@@ -575,6 +575,24 @@ Regras atuais:
 - Configurações do Admin deixou de ser estática: Admin cria/edita/inativa LOBs, turnos e cargos/funções, altera mês padrão local e visualiza roles/tipos de solicitação com persistência e AuditLog.
 - A aprovação cadastral usa as LOBs, turnos e cargos ativos configurados pelo Admin nos selects operacionais.
 
+### Configurações ADMIN e permissões de escala
+
+- A rota `/configuracoes` fica visível e acessível apenas para `ADMIN`; acesso direto por outro perfil redireciona para a Central Operacional.
+- A API de Configurações permite gravação apenas para `ADMIN`. Perfis não admin recebem somente opções operacionais limitadas, como LOBs, turnos e tipos ativos para filtros e formulários.
+- Configurações agora persistem no banco e geram `AuditLog` para usuários, perfis, permissões, LOBs, times, vínculos de supervisão, turnos, cargos/funções, tipos de solicitação, SLAs, regras de aprovação, regras de cobertura, regras de tokens e parâmetros gerais.
+- Admin pode criar/editar/inativar usuários, resetar senha temporária pela edição do usuário, alterar role, vincular `EmployeeProfile`, criar LOBs, times, turnos, cargos e parametrizar regras.
+- Supervisores podem ser vinculados a times ou colaboradores em Configurações e também no Mapa de Funcionários. O vínculo passa a alimentar filtros, mapa, escala e esteiras.
+- Em Escalas, `WFM`, `ADMIN` e `GESTOR` podem importar Excel, adicionar escala manual, editar escala completa e marcar `Presente`.
+- Em Escalas, `SUPERVISOR` visualiza a grade, mas não vê upload/adicionar escala e não consegue executar importação, adição ou edição completa via API.
+- Supervisor só registra justificativas de ocorrência (`Ausente`, `Falta`, `Atraso`, `Saída antecipada`, `Afastado`, `Erro de escala`) em `AttendanceRecord`; ele não altera turno, entrada, saída, folga ou presença.
+- As justificativas do Supervisor geram `AttendanceHistory`, `AuditLog` e passam a impactar os indicadores reais da Central Operacional por período/LOB.
+
+Limitações temporárias:
+
+- As permissões configuráveis em `SystemConfig` já são persistidas e visíveis, mas parte dos módulos antigos ainda usa checagens por role enquanto a migração fina para permissões granulares é concluída.
+- Regras de tokens ficam salvas para fase futura; o motor automático de concessão de tokens ainda não é executado.
+- Regras de cobertura ficam disponíveis para parametrização e leitura operacional, com cálculo avançado de gap por regra preparado para evolução do Staff/Cobertura.
+
 ## Estrutura
 
 ```text

@@ -304,18 +304,29 @@ type AttendanceItem = {
 type ScheduleGridRow = (typeof scheduleGridRows)[number];
 
 type SystemSettings = {
-  lobs: Array<{ id: string; name: string; description?: string; status: "ACTIVE" | "INACTIVE" }>;
+  users?: Array<{ id: string; name: string; email: string; status: string; roleName: string; roleLabel?: string; employeeId?: string; employeeName?: string }>;
+  lobs: Array<{ id: string; name: string; description?: string; status: "ACTIVE" | "INACTIVE"; system?: boolean }>;
   shifts: Array<{ id: string; name: string; startsAt: string; endsAt: string; color?: string; status: "ACTIVE" | "INACTIVE" }>;
-  roles: Array<{ id: string; name: string; label: string }>;
-  requestTypes: Array<{ id: string; name: string; area: string; slaHours: number; requiresApproval: boolean }>;
+  roles: Array<{ id: string; name: string; label: string; description?: string; status?: "ACTIVE" | "INACTIVE"; essential?: boolean; permissions?: string[] }>;
+  permissions?: Array<{ id: string; key: string; label: string; description?: string; status: "ACTIVE" | "INACTIVE" }>;
+  requestTypes: Array<{ id: string; name: string; area: string; slaHours: number; requiresApproval: boolean; status?: "ACTIVE" | "INACTIVE"; essential?: boolean }>;
+  teams?: Array<{ id: string; name: string; lobId: string; lob: string; supervisorId?: string; supervisorName?: string; supervisorEmail?: string; status: "ACTIVE" | "INACTIVE" }>;
+  supervisors?: Array<{ id: string; name: string; email?: string; lobId?: string; lob?: string; teamId?: string; team?: string; supervisees?: number; status?: string }>;
+  employees?: Array<{ id: string; name: string; email?: string; wb?: string; roleTitle?: string; roleName?: string; lobId?: string; lob?: string; teamId?: string; team?: string; supervisorId?: string; supervisorName?: string; shiftId?: string; shift?: string; status?: string }>;
   roleTitles: Array<{ name: string; status: "ACTIVE" | "INACTIVE" }>;
   defaultMonth: string;
+  slaRules?: Array<Record<string, unknown> & { id: string; name: string; status: "ACTIVE" | "INACTIVE" }>;
+  approvalRules?: Array<Record<string, unknown> & { id: string; name: string; status: "ACTIVE" | "INACTIVE" }>;
+  coverageRules?: Array<Record<string, unknown> & { id: string; name: string; status: "ACTIVE" | "INACTIVE" }>;
+  tokenRules?: Array<Record<string, unknown> & { id: string; name: string; status: "ACTIVE" | "INACTIVE" }>;
+  generalSettings?: Record<string, unknown>;
 };
 
 type EmployeeClient = (typeof employees)[number] & {
   email?: string;
   userId?: string;
   systemRole?: string;
+  supervisorId?: string;
   canViewSensitive?: boolean;
   restrictedSections?: Record<string, boolean>;
   sensitive?: {
@@ -1787,6 +1798,7 @@ export function SchedulesPage() {
   const [importHistory, setImportHistory] = useState<Array<{ id: string; fileName: string; importedRows: number; status: string; createdAt: string; user: string }>>([]);
   const [attendanceMessage, setAttendanceMessage] = useState("");
   const [attendanceSummary, setAttendanceSummary] = useState<AttendanceSummary | null>(null);
+  const [scheduleActorRole, setScheduleActorRole] = useState("COLABORADOR");
   const [schedulePeriod, setSchedulePeriod] = useState({ month: 5, year: 2026 });
   const [scheduleFilters, setScheduleFilters] = useState({ collaborator: "", lob: "Todos", supervisor: "", shift: "Todos", status: "Todos", roleTitle: "" });
   const [daysInMonth, setDaysInMonth] = useState(31);
@@ -1855,7 +1867,8 @@ export function SchedulesPage() {
         status: scheduleFilters.status,
         roleTitle: scheduleFilters.roleTitle
       });
-      const payload = await apiJson<{ data: { scheduleGridRows: typeof scheduleGridRows; imports: Array<{ id: string; fileName: string; importedRows: number; status: string; createdAt: string; user: string }>; attendanceSummary?: AttendanceSummary; daysInMonth?: number } }>(`/api/schedules?${params.toString()}`);
+      const payload = await apiJson<{ data: { scheduleGridRows: typeof scheduleGridRows; imports: Array<{ id: string; fileName: string; importedRows: number; status: string; createdAt: string; user: string }>; attendanceSummary?: AttendanceSummary; daysInMonth?: number }; actor?: { role: string; name: string } }>(`/api/schedules?${params.toString()}`);
+      setScheduleActorRole(payload.actor?.role ?? "COLABORADOR");
       setScheduleRows(payload.data.scheduleGridRows);
       setDaysInMonth(payload.data.daysInMonth ?? 31);
       if (payload.data.scheduleGridRows.length) {
@@ -1922,6 +1935,30 @@ export function SchedulesPage() {
       observation: ""
     });
     setShowEditSchedule(true);
+  }
+
+  function openAttendanceJustification(row?: ScheduleGridRow, dayIndex = 0, value = "Ausente") {
+    const targetRow = row ?? scheduleRows[0];
+    const targetEmployee = targetRow?.employee ?? scheduleEmployees[0];
+    if (!targetEmployee) {
+      setAttendanceMessage("Nenhum colaborador ativo encontrado para justificar ocorrência.");
+      return;
+    }
+    const cellStatus = statusFromScheduleCell(value);
+    const safeStatus = supervisorOccurrenceStatuses.includes(cellStatus) ? cellStatus : "Ausente";
+    setAttendanceForm({
+      ...attendanceForm,
+      employeeId: targetEmployee.id,
+      date: `${schedulePeriod.year}-${String(schedulePeriod.month).padStart(2, "0")}-${String(dayIndex + 1).padStart(2, "0")}`,
+      shift: targetEmployee.shift,
+      status: safeStatus,
+      absenceReason: attendanceForm.absenceReason || "Outros",
+      reasonCategory: attendanceForm.reasonCategory || "Escala",
+      supervisorJustification: "",
+      impactsAbs: ["Falta", "Ausente"].includes(safeStatus),
+      impactsCoverage: ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala"].includes(safeStatus)
+    });
+    setShowAttendance(true);
   }
 
   async function saveScheduleEdit() {
@@ -2015,6 +2052,13 @@ export function SchedulesPage() {
   const availableShiftNames = Array.from(new Set([...configuredShifts, "Manhã", "Tarde", "Noite", "Madrugada", "Backoffice"]));
   const uniqueLobs = ["Todos", ...Array.from(new Set([...configuredLobs, ...scheduleRows.map((row) => row.employee.lob).filter(Boolean), ...scheduleEmployees.map((employee) => employee.lob).filter(Boolean)]))];
   const uniqueShifts = ["Todos", ...availableShiftNames];
+  const normalizedScheduleActorRole = scheduleActorRole === "MANAGEMENT" ? "GESTOR" : scheduleActorRole;
+  const canManageSchedules = ["ADMIN", "GESTOR", "WFM"].includes(normalizedScheduleActorRole);
+  const isScheduleSupervisor = normalizedScheduleActorRole === "SUPERVISOR";
+  const supervisorOccurrenceStatuses = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala"];
+  const attendanceStatusOptions = isScheduleSupervisor
+    ? supervisorOccurrenceStatuses
+    : [...scheduleStatusOptions].filter((status) => status !== "Escalado");
 
   function configuredTimesForShift(shift: string) {
     const configured = scheduleSettings?.shifts.find((item) => item.name === shift);
@@ -2051,23 +2095,31 @@ export function SchedulesPage() {
           </div>
         </div>
       </div>
-      <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(event) => handleFile(event.target.files?.[0])} />
+      {canManageSchedules ? <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(event) => handleFile(event.target.files?.[0])} /> : null}
       <div className="mb-5 flex flex-wrap gap-3">
-        <button onClick={() => fileInputRef.current?.click()} className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft">
-          <Upload className="h-4 w-4" />
-          Upload Excel
-        </button>
-        <a
-          href="/api/schedules/template"
-          className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft"
-        >
-          <Download className="h-4 w-4" />
-          Baixar Template
-        </a>
-        <button onClick={() => openScheduleEditor(undefined, 0, "Escalado")} className="flex h-11 items-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white shadow-soft">
-          <Plus className="h-4 w-4" />
-          Adicionar escala manual
-        </button>
+        {canManageSchedules ? (
+          <>
+            <button onClick={() => fileInputRef.current?.click()} className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft">
+              <Upload className="h-4 w-4" />
+              Upload Excel
+            </button>
+            <a
+              href="/api/schedules/template"
+              className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft"
+            >
+              <Download className="h-4 w-4" />
+              Baixar Template
+            </a>
+            <button onClick={() => openScheduleEditor(undefined, 0, "Escalado")} className="flex h-11 items-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white shadow-soft">
+              <Plus className="h-4 w-4" />
+              Adicionar escala manual
+            </button>
+          </>
+        ) : (
+          <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
+            Supervisor visualiza a grade e registra justificativas de ocorrência. Upload, adição manual e presença ficam com WFM/Admin.
+          </div>
+        )}
       </div>
 
       {imported ? (
@@ -2123,13 +2175,15 @@ export function SchedulesPage() {
                     <td className="px-4 py-3">{row.employee.lob}</td>
                     {row.days.map((value, index) => (
                       <td key={`${row.employee.id}-${index}`} className="px-2 py-3 text-center">
-                        <button onClick={() => openScheduleEditor(row, index, value)} className={cn("inline-flex min-w-[78px] justify-center rounded-md px-2 py-2 text-xs font-bold transition hover:ring-2 hover:ring-blue-200", shiftTagClass(value))}>
+                        <button onClick={() => isScheduleSupervisor ? openAttendanceJustification(row, index, value) : openScheduleEditor(row, index, value)} className={cn("inline-flex min-w-[78px] justify-center rounded-md px-2 py-2 text-xs font-bold transition hover:ring-2 hover:ring-blue-200", shiftTagClass(value))}>
                           {value}
                         </button>
                       </td>
                     ))}
                     <td className="px-4 py-3 text-center">
-                      <button onClick={() => openScheduleEditor(row, 0, row.days[0] ?? "Escalado")} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">Editar</button>
+                      <button onClick={() => isScheduleSupervisor ? openAttendanceJustification(row, 0, row.days[0] ?? "Ausente") : openScheduleEditor(row, 0, row.days[0] ?? "Escalado")} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
+                        {isScheduleSupervisor ? "Justificar" : "Editar"}
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -2270,8 +2324,10 @@ export function SchedulesPage() {
           <div className="card w-full max-w-2xl p-5">
             <div className="mb-5 flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-extrabold text-navy-950">Marcar presença/ausência</h2>
-                <p className="text-sm text-muted">Atualiza escala, mapa, cobertura, indicadores de ABS e auditoria.</p>
+                <h2 className="text-lg font-extrabold text-navy-950">{isScheduleSupervisor ? "Justificar ocorrência" : "Marcar presença/ausência"}</h2>
+                <p className="text-sm text-muted">
+                  {isScheduleSupervisor ? "Registra justificativa e AttendanceRecord sem alterar turno, entrada, saída ou marcar presença." : "Atualiza escala, mapa, cobertura, indicadores de ABS e auditoria."}
+                </p>
               </div>
               <button onClick={() => setShowAttendance(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
             </div>
@@ -2287,7 +2343,7 @@ export function SchedulesPage() {
               <FormSelect
                 label="Status"
                 value={attendanceForm.status}
-                options={[...scheduleStatusOptions].filter((status) => status !== "Escalado")}
+                options={attendanceStatusOptions}
                 onChange={(value) => {
                   const reasonRequired = statusNeedsReason(value);
                   setAttendanceForm({
@@ -2322,7 +2378,7 @@ export function SchedulesPage() {
               </label>
             </div>
             <div className="mt-5 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
-              {attendanceRequiresReason ? "Este status exige motivo ou observação antes de salvar." : "Este status não exige motivo obrigatório."}
+              {isScheduleSupervisor ? "Supervisor não pode marcar Presente nem alterar a escala planejada. A validação/correção final fica com WFM/Admin." : attendanceRequiresReason ? "Este status exige motivo ou observação antes de salvar." : "Este status não exige motivo obrigatório."}
             </div>
             <div className="mt-5 grid gap-3 md:grid-cols-3">
               <MetricPill value={`${attendanceSummary?.coverageRate ?? 0}%`} label="Cobertura atual" />
@@ -3085,11 +3141,13 @@ export function EmployeeMapPage() {
   const { data: session } = useSession();
   const [query, setQuery] = useState("");
   const [employeeRows, setEmployeeRows] = useState<EmployeeClient[]>([]);
+  const [employeeSettings, setEmployeeSettings] = useState<SystemSettings | null>(null);
   const [selected, setSelected] = useState<EmployeeClient | null>(null);
   const [employeeMessage, setEmployeeMessage] = useState("");
   const [roleTitleDraft, setRoleTitleDraft] = useState("");
   const [statusDraft, setStatusDraft] = useState("");
   const [roleDraft, setRoleDraft] = useState("");
+  const [supervisorDraft, setSupervisorDraft] = useState("");
   const [savingEmployee, setSavingEmployee] = useState(false);
   const [showResetPassword, setShowResetPassword] = useState(false);
   const [resetPasswordForm, setResetPasswordForm] = useState({ password: "", confirmPassword: "" });
@@ -3098,9 +3156,13 @@ export function EmployeeMapPage() {
   const isAdmin = session?.user?.role === "ADMIN";
 
   useEffect(() => {
-    apiJson<{ data: EmployeeClient[] }>("/api/employees")
-      .then((payload) => {
-        setEmployeeRows(payload.data);
+    Promise.all([
+      apiJson<{ data: EmployeeClient[] }>("/api/employees"),
+      apiJson<{ data: SystemSettings }>("/api/settings").catch(() => ({ data: null as unknown as SystemSettings }))
+    ])
+      .then(([employeePayload, settingsPayload]) => {
+        setEmployeeRows(employeePayload.data);
+        setEmployeeSettings(settingsPayload.data);
         setSelected(null);
       })
       .catch(() => setEmployeeRows([]));
@@ -3111,6 +3173,7 @@ export function EmployeeMapPage() {
     setRoleTitleDraft(selected.role ?? "");
     setStatusDraft(selected.status ?? "");
     setRoleDraft(selected.systemRole ?? "COLABORADOR");
+    setSupervisorDraft(selected.supervisorId ?? "");
   }, [selected]);
 
   async function saveEmployeeOperationalData() {
@@ -3120,7 +3183,7 @@ export function EmployeeMapPage() {
     try {
       const payload = await apiJson<{ data: EmployeeClient }>("/api/employees", {
         method: "PATCH",
-        body: JSON.stringify({ id: selected.id, roleTitle: roleTitleDraft, operationalStatus: statusDraft, roleName: isAdmin ? roleDraft : undefined })
+        body: JSON.stringify({ id: selected.id, roleTitle: roleTitleDraft, operationalStatus: statusDraft, roleName: isAdmin ? roleDraft : undefined, supervisorId: supervisorDraft })
       });
       setEmployeeRows((items) => items.map((employee) => (employee.id === payload.data.id ? payload.data : employee)));
       setSelected(payload.data);
@@ -3262,6 +3325,7 @@ export function EmployeeMapPage() {
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <InfoLine label="Cargo/Função" value={selected.role} />
                   <InfoLine label="Status atual" value={<StatusBadge status={selected.status} />} />
+                  <InfoLine label="Supervisor vinculado" value={selected.supervisor} />
                   <InfoLine label="Última presença" value={selected.lastPresence ?? "Sem registro"} />
                   <InfoLine label="E-mail operacional" value={selected.email ?? "Restrito"} />
                 </div>
@@ -3279,6 +3343,17 @@ export function EmployeeMapPage() {
                       <span className="mb-1 block text-xs font-bold text-muted">Role/Permissão de sistema</span>
                       <select value={roleDraft} onChange={(event) => setRoleDraft(event.target.value)} className="h-10 w-full rounded-lg border border-border px-3 text-sm outline-none">
                         {["COLABORADOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI", "GESTOR", "ADMIN"].map((roleName) => <option key={roleName}>{roleName}</option>)}
+                      </select>
+                    </label>
+                  ) : null}
+                  {isAdmin ? (
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-bold text-muted">Supervisor</span>
+                      <select value={supervisorDraft} onChange={(event) => setSupervisorDraft(event.target.value)} className="h-10 w-full rounded-lg border border-border px-3 text-sm outline-none">
+                        <option value="">Sem supervisor</option>
+                        {(employeeSettings?.supervisors ?? []).map((supervisor) => (
+                          <option key={supervisor.id} value={supervisor.id}>{supervisor.name} - {supervisor.email || supervisor.lob || "supervisor"}</option>
+                        ))}
                       </select>
                     </label>
                   ) : null}
@@ -4588,9 +4663,19 @@ export function SettingsPage() {
   const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [settingsMessage, setSettingsMessage] = useState("");
   const [settingsError, setSettingsError] = useState(false);
+  const adminSections = ["Usuários", "Perfis", "Permissões", "LOBs", "Times", "Supervisores", "Turnos", "Cargos/Funções", "Tipos de solicitação", "SLAs", "Regras de aprovação", "Regras de cobertura", "Regras de tokens", "Configurações gerais"];
+  const [activeSection, setActiveSection] = useState(adminSections[0]);
+  const [userDraft, setUserDraft] = useState({ id: "", name: "", email: "", roleName: "COLABORADOR", status: "ACTIVE", employeeId: "", password: "" });
+  const [roleDraft, setRoleDraft] = useState({ id: "", name: "", label: "", description: "", status: "ACTIVE" as "ACTIVE" | "INACTIVE" });
+  const [permissionDraft, setPermissionDraft] = useState({ id: "", key: "", label: "", description: "", status: "ACTIVE" as "ACTIVE" | "INACTIVE", roleName: "", granted: true });
   const [lobDraft, setLobDraft] = useState({ id: "", name: "", description: "" });
+  const [teamDraft, setTeamDraft] = useState({ id: "", name: "", lobId: "", supervisorId: "", status: "ACTIVE" as "ACTIVE" | "INACTIVE" });
+  const [supervisorDraft, setSupervisorDraft] = useState({ supervisorId: "", teamId: "", employeeId: "" });
   const [shiftDraft, setShiftDraft] = useState({ id: "", name: "", startsAt: "08:00", endsAt: "16:00", color: "#2563EB" });
+  const [requestTypeDraft, setRequestTypeDraft] = useState({ id: "", name: "", area: "Operação", slaHours: "24", requiresApproval: true, status: "ACTIVE" as "ACTIVE" | "INACTIVE" });
   const [roleTitleDraft, setRoleTitleDraft] = useState({ previousName: "", name: "", status: "ACTIVE" as "ACTIVE" | "INACTIVE" });
+  const [ruleDraft, setRuleDraft] = useState({ id: "", name: "", requestType: "", priority: "Média", hours: "24", role: "WFM", lob: "ALL", shift: "", staffRequired: "1", points: "1", status: "ACTIVE" as "ACTIVE" | "INACTIVE" });
+  const [generalDraft, setGeneralDraft] = useState<Record<string, unknown>>({});
   const [defaultMonthDraft, setDefaultMonthDraft] = useState("2026-05");
   const [savingSettings, setSavingSettings] = useState(false);
 
@@ -4603,6 +4688,7 @@ export function SettingsPage() {
       const payload = await apiJson<{ data: SystemSettings }>("/api/settings");
       setSettings(payload.data);
       setDefaultMonthDraft(payload.data.defaultMonth);
+      setGeneralDraft(payload.data.generalSettings ?? {});
     } catch (error) {
       setSettingsError(true);
       setSettingsMessage(error instanceof Error ? error.message : "Não foi possível carregar configurações.");
@@ -4617,8 +4703,14 @@ export function SettingsPage() {
       setSettingsError(false);
       setSettingsMessage(success);
       setLobDraft({ id: "", name: "", description: "" });
+      setTeamDraft({ id: "", name: "", lobId: "", supervisorId: "", status: "ACTIVE" });
+      setSupervisorDraft({ supervisorId: "", teamId: "", employeeId: "" });
       setShiftDraft({ id: "", name: "", startsAt: "08:00", endsAt: "16:00", color: "#2563EB" });
       setRoleTitleDraft({ previousName: "", name: "", status: "ACTIVE" });
+      setRequestTypeDraft({ id: "", name: "", area: "Operação", slaHours: "24", requiresApproval: true, status: "ACTIVE" });
+      setPermissionDraft({ id: "", key: "", label: "", description: "", status: "ACTIVE", roleName: "", granted: true });
+      setUserDraft({ id: "", name: "", email: "", roleName: "COLABORADOR", status: "ACTIVE", employeeId: "", password: "" });
+      setRuleDraft({ id: "", name: "", requestType: "", priority: "Média", hours: "24", role: "WFM", lob: "ALL", shift: "", staffRequired: "1", points: "1", status: "ACTIVE" });
       await loadSettings();
     } catch (error) {
       setSettingsError(true);
@@ -4631,6 +4723,76 @@ export function SettingsPage() {
   const activeLobs = settings?.lobs.filter((lob) => lob.status !== "INACTIVE").length ?? 0;
   const activeShifts = settings?.shifts.filter((shift) => shift.status !== "INACTIVE").length ?? 0;
   const activeTitles = settings?.roleTitles.filter((title) => title.status !== "INACTIVE").length ?? 0;
+  const activeTeams = settings?.teams?.filter((team) => team.status !== "INACTIVE").length ?? 0;
+  const roleOptions = settings?.roles.filter((role) => role.status !== "INACTIVE").map((role) => role.name) ?? ["COLABORADOR", "SUPERVISOR", "WFM", "ADMIN"];
+  const lobOptions = settings?.lobs.filter((lob) => lob.status !== "INACTIVE") ?? [];
+  const supervisorOptions = settings?.supervisors ?? [];
+  const employeeOptionsForSettings = settings?.employees ?? [];
+  const teamOptions = settings?.teams ?? [];
+
+  function statusButtonLabel(status?: string) {
+    return status === "INACTIVE" ? "Ativar" : "Inativar";
+  }
+
+  function editRule(kind: "slaRule" | "approvalRule" | "coverageRule" | "tokenRule", item: Record<string, unknown>) {
+    setRuleDraft({
+      id: String(item.id ?? ""),
+      name: String(item.name ?? ""),
+      requestType: String(item.requestType ?? item.typeName ?? ""),
+      priority: String(item.priority ?? "Média"),
+      hours: String(item.hours ?? item.slaHours ?? "24"),
+      role: String(item.role ?? item.approverRole ?? "WFM"),
+      lob: String(item.lob ?? "ALL"),
+      shift: String(item.shift ?? ""),
+      staffRequired: String(item.staffRequired ?? "1"),
+      points: String(item.points ?? "1"),
+      status: item.status === "INACTIVE" ? "INACTIVE" : "ACTIVE"
+    });
+    if (kind === "slaRule") setActiveSection("SLAs");
+    if (kind === "approvalRule") setActiveSection("Regras de aprovação");
+    if (kind === "coverageRule") setActiveSection("Regras de cobertura");
+    if (kind === "tokenRule") setActiveSection("Regras de tokens");
+  }
+
+  function rulePanel(title: string, kind: "slaRule" | "approvalRule" | "coverageRule" | "tokenRule", items: Array<Record<string, unknown> & { id: string; name: string; status: "ACTIVE" | "INACTIVE" }>) {
+    const isSla = kind === "slaRule";
+    const isApproval = kind === "approvalRule";
+    const isCoverage = kind === "coverageRule";
+    return (
+      <Panel title={title}>
+        <div className="mb-4 grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <input value={ruleDraft.name} onChange={(event) => setRuleDraft({ ...ruleDraft, name: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Nome da regra" />
+          <input value={ruleDraft.requestType} onChange={(event) => setRuleDraft({ ...ruleDraft, requestType: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder={isCoverage ? "Dia/período" : "Tipo de solicitação/evento"} />
+          <input value={isSla ? ruleDraft.hours : isCoverage ? ruleDraft.staffRequired : kind === "tokenRule" ? ruleDraft.points : ruleDraft.role} onChange={(event) => setRuleDraft({ ...ruleDraft, [isSla ? "hours" : isCoverage ? "staffRequired" : kind === "tokenRule" ? "points" : "role"]: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder={isSla ? "Prazo horas" : isCoverage ? "Staff necessário" : kind === "tokenRule" ? "Pontos" : "Role aprovadora"} />
+          <select value={ruleDraft.lob} onChange={(event) => setRuleDraft({ ...ruleDraft, lob: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
+            {["ALL", ...lobOptions.map((lob) => lob.name).filter((name) => name !== "ALL")].map((name) => <option key={name}>{name}</option>)}
+          </select>
+          <select value={ruleDraft.status} onChange={(event) => setRuleDraft({ ...ruleDraft, status: event.target.value as "ACTIVE" | "INACTIVE" })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
+            <option value="ACTIVE">Ativo</option>
+            <option value="INACTIVE">Inativo</option>
+          </select>
+          <button disabled={savingSettings} onClick={() => void saveSetting({ type: kind, ...ruleDraft, slaHours: Number(ruleDraft.hours), staffRequired: Number(ruleDraft.staffRequired), points: Number(ruleDraft.points), approverRole: ruleDraft.role, appliesScheduleChange: isApproval && ruleDraft.role === "WFM" }, ruleDraft.id ? "Regra atualizada." : "Regra criada.")} className="rounded-lg bg-blue-600 px-4 text-sm font-bold text-white disabled:opacity-60">
+            {ruleDraft.id ? "Salvar regra" : "Criar regra"}
+          </button>
+        </div>
+        {items.length ? (
+          <SimpleTable
+            columns={["Nome", isSla ? "Prazo" : isCoverage ? "Staff" : kind === "tokenRule" ? "Pontos" : "Role", "LOB", "Status", "Ações"]}
+            rows={items.map((item) => [
+              item.name,
+              isSla ? `${String(item.slaHours ?? item.hours ?? "-")}h` : isCoverage ? String(item.staffRequired ?? "-") : kind === "tokenRule" ? String(item.points ?? "-") : String(item.approverRole ?? item.role ?? "-"),
+              String(item.lob ?? "ALL"),
+              <StatusBadge key={`${item.id}-status`} status={item.status === "INACTIVE" ? "Inativo" : "Ativo"} />,
+              <div key={`${item.id}-actions`} className="flex flex-wrap gap-2">
+                <button onClick={() => editRule(kind, item)} className="rounded-lg border border-border px-3 py-1 text-xs font-bold">Editar</button>
+                <button onClick={() => void saveSetting({ type: kind, ...item, status: item.status === "INACTIVE" ? "ACTIVE" : "INACTIVE" }, "Status da regra atualizado.")} className="rounded-lg border border-border px-3 py-1 text-xs font-bold">{statusButtonLabel(item.status)}</button>
+              </div>
+            ])}
+          />
+        ) : <EmptyState title="Nenhuma regra cadastrada" description="Crie regras para parametrizar fluxos sem alterar código." />}
+      </Panel>
+    );
+  }
 
   return (
     <div>
@@ -4642,8 +4804,8 @@ export function SettingsPage() {
       ) : null}
       <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
         <Panel title="Módulos administrativos">
-          {settingsSections.map((section, index) => (
-            <button key={section} className={cn("mb-2 flex w-full items-center justify-between rounded-lg px-4 py-3 text-left text-sm font-bold last:mb-0", index === 0 ? "bg-blue-50 text-blue-700" : "hover:bg-slate-50")}>
+          {adminSections.map((section) => (
+            <button key={section} onClick={() => setActiveSection(section)} className={cn("mb-2 flex w-full items-center justify-between rounded-lg px-4 py-3 text-left text-sm font-bold last:mb-0", activeSection === section ? "bg-blue-50 text-blue-700" : "hover:bg-slate-50")}>
               {section}
               <ChevronRight className="h-4 w-4" />
             </button>
@@ -4654,9 +4816,75 @@ export function SettingsPage() {
             <MetricPill value={activeLobs} label="LOBs ativas" />
             <MetricPill value={activeShifts} label="Turnos ativos" />
             <MetricPill value={activeTitles} label="Cargos ativos" />
-            <MetricPill value={settings?.roles.length ?? 0} label="Roles de sistema" />
+            <MetricPill value={activeTeams} label="Times ativos" />
           </div>
-          <Panel title="LOBs">
+
+          {activeSection === "Usuários" ? (
+            <Panel title="Usuários">
+              <div className="mb-4 grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+                <input value={userDraft.name} onChange={(event) => setUserDraft({ ...userDraft, name: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Nome" />
+                <input value={userDraft.email} onChange={(event) => setUserDraft({ ...userDraft, email: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="E-mail" />
+                <select value={userDraft.roleName} onChange={(event) => setUserDraft({ ...userDraft, roleName: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">{roleOptions.map((role) => <option key={role}>{role}</option>)}</select>
+                <select value={userDraft.employeeId} onChange={(event) => setUserDraft({ ...userDraft, employeeId: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
+                  <option value="">Sem vínculo</option>
+                  {employeeOptionsForSettings.map((employee) => <option key={employee.id} value={employee.id}>{employee.name} - {employee.email || employee.wb || employee.id}</option>)}
+                </select>
+                <input value={userDraft.password} onChange={(event) => setUserDraft({ ...userDraft, password: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Senha temp/reset" type="password" />
+                <button disabled={savingSettings} onClick={() => void saveSetting({ type: "user", ...userDraft }, userDraft.id ? "Usuário atualizado." : "Usuário criado.")} className="rounded-lg bg-blue-600 px-4 text-sm font-bold text-white disabled:opacity-60">{userDraft.id ? "Salvar" : "Criar"}</button>
+              </div>
+              {settings?.users?.length ? <SimpleTable columns={["Nome", "E-mail", "Role", "Status", "Vínculo", "Ações"]} rows={settings.users.map((user) => [
+                user.name,
+                user.email,
+                user.roleName,
+                <StatusBadge key={`${user.id}-status`} status={user.status === "ACTIVE" ? "Ativo" : "Inativo"} />,
+                user.employeeName || "-",
+                <div key={`${user.id}-actions`} className="flex flex-wrap gap-2">
+                  <button onClick={() => setUserDraft({ id: user.id, name: user.name, email: user.email, roleName: user.roleName, status: user.status, employeeId: user.employeeId ?? "", password: "" })} className="rounded-lg border border-border px-3 py-1 text-xs font-bold">Editar</button>
+                  <button onClick={() => void saveSetting({ type: "user", id: user.id, name: user.name, email: user.email, roleName: user.roleName, employeeId: user.employeeId, status: user.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" }, "Status do usuário atualizado.")} className="rounded-lg border border-border px-3 py-1 text-xs font-bold">{user.status === "ACTIVE" ? "Inativar" : "Ativar"}</button>
+                </div>
+              ])} /> : <EmptyState title="Nenhum usuário" description="Crie usuários reais para acessar a plataforma." />}
+            </Panel>
+          ) : null}
+
+          {activeSection === "Perfis" ? (
+            <Panel title="Perfis/Roles">
+              <div className="mb-4 grid gap-3 md:grid-cols-[1fr_1fr_1fr_120px_auto]">
+                <input value={roleDraft.name} onChange={(event) => setRoleDraft({ ...roleDraft, name: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Role interna" />
+                <input value={roleDraft.label} onChange={(event) => setRoleDraft({ ...roleDraft, label: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Label" />
+                <input value={roleDraft.description} onChange={(event) => setRoleDraft({ ...roleDraft, description: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Descrição" />
+                <select value={roleDraft.status} onChange={(event) => setRoleDraft({ ...roleDraft, status: event.target.value as "ACTIVE" | "INACTIVE" })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold"><option value="ACTIVE">Ativo</option><option value="INACTIVE">Inativo</option></select>
+                <button disabled={savingSettings || !roleDraft.id} onClick={() => void saveSetting({ type: "role", ...roleDraft }, "Perfil atualizado.")} className="rounded-lg bg-blue-600 px-4 text-sm font-bold text-white disabled:opacity-60">Salvar</button>
+              </div>
+              <SimpleTable columns={["Role", "Label", "Essencial", "Status", "Ações"]} rows={(settings?.roles ?? []).map((role) => [
+                role.name,
+                role.label,
+                role.essential ? "Sim" : "Não",
+                <StatusBadge key={`${role.id}-status`} status={role.status === "INACTIVE" ? "Inativo" : "Ativo"} />,
+                <button key={`${role.id}-edit`} onClick={() => setRoleDraft({ id: role.id, name: role.name, label: role.label, description: role.description ?? "", status: role.status ?? "ACTIVE" })} className="rounded-lg border border-border px-3 py-1 text-xs font-bold">Editar</button>
+              ])} />
+            </Panel>
+          ) : null}
+
+          {activeSection === "Permissões" ? (
+            <Panel title="Permissões">
+              <div className="mb-4 grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+                <input value={permissionDraft.key} onChange={(event) => setPermissionDraft({ ...permissionDraft, key: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Chave" />
+                <input value={permissionDraft.label} onChange={(event) => setPermissionDraft({ ...permissionDraft, label: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Label" />
+                <select value={permissionDraft.roleName} onChange={(event) => setPermissionDraft({ ...permissionDraft, roleName: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"><option value="">Sem role</option>{roleOptions.map((role) => <option key={role}>{role}</option>)}</select>
+                <select value={permissionDraft.granted ? "true" : "false"} onChange={(event) => setPermissionDraft({ ...permissionDraft, granted: event.target.value === "true" })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"><option value="true">Conceder</option><option value="false">Remover</option></select>
+                <select value={permissionDraft.status} onChange={(event) => setPermissionDraft({ ...permissionDraft, status: event.target.value as "ACTIVE" | "INACTIVE" })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"><option value="ACTIVE">Ativa</option><option value="INACTIVE">Inativa</option></select>
+                <button disabled={savingSettings} onClick={() => void saveSetting({ type: "permission", ...permissionDraft }, "Permissão salva.")} className="rounded-lg bg-blue-600 px-4 text-sm font-bold text-white disabled:opacity-60">Salvar</button>
+              </div>
+              <SimpleTable columns={["Chave", "Label", "Status", "Ações"]} rows={(settings?.permissions ?? []).map((permission) => [
+                permission.key,
+                permission.label,
+                <StatusBadge key={`${permission.id}-status`} status={permission.status === "INACTIVE" ? "Inativa" : "Ativa"} />,
+                <button key={`${permission.id}-edit`} onClick={() => setPermissionDraft({ id: permission.id, key: permission.key, label: permission.label, description: permission.description ?? "", status: permission.status, roleName: "", granted: true })} className="rounded-lg border border-border px-3 py-1 text-xs font-bold">Editar</button>
+              ])} />
+            </Panel>
+          ) : null}
+
+          {activeSection === "LOBs" ? <Panel title="LOBs">
             <div className="mb-4 grid gap-3 md:grid-cols-[1fr_1fr_auto]">
               <input value={lobDraft.name} onChange={(event) => setLobDraft({ ...lobDraft, name: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Nome da LOB" />
               <input value={lobDraft.description} onChange={(event) => setLobDraft({ ...lobDraft, description: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Descrição" />
@@ -4680,9 +4908,49 @@ export function SettingsPage() {
                 ])}
               />
             ) : <EmptyState title="Nenhuma LOB cadastrada" description="Crie uma LOB para alimentar filtros, cadastros e escala." />}
-          </Panel>
+          </Panel> : null}
 
-          <Panel title="Turnos">
+          {activeSection === "Times" ? (
+            <Panel title="Times">
+              <div className="mb-4 grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto]">
+                <input value={teamDraft.name} onChange={(event) => setTeamDraft({ ...teamDraft, name: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Nome do time" />
+                <select value={teamDraft.lobId} onChange={(event) => setTeamDraft({ ...teamDraft, lobId: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"><option value="">LOB</option>{lobOptions.map((lob) => <option key={lob.id} value={lob.id}>{lob.name}</option>)}</select>
+                <select value={teamDraft.supervisorId} onChange={(event) => setTeamDraft({ ...teamDraft, supervisorId: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"><option value="">Sem supervisor</option>{supervisorOptions.map((supervisor) => <option key={supervisor.id} value={supervisor.id}>{supervisor.name} - {supervisor.email}</option>)}</select>
+                <button disabled={savingSettings} onClick={() => void saveSetting({ type: "team", ...teamDraft }, teamDraft.id ? "Time atualizado." : "Time criado.")} className="rounded-lg bg-blue-600 px-4 text-sm font-bold text-white disabled:opacity-60">{teamDraft.id ? "Salvar" : "Criar"}</button>
+              </div>
+              {teamOptions.length ? <SimpleTable columns={["Time", "LOB", "Supervisor", "Status", "Ações"]} rows={teamOptions.map((team) => [
+                team.name,
+                team.lob,
+                team.supervisorName || "-",
+                <StatusBadge key={`${team.id}-status`} status={team.status === "INACTIVE" ? "Inativo" : "Ativo"} />,
+                <div key={`${team.id}-actions`} className="flex flex-wrap gap-2">
+                  <button onClick={() => setTeamDraft({ id: team.id, name: team.name, lobId: team.lobId, supervisorId: team.supervisorId ?? "", status: team.status })} className="rounded-lg border border-border px-3 py-1 text-xs font-bold">Editar</button>
+                  <button onClick={() => void saveSetting({ type: "team", id: team.id, name: team.name, lobId: team.lobId, supervisorId: team.supervisorId, status: team.status === "INACTIVE" ? "ACTIVE" : "INACTIVE" }, "Status do time atualizado.")} className="rounded-lg border border-border px-3 py-1 text-xs font-bold">{statusButtonLabel(team.status)}</button>
+                </div>
+              ])} /> : <EmptyState title="Nenhum time" description="Crie times para supervisão, filtros e esteiras." />}
+            </Panel>
+          ) : null}
+
+          {activeSection === "Supervisores" ? (
+            <Panel title="Supervisores">
+              <div className="mb-4 grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto]">
+                <select value={supervisorDraft.supervisorId} onChange={(event) => setSupervisorDraft({ ...supervisorDraft, supervisorId: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"><option value="">Supervisor</option>{supervisorOptions.map((supervisor) => <option key={supervisor.id} value={supervisor.id}>{supervisor.name} - {supervisor.email}</option>)}</select>
+                <select value={supervisorDraft.teamId} onChange={(event) => setSupervisorDraft({ ...supervisorDraft, teamId: event.target.value, employeeId: "" })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"><option value="">Vincular time</option>{teamOptions.map((team) => <option key={team.id} value={team.id}>{team.name} - {team.lob}</option>)}</select>
+                <select value={supervisorDraft.employeeId} onChange={(event) => setSupervisorDraft({ ...supervisorDraft, employeeId: event.target.value, teamId: "" })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"><option value="">Vincular colaborador</option>{employeeOptionsForSettings.map((employee) => <option key={employee.id} value={employee.id}>{employee.name} - {employee.email || employee.wb}</option>)}</select>
+                <button disabled={savingSettings} onClick={() => void saveSetting({ type: "supervisor", ...supervisorDraft }, "Vínculo de supervisão atualizado.")} className="rounded-lg bg-blue-600 px-4 text-sm font-bold text-white disabled:opacity-60">Salvar vínculo</button>
+              </div>
+              {supervisorOptions.length ? <SimpleTable columns={["Supervisor", "E-mail", "LOB", "Time", "Agentes", "Status"]} rows={supervisorOptions.map((supervisor) => [
+                supervisor.name,
+                supervisor.email || "-",
+                supervisor.lob || "-",
+                supervisor.team || "-",
+                String(supervisor.supervisees ?? 0),
+                supervisor.status || "Ativo"
+              ])} /> : <EmptyState title="Nenhum supervisor" description="Atribua role SUPERVISOR a um usuário para aparecer aqui." />}
+            </Panel>
+          ) : null}
+
+          {activeSection === "Turnos" ? <Panel title="Turnos">
             <div className="mb-4 grid gap-3 md:grid-cols-[1fr_120px_120px_110px_auto]">
               <input value={shiftDraft.name} onChange={(event) => setShiftDraft({ ...shiftDraft, name: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Nome do turno" />
               <input value={shiftDraft.startsAt} onChange={(event) => setShiftDraft({ ...shiftDraft, startsAt: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Entrada" />
@@ -4709,9 +4977,9 @@ export function SettingsPage() {
                 ])}
               />
             ) : <EmptyState title="Nenhum turno cadastrado" description="Crie turnos para aparecerem em escala e filtros." />}
-          </Panel>
+          </Panel> : null}
 
-          <div className="grid gap-5 xl:grid-cols-2">
+          {activeSection === "Cargos/Funções" ? <div className="grid gap-5 xl:grid-cols-2">
             <Panel title="Cargos/Funções">
               <div className="mb-4 grid gap-3 md:grid-cols-[1fr_auto]">
                 <input value={roleTitleDraft.name} onChange={(event) => setRoleTitleDraft({ ...roleTitleDraft, name: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Cargo/Função operacional" />
@@ -4736,7 +5004,9 @@ export function SettingsPage() {
                 </div>
               ) : <EmptyState title="Nenhum cargo configurado" description="Cadastre cargos operacionais para uso no Mapa e cadastros." />}
             </Panel>
+          </div> : null}
 
+          {activeSection === "Configurações gerais" ? (
             <Panel title="Parâmetros e permissões">
               <div className="mb-5 grid gap-3 md:grid-cols-[1fr_auto]">
                 <FormInput label="Mês padrão local" value={defaultMonthDraft} onChange={setDefaultMonthDraft} />
@@ -4747,19 +5017,54 @@ export function SettingsPage() {
                 rows={(settings?.roles ?? []).map((role) => [role.name, role.label])}
               />
               <div className="mt-4 rounded-lg border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
-                Roles essenciais são protegidas. A alteração de role dos usuários continua no Mapa de Funcionários.
+                Apenas ADMIN acessa esta página. Modo local/produção é informativo; secrets continuam fora da interface.
+              </div>
+              <div className="mt-5 grid gap-3 md:grid-cols-2">
+                <FormInput label="Nome da operação" value={String(generalDraft.operationName ?? "Central Operacional")} onChange={(value) => setGeneralDraft({ ...generalDraft, operationName: value })} />
+                <FormInput label="Fuso horário" value={String(generalDraft.timezone ?? "America/Sao_Paulo")} onChange={(value) => setGeneralDraft({ ...generalDraft, timezone: value })} />
+                {["enableScheduleUpload", "enableDayOffRequests", "enableDayOffSell", "enablePublicRegistration", "enableEmployeeImport", "enableInternalNotifications"].map((key) => (
+                  <label key={key} className="flex items-center justify-between rounded-lg border border-border bg-slate-50 p-3 text-sm font-bold text-navy-950">
+                    {key}
+                    <input type="checkbox" checked={Boolean(generalDraft[key] ?? true)} onChange={(event) => setGeneralDraft({ ...generalDraft, [key]: event.target.checked })} />
+                  </label>
+                ))}
+                <button disabled={savingSettings} onClick={() => void saveSetting({ type: "generalSettings", values: { ...generalDraft, defaultMonth: defaultMonthDraft } }, "Configurações gerais salvas.")} className="rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">Salvar configurações gerais</button>
               </div>
             </Panel>
-          </div>
+          ) : null}
 
-          <Panel title="Tipos de solicitação">
-            {settings?.requestTypes.length ? (
-              <SimpleTable
-                columns={["Tipo", "Área", "SLA", "Aprovação"]}
-                rows={settings.requestTypes.map((type) => [type.name, type.area, `${type.slaHours}h`, type.requiresApproval ? "Sim" : "Não"])}
-              />
-            ) : <EmptyState title="Nenhum tipo configurado" description="Tipos essenciais serão criados pelo seed local." />}
-          </Panel>
+          {activeSection === "Tipos de solicitação" ? (
+            <Panel title="Tipos de solicitação">
+              <div className="mb-4 grid gap-3 md:grid-cols-[1fr_1fr_100px_120px_auto]">
+                <input value={requestTypeDraft.name} onChange={(event) => setRequestTypeDraft({ ...requestTypeDraft, name: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Tipo" />
+                <input value={requestTypeDraft.area} onChange={(event) => setRequestTypeDraft({ ...requestTypeDraft, area: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Área" />
+                <input value={requestTypeDraft.slaHours} onChange={(event) => setRequestTypeDraft({ ...requestTypeDraft, slaHours: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="SLA" />
+                <select value={requestTypeDraft.status} onChange={(event) => setRequestTypeDraft({ ...requestTypeDraft, status: event.target.value as "ACTIVE" | "INACTIVE" })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"><option value="ACTIVE">Ativo</option><option value="INACTIVE">Inativo</option></select>
+                <button disabled={savingSettings} onClick={() => void saveSetting({ type: "requestType", ...requestTypeDraft, slaHours: Number(requestTypeDraft.slaHours) }, requestTypeDraft.id ? "Tipo atualizado." : "Tipo criado.")} className="rounded-lg bg-blue-600 px-4 text-sm font-bold text-white disabled:opacity-60">{requestTypeDraft.id ? "Salvar" : "Criar"}</button>
+              </div>
+              {settings?.requestTypes.length ? (
+                <SimpleTable
+                  columns={["Tipo", "Área", "SLA", "Aprovação", "Status", "Ações"]}
+                  rows={settings.requestTypes.map((type) => [
+                    type.name,
+                    type.area,
+                    `${type.slaHours}h`,
+                    type.requiresApproval ? "Sim" : "Não",
+                    <StatusBadge key={`${type.id}-status`} status={type.status === "INACTIVE" ? "Inativo" : "Ativo"} />,
+                    <div key={`${type.id}-actions`} className="flex flex-wrap gap-2">
+                      <button onClick={() => setRequestTypeDraft({ id: type.id, name: type.name, area: type.area, slaHours: String(type.slaHours), requiresApproval: type.requiresApproval, status: type.status ?? "ACTIVE" })} className="rounded-lg border border-border px-3 py-1 text-xs font-bold">Editar</button>
+                      <button onClick={() => void saveSetting({ type: "requestType", id: type.id, name: type.name, area: type.area, slaHours: type.slaHours, requiresApproval: type.requiresApproval, status: type.status === "INACTIVE" ? "ACTIVE" : "INACTIVE" }, "Status do tipo atualizado.")} className="rounded-lg border border-border px-3 py-1 text-xs font-bold">{statusButtonLabel(type.status)}</button>
+                    </div>
+                  ])}
+                />
+              ) : <EmptyState title="Nenhum tipo configurado" description="Tipos essenciais serão criados pelo seed local." />}
+            </Panel>
+          ) : null}
+
+          {activeSection === "SLAs" ? rulePanel("SLAs", "slaRule", settings?.slaRules ?? []) : null}
+          {activeSection === "Regras de aprovação" ? rulePanel("Regras de aprovação", "approvalRule", settings?.approvalRules ?? []) : null}
+          {activeSection === "Regras de cobertura" ? rulePanel("Regras de cobertura", "coverageRule", settings?.coverageRules ?? []) : null}
+          {activeSection === "Regras de tokens" ? rulePanel("Regras de tokens", "tokenRule", settings?.tokenRules ?? []) : null}
         </div>
       </div>
     </div>

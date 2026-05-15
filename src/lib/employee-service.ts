@@ -55,7 +55,7 @@ export async function listOperationalEmployees(actor: Actor) {
   }
 }
 
-export async function updateOperationalEmployee(actor: Actor, input: { id: string; roleTitle?: string; operationalStatus?: string; roleName?: string }) {
+export async function updateOperationalEmployee(actor: Actor, input: { id: string; roleTitle?: string; operationalStatus?: string; roleName?: string; supervisorId?: string }) {
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
     if (!user) return { error: "Usuário não autenticado." };
@@ -71,7 +71,8 @@ export async function updateOperationalEmployee(actor: Actor, input: { id: strin
     const nextRoleTitle = input.roleTitle?.trim();
     const nextStatus = input.operationalStatus?.trim();
     const nextRoleName = input.roleName?.trim();
-    if (!nextRoleTitle && !nextStatus && !nextRoleName) return { error: "Informe ao menos um campo para atualizar." };
+    const nextSupervisorId = input.supervisorId?.trim();
+    if (!nextRoleTitle && !nextStatus && !nextRoleName && nextSupervisorId === undefined) return { error: "Informe ao menos um campo para atualizar." };
 
     let targetRoleId: string | undefined;
     if (nextRoleName) {
@@ -84,6 +85,12 @@ export async function updateOperationalEmployee(actor: Actor, input: { id: strin
       if (!targetRole) return { error: "Role/permissão não encontrada." };
       targetRoleId = targetRole.id;
     }
+    if (nextSupervisorId) {
+      const supervisor = await prisma.employeeProfile.findFirst({ where: { id: nextSupervisorId, deletedAt: null }, include: { user: { include: { role: true } } } });
+      if (!supervisor?.user || !["SUPERVISOR", "ADMIN"].includes(supervisor.user.role.name)) {
+        return { error: "Supervisor selecionado precisa ter role SUPERVISOR ou ADMIN." };
+      }
+    }
 
     const updated = await prisma.$transaction(async (tx) => {
       if (targetRoleId && employee.userId) {
@@ -93,7 +100,8 @@ export async function updateOperationalEmployee(actor: Actor, input: { id: strin
         where: { id: employee.id },
         data: {
           ...(nextRoleTitle ? { roleTitle: nextRoleTitle } : {}),
-          ...(nextStatus ? { operationalStatus: nextStatus } : {})
+          ...(nextStatus ? { operationalStatus: nextStatus } : {}),
+          ...(nextSupervisorId !== undefined ? { supervisorId: nextSupervisorId || null } : {})
         },
         include: { ...employeeInclude }
       });
@@ -104,8 +112,8 @@ export async function updateOperationalEmployee(actor: Actor, input: { id: strin
           entity: "EmployeeProfile",
           entityId: employee.id,
           reason: "Atualização de dados operacionais pelo painel administrativo",
-          previousValue: { roleTitle: employee.roleTitle, operationalStatus: employee.operationalStatus, role: employee.user?.role?.name },
-          newValue: { roleTitle: record.roleTitle, operationalStatus: record.operationalStatus, role: record.user?.role?.name }
+          previousValue: { roleTitle: employee.roleTitle, operationalStatus: employee.operationalStatus, role: employee.user?.role?.name, supervisorId: employee.supervisorId },
+          newValue: { roleTitle: record.roleTitle, operationalStatus: record.operationalStatus, role: record.user?.role?.name, supervisorId: record.supervisorId }
         }
       });
       return record;
@@ -184,6 +192,7 @@ function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: 
     wb: employee.wbLogin,
     lob: employee.lob.name,
     supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
+    supervisorId: employee.supervisorId ?? "",
     shift: employee.shift.name,
     schedule: employee.scheduleType,
     status: employee.operationalStatus,

@@ -14,3 +14,5 @@ storage/local
 node_modules
 .next
 .next.stale
+.env.local.backup
+*.backup

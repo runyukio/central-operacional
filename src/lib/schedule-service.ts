@@ -46,6 +46,7 @@ const uiToAttendanceStatus: Record<string, AttendanceStatus> = {
 };
 
 export const statusesRequiringReason = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala"];
+const supervisorJustificationStatuses = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala"];
 
 const defaultShiftTimes: Record<string, { startsAt: string; endsAt: string }> = {
   Manhã: { startsAt: "06:00", endsAt: "14:00" },
@@ -138,16 +139,10 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       where:
         role === "COLABORADOR" && user.employeeProfile
           ? { id: user.employeeProfile.id, deletedAt: null }
-          : role === "SUPERVISOR" && user.employeeProfile
-            ? {
-              supervisorId: user.employeeProfile.id,
-              deletedAt: null,
-              ...employeeFilters(query, search)
-            }
-            : {
-              deletedAt: null,
-              ...employeeFilters(query, search)
-            },
+          : {
+            deletedAt: null,
+            ...employeeFilters(query, search)
+          },
       include: {
         user: true,
         lob: true,
@@ -345,6 +340,12 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
 export async function updateOperationalAttendance(actor: Actor, input: AttendanceInput) {
   const validationError = validateAttendance(input);
   if (validationError) return { error: validationError };
+  const role = normalizeRole(actor.role);
+
+  if (role === "SUPERVISOR") {
+    return justifyAttendanceAsSupervisor(actor, input);
+  }
+
   const defaultTimes = defaultShiftTimes[input.shift] ?? defaultShiftTimes.Manhã;
 
   const scheduleResult = await editOperationalSchedule(actor, {
@@ -373,6 +374,135 @@ export async function updateOperationalAttendance(actor: Actor, input: Attendanc
     },
     summary: scheduleResult.summary
   };
+}
+
+async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInput) {
+  if (!supervisorJustificationStatuses.includes(input.status)) {
+    return { error: "Supervisor só pode justificar ocorrências. Presença, escala, folga, férias e treinamento são atualizados pelo WFM/Admin." };
+  }
+
+  try {
+    const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
+    if (!user) return { error: "Usuário ativo não encontrado para justificar ocorrência." };
+    if (!user.employeeProfile) return { error: "Supervisor sem perfil de funcionário vinculado." };
+
+    const date = parseDateOnly(input.date);
+    if (!date) return { error: "Data inválida." };
+
+    const employee = await prisma.employeeProfile.findFirst({
+      where: { id: input.employeeId, deletedAt: null },
+      include: { shift: true, supervisor: true }
+    });
+    if (!employee) return { error: "Colaborador não encontrado." };
+    if (employee.supervisorId && employee.supervisorId !== user.employeeProfile.id) {
+      return { error: "Supervisor só pode justificar colaboradores vinculados ao seu time." };
+    }
+
+    const status = uiToAttendanceStatus[input.status];
+    if (!status) return { error: "Status de ocorrência inválido." };
+
+    const schedule = await prisma.schedule.findUnique({
+      where: { employeeId_date: { employeeId: employee.id, date } },
+      include: { shift: true }
+    });
+    const shift = schedule?.shift ?? (input.shift ? await prisma.shift.findUnique({ where: { name: input.shift } }) : null) ?? employee.shift;
+    const existing = await prisma.attendanceRecord.findFirst({
+      where: {
+        employeeId: employee.id,
+        date,
+        shiftId: shift.id
+      }
+    });
+
+    const saved = await prisma.$transaction(async (tx) => {
+      const record = existing
+        ? await tx.attendanceRecord.update({
+            where: { id: existing.id },
+            data: {
+              scheduleId: schedule?.id ?? existing.scheduleId,
+              status,
+              absenceReason: input.absenceReason,
+              reasonCategory: input.reasonCategory,
+              supervisorJustification: input.supervisorJustification,
+              hasEvidence: input.hasEvidence ?? false,
+              evidenceUrl: input.evidenceUrl,
+              isJustified: Boolean(input.absenceReason || input.supervisorJustification),
+              impactsAbs: input.impactsAbs ?? impactsAbs(input.status, input.absenceReason),
+              impactsCoverage: input.impactsCoverage ?? impactsCoverage(input.status),
+              registeredById: user.id,
+              justifiedById: user.id,
+              justifiedAt: new Date()
+            }
+          })
+        : await tx.attendanceRecord.create({
+            data: {
+              employeeId: employee.id,
+              scheduleId: schedule?.id,
+              date,
+              shiftId: shift.id,
+              status,
+              absenceReason: input.absenceReason,
+              reasonCategory: input.reasonCategory,
+              supervisorJustification: input.supervisorJustification,
+              hasEvidence: input.hasEvidence ?? false,
+              evidenceUrl: input.evidenceUrl,
+              isJustified: Boolean(input.absenceReason || input.supervisorJustification),
+              impactsAbs: input.impactsAbs ?? impactsAbs(input.status, input.absenceReason),
+              impactsCoverage: input.impactsCoverage ?? impactsCoverage(input.status),
+              registeredById: user.id,
+              justifiedById: user.id,
+              justifiedAt: new Date()
+            }
+          });
+
+      await tx.attendanceHistory.create({
+        data: {
+          attendanceRecordId: record.id,
+          changedById: user.id,
+          previousStatus: existing?.status,
+          newStatus: status,
+          previousReason: existing?.absenceReason,
+          newReason: input.absenceReason,
+          comment: input.supervisorJustification || input.absenceReason
+        }
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          action: "EDICAO",
+          entity: "AttendanceRecord",
+          entityId: record.id,
+          reason: "Justificativa de ocorrência registrada pelo Supervisor",
+          previousValue: serialize(existing),
+          newValue: serialize(record)
+        }
+      });
+
+      return record;
+    });
+
+    return {
+      data: {
+        id: saved.id,
+        employeeId: employee.id,
+        employeeName: employee.fullName,
+        date: formatDate(date),
+        shift: shift.name,
+        status: input.status,
+        absenceReason: saved.absenceReason ?? undefined,
+        supervisorJustification: saved.supervisorJustification ?? undefined,
+        impactsAbs: saved.impactsAbs,
+        impactsCoverage: saved.impactsCoverage,
+        registeredBy: user.name,
+        registeredAt: formatDateTime(saved.registeredAt)
+      },
+      summary: await getAttendanceSummaryFromDb(resolveAttendancePeriod({ month: date.getUTCMonth() + 1, year: date.getUTCFullYear() }))
+    };
+  } catch (error) {
+    recordErrorLog({ userEmail: actor.email, code: "SUPERVISOR_ATTENDANCE_JUSTIFICATION_ERROR", message: error instanceof Error ? error.message : "Falha ao justificar ocorrência", action: "ATTENDANCE_JUSTIFY", severity: "ERROR" });
+    return { error: "Não foi possível salvar a justificativa da ocorrência." };
+  }
 }
 
 export async function removeOperationalSchedules(actor: Actor, input: ScheduleRemoveInput) {
@@ -431,7 +561,17 @@ export async function removeOperationalSchedules(actor: Actor, input: ScheduleRe
   }
 }
 
-export async function previewOperationalScheduleImport(rows: Array<Record<string, unknown>>) {
+export async function previewOperationalScheduleImport(actor: Actor, rows: Array<Record<string, unknown>>) {
+  if (!["ADMIN", "GESTOR", "WFM"].includes(normalizeRole(actor.role))) {
+    return toImportPreview(
+      rows,
+      rows.map((_, index) => ({
+        rowNumber: index + 1,
+        errors: ["Sem permissão para importar escala. Supervisor apenas visualiza e justifica ocorrências."],
+        warnings: []
+      }))
+    );
+  }
   try {
     const validation = await validateImportRowsInDb(rows);
     return toImportPreview(rows, validation);
@@ -804,11 +944,15 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     include: { attendanceRecords: true, shift: true }
   });
   const plannedStatuses: ScheduleStatus[] = ["ESCALADO", "PRESENTE", "ATRASO", "SAIDA_ANTECIPADA", "AUSENTE", "FALTA", "VENDA_FOLGA_APROVADA"];
-  const presentStatuses: ScheduleStatus[] = ["PRESENTE", "VENDA_FOLGA_APROVADA"];
-  const absentStatuses: ScheduleStatus[] = ["AUSENTE", "FALTA", "AFASTADO", "SAIDA_ANTECIPADA"];
+  const presentStatuses = ["PRESENTE", "VENDA_FOLGA_APROVADA"];
+  const absentStatuses = ["AUSENTE", "FALTA", "AFASTADO", "SAIDA_ANTECIPADA"];
+  const effectiveStatus = (schedule: (typeof schedules)[number]) => {
+    const latest = [...schedule.attendanceRecords].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
+    return latest?.status ?? schedule.status;
+  };
   const planned = schedules.filter((schedule) => plannedStatuses.includes(schedule.status)).length;
-  const present = schedules.filter((schedule) => presentStatuses.includes(schedule.status)).length;
-  const absent = schedules.filter((schedule) => absentStatuses.includes(schedule.status)).length;
+  const present = schedules.filter((schedule) => presentStatuses.includes(String(effectiveStatus(schedule)))).length;
+  const absent = schedules.filter((schedule) => absentStatuses.includes(String(effectiveStatus(schedule)))).length;
   const denominator = planned || 1;
   const coverageRate = Math.round((present / denominator) * 1000) / 10;
   const absRate = Math.round((absent / denominator) * 1000) / 10;
@@ -817,8 +961,8 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     const shiftName = schedule.shift?.name ?? "Sem turno";
     acc[shiftName] ??= { planned: 0, present: 0, absent: 0, gap: 0 };
     if (plannedStatuses.includes(schedule.status)) acc[shiftName].planned += 1;
-    if (presentStatuses.includes(schedule.status)) acc[shiftName].present += 1;
-    if (absentStatuses.includes(schedule.status)) acc[shiftName].absent += 1;
+    if (presentStatuses.includes(String(effectiveStatus(schedule)))) acc[shiftName].present += 1;
+    if (absentStatuses.includes(String(effectiveStatus(schedule)))) acc[shiftName].absent += 1;
     acc[shiftName].gap = acc[shiftName].present - acc[shiftName].planned;
     return acc;
   }, {});
@@ -832,8 +976,8 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     present,
     absent,
     absRate,
-    late: schedules.filter((schedule) => schedule.status === "ATRASO").length,
-    earlyLeave: schedules.filter((schedule) => schedule.status === "SAIDA_ANTECIPADA").length,
+    late: schedules.filter((schedule) => effectiveStatus(schedule) === "ATRASO").length,
+    earlyLeave: schedules.filter((schedule) => effectiveStatus(schedule) === "SAIDA_ANTECIPADA").length,
     unjustified: attendanceRecords.filter((record) => record.impactsAbs && !record.isJustified).length,
     coverageRate,
     gap: present - planned,

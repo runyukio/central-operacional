@@ -49,6 +49,39 @@ export function canEditSchedule(user: PermissionUser) {
   return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM"].includes(role);
 }
 
+export function canAccessSettings(user: PermissionUser) {
+  return isActiveUser(user) && normalizeRole(user.role) === "ADMIN";
+}
+
+export function canManageUsers(user: PermissionUser) {
+  return canAccessSettings(user);
+}
+
+export function canManageRoles(user: PermissionUser) {
+  return canAccessSettings(user);
+}
+
+export function canManagePermissions(user: PermissionUser) {
+  return canAccessSettings(user);
+}
+
+export function canManageOperationalSettings(user: PermissionUser) {
+  return canAccessSettings(user);
+}
+
+export function canImportSchedules(user: PermissionUser) {
+  const role = normalizeRole(user.role);
+  return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM"].includes(role);
+}
+
+export function canAddScheduleManually(user: PermissionUser) {
+  return canImportSchedules(user);
+}
+
+export function canMarkPresent(user: PermissionUser) {
+  return canImportSchedules(user);
+}
+
 export function canApproveRequest(user: PermissionUser, request?: { area?: string | null; type?: string | null }) {
   const role = normalizeRole(user.role);
   if (!isActiveUser(user)) return false;
