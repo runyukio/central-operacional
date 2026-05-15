@@ -187,12 +187,15 @@ export async function getSystemSettings(actor: Actor) {
 }
 
 async function getLimitedSystemSettings() {
-  const [lobs, shifts, requestTypes, lobStatus, shiftStatus, requestTypeStatus, roleTitles, defaultMonth, generalSettings] = await Promise.all([
+  const [lobs, shifts, requestTypes, teams, employees, lobStatus, shiftStatus, teamStatus, requestTypeStatus, roleTitles, defaultMonth, generalSettings] = await Promise.all([
     prisma.lob.findMany({ orderBy: { name: "asc" } }),
     prisma.shift.findMany({ orderBy: { name: "asc" } }),
     prisma.requestType.findMany({ orderBy: { name: "asc" } }),
+    prisma.team.findMany({ include: { lob: true, supervisor: { include: { user: true } } }, orderBy: { name: "asc" } }),
+    prisma.employeeProfile.findMany({ where: { deletedAt: null }, include: { user: { include: { role: true } }, lob: true, team: true }, orderBy: { fullName: "asc" }, take: 500 }),
     readStatusMap(configKeys.lobStatus),
     readStatusMap(configKeys.shiftStatus),
+    readStatusMap(configKeys.teamStatus),
     readStatusMap(configKeys.requestTypeStatus),
     readRoleTitles(),
     readStringConfig(configKeys.defaultMonth, "2026-05"),
@@ -204,6 +207,20 @@ async function getLimitedSystemSettings() {
     lobs: lobs.map((lob) => ({ id: lob.id, name: lob.name, label: lob.name, description: lob.description ?? "", status: lobStatus[lob.id] ?? "ACTIVE", active: (lobStatus[lob.id] ?? "ACTIVE") === "ACTIVE", system: lob.name === "ALL", isSystem: lob.name === "ALL" })),
     shifts: shifts.map((shift) => ({ id: shift.id, name: shift.name, startsAt: shift.startsAt, endsAt: shift.endsAt, color: shift.color, status: shiftStatus[shift.id] ?? "ACTIVE" })),
     requestTypes: requestTypes.map((type) => ({ id: type.id, name: type.name, area: type.area, slaHours: type.slaHours, requiresApproval: type.requiresApproval, status: requestTypeStatus[type.id] ?? "ACTIVE", essential: essentialDayOffTypes.includes(type.name) })),
+    teams: teams.map((team) => ({ id: team.id, name: team.name, lobId: team.lobId, lob: team.lob.name, supervisorId: team.supervisorId ?? "", supervisorName: team.supervisor?.fullName ?? "", supervisorEmail: team.supervisor?.user?.email ?? "", status: teamStatus[team.id] ?? "ACTIVE" })),
+    supervisors: employees
+      .filter((employee) => employee.user?.role?.name === "SUPERVISOR" || employee.user?.role?.name === "ADMIN")
+      .map((employee) => ({
+        id: employee.id,
+        name: employee.fullName,
+        email: employee.user?.email ?? "",
+        lobId: employee.lobId,
+        lob: employee.lob.name,
+        teamId: employee.teamId,
+        team: employee.team.name,
+        supervisees: employees.filter((item) => item.supervisorId === employee.id).length,
+        status: employee.operationalStatus
+      })),
     roleTitles,
     defaultMonth,
     generalSettings

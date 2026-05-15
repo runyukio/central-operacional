@@ -68,6 +68,7 @@ export type ScheduleEditInput = {
   lob?: string;
   supervisor?: string;
   observation?: string;
+  pendingJustification?: boolean;
   impactsAbs?: boolean;
   impactsCoverage?: boolean;
   hasEvidence?: boolean;
@@ -148,7 +149,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         lob: true,
         shift: true,
         supervisor: true,
-        schedules: { where: scheduleWhere, include: { shift: true }, orderBy: { date: "asc" } }
+        schedules: { where: scheduleWhere, include: { shift: true, attendanceRecords: true }, orderBy: { date: "asc" } }
       },
       orderBy: { fullName: "asc" },
       take: 200
@@ -178,6 +179,8 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         const day = index + 1;
         const schedule = employee.schedules.find((item) => item.date.getUTCDate() === day);
         if (!schedule) return "Sem escala";
+        const attendanceLabel = attendanceDisplayLabel(schedule.attendanceRecords);
+        if (attendanceLabel) return attendanceLabel;
         if (schedule.status === "ESCALADO") return schedule.shift?.name ?? "Escalado";
         return scheduleToUiStatus[schedule.status] ?? schedule.status;
       })
@@ -186,7 +189,9 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
     const own = user.employeeProfile ? employees.find((employee) => employee.id === user.employeeProfile?.id) : null;
     const scheduleDays = calendarCells(period.year, period.month).map(({ date, outside }) => {
       const schedule = outside ? undefined : own?.schedules.find((item) => item.date.getUTCDate() === date);
-      const label = schedule ? (schedule.status === "ESCALADO" ? schedule.shift?.name ?? "Escalado" : scheduleToUiStatus[schedule.status] ?? "Escalado") : "Sem escala";
+      const label = schedule
+        ? attendanceDisplayLabel(schedule.attendanceRecords) ?? (schedule.status === "ESCALADO" ? schedule.shift?.name ?? "Escalado" : scheduleToUiStatus[schedule.status] ?? "Escalado")
+        : "Sem escala";
       return { date, outside, shift: label, label };
     });
 
@@ -306,8 +311,9 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
         }
       });
 
+      let attendanceRecord: { id: string } | null = null;
       if (uiToAttendanceStatus[input.status]) {
-        await upsertAttendance(tx, user.id, employee.id, schedule.id, date, input);
+        attendanceRecord = (await upsertAttendance(tx, user.id, employee.id, schedule.id, date, input)) ?? null;
       }
 
       await tx.employeeProfile.update({ where: { id: employee.id }, data: { operationalStatus: statusToOperational(input.status) } });
@@ -323,8 +329,8 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
         }
       });
 
-      if (requiresReason(input.status)) {
-        await notifyAttendanceImpact(tx, employee.id, input.status, input.observation);
+      if (attendanceRecord && isPendingJustificationInput(input)) {
+        await notifyAttendanceImpact(tx, employee.id, attendanceRecord.id, input.status, input.observation);
       }
 
       return schedule;
@@ -380,6 +386,8 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
   if (!supervisorJustificationStatuses.includes(input.status)) {
     return { error: "Supervisor só pode justificar ocorrências. Presença, escala, folga, férias e treinamento são atualizados pelo WFM/Admin." };
   }
+  if (!input.absenceReason?.trim()) return { error: "Motivo obrigatório para justificar a ocorrência." };
+  if (!input.supervisorJustification?.trim()) return { error: "Justificativa obrigatória para encerrar a pendência." };
 
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
@@ -405,55 +413,38 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
       where: { employeeId_date: { employeeId: employee.id, date } },
       include: { shift: true }
     });
-    const shift = schedule?.shift ?? (input.shift ? await prisma.shift.findUnique({ where: { name: input.shift } }) : null) ?? employee.shift;
+    if (!schedule) return { error: "Ocorrência de escala não encontrada para esta data. WFM/Admin precisa registrar a ocorrência antes da justificativa." };
+    const shift = schedule.shift ?? employee.shift;
     const existing = await prisma.attendanceRecord.findFirst({
       where: {
         employeeId: employee.id,
         date,
-        shiftId: shift.id
+        OR: [{ scheduleId: schedule.id }, { shiftId: shift.id }]
       }
     });
+    if (!existing) return { error: "Nenhuma pendência de justificativa foi registrada para este colaborador/data." };
+    const existingStatus = scheduleToUiStatus[existing.status] ?? String(existing.status);
+    if (!supervisorJustificationStatuses.includes(existingStatus)) return { error: "Esta ocorrência não é uma ausência justificável pelo Supervisor." };
+    if (existing.isJustified) return { error: "Esta ocorrência já foi justificada." };
 
     const saved = await prisma.$transaction(async (tx) => {
-      const record = existing
-        ? await tx.attendanceRecord.update({
-            where: { id: existing.id },
-            data: {
-              scheduleId: schedule?.id ?? existing.scheduleId,
-              status,
-              absenceReason: input.absenceReason,
-              reasonCategory: input.reasonCategory,
-              supervisorJustification: input.supervisorJustification,
-              hasEvidence: input.hasEvidence ?? false,
-              evidenceUrl: input.evidenceUrl,
-              isJustified: Boolean(input.absenceReason || input.supervisorJustification),
-              impactsAbs: input.impactsAbs ?? impactsAbs(input.status, input.absenceReason),
-              impactsCoverage: input.impactsCoverage ?? impactsCoverage(input.status),
-              registeredById: user.id,
-              justifiedById: user.id,
-              justifiedAt: new Date()
-            }
-          })
-        : await tx.attendanceRecord.create({
-            data: {
-              employeeId: employee.id,
-              scheduleId: schedule?.id,
-              date,
-              shiftId: shift.id,
-              status,
-              absenceReason: input.absenceReason,
-              reasonCategory: input.reasonCategory,
-              supervisorJustification: input.supervisorJustification,
-              hasEvidence: input.hasEvidence ?? false,
-              evidenceUrl: input.evidenceUrl,
-              isJustified: Boolean(input.absenceReason || input.supervisorJustification),
-              impactsAbs: input.impactsAbs ?? impactsAbs(input.status, input.absenceReason),
-              impactsCoverage: input.impactsCoverage ?? impactsCoverage(input.status),
-              registeredById: user.id,
-              justifiedById: user.id,
-              justifiedAt: new Date()
-            }
-          });
+      const record = await tx.attendanceRecord.update({
+        where: { id: existing.id },
+        data: {
+          scheduleId: schedule.id,
+          status,
+          absenceReason: input.absenceReason,
+          reasonCategory: input.reasonCategory,
+          supervisorJustification: input.supervisorJustification,
+          hasEvidence: input.hasEvidence ?? false,
+          evidenceUrl: input.evidenceUrl,
+          isJustified: true,
+          impactsAbs: input.impactsAbs ?? impactsAbs(input.status, input.absenceReason),
+          impactsCoverage: input.impactsCoverage ?? impactsCoverage(input.status),
+          justifiedById: user.id,
+          justifiedAt: new Date()
+        }
+      });
 
       await tx.attendanceHistory.create({
         data: {
@@ -479,6 +470,30 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
         }
       });
 
+      const reviewers = await tx.user.findMany({
+        where: {
+          status: "ACTIVE",
+          deletedAt: null,
+          id: { not: user.id },
+          role: { name: { in: ["ADMIN", "WFM", "GESTOR"] } }
+        },
+        select: { id: true }
+      });
+      if (reviewers.length) {
+        await tx.notification.createMany({
+          data: reviewers.map((reviewer) => ({
+            userId: reviewer.id,
+            title: "Justificativa de ausência enviada",
+            body: `${user.name} justificou uma ocorrência de ${employee.fullName}.`,
+            category: "Presença",
+            type: "INFO",
+            entity: "AttendanceRecord",
+            entityId: record.id,
+            href: "/escalas"
+          }))
+        });
+      }
+
       return record;
     });
 
@@ -488,10 +503,13 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
         employeeId: employee.id,
         employeeName: employee.fullName,
         date: formatDate(date),
+        dateIso: date.toISOString().slice(0, 10),
         shift: shift.name,
         status: input.status,
         absenceReason: saved.absenceReason ?? undefined,
+        reasonCategory: saved.reasonCategory ?? undefined,
         supervisorJustification: saved.supervisorJustification ?? undefined,
+        isJustified: saved.isJustified,
         impactsAbs: saved.impactsAbs,
         impactsCoverage: saved.impactsCoverage,
         registeredBy: user.name,
@@ -729,13 +747,20 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
       ...(period ? { date: { gte: period.start, lte: period.end } } : {}),
       ...(lobFilter ? { employee: { lob: { name: lobFilter } } } : {})
     };
+    let attendanceWhere: Prisma.AttendanceRecordWhereInput =
+      role === "COLABORADOR" && user.employeeProfile
+        ? { ...baseWhere, employeeId: user.employeeProfile.id }
+        : baseWhere;
+    if (role === "SUPERVISOR" && user.employeeProfile) {
+      const ownTeamRecords = await prisma.attendanceRecord.count({
+        where: { ...baseWhere, employee: { supervisorId: user.employeeProfile.id, ...(lobFilter ? { lob: { name: lobFilter } } : {}) } }
+      });
+      attendanceWhere = ownTeamRecords
+        ? { ...baseWhere, employee: { supervisorId: user.employeeProfile.id, ...(lobFilter ? { lob: { name: lobFilter } } : {}) } }
+        : baseWhere;
+    }
     const records = await prisma.attendanceRecord.findMany({
-      where:
-        role === "COLABORADOR" && user.employeeProfile
-          ? { ...baseWhere, employeeId: user.employeeProfile.id }
-          : role === "SUPERVISOR" && user.employeeProfile
-            ? { ...baseWhere, employee: { supervisorId: user.employeeProfile.id, ...(lobFilter ? { lob: { name: lobFilter } } : {}) } }
-            : baseWhere,
+      where: attendanceWhere,
       include: { employee: { include: { shift: true } }, registeredBy: true },
       orderBy: { registeredAt: "desc" },
       take: 100
@@ -747,10 +772,13 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
         employeeId: record.employeeId,
         employeeName: record.employee.fullName,
         date: formatDate(record.date),
+        dateIso: record.date.toISOString().slice(0, 10),
         shift: record.employee.shift.name,
         status: scheduleToUiStatus[record.status] ?? record.status,
         absenceReason: record.absenceReason ?? undefined,
+        reasonCategory: record.reasonCategory ?? undefined,
         supervisorJustification: record.supervisorJustification ?? undefined,
+        isJustified: record.isJustified,
         impactsAbs: record.impactsAbs,
         impactsCoverage: record.impactsCoverage,
         registeredBy: record.registeredBy?.name ?? "Sistema",
@@ -783,8 +811,21 @@ function validateScheduleEdit(input: ScheduleEditInput) {
   if (!input.date) return "Data obrigatória.";
   if (!input.status) return "Status obrigatório.";
   if (needsTime(input.status) && (!input.shift || !input.startsAt || !input.endsAt)) return "Turno, entrada e saída são obrigatórios para Escalado ou Presente.";
-  if (requiresReason(input.status) && !input.observation?.trim()) return "Motivo ou observação obrigatório para este status.";
+  if (requiresReason(input.status) && !input.observation?.trim() && !input.pendingJustification) return "Motivo ou observação obrigatório para este status, exceto quando marcado como sem justificativa.";
   return "";
+}
+
+function isPendingJustificationInput(input: ScheduleEditInput) {
+  const observation = input.observation?.trim() ?? "";
+  return requiresReason(input.status) && (Boolean(input.pendingJustification) || !observation || /^sem justificativa/i.test(observation));
+}
+
+function attendanceDisplayLabel(records: Array<{ status: AttendanceStatus | string; isJustified: boolean; updatedAt: Date }>) {
+  const latest = [...records].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
+  if (!latest) return null;
+  const status = scheduleToUiStatus[String(latest.status)] ?? String(latest.status);
+  if (!requiresReason(status)) return null;
+  return latest.isJustified ? `${status} justificada` : `${status} sem justificativa`;
 }
 
 async function validateImportRowsInDb(rows: Array<Record<string, unknown>>) {
@@ -864,24 +905,27 @@ async function upsertAttendance(tx: Prisma.TransactionClient, userId: string, em
   const status = uiToAttendanceStatus[input.status];
   if (!status) return;
   const existing = await tx.attendanceRecord.findFirst({ where: { employeeId, scheduleId } });
-  const absImpact = input.impactsAbs ?? impactsAbs(input.status, input.observation);
+  const pendingJustification = isPendingJustificationInput(input);
+  const observation = input.observation?.trim();
+  const savedReason = pendingJustification ? "Sem justificativa" : observation || undefined;
+  const absImpact = input.impactsAbs ?? impactsAbs(input.status, savedReason);
   const coverageImpact = input.impactsCoverage ?? impactsCoverage(input.status);
   const saved = existing
     ? await tx.attendanceRecord.update({
         where: { id: existing.id },
         data: {
           status,
-          absenceReason: input.observation,
+          absenceReason: savedReason,
           reasonCategory: requiresReason(input.status) ? "Escala" : undefined,
-          supervisorJustification: input.observation,
-          isJustified: !requiresReason(input.status) || Boolean(input.observation),
+          supervisorJustification: pendingJustification ? null : observation || null,
+          isJustified: !requiresReason(input.status) || !pendingJustification,
           impactsAbs: absImpact,
           impactsCoverage: coverageImpact,
           hasEvidence: input.hasEvidence ?? false,
           evidenceUrl: input.evidenceUrl,
           registeredById: userId,
-          justifiedById: input.observation ? userId : undefined,
-          justifiedAt: input.observation ? new Date() : undefined
+          justifiedById: !pendingJustification && observation ? userId : null,
+          justifiedAt: !pendingJustification && observation ? new Date() : null
         }
       })
     : await tx.attendanceRecord.create({
@@ -890,17 +934,17 @@ async function upsertAttendance(tx: Prisma.TransactionClient, userId: string, em
           scheduleId,
           date,
           status,
-          absenceReason: input.observation,
+          absenceReason: savedReason,
           reasonCategory: requiresReason(input.status) ? "Escala" : undefined,
-          supervisorJustification: input.observation,
-          isJustified: !requiresReason(input.status) || Boolean(input.observation),
+          supervisorJustification: pendingJustification ? null : observation || null,
+          isJustified: !requiresReason(input.status) || !pendingJustification,
           impactsAbs: absImpact,
           impactsCoverage: coverageImpact,
           hasEvidence: input.hasEvidence ?? false,
           evidenceUrl: input.evidenceUrl,
           registeredById: userId,
-          justifiedById: input.observation ? userId : undefined,
-          justifiedAt: input.observation ? new Date() : undefined
+          justifiedById: !pendingJustification && observation ? userId : undefined,
+          justifiedAt: !pendingJustification && observation ? new Date() : undefined
         }
       });
 
@@ -911,24 +955,35 @@ async function upsertAttendance(tx: Prisma.TransactionClient, userId: string, em
       previousStatus: existing?.status,
       newStatus: status,
       previousReason: existing?.absenceReason,
-      newReason: input.observation,
-      comment: input.observation
+      newReason: savedReason,
+      comment: pendingJustification ? "Ocorrência marcada sem justificativa; pendente de supervisor." : observation
     }
   });
+
+  return saved;
 }
 
-async function notifyAttendanceImpact(tx: Prisma.TransactionClient, employeeId: string, status: string, observation?: string) {
+async function notifyAttendanceImpact(tx: Prisma.TransactionClient, employeeId: string, attendanceRecordId: string, status: string, observation?: string) {
   const employee = await tx.employeeProfile.findUnique({ where: { id: employeeId }, include: { supervisor: { include: { user: true } } } });
   if (!employee?.supervisor?.userId) return;
+  const duplicate = await tx.notification.findFirst({
+    where: {
+      userId: employee.supervisor.userId,
+      entity: "AttendanceRecord",
+      entityId: attendanceRecordId,
+      readAt: null
+    }
+  });
+  if (duplicate) return;
   await tx.notification.create({
     data: {
       userId: employee.supervisor.userId,
-      title: "Ausência pendente de acompanhamento",
-      body: `${employee.fullName} foi marcado como ${status}. ${observation ?? "Validar justificativa."}`,
+      title: "Falta pendente de justificativa",
+      body: `${employee.fullName} foi marcado como ${status} sem justificativa. ${observation ?? "Supervisor deve justificar a ocorrência."}`,
       category: "Presença",
       type: "WARNING",
       entity: "AttendanceRecord",
-      entityId: employeeId,
+      entityId: attendanceRecordId,
       href: "/escalas"
     }
   });

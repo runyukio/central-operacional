@@ -44,6 +44,11 @@ export function canViewEmployeeSensitiveData(user: PermissionUser) {
   return isActiveUser(user) && ["ADMIN", "GESTOR", "RH"].includes(role);
 }
 
+export function canAccessEmployeeMap(user: PermissionUser) {
+  const role = normalizeRole(user.role);
+  return isActiveUser(user) && ["ADMIN", "GESTOR", "RH", "WFM", "SUPERVISOR"].includes(role);
+}
+
 export function canEditSchedule(user: PermissionUser) {
   const role = normalizeRole(user.role);
   return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM"].includes(role);

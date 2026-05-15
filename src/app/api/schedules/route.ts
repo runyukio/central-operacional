@@ -14,6 +14,7 @@ const editSchema = z.object({
   lob: z.string().optional(),
   supervisor: z.string().optional(),
   observation: z.string().optional(),
+  pendingJustification: z.boolean().optional(),
   impactsAbs: z.boolean().optional(),
   impactsCoverage: z.boolean().optional()
 });

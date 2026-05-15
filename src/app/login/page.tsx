@@ -6,14 +6,10 @@ import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, LockKeyhole, Mail, Sparkles } from "lucide-react";
 
-import { demoUsers } from "@/lib/demo-auth";
-import { cn } from "@/lib/utils";
-
 export default function LoginPage() {
   const router = useRouter();
-  const showDemoUsers = process.env.NEXT_PUBLIC_ENABLE_DEMO_USERS === "true";
-  const [email, setEmail] = useState("admin@central.com");
-  const [password, setPassword] = useState("Central@123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -72,7 +68,7 @@ export default function LoginPage() {
             <div className="mb-6 flex items-center justify-between">
               <div>
                 <h2 className="text-2xl font-black tracking-tight text-navy-950">Entrar</h2>
-                <p className="mt-1 text-sm font-medium text-muted">{showDemoUsers ? "Use um usuário demo ou suas credenciais internas." : "Use suas credenciais internas."}</p>
+                <p className="mt-1 text-sm font-medium text-muted">Digite suas credenciais internas.</p>
               </div>
               <div className="grid h-11 w-11 place-items-center rounded-xl bg-blue-50 text-blue-600">
                 <LockKeyhole className="h-5 w-5" />
@@ -83,14 +79,28 @@ export default function LoginPage() {
                 <span className="mb-1.5 block text-[12px] font-extrabold uppercase tracking-wide text-muted">E-mail</span>
                 <div className="premium-control flex h-12 items-center gap-3 px-3">
                   <Mail className="h-4 w-4 text-muted" />
-                  <input value={email} onChange={(event) => setEmail(event.target.value)} className="w-full outline-none" type="email" />
+                  <input
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    className="w-full outline-none"
+                    type="email"
+                    name="loginEmail"
+                    autoComplete="off"
+                  />
                 </div>
               </label>
               <label className="block">
                 <span className="mb-1.5 block text-[12px] font-extrabold uppercase tracking-wide text-muted">Senha</span>
                 <div className="premium-control flex h-12 items-center gap-3 px-3">
                   <LockKeyhole className="h-4 w-4 text-muted" />
-                  <input value={password} onChange={(event) => setPassword(event.target.value)} className="w-full outline-none" type="password" />
+                  <input
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    className="w-full outline-none"
+                    type="password"
+                    name="loginPassword"
+                    autoComplete="current-password"
+                  />
                 </div>
               </label>
               {error ? <p className="rounded-lg bg-red-50 px-3 py-2 text-sm font-bold text-red-600">{error}</p> : null}
@@ -103,25 +113,6 @@ export default function LoginPage() {
               Criar cadastro
             </Link>
           </div>
-          {showDemoUsers ? <div className="mt-5 grid gap-2">
-            <p className="text-xs font-black uppercase tracking-wide text-muted">Usuários demo</p>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {demoUsers.map((user) => (
-                <button
-                  key={user.email}
-                  onClick={() => {
-                    setEmail(user.email);
-                    setPassword("Central@123");
-                  }}
-                  className={cn("rounded-lg border border-border bg-white p-3 text-left shadow-soft transition hover:-translate-y-0.5 hover:border-blue-400 hover:shadow-card", email === user.email && "border-blue-500 bg-blue-50 ring-2 ring-blue-100")}
-                >
-                  <p className="truncate text-sm font-bold text-navy-950">{user.email}</p>
-                  <p className="text-xs text-muted">{user.label}</p>
-                </button>
-              ))}
-            </div>
-            <p className="text-xs text-muted">Senha padrão: <strong>Central@123</strong></p>
-          </div> : null}
         </div>
       </section>
     </main>

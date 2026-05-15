@@ -311,9 +311,18 @@ model EmployeeProfile {
   user               User?                   @relation(fields: [userId], references: [id], onDelete: SetNull)
   wbLogin            String                  @unique
   fullName           String
+  socialName         String?
+  primaryPhone       String?
+  city               String?
+  stateUf            String?
+  preferredSchedule  String?
   roleTitle          String
   admissionDate      DateTime
+  trainingStartDate  DateTime?
   scheduleType       String
+  contractType       String?
+  siteOperation      String?
+  internalNotes      String?
   operationalStatus  String                  @default("Online")
   lobId              String
   teamId             String

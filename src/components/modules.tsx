@@ -291,10 +291,13 @@ type AttendanceItem = {
   employeeId: string;
   employeeName: string;
   date: string;
+  dateIso?: string;
   shift: string;
   status: string;
   absenceReason?: string;
+  reasonCategory?: string;
   supervisorJustification?: string;
+  isJustified?: boolean;
   impactsAbs: boolean;
   impactsCoverage: boolean;
   registeredBy: string;
@@ -325,9 +328,24 @@ type SystemSettings = {
 type EmployeeClient = (typeof employees)[number] & {
   email?: string;
   userId?: string;
+  userStatus?: string;
   systemRole?: string;
+  socialName?: string;
+  team?: string;
+  teamId?: string;
   supervisorId?: string;
   lobId?: string;
+  shiftId?: string;
+  admissionIso?: string;
+  trainingStartDate?: string;
+  trainingStartDateIso?: string;
+  contractType?: string;
+  siteOperation?: string;
+  internalNotes?: string;
+  primaryPhone?: string;
+  city?: string;
+  stateUf?: string;
+  preferredSchedule?: string;
   canViewSensitive?: boolean;
   restrictedSections?: Record<string, boolean>;
   sensitive?: {
@@ -453,6 +471,7 @@ function employeeOptionLabel(employee: { name: string; wb?: string; email?: stri
 }
 
 function statusFromScheduleCell(value: string) {
+  if (/^(.+?)\s+(sem justificativa|justificada)$/i.test(value)) return value.replace(/\s+(sem justificativa|justificada)$/i, "");
   return ["Manhã", "Tarde", "Noite", "Madrugada", "Backoffice"].includes(value) ? "Escalado" : value;
 }
 
@@ -851,6 +870,7 @@ export function OperationalCommandCenter() {
     { title: "Pessoas Escaladas", value: summary.planned, change: summary.planned ? "100%" : "0%", helper: "base atual", icon: Users, tone: "blue" as const },
     { title: "Presentes", value: summary.present, change: `${summary.coverageRate}%`, helper: "cobertura real", icon: UserCheck, tone: "green" as const },
     { title: "Ausências", value: summary.absent, change: `${summary.absRate}%`, helper: "ABS", icon: XCircle, tone: "orange" as const },
+    { title: "Pendências Justificativa", value: summary.unjustified, helper: "sem justificativa", icon: AlertTriangle, tone: summary.unjustified ? "red" as const : "green" as const },
     { title: "Atrasos", value: summary.late, helper: "turno atual", icon: Clock, tone: "gold" as const },
     { title: "Saídas antecipadas", value: summary.earlyLeave, helper: "turno atual", icon: AlertTriangle, tone: "red" as const },
     { title: "Risco de Cobertura", value: summary.riskLevel, change: `${summary.gap}`, helper: "gap real", icon: ShieldCheck, tone: summary.riskLevel === "Crítico" ? "red" as const : "purple" as const }
@@ -1803,6 +1823,7 @@ export function SchedulesPage() {
   const [importHistory, setImportHistory] = useState<Array<{ id: string; fileName: string; importedRows: number; status: string; createdAt: string; user: string }>>([]);
   const [attendanceMessage, setAttendanceMessage] = useState("");
   const [attendanceSummary, setAttendanceSummary] = useState<AttendanceSummary | null>(null);
+  const [pendingJustifications, setPendingJustifications] = useState<AttendanceItem[]>([]);
   const [scheduleActorRole, setScheduleActorRole] = useState("COLABORADOR");
   const [schedulePeriod, setSchedulePeriod] = useState({ month: 5, year: 2026 });
   const [scheduleFilters, setScheduleFilters] = useState({ collaborator: "", lob: "Todos", supervisor: "", shift: "Todos", status: "Todos", roleTitle: "" });
@@ -1816,7 +1837,8 @@ export function SchedulesPage() {
     status: "Escalado",
     lob: "",
     supervisor: "",
-    observation: ""
+    observation: "",
+    pendingJustification: false
   });
   const [attendanceForm, setAttendanceForm] = useState({
     employeeId: "",
@@ -1834,9 +1856,9 @@ export function SchedulesPage() {
 
   useEffect(() => {
     void refreshSchedules();
-    apiJson<{ summary: AttendanceSummary }>(`/api/attendance?month=${schedulePeriod.month}&year=${schedulePeriod.year}`).then((payload) => setAttendanceSummary(payload.summary)).catch(() => undefined);
+    void refreshAttendanceForSchedulePeriod();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [schedulePeriod.month, schedulePeriod.year]);
+  }, [schedulePeriod.month, schedulePeriod.year, scheduleFilters.lob]);
 
   useEffect(() => {
     void loadScheduleSupportData();
@@ -1882,8 +1904,24 @@ export function SchedulesPage() {
       }
       setImportHistory(payload.data.imports);
       setAttendanceSummary(payload.data.attendanceSummary ?? null);
+      void refreshAttendanceForSchedulePeriod();
     } catch {
       setScheduleRows([]);
+    }
+  }
+
+  async function refreshAttendanceForSchedulePeriod() {
+    const params = new URLSearchParams({
+      month: String(schedulePeriod.month),
+      year: String(schedulePeriod.year)
+    });
+    if (scheduleFilters.lob !== "Todos") params.set("lob", scheduleFilters.lob);
+    try {
+      const payload = await apiJson<{ data: AttendanceItem[]; summary: AttendanceSummary }>(`/api/attendance?${params.toString()}`);
+      setAttendanceSummary(payload.summary);
+      setPendingJustifications(payload.data.filter((record) => statusNeedsReason(record.status) && record.isJustified === false));
+    } catch {
+      setPendingJustifications([]);
     }
   }
 
@@ -1937,9 +1975,26 @@ export function SchedulesPage() {
       status: cellStatus,
       lob: targetEmployee.lob,
       supervisor: targetEmployee.supervisor,
-      observation: ""
+      observation: "",
+      pendingJustification: false
     });
     setShowEditSchedule(true);
+  }
+
+  function openPendingJustification(record: AttendanceItem) {
+    setAttendanceForm({
+      ...attendanceForm,
+      employeeId: record.employeeId,
+      date: record.dateIso ?? record.date,
+      shift: record.shift,
+      status: statusFromScheduleCell(record.status),
+      absenceReason: record.absenceReason === "Sem justificativa" ? "" : record.absenceReason ?? "",
+      reasonCategory: record.reasonCategory ?? "Operacional",
+      supervisorJustification: "",
+      impactsAbs: record.impactsAbs,
+      impactsCoverage: record.impactsCoverage
+    });
+    setShowAttendance(true);
   }
 
   function openAttendanceJustification(row?: ScheduleGridRow, dayIndex = 0, value = "Ausente") {
@@ -1975,8 +2030,8 @@ export function SchedulesPage() {
       setAttendanceMessage("Turno, entrada e saída são obrigatórios para Escalado ou Presente.");
       return;
     }
-    if (statusNeedsReason(scheduleEditForm.status) && !scheduleEditForm.observation.trim()) {
-      setAttendanceMessage("Motivo ou observação obrigatório para este status.");
+    if (statusNeedsReason(scheduleEditForm.status) && !scheduleEditForm.observation.trim() && !scheduleEditForm.pendingJustification) {
+      setAttendanceMessage("Informe uma observação ou marque como sem justificativa no momento.");
       return;
     }
 
@@ -2147,7 +2202,7 @@ export function SchedulesPage() {
             <MetricPill value={`${plannedHours}h`} label="Horas Programadas" />
             <MetricPill value={conflictCount} label="Conflitos" />
             <MetricPill value={`${attendanceSummary?.absRate ?? 0}%`} label="ABS" />
-            <MetricPill value={attendanceSummary?.riskLevel ?? "Adequado"} label="Risco real" />
+            <MetricPill value={attendanceSummary?.unjustified ?? 0} label="Pendências justificativa" />
           </div>
           <div className="overflow-x-auto">
             {scheduleRows.length ? <table className="w-full min-w-[1040px] border-collapse text-sm">
@@ -2211,6 +2266,28 @@ export function SchedulesPage() {
         </section>
 
         <div className="space-y-5">
+          <Panel title="Pendências de Justificativa" action={pendingJustifications.length ? `${pendingJustifications.length} aberta(s)` : undefined}>
+            {pendingJustifications.length ? (
+              <div className="space-y-3">
+                {pendingJustifications.slice(0, 6).map((record) => (
+                  <div key={record.id} className="rounded-lg border border-orange-200 bg-orange-50 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-extrabold text-navy-950">{record.employeeName}</p>
+                        <p className="text-xs font-semibold text-orange-800">{record.date} • {record.shift} • {record.status}</p>
+                        <p className="mt-1 text-xs text-muted">Registrado por {record.registeredBy}</p>
+                      </div>
+                      <button onClick={() => openPendingJustification(record)} className="rounded-lg bg-orange-600 px-3 py-2 text-xs font-bold text-white">
+                        Justificar
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState title="Sem pendências" description="Faltas ou ausências sem justificativa aparecerão aqui." />
+            )}
+          </Panel>
           <Panel title="Cobertura">
             <DonutLegend
               total={`${attendanceSummary?.coverageRate ?? 0}%`}
@@ -2298,7 +2375,8 @@ export function SchedulesPage() {
                     status: value,
                     startsAt: statusNeedsTime(value) ? scheduleEditForm.startsAt || times.startsAt : "",
                     endsAt: statusNeedsTime(value) ? scheduleEditForm.endsAt || times.endsAt : "",
-                    observation: statusNeedsReason(value) ? scheduleEditForm.observation : scheduleEditForm.observation
+                    observation: statusNeedsReason(value) ? scheduleEditForm.observation : scheduleEditForm.observation,
+                    pendingJustification: statusNeedsReason(value) ? scheduleEditForm.pendingJustification : false
                   });
                 }}
               />
@@ -2310,9 +2388,25 @@ export function SchedulesPage() {
                 <span className="mb-1.5 block text-sm font-bold text-muted">{scheduleEditRequiresReason ? "Motivo/observação obrigatória" : "Observação"}</span>
                 <textarea value={scheduleEditForm.observation} onChange={(event) => setScheduleEditForm({ ...scheduleEditForm, observation: event.target.value })} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none" placeholder={scheduleEditRequiresReason ? "Obrigatório para ausência, falta, atraso, saída antecipada, afastado ou erro de escala" : "Opcional para este status"} />
               </label>
+              {scheduleEditRequiresReason ? (
+                <label className="md:col-span-2 flex items-start gap-3 rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm font-semibold text-orange-800">
+                  <input
+                    type="checkbox"
+                    checked={scheduleEditForm.pendingJustification}
+                    onChange={(event) => setScheduleEditForm({ ...scheduleEditForm, pendingJustification: event.target.checked, observation: event.target.checked ? "" : scheduleEditForm.observation })}
+                    className="mt-1"
+                  />
+                  <span>
+                    Sem justificativa no momento
+                    <span className="mt-1 block text-xs font-medium text-orange-700">
+                      WFM registra a ocorrência agora e o Supervisor recebe uma pendência para justificar depois.
+                    </span>
+                  </span>
+                </label>
+              ) : null}
             </div>
             <div className="mt-5 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
-              {scheduleEditRequiresTime ? "Este status exige turno, entrada e saída." : "Este status permite entrada/saída vazias."}
+              {scheduleEditForm.pendingJustification ? "A célula ficará destacada como pendente de justificativa até o Supervisor justificar." : scheduleEditRequiresTime ? "Este status exige turno, entrada e saída." : "Este status permite entrada/saída vazias."}
             </div>
             <button disabled={savingSchedule} onClick={saveScheduleEdit} className="mt-5 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
               {savingSchedule ? "Salvando..." : "Salvar edição da escala"}
@@ -2488,6 +2582,18 @@ function shiftTagClass(value: string) {
     Presente: "bg-emerald-50 text-emerald-700",
     Ausente: "bg-red-50 text-red-700",
     Falta: "bg-red-100 text-red-800",
+    "Falta sem justificativa": "border border-red-300 bg-red-100 text-red-900 shadow-sm shadow-red-100",
+    "Ausente sem justificativa": "border border-orange-300 bg-orange-100 text-orange-900 shadow-sm shadow-orange-100",
+    "Atraso sem justificativa": "border border-orange-300 bg-orange-100 text-orange-900 shadow-sm shadow-orange-100",
+    "Saída antecipada sem justificativa": "border border-orange-300 bg-orange-100 text-orange-900 shadow-sm shadow-orange-100",
+    "Afastado sem justificativa": "border border-violet-300 bg-violet-100 text-violet-900 shadow-sm shadow-violet-100",
+    "Erro de escala sem justificativa": "border border-red-300 bg-red-100 text-red-900 shadow-sm shadow-red-100",
+    "Falta justificada": "bg-amber-50 text-amber-800",
+    "Ausente justificada": "bg-amber-50 text-amber-800",
+    "Atraso justificada": "bg-amber-50 text-amber-800",
+    "Saída antecipada justificada": "bg-amber-50 text-amber-800",
+    "Afastado justificada": "bg-amber-50 text-amber-800",
+    "Erro de escala justificada": "bg-amber-50 text-amber-800",
     Atraso: "bg-orange-50 text-orange-700",
     "Saída antecipada": "bg-orange-100 text-orange-800",
     Afastado: "bg-violet-50 text-violet-700",
@@ -3150,11 +3256,29 @@ export function EmployeeMapPage() {
   const [selected, setSelected] = useState<EmployeeClient | null>(null);
   const [employeeMessage, setEmployeeMessage] = useState("");
   const [lobFilter, setLobFilter] = useState("Todos");
+  const [editingEmployee, setEditingEmployee] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const [socialNameDraft, setSocialNameDraft] = useState("");
+  const [emailDraft, setEmailDraft] = useState("");
+  const [userStatusDraft, setUserStatusDraft] = useState("ACTIVE");
+  const [wbDraft, setWbDraft] = useState("");
   const [roleTitleDraft, setRoleTitleDraft] = useState("");
   const [statusDraft, setStatusDraft] = useState("");
   const [roleDraft, setRoleDraft] = useState("");
   const [supervisorDraft, setSupervisorDraft] = useState("");
   const [lobDraft, setLobDraft] = useState("");
+  const [teamDraft, setTeamDraft] = useState("");
+  const [shiftDraft, setShiftDraft] = useState("");
+  const [scheduleDraft, setScheduleDraft] = useState("");
+  const [contractDraft, setContractDraft] = useState("");
+  const [admissionDraft, setAdmissionDraft] = useState("");
+  const [trainingDraft, setTrainingDraft] = useState("");
+  const [siteDraft, setSiteDraft] = useState("");
+  const [primaryPhoneDraft, setPrimaryPhoneDraft] = useState("");
+  const [cityDraft, setCityDraft] = useState("");
+  const [stateUfDraft, setStateUfDraft] = useState("");
+  const [preferredScheduleDraft, setPreferredScheduleDraft] = useState("");
+  const [internalNotesDraft, setInternalNotesDraft] = useState("");
   const [savingEmployee, setSavingEmployee] = useState(false);
   const [showResetPassword, setShowResetPassword] = useState(false);
   const [resetPasswordForm, setResetPasswordForm] = useState({ password: "", confirmPassword: "" });
@@ -3165,6 +3289,18 @@ export function EmployeeMapPage() {
     (lobFilter === "Todos" || employee.lob === lobFilter)
   );
   const isAdmin = session?.user?.role === "ADMIN";
+  const isSupervisorUser = session?.user?.role === "SUPERVISOR";
+  const normalizedEmployeeMapRole = String(session?.user?.role ?? "").toUpperCase();
+  const canEditEmployeeOperational = ["ADMIN", "WFM", "RH", "HR", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
+  const canEditOperationalBindings = ["ADMIN", "WFM", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
+  const canEditPeopleData = ["ADMIN", "RH", "HR", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
+  const employeeLobOptions = employeeSettings?.lobs.filter((lob) => lob.status !== "INACTIVE") ?? [];
+  const employeeTeamOptions = employeeSettings?.teams?.filter((team) => team.status !== "INACTIVE" && (!lobDraft || team.lobId === lobDraft || team.lob === "ALL")) ?? [];
+  const employeeShiftOptions = employeeSettings?.shifts.filter((shift) => shift.status !== "INACTIVE") ?? [];
+  const employeeRoleTitleOptions = employeeSettings?.roleTitles.filter((title) => title.status !== "INACTIVE").map((title) => title.name) ?? [];
+  const employeeRoleOptions = employeeSettings?.roles.filter((roleItem) => roleItem.status !== "INACTIVE").map((roleItem) => roleItem.name) ?? ["COLABORADOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI", "GESTOR", "ADMIN"];
+  const contractOptions = ["CLT", "PJ", "Temporário", "Estágio", "Terceiro", "Outro"];
+  const operationalStatusOptions = ["Ativo", "Inativo", "Pendente de cadastro", "Afastado", "Desligado", "Em treinamento", "Suspenso", "Online", "Em Atendimento", "Offline"];
 
   useEffect(() => {
     Promise.all([
@@ -3181,11 +3317,29 @@ export function EmployeeMapPage() {
 
   useEffect(() => {
     if (!selected) return;
+    setEditingEmployee(false);
+    setNameDraft(selected.name ?? "");
+    setSocialNameDraft(selected.socialName ?? "");
+    setEmailDraft(selected.email ?? "");
+    setUserStatusDraft(selected.userStatus ?? "ACTIVE");
+    setWbDraft(selected.wb ?? "");
     setRoleTitleDraft(selected.role ?? "");
     setStatusDraft(selected.status ?? "");
     setRoleDraft(selected.systemRole ?? "COLABORADOR");
     setSupervisorDraft(selected.supervisorId ?? "");
     setLobDraft(selected.lobId ?? "");
+    setTeamDraft(selected.teamId ?? "");
+    setShiftDraft(selected.shiftId ?? "");
+    setScheduleDraft(selected.schedule ?? "");
+    setContractDraft(selected.contractType ?? "");
+    setAdmissionDraft(selected.admissionIso ?? "");
+    setTrainingDraft(selected.trainingStartDateIso ?? "");
+    setSiteDraft(selected.siteOperation ?? "");
+    setPrimaryPhoneDraft(selected.primaryPhone ?? "");
+    setCityDraft(selected.city ?? "");
+    setStateUfDraft(selected.stateUf ?? "");
+    setPreferredScheduleDraft(selected.preferredSchedule ?? "");
+    setInternalNotesDraft(selected.internalNotes ?? "");
   }, [selected]);
 
   async function saveEmployeeOperationalData() {
@@ -3195,10 +3349,35 @@ export function EmployeeMapPage() {
     try {
       const payload = await apiJson<{ data: EmployeeClient }>("/api/employees", {
         method: "PATCH",
-        body: JSON.stringify({ id: selected.id, roleTitle: roleTitleDraft, operationalStatus: statusDraft, roleName: isAdmin ? roleDraft : undefined, supervisorId: supervisorDraft, lobId: lobDraft || undefined })
+        body: JSON.stringify({
+          id: selected.id,
+          fullName: canEditPeopleData ? nameDraft : undefined,
+          socialName: canEditPeopleData ? socialNameDraft : undefined,
+          email: canEditPeopleData ? emailDraft : undefined,
+          userStatus: isAdmin ? userStatusDraft : undefined,
+          wbLogin: isAdmin ? wbDraft : undefined,
+          roleTitle: roleTitleDraft,
+          operationalStatus: statusDraft,
+          roleName: isAdmin ? roleDraft : undefined,
+          supervisorId: canEditOperationalBindings ? supervisorDraft : undefined,
+          lobId: canEditOperationalBindings ? lobDraft || undefined : undefined,
+          teamId: canEditOperationalBindings ? teamDraft || undefined : undefined,
+          shiftId: canEditOperationalBindings ? shiftDraft || undefined : undefined,
+          scheduleType: canEditOperationalBindings ? scheduleDraft : undefined,
+          contractType: canEditPeopleData ? contractDraft : undefined,
+          admissionDate: canEditPeopleData ? admissionDraft : undefined,
+          trainingStartDate: canEditPeopleData ? trainingDraft : undefined,
+          siteOperation: canEditOperationalBindings ? siteDraft : undefined,
+          internalNotes: canEditEmployeeOperational ? internalNotesDraft : undefined,
+          primaryPhone: canEditPeopleData ? primaryPhoneDraft : undefined,
+          city: canEditPeopleData ? cityDraft : undefined,
+          stateUf: canEditPeopleData ? stateUfDraft : undefined,
+          preferredSchedule: canEditPeopleData ? preferredScheduleDraft : undefined
+        })
       });
       setEmployeeRows((items) => items.map((employee) => (employee.id === payload.data.id ? payload.data : employee)));
       setSelected(payload.data);
+      setEditingEmployee(false);
       setEmployeeMessage("Dados operacionais atualizados.");
     } catch (error) {
       setEmployeeMessage(error instanceof ApiRequestError ? error.message : error instanceof Error ? error.message : "Não foi possível atualizar o colaborador.");
@@ -3215,10 +3394,13 @@ export function EmployeeMapPage() {
       "Cargo/Função": employee.role,
       "Role/Permissão": employee.systemRole ?? "",
       LOB: employee.lob,
+      Time: employee.team ?? "",
       Supervisor: employee.supervisor,
       Turno: employee.shift,
       Status: employee.status,
       Escala: employee.schedule,
+      Contrato: employee.contractType ?? "",
+      "Site/Operação": employee.siteOperation ?? "",
       "Usuário ativo": employee.userId ? "Sim" : "Não"
     }));
     const csv = [
@@ -3345,82 +3527,153 @@ export function EmployeeMapPage() {
                   <InfoLine label="Última presença" value={selected.lastPresence ?? "Sem registro"} />
                   <InfoLine label="E-mail operacional" value={selected.email ?? "Restrito"} />
                 </div>
-                <div className="mt-3 grid gap-3">
-                  <label className="block">
-                    <span className="mb-1 block text-xs font-bold text-muted">Editar Cargo/Função operacional</span>
-                    <input value={roleTitleDraft} onChange={(event) => setRoleTitleDraft(event.target.value)} className="h-10 w-full rounded-lg border border-border px-3 text-sm outline-none" />
-                  </label>
-                  <label className="block">
-                    <span className="mb-1 block text-xs font-bold text-muted">Status operacional</span>
-                    <input value={statusDraft} onChange={(event) => setStatusDraft(event.target.value)} className="h-10 w-full rounded-lg border border-border px-3 text-sm outline-none" />
-                  </label>
-                  {isAdmin ? (
-                    <label className="block">
-                      <span className="mb-1 block text-xs font-bold text-muted">LOB</span>
-                      <select value={lobDraft} onChange={(event) => setLobDraft(event.target.value)} className="h-10 w-full rounded-lg border border-border px-3 text-sm outline-none">
-                        {(employeeSettings?.lobs ?? []).filter((lob) => lob.status !== "INACTIVE").map((lob) => (
-                          <option key={lob.id} value={lob.id}>{lob.name}</option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : null}
-                  {isAdmin ? (
-                    <label className="block">
-                      <span className="mb-1 block text-xs font-bold text-muted">Role/Permissão de sistema</span>
-                      <select value={roleDraft} onChange={(event) => setRoleDraft(event.target.value)} className="h-10 w-full rounded-lg border border-border px-3 text-sm outline-none">
-                        {["COLABORADOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI", "GESTOR", "ADMIN"].map((roleName) => <option key={roleName}>{roleName}</option>)}
-                      </select>
-                    </label>
-                  ) : null}
-                  {isAdmin ? (
-                    <label className="block">
-                      <span className="mb-1 block text-xs font-bold text-muted">Supervisor</span>
-                      <select value={supervisorDraft} onChange={(event) => setSupervisorDraft(event.target.value)} className="h-10 w-full rounded-lg border border-border px-3 text-sm outline-none">
-                        <option value="">Sem supervisor</option>
-                        {(employeeSettings?.supervisors ?? []).map((supervisor) => (
-                          <option key={supervisor.id} value={supervisor.id}>{supervisor.name} - {supervisor.email || supervisor.lob || "supervisor"}</option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : null}
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <button disabled={savingEmployee} onClick={saveEmployeeOperationalData} className="rounded-lg bg-blue-600 px-3 py-2.5 text-sm font-bold text-white disabled:opacity-50">
-                      {savingEmployee ? "Salvando..." : "Salvar dados operacionais"}
-                    </button>
-                    {isAdmin ? (
-                      <button onClick={() => setShowResetPassword(true)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5 text-sm font-bold text-blue-700">
-                        Resetar senha
-                      </button>
-                    ) : null}
+                {canEditEmployeeOperational ? (
+                  <div className="mt-3 grid gap-3">
+                    <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm font-semibold text-blue-700">
+                      Dados aprovados podem ser ajustados administrativamente. Todas as alterações ficam registradas em auditoria.
+                    </div>
+                    {!editingEmployee ? (
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <button onClick={() => setEditingEmployee(true)} className="rounded-lg bg-blue-600 px-3 py-2.5 text-sm font-bold text-white">
+                          Editar dados
+                        </button>
+                        {isAdmin ? (
+                          <button onClick={() => setShowResetPassword(true)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5 text-sm font-bold text-blue-700">
+                            Resetar senha
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        <ProfileSection title="Identificação">
+                          <div className="grid gap-3 md:grid-cols-2">
+                            <FormInput label="Nome" value={nameDraft} onChange={setNameDraft} />
+                            <FormInput label="Nome social" value={socialNameDraft} onChange={setSocialNameDraft} />
+                            <FormInput label="E-mail de login" type="email" value={emailDraft} onChange={setEmailDraft} />
+                            <FormInput label="WB/Login" value={wbDraft} onChange={setWbDraft} />
+                          </div>
+                        </ProfileSection>
+                        <ProfileSection title="Operacional">
+                          <div className="grid gap-3 md:grid-cols-2">
+                            {employeeRoleTitleOptions.length ? (
+                              <FormSelect label="Cargo/Função" value={roleTitleDraft} options={employeeRoleTitleOptions} onChange={setRoleTitleDraft} />
+                            ) : (
+                              <FormInput label="Cargo/Função" value={roleTitleDraft} onChange={setRoleTitleDraft} />
+                            )}
+                            {isAdmin ? <FormSelect label="Role/Permissão" value={roleDraft} options={employeeRoleOptions} onChange={setRoleDraft} /> : null}
+                            {canEditOperationalBindings ? (
+                              <label className="block">
+                                <span className="mb-1.5 block text-sm font-bold text-muted">LOB</span>
+                                <select value={lobDraft} onChange={(event) => setLobDraft(event.target.value)} className="h-11 w-full rounded-lg border border-border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100">
+                                  {employeeLobOptions.map((lob) => <option key={lob.id} value={lob.id}>{lob.name}</option>)}
+                                </select>
+                              </label>
+                            ) : null}
+                            {canEditOperationalBindings ? (
+                              <label className="block">
+                                <span className="mb-1.5 block text-sm font-bold text-muted">Time</span>
+                                <select value={teamDraft} onChange={(event) => setTeamDraft(event.target.value)} className="h-11 w-full rounded-lg border border-border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100">
+                                  {employeeTeamOptions.map((team) => <option key={team.id} value={team.id}>{team.name} - {team.lob}</option>)}
+                                </select>
+                              </label>
+                            ) : null}
+                            {canEditOperationalBindings ? (
+                              <label className="block">
+                                <span className="mb-1.5 block text-sm font-bold text-muted">Supervisor</span>
+                                <select value={supervisorDraft} onChange={(event) => setSupervisorDraft(event.target.value)} className="h-11 w-full rounded-lg border border-border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100">
+                                  <option value="">Sem supervisor</option>
+                                  {(employeeSettings?.supervisors ?? []).map((supervisor) => (
+                                    <option key={supervisor.id} value={supervisor.id}>{supervisor.name} - {supervisor.email || supervisor.lob || "supervisor"}</option>
+                                  ))}
+                                </select>
+                              </label>
+                            ) : null}
+                            {canEditOperationalBindings ? (
+                              <label className="block">
+                                <span className="mb-1.5 block text-sm font-bold text-muted">Turno</span>
+                                <select value={shiftDraft} onChange={(event) => setShiftDraft(event.target.value)} className="h-11 w-full rounded-lg border border-border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100">
+                                  {employeeShiftOptions.map((shift) => <option key={shift.id} value={shift.id}>{shift.name} ({shift.startsAt}-{shift.endsAt})</option>)}
+                                </select>
+                              </label>
+                            ) : null}
+                            <FormSelect label="Status" value={statusDraft} options={operationalStatusOptions} onChange={setStatusDraft} />
+                            {canEditOperationalBindings ? <FormInput label="Escala" value={scheduleDraft} onChange={setScheduleDraft} /> : null}
+                            {canEditOperationalBindings ? <FormInput label="Site/Operação" value={siteDraft} onChange={setSiteDraft} /> : null}
+                          </div>
+                        </ProfileSection>
+                        <ProfileSection title="Contrato e Datas">
+                          <div className="grid gap-3 md:grid-cols-2">
+                            {canEditPeopleData ? <FormSelect label="Tipo de contrato" value={contractDraft} options={contractOptions} onChange={setContractDraft} /> : null}
+                            {canEditPeopleData ? <FormInput label="Data de admissão" type="date" value={admissionDraft} onChange={setAdmissionDraft} /> : null}
+                            {canEditPeopleData ? <FormInput label="Início do treinamento" type="date" value={trainingDraft} onChange={setTrainingDraft} /> : null}
+                            {isAdmin ? <FormSelect label="Usuário ativo/inativo" value={userStatusDraft} options={["ACTIVE", "INACTIVE", "BLOCKED"]} onChange={setUserStatusDraft} /> : null}
+                          </div>
+                        </ProfileSection>
+                        {canEditPeopleData ? (
+                          <ProfileSection title="Contato Operacional">
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <FormInput label="Contato principal" value={primaryPhoneDraft} onChange={setPrimaryPhoneDraft} />
+                              <FormInput label="Cidade" value={cityDraft} onChange={setCityDraft} />
+                              <FormInput label="Estado/UF" value={stateUfDraft} onChange={setStateUfDraft} />
+                              <FormInput label="Preferência de horário" value={preferredScheduleDraft} onChange={setPreferredScheduleDraft} />
+                            </div>
+                          </ProfileSection>
+                        ) : null}
+                        <ProfileSection title="Observações">
+                          <textarea value={internalNotesDraft} onChange={(event) => setInternalNotesDraft(event.target.value)} className="min-h-24 w-full rounded-lg border border-border p-3 text-sm outline-none" placeholder="Observações internas da operação" />
+                        </ProfileSection>
+                        <div className="grid gap-2 sm:grid-cols-3">
+                          <button disabled={savingEmployee} onClick={saveEmployeeOperationalData} className="rounded-lg bg-blue-600 px-3 py-2.5 text-sm font-bold text-white disabled:opacity-50">
+                            {savingEmployee ? "Salvando..." : "Salvar alterações"}
+                          </button>
+                          <button disabled={savingEmployee} onClick={() => setEditingEmployee(false)} className="rounded-lg border border-border bg-white px-3 py-2.5 text-sm font-bold text-navy-950 disabled:opacity-50">
+                            Cancelar
+                          </button>
+                          {isAdmin ? (
+                            <button onClick={() => setShowResetPassword(true)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5 text-sm font-bold text-blue-700">
+                              Resetar senha
+                            </button>
+                          ) : null}
+                        </div>
+                        <p className="text-xs font-semibold text-muted">Mudar cargo não muda permissão automaticamente. Role/Permissão só muda quando Admin altera explicitamente.</p>
+                      </div>
+                    )}
                   </div>
-                  <p className="text-xs font-semibold text-muted">Cargo/Função operacional não altera automaticamente a role/permissão de sistema.</p>
+                ) : null}
+              </ProfileSection>
+              {isSupervisorUser ? (
+                <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm font-semibold text-blue-700">
+                  Visão operacional do Supervisor: dados pessoais, bancários, familiares, documentos e contatos de emergência ficam ocultos.
                 </div>
-              </ProfileSection>
-              <ProfileSection title="Dados Cadastrais">
-                {selected.restrictedSections?.cadastrais ? (
-                  <div className="grid grid-cols-2 gap-3 text-sm">
-                    <InfoLine label="CPF" value={selected.canViewSensitive ? selected.sensitive?.cpf : selected.maskedSensitive?.cpf} />
-                    <InfoLine label="RG" value={selected.canViewSensitive ? selected.sensitive?.rg : selected.maskedSensitive?.rg} />
-                    <InfoLine label="Nascimento" value={selected.canViewSensitive ? selected.sensitive?.birthDate : "Acesso restrito"} />
-                    <InfoLine label="Família" value={selected.canViewSensitive ? selected.sensitive?.familyData : "Acesso restrito"} />
-                  </div>
-                ) : (
-                  <RestrictedSection />
-                )}
-              </ProfileSection>
-              <ProfileSection title="Dados de Contato e Emergência">
-                {selected.restrictedSections?.contato || selected.restrictedSections?.emergencia ? (
-                  <div className="grid gap-3 text-sm">
-                    <InfoLine label="Endereço" value={selected.canViewSensitive ? selected.sensitive?.address : "Acesso restrito"} />
-                    <InfoLine label="Emergência" value={selected.maskedSensitive?.emergencyContactData ?? "Acesso restrito"} />
-                  </div>
-                ) : (
-                  <RestrictedSection />
-                )}
-              </ProfileSection>
-              <ProfileSection title="Dados Bancários">
-                {selected.restrictedSections?.bancarios ? <InfoLine label="Banco/PIX" value={selected.sensitive?.bankData ?? selected.maskedSensitive?.bankData} /> : <RestrictedSection />}
-              </ProfileSection>
+              ) : (
+                <>
+                  <ProfileSection title="Dados Cadastrais">
+                    {selected.restrictedSections?.cadastrais ? (
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        <InfoLine label="CPF" value={selected.canViewSensitive ? selected.sensitive?.cpf : selected.maskedSensitive?.cpf} />
+                        <InfoLine label="RG" value={selected.canViewSensitive ? selected.sensitive?.rg : selected.maskedSensitive?.rg} />
+                        <InfoLine label="Nascimento" value={selected.canViewSensitive ? selected.sensitive?.birthDate : "Acesso restrito"} />
+                        <InfoLine label="Família" value={selected.canViewSensitive ? selected.sensitive?.familyData : "Acesso restrito"} />
+                      </div>
+                    ) : (
+                      <RestrictedSection />
+                    )}
+                  </ProfileSection>
+                  <ProfileSection title="Dados de Contato e Emergência">
+                    {selected.restrictedSections?.contato || selected.restrictedSections?.emergencia ? (
+                      <div className="grid gap-3 text-sm">
+                        <InfoLine label="Endereço" value={selected.canViewSensitive ? selected.sensitive?.address : "Acesso restrito"} />
+                        <InfoLine label="Emergência" value={selected.maskedSensitive?.emergencyContactData ?? "Acesso restrito"} />
+                      </div>
+                    ) : (
+                      <RestrictedSection />
+                    )}
+                  </ProfileSection>
+                  <ProfileSection title="Dados Bancários">
+                    {selected.restrictedSections?.bancarios ? <InfoLine label="Banco/PIX" value={selected.sensitive?.bankData ?? selected.maskedSensitive?.bankData} /> : <RestrictedSection />}
+                  </ProfileSection>
+                </>
+              )}
               <ProfileSection title="Histórico de Ausências">
                 {selected.attendanceHistory?.length ? (
                   <MiniAlertList

@@ -586,10 +586,17 @@ Regras atuais:
 - Em Escalas, `SUPERVISOR` visualiza a grade, mas não vê upload/adicionar escala e não consegue executar importação, adição ou edição completa via API.
 - Supervisor só registra justificativas de ocorrência (`Ausente`, `Falta`, `Atraso`, `Saída antecipada`, `Afastado`, `Erro de escala`) em `AttendanceRecord`; ele não altera turno, entrada, saída, folga ou presença.
 - As justificativas do Supervisor geram `AttendanceHistory`, `AuditLog` e passam a impactar os indicadores reais da Central Operacional por período/LOB.
+- Mapa de Funcionários permite acesso operacional para `SUPERVISOR`, mas a API não carrega dados sensíveis para esse perfil e o detalhe exibe apenas dados operacionais.
+- A tela de login não inicializa mais `admin@central.com`/senha por código e não renderiza cartões de usuários demo; credenciais precisam ser digitadas manualmente.
+- WFM/Admin podem marcar `Falta`, `Ausente`, `Atraso`, `Saída antecipada`, `Afastado` ou `Erro de escala` como "sem justificativa no momento"; a célula fica destacada, o Supervisor recebe pendência/notificação e a Central Operacional contabiliza pendências de justificativa.
+- Quando o Supervisor justifica a ocorrência, o sistema exige motivo e observação, grava `AttendanceHistory`, `AuditLog`, notifica WFM/Admin e mantém a ocorrência impactando ABS conforme a regra do registro.
+- Cadastros aprovados podem ser ajustados administrativamente pelo Mapa de Funcionários. Admin edita identificação, WB/Login, LOB, time, supervisor, turno, escala, cargo, status, contrato, datas, site/operação, role, status de acesso e observações sem recriar colaborador.
+- WFM e RH usam a mesma manutenção pós-aprovação com escopo reduzido por perfil: WFM para dados operacionais e RH para dados cadastrais/contratuais autorizados.
 
 Limitações temporárias:
 
 - As permissões configuráveis em `SystemConfig` já são persistidas e visíveis, mas parte dos módulos antigos ainda usa checagens por role enquanto a migração fina para permissões granulares é concluída.
+- Se um supervisor ainda não tiver colaboradores vinculados por `supervisorId`, o Mapa pode exibir a visão operacional ampla temporária, sempre sem dados sensíveis.
 - Regras de tokens ficam salvas para fase futura; o motor automático de concessão de tokens ainda não é executado.
 - Regras de cobertura ficam disponíveis para parametrização e leitura operacional, com cálculo avançado de gap por regra preparado para evolução do Staff/Cobertura.
 
