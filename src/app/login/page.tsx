@@ -1,0 +1,130 @@
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
+import { signIn } from "next-auth/react";
+import { useRouter } from "next/navigation";
+import { ArrowRight, LockKeyhole, Mail, Sparkles } from "lucide-react";
+
+import { demoUsers } from "@/lib/demo-auth";
+import { cn } from "@/lib/utils";
+
+export default function LoginPage() {
+  const router = useRouter();
+  const showDemoUsers = process.env.NEXT_PUBLIC_ENABLE_DEMO_USERS === "true";
+  const [email, setEmail] = useState("admin@central.com");
+  const [password, setPassword] = useState("Central@123");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    const result = await signIn("credentials", {
+      email,
+      password,
+      redirect: false,
+      callbackUrl: "/central-operacional"
+    });
+    setLoading(false);
+    if (result?.error) {
+      setError("E-mail ou senha inválidos.");
+      return;
+    }
+    router.push(result?.url ?? "/central-operacional");
+    router.refresh();
+  }
+
+  return (
+    <main className="grid min-h-screen bg-[radial-gradient(circle_at_78%_8%,rgba(37,99,235,.12),transparent_28rem),#F6F8FC] lg:grid-cols-[minmax(0,1fr)_560px]">
+      <section className="relative hidden overflow-hidden bg-white text-navy-950 lg:block">
+        <div className="absolute inset-0 bg-[url('/login-wallpaper.png')] bg-cover bg-center" />
+        <div className="absolute inset-0 bg-gradient-to-r from-white/70 via-white/20 to-transparent" />
+        <div className="relative flex h-full flex-col justify-between p-12">
+          <div className="flex items-center gap-3">
+            <div className="grid h-12 w-12 place-items-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 text-white shadow-lg shadow-blue-950/25 ring-1 ring-white/40">
+              <Sparkles className="h-7 w-7" />
+            </div>
+            <div>
+              <p className="text-2xl font-extrabold leading-tight">Central</p>
+              <p className="text-2xl font-extrabold leading-tight">Operacional</p>
+            </div>
+          </div>
+          <div className="max-w-xl">
+            <p className="text-xs font-black uppercase tracking-[0.24em] text-blue-700">Command Center</p>
+            <h1 className="mt-4 text-5xl font-black leading-tight tracking-tight">Operação, pessoas e indicadores em um único lugar.</h1>
+          </div>
+          <div className="h-1 w-24 rounded-full bg-blue-500 shadow-lg shadow-blue-600/30" />
+        </div>
+      </section>
+
+      <section className="flex items-center justify-center p-6">
+        <div className="w-full max-w-md">
+          <div className="mb-8 lg:hidden">
+            <div className="flex items-center gap-3">
+              <div className="grid h-11 w-11 place-items-center rounded-xl bg-blue-600 text-white">
+                <Sparkles className="h-6 w-6" />
+              </div>
+              <p className="text-xl font-extrabold text-navy-950">Central Operacional</p>
+            </div>
+          </div>
+          <div className="card p-7">
+            <div className="mb-6 flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-black tracking-tight text-navy-950">Entrar</h2>
+                <p className="mt-1 text-sm font-medium text-muted">{showDemoUsers ? "Use um usuário demo ou suas credenciais internas." : "Use suas credenciais internas."}</p>
+              </div>
+              <div className="grid h-11 w-11 place-items-center rounded-xl bg-blue-50 text-blue-600">
+                <LockKeyhole className="h-5 w-5" />
+              </div>
+            </div>
+            <form onSubmit={submit} className="space-y-4">
+              <label className="block">
+                <span className="mb-1.5 block text-[12px] font-extrabold uppercase tracking-wide text-muted">E-mail</span>
+                <div className="premium-control flex h-12 items-center gap-3 px-3">
+                  <Mail className="h-4 w-4 text-muted" />
+                  <input value={email} onChange={(event) => setEmail(event.target.value)} className="w-full outline-none" type="email" />
+                </div>
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-[12px] font-extrabold uppercase tracking-wide text-muted">Senha</span>
+                <div className="premium-control flex h-12 items-center gap-3 px-3">
+                  <LockKeyhole className="h-4 w-4 text-muted" />
+                  <input value={password} onChange={(event) => setPassword(event.target.value)} className="w-full outline-none" type="password" />
+                </div>
+              </label>
+              {error ? <p className="rounded-lg bg-red-50 px-3 py-2 text-sm font-bold text-red-600">{error}</p> : null}
+              <button disabled={loading} className="premium-button flex h-12 w-full items-center justify-center gap-2 text-sm font-extrabold disabled:opacity-70">
+                {loading ? "Entrando..." : "Entrar"}
+                <ArrowRight className="h-4 w-4" />
+              </button>
+            </form>
+            <Link href="/cadastro-colaborador" className="mt-4 flex h-11 w-full items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-sm font-extrabold text-blue-700">
+              Criar cadastro
+            </Link>
+          </div>
+          {showDemoUsers ? <div className="mt-5 grid gap-2">
+            <p className="text-xs font-black uppercase tracking-wide text-muted">Usuários demo</p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {demoUsers.map((user) => (
+                <button
+                  key={user.email}
+                  onClick={() => {
+                    setEmail(user.email);
+                    setPassword("Central@123");
+                  }}
+                  className={cn("rounded-lg border border-border bg-white p-3 text-left shadow-soft transition hover:-translate-y-0.5 hover:border-blue-400 hover:shadow-card", email === user.email && "border-blue-500 bg-blue-50 ring-2 ring-blue-100")}
+                >
+                  <p className="truncate text-sm font-bold text-navy-950">{user.email}</p>
+                  <p className="text-xs text-muted">{user.label}</p>
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-muted">Senha padrão: <strong>Central@123</strong></p>
+          </div> : null}
+        </div>
+      </section>
+    </main>
+  );
+}

@@ -1,0 +1,1057 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum UserStatus {
+  ACTIVE
+  BLOCKED
+  INACTIVE
+}
+
+enum ScheduleStatus {
+  ESCALADO
+  PRESENTE
+  AUSENTE
+  FALTA
+  ATRASO
+  SAIDA_ANTECIPADA
+  AFASTADO
+  FOLGA
+  FERIAS
+  TREINAMENTO
+  TROCA_APROVADA
+  VENDA_FOLGA_APROVADA
+  FOLGA_APROVADA
+  SEM_ESCALA
+  ERRO_ESCALA
+  FERIADO
+  CONFLITO
+  DESCOBERTO
+}
+
+enum RequestStatus {
+  ABERTO
+  EM_ANALISE
+  AGUARDANDO_APROVACAO
+  APROVADO
+  RECUSADO
+  AJUSTE_SOLICITADO
+  CONCLUIDO
+  CANCELADO
+}
+
+enum Priority {
+  BAIXA
+  MEDIA
+  ALTA
+  CRITICA
+}
+
+enum AnnouncementStatus {
+  RASCUNHO
+  AGENDADO
+  PUBLICADO
+  ARQUIVADO
+}
+
+enum FeedbackClassification {
+  POSITIVO
+  ATENCAO
+  CRITICO
+}
+
+enum EquipmentStatus {
+  DISPONIVEL
+  ENTREGUE
+  FUNCIONANDO
+  EM_ATENCAO
+  EM_MANUTENCAO
+  INOPERANTE
+  DEVOLVIDO
+  PERDIDO
+  BLOQUEADO
+  SUBSTITUIDO
+}
+
+enum EquipmentImpact {
+  BAIXO
+  MEDIO
+  ALTO
+}
+
+enum TicketStatus {
+  ABERTO
+  EM_ATENDIMENTO
+  AGUARDANDO
+  RESOLVIDO
+  CANCELADO
+}
+
+enum ClimateQuestionType {
+  ESCALA_1_5
+  TEXTO_LIVRE
+  MULTIPLA_ESCOLHA
+  SIM_NAO
+}
+
+enum AnonymousFeedbackStatus {
+  RECEBIDO
+  EM_ANALISE
+  PLANO_DE_ACAO
+  CONCLUIDO
+}
+
+enum TokenTransactionType {
+  GANHO
+  RESGATE
+  AJUSTE
+  EXPIRACAO
+}
+
+enum RedemptionStatus {
+  SOLICITADO
+  APROVADO
+  RECUSADO
+  ENTREGUE
+  CANCELADO
+}
+
+enum AuditAction {
+  CRIACAO
+  EDICAO
+  EXCLUSAO
+  APROVACAO
+  RECUSA
+  UPLOAD
+  IMPORTACAO
+  ALTERACAO_ESCALA
+  ALTERACAO_PERMISSAO
+  ALTERACAO_EQUIPAMENTO
+  CONFIRMACAO_LEITURA
+  RESGATE_TOKEN
+  LOGIN
+}
+
+enum CoverageRisk {
+  EXCELENTE
+  ADEQUADO
+  ATENCAO
+  CRITICO
+}
+
+enum ChatRoomType {
+  INDIVIDUAL
+  TIME
+  LOB
+  AREA
+}
+
+enum EmployeeRegistrationStatus {
+  RASCUNHO
+  ENVIADO
+  PENDENTE_APROVACAO
+  AJUSTE_SOLICITADO
+  APROVADO
+  RECUSADO
+  ATIVO
+  INATIVO
+}
+
+enum ShiftReportImportance {
+  BAIXA
+  MEDIA
+  ALTA
+  CRITICA
+}
+
+enum GeneralMood {
+  MUITO_BOM
+  BOM
+  NEUTRO
+  RUIM
+  CRITICO
+}
+
+enum FollowUpStatus {
+  ABERTO
+  EM_ANDAMENTO
+  CONCLUIDO
+  CANCELADO
+}
+
+enum AttendanceStatus {
+  PRESENTE
+  AUSENTE
+  FALTA
+  ATRASO
+  SAIDA_ANTECIPADA
+  AFASTADO
+  FERIAS
+  TREINAMENTO
+  FOLGA
+  TROCA_APROVADA
+  SEM_ESCALA
+  ERRO_ESCALA
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  label       String
+  description String?
+  users       User[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Permission {
+  id          String           @id @default(cuid())
+  key         String           @unique
+  label       String
+  description String?
+  users       UserPermission[]
+  createdAt   DateTime         @default(now())
+}
+
+model UserPermission {
+  id           String     @id @default(cuid())
+  userId       String
+  permissionId String
+  granted      Boolean    @default(true)
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+
+  @@unique([userId, permissionId])
+}
+
+model User {
+  id                      String                  @id @default(cuid())
+  email                   String                  @unique
+  name                    String
+  passwordHash            String
+  avatarUrl               String?
+  status                  UserStatus              @default(ACTIVE)
+  roleId                  String
+  role                    Role                    @relation(fields: [roleId], references: [id])
+  permissions             UserPermission[]
+  employeeProfile         EmployeeProfile?
+  requestedRequests       Request[]               @relation("RequestRequester")
+  assignedRequests        Request[]               @relation("RequestAssignee")
+  requestComments         RequestComment[]
+  requestHistory          RequestHistory[]
+  approvalSteps           ApprovalStep[]
+  authoredAnnouncements   Announcement[]
+  announcementReads       AnnouncementRead[]
+  notifications           Notification[]
+  authoredFeedbacks       QualityFeedback[]       @relation("FeedbackAuthor")
+  qualityMaterials        QualityMaterial[]
+  climateAnswers          ClimateAnswer[]
+  rewardRedemptions       RewardRedemption[]
+  chatParticipants        ChatParticipant[]
+  chatMessages            ChatMessage[]
+  auditLogs               AuditLog[]
+  scheduleImports         ScheduleImport[]
+  scheduleChangeHistories ScheduleChangeHistory[]
+  equipmentHistories      EquipmentHistory[]
+  equipmentTickets        EquipmentTicket[]
+  registeredAttendances   AttendanceRecord[]      @relation("AttendanceRegisteredBy")
+  justifiedAttendances    AttendanceRecord[]      @relation("AttendanceJustifiedBy")
+  attendanceHistories     AttendanceHistory[]     @relation("AttendanceHistoryChangedBy")
+  createdAt               DateTime                @default(now())
+  updatedAt               DateTime                @updatedAt
+  deletedAt               DateTime?
+}
+
+model Lob {
+  id             String            @id @default(cuid())
+  name           String            @unique
+  description    String?
+  teams          Team[]
+  employees      EmployeeProfile[]
+  staffCoverages StaffCoverage[]
+  createdAt      DateTime          @default(now())
+}
+
+model Team {
+  id           String            @id @default(cuid())
+  name         String
+  lobId        String
+  supervisorId String?
+  lob          Lob               @relation(fields: [lobId], references: [id])
+  supervisor   EmployeeProfile?  @relation("TeamSupervisor", fields: [supervisorId], references: [id])
+  employees    EmployeeProfile[] @relation("TeamEmployees")
+  createdAt    DateTime          @default(now())
+
+  @@unique([name, lobId])
+}
+
+model Shift {
+  id                String             @id @default(cuid())
+  name              String             @unique
+  startsAt          String
+  endsAt            String
+  color             String
+  employees         EmployeeProfile[]
+  schedules         Schedule[]
+  attendanceRecords AttendanceRecord[]
+  coverages         StaffCoverage[]
+  createdAt         DateTime           @default(now())
+}
+
+model EmployeeProfile {
+  id                 String                  @id @default(cuid())
+  userId             String?                 @unique
+  user               User?                   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  wbLogin            String                  @unique
+  fullName           String
+  roleTitle          String
+  admissionDate      DateTime
+  scheduleType       String
+  operationalStatus  String                  @default("Online")
+  lobId              String
+  teamId             String
+  supervisorId       String?
+  shiftId            String
+  lob                Lob                     @relation(fields: [lobId], references: [id])
+  team               Team                    @relation("TeamEmployees", fields: [teamId], references: [id])
+  supervisor         EmployeeProfile?        @relation("SupervisorTree", fields: [supervisorId], references: [id])
+  supervisees        EmployeeProfile[]       @relation("SupervisorTree")
+  supervisedTeams    Team[]                  @relation("TeamSupervisor")
+  shift              Shift                   @relation(fields: [shiftId], references: [id])
+  schedules          Schedule[]
+  attendanceRecords  AttendanceRecord[]
+  scheduleChanges    ScheduleChangeHistory[]
+  requests           Request[]
+  performanceMetrics PerformanceMetric[]
+  qualityFeedbacks   QualityFeedback[]       @relation("FeedbackEmployee")
+  equipments         Equipment[]
+  equipmentTickets   EquipmentTicket[]
+  tokenBalance       TokenBalance?
+  tokenTransactions  TokenTransaction[]
+  rewardRedemptions  RewardRedemption[]
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+  deletedAt          DateTime?
+}
+
+model Schedule {
+  id                String             @id @default(cuid())
+  employeeId        String
+  shiftId           String?
+  lobId             String?
+  supervisorId      String?
+  date              DateTime
+  startsAt          String?
+  endsAt            String?
+  status            ScheduleStatus     @default(ESCALADO)
+  observation       String?
+  source            String             @default("seed")
+  employee          EmployeeProfile    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  shift             Shift?             @relation(fields: [shiftId], references: [id])
+  attendanceRecords AttendanceRecord[]
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  deletedAt         DateTime?
+
+  @@unique([employeeId, date])
+  @@index([date, status])
+}
+
+model ScheduleImport {
+  id           String              @id @default(cuid())
+  fileName     String
+  importedById String
+  status       String
+  totalRows    Int
+  validRows    Int
+  errorRows    Int
+  warnings     Json?
+  importedBy   User                @relation(fields: [importedById], references: [id])
+  rows         ScheduleImportRow[]
+  createdAt    DateTime            @default(now())
+}
+
+model ScheduleImportRow {
+  id          String         @id @default(cuid())
+  importId    String
+  rowNumber   Int
+  wbLogin     String?
+  name        String?
+  lob         String?
+  supervisor  String?
+  date        DateTime?
+  shift       String?
+  startsAt    String?
+  endsAt      String?
+  status      String?
+  observation String?
+  validation  Json?
+  import      ScheduleImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+}
+
+model ScheduleChangeHistory {
+  id            String          @id @default(cuid())
+  scheduleId    String?
+  employeeId    String
+  changedById   String
+  date          DateTime
+  before        Json
+  after         Json
+  previousValue Json?
+  newValue      Json?
+  reason        String
+  employee      EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  changedBy     User            @relation(fields: [changedById], references: [id])
+  createdAt     DateTime        @default(now())
+}
+
+model RequestType {
+  id               String         @id @default(cuid())
+  name             String         @unique
+  area             String
+  slaHours         Int            @default(24)
+  requiresApproval Boolean        @default(true)
+  requests         Request[]
+  approvalFlows    ApprovalFlow[]
+}
+
+model Request {
+  id            String             @id @default(cuid())
+  code          String             @unique
+  title         String
+  description   String
+  requesterId   String
+  employeeId    String?
+  typeId        String
+  assigneeId    String?
+  assignedArea  String
+  priority      Priority           @default(MEDIA)
+  status        RequestStatus      @default(ABERTO)
+  payload       Json?
+  requester     User               @relation("RequestRequester", fields: [requesterId], references: [id])
+  employee      EmployeeProfile?   @relation(fields: [employeeId], references: [id])
+  type          RequestType        @relation(fields: [typeId], references: [id])
+  assignee      User?              @relation("RequestAssignee", fields: [assigneeId], references: [id])
+  comments      RequestComment[]
+  history       RequestHistory[]
+  approvalFlows ApprovalFlow[]
+  redemptions   RewardRedemption[]
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  deletedAt     DateTime?
+}
+
+model RequestComment {
+  id        String   @id @default(cuid())
+  requestId String
+  authorId  String
+  message   String
+  request   Request  @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  author    User     @relation(fields: [authorId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model RequestHistory {
+  id        String         @id @default(cuid())
+  requestId String
+  actorId   String
+  action    String?
+  from      RequestStatus?
+  to        RequestStatus
+  reason    String?
+  metadata  Json?
+  request   Request        @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  actor     User           @relation(fields: [actorId], references: [id])
+  createdAt DateTime       @default(now())
+}
+
+model ApprovalFlow {
+  id            String         @id @default(cuid())
+  requestId     String?
+  requestTypeId String?
+  name          String
+  isActive      Boolean        @default(true)
+  request       Request?       @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  requestType   RequestType?   @relation(fields: [requestTypeId], references: [id])
+  steps         ApprovalStep[]
+}
+
+model ApprovalStep {
+  id            String        @id @default(cuid())
+  flowId        String
+  approverId    String?
+  roleName      String
+  stepOrder     Int
+  status        RequestStatus @default(AGUARDANDO_APROVACAO)
+  decidedAt     DateTime?
+  justification String?
+  flow          ApprovalFlow  @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  approver      User?         @relation(fields: [approverId], references: [id])
+}
+
+model Announcement {
+  id             String             @id @default(cuid())
+  title          String
+  content        String
+  category       String
+  targetAudience String
+  authorId       String
+  status         AnnouncementStatus @default(PUBLICADO)
+  isPinned       Boolean            @default(false)
+  requiresRead   Boolean            @default(false)
+  publishAt      DateTime           @default(now())
+  author         User               @relation(fields: [authorId], references: [id])
+  reads          AnnouncementRead[]
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  deletedAt      DateTime?
+}
+
+model AnnouncementRead {
+  id             String       @id @default(cuid())
+  announcementId String
+  userId         String
+  readAt         DateTime     @default(now())
+  announcement   Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([announcementId, userId])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  title     String
+  body      String
+  category  String
+  type      String    @default("INFO")
+  isRead    Boolean   @default(false)
+  readAt    DateTime?
+  entity    String?
+  entityId  String?
+  href      String?
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+}
+
+model PerformanceMetric {
+  id           String          @id @default(cuid())
+  employeeId   String
+  period       DateTime
+  productivity Float
+  quality      Float
+  presence     Float
+  adherence    Float
+  tokensEarned Int             @default(0)
+  employee     EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, period])
+}
+
+model QualityFeedback {
+  id             String                 @id @default(cuid())
+  employeeId     String
+  authorId       String
+  type           String
+  theme          String
+  message        String
+  classification FeedbackClassification
+  evidenceUrl    String?
+  readAt         DateTime?
+  employee       EmployeeProfile        @relation("FeedbackEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  author         User                   @relation("FeedbackAuthor", fields: [authorId], references: [id])
+  createdAt      DateTime               @default(now())
+}
+
+model QualityMaterial {
+  id          String   @id @default(cuid())
+  title       String
+  description String
+  url         String
+  category    String
+  authorId    String
+  author      User     @relation(fields: [authorId], references: [id])
+  createdAt   DateTime @default(now())
+}
+
+model ClimateSurvey {
+  id          String            @id @default(cuid())
+  title       String
+  description String
+  status      String            @default("Ativa")
+  startsAt    DateTime
+  endsAt      DateTime
+  questions   ClimateQuestion[]
+  answers     ClimateAnswer[]
+  createdAt   DateTime          @default(now())
+}
+
+model ClimateQuestion {
+  id       String              @id @default(cuid())
+  surveyId String
+  text     String
+  type     ClimateQuestionType
+  options  Json?
+  required Boolean             @default(true)
+  order    Int
+  survey   ClimateSurvey       @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+  answers  ClimateAnswer[]
+}
+
+model ClimateAnswer {
+  id           String          @id @default(cuid())
+  surveyId     String
+  questionId   String
+  respondentId String?
+  value        Json
+  survey       ClimateSurvey   @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+  question     ClimateQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  respondent   User?           @relation(fields: [respondentId], references: [id], onDelete: SetNull)
+  createdAt    DateTime        @default(now())
+}
+
+model AnonymousFeedback {
+  id          String                  @id @default(cuid())
+  category    String
+  message     String
+  evidenceUrl String?
+  status      AnonymousFeedbackStatus @default(RECEBIDO)
+  theme       String?
+  actionPlan  ActionPlan?
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
+}
+
+model ActionPlan {
+  id                  String             @id @default(cuid())
+  title               String
+  description         String
+  ownerArea           String
+  status              String             @default("Em andamento")
+  dueDate             DateTime?
+  anonymousFeedbackId String?            @unique
+  anonymousFeedback   AnonymousFeedback? @relation(fields: [anonymousFeedbackId], references: [id], onDelete: SetNull)
+  createdAt           DateTime           @default(now())
+}
+
+model Equipment {
+  id          String             @id @default(cuid())
+  code        String             @unique
+  type        String
+  model       String?
+  serial      String?
+  employeeId  String?
+  status      EquipmentStatus
+  deliveredAt DateTime?
+  impact      EquipmentImpact    @default(BAIXO)
+  employee    EmployeeProfile?   @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  histories   EquipmentHistory[]
+  tickets     EquipmentTicket[]
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  deletedAt   DateTime?
+}
+
+model EquipmentHistory {
+  id          String    @id @default(cuid())
+  equipmentId String
+  actorId     String
+  action      String
+  before      Json?
+  after       Json?
+  reason      String?
+  equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  actor       User      @relation(fields: [actorId], references: [id])
+  createdAt   DateTime  @default(now())
+}
+
+model EquipmentTicket {
+  id          String           @id @default(cuid())
+  code        String           @unique
+  equipmentId String
+  employeeId  String?
+  openedById  String
+  title       String
+  description String
+  impact      EquipmentImpact  @default(MEDIO)
+  status      TicketStatus     @default(ABERTO)
+  slaDueAt    DateTime
+  equipment   Equipment        @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  employee    EmployeeProfile? @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  openedBy    User             @relation(fields: [openedById], references: [id])
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+}
+
+model StaffCoverage {
+  id              String       @id @default(cuid())
+  date            DateTime
+  lobId           String
+  shiftId         String
+  plannedStaff    Int
+  requiredStaff   Int
+  coveragePercent Float
+  gap             Int
+  risk            CoverageRisk
+  lob             Lob          @relation(fields: [lobId], references: [id], onDelete: Cascade)
+  shift           Shift        @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+
+  @@unique([date, lobId, shiftId])
+}
+
+model TokenBalance {
+  id         String          @id @default(cuid())
+  employeeId String          @unique
+  balance    Int             @default(0)
+  employee   EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  updatedAt  DateTime        @updatedAt
+}
+
+model TokenTransaction {
+  id         String               @id @default(cuid())
+  employeeId String
+  type       TokenTransactionType
+  amount     Int
+  reason     String
+  campaign   String?
+  employee   EmployeeProfile      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  createdAt  DateTime             @default(now())
+}
+
+model Reward {
+  id          String             @id @default(cuid())
+  name        String
+  description String
+  cost        Int
+  stock       Int
+  isActive    Boolean            @default(true)
+  redemptions RewardRedemption[]
+}
+
+model RewardRedemption {
+  id           String           @id @default(cuid())
+  employeeId   String
+  rewardId     String
+  requestId    String?
+  status       RedemptionStatus @default(SOLICITADO)
+  approvedById String?
+  employee     EmployeeProfile  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  reward       Reward           @relation(fields: [rewardId], references: [id])
+  request      Request?         @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  approvedBy   User?            @relation(fields: [approvedById], references: [id])
+  createdAt    DateTime         @default(now())
+}
+
+model ChatRoom {
+  id           String            @id @default(cuid())
+  name         String
+  type         ChatRoomType
+  participants ChatParticipant[]
+  messages     ChatMessage[]
+  createdAt    DateTime          @default(now())
+}
+
+model ChatParticipant {
+  id       String   @id @default(cuid())
+  roomId   String
+  userId   String
+  room     ChatRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  joinedAt DateTime @default(now())
+
+  @@unique([roomId, userId])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  roomId    String
+  senderId  String
+  content   String
+  room      ChatRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  sender    User     @relation(fields: [senderId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model AuditLog {
+  id            String      @id @default(cuid())
+  actorId       String?
+  action        AuditAction
+  entity        String
+  entityId      String?
+  before        Json?
+  after         Json?
+  previousValue Json?
+  newValue      Json?
+  reason        String?
+  ipAddress     String?
+  userAgent     String?
+  actor         User?       @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  createdAt     DateTime    @default(now())
+}
+
+model ErrorLog {
+  id         String    @id @default(cuid())
+  userId     String?
+  code       String?
+  message    String
+  stack      String?
+  route      String?
+  action     String?
+  severity   String    @default("ERROR")
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+
+  @@index([createdAt, severity])
+  @@index([userId])
+}
+
+model StoredFile {
+  id           String    @id @default(cuid())
+  bucket       String
+  path         String    @unique
+  fileName     String
+  mimeType     String
+  sizeBytes    Int
+  category     String
+  entity       String?
+  entityId     String?
+  uploadedById String?
+  ownerUserId  String?
+  employeeId   String?
+  isSensitive  Boolean   @default(true)
+  metadata     Json?
+  createdAt    DateTime  @default(now())
+  deletedAt    DateTime?
+
+  @@index([bucket, entity, entityId])
+  @@index([ownerUserId])
+  @@index([employeeId])
+}
+
+model SystemConfig {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       Json
+  description String?
+  updatedAt   DateTime @updatedAt
+}
+
+model EmployeeRegistrationRequest {
+  id                           String                     @id @default(cuid())
+  submittedAt                  DateTime                   @default(now())
+  status                       EmployeeRegistrationStatus @default(PENDENTE_APROVACAO)
+  cnpj                         String
+  fullName                     String
+  addressType                  String
+  addressName                  String
+  addressNumber                String
+  complement                   String?
+  neighborhood                 String
+  city                         String
+  stateUf                      String
+  zipCode                      String
+  primaryPhone                 String
+  emergencyPhone               String
+  emergencyContactName         String
+  emergencyContactRelationship String
+  birthDate                    DateTime
+  email                        String
+  passwordHash                 String?
+  rg                           String
+  rgIssuer                     String
+  cpf                          String
+  sex                          String
+  maritalStatus                String
+  educationLevel               String
+  trainingStartDate            DateTime
+  preferredSchedule            String
+  bankName                     String
+  bankAgency                   String
+  bankAccount                  String
+  pixKey                       String
+  pixKeyType                   String
+  secondaryPixKey              String?
+  secondaryPixKeyType          String?
+  socialName                   String?
+  hasChildren                  Boolean                    @default(false)
+  childrenCount                Int?
+  notes                        String?
+  reviewedById                 String?
+  reviewedAt                   DateTime?
+  reviewNotes                  String?
+  createdUserId                String?
+  createdEmployeeProfileId     String?
+  operationalData              Json?
+  history                      Json?
+  createdAt                    DateTime                   @default(now())
+  updatedAt                    DateTime                   @updatedAt
+  deletedAt                    DateTime?
+
+  @@unique([cpf])
+  @@unique([email])
+  @@index([status, submittedAt])
+}
+
+model EmployeeSensitiveData {
+  id                   String   @id @default(cuid())
+  employeeId           String   @unique
+  cpf                  String
+  rg                   String
+  rgIssuer             String
+  cnpj                 String?
+  birthDate            DateTime
+  address              Json
+  bankData             Json
+  emergencyContactData Json
+  familyData           Json?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+}
+
+model ShiftReport {
+  id                       String                @id @default(cuid())
+  reportDate               DateTime
+  submittedAt              DateTime              @default(now())
+  shiftId                  String?
+  lobId                    String?
+  operation                String
+  supervisorId             String?
+  rtaId                    String?
+  importance               ShiftReportImportance @default(MEDIA)
+  plannedHeadcount         Int
+  actualHeadcount          Int
+  onlineAgents             Int
+  absCount                 Int
+  absJustification         String?
+  queueStatusStart         String
+  queueStatusEnd           String
+  backlogStart             Int?
+  backlogEnd               Int?
+  latencyStart             String?
+  latencyEnd               String?
+  occurrences              Json?
+  pendingTasks             String?
+  generalMood              GeneralMood
+  leadersPresent           String?
+  mainRisks                String?
+  actionsTaken             String?
+  nextShiftAttentionPoints String?
+  requiresFollowUp         Boolean               @default(false)
+  followUpOwnerId          String?
+  followUpDueDate          DateTime?
+  followUpStatus           FollowUpStatus        @default(ABERTO)
+  additionalComments       String?
+  absences                 ShiftReportAbsence[]
+  createdAt                DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
+  deletedAt                DateTime?
+
+  @@index([reportDate, shiftId, lobId])
+}
+
+model ShiftReportAbsence {
+  id              String      @id @default(cuid())
+  shiftReportId   String
+  employeeId      String
+  absenceReason   String
+  observation     String?
+  impactsAbs      Boolean     @default(true)
+  impactsCoverage Boolean     @default(true)
+  shiftReport     ShiftReport @relation(fields: [shiftReportId], references: [id], onDelete: Cascade)
+  createdAt       DateTime    @default(now())
+}
+
+model AttendanceRecord {
+  id                      String              @id @default(cuid())
+  employeeId              String
+  scheduleId              String?
+  date                    DateTime
+  shiftId                 String?
+  status                  AttendanceStatus
+  absenceReason           String?
+  reasonCategory          String?
+  supervisorJustification String?
+  hasEvidence             Boolean             @default(false)
+  evidenceUrl             String?
+  isJustified             Boolean             @default(false)
+  impactsAbs              Boolean             @default(false)
+  impactsCoverage         Boolean             @default(false)
+  registeredById          String?
+  justifiedById           String?
+  registeredAt            DateTime            @default(now())
+  justifiedAt             DateTime?
+  employee                EmployeeProfile     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  schedule                Schedule?           @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  shift                   Shift?              @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+  registeredBy            User?               @relation("AttendanceRegisteredBy", fields: [registeredById], references: [id], onDelete: SetNull)
+  justifiedBy             User?               @relation("AttendanceJustifiedBy", fields: [justifiedById], references: [id], onDelete: SetNull)
+  histories               AttendanceHistory[]
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
+
+  @@unique([employeeId, date, shiftId])
+  @@index([date, status])
+}
+
+model AttendanceHistory {
+  id                 String            @id @default(cuid())
+  attendanceRecordId String
+  changedById        String?
+  previousStatus     AttendanceStatus?
+  newStatus          AttendanceStatus
+  previousReason     String?
+  newReason          String?
+  comment            String?
+  attendanceRecord   AttendanceRecord  @relation(fields: [attendanceRecordId], references: [id], onDelete: Cascade)
+  changedBy          User?             @relation("AttendanceHistoryChangedBy", fields: [changedById], references: [id], onDelete: SetNull)
+  createdAt          DateTime          @default(now())
+}
+
+model CoverageSnapshot {
+  id               String       @id @default(cuid())
+  date             DateTime
+  shiftId          String?
+  lobId            String?
+  plannedHeadcount Int
+  actualHeadcount  Int
+  presentCount     Int
+  absentCount      Int
+  gap              Int
+  coverageRate     Float
+  riskLevel        CoverageRisk
+  createdAt        DateTime     @default(now())
+
+  @@index([date, shiftId, lobId])
+}
+
+model EmployeeCampaignSegment {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  filtersJson Json
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model BirthdayNotification {
+  id           String   @id @default(cuid())
+  employeeId   String
+  birthdayDate DateTime
+  month        Int
+  visibleTo    String
+  createdAt    DateTime @default(now())
+
+  @@index([month])
+}

@@ -1,0 +1,57 @@
+import { NextResponse } from "next/server";
+import { z } from "zod";
+
+import { getApiActor } from "@/lib/api-actor";
+import { createOperationalRequest, listOperationalRequests } from "@/lib/request-service";
+
+const createRequestSchema = z.object({
+  type: z.string().min(1),
+  title: z.string().min(1),
+  priority: z.enum(["Baixa", "Média", "Alta", "Crítica"]).default("Média"),
+  description: z.string().min(1),
+  dayOffKind: z.enum(["DAY_OFF_SWAP", "DAY_OFF_SELL", "DAY_OFF_REQUEST"]).optional(),
+  requestedDate: z.string().optional(),
+  currentDayOffDate: z.string().optional(),
+  desiredDayOffDate: z.string().optional(),
+  dayOffToSellDate: z.string().optional(),
+  availabilityShift: z.string().optional(),
+  preferredStartTime: z.string().optional(),
+  preferredEndTime: z.string().optional(),
+  acknowledgement: z.boolean().optional(),
+  desiredDayOffRequestDate: z.string().optional(),
+  dayOffReason: z.string().optional(),
+  urgency: z.enum(["Baixa", "Média", "Alta", "Crítica"]).optional(),
+  justification: z.string().optional(),
+  attachmentUrl: z.string().optional()
+});
+
+export async function GET(request: Request) {
+  const actor = await getApiActor();
+  const url = new URL(request.url);
+  const data = await listOperationalRequests(actor, {
+    type: url.searchParams.get("type") ?? undefined,
+    status: url.searchParams.get("status") ?? undefined,
+    priority: url.searchParams.get("priority") ?? undefined,
+    requester: url.searchParams.get("requester") ?? undefined,
+    assignee: url.searchParams.get("assignee") ?? undefined,
+    date: url.searchParams.get("date") ?? undefined,
+    scope: url.searchParams.get("scope") === "mine" ? "mine" : "all"
+  });
+  return NextResponse.json({ data, actor: { role: actor.role, name: actor.name } });
+}
+
+export async function POST(request: Request) {
+  const body = await request.json();
+  const parsed = createRequestSchema.safeParse(body);
+
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Dados inválidos", issues: parsed.error.flatten() }, { status: 400 });
+  }
+
+  const actor = await getApiActor();
+  const result = await createOperationalRequest(actor, parsed.data);
+  if ("error" in result) {
+    return NextResponse.json({ error: result.error }, { status: 400 });
+  }
+  return NextResponse.json({ data: result.data, persisted: result.persisted }, { status: 201 });
+}

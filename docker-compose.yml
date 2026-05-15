@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: central_operacional_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: central
+      POSTGRES_PASSWORD: central123
+      POSTGRES_DB: central_operacional
+    ports:
+      - "5432:5432"
+    volumes:
+      - central_operacional_pgdata:/var/lib/postgresql/data
+
+volumes:
+  central_operacional_pgdata:

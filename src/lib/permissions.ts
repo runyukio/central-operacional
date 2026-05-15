@@ -1,0 +1,138 @@
+import type { AppRole } from "@/lib/demo-auth";
+
+export type PermissionUser = {
+  role?: string | null;
+  email?: string | null;
+  name?: string | null;
+  status?: string | null;
+};
+
+export type PermissionEmployee = {
+  email?: string | null;
+  supervisor?: string | null;
+  supervisorEmail?: string | null;
+  teamId?: string | null;
+  id?: string | null;
+};
+
+const roleAliases: Record<string, AppRole> = {
+  COLLABORATOR: "COLABORADOR",
+  COLABORADOR: "COLABORADOR",
+  SUPERVISOR: "SUPERVISOR",
+  WFM: "WFM",
+  QUALITY: "QUALIDADE",
+  QUALIDADE: "QUALIDADE",
+  HR: "RH",
+  RH: "RH",
+  LOGISTICS_IT: "TI",
+  TI: "TI",
+  MANAGEMENT: "GESTOR",
+  GESTOR: "GESTOR",
+  ADMIN: "ADMIN"
+};
+
+export function normalizeRole(role?: string | null): AppRole {
+  return roleAliases[String(role ?? "COLABORADOR").toUpperCase()] ?? "COLABORADOR";
+}
+
+export function isActiveUser(user: PermissionUser) {
+  return !user.status || user.status === "ACTIVE" || user.status === "Ativo";
+}
+
+export function canViewEmployeeSensitiveData(user: PermissionUser) {
+  const role = normalizeRole(user.role);
+  return isActiveUser(user) && ["ADMIN", "GESTOR", "RH"].includes(role);
+}
+
+export function canEditSchedule(user: PermissionUser) {
+  const role = normalizeRole(user.role);
+  return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM"].includes(role);
+}
+
+export function canApproveRequest(user: PermissionUser, request?: { area?: string | null; type?: string | null }) {
+  const role = normalizeRole(user.role);
+  if (!isActiveUser(user)) return false;
+  if (["ADMIN", "GESTOR"].includes(role)) return true;
+  if (role === "WFM") return request ? /(wfm|escala|folga|ponto|presença|presenca)/i.test(`${request.area} ${request.type}`) : true;
+  if (role === "RH") return request ? /(rh|clima|cadastral|pessoas)/i.test(`${request.area} ${request.type}`) : true;
+  if (role === "TI") return request ? /(ti|equipamento|notebook|acesso|suporte)/i.test(`${request.area} ${request.type}`) : true;
+  if (role === "QUALIDADE") return request ? /(qualidade|feedback)/i.test(`${request.area} ${request.type}`) : true;
+  return role === "SUPERVISOR";
+}
+
+export function canViewTeam(user: PermissionUser, employee?: PermissionEmployee) {
+  const role = normalizeRole(user.role);
+  if (!isActiveUser(user)) return false;
+  if (["ADMIN", "GESTOR", "RH", "WFM"].includes(role)) return true;
+  if (role === "COLABORADOR") return user.email && employee?.email === user.email;
+  if (role === "SUPERVISOR") {
+    return Boolean(
+      (user.email && employee?.supervisorEmail === user.email) ||
+        (user.name && employee?.supervisor === user.name)
+    );
+  }
+  return false;
+}
+
+export function canViewShiftReport(user: PermissionUser, report?: { supervisor?: string | null; supervisorEmail?: string | null }) {
+  const role = normalizeRole(user.role);
+  if (!isActiveUser(user)) return false;
+  if (["ADMIN", "GESTOR", "WFM"].includes(role)) return true;
+  if (role === "SUPERVISOR") {
+    return !report || report.supervisor === user.name || report.supervisorEmail === user.email;
+  }
+  return false;
+}
+
+export function canManageEquipment(user: PermissionUser) {
+  const role = normalizeRole(user.role);
+  return isActiveUser(user) && ["ADMIN", "GESTOR", "TI"].includes(role);
+}
+
+export function canAccessAuditLogs(user: PermissionUser) {
+  const role = normalizeRole(user.role);
+  return isActiveUser(user) && ["ADMIN", "GESTOR"].includes(role);
+}
+
+export function canViewSensitiveFile(user: PermissionUser, file: { category?: string; ownerUserEmail?: string | null; employeeSupervisor?: string | null }) {
+  const role = normalizeRole(user.role);
+  if (!isActiveUser(user)) return false;
+  if (["ADMIN", "GESTOR"].includes(role)) return true;
+  if (file.ownerUserEmail && file.ownerUserEmail === user.email) return true;
+  if (role === "SUPERVISOR" && file.employeeSupervisor === user.name) return true;
+  if (role === "RH") return ["employee-documents", "absence-evidence", "request-attachments"].includes(file.category ?? "");
+  if (role === "WFM") return ["schedule-imports", "absence-evidence", "shift-report-attachments"].includes(file.category ?? "");
+  if (role === "QUALIDADE") return file.category === "quality-materials";
+  if (role === "TI") return ["equipment-evidence", "request-attachments"].includes(file.category ?? "");
+  return false;
+}
+
+export function canManageAttendance(user: PermissionUser) {
+  const role = normalizeRole(user.role);
+  return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM"].includes(role);
+}
+
+export function canJustifyAbsence(user: PermissionUser, employee?: PermissionEmployee) {
+  const role = normalizeRole(user.role);
+  if (!isActiveUser(user)) return false;
+  if (["ADMIN", "GESTOR", "WFM"].includes(role)) return true;
+  return role === "SUPERVISOR" && canViewTeam(user, employee);
+}
+
+export function maskCpf(value?: string | null) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  if (digits.length < 2) return "***.***.***-**";
+  return `***.***.***-${digits.slice(-2)}`;
+}
+
+export function maskBankAccount(value?: string | null) {
+  const text = String(value ?? "");
+  const last = text.replace(/\D/g, "").slice(-1) || "*";
+  return `****-${last}`;
+}
+
+export function maskPix(value?: string | null) {
+  const text = String(value ?? "");
+  if (text.length <= 4) return "****";
+  return `${text.slice(0, 2)}***${text.slice(-2)}`;
+}

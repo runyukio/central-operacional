@@ -1,0 +1,2 @@
+-- No-op migration kept to preserve the migration history created during the demo build.
+-- The production-ready baseline is prisma/migrations/202605140000_init/migration.sql.

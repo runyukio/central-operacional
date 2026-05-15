@@ -1,0 +1,72 @@
+import { NextResponse } from "next/server";
+import { z } from "zod";
+
+import { getApiActor } from "@/lib/api-actor";
+import { editOperationalSchedule, getOperationalSchedules, removeOperationalSchedules } from "@/lib/schedule-service";
+
+const editSchema = z.object({
+  employeeId: z.string().min(1),
+  date: z.string().min(1),
+  shift: z.string().min(1),
+  startsAt: z.string().optional(),
+  endsAt: z.string().optional(),
+  status: z.string().min(1),
+  lob: z.string().optional(),
+  supervisor: z.string().optional(),
+  observation: z.string().optional(),
+  impactsAbs: z.boolean().optional(),
+  impactsCoverage: z.boolean().optional()
+});
+
+export async function GET(request: Request) {
+  const actor = await getApiActor();
+  const url = new URL(request.url);
+  return NextResponse.json({
+    data: await getOperationalSchedules(actor, {
+      month: Number(url.searchParams.get("month")) || undefined,
+      year: Number(url.searchParams.get("year")) || undefined,
+      collaborator: url.searchParams.get("collaborator") ?? undefined,
+      lob: url.searchParams.get("lob") ?? undefined,
+      supervisor: url.searchParams.get("supervisor") ?? undefined,
+      shift: url.searchParams.get("shift") ?? undefined,
+      status: url.searchParams.get("status") ?? undefined,
+      roleTitle: url.searchParams.get("roleTitle") ?? undefined
+    }),
+    actor: { role: actor.role, name: actor.name }
+  });
+}
+
+export async function PATCH(request: Request) {
+  const parsed = editSchema.safeParse(await request.json());
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Dados inválidos", issues: parsed.error.flatten() }, { status: 400 });
+  }
+
+  const actor = await getApiActor();
+  const result = await editOperationalSchedule(actor, parsed.data);
+  if ("error" in result) {
+    return NextResponse.json({ error: result.error }, { status: 409 });
+  }
+
+  return NextResponse.json(result);
+}
+
+const removeSchema = z.object({
+  employeeId: z.string().min(1),
+  month: z.number().optional(),
+  year: z.number().optional(),
+  scope: z.enum(["month", "all"]).optional()
+});
+
+export async function DELETE(request: Request) {
+  const parsed = removeSchema.safeParse(await request.json());
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Dados inválidos para remover escala.", issues: parsed.error.flatten() }, { status: 400 });
+  }
+
+  const actor = await getApiActor();
+  const result = await removeOperationalSchedules(actor, parsed.data);
+  if ("error" in result) return NextResponse.json({ error: result.error }, { status: 409 });
+
+  return NextResponse.json(result);
+}

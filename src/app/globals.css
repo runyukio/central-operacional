@@ -1,0 +1,205 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --navy: #071b3a;
+  --navy-2: #0b1f44;
+  --blue: #2563eb;
+  --surface: #f6f8fc;
+  --ink: #18233a;
+  --muted: #5d6c88;
+  --border: #dfe4ec;
+  --border-strong: #cfd8e7;
+  --card-shadow: 0 16px 36px rgba(7, 27, 58, 0.065);
+  --card-shadow-hover: 0 22px 48px rgba(7, 27, 58, 0.1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+  background: var(--surface);
+}
+
+body {
+  min-height: 100%;
+  margin: 0;
+  background:
+    radial-gradient(circle at 78% -12%, rgba(37, 99, 235, 0.1), transparent 34rem),
+    linear-gradient(180deg, #fbfcff 0%, #f6f8fc 34%, #f3f6fb 100%),
+    var(--surface);
+  color: var(--ink);
+  font-family: Inter, Aptos, "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 14px;
+  letter-spacing: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button,
+a,
+select,
+input,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.22);
+  outline-offset: 2px;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #eef2f8;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c9d2e4;
+  border-radius: 999px;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: var(--card-shadow);
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.card:hover {
+  border-color: rgba(207, 216, 231, 0.95);
+}
+
+.glass-panel {
+  border: 1px solid rgba(223, 228, 236, 0.88);
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(16px);
+}
+
+.navy-gradient {
+  background:
+    radial-gradient(circle at 20% 0%, rgba(37, 99, 235, 0.42), transparent 18rem),
+    linear-gradient(180deg, rgba(11, 31, 68, 0.98) 0%, rgba(7, 27, 58, 1) 44%, rgba(3, 15, 36, 1) 100%),
+    #071b3a;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.premium-control {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  box-shadow: 0 4px 12px rgba(7, 27, 58, 0.035);
+}
+
+.premium-control:hover {
+  border-color: var(--border-strong);
+}
+
+.premium-button {
+  border-radius: 10px;
+  background: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
+  color: #fff;
+  box-shadow: 0 10px 22px rgba(37, 99, 235, 0.2);
+}
+
+.premium-button:hover {
+  filter: brightness(0.98);
+  box-shadow: 0 14px 28px rgba(37, 99, 235, 0.26);
+}
+
+.executive-grid {
+  background-image:
+    linear-gradient(rgba(223, 228, 236, 0.42) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(223, 228, 236, 0.42) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+.card input:not([type="range"]):not([type="checkbox"]):not([type="file"]),
+.card select,
+.card textarea {
+  border-color: var(--border);
+  background-color: #fff;
+  box-shadow: 0 4px 12px rgba(7, 27, 58, 0.025);
+}
+
+.card input:not([type="range"]):not([type="checkbox"]):not([type="file"]):focus,
+.card select:focus,
+.card textarea:focus {
+  border-color: rgba(37, 99, 235, 0.55);
+}
+
+.card button {
+  transition:
+    transform 150ms ease,
+    box-shadow 150ms ease,
+    border-color 150ms ease,
+    background-color 150ms ease;
+}
+
+.card button:hover {
+  border-color: var(--border-strong);
+}
+
+.card button.bg-blue-600,
+.card a.bg-blue-600,
+.card .bg-blue-600.text-white {
+  background-image: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
+  box-shadow: 0 10px 22px rgba(37, 99, 235, 0.18);
+}
+
+.card button.bg-blue-600:hover,
+.card a.bg-blue-600:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 28px rgba(37, 99, 235, 0.24);
+}
+
+.card .rounded-lg.border.border-border {
+  border-color: rgba(223, 228, 236, 0.92);
+}
+
+.sidebar-scroll {
+  scrollbar-width: none;
+}
+
+.sidebar-scroll::-webkit-scrollbar {
+  display: none;
+}
