@@ -1,6 +1,6 @@
 import bcrypt from "bcryptjs";
 
-import type { EmployeeSensitiveData, Prisma, UserStatus } from "@prisma/client";
+import { Prisma, type EmployeeSensitiveData, type UserStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import type { Actor } from "@/lib/mock-db";
@@ -77,6 +77,13 @@ export async function listOperationalEmployees(actor: Actor) {
 
     return employees.map((employee) => mapEmployee(employee, role, sensitiveByEmployee.get(employee.id)));
   } catch (error) {
+    if (isMissingEmployeeProfileColumnError(error)) {
+      try {
+        return await listOperationalEmployeesLegacy(actor);
+      } catch (legacyError) {
+        console.error("[employee] erro no fallback legado de colaboradores", legacyError);
+      }
+    }
     recordErrorLog({
       userEmail: actor.email,
       code: "EMPLOYEE_LIST_DB_ERROR",
@@ -87,6 +94,102 @@ export async function listOperationalEmployees(actor: Actor) {
     });
     return allowDemoDataFallback ? listMockEmployees(actor) : [];
   }
+}
+
+type LegacyActorRow = {
+  id: string;
+  email: string;
+  name: string;
+  status: string;
+  roleName: string;
+  employeeProfileId: string | null;
+};
+
+type LegacyEmployeeRow = {
+  id: string;
+  userId: string | null;
+  wbLogin: string;
+  fullName: string;
+  roleTitle: string;
+  admissionDate: Date;
+  scheduleType: string;
+  operationalStatus: string;
+  lobId: string;
+  lob: string;
+  teamId: string;
+  team: string;
+  supervisorId: string | null;
+  supervisor: string | null;
+  shiftId: string;
+  shift: string;
+  email: string | null;
+  userStatus: string | null;
+  systemRole: string | null;
+};
+
+async function listOperationalEmployeesLegacy(actor: Actor) {
+  const [actorUser] = await prisma.$queryRaw<LegacyActorRow[]>`
+    SELECT u.id, u.email, u.name, u.status, r.name AS "roleName", ep.id AS "employeeProfileId"
+    FROM "User" u
+    JOIN "Role" r ON r.id = u."roleId"
+    LEFT JOIN "EmployeeProfile" ep ON ep."userId" = u.id AND ep."deletedAt" IS NULL
+    WHERE u.email = ${actor.email} AND u."deletedAt" IS NULL
+    LIMIT 1
+  `;
+  if (!actorUser) return [];
+  const role = normalizeRole(actorUser.roleName);
+  if (!canAccessEmployeeMap({ role: actorUser.roleName, status: actorUser.status })) return [];
+  if (role === "COLABORADOR" && !actorUser.employeeProfileId) return [];
+
+  let where = Prisma.sql`e."deletedAt" IS NULL`;
+  if (role === "COLABORADOR" && actorUser.employeeProfileId) {
+    where = Prisma.sql`e.id = ${actorUser.employeeProfileId} AND e."deletedAt" IS NULL`;
+  }
+  if (role === "SUPERVISOR" && actorUser.employeeProfileId) {
+    const [count] = await prisma.$queryRaw<Array<{ total: bigint }>>`
+      SELECT COUNT(*)::bigint AS total
+      FROM "EmployeeProfile" e
+      WHERE e."supervisorId" = ${actorUser.employeeProfileId} AND e."deletedAt" IS NULL
+    `;
+    if (Number(count?.total ?? 0) > 0) {
+      where = Prisma.sql`e."supervisorId" = ${actorUser.employeeProfileId} AND e."deletedAt" IS NULL`;
+    }
+  }
+
+  const rows = await prisma.$queryRaw<LegacyEmployeeRow[]>(Prisma.sql`
+    SELECT
+      e.id,
+      e."userId",
+      e."wbLogin",
+      e."fullName",
+      e."roleTitle",
+      e."admissionDate",
+      e."scheduleType",
+      e."operationalStatus",
+      e."lobId",
+      l.name AS lob,
+      e."teamId",
+      t.name AS team,
+      e."supervisorId",
+      sup."fullName" AS supervisor,
+      e."shiftId",
+      s.name AS shift,
+      u.email,
+      u.status AS "userStatus",
+      ur.name AS "systemRole"
+    FROM "EmployeeProfile" e
+    JOIN "Lob" l ON l.id = e."lobId"
+    JOIN "Team" t ON t.id = e."teamId"
+    JOIN "Shift" s ON s.id = e."shiftId"
+    LEFT JOIN "EmployeeProfile" sup ON sup.id = e."supervisorId"
+    LEFT JOIN "User" u ON u.id = e."userId"
+    LEFT JOIN "Role" ur ON ur.id = u."roleId"
+    WHERE ${where}
+    ORDER BY e."fullName" ASC
+    LIMIT 200
+  `);
+
+  return rows.map((employee) => mapLegacyEmployee(employee, role));
 }
 
 export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdminUpdateInput) {
@@ -373,6 +476,60 @@ function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: 
       }
       : undefined
   };
+}
+
+function mapLegacyEmployee(employee: LegacyEmployeeRow, role: string) {
+  const canViewSensitive = ["ADMIN", "GESTOR", "RH"].includes(role);
+  return {
+    id: employee.id,
+    name: employee.fullName,
+    socialName: "",
+    wb: employee.wbLogin,
+    lob: employee.lob,
+    lobId: employee.lobId,
+    team: employee.team,
+    teamId: employee.teamId,
+    supervisor: employee.supervisor ?? "Sem supervisor",
+    supervisorId: employee.supervisorId ?? "",
+    shift: employee.shift,
+    shiftId: employee.shiftId,
+    schedule: employee.scheduleType,
+    status: employee.operationalStatus,
+    quality: null,
+    productivity: null,
+    equipment: 0,
+    admission: formatDate(employee.admissionDate),
+    admissionIso: toDateInput(employee.admissionDate),
+    trainingStartDate: "",
+    trainingStartDateIso: "",
+    contractType: "",
+    siteOperation: "",
+    internalNotes: "",
+    primaryPhone: "",
+    city: "",
+    stateUf: "",
+    preferredSchedule: "",
+    role: employee.roleTitle,
+    email: employee.email ?? undefined,
+    userId: employee.userId ?? undefined,
+    userStatus: employee.userStatus ?? "",
+    systemRole: employee.systemRole ?? undefined,
+    canViewSensitive,
+    restrictedSections: {
+      cadastrais: false,
+      contato: false,
+      emergencia: false,
+      bancarios: false,
+      familia: false
+    },
+    sensitive: undefined,
+    maskedSensitive: undefined
+  };
+}
+
+function isMissingEmployeeProfileColumnError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /EmployeeProfile\.(socialName|primaryPhone|city|stateUf|preferredSchedule|trainingStartDate|contractType|siteOperation|internalNotes)|column .* does not exist/i.test(message);
 }
 
 function formatDate(date: Date) {
