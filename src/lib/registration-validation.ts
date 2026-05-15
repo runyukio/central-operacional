@@ -50,6 +50,7 @@ export const registrationPayloadSchema = z.object({
   educationLevel: requiredString("Escolaridade é obrigatória."),
   trainingStartDate: dateString("Data de início do treinamento é obrigatória."),
   preferredSchedule: requiredString("Preferência de horário é obrigatória."),
+  requestedLob: optionalString.refine((value) => !value || value.toLowerCase() !== "todos", "Todos é opção de filtro. Para atuação transversal use ALL."),
   bankName: requiredString("Banco é obrigatório."),
   bankAgency: requiredString("Agência com dígito é obrigatória."),
   bankAccount: requiredString("Conta corrente com dígito é obrigatória."),

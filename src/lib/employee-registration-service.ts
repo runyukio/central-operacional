@@ -158,6 +158,7 @@ export async function submitOperationalRegistration(input: RegistrationInput) {
       confirmPassword: _confirmPassword,
       birthDate,
       trainingStartDate,
+      requestedLob,
       email: _inputEmail,
       ...registrationData
     } = input;
@@ -176,7 +177,7 @@ export async function submitOperationalRegistration(input: RegistrationInput) {
         reviewedById: null,
         reviewedAt: null,
         reviewNotes: null,
-        operationalData: Prisma.JsonNull,
+        operationalData: requestedLob ? { lob: normalizeLobName(requestedLob) } as Prisma.InputJsonObject : Prisma.JsonNull,
         deletedAt: null
       };
 
@@ -276,8 +277,8 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
         const role = await tx.role.findUniqueOrThrow({ where: { name: row.roleName } });
         const lob = await tx.lob.upsert({
           where: { name: row.lob },
-          update: {},
-          create: { name: row.lob, description: "Criado por importação de colaboradores" }
+          update: row.lob === "ALL" ? { description: "Atuação transversal / staff / multi-LOB" } : {},
+          create: { name: row.lob, description: row.lob === "ALL" ? "Atuação transversal / staff / multi-LOB" : "Criado por importação de colaboradores" }
         });
         const shift = await tx.shift.upsert({
           where: { name: row.shift },
@@ -518,11 +519,11 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
         return updated;
       }
 
-      const op = input.operationalData!;
+      const op = { ...input.operationalData!, lob: normalizeLobName(input.operationalData!.lob) };
       const lob = await tx.lob.upsert({
         where: { name: op.lob },
-        update: {},
-        create: { name: op.lob, description: "Criado no cadastro real" }
+        update: op.lob === "ALL" ? { description: "Atuação transversal / staff / multi-LOB" } : {},
+        create: { name: op.lob, description: op.lob === "ALL" ? "Atuação transversal / staff / multi-LOB" : "Criado no cadastro real" }
       });
       const shift = await tx.shift.upsert({
         where: { name: op.shift },
@@ -729,6 +730,7 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     if (row.createUser && !row.email) errors.push("E-mail obrigatório quando criar_usuario = sim.");
     if (row.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) errors.push("E-mail inválido.");
     if (!validRoles.has(row.roleName)) errors.push(`Role/permissão inválida: ${row.roleName}.`);
+    if (text(rows[index]?.lob).toLowerCase() === "todos") errors.push("Todos é opção de filtro. Para atuação transversal use a LOB real ALL.");
     if (!row.birthDate || Number.isNaN(row.birthDate.getTime())) errors.push("Data de nascimento inválida.");
     if (!row.trainingStartDate || Number.isNaN(row.trainingStartDate.getTime())) errors.push("Data de início do treinamento inválida.");
     if (row.stateUf && !/^[A-Z]{2}$/.test(row.stateUf)) errors.push("Estado UF deve ter 2 letras.");
@@ -810,7 +812,7 @@ function normalizeEmployeeImportRow(raw: EmployeeImportRow) {
     wbLogin,
     roleTitle: text(raw.cargo_funcao) || "Agente",
     roleName,
-    lob: text(raw.lob) || "CEC",
+    lob: normalizeLobName(raw.lob),
     supervisorEmail: text(raw.supervisor_email).toLowerCase(),
     supervisorName: text(raw.supervisor_nome),
     shift: text(raw.turno) || "Manhã",
@@ -913,6 +915,12 @@ function isCpfFormat(value: string) {
 
 function text(value: unknown) {
   return String(value ?? "").trim();
+}
+
+function normalizeLobName(value: unknown) {
+  const raw = text(value);
+  if (!raw) return "CEC";
+  return raw.toUpperCase() === "ALL" ? "ALL" : raw;
 }
 
 function isReusableRegistration(item: EmployeeRegistrationRequest) {

@@ -110,14 +110,14 @@ async function main() {
     }))
   });
 
-  const lobNames = ["CEC", "TNS", "ADS"];
+  const lobNames = ["ALL", "CEC", "TNS", "ADS"];
   const lobs = Object.fromEntries(
     await Promise.all(
       lobNames.map((name) =>
         prisma.lob.create({
           data: {
             name,
-            description: `Operação ${name}`
+            description: name === "ALL" ? "Atuação transversal / staff / multi-LOB" : `Operação ${name}`
           }
         })
       )

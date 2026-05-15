@@ -135,7 +135,7 @@ export async function getSystemSettings(actor: Actor) {
           employeeName: user.employeeProfile?.fullName ?? "",
           createdAt: user.createdAt.toISOString()
         })),
-        lobs: lobs.map((lob) => ({ id: lob.id, name: lob.name, description: lob.description ?? "", status: lobStatus[lob.id] ?? "ACTIVE", system: lob.name === "ALL" })),
+        lobs: lobs.map((lob) => ({ id: lob.id, name: lob.name, label: lob.name, description: lob.description ?? "", status: lobStatus[lob.id] ?? "ACTIVE", active: (lobStatus[lob.id] ?? "ACTIVE") === "ACTIVE", system: lob.name === "ALL", isSystem: lob.name === "ALL" })),
         shifts: shifts.map((shift) => ({ id: shift.id, name: shift.name, startsAt: shift.startsAt, endsAt: shift.endsAt, color: shift.color, status: shiftStatus[shift.id] ?? "ACTIVE" })),
         roles: roles.map((role) => ({ id: role.id, name: role.name, label: role.label, description: role.description ?? "", status: roleStatus[role.id] ?? "ACTIVE", essential: essentialRoles.includes(role.name), permissions: rolePermissions[role.name] ?? defaultPermissionsForRole(role.name) })),
         permissions: permissions.map((permission) => ({ id: permission.id, key: permission.key, label: permission.label, description: permission.description ?? "", status: permissionStatus[permission.id] ?? "ACTIVE" })),
@@ -201,7 +201,7 @@ async function getLimitedSystemSettings() {
 
   return {
     ...emptySettings(),
-    lobs: lobs.map((lob) => ({ id: lob.id, name: lob.name, description: lob.description ?? "", status: lobStatus[lob.id] ?? "ACTIVE", system: lob.name === "ALL" })),
+    lobs: lobs.map((lob) => ({ id: lob.id, name: lob.name, label: lob.name, description: lob.description ?? "", status: lobStatus[lob.id] ?? "ACTIVE", active: (lobStatus[lob.id] ?? "ACTIVE") === "ACTIVE", system: lob.name === "ALL", isSystem: lob.name === "ALL" })),
     shifts: shifts.map((shift) => ({ id: shift.id, name: shift.name, startsAt: shift.startsAt, endsAt: shift.endsAt, color: shift.color, status: shiftStatus[shift.id] ?? "ACTIVE" })),
     requestTypes: requestTypes.map((type) => ({ id: type.id, name: type.name, area: type.area, slaHours: type.slaHours, requiresApproval: type.requiresApproval, status: requestTypeStatus[type.id] ?? "ACTIVE", essential: essentialDayOffTypes.includes(type.name) })),
     roleTitles,
@@ -460,7 +460,19 @@ async function saveGeneralSettings(tx: Prisma.TransactionClient, adminId: string
 }
 
 async function ensureCoreSettings() {
-  await prisma.lob.upsert({ where: { name: "ALL" }, update: {}, create: { name: "ALL", description: "LOB sistêmica para visão consolidada" } });
+  const allLob = await prisma.lob.upsert({
+    where: { name: "ALL" },
+    update: { description: "Atuação transversal / staff / multi-LOB" },
+    create: { name: "ALL", description: "Atuação transversal / staff / multi-LOB" }
+  });
+  const lobStatus = await readStatusMap(configKeys.lobStatus);
+  if (lobStatus[allLob.id] !== "ACTIVE") {
+    await prisma.systemConfig.upsert({
+      where: { key: configKeys.lobStatus },
+      update: { value: { ...lobStatus, [allLob.id]: "ACTIVE" } },
+      create: { key: configKeys.lobStatus, value: { [allLob.id]: "ACTIVE" }, description: "Status configurável de LOBs" }
+    });
+  }
   await Promise.all(permissionSeeds.map(([key, label]) => prisma.permission.upsert({ where: { key }, update: { label }, create: { key, label, description: label } })));
   const current = await readObjectConfig<Record<string, string[]>>(configKeys.rolePermissions, {});
   const next = { ...current };

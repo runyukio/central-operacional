@@ -305,7 +305,7 @@ type ScheduleGridRow = (typeof scheduleGridRows)[number];
 
 type SystemSettings = {
   users?: Array<{ id: string; name: string; email: string; status: string; roleName: string; roleLabel?: string; employeeId?: string; employeeName?: string }>;
-  lobs: Array<{ id: string; name: string; description?: string; status: "ACTIVE" | "INACTIVE"; system?: boolean }>;
+  lobs: Array<{ id: string; name: string; label?: string; description?: string; status: "ACTIVE" | "INACTIVE"; active?: boolean; system?: boolean; isSystem?: boolean }>;
   shifts: Array<{ id: string; name: string; startsAt: string; endsAt: string; color?: string; status: "ACTIVE" | "INACTIVE" }>;
   roles: Array<{ id: string; name: string; label: string; description?: string; status?: "ACTIVE" | "INACTIVE"; essential?: boolean; permissions?: string[] }>;
   permissions?: Array<{ id: string; key: string; label: string; description?: string; status: "ACTIVE" | "INACTIVE" }>;
@@ -327,6 +327,7 @@ type EmployeeClient = (typeof employees)[number] & {
   userId?: string;
   systemRole?: string;
   supervisorId?: string;
+  lobId?: string;
   canViewSensitive?: boolean;
   restrictedSections?: Record<string, boolean>;
   sensitive?: {
@@ -518,6 +519,7 @@ const registrationFieldLabels: Record<string, string> = {
   educationLevel: "Escolaridade",
   trainingStartDate: "Data de início do treinamento",
   preferredSchedule: "Preferência de horário",
+  requestedLob: "LOB",
   bankName: "Banco",
   bankAgency: "Agência",
   bankAccount: "Conta corrente",
@@ -563,6 +565,7 @@ export function EmployeeRegistrationPublicPage() {
     educationLevel: "Ensino médio",
     trainingStartDate: "2026-05-04",
     preferredSchedule: "Manhã",
+    requestedLob: "ALL",
     bankName: "",
     bankAgency: "",
     bankAccount: "",
@@ -657,6 +660,7 @@ export function EmployeeRegistrationPublicPage() {
     <div key="ops" className="grid gap-4 md:grid-cols-2">
       <FormInput label="Data de início do treinamento" type="date" value={form.trainingStartDate} error={fieldError("trainingStartDate")} onChange={(value) => updateField("trainingStartDate", value)} />
       <FormSelect label="Preferência de horário" value={form.preferredSchedule} error={fieldError("preferredSchedule")} options={["Manhã", "Tarde", "Noite", "Backoffice"]} onChange={(value) => updateField("preferredSchedule", value)} />
+      <FormSelect label="LOB" value={form.requestedLob} error={fieldError("requestedLob")} options={["ALL", "CEC", "TNS", "ADS"]} onChange={(value) => updateField("requestedLob", value)} />
       <label className="md:col-span-2">
         <span className="mb-1.5 block text-sm font-bold text-muted">Observações adicionais</span>
         <textarea value={form.notes} onChange={(event) => updateField("notes", event.target.value)} className={cn("min-h-28 w-full rounded-lg border p-3 outline-none", fieldError("notes") ? "border-red-300 bg-red-50/40" : "border-border")} />
@@ -672,6 +676,7 @@ export function EmployeeRegistrationPublicPage() {
         ["Cidade/UF", `${form.city}/${form.stateUf}`],
         ["Treinamento", form.trainingStartDate],
         ["Preferência", form.preferredSchedule],
+        ["LOB", form.requestedLob],
         ["PIX principal", `${form.pixKeyType}: ${form.pixKey}`]
       ].map(([label, value]) => (
         <InfoLine key={label} label={label} value={value} />
@@ -1594,7 +1599,7 @@ export function RegistrationApprovalsPage() {
     refused: items.filter((item) => item.status === "Recusado").length
   };
   const selectedReviewClosed = selected ? ["Aprovado", "Ativo", "Recusado"].includes(selected.status) : false;
-  const registrationLobOptions = registrationSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? ["CEC", "TNS", "ADS"];
+  const registrationLobOptions = registrationSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? ["ALL", "CEC", "TNS", "ADS"];
   const registrationShiftOptions = registrationSettings?.shifts.filter((shift) => shift.status !== "INACTIVE").map((shift) => shift.name) ?? ["Manhã", "Tarde", "Noite", "Backoffice"];
   const registrationRoleTitleOptions = registrationSettings?.roleTitles.filter((title) => title.status !== "INACTIVE").map((title) => title.name) ?? ["Atendente", "Supervisor", "WFM", "Qualidade", "RH"];
 
@@ -3144,15 +3149,21 @@ export function EmployeeMapPage() {
   const [employeeSettings, setEmployeeSettings] = useState<SystemSettings | null>(null);
   const [selected, setSelected] = useState<EmployeeClient | null>(null);
   const [employeeMessage, setEmployeeMessage] = useState("");
+  const [lobFilter, setLobFilter] = useState("Todos");
   const [roleTitleDraft, setRoleTitleDraft] = useState("");
   const [statusDraft, setStatusDraft] = useState("");
   const [roleDraft, setRoleDraft] = useState("");
   const [supervisorDraft, setSupervisorDraft] = useState("");
+  const [lobDraft, setLobDraft] = useState("");
   const [savingEmployee, setSavingEmployee] = useState(false);
   const [showResetPassword, setShowResetPassword] = useState(false);
   const [resetPasswordForm, setResetPasswordForm] = useState({ password: "", confirmPassword: "" });
   const [resettingPassword, setResettingPassword] = useState(false);
-  const filtered = employeeRows.filter((employee) => [employee.name, employee.wb, employee.email].join(" ").toLowerCase().includes(query.toLowerCase()));
+  const employeeMapLobs = ["Todos", ...(employeeSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? Array.from(new Set(employeeRows.map((employee) => employee.lob).filter(Boolean))))];
+  const filtered = employeeRows.filter((employee) =>
+    [employee.name, employee.wb, employee.email].join(" ").toLowerCase().includes(query.toLowerCase()) &&
+    (lobFilter === "Todos" || employee.lob === lobFilter)
+  );
   const isAdmin = session?.user?.role === "ADMIN";
 
   useEffect(() => {
@@ -3174,6 +3185,7 @@ export function EmployeeMapPage() {
     setStatusDraft(selected.status ?? "");
     setRoleDraft(selected.systemRole ?? "COLABORADOR");
     setSupervisorDraft(selected.supervisorId ?? "");
+    setLobDraft(selected.lobId ?? "");
   }, [selected]);
 
   async function saveEmployeeOperationalData() {
@@ -3183,7 +3195,7 @@ export function EmployeeMapPage() {
     try {
       const payload = await apiJson<{ data: EmployeeClient }>("/api/employees", {
         method: "PATCH",
-        body: JSON.stringify({ id: selected.id, roleTitle: roleTitleDraft, operationalStatus: statusDraft, roleName: isAdmin ? roleDraft : undefined, supervisorId: supervisorDraft })
+        body: JSON.stringify({ id: selected.id, roleTitle: roleTitleDraft, operationalStatus: statusDraft, roleName: isAdmin ? roleDraft : undefined, supervisorId: supervisorDraft, lobId: lobDraft || undefined })
       });
       setEmployeeRows((items) => items.map((employee) => (employee.id === payload.data.id ? payload.data : employee)));
       setSelected(payload.data);
@@ -3252,6 +3264,9 @@ export function EmployeeMapPage() {
             <select className="h-11 rounded-lg border border-border px-3 font-bold">
               <option>WB/Login</option>
               <option>Nome</option>
+            </select>
+            <select value={lobFilter} onChange={(event) => setLobFilter(event.target.value)} className="h-11 rounded-lg border border-border px-3 font-bold">
+              {employeeMapLobs.map((lob) => <option key={lob} value={lob}>{lob === "Todos" ? "Todas as LOBs" : lob}</option>)}
             </select>
             <input value={query} onChange={(event) => setQuery(event.target.value)} className="h-11 flex-1 rounded-lg border border-border px-3 outline-none" placeholder="Digite o WB/Login ou nome" />
             <button className="h-11 rounded-lg bg-blue-600 px-6 text-sm font-bold text-white">Buscar</button>
@@ -3324,6 +3339,7 @@ export function EmployeeMapPage() {
               <ProfileSection title="Dados Operacionais">
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <InfoLine label="Cargo/Função" value={selected.role} />
+                  <InfoLine label="LOB" value={selected.lob} />
                   <InfoLine label="Status atual" value={<StatusBadge status={selected.status} />} />
                   <InfoLine label="Supervisor vinculado" value={selected.supervisor} />
                   <InfoLine label="Última presença" value={selected.lastPresence ?? "Sem registro"} />
@@ -3338,6 +3354,16 @@ export function EmployeeMapPage() {
                     <span className="mb-1 block text-xs font-bold text-muted">Status operacional</span>
                     <input value={statusDraft} onChange={(event) => setStatusDraft(event.target.value)} className="h-10 w-full rounded-lg border border-border px-3 text-sm outline-none" />
                   </label>
+                  {isAdmin ? (
+                    <label className="block">
+                      <span className="mb-1 block text-xs font-bold text-muted">LOB</span>
+                      <select value={lobDraft} onChange={(event) => setLobDraft(event.target.value)} className="h-10 w-full rounded-lg border border-border px-3 text-sm outline-none">
+                        {(employeeSettings?.lobs ?? []).filter((lob) => lob.status !== "INACTIVE").map((lob) => (
+                          <option key={lob.id} value={lob.id}>{lob.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
                   {isAdmin ? (
                     <label className="block">
                       <span className="mb-1 block text-xs font-bold text-muted">Role/Permissão de sistema</span>

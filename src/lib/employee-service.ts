@@ -55,7 +55,7 @@ export async function listOperationalEmployees(actor: Actor) {
   }
 }
 
-export async function updateOperationalEmployee(actor: Actor, input: { id: string; roleTitle?: string; operationalStatus?: string; roleName?: string; supervisorId?: string }) {
+export async function updateOperationalEmployee(actor: Actor, input: { id: string; roleTitle?: string; operationalStatus?: string; roleName?: string; supervisorId?: string; lobId?: string }) {
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
     if (!user) return { error: "Usuário não autenticado." };
@@ -72,7 +72,8 @@ export async function updateOperationalEmployee(actor: Actor, input: { id: strin
     const nextStatus = input.operationalStatus?.trim();
     const nextRoleName = input.roleName?.trim();
     const nextSupervisorId = input.supervisorId?.trim();
-    if (!nextRoleTitle && !nextStatus && !nextRoleName && nextSupervisorId === undefined) return { error: "Informe ao menos um campo para atualizar." };
+    const nextLobId = input.lobId?.trim();
+    if (!nextRoleTitle && !nextStatus && !nextRoleName && nextSupervisorId === undefined && nextLobId === undefined) return { error: "Informe ao menos um campo para atualizar." };
 
     let targetRoleId: string | undefined;
     if (nextRoleName) {
@@ -91,6 +92,11 @@ export async function updateOperationalEmployee(actor: Actor, input: { id: strin
         return { error: "Supervisor selecionado precisa ter role SUPERVISOR ou ADMIN." };
       }
     }
+    if (input.lobId !== undefined && !nextLobId) return { error: "LOB obrigatória." };
+    if (nextLobId) {
+      const lob = await prisma.lob.findUnique({ where: { id: nextLobId } });
+      if (!lob) return { error: "LOB selecionada não encontrada." };
+    }
 
     const updated = await prisma.$transaction(async (tx) => {
       if (targetRoleId && employee.userId) {
@@ -99,9 +105,10 @@ export async function updateOperationalEmployee(actor: Actor, input: { id: strin
       const record = await tx.employeeProfile.update({
         where: { id: employee.id },
         data: {
-          ...(nextRoleTitle ? { roleTitle: nextRoleTitle } : {}),
-          ...(nextStatus ? { operationalStatus: nextStatus } : {}),
-          ...(nextSupervisorId !== undefined ? { supervisorId: nextSupervisorId || null } : {})
+              ...(nextRoleTitle ? { roleTitle: nextRoleTitle } : {}),
+              ...(nextStatus ? { operationalStatus: nextStatus } : {}),
+              ...(nextSupervisorId !== undefined ? { supervisorId: nextSupervisorId || null } : {}),
+              ...(nextLobId !== undefined ? { lobId: nextLobId } : {})
         },
         include: { ...employeeInclude }
       });
@@ -112,8 +119,8 @@ export async function updateOperationalEmployee(actor: Actor, input: { id: strin
           entity: "EmployeeProfile",
           entityId: employee.id,
           reason: "Atualização de dados operacionais pelo painel administrativo",
-          previousValue: { roleTitle: employee.roleTitle, operationalStatus: employee.operationalStatus, role: employee.user?.role?.name, supervisorId: employee.supervisorId },
-          newValue: { roleTitle: record.roleTitle, operationalStatus: record.operationalStatus, role: record.user?.role?.name, supervisorId: record.supervisorId }
+          previousValue: { roleTitle: employee.roleTitle, operationalStatus: employee.operationalStatus, role: employee.user?.role?.name, supervisorId: employee.supervisorId, lobId: employee.lobId },
+          newValue: { roleTitle: record.roleTitle, operationalStatus: record.operationalStatus, role: record.user?.role?.name, supervisorId: record.supervisorId, lobId: record.lobId }
         }
       });
       return record;
@@ -191,6 +198,7 @@ function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: 
     name: employee.fullName,
     wb: employee.wbLogin,
     lob: employee.lob.name,
+    lobId: employee.lobId,
     supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
     supervisorId: employee.supervisorId ?? "",
     shift: employee.shift.name,

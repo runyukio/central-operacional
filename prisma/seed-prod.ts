@@ -39,11 +39,16 @@ async function main() {
     });
   }
 
-  for (const name of ["CEC", "TNS", "ADS"]) {
+  for (const [name, description] of [
+    ["ALL", "Atuação transversal / staff / multi-LOB"],
+    ["CEC", "LOB disponível para importação real"],
+    ["TNS", "LOB disponível para importação real"],
+    ["ADS", "LOB disponível para importação real"]
+  ] as const) {
     await prisma.lob.upsert({
       where: { name },
-      update: {},
-      create: { name, description: "LOB disponível para importação real" }
+      update: { description },
+      create: { name, description }
     });
   }
 

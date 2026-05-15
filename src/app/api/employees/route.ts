@@ -9,7 +9,8 @@ const updateSchema = z.object({
   roleTitle: z.string().trim().optional(),
   operationalStatus: z.string().trim().optional(),
   roleName: z.string().trim().optional(),
-  supervisorId: z.string().trim().optional()
+  supervisorId: z.string().trim().optional(),
+  lobId: z.string().trim().optional()
 });
 
 export async function GET() {
