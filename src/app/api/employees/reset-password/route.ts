@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getApiActor } from "@/lib/api-actor";
+import { errorResponse, errorStatus, mapZodError } from "@/lib/api-errors";
 import { resetEmployeeUserPassword } from "@/lib/employee-service";
 
 const schema = z.object({
@@ -16,12 +17,12 @@ const schema = z.object({
 export async function POST(request: Request) {
   const parsed = schema.safeParse(await request.json());
   if (!parsed.success) {
-    return NextResponse.json({ error: "Dados inválidos para resetar senha.", fields: parsed.error.flatten().fieldErrors }, { status: 400 });
+    return errorResponse(mapZodError(parsed.error));
   }
 
   const actor = await getApiActor();
   const result = await resetEmployeeUserPassword(actor, parsed.data);
-  if ("error" in result) return NextResponse.json(result, { status: 403 });
+  if ("error" in result) return NextResponse.json(result, { status: errorStatus(result as any) });
 
   return NextResponse.json(result);
 }

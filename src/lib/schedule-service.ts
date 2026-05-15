@@ -639,9 +639,9 @@ export async function commitOperationalScheduleImport(actor: Actor, input: Sched
             importId: importRecord.id,
             rowNumber: rowValidation.rowNumber,
             wbLogin: text(row.wb_login),
-            name: text(row.nome),
+            name: "",
             lob: text(row.lob),
-            supervisor: text(row.supervisor),
+            supervisor: text(row.supervisor_wb_login),
             date: parsedDate,
             shift: text(row.turno),
             startsAt: text(row.entrada),
@@ -836,8 +836,7 @@ async function validateImportRowsInDb(rows: Array<Record<string, unknown>>) {
     const warnings: string[] = [];
     const rowNumber = index + 1;
 
-    if (!text(row.wb_login) && !text(row.email)) errors.push("Informe wb_login ou email.");
-    if (!text(row.nome)) errors.push("Nome obrigatório.");
+    if (!text(row.wb_login)) errors.push("WB/Login obrigatório para importar escala.");
     const parsedDate = parseImportDate(row.data);
     if (!parsedDate) errors.push("Data obrigatória ou inválida.");
     if (parsedDate && (parsedDate.getUTCFullYear() !== 2026 || parsedDate.getUTCMonth() !== 4)) {
@@ -847,6 +846,8 @@ async function validateImportRowsInDb(rows: Array<Record<string, unknown>>) {
 
     const status = text(row.status);
     if ((status === "Escalado" || status === "Presente") && !text(row.turno)) errors.push("Turno obrigatório para Escalado/Presente.");
+    if ((status === "Escalado" || status === "Presente") && !text(row.entrada)) errors.push("Entrada obrigatória para Escalado/Presente.");
+    if ((status === "Escalado" || status === "Presente") && !text(row.saida)) errors.push("Saída obrigatória para Escalado/Presente.");
     if (text(row.turno)) {
       const shift = await prisma.shift.findUnique({ where: { name: text(row.turno) } });
       if (!shift) errors.push(`Turno ${text(row.turno)} não cadastrado.`);
@@ -855,10 +856,10 @@ async function validateImportRowsInDb(rows: Array<Record<string, unknown>>) {
       const lob = await prisma.lob.findUnique({ where: { name: text(row.lob) } });
       if (!lob) warnings.push(`LOB ${text(row.lob)} não cadastrado; será usado o LOB do colaborador existente.`);
     }
-    if (!(uiToScheduleStatus[status] ?? null)) warnings.push(`Status ${status || "-"} será tratado como Escalado.`);
+    if (status && !(uiToScheduleStatus[status] ?? null)) errors.push(`Status inválido: ${status}.`);
 
     const employee = await findEmployeeForImport(prisma, row);
-    if (!employee) errors.push("Colaborador não encontrado por wb_login ou email. Cadastre/aprove o login antes de importar esta linha.");
+    if (!employee) errors.push("WB/Login não encontrado na base de funcionários. Cadastre/aprove o funcionário antes de importar escala.");
 
     validations.push({ rowNumber, errors, warnings });
   }
@@ -1155,17 +1156,8 @@ function text(value: unknown) {
 
 async function findEmployeeForImport(client: Prisma.TransactionClient | typeof prisma, row: Record<string, unknown>) {
   const wbLogin = text(row.wb_login);
-  const email = text(row.email).toLowerCase();
-  if (!wbLogin && !email) return null;
-  return client.employeeProfile.findFirst({
-    where: {
-      OR: [
-        wbLogin ? { wbLogin } : undefined,
-        email ? { user: { email } } : undefined
-      ].filter(Boolean) as Prisma.EmployeeProfileWhereInput[]
-    },
-    include: { shift: true }
-  });
+  if (!wbLogin) return null;
+  return client.employeeProfile.findFirst({ where: { wbLogin, deletedAt: null }, include: { shift: true } });
 }
 
 function serialize(value: unknown) {

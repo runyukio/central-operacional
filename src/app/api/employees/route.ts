@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getApiActor } from "@/lib/api-actor";
+import { errorResponse, errorStatus, mapZodError } from "@/lib/api-errors";
 import { listOperationalEmployees, updateOperationalEmployee } from "@/lib/employee-service";
 
 const updateSchema = z.object({
@@ -38,12 +39,12 @@ export async function GET() {
 export async function PATCH(request: Request) {
   const parsed = updateSchema.safeParse(await request.json());
   if (!parsed.success) {
-    return NextResponse.json({ error: "Dados inválidos para atualizar colaborador.", fields: parsed.error.flatten().fieldErrors }, { status: 400 });
+    return errorResponse(mapZodError(parsed.error));
   }
 
   const actor = await getApiActor();
   const result = await updateOperationalEmployee(actor, parsed.data);
-  if ("error" in result) return NextResponse.json(result, { status: 403 });
+  if ("error" in result) return NextResponse.json(result, { status: errorStatus(result) });
 
   return NextResponse.json(result);
 }

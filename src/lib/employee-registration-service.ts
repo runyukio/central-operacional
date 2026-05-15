@@ -65,11 +65,17 @@ export const employeeImportColumns = [
   "cargo_funcao",
   "role_permissao",
   "lob",
+  "time",
+  "supervisor_wb_login",
   "supervisor_email",
   "supervisor_nome",
   "turno",
+  "escala_modelo",
   "status_colaborador",
+  "tipo_contrato",
+  "data_admissao",
   "data_inicio_treinamento",
+  "site_operacao",
   "preferencia_horario",
   "banco",
   "agencia",
@@ -285,11 +291,11 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
           update: {},
           create: { name: row.shift, startsAt: defaultShiftStart(row.shift), endsAt: defaultShiftEnd(row.shift), color: "#2563EB" }
         });
-        const supervisor = await findSupervisorForImport(tx, row.supervisorEmail, row.supervisorName);
+        const supervisor = await findSupervisorForImport(tx, row.supervisorWbLogin, row.supervisorEmail, row.supervisorName);
         const team = await tx.team.upsert({
-          where: { name_lobId: { name: supervisor?.fullName ? `Time ${supervisor.fullName}` : "Time Inicial", lobId: lob.id } },
+          where: { name_lobId: { name: row.teamName || (supervisor?.fullName ? `Time ${supervisor.fullName}` : "Time Inicial"), lobId: lob.id } },
           update: { supervisorId: supervisor?.id },
-          create: { name: supervisor?.fullName ? `Time ${supervisor.fullName}` : "Time Inicial", lobId: lob.id, supervisorId: supervisor?.id }
+          create: { name: row.teamName || (supervisor?.fullName ? `Time ${supervisor.fullName}` : "Time Inicial"), lobId: lob.id, supervisorId: supervisor?.id }
         });
 
         const existingRegistration = await tx.employeeRegistrationRequest.findFirst({
@@ -349,7 +355,13 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
             shift: row.shift,
             roleTitle: row.roleTitle,
             employeeStatus: row.employeeStatus,
-            preferredSchedule: row.preferredSchedule
+            preferredSchedule: row.preferredSchedule,
+            team: row.teamName,
+            supervisorWbLogin: row.supervisorWbLogin,
+            scheduleType: row.scheduleType,
+            contractType: row.contractType,
+            admissionDate: row.admissionDate?.toISOString(),
+            siteOperation: row.siteOperation
           } as Prisma.InputJsonObject,
           history: [{ at: new Date().toISOString(), actor: actor.name, action: "Cadastro importado e aprovado via Excel", notes: batchId }] as Prisma.InputJsonArray,
           deletedAt: null
@@ -382,14 +394,23 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
             data: {
               userId,
               fullName: row.name,
+              socialName: row.socialName || null,
               roleTitle: row.roleTitle,
-              admissionDate: row.trainingStartDate,
-              scheduleType: row.preferredSchedule || "Não informado",
+              admissionDate: row.admissionDate ?? row.trainingStartDate,
+              scheduleType: row.scheduleType,
               operationalStatus: row.employeeStatus,
               lobId: lob.id,
               teamId: team.id,
               supervisorId: supervisor?.id,
               shiftId: shift.id,
+              trainingStartDate: row.trainingStartDate,
+              contractType: row.contractType || null,
+              siteOperation: row.siteOperation || null,
+              internalNotes: row.notes || null,
+              primaryPhone: row.primaryPhone || null,
+              city: row.city || null,
+              stateUf: row.stateUf || null,
+              preferredSchedule: row.preferredSchedule || null,
               deletedAt: null
             }
           })
@@ -398,14 +419,23 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               userId,
               wbLogin: row.wbLogin,
               fullName: row.name,
+              socialName: row.socialName || null,
               roleTitle: row.roleTitle,
-              admissionDate: row.trainingStartDate,
-              scheduleType: row.preferredSchedule || "Não informado",
+              admissionDate: row.admissionDate ?? row.trainingStartDate,
+              scheduleType: row.scheduleType,
               operationalStatus: row.employeeStatus,
               lobId: lob.id,
               teamId: team.id,
               supervisorId: supervisor?.id,
               shiftId: shift.id,
+              trainingStartDate: row.trainingStartDate,
+              contractType: row.contractType || null,
+              siteOperation: row.siteOperation || null,
+              internalNotes: row.notes || null,
+              primaryPhone: row.primaryPhone || null,
+              city: row.city || null,
+              stateUf: row.stateUf || null,
+              preferredSchedule: row.preferredSchedule || null,
               deletedAt: null
             }
           });
@@ -726,6 +756,7 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     const warnings: string[] = [];
 
     if (!row.name) errors.push("Nome obrigatório.");
+    if (!row.wbLogin) errors.push("WB/Login obrigatório.");
     if (!row.cpf || !isCpfFormat(row.cpf)) errors.push("CPF obrigatório ou inválido.");
     if (row.createUser && !row.email) errors.push("E-mail obrigatório quando criar_usuario = sim.");
     if (row.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) errors.push("E-mail inválido.");
@@ -746,12 +777,20 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     if (row.email) seenEmail.add(row.email);
     if (row.wbLogin) seenWb.add(row.wbLogin);
 
-    const activeByCpf = row.cpf ? await activeEmployeeByCpf(row.cpf) : null;
-    if (activeByCpf) errors.push("Já existe colaborador ativo com este CPF.");
-    const activeUser = row.email ? await prisma.user.findFirst({ where: { email: row.email, status: "ACTIVE", deletedAt: null } }) : null;
-    if (activeUser) errors.push("Já existe usuário ativo com este e-mail.");
     const activeByWb = row.wbLogin ? await prisma.employeeProfile.findFirst({ where: { wbLogin: row.wbLogin, deletedAt: null } }) : null;
-    if (activeByWb) errors.push("Já existe colaborador ativo com este WB/Login.");
+    if (activeByWb) warnings.push("WB/Login existente: o colaborador será atualizado.");
+    const activeByCpf = row.cpf ? await activeEmployeeByCpf(row.cpf) : null;
+    if (activeByCpf && activeByCpf.id !== activeByWb?.id) errors.push("Já existe colaborador ativo com este CPF.");
+    const activeUser = row.email ? await prisma.user.findFirst({ where: { email: row.email, status: "ACTIVE", deletedAt: null } }) : null;
+    if (activeUser && activeUser.id !== activeByWb?.userId) errors.push("Já existe usuário ativo com este e-mail.");
+    if (row.supervisorWbLogin) {
+      const supervisor = await prisma.employeeProfile.findFirst({
+        where: { wbLogin: row.supervisorWbLogin, deletedAt: null },
+        include: { user: { include: { role: true } } }
+      });
+      if (!supervisor) errors.push("Supervisor informado por WB/Login não encontrado.");
+      if (supervisor?.user && !["SUPERVISOR", "ADMIN"].includes(supervisor.user.role.name)) errors.push("Supervisor informado precisa ter role SUPERVISOR ou ADMIN.");
+    }
 
     validations.push({
       rowNumber: index + 1,
@@ -781,7 +820,7 @@ async function activeEmployeeByCpf(cpf: string) {
 function normalizeEmployeeImportRow(raw: EmployeeImportRow) {
   const cpf = text(raw.cpf);
   const email = text(raw.email).toLowerCase();
-  const wbLogin = text(raw.wb_login) || (email ? email.split("@")[0] : `WB-${cpf.replace(/\D/g, "").slice(-6)}`);
+  const wbLogin = text(raw.wb_login);
   const roleName = normalizeImportRole(text(raw.role_permissao) || "COLABORADOR");
   return {
     cnpj: text(raw.cnpj),
@@ -813,11 +852,17 @@ function normalizeEmployeeImportRow(raw: EmployeeImportRow) {
     roleTitle: text(raw.cargo_funcao) || "Agente",
     roleName,
     lob: normalizeLobName(raw.lob),
+    teamName: text(raw.time),
+    supervisorWbLogin: text(raw.supervisor_wb_login),
     supervisorEmail: text(raw.supervisor_email).toLowerCase(),
     supervisorName: text(raw.supervisor_nome),
     shift: text(raw.turno) || "Manhã",
+    scheduleType: text(raw.escala_modelo) || text(raw.preferencia_horario) || "Não informado",
     employeeStatus: text(raw.status_colaborador) || "Ativo",
+    contractType: text(raw.tipo_contrato),
+    admissionDate: parseImportDate(raw.data_admissao),
     trainingStartDate: parseImportDate(raw.data_inicio_treinamento),
+    siteOperation: text(raw.site_operacao),
     preferredSchedule: text(raw.preferencia_horario) || "Não informado",
     bankName: text(raw.banco) || "Não informado",
     bankAgency: text(raw.agencia) || "Não informado",
@@ -875,7 +920,14 @@ function sensitiveDataFromImport(row: ReturnType<typeof normalizeEmployeeImportR
   };
 }
 
-async function findSupervisorForImport(tx: Prisma.TransactionClient, email: string, name: string) {
+async function findSupervisorForImport(tx: Prisma.TransactionClient, wbLogin: string, email: string, name: string) {
+  if (wbLogin) {
+    const employee = await tx.employeeProfile.findFirst({
+      where: { wbLogin, deletedAt: null },
+      include: { user: { include: { role: true } } }
+    });
+    if (employee?.user && ["SUPERVISOR", "ADMIN"].includes(employee.user.role.name)) return employee;
+  }
   if (email) {
     const user = await tx.user.findUnique({ where: { email }, include: { employeeProfile: true } });
     if (user?.employeeProfile) return user.employeeProfile;

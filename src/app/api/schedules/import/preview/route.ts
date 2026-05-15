@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 
 import { getApiActor } from "@/lib/api-actor";
+import { createValidationError, errorResponse } from "@/lib/api-errors";
 import { previewOperationalScheduleImport } from "@/lib/schedule-service";
 
 export async function POST(request: Request) {
@@ -9,7 +10,7 @@ export async function POST(request: Request) {
   const file = formData.get("file");
 
   if (!(file instanceof File)) {
-    return NextResponse.json({ error: "Arquivo não enviado" }, { status: 400 });
+    return errorResponse(createValidationError({ file: "Arquivo não enviado." }));
   }
 
   const workbook = XLSX.read(await file.arrayBuffer());

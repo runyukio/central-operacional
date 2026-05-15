@@ -528,21 +528,20 @@ Regras:
 Template mínimo:
 
 - `wb_login`
-- `nome`
-- `email`
-- `lob`
-- `supervisor`
 - `data`
+- `status`
 - `turno`
 - `entrada`
 - `saida`
-- `status`
+- `lob`
+- `supervisor_wb_login`
 - `observacao`
 
 Regras atuais:
 
-- Se o colaborador já existir por `wb_login` ou `email`, a escala é vinculada a ele.
-- Se o colaborador não existir, a linha aparece como erro para correção; o sistema não cria colaborador fake.
+- A escala é vinculada exclusivamente por `wb_login` existente e ativo na base de funcionários.
+- Se o `wb_login` não existir, a linha aparece como erro para correção; o sistema não cria colaborador fake nem escala órfã.
+- Para status `Escalado` ou `Presente`, `turno`, `entrada` e `saida` são obrigatórios.
 - Não cria duplicidade de escala para o mesmo colaborador/data; a importação atualiza o registro existente.
 - Minha Escala e Escalas Consolidadas leem a mesma tabela `Schedule`.
 - Alteração feita por edição manual ou aprovação final WFM aparece nas duas telas.
@@ -592,6 +591,11 @@ Regras atuais:
 - Quando o Supervisor justifica a ocorrência, o sistema exige motivo e observação, grava `AttendanceHistory`, `AuditLog`, notifica WFM/Admin e mantém a ocorrência impactando ABS conforme a regra do registro.
 - Cadastros aprovados podem ser ajustados administrativamente pelo Mapa de Funcionários. Admin edita identificação, WB/Login, LOB, time, supervisor, turno, escala, cargo, status, contrato, datas, site/operação, role, status de acesso e observações sem recriar colaborador.
 - WFM e RH usam a mesma manutenção pós-aprovação com escopo reduzido por perfil: WFM para dados operacionais e RH para dados cadastrais/contratuais autorizados.
+- APIs críticas passaram a retornar erro estruturado com `type`, `message` e `fieldErrors`, incluindo validações, duplicidades, permissões e relacionamentos inválidos.
+- A edição de colaborador no Mapa preserva os dados preenchidos, destaca campos inválidos e substitui a mensagem genérica por erros como `LOB é obrigatória`, `WB/Login já está em uso` ou `Supervisor selecionado não existe`.
+- A exportação CSV do Mapa agora sai pelo backend em `/api/employees/export`, respeita filtros aplicados e aplica colunas por perfil: `ADMIN` exporta dados completos disponíveis; `SUPERVISOR` exporta apenas dados operacionais sem dados sensíveis.
+- Importação de colaboradores exige `wb_login` como chave operacional principal; linhas com `wb_login` existente atualizam o colaborador, enquanto CPF/e-mail ativos de outro colaborador continuam bloqueados.
+- Importação de escala não usa mais nome ou e-mail como fallback: cada linha precisa de `wb_login` existente em `EmployeeProfile`; linhas sem vínculo falham no preview com erro por linha/campo.
 
 Limitações temporárias:
 

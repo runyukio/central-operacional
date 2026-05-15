@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getApiActor } from "@/lib/api-actor";
+import { errorResponse, errorStatus, mapZodError } from "@/lib/api-errors";
 import { previewEmployeeImport } from "@/lib/employee-registration-service";
 
 const schema = z.object({
@@ -11,12 +12,12 @@ const schema = z.object({
 export async function POST(request: Request) {
   const parsed = schema.safeParse(await request.json().catch(() => ({})));
   if (!parsed.success) {
-    return NextResponse.json({ error: "Arquivo inválido para preview.", fields: parsed.error.flatten().fieldErrors }, { status: 400 });
+    return errorResponse(mapZodError(parsed.error));
   }
 
   const actor = await getApiActor();
   const result = await previewEmployeeImport(actor, parsed.data.rows);
-  if ("error" in result) return NextResponse.json(result, { status: 403 });
+  if ("error" in result) return NextResponse.json(result, { status: errorStatus(result as any) });
 
   return NextResponse.json(result);
 }

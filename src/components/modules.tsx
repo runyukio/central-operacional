@@ -441,10 +441,10 @@ async function apiJson<T>(url: string, options?: RequestInit) {
     ...options,
     headers: options?.body instanceof FormData ? options.headers : { "Content-Type": "application/json", ...(options?.headers ?? {}) }
   });
-  const payload = (await response.json()) as T & { error?: string; message?: string; fields?: Record<string, string>; type?: string };
+  const payload = (await response.json()) as T & { error?: string; message?: string; fields?: Record<string, string>; fieldErrors?: Record<string, string>; type?: string };
   if (!response.ok) {
     throw new ApiRequestError(payload.error ?? payload.message ?? "Erro ao processar solicitação", {
-      fields: payload.fields,
+      fields: payload.fieldErrors ?? payload.fields,
       type: payload.type,
       status: response.status
     });
@@ -2523,7 +2523,7 @@ export function SchedulesPage() {
               <div className="space-y-3">
                 <StatusBadge status={validation.errors ? `${validation.errors} erros` : "Sem erros críticos"} />
                 <StatusBadge status={`${validation.warnings} alertas`} />
-                <p className="text-sm text-muted">Validações: WB/Login, nome, data, turno obrigatório, status válido, conflito por pessoa/dia, LOB, supervisor e cobertura mínima.</p>
+                <p className="text-sm text-muted">Validações: WB/Login existente, data, status válido, turno/entrada/saída quando necessário, conflito por pessoa/dia, LOB, supervisor e cobertura mínima.</p>
                 <button
                   onClick={commitImport}
                   className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white"
@@ -3280,6 +3280,7 @@ export function EmployeeMapPage() {
   const [preferredScheduleDraft, setPreferredScheduleDraft] = useState("");
   const [internalNotesDraft, setInternalNotesDraft] = useState("");
   const [savingEmployee, setSavingEmployee] = useState(false);
+  const [employeeFieldErrors, setEmployeeFieldErrors] = useState<Record<string, string>>({});
   const [showResetPassword, setShowResetPassword] = useState(false);
   const [resetPasswordForm, setResetPasswordForm] = useState({ password: "", confirmPassword: "" });
   const [resettingPassword, setResettingPassword] = useState(false);
@@ -3340,12 +3341,14 @@ export function EmployeeMapPage() {
     setStateUfDraft(selected.stateUf ?? "");
     setPreferredScheduleDraft(selected.preferredSchedule ?? "");
     setInternalNotesDraft(selected.internalNotes ?? "");
+    setEmployeeFieldErrors({});
   }, [selected]);
 
   async function saveEmployeeOperationalData() {
     if (!selected || savingEmployee) return;
     setSavingEmployee(true);
     setEmployeeMessage("");
+    setEmployeeFieldErrors({});
     try {
       const payload = await apiJson<{ data: EmployeeClient }>("/api/employees", {
         method: "PATCH",
@@ -3380,40 +3383,22 @@ export function EmployeeMapPage() {
       setEditingEmployee(false);
       setEmployeeMessage("Dados operacionais atualizados.");
     } catch (error) {
-      setEmployeeMessage(error instanceof ApiRequestError ? error.message : error instanceof Error ? error.message : "Não foi possível atualizar o colaborador.");
+      if (error instanceof ApiRequestError) {
+        setEmployeeFieldErrors(error.fields ?? {});
+        setEmployeeMessage(error.message);
+      } else {
+        setEmployeeMessage(error instanceof Error ? error.message : "Não foi possível atualizar o colaborador.");
+      }
     } finally {
       setSavingEmployee(false);
     }
   }
 
   function exportEmployeesCsv() {
-    const rows = filtered.map((employee) => ({
-      Nome: employee.name,
-      Email: employee.email ?? "",
-      "WB/Login": employee.wb,
-      "Cargo/Função": employee.role,
-      "Role/Permissão": employee.systemRole ?? "",
-      LOB: employee.lob,
-      Time: employee.team ?? "",
-      Supervisor: employee.supervisor,
-      Turno: employee.shift,
-      Status: employee.status,
-      Escala: employee.schedule,
-      Contrato: employee.contractType ?? "",
-      "Site/Operação": employee.siteOperation ?? "",
-      "Usuário ativo": employee.userId ? "Sim" : "Não"
-    }));
-    const csv = [
-      Object.keys(rows[0] ?? { Nome: "" }).join(","),
-      ...rows.map((row) => Object.values(row).map((value) => `"${String(value).replace(/"/g, '""')}"`).join(","))
-    ].join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "mapa-funcionarios.csv";
-    link.click();
-    URL.revokeObjectURL(url);
+    const params = new URLSearchParams();
+    if (query.trim()) params.set("q", query.trim());
+    if (lobFilter !== "Todos") params.set("lob", lobFilter);
+    window.location.href = `/api/employees/export${params.toString() ? `?${params.toString()}` : ""}`;
   }
 
   async function resetSelectedPassword() {
@@ -3545,82 +3530,92 @@ export function EmployeeMapPage() {
                       </div>
                     ) : (
                       <div className="space-y-4">
+                        {Object.keys(employeeFieldErrors).length ? (
+                          <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">
+                            Existem campos inválidos. Revise os campos destacados antes de salvar.
+                          </div>
+                        ) : null}
                         <ProfileSection title="Identificação">
                           <div className="grid gap-3 md:grid-cols-2">
-                            <FormInput label="Nome" value={nameDraft} onChange={setNameDraft} />
-                            <FormInput label="Nome social" value={socialNameDraft} onChange={setSocialNameDraft} />
-                            <FormInput label="E-mail de login" type="email" value={emailDraft} onChange={setEmailDraft} />
-                            <FormInput label="WB/Login" value={wbDraft} onChange={setWbDraft} />
+                            <FormInput label="Nome" value={nameDraft} onChange={setNameDraft} error={employeeFieldErrors.fullName} />
+                            <FormInput label="Nome social" value={socialNameDraft} onChange={setSocialNameDraft} error={employeeFieldErrors.socialName} />
+                            <FormInput label="E-mail de login" type="email" value={emailDraft} onChange={setEmailDraft} error={employeeFieldErrors.email} />
+                            <FormInput label="WB/Login" value={wbDraft} onChange={setWbDraft} error={employeeFieldErrors.wbLogin} />
                           </div>
                         </ProfileSection>
                         <ProfileSection title="Operacional">
                           <div className="grid gap-3 md:grid-cols-2">
                             {employeeRoleTitleOptions.length ? (
-                              <FormSelect label="Cargo/Função" value={roleTitleDraft} options={employeeRoleTitleOptions} onChange={setRoleTitleDraft} />
+                              <FormSelect label="Cargo/Função" value={roleTitleDraft} options={employeeRoleTitleOptions} onChange={setRoleTitleDraft} error={employeeFieldErrors.roleTitle} />
                             ) : (
-                              <FormInput label="Cargo/Função" value={roleTitleDraft} onChange={setRoleTitleDraft} />
+                              <FormInput label="Cargo/Função" value={roleTitleDraft} onChange={setRoleTitleDraft} error={employeeFieldErrors.roleTitle} />
                             )}
-                            {isAdmin ? <FormSelect label="Role/Permissão" value={roleDraft} options={employeeRoleOptions} onChange={setRoleDraft} /> : null}
+                            {isAdmin ? <FormSelect label="Role/Permissão" value={roleDraft} options={employeeRoleOptions} onChange={setRoleDraft} error={employeeFieldErrors.roleName} /> : null}
                             {canEditOperationalBindings ? (
                               <label className="block">
                                 <span className="mb-1.5 block text-sm font-bold text-muted">LOB</span>
-                                <select value={lobDraft} onChange={(event) => setLobDraft(event.target.value)} className="h-11 w-full rounded-lg border border-border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100">
+                                <select value={lobDraft} onChange={(event) => setLobDraft(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100", employeeFieldErrors.lobId ? "border-red-300 bg-red-50/40" : "border-border")}>
                                   {employeeLobOptions.map((lob) => <option key={lob.id} value={lob.id}>{lob.name}</option>)}
                                 </select>
+                                {employeeFieldErrors.lobId ? <span className="mt-1 block text-xs font-bold text-red-600">{employeeFieldErrors.lobId}</span> : null}
                               </label>
                             ) : null}
                             {canEditOperationalBindings ? (
                               <label className="block">
                                 <span className="mb-1.5 block text-sm font-bold text-muted">Time</span>
-                                <select value={teamDraft} onChange={(event) => setTeamDraft(event.target.value)} className="h-11 w-full rounded-lg border border-border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100">
+                                <select value={teamDraft} onChange={(event) => setTeamDraft(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100", employeeFieldErrors.teamId ? "border-red-300 bg-red-50/40" : "border-border")}>
                                   {employeeTeamOptions.map((team) => <option key={team.id} value={team.id}>{team.name} - {team.lob}</option>)}
                                 </select>
+                                {employeeFieldErrors.teamId ? <span className="mt-1 block text-xs font-bold text-red-600">{employeeFieldErrors.teamId}</span> : null}
                               </label>
                             ) : null}
                             {canEditOperationalBindings ? (
                               <label className="block">
                                 <span className="mb-1.5 block text-sm font-bold text-muted">Supervisor</span>
-                                <select value={supervisorDraft} onChange={(event) => setSupervisorDraft(event.target.value)} className="h-11 w-full rounded-lg border border-border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100">
+                                <select value={supervisorDraft} onChange={(event) => setSupervisorDraft(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100", employeeFieldErrors.supervisorId ? "border-red-300 bg-red-50/40" : "border-border")}>
                                   <option value="">Sem supervisor</option>
                                   {(employeeSettings?.supervisors ?? []).map((supervisor) => (
                                     <option key={supervisor.id} value={supervisor.id}>{supervisor.name} - {supervisor.email || supervisor.lob || "supervisor"}</option>
                                   ))}
                                 </select>
+                                {employeeFieldErrors.supervisorId ? <span className="mt-1 block text-xs font-bold text-red-600">{employeeFieldErrors.supervisorId}</span> : null}
                               </label>
                             ) : null}
                             {canEditOperationalBindings ? (
                               <label className="block">
                                 <span className="mb-1.5 block text-sm font-bold text-muted">Turno</span>
-                                <select value={shiftDraft} onChange={(event) => setShiftDraft(event.target.value)} className="h-11 w-full rounded-lg border border-border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100">
+                                <select value={shiftDraft} onChange={(event) => setShiftDraft(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100", employeeFieldErrors.shiftId ? "border-red-300 bg-red-50/40" : "border-border")}>
                                   {employeeShiftOptions.map((shift) => <option key={shift.id} value={shift.id}>{shift.name} ({shift.startsAt}-{shift.endsAt})</option>)}
                                 </select>
+                                {employeeFieldErrors.shiftId ? <span className="mt-1 block text-xs font-bold text-red-600">{employeeFieldErrors.shiftId}</span> : null}
                               </label>
                             ) : null}
-                            <FormSelect label="Status" value={statusDraft} options={operationalStatusOptions} onChange={setStatusDraft} />
-                            {canEditOperationalBindings ? <FormInput label="Escala" value={scheduleDraft} onChange={setScheduleDraft} /> : null}
-                            {canEditOperationalBindings ? <FormInput label="Site/Operação" value={siteDraft} onChange={setSiteDraft} /> : null}
+                            <FormSelect label="Status" value={statusDraft} options={operationalStatusOptions} onChange={setStatusDraft} error={employeeFieldErrors.operationalStatus} />
+                            {canEditOperationalBindings ? <FormInput label="Escala" value={scheduleDraft} onChange={setScheduleDraft} error={employeeFieldErrors.scheduleType} /> : null}
+                            {canEditOperationalBindings ? <FormInput label="Site/Operação" value={siteDraft} onChange={setSiteDraft} error={employeeFieldErrors.siteOperation} /> : null}
                           </div>
                         </ProfileSection>
                         <ProfileSection title="Contrato e Datas">
                           <div className="grid gap-3 md:grid-cols-2">
-                            {canEditPeopleData ? <FormSelect label="Tipo de contrato" value={contractDraft} options={contractOptions} onChange={setContractDraft} /> : null}
-                            {canEditPeopleData ? <FormInput label="Data de admissão" type="date" value={admissionDraft} onChange={setAdmissionDraft} /> : null}
-                            {canEditPeopleData ? <FormInput label="Início do treinamento" type="date" value={trainingDraft} onChange={setTrainingDraft} /> : null}
-                            {isAdmin ? <FormSelect label="Usuário ativo/inativo" value={userStatusDraft} options={["ACTIVE", "INACTIVE", "BLOCKED"]} onChange={setUserStatusDraft} /> : null}
+                            {canEditPeopleData ? <FormSelect label="Tipo de contrato" value={contractDraft} options={contractOptions} onChange={setContractDraft} error={employeeFieldErrors.contractType} /> : null}
+                            {canEditPeopleData ? <FormInput label="Data de admissão" type="date" value={admissionDraft} onChange={setAdmissionDraft} error={employeeFieldErrors.admissionDate} /> : null}
+                            {canEditPeopleData ? <FormInput label="Início do treinamento" type="date" value={trainingDraft} onChange={setTrainingDraft} error={employeeFieldErrors.trainingStartDate} /> : null}
+                            {isAdmin ? <FormSelect label="Usuário ativo/inativo" value={userStatusDraft} options={["ACTIVE", "INACTIVE", "BLOCKED"]} onChange={setUserStatusDraft} error={employeeFieldErrors.userStatus} /> : null}
                           </div>
                         </ProfileSection>
                         {canEditPeopleData ? (
                           <ProfileSection title="Contato Operacional">
                             <div className="grid gap-3 md:grid-cols-2">
-                              <FormInput label="Contato principal" value={primaryPhoneDraft} onChange={setPrimaryPhoneDraft} />
-                              <FormInput label="Cidade" value={cityDraft} onChange={setCityDraft} />
-                              <FormInput label="Estado/UF" value={stateUfDraft} onChange={setStateUfDraft} />
-                              <FormInput label="Preferência de horário" value={preferredScheduleDraft} onChange={setPreferredScheduleDraft} />
+                              <FormInput label="Contato principal" value={primaryPhoneDraft} onChange={setPrimaryPhoneDraft} error={employeeFieldErrors.primaryPhone} />
+                              <FormInput label="Cidade" value={cityDraft} onChange={setCityDraft} error={employeeFieldErrors.city} />
+                              <FormInput label="Estado/UF" value={stateUfDraft} onChange={setStateUfDraft} error={employeeFieldErrors.stateUf} />
+                              <FormInput label="Preferência de horário" value={preferredScheduleDraft} onChange={setPreferredScheduleDraft} error={employeeFieldErrors.preferredSchedule} />
                             </div>
                           </ProfileSection>
                         ) : null}
                         <ProfileSection title="Observações">
-                          <textarea value={internalNotesDraft} onChange={(event) => setInternalNotesDraft(event.target.value)} className="min-h-24 w-full rounded-lg border border-border p-3 text-sm outline-none" placeholder="Observações internas da operação" />
+                          <textarea value={internalNotesDraft} onChange={(event) => setInternalNotesDraft(event.target.value)} className={cn("min-h-24 w-full rounded-lg border p-3 text-sm outline-none", employeeFieldErrors.internalNotes ? "border-red-300 bg-red-50/40" : "border-border")} placeholder="Observações internas da operação" />
+                          {employeeFieldErrors.internalNotes ? <span className="mt-1 block text-xs font-bold text-red-600">{employeeFieldErrors.internalNotes}</span> : null}
                         </ProfileSection>
                         <div className="grid gap-2 sm:grid-cols-3">
                           <button disabled={savingEmployee} onClick={saveEmployeeOperationalData} className="rounded-lg bg-blue-600 px-3 py-2.5 text-sm font-bold text-white disabled:opacity-50">

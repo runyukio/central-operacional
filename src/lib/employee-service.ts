@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import type { Actor } from "@/lib/mock-db";
 import { listEmployeesForActor as listMockEmployees, recordErrorLog } from "@/lib/mock-db";
 import { canAccessEmployeeMap, canViewEmployeeSensitiveData, normalizeRole } from "@/lib/permissions";
+import { createDuplicateError, createNotFoundError, createPermissionError, createRelationError, createServerError, createValidationError, mapPrismaError } from "@/lib/api-errors";
 
 const allowDemoDataFallback = process.env.ALLOW_DEMO_LOGIN === "true" || process.env.ALLOW_DEMO_DATA === "true";
 const employeeInclude = {
@@ -195,27 +196,27 @@ async function listOperationalEmployeesLegacy(actor: Actor) {
 export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdminUpdateInput) {
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
-    if (!user) return { error: "Usuário não autenticado." };
+    if (!user) return createPermissionError("Usuário não autenticado.");
     const role = normalizeRole(actor.role);
-    if (!["ADMIN", "GESTOR", "RH", "WFM"].includes(role)) return { error: "Sem permissão para editar dados operacionais." };
+    if (!["ADMIN", "GESTOR", "RH", "WFM"].includes(role)) return createPermissionError("Você não tem permissão para editar dados operacionais.");
 
     const employee = await prisma.employeeProfile.findFirst({
       where: { id: input.id, deletedAt: null },
       include: { ...employeeInclude }
     });
-    if (!employee) return { error: "Colaborador não encontrado." };
+    if (!employee) return createNotFoundError("Colaborador não encontrado.");
 
     const actorIsAdmin = role === "ADMIN";
     const canEditOperational = ["ADMIN", "GESTOR", "WFM"].includes(role);
     const canEditPeopleData = ["ADMIN", "GESTOR", "RH"].includes(role);
-    if (!canEditOperational && !canEditPeopleData) return { error: "Sem permissão para editar dados do colaborador." };
+    if (!canEditOperational && !canEditPeopleData) return createPermissionError("Você não tem permissão para editar dados do colaborador.");
 
     const adminOnlyFields: Array<keyof EmployeeAdminUpdateInput> = ["wbLogin", "roleName", "userStatus"];
     const sensitivePeopleFields: Array<keyof EmployeeAdminUpdateInput> = ["fullName", "socialName", "email", "primaryPhone", "city", "stateUf", "preferredSchedule", "contractType", "admissionDate", "trainingStartDate"];
     const operationalFields: Array<keyof EmployeeAdminUpdateInput> = ["roleTitle", "operationalStatus", "lobId", "teamId", "supervisorId", "shiftId", "scheduleType", "siteOperation", "internalNotes"];
-    if (!actorIsAdmin && adminOnlyFields.some((field) => input[field] !== undefined)) return { error: "Apenas Admin pode alterar WB/Login, role ou status de acesso." };
-    if (!canEditPeopleData && sensitivePeopleFields.some((field) => input[field] !== undefined)) return { error: "Sem permissão para editar dados cadastrais/contratuais." };
-    if (!canEditOperational && operationalFields.some((field) => input[field] !== undefined)) return { error: "Sem permissão para editar dados operacionais." };
+    if (!actorIsAdmin && adminOnlyFields.some((field) => input[field] !== undefined)) return createPermissionError("Apenas Admin pode alterar WB/Login, role ou status de acesso.");
+    if (!canEditPeopleData && sensitivePeopleFields.some((field) => input[field] !== undefined)) return createPermissionError("Você não tem permissão para editar dados cadastrais/contratuais.");
+    if (!canEditOperational && operationalFields.some((field) => input[field] !== undefined)) return createPermissionError("Você não tem permissão para editar dados operacionais.");
 
     const nextFullName = clean(input.fullName);
     const nextSocialName = cleanNullable(input.socialName);
@@ -232,9 +233,9 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     const nextScheduleType = clean(input.scheduleType);
     const nextContractType = cleanNullable(input.contractType);
     const nextAdmissionDate = parseDateInput(input.admissionDate, "Data de admissão inválida.");
-    if ("error" in nextAdmissionDate) return { error: nextAdmissionDate.error };
+    if ("error" in nextAdmissionDate) return createValidationError({ admissionDate: nextAdmissionDate.error });
     const nextTrainingDate = parseDateInput(input.trainingStartDate, "Data de treinamento inválida.");
-    if ("error" in nextTrainingDate) return { error: nextTrainingDate.error };
+    if ("error" in nextTrainingDate) return createValidationError({ trainingStartDate: nextTrainingDate.error });
     const nextSiteOperation = cleanNullable(input.siteOperation);
     const nextInternalNotes = cleanNullable(input.internalNotes);
     const nextPrimaryPhone = cleanNullable(input.primaryPhone);
@@ -243,55 +244,55 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     const nextPreferredSchedule = cleanNullable(input.preferredSchedule);
 
     const hasAnyUpdate = Object.entries(input).some(([key, value]) => key !== "id" && value !== undefined);
-    if (!hasAnyUpdate) return { error: "Informe ao menos um campo para atualizar." };
-    if (input.fullName !== undefined && !nextFullName) return { error: "Nome obrigatório." };
-    if (input.email !== undefined && (!nextEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail))) return { error: "E-mail inválido." };
-    if (input.wbLogin !== undefined && !nextWbLogin) return { error: "WB/Login obrigatório." };
-    if (input.lobId !== undefined && !nextLobId) return { error: "LOB obrigatória." };
-    if (input.teamId !== undefined && !nextTeamId) return { error: "Time obrigatório." };
-    if (input.shiftId !== undefined && !nextShiftId) return { error: "Turno obrigatório." };
-    if (input.roleTitle !== undefined && !nextRoleTitle) return { error: "Cargo/Função obrigatório." };
-    if (input.operationalStatus !== undefined && !nextStatus) return { error: "Status obrigatório." };
-    if (input.scheduleType !== undefined && !nextScheduleType) return { error: "Escala obrigatória." };
-    if (input.stateUf !== undefined && nextStateUf && nextStateUf.length !== 2) return { error: "Estado/UF deve ter 2 letras." };
+    if (!hasAnyUpdate) return createValidationError({ form: "Informe ao menos um campo para atualizar." });
+    if (input.fullName !== undefined && !nextFullName) return createValidationError({ fullName: "Nome obrigatório." });
+    if (input.email !== undefined && (!nextEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail))) return createValidationError({ email: "E-mail inválido." });
+    if (input.wbLogin !== undefined && !nextWbLogin) return createValidationError({ wbLogin: "WB/Login obrigatório." });
+    if (input.lobId !== undefined && !nextLobId) return createValidationError({ lobId: "LOB é obrigatória." });
+    if (input.teamId !== undefined && !nextTeamId) return createValidationError({ teamId: "Time é obrigatório." });
+    if (input.shiftId !== undefined && !nextShiftId) return createValidationError({ shiftId: "Turno é obrigatório." });
+    if (input.roleTitle !== undefined && !nextRoleTitle) return createValidationError({ roleTitle: "Cargo/Função é obrigatório." });
+    if (input.operationalStatus !== undefined && !nextStatus) return createValidationError({ operationalStatus: "Status do colaborador é obrigatório." });
+    if (input.scheduleType !== undefined && !nextScheduleType) return createValidationError({ scheduleType: "Escala é obrigatória." });
+    if (input.stateUf !== undefined && nextStateUf && nextStateUf.length !== 2) return createValidationError({ stateUf: "Estado/UF deve ter 2 letras." });
 
     let targetRoleId: string | undefined;
     if (nextRoleName) {
-      if (role !== "ADMIN") return { error: "Apenas Admin pode alterar role/permissão de sistema." };
+      if (role !== "ADMIN") return createPermissionError("Apenas Admin pode alterar role/permissão de sistema.");
       const activeAdmins = await prisma.user.count({ where: { status: "ACTIVE", deletedAt: null, role: { name: "ADMIN" } } });
       if (employee.userId && employee.userId === user.id && employee.user?.role?.name === "ADMIN" && nextRoleName !== "ADMIN" && activeAdmins <= 1) {
-        return { error: "Não é permitido remover o único Admin ativo." };
+        return createPermissionError("Não é permitido remover o único Admin ativo.");
       }
       const targetRole = await prisma.role.findUnique({ where: { name: nextRoleName } });
-      if (!targetRole) return { error: "Role/permissão não encontrada." };
+      if (!targetRole) return createValidationError({ roleName: "Role/Permissão selecionada não existe." }, "Role/Permissão selecionada não existe.");
       targetRoleId = targetRole.id;
     }
-    if (nextUserStatus && !["ACTIVE", "INACTIVE", "BLOCKED"].includes(nextUserStatus)) return { error: "Status de acesso inválido." };
+    if (nextUserStatus && !["ACTIVE", "INACTIVE", "BLOCKED"].includes(nextUserStatus)) return createValidationError({ userStatus: "Status de acesso inválido." });
     if (nextWbLogin && nextWbLogin !== employee.wbLogin) {
       const duplicatedWb = await prisma.employeeProfile.findFirst({ where: { wbLogin: nextWbLogin, deletedAt: null, id: { not: employee.id } } });
-      if (duplicatedWb) return { error: "Já existe colaborador ativo com este WB/Login." };
+      if (duplicatedWb) return createDuplicateError("Já existe um colaborador com este WB/Login.", { wbLogin: "Este WB/Login já está em uso." });
     }
     if (nextEmail && nextEmail !== employee.user?.email) {
       const duplicatedEmail = await prisma.user.findFirst({ where: { email: nextEmail, deletedAt: null, id: employee.userId ? { not: employee.userId } : undefined } });
-      if (duplicatedEmail) return { error: "Já existe usuário ativo com este e-mail." };
+      if (duplicatedEmail) return createDuplicateError("Já existe usuário ativo com este e-mail.", { email: "Este e-mail já está vinculado a outro usuário ativo." });
     }
     if (nextSupervisorId) {
       const supervisor = await prisma.employeeProfile.findFirst({ where: { id: nextSupervisorId, deletedAt: null }, include: { user: { include: { role: true } } } });
       if (!supervisor?.user || !["SUPERVISOR", "ADMIN"].includes(supervisor.user.role.name)) {
-        return { error: "Supervisor selecionado precisa ter role SUPERVISOR ou ADMIN." };
+        return createRelationError("Supervisor selecionado não existe ou não é elegível.", { supervisorId: "Selecione um supervisor com role SUPERVISOR ou ADMIN." });
       }
     }
     if (nextLobId) {
       const lob = await prisma.lob.findUnique({ where: { id: nextLobId } });
-      if (!lob) return { error: "LOB selecionada não encontrada." };
+      if (!lob) return createRelationError("LOB selecionada não foi encontrada.", { lobId: "LOB selecionada não existe ou está inativa." });
     }
     if (nextTeamId) {
       const team = await prisma.team.findUnique({ where: { id: nextTeamId } });
-      if (!team) return { error: "Time selecionado não encontrado." };
+      if (!team) return createRelationError("Time selecionado não foi encontrado.", { teamId: "Selecione um time válido." });
     }
     if (nextShiftId) {
       const shift = await prisma.shift.findUnique({ where: { id: nextShiftId } });
-      if (!shift) return { error: "Turno selecionado não encontrado." };
+      if (!shift) return createRelationError("Turno selecionado não foi encontrado.", { shiftId: "Selecione um turno válido." });
     }
 
     const updated = await prisma.$transaction(async (tx) => {
@@ -357,8 +358,54 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
       action: "EMPLOYEE_UPDATE",
       severity: "ERROR"
     });
-    return { error: "Não foi possível atualizar o colaborador." };
+    return mapPrismaError(error) ?? createServerError(error, "Erro inesperado ao atualizar colaborador. Tente novamente ou contate o administrador.");
   }
+}
+
+export async function exportOperationalEmployeesCsv(actor: Actor, filters: { query?: string | null; lob?: string | null }) {
+  const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
+  if (!user) return createPermissionError("Usuário não autenticado.");
+  if (!canAccessEmployeeMap({ role: actor.role, status: user.status })) return createPermissionError("Você não tem permissão para exportar o Mapa de Funcionários.");
+
+  const role = normalizeRole(actor.role);
+  const rows = await listOperationalEmployees(actor);
+  const query = clean(filters.query)?.toLowerCase() ?? "";
+  const lob = clean(filters.lob);
+  const filteredRows = rows.filter((employee) => {
+    const matchesQuery = !query || [employee.name, employee.wb, employee.email].join(" ").toLowerCase().includes(query);
+    const matchesLob = !lob || lob === "Todos" || employee.lob === lob;
+    return matchesQuery && matchesLob;
+  });
+
+  const columns = employeeExportColumns(role);
+  const csv = [
+    columns.map((column) => csvEscape(column.header)).join(","),
+    ...filteredRows.map((employee) => columns.map((column) => csvEscape(column.value(employee))).join(","))
+  ].join("\n");
+
+  await prisma.auditLog.create({
+    data: {
+      actorId: user.id,
+      action: "EDICAO",
+      entity: "EmployeeProfile",
+      entityId: "employee-map",
+      reason: `Exportação CSV do Mapa de Funcionários (${role})`,
+      previousValue: {},
+      newValue: {
+        role,
+        filters,
+        exportedRows: filteredRows.length,
+        columns: columns.map((column) => column.header)
+      }
+    }
+  }).catch((error) => {
+    console.error("[employee] falha ao auditar exportação", error);
+  });
+
+  return {
+    csv: `\uFEFF${csv}`,
+    fileName: `mapa-funcionarios-${new Date().toISOString().slice(0, 10)}.csv`
+  };
 }
 
 export async function resetEmployeeUserPassword(actor: Actor, input: { employeeId: string; password: string; confirmPassword: string }) {
@@ -525,6 +572,71 @@ function mapLegacyEmployee(employee: LegacyEmployeeRow, role: string) {
     sensitive: undefined,
     maskedSensitive: undefined
   };
+}
+
+function employeeExportColumns(role: string) {
+  const operational = [
+    col("nome", (employee) => employee.name),
+    col("email", (employee) => employee.email),
+    col("wb_login", (employee) => employee.wb),
+    col("cargo_funcao", (employee) => employee.role),
+    col("role_permissao", (employee) => employee.systemRole),
+    col("lob", (employee) => employee.lob),
+    col("time", (employee) => employee.team),
+    col("supervisor", (employee) => employee.supervisor),
+    col("turno", (employee) => employee.shift),
+    col("status_colaborador", (employee) => employee.status),
+    col("status_usuario", (employee) => employee.userStatus),
+    col("preferencia_horario", (employee) => employee.preferredSchedule),
+    col("escala_vinculada", (employee) => employee.schedule ? "Sim" : "Não")
+  ];
+  if (role === "SUPERVISOR" || role === "WFM" || role === "QUALIDADE") return operational;
+
+  const people = [
+    col("nome_social", (employee) => employee.socialName),
+    col("telefone_principal", (employee) => employee.primaryPhone),
+    col("cidade", (employee) => employee.city),
+    col("estado_uf", (employee) => employee.stateUf),
+    col("tipo_contrato", (employee) => employee.contractType),
+    col("data_admissao", (employee) => employee.admission),
+    col("data_inicio_treinamento", (employee) => employee.trainingStartDate),
+    col("site_operacao", (employee) => employee.siteOperation),
+    col("observacoes_internas", (employee) => employee.internalNotes)
+  ];
+  if (role === "RH") {
+    return [
+      ...operational,
+      ...people,
+      col("cpf", (employee) => employee.sensitive?.cpf ?? employee.maskedSensitive?.cpf),
+      col("rg", (employee) => employee.sensitive?.rg ?? employee.maskedSensitive?.rg),
+      col("data_nascimento", (employee) => employee.sensitive?.birthDate),
+      col("endereco", (employee) => employee.sensitive?.address),
+      col("contato_emergencia", (employee) => employee.sensitive?.emergencyContactData)
+    ];
+  }
+  if (role !== "ADMIN" && role !== "GESTOR") return operational;
+
+  return [
+    ...operational,
+    ...people,
+    col("cpf", (employee) => employee.sensitive?.cpf ?? employee.maskedSensitive?.cpf),
+    col("rg", (employee) => employee.sensitive?.rg ?? employee.maskedSensitive?.rg),
+    col("cnpj", (employee) => employee.sensitive?.cnpj),
+    col("data_nascimento", (employee) => employee.sensitive?.birthDate),
+    col("endereco", (employee) => employee.sensitive?.address),
+    col("dados_bancarios_pix", (employee) => employee.sensitive?.bankData),
+    col("contato_emergencia", (employee) => employee.sensitive?.emergencyContactData),
+    col("dados_familiares", (employee) => employee.sensitive?.familyData),
+    col("usuario_ativo", (employee) => employee.userId ? "Sim" : "Não")
+  ];
+}
+
+function col(header: string, value: (employee: Record<string, any>) => unknown) {
+  return { header, value: (employee: Record<string, any>) => value(employee) ?? "" };
+}
+
+function csvEscape(value: unknown) {
+  return `"${String(value ?? "").replace(/"/g, '""')}"`;
 }
 
 function isMissingEmployeeProfileColumnError(error: unknown) {
