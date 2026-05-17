@@ -29,6 +29,7 @@ export async function GET(request: Request) {
     divergentOnly: url.searchParams.get("divergentOnly") === "true",
     pendingOnly: url.searchParams.get("pendingOnly") === "true",
     noScheduleOnly: url.searchParams.get("noScheduleOnly") === "true",
+    source: url.searchParams.get("source") ?? undefined,
     scope: url.searchParams.get("scope") === "mine" ? "mine" : "all",
     page: Number(url.searchParams.get("page") ?? 1),
     limit: Number(url.searchParams.get("limit") ?? 50)

@@ -298,10 +298,16 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
           create: { name: row.teamName || (supervisor?.fullName ? `Time ${supervisor.fullName}` : "Time Inicial"), lobId: lob.id, supervisorId: supervisor?.id }
         });
 
-        const existingRegistration = await tx.employeeRegistrationRequest.findFirst({
-          where: { OR: [{ cpf: row.cpf }, ...(row.email ? [{ email: row.email }] : [])] },
-          orderBy: { submittedAt: "desc" }
-        });
+        const registrationOr: Prisma.EmployeeRegistrationRequestWhereInput[] = [
+          ...(row.cpf ? [{ cpf: row.cpf }] : []),
+          ...(row.email ? [{ email: row.email }] : [])
+        ];
+        const existingRegistration = registrationOr.length
+          ? await tx.employeeRegistrationRequest.findFirst({
+            where: { OR: registrationOr },
+            orderBy: { submittedAt: "desc" }
+          })
+          : null;
 
         const passwordHash = row.createUser ? await bcrypt.hash(row.temporaryPassword, 10) : null;
         const registrationData = {
@@ -342,7 +348,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
           socialName: row.socialName || null,
           hasChildren: row.hasChildren,
           childrenCount: row.hasChildren ? row.childrenCount : null,
-          notes: row.notes || null,
+          notes: row.notes || (row.cpf ? null : "CPF pendente de complemento administrativo."),
           reviewedById: permission.user.id,
           reviewedAt: new Date(),
           reviewNotes: "Importado via Excel e aprovado automaticamente.",
@@ -355,6 +361,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
             shift: row.shift,
             roleTitle: row.roleTitle,
             employeeStatus: row.employeeStatus,
+            cpfPending: !row.cpf,
             preferredSchedule: row.preferredSchedule,
             team: row.teamName,
             supervisorWbLogin: row.supervisorWbLogin,
@@ -788,7 +795,12 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
 
     if (!row.name) errors.push("Nome obrigatório.");
     if (!row.wbLogin) errors.push("WB/Login obrigatório.");
-    if (!row.cpf || !isCpfFormat(row.cpf)) errors.push("CPF obrigatório ou inválido.");
+    if (!row.roleTitle) errors.push("Cargo/Função obrigatório.");
+    if (!row.roleName) errors.push("Role/Permissão obrigatória.");
+    if (!row.lob) errors.push("LOB obrigatória.");
+    if (!row.employeeStatus) errors.push("Status do colaborador obrigatório.");
+    if (row.cpf && !isCpfFormat(row.cpf)) errors.push("CPF inválido.");
+    if (!row.cpf) warnings.push("CPF pendente: o colaborador será importado com cadastro incompleto para complemento posterior.");
     if (row.createUser && !row.email) errors.push("E-mail obrigatório quando criar_usuario = sim.");
     if (row.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) errors.push("E-mail inválido.");
     if (!validRoles.has(row.roleName)) errors.push(`Role/permissão inválida: ${row.roleName}.`);
@@ -849,7 +861,7 @@ async function activeEmployeeByCpf(cpf: string) {
 }
 
 function normalizeEmployeeImportRow(raw: EmployeeImportRow) {
-  const cpf = text(raw.cpf);
+  const cpf = text(raw.cpf) || null;
   const email = text(raw.email).toLowerCase();
   const wbLogin = text(raw.wb_login);
   const roleName = normalizeImportRole(text(raw.role_permissao) || "COLABORADOR");
@@ -889,7 +901,7 @@ function normalizeEmployeeImportRow(raw: EmployeeImportRow) {
     supervisorName: text(raw.supervisor_nome),
     shift: text(raw.turno) || "Manhã",
     scheduleType: text(raw.escala_modelo) || text(raw.preferencia_horario) || "Não informado",
-    employeeStatus: text(raw.status_colaborador) || "Ativo",
+    employeeStatus: text(raw.status_colaborador),
     contractType: text(raw.tipo_contrato),
     admissionDate: parseImportDate(raw.data_admissao),
     trainingStartDate: parseImportDate(raw.data_inicio_treinamento),
@@ -1052,7 +1064,8 @@ function mapRegistration(item: EmployeeRegistrationRequest) {
   };
 }
 
-function maskCpfForAudit(value: string) {
+function maskCpfForAudit(value?: string | null) {
+  if (!value) return "CPF pendente";
   const digits = value.replace(/\D/g, "");
   if (digits.length < 2) return "***.***.***-**";
   return `***.***.***-${digits.slice(-2)}`;

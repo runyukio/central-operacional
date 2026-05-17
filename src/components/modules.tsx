@@ -245,6 +245,8 @@ type WorkHourRow = {
   adjustedStart: string;
   adjustedEnd: string;
   adjustedHours: number;
+  effectiveStart: string;
+  effectiveEnd: string;
   effectiveHours: number;
   differenceMinutes: number;
   status: string;
@@ -253,6 +255,17 @@ type WorkHourRow = {
   adjustmentStatus: string;
   source: string;
   observation: string;
+};
+
+type ScheduleWorkHourCell = Pick<WorkHourRow, "id" | "plannedStart" | "plannedEnd" | "plannedHours" | "actualStart" | "actualEnd" | "actualHours" | "effectiveStart" | "effectiveEnd" | "effectiveHours" | "differenceMinutes" | "status" | "rawStatus" | "source" | "observation" | "adjustmentId" | "adjustmentStatus"> & {
+  updatedAt?: string;
+};
+
+type SchedulePlannedCell = {
+  scheduleId: string;
+  startsAt: string;
+  endsAt: string;
+  observation?: string;
 };
 
 type WorkHourSummary = {
@@ -360,7 +373,10 @@ type AttendanceItem = {
   registeredAt: string;
 };
 
-type ScheduleGridRow = (typeof scheduleGridRows)[number];
+type ScheduleGridRow = (typeof scheduleGridRows)[number] & {
+  plannedTimes?: Array<SchedulePlannedCell | null>;
+  workHours?: Array<ScheduleWorkHourCell | null>;
+};
 
 type SystemSettings = {
   users?: Array<{ id: string; name: string; email: string; status: string; roleName: string; roleLabel?: string; employeeId?: string; employeeName?: string }>;
@@ -532,6 +548,29 @@ function employeeOptionLabel(employee: { name: string; wb?: string; email?: stri
   if (employee.wb) return `${employee.name} - ${employee.wb}`;
   if (employee.email) return `${employee.name} - ${employee.email}`;
   return employee.name;
+}
+
+function minutesBetweenTimes(start: string, end: string) {
+  const [startHour, startMinute] = start.split(":").map(Number);
+  const [endHour, endMinute] = end.split(":").map(Number);
+  if ([startHour, startMinute, endHour, endMinute].some((value) => Number.isNaN(value))) return 0;
+  let startTotal = startHour * 60 + startMinute;
+  let endTotal = endHour * 60 + endMinute;
+  if (endTotal < startTotal) endTotal += 24 * 60;
+  return endTotal - startTotal;
+}
+
+function roundDecimal(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+function formatHourDifference(minutes: number) {
+  if (!minutes) return "0min";
+  const sign = minutes > 0 ? "+" : "-";
+  const absolute = Math.abs(minutes);
+  const hours = Math.floor(absolute / 60);
+  const remainingMinutes = absolute % 60;
+  return hours ? `${sign}${hours}h${String(remainingMinutes).padStart(2, "0")}` : `${sign}${remainingMinutes}min`;
 }
 
 function statusFromScheduleCell(value: string) {
@@ -836,21 +875,21 @@ export function EmployeeRegistrationPublicPage() {
   );
 }
 
-function FormInput({ label, value, onChange, type = "text", error }: { label: string; value: string; onChange: (value: string) => void; type?: string; error?: string }) {
+function FormInput({ label, value, onChange, type = "text", error, disabled = false }: { label: string; value: string; onChange: (value: string) => void; type?: string; error?: string; disabled?: boolean }) {
   return (
     <label className="block">
       <span className="mb-1.5 block text-sm font-bold text-muted">{label}</span>
-      <input type={type} value={value} onChange={(event) => onChange(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100", error ? "border-red-300 bg-red-50/40" : "border-border")} />
+      <input type={type} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500", error ? "border-red-300 bg-red-50/40" : "border-border")} />
       {error ? <span className="mt-1 block text-xs font-bold text-red-600">{error}</span> : null}
     </label>
   );
 }
 
-function FormSelect({ label, value, options, onChange, error }: { label: string; value: string; options: string[]; onChange: (value: string) => void; error?: string }) {
+function FormSelect({ label, value, options, onChange, error, disabled = false }: { label: string; value: string; options: string[]; onChange: (value: string) => void; error?: string; disabled?: boolean }) {
   return (
     <label className="block">
       <span className="mb-1.5 block text-sm font-bold text-muted">{label}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100", error ? "border-red-300 bg-red-50/40" : "border-border")}>
+      <select value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500", error ? "border-red-300 bg-red-50/40" : "border-border")}>
         {options.map((option) => (
           <option key={option} value={option}>{option || "Não informado"}</option>
         ))}
@@ -1941,6 +1980,32 @@ export function SchedulesPage() {
     observation: "",
     pendingJustification: false
   });
+  const [workHourForm, setWorkHourForm] = useState({
+    recordId: "",
+    plannedStart: "",
+    plannedEnd: "",
+    plannedHours: 0,
+    actualStart: "",
+    actualEnd: "",
+    actualHours: "",
+    effectiveHours: 0,
+    differenceMinutes: 0,
+    status: "Sem horas",
+    rawStatus: "",
+    source: "",
+    observation: "",
+    adjustmentId: "",
+    adjustmentStatus: "Sem ajuste"
+  });
+  const [savingWorkHour, setSavingWorkHour] = useState(false);
+  const [workHourAdjustmentForm, setWorkHourAdjustmentForm] = useState({
+    requestedActualStart: "",
+    requestedActualEnd: "",
+    requestedActualHours: "",
+    reason: "Erro de apontamento",
+    justification: ""
+  });
+  const [savingWorkHourAdjustment, setSavingWorkHourAdjustment] = useState(false);
   const [attendanceForm, setAttendanceForm] = useState({
     employeeId: "",
     date: "2026-05-15",
@@ -2067,17 +2132,46 @@ export function SchedulesPage() {
     const cellStatus = statusFromScheduleCell(value);
     const shift = cellStatus === "Escalado" ? (availableShiftNames.includes(value) ? value : targetEmployee.shift) : targetEmployee.shift;
     const times = configuredTimesForShift(shift);
+    const plannedCell = targetRow?.plannedTimes?.[dayIndex] ?? null;
+    const hourCell = targetRow?.workHours?.[dayIndex] ?? null;
+    const plannedStart = plannedCell?.startsAt || (statusNeedsTime(cellStatus) ? times.startsAt : "");
+    const plannedEnd = plannedCell?.endsAt || (statusNeedsTime(cellStatus) ? times.endsAt : "");
+    const plannedHours = plannedStart && plannedEnd ? roundDecimal(minutesBetweenTimes(plannedStart, plannedEnd) / 60) : 0;
     setScheduleEditForm({
       employeeId: targetEmployee.id,
       date: `${schedulePeriod.year}-${String(schedulePeriod.month).padStart(2, "0")}-${String(dayIndex + 1).padStart(2, "0")}`,
       shift,
-      startsAt: statusNeedsTime(cellStatus) ? times.startsAt : "",
-      endsAt: statusNeedsTime(cellStatus) ? times.endsAt : "",
+      startsAt: statusNeedsTime(cellStatus) ? plannedStart : "",
+      endsAt: statusNeedsTime(cellStatus) ? plannedEnd : "",
       status: cellStatus,
       lob: targetEmployee.lob,
       supervisor: targetEmployee.supervisor,
-      observation: "",
+      observation: plannedCell?.observation ?? "",
       pendingJustification: false
+    });
+    setWorkHourForm({
+      recordId: hourCell?.id ?? "",
+      plannedStart: hourCell?.plannedStart || plannedStart,
+      plannedEnd: hourCell?.plannedEnd || plannedEnd,
+      plannedHours: hourCell?.plannedHours ?? plannedHours,
+      actualStart: hourCell?.actualStart ?? "",
+      actualEnd: hourCell?.actualEnd ?? "",
+      actualHours: hourCell?.actualHours ? String(hourCell.actualHours) : "",
+      effectiveHours: hourCell?.effectiveHours ?? 0,
+      differenceMinutes: hourCell?.differenceMinutes ?? 0,
+      status: hourCell?.status ?? "Sem horas",
+      rawStatus: hourCell?.rawStatus ?? "",
+      source: hourCell?.source ?? "",
+      observation: hourCell?.observation ?? "",
+      adjustmentId: hourCell?.adjustmentId ?? "",
+      adjustmentStatus: hourCell?.adjustmentStatus ?? "Sem ajuste"
+    });
+    setWorkHourAdjustmentForm({
+      requestedActualStart: hourCell?.actualStart ?? "",
+      requestedActualEnd: hourCell?.actualEnd ?? "",
+      requestedActualHours: hourCell?.actualHours ? String(hourCell.actualHours) : "",
+      reason: "Erro de apontamento",
+      justification: ""
     });
     setShowEditSchedule(true);
   }
@@ -2153,6 +2247,94 @@ export function SchedulesPage() {
     }
   }
 
+  async function saveManualWorkHours(confirmOverwrite = false) {
+    if (!scheduleEditForm.employeeId || !scheduleEditForm.date) {
+      setAttendanceMessage("Colaborador e data são obrigatórios para lançar horas.");
+      return;
+    }
+    if (!workHourForm.actualStart || !workHourForm.actualEnd) {
+      setAttendanceMessage("Entrada real e saída real são obrigatórias.");
+      return;
+    }
+    if (workHourForm.recordId && workHourForm.source && !/^manual$/i.test(workHourForm.source) && !confirmOverwrite) {
+      const confirmed = window.confirm("Já existe um registro de horas importado para este dia. Deseja sobrescrever manualmente?");
+      if (!confirmed) return;
+      return saveManualWorkHours(true);
+    }
+
+    setSavingWorkHour(true);
+    try {
+      const payload = await apiJson<{ data: WorkHourRow; message?: string; warning?: string }>("/api/work-hours/manual", {
+        method: "POST",
+        body: JSON.stringify({
+          employeeId: scheduleEditForm.employeeId,
+          date: scheduleEditForm.date,
+          actualStart: workHourForm.actualStart,
+          actualEnd: workHourForm.actualEnd,
+          actualHours: workHourForm.actualHours ? Number(workHourForm.actualHours.replace(",", ".")) : undefined,
+          observation: workHourForm.observation,
+          source: "MANUAL",
+          confirmOverwrite
+        })
+      });
+      setWorkHourForm({
+        recordId: payload.data.id,
+        plannedStart: payload.data.plannedStart,
+        plannedEnd: payload.data.plannedEnd,
+        plannedHours: payload.data.plannedHours,
+        actualStart: payload.data.actualStart,
+        actualEnd: payload.data.actualEnd,
+        actualHours: String(payload.data.actualHours),
+        effectiveHours: payload.data.effectiveHours,
+        differenceMinutes: payload.data.differenceMinutes,
+        status: payload.data.status,
+        rawStatus: payload.data.rawStatus ?? "",
+        source: payload.data.source,
+        observation: payload.data.observation,
+        adjustmentId: payload.data.adjustmentId ?? "",
+        adjustmentStatus: payload.data.adjustmentStatus
+      });
+      setAttendanceMessage(payload.warning ? `${payload.message ?? "Horas salvas."} ${payload.warning}` : payload.message ?? "Horas salvas.");
+      await refreshSchedules();
+    } catch (error) {
+      setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível salvar as horas.");
+    } finally {
+      setSavingWorkHour(false);
+    }
+  }
+
+  async function requestScheduleWorkHourAdjustment() {
+    if (!workHourForm.recordId) {
+      setAttendanceMessage("Ainda não existe registro de horas para solicitar ajuste. WFM/Admin precisa lançar ou importar as horas primeiro.");
+      return;
+    }
+    if (!workHourAdjustmentForm.reason.trim() || !workHourAdjustmentForm.justification.trim()) {
+      setAttendanceMessage("Motivo e justificativa são obrigatórios para solicitar ajuste de horas.");
+      return;
+    }
+    setSavingWorkHourAdjustment(true);
+    try {
+      await apiJson("/api/work-hours", {
+        method: "POST",
+        body: JSON.stringify({
+          workHourRecordId: workHourForm.recordId,
+          requestedActualStart: workHourAdjustmentForm.requestedActualStart || undefined,
+          requestedActualEnd: workHourAdjustmentForm.requestedActualEnd || undefined,
+          requestedActualHours: workHourAdjustmentForm.requestedActualHours ? Number(workHourAdjustmentForm.requestedActualHours.replace(",", ".")) : undefined,
+          reason: workHourAdjustmentForm.reason,
+          justification: workHourAdjustmentForm.justification
+        })
+      });
+      setAttendanceMessage("Ajuste de horas solicitado para análise do WFM/Admin.");
+      setShowEditSchedule(false);
+      await refreshSchedules();
+    } catch (error) {
+      setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível solicitar ajuste de horas.");
+    } finally {
+      setSavingWorkHourAdjustment(false);
+    }
+  }
+
   async function removeSelectedEmployeeSchedule(scope: "month" | "all" = "month") {
     if (!scheduleEditForm.employeeId) return;
     const confirmed = window.confirm(scope === "all" ? "Isso removerá todas as escalas deste colaborador, mas não excluirá o cadastro. Continuar?" : "Isso removerá os registros de escala deste colaborador no mês selecionado, mas não excluirá o cadastro. Continuar?");
@@ -2216,6 +2398,17 @@ export function SchedulesPage() {
   const normalizedScheduleActorRole = scheduleActorRole === "MANAGEMENT" ? "GESTOR" : scheduleActorRole;
   const canManageSchedules = ["ADMIN", "GESTOR", "WFM"].includes(normalizedScheduleActorRole);
   const isScheduleSupervisor = normalizedScheduleActorRole === "SUPERVISOR";
+  const selectedScheduleEmployee = employeeOptions.find((employee) => employee.id === scheduleEditForm.employeeId);
+  const canEditOfficialWorkHours = canManageSchedules;
+  const manualActualHoursPreview = workHourForm.actualStart && workHourForm.actualEnd
+    ? roundDecimal(minutesBetweenTimes(workHourForm.actualStart, workHourForm.actualEnd) / 60)
+    : workHourForm.actualHours ? Number(workHourForm.actualHours.replace(",", ".")) || 0 : 0;
+  const manualDifferencePreview = manualActualHoursPreview && workHourForm.plannedHours
+    ? Math.round((manualActualHoursPreview - workHourForm.plannedHours) * 60)
+    : workHourForm.differenceMinutes;
+  const manualStatusPreview = workHourForm.plannedHours
+    ? Math.abs(manualDifferencePreview) <= 5 ? "OK" : "Divergente"
+    : workHourForm.recordId ? workHourForm.status : "Sem escala";
   const supervisorOccurrenceStatuses = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala"];
   const attendanceStatusOptions = isScheduleSupervisor
     ? supervisorOccurrenceStatuses
@@ -2224,6 +2417,13 @@ export function SchedulesPage() {
   function configuredTimesForShift(shift: string) {
     const configured = scheduleSettings?.shifts.find((item) => item.name === shift);
     return configured ? { startsAt: configured.startsAt, endsAt: configured.endsAt } : timesForShift(shift);
+  }
+
+  function updateManualTime(field: "actualStart" | "actualEnd", value: string) {
+    const nextStart = field === "actualStart" ? value : workHourForm.actualStart;
+    const nextEnd = field === "actualEnd" ? value : workHourForm.actualEnd;
+    const calculatedHours = nextStart && nextEnd ? String(roundDecimal(minutesBetweenTimes(nextStart, nextEnd) / 60)) : workHourForm.actualHours;
+    setWorkHourForm({ ...workHourForm, [field]: value, actualHours: calculatedHours });
   }
 
   return (
@@ -2334,13 +2534,23 @@ export function SchedulesPage() {
                     </td>
                     <td className="px-4 py-3">{row.employee.role}</td>
                     <td className="px-4 py-3">{row.employee.lob}</td>
-                    {row.days.map((value, index) => (
-                      <td key={`${row.employee.id}-${index}`} className="px-2 py-3 text-center">
-                        <button onClick={() => isScheduleSupervisor ? openAttendanceJustification(row, index, value) : openScheduleEditor(row, index, value)} className={cn("inline-flex min-w-[78px] justify-center rounded-md px-2 py-2 text-xs font-bold transition hover:ring-2 hover:ring-blue-200", shiftTagClass(value))}>
-                          {value}
-                        </button>
-                      </td>
-                    ))}
+                    {row.days.map((value, index) => {
+                      const hourCell = row.workHours?.[index] ?? null;
+                      return (
+                        <td key={`${row.employee.id}-${index}`} className="px-2 py-3 text-center">
+                          <button onClick={() => openScheduleEditor(row, index, value)} className={cn("inline-flex min-w-[92px] flex-col items-center justify-center rounded-md px-2 py-2 text-xs font-bold transition hover:ring-2 hover:ring-blue-200", shiftTagClass(value), hourCell?.rawStatus === "DIVERGENT" && "ring-1 ring-orange-300", hourCell?.rawStatus === "ADJUSTMENT_REQUESTED" && "ring-1 ring-amber-400")}>
+                            <span>{value}</span>
+                            {hourCell ? (
+                              <span className={cn("mt-1 rounded px-1.5 py-0.5 text-[10px]", hourCell.rawStatus === "OK" ? "bg-emerald-100 text-emerald-700" : hourCell.rawStatus === "DIVERGENT" ? "bg-orange-100 text-orange-700" : hourCell.rawStatus === "ADJUSTMENT_REQUESTED" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700")}>
+                                Real: {hourCell.effectiveHours}h {hourCell.differenceMinutes ? formatHourDifference(hourCell.differenceMinutes) : ""}
+                              </span>
+                            ) : (
+                              <span className="mt-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">Sem horas</span>
+                            )}
+                          </button>
+                        </td>
+                      );
+                    })}
                     <td className="px-4 py-3 text-center">
                       <button onClick={() => isScheduleSupervisor ? openAttendanceJustification(row, 0, row.days[0] ?? "Ausente") : openScheduleEditor(row, 0, row.days[0] ?? "Escalado")} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
                         {isScheduleSupervisor ? "Justificar" : "Editar"}
@@ -2427,94 +2637,179 @@ export function SchedulesPage() {
 
       {showEditSchedule ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
-          <div className="card w-full max-w-3xl p-5">
+          <div className="card max-h-[90vh] w-full max-w-5xl overflow-y-auto p-5">
             <div className="mb-5 flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-extrabold text-navy-950">Editar escala</h2>
-                <p className="text-sm text-muted">Atualiza o registro real, histórico, auditoria e presença quando aplicável.</p>
+                <h2 className="text-lg font-extrabold text-navy-950">{canManageSchedules ? "Editar escala e horas" : "Visualizar escala e horas"}</h2>
+                <p className="text-sm text-muted">{selectedScheduleEmployee ? `${employeeOptionLabel(selectedScheduleEmployee)} • ${scheduleEditForm.date}` : "Atualiza histórico, auditoria e horas oficiais quando aplicável."}</p>
               </div>
               <button onClick={() => setShowEditSchedule(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
             </div>
-            <div className="grid gap-4 md:grid-cols-2">
-              <label className="block">
-                <span className="mb-1.5 block text-sm font-bold text-muted">Colaborador</span>
-                <select value={scheduleEditForm.employeeId} onChange={(event) => {
-                  const value = event.target.value;
-                  const employee = employeeOptions.find((item) => item.id === value);
-                  const times = configuredTimesForShift(employee?.shift ?? scheduleEditForm.shift);
-                  setScheduleEditForm({
-                    ...scheduleEditForm,
-                    employeeId: value,
-                    shift: employee?.shift ?? scheduleEditForm.shift,
-                    startsAt: scheduleEditRequiresTime ? times.startsAt : scheduleEditForm.startsAt,
-                    endsAt: scheduleEditRequiresTime ? times.endsAt : scheduleEditForm.endsAt,
-                    lob: employee?.lob ?? scheduleEditForm.lob,
-                    supervisor: employee?.supervisor ?? scheduleEditForm.supervisor
-                  });
-                }} className="h-11 w-full rounded-lg border border-border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100">
-                  {employeeOptions.map((employee) => <option key={employee.id} value={employee.id}>{employeeOptionLabel(employee)}</option>)}
-                </select>
-              </label>
-              <FormInput label="Data" type="date" value={scheduleEditForm.date} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, date: value })} />
-              <FormSelect
-                label="Turno"
-                value={scheduleEditForm.shift}
-                options={availableShiftNames}
-                onChange={(value) => {
-                  const times = configuredTimesForShift(value);
-                  setScheduleEditForm({ ...scheduleEditForm, shift: value, startsAt: scheduleEditRequiresTime ? times.startsAt : scheduleEditForm.startsAt, endsAt: scheduleEditRequiresTime ? times.endsAt : scheduleEditForm.endsAt });
-                }}
-              />
-              <FormSelect
-                label="Status"
-                value={scheduleEditForm.status}
-                options={[...scheduleStatusOptions]}
-                onChange={(value) => {
-                  const times = configuredTimesForShift(scheduleEditForm.shift);
-                  setScheduleEditForm({
-                    ...scheduleEditForm,
-                    status: value,
-                    startsAt: statusNeedsTime(value) ? scheduleEditForm.startsAt || times.startsAt : "",
-                    endsAt: statusNeedsTime(value) ? scheduleEditForm.endsAt || times.endsAt : "",
-                    observation: statusNeedsReason(value) ? scheduleEditForm.observation : scheduleEditForm.observation,
-                    pendingJustification: statusNeedsReason(value) ? scheduleEditForm.pendingJustification : false
-                  });
-                }}
-              />
-              <FormInput label="Entrada" value={scheduleEditForm.startsAt} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, startsAt: value })} />
-              <FormInput label="Saída" value={scheduleEditForm.endsAt} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, endsAt: value })} />
-              <FormInput label="LOB" value={scheduleEditForm.lob} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, lob: value })} />
-              <FormInput label="Supervisor" value={scheduleEditForm.supervisor} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, supervisor: value })} />
-              <label className="md:col-span-2">
-                <span className="mb-1.5 block text-sm font-bold text-muted">{scheduleEditRequiresReason ? "Motivo/observação obrigatória" : "Observação"}</span>
-                <textarea value={scheduleEditForm.observation} onChange={(event) => setScheduleEditForm({ ...scheduleEditForm, observation: event.target.value })} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none" placeholder={scheduleEditRequiresReason ? "Obrigatório para ausência, falta, atraso, saída antecipada, afastado ou erro de escala" : "Opcional para este status"} />
-              </label>
-              {scheduleEditRequiresReason ? (
-                <label className="md:col-span-2 flex items-start gap-3 rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm font-semibold text-orange-800">
-                  <input
-                    type="checkbox"
-                    checked={scheduleEditForm.pendingJustification}
-                    onChange={(event) => setScheduleEditForm({ ...scheduleEditForm, pendingJustification: event.target.checked, observation: event.target.checked ? "" : scheduleEditForm.observation })}
-                    className="mt-1"
+            <div className="grid gap-5 lg:grid-cols-[1fr_1fr]">
+              <section className="rounded-xl border border-border p-4">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-extrabold text-navy-950">Escala</h3>
+                    <p className="text-xs text-muted">Planejado do dia e status da célula.</p>
+                  </div>
+                  <StatusBadge status={scheduleEditForm.status} />
+                </div>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="block md:col-span-2">
+                    <span className="mb-1.5 block text-sm font-bold text-muted">Colaborador</span>
+                    <select disabled={!canManageSchedules} value={scheduleEditForm.employeeId} onChange={(event) => {
+                      const value = event.target.value;
+                      const employee = employeeOptions.find((item) => item.id === value);
+                      const times = configuredTimesForShift(employee?.shift ?? scheduleEditForm.shift);
+                      setScheduleEditForm({
+                        ...scheduleEditForm,
+                        employeeId: value,
+                        shift: employee?.shift ?? scheduleEditForm.shift,
+                        startsAt: scheduleEditRequiresTime ? times.startsAt : scheduleEditForm.startsAt,
+                        endsAt: scheduleEditRequiresTime ? times.endsAt : scheduleEditForm.endsAt,
+                        lob: employee?.lob ?? scheduleEditForm.lob,
+                        supervisor: employee?.supervisor ?? scheduleEditForm.supervisor
+                      });
+                    }} className="h-11 w-full rounded-lg border border-border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500">
+                      {employeeOptions.map((employee) => <option key={employee.id} value={employee.id}>{employeeOptionLabel(employee)}</option>)}
+                    </select>
+                  </label>
+                  <FormInput disabled={!canManageSchedules} label="Data" type="date" value={scheduleEditForm.date} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, date: value })} />
+                  <FormSelect
+                    disabled={!canManageSchedules}
+                    label="Turno"
+                    value={scheduleEditForm.shift}
+                    options={availableShiftNames}
+                    onChange={(value) => {
+                      const times = configuredTimesForShift(value);
+                      setScheduleEditForm({ ...scheduleEditForm, shift: value, startsAt: scheduleEditRequiresTime ? times.startsAt : scheduleEditForm.startsAt, endsAt: scheduleEditRequiresTime ? times.endsAt : scheduleEditForm.endsAt });
+                    }}
                   />
-                  <span>
-                    Sem justificativa no momento
-                    <span className="mt-1 block text-xs font-medium text-orange-700">
-                      WFM registra a ocorrência agora e o Supervisor recebe uma pendência para justificar depois.
-                    </span>
-                  </span>
-                </label>
-              ) : null}
+                  <FormSelect
+                    disabled={!canManageSchedules}
+                    label="Status"
+                    value={scheduleEditForm.status}
+                    options={[...scheduleStatusOptions]}
+                    onChange={(value) => {
+                      const times = configuredTimesForShift(scheduleEditForm.shift);
+                      setScheduleEditForm({
+                        ...scheduleEditForm,
+                        status: value,
+                        startsAt: statusNeedsTime(value) ? scheduleEditForm.startsAt || times.startsAt : "",
+                        endsAt: statusNeedsTime(value) ? scheduleEditForm.endsAt || times.endsAt : "",
+                        observation: statusNeedsReason(value) ? scheduleEditForm.observation : scheduleEditForm.observation,
+                        pendingJustification: statusNeedsReason(value) ? scheduleEditForm.pendingJustification : false
+                      });
+                    }}
+                  />
+                  <FormInput disabled={!canManageSchedules} label="Entrada prevista" value={scheduleEditForm.startsAt} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, startsAt: value })} />
+                  <FormInput disabled={!canManageSchedules} label="Saída prevista" value={scheduleEditForm.endsAt} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, endsAt: value })} />
+                  <FormInput disabled={!canManageSchedules} label="LOB" value={scheduleEditForm.lob} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, lob: value })} />
+                  <FormInput disabled={!canManageSchedules} label="Supervisor" value={scheduleEditForm.supervisor} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, supervisor: value })} />
+                  <label className="md:col-span-2">
+                    <span className="mb-1.5 block text-sm font-bold text-muted">{scheduleEditRequiresReason ? "Motivo/observação obrigatória" : "Observação da escala"}</span>
+                    <textarea disabled={!canManageSchedules} value={scheduleEditForm.observation} onChange={(event) => setScheduleEditForm({ ...scheduleEditForm, observation: event.target.value })} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500" placeholder={scheduleEditRequiresReason ? "Obrigatório para ausência, falta, atraso, saída antecipada, afastado ou erro de escala" : "Opcional para este status"} />
+                  </label>
+                  {scheduleEditRequiresReason && canManageSchedules ? (
+                    <label className="md:col-span-2 flex items-start gap-3 rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm font-semibold text-orange-800">
+                      <input
+                        type="checkbox"
+                        checked={scheduleEditForm.pendingJustification}
+                        onChange={(event) => setScheduleEditForm({ ...scheduleEditForm, pendingJustification: event.target.checked, observation: event.target.checked ? "" : scheduleEditForm.observation })}
+                        className="mt-1"
+                      />
+                      <span>
+                        Sem justificativa no momento
+                        <span className="mt-1 block text-xs font-medium text-orange-700">
+                          WFM registra a ocorrência agora e o Supervisor recebe uma pendência para justificar depois.
+                        </span>
+                      </span>
+                    </label>
+                  ) : null}
+                </div>
+                <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
+                  {canManageSchedules ? scheduleEditForm.pendingJustification ? "A célula ficará destacada como pendente de justificativa até o Supervisor justificar." : scheduleEditRequiresTime ? "Este status exige turno, entrada e saída." : "Este status permite entrada/saída vazias." : "Supervisor visualiza a escala e solicita ajustes; WFM/Admin altera o planejado."}
+                </div>
+                {canManageSchedules ? (
+                  <>
+                    <button disabled={savingSchedule} onClick={saveScheduleEdit} className="mt-4 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
+                      {savingSchedule ? "Salvando..." : "Salvar edição da escala"}
+                    </button>
+                    <button disabled={savingSchedule} onClick={() => removeSelectedEmployeeSchedule("month")} className="mt-3 w-full rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700 disabled:opacity-60">
+                      Remover escala do colaborador neste mês
+                    </button>
+                  </>
+                ) : null}
+              </section>
+
+              <section className="rounded-xl border border-border p-4">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-extrabold text-navy-950">Horas</h3>
+                    <p className="text-xs text-muted">Realizado oficial conectado ao módulo Horas Operacionais.</p>
+                  </div>
+                  <StatusBadge status={workHourForm.recordId ? workHourForm.status : "Sem horas"} />
+                </div>
+                <div className="grid gap-3 md:grid-cols-3">
+                  <MetricPill value={workHourForm.plannedHours ? `${workHourForm.plannedHours}h` : "-"} label="Previsto" />
+                  <MetricPill value={manualActualHoursPreview ? `${manualActualHoursPreview}h` : workHourForm.effectiveHours ? `${workHourForm.effectiveHours}h` : "-"} label="Realizado" />
+                  <MetricPill value={manualActualHoursPreview || workHourForm.differenceMinutes ? formatHourDifference(manualDifferencePreview) : "-"} label="Diferença" />
+                </div>
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <FormInput disabled label="Entrada prevista" value={workHourForm.plannedStart} onChange={() => undefined} />
+                  <FormInput disabled label="Saída prevista" value={workHourForm.plannedEnd} onChange={() => undefined} />
+                  <FormInput disabled={!canEditOfficialWorkHours} label="Entrada real" value={workHourForm.actualStart} onChange={(value) => updateManualTime("actualStart", value)} />
+                  <FormInput disabled={!canEditOfficialWorkHours} label="Saída real" value={workHourForm.actualEnd} onChange={(value) => updateManualTime("actualEnd", value)} />
+                  <FormInput disabled={!canEditOfficialWorkHours} label="Horas realizadas" value={workHourForm.actualHours} onChange={(value) => setWorkHourForm({ ...workHourForm, actualHours: value })} />
+                  <FormInput disabled label="Origem" value={workHourForm.source || "Sem origem"} onChange={() => undefined} />
+                  <label className="md:col-span-2">
+                    <span className="mb-1.5 block text-sm font-bold text-muted">Observação das horas</span>
+                    <textarea disabled={!canEditOfficialWorkHours} value={workHourForm.observation} onChange={(event) => setWorkHourForm({ ...workHourForm, observation: event.target.value })} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500" placeholder="Motivo da correção, sistema de origem ou comentário operacional" />
+                  </label>
+                </div>
+                <div className={cn("mt-4 rounded-lg border px-4 py-3 text-sm font-semibold", manualStatusPreview === "OK" ? "border-emerald-100 bg-emerald-50 text-emerald-700" : manualStatusPreview === "Divergente" ? "border-orange-100 bg-orange-50 text-orange-700" : "border-blue-100 bg-blue-50 text-blue-700")}>
+                  {workHourForm.plannedHours ? `Status previsto após salvar: ${manualStatusPreview}.` : "Este colaborador não possui escala vinculada nesta data; WFM/Admin pode lançar horas com alerta."}
+                  {workHourForm.adjustmentStatus && workHourForm.adjustmentStatus !== "Sem ajuste" ? ` Ajuste: ${workHourForm.adjustmentStatus}.` : ""}
+                </div>
+                {canEditOfficialWorkHours ? (
+                  <button disabled={savingWorkHour} onClick={() => saveManualWorkHours()} className="mt-4 w-full rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
+                    {savingWorkHour ? "Salvando horas..." : workHourForm.recordId ? "Salvar correção de horas" : "Lançar horas"}
+                  </button>
+                ) : (
+                  <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-600">
+                    Supervisor não altera horas oficiais. Use a solicitação de ajuste abaixo.
+                  </div>
+                )}
+
+                {isScheduleSupervisor ? (
+                  <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4">
+                    <div className="mb-3">
+                      <h4 className="text-sm font-extrabold text-amber-900">Solicitar ajuste de horas</h4>
+                      <p className="text-xs font-semibold text-amber-800">A solicitação vai para WFM/Admin e só vira hora oficial após aprovação.</p>
+                    </div>
+                    {workHourForm.recordId ? (
+                      <div className="grid gap-4 md:grid-cols-3">
+                        <FormInput label="Nova entrada" value={workHourAdjustmentForm.requestedActualStart} onChange={(value) => setWorkHourAdjustmentForm({ ...workHourAdjustmentForm, requestedActualStart: value })} />
+                        <FormInput label="Nova saída" value={workHourAdjustmentForm.requestedActualEnd} onChange={(value) => setWorkHourAdjustmentForm({ ...workHourAdjustmentForm, requestedActualEnd: value })} />
+                        <FormInput label="Novas horas" value={workHourAdjustmentForm.requestedActualHours} onChange={(value) => setWorkHourAdjustmentForm({ ...workHourAdjustmentForm, requestedActualHours: value })} />
+                        <div className="md:col-span-3">
+                          <FormSelect label="Motivo" value={workHourAdjustmentForm.reason} options={["Erro de apontamento", "Sistema não capturou horário", "Feedback/treinamento durante o turno", "Problema técnico", "Ajuste manual autorizado", "Erro no upload", "Atividade operacional fora do sistema", "Outro"]} onChange={(value) => setWorkHourAdjustmentForm({ ...workHourAdjustmentForm, reason: value })} />
+                        </div>
+                        <label className="md:col-span-3">
+                          <span className="mb-1.5 block text-sm font-bold text-muted">Justificativa</span>
+                          <textarea value={workHourAdjustmentForm.justification} onChange={(event) => setWorkHourAdjustmentForm({ ...workHourAdjustmentForm, justification: event.target.value })} className="min-h-24 w-full rounded-lg border border-border bg-white p-3 outline-none" />
+                        </label>
+                        <button disabled={savingWorkHourAdjustment} onClick={requestScheduleWorkHourAdjustment} className="md:col-span-3 rounded-lg bg-amber-500 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
+                          {savingWorkHourAdjustment ? "Enviando..." : "Solicitar ajuste para WFM/Admin"}
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="text-sm font-semibold text-amber-800">Ainda não existe registro de horas para este dia. WFM/Admin precisa lançar ou importar as horas antes da solicitação de ajuste.</p>
+                    )}
+                  </div>
+                ) : null}
+              </section>
             </div>
-            <div className="mt-5 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
-              {scheduleEditForm.pendingJustification ? "A célula ficará destacada como pendente de justificativa até o Supervisor justificar." : scheduleEditRequiresTime ? "Este status exige turno, entrada e saída." : "Este status permite entrada/saída vazias."}
-            </div>
-            <button disabled={savingSchedule} onClick={saveScheduleEdit} className="mt-5 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
-              {savingSchedule ? "Salvando..." : "Salvar edição da escala"}
-            </button>
-            <button disabled={savingSchedule} onClick={() => removeSelectedEmployeeSchedule("month")} className="mt-3 w-full rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700 disabled:opacity-60">
-              Remover escala do colaborador neste mês
-            </button>
           </div>
         </div>
       ) : null}
@@ -2654,6 +2949,7 @@ export function WorkHoursPage() {
     shift: "Todos",
     collaborator: "",
     status: "Todos",
+    source: "Todos",
     divergentOnly: false,
     pendingOnly: false,
     noScheduleOnly: false
@@ -2684,6 +2980,7 @@ export function WorkHoursPage() {
   const canApprove = ["ADMIN", "GESTOR", "WFM"].includes(normalizedRole);
   const canRequestAdjustment = ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(normalizedRole);
   const statusOptions = ["Todos", "OK", "Divergente", "Sem escala", "Ajuste solicitado", "Ajuste aprovado", "Ajuste recusado", "Importado", "Corrigido manualmente"];
+  const sourceOptions = ["Todos", "MANUAL", "upload-horas"];
   const lobOptions = ["Todos", ...(settings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? Array.from(new Set(rows.map((row) => row.lob).filter(Boolean))))];
   const shiftOptions = ["Todos", ...(settings?.shifts.filter((shift) => shift.status !== "INACTIVE").map((shift) => shift.name) ?? Array.from(new Set(rows.map((row) => row.shift).filter(Boolean))))];
 
@@ -2708,6 +3005,7 @@ export function WorkHoursPage() {
       if (filters.shift !== "Todos") params.set("shift", filters.shift);
       if (filters.collaborator) params.set("collaborator", filters.collaborator);
       if (filters.status !== "Todos") params.set("status", filters.status);
+      if (filters.source !== "Todos") params.set("source", filters.source);
       if (filters.divergentOnly) params.set("divergentOnly", "true");
       if (filters.pendingOnly) params.set("pendingOnly", "true");
       if (filters.noScheduleOnly) params.set("noScheduleOnly", "true");
@@ -2833,6 +3131,7 @@ export function WorkHoursPage() {
     if (filters.shift !== "Todos") params.set("shift", filters.shift);
     if (filters.collaborator) params.set("collaborator", filters.collaborator);
     if (filters.status !== "Todos") params.set("status", filters.status);
+    if (filters.source !== "Todos") params.set("source", filters.source);
     return `/api/work-hours/export?${params.toString()}`;
   }
 
@@ -2881,7 +3180,7 @@ export function WorkHoursPage() {
       </div>
 
       <section className="card mb-5 p-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-8">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-9">
           <FormInput label="Data inicial" type="date" value={filters.startDate} onChange={(value) => setFilters({ ...filters, startDate: value })} />
           <FormInput label="Data final" type="date" value={filters.endDate} onChange={(value) => setFilters({ ...filters, endDate: value })} />
           <FormSelect label="LOB" value={filters.lob} options={lobOptions} onChange={(value) => setFilters({ ...filters, lob: value })} />
@@ -2889,9 +3188,10 @@ export function WorkHoursPage() {
           <FormSelect label="Turno" value={filters.shift} options={shiftOptions} onChange={(value) => setFilters({ ...filters, shift: value })} />
           <FormInput label="Colaborador/WB" value={filters.collaborator} onChange={(value) => setFilters({ ...filters, collaborator: value })} />
           <FormSelect label="Status" value={filters.status} options={statusOptions} onChange={(value) => setFilters({ ...filters, status: value })} />
+          <FormSelect label="Origem" value={filters.source} options={sourceOptions} onChange={(value) => setFilters({ ...filters, source: value })} />
           <div className="flex items-end gap-2">
             <button onClick={() => loadWorkHours(1)} className="h-11 flex-1 rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
-            <button onClick={() => { setFilters({ startDate: "2026-05-01", endDate: "2026-05-31", lob: "Todos", supervisor: "", shift: "Todos", collaborator: "", status: "Todos", divergentOnly: false, pendingOnly: false, noScheduleOnly: false }); setTimeout(() => void loadWorkHours(1), 0); }} className="h-11 rounded-lg border border-border bg-white px-3 text-sm font-bold">Limpar</button>
+            <button onClick={() => { setFilters({ startDate: "2026-05-01", endDate: "2026-05-31", lob: "Todos", supervisor: "", shift: "Todos", collaborator: "", status: "Todos", source: "Todos", divergentOnly: false, pendingOnly: false, noScheduleOnly: false }); setTimeout(() => void loadWorkHours(1), 0); }} className="h-11 rounded-lg border border-border bg-white px-3 text-sm font-bold">Limpar</button>
           </div>
         </div>
         <div className="mt-3 flex flex-wrap gap-3 text-sm font-semibold text-navy-950">
@@ -2914,7 +3214,7 @@ export function WorkHoursPage() {
             <table className="w-full min-w-[1280px] text-left text-sm">
               <thead className="border-b border-border bg-slate-50 text-xs font-bold uppercase tracking-wide text-muted">
                 <tr>
-                  {["Data", "Colaborador", "WB/Login", "LOB", "Supervisor", "Turno", "Previsto", "Realizado", "Efetivo", "Dif.", "Status", "Ajuste", "Ações"].map((column) => <th key={column} className="px-4 py-3">{column}</th>)}
+                  {["Data", "Colaborador", "WB/Login", "LOB", "Supervisor", "Turno", "Previsto", "Realizado", "Efetivo", "Dif.", "Status", "Origem", "Ajuste", "Ações"].map((column) => <th key={column} className="px-4 py-3">{column}</th>)}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border bg-white">
@@ -2931,6 +3231,7 @@ export function WorkHoursPage() {
                     <td className="px-4 py-3">{row.effectiveHours}h</td>
                     <td className={cn("px-4 py-3 font-bold", row.differenceMinutes < 0 ? "text-red-600" : row.differenceMinutes > 0 ? "text-emerald-600" : "text-muted")}>{row.differenceMinutes}min</td>
                     <td className="px-4 py-3"><StatusBadge status={row.status} /></td>
+                    <td className="px-4 py-3">{row.source || "-"}</td>
                     <td className="px-4 py-3"><StatusBadge status={row.adjustmentStatus} /></td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-2">

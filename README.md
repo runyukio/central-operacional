@@ -564,7 +564,8 @@ Regras atuais:
 - Minha Escala/Minhas Solicitações usa `/api/requests?scope=mine`, então Admin só vê solicitações próprias nessa área pessoal; o consolidado continua em Solicitações/Esteiras.
 - Cadastros ganhou importação em massa por Excel: baixe o template, suba a planilha, valide preview/erros e confirme a importação de colaboradores aprovados/ativos.
 - Na importação de colaboradores, `criar_usuario = sim` exige `senha_temporaria`; a senha é armazenada somente como hash e deve ser comunicada manualmente pelo Admin.
-- Duplicidades ativas de CPF, e-mail ou WB/Login bloqueiam a linha; cadastros recusados/inativos podem ser reaproveitados pela importação.
+- CPF é opcional na importação de colaboradores. Quando vazio, a linha entra com alerta de `CPF pendente` e o Admin/RH pode completar depois; quando preenchido, o CPF continua validado e duplicidade ativa continua bloqueando a linha.
+- Duplicidades ativas de e-mail ou WB/Login bloqueiam a linha; CPF preenchido duplicado também bloqueia. Cadastros recusados/inativos podem ser reaproveitados pela importação.
 - Login atualizado para apresentação do MVP local: novo subtítulo, botão `Criar cadastro`, sem cards de status fake e com wallpaper local em `public/login-wallpaper.png`.
 - Central Operacional agora combina range de datas com filtro real de LOB vindo do banco; os indicadores usam `Schedule`/`AttendanceRecord` filtrados por período e LOB.
 - Aprovação de cadastro normaliza `Pendente de Cadastro` para `Ativo`, ativa o `User`, reabre `EmployeeProfile` soft-deletado quando houver vínculo e mantém o Mapa refletindo colaborador aprovado.
@@ -594,7 +595,7 @@ Regras atuais:
 - APIs críticas passaram a retornar erro estruturado com `type`, `message` e `fieldErrors`, incluindo validações, duplicidades, permissões e relacionamentos inválidos.
 - A edição de colaborador no Mapa preserva os dados preenchidos, destaca campos inválidos e substitui a mensagem genérica por erros como `LOB é obrigatória`, `WB/Login já está em uso` ou `Supervisor selecionado não existe`.
 - A exportação CSV do Mapa agora sai pelo backend em `/api/employees/export`, respeita filtros aplicados e aplica colunas por perfil: `ADMIN` exporta dados completos disponíveis; `SUPERVISOR` exporta apenas dados operacionais sem dados sensíveis.
-- Importação de colaboradores exige `wb_login` como chave operacional principal; linhas com `wb_login` existente atualizam o colaborador, enquanto CPF/e-mail ativos de outro colaborador continuam bloqueados.
+- Importação de colaboradores exige `wb_login` como chave operacional principal; linhas com `wb_login` existente atualizam o colaborador. Upload de escala e horas continua cruzando por WB/Login, sem depender de CPF.
 - Importação de escala não usa mais nome ou e-mail como fallback: cada linha precisa de `wb_login` existente em `EmployeeProfile`; linhas sem vínculo falham no preview com erro por linha/campo.
 - Usuários criados por importação com `senha_temporaria` e senhas resetadas pelo Admin ficam com `mustChangePassword=true` e `temporaryPassword=true`; no próximo login são redirecionados para `/alterar-senha`.
 - A tela de login possui o link `Primeiro acesso ou senha temporária? Alterar senha`, permitindo trocar senha sem e-mail transacional ao informar e-mail, senha atual, nova senha e confirmação.
@@ -609,15 +610,17 @@ Regras atuais:
 
 ### Horas Operacionais
 
-- O módulo `/horas-operacionais` permite comparar escala planejada com horas realizadas importadas por Excel.
+- O módulo `/horas-operacionais` permite comparar escala planejada com horas realizadas importadas por Excel ou lançadas manualmente pela célula da escala.
 - O template fica em `/api/work-hours/template` e usa `wb_login + data` como chave operacional. Colunas obrigatórias: `wb_login`, `data`, `entrada_real`, `saida_real` e `horas_realizadas`.
 - O preview valida linha a linha: WB/Login obrigatório e existente, data válida, horários válidos, horas válidas, duplicidade no arquivo e atualização de registro já existente.
 - WB/Login inexistente bloqueia a linha. Registro sem escala vinculada vira alerta (`Sem escala`) e pode ser importado por WFM/Admin mediante confirmação.
 - WFM/Admin/Gestão fazem upload, aprovam/recusam ajustes e exportam CSV. Supervisor visualiza registros e solicita ajuste, mas não altera a hora oficial diretamente.
+- Na tela Escalas, WFM/Admin podem clicar no dia do colaborador, abrir a seção `Horas`, lançar ou corrigir entrada real, saída real, horas realizadas e observação. O sistema cria/atualiza `WorkHourRecord` com `source = MANUAL`, recalcula diferença/status, grava histórico e AuditLog.
+- Se já existir hora importada para o mesmo colaborador/data, a sobrescrita manual exige confirmação. Supervisor vê as horas no mesmo modal e usa apenas `Solicitar ajuste de horas`.
 - Quando Supervisor solicita ajuste, o `WorkHourRecord` fica como `Ajuste solicitado` e uma pendência é criada para WFM/Admin.
 - Ao aprovar, WFM/Admin atualiza as horas ajustadas e efetivas, recalcula diferença e grava histórico/AuditLog. Ao recusar, as horas originais permanecem.
 - Minha Escala mostra as horas importadas no calendário diário e troca o card de Resumo de Horas por dados reais do período quando houver `WorkHourRecord`.
-- A exportação CSV de horas respeita filtros aplicados e sai em `/api/work-hours/export`.
+- A listagem e a exportação CSV de horas respeitam filtros aplicados, incluindo origem (`MANUAL` ou `upload-horas`), e saem em `/api/work-hours/export`.
 - A migration do módulo é `202605171330_work_hours_module`. Em ambiente online, aplicar com `npx prisma migrate deploy`; localmente, usar `npx prisma migrate dev`.
 
 Limitações temporárias:

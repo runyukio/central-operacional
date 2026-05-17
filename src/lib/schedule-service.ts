@@ -158,13 +158,43 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         schedules: {
           where: scheduleWhere,
           select: {
+            id: true,
             date: true,
+            startsAt: true,
+            endsAt: true,
             status: true,
+            observation: true,
             shift: { select: { name: true } },
             attendanceRecords: {
               orderBy: { updatedAt: "desc" },
               take: 1,
               select: { status: true, absenceReason: true, isJustified: true, updatedAt: true }
+            },
+            workHourRecords: {
+              orderBy: { updatedAt: "desc" },
+              take: 1,
+              select: {
+                id: true,
+                plannedStart: true,
+                plannedEnd: true,
+                plannedHours: true,
+                actualStart: true,
+                actualEnd: true,
+                actualHours: true,
+                effectiveStart: true,
+                effectiveEnd: true,
+                effectiveHours: true,
+                differenceMinutes: true,
+                status: true,
+                source: true,
+                observation: true,
+                updatedAt: true,
+                adjustments: {
+                  orderBy: { createdAt: "desc" },
+                  take: 1,
+                  select: { id: true, status: true, reason: true, createdAt: true }
+                }
+              }
             }
           },
           orderBy: { date: "asc" }
@@ -203,6 +233,45 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         if (attendanceLabel) return attendanceLabel;
         if (schedule.status === "ESCALADO") return schedule.shift?.name ?? "Escalado";
         return scheduleToUiStatus[schedule.status] ?? schedule.status;
+      }),
+      plannedTimes: Array.from({ length: period.daysInMonth }).map((_, index) => {
+        const day = index + 1;
+        const schedule = employee.schedules.find((item) => item.date.getUTCDate() === day);
+        return schedule
+          ? {
+            scheduleId: schedule.id,
+            startsAt: schedule.startsAt ?? "",
+            endsAt: schedule.endsAt ?? "",
+            observation: schedule.observation ?? ""
+          }
+          : null;
+      }),
+      workHours: Array.from({ length: period.daysInMonth }).map((_, index) => {
+        const day = index + 1;
+        const schedule = employee.schedules.find((item) => item.date.getUTCDate() === day);
+        const record = schedule?.workHourRecords?.[0];
+        if (!record) return null;
+        const adjustment = record.adjustments?.[0];
+        return {
+          id: record.id,
+          plannedStart: record.plannedStart ?? "",
+          plannedEnd: record.plannedEnd ?? "",
+          plannedHours: record.plannedHours ?? 0,
+          actualStart: record.actualStart ?? "",
+          actualEnd: record.actualEnd ?? "",
+          actualHours: record.actualHours,
+          effectiveStart: record.effectiveStart ?? "",
+          effectiveEnd: record.effectiveEnd ?? "",
+          effectiveHours: record.effectiveHours,
+          differenceMinutes: record.differenceMinutes ?? 0,
+          status: workHourStatusLabel(record.status),
+          rawStatus: record.status,
+          source: record.source ?? "",
+          observation: record.observation ?? "",
+          adjustmentId: adjustment?.id ?? "",
+          adjustmentStatus: adjustment ? workHourAdjustmentStatusLabel(adjustment.status) : "Sem ajuste",
+          updatedAt: formatDateTime(record.updatedAt)
+        };
       })
     }));
 
@@ -1097,6 +1166,32 @@ function statusToOperational(status: string) {
   if (status === "Atraso" || status === "Saída antecipada") return "Em Atendimento";
   if (["Ausente", "Falta", "Afastado"].includes(status)) return "Offline";
   return status;
+}
+
+function workHourStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    IMPORTED: "Importado",
+    OK: "OK",
+    DIVERGENT: "Divergente",
+    NO_SCHEDULE: "Sem escala",
+    MISSING_WORK_HOURS: "Sem horas",
+    ADJUSTMENT_REQUESTED: "Ajuste solicitado",
+    ADJUSTMENT_APPROVED: "Ajuste aprovado",
+    ADJUSTMENT_REJECTED: "Ajuste recusado",
+    MANUALLY_CORRECTED: "Corrigido manualmente"
+  };
+  return labels[status] ?? status;
+}
+
+function workHourAdjustmentStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    ABERTO: "Aberto",
+    EM_ANALISE: "Em análise",
+    APROVADO: "Aprovado",
+    RECUSADO: "Recusado",
+    CANCELADO: "Cancelado"
+  };
+  return labels[status] ?? status;
 }
 
 function resolvePeriod(query: ScheduleQuery | ScheduleRemoveInput) {

@@ -14,6 +14,7 @@ import { prisma } from "@/lib/prisma";
 
 const uploadRoles = ["ADMIN", "GESTOR", "WFM"];
 const approvalRoles = ["ADMIN", "GESTOR", "WFM"];
+const manualEditRoles = ["ADMIN", "GESTOR", "WFM"];
 const viewRoles = ["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "COLABORADOR"];
 const requestAdjustmentRoles = ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"];
 const toleranceMinutes = 5;
@@ -32,6 +33,7 @@ export type WorkHourQuery = {
   divergentOnly?: boolean;
   pendingOnly?: boolean;
   noScheduleOnly?: boolean;
+  source?: string;
   scope?: "mine" | "all";
   page?: number;
   limit?: number;
@@ -56,6 +58,17 @@ export type WorkHourReviewInput = {
   id: string;
   action: "approve" | "reject";
   rejectionReason?: string;
+};
+
+export type ManualWorkHourInput = {
+  employeeId: string;
+  date: string;
+  actualStart?: string;
+  actualEnd?: string;
+  actualHours?: number;
+  observation?: string;
+  source?: string;
+  confirmOverwrite?: boolean;
 };
 
 type ValidationRow = {
@@ -431,6 +444,132 @@ export async function reviewWorkHourAdjustment(actor: Actor, input: WorkHourRevi
   }
 }
 
+export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWorkHourInput) {
+  const user = await getUser(actor);
+  if (!user || !manualEditRoles.includes(normalizeRole(user.role.name))) return createPermissionError("Você não tem permissão para lançar horas.");
+
+  const fieldErrors: Record<string, string> = {};
+  if (!input.employeeId) fieldErrors.employeeId = "Colaborador é obrigatório.";
+  const date = parseImportDate(input.date);
+  if (!date) fieldErrors.date = "Data inválida.";
+  const actualStart = normalizeTime(input.actualStart);
+  const actualEnd = normalizeTime(input.actualEnd);
+  if (!actualStart) fieldErrors.actualStart = "Entrada real é obrigatória.";
+  if (!actualEnd) fieldErrors.actualEnd = "Saída real é obrigatória.";
+  const explicitHours = parseHours(input.actualHours);
+  const calculatedHours = actualStart && actualEnd ? roundHours(minutesBetween(actualStart, actualEnd) / 60) : null;
+  const actualHours = explicitHours ?? calculatedHours;
+  if (actualHours === null) fieldErrors.actualHours = "Horas realizadas inválidas.";
+  if (Object.keys(fieldErrors).length) return createValidationError(fieldErrors, "Existem campos inválidos para lançar horas.");
+
+  try {
+    const employee = await prisma.employeeProfile.findFirst({
+      where: { id: input.employeeId, deletedAt: null },
+      include: { shift: true, lob: true, supervisor: true }
+    });
+    if (!employee) return createValidationError({ employeeId: "Colaborador não encontrado." }, "Colaborador não encontrado.");
+
+    const schedule = await prisma.schedule.findUnique({
+      where: { employeeId_date: { employeeId: employee.id, date: date! } }
+    });
+    const planned = schedule ? plannedFromSchedule(schedule) : { start: null, end: null, hours: null };
+    const existing = await prisma.workHourRecord.findUnique({
+      where: { employeeId_date: { employeeId: employee.id, date: date! } }
+    });
+    if (existing && existing.source && !/^manual$/i.test(existing.source) && !input.confirmOverwrite) {
+      return {
+        error: "Já existe um registro de horas para este dia. Confirme se deseja atualizar.",
+        type: "CONFIRMATION_REQUIRED",
+        existing: formatWorkHourRecord(await getRecordWithRelations(existing.id))
+      };
+    }
+
+    const differenceMinutes = planned.hours === null ? null : Math.round((actualHours! - planned.hours) * 60);
+    const baseStatus = calculateRecordStatus(planned.hours, actualHours!, Boolean(schedule));
+    const status: WorkHourRecordStatus = baseStatus === "NO_SCHEDULE" ? "NO_SCHEDULE" : existing ? "MANUALLY_CORRECTED" : baseStatus;
+
+    const saved = await prisma.$transaction(async (tx) => {
+      const record = await tx.workHourRecord.upsert({
+        where: { employeeId_date: { employeeId: employee.id, date: date! } },
+        update: {
+          scheduleId: schedule?.id ?? null,
+          wbLogin: employee.wbLogin,
+          plannedStart: planned.start,
+          plannedEnd: planned.end,
+          plannedHours: planned.hours,
+          actualStart,
+          actualEnd,
+          actualHours: actualHours!,
+          adjustedStart: null,
+          adjustedEnd: null,
+          adjustedHours: null,
+          effectiveStart: actualStart,
+          effectiveEnd: actualEnd,
+          effectiveHours: actualHours!,
+          differenceMinutes,
+          status,
+          source: "MANUAL",
+          observation: input.observation?.trim() || null,
+          importBatchId: null
+        },
+        create: {
+          employeeId: employee.id,
+          scheduleId: schedule?.id ?? null,
+          wbLogin: employee.wbLogin,
+          date: date!,
+          plannedStart: planned.start,
+          plannedEnd: planned.end,
+          plannedHours: planned.hours,
+          actualStart,
+          actualEnd,
+          actualHours: actualHours!,
+          effectiveStart: actualStart,
+          effectiveEnd: actualEnd,
+          effectiveHours: actualHours!,
+          differenceMinutes,
+          status,
+          source: "MANUAL",
+          observation: input.observation?.trim() || null
+        }
+      });
+
+      await tx.workHourHistory.create({
+        data: {
+          workHourRecordId: record.id,
+          changedById: user.id,
+          action: existing ? "MANUAL_UPDATE" : "MANUAL_CREATE",
+          previousValue: serialize(existing),
+          newValue: serialize(record),
+          reason: input.observation?.trim() || "Lançamento manual pela escala"
+        }
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          action: AuditAction.EDICAO,
+          entity: "WorkHourRecord",
+          entityId: record.id,
+          reason: input.observation?.trim() || "Lançamento manual de horas",
+          previousValue: serialize(existing),
+          newValue: serialize(record)
+        }
+      });
+
+      return record;
+    });
+
+    return {
+      success: true,
+      message: existing ? "Horas atualizadas manualmente." : "Horas lançadas manualmente.",
+      warning: schedule ? undefined : "Este colaborador não possui escala vinculada nesta data.",
+      data: formatWorkHourRecord(await getRecordWithRelations(saved.id))
+    };
+  } catch (error) {
+    recordErrorLog({ userEmail: actor.email, code: "WORK_HOUR_MANUAL_UPSERT_ERROR", message: error instanceof Error ? error.message : "Falha ao lançar horas", action: "WORK_HOUR_MANUAL_UPSERT", severity: "ERROR" });
+    return mapPrismaError(error) ?? { error: "Não foi possível salvar as horas manuais." };
+  }
+}
+
 export async function exportOperationalWorkHoursCsv(actor: Actor, query: WorkHourQuery = {}) {
   const user = await getUser(actor);
   if (!user || !["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(normalizeRole(user.role.name))) return createPermissionError("Você não tem permissão para exportar horas.");
@@ -627,6 +766,7 @@ function buildRecordWhere(user: UserWithRole, query: WorkHourQuery, period: { st
   if (query.divergentOnly) where.status = "DIVERGENT";
   if (query.pendingOnly) where.status = "ADJUSTMENT_REQUESTED";
   if (query.noScheduleOnly) where.status = "NO_SCHEDULE";
+  if (query.source && query.source !== "Todos") where.source = { equals: query.source, mode: "insensitive" };
   return where;
 }
 

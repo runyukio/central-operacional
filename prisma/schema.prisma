@@ -944,7 +944,7 @@ model EmployeeRegistrationRequest {
   passwordHash                 String?
   rg                           String
   rgIssuer                     String
-  cpf                          String
+  cpf                          String?
   sex                          String
   maritalStatus                String
   educationLevel               String
@@ -980,7 +980,7 @@ model EmployeeRegistrationRequest {
 model EmployeeSensitiveData {
   id                   String   @id @default(cuid())
   employeeId           String   @unique
-  cpf                  String
+  cpf                  String?
   rg                   String
   rgIssuer             String
   cnpj                 String?
