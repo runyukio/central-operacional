@@ -200,6 +200,32 @@ enum AttendanceStatus {
   ERRO_ESCALA
 }
 
+enum WorkHourRecordStatus {
+  IMPORTED
+  OK
+  DIVERGENT
+  NO_SCHEDULE
+  MISSING_WORK_HOURS
+  ADJUSTMENT_REQUESTED
+  ADJUSTMENT_APPROVED
+  ADJUSTMENT_REJECTED
+  MANUALLY_CORRECTED
+}
+
+enum WorkHourAdjustmentStatus {
+  ABERTO
+  EM_ANALISE
+  APROVADO
+  RECUSADO
+  CANCELADO
+}
+
+enum WorkHourImportStatus {
+  IMPORTED
+  PARTIAL
+  FAILED
+}
+
 model Role {
   id          String   @id @default(cuid())
   name        String   @unique
@@ -269,6 +295,11 @@ model User {
   registeredAttendances   AttendanceRecord[]      @relation("AttendanceRegisteredBy")
   justifiedAttendances    AttendanceRecord[]      @relation("AttendanceJustifiedBy")
   attendanceHistories     AttendanceHistory[]     @relation("AttendanceHistoryChangedBy")
+  workHourImports         WorkHourImportBatch[]   @relation("WorkHourImportUploadedBy")
+  requestedWorkHourAdjustments WorkHourAdjustmentRequest[] @relation("WorkHourAdjustmentRequestedBy")
+  approvedWorkHourAdjustments  WorkHourAdjustmentRequest[] @relation("WorkHourAdjustmentApprovedBy")
+  rejectedWorkHourAdjustments  WorkHourAdjustmentRequest[] @relation("WorkHourAdjustmentRejectedBy")
+  workHourHistories       WorkHourHistory[]       @relation("WorkHourHistoryChangedBy")
   createdAt               DateTime                @default(now())
   updatedAt               DateTime                @updatedAt
   deletedAt               DateTime?
@@ -341,6 +372,8 @@ model EmployeeProfile {
   shift              Shift                   @relation(fields: [shiftId], references: [id])
   schedules          Schedule[]
   attendanceRecords  AttendanceRecord[]
+  workHourRecords    WorkHourRecord[]
+  workHourAdjustments WorkHourAdjustmentRequest[]
   scheduleChanges    ScheduleChangeHistory[]
   requests           Request[]
   performanceMetrics PerformanceMetric[]
@@ -377,6 +410,7 @@ model Schedule {
   employee          EmployeeProfile    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   shift             Shift?             @relation(fields: [shiftId], references: [id])
   attendanceRecords AttendanceRecord[]
+  workHourRecords    WorkHourRecord[]
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
   deletedAt         DateTime?
@@ -1061,6 +1095,113 @@ model AttendanceHistory {
   attendanceRecord   AttendanceRecord  @relation(fields: [attendanceRecordId], references: [id], onDelete: Cascade)
   changedBy          User?             @relation("AttendanceHistoryChangedBy", fields: [changedById], references: [id], onDelete: SetNull)
   createdAt          DateTime          @default(now())
+}
+
+model WorkHourImportBatch {
+  id          String               @id @default(cuid())
+  fileName    String
+  uploadedById String
+  totalRows   Int
+  validRows   Int
+  errorRows   Int
+  warningRows Int                @default(0)
+  createdRows Int                @default(0)
+  updatedRows Int                @default(0)
+  status      WorkHourImportStatus @default(IMPORTED)
+  uploadedBy  User                 @relation("WorkHourImportUploadedBy", fields: [uploadedById], references: [id])
+  records     WorkHourRecord[]
+  createdAt   DateTime             @default(now())
+
+  @@index([uploadedById, createdAt])
+  @@index([status, createdAt])
+}
+
+model WorkHourRecord {
+  id                String                 @id @default(cuid())
+  employeeId        String
+  scheduleId        String?
+  wbLogin           String
+  date              DateTime
+  plannedStart      String?
+  plannedEnd        String?
+  plannedHours      Float?
+  actualStart       String?
+  actualEnd         String?
+  actualHours       Float
+  adjustedStart     String?
+  adjustedEnd       String?
+  adjustedHours     Float?
+  effectiveStart    String?
+  effectiveEnd      String?
+  effectiveHours    Float
+  differenceMinutes Int?
+  status            WorkHourRecordStatus   @default(IMPORTED)
+  source            String?
+  observation       String?
+  importBatchId     String?
+  employee          EmployeeProfile        @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  schedule          Schedule?              @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  importBatch       WorkHourImportBatch?   @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
+  adjustments       WorkHourAdjustmentRequest[]
+  histories         WorkHourHistory[]
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  @@unique([employeeId, date])
+  @@index([employeeId])
+  @@index([wbLogin])
+  @@index([date])
+  @@index([status])
+  @@index([importBatchId])
+}
+
+model WorkHourAdjustmentRequest {
+  id                   String                   @id @default(cuid())
+  workHourRecordId     String
+  employeeId           String
+  requestedById        String
+  approvedById         String?
+  rejectedById         String?
+  status               WorkHourAdjustmentStatus @default(ABERTO)
+  currentActualStart   String?
+  currentActualEnd     String?
+  currentActualHours   Float
+  requestedActualStart String?
+  requestedActualEnd   String?
+  requestedActualHours Float
+  reason               String
+  justification        String
+  rejectionReason      String?
+  approvedAt           DateTime?
+  rejectedAt           DateTime?
+  record               WorkHourRecord           @relation(fields: [workHourRecordId], references: [id], onDelete: Cascade)
+  employee             EmployeeProfile          @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  requestedBy          User                     @relation("WorkHourAdjustmentRequestedBy", fields: [requestedById], references: [id])
+  approvedBy           User?                    @relation("WorkHourAdjustmentApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  rejectedBy           User?                    @relation("WorkHourAdjustmentRejectedBy", fields: [rejectedById], references: [id], onDelete: SetNull)
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
+
+  @@index([workHourRecordId])
+  @@index([employeeId])
+  @@index([requestedById])
+  @@index([status, createdAt])
+}
+
+model WorkHourHistory {
+  id               String          @id @default(cuid())
+  workHourRecordId String
+  changedById      String?
+  action           String
+  previousValue    Json?
+  newValue         Json?
+  reason           String?
+  record           WorkHourRecord  @relation(fields: [workHourRecordId], references: [id], onDelete: Cascade)
+  changedBy        User?           @relation("WorkHourHistoryChangedBy", fields: [changedById], references: [id], onDelete: SetNull)
+  createdAt        DateTime        @default(now())
+
+  @@index([workHourRecordId, createdAt])
+  @@index([changedById, createdAt])
 }
 
 model CoverageSnapshot {

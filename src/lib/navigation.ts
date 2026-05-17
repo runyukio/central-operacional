@@ -18,6 +18,7 @@ export const navItems: NavItem[] = [
   { label: "Minha Escala", href: "/minha-escala", icon: "CalendarDays", roles: allRoles },
   { label: "Cadastros", href: "/cadastros", icon: "UserPlus", roles: peopleOps },
   { label: "Escalas", href: "/escalas", icon: "CalendarRange", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"] },
+  { label: "Horas Operacionais", href: "/horas-operacionais", icon: "Clock", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"] },
   { label: "Solicitações", href: "/solicitacoes", icon: "ClipboardList", roles: authenticatedOps },
   { label: "Esteiras", href: "/esteiras", icon: "KanbanSquare", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH", "TI", "QUALIDADE"] },
   { label: "Report de Turno", href: "/report-turno", icon: "ClipboardCheck", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"] },

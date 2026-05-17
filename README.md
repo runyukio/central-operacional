@@ -604,12 +604,27 @@ Regras atuais:
 - Aprovar/recusar solicitações mantém atualização local no frontend e agora faz guarda transacional por status atual antes de histórico/notificações/aplicação de escala, reduzindo clique duplo e logs duplicados.
 - Foram adicionados índices de performance para filtros de colaboradores, escalas, solicitações, notificações, auditoria e attendance. A migration é `202605171245_performance_indexes`.
 
+### Horas Operacionais
+
+- O módulo `/horas-operacionais` permite comparar escala planejada com horas realizadas importadas por Excel.
+- O template fica em `/api/work-hours/template` e usa `wb_login + data` como chave operacional. Colunas obrigatórias: `wb_login`, `data`, `entrada_real`, `saida_real` e `horas_realizadas`.
+- O preview valida linha a linha: WB/Login obrigatório e existente, data válida, horários válidos, horas válidas, duplicidade no arquivo e atualização de registro já existente.
+- WB/Login inexistente bloqueia a linha. Registro sem escala vinculada vira alerta (`Sem escala`) e pode ser importado por WFM/Admin mediante confirmação.
+- WFM/Admin/Gestão fazem upload, aprovam/recusam ajustes e exportam CSV. Supervisor visualiza registros e solicita ajuste, mas não altera a hora oficial diretamente.
+- Quando Supervisor solicita ajuste, o `WorkHourRecord` fica como `Ajuste solicitado` e uma pendência é criada para WFM/Admin.
+- Ao aprovar, WFM/Admin atualiza as horas ajustadas e efetivas, recalcula diferença e grava histórico/AuditLog. Ao recusar, as horas originais permanecem.
+- Minha Escala mostra as horas importadas no calendário diário e troca o card de Resumo de Horas por dados reais do período quando houver `WorkHourRecord`.
+- A exportação CSV de horas respeita filtros aplicados e sai em `/api/work-hours/export`.
+- A migration do módulo é `202605171330_work_hours_module`. Em ambiente online, aplicar com `npx prisma migrate deploy`; localmente, usar `npx prisma migrate dev`.
+
 Limitações temporárias:
 
 - As permissões configuráveis em `SystemConfig` já são persistidas e visíveis, mas parte dos módulos antigos ainda usa checagens por role enquanto a migração fina para permissões granulares é concluída.
 - Se um supervisor ainda não tiver colaboradores vinculados por `supervisorId`, o Mapa pode exibir a visão operacional ampla temporária, sempre sem dados sensíveis.
 - Regras de tokens ficam salvas para fase futura; o motor automático de concessão de tokens ainda não é executado.
 - Regras de cobertura ficam disponíveis para parametrização e leitura operacional, com cálculo avançado de gap por regra preparado para evolução do Staff/Cobertura.
+- Horas Operacionais ainda mantém ajustes em painel próprio, sem integrar o tipo `Ajuste de Horas` à esteira geral para não mexer no fluxo de folgas já validado.
+- Integração de cards de horas na Central Operacional ficou preparada pelo serviço/dados reais, mas a exibição principal desta etapa está no painel de Horas e em Minha Escala.
 
 ## Estrutura
 

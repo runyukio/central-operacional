@@ -98,6 +98,7 @@ import {
 import { cn, formatCurrency, initials } from "@/lib/utils";
 
 const scheduleImportColumns = ["wb_login", "nome", "email", "lob", "supervisor", "data", "turno", "entrada", "saida", "status", "observacao"] as const;
+const workHourImportColumns = ["wb_login", "data", "entrada_real", "saida_real", "horas_realizadas", "sistema_origem", "observacao", "nome", "email", "lob", "supervisor_wb_login", "turno"] as const;
 const scheduleStatusOptions = ["Escalado", "Presente", "Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Férias", "Treinamento", "Folga", "Troca aprovada", "Venda de folga aprovada", "Folga aprovada", "Sem escala", "Erro de escala"] as const;
 const attendanceReasonStatuses = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala"];
 const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Venda de folga aprovada"];
@@ -225,6 +226,61 @@ type ImportPreview = {
   errorRows: number;
   rows: Array<Record<string, unknown>>;
   validation: Array<{ rowNumber: number; errors: string[]; warnings: string[] }>;
+};
+
+type WorkHourRow = {
+  id: string;
+  employeeName: string;
+  wbLogin: string;
+  date: string;
+  lob: string;
+  supervisor: string;
+  shift: string;
+  plannedStart: string;
+  plannedEnd: string;
+  plannedHours: number;
+  actualStart: string;
+  actualEnd: string;
+  actualHours: number;
+  adjustedStart: string;
+  adjustedEnd: string;
+  adjustedHours: number;
+  effectiveHours: number;
+  differenceMinutes: number;
+  status: string;
+  rawStatus?: string;
+  adjustmentId?: string;
+  adjustmentStatus: string;
+  source: string;
+  observation: string;
+};
+
+type WorkHourSummary = {
+  plannedHours: number;
+  actualHours: number;
+  differenceHours: number;
+  okRecords: number;
+  divergentRecords: number;
+  noScheduleRecords: number;
+  pendingAdjustments: number;
+  approvedAdjustments: number;
+  rejectedAdjustments: number;
+  adjustedHours: number;
+};
+
+type WorkHourPreview = {
+  totalRows: number;
+  validRows: number;
+  errorRows: number;
+  rows: Array<Record<string, unknown>>;
+  warningRows: number;
+  createdRows: number;
+  updatedRows: number;
+  foundEmployees: number;
+  missingEmployees: number;
+  scheduleFoundRows: number;
+  noScheduleRows: number;
+  validation: Array<{ rowNumber: number; wbLogin: string; employeeName: string; date: string; errors: string[]; warnings: string[]; action: string; status: string }>;
 };
 
 type RegistrationItem = {
@@ -1035,6 +1091,8 @@ export function OperationalCommandCenter() {
 export function MySchedulePage() {
   const [days, setDays] = useState(emptyCalendarDays());
   const [scheduleInfo, setScheduleInfo] = useState<{ id: string; name: string; schedule: string; shift: string; lob: string } | null>(null);
+  const [myWorkHours, setMyWorkHours] = useState<WorkHourRow[]>([]);
+  const [myWorkHourSummary, setMyWorkHourSummary] = useState<WorkHourSummary | null>(null);
   const [myRequests, setMyRequests] = useState<ClientRequest[]>([]);
   const [selectedRequest, setSelectedRequest] = useState<ClientRequest | null>(null);
   const [showDayOffModal, setShowDayOffModal] = useState(false);
@@ -1072,8 +1130,20 @@ export function MySchedulePage() {
         setScheduleInfo(null);
       });
     void loadMyRequests();
+    void loadMyWorkHours();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function loadMyWorkHours() {
+    try {
+      const payload = await apiJson<{ data: WorkHourRow[]; summary: WorkHourSummary }>("/api/work-hours?scope=mine&startDate=2026-05-01&endDate=2026-05-31&limit=100");
+      setMyWorkHours(payload.data);
+      setMyWorkHourSummary(payload.summary);
+    } catch {
+      setMyWorkHours([]);
+      setMyWorkHourSummary(null);
+    }
+  }
 
   async function loadMyRequests() {
     try {
@@ -1216,6 +1286,7 @@ export function MySchedulePage() {
   };
   const hasSchedule = days.some((day) => !day.outside && day.shift !== "Sem escala");
   const nextScheduleLabel = days.find((day) => !day.outside && !["Sem escala", "Folga", "Férias"].includes(day.label))?.label;
+  const workHourByDate = new Map(myWorkHours.map((row) => [row.date, row]));
 
   return (
     <div>
@@ -1258,14 +1329,24 @@ export function MySchedulePage() {
           <div className="grid grid-cols-7 bg-white">
             {days.map((day, index) => {
               const isToday = day.date === 29 && !day.outside;
+              const dateKey = day.outside ? "" : `2026-05-${String(day.date).padStart(2, "0")}`;
+              const workHour = dateKey ? workHourByDate.get(dateKey) : undefined;
               return (
                 <div key={index} className={cn("min-h-[98px] border-r border-t border-border p-3 last:border-r-0", day.outside && "text-slate-300")}>
                   <div className={cn("mb-2 text-base font-bold", isToday && "grid h-8 w-8 place-items-center rounded-full bg-blue-600 text-white")}>{day.date}</div>
                   {!day.outside ? (
-                    <span className={cn("inline-flex items-center gap-2 rounded-md px-2 py-1 text-xs font-semibold", shiftTagClass(day.label))}>
-                      <span className={cn("status-dot", day.shift === "Manhã" ? "bg-emerald-500" : day.shift === "Tarde" ? "bg-orange-500" : day.shift === "Noite" ? "bg-violet-600" : "bg-violet-300")} />
-                      {day.label}
-                    </span>
+                    <div className="space-y-1.5">
+                      <span className={cn("inline-flex items-center gap-2 rounded-md px-2 py-1 text-xs font-semibold", shiftTagClass(day.label))}>
+                        <span className={cn("status-dot", day.shift === "Manhã" ? "bg-emerald-500" : day.shift === "Tarde" ? "bg-orange-500" : day.shift === "Noite" ? "bg-violet-600" : "bg-violet-300")} />
+                        {day.label}
+                      </span>
+                      {workHour ? (
+                        <div className="rounded-md border border-blue-100 bg-white/80 px-2 py-1 text-[11px] font-bold text-navy-950">
+                          <p>Real: {workHour.actualStart || "--"}-{workHour.actualEnd || "--"} • {workHour.effectiveHours}h</p>
+                          <p className={cn(workHour.differenceMinutes < 0 ? "text-red-600" : workHour.differenceMinutes > 0 ? "text-emerald-600" : "text-muted")}>{workHour.status} • {workHour.differenceMinutes}min</p>
+                        </div>
+                      ) : null}
+                    </div>
                   ) : null}
                 </div>
               );
@@ -1321,7 +1402,19 @@ export function MySchedulePage() {
             )}
           </Panel>
           <Panel title="Resumo de Horas">
-            <EmptyState title="Resumo de horas" description="Resumo de horas ainda não disponível para este teste." />
+            {myWorkHours.length && myWorkHourSummary ? (
+              <div className="grid gap-3">
+                <MetricPill value={`${myWorkHourSummary.plannedHours}h`} label="Horas previstas" />
+                <MetricPill value={`${myWorkHourSummary.actualHours}h`} label="Horas realizadas" />
+                <MetricPill value={`${myWorkHourSummary.differenceHours}h`} label="Diferença" />
+                <MetricPill value={`${myWorkHourSummary.adjustedHours}h`} label="Horas ajustadas" />
+                <MetricPill value={myWorkHourSummary.pendingAdjustments} label="Ajustes pendentes" />
+                <MetricPill value={myWorkHourSummary.divergentRecords} label="Dias com divergência" />
+                <MetricPill value={myWorkHourSummary.noScheduleRecords} label="Dias sem escala vinculada" />
+              </div>
+            ) : (
+              <EmptyState title="Horas ainda não importadas" description="Horas ainda não importadas para este período." />
+            )}
           </Panel>
           <Panel title="Comunicados Recentes">
             <EmptyState title="Comunicados recentes" description="Nenhum comunicado disponível no momento." />
@@ -2532,6 +2625,444 @@ export function SchedulesPage() {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export function WorkHoursPage() {
+  const { data: session } = useSession();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [rows, setRows] = useState<WorkHourRow[]>([]);
+  const [summary, setSummary] = useState<WorkHourSummary | null>(null);
+  const [pagination, setPagination] = useState({ page: 1, limit: 50, total: 0, totalPages: 1 });
+  const [filters, setFilters] = useState({
+    startDate: "2026-05-01",
+    endDate: "2026-05-31",
+    lob: "Todos",
+    supervisor: "",
+    shift: "Todos",
+    collaborator: "",
+    status: "Todos",
+    divergentOnly: false,
+    pendingOnly: false,
+    noScheduleOnly: false
+  });
+  const [settings, setSettings] = useState<SystemSettings | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [preview, setPreview] = useState<(WorkHourPreview & { fileName: string }) | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
+  const [savingImport, setSavingImport] = useState(false);
+  const [selectedRow, setSelectedRow] = useState<WorkHourRow | null>(null);
+  const [showAdjustment, setShowAdjustment] = useState(false);
+  const [showReview, setShowReview] = useState(false);
+  const [adjustmentAction, setAdjustmentAction] = useState<"approve" | "reject">("approve");
+  const [savingAdjustment, setSavingAdjustment] = useState(false);
+  const [adjustmentForm, setAdjustmentForm] = useState({
+    requestedActualStart: "",
+    requestedActualEnd: "",
+    requestedActualHours: "",
+    reason: "Erro de apontamento",
+    justification: "",
+    rejectionReason: ""
+  });
+
+  const actorRole = session?.user?.role ?? "COLABORADOR";
+  const normalizedRole = actorRole === "MANAGEMENT" ? "GESTOR" : actorRole;
+  const canUpload = ["ADMIN", "GESTOR", "WFM"].includes(normalizedRole);
+  const canApprove = ["ADMIN", "GESTOR", "WFM"].includes(normalizedRole);
+  const canRequestAdjustment = ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(normalizedRole);
+  const statusOptions = ["Todos", "OK", "Divergente", "Sem escala", "Ajuste solicitado", "Ajuste aprovado", "Ajuste recusado", "Importado", "Corrigido manualmente"];
+  const lobOptions = ["Todos", ...(settings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? Array.from(new Set(rows.map((row) => row.lob).filter(Boolean))))];
+  const shiftOptions = ["Todos", ...(settings?.shifts.filter((shift) => shift.status !== "INACTIVE").map((shift) => shift.name) ?? Array.from(new Set(rows.map((row) => row.shift).filter(Boolean))))];
+
+  useEffect(() => {
+    apiJson<{ data: SystemSettings }>("/api/settings").then((payload) => setSettings(payload.data)).catch(() => undefined);
+    void loadWorkHours();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function loadWorkHours(nextPage = pagination.page) {
+    setLoading(true);
+    setMessage("");
+    try {
+      const params = new URLSearchParams({
+        startDate: filters.startDate,
+        endDate: filters.endDate,
+        page: String(nextPage),
+        limit: String(pagination.limit)
+      });
+      if (filters.lob !== "Todos") params.set("lob", filters.lob);
+      if (filters.supervisor) params.set("supervisor", filters.supervisor);
+      if (filters.shift !== "Todos") params.set("shift", filters.shift);
+      if (filters.collaborator) params.set("collaborator", filters.collaborator);
+      if (filters.status !== "Todos") params.set("status", filters.status);
+      if (filters.divergentOnly) params.set("divergentOnly", "true");
+      if (filters.pendingOnly) params.set("pendingOnly", "true");
+      if (filters.noScheduleOnly) params.set("noScheduleOnly", "true");
+      const payload = await apiJson<{ data: WorkHourRow[]; summary: WorkHourSummary; pagination: typeof pagination }>(`/api/work-hours?${params.toString()}`);
+      setRows(payload.data);
+      setSummary(payload.summary);
+      setPagination(payload.pagination);
+    } catch (error) {
+      setRows([]);
+      setSummary(null);
+      setMessage(error instanceof Error ? error.message : "Não foi possível carregar horas operacionais.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleWorkHourFile(file?: File) {
+    if (!file) return;
+    const formData = new FormData();
+    formData.append("file", file);
+    setMessage("");
+    try {
+      const payload = await apiJson<WorkHourPreview & { fileName: string }>("/api/work-hours/import/preview", {
+        method: "POST",
+        body: formData
+      });
+      setPreview(payload);
+      setShowPreview(true);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível validar o arquivo de horas.");
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function commitWorkHourImport() {
+    if (!preview) return;
+    setSavingImport(true);
+    try {
+      const payload = await apiJson<{ data: { importedRows: number; createdRows: number; updatedRows: number } }>("/api/work-hours/import/commit", {
+        method: "POST",
+        body: JSON.stringify({ fileName: preview.fileName, allowPartial: true, rows: preview.rows })
+      });
+      setShowPreview(false);
+      setPreview(null);
+      setMessage(`${payload.data.importedRows} registro(s) importado(s). Criados: ${payload.data.createdRows}. Atualizados: ${payload.data.updatedRows}.`);
+      await loadWorkHours(1);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível importar horas.");
+    } finally {
+      setSavingImport(false);
+    }
+  }
+
+  function openAdjustment(row: WorkHourRow) {
+    setSelectedRow(row);
+    setAdjustmentForm({
+      requestedActualStart: row.effectiveHours ? row.actualStart : "",
+      requestedActualEnd: row.effectiveHours ? row.actualEnd : "",
+      requestedActualHours: row.effectiveHours ? String(row.effectiveHours).replace(".", ",") : "",
+      reason: "Erro de apontamento",
+      justification: "",
+      rejectionReason: ""
+    });
+    setShowAdjustment(true);
+  }
+
+  function openReview(row: WorkHourRow, action: "approve" | "reject") {
+    setSelectedRow(row);
+    setAdjustmentAction(action);
+    setAdjustmentForm({ ...adjustmentForm, rejectionReason: "" });
+    setShowReview(true);
+  }
+
+  async function submitAdjustment() {
+    if (!selectedRow) return;
+    setSavingAdjustment(true);
+    setMessage("");
+    try {
+      await apiJson("/api/work-hours", {
+        method: "POST",
+        body: JSON.stringify({
+          workHourRecordId: selectedRow.id,
+          requestedActualStart: adjustmentForm.requestedActualStart || undefined,
+          requestedActualEnd: adjustmentForm.requestedActualEnd || undefined,
+          requestedActualHours: Number(adjustmentForm.requestedActualHours.replace(",", ".")) || undefined,
+          reason: adjustmentForm.reason,
+          justification: adjustmentForm.justification
+        })
+      });
+      setShowAdjustment(false);
+      setMessage("Ajuste de horas solicitado e enviado para WFM/Admin.");
+      await loadWorkHours();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível solicitar ajuste.");
+    } finally {
+      setSavingAdjustment(false);
+    }
+  }
+
+  async function reviewAdjustment() {
+    if (!selectedRow?.adjustmentId) return;
+    setSavingAdjustment(true);
+    try {
+      await apiJson("/api/work-hours/adjustments", {
+        method: "PATCH",
+        body: JSON.stringify({ id: selectedRow.adjustmentId, action: adjustmentAction, rejectionReason: adjustmentForm.rejectionReason })
+      });
+      setShowReview(false);
+      setMessage(adjustmentAction === "approve" ? "Ajuste aprovado e horas efetivas atualizadas." : "Ajuste recusado.");
+      await loadWorkHours();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível processar ajuste.");
+    } finally {
+      setSavingAdjustment(false);
+    }
+  }
+
+  function exportUrl() {
+    const params = new URLSearchParams({ startDate: filters.startDate, endDate: filters.endDate });
+    if (filters.lob !== "Todos") params.set("lob", filters.lob);
+    if (filters.supervisor) params.set("supervisor", filters.supervisor);
+    if (filters.shift !== "Todos") params.set("shift", filters.shift);
+    if (filters.collaborator) params.set("collaborator", filters.collaborator);
+    if (filters.status !== "Todos") params.set("status", filters.status);
+    return `/api/work-hours/export?${params.toString()}`;
+  }
+
+  return (
+    <div>
+      <PageHeader
+        title="Horas Operacionais"
+        description="Upload, conferência e ajuste das horas realizadas versus escala planejada"
+        icon={Clock}
+        actions={
+          <div className="flex flex-wrap gap-2">
+            {canUpload ? <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(event) => handleWorkHourFile(event.target.files?.[0])} /> : null}
+            {canUpload ? (
+              <button onClick={() => fileInputRef.current?.click()} className="flex h-11 items-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white shadow-soft">
+                <Upload className="h-4 w-4" />
+                Upload horas
+              </button>
+            ) : null}
+            <a href="/api/work-hours/template" className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft">
+              <Download className="h-4 w-4" />
+              Baixar template
+            </a>
+            {["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(normalizedRole) ? (
+              <a href={exportUrl()} className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft">
+                <FileText className="h-4 w-4" />
+                Exportar CSV
+              </a>
+            ) : null}
+          </div>
+        }
+      />
+
+      {message ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
+
+      <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <StatCard title="Horas previstas" value={`${summary?.plannedHours ?? 0}h`} helper="escala planejada" icon={Clock} tone="blue" />
+        <StatCard title="Horas realizadas" value={`${summary?.actualHours ?? 0}h`} helper="apontamento importado" icon={CheckCircle2} tone="green" />
+        <StatCard title="Diferença total" value={`${summary?.differenceHours ?? 0}h`} helper="realizado - previsto" icon={AlertTriangle} tone={(summary?.differenceHours ?? 0) < 0 ? "orange" : "cyan"} />
+        <StatCard title="Ajustes pendentes" value={summary?.pendingAdjustments ?? 0} helper="aguardando WFM/Admin" icon={ClipboardList} tone={(summary?.pendingAdjustments ?? 0) ? "orange" : "green"} />
+      </div>
+      <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <MetricPill value={summary?.okRecords ?? 0} label="Registros OK" />
+        <MetricPill value={summary?.divergentRecords ?? 0} label="Divergentes" />
+        <MetricPill value={summary?.noScheduleRecords ?? 0} label="Sem escala vinculada" />
+        <MetricPill value={`${summary?.adjustedHours ?? 0}h`} label="Horas ajustadas" />
+      </div>
+
+      <section className="card mb-5 p-4">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-8">
+          <FormInput label="Data inicial" type="date" value={filters.startDate} onChange={(value) => setFilters({ ...filters, startDate: value })} />
+          <FormInput label="Data final" type="date" value={filters.endDate} onChange={(value) => setFilters({ ...filters, endDate: value })} />
+          <FormSelect label="LOB" value={filters.lob} options={lobOptions} onChange={(value) => setFilters({ ...filters, lob: value })} />
+          <FormInput label="Supervisor" value={filters.supervisor} onChange={(value) => setFilters({ ...filters, supervisor: value })} />
+          <FormSelect label="Turno" value={filters.shift} options={shiftOptions} onChange={(value) => setFilters({ ...filters, shift: value })} />
+          <FormInput label="Colaborador/WB" value={filters.collaborator} onChange={(value) => setFilters({ ...filters, collaborator: value })} />
+          <FormSelect label="Status" value={filters.status} options={statusOptions} onChange={(value) => setFilters({ ...filters, status: value })} />
+          <div className="flex items-end gap-2">
+            <button onClick={() => loadWorkHours(1)} className="h-11 flex-1 rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
+            <button onClick={() => { setFilters({ startDate: "2026-05-01", endDate: "2026-05-31", lob: "Todos", supervisor: "", shift: "Todos", collaborator: "", status: "Todos", divergentOnly: false, pendingOnly: false, noScheduleOnly: false }); setTimeout(() => void loadWorkHours(1), 0); }} className="h-11 rounded-lg border border-border bg-white px-3 text-sm font-bold">Limpar</button>
+          </div>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-3 text-sm font-semibold text-navy-950">
+          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.divergentOnly} onChange={(event) => setFilters({ ...filters, divergentOnly: event.target.checked, pendingOnly: false, noScheduleOnly: false })} /> Apenas divergentes</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.pendingOnly} onChange={(event) => setFilters({ ...filters, pendingOnly: event.target.checked, divergentOnly: false, noScheduleOnly: false })} /> Ajuste pendente</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.noScheduleOnly} onChange={(event) => setFilters({ ...filters, noScheduleOnly: event.target.checked, divergentOnly: false, pendingOnly: false })} /> Sem escala</label>
+        </div>
+      </section>
+
+      <section className="card overflow-hidden">
+        <div className="flex items-center justify-between border-b border-border px-5 py-4">
+          <div>
+            <h2 className="text-lg font-extrabold text-navy-950">Painel de horas</h2>
+            <p className="text-sm text-muted">{loading ? "Carregando..." : `${pagination.total} registro(s) no período`}</p>
+          </div>
+          {!canUpload && normalizedRole === "SUPERVISOR" ? <StatusBadge status="Supervisor solicita ajuste; WFM aprova" /> : null}
+        </div>
+        <div className="overflow-x-auto">
+          {rows.length ? (
+            <table className="w-full min-w-[1280px] text-left text-sm">
+              <thead className="border-b border-border bg-slate-50 text-xs font-bold uppercase tracking-wide text-muted">
+                <tr>
+                  {["Data", "Colaborador", "WB/Login", "LOB", "Supervisor", "Turno", "Previsto", "Realizado", "Efetivo", "Dif.", "Status", "Ajuste", "Ações"].map((column) => <th key={column} className="px-4 py-3">{column}</th>)}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border bg-white">
+                {rows.map((row) => (
+                  <tr key={row.id} className="hover:bg-blue-50/30">
+                    <td className="px-4 py-3 font-bold text-navy-950">{row.date}</td>
+                    <td className="px-4 py-3">{row.employeeName}</td>
+                    <td className="px-4 py-3">{row.wbLogin}</td>
+                    <td className="px-4 py-3">{row.lob}</td>
+                    <td className="px-4 py-3">{row.supervisor || "-"}</td>
+                    <td className="px-4 py-3">{row.shift || "-"}</td>
+                    <td className="px-4 py-3">{row.plannedStart || "--"} às {row.plannedEnd || "--"} • {row.plannedHours || 0}h</td>
+                    <td className="px-4 py-3">{row.actualStart || "--"} às {row.actualEnd || "--"} • {row.actualHours}h</td>
+                    <td className="px-4 py-3">{row.effectiveHours}h</td>
+                    <td className={cn("px-4 py-3 font-bold", row.differenceMinutes < 0 ? "text-red-600" : row.differenceMinutes > 0 ? "text-emerald-600" : "text-muted")}>{row.differenceMinutes}min</td>
+                    <td className="px-4 py-3"><StatusBadge status={row.status} /></td>
+                    <td className="px-4 py-3"><StatusBadge status={row.adjustmentStatus} /></td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap gap-2">
+                        {canRequestAdjustment && !["Ajuste solicitado", "Ajuste aprovado"].includes(row.status) ? (
+                          <button onClick={() => openAdjustment(row)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">Solicitar ajuste</button>
+                        ) : null}
+                        {canApprove && row.adjustmentId && row.adjustmentStatus === "Em análise" ? (
+                          <>
+                            <button onClick={() => openReview(row, "approve")} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white">Aprovar</button>
+                            <button onClick={() => openReview(row, "reject")} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700">Recusar</button>
+                          </>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="p-8"><EmptyState title="Nenhum registro de horas" description="Importe horas realizadas ou ajuste os filtros do período." /></div>
+          )}
+        </div>
+        <div className="flex items-center justify-between border-t border-border px-5 py-4 text-sm text-muted">
+          <span>Página {pagination.page} de {pagination.totalPages}</span>
+          <div className="flex gap-2">
+            <button disabled={pagination.page <= 1} onClick={() => loadWorkHours(pagination.page - 1)} className="rounded-lg border border-border bg-white px-3 py-2 font-bold disabled:opacity-40">Anterior</button>
+            <button disabled={pagination.page >= pagination.totalPages} onClick={() => loadWorkHours(pagination.page + 1)} className="rounded-lg border border-border bg-white px-3 py-2 font-bold disabled:opacity-40">Próxima</button>
+          </div>
+        </div>
+      </section>
+
+      {showPreview && preview ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="card max-h-[86vh] w-full max-w-6xl overflow-hidden">
+            <div className="flex items-center justify-between border-b border-border px-5 py-4">
+              <div>
+                <h2 className="text-lg font-extrabold text-navy-950">Preview do upload de horas</h2>
+                <p className="text-sm text-muted">{preview.fileName} • {preview.totalRows} linha(s)</p>
+              </div>
+              <button onClick={() => setShowPreview(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+            </div>
+            <div className="grid gap-4 p-5 lg:grid-cols-[1fr_300px]">
+              <div className="max-h-[58vh] overflow-auto rounded-lg border border-border">
+                <table className="w-full min-w-[980px] text-left text-xs">
+                  <thead className="bg-slate-50 font-bold text-muted">
+                    <tr>
+                      <th className="px-3 py-2">Linha</th>
+                      <th className="px-3 py-2">WB/Login</th>
+                      <th className="px-3 py-2">Colaborador</th>
+                      <th className="px-3 py-2">Data</th>
+                      <th className="px-3 py-2">Status</th>
+                      <th className="px-3 py-2">Ação</th>
+                      <th className="px-3 py-2">Erros/alertas</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border bg-white">
+                    {preview.validation.map((row) => (
+                      <tr key={row.rowNumber}>
+                        <td className="px-3 py-2 font-bold">{row.rowNumber}</td>
+                        <td className="px-3 py-2">{row.wbLogin}</td>
+                        <td className="px-3 py-2">{row.employeeName || "-"}</td>
+                        <td className="px-3 py-2">{row.date || "-"}</td>
+                        <td className="px-3 py-2"><StatusBadge status={row.status} /></td>
+                        <td className="px-3 py-2">{row.action}</td>
+                        <td className="px-3 py-2">
+                          {[...row.errors, ...row.warnings].length ? [...row.errors, ...row.warnings].join(" | ") : "OK"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="space-y-3">
+                <MetricPill value={preview.validRows} label="Linhas válidas" />
+                <MetricPill value={preview.errorRows} label="Linhas com erro" />
+                <MetricPill value={preview.warningRows} label="Alertas" />
+                <MetricPill value={preview.createdRows} label="Novos registros" />
+                <MetricPill value={preview.updatedRows} label="Atualizações" />
+                <p className="text-sm text-muted">WB/Login inexistente bloqueia a linha. Sem escala vinculada vira alerta e pode ser importado.</p>
+                <button disabled={savingImport} onClick={commitWorkHourImport} className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
+                  {savingImport ? "Importando..." : "Confirmar importação"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showAdjustment && selectedRow ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="card w-full max-w-2xl p-5">
+            <div className="mb-5 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-extrabold text-navy-950">Solicitar ajuste de horas</h2>
+                <p className="text-sm text-muted">{selectedRow.employeeName} • {selectedRow.date} • {selectedRow.wbLogin}</p>
+              </div>
+              <button onClick={() => setShowAdjustment(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+            </div>
+            <div className="grid gap-4 md:grid-cols-3">
+              <FormInput label="Nova entrada" value={adjustmentForm.requestedActualStart} onChange={(value) => setAdjustmentForm({ ...adjustmentForm, requestedActualStart: value })} />
+              <FormInput label="Nova saída" value={adjustmentForm.requestedActualEnd} onChange={(value) => setAdjustmentForm({ ...adjustmentForm, requestedActualEnd: value })} />
+              <FormInput label="Novas horas" value={adjustmentForm.requestedActualHours} onChange={(value) => setAdjustmentForm({ ...adjustmentForm, requestedActualHours: value })} />
+              <div className="md:col-span-3">
+                <FormSelect label="Motivo" value={adjustmentForm.reason} options={["Erro de apontamento", "Sistema não capturou horário", "Feedback/treinamento durante o turno", "Problema técnico", "Ajuste manual autorizado", "Erro no upload", "Atividade operacional fora do sistema", "Outro"]} onChange={(value) => setAdjustmentForm({ ...adjustmentForm, reason: value })} />
+              </div>
+              <label className="md:col-span-3">
+                <span className="mb-1.5 block text-sm font-bold text-muted">Justificativa</span>
+                <textarea value={adjustmentForm.justification} onChange={(event) => setAdjustmentForm({ ...adjustmentForm, justification: event.target.value })} className="min-h-28 w-full rounded-lg border border-border p-3 outline-none" />
+              </label>
+            </div>
+            <button disabled={savingAdjustment} onClick={submitAdjustment} className="mt-5 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
+              {savingAdjustment ? "Enviando..." : "Enviar para WFM/Admin"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {showReview && selectedRow ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="card w-full max-w-xl p-5">
+            <div className="mb-5 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-extrabold text-navy-950">{adjustmentAction === "approve" ? "Aprovar ajuste" : "Recusar ajuste"}</h2>
+                <p className="text-sm text-muted">{selectedRow.employeeName} • {selectedRow.date}</p>
+              </div>
+              <button onClick={() => setShowReview(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+            </div>
+            {adjustmentAction === "reject" ? (
+              <label>
+                <span className="mb-1.5 block text-sm font-bold text-muted">Motivo da recusa</span>
+                <textarea value={adjustmentForm.rejectionReason} onChange={(event) => setAdjustmentForm({ ...adjustmentForm, rejectionReason: event.target.value })} className="min-h-28 w-full rounded-lg border border-border p-3 outline-none" />
+              </label>
+            ) : (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-700">
+                Ao aprovar, as horas ajustadas passam a valer como horas efetivas oficiais.
+              </div>
+            )}
+            <button disabled={savingAdjustment} onClick={reviewAdjustment} className={cn("mt-5 w-full rounded-lg px-4 py-3 text-sm font-bold text-white disabled:opacity-60", adjustmentAction === "approve" ? "bg-emerald-600" : "bg-red-600")}>
+              {savingAdjustment ? "Processando..." : adjustmentAction === "approve" ? "Aprovar ajuste" : "Recusar ajuste"}
+            </button>
           </div>
         </div>
       ) : null}
