@@ -8,6 +8,7 @@ import {
   reviewEmployeeRegistration as reviewMockRegistration,
   submitEmployeeRegistration as submitMockRegistration
 } from "@/lib/mock-db";
+import { mapPrismaError } from "@/lib/api-errors";
 import { normalizeRole } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import type { RegistrationInput } from "@/lib/registration-validation";
@@ -95,6 +96,8 @@ type EmployeeImportValidation = {
   rowNumber: number;
   errors: string[];
   warnings: string[];
+  action: "criar" | "atualizar" | "ignorar";
+  status: "Válida" | "Erro" | "Alerta";
   preview: {
     name: string;
     email: string;
@@ -256,6 +259,11 @@ export async function previewEmployeeImport(actor: Actor, rows: EmployeeImportRo
       totalRows: rows.length,
       validRows: validations.filter((item) => !item.errors.length).length,
       errorRows: validations.filter((item) => item.errors.length).length,
+      warningRows: validations.filter((item) => !item.errors.length && item.warnings.length).length,
+      usuariosCriar: validations.filter((item) => !item.errors.length && item.preview.createUser).length,
+      colaboradoresCriar: validations.filter((item) => !item.errors.length && item.action === "criar").length,
+      registrosAtualizar: validations.filter((item) => !item.errors.length && item.action === "atualizar").length,
+      duplicidades: validations.filter((item) => [...item.errors, ...item.warnings].some((message) => /duplic|existente|uso/i.test(message))).length,
       rows: validations
     }
   };
@@ -281,16 +289,12 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
       for (const raw of validRows) {
         const row = normalizeEmployeeImportRow(raw);
         const role = await tx.role.findUniqueOrThrow({ where: { name: row.roleName } });
-        const lob = await tx.lob.upsert({
-          where: { name: row.lob },
-          update: row.lob === "ALL" ? { description: "Atuação transversal / staff / multi-LOB" } : {},
-          create: { name: row.lob, description: row.lob === "ALL" ? "Atuação transversal / staff / multi-LOB" : "Criado por importação de colaboradores" }
-        });
-        const shift = await tx.shift.upsert({
-          where: { name: row.shift },
-          update: {},
-          create: { name: row.shift, startsAt: defaultShiftStart(row.shift), endsAt: defaultShiftEnd(row.shift), color: "#2563EB" }
-        });
+        const lob = await tx.lob.findUniqueOrThrow({ where: { name: row.lob } });
+        const shift = await tx.shift.findUniqueOrThrow({ where: { name: row.shift } });
+        const importDateFallback = new Date();
+        const birthDate = row.birthDate ?? row.admissionDate ?? row.trainingStartDate ?? importDateFallback;
+        const trainingStartDate = row.trainingStartDate ?? row.admissionDate ?? importDateFallback;
+        const admissionDate = row.admissionDate ?? row.trainingStartDate ?? importDateFallback;
         const supervisor = await findSupervisorForImport(tx, row.supervisorWbLogin, row.supervisorEmail, row.supervisorName);
         const team = await tx.team.upsert({
           where: { name_lobId: { name: row.teamName || (supervisor?.fullName ? `Time ${supervisor.fullName}` : "Time Inicial"), lobId: lob.id } },
@@ -327,7 +331,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
           emergencyPhone: row.emergencyPhone,
           emergencyContactName: row.emergencyContactName,
           emergencyContactRelationship: row.emergencyContactRelationship,
-          birthDate: row.birthDate,
+          birthDate,
           email: row.email || `${row.wbLogin.toLowerCase()}@sem-email.local`,
           passwordHash,
           rg: row.rg,
@@ -336,7 +340,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
           sex: row.sex,
           maritalStatus: row.maritalStatus,
           educationLevel: row.educationLevel,
-          trainingStartDate: row.trainingStartDate,
+          trainingStartDate,
           preferredSchedule: row.preferredSchedule,
           bankName: row.bankName,
           bankAgency: row.bankAgency,
@@ -367,7 +371,8 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
             supervisorWbLogin: row.supervisorWbLogin,
             scheduleType: row.scheduleType,
             contractType: row.contractType,
-            admissionDate: row.admissionDate?.toISOString(),
+            admissionDate: admissionDate.toISOString(),
+            trainingStartDate: trainingStartDate.toISOString(),
             siteOperation: row.siteOperation
           } as Prisma.InputJsonObject,
           history: [{ at: new Date().toISOString(), actor: actor.name, action: "Cadastro importado e aprovado via Excel", notes: batchId }] as Prisma.InputJsonArray,
@@ -428,14 +433,14 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               fullName: row.name,
               socialName: row.socialName || null,
               roleTitle: row.roleTitle,
-              admissionDate: row.admissionDate ?? row.trainingStartDate,
+              admissionDate,
               scheduleType: row.scheduleType,
               operationalStatus: row.employeeStatus,
               lobId: lob.id,
               teamId: team.id,
               supervisorId: supervisor?.id,
               shiftId: shift.id,
-              trainingStartDate: row.trainingStartDate,
+              trainingStartDate,
               contractType: row.contractType || null,
               siteOperation: row.siteOperation || null,
               internalNotes: row.notes || null,
@@ -453,14 +458,14 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               fullName: row.name,
               socialName: row.socialName || null,
               roleTitle: row.roleTitle,
-              admissionDate: row.admissionDate ?? row.trainingStartDate,
+              admissionDate,
               scheduleType: row.scheduleType,
               operationalStatus: row.employeeStatus,
               lobId: lob.id,
               teamId: team.id,
               supervisorId: supervisor?.id,
               shiftId: shift.id,
-              trainingStartDate: row.trainingStartDate,
+              trainingStartDate,
               contractType: row.contractType || null,
               siteOperation: row.siteOperation || null,
               internalNotes: row.notes || null,
@@ -475,8 +480,8 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
 
         await tx.employeeSensitiveData.upsert({
           where: { employeeId: employee.id },
-          update: sensitiveDataFromImport(row),
-          create: { employeeId: employee.id, ...sensitiveDataFromImport(row) }
+          update: sensitiveDataFromImport(row, birthDate),
+          create: { employeeId: employee.id, ...sensitiveDataFromImport(row, birthDate) }
         });
 
         await tx.employeeRegistrationRequest.update({
@@ -513,6 +518,11 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
         totalRows: rows.length,
         validRows: validRows.length,
         errorRows: invalidRows.length,
+        warningRows: validations.filter((item) => !item.errors.length && item.warnings.length).length,
+        usuariosCriar: validations.filter((item) => !item.errors.length && item.preview.createUser).length,
+        colaboradoresCriar: validations.filter((item) => !item.errors.length && item.action === "criar").length,
+        registrosAtualizar: validations.filter((item) => !item.errors.length && item.action === "atualizar").length,
+        duplicidades: validations.filter((item) => [...item.errors, ...item.warnings].some((message) => /duplic|existente|uso/i.test(message))).length,
         colaboradoresCriados,
         usuariosCriados,
         registrosAtualizados,
@@ -523,7 +533,9 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
   } catch (error) {
     console.error("[registration-import] erro ao importar colaboradores", error);
     recordErrorLog({ userEmail: actor.email, code: "EMPLOYEE_IMPORT_DB_ERROR", message: error instanceof Error ? error.message : "Falha ao importar colaboradores", action: "EMPLOYEE_IMPORT", severity: "ERROR" });
-    return { error: "Não foi possível importar colaboradores. Verifique os dados obrigatórios e duplicidades." };
+    const mapped = mapPrismaError(error);
+    if (mapped) return mapped;
+    return { error: error instanceof Error ? `Não foi possível importar colaboradores: ${error.message}` : "Não foi possível importar colaboradores. Verifique os dados obrigatórios e duplicidades." };
   }
 }
 
@@ -785,28 +797,44 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
   const seenCpf = new Set<string>();
   const seenEmail = new Set<string>();
   const seenWb = new Set<string>();
-  const validRoles = new Set((await prisma.role.findMany({ select: { name: true } })).map((role) => role.name));
+  const [roles, lobs, shifts] = await Promise.all([
+    prisma.role.findMany({ select: { name: true } }),
+    prisma.lob.findMany({ select: { name: true } }),
+    prisma.shift.findMany({ select: { name: true } })
+  ]);
+  const validRoles = new Set(roles.map((role) => role.name));
+  const validLobs = new Set(lobs.map((lob) => lob.name.toUpperCase()));
+  const validShifts = new Set(shifts.map((shift) => normalizeLookupKey(shift.name)));
+  const requiredConfigErrors = [
+    ...["CEC", "ADS", "TNS", "ALL"].filter((lob) => !validLobs.has(lob)).map((lob) => `LOB ${lob} não existe em Configurações.`),
+    ...["Manhã", "Tarde", "Noite"].filter((shift) => !validShifts.has(normalizeLookupKey(shift))).map((shift) => `Turno ${shift} não existe em Configurações.`),
+    ...(!validRoles.has("COLABORADOR") ? ["Role COLLABORATOR/COLABORADOR não existe em Configurações."] : [])
+  ];
 
   const validations: EmployeeImportValidation[] = [];
   for (let index = 0; index < rows.length; index += 1) {
     const row = normalizeEmployeeImportRow(rows[index]);
-    const errors: string[] = [];
+    const errors: string[] = [...requiredConfigErrors];
     const warnings: string[] = [];
 
     if (!row.name) errors.push("Nome obrigatório.");
     if (!row.wbLogin) errors.push("WB/Login obrigatório.");
     if (!row.roleTitle) errors.push("Cargo/Função obrigatório.");
-    if (!row.roleName) errors.push("Role/Permissão obrigatória.");
+    if (!text(rows[index]?.role_permissao)) errors.push("Role/Permissão obrigatória.");
     if (!row.lob) errors.push("LOB obrigatória.");
     if (!row.employeeStatus) errors.push("Status do colaborador obrigatório.");
+    if (row.lob && text(rows[index]?.lob).toLowerCase() === "todos") errors.push("Todos é opção de filtro. Para atuação transversal use a LOB real ALL.");
+    if (row.lob && !validLobs.has(row.lob.toUpperCase())) errors.push(`LOB ${row.lob} não existe em Configurações.`);
+    if (row.shift && !validShifts.has(normalizeLookupKey(row.shift))) errors.push(`Turno ${row.shift} não existe em Configurações.`);
     if (row.cpf && !isCpfFormat(row.cpf)) errors.push("CPF inválido.");
     if (!row.cpf) warnings.push("CPF pendente: o colaborador será importado com cadastro incompleto para complemento posterior.");
+    if (!row.email) errors.push("E-mail obrigatório.");
     if (row.createUser && !row.email) errors.push("E-mail obrigatório quando criar_usuario = sim.");
     if (row.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) errors.push("E-mail inválido.");
     if (!validRoles.has(row.roleName)) errors.push(`Role/permissão inválida: ${row.roleName}.`);
-    if (text(rows[index]?.lob).toLowerCase() === "todos") errors.push("Todos é opção de filtro. Para atuação transversal use a LOB real ALL.");
-    if (!row.birthDate || Number.isNaN(row.birthDate.getTime())) errors.push("Data de nascimento inválida.");
-    if (!row.trainingStartDate || Number.isNaN(row.trainingStartDate.getTime())) errors.push("Data de início do treinamento inválida.");
+    if (hasImportValue(rows[index]?.data_nascimento) && !row.birthDate) errors.push("Data de nascimento inválida.");
+    if (hasImportValue(rows[index]?.data_admissao) && !row.admissionDate) errors.push("Data de admissão inválida.");
+    if (hasImportValue(rows[index]?.data_inicio_treinamento) && !row.trainingStartDate) errors.push("Data de início do treinamento inválida.");
     if (row.stateUf && !/^[A-Z]{2}$/.test(row.stateUf)) errors.push("Estado UF deve ter 2 letras.");
     if (row.zipCode && !/^\d{5}-?\d{3}$/.test(row.zipCode)) warnings.push("CEP fora do padrão 00000-000.");
     if (row.primaryPhone && !/^\d{2}\s?\d{4,5}-?\d{4}$/.test(row.primaryPhone.replace(/[()]/g, ""))) warnings.push("Contato principal fora do padrão brasileiro.");
@@ -839,6 +867,8 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
       rowNumber: index + 1,
       errors,
       warnings,
+      action: errors.length ? "ignorar" : activeByWb ? "atualizar" : "criar",
+      status: errors.length ? "Erro" : warnings.length ? "Alerta" : "Válida",
       preview: {
         name: row.name,
         email: row.email,
@@ -864,7 +894,7 @@ function normalizeEmployeeImportRow(raw: EmployeeImportRow) {
   const cpf = text(raw.cpf) || null;
   const email = text(raw.email).toLowerCase();
   const wbLogin = text(raw.wb_login);
-  const roleName = normalizeImportRole(text(raw.role_permissao) || "COLABORADOR");
+  const roleName = normalizeImportRole(text(raw.role_permissao));
   return {
     cnpj: text(raw.cnpj),
     name: text(raw.nome),
@@ -892,17 +922,17 @@ function normalizeEmployeeImportRow(raw: EmployeeImportRow) {
     emergencyContactName: text(raw.nome_contato_emergencia) || "Não informado",
     emergencyContactRelationship: text(raw.parentesco_contato_emergencia) || "Não informado",
     wbLogin,
-    roleTitle: text(raw.cargo_funcao) || "Agente",
+    roleTitle: text(raw.cargo_funcao),
     roleName,
     lob: normalizeLobName(raw.lob),
     teamName: text(raw.time),
     supervisorWbLogin: text(raw.supervisor_wb_login),
     supervisorEmail: text(raw.supervisor_email).toLowerCase(),
     supervisorName: text(raw.supervisor_nome),
-    shift: text(raw.turno) || "Manhã",
+    shift: normalizeShiftName(raw.turno),
     scheduleType: text(raw.escala_modelo) || text(raw.preferencia_horario) || "Não informado",
-    employeeStatus: text(raw.status_colaborador),
-    contractType: text(raw.tipo_contrato),
+    employeeStatus: normalizeEmployeeStatus(raw.status_colaborador),
+    contractType: normalizeContractType(raw.tipo_contrato),
     admissionDate: parseImportDate(raw.data_admissao),
     trainingStartDate: parseImportDate(raw.data_inicio_treinamento),
     siteOperation: text(raw.site_operacao),
@@ -920,13 +950,13 @@ function normalizeEmployeeImportRow(raw: EmployeeImportRow) {
   };
 }
 
-function sensitiveDataFromImport(row: ReturnType<typeof normalizeEmployeeImportRow>) {
+function sensitiveDataFromImport(row: ReturnType<typeof normalizeEmployeeImportRow>, birthDate: Date) {
   return {
     cpf: row.cpf,
     rg: row.rg,
     rgIssuer: row.rgIssuer,
     cnpj: row.cnpj,
-    birthDate: row.birthDate,
+    birthDate,
     address: {
       type: row.addressType,
       name: row.address,
@@ -985,10 +1015,11 @@ function normalizeImportRole(value: string) {
 }
 
 function parseImportBoolean(value: unknown) {
-  return ["sim", "s", "yes", "true", "1"].includes(text(value).toLowerCase());
+  return ["sim", "s", "yes", "y", "true", "1"].includes(text(value).toLowerCase());
 }
 
 function parseImportDate(value: unknown) {
+  if (!hasImportValue(value)) return null;
   if (value instanceof Date) return value;
   if (typeof value === "number") {
     const excelEpoch = new Date(Date.UTC(1899, 11, 30));
@@ -1000,7 +1031,7 @@ function parseImportDate(value: unknown) {
     return new Date(Date.UTC(year, month - 1, day));
   }
   const parsed = new Date(`${raw.slice(0, 10)}T00:00:00.000Z`);
-  return Number.isNaN(parsed.getTime()) ? new Date("Invalid") : parsed;
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 function isCpfFormat(value: string) {
@@ -1014,8 +1045,68 @@ function text(value: unknown) {
 
 function normalizeLobName(value: unknown) {
   const raw = text(value);
-  if (!raw) return "CEC";
-  return raw.toUpperCase() === "ALL" ? "ALL" : raw;
+  if (!raw) return "";
+  return raw.toUpperCase();
+}
+
+function normalizeShiftName(value: unknown) {
+  const raw = text(value);
+  if (!raw) return "";
+  const key = normalizeLookupKey(raw);
+  const map: Record<string, string> = {
+    MANHA: "Manhã",
+    TARDE: "Tarde",
+    NOITE: "Noite",
+    MADRUGADA: "Madrugada",
+    BACKOFFICE: "Backoffice",
+    BACK_OFFICE: "Backoffice"
+  };
+  return map[key] ?? raw;
+}
+
+function normalizeEmployeeStatus(value: unknown) {
+  const raw = text(value);
+  if (!raw) return "";
+  const key = normalizeLookupKey(raw);
+  const map: Record<string, string> = {
+    ATIVO: "Ativo",
+    ACTIVE: "Ativo",
+    INATIVO: "Inativo",
+    INACTIVE: "Inativo",
+    PENDENTE: "Pendente de Cadastro",
+    PENDING: "Pendente de Cadastro",
+    EM_TREINAMENTO: "Em treinamento",
+    TREINAMENTO: "Em treinamento",
+    AFASTADO: "Afastado",
+    DESLIGADO: "Desligado",
+    SUSPENSO: "Suspenso"
+  };
+  return map[key] ?? raw;
+}
+
+function normalizeContractType(value: unknown) {
+  const raw = text(value);
+  if (!raw) return "";
+  const key = normalizeLookupKey(raw);
+  const map: Record<string, string> = {
+    PJ: "PJ",
+    CLT: "CLT",
+    ESTAGIO: "Estágio",
+    TEMPORARIO: "Temporário",
+    TERCEIRO: "Terceiro",
+    OUTRO: "Outro"
+  };
+  return map[key] ?? raw;
+}
+
+function normalizeLookupKey(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toUpperCase().replace(/[\s/-]+/g, "_");
+}
+
+function hasImportValue(value: unknown) {
+  if (value instanceof Date) return true;
+  if (typeof value === "number") return true;
+  return text(value) !== "";
 }
 
 function isReusableRegistration(item: EmployeeRegistrationRequest) {

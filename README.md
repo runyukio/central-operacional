@@ -563,8 +563,11 @@ Regras atuais:
 - Mapa de Funcionários corrige permissões de Admin para detalhes/dados sensíveis e não seleciona automaticamente o primeiro colaborador.
 - Minha Escala/Minhas Solicitações usa `/api/requests?scope=mine`, então Admin só vê solicitações próprias nessa área pessoal; o consolidado continua em Solicitações/Esteiras.
 - Cadastros ganhou importação em massa por Excel: baixe o template, suba a planilha, valide preview/erros e confirme a importação de colaboradores aprovados/ativos.
+- O upload de colaboradores prioriza a aba `colaboradores`, normaliza cabeçalhos do Excel e remove linhas vazias antes do preview.
 - Na importação de colaboradores, `criar_usuario = sim` exige `senha_temporaria`; a senha é armazenada somente como hash e deve ser comunicada manualmente pelo Admin.
 - CPF é opcional na importação de colaboradores. Quando vazio, a linha entra com alerta de `CPF pendente` e o Admin/RH pode completar depois; quando preenchido, o CPF continua validado e duplicidade ativa continua bloqueando a linha.
+- Valores comuns são normalizados no preview/commit: `Sim/S/Yes/true/1`, `Ativo/ACTIVE`, `Manha/Manhã`, `Tarde`, `Noite`, roles como `COLLABORATOR`, `SUPERVISOR`, `WFM`, `QUALITY`, `HR`, `LOGISTICS_IT`, `MANAGEMENT` e LOBs `CEC`, `ADS`, `TNS`, `ALL`.
+- O preview mostra total de linhas, válidas, erros, alertas, usuários a criar, funcionários a criar, atualizações, duplicidades e ação por linha (`criar`, `atualizar` ou `ignorar`).
 - Duplicidades ativas de e-mail ou WB/Login bloqueiam a linha; CPF preenchido duplicado também bloqueia. Cadastros recusados/inativos podem ser reaproveitados pela importação.
 - Login atualizado para apresentação do MVP local: novo subtítulo, botão `Criar cadastro`, sem cards de status fake e com wallpaper local em `public/login-wallpaper.png`.
 - Central Operacional agora combina range de datas com filtro real de LOB vindo do banco; os indicadores usam `Schedule`/`AttendanceRecord` filtrados por período e LOB.

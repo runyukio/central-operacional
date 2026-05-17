@@ -323,10 +323,17 @@ type EmployeeImportPreview = {
   totalRows: number;
   validRows: number;
   errorRows: number;
+  warningRows?: number;
+  usuariosCriar?: number;
+  colaboradoresCriar?: number;
+  registrosAtualizar?: number;
+  duplicidades?: number;
   rows: Array<{
     rowNumber: number;
     errors: string[];
     warnings: string[];
+    action?: string;
+    status?: string;
     preview: {
       name: string;
       email: string;
@@ -1557,6 +1564,20 @@ export function MySchedulePage() {
   );
 }
 
+function normalizeExcelKey(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function normalizeEmployeeImportSheetRow(row: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(row).map(([key, value]) => [normalizeExcelKey(key), value]));
+}
+
 export function RegistrationApprovalsPage() {
   const employeeImportInputRef = useRef<HTMLInputElement | null>(null);
   const [items, setItems] = useState<RegistrationItem[]>([]);
@@ -1629,8 +1650,13 @@ export function RegistrationApprovalsPage() {
     try {
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer);
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+      const sheetName = workbook.SheetNames.find((name) => normalizeExcelKey(name) === "colaboradores") ?? workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+      const rows = rawRows
+        .map(normalizeEmployeeImportSheetRow)
+        .filter((row) => Object.values(row).some((value) => String(value ?? "").trim() !== ""));
+      if (!rows.length) throw new Error("Nenhuma linha de colaborador encontrada. Verifique se a aba colaboradores possui dados.");
       const payload = await apiJson<{ data: EmployeeImportPreview }>("/api/employee-registrations/import/preview", {
         method: "POST",
         body: JSON.stringify({ rows })
@@ -1895,7 +1921,11 @@ export function RegistrationApprovalsPage() {
                   <MetricPill value={employeeImportPreview.totalRows} label="Total de linhas" />
                   <MetricPill value={employeeImportPreview.validRows} label="Linhas válidas" />
                   <MetricPill value={employeeImportPreview.errorRows} label="Linhas com erro" />
-                  <MetricPill value={employeeImportPreview.rows.filter((row) => row.preview.createUser).length} label="Usuários a criar" />
+                  <MetricPill value={employeeImportPreview.warningRows ?? employeeImportPreview.rows.filter((row) => !row.errors.length && row.warnings.length).length} label="Linhas com alerta" />
+                  <MetricPill value={employeeImportPreview.usuariosCriar ?? employeeImportPreview.rows.filter((row) => !row.errors.length && row.preview.createUser).length} label="Usuários a criar" />
+                  <MetricPill value={employeeImportPreview.colaboradoresCriar ?? employeeImportPreview.rows.filter((row) => !row.errors.length && row.action === "criar").length} label="Funcionários a criar" />
+                  <MetricPill value={employeeImportPreview.registrosAtualizar ?? employeeImportPreview.rows.filter((row) => !row.errors.length && row.action === "atualizar").length} label="Atualizações" />
+                  <MetricPill value={employeeImportPreview.duplicidades ?? employeeImportPreview.rows.filter((row) => [...row.errors, ...row.warnings].some((message) => /duplic|existente|uso/i.test(message))).length} label="Duplicidades" />
                 </div>
                 {employeeImportPreview.errorRows ? (
                   <label className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-700">
@@ -1904,13 +1934,15 @@ export function RegistrationApprovalsPage() {
                   </label>
                 ) : null}
                 <SimpleTable
-                  columns={["Linha", "Nome", "E-mail", "CPF", "WB/Login", "Role", "LOB", "Usuário", "Validação"]}
+                  columns={["Linha", "Nome", "WB/Login", "E-mail", "Status", "Ação", "CPF", "Role", "LOB", "Usuário", "Validação"]}
                   rows={employeeImportPreview.rows.slice(0, 80).map((row) => [
                     row.rowNumber,
                     row.preview.name || "-",
-                    row.preview.email || "-",
-                    row.preview.cpf || "-",
                     row.preview.wbLogin || "-",
+                    row.preview.email || "-",
+                    <StatusBadge key={`${row.rowNumber}-status`} status={row.status ?? (row.errors.length ? "Erro" : row.warnings.length ? "Alerta" : "Válida")} />,
+                    row.action ?? (row.errors.length ? "ignorar" : "criar"),
+                    row.preview.cpf || "CPF pendente",
                     row.preview.role || "-",
                     row.preview.lob || "-",
                     row.preview.createUser ? (row.preview.passwordProvided ? "Sim" : "Senha ausente") : "Não",
@@ -1926,7 +1958,7 @@ export function RegistrationApprovalsPage() {
                   ])}
                 />
                 <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
-                  Quando `criar_usuario = sim`, a coluna `senha_temporaria` é obrigatória e será salva apenas como hash. O Admin deve comunicar a senha manualmente.
+                  CPF vazio é permitido e aparece como CPF pendente. Quando `criar_usuario = sim`, a coluna `senha_temporaria` é obrigatória e será salva apenas como hash. O Admin deve comunicar a senha manualmente.
                 </div>
                 <div className="flex flex-wrap justify-end gap-3">
                   <button onClick={() => setShowEmployeeImport(false)} className="rounded-lg border border-border px-4 py-3 text-sm font-bold">Cancelar</button>
