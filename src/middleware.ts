@@ -15,6 +15,10 @@ export async function middleware(request: NextRequest) {
   }
 
   const role = String(token.role ?? "COLABORADOR");
+  if (token.mustChangePassword && pathname !== "/alterar-senha") {
+    return NextResponse.redirect(new URL("/alterar-senha", request.url));
+  }
+
   const protectedItem = navItems.find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
 
   if (protectedItem && !protectedItem.roles.includes(role as never)) {

@@ -4,7 +4,9 @@ import { useState } from "react";
 import Link from "next/link";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, LockKeyhole, Mail, Sparkles } from "lucide-react";
+import { ArrowRight, LockKeyhole, Mail, Sparkles, X } from "lucide-react";
+
+import { ChangePasswordCard } from "@/components/change-password-card";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -12,11 +14,14 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showChangePassword, setShowChangePassword] = useState(false);
+  const [success, setSuccess] = useState("");
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setLoading(true);
     setError("");
+    setSuccess("");
     const result = await signIn("credentials", {
       email,
       password,
@@ -104,17 +109,49 @@ export default function LoginPage() {
                 </div>
               </label>
               {error ? <p className="rounded-lg bg-red-50 px-3 py-2 text-sm font-bold text-red-600">{error}</p> : null}
+              {success ? <p className="rounded-lg bg-blue-50 px-3 py-2 text-sm font-bold text-blue-700">{success}</p> : null}
               <button disabled={loading} className="premium-button flex h-12 w-full items-center justify-center gap-2 text-sm font-extrabold disabled:opacity-70">
                 {loading ? "Entrando..." : "Entrar"}
                 <ArrowRight className="h-4 w-4" />
               </button>
             </form>
+            <button
+              type="button"
+              onClick={() => setShowChangePassword(true)}
+              className="mt-3 flex h-10 w-full items-center justify-center text-sm font-extrabold text-blue-700 hover:text-blue-800"
+            >
+              Primeiro acesso ou senha temporária? Alterar senha
+            </button>
             <Link href="/cadastro-colaborador" className="mt-4 flex h-11 w-full items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-sm font-extrabold text-blue-700">
               Criar cadastro
             </Link>
           </div>
         </div>
       </section>
+      {showChangePassword ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="relative w-full max-w-md">
+            <button
+              type="button"
+              onClick={() => setShowChangePassword(false)}
+              className="absolute right-3 top-3 z-10 grid h-9 w-9 place-items-center rounded-lg text-muted hover:bg-slate-100"
+              aria-label="Fechar"
+            >
+              <X className="h-4 w-4" />
+            </button>
+            <ChangePasswordCard
+              initialEmail={email}
+              onCancel={() => setShowChangePassword(false)}
+              onSuccess={(changedEmail) => {
+                setEmail(changedEmail);
+                setPassword("");
+                setSuccess("Senha alterada com sucesso. Entre usando a nova senha.");
+                setShowChangePassword(false);
+              }}
+            />
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

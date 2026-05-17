@@ -301,9 +301,12 @@ async function saveUser(tx: Prisma.TransactionClient, adminId: string, action: S
   if (!id && password.length < 8) return { error: "Senha temporária deve ter pelo menos 8 caracteres." };
   const passwordHash = password ? await bcrypt.hash(password, 10) : undefined;
   const before = id ? await tx.user.findUnique({ where: { id }, include: { role: true, employeeProfile: true } }) : null;
+  const passwordResetData = passwordHash
+    ? { passwordHash, mustChangePassword: true, temporaryPassword: true, lastPasswordResetAt: new Date(), passwordResetById: adminId }
+    : {};
   const user = id
-    ? await tx.user.update({ where: { id }, data: { name, email, roleId: role.id, status: status === "INACTIVE" ? "INACTIVE" : "ACTIVE", ...(passwordHash ? { passwordHash } : {}) } })
-    : await tx.user.create({ data: { name, email, roleId: role.id, passwordHash: passwordHash!, status: "ACTIVE" } });
+    ? await tx.user.update({ where: { id }, data: { name, email, roleId: role.id, status: status === "INACTIVE" ? "INACTIVE" : "ACTIVE", ...passwordResetData } })
+    : await tx.user.create({ data: { name, email, roleId: role.id, passwordHash: passwordHash!, status: "ACTIVE", mustChangePassword: true, temporaryPassword: true, lastPasswordResetAt: new Date(), passwordResetById: adminId } });
   if (employeeId) {
     await tx.employeeProfile.update({ where: { id: employeeId }, data: { userId: user.id } });
   }

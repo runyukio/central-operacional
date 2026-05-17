@@ -55,7 +55,8 @@ export const authOptions: NextAuthOptions = {
                 id: supabaseUser?.id ?? user.id,
                 email: user.email,
                 name: user.name,
-                role: user.role.name
+                role: user.role.name,
+                mustChangePassword: user.mustChangePassword
               } as never;
             }
           }
@@ -98,6 +99,7 @@ export const authOptions: NextAuthOptions = {
     async jwt({ token, user }) {
       if (user) {
         token.role = (user as { role?: string }).role;
+        token.mustChangePassword = Boolean((user as { mustChangePassword?: boolean }).mustChangePassword);
       }
       return token;
     },
@@ -105,6 +107,7 @@ export const authOptions: NextAuthOptions = {
       if (session.user) {
         session.user.id = token.sub ?? "";
         session.user.role = String(token.role ?? "COLABORADOR");
+        session.user.mustChangePassword = Boolean(token.mustChangePassword);
       }
       return session;
     }

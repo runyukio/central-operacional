@@ -236,6 +236,11 @@ model User {
   email                   String                  @unique
   name                    String
   passwordHash            String
+  mustChangePassword      Boolean                 @default(false)
+  passwordChangedAt       DateTime?
+  temporaryPassword       Boolean                 @default(false)
+  lastPasswordResetAt     DateTime?
+  passwordResetById       String?
   avatarUrl               String?
   status                  UserStatus              @default(ACTIVE)
   roleId                  String

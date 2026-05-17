@@ -379,8 +379,33 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
         if (row.createUser) {
           const existingUser = row.email ? await tx.user.findUnique({ where: { email: row.email } }) : null;
           const user = existingUser
-            ? await tx.user.update({ where: { id: existingUser.id }, data: { name: row.name, passwordHash: passwordHash!, roleId: role.id, status: "ACTIVE", deletedAt: null } })
-            : await tx.user.create({ data: { email: row.email, name: row.name, passwordHash: passwordHash!, roleId: role.id, status: "ACTIVE" } });
+            ? await tx.user.update({
+              where: { id: existingUser.id },
+              data: {
+                name: row.name,
+                passwordHash: passwordHash!,
+                roleId: role.id,
+                status: "ACTIVE",
+                mustChangePassword: true,
+                temporaryPassword: true,
+                lastPasswordResetAt: new Date(),
+                passwordResetById: permission.user.id,
+                deletedAt: null
+              }
+            })
+            : await tx.user.create({
+              data: {
+                email: row.email,
+                name: row.name,
+                passwordHash: passwordHash!,
+                roleId: role.id,
+                status: "ACTIVE",
+                mustChangePassword: true,
+                temporaryPassword: true,
+                lastPasswordResetAt: new Date(),
+                passwordResetById: permission.user.id
+              }
+            });
           userId = user.id;
           usuariosCriados += existingUser ? 0 : 1;
         }
@@ -578,6 +603,9 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
             passwordHash: existing.passwordHash!,
             roleId: collaboratorRole.id,
             status: "ACTIVE",
+            mustChangePassword: false,
+            temporaryPassword: false,
+            passwordChangedAt: new Date(),
             deletedAt: null
           }
         })
@@ -587,7 +615,10 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
           name: existing.fullName,
           passwordHash: existing.passwordHash!,
           roleId: collaboratorRole.id,
-          status: "ACTIVE"
+          status: "ACTIVE",
+          mustChangePassword: false,
+          temporaryPassword: false,
+          passwordChangedAt: new Date()
           }
         });
 

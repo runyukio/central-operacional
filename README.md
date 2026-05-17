@@ -596,6 +596,9 @@ Regras atuais:
 - A exportação CSV do Mapa agora sai pelo backend em `/api/employees/export`, respeita filtros aplicados e aplica colunas por perfil: `ADMIN` exporta dados completos disponíveis; `SUPERVISOR` exporta apenas dados operacionais sem dados sensíveis.
 - Importação de colaboradores exige `wb_login` como chave operacional principal; linhas com `wb_login` existente atualizam o colaborador, enquanto CPF/e-mail ativos de outro colaborador continuam bloqueados.
 - Importação de escala não usa mais nome ou e-mail como fallback: cada linha precisa de `wb_login` existente em `EmployeeProfile`; linhas sem vínculo falham no preview com erro por linha/campo.
+- Usuários criados por importação com `senha_temporaria` e senhas resetadas pelo Admin ficam com `mustChangePassword=true` e `temporaryPassword=true`; no próximo login são redirecionados para `/alterar-senha`.
+- A tela de login possui o link `Primeiro acesso ou senha temporária? Alterar senha`, permitindo trocar senha sem e-mail transacional ao informar e-mail, senha atual, nova senha e confirmação.
+- A troca de senha valida senha atual, tamanho mínimo, confirmação e impede reutilizar a senha temporária; após sucesso grava hash, limpa a obrigatoriedade e registra `AuditLog`.
 
 Limitações temporárias:
 

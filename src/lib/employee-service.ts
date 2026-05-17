@@ -423,7 +423,14 @@ export async function resetEmployeeUserPassword(actor: Actor, input: { employeeI
     await prisma.$transaction(async (tx) => {
       await tx.user.update({
         where: { id: employee.userId! },
-        data: { passwordHash, status: "ACTIVE" }
+        data: {
+          passwordHash,
+          status: "ACTIVE",
+          mustChangePassword: true,
+          temporaryPassword: true,
+          lastPasswordResetAt: new Date(),
+          passwordResetById: admin.id
+        }
       });
       await tx.auditLog.create({
         data: {
@@ -431,14 +438,14 @@ export async function resetEmployeeUserPassword(actor: Actor, input: { employeeI
           action: "EDICAO",
           entity: "User",
           entityId: employee.userId,
-          reason: `Senha redefinida manualmente para ${employee.fullName}`,
-          previousValue: { passwordHash: "protected" },
-          newValue: { passwordHash: "updated" }
+          reason: `Senha temporária redefinida manualmente para ${employee.fullName}`,
+          previousValue: { passwordHash: "protected", mustChangePassword: employee.user?.mustChangePassword, temporaryPassword: employee.user?.temporaryPassword },
+          newValue: { passwordHash: "updated", mustChangePassword: true, temporaryPassword: true }
         }
       });
     });
 
-    return { success: true, message: "Senha redefinida com sucesso." };
+    return { success: true, message: "Senha temporária definida. O usuário deverá alterá-la no próximo acesso." };
   } catch (error) {
     console.error("[employee] erro ao resetar senha", error);
     recordErrorLog({
