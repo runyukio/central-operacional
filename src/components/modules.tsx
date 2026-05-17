@@ -425,6 +425,14 @@ type EmployeeClient = (typeof employees)[number] & {
   lastPresence?: string;
 };
 
+type EmployeeListResponse = {
+  data: EmployeeClient[];
+  total?: number;
+  page?: number;
+  limit?: number;
+  totalPages?: number;
+};
+
 type ShiftReportItem = {
   id: string;
   reportDate: string;
@@ -3789,6 +3797,11 @@ export function EmployeeMapPage() {
   const [employeeLoading, setEmployeeLoading] = useState(true);
   const [selectedEmployeeLoading, setSelectedEmployeeLoading] = useState(false);
   const [lobFilter, setLobFilter] = useState("Todos");
+  const [statusFilter, setStatusFilter] = useState("Todos");
+  const [supervisorFilter, setSupervisorFilter] = useState("Todos");
+  const [shiftFilter, setShiftFilter] = useState("Todos");
+  const [employeePage, setEmployeePage] = useState(1);
+  const [employeePagination, setEmployeePagination] = useState({ total: 0, page: 1, limit: 50, totalPages: 1 });
   const [editingEmployee, setEditingEmployee] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
   const [socialNameDraft, setSocialNameDraft] = useState("");
@@ -3817,11 +3830,10 @@ export function EmployeeMapPage() {
   const [showResetPassword, setShowResetPassword] = useState(false);
   const [resetPasswordForm, setResetPasswordForm] = useState({ password: "", confirmPassword: "" });
   const [resettingPassword, setResettingPassword] = useState(false);
-  const employeeMapLobs = ["Todos", ...(employeeSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? Array.from(new Set(employeeRows.map((employee) => employee.lob).filter(Boolean))))];
-  const filtered = employeeRows.filter((employee) =>
-    [employee.name, employee.wb, employee.email].join(" ").toLowerCase().includes(query.toLowerCase()) &&
-    (lobFilter === "Todos" || employee.lob === lobFilter)
-  );
+  const employeeMapLobs = ["Todos", ...Array.from(new Set(employeeSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? employeeRows.map((employee) => employee.lob).filter(Boolean)))];
+  const employeeStatusOptions = ["Todos", "Ativos/Aprovados", "Pendentes", "Inativos", "Online", "Em Atendimento", "Offline"];
+  const employeeSupervisorOptions = employeeSettings?.supervisors?.filter((supervisor) => supervisor.status !== "INACTIVE") ?? [];
+  const hasEmployeeFilters = Boolean(query.trim()) || lobFilter !== "Todos" || statusFilter !== "Todos" || supervisorFilter !== "Todos" || shiftFilter !== "Todos";
   const isAdmin = session?.user?.role === "ADMIN";
   const isSupervisorUser = session?.user?.role === "SUPERVISOR";
   const normalizedEmployeeMapRole = String(session?.user?.role ?? "").toUpperCase();
@@ -3844,17 +3856,39 @@ export function EmployeeMapPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function loadEmployees(nextQuery = query, nextLob = lobFilter) {
+  async function loadEmployees(options?: { nextQuery?: string; nextLob?: string; nextStatus?: string; nextSupervisor?: string; nextShift?: string; nextPage?: number }) {
     setEmployeeLoading(true);
-    const params = new URLSearchParams({ summary: "true", limit: "100" });
+    const nextQuery = options?.nextQuery ?? query;
+    const nextLob = options?.nextLob ?? lobFilter;
+    const nextStatus = options?.nextStatus ?? statusFilter;
+    const nextSupervisor = options?.nextSupervisor ?? supervisorFilter;
+    const nextShift = options?.nextShift ?? shiftFilter;
+    const nextPage = options?.nextPage ?? employeePage;
+    const params = new URLSearchParams({ summary: "true", limit: "50", page: String(nextPage) });
     if (nextQuery.trim()) params.set("search", nextQuery.trim());
     if (nextLob !== "Todos") params.set("lob", nextLob);
+    if (nextStatus !== "Todos") params.set("status", nextStatus);
+    if (nextSupervisor !== "Todos") params.set("supervisorId", nextSupervisor);
+    if (nextShift !== "Todos") params.set("shiftId", nextShift);
     try {
-      const employeePayload = await apiJson<{ data: EmployeeClient[] }>(`/api/employees?${params.toString()}`);
+      const employeePayload = await apiJson<EmployeeListResponse>(`/api/employees?${params.toString()}`);
+      if (!employeePayload.data?.length && Number(employeePayload.total ?? 0) > 0 && nextPage > 1) {
+        setEmployeePage(1);
+        await loadEmployees({ nextQuery, nextLob, nextStatus, nextSupervisor, nextShift, nextPage: 1 });
+        return;
+      }
       setEmployeeRows(employeePayload.data);
+      setEmployeePagination({
+        total: employeePayload.total ?? employeePayload.data.length,
+        page: employeePayload.page ?? nextPage,
+        limit: employeePayload.limit ?? 50,
+        totalPages: employeePayload.totalPages ?? Math.max(1, Math.ceil((employeePayload.total ?? employeePayload.data.length) / 50))
+      });
+      setEmployeePage(employeePayload.page ?? nextPage);
       setSelected(null);
     } catch {
       setEmployeeRows([]);
+      setEmployeePagination({ total: 0, page: 1, limit: 50, totalPages: 1 });
     } finally {
       setEmployeeLoading(false);
     }
@@ -3956,6 +3990,9 @@ export function EmployeeMapPage() {
     const params = new URLSearchParams();
     if (query.trim()) params.set("q", query.trim());
     if (lobFilter !== "Todos") params.set("lob", lobFilter);
+    if (statusFilter !== "Todos") params.set("status", statusFilter);
+    if (supervisorFilter !== "Todos") params.set("supervisorId", supervisorFilter);
+    if (shiftFilter !== "Todos") params.set("shiftId", shiftFilter);
     window.location.href = `/api/employees/export${params.toString() ? `?${params.toString()}` : ""}`;
   }
 
@@ -3980,50 +4017,74 @@ export function EmployeeMapPage() {
 
   return (
     <div>
-      <PageHeader title="Mapa de Funcionários" description="Monitore presença, status e dados operacionais da sua equipe" icon={UsersRound} actions={<button onClick={exportEmployeesCsv} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950">Exportar CSV</button>} />
+      <PageHeader title="Mapa de Funcionários" description="Monitore presença, status e dados operacionais da sua equipe" icon={UsersRound} actions={<button onClick={exportEmployeesCsv} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Exportar CSV</button>} />
       {employeeMessage ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{employeeMessage}</div> : null}
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="space-y-5">
-          <div className="card flex flex-col gap-3 p-4 md:flex-row md:items-center">
-            <label className="text-sm font-bold text-navy-950">Pesquisar por</label>
-            <select className="h-11 rounded-lg border border-border px-3 font-bold">
-              <option>WB/Login</option>
-              <option>Nome</option>
-            </select>
-            <select value={lobFilter} onChange={(event) => setLobFilter(event.target.value)} className="h-11 rounded-lg border border-border px-3 font-bold">
+          <div className="card grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-6">
+            <input value={query} onChange={(event) => setQuery(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm outline-none xl:col-span-2" placeholder="Nome, e-mail ou WB/Login" />
+            <select value={lobFilter} onChange={(event) => setLobFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
               {employeeMapLobs.map((lob) => <option key={lob} value={lob}>{lob === "Todos" ? "Todas as LOBs" : lob}</option>)}
             </select>
-            <input value={query} onChange={(event) => setQuery(event.target.value)} className="h-11 flex-1 rounded-lg border border-border px-3 outline-none" placeholder="Digite o WB/Login ou nome" />
-            <button onClick={() => loadEmployees()} className="h-11 rounded-lg bg-blue-600 px-6 text-sm font-bold text-white">Buscar</button>
-            <button onClick={() => { setQuery(""); setLobFilter("Todos"); void loadEmployees("", "Todos"); }} className="h-11 rounded-lg border border-border px-6 text-sm font-bold">Limpar</button>
+            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
+              {employeeStatusOptions.map((status) => <option key={status} value={status}>{status === "Todos" ? "Todos os status" : status}</option>)}
+            </select>
+            <select value={supervisorFilter} onChange={(event) => setSupervisorFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
+              <option value="Todos">Todos os supervisores</option>
+              {employeeSupervisorOptions.map((supervisor) => <option key={supervisor.id} value={supervisor.id}>{supervisor.name}</option>)}
+            </select>
+            <select value={shiftFilter} onChange={(event) => setShiftFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
+              <option value="Todos">Todos os turnos</option>
+              {employeeShiftOptions.map((shift) => <option key={shift.id} value={shift.id}>{shift.name}</option>)}
+            </select>
+            <div className="flex gap-2 md:col-span-2 xl:col-span-6 xl:justify-end">
+              <button onClick={() => { setEmployeePage(1); void loadEmployees({ nextPage: 1 }); }} className="h-10 rounded-lg bg-blue-600 px-5 text-sm font-bold text-white">Buscar</button>
+              <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setShiftFilter("Todos"); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextShift: "Todos", nextPage: 1 }); }} className="h-10 rounded-lg border border-border px-5 text-sm font-bold">Limpar filtros</button>
+            </div>
           </div>
-          <div className="grid gap-4 md:grid-cols-4">
-            <MetricPill value={employeeRows.length} label="Total de Funcionários" />
-            <MetricPill value={employeeRows.filter((employee) => employee.status === "Online").length} label="Online" />
-            <MetricPill value={employeeRows.filter((employee) => employee.status === "Em Atendimento").length} label="Em Atendimento" />
-            <MetricPill value={employeeRows.filter((employee) => employee.status === "Offline").length} label="Offline" />
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <MetricPill value={employeePagination.total} label="Total encontrado" />
+            <MetricPill value={employeeRows.filter((employee) => employee.status === "Online").length} label="Online na página" />
+            <MetricPill value={employeeRows.filter((employee) => employee.status === "Em Atendimento").length} label="Em atendimento na página" />
+            <MetricPill value={employeeRows.filter((employee) => employee.status === "Offline").length} label="Offline na página" />
           </div>
           <Panel title="Funcionários">
             {employeeLoading ? (
               <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm font-bold text-blue-700">Carregando resumo dos colaboradores...</div>
-            ) : filtered.length ? (
-              <SimpleTable
-                columns={["Nome", "E-mail", "WB/Login", "Cargo/Função", "Role", "LOB", "Supervisor", "Turno", "Status", "Ação"]}
-                rows={filtered.slice(0, 10).map((employee) => [
-                  <button key={employee.id} onClick={() => selectEmployee(employee)} className="font-bold text-blue-700">{employee.name}</button>,
-                  employee.email ?? "-",
-                  employee.wb,
-                  employee.role,
-                  employee.systemRole ?? "-",
-                  employee.lob,
-                  employee.supervisor,
-                  employee.shift,
-                  <StatusBadge key={`${employee.id}-status`} status={employee.status} />,
-                  <button key={`${employee.id}-action`} onClick={() => selectEmployee(employee)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">Ver detalhes</button>
-                ])}
-              />
+            ) : employeeRows.length ? (
+              <>
+                <SimpleTable
+                  columns={["Nome", "E-mail", "WB/Login", "Cargo/Função", "Role", "LOB", "Supervisor", "Turno", "Status", "Ação"]}
+                  rows={employeeRows.map((employee) => [
+                    <button key={employee.id} onClick={() => selectEmployee(employee)} className="max-w-[180px] truncate font-bold text-blue-700" title={employee.name}>{employee.name}</button>,
+                    <span key={`${employee.id}-email`} className="block max-w-[190px] truncate" title={employee.email ?? "-"}>{employee.email ?? "-"}</span>,
+                    employee.wb,
+                    <span key={`${employee.id}-role`} className="block max-w-[160px] truncate" title={employee.role}>{employee.role}</span>,
+                    employee.systemRole ?? "-",
+                    employee.lob,
+                    <span key={`${employee.id}-supervisor`} className="block max-w-[160px] truncate" title={employee.supervisor}>{employee.supervisor}</span>,
+                    employee.shift,
+                    <StatusBadge key={`${employee.id}-status`} status={employee.status} />,
+                    <button key={`${employee.id}-action`} onClick={() => selectEmployee(employee)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">Ver detalhes</button>
+                  ])}
+                />
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm text-muted">
+                  <span>Página {employeePagination.page} de {employeePagination.totalPages} • {employeePagination.total} registro(s)</span>
+                  <div className="flex gap-2">
+                    <button disabled={employeePagination.page <= 1 || employeeLoading} onClick={() => loadEmployees({ nextPage: employeePagination.page - 1 })} className="rounded-lg border border-border px-3 py-2 text-xs font-bold text-navy-950 disabled:opacity-45">Anterior</button>
+                    <button disabled={employeePagination.page >= employeePagination.totalPages || employeeLoading} onClick={() => loadEmployees({ nextPage: employeePagination.page + 1 })} className="rounded-lg border border-border px-3 py-2 text-xs font-bold text-navy-950 disabled:opacity-45">Próxima</button>
+                  </div>
+                </div>
+              </>
             ) : (
-              <EmptyState title="Nenhum colaborador cadastrado" description="Aprove cadastros ou importe colaboradores para iniciar a base." />
+              <div>
+                <EmptyState title={hasEmployeeFilters ? "Nenhum colaborador encontrado para os filtros selecionados" : "Nenhum colaborador encontrado"} description={hasEmployeeFilters ? "Limpe os filtros para voltar a listar a base real disponível para seu perfil." : "Aprove cadastros ou importe colaboradores para iniciar a base."} />
+                {hasEmployeeFilters ? (
+                  <div className="mt-3 text-center">
+                    <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setShiftFilter("Todos"); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextShift: "Todos", nextPage: 1 }); }} className="rounded-lg border border-border px-4 py-2 text-sm font-bold text-navy-950">Limpar filtros</button>
+                  </div>
+                ) : null}
+              </div>
             )}
           </Panel>
         </div>

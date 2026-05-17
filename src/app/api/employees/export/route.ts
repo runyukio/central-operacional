@@ -9,7 +9,10 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const result = await exportOperationalEmployeesCsv(actor, {
     query: searchParams.get("q"),
-    lob: searchParams.get("lob")
+    lob: searchParams.get("lob"),
+    status: searchParams.get("status"),
+    supervisorId: searchParams.get("supervisorId"),
+    shiftId: searchParams.get("shiftId")
   });
 
   if ("error" in result) return errorResponse(result, errorStatus(result));

@@ -36,20 +36,21 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const page = Number(url.searchParams.get("page")) || 1;
   const limit = Number(url.searchParams.get("limit")) || 100;
-  return NextResponse.json({
-    data: await listOperationalEmployees(actor, {
-      summary: url.searchParams.get("summary") !== "false",
-      page,
-      limit,
-      search: url.searchParams.get("search") ?? undefined,
-      lob: url.searchParams.get("lob") ?? undefined,
-      lobId: url.searchParams.get("lobId") ?? undefined,
-      supervisorId: url.searchParams.get("supervisorId") ?? undefined,
-      status: url.searchParams.get("status") ?? undefined
-    }),
+  const result = await listOperationalEmployees(actor, {
+    summary: url.searchParams.get("summary") !== "false",
     page,
-    limit
+    limit,
+    search: url.searchParams.get("search") ?? undefined,
+    lob: url.searchParams.get("lob") ?? undefined,
+    lobId: url.searchParams.get("lobId") ?? undefined,
+    supervisorId: url.searchParams.get("supervisorId") ?? undefined,
+    teamId: url.searchParams.get("teamId") ?? undefined,
+    shiftId: url.searchParams.get("shiftId") ?? undefined,
+    status: url.searchParams.get("status") ?? undefined,
+    role: url.searchParams.get("role") ?? undefined
   });
+  if (Array.isArray(result)) return NextResponse.json({ data: result, total: result.length, page, limit, totalPages: 1 });
+  return NextResponse.json(result);
 }
 
 export async function PATCH(request: Request) {

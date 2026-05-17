@@ -28,16 +28,16 @@ export function PageHeader({
   actions?: React.ReactNode;
 }) {
   return (
-    <div className="mb-6 flex flex-col gap-4 border-b border-border/70 pb-5 xl:flex-row xl:items-center xl:justify-between">
-      <div className="flex min-w-0 items-center gap-4">
+    <div className="mb-5 flex flex-col gap-3 border-b border-border/70 pb-4 xl:flex-row xl:items-center xl:justify-between">
+      <div className="flex min-w-0 items-center gap-3">
         {Icon ? (
-          <div className="grid h-11 w-11 place-items-center rounded-xl border border-blue-100 bg-gradient-to-br from-blue-50 to-white text-blue-600 shadow-soft">
-            <Icon className="h-6 w-6" />
+          <div className="grid h-10 w-10 place-items-center rounded-xl border border-blue-100 bg-gradient-to-br from-blue-50 to-white text-blue-600 shadow-soft">
+            <Icon className="h-5 w-5" />
           </div>
         ) : null}
-        <div>
-          <h1 className="text-[26px] font-extrabold leading-tight tracking-tight text-navy-950 md:text-[30px]">{title}</h1>
-          <p className="mt-1.5 text-[14px] font-medium text-muted">{description}</p>
+        <div className="min-w-0">
+          <h1 className="truncate text-[22px] font-extrabold leading-tight tracking-tight text-navy-950 md:text-[24px]">{title}</h1>
+          <p className="mt-1 text-[13px] font-medium text-muted">{description}</p>
         </div>
       </div>
       {actions ? <div>{actions}</div> : null}
@@ -73,18 +73,18 @@ export function StatCard({
   }[tone];
 
   return (
-    <div className="card group relative flex min-h-[122px] items-center gap-4 overflow-hidden p-5">
+    <div className="card group relative flex min-h-[104px] items-center gap-3 overflow-hidden p-4">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-blue-200 to-transparent opacity-70" />
-      <div className={cn("grid h-[58px] w-[58px] shrink-0 place-items-center rounded-xl shadow-soft ring-1 ring-white", toneClass)}>
-        <Icon className="h-7 w-7" />
+      <div className={cn("grid h-12 w-12 shrink-0 place-items-center rounded-xl shadow-soft ring-1 ring-white", toneClass)}>
+        <Icon className="h-6 w-6" />
       </div>
       <div className="min-w-0 flex-1">
-        <p className="text-[13px] font-extrabold leading-snug text-navy-950">{title}</p>
-        <div className="mt-2 flex items-end gap-3">
-          <p className="text-[27px] font-black leading-none tracking-tight text-navy-950">{value}</p>
+        <p className="text-[12px] font-extrabold leading-snug text-navy-950">{title}</p>
+        <div className="mt-1.5 flex items-end gap-2">
+          <p className="text-[23px] font-black leading-none tracking-tight text-navy-950">{value}</p>
           {sparkline}
         </div>
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+        <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
           {change ? (
             <span className={cn("font-bold", change.startsWith("-") || change.includes("↓") ? "text-red-500" : "text-emerald-600")}>
               {change}
@@ -111,7 +111,7 @@ export function StatusBadge({ status }: { status: string }) {
             : "bg-slate-100 text-slate-600";
 
   return (
-    <span className={cn("inline-flex items-center gap-1.5 rounded-md border border-current/10 px-2.5 py-1 text-[11px] font-extrabold leading-none", styles)}>
+    <span className={cn("inline-flex items-center gap-1.5 rounded-md border border-current/10 px-2 py-1 text-[11px] font-extrabold leading-none", styles)}>
       <span className="h-1.5 w-1.5 rounded-full bg-current opacity-75" />
       {status}
     </span>
@@ -139,13 +139,13 @@ export function FilterBar({
   primaryAction?: string;
 }) {
   return (
-    <div className="card mb-5 flex flex-col gap-3 p-4 lg:flex-row lg:items-end lg:p-5">
+    <div className="card mb-5 flex flex-col gap-3 p-3 lg:flex-row lg:items-end lg:p-4">
       <div className="grid flex-1 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
         {filters.map((filter) => (
           <label key={filter} className="block">
             <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">{filter}</span>
             <div className="relative">
-            <select className="premium-control h-11 w-full appearance-none px-3 pr-9 text-sm font-bold outline-none">
+            <select className="premium-control h-10 w-full appearance-none px-3 pr-9 text-sm font-bold outline-none">
               <option>Todos</option>
               <option>CEC</option>
               <option>TNS</option>
@@ -156,8 +156,8 @@ export function FilterBar({
           </label>
         ))}
       </div>
-      {action ? <button className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950">{action}</button> : null}
-      {primaryAction ? <button className="premium-button h-11 px-4 text-sm font-extrabold">{primaryAction}</button> : null}
+      {action ? <button className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">{action}</button> : null}
+      {primaryAction ? <button className="premium-button h-10 px-4 text-sm font-extrabold">{primaryAction}</button> : null}
     </div>
   );
 }
@@ -165,8 +165,8 @@ export function FilterBar({
 export function Panel({ title, children, action }: { title: string; children: React.ReactNode; action?: string }) {
   return (
     <section className="card overflow-hidden">
-      <div className="flex items-center justify-between border-b border-border/75 bg-gradient-to-b from-white to-slate-50/65 px-5 py-4">
-        <h2 className="text-[15px] font-black tracking-tight text-navy-950">{title}</h2>
+      <div className="flex items-center justify-between border-b border-border/75 bg-gradient-to-b from-white to-slate-50/65 px-4 py-3">
+        <h2 className="text-[14px] font-black tracking-tight text-navy-950">{title}</h2>
         {action ? (
           <button className="flex items-center gap-1 text-sm font-extrabold text-blue-600">
             {action}
@@ -174,7 +174,7 @@ export function Panel({ title, children, action }: { title: string; children: Re
           </button>
         ) : null}
       </div>
-      <div className="p-5">{children}</div>
+      <div className="p-4">{children}</div>
     </section>
   );
 }
@@ -217,26 +217,26 @@ export function SimpleTable({
 }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-border bg-white">
-      <table className="w-full min-w-[720px] border-collapse text-left text-sm">
+      <table className="w-full min-w-[720px] border-collapse text-left text-[13px]">
         <thead>
           <tr className="border-b border-border bg-gradient-to-b from-slate-50 to-white text-[11px] font-black uppercase tracking-wide text-muted">
             {columns.map((column) => (
-              <th key={column} className="px-4 py-3.5">
+              <th key={column} className="px-3 py-2.5">
                 {column}
               </th>
             ))}
-            <th className="w-10 px-4 py-3" />
+            <th className="w-10 px-3 py-2.5" />
           </tr>
         </thead>
         <tbody className="divide-y divide-border/70 bg-white">
           {rows.map((row, rowIndex) => (
             <tr key={rowIndex} className="transition-colors hover:bg-blue-50/35">
               {row.map((cell, cellIndex) => (
-                <td key={cellIndex} className="px-4 py-3.5 align-middle font-medium text-navy-950">
+                <td key={cellIndex} className="px-3 py-2.5 align-middle font-medium text-navy-950">
                   {cell}
                 </td>
               ))}
-              <td className="px-4 py-3 text-right text-muted">
+              <td className="px-3 py-2.5 text-right text-muted">
                 <MoreVertical className="h-4 w-4" />
               </td>
             </tr>
@@ -295,8 +295,8 @@ export function DonutLegend({ total, items }: { total: string | number; items: A
 
 export function MetricPill({ value, label }: { value: number | string; label: string }) {
   return (
-    <div className="rounded-lg border border-border bg-gradient-to-b from-white to-slate-50/70 p-4 text-center shadow-soft">
-      <p className="text-2xl font-black tracking-tight text-navy-950">{typeof value === "number" ? formatNumber(value) : value}</p>
+    <div className="rounded-lg border border-border bg-gradient-to-b from-white to-slate-50/70 p-3 text-center shadow-soft">
+      <p className="text-xl font-black tracking-tight text-navy-950">{typeof value === "number" ? formatNumber(value) : value}</p>
       <p className="mt-1 text-[11px] font-extrabold uppercase tracking-wide text-muted">{label}</p>
     </div>
   );
@@ -304,10 +304,10 @@ export function MetricPill({ value, label }: { value: number | string; label: st
 
 export function EmptyState({ title, description }: { title: string; description: string }) {
   return (
-    <div className="grid min-h-[220px] place-items-center rounded-xl border border-dashed border-border bg-gradient-to-b from-white to-slate-50 text-center">
+    <div className="grid min-h-[180px] place-items-center rounded-xl border border-dashed border-border bg-gradient-to-b from-white to-slate-50 p-4 text-center">
       <div>
-        <div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-blue-50">
-          <Circle className="h-9 w-9 text-blue-300" />
+        <div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-blue-50">
+          <Circle className="h-8 w-8 text-blue-300" />
         </div>
         <h3 className="mt-3 text-base font-bold text-navy-950">{title}</h3>
         <p className="mt-1 text-sm text-muted">{description}</p>

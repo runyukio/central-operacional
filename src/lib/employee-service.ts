@@ -52,7 +52,10 @@ export type EmployeeListQuery = {
   lob?: string;
   lobId?: string;
   supervisorId?: string;
+  teamId?: string;
+  shiftId?: string;
   status?: string;
+  role?: string;
 };
 
 export async function listOperationalEmployees(actor: Actor, query: EmployeeListQuery = {}) {
@@ -110,15 +113,19 @@ export async function listOperationalEmployees(actor: Actor, query: EmployeeList
 }
 
 async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeListQuery) {
+  const page = Math.max(1, Number(query.page) || 1);
+  const limit = Math.min(100, Math.max(10, Number(query.limit) || 50));
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
-    if (!user) return allowDemoDataFallback ? listMockEmployees(actor) : [];
+    if (!user) {
+      const fallback = allowDemoDataFallback ? listMockEmployees(actor) : [];
+      return paginatedEmployees(fallback, fallback.length, page, limit);
+    }
 
     const role = normalizeRole(actor.role);
-    if (!canAccessEmployeeMap({ role: actor.role, status: user.status })) return [];
-    const page = Math.max(1, Number(query.page) || 1);
-    const limit = Math.min(100, Math.max(10, Number(query.limit) || 50));
+    if (!canAccessEmployeeMap({ role: actor.role, status: user.status })) return paginatedEmployees([], 0, page, limit);
     const search = clean(query.search)?.trim();
+    const statusWhere = buildEmployeeStatusWhere(query.status);
 
     let employeeWhere: Prisma.EmployeeProfileWhereInput =
       role === "COLABORADOR" && user.employeeProfile
@@ -134,44 +141,48 @@ async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeList
                 ]
               }
             : {}),
-          ...(query.lob && query.lob !== "Todos" ? { lob: { name: query.lob } } : {}),
+          ...(query.lob && query.lob !== "Todos" ? { lob: { name: { equals: query.lob, mode: "insensitive" } } } : {}),
           ...(query.lobId ? { lobId: query.lobId } : {}),
           ...(query.supervisorId ? { supervisorId: query.supervisorId } : {}),
-          ...(query.status && query.status !== "Todos" ? { operationalStatus: query.status } : {})
+          ...(query.teamId ? { teamId: query.teamId } : {}),
+          ...(query.shiftId ? { shiftId: query.shiftId } : {}),
+          ...(query.role ? { user: { role: { name: query.role } } } : {}),
+          ...statusWhere
         };
     if (role === "SUPERVISOR" && user.employeeProfile) {
       const supervisedCount = await prisma.employeeProfile.count({ where: { supervisorId: user.employeeProfile.id, deletedAt: null } });
       employeeWhere = supervisedCount ? { ...employeeWhere, supervisorId: user.employeeProfile.id } : employeeWhere;
     }
 
+    const total = await prisma.employeeProfile.count({ where: employeeWhere });
+    const effectivePage = total > 0 && (page - 1) * limit >= total ? 1 : page;
     const employees = await prisma.employeeProfile.findMany({
       where: employeeWhere,
-      select: {
-        id: true,
-        userId: true,
-        wbLogin: true,
-        fullName: true,
-        roleTitle: true,
-        admissionDate: true,
-        scheduleType: true,
-        operationalStatus: true,
-        lobId: true,
-        teamId: true,
-        supervisorId: true,
-        shiftId: true,
-        user: { select: { email: true, status: true, role: { select: { name: true } } } },
-        lob: { select: { name: true } },
-        team: { select: { name: true } },
-        supervisor: { select: { fullName: true } },
-        shift: { select: { name: true } },
-        _count: { select: { equipments: true, schedules: true } }
-      },
+      select: employeeSummarySelect,
       orderBy: { fullName: "asc" },
-      skip: (page - 1) * limit,
+      skip: (effectivePage - 1) * limit,
       take: limit
     });
 
-    return employees.map((employee) => mapEmployeeSummary(employee, role));
+    if (process.env.NODE_ENV !== "production") {
+      console.info("[employees:summary]", {
+        role,
+        page: effectivePage,
+        limit,
+        total,
+        returned: employees.length,
+        filters: {
+          search: Boolean(search),
+          lob: query.lob ?? query.lobId ?? "Todos",
+          supervisorId: query.supervisorId ?? "Todos",
+          teamId: query.teamId ?? "Todos",
+          shiftId: query.shiftId ?? "Todos",
+          status: query.status ?? "Todos"
+        }
+      });
+    }
+
+    return paginatedEmployees(employees.map((employee) => mapEmployeeSummary(employee, role)), total, effectivePage, limit);
   } catch (error) {
     recordErrorLog({
       userEmail: actor.email,
@@ -181,7 +192,8 @@ async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeList
       action: "EMPLOYEE_SUMMARY_LIST",
       severity: "ERROR"
     });
-    return allowDemoDataFallback ? listMockEmployees(actor) : [];
+    const fallback = allowDemoDataFallback ? listMockEmployees(actor) : [];
+    return paginatedEmployees(fallback, fallback.length, page, limit);
   }
 }
 
@@ -272,6 +284,27 @@ type EmployeeSummaryRow = {
   shift: { name: string };
   _count: { equipments: number; schedules: number };
 };
+
+const employeeSummarySelect = {
+  id: true,
+  userId: true,
+  wbLogin: true,
+  fullName: true,
+  roleTitle: true,
+  admissionDate: true,
+  scheduleType: true,
+  operationalStatus: true,
+  lobId: true,
+  teamId: true,
+  supervisorId: true,
+  shiftId: true,
+  user: { select: { email: true, status: true, role: { select: { name: true } } } },
+  lob: { select: { name: true } },
+  team: { select: { name: true } },
+  supervisor: { select: { fullName: true } },
+  shift: { select: { name: true } },
+  _count: { select: { equipments: true, schedules: true } }
+} satisfies Prisma.EmployeeProfileSelect;
 
 async function listOperationalEmployeesLegacy(actor: Actor) {
   const [actorUser] = await prisma.$queryRaw<LegacyActorRow[]>`
@@ -507,19 +540,27 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
   }
 }
 
-export async function exportOperationalEmployeesCsv(actor: Actor, filters: { query?: string | null; lob?: string | null }) {
+export async function exportOperationalEmployeesCsv(actor: Actor, filters: { query?: string | null; lob?: string | null; status?: string | null; supervisorId?: string | null; shiftId?: string | null }) {
   const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
   if (!user) return createPermissionError("Usuário não autenticado.");
   if (!canAccessEmployeeMap({ role: actor.role, status: user.status })) return createPermissionError("Você não tem permissão para exportar o Mapa de Funcionários.");
 
   const role = normalizeRole(actor.role);
-  const rows = await listOperationalEmployees(actor);
+  const rowsResult = await listOperationalEmployees(actor);
+  const rows = Array.isArray(rowsResult) ? rowsResult : rowsResult.data;
   const query = clean(filters.query)?.toLowerCase() ?? "";
   const lob = clean(filters.lob);
+  const status = clean(filters.status);
+  const supervisorId = clean(filters.supervisorId);
+  const shiftId = clean(filters.shiftId);
   const filteredRows = rows.filter((employee) => {
+    const row = employee as Record<string, any>;
     const matchesQuery = !query || [employee.name, employee.wb, employee.email].join(" ").toLowerCase().includes(query);
     const matchesLob = !lob || lob === "Todos" || employee.lob === lob;
-    return matchesQuery && matchesLob;
+    const matchesStatus = !status || status === "Todos" || matchesEmployeeStatusFilter(employee.status, row.userStatus, status);
+    const matchesSupervisor = !supervisorId || row.supervisorId === supervisorId;
+    const matchesShift = !shiftId || row.shiftId === shiftId;
+    return matchesQuery && matchesLob && matchesStatus && matchesSupervisor && matchesShift;
   });
 
   const columns = employeeExportColumns(role);
@@ -839,6 +880,116 @@ function col(header: string, value: (employee: Record<string, any>) => unknown) 
 
 function csvEscape(value: unknown) {
   return `"${String(value ?? "").replace(/"/g, '""')}"`;
+}
+
+function paginatedEmployees<T>(data: T[], total: number, page: number, limit: number) {
+  return {
+    data,
+    total,
+    page,
+    limit,
+    totalPages: Math.max(1, Math.ceil(total / limit))
+  };
+}
+
+const activeEmployeeStatusTokens = new Set([
+  "ACTIVE",
+  "ATIVO",
+  "ATIVA",
+  "APPROVED",
+  "APROVADO",
+  "APROVADA",
+  "ONLINE",
+  "EM_ATENDIMENTO",
+  "EM ATENDIMENTO",
+  "EM_TREINAMENTO",
+  "EM TREINAMENTO"
+]);
+
+const pendingEmployeeStatusTokens = new Set([
+  "PENDING",
+  "PENDENTE",
+  "PENDING_REGISTRATION",
+  "PENDENTE_CADASTRO",
+  "PENDENTE CADASTRO",
+  "PENDENTE_DE_CADASTRO",
+  "PENDENTE DE CADASTRO",
+  "PENDENTE_APROVACAO",
+  "PENDENTE APROVACAO",
+  "PENDENTE_APROVAÇÃO",
+  "PENDENTE APROVAÇÃO"
+]);
+
+const inactiveEmployeeStatusTokens = new Set([
+  "INACTIVE",
+  "INATIVO",
+  "INATIVA",
+  "OFFLINE",
+  "DESLIGADO",
+  "DESLIGADA",
+  "CANCELLED",
+  "CANCELADO",
+  "CANCELADA",
+  "SUSPENSO",
+  "SUSPENSA"
+]);
+
+function buildEmployeeStatusWhere(status: unknown): Prisma.EmployeeProfileWhereInput {
+  const raw = clean(status);
+  if (!raw || isAllFilter(raw)) return {};
+  const token = normalizeStatusToken(raw);
+  if (["ATIVOS_APROVADOS", "ATIVOS", "ATIVO", "ACTIVE", "APROVADOS", "APROVADO", "APPROVED"].includes(token)) {
+    return {
+      OR: [
+        { operationalStatus: { in: ["ACTIVE", "ATIVO", "Ativo", "APPROVED", "APROVADO", "Aprovado", "Online", "Em Atendimento", "Em treinamento", "EM_TREINAMENTO"] } },
+        { user: { status: "ACTIVE" } }
+      ]
+    };
+  }
+  if (token === "PENDENTES" || pendingEmployeeStatusTokens.has(token)) {
+    return {
+      operationalStatus: {
+        in: ["PENDING", "PENDENTE", "Pendente", "Pendente de cadastro", "PENDENTE_CADASTRO", "PENDENTE_APROVACAO", "PENDENTE_APROVAÇÃO"]
+      }
+    };
+  }
+  if (token === "INATIVOS" || inactiveEmployeeStatusTokens.has(token)) {
+    return {
+      OR: [
+        { operationalStatus: { in: ["INACTIVE", "INATIVO", "Inativo", "Offline", "DESLIGADO", "Desligado", "SUSPENSO", "Suspenso"] } },
+        { user: { status: { in: ["INACTIVE", "BLOCKED"] } } }
+      ]
+    };
+  }
+  return { operationalStatus: { contains: raw, mode: "insensitive" } };
+}
+
+function matchesEmployeeStatusFilter(status: unknown, userStatus: unknown, filter: unknown) {
+  const rawFilter = clean(filter);
+  if (!rawFilter || isAllFilter(rawFilter)) return true;
+  const token = normalizeStatusToken(rawFilter);
+  const employeeToken = normalizeStatusToken(status);
+  const userToken = normalizeStatusToken(userStatus);
+  if (["ATIVOS_APROVADOS", "ATIVOS", "ATIVO", "ACTIVE", "APROVADOS", "APROVADO", "APPROVED"].includes(token)) {
+    return activeEmployeeStatusTokens.has(employeeToken) || userToken === "ACTIVE";
+  }
+  if (token === "PENDENTES" || pendingEmployeeStatusTokens.has(token)) return pendingEmployeeStatusTokens.has(employeeToken);
+  if (token === "INATIVOS" || inactiveEmployeeStatusTokens.has(token)) return inactiveEmployeeStatusTokens.has(employeeToken) || ["INACTIVE", "BLOCKED"].includes(userToken);
+  return employeeToken.includes(token);
+}
+
+function isAllFilter(value: string) {
+  return ["TODOS", "TODAS", "ALL", "TUDO"].includes(normalizeStatusToken(value));
+}
+
+function normalizeStatusToken(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[/-]+/g, "_")
+    .replace(/\s+/g, "_")
+    .toUpperCase();
 }
 
 function isMissingEmployeeProfileColumnError(error: unknown) {
