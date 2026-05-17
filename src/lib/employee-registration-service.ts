@@ -254,7 +254,17 @@ export async function previewEmployeeImport(actor: Actor, rows: EmployeeImportRo
   const permission = await canImportEmployees(actor);
   if ("error" in permission) return permission;
   const validations = await validateEmployeeImportRows(rows);
+  const errorRows = validations.filter((item) => item.errors.length).length;
+  console.info("[employee-import:preview]", {
+    actor: actor.email,
+    totalRows: rows.length,
+    headers: Object.keys(rows[0] ?? {}).slice(0, 80),
+    validRows: validations.length - errorRows,
+    errorRows,
+    warningRows: validations.filter((item) => !item.errors.length && item.warnings.length).length
+  });
   return {
+    success: true,
     data: {
       totalRows: rows.length,
       validRows: validations.filter((item) => !item.errors.length).length,
@@ -275,6 +285,14 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
     if ("error" in permission) return permission;
     const validations = await validateEmployeeImportRows(rows);
     const invalidRows = validations.filter((item) => item.errors.length);
+    console.info("[employee-import:commit]", {
+      actor: actor.email,
+      totalRows: rows.length,
+      headers: Object.keys(rows[0] ?? {}).slice(0, 80),
+      validRows: rows.length - invalidRows.length,
+      errorRows: invalidRows.length,
+      allowPartial
+    });
     if (invalidRows.length && !allowPartial) {
       return { error: "Existem linhas com erros críticos. Corrija o arquivo ou confirme importação parcial.", preview: { rows: validations } };
     }
@@ -519,6 +537,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
     });
 
     return {
+      success: true,
       data: {
         importBatchId: batchId,
         totalRows: rows.length,
@@ -800,21 +819,46 @@ async function canImportEmployees(actor: Actor) {
 }
 
 async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<EmployeeImportValidation[]> {
+  const normalizedRows = rows.map((row) => normalizeEmployeeImportRow(row));
   const seenCpf = new Set<string>();
   const seenEmail = new Set<string>();
   const seenWb = new Set<string>();
-  const [roles, lobs, shifts] = await Promise.all([
+  const unique = (values: string[]) => [...new Set(values.filter(Boolean))];
+  const wbLogins = unique(normalizedRows.map((row) => row.wbLogin));
+  const supervisorWbLogins = unique(normalizedRows.map((row) => row.supervisorWbLogin));
+  const cpfs = unique(normalizedRows.map((row) => row.cpf ?? ""));
+  const emails = unique(normalizedRows.map((row) => row.email));
+  const [roles, lobs, shifts, employeesByWb, sensitiveMatches, activeUsers] = await Promise.all([
     prisma.role.findMany({ select: { name: true } }),
     prisma.lob.findMany({ select: { name: true } }),
-    prisma.shift.findMany({ select: { name: true } })
+    prisma.shift.findMany({ select: { name: true } }),
+    prisma.employeeProfile.findMany({
+      where: { wbLogin: { in: unique([...wbLogins, ...supervisorWbLogins]) }, deletedAt: null },
+      select: { id: true, userId: true, wbLogin: true, user: { select: { role: { select: { name: true } } } } }
+    }),
+    cpfs.length ? prisma.employeeSensitiveData.findMany({ where: { cpf: { in: cpfs } }, select: { cpf: true, employeeId: true } }) : Promise.resolve([]),
+    emails.length ? prisma.user.findMany({ where: { email: { in: emails }, status: "ACTIVE", deletedAt: null }, select: { id: true, email: true } }) : Promise.resolve([])
   ]);
   const validRoles = new Set(roles.map((role) => role.name));
   const validLobs = new Set(lobs.map((lob) => lob.name.toUpperCase()));
   const validShifts = new Set(shifts.map((shift) => normalizeLookupKey(shift.name)));
+  const employeeByWb = new Map(employeesByWb.map((employee) => [employee.wbLogin, employee]));
+  const activeUserByEmail = new Map(activeUsers.map((user) => [user.email.toLowerCase(), user]));
+  const sensitiveEmployeeIds = unique(sensitiveMatches.map((item) => item.employeeId));
+  const cpfEmployees = sensitiveEmployeeIds.length
+    ? await prisma.employeeProfile.findMany({ where: { id: { in: sensitiveEmployeeIds }, deletedAt: null }, select: { id: true, userId: true } })
+    : [];
+  const cpfEmployeeById = new Map(cpfEmployees.map((employee) => [employee.id, employee]));
+  const activeEmployeeByCpfMap = new Map<string, { id: string; userId: string | null }>();
+  for (const match of sensitiveMatches) {
+    if (!match.cpf) continue;
+    const employee = cpfEmployeeById.get(match.employeeId);
+    if (employee && !activeEmployeeByCpfMap.has(match.cpf)) activeEmployeeByCpfMap.set(match.cpf, employee);
+  }
 
   const validations: EmployeeImportValidation[] = [];
   for (let index = 0; index < rows.length; index += 1) {
-    const row = normalizeEmployeeImportRow(rows[index]);
+    const row = normalizedRows[index];
     const errors: string[] = [];
     const warnings: string[] = [];
 
@@ -849,17 +893,14 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     if (row.email) seenEmail.add(row.email);
     if (row.wbLogin) seenWb.add(row.wbLogin);
 
-    const activeByWb = row.wbLogin ? await prisma.employeeProfile.findFirst({ where: { wbLogin: row.wbLogin, deletedAt: null } }) : null;
+    const activeByWb = row.wbLogin ? employeeByWb.get(row.wbLogin) ?? null : null;
     if (activeByWb) warnings.push("WB/Login existente: o colaborador será atualizado.");
-    const activeByCpf = row.cpf ? await activeEmployeeByCpf(row.cpf) : null;
+    const activeByCpf = row.cpf ? activeEmployeeByCpfMap.get(row.cpf) ?? null : null;
     if (activeByCpf && activeByCpf.id !== activeByWb?.id) errors.push("Já existe colaborador ativo com este CPF.");
-    const activeUser = row.email ? await prisma.user.findFirst({ where: { email: row.email, status: "ACTIVE", deletedAt: null } }) : null;
+    const activeUser = row.email ? activeUserByEmail.get(row.email) ?? null : null;
     if (activeUser && activeUser.id !== activeByWb?.userId) errors.push("Já existe usuário ativo com este e-mail.");
     if (row.supervisorWbLogin) {
-      const supervisor = await prisma.employeeProfile.findFirst({
-        where: { wbLogin: row.supervisorWbLogin, deletedAt: null },
-        include: { user: { include: { role: true } } }
-      });
+      const supervisor = employeeByWb.get(row.supervisorWbLogin);
       if (!supervisor) errors.push("Supervisor informado por WB/Login não encontrado.");
       if (supervisor?.user && !["SUPERVISOR", "ADMIN"].includes(supervisor.user.role.name)) errors.push("Supervisor informado precisa ter role SUPERVISOR ou ADMIN.");
     }
@@ -883,12 +924,6 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     });
   }
   return validations;
-}
-
-async function activeEmployeeByCpf(cpf: string) {
-  const sensitive = await prisma.employeeSensitiveData.findMany({ where: { cpf }, select: { employeeId: true } });
-  if (!sensitive.length) return null;
-  return prisma.employeeProfile.findFirst({ where: { id: { in: sensitive.map((item) => item.employeeId) }, deletedAt: null } });
 }
 
 function normalizeEmployeeImportRow(raw: EmployeeImportRow) {

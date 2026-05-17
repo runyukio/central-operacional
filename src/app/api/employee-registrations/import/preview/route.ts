@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getApiActor } from "@/lib/api-actor";
-import { errorResponse, errorStatus, mapZodError } from "@/lib/api-errors";
+import { createServerError, errorResponse, errorStatus, mapZodError } from "@/lib/api-errors";
 import { previewEmployeeImport } from "@/lib/employee-registration-service";
 
 const schema = z.object({
@@ -10,14 +10,19 @@ const schema = z.object({
 });
 
 export async function POST(request: Request) {
-  const parsed = schema.safeParse(await request.json().catch(() => ({})));
-  if (!parsed.success) {
-    return errorResponse(mapZodError(parsed.error));
+  try {
+    const parsed = schema.safeParse(await request.json().catch(() => ({})));
+    if (!parsed.success) {
+      return errorResponse(mapZodError(parsed.error));
+    }
+
+    const actor = await getApiActor();
+    const result = await previewEmployeeImport(actor, parsed.data.rows);
+    if ("error" in result) return NextResponse.json(result, { status: errorStatus(result as any) });
+
+    return NextResponse.json(result);
+  } catch (error) {
+    console.error("[employee-import:preview-route] falha inesperada", error);
+    return errorResponse(createServerError(error, "Não foi possível validar o arquivo de colaboradores. Tente novamente ou contate o administrador."));
   }
-
-  const actor = await getApiActor();
-  const result = await previewEmployeeImport(actor, parsed.data.rows);
-  if ("error" in result) return NextResponse.json(result, { status: errorStatus(result as any) });
-
-  return NextResponse.json(result);
 }

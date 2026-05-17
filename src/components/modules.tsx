@@ -528,7 +528,9 @@ async function apiJson<T>(url: string, options?: RequestInit) {
     ...options,
     headers: options?.body instanceof FormData ? options.headers : { "Content-Type": "application/json", ...(options?.headers ?? {}) }
   });
-  const payload = (await response.json()) as T & { error?: string; message?: string; fields?: Record<string, string>; fieldErrors?: Record<string, string>; type?: string };
+  const payload = (await response.json().catch(() => ({
+    message: response.ok ? "Resposta vazia do servidor." : "Resposta inesperada do servidor. Tente novamente ou contate o administrador."
+  }))) as T & { error?: string; message?: string; fields?: Record<string, string>; fieldErrors?: Record<string, string>; type?: string };
   if (!response.ok) {
     throw new ApiRequestError(payload.error ?? payload.message ?? "Erro ao processar solicitação", {
       fields: payload.fieldErrors ?? payload.fields,
@@ -1588,6 +1590,7 @@ export function RegistrationApprovalsPage() {
   const [employeeImportRows, setEmployeeImportRows] = useState<Array<Record<string, unknown>>>([]);
   const [employeeImportPreview, setEmployeeImportPreview] = useState<EmployeeImportPreview | null>(null);
   const [employeeImportFileName, setEmployeeImportFileName] = useState("");
+  const [employeeImportError, setEmployeeImportError] = useState("");
   const [registrationSettings, setRegistrationSettings] = useState<SystemSettings | null>(null);
   const [importingEmployees, setImportingEmployees] = useState(false);
   const [allowPartialEmployeeImport, setAllowPartialEmployeeImport] = useState(false);
@@ -1647,10 +1650,16 @@ export function RegistrationApprovalsPage() {
     if (!file) return;
     setImportingEmployees(true);
     setMessage("");
+    setEmployeeImportError("");
+    setEmployeeImportPreview(null);
+    setEmployeeImportRows([]);
+    setEmployeeImportFileName(file.name);
+    setShowEmployeeImport(true);
     try {
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer);
       const sheetName = workbook.SheetNames.find((name) => normalizeExcelKey(name) === "colaboradores") ?? workbook.SheetNames[0];
+      if (!sheetName) throw new Error("O arquivo não possui abas para leitura.");
       const sheet = workbook.Sheets[sheetName];
       const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
       const rows = rawRows
@@ -1661,13 +1670,15 @@ export function RegistrationApprovalsPage() {
         method: "POST",
         body: JSON.stringify({ rows })
       });
-      setEmployeeImportFileName(file.name);
       setEmployeeImportRows(rows);
       setEmployeeImportPreview(payload.data);
       setShowEmployeeImport(true);
     } catch (err) {
       setMessageTone("error");
-      setMessage(err instanceof ApiRequestError ? err.message : err instanceof Error ? err.message : "Não foi possível ler o arquivo de colaboradores.");
+      const errorMessage = err instanceof ApiRequestError ? err.message : err instanceof Error ? err.message : "Não foi possível ler o arquivo de colaboradores.";
+      setEmployeeImportError(errorMessage);
+      setMessage(errorMessage);
+      setShowEmployeeImport(true);
     } finally {
       setImportingEmployees(false);
       if (employeeImportInputRef.current) employeeImportInputRef.current.value = "";
@@ -1678,6 +1689,7 @@ export function RegistrationApprovalsPage() {
     if (!employeeImportRows.length || importingEmployees) return;
     setImportingEmployees(true);
     setMessage("");
+    setEmployeeImportError("");
     try {
       const payload = await apiJson<{ data: EmployeeImportPreview & { colaboradoresCriados: number; usuariosCriados: number; registrosAtualizados: number; importBatchId: string } }>("/api/employee-registrations/import/commit", {
         method: "POST",
@@ -1690,7 +1702,10 @@ export function RegistrationApprovalsPage() {
       await refreshRegistrations();
     } catch (err) {
       setMessageTone("error");
-      setMessage(err instanceof ApiRequestError ? err.message : err instanceof Error ? err.message : "Não foi possível importar colaboradores.");
+      const errorMessage = err instanceof ApiRequestError ? err.message : err instanceof Error ? err.message : "Não foi possível importar colaboradores.";
+      setEmployeeImportError(errorMessage);
+      setMessage(errorMessage);
+      setShowEmployeeImport(true);
     } finally {
       setImportingEmployees(false);
     }
@@ -1915,7 +1930,21 @@ export function RegistrationApprovalsPage() {
               </div>
               <button onClick={() => setShowEmployeeImport(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
             </div>
-            {employeeImportPreview ? (
+            {importingEmployees && !employeeImportPreview ? (
+              <div className="space-y-4">
+                <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">
+                  Validando arquivo... Aguarde enquanto leio a planilha e confiro as linhas.
+                </div>
+                <EmptyState title="Processando importação" description="O preview aparecerá aqui assim que a validação terminar." />
+              </div>
+            ) : employeeImportError && !employeeImportPreview ? (
+              <div className="space-y-4">
+                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
+                  {employeeImportError}
+                </div>
+                <EmptyState title="Não foi possível validar o arquivo" description="Revise a aba colaboradores e os cabeçalhos mínimos, depois selecione o arquivo novamente." />
+              </div>
+            ) : employeeImportPreview ? (
               <div className="space-y-5">
                 <div className="grid gap-3 md:grid-cols-4">
                   <MetricPill value={employeeImportPreview.totalRows} label="Total de linhas" />
