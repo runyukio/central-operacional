@@ -23,12 +23,14 @@ export function ChangePasswordCard({ initialEmail = "", showEmail = true, forceM
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [submitError, setSubmitError] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setLoading(true);
     setMessage("");
+    setSubmitError(false);
     setFieldErrors({});
     try {
       const response = await fetch("/api/auth/change-password", {
@@ -52,10 +54,12 @@ export function ChangePasswordCard({ initialEmail = "", showEmail = true, forceM
       };
       if (!response.ok) {
         setFieldErrors(payload.fieldErrors ?? payload.fields ?? {});
+        setSubmitError(true);
         setMessage(payload.error ?? payload.message ?? "Não foi possível alterar a senha. Tente novamente.");
         return;
       }
-      setMessage(payload.message ?? "Senha alterada com sucesso.");
+      setSubmitError(false);
+      setMessage(forceMode ? payload.message ?? "Senha alterada com sucesso." : "Senha alterada com sucesso. Faça login com sua nova senha.");
       if (forceMode) {
         const login = await signIn("credentials", {
           email: payload.email ?? email,
@@ -128,7 +132,7 @@ export function ChangePasswordCard({ initialEmail = "", showEmail = true, forceM
           icon={<LockKeyhole className="h-4 w-4 text-muted" />}
           autoComplete="new-password"
         />
-        {message ? <p className={`rounded-lg px-3 py-2 text-sm font-bold ${fieldErrors && Object.keys(fieldErrors).length ? "bg-red-50 text-red-600" : "bg-blue-50 text-blue-700"}`}>{message}</p> : null}
+        {message ? <p className={`rounded-lg px-3 py-2 text-sm font-bold ${submitError || Object.keys(fieldErrors).length ? "bg-red-50 text-red-600" : "bg-blue-50 text-blue-700"}`}>{message}</p> : null}
         <div className="grid gap-2 sm:grid-cols-2">
           <button disabled={loading} className="premium-button flex h-12 items-center justify-center gap-2 text-sm font-extrabold disabled:opacity-70">
             {loading ? "Salvando..." : "Salvar senha"}

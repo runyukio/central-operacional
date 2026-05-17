@@ -4,6 +4,7 @@ import { ZodError } from "zod";
 
 export type ApiErrorType =
   | "VALIDATION_ERROR"
+  | "AUTH_ERROR"
   | "DUPLICATE_ERROR"
   | "PERMISSION_ERROR"
   | "RELATION_ERROR"
@@ -25,6 +26,10 @@ export function createValidationError(fieldErrors: Record<string, string>, messa
 
 export function createDuplicateError(message: string, fieldErrors?: Record<string, string>): ApiErrorPayload {
   return buildError("DUPLICATE_ERROR", message, fieldErrors);
+}
+
+export function createAuthError(message = "E-mail ou senha atual inválidos."): ApiErrorPayload {
+  return buildError("AUTH_ERROR", message);
 }
 
 export function createPermissionError(message = "Você não tem permissão para executar esta ação."): ApiErrorPayload {
@@ -73,6 +78,7 @@ export function mapPrismaError(error: unknown): ApiErrorPayload | null {
 }
 
 export function errorStatus(payload: ApiErrorPayload) {
+  if (payload.type === "AUTH_ERROR") return 401;
   if (payload.type === "PERMISSION_ERROR") return 403;
   if (payload.type === "NOT_FOUND_ERROR") return 404;
   if (payload.type === "DUPLICATE_ERROR") return 409;

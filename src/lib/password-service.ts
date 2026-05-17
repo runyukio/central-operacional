@@ -1,8 +1,9 @@
 import bcrypt from "bcryptjs";
 
-import { createPermissionError, createServerError, createValidationError, mapPrismaError } from "@/lib/api-errors";
+import { createAuthError, createServerError, createValidationError, mapPrismaError } from "@/lib/api-errors";
 import { recordErrorLog } from "@/lib/mock-db";
 import { getDefaultPathForRole } from "@/lib/navigation";
+import { findPasswordUserByEmail, updatePasswordForUser } from "@/lib/password-user-repository";
 import { prisma } from "@/lib/prisma";
 
 export type ChangePasswordInput = {
@@ -24,36 +25,27 @@ export async function changeUserPassword(input: ChangePasswordInput) {
   if (!currentPassword) fieldErrors.currentPassword = "Senha atual é obrigatória.";
   if (!newPassword) fieldErrors.newPassword = "Nova senha é obrigatória.";
   if (newPassword && newPassword.length < 8) fieldErrors.newPassword = "A nova senha deve ter pelo menos 8 caracteres.";
-  if (!confirmPassword) fieldErrors.confirmPassword = "Confirmar nova senha é obrigatório.";
+  if (!confirmPassword) fieldErrors.confirmPassword = "A confirmação de senha é obrigatória.";
   if (newPassword && confirmPassword && newPassword !== confirmPassword) fieldErrors.confirmPassword = "A confirmação de senha não confere.";
   if (currentPassword && newPassword && currentPassword === newPassword) fieldErrors.newPassword = "A nova senha não pode ser igual à senha atual.";
   if (Object.keys(fieldErrors).length) return createValidationError(fieldErrors);
 
   try {
-    const user = await prisma.user.findFirst({
-      where: { email, status: "ACTIVE", deletedAt: null },
-      include: { role: true }
-    });
-    if (!user) return createPermissionError("E-mail ou senha atual inválidos.");
+    const user = await findPasswordUserByEmail(email);
+    if (!user) return createAuthError("E-mail ou senha atual inválidos.");
+    if (user.status !== "ACTIVE") return createAuthError("Usuário inativo. Contate o administrador.");
 
     const passwordMatches = await bcrypt.compare(currentPassword, user.passwordHash);
-    if (!passwordMatches) return createPermissionError("E-mail ou senha atual inválidos.");
+    if (!passwordMatches) return createAuthError("E-mail ou senha atual inválidos.");
 
     const sameAsCurrentHash = await bcrypt.compare(newPassword, user.passwordHash);
     if (sameAsCurrentHash) return createValidationError({ newPassword: "A nova senha não pode ser igual à senha atual." });
 
     const passwordHash = await bcrypt.hash(newPassword, 10);
-    await prisma.$transaction(async (tx) => {
-      await tx.user.update({
-        where: { id: user.id },
-        data: {
-          passwordHash,
-          mustChangePassword: false,
-          temporaryPassword: false,
-          passwordChangedAt: new Date()
-        }
-      });
-      await tx.auditLog.create({
+    await updatePasswordForUser(user.id, passwordHash);
+
+    try {
+      await prisma.auditLog.create({
         data: {
           actorId: user.id,
           action: "EDICAO",
@@ -64,13 +56,22 @@ export async function changeUserPassword(input: ChangePasswordInput) {
           newValue: { passwordHash: "updated", mustChangePassword: false, temporaryPassword: false }
         }
       });
-    });
+    } catch (auditError) {
+      recordErrorLog({
+        userEmail: email,
+        code: "PASSWORD_CHANGE_AUDIT_ERROR",
+        message: auditError instanceof Error ? auditError.message : "Falha ao registrar auditoria de senha",
+        route: "/api/auth/change-password",
+        action: "PASSWORD_CHANGE_AUDIT",
+        severity: "WARNING"
+      });
+    }
 
     return {
       success: true,
       message: "Senha alterada com sucesso.",
       email: user.email,
-      defaultPath: getDefaultPathForRole(user.role.name)
+      defaultPath: getDefaultPathForRole(user.roleName)
     };
   } catch (error) {
     recordErrorLog({
@@ -81,6 +82,6 @@ export async function changeUserPassword(input: ChangePasswordInput) {
       action: "PASSWORD_CHANGE",
       severity: "ERROR"
     });
-    return mapPrismaError(error) ?? createServerError(error, "Não foi possível alterar a senha. Tente novamente.");
+    return mapPrismaError(error) ?? createServerError(error, "Não foi possível salvar a nova senha. Tente novamente.");
   }
 }

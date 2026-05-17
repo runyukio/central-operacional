@@ -4,7 +4,7 @@ import bcrypt from "bcryptjs";
 
 import { demoUsers } from "@/lib/demo-auth";
 import { recordErrorLog } from "@/lib/mock-db";
-import { prisma } from "@/lib/prisma";
+import { findPasswordUserByEmail } from "@/lib/password-user-repository";
 import { verifySupabasePassword } from "@/lib/supabase-auth";
 
 const allowDemoLogin = process.env.ALLOW_DEMO_LOGIN === "true";
@@ -43,10 +43,7 @@ export const authOptions: NextAuthOptions = {
         });
 
         try {
-          const user = await prisma.user.findUnique({
-            where: { email },
-            include: { role: true }
-          });
+          const user = await findPasswordUserByEmail(email);
 
           if (user && user.status === "ACTIVE") {
             const passwordMatches = supabaseUser ? true : await bcrypt.compare(password, user.passwordHash);
@@ -55,7 +52,7 @@ export const authOptions: NextAuthOptions = {
                 id: supabaseUser?.id ?? user.id,
                 email: user.email,
                 name: user.name,
-                role: user.role.name,
+                role: user.roleName,
                 mustChangePassword: user.mustChangePassword
               } as never;
             }
