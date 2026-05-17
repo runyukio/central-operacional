@@ -290,7 +290,13 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
         const row = normalizeEmployeeImportRow(raw);
         const role = await tx.role.findUniqueOrThrow({ where: { name: row.roleName } });
         const lob = await tx.lob.findUniqueOrThrow({ where: { name: row.lob } });
-        const shift = await tx.shift.findUniqueOrThrow({ where: { name: row.shift } });
+        const shift = row.shift
+          ? await tx.shift.findUniqueOrThrow({ where: { name: row.shift } })
+          : await tx.shift.upsert({
+            where: { name: "Não informado" },
+            update: {},
+            create: { name: "Não informado", startsAt: "00:00", endsAt: "00:00", color: "#64748B" }
+          });
         const importDateFallback = new Date();
         const birthDate = row.birthDate ?? row.admissionDate ?? row.trainingStartDate ?? importDateFallback;
         const trainingStartDate = row.trainingStartDate ?? row.admissionDate ?? importDateFallback;
@@ -805,16 +811,11 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
   const validRoles = new Set(roles.map((role) => role.name));
   const validLobs = new Set(lobs.map((lob) => lob.name.toUpperCase()));
   const validShifts = new Set(shifts.map((shift) => normalizeLookupKey(shift.name)));
-  const requiredConfigErrors = [
-    ...["CEC", "ADS", "TNS", "ALL"].filter((lob) => !validLobs.has(lob)).map((lob) => `LOB ${lob} não existe em Configurações.`),
-    ...["Manhã", "Tarde", "Noite"].filter((shift) => !validShifts.has(normalizeLookupKey(shift))).map((shift) => `Turno ${shift} não existe em Configurações.`),
-    ...(!validRoles.has("COLABORADOR") ? ["Role COLLABORATOR/COLABORADOR não existe em Configurações."] : [])
-  ];
 
   const validations: EmployeeImportValidation[] = [];
   for (let index = 0; index < rows.length; index += 1) {
     const row = normalizeEmployeeImportRow(rows[index]);
-    const errors: string[] = [...requiredConfigErrors];
+    const errors: string[] = [];
     const warnings: string[] = [];
 
     if (!row.name) errors.push("Nome obrigatório.");
@@ -823,12 +824,12 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     if (!text(rows[index]?.role_permissao)) errors.push("Role/Permissão obrigatória.");
     if (!row.lob) errors.push("LOB obrigatória.");
     if (!row.employeeStatus) errors.push("Status do colaborador obrigatório.");
+    if (!hasImportValue(rows[index]?.criar_usuario)) errors.push("criar_usuario obrigatório.");
     if (row.lob && text(rows[index]?.lob).toLowerCase() === "todos") errors.push("Todos é opção de filtro. Para atuação transversal use a LOB real ALL.");
     if (row.lob && !validLobs.has(row.lob.toUpperCase())) errors.push(`LOB ${row.lob} não existe em Configurações.`);
     if (row.shift && !validShifts.has(normalizeLookupKey(row.shift))) errors.push(`Turno ${row.shift} não existe em Configurações.`);
     if (row.cpf && !isCpfFormat(row.cpf)) errors.push("CPF inválido.");
     if (!row.cpf) warnings.push("CPF pendente: o colaborador será importado com cadastro incompleto para complemento posterior.");
-    if (!row.email) errors.push("E-mail obrigatório.");
     if (row.createUser && !row.email) errors.push("E-mail obrigatório quando criar_usuario = sim.");
     if (row.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) errors.push("E-mail inválido.");
     if (!validRoles.has(row.roleName)) errors.push(`Role/permissão inválida: ${row.roleName}.`);
