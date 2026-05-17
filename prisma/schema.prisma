@@ -353,6 +353,13 @@ model EmployeeProfile {
   createdAt          DateTime                @default(now())
   updatedAt          DateTime                @updatedAt
   deletedAt          DateTime?
+
+  @@index([lobId])
+  @@index([teamId])
+  @@index([supervisorId])
+  @@index([shiftId])
+  @@index([operationalStatus])
+  @@index([deletedAt])
 }
 
 model Schedule {
@@ -376,6 +383,11 @@ model Schedule {
 
   @@unique([employeeId, date])
   @@index([date, status])
+  @@index([employeeId])
+  @@index([lobId])
+  @@index([supervisorId])
+  @@index([shiftId])
+  @@index([status])
 }
 
 model ScheduleImport {
@@ -460,6 +472,14 @@ model Request {
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt
   deletedAt     DateTime?
+
+  @@index([requesterId])
+  @@index([employeeId])
+  @@index([typeId])
+  @@index([assigneeId])
+  @@index([status, createdAt])
+  @@index([priority])
+  @@index([assignedArea])
 }
 
 model RequestComment {
@@ -554,6 +574,9 @@ model Notification {
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt DateTime  @default(now())
   deletedAt DateTime?
+
+  @@index([userId, isRead, createdAt])
+  @@index([entity, entityId])
 }
 
 model PerformanceMetric {
@@ -809,6 +832,9 @@ model AuditLog {
   userAgent     String?
   actor         User?       @relation(fields: [actorId], references: [id], onDelete: SetNull)
   createdAt     DateTime    @default(now())
+
+  @@index([actorId, createdAt])
+  @@index([entity, entityId, createdAt])
 }
 
 model ErrorLog {
@@ -1016,6 +1042,11 @@ model AttendanceRecord {
 
   @@unique([employeeId, date, shiftId])
   @@index([date, status])
+  @@index([employeeId])
+  @@index([scheduleId])
+  @@index([isJustified])
+  @@index([registeredById])
+  @@index([justifiedById])
 }
 
 model AttendanceHistory {

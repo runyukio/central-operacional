@@ -44,7 +44,19 @@ export type EmployeeAdminUpdateInput = {
   preferredSchedule?: string;
 };
 
-export async function listOperationalEmployees(actor: Actor) {
+export type EmployeeListQuery = {
+  summary?: boolean;
+  page?: number;
+  limit?: number;
+  search?: string;
+  lob?: string;
+  lobId?: string;
+  supervisorId?: string;
+  status?: string;
+};
+
+export async function listOperationalEmployees(actor: Actor, query: EmployeeListQuery = {}) {
+  if (query.summary) return listOperationalEmployeesSummary(actor, query);
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
     if (!user) return allowDemoDataFallback ? listMockEmployees(actor) : [];
@@ -97,6 +109,118 @@ export async function listOperationalEmployees(actor: Actor) {
   }
 }
 
+async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeListQuery) {
+  try {
+    const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
+    if (!user) return allowDemoDataFallback ? listMockEmployees(actor) : [];
+
+    const role = normalizeRole(actor.role);
+    if (!canAccessEmployeeMap({ role: actor.role, status: user.status })) return [];
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(100, Math.max(10, Number(query.limit) || 50));
+    const search = clean(query.search)?.trim();
+
+    let employeeWhere: Prisma.EmployeeProfileWhereInput =
+      role === "COLABORADOR" && user.employeeProfile
+        ? { id: user.employeeProfile.id, deletedAt: null }
+        : {
+          deletedAt: null,
+          ...(search
+            ? {
+                OR: [
+                  { fullName: { contains: search, mode: "insensitive" } },
+                  { wbLogin: { contains: search, mode: "insensitive" } },
+                  { user: { email: { contains: search, mode: "insensitive" } } }
+                ]
+              }
+            : {}),
+          ...(query.lob && query.lob !== "Todos" ? { lob: { name: query.lob } } : {}),
+          ...(query.lobId ? { lobId: query.lobId } : {}),
+          ...(query.supervisorId ? { supervisorId: query.supervisorId } : {}),
+          ...(query.status && query.status !== "Todos" ? { operationalStatus: query.status } : {})
+        };
+    if (role === "SUPERVISOR" && user.employeeProfile) {
+      const supervisedCount = await prisma.employeeProfile.count({ where: { supervisorId: user.employeeProfile.id, deletedAt: null } });
+      employeeWhere = supervisedCount ? { ...employeeWhere, supervisorId: user.employeeProfile.id } : employeeWhere;
+    }
+
+    const employees = await prisma.employeeProfile.findMany({
+      where: employeeWhere,
+      select: {
+        id: true,
+        userId: true,
+        wbLogin: true,
+        fullName: true,
+        roleTitle: true,
+        admissionDate: true,
+        scheduleType: true,
+        operationalStatus: true,
+        lobId: true,
+        teamId: true,
+        supervisorId: true,
+        shiftId: true,
+        user: { select: { email: true, status: true, role: { select: { name: true } } } },
+        lob: { select: { name: true } },
+        team: { select: { name: true } },
+        supervisor: { select: { fullName: true } },
+        shift: { select: { name: true } },
+        _count: { select: { equipments: true, schedules: true } }
+      },
+      orderBy: { fullName: "asc" },
+      skip: (page - 1) * limit,
+      take: limit
+    });
+
+    return employees.map((employee) => mapEmployeeSummary(employee, role));
+  } catch (error) {
+    recordErrorLog({
+      userEmail: actor.email,
+      code: "EMPLOYEE_SUMMARY_LIST_ERROR",
+      message: error instanceof Error ? error.message : "Falha ao listar resumo de colaboradores",
+      route: "/api/employees",
+      action: "EMPLOYEE_SUMMARY_LIST",
+      severity: "ERROR"
+    });
+    return allowDemoDataFallback ? listMockEmployees(actor) : [];
+  }
+}
+
+export async function getOperationalEmployeeDetail(actor: Actor, id: string) {
+  try {
+    const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
+    if (!user) return createPermissionError("Usuário não autenticado.");
+    const role = normalizeRole(actor.role);
+    if (!canAccessEmployeeMap({ role: actor.role, status: user.status })) return createPermissionError("Você não tem permissão para acessar o Mapa de Funcionários.");
+
+    const employee = await prisma.employeeProfile.findFirst({
+      where: { id, deletedAt: null },
+      include: { ...employeeInclude }
+    });
+    if (!employee) return createNotFoundError("Colaborador não encontrado.");
+    if (role === "COLABORADOR" && employee.userId !== user.id) return createPermissionError("Você não tem permissão para visualizar este colaborador.");
+    if (role === "SUPERVISOR" && user.employeeProfile?.id) {
+      const supervisedCount = await prisma.employeeProfile.count({ where: { supervisorId: user.employeeProfile.id, deletedAt: null } });
+      if (supervisedCount && employee.supervisorId !== user.employeeProfile.id && employee.id !== user.employeeProfile.id) {
+        return createPermissionError("Você não tem permissão para visualizar este colaborador.");
+      }
+    }
+
+    const shouldLoadSensitive = canViewEmployeeSensitiveData({ role: actor.role, status: user.status }) || role === "COLABORADOR";
+    const sensitive = shouldLoadSensitive ? await prisma.employeeSensitiveData.findUnique({ where: { employeeId: employee.id } }) : null;
+    return { data: mapEmployee(employee, role, sensitive ?? undefined) };
+  } catch (error) {
+    recordErrorLog({
+      userEmail: actor.email,
+      code: "EMPLOYEE_DETAIL_ERROR",
+      message: error instanceof Error ? error.message : "Falha ao carregar detalhe do colaborador",
+      route: `/api/employees/${id}`,
+      action: "EMPLOYEE_DETAIL",
+      severity: "ERROR"
+    });
+    return mapPrismaError(error) ?? createServerError(error, "Não foi possível carregar os detalhes do colaborador.");
+  }
+}
+
 type LegacyActorRow = {
   id: string;
   email: string;
@@ -126,6 +250,27 @@ type LegacyEmployeeRow = {
   email: string | null;
   userStatus: string | null;
   systemRole: string | null;
+};
+
+type EmployeeSummaryRow = {
+  id: string;
+  userId: string | null;
+  wbLogin: string;
+  fullName: string;
+  roleTitle: string;
+  admissionDate: Date;
+  scheduleType: string;
+  operationalStatus: string;
+  lobId: string;
+  teamId: string;
+  supervisorId: string | null;
+  shiftId: string;
+  user: { email: string; status: UserStatus; role: { name: string } } | null;
+  lob: { name: string };
+  team: { name: string };
+  supervisor: { fullName: string } | null;
+  shift: { name: string };
+  _count: { equipments: number; schedules: number };
 };
 
 async function listOperationalEmployeesLegacy(actor: Actor) {
@@ -569,6 +714,56 @@ function mapLegacyEmployee(employee: LegacyEmployeeRow, role: string) {
     userStatus: employee.userStatus ?? "",
     systemRole: employee.systemRole ?? undefined,
     canViewSensitive,
+    restrictedSections: {
+      cadastrais: false,
+      contato: false,
+      emergencia: false,
+      bancarios: false,
+      familia: false
+    },
+    sensitive: undefined,
+    maskedSensitive: undefined
+  };
+}
+
+function mapEmployeeSummary(employee: EmployeeSummaryRow, role: string) {
+  const canViewSensitive = ["ADMIN", "GESTOR", "RH"].includes(role);
+  return {
+    id: employee.id,
+    name: employee.fullName,
+    socialName: "",
+    wb: employee.wbLogin,
+    lob: employee.lob.name,
+    lobId: employee.lobId,
+    team: employee.team.name,
+    teamId: employee.teamId,
+    supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
+    supervisorId: employee.supervisorId ?? "",
+    shift: employee.shift.name,
+    shiftId: employee.shiftId,
+    schedule: employee.scheduleType,
+    status: employee.operationalStatus,
+    quality: null,
+    productivity: null,
+    equipment: employee._count.equipments,
+    admission: formatDate(employee.admissionDate),
+    admissionIso: toDateInput(employee.admissionDate),
+    trainingStartDate: "",
+    trainingStartDateIso: "",
+    contractType: "",
+    siteOperation: "",
+    internalNotes: "",
+    primaryPhone: "",
+    city: "",
+    stateUf: "",
+    preferredSchedule: "",
+    role: employee.roleTitle,
+    email: employee.user?.email,
+    userStatus: employee.user?.status ?? "",
+    userId: employee.userId ?? undefined,
+    systemRole: employee.user?.role.name,
+    canViewSensitive,
+    hasSchedule: employee._count.schedules > 0,
     restrictedSections: {
       cadastrais: false,
       contato: false,

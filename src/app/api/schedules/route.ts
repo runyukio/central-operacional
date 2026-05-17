@@ -24,6 +24,8 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   return NextResponse.json({
     data: await getOperationalSchedules(actor, {
+      startDate: url.searchParams.get("startDate") ?? undefined,
+      endDate: url.searchParams.get("endDate") ?? undefined,
       month: Number(url.searchParams.get("month")) || undefined,
       year: Number(url.searchParams.get("year")) || undefined,
       collaborator: url.searchParams.get("collaborator") ?? undefined,
@@ -31,7 +33,9 @@ export async function GET(request: Request) {
       supervisor: url.searchParams.get("supervisor") ?? undefined,
       shift: url.searchParams.get("shift") ?? undefined,
       status: url.searchParams.get("status") ?? undefined,
-      roleTitle: url.searchParams.get("roleTitle") ?? undefined
+      roleTitle: url.searchParams.get("roleTitle") ?? undefined,
+      page: Number(url.searchParams.get("page")) || undefined,
+      limit: Number(url.searchParams.get("limit")) || undefined
     }),
     actor: { role: actor.role, name: actor.name }
   });

@@ -76,6 +76,8 @@ export type ScheduleEditInput = {
 };
 
 export type ScheduleQuery = {
+  startDate?: string;
+  endDate?: string;
   month?: number;
   year?: number;
   collaborator?: string;
@@ -84,6 +86,8 @@ export type ScheduleQuery = {
   shift?: string;
   status?: string;
   roleTitle?: string;
+  page?: number;
+  limit?: number;
 };
 
 export type ScheduleRemoveInput = {
@@ -130,6 +134,8 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
     const role = normalizeRole(actor.role);
     if (role === "COLABORADOR" && !user.employeeProfile) return emptyOperationalSchedules();
     const period = resolvePeriod(query);
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(100, Math.max(25, Number(query.limit) || 75));
     const scheduleWhere: Prisma.ScheduleWhereInput = {
       deletedAt: null,
       date: { gte: period.start, lte: period.end },
@@ -145,14 +151,28 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
             ...employeeFilters(query, search)
           },
       include: {
-        user: true,
-        lob: true,
-        shift: true,
-        supervisor: true,
-        schedules: { where: scheduleWhere, include: { shift: true, attendanceRecords: true }, orderBy: { date: "asc" } }
+        user: { select: { email: true } },
+        lob: { select: { name: true } },
+        shift: { select: { name: true } },
+        supervisor: { select: { fullName: true } },
+        schedules: {
+          where: scheduleWhere,
+          select: {
+            date: true,
+            status: true,
+            shift: { select: { name: true } },
+            attendanceRecords: {
+              orderBy: { updatedAt: "desc" },
+              take: 1,
+              select: { status: true, absenceReason: true, isJustified: true, updatedAt: true }
+            }
+          },
+          orderBy: { date: "asc" }
+        }
       },
       orderBy: { fullName: "asc" },
-      take: 200
+      skip: role === "COLABORADOR" ? 0 : (page - 1) * limit,
+      take: role === "COLABORADOR" ? 1 : limit
     });
 
     const visibleEmployees = role === "COLABORADOR" ? employees : employees.filter((employee) => employee.schedules.length > 0);
@@ -997,7 +1017,19 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
       ...(period ? { date: { gte: period.start, lte: period.end } } : {}),
       ...(lob && lob !== "Todos" ? { employee: { lob: { name: lob } } } : {})
     },
-    include: { attendanceRecords: true, shift: true }
+    select: {
+      status: true,
+      shift: { select: { name: true } },
+      attendanceRecords: {
+        select: {
+          status: true,
+          absenceReason: true,
+          impactsAbs: true,
+          isJustified: true,
+          updatedAt: true
+        }
+      }
+    }
   });
   const plannedStatuses: ScheduleStatus[] = ["ESCALADO", "PRESENTE", "ATRASO", "SAIDA_ANTECIPADA", "AUSENTE", "FALTA", "VENDA_FOLGA_APROVADA"];
   const presentStatuses = ["PRESENTE", "VENDA_FOLGA_APROVADA"];
@@ -1068,6 +1100,16 @@ function statusToOperational(status: string) {
 }
 
 function resolvePeriod(query: ScheduleQuery | ScheduleRemoveInput) {
+  if ("startDate" in query || "endDate" in query) {
+    const startDate = parseDateOnly(query.startDate || query.endDate || "");
+    const endDate = parseDateOnly(query.endDate || query.startDate || "");
+    if (startDate && endDate) {
+      const start = startDate <= endDate ? startDate : endDate;
+      const endBase = startDate <= endDate ? endDate : startDate;
+      const end = new Date(Date.UTC(endBase.getUTCFullYear(), endBase.getUTCMonth(), endBase.getUTCDate(), 23, 59, 59, 999));
+      return { year: start.getUTCFullYear(), month: start.getUTCMonth() + 1, start, end, daysInMonth: new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0)).getUTCDate() };
+    }
+  }
   const year = Number(query.year) || 2026;
   const month = Number(query.month) || 5;
   const start = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0));

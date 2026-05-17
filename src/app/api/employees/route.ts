@@ -31,9 +31,25 @@ const updateSchema = z.object({
   preferredSchedule: z.string().trim().optional()
 });
 
-export async function GET() {
+export async function GET(request: Request) {
   const actor = await getApiActor();
-  return NextResponse.json({ data: await listOperationalEmployees(actor) });
+  const url = new URL(request.url);
+  const page = Number(url.searchParams.get("page")) || 1;
+  const limit = Number(url.searchParams.get("limit")) || 100;
+  return NextResponse.json({
+    data: await listOperationalEmployees(actor, {
+      summary: url.searchParams.get("summary") !== "false",
+      page,
+      limit,
+      search: url.searchParams.get("search") ?? undefined,
+      lob: url.searchParams.get("lob") ?? undefined,
+      lobId: url.searchParams.get("lobId") ?? undefined,
+      supervisorId: url.searchParams.get("supervisorId") ?? undefined,
+      status: url.searchParams.get("status") ?? undefined
+    }),
+    page,
+    limit
+  });
 }
 
 export async function PATCH(request: Request) {

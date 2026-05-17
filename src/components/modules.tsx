@@ -3255,6 +3255,8 @@ export function EmployeeMapPage() {
   const [employeeSettings, setEmployeeSettings] = useState<SystemSettings | null>(null);
   const [selected, setSelected] = useState<EmployeeClient | null>(null);
   const [employeeMessage, setEmployeeMessage] = useState("");
+  const [employeeLoading, setEmployeeLoading] = useState(true);
+  const [selectedEmployeeLoading, setSelectedEmployeeLoading] = useState(false);
   const [lobFilter, setLobFilter] = useState("Todos");
   const [editingEmployee, setEditingEmployee] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
@@ -3304,17 +3306,42 @@ export function EmployeeMapPage() {
   const operationalStatusOptions = ["Ativo", "Inativo", "Pendente de cadastro", "Afastado", "Desligado", "Em treinamento", "Suspenso", "Online", "Em Atendimento", "Offline"];
 
   useEffect(() => {
-    Promise.all([
-      apiJson<{ data: EmployeeClient[] }>("/api/employees"),
-      apiJson<{ data: SystemSettings }>("/api/settings").catch(() => ({ data: null as unknown as SystemSettings }))
-    ])
-      .then(([employeePayload, settingsPayload]) => {
-        setEmployeeRows(employeePayload.data);
-        setEmployeeSettings(settingsPayload.data);
-        setSelected(null);
-      })
-      .catch(() => setEmployeeRows([]));
+    void loadEmployees();
+    apiJson<{ data: SystemSettings }>("/api/settings")
+      .then((payload) => setEmployeeSettings(payload.data))
+      .catch(() => setEmployeeSettings(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function loadEmployees(nextQuery = query, nextLob = lobFilter) {
+    setEmployeeLoading(true);
+    const params = new URLSearchParams({ summary: "true", limit: "100" });
+    if (nextQuery.trim()) params.set("search", nextQuery.trim());
+    if (nextLob !== "Todos") params.set("lob", nextLob);
+    try {
+      const employeePayload = await apiJson<{ data: EmployeeClient[] }>(`/api/employees?${params.toString()}`);
+      setEmployeeRows(employeePayload.data);
+      setSelected(null);
+    } catch {
+      setEmployeeRows([]);
+    } finally {
+      setEmployeeLoading(false);
+    }
+  }
+
+  async function selectEmployee(employee: EmployeeClient) {
+    setSelected(employee);
+    setSelectedEmployeeLoading(true);
+    try {
+      const payload = await apiJson<{ data: EmployeeClient }>(`/api/employees/${employee.id}`);
+      setSelected(payload.data);
+      setEmployeeRows((items) => items.map((item) => (item.id === payload.data.id ? { ...item, ...payload.data } : item)));
+    } catch (error) {
+      setEmployeeMessage(error instanceof Error ? error.message : "Não foi possível carregar o detalhe do colaborador.");
+    } finally {
+      setSelectedEmployeeLoading(false);
+    }
+  }
 
   useEffect(() => {
     if (!selected) return;
@@ -3436,8 +3463,8 @@ export function EmployeeMapPage() {
               {employeeMapLobs.map((lob) => <option key={lob} value={lob}>{lob === "Todos" ? "Todas as LOBs" : lob}</option>)}
             </select>
             <input value={query} onChange={(event) => setQuery(event.target.value)} className="h-11 flex-1 rounded-lg border border-border px-3 outline-none" placeholder="Digite o WB/Login ou nome" />
-            <button className="h-11 rounded-lg bg-blue-600 px-6 text-sm font-bold text-white">Buscar</button>
-            <button onClick={() => setQuery("")} className="h-11 rounded-lg border border-border px-6 text-sm font-bold">Limpar</button>
+            <button onClick={() => loadEmployees()} className="h-11 rounded-lg bg-blue-600 px-6 text-sm font-bold text-white">Buscar</button>
+            <button onClick={() => { setQuery(""); setLobFilter("Todos"); void loadEmployees("", "Todos"); }} className="h-11 rounded-lg border border-border px-6 text-sm font-bold">Limpar</button>
           </div>
           <div className="grid gap-4 md:grid-cols-4">
             <MetricPill value={employeeRows.length} label="Total de Funcionários" />
@@ -3446,11 +3473,13 @@ export function EmployeeMapPage() {
             <MetricPill value={employeeRows.filter((employee) => employee.status === "Offline").length} label="Offline" />
           </div>
           <Panel title="Funcionários">
-            {filtered.length ? (
+            {employeeLoading ? (
+              <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm font-bold text-blue-700">Carregando resumo dos colaboradores...</div>
+            ) : filtered.length ? (
               <SimpleTable
                 columns={["Nome", "E-mail", "WB/Login", "Cargo/Função", "Role", "LOB", "Supervisor", "Turno", "Status", "Ação"]}
                 rows={filtered.slice(0, 10).map((employee) => [
-                  <button key={employee.id} onClick={() => setSelected(employee)} className="font-bold text-blue-700">{employee.name}</button>,
+                  <button key={employee.id} onClick={() => selectEmployee(employee)} className="font-bold text-blue-700">{employee.name}</button>,
                   employee.email ?? "-",
                   employee.wb,
                   employee.role,
@@ -3459,7 +3488,7 @@ export function EmployeeMapPage() {
                   employee.supervisor,
                   employee.shift,
                   <StatusBadge key={`${employee.id}-status`} status={employee.status} />,
-                  <button key={`${employee.id}-action`} onClick={() => setSelected(employee)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">Ver detalhes</button>
+                  <button key={`${employee.id}-action`} onClick={() => selectEmployee(employee)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">Ver detalhes</button>
                 ])}
               />
             ) : (
@@ -3488,6 +3517,7 @@ export function EmployeeMapPage() {
           </Panel>
           <Panel title="Perfil do Colaborador">
             {selected ? <div className="space-y-4">
+              {selectedEmployeeLoading ? <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm font-bold text-blue-700">Carregando detalhes...</div> : null}
               <div className="flex items-center gap-3">
                 <span className="grid h-14 w-14 place-items-center rounded-full bg-blue-600 font-bold text-white">{initials(selected.name)}</span>
                 <div>

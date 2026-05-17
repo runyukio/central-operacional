@@ -599,6 +599,10 @@ Regras atuais:
 - Usuários criados por importação com `senha_temporaria` e senhas resetadas pelo Admin ficam com `mustChangePassword=true` e `temporaryPassword=true`; no próximo login são redirecionados para `/alterar-senha`.
 - A tela de login possui o link `Primeiro acesso ou senha temporária? Alterar senha`, permitindo trocar senha sem e-mail transacional ao informar e-mail, senha atual, nova senha e confirmação.
 - A troca de senha valida senha atual, tamanho mínimo, confirmação e impede reutilizar a senha temporária; após sucesso grava hash, limpa a obrigatoriedade e registra `AuditLog`.
+- Mapa de Funcionários passou a carregar uma listagem resumida paginada (`/api/employees?summary=true&limit=100`) e só busca dados completos/sensíveis no detalhe (`/api/employees/[id]`) quando o usuário clica em `Ver detalhes`.
+- Escalas usa consultas mais leves por período/mês selecionado, limitadas por página, com `select` nos campos necessários e apenas a última ocorrência de presença por célula para montar a grade.
+- Aprovar/recusar solicitações mantém atualização local no frontend e agora faz guarda transacional por status atual antes de histórico/notificações/aplicação de escala, reduzindo clique duplo e logs duplicados.
+- Foram adicionados índices de performance para filtros de colaboradores, escalas, solicitações, notificações, auditoria e attendance. A migration é `202605171245_performance_indexes`.
 
 Limitações temporárias:
 

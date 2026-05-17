@@ -272,6 +272,12 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
       if (transition === "FORBIDDEN") throw new DomainError("Sem permissão para alterar esta solicitação.");
       if ("error" in transition) throw new DomainError(transition.error);
 
+      const guard = await tx.request.updateMany({
+        where: { id: current.id, status: current.status },
+        data: { updatedAt: new Date() }
+      });
+      if (guard.count !== 1) throw new DomainError("Esta solicitação já foi processada por outra ação.");
+
       const scheduleResult =
         transition.applySchedule && isDayOffRequest(current)
           ? await applyDayOffRequestToSchedule(tx, current, user.id, actionInput)
@@ -471,11 +477,13 @@ const requestInclude = {
   employee: true,
   comments: {
     include: { author: true },
-    orderBy: { createdAt: "desc" as const }
+    orderBy: { createdAt: "desc" as const },
+    take: 20
   },
   history: {
     include: { actor: true },
-    orderBy: { createdAt: "desc" as const }
+    orderBy: { createdAt: "desc" as const },
+    take: 30
   }
 };
 

@@ -38,5 +38,12 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: result.error }, { status: 400 });
   }
 
-  return NextResponse.json({ data: result.data, scheduleUpdated: result.scheduleUpdated, persisted: result.persisted });
+  return NextResponse.json({
+    success: true,
+    data: result.data,
+    request: result.data,
+    message: `Solicitação ${result.data.id} atualizada para ${result.data.status}.`,
+    scheduleUpdated: result.scheduleUpdated,
+    persisted: result.persisted
+  });
 }
