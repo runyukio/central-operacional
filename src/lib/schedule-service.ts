@@ -142,6 +142,7 @@ type ScheduleImportValidation = {
   shiftId?: string | null;
   shiftStartsAt?: string | null;
   shiftEndsAt?: string | null;
+  lobId?: string | null;
   date?: Date;
   status?: ScheduleStatus;
 };
@@ -777,15 +778,14 @@ export async function commitOperationalScheduleImport(actor: Actor, input: Sched
     for (const chunk of chunkArray(validRows, 500)) {
       const values = chunk.map((rowValidation) => {
         const row = input.rows[rowValidation.rowNumber - 1] ?? {};
-        const useTime = needsTimeDb(rowValidation.status!);
-        const startsAt = useTime ? text(row.entrada) || rowValidation.shiftStartsAt || rowValidation.employeeShiftStartsAt || null : null;
-        const endsAt = useTime ? text(row.saida) || rowValidation.shiftEndsAt || rowValidation.employeeShiftEndsAt || null : null;
-        const shiftId = useTime ? rowValidation.shiftId ?? rowValidation.employeeShiftId ?? null : null;
+        const startsAt = normalizeTime(row.entrada);
+        const endsAt = normalizeTime(row.saida);
+        const shiftId = rowValidation.shiftId ?? null;
         return Prisma.sql`(
           ${randomUUID()},
           ${rowValidation.employeeId!},
           ${shiftId},
-          ${rowValidation.employeeLobId ?? null},
+          ${rowValidation.lobId ?? null},
           ${rowValidation.employeeSupervisorId ?? null},
           ${rowValidation.date!},
           ${startsAt},
@@ -858,6 +858,74 @@ export async function commitOperationalScheduleImport(actor: Actor, input: Sched
     recordErrorLog({ userEmail: actor.email, code: "SCHEDULE_IMPORT_DB_FALLBACK", message: error instanceof Error ? error.message : "Falha ao importar escala", action: "SCHEDULE_IMPORT", severity: "ERROR" });
     if (allowDemoDataFallback) return commitMockScheduleImport(actor, { ...input, allowPartial: Boolean(input.allowPartial) });
     return { error: "Não foi possível importar a escala no banco." };
+  }
+}
+
+export async function exportOperationalSchedulesCsv(actor: Actor, query: ScheduleQuery = {}) {
+  try {
+    const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
+    if (!user) return { error: "Usuário ativo não encontrado para exportar escala." };
+    const role = normalizeRole(actor.role);
+    if (!["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(role)) return { error: "Sem permissão para baixar Escalas Consolidadas." };
+
+    const period = resolvePeriod(query);
+    const search = query.collaborator?.trim();
+    const where: Prisma.ScheduleWhereInput = {
+      deletedAt: null,
+      date: { gte: period.start, lte: period.end },
+      ...(query.status && query.status !== "Todos" ? { status: uiToScheduleStatus[query.status] ?? undefined } : {}),
+      employee: {
+        deletedAt: null,
+        ...employeeFilters(query, search)
+      }
+    };
+
+    const schedules = await prisma.schedule.findMany({
+      where,
+      include: {
+        employee: {
+          include: {
+            user: { select: { email: true } },
+            lob: { select: { name: true } },
+            shift: { select: { name: true } },
+            supervisor: { select: { fullName: true } }
+          }
+        },
+        shift: { select: { name: true } }
+      },
+      orderBy: [{ date: "asc" }, { employee: { fullName: "asc" } }]
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        actorId: user.id,
+        action: "UPLOAD",
+        entity: "Schedule",
+        reason: "Exportação CSV de Escalas Consolidadas",
+        newValue: { filters: query, exportedRows: schedules.length }
+      }
+    }).catch(() => undefined);
+
+    const headers = ["wb_login", "nome", "email", "data", "status", "turno", "entrada", "saida", "lob", "supervisor", "observacao", "atualizado_em"];
+    const rows = schedules.map((schedule) => [
+      schedule.employee.wbLogin,
+      schedule.employee.fullName,
+      schedule.employee.user?.email ?? "",
+      schedule.date.toISOString().slice(0, 10),
+      scheduleToUiStatus[schedule.status] ?? schedule.status,
+      schedule.shift?.name ?? schedule.employee.shift?.name ?? "",
+      schedule.startsAt ?? "",
+      schedule.endsAt ?? "",
+      schedule.employee.lob.name,
+      schedule.employee.supervisor?.fullName ?? "",
+      schedule.observation ?? "",
+      formatDateTime(schedule.updatedAt)
+    ]);
+
+    return { csv: [headers, ...rows].map((row) => row.map(csvCell).join(";")).join("\n") };
+  } catch (error) {
+    recordErrorLog({ userEmail: actor.email, code: "SCHEDULE_EXPORT_ERROR", message: error instanceof Error ? error.message : "Falha ao exportar escalas", action: "SCHEDULE_EXPORT", severity: "ERROR" });
+    return { error: "Não foi possível baixar Escalas Consolidadas." };
   }
 }
 
@@ -1005,19 +1073,25 @@ async function validateImportRowsInDb(rows: Array<Record<string, unknown>>): Pro
       warnings.push("Data fora de maio de 2026. A linha será preservada, mas não aparecerá no filtro inicial de teste.");
     }
     if (!text(row.status)) errors.push("Status obrigatório.");
+    if (!text(row.turno)) errors.push("Turno obrigatório.");
+    if (!text(row.entrada)) errors.push("Entrada é obrigatória.");
+    if (!text(row.saida)) errors.push("Saída é obrigatória.");
+    if (!text(row.lob)) errors.push("LOB é obrigatória.");
 
     const status = scheduleStatusFromImport(row.status);
     if (text(row.status) && !status) errors.push(`Status inválido: ${text(row.status)}.`);
-    if (status && needsTimeDb(status) && !text(row.turno)) errors.push("Turno obrigatório para Escalado/Presente.");
-    if (status && needsTimeDb(status) && !text(row.entrada)) errors.push("Entrada obrigatória para Escalado/Presente.");
-    if (status && needsTimeDb(status) && !text(row.saida)) errors.push("Saída obrigatória para Escalado/Presente.");
+    const startsAt = normalizeTime(row.entrada);
+    const endsAt = normalizeTime(row.saida);
+    if (text(row.entrada) && !startsAt) errors.push("Horário de entrada inválido.");
+    if (text(row.saida) && !endsAt) errors.push("Horário de saída inválido.");
 
     const shift = text(row.turno) ? shiftMap.get(normalizeImportKey(text(row.turno))) : null;
     if (text(row.turno) && !shift) errors.push(`Turno ${text(row.turno)} não cadastrado.`);
-    if (text(row.lob) && !lobMap.has(normalizeImportKey(text(row.lob)))) warnings.push(`LOB ${text(row.lob)} não cadastrado; será usado o LOB do colaborador existente.`);
+    const lob = text(row.lob) ? lobMap.get(normalizeImportKey(text(row.lob))) : null;
+    if (text(row.lob) && !lob) errors.push(`LOB ${text(row.lob)} não cadastrada.`);
 
     const employee = wbLogin ? employeeMap.get(wbLogin) : null;
-    if (!employee) errors.push("WB/Login não encontrado na base de funcionários. Cadastre/aprove o funcionário antes de importar escala.");
+    if (wbLogin && !employee) errors.push("WB/Login não encontrado na base de funcionários.");
     if (employee && text(row.lob) && normalizeImportKey(text(row.lob)) !== normalizeImportKey(employee.lob.name)) warnings.push("LOB no arquivo diferente da LOB do colaborador.");
     if (employee && text(row.supervisor_wb_login) && normalizeImportKey(text(row.supervisor_wb_login)) !== normalizeImportKey(employee.supervisor?.wbLogin ?? "")) warnings.push("Supervisor no arquivo diferente do supervisor do colaborador.");
     if (key && (duplicateKeys.get(key) ?? 0) > 1) errors.push("Linha duplicada no arquivo para o mesmo WB/Login + data.");
@@ -1039,6 +1113,7 @@ async function validateImportRowsInDb(rows: Array<Record<string, unknown>>): Pro
       shiftId: shift?.id,
       shiftStartsAt: shift?.startsAt,
       shiftEndsAt: shift?.endsAt,
+      lobId: lob?.id,
       date: parsedDate ?? undefined,
       status: status ?? undefined
     };
@@ -1392,18 +1467,38 @@ function calendarCells(year: number, month: number) {
 }
 
 function parseDateOnly(value: string) {
-  const date = new Date(`${value.slice(0, 10)}T00:00:00.000Z`);
+  const raw = text(value);
+  const br = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (br) return new Date(Date.UTC(Number(br[3]), Number(br[2]) - 1, Number(br[1])));
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return new Date(Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])));
+  const date = new Date(`${raw.slice(0, 10)}T00:00:00.000Z`);
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
 function parseImportDate(value: unknown) {
   if (!value) return null;
-  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : dateOnly(value);
   if (typeof value === "number") {
     const excelEpoch = new Date(Date.UTC(1899, 11, 30));
-    return new Date(excelEpoch.getTime() + value * 24 * 60 * 60 * 1000);
+    return dateOnly(new Date(excelEpoch.getTime() + value * 24 * 60 * 60 * 1000));
   }
   return parseDateOnly(String(value));
+}
+
+function dateOnly(value: Date) {
+  return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
+}
+
+function normalizeTime(value: unknown) {
+  const raw = text(value);
+  if (!raw) return null;
+  const match = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23 || minute > 59) return null;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
 function text(value: unknown) {
@@ -1442,4 +1537,8 @@ function formatDateTime(date: Date) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(date);
+}
+
+function csvCell(value: unknown) {
+  return `"${String(value ?? "").replace(/"/g, '""')}"`;
 }

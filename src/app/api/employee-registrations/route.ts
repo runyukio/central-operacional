@@ -4,9 +4,15 @@ import { getApiActor } from "@/lib/api-actor";
 import { deleteOperationalRegistration, listOperationalRegistrations, submitOperationalRegistration } from "@/lib/employee-registration-service";
 import { parseRegistrationPayload } from "@/lib/registration-validation";
 
-export async function GET() {
+export async function GET(request: Request) {
   const actor = await getApiActor();
-  return NextResponse.json({ data: await listOperationalRegistrations(actor) });
+  const url = new URL(request.url);
+  return NextResponse.json(await listOperationalRegistrations(actor, {
+    page: Number(url.searchParams.get("page")) || undefined,
+    limit: Number(url.searchParams.get("limit")) || undefined,
+    search: url.searchParams.get("search") ?? undefined,
+    status: url.searchParams.get("status") ?? undefined
+  }));
 }
 
 export async function POST(request: Request) {

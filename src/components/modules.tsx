@@ -97,7 +97,7 @@ import {
 } from "@/lib/demo-data";
 import { cn, formatCurrency, initials } from "@/lib/utils";
 
-const scheduleImportColumns = ["wb_login", "nome", "email", "lob", "supervisor", "data", "turno", "entrada", "saida", "status", "observacao"] as const;
+const scheduleImportColumns = ["wb_login", "data", "status", "turno", "entrada", "saida", "lob"] as const;
 const workHourImportColumns = ["wb_login", "data", "entrada_real", "saida_real", "pausa_minutos", "horas_realizadas", "sistema_origem", "observacao", "nome", "email", "lob", "supervisor_wb_login", "turno"] as const;
 const scheduleStatusOptions = ["Escalado", "Presente", "Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Férias", "Treinamento", "Folga", "Troca aprovada", "Venda de folga aprovada", "Folga aprovada", "Sem escala", "Erro de escala"] as const;
 const attendanceReasonStatuses = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala"];
@@ -326,6 +326,13 @@ type RegistrationItem = {
   reviewNotes?: string;
   operationalData?: Record<string, string>;
   history: Array<{ at: string; actor: string; action: string; notes?: string }>;
+};
+
+type RegistrationSummary = {
+  pending: number;
+  active: number;
+  adjust: number;
+  refused: number;
 };
 
 type EmployeeImportPreview = {
@@ -1616,6 +1623,9 @@ function normalizeEmployeeImportSheetRow(row: Record<string, unknown>) {
 export function RegistrationApprovalsPage() {
   const employeeImportInputRef = useRef<HTMLInputElement | null>(null);
   const [items, setItems] = useState<RegistrationItem[]>([]);
+  const [registrationPagination, setRegistrationPagination] = useState({ page: 1, limit: 50, total: 0, totalPages: 1 });
+  const [registrationFilters, setRegistrationFilters] = useState({ search: "", status: "Todos" });
+  const [registrationSummary, setRegistrationSummary] = useState<RegistrationSummary>({ pending: 0, active: 0, adjust: 0, refused: 0 });
   const [selected, setSelected] = useState<RegistrationItem | null>(null);
   const [message, setMessage] = useState("");
   const [messageTone, setMessageTone] = useState<"success" | "error">("success");
@@ -1651,6 +1661,7 @@ export function RegistrationApprovalsPage() {
     apiJson<{ data: SystemSettings }>("/api/settings")
       .then((payload) => setRegistrationSettings(payload.data))
       .catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -1673,10 +1684,23 @@ export function RegistrationApprovalsPage() {
     });
   }, [selected]);
 
-  async function refreshRegistrations() {
-    const payload = await apiJson<{ data: RegistrationItem[] }>("/api/employee-registrations");
+  async function refreshRegistrations(nextPage = registrationPagination.page, nextLimit = registrationPagination.limit, nextFilters = registrationFilters) {
+    const params = new URLSearchParams({
+      page: String(nextPage),
+      limit: String(nextLimit)
+    });
+    if (nextFilters.search.trim()) params.set("search", nextFilters.search.trim());
+    if (nextFilters.status !== "Todos") params.set("status", nextFilters.status);
+    const payload = await apiJson<{ data: RegistrationItem[]; total: number; page: number; limit: number; totalPages: number; summary?: RegistrationSummary }>(`/api/employee-registrations?${params.toString()}`);
     setItems(payload.data);
-    setSelected((current) => current ?? payload.data[0] ?? null);
+    setRegistrationPagination({ total: payload.total, page: payload.page, limit: payload.limit, totalPages: payload.totalPages });
+    setRegistrationSummary(payload.summary ?? {
+      pending: payload.data.filter((item) => item.status === "Pendente de Aprovação").length,
+      active: payload.data.filter((item) => item.status === "Ativo" || item.status === "Aprovado").length,
+      adjust: payload.data.filter((item) => item.status === "Ajuste Solicitado").length,
+      refused: payload.data.filter((item) => item.status === "Recusado").length
+    });
+    setSelected((current) => current && payload.data.some((item) => item.id === current.id) ? current : payload.data[0] ?? null);
   }
 
   async function handleEmployeeImportFile(file?: File) {
@@ -1745,7 +1769,7 @@ export function RegistrationApprovalsPage() {
       setMessageTone("success");
       setMessage(`Importação concluída: ${summary.colaboradoresCriados} colaborador(es), ${summary.usuariosCriados} usuário(s), ${summary.registrosAtualizados} registro(s) atualizado(s), ${summary.ignoredRows} linha(s) ignorada(s).`);
       setShowEmployeeImport(false);
-      await refreshRegistrations();
+      await refreshRegistrations(1);
     } catch (err) {
       setMessageTone("error");
       const errorMessage = err instanceof ApiRequestError ? err.message : err instanceof Error ? err.message : "Não foi possível importar colaboradores.";
@@ -1840,15 +1864,17 @@ export function RegistrationApprovalsPage() {
   }
 
   const counts = {
-    pending: items.filter((item) => item.status === "Pendente de Aprovação").length,
-    active: items.filter((item) => item.status === "Ativo" || item.status === "Aprovado").length,
-    adjust: items.filter((item) => item.status === "Ajuste Solicitado").length,
-    refused: items.filter((item) => item.status === "Recusado").length
+    pending: registrationSummary.pending,
+    active: registrationSummary.active,
+    adjust: registrationSummary.adjust,
+    refused: registrationSummary.refused
   };
   const selectedReviewClosed = selected ? ["Aprovado", "Ativo", "Recusado"].includes(selected.status) : false;
   const registrationLobOptions = registrationSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? ["ALL", "CEC", "TNS", "ADS"];
   const registrationShiftOptions = registrationSettings?.shifts.filter((shift) => shift.status !== "INACTIVE").map((shift) => shift.name) ?? ["Manhã", "Tarde", "Noite", "Backoffice"];
   const registrationRoleTitleOptions = registrationSettings?.roleTitles.filter((title) => title.status !== "INACTIVE").map((title) => title.name) ?? ["Atendente", "Supervisor", "WFM", "Qualidade", "RH"];
+  const registrationStart = registrationPagination.total ? (registrationPagination.page - 1) * registrationPagination.limit + 1 : 0;
+  const registrationEnd = Math.min(registrationPagination.page * registrationPagination.limit, registrationPagination.total);
 
   return (
     <div>
@@ -1878,21 +1904,73 @@ export function RegistrationApprovalsPage() {
         <StatCard title="Recusados" value={counts.refused} helper="com justificativa" icon={XCircle} tone="red" />
       </div>
       {message ? <div className={cn("mb-5 rounded-lg border px-4 py-3 text-sm font-bold", messageTone === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700")}>{message}</div> : null}
+      <section className="card mb-5 p-4">
+        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px_140px_160px]">
+          <input
+            value={registrationFilters.search}
+            onChange={(event) => setRegistrationFilters({ ...registrationFilters, search: event.target.value })}
+            className="h-10 rounded-lg border border-border px-3 text-sm outline-none"
+            placeholder="Buscar por nome, e-mail ou CPF"
+          />
+          <select
+            value={registrationFilters.status}
+            onChange={(event) => setRegistrationFilters({ ...registrationFilters, status: event.target.value })}
+            className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"
+          >
+            {["Todos", "Pendente de Aprovação", "Ajuste Solicitado", "Aprovado", "Ativo", "Recusado", "Inativo"].map((status) => <option key={status}>{status}</option>)}
+          </select>
+          <select
+            value={registrationPagination.limit}
+            onChange={(event) => {
+              const limit = Number(event.target.value);
+              setRegistrationPagination((current) => ({ ...current, limit, page: 1 }));
+              void refreshRegistrations(1, limit);
+            }}
+            className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"
+          >
+            {[25, 50, 100].map((limit) => <option key={limit} value={limit}>{limit}/página</option>)}
+          </select>
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={() => void refreshRegistrations(1)} className="rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
+            <button
+              onClick={() => {
+                setRegistrationFilters({ search: "", status: "Todos" });
+                setRegistrationPagination((current) => ({ ...current, page: 1 }));
+                void refreshRegistrations(1, registrationPagination.limit, { search: "", status: "Todos" });
+              }}
+              className="rounded-lg border border-border bg-white px-3 text-sm font-bold"
+            >
+              Limpar
+            </button>
+          </div>
+        </div>
+      </section>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_460px]">
         <Panel title="Esteira de aprovação cadastral">
           {items.length ? (
-            <SimpleTable
-              columns={["Protocolo", "Nome", "E-mail", "Cidade/UF", "Status", "Envio"]}
-              rows={items.map((item) => [
-                <button key={item.id} onClick={() => setSelected(item)} className="font-extrabold text-blue-600">{item.id}</button>,
-                <button key={`${item.id}-name`} onClick={() => setSelected(item)} className="text-left font-extrabold text-navy-950 hover:text-blue-700">{item.fullName}</button>,
-                <button key={`${item.id}-email`} onClick={() => setSelected(item)} className="text-left text-blue-700">{item.email}</button>,
-                `${item.city}/${item.stateUf}`,
-                <StatusBadge key={`${item.id}-status`} status={item.status} />,
-                item.submittedAt
-              ])}
-            />
-          ) : <EmptyState title="Nenhum cadastro pendente" description="Cadastros reais enviados pelos colaboradores aparecerão aqui." />}
+            <div className="space-y-4">
+              <SimpleTable
+                columns={["Protocolo", "Nome", "E-mail", "Cidade/UF", "Status", "Envio"]}
+                rows={items.map((item) => [
+                  <button key={item.id} onClick={() => setSelected(item)} className="font-extrabold text-blue-600">{item.id}</button>,
+                  <button key={`${item.id}-name`} onClick={() => setSelected(item)} className="text-left font-extrabold text-navy-950 hover:text-blue-700">{item.fullName}</button>,
+                  <button key={`${item.id}-email`} onClick={() => setSelected(item)} className="text-left text-blue-700">{item.email}</button>,
+                  `${item.city}/${item.stateUf}`,
+                  <StatusBadge key={`${item.id}-status`} status={item.status} />,
+                  item.submittedAt
+                ])}
+              />
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4 text-sm text-muted">
+                <span>Exibindo {registrationStart}-{registrationEnd} de {registrationPagination.total} registros • Página {registrationPagination.page} de {registrationPagination.totalPages}</span>
+                <div className="flex flex-wrap gap-2">
+                  <button disabled={registrationPagination.page <= 1} onClick={() => void refreshRegistrations(1)} className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-bold text-navy-950 disabled:opacity-40">Primeira</button>
+                  <button disabled={registrationPagination.page <= 1} onClick={() => void refreshRegistrations(registrationPagination.page - 1)} className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-bold text-navy-950 disabled:opacity-40">Anterior</button>
+                  <button disabled={registrationPagination.page >= registrationPagination.totalPages} onClick={() => void refreshRegistrations(registrationPagination.page + 1)} className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-bold text-navy-950 disabled:opacity-40">Próxima</button>
+                  <button disabled={registrationPagination.page >= registrationPagination.totalPages} onClick={() => void refreshRegistrations(registrationPagination.totalPages)} className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-bold text-navy-950 disabled:opacity-40">Última</button>
+                </div>
+              </div>
+            </div>
+          ) : <EmptyState title="Nenhum cadastro encontrado" description="Nenhum cadastro encontrado para os filtros selecionados." />}
         </Panel>
         <Panel title="Validação e dados operacionais">
           {selected ? (
@@ -2523,6 +2601,7 @@ export function SchedulesPage() {
   const uniqueShifts = ["Todos", ...availableShiftNames];
   const normalizedScheduleActorRole = scheduleActorRole === "MANAGEMENT" ? "GESTOR" : scheduleActorRole;
   const canManageSchedules = ["ADMIN", "GESTOR", "WFM"].includes(normalizedScheduleActorRole);
+  const canExportSchedules = ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(normalizedScheduleActorRole);
   const isScheduleSupervisor = normalizedScheduleActorRole === "SUPERVISOR";
   const selectedScheduleEmployee = employeeOptions.find((employee) => employee.id === scheduleEditForm.employeeId);
   const canEditOfficialWorkHours = canManageSchedules;
@@ -2546,6 +2625,20 @@ export function SchedulesPage() {
   function configuredTimesForShift(shift: string) {
     const configured = scheduleSettings?.shifts.find((item) => item.name === shift);
     return configured ? { startsAt: configured.startsAt, endsAt: configured.endsAt } : timesForShift(shift);
+  }
+
+  function scheduleExportUrl() {
+    const params = new URLSearchParams({
+      month: String(schedulePeriod.month),
+      year: String(schedulePeriod.year)
+    });
+    if (scheduleFilters.collaborator) params.set("collaborator", scheduleFilters.collaborator);
+    if (scheduleFilters.lob !== "Todos") params.set("lob", scheduleFilters.lob);
+    if (scheduleFilters.supervisor) params.set("supervisor", scheduleFilters.supervisor);
+    if (scheduleFilters.shift !== "Todos") params.set("shift", scheduleFilters.shift);
+    if (scheduleFilters.status !== "Todos") params.set("status", scheduleFilters.status);
+    if (scheduleFilters.roleTitle) params.set("roleTitle", scheduleFilters.roleTitle);
+    return `/api/schedules/export?${params.toString()}`;
   }
 
   function updateManualTime(field: "actualStart" | "actualEnd", value: string) {
@@ -2609,15 +2702,30 @@ export function SchedulesPage() {
               <Download className="h-4 w-4" />
               Baixar Template
             </a>
+            <a
+              href={scheduleExportUrl()}
+              className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft"
+            >
+              <FileSpreadsheet className="h-4 w-4" />
+              Baixar Escalas Consolidadas
+            </a>
             <button onClick={() => openScheduleEditor(undefined, 0, "Escalado")} className="flex h-11 items-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white shadow-soft">
               <Plus className="h-4 w-4" />
               Adicionar escala manual
             </button>
           </>
         ) : (
-          <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
-            Supervisor visualiza a grade e registra justificativas de ocorrência. Upload, adição manual e presença ficam com WFM/Admin.
-          </div>
+          <>
+            <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
+              Supervisor visualiza a grade e registra justificativas de ocorrência. Upload, adição manual e presença ficam com WFM/Admin.
+            </div>
+            {canExportSchedules ? (
+              <a href={scheduleExportUrl()} className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft">
+                <FileSpreadsheet className="h-4 w-4" />
+                Baixar Escalas Consolidadas
+              </a>
+            ) : null}
+          </>
         )}
       </div>
 
@@ -3068,13 +3176,13 @@ export function SchedulesPage() {
                 <MetricPill value={previewResult?.createdRows ?? 0} label="Novas escalas" />
                 <MetricPill value={previewResult?.updatedRows ?? 0} label="Atualizações" />
                 <MetricPill value={previewResult?.missingEmployees ?? 0} label="WB/Login não encontrados" />
-                <p className="text-sm text-muted">Validações: WB/Login existente, data, status válido, turno/entrada/saída quando necessário, conflito por pessoa/dia, LOB, supervisor e cobertura mínima.</p>
+                <p className="text-sm text-muted">Validações: WB/Login existente, data, status válido, turno, entrada, saída, LOB e conflito por pessoa/dia.</p>
                 {(previewRows.length > 300 || (previewResult?.validation.length ?? 0) > 300) ? <p className="text-xs font-semibold text-muted">Exibindo as primeiras 300 linhas no preview para manter a tela rápida. O commit processa todas as linhas válidas.</p> : null}
                 <button
                   onClick={commitImport}
                   className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white"
                 >
-                  Confirmar importação parcial
+                  Confirmar importação
                 </button>
               </div>
             </div>
@@ -3541,22 +3649,18 @@ export function WorkHoursPage() {
 const templateRows = [
   {
     wb_login: "WB1001",
-    nome: "João Silva",
-    email: "joao.silva@empresa.com",
-    lob: "CEC",
-    supervisor: "Carla Supervisora",
     data: "2026-05-15",
+    status: "Escalado",
     turno: "Manhã",
     entrada: "06:00",
     saida: "14:00",
-    status: "Escalado",
-    observacao: "Seed"
+    lob: "CEC"
   }
 ];
 
 function validateImportRows(rows: Array<Record<string, unknown>>) {
   if (!rows.length) return { errors: 0, warnings: 0 };
-  const required = ["wb_login", "nome", "data", "status"];
+  const required = ["wb_login", "data", "status", "turno", "entrada", "saida", "lob"];
   const errors = rows.reduce((acc, row) => acc + required.filter((field) => !row[field]).length, 0);
   const warnings = rows.filter((row) => row.lob && !["CEC", "TNS", "ADS"].includes(String(row.lob))).length;
   return { errors, warnings };

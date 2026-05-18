@@ -92,6 +92,13 @@ export const employeeImportColumns = [
 
 type EmployeeImportRow = Record<string, unknown>;
 
+export type RegistrationListQuery = {
+  page?: number;
+  limit?: number;
+  search?: string;
+  status?: string;
+};
+
 type EmployeeImportValidation = {
   rowNumber: number;
   errors: string[];
@@ -573,21 +580,57 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
   }
 }
 
-export async function listOperationalRegistrations(actor: Actor) {
+export async function listOperationalRegistrations(actor: Actor, query: RegistrationListQuery = {}) {
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
-    if (!user) return allowDemoDataFallback ? listMockRegistrations(actor) : [];
-    if (!["ADMIN", "GESTOR", "RH", "WFM"].includes(normalizeRole(actor.role))) return [];
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(100, Math.max(25, Number(query.limit) || 50));
+    if (!user) {
+      const mock = allowDemoDataFallback ? listMockRegistrations(actor) : [];
+      return { data: mock, total: mock.length, page: 1, limit, totalPages: 1, summary: summarizeRegistrations(mock) };
+    }
+    if (!["ADMIN", "GESTOR", "RH", "WFM"].includes(normalizeRole(actor.role))) {
+      return { data: [], total: 0, page: 1, limit, totalPages: 1, summary: summarizeRegistrations([]) };
+    }
 
-    const items = await prisma.employeeRegistrationRequest.findMany({
-      where: { deletedAt: null },
-      orderBy: { submittedAt: "desc" },
-      take: 100
-    });
-    return items.map(mapRegistration);
+    const status = registrationStatusFromFilter(query.status);
+    const search = query.search?.trim();
+    const where: Prisma.EmployeeRegistrationRequestWhereInput = {
+      deletedAt: null,
+      ...(status ? { status } : {}),
+      ...(search ? {
+        OR: [
+          { fullName: { contains: search, mode: "insensitive" } },
+          { email: { contains: search, mode: "insensitive" } },
+          { cpf: { contains: search.replace(/\D/g, ""), mode: "insensitive" } }
+        ]
+      } : {})
+    };
+    const [items, total, statusItems] = await prisma.$transaction([
+      prisma.employeeRegistrationRequest.findMany({
+        where,
+        orderBy: { submittedAt: "desc" },
+        skip: (page - 1) * limit,
+        take: limit
+      }),
+      prisma.employeeRegistrationRequest.count({ where }),
+      prisma.employeeRegistrationRequest.findMany({
+        where: { deletedAt: null },
+        select: { status: true }
+      })
+    ]);
+    return {
+      data: items.map(mapRegistration),
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+      summary: summarizeRegistrationStatuses(statusItems)
+    };
   } catch (error) {
     recordErrorLog({ userEmail: actor.email, code: "REGISTRATION_LIST_DB_ERROR", message: error instanceof Error ? error.message : "Falha ao listar cadastros reais", action: "REGISTRATION_LIST", severity: "ERROR" });
-    return allowDemoDataFallback ? listMockRegistrations(actor) : [];
+    const fallback = allowDemoDataFallback ? listMockRegistrations(actor) : [];
+    return { data: fallback, total: fallback.length, page: 1, limit: Number(query.limit) || 50, totalPages: 1, summary: summarizeRegistrations(fallback) };
   }
 }
 
@@ -1170,6 +1213,42 @@ function duplicateMessageForRegistration(item: EmployeeRegistrationRequest, fiel
       : "Já existe um cadastro ativo ou aprovado com este e-mail.";
   }
   return "Já existe um cadastro ativo ou em análise para este CNPJ.";
+}
+
+function registrationStatusFromFilter(value?: string) {
+  if (!value || value === "Todos") return undefined;
+  const normalized = normalizeLookupKey(value);
+  const map: Record<string, EmployeeRegistrationStatus> = {
+    RASCUNHO: "RASCUNHO",
+    ENVIADO: "ENVIADO",
+    PENDENTE_APROVACAO: "PENDENTE_APROVACAO",
+    PENDENTE_DE_APROVACAO: "PENDENTE_APROVACAO",
+    AJUSTE_SOLICITADO: "AJUSTE_SOLICITADO",
+    APROVADO: "APROVADO",
+    ATIVO: "ATIVO",
+    RECUSADO: "RECUSADO",
+    INATIVO: "INATIVO"
+  };
+  return map[normalized];
+}
+
+function summarizeRegistrationStatuses(items: Array<{ status: EmployeeRegistrationStatus }>) {
+  const count = (statuses: EmployeeRegistrationStatus[]) => items.filter((item) => statuses.includes(item.status)).length;
+  return {
+    pending: count(["PENDENTE_APROVACAO", "ENVIADO"]),
+    active: count(["ATIVO", "APROVADO"]),
+    adjust: count(["AJUSTE_SOLICITADO"]),
+    refused: count(["RECUSADO"])
+  };
+}
+
+function summarizeRegistrations(items: Array<{ status: string }>) {
+  return {
+    pending: items.filter((item) => item.status === "Pendente de Aprovação" || item.status === "Enviado").length,
+    active: items.filter((item) => item.status === "Ativo" || item.status === "Aprovado").length,
+    adjust: items.filter((item) => item.status === "Ajuste Solicitado").length,
+    refused: items.filter((item) => item.status === "Recusado").length
+  };
 }
 
 function mapRegistration(item: EmployeeRegistrationRequest) {
