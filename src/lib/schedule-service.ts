@@ -3,6 +3,7 @@ import { AttendanceStatus, Prisma, ScheduleStatus } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
 import { commitScheduleImport as commitMockScheduleImport, getAttendanceSummary as getMockAttendanceSummary, getSchedulesForActor as getMockSchedulesForActor, listAttendanceRecords as listMockAttendanceRecords, previewScheduleRows as previewMockScheduleRows, recordErrorLog, updateAttendance as updateMockAttendance } from "@/lib/mock-db";
+import { hasExcelValue, normalizeExcelDate, normalizeExcelTime } from "@/lib/excel-normalization";
 import { prisma } from "@/lib/prisma";
 import { normalizeRole } from "@/lib/permissions";
 
@@ -26,6 +27,26 @@ const uiToScheduleStatus: Record<string, ScheduleStatus> = {
   Conflito: "CONFLITO",
   Descoberto: "DESCOBERTO"
 };
+
+const allowedScheduleImportStatusKeys = new Set([
+  "ESCALADO",
+  "PRESENTE",
+  "AUSENTE",
+  "FALTA",
+  "ATRASO",
+  "SAIDA_ANTECIPADA",
+  "AFASTADO",
+  "FERIAS",
+  "TREINAMENTO",
+  "FOLGA",
+  "TROCA_APROVADA",
+  "VENDA_DE_FOLGA_APROVADA",
+  "VENDA_FOLGA_APROVADA",
+  "FOLGA_APROVADA",
+  "SEM_ESCALA",
+  "ERRO_DE_ESCALA",
+  "ERRO_ESCALA"
+]);
 
 const scheduleToUiStatus: Record<string, string> = Object.fromEntries(Object.entries(uiToScheduleStatus).map(([ui, db]) => [db, ui]));
 
@@ -145,6 +166,8 @@ type ScheduleImportValidation = {
   lobId?: string | null;
   date?: Date;
   status?: ScheduleStatus;
+  startsAt?: string;
+  endsAt?: string;
 };
 
 export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery = {}) {
@@ -801,8 +824,8 @@ export async function commitOperationalScheduleImport(actor: Actor, input: Sched
             supervisor: text(row.supervisor_wb_login),
             date: rowValidation.date ?? null,
             shift: text(row.turno),
-            startsAt: text(row.entrada),
-            endsAt: text(row.saida),
+            startsAt: rowValidation.startsAt ?? text(row.entrada),
+            endsAt: rowValidation.endsAt ?? text(row.saida),
             status: text(row.status),
             observation: text(row.observacao),
             validation: {
@@ -820,8 +843,8 @@ export async function commitOperationalScheduleImport(actor: Actor, input: Sched
     for (const chunk of chunkArray(validRows, 500)) {
       const values = chunk.map((rowValidation) => {
         const row = input.rows[rowValidation.rowNumber - 1] ?? {};
-        const startsAt = normalizeTime(row.entrada);
-        const endsAt = normalizeTime(row.saida);
+        const startsAt = rowValidation.startsAt ?? normalizeTime(row.entrada);
+        const endsAt = rowValidation.endsAt ?? normalizeTime(row.saida);
         const shiftId = rowValidation.shiftId ?? null;
         return Prisma.sql`(
           ${randomUUID()},
@@ -1109,23 +1132,26 @@ async function validateImportRowsInDb(rows: Array<Record<string, unknown>>): Pro
     const errors: string[] = [];
     const warnings: string[] = [];
 
-    if (!text(row.wb_login)) errors.push("WB/Login obrigatório para importar escala.");
-    if (!parsedDate) errors.push("Data obrigatória ou inválida.");
-    if (parsedDate && (parsedDate.getUTCFullYear() !== 2026 || parsedDate.getUTCMonth() !== 4)) {
-      warnings.push("Data fora de maio de 2026. A linha será preservada, mas não aparecerá no filtro inicial de teste.");
-    }
-    if (!text(row.status)) errors.push("Status obrigatório.");
-    if (!text(row.turno)) errors.push("Turno obrigatório.");
-    if (!text(row.entrada)) errors.push("Entrada é obrigatória.");
-    if (!text(row.saida)) errors.push("Saída é obrigatória.");
-    if (!text(row.lob)) errors.push("LOB é obrigatória.");
+    if (!hasExcelValue(row.wb_login)) errors.push("WB/Login obrigatório para importar escala.");
+    if (!hasExcelValue(row.data)) errors.push("Data é obrigatória.");
+    else if (!parsedDate) errors.push("Data inválida. Use DD/MM/AAAA ou AAAA-MM-DD.");
+    if (!hasExcelValue(row.status)) errors.push("Status obrigatório.");
+    if (!hasExcelValue(row.turno)) errors.push("Turno obrigatório.");
+    if (!hasExcelValue(row.entrada)) errors.push("Entrada é obrigatória.");
+    if (!hasExcelValue(row.saida)) errors.push("Saída é obrigatória.");
+    if (!hasExcelValue(row.lob)) errors.push("LOB é obrigatória.");
 
     const status = scheduleStatusFromImport(row.status);
-    if (text(row.status) && !status) errors.push(`Status inválido: ${text(row.status)}.`);
+    const statusKey = normalizeImportKey(text(row.status));
+    if (statusKey === "NESTING") {
+      errors.push("Nesting não é um status de escala. Use Treinamento, Escalado, Folga ou outro status de escala válido.");
+    } else if (hasExcelValue(row.status) && !status) {
+      errors.push(`Status inválido: ${text(row.status)}. Use um status de escala válido.`);
+    }
     const startsAt = normalizeTime(row.entrada);
     const endsAt = normalizeTime(row.saida);
-    if (text(row.entrada) && !startsAt) errors.push("Horário de entrada inválido.");
-    if (text(row.saida) && !endsAt) errors.push("Horário de saída inválido.");
+    if (hasExcelValue(row.entrada) && !startsAt) errors.push("Entrada inválida. Use 06:00, 06:00:00 ou decimal do Excel como 0,25.");
+    if (hasExcelValue(row.saida) && !endsAt) errors.push("Saída inválida. Use 06:00, 06:00:00 ou decimal do Excel como 0,25.");
 
     const shift = text(row.turno) ? shiftMap.get(normalizeImportKey(text(row.turno))) : null;
     if (text(row.turno) && !shift) errors.push(`Turno ${text(row.turno)} não cadastrado.`);
@@ -1157,14 +1183,25 @@ async function validateImportRowsInDb(rows: Array<Record<string, unknown>>): Pro
       shiftEndsAt: shift?.endsAt,
       lobId: lob?.id,
       date: parsedDate ?? undefined,
-      status: status ?? undefined
+      status: status ?? undefined,
+      startsAt: startsAt ?? undefined,
+      endsAt: endsAt ?? undefined
     };
   });
 }
 
 function toImportPreview(rows: Array<Record<string, unknown>>, validation: ScheduleImportValidation[]) {
   return {
-    rows,
+    rows: rows.map((row, index) => {
+      const result = validation[index];
+      return {
+        ...row,
+        data: result?.date ? formatDate(result.date) : row.data,
+        entrada: result?.startsAt ?? row.entrada,
+        saida: result?.endsAt ?? row.saida,
+        status: result?.status ? scheduleToUiStatus[result.status] ?? row.status : row.status
+      };
+    }),
     totalRows: rows.length,
     validRows: validation.filter((row) => !row.errors.length).length,
     errorRows: validation.filter((row) => row.errors.length).length,
@@ -1206,7 +1243,9 @@ function needsTimeDb(status: ScheduleStatus) {
 function scheduleStatusFromImport(value: unknown) {
   const raw = text(value);
   if (!raw) return null;
-  return uiToScheduleStatus[raw] ?? uiToScheduleStatusByKey[normalizeImportKey(raw)] ?? null;
+  const key = normalizeImportKey(raw);
+  if (!allowedScheduleImportStatusKeys.has(key)) return null;
+  return uiToScheduleStatus[raw] ?? uiToScheduleStatusByKey[key] ?? null;
 }
 
 const uiToScheduleStatusByKey = Object.fromEntries(
@@ -1519,28 +1558,11 @@ function parseDateOnly(value: string) {
 }
 
 function parseImportDate(value: unknown) {
-  if (!value) return null;
-  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : dateOnly(value);
-  if (typeof value === "number") {
-    const excelEpoch = new Date(Date.UTC(1899, 11, 30));
-    return dateOnly(new Date(excelEpoch.getTime() + value * 24 * 60 * 60 * 1000));
-  }
-  return parseDateOnly(String(value));
-}
-
-function dateOnly(value: Date) {
-  return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
+  return normalizeExcelDate(value);
 }
 
 function normalizeTime(value: unknown) {
-  const raw = text(value);
-  if (!raw) return null;
-  const match = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
-  if (!match) return null;
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  if (hour > 23 || minute > 59) return null;
-  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  return normalizeExcelTime(value);
 }
 
 function text(value: unknown) {

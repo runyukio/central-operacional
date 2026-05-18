@@ -8,6 +8,7 @@ import {
 } from "@prisma/client";
 
 import { createPermissionError, createValidationError, mapPrismaError } from "@/lib/api-errors";
+import { hasExcelValue, normalizeExcelDate, normalizeExcelTime } from "@/lib/excel-normalization";
 import type { Actor } from "@/lib/mock-db";
 import { recordErrorLog } from "@/lib/mock-db";
 import { normalizeRole } from "@/lib/permissions";
@@ -726,7 +727,8 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
     const errors: string[] = [];
     const warnings: string[] = [];
     if (!wbLogin) errors.push("WB/Login é obrigatório.");
-    if (!date) errors.push("Data inválida.");
+    if (!hasExcelValue(row.data)) errors.push("Data é obrigatória.");
+    else if (!date) errors.push("Data inválida. Use DD/MM/AAAA ou AAAA-MM-DD.");
     if (key && (duplicateKeys.get(key) ?? 0) > 1) errors.push("Linha duplicada no arquivo para o mesmo WB/Login + data.");
 
     const employee = wbLogin ? employeeMap.get(wbLogin) : null;
@@ -737,8 +739,10 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
     const actualEnd = normalizeTime(row.saida_real);
     const parsedBreak = parseBreakMinutes(text(row.pausa_minutos) ? row.pausa_minutos : row.pausa);
     const explicitActualHours = parseHours(row.horas_realizadas);
-    if (!actualStart) errors.push("Entrada real inválida.");
-    if (!actualEnd) errors.push("Saída real inválida.");
+    if (!hasExcelValue(row.entrada_real)) errors.push("Entrada real é obrigatória.");
+    else if (!actualStart) errors.push("Entrada real inválida. Use 06:00, 06:00:00 ou decimal do Excel como 0,25.");
+    if (!hasExcelValue(row.saida_real)) errors.push("Saída real é obrigatória.");
+    else if (!actualEnd) errors.push("Saída real inválida. Use 06:00, 06:00:00 ou decimal do Excel como 0,25.");
     if (parsedBreak.error) errors.push(parsedBreak.error);
     const grossMinutes = actualStart && actualEnd ? minutesBetween(actualStart, actualEnd) : null;
     if (grossMinutes !== null && parsedBreak.minutes > grossMinutes) errors.push("A pausa não pode ser maior que o período entre entrada e saída.");
@@ -794,12 +798,25 @@ function toImportPreview(rows: Array<Record<string, unknown>>, validation: Valid
     missingEmployees: validation.filter((row) => row.errors.includes("WB/Login não encontrado na base de funcionários.")).length,
     scheduleFoundRows: validation.filter((row) => row.hasSchedule).length,
     noScheduleRows: validation.filter((row) => !row.hasSchedule && !row.errors.length).length,
-    rows,
+    rows: rows.map((row, index) => {
+      const result = validation[index];
+      return {
+        ...row,
+        data: result?.dateIso ?? row.data,
+        entrada_real: result?.actualStart ?? row.entrada_real,
+        saida_real: result?.actualEnd ?? row.saida_real,
+        pausa_minutos: result?.breakMinutes ?? row.pausa_minutos,
+        horas_realizadas: result?.actualHours ?? row.horas_realizadas
+      };
+    }),
     validation: validation.map((row) => ({
       rowNumber: row.rowNumber,
       wbLogin: row.wbLogin,
       employeeName: row.employeeName ?? "",
       date: row.dateIso ?? "",
+      actualStart: row.actualStart ?? "",
+      actualEnd: row.actualEnd ?? "",
+      actualHours: row.actualHours ?? 0,
       breakMinutes: row.breakMinutes ?? 0,
       errors: row.errors,
       warnings: row.warnings,
@@ -1024,43 +1041,23 @@ function adjustmentStatusLabel(status: WorkHourAdjustmentStatus) {
 }
 
 function parseImportDate(value: unknown) {
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return dateOnly(value);
-  if (typeof value === "number" && Number.isFinite(value)) {
-    const date = new Date(Math.round((value - 25569) * 86400 * 1000));
-    return dateOnly(date);
-  }
-  const raw = text(value);
-  if (!raw) return null;
-  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (iso) return new Date(Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])));
-  const br = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (br) return new Date(Date.UTC(Number(br[3]), Number(br[2]) - 1, Number(br[1])));
-  const parsed = new Date(raw);
-  return Number.isNaN(parsed.getTime()) ? null : dateOnly(parsed);
-}
-
-function dateOnly(value: Date) {
-  return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
+  return normalizeExcelDate(value);
 }
 
 function normalizeTime(value: unknown) {
-  const raw = text(value);
-  if (!raw) return null;
-  const match = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
-  if (!match) return null;
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  if (hour > 23 || minute > 59) return null;
-  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  return normalizeExcelTime(value);
 }
 
 function parseHours(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 24) return roundHours(value);
   const raw = text(value);
   if (!raw) return null;
-  if (/^\d{1,2}:\d{2}$/.test(raw)) {
-    const [hour, minute] = raw.split(":").map(Number);
-    if (hour > 24 || minute > 59) return null;
+  const time = raw.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (time) {
+    const hour = Number(time[1]);
+    const minute = Number(time[2]);
+    const second = Number(time[3] ?? 0);
+    if (hour > 24 || minute > 59 || second > 59) return null;
     return roundHours(hour + minute / 60);
   }
   const parsed = Number(raw.replace(",", "."));

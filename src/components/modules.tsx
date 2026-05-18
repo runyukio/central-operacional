@@ -303,7 +303,7 @@ type WorkHourPreview = {
   missingEmployees: number;
   scheduleFoundRows: number;
   noScheduleRows: number;
-  validation: Array<{ rowNumber: number; wbLogin: string; employeeName: string; date: string; breakMinutes: number; errors: string[]; warnings: string[]; action: string; status: string }>;
+  validation: Array<{ rowNumber: number; wbLogin: string; employeeName: string; date: string; actualStart?: string; actualEnd?: string; actualHours?: number; breakMinutes: number; errors: string[]; warnings: string[]; action: string; status: string }>;
 };
 
 type RegistrationItem = {
@@ -3717,7 +3717,10 @@ export function WorkHoursPage() {
                       <th className="px-3 py-2">WB/Login</th>
                       <th className="px-3 py-2">Colaborador</th>
                       <th className="px-3 py-2">Data</th>
+                      <th className="px-3 py-2">Entrada</th>
+                      <th className="px-3 py-2">Saída</th>
                       <th className="px-3 py-2">Pausa</th>
+                      <th className="px-3 py-2">Horas</th>
                       <th className="px-3 py-2">Status</th>
                       <th className="px-3 py-2">Ação</th>
                       <th className="px-3 py-2">Erros/alertas</th>
@@ -3730,7 +3733,10 @@ export function WorkHoursPage() {
                         <td className="px-3 py-2">{row.wbLogin}</td>
                         <td className="px-3 py-2">{row.employeeName || "-"}</td>
                         <td className="px-3 py-2">{row.date || "-"}</td>
+                        <td className="px-3 py-2">{row.actualStart || "-"}</td>
+                        <td className="px-3 py-2">{row.actualEnd || "-"}</td>
                         <td className="px-3 py-2">{formatBreakDuration(row.breakMinutes ?? 0)}</td>
+                        <td className="px-3 py-2">{row.actualHours ?? "-"}</td>
                         <td className="px-3 py-2"><StatusBadge status={row.status} /></td>
                         <td className="px-3 py-2">{row.action}</td>
                         <td className="px-3 py-2">
