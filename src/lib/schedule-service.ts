@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { AttendanceStatus, Prisma, ScheduleStatus } from "@prisma/client";
+import { AttendanceStatus, Prisma, ScheduleStatus, type WorkHourRecordStatus } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
 import { commitScheduleImport as commitMockScheduleImport, getAttendanceSummary as getMockAttendanceSummary, getSchedulesForActor as getMockSchedulesForActor, listAttendanceRecords as listMockAttendanceRecords, previewScheduleRows as previewMockScheduleRows, recordErrorLog, updateAttendance as updateMockAttendance } from "@/lib/mock-db";
@@ -255,6 +255,45 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       },
       orderBy: [{ date: "asc" }, { employeeId: "asc" }]
     });
+    const scheduleEmployeeIds = Array.from(new Set(scheduleRows.map((schedule) => schedule.employeeId)));
+    const relatedWorkHourRecords = scheduleEmployeeIds.length
+      ? await prisma.workHourRecord.findMany({
+          where: {
+            employeeId: { in: scheduleEmployeeIds },
+            date: { gte: period.start, lte: period.end }
+          },
+          orderBy: { updatedAt: "desc" },
+          select: {
+            id: true,
+            employeeId: true,
+            date: true,
+            plannedStart: true,
+            plannedEnd: true,
+            plannedHours: true,
+            actualStart: true,
+            actualEnd: true,
+            breakMinutes: true,
+            actualHours: true,
+            effectiveStart: true,
+            effectiveEnd: true,
+            effectiveBreakMinutes: true,
+            effectiveHours: true,
+            differenceMinutes: true,
+            status: true,
+            source: true,
+            observation: true,
+            updatedAt: true,
+            adjustments: {
+              orderBy: { createdAt: "desc" },
+              take: 1,
+              select: { id: true, status: true, reason: true, createdAt: true }
+            }
+          }
+        })
+      : [];
+    const workHourByEmployeeDay = new Map(
+      relatedWorkHourRecords.map((record) => [`${record.employeeId}:${record.date.getTime()}`, record])
+    );
 
     const grouped = new Map<string, { employee: (typeof scheduleRows)[number]["employee"]; schedules: typeof scheduleRows }>();
     scheduleRows.forEach((schedule) => {
@@ -314,9 +353,10 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       workHours: Array.from({ length: period.daysInMonth }).map((_, index) => {
         const day = index + 1;
         const schedule = scheduleByDay.get(day);
-        const record = schedule?.workHourRecords?.[0];
+        const record = schedule?.workHourRecords?.[0] ?? (schedule ? workHourByEmployeeDay.get(`${schedule.employeeId}:${schedule.date.getTime()}`) : undefined);
         if (!record) return null;
         const adjustment = record.adjustments?.[0];
+        const effectiveRecordStatus = schedule && record.status === "NO_SCHEDULE" ? "IMPORTED" : record.status;
         return {
           id: record.id,
           plannedStart: record.plannedStart ?? "",
@@ -331,8 +371,8 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
           effectiveBreakMinutes: record.effectiveBreakMinutes ?? record.breakMinutes ?? 0,
           effectiveHours: record.effectiveHours,
           differenceMinutes: record.differenceMinutes ?? 0,
-          status: workHourStatusLabel(record.status),
-          rawStatus: record.status,
+          status: workHourStatusLabel(effectiveRecordStatus),
+          rawStatus: effectiveRecordStatus,
           source: record.source ?? "",
           observation: record.observation ?? "",
           adjustmentId: adjustment?.id ?? "",
@@ -377,7 +417,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       return { date, outside, shift: label, label };
     });
 
-    const imports = await prisma.scheduleImport.findMany({ orderBy: { createdAt: "desc" }, take: 5, include: { importedBy: true } });
+    const imports = await prisma.scheduleImport.findMany({ orderBy: { createdAt: "desc" }, include: { importedBy: true } });
 
     return {
       scheduleDays,
@@ -395,6 +435,9 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         id: item.id,
         fileName: item.fileName,
         importedRows: item.validRows,
+        totalRows: item.totalRows,
+        errorRows: item.errorRows,
+        warningRows: Array.isArray(item.warnings) ? item.warnings.length : 0,
         status: item.status,
         createdAt: formatDateTime(item.createdAt),
         user: item.importedBy.name
@@ -493,7 +536,10 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
       let attendanceRecord: { id: string } | null = null;
       if (uiToAttendanceStatus[input.status]) {
         attendanceRecord = (await upsertAttendance(tx, user.id, employee.id, schedule.id, date, input)) ?? null;
+      } else {
+        await resolveAttendanceForScheduleStatus(tx, user.id, employee.id, schedule.id, date, input.status);
       }
+      await syncWorkHourRecordToSchedule(tx, schedule);
 
       await tx.employeeProfile.update({ where: { id: employee.id }, data: { operationalStatus: statusToOperational(input.status) } });
       await tx.auditLog.create({
@@ -724,6 +770,23 @@ export async function removeOperationalSchedules(actor: Actor, input: ScheduleRe
     await prisma.$transaction(async (tx) => {
       await tx.schedule.updateMany({ where, data: { deletedAt: now, observation: "Escala removida manualmente" } });
       for (const schedule of schedules) {
+        await resolveAttendanceForScheduleStatus(tx, user.id, employee.id, schedule.id, schedule.date, "Sem escala");
+        await tx.workHourRecord.updateMany({
+          where: {
+            OR: [
+              { scheduleId: schedule.id },
+              { employeeId: employee.id, date: schedule.date }
+            ]
+          },
+          data: {
+            scheduleId: null,
+            plannedStart: null,
+            plannedEnd: null,
+            plannedHours: null,
+            differenceMinutes: null,
+            status: "NO_SCHEDULE"
+          }
+        });
         await tx.scheduleChangeHistory.create({
           data: {
             scheduleId: schedule.id,
@@ -1269,21 +1332,30 @@ function impactsCoverage(status: string) {
 async function upsertAttendance(tx: Prisma.TransactionClient, userId: string, employeeId: string, scheduleId: string, date: Date, input: ScheduleEditInput) {
   const status = uiToAttendanceStatus[input.status];
   if (!status) return;
-  const existing = await tx.attendanceRecord.findFirst({ where: { employeeId, scheduleId } });
+  const existing = await tx.attendanceRecord.findFirst({
+    where: {
+      employeeId,
+      date,
+      OR: [{ scheduleId }, { scheduleId: null }]
+    },
+    orderBy: { updatedAt: "desc" }
+  });
   const pendingJustification = isPendingJustificationInput(input);
   const observation = input.observation?.trim();
-  const savedReason = pendingJustification ? "Sem justificativa" : observation || undefined;
-  const absImpact = input.impactsAbs ?? impactsAbs(input.status, savedReason);
+  const requiresJustification = requiresReason(input.status);
+  const savedReason = pendingJustification ? "Sem justificativa" : requiresJustification ? observation || null : null;
+  const absImpact = input.impactsAbs ?? impactsAbs(input.status, savedReason ?? undefined);
   const coverageImpact = input.impactsCoverage ?? impactsCoverage(input.status);
   const saved = existing
     ? await tx.attendanceRecord.update({
         where: { id: existing.id },
         data: {
+          scheduleId,
           status,
           absenceReason: savedReason,
-          reasonCategory: requiresReason(input.status) ? "Escala" : undefined,
+          reasonCategory: requiresJustification ? "Escala" : null,
           supervisorJustification: pendingJustification ? null : observation || null,
-          isJustified: !requiresReason(input.status) || !pendingJustification,
+          isJustified: !requiresJustification || !pendingJustification,
           impactsAbs: absImpact,
           impactsCoverage: coverageImpact,
           hasEvidence: input.hasEvidence ?? false,
@@ -1300,9 +1372,9 @@ async function upsertAttendance(tx: Prisma.TransactionClient, userId: string, em
           date,
           status,
           absenceReason: savedReason,
-          reasonCategory: requiresReason(input.status) ? "Escala" : undefined,
+          reasonCategory: requiresJustification ? "Escala" : undefined,
           supervisorJustification: pendingJustification ? null : observation || null,
-          isJustified: !requiresReason(input.status) || !pendingJustification,
+          isJustified: !requiresJustification || !pendingJustification,
           impactsAbs: absImpact,
           impactsCoverage: coverageImpact,
           hasEvidence: input.hasEvidence ?? false,
@@ -1326,6 +1398,119 @@ async function upsertAttendance(tx: Prisma.TransactionClient, userId: string, em
   });
 
   return saved;
+}
+
+async function resolveAttendanceForScheduleStatus(tx: Prisma.TransactionClient, userId: string, employeeId: string, scheduleId: string, date: Date, scheduleStatus: string) {
+  const records = await tx.attendanceRecord.findMany({
+    where: {
+      employeeId,
+      date,
+      OR: [{ scheduleId }, { scheduleId: null }]
+    }
+  });
+  if (!records.length) return;
+
+  for (const record of records) {
+    const before = serialize(record);
+    const saved = await tx.attendanceRecord.update({
+      where: { id: record.id },
+      data: {
+        scheduleId,
+        status: "SEM_ESCALA",
+        absenceReason: null,
+        reasonCategory: null,
+        supervisorJustification: null,
+        isJustified: true,
+        impactsAbs: false,
+        impactsCoverage: false,
+        justifiedById: userId,
+        justifiedAt: new Date()
+      }
+    });
+
+    await tx.attendanceHistory.create({
+      data: {
+        attendanceRecordId: saved.id,
+        changedById: userId,
+        previousStatus: record.status,
+        newStatus: saved.status,
+        previousReason: record.absenceReason,
+        newReason: null,
+        comment: `Pendência encerrada por alteração da escala para ${scheduleStatus}.`
+      }
+    });
+
+    await tx.notification.updateMany({
+      where: { entity: "AttendanceRecord", entityId: record.id, readAt: null },
+      data: { readAt: new Date(), isRead: true }
+    });
+
+    await tx.auditLog.create({
+      data: {
+        actorId: userId,
+        action: "ALTERACAO_ESCALA",
+        entity: "AttendanceRecord",
+        entityId: record.id,
+        reason: `Pendência de justificativa encerrada por alteração da escala para ${scheduleStatus}.`,
+        previousValue: before,
+        newValue: serialize(saved)
+      }
+    });
+  }
+}
+
+async function syncWorkHourRecordToSchedule(
+  tx: Prisma.TransactionClient,
+  schedule: { id: string; employeeId: string; date: Date; startsAt: string | null; endsAt: string | null }
+) {
+  const record = await tx.workHourRecord.findFirst({
+    where: {
+      employeeId: schedule.employeeId,
+      date: schedule.date,
+      OR: [{ scheduleId: schedule.id }, { scheduleId: null }]
+    },
+    orderBy: { updatedAt: "desc" }
+  });
+  if (!record) return;
+
+  const plannedHours = schedule.startsAt && schedule.endsAt
+    ? roundHours(minutesBetweenScheduleTimes(schedule.startsAt, schedule.endsAt) / 60)
+    : null;
+  const effectiveHours = record.effectiveHours ?? record.actualHours;
+  const differenceMinutes = plannedHours !== null && Number.isFinite(effectiveHours)
+    ? Math.round((effectiveHours - plannedHours) * 60)
+    : null;
+
+  await tx.workHourRecord.update({
+    where: { id: record.id },
+    data: {
+      scheduleId: schedule.id,
+      plannedStart: schedule.startsAt,
+      plannedEnd: schedule.endsAt,
+      plannedHours,
+      differenceMinutes,
+      status: resolveWorkHourStatusForSchedule(record.status, differenceMinutes)
+    }
+  });
+}
+
+function resolveWorkHourStatusForSchedule(status: WorkHourRecordStatus, differenceMinutes: number | null): WorkHourRecordStatus {
+  if (["ADJUSTMENT_REQUESTED", "ADJUSTMENT_APPROVED", "ADJUSTMENT_REJECTED", "MANUALLY_CORRECTED"].includes(status)) return status;
+  if (differenceMinutes === null) return status === "NO_SCHEDULE" ? "IMPORTED" : status;
+  return Math.abs(differenceMinutes) <= 5 ? "OK" : "DIVERGENT";
+}
+
+function minutesBetweenScheduleTimes(startsAt: string, endsAt: string) {
+  const [startHour = 0, startMinute = 0] = startsAt.split(":").map(Number);
+  const [endHour = 0, endMinute = 0] = endsAt.split(":").map(Number);
+  const start = startHour * 60 + startMinute;
+  let end = endHour * 60 + endMinute;
+  if (end < start) end += 24 * 60;
+  return Math.max(0, end - start);
+}
+
+function roundHours(value: number) {
+  return Math.round(value * 100) / 100;
 }
 
 async function notifyAttendanceImpact(tx: Prisma.TransactionClient, employeeId: string, attendanceRecordId: string, status: string, observation?: string) {

@@ -402,6 +402,25 @@ type ScheduleGridRow = (typeof scheduleGridRows)[number] & {
   workHours?: Array<ScheduleWorkHourCell | null>;
 };
 
+type ScheduleImportHistory = {
+  id: string;
+  fileName: string;
+  importedRows: number;
+  totalRows?: number;
+  errorRows?: number;
+  warningRows?: number;
+  status: string;
+  createdAt: string;
+  user: string;
+};
+
+type ScheduleAlertItem = {
+  title: string;
+  status: string;
+  tone: "red" | "orange" | "blue" | "green";
+  detail: string;
+};
+
 type SystemSettings = {
   users?: Array<{ id: string; name: string; email: string; status: string; roleName: string; roleLabel?: string; employeeId?: string; employeeName?: string }>;
   lobs: Array<{ id: string; name: string; label?: string; description?: string; status: "ACTIVE" | "INACTIVE"; active?: boolean; system?: boolean; isSystem?: boolean }>;
@@ -2189,7 +2208,9 @@ export function SchedulesPage() {
   const [scheduleEmployeeSearch, setScheduleEmployeeSearch] = useState("");
   const [loadingScheduleEmployeeSearch, setLoadingScheduleEmployeeSearch] = useState(false);
   const [scheduleSettings, setScheduleSettings] = useState<SystemSettings | null>(null);
-  const [importHistory, setImportHistory] = useState<Array<{ id: string; fileName: string; importedRows: number; status: string; createdAt: string; user: string }>>([]);
+  const [importHistory, setImportHistory] = useState<ScheduleImportHistory[]>([]);
+  const [showScheduleAlerts, setShowScheduleAlerts] = useState(false);
+  const [showScheduleImports, setShowScheduleImports] = useState(false);
   const [attendanceMessage, setAttendanceMessage] = useState("");
   const [attendanceSummary, setAttendanceSummary] = useState<AttendanceSummary | null>(null);
   const [pendingJustifications, setPendingJustifications] = useState<AttendanceItem[]>([]);
@@ -2199,6 +2220,7 @@ export function SchedulesPage() {
   const [scheduleFilters, setScheduleFilters] = useState({ collaborator: "", lob: "Todos", supervisor: "", shift: "Todos", status: "Todos", roleTitle: "" });
   const [daysInMonth, setDaysInMonth] = useState(31);
   const [scheduleEditForm, setScheduleEditForm] = useState({
+    scheduleId: "",
     employeeId: "",
     date: "2026-05-01",
     shift: "Manhã",
@@ -2314,7 +2336,7 @@ export function SchedulesPage() {
         status: filtersOverride.status,
         roleTitle: filtersOverride.roleTitle
       });
-      const payload = await apiJson<{ data: { scheduleGridRows: typeof scheduleRows; imports: Array<{ id: string; fileName: string; importedRows: number; status: string; createdAt: string; user: string }>; attendanceSummary?: AttendanceSummary; daysInMonth?: number; pagination?: { page: number; limit: number; total: number; totalPages: number } }; actor?: { role: string; name: string } }>(`/api/schedules?${params.toString()}`);
+      const payload = await apiJson<{ data: { scheduleGridRows: typeof scheduleRows; imports: ScheduleImportHistory[]; attendanceSummary?: AttendanceSummary; daysInMonth?: number; pagination?: { page: number; limit: number; total: number; totalPages: number } }; actor?: { role: string; name: string } }>(`/api/schedules?${params.toString()}`);
       setScheduleActorRole(payload.actor?.role ?? "COLABORADOR");
       setScheduleRows(payload.data.scheduleGridRows);
       setSchedulePagination(payload.data.pagination ?? { page: pageOverride, limit: schedulePagination.limit, total: payload.data.scheduleGridRows.length, totalPages: 1 });
@@ -2395,6 +2417,7 @@ export function SchedulesPage() {
     const plannedHours = plannedStart && plannedEnd ? roundDecimal(minutesBetweenTimes(plannedStart, plannedEnd) / 60) : 0;
     setScheduleEmployeeSearch(employeeOptionLabel(targetEmployee));
     setScheduleEditForm({
+      scheduleId: plannedCell?.scheduleId ?? "",
       employeeId: targetEmployee.id,
       date: `${schedulePeriod.year}-${String(schedulePeriod.month).padStart(2, "0")}-${String(dayIndex + 1).padStart(2, "0")}`,
       shift,
@@ -2418,7 +2441,7 @@ export function SchedulesPage() {
       effectiveBreakMinutes: hourCell?.effectiveBreakMinutes ?? hourCell?.breakMinutes ?? 0,
       effectiveHours: hourCell?.effectiveHours ?? 0,
       differenceMinutes: hourCell?.differenceMinutes ?? 0,
-      status: hourCell?.status ?? "Sem horas",
+      status: hourCell?.status ?? (plannedCell ? "Sem horas" : "Sem escala"),
       rawStatus: hourCell?.rawStatus ?? "",
       source: hourCell?.source ?? "",
       observation: hourCell?.observation ?? "",
@@ -2670,6 +2693,34 @@ export function SchedulesPage() {
   const scheduledCells = scheduleCellValues.filter((value) => !["Folga", "Sem escala", "Férias"].includes(value)).length;
   const conflictCount = scheduleCellValues.filter((value) => value === "Conflito").length;
   const unscheduledCount = scheduleCellValues.filter((value) => value === "Sem escala" || value === "Descoberto").length;
+  const scheduleAlertItems = ([
+    conflictCount > 0 ? {
+      title: `${conflictCount} conflitos de escala`,
+      status: String(conflictCount),
+      tone: "red" as const,
+      detail: "Revise células marcadas como conflito no período selecionado."
+    } : null,
+    unscheduledCount > 0 ? {
+      title: `${unscheduledCount} células sem escala/descobertas`,
+      status: String(unscheduledCount),
+      tone: "orange" as const,
+      detail: "Há dias sem escala vinculada ou descoberta nos filtros atuais."
+    } : null,
+    pendingJustifications.length > 0 ? {
+      title: `${pendingJustifications.length} justificativas pendentes`,
+      status: String(pendingJustifications.length),
+      tone: "orange" as const,
+      detail: "Faltas, ausências ou atrasos aguardando justificativa do supervisor."
+    } : null,
+    ...importHistory
+      .filter((file) => (file.errorRows ?? 0) > 0 || (file.warningRows ?? 0) > 0 || /erro|falha|partial|parcial/i.test(file.status))
+      .map((file) => ({
+        title: `Importação com alerta: ${file.fileName}`,
+        status: file.status,
+        tone: ((file.errorRows ?? 0) > 0 || /erro|falha/i.test(file.status) ? "red" : "orange") as "red" | "orange",
+        detail: `${file.errorRows ?? 0} erro(s), ${file.warningRows ?? 0} alerta(s), ${file.importedRows} linha(s) válidas.`
+      }))
+  ] as Array<ScheduleAlertItem | null>).filter((item): item is ScheduleAlertItem => item !== null);
   const plannedHours = scheduledCells * 8;
   const scheduleTotalRows = schedulePagination.total || scheduleRows.length;
   const schedulePageStart = scheduleTotalRows && scheduleRows.length ? (schedulePagination.page - 1) * schedulePagination.limit + 1 : 0;
@@ -2696,6 +2747,7 @@ export function SchedulesPage() {
   const canExportSchedules = ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(normalizedScheduleActorRole);
   const isScheduleSupervisor = normalizedScheduleActorRole === "SUPERVISOR";
   const selectedScheduleEmployee = employeeOptions.find((employee) => employee.id === scheduleEditForm.employeeId);
+  const selectedCellHasSchedule = Boolean(scheduleEditForm.scheduleId);
   const canEditOfficialWorkHours = canManageSchedules;
   const manualBreakMinutesPreview = Math.max(0, Number(workHourForm.breakMinutes.replace(",", ".") || 0) || 0);
   const manualGrossMinutesPreview = workHourForm.actualStart && workHourForm.actualEnd ? minutesBetweenTimes(workHourForm.actualStart, workHourForm.actualEnd) : 0;
@@ -2708,7 +2760,7 @@ export function SchedulesPage() {
     : workHourForm.differenceMinutes;
   const manualStatusPreview = workHourForm.plannedHours
     ? Math.abs(manualDifferencePreview) <= 5 ? "OK" : "Divergente"
-    : workHourForm.recordId ? workHourForm.status : "Sem escala";
+    : workHourForm.recordId ? workHourForm.status : selectedCellHasSchedule ? "Sem horas" : "Sem escala";
   const supervisorOccurrenceStatuses = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala"];
   const attendanceStatusOptions = isScheduleSupervisor
     ? supervisorOccurrenceStatuses
@@ -2723,12 +2775,33 @@ export function SchedulesPage() {
     const times = configuredTimesForShift(employee.shift || scheduleEditForm.shift);
     setScheduleEditForm((current) => ({
       ...current,
+      scheduleId: "",
       employeeId: employee.id,
       shift: employee.shift || current.shift,
       startsAt: scheduleEditRequiresTime ? times.startsAt : current.startsAt,
       endsAt: scheduleEditRequiresTime ? times.endsAt : current.endsAt,
       lob: employee.lob || current.lob,
       supervisor: employee.supervisor || current.supervisor
+    }));
+    setWorkHourForm((current) => ({
+      ...current,
+      recordId: "",
+      plannedStart: scheduleEditRequiresTime ? times.startsAt : "",
+      plannedEnd: scheduleEditRequiresTime ? times.endsAt : "",
+      plannedHours: scheduleEditRequiresTime ? roundDecimal(minutesBetweenTimes(times.startsAt, times.endsAt) / 60) : 0,
+      actualStart: "",
+      actualEnd: "",
+      breakMinutes: "0",
+      actualHours: "",
+      effectiveBreakMinutes: 0,
+      effectiveHours: 0,
+      differenceMinutes: 0,
+      status: "Sem horas",
+      rawStatus: "",
+      source: "",
+      observation: "",
+      adjustmentId: "",
+      adjustmentStatus: "Sem ajuste"
     }));
     setScheduleEmployeeSearch(employeeOptionLabel(employee));
   }
@@ -2989,18 +3062,13 @@ export function SchedulesPage() {
               ]}
             />
           </Panel>
-          <Panel title="Alertas e Conflitos" action="Ver todos os alertas">
-            {conflictCount || unscheduledCount ? (
-              <MiniAlertList
-                items={[
-                  { title: `${conflictCount} conflitos de escala`, status: String(conflictCount), tone: "red" },
-                  { title: `${unscheduledCount} células sem escala/descobertas`, status: String(unscheduledCount), tone: "orange" }
-                ]}
-              />
+          <Panel title="Alertas e Conflitos" action="Ver todos os alertas" actionOnClick={() => setShowScheduleAlerts(true)}>
+            {scheduleAlertItems.length ? (
+              <MiniAlertList items={scheduleAlertItems.slice(0, 3)} />
             ) : <EmptyState title="Sem alertas" description="Alertas aparecerão após importação e validação da escala real." />}
           </Panel>
-          <Panel title="Importações Recentes" action="Ver todas">
-            {importHistory.length ? importHistory.map((file) => (
+          <Panel title="Importações Recentes" action="Ver todas" actionOnClick={() => setShowScheduleImports(true)}>
+            {importHistory.length ? importHistory.slice(0, 5).map((file) => (
               <div key={file.id} className="mb-3 flex items-center gap-3 last:mb-0">
                 <FileSpreadsheet className="h-8 w-8 text-emerald-600" />
                 <div className="flex-1">
@@ -3013,6 +3081,71 @@ export function SchedulesPage() {
           </Panel>
         </div>
       </div>
+
+      {showScheduleAlerts ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="card max-h-[88vh] w-full max-w-3xl overflow-y-auto p-5">
+            <div className="mb-5 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-extrabold text-navy-950">Alertas e conflitos da escala</h2>
+                <p className="text-sm text-muted">Período atual, filtros aplicados e pendências reais carregadas da operação.</p>
+              </div>
+              <button type="button" onClick={() => setShowScheduleAlerts(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+            </div>
+            {scheduleAlertItems.length ? (
+              <div className="space-y-3">
+                {scheduleAlertItems.map((item) => (
+                  <div key={`${item.title}-${item.status}`} className="rounded-xl border border-border p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-extrabold text-navy-950">{item.title}</p>
+                        <p className="mt-1 text-xs font-semibold text-muted">{item.detail}</p>
+                      </div>
+                      <StatusBadge status={item.status} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState title="Nenhum alerta encontrado para o período selecionado." description="Ao surgir conflito, falta pendente ou importação com erro, o item aparecerá aqui." />
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {showScheduleImports ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="card max-h-[88vh] w-full max-w-4xl overflow-y-auto p-5">
+            <div className="mb-5 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-extrabold text-navy-950">Histórico de importações</h2>
+                <p className="text-sm text-muted">Últimas importações reais de escala registradas no banco.</p>
+              </div>
+              <button type="button" onClick={() => setShowScheduleImports(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+            </div>
+            {importHistory.length ? (
+              <div className="space-y-3">
+                {importHistory.map((file) => (
+                  <div key={file.id} className="rounded-xl border border-border p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-extrabold text-navy-950" title={file.fileName}>{file.fileName}</p>
+                        <p className="mt-1 text-xs font-semibold text-muted">Importado por {file.user} • {file.createdAt}</p>
+                        <p className="mt-2 text-xs text-muted">
+                          Total: {file.totalRows ?? file.importedRows} • Válidas: {file.importedRows} • Erros: {file.errorRows ?? 0} • Alertas: {file.warningRows ?? 0}
+                        </p>
+                      </div>
+                      <StatusBadge status={file.status} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState title="Nenhuma importação recente encontrada." description="Quando uma escala for importada, o histórico aparecerá aqui." />
+            )}
+          </div>
+        </div>
+      ) : null}
 
       {showEditSchedule ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
@@ -3079,7 +3212,7 @@ export function SchedulesPage() {
                       ) : null}
                     </div>
                   </div>
-                  <FormInput disabled={!canManageSchedules} label="Data" type="date" value={scheduleEditForm.date} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, date: value })} />
+                  <FormInput disabled={!canManageSchedules} label="Data" type="date" value={scheduleEditForm.date} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, scheduleId: "", date: value })} />
                   <FormSelect
                     disabled={!canManageSchedules}
                     label="Turno"
@@ -3153,7 +3286,7 @@ export function SchedulesPage() {
                     <h3 className="text-sm font-extrabold text-navy-950">Horas</h3>
                     <p className="text-xs text-muted">Realizado oficial conectado ao módulo Horas Operacionais.</p>
                   </div>
-                  <StatusBadge status={workHourForm.recordId ? workHourForm.status : "Sem horas"} />
+                  <StatusBadge status={workHourForm.recordId ? workHourForm.status : selectedCellHasSchedule ? "Sem horas" : "Sem escala"} />
                 </div>
                 <div className="grid gap-3 md:grid-cols-3">
                   <MetricPill value={workHourForm.plannedHours ? `${workHourForm.plannedHours}h` : "-"} label="Previsto" />
@@ -3175,7 +3308,13 @@ export function SchedulesPage() {
                   </label>
                 </div>
                 <div className={cn("mt-4 rounded-lg border px-4 py-3 text-sm font-semibold", manualStatusPreview === "OK" ? "border-emerald-100 bg-emerald-50 text-emerald-700" : manualStatusPreview === "Divergente" ? "border-orange-100 bg-orange-50 text-orange-700" : "border-blue-100 bg-blue-50 text-blue-700")}>
-                  {manualBreakIsInvalid ? "A pausa não pode ser maior que o período entre entrada e saída." : workHourForm.plannedHours ? `Status previsto após salvar: ${manualStatusPreview}.` : "Este colaborador não possui escala vinculada nesta data; WFM/Admin pode lançar horas com alerta."}
+                  {manualBreakIsInvalid
+                    ? "A pausa não pode ser maior que o período entre entrada e saída."
+                    : workHourForm.plannedHours
+                      ? `Status previsto após salvar: ${manualStatusPreview}.`
+                      : selectedCellHasSchedule
+                        ? "Horas ainda não lançadas para este dia."
+                        : "Sem escala vinculada para este dia."}
                   {workHourForm.adjustmentStatus && workHourForm.adjustmentStatus !== "Sem ajuste" ? ` Ajuste: ${workHourForm.adjustmentStatus}.` : ""}
                 </div>
                 {canEditOfficialWorkHours ? (

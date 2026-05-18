@@ -164,16 +164,21 @@ export function FilterBar({
   );
 }
 
-export function Panel({ title, children, action }: { title: string; children: React.ReactNode; action?: string }) {
+export function Panel({ title, children, action, actionOnClick }: { title: string; children: React.ReactNode; action?: string; actionOnClick?: () => void }) {
   return (
     <section className="card overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/75 bg-gradient-to-b from-white to-slate-50/65 px-4 py-3">
         <h2 className="min-w-0 break-words text-[14px] font-black leading-tight tracking-tight text-navy-950">{title}</h2>
-        {action ? (
-          <button className="flex items-center gap-1 text-sm font-extrabold text-blue-600">
+        {action && actionOnClick ? (
+          <button type="button" onClick={actionOnClick} className="flex items-center gap-1 text-sm font-extrabold text-blue-600">
             {action}
             <ChevronRight className="h-4 w-4" />
           </button>
+        ) : action ? (
+          <span className="flex items-center gap-1 text-sm font-extrabold text-blue-600">
+            {action}
+            <ChevronRight className="h-4 w-4" />
+          </span>
         ) : null}
       </div>
       <div className="p-4">{children}</div>
