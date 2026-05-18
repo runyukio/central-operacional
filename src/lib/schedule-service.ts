@@ -7,6 +7,7 @@ import { hasExcelValue, normalizeExcelDate, normalizeExcelTime } from "@/lib/exc
 import { prisma } from "@/lib/prisma";
 import { normalizeRole } from "@/lib/permissions";
 import { cleanShiftName, isBlockedShiftName, isSelectableShiftName, shiftLookupKey } from "@/lib/shift-display";
+import { calculateAbsenceRate, calculateCoverageRate, isAbsenceStatus, isPresentStatus, isScheduledStatus, normalizeOperationalStatus } from "@/lib/attendance-calculation";
 
 const uiToScheduleStatus: Record<string, ScheduleStatus> = {
   Escalado: "ESCALADO",
@@ -145,6 +146,11 @@ export type AttendanceInput = {
   evidenceUrl?: string;
   impactsAbs?: boolean;
   impactsCoverage?: boolean;
+};
+
+type AttendanceSummaryFilters = Partial<Pick<ScheduleQuery, "lob" | "supervisor" | "shift" | "collaborator" | "status" | "roleTitle">> & {
+  employeeId?: string;
+  teamSupervisorId?: string;
 };
 
 export type ScheduleImportInput = {
@@ -448,7 +454,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         createdAt: formatDateTime(item.createdAt),
         user: item.importedBy.name
       })),
-      attendanceSummary: await getAttendanceSummaryFromDb(period, query.lob),
+      attendanceSummary: await getAttendanceSummaryFromDb(period, query),
       month: period.month,
       year: period.year,
       daysInMonth: dateColumns.length,
@@ -1121,10 +1127,12 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
       role === "COLABORADOR" && user.employeeProfile
         ? { ...baseWhere, employeeId: user.employeeProfile.id }
         : baseWhere;
+    let summaryTeamSupervisorId: string | undefined;
     if (role === "SUPERVISOR" && user.employeeProfile) {
       const ownTeamRecords = await prisma.attendanceRecord.count({
         where: { ...baseWhere, employee: { supervisorId: user.employeeProfile.id } }
       });
+      summaryTeamSupervisorId = ownTeamRecords ? user.employeeProfile.id : undefined;
       attendanceWhere = ownTeamRecords
         ? { ...baseWhere, employee: { supervisorId: user.employeeProfile.id } }
         : baseWhere;
@@ -1160,7 +1168,14 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
         registeredBy: record.registeredBy?.name ?? "Sistema",
         registeredAt: formatDateTime(record.registeredAt)
       })),
-      summary: await getAttendanceSummaryFromDb(period, lobFilter)
+      summary: await getAttendanceSummaryFromDb(period, {
+        lob: lobFilter,
+        supervisor: query.supervisor,
+        shift: query.shift,
+        collaborator: query.collaborator,
+        employeeId: role === "COLABORADOR" && user.employeeProfile ? user.employeeProfile.id : undefined,
+        teamSupervisorId: summaryTeamSupervisorId
+      })
     };
   } catch (error) {
     recordErrorLog({ userEmail: actor.email, code: "ATTENDANCE_LIST_DB_FALLBACK", message: error instanceof Error ? error.message : "Falha ao listar presença", action: "ATTENDANCE_LIST", severity: "WARNING" });
@@ -1395,11 +1410,8 @@ const uiToScheduleStatusByKey = Object.fromEntries(
   ])
 ) as Record<string, ScheduleStatus>;
 
-function impactsAbs(status: string, reason?: string) {
-  if (["Falta", "Ausente"].includes(status)) return true;
-  if (status === "Atraso" || status === "Saída antecipada") return false;
-  if (/falta de equipamento|problema técnico|internet/i.test(reason ?? "")) return false;
-  return false;
+function impactsAbs(status: string, _reason?: string) {
+  return isAbsenceStatus(status);
 }
 
 function impactsCoverage(status: string) {
@@ -1627,12 +1639,42 @@ async function notifyAttendanceImpact(tx: Prisma.TransactionClient, employeeId: 
   });
 }
 
-async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeriod>, lob?: string) {
+async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeriod>, filters: AttendanceSummaryFilters = {}) {
+  const shiftFilter = cleanShiftName(filters.shift);
+  const search = filters.collaborator?.trim();
+  const statusFilter = filters.status && filters.status !== "Todos" ? uiToScheduleStatus[filters.status] : undefined;
+  const employeeWhere: Prisma.EmployeeProfileWhereInput = {
+    ...(filters.employeeId ? { id: filters.employeeId } : {}),
+    ...(filters.teamSupervisorId ? { supervisorId: filters.teamSupervisorId } : {}),
+    ...(filters.lob && filters.lob !== "Todos" ? { lob: { name: filters.lob } } : {}),
+    ...(filters.supervisor && filters.supervisor !== "Todos" ? { supervisor: { fullName: { contains: filters.supervisor, mode: "insensitive" } } } : {}),
+    ...(search ? {
+      OR: [
+        { fullName: { contains: search, mode: "insensitive" } },
+        { wbLogin: { contains: search, mode: "insensitive" } },
+        { user: { email: { contains: search, mode: "insensitive" } } }
+      ]
+    } : {}),
+    ...(filters.roleTitle && filters.roleTitle !== "Todos" ? { roleTitle: { contains: filters.roleTitle, mode: "insensitive" } } : {})
+  };
+  const scheduleShiftWhere: Prisma.ScheduleWhereInput =
+    shiftFilter && shiftFilter !== "Todos" && shiftFilter !== "Folga"
+      ? {
+          OR: [
+            { shift: { name: shiftFilter } },
+            { shift: { name: { startsWith: `${shiftFilter} (` } } },
+            { shiftId: null, employee: { shift: { OR: [{ name: shiftFilter }, { name: { startsWith: `${shiftFilter} (` } }] } } }
+          ]
+        }
+      : {};
   const schedules = await prisma.schedule.findMany({
     where: {
       deletedAt: null,
       ...(period ? { date: { gte: period.start, lte: period.end } } : {}),
-      ...(lob && lob !== "Todos" ? { employee: { lob: { name: lob } } } : {})
+      ...(statusFilter ? { status: statusFilter } : {}),
+      ...(shiftFilter === "Folga" && !statusFilter ? { status: "FOLGA" } : {}),
+      ...scheduleShiftWhere,
+      employee: employeeWhere
     },
     select: {
       status: true,
@@ -1649,20 +1691,17 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
       }
     }
   });
-  const plannedStatuses: ScheduleStatus[] = ["ESCALADO", "PRESENTE", "NESTING", "ATRASO", "SAIDA_ANTECIPADA", "AUSENTE", "FALTA", "VENDA_FOLGA_APROVADA"];
-  const presentStatuses = ["PRESENTE", "VENDA_FOLGA_APROVADA"];
-  const absentStatuses = ["AUSENTE", "FALTA", "AFASTADO", "SAIDA_ANTECIPADA"];
   const effectiveStatus = (schedule: (typeof schedules)[number]) => {
     if (!scheduleStatusRequiresJustification(schedule.status)) return schedule.status;
     const latest = [...schedule.attendanceRecords].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
     return latest?.status ?? schedule.status;
   };
-  const planned = schedules.filter((schedule) => plannedStatuses.includes(schedule.status)).length;
-  const present = schedules.filter((schedule) => presentStatuses.includes(String(effectiveStatus(schedule)))).length;
-  const absent = schedules.filter((schedule) => absentStatuses.includes(String(effectiveStatus(schedule)))).length;
-  const denominator = planned || 1;
-  const coverageRate = Math.round((present / denominator) * 1000) / 10;
-  const absRate = Math.round((absent / denominator) * 1000) / 10;
+  const statusFor = (schedule: (typeof schedules)[number]) => normalizeOperationalStatus(effectiveStatus(schedule));
+  const planned = schedules.filter((schedule) => isScheduledStatus(statusFor(schedule))).length;
+  const present = schedules.filter((schedule) => isPresentStatus(statusFor(schedule))).length;
+  const absent = schedules.filter((schedule) => isAbsenceStatus(statusFor(schedule))).length;
+  const coverageRate = calculateCoverageRate(planned, present);
+  const absRate = calculateAbsenceRate(planned, absent);
   const attendanceRecords = schedules.flatMap((schedule) =>
     scheduleStatusRequiresJustification(schedule.status)
       ? schedule.attendanceRecords.filter((record) => scheduleStatusRequiresJustification(record.status))
@@ -1670,10 +1709,11 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
   );
   const byShift = schedules.reduce<Record<string, { planned: number; present: number; absent: number; gap: number }>>((acc, schedule) => {
     const shiftName = cleanShiftName(schedule.shift?.name ?? schedule.employee.shift?.name) || "Sem turno";
+    const status = statusFor(schedule);
     acc[shiftName] ??= { planned: 0, present: 0, absent: 0, gap: 0 };
-    if (plannedStatuses.includes(schedule.status)) acc[shiftName].planned += 1;
-    if (presentStatuses.includes(String(effectiveStatus(schedule)))) acc[shiftName].present += 1;
-    if (absentStatuses.includes(String(effectiveStatus(schedule)))) acc[shiftName].absent += 1;
+    if (isScheduledStatus(status)) acc[shiftName].planned += 1;
+    if (isPresentStatus(status)) acc[shiftName].present += 1;
+    if (isAbsenceStatus(status)) acc[shiftName].absent += 1;
     acc[shiftName].gap = acc[shiftName].present - acc[shiftName].planned;
     return acc;
   }, {});
@@ -1687,8 +1727,8 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     present,
     absent,
     absRate,
-    late: schedules.filter((schedule) => effectiveStatus(schedule) === "ATRASO").length,
-    earlyLeave: schedules.filter((schedule) => effectiveStatus(schedule) === "SAIDA_ANTECIPADA").length,
+    late: schedules.filter((schedule) => statusFor(schedule) === "ATRASO").length,
+    earlyLeave: schedules.filter((schedule) => statusFor(schedule) === "SAIDA_ANTECIPADA").length,
     unjustified: attendanceRecords.filter((record) => record.impactsAbs && !record.isJustified).length,
     coverageRate,
     gap: present - planned,
