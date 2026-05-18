@@ -402,6 +402,8 @@ type ScheduleGridRow = (typeof scheduleGridRows)[number] & {
   workHours?: Array<ScheduleWorkHourCell | null>;
 };
 
+type ScheduleRangeMode = "day" | "week" | "month" | "custom";
+
 type ScheduleImportHistory = {
   id: string;
   fileName: string;
@@ -647,6 +649,71 @@ function minutesBetweenTimes(start: string, end: string) {
 
 function roundDecimal(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+function dateInputFromUtc(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function parseDateInput(value: string) {
+  if (!value) return null;
+  const [year, month, day] = value.split("-").map(Number);
+  if (!year || !month || !day) return null;
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+function monthRange(month: number, year: number) {
+  const start = new Date(Date.UTC(year, month - 1, 1));
+  const end = new Date(Date.UTC(year, month, 0));
+  return { startDate: dateInputFromUtc(start), endDate: dateInputFromUtc(end) };
+}
+
+function anchorForSchedulePeriod(period: { month: number; year: number }, currentStartDate?: string) {
+  const parsed = parseDateInput(currentStartDate ?? "");
+  const day = parsed?.getUTCDate() ?? 1;
+  const lastDay = new Date(Date.UTC(period.year, period.month, 0)).getUTCDate();
+  return new Date(Date.UTC(period.year, period.month - 1, Math.min(day, lastDay)));
+}
+
+function rangeForScheduleMode(mode: ScheduleRangeMode, period: { month: number; year: number }, currentStartDate?: string) {
+  const anchor = anchorForSchedulePeriod(period, currentStartDate);
+  if (mode === "day") {
+    const value = dateInputFromUtc(anchor);
+    return { startDate: value, endDate: value };
+  }
+  if (mode === "week") {
+    const weekday = anchor.getUTCDay();
+    const mondayOffset = weekday === 0 ? -6 : 1 - weekday;
+    const start = new Date(anchor);
+    start.setUTCDate(anchor.getUTCDate() + mondayOffset);
+    const end = new Date(start);
+    end.setUTCDate(start.getUTCDate() + 6);
+    return { startDate: dateInputFromUtc(start), endDate: dateInputFromUtc(end) };
+  }
+  return monthRange(period.month, period.year);
+}
+
+function dateInputsBetween(startDate: string, endDate: string) {
+  const start = parseDateInput(startDate);
+  const end = parseDateInput(endDate);
+  if (!start && !end) return [];
+  const first = start ?? end!;
+  const last = end ?? start!;
+  const from = first <= last ? first : last;
+  const to = first <= last ? last : first;
+  const values: string[] = [];
+  const current = new Date(from);
+  while (current <= to) {
+    values.push(dateInputFromUtc(current));
+    current.setUTCDate(current.getUTCDate() + 1);
+  }
+  return values;
+}
+
+function isInvalidDateRange(range: { startDate: string; endDate: string }) {
+  const start = parseDateInput(range.startDate);
+  const end = parseDateInput(range.endDate);
+  return Boolean(start && end && start > end);
 }
 
 function formatHourDifference(minutes: number) {
@@ -2216,9 +2283,12 @@ export function SchedulesPage() {
   const [pendingJustifications, setPendingJustifications] = useState<AttendanceItem[]>([]);
   const [scheduleActorRole, setScheduleActorRole] = useState("COLABORADOR");
   const [schedulePeriod, setSchedulePeriod] = useState({ month: 5, year: 2026 });
+  const [scheduleRangeMode, setScheduleRangeMode] = useState<ScheduleRangeMode>("month");
+  const [scheduleDateRange, setScheduleDateRange] = useState(monthRange(5, 2026));
+  const [scheduleDateError, setScheduleDateError] = useState("");
+  const [scheduleDateColumns, setScheduleDateColumns] = useState<string[]>([]);
   const [schedulePagination, setSchedulePagination] = useState({ page: 1, limit: 75, total: 0, totalPages: 1 });
   const [scheduleFilters, setScheduleFilters] = useState({ collaborator: "", lob: "Todos", supervisor: "", shift: "Todos", status: "Todos", roleTitle: "" });
-  const [daysInMonth, setDaysInMonth] = useState(31);
   const [scheduleEditForm, setScheduleEditForm] = useState({
     scheduleId: "",
     employeeId: "",
@@ -2322,11 +2392,13 @@ export function SchedulesPage() {
     }
   }
 
-  async function refreshSchedules(pageOverride = schedulePagination.page, filtersOverride = scheduleFilters) {
+  async function refreshSchedules(pageOverride = schedulePagination.page, filtersOverride = scheduleFilters, rangeOverride = scheduleDateRange) {
     try {
       const params = new URLSearchParams({
         month: String(schedulePeriod.month),
         year: String(schedulePeriod.year),
+        startDate: rangeOverride.startDate,
+        endDate: rangeOverride.endDate,
         page: String(pageOverride),
         limit: String(schedulePagination.limit),
         collaborator: filtersOverride.collaborator,
@@ -2336,28 +2408,31 @@ export function SchedulesPage() {
         status: filtersOverride.status,
         roleTitle: filtersOverride.roleTitle
       });
-      const payload = await apiJson<{ data: { scheduleGridRows: typeof scheduleRows; imports: ScheduleImportHistory[]; attendanceSummary?: AttendanceSummary; daysInMonth?: number; pagination?: { page: number; limit: number; total: number; totalPages: number } }; actor?: { role: string; name: string } }>(`/api/schedules?${params.toString()}`);
+      const payload = await apiJson<{ data: { scheduleGridRows: typeof scheduleRows; imports: ScheduleImportHistory[]; attendanceSummary?: AttendanceSummary; daysInMonth?: number; dateColumns?: string[]; pagination?: { page: number; limit: number; total: number; totalPages: number } }; actor?: { role: string; name: string } }>(`/api/schedules?${params.toString()}`);
       setScheduleActorRole(payload.actor?.role ?? "COLABORADOR");
       setScheduleRows(payload.data.scheduleGridRows);
       setSchedulePagination(payload.data.pagination ?? { page: pageOverride, limit: schedulePagination.limit, total: payload.data.scheduleGridRows.length, totalPages: 1 });
-      setDaysInMonth(payload.data.daysInMonth ?? 31);
+      setScheduleDateColumns(payload.data.dateColumns ?? []);
       if (payload.data.scheduleGridRows.length) {
         setAttendanceForm((current) => payload.data.scheduleGridRows.some((row) => row.employee.id === current.employeeId) ? current : { ...current, employeeId: payload.data.scheduleGridRows[0].employee.id });
         setScheduleEditForm((current) => payload.data.scheduleGridRows.some((row) => row.employee.id === current.employeeId) ? current : { ...current, employeeId: payload.data.scheduleGridRows[0].employee.id, lob: payload.data.scheduleGridRows[0].employee.lob, supervisor: payload.data.scheduleGridRows[0].employee.supervisor });
       }
       setImportHistory(payload.data.imports);
       setAttendanceSummary(payload.data.attendanceSummary ?? null);
-      void refreshAttendanceForSchedulePeriod();
+      void refreshAttendanceForSchedulePeriod(rangeOverride);
     } catch {
       setScheduleRows([]);
+      setScheduleDateColumns([]);
       setSchedulePagination((current) => ({ ...current, page: 1, total: 0, totalPages: 1 }));
     }
   }
 
-  async function refreshAttendanceForSchedulePeriod() {
+  async function refreshAttendanceForSchedulePeriod(rangeOverride = scheduleDateRange) {
     const params = new URLSearchParams({
       month: String(schedulePeriod.month),
-      year: String(schedulePeriod.year)
+      year: String(schedulePeriod.year),
+      startDate: rangeOverride.startDate,
+      endDate: rangeOverride.endDate
     });
     if (scheduleFilters.lob !== "Todos") params.set("lob", scheduleFilters.lob);
     try {
@@ -2371,7 +2446,51 @@ export function SchedulesPage() {
 
   function moveScheduleMonth(delta: number) {
     const next = new Date(Date.UTC(schedulePeriod.year, schedulePeriod.month - 1 + delta, 1));
-    setSchedulePeriod({ month: next.getUTCMonth() + 1, year: next.getUTCFullYear() });
+    const nextPeriod = { month: next.getUTCMonth() + 1, year: next.getUTCFullYear() };
+    setSchedulePeriod(nextPeriod);
+    if (scheduleRangeMode !== "custom") setScheduleDateRange(rangeForScheduleMode(scheduleRangeMode, nextPeriod, scheduleDateRange.startDate));
+  }
+
+  function updateSchedulePeriod(nextPeriod: { month: number; year: number }) {
+    setSchedulePeriod(nextPeriod);
+    if (scheduleRangeMode !== "custom") setScheduleDateRange(rangeForScheduleMode(scheduleRangeMode, nextPeriod, scheduleDateRange.startDate));
+  }
+
+  function applyScheduleQuickRange(mode: ScheduleRangeMode) {
+    const nextRange = rangeForScheduleMode(mode, schedulePeriod, scheduleDateRange.startDate);
+    setScheduleRangeMode(mode);
+    setScheduleDateRange(nextRange);
+    setScheduleDateError("");
+    void refreshSchedules(1, scheduleFilters, nextRange);
+  }
+
+  function applyScheduleDateRange() {
+    if (isInvalidDateRange(scheduleDateRange)) {
+      setScheduleDateError("Data inicial não pode ser maior que data final.");
+      return;
+    }
+    setScheduleRangeMode("custom");
+    setScheduleDateError("");
+    void refreshSchedules(1, scheduleFilters, scheduleDateRange);
+  }
+
+  function applyScheduleFilters() {
+    if (isInvalidDateRange(scheduleDateRange)) {
+      setScheduleDateError("Data inicial não pode ser maior que data final.");
+      return;
+    }
+    setScheduleDateError("");
+    void refreshSchedules(1, scheduleFilters, scheduleDateRange);
+  }
+
+  function clearScheduleFilters() {
+    const clearedFilters = { collaborator: "", lob: "Todos", supervisor: "", shift: "Todos", status: "Todos", roleTitle: "" };
+    const clearedRange = monthRange(schedulePeriod.month, schedulePeriod.year);
+    setScheduleFilters(clearedFilters);
+    setScheduleRangeMode("month");
+    setScheduleDateRange(clearedRange);
+    setScheduleDateError("");
+    void refreshSchedules(1, clearedFilters, clearedRange);
   }
 
   async function handleFile(file?: File) {
@@ -2419,7 +2538,7 @@ export function SchedulesPage() {
     setScheduleEditForm({
       scheduleId: plannedCell?.scheduleId ?? "",
       employeeId: targetEmployee.id,
-      date: `${schedulePeriod.year}-${String(schedulePeriod.month).padStart(2, "0")}-${String(dayIndex + 1).padStart(2, "0")}`,
+      date: visibleScheduleDates[dayIndex] ?? `${schedulePeriod.year}-${String(schedulePeriod.month).padStart(2, "0")}-${String(dayIndex + 1).padStart(2, "0")}`,
       shift,
       startsAt: statusNeedsTime(cellStatus) ? plannedStart : "",
       endsAt: statusNeedsTime(cellStatus) ? plannedEnd : "",
@@ -2493,7 +2612,7 @@ export function SchedulesPage() {
     setAttendanceForm({
       ...attendanceForm,
       employeeId: targetEmployee.id,
-      date: `${schedulePeriod.year}-${String(schedulePeriod.month).padStart(2, "0")}-${String(dayIndex + 1).padStart(2, "0")}`,
+      date: visibleScheduleDates[dayIndex] ?? `${schedulePeriod.year}-${String(schedulePeriod.month).padStart(2, "0")}-${String(dayIndex + 1).padStart(2, "0")}`,
       shift: targetEmployee.shift,
       status: safeStatus,
       absenceReason: attendanceForm.absenceReason || "Outros",
@@ -2726,6 +2845,9 @@ export function SchedulesPage() {
   const schedulePageStart = scheduleTotalRows && scheduleRows.length ? (schedulePagination.page - 1) * schedulePagination.limit + 1 : 0;
   const schedulePageEnd = scheduleTotalRows ? Math.min(schedulePagination.page * schedulePagination.limit, scheduleTotalRows) : 0;
   const monthLabel = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(schedulePeriod.year, schedulePeriod.month - 1, 1)));
+  const visibleScheduleDates = scheduleDateColumns.length
+    ? scheduleDateColumns
+    : dateInputsBetween(scheduleDateRange.startDate, scheduleDateRange.endDate);
   const scheduleRowEmployees = scheduleRows.map((row) => row.employee as EmployeeClient);
   const employeeOptions = Array.from(
     new Map([...scheduleEmployees, ...scheduleRowEmployees, ...scheduleEmployeeSearchResults].map((employee) => [employee.id, employee])).values()
@@ -2809,7 +2931,9 @@ export function SchedulesPage() {
   function scheduleExportUrl() {
     const params = new URLSearchParams({
       month: String(schedulePeriod.month),
-      year: String(schedulePeriod.year)
+      year: String(schedulePeriod.year),
+      startDate: scheduleDateRange.startDate,
+      endDate: scheduleDateRange.endDate
     });
     if (scheduleFilters.collaborator) params.set("collaborator", scheduleFilters.collaborator);
     if (scheduleFilters.lob !== "Todos") params.set("lob", scheduleFilters.lob);
@@ -2859,11 +2983,51 @@ export function SchedulesPage() {
             <button onClick={() => moveScheduleMonth(1)} className="h-10 rounded-lg border border-border bg-white px-3 text-sm font-bold">Próximo mês</button>
           </div>
           <div className="flex gap-2">
-            <select value={schedulePeriod.month} onChange={(event) => setSchedulePeriod({ ...schedulePeriod, month: Number(event.target.value) })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
+            <select value={schedulePeriod.month} onChange={(event) => updateSchedulePeriod({ ...schedulePeriod, month: Number(event.target.value) })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
               {Array.from({ length: 12 }).map((_, index) => <option key={index + 1} value={index + 1}>{String(index + 1).padStart(2, "0")}</option>)}
             </select>
-            <input value={schedulePeriod.year} onChange={(event) => setSchedulePeriod({ ...schedulePeriod, year: Number(event.target.value) || 2026 })} className="h-10 w-24 rounded-lg border border-border px-3 text-sm font-bold outline-none" />
+            <input value={schedulePeriod.year} onChange={(event) => updateSchedulePeriod({ ...schedulePeriod, year: Number(event.target.value) || 2026 })} className="h-10 w-24 rounded-lg border border-border px-3 text-sm font-bold outline-none" />
           </div>
+        </div>
+        <div className="mb-4 flex flex-wrap items-end gap-3">
+          <div className="flex rounded-lg border border-border bg-white p-1">
+            {(["day", "week", "month"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => applyScheduleQuickRange(mode)}
+                className={cn("h-9 rounded-md px-3 text-sm font-extrabold transition", scheduleRangeMode === mode ? "bg-blue-600 text-white shadow-soft" : "text-navy-950 hover:bg-blue-50")}
+              >
+                {mode === "day" ? "Dia" : mode === "week" ? "Semana" : "Mês"}
+              </button>
+            ))}
+          </div>
+          <label className="block">
+            <span className="mb-1 block text-xs font-bold text-muted">Data inicial</span>
+            <input
+              type="date"
+              value={scheduleDateRange.startDate}
+              onChange={(event) => {
+                setScheduleRangeMode("custom");
+                setScheduleDateRange((current) => ({ ...current, startDate: event.target.value }));
+              }}
+              className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-bold text-muted">Data final</span>
+            <input
+              type="date"
+              value={scheduleDateRange.endDate}
+              onChange={(event) => {
+                setScheduleRangeMode("custom");
+                setScheduleDateRange((current) => ({ ...current, endDate: event.target.value }));
+              }}
+              className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"
+            />
+          </label>
+          <button type="button" onClick={applyScheduleDateRange} className="h-10 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white">Aplicar datas</button>
+          {scheduleDateError ? <span className="text-sm font-bold text-red-600">{scheduleDateError}</span> : null}
         </div>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
           <input value={scheduleFilters.collaborator} onChange={(event) => setScheduleFilters({ ...scheduleFilters, collaborator: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Nome, WB ou e-mail" />
@@ -2873,13 +3037,9 @@ export function SchedulesPage() {
           <select value={scheduleFilters.status} onChange={(event) => setScheduleFilters({ ...scheduleFilters, status: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">{["Todos", ...scheduleStatusOptions].map((item) => <option key={item}>{item}</option>)}</select>
           <input value={scheduleFilters.roleTitle} onChange={(event) => setScheduleFilters({ ...scheduleFilters, roleTitle: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Cargo/Função" />
           <div className="grid grid-cols-2 gap-2">
-            <button onClick={() => void refreshSchedules(1)} className="rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
+            <button onClick={applyScheduleFilters} className="rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
             <button
-              onClick={() => {
-                const clearedFilters = { collaborator: "", lob: "Todos", supervisor: "", shift: "Todos", status: "Todos", roleTitle: "" };
-                setScheduleFilters(clearedFilters);
-                void refreshSchedules(1, clearedFilters);
-              }}
+              onClick={clearScheduleFilters}
               className="rounded-lg border border-border bg-white px-3 text-sm font-bold"
             >
               Limpar
@@ -2960,10 +3120,10 @@ export function SchedulesPage() {
                   <th className="px-4 py-3">Colaborador</th>
                   <th className="px-4 py-3">Cargo</th>
                   <th className="px-4 py-3">LOB</th>
-                  {Array.from({ length: daysInMonth }).map((_, index) => {
-                    const date = new Date(Date.UTC(schedulePeriod.year, schedulePeriod.month - 1, index + 1));
-                    const label = `${String(index + 1).padStart(2, "0")} ${new Intl.DateTimeFormat("pt-BR", { weekday: "short", timeZone: "UTC" }).format(date).replace(".", "")}`;
-                    return <th key={label} className="px-2 py-3 text-center">{label}</th>;
+                  {visibleScheduleDates.map((dateIso) => {
+                    const date = new Date(`${dateIso}T00:00:00.000Z`);
+                    const label = `${String(date.getUTCDate()).padStart(2, "0")} ${new Intl.DateTimeFormat("pt-BR", { weekday: "short", timeZone: "UTC" }).format(date).replace(".", "")}`;
+                    return <th key={dateIso} className="px-2 py-3 text-center">{label}</th>;
                   })}
                   <th className="px-4 py-3 text-center">Ação</th>
                 </tr>
@@ -4971,24 +5131,6 @@ export function EmployeeMapPage() {
           </Panel>
         </div>
         <div className="space-y-5">
-          <Panel title="Status dos Equipamentos">
-            <DonutLegend
-              total={String(employeeRows.reduce((total, employee) => total + Number(employee.equipment ?? 0), 0))}
-              items={[
-                { label: "Funcionando", value: "0", color: "#10B981" },
-                { label: "Atenção", value: "0", color: "#F59E0B" },
-                { label: "Inoperante", value: "0", color: "#EF4444" }
-              ]}
-            />
-          </Panel>
-          <Panel title="Impacto Operacional">
-            <div className="grid grid-cols-2 gap-3">
-              <MetricPill value={0} label="Usuários Afetados" />
-              <MetricPill value={0} label="Chamados Abertos" />
-              <MetricPill value="-" label="Risco de SLA" />
-              <MetricPill value={formatCurrency(0)} label="Custo Estimado" />
-            </div>
-          </Panel>
           <Panel title="Perfil do Colaborador">
             {selected ? <div className="space-y-4">
               {selectedEmployeeLoading ? <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm font-bold text-blue-700">Carregando detalhes...</div> : null}

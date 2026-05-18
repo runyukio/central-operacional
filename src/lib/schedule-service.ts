@@ -180,6 +180,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
     const role = normalizeRole(actor.role);
     if (role === "COLABORADOR" && !user.employeeProfile) return emptyOperationalSchedules();
     const period = resolvePeriod(query);
+    const dateColumns = datesBetween(period.start, period.end);
     const requestedPage = Math.max(1, Number(query.page) || 1);
     const limit = Math.min(100, Math.max(25, Number(query.limit) || 75));
     const scheduleWhere: Prisma.ScheduleWhereInput = {
@@ -313,7 +314,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
     const visibleEmployees = role === "COLABORADOR" ? groupedEmployees.slice(0, 1) : groupedEmployees.slice((page - 1) * limit, page * limit);
 
     const scheduleGridRows = visibleEmployees.map(({ employee, schedules }) => {
-      const scheduleByDay = new Map(schedules.map((item) => [item.date.getUTCDate(), item]));
+      const scheduleByDate = new Map(schedules.map((item) => [dateKey(item.date), item]));
       return {
       employee: {
         id: employee.id,
@@ -331,18 +332,16 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         admission: formatDate(employee.admissionDate),
         role: employee.roleTitle
       },
-      days: Array.from({ length: period.daysInMonth }).map((_, index) => {
-        const day = index + 1;
-        const schedule = scheduleByDay.get(day);
+      days: dateColumns.map((date) => {
+        const schedule = scheduleByDate.get(dateKey(date));
         if (!schedule) return "Sem escala";
         const attendanceLabel = scheduleStatusRequiresJustification(schedule.status) ? attendanceDisplayLabel(schedule.attendanceRecords) : null;
         if (attendanceLabel) return attendanceLabel;
         if (schedule.status === "ESCALADO") return schedule.shift?.name ?? "Escalado";
         return scheduleToUiStatus[schedule.status] ?? schedule.status;
       }),
-      plannedTimes: Array.from({ length: period.daysInMonth }).map((_, index) => {
-        const day = index + 1;
-        const schedule = scheduleByDay.get(day);
+      plannedTimes: dateColumns.map((date) => {
+        const schedule = scheduleByDate.get(dateKey(date));
         return schedule
           ? {
             scheduleId: schedule.id,
@@ -352,9 +351,8 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
           }
           : null;
       }),
-      workHours: Array.from({ length: period.daysInMonth }).map((_, index) => {
-        const day = index + 1;
-        const schedule = scheduleByDay.get(day);
+      workHours: dateColumns.map((date) => {
+        const schedule = scheduleByDate.get(dateKey(date));
         const record = schedule?.workHourRecords?.[0] ?? (schedule ? workHourByEmployeeDay.get(`${schedule.employeeId}:${schedule.date.getTime()}`) : undefined);
         if (!record) return null;
         const adjustment = record.adjustments?.[0];
@@ -411,12 +409,13 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         }
       })
       : null;
-    const scheduleDays = calendarCells(period.year, period.month).map(({ date, outside }) => {
-      const schedule = outside ? undefined : own?.schedules.find((item) => item.date.getUTCDate() === date);
+    const ownScheduleByDate = new Map((own?.schedules ?? []).map((item) => [dateKey(item.date), item]));
+    const scheduleDays = dateColumns.map((date) => {
+      const schedule = ownScheduleByDate.get(dateKey(date));
       const label = schedule
         ? (scheduleStatusRequiresJustification(schedule.status) ? attendanceDisplayLabel(schedule.attendanceRecords) : null) ?? (schedule.status === "ESCALADO" ? schedule.shift?.name ?? "Escalado" : scheduleToUiStatus[schedule.status] ?? "Escalado")
         : "Sem escala";
-      return { date, outside, shift: label, label };
+      return { date: date.getUTCDate(), dateIso: dateKey(date), outside: false, shift: label, label };
     });
 
     const imports = await prisma.scheduleImport.findMany({ orderBy: { createdAt: "desc" }, include: { importedBy: true } });
@@ -447,7 +446,8 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       attendanceSummary: await getAttendanceSummaryFromDb(period, query.lob),
       month: period.month,
       year: period.year,
-      daysInMonth: period.daysInMonth,
+      daysInMonth: dateColumns.length,
+      dateColumns: dateColumns.map(dateKey),
       pagination: {
         page,
         limit,
@@ -462,14 +462,16 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
 }
 
 function emptyOperationalSchedules(period = resolvePeriod({}), pagination = { page: 1, limit: 75, total: 0, totalPages: 1 }) {
+  const dateColumns = datesBetween(period.start, period.end);
   return {
-    scheduleDays: calendarCells(period.year, period.month).map(({ date, outside }) => ({ date, outside, shift: "Sem escala", label: "Sem escala" })),
+    scheduleDays: dateColumns.map((date) => ({ date: date.getUTCDate(), dateIso: dateKey(date), outside: false, shift: "Sem escala", label: "Sem escala" })),
     scheduleGridRows: [],
     ownEmployee: null,
     imports: [],
     month: period.month,
     year: period.year,
-    daysInMonth: period.daysInMonth,
+    daysInMonth: dateColumns.length,
+    dateColumns: dateColumns.map(dateKey),
     attendanceSummary: emptyAttendanceSummary(),
     pagination
   };
@@ -1686,13 +1688,15 @@ function workHourAdjustmentStatusLabel(status: string) {
 
 function resolvePeriod(query: ScheduleQuery | ScheduleRemoveInput) {
   if ("startDate" in query || "endDate" in query) {
-    const startDate = parseDateOnly(query.startDate || query.endDate || "");
-    const endDate = parseDateOnly(query.endDate || query.startDate || "");
-    if (startDate && endDate) {
+    const rawStartDate = parseDateOnly(query.startDate || "");
+    const rawEndDate = parseDateOnly(query.endDate || "");
+    if (rawStartDate || rawEndDate) {
+      const startDate = rawStartDate ?? new Date(Date.UTC(rawEndDate!.getUTCFullYear(), rawEndDate!.getUTCMonth(), 1));
+      const endDate = rawEndDate ?? new Date(Date.UTC(rawStartDate!.getUTCFullYear(), rawStartDate!.getUTCMonth() + 1, 0));
       const start = startDate <= endDate ? startDate : endDate;
       const endBase = startDate <= endDate ? endDate : startDate;
       const end = new Date(Date.UTC(endBase.getUTCFullYear(), endBase.getUTCMonth(), endBase.getUTCDate(), 23, 59, 59, 999));
-      return { year: start.getUTCFullYear(), month: start.getUTCMonth() + 1, start, end, daysInMonth: new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0)).getUTCDate() };
+      return { year: start.getUTCFullYear(), month: start.getUTCMonth() + 1, start, end, daysInMonth: datesBetween(start, end).length };
     }
   }
   const year = Number(query.year) || 2026;
@@ -1702,11 +1706,28 @@ function resolvePeriod(query: ScheduleQuery | ScheduleRemoveInput) {
   return { year, month, start, end, daysInMonth: end.getUTCDate() };
 }
 
+function datesBetween(start: Date, end: Date) {
+  const dates: Date[] = [];
+  const current = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
+  const last = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate()));
+  while (current <= last) {
+    dates.push(new Date(current));
+    current.setUTCDate(current.getUTCDate() + 1);
+  }
+  return dates;
+}
+
+function dateKey(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
 function resolveAttendancePeriod(query: AttendanceQuery) {
   if (query.startDate || query.endDate) {
-    const startDate = parseDateOnly(query.startDate || query.endDate || "");
-    const endDate = parseDateOnly(query.endDate || query.startDate || "");
-    if (!startDate || !endDate) return undefined;
+    const rawStartDate = parseDateOnly(query.startDate || "");
+    const rawEndDate = parseDateOnly(query.endDate || "");
+    if (!rawStartDate && !rawEndDate) return undefined;
+    const startDate = rawStartDate ?? new Date(Date.UTC(rawEndDate!.getUTCFullYear(), rawEndDate!.getUTCMonth(), 1));
+    const endDate = rawEndDate ?? new Date(Date.UTC(rawStartDate!.getUTCFullYear(), rawStartDate!.getUTCMonth() + 1, 0));
     const start = startDate <= endDate ? startDate : endDate;
     const endBase = startDate <= endDate ? endDate : startDate;
     const end = new Date(Date.UTC(endBase.getUTCFullYear(), endBase.getUTCMonth(), endBase.getUTCDate(), 23, 59, 59, 999));
