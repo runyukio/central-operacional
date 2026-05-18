@@ -102,6 +102,7 @@ const workHourImportColumns = ["wb_login", "data", "entrada_real", "saida_real",
 const scheduleStatusOptions = ["Escalado", "Presente", "Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Férias", "Treinamento", "Folga", "Troca aprovada", "Venda de folga aprovada", "Folga aprovada", "Sem escala", "Erro de escala"] as const;
 const attendanceReasonStatuses = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala"];
 const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Venda de folga aprovada"];
+const employeeOperationalStatusOptions = ["Ativo", "Nesting", "Inativo", "Pendente de cadastro", "Afastado", "Desligado", "Em treinamento", "Suspenso", "Online", "Em Atendimento", "Offline"];
 const absenceReasonOptions = ["Falta injustificada", "Atestado", "Problema de saúde", "Emergência familiar", "Problema técnico", "Falta de equipamento", "Problema de internet", "Atraso", "Saída antecipada", "Erro de escala", "Afastamento", "Outros"];
 const scheduleShiftTimes: Record<string, { startsAt: string; endsAt: string }> = {
   Manhã: { startsAt: "06:00", endsAt: "14:00" },
@@ -2047,9 +2048,9 @@ export function RegistrationApprovalsPage() {
                 ].map(([label, key]) => (
                   <label key={key} className="block">
                     <span className="mb-1 block text-xs font-bold text-muted">{label}</span>
-                    {key === "lob" || key === "shift" || key === "roleTitle" ? (
+                    {key === "lob" || key === "shift" || key === "roleTitle" || key === "employeeStatus" ? (
                       <select value={operational[key as keyof typeof operational]} onChange={(event) => setOperational({ ...operational, [key]: event.target.value })} className="h-10 w-full rounded-lg border border-border px-3 text-sm outline-none">
-                        {(key === "lob" ? registrationLobOptions : key === "shift" ? registrationShiftOptions : registrationRoleTitleOptions).map((option) => (
+                        {(key === "lob" ? registrationLobOptions : key === "shift" ? registrationShiftOptions : key === "roleTitle" ? registrationRoleTitleOptions : employeeOperationalStatusOptions).map((option) => (
                           <option key={option} value={option}>{option}</option>
                         ))}
                       </select>
@@ -4566,7 +4567,7 @@ export function EmployeeMapPage() {
   const [resetPasswordForm, setResetPasswordForm] = useState({ password: "", confirmPassword: "" });
   const [resettingPassword, setResettingPassword] = useState(false);
   const employeeMapLobs = ["Todos", ...Array.from(new Set(employeeSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? employeeRows.map((employee) => employee.lob).filter(Boolean)))];
-  const employeeStatusOptions = ["Todos", "Ativos/Aprovados", "Pendentes", "Inativos", "Online", "Em Atendimento", "Offline"];
+  const employeeStatusOptions = ["Todos", "Ativos/Aprovados", "Nesting", "Pendentes", "Inativos", "Online", "Em Atendimento", "Offline"];
   const employeeSupervisorOptions = employeeSettings?.supervisors?.filter((supervisor) => supervisor.status !== "INACTIVE") ?? [];
   const hasEmployeeFilters = Boolean(query.trim()) || lobFilter !== "Todos" || statusFilter !== "Todos" || supervisorFilter !== "Todos" || shiftFilter !== "Todos";
   const isAdmin = session?.user?.role === "ADMIN";
@@ -4581,7 +4582,7 @@ export function EmployeeMapPage() {
   const employeeRoleTitleOptions = employeeSettings?.roleTitles.filter((title) => title.status !== "INACTIVE").map((title) => title.name) ?? [];
   const employeeRoleOptions = employeeSettings?.roles.filter((roleItem) => roleItem.status !== "INACTIVE").map((roleItem) => roleItem.name) ?? ["COLABORADOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI", "GESTOR", "ADMIN"];
   const contractOptions = ["CLT", "PJ", "Temporário", "Estágio", "Terceiro", "Outro"];
-  const operationalStatusOptions = ["Ativo", "Inativo", "Pendente de cadastro", "Afastado", "Desligado", "Em treinamento", "Suspenso", "Online", "Em Atendimento", "Offline"];
+  const operationalStatusOptions = employeeOperationalStatusOptions;
 
   useEffect(() => {
     void loadEmployees();

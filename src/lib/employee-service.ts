@@ -903,7 +903,8 @@ const activeEmployeeStatusTokens = new Set([
   "EM_ATENDIMENTO",
   "EM ATENDIMENTO",
   "EM_TREINAMENTO",
-  "EM TREINAMENTO"
+  "EM TREINAMENTO",
+  "NESTING"
 ]);
 
 const pendingEmployeeStatusTokens = new Set([
@@ -941,7 +942,7 @@ function buildEmployeeStatusWhere(status: unknown): Prisma.EmployeeProfileWhereI
   if (["ATIVOS_APROVADOS", "ATIVOS", "ATIVO", "ACTIVE", "APROVADOS", "APROVADO", "APPROVED"].includes(token)) {
     return {
       OR: [
-        { operationalStatus: { in: ["ACTIVE", "ATIVO", "Ativo", "APPROVED", "APROVADO", "Aprovado", "Online", "Em Atendimento", "Em treinamento", "EM_TREINAMENTO"] } },
+        { operationalStatus: { in: ["ACTIVE", "ATIVO", "Ativo", "APPROVED", "APROVADO", "Aprovado", "Online", "Em Atendimento", "Em treinamento", "EM_TREINAMENTO", "NESTING", "Nesting", "nesting"] } },
         { user: { status: "ACTIVE" } }
       ]
     };

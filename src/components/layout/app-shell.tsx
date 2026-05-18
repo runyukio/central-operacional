@@ -31,12 +31,14 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  Sun,
   Trophy,
   UserPlus,
   UserCircle,
   UsersRound
 } from "lucide-react";
 
+import { useTheme } from "@/components/theme-provider";
 import { getNavItems } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 
@@ -82,6 +84,7 @@ type HeaderNotification = {
 
 export function AppShell({ children, user }: { children: React.ReactNode; user: ShellUser }) {
   const pathname = usePathname();
+  const { theme, toggleTheme } = useTheme();
   const role = user.role ?? "COLABORADOR";
   const navItems = getNavItems(role);
   const isCollaborator = role === "COLABORADOR";
@@ -239,8 +242,13 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
             <button className="hidden h-10 w-10 place-items-center rounded-lg border border-transparent hover:border-border hover:bg-surface md:grid">
               <HelpCircle className="h-5 w-5" />
             </button>
-            <button className="hidden h-10 w-10 place-items-center rounded-lg border border-transparent hover:border-border hover:bg-surface md:grid">
-              <Moon className="h-5 w-5" />
+            <button
+              onClick={toggleTheme}
+              className="hidden h-10 w-10 place-items-center rounded-lg border border-transparent hover:border-border hover:bg-surface md:grid"
+              aria-label={theme === "dark" ? "Ativar modo claro" : "Ativar modo escuro"}
+              title={theme === "dark" ? "Ativar modo claro" : "Ativar modo escuro"}
+            >
+              {theme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
             </button>
             <div className="hidden h-9 w-px bg-border md:block" />
             <div className="flex items-center gap-3">

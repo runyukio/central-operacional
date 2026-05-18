@@ -1165,6 +1165,7 @@ function normalizeEmployeeStatus(value: unknown) {
     PENDING: "Pendente de Cadastro",
     EM_TREINAMENTO: "Em treinamento",
     TREINAMENTO: "Em treinamento",
+    NESTING: "Nesting",
     AFASTADO: "Afastado",
     DESLIGADO: "Desligado",
     SUSPENSO: "Suspenso"

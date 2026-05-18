@@ -106,7 +106,9 @@ export function StatusBadge({ status }: { status: string }) {
         ? "bg-amber-50 text-amber-600"
         : normalized.includes("aprov") || normalized.includes("funcion") || normalized.includes("online") || normalized.includes("lido") || normalized.includes("sucesso")
           ? "bg-emerald-50 text-emerald-600"
-          : normalized.includes("inform") || normalized.includes("análise") || normalized.includes("analise")
+          : normalized.includes("nesting")
+            ? "bg-violet-50 text-violet-700"
+            : normalized.includes("inform") || normalized.includes("análise") || normalized.includes("analise")
             ? "bg-blue-50 text-blue-600"
             : "bg-slate-100 text-slate-600";
 
