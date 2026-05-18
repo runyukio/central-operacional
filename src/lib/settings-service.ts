@@ -6,6 +6,7 @@ import type { Actor } from "@/lib/mock-db";
 import { recordErrorLog } from "@/lib/mock-db";
 import { normalizeRole } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import { cleanShiftName, isBlockedShiftName } from "@/lib/shift-display";
 
 type StatusValue = "ACTIVE" | "INACTIVE";
 type StatusMap = Record<string, StatusValue>;
@@ -136,7 +137,7 @@ export async function getSystemSettings(actor: Actor) {
           createdAt: user.createdAt.toISOString()
         })),
         lobs: lobs.map((lob) => ({ id: lob.id, name: lob.name, label: lob.name, description: lob.description ?? "", status: lobStatus[lob.id] ?? "ACTIVE", active: (lobStatus[lob.id] ?? "ACTIVE") === "ACTIVE", system: lob.name === "ALL", isSystem: lob.name === "ALL" })),
-        shifts: shifts.map((shift) => ({ id: shift.id, name: shift.name, startsAt: shift.startsAt, endsAt: shift.endsAt, color: shift.color, status: shiftStatus[shift.id] ?? "ACTIVE" })),
+        shifts: shifts.map((shift) => ({ id: shift.id, name: cleanShiftName(shift.name), startsAt: shift.startsAt, endsAt: shift.endsAt, color: shift.color, status: isBlockedShiftName(shift.name) ? "INACTIVE" : shiftStatus[shift.id] ?? "ACTIVE" })),
         roles: roles.map((role) => ({ id: role.id, name: role.name, label: role.label, description: role.description ?? "", status: roleStatus[role.id] ?? "ACTIVE", essential: essentialRoles.includes(role.name), permissions: rolePermissions[role.name] ?? defaultPermissionsForRole(role.name) })),
         permissions: permissions.map((permission) => ({ id: permission.id, key: permission.key, label: permission.label, description: permission.description ?? "", status: permissionStatus[permission.id] ?? "ACTIVE" })),
         requestTypes: requestTypes.map((type) => ({ id: type.id, name: type.name, area: type.area, slaHours: type.slaHours, requiresApproval: type.requiresApproval, status: requestTypeStatus[type.id] ?? "ACTIVE", essential: essentialDayOffTypes.includes(type.name) })),
@@ -168,7 +169,7 @@ export async function getSystemSettings(actor: Actor) {
           supervisorId: employee.supervisorId ?? "",
           supervisorName: employee.supervisor?.fullName ?? "",
           shiftId: employee.shiftId,
-          shift: employee.shift.name,
+          shift: cleanShiftName(employee.shift.name) || "Sem turno",
           status: employee.operationalStatus
         })),
         roleTitles,
@@ -205,7 +206,7 @@ async function getLimitedSystemSettings() {
   return {
     ...emptySettings(),
     lobs: lobs.map((lob) => ({ id: lob.id, name: lob.name, label: lob.name, description: lob.description ?? "", status: lobStatus[lob.id] ?? "ACTIVE", active: (lobStatus[lob.id] ?? "ACTIVE") === "ACTIVE", system: lob.name === "ALL", isSystem: lob.name === "ALL" })),
-    shifts: shifts.map((shift) => ({ id: shift.id, name: shift.name, startsAt: shift.startsAt, endsAt: shift.endsAt, color: shift.color, status: shiftStatus[shift.id] ?? "ACTIVE" })),
+    shifts: shifts.map((shift) => ({ id: shift.id, name: cleanShiftName(shift.name), startsAt: shift.startsAt, endsAt: shift.endsAt, color: shift.color, status: isBlockedShiftName(shift.name) ? "INACTIVE" : shiftStatus[shift.id] ?? "ACTIVE" })),
     requestTypes: requestTypes.map((type) => ({ id: type.id, name: type.name, area: type.area, slaHours: type.slaHours, requiresApproval: type.requiresApproval, status: requestTypeStatus[type.id] ?? "ACTIVE", essential: essentialDayOffTypes.includes(type.name) })),
     teams: teams.map((team) => ({ id: team.id, name: team.name, lobId: team.lobId, lob: team.lob.name, supervisorId: team.supervisorId ?? "", supervisorName: team.supervisor?.fullName ?? "", supervisorEmail: team.supervisor?.user?.email ?? "", status: teamStatus[team.id] ?? "ACTIVE" })),
     supervisors: employees
@@ -280,7 +281,7 @@ export async function updateSystemSettings(actor: Actor, action: SettingsAction)
 
 async function saveUser(tx: Prisma.TransactionClient, adminId: string, action: SettingsAction) {
   const id = text(action.id);
-  const name = text(action.name);
+  const name = cleanShiftName(text(action.name));
   const email = text(action.email).toLowerCase();
   const roleName = text(action.roleName) || "COLABORADOR";
   const status = text(action.status) || "ACTIVE";
@@ -319,7 +320,7 @@ async function saveRole(tx: Prisma.TransactionClient, adminId: string, action: S
   const name = text(action.name);
   const label = text(action.label);
   const description = text(action.description);
-  const status = statusValue(action.status);
+  const status = isBlockedShiftName(name) ? "INACTIVE" : statusValue(action.status);
   const role = id ? await tx.role.findUnique({ where: { id } }) : await tx.role.findUnique({ where: { name } });
   if (!role) return { error: "Role/perfil não encontrado." };
   if (role.name === "ADMIN" && status === "INACTIVE") return { error: "ADMIN é essencial e não pode ser inativado." };

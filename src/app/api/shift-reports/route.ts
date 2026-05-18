@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getApiActor } from "@/lib/api-actor";
-import { createShiftReport, getShiftReportDashboard, listShiftReports } from "@/lib/mock-db";
+import { createShiftReport, deleteShiftReport, listShiftReports } from "@/lib/shift-report-service";
 
 const absenceSchema = z.object({
   employeeId: z.string().min(1),
@@ -49,9 +49,19 @@ const schema = z.object({
   additionalComments: z.string().optional().default("")
 });
 
-export async function GET() {
+export async function GET(request: Request) {
   const actor = await getApiActor();
-  return NextResponse.json({ data: listShiftReports(actor), dashboard: getShiftReportDashboard(actor) });
+  const url = new URL(request.url);
+  return NextResponse.json(await listShiftReports(actor, {
+    startDate: url.searchParams.get("startDate") ?? undefined,
+    endDate: url.searchParams.get("endDate") ?? undefined,
+    shift: url.searchParams.get("shift") ?? undefined,
+    supervisor: url.searchParams.get("supervisor") ?? undefined,
+    rta: url.searchParams.get("rta") ?? undefined,
+    importance: url.searchParams.get("importance") ?? undefined,
+    mood: url.searchParams.get("mood") ?? undefined,
+    search: url.searchParams.get("search") ?? undefined
+  }));
 }
 
 export async function POST(request: Request) {
@@ -67,4 +77,14 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json(result, { status: 201 });
+}
+
+export async function DELETE(request: Request) {
+  const actor = await getApiActor();
+  const url = new URL(request.url);
+  const id = url.searchParams.get("id");
+  if (!id) return NextResponse.json({ error: "Informe o report de turno." }, { status: 400 });
+  const result = await deleteShiftReport(actor, id);
+  if ("error" in result) return NextResponse.json({ error: result.error }, { status: 403 });
+  return NextResponse.json(result);
 }

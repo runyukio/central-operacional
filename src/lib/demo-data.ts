@@ -27,7 +27,7 @@ import {
 
 export const operations = ["Todas as Operações", "CEC", "TNS", "ADS"];
 export const lobs = ["CEC", "TNS", "ADS"];
-export const shifts = ["Manhã", "Tarde", "Noite", "Madrugada", "Backoffice"];
+export const shifts = ["Manhã", "Tarde", "Noite", "Folga"];
 
 export const commandStats = [
   { title: "Pessoas Escaladas", value: "1.256", change: "100%", helper: "vs dia anterior", icon: Users, tone: "blue" as const },
@@ -39,10 +39,10 @@ export const commandStats = [
 ];
 
 export const presenceByShift = [
-  { shift: "Madrugada", escalados: 1200, presentes: 1260 },
   { shift: "Manhã", escalados: 1220, presentes: 1248 },
   { shift: "Tarde", escalados: 780, presentes: 850 },
-  { shift: "Noite", escalados: 1160, presentes: 1210 }
+  { shift: "Noite", escalados: 1160, presentes: 1210 },
+  { shift: "Folga", escalados: 0, presentes: 0 }
 ];
 
 export const absenceReasons = [
@@ -54,10 +54,10 @@ export const absenceReasons = [
 ];
 
 export const gapByShift = [
-  { shift: "Madrugada", gaps: 38 },
   { shift: "Manhã", gaps: 49 },
   { shift: "Tarde", gaps: 37 },
-  { shift: "Noite", gaps: 41 }
+  { shift: "Noite", gaps: 41 },
+  { shift: "Folga", gaps: 0 }
 ];
 
 export const alerts = [
@@ -243,17 +243,17 @@ export const equipmentTickets = [
 ];
 
 export const coverageMatrix = [
-  { turno: "Madrugada", range: "00:00 - 06:00", values: [92, 95, 90, 88, 93, 85, 82], media: 89 },
-  { turno: "Manhã", range: "06:00 - 14:00", values: [96, 98, 97, 95, 96, 93, 91], media: 95 },
-  { turno: "Tarde", range: "14:00 - 22:00", values: [94, 93, 92, 90, 91, 88, 86], media: 91 },
-  { turno: "Noite", range: "22:00 - 00:00", values: [89, 91, 88, 87, 90, 83, 80], media: 87 }
+  { turno: "Manhã", range: "08:00 - 14:00", values: [96, 98, 97, 95, 96, 93, 91], media: 95 },
+  { turno: "Tarde", range: "14:00 - 20:00", values: [94, 93, 92, 90, 91, 88, 86], media: 91 },
+  { turno: "Noite", range: "20:00 - 02:00", values: [89, 91, 88, 87, 90, 83, 80], media: 87 },
+  { turno: "Folga", range: "Sem horário", values: [0, 0, 0, 0, 0, 0, 0], media: 0 }
 ];
 
 export const coverageByShift = [
-  { shift: "Madrugada", cobertura: 89, meta: 95 },
   { shift: "Manhã", cobertura: 95, meta: 95 },
   { shift: "Tarde", cobertura: 91, meta: 95 },
-  { shift: "Noite", cobertura: 87, meta: 95 }
+  { shift: "Noite", cobertura: 87, meta: 95 },
+  { shift: "Folga", cobertura: 100, meta: 100 }
 ];
 
 export const climateThemes = [

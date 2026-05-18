@@ -27,7 +27,10 @@ export async function GET(request: Request) {
     endDate: url.searchParams.get("endDate") ?? undefined,
     month: url.searchParams.get("month") ? Number(url.searchParams.get("month")) : undefined,
     year: url.searchParams.get("year") ? Number(url.searchParams.get("year")) : undefined,
-    lob: url.searchParams.get("lob") ?? undefined
+    lob: url.searchParams.get("lob") ?? undefined,
+    supervisor: url.searchParams.get("supervisor") ?? undefined,
+    shift: url.searchParams.get("shift") ?? undefined,
+    collaborator: url.searchParams.get("collaborator") ?? undefined
   }));
 }
 

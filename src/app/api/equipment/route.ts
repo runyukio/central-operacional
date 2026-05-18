@@ -2,19 +2,40 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getApiActor } from "@/lib/api-actor";
-import { createEquipment, listEquipment } from "@/lib/mock-db";
+import { deleteEquipment, listEquipment, saveEquipment } from "@/lib/equipment-service";
 
 const schema = z.object({
-  code: z.string().min(1),
-  type: z.string().min(1),
-  employeeId: z.string().optional(),
-  status: z.string().min(1),
-  impact: z.string().min(1)
+  id: z.string().optional(),
+  numeroSerie: z.string().optional(),
+  code: z.string().optional(),
+  serial: z.string().optional(),
+  responsibleEmployeeId: z.string().optional(),
+  responsavelWbLogin: z.string().optional(),
+  responsavelEmail: z.string().optional(),
+  responsavelNome: z.string().optional(),
+  deliveredAt: z.string().optional(),
+  dataEntrega: z.string().optional(),
+  type: z.string().optional(),
+  tipoEquipamento: z.string().optional(),
+  model: z.string().optional(),
+  modelo: z.string().optional(),
+  status: z.string().optional(),
+  observation: z.string().optional(),
+  observacao: z.string().optional()
 });
 
-export async function GET() {
+export async function GET(request: Request) {
   const actor = await getApiActor();
-  return NextResponse.json({ data: listEquipment(actor) });
+  const url = new URL(request.url);
+  return NextResponse.json(await listEquipment(actor, {
+    status: url.searchParams.get("status") ?? undefined,
+    type: url.searchParams.get("type") ?? undefined,
+    search: url.searchParams.get("search") ?? undefined,
+    responsible: url.searchParams.get("responsible") ?? undefined,
+    model: url.searchParams.get("model") ?? undefined,
+    deliveredFrom: url.searchParams.get("deliveredFrom") ?? undefined,
+    deliveredTo: url.searchParams.get("deliveredTo") ?? undefined
+  }));
 }
 
 export async function POST(request: Request) {
@@ -23,11 +44,32 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Dados inválidos", issues: parsed.error.flatten() }, { status: 400 });
   }
   const actor = await getApiActor();
-  const result = createEquipment(actor, parsed.data);
+  const result = await saveEquipment(actor, parsed.data);
 
   if ("error" in result) {
     return NextResponse.json({ error: result.error }, { status: 409 });
   }
 
   return NextResponse.json(result, { status: 201 });
+}
+
+export async function PATCH(request: Request) {
+  const parsed = schema.safeParse(await request.json());
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Dados inválidos", issues: parsed.error.flatten() }, { status: 400 });
+  }
+  const actor = await getApiActor();
+  const result = await saveEquipment(actor, parsed.data);
+  if ("error" in result) return NextResponse.json({ error: result.error }, { status: 409 });
+  return NextResponse.json(result);
+}
+
+export async function DELETE(request: Request) {
+  const actor = await getApiActor();
+  const url = new URL(request.url);
+  const id = url.searchParams.get("id");
+  if (!id) return NextResponse.json({ error: "Informe o equipamento." }, { status: 400 });
+  const result = await deleteEquipment(actor, id);
+  if ("error" in result) return NextResponse.json({ error: result.error }, { status: 409 });
+  return NextResponse.json(result);
 }

@@ -13,6 +13,7 @@ import type { Actor } from "@/lib/mock-db";
 import { recordErrorLog } from "@/lib/mock-db";
 import { normalizeRole } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import { cleanShiftName } from "@/lib/shift-display";
 
 const uploadRoles = ["ADMIN", "GESTOR", "WFM"];
 const approvalRoles = ["ADMIN", "GESTOR", "WFM"];
@@ -835,7 +836,10 @@ function buildRecordWhere(user: UserWithRole, query: WorkHourQuery, period: { st
   if (role === "COLABORADOR" || query.scope === "mine") where.employeeId = user.employeeProfile?.id ?? "__none__";
   if (query.lob && query.lob !== "Todos") where.employee = { ...(where.employee as Prisma.EmployeeProfileWhereInput), lob: { name: query.lob } };
   if (query.supervisor) where.employee = { ...(where.employee as Prisma.EmployeeProfileWhereInput), supervisor: { fullName: { contains: query.supervisor, mode: "insensitive" } } };
-  if (query.shift && query.shift !== "Todos") where.employee = { ...(where.employee as Prisma.EmployeeProfileWhereInput), shift: { name: query.shift } };
+  const shiftFilter = cleanShiftName(query.shift);
+  if (shiftFilter && shiftFilter !== "Todos" && shiftFilter !== "Folga") {
+    where.employee = { ...(where.employee as Prisma.EmployeeProfileWhereInput), shift: { OR: [{ name: shiftFilter }, { name: { startsWith: `${shiftFilter} (` } }] } };
+  }
   if (query.collaborator || query.wbLogin) {
     const search = query.collaborator || query.wbLogin || "";
     where.OR = [
@@ -895,7 +899,7 @@ function formatWorkHourRecord(record: any) {
     date: formatDate(record.date),
     lob: record.employee?.lob?.name ?? "",
     supervisor: record.employee?.supervisor?.fullName ?? "",
-    shift: record.employee?.shift?.name ?? "",
+    shift: cleanShiftName(record.employee?.shift?.name) || "",
     plannedStart: record.plannedStart ?? "",
     plannedEnd: record.plannedEnd ?? "",
     plannedHours: record.plannedHours ?? 0,

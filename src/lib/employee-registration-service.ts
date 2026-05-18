@@ -11,6 +11,7 @@ import {
 import { mapPrismaError } from "@/lib/api-errors";
 import { normalizeRole } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import { cleanShiftName, isSelectableShiftName } from "@/lib/shift-display";
 import type { RegistrationInput } from "@/lib/registration-validation";
 
 const allowDemoDataFallback = process.env.ALLOW_DEMO_LOGIN === "true" || process.env.ALLOW_DEMO_DATA === "true";
@@ -330,7 +331,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
       const role = await prisma.role.findUniqueOrThrow({ where: { name: row.roleName } });
       const lob = await prisma.lob.findUniqueOrThrow({ where: { name: row.lob } });
       const shift = row.shift
-        ? await prisma.shift.findUniqueOrThrow({ where: { name: row.shift } })
+        ? await prisma.shift.findFirstOrThrow({ where: { OR: [{ name: row.shift }, { name: { startsWith: `${row.shift} (` } }] } })
         : fallbackShift!;
       const importDateFallback = new Date();
       const birthDate = row.birthDate ?? row.admissionDate ?? row.trainingStartDate ?? importDateFallback;
@@ -652,6 +653,9 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
     if (input.action === "approve" && existingUser?.status === "ACTIVE" && existingUser.id !== existing.createdUserId) {
       return { error: "Já existe um usuário ativo com este e-mail." };
     }
+    if (input.action === "approve" && !isSelectableShiftName(input.operationalData?.shift)) {
+      return { error: "Turno selecionado não é uma opção padrão válida." };
+    }
 
     const result = await prisma.$transaction(async (tx) => {
       if (input.action !== "approve") {
@@ -670,17 +674,14 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
         return updated;
       }
 
-      const op = { ...input.operationalData!, lob: normalizeLobName(input.operationalData!.lob) };
+      const op = { ...input.operationalData!, lob: normalizeLobName(input.operationalData!.lob), shift: cleanShiftName(input.operationalData!.shift) || "Manhã" };
       const lob = await tx.lob.upsert({
         where: { name: op.lob },
         update: op.lob === "ALL" ? { description: "Atuação transversal / staff / multi-LOB" } : {},
         create: { name: op.lob, description: op.lob === "ALL" ? "Atuação transversal / staff / multi-LOB" : "Criado no cadastro real" }
       });
-      const shift = await tx.shift.upsert({
-        where: { name: op.shift },
-        update: {},
-        create: { name: op.shift, startsAt: defaultShiftStart(op.shift), endsAt: defaultShiftEnd(op.shift), color: "#2563EB" }
-      });
+      const existingShift = await tx.shift.findFirst({ where: { OR: [{ name: op.shift }, { name: { startsWith: `${op.shift} (` } }] } });
+      const shift = existingShift ?? await tx.shift.create({ data: { name: op.shift, startsAt: defaultShiftStart(op.shift), endsAt: defaultShiftEnd(op.shift), color: "#2563EB" } });
       const supervisor = op.supervisor
         ? await tx.employeeProfile.findFirst({ where: { OR: [{ fullName: op.supervisor }, { wbLogin: op.supervisor }] } })
         : null;
@@ -893,7 +894,9 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
   ]);
   const validRoles = new Set(roles.map((role) => role.name));
   const validLobs = new Set(lobs.map((lob) => lob.name.toUpperCase()));
-  const validShifts = new Set(shifts.map((shift) => normalizeLookupKey(shift.name)));
+  const validShifts = new Set(shifts
+    .filter((shift) => isSelectableShiftName(shift.name))
+    .flatMap((shift) => [normalizeLookupKey(shift.name), normalizeLookupKey(cleanShiftName(shift.name))]));
   const employeeByWb = new Map(employeesByWb.map((employee) => [employee.wbLogin, employee]));
   const activeUserByEmail = new Map(activeUsers.map((user) => [user.email.toLowerCase(), user]));
   const sensitiveEmployeeIds = unique(sensitiveMatches.map((item) => item.employeeId));
@@ -923,7 +926,7 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     if (!hasImportValue(rows[index]?.criar_usuario)) errors.push("criar_usuario obrigatório.");
     if (row.lob && text(rows[index]?.lob).toLowerCase() === "todos") errors.push("Todos é opção de filtro. Para atuação transversal use a LOB real ALL.");
     if (row.lob && !validLobs.has(row.lob.toUpperCase())) errors.push(`LOB ${row.lob} não existe em Configurações.`);
-    if (row.shift && !validShifts.has(normalizeLookupKey(row.shift))) errors.push(`Turno ${row.shift} não existe em Configurações.`);
+    if (row.shift && (!isSelectableShiftName(row.shift) || !validShifts.has(normalizeLookupKey(cleanShiftName(row.shift))))) errors.push(`Turno ${row.shift} não existe em Configurações.`);
     if (row.cpf && !isCpfFormat(row.cpf)) errors.push("CPF inválido.");
     if (!row.cpf) warnings.push("CPF pendente: o colaborador será importado com cadastro incompleto para complemento posterior.");
     if (row.createUser && !row.email) errors.push("E-mail obrigatório quando criar_usuario = sim.");
@@ -1138,16 +1141,14 @@ function normalizeLobName(value: unknown) {
 }
 
 function normalizeShiftName(value: unknown) {
-  const raw = text(value);
+  const raw = cleanShiftName(text(value));
   if (!raw) return "";
   const key = normalizeLookupKey(raw);
   const map: Record<string, string> = {
     MANHA: "Manhã",
     TARDE: "Tarde",
     NOITE: "Noite",
-    MADRUGADA: "Madrugada",
-    BACKOFFICE: "Backoffice",
-    BACK_OFFICE: "Backoffice"
+    FOLGA: "Folga"
   };
   return map[key] ?? raw;
 }
@@ -1498,15 +1499,15 @@ function technicalMessage(error: unknown) {
 
 function defaultShiftStart(name: string) {
   if (name === "Tarde") return "14:00";
-  if (name === "Noite") return "22:00";
-  if (name === "Backoffice") return "08:00";
-  return "06:00";
+  if (name === "Noite") return "20:00";
+  if (name === "Folga") return "00:00";
+  return "08:00";
 }
 
 function defaultShiftEnd(name: string) {
-  if (name === "Tarde") return "22:00";
-  if (name === "Noite") return "06:00";
-  if (name === "Backoffice") return "16:00";
+  if (name === "Tarde") return "20:00";
+  if (name === "Noite") return "02:00";
+  if (name === "Folga") return "00:00";
   return "14:00";
 }
 

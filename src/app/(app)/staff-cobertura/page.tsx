@@ -1,5 +1,7 @@
 import { StaffCoveragePage } from "@/components/modules";
+import { requireAdminRoute } from "@/lib/admin-route";
 
-export default function StaffCoberturaRoute() {
+export default async function StaffCoberturaRoute() {
+  await requireAdminRoute();
   return <StaffCoveragePage />;
 }

@@ -10,6 +10,7 @@ import {
 } from "@/lib/mock-db";
 import { prisma } from "@/lib/prisma";
 import { canApproveRequest, normalizeRole } from "@/lib/permissions";
+import { cleanShiftName } from "@/lib/shift-display";
 
 const uiToDbStatus = {
   Aberto: "ABERTO",
@@ -990,8 +991,8 @@ async function applySellSchedule(tx: Prisma.TransactionClient, request: PrismaRe
   if (!schedule) throw new DomainError("Escala não encontrada para a data da venda de folga.");
   if (schedule.status !== "FOLGA") throw new DomainError("A data selecionada não está como folga.");
 
-  const shiftName = actionInput.finalApprovedShift || String(payload.availabilityShift ?? employee.shift.name);
-  const finalShift = (await tx.shift.findUnique({ where: { name: shiftName } })) ?? employee.shift;
+  const shiftName = cleanShiftName(actionInput.finalApprovedShift || String(payload.availabilityShift ?? employee.shift.name)) || employee.shift.name;
+  const finalShift = (await tx.shift.findFirst({ where: { OR: [{ name: shiftName }, { name: { startsWith: `${shiftName} (` } }] } })) ?? employee.shift;
   const before = serialize(schedule);
   const after = await tx.schedule.update({
     where: { id: schedule.id },

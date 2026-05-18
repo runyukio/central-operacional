@@ -6,6 +6,7 @@ import { commitScheduleImport as commitMockScheduleImport, getAttendanceSummary 
 import { hasExcelValue, normalizeExcelDate, normalizeExcelTime } from "@/lib/excel-normalization";
 import { prisma } from "@/lib/prisma";
 import { normalizeRole } from "@/lib/permissions";
+import { cleanShiftName, isSelectableShiftName } from "@/lib/shift-display";
 
 const uiToScheduleStatus: Record<string, ScheduleStatus> = {
   Escalado: "ESCALADO",
@@ -73,11 +74,10 @@ export const statusesRequiringReason = ["Ausente", "Falta", "Atraso", "Saída an
 const supervisorJustificationStatuses = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala"];
 
 const defaultShiftTimes: Record<string, { startsAt: string; endsAt: string }> = {
-  Manhã: { startsAt: "06:00", endsAt: "14:00" },
-  Tarde: { startsAt: "14:00", endsAt: "22:00" },
-  Noite: { startsAt: "22:00", endsAt: "06:00" },
-  Madrugada: { startsAt: "00:00", endsAt: "06:00" },
-  Backoffice: { startsAt: "08:00", endsAt: "16:00" }
+  Manhã: { startsAt: "08:00", endsAt: "14:00" },
+  Tarde: { startsAt: "14:00", endsAt: "20:00" },
+  Noite: { startsAt: "20:00", endsAt: "02:00" },
+  Folga: { startsAt: "", endsAt: "" }
 };
 
 const allowDemoDataFallback = process.env.ALLOW_DEMO_LOGIN === "true" || process.env.ALLOW_DEMO_DATA === "true";
@@ -128,6 +128,9 @@ export type AttendanceQuery = {
   month?: number;
   year?: number;
   lob?: string;
+  supervisor?: string;
+  shift?: string;
+  collaborator?: string;
 };
 
 export type AttendanceInput = {
@@ -183,9 +186,11 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
     const dateColumns = datesBetween(period.start, period.end);
     const requestedPage = Math.max(1, Number(query.page) || 1);
     const limit = Math.min(100, Math.max(25, Number(query.limit) || 75));
+    const shiftFilter = cleanShiftName(query.shift);
     const scheduleWhere: Prisma.ScheduleWhereInput = {
       deletedAt: null,
       date: { gte: period.start, lte: period.end },
+      ...(shiftFilter === "Folga" && (!query.status || query.status === "Todos") ? { status: "FOLGA" } : {}),
       ...(query.status && query.status !== "Todos" ? { status: uiToScheduleStatus[query.status] ?? undefined } : {})
     };
     const search = query.collaborator?.trim();
@@ -323,7 +328,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         email: employee.user?.email ?? "",
         lob: employee.lob.name,
         supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
-        shift: employee.shift.name,
+        shift: cleanShiftName(employee.shift.name) || "Sem turno",
         schedule: employee.scheduleType,
         status: employee.operationalStatus,
         quality: null,
@@ -337,7 +342,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         if (!schedule) return "Sem escala";
         const attendanceLabel = scheduleStatusRequiresJustification(schedule.status) ? attendanceDisplayLabel(schedule.attendanceRecords) : null;
         if (attendanceLabel) return attendanceLabel;
-        if (schedule.status === "ESCALADO") return schedule.shift?.name ?? "Escalado";
+        if (schedule.status === "ESCALADO") return cleanShiftName(schedule.shift?.name) || "Escalado";
         return scheduleToUiStatus[schedule.status] ?? schedule.status;
       }),
       plannedTimes: dateColumns.map((date) => {
@@ -413,7 +418,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
     const scheduleDays = dateColumns.map((date) => {
       const schedule = ownScheduleByDate.get(dateKey(date));
       const label = schedule
-        ? (scheduleStatusRequiresJustification(schedule.status) ? attendanceDisplayLabel(schedule.attendanceRecords) : null) ?? (schedule.status === "ESCALADO" ? schedule.shift?.name ?? "Escalado" : scheduleToUiStatus[schedule.status] ?? "Escalado")
+        ? (scheduleStatusRequiresJustification(schedule.status) ? attendanceDisplayLabel(schedule.attendanceRecords) : null) ?? (schedule.status === "ESCALADO" ? cleanShiftName(schedule.shift?.name) || "Escalado" : scheduleToUiStatus[schedule.status] ?? "Escalado")
         : "Sem escala";
       return { date: date.getUTCDate(), dateIso: dateKey(date), outside: false, shift: label, label };
     });
@@ -428,7 +433,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
           id: own.id,
           name: own.fullName,
           schedule: own.scheduleType,
-          shift: own.shift.name,
+          shift: cleanShiftName(own.shift.name) || "Sem turno",
           lob: own.lob.name
         }
         : null,
@@ -493,7 +498,17 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
     const employee = await prisma.employeeProfile.findUnique({ where: { id: input.employeeId }, include: { shift: true } });
     if (!employee) return { error: "Colaborador não encontrado." };
 
-    const shift = input.shift ? await prisma.shift.findUnique({ where: { name: input.shift } }) : null;
+    const requestedShift = cleanShiftName(input.shift);
+    const shift = requestedShift && isSelectableShiftName(requestedShift)
+      ? await prisma.shift.findFirst({
+        where: {
+          OR: [
+            { name: requestedShift },
+            { name: { startsWith: `${requestedShift} (` } }
+          ]
+        }
+      })
+      : null;
     const status = uiToScheduleStatus[input.status] ?? "ESCALADO";
     const before = await prisma.schedule.findUnique({ where: { employeeId_date: { employeeId: employee.id, date } }, include: { shift: true } });
 
@@ -582,12 +597,12 @@ export async function updateOperationalAttendance(actor: Actor, input: Attendanc
     return justifyAttendanceAsSupervisor(actor, input);
   }
 
-  const defaultTimes = defaultShiftTimes[input.shift] ?? defaultShiftTimes.Manhã;
+  const defaultTimes = defaultShiftTimes[cleanShiftName(input.shift)] ?? defaultShiftTimes.Manhã;
 
   const scheduleResult = await editOperationalSchedule(actor, {
     employeeId: input.employeeId,
     date: input.date,
-    shift: input.shift,
+    shift: cleanShiftName(input.shift) || input.shift,
     status: input.status,
     observation: input.supervisorJustification || input.absenceReason,
     startsAt: needsTime(input.status) ? defaultTimes.startsAt : "",
@@ -603,7 +618,7 @@ export async function updateOperationalAttendance(actor: Actor, input: Attendanc
     data: {
       employeeId: input.employeeId,
       date: input.date,
-      shift: input.shift,
+      shift: cleanShiftName(input.shift) || input.shift,
       status: input.status,
       absenceReason: input.absenceReason,
       supervisorJustification: input.supervisorJustification
@@ -734,7 +749,7 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
         employeeName: employee.fullName,
         date: formatDate(date),
         dateIso: date.toISOString().slice(0, 10),
-        shift: shift.name,
+        shift: cleanShiftName(shift.name) || "Sem turno",
         status: input.status,
         absenceReason: saved.absenceReason ?? undefined,
         reasonCategory: saved.reasonCategory ?? undefined,
@@ -891,7 +906,7 @@ export async function commitOperationalScheduleImport(actor: Actor, input: Sched
             lob: text(row.lob),
             supervisor: text(row.supervisor_wb_login),
             date: rowValidation.date ?? null,
-            shift: text(row.turno),
+            shift: cleanShiftName(text(row.turno)) || text(row.turno),
             startsAt: rowValidation.startsAt ?? text(row.entrada),
             endsAt: rowValidation.endsAt ?? text(row.saida),
             status: text(row.status),
@@ -1046,7 +1061,7 @@ export async function exportOperationalSchedulesCsv(actor: Actor, query: Schedul
       schedule.employee.user?.email ?? "",
       schedule.date.toISOString().slice(0, 10),
       scheduleToUiStatus[schedule.status] ?? schedule.status,
-      schedule.shift?.name ?? schedule.employee.shift?.name ?? "",
+      cleanShiftName(schedule.shift?.name ?? schedule.employee.shift?.name) || "",
       schedule.startsAt ?? "",
       schedule.endsAt ?? "",
       schedule.employee.lob.name,
@@ -1074,9 +1089,33 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
     const role = normalizeRole(actor.role);
     const period = resolveAttendancePeriod(query);
     const lobFilter = query.lob && query.lob !== "Todos" ? query.lob : undefined;
+    const supervisorFilter = query.supervisor?.trim();
+    const collaboratorFilter = query.collaborator?.trim();
+    const shiftFilter = cleanShiftName(query.shift);
+    const extraFilters: Prisma.AttendanceRecordWhereInput[] = [];
+    if (lobFilter) extraFilters.push({ employee: { lob: { name: lobFilter } } });
+    if (supervisorFilter) extraFilters.push({ employee: { supervisor: { fullName: { contains: supervisorFilter, mode: "insensitive" } } } });
+    if (collaboratorFilter) {
+      extraFilters.push({
+        OR: [
+          { employee: { fullName: { contains: collaboratorFilter, mode: "insensitive" } } },
+          { employee: { wbLogin: { contains: collaboratorFilter, mode: "insensitive" } } },
+          { employee: { user: { email: { contains: collaboratorFilter, mode: "insensitive" } } } }
+        ]
+      });
+    }
+    if (shiftFilter && shiftFilter !== "Todos") {
+      extraFilters.push({
+        OR: [
+          { shift: { name: { startsWith: shiftFilter, mode: "insensitive" } } },
+          { schedule: { shift: { name: { startsWith: shiftFilter, mode: "insensitive" } } } },
+          { employee: { shift: { name: { startsWith: shiftFilter, mode: "insensitive" } } } }
+        ]
+      });
+    }
     const baseWhere: Prisma.AttendanceRecordWhereInput = {
       ...(period ? { date: { gte: period.start, lte: period.end } } : {}),
-      ...(lobFilter ? { employee: { lob: { name: lobFilter } } } : {})
+      ...(extraFilters.length ? { AND: extraFilters } : {})
     };
     let attendanceWhere: Prisma.AttendanceRecordWhereInput =
       role === "COLABORADOR" && user.employeeProfile
@@ -1084,15 +1123,20 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
         : baseWhere;
     if (role === "SUPERVISOR" && user.employeeProfile) {
       const ownTeamRecords = await prisma.attendanceRecord.count({
-        where: { ...baseWhere, employee: { supervisorId: user.employeeProfile.id, ...(lobFilter ? { lob: { name: lobFilter } } : {}) } }
+        where: { ...baseWhere, employee: { supervisorId: user.employeeProfile.id } }
       });
       attendanceWhere = ownTeamRecords
-        ? { ...baseWhere, employee: { supervisorId: user.employeeProfile.id, ...(lobFilter ? { lob: { name: lobFilter } } : {}) } }
+        ? { ...baseWhere, employee: { supervisorId: user.employeeProfile.id } }
         : baseWhere;
     }
     const records = await prisma.attendanceRecord.findMany({
       where: attendanceWhere,
-      include: { employee: { include: { shift: true } }, registeredBy: true, schedule: { select: { status: true, deletedAt: true } } },
+      include: {
+        shift: true,
+        employee: { include: { shift: true } },
+        registeredBy: true,
+        schedule: { select: { status: true, deletedAt: true, shift: { select: { name: true } } } }
+      },
       orderBy: { registeredAt: "desc" },
       take: 100
     });
@@ -1105,7 +1149,7 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
         employeeName: record.employee.fullName,
         date: formatDate(record.date),
         dateIso: record.date.toISOString().slice(0, 10),
-        shift: record.employee.shift.name,
+        shift: cleanShiftName(record.schedule?.shift?.name ?? record.shift?.name ?? record.employee.shift.name) || "Sem turno",
         status: scheduleToUiStatus[record.status] ?? record.status,
         absenceReason: record.absenceReason ?? undefined,
         reasonCategory: record.reasonCategory ?? undefined,
@@ -1128,7 +1172,7 @@ function editMockSchedule(actor: Actor, input: ScheduleEditInput) {
   const attendance = updateMockAttendance(actor, {
     employeeId: input.employeeId,
     date: input.date,
-    shift: input.shift,
+    shift: cleanShiftName(input.shift) || input.shift,
     status: input.status,
     absenceReason: input.observation,
     reasonCategory: "Escala",
@@ -1207,7 +1251,15 @@ async function validateImportRowsInDb(rows: Array<Record<string, unknown>>): Pro
     })
     : [];
   const scheduleMap = new Map(existingSchedules.map((schedule) => [`${schedule.employeeId}:${schedule.date.getTime()}`, schedule]));
-  const shiftMap = new Map(shifts.map((shift) => [normalizeImportKey(shift.name), shift]));
+  const shiftMap = new Map(shifts
+    .filter((shift) => isSelectableShiftName(shift.name))
+    .flatMap((shift) => {
+      const cleanName = cleanShiftName(shift.name);
+      return [
+        [normalizeImportKey(shift.name), shift],
+        [normalizeImportKey(cleanName), shift]
+      ] as const;
+    }));
   const lobMap = new Map(lobs.map((lob) => [normalizeImportKey(lob.name), lob]));
 
   return normalizedRows.map<ScheduleImportValidation>(({ row, rowNumber, wbLogin, parsedDate, key }) => {
@@ -1232,8 +1284,14 @@ async function validateImportRowsInDb(rows: Array<Record<string, unknown>>): Pro
     if (hasExcelValue(row.entrada) && !startsAt) errors.push("Entrada inválida. Use 06:00, 06:00:00 ou decimal do Excel como 0,25.");
     if (hasExcelValue(row.saida) && !endsAt) errors.push("Saída inválida. Use 06:00, 06:00:00 ou decimal do Excel como 0,25.");
 
-    const shift = text(row.turno) ? shiftMap.get(normalizeImportKey(text(row.turno))) : null;
-    if (text(row.turno) && !shift) errors.push(`Turno ${text(row.turno)} não cadastrado.`);
+    const receivedShift = text(row.turno);
+    const normalizedShift = cleanShiftName(receivedShift);
+    const shift = normalizedShift && normalizedShift !== "Folga" ? shiftMap.get(normalizeImportKey(normalizedShift)) : null;
+    if (receivedShift && !isSelectableShiftName(receivedShift)) {
+      errors.push(`Turno ${receivedShift} não é uma opção padrão válida.`);
+    } else if (normalizedShift && normalizedShift !== "Folga" && !shift) {
+      errors.push(`Turno ${receivedShift} não cadastrado.`);
+    }
     const lob = text(row.lob) ? lobMap.get(normalizeImportKey(text(row.lob))) : null;
     if (text(row.lob) && !lob) errors.push(`LOB ${text(row.lob)} não cadastrada.`);
 
@@ -1576,6 +1634,7 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     select: {
       status: true,
       shift: { select: { name: true } },
+      employee: { select: { shift: { select: { name: true } } } },
       attendanceRecords: {
         select: {
           status: true,
@@ -1607,7 +1666,7 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
       : []
   );
   const byShift = schedules.reduce<Record<string, { planned: number; present: number; absent: number; gap: number }>>((acc, schedule) => {
-    const shiftName = schedule.shift?.name ?? "Sem turno";
+    const shiftName = cleanShiftName(schedule.shift?.name ?? schedule.employee.shift?.name) || "Sem turno";
     acc[shiftName] ??= { planned: 0, present: 0, absent: 0, gap: 0 };
     if (plannedStatuses.includes(schedule.status)) acc[shiftName].planned += 1;
     if (presentStatuses.includes(String(effectiveStatus(schedule)))) acc[shiftName].present += 1;
@@ -1755,6 +1814,7 @@ function resolveAttendancePeriod(query: AttendanceQuery) {
 }
 
 function employeeFilters(query: ScheduleQuery, search?: string): Prisma.EmployeeProfileWhereInput {
+  const shiftFilter = cleanShiftName(query.shift);
   return {
     ...(search ? {
       OR: [
@@ -1765,7 +1825,7 @@ function employeeFilters(query: ScheduleQuery, search?: string): Prisma.Employee
     } : {}),
     ...(query.lob && query.lob !== "Todos" ? { lob: { name: query.lob } } : {}),
     ...(query.supervisor && query.supervisor !== "Todos" ? { supervisor: { fullName: { contains: query.supervisor, mode: "insensitive" } } } : {}),
-    ...(query.shift && query.shift !== "Todos" ? { shift: { name: query.shift } } : {}),
+    ...(shiftFilter && shiftFilter !== "Todos" && shiftFilter !== "Folga" ? { shift: { OR: [{ name: shiftFilter }, { name: { startsWith: `${shiftFilter} (` } }] } } : {}),
     ...(query.roleTitle && query.roleTitle !== "Todos" ? { roleTitle: { contains: query.roleTitle, mode: "insensitive" } } : {})
   };
 }

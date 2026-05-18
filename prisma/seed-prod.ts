@@ -27,10 +27,10 @@ async function main() {
   }
 
   for (const [name, startsAt, endsAt, color] of [
-    ["Manhã", "06:00", "14:00", "#10B981"],
-    ["Tarde", "14:00", "22:00", "#2563EB"],
-    ["Noite", "22:00", "06:00", "#7C3AED"],
-    ["Backoffice", "08:00", "16:00", "#F59E0B"]
+    ["Manhã", "08:00", "14:00", "#10B981"],
+    ["Tarde", "14:00", "20:00", "#2563EB"],
+    ["Noite", "20:00", "02:00", "#7C3AED"],
+    ["Folga", "00:00", "00:00", "#64748B"]
   ] as const) {
     await prisma.shift.upsert({
       where: { name },

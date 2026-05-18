@@ -1,38 +1,28 @@
 import { NextResponse } from "next/server";
 
 import { getApiActor } from "@/lib/api-actor";
-import { getShiftReportDashboard, listShiftReports } from "@/lib/mock-db";
+import { exportShiftReports } from "@/lib/shift-report-service";
 
 export async function GET(request: Request) {
   const actor = await getApiActor();
   const url = new URL(request.url);
   const format = url.searchParams.get("format") ?? "csv";
-  const reports = listShiftReports(actor);
+  const payload = await exportShiftReports(actor, {
+    startDate: url.searchParams.get("startDate") ?? undefined,
+    endDate: url.searchParams.get("endDate") ?? undefined,
+    shift: url.searchParams.get("shift") ?? undefined,
+    supervisor: url.searchParams.get("supervisor") ?? undefined,
+    rta: url.searchParams.get("rta") ?? undefined,
+    importance: url.searchParams.get("importance") ?? undefined,
+    mood: url.searchParams.get("mood") ?? undefined,
+    search: url.searchParams.get("search") ?? undefined
+  });
 
   if (format === "json") {
-    return NextResponse.json({ reports, dashboard: getShiftReportDashboard(actor) });
+    return NextResponse.json({ reports: payload.data, dashboard: payload.dashboard });
   }
 
-  const rows = [
-    ["id", "data", "turno", "lob", "supervisor", "importancia", "hc_previsto", "hc_real", "abs", "humor", "categoria", "impacto", "follow_up"],
-    ...reports.map((report) => [
-      report.id,
-      report.reportDate,
-      report.shift,
-      report.lob,
-      report.supervisor,
-      report.importance,
-      report.plannedHeadcount,
-      report.actualHeadcount,
-      report.absCount,
-      report.generalMood,
-      report.occurrenceCategory,
-      report.impactLevel,
-      report.followUpStatus
-    ])
-  ];
-  const csv = rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")).join("\n");
-  return new NextResponse(csv, {
+  return new NextResponse(payload.csv, {
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
       "Content-Disposition": 'attachment; filename="reports_turno.csv"'

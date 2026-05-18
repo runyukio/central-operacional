@@ -79,8 +79,6 @@ import {
   coverageByShift,
   coverageMatrix,
   employees,
-  equipmentRows,
-  equipmentTickets,
   notificationItems,
   performanceEvolution,
   pinnedAnnouncements,
@@ -96,6 +94,7 @@ import {
   topPerformers
 } from "@/lib/demo-data";
 import { cn, formatCurrency, initials } from "@/lib/utils";
+import { cleanShiftName, cleanShiftOptions, isBlockedShiftName, isSelectableShiftName, standardShiftNames } from "@/lib/shift-display";
 
 const scheduleImportColumns = ["wb_login", "data", "status", "turno", "entrada", "saida", "lob"] as const;
 const workHourImportColumns = ["wb_login", "data", "entrada_real", "saida_real", "pausa_minutos", "horas_realizadas", "sistema_origem", "observacao", "nome", "email", "lob", "supervisor_wb_login", "turno"] as const;
@@ -105,11 +104,10 @@ const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Nesting", "Venda 
 const employeeOperationalStatusOptions = ["Ativo", "Nesting", "Inativo", "Pendente de cadastro", "Afastado", "Desligado", "Em treinamento", "Suspenso", "Online", "Em Atendimento", "Offline"];
 const absenceReasonOptions = ["Falta injustificada", "Atestado", "Problema de saúde", "Emergência familiar", "Problema técnico", "Falta de equipamento", "Problema de internet", "Atraso", "Saída antecipada", "Erro de escala", "Afastamento", "Outros"];
 const scheduleShiftTimes: Record<string, { startsAt: string; endsAt: string }> = {
-  Manhã: { startsAt: "06:00", endsAt: "14:00" },
-  Tarde: { startsAt: "14:00", endsAt: "22:00" },
-  Noite: { startsAt: "22:00", endsAt: "06:00" },
-  Madrugada: { startsAt: "00:00", endsAt: "06:00" },
-  Backoffice: { startsAt: "08:00", endsAt: "16:00" }
+  Manhã: { startsAt: "08:00", endsAt: "14:00" },
+  Tarde: { startsAt: "14:00", endsAt: "20:00" },
+  Noite: { startsAt: "20:00", endsAt: "02:00" },
+  Folga: { startsAt: "", endsAt: "" }
 };
 const dayOffKinds = ["DAY_OFF_SWAP", "DAY_OFF_SELL", "DAY_OFF_REQUEST"] as const;
 type DayOffKind = (typeof dayOffKinds)[number];
@@ -168,11 +166,53 @@ type QualityFeedbackItem = {
 type EquipmentItem = {
   id?: string;
   code: string;
+  serial?: string;
   type: string;
+  model?: string;
+  employeeId?: string;
   employee: string;
+  employeeWbLogin?: string;
+  employeeEmail?: string;
   status: string;
   delivered: string;
+  deliveredAt?: string;
   impact: string;
+  observation?: string;
+};
+
+type EquipmentSummary = {
+  total: number;
+  inUse: number;
+  available: number;
+  maintenance: number;
+  returned: number;
+  pending: number;
+};
+
+type EquipmentImportPreview = {
+  success: boolean;
+  message?: string;
+  summary: {
+    totalRows: number;
+    validRows: number;
+    errorRows: number;
+    warningRows: number;
+    createdRows: number;
+    updatedRows: number;
+  };
+  rows: Array<{
+    rowNumber: number;
+    numeroSerie: string;
+    type: string;
+    model: string;
+    status: string;
+    responsible: string;
+    deliveredAt: string;
+    action: string;
+    errors: string[];
+    warnings: string[];
+    normalized?: Record<string, unknown>;
+  }>;
 };
 
 type RewardItem = {
@@ -628,7 +668,7 @@ function statusNeedsTime(status: string) {
 }
 
 function timesForShift(shift: string) {
-  return scheduleShiftTimes[shift] ?? scheduleShiftTimes.Manhã;
+  return scheduleShiftTimes[cleanShiftName(shift)] ?? scheduleShiftTimes.Manhã;
 }
 
 function employeeOptionLabel(employee: { name: string; wb?: string; email?: string }) {
@@ -734,7 +774,7 @@ function formatBreakDuration(minutes: number) {
 
 function statusFromScheduleCell(value: string) {
   if (/^(.+?)\s+(sem justificativa|justificada)$/i.test(value)) return value.replace(/\s+(sem justificativa|justificada)$/i, "");
-  return ["Manhã", "Tarde", "Noite", "Madrugada", "Backoffice"].includes(value) ? "Escalado" : value;
+  return ["Manhã", "Tarde", "Noite"].includes(cleanShiftName(value)) ? "Escalado" : value;
 }
 
 function dayOffKindFromRequest(request: Pick<ClientRequest, "type" | "payload"> | { type: string; payload?: Record<string, unknown> }): DayOffKind | null {
@@ -940,7 +980,7 @@ export function EmployeeRegistrationPublicPage() {
     </div>,
     <div key="ops" className="grid gap-4 md:grid-cols-2">
       <FormInput label="Data de início do treinamento" type="date" value={form.trainingStartDate} error={fieldError("trainingStartDate")} onChange={(value) => updateField("trainingStartDate", value)} />
-      <FormSelect label="Preferência de horário" value={form.preferredSchedule} error={fieldError("preferredSchedule")} options={["Manhã", "Tarde", "Noite", "Backoffice"]} onChange={(value) => updateField("preferredSchedule", value)} />
+      <FormSelect label="Preferência de horário" value={form.preferredSchedule} error={fieldError("preferredSchedule")} options={Array.from(standardShiftNames)} onChange={(value) => updateField("preferredSchedule", value)} />
       <FormSelect label="LOB" value={form.requestedLob} error={fieldError("requestedLob")} options={["ALL", "CEC", "TNS", "ADS"]} onChange={(value) => updateField("requestedLob", value)} />
       <label className="md:col-span-2">
         <span className="mb-1.5 block text-sm font-bold text-muted">Observações adicionais</span>
@@ -1329,7 +1369,7 @@ export function MySchedulePage() {
     apiJson<{ data: { scheduleDays: typeof scheduleDays; ownEmployee?: { id: string; name: string; schedule: string; shift: string; lob: string } | null } }>("/api/schedules")
       .then((payload) => {
         setDays(payload.data.scheduleDays);
-        setScheduleInfo(payload.data.ownEmployee ?? null);
+        setScheduleInfo(payload.data.ownEmployee ? { ...payload.data.ownEmployee, shift: cleanShiftName(payload.data.ownEmployee.shift) || "Sem turno" } : null);
       })
       .catch(() => {
         setDays(emptyCalendarDays());
@@ -1491,7 +1531,7 @@ export function MySchedulePage() {
     canceled: myRequests.filter((request) => request.status === "Cancelado").length
   };
   const hasSchedule = days.some((day) => !day.outside && day.shift !== "Sem escala");
-  const nextScheduleLabel = days.find((day) => !day.outside && !["Sem escala", "Folga", "Férias"].includes(day.label))?.label;
+  const nextScheduleLabel = cleanShiftName(days.find((day) => !day.outside && !["Sem escala", "Folga", "Férias"].includes(day.label))?.label) || "";
   const workHourByDate = new Map(myWorkHours.map((row) => [row.date, row]));
 
   return (
@@ -1537,14 +1577,16 @@ export function MySchedulePage() {
               const isToday = day.date === 29 && !day.outside;
               const dateKey = day.outside ? "" : `2026-05-${String(day.date).padStart(2, "0")}`;
               const workHour = dateKey ? workHourByDate.get(dateKey) : undefined;
+              const dayLabel = cleanShiftName(day.label) || day.label;
+              const dayShift = cleanShiftName(day.shift) || day.shift;
               return (
                 <div key={index} className={cn("min-h-[98px] border-r border-t border-border p-3 last:border-r-0", day.outside && "text-slate-300")}>
                   <div className={cn("mb-2 text-base font-bold", isToday && "grid h-8 w-8 place-items-center rounded-full bg-blue-600 text-white")}>{day.date}</div>
                   {!day.outside ? (
                     <div className="space-y-1.5">
-                      <span className={cn("inline-flex items-center gap-2 rounded-md px-2 py-1 text-xs font-semibold", shiftTagClass(day.label))}>
-                        <span className={cn("status-dot", day.shift === "Manhã" ? "bg-emerald-500" : day.shift === "Tarde" ? "bg-orange-500" : day.shift === "Noite" ? "bg-violet-600" : "bg-violet-300")} />
-                        {day.label}
+                      <span className={cn("inline-flex items-center gap-2 rounded-md px-2 py-1 text-xs font-semibold", shiftTagClass(dayLabel))}>
+                        <span className={cn("status-dot", dayShift === "Manhã" ? "bg-emerald-500" : dayShift === "Tarde" ? "bg-orange-500" : dayShift === "Noite" ? "bg-violet-600" : "bg-violet-300")} />
+                        {dayLabel}
                       </span>
                       {workHour ? (
                         <div className="rounded-md border border-blue-100 bg-white/80 px-2 py-1 text-[11px] font-bold text-navy-950">
@@ -1560,9 +1602,9 @@ export function MySchedulePage() {
             })}
           </div>
           <div className="flex flex-wrap gap-5 px-5 py-4 text-xs font-semibold text-muted">
-            {["Manhã (08:00 - 14:00)", "Tarde (14:00 - 20:00)", "Noite (20:00 - 02:00)", "Folga", "Férias", "Plantão"].map((item, index) => (
+            {Array.from(standardShiftNames).map((item, index) => (
               <span key={item} className="flex items-center gap-2">
-                <span className={cn("status-dot", ["bg-emerald-500", "bg-orange-500", "bg-violet-600", "bg-violet-300", "bg-slate-300", "bg-amber-400"][index])} />
+                <span className={cn("status-dot", ["bg-emerald-500", "bg-orange-500", "bg-violet-600", "bg-violet-300"][index])} />
                 {item}
               </span>
             ))}
@@ -1672,7 +1714,7 @@ export function MySchedulePage() {
               {dayOffForm.kind === "DAY_OFF_SELL" ? (
                 <>
                   <FormInput label="Data da folga que deseja vender" type="date" value={dayOffForm.dayOffToSellDate} onChange={(value) => setDayOffForm({ ...dayOffForm, dayOffToSellDate: value })} />
-                  <FormSelect label="Turno desejado" value={dayOffForm.availabilityShift} options={["Manhã", "Tarde", "Noite", "Madrugada", "Backoffice"]} onChange={(value) => setDayOffForm({ ...dayOffForm, availabilityShift: value })} />
+                  <FormSelect label="Turno desejado" value={dayOffForm.availabilityShift} options={Array.from(standardShiftNames)} onChange={(value) => setDayOffForm({ ...dayOffForm, availabilityShift: value })} />
                   <FormInput label="Horário preferencial de entrada" value={dayOffForm.preferredStartTime} onChange={(value) => setDayOffForm({ ...dayOffForm, preferredStartTime: value })} />
                   <FormInput label="Horário preferencial de saída" value={dayOffForm.preferredEndTime} onChange={(value) => setDayOffForm({ ...dayOffForm, preferredEndTime: value })} />
                   <label className="md:col-span-2 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-700">
@@ -1997,7 +2039,7 @@ export function RegistrationApprovalsPage() {
   };
   const selectedReviewClosed = selected ? ["Aprovado", "Ativo", "Recusado"].includes(selected.status) : false;
   const registrationLobOptions = registrationSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? ["ALL", "CEC", "TNS", "ADS"];
-  const registrationShiftOptions = registrationSettings?.shifts.filter((shift) => shift.status !== "INACTIVE").map((shift) => shift.name) ?? ["Manhã", "Tarde", "Noite", "Backoffice"];
+  const registrationShiftOptions = cleanShiftOptions(registrationSettings?.shifts.filter((shift) => shift.status !== "INACTIVE").map((shift) => shift.name), true);
   const registrationRoleTitleOptions = registrationSettings?.roleTitles.filter((title) => title.status !== "INACTIVE").map((title) => title.name) ?? ["Atendente", "Supervisor", "WFM", "Qualidade", "RH"];
   const registrationStart = registrationPagination.total ? (registrationPagination.page - 1) * registrationPagination.limit + 1 : 0;
   const registrationEnd = Math.min(registrationPagination.page * registrationPagination.limit, registrationPagination.total);
@@ -2278,6 +2320,7 @@ export function SchedulesPage() {
   const [importHistory, setImportHistory] = useState<ScheduleImportHistory[]>([]);
   const [showScheduleAlerts, setShowScheduleAlerts] = useState(false);
   const [showScheduleImports, setShowScheduleImports] = useState(false);
+  const [showPendingJustifications, setShowPendingJustifications] = useState(false);
   const [attendanceMessage, setAttendanceMessage] = useState("");
   const [attendanceSummary, setAttendanceSummary] = useState<AttendanceSummary | null>(null);
   const [pendingJustifications, setPendingJustifications] = useState<AttendanceItem[]>([]);
@@ -2366,7 +2409,7 @@ export function SchedulesPage() {
     const timeout = window.setTimeout(() => {
       setLoadingScheduleEmployeeSearch(true);
       apiJson<EmployeeListResponse>(`/api/employees?search=${encodeURIComponent(query)}&limit=50`)
-        .then((payload) => setScheduleEmployeeSearchResults(payload.data.filter((employee) => employee.status !== "Inativo")))
+        .then((payload) => setScheduleEmployeeSearchResults(payload.data.filter((employee) => employee.status !== "Inativo").map((employee) => ({ ...employee, shift: cleanShiftName(employee.shift) || "Manhã" }))))
         .catch(() => setScheduleEmployeeSearchResults([]))
         .finally(() => setLoadingScheduleEmployeeSearch(false));
     }, 250);
@@ -2380,7 +2423,9 @@ export function SchedulesPage() {
         apiJson<{ data: EmployeeClient[] }>("/api/employees"),
         apiJson<{ data: SystemSettings }>("/api/settings")
       ]);
-      const activeEmployees = employeePayload.data.filter((employee) => employee.status !== "Inativo");
+      const activeEmployees = employeePayload.data
+        .filter((employee) => employee.status !== "Inativo")
+        .map((employee) => ({ ...employee, shift: cleanShiftName(employee.shift) || "Manhã" }));
       setScheduleEmployees(activeEmployees);
       setScheduleSettings(settingsPayload.data);
       if (activeEmployees.length) {
@@ -2419,7 +2464,7 @@ export function SchedulesPage() {
       }
       setImportHistory(payload.data.imports);
       setAttendanceSummary(payload.data.attendanceSummary ?? null);
-      void refreshAttendanceForSchedulePeriod(rangeOverride);
+      void refreshAttendanceForSchedulePeriod(rangeOverride, filtersOverride);
     } catch {
       setScheduleRows([]);
       setScheduleDateColumns([]);
@@ -2427,14 +2472,17 @@ export function SchedulesPage() {
     }
   }
 
-  async function refreshAttendanceForSchedulePeriod(rangeOverride = scheduleDateRange) {
+  async function refreshAttendanceForSchedulePeriod(rangeOverride = scheduleDateRange, filtersOverride = scheduleFilters) {
     const params = new URLSearchParams({
       month: String(schedulePeriod.month),
       year: String(schedulePeriod.year),
       startDate: rangeOverride.startDate,
       endDate: rangeOverride.endDate
     });
-    if (scheduleFilters.lob !== "Todos") params.set("lob", scheduleFilters.lob);
+    if (filtersOverride.lob !== "Todos") params.set("lob", filtersOverride.lob);
+    if (filtersOverride.supervisor.trim()) params.set("supervisor", filtersOverride.supervisor.trim());
+    if (filtersOverride.shift !== "Todos") params.set("shift", filtersOverride.shift);
+    if (filtersOverride.collaborator.trim()) params.set("collaborator", filtersOverride.collaborator.trim());
     try {
       const payload = await apiJson<{ data: AttendanceItem[]; summary: AttendanceSummary }>(`/api/attendance?${params.toString()}`);
       setAttendanceSummary(payload.summary);
@@ -2527,7 +2575,9 @@ export function SchedulesPage() {
       return;
     }
     const cellStatus = statusFromScheduleCell(value);
-    const shift = cellStatus === "Escalado" ? (availableShiftNames.includes(value) ? value : targetEmployee.shift) : targetEmployee.shift;
+    const employeeShift = cleanShiftName(targetEmployee.shift) || "Manhã";
+    const cellShift = cleanShiftName(value);
+    const shift = cellStatus === "Escalado" ? (availableShiftNames.includes(cellShift) ? cellShift : employeeShift) : employeeShift;
     const times = configuredTimesForShift(shift);
     const plannedCell = targetRow?.plannedTimes?.[dayIndex] ?? null;
     const hourCell = targetRow?.workHours?.[dayIndex] ?? null;
@@ -2539,7 +2589,7 @@ export function SchedulesPage() {
       scheduleId: plannedCell?.scheduleId ?? "",
       employeeId: targetEmployee.id,
       date: visibleScheduleDates[dayIndex] ?? `${schedulePeriod.year}-${String(schedulePeriod.month).padStart(2, "0")}-${String(dayIndex + 1).padStart(2, "0")}`,
-      shift,
+      shift: cleanShiftName(shift) || "Manhã",
       startsAt: statusNeedsTime(cellStatus) ? plannedStart : "",
       endsAt: statusNeedsTime(cellStatus) ? plannedEnd : "",
       status: cellStatus,
@@ -2589,7 +2639,7 @@ export function SchedulesPage() {
       ...attendanceForm,
       employeeId: record.employeeId,
       date: record.dateIso ?? record.date,
-      shift: record.shift,
+      shift: cleanShiftName(record.shift) || "Manhã",
       status: statusFromScheduleCell(record.status),
       absenceReason: record.absenceReason === "Sem justificativa" ? "" : record.absenceReason ?? "",
       reasonCategory: record.reasonCategory ?? "Operacional",
@@ -2613,7 +2663,7 @@ export function SchedulesPage() {
       ...attendanceForm,
       employeeId: targetEmployee.id,
       date: visibleScheduleDates[dayIndex] ?? `${schedulePeriod.year}-${String(schedulePeriod.month).padStart(2, "0")}-${String(dayIndex + 1).padStart(2, "0")}`,
-      shift: targetEmployee.shift,
+      shift: cleanShiftName(targetEmployee.shift) || "Manhã",
       status: safeStatus,
       absenceReason: attendanceForm.absenceReason || "Outros",
       reasonCategory: attendanceForm.reasonCategory || "Escala",
@@ -2860,8 +2910,8 @@ export function SchedulesPage() {
     })
     .slice(0, 60);
   const configuredLobs = scheduleSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? [];
-  const configuredShifts = scheduleSettings?.shifts.filter((shift) => shift.status !== "INACTIVE").map((shift) => shift.name) ?? [];
-  const availableShiftNames = Array.from(new Set([...configuredShifts, "Manhã", "Tarde", "Noite", "Madrugada", "Backoffice"]));
+  const configuredShifts = scheduleSettings?.shifts.filter((shift) => shift.status !== "INACTIVE" && isSelectableShiftName(shift.name)).map((shift) => cleanShiftName(shift.name)) ?? [];
+  const availableShiftNames = cleanShiftOptions(configuredShifts, true);
   const uniqueLobs = ["Todos", ...Array.from(new Set([...configuredLobs, ...scheduleRows.map((row) => row.employee.lob).filter(Boolean), ...scheduleEmployees.map((employee) => employee.lob).filter(Boolean)]))];
   const uniqueShifts = ["Todos", ...availableShiftNames];
   const normalizedScheduleActorRole = scheduleActorRole === "MANAGEMENT" ? "GESTOR" : scheduleActorRole;
@@ -2889,17 +2939,19 @@ export function SchedulesPage() {
     : [...scheduleStatusOptions].filter((status) => status !== "Escalado");
 
   function configuredTimesForShift(shift: string) {
-    const configured = scheduleSettings?.shifts.find((item) => item.name === shift);
-    return configured ? { startsAt: configured.startsAt, endsAt: configured.endsAt } : timesForShift(shift);
+    const cleanedShift = cleanShiftName(shift) || "Manhã";
+    const configured = scheduleSettings?.shifts.find((item) => item.status !== "INACTIVE" && cleanShiftName(item.name) === cleanedShift);
+    return configured ? { startsAt: configured.startsAt, endsAt: configured.endsAt } : timesForShift(cleanedShift);
   }
 
   function selectScheduleEmployee(employee: EmployeeClient) {
-    const times = configuredTimesForShift(employee.shift || scheduleEditForm.shift);
+    const employeeShift = cleanShiftName(employee.shift) || scheduleEditForm.shift;
+    const times = configuredTimesForShift(employeeShift);
     setScheduleEditForm((current) => ({
       ...current,
       scheduleId: "",
       employeeId: employee.id,
-      shift: employee.shift || current.shift,
+      shift: employeeShift || current.shift,
       startsAt: scheduleEditRequiresTime ? times.startsAt : current.startsAt,
       endsAt: scheduleEditRequiresTime ? times.endsAt : current.endsAt,
       lob: employee.lob || current.lob,
@@ -3189,7 +3241,11 @@ export function SchedulesPage() {
         </section>
 
         <div className="space-y-5">
-          <Panel title="Pendências de Justificativa" action={pendingJustifications.length ? `${pendingJustifications.length} aberta(s)` : undefined}>
+          <Panel
+            title="Pendências de Justificativa"
+            action={pendingJustifications.length ? `${pendingJustifications.length} aberta(s)` : undefined}
+            actionOnClick={() => setShowPendingJustifications(true)}
+          >
             {pendingJustifications.length ? (
               <div className="space-y-3">
                 {pendingJustifications.slice(0, 6).map((record) => (
@@ -3197,7 +3253,7 @@ export function SchedulesPage() {
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="text-sm font-extrabold text-navy-950">{record.employeeName}</p>
-                        <p className="text-xs font-semibold text-orange-800">{record.date} • {record.shift} • {record.status}</p>
+                        <p className="text-xs font-semibold text-orange-800">{record.date} • {cleanShiftName(record.shift) || "Sem turno"} • {record.status}</p>
                         <p className="mt-1 text-xs text-muted">Registrado por {record.registeredBy}</p>
                       </div>
                       <button onClick={() => openPendingJustification(record)} className="rounded-lg bg-orange-600 px-3 py-2 text-xs font-bold text-white">
@@ -3241,6 +3297,50 @@ export function SchedulesPage() {
           </Panel>
         </div>
       </div>
+
+      {showPendingJustifications ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="card max-h-[88vh] w-full max-w-4xl overflow-y-auto p-5">
+            <div className="mb-5 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-extrabold text-navy-950">Pendências abertas da escala</h2>
+                <p className="text-sm text-muted">Ocorrências sem justificativa dentro do período e filtros atuais.</p>
+              </div>
+              <button type="button" onClick={() => setShowPendingJustifications(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+            </div>
+            {pendingJustifications.length ? (
+              <div className="space-y-3">
+                {pendingJustifications.map((record) => (
+                  <div key={record.id} className="rounded-xl border border-orange-200 bg-orange-50 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-extrabold text-navy-950" title={record.employeeName}>{record.employeeName}</p>
+                        <p className="mt-1 text-xs font-semibold text-orange-800">
+                          {record.date} • {cleanShiftName(record.shift) || "Sem turno"} • {record.status}
+                        </p>
+                        <p className="mt-1 text-xs text-muted">Motivo: {record.absenceReason || "Sem justificativa"} • Registrado por {record.registeredBy}</p>
+                        <p className="mt-1 text-xs text-muted">Ação recomendada: justificar ocorrência ou corrigir o status da escala.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowPendingJustifications(false);
+                          openPendingJustification(record);
+                        }}
+                        className="rounded-lg bg-orange-600 px-3 py-2 text-xs font-bold text-white"
+                      >
+                        Regularizar
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState title="Nenhuma pendência aberta para os filtros selecionados." description="Quando surgir falta, ausência ou atraso sem justificativa, o item aparecerá aqui." />
+            )}
+          </div>
+        </div>
+      ) : null}
 
       {showScheduleAlerts ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
@@ -3362,7 +3462,7 @@ export function SchedulesPage() {
                                 )}
                               >
                                 <span className="block truncate">{employeeOptionLabel(employee)}</span>
-                                <span className="block truncate text-xs font-medium text-muted">{employee.lob} • {employee.shift} • {employee.status}</span>
+                                <span className="block truncate text-xs font-medium text-muted">{employee.lob} • {cleanShiftName(employee.shift) || "Sem turno"} • {employee.status}</span>
                               </button>
                             ))
                           ) : (
@@ -3700,7 +3800,7 @@ export function WorkHoursPage() {
   const statusOptions = ["Todos", "OK", "Divergente", "Sem escala", "Ajuste solicitado", "Ajuste aprovado", "Ajuste recusado", "Importado", "Corrigido manualmente"];
   const sourceOptions = ["Todos", "MANUAL", "upload-horas"];
   const lobOptions = ["Todos", ...(settings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? Array.from(new Set(rows.map((row) => row.lob).filter(Boolean))))];
-  const shiftOptions = ["Todos", ...(settings?.shifts.filter((shift) => shift.status !== "INACTIVE").map((shift) => shift.name) ?? Array.from(new Set(rows.map((row) => row.shift).filter(Boolean))))];
+  const shiftOptions = ["Todos", ...cleanShiftOptions(settings?.shifts.filter((shift) => shift.status !== "INACTIVE").map((shift) => shift.name) ?? rows.map((row) => row.shift), true)];
 
   useEffect(() => {
     apiJson<{ data: SystemSettings }>("/api/settings").then((payload) => setSettings(payload.data)).catch(() => undefined);
@@ -3958,7 +4058,7 @@ export function WorkHoursPage() {
                     <td className="px-4 py-3">{row.wbLogin}</td>
                     <td className="px-4 py-3">{row.lob}</td>
                     <td className="px-4 py-3">{row.supervisor || "-"}</td>
-                    <td className="px-4 py-3">{row.shift || "-"}</td>
+                    <td className="px-4 py-3">{cleanShiftName(row.shift) || "-"}</td>
                     <td className="px-4 py-3">{row.plannedStart || "--"} às {row.plannedEnd || "--"} • {row.plannedHours || 0}h</td>
                     <td className="px-4 py-3">{row.actualStart || "--"} às {row.actualEnd || "--"} • {row.actualHours}h</td>
                     <td className="px-4 py-3">{formatBreakDuration(row.effectiveBreakMinutes ?? row.breakMinutes ?? 0)}</td>
@@ -4157,7 +4257,6 @@ function shiftTagClass(value: string) {
     Manhã: "bg-blue-50 text-blue-700",
     Tarde: "bg-blue-50 text-blue-700",
     Noite: "bg-blue-50 text-blue-700",
-    Backoffice: "bg-blue-50 text-blue-700",
     Escalado: "bg-blue-50 text-blue-700",
     Presente: "bg-emerald-50 text-emerald-700",
     Ausente: "bg-red-50 text-red-700",
@@ -4307,7 +4406,7 @@ function RequestDetailContent({
         <div className="rounded-lg border border-blue-100 bg-blue-50 p-4">
           <p className="mb-3 text-sm font-bold text-navy-950">Definição final do aprovador</p>
           <div className="grid gap-3 md:grid-cols-3">
-            <FormSelect label="Turno final" value={approvalData.finalApprovedShift} options={["Manhã", "Tarde", "Noite", "Madrugada", "Backoffice"]} onChange={(value) => {
+            <FormSelect label="Turno final" value={approvalData.finalApprovedShift} options={Array.from(standardShiftNames)} onChange={(value) => {
               const times = timesForShift(value);
               setApprovalData({ finalApprovedShift: value, finalApprovedStartTime: times.startsAt, finalApprovedEndTime: times.endsAt });
             }} />
@@ -4634,7 +4733,7 @@ export function RequestsPage() {
                         <span className="mb-1.5 block text-sm font-semibold text-muted">Data da folga que deseja vender</span>
                         <input type="date" value={newRequest.dayOffToSellDate} onChange={(event) => setNewRequest({ ...newRequest, dayOffToSellDate: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
                       </label>
-                      <FormSelect label="Turno desejado" value={newRequest.availabilityShift} options={["Manhã", "Tarde", "Noite", "Madrugada", "Backoffice"]} onChange={(value) => setNewRequest({ ...newRequest, availabilityShift: value })} />
+                      <FormSelect label="Turno desejado" value={newRequest.availabilityShift} options={Array.from(standardShiftNames)} onChange={(value) => setNewRequest({ ...newRequest, availabilityShift: value })} />
                       <FormInput label="Entrada preferencial" value={newRequest.preferredStartTime} onChange={(value) => setNewRequest({ ...newRequest, preferredStartTime: value })} />
                       <FormInput label="Saída preferencial" value={newRequest.preferredEndTime} onChange={(value) => setNewRequest({ ...newRequest, preferredEndTime: value })} />
                       <label className="md:col-span-2 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-700">
@@ -4884,7 +4983,7 @@ export function EmployeeMapPage() {
   const canEditPeopleData = ["ADMIN", "RH", "HR", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
   const employeeLobOptions = employeeSettings?.lobs.filter((lob) => lob.status !== "INACTIVE") ?? [];
   const employeeTeamOptions = employeeSettings?.teams?.filter((team) => team.status !== "INACTIVE" && (!lobDraft || team.lobId === lobDraft || team.lob === "ALL")) ?? [];
-  const employeeShiftOptions = employeeSettings?.shifts.filter((shift) => shift.status !== "INACTIVE") ?? [];
+  const employeeShiftOptions = employeeSettings?.shifts.filter((shift) => shift.status !== "INACTIVE" && isSelectableShiftName(shift.name)) ?? [];
   const employeeRoleTitleOptions = employeeSettings?.roleTitles.filter((title) => title.status !== "INACTIVE").map((title) => title.name) ?? [];
   const employeeRoleOptions = employeeSettings?.roles.filter((roleItem) => roleItem.status !== "INACTIVE").map((roleItem) => roleItem.name) ?? ["COLABORADOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI", "GESTOR", "ADMIN"];
   const contractOptions = ["CLT", "PJ", "Temporário", "Estágio", "Terceiro", "Outro"];
@@ -5077,7 +5176,7 @@ export function EmployeeMapPage() {
             </select>
             <select value={shiftFilter} onChange={(event) => setShiftFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
               <option value="Todos">Todos os turnos</option>
-              {employeeShiftOptions.map((shift) => <option key={shift.id} value={shift.id}>{shift.name}</option>)}
+              {employeeShiftOptions.map((shift) => <option key={shift.id} value={shift.id}>{cleanShiftName(shift.name)}</option>)}
             </select>
             <div className="flex gap-2 md:col-span-2 xl:col-span-6 xl:justify-end">
               <button onClick={() => { setEmployeePage(1); void loadEmployees({ nextPage: 1 }); }} className="h-10 rounded-lg bg-blue-600 px-5 text-sm font-bold text-white">Buscar</button>
@@ -5105,7 +5204,7 @@ export function EmployeeMapPage() {
                     employee.systemRole ?? "-",
                     employee.lob,
                     <span key={`${employee.id}-supervisor`} className="block max-w-[160px] truncate" title={employee.supervisor}>{employee.supervisor}</span>,
-                    employee.shift,
+                    cleanShiftName(employee.shift) || "-",
                     <StatusBadge key={`${employee.id}-status`} status={employee.status} />,
                     <button key={`${employee.id}-action`} onClick={() => selectEmployee(employee)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">Ver detalhes</button>
                   ])}
@@ -5144,7 +5243,7 @@ export function EmployeeMapPage() {
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <InfoLine label="LOB" value={selected.lob} />
                 <InfoLine label="Supervisor" value={selected.supervisor} />
-                <InfoLine label="Turno" value={selected.shift} />
+                <InfoLine label="Turno" value={cleanShiftName(selected.shift) || "-"} />
                 <InfoLine label="Escala" value={selected.schedule} />
                 <InfoLine label="Admissão" value={selected.admission} />
                 <InfoLine label="Status" value={selected.status} />
@@ -5231,7 +5330,7 @@ export function EmployeeMapPage() {
                               <label className="block">
                                 <span className="mb-1.5 block text-sm font-bold text-muted">Turno</span>
                                 <select value={shiftDraft} onChange={(event) => setShiftDraft(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100", employeeFieldErrors.shiftId ? "border-red-300 bg-red-50/40" : "border-border")}>
-                                  {employeeShiftOptions.map((shift) => <option key={shift.id} value={shift.id}>{shift.name} ({shift.startsAt}-{shift.endsAt})</option>)}
+                                  {employeeShiftOptions.map((shift) => <option key={shift.id} value={shift.id}>{cleanShiftName(shift.name)}</option>)}
                                 </select>
                                 {employeeFieldErrors.shiftId ? <span className="mt-1 block text-xs font-bold text-red-600">{employeeFieldErrors.shiftId}</span> : null}
                               </label>
@@ -5319,7 +5418,7 @@ export function EmployeeMapPage() {
                 {selected.attendanceHistory?.length ? (
                   <MiniAlertList
                     items={selected.attendanceHistory.map((record) => ({
-                      title: `${record.date} • ${record.shift} • ${record.absenceReason ?? record.status}`,
+                      title: `${record.date} • ${cleanShiftName(record.shift) || "Sem turno"} • ${record.absenceReason ?? record.status}`,
                       status: record.status,
                       tone: record.impactsAbs ? "orange" : "green"
                     }))}
@@ -5693,30 +5792,126 @@ export function QualityPage() {
 }
 
 export function EquipmentPage() {
-  const [rows, setRows] = useState<EquipmentItem[]>(equipmentRows);
+  const equipmentFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [rows, setRows] = useState<EquipmentItem[]>([]);
+  const [summary, setSummary] = useState<EquipmentSummary>({ total: 0, inUse: 0, available: 0, maintenance: 0, returned: 0, pending: 0 });
+  const [canManage, setCanManage] = useState(false);
   const [equipmentMessage, setEquipmentMessage] = useState("");
+  const [equipmentFilters, setEquipmentFilters] = useState({ search: "", status: "Todos", type: "Todos", responsible: "", model: "" });
+  const [equipmentForm, setEquipmentForm] = useState({
+    id: "",
+    numeroSerie: "",
+    tipoEquipamento: "Notebook",
+    modelo: "",
+    responsavel: "",
+    dataEntrega: new Date().toISOString().slice(0, 10),
+    status: "Disponível",
+    observacao: ""
+  });
+  const [equipmentPreview, setEquipmentPreview] = useState<EquipmentImportPreview | null>(null);
+  const [savingEquipment, setSavingEquipment] = useState(false);
+  const [importingEquipment, setImportingEquipment] = useState(false);
 
   useEffect(() => {
-    apiJson<{ data: EquipmentItem[] }>("/api/equipment")
-      .then((payload) => setRows(payload.data))
-      .catch(() => setRows(equipmentRows));
+    void refreshEquipment();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function addEquipment() {
-    const code = `EQP-${String(rows.length + 1).padStart(4, "0")}`;
-    const payload = await apiJson<{ data: EquipmentItem }>("/api/equipment", {
-      method: "POST",
-      body: JSON.stringify({
-        code,
-        type: "Notebook Dell",
-        employeeId: employees[0]?.id,
-        status: "Entregue",
-        impact: "Baixo"
-      })
+  async function refreshEquipment(filters = equipmentFilters) {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value && value !== "Todos") params.set(key, value);
     });
-    setRows((items) => [payload.data, ...items]);
-    setEquipmentMessage(`${payload.data.code} cadastrado e vinculado a ${payload.data.employee}.`);
+    const payload = await apiJson<{ data: EquipmentItem[]; summary: EquipmentSummary; canManage: boolean }>(`/api/equipment?${params.toString()}`);
+    setRows(payload.data);
+    setSummary(payload.summary);
+    setCanManage(payload.canManage);
   }
+
+  async function saveEquipmentForm() {
+    setSavingEquipment(true);
+    try {
+      const payload = await apiJson<{ message: string }>("/api/equipment", {
+        method: equipmentForm.id ? "PATCH" : "POST",
+        body: JSON.stringify({
+          id: equipmentForm.id || undefined,
+          numeroSerie: equipmentForm.numeroSerie,
+          tipoEquipamento: equipmentForm.tipoEquipamento,
+          modelo: equipmentForm.modelo,
+          responsavelWbLogin: equipmentForm.responsavel,
+          responsavelEmail: equipmentForm.responsavel,
+          responsavelNome: equipmentForm.responsavel,
+          dataEntrega: equipmentForm.dataEntrega,
+          status: equipmentForm.status,
+          observacao: equipmentForm.observacao
+        })
+      });
+      setEquipmentMessage(payload.message);
+      setEquipmentForm({ id: "", numeroSerie: "", tipoEquipamento: "Notebook", modelo: "", responsavel: "", dataEntrega: new Date().toISOString().slice(0, 10), status: "Disponível", observacao: "" });
+      await refreshEquipment();
+    } catch (error) {
+      setEquipmentMessage(error instanceof Error ? error.message : "Não foi possível salvar o equipamento.");
+    } finally {
+      setSavingEquipment(false);
+    }
+  }
+
+  function editEquipment(item: EquipmentItem) {
+    setEquipmentForm({
+      id: item.id ?? "",
+      numeroSerie: item.serial ?? item.code,
+      tipoEquipamento: item.type,
+      modelo: item.model ?? "",
+      responsavel: item.employeeWbLogin || item.employeeEmail || item.employee,
+      dataEntrega: item.deliveredAt || new Date().toISOString().slice(0, 10),
+      status: item.status,
+      observacao: item.observation ?? ""
+    });
+  }
+
+  async function removeEquipment(id?: string) {
+    if (!id) return;
+    if (!window.confirm("Tem certeza que deseja remover este equipamento da lista ativa?")) return;
+    const payload = await apiJson<{ message: string }>(`/api/equipment?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+    setEquipmentMessage(payload.message);
+    await refreshEquipment();
+  }
+
+  async function previewEquipmentFile(file?: File) {
+    if (!file) return;
+    setEquipmentMessage(`Arquivo selecionado: ${file.name}`);
+    const formData = new FormData();
+    formData.append("file", file);
+    setEquipmentPreview(await apiJson<EquipmentImportPreview>("/api/equipment/import/preview", { method: "POST", body: formData }));
+  }
+
+  async function commitEquipmentFile() {
+    if (!equipmentPreview) return;
+    setImportingEquipment(true);
+    try {
+      const payload = await apiJson<{ message: string; summary: { createdRows: number; updatedRows: number; skippedRows: number } }>("/api/equipment/import/commit", {
+        method: "POST",
+        body: JSON.stringify({ rows: equipmentPreview.rows })
+      });
+      setEquipmentMessage(`${payload.message} Criados: ${payload.summary.createdRows}. Atualizados: ${payload.summary.updatedRows}. Ignorados: ${payload.summary.skippedRows}.`);
+      setEquipmentPreview(null);
+      await refreshEquipment();
+    } catch (error) {
+      setEquipmentMessage(error instanceof Error ? error.message : "Não foi possível importar equipamentos.");
+    } finally {
+      setImportingEquipment(false);
+    }
+  }
+
+  const equipmentTypes = ["Todos", "Notebook", "Desktop", "Monitor", "Headset", "Mouse", "Teclado", "Cadeira", "Celular", "Outro"];
+  const equipmentStatuses = ["Todos", "Disponível", "Em uso", "Em manutenção", "Devolvido", "Extraviado", "Inativo"];
+  const equipmentExportUrl = () => {
+    const params = new URLSearchParams();
+    Object.entries(equipmentFilters).forEach(([key, value]) => {
+      if (value && value !== "Todos") params.set(key, value);
+    });
+    return `/api/equipment/export?${params.toString()}`;
+  };
 
   return (
     <div>
@@ -5725,75 +5920,126 @@ export function EquipmentPage() {
         <div className="mb-5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700">{equipmentMessage}</div>
       ) : null}
       <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <StatCard title="Total de Equipamentos" value="1.248" change="100%" helper="vs dia anterior" icon={Laptop} tone="blue" />
-        <StatCard title="Funcionando" value="1.030" change="82,5%" helper="vs dia anterior" icon={CheckCircle2} tone="green" />
-        <StatCard title="Em Manutenção" value="128" change="10,3%" helper="vs dia anterior" icon={Wrench} tone="orange" />
-        <StatCard title="Inoperantes" value="90" change="7,2%" helper="vs dia anterior" icon={AlertTriangle} tone="red" />
-        <StatCard title="Chamados Abertos" value="96" change="7,7%" helper="vs dia anterior" icon={Headphones} tone="purple" />
+        <StatCard title="Total de equipamentos" value={summary.total} helper="base real cadastrada" icon={Laptop} tone="blue" />
+        <StatCard title="Em uso" value={summary.inUse} helper="vinculados a responsável" icon={CheckCircle2} tone="green" />
+        <StatCard title="Disponíveis" value={summary.available} helper="prontos para entrega" icon={Laptop} tone="cyan" />
+        <StatCard title="Em manutenção" value={summary.maintenance} helper="atenção logística" icon={Wrench} tone="orange" />
+        <StatCard title="Pendências" value={summary.pending} helper="sem responsável/inativo" icon={AlertTriangle} tone="red" />
       </div>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
         <Panel title="Equipamentos">
-          <div className="mb-4 flex flex-col gap-3 md:flex-row">
-            <div className="flex h-11 flex-1 items-center gap-2 rounded-lg border border-border px-3">
+          {canManage ? <input ref={equipmentFileInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(event) => void previewEquipmentFile(event.target.files?.[0])} /> : null}
+          <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+            <div className="flex h-10 items-center gap-2 rounded-lg border border-border px-3 xl:col-span-2">
               <Search className="h-4 w-4 text-muted" />
-              <input className="flex-1 outline-none" placeholder="Pesquisar equipamento, colaborador ou código..." />
+              <input value={equipmentFilters.search} onChange={(event) => setEquipmentFilters({ ...equipmentFilters, search: event.target.value })} className="min-w-0 flex-1 text-sm outline-none" placeholder="Pesquisar série, modelo ou responsável" />
             </div>
-            <button className="flex h-11 items-center gap-2 rounded-lg border border-border px-4 text-sm font-bold">
-              <Download className="h-4 w-4" />
-              Exportar
-            </button>
-            <button onClick={addEquipment} className="flex h-11 items-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white">
-              <Plus className="h-4 w-4" />
-              Novo Equipamento
-            </button>
+            <select value={equipmentFilters.status} onChange={(event) => setEquipmentFilters({ ...equipmentFilters, status: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
+              {equipmentStatuses.map((status) => <option key={status}>{status}</option>)}
+            </select>
+            <select value={equipmentFilters.type} onChange={(event) => setEquipmentFilters({ ...equipmentFilters, type: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
+              {equipmentTypes.map((type) => <option key={type}>{type}</option>)}
+            </select>
+            <button onClick={() => void refreshEquipment()} className="h-10 rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
           </div>
-          <SimpleTable
-            columns={["Código", "Tipo", "Colaborador", "Status", "Data de Entrega", "Impacto"]}
-            rows={rows.map((item) => [
-              item.code,
-              item.type,
-              item.employee,
-              <StatusBadge key={`${item.code}-s`} status={item.status} />,
-              item.delivered,
-              <StatusBadge key={`${item.code}-i`} status={item.impact} />
-            ])}
-          />
+          <div className="mb-4 flex flex-wrap gap-2">
+            <a href={equipmentExportUrl()} className="flex h-10 items-center gap-2 rounded-lg border border-border bg-white px-3 text-sm font-bold"><Download className="h-4 w-4" />Exportar CSV</a>
+            {canManage ? (
+              <>
+                <button type="button" onClick={() => void downloadFile("/api/equipment/template", "template_equipamentos.xlsx").catch((error) => setEquipmentMessage(error.message))} className="flex h-10 items-center gap-2 rounded-lg border border-border bg-white px-3 text-sm font-bold"><FileSpreadsheet className="h-4 w-4" />Baixar template</button>
+                <button type="button" onClick={() => equipmentFileInputRef.current?.click()} className="flex h-10 items-center gap-2 rounded-lg border border-border bg-white px-3 text-sm font-bold"><Upload className="h-4 w-4" />Importar</button>
+              </>
+            ) : null}
+          </div>
+          {rows.length ? (
+            <SimpleTable
+              columns={["Nº série", "Tipo", "Modelo", "Responsável", "WB/Login", "Entrega", "Status", "Ações"]}
+              rows={rows.map((item) => [
+                item.serial ?? item.code,
+                item.type,
+                item.model ?? "",
+                item.employee,
+                item.employeeWbLogin ?? "",
+                item.delivered,
+                <StatusBadge key={`${item.code}-s`} status={item.status} />,
+                canManage ? (
+                  <div key={`${item.code}-actions`} className="flex flex-wrap gap-2">
+                    <button onClick={() => editEquipment(item)} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Editar</button>
+                    <button onClick={() => void removeEquipment(item.id)} className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-bold text-red-600">Inativar</button>
+                  </div>
+                ) : "Visualização"
+              ])}
+            />
+          ) : (
+            <EmptyState title="Nenhum equipamento cadastrado." description="Cadastre ou importe equipamentos para começar." />
+          )}
         </Panel>
         <div className="space-y-5">
-          <Panel title="Chamados Técnicos Abertos" action="Ver todos">
-            {equipmentTickets.map((ticket) => (
-              <div key={ticket.code} className="mb-3 flex items-center gap-3 rounded-lg border border-border p-3 last:mb-0">
-                <span className={cn("status-dot", ticket.status === "Alto" ? "bg-red-500" : ticket.status === "Médio" ? "bg-amber-500" : "bg-emerald-500")} />
-                <div className="flex-1">
-                  <p className="text-sm font-extrabold text-blue-700">{ticket.code}</p>
-                  <p className="text-sm font-bold text-navy-950">{ticket.title}</p>
-                  <p className="text-xs text-muted">{ticket.body}</p>
-                </div>
-                <StatusBadge status={ticket.status} />
+          {canManage ? (
+            <Panel title={equipmentForm.id ? "Editar equipamento" : "Cadastrar equipamento"}>
+              <div className="grid gap-3">
+                <FormInput label="Número de série" value={equipmentForm.numeroSerie} onChange={(value) => setEquipmentForm({ ...equipmentForm, numeroSerie: value })} />
+                <FormSelect label="Tipo" value={equipmentForm.tipoEquipamento} options={equipmentTypes.filter((type) => type !== "Todos")} onChange={(value) => setEquipmentForm({ ...equipmentForm, tipoEquipamento: value })} />
+                <FormInput label="Modelo" value={equipmentForm.modelo} onChange={(value) => setEquipmentForm({ ...equipmentForm, modelo: value })} />
+                <FormInput label="Responsável (WB/Login, e-mail ou nome)" value={equipmentForm.responsavel} onChange={(value) => setEquipmentForm({ ...equipmentForm, responsavel: value })} />
+                <FormInput label="Data de entrega" type="date" value={equipmentForm.dataEntrega} onChange={(value) => setEquipmentForm({ ...equipmentForm, dataEntrega: value })} />
+                <FormSelect label="Status" value={equipmentForm.status} options={equipmentStatuses.filter((status) => status !== "Todos")} onChange={(value) => setEquipmentForm({ ...equipmentForm, status: value })} />
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-bold text-muted">Observação</span>
+                  <textarea value={equipmentForm.observacao} onChange={(event) => setEquipmentForm({ ...equipmentForm, observacao: event.target.value })} className="min-h-24 w-full rounded-lg border border-border p-3 text-sm outline-none" />
+                </label>
+                <button disabled={savingEquipment} onClick={saveEquipmentForm} className="flex h-11 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white disabled:opacity-50">
+                  <Plus className="h-4 w-4" />
+                  {savingEquipment ? "Salvando..." : equipmentForm.id ? "Salvar alterações" : "Cadastrar equipamento"}
+                </button>
               </div>
-            ))}
-          </Panel>
-          <Panel title="Status de SLA dos Chamados">
+            </Panel>
+          ) : null}
+          <Panel title="Resumo logístico">
             <DonutLegend
-              total="96"
+              total={summary.total}
               items={[
-                { label: "Dentro do SLA", value: "70,8%", color: "#10B981" },
-                { label: "Atenção", value: "18,8%", color: "#F59E0B" },
-                { label: "Fora do SLA", value: "10,4%", color: "#EF4444" }
-              ]}
-            />
-          </Panel>
-          <Panel title="Movimentações Recentes">
-            <MiniAlertList
-              items={[
-                { title: "EQP-0002 saiu da manutenção", status: "Hoje", tone: "green" },
-                { title: "EQP-0004 enviado para manutenção", status: "Hoje", tone: "blue" },
-                { title: "EQP-0006 manutenção preventiva", status: "Ontem", tone: "orange" }
+                { label: "Em uso", value: String(summary.inUse), color: "#10B981" },
+                { label: "Disponíveis", value: String(summary.available), color: "#2563EB" },
+                { label: "Manutenção", value: String(summary.maintenance), color: "#F59E0B" },
+                { label: "Pendências", value: String(summary.pending), color: "#EF4444" }
               ]}
             />
           </Panel>
         </div>
       </div>
+      {equipmentPreview ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="card max-h-[88vh] w-full max-w-5xl overflow-y-auto p-5">
+            <div className="mb-5 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-extrabold text-navy-950">Preview da importação de equipamentos</h2>
+                <p className="text-sm text-muted">Total: {equipmentPreview.summary.totalRows} • Válidas: {equipmentPreview.summary.validRows} • Erros: {equipmentPreview.summary.errorRows} • Alertas: {equipmentPreview.summary.warningRows}</p>
+              </div>
+              <button onClick={() => setEquipmentPreview(null)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+            </div>
+            <SimpleTable
+              columns={["Linha", "Série", "Tipo", "Modelo", "Responsável", "Status", "Ação", "Erros/alertas"]}
+              rows={equipmentPreview.rows.slice(0, 80).map((row) => [
+                row.rowNumber,
+                row.numeroSerie,
+                row.type,
+                row.model,
+                row.responsible,
+                <StatusBadge key={`${row.rowNumber}-status`} status={row.errors.length ? "Erro" : row.status} />,
+                row.action === "update" ? "Atualizar" : row.action === "create" ? "Criar" : "Ignorar",
+                [...row.errors, ...row.warnings].join(" | ") || "Linha válida"
+              ])}
+            />
+            <div className="mt-5 flex flex-wrap justify-end gap-3">
+              <button onClick={() => setEquipmentPreview(null)} className="h-11 rounded-lg border border-border px-4 text-sm font-bold">Cancelar</button>
+              <button disabled={importingEquipment || equipmentPreview.summary.errorRows > 0} onClick={commitEquipmentFile} className="h-11 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">
+                {importingEquipment ? "Importando..." : "Confirmar importação"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -5801,51 +6047,57 @@ export function EquipmentPage() {
 export function ShiftReportPage() {
   const [reports, setReports] = useState<ShiftReportItem[]>([]);
   const [dashboard, setDashboard] = useState<ShiftReportDashboard | null>(null);
-  const [employeeRows, setEmployeeRows] = useState<EmployeeClient[]>(employees);
+  const [employeeRows, setEmployeeRows] = useState<EmployeeClient[]>([]);
   const [message, setMessage] = useState("");
+  const [reportFilters, setReportFilters] = useState({ startDate: "", endDate: "", shift: "Todos", supervisor: "", rta: "", importance: "Todos", mood: "Todos", search: "" });
   const [form, setForm] = useState({
-    reportDate: "2026-05-23",
+    reportDate: new Date().toISOString().slice(0, 10),
     shift: "Manhã",
     lob: "CEC",
-    operation: "Atendimento",
-    rta: "WFM Operações",
-    importance: "Alta",
-    plannedHeadcount: 42,
-    actualHeadcount: 39,
-    onlineAgents: 37,
-    absCount: 2,
-    absJustification: "Atestados e problema técnico em validação.",
-    absentEmployeeId: employees[4]?.id ?? "",
-    absenceReason: "Problema de saúde",
-    queueStatusStart: "Fila estável; TMA dentro da meta",
-    queueStatusEnd: "Fila em atenção; aumento de backlog",
-    backlogStart: 18,
-    backlogEnd: 31,
-    latencyStart: "SLA 94%",
-    latencyEnd: "SLA 88%",
+    operation: "",
+    rta: "",
+    importance: "Média",
+    plannedHeadcount: 0,
+    actualHeadcount: 0,
+    onlineAgents: 0,
+    absCount: 0,
+    absJustification: "",
+    absentEmployeeId: "",
+    absenceReason: "Falta injustificada",
+    queueStatusStart: "",
+    queueStatusEnd: "",
+    backlogStart: 0,
+    backlogEnd: 0,
+    latencyStart: "",
+    latencyEnd: "",
     occurrenceCategory: "Pessoas",
-    impactLevel: "Médio",
-    occurrences: "Aumento de ABS no meio do turno.",
-    pendingTasks: "Validar cobertura e confirmar documentação.",
+    impactLevel: "Sem impacto",
+    occurrences: "",
+    pendingTasks: "",
     generalMood: "Neutro",
-    leadersPresent: "Carla Supervisora; WFM Operações",
-    mainRisks: "Cobertura do turno da tarde; backlog CEC.",
-    actionsTaken: "Redistribuição de pausas; reforço em fila crítica.",
-    nextShiftAttentionPoints: "Monitorar backlog e ausências sem justificativa.",
-    requiresFollowUp: true,
-    followUpOwner: "WFM Operações",
-    followUpDueDate: "2026-05-24",
+    leadersPresent: "",
+    mainRisks: "",
+    actionsTaken: "",
+    nextShiftAttentionPoints: "",
+    requiresFollowUp: false,
+    followUpOwner: "",
+    followUpDueDate: "",
     followUpStatus: "Aberto",
     additionalComments: ""
   });
 
   useEffect(() => {
-    refreshReports();
-    apiJson<{ data: EmployeeClient[] }>("/api/employees").then((payload) => setEmployeeRows(payload.data)).catch(() => undefined);
+    void refreshReports();
+    apiJson<{ data: EmployeeClient[] }>("/api/employees?limit=200").then((payload) => setEmployeeRows(payload.data)).catch(() => setEmployeeRows([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function refreshReports() {
-    const payload = await apiJson<{ data: ShiftReportItem[]; dashboard: ShiftReportDashboard }>("/api/shift-reports");
+  async function refreshReports(filters = reportFilters) {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value && value !== "Todos") params.set(key, value);
+    });
+    const payload = await apiJson<{ data: ShiftReportItem[]; dashboard: ShiftReportDashboard }>(`/api/shift-reports?${params.toString()}`);
     setReports(payload.data);
     setDashboard(payload.dashboard);
   }
@@ -5864,6 +6116,13 @@ export function ShiftReportPage() {
     setReports((items) => [payload.data, ...items]);
     setDashboard((current) => current ? { ...current, briefing: payload.briefing, total: current.total + 1 } : current);
     setMessage(`Report ${payload.data.id} enviado, ausências registradas e briefing atualizado.`);
+    await refreshReports();
+  }
+
+  async function deleteReport(id: string) {
+    if (!window.confirm("Tem certeza que deseja excluir este report de turno?")) return;
+    const payload = await apiJson<{ message: string }>(`/api/shift-reports?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+    setMessage(payload.message);
     await refreshReports();
   }
 
@@ -5887,6 +6146,14 @@ export function ShiftReportPage() {
   }
 
   const categoryChart = Object.entries(dashboard?.byCategory ?? {}).map(([name, value]) => ({ name, value }));
+  const reportExportUrl = (format?: string) => {
+    const params = new URLSearchParams();
+    Object.entries(reportFilters).forEach(([key, value]) => {
+      if (value && value !== "Todos") params.set(key, value);
+    });
+    if (format) params.set("format", format);
+    return `/api/shift-reports/export?${params.toString()}`;
+  };
 
   return (
     <div>
@@ -5899,12 +6166,24 @@ export function ShiftReportPage() {
         <StatCard title="Vencidos" value={dashboard?.overdueFollowUps ?? 0} helper="SLA follow-up" icon={XCircle} tone="red" />
       </div>
       {message ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
+      <div className="card mb-5 grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-8">
+        <FormInput label="Data inicial" type="date" value={reportFilters.startDate} onChange={(value) => setReportFilters({ ...reportFilters, startDate: value })} />
+        <FormInput label="Data final" type="date" value={reportFilters.endDate} onChange={(value) => setReportFilters({ ...reportFilters, endDate: value })} />
+        <FormSelect label="Turno" value={reportFilters.shift} options={["Todos", ...Array.from(standardShiftNames)]} onChange={(value) => setReportFilters({ ...reportFilters, shift: value })} />
+        <FormSelect label="Importância" value={reportFilters.importance} options={["Todos", "Baixa", "Média", "Alta", "Crítica"]} onChange={(value) => setReportFilters({ ...reportFilters, importance: value })} />
+        <FormSelect label="Humor" value={reportFilters.mood} options={["Todos", "Muito bom", "Bom", "Neutro", "Ruim", "Crítico"]} onChange={(value) => setReportFilters({ ...reportFilters, mood: value })} />
+        <FormInput label="Supervisor" value={reportFilters.supervisor} onChange={(value) => setReportFilters({ ...reportFilters, supervisor: value })} />
+        <FormInput label="RTA" value={reportFilters.rta} onChange={(value) => setReportFilters({ ...reportFilters, rta: value })} />
+        <div className="flex items-end">
+          <button onClick={() => void refreshReports()} className="h-11 w-full rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
+        </div>
+      </div>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_460px]">
         <div className="space-y-5">
           <Panel title="Questionário do turno">
             <div className="grid gap-4 md:grid-cols-4">
               <FormInput label="Data do report" type="date" value={form.reportDate} onChange={(value) => setForm({ ...form, reportDate: value })} />
-              <FormSelect label="Turno" value={form.shift} options={["Manhã", "Tarde", "Noite", "Madrugada", "Backoffice"]} onChange={(value) => setForm({ ...form, shift: value })} />
+              <FormSelect label="Turno" value={form.shift} options={Array.from(standardShiftNames)} onChange={(value) => setForm({ ...form, shift: value })} />
               <FormSelect label="LOB" value={form.lob} options={["CEC", "TNS", "ADS"]} onChange={(value) => setForm({ ...form, lob: value })} />
               <FormSelect label="Importância" value={form.importance} options={["Baixa", "Média", "Alta", "Crítica"]} onChange={(value) => setForm({ ...form, importance: value })} />
               <FormInput label="RTA responsável" value={form.rta} onChange={(value) => setForm({ ...form, rta: value })} />
@@ -5917,7 +6196,15 @@ export function ShiftReportPage() {
               <FormSelect label="Humor geral" value={form.generalMood} options={["Muito bom", "Bom", "Neutro", "Ruim", "Crítico"]} onChange={(value) => setForm({ ...form, generalMood: value })} />
             </div>
             <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <FormSelect label="Agente ausente" value={form.absentEmployeeId} options={employeeRows.map((employee) => employee.id)} onChange={(value) => setForm({ ...form, absentEmployeeId: value })} />
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-bold text-muted">Agente ausente</span>
+                <select value={form.absentEmployeeId} onChange={(event) => setForm({ ...form, absentEmployeeId: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 text-sm font-semibold outline-none">
+                  <option value="">Sem ausência individual</option>
+                  {employeeRows.map((employee) => (
+                    <option key={employee.id} value={employee.id}>{employee.name} - {employee.wb || employee.email}</option>
+                  ))}
+                </select>
+              </label>
               <FormSelect label="Motivo da ausência" value={form.absenceReason} options={["Falta injustificada", "Atestado", "Problema de saúde", "Emergência familiar", "Problema técnico", "Falta de equipamento", "Problema de internet", "Atraso", "Saída antecipada", "Erro de escala", "Treinamento", "Férias", "Afastamento", "Folga", "Outros"]} onChange={(value) => setForm({ ...form, absenceReason: value })} />
               <FormSelect label="Categoria da ocorrência" value={form.occurrenceCategory} options={["Pessoas", "Sistema", "Ferramenta", "Cliente", "Volume", "SLA/Latência", "Qualidade", "Escala", "Equipamento", "Treinamento", "Outros"]} onChange={(value) => setForm({ ...form, occurrenceCategory: value })} />
               <FormSelect label="Nível de impacto" value={form.impactLevel} options={["Sem impacto", "Baixo", "Médio", "Alto", "Crítico"]} onChange={(value) => setForm({ ...form, impactLevel: value })} />
@@ -5951,10 +6238,24 @@ export function ShiftReportPage() {
             <button onClick={submitReport} className="mt-5 rounded-lg bg-blue-600 px-5 py-3 text-sm font-bold text-white">Enviar report de turno</button>
           </Panel>
           <Panel title="Últimos reports enviados">
-            <SimpleTable
-              columns={["ID", "Data", "Turno", "LOB", "Supervisor", "Importância", "ABS", "Follow-up"]}
-              rows={reports.map((report) => [report.id, report.reportDate, report.shift, report.lob, report.supervisor, <PriorityBadge key={report.id} priority={report.importance} />, report.absCount, <StatusBadge key={`${report.id}-f`} status={report.followUpStatus} />])}
-            />
+            {reports.length ? (
+              <SimpleTable
+                columns={["ID", "Data", "Turno", "LOB", "Supervisor", "Importância", "ABS", "Follow-up", "Ações"]}
+                rows={reports.map((report) => [
+                  report.id,
+                  report.reportDate,
+                  report.shift,
+                  report.lob,
+                  report.supervisor,
+                  <PriorityBadge key={report.id} priority={report.importance} />,
+                  report.absCount,
+                  <StatusBadge key={`${report.id}-f`} status={report.followUpStatus} />,
+                  <button key={`${report.id}-delete`} onClick={() => void deleteReport(report.id)} className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-bold text-red-600">Excluir</button>
+                ])}
+              />
+            ) : (
+              <EmptyState title="Nenhum report de turno enviado." description="Reports reais aparecerão aqui após o envio." />
+            )}
           </Panel>
         </div>
         <div className="space-y-5">
@@ -5964,8 +6265,8 @@ export function ShiftReportPage() {
               <MiniAlertList items={(dashboard?.briefing.mainRisks ?? []).slice(0, 4).map((risk) => ({ title: risk, status: "Risco", tone: "orange" }))} />
               <div className="grid gap-2">
                 <button onClick={copyBriefing} className="flex h-11 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white"><Copy className="h-4 w-4" />Copiar resumo para IA</button>
-                <a href="/api/shift-reports/export" className="flex h-11 items-center justify-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold"><Download className="h-4 w-4" />Exportar CSV</a>
-                <a href="/api/shift-reports/export?format=json" className="flex h-11 items-center justify-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold"><FileJson className="h-4 w-4" />Exportar JSON</a>
+                <a href={reportExportUrl()} className="flex h-11 items-center justify-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold"><Download className="h-4 w-4" />Exportar CSV</a>
+                <a href={reportExportUrl("json")} className="flex h-11 items-center justify-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold"><FileJson className="h-4 w-4" />Exportar JSON</a>
               </div>
             </div>
           </Panel>
@@ -6081,7 +6382,7 @@ export function StaffCoveragePage() {
           <MiniAlertList
             items={[
               { title: "Déficit crítico no turno da Noite de Domingo", status: "Crítico", tone: "red" },
-              { title: "Cobertura abaixo da meta na Madrugada", status: "Atenção", tone: "orange" },
+              { title: "Cobertura abaixo da meta na Noite", status: "Atenção", tone: "orange" },
               { title: "Gap projetado para aumentar na próxima semana", status: "Atenção", tone: "orange" },
               { title: "12 colaboradores em férias impactando cobertura", status: "Informativo", tone: "blue" }
             ]}
@@ -6112,7 +6413,7 @@ export function StaffCoveragePage() {
               ["Atendimento", 512, 468, "-44", "91,4%"],
               ["Vendas", 320, 292, "-28", "91,3%"],
               ["Retenção", 208, 186, "-22", "89,4%"],
-              ["Backoffice", 160, 154, "-6", "96,3%"],
+              ["Operação", 160, 154, "-6", "96,3%"],
               ["Suporte", 112, 102, "-10", "91,1%"]
             ]}
           />
@@ -6641,7 +6942,7 @@ export function SettingsPage() {
   }
 
   const activeLobs = settings?.lobs.filter((lob) => lob.status !== "INACTIVE").length ?? 0;
-  const activeShifts = settings?.shifts.filter((shift) => shift.status !== "INACTIVE").length ?? 0;
+  const activeShifts = settings?.shifts.filter((shift) => shift.status !== "INACTIVE" && isSelectableShiftName(shift.name)).length ?? 0;
   const activeTitles = settings?.roleTitles.filter((title) => title.status !== "INACTIVE").length ?? 0;
   const activeTeams = settings?.teams?.filter((team) => team.status !== "INACTIVE").length ?? 0;
   const roleOptions = settings?.roles.filter((role) => role.status !== "INACTIVE").map((role) => role.name) ?? ["COLABORADOR", "SUPERVISOR", "WFM", "ADMIN"];
@@ -6876,25 +7177,33 @@ export function SettingsPage() {
               <input value={shiftDraft.startsAt} onChange={(event) => setShiftDraft({ ...shiftDraft, startsAt: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Entrada" />
               <input value={shiftDraft.endsAt} onChange={(event) => setShiftDraft({ ...shiftDraft, endsAt: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Saída" />
               <input type="color" value={shiftDraft.color} onChange={(event) => setShiftDraft({ ...shiftDraft, color: event.target.value })} className="h-10 rounded-lg border border-border px-2" />
-              <button disabled={savingSettings} onClick={() => void saveSetting({ type: "shift", ...shiftDraft, status: "ACTIVE" }, shiftDraft.id ? "Turno atualizado." : "Turno criado.")} className="rounded-lg bg-blue-600 px-4 text-sm font-bold text-white disabled:opacity-60">
+              <button disabled={savingSettings} onClick={() => void saveSetting({ type: "shift", ...shiftDraft, name: cleanShiftName(shiftDraft.name), status: isBlockedShiftName(shiftDraft.name) ? "INACTIVE" : "ACTIVE" }, shiftDraft.id ? "Turno atualizado." : "Turno criado.")} className="rounded-lg bg-blue-600 px-4 text-sm font-bold text-white disabled:opacity-60">
                 {shiftDraft.id ? "Salvar" : "Criar"}
               </button>
             </div>
             {settings?.shifts.length ? (
               <SimpleTable
                 columns={["Turno", "Entrada", "Saída", "Status", "Ações"]}
-                rows={settings.shifts.map((shift) => [
-                  shift.name,
-                  shift.startsAt,
-                  shift.endsAt,
-                  <StatusBadge key={`${shift.id}-status`} status={shift.status === "INACTIVE" ? "Inativo" : "Ativo"} />,
-                  <div key={`${shift.id}-actions`} className="flex flex-wrap gap-2">
-                    <button onClick={() => setShiftDraft({ id: shift.id, name: shift.name, startsAt: shift.startsAt, endsAt: shift.endsAt, color: shift.color ?? "#2563EB" })} className="rounded-lg border border-border px-3 py-1 text-xs font-bold">Editar</button>
-                    <button onClick={() => void saveSetting({ type: "shift", id: shift.id, name: shift.name, startsAt: shift.startsAt, endsAt: shift.endsAt, color: shift.color, status: shift.status === "INACTIVE" ? "ACTIVE" : "INACTIVE" }, "Status do turno atualizado.")} className="rounded-lg border border-border px-3 py-1 text-xs font-bold">
-                      {shift.status === "INACTIVE" ? "Ativar" : "Inativar"}
-                    </button>
-                  </div>
-                ])}
+                rows={settings.shifts.map((shift) => {
+                  const blockedShift = isBlockedShiftName(shift.name);
+                  const effectiveStatus = blockedShift ? "INACTIVE" : shift.status;
+                  return [
+                    cleanShiftName(shift.name),
+                    shift.startsAt,
+                    shift.endsAt,
+                    <StatusBadge key={`${shift.id}-status`} status={effectiveStatus === "INACTIVE" ? "Inativo" : "Ativo"} />,
+                    <div key={`${shift.id}-actions`} className="flex flex-wrap gap-2">
+                      <button onClick={() => setShiftDraft({ id: shift.id, name: cleanShiftName(shift.name), startsAt: shift.startsAt, endsAt: shift.endsAt, color: shift.color ?? "#2563EB" })} className="rounded-lg border border-border px-3 py-1 text-xs font-bold">Editar</button>
+                      <button
+                        disabled={blockedShift}
+                        onClick={() => void saveSetting({ type: "shift", id: shift.id, name: cleanShiftName(shift.name), startsAt: shift.startsAt, endsAt: shift.endsAt, color: shift.color, status: effectiveStatus === "INACTIVE" ? "ACTIVE" : "INACTIVE" }, "Status do turno atualizado.")}
+                        className="rounded-lg border border-border px-3 py-1 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {blockedShift ? "Inativo padrão" : effectiveStatus === "INACTIVE" ? "Ativar" : "Inativar"}
+                      </button>
+                    </div>
+                  ];
+                })}
               />
             ) : <EmptyState title="Nenhum turno cadastrado" description="Crie turnos para aparecerem em escala e filtros." />}
           </Panel> : null}

@@ -1,5 +1,8 @@
 import { redirect } from "next/navigation";
 
-export default function ComunicacaoRoute() {
+import { requireAdminRoute } from "@/lib/admin-route";
+
+export default async function ComunicacaoRoute() {
+  await requireAdminRoute();
   redirect("/mural");
 }

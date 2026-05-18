@@ -7,6 +7,7 @@ import type { Actor } from "@/lib/mock-db";
 import { listEmployeesForActor as listMockEmployees, recordErrorLog } from "@/lib/mock-db";
 import { canAccessEmployeeMap, canViewEmployeeSensitiveData, normalizeRole } from "@/lib/permissions";
 import { createDuplicateError, createNotFoundError, createPermissionError, createRelationError, createServerError, createValidationError, mapPrismaError } from "@/lib/api-errors";
+import { cleanShiftName } from "@/lib/shift-display";
 
 const allowDemoDataFallback = process.env.ALLOW_DEMO_LOGIN === "true" || process.env.ALLOW_DEMO_DATA === "true";
 const employeeInclude = {
@@ -663,7 +664,7 @@ function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: 
     teamId: employee.teamId,
     supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
     supervisorId: employee.supervisorId ?? "",
-    shift: employee.shift.name,
+    shift: cleanShiftName(employee.shift.name) || "Sem turno",
     shiftId: employee.shiftId,
     schedule: employee.scheduleType,
     status: employee.operationalStatus,
@@ -731,7 +732,7 @@ function mapLegacyEmployee(employee: LegacyEmployeeRow, role: string) {
     teamId: employee.teamId,
     supervisor: employee.supervisor ?? "Sem supervisor",
     supervisorId: employee.supervisorId ?? "",
-    shift: employee.shift,
+    shift: cleanShiftName(employee.shift) || "Sem turno",
     shiftId: employee.shiftId,
     schedule: employee.scheduleType,
     status: employee.operationalStatus,
@@ -780,7 +781,7 @@ function mapEmployeeSummary(employee: EmployeeSummaryRow, role: string) {
     teamId: employee.teamId,
     supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
     supervisorId: employee.supervisorId ?? "",
-    shift: employee.shift.name,
+    shift: cleanShiftName(employee.shift.name) || "Sem turno",
     shiftId: employee.shiftId,
     schedule: employee.scheduleType,
     status: employee.operationalStatus,
