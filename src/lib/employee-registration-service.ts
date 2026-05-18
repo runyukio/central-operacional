@@ -298,23 +298,34 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
     }
 
     const validRows = rows.filter((_, index) => !validations[index]?.errors.length);
+    const normalizedValidRows = validRows.map((row) => normalizeEmployeeImportRow(row));
+    const passwordHashByWbLogin = new Map<string, string>();
+    await Promise.all(
+      normalizedValidRows
+        .filter((row) => row.createUser)
+        .map(async (row) => {
+          passwordHashByWbLogin.set(row.wbLogin, await bcrypt.hash(row.temporaryPassword, 10));
+        })
+    );
+    const fallbackShift = normalizedValidRows.some((row) => !row.shift)
+      ? await prisma.shift.upsert({
+        where: { name: "Não informado" },
+        update: {},
+        create: { name: "Não informado", startsAt: "00:00", endsAt: "00:00", color: "#64748B" }
+      })
+      : null;
     const batchId = `IMPORT-${Date.now()}`;
     let colaboradoresCriados = 0;
     let usuariosCriados = 0;
     let registrosAtualizados = 0;
 
     await prisma.$transaction(async (tx) => {
-      for (const raw of validRows) {
-        const row = normalizeEmployeeImportRow(raw);
+      for (const row of normalizedValidRows) {
         const role = await tx.role.findUniqueOrThrow({ where: { name: row.roleName } });
         const lob = await tx.lob.findUniqueOrThrow({ where: { name: row.lob } });
         const shift = row.shift
           ? await tx.shift.findUniqueOrThrow({ where: { name: row.shift } })
-          : await tx.shift.upsert({
-            where: { name: "Não informado" },
-            update: {},
-            create: { name: "Não informado", startsAt: "00:00", endsAt: "00:00", color: "#64748B" }
-          });
+          : fallbackShift!;
         const importDateFallback = new Date();
         const birthDate = row.birthDate ?? row.admissionDate ?? row.trainingStartDate ?? importDateFallback;
         const trainingStartDate = row.trainingStartDate ?? row.admissionDate ?? importDateFallback;
@@ -337,7 +348,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
           })
           : null;
 
-        const passwordHash = row.createUser ? await bcrypt.hash(row.temporaryPassword, 10) : null;
+        const passwordHash = row.createUser ? passwordHashByWbLogin.get(row.wbLogin) ?? null : null;
         const registrationData = {
           submittedAt: new Date(),
           status: "APROVADO" as const,
@@ -534,7 +545,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
           }
         }
       });
-    });
+    }, { maxWait: 10000, timeout: 60000 });
 
     return {
       success: true,
