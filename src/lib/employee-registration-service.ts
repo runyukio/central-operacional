@@ -319,30 +319,29 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
     let usuariosCriados = 0;
     let registrosAtualizados = 0;
 
-    await prisma.$transaction(async (tx) => {
-      for (const row of normalizedValidRows) {
-        const role = await tx.role.findUniqueOrThrow({ where: { name: row.roleName } });
-        const lob = await tx.lob.findUniqueOrThrow({ where: { name: row.lob } });
-        const shift = row.shift
-          ? await tx.shift.findUniqueOrThrow({ where: { name: row.shift } })
-          : fallbackShift!;
-        const importDateFallback = new Date();
-        const birthDate = row.birthDate ?? row.admissionDate ?? row.trainingStartDate ?? importDateFallback;
-        const trainingStartDate = row.trainingStartDate ?? row.admissionDate ?? importDateFallback;
-        const admissionDate = row.admissionDate ?? row.trainingStartDate ?? importDateFallback;
-        const supervisor = await findSupervisorForImport(tx, row.supervisorWbLogin, row.supervisorEmail, row.supervisorName);
-        const team = await tx.team.upsert({
-          where: { name_lobId: { name: row.teamName || (supervisor?.fullName ? `Time ${supervisor.fullName}` : "Time Inicial"), lobId: lob.id } },
-          update: { supervisorId: supervisor?.id },
-          create: { name: row.teamName || (supervisor?.fullName ? `Time ${supervisor.fullName}` : "Time Inicial"), lobId: lob.id, supervisorId: supervisor?.id }
-        });
+    for (const row of normalizedValidRows) {
+      const role = await prisma.role.findUniqueOrThrow({ where: { name: row.roleName } });
+      const lob = await prisma.lob.findUniqueOrThrow({ where: { name: row.lob } });
+      const shift = row.shift
+        ? await prisma.shift.findUniqueOrThrow({ where: { name: row.shift } })
+        : fallbackShift!;
+      const importDateFallback = new Date();
+      const birthDate = row.birthDate ?? row.admissionDate ?? row.trainingStartDate ?? importDateFallback;
+      const trainingStartDate = row.trainingStartDate ?? row.admissionDate ?? importDateFallback;
+      const admissionDate = row.admissionDate ?? row.trainingStartDate ?? importDateFallback;
+      const supervisor = await findSupervisorForImport(prisma, row.supervisorWbLogin, row.supervisorEmail, row.supervisorName);
+      const team = await prisma.team.upsert({
+        where: { name_lobId: { name: row.teamName || (supervisor?.fullName ? `Time ${supervisor.fullName}` : "Time Inicial"), lobId: lob.id } },
+        update: { supervisorId: supervisor?.id },
+        create: { name: row.teamName || (supervisor?.fullName ? `Time ${supervisor.fullName}` : "Time Inicial"), lobId: lob.id, supervisorId: supervisor?.id }
+      });
 
         const registrationOr: Prisma.EmployeeRegistrationRequestWhereInput[] = [
           ...(row.cpf ? [{ cpf: row.cpf }] : []),
           ...(row.email ? [{ email: row.email }] : [])
         ];
         const existingRegistration = registrationOr.length
-          ? await tx.employeeRegistrationRequest.findFirst({
+          ? await prisma.employeeRegistrationRequest.findFirst({
             where: { OR: registrationOr },
             orderBy: { submittedAt: "desc" }
           })
@@ -415,18 +414,18 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
         };
 
         const registration = existingRegistration
-          ? await tx.employeeRegistrationRequest.update({
+          ? await prisma.employeeRegistrationRequest.update({
             where: { id: existingRegistration.id },
             data: registrationData
           })
-          : await tx.employeeRegistrationRequest.create({ data: registrationData });
+          : await prisma.employeeRegistrationRequest.create({ data: registrationData });
         if (existingRegistration) registrosAtualizados += 1;
 
         let userId: string | undefined;
         if (row.createUser) {
-          const existingUser = row.email ? await tx.user.findUnique({ where: { email: row.email } }) : null;
+          const existingUser = row.email ? await prisma.user.findUnique({ where: { email: row.email } }) : null;
           const user = existingUser
-            ? await tx.user.update({
+            ? await prisma.user.update({
               where: { id: existingUser.id },
               data: {
                 name: row.name,
@@ -440,7 +439,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
                 deletedAt: null
               }
             })
-            : await tx.user.create({
+            : await prisma.user.create({
               data: {
                 email: row.email,
                 name: row.name,
@@ -457,11 +456,11 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
           usuariosCriados += existingUser ? 0 : 1;
         }
 
-        const existingByWb = await tx.employeeProfile.findUnique({ where: { wbLogin: row.wbLogin } });
-        const existingByUser = userId ? await tx.employeeProfile.findUnique({ where: { userId } }) : null;
+        const existingByWb = await prisma.employeeProfile.findUnique({ where: { wbLogin: row.wbLogin } });
+        const existingByUser = userId ? await prisma.employeeProfile.findUnique({ where: { userId } }) : null;
         const employeeId = existingByWb?.id ?? existingByUser?.id;
         const employee = employeeId
-          ? await tx.employeeProfile.update({
+          ? await prisma.employeeProfile.update({
             where: { id: employeeId },
             data: {
               userId,
@@ -486,7 +485,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               deletedAt: null
             }
           })
-          : await tx.employeeProfile.create({
+          : await prisma.employeeProfile.create({
             data: {
               userId,
               wbLogin: row.wbLogin,
@@ -513,13 +512,13 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
           });
         if (!employeeId) colaboradoresCriados += 1;
 
-        await tx.employeeSensitiveData.upsert({
+        await prisma.employeeSensitiveData.upsert({
           where: { employeeId: employee.id },
           update: sensitiveDataFromImport(row, birthDate),
           create: { employeeId: employee.id, ...sensitiveDataFromImport(row, birthDate) }
         });
 
-        await tx.employeeRegistrationRequest.update({
+        await prisma.employeeRegistrationRequest.update({
           where: { id: registration.id },
           data: {
             createdUserId: userId,
@@ -528,7 +527,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
         });
       }
 
-      await tx.auditLog.create({
+      await prisma.auditLog.create({
         data: {
           actorId: permission.user.id,
           action: "IMPORTACAO",
@@ -545,7 +544,6 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
           }
         }
       });
-    }, { maxWait: 10000, timeout: 60000 });
 
     return {
       success: true,
