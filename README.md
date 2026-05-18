@@ -570,6 +570,7 @@ Regras atuais:
 - Supervisor, time, turno, contrato, datas, site/operação, RG, endereço, dados bancários e contatos são opcionais no upload inicial; quando o turno vier vazio, o sistema usa `Não informado` para manter o colaborador visível e editável no Mapa.
 - Valores comuns são normalizados no preview/commit: `Sim/S/Yes/true/1`, `Ativo/ACTIVE`, `Manha/Manhã`, `Tarde`, `Noite`, roles como `COLLABORATOR`, `SUPERVISOR`, `WFM`, `QUALITY`, `HR`, `LOGISTICS_IT`, `MANAGEMENT` e LOBs `CEC`, `ADS`, `TNS`, `ALL`.
 - A tela de importação abre feedback imediatamente ao selecionar o Excel, mostra loading de validação, erro claro se a leitura falhar e usa validação em lote para bases maiores.
+- A confirmação da importação de colaboradores é enviada em lotes menores para evitar timeout de servidor em bases grandes.
 - O preview mostra total de linhas, válidas, erros, alertas, usuários a criar, funcionários a criar, atualizações, duplicidades e ação por linha (`criar`, `atualizar` ou `ignorar`).
 - Duplicidades ativas de e-mail ou WB/Login bloqueiam a linha; CPF preenchido duplicado também bloqueia. Cadastros recusados/inativos podem ser reaproveitados pela importação.
 - Login atualizado para apresentação do MVP local: novo subtítulo, botão `Criar cadastro`, sem cards de status fake e com wallpaper local em `public/login-wallpaper.png`.

@@ -528,9 +528,24 @@ async function apiJson<T>(url: string, options?: RequestInit) {
     ...options,
     headers: options?.body instanceof FormData ? options.headers : { "Content-Type": "application/json", ...(options?.headers ?? {}) }
   });
-  const payload = (await response.json().catch(() => ({
-    message: response.ok ? "Resposta vazia do servidor." : "Resposta inesperada do servidor. Tente novamente ou contate o administrador."
-  }))) as T & { error?: string; message?: string; fields?: Record<string, string>; fieldErrors?: Record<string, string>; type?: string };
+  const rawPayload = await response.text();
+  let payload: T & { error?: string; message?: string; fields?: Record<string, string>; fieldErrors?: Record<string, string>; type?: string };
+  try {
+    payload = rawPayload ? JSON.parse(rawPayload) : { message: response.ok ? "Resposta vazia do servidor." : `Erro HTTP ${response.status}.` } as T & { message?: string };
+  } catch {
+    const plainText = rawPayload
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 300);
+    payload = {
+      message: response.ok
+        ? "Resposta vazia ou inválida do servidor."
+        : `Erro HTTP ${response.status}. ${plainText || "O servidor não retornou detalhes em JSON."}`
+    } as T & { message?: string };
+  }
   if (!response.ok) {
     throw new ApiRequestError(payload.error ?? payload.message ?? "Erro ao processar solicitação", {
       fields: payload.fieldErrors ?? payload.fields,
@@ -1691,13 +1706,26 @@ export function RegistrationApprovalsPage() {
     setMessage("");
     setEmployeeImportError("");
     try {
-      const payload = await apiJson<{ data: EmployeeImportPreview & { colaboradoresCriados: number; usuariosCriados: number; registrosAtualizados: number; importBatchId: string } }>("/api/employee-registrations/import/commit", {
-        method: "POST",
-        body: JSON.stringify({ rows: employeeImportRows, allowPartial: allowPartialEmployeeImport })
-      });
-      setEmployeeImportPreview(payload.data);
+      const chunkSize = 25;
+      const chunks = Array.from({ length: Math.ceil(employeeImportRows.length / chunkSize) }, (_, index) => employeeImportRows.slice(index * chunkSize, (index + 1) * chunkSize));
+      const summary = { colaboradoresCriados: 0, usuariosCriados: 0, registrosAtualizados: 0, ignoredRows: 0 };
+      let processedRows = 0;
+      for (let index = 0; index < chunks.length; index += 1) {
+        const chunk = chunks[index];
+        setMessageTone("success");
+        setMessage(`Importando colaboradores... lote ${index + 1}/${chunks.length} (${processedRows}/${employeeImportRows.length} linhas processadas).`);
+        const payload = await apiJson<{ data: EmployeeImportPreview & { colaboradoresCriados: number; usuariosCriados: number; registrosAtualizados: number; ignoredRows?: number; importBatchId: string } }>("/api/employee-registrations/import/commit", {
+          method: "POST",
+          body: JSON.stringify({ rows: chunk, allowPartial: allowPartialEmployeeImport })
+        });
+        summary.colaboradoresCriados += payload.data.colaboradoresCriados;
+        summary.usuariosCriados += payload.data.usuariosCriados;
+        summary.registrosAtualizados += payload.data.registrosAtualizados;
+        summary.ignoredRows += payload.data.ignoredRows ?? 0;
+        processedRows += chunk.length;
+      }
       setMessageTone("success");
-      setMessage(`Importação concluída: ${payload.data.colaboradoresCriados} colaborador(es), ${payload.data.usuariosCriados} usuário(s), ${payload.data.registrosAtualizados} registro(s) atualizado(s).`);
+      setMessage(`Importação concluída: ${summary.colaboradoresCriados} colaborador(es), ${summary.usuariosCriados} usuário(s), ${summary.registrosAtualizados} registro(s) atualizado(s), ${summary.ignoredRows} linha(s) ignorada(s).`);
       setShowEmployeeImport(false);
       await refreshRegistrations();
     } catch (err) {
