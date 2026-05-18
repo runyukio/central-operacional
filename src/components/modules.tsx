@@ -2184,6 +2184,9 @@ export function SchedulesPage() {
   const [imported, setImported] = useState("");
   const [scheduleRows, setScheduleRows] = useState<ScheduleGridRow[]>([]);
   const [scheduleEmployees, setScheduleEmployees] = useState<EmployeeClient[]>([]);
+  const [scheduleEmployeeSearchResults, setScheduleEmployeeSearchResults] = useState<EmployeeClient[]>([]);
+  const [scheduleEmployeeSearch, setScheduleEmployeeSearch] = useState("");
+  const [loadingScheduleEmployeeSearch, setLoadingScheduleEmployeeSearch] = useState(false);
   const [scheduleSettings, setScheduleSettings] = useState<SystemSettings | null>(null);
   const [importHistory, setImportHistory] = useState<Array<{ id: string; fileName: string; importedRows: number; status: string; createdAt: string; user: string }>>([]);
   const [attendanceMessage, setAttendanceMessage] = useState("");
@@ -2258,6 +2261,25 @@ export function SchedulesPage() {
   useEffect(() => {
     void loadScheduleSupportData();
   }, []);
+
+  useEffect(() => {
+    const query = scheduleEmployeeSearch.trim();
+    if (query.length < 2) {
+      setScheduleEmployeeSearchResults([]);
+      setLoadingScheduleEmployeeSearch(false);
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setLoadingScheduleEmployeeSearch(true);
+      apiJson<EmployeeListResponse>(`/api/employees?search=${encodeURIComponent(query)}&limit=50`)
+        .then((payload) => setScheduleEmployeeSearchResults(payload.data.filter((employee) => employee.status !== "Inativo")))
+        .catch(() => setScheduleEmployeeSearchResults([]))
+        .finally(() => setLoadingScheduleEmployeeSearch(false));
+    }, 250);
+
+    return () => window.clearTimeout(timeout);
+  }, [scheduleEmployeeSearch]);
 
   async function loadScheduleSupportData() {
     try {
@@ -2370,6 +2392,7 @@ export function SchedulesPage() {
     const plannedStart = plannedCell?.startsAt || (statusNeedsTime(cellStatus) ? times.startsAt : "");
     const plannedEnd = plannedCell?.endsAt || (statusNeedsTime(cellStatus) ? times.endsAt : "");
     const plannedHours = plannedStart && plannedEnd ? roundDecimal(minutesBetweenTimes(plannedStart, plannedEnd) / 60) : 0;
+    setScheduleEmployeeSearch(employeeOptionLabel(targetEmployee));
     setScheduleEditForm({
       employeeId: targetEmployee.id,
       date: `${schedulePeriod.year}-${String(schedulePeriod.month).padStart(2, "0")}-${String(dayIndex + 1).padStart(2, "0")}`,
@@ -2410,6 +2433,12 @@ export function SchedulesPage() {
       justification: ""
     });
     setShowEditSchedule(true);
+  }
+
+  function closeScheduleEditor() {
+    setShowEditSchedule(false);
+    setScheduleEmployeeSearch("");
+    setScheduleEmployeeSearchResults([]);
   }
 
   function openPendingJustification(record: AttendanceItem) {
@@ -2453,8 +2482,12 @@ export function SchedulesPage() {
   }
 
   async function saveScheduleEdit() {
-    if (!scheduleEditForm.employeeId || !scheduleEditForm.date || !scheduleEditForm.status) {
-      setAttendanceMessage("Colaborador, data e status são obrigatórios.");
+    if (!scheduleEditForm.employeeId) {
+      setAttendanceMessage("Selecione um colaborador.");
+      return;
+    }
+    if (!scheduleEditForm.date || !scheduleEditForm.status) {
+      setAttendanceMessage("Data e status são obrigatórios.");
       return;
     }
     if (statusNeedsTime(scheduleEditForm.status) && (!scheduleEditForm.shift || !scheduleEditForm.startsAt || !scheduleEditForm.endsAt)) {
@@ -2474,7 +2507,7 @@ export function SchedulesPage() {
       });
       setAttendanceSummary(payload.schedules.attendanceSummary ?? payload.summary);
       setAttendanceMessage("Escala atualizada com histórico, auditoria e indicadores de presença/cobertura.");
-      setShowEditSchedule(false);
+      closeScheduleEditor();
       await refreshSchedules();
     } catch (error) {
       setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível editar a escala.");
@@ -2575,7 +2608,7 @@ export function SchedulesPage() {
         })
       });
       setAttendanceMessage("Ajuste de horas solicitado para análise do WFM/Admin.");
-      setShowEditSchedule(false);
+      closeScheduleEditor();
       await refreshSchedules();
     } catch (error) {
       setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível solicitar ajuste de horas.");
@@ -2596,7 +2629,7 @@ export function SchedulesPage() {
         body: JSON.stringify({ employeeId: scheduleEditForm.employeeId, month: schedulePeriod.month, year: schedulePeriod.year, scope })
       });
       setAttendanceMessage(payload.message ?? "Escala removida.");
-      setShowEditSchedule(false);
+      closeScheduleEditor();
       await refreshSchedules();
     } catch (error) {
       setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível remover a escala do colaborador.");
@@ -2641,7 +2674,17 @@ export function SchedulesPage() {
   const schedulePageStart = scheduleTotalRows && scheduleRows.length ? (schedulePagination.page - 1) * schedulePagination.limit + 1 : 0;
   const schedulePageEnd = scheduleTotalRows ? Math.min(schedulePagination.page * schedulePagination.limit, scheduleTotalRows) : 0;
   const monthLabel = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(schedulePeriod.year, schedulePeriod.month - 1, 1)));
-  const employeeOptions = scheduleEmployees.length ? scheduleEmployees : scheduleRows.map((row) => row.employee as EmployeeClient);
+  const scheduleRowEmployees = scheduleRows.map((row) => row.employee as EmployeeClient);
+  const employeeOptions = Array.from(
+    new Map([...scheduleEmployees, ...scheduleRowEmployees, ...scheduleEmployeeSearchResults].map((employee) => [employee.id, employee])).values()
+  );
+  const scheduleEmployeeSearchTerm = scheduleEmployeeSearch.trim().toLowerCase();
+  const filteredScheduleEmployeeOptions = employeeOptions
+    .filter((employee) => {
+      if (!scheduleEmployeeSearchTerm) return true;
+      return [employee.name, employee.wb, employee.email].filter(Boolean).join(" ").toLowerCase().includes(scheduleEmployeeSearchTerm);
+    })
+    .slice(0, 60);
   const configuredLobs = scheduleSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? [];
   const configuredShifts = scheduleSettings?.shifts.filter((shift) => shift.status !== "INACTIVE").map((shift) => shift.name) ?? [];
   const availableShiftNames = Array.from(new Set([...configuredShifts, "Manhã", "Tarde", "Noite", "Madrugada", "Backoffice"]));
@@ -2673,6 +2716,20 @@ export function SchedulesPage() {
   function configuredTimesForShift(shift: string) {
     const configured = scheduleSettings?.shifts.find((item) => item.name === shift);
     return configured ? { startsAt: configured.startsAt, endsAt: configured.endsAt } : timesForShift(shift);
+  }
+
+  function selectScheduleEmployee(employee: EmployeeClient) {
+    const times = configuredTimesForShift(employee.shift || scheduleEditForm.shift);
+    setScheduleEditForm((current) => ({
+      ...current,
+      employeeId: employee.id,
+      shift: employee.shift || current.shift,
+      startsAt: scheduleEditRequiresTime ? times.startsAt : current.startsAt,
+      endsAt: scheduleEditRequiresTime ? times.endsAt : current.endsAt,
+      lob: employee.lob || current.lob,
+      supervisor: employee.supervisor || current.supervisor
+    }));
+    setScheduleEmployeeSearch(employeeOptionLabel(employee));
   }
 
   function scheduleExportUrl() {
@@ -2964,7 +3021,7 @@ export function SchedulesPage() {
                 <h2 className="text-lg font-extrabold text-navy-950">{canManageSchedules ? "Editar escala e horas" : "Visualizar escala e horas"}</h2>
                 <p className="text-sm text-muted">{selectedScheduleEmployee ? `${employeeOptionLabel(selectedScheduleEmployee)} • ${scheduleEditForm.date}` : "Atualiza histórico, auditoria e horas oficiais quando aplicável."}</p>
               </div>
-              <button onClick={() => setShowEditSchedule(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+              <button onClick={closeScheduleEditor} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
             </div>
             <div className="grid gap-5 lg:grid-cols-[1fr_1fr]">
               <section className="rounded-xl border border-border p-4">
@@ -2976,25 +3033,51 @@ export function SchedulesPage() {
                   <StatusBadge status={scheduleEditForm.status} />
                 </div>
                 <div className="grid gap-4 md:grid-cols-2">
-                  <label className="block md:col-span-2">
+                  <div className="block md:col-span-2">
                     <span className="mb-1.5 block text-sm font-bold text-muted">Colaborador</span>
-                    <select disabled={!canManageSchedules} value={scheduleEditForm.employeeId} onChange={(event) => {
-                      const value = event.target.value;
-                      const employee = employeeOptions.find((item) => item.id === value);
-                      const times = configuredTimesForShift(employee?.shift ?? scheduleEditForm.shift);
-                      setScheduleEditForm({
-                        ...scheduleEditForm,
-                        employeeId: value,
-                        shift: employee?.shift ?? scheduleEditForm.shift,
-                        startsAt: scheduleEditRequiresTime ? times.startsAt : scheduleEditForm.startsAt,
-                        endsAt: scheduleEditRequiresTime ? times.endsAt : scheduleEditForm.endsAt,
-                        lob: employee?.lob ?? scheduleEditForm.lob,
-                        supervisor: employee?.supervisor ?? scheduleEditForm.supervisor
-                      });
-                    }} className="h-11 w-full rounded-lg border border-border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500">
-                      {employeeOptions.map((employee) => <option key={employee.id} value={employee.id}>{employeeOptionLabel(employee)}</option>)}
-                    </select>
-                  </label>
+                    <div className="rounded-lg border border-border bg-white p-2">
+                      <input
+                        disabled={!canManageSchedules}
+                        value={scheduleEmployeeSearch}
+                        onChange={(event) => setScheduleEmployeeSearch(event.target.value)}
+                        className="h-10 w-full rounded-md border border-border px-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
+                        placeholder="Buscar por nome, WB/Login ou e-mail"
+                      />
+                      {selectedScheduleEmployee ? (
+                        <div className="mt-2 rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-800">
+                          Selecionado: {employeeOptionLabel(selectedScheduleEmployee)}
+                        </div>
+                      ) : (
+                        <div className="mt-2 rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
+                          Selecione um colaborador.
+                        </div>
+                      )}
+                      {canManageSchedules ? (
+                        <div className="mt-2 max-h-52 overflow-y-auto rounded-md border border-border bg-white">
+                          {loadingScheduleEmployeeSearch ? (
+                            <div className="px-3 py-3 text-sm font-semibold text-muted">Buscando colaboradores...</div>
+                          ) : filteredScheduleEmployeeOptions.length ? (
+                            filteredScheduleEmployeeOptions.map((employee) => (
+                              <button
+                                type="button"
+                                key={employee.id}
+                                onClick={() => selectScheduleEmployee(employee)}
+                                className={cn(
+                                  "block w-full px-3 py-2 text-left text-sm font-semibold transition hover:bg-blue-50",
+                                  employee.id === scheduleEditForm.employeeId ? "bg-blue-50 text-blue-700" : "text-navy-950"
+                                )}
+                              >
+                                <span className="block truncate">{employeeOptionLabel(employee)}</span>
+                                <span className="block truncate text-xs font-medium text-muted">{employee.lob} • {employee.shift} • {employee.status}</span>
+                              </button>
+                            ))
+                          ) : (
+                            <div className="px-3 py-3 text-sm font-semibold text-muted">Nenhum colaborador encontrado.</div>
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
                   <FormInput disabled={!canManageSchedules} label="Data" type="date" value={scheduleEditForm.date} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, date: value })} />
                   <FormSelect
                     disabled={!canManageSchedules}
