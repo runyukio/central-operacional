@@ -572,6 +572,31 @@ async function apiJson<T>(url: string, options?: RequestInit) {
   return payload;
 }
 
+function fileNameFromDisposition(disposition: string | null, fallback: string) {
+  if (!disposition) return fallback;
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) return decodeURIComponent(utf8Match[1].replace(/"/g, ""));
+  const plainMatch = disposition.match(/filename="?([^";]+)"?/i);
+  return plainMatch?.[1] ?? fallback;
+}
+
+async function downloadFile(url: string, fallbackFileName: string) {
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) throw new Error("Não foi possível baixar o template. Tente novamente.");
+  const blob = await response.blob();
+  if (!blob.size) throw new Error("Não foi possível baixar o template. Tente novamente.");
+  const fileName = fileNameFromDisposition(response.headers.get("Content-Disposition"), fallbackFileName);
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = fileName;
+  link.rel = "noopener";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+}
+
 function statusNeedsReason(status: string) {
   return attendanceReasonStatuses.includes(status);
 }
@@ -1636,6 +1661,7 @@ export function RegistrationApprovalsPage() {
   const [employeeImportError, setEmployeeImportError] = useState("");
   const [registrationSettings, setRegistrationSettings] = useState<SystemSettings | null>(null);
   const [importingEmployees, setImportingEmployees] = useState(false);
+  const [downloadingEmployeeTemplate, setDownloadingEmployeeTemplate] = useState(false);
   const [allowPartialEmployeeImport, setAllowPartialEmployeeImport] = useState(false);
   const [reviewingAction, setReviewingAction] = useState<"approve" | "reject" | "request_adjustment" | null>(null);
   const [deletingRegistration, setDeletingRegistration] = useState(false);
@@ -1739,6 +1765,19 @@ export function RegistrationApprovalsPage() {
     } finally {
       setImportingEmployees(false);
       if (employeeImportInputRef.current) employeeImportInputRef.current.value = "";
+    }
+  }
+
+  async function downloadEmployeeTemplate() {
+    setDownloadingEmployeeTemplate(true);
+    setMessage("");
+    try {
+      await downloadFile("/api/employee-registrations/template", "template_colaboradores.xlsx");
+    } catch (err) {
+      setMessageTone("error");
+      setMessage(err instanceof Error ? err.message : "Não foi possível baixar o template. Tente novamente.");
+    } finally {
+      setDownloadingEmployeeTemplate(false);
     }
   }
 
@@ -1889,10 +1928,10 @@ export function RegistrationApprovalsPage() {
               <Upload className="h-4 w-4" />
               Importar colaboradores
             </button>
-            <a href="/api/employee-registrations/template" className="premium-control flex h-11 items-center gap-2 px-4 text-sm font-extrabold text-navy-950">
+            <button type="button" disabled={downloadingEmployeeTemplate} onClick={downloadEmployeeTemplate} className="premium-control flex h-11 items-center gap-2 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-60">
               <Download className="h-4 w-4" />
-              Baixar template
-            </a>
+              {downloadingEmployeeTemplate ? "Baixando..." : "Baixar template"}
+            </button>
           </div>
         }
       />
@@ -2141,6 +2180,7 @@ export function SchedulesPage() {
   const [showAttendance, setShowAttendance] = useState(false);
   const [showEditSchedule, setShowEditSchedule] = useState(false);
   const [savingSchedule, setSavingSchedule] = useState(false);
+  const [downloadingScheduleTemplate, setDownloadingScheduleTemplate] = useState(false);
   const [imported, setImported] = useState("");
   const [scheduleRows, setScheduleRows] = useState<ScheduleGridRow[]>([]);
   const [scheduleEmployees, setScheduleEmployees] = useState<EmployeeClient[]>([]);
@@ -2649,6 +2689,18 @@ export function SchedulesPage() {
     return `/api/schedules/export?${params.toString()}`;
   }
 
+  async function downloadScheduleTemplate() {
+    setDownloadingScheduleTemplate(true);
+    setAttendanceMessage("");
+    try {
+      await downloadFile("/api/schedules/template", "template_escala_central_operacional.xlsx");
+    } catch (error) {
+      setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível baixar o template. Tente novamente.");
+    } finally {
+      setDownloadingScheduleTemplate(false);
+    }
+  }
+
   function updateManualTime(field: "actualStart" | "actualEnd", value: string) {
     const nextStart = field === "actualStart" ? value : workHourForm.actualStart;
     const nextEnd = field === "actualEnd" ? value : workHourForm.actualEnd;
@@ -2712,13 +2764,15 @@ export function SchedulesPage() {
               <Upload className="h-4 w-4" />
               Upload Excel
             </button>
-            <a
-              href="/api/schedules/template"
-              className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft"
+            <button
+              type="button"
+              disabled={downloadingScheduleTemplate}
+              onClick={downloadScheduleTemplate}
+              className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Download className="h-4 w-4" />
-              Baixar Template
-            </a>
+              {downloadingScheduleTemplate ? "Baixando..." : "Baixar Template"}
+            </button>
             <a
               href={scheduleExportUrl()}
               className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft"
@@ -3239,6 +3293,7 @@ export function WorkHoursPage() {
   const [preview, setPreview] = useState<(WorkHourPreview & { fileName: string }) | null>(null);
   const [showPreview, setShowPreview] = useState(false);
   const [savingImport, setSavingImport] = useState(false);
+  const [downloadingWorkHourTemplate, setDownloadingWorkHourTemplate] = useState(false);
   const [selectedRow, setSelectedRow] = useState<WorkHourRow | null>(null);
   const [showAdjustment, setShowAdjustment] = useState(false);
   const [showReview, setShowReview] = useState(false);
@@ -3318,6 +3373,18 @@ export function WorkHoursPage() {
       setMessage(error instanceof Error ? error.message : "Não foi possível validar o arquivo de horas.");
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function downloadWorkHourTemplate() {
+    setDownloadingWorkHourTemplate(true);
+    setMessage("");
+    try {
+      await downloadFile("/api/work-hours/template", "template_horas_operacionais.xlsx");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível baixar o template. Tente novamente.");
+    } finally {
+      setDownloadingWorkHourTemplate(false);
     }
   }
 
@@ -3432,10 +3499,10 @@ export function WorkHoursPage() {
                 Upload horas
               </button>
             ) : null}
-            <a href="/api/work-hours/template" className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft">
+            <button type="button" disabled={downloadingWorkHourTemplate} onClick={downloadWorkHourTemplate} className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft disabled:cursor-not-allowed disabled:opacity-60">
               <Download className="h-4 w-4" />
-              Baixar template
-            </a>
+              {downloadingWorkHourTemplate ? "Baixando..." : "Baixar template"}
+            </button>
             {["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(normalizedRole) ? (
               <a href={exportUrl()} className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft">
                 <FileText className="h-4 w-4" />

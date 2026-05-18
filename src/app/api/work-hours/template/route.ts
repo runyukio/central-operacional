@@ -26,10 +26,14 @@ export async function GET() {
   XLSX.utils.book_append_sheet(workbook, worksheet, "Horas");
   const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
 
-  return new NextResponse(new Uint8Array(buffer), {
+  const body = new Uint8Array(buffer);
+
+  return new NextResponse(body, {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": 'attachment; filename="template_horas_operacionais.xlsx"'
+      "Content-Disposition": 'attachment; filename="template_horas_operacionais.xlsx"',
+      "Content-Length": String(body.byteLength),
+      "Cache-Control": "no-store"
     }
   });
 }
