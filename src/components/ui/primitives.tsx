@@ -36,11 +36,11 @@ export function PageHeader({
           </div>
         ) : null}
         <div className="min-w-0">
-          <h1 className="truncate text-[22px] font-extrabold leading-tight tracking-tight text-navy-950 md:text-[24px]">{title}</h1>
-          <p className="mt-1 text-[13px] font-medium text-muted">{description}</p>
+          <h1 className="break-words text-[21px] font-extrabold leading-tight tracking-tight text-navy-950 md:text-[23px]">{title}</h1>
+          <p className="mt-1 text-[13px] font-medium leading-snug text-muted">{description}</p>
         </div>
       </div>
-      {actions ? <div>{actions}</div> : null}
+      {actions ? <div className="min-w-0">{actions}</div> : null}
     </div>
   );
 }
@@ -73,15 +73,15 @@ export function StatCard({
   }[tone];
 
   return (
-    <div className="card group relative flex min-h-[104px] items-center gap-3 overflow-hidden p-4">
+    <div className="card group relative flex min-h-[104px] min-w-0 items-center gap-3 overflow-hidden p-4">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-blue-200 to-transparent opacity-70" />
       <div className={cn("grid h-12 w-12 shrink-0 place-items-center rounded-xl shadow-soft ring-1 ring-white", toneClass)}>
         <Icon className="h-6 w-6" />
       </div>
       <div className="min-w-0 flex-1">
-        <p className="text-[12px] font-extrabold leading-snug text-navy-950">{title}</p>
-        <div className="mt-1.5 flex items-end gap-2">
-          <p className="text-[23px] font-black leading-none tracking-tight text-navy-950">{value}</p>
+        <p className="max-w-full break-words text-[12px] font-extrabold leading-tight text-navy-950">{title}</p>
+        <div className="mt-1.5 flex min-w-0 items-end gap-2">
+          <p className="min-w-0 break-words text-[23px] font-black leading-none tracking-tight text-navy-950">{value}</p>
           {sparkline}
         </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
@@ -111,9 +111,9 @@ export function StatusBadge({ status }: { status: string }) {
             : "bg-slate-100 text-slate-600";
 
   return (
-    <span className={cn("inline-flex items-center gap-1.5 rounded-md border border-current/10 px-2 py-1 text-[11px] font-extrabold leading-none", styles)}>
-      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-75" />
-      {status}
+    <span className={cn("inline-flex max-w-full items-center gap-1.5 rounded-md border border-current/10 px-2 py-1 text-[11px] font-extrabold leading-tight", styles)}>
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-75" />
+      <span className="min-w-0 break-words">{status}</span>
     </span>
   );
 }
@@ -165,8 +165,8 @@ export function FilterBar({
 export function Panel({ title, children, action }: { title: string; children: React.ReactNode; action?: string }) {
   return (
     <section className="card overflow-hidden">
-      <div className="flex items-center justify-between border-b border-border/75 bg-gradient-to-b from-white to-slate-50/65 px-4 py-3">
-        <h2 className="text-[14px] font-black tracking-tight text-navy-950">{title}</h2>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/75 bg-gradient-to-b from-white to-slate-50/65 px-4 py-3">
+        <h2 className="min-w-0 break-words text-[14px] font-black leading-tight tracking-tight text-navy-950">{title}</h2>
         {action ? (
           <button className="flex items-center gap-1 text-sm font-extrabold text-blue-600">
             {action}
@@ -216,12 +216,12 @@ export function SimpleTable({
   rows: Array<Array<React.ReactNode>>;
 }) {
   return (
-    <div className="overflow-x-auto rounded-lg border border-border bg-white">
+    <div className="max-w-full overflow-x-auto rounded-lg border border-border bg-white">
       <table className="w-full min-w-[720px] border-collapse text-left text-[13px]">
         <thead>
           <tr className="border-b border-border bg-gradient-to-b from-slate-50 to-white text-[11px] font-black uppercase tracking-wide text-muted">
             {columns.map((column) => (
-              <th key={column} className="px-3 py-2.5">
+              <th key={column} className="px-3 py-2.5 leading-tight break-words">
                 {column}
               </th>
             ))}
@@ -232,7 +232,7 @@ export function SimpleTable({
           {rows.map((row, rowIndex) => (
             <tr key={rowIndex} className="transition-colors hover:bg-blue-50/35">
               {row.map((cell, cellIndex) => (
-                <td key={cellIndex} className="px-3 py-2.5 align-middle font-medium text-navy-950">
+                <td key={cellIndex} className="max-w-[260px] break-words px-3 py-2.5 align-middle font-medium leading-snug text-navy-950">
                   {cell}
                 </td>
               ))}
@@ -295,9 +295,9 @@ export function DonutLegend({ total, items }: { total: string | number; items: A
 
 export function MetricPill({ value, label }: { value: number | string; label: string }) {
   return (
-    <div className="rounded-lg border border-border bg-gradient-to-b from-white to-slate-50/70 p-3 text-center shadow-soft">
-      <p className="text-xl font-black tracking-tight text-navy-950">{typeof value === "number" ? formatNumber(value) : value}</p>
-      <p className="mt-1 text-[11px] font-extrabold uppercase tracking-wide text-muted">{label}</p>
+    <div className="min-w-0 rounded-lg border border-border bg-gradient-to-b from-white to-slate-50/70 p-3 text-center shadow-soft">
+      <p className="min-w-0 break-words text-[19px] font-black leading-tight tracking-tight text-navy-950">{typeof value === "number" ? formatNumber(value) : value}</p>
+      <p className="mx-auto mt-1 max-w-full whitespace-normal break-words text-[10.5px] font-extrabold uppercase leading-tight tracking-wide text-muted">{label}</p>
     </div>
   );
 }

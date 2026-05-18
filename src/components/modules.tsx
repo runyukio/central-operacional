@@ -2151,6 +2151,7 @@ export function SchedulesPage() {
   const [pendingJustifications, setPendingJustifications] = useState<AttendanceItem[]>([]);
   const [scheduleActorRole, setScheduleActorRole] = useState("COLABORADOR");
   const [schedulePeriod, setSchedulePeriod] = useState({ month: 5, year: 2026 });
+  const [schedulePagination, setSchedulePagination] = useState({ page: 1, limit: 75, total: 0, totalPages: 1 });
   const [scheduleFilters, setScheduleFilters] = useState({ collaborator: "", lob: "Todos", supervisor: "", shift: "Todos", status: "Todos", roleTitle: "" });
   const [daysInMonth, setDaysInMonth] = useState(31);
   const [scheduleEditForm, setScheduleEditForm] = useState({
@@ -2209,7 +2210,7 @@ export function SchedulesPage() {
   });
 
   useEffect(() => {
-    void refreshSchedules();
+    void refreshSchedules(1);
     void refreshAttendanceForSchedulePeriod();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [schedulePeriod.month, schedulePeriod.year, scheduleFilters.lob]);
@@ -2236,21 +2237,24 @@ export function SchedulesPage() {
     }
   }
 
-  async function refreshSchedules() {
+  async function refreshSchedules(pageOverride = schedulePagination.page, filtersOverride = scheduleFilters) {
     try {
       const params = new URLSearchParams({
         month: String(schedulePeriod.month),
         year: String(schedulePeriod.year),
-        collaborator: scheduleFilters.collaborator,
-        lob: scheduleFilters.lob,
-        supervisor: scheduleFilters.supervisor,
-        shift: scheduleFilters.shift,
-        status: scheduleFilters.status,
-        roleTitle: scheduleFilters.roleTitle
+        page: String(pageOverride),
+        limit: String(schedulePagination.limit),
+        collaborator: filtersOverride.collaborator,
+        lob: filtersOverride.lob,
+        supervisor: filtersOverride.supervisor,
+        shift: filtersOverride.shift,
+        status: filtersOverride.status,
+        roleTitle: filtersOverride.roleTitle
       });
-      const payload = await apiJson<{ data: { scheduleGridRows: typeof scheduleGridRows; imports: Array<{ id: string; fileName: string; importedRows: number; status: string; createdAt: string; user: string }>; attendanceSummary?: AttendanceSummary; daysInMonth?: number }; actor?: { role: string; name: string } }>(`/api/schedules?${params.toString()}`);
+      const payload = await apiJson<{ data: { scheduleGridRows: typeof scheduleRows; imports: Array<{ id: string; fileName: string; importedRows: number; status: string; createdAt: string; user: string }>; attendanceSummary?: AttendanceSummary; daysInMonth?: number; pagination?: { page: number; limit: number; total: number; totalPages: number } }; actor?: { role: string; name: string } }>(`/api/schedules?${params.toString()}`);
       setScheduleActorRole(payload.actor?.role ?? "COLABORADOR");
       setScheduleRows(payload.data.scheduleGridRows);
+      setSchedulePagination(payload.data.pagination ?? { page: pageOverride, limit: schedulePagination.limit, total: payload.data.scheduleGridRows.length, totalPages: 1 });
       setDaysInMonth(payload.data.daysInMonth ?? 31);
       if (payload.data.scheduleGridRows.length) {
         setAttendanceForm((current) => payload.data.scheduleGridRows.some((row) => row.employee.id === current.employeeId) ? current : { ...current, employeeId: payload.data.scheduleGridRows[0].employee.id });
@@ -2261,6 +2265,7 @@ export function SchedulesPage() {
       void refreshAttendanceForSchedulePeriod();
     } catch {
       setScheduleRows([]);
+      setSchedulePagination((current) => ({ ...current, page: 1, total: 0, totalPages: 1 }));
     }
   }
 
@@ -2592,6 +2597,9 @@ export function SchedulesPage() {
   const conflictCount = scheduleCellValues.filter((value) => value === "Conflito").length;
   const unscheduledCount = scheduleCellValues.filter((value) => value === "Sem escala" || value === "Descoberto").length;
   const plannedHours = scheduledCells * 8;
+  const scheduleTotalRows = schedulePagination.total || scheduleRows.length;
+  const schedulePageStart = scheduleTotalRows && scheduleRows.length ? (schedulePagination.page - 1) * schedulePagination.limit + 1 : 0;
+  const schedulePageEnd = scheduleTotalRows ? Math.min(schedulePagination.page * schedulePagination.limit, scheduleTotalRows) : 0;
   const monthLabel = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(schedulePeriod.year, schedulePeriod.month - 1, 1)));
   const employeeOptions = scheduleEmployees.length ? scheduleEmployees : scheduleRows.map((row) => row.employee as EmployeeClient);
   const configuredLobs = scheduleSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? [];
@@ -2682,8 +2690,17 @@ export function SchedulesPage() {
           <select value={scheduleFilters.status} onChange={(event) => setScheduleFilters({ ...scheduleFilters, status: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">{["Todos", ...scheduleStatusOptions].map((item) => <option key={item}>{item}</option>)}</select>
           <input value={scheduleFilters.roleTitle} onChange={(event) => setScheduleFilters({ ...scheduleFilters, roleTitle: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Cargo/Função" />
           <div className="grid grid-cols-2 gap-2">
-            <button onClick={() => void refreshSchedules()} className="rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
-            <button onClick={() => { setScheduleFilters({ collaborator: "", lob: "Todos", supervisor: "", shift: "Todos", status: "Todos", roleTitle: "" }); setTimeout(() => void refreshSchedules(), 0); }} className="rounded-lg border border-border bg-white px-3 text-sm font-bold">Limpar</button>
+            <button onClick={() => void refreshSchedules(1)} className="rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
+            <button
+              onClick={() => {
+                const clearedFilters = { collaborator: "", lob: "Todos", supervisor: "", shift: "Todos", status: "Todos", roleTitle: "" };
+                setScheduleFilters(clearedFilters);
+                void refreshSchedules(1, clearedFilters);
+              }}
+              className="rounded-lg border border-border bg-white px-3 text-sm font-bold"
+            >
+              Limpar
+            </button>
           </div>
         </div>
       </div>
@@ -2742,8 +2759,8 @@ export function SchedulesPage() {
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_410px]">
         <section className="card overflow-hidden">
-          <div className="grid gap-4 border-b border-border p-5 md:grid-cols-4 xl:grid-cols-7">
-            <MetricPill value={scheduleRows.length} label="Colaboradores" />
+          <div className="grid gap-3 border-b border-border p-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 min-[1800px]:grid-cols-7">
+            <MetricPill value={scheduleTotalRows} label="Colaboradores" />
             <MetricPill value={scheduleRows.length ? "100%" : "0%"} label="Cobertura Planejada" />
             <MetricPill value={`${attendanceSummary?.coverageRate ?? 0}%`} label="Cobertura Real" />
             <MetricPill value={`${plannedHours}h`} label="Horas Programadas" />
@@ -2813,11 +2830,15 @@ export function SchedulesPage() {
             ))}
           </div>
           <div className="flex flex-wrap items-center justify-between gap-4 border-t border-border px-5 py-4 text-sm text-muted">
-            <span>{scheduleRows.length ? `Exibindo 1 a ${Math.min(scheduleRows.length, 12)} de ${scheduleRows.length} registros` : "Nenhum registro de escala"}</span>
-            <div className="flex gap-2">
-              {[1, 2, 3, 10].map((page) => (
-                <button key={page} className={cn("h-9 w-9 rounded-lg border border-border font-bold", page === 1 ? "bg-blue-600 text-white" : "bg-white text-navy-950")}>{page}</button>
-              ))}
+            <span>{scheduleTotalRows ? `Exibindo ${schedulePageStart}-${schedulePageEnd} de ${scheduleTotalRows} registros` : "Nenhum registro de escala"}</span>
+            <div className="flex flex-wrap gap-2">
+              <button disabled={schedulePagination.page <= 1} onClick={() => void refreshSchedules(1)} className="h-9 rounded-lg border border-border bg-white px-3 text-xs font-bold text-navy-950 disabled:cursor-not-allowed disabled:opacity-45">Primeira</button>
+              <button disabled={schedulePagination.page <= 1} onClick={() => void refreshSchedules(schedulePagination.page - 1)} className="h-9 rounded-lg border border-border bg-white px-3 text-xs font-bold text-navy-950 disabled:cursor-not-allowed disabled:opacity-45">Anterior</button>
+              <span className="grid h-9 min-w-24 place-items-center rounded-lg border border-blue-100 bg-blue-50 px-3 text-xs font-extrabold text-blue-700">
+                {schedulePagination.page} de {schedulePagination.totalPages}
+              </span>
+              <button disabled={schedulePagination.page >= schedulePagination.totalPages} onClick={() => void refreshSchedules(schedulePagination.page + 1)} className="h-9 rounded-lg border border-border bg-white px-3 text-xs font-bold text-navy-950 disabled:cursor-not-allowed disabled:opacity-45">Próxima</button>
+              <button disabled={schedulePagination.page >= schedulePagination.totalPages} onClick={() => void refreshSchedules(schedulePagination.totalPages)} className="h-9 rounded-lg border border-border bg-white px-3 text-xs font-bold text-navy-950 disabled:cursor-not-allowed disabled:opacity-45">Última</button>
             </div>
           </div>
         </section>

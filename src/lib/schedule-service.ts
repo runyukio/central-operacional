@@ -155,7 +155,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
     const role = normalizeRole(actor.role);
     if (role === "COLABORADOR" && !user.employeeProfile) return emptyOperationalSchedules();
     const period = resolvePeriod(query);
-    const page = Math.max(1, Number(query.page) || 1);
+    const requestedPage = Math.max(1, Number(query.page) || 1);
     const limit = Math.min(100, Math.max(25, Number(query.limit) || 75));
     const scheduleWhere: Prisma.ScheduleWhereInput = {
       deletedAt: null,
@@ -163,75 +163,94 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       ...(query.status && query.status !== "Todos" ? { status: uiToScheduleStatus[query.status] ?? undefined } : {})
     };
     const search = query.collaborator?.trim();
-    const employees = await prisma.employeeProfile.findMany({
-      where:
-        role === "COLABORADOR" && user.employeeProfile
-          ? { id: user.employeeProfile.id, deletedAt: null }
-          : {
-            deletedAt: null,
-            ...employeeFilters(query, search)
-          },
-      include: {
-        user: { select: { email: true } },
-        lob: { select: { name: true } },
+    const employeeWhere: Prisma.EmployeeProfileWhereInput =
+      role === "COLABORADOR" && user.employeeProfile
+        ? { id: user.employeeProfile.id }
+        : employeeFilters(query, search);
+    const scheduleRows = await prisma.schedule.findMany({
+      where: {
+        ...scheduleWhere,
+        employee: employeeWhere
+      },
+      select: {
+        id: true,
+        employeeId: true,
+        date: true,
+        startsAt: true,
+        endsAt: true,
+        status: true,
+        observation: true,
         shift: { select: { name: true } },
-        supervisor: { select: { fullName: true } },
-        schedules: {
-          where: scheduleWhere,
+        attendanceRecords: {
+          orderBy: { updatedAt: "desc" },
+          take: 1,
+          select: { status: true, absenceReason: true, isJustified: true, updatedAt: true }
+        },
+        workHourRecords: {
+          orderBy: { updatedAt: "desc" },
+          take: 1,
           select: {
             id: true,
-            date: true,
-            startsAt: true,
-            endsAt: true,
+            plannedStart: true,
+            plannedEnd: true,
+            plannedHours: true,
+            actualStart: true,
+            actualEnd: true,
+            breakMinutes: true,
+            actualHours: true,
+            effectiveStart: true,
+            effectiveEnd: true,
+            effectiveBreakMinutes: true,
+            effectiveHours: true,
+            differenceMinutes: true,
             status: true,
+            source: true,
             observation: true,
-            shift: { select: { name: true } },
-            attendanceRecords: {
-              orderBy: { updatedAt: "desc" },
+            updatedAt: true,
+            adjustments: {
+              orderBy: { createdAt: "desc" },
               take: 1,
-              select: { status: true, absenceReason: true, isJustified: true, updatedAt: true }
-            },
-            workHourRecords: {
-              orderBy: { updatedAt: "desc" },
-              take: 1,
-              select: {
-                id: true,
-                plannedStart: true,
-                plannedEnd: true,
-                plannedHours: true,
-                actualStart: true,
-                actualEnd: true,
-                breakMinutes: true,
-                actualHours: true,
-                effectiveStart: true,
-                effectiveEnd: true,
-                effectiveBreakMinutes: true,
-                effectiveHours: true,
-                differenceMinutes: true,
-                status: true,
-                source: true,
-                observation: true,
-                updatedAt: true,
-                adjustments: {
-                  orderBy: { createdAt: "desc" },
-                  take: 1,
-                  select: { id: true, status: true, reason: true, createdAt: true }
-                }
-              }
+              select: { id: true, status: true, reason: true, createdAt: true }
             }
-          },
-          orderBy: { date: "asc" }
+          }
+        },
+        employee: {
+          select: {
+            id: true,
+            fullName: true,
+            wbLogin: true,
+            scheduleType: true,
+            operationalStatus: true,
+            admissionDate: true,
+            roleTitle: true,
+            user: { select: { email: true } },
+            lob: { select: { name: true } },
+            shift: { select: { name: true } },
+            supervisor: { select: { fullName: true } }
+          }
         }
       },
-      orderBy: { fullName: "asc" },
-      skip: role === "COLABORADOR" ? 0 : (page - 1) * limit,
-      take: role === "COLABORADOR" ? 1 : limit
+      orderBy: [{ date: "asc" }, { employeeId: "asc" }]
     });
 
-    const visibleEmployees = role === "COLABORADOR" ? employees : employees.filter((employee) => employee.schedules.length > 0);
-    if (!visibleEmployees.length) return emptyOperationalSchedules(period);
+    const grouped = new Map<string, { employee: (typeof scheduleRows)[number]["employee"]; schedules: typeof scheduleRows }>();
+    scheduleRows.forEach((schedule) => {
+      const current = grouped.get(schedule.employeeId);
+      if (current) {
+        current.schedules.push(schedule);
+      } else {
+        grouped.set(schedule.employeeId, { employee: schedule.employee, schedules: [schedule] });
+      }
+    });
+    const groupedEmployees = Array.from(grouped.values()).sort((a, b) => a.employee.fullName.localeCompare(b.employee.fullName, "pt-BR"));
+    const totalSchedules = groupedEmployees.length;
+    const totalPages = Math.max(1, Math.ceil(totalSchedules / limit));
+    const page = totalSchedules > 0 && requestedPage > totalPages ? 1 : requestedPage;
+    const visibleEmployees = role === "COLABORADOR" ? groupedEmployees.slice(0, 1) : groupedEmployees.slice((page - 1) * limit, page * limit);
 
-    const scheduleGridRows = visibleEmployees.map((employee) => ({
+    const scheduleGridRows = visibleEmployees.map(({ employee, schedules }) => {
+      const scheduleByDay = new Map(schedules.map((item) => [item.date.getUTCDate(), item]));
+      return {
       employee: {
         id: employee.id,
         name: employee.fullName,
@@ -250,7 +269,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       },
       days: Array.from({ length: period.daysInMonth }).map((_, index) => {
         const day = index + 1;
-        const schedule = employee.schedules.find((item) => item.date.getUTCDate() === day);
+        const schedule = scheduleByDay.get(day);
         if (!schedule) return "Sem escala";
         const attendanceLabel = attendanceDisplayLabel(schedule.attendanceRecords);
         if (attendanceLabel) return attendanceLabel;
@@ -259,7 +278,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       }),
       plannedTimes: Array.from({ length: period.daysInMonth }).map((_, index) => {
         const day = index + 1;
-        const schedule = employee.schedules.find((item) => item.date.getUTCDate() === day);
+        const schedule = scheduleByDay.get(day);
         return schedule
           ? {
             scheduleId: schedule.id,
@@ -271,7 +290,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       }),
       workHours: Array.from({ length: period.daysInMonth }).map((_, index) => {
         const day = index + 1;
-        const schedule = employee.schedules.find((item) => item.date.getUTCDate() === day);
+        const schedule = scheduleByDay.get(day);
         const record = schedule?.workHourRecords?.[0];
         if (!record) return null;
         const adjustment = record.adjustments?.[0];
@@ -298,9 +317,35 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
           updatedAt: formatDateTime(record.updatedAt)
         };
       })
-    }));
+    };
+    });
 
-    const own = user.employeeProfile ? employees.find((employee) => employee.id === user.employeeProfile?.id) : null;
+    const own = user.employeeProfile
+      ? await prisma.employeeProfile.findUnique({
+        where: { id: user.employeeProfile.id },
+        select: {
+          id: true,
+          fullName: true,
+          scheduleType: true,
+          lob: { select: { name: true } },
+          shift: { select: { name: true } },
+          schedules: {
+            where: scheduleWhere,
+            select: {
+              date: true,
+              status: true,
+              shift: { select: { name: true } },
+              attendanceRecords: {
+                orderBy: { updatedAt: "desc" },
+                take: 1,
+                select: { status: true, absenceReason: true, isJustified: true, updatedAt: true }
+              }
+            },
+            orderBy: { date: "asc" }
+          }
+        }
+      })
+      : null;
     const scheduleDays = calendarCells(period.year, period.month).map(({ date, outside }) => {
       const schedule = outside ? undefined : own?.schedules.find((item) => item.date.getUTCDate() === date);
       const label = schedule
@@ -334,7 +379,13 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       attendanceSummary: await getAttendanceSummaryFromDb(period, query.lob),
       month: period.month,
       year: period.year,
-      daysInMonth: period.daysInMonth
+      daysInMonth: period.daysInMonth,
+      pagination: {
+        page,
+        limit,
+        total: totalSchedules,
+        totalPages
+      }
     };
   } catch (error) {
     recordErrorLog({ userEmail: actor.email, code: "SCHEDULE_LIST_DB_FALLBACK", message: error instanceof Error ? error.message : "Falha ao listar escalas", action: "SCHEDULE_LIST", severity: "WARNING" });
@@ -342,7 +393,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
   }
 }
 
-function emptyOperationalSchedules(period = resolvePeriod({})) {
+function emptyOperationalSchedules(period = resolvePeriod({}), pagination = { page: 1, limit: 75, total: 0, totalPages: 1 }) {
   return {
     scheduleDays: calendarCells(period.year, period.month).map(({ date, outside }) => ({ date, outside, shift: "Sem escala", label: "Sem escala" })),
     scheduleGridRows: [],
@@ -351,17 +402,8 @@ function emptyOperationalSchedules(period = resolvePeriod({})) {
     month: period.month,
     year: period.year,
     daysInMonth: period.daysInMonth,
-    attendanceSummary: {
-      scheduled: 0,
-      present: 0,
-      absent: 0,
-      delays: 0,
-      earlyLeaves: 0,
-      unjustified: 0,
-      absRate: "0%",
-      presenceRate: "0%",
-      reasonBreakdown: []
-    }
+    attendanceSummary: emptyAttendanceSummary(),
+    pagination
   };
 }
 
