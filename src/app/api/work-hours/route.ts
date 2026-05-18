@@ -9,6 +9,7 @@ const adjustmentSchema = z.object({
   workHourRecordId: z.string().min(1),
   requestedActualStart: z.string().optional(),
   requestedActualEnd: z.string().optional(),
+  requestedBreakMinutes: z.coerce.number().optional(),
   requestedActualHours: z.coerce.number().optional(),
   reason: z.string().optional(),
   justification: z.string().optional()

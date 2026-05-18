@@ -98,7 +98,7 @@ import {
 import { cn, formatCurrency, initials } from "@/lib/utils";
 
 const scheduleImportColumns = ["wb_login", "nome", "email", "lob", "supervisor", "data", "turno", "entrada", "saida", "status", "observacao"] as const;
-const workHourImportColumns = ["wb_login", "data", "entrada_real", "saida_real", "horas_realizadas", "sistema_origem", "observacao", "nome", "email", "lob", "supervisor_wb_login", "turno"] as const;
+const workHourImportColumns = ["wb_login", "data", "entrada_real", "saida_real", "pausa_minutos", "horas_realizadas", "sistema_origem", "observacao", "nome", "email", "lob", "supervisor_wb_login", "turno"] as const;
 const scheduleStatusOptions = ["Escalado", "Presente", "Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Férias", "Treinamento", "Folga", "Troca aprovada", "Venda de folga aprovada", "Folga aprovada", "Sem escala", "Erro de escala"] as const;
 const attendanceReasonStatuses = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala"];
 const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Venda de folga aprovada"];
@@ -246,12 +246,15 @@ type WorkHourRow = {
   plannedHours: number;
   actualStart: string;
   actualEnd: string;
+  breakMinutes: number;
   actualHours: number;
   adjustedStart: string;
   adjustedEnd: string;
+  adjustedBreakMinutes: number;
   adjustedHours: number;
   effectiveStart: string;
   effectiveEnd: string;
+  effectiveBreakMinutes: number;
   effectiveHours: number;
   differenceMinutes: number;
   status: string;
@@ -262,7 +265,7 @@ type WorkHourRow = {
   observation: string;
 };
 
-type ScheduleWorkHourCell = Pick<WorkHourRow, "id" | "plannedStart" | "plannedEnd" | "plannedHours" | "actualStart" | "actualEnd" | "actualHours" | "effectiveStart" | "effectiveEnd" | "effectiveHours" | "differenceMinutes" | "status" | "rawStatus" | "source" | "observation" | "adjustmentId" | "adjustmentStatus"> & {
+type ScheduleWorkHourCell = Pick<WorkHourRow, "id" | "plannedStart" | "plannedEnd" | "plannedHours" | "actualStart" | "actualEnd" | "breakMinutes" | "actualHours" | "effectiveStart" | "effectiveEnd" | "effectiveBreakMinutes" | "effectiveHours" | "differenceMinutes" | "status" | "rawStatus" | "source" | "observation" | "adjustmentId" | "adjustmentStatus"> & {
   updatedAt?: string;
 };
 
@@ -284,6 +287,7 @@ type WorkHourSummary = {
   approvedAdjustments: number;
   rejectedAdjustments: number;
   adjustedHours: number;
+  breakMinutes: number;
 };
 
 type WorkHourPreview = {
@@ -298,7 +302,7 @@ type WorkHourPreview = {
   missingEmployees: number;
   scheduleFoundRows: number;
   noScheduleRows: number;
-  validation: Array<{ rowNumber: number; wbLogin: string; employeeName: string; date: string; errors: string[]; warnings: string[]; action: string; status: string }>;
+  validation: Array<{ rowNumber: number; wbLogin: string; employeeName: string; date: string; breakMinutes: number; errors: string[]; warnings: string[]; action: string; status: string }>;
 };
 
 type RegistrationItem = {
@@ -600,6 +604,13 @@ function formatHourDifference(minutes: number) {
   const hours = Math.floor(absolute / 60);
   const remainingMinutes = absolute % 60;
   return hours ? `${sign}${hours}h${String(remainingMinutes).padStart(2, "0")}` : `${sign}${remainingMinutes}min`;
+}
+
+function formatBreakDuration(minutes: number) {
+  const safeMinutes = Math.max(0, Math.round(minutes || 0));
+  const hours = Math.floor(safeMinutes / 60);
+  const remainingMinutes = safeMinutes % 60;
+  return hours ? `${hours}h${String(remainingMinutes).padStart(2, "0")}` : `${remainingMinutes}min`;
 }
 
 function statusFromScheduleCell(value: string) {
@@ -1419,6 +1430,7 @@ export function MySchedulePage() {
                       {workHour ? (
                         <div className="rounded-md border border-blue-100 bg-white/80 px-2 py-1 text-[11px] font-bold text-navy-950">
                           <p>Real: {workHour.actualStart || "--"}-{workHour.actualEnd || "--"} • {workHour.effectiveHours}h</p>
+                          <p className="text-muted">Pausa: {formatBreakDuration(workHour.effectiveBreakMinutes ?? workHour.breakMinutes ?? 0)}</p>
                           <p className={cn(workHour.differenceMinutes < 0 ? "text-red-600" : workHour.differenceMinutes > 0 ? "text-emerald-600" : "text-muted")}>{workHour.status} • {workHour.differenceMinutes}min</p>
                         </div>
                       ) : null}
@@ -1482,6 +1494,7 @@ export function MySchedulePage() {
               <div className="grid gap-3">
                 <MetricPill value={`${myWorkHourSummary.plannedHours}h`} label="Horas previstas" />
                 <MetricPill value={`${myWorkHourSummary.actualHours}h`} label="Horas realizadas" />
+                <MetricPill value={formatBreakDuration(myWorkHourSummary.breakMinutes ?? 0)} label="Pausas totais" />
                 <MetricPill value={`${myWorkHourSummary.differenceHours}h`} label="Diferença" />
                 <MetricPill value={`${myWorkHourSummary.adjustedHours}h`} label="Horas ajustadas" />
                 <MetricPill value={myWorkHourSummary.pendingAdjustments} label="Ajustes pendentes" />
@@ -2081,7 +2094,9 @@ export function SchedulesPage() {
     plannedHours: 0,
     actualStart: "",
     actualEnd: "",
+    breakMinutes: "0",
     actualHours: "",
+    effectiveBreakMinutes: 0,
     effectiveHours: 0,
     differenceMinutes: 0,
     status: "Sem horas",
@@ -2095,6 +2110,7 @@ export function SchedulesPage() {
   const [workHourAdjustmentForm, setWorkHourAdjustmentForm] = useState({
     requestedActualStart: "",
     requestedActualEnd: "",
+    requestedBreakMinutes: "0",
     requestedActualHours: "",
     reason: "Erro de apontamento",
     justification: ""
@@ -2250,7 +2266,9 @@ export function SchedulesPage() {
       plannedHours: hourCell?.plannedHours ?? plannedHours,
       actualStart: hourCell?.actualStart ?? "",
       actualEnd: hourCell?.actualEnd ?? "",
+      breakMinutes: String(hourCell?.breakMinutes ?? hourCell?.effectiveBreakMinutes ?? 0),
       actualHours: hourCell?.actualHours ? String(hourCell.actualHours) : "",
+      effectiveBreakMinutes: hourCell?.effectiveBreakMinutes ?? hourCell?.breakMinutes ?? 0,
       effectiveHours: hourCell?.effectiveHours ?? 0,
       differenceMinutes: hourCell?.differenceMinutes ?? 0,
       status: hourCell?.status ?? "Sem horas",
@@ -2263,6 +2281,7 @@ export function SchedulesPage() {
     setWorkHourAdjustmentForm({
       requestedActualStart: hourCell?.actualStart ?? "",
       requestedActualEnd: hourCell?.actualEnd ?? "",
+      requestedBreakMinutes: String(hourCell?.effectiveBreakMinutes ?? hourCell?.breakMinutes ?? 0),
       requestedActualHours: hourCell?.actualHours ? String(hourCell.actualHours) : "",
       reason: "Erro de apontamento",
       justification: ""
@@ -2350,6 +2369,15 @@ export function SchedulesPage() {
       setAttendanceMessage("Entrada real e saída real são obrigatórias.");
       return;
     }
+    const parsedBreakMinutes = Number(workHourForm.breakMinutes.replace(",", ".") || 0);
+    if (!Number.isFinite(parsedBreakMinutes) || parsedBreakMinutes < 0) {
+      setAttendanceMessage("Pausa deve ser um número válido e não pode ser negativa.");
+      return;
+    }
+    if (parsedBreakMinutes > minutesBetweenTimes(workHourForm.actualStart, workHourForm.actualEnd)) {
+      setAttendanceMessage("A pausa não pode ser maior que o período entre entrada e saída.");
+      return;
+    }
     if (workHourForm.recordId && workHourForm.source && !/^manual$/i.test(workHourForm.source) && !confirmOverwrite) {
       const confirmed = window.confirm("Já existe um registro de horas importado para este dia. Deseja sobrescrever manualmente?");
       if (!confirmed) return;
@@ -2365,6 +2393,7 @@ export function SchedulesPage() {
           date: scheduleEditForm.date,
           actualStart: workHourForm.actualStart,
           actualEnd: workHourForm.actualEnd,
+          breakMinutes: parsedBreakMinutes,
           actualHours: workHourForm.actualHours ? Number(workHourForm.actualHours.replace(",", ".")) : undefined,
           observation: workHourForm.observation,
           source: "MANUAL",
@@ -2378,7 +2407,9 @@ export function SchedulesPage() {
         plannedHours: payload.data.plannedHours,
         actualStart: payload.data.actualStart,
         actualEnd: payload.data.actualEnd,
+        breakMinutes: String(payload.data.breakMinutes ?? 0),
         actualHours: String(payload.data.actualHours),
+        effectiveBreakMinutes: payload.data.effectiveBreakMinutes ?? payload.data.breakMinutes ?? 0,
         effectiveHours: payload.data.effectiveHours,
         differenceMinutes: payload.data.differenceMinutes,
         status: payload.data.status,
@@ -2414,6 +2445,7 @@ export function SchedulesPage() {
           workHourRecordId: workHourForm.recordId,
           requestedActualStart: workHourAdjustmentForm.requestedActualStart || undefined,
           requestedActualEnd: workHourAdjustmentForm.requestedActualEnd || undefined,
+          requestedBreakMinutes: workHourAdjustmentForm.requestedBreakMinutes ? Number(workHourAdjustmentForm.requestedBreakMinutes.replace(",", ".")) : undefined,
           requestedActualHours: workHourAdjustmentForm.requestedActualHours ? Number(workHourAdjustmentForm.requestedActualHours.replace(",", ".")) : undefined,
           reason: workHourAdjustmentForm.reason,
           justification: workHourAdjustmentForm.justification
@@ -2494,8 +2526,11 @@ export function SchedulesPage() {
   const isScheduleSupervisor = normalizedScheduleActorRole === "SUPERVISOR";
   const selectedScheduleEmployee = employeeOptions.find((employee) => employee.id === scheduleEditForm.employeeId);
   const canEditOfficialWorkHours = canManageSchedules;
-  const manualActualHoursPreview = workHourForm.actualStart && workHourForm.actualEnd
-    ? roundDecimal(minutesBetweenTimes(workHourForm.actualStart, workHourForm.actualEnd) / 60)
+  const manualBreakMinutesPreview = Math.max(0, Number(workHourForm.breakMinutes.replace(",", ".") || 0) || 0);
+  const manualGrossMinutesPreview = workHourForm.actualStart && workHourForm.actualEnd ? minutesBetweenTimes(workHourForm.actualStart, workHourForm.actualEnd) : 0;
+  const manualBreakIsInvalid = Boolean(workHourForm.actualStart && workHourForm.actualEnd && manualBreakMinutesPreview > manualGrossMinutesPreview);
+  const manualActualHoursPreview = workHourForm.actualStart && workHourForm.actualEnd && !manualBreakIsInvalid
+    ? roundDecimal((manualGrossMinutesPreview - manualBreakMinutesPreview) / 60)
     : workHourForm.actualHours ? Number(workHourForm.actualHours.replace(",", ".")) || 0 : 0;
   const manualDifferencePreview = manualActualHoursPreview && workHourForm.plannedHours
     ? Math.round((manualActualHoursPreview - workHourForm.plannedHours) * 60)
@@ -2516,8 +2551,17 @@ export function SchedulesPage() {
   function updateManualTime(field: "actualStart" | "actualEnd", value: string) {
     const nextStart = field === "actualStart" ? value : workHourForm.actualStart;
     const nextEnd = field === "actualEnd" ? value : workHourForm.actualEnd;
-    const calculatedHours = nextStart && nextEnd ? String(roundDecimal(minutesBetweenTimes(nextStart, nextEnd) / 60)) : workHourForm.actualHours;
+    const breakMinutes = Math.max(0, Number(workHourForm.breakMinutes.replace(",", ".") || 0) || 0);
+    const grossMinutes = nextStart && nextEnd ? minutesBetweenTimes(nextStart, nextEnd) : 0;
+    const calculatedHours = nextStart && nextEnd && breakMinutes <= grossMinutes ? String(roundDecimal((grossMinutes - breakMinutes) / 60)) : workHourForm.actualHours;
     setWorkHourForm({ ...workHourForm, [field]: value, actualHours: calculatedHours });
+  }
+
+  function updateManualBreak(value: string) {
+    const breakMinutes = Math.max(0, Number(value.replace(",", ".") || 0) || 0);
+    const grossMinutes = workHourForm.actualStart && workHourForm.actualEnd ? minutesBetweenTimes(workHourForm.actualStart, workHourForm.actualEnd) : 0;
+    const calculatedHours = workHourForm.actualStart && workHourForm.actualEnd && breakMinutes <= grossMinutes ? String(roundDecimal((grossMinutes - breakMinutes) / 60)) : workHourForm.actualHours;
+    setWorkHourForm({ ...workHourForm, breakMinutes: value, actualHours: calculatedHours });
   }
 
   return (
@@ -2846,6 +2890,7 @@ export function SchedulesPage() {
                 </div>
                 <div className="grid gap-3 md:grid-cols-3">
                   <MetricPill value={workHourForm.plannedHours ? `${workHourForm.plannedHours}h` : "-"} label="Previsto" />
+                  <MetricPill value={formatBreakDuration(manualBreakMinutesPreview)} label="Pausa" />
                   <MetricPill value={manualActualHoursPreview ? `${manualActualHoursPreview}h` : workHourForm.effectiveHours ? `${workHourForm.effectiveHours}h` : "-"} label="Realizado" />
                   <MetricPill value={manualActualHoursPreview || workHourForm.differenceMinutes ? formatHourDifference(manualDifferencePreview) : "-"} label="Diferença" />
                 </div>
@@ -2854,7 +2899,8 @@ export function SchedulesPage() {
                   <FormInput disabled label="Saída prevista" value={workHourForm.plannedEnd} onChange={() => undefined} />
                   <FormInput disabled={!canEditOfficialWorkHours} label="Entrada real" value={workHourForm.actualStart} onChange={(value) => updateManualTime("actualStart", value)} />
                   <FormInput disabled={!canEditOfficialWorkHours} label="Saída real" value={workHourForm.actualEnd} onChange={(value) => updateManualTime("actualEnd", value)} />
-                  <FormInput disabled={!canEditOfficialWorkHours} label="Horas realizadas" value={workHourForm.actualHours} onChange={(value) => setWorkHourForm({ ...workHourForm, actualHours: value })} />
+                  <FormInput disabled={!canEditOfficialWorkHours} label="Pausa/Intervalo (min)" value={workHourForm.breakMinutes} onChange={updateManualBreak} />
+                  <FormInput disabled={!canEditOfficialWorkHours} label="Horas realizadas líquidas" value={workHourForm.actualHours} onChange={(value) => setWorkHourForm({ ...workHourForm, actualHours: value })} />
                   <FormInput disabled label="Origem" value={workHourForm.source || "Sem origem"} onChange={() => undefined} />
                   <label className="md:col-span-2">
                     <span className="mb-1.5 block text-sm font-bold text-muted">Observação das horas</span>
@@ -2862,7 +2908,7 @@ export function SchedulesPage() {
                   </label>
                 </div>
                 <div className={cn("mt-4 rounded-lg border px-4 py-3 text-sm font-semibold", manualStatusPreview === "OK" ? "border-emerald-100 bg-emerald-50 text-emerald-700" : manualStatusPreview === "Divergente" ? "border-orange-100 bg-orange-50 text-orange-700" : "border-blue-100 bg-blue-50 text-blue-700")}>
-                  {workHourForm.plannedHours ? `Status previsto após salvar: ${manualStatusPreview}.` : "Este colaborador não possui escala vinculada nesta data; WFM/Admin pode lançar horas com alerta."}
+                  {manualBreakIsInvalid ? "A pausa não pode ser maior que o período entre entrada e saída." : workHourForm.plannedHours ? `Status previsto após salvar: ${manualStatusPreview}.` : "Este colaborador não possui escala vinculada nesta data; WFM/Admin pode lançar horas com alerta."}
                   {workHourForm.adjustmentStatus && workHourForm.adjustmentStatus !== "Sem ajuste" ? ` Ajuste: ${workHourForm.adjustmentStatus}.` : ""}
                 </div>
                 {canEditOfficialWorkHours ? (
@@ -2882,18 +2928,19 @@ export function SchedulesPage() {
                       <p className="text-xs font-semibold text-amber-800">A solicitação vai para WFM/Admin e só vira hora oficial após aprovação.</p>
                     </div>
                     {workHourForm.recordId ? (
-                      <div className="grid gap-4 md:grid-cols-3">
+                      <div className="grid gap-4 md:grid-cols-4">
                         <FormInput label="Nova entrada" value={workHourAdjustmentForm.requestedActualStart} onChange={(value) => setWorkHourAdjustmentForm({ ...workHourAdjustmentForm, requestedActualStart: value })} />
                         <FormInput label="Nova saída" value={workHourAdjustmentForm.requestedActualEnd} onChange={(value) => setWorkHourAdjustmentForm({ ...workHourAdjustmentForm, requestedActualEnd: value })} />
-                        <FormInput label="Novas horas" value={workHourAdjustmentForm.requestedActualHours} onChange={(value) => setWorkHourAdjustmentForm({ ...workHourAdjustmentForm, requestedActualHours: value })} />
-                        <div className="md:col-span-3">
+                        <FormInput label="Nova pausa (min)" value={workHourAdjustmentForm.requestedBreakMinutes} onChange={(value) => setWorkHourAdjustmentForm({ ...workHourAdjustmentForm, requestedBreakMinutes: value })} />
+                        <FormInput label="Novas horas líquidas" value={workHourAdjustmentForm.requestedActualHours} onChange={(value) => setWorkHourAdjustmentForm({ ...workHourAdjustmentForm, requestedActualHours: value })} />
+                        <div className="md:col-span-4">
                           <FormSelect label="Motivo" value={workHourAdjustmentForm.reason} options={["Erro de apontamento", "Sistema não capturou horário", "Feedback/treinamento durante o turno", "Problema técnico", "Ajuste manual autorizado", "Erro no upload", "Atividade operacional fora do sistema", "Outro"]} onChange={(value) => setWorkHourAdjustmentForm({ ...workHourAdjustmentForm, reason: value })} />
                         </div>
-                        <label className="md:col-span-3">
+                        <label className="md:col-span-4">
                           <span className="mb-1.5 block text-sm font-bold text-muted">Justificativa</span>
                           <textarea value={workHourAdjustmentForm.justification} onChange={(event) => setWorkHourAdjustmentForm({ ...workHourAdjustmentForm, justification: event.target.value })} className="min-h-24 w-full rounded-lg border border-border bg-white p-3 outline-none" />
                         </label>
-                        <button disabled={savingWorkHourAdjustment} onClick={requestScheduleWorkHourAdjustment} className="md:col-span-3 rounded-lg bg-amber-500 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
+                        <button disabled={savingWorkHourAdjustment} onClick={requestScheduleWorkHourAdjustment} className="md:col-span-4 rounded-lg bg-amber-500 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
                           {savingWorkHourAdjustment ? "Enviando..." : "Solicitar ajuste para WFM/Admin"}
                         </button>
                       </div>
@@ -3071,6 +3118,7 @@ export function WorkHoursPage() {
   const [adjustmentForm, setAdjustmentForm] = useState({
     requestedActualStart: "",
     requestedActualEnd: "",
+    requestedBreakMinutes: "0",
     requestedActualHours: "",
     reason: "Erro de apontamento",
     justification: "",
@@ -3168,6 +3216,7 @@ export function WorkHoursPage() {
     setAdjustmentForm({
       requestedActualStart: row.effectiveHours ? row.actualStart : "",
       requestedActualEnd: row.effectiveHours ? row.actualEnd : "",
+      requestedBreakMinutes: String(row.effectiveBreakMinutes ?? row.breakMinutes ?? 0),
       requestedActualHours: row.effectiveHours ? String(row.effectiveHours).replace(".", ",") : "",
       reason: "Erro de apontamento",
       justification: "",
@@ -3179,7 +3228,7 @@ export function WorkHoursPage() {
   function openReview(row: WorkHourRow, action: "approve" | "reject") {
     setSelectedRow(row);
     setAdjustmentAction(action);
-    setAdjustmentForm({ ...adjustmentForm, rejectionReason: "" });
+    setAdjustmentForm({ ...adjustmentForm, requestedBreakMinutes: String(row.effectiveBreakMinutes ?? row.breakMinutes ?? 0), rejectionReason: "" });
     setShowReview(true);
   }
 
@@ -3194,6 +3243,7 @@ export function WorkHoursPage() {
           workHourRecordId: selectedRow.id,
           requestedActualStart: adjustmentForm.requestedActualStart || undefined,
           requestedActualEnd: adjustmentForm.requestedActualEnd || undefined,
+          requestedBreakMinutes: adjustmentForm.requestedBreakMinutes ? Number(adjustmentForm.requestedBreakMinutes.replace(",", ".")) : undefined,
           requestedActualHours: Number(adjustmentForm.requestedActualHours.replace(",", ".")) || undefined,
           reason: adjustmentForm.reason,
           justification: adjustmentForm.justification
@@ -3279,6 +3329,7 @@ export function WorkHoursPage() {
         <MetricPill value={summary?.okRecords ?? 0} label="Registros OK" />
         <MetricPill value={summary?.divergentRecords ?? 0} label="Divergentes" />
         <MetricPill value={summary?.noScheduleRecords ?? 0} label="Sem escala vinculada" />
+        <MetricPill value={formatBreakDuration(summary?.breakMinutes ?? 0)} label="Pausas totais" />
         <MetricPill value={`${summary?.adjustedHours ?? 0}h`} label="Horas ajustadas" />
       </div>
 
@@ -3314,10 +3365,10 @@ export function WorkHoursPage() {
         </div>
         <div className="overflow-x-auto">
           {rows.length ? (
-            <table className="w-full min-w-[1280px] text-left text-sm">
+            <table className="w-full min-w-[1360px] text-left text-sm">
               <thead className="border-b border-border bg-slate-50 text-xs font-bold uppercase tracking-wide text-muted">
                 <tr>
-                  {["Data", "Colaborador", "WB/Login", "LOB", "Supervisor", "Turno", "Previsto", "Realizado", "Efetivo", "Dif.", "Status", "Origem", "Ajuste", "Ações"].map((column) => <th key={column} className="px-4 py-3">{column}</th>)}
+                  {["Data", "Colaborador", "WB/Login", "LOB", "Supervisor", "Turno", "Previsto", "Realizado", "Pausa", "Efetivo", "Dif.", "Status", "Origem", "Ajuste", "Ações"].map((column) => <th key={column} className="px-4 py-3">{column}</th>)}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border bg-white">
@@ -3331,6 +3382,7 @@ export function WorkHoursPage() {
                     <td className="px-4 py-3">{row.shift || "-"}</td>
                     <td className="px-4 py-3">{row.plannedStart || "--"} às {row.plannedEnd || "--"} • {row.plannedHours || 0}h</td>
                     <td className="px-4 py-3">{row.actualStart || "--"} às {row.actualEnd || "--"} • {row.actualHours}h</td>
+                    <td className="px-4 py-3">{formatBreakDuration(row.effectiveBreakMinutes ?? row.breakMinutes ?? 0)}</td>
                     <td className="px-4 py-3">{row.effectiveHours}h</td>
                     <td className={cn("px-4 py-3 font-bold", row.differenceMinutes < 0 ? "text-red-600" : row.differenceMinutes > 0 ? "text-emerald-600" : "text-muted")}>{row.differenceMinutes}min</td>
                     <td className="px-4 py-3"><StatusBadge status={row.status} /></td>
@@ -3385,6 +3437,7 @@ export function WorkHoursPage() {
                       <th className="px-3 py-2">WB/Login</th>
                       <th className="px-3 py-2">Colaborador</th>
                       <th className="px-3 py-2">Data</th>
+                      <th className="px-3 py-2">Pausa</th>
                       <th className="px-3 py-2">Status</th>
                       <th className="px-3 py-2">Ação</th>
                       <th className="px-3 py-2">Erros/alertas</th>
@@ -3397,6 +3450,7 @@ export function WorkHoursPage() {
                         <td className="px-3 py-2">{row.wbLogin}</td>
                         <td className="px-3 py-2">{row.employeeName || "-"}</td>
                         <td className="px-3 py-2">{row.date || "-"}</td>
+                        <td className="px-3 py-2">{formatBreakDuration(row.breakMinutes ?? 0)}</td>
                         <td className="px-3 py-2"><StatusBadge status={row.status} /></td>
                         <td className="px-3 py-2">{row.action}</td>
                         <td className="px-3 py-2">
@@ -3434,14 +3488,15 @@ export function WorkHoursPage() {
               </div>
               <button onClick={() => setShowAdjustment(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
             </div>
-            <div className="grid gap-4 md:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-4">
               <FormInput label="Nova entrada" value={adjustmentForm.requestedActualStart} onChange={(value) => setAdjustmentForm({ ...adjustmentForm, requestedActualStart: value })} />
               <FormInput label="Nova saída" value={adjustmentForm.requestedActualEnd} onChange={(value) => setAdjustmentForm({ ...adjustmentForm, requestedActualEnd: value })} />
-              <FormInput label="Novas horas" value={adjustmentForm.requestedActualHours} onChange={(value) => setAdjustmentForm({ ...adjustmentForm, requestedActualHours: value })} />
-              <div className="md:col-span-3">
+              <FormInput label="Nova pausa (min)" value={adjustmentForm.requestedBreakMinutes} onChange={(value) => setAdjustmentForm({ ...adjustmentForm, requestedBreakMinutes: value })} />
+              <FormInput label="Novas horas líquidas" value={adjustmentForm.requestedActualHours} onChange={(value) => setAdjustmentForm({ ...adjustmentForm, requestedActualHours: value })} />
+              <div className="md:col-span-4">
                 <FormSelect label="Motivo" value={adjustmentForm.reason} options={["Erro de apontamento", "Sistema não capturou horário", "Feedback/treinamento durante o turno", "Problema técnico", "Ajuste manual autorizado", "Erro no upload", "Atividade operacional fora do sistema", "Outro"]} onChange={(value) => setAdjustmentForm({ ...adjustmentForm, reason: value })} />
               </div>
-              <label className="md:col-span-3">
+              <label className="md:col-span-4">
                 <span className="mb-1.5 block text-sm font-bold text-muted">Justificativa</span>
                 <textarea value={adjustmentForm.justification} onChange={(event) => setAdjustmentForm({ ...adjustmentForm, justification: event.target.value })} className="min-h-28 w-full rounded-lg border border-border p-3 outline-none" />
               </label>

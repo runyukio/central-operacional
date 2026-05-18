@@ -1127,12 +1127,15 @@ model WorkHourRecord {
   plannedHours      Float?
   actualStart       String?
   actualEnd         String?
+  breakMinutes      Int                    @default(0)
   actualHours       Float
   adjustedStart     String?
   adjustedEnd       String?
+  adjustedBreakMinutes Int?
   adjustedHours     Float?
   effectiveStart    String?
   effectiveEnd      String?
+  effectiveBreakMinutes Int                @default(0)
   effectiveHours    Float
   differenceMinutes Int?
   status            WorkHourRecordStatus   @default(IMPORTED)
@@ -1165,9 +1168,11 @@ model WorkHourAdjustmentRequest {
   status               WorkHourAdjustmentStatus @default(ABERTO)
   currentActualStart   String?
   currentActualEnd     String?
+  currentBreakMinutes  Int?
   currentActualHours   Float
   requestedActualStart String?
   requestedActualEnd   String?
+  requestedBreakMinutes Int?
   requestedActualHours Float
   reason               String
   justification        String

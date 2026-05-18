@@ -10,6 +10,7 @@ const manualWorkHourSchema = z.object({
   date: z.string().min(1),
   actualStart: z.string().optional(),
   actualEnd: z.string().optional(),
+  breakMinutes: z.coerce.number().optional(),
   actualHours: z.coerce.number().optional(),
   observation: z.string().optional(),
   source: z.string().optional(),

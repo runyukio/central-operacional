@@ -1,0 +1,8 @@
+ALTER TABLE "WorkHourRecord"
+  ADD COLUMN IF NOT EXISTS "breakMinutes" INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS "adjustedBreakMinutes" INTEGER,
+  ADD COLUMN IF NOT EXISTS "effectiveBreakMinutes" INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE "WorkHourAdjustmentRequest"
+  ADD COLUMN IF NOT EXISTS "currentBreakMinutes" INTEGER,
+  ADD COLUMN IF NOT EXISTS "requestedBreakMinutes" INTEGER;

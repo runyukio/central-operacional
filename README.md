@@ -619,17 +619,17 @@ Regras atuais:
 ### Horas Operacionais
 
 - O módulo `/horas-operacionais` permite comparar escala planejada com horas realizadas importadas por Excel ou lançadas manualmente pela célula da escala.
-- O template fica em `/api/work-hours/template` e usa `wb_login + data` como chave operacional. Colunas obrigatórias: `wb_login`, `data`, `entrada_real`, `saida_real` e `horas_realizadas`.
-- O preview valida linha a linha: WB/Login obrigatório e existente, data válida, horários válidos, horas válidas, duplicidade no arquivo e atualização de registro já existente.
+- O template fica em `/api/work-hours/template` e usa `wb_login + data` como chave operacional. Colunas obrigatórias: `wb_login`, `data`, `entrada_real`, `saida_real` e `horas_realizadas`; `pausa_minutos` é opcional e, quando vazio, vale `0`.
+- O preview valida linha a linha: WB/Login obrigatório e existente, data válida, horários válidos, pausa válida, horas líquidas válidas, duplicidade no arquivo e atualização de registro já existente. Se `horas_realizadas` divergir de `saida_real - entrada_real - pausa_minutos`, a linha recebe alerta.
 - WB/Login inexistente bloqueia a linha. Registro sem escala vinculada vira alerta (`Sem escala`) e pode ser importado por WFM/Admin mediante confirmação.
 - WFM/Admin/Gestão fazem upload, aprovam/recusam ajustes e exportam CSV. Supervisor visualiza registros e solicita ajuste, mas não altera a hora oficial diretamente.
-- Na tela Escalas, WFM/Admin podem clicar no dia do colaborador, abrir a seção `Horas`, lançar ou corrigir entrada real, saída real, horas realizadas e observação. O sistema cria/atualiza `WorkHourRecord` com `source = MANUAL`, recalcula diferença/status, grava histórico e AuditLog.
+- Na tela Escalas, WFM/Admin podem clicar no dia do colaborador, abrir a seção `Horas`, lançar ou corrigir entrada real, saída real, pausa/intervalo, horas realizadas líquidas e observação. O sistema cria/atualiza `WorkHourRecord` com `source = MANUAL`, recalcula diferença/status descontando a pausa, grava histórico e AuditLog.
 - Se já existir hora importada para o mesmo colaborador/data, a sobrescrita manual exige confirmação. Supervisor vê as horas no mesmo modal e usa apenas `Solicitar ajuste de horas`.
 - Quando Supervisor solicita ajuste, o `WorkHourRecord` fica como `Ajuste solicitado` e uma pendência é criada para WFM/Admin.
-- Ao aprovar, WFM/Admin atualiza as horas ajustadas e efetivas, recalcula diferença e grava histórico/AuditLog. Ao recusar, as horas originais permanecem.
-- Minha Escala mostra as horas importadas no calendário diário e troca o card de Resumo de Horas por dados reais do período quando houver `WorkHourRecord`.
-- A listagem e a exportação CSV de horas respeitam filtros aplicados, incluindo origem (`MANUAL` ou `upload-horas`), e saem em `/api/work-hours/export`.
-- A migration do módulo é `202605171330_work_hours_module`. Em ambiente online, aplicar com `npx prisma migrate deploy`; localmente, usar `npx prisma migrate dev`.
+- Ao aprovar, WFM/Admin atualiza entrada, saída, pausa ajustada e horas efetivas, recalcula diferença com horas líquidas e grava histórico/AuditLog. Ao recusar, as horas originais permanecem.
+- Minha Escala mostra as horas importadas no calendário diário, exibe pausa por dia e inclui pausas totais no Resumo de Horas quando houver `WorkHourRecord`.
+- A listagem e a exportação CSV de horas respeitam filtros aplicados, incluindo origem (`MANUAL` ou `upload-horas`), incluem `pausa_minutos`, `pausa_formatada` e horas líquidas, e saem em `/api/work-hours/export`.
+- As migrations do módulo são `202605171330_work_hours_module` e `202605181030_add_work_hour_break_minutes`. Em ambiente online, aplicar com `npx prisma migrate deploy`; localmente, usar `npx prisma migrate dev`.
 
 Limitações temporárias:
 
