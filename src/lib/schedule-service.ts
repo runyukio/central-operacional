@@ -17,6 +17,7 @@ const uiToScheduleStatus: Record<string, ScheduleStatus> = {
   Afastado: "AFASTADO",
   Férias: "FERIAS",
   Treinamento: "TREINAMENTO",
+  Nesting: "NESTING",
   Folga: "FOLGA",
   "Troca aprovada": "TROCA_APROVADA",
   "Venda de folga aprovada": "VENDA_FOLGA_APROVADA",
@@ -38,6 +39,7 @@ const allowedScheduleImportStatusKeys = new Set([
   "AFASTADO",
   "FERIAS",
   "TREINAMENTO",
+  "NESTING",
   "FOLGA",
   "TROCA_APROVADA",
   "VENDA_DE_FOLGA_APROVADA",
@@ -333,7 +335,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         const day = index + 1;
         const schedule = scheduleByDay.get(day);
         if (!schedule) return "Sem escala";
-        const attendanceLabel = attendanceDisplayLabel(schedule.attendanceRecords);
+        const attendanceLabel = scheduleStatusRequiresJustification(schedule.status) ? attendanceDisplayLabel(schedule.attendanceRecords) : null;
         if (attendanceLabel) return attendanceLabel;
         if (schedule.status === "ESCALADO") return schedule.shift?.name ?? "Escalado";
         return scheduleToUiStatus[schedule.status] ?? schedule.status;
@@ -412,7 +414,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
     const scheduleDays = calendarCells(period.year, period.month).map(({ date, outside }) => {
       const schedule = outside ? undefined : own?.schedules.find((item) => item.date.getUTCDate() === date);
       const label = schedule
-        ? attendanceDisplayLabel(schedule.attendanceRecords) ?? (schedule.status === "ESCALADO" ? schedule.shift?.name ?? "Escalado" : scheduleToUiStatus[schedule.status] ?? "Escalado")
+        ? (scheduleStatusRequiresJustification(schedule.status) ? attendanceDisplayLabel(schedule.attendanceRecords) : null) ?? (schedule.status === "ESCALADO" ? schedule.shift?.name ?? "Escalado" : scheduleToUiStatus[schedule.status] ?? "Escalado")
         : "Sem escala";
       return { date, outside, shift: label, label };
     });
@@ -536,8 +538,9 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
       let attendanceRecord: { id: string } | null = null;
       if (uiToAttendanceStatus[input.status]) {
         attendanceRecord = (await upsertAttendance(tx, user.id, employee.id, schedule.id, date, input)) ?? null;
-      } else {
-        await resolveAttendanceForScheduleStatus(tx, user.id, employee.id, schedule.id, date, input.status);
+      }
+      if (!requiresReason(input.status)) {
+        await resolveAttendanceForScheduleStatus(tx, user.id, employee.id, schedule.id, date, input.status, attendanceRecord?.id);
       }
       await syncWorkHourRecordToSchedule(tx, schedule);
 
@@ -1087,13 +1090,14 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
     }
     const records = await prisma.attendanceRecord.findMany({
       where: attendanceWhere,
-      include: { employee: { include: { shift: true } }, registeredBy: true },
+      include: { employee: { include: { shift: true } }, registeredBy: true, schedule: { select: { status: true, deletedAt: true } } },
       orderBy: { registeredAt: "desc" },
       take: 100
     });
+    const activePendingRecords = records.filter(isActivePendingJustificationRecord);
 
     return {
-      data: records.map((record) => ({
+      data: activePendingRecords.map((record) => ({
         id: record.id,
         employeeId: record.employeeId,
         employeeName: record.employee.fullName,
@@ -1136,7 +1140,7 @@ function validateScheduleEdit(input: ScheduleEditInput) {
   if (!input.employeeId) return "Colaborador obrigatório.";
   if (!input.date) return "Data obrigatória.";
   if (!input.status) return "Status obrigatório.";
-  if (needsTime(input.status) && (!input.shift || !input.startsAt || !input.endsAt)) return "Turno, entrada e saída são obrigatórios para Escalado ou Presente.";
+  if (needsTime(input.status) && (!input.shift || !input.startsAt || !input.endsAt)) return "Turno, entrada e saída são obrigatórios para Escalado, Presente ou Nesting.";
   if (requiresReason(input.status) && !input.observation?.trim() && !input.pendingJustification) return "Motivo ou observação obrigatório para este status, exceto quando marcado como sem justificativa.";
   return "";
 }
@@ -1152,6 +1156,19 @@ function attendanceDisplayLabel(records: Array<{ status: AttendanceStatus | stri
   const status = scheduleToUiStatus[String(latest.status)] ?? String(latest.status);
   if (!requiresReason(status)) return null;
   return latest.isJustified ? `${status} justificada` : `${status} sem justificativa`;
+}
+
+function scheduleStatusRequiresJustification(status: ScheduleStatus | AttendanceStatus | string) {
+  const label = scheduleToUiStatus[String(status)] ?? String(status);
+  return requiresReason(label);
+}
+
+function isActivePendingJustificationRecord(record: { status: AttendanceStatus | string; isJustified: boolean; schedule?: { status: ScheduleStatus | string; deletedAt: Date | null } | null }) {
+  if (record.isJustified) return false;
+  if (!scheduleStatusRequiresJustification(record.status)) return false;
+  if (record.schedule?.deletedAt) return false;
+  if (record.schedule && !scheduleStatusRequiresJustification(record.schedule.status)) return false;
+  return true;
 }
 
 async function validateImportRowsInDb(rows: Array<Record<string, unknown>>): Promise<ScheduleImportValidation[]> {
@@ -1205,10 +1222,7 @@ async function validateImportRowsInDb(rows: Array<Record<string, unknown>>): Pro
     if (!hasExcelValue(row.lob)) errors.push("LOB é obrigatória.");
 
     const status = scheduleStatusFromImport(row.status);
-    const statusKey = normalizeImportKey(text(row.status));
-    if (statusKey === "NESTING") {
-      errors.push("Nesting não é um status de escala. Use Treinamento, Escalado, Folga ou outro status de escala válido.");
-    } else if (hasExcelValue(row.status) && !status) {
+    if (hasExcelValue(row.status) && !status) {
       errors.push(`Status inválido: ${text(row.status)}. Use um status de escala válido.`);
     }
     const startsAt = normalizeTime(row.entrada);
@@ -1296,11 +1310,11 @@ function requiresReason(status: string) {
 }
 
 function needsTime(status: string) {
-  return ["Escalado", "Presente", "Venda de folga aprovada"].includes(status);
+  return ["Escalado", "Presente", "Nesting", "Venda de folga aprovada"].includes(status);
 }
 
 function needsTimeDb(status: ScheduleStatus) {
-  return ["ESCALADO", "PRESENTE", "VENDA_FOLGA_APROVADA"].includes(status);
+  return ["ESCALADO", "PRESENTE", "NESTING", "VENDA_FOLGA_APROVADA"].includes(status);
 }
 
 function scheduleStatusFromImport(value: unknown) {
@@ -1400,23 +1414,34 @@ async function upsertAttendance(tx: Prisma.TransactionClient, userId: string, em
   return saved;
 }
 
-async function resolveAttendanceForScheduleStatus(tx: Prisma.TransactionClient, userId: string, employeeId: string, scheduleId: string, date: Date, scheduleStatus: string) {
+async function resolveAttendanceForScheduleStatus(tx: Prisma.TransactionClient, userId: string, employeeId: string, scheduleId: string, date: Date, scheduleStatus: string, keepRecordId?: string) {
+  const resolvedStatus = uiToAttendanceStatus[scheduleStatus] ?? "SEM_ESCALA";
   const records = await tx.attendanceRecord.findMany({
     where: {
       employeeId,
       date,
-      OR: [{ scheduleId }, { scheduleId: null }]
+      ...(keepRecordId ? { id: { not: keepRecordId } } : {})
     }
   });
   if (!records.length) return;
 
   for (const record of records) {
+    const alreadyResolved =
+      record.status === resolvedStatus &&
+      !record.absenceReason &&
+      !record.reasonCategory &&
+      !record.supervisorJustification &&
+      record.isJustified &&
+      !record.impactsAbs &&
+      !record.impactsCoverage;
+    if (alreadyResolved) continue;
+
     const before = serialize(record);
     const saved = await tx.attendanceRecord.update({
       where: { id: record.id },
       data: {
         scheduleId,
-        status: "SEM_ESCALA",
+        status: resolvedStatus,
         absenceReason: null,
         reasonCategory: null,
         supervisorJustification: null,
@@ -1560,10 +1585,11 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
       }
     }
   });
-  const plannedStatuses: ScheduleStatus[] = ["ESCALADO", "PRESENTE", "ATRASO", "SAIDA_ANTECIPADA", "AUSENTE", "FALTA", "VENDA_FOLGA_APROVADA"];
+  const plannedStatuses: ScheduleStatus[] = ["ESCALADO", "PRESENTE", "NESTING", "ATRASO", "SAIDA_ANTECIPADA", "AUSENTE", "FALTA", "VENDA_FOLGA_APROVADA"];
   const presentStatuses = ["PRESENTE", "VENDA_FOLGA_APROVADA"];
   const absentStatuses = ["AUSENTE", "FALTA", "AFASTADO", "SAIDA_ANTECIPADA"];
   const effectiveStatus = (schedule: (typeof schedules)[number]) => {
+    if (!scheduleStatusRequiresJustification(schedule.status)) return schedule.status;
     const latest = [...schedule.attendanceRecords].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
     return latest?.status ?? schedule.status;
   };
@@ -1573,7 +1599,11 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
   const denominator = planned || 1;
   const coverageRate = Math.round((present / denominator) * 1000) / 10;
   const absRate = Math.round((absent / denominator) * 1000) / 10;
-  const attendanceRecords = schedules.flatMap((schedule) => schedule.attendanceRecords);
+  const attendanceRecords = schedules.flatMap((schedule) =>
+    scheduleStatusRequiresJustification(schedule.status)
+      ? schedule.attendanceRecords.filter((record) => scheduleStatusRequiresJustification(record.status))
+      : []
+  );
   const byShift = schedules.reduce<Record<string, { planned: number; present: number; absent: number; gap: number }>>((acc, schedule) => {
     const shiftName = schedule.shift?.name ?? "Sem turno";
     acc[shiftName] ??= { planned: 0, present: 0, absent: 0, gap: 0 };

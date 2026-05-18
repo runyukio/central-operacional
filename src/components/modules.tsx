@@ -99,9 +99,9 @@ import { cn, formatCurrency, initials } from "@/lib/utils";
 
 const scheduleImportColumns = ["wb_login", "data", "status", "turno", "entrada", "saida", "lob"] as const;
 const workHourImportColumns = ["wb_login", "data", "entrada_real", "saida_real", "pausa_minutos", "horas_realizadas", "sistema_origem", "observacao", "nome", "email", "lob", "supervisor_wb_login", "turno"] as const;
-const scheduleStatusOptions = ["Escalado", "Presente", "Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Férias", "Treinamento", "Folga", "Troca aprovada", "Venda de folga aprovada", "Folga aprovada", "Sem escala", "Erro de escala"] as const;
+const scheduleStatusOptions = ["Escalado", "Presente", "Nesting", "Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Férias", "Treinamento", "Folga", "Troca aprovada", "Venda de folga aprovada", "Folga aprovada", "Sem escala", "Erro de escala"] as const;
 const attendanceReasonStatuses = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala"];
-const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Venda de folga aprovada"];
+const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Nesting", "Venda de folga aprovada"];
 const employeeOperationalStatusOptions = ["Ativo", "Nesting", "Inativo", "Pendente de cadastro", "Afastado", "Desligado", "Em treinamento", "Suspenso", "Online", "Em Atendimento", "Offline"];
 const absenceReasonOptions = ["Falta injustificada", "Atestado", "Problema de saúde", "Emergência familiar", "Problema técnico", "Falta de equipamento", "Problema de internet", "Atraso", "Saída antecipada", "Erro de escala", "Afastamento", "Outros"];
 const scheduleShiftTimes: Record<string, { startsAt: string; endsAt: string }> = {
@@ -2515,7 +2515,7 @@ export function SchedulesPage() {
       return;
     }
     if (statusNeedsTime(scheduleEditForm.status) && (!scheduleEditForm.shift || !scheduleEditForm.startsAt || !scheduleEditForm.endsAt)) {
-      setAttendanceMessage("Turno, entrada e saída são obrigatórios para Escalado ou Presente.");
+      setAttendanceMessage("Turno, entrada e saída são obrigatórios para Escalado, Presente ou Nesting.");
       return;
     }
     if (statusNeedsReason(scheduleEditForm.status) && !scheduleEditForm.observation.trim() && !scheduleEditForm.pendingJustification) {
@@ -4019,6 +4019,7 @@ function shiftTagClass(value: string) {
     Afastado: "bg-violet-50 text-violet-700",
     Férias: "bg-sky-50 text-sky-700",
     Treinamento: "bg-purple-50 text-purple-700",
+    Nesting: "bg-fuchsia-50 text-fuchsia-700",
     Folga: "bg-slate-100 text-slate-600",
     "Troca aprovada": "bg-teal-50 text-teal-700",
     "Venda de folga aprovada": "bg-amber-50 text-amber-700",
