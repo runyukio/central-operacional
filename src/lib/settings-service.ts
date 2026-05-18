@@ -137,7 +137,7 @@ export async function getSystemSettings(actor: Actor) {
           createdAt: user.createdAt.toISOString()
         })),
         lobs: lobs.map((lob) => ({ id: lob.id, name: lob.name, label: lob.name, description: lob.description ?? "", status: lobStatus[lob.id] ?? "ACTIVE", active: (lobStatus[lob.id] ?? "ACTIVE") === "ACTIVE", system: lob.name === "ALL", isSystem: lob.name === "ALL" })),
-        shifts: shifts.map((shift) => ({ id: shift.id, name: cleanShiftName(shift.name), startsAt: shift.startsAt, endsAt: shift.endsAt, color: shift.color, status: isBlockedShiftName(shift.name) ? "INACTIVE" : shiftStatus[shift.id] ?? "ACTIVE" })),
+        shifts: formatShiftsForSettings(shifts, shiftStatus),
         roles: roles.map((role) => ({ id: role.id, name: role.name, label: role.label, description: role.description ?? "", status: roleStatus[role.id] ?? "ACTIVE", essential: essentialRoles.includes(role.name), permissions: rolePermissions[role.name] ?? defaultPermissionsForRole(role.name) })),
         permissions: permissions.map((permission) => ({ id: permission.id, key: permission.key, label: permission.label, description: permission.description ?? "", status: permissionStatus[permission.id] ?? "ACTIVE" })),
         requestTypes: requestTypes.map((type) => ({ id: type.id, name: type.name, area: type.area, slaHours: type.slaHours, requiresApproval: type.requiresApproval, status: requestTypeStatus[type.id] ?? "ACTIVE", essential: essentialDayOffTypes.includes(type.name) })),
@@ -206,7 +206,7 @@ async function getLimitedSystemSettings() {
   return {
     ...emptySettings(),
     lobs: lobs.map((lob) => ({ id: lob.id, name: lob.name, label: lob.name, description: lob.description ?? "", status: lobStatus[lob.id] ?? "ACTIVE", active: (lobStatus[lob.id] ?? "ACTIVE") === "ACTIVE", system: lob.name === "ALL", isSystem: lob.name === "ALL" })),
-    shifts: shifts.map((shift) => ({ id: shift.id, name: cleanShiftName(shift.name), startsAt: shift.startsAt, endsAt: shift.endsAt, color: shift.color, status: isBlockedShiftName(shift.name) ? "INACTIVE" : shiftStatus[shift.id] ?? "ACTIVE" })),
+    shifts: formatShiftsForSettings(shifts, shiftStatus),
     requestTypes: requestTypes.map((type) => ({ id: type.id, name: type.name, area: type.area, slaHours: type.slaHours, requiresApproval: type.requiresApproval, status: requestTypeStatus[type.id] ?? "ACTIVE", essential: essentialDayOffTypes.includes(type.name) })),
     teams: teams.map((team) => ({ id: team.id, name: team.name, lobId: team.lobId, lob: team.lob.name, supervisorId: team.supervisorId ?? "", supervisorName: team.supervisor?.fullName ?? "", supervisorEmail: team.supervisor?.user?.email ?? "", status: teamStatus[team.id] ?? "ACTIVE" })),
     supervisors: employees
@@ -574,6 +574,21 @@ function upsertRoleTitle(current: RoleTitleConfig[], previousName: string | unde
 
 function upsertById(list: ConfigRule[], item: ConfigRule) {
   return list.some((entry) => entry.id === item.id) ? list.map((entry) => (entry.id === item.id ? item : entry)) : [...list, item];
+}
+
+function formatShiftsForSettings(shifts: Array<{ id: string; name: string; startsAt: string; endsAt: string; color: string }>, shiftStatus: Record<string, StatusValue>) {
+  const byCleanName = new Map<string, { id: string; name: string; startsAt: string; endsAt: string; color: string; status: StatusValue; exactCleanName: boolean }>();
+  for (const shift of shifts) {
+    const cleanName = cleanShiftName(shift.name);
+    if (!cleanName || isBlockedShiftName(cleanName)) continue;
+    const status = shiftStatus[shift.id] ?? "ACTIVE";
+    const exactCleanName = shift.name === cleanName;
+    const current = byCleanName.get(cleanName);
+    if (!current || (current.status !== "ACTIVE" && status === "ACTIVE") || (!current.exactCleanName && exactCleanName)) {
+      byCleanName.set(cleanName, { ...shift, name: cleanName, status, exactCleanName });
+    }
+  }
+  return Array.from(byCleanName.values()).map(({ exactCleanName: _exactCleanName, ...shift }) => shift);
 }
 
 async function auditSettings(tx: Prisma.TransactionClient, actorId: string, action: "CRIACAO" | "EDICAO", entity: string, entityId: string, payload: unknown, previousValue?: unknown) {

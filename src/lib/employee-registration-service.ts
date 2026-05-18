@@ -11,7 +11,7 @@ import {
 import { mapPrismaError } from "@/lib/api-errors";
 import { normalizeRole } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
-import { cleanShiftName, isSelectableShiftName } from "@/lib/shift-display";
+import { cleanShiftName, isBlockedShiftName, isSelectableShiftName, shiftLookupKey } from "@/lib/shift-display";
 import type { RegistrationInput } from "@/lib/registration-validation";
 
 const allowDemoDataFallback = process.env.ALLOW_DEMO_LOGIN === "true" || process.env.ALLOW_DEMO_DATA === "true";
@@ -926,7 +926,10 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     if (!hasImportValue(rows[index]?.criar_usuario)) errors.push("criar_usuario obrigatório.");
     if (row.lob && text(rows[index]?.lob).toLowerCase() === "todos") errors.push("Todos é opção de filtro. Para atuação transversal use a LOB real ALL.");
     if (row.lob && !validLobs.has(row.lob.toUpperCase())) errors.push(`LOB ${row.lob} não existe em Configurações.`);
-    if (row.shift && (!isSelectableShiftName(row.shift) || !validShifts.has(normalizeLookupKey(cleanShiftName(row.shift))))) errors.push(`Turno ${row.shift} não existe em Configurações.`);
+    if (row.shift && isBlockedShiftName(row.shift)) {
+      const blockedKey = shiftLookupKey(cleanShiftName(row.shift));
+      errors.push(blockedKey === "PLANTAO" ? "Plantão não é um turno ativo." : "Férias deve ser usada como status de escala, não como turno.");
+    } else if (row.shift && (!isSelectableShiftName(row.shift) || !validShifts.has(normalizeLookupKey(cleanShiftName(row.shift))))) errors.push(`Turno ${row.shift} não existe em Configurações.`);
     if (row.cpf && !isCpfFormat(row.cpf)) errors.push("CPF inválido.");
     if (!row.cpf) warnings.push("CPF pendente: o colaborador será importado com cadastro incompleto para complemento posterior.");
     if (row.createUser && !row.email) errors.push("E-mail obrigatório quando criar_usuario = sim.");

@@ -6,7 +6,7 @@ import { commitScheduleImport as commitMockScheduleImport, getAttendanceSummary 
 import { hasExcelValue, normalizeExcelDate, normalizeExcelTime } from "@/lib/excel-normalization";
 import { prisma } from "@/lib/prisma";
 import { normalizeRole } from "@/lib/permissions";
-import { cleanShiftName, isSelectableShiftName } from "@/lib/shift-display";
+import { cleanShiftName, isBlockedShiftName, isSelectableShiftName, shiftLookupKey } from "@/lib/shift-display";
 
 const uiToScheduleStatus: Record<string, ScheduleStatus> = {
   Escalado: "ESCALADO",
@@ -1287,7 +1287,10 @@ async function validateImportRowsInDb(rows: Array<Record<string, unknown>>): Pro
     const receivedShift = text(row.turno);
     const normalizedShift = cleanShiftName(receivedShift);
     const shift = normalizedShift && normalizedShift !== "Folga" ? shiftMap.get(normalizeImportKey(normalizedShift)) : null;
-    if (receivedShift && !isSelectableShiftName(receivedShift)) {
+    if (receivedShift && isBlockedShiftName(receivedShift)) {
+      const blockedKey = shiftLookupKey(normalizedShift);
+      errors.push(blockedKey === "PLANTAO" ? "Plantão não é um turno ativo." : "Férias deve ser usada como status de escala, não como turno.");
+    } else if (receivedShift && !isSelectableShiftName(receivedShift)) {
       errors.push(`Turno ${receivedShift} não é uma opção padrão válida.`);
     } else if (normalizedShift && normalizedShift !== "Folga" && !shift) {
       errors.push(`Turno ${receivedShift} não cadastrado.`);

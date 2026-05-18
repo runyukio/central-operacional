@@ -5427,7 +5427,6 @@ export function EmployeeMapPage() {
                   <p className="text-sm text-muted">Sem ausência recente registrada.</p>
                 )}
               </ProfileSection>
-              <div className="rounded-lg border border-border bg-slate-50 p-3 text-sm text-muted">Equipamentos, solicitações, histórico de alterações cadastrais e observações internas ficam consolidados conforme permissão.</div>
             </div> : <EmptyState title="Nenhum colaborador selecionado" description="Selecione um colaborador quando houver dados reais cadastrados." />}
           </Panel>
         </div>
