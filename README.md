@@ -573,6 +573,7 @@ Regras atuais:
 - A confirmação da importação de colaboradores é enviada em lotes menores para evitar timeout de servidor em bases grandes.
 - O preview mostra total de linhas, válidas, erros, alertas, usuários a criar, funcionários a criar, atualizações, duplicidades e ação por linha (`criar`, `atualizar` ou `ignorar`).
 - Duplicidades ativas de e-mail ou WB/Login bloqueiam a linha; CPF preenchido duplicado também bloqueia. Cadastros recusados/inativos podem ser reaproveitados pela importação.
+- Uploads de Escalas e Horas seguem o padrão de migração: uma requisição de preview por arquivo, uma requisição de commit por arquivo e processamento em chunks internos no backend. Escalas cruzam por `wb_login`, validam colaboradores/turnos/LOBs em lote e gravam em blocos. Horas cruzam por `wb_login`, vinculam `Schedule` quando existir e gravam `WorkHourRecord` em blocos.
 - Login atualizado para apresentação do MVP local: novo subtítulo, botão `Criar cadastro`, sem cards de status fake e com wallpaper local em `public/login-wallpaper.png`.
 - Central Operacional agora combina range de datas com filtro real de LOB vindo do banco; os indicadores usam `Schedule`/`AttendanceRecord` filtrados por período e LOB.
 - Aprovação de cadastro normaliza `Pendente de Cadastro` para `Ativo`, ativa o `User`, reabre `EmployeeProfile` soft-deletado quando houver vínculo e mantém o Mapa refletindo colaborador aprovado.

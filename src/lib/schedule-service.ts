@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { AttendanceStatus, Prisma, ScheduleStatus } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
@@ -124,6 +125,25 @@ export type ScheduleImportInput = {
   fileName: string;
   allowPartial?: boolean;
   rows: Array<Record<string, unknown>>;
+};
+
+type ScheduleImportValidation = {
+  rowNumber: number;
+  errors: string[];
+  warnings: string[];
+  action: "criar" | "atualizar" | "ignorar";
+  employeeId?: string;
+  employeeName?: string;
+  employeeLobId?: string;
+  employeeSupervisorId?: string | null;
+  employeeShiftId?: string | null;
+  employeeShiftStartsAt?: string | null;
+  employeeShiftEndsAt?: string | null;
+  shiftId?: string | null;
+  shiftStartsAt?: string | null;
+  shiftEndsAt?: string | null;
+  date?: Date;
+  status?: ScheduleStatus;
 };
 
 export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery = {}) {
@@ -675,7 +695,8 @@ export async function previewOperationalScheduleImport(actor: Actor, rows: Array
       rows.map((_, index) => ({
         rowNumber: index + 1,
         errors: ["Sem permissão para importar escala. Supervisor apenas visualiza e justifica ocorrências."],
-        warnings: []
+        warnings: [],
+        action: "ignorar" as const
       }))
     );
   }
@@ -689,7 +710,8 @@ export async function previewOperationalScheduleImport(actor: Actor, rows: Array
       rows.map((_, index) => ({
         rowNumber: index + 1,
         errors: ["Não foi possível validar no banco. Verifique a conexão antes de importar."],
-        warnings: []
+        warnings: [],
+        action: "ignorar" as const
       }))
     );
   }
@@ -706,111 +728,126 @@ export async function commitOperationalScheduleImport(actor: Actor, input: Sched
     const hasErrors = validation.some((row) => row.errors.length);
     if (hasErrors && !input.allowPartial) return { error: "Existem erros na importação. Corrija ou confirme importação parcial.", preview: toImportPreview(input.rows, validation) };
 
-    const result = await prisma.$transaction(async (tx) => {
-      const importRecord = await tx.scheduleImport.create({
-        data: {
-          fileName: input.fileName,
-          importedById: user.id,
-          status: hasErrors ? "Atenção" : "Sucesso",
-          totalRows: input.rows.length,
-          validRows: validation.filter((row) => !row.errors.length).length,
-          errorRows: validation.filter((row) => row.errors.length).length,
-          warnings: validation.filter((row) => row.warnings.length).map((row) => ({ row: row.rowNumber, warnings: row.warnings }))
-        }
-      });
+    const validRows = validation.filter((row) => !row.errors.length && row.employeeId && row.date && row.status);
+    const importRecord = await prisma.scheduleImport.create({
+      data: {
+        fileName: input.fileName,
+        importedById: user.id,
+        status: hasErrors ? "Atenção" : "Sucesso",
+        totalRows: input.rows.length,
+        validRows: validRows.length,
+        errorRows: validation.filter((row) => row.errors.length).length,
+        warnings: validation.filter((row) => row.warnings.length).map((row) => ({ row: row.rowNumber, warnings: row.warnings }))
+      }
+    });
 
-      let importedRows = 0;
-      for (const rowValidation of validation) {
-        const row = input.rows[rowValidation.rowNumber - 1] ?? {};
-        const parsedDate = parseImportDate(row.data);
-        await tx.scheduleImportRow.create({
-          data: {
+    for (const chunk of chunkArray(validation, 500)) {
+      await prisma.scheduleImportRow.createMany({
+        data: chunk.map((rowValidation) => {
+          const row = input.rows[rowValidation.rowNumber - 1] ?? {};
+          return {
             importId: importRecord.id,
             rowNumber: rowValidation.rowNumber,
             wbLogin: text(row.wb_login),
-            name: "",
+            name: rowValidation.employeeName ?? "",
             lob: text(row.lob),
             supervisor: text(row.supervisor_wb_login),
-            date: parsedDate,
+            date: rowValidation.date ?? null,
             shift: text(row.turno),
             startsAt: text(row.entrada),
             endsAt: text(row.saida),
             status: text(row.status),
             observation: text(row.observacao),
-            validation: rowValidation
-          }
-        });
-
-        if (rowValidation.errors.length || !parsedDate) continue;
-
-        const employee = await findEmployeeForImport(tx, row);
-        if (!employee) continue;
-        const shift = text(row.turno) ? await tx.shift.findUnique({ where: { name: text(row.turno) } }) : null;
-        const status = uiToScheduleStatus[text(row.status)] ?? "ESCALADO";
-        const before = await tx.schedule.findUnique({ where: { employeeId_date: { employeeId: employee.id, date: parsedDate } }, include: { shift: true } });
-
-        const saved = await tx.schedule.upsert({
-          where: { employeeId_date: { employeeId: employee.id, date: parsedDate } },
-          update: {
-            shiftId: needsTime(text(row.status)) ? shift?.id ?? employee.shiftId : null,
-            startsAt: needsTime(text(row.status)) ? text(row.entrada) || shift?.startsAt || employee.shift.startsAt : null,
-            endsAt: needsTime(text(row.status)) ? text(row.saida) || shift?.endsAt || employee.shift.endsAt : null,
-            status,
-            lobId: employee.lobId,
-            supervisorId: employee.supervisorId,
-            observation: text(row.observacao),
-            source: "excel-import"
-          },
-          create: {
-            employeeId: employee.id,
-            shiftId: needsTime(text(row.status)) ? shift?.id ?? employee.shiftId : null,
-            date: parsedDate,
-            startsAt: needsTime(text(row.status)) ? text(row.entrada) || shift?.startsAt || employee.shift.startsAt : null,
-            endsAt: needsTime(text(row.status)) ? text(row.saida) || shift?.endsAt || employee.shift.endsAt : null,
-            status,
-            source: "excel-import",
-            lobId: employee.lobId,
-            supervisorId: employee.supervisorId,
-            observation: text(row.observacao)
-          }
-        });
-
-        await tx.scheduleChangeHistory.create({
-          data: {
-            scheduleId: saved.id,
-            employeeId: employee.id,
-            changedById: user.id,
-            date: parsedDate,
-            before: serialize(before),
-            after: serialize(saved),
-            previousValue: serialize(before),
-            newValue: serialize(saved),
-            reason: `Importação de escala ${input.fileName}`
-          }
-        });
-        importedRows += 1;
-      }
-
-      await tx.auditLog.create({
-        data: {
-          actorId: user.id,
-          action: "IMPORTACAO",
-          entity: "ScheduleImport",
-          entityId: importRecord.id,
-          reason: `${importedRows} linhas importadas de ${input.fileName}`,
-          newValue: { fileName: input.fileName, importedRows, totalRows: input.rows.length }
-        }
+            validation: {
+              rowNumber: rowValidation.rowNumber,
+              errors: rowValidation.errors,
+              warnings: rowValidation.warnings,
+              action: rowValidation.action
+            }
+          };
+        })
       });
+    }
 
-      return {
-        id: importRecord.id,
-        fileName: importRecord.fileName,
-        importedRows,
-        status: importRecord.status,
-        createdAt: formatDateTime(importRecord.createdAt),
-        user: user.name
-      };
+    let importedRows = 0;
+    for (const chunk of chunkArray(validRows, 500)) {
+      const values = chunk.map((rowValidation) => {
+        const row = input.rows[rowValidation.rowNumber - 1] ?? {};
+        const useTime = needsTimeDb(rowValidation.status!);
+        const startsAt = useTime ? text(row.entrada) || rowValidation.shiftStartsAt || rowValidation.employeeShiftStartsAt || null : null;
+        const endsAt = useTime ? text(row.saida) || rowValidation.shiftEndsAt || rowValidation.employeeShiftEndsAt || null : null;
+        const shiftId = useTime ? rowValidation.shiftId ?? rowValidation.employeeShiftId ?? null : null;
+        return Prisma.sql`(
+          ${randomUUID()},
+          ${rowValidation.employeeId!},
+          ${shiftId},
+          ${rowValidation.employeeLobId ?? null},
+          ${rowValidation.employeeSupervisorId ?? null},
+          ${rowValidation.date!},
+          ${startsAt},
+          ${endsAt},
+          ${rowValidation.status!}::"ScheduleStatus",
+          ${text(row.observacao) || null},
+          ${"excel-import"},
+          NOW(),
+          NOW()
+        )`;
+      });
+      const saved = await prisma.$queryRaw<Array<{ id: string; employeeId: string; date: Date }>>(Prisma.sql`
+        INSERT INTO "Schedule" (
+          "id", "employeeId", "shiftId", "lobId", "supervisorId", "date", "startsAt", "endsAt", "status", "observation", "source", "createdAt", "updatedAt"
+        )
+        VALUES ${Prisma.join(values)}
+        ON CONFLICT ("employeeId", "date") DO UPDATE SET
+          "shiftId" = EXCLUDED."shiftId",
+          "lobId" = EXCLUDED."lobId",
+          "supervisorId" = EXCLUDED."supervisorId",
+          "startsAt" = EXCLUDED."startsAt",
+          "endsAt" = EXCLUDED."endsAt",
+          "status" = EXCLUDED."status",
+          "observation" = EXCLUDED."observation",
+          "source" = EXCLUDED."source",
+          "updatedAt" = NOW(),
+          "deletedAt" = NULL
+        RETURNING "id", "employeeId", "date"
+      `);
+      importedRows += saved.length;
+      if (saved.length) {
+        await prisma.scheduleChangeHistory.createMany({
+          data: saved.map((schedule) => ({
+            scheduleId: schedule.id,
+            employeeId: schedule.employeeId,
+            changedById: user.id,
+            date: schedule.date,
+            before: {},
+            after: { importId: importRecord.id, fileName: input.fileName },
+            previousValue: {},
+            newValue: { scheduleId: schedule.id, importId: importRecord.id },
+            reason: `Importação de escala ${input.fileName}`
+          }))
+        });
+      }
+    }
+
+    await prisma.auditLog.create({
+      data: {
+        actorId: user.id,
+        action: "IMPORTACAO",
+        entity: "ScheduleImport",
+        entityId: importRecord.id,
+        reason: `${importedRows} linhas importadas de ${input.fileName}`,
+        newValue: { fileName: input.fileName, importedRows, totalRows: input.rows.length, chunks: Math.ceil(validRows.length / 500) }
+      }
     });
+
+    const result = {
+      id: importRecord.id,
+      fileName: importRecord.fileName,
+      importedRows,
+      status: importRecord.status,
+      createdAt: formatDateTime(importRecord.createdAt),
+      user: user.name
+    };
 
     return { data: result, preview: toImportPreview(input.rows, validation) };
   } catch (error) {
@@ -917,51 +954,112 @@ function attendanceDisplayLabel(records: Array<{ status: AttendanceStatus | stri
   return latest.isJustified ? `${status} justificada` : `${status} sem justificativa`;
 }
 
-async function validateImportRowsInDb(rows: Array<Record<string, unknown>>) {
-  const validations = [];
-  for (let index = 0; index < rows.length; index += 1) {
-    const row = rows[index];
+async function validateImportRowsInDb(rows: Array<Record<string, unknown>>): Promise<ScheduleImportValidation[]> {
+  const duplicateKeys = new Map<string, number>();
+  const normalizedRows = rows.map((row, index) => {
+    const wbLogin = text(row.wb_login).toUpperCase();
+    const parsedDate = parseImportDate(row.data);
+    const key = wbLogin && parsedDate ? `${wbLogin}:${parsedDate.getTime()}` : "";
+    if (key) duplicateKeys.set(key, (duplicateKeys.get(key) ?? 0) + 1);
+    return { row, rowNumber: index + 1, wbLogin, parsedDate, key };
+  });
+  const wbLogins = Array.from(new Set(normalizedRows.map((row) => row.wbLogin).filter(Boolean)));
+  const dates = Array.from(new Set(normalizedRows.map((row) => row.parsedDate?.getTime()).filter((value): value is number => Boolean(value)))).map((value) => new Date(value));
+  const [employees, shifts, lobs] = await Promise.all([
+    wbLogins.length
+      ? prisma.employeeProfile.findMany({
+        where: { deletedAt: null },
+        include: { shift: true, lob: true, supervisor: { select: { id: true, wbLogin: true, fullName: true } } }
+      })
+      : Promise.resolve([]),
+    prisma.shift.findMany(),
+    prisma.lob.findMany({ select: { id: true, name: true } })
+  ]);
+  const employeeMap = new Map(employees.map((employee) => [employee.wbLogin.toUpperCase(), employee]));
+  const employeeIds = employees.map((employee) => employee.id);
+  const existingSchedules = employeeIds.length && dates.length
+    ? await prisma.schedule.findMany({
+      where: {
+        employeeId: { in: employeeIds },
+        date: { gte: new Date(Math.min(...dates.map((date) => date.getTime()))), lte: new Date(Math.max(...dates.map((date) => date.getTime()))) },
+        deletedAt: null
+      },
+      select: { id: true, employeeId: true, date: true }
+    })
+    : [];
+  const scheduleMap = new Map(existingSchedules.map((schedule) => [`${schedule.employeeId}:${schedule.date.getTime()}`, schedule]));
+  const shiftMap = new Map(shifts.map((shift) => [normalizeImportKey(shift.name), shift]));
+  const lobMap = new Map(lobs.map((lob) => [normalizeImportKey(lob.name), lob]));
+
+  return normalizedRows.map<ScheduleImportValidation>(({ row, rowNumber, wbLogin, parsedDate, key }) => {
     const errors: string[] = [];
     const warnings: string[] = [];
-    const rowNumber = index + 1;
 
     if (!text(row.wb_login)) errors.push("WB/Login obrigatório para importar escala.");
-    const parsedDate = parseImportDate(row.data);
     if (!parsedDate) errors.push("Data obrigatória ou inválida.");
     if (parsedDate && (parsedDate.getUTCFullYear() !== 2026 || parsedDate.getUTCMonth() !== 4)) {
       warnings.push("Data fora de maio de 2026. A linha será preservada, mas não aparecerá no filtro inicial de teste.");
     }
     if (!text(row.status)) errors.push("Status obrigatório.");
 
-    const status = text(row.status);
-    if ((status === "Escalado" || status === "Presente") && !text(row.turno)) errors.push("Turno obrigatório para Escalado/Presente.");
-    if ((status === "Escalado" || status === "Presente") && !text(row.entrada)) errors.push("Entrada obrigatória para Escalado/Presente.");
-    if ((status === "Escalado" || status === "Presente") && !text(row.saida)) errors.push("Saída obrigatória para Escalado/Presente.");
-    if (text(row.turno)) {
-      const shift = await prisma.shift.findUnique({ where: { name: text(row.turno) } });
-      if (!shift) errors.push(`Turno ${text(row.turno)} não cadastrado.`);
-    }
-    if (text(row.lob)) {
-      const lob = await prisma.lob.findUnique({ where: { name: text(row.lob) } });
-      if (!lob) warnings.push(`LOB ${text(row.lob)} não cadastrado; será usado o LOB do colaborador existente.`);
-    }
-    if (status && !(uiToScheduleStatus[status] ?? null)) errors.push(`Status inválido: ${status}.`);
+    const status = scheduleStatusFromImport(row.status);
+    if (text(row.status) && !status) errors.push(`Status inválido: ${text(row.status)}.`);
+    if (status && needsTimeDb(status) && !text(row.turno)) errors.push("Turno obrigatório para Escalado/Presente.");
+    if (status && needsTimeDb(status) && !text(row.entrada)) errors.push("Entrada obrigatória para Escalado/Presente.");
+    if (status && needsTimeDb(status) && !text(row.saida)) errors.push("Saída obrigatória para Escalado/Presente.");
 
-    const employee = await findEmployeeForImport(prisma, row);
+    const shift = text(row.turno) ? shiftMap.get(normalizeImportKey(text(row.turno))) : null;
+    if (text(row.turno) && !shift) errors.push(`Turno ${text(row.turno)} não cadastrado.`);
+    if (text(row.lob) && !lobMap.has(normalizeImportKey(text(row.lob)))) warnings.push(`LOB ${text(row.lob)} não cadastrado; será usado o LOB do colaborador existente.`);
+
+    const employee = wbLogin ? employeeMap.get(wbLogin) : null;
     if (!employee) errors.push("WB/Login não encontrado na base de funcionários. Cadastre/aprove o funcionário antes de importar escala.");
+    if (employee && text(row.lob) && normalizeImportKey(text(row.lob)) !== normalizeImportKey(employee.lob.name)) warnings.push("LOB no arquivo diferente da LOB do colaborador.");
+    if (employee && text(row.supervisor_wb_login) && normalizeImportKey(text(row.supervisor_wb_login)) !== normalizeImportKey(employee.supervisor?.wbLogin ?? "")) warnings.push("Supervisor no arquivo diferente do supervisor do colaborador.");
+    if (key && (duplicateKeys.get(key) ?? 0) > 1) errors.push("Linha duplicada no arquivo para o mesmo WB/Login + data.");
+    const existingSchedule = employee && parsedDate ? scheduleMap.get(`${employee.id}:${parsedDate.getTime()}`) : null;
+    if (existingSchedule) warnings.push("Escala já existe para este colaborador/data e será atualizada.");
 
-    validations.push({ rowNumber, errors, warnings });
-  }
-  return validations;
+    return {
+      rowNumber,
+      errors,
+      warnings,
+      action: errors.length ? "ignorar" : existingSchedule ? "atualizar" : "criar",
+      employeeId: employee?.id,
+      employeeName: employee?.fullName,
+      employeeLobId: employee?.lobId,
+      employeeSupervisorId: employee?.supervisorId,
+      employeeShiftId: employee?.shiftId,
+      employeeShiftStartsAt: employee?.shift.startsAt,
+      employeeShiftEndsAt: employee?.shift.endsAt,
+      shiftId: shift?.id,
+      shiftStartsAt: shift?.startsAt,
+      shiftEndsAt: shift?.endsAt,
+      date: parsedDate ?? undefined,
+      status: status ?? undefined
+    };
+  });
 }
 
-function toImportPreview(rows: Array<Record<string, unknown>>, validation: Array<{ rowNumber: number; errors: string[]; warnings: string[] }>) {
+function toImportPreview(rows: Array<Record<string, unknown>>, validation: ScheduleImportValidation[]) {
   return {
     rows,
     totalRows: rows.length,
     validRows: validation.filter((row) => !row.errors.length).length,
     errorRows: validation.filter((row) => row.errors.length).length,
-    validation
+    warningRows: validation.filter((row) => row.warnings.length).length,
+    createdRows: validation.filter((row) => !row.errors.length && row.action === "criar").length,
+    updatedRows: validation.filter((row) => !row.errors.length && row.action === "atualizar").length,
+    foundEmployees: validation.filter((row) => row.employeeId).length,
+    missingEmployees: validation.filter((row) => row.errors.some((error) => error.includes("WB/Login não encontrado"))).length,
+    validation: validation.map((row) => ({
+      rowNumber: row.rowNumber,
+      errors: row.errors,
+      warnings: row.warnings,
+      action: row.action,
+      employeeName: row.employeeName ?? "",
+      status: row.errors.length ? "Erro" : row.warnings.length ? "Alerta" : "Válida"
+    }))
   };
 }
 
@@ -979,6 +1077,23 @@ function requiresReason(status: string) {
 function needsTime(status: string) {
   return ["Escalado", "Presente", "Venda de folga aprovada"].includes(status);
 }
+
+function needsTimeDb(status: ScheduleStatus) {
+  return ["ESCALADO", "PRESENTE", "VENDA_FOLGA_APROVADA"].includes(status);
+}
+
+function scheduleStatusFromImport(value: unknown) {
+  const raw = text(value);
+  if (!raw) return null;
+  return uiToScheduleStatus[raw] ?? uiToScheduleStatusByKey[normalizeImportKey(raw)] ?? null;
+}
+
+const uiToScheduleStatusByKey = Object.fromEntries(
+  Object.entries(uiToScheduleStatus).flatMap(([label, status]) => [
+    [normalizeImportKey(label), status],
+    [normalizeImportKey(status), status]
+  ])
+) as Record<string, ScheduleStatus>;
 
 function impactsAbs(status: string, reason?: string) {
   if (["Falta", "Ausente"].includes(status)) return true;
@@ -1289,6 +1404,16 @@ function parseImportDate(value: unknown) {
 
 function text(value: unknown) {
   return String(value ?? "").trim();
+}
+
+function normalizeImportKey(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toUpperCase().replace(/[\s/-]+/g, "_");
+}
+
+function chunkArray<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
+  return chunks;
 }
 
 async function findEmployeeForImport(client: Prisma.TransactionClient | typeof prisma, row: Record<string, unknown>) {

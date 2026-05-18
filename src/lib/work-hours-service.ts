@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import {
   AuditAction,
   Prisma,
@@ -175,112 +176,133 @@ export async function commitOperationalWorkHoursImport(actor: Actor, input: Work
       return { error: "Existem erros na importação. Corrija ou confirme importação parcial.", preview: toImportPreview(input.rows, validation) };
     }
 
-    const result = await prisma.$transaction(async (tx) => {
-      const batch = await tx.workHourImportBatch.create({
-        data: {
-          fileName: input.fileName,
-          uploadedById: user.id,
-          totalRows: input.rows.length,
-          validRows: validRows.length,
-          errorRows: validation.filter((row) => row.errors.length).length,
-          warningRows: validation.filter((row) => row.warnings.length).length,
-          createdRows: validation.filter((row) => !row.errors.length && row.action === "criar").length,
-          updatedRows: validation.filter((row) => !row.errors.length && row.action === "atualizar").length,
-          status: hasErrors ? "PARTIAL" : "IMPORTED"
-        }
-      });
+    const batch = await prisma.workHourImportBatch.create({
+      data: {
+        fileName: input.fileName,
+        uploadedById: user.id,
+        totalRows: input.rows.length,
+        validRows: validRows.length,
+        errorRows: validation.filter((row) => row.errors.length).length,
+        warningRows: validation.filter((row) => row.warnings.length).length,
+        createdRows: validation.filter((row) => !row.errors.length && row.action === "criar").length,
+        updatedRows: validation.filter((row) => !row.errors.length && row.action === "atualizar").length,
+        status: hasErrors ? "PARTIAL" : "IMPORTED"
+      }
+    });
 
-      let importedRows = 0;
-      for (const rowValidation of validRows) {
-        const schedule = await tx.schedule.findUnique({
-          where: { employeeId_date: { employeeId: rowValidation.employeeId!, date: rowValidation.date! } }
-        });
+    const employeeIds = Array.from(new Set(validRows.map((row) => row.employeeId!).filter(Boolean)));
+    const dates = Array.from(new Set(validRows.map((row) => row.date!.getTime()))).map((value) => new Date(value));
+    const schedules = employeeIds.length && dates.length
+      ? await prisma.schedule.findMany({
+        where: {
+          employeeId: { in: employeeIds },
+          date: { gte: new Date(Math.min(...dates.map((date) => date.getTime()))), lte: new Date(Math.max(...dates.map((date) => date.getTime()))) },
+          deletedAt: null
+        }
+      })
+      : [];
+    const scheduleMap = new Map(schedules.map((schedule) => [`${schedule.employeeId}:${schedule.date.getTime()}`, schedule]));
+
+    let importedRows = 0;
+    for (const chunk of chunkArray(validRows, 500)) {
+      const values = chunk.map((rowValidation) => {
+        const schedule = scheduleMap.get(`${rowValidation.employeeId!}:${rowValidation.date!.getTime()}`);
         const planned = schedule ? plannedFromSchedule(schedule) : { start: null, end: null, hours: null };
         const status = calculateRecordStatus(planned.hours, rowValidation.actualHours!, Boolean(schedule));
         const differenceMinutes = planned.hours === null ? null : Math.round((rowValidation.actualHours! - planned.hours) * 60);
-        const before = rowValidation.existingRecordId
-          ? await tx.workHourRecord.findUnique({ where: { id: rowValidation.existingRecordId } })
-          : null;
-
-        const saved = await tx.workHourRecord.upsert({
-          where: { employeeId_date: { employeeId: rowValidation.employeeId!, date: rowValidation.date! } },
-          update: {
-            scheduleId: schedule?.id ?? null,
-            wbLogin: rowValidation.wbLogin,
-            plannedStart: planned.start,
-            plannedEnd: planned.end,
-            plannedHours: planned.hours,
-            actualStart: rowValidation.actualStart,
-            actualEnd: rowValidation.actualEnd,
-            actualHours: rowValidation.actualHours!,
-            adjustedStart: null,
-            adjustedEnd: null,
-            adjustedHours: null,
-            effectiveStart: rowValidation.actualStart,
-            effectiveEnd: rowValidation.actualEnd,
-            effectiveHours: rowValidation.actualHours!,
-            differenceMinutes,
-            status,
-            source: rowValidation.source || "upload-horas",
-            observation: rowValidation.observation,
-            importBatchId: batch.id
-          },
-          create: {
-            employeeId: rowValidation.employeeId!,
-            scheduleId: schedule?.id ?? null,
-            wbLogin: rowValidation.wbLogin,
-            date: rowValidation.date!,
-            plannedStart: planned.start,
-            plannedEnd: planned.end,
-            plannedHours: planned.hours,
-            actualStart: rowValidation.actualStart,
-            actualEnd: rowValidation.actualEnd,
-            actualHours: rowValidation.actualHours!,
-            effectiveStart: rowValidation.actualStart,
-            effectiveEnd: rowValidation.actualEnd,
-            effectiveHours: rowValidation.actualHours!,
-            differenceMinutes,
-            status,
-            source: rowValidation.source || "upload-horas",
-            observation: rowValidation.observation,
-            importBatchId: batch.id
-          }
-        });
-
-        await tx.workHourHistory.create({
-          data: {
-            workHourRecordId: saved.id,
-            changedById: user.id,
-            action: rowValidation.action === "atualizar" ? "IMPORT_UPDATE" : "IMPORT_CREATE",
-            previousValue: serialize(before),
-            newValue: serialize(saved),
-            reason: `Importação de horas ${input.fileName}`
-          }
-        });
-        importedRows += 1;
-      }
-
-      await tx.auditLog.create({
-        data: {
-          actorId: user.id,
-          action: AuditAction.IMPORTACAO,
-          entity: "WorkHourImportBatch",
-          entityId: batch.id,
-          reason: `${importedRows} registro(s) de horas importado(s)`,
-          newValue: { fileName: input.fileName, importedRows, totalRows: input.rows.length }
-        }
+        return Prisma.sql`(
+          ${randomUUID()},
+          ${rowValidation.employeeId!},
+          ${schedule?.id ?? null},
+          ${rowValidation.wbLogin},
+          ${rowValidation.date!},
+          ${planned.start},
+          ${planned.end},
+          ${planned.hours},
+          ${rowValidation.actualStart},
+          ${rowValidation.actualEnd},
+          ${rowValidation.actualHours!},
+          ${null},
+          ${null},
+          ${null},
+          ${rowValidation.actualStart},
+          ${rowValidation.actualEnd},
+          ${rowValidation.actualHours!},
+          ${differenceMinutes},
+          ${status}::"WorkHourRecordStatus",
+          ${rowValidation.source || "upload-horas"},
+          ${rowValidation.observation || null},
+          ${batch.id},
+          NOW(),
+          NOW()
+        )`;
       });
+      const saved = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        INSERT INTO "WorkHourRecord" (
+          "id", "employeeId", "scheduleId", "wbLogin", "date", "plannedStart", "plannedEnd", "plannedHours",
+          "actualStart", "actualEnd", "actualHours", "adjustedStart", "adjustedEnd", "adjustedHours",
+          "effectiveStart", "effectiveEnd", "effectiveHours", "differenceMinutes", "status", "source",
+          "observation", "importBatchId", "createdAt", "updatedAt"
+        )
+        VALUES ${Prisma.join(values)}
+        ON CONFLICT ("employeeId", "date") DO UPDATE SET
+          "scheduleId" = EXCLUDED."scheduleId",
+          "wbLogin" = EXCLUDED."wbLogin",
+          "plannedStart" = EXCLUDED."plannedStart",
+          "plannedEnd" = EXCLUDED."plannedEnd",
+          "plannedHours" = EXCLUDED."plannedHours",
+          "actualStart" = EXCLUDED."actualStart",
+          "actualEnd" = EXCLUDED."actualEnd",
+          "actualHours" = EXCLUDED."actualHours",
+          "adjustedStart" = NULL,
+          "adjustedEnd" = NULL,
+          "adjustedHours" = NULL,
+          "effectiveStart" = EXCLUDED."effectiveStart",
+          "effectiveEnd" = EXCLUDED."effectiveEnd",
+          "effectiveHours" = EXCLUDED."effectiveHours",
+          "differenceMinutes" = EXCLUDED."differenceMinutes",
+          "status" = EXCLUDED."status",
+          "source" = EXCLUDED."source",
+          "observation" = EXCLUDED."observation",
+          "importBatchId" = EXCLUDED."importBatchId",
+          "updatedAt" = NOW()
+        RETURNING "id"
+      `);
+      importedRows += saved.length;
+      if (saved.length) {
+        await prisma.workHourHistory.createMany({
+          data: saved.map((record, index) => ({
+            workHourRecordId: record.id,
+            changedById: user.id,
+            action: chunk[index]?.action === "atualizar" ? "IMPORT_UPDATE" : "IMPORT_CREATE",
+            previousValue: {},
+            newValue: { importBatchId: batch.id, fileName: input.fileName },
+            reason: `Importação de horas ${input.fileName}`
+          }))
+        });
+      }
+    }
 
-      return {
-        id: batch.id,
-        fileName: batch.fileName,
-        importedRows,
-        createdRows: batch.createdRows,
-        updatedRows: batch.updatedRows,
-        status: batch.status,
-        createdAt: formatDateTime(batch.createdAt)
-      };
+    await prisma.auditLog.create({
+      data: {
+        actorId: user.id,
+        action: AuditAction.IMPORTACAO,
+        entity: "WorkHourImportBatch",
+        entityId: batch.id,
+        reason: `${importedRows} registro(s) de horas importado(s)`,
+        newValue: { fileName: input.fileName, importedRows, totalRows: input.rows.length, chunks: Math.ceil(validRows.length / 500) }
+      }
     });
+
+    const result = {
+      id: batch.id,
+      fileName: batch.fileName,
+      importedRows,
+      createdRows: batch.createdRows,
+      updatedRows: batch.updatedRows,
+      status: batch.status,
+      createdAt: formatDateTime(batch.createdAt)
+    };
 
     return { data: result, preview: toImportPreview(input.rows, validation) };
   } catch (error) {
@@ -988,6 +1010,12 @@ function minutesBetween(start: string, end: string) {
 
 function text(value: unknown) {
   return String(value ?? "").trim();
+}
+
+function chunkArray<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
+  return chunks;
 }
 
 function roundHours(value: number) {

@@ -224,8 +224,13 @@ type ImportPreview = {
   totalRows: number;
   validRows: number;
   errorRows: number;
+  warningRows?: number;
+  createdRows?: number;
+  updatedRows?: number;
+  foundEmployees?: number;
+  missingEmployees?: number;
   rows: Array<Record<string, unknown>>;
-  validation: Array<{ rowNumber: number; errors: string[]; warnings: string[] }>;
+  validation: Array<{ rowNumber: number; errors: string[]; warnings: string[]; action?: string; status?: string; employeeName?: string }>;
 };
 
 type WorkHourRow = {
@@ -2989,17 +2994,22 @@ export function SchedulesPage() {
                 <table className="w-full min-w-[820px] text-left text-xs">
                   <thead className="bg-slate-50 font-bold text-muted">
                     <tr>
-                      {scheduleImportColumns.map((column) => (
+                      {[...scheduleImportColumns, "validacao"].map((column) => (
                         <th key={column} className="px-3 py-2">{column}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {((previewRows.length ? previewRows : templateRows) as Array<Record<string, unknown>>).map((row, index) => (
+                    {((previewRows.length ? previewRows : templateRows) as Array<Record<string, unknown>>).slice(0, 300).map((row, index) => (
                       <tr key={index}>
                         {scheduleImportColumns.map((column) => (
                           <td key={column} className="px-3 py-2">{String(row[column] ?? "")}</td>
                         ))}
+                        <td className="px-3 py-2">
+                          {previewResult?.validation?.[index]
+                            ? [...previewResult.validation[index].errors, ...previewResult.validation[index].warnings].join(" | ") || previewResult.validation[index].action || "OK"
+                            : "OK"}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -3008,7 +3018,11 @@ export function SchedulesPage() {
               <div className="space-y-3">
                 <StatusBadge status={validation.errors ? `${validation.errors} erros` : "Sem erros críticos"} />
                 <StatusBadge status={`${validation.warnings} alertas`} />
+                <MetricPill value={previewResult?.createdRows ?? 0} label="Novas escalas" />
+                <MetricPill value={previewResult?.updatedRows ?? 0} label="Atualizações" />
+                <MetricPill value={previewResult?.missingEmployees ?? 0} label="WB/Login não encontrados" />
                 <p className="text-sm text-muted">Validações: WB/Login existente, data, status válido, turno/entrada/saída quando necessário, conflito por pessoa/dia, LOB, supervisor e cobertura mínima.</p>
+                {(previewRows.length > 300 || (previewResult?.validation.length ?? 0) > 300) ? <p className="text-xs font-semibold text-muted">Exibindo as primeiras 300 linhas no preview para manter a tela rápida. O commit processa todas as linhas válidas.</p> : null}
                 <button
                   onClick={commitImport}
                   className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white"
@@ -3377,7 +3391,7 @@ export function WorkHoursPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border bg-white">
-                    {preview.validation.map((row) => (
+                    {preview.validation.slice(0, 300).map((row) => (
                       <tr key={row.rowNumber}>
                         <td className="px-3 py-2 font-bold">{row.rowNumber}</td>
                         <td className="px-3 py-2">{row.wbLogin}</td>
@@ -3400,6 +3414,7 @@ export function WorkHoursPage() {
                 <MetricPill value={preview.createdRows} label="Novos registros" />
                 <MetricPill value={preview.updatedRows} label="Atualizações" />
                 <p className="text-sm text-muted">WB/Login inexistente bloqueia a linha. Sem escala vinculada vira alerta e pode ser importado.</p>
+                {preview.validation.length > 300 ? <p className="text-xs font-semibold text-muted">Exibindo as primeiras 300 linhas no preview para manter a tela rápida. O commit processa todas as linhas válidas.</p> : null}
                 <button disabled={savingImport} onClick={commitWorkHourImport} className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
                   {savingImport ? "Importando..." : "Confirmar importação"}
                 </button>

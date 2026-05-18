@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getApiActor } from "@/lib/api-actor";
-import { errorStatus, mapZodError, errorResponse } from "@/lib/api-errors";
+import { createServerError, errorStatus, mapZodError, errorResponse } from "@/lib/api-errors";
 import { commitOperationalScheduleImport } from "@/lib/schedule-service";
 
 const commitSchema = z.object({
@@ -12,19 +12,25 @@ const commitSchema = z.object({
 });
 
 export async function POST(request: Request) {
-  const body = await request.json();
-  const parsed = commitSchema.safeParse(body);
+  try {
+    const body = await request.json();
+    const parsed = commitSchema.safeParse(body);
 
-  if (!parsed.success) {
-    return errorResponse(mapZodError(parsed.error));
+    if (!parsed.success) {
+      return errorResponse(mapZodError(parsed.error));
+    }
+
+    console.info("[schedule-import:commit-route]", { fileName: parsed.data.fileName, totalRows: parsed.data.rows.length, allowPartial: parsed.data.allowPartial });
+    const actor = await getApiActor();
+    const result = await commitOperationalScheduleImport(actor, parsed.data);
+
+    if ("error" in result) {
+      return NextResponse.json(result, { status: errorStatus(result as any) || 409 });
+    }
+
+    return NextResponse.json(result);
+  } catch (error) {
+    console.error("[schedule-import:commit-route] falha inesperada", error);
+    return errorResponse(createServerError(error, "Não foi possível confirmar a importação de escala. Tente novamente ou contate o administrador."));
   }
-
-  const actor = await getApiActor();
-  const result = await commitOperationalScheduleImport(actor, parsed.data);
-
-  if ("error" in result) {
-    return NextResponse.json(result, { status: errorStatus(result as any) || 409 });
-  }
-
-  return NextResponse.json(result);
 }
