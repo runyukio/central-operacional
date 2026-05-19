@@ -9,34 +9,24 @@ export type ShiftReportInput = {
   reportDate: string;
   shift: string;
   lob: string;
-  operation: string;
   rta: string;
   importance: string;
   plannedHeadcount: number;
   actualHeadcount: number;
-  onlineAgents: number;
   absCount: number;
-  absJustification?: string;
-  absentEmployees?: Array<{ employeeId: string; absenceReason: string; observation?: string; impactsAbs?: boolean; impactsCoverage?: boolean }>;
-  queueStatusStart: string;
-  queueStatusEnd: string;
   backlogStart?: number;
   backlogEnd?: number;
   latencyStart?: string;
   latencyEnd?: string;
-  occurrenceCategory: string;
-  impactLevel: string;
   occurrences?: string;
   pendingTasks?: string;
   generalMood: string;
-  leadersPresent?: string;
   mainRisks?: string;
   actionsTaken?: string;
   nextShiftAttentionPoints?: string;
   requiresFollowUp?: boolean;
   followUpOwner?: string;
   followUpDueDate?: string;
-  followUpStatus?: string;
   additionalComments?: string;
   timeBlocks?: Array<{ startTime: string; endTime: string; category: string; description?: string }>;
 };
@@ -45,10 +35,11 @@ export type ShiftReportQuery = {
   startDate?: string;
   endDate?: string;
   shift?: string;
-  supervisor?: string;
+  lob?: string;
   rta?: string;
   importance?: string;
   mood?: string;
+  followUp?: string;
   search?: string;
 };
 
@@ -71,18 +62,8 @@ const moodMap: Record<string, GeneralMood> = {
   CRÍTICO: "CRITICO"
 };
 
-const followUpMap: Record<string, FollowUpStatus> = {
-  ABERTO: "ABERTO",
-  "EM ANDAMENTO": "EM_ANDAMENTO",
-  EM_ANDAMENTO: "EM_ANDAMENTO",
-  CONCLUIDO: "CONCLUIDO",
-  CONCLUÍDO: "CONCLUIDO",
-  CANCELADO: "CANCELADO"
-};
-
 const labelImportance: Record<ShiftReportImportance, string> = { BAIXA: "Baixa", MEDIA: "Média", ALTA: "Alta", CRITICA: "Crítica" };
 const labelMood: Record<GeneralMood, string> = { MUITO_BOM: "Muito bom", BOM: "Bom", NEUTRO: "Neutro", RUIM: "Ruim", CRITICO: "Crítico" };
-const labelFollowUp: Record<FollowUpStatus, string> = { ABERTO: "Aberto", EM_ANDAMENTO: "Em andamento", CONCLUIDO: "Concluído", CANCELADO: "Cancelado" };
 const timeBlockCategories = new Set([
   "Administrativo",
   "Desenvolvimento",
@@ -226,10 +207,10 @@ async function findEmployeeByText(value?: string | null) {
   });
 }
 
-async function reportLabels(reports: Array<{ shiftId: string | null; lobId: string | null; supervisorId: string | null; rtaId: string | null }>) {
+async function reportLabels(reports: Array<{ shiftId: string | null; lobId: string | null; supervisorId: string | null; rtaId: string | null; followUpOwnerId?: string | null }>) {
   const shiftIds = [...new Set(reports.map((report) => report.shiftId).filter(Boolean) as string[])];
   const lobIds = [...new Set(reports.map((report) => report.lobId).filter(Boolean) as string[])];
-  const employeeIds = [...new Set(reports.flatMap((report) => [report.supervisorId, report.rtaId]).filter(Boolean) as string[])];
+  const employeeIds = [...new Set(reports.flatMap((report) => [report.supervisorId, report.rtaId, report.followUpOwnerId]).filter(Boolean) as string[])];
   const [shifts, lobs, employees] = await Promise.all([
     prisma.shift.findMany({ where: { id: { in: shiftIds } }, select: { id: true, name: true } }),
     prisma.lob.findMany({ where: { id: { in: lobIds } }, select: { id: true, name: true } }),
@@ -243,11 +224,14 @@ async function reportLabels(reports: Array<{ shiftId: string | null; lobId: stri
 }
 
 function occurrenceFrom(report: { occurrences: Prisma.JsonValue | null }) {
-  if (!report.occurrences || typeof report.occurrences !== "object" || Array.isArray(report.occurrences)) {
-    return { category: "Outros", impactLevel: "Sem impacto", description: "" };
+  if (typeof report.occurrences === "string") {
+    return { description: report.occurrences };
   }
-  const occurrence = report.occurrences as { category?: string; impactLevel?: string; description?: string };
-  return { category: occurrence.category ?? "Outros", impactLevel: occurrence.impactLevel ?? "Sem impacto", description: occurrence.description ?? "" };
+  if (!report.occurrences || typeof report.occurrences !== "object" || Array.isArray(report.occurrences)) {
+    return { description: "" };
+  }
+  const occurrence = report.occurrences as { description?: string };
+  return { description: occurrence.description ?? "" };
 }
 
 export async function listShiftReports(actor: Actor, query: ShiftReportQuery = {}) {
@@ -257,24 +241,27 @@ export async function listShiftReports(actor: Actor, query: ShiftReportQuery = {
   const startDate = parseDate(query.startDate);
   const endDate = parseDate(query.endDate);
   const shiftId = query.shift && query.shift !== "Todos" ? await findShiftId(query.shift) : null;
+  const lobId = query.lob && query.lob !== "Todos" ? await findLobId(query.lob) : null;
   const rta = query.rta ? await findEmployeeByText(query.rta) : null;
-  const supervisor = query.supervisor ? await findEmployeeByText(query.supervisor) : null;
   const importance = query.importance && query.importance !== "Todos" ? importanceMap[normalizeKey(query.importance)] : null;
   const mood = query.mood && query.mood !== "Todos" ? moodMap[normalizeKey(query.mood)] : null;
   const search = query.search?.trim();
   const filters: Prisma.ShiftReportWhereInput[] = [];
   if (startDate || endDate) filters.push({ reportDate: { ...(startDate ? { gte: startDate } : {}), ...(endDate ? { lte: endDate } : {}) } });
   if (shiftId) filters.push({ shiftId });
-  if (supervisor) filters.push({ supervisorId: supervisor.id });
+  if (lobId) filters.push({ lobId });
   if (rta) filters.push({ rtaId: rta.id });
   if (importance) filters.push({ importance });
   if (mood) filters.push({ generalMood: mood });
+  if (query.followUp === "Sim") filters.push({ requiresFollowUp: true });
+  if (query.followUp === "Não" || query.followUp === "Nao") filters.push({ requiresFollowUp: false });
   if (search) {
     filters.push({
       OR: [
-        { operation: { contains: search, mode: "insensitive" } },
         { pendingTasks: { contains: search, mode: "insensitive" } },
         { mainRisks: { contains: search, mode: "insensitive" } },
+        { actionsTaken: { contains: search, mode: "insensitive" } },
+        { nextShiftAttentionPoints: { contains: search, mode: "insensitive" } },
         { additionalComments: { contains: search, mode: "insensitive" } }
       ]
     });
@@ -301,7 +288,11 @@ export async function createShiftReport(actor: Actor, input: ShiftReportInput) {
   if (!importance) return { error: "Importância do report inválida." };
   const generalMood = moodMap[normalizeKey(input.generalMood)];
   if (!generalMood) return { error: "Humor geral do turno inválido." };
-  const followUpStatus = followUpMap[normalizeKey(input.followUpStatus)] ?? "ABERTO";
+  if (!input.latencyStart?.trim()) return { error: "SLA latência início é obrigatório." };
+  if (!input.latencyEnd?.trim()) return { error: "SLA latência final é obrigatório." };
+  if (input.requiresFollowUp && !input.followUpOwner?.trim()) return { error: "Responsável follow-up é obrigatório quando há follow-up." };
+  if (input.requiresFollowUp && !input.followUpDueDate?.trim()) return { error: "Prazo follow-up é obrigatório quando há follow-up." };
+  const followUpStatus: FollowUpStatus = input.requiresFollowUp ? "ABERTO" : "CANCELADO";
   const shift = await findShift(input.shift);
   const shiftId = shift?.id ?? null;
   const lobId = await findLobId(input.lob);
@@ -310,38 +301,36 @@ export async function createShiftReport(actor: Actor, input: ShiftReportInput) {
   const timeBlocks = validateTimeBlocks(input.timeBlocks, shift);
   if ("error" in timeBlocks) return { error: timeBlocks.error };
   const rta = await findEmployeeByText(input.rta);
-  const followUpOwner = await findEmployeeByText(input.followUpOwner);
+  if (!rta) return { error: "RTA responsável não encontrado." };
+  const followUpOwner = input.requiresFollowUp ? await findEmployeeByText(input.followUpOwner) : null;
+  if (input.requiresFollowUp && !followUpOwner) return { error: "Responsável follow-up não encontrado." };
   const supervisorId = user.employeeProfile?.id ?? null;
 
-  const report = await prisma.$transaction(async (tx) => {
+  const reportId = await prisma.$transaction(async (tx) => {
     const saved = await tx.shiftReport.create({
       data: {
         reportDate,
         shiftId,
         lobId,
-        operation: input.operation,
+        operation: "Report operacional",
         supervisorId,
-        rtaId: rta?.id ?? null,
+        rtaId: rta.id,
         importance,
         plannedHeadcount: input.plannedHeadcount,
         actualHeadcount: input.actualHeadcount,
-        onlineAgents: input.onlineAgents,
+        onlineAgents: input.actualHeadcount,
         absCount: input.absCount,
-        absJustification: input.absJustification,
-        queueStatusStart: input.queueStatusStart,
-        queueStatusEnd: input.queueStatusEnd,
-        backlogStart: input.backlogStart,
-        backlogEnd: input.backlogEnd,
+        absJustification: null,
+        queueStatusStart: input.latencyStart ?? "",
+        queueStatusEnd: input.latencyEnd ?? "",
+        backlogStart: input.backlogStart ?? 0,
+        backlogEnd: input.backlogEnd ?? 0,
         latencyStart: input.latencyStart,
         latencyEnd: input.latencyEnd,
-        occurrences: {
-          category: input.occurrenceCategory,
-          impactLevel: input.impactLevel,
-          description: input.occurrences ?? ""
-        },
+        occurrences: { description: input.occurrences ?? "" },
         pendingTasks: input.pendingTasks,
         generalMood,
-        leadersPresent: input.leadersPresent,
+        leadersPresent: null,
         mainRisks: input.mainRisks,
         actionsTaken: input.actionsTaken,
         nextShiftAttentionPoints: input.nextShiftAttentionPoints,
@@ -350,15 +339,6 @@ export async function createShiftReport(actor: Actor, input: ShiftReportInput) {
         followUpDueDate: parseDate(input.followUpDueDate),
         followUpStatus,
         additionalComments: input.additionalComments,
-        absences: {
-          create: (input.absentEmployees ?? []).map((absence) => ({
-            employeeId: absence.employeeId,
-            absenceReason: absence.absenceReason,
-            observation: absence.observation,
-            impactsAbs: absence.impactsAbs ?? true,
-            impactsCoverage: absence.impactsCoverage ?? true
-          }))
-        },
         timeBlocks: {
           create: (timeBlocks.data ?? []).map((block) => ({
             startTime: block.startTime,
@@ -381,7 +361,11 @@ export async function createShiftReport(actor: Actor, input: ShiftReportInput) {
         newValue: serialize(saved)
       }
     });
-    return saved;
+    return saved.id;
+  });
+  const report = await prisma.shiftReport.findUniqueOrThrow({
+    where: { id: reportId },
+    include: { absences: true, timeBlocks: { orderBy: { startTime: "asc" } } }
   });
   const labels = await reportLabels([report]);
   const data = formatReport(report, labels);
@@ -415,26 +399,32 @@ export async function deleteShiftReport(actor: Actor, id: string) {
 
 export async function exportShiftReports(actor: Actor, query: ShiftReportQuery = {}) {
   const payload = await listShiftReports(actor, query);
-  const headers = ["id", "data", "turno", "lob", "supervisor", "rta", "importancia", "hc_previsto", "hc_real", "online", "abs", "humor", "categoria", "impacto", "follow_up", "tempo_total_minutos", "tempo_por_categoria", "blocos_tempo"];
+  const headers = ["id", "data_report", "turno", "lob", "importancia", "rta_responsavel", "hc_escalado", "hc_real", "abs_total", "backlog_inicio", "backlog_final", "humor_geral", "sla_latencia_inicio", "sla_latencia_final", "distribuicao_tempo", "ocorrencias", "tarefas_pendentes", "principais_riscos", "acoes_realizadas", "pontos_proximo_turno", "comentarios_adicionais", "necessita_follow_up", "responsavel_follow_up", "prazo_follow_up"];
   const rows = payload.data.map((report) => [
     report.id,
     report.reportDate,
     report.shift,
     report.lob,
-    report.supervisor,
-    report.rta,
     report.importance,
+    report.rta,
     report.plannedHeadcount,
     report.actualHeadcount,
-    report.onlineAgents,
     report.absCount,
+    report.backlogStart,
+    report.backlogEnd,
     report.generalMood,
-    report.occurrenceCategory,
-    report.impactLevel,
-    report.followUpStatus,
-    report.totalTimeMinutes,
-    Object.entries(report.timeSummary).map(([category, minutes]) => `${category}: ${minutes}min`).join("; "),
-    report.timeBlocks.map((block) => `${block.startTime}-${block.endTime} ${block.category}${block.description ? ` (${block.description})` : ""}`).join("; ")
+    report.latencyStart,
+    report.latencyEnd,
+    report.timeBlocks.map((block) => `${block.startTime}-${block.endTime} ${block.category}${block.description ? ` (${block.description})` : ""}`).join("; "),
+    report.occurrences,
+    report.pendingTasks,
+    report.mainRisks,
+    report.actionsTaken,
+    report.nextShiftAttentionPoints,
+    report.additionalComments,
+    report.requiresFollowUp ? "Sim" : "Não",
+    report.followUpOwner,
+    report.followUpDueDate
   ]);
   return { csv: [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n"), data: payload.data, dashboard: payload.dashboard };
 }
@@ -444,7 +434,6 @@ function formatReport(
   labels: Awaited<ReturnType<typeof reportLabels>>
 ) {
   const occurrence = occurrenceFrom(report);
-  const supervisor = report.supervisorId ? labels.employees.get(report.supervisorId) : null;
   const rta = report.rtaId ? labels.employees.get(report.rtaId) : null;
   const timeBlocks = [...report.timeBlocks].sort((a, b) => a.startTime.localeCompare(b.startTime));
   const timeSummary = timeBlocks.reduce<Record<string, number>>((acc, block) => {
@@ -458,34 +447,25 @@ function formatReport(
     submittedAt: report.submittedAt.toISOString(),
     shift: report.shiftId ? labels.shifts.get(report.shiftId) ?? "Sem turno" : "Sem turno",
     lob: report.lobId ? labels.lobs.get(report.lobId) ?? "Sem LOB" : "Sem LOB",
-    operation: report.operation,
-    supervisor: supervisor?.fullName ?? "Sem supervisor",
     supervisorId: report.supervisorId ?? "",
     rta: rta?.fullName ?? "",
     importance: labelImportance[report.importance],
     plannedHeadcount: report.plannedHeadcount,
     actualHeadcount: report.actualHeadcount,
-    onlineAgents: report.onlineAgents,
     absCount: report.absCount,
-    absJustification: report.absJustification ?? "",
-    queueStatusStart: report.queueStatusStart,
-    queueStatusEnd: report.queueStatusEnd,
     backlogStart: report.backlogStart ?? 0,
     backlogEnd: report.backlogEnd ?? 0,
     latencyStart: report.latencyStart ?? "",
     latencyEnd: report.latencyEnd ?? "",
-    occurrenceCategory: occurrence.category,
-    impactLevel: occurrence.impactLevel,
     occurrences: occurrence.description,
     pendingTasks: report.pendingTasks ?? "",
     generalMood: labelMood[report.generalMood],
-    leadersPresent: report.leadersPresent ?? "",
     mainRisks: report.mainRisks ?? "",
     actionsTaken: report.actionsTaken ?? "",
     nextShiftAttentionPoints: report.nextShiftAttentionPoints ?? "",
     requiresFollowUp: report.requiresFollowUp,
     followUpOwner: report.followUpOwnerId ? labels.employees.get(report.followUpOwnerId)?.fullName ?? "" : "",
-    followUpStatus: labelFollowUp[report.followUpStatus],
+    followUpDueDate: report.followUpDueDate ? formatDate(report.followUpDueDate) : "",
     additionalComments: report.additionalComments ?? "",
     timeBlocks: timeBlocks.map((block) => ({
       id: block.id,
@@ -504,11 +484,7 @@ function formatReport(
 function buildDashboard(reports: ReturnType<typeof formatReport>[]) {
   const critical = reports.filter((report) => report.importance === "Crítica").length;
   const absTotal = reports.reduce((sum, report) => sum + report.absCount, 0);
-  const pendingFollowUps = reports.filter((report) => report.requiresFollowUp && !["Concluído", "Cancelado"].includes(report.followUpStatus)).length;
-  const byCategory = reports.reduce<Record<string, number>>((acc, report) => {
-    acc[report.occurrenceCategory] = (acc[report.occurrenceCategory] ?? 0) + 1;
-    return acc;
-  }, {});
+  const pendingFollowUps = reports.filter((report) => report.requiresFollowUp).length;
   const byShift = reports.reduce<Record<string, number>>((acc, report) => {
     acc[report.shift] = (acc[report.shift] ?? 0) + 1;
     return acc;
@@ -526,8 +502,6 @@ function buildDashboard(reports: ReturnType<typeof formatReport>[]) {
     critical,
     absTotal,
     pendingFollowUps,
-    overdueFollowUps: 0,
-    byCategory,
     timeByCategory,
     totalTimeMinutes: reports.reduce((sum, report) => sum + report.totalTimeMinutes, 0),
     recent: reports.slice(0, 5),
@@ -536,11 +510,10 @@ function buildDashboard(reports: ReturnType<typeof formatReport>[]) {
       generatedAt: new Date().toLocaleString("pt-BR"),
       whatHappened: reports[0]?.occurrences || "Nenhum report de turno enviado.",
       mainRisks,
-      worstImpacts: reports.filter((report) => ["Alto", "Crítico"].includes(report.impactLevel)).map((report) => `${report.occurrenceCategory}: ${report.impactLevel}`),
       decisionsNeeded: reports.filter((report) => report.requiresFollowUp).map((report) => report.pendingTasks || "Follow-up pendente"),
       abs: `${absTotal} ausência(s) reportada(s).`,
       mood: reports[0]?.generalMood ?? "Sem dados",
-      queueStatus: reports[0] ? `${reports[0].queueStatusStart} → ${reports[0].queueStatusEnd}` : "Sem dados",
+      slaLatency: reports[0] ? `${reports[0].latencyStart || "N/I"} → ${reports[0].latencyEnd || "N/I"}` : "Sem dados",
       actionsTaken: reports.flatMap((report) => splitText(report.actionsTaken)).slice(0, 5),
       recommendations: pendingFollowUps ? ["Acompanhar follow-ups abertos e responsáveis definidos."] : ["Sem follow-up pendente no período."]
     }

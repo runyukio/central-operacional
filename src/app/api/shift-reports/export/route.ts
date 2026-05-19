@@ -11,10 +11,11 @@ export async function GET(request: Request) {
     startDate: url.searchParams.get("startDate") ?? undefined,
     endDate: url.searchParams.get("endDate") ?? undefined,
     shift: url.searchParams.get("shift") ?? undefined,
-    supervisor: url.searchParams.get("supervisor") ?? undefined,
+    lob: url.searchParams.get("lob") ?? undefined,
     rta: url.searchParams.get("rta") ?? undefined,
     importance: url.searchParams.get("importance") ?? undefined,
     mood: url.searchParams.get("mood") ?? undefined,
+    followUp: url.searchParams.get("followUp") ?? undefined,
     search: url.searchParams.get("search") ?? undefined
   });
 

@@ -4,15 +4,6 @@ import { z } from "zod";
 import { getApiActor } from "@/lib/api-actor";
 import { createShiftReport, deleteShiftReport, listShiftReports } from "@/lib/shift-report-service";
 
-const absenceSchema = z.object({
-  employeeId: z.string().min(1),
-  employeeName: z.string().min(1),
-  absenceReason: z.string().min(1),
-  observation: z.string().optional(),
-  impactsAbs: z.boolean().default(true),
-  impactsCoverage: z.boolean().default(true)
-});
-
 const timeBlockSchema = z.object({
   startTime: z.string().min(1),
   endTime: z.string().min(1),
@@ -21,40 +12,37 @@ const timeBlockSchema = z.object({
 });
 
 const schema = z.object({
-  reportDate: z.string().min(1),
-  shift: z.string().min(1),
-  lob: z.string().min(1),
-  operation: z.string().min(1),
-  supervisor: z.string().optional(),
-  rta: z.string().min(1),
+  reportDate: z.string().min(1, "Data do report é obrigatória."),
+  shift: z.string().min(1, "Turno é obrigatório."),
+  lob: z.string().min(1, "LOB é obrigatória."),
+  rta: z.string().min(1, "RTA responsável é obrigatório."),
   importance: z.enum(["Baixa", "Média", "Alta", "Crítica"]),
-  plannedHeadcount: z.number().int().nonnegative(),
-  actualHeadcount: z.number().int().nonnegative(),
-  onlineAgents: z.number().int().nonnegative(),
-  absCount: z.number().int().nonnegative(),
-  absJustification: z.string().optional().default(""),
-  absentEmployees: z.array(absenceSchema).default([]),
-  queueStatusStart: z.string().min(1),
-  queueStatusEnd: z.string().min(1),
-  backlogStart: z.number().int().nonnegative().default(0),
-  backlogEnd: z.number().int().nonnegative().default(0),
-  latencyStart: z.string().optional().default(""),
-  latencyEnd: z.string().optional().default(""),
-  occurrenceCategory: z.string().min(1),
-  impactLevel: z.string().min(1),
+  plannedHeadcount: z.number().int().nonnegative("HC escalado deve ser um número válido."),
+  actualHeadcount: z.number().int().nonnegative("HC real deve ser um número válido."),
+  absCount: z.number().int().nonnegative("ABS total deve ser um número válido."),
+  backlogStart: z.number().int().nonnegative("Backlog início deve ser um número válido.").default(0),
+  backlogEnd: z.number().int().nonnegative("Backlog final deve ser um número válido.").default(0),
+  latencyStart: z.string().min(1, "SLA latência início é obrigatório."),
+  latencyEnd: z.string().min(1, "SLA latência final é obrigatório."),
   occurrences: z.string().optional().default(""),
   pendingTasks: z.string().optional().default(""),
-  generalMood: z.string().min(1),
-  leadersPresent: z.string().optional().default(""),
+  generalMood: z.string().min(1, "Humor geral é obrigatório."),
   mainRisks: z.string().optional().default(""),
   actionsTaken: z.string().optional().default(""),
   nextShiftAttentionPoints: z.string().optional().default(""),
   requiresFollowUp: z.boolean().default(false),
   followUpOwner: z.string().optional().default(""),
   followUpDueDate: z.string().optional(),
-  followUpStatus: z.string().optional().default("Aberto"),
   additionalComments: z.string().optional().default(""),
   timeBlocks: z.array(timeBlockSchema).default([])
+}).superRefine((data, ctx) => {
+  if (!data.requiresFollowUp) return;
+  if (!data.followUpOwner?.trim()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["followUpOwner"], message: "Responsável follow-up é obrigatório quando há follow-up." });
+  }
+  if (!data.followUpDueDate?.trim()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["followUpDueDate"], message: "Prazo follow-up é obrigatório quando há follow-up." });
+  }
 });
 
 export async function GET(request: Request) {
@@ -64,10 +52,11 @@ export async function GET(request: Request) {
     startDate: url.searchParams.get("startDate") ?? undefined,
     endDate: url.searchParams.get("endDate") ?? undefined,
     shift: url.searchParams.get("shift") ?? undefined,
-    supervisor: url.searchParams.get("supervisor") ?? undefined,
+    lob: url.searchParams.get("lob") ?? undefined,
     rta: url.searchParams.get("rta") ?? undefined,
     importance: url.searchParams.get("importance") ?? undefined,
     mood: url.searchParams.get("mood") ?? undefined,
+    followUp: url.searchParams.get("followUp") ?? undefined,
     search: url.searchParams.get("search") ?? undefined
   }));
 }

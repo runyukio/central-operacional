@@ -541,27 +541,25 @@ type ShiftReportItem = {
   submittedAt: string;
   shift: string;
   lob: string;
-  operation: string;
-  supervisor: string;
   rta: string;
   importance: string;
   plannedHeadcount: number;
   actualHeadcount: number;
-  onlineAgents: number;
   absCount: number;
-  queueStatusStart: string;
-  queueStatusEnd: string;
   backlogStart: number;
   backlogEnd: number;
-  occurrenceCategory: string;
-  impactLevel: string;
+  latencyStart: string;
+  latencyEnd: string;
+  occurrences: string;
+  pendingTasks: string;
   generalMood: string;
   requiresFollowUp: boolean;
   followUpOwner: string;
-  followUpStatus: string;
+  followUpDueDate: string;
   mainRisks: string;
   actionsTaken: string;
   nextShiftAttentionPoints: string;
+  additionalComments: string;
   timeBlocks: ShiftReportTimeBlock[];
   timeSummary: Record<string, number>;
   totalTimeMinutes: number;
@@ -582,8 +580,6 @@ type ShiftReportDashboard = {
   critical: number;
   absTotal: number;
   pendingFollowUps: number;
-  overdueFollowUps: number;
-  byCategory: Record<string, number>;
   timeByCategory: Record<string, number>;
   totalTimeMinutes: number;
   briefing: {
@@ -591,11 +587,10 @@ type ShiftReportDashboard = {
     generatedAt: string;
     whatHappened: string;
     mainRisks: string[];
-    worstImpacts: string[];
     decisionsNeeded: string[];
     abs: string;
     mood: string;
-    queueStatus: string;
+    slaLatency: string;
     actionsTaken: string[];
     recommendations: string[];
   };
@@ -6155,42 +6150,31 @@ function TimeDistributionView({ blocks, summary, compact = false }: { blocks: Sh
 export function ShiftReportPage() {
   const [reports, setReports] = useState<ShiftReportItem[]>([]);
   const [dashboard, setDashboard] = useState<ShiftReportDashboard | null>(null);
-  const [employeeRows, setEmployeeRows] = useState<EmployeeClient[]>([]);
   const [message, setMessage] = useState("");
-  const [reportFilters, setReportFilters] = useState({ startDate: "", endDate: "", shift: "Todos", supervisor: "", rta: "", importance: "Todos", mood: "Todos", search: "" });
+  const [selectedReport, setSelectedReport] = useState<ShiftReportItem | null>(null);
+  const [reportFilters, setReportFilters] = useState({ startDate: "", endDate: "", shift: "Todos", lob: "Todos", rta: "", importance: "Todos", mood: "Todos", followUp: "Todos", search: "" });
   const [form, setForm] = useState({
     reportDate: new Date().toISOString().slice(0, 10),
     shift: "Manhã",
     lob: "CEC",
-    operation: "",
     rta: "",
     importance: "Média",
     plannedHeadcount: 0,
     actualHeadcount: 0,
-    onlineAgents: 0,
     absCount: 0,
-    absJustification: "",
-    absentEmployeeId: "",
-    absenceReason: "Falta injustificada",
-    queueStatusStart: "",
-    queueStatusEnd: "",
     backlogStart: 0,
     backlogEnd: 0,
     latencyStart: "",
     latencyEnd: "",
-    occurrenceCategory: "Pessoas",
-    impactLevel: "Sem impacto",
     occurrences: "",
     pendingTasks: "",
     generalMood: "Neutro",
-    leadersPresent: "",
     mainRisks: "",
     actionsTaken: "",
     nextShiftAttentionPoints: "",
     requiresFollowUp: false,
     followUpOwner: "",
     followUpDueDate: "",
-    followUpStatus: "Aberto",
     additionalComments: "",
     timeBlocks: [] as ShiftReportTimeBlock[]
   });
@@ -6204,7 +6188,6 @@ export function ShiftReportPage() {
 
   useEffect(() => {
     void refreshReports();
-    apiJson<{ data: EmployeeClient[] }>("/api/employees?limit=200").then((payload) => setEmployeeRows(payload.data)).catch(() => setEmployeeRows([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -6219,19 +6202,13 @@ export function ShiftReportPage() {
   }
 
   async function submitReport() {
-    const absent = employeeRows.find((employee) => employee.id === form.absentEmployeeId);
     const payload = await apiJson<{ data: ShiftReportItem; briefing: ShiftReportDashboard["briefing"] }>("/api/shift-reports", {
       method: "POST",
-      body: JSON.stringify({
-        ...form,
-        absentEmployees: absent
-          ? [{ employeeId: absent.id, employeeName: absent.name, absenceReason: form.absenceReason, observation: form.absJustification, impactsAbs: true, impactsCoverage: true }]
-          : []
-      })
+      body: JSON.stringify(form)
     });
     setReports((items) => [payload.data, ...items]);
     setDashboard((current) => current ? { ...current, briefing: payload.briefing, total: current.total + 1 } : current);
-    setMessage(`Report ${payload.data.id} enviado, ausências registradas e briefing atualizado.`);
+    setMessage(`Report ${payload.data.id} enviado e briefing atualizado.`);
     await refreshReports();
   }
 
@@ -6239,6 +6216,7 @@ export function ShiftReportPage() {
     if (!window.confirm("Tem certeza que deseja excluir este report de turno?")) return;
     const payload = await apiJson<{ message: string }>(`/api/shift-reports?id=${encodeURIComponent(id)}`, { method: "DELETE" });
     setMessage(payload.message);
+    if (selectedReport?.id === id) setSelectedReport(null);
     await refreshReports();
   }
 
@@ -6292,18 +6270,16 @@ export function ShiftReportPage() {
       `Gerado em: ${briefing.generatedAt}`,
       `O que aconteceu: ${briefing.whatHappened}`,
       `Riscos: ${briefing.mainRisks.join("; ")}`,
-      `Impactos: ${briefing.worstImpacts.join("; ") || "Sem impacto crítico"}`,
       `Decisões: ${briefing.decisionsNeeded.join("; ") || "Sem decisão pendente"}`,
       `ABS: ${briefing.abs}`,
       `Humor: ${briefing.mood}`,
-      `Status filas: ${briefing.queueStatus}`,
+      `SLA latência: ${briefing.slaLatency}`,
       `Recomendações: ${briefing.recommendations.join("; ")}`
     ].join("\n");
     navigator.clipboard?.writeText(text);
     setMessage("Resumo gerencial copiado para uso em IA externa.");
   }
 
-  const categoryChart = Object.entries(dashboard?.byCategory ?? {}).map(([name, value]) => ({ name, value }));
   const timeSummary = summarizeTimeBlocks(form.timeBlocks);
   const totalTimeMinutes = Object.values(timeSummary).reduce((sum, minutes) => sum + minutes, 0);
   const timeCategoryChart = Object.entries(dashboard?.timeByCategory ?? {}).map(([name, minutes]) => ({ name, horas: Math.round((minutes / 60) * 100) / 100 }));
@@ -6319,58 +6295,47 @@ export function ShiftReportPage() {
   return (
     <div>
       <PageHeader title="Report de Turno" description="Registre a leitura operacional do turno e gere visão gerencial para liderança." icon={ClipboardList} actions={<TopActions />} />
-      <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+      <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard title="Reports enviados" value={dashboard?.total ?? reports.length} helper="período atual" icon={FileText} tone="blue" />
         <StatCard title="Reports críticos" value={dashboard?.critical ?? 0} helper="alta atenção" icon={AlertTriangle} tone="red" />
         <StatCard title="ABS consolidado" value={dashboard?.absTotal ?? 0} helper="agentes ausentes" icon={UsersRound} tone="orange" />
         <StatCard title="Pendências abertas" value={dashboard?.pendingFollowUps ?? 0} helper="follow-up" icon={Clock} tone="purple" />
-        <StatCard title="Vencidos" value={dashboard?.overdueFollowUps ?? 0} helper="SLA follow-up" icon={XCircle} tone="red" />
       </div>
       {message ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
       <div className="card mb-5 grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-8">
         <FormInput label="Data inicial" type="date" value={reportFilters.startDate} onChange={(value) => setReportFilters({ ...reportFilters, startDate: value })} />
         <FormInput label="Data final" type="date" value={reportFilters.endDate} onChange={(value) => setReportFilters({ ...reportFilters, endDate: value })} />
         <FormSelect label="Turno" value={reportFilters.shift} options={["Todos", ...Array.from(standardShiftNames)]} onChange={(value) => setReportFilters({ ...reportFilters, shift: value })} />
+        <FormSelect label="LOB" value={reportFilters.lob} options={["Todos", "CEC", "TNS", "ADS", "ALL"]} onChange={(value) => setReportFilters({ ...reportFilters, lob: value })} />
         <FormSelect label="Importância" value={reportFilters.importance} options={["Todos", "Baixa", "Média", "Alta", "Crítica"]} onChange={(value) => setReportFilters({ ...reportFilters, importance: value })} />
         <FormSelect label="Humor" value={reportFilters.mood} options={["Todos", "Muito bom", "Bom", "Neutro", "Ruim", "Crítico"]} onChange={(value) => setReportFilters({ ...reportFilters, mood: value })} />
-        <FormInput label="Supervisor" value={reportFilters.supervisor} onChange={(value) => setReportFilters({ ...reportFilters, supervisor: value })} />
         <FormInput label="RTA" value={reportFilters.rta} onChange={(value) => setReportFilters({ ...reportFilters, rta: value })} />
+        <FormSelect label="Follow-up" value={reportFilters.followUp} options={["Todos", "Sim", "Não"]} onChange={(value) => setReportFilters({ ...reportFilters, followUp: value })} />
         <div className="flex items-end">
           <button onClick={() => void refreshReports()} className="h-11 w-full rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
         </div>
       </div>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_460px]">
         <div className="space-y-5">
-          <Panel title="Questionário do turno">
+          <Panel title="Report de turno">
+            <h3 className="mb-3 text-sm font-extrabold text-navy-950">Identificação do turno</h3>
             <div className="grid gap-4 md:grid-cols-4">
               <FormInput label="Data do report" type="date" value={form.reportDate} onChange={(value) => setForm({ ...form, reportDate: value })} />
               <FormSelect label="Turno" value={form.shift} options={Array.from(standardShiftNames)} onChange={(value) => setForm({ ...form, shift: value })} />
-              <FormSelect label="LOB" value={form.lob} options={["CEC", "TNS", "ADS"]} onChange={(value) => setForm({ ...form, lob: value })} />
+              <FormSelect label="LOB" value={form.lob} options={["CEC", "TNS", "ADS", "ALL"]} onChange={(value) => setForm({ ...form, lob: value })} />
               <FormSelect label="Importância" value={form.importance} options={["Baixa", "Média", "Alta", "Crítica"]} onChange={(value) => setForm({ ...form, importance: value })} />
               <FormInput label="RTA responsável" value={form.rta} onChange={(value) => setForm({ ...form, rta: value })} />
-              <FormInput label="HC previsto" type="number" value={String(form.plannedHeadcount)} onChange={(value) => setForm({ ...form, plannedHeadcount: Number(value) })} />
+            </div>
+            <h3 className="mb-3 mt-5 text-sm font-extrabold text-navy-950">Headcount e operação</h3>
+            <div className="grid gap-4 md:grid-cols-4">
+              <FormInput label="HC escalado" type="number" value={String(form.plannedHeadcount)} onChange={(value) => setForm({ ...form, plannedHeadcount: Number(value) })} />
               <FormInput label="HC real" type="number" value={String(form.actualHeadcount)} onChange={(value) => setForm({ ...form, actualHeadcount: Number(value) })} />
-              <FormInput label="Agentes online" type="number" value={String(form.onlineAgents)} onChange={(value) => setForm({ ...form, onlineAgents: Number(value) })} />
               <FormInput label="ABS total" type="number" value={String(form.absCount)} onChange={(value) => setForm({ ...form, absCount: Number(value) })} />
               <FormInput label="Backlog início" type="number" value={String(form.backlogStart)} onChange={(value) => setForm({ ...form, backlogStart: Number(value) })} />
               <FormInput label="Backlog final" type="number" value={String(form.backlogEnd)} onChange={(value) => setForm({ ...form, backlogEnd: Number(value) })} />
-              <FormSelect label="Humor geral" value={form.generalMood} options={["Muito bom", "Bom", "Neutro", "Ruim", "Crítico"]} onChange={(value) => setForm({ ...form, generalMood: value })} />
-            </div>
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <label className="block">
-                <span className="mb-1.5 block text-sm font-bold text-muted">Agente ausente</span>
-                <select value={form.absentEmployeeId} onChange={(event) => setForm({ ...form, absentEmployeeId: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 text-sm font-semibold outline-none">
-                  <option value="">Sem ausência individual</option>
-                  {employeeRows.map((employee) => (
-                    <option key={employee.id} value={employee.id}>{employee.name} - {employee.wb || employee.email}</option>
-                  ))}
-                </select>
-              </label>
-              <FormSelect label="Motivo da ausência" value={form.absenceReason} options={["Falta injustificada", "Atestado", "Problema de saúde", "Emergência familiar", "Problema técnico", "Falta de equipamento", "Problema de internet", "Atraso", "Saída antecipada", "Erro de cronograma", "Treinamento", "Férias", "Afastamento", "Folga", "Outros"]} onChange={(value) => setForm({ ...form, absenceReason: value })} />
-              <FormSelect label="Categoria da ocorrência" value={form.occurrenceCategory} options={["Pessoas", "Sistema", "Ferramenta", "Cliente", "Volume", "SLA/Latência", "Qualidade", "Cronograma", "Equipamento", "Treinamento", "Outros"]} onChange={(value) => setForm({ ...form, occurrenceCategory: value })} />
-              <FormSelect label="Nível de impacto" value={form.impactLevel} options={["Sem impacto", "Baixo", "Médio", "Alto", "Crítico"]} onChange={(value) => setForm({ ...form, impactLevel: value })} />
               <FormInput label="SLA/latência início" value={form.latencyStart} onChange={(value) => setForm({ ...form, latencyStart: value })} />
               <FormInput label="SLA/latência final" value={form.latencyEnd} onChange={(value) => setForm({ ...form, latencyEnd: value })} />
+              <FormSelect label="Humor geral" value={form.generalMood} options={["Muito bom", "Bom", "Neutro", "Ruim", "Crítico"]} onChange={(value) => setForm({ ...form, generalMood: value })} />
             </div>
             <div className="mt-5 rounded-lg border border-border bg-white p-4">
               <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
@@ -6411,14 +6376,11 @@ export function ShiftReportPage() {
                 <div className="mt-4"><EmptyState title="Nenhum bloco de tempo" description="Adicione atividades como Administrativo, Desenvolvimento ou Suporte ao time." /></div>
               )}
             </div>
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <h3 className="mb-3 mt-5 text-sm font-extrabold text-navy-950">Registro operacional</h3>
+            <div className="grid gap-4 md:grid-cols-2">
               {[
-                ["Status das filas no início", "queueStatusStart"],
-                ["Status das filas no final", "queueStatusEnd"],
-                ["Justificativa de ABS", "absJustification"],
                 ["Ocorrências", "occurrences"],
                 ["Tarefas pendentes", "pendingTasks"],
-                ["Líderes presentes", "leadersPresent"],
                 ["Principais riscos", "mainRisks"],
                 ["Ações realizadas", "actionsTaken"],
                 ["Pontos para próximo turno", "nextShiftAttentionPoints"],
@@ -6430,7 +6392,8 @@ export function ShiftReportPage() {
                 </label>
               ))}
             </div>
-            <div className="mt-4 grid gap-4 md:grid-cols-3">
+            <h3 className="mb-3 mt-5 text-sm font-extrabold text-navy-950">Follow-up</h3>
+            <div className="grid gap-4 md:grid-cols-3">
               <FormSelect label="Necessita follow-up?" value={form.requiresFollowUp ? "Sim" : "Não"} options={["Sim", "Não"]} onChange={(value) => setForm({ ...form, requiresFollowUp: value === "Sim" })} />
               <FormInput label="Responsável follow-up" value={form.followUpOwner} onChange={(value) => setForm({ ...form, followUpOwner: value })} />
               <FormInput label="Prazo follow-up" type="date" value={form.followUpDueDate} onChange={(value) => setForm({ ...form, followUpDueDate: value })} />
@@ -6440,18 +6403,23 @@ export function ShiftReportPage() {
           <Panel title="Últimos reports enviados">
             {reports.length ? (
               <SimpleTable
-                columns={["ID", "Data", "Turno", "LOB", "Supervisor", "Importância", "ABS", "Tempo", "Follow-up", "Ações"]}
+                columns={["Data", "Turno", "LOB", "Importância", "RTA responsável", "HC escalado", "HC real", "ABS total", "Humor", "Tempo", "Follow-up", "Ações"]}
                 rows={reports.map((report) => [
-                  report.id,
                   report.reportDate,
                   report.shift,
                   report.lob,
-                  report.supervisor,
                   <PriorityBadge key={report.id} priority={report.importance} />,
+                  report.rta || "-",
+                  report.plannedHeadcount,
+                  report.actualHeadcount,
                   report.absCount,
+                  report.generalMood,
                   <div key={`${report.id}-tempo`} className="min-w-[220px]"><TimeDistributionView blocks={report.timeBlocks ?? []} summary={report.timeSummary} compact /></div>,
-                  <StatusBadge key={`${report.id}-f`} status={report.followUpStatus} />,
-                  <button key={`${report.id}-delete`} onClick={() => void deleteReport(report.id)} className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-bold text-red-600">Excluir</button>
+                  <StatusBadge key={`${report.id}-f`} status={report.requiresFollowUp ? "Sim" : "Não"} />,
+                  <div key={`${report.id}-actions`} className="flex gap-2">
+                    <button onClick={() => setSelectedReport(report)} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Ver</button>
+                    <button onClick={() => void deleteReport(report.id)} className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-bold text-red-600">Excluir</button>
+                  </div>
                 ])}
               />
             ) : (
@@ -6469,19 +6437,6 @@ export function ShiftReportPage() {
                 <a href={reportExportUrl()} className="flex h-11 items-center justify-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold"><Download className="h-4 w-4" />Exportar CSV</a>
                 <a href={reportExportUrl("json")} className="flex h-11 items-center justify-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold"><FileJson className="h-4 w-4" />Exportar JSON</a>
               </div>
-            </div>
-          </Panel>
-          <Panel title="Ocorrências por categoria">
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={categoryChart}>
-                  <CartesianGrid stroke="#E8EDF5" vertical={false} />
-                  <XAxis dataKey="name" />
-                  <YAxis allowDecimals={false} />
-                  <Tooltip />
-                  <Bar dataKey="value" fill="#2563EB" radius={[8, 8, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
             </div>
           </Panel>
           <Panel title="Tempo por atividade">
@@ -6508,12 +6463,66 @@ export function ShiftReportPage() {
             <div className="space-y-3 text-sm text-muted">
               <p><strong className="text-navy-950">ABS:</strong> {dashboard?.briefing.abs}</p>
               <p><strong className="text-navy-950">Humor:</strong> {dashboard?.briefing.mood}</p>
-              <p><strong className="text-navy-950">Filas:</strong> {dashboard?.briefing.queueStatus}</p>
+              <p><strong className="text-navy-950">SLA latência:</strong> {dashboard?.briefing.slaLatency}</p>
               <p><strong className="text-navy-950">Recomendações:</strong> {(dashboard?.briefing.recommendations ?? []).join(" ")}</p>
             </div>
           </Panel>
         </div>
       </div>
+      {selectedReport ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy-950/40 p-4">
+          <div className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-xl bg-white p-5 shadow-2xl">
+            <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-extrabold text-navy-950">Report de Turno</h2>
+                <p className="text-sm font-semibold text-muted">{selectedReport.reportDate} · {selectedReport.shift} · {selectedReport.lob}</p>
+              </div>
+              <button onClick={() => setSelectedReport(null)} className="rounded-lg border border-border px-3 py-2 text-sm font-bold">Fechar</button>
+            </div>
+            <div className="grid gap-4 md:grid-cols-3">
+              <InfoLine label="Data do report" value={selectedReport.reportDate} />
+              <InfoLine label="Turno" value={selectedReport.shift} />
+              <InfoLine label="LOB" value={selectedReport.lob} />
+              <InfoLine label="Importância" value={selectedReport.importance} />
+              <InfoLine label="RTA responsável" value={selectedReport.rta || "-"} />
+              <InfoLine label="Humor geral" value={selectedReport.generalMood} />
+              <InfoLine label="HC escalado" value={selectedReport.plannedHeadcount} />
+              <InfoLine label="HC real" value={selectedReport.actualHeadcount} />
+              <InfoLine label="ABS total" value={selectedReport.absCount} />
+              <InfoLine label="Backlog início" value={selectedReport.backlogStart} />
+              <InfoLine label="Backlog final" value={selectedReport.backlogEnd} />
+              <InfoLine label="SLA latência início" value={selectedReport.latencyStart || "-"} />
+              <InfoLine label="SLA latência final" value={selectedReport.latencyEnd || "-"} />
+              <InfoLine label="Necessita follow-up" value={selectedReport.requiresFollowUp ? "Sim" : "Não"} />
+              <InfoLine label="Responsável follow-up" value={selectedReport.followUpOwner || "-"} />
+              <InfoLine label="Prazo follow-up" value={selectedReport.followUpDueDate || "-"} />
+            </div>
+            <div className="mt-5 rounded-lg border border-border p-4">
+              <h3 className="mb-3 text-sm font-extrabold text-navy-950">Distribuição do Tempo</h3>
+              {selectedReport.timeBlocks?.length ? (
+                <TimeDistributionView blocks={selectedReport.timeBlocks} summary={selectedReport.timeSummary} />
+              ) : (
+                <EmptyState title="Sem blocos registrados" description="Este report não possui distribuição de tempo." />
+              )}
+            </div>
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              {[
+                ["Ocorrências", selectedReport.occurrences],
+                ["Tarefas pendentes", selectedReport.pendingTasks],
+                ["Principais riscos", selectedReport.mainRisks],
+                ["Ações realizadas", selectedReport.actionsTaken],
+                ["Pontos para o próximo turno", selectedReport.nextShiftAttentionPoints],
+                ["Comentários adicionais", selectedReport.additionalComments]
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-lg border border-border p-3">
+                  <p className="text-xs font-extrabold uppercase text-muted">{label}</p>
+                  <p className="mt-2 whitespace-pre-wrap text-sm font-semibold text-navy-950">{value || "-"}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
