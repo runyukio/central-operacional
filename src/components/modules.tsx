@@ -1322,15 +1322,17 @@ export function OperationalCommandCenter() {
   const commandAbsenceReasons = Object.entries(summary.byReason)
     .filter(([, value]) => value > 0)
     .map(([name, value], index) => ({ name, value, fill: ["#071B3A", "#14B8A6", "#F59E0B", "#7C3AED", "#94A3B8"][index % 5] }));
+  const commandGapByShift = Object.entries(summary.byShift ?? {}).map(([shift, values]) => ({
+    shift,
+    planned: values.planned,
+    present: values.present,
+    gap: values.present - values.planned,
+    status: values.present >= values.planned ? "Coberto" : "Gap"
+  }));
   const commandSupervisorOptions = ["Todos", ...Array.from(new Set(["Sem supervisor", ...Object.keys(summary.bySupervisor ?? {}), selectedCommandSupervisor].filter((value) => value && value !== "Todos")))];
   const commandAbsBySupervisor = Object.entries(summary.bySupervisor ?? {})
     .map(([supervisor, values]) => ({ supervisor, ...values }))
     .sort((a, b) => b.absent - a.absent || b.absRate - a.absRate || a.supervisor.localeCompare(b.supervisor, "pt-BR"));
-  const commandAlerts = [
-    ...(summary.unjustified ? [{ title: `${summary.unjustified} faltas sem justificativa`, status: "Atenção", tone: "orange" as const }] : []),
-    ...(summary.gap < 0 ? [{ title: `Gap real de ${summary.gap} pessoas`, status: summary.riskLevel, tone: "red" as const }] : []),
-    ...(summary.late ? [{ title: `${summary.late} atrasos registrados`, status: "Info", tone: "blue" as const }] : [])
-  ];
 
   return (
     <div>
@@ -1402,7 +1404,7 @@ export function OperationalCommandCenter() {
           )
         ))}
       </div>
-      <div className="grid gap-5 xl:grid-cols-[1fr_1fr_1fr]">
+      <div className="grid gap-5 xl:grid-cols-2 2xl:grid-cols-4">
         <Panel title="Presença por Turno">
           {commandPresenceByShift.length ? <div className="h-[280px]">
             <ResponsiveContainer width="100%" height="100%">
@@ -1419,6 +1421,29 @@ export function OperationalCommandCenter() {
           <div className="mt-4 rounded-lg bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
             {summary.planned ? `Cobertura real atual: ${summary.coverageRate}%` : "Sem cronograma importado para o período de teste."}
           </div>
+        </Panel>
+
+        <Panel title="Gaps por Turno">
+          {commandGapByShift.length ? (
+            <div className="space-y-2">
+              {commandGapByShift.map((item) => (
+                <div key={item.shift} className="rounded-lg border border-border bg-white p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="font-extrabold text-navy-950">{item.shift}</p>
+                    <span className={cn("rounded-md px-2 py-1 text-xs font-black", item.gap < 0 ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700")}>
+                      {item.status}
+                    </span>
+                  </div>
+                  <div className="mt-3 grid grid-cols-4 gap-2 text-center">
+                    <MetricMini label="Meta" value="Sem meta" />
+                    <MetricMini label="Escalado" value={item.planned} />
+                    <MetricMini label="Real" value={item.present} />
+                    <MetricMini label="Gap" value={item.gap} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : <EmptyState title="Sem gap por turno" description="Os gaps serão exibidos quando houver cronogramas reais no período selecionado." />}
         </Panel>
 
         <Panel title="Ausências por Motivo">
@@ -1473,15 +1498,6 @@ export function OperationalCommandCenter() {
               ))}
             </div>
           ) : <EmptyState title="Sem ABS por supervisor" description="A visão será exibida quando houver cronogramas no período selecionado." />}
-        </Panel>
-      </div>
-
-      <div className="mt-5 grid gap-5 xl:grid-cols-[1fr_1fr]">
-        <Panel title="Alertas e Ocorrências" action="Ver todos os alertas">
-          {commandAlerts.length ? <MiniAlertList items={commandAlerts} /> : <EmptyState title="Sem alertas" description="Alertas aparecerão quando houver cronograma, presença ou ausência real." />}
-        </Panel>
-        <Panel title="Top Performers do Dia" action="Ver ranking completo">
-          <EmptyState title="Sem ranking real" description="O ranking será preenchido quando houver métricas reais de performance." />
         </Panel>
       </div>
 
@@ -2558,6 +2574,7 @@ export function SchedulesPage() {
   const [attendanceMessage, setAttendanceMessage] = useState("");
   const [attendanceSummary, setAttendanceSummary] = useState<AttendanceSummary | null>(null);
   const [pendingJustifications, setPendingJustifications] = useState<AttendanceItem[]>([]);
+  const [pendingSupervisorFilter, setPendingSupervisorFilter] = useState("Todos");
   const [scheduleActorRole, setScheduleActorRole] = useState("COLABORADOR");
   const [schedulePeriod, setSchedulePeriod] = useState({ month: 5, year: 2026 });
   const [scheduleRangeMode, setScheduleRangeMode] = useState<ScheduleRangeMode>("month");
@@ -3184,6 +3201,10 @@ export function SchedulesPage() {
   const scheduledCells = scheduleCellValues.filter((value) => !["Folga", "Sem cronograma", "Férias"].includes(value)).length;
   const conflictCount = scheduleCellValues.filter((value) => value === "Conflito").length;
   const unscheduledCount = scheduleCellValues.filter((value) => value === "Sem cronograma" || value === "Descoberto").length;
+  const filteredPendingJustifications =
+    pendingSupervisorFilter === "Todos"
+      ? pendingJustifications
+      : pendingJustifications.filter((record) => (record.supervisor || "Sem supervisor") === pendingSupervisorFilter);
   const scheduleAlertItems = ([
     conflictCount > 0 ? {
       title: `${conflictCount} conflitos de cronograma`,
@@ -3197,9 +3218,9 @@ export function SchedulesPage() {
       tone: "orange" as const,
       detail: "Há dias sem cronograma vinculado ou descoberta nos filtros atuais."
     } : null,
-    pendingJustifications.length > 0 ? {
-      title: `${pendingJustifications.length} justificativas pendentes`,
-      status: String(pendingJustifications.length),
+    filteredPendingJustifications.length > 0 ? {
+      title: `${filteredPendingJustifications.length} justificativas pendentes`,
+      status: String(filteredPendingJustifications.length),
       tone: "orange" as const,
       detail: "Faltas, atrasos ou saídas antecipadas aguardando justificativa do supervisor."
     } : null,
@@ -3236,6 +3257,16 @@ export function SchedulesPage() {
   const availableShiftNames = cleanShiftOptions(configuredShifts, true);
   const uniqueLobs = ["Todos", ...Array.from(new Set([...configuredLobs, ...scheduleRows.map((row) => row.employee.lob).filter(Boolean), ...scheduleEmployees.map((employee) => employee.lob).filter(Boolean)]))];
   const uniqueSupervisors = ["Todos", ...Array.from(new Set(["Sem supervisor", ...scheduleRows.map((row) => row.employee.supervisor || "Sem supervisor"), ...scheduleEmployees.map((employee) => employee.supervisor || "Sem supervisor")].filter(Boolean)))];
+  const pendingSupervisorOptions = Array.from(
+    new Map([
+      ["Todos", "Todos"],
+      ["Sem supervisor", "Sem supervisor"],
+      ...(scheduleSettings?.supervisors ?? [])
+        .filter((supervisor) => supervisor.status !== "INACTIVE")
+        .map((supervisor) => [supervisor.name, supervisor.email ? `${supervisor.name} - ${supervisor.email}` : supervisor.name] as const),
+      ...pendingJustifications.map((record) => [record.supervisor || "Sem supervisor", record.supervisor || "Sem supervisor"] as const)
+    ]).entries()
+  ).map(([value, label]) => ({ value, label }));
   const uniqueShifts = ["Todos", ...availableShiftNames];
   const normalizedScheduleActorRole = scheduleActorRole === "MANAGEMENT" ? "GESTOR" : scheduleActorRole;
   const canManageSchedules = ["ADMIN", "GESTOR", "WFM"].includes(normalizedScheduleActorRole);
@@ -3567,17 +3598,33 @@ export function SchedulesPage() {
         <div className="space-y-5">
           <Panel
             title="Pendências de Justificativa"
-            action={pendingJustifications.length ? `${pendingJustifications.length} aberta(s)` : undefined}
+            action={filteredPendingJustifications.length ? `${filteredPendingJustifications.length} aberta(s)` : undefined}
             actionOnClick={() => setShowPendingJustifications(true)}
           >
-            {pendingJustifications.length ? (
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <label className="text-xs font-extrabold uppercase tracking-[0.08em] text-muted" htmlFor="pending-supervisor-filter">
+                Supervisor
+              </label>
+              <select
+                id="pending-supervisor-filter"
+                value={pendingSupervisorFilter}
+                onChange={(event) => setPendingSupervisorFilter(event.target.value)}
+                className="premium-control h-10 min-w-0 flex-1 px-3 text-sm font-bold text-navy-950 outline-none"
+              >
+                {pendingSupervisorOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+            {filteredPendingJustifications.length ? (
               <div className="space-y-3">
-                {pendingJustifications.slice(0, 6).map((record) => (
+                {filteredPendingJustifications.slice(0, 6).map((record) => (
                   <div key={record.id} className="rounded-lg border border-orange-200 bg-orange-50 p-3">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="text-sm font-extrabold text-navy-950">{record.employeeName}</p>
                         <p className="text-xs font-semibold text-orange-800">{record.date} • {cleanShiftName(record.shift) || "Sem turno"} • {record.status}</p>
+                        <p className="mt-1 text-xs font-semibold text-muted">Supervisor: {record.supervisor || "Sem supervisor"}</p>
                         <p className="mt-1 text-xs text-muted">Registrado por {record.registeredBy}</p>
                       </div>
                       <button onClick={() => openPendingJustification(record)} className="rounded-lg bg-orange-600 px-3 py-2 text-xs font-bold text-white">
@@ -3588,7 +3635,10 @@ export function SchedulesPage() {
                 ))}
               </div>
             ) : (
-              <EmptyState title="Sem pendências" description="Faltas, atrasos ou saídas antecipadas sem justificativa aparecerão aqui." />
+              <EmptyState
+                title={pendingSupervisorFilter === "Todos" ? "Sem pendências" : "Sem pendências para este supervisor"}
+                description={pendingSupervisorFilter === "Todos" ? "Faltas, atrasos ou saídas antecipadas sem justificativa aparecerão aqui." : "Nenhuma pendência de justificativa encontrada para este supervisor."}
+              />
             )}
           </Panel>
           <Panel title="Cobertura">
@@ -3628,13 +3678,34 @@ export function SchedulesPage() {
             <div className="mb-5 flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-extrabold text-navy-950">Pendências abertas do cronograma</h2>
-                <p className="text-sm text-muted">Ocorrências sem justificativa dentro do período e filtros atuais.</p>
+                <p className="text-sm text-muted">
+                  Ocorrências sem justificativa dentro do período e filtros atuais.
+                  Supervisor: {pendingSupervisorFilter === "Todos" ? "Todos" : pendingSupervisorFilter}.
+                </p>
               </div>
               <button type="button" onClick={() => setShowPendingJustifications(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
             </div>
-            {pendingJustifications.length ? (
+            <div className="mb-4 flex flex-wrap items-center gap-2">
+              <label className="text-xs font-extrabold uppercase tracking-[0.08em] text-muted" htmlFor="pending-supervisor-modal-filter">
+                Supervisor
+              </label>
+              <select
+                id="pending-supervisor-modal-filter"
+                value={pendingSupervisorFilter}
+                onChange={(event) => setPendingSupervisorFilter(event.target.value)}
+                className="premium-control h-10 min-w-56 px-3 text-sm font-bold text-navy-950 outline-none"
+              >
+                {pendingSupervisorOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <span className="rounded-md bg-orange-50 px-2 py-1 text-xs font-black text-orange-700">
+                {filteredPendingJustifications.length} pendência(s)
+              </span>
+            </div>
+            {filteredPendingJustifications.length ? (
               <div className="space-y-3">
-                {pendingJustifications.map((record) => (
+                {filteredPendingJustifications.map((record) => (
                   <div key={record.id} className="rounded-xl border border-orange-200 bg-orange-50 p-4">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="min-w-0">
@@ -3642,6 +3713,7 @@ export function SchedulesPage() {
                         <p className="mt-1 text-xs font-semibold text-orange-800">
                           {record.date} • {cleanShiftName(record.shift) || "Sem turno"} • {record.status}
                         </p>
+                        <p className="mt-1 text-xs text-muted">Supervisor: {record.supervisor || "Sem supervisor"} • WB/Login: {record.wbLogin || "Não informado"}</p>
                         <p className="mt-1 text-xs text-muted">Motivo: {record.absenceReason || "Sem justificativa"} • Registrado por {record.registeredBy}</p>
                         <p className="mt-1 text-xs text-muted">Ação recomendada: justificar ocorrência ou corrigir o status do cronograma.</p>
                       </div>
@@ -3660,7 +3732,10 @@ export function SchedulesPage() {
                 ))}
               </div>
             ) : (
-              <EmptyState title="Nenhuma pendência aberta para os filtros selecionados." description="Quando surgir falta, atraso ou saída antecipada sem justificativa, o item aparecerá aqui." />
+              <EmptyState
+                title="Nenhuma pendência aberta para os filtros selecionados."
+                description={pendingSupervisorFilter === "Todos" ? "Quando surgir falta, atraso ou saída antecipada sem justificativa, o item aparecerá aqui." : "Nenhuma pendência de justificativa encontrada para este supervisor."}
+              />
             )}
           </div>
         </div>
