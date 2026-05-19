@@ -316,6 +316,33 @@ type SchedulePlannedCell = {
   startsAt: string;
   endsAt: string;
   observation?: string;
+  justification?: ScheduleJustificationCell | null;
+};
+
+type ScheduleJustificationCell = {
+  id?: string;
+  status: string;
+  justificationStatus: string;
+  absenceReason?: string;
+  reasonCategory?: string;
+  supervisorJustification?: string;
+  isJustified?: boolean;
+  impactsAbs?: boolean;
+  impactsCoverage?: boolean;
+  registeredBy?: string;
+  registeredAt?: string;
+  justifiedBy?: string;
+  justifiedAt?: string;
+  updatedAt?: string;
+  history?: Array<{
+    previousStatus?: string;
+    newStatus?: string;
+    previousReason?: string;
+    newReason?: string;
+    comment?: string;
+    changedBy?: string;
+    createdAt?: string;
+  }>;
 };
 
 type WorkHourSummary = {
@@ -424,9 +451,13 @@ type AttendanceItem = {
   id: string;
   employeeId: string;
   employeeName: string;
+  wbLogin?: string;
   date: string;
   dateIso?: string;
+  scheduleId?: string;
   shift: string;
+  lob?: string;
+  supervisor?: string;
   status: string;
   absenceReason?: string;
   reasonCategory?: string;
@@ -436,6 +467,9 @@ type AttendanceItem = {
   impactsCoverage: boolean;
   registeredBy: string;
   registeredAt: string;
+  justifiedBy?: string;
+  justifiedAt?: string;
+  updatedAt?: string;
 };
 
 type ScheduleGridRow = (typeof scheduleGridRows)[number] & {
@@ -1115,6 +1149,10 @@ export function OperationalCommandCenter() {
   const [commandLobs, setCommandLobs] = useState<string[]>(["Todos"]);
   const [selectedCommandLob, setSelectedCommandLob] = useState("Todos");
   const [loadingSummary, setLoadingSummary] = useState(false);
+  const [selectedAbsenceReason, setSelectedAbsenceReason] = useState<string | null>(null);
+  const [absenceReasonPeople, setAbsenceReasonPeople] = useState<AttendanceItem[]>([]);
+  const [loadingAbsenceReasonPeople, setLoadingAbsenceReasonPeople] = useState(false);
+  const [absenceReasonError, setAbsenceReasonError] = useState("");
 
   useEffect(() => {
     void loadCommandCenterSummary();
@@ -1142,6 +1180,34 @@ export function OperationalCommandCenter() {
     } finally {
       setLoadingSummary(false);
     }
+  }
+
+  async function openAbsenceReasonPeople(reason: string) {
+    setSelectedAbsenceReason(reason);
+    setAbsenceReasonPeople([]);
+    setAbsenceReasonError("");
+    setLoadingAbsenceReasonPeople(true);
+    try {
+      const params = new URLSearchParams({
+        startDate: dateRange.startDate,
+        endDate: dateRange.endDate,
+        reason,
+        includeJustified: "true"
+      });
+      if (selectedCommandLob !== "Todos") params.set("lob", selectedCommandLob);
+      const payload = await apiJson<{ data: AttendanceItem[] }>(`/api/attendance?${params.toString()}`);
+      setAbsenceReasonPeople(payload.data);
+    } catch {
+      setAbsenceReasonError("Não foi possível carregar as ausências deste motivo.");
+    } finally {
+      setLoadingAbsenceReasonPeople(false);
+    }
+  }
+
+  function closeAbsenceReasonPeople() {
+    setSelectedAbsenceReason(null);
+    setAbsenceReasonPeople([]);
+    setAbsenceReasonError("");
   }
 
   function setCommandRange(preset: "today" | "week" | "month" | "previousMonth") {
@@ -1300,13 +1366,13 @@ export function OperationalCommandCenter() {
             </div>
             <div className="flex flex-col justify-center space-y-3">
               {commandAbsenceReasons.map((reason) => (
-                <div key={reason.name} className="flex items-center justify-between gap-3 text-sm">
+                <button key={reason.name} type="button" onClick={() => void openAbsenceReasonPeople(reason.name)} className="flex items-center justify-between gap-3 rounded-lg border border-transparent px-2 py-2 text-left text-sm transition hover:border-blue-100 hover:bg-blue-50">
                   <span className="flex items-center gap-2 font-semibold text-navy-950">
                     <span className="status-dot" style={{ backgroundColor: reason.fill }} />
                     {reason.name}
                   </span>
-                  <span className="font-bold text-muted">{reason.value}</span>
-                </div>
+                  <span className="flex items-center gap-2 font-bold text-muted">{reason.value}<span className="text-[11px] text-blue-600">Ver pessoas</span></span>
+                </button>
               ))}
             </div>
           </div> : <EmptyState title="Sem faltas registradas" description="Os motivos aparecerão quando houver registros reais de presença ou ocorrência." />}
@@ -1341,6 +1407,48 @@ export function OperationalCommandCenter() {
           {commandRisks.length ? <MiniAlertList items={commandRisks} /> : <EmptyState title="Sem riscos ativos" description="Riscos serão calculados a partir de cronograma, presença e solicitações reais." />}
         </Panel>
       </div>
+
+      {selectedAbsenceReason ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="card max-h-[90vh] w-full max-w-6xl overflow-y-auto p-5">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-extrabold text-navy-950">Ausências por motivo</h2>
+                <p className="text-sm font-semibold text-muted">
+                  {selectedAbsenceReason} • {dateRange.startDate} até {dateRange.endDate} • {selectedCommandLob === "Todos" ? "Todas as LOBs" : selectedCommandLob}
+                </p>
+              </div>
+              <button onClick={closeAbsenceReasonPeople} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+            </div>
+            {loadingAbsenceReasonPeople ? (
+              <div className="rounded-xl border border-border p-8 text-center text-sm font-bold text-muted">Carregando pessoas deste motivo...</div>
+            ) : absenceReasonError ? (
+              <EmptyState title="Não foi possível carregar" description={absenceReasonError} />
+            ) : absenceReasonPeople.length ? (
+              <SimpleTable
+                columns={["Colaborador", "WB/Login", "Data", "Turno", "LOB", "Supervisor", "Status", "Motivo", "Categoria", "Observação", "Justificado por", "Justificado em", "Ação"]}
+                rows={absenceReasonPeople.map((record) => [
+                  record.employeeName,
+                  record.wbLogin ?? "-",
+                  record.date,
+                  record.shift,
+                  record.lob ?? "-",
+                  record.supervisor ?? "Sem supervisor",
+                  <StatusBadge key={`${record.id}-status`} status={record.status} />,
+                  record.absenceReason ?? "Sem justificativa",
+                  record.reasonCategory ?? "-",
+                  <span key={`${record.id}-note`} className="block max-w-[260px] truncate" title={record.supervisorJustification ?? ""}>{record.supervisorJustification ?? "-"}</span>,
+                  record.justifiedBy ?? record.registeredBy ?? "Sistema",
+                  record.justifiedAt ?? record.registeredAt,
+                  <a key={`${record.id}-open`} href={`/escalas?startDate=${record.dateIso ?? dateRange.startDate}&collaborator=${encodeURIComponent(record.employeeName)}`} className="text-xs font-extrabold text-blue-600 hover:underline">Abrir no Cronograma</a>
+                ])}
+              />
+            ) : (
+              <EmptyState title="Nenhuma ausência encontrada para este motivo" description="A lista respeita o período e os filtros aplicados na Central Operacional." />
+            )}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2356,6 +2464,15 @@ export function SchedulesPage() {
     observation: "",
     pendingJustification: false
   });
+  const [selectedScheduleJustification, setSelectedScheduleJustification] = useState<ScheduleJustificationCell | null>(null);
+  const [justificationDraft, setJustificationDraft] = useState({
+    absenceReason: "Ausente",
+    reasonCategory: "Cronograma",
+    supervisorJustification: "",
+    hasEvidence: false,
+    evidenceUrl: ""
+  });
+  const [savingJustification, setSavingJustification] = useState(false);
   const [workHourForm, setWorkHourForm] = useState({
     recordId: "",
     plannedStart: "",
@@ -2592,6 +2709,7 @@ export function SchedulesPage() {
     const times = configuredTimesForShift(shift);
     const plannedCell = targetRow?.plannedTimes?.[dayIndex] ?? null;
     const hourCell = targetRow?.workHours?.[dayIndex] ?? null;
+    const justification = plannedCell?.justification ?? null;
     const plannedStart = plannedCell?.startsAt || (statusNeedsTime(cellStatus) ? times.startsAt : "");
     const plannedEnd = plannedCell?.endsAt || (statusNeedsTime(cellStatus) ? times.endsAt : "");
     const plannedHours = plannedStart && plannedEnd ? roundDecimal(minutesBetweenTimes(plannedStart, plannedEnd) / 60) : 0;
@@ -2608,6 +2726,14 @@ export function SchedulesPage() {
       supervisor: targetEmployee.supervisor,
       observation: plannedCell?.observation ?? "",
       pendingJustification: false
+    });
+    setSelectedScheduleJustification(justification);
+    setJustificationDraft({
+      absenceReason: justification?.absenceReason && justification.absenceReason !== "Sem justificativa" ? justification.absenceReason : "Ausente",
+      reasonCategory: justification?.reasonCategory ?? "Cronograma",
+      supervisorJustification: justification?.supervisorJustification ?? "",
+      hasEvidence: false,
+      evidenceUrl: ""
     });
     setWorkHourForm({
       recordId: hourCell?.id ?? "",
@@ -2643,6 +2769,14 @@ export function SchedulesPage() {
     setShowEditSchedule(false);
     setScheduleEmployeeSearch("");
     setScheduleEmployeeSearchResults([]);
+    setSelectedScheduleJustification(null);
+    setJustificationDraft({
+      absenceReason: "Ausente",
+      reasonCategory: "Cronograma",
+      supervisorJustification: "",
+      hasEvidence: false,
+      evidenceUrl: ""
+    });
   }
 
   function openPendingJustification(record: AttendanceItem) {
@@ -2863,6 +2997,68 @@ export function SchedulesPage() {
     }
   }
 
+  async function saveSlotJustification() {
+    if (!scheduleEditForm.employeeId || !scheduleEditForm.date) {
+      setAttendanceMessage("Colaborador e data são obrigatórios para revisar a justificativa.");
+      return;
+    }
+    if (!statusNeedsReason(scheduleEditForm.status)) {
+      setAttendanceMessage("Este status não exige justificativa.");
+      return;
+    }
+    if (!justificationDraft.absenceReason.trim()) {
+      setAttendanceMessage("Motivo da justificativa é obrigatório.");
+      return;
+    }
+    if (!justificationDraft.supervisorJustification.trim()) {
+      setAttendanceMessage("Observação é obrigatória para esta justificativa.");
+      return;
+    }
+
+    setSavingJustification(true);
+    try {
+      const payload = await apiJson<{ data: Partial<AttendanceItem>; summary: AttendanceSummary }>("/api/attendance", {
+        method: "POST",
+        body: JSON.stringify({
+          employeeId: scheduleEditForm.employeeId,
+          date: scheduleEditForm.date,
+          shift: scheduleEditForm.shift,
+          status: scheduleEditForm.status,
+          absenceReason: justificationDraft.absenceReason,
+          reasonCategory: justificationDraft.reasonCategory || "Cronograma",
+          supervisorJustification: justificationDraft.supervisorJustification,
+          hasEvidence: justificationDraft.hasEvidence,
+          evidenceUrl: justificationDraft.evidenceUrl,
+          impactsAbs: scheduleEditForm.status === "Falta",
+          impactsCoverage: ["Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de cronograma"].includes(scheduleEditForm.status)
+        })
+      });
+      setAttendanceSummary(payload.summary);
+      setSelectedScheduleJustification({
+        id: payload.data.id,
+        status: payload.data.status ?? scheduleEditForm.status,
+        justificationStatus: payload.data.isJustified === false ? "Justificativa pendente" : "Justificado",
+        absenceReason: payload.data.absenceReason,
+        reasonCategory: payload.data.reasonCategory,
+        supervisorJustification: payload.data.supervisorJustification,
+        isJustified: payload.data.isJustified,
+        impactsAbs: payload.data.impactsAbs,
+        impactsCoverage: payload.data.impactsCoverage,
+        registeredBy: payload.data.registeredBy,
+        registeredAt: payload.data.registeredAt,
+        justifiedBy: payload.data.justifiedBy,
+        justifiedAt: payload.data.justifiedAt,
+        updatedAt: payload.data.updatedAt
+      });
+      setAttendanceMessage("Justificativa atualizada com sucesso.");
+      await refreshSchedules();
+    } catch (error) {
+      setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível atualizar a justificativa.");
+    } finally {
+      setSavingJustification(false);
+    }
+  }
+
   const validation = previewResult
     ? { errors: previewResult.errorRows, warnings: previewResult.validation.reduce((total, row) => total + row.warnings.length, 0) }
     : validateImportRows(previewRows);
@@ -2932,6 +3128,7 @@ export function SchedulesPage() {
   const selectedScheduleEmployee = employeeOptions.find((employee) => employee.id === scheduleEditForm.employeeId);
   const selectedCellHasSchedule = Boolean(scheduleEditForm.scheduleId);
   const canEditOfficialWorkHours = canManageSchedules;
+  const canEditSlotJustification = scheduleEditRequiresReason && (canManageSchedules || isScheduleSupervisor);
   const manualBreakMinutesPreview = Math.max(0, Number(workHourForm.breakMinutes.replace(",", ".") || 0) || 0);
   const manualGrossMinutesPreview = workHourForm.actualStart && workHourForm.actualEnd ? minutesBetweenTimes(workHourForm.actualStart, workHourForm.actualEnd) : 0;
   const manualBreakIsInvalid = Boolean(workHourForm.actualStart && workHourForm.actualEnd && manualBreakMinutesPreview > manualGrossMinutesPreview);
@@ -3538,6 +3735,99 @@ export function SchedulesPage() {
                 </div>
                 <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
                   {canManageSchedules ? scheduleEditForm.pendingJustification ? "A célula ficará destacada como pendente de justificativa até o Supervisor justificar." : scheduleEditRequiresTime ? "Este status exige turno, entrada e saída." : "Este status permite entrada/saída vazias." : "Supervisor visualiza o cronograma e solicita ajustes; WFM/Admin altera o planejado."}
+                </div>
+                <div className="mt-4 rounded-xl border border-border bg-slate-50 p-4">
+                  <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-extrabold text-navy-950">Justificativa da ocorrência</h4>
+                      <p className="text-xs font-semibold text-muted">
+                        {scheduleEditRequiresReason ? "Motivo conectado ao registro oficial de presença." : "Este status não exige justificativa."}
+                      </p>
+                    </div>
+                    {scheduleEditRequiresReason ? (
+                      <StatusBadge status={selectedScheduleJustification?.justificationStatus ?? "Justificativa pendente"} />
+                    ) : null}
+                  </div>
+
+                  {scheduleEditRequiresReason ? (
+                    <div className="space-y-4">
+                      <div className="grid gap-3 text-sm md:grid-cols-2">
+                        <div className="rounded-lg border border-border bg-white p-3">
+                          <span className="block text-xs font-bold uppercase tracking-wide text-muted">Status do cronograma</span>
+                          <span className="mt-1 block font-extrabold text-navy-950">{scheduleEditForm.status}</span>
+                        </div>
+                        <div className="rounded-lg border border-border bg-white p-3">
+                          <span className="block text-xs font-bold uppercase tracking-wide text-muted">Status da justificativa</span>
+                          <span className="mt-1 block font-extrabold text-navy-950">{selectedScheduleJustification?.justificationStatus ?? "Justificativa pendente"}</span>
+                        </div>
+                        <div className="rounded-lg border border-border bg-white p-3">
+                          <span className="block text-xs font-bold uppercase tracking-wide text-muted">Motivo</span>
+                          <span className="mt-1 block font-extrabold text-navy-950">{selectedScheduleJustification?.absenceReason ?? "Sem justificativa"}</span>
+                        </div>
+                        <div className="rounded-lg border border-border bg-white p-3">
+                          <span className="block text-xs font-bold uppercase tracking-wide text-muted">Categoria</span>
+                          <span className="mt-1 block font-extrabold text-navy-950">{selectedScheduleJustification?.reasonCategory ?? "Não informada"}</span>
+                        </div>
+                        <div className="rounded-lg border border-border bg-white p-3 md:col-span-2">
+                          <span className="block text-xs font-bold uppercase tracking-wide text-muted">Observação/descrição</span>
+                          <span className="mt-1 block whitespace-pre-wrap text-sm font-semibold text-navy-950">{selectedScheduleJustification?.supervisorJustification ?? "Justificativa pendente."}</span>
+                        </div>
+                        <div className="rounded-lg border border-border bg-white p-3">
+                          <span className="block text-xs font-bold uppercase tracking-wide text-muted">Justificado por</span>
+                          <span className="mt-1 block font-extrabold text-navy-950">{selectedScheduleJustification?.justifiedBy ?? selectedScheduleJustification?.registeredBy ?? "Ainda não justificado"}</span>
+                        </div>
+                        <div className="rounded-lg border border-border bg-white p-3">
+                          <span className="block text-xs font-bold uppercase tracking-wide text-muted">Data/hora</span>
+                          <span className="mt-1 block font-extrabold text-navy-950">{selectedScheduleJustification?.justifiedAt ?? selectedScheduleJustification?.registeredAt ?? "-"}</span>
+                        </div>
+                        <div className="rounded-lg border border-border bg-white p-3 md:col-span-2">
+                          <span className="block text-xs font-bold uppercase tracking-wide text-muted">Última atualização</span>
+                          <span className="mt-1 block font-extrabold text-navy-950">{selectedScheduleJustification?.updatedAt ?? "-"}</span>
+                        </div>
+                      </div>
+                      {selectedScheduleJustification?.history?.length ? (
+                        <div className="rounded-lg border border-border bg-white p-3">
+                          <span className="block text-xs font-bold uppercase tracking-wide text-muted">Histórico</span>
+                          <div className="mt-2 space-y-2">
+                            {selectedScheduleJustification.history.slice(0, 5).map((item, index) => (
+                              <div key={`${item.createdAt}-${index}`} className="rounded-md bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">
+                                <span className="font-extrabold text-navy-950">{item.createdAt ?? "-"}</span> • {item.changedBy ?? "Sistema"} • {item.previousReason ?? "Sem motivo"} → {item.newReason ?? "Sem motivo"}
+                                {item.comment ? <span className="block text-muted">{item.comment}</span> : null}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {canEditSlotJustification ? (
+                        <div className="rounded-xl border border-blue-100 bg-white p-4">
+                          <div className="mb-3">
+                            <h5 className="text-sm font-extrabold text-navy-950">Editar justificativa</h5>
+                            <p className="text-xs font-semibold text-muted">Supervisor revisa ocorrências do time; WFM/Admin pode corrigir motivo, categoria e observação.</p>
+                          </div>
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <FormSelect label="Motivo da justificativa" value={justificationDraft.absenceReason} options={[...absenceReasonOptions]} onChange={(value) => setJustificationDraft({ ...justificationDraft, absenceReason: value })} />
+                            <FormSelect label="Categoria" value={justificationDraft.reasonCategory} options={["Cronograma", "Operacional", "Saúde", "Infraestrutura", "Equipamentos", "Internet", "Outros"]} onChange={(value) => setJustificationDraft({ ...justificationDraft, reasonCategory: value })} />
+                            <label className="md:col-span-2">
+                              <span className="mb-1.5 block text-sm font-bold text-muted">Observação</span>
+                              <textarea value={justificationDraft.supervisorJustification} onChange={(event) => setJustificationDraft({ ...justificationDraft, supervisorJustification: event.target.value })} className="min-h-24 w-full rounded-lg border border-border bg-white p-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100" placeholder="Descreva o motivo informado pelo Supervisor/WFM" />
+                            </label>
+                          </div>
+                          <button disabled={savingJustification} onClick={saveSlotJustification} className="mt-4 w-full rounded-lg bg-navy-950 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
+                            {savingJustification ? "Salvando justificativa..." : "Salvar justificativa"}
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-600">
+                          Seu perfil pode visualizar a justificativa, mas não alterá-la neste slot.
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-600">
+                      Este status não exige justificativa.
+                    </div>
+                  )}
                 </div>
                 {canManageSchedules ? (
                   <>

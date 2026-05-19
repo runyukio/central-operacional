@@ -30,7 +30,10 @@ export async function GET(request: Request) {
     lob: url.searchParams.get("lob") ?? undefined,
     supervisor: url.searchParams.get("supervisor") ?? undefined,
     shift: url.searchParams.get("shift") ?? undefined,
-    collaborator: url.searchParams.get("collaborator") ?? undefined
+    collaborator: url.searchParams.get("collaborator") ?? undefined,
+    status: url.searchParams.get("status") ?? undefined,
+    reason: url.searchParams.get("reason") ?? undefined,
+    includeJustified: url.searchParams.get("includeJustified") ?? undefined
   }));
 }
 
