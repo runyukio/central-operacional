@@ -27,7 +27,7 @@ export async function GET(request: Request) {
   return new NextResponse(result.csv, {
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": 'attachment; filename="escalas_consolidadas.csv"'
+      "Content-Disposition": 'attachment; filename="cronogramas_consolidados.csv"'
     }
   });
 }

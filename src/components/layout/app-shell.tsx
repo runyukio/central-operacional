@@ -180,7 +180,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
               <Search className="h-4 w-4" />
               <input
                 className="w-full border-0 bg-transparent text-sm outline-none"
-                placeholder="Pesquisar pessoas, escalas, solicitações..."
+                placeholder="Pesquisar pessoas, cronogramas, solicitações..."
               />
             </div>
           </div>

@@ -695,7 +695,7 @@ docs
 - Upload Excel funcionando.
 - Ausência/presença atualiza cobertura.
 - Solicitação muda de status.
-- Aprovação de folga atualiza escala.
+- Aprovação de folga atualiza cronograma.
 - Report de turno salva e exporta.
 - Mural e aniversariantes aparecem.
 - Notificações internas funcionam.
@@ -716,3 +716,9 @@ Resumo estimado inicial:
 - Monitoramento externo: R$ 0 nesta versão.
 
 Budget recomendado com margem: R$ 500/mês.
+
+## Atualização: Cronogramas e Distribuição de Tempo
+
+- A nomenclatura visível do módulo de agenda operacional foi padronizada de `Escala` para `Cronograma`, mantendo rotas, models e campos técnicos como `Schedule` por segurança.
+- O Report de Turno agora permite registrar blocos visuais de tempo por atividade, com cálculo automático de duração, total por categoria, timeline no formulário e visualização nos reports enviados.
+- A nova tabela `ShiftReportTimeBlock` guarda `startTime`, `endTime`, categoria, descrição e duração em minutos para análises futuras.

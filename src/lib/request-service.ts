@@ -328,7 +328,7 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
           data: {
             requestId: saved.id,
             actorId: user.id,
-            action: "Escala atualizada",
+            action: "Cronograma atualizado",
             from: transition.nextStatus,
             to: transition.nextStatus,
             reason: scheduleResult.message,
@@ -637,7 +637,7 @@ function resolveRequestTransition(actor: Actor, user: ActiveUser, request: Prism
         requesterNotificationType: "SUCCESS",
         notifySupervisor: true,
         supervisorTitle: "Solicitação aprovada pelo WFM",
-        supervisorBody: `${request.code} foi aprovada pelo WFM e a escala foi atualizada.`
+        supervisorBody: `${request.code} foi aprovada pelo WFM e o cronograma foi atualizado.`
       };
     }
 
@@ -839,8 +839,8 @@ async function validateDayOffRequestInDatabase(employeeId: string, input: Create
     const current = await findSchedule(input.currentDayOffDate);
     const desired = await findSchedule(input.desiredDayOffDate);
     if (!current.date || !desired.date) return "Datas da troca de folga inválidas.";
-    if (employeeScheduleCount && !current.schedule) return "Data atual da folga fora do período de escala carregado.";
-    if (employeeScheduleCount && !desired.schedule) return "Nova data desejada fora do período de escala carregado.";
+    if (employeeScheduleCount && !current.schedule) return "Data atual da folga fora do período de cronograma carregado.";
+    if (employeeScheduleCount && !desired.schedule) return "Nova data desejada fora do período de cronograma carregado.";
     if (current.schedule && current.schedule.status !== "FOLGA") return "A data atual informada não está registrada como folga para este colaborador.";
     if (desired.schedule && desired.schedule.status === "FOLGA") return "A nova data desejada já está registrada como folga.";
     return duplicateDayOffRequest(employeeId, kind, { currentDayOffDate: input.currentDayOffDate, desiredDayOffDate: input.desiredDayOffDate });
@@ -849,7 +849,7 @@ async function validateDayOffRequestInDatabase(employeeId: string, input: Create
   if (kind === "DAY_OFF_SELL") {
     const target = await findSchedule(input.dayOffToSellDate);
     if (!target.date) return "Data da folga que deseja vender inválida.";
-    if (employeeScheduleCount && !target.schedule) return "Data da folga fora do período de escala carregado.";
+    if (employeeScheduleCount && !target.schedule) return "Data da folga fora do período de cronograma carregado.";
     if (target.schedule && target.schedule.status !== "FOLGA") return "A data selecionada não está registrada como folga.";
     return duplicateDayOffRequest(employeeId, kind, { dayOffToSellDate: input.dayOffToSellDate });
   }
@@ -857,7 +857,7 @@ async function validateDayOffRequestInDatabase(employeeId: string, input: Create
   const targetDate = input.desiredDayOffRequestDate || input.desiredDayOffDate || input.requestedDate;
   const target = await findSchedule(targetDate);
   if (!target.date) return "Data desejada para folga inválida.";
-  if (employeeScheduleCount && !target.schedule) return "Data desejada fora do período de escala carregado.";
+  if (employeeScheduleCount && !target.schedule) return "Data desejada fora do período de cronograma carregado.";
   if (target.schedule && target.schedule.status === "FOLGA") return "A data desejada já está registrada como folga.";
   return duplicateDayOffRequest(employeeId, kind, { desiredDayOffRequestDate: targetDate });
 }
@@ -884,11 +884,11 @@ async function applyDayOffRequestToSchedule(tx: Prisma.TransactionClient, reques
   const kind = normalizeDayOffKind(request);
   if (!kind) return { updated: false, message: "" };
   const payload = (request.payload ?? {}) as Record<string, unknown>;
-  if (payload.scheduleAppliedAt) throw new DomainError("Esta solicitação já teve a escala aplicada.");
-  if (!request.employeeId) throw new DomainError("Solicitação sem colaborador vinculado para aplicar escala.");
+  if (payload.scheduleAppliedAt) throw new DomainError("Esta solicitação já teve o cronograma aplicado.");
+  if (!request.employeeId) throw new DomainError("Solicitação sem colaborador vinculado para aplicar cronograma.");
 
   const employee = await tx.employeeProfile.findUnique({ where: { id: request.employeeId }, include: { shift: true } });
-  if (!employee) throw new DomainError("Colaborador não encontrado para aplicar escala.");
+  if (!employee) throw new DomainError("Colaborador não encontrado para aplicar cronograma.");
 
   if (kind === "DAY_OFF_SWAP") return applySwapSchedule(tx, request, employee, actorId, payload);
   if (kind === "DAY_OFF_SELL") return applySellSchedule(tx, request, employee, actorId, payload, actionInput);
@@ -902,8 +902,8 @@ async function applySwapSchedule(tx: Prisma.TransactionClient, request: PrismaRe
 
   const current = await tx.schedule.findUnique({ where: { employeeId_date: { employeeId: employee.id, date: currentDate } }, include: { shift: true } });
   const desired = await tx.schedule.findUnique({ where: { employeeId_date: { employeeId: employee.id, date: desiredDate } }, include: { shift: true } });
-  if (!current || !desired) throw new DomainError("Escala não encontrada para as duas datas da troca.");
-  if (current.status !== "FOLGA") throw new DomainError("A data atual não está como folga na escala.");
+  if (!current || !desired) throw new DomainError("Cronograma não encontrado para as duas datas da troca.");
+  if (current.status !== "FOLGA") throw new DomainError("A data atual não está como folga no cronograma.");
   if (desired.status === "FOLGA") throw new DomainError("A nova data desejada já está como folga.");
 
   const before = { current: serialize(current), desired: serialize(desired) };
@@ -981,14 +981,14 @@ async function applySwapSchedule(tx: Prisma.TransactionClient, request: PrismaRe
     }
   });
 
-  return { updated: true, message: "Troca de folga aplicada na escala." };
+  return { updated: true, message: "Troca de folga aplicada no cronograma." };
 }
 
 async function applySellSchedule(tx: Prisma.TransactionClient, request: PrismaRequest, employee: { id: string; shiftId: string; lobId: string; supervisorId: string | null; shift: { id: string; name: string; startsAt: string; endsAt: string } }, actorId: string, payload: Record<string, unknown>, actionInput: RequestStatusActionInput) {
   const targetDate = parseDateOnly(payload.dayOffToSellDate);
   if (!targetDate) throw new DomainError("Data da venda de folga inválida.");
   const schedule = await tx.schedule.findUnique({ where: { employeeId_date: { employeeId: employee.id, date: targetDate } }, include: { shift: true } });
-  if (!schedule) throw new DomainError("Escala não encontrada para a data da venda de folga.");
+  if (!schedule) throw new DomainError("Cronograma não encontrado para a data da venda de folga.");
   if (schedule.status !== "FOLGA") throw new DomainError("A data selecionada não está como folga.");
 
   const shiftName = cleanShiftName(actionInput.finalApprovedShift || String(payload.availabilityShift ?? employee.shift.name)) || employee.shift.name;
@@ -1019,14 +1019,14 @@ async function applySellSchedule(tx: Prisma.TransactionClient, request: PrismaRe
       reason: `Venda de folga aprovada pela solicitação ${request.code}`
     }
   });
-  return { updated: true, message: "Venda de folga aplicada na escala." };
+  return { updated: true, message: "Venda de folga aplicada no cronograma." };
 }
 
 async function applyRequestedDayOffSchedule(tx: Prisma.TransactionClient, request: PrismaRequest, employee: { id: string }, actorId: string, payload: Record<string, unknown>) {
   const targetDate = parseDateOnly(payload.desiredDayOffRequestDate ?? payload.desiredDayOffDate ?? payload.requestedDate);
   if (!targetDate) throw new DomainError("Data desejada para folga inválida.");
   const schedule = await tx.schedule.findUnique({ where: { employeeId_date: { employeeId: employee.id, date: targetDate } }, include: { shift: true } });
-  if (!schedule) throw new DomainError("Escala não encontrada para a data desejada.");
+  if (!schedule) throw new DomainError("Cronograma não encontrado para a data desejada.");
   if (schedule.status === "FOLGA") throw new DomainError("A data desejada já está como folga.");
 
   const before = serialize(schedule);
@@ -1055,7 +1055,7 @@ async function applyRequestedDayOffSchedule(tx: Prisma.TransactionClient, reques
       reason: `Dia de folga aprovado pela solicitação ${request.code}`
     }
   });
-  return { updated: true, message: "Dia de folga aplicado na escala." };
+  return { updated: true, message: "Dia de folga aplicado no cronograma." };
 }
 
 function parseDateOnly(value: unknown) {
@@ -1098,9 +1098,9 @@ function notificationTitleForStatus(status: UiRequestStatus, type: string) {
 
 function notificationBodyForStatus(status: UiRequestStatus, type: string, reason?: string, scheduleMessage?: string) {
   if (isDayOffRequest(type) && status === "Aprovado") {
-    if (/venda/i.test(type)) return "Sua venda de folga foi aprovada e sua escala foi atualizada.";
-    if (/dia de folga/i.test(type)) return "Sua solicitação de folga foi aprovada e sua escala foi atualizada.";
-    return "Sua troca de folga foi aprovada e sua escala foi atualizada.";
+    if (/venda/i.test(type)) return "Sua venda de folga foi aprovada e seu cronograma foi atualizado.";
+    if (/dia de folga/i.test(type)) return "Sua solicitação de folga foi aprovada e seu cronograma foi atualizado.";
+    return "Sua troca de folga foi aprovada e seu cronograma foi atualizado.";
   }
   if (isDayOffRequest(type) && status === "Recusado") return reason ? `Sua solicitação de folga foi recusada. Motivo: ${reason}` : "Sua solicitação de folga foi recusada.";
   return reason ?? scheduleMessage ?? `${type} atualizada para ${status}.`;
@@ -1114,9 +1114,9 @@ function finalApprovalTitle(type: string) {
 }
 
 function finalApprovalBody(type: string) {
-  if (/venda/i.test(type)) return "Sua venda de folga foi aprovada e sua escala foi atualizada.";
-  if (/dia de folga/i.test(type)) return "Sua solicitação de folga foi aprovada e sua escala foi atualizada.";
-  if (/folga/i.test(type)) return "Sua troca de folga foi aprovada e sua escala foi atualizada.";
+  if (/venda/i.test(type)) return "Sua venda de folga foi aprovada e seu cronograma foi atualizado.";
+  if (/dia de folga/i.test(type)) return "Sua solicitação de folga foi aprovada e seu cronograma foi atualizado.";
+  if (/folga/i.test(type)) return "Sua troca de folga foi aprovada e seu cronograma foi atualizado.";
   return "Sua solicitação foi aprovada.";
 }
 

@@ -17,7 +17,7 @@ export async function GET() {
   return new NextResponse(body, {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": 'attachment; filename="template_escala_central_operacional.xlsx"',
+      "Content-Disposition": 'attachment; filename="template_cronograma_central_operacional.xlsx"',
       "Content-Length": String(body.byteLength),
       "Cache-Control": "no-store"
     }

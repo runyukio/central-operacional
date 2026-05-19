@@ -591,7 +591,7 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
           action: existing ? "MANUAL_UPDATE" : "MANUAL_CREATE",
           previousValue: serialize(existing),
           newValue: serialize(record),
-          reason: input.observation?.trim() || "Lançamento manual pela escala"
+          reason: input.observation?.trim() || "Lançamento manual pelo cronograma"
         }
       });
       await tx.auditLog.create({
@@ -612,7 +612,7 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
     return {
       success: true,
       message: existing ? "Horas atualizadas manualmente." : "Horas lançadas manualmente.",
-      warning: schedule ? undefined : "Este colaborador não possui escala vinculada nesta data.",
+      warning: schedule ? undefined : "Este colaborador não possui cronograma vinculado nesta data.",
       data: formatWorkHourRecord(await getRecordWithRelations(saved.id))
     };
   } catch (error) {
@@ -759,7 +759,7 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
     if (employee && date) {
       schedule = scheduleMap.get(`${employee.id}:${date.getTime()}`);
       existingRecordId = recordMap.get(`${employee.id}:${date.getTime()}`)?.id;
-      if (!schedule) warnings.push("Não existe escala para esse colaborador nessa data.");
+      if (!schedule) warnings.push("Não existe cronograma para esse colaborador nessa data.");
       if (text(row.lob) && text(row.lob).toUpperCase() !== employee.lob.name.toUpperCase()) warnings.push("LOB no arquivo diferente da LOB do colaborador.");
       if (text(row.supervisor_wb_login) && text(row.supervisor_wb_login).toUpperCase() !== (employee.supervisor?.wbLogin ?? "").toUpperCase()) warnings.push("Supervisor no arquivo diferente do supervisor do colaborador.");
       if (existingRecordId) warnings.push("Registro já existe e será atualizado.");
@@ -1009,6 +1009,7 @@ function uiToRecordStatus(status: string): WorkHourRecordStatus | undefined {
     OK: "OK",
     Divergente: "DIVERGENT",
     "Sem escala": "NO_SCHEDULE",
+    "Sem cronograma": "NO_SCHEDULE",
     "Sem horas": "MISSING_WORK_HOURS",
     "Ajuste solicitado": "ADJUSTMENT_REQUESTED",
     "Ajuste aprovado": "ADJUSTMENT_APPROVED",
@@ -1023,7 +1024,7 @@ function recordStatusLabel(status: WorkHourRecordStatus) {
     IMPORTED: "Importado",
     OK: "OK",
     DIVERGENT: "Divergente",
-    NO_SCHEDULE: "Sem escala",
+    NO_SCHEDULE: "Sem cronograma",
     MISSING_WORK_HOURS: "Sem horas",
     ADJUSTMENT_REQUESTED: "Ajuste solicitado",
     ADJUSTMENT_APPROVED: "Ajuste aprovado",

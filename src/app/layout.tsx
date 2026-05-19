@@ -6,7 +6,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Central Operacional",
-  description: "Central operacional interna para BPO, WFM, escala, qualidade, RH, logística e gestão."
+  description: "Central operacional interna para BPO, WFM, cronograma, qualidade, RH, logística e gestão."
 };
 
 const themeScript = `

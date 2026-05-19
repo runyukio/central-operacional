@@ -25,7 +25,7 @@ export function CalendarView({ children }: { children: ReactNode }) {
 }
 
 export function ScheduleGrid({ children }: { children: ReactNode }) {
-  return <Panel title="Grade de Escala">{children}</Panel>;
+  return <Panel title="Grade de Cronograma">{children}</Panel>;
 }
 
 export function RequestKanban({ children }: { children: ReactNode }) {

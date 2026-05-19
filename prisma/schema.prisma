@@ -1028,6 +1028,7 @@ model ShiftReport {
   followUpStatus           FollowUpStatus        @default(ABERTO)
   additionalComments       String?
   absences                 ShiftReportAbsence[]
+  timeBlocks               ShiftReportTimeBlock[]
   createdAt                DateTime              @default(now())
   updatedAt                DateTime              @updatedAt
   deletedAt                DateTime?
@@ -1045,6 +1046,22 @@ model ShiftReportAbsence {
   impactsCoverage Boolean     @default(true)
   shiftReport     ShiftReport @relation(fields: [shiftReportId], references: [id], onDelete: Cascade)
   createdAt       DateTime    @default(now())
+}
+
+model ShiftReportTimeBlock {
+  id              String      @id @default(cuid())
+  shiftReportId   String
+  startTime       String
+  endTime         String
+  category        String
+  description     String?
+  durationMinutes Int
+  shiftReport     ShiftReport @relation(fields: [shiftReportId], references: [id], onDelete: Cascade)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([shiftReportId])
+  @@index([category])
 }
 
 model AttendanceRecord {

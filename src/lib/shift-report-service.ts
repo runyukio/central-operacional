@@ -38,6 +38,7 @@ export type ShiftReportInput = {
   followUpDueDate?: string;
   followUpStatus?: string;
   additionalComments?: string;
+  timeBlocks?: Array<{ startTime: string; endTime: string; category: string; description?: string }>;
 };
 
 export type ShiftReportQuery = {
@@ -82,6 +83,19 @@ const followUpMap: Record<string, FollowUpStatus> = {
 const labelImportance: Record<ShiftReportImportance, string> = { BAIXA: "Baixa", MEDIA: "Média", ALTA: "Alta", CRITICA: "Crítica" };
 const labelMood: Record<GeneralMood, string> = { MUITO_BOM: "Muito bom", BOM: "Bom", NEUTRO: "Neutro", RUIM: "Ruim", CRITICO: "Crítico" };
 const labelFollowUp: Record<FollowUpStatus, string> = { ABERTO: "Aberto", EM_ANDAMENTO: "Em andamento", CONCLUIDO: "Concluído", CANCELADO: "Cancelado" };
+const timeBlockCategories = new Set([
+  "Administrativo",
+  "Desenvolvimento",
+  "Acompanhamento de operação",
+  "Feedback",
+  "Reunião",
+  "Treinamento",
+  "Suporte ao time",
+  "Análise de indicadores",
+  "Escalonamento / Ocorrência",
+  "Pausa",
+  "Outros"
+]);
 
 async function getActorUser(actor: Actor) {
   return prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
@@ -110,11 +124,86 @@ function serialize(value: unknown) {
   return JSON.parse(JSON.stringify(value, (_key, current) => current instanceof Date ? current.toISOString() : current));
 }
 
+function parseTimeToMinutes(value?: string | null) {
+  const match = String(value ?? "").trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
+function minutesBetween(startTime: string, endTime: string) {
+  const start = parseTimeToMinutes(startTime);
+  const end = parseTimeToMinutes(endTime);
+  if (start === null || end === null || start === end) return null;
+  return end > start ? end - start : end + 24 * 60 - start;
+}
+
+function minutesFromShiftStart(time: string, shiftStart: number) {
+  const minutes = parseTimeToMinutes(time);
+  if (minutes === null) return null;
+  return minutes >= shiftStart ? minutes - shiftStart : minutes + 24 * 60 - shiftStart;
+}
+
+function validateTimeBlocks(inputBlocks: ShiftReportInput["timeBlocks"], shift?: { startsAt: string; endsAt: string } | null) {
+  const blocks = inputBlocks ?? [];
+  const normalized: Array<{ startTime: string; endTime: string; category: string; description?: string; durationMinutes: number; startOffset: number; endOffset: number }> = [];
+  const shiftStart = parseTimeToMinutes(shift?.startsAt);
+  const shiftDuration = shift?.startsAt && shift?.endsAt ? minutesBetween(shift.startsAt, shift.endsAt) : null;
+
+  for (const [index, block] of blocks.entries()) {
+    const label = `Bloco ${index + 1}`;
+    const startTime = String(block.startTime ?? "").trim();
+    const endTime = String(block.endTime ?? "").trim();
+    const category = String(block.category ?? "").trim();
+    if (!startTime) return { error: `${label}: Informe a hora inicial.` };
+    if (!endTime) return { error: `${label}: Informe a hora final.` };
+    if (!category) return { error: `${label}: Selecione uma categoria.` };
+    if (!timeBlockCategories.has(category)) return { error: `${label}: Categoria de atividade inválida.` };
+    const durationMinutes = minutesBetween(startTime, endTime);
+    if (durationMinutes === null) return { error: `${label}: A hora final deve ser maior que a hora inicial.` };
+    const startOffset = shiftStart === null ? parseTimeToMinutes(startTime) ?? 0 : minutesFromShiftStart(startTime, shiftStart);
+    if (startOffset === null) return { error: `${label}: Hora inicial inválida.` };
+    const endOffset = startOffset + durationMinutes;
+    if (shiftStart !== null && shiftDuration !== null && shiftDuration > 0 && (startOffset < 0 || endOffset > shiftDuration)) {
+      return { error: `${label}: Este bloco está fora do horário do turno.` };
+    }
+    normalized.push({
+      startTime,
+      endTime,
+      category,
+      description: String(block.description ?? "").trim() || undefined,
+      durationMinutes,
+      startOffset,
+      endOffset
+    });
+  }
+
+  const sorted = [...normalized].sort((a, b) => a.startOffset - b.startOffset);
+  for (let index = 1; index < sorted.length; index += 1) {
+    if (sorted[index].startOffset < sorted[index - 1].endOffset) {
+      return { error: "Existe sobreposição com outro bloco de tempo." };
+    }
+  }
+
+  return { data: normalized };
+}
+
 async function findShiftId(value: string) {
   const name = cleanShiftName(value);
   if (!name) return null;
   const shift = await prisma.shift.findFirst({ where: { name: { startsWith: name, mode: "insensitive" } }, select: { id: true } });
   return shift?.id ?? null;
+}
+
+async function findShift(value: string) {
+  const name = cleanShiftName(value);
+  if (!name) return null;
+  return prisma.shift.findFirst({
+    where: { name: { startsWith: name, mode: "insensitive" } },
+    select: { id: true, startsAt: true, endsAt: true }
+  });
 }
 
 async function findLobId(value: string) {
@@ -194,7 +283,7 @@ export async function listShiftReports(actor: Actor, query: ShiftReportQuery = {
 
   const reports = await prisma.shiftReport.findMany({
     where: { deletedAt: null, ...(filters.length ? { AND: filters } : {}) },
-    include: { absences: true },
+    include: { absences: true, timeBlocks: { orderBy: { startTime: "asc" } } },
     orderBy: { reportDate: "desc" },
     take: 300
   });
@@ -213,10 +302,13 @@ export async function createShiftReport(actor: Actor, input: ShiftReportInput) {
   const generalMood = moodMap[normalizeKey(input.generalMood)];
   if (!generalMood) return { error: "Humor geral do turno inválido." };
   const followUpStatus = followUpMap[normalizeKey(input.followUpStatus)] ?? "ABERTO";
-  const shiftId = await findShiftId(input.shift);
+  const shift = await findShift(input.shift);
+  const shiftId = shift?.id ?? null;
   const lobId = await findLobId(input.lob);
   if (!shiftId) return { error: "Turno não encontrado em Configurações." };
   if (!lobId) return { error: "LOB não encontrada em Configurações." };
+  const timeBlocks = validateTimeBlocks(input.timeBlocks, shift);
+  if ("error" in timeBlocks) return { error: timeBlocks.error };
   const rta = await findEmployeeByText(input.rta);
   const followUpOwner = await findEmployeeByText(input.followUpOwner);
   const supervisorId = user.employeeProfile?.id ?? null;
@@ -266,9 +358,18 @@ export async function createShiftReport(actor: Actor, input: ShiftReportInput) {
             impactsAbs: absence.impactsAbs ?? true,
             impactsCoverage: absence.impactsCoverage ?? true
           }))
+        },
+        timeBlocks: {
+          create: (timeBlocks.data ?? []).map((block) => ({
+            startTime: block.startTime,
+            endTime: block.endTime,
+            category: block.category,
+            description: block.description,
+            durationMinutes: block.durationMinutes
+          }))
         }
       },
-      include: { absences: true }
+      include: { absences: true, timeBlocks: { orderBy: { startTime: "asc" } } }
     });
     await tx.auditLog.create({
       data: {
@@ -314,7 +415,7 @@ export async function deleteShiftReport(actor: Actor, id: string) {
 
 export async function exportShiftReports(actor: Actor, query: ShiftReportQuery = {}) {
   const payload = await listShiftReports(actor, query);
-  const headers = ["id", "data", "turno", "lob", "supervisor", "rta", "importancia", "hc_previsto", "hc_real", "online", "abs", "humor", "categoria", "impacto", "follow_up"];
+  const headers = ["id", "data", "turno", "lob", "supervisor", "rta", "importancia", "hc_previsto", "hc_real", "online", "abs", "humor", "categoria", "impacto", "follow_up", "tempo_total_minutos", "tempo_por_categoria", "blocos_tempo"];
   const rows = payload.data.map((report) => [
     report.id,
     report.reportDate,
@@ -330,18 +431,26 @@ export async function exportShiftReports(actor: Actor, query: ShiftReportQuery =
     report.generalMood,
     report.occurrenceCategory,
     report.impactLevel,
-    report.followUpStatus
+    report.followUpStatus,
+    report.totalTimeMinutes,
+    Object.entries(report.timeSummary).map(([category, minutes]) => `${category}: ${minutes}min`).join("; "),
+    report.timeBlocks.map((block) => `${block.startTime}-${block.endTime} ${block.category}${block.description ? ` (${block.description})` : ""}`).join("; ")
   ]);
   return { csv: [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n"), data: payload.data, dashboard: payload.dashboard };
 }
 
 function formatReport(
-  report: Prisma.ShiftReportGetPayload<{ include: { absences: true } }>,
+  report: Prisma.ShiftReportGetPayload<{ include: { absences: true; timeBlocks: true } }>,
   labels: Awaited<ReturnType<typeof reportLabels>>
 ) {
   const occurrence = occurrenceFrom(report);
   const supervisor = report.supervisorId ? labels.employees.get(report.supervisorId) : null;
   const rta = report.rtaId ? labels.employees.get(report.rtaId) : null;
+  const timeBlocks = [...report.timeBlocks].sort((a, b) => a.startTime.localeCompare(b.startTime));
+  const timeSummary = timeBlocks.reduce<Record<string, number>>((acc, block) => {
+    acc[block.category] = (acc[block.category] ?? 0) + block.durationMinutes;
+    return acc;
+  }, {});
   return {
     id: report.id,
     reportDate: formatDate(report.reportDate),
@@ -378,6 +487,16 @@ function formatReport(
     followUpOwner: report.followUpOwnerId ? labels.employees.get(report.followUpOwnerId)?.fullName ?? "" : "",
     followUpStatus: labelFollowUp[report.followUpStatus],
     additionalComments: report.additionalComments ?? "",
+    timeBlocks: timeBlocks.map((block) => ({
+      id: block.id,
+      startTime: block.startTime,
+      endTime: block.endTime,
+      category: block.category,
+      description: block.description ?? "",
+      durationMinutes: block.durationMinutes
+    })),
+    timeSummary,
+    totalTimeMinutes: timeBlocks.reduce((sum, block) => sum + block.durationMinutes, 0),
     createdAt: report.createdAt.toISOString()
   };
 }
@@ -394,6 +513,12 @@ function buildDashboard(reports: ReturnType<typeof formatReport>[]) {
     acc[report.shift] = (acc[report.shift] ?? 0) + 1;
     return acc;
   }, {});
+  const timeByCategory = reports.reduce<Record<string, number>>((acc, report) => {
+    Object.entries(report.timeSummary).forEach(([category, minutes]) => {
+      acc[category] = (acc[category] ?? 0) + minutes;
+    });
+    return acc;
+  }, {});
   const mainRisks = reports.flatMap((report) => splitText(report.mainRisks)).slice(0, 5);
   return {
     total: reports.length,
@@ -403,6 +528,8 @@ function buildDashboard(reports: ReturnType<typeof formatReport>[]) {
     pendingFollowUps,
     overdueFollowUps: 0,
     byCategory,
+    timeByCategory,
+    totalTimeMinutes: reports.reduce((sum, report) => sum + report.totalTimeMinutes, 0),
     recent: reports.slice(0, 5),
     briefing: {
       title: "Resumo gerencial do turno",

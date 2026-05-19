@@ -703,8 +703,8 @@ export function updateRequestStatus(actor: Actor, id: string, status: RequestSta
   let scheduleUpdated = false;
   if (transition.applySchedule && isMockDayOff(record)) {
     scheduleUpdated = applyMockDayOffToSchedule(record, actor, actionInput);
-    if (!scheduleUpdated) return { error: "Não foi possível aplicar a solicitação na escala. Verifique as datas e tente novamente." };
-    record.history.unshift({ at: timestamp(), actor: actor.name, action: "Escala atualizada", reason: "Solicitação de folga aplicada na escala." });
+    if (!scheduleUpdated) return { error: "Não foi possível aplicar a solicitação no cronograma. Verifique as datas e tente novamente." };
+    record.history.unshift({ at: timestamp(), actor: actor.name, action: "Cronograma atualizado", reason: "Solicitação de folga aplicada no cronograma." });
   }
 
   record.status = transition.nextStatus;
@@ -851,7 +851,7 @@ export function commitScheduleImport(actor: Actor, input: { fileName: string; al
   };
 
   db.scheduleImports.unshift(record);
-  createInternalNotification({ userEmail: actor.email, title: "Importação de escala concluída", body: `${record.fileName}: ${record.importedRows} linhas importadas.`, type: "ESCALA", href: "/escalas" });
+  createInternalNotification({ userEmail: actor.email, title: "Importação de cronograma concluída", body: `${record.fileName}: ${record.importedRows} linhas importadas.`, type: "ESCALA", href: "/escalas" });
   addAudit(actor, "IMPORTAÇÃO", "ScheduleImport", record.fileName, `${record.importedRows} linhas válidas`, undefined, record);
   return { data: record, preview };
 }
@@ -933,7 +933,7 @@ export function updateAttendance(actor: Actor, input: { employeeId: string; date
   record.supervisorJustification = input.supervisorJustification;
   record.hasEvidence = Boolean(input.hasEvidence);
   record.evidenceUrl = input.evidenceUrl;
-  record.isJustified = Boolean(input.supervisorJustification) || ["Presente", "Folga", "Férias", "Treinamento", "Erro de escala"].includes(input.status);
+  record.isJustified = Boolean(input.supervisorJustification) || ["Presente", "Folga", "Férias", "Treinamento", "Erro de cronograma"].includes(input.status);
   record.impactsAbs = impactsAbs;
   record.impactsCoverage = impactsCoverage;
   record.registeredBy = actor.name;
@@ -1713,9 +1713,9 @@ function createInitialDb(): MockDb {
     scheduleDaysByEmail,
     scheduleGridRows: seedScheduleGridRows,
     scheduleImports: [
-      { id: "IMP-001", fileName: "Escala_Maio_2026_v3.xlsx", importedRows: 241, status: "Sucesso", createdAt: "Hoje, 08:45", user: "Admin Central" },
-      { id: "IMP-002", fileName: "Escala_Maio_2026_v2.xlsx", importedRows: 238, status: "Sucesso", createdAt: "Ontem, 18:12", user: "Admin Central" },
-      { id: "IMP-003", fileName: "Escala_Maio_2026_v1.xlsx", importedRows: 230, status: "Atenção", createdAt: "21/05/2026", user: "Admin Central" }
+      { id: "IMP-001", fileName: "Cronograma_Maio_2026_v3.xlsx", importedRows: 241, status: "Sucesso", createdAt: "Hoje, 08:45", user: "Admin Central" },
+      { id: "IMP-002", fileName: "Cronograma_Maio_2026_v2.xlsx", importedRows: 238, status: "Sucesso", createdAt: "Ontem, 18:12", user: "Admin Central" },
+      { id: "IMP-003", fileName: "Cronograma_Maio_2026_v1.xlsx", importedRows: 230, status: "Atenção", createdAt: "21/05/2026", user: "Admin Central" }
     ],
     registrationRequests,
     sensitiveDataByEmployeeId,
@@ -1815,7 +1815,7 @@ function createInitialDb(): MockDb {
         id: "ERR-001",
         userEmail: "admin@central.com",
         code: "DEMO_UPLOAD_VALIDATION",
-        message: "Arquivo de escala com 3 linhas inválidas no preview.",
+        message: "Arquivo de cronograma com 3 linhas inválidas no preview.",
         route: "/api/schedules/import/preview",
         action: "UPLOAD_EXCEL_PREVIEW",
         severity: "WARNING",
@@ -1826,8 +1826,8 @@ function createInitialDb(): MockDb {
       {
         id: "FILE-001",
         bucket: "schedule-imports",
-        path: "2026/05/Escala_Maio_2026_v3.xlsx",
-        fileName: "Escala_Maio_2026_v3.xlsx",
+        path: "2026/05/Cronograma_Maio_2026_v3.xlsx",
+        fileName: "Cronograma_Maio_2026_v3.xlsx",
         mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         sizeBytes: 420000,
         category: "schedule-imports",
@@ -2070,9 +2070,9 @@ function applyMockDayOffToSchedule(request: RequestRecord, actor: Actor, actionI
 
 function mockNotificationBody(record: RequestRecord, status: RequestStatus, reason?: string) {
   if (isMockDayOff(record) && status === "Aprovado") {
-    if (mockDayOffKind(record) === "DAY_OFF_SELL") return "Sua venda de folga foi aprovada e sua escala foi atualizada.";
-    if (mockDayOffKind(record) === "DAY_OFF_REQUEST") return "Sua solicitação de folga foi aprovada e sua escala foi atualizada.";
-    return "Sua troca de folga foi aprovada e sua escala foi atualizada.";
+    if (mockDayOffKind(record) === "DAY_OFF_SELL") return "Sua venda de folga foi aprovada e seu cronograma foi atualizado.";
+    if (mockDayOffKind(record) === "DAY_OFF_REQUEST") return "Sua solicitação de folga foi aprovada e seu cronograma foi atualizado.";
+    return "Sua troca de folga foi aprovada e seu cronograma foi atualizado.";
   }
   if (isMockDayOff(record) && status === "Recusado") return reason ? `Sua solicitação de folga foi recusada. Motivo: ${reason}` : "Sua solicitação de folga foi recusada.";
   return reason ?? `${record.type} atualizada para ${status}.`;

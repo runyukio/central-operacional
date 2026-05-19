@@ -15,7 +15,7 @@ export async function POST(request: Request) {
     }
 
     const workbook = XLSX.read(await file.arrayBuffer(), { cellDates: true });
-    const sheetName = workbook.SheetNames.find((name) => normalizeSheetName(name) === "escalas") ?? workbook.SheetNames[0];
+    const sheetName = workbook.SheetNames.find((name) => ["cronogramas", "escalas"].includes(normalizeSheetName(name))) ?? workbook.SheetNames[0];
     if (!sheetName) return errorResponse(createValidationError({ file: "O arquivo não possui abas para leitura." }));
     const sheet = workbook.Sheets[sheetName];
     const rows = XLSX.utils.sheet_to_json<Record<string, string>>(sheet, { defval: "" });
@@ -24,7 +24,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ fileName: file.name, ...(await previewOperationalScheduleImport(actor, rows)) });
   } catch (error) {
     console.error("[schedule-import:preview-route] falha inesperada", error);
-    return errorResponse(createServerError(error, "Não foi possível ler o arquivo de escala. Verifique o template e tente novamente."));
+    return errorResponse(createServerError(error, "Não foi possível ler o arquivo de cronograma. Verifique o template e tente novamente."));
   }
 }
 

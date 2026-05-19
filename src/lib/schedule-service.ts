@@ -25,7 +25,9 @@ const uiToScheduleStatus: Record<string, ScheduleStatus> = {
   "Venda de folga aprovada": "VENDA_FOLGA_APROVADA",
   "Folga aprovada": "FOLGA_APROVADA",
   "Sem escala": "SEM_ESCALA",
+  "Sem cronograma": "SEM_ESCALA",
   "Erro de escala": "ERRO_ESCALA",
+  "Erro de cronograma": "ERRO_ESCALA",
   Feriado: "FERIADO",
   Conflito: "CONFLITO",
   Descoberto: "DESCOBERTO"
@@ -48,11 +50,17 @@ const allowedScheduleImportStatusKeys = new Set([
   "VENDA_FOLGA_APROVADA",
   "FOLGA_APROVADA",
   "SEM_ESCALA",
+  "SEM_CRONOGRAMA",
   "ERRO_DE_ESCALA",
+  "ERRO_DE_CRONOGRAMA",
   "ERRO_ESCALA"
 ]);
 
-const scheduleToUiStatus: Record<string, string> = Object.fromEntries(Object.entries(uiToScheduleStatus).map(([ui, db]) => [db, ui]));
+const scheduleToUiStatus: Record<string, string> = {
+  ...Object.fromEntries(Object.entries(uiToScheduleStatus).map(([ui, db]) => [db, ui])),
+  SEM_ESCALA: "Sem cronograma",
+  ERRO_ESCALA: "Erro de cronograma"
+};
 
 const uiToAttendanceStatus: Record<string, AttendanceStatus> = {
   Presente: "PRESENTE",
@@ -68,11 +76,13 @@ const uiToAttendanceStatus: Record<string, AttendanceStatus> = {
   "Venda de folga aprovada": "PRESENTE",
   "Folga aprovada": "FOLGA",
   "Sem escala": "SEM_ESCALA",
-  "Erro de escala": "ERRO_ESCALA"
+  "Sem cronograma": "SEM_ESCALA",
+  "Erro de escala": "ERRO_ESCALA",
+  "Erro de cronograma": "ERRO_ESCALA"
 };
 
-export const statusesRequiringReason = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala"];
-const supervisorJustificationStatuses = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala"];
+export const statusesRequiringReason = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala", "Erro de cronograma"];
+const supervisorJustificationStatuses = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala", "Erro de cronograma"];
 
 const defaultShiftTimes: Record<string, { startsAt: string; endsAt: string }> = {
   Manhã: { startsAt: "08:00", endsAt: "14:00" },
@@ -345,7 +355,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       },
       days: dateColumns.map((date) => {
         const schedule = scheduleByDate.get(dateKey(date));
-        if (!schedule) return "Sem escala";
+        if (!schedule) return "Sem cronograma";
         const attendanceLabel = scheduleStatusRequiresJustification(schedule.status) ? attendanceDisplayLabel(schedule.attendanceRecords) : null;
         if (attendanceLabel) return attendanceLabel;
         if (schedule.status === "ESCALADO") return cleanShiftName(schedule.shift?.name) || "Escalado";
@@ -425,7 +435,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       const schedule = ownScheduleByDate.get(dateKey(date));
       const label = schedule
         ? (scheduleStatusRequiresJustification(schedule.status) ? attendanceDisplayLabel(schedule.attendanceRecords) : null) ?? (schedule.status === "ESCALADO" ? cleanShiftName(schedule.shift?.name) || "Escalado" : scheduleToUiStatus[schedule.status] ?? "Escalado")
-        : "Sem escala";
+        : "Sem cronograma";
       return { date: date.getUTCDate(), dateIso: dateKey(date), outside: false, shift: label, label };
     });
 
@@ -467,7 +477,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       }
     };
   } catch (error) {
-    recordErrorLog({ userEmail: actor.email, code: "SCHEDULE_LIST_DB_FALLBACK", message: error instanceof Error ? error.message : "Falha ao listar escalas", action: "SCHEDULE_LIST", severity: "WARNING" });
+    recordErrorLog({ userEmail: actor.email, code: "SCHEDULE_LIST_DB_FALLBACK", message: error instanceof Error ? error.message : "Falha ao listar cronogramas", action: "SCHEDULE_LIST", severity: "WARNING" });
     return allowDemoDataFallback ? getMockSchedulesForActor(actor) : emptyOperationalSchedules();
   }
 }
@@ -475,7 +485,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
 function emptyOperationalSchedules(period = resolvePeriod({}), pagination = { page: 1, limit: 75, total: 0, totalPages: 1 }) {
   const dateColumns = datesBetween(period.start, period.end);
   return {
-    scheduleDays: dateColumns.map((date) => ({ date: date.getUTCDate(), dateIso: dateKey(date), outside: false, shift: "Sem escala", label: "Sem escala" })),
+    scheduleDays: dateColumns.map((date) => ({ date: date.getUTCDate(), dateIso: dateKey(date), outside: false, shift: "Sem cronograma", label: "Sem cronograma" })),
     scheduleGridRows: [],
     ownEmployee: null,
     imports: [],
@@ -495,8 +505,8 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
     if (!user && allowDemoDataFallback) return editMockSchedule(actor, input);
-    if (!user) return { error: "Usuário ativo não encontrado para editar escala." };
-    if (!["ADMIN", "GESTOR", "WFM"].includes(normalizeRole(actor.role))) return { error: "Sem permissão para editar escala." };
+    if (!user) return { error: "Usuário ativo não encontrado para editar cronograma." };
+    if (!["ADMIN", "GESTOR", "WFM"].includes(normalizeRole(actor.role))) return { error: "Sem permissão para editar cronograma." };
 
     const date = parseDateOnly(input.date);
     if (!date) return { error: "Data inválida." };
@@ -554,7 +564,7 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
           after: serialize(schedule),
           previousValue: serialize(before),
           newValue: serialize(schedule),
-          reason: input.observation || `Edição de escala para ${input.status}`
+          reason: input.observation || `Edição de cronograma para ${input.status}`
         }
       });
 
@@ -589,8 +599,8 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
 
     return { data: saved, summary: await getAttendanceSummaryFromDb(), schedules: await getOperationalSchedules(actor) };
   } catch (error) {
-    recordErrorLog({ userEmail: actor.email, code: "SCHEDULE_EDIT_DB_FALLBACK", message: error instanceof Error ? error.message : "Falha ao editar escala", action: "SCHEDULE_EDIT", severity: "ERROR" });
-    return allowDemoDataFallback ? editMockSchedule(actor, input) : { error: "Não foi possível editar a escala no banco." };
+    recordErrorLog({ userEmail: actor.email, code: "SCHEDULE_EDIT_DB_FALLBACK", message: error instanceof Error ? error.message : "Falha ao editar cronograma", action: "SCHEDULE_EDIT", severity: "ERROR" });
+    return allowDemoDataFallback ? editMockSchedule(actor, input) : { error: "Não foi possível editar o cronograma no banco." };
   }
 }
 
@@ -635,7 +645,7 @@ export async function updateOperationalAttendance(actor: Actor, input: Attendanc
 
 async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInput) {
   if (!supervisorJustificationStatuses.includes(input.status)) {
-    return { error: "Supervisor só pode justificar ocorrências. Presença, escala, folga, férias e treinamento são atualizados pelo WFM/Admin." };
+    return { error: "Supervisor só pode justificar ocorrências. Presença, cronograma, folga, férias e treinamento são atualizados pelo WFM/Admin." };
   }
   if (!input.absenceReason?.trim()) return { error: "Motivo obrigatório para justificar a ocorrência." };
   if (!input.supervisorJustification?.trim()) return { error: "Justificativa obrigatória para encerrar a pendência." };
@@ -664,7 +674,7 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
       where: { employeeId_date: { employeeId: employee.id, date } },
       include: { shift: true }
     });
-    if (!schedule) return { error: "Ocorrência de escala não encontrada para esta data. WFM/Admin precisa registrar a ocorrência antes da justificativa." };
+    if (!schedule) return { error: "Ocorrência de cronograma não encontrada para esta data. WFM/Admin precisa registrar a ocorrência antes da justificativa." };
     const shift = schedule.shift ?? employee.shift;
     const existing = await prisma.attendanceRecord.findFirst({
       where: {
@@ -777,8 +787,8 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
 export async function removeOperationalSchedules(actor: Actor, input: ScheduleRemoveInput) {
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
-    if (!user) return { error: "Usuário ativo não encontrado para remover escala." };
-    if (!["ADMIN", "GESTOR", "WFM"].includes(normalizeRole(actor.role))) return { error: "Sem permissão para remover escalas." };
+    if (!user) return { error: "Usuário ativo não encontrado para remover cronograma." };
+    if (!["ADMIN", "GESTOR", "WFM"].includes(normalizeRole(actor.role))) return { error: "Sem permissão para remover cronogramas." };
     if (!input.employeeId) return { error: "Informe o colaborador." };
 
     const employee = await prisma.employeeProfile.findUnique({ where: { id: input.employeeId } });
@@ -790,13 +800,13 @@ export async function removeOperationalSchedules(actor: Actor, input: ScheduleRe
       ...(input.scope === "all" ? {} : { date: { gte: period.start, lte: period.end } })
     };
     const schedules = await prisma.schedule.findMany({ where });
-    if (!schedules.length) return { error: "Nenhuma escala encontrada para remover." };
+    if (!schedules.length) return { error: "Nenhum cronograma encontrado para remover." };
 
     const now = new Date();
     await prisma.$transaction(async (tx) => {
-      await tx.schedule.updateMany({ where, data: { deletedAt: now, observation: "Escala removida manualmente" } });
+      await tx.schedule.updateMany({ where, data: { deletedAt: now, observation: "Cronograma removido manualmente" } });
       for (const schedule of schedules) {
-        await resolveAttendanceForScheduleStatus(tx, user.id, employee.id, schedule.id, schedule.date, "Sem escala");
+        await resolveAttendanceForScheduleStatus(tx, user.id, employee.id, schedule.id, schedule.date, "Sem cronograma");
         await tx.workHourRecord.updateMany({
           where: {
             OR: [
@@ -823,7 +833,7 @@ export async function removeOperationalSchedules(actor: Actor, input: ScheduleRe
             after: { deletedAt: now.toISOString() },
             previousValue: serialize(schedule),
             newValue: { deletedAt: now.toISOString() },
-            reason: input.scope === "all" ? "Remoção de todas as escalas do colaborador" : `Remoção de escala do período ${period.month}/${period.year}`
+            reason: input.scope === "all" ? "Remoção de todos os cronogramas do colaborador" : `Remoção de cronograma do período ${period.month}/${period.year}`
           }
         });
       }
@@ -833,17 +843,17 @@ export async function removeOperationalSchedules(actor: Actor, input: ScheduleRe
           action: "ALTERACAO_ESCALA",
           entity: "Schedule",
           entityId: employee.id,
-          reason: input.scope === "all" ? "Remoção de todas as escalas do colaborador" : `Remoção de escala do colaborador no mês ${period.month}/${period.year}`,
+          reason: input.scope === "all" ? "Remoção de todos os cronogramas do colaborador" : `Remoção de cronograma do colaborador no mês ${period.month}/${period.year}`,
           previousValue: { affectedSchedules: schedules.length },
           newValue: { deletedAt: true }
         }
       });
     });
 
-    return { success: true, message: `${schedules.length} registro(s) de escala removido(s).`, schedules: await getOperationalSchedules(actor, input) };
+    return { success: true, message: `${schedules.length} registro(s) de cronograma removido(s).`, schedules: await getOperationalSchedules(actor, input) };
   } catch (error) {
-    recordErrorLog({ userEmail: actor.email, code: "SCHEDULE_REMOVE_DB_ERROR", message: error instanceof Error ? error.message : "Falha ao remover escala", action: "SCHEDULE_REMOVE", severity: "ERROR" });
-    return { error: "Não foi possível remover a escala do colaborador." };
+    recordErrorLog({ userEmail: actor.email, code: "SCHEDULE_REMOVE_DB_ERROR", message: error instanceof Error ? error.message : "Falha ao remover cronograma", action: "SCHEDULE_REMOVE", severity: "ERROR" });
+    return { error: "Não foi possível remover o cronograma do colaborador." };
   }
 }
 
@@ -853,7 +863,7 @@ export async function previewOperationalScheduleImport(actor: Actor, rows: Array
       rows,
       rows.map((_, index) => ({
         rowNumber: index + 1,
-        errors: ["Sem permissão para importar escala. Supervisor apenas visualiza e justifica ocorrências."],
+        errors: ["Sem permissão para importar cronograma. Supervisor apenas visualiza e justifica ocorrências."],
         warnings: [],
         action: "ignorar" as const
       }))
@@ -880,8 +890,8 @@ export async function commitOperationalScheduleImport(actor: Actor, input: Sched
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
     if (!user && allowDemoDataFallback) return commitMockScheduleImport(actor, { ...input, allowPartial: Boolean(input.allowPartial) });
-    if (!user) return { error: "Usuário ativo não encontrado para importar escala." };
-    if (!["ADMIN", "GESTOR", "WFM"].includes(normalizeRole(actor.role))) return { error: "Sem permissão para importar escala." };
+    if (!user) return { error: "Usuário ativo não encontrado para importar cronograma." };
+    if (!["ADMIN", "GESTOR", "WFM"].includes(normalizeRole(actor.role))) return { error: "Sem permissão para importar cronograma." };
 
     const validation = await validateImportRowsInDb(input.rows);
     const hasErrors = validation.some((row) => row.errors.length);
@@ -981,7 +991,7 @@ export async function commitOperationalScheduleImport(actor: Actor, input: Sched
             after: { importId: importRecord.id, fileName: input.fileName },
             previousValue: {},
             newValue: { scheduleId: schedule.id, importId: importRecord.id },
-            reason: `Importação de escala ${input.fileName}`
+            reason: `Importação de cronograma ${input.fileName}`
           }))
         });
       }
@@ -1009,18 +1019,18 @@ export async function commitOperationalScheduleImport(actor: Actor, input: Sched
 
     return { data: result, preview: toImportPreview(input.rows, validation) };
   } catch (error) {
-    recordErrorLog({ userEmail: actor.email, code: "SCHEDULE_IMPORT_DB_FALLBACK", message: error instanceof Error ? error.message : "Falha ao importar escala", action: "SCHEDULE_IMPORT", severity: "ERROR" });
+    recordErrorLog({ userEmail: actor.email, code: "SCHEDULE_IMPORT_DB_FALLBACK", message: error instanceof Error ? error.message : "Falha ao importar cronograma", action: "SCHEDULE_IMPORT", severity: "ERROR" });
     if (allowDemoDataFallback) return commitMockScheduleImport(actor, { ...input, allowPartial: Boolean(input.allowPartial) });
-    return { error: "Não foi possível importar a escala no banco." };
+    return { error: "Não foi possível importar o cronograma no banco." };
   }
 }
 
 export async function exportOperationalSchedulesCsv(actor: Actor, query: ScheduleQuery = {}) {
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
-    if (!user) return { error: "Usuário ativo não encontrado para exportar escala." };
+    if (!user) return { error: "Usuário ativo não encontrado para exportar cronograma." };
     const role = normalizeRole(actor.role);
-    if (!["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(role)) return { error: "Sem permissão para baixar Escalas Consolidadas." };
+    if (!["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(role)) return { error: "Sem permissão para baixar Cronogramas Consolidados." };
 
     const period = resolvePeriod(query);
     const search = query.collaborator?.trim();
@@ -1055,7 +1065,7 @@ export async function exportOperationalSchedulesCsv(actor: Actor, query: Schedul
         actorId: user.id,
         action: "UPLOAD",
         entity: "Schedule",
-        reason: "Exportação CSV de Escalas Consolidadas",
+        reason: "Exportação CSV de Cronogramas Consolidados",
         newValue: { filters: query, exportedRows: schedules.length }
       }
     }).catch(() => undefined);
@@ -1078,8 +1088,8 @@ export async function exportOperationalSchedulesCsv(actor: Actor, query: Schedul
 
     return { csv: [headers, ...rows].map((row) => row.map(csvCell).join(";")).join("\n") };
   } catch (error) {
-    recordErrorLog({ userEmail: actor.email, code: "SCHEDULE_EXPORT_ERROR", message: error instanceof Error ? error.message : "Falha ao exportar escalas", action: "SCHEDULE_EXPORT", severity: "ERROR" });
-    return { error: "Não foi possível baixar Escalas Consolidadas." };
+    recordErrorLog({ userEmail: actor.email, code: "SCHEDULE_EXPORT_ERROR", message: error instanceof Error ? error.message : "Falha ao exportar cronogramas", action: "SCHEDULE_EXPORT", severity: "ERROR" });
+    return { error: "Não foi possível baixar Cronogramas Consolidados." };
   }
 }
 
@@ -1190,7 +1200,7 @@ function editMockSchedule(actor: Actor, input: ScheduleEditInput) {
     shift: cleanShiftName(input.shift) || input.shift,
     status: input.status,
     absenceReason: input.observation,
-    reasonCategory: "Escala",
+    reasonCategory: "Cronograma",
     supervisorJustification: input.observation
   });
   if ("error" in attendance) return attendance;
@@ -1281,7 +1291,7 @@ async function validateImportRowsInDb(rows: Array<Record<string, unknown>>): Pro
     const errors: string[] = [];
     const warnings: string[] = [];
 
-    if (!hasExcelValue(row.wb_login)) errors.push("WB/Login obrigatório para importar escala.");
+    if (!hasExcelValue(row.wb_login)) errors.push("WB/Login obrigatório para importar cronograma.");
     if (!hasExcelValue(row.data)) errors.push("Data é obrigatória.");
     else if (!parsedDate) errors.push("Data inválida. Use DD/MM/AAAA ou AAAA-MM-DD.");
     if (!hasExcelValue(row.status)) errors.push("Status obrigatório.");
@@ -1292,7 +1302,7 @@ async function validateImportRowsInDb(rows: Array<Record<string, unknown>>): Pro
 
     const status = scheduleStatusFromImport(row.status);
     if (hasExcelValue(row.status) && !status) {
-      errors.push(`Status inválido: ${text(row.status)}. Use um status de escala válido.`);
+      errors.push(`Status inválido: ${text(row.status)}. Use um status de cronograma válido.`);
     }
     const startsAt = normalizeTime(row.entrada);
     const endsAt = normalizeTime(row.saida);
@@ -1304,7 +1314,7 @@ async function validateImportRowsInDb(rows: Array<Record<string, unknown>>): Pro
     const shift = normalizedShift && normalizedShift !== "Folga" ? shiftMap.get(normalizeImportKey(normalizedShift)) : null;
     if (receivedShift && isBlockedShiftName(receivedShift)) {
       const blockedKey = shiftLookupKey(normalizedShift);
-      errors.push(blockedKey === "PLANTAO" ? "Plantão não é um turno ativo." : "Férias deve ser usada como status de escala, não como turno.");
+      errors.push(blockedKey === "PLANTAO" ? "Plantão não é um turno ativo." : "Férias deve ser usada como status de cronograma, não como turno.");
     } else if (receivedShift && !isSelectableShiftName(receivedShift)) {
       errors.push(`Turno ${receivedShift} não é uma opção padrão válida.`);
     } else if (normalizedShift && normalizedShift !== "Folga" && !shift) {
@@ -1319,7 +1329,7 @@ async function validateImportRowsInDb(rows: Array<Record<string, unknown>>): Pro
     if (employee && text(row.supervisor_wb_login) && normalizeImportKey(text(row.supervisor_wb_login)) !== normalizeImportKey(employee.supervisor?.wbLogin ?? "")) warnings.push("Supervisor no arquivo diferente do supervisor do colaborador.");
     if (key && (duplicateKeys.get(key) ?? 0) > 1) errors.push("Linha duplicada no arquivo para o mesmo WB/Login + data.");
     const existingSchedule = employee && parsedDate ? scheduleMap.get(`${employee.id}:${parsedDate.getTime()}`) : null;
-    if (existingSchedule) warnings.push("Escala já existe para este colaborador/data e será atualizada.");
+    if (existingSchedule) warnings.push("Cronograma já existe para este colaborador/data e será atualizado.");
 
     return {
       rowNumber,
@@ -1378,7 +1388,7 @@ function toImportPreview(rows: Array<Record<string, unknown>>, validation: Sched
 
 function validateAttendance(input: AttendanceInput) {
   if (requiresReason(input.status) && !input.absenceReason?.trim() && !input.supervisorJustification?.trim()) {
-    return "Motivo/observação obrigatório para ausência, falta, atraso, saída antecipada, afastado ou erro de escala.";
+    return "Motivo/observação obrigatório para ausência, falta, atraso, saída antecipada, afastado ou erro de cronograma.";
   }
   return "";
 }
@@ -1415,7 +1425,7 @@ function impactsAbs(status: string, _reason?: string) {
 }
 
 function impactsCoverage(status: string) {
-  return ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Sem escala"].includes(status);
+  return ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Sem escala", "Sem cronograma"].includes(status);
 }
 
 async function upsertAttendance(tx: Prisma.TransactionClient, userId: string, employeeId: string, scheduleId: string, date: Date, input: ScheduleEditInput) {
@@ -1442,7 +1452,7 @@ async function upsertAttendance(tx: Prisma.TransactionClient, userId: string, em
           scheduleId,
           status,
           absenceReason: savedReason,
-          reasonCategory: requiresJustification ? "Escala" : null,
+          reasonCategory: requiresJustification ? "Cronograma" : null,
           supervisorJustification: pendingJustification ? null : observation || null,
           isJustified: !requiresJustification || !pendingJustification,
           impactsAbs: absImpact,
@@ -1461,7 +1471,7 @@ async function upsertAttendance(tx: Prisma.TransactionClient, userId: string, em
           date,
           status,
           absenceReason: savedReason,
-          reasonCategory: requiresJustification ? "Escala" : undefined,
+          reasonCategory: requiresJustification ? "Cronograma" : undefined,
           supervisorJustification: pendingJustification ? null : observation || null,
           isJustified: !requiresJustification || !pendingJustification,
           impactsAbs: absImpact,
@@ -1536,7 +1546,7 @@ async function resolveAttendanceForScheduleStatus(tx: Prisma.TransactionClient, 
         newStatus: saved.status,
         previousReason: record.absenceReason,
         newReason: null,
-        comment: `Pendência encerrada por alteração da escala para ${scheduleStatus}.`
+        comment: `Pendência encerrada por alteração do cronograma para ${scheduleStatus}.`
       }
     });
 
@@ -1551,7 +1561,7 @@ async function resolveAttendanceForScheduleStatus(tx: Prisma.TransactionClient, 
         action: "ALTERACAO_ESCALA",
         entity: "AttendanceRecord",
         entityId: record.id,
-        reason: `Pendência de justificativa encerrada por alteração da escala para ${scheduleStatus}.`,
+        reason: `Pendência de justificativa encerrada por alteração do cronograma para ${scheduleStatus}.`,
         previousValue: before,
         newValue: serialize(saved)
       }
@@ -1767,7 +1777,7 @@ function workHourStatusLabel(status: string) {
     IMPORTED: "Importado",
     OK: "OK",
     DIVERGENT: "Divergente",
-    NO_SCHEDULE: "Sem escala",
+    NO_SCHEDULE: "Sem cronograma",
     MISSING_WORK_HOURS: "Sem horas",
     ADJUSTMENT_REQUESTED: "Ajuste solicitado",
     ADJUSTMENT_APPROVED: "Ajuste aprovado",

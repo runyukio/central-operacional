@@ -171,16 +171,16 @@ export const scheduleGridRows = employees.slice(1, 9).map((employee, index) => (
 
 export const requests = [
   { id: "REQ-1024", type: "Troca de folga", requester: "Larissa Souza", priority: "Média", status: "Aberto", area: "WFM", time: "Hoje, 09:15", icon: CalendarCheck },
-  { id: "REQ-1025", type: "Ajuste de escala", requester: "Rafael Pereira", priority: "Alta", status: "Em análise", area: "WFM", time: "Hoje, 10:05", icon: UsersRound },
+  { id: "REQ-1025", type: "Ajuste de cronograma", requester: "Rafael Pereira", priority: "Alta", status: "Em análise", area: "WFM", time: "Hoje, 10:05", icon: UsersRound },
   { id: "REQ-1026", type: "Equipamento", requester: "Bruno Pereira", priority: "Média", status: "Aguardando aprovação", area: "TI", time: "Hoje, 10:40", icon: Laptop },
   { id: "REQ-1027", type: "Troca de folga", requester: "Vanessa Carvalho", priority: "Média", status: "Aprovado", area: "WFM", time: "Hoje, 08:55", icon: CalendarCheck },
-  { id: "REQ-1028", type: "Ajuste de escala", requester: "Paula Ribeiro", priority: "Alta", status: "Recusado", area: "WFM", time: "Ontem, 16:40", icon: UsersRound },
+  { id: "REQ-1028", type: "Ajuste de cronograma", requester: "Paula Ribeiro", priority: "Alta", status: "Recusado", area: "WFM", time: "Ontem, 16:40", icon: UsersRound },
   { id: "REQ-1029", type: "Suporte", requester: "Rafael Souza", priority: "Média", status: "Concluído", area: "Operações", time: "Ontem, 17:20", icon: Headphones },
   { id: "REQ-1030", type: "RH", requester: "Juliana Lima", priority: "Baixa", status: "Concluído", area: "RH", time: "Ontem, 18:30", icon: HeartPulse },
   { id: "REQ-1031", type: "Qualidade", requester: "Diego Fernandes", priority: "Média", status: "Aprovado", area: "Qualidade", time: "Ontem, 11:10", icon: ShieldCheck },
   { id: "REQ-1032", type: "Equipamento", requester: "Lucas Andrade", priority: "Baixa", status: "Recusado", area: "TI", time: "Ontem, 15:00", icon: Laptop },
   { id: "REQ-1033", type: "Troca de folga", requester: "Thiago Ferreira", priority: "Alta", status: "Aguardando aprovação", area: "WFM", time: "Hoje, 11:20", icon: CalendarCheck },
-  { id: "REQ-1034", type: "Ajuste de escala", requester: "Marcos Costa", priority: "Alta", status: "Aberto", area: "WFM", time: "Hoje, 08:42", icon: UsersRound },
+  { id: "REQ-1034", type: "Ajuste de cronograma", requester: "Marcos Costa", priority: "Alta", status: "Aberto", area: "WFM", time: "Hoje, 08:42", icon: UsersRound },
   { id: "REQ-1035", type: "Equipamento", requester: "Ana Ferreira", priority: "Baixa", status: "Aberto", area: "TI", time: "Hoje, 08:30", icon: Laptop }
 ];
 
@@ -284,7 +284,7 @@ export const chatMessages = [
 ];
 
 export const auditLogs = [
-  ["23/05/2026 09:32", "Admin Central", "IMPORTAÇÃO", "ScheduleImport", "Escala_Maio_2026_v3.xlsx", "241 linhas válidas"],
+  ["23/05/2026 09:32", "Admin Central", "IMPORTAÇÃO", "ScheduleImport", "Cronograma_Maio_2026_v3.xlsx", "241 linhas válidas"],
   ["23/05/2026 09:18", "Carla Supervisora", "APROVAÇÃO", "Request", "REQ-1024", "Cobertura validada"],
   ["23/05/2026 08:55", "Thiago TI", "ALTERAÇÃO_EQUIPAMENTO", "Equipment", "EQP-0004", "Status: Inoperante"],
   ["22/05/2026 17:20", "Ana Qualidade", "CRIAÇÃO", "QualityFeedback", "QF-129", "Pílula enviada"],
@@ -292,7 +292,7 @@ export const auditLogs = [
 ];
 
 export const reportCards = [
-  { title: "Relatório de escala", icon: CalendarCheck, records: "248 registros" },
+  { title: "Relatório de cronograma", icon: CalendarCheck, records: "248 registros" },
   { title: "Relatório de solicitações", icon: FileText, records: "63 solicitações" },
   { title: "Relatório de performance", icon: Trophy, records: "5 equipes" },
   { title: "Relatório de qualidade", icon: ShieldCheck, records: "128 feedbacks" },

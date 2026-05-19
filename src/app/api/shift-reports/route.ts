@@ -13,6 +13,13 @@ const absenceSchema = z.object({
   impactsCoverage: z.boolean().default(true)
 });
 
+const timeBlockSchema = z.object({
+  startTime: z.string().min(1),
+  endTime: z.string().min(1),
+  category: z.string().min(1),
+  description: z.string().optional().default("")
+});
+
 const schema = z.object({
   reportDate: z.string().min(1),
   shift: z.string().min(1),
@@ -46,7 +53,8 @@ const schema = z.object({
   followUpOwner: z.string().optional().default(""),
   followUpDueDate: z.string().optional(),
   followUpStatus: z.string().optional().default("Aberto"),
-  additionalComments: z.string().optional().default("")
+  additionalComments: z.string().optional().default(""),
+  timeBlocks: z.array(timeBlockSchema).default([])
 });
 
 export async function GET(request: Request) {
@@ -71,7 +79,7 @@ export async function POST(request: Request) {
   }
 
   const actor = await getApiActor();
-  const result = createShiftReport(actor, parsed.data);
+  const result = await createShiftReport(actor, parsed.data);
   if ("error" in result) {
     return NextResponse.json({ error: result.error }, { status: 403 });
   }

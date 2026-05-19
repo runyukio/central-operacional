@@ -432,7 +432,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     if (input.shiftId !== undefined && !nextShiftId) return createValidationError({ shiftId: "Turno é obrigatório." });
     if (input.roleTitle !== undefined && !nextRoleTitle) return createValidationError({ roleTitle: "Cargo/Função é obrigatório." });
     if (input.operationalStatus !== undefined && !nextStatus) return createValidationError({ operationalStatus: "Status do colaborador é obrigatório." });
-    if (input.scheduleType !== undefined && !nextScheduleType) return createValidationError({ scheduleType: "Escala é obrigatória." });
+    if (input.scheduleType !== undefined && !nextScheduleType) return createValidationError({ scheduleType: "Cronograma é obrigatório." });
     if (input.stateUf !== undefined && nextStateUf && nextStateUf.length !== 2) return createValidationError({ stateUf: "Estado/UF deve ter 2 letras." });
 
     let targetRoleId: string | undefined;
@@ -832,7 +832,7 @@ function employeeExportColumns(role: string) {
     col("status_colaborador", (employee) => employee.status),
     col("status_usuario", (employee) => employee.userStatus),
     col("preferencia_horario", (employee) => employee.preferredSchedule),
-    col("escala_vinculada", (employee) => employee.schedule ? "Sim" : "Não")
+    col("cronograma_vinculado", (employee) => employee.schedule ? "Sim" : "Não")
   ];
   if (role === "SUPERVISOR" || role === "WFM" || role === "QUALIDADE") return operational;
 

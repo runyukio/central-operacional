@@ -779,7 +779,7 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
         data: {
           userId: user.id,
           title: "Cadastro aprovado",
-          body: "Seu acesso foi liberado. A escala aparecerá assim que for importada e vinculada ao seu cadastro.",
+          body: "Seu acesso foi liberado. O cronograma aparecerá assim que for importado e vinculado ao seu cadastro.",
           category: "Cadastro",
           type: "SUCCESS",
           entity: "EmployeeRegistrationRequest",
@@ -928,7 +928,7 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     if (row.lob && !validLobs.has(row.lob.toUpperCase())) errors.push(`LOB ${row.lob} não existe em Configurações.`);
     if (row.shift && isBlockedShiftName(row.shift)) {
       const blockedKey = shiftLookupKey(cleanShiftName(row.shift));
-      errors.push(blockedKey === "PLANTAO" ? "Plantão não é um turno ativo." : "Férias deve ser usada como status de escala, não como turno.");
+      errors.push(blockedKey === "PLANTAO" ? "Plantão não é um turno ativo." : "Férias deve ser usada como status de cronograma, não como turno.");
     } else if (row.shift && (!isSelectableShiftName(row.shift) || !validShifts.has(normalizeLookupKey(cleanShiftName(row.shift))))) errors.push(`Turno ${row.shift} não existe em Configurações.`);
     if (row.cpf && !isCpfFormat(row.cpf)) errors.push("CPF inválido.");
     if (!row.cpf) warnings.push("CPF pendente: o colaborador será importado com cadastro incompleto para complemento posterior.");

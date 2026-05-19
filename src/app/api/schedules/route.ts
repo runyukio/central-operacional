@@ -66,7 +66,7 @@ const removeSchema = z.object({
 export async function DELETE(request: Request) {
   const parsed = removeSchema.safeParse(await request.json());
   if (!parsed.success) {
-    return NextResponse.json({ error: "Dados inválidos para remover escala.", issues: parsed.error.flatten() }, { status: 400 });
+    return NextResponse.json({ error: "Dados inválidos para remover cronograma.", issues: parsed.error.flatten() }, { status: 400 });
   }
 
   const actor = await getApiActor();

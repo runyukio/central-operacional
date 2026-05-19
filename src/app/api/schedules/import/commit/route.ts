@@ -31,6 +31,6 @@ export async function POST(request: Request) {
     return NextResponse.json(result);
   } catch (error) {
     console.error("[schedule-import:commit-route] falha inesperada", error);
-    return errorResponse(createServerError(error, "Não foi possível confirmar a importação de escala. Tente novamente ou contate o administrador."));
+    return errorResponse(createServerError(error, "Não foi possível confirmar a importação de cronograma. Tente novamente ou contate o administrador."));
   }
 }

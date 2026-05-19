@@ -98,11 +98,12 @@ import { cleanShiftName, cleanShiftOptions, isBlockedShiftName, isSelectableShif
 
 const scheduleImportColumns = ["wb_login", "data", "status", "turno", "entrada", "saida", "lob"] as const;
 const workHourImportColumns = ["wb_login", "data", "entrada_real", "saida_real", "pausa_minutos", "horas_realizadas", "sistema_origem", "observacao", "nome", "email", "lob", "supervisor_wb_login", "turno"] as const;
-const scheduleStatusOptions = ["Escalado", "Presente", "Nesting", "Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Férias", "Treinamento", "Folga", "Troca aprovada", "Venda de folga aprovada", "Folga aprovada", "Sem escala", "Erro de escala"] as const;
-const attendanceReasonStatuses = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala"];
+const scheduleStatusOptions = ["Escalado", "Presente", "Nesting", "Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Férias", "Treinamento", "Folga", "Troca aprovada", "Venda de folga aprovada", "Folga aprovada", "Sem cronograma", "Erro de cronograma"] as const;
+const attendanceReasonStatuses = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de cronograma"];
 const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Nesting", "Venda de folga aprovada"];
 const employeeOperationalStatusOptions = ["Ativo", "Nesting", "Inativo", "Pendente de cadastro", "Afastado", "Desligado", "Em treinamento", "Suspenso", "Online", "Em Atendimento", "Offline"];
-const absenceReasonOptions = ["Falta injustificada", "Atestado", "Problema de saúde", "Emergência familiar", "Problema técnico", "Falta de equipamento", "Problema de internet", "Atraso", "Saída antecipada", "Erro de escala", "Afastamento", "Outros"];
+const absenceReasonOptions = ["Falta injustificada", "Atestado", "Problema de saúde", "Emergência familiar", "Problema técnico", "Falta de equipamento", "Problema de internet", "Atraso", "Saída antecipada", "Erro de cronograma", "Afastamento", "Outros"];
+const timeBlockCategoryOptions = ["Administrativo", "Desenvolvimento", "Acompanhamento de operação", "Feedback", "Reunião", "Treinamento", "Suporte ao time", "Análise de indicadores", "Escalonamento / Ocorrência", "Pausa", "Outros"];
 const scheduleShiftTimes: Record<string, { startsAt: string; endsAt: string }> = {
   Manhã: { startsAt: "08:00", endsAt: "14:00" },
   Tarde: { startsAt: "14:00", endsAt: "20:00" },
@@ -117,9 +118,9 @@ const dayOffKindLabels: Record<DayOffKind, string> = {
   DAY_OFF_REQUEST: "Solicitação de Dia de Folga"
 };
 const dayOffOptions: Array<{ kind: DayOffKind; title: string; description: string }> = [
-  { kind: "DAY_OFF_SWAP", title: "Trocar folga", description: "Mover uma folga para outra data já escalada." },
+  { kind: "DAY_OFF_SWAP", title: "Trocar folga", description: "Mover uma folga para outra data já programada." },
   { kind: "DAY_OFF_SELL", title: "Vender folga", description: "Trabalhar em um dia que hoje está como folga." },
-  { kind: "DAY_OFF_REQUEST", title: "Solicitar dia de folga", description: "Pedir folga em uma data em que você está escalado." }
+  { kind: "DAY_OFF_REQUEST", title: "Solicitar dia de folga", description: "Pedir folga em uma data em que você está programado." }
 ];
 
 type ClientRequest = {
@@ -561,6 +562,18 @@ type ShiftReportItem = {
   mainRisks: string;
   actionsTaken: string;
   nextShiftAttentionPoints: string;
+  timeBlocks: ShiftReportTimeBlock[];
+  timeSummary: Record<string, number>;
+  totalTimeMinutes: number;
+};
+
+type ShiftReportTimeBlock = {
+  id?: string;
+  startTime: string;
+  endTime: string;
+  category: string;
+  description: string;
+  durationMinutes?: number;
 };
 
 type ShiftReportDashboard = {
@@ -571,6 +584,8 @@ type ShiftReportDashboard = {
   pendingFollowUps: number;
   overdueFollowUps: number;
   byCategory: Record<string, number>;
+  timeByCategory: Record<string, number>;
+  totalTimeMinutes: number;
   briefing: {
     title: string;
     generatedAt: string;
@@ -1267,9 +1282,9 @@ export function OperationalCommandCenter() {
                 <Line type="monotone" dataKey="presentes" stroke="#071B3A" strokeWidth={3} />
               </BarChart>
             </ResponsiveContainer>
-          </div> : <EmptyState title="Sem escala nesta data" description="Selecione uma data com registros reais de escala para visualizar presença por turno." />}
+          </div> : <EmptyState title="Sem cronograma nesta data" description="Selecione uma data com registros reais de cronograma para visualizar presença por turno." />}
           <div className="mt-4 rounded-lg bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
-            {summary.planned ? `Cobertura real atual: ${summary.coverageRate}%` : "Sem escala importada para o período de teste."}
+            {summary.planned ? `Cobertura real atual: ${summary.coverageRate}%` : "Sem cronograma importado para o período de teste."}
           </div>
         </Panel>
 
@@ -1312,7 +1327,7 @@ export function OperationalCommandCenter() {
                 <Bar dataKey="gaps" fill="#EF4444" radius={[8, 8, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
-          </div> : <EmptyState title="Sem gap nesta data" description="Os gaps serão exibidos quando houver escala real na data selecionada." />}
+          </div> : <EmptyState title="Sem gap nesta data" description="Os gaps serão exibidos quando houver cronograma real na data selecionada." />}
           <div className="mt-4 rounded-lg bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
             {summary.gap < 0 ? `Gap real identificado: ${summary.gap}` : "Sem gap crítico identificado na base real."}
           </div>
@@ -1321,13 +1336,13 @@ export function OperationalCommandCenter() {
 
       <div className="mt-5 grid gap-5 xl:grid-cols-[1fr_1fr_1fr]">
         <Panel title="Alertas e Ocorrências" action="Ver todos os alertas">
-          {commandAlerts.length ? <MiniAlertList items={commandAlerts} /> : <EmptyState title="Sem alertas" description="Alertas aparecerão quando houver escala, presença ou ausência real." />}
+          {commandAlerts.length ? <MiniAlertList items={commandAlerts} /> : <EmptyState title="Sem alertas" description="Alertas aparecerão quando houver cronograma, presença ou ausência real." />}
         </Panel>
         <Panel title="Top Performers do Dia" action="Ver ranking completo">
           <EmptyState title="Sem ranking real" description="O ranking será preenchido quando houver métricas reais de performance." />
         </Panel>
         <Panel title="Riscos do Dia" action="Ver todos os riscos">
-          {commandRisks.length ? <MiniAlertList items={commandRisks} /> : <EmptyState title="Sem riscos ativos" description="Riscos serão calculados a partir de escala, presença e solicitações reais." />}
+          {commandRisks.length ? <MiniAlertList items={commandRisks} /> : <EmptyState title="Sem riscos ativos" description="Riscos serão calculados a partir de cronograma, presença e solicitações reais." />}
         </Panel>
       </div>
     </div>
@@ -1481,7 +1496,7 @@ export function MySchedulePage() {
       setMyRequests((items) => items.map((item) => (item.id === id ? payload.data : item)));
       setSelectedRequest(payload.data);
       setActionReason("");
-      setDayOffMessage(payload.scheduleUpdated ? "Solicitação aprovada e escala atualizada." : `Solicitação movida para ${payload.data.status}.`);
+      setDayOffMessage(payload.scheduleUpdated ? "Solicitação aprovada e cronograma atualizado." : `Solicitação movida para ${payload.data.status}.`);
       apiJson<{ data: { scheduleDays: typeof scheduleDays } }>("/api/schedules")
         .then((schedulePayload) => setDays(schedulePayload.data.scheduleDays))
         .catch(() => undefined);
@@ -1530,15 +1545,15 @@ export function MySchedulePage() {
     done: myRequests.filter((request) => request.status === "Concluído").length,
     canceled: myRequests.filter((request) => request.status === "Cancelado").length
   };
-  const hasSchedule = days.some((day) => !day.outside && day.shift !== "Sem escala");
-  const nextScheduleLabel = cleanShiftName(days.find((day) => !day.outside && !["Sem escala", "Folga", "Férias"].includes(day.label))?.label) || "";
+  const hasSchedule = days.some((day) => !day.outside && day.shift !== "Sem cronograma");
+  const nextScheduleLabel = cleanShiftName(days.find((day) => !day.outside && !["Sem cronograma", "Folga", "Férias"].includes(day.label))?.label) || "";
   const workHourByDate = new Map(myWorkHours.map((row) => [row.date, row]));
 
   return (
     <div>
       <PageHeader
-        title="Minha Escala"
-        description="Visualize sua escala, folgas e solicite alterações"
+        title="Meu Cronograma"
+        description="Visualize seu cronograma, folgas e solicite alterações"
         icon={CalendarDays}
         actions={
           <button onClick={() => setShowDayOffModal(true)} className="flex h-12 items-center gap-2 rounded-lg bg-blue-600 px-5 text-sm font-bold text-white shadow-soft">
@@ -1559,12 +1574,12 @@ export function MySchedulePage() {
               <button className="grid h-10 w-10 place-items-center rounded-lg border border-border bg-white">›</button>
             </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-              <MetricPill value={hasSchedule && scheduleInfo ? `${scheduleInfo.schedule} - ${scheduleInfo.shift}` : "Sem escala"} label="Sua Escala" />
+              <MetricPill value={hasSchedule && scheduleInfo ? `${scheduleInfo.schedule} - ${scheduleInfo.shift}` : "Sem cronograma"} label="Seu Cronograma" />
               <MetricPill value={hasSchedule && nextScheduleLabel ? nextScheduleLabel : "Sem próximo turno"} label="Próximo Turno" />
               <MetricPill value={hasSchedule && scheduleInfo ? scheduleInfo.lob : "Não vinculado"} label="Local" />
             </div>
           </div>
-          {!hasSchedule ? <div className="border-b border-border p-8"><EmptyState title="Nenhuma escala encontrada" description="Sua escala ainda não foi importada ou vinculada ao seu cadastro." /></div> : null}
+          {!hasSchedule ? <div className="border-b border-border p-8"><EmptyState title="Nenhum cronograma encontrado" description="Seu cronograma ainda não foi importado ou vinculado ao seu cadastro." /></div> : null}
           <div className="grid grid-cols-7 border-b border-border bg-white text-center text-sm font-bold text-navy-950">
             {["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"].map((day) => (
               <div key={day} className="border-r border-border px-3 py-4 last:border-r-0">
@@ -1660,7 +1675,7 @@ export function MySchedulePage() {
                 <MetricPill value={`${myWorkHourSummary.adjustedHours}h`} label="Horas ajustadas" />
                 <MetricPill value={myWorkHourSummary.pendingAdjustments} label="Ajustes pendentes" />
                 <MetricPill value={myWorkHourSummary.divergentRecords} label="Dias com divergência" />
-                <MetricPill value={myWorkHourSummary.noScheduleRecords} label="Dias sem escala vinculada" />
+                <MetricPill value={myWorkHourSummary.noScheduleRecords} label="Dias sem cronograma vinculado" />
               </div>
             ) : (
               <EmptyState title="Horas ainda não importadas" description="Horas ainda não importadas para este período." />
@@ -1967,7 +1982,7 @@ export function RegistrationApprovalsPage() {
         ["LOB", operational.lob],
         ["Time", operational.team],
         ["Turno", operational.shift],
-        ["Escala", operational.schedule],
+        ["Cronograma", operational.schedule],
         ["Cargo/Função", operational.roleTitle],
         ["Status", operational.employeeStatus],
         ["Admissão", operational.admissionDate],
@@ -2166,7 +2181,7 @@ export function RegistrationApprovalsPage() {
                   ["Time", "team"],
                   ["Supervisor", "supervisor"],
                   ["Turno", "shift"],
-                  ["Escala", "schedule"],
+                  ["Cronograma", "schedule"],
                   ["Cargo/Função", "roleTitle"],
                   ["Status", "employeeStatus"],
                   ["Contrato", "contractType"],
@@ -2571,7 +2586,7 @@ export function SchedulesPage() {
     const targetRow = row ?? scheduleRows[0];
     const targetEmployee = targetRow?.employee ?? scheduleEmployees[0];
     if (!targetEmployee) {
-      setAttendanceMessage("Nenhum colaborador ativo encontrado para receber escala.");
+      setAttendanceMessage("Nenhum colaborador ativo encontrado para receber cronograma.");
       return;
     }
     const cellStatus = statusFromScheduleCell(value);
@@ -2610,7 +2625,7 @@ export function SchedulesPage() {
       effectiveBreakMinutes: hourCell?.effectiveBreakMinutes ?? hourCell?.breakMinutes ?? 0,
       effectiveHours: hourCell?.effectiveHours ?? 0,
       differenceMinutes: hourCell?.differenceMinutes ?? 0,
-      status: hourCell?.status ?? (plannedCell ? "Sem horas" : "Sem escala"),
+      status: hourCell?.status ?? (plannedCell ? "Sem horas" : "Sem cronograma"),
       rawStatus: hourCell?.rawStatus ?? "",
       source: hourCell?.source ?? "",
       observation: hourCell?.observation ?? "",
@@ -2666,10 +2681,10 @@ export function SchedulesPage() {
       shift: cleanShiftName(targetEmployee.shift) || "Manhã",
       status: safeStatus,
       absenceReason: attendanceForm.absenceReason || "Outros",
-      reasonCategory: attendanceForm.reasonCategory || "Escala",
+      reasonCategory: attendanceForm.reasonCategory || "Cronograma",
       supervisorJustification: "",
       impactsAbs: ["Falta", "Ausente"].includes(safeStatus),
-      impactsCoverage: ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala"].includes(safeStatus)
+      impactsCoverage: ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de cronograma"].includes(safeStatus)
     });
     setShowAttendance(true);
   }
@@ -2699,11 +2714,11 @@ export function SchedulesPage() {
         body: JSON.stringify(scheduleEditForm)
       });
       setAttendanceSummary(payload.schedules.attendanceSummary ?? payload.summary);
-      setAttendanceMessage("Escala atualizada com histórico, auditoria e indicadores de presença/cobertura.");
+      setAttendanceMessage("Cronograma atualizado com histórico, auditoria e indicadores de presença/cobertura.");
       closeScheduleEditor();
       await refreshSchedules();
     } catch (error) {
-      setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível editar a escala.");
+      setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível editar o cronograma.");
     } finally {
       setSavingSchedule(false);
     }
@@ -2812,7 +2827,7 @@ export function SchedulesPage() {
 
   async function removeSelectedEmployeeSchedule(scope: "month" | "all" = "month") {
     if (!scheduleEditForm.employeeId) return;
-    const confirmed = window.confirm(scope === "all" ? "Isso removerá todas as escalas deste colaborador, mas não excluirá o cadastro. Continuar?" : "Isso removerá os registros de escala deste colaborador no mês selecionado, mas não excluirá o cadastro. Continuar?");
+    const confirmed = window.confirm(scope === "all" ? "Isso removerá todos os cronogramas deste colaborador, mas não excluirá o cadastro. Continuar?" : "Isso removerá os registros de cronograma deste colaborador no mês selecionado, mas não excluirá o cadastro. Continuar?");
     if (!confirmed) return;
 
     setSavingSchedule(true);
@@ -2821,11 +2836,11 @@ export function SchedulesPage() {
         method: "DELETE",
         body: JSON.stringify({ employeeId: scheduleEditForm.employeeId, month: schedulePeriod.month, year: schedulePeriod.year, scope })
       });
-      setAttendanceMessage(payload.message ?? "Escala removida.");
+      setAttendanceMessage(payload.message ?? "Cronograma removido.");
       closeScheduleEditor();
       await refreshSchedules();
     } catch (error) {
-      setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível remover a escala do colaborador.");
+      setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível remover o cronograma do colaborador.");
     } finally {
       setSavingSchedule(false);
     }
@@ -2833,7 +2848,7 @@ export function SchedulesPage() {
 
   async function saveAttendance() {
     if (statusNeedsReason(attendanceForm.status) && !attendanceForm.absenceReason.trim() && !attendanceForm.supervisorJustification.trim()) {
-      setAttendanceMessage("Motivo/observação obrigatório para ausência, falta, atraso, saída antecipada, afastado ou erro de escala.");
+      setAttendanceMessage("Motivo/observação obrigatório para ausência, falta, atraso, saída antecipada, afastado ou erro de cronograma.");
       return;
     }
 
@@ -2859,21 +2874,21 @@ export function SchedulesPage() {
   const scheduleEditRequiresReason = statusNeedsReason(scheduleEditForm.status);
   const scheduleEditRequiresTime = statusNeedsTime(scheduleEditForm.status);
   const scheduleCellValues = scheduleRows.flatMap((row) => row.days);
-  const scheduledCells = scheduleCellValues.filter((value) => !["Folga", "Sem escala", "Férias"].includes(value)).length;
+  const scheduledCells = scheduleCellValues.filter((value) => !["Folga", "Sem cronograma", "Férias"].includes(value)).length;
   const conflictCount = scheduleCellValues.filter((value) => value === "Conflito").length;
-  const unscheduledCount = scheduleCellValues.filter((value) => value === "Sem escala" || value === "Descoberto").length;
+  const unscheduledCount = scheduleCellValues.filter((value) => value === "Sem cronograma" || value === "Descoberto").length;
   const scheduleAlertItems = ([
     conflictCount > 0 ? {
-      title: `${conflictCount} conflitos de escala`,
+      title: `${conflictCount} conflitos de cronograma`,
       status: String(conflictCount),
       tone: "red" as const,
       detail: "Revise células marcadas como conflito no período selecionado."
     } : null,
     unscheduledCount > 0 ? {
-      title: `${unscheduledCount} células sem escala/descobertas`,
+      title: `${unscheduledCount} células sem cronograma/descobertas`,
       status: String(unscheduledCount),
       tone: "orange" as const,
-      detail: "Há dias sem escala vinculada ou descoberta nos filtros atuais."
+      detail: "Há dias sem cronograma vinculado ou descoberta nos filtros atuais."
     } : null,
     pendingJustifications.length > 0 ? {
       title: `${pendingJustifications.length} justificativas pendentes`,
@@ -2932,8 +2947,8 @@ export function SchedulesPage() {
     : workHourForm.differenceMinutes;
   const manualStatusPreview = workHourForm.plannedHours
     ? Math.abs(manualDifferencePreview) <= 5 ? "OK" : "Divergente"
-    : workHourForm.recordId ? workHourForm.status : selectedCellHasSchedule ? "Sem horas" : "Sem escala";
-  const supervisorOccurrenceStatuses = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala"];
+    : workHourForm.recordId ? workHourForm.status : selectedCellHasSchedule ? "Sem horas" : "Sem cronograma";
+  const supervisorOccurrenceStatuses = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de cronograma"];
   const attendanceStatusOptions = isScheduleSupervisor
     ? supervisorOccurrenceStatuses
     : [...scheduleStatusOptions].filter((status) => status !== "Escalado");
@@ -3000,7 +3015,7 @@ export function SchedulesPage() {
     setDownloadingScheduleTemplate(true);
     setAttendanceMessage("");
     try {
-      await downloadFile("/api/schedules/template", "template_escala_central_operacional.xlsx");
+      await downloadFile("/api/schedules/template", "template_cronograma_central_operacional.xlsx");
     } catch (error) {
       setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível baixar o template. Tente novamente.");
     } finally {
@@ -3026,7 +3041,7 @@ export function SchedulesPage() {
 
   return (
     <div>
-      <PageHeader title="Escalas Consolidadas" description="Visão consolidada das escalas da operação" icon={CalendarCheck} actions={<TopActions />} />
+      <PageHeader title="Cronogramas Consolidados" description="Visão consolidada dos cronogramas da operação" icon={CalendarCheck} actions={<TopActions />} />
       <div className="card mb-5 p-4">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
@@ -3121,11 +3136,11 @@ export function SchedulesPage() {
               className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft"
             >
               <FileSpreadsheet className="h-4 w-4" />
-              Baixar Escalas Consolidadas
+              Baixar Cronogramas Consolidados
             </a>
             <button onClick={() => openScheduleEditor(undefined, 0, "Escalado")} className="flex h-11 items-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white shadow-soft">
               <Plus className="h-4 w-4" />
-              Adicionar escala manual
+              Adicionar cronograma manual
             </button>
           </>
         ) : (
@@ -3136,7 +3151,7 @@ export function SchedulesPage() {
             {canExportSchedules ? (
               <a href={scheduleExportUrl()} className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft">
                 <FileSpreadsheet className="h-4 w-4" />
-                Baixar Escalas Consolidadas
+                Baixar Cronogramas Consolidados
               </a>
             ) : null}
           </>
@@ -3219,7 +3234,7 @@ export function SchedulesPage() {
                   </tr>
                 ))}
               </tbody>
-            </table> : <div className="p-8"><EmptyState title="Nenhuma escala importada" description="Importe uma escala para começar a visualizar a operação." /></div>}
+            </table> : <div className="p-8"><EmptyState title="Nenhum cronograma importado" description="Importe um cronograma para começar a visualizar a operação." /></div>}
           </div>
           <div className="flex flex-wrap gap-2 border-t border-border px-5 py-3">
             {scheduleStatusOptions.map((status) => (
@@ -3227,7 +3242,7 @@ export function SchedulesPage() {
             ))}
           </div>
           <div className="flex flex-wrap items-center justify-between gap-4 border-t border-border px-5 py-4 text-sm text-muted">
-            <span>{scheduleTotalRows ? `Exibindo ${schedulePageStart}-${schedulePageEnd} de ${scheduleTotalRows} registros` : "Nenhum registro de escala"}</span>
+            <span>{scheduleTotalRows ? `Exibindo ${schedulePageStart}-${schedulePageEnd} de ${scheduleTotalRows} registros` : "Nenhum registro de cronograma"}</span>
             <div className="flex flex-wrap gap-2">
               <button disabled={schedulePagination.page <= 1} onClick={() => void refreshSchedules(1)} className="h-9 rounded-lg border border-border bg-white px-3 text-xs font-bold text-navy-950 disabled:cursor-not-allowed disabled:opacity-45">Primeira</button>
               <button disabled={schedulePagination.page <= 1} onClick={() => void refreshSchedules(schedulePagination.page - 1)} className="h-9 rounded-lg border border-border bg-white px-3 text-xs font-bold text-navy-950 disabled:cursor-not-allowed disabled:opacity-45">Anterior</button>
@@ -3281,7 +3296,7 @@ export function SchedulesPage() {
           <Panel title="Alertas e Conflitos" action="Ver todos os alertas" actionOnClick={() => setShowScheduleAlerts(true)}>
             {scheduleAlertItems.length ? (
               <MiniAlertList items={scheduleAlertItems.slice(0, 3)} />
-            ) : <EmptyState title="Sem alertas" description="Alertas aparecerão após importação e validação da escala real." />}
+            ) : <EmptyState title="Sem alertas" description="Alertas aparecerão após importação e validação do cronograma real." />}
           </Panel>
           <Panel title="Importações Recentes" action="Ver todas" actionOnClick={() => setShowScheduleImports(true)}>
             {importHistory.length ? importHistory.slice(0, 5).map((file) => (
@@ -3303,7 +3318,7 @@ export function SchedulesPage() {
           <div className="card max-h-[88vh] w-full max-w-4xl overflow-y-auto p-5">
             <div className="mb-5 flex items-start justify-between gap-3">
               <div>
-                <h2 className="text-lg font-extrabold text-navy-950">Pendências abertas da escala</h2>
+                <h2 className="text-lg font-extrabold text-navy-950">Pendências abertas do cronograma</h2>
                 <p className="text-sm text-muted">Ocorrências sem justificativa dentro do período e filtros atuais.</p>
               </div>
               <button type="button" onClick={() => setShowPendingJustifications(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
@@ -3319,7 +3334,7 @@ export function SchedulesPage() {
                           {record.date} • {cleanShiftName(record.shift) || "Sem turno"} • {record.status}
                         </p>
                         <p className="mt-1 text-xs text-muted">Motivo: {record.absenceReason || "Sem justificativa"} • Registrado por {record.registeredBy}</p>
-                        <p className="mt-1 text-xs text-muted">Ação recomendada: justificar ocorrência ou corrigir o status da escala.</p>
+                        <p className="mt-1 text-xs text-muted">Ação recomendada: justificar ocorrência ou corrigir o status do cronograma.</p>
                       </div>
                       <button
                         type="button"
@@ -3347,7 +3362,7 @@ export function SchedulesPage() {
           <div className="card max-h-[88vh] w-full max-w-3xl overflow-y-auto p-5">
             <div className="mb-5 flex items-start justify-between gap-3">
               <div>
-                <h2 className="text-lg font-extrabold text-navy-950">Alertas e conflitos da escala</h2>
+                <h2 className="text-lg font-extrabold text-navy-950">Alertas e conflitos do cronograma</h2>
                 <p className="text-sm text-muted">Período atual, filtros aplicados e pendências reais carregadas da operação.</p>
               </div>
               <button type="button" onClick={() => setShowScheduleAlerts(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
@@ -3379,7 +3394,7 @@ export function SchedulesPage() {
             <div className="mb-5 flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-extrabold text-navy-950">Histórico de importações</h2>
-                <p className="text-sm text-muted">Últimas importações reais de escala registradas no banco.</p>
+                <p className="text-sm text-muted">Últimas importações reais de cronograma registradas no banco.</p>
               </div>
               <button type="button" onClick={() => setShowScheduleImports(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
             </div>
@@ -3401,7 +3416,7 @@ export function SchedulesPage() {
                 ))}
               </div>
             ) : (
-              <EmptyState title="Nenhuma importação recente encontrada." description="Quando uma escala for importada, o histórico aparecerá aqui." />
+              <EmptyState title="Nenhuma importação recente encontrada." description="Quando um cronograma for importado, o histórico aparecerá aqui." />
             )}
           </div>
         </div>
@@ -3412,7 +3427,7 @@ export function SchedulesPage() {
           <div className="card max-h-[90vh] w-full max-w-5xl overflow-y-auto p-5">
             <div className="mb-5 flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-extrabold text-navy-950">{canManageSchedules ? "Editar escala e horas" : "Visualizar escala e horas"}</h2>
+                <h2 className="text-lg font-extrabold text-navy-950">{canManageSchedules ? "Editar cronograma e horas" : "Visualizar cronograma e horas"}</h2>
                 <p className="text-sm text-muted">{selectedScheduleEmployee ? `${employeeOptionLabel(selectedScheduleEmployee)} • ${scheduleEditForm.date}` : "Atualiza histórico, auditoria e horas oficiais quando aplicável."}</p>
               </div>
               <button onClick={closeScheduleEditor} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
@@ -3421,7 +3436,7 @@ export function SchedulesPage() {
               <section className="rounded-xl border border-border p-4">
                 <div className="mb-4 flex items-center justify-between gap-3">
                   <div>
-                    <h3 className="text-sm font-extrabold text-navy-950">Escala</h3>
+                    <h3 className="text-sm font-extrabold text-navy-950">Cronograma</h3>
                     <p className="text-xs text-muted">Planejado do dia e status da célula.</p>
                   </div>
                   <StatusBadge status={scheduleEditForm.status} />
@@ -3505,8 +3520,8 @@ export function SchedulesPage() {
                   <FormInput disabled={!canManageSchedules} label="LOB" value={scheduleEditForm.lob} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, lob: value })} />
                   <FormInput disabled={!canManageSchedules} label="Supervisor" value={scheduleEditForm.supervisor} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, supervisor: value })} />
                   <label className="md:col-span-2">
-                    <span className="mb-1.5 block text-sm font-bold text-muted">{scheduleEditRequiresReason ? "Motivo/observação obrigatória" : "Observação da escala"}</span>
-                    <textarea disabled={!canManageSchedules} value={scheduleEditForm.observation} onChange={(event) => setScheduleEditForm({ ...scheduleEditForm, observation: event.target.value })} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500" placeholder={scheduleEditRequiresReason ? "Obrigatório para ausência, falta, atraso, saída antecipada, afastado ou erro de escala" : "Opcional para este status"} />
+                    <span className="mb-1.5 block text-sm font-bold text-muted">{scheduleEditRequiresReason ? "Motivo/observação obrigatória" : "Observação do cronograma"}</span>
+                    <textarea disabled={!canManageSchedules} value={scheduleEditForm.observation} onChange={(event) => setScheduleEditForm({ ...scheduleEditForm, observation: event.target.value })} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500" placeholder={scheduleEditRequiresReason ? "Obrigatório para ausência, falta, atraso, saída antecipada, afastado ou erro de cronograma" : "Opcional para este status"} />
                   </label>
                   {scheduleEditRequiresReason && canManageSchedules ? (
                     <label className="md:col-span-2 flex items-start gap-3 rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm font-semibold text-orange-800">
@@ -3526,15 +3541,15 @@ export function SchedulesPage() {
                   ) : null}
                 </div>
                 <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
-                  {canManageSchedules ? scheduleEditForm.pendingJustification ? "A célula ficará destacada como pendente de justificativa até o Supervisor justificar." : scheduleEditRequiresTime ? "Este status exige turno, entrada e saída." : "Este status permite entrada/saída vazias." : "Supervisor visualiza a escala e solicita ajustes; WFM/Admin altera o planejado."}
+                  {canManageSchedules ? scheduleEditForm.pendingJustification ? "A célula ficará destacada como pendente de justificativa até o Supervisor justificar." : scheduleEditRequiresTime ? "Este status exige turno, entrada e saída." : "Este status permite entrada/saída vazias." : "Supervisor visualiza o cronograma e solicita ajustes; WFM/Admin altera o planejado."}
                 </div>
                 {canManageSchedules ? (
                   <>
                     <button disabled={savingSchedule} onClick={saveScheduleEdit} className="mt-4 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
-                      {savingSchedule ? "Salvando..." : "Salvar edição da escala"}
+                      {savingSchedule ? "Salvando..." : "Salvar edição do cronograma"}
                     </button>
                     <button disabled={savingSchedule} onClick={() => removeSelectedEmployeeSchedule("month")} className="mt-3 w-full rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700 disabled:opacity-60">
-                      Remover escala do colaborador neste mês
+                      Remover cronograma do colaborador neste mês
                     </button>
                   </>
                 ) : null}
@@ -3546,7 +3561,7 @@ export function SchedulesPage() {
                     <h3 className="text-sm font-extrabold text-navy-950">Horas</h3>
                     <p className="text-xs text-muted">Realizado oficial conectado ao módulo Horas Operacionais.</p>
                   </div>
-                  <StatusBadge status={workHourForm.recordId ? workHourForm.status : selectedCellHasSchedule ? "Sem horas" : "Sem escala"} />
+                  <StatusBadge status={workHourForm.recordId ? workHourForm.status : selectedCellHasSchedule ? "Sem horas" : "Sem cronograma"} />
                 </div>
                 <div className="grid gap-3 md:grid-cols-3">
                   <MetricPill value={workHourForm.plannedHours ? `${workHourForm.plannedHours}h` : "-"} label="Previsto" />
@@ -3574,7 +3589,7 @@ export function SchedulesPage() {
                       ? `Status previsto após salvar: ${manualStatusPreview}.`
                       : selectedCellHasSchedule
                         ? "Horas ainda não lançadas para este dia."
-                        : "Sem escala vinculada para este dia."}
+                        : "Sem cronograma vinculado para este dia."}
                   {workHourForm.adjustmentStatus && workHourForm.adjustmentStatus !== "Sem ajuste" ? ` Ajuste: ${workHourForm.adjustmentStatus}.` : ""}
                 </div>
                 {canEditOfficialWorkHours ? (
@@ -3628,7 +3643,7 @@ export function SchedulesPage() {
               <div>
                 <h2 className="text-lg font-extrabold text-navy-950">{isScheduleSupervisor ? "Justificar ocorrência" : "Marcar presença/ausência"}</h2>
                 <p className="text-sm text-muted">
-                  {isScheduleSupervisor ? "Registra justificativa e AttendanceRecord sem alterar turno, entrada, saída ou marcar presença." : "Atualiza escala, mapa, cobertura, indicadores de ABS e auditoria."}
+                  {isScheduleSupervisor ? "Registra justificativa e AttendanceRecord sem alterar turno, entrada, saída ou marcar presença." : "Atualiza cronograma, mapa, cobertura, indicadores de ABS e auditoria."}
                 </p>
               </div>
               <button onClick={() => setShowAttendance(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
@@ -3654,12 +3669,12 @@ export function SchedulesPage() {
                     absenceReason: reasonRequired ? attendanceForm.absenceReason : "",
                     supervisorJustification: reasonRequired ? attendanceForm.supervisorJustification : "",
                     impactsAbs: ["Falta", "Ausente"].includes(value),
-                    impactsCoverage: ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Sem escala"].includes(value)
+                    impactsCoverage: ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Sem cronograma"].includes(value)
                   });
                 }}
               />
               <FormSelect label={attendanceRequiresReason ? "Motivo obrigatório" : "Motivo (opcional)"} value={attendanceForm.absenceReason} options={["", ...absenceReasonOptions]} onChange={(value) => setAttendanceForm({ ...attendanceForm, absenceReason: value })} />
-              <FormSelect label="Categoria" value={attendanceForm.reasonCategory} options={["Pessoas", "Sistema", "Ferramenta", "Equipamento", "Escala", "Treinamento", "Outros"]} onChange={(value) => setAttendanceForm({ ...attendanceForm, reasonCategory: value })} />
+              <FormSelect label="Categoria" value={attendanceForm.reasonCategory} options={["Pessoas", "Sistema", "Ferramenta", "Equipamento", "Cronograma", "Treinamento", "Outros"]} onChange={(value) => setAttendanceForm({ ...attendanceForm, reasonCategory: value })} />
               <FormInput label="Anexo/evidência (opcional)" value={attendanceForm.evidenceUrl} onChange={(value) => setAttendanceForm({ ...attendanceForm, hasEvidence: Boolean(value), evidenceUrl: value })} />
               <div className="rounded-lg border border-border bg-slate-50 p-3">
                 <p className="mb-2 text-sm font-bold text-muted">Impactos</p>
@@ -3680,7 +3695,7 @@ export function SchedulesPage() {
               </label>
             </div>
             <div className="mt-5 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
-              {isScheduleSupervisor ? "Supervisor não pode marcar Presente nem alterar a escala planejada. A validação/correção final fica com WFM/Admin." : attendanceRequiresReason ? "Este status exige motivo ou observação antes de salvar." : "Este status não exige motivo obrigatório."}
+              {isScheduleSupervisor ? "Supervisor não pode marcar Presente nem alterar o cronograma planejado. A validação/correção final fica com WFM/Admin." : attendanceRequiresReason ? "Este status exige motivo ou observação antes de salvar." : "Este status não exige motivo obrigatório."}
             </div>
             <div className="mt-5 grid gap-3 md:grid-cols-3">
               <MetricPill value={`${attendanceSummary?.coverageRate ?? 0}%`} label="Cobertura atual" />
@@ -3731,7 +3746,7 @@ export function SchedulesPage() {
               <div className="space-y-3">
                 <StatusBadge status={validation.errors ? `${validation.errors} erros` : "Sem erros críticos"} />
                 <StatusBadge status={`${validation.warnings} alertas`} />
-                <MetricPill value={previewResult?.createdRows ?? 0} label="Novas escalas" />
+                <MetricPill value={previewResult?.createdRows ?? 0} label="Novos cronogramas" />
                 <MetricPill value={previewResult?.updatedRows ?? 0} label="Atualizações" />
                 <MetricPill value={previewResult?.missingEmployees ?? 0} label="WB/Login não encontrados" />
                 <p className="text-sm text-muted">Validações: WB/Login existente, data, status válido, turno, entrada, saída, LOB e conflito por pessoa/dia.</p>
@@ -3797,7 +3812,7 @@ export function WorkHoursPage() {
   const canUpload = ["ADMIN", "GESTOR", "WFM"].includes(normalizedRole);
   const canApprove = ["ADMIN", "GESTOR", "WFM"].includes(normalizedRole);
   const canRequestAdjustment = ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(normalizedRole);
-  const statusOptions = ["Todos", "OK", "Divergente", "Sem escala", "Ajuste solicitado", "Ajuste aprovado", "Ajuste recusado", "Importado", "Corrigido manualmente"];
+  const statusOptions = ["Todos", "OK", "Divergente", "Sem cronograma", "Ajuste solicitado", "Ajuste aprovado", "Ajuste recusado", "Importado", "Corrigido manualmente"];
   const sourceOptions = ["Todos", "MANUAL", "upload-horas"];
   const lobOptions = ["Todos", ...(settings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? Array.from(new Set(rows.map((row) => row.lob).filter(Boolean))))];
   const shiftOptions = ["Todos", ...cleanShiftOptions(settings?.shifts.filter((shift) => shift.status !== "INACTIVE").map((shift) => shift.name) ?? rows.map((row) => row.shift), true)];
@@ -3971,7 +3986,7 @@ export function WorkHoursPage() {
     <div>
       <PageHeader
         title="Horas Operacionais"
-        description="Upload, conferência e ajuste das horas realizadas versus escala planejada"
+        description="Upload, conferência e ajuste das horas realizadas versus cronograma planejado"
         icon={Clock}
         actions={
           <div className="flex flex-wrap gap-2">
@@ -3999,7 +4014,7 @@ export function WorkHoursPage() {
       {message ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
 
       <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="Horas previstas" value={`${summary?.plannedHours ?? 0}h`} helper="escala planejada" icon={Clock} tone="blue" />
+        <StatCard title="Horas previstas" value={`${summary?.plannedHours ?? 0}h`} helper="cronograma planejado" icon={Clock} tone="blue" />
         <StatCard title="Horas realizadas" value={`${summary?.actualHours ?? 0}h`} helper="apontamento importado" icon={CheckCircle2} tone="green" />
         <StatCard title="Diferença total" value={`${summary?.differenceHours ?? 0}h`} helper="realizado - previsto" icon={AlertTriangle} tone={(summary?.differenceHours ?? 0) < 0 ? "orange" : "cyan"} />
         <StatCard title="Ajustes pendentes" value={summary?.pendingAdjustments ?? 0} helper="aguardando WFM/Admin" icon={ClipboardList} tone={(summary?.pendingAdjustments ?? 0) ? "orange" : "green"} />
@@ -4007,7 +4022,7 @@ export function WorkHoursPage() {
       <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricPill value={summary?.okRecords ?? 0} label="Registros OK" />
         <MetricPill value={summary?.divergentRecords ?? 0} label="Divergentes" />
-        <MetricPill value={summary?.noScheduleRecords ?? 0} label="Sem escala vinculada" />
+        <MetricPill value={summary?.noScheduleRecords ?? 0} label="Sem cronograma vinculado" />
         <MetricPill value={formatBreakDuration(summary?.breakMinutes ?? 0)} label="Pausas totais" />
         <MetricPill value={`${summary?.adjustedHours ?? 0}h`} label="Horas ajustadas" />
       </div>
@@ -4030,7 +4045,7 @@ export function WorkHoursPage() {
         <div className="mt-3 flex flex-wrap gap-3 text-sm font-semibold text-navy-950">
           <label className="flex items-center gap-2"><input type="checkbox" checked={filters.divergentOnly} onChange={(event) => setFilters({ ...filters, divergentOnly: event.target.checked, pendingOnly: false, noScheduleOnly: false })} /> Apenas divergentes</label>
           <label className="flex items-center gap-2"><input type="checkbox" checked={filters.pendingOnly} onChange={(event) => setFilters({ ...filters, pendingOnly: event.target.checked, divergentOnly: false, noScheduleOnly: false })} /> Ajuste pendente</label>
-          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.noScheduleOnly} onChange={(event) => setFilters({ ...filters, noScheduleOnly: event.target.checked, divergentOnly: false, pendingOnly: false })} /> Sem escala</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.noScheduleOnly} onChange={(event) => setFilters({ ...filters, noScheduleOnly: event.target.checked, divergentOnly: false, pendingOnly: false })} /> Sem cronograma</label>
         </div>
       </section>
 
@@ -4152,7 +4167,7 @@ export function WorkHoursPage() {
                 <MetricPill value={preview.warningRows} label="Alertas" />
                 <MetricPill value={preview.createdRows} label="Novos registros" />
                 <MetricPill value={preview.updatedRows} label="Atualizações" />
-                <p className="text-sm text-muted">WB/Login inexistente bloqueia a linha. Sem escala vinculada vira alerta e pode ser importado.</p>
+                <p className="text-sm text-muted">WB/Login inexistente bloqueia a linha. Sem cronograma vinculado vira alerta e pode ser importado.</p>
                 {preview.validation.length > 300 ? <p className="text-xs font-semibold text-muted">Exibindo as primeiras 300 linhas no preview para manter a tela rápida. O commit processa todas as linhas válidas.</p> : null}
                 <button disabled={savingImport} onClick={commitWorkHourImport} className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
                   {savingImport ? "Importando..." : "Confirmar importação"}
@@ -4248,7 +4263,7 @@ function emptyCalendarDays() {
     const dayNumber = index - 4;
     const outside = dayNumber < 1 || dayNumber > 31;
     const date = outside ? (dayNumber < 1 ? 30 + dayNumber : dayNumber - 31) : dayNumber;
-    return { date, outside, shift: "Sem escala", label: "Sem escala" };
+    return { date, outside, shift: "Sem cronograma", label: "Sem cronograma" };
   });
 }
 
@@ -4266,13 +4281,13 @@ function shiftTagClass(value: string) {
     "Atraso sem justificativa": "border border-orange-300 bg-orange-100 text-orange-900 shadow-sm shadow-orange-100",
     "Saída antecipada sem justificativa": "border border-orange-300 bg-orange-100 text-orange-900 shadow-sm shadow-orange-100",
     "Afastado sem justificativa": "border border-violet-300 bg-violet-100 text-violet-900 shadow-sm shadow-violet-100",
-    "Erro de escala sem justificativa": "border border-red-300 bg-red-100 text-red-900 shadow-sm shadow-red-100",
+    "Erro de cronograma sem justificativa": "border border-red-300 bg-red-100 text-red-900 shadow-sm shadow-red-100",
     "Falta justificada": "bg-amber-50 text-amber-800",
     "Ausente justificada": "bg-amber-50 text-amber-800",
     "Atraso justificada": "bg-amber-50 text-amber-800",
     "Saída antecipada justificada": "bg-amber-50 text-amber-800",
     "Afastado justificada": "bg-amber-50 text-amber-800",
-    "Erro de escala justificada": "bg-amber-50 text-amber-800",
+    "Erro de cronograma justificada": "bg-amber-50 text-amber-800",
     Atraso: "bg-orange-50 text-orange-700",
     "Saída antecipada": "bg-orange-100 text-orange-800",
     Afastado: "bg-violet-50 text-violet-700",
@@ -4283,8 +4298,8 @@ function shiftTagClass(value: string) {
     "Troca aprovada": "bg-teal-50 text-teal-700",
     "Venda de folga aprovada": "bg-amber-50 text-amber-700",
     "Folga aprovada": "bg-emerald-50 text-emerald-700",
-    "Sem escala": "bg-slate-50 text-slate-400",
-    "Erro de escala": "bg-red-50 text-red-700",
+    "Sem cronograma": "bg-slate-50 text-slate-400",
+    "Erro de cronograma": "bg-red-50 text-red-700",
     Feriado: "bg-pink-50 text-pink-700",
     Conflito: "bg-red-50 text-red-600",
     Descoberto: "border border-dashed border-red-400 text-red-600"
@@ -4292,7 +4307,7 @@ function shiftTagClass(value: string) {
   return map[value] ?? "bg-slate-100 text-slate-600";
 }
 
-const requestTypes = ["Troca de Folga", "Venda de Folga", "Solicitação de Dia de Folga", "Ajuste de escala", "Correção de escala", "Equipamento", "Acesso", "RH", "Qualidade", "WFM", "Operação", "Suporte geral"];
+const requestTypes = ["Troca de Folga", "Venda de Folga", "Solicitação de Dia de Folga", "Ajuste de cronograma", "Correção de cronograma", "Equipamento", "Acesso", "RH", "Qualidade", "WFM", "Operação", "Suporte geral"];
 const requestPriorities = ["Baixa", "Média", "Alta", "Crítica"];
 const requestStatuses = ["Aberto", "Em análise", "Aprovado", "Recusado", "Concluído", "Cancelado"];
 const requestColumns = ["Aberto", "Em análise", "Aprovado", "Recusado", "Concluído", "Cancelado"];
@@ -4347,7 +4362,7 @@ function RequestDetailContent({
   const stageText: Record<string, string> = {
     Aberto: "Aguardando supervisor",
     "Em análise": "Aguardando WFM",
-    Aprovado: "Escala atualizada",
+    Aprovado: "Cronograma atualizado",
     Recusado: "Solicitação recusada",
     Concluído: "Processo encerrado",
     Cancelado: "Processo cancelado"
@@ -4366,7 +4381,7 @@ function RequestDetailContent({
         <MetricPill value={selected.status} label="Status" />
         <MetricPill value={stageText[selected.status] ?? selected.status} label="Etapa atual" />
         {dayOffKind ? <MetricPill value={dayOffKindLabels[dayOffKind]} label="Modalidade" /> : null}
-        {payload.scheduleApplicationStatus ? <MetricPill value={String(payload.scheduleApplicationStatus)} label="Aplicação na escala" /> : null}
+        {payload.scheduleApplicationStatus ? <MetricPill value={String(payload.scheduleApplicationStatus)} label="Aplicação no cronograma" /> : null}
       </div>
 
       <div className="rounded-lg border border-border bg-slate-50 p-4 text-sm text-muted">
@@ -4528,7 +4543,7 @@ export function RequestsPage() {
       setRequests((items) => items.map((item) => (item.id === id ? payload.data : item)));
       setSelected((item) => (item?.id === id ? payload.data : item));
       setActionReason("");
-      setActionMessage(payload.scheduleUpdated ? "Troca de folga aprovada e escala atualizada automaticamente." : `Solicitação ${payload.data.id} movida para ${payload.data.status}.`);
+      setActionMessage(payload.scheduleUpdated ? "Troca de folga aprovada e cronograma atualizado automaticamente." : `Solicitação ${payload.data.id} movida para ${payload.data.status}.`);
     } catch (error) {
       setActionMessage(error instanceof Error ? error.message : "Não foi possível atualizar a solicitação.");
     } finally {
@@ -4821,7 +4836,7 @@ export function RequestsKanbanPage() {
       setRequests((items) => items.map((request) => (request.id === id ? payload.data : request)));
       setSelected(payload.data);
       setActionReason("");
-      setActionMessage(payload.scheduleUpdated ? "Solicitação aprovada e escala atualizada." : `Solicitação ${payload.data.id} atualizada para ${payload.data.status}.`);
+      setActionMessage(payload.scheduleUpdated ? "Solicitação aprovada e cronograma atualizado." : `Solicitação ${payload.data.id} atualizada para ${payload.data.status}.`);
     } catch (error) {
       setActionMessage(error instanceof Error ? error.message : "Não foi possível atualizar a solicitação.");
     } finally {
@@ -5244,7 +5259,7 @@ export function EmployeeMapPage() {
                 <InfoLine label="LOB" value={selected.lob} />
                 <InfoLine label="Supervisor" value={selected.supervisor} />
                 <InfoLine label="Turno" value={cleanShiftName(selected.shift) || "-"} />
-                <InfoLine label="Escala" value={selected.schedule} />
+                <InfoLine label="Cronograma" value={selected.schedule} />
                 <InfoLine label="Admissão" value={selected.admission} />
                 <InfoLine label="Status" value={selected.status} />
               </div>
@@ -5336,7 +5351,7 @@ export function EmployeeMapPage() {
                               </label>
                             ) : null}
                             <FormSelect label="Status" value={statusDraft} options={operationalStatusOptions} onChange={setStatusDraft} error={employeeFieldErrors.operationalStatus} />
-                            {canEditOperationalBindings ? <FormInput label="Escala" value={scheduleDraft} onChange={setScheduleDraft} error={employeeFieldErrors.scheduleType} /> : null}
+                            {canEditOperationalBindings ? <FormInput label="Cronograma" value={scheduleDraft} onChange={setScheduleDraft} error={employeeFieldErrors.scheduleType} /> : null}
                             {canEditOperationalBindings ? <FormInput label="Site/Operação" value={siteDraft} onChange={setSiteDraft} error={employeeFieldErrors.siteOperation} /> : null}
                           </div>
                         </ProfileSection>
@@ -6043,6 +6058,100 @@ export function EquipmentPage() {
   );
 }
 
+function parseTimeBlockMinutes(value: string) {
+  const match = value.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
+function getTimeBlockDuration(startTime: string, endTime: string) {
+  const start = parseTimeBlockMinutes(startTime);
+  const end = parseTimeBlockMinutes(endTime);
+  if (start === null || end === null || start === end) return null;
+  return end > start ? end - start : end + 24 * 60 - start;
+}
+
+function formatTimeFromMinutes(minutes: number) {
+  const normalized = ((minutes % (24 * 60)) + 24 * 60) % (24 * 60);
+  return `${String(Math.floor(normalized / 60)).padStart(2, "0")}:${String(normalized % 60).padStart(2, "0")}`;
+}
+
+function formatDuration(minutes: number) {
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  if (!hours) return `${remainder}min`;
+  return remainder ? `${hours}h${String(remainder).padStart(2, "0")}` : `${hours}h`;
+}
+
+function summarizeTimeBlocks(blocks: ShiftReportTimeBlock[]) {
+  return blocks.reduce<Record<string, number>>((acc, block) => {
+    const duration = block.durationMinutes ?? getTimeBlockDuration(block.startTime, block.endTime) ?? 0;
+    acc[block.category] = (acc[block.category] ?? 0) + duration;
+    return acc;
+  }, {});
+}
+
+function timeBlocksOverlap(blocks: ShiftReportTimeBlock[]) {
+  const sorted = blocks
+    .map((block) => {
+      const start = parseTimeBlockMinutes(block.startTime) ?? 0;
+      const duration = block.durationMinutes ?? getTimeBlockDuration(block.startTime, block.endTime) ?? 0;
+      return { start, end: start + duration };
+    })
+    .sort((a, b) => a.start - b.start);
+  return sorted.some((block, index) => index > 0 && block.start < sorted[index - 1].end);
+}
+
+function TimeDistributionView({ blocks, summary, compact = false }: { blocks: ShiftReportTimeBlock[]; summary?: Record<string, number>; compact?: boolean }) {
+  const sortedBlocks = [...blocks].sort((a, b) => a.startTime.localeCompare(b.startTime));
+  const currentSummary = summary ?? summarizeTimeBlocks(sortedBlocks);
+  const total = Object.values(currentSummary).reduce((sum, minutes) => sum + minutes, 0);
+
+  if (!sortedBlocks.length) {
+    return compact ? <span className="text-xs font-bold text-muted">Sem blocos</span> : <EmptyState title="Sem distribuição do tempo" description="Adicione blocos para visualizar a timeline do turno." />;
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="overflow-hidden rounded-lg border border-border bg-slate-50">
+        {sortedBlocks.map((block, index) => {
+          const duration = block.durationMinutes ?? getTimeBlockDuration(block.startTime, block.endTime) ?? 0;
+          const width = total ? Math.max(8, Math.round((duration / total) * 100)) : 100;
+          return (
+            <div key={`${block.startTime}-${block.endTime}-${block.category}-${index}`} className="border-b border-white last:border-b-0">
+              <div className={cn("flex items-center gap-3 px-3", compact ? "py-1.5" : "py-2")}>
+                <span className="w-24 shrink-0 text-xs font-extrabold text-navy-950">{block.startTime} - {block.endTime}</span>
+                <div className="h-3 flex-1 overflow-hidden rounded-full bg-white">
+                  <div className="h-full rounded-full bg-blue-500" style={{ width: `${width}%` }} />
+                </div>
+                <span className="w-16 shrink-0 text-right text-xs font-bold text-muted">{formatDuration(duration)}</span>
+              </div>
+              <div className="px-3 pb-2 pl-[7.25rem] text-xs">
+                <span className="font-extrabold text-navy-950">{block.category}</span>
+                {block.description ? <span className="ml-2 text-muted">{block.description}</span> : null}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {!compact ? (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {Object.entries(currentSummary).map(([category, minutes]) => (
+            <div key={category} className="rounded-lg border border-border bg-white px-3 py-2">
+              <p className="text-xs font-bold text-muted">{category}</p>
+              <p className="text-sm font-extrabold text-navy-950">{formatDuration(minutes)}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <p className="text-xs font-bold text-muted">Total registrado: {formatDuration(total)}</p>
+    </div>
+  );
+}
+
 export function ShiftReportPage() {
   const [reports, setReports] = useState<ShiftReportItem[]>([]);
   const [dashboard, setDashboard] = useState<ShiftReportDashboard | null>(null);
@@ -6082,8 +6191,16 @@ export function ShiftReportPage() {
     followUpOwner: "",
     followUpDueDate: "",
     followUpStatus: "Aberto",
-    additionalComments: ""
+    additionalComments: "",
+    timeBlocks: [] as ShiftReportTimeBlock[]
   });
+  const [timeBlockDraft, setTimeBlockDraft] = useState<ShiftReportTimeBlock>({
+    startTime: "08:00",
+    endTime: "10:00",
+    category: "Administrativo",
+    description: ""
+  });
+  const [timeBlockError, setTimeBlockError] = useState("");
 
   useEffect(() => {
     void refreshReports();
@@ -6125,6 +6242,48 @@ export function ShiftReportPage() {
     await refreshReports();
   }
 
+  function addTimeBlock() {
+    const durationMinutes = getTimeBlockDuration(timeBlockDraft.startTime, timeBlockDraft.endTime);
+    if (!timeBlockDraft.startTime) {
+      setTimeBlockError("Informe a hora inicial.");
+      return;
+    }
+    if (!timeBlockDraft.endTime) {
+      setTimeBlockError("Informe a hora final.");
+      return;
+    }
+    if (!timeBlockDraft.category) {
+      setTimeBlockError("Selecione uma categoria.");
+      return;
+    }
+    if (durationMinutes === null) {
+      setTimeBlockError("A hora final deve ser maior que a hora inicial.");
+      return;
+    }
+    const nextBlocks = [...form.timeBlocks, { ...timeBlockDraft, durationMinutes }];
+    if (timeBlocksOverlap(nextBlocks)) {
+      setTimeBlockError("Existe sobreposição com outro bloco de tempo.");
+      return;
+    }
+    const nextStart = timeBlockDraft.endTime;
+    const nextEnd = formatTimeFromMinutes((parseTimeBlockMinutes(nextStart) ?? 0) + 60);
+    setForm({ ...form, timeBlocks: nextBlocks });
+    setTimeBlockDraft({ startTime: nextStart, endTime: nextEnd, category: "Administrativo", description: "" });
+    setTimeBlockError("");
+  }
+
+  function editTimeBlock(index: number) {
+    const block = form.timeBlocks[index];
+    setTimeBlockDraft(block);
+    setForm({ ...form, timeBlocks: form.timeBlocks.filter((_, currentIndex) => currentIndex !== index) });
+    setTimeBlockError("");
+  }
+
+  function removeTimeBlock(index: number) {
+    setForm({ ...form, timeBlocks: form.timeBlocks.filter((_, currentIndex) => currentIndex !== index) });
+    setTimeBlockError("");
+  }
+
   function copyBriefing() {
     const briefing = dashboard?.briefing;
     if (!briefing) return;
@@ -6145,6 +6304,9 @@ export function ShiftReportPage() {
   }
 
   const categoryChart = Object.entries(dashboard?.byCategory ?? {}).map(([name, value]) => ({ name, value }));
+  const timeSummary = summarizeTimeBlocks(form.timeBlocks);
+  const totalTimeMinutes = Object.values(timeSummary).reduce((sum, minutes) => sum + minutes, 0);
+  const timeCategoryChart = Object.entries(dashboard?.timeByCategory ?? {}).map(([name, minutes]) => ({ name, horas: Math.round((minutes / 60) * 100) / 100 }));
   const reportExportUrl = (format?: string) => {
     const params = new URLSearchParams();
     Object.entries(reportFilters).forEach(([key, value]) => {
@@ -6204,11 +6366,50 @@ export function ShiftReportPage() {
                   ))}
                 </select>
               </label>
-              <FormSelect label="Motivo da ausência" value={form.absenceReason} options={["Falta injustificada", "Atestado", "Problema de saúde", "Emergência familiar", "Problema técnico", "Falta de equipamento", "Problema de internet", "Atraso", "Saída antecipada", "Erro de escala", "Treinamento", "Férias", "Afastamento", "Folga", "Outros"]} onChange={(value) => setForm({ ...form, absenceReason: value })} />
-              <FormSelect label="Categoria da ocorrência" value={form.occurrenceCategory} options={["Pessoas", "Sistema", "Ferramenta", "Cliente", "Volume", "SLA/Latência", "Qualidade", "Escala", "Equipamento", "Treinamento", "Outros"]} onChange={(value) => setForm({ ...form, occurrenceCategory: value })} />
+              <FormSelect label="Motivo da ausência" value={form.absenceReason} options={["Falta injustificada", "Atestado", "Problema de saúde", "Emergência familiar", "Problema técnico", "Falta de equipamento", "Problema de internet", "Atraso", "Saída antecipada", "Erro de cronograma", "Treinamento", "Férias", "Afastamento", "Folga", "Outros"]} onChange={(value) => setForm({ ...form, absenceReason: value })} />
+              <FormSelect label="Categoria da ocorrência" value={form.occurrenceCategory} options={["Pessoas", "Sistema", "Ferramenta", "Cliente", "Volume", "SLA/Latência", "Qualidade", "Cronograma", "Equipamento", "Treinamento", "Outros"]} onChange={(value) => setForm({ ...form, occurrenceCategory: value })} />
               <FormSelect label="Nível de impacto" value={form.impactLevel} options={["Sem impacto", "Baixo", "Médio", "Alto", "Crítico"]} onChange={(value) => setForm({ ...form, impactLevel: value })} />
               <FormInput label="SLA/latência início" value={form.latencyStart} onChange={(value) => setForm({ ...form, latencyStart: value })} />
               <FormInput label="SLA/latência final" value={form.latencyEnd} onChange={(value) => setForm({ ...form, latencyEnd: value })} />
+            </div>
+            <div className="mt-5 rounded-lg border border-border bg-white p-4">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 className="text-sm font-extrabold text-navy-950">Distribuição do Tempo</h3>
+                  <p className="text-xs font-semibold text-muted">Registre os blocos de atuação do supervisor durante o turno.</p>
+                </div>
+                <span className="text-xs font-extrabold text-blue-600">Total: {formatDuration(totalTimeMinutes)}</span>
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-[120px_120px_minmax(0,1fr)]">
+                <FormInput label="Início" type="time" value={timeBlockDraft.startTime} onChange={(value) => setTimeBlockDraft({ ...timeBlockDraft, startTime: value })} />
+                <FormInput label="Fim" type="time" value={timeBlockDraft.endTime} onChange={(value) => setTimeBlockDraft({ ...timeBlockDraft, endTime: value })} />
+                <FormSelect label="Atividade" value={timeBlockDraft.category} options={timeBlockCategoryOptions} onChange={(value) => setTimeBlockDraft({ ...timeBlockDraft, category: value })} />
+              </div>
+              <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_150px]">
+                <FormInput label="Observação do bloco" value={timeBlockDraft.description} onChange={(value) => setTimeBlockDraft({ ...timeBlockDraft, description: value })} />
+                <div className="flex items-end">
+                  <button onClick={addTimeBlock} className="h-11 w-full rounded-lg bg-navy-950 px-4 text-sm font-bold text-white">Adicionar bloco</button>
+                </div>
+              </div>
+              {timeBlockError ? <p className="mt-2 text-xs font-bold text-red-600">{timeBlockError}</p> : null}
+              {form.timeBlocks.length ? (
+                <div className="mt-4 space-y-3">
+                  <TimeDistributionView blocks={form.timeBlocks} summary={timeSummary} />
+                  <div className="grid gap-2">
+                    {form.timeBlocks.map((block, index) => (
+                      <div key={`${block.startTime}-${block.endTime}-${block.category}-${index}`} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-xs">
+                        <span className="font-bold text-navy-950">{block.startTime} - {block.endTime} · {block.category}</span>
+                        <div className="flex gap-2">
+                          <button onClick={() => editTimeBlock(index)} className="rounded-md border border-border px-2 py-1 font-bold">Editar</button>
+                          <button onClick={() => removeTimeBlock(index)} className="rounded-md border border-red-200 bg-red-50 px-2 py-1 font-bold text-red-600">Excluir</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-4"><EmptyState title="Nenhum bloco de tempo" description="Adicione atividades como Administrativo, Desenvolvimento ou Suporte ao time." /></div>
+              )}
             </div>
             <div className="mt-4 grid gap-4 md:grid-cols-2">
               {[
@@ -6239,7 +6440,7 @@ export function ShiftReportPage() {
           <Panel title="Últimos reports enviados">
             {reports.length ? (
               <SimpleTable
-                columns={["ID", "Data", "Turno", "LOB", "Supervisor", "Importância", "ABS", "Follow-up", "Ações"]}
+                columns={["ID", "Data", "Turno", "LOB", "Supervisor", "Importância", "ABS", "Tempo", "Follow-up", "Ações"]}
                 rows={reports.map((report) => [
                   report.id,
                   report.reportDate,
@@ -6248,6 +6449,7 @@ export function ShiftReportPage() {
                   report.supervisor,
                   <PriorityBadge key={report.id} priority={report.importance} />,
                   report.absCount,
+                  <div key={`${report.id}-tempo`} className="min-w-[220px]"><TimeDistributionView blocks={report.timeBlocks ?? []} summary={report.timeSummary} compact /></div>,
                   <StatusBadge key={`${report.id}-f`} status={report.followUpStatus} />,
                   <button key={`${report.id}-delete`} onClick={() => void deleteReport(report.id)} className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-bold text-red-600">Excluir</button>
                 ])}
@@ -6281,6 +6483,26 @@ export function ShiftReportPage() {
                 </BarChart>
               </ResponsiveContainer>
             </div>
+          </Panel>
+          <Panel title="Tempo por atividade">
+            {timeCategoryChart.length ? (
+              <div className="space-y-3">
+                <div className="h-56">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={timeCategoryChart}>
+                      <CartesianGrid stroke="#E8EDF5" vertical={false} />
+                      <XAxis dataKey="name" />
+                      <YAxis allowDecimals={false} />
+                      <Tooltip />
+                      <Bar dataKey="horas" fill="#0F766E" radius={[8, 8, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+                <p className="text-xs font-bold text-muted">Total registrado no período: {formatDuration(dashboard?.totalTimeMinutes ?? 0)}</p>
+              </div>
+            ) : (
+              <EmptyState title="Sem tempo classificado" description="Os blocos adicionados no report aparecerão aqui por categoria." />
+            )}
           </Panel>
           <Panel title="Briefing estruturado">
             <div className="space-y-3 text-sm text-muted">
@@ -6835,7 +7057,7 @@ export function PlatformUsagePage() {
             <SimpleTable
               columns={["Indicador", "Valor", "Leitura"]}
               rows={[
-                ["Importações de escala", usage.scheduleImports, "Arquivos de escala com validação/preview"],
+                ["Importações de cronograma", usage.scheduleImports, "Arquivos de cronograma com validação/preview"],
                 ["Notificações internas", usage.notifications, `${usage.unreadNotifications} não lidas`],
                 ["Cadastros pendentes", usage.pendingRegistrations, usage.pendingRegistrations ? "Requer ação de RH/Admin/WFM" : "Sem fila crítica"],
                 ["Solicitações abertas", usage.openRequests, "Monitorar SLAs operacionais"],
@@ -7127,7 +7349,7 @@ export function SettingsPage() {
                   </div>
                 ])}
               />
-            ) : <EmptyState title="Nenhuma LOB cadastrada" description="Crie uma LOB para alimentar filtros, cadastros e escala." />}
+            ) : <EmptyState title="Nenhuma LOB cadastrada" description="Crie uma LOB para alimentar filtros, cadastros e cronograma." />}
           </Panel> : null}
 
           {activeSection === "Times" ? (
@@ -7204,7 +7426,7 @@ export function SettingsPage() {
                   ];
                 })}
               />
-            ) : <EmptyState title="Nenhum turno cadastrado" description="Crie turnos para aparecerem em escala e filtros." />}
+            ) : <EmptyState title="Nenhum turno cadastrado" description="Crie turnos para aparecerem em cronograma e filtros." />}
           </Panel> : null}
 
           {activeSection === "Cargos/Funções" ? <div className="grid gap-5 xl:grid-cols-2">
