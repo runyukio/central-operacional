@@ -12,7 +12,6 @@ import { calculateAbsenceRate, calculateCoverageRate, isAbsenceStatus, isPresent
 const uiToScheduleStatus: Record<string, ScheduleStatus> = {
   Escalado: "ESCALADO",
   Presente: "PRESENTE",
-  Ausente: "AUSENTE",
   Falta: "FALTA",
   Atraso: "ATRASO",
   "Saída antecipada": "SAIDA_ANTECIPADA",
@@ -36,7 +35,6 @@ const uiToScheduleStatus: Record<string, ScheduleStatus> = {
 const allowedScheduleImportStatusKeys = new Set([
   "ESCALADO",
   "PRESENTE",
-  "AUSENTE",
   "FALTA",
   "ATRASO",
   "SAIDA_ANTECIPADA",
@@ -58,13 +56,13 @@ const allowedScheduleImportStatusKeys = new Set([
 
 const scheduleToUiStatus: Record<string, string> = {
   ...Object.fromEntries(Object.entries(uiToScheduleStatus).map(([ui, db]) => [db, ui])),
+  AUSENTE: "Falta",
   SEM_ESCALA: "Sem cronograma",
   ERRO_ESCALA: "Erro de cronograma"
 };
 
 const uiToAttendanceStatus: Record<string, AttendanceStatus> = {
   Presente: "PRESENTE",
-  Ausente: "AUSENTE",
   Falta: "FALTA",
   Atraso: "ATRASO",
   "Saída antecipada": "SAIDA_ANTECIPADA",
@@ -81,8 +79,8 @@ const uiToAttendanceStatus: Record<string, AttendanceStatus> = {
   "Erro de cronograma": "ERRO_ESCALA"
 };
 
-export const statusesRequiringReason = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala", "Erro de cronograma"];
-const supervisorJustificationStatuses = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala", "Erro de cronograma"];
+export const statusesRequiringReason = ["Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala", "Erro de cronograma"];
+const supervisorJustificationStatuses = ["Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala", "Erro de cronograma"];
 
 const defaultShiftTimes: Record<string, { startsAt: string; endsAt: string }> = {
   Manhã: { startsAt: "08:00", endsAt: "14:00" },
@@ -685,7 +683,7 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
     });
     if (!existing) return { error: "Nenhuma pendência de justificativa foi registrada para este colaborador/data." };
     const existingStatus = scheduleToUiStatus[existing.status] ?? String(existing.status);
-    if (!supervisorJustificationStatuses.includes(existingStatus)) return { error: "Esta ocorrência não é uma ausência justificável pelo Supervisor." };
+    if (!supervisorJustificationStatuses.includes(existingStatus)) return { error: "Esta ocorrência não é justificável pelo Supervisor." };
     if (existing.isJustified) return { error: "Esta ocorrência já foi justificada." };
 
     const saved = await prisma.$transaction(async (tx) => {
@@ -744,7 +742,7 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
         await tx.notification.createMany({
           data: reviewers.map((reviewer) => ({
             userId: reviewer.id,
-            title: "Justificativa de ausência enviada",
+            title: "Justificativa de ocorrência enviada",
             body: `${user.name} justificou uma ocorrência de ${employee.fullName}.`,
             category: "Presença",
             type: "INFO",
@@ -925,7 +923,7 @@ export async function commitOperationalScheduleImport(actor: Actor, input: Sched
             shift: cleanShiftName(text(row.turno)) || text(row.turno),
             startsAt: rowValidation.startsAt ?? text(row.entrada),
             endsAt: rowValidation.endsAt ?? text(row.saida),
-            status: text(row.status),
+            status: rowValidation.status ? scheduleToUiStatus[rowValidation.status] ?? text(row.status) : text(row.status),
             observation: text(row.observacao),
             validation: {
               rowNumber: rowValidation.rowNumber,
@@ -1304,6 +1302,9 @@ async function validateImportRowsInDb(rows: Array<Record<string, unknown>>): Pro
     if (hasExcelValue(row.status) && !status) {
       errors.push(`Status inválido: ${text(row.status)}. Use um status de cronograma válido.`);
     }
+    if (normalizeImportKey(text(row.status)) === "AUSENTE") {
+      warnings.push("Status Ausente foi convertido para Falta conforme regra atual.");
+    }
     const startsAt = normalizeTime(row.entrada);
     const endsAt = normalizeTime(row.saida);
     if (hasExcelValue(row.entrada) && !startsAt) errors.push("Entrada inválida. Use 06:00, 06:00:00 ou decimal do Excel como 0,25.");
@@ -1388,7 +1389,7 @@ function toImportPreview(rows: Array<Record<string, unknown>>, validation: Sched
 
 function validateAttendance(input: AttendanceInput) {
   if (requiresReason(input.status) && !input.absenceReason?.trim() && !input.supervisorJustification?.trim()) {
-    return "Motivo/observação obrigatório para ausência, falta, atraso, saída antecipada, afastado ou erro de cronograma.";
+    return "Motivo/observação obrigatório para falta, atraso, saída antecipada, afastado ou erro de cronograma.";
   }
   return "";
 }
@@ -1409,6 +1410,7 @@ function scheduleStatusFromImport(value: unknown) {
   const raw = text(value);
   if (!raw) return null;
   const key = normalizeImportKey(raw);
+  if (key === "AUSENTE") return "FALTA";
   if (!allowedScheduleImportStatusKeys.has(key)) return null;
   return uiToScheduleStatus[raw] ?? uiToScheduleStatusByKey[key] ?? null;
 }
@@ -1425,7 +1427,7 @@ function impactsAbs(status: string, _reason?: string) {
 }
 
 function impactsCoverage(status: string) {
-  return ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Sem escala", "Sem cronograma"].includes(status);
+  return ["Falta", "Atraso", "Saída antecipada", "Afastado", "Sem escala", "Sem cronograma"].includes(status);
 }
 
 async function upsertAttendance(tx: Prisma.TransactionClient, userId: string, employeeId: string, scheduleId: string, date: Date, input: ScheduleEditInput) {
@@ -1768,7 +1770,7 @@ function emptyAttendanceSummary() {
 function statusToOperational(status: string) {
   if (status === "Presente") return "Online";
   if (status === "Atraso" || status === "Saída antecipada") return "Em Atendimento";
-  if (["Ausente", "Falta", "Afastado"].includes(status)) return "Offline";
+  if (["Falta", "Afastado"].includes(status)) return "Offline";
   return status;
 }
 

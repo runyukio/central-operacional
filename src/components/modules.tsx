@@ -98,11 +98,11 @@ import { cleanShiftName, cleanShiftOptions, isBlockedShiftName, isSelectableShif
 
 const scheduleImportColumns = ["wb_login", "data", "status", "turno", "entrada", "saida", "lob"] as const;
 const workHourImportColumns = ["wb_login", "data", "entrada_real", "saida_real", "pausa_minutos", "horas_realizadas", "sistema_origem", "observacao", "nome", "email", "lob", "supervisor_wb_login", "turno"] as const;
-const scheduleStatusOptions = ["Escalado", "Presente", "Nesting", "Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Férias", "Treinamento", "Folga", "Troca aprovada", "Venda de folga aprovada", "Folga aprovada", "Sem cronograma", "Erro de cronograma"] as const;
-const attendanceReasonStatuses = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de cronograma"];
+const scheduleStatusOptions = ["Escalado", "Presente", "Nesting", "Falta", "Atraso", "Saída antecipada", "Afastado", "Férias", "Treinamento", "Folga", "Troca aprovada", "Venda de folga aprovada", "Folga aprovada", "Sem cronograma", "Erro de cronograma"] as const;
+const attendanceReasonStatuses = ["Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de cronograma"];
 const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Nesting", "Venda de folga aprovada"];
 const employeeOperationalStatusOptions = ["Ativo", "Nesting", "Inativo", "Pendente de cadastro", "Afastado", "Desligado", "Em treinamento", "Suspenso", "Online", "Em Atendimento", "Offline"];
-const absenceReasonOptions = ["Falta injustificada", "Atestado", "Problema de saúde", "Emergência familiar", "Problema técnico", "Falta de equipamento", "Problema de internet", "Atraso", "Saída antecipada", "Erro de cronograma", "Afastamento", "Outros"];
+const absenceReasonOptions = ["Ausente", "Problema de saúde", "Emergência familiar", "Problema técnico", "Falta de equipamento", "Problema de internet", "Atraso", "Saída antecipada", "Afastamento", "Erro de cronograma", "Outros"];
 const timeBlockCategoryOptions = ["Administrativo", "Desenvolvimento", "Acompanhamento de operação", "Feedback", "Reunião", "Treinamento", "Suporte ao time", "Análise de indicadores", "Escalonamento / Ocorrência", "Pausa", "Outros"];
 const scheduleShiftTimes: Record<string, { startsAt: string; endsAt: string }> = {
   Manhã: { startsAt: "08:00", endsAt: "14:00" },
@@ -783,8 +783,9 @@ function formatBreakDuration(minutes: number) {
 }
 
 function statusFromScheduleCell(value: string) {
-  if (/^(.+?)\s+(sem justificativa|justificada)$/i.test(value)) return value.replace(/\s+(sem justificativa|justificada)$/i, "");
-  return ["Manhã", "Tarde", "Noite"].includes(cleanShiftName(value)) ? "Escalado" : value;
+  const baseStatus = /^(.+?)\s+(sem justificativa|justificada)$/i.test(value) ? value.replace(/\s+(sem justificativa|justificada)$/i, "") : value;
+  if (baseStatus === "Ausente") return "Falta";
+  return ["Manhã", "Tarde", "Noite"].includes(cleanShiftName(baseStatus)) ? "Escalado" : baseStatus;
 }
 
 function dayOffKindFromRequest(request: Pick<ClientRequest, "type" | "payload"> | { type: string; payload?: Record<string, unknown> }): DayOffKind | null {
@@ -1200,13 +1201,13 @@ export function OperationalCommandCenter() {
     gaps: Math.max(0, Math.abs(values.gap))
   }));
   const commandAlerts = [
-    ...(summary.unjustified ? [{ title: `${summary.unjustified} ausências sem justificativa`, status: "Atenção", tone: "orange" as const }] : []),
+    ...(summary.unjustified ? [{ title: `${summary.unjustified} faltas/ocorrências sem justificativa`, status: "Atenção", tone: "orange" as const }] : []),
     ...(summary.gap < 0 ? [{ title: `Gap real de ${summary.gap} pessoas`, status: summary.riskLevel, tone: "red" as const }] : []),
     ...(summary.late ? [{ title: `${summary.late} atrasos registrados`, status: "Info", tone: "blue" as const }] : [])
   ];
   const commandRisks = [
     ...(summary.riskLevel === "Crítico" ? [{ title: "Cobertura abaixo do mínimo operacional", status: "Crítico", tone: "red" as const }] : []),
-    ...(summary.absent ? [{ title: `${summary.absent} ausências impactando a operação`, status: "ABS", tone: "orange" as const }] : [])
+    ...(summary.absent ? [{ title: `${summary.absent} faltas impactando a operação`, status: "ABS", tone: "orange" as const }] : [])
   ];
 
   return (
@@ -1308,7 +1309,7 @@ export function OperationalCommandCenter() {
                 </div>
               ))}
             </div>
-          </div> : <EmptyState title="Sem ausências registradas" description="Os motivos aparecerão quando houver registros reais de presença ou ausência." />}
+          </div> : <EmptyState title="Sem faltas registradas" description="Os motivos aparecerão quando houver registros reais de presença ou ocorrência." />}
         </Panel>
 
         <Panel title="Gaps por Turno">
@@ -2388,10 +2389,10 @@ export function SchedulesPage() {
     employeeId: "",
     date: "2026-05-15",
     shift: "Manhã",
-    status: "Ausente",
-    absenceReason: "Problema técnico",
-    reasonCategory: "Ferramenta",
-    supervisorJustification: "Impacto registrado durante o turno; aguardando normalização.",
+    status: "Falta",
+    absenceReason: "Ausente",
+    reasonCategory: "Cronograma",
+    supervisorJustification: "",
     hasEvidence: false,
     evidenceUrl: "",
     impactsAbs: true,
@@ -2660,7 +2661,7 @@ export function SchedulesPage() {
     setShowAttendance(true);
   }
 
-  function openAttendanceJustification(row?: ScheduleGridRow, dayIndex = 0, value = "Ausente") {
+  function openAttendanceJustification(row?: ScheduleGridRow, dayIndex = 0, value = "Falta") {
     const targetRow = row ?? scheduleRows[0];
     const targetEmployee = targetRow?.employee ?? scheduleEmployees[0];
     if (!targetEmployee) {
@@ -2668,7 +2669,7 @@ export function SchedulesPage() {
       return;
     }
     const cellStatus = statusFromScheduleCell(value);
-    const safeStatus = supervisorOccurrenceStatuses.includes(cellStatus) ? cellStatus : "Ausente";
+    const safeStatus = supervisorOccurrenceStatuses.includes(cellStatus) ? cellStatus : "Falta";
     setAttendanceForm({
       ...attendanceForm,
       employeeId: targetEmployee.id,
@@ -2678,8 +2679,8 @@ export function SchedulesPage() {
       absenceReason: attendanceForm.absenceReason || "Outros",
       reasonCategory: attendanceForm.reasonCategory || "Cronograma",
       supervisorJustification: "",
-      impactsAbs: ["Falta", "Ausente"].includes(safeStatus),
-      impactsCoverage: ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de cronograma"].includes(safeStatus)
+      impactsAbs: safeStatus === "Falta",
+      impactsCoverage: ["Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de cronograma"].includes(safeStatus)
     });
     setShowAttendance(true);
   }
@@ -2843,7 +2844,7 @@ export function SchedulesPage() {
 
   async function saveAttendance() {
     if (statusNeedsReason(attendanceForm.status) && !attendanceForm.absenceReason.trim() && !attendanceForm.supervisorJustification.trim()) {
-      setAttendanceMessage("Motivo/observação obrigatório para ausência, falta, atraso, saída antecipada, afastado ou erro de cronograma.");
+      setAttendanceMessage("Motivo/observação obrigatório para falta, atraso, saída antecipada, afastado ou erro de cronograma.");
       return;
     }
 
@@ -2858,7 +2859,7 @@ export function SchedulesPage() {
       setShowAttendance(false);
       await refreshSchedules();
     } catch (error) {
-      setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível salvar presença/ausência.");
+      setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível salvar presença/ocorrência.");
     }
   }
 
@@ -2889,7 +2890,7 @@ export function SchedulesPage() {
       title: `${pendingJustifications.length} justificativas pendentes`,
       status: String(pendingJustifications.length),
       tone: "orange" as const,
-      detail: "Faltas, ausências ou atrasos aguardando justificativa do supervisor."
+      detail: "Faltas, atrasos ou saídas antecipadas aguardando justificativa do supervisor."
     } : null,
     ...importHistory
       .filter((file) => (file.errorRows ?? 0) > 0 || (file.warningRows ?? 0) > 0 || /erro|falha|partial|parcial/i.test(file.status))
@@ -2943,7 +2944,7 @@ export function SchedulesPage() {
   const manualStatusPreview = workHourForm.plannedHours
     ? Math.abs(manualDifferencePreview) <= 5 ? "OK" : "Divergente"
     : workHourForm.recordId ? workHourForm.status : selectedCellHasSchedule ? "Sem horas" : "Sem cronograma";
-  const supervisorOccurrenceStatuses = ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de cronograma"];
+  const supervisorOccurrenceStatuses = ["Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de cronograma"];
   const attendanceStatusOptions = isScheduleSupervisor
     ? supervisorOccurrenceStatuses
     : [...scheduleStatusOptions].filter((status) => status !== "Escalado");
@@ -3222,7 +3223,7 @@ export function SchedulesPage() {
                       );
                     })}
                     <td className="px-4 py-3 text-center">
-                      <button onClick={() => isScheduleSupervisor ? openAttendanceJustification(row, 0, row.days[0] ?? "Ausente") : openScheduleEditor(row, 0, row.days[0] ?? "Escalado")} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
+                      <button onClick={() => isScheduleSupervisor ? openAttendanceJustification(row, 0, row.days[0] ?? "Falta") : openScheduleEditor(row, 0, row.days[0] ?? "Escalado")} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
                         {isScheduleSupervisor ? "Justificar" : "Editar"}
                       </button>
                     </td>
@@ -3274,7 +3275,7 @@ export function SchedulesPage() {
                 ))}
               </div>
             ) : (
-              <EmptyState title="Sem pendências" description="Faltas ou ausências sem justificativa aparecerão aqui." />
+              <EmptyState title="Sem pendências" description="Faltas, atrasos ou saídas antecipadas sem justificativa aparecerão aqui." />
             )}
           </Panel>
           <Panel title="Cobertura">
@@ -3346,7 +3347,7 @@ export function SchedulesPage() {
                 ))}
               </div>
             ) : (
-              <EmptyState title="Nenhuma pendência aberta para os filtros selecionados." description="Quando surgir falta, ausência ou atraso sem justificativa, o item aparecerá aqui." />
+              <EmptyState title="Nenhuma pendência aberta para os filtros selecionados." description="Quando surgir falta, atraso ou saída antecipada sem justificativa, o item aparecerá aqui." />
             )}
           </div>
         </div>
@@ -3516,7 +3517,7 @@ export function SchedulesPage() {
                   <FormInput disabled={!canManageSchedules} label="Supervisor" value={scheduleEditForm.supervisor} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, supervisor: value })} />
                   <label className="md:col-span-2">
                     <span className="mb-1.5 block text-sm font-bold text-muted">{scheduleEditRequiresReason ? "Motivo/observação obrigatória" : "Observação do cronograma"}</span>
-                    <textarea disabled={!canManageSchedules} value={scheduleEditForm.observation} onChange={(event) => setScheduleEditForm({ ...scheduleEditForm, observation: event.target.value })} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500" placeholder={scheduleEditRequiresReason ? "Obrigatório para ausência, falta, atraso, saída antecipada, afastado ou erro de cronograma" : "Opcional para este status"} />
+                    <textarea disabled={!canManageSchedules} value={scheduleEditForm.observation} onChange={(event) => setScheduleEditForm({ ...scheduleEditForm, observation: event.target.value })} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500" placeholder={scheduleEditRequiresReason ? "Obrigatório para falta, atraso, saída antecipada, afastado ou erro de cronograma" : "Opcional para este status"} />
                   </label>
                   {scheduleEditRequiresReason && canManageSchedules ? (
                     <label className="md:col-span-2 flex items-start gap-3 rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm font-semibold text-orange-800">
@@ -3636,7 +3637,7 @@ export function SchedulesPage() {
           <div className="card w-full max-w-2xl p-5">
             <div className="mb-5 flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-extrabold text-navy-950">{isScheduleSupervisor ? "Justificar ocorrência" : "Marcar presença/ausência"}</h2>
+                <h2 className="text-lg font-extrabold text-navy-950">{isScheduleSupervisor ? "Justificar ocorrência" : "Marcar presença/ocorrência"}</h2>
                 <p className="text-sm text-muted">
                   {isScheduleSupervisor ? "Registra justificativa e AttendanceRecord sem alterar turno, entrada, saída ou marcar presença." : "Atualiza cronograma, mapa, cobertura, indicadores de ABS e auditoria."}
                 </p>
@@ -3663,8 +3664,8 @@ export function SchedulesPage() {
                     status: value,
                     absenceReason: reasonRequired ? attendanceForm.absenceReason : "",
                     supervisorJustification: reasonRequired ? attendanceForm.supervisorJustification : "",
-                    impactsAbs: ["Falta", "Ausente"].includes(value),
-                    impactsCoverage: ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Sem cronograma"].includes(value)
+                    impactsAbs: value === "Falta",
+                    impactsCoverage: ["Falta", "Atraso", "Saída antecipada", "Afastado", "Sem cronograma"].includes(value)
                   });
                 }}
               />
@@ -4269,16 +4270,13 @@ function shiftTagClass(value: string) {
     Noite: "bg-blue-50 text-blue-700",
     Escalado: "bg-blue-50 text-blue-700",
     Presente: "bg-emerald-50 text-emerald-700",
-    Ausente: "bg-red-50 text-red-700",
     Falta: "bg-red-100 text-red-800",
     "Falta sem justificativa": "border border-red-300 bg-red-100 text-red-900 shadow-sm shadow-red-100",
-    "Ausente sem justificativa": "border border-orange-300 bg-orange-100 text-orange-900 shadow-sm shadow-orange-100",
     "Atraso sem justificativa": "border border-orange-300 bg-orange-100 text-orange-900 shadow-sm shadow-orange-100",
     "Saída antecipada sem justificativa": "border border-orange-300 bg-orange-100 text-orange-900 shadow-sm shadow-orange-100",
     "Afastado sem justificativa": "border border-violet-300 bg-violet-100 text-violet-900 shadow-sm shadow-violet-100",
     "Erro de cronograma sem justificativa": "border border-red-300 bg-red-100 text-red-900 shadow-sm shadow-red-100",
     "Falta justificada": "bg-amber-50 text-amber-800",
-    "Ausente justificada": "bg-amber-50 text-amber-800",
     "Atraso justificada": "bg-amber-50 text-amber-800",
     "Saída antecipada justificada": "bg-amber-50 text-amber-800",
     "Afastado justificada": "bg-amber-50 text-amber-800",

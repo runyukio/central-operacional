@@ -1,7 +1,6 @@
 export type OperationalStatusKey =
   | "ESCALADO"
   | "PRESENTE"
-  | "AUSENTE"
   | "FALTA"
   | "ATRASO"
   | "SAIDA_ANTECIPADA"
@@ -22,7 +21,7 @@ export type OperationalStatusKey =
 const STATUS_ALIASES: Record<string, OperationalStatusKey> = {
   ESCALADO: "ESCALADO",
   PRESENTE: "PRESENTE",
-  AUSENTE: "AUSENTE",
+  AUSENTE: "FALTA",
   FALTA: "FALTA",
   ATRASO: "ATRASO",
   SAIDA_ANTECIPADA: "SAIDA_ANTECIPADA",
@@ -49,7 +48,6 @@ const STATUS_ALIASES: Record<string, OperationalStatusKey> = {
 const SCHEDULED_STATUS_KEYS = new Set<OperationalStatusKey>([
   "ESCALADO",
   "PRESENTE",
-  "AUSENTE",
   "FALTA",
   "ATRASO",
   "SAIDA_ANTECIPADA",
@@ -67,7 +65,7 @@ const PRESENT_STATUS_KEYS = new Set<OperationalStatusKey>([
   "FOLGA_APROVADA"
 ]);
 
-const ABSENCE_STATUS_KEYS = new Set<OperationalStatusKey>(["AUSENTE", "FALTA"]);
+const ABSENCE_STATUS_KEYS = new Set<OperationalStatusKey>(["FALTA"]);
 
 function statusLookupKey(status: unknown) {
   return String(status ?? "")

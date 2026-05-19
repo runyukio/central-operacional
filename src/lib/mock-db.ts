@@ -1025,7 +1025,7 @@ export function createShiftReport(actor: Actor, input: Omit<ShiftReportRecord, "
       employeeId: absent.employeeId,
       date: report.reportDate,
       shift: report.shift,
-      status: "Ausente",
+      status: "Falta",
       absenceReason: absent.absenceReason,
       reasonCategory: "Pessoas",
       supervisorJustification: absent.observation,
@@ -1429,18 +1429,18 @@ function defaultOperationalData(record: EmployeeRegistrationRecord): Registratio
 }
 
 function shouldImpactAbs(status: string, reason?: string) {
-  if (["Falta", "Ausente", "Atraso", "Saída antecipada", "Afastado"].includes(status)) return !/erro de escala|folga|férias|ferias|treinamento/i.test(reason ?? "");
+  if (["Falta", "Atraso", "Saída antecipada", "Afastado"].includes(status)) return !/erro de escala|folga|férias|ferias|treinamento/i.test(reason ?? "");
   return false;
 }
 
 function shouldImpactCoverage(status: string) {
-  return ["Ausente", "Falta", "Atraso", "Saída antecipada", "Afastado", "Sem escala"].includes(status);
+  return ["Falta", "Atraso", "Saída antecipada", "Afastado", "Sem escala"].includes(status);
 }
 
 function statusToEmployeeStatus(status: string) {
   if (status === "Presente") return "Online";
   if (status === "Atraso") return "Em Atendimento";
-  if (["Ausente", "Falta", "Afastado"].includes(status)) return "Offline";
+  if (["Falta", "Afastado"].includes(status)) return "Offline";
   return status;
 }
 
@@ -1587,7 +1587,7 @@ function createInitialDb(): MockDb {
       status: "Falta",
       absenceReason: "Problema de saúde",
       reasonCategory: "Pessoas",
-      supervisorJustification: "Aguardando atestado.",
+      supervisorJustification: "Aguardando justificativa.",
       hasEvidence: false,
       isJustified: false,
       impactsAbs: true,
@@ -1630,8 +1630,8 @@ function createInitialDb(): MockDb {
       actualHeadcount: 39,
       onlineAgents: 37,
       absCount: 3,
-      absJustification: "2 atestados em análise e 1 problema técnico.",
-      absentEmployees: [{ employeeId: employees[4].id, employeeName: employees[4].name, absenceReason: "Problema de saúde", observation: "Aguardando atestado", impactsAbs: true, impactsCoverage: true }],
+      absJustification: "2 ausentes em análise e 1 problema técnico.",
+      absentEmployees: [{ employeeId: employees[4].id, employeeName: employees[4].name, absenceReason: "Ausente", observation: "Aguardando justificativa", impactsAbs: true, impactsCoverage: true }],
       queueStatusStart: "Fila estável, TMA dentro da meta",
       queueStatusEnd: "Fila em atenção por absenteísmo",
       backlogStart: 18,
@@ -1641,7 +1641,7 @@ function createInitialDb(): MockDb {
       occurrenceCategory: "Pessoas",
       impactLevel: "Médio",
       occurrences: "Aumento de ABS no meio do turno e dois atrasos por transporte.",
-      pendingTasks: "Validar cobertura do próximo turno e confirmar atestado.",
+      pendingTasks: "Validar cobertura do próximo turno e confirmar justificativa.",
       generalMood: "Neutro",
       leadersPresent: "Carla Supervisora; WFM Operações",
       mainRisks: "Cobertura do turno da tarde; backlog em CEC.",
