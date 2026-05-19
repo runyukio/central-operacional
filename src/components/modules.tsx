@@ -99,7 +99,7 @@ import { cleanShiftName, cleanShiftOptions, isBlockedShiftName, isSelectableShif
 const scheduleImportColumns = ["wb_login", "data", "status", "turno", "entrada", "saida", "lob"] as const;
 const workHourImportColumns = ["wb_login", "data", "entrada_real", "saida_real", "pausa_minutos", "horas_realizadas", "sistema_origem", "observacao", "nome", "email", "lob", "supervisor_wb_login", "turno"] as const;
 const scheduleStatusOptions = ["Escalado", "Presente", "Nesting", "Falta", "Atraso", "Saída antecipada", "Afastado", "Férias", "Treinamento", "Folga", "Troca aprovada", "Venda de folga aprovada", "Folga aprovada", "Sem cronograma", "Erro de cronograma"] as const;
-const attendanceReasonStatuses = ["Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de cronograma"];
+const attendanceReasonStatuses = ["Falta", "Atraso", "Saída antecipada", "Erro de cronograma"];
 const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Nesting", "Venda de folga aprovada"];
 const employeeOperationalStatusOptions = ["Ativo", "Nesting", "Inativo", "Pendente de cadastro", "Afastado", "Desligado", "Em treinamento", "Suspenso", "Online", "Em Atendimento", "Offline"];
 const absenceReasonOptions = ["Ausente", "Problema de saúde", "Emergência familiar", "Problema técnico", "Falta de equipamento", "Problema de internet", "Atraso", "Saída antecipada", "Afastamento", "Erro de cronograma", "Outros"];
@@ -447,11 +447,13 @@ type AttendanceSummary = {
   late: number;
   earlyLeave: number;
   unjustified: number;
+  justified?: number;
   coverageRate: number;
   gap: number;
   riskLevel: string;
   byReason: Record<string, number>;
   byShift?: Record<string, { planned: number; present: number; absent: number; gap: number }>;
+  bySupervisor?: Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; absRate: number }>;
 };
 
 type AttendanceItem = {
@@ -1150,21 +1152,35 @@ function FormSelect({ label, value, options, onChange, error, disabled = false }
   );
 }
 
+function MetricMini({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-md bg-slate-50 px-2 py-2">
+      <p className="text-[10px] font-black uppercase tracking-wide text-muted">{label}</p>
+      <p className="mt-0.5 text-sm font-extrabold text-navy-950">{value}</p>
+    </div>
+  );
+}
+
 export function OperationalCommandCenter() {
   const [attendanceSummary, setAttendanceSummary] = useState<AttendanceSummary | null>(null);
   const [dateRange, setDateRange] = useState({ startDate: "2026-05-01", endDate: "2026-05-31" });
   const [commandLobs, setCommandLobs] = useState<string[]>(["Todos"]);
   const [selectedCommandLob, setSelectedCommandLob] = useState("Todos");
+  const [selectedCommandSupervisor, setSelectedCommandSupervisor] = useState("Todos");
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [selectedAbsenceReason, setSelectedAbsenceReason] = useState<string | null>(null);
   const [absenceReasonPeople, setAbsenceReasonPeople] = useState<AttendanceItem[]>([]);
   const [loadingAbsenceReasonPeople, setLoadingAbsenceReasonPeople] = useState(false);
   const [absenceReasonError, setAbsenceReasonError] = useState("");
+  const [selectedAbsSupervisor, setSelectedAbsSupervisor] = useState<string | null>(null);
+  const [absSupervisorPeople, setAbsSupervisorPeople] = useState<AttendanceItem[]>([]);
+  const [loadingAbsSupervisorPeople, setLoadingAbsSupervisorPeople] = useState(false);
+  const [absSupervisorError, setAbsSupervisorError] = useState("");
 
   useEffect(() => {
     void loadCommandCenterSummary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateRange.startDate, dateRange.endDate, selectedCommandLob]);
+  }, [dateRange.startDate, dateRange.endDate, selectedCommandLob, selectedCommandSupervisor]);
 
   useEffect(() => {
     apiJson<{ data: SystemSettings }>("/api/settings")
@@ -1180,6 +1196,7 @@ export function OperationalCommandCenter() {
     try {
       const params = new URLSearchParams({ startDate: dateRange.startDate, endDate: dateRange.endDate });
       if (selectedCommandLob !== "Todos") params.set("lob", selectedCommandLob);
+      if (selectedCommandSupervisor !== "Todos") params.set("supervisor", selectedCommandSupervisor);
       const payload = await apiJson<{ summary: AttendanceSummary }>(`/api/attendance?${params.toString()}`);
       setAttendanceSummary(payload.summary);
     } catch {
@@ -1189,8 +1206,8 @@ export function OperationalCommandCenter() {
     }
   }
 
-  async function openAbsenceReasonPeople(reason: string) {
-    setSelectedAbsenceReason(reason);
+  async function openAbsenceReasonPeople(reason: string, justification?: "pending" | "justified") {
+    setSelectedAbsenceReason(justification === "justified" ? "Faltas justificadas" : reason);
     setAbsenceReasonPeople([]);
     setAbsenceReasonError("");
     setLoadingAbsenceReasonPeople(true);
@@ -1198,10 +1215,15 @@ export function OperationalCommandCenter() {
       const params = new URLSearchParams({
         startDate: dateRange.startDate,
         endDate: dateRange.endDate,
-        reason,
         includeJustified: "true"
       });
+      if (justification) {
+        params.set("justification", justification);
+      } else {
+        params.set("reason", reason);
+      }
       if (selectedCommandLob !== "Todos") params.set("lob", selectedCommandLob);
+      if (selectedCommandSupervisor !== "Todos") params.set("supervisor", selectedCommandSupervisor);
       const payload = await apiJson<{ data: AttendanceItem[] }>(`/api/attendance?${params.toString()}`);
       setAbsenceReasonPeople(payload.data);
     } catch {
@@ -1215,6 +1237,34 @@ export function OperationalCommandCenter() {
     setSelectedAbsenceReason(null);
     setAbsenceReasonPeople([]);
     setAbsenceReasonError("");
+  }
+
+  async function openAbsSupervisorPeople(supervisor: string) {
+    setSelectedAbsSupervisor(supervisor);
+    setAbsSupervisorPeople([]);
+    setAbsSupervisorError("");
+    setLoadingAbsSupervisorPeople(true);
+    try {
+      const params = new URLSearchParams({
+        startDate: dateRange.startDate,
+        endDate: dateRange.endDate,
+        includeJustified: "true",
+        supervisor
+      });
+      if (selectedCommandLob !== "Todos") params.set("lob", selectedCommandLob);
+      const payload = await apiJson<{ data: AttendanceItem[] }>(`/api/attendance?${params.toString()}`);
+      setAbsSupervisorPeople(payload.data);
+    } catch {
+      setAbsSupervisorError("Não foi possível carregar as faltas deste supervisor.");
+    } finally {
+      setLoadingAbsSupervisorPeople(false);
+    }
+  }
+
+  function closeAbsSupervisorPeople() {
+    setSelectedAbsSupervisor(null);
+    setAbsSupervisorPeople([]);
+    setAbsSupervisorError("");
   }
 
   function setCommandRange(preset: "today" | "week" | "month" | "previousMonth") {
@@ -1246,17 +1296,20 @@ export function OperationalCommandCenter() {
     late: 0,
     earlyLeave: 0,
     unjustified: 0,
+    justified: 0,
     coverageRate: 0,
     gap: 0,
     riskLevel: "Sem dados",
     byReason: {},
-    byShift: {}
+    byShift: {},
+    bySupervisor: {}
   };
   const stats = [
     { title: "Pessoas Escaladas", value: summary.planned, change: summary.planned ? "100%" : "0%", helper: "base atual", icon: Users, tone: "blue" as const },
     { title: "Presentes", value: summary.present, change: `${summary.coverageRate}%`, helper: "cobertura real", icon: UserCheck, tone: "green" as const },
     { title: "Faltas", value: summary.absent, change: `${summary.absRate}%`, helper: "ABS", icon: XCircle, tone: "orange" as const },
-    { title: "Faltas sem justificativa", value: summary.unjustified, helper: "pendentes", icon: AlertTriangle, tone: summary.unjustified ? "red" as const : "green" as const },
+    { title: "Faltas sem justificativa", value: summary.unjustified, helper: "pendentes", icon: AlertTriangle, tone: summary.unjustified ? "red" as const : "green" as const, action: () => void openAbsenceReasonPeople("Sem justificativa", "pending") },
+    { title: "Faltas justificadas", value: summary.justified ?? 0, helper: "com motivo registrado", icon: CheckCircle2, tone: (summary.justified ?? 0) ? "green" as const : "blue" as const, action: () => void openAbsenceReasonPeople("Faltas justificadas", "justified") },
     { title: "Atrasos", value: summary.late, helper: "turno atual", icon: Clock, tone: "gold" as const },
     { title: "Saídas antecipadas", value: summary.earlyLeave, helper: "turno atual", icon: AlertTriangle, tone: "red" as const },
     { title: "Risco de Cobertura", value: summary.riskLevel, change: `${summary.gap}`, helper: "gap real", icon: ShieldCheck, tone: summary.riskLevel === "Crítico" ? "red" as const : "purple" as const }
@@ -1269,18 +1322,14 @@ export function OperationalCommandCenter() {
   const commandAbsenceReasons = Object.entries(summary.byReason)
     .filter(([, value]) => value > 0)
     .map(([name, value], index) => ({ name, value, fill: ["#071B3A", "#14B8A6", "#F59E0B", "#7C3AED", "#94A3B8"][index % 5] }));
-  const commandGapByShift = Object.entries(summary.byShift ?? {}).map(([shift, values]) => ({
-    shift,
-    gaps: Math.max(0, Math.abs(values.gap))
-  }));
+  const commandSupervisorOptions = ["Todos", ...Array.from(new Set(["Sem supervisor", ...Object.keys(summary.bySupervisor ?? {}), selectedCommandSupervisor].filter((value) => value && value !== "Todos")))];
+  const commandAbsBySupervisor = Object.entries(summary.bySupervisor ?? {})
+    .map(([supervisor, values]) => ({ supervisor, ...values }))
+    .sort((a, b) => b.absent - a.absent || b.absRate - a.absRate || a.supervisor.localeCompare(b.supervisor, "pt-BR"));
   const commandAlerts = [
     ...(summary.unjustified ? [{ title: `${summary.unjustified} faltas sem justificativa`, status: "Atenção", tone: "orange" as const }] : []),
     ...(summary.gap < 0 ? [{ title: `Gap real de ${summary.gap} pessoas`, status: summary.riskLevel, tone: "red" as const }] : []),
     ...(summary.late ? [{ title: `${summary.late} atrasos registrados`, status: "Info", tone: "blue" as const }] : [])
-  ];
-  const commandRisks = [
-    ...(summary.riskLevel === "Crítico" ? [{ title: "Cobertura abaixo do mínimo operacional", status: "Crítico", tone: "red" as const }] : []),
-    ...(summary.absent ? [{ title: `${summary.absent} faltas impactando a operação`, status: "ABS", tone: "orange" as const }] : [])
   ];
 
   return (
@@ -1298,6 +1347,15 @@ export function OperationalCommandCenter() {
             >
               {commandLobs.map((lob) => (
                 <option key={lob} value={lob}>{lob === "Todos" ? "Todas as LOBs" : lob}</option>
+              ))}
+            </select>
+            <select
+              value={selectedCommandSupervisor}
+              onChange={(event) => setSelectedCommandSupervisor(event.target.value)}
+              className="premium-control h-11 px-3 text-sm font-extrabold text-navy-950 outline-none"
+            >
+              {commandSupervisorOptions.map((supervisor) => (
+                <option key={supervisor} value={supervisor}>{supervisor === "Todos" ? "Todos os supervisores" : supervisor}</option>
               ))}
             </select>
             <label className="premium-control flex h-11 items-center gap-2 px-3 text-sm font-bold text-navy-900">
@@ -1335,7 +1393,13 @@ export function OperationalCommandCenter() {
       />
       <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         {stats.map((stat) => (
-          <StatCard key={stat.title} {...stat} />
+          stat.action ? (
+            <button key={stat.title} type="button" onClick={stat.action} className="text-left">
+              <StatCard {...stat} />
+            </button>
+          ) : (
+            <StatCard key={stat.title} {...stat} />
+          )
         ))}
       </div>
       <div className="grid gap-5 xl:grid-cols-[1fr_1fr_1fr]">
@@ -1385,33 +1449,39 @@ export function OperationalCommandCenter() {
           </div> : <EmptyState title="Sem faltas registradas" description="Os motivos aparecerão quando houver registros reais de presença ou ocorrência." />}
         </Panel>
 
-        <Panel title="Gaps por Turno">
-          {commandGapByShift.length ? <div className="h-[280px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={commandGapByShift}>
-                <CartesianGrid stroke="#E8EDF5" vertical={false} />
-                <XAxis dataKey="shift" tickLine={false} axisLine={false} />
-                <YAxis tickLine={false} axisLine={false} />
-                <Tooltip />
-                <Bar dataKey="gaps" fill="#EF4444" radius={[8, 8, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div> : <EmptyState title="Sem gap nesta data" description="Os gaps serão exibidos quando houver cronograma real na data selecionada." />}
-          <div className="mt-4 rounded-lg bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
-            {summary.gap < 0 ? `Gap real identificado: ${summary.gap}` : "Sem gap crítico identificado na base real."}
-          </div>
+        <Panel title="ABS por Supervisor">
+          {commandAbsBySupervisor.length ? (
+            <div className="max-h-[320px] space-y-2 overflow-y-auto pr-1">
+              {commandAbsBySupervisor.map((item) => (
+                <button
+                  key={item.supervisor}
+                  type="button"
+                  onClick={() => void openAbsSupervisorPeople(item.supervisor)}
+                  className="w-full rounded-lg border border-border bg-white p-3 text-left transition hover:border-blue-200 hover:bg-blue-50"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="min-w-0 truncate text-sm font-extrabold text-navy-950">{item.supervisor}</span>
+                    <span className="rounded-md bg-orange-50 px-2 py-1 text-xs font-black text-orange-700">{item.absRate}% ABS</span>
+                  </div>
+                  <div className="mt-3 grid grid-cols-4 gap-2 text-center text-xs">
+                    <MetricMini label="Escaladas" value={item.planned} />
+                    <MetricMini label="Faltas" value={item.absent} />
+                    <MetricMini label="Sem just." value={item.unjustified} />
+                    <MetricMini label="Justif." value={item.justified} />
+                  </div>
+                </button>
+              ))}
+            </div>
+          ) : <EmptyState title="Sem ABS por supervisor" description="A visão será exibida quando houver cronogramas no período selecionado." />}
         </Panel>
       </div>
 
-      <div className="mt-5 grid gap-5 xl:grid-cols-[1fr_1fr_1fr]">
+      <div className="mt-5 grid gap-5 xl:grid-cols-[1fr_1fr]">
         <Panel title="Alertas e Ocorrências" action="Ver todos os alertas">
           {commandAlerts.length ? <MiniAlertList items={commandAlerts} /> : <EmptyState title="Sem alertas" description="Alertas aparecerão quando houver cronograma, presença ou ausência real." />}
         </Panel>
         <Panel title="Top Performers do Dia" action="Ver ranking completo">
           <EmptyState title="Sem ranking real" description="O ranking será preenchido quando houver métricas reais de performance." />
-        </Panel>
-        <Panel title="Riscos do Dia" action="Ver todos os riscos">
-          {commandRisks.length ? <MiniAlertList items={commandRisks} /> : <EmptyState title="Sem riscos ativos" description="Riscos serão calculados a partir de cronograma, presença e solicitações reais." />}
         </Panel>
       </div>
 
@@ -1452,6 +1522,44 @@ export function OperationalCommandCenter() {
               />
             ) : (
               <EmptyState title="Nenhuma ausência encontrada para este motivo" description="A lista respeita o período e os filtros aplicados na Central Operacional." />
+            )}
+          </div>
+        </div>
+      ) : null}
+      {selectedAbsSupervisor ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="card max-h-[90vh] w-full max-w-6xl overflow-y-auto p-5">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-extrabold text-navy-950">ABS por Supervisor</h2>
+                <p className="text-sm font-semibold text-muted">
+                  {selectedAbsSupervisor} • {dateRange.startDate} até {dateRange.endDate} • {selectedCommandLob === "Todos" ? "Todas as LOBs" : selectedCommandLob}
+                </p>
+              </div>
+              <button onClick={closeAbsSupervisorPeople} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+            </div>
+            {loadingAbsSupervisorPeople ? (
+              <div className="rounded-xl border border-border p-8 text-center text-sm font-bold text-muted">Carregando faltas deste supervisor...</div>
+            ) : absSupervisorError ? (
+              <EmptyState title="Não foi possível carregar" description={absSupervisorError} />
+            ) : absSupervisorPeople.length ? (
+              <SimpleTable
+                columns={["Colaborador", "WB/Login", "Data", "Turno", "LOB", "Supervisor", "Status", "Motivo", "Justificativa", "Ação"]}
+                rows={absSupervisorPeople.map((record) => [
+                  record.employeeName,
+                  record.wbLogin ?? "-",
+                  record.date,
+                  record.shift,
+                  record.lob ?? "-",
+                  record.supervisor ?? "Sem supervisor",
+                  <StatusBadge key={`${record.id}-status`} status={record.status} />,
+                  record.absenceReason ?? "Sem justificativa",
+                  record.isJustified ? "Justificada" : "Sem justificativa",
+                  <a key={`${record.id}-open`} href={`/escalas?startDate=${record.dateIso ?? dateRange.startDate}&collaborator=${encodeURIComponent(record.employeeName)}`} className="text-xs font-extrabold text-blue-600 hover:underline">Abrir no Cronograma</a>
+                ])}
+              />
+            ) : (
+              <EmptyState title="Nenhuma falta encontrada para este supervisor" description="A lista respeita o período e os filtros aplicados na Central Operacional." />
             )}
           </div>
         </div>
@@ -2457,7 +2565,7 @@ export function SchedulesPage() {
   const [scheduleDateError, setScheduleDateError] = useState("");
   const [scheduleDateColumns, setScheduleDateColumns] = useState<string[]>([]);
   const [schedulePagination, setSchedulePagination] = useState({ page: 1, limit: 75, total: 0, totalPages: 1 });
-  const [scheduleFilters, setScheduleFilters] = useState({ collaborator: "", lob: "Todos", supervisor: "", shift: "Todos", status: "Todos", roleTitle: "" });
+  const [scheduleFilters, setScheduleFilters] = useState({ collaborator: "", lob: "Todos", supervisor: "Todos", shift: "Todos", status: "Todos", roleTitle: "" });
   const [scheduleEditForm, setScheduleEditForm] = useState({
     scheduleId: "",
     employeeId: "",
@@ -2615,7 +2723,7 @@ export function SchedulesPage() {
       endDate: rangeOverride.endDate
     });
     if (filtersOverride.lob !== "Todos") params.set("lob", filtersOverride.lob);
-    if (filtersOverride.supervisor.trim()) params.set("supervisor", filtersOverride.supervisor.trim());
+    if (filtersOverride.supervisor !== "Todos") params.set("supervisor", filtersOverride.supervisor.trim());
     if (filtersOverride.shift !== "Todos") params.set("shift", filtersOverride.shift);
     if (filtersOverride.collaborator.trim()) params.set("collaborator", filtersOverride.collaborator.trim());
     try {
@@ -2667,7 +2775,7 @@ export function SchedulesPage() {
   }
 
   function clearScheduleFilters() {
-    const clearedFilters = { collaborator: "", lob: "Todos", supervisor: "", shift: "Todos", status: "Todos", roleTitle: "" };
+    const clearedFilters = { collaborator: "", lob: "Todos", supervisor: "Todos", shift: "Todos", status: "Todos", roleTitle: "" };
     const clearedRange = monthRange(schedulePeriod.month, schedulePeriod.year);
     setScheduleFilters(clearedFilters);
     setScheduleRangeMode("month");
@@ -2821,7 +2929,7 @@ export function SchedulesPage() {
       reasonCategory: attendanceForm.reasonCategory || "Cronograma",
       supervisorJustification: "",
       impactsAbs: safeStatus === "Falta",
-      impactsCoverage: ["Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de cronograma"].includes(safeStatus)
+      impactsCoverage: ["Falta", "Atraso", "Saída antecipada", "Erro de cronograma"].includes(safeStatus)
     });
     setShowAttendance(true);
   }
@@ -2985,7 +3093,7 @@ export function SchedulesPage() {
 
   async function saveAttendance() {
     if (statusNeedsReason(attendanceForm.status) && !attendanceForm.absenceReason.trim() && !attendanceForm.supervisorJustification.trim()) {
-      setAttendanceMessage("Motivo/observação obrigatório para falta, atraso, saída antecipada, afastado ou erro de cronograma.");
+      setAttendanceMessage("Motivo/observação obrigatório para falta, atraso, saída antecipada ou erro de cronograma.");
       return;
     }
 
@@ -3037,7 +3145,7 @@ export function SchedulesPage() {
           hasEvidence: justificationDraft.hasEvidence,
           evidenceUrl: justificationDraft.evidenceUrl,
           impactsAbs: scheduleEditForm.status === "Falta",
-          impactsCoverage: ["Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de cronograma"].includes(scheduleEditForm.status)
+          impactsCoverage: ["Falta", "Atraso", "Saída antecipada", "Erro de cronograma"].includes(scheduleEditForm.status)
         })
       });
       setAttendanceSummary(payload.summary);
@@ -3127,6 +3235,7 @@ export function SchedulesPage() {
   const configuredShifts = scheduleSettings?.shifts.filter((shift) => shift.status !== "INACTIVE" && isSelectableShiftName(shift.name)).map((shift) => cleanShiftName(shift.name)) ?? [];
   const availableShiftNames = cleanShiftOptions(configuredShifts, true);
   const uniqueLobs = ["Todos", ...Array.from(new Set([...configuredLobs, ...scheduleRows.map((row) => row.employee.lob).filter(Boolean), ...scheduleEmployees.map((employee) => employee.lob).filter(Boolean)]))];
+  const uniqueSupervisors = ["Todos", ...Array.from(new Set(["Sem supervisor", ...scheduleRows.map((row) => row.employee.supervisor || "Sem supervisor"), ...scheduleEmployees.map((employee) => employee.supervisor || "Sem supervisor")].filter(Boolean)))];
   const uniqueShifts = ["Todos", ...availableShiftNames];
   const normalizedScheduleActorRole = scheduleActorRole === "MANAGEMENT" ? "GESTOR" : scheduleActorRole;
   const canManageSchedules = ["ADMIN", "GESTOR", "WFM"].includes(normalizedScheduleActorRole);
@@ -3148,7 +3257,7 @@ export function SchedulesPage() {
   const manualStatusPreview = workHourForm.plannedHours
     ? Math.abs(manualDifferencePreview) <= 5 ? "OK" : "Divergente"
     : workHourForm.recordId ? workHourForm.status : selectedCellHasSchedule ? "Sem horas" : "Sem cronograma";
-  const supervisorOccurrenceStatuses = ["Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de cronograma"];
+  const supervisorOccurrenceStatuses = ["Falta", "Atraso", "Saída antecipada", "Erro de cronograma"];
   const attendanceStatusOptions = isScheduleSupervisor
     ? supervisorOccurrenceStatuses
     : [...scheduleStatusOptions].filter((status) => status !== "Escalado");
@@ -3204,7 +3313,7 @@ export function SchedulesPage() {
     });
     if (scheduleFilters.collaborator) params.set("collaborator", scheduleFilters.collaborator);
     if (scheduleFilters.lob !== "Todos") params.set("lob", scheduleFilters.lob);
-    if (scheduleFilters.supervisor) params.set("supervisor", scheduleFilters.supervisor);
+    if (scheduleFilters.supervisor !== "Todos") params.set("supervisor", scheduleFilters.supervisor);
     if (scheduleFilters.shift !== "Todos") params.set("shift", scheduleFilters.shift);
     if (scheduleFilters.status !== "Todos") params.set("status", scheduleFilters.status);
     if (scheduleFilters.roleTitle) params.set("roleTitle", scheduleFilters.roleTitle);
@@ -3299,7 +3408,7 @@ export function SchedulesPage() {
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
           <input value={scheduleFilters.collaborator} onChange={(event) => setScheduleFilters({ ...scheduleFilters, collaborator: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Nome, WB ou e-mail" />
           <select value={scheduleFilters.lob} onChange={(event) => setScheduleFilters({ ...scheduleFilters, lob: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">{uniqueLobs.map((item) => <option key={item}>{item}</option>)}</select>
-          <input value={scheduleFilters.supervisor} onChange={(event) => setScheduleFilters({ ...scheduleFilters, supervisor: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Supervisor" />
+          <select value={scheduleFilters.supervisor} onChange={(event) => setScheduleFilters({ ...scheduleFilters, supervisor: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">{uniqueSupervisors.map((item) => <option key={item}>{item}</option>)}</select>
           <select value={scheduleFilters.shift} onChange={(event) => setScheduleFilters({ ...scheduleFilters, shift: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">{uniqueShifts.map((item) => <option key={item}>{item}</option>)}</select>
           <select value={scheduleFilters.status} onChange={(event) => setScheduleFilters({ ...scheduleFilters, status: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">{["Todos", ...scheduleStatusOptions].map((item) => <option key={item}>{item}</option>)}</select>
           <input value={scheduleFilters.roleTitle} onChange={(event) => setScheduleFilters({ ...scheduleFilters, roleTitle: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Cargo/Função" />
@@ -3346,7 +3455,7 @@ export function SchedulesPage() {
         ) : (
           <>
             <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
-              Supervisor visualiza a grade e registra justificativas de ocorrência. Upload, adição manual e presença ficam com WFM/Admin.
+              Este perfil visualiza a grade. Justificativas ficam com Supervisores autorizados; upload, adição manual e presença ficam com WFM/Admin.
             </div>
             {canExportSchedules ? (
               <a href={scheduleExportUrl()} className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft">
@@ -3721,7 +3830,7 @@ export function SchedulesPage() {
                   <FormInput disabled={!canManageSchedules} label="Supervisor" value={scheduleEditForm.supervisor} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, supervisor: value })} />
                   <label className="md:col-span-2">
                     <span className="mb-1.5 block text-sm font-bold text-muted">{scheduleEditRequiresReason ? "Motivo/observação obrigatória" : "Observação do cronograma"}</span>
-                    <textarea disabled={!canManageSchedules} value={scheduleEditForm.observation} onChange={(event) => setScheduleEditForm({ ...scheduleEditForm, observation: event.target.value })} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500" placeholder={scheduleEditRequiresReason ? "Obrigatório para falta, atraso, saída antecipada, afastado ou erro de cronograma" : "Opcional para este status"} />
+                    <textarea disabled={!canManageSchedules} value={scheduleEditForm.observation} onChange={(event) => setScheduleEditForm({ ...scheduleEditForm, observation: event.target.value })} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500" placeholder={scheduleEditRequiresReason ? "Obrigatório para falta, atraso, saída antecipada ou erro de cronograma" : "Opcional para este status"} />
                   </label>
                   {scheduleEditRequiresReason && canManageSchedules ? (
                     <label className="md:col-span-2 flex items-start gap-3 rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm font-semibold text-orange-800">
@@ -3962,7 +4071,7 @@ export function SchedulesPage() {
                     absenceReason: reasonRequired ? attendanceForm.absenceReason : "",
                     supervisorJustification: reasonRequired ? attendanceForm.supervisorJustification : "",
                     impactsAbs: value === "Falta",
-                    impactsCoverage: ["Falta", "Atraso", "Saída antecipada", "Afastado", "Sem cronograma"].includes(value)
+                    impactsCoverage: ["Falta", "Atraso", "Saída antecipada", "Sem cronograma"].includes(value)
                   });
                 }}
               />

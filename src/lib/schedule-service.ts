@@ -79,8 +79,8 @@ const uiToAttendanceStatus: Record<string, AttendanceStatus> = {
   "Erro de cronograma": "ERRO_ESCALA"
 };
 
-export const statusesRequiringReason = ["Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala", "Erro de cronograma"];
-const supervisorJustificationStatuses = ["Falta", "Atraso", "Saída antecipada", "Afastado", "Erro de escala", "Erro de cronograma"];
+export const statusesRequiringReason = ["Falta", "Atraso", "Saída antecipada", "Erro de escala", "Erro de cronograma"];
+const supervisorJustificationStatuses = ["Falta", "Atraso", "Saída antecipada", "Erro de escala", "Erro de cronograma"];
 
 const defaultShiftTimes: Record<string, { startsAt: string; endsAt: string }> = {
   Manhã: { startsAt: "08:00", endsAt: "14:00" },
@@ -145,6 +145,7 @@ export type AttendanceQuery = {
   collaborator?: string;
   status?: string;
   reason?: string;
+  justification?: "pending" | "justified" | string;
   includeJustified?: boolean | string;
 };
 
@@ -210,6 +211,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
     const scheduleWhere: Prisma.ScheduleWhereInput = {
       deletedAt: null,
       date: { gte: period.start, lte: period.end },
+      ...(query.supervisor && query.supervisor !== "Todos" && isNoSupervisorFilter(query.supervisor) ? { supervisorId: null } : {}),
       ...(shiftFilter === "Folga" && (!query.status || query.status === "Todos") ? { status: "FOLGA" } : {}),
       ...(query.status && query.status !== "Todos" ? { status: uiToScheduleStatus[query.status] ?? undefined } : {})
     };
@@ -218,9 +220,11 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       role === "COLABORADOR" && user.employeeProfile
         ? { id: user.employeeProfile.id }
         : employeeFilters(query, search);
+    const supervisorFilter = await scheduleSupervisorFilter(query.supervisor);
     const scheduleRows = await prisma.schedule.findMany({
       where: {
         ...scheduleWhere,
+        ...(supervisorFilter ?? {}),
         employee: employeeWhere
       },
       select: {
@@ -1075,10 +1079,13 @@ export async function exportOperationalSchedulesCsv(actor: Actor, query: Schedul
 
     const period = resolvePeriod(query);
     const search = query.collaborator?.trim();
+    const supervisorFilter = await scheduleSupervisorFilter(query.supervisor);
     const where: Prisma.ScheduleWhereInput = {
       deletedAt: null,
       date: { gte: period.start, lte: period.end },
       ...(query.status && query.status !== "Todos" ? { status: uiToScheduleStatus[query.status] ?? undefined } : {}),
+      ...(query.supervisor && query.supervisor !== "Todos" && isNoSupervisorFilter(query.supervisor) ? { supervisorId: null } : {}),
+      ...(supervisorFilter ?? {}),
       employee: {
         deletedAt: null,
         ...employeeFilters(query, search)
@@ -1122,7 +1129,7 @@ export async function exportOperationalSchedulesCsv(actor: Actor, query: Schedul
       schedule.startsAt ?? "",
       schedule.endsAt ?? "",
       schedule.employee.lob.name,
-      schedule.employee.supervisor?.fullName ?? "",
+      schedule.employee.supervisor?.fullName ?? "Sem supervisor",
       schedule.observation ?? "",
       formatDateTime(schedule.updatedAt)
     ]);
@@ -1151,10 +1158,12 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
     const shiftFilter = cleanShiftName(query.shift);
     const statusFilter = query.status && query.status !== "Todos" ? uiToScheduleStatus[query.status] : undefined;
     const reasonFilter = query.reason?.trim();
+    const justificationFilter = query.justification?.trim().toLowerCase();
     const includeJustified = query.includeJustified === true || query.includeJustified === "true";
     const extraFilters: Prisma.ScheduleWhereInput[] = [];
     if (lobFilter) extraFilters.push({ employee: { lob: { name: lobFilter } } });
-    if (supervisorFilter) extraFilters.push({ employee: { supervisor: { fullName: { contains: supervisorFilter, mode: "insensitive" } } } });
+    const supervisorWhere = await scheduleSupervisorFilter(supervisorFilter);
+    if (supervisorWhere) extraFilters.push(supervisorWhere);
     if (statusFilter) extraFilters.push({ status: statusFilter });
     if (collaboratorFilter) {
       extraFilters.push({
@@ -1207,13 +1216,17 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
         }
       },
       orderBy: [{ date: "desc" }, { employee: { fullName: "asc" } }],
-      take: includeJustified || reasonFilter ? 500 : 100
+      take: includeJustified || reasonFilter ? 5000 : 5000
     });
+    const supervisorNameById = await supervisorNameMap(schedules.map((schedule) => schedule.supervisorId));
     const activeSchedules = schedules.filter((schedule) => {
       const record = schedule.attendanceRecords[0];
-      if (includeJustified || reasonFilter) {
+      if (includeJustified || reasonFilter || justificationFilter) {
         if (!isAbsenceStatus(schedule.status)) return false;
-        return reasonFilter ? attendanceReasonForSchedule(schedule.status, record) === reasonFilter : true;
+        if (reasonFilter && attendanceReasonForSchedule(schedule.status, record) !== reasonFilter) return false;
+        if (justificationFilter === "pending") return isPendingJustificationForSchedule(schedule.status, record);
+        if (justificationFilter === "justified") return hasValidJustification(record);
+        return true;
       }
       return isPendingJustificationForSchedule(schedule.status, record);
     });
@@ -1233,7 +1246,7 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
           scheduleId: schedule.id,
           shift: cleanShiftName(schedule.shift?.name ?? schedule.employee.shift.name) || "Sem turno",
           lob: schedule.employee.lob.name,
-          supervisor: schedule.employee.supervisor?.fullName ?? "Sem supervisor",
+          supervisor: resolveSupervisorName(schedule, supervisorNameById),
           status,
           absenceReason: attendanceReasonForSchedule(schedule.status, record),
           reasonCategory: validJustification ? record?.reasonCategory ?? undefined : undefined,
@@ -1550,7 +1563,7 @@ function toImportPreview(rows: Array<Record<string, unknown>>, validation: Sched
 
 function validateAttendance(input: AttendanceInput) {
   if (requiresReason(input.status) && !input.absenceReason?.trim() && !input.supervisorJustification?.trim()) {
-    return "Motivo/observação obrigatório para falta, atraso, saída antecipada, afastado ou erro de cronograma.";
+    return "Motivo/observação obrigatório para falta, atraso, saída antecipada ou erro de cronograma.";
   }
   return "";
 }
@@ -1588,7 +1601,7 @@ function impactsAbs(status: string, _reason?: string) {
 }
 
 function impactsCoverage(status: string) {
-  return ["Falta", "Atraso", "Saída antecipada", "Afastado", "Sem escala", "Sem cronograma"].includes(status);
+  return ["Falta", "Atraso", "Saída antecipada", "Sem escala", "Sem cronograma"].includes(status);
 }
 
 async function upsertAttendance(tx: Prisma.TransactionClient, userId: string, employeeId: string, scheduleId: string, date: Date, input: ScheduleEditInput) {
@@ -1820,11 +1833,11 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
   const shiftFilter = cleanShiftName(filters.shift);
   const search = filters.collaborator?.trim();
   const statusFilter = filters.status && filters.status !== "Todos" ? uiToScheduleStatus[filters.status] : undefined;
+  const supervisorFilter = await scheduleSupervisorFilter(filters.supervisor);
   const employeeWhere: Prisma.EmployeeProfileWhereInput = {
     ...(filters.employeeId ? { id: filters.employeeId } : {}),
     ...(filters.teamSupervisorId ? { supervisorId: filters.teamSupervisorId } : {}),
     ...(filters.lob && filters.lob !== "Todos" ? { lob: { name: filters.lob } } : {}),
-    ...(filters.supervisor && filters.supervisor !== "Todos" ? { supervisor: { fullName: { contains: filters.supervisor, mode: "insensitive" } } } : {}),
     ...(search ? {
       OR: [
         { fullName: { contains: search, mode: "insensitive" } },
@@ -1849,6 +1862,7 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
       deletedAt: null,
       ...(period ? { date: { gte: period.start, lte: period.end } } : {}),
       ...(statusFilter ? { status: statusFilter } : {}),
+      ...(supervisorFilter ?? {}),
       ...(shiftFilter === "Folga" && !statusFilter ? { status: "FOLGA" } : {}),
       ...scheduleShiftWhere,
       employee: employeeWhere
@@ -1856,7 +1870,8 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     select: {
       status: true,
       shift: { select: { name: true } },
-      employee: { select: { shift: { select: { name: true } } } },
+      supervisorId: true,
+      employee: { select: { shift: { select: { name: true } }, supervisor: { select: { fullName: true } } } },
       attendanceRecords: {
         orderBy: { updatedAt: "desc" },
         take: 1,
@@ -1870,6 +1885,7 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
       }
     }
   });
+  const supervisorNameById = await supervisorNameMap(schedules.map((schedule) => schedule.supervisorId));
   const statusFor = (schedule: (typeof schedules)[number]) => normalizeOperationalStatus(schedule.status);
   const planned = schedules.filter((schedule) => isScheduledStatus(statusFor(schedule))).length;
   const present = schedules.filter((schedule) => isPresentStatus(statusFor(schedule))).length;
@@ -1894,7 +1910,26 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     acc[key] = (acc[key] ?? 0) + 1;
     return acc;
   }, {});
+  const bySupervisor = schedules.reduce<Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; absRate: number }>>((acc, schedule) => {
+    const supervisorName = resolveSupervisorName(schedule, supervisorNameById);
+    const status = statusFor(schedule);
+    const record = schedule.attendanceRecords[0];
+    acc[supervisorName] ??= { planned: 0, present: 0, absent: 0, unjustified: 0, justified: 0, absRate: 0 };
+    if (isScheduledStatus(status)) acc[supervisorName].planned += 1;
+    if (isPresentStatus(status)) acc[supervisorName].present += 1;
+    if (isAbsenceStatus(status)) {
+      acc[supervisorName].absent += 1;
+      if (isPendingJustificationForSchedule(schedule.status, record)) {
+        acc[supervisorName].unjustified += 1;
+      } else if (hasValidJustification(record)) {
+        acc[supervisorName].justified += 1;
+      }
+    }
+    acc[supervisorName].absRate = calculateAbsenceRate(acc[supervisorName].planned, acc[supervisorName].absent);
+    return acc;
+  }, {});
   const unjustified = absenceSchedules.filter((item) => isPendingJustificationForSchedule(item.schedule.status, item.record)).length;
+  const justified = absenceSchedules.filter((item) => hasValidJustification(item.record)).length;
   return {
     planned,
     present,
@@ -1903,11 +1938,13 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     late: schedules.filter((schedule) => statusFor(schedule) === "ATRASO").length,
     earlyLeave: schedules.filter((schedule) => statusFor(schedule) === "SAIDA_ANTECIPADA").length,
     unjustified,
+    justified,
     coverageRate,
     gap: present - planned,
     riskLevel: coverageRate >= 95 ? "Excelente" : coverageRate >= 90 ? "Adequado" : coverageRate >= 85 ? "Atenção" : "Crítico",
     byReason,
-    byShift
+    byShift,
+    bySupervisor
   };
 }
 
@@ -1920,12 +1957,18 @@ function emptyAttendanceSummary() {
     late: 0,
     earlyLeave: 0,
     unjustified: 0,
+    justified: 0,
     coverageRate: 0,
     gap: 0,
     riskLevel: "Adequado",
     byReason: {},
-    byShift: {}
+    byShift: {},
+    bySupervisor: {}
   };
+}
+
+function resolveSupervisorName(schedule: { supervisorId?: string | null; employee?: { supervisor?: { fullName: string } | null } | null }, supervisorNameById?: Map<string, string>) {
+  return (schedule.supervisorId ? supervisorNameById?.get(schedule.supervisorId) : "") || schedule.employee?.supervisor?.fullName?.trim() || "Sem supervisor";
 }
 
 function statusToOperational(status: string) {
@@ -2040,9 +2083,40 @@ function employeeFilters(query: ScheduleQuery, search?: string): Prisma.Employee
       ]
     } : {}),
     ...(query.lob && query.lob !== "Todos" ? { lob: { name: query.lob } } : {}),
-    ...(query.supervisor && query.supervisor !== "Todos" ? { supervisor: { fullName: { contains: query.supervisor, mode: "insensitive" } } } : {}),
     ...(shiftFilter && shiftFilter !== "Todos" && shiftFilter !== "Folga" ? { shift: { OR: [{ name: shiftFilter }, { name: { startsWith: `${shiftFilter} (` } }] } } : {}),
     ...(query.roleTitle && query.roleTitle !== "Todos" ? { roleTitle: { contains: query.roleTitle, mode: "insensitive" } } : {})
+  };
+}
+
+function isNoSupervisorFilter(value: string) {
+  return /^(sem\s*supervisor|sem_supervisor|none|no_supervisor|null)$/i.test(value.trim());
+}
+
+async function supervisorNameMap(supervisorIds: Array<string | null | undefined>) {
+  const ids = Array.from(new Set(supervisorIds.filter((id): id is string => Boolean(id))));
+  if (!ids.length) return new Map<string, string>();
+  const supervisors = await prisma.employeeProfile.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, fullName: true }
+  });
+  return new Map(supervisors.map((supervisor) => [supervisor.id, supervisor.fullName]));
+}
+
+async function scheduleSupervisorFilter(value?: string | null): Promise<Prisma.ScheduleWhereInput | null> {
+  const raw = value?.trim();
+  if (!raw || raw === "Todos") return null;
+  if (isNoSupervisorFilter(raw)) return { supervisorId: null, employee: { supervisorId: null } };
+
+  const supervisors = await prisma.employeeProfile.findMany({
+    where: { fullName: { contains: raw, mode: "insensitive" } },
+    select: { id: true }
+  });
+  const ids = supervisors.map((supervisor) => supervisor.id);
+  return {
+    OR: [
+      ...(ids.length ? [{ supervisorId: { in: ids } }] : []),
+      { employee: { supervisor: { fullName: { contains: raw, mode: "insensitive" } } } }
+    ]
   };
 }
 

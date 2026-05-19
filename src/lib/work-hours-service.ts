@@ -835,7 +835,14 @@ function buildRecordWhere(user: UserWithRole, query: WorkHourQuery, period: { st
   };
   if (role === "COLABORADOR" || query.scope === "mine") where.employeeId = user.employeeProfile?.id ?? "__none__";
   if (query.lob && query.lob !== "Todos") where.employee = { ...(where.employee as Prisma.EmployeeProfileWhereInput), lob: { name: query.lob } };
-  if (query.supervisor) where.employee = { ...(where.employee as Prisma.EmployeeProfileWhereInput), supervisor: { fullName: { contains: query.supervisor, mode: "insensitive" } } };
+  if (query.supervisor && query.supervisor !== "Todos") {
+    where.employee = {
+      ...(where.employee as Prisma.EmployeeProfileWhereInput),
+      ...(isNoSupervisorFilter(query.supervisor)
+        ? { supervisorId: null }
+        : { supervisor: { fullName: { contains: query.supervisor, mode: "insensitive" } } })
+    };
+  }
   const shiftFilter = cleanShiftName(query.shift);
   if (shiftFilter && shiftFilter !== "Todos" && shiftFilter !== "Folga") {
     where.employee = { ...(where.employee as Prisma.EmployeeProfileWhereInput), shift: { OR: [{ name: shiftFilter }, { name: { startsWith: `${shiftFilter} (` } }] } };
@@ -853,6 +860,10 @@ function buildRecordWhere(user: UserWithRole, query: WorkHourQuery, period: { st
   if (query.noScheduleOnly) where.status = "NO_SCHEDULE";
   if (query.source && query.source !== "Todos") where.source = { equals: query.source, mode: "insensitive" };
   return where;
+}
+
+function isNoSupervisorFilter(value: string) {
+  return /^(sem\s*supervisor|sem_supervisor|none|no_supervisor|null)$/i.test(value.trim());
 }
 
 async function getWorkHoursSummary(where: Prisma.WorkHourRecordWhereInput) {

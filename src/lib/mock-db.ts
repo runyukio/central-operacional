@@ -1436,12 +1436,12 @@ function defaultOperationalData(record: EmployeeRegistrationRecord): Registratio
 }
 
 function shouldImpactAbs(status: string, reason?: string) {
-  if (["Falta", "Atraso", "Saída antecipada", "Afastado"].includes(status)) return !/erro de escala|folga|férias|ferias|treinamento/i.test(reason ?? "");
+  if (["Falta", "Atraso", "Saída antecipada"].includes(status)) return !/erro de escala|folga|férias|ferias|treinamento/i.test(reason ?? "");
   return false;
 }
 
 function shouldImpactCoverage(status: string) {
-  return ["Falta", "Atraso", "Saída antecipada", "Afastado", "Sem escala"].includes(status);
+  return ["Falta", "Atraso", "Saída antecipada", "Sem escala"].includes(status);
 }
 
 function statusToEmployeeStatus(status: string) {

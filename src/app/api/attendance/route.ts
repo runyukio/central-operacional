@@ -33,6 +33,7 @@ export async function GET(request: Request) {
     collaborator: url.searchParams.get("collaborator") ?? undefined,
     status: url.searchParams.get("status") ?? undefined,
     reason: url.searchParams.get("reason") ?? undefined,
+    justification: url.searchParams.get("justification") ?? undefined,
     includeJustified: url.searchParams.get("includeJustified") ?? undefined
   }));
 }
