@@ -129,10 +129,17 @@ type ClientRequest = {
   title?: string;
   requester: string;
   requesterEmail?: string;
+  requesterWbLogin?: string;
+  lob?: string;
+  supervisor?: string;
   priority: string;
   status: string;
   area: string;
   assignee?: string;
+  nextStep?: string;
+  nextOwner?: string;
+  canSupervisorStep?: boolean;
+  canWfmFinal?: boolean;
   time: string;
   description?: string;
   payload?: Record<string, unknown>;
@@ -1248,8 +1255,8 @@ export function OperationalCommandCenter() {
   const stats = [
     { title: "Pessoas Escaladas", value: summary.planned, change: summary.planned ? "100%" : "0%", helper: "base atual", icon: Users, tone: "blue" as const },
     { title: "Presentes", value: summary.present, change: `${summary.coverageRate}%`, helper: "cobertura real", icon: UserCheck, tone: "green" as const },
-    { title: "Ausências", value: summary.absent, change: `${summary.absRate}%`, helper: "ABS", icon: XCircle, tone: "orange" as const },
-    { title: "Pendências Justificativa", value: summary.unjustified, helper: "sem justificativa", icon: AlertTriangle, tone: summary.unjustified ? "red" as const : "green" as const },
+    { title: "Faltas", value: summary.absent, change: `${summary.absRate}%`, helper: "ABS", icon: XCircle, tone: "orange" as const },
+    { title: "Faltas sem justificativa", value: summary.unjustified, helper: "pendentes", icon: AlertTriangle, tone: summary.unjustified ? "red" as const : "green" as const },
     { title: "Atrasos", value: summary.late, helper: "turno atual", icon: Clock, tone: "gold" as const },
     { title: "Saídas antecipadas", value: summary.earlyLeave, helper: "turno atual", icon: AlertTriangle, tone: "red" as const },
     { title: "Risco de Cobertura", value: summary.riskLevel, change: `${summary.gap}`, helper: "gap real", icon: ShieldCheck, tone: summary.riskLevel === "Crítico" ? "red" as const : "purple" as const }
@@ -1267,7 +1274,7 @@ export function OperationalCommandCenter() {
     gaps: Math.max(0, Math.abs(values.gap))
   }));
   const commandAlerts = [
-    ...(summary.unjustified ? [{ title: `${summary.unjustified} faltas/ocorrências sem justificativa`, status: "Atenção", tone: "orange" as const }] : []),
+    ...(summary.unjustified ? [{ title: `${summary.unjustified} faltas sem justificativa`, status: "Atenção", tone: "orange" as const }] : []),
     ...(summary.gap < 0 ? [{ title: `Gap real de ${summary.gap} pessoas`, status: summary.riskLevel, tone: "red" as const }] : []),
     ...(summary.late ? [{ title: `${summary.late} atrasos registrados`, status: "Info", tone: "blue" as const }] : [])
   ];
@@ -4634,12 +4641,11 @@ function RequestDetailContent({
   const dayOffKind = dayOffKindFromRequest(selected);
   const isProcessed = ["Recusado", "Concluído", "Cancelado"].includes(selected.status);
   const isApproved = selected.status === "Aprovado";
-  const isAdminLike = ["ADMIN", "GESTOR"].includes(actorRole);
-  const canSupervisorStep = selected.status === "Aberto" && (actorRole === "SUPERVISOR" || isAdminLike);
-  const canWfmFinal = selected.status === "Em análise" && (actorRole === "WFM" || isAdminLike);
+  const canSupervisorStep = selected.status === "Aberto" && Boolean(selected.canSupervisorStep);
+  const canWfmFinal = selected.status === "Em análise" && Boolean(selected.canWfmFinal);
   const canReject = canSupervisorStep || canWfmFinal;
-  const canConclude = selected.status === "Aprovado" && (actorRole === "WFM" || isAdminLike);
-  const canCancel = !isProcessed && !isApproved && ((actorRole === "COLABORADOR" && selected.status === "Aberto") || actorRole === "WFM" || isAdminLike);
+  const canConclude = selected.status === "Aprovado" && Boolean(selected.canWfmFinal);
+  const canCancel = !isProcessed && !isApproved && ((actorRole === "COLABORADOR" && selected.status === "Aberto") || Boolean(selected.canWfmFinal));
   const buttonsDisabled = Boolean(actionPending) || isProcessed;
   const actionInput = dayOffKind === "DAY_OFF_SELL" && canWfmFinal ? approvalData : undefined;
   const stageText: Record<string, string> = {
@@ -4665,6 +4671,14 @@ function RequestDetailContent({
         <MetricPill value={stageText[selected.status] ?? selected.status} label="Etapa atual" />
         {dayOffKind ? <MetricPill value={dayOffKindLabels[dayOffKind]} label="Modalidade" /> : null}
         {payload.scheduleApplicationStatus ? <MetricPill value={String(payload.scheduleApplicationStatus)} label="Aplicação no cronograma" /> : null}
+      </div>
+
+      <div className="grid gap-2 rounded-lg border border-border bg-white p-4 text-sm md:grid-cols-2">
+        <InfoLine label="WB/Login" value={selected.requesterWbLogin ?? "-"} />
+        <InfoLine label="LOB" value={selected.lob ?? "-"} />
+        <InfoLine label="Supervisor" value={selected.supervisor ?? "-"} />
+        <InfoLine label="Próxima etapa" value={selected.nextStep ?? stageText[selected.status] ?? selected.status} />
+        <InfoLine label="Responsável pela próxima etapa" value={selected.nextOwner ?? "-"} />
       </div>
 
       <div className="rounded-lg border border-border bg-slate-50 p-4 text-sm text-muted">
@@ -4767,7 +4781,17 @@ export function RequestsPage() {
   const [actionReason, setActionReason] = useState("");
   const [comment, setComment] = useState("");
   const [actionPending, setActionPending] = useState("");
-  const [filters, setFilters] = useState({ type: "Todos", status: "Todos", priority: "Todos", requester: "", assignee: "", date: "" });
+  const [filters, setFilters] = useState({
+    type: "Todos",
+    status: "Todos",
+    priority: "Todos",
+    requester: "",
+    collaborator: "",
+    lob: "Todos",
+    startDate: "",
+    endDate: "",
+    pendingAction: "false"
+  });
   const [newRequest, setNewRequest] = useState({
     type: "Troca de Folga",
     title: "Troca de Folga",
@@ -4797,7 +4821,7 @@ export function RequestsPage() {
   async function loadRequests(nextFilters = filters) {
     const params = new URLSearchParams();
     Object.entries(nextFilters).forEach(([key, value]) => {
-      if (value && value !== "Todos") params.set(key, value);
+      if (value && value !== "Todos" && value !== "false") params.set(key, value);
     });
 
     apiJson<{ data: ClientRequest[]; actor?: { role: string; name: string } }>(`/api/requests?${params.toString()}`)
@@ -4937,7 +4961,7 @@ export function RequestsPage() {
           </button>
         }
       />
-      <div className="card mb-5 grid gap-3 p-4 md:grid-cols-3 xl:grid-cols-6">
+      <div className="card mb-5 grid gap-3 p-4 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-10">
         <select value={filters.type} onChange={(event) => setFilters({ ...filters, type: event.target.value })} className="h-11 rounded-lg border border-border px-3 text-sm font-bold outline-none">
           {["Todos", ...requestTypes].map((type) => <option key={type}>{type}</option>)}
         </select>
@@ -4948,7 +4972,16 @@ export function RequestsPage() {
           {["Todos", ...requestPriorities].map((priority) => <option key={priority}>{priority}</option>)}
         </select>
         <input value={filters.requester} onChange={(event) => setFilters({ ...filters, requester: event.target.value })} className="h-11 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Solicitante" />
-        <input type="date" value={filters.date} onChange={(event) => setFilters({ ...filters, date: event.target.value })} className="h-11 rounded-lg border border-border px-3 text-sm outline-none" />
+        <input value={filters.collaborator} onChange={(event) => setFilters({ ...filters, collaborator: event.target.value })} className="h-11 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Colaborador ou WB/Login" />
+        <select value={filters.lob} onChange={(event) => setFilters({ ...filters, lob: event.target.value })} className="h-11 rounded-lg border border-border px-3 text-sm font-bold outline-none">
+          {["Todos", "ALL", "CEC", "TNS", "ADS"].map((lob) => <option key={lob}>{lob}</option>)}
+        </select>
+        <input type="date" value={filters.startDate} onChange={(event) => setFilters({ ...filters, startDate: event.target.value })} className="h-11 rounded-lg border border-border px-3 text-sm outline-none" aria-label="Data inicial" />
+        <input type="date" value={filters.endDate} onChange={(event) => setFilters({ ...filters, endDate: event.target.value })} className="h-11 rounded-lg border border-border px-3 text-sm outline-none" aria-label="Data final" />
+        <select value={filters.pendingAction} onChange={(event) => setFilters({ ...filters, pendingAction: event.target.value })} className="h-11 rounded-lg border border-border px-3 text-sm font-bold outline-none">
+          <option value="false">Todas as etapas</option>
+          <option value="true">Pendentes da minha ação</option>
+        </select>
         <button onClick={() => loadRequests(filters)} className="h-11 rounded-lg bg-navy-950 px-4 text-sm font-extrabold text-white">Atualizar</button>
       </div>
       {actionMessage ? (
@@ -5091,16 +5124,25 @@ export function RequestsKanbanPage() {
   const [actionReason, setActionReason] = useState("");
   const [comment, setComment] = useState("");
   const [actionPending, setActionPending] = useState("");
+  const [pendingActionFilter, setPendingActionFilter] = useState("false");
   const countByStatus = (status: string) => requests.filter((request) => request.status === status).length;
 
   useEffect(() => {
-    apiJson<{ data: ClientRequest[]; actor?: { role: string } }>("/api/requests")
+    void loadKanbanRequests();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function loadKanbanRequests(nextPendingAction = pendingActionFilter) {
+    const params = new URLSearchParams();
+    if (nextPendingAction === "true") params.set("pendingAction", "true");
+    apiJson<{ data: ClientRequest[]; actor?: { role: string } }>(`/api/requests?${params.toString()}`)
       .then((payload) => {
         setRequests(payload.data);
         setActorRole(payload.actor?.role ?? "ADMIN");
+        setSelected((current) => payload.data.find((request) => request.id === current?.id) ?? payload.data[0] ?? null);
       })
       .catch(() => setRequests([]));
-  }, []);
+  }
 
   async function moveStatus(id: string, status: string, actionInput?: Record<string, string>) {
     if (actionPending) return;
@@ -5149,7 +5191,28 @@ export function RequestsKanbanPage() {
 
   return (
     <div>
-      <PageHeader title="Esteiras de Solicitações" description="Acompanhe e gerencie as solicitações do time em todas as etapas do processo." icon={KanbanSquare} actions={<TopActions />} />
+      <PageHeader
+        title="Esteiras de Solicitações"
+        description="Acompanhe e gerencie as solicitações do time em todas as etapas do processo."
+        icon={KanbanSquare}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={pendingActionFilter}
+              onChange={(event) => {
+                const value = event.target.value;
+                setPendingActionFilter(value);
+                void loadKanbanRequests(value);
+              }}
+              className="h-10 rounded-lg border border-border bg-white px-3 text-sm font-bold outline-none"
+            >
+              <option value="false">Todas</option>
+              <option value="true">Pendentes da minha ação</option>
+            </select>
+            <TopActions />
+          </div>
+        }
+      />
       {actionMessage ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{actionMessage}</div> : null}
       <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         {[

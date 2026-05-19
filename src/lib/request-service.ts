@@ -65,6 +65,11 @@ export type RequestFilters = {
   requester?: string;
   assignee?: string;
   date?: string;
+  startDate?: string;
+  endDate?: string;
+  lob?: string;
+  collaborator?: string;
+  pendingAction?: string | boolean;
   scope?: "mine" | "all";
 };
 
@@ -107,7 +112,7 @@ export async function listOperationalRequests(actor: Actor, filters: RequestFilt
       orderBy: { createdAt: "desc" }
     });
 
-    return requests.map(mapPrismaRequest);
+    return requests.map((request) => mapPrismaRequest(request, user, actor));
   } catch (error) {
     recordErrorLog({
       userEmail: actor.email,
@@ -213,7 +218,7 @@ export async function createOperationalRequest(actor: Actor, input: CreateReques
       return created;
     });
 
-    return { data: mapPrismaRequest(request), persisted: true };
+    return { data: mapPrismaRequest(request, user, actor), persisted: true };
   } catch (error) {
     recordErrorLog({
       userEmail: actor.email,
@@ -374,7 +379,7 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
     });
 
     const historyMetadata = updated.history[0]?.metadata as { scheduleUpdated?: boolean } | null;
-    return { data: mapPrismaRequest(updated), scheduleUpdated: Boolean(historyMetadata?.scheduleUpdated), persisted: true };
+    return { data: mapPrismaRequest(updated, user, actor), scheduleUpdated: Boolean(historyMetadata?.scheduleUpdated), persisted: true };
   } catch (error) {
     if (error instanceof DomainError) {
       return { error: error.message };
@@ -454,7 +459,7 @@ export async function addOperationalRequestComment(actor: Actor, id: string, bod
       return tx.request.findUniqueOrThrow({ where: { id: existing.id }, include: requestInclude });
     });
 
-    return { data: mapPrismaRequest(updated), persisted: true };
+    return { data: mapPrismaRequest(updated, user, actor), persisted: true };
   } catch (error) {
     recordErrorLog({
       userEmail: actor.email,
@@ -475,7 +480,12 @@ const requestInclude = {
   type: true,
   requester: true,
   assignee: true,
-  employee: true,
+  employee: {
+    include: {
+      lob: true,
+      supervisor: true
+    }
+  },
   comments: {
     include: { author: true },
     orderBy: { createdAt: "desc" as const },
@@ -522,6 +532,7 @@ async function findActiveUser(email: string) {
 function buildRequestWhere(actor: Actor, user: ActiveUser, filters: RequestFilters) {
   const role = normalizeRole(actor.role);
   const where: Prisma.RequestWhereInput = { deletedAt: null };
+  const andFilters: Prisma.RequestWhereInput[] = [];
 
   if (filters.scope === "mine") {
     where.requesterId = user.id;
@@ -537,6 +548,20 @@ function buildRequestWhere(actor: Actor, user: ActiveUser, filters: RequestFilte
     where.assignedArea = "Qualidade";
   }
 
+  if (isPendingActionFilter(filters.pendingAction)) {
+    if (role === "SUPERVISOR") {
+      if (user.employeeProfile?.id) {
+        andFilters.push({ status: "ABERTO", employee: { supervisorId: user.employeeProfile.id } });
+      } else {
+        andFilters.push({ id: "__no_supervisor_profile__" });
+      }
+    } else if (role === "WFM") {
+      andFilters.push({ status: { in: ["EM_ANALISE", "AGUARDANDO_APROVACAO", "AJUSTE_SOLICITADO"] } });
+    } else if (["ADMIN", "GESTOR"].includes(role)) {
+      andFilters.push({ status: { in: [...pendingStatuses] } });
+    }
+  }
+
   if (filters.type && filters.type !== "Todos") where.type = { name: filters.type };
   if (filters.status && filters.status !== "Todos" && filters.status in uiToDbStatus) {
     const mapped = uiToDbStatus[filters.status as keyof typeof uiToDbStatus];
@@ -546,15 +571,52 @@ function buildRequestWhere(actor: Actor, user: ActiveUser, filters: RequestFilte
         : mapped;
   }
   if (filters.priority && filters.priority !== "Todos" && filters.priority in uiToDbPriority) where.priority = uiToDbPriority[filters.priority as UiPriority];
-  if (filters.requester) where.requester = { name: { contains: filters.requester, mode: "insensitive" } };
+  if (filters.requester) {
+    andFilters.push({
+      OR: [
+        { requester: { name: { contains: filters.requester, mode: "insensitive" } } },
+        { requester: { email: { contains: filters.requester, mode: "insensitive" } } }
+      ]
+    });
+  }
   if (filters.assignee) where.assignee = { name: { contains: filters.assignee, mode: "insensitive" } };
+  if (filters.lob && filters.lob !== "Todos") {
+    andFilters.push({ employee: { lob: { name: { equals: filters.lob, mode: "insensitive" } } } });
+  }
+  if (filters.collaborator) {
+    andFilters.push({
+      OR: [
+        { employee: { fullName: { contains: filters.collaborator, mode: "insensitive" } } },
+        { employee: { wbLogin: { contains: filters.collaborator, mode: "insensitive" } } },
+        { requester: { name: { contains: filters.collaborator, mode: "insensitive" } } },
+        { requester: { email: { contains: filters.collaborator, mode: "insensitive" } } }
+      ]
+    });
+  }
   if (filters.date) {
     const start = new Date(`${filters.date}T00:00:00`);
     const end = new Date(`${filters.date}T23:59:59`);
     if (!Number.isNaN(start.getTime())) where.createdAt = { gte: start, lte: end };
+  } else if (filters.startDate || filters.endDate) {
+    const range: Prisma.DateTimeFilter = {};
+    if (filters.startDate) {
+      const start = new Date(`${filters.startDate}T00:00:00`);
+      if (!Number.isNaN(start.getTime())) range.gte = start;
+    }
+    if (filters.endDate) {
+      const end = new Date(`${filters.endDate}T23:59:59`);
+      if (!Number.isNaN(end.getTime())) range.lte = end;
+    }
+    if (Object.keys(range).length) where.createdAt = range;
   }
 
+  if (andFilters.length) where.AND = andFilters;
+
   return where;
+}
+
+function isPendingActionFilter(value: RequestFilters["pendingAction"]) {
+  return value === true || value === "true" || value === "1" || value === "sim";
 }
 
 function canViewRequest(actor: Actor, user: ActiveUser, request: PrismaRequest) {
@@ -585,6 +647,7 @@ function resolveRequestTransition(actor: Actor, user: ActiveUser, request: Prism
   const isTeamSupervisor = Boolean(user.employeeProfile?.id && request.employee?.supervisorId === user.employeeProfile.id);
   const isSupervisorStep = supervisorStepRoles.includes(role) && (role !== "SUPERVISOR" || isTeamSupervisor);
   const isFinalApprover = wfmFinalRoles.includes(role);
+  const isAdminLike = ["ADMIN", "GESTOR"].includes(role);
   const target = uiToDbStatus[targetStatus as keyof typeof uiToDbStatus];
 
   if ((terminalFlowStatuses as readonly string[]).includes(current) && !(current === "APROVADO" && target === "CONCLUIDO" && isFinalApprover)) {
@@ -626,6 +689,7 @@ function resolveRequestTransition(actor: Actor, user: ActiveUser, request: Prism
     }
 
     if (current === "EM_ANALISE") {
+      if (role === "SUPERVISOR") return { error: "Supervisor pode aprovar apenas a primeira etapa da solicitação." };
       if (!isFinalApprover) return "FORBIDDEN";
       return {
         nextStatus: "APROVADO",
@@ -645,8 +709,14 @@ function resolveRequestTransition(actor: Actor, user: ActiveUser, request: Prism
   }
 
   if (target === "RECUSADO") {
-    if (current === "ABERTO" && !isSupervisorStep && !isFinalApprover) return "FORBIDDEN";
-    if (current === "EM_ANALISE" && !isFinalApprover) return "FORBIDDEN";
+    if (current === "ABERTO") {
+      if (role === "WFM") return { error: "A solicitação precisa da primeira aprovação do supervisor antes da decisão final do WFM." };
+      if (!isSupervisorStep && !isAdminLike) return "FORBIDDEN";
+    }
+    if (current === "EM_ANALISE") {
+      if (role === "SUPERVISOR") return { error: "Supervisor pode aprovar apenas a primeira etapa da solicitação." };
+      if (!isFinalApprover) return "FORBIDDEN";
+    }
     return {
       nextStatus: "RECUSADO",
       applySchedule: false,
@@ -662,6 +732,7 @@ function resolveRequestTransition(actor: Actor, user: ActiveUser, request: Prism
   }
 
   if (target === "CONCLUIDO") {
+    if (role === "SUPERVISOR") return { error: "Supervisor pode aprovar apenas a primeira etapa da solicitação." };
     if (current !== "APROVADO" || !isFinalApprover) return "FORBIDDEN";
     return {
       nextStatus: "CONCLUIDO",
@@ -714,18 +785,30 @@ function normalizeDbRequestStatus(status: string): DbRequestStatus {
   return (Object.values(uiToDbStatus) as string[]).includes(status) ? (status as DbRequestStatus) : "ABERTO";
 }
 
-function mapPrismaRequest(request: PrismaRequest): RequestRecord {
+function mapPrismaRequest(request: PrismaRequest, user?: ActiveUser, actor?: Actor): RequestRecord {
   const payload = (request.payload ?? {}) as Record<string, unknown>;
+  const role = normalizeRole(actor?.role);
+  const isAdminLike = ["ADMIN", "GESTOR"].includes(role);
+  const isTeamSupervisor = Boolean(user?.employeeProfile?.id && request.employee?.supervisorId === user.employeeProfile.id);
+  const canSupervisorStep = isAdminLike || (role === "SUPERVISOR" && isTeamSupervisor);
+  const canWfmFinal = isAdminLike || role === "WFM";
   return {
     id: request.code,
     type: request.type.name,
     title: request.title,
     requester: request.requester.name,
     requesterEmail: request.requester.email,
+    requesterWbLogin: request.employee?.wbLogin,
+    lob: request.employee?.lob?.name,
+    supervisor: request.employee?.supervisor?.fullName,
     priority: dbToUiPriority[request.priority] ?? "Média",
     status: dbToUiStatus[request.status] ?? "Aberto",
     area: request.assignedArea,
     assignee: request.assignee?.name,
+    nextStep: nextStepForRequest(request.status),
+    nextOwner: nextOwnerForRequest(request),
+    canSupervisorStep,
+    canWfmFinal,
     time: formatDateTime(request.createdAt),
     description: request.description,
     payload,
@@ -743,6 +826,25 @@ function mapPrismaRequest(request: PrismaRequest): RequestRecord {
     createdAt: formatDateTime(request.createdAt),
     updatedAt: formatDateTime(request.updatedAt)
   };
+}
+
+function nextStepForRequest(status: string) {
+  const normalized = normalizeDbRequestStatus(status);
+  if (normalized === "ABERTO") return "Aprovação do supervisor";
+  if (normalized === "EM_ANALISE") return "Análise final WFM";
+  if (normalized === "APROVADO") return "Conclusão administrativa";
+  if (normalized === "RECUSADO") return "Encerrada por recusa";
+  if (normalized === "CANCELADO") return "Cancelada";
+  if (normalized === "CONCLUIDO") return "Concluída";
+  return "Acompanhar";
+}
+
+function nextOwnerForRequest(request: PrismaRequest) {
+  const normalized = normalizeDbRequestStatus(request.status);
+  if (normalized === "ABERTO") return request.employee?.supervisor?.fullName ?? "Supervisor responsável";
+  if (normalized === "EM_ANALISE") return "WFM";
+  if (normalized === "APROVADO") return "WFM/Admin";
+  return "Sem próxima ação";
 }
 
 function validateCreateInput(input: CreateRequestInput) {

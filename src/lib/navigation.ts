@@ -11,7 +11,7 @@ const allRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "COLABORADOR", "WF
 const leadership: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"];
 const adminOps: AppRole[] = ["ADMIN", "GESTOR"];
 const peopleOps: AppRole[] = ["ADMIN", "GESTOR", "RH", "WFM"];
-const authenticatedOps: AppRole[] = ["ADMIN", "GESTOR", "WFM", "QUALIDADE", "RH", "TI"];
+const authenticatedOps: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI"];
 
 export const navItems: NavItem[] = [
   { label: "Central Operacional", href: "/central-operacional", icon: "LayoutDashboard", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI"] },

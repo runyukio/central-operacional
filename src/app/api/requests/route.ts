@@ -35,6 +35,11 @@ export async function GET(request: Request) {
     requester: url.searchParams.get("requester") ?? undefined,
     assignee: url.searchParams.get("assignee") ?? undefined,
     date: url.searchParams.get("date") ?? undefined,
+    startDate: url.searchParams.get("startDate") ?? undefined,
+    endDate: url.searchParams.get("endDate") ?? undefined,
+    lob: url.searchParams.get("lob") ?? undefined,
+    collaborator: url.searchParams.get("collaborator") ?? undefined,
+    pendingAction: url.searchParams.get("pendingAction") ?? undefined,
     scope: url.searchParams.get("scope") === "mine" ? "mine" : "all"
   });
   return NextResponse.json({ data, actor: { role: actor.role, name: actor.name } });

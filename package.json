@@ -23,6 +23,7 @@
     "db:reset-admin": "tsx prisma/reset-admin.ts",
     "db:cleanup-shifts": "tsx prisma/cleanup-shifts.ts",
     "db:migrate-ausente-to-falta": "tsx scripts/migrate-ausente-to-falta.ts",
+    "db:reconcile-attendance": "tsx scripts/reconcile-attendance-justifications.ts",
     "seed:demo": "tsx prisma/seed.ts",
     "seed:prod": "tsx prisma/seed-prod.ts",
     "seed:local": "tsx prisma/seed-prod.ts",

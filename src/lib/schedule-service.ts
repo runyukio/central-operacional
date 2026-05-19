@@ -1149,10 +1149,10 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
     const supervisorFilter = query.supervisor?.trim();
     const collaboratorFilter = query.collaborator?.trim();
     const shiftFilter = cleanShiftName(query.shift);
-    const statusFilter = query.status && query.status !== "Todos" ? uiToAttendanceStatus[query.status] : undefined;
+    const statusFilter = query.status && query.status !== "Todos" ? uiToScheduleStatus[query.status] : undefined;
     const reasonFilter = query.reason?.trim();
     const includeJustified = query.includeJustified === true || query.includeJustified === "true";
-    const extraFilters: Prisma.AttendanceRecordWhereInput[] = [];
+    const extraFilters: Prisma.ScheduleWhereInput[] = [];
     if (lobFilter) extraFilters.push({ employee: { lob: { name: lobFilter } } });
     if (supervisorFilter) extraFilters.push({ employee: { supervisor: { fullName: { contains: supervisorFilter, mode: "insensitive" } } } });
     if (statusFilter) extraFilters.push({ status: statusFilter });
@@ -1169,71 +1169,85 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
       extraFilters.push({
         OR: [
           { shift: { name: { startsWith: shiftFilter, mode: "insensitive" } } },
-          { schedule: { shift: { name: { startsWith: shiftFilter, mode: "insensitive" } } } },
           { employee: { shift: { name: { startsWith: shiftFilter, mode: "insensitive" } } } }
         ]
       });
     }
-    const baseWhere: Prisma.AttendanceRecordWhereInput = {
+    const baseWhere: Prisma.ScheduleWhereInput = {
+      deletedAt: null,
       ...(period ? { date: { gte: period.start, lte: period.end } } : {}),
       ...(extraFilters.length ? { AND: extraFilters } : {})
     };
-    let attendanceWhere: Prisma.AttendanceRecordWhereInput =
+    let scheduleWhere: Prisma.ScheduleWhereInput =
       role === "COLABORADOR" && user.employeeProfile
         ? { ...baseWhere, employeeId: user.employeeProfile.id }
         : baseWhere;
     let summaryTeamSupervisorId: string | undefined;
     if (role === "SUPERVISOR" && user.employeeProfile) {
-      const ownTeamRecords = await prisma.attendanceRecord.count({
+      const ownTeamRecords = await prisma.schedule.count({
         where: { ...baseWhere, employee: { supervisorId: user.employeeProfile.id } }
       });
       summaryTeamSupervisorId = ownTeamRecords ? user.employeeProfile.id : undefined;
-      attendanceWhere = ownTeamRecords
+      scheduleWhere = ownTeamRecords
         ? { ...baseWhere, employee: { supervisorId: user.employeeProfile.id } }
         : baseWhere;
     }
-    const records = await prisma.attendanceRecord.findMany({
-      where: attendanceWhere,
+    const schedules = await prisma.schedule.findMany({
+      where: scheduleWhere,
       include: {
         shift: true,
         employee: { include: { shift: true, lob: true, supervisor: true, user: { select: { email: true } } } },
-        registeredBy: true,
-        justifiedBy: true,
-        schedule: { select: { id: true, status: true, deletedAt: true, shift: { select: { name: true } } } }
+        attendanceRecords: {
+          orderBy: { updatedAt: "desc" },
+          take: 1,
+          include: {
+            registeredBy: true,
+            justifiedBy: true
+          }
+        }
       },
-      orderBy: { registeredAt: "desc" },
+      orderBy: [{ date: "desc" }, { employee: { fullName: "asc" } }],
       take: includeJustified || reasonFilter ? 500 : 100
     });
-    const activeRecords = records.filter(includeJustified || reasonFilter ? isActiveJustificationRecord : isActivePendingJustificationRecord);
-    const recordsByReason = reasonFilter
-      ? activeRecords.filter((record) => attendanceReasonLabel(record) === reasonFilter)
-      : activeRecords;
+    const activeSchedules = schedules.filter((schedule) => {
+      const record = schedule.attendanceRecords[0];
+      if (includeJustified || reasonFilter) {
+        if (!isAbsenceStatus(schedule.status)) return false;
+        return reasonFilter ? attendanceReasonForSchedule(schedule.status, record) === reasonFilter : true;
+      }
+      return isPendingJustificationForSchedule(schedule.status, record);
+    });
 
     return {
-      data: recordsByReason.map((record) => ({
-        id: record.id,
-        employeeId: record.employeeId,
-        employeeName: record.employee.fullName,
-        wbLogin: record.employee.wbLogin,
-        date: formatDate(record.date),
-        dateIso: record.date.toISOString().slice(0, 10),
-        scheduleId: record.scheduleId ?? record.schedule?.id ?? undefined,
-        shift: cleanShiftName(record.schedule?.shift?.name ?? record.shift?.name ?? record.employee.shift.name) || "Sem turno",
-        lob: record.employee.lob.name,
-        supervisor: record.employee.supervisor?.fullName ?? "Sem supervisor",
-        status: scheduleToUiStatus[record.status] ?? record.status,
-        absenceReason: record.absenceReason ?? undefined,
-        reasonCategory: record.reasonCategory ?? undefined,
-        supervisorJustification: record.supervisorJustification ?? undefined,
-        isJustified: record.isJustified,
-        impactsAbs: record.impactsAbs,
-        impactsCoverage: record.impactsCoverage,
-        registeredBy: record.registeredBy?.name ?? "Sistema",
-        registeredAt: formatDateTime(record.registeredAt),
-        justifiedBy: record.justifiedBy?.name ?? undefined,
-        justifiedAt: record.justifiedAt ? formatDateTime(record.justifiedAt) : undefined,
-        updatedAt: formatDateTime(record.updatedAt)
-      })),
+      data: activeSchedules.map((schedule) => {
+        const record = schedule.attendanceRecords[0];
+        const status = scheduleToUiStatus[schedule.status] ?? schedule.status;
+        const validJustification = hasValidJustification(record);
+        return {
+          id: record?.id ?? `schedule:${schedule.id}`,
+          employeeId: schedule.employeeId,
+          employeeName: schedule.employee.fullName,
+          wbLogin: schedule.employee.wbLogin,
+          date: formatDate(schedule.date),
+          dateIso: schedule.date.toISOString().slice(0, 10),
+          scheduleId: schedule.id,
+          shift: cleanShiftName(schedule.shift?.name ?? schedule.employee.shift.name) || "Sem turno",
+          lob: schedule.employee.lob.name,
+          supervisor: schedule.employee.supervisor?.fullName ?? "Sem supervisor",
+          status,
+          absenceReason: attendanceReasonForSchedule(schedule.status, record),
+          reasonCategory: validJustification ? record?.reasonCategory ?? undefined : undefined,
+          supervisorJustification: validJustification ? record?.supervisorJustification ?? undefined : undefined,
+          isJustified: validJustification,
+          impactsAbs: isAbsenceStatus(schedule.status),
+          impactsCoverage: impactsCoverage(status),
+          registeredBy: record?.registeredBy?.name ?? "Sistema",
+          registeredAt: record ? formatDateTime(record.registeredAt) : formatDateTime(schedule.updatedAt),
+          justifiedBy: validJustification ? record?.justifiedBy?.name ?? undefined : undefined,
+          justifiedAt: validJustification && record?.justifiedAt ? formatDateTime(record.justifiedAt) : undefined,
+          updatedAt: formatDateTime(record?.updatedAt ?? schedule.updatedAt)
+        };
+      }),
       summary: await getAttendanceSummaryFromDb(period, {
         lob: lobFilter,
         supervisor: query.supervisor,
@@ -1367,9 +1381,24 @@ function isActivePendingJustificationRecord(record: { status: AttendanceStatus |
   return isActiveJustificationRecord(record);
 }
 
-function attendanceReasonLabel(record: { absenceReason: string | null }) {
-  const reason = record.absenceReason?.trim();
-  return reason || "Sem justificativa";
+function hasValidJustification(record?: { isJustified: boolean; absenceReason: string | null } | null) {
+  if (!record?.isJustified) return false;
+  return attendanceReasonLabel(record) !== "Sem justificativa";
+}
+
+function isPendingJustificationForSchedule(status: ScheduleStatus | AttendanceStatus | string, record?: { isJustified: boolean; absenceReason: string | null } | null) {
+  if (!scheduleStatusRequiresJustification(status)) return false;
+  return !hasValidJustification(record);
+}
+
+function attendanceReasonLabel(record?: { absenceReason: string | null } | null) {
+  const reason = record?.absenceReason?.trim();
+  return reason && reason !== "Sem justificativa" ? reason : "Sem justificativa";
+}
+
+function attendanceReasonForSchedule(status: ScheduleStatus | AttendanceStatus | string, record?: { isJustified: boolean; absenceReason: string | null } | null) {
+  if (!isAbsenceStatus(status)) return attendanceReasonLabel(record);
+  return hasValidJustification(record) ? attendanceReasonLabel(record) : "Sem justificativa";
 }
 
 async function validateImportRowsInDb(rows: Array<Record<string, unknown>>): Promise<ScheduleImportValidation[]> {
@@ -1829,6 +1858,8 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
       shift: { select: { name: true } },
       employee: { select: { shift: { select: { name: true } } } },
       attendanceRecords: {
+        orderBy: { updatedAt: "desc" },
+        take: 1,
         select: {
           status: true,
           absenceReason: true,
@@ -1839,32 +1870,15 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
       }
     }
   });
-  const effectiveStatus = (schedule: (typeof schedules)[number]) => {
-    if (!scheduleStatusRequiresJustification(schedule.status)) return schedule.status;
-    const latest = [...schedule.attendanceRecords].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
-    return latest?.status ?? schedule.status;
-  };
-  const statusFor = (schedule: (typeof schedules)[number]) => normalizeOperationalStatus(effectiveStatus(schedule));
+  const statusFor = (schedule: (typeof schedules)[number]) => normalizeOperationalStatus(schedule.status);
   const planned = schedules.filter((schedule) => isScheduledStatus(statusFor(schedule))).length;
   const present = schedules.filter((schedule) => isPresentStatus(statusFor(schedule))).length;
   const absent = schedules.filter((schedule) => isAbsenceStatus(statusFor(schedule))).length;
   const coverageRate = calculateCoverageRate(planned, present);
   const absRate = calculateAbsenceRate(planned, absent);
-  const attendanceRecords = schedules.flatMap((schedule) => {
-    if (!scheduleStatusRequiresJustification(schedule.status)) return [];
-    const latest = [...schedule.attendanceRecords]
-      .filter((record) => scheduleStatusRequiresJustification(record.status))
-      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
-    return [
-      latest ?? {
-        status: schedule.status,
-        absenceReason: null,
-        impactsAbs: isAbsenceStatus(normalizeOperationalStatus(schedule.status)),
-        isJustified: false,
-        updatedAt: new Date(0)
-      }
-    ];
-  });
+  const absenceSchedules = schedules
+    .filter((schedule) => isAbsenceStatus(statusFor(schedule)))
+    .map((schedule) => ({ schedule, record: schedule.attendanceRecords[0] }));
   const byShift = schedules.reduce<Record<string, { planned: number; present: number; absent: number; gap: number }>>((acc, schedule) => {
     const shiftName = cleanShiftName(schedule.shift?.name ?? schedule.employee.shift?.name) || "Sem turno";
     const status = statusFor(schedule);
@@ -1875,11 +1889,12 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     acc[shiftName].gap = acc[shiftName].present - acc[shiftName].planned;
     return acc;
   }, {});
-  const byReason = attendanceRecords.reduce<Record<string, number>>((acc, record) => {
-    const key = attendanceReasonLabel(record);
+  const byReason = absenceSchedules.reduce<Record<string, number>>((acc, item) => {
+    const key = attendanceReasonForSchedule(item.schedule.status, item.record);
     acc[key] = (acc[key] ?? 0) + 1;
     return acc;
   }, {});
+  const unjustified = absenceSchedules.filter((item) => isPendingJustificationForSchedule(item.schedule.status, item.record)).length;
   return {
     planned,
     present,
@@ -1887,7 +1902,7 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     absRate,
     late: schedules.filter((schedule) => statusFor(schedule) === "ATRASO").length,
     earlyLeave: schedules.filter((schedule) => statusFor(schedule) === "SAIDA_ANTECIPADA").length,
-    unjustified: attendanceRecords.filter((record) => record.impactsAbs && !record.isJustified).length,
+    unjustified,
     coverageRate,
     gap: present - planned,
     riskLevel: coverageRate >= 95 ? "Excelente" : coverageRate >= 90 ? "Adequado" : coverageRate >= 85 ? "Atenção" : "Crítico",
