@@ -1322,13 +1322,6 @@ export function OperationalCommandCenter() {
   const commandAbsenceReasons = Object.entries(summary.byReason)
     .filter(([, value]) => value > 0)
     .map(([name, value], index) => ({ name, value, fill: ["#071B3A", "#14B8A6", "#F59E0B", "#7C3AED", "#94A3B8"][index % 5] }));
-  const commandGapByShift = Object.entries(summary.byShift ?? {}).map(([shift, values]) => ({
-    shift,
-    planned: values.planned,
-    present: values.present,
-    gap: values.present - values.planned,
-    status: values.present >= values.planned ? "Coberto" : "Gap"
-  }));
   const commandSupervisorOptions = ["Todos", ...Array.from(new Set(["Sem supervisor", ...Object.keys(summary.bySupervisor ?? {}), selectedCommandSupervisor].filter((value) => value && value !== "Todos")))];
   const commandAbsBySupervisor = Object.entries(summary.bySupervisor ?? {})
     .map(([supervisor, values]) => ({ supervisor, ...values }))
@@ -1404,7 +1397,7 @@ export function OperationalCommandCenter() {
           )
         ))}
       </div>
-      <div className="grid gap-5 xl:grid-cols-2 2xl:grid-cols-4">
+      <div className="grid gap-5 xl:grid-cols-3">
         <Panel title="Presença por Turno">
           {commandPresenceByShift.length ? <div className="h-[280px]">
             <ResponsiveContainer width="100%" height="100%">
@@ -1421,29 +1414,6 @@ export function OperationalCommandCenter() {
           <div className="mt-4 rounded-lg bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
             {summary.planned ? `Cobertura real atual: ${summary.coverageRate}%` : "Sem cronograma importado para o período de teste."}
           </div>
-        </Panel>
-
-        <Panel title="Gaps por Turno">
-          {commandGapByShift.length ? (
-            <div className="space-y-2">
-              {commandGapByShift.map((item) => (
-                <div key={item.shift} className="rounded-lg border border-border bg-white p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="font-extrabold text-navy-950">{item.shift}</p>
-                    <span className={cn("rounded-md px-2 py-1 text-xs font-black", item.gap < 0 ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700")}>
-                      {item.status}
-                    </span>
-                  </div>
-                  <div className="mt-3 grid grid-cols-4 gap-2 text-center">
-                    <MetricMini label="Meta" value="Sem meta" />
-                    <MetricMini label="Escalado" value={item.planned} />
-                    <MetricMini label="Real" value={item.present} />
-                    <MetricMini label="Gap" value={item.gap} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : <EmptyState title="Sem gap por turno" description="Os gaps serão exibidos quando houver cronogramas reais no período selecionado." />}
         </Panel>
 
         <Panel title="Ausências por Motivo">
