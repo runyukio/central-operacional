@@ -60,10 +60,15 @@ export type EquipmentQuery = {
   status?: string;
   type?: string;
   search?: string;
+  serialNumber?: string;
   responsible?: string;
+  responsibleId?: string;
+  wbLogin?: string;
   model?: string;
   deliveredFrom?: string;
   deliveredTo?: string;
+  deliveryDateFrom?: string;
+  deliveryDateTo?: string;
 };
 
 export type EquipmentPreviewRow = {
@@ -172,16 +177,23 @@ export async function listEquipment(actor: Actor, query: EquipmentQuery = {}) {
   if (!user || !canViewEquipmentRole(user.role.name)) return { data: [], summary: emptyEquipmentSummary(), canManage: false };
 
   const search = query.search?.trim();
+  const serialNumber = query.serialNumber?.trim();
   const responsible = query.responsible?.trim();
+  const responsibleId = query.responsibleId?.trim();
+  const wbLogin = query.wbLogin?.trim();
   const status = query.status && query.status !== "Todos" ? normalizeStatus(query.status) : null;
   const type = query.type && query.type !== "Todos" ? query.type : undefined;
   const model = query.model?.trim();
-  const deliveredFrom = parseDate(query.deliveredFrom);
-  const deliveredTo = parseDate(query.deliveredTo);
+  const deliveredFrom = parseDate(query.deliveredFrom ?? query.deliveryDateFrom);
+  const rawDeliveredTo = parseDate(query.deliveredTo ?? query.deliveryDateTo);
+  const deliveredTo = rawDeliveredTo ? new Date(Date.UTC(rawDeliveredTo.getUTCFullYear(), rawDeliveredTo.getUTCMonth(), rawDeliveredTo.getUTCDate(), 23, 59, 59, 999)) : null;
   const filters: Prisma.EquipmentWhereInput[] = [];
   if (status) filters.push({ status });
   if (type) filters.push({ type });
   if (model) filters.push({ model: { contains: model, mode: "insensitive" } });
+  if (serialNumber) filters.push({ OR: [{ code: { contains: serialNumber, mode: "insensitive" } }, { serial: { contains: serialNumber, mode: "insensitive" } }] });
+  if (responsibleId) filters.push({ employeeId: responsibleId });
+  if (wbLogin) filters.push({ employee: { wbLogin: { contains: wbLogin, mode: "insensitive" } } });
   if (responsible) {
     filters.push({
       employee: {
@@ -209,7 +221,7 @@ export async function listEquipment(actor: Actor, query: EquipmentQuery = {}) {
   if (normalizeRole(user.role.name) === "SUPERVISOR" && user.employeeProfile) filters.push({ employee: { supervisorId: user.employeeProfile.id } });
 
   const where: Prisma.EquipmentWhereInput = { deletedAt: null, ...(filters.length ? { AND: filters } : {}) };
-  const [rows, allActive] = await Promise.all([
+  const [rows, filteredEquipment] = await Promise.all([
     prisma.equipment.findMany({
       where,
       include: {
@@ -219,18 +231,18 @@ export async function listEquipment(actor: Actor, query: EquipmentQuery = {}) {
       orderBy: { updatedAt: "desc" },
       take: 300
     }),
-    prisma.equipment.findMany({ where: { deletedAt: null }, select: { status: true, employeeId: true } })
+    prisma.equipment.findMany({ where, select: { status: true, employeeId: true } })
   ]);
 
   return {
     data: rows.map(formatEquipment),
     summary: {
-      total: allActive.length,
-      inUse: allActive.filter((item) => ["ENTREGUE", "FUNCIONANDO"].includes(item.status)).length,
-      available: allActive.filter((item) => item.status === "DISPONIVEL").length,
-      maintenance: allActive.filter((item) => ["EM_MANUTENCAO", "EM_ATENCAO", "INOPERANTE"].includes(item.status)).length,
-      returned: allActive.filter((item) => ["DEVOLVIDO", "SUBSTITUIDO"].includes(item.status)).length,
-      pending: allActive.filter((item) => !item.employeeId || ["PERDIDO", "BLOQUEADO"].includes(item.status)).length
+      total: filteredEquipment.length,
+      inUse: filteredEquipment.filter((item) => ["ENTREGUE", "FUNCIONANDO"].includes(item.status)).length,
+      available: filteredEquipment.filter((item) => item.status === "DISPONIVEL").length,
+      maintenance: filteredEquipment.filter((item) => ["EM_MANUTENCAO", "EM_ATENCAO", "INOPERANTE"].includes(item.status)).length,
+      returned: filteredEquipment.filter((item) => ["DEVOLVIDO", "SUBSTITUIDO"].includes(item.status)).length,
+      pending: filteredEquipment.filter((item) => !item.employeeId || ["PERDIDO", "BLOQUEADO"].includes(item.status)).length
     },
     canManage: canManageEquipmentRole(user.role.name)
   };

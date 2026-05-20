@@ -6580,7 +6580,9 @@ export function EquipmentPage() {
   const [summary, setSummary] = useState<EquipmentSummary>({ total: 0, inUse: 0, available: 0, maintenance: 0, returned: 0, pending: 0 });
   const [canManage, setCanManage] = useState(false);
   const [equipmentMessage, setEquipmentMessage] = useState("");
-  const [equipmentFilters, setEquipmentFilters] = useState({ search: "", status: "Todos", type: "Todos", responsible: "", model: "" });
+  const emptyEquipmentFilters = { search: "", serialNumber: "", status: "Todos", type: "Todos", responsible: "", model: "", deliveredFrom: "", deliveredTo: "" };
+  const [equipmentFilters, setEquipmentFilters] = useState(emptyEquipmentFilters);
+  const [appliedEquipmentFilters, setAppliedEquipmentFilters] = useState(emptyEquipmentFilters);
   const [equipmentForm, setEquipmentForm] = useState({
     id: "",
     numeroSerie: "",
@@ -6609,6 +6611,7 @@ export function EquipmentPage() {
     setRows(payload.data);
     setSummary(payload.summary);
     setCanManage(payload.canManage);
+    setAppliedEquipmentFilters(filters);
   }
 
   async function saveEquipmentForm() {
@@ -6688,9 +6691,26 @@ export function EquipmentPage() {
 
   const equipmentTypes = ["Todos", "Notebook", "Desktop", "Monitor", "Headset", "Mouse", "Teclado", "Cadeira", "Celular", "Outro"];
   const equipmentStatuses = ["Todos", "Disponível", "Em uso", "Em manutenção", "Devolvido", "Extraviado", "Inativo"];
+  const activeEquipmentFilters = [
+    appliedEquipmentFilters.search.trim() ? `Busca: ${appliedEquipmentFilters.search.trim()}` : "",
+    appliedEquipmentFilters.serialNumber.trim() ? `Série: ${appliedEquipmentFilters.serialNumber.trim()}` : "",
+    appliedEquipmentFilters.status !== "Todos" ? `Status: ${appliedEquipmentFilters.status}` : "",
+    appliedEquipmentFilters.type !== "Todos" ? `Tipo: ${appliedEquipmentFilters.type}` : "",
+    appliedEquipmentFilters.responsible.trim() ? `Responsável: ${appliedEquipmentFilters.responsible.trim()}` : "",
+    appliedEquipmentFilters.model.trim() ? `Modelo: ${appliedEquipmentFilters.model.trim()}` : "",
+    appliedEquipmentFilters.deliveredFrom ? `Entrega inicial: ${appliedEquipmentFilters.deliveredFrom}` : "",
+    appliedEquipmentFilters.deliveredTo ? `Entrega final: ${appliedEquipmentFilters.deliveredTo}` : ""
+  ].filter(Boolean);
+  const hasEquipmentFilters = activeEquipmentFilters.length > 0;
+  const equipmentCardContext = hasEquipmentFilters ? activeEquipmentFilters.length === 1 ? activeEquipmentFilters[0] : "Filtros aplicados" : "Base completa";
+  const equipmentCardHelper = (defaultHelper: string) => hasEquipmentFilters ? equipmentCardContext : defaultHelper;
+  function clearEquipmentFilters() {
+    setEquipmentFilters(emptyEquipmentFilters);
+    void refreshEquipment(emptyEquipmentFilters);
+  }
   const equipmentExportUrl = () => {
     const params = new URLSearchParams();
-    Object.entries(equipmentFilters).forEach(([key, value]) => {
+    Object.entries(appliedEquipmentFilters).forEach(([key, value]) => {
       if (value && value !== "Todos") params.set(key, value);
     });
     return `/api/equipment/export?${params.toString()}`;
@@ -6702,29 +6722,50 @@ export function EquipmentPage() {
       {equipmentMessage ? (
         <div className="mb-5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700">{equipmentMessage}</div>
       ) : null}
-      <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <StatCard title="Total de equipamentos" value={summary.total} helper="base real cadastrada" icon={Laptop} tone="blue" />
-        <StatCard title="Em uso" value={summary.inUse} helper="vinculados a responsável" icon={CheckCircle2} tone="green" />
-        <StatCard title="Disponíveis" value={summary.available} helper="prontos para entrega" icon={Laptop} tone="cyan" />
-        <StatCard title="Em manutenção" value={summary.maintenance} helper="atenção logística" icon={Wrench} tone="orange" />
-        <StatCard title="Pendências" value={summary.pending} helper="sem responsável/inativo" icon={AlertTriangle} tone="red" />
+      <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+        <StatCard title={hasEquipmentFilters ? "Total filtrado" : "Total de equipamentos"} value={summary.total} helper={equipmentCardContext} icon={Laptop} tone="blue" />
+        <StatCard title="Em uso" value={summary.inUse} helper={equipmentCardHelper("vinculados a responsável")} icon={CheckCircle2} tone="green" />
+        <StatCard title="Disponíveis" value={summary.available} helper={equipmentCardHelper("prontos para entrega")} icon={Laptop} tone="cyan" />
+        <StatCard title="Em manutenção" value={summary.maintenance} helper={equipmentCardHelper("atenção logística")} icon={Wrench} tone="orange" />
+        <StatCard title="Devolvidos" value={summary.returned} helper={equipmentCardHelper("retornados ao estoque")} icon={RefreshCw} tone="purple" />
+        <StatCard title="Sem responsável / Pendentes" value={summary.pending} helper={equipmentCardHelper("sem responsável/inativo")} icon={AlertTriangle} tone="red" />
       </div>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
         <Panel title="Equipamentos">
           {canManage ? <input ref={equipmentFileInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(event) => void previewEquipmentFile(event.target.files?.[0])} /> : null}
-          <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
             <div className="flex h-10 items-center gap-2 rounded-lg border border-border px-3 xl:col-span-2">
               <Search className="h-4 w-4 text-muted" />
               <input value={equipmentFilters.search} onChange={(event) => setEquipmentFilters({ ...equipmentFilters, search: event.target.value })} className="min-w-0 flex-1 text-sm outline-none" placeholder="Pesquisar série, modelo ou responsável" />
             </div>
+            <input value={equipmentFilters.serialNumber} onChange={(event) => setEquipmentFilters({ ...equipmentFilters, serialNumber: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Número de série" />
             <select value={equipmentFilters.status} onChange={(event) => setEquipmentFilters({ ...equipmentFilters, status: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
               {equipmentStatuses.map((status) => <option key={status}>{status}</option>)}
             </select>
             <select value={equipmentFilters.type} onChange={(event) => setEquipmentFilters({ ...equipmentFilters, type: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
               {equipmentTypes.map((type) => <option key={type}>{type}</option>)}
             </select>
-            <button onClick={() => void refreshEquipment()} className="h-10 rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
+            <input value={equipmentFilters.responsible} onChange={(event) => setEquipmentFilters({ ...equipmentFilters, responsible: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Responsável ou WB/Login" />
+            <input value={equipmentFilters.model} onChange={(event) => setEquipmentFilters({ ...equipmentFilters, model: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Modelo" />
+            <label className="block">
+              <span className="sr-only">Entrega inicial</span>
+              <input type="date" value={equipmentFilters.deliveredFrom} onChange={(event) => setEquipmentFilters({ ...equipmentFilters, deliveredFrom: event.target.value })} className="h-10 w-full rounded-lg border border-border px-3 text-sm outline-none" />
+            </label>
+            <label className="block">
+              <span className="sr-only">Entrega final</span>
+              <input type="date" value={equipmentFilters.deliveredTo} onChange={(event) => setEquipmentFilters({ ...equipmentFilters, deliveredTo: event.target.value })} className="h-10 w-full rounded-lg border border-border px-3 text-sm outline-none" />
+            </label>
+            <div className="grid grid-cols-2 gap-2 xl:col-span-2">
+              <button onClick={() => void refreshEquipment()} className="h-10 rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
+              <button onClick={clearEquipmentFilters} className="h-10 rounded-lg border border-border bg-white px-3 text-sm font-bold text-navy-950">Limpar filtros</button>
+            </div>
           </div>
+          {hasEquipmentFilters ? (
+            <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
+              <span>Exibindo equipamentos filtrados</span>
+              {activeEquipmentFilters.map((filter) => <span key={filter} className="rounded-md bg-white px-2 py-1 text-navy-950">{filter}</span>)}
+            </div>
+          ) : null}
           <div className="mb-4 flex flex-wrap gap-2">
             <a href={equipmentExportUrl()} className="flex h-10 items-center gap-2 rounded-lg border border-border bg-white px-3 text-sm font-bold"><Download className="h-4 w-4" />Exportar CSV</a>
             {canManage ? (
@@ -6754,7 +6795,7 @@ export function EquipmentPage() {
               ])}
             />
           ) : (
-            <EmptyState title="Nenhum equipamento cadastrado." description="Cadastre ou importe equipamentos para começar." />
+            <EmptyState title={hasEquipmentFilters ? "Nenhum equipamento encontrado para os filtros selecionados." : "Nenhum equipamento cadastrado."} description={hasEquipmentFilters ? "Ajuste ou limpe os filtros para ampliar a busca." : "Cadastre ou importe equipamentos para começar."} />
           )}
         </Panel>
         <div className="space-y-5">
@@ -6785,6 +6826,7 @@ export function EquipmentPage() {
                 { label: "Em uso", value: String(summary.inUse), color: "#10B981" },
                 { label: "Disponíveis", value: String(summary.available), color: "#2563EB" },
                 { label: "Manutenção", value: String(summary.maintenance), color: "#F59E0B" },
+                { label: "Devolvidos", value: String(summary.returned), color: "#8B5CF6" },
                 { label: "Pendências", value: String(summary.pending), color: "#EF4444" }
               ]}
             />
