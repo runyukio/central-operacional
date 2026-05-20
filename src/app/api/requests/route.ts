@@ -50,13 +50,31 @@ export async function POST(request: Request) {
   const parsed = createRequestSchema.safeParse(body);
 
   if (!parsed.success) {
-    return NextResponse.json({ error: "Dados inválidos", issues: parsed.error.flatten() }, { status: 400 });
+    const flattened = parsed.error.flatten();
+    const fieldErrors = Object.fromEntries(
+      Object.entries(flattened.fieldErrors).map(([field, messages]) => [field, messages?.[0] ?? "Campo inválido."])
+    );
+    return NextResponse.json({
+      success: false,
+      type: "VALIDATION_ERROR",
+      message: "Não foi possível criar a solicitação. Revise os campos destacados.",
+      error: "Não foi possível criar a solicitação. Revise os campos destacados.",
+      fieldErrors,
+      issues: flattened
+    }, { status: 400 });
   }
 
   const actor = await getApiActor();
   const result = await createOperationalRequest(actor, parsed.data);
   if ("error" in result) {
-    return NextResponse.json({ error: result.error }, { status: 400 });
+    const message = result.message ?? result.error;
+    return NextResponse.json({
+      success: false,
+      type: result.type ?? "REQUEST_ERROR",
+      message,
+      error: message,
+      fieldErrors: result.fieldErrors ?? {}
+    }, { status: result.status ?? 400 });
   }
   return NextResponse.json({ data: result.data, persisted: result.persisted }, { status: 201 });
 }

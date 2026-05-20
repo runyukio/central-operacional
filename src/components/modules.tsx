@@ -1761,12 +1761,6 @@ export function MySchedulePage() {
         title="Meu Cronograma"
         description="Visualize seu cronograma, folgas e solicite alterações"
         icon={CalendarDays}
-        actions={
-          <button onClick={() => setShowDayOffModal(true)} className="flex h-12 items-center gap-2 rounded-lg bg-blue-600 px-5 text-sm font-bold text-white shadow-soft">
-            <RefreshCw className="h-4 w-4" />
-            Solicitar Folga
-          </button>
-        }
       />
       {dayOffMessage ? (
         <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{dayOffMessage}</div>
@@ -1833,7 +1827,7 @@ export function MySchedulePage() {
         </section>
 
         <div className="space-y-5">
-          <Panel title="Minhas Solicitações">
+          <Panel title="Minhas Solicitações" action="Solicitar Folga" actionOnClick={() => setShowDayOffModal(true)}>
             <div className="mb-4 grid gap-2 md:grid-cols-2">
               <select value={requestFilters.status} onChange={(event) => setRequestFilters({ ...requestFilters, status: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
                 {["Todos", ...requestStatuses].map((status) => <option key={status}>{status}</option>)}
@@ -1865,10 +1859,7 @@ export function MySchedulePage() {
                 })}
               </div>
             ) : (
-              <div className="space-y-3">
-                <EmptyState title="Você ainda não possui solicitações" description="Quando você abrir uma solicitação, ela aparecerá aqui para acompanhamento." />
-                <button onClick={() => setShowDayOffModal(true)} className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white">Solicitar Folga</button>
-              </div>
+              <EmptyState title="Você ainda não possui solicitações" description="Quando você abrir uma solicitação, ela aparecerá aqui para acompanhamento." />
             )}
           </Panel>
           <Panel title="Resumo de Horas">

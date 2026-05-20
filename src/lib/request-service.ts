@@ -58,6 +58,16 @@ const allowDemoDataFallback = process.env.ALLOW_DEMO_LOGIN === "true" || process
 
 class DomainError extends Error {}
 
+type RequestServiceError = {
+  error: string;
+  message?: string;
+  type?: string;
+  fieldErrors?: Record<string, string>;
+  status?: number;
+};
+
+type RequestNotificationClient = Pick<Prisma.TransactionClient, "user" | "employeeProfile" | "notification">;
+
 export type RequestFilters = {
   type?: string;
   status?: string;
@@ -128,7 +138,7 @@ export async function listOperationalRequests(actor: Actor, filters: RequestFilt
 
 export async function createOperationalRequest(actor: Actor, input: CreateRequestInput) {
   const validationError = validateCreateInput(input);
-  if (validationError) return { error: validationError };
+  if (validationError) return validationFailure(validationError);
 
   try {
     const user = await findActiveUser(actor.email);
@@ -147,8 +157,14 @@ export async function createOperationalRequest(actor: Actor, input: CreateReques
     if (!user) return { error: "Usuário ativo não encontrado para criar solicitação." };
 
     const area = areaForRequest(input.type);
-    if (isDayOffRequest(input) && user.employeeProfile?.id) {
-      const dayOffError = await validateDayOffRequestInDatabase(user.employeeProfile.id, input);
+    const requesterProfile = await resolveRequesterEmployeeProfile(user);
+    if (isDayOffRequest(input) && !requesterProfile) {
+      return validationFailure("Seu usuário não está vinculado a um cadastro de colaborador. Contate o administrador.", {
+        employeeId: "Colaborador não vinculado ao usuário logado."
+      });
+    }
+    if (isDayOffRequest(input) && requesterProfile?.id) {
+      const dayOffError = await validateDayOffRequestInDatabase(requesterProfile.id, input);
       if (dayOffError) return { error: dayOffError };
     }
 
@@ -165,7 +181,7 @@ export async function createOperationalRequest(actor: Actor, input: CreateReques
           title: input.title,
           description: input.description,
           requesterId: user.id,
-          employeeId: user.employeeProfile?.id,
+          employeeId: requesterProfile?.id,
           typeId: type.id,
           assignedArea: area,
           priority: uiToDbPriority[input.priority],
@@ -202,33 +218,23 @@ export async function createOperationalRequest(actor: Actor, input: CreateReques
         }
       });
 
-      await notifyApprovers(tx, created.id, created.code, input.type, user.name, area, user.employeeProfile?.supervisorId);
-      await tx.notification.create({
-        data: {
-          userId: user.id,
-          title: isDayOffRequest(input) ? "Solicitação de folga criada" : "Solicitação criada",
-          body: isDayOffRequest(input) ? "Sua solicitação foi enviada para aprovação." : `${created.code} foi registrada com status Aberto.`,
-          category: "Solicitações",
-          type: "REQUEST",
-          entity: "Request",
-          entityId: created.id,
-          href: `/solicitacoes?request=${created.code}`
-        }
-      });
       return created;
     });
 
+    await notifyRequestCreationSafely(request.id, request.code, input.type, user.id, user.name, area, requesterProfile?.supervisorId, actor.email);
+
     return { data: mapPrismaRequest(request, user, actor), persisted: true };
   } catch (error) {
+    const mapped = mapRequestCreateError(error);
     recordErrorLog({
       userEmail: actor.email,
       code: "REQUEST_CREATE_DB_FALLBACK",
-      message: error instanceof Error ? error.message : "Falha ao criar solicitação no banco",
+      message: error instanceof Error ? error.message : mapped.error,
       route: "/api/requests",
       action: "REQUEST_CREATE",
       severity: "ERROR"
     });
-    if (!allowDemoDataFallback) return { error: "Não foi possível criar a solicitação no banco." };
+    if (!allowDemoDataFallback) return mapped;
     return {
       data: createMockRequest(actor, {
         type: input.type,
@@ -527,6 +533,95 @@ async function findActiveUser(email: string) {
       employeeProfile: true
     }
   });
+}
+
+async function resolveRequesterEmployeeProfile(user: ActiveUser) {
+  if (user.employeeProfile && !user.employeeProfile.deletedAt) return user.employeeProfile;
+
+  const byUserId = await prisma.employeeProfile.findFirst({
+    where: { userId: user.id, deletedAt: null }
+  });
+  if (byUserId) return byUserId;
+
+  const byUserEmail = await prisma.employeeProfile.findFirst({
+    where: { user: { email: { equals: user.email, mode: "insensitive" } }, deletedAt: null }
+  });
+  if (byUserEmail) return byUserEmail;
+
+  const registration = await prisma.employeeRegistrationRequest.findFirst({
+    where: {
+      email: { equals: user.email, mode: "insensitive" },
+      createdEmployeeProfileId: { not: null },
+      deletedAt: null
+    },
+    orderBy: { updatedAt: "desc" },
+    select: { createdEmployeeProfileId: true }
+  });
+  if (!registration?.createdEmployeeProfileId) return null;
+
+  const byRegistration = await prisma.employeeProfile.findFirst({
+    where: { id: registration.createdEmployeeProfileId, deletedAt: null }
+  });
+  if (byRegistration) return byRegistration;
+
+  const wbLoginCandidate = user.email.split("@")[0]?.trim();
+  if (!wbLoginCandidate) return null;
+
+  return prisma.employeeProfile.findFirst({
+    where: { wbLogin: { equals: wbLoginCandidate, mode: "insensitive" }, deletedAt: null }
+  });
+}
+
+function validationFailure(error: string, fieldErrors: Record<string, string> = {}): RequestServiceError {
+  return {
+    error,
+    message: error,
+    type: "VALIDATION_ERROR",
+    fieldErrors,
+    status: 400
+  };
+}
+
+function mapRequestCreateError(error: unknown): RequestServiceError {
+  if (error instanceof DomainError) {
+    return validationFailure(error.message);
+  }
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    if (error.code === "P2002") {
+      return {
+        error: "Não foi possível criar a solicitação porque já existe um registro com identificador duplicado. Tente novamente.",
+        message: "Não foi possível criar a solicitação porque já existe um registro com identificador duplicado. Tente novamente.",
+        type: "DUPLICATE_ERROR",
+        fieldErrors: { code: "Identificador da solicitação duplicado." },
+        status: 409
+      };
+    }
+    if (error.code === "P2003") {
+      return {
+        error: "Não foi possível criar a solicitação porque há um vínculo obrigatório ausente ou inválido.",
+        message: "Não foi possível criar a solicitação porque há um vínculo obrigatório ausente ou inválido.",
+        type: "RELATION_ERROR",
+        fieldErrors: { request: "Revise usuário, colaborador e tipo da solicitação." },
+        status: 400
+      };
+    }
+    if (error.code === "P2025") {
+      return {
+        error: "Não foi possível criar a solicitação porque um registro relacionado não foi encontrado.",
+        message: "Não foi possível criar a solicitação porque um registro relacionado não foi encontrado.",
+        type: "NOT_FOUND",
+        fieldErrors: { request: "Registro relacionado não encontrado." },
+        status: 404
+      };
+    }
+  }
+  return {
+    error: "Não foi possível criar a solicitação. Tente novamente ou contate o administrador.",
+    message: "Não foi possível criar a solicitação. Tente novamente ou contate o administrador.",
+    type: "REQUEST_CREATE_ERROR",
+    fieldErrors: {},
+    status: 500
+  };
 }
 
 function buildRequestWhere(actor: Actor, user: ActiveUser, filters: RequestFilters) {
@@ -1222,8 +1317,44 @@ function finalApprovalBody(type: string) {
   return "Sua solicitação foi aprovada.";
 }
 
+async function notifyRequestCreationSafely(
+  requestId: string,
+  code: string,
+  type: string,
+  userId: string,
+  requesterName: string,
+  area: string,
+  supervisorId: string | null | undefined,
+  userEmail: string
+) {
+  try {
+    await notifyApprovers(prisma, requestId, code, type, requesterName, area, supervisorId);
+    await prisma.notification.create({
+      data: {
+        userId,
+        title: isDayOffRequest(type) ? "Solicitação de folga criada" : "Solicitação criada",
+        body: isDayOffRequest(type) ? "Sua solicitação foi enviada para aprovação." : `${code} foi registrada com status Aberto.`,
+        category: "Solicitações",
+        type: "REQUEST",
+        entity: "Request",
+        entityId: requestId,
+        href: `/solicitacoes?request=${code}`
+      }
+    });
+  } catch (error) {
+    recordErrorLog({
+      userEmail,
+      code: "REQUEST_NOTIFICATION_WARNING",
+      message: error instanceof Error ? error.message : "Falha ao notificar criação de solicitação",
+      route: "/api/requests",
+      action: "REQUEST_NOTIFY",
+      severity: "WARNING"
+    });
+  }
+}
+
 async function notifyApprovers(
-  tx: Prisma.TransactionClient,
+  tx: RequestNotificationClient,
   requestId: string,
   code: string,
   type: string,
@@ -1253,7 +1384,7 @@ async function notifyApprovers(
   }
 }
 
-async function notifyWfmApprovers(tx: Prisma.TransactionClient, requestId: string, code: string, type: string, requesterName: string) {
+async function notifyWfmApprovers(tx: RequestNotificationClient, requestId: string, code: string, type: string, requesterName: string) {
   const users = await tx.user.findMany({
     where: { status: "ACTIVE", role: { name: { in: ["ADMIN", "GESTOR", "WFM"] } } }
   });
@@ -1274,7 +1405,7 @@ async function notifyWfmApprovers(tx: Prisma.TransactionClient, requestId: strin
   }
 }
 
-async function notifyRequestSupervisor(tx: Prisma.TransactionClient, request: PrismaRequest, title?: string, body?: string) {
+async function notifyRequestSupervisor(tx: RequestNotificationClient, request: PrismaRequest, title?: string, body?: string) {
   if (!title || !body || !request.employee?.supervisorId) return;
   const supervisor = await tx.employeeProfile.findUnique({
     where: { id: request.employee.supervisorId },
@@ -1307,8 +1438,24 @@ function serialize(value: unknown) {
 }
 
 async function nextRequestCode(tx: Prisma.TransactionClient) {
-  const count = await tx.request.count();
-  return `REQ-${String(1001 + count).padStart(4, "0")}`;
+  const recentCodes = await tx.request.findMany({
+    where: { code: { startsWith: "REQ-" } },
+    select: { code: true },
+    orderBy: { code: "desc" },
+    take: 200
+  });
+  const maxNumber = recentCodes.reduce((max, item) => {
+    const numeric = Number(item.code.replace(/^REQ-/i, ""));
+    return Number.isFinite(numeric) ? Math.max(max, numeric) : max;
+  }, 1000);
+
+  for (let offset = 1; offset <= 100; offset += 1) {
+    const candidate = `REQ-${String(maxNumber + offset).padStart(4, "0")}`;
+    const exists = await tx.request.findUnique({ where: { code: candidate }, select: { id: true } });
+    if (!exists) return candidate;
+  }
+
+  return `REQ-${Date.now()}`;
 }
 
 function formatDateTime(date: Date) {
