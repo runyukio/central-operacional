@@ -5357,10 +5357,23 @@ export function RequestsKanbanPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [viewMode, setViewMode] = useState<"table" | "kanban">("table");
   const [loadError, setLoadError] = useState("");
+  const initialDeepLinkHandled = useRef(false);
   const countByStatus = (status: string) => summary?.byStatus?.[status] ?? requests.filter((request) => request.status === status).length;
 
   useEffect(() => {
+    setSelected(null);
+    setDetailLoading(false);
     void loadKanbanRequests(defaultPipelineFilters, 1);
+    const params = new URLSearchParams(window.location.search);
+    const explicitRequestId = params.get("requestId") ?? params.get("request") ?? params.get("id") ?? params.get("taskId");
+    if (explicitRequestId && !initialDeepLinkHandled.current) {
+      initialDeepLinkHandled.current = true;
+      void openRequestDetail({ id: explicitRequestId } as ClientRequest);
+    }
+    return () => {
+      setSelected(null);
+      setDetailLoading(false);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -5392,7 +5405,6 @@ export function RequestsKanbanPage() {
       });
       setSummary(payload.summary ?? { total: payload.total ?? payload.data.length, byStatus: {} });
       setSupervisors(payload.supervisors ?? []);
-      setSelected((current) => (current ? payload.data.find((request) => request.id === current.id) ?? current : null));
     } catch (error) {
       setRequests([]);
       setPagination({ total: 0, page: 1, limit: Number(nextFilters.limit), totalPages: 1 });
@@ -5428,6 +5440,25 @@ export function RequestsKanbanPage() {
       setActionMessage(error instanceof Error ? error.message : "Não foi possível carregar o detalhe da solicitação.");
     } finally {
       setDetailLoading(false);
+    }
+  }
+
+  function closeRequestDetail() {
+    setSelected(null);
+    setDetailLoading(false);
+    setActionReason("");
+    setComment("");
+    const url = new URL(window.location.href);
+    let changed = false;
+    ["requestId", "request", "id", "taskId"].forEach((key) => {
+      if (url.searchParams.has(key)) {
+        url.searchParams.delete(key);
+        changed = true;
+      }
+    });
+    if (changed) {
+      const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+      window.history.replaceState({}, "", nextUrl);
     }
   }
 
@@ -5648,7 +5679,7 @@ export function RequestsKanbanPage() {
           <div className="card max-h-[88vh] w-full max-w-3xl overflow-y-auto p-5">
             <div className="mb-5 flex items-center justify-between">
               <h2 className="text-lg font-extrabold text-navy-950">Detalhe da Solicitação</h2>
-              <button onClick={() => setSelected(null)} className="text-2xl text-muted">×</button>
+              <button onClick={closeRequestDetail} className="text-2xl text-muted">×</button>
             </div>
             {detailLoading ? <div className="mb-4 rounded-lg border border-border bg-slate-50 p-3 text-sm font-bold text-muted">Carregando detalhe completo...</div> : null}
             <RequestDetailContent selected={selected} actorRole={actorRole} actionReason={actionReason} setActionReason={setActionReason} comment={comment} setComment={setComment} onMove={moveStatus} onComment={submitComment} actionPending={actionPending} />
