@@ -469,12 +469,14 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       })
       : null;
     const ownScheduleByDate = new Map((own?.schedules ?? []).map((item) => [dateKey(item.date), item]));
-    const scheduleDays = dateColumns.map((date) => {
-      const schedule = ownScheduleByDate.get(dateKey(date));
+    const scheduleDayCells = isFullMonthPeriod(period) ? calendarCells(period.year, period.month) : dateColumns.map((date) => ({ date: date.getUTCDate(), dateIso: dateKey(date), outside: false }));
+    const scheduleDays = scheduleDayCells.map((day) => {
+      if (day.outside) return { ...day, shift: "Sem cronograma", label: "Sem cronograma" };
+      const schedule = ownScheduleByDate.get(day.dateIso);
       const label = schedule
         ? (scheduleStatusRequiresJustification(schedule.status) ? attendanceDisplayLabel(schedule.attendanceRecords) : null) ?? (schedule.status === "ESCALADO" ? cleanShiftName(schedule.shift?.name) || "Escalado" : scheduleToUiStatus[schedule.status] ?? "Escalado")
         : "Sem cronograma";
-      return { date: date.getUTCDate(), dateIso: dateKey(date), outside: false, shift: label, label };
+      return { ...day, shift: label, label };
     });
 
     const imports = await prisma.scheduleImport.findMany({ orderBy: { createdAt: "desc" }, include: { importedBy: true } });
@@ -522,8 +524,9 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
 
 function emptyOperationalSchedules(period = resolvePeriod({}), pagination = { page: 1, limit: 75, total: 0, totalPages: 1 }) {
   const dateColumns = datesBetween(period.start, period.end);
+  const scheduleDayCells = isFullMonthPeriod(period) ? calendarCells(period.year, period.month) : dateColumns.map((date) => ({ date: date.getUTCDate(), dateIso: dateKey(date), outside: false }));
   return {
-    scheduleDays: dateColumns.map((date) => ({ date: date.getUTCDate(), dateIso: dateKey(date), outside: false, shift: "Sem cronograma", label: "Sem cronograma" })),
+    scheduleDays: scheduleDayCells.map((day) => ({ ...day, shift: "Sem cronograma", label: "Sem cronograma" })),
     scheduleGridRows: [],
     ownEmployee: null,
     imports: [],
@@ -845,7 +848,7 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
         employeeName: employee.fullName,
         wbLogin: employee.wbLogin,
         date: formatDate(date),
-        dateIso: date.toISOString().slice(0, 10),
+        dateIso: dateKey(date),
         scheduleId: schedule.id,
         shift: cleanShiftName(shift.name) || "Sem turno",
         lob: employee.lob.name,
@@ -950,7 +953,7 @@ export async function previewOperationalScheduleImport(actor: Actor, rows: Array
       rows,
       rows.map((_, index) => ({
         rowNumber: index + 1,
-        errors: ["Sem permissão para importar cronograma. Supervisor apenas visualiza e justifica ocorrências."],
+        errors: ["Sem permissão para importar cronograma. RH visualiza; Supervisor apenas visualiza e justifica ocorrências."],
         warnings: [],
         action: "ignorar" as const
       }))
@@ -1117,7 +1120,7 @@ export async function exportOperationalSchedulesCsv(actor: Actor, query: Schedul
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
     if (!user) return { error: "Usuário ativo não encontrado para exportar cronograma." };
     const role = normalizeRole(actor.role);
-    if (!["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(role)) return { error: "Sem permissão para baixar Cronogramas Consolidados." };
+    if (!["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "RH"].includes(role)) return { error: "Sem permissão para baixar Cronogramas Consolidados." };
 
     const period = resolvePeriod(query);
     const search = query.collaborator?.trim();
@@ -1165,7 +1168,7 @@ export async function exportOperationalSchedulesCsv(actor: Actor, query: Schedul
       schedule.employee.wbLogin,
       schedule.employee.fullName,
       schedule.employee.user?.email ?? "",
-      schedule.date.toISOString().slice(0, 10),
+      dateKey(schedule.date),
       scheduleToUiStatus[schedule.status] ?? schedule.status,
       cleanShiftName(schedule.shift?.name ?? schedule.employee.shift?.name) || "",
       schedule.startsAt ?? "",
@@ -1285,7 +1288,7 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
           employeeName: schedule.employee.fullName,
           wbLogin: schedule.employee.wbLogin,
           date: formatDate(schedule.date),
-          dateIso: schedule.date.toISOString().slice(0, 10),
+          dateIso: dateKey(schedule.date),
           scheduleId: schedule.id,
           shift: cleanShiftName(schedule.shift?.name ?? schedule.employee.shift.name) || "Sem turno",
           lob: schedule.employee.lob.name,
@@ -2078,8 +2081,24 @@ function datesBetween(start: Date, end: Date) {
   return dates;
 }
 
+function dateInputFromParts(year: number, month: number, day: number) {
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
 function dateKey(date: Date) {
-  return date.toISOString().slice(0, 10);
+  return dateInputFromParts(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
+}
+
+function isFullMonthPeriod(period: ReturnType<typeof resolvePeriod>) {
+  const lastDay = new Date(Date.UTC(period.year, period.month, 0)).getUTCDate();
+  return (
+    period.start.getUTCFullYear() === period.year &&
+    period.start.getUTCMonth() === period.month - 1 &&
+    period.start.getUTCDate() === 1 &&
+    period.end.getUTCFullYear() === period.year &&
+    period.end.getUTCMonth() === period.month - 1 &&
+    period.end.getUTCDate() === lastDay
+  );
 }
 
 function resolveAttendancePeriod(query: AttendanceQuery) {
@@ -2166,13 +2185,12 @@ async function scheduleSupervisorFilter(value?: string | null): Promise<Prisma.S
 function calendarCells(year: number, month: number) {
   const first = new Date(Date.UTC(year, month - 1, 1));
   const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  const leading = first.getUTCDay();
-  const previousMonthDays = new Date(Date.UTC(year, month - 1, 0)).getUTCDate();
+  const leading = (first.getUTCDay() + 6) % 7;
   return Array.from({ length: 42 }).map((_, index) => {
     const dayNumber = index - leading + 1;
     const outside = dayNumber < 1 || dayNumber > daysInMonth;
-    const date = outside ? (dayNumber < 1 ? previousMonthDays + dayNumber : dayNumber - daysInMonth) : dayNumber;
-    return { date, outside };
+    const actualDate = new Date(Date.UTC(year, month - 1, dayNumber));
+    return { date: actualDate.getUTCDate(), dateIso: dateKey(actualDate), outside };
   });
 }
 
@@ -2219,7 +2237,8 @@ function serialize(value: unknown) {
 }
 
 function formatDate(date: Date) {
-  return new Intl.DateTimeFormat("pt-BR").format(date);
+  const [year, month, day] = dateKey(date).split("-");
+  return `${day}/${month}/${year}`;
 }
 
 function formatDateTime(date: Date) {

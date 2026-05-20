@@ -85,7 +85,6 @@ import {
   qualityFeedback,
   reportCards,
   rewards,
-  scheduleDays,
   scheduleGridRows,
   scheduleRequests,
   settingsSections,
@@ -501,6 +500,14 @@ type ScheduleGridRow = (typeof scheduleGridRows)[number] & {
   workHours?: Array<ScheduleWorkHourCell | null>;
 };
 
+type CalendarScheduleDay = {
+  date: number;
+  outside: boolean;
+  shift: string;
+  label: string;
+  dateIso?: string;
+};
+
 type ScheduleRangeMode = "day" | "week" | "month" | "custom";
 
 type ScheduleImportHistory = {
@@ -759,28 +766,35 @@ function roundDecimal(value: number) {
   return Math.round(value * 100) / 100;
 }
 
+function dateInputFromParts(year: number, month: number, day: number) {
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
 function dateInputFromUtc(date: Date) {
-  return date.toISOString().slice(0, 10);
+  return dateInputFromParts(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
+}
+
+function operationalDateFromParts(year: number, month: number, day: number) {
+  return new Date(Date.UTC(year, month - 1, day, 12));
 }
 
 function parseDateInput(value: string) {
   if (!value) return null;
   const [year, month, day] = value.split("-").map(Number);
   if (!year || !month || !day) return null;
-  return new Date(Date.UTC(year, month - 1, day));
+  return operationalDateFromParts(year, month, day);
 }
 
 function monthRange(month: number, year: number) {
-  const start = new Date(Date.UTC(year, month - 1, 1));
-  const end = new Date(Date.UTC(year, month, 0));
-  return { startDate: dateInputFromUtc(start), endDate: dateInputFromUtc(end) };
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return { startDate: dateInputFromParts(year, month, 1), endDate: dateInputFromParts(year, month, lastDay) };
 }
 
 function anchorForSchedulePeriod(period: { month: number; year: number }, currentStartDate?: string) {
   const parsed = parseDateInput(currentStartDate ?? "");
   const day = parsed?.getUTCDate() ?? 1;
   const lastDay = new Date(Date.UTC(period.year, period.month, 0)).getUTCDate();
-  return new Date(Date.UTC(period.year, period.month - 1, Math.min(day, lastDay)));
+  return operationalDateFromParts(period.year, period.month, Math.min(day, lastDay));
 }
 
 function rangeForScheduleMode(mode: ScheduleRangeMode, period: { month: number; year: number }, currentStartDate?: string) {
@@ -822,6 +836,16 @@ function isInvalidDateRange(range: { startDate: string; endDate: string }) {
   const start = parseDateInput(range.startDate);
   const end = parseDateInput(range.endDate);
   return Boolean(start && end && start > end);
+}
+
+const scheduleWeekdayFormatter = new Intl.DateTimeFormat("pt-BR", { weekday: "short", timeZone: "America/Sao_Paulo" });
+const scheduleMonthFormatter = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric", timeZone: "America/Sao_Paulo" });
+
+function formatScheduleDateHeader(dateIso: string) {
+  const date = parseDateInput(dateIso);
+  if (!date) return dateIso;
+  const weekday = scheduleWeekdayFormatter.format(date).replace(".", "");
+  return `${String(date.getUTCDate()).padStart(2, "0")} ${weekday}`;
 }
 
 function formatHourDifference(minutes: number) {
@@ -1570,7 +1594,7 @@ export function OperationalCommandCenter() {
 }
 
 export function MySchedulePage() {
-  const [days, setDays] = useState(emptyCalendarDays());
+  const [days, setDays] = useState<CalendarScheduleDay[]>(emptyCalendarDays());
   const [scheduleInfo, setScheduleInfo] = useState<{ id: string; name: string; schedule: string; shift: string; lob: string } | null>(null);
   const [myWorkHours, setMyWorkHours] = useState<WorkHourRow[]>([]);
   const [myWorkHourSummary, setMyWorkHourSummary] = useState<WorkHourSummary | null>(null);
@@ -1601,7 +1625,7 @@ export function MySchedulePage() {
   });
 
   useEffect(() => {
-    apiJson<{ data: { scheduleDays: typeof scheduleDays; ownEmployee?: { id: string; name: string; schedule: string; shift: string; lob: string } | null } }>("/api/schedules")
+    apiJson<{ data: { scheduleDays: CalendarScheduleDay[]; ownEmployee?: { id: string; name: string; schedule: string; shift: string; lob: string } | null } }>("/api/schedules")
       .then((payload) => {
         setDays(payload.data.scheduleDays);
         setScheduleInfo(payload.data.ownEmployee ? { ...payload.data.ownEmployee, shift: cleanShiftName(payload.data.ownEmployee.shift) || "Sem turno" } : null);
@@ -1717,7 +1741,7 @@ export function MySchedulePage() {
       setSelectedRequest(payload.data);
       setActionReason("");
       setDayOffMessage(payload.scheduleUpdated ? "Solicitação aprovada e cronograma atualizado." : `Solicitação movida para ${payload.data.status}.`);
-      apiJson<{ data: { scheduleDays: typeof scheduleDays } }>("/api/schedules")
+      apiJson<{ data: { scheduleDays: CalendarScheduleDay[] } }>("/api/schedules")
         .then((schedulePayload) => setDays(schedulePayload.data.scheduleDays))
         .catch(() => undefined);
     } catch (error) {
@@ -1795,7 +1819,7 @@ export function MySchedulePage() {
           </div>
           {!hasSchedule ? <div className="border-b border-border p-8"><EmptyState title="Nenhum cronograma encontrado" description="Seu cronograma ainda não foi importado ou vinculado ao seu cadastro." /></div> : null}
           <div className="grid grid-cols-7 border-b border-border bg-white text-center text-sm font-bold text-navy-950">
-            {["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"].map((day) => (
+            {["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((day) => (
               <div key={day} className="border-r border-border px-3 py-4 last:border-r-0">
                 {day}
               </div>
@@ -1804,7 +1828,7 @@ export function MySchedulePage() {
           <div className="grid grid-cols-7 bg-white">
             {days.map((day, index) => {
               const isToday = day.date === 29 && !day.outside;
-              const dateKey = day.outside ? "" : `2026-05-${String(day.date).padStart(2, "0")}`;
+              const dateKey = day.outside ? "" : day.dateIso ?? `2026-05-${String(day.date).padStart(2, "0")}`;
               const workHour = dateKey ? workHourByDate.get(dateKey) : undefined;
               const dayLabel = cleanShiftName(day.label) || day.label;
               const dayShift = cleanShiftName(day.shift) || day.shift;
@@ -3232,7 +3256,7 @@ export function SchedulesPage() {
   const scheduleTotalRows = schedulePagination.total || scheduleRows.length;
   const schedulePageStart = scheduleTotalRows && scheduleRows.length ? (schedulePagination.page - 1) * schedulePagination.limit + 1 : 0;
   const schedulePageEnd = scheduleTotalRows ? Math.min(schedulePagination.page * schedulePagination.limit, scheduleTotalRows) : 0;
-  const monthLabel = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(schedulePeriod.year, schedulePeriod.month - 1, 1)));
+  const monthLabel = scheduleMonthFormatter.format(operationalDateFromParts(schedulePeriod.year, schedulePeriod.month, 1));
   const visibleScheduleDates = scheduleDateColumns.length
     ? scheduleDateColumns
     : dateInputsBetween(scheduleDateRange.startDate, scheduleDateRange.endDate);
@@ -3263,9 +3287,9 @@ export function SchedulesPage() {
     ]).entries()
   ).map(([value, label]) => ({ value, label }));
   const uniqueShifts = ["Todos", ...availableShiftNames];
-  const normalizedScheduleActorRole = scheduleActorRole === "MANAGEMENT" ? "GESTOR" : scheduleActorRole;
+  const normalizedScheduleActorRole = scheduleActorRole === "MANAGEMENT" ? "GESTOR" : scheduleActorRole === "HR" ? "RH" : scheduleActorRole;
   const canManageSchedules = ["ADMIN", "GESTOR", "WFM"].includes(normalizedScheduleActorRole);
-  const canExportSchedules = ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(normalizedScheduleActorRole);
+  const canExportSchedules = ["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "RH"].includes(normalizedScheduleActorRole);
   const isScheduleSupervisor = normalizedScheduleActorRole === "SUPERVISOR";
   const selectedScheduleEmployee = employeeOptions.find((employee) => employee.id === scheduleEditForm.employeeId);
   const selectedCellHasSchedule = Boolean(scheduleEditForm.scheduleId);
@@ -3522,11 +3546,9 @@ export function SchedulesPage() {
                   <th className="px-4 py-3">Colaborador</th>
                   <th className="px-4 py-3">Cargo</th>
                   <th className="px-4 py-3">LOB</th>
-                  {visibleScheduleDates.map((dateIso) => {
-                    const date = new Date(`${dateIso}T00:00:00.000Z`);
-                    const label = `${String(date.getUTCDate()).padStart(2, "0")} ${new Intl.DateTimeFormat("pt-BR", { weekday: "short", timeZone: "UTC" }).format(date).replace(".", "")}`;
-                    return <th key={dateIso} className="px-2 py-3 text-center">{label}</th>;
-                  })}
+                  {visibleScheduleDates.map((dateIso) => (
+                    <th key={dateIso} className="px-2 py-3 text-center">{formatScheduleDateHeader(dateIso)}</th>
+                  ))}
                   <th className="px-4 py-3 text-center">Ação</th>
                 </tr>
               </thead>
@@ -4743,10 +4765,10 @@ function validateImportRows(rows: Array<Record<string, unknown>>) {
 
 function emptyCalendarDays() {
   return Array.from({ length: 42 }).map((_, index) => {
-    const dayNumber = index - 4;
+    const dayNumber = index - 3;
     const outside = dayNumber < 1 || dayNumber > 31;
     const date = outside ? (dayNumber < 1 ? 30 + dayNumber : dayNumber - 31) : dayNumber;
-    return { date, outside, shift: "Sem cronograma", label: "Sem cronograma" };
+    return { date, outside, dateIso: outside ? undefined : `2026-05-${String(date).padStart(2, "0")}`, shift: "Sem cronograma", label: "Sem cronograma" };
   });
 }
 
