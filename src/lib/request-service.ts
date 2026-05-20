@@ -420,35 +420,16 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
         }
       });
 
-      await tx.notification.create({
-        data: {
-          userId: current.requesterId,
-          title: transition.requesterTitle,
-          body: transition.nextStatus === "RECUSADO" && reason ? `${transition.requesterBody} Motivo: ${reason}` : transition.requesterBody,
-          category: "Solicitações",
-          type: transition.requesterNotificationType,
-          entity: "Request",
-          entityId: saved.id,
-          href: `/solicitacoes?request=${saved.code}`
-        }
-      });
-
-      if (transition.notifyWfm) {
-        await notifyWfmApprovers(tx, saved.id, saved.code, current.type.name, current.requester.name);
-      }
-
-      if (transition.notifySupervisor) {
-        await notifyRequestSupervisor(tx, current, transition.supervisorTitle, transition.supervisorBody);
-      }
-
       return saved;
     });
+
+    await notifyRequestStatusChangeSafely(updated, user.id, reason, actor.email);
 
     const historyMetadata = updated.history[0]?.metadata as { scheduleUpdated?: boolean } | null;
     return { data: mapPrismaRequest(updated, user, actor), scheduleUpdated: Boolean(historyMetadata?.scheduleUpdated), persisted: true };
   } catch (error) {
     if (error instanceof DomainError) {
-      return { error: error.message };
+      return validationFailure(error.message);
     }
     recordErrorLog({
       userEmail: actor.email,
@@ -458,7 +439,7 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
       action: "REQUEST_STATUS",
       severity: "ERROR"
     });
-    if (!allowDemoDataFallback) return { error: "Não foi possível atualizar a solicitação no banco." };
+    if (!allowDemoDataFallback) return mapRequestStatusError(error);
     const result = updateMockRequestStatus(actor, id, status, reason, actionInput);
     if (!result || result === "FORBIDDEN") return result;
     if ("record" in result) return { data: result.record, scheduleUpdated: result.scheduleUpdated, persisted: false };
@@ -684,6 +665,37 @@ function mapRequestCreateError(error: unknown): RequestServiceError {
   };
 }
 
+function mapRequestStatusError(error: unknown): RequestServiceError {
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    if (error.code === "P2003") {
+      return {
+        error: "Não foi possível atualizar a solicitação porque há um vínculo obrigatório ausente ou inválido.",
+        message: "Não foi possível atualizar a solicitação porque há um vínculo obrigatório ausente ou inválido.",
+        type: "RELATION_ERROR",
+        fieldErrors: { request: "Revise usuário, histórico, auditoria e solicitação." },
+        status: 400
+      };
+    }
+    if (error.code === "P2025") {
+      return {
+        error: "Solicitação não encontrada.",
+        message: "Solicitação não encontrada.",
+        type: "NOT_FOUND",
+        fieldErrors: {},
+        status: 404
+      };
+    }
+  }
+
+  return {
+    error: "Não foi possível enviar para análise do WFM. Tente novamente ou contate o administrador.",
+    message: "Não foi possível enviar para análise do WFM. Tente novamente ou contate o administrador.",
+    type: "REQUEST_STATUS_UPDATE_ERROR",
+    fieldErrors: {},
+    status: 500
+  };
+}
+
 function buildRequestWhere(actor: Actor, user: ActiveUser, filters: RequestFilters) {
   const role = normalizeRole(actor.role);
   const where: Prisma.RequestWhereInput = { deletedAt: null };
@@ -693,8 +705,12 @@ function buildRequestWhere(actor: Actor, user: ActiveUser, filters: RequestFilte
     where.requesterId = user.id;
   } else if (role === "COLABORADOR") {
     where.requesterId = user.id;
-  } else if (role === "SUPERVISOR" && user.employeeProfile?.id) {
-    where.OR = [{ employee: { supervisorId: user.employeeProfile.id } }, { requesterId: user.id }];
+  } else if (role === "SUPERVISOR") {
+    where.OR = [
+      ...(user.employeeProfile?.id ? [{ employee: { supervisorId: user.employeeProfile.id } }] : []),
+      { requesterId: user.id },
+      dayOffRequestTypeWhere()
+    ];
   } else if (role === "RH") {
     where.assignedArea = "RH";
   } else if (role === "TI") {
@@ -705,11 +721,7 @@ function buildRequestWhere(actor: Actor, user: ActiveUser, filters: RequestFilte
 
   if (isPendingActionFilter(filters.pendingAction)) {
     if (role === "SUPERVISOR") {
-      if (user.employeeProfile?.id) {
-        andFilters.push({ status: "ABERTO", employee: { supervisorId: user.employeeProfile.id } });
-      } else {
-        andFilters.push({ id: "__no_supervisor_profile__" });
-      }
+      andFilters.push({ status: "ABERTO", ...dayOffRequestTypeWhere() });
     } else if (role === "WFM") {
       andFilters.push({ status: { in: ["EM_ANALISE", "AGUARDANDO_APROVACAO", "AJUSTE_SOLICITADO"] } });
     } else if (["ADMIN", "GESTOR"].includes(role)) {
@@ -823,6 +835,15 @@ function buildRequestWhere(actor: Actor, user: ActiveUser, filters: RequestFilte
   return where;
 }
 
+function dayOffRequestTypeWhere(): Prisma.RequestWhereInput {
+  return {
+    OR: [
+      { type: { name: { contains: "folga", mode: "insensitive" } } },
+      { type: { name: { contains: "day off", mode: "insensitive" } } }
+    ]
+  };
+}
+
 function isPendingActionFilter(value: RequestFilters["pendingAction"]) {
   return value === true || value === "true" || value === "1" || value === "sim";
 }
@@ -919,7 +940,7 @@ function canViewRequest(actor: Actor, user: ActiveUser, request: PrismaRequest) 
   const role = normalizeRole(actor.role);
   if (["ADMIN", "GESTOR", "WFM"].includes(role)) return true;
   if (role === "COLABORADOR") return request.requesterId === user.id;
-  if (role === "SUPERVISOR") return request.employee?.supervisorId === user.employeeProfile?.id || request.requesterId === user.id;
+  if (role === "SUPERVISOR") return isDayOffRequest(request) || request.employee?.supervisorId === user.employeeProfile?.id || request.requesterId === user.id;
   return canApproveRequest(actor, { area: request.assignedArea, type: request.type.name });
 }
 
@@ -940,8 +961,7 @@ function resolveRequestTransition(actor: Actor, user: ActiveUser, request: Prism
   const role = normalizeRole(actor.role);
   const current = normalizeDbRequestStatus(request.status);
   const isRequester = request.requesterId === user.id;
-  const isTeamSupervisor = Boolean(user.employeeProfile?.id && request.employee?.supervisorId === user.employeeProfile.id);
-  const isSupervisorStep = supervisorStepRoles.includes(role) && (role !== "SUPERVISOR" || isTeamSupervisor);
+  const isSupervisorStep = supervisorStepRoles.includes(role) && (role !== "SUPERVISOR" || isDayOffRequest(request));
   const isFinalApprover = wfmFinalRoles.includes(role);
   const isAdminLike = ["ADMIN", "GESTOR"].includes(role);
   const target = uiToDbStatus[targetStatus as keyof typeof uiToDbStatus];
@@ -1085,8 +1105,7 @@ function mapPrismaRequest(request: PrismaRequest, user?: ActiveUser, actor?: Act
   const payload = (request.payload ?? {}) as Record<string, unknown>;
   const role = normalizeRole(actor?.role);
   const isAdminLike = ["ADMIN", "GESTOR"].includes(role);
-  const isTeamSupervisor = Boolean(user?.employeeProfile?.id && request.employee?.supervisorId === user.employeeProfile.id);
-  const canSupervisorStep = isAdminLike || (role === "SUPERVISOR" && isTeamSupervisor);
+  const canSupervisorStep = isAdminLike || (role === "SUPERVISOR" && isDayOffRequest(request));
   const canWfmFinal = isAdminLike || role === "WFM";
   return {
     id: request.code,
@@ -1581,6 +1600,63 @@ async function notifyApprovers(
         entityId: requestId,
         href: `/esteiras?request=${code}`
       }
+    });
+  }
+}
+
+async function notifyRequestStatusChangeSafely(request: PrismaRequest, actorId: string, reason: string | undefined, actorEmail: string) {
+  try {
+    const latestHistory = request.history[0];
+    const previousStatus = latestHistory?.from ? normalizeDbRequestStatus(latestHistory.from) : "ABERTO";
+    const currentStatus = normalizeDbRequestStatus(request.status);
+    const currentUiStatus = dbToUiStatus[currentStatus] ?? "Aberto";
+    const requesterNotification =
+      previousStatus === "ABERTO" && currentStatus === "EM_ANALISE"
+        ? {
+            title: "Solicitação encaminhada ao WFM",
+            body: "Seu supervisor aprovou a primeira etapa. A solicitação está em análise pelo WFM.",
+            type: "REQUEST" as NotificationKind
+          }
+        : {
+            title: notificationTitleForStatus(currentUiStatus, request.type.name),
+            body: notificationBodyForStatus(currentUiStatus, request.type.name, reason),
+            type: currentStatus === "RECUSADO" ? "ERROR" as NotificationKind : currentStatus === "APROVADO" ? "SUCCESS" as NotificationKind : "INFO" as NotificationKind
+          };
+
+    await prisma.notification.create({
+      data: {
+        userId: request.requesterId,
+        title: requesterNotification.title,
+        body: requesterNotification.body,
+        category: "Solicitações",
+        type: requesterNotification.type,
+        entity: "Request",
+        entityId: request.id,
+        href: `/solicitacoes?request=${request.code}`
+      }
+    });
+
+    if (previousStatus === "ABERTO" && currentStatus === "EM_ANALISE") {
+      await notifyWfmApprovers(prisma, request.id, request.code, request.type.name, request.requester.name);
+    }
+
+    if (previousStatus === "EM_ANALISE" && ["APROVADO", "RECUSADO"].includes(currentStatus)) {
+      await notifyRequestSupervisor(
+        prisma,
+        request,
+        currentStatus === "APROVADO" ? "Solicitação aprovada pelo WFM" : "Solicitação recusada pelo WFM",
+        `${request.code} foi ${currentStatus === "APROVADO" ? "aprovada" : "recusada"} pelo WFM.`
+      );
+    }
+  } catch (error) {
+    recordErrorLog({
+      userEmail: actorEmail,
+      code: "REQUEST_STATUS_NOTIFICATION_WARNING",
+      message: error instanceof Error ? error.message : "Falha ao notificar atualização de solicitação",
+      route: "/api/requests/status",
+      action: "REQUEST_STATUS_NOTIFICATION",
+      severity: "WARNING",
+      metadata: { requestId: request.id, code: request.code, actorId }
     });
   }
 }

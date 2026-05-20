@@ -5040,7 +5040,7 @@ export function RequestsPage() {
       setRequests((items) => items.map((item) => (item.id === id ? payload.data : item)));
       setSelected((item) => (item?.id === id ? payload.data : item));
       setActionReason("");
-      setActionMessage(payload.scheduleUpdated ? "Troca de folga aprovada e cronograma atualizado automaticamente." : `Solicitação ${payload.data.id} movida para ${payload.data.status}.`);
+      setActionMessage(payload.scheduleUpdated ? "Troca de folga aprovada e cronograma atualizado automaticamente." : payload.data.status === "Em análise" ? "Solicitação enviada para análise do WFM." : `Solicitação ${payload.data.id} movida para ${payload.data.status}.`);
     } catch (error) {
       setActionMessage(error instanceof Error ? error.message : "Não foi possível atualizar a solicitação.");
     } finally {
@@ -5479,7 +5479,7 @@ export function RequestsKanbanPage() {
       setRequests((items) => items.map((request) => (request.id === id ? payload.data : request)));
       setSelected(payload.data);
       setActionReason("");
-      setActionMessage(payload.scheduleUpdated ? "Solicitação aprovada e cronograma atualizado." : `Solicitação ${payload.data.id} atualizada para ${payload.data.status}.`);
+      setActionMessage(payload.scheduleUpdated ? "Solicitação aprovada e cronograma atualizado." : payload.data.status === "Em análise" ? "Solicitação enviada para análise do WFM." : `Solicitação ${payload.data.id} atualizada para ${payload.data.status}.`);
       void loadKanbanRequests(filters, pagination.page);
     } catch (error) {
       setActionMessage(error instanceof Error ? error.message : "Não foi possível atualizar a solicitação.");
