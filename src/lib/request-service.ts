@@ -317,7 +317,6 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
   const diagnostics: Record<string, unknown> = {
     requestId: id,
     targetStatus: status,
-    actorEmail: actor.email,
     actorRole: actor.role
   };
 
@@ -346,6 +345,10 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
     const initialTransition = resolveRequestTransition(actor, user, existing, status);
     if (initialTransition === "FORBIDDEN") return "FORBIDDEN" as const;
     if ("error" in initialTransition) return initialTransition;
+
+    if (isSupervisorSendToWfm(actor, existing, initialTransition)) {
+      return sendSupervisorRequestToWfmAnalysis(actor, user, existing, initialTransition, reason, diagnostics);
+    }
 
     const updated = await prisma.$transaction(async (tx) => {
       const current = await tx.request.findUnique({
@@ -436,7 +439,7 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
       });
 
       return saved;
-    });
+    }, { maxWait: 10000, timeout: 15000 });
 
     await notifyRequestStatusChangeSafely(updated, user.id, reason, actor.email);
 
@@ -629,12 +632,13 @@ async function resolveRequesterEmployeeProfile(user: ActiveUser) {
   });
 }
 
-function validationFailure(error: string, fieldErrors: Record<string, string> = {}): RequestServiceError {
+function validationFailure(error: string, fieldErrors: Record<string, string> = {}, details: Record<string, unknown> = {}): RequestServiceError {
   return {
     error,
     message: error,
     type: "VALIDATION_ERROR",
     fieldErrors,
+    details,
     status: 400
   };
 }
@@ -682,6 +686,18 @@ function mapRequestCreateError(error: unknown): RequestServiceError {
 }
 
 function mapRequestStatusError(error: unknown, diagnostics: Record<string, unknown> = {}): RequestServiceError {
+  const message = error instanceof Error ? error.message : "";
+  if (/Unable to start a transaction|Transaction API error|transaction.*time/i.test(message)) {
+    return {
+      error: "Não foi possível enviar para análise do WFM por instabilidade temporária no banco. Tente novamente.",
+      message: "Não foi possível enviar para análise do WFM por instabilidade temporária no banco. Tente novamente.",
+      type: "TRANSACTION_TIMEOUT",
+      fieldErrors: {},
+      details: diagnostics,
+      status: 503
+    };
+  }
+
   if (error instanceof Prisma.PrismaClientKnownRequestError) {
     if (error.code === "P2003") {
       return {
@@ -717,8 +733,8 @@ function mapRequestStatusError(error: unknown, diagnostics: Record<string, unkno
   }
 
   return {
-    error: error instanceof Error ? `Falha ao atualizar solicitação: ${error.message}` : "Não foi possível enviar para análise do WFM.",
-    message: error instanceof Error ? `Falha ao atualizar solicitação: ${error.message}` : "Não foi possível enviar para análise do WFM.",
+    error: "Não foi possível atualizar a solicitação. Tente novamente ou contate o administrador.",
+    message: "Não foi possível atualizar a solicitação. Tente novamente ou contate o administrador.",
     type: "REQUEST_STATUS_UPDATE_ERROR",
     fieldErrors: {},
     details: diagnostics,
@@ -964,6 +980,107 @@ async function listRequestSupervisors() {
     wbLogin: supervisor.wbLogin,
     email: supervisor.user?.email
   }));
+}
+
+function isResolvedRequestTransition(transition: RequestTransition): transition is Exclude<RequestTransition, "FORBIDDEN" | { error: string }> {
+  return typeof transition === "object" && "nextStatus" in transition;
+}
+
+function isSupervisorSendToWfm(actor: Actor, request: PrismaRequest, transition: RequestTransition) {
+  return (
+    normalizeRole(actor.role) === "SUPERVISOR" &&
+    normalizeDbRequestStatus(request.status) === "ABERTO" &&
+    isResolvedRequestTransition(transition) &&
+    transition.nextStatus === "EM_ANALISE" &&
+    !transition.applySchedule
+  );
+}
+
+async function sendSupervisorRequestToWfmAnalysis(
+  actor: Actor,
+  user: ActiveUser,
+  request: PrismaRequest,
+  transition: Exclude<RequestTransition, "FORBIDDEN" | { error: string }>,
+  reason: string | undefined,
+  diagnostics: Record<string, unknown>
+) {
+  const startedAt = Date.now();
+  diagnostics.fastPath = "SUPERVISOR_SEND_TO_WFM";
+
+  const guard = await prisma.request.updateMany({
+    where: { id: request.id, status: request.status, deletedAt: null },
+    data: { status: transition.nextStatus, updatedAt: new Date() }
+  });
+
+  if (guard.count !== 1) {
+    const latest = await prisma.request.findUnique({ where: { id: request.id }, select: { status: true } });
+    const latestStatus = latest?.status ? normalizeDbRequestStatus(latest.status) : null;
+    return validationFailure(
+      latestStatus === "EM_ANALISE"
+        ? "Esta solicitação já foi enviada para análise."
+        : "A solicitação já foi movimentada por outro usuário.",
+      {},
+      { ...diagnostics, currentStatus: latest?.status ?? null, elapsedMs: Date.now() - startedAt }
+    );
+  }
+
+  const sideEffects = await Promise.allSettled([
+    prisma.requestHistory.create({
+      data: {
+        requestId: request.id,
+        actorId: user.id,
+        action: transition.historyAction,
+        from: request.status,
+        to: transition.nextStatus,
+        reason
+      }
+    }),
+    prisma.auditLog.create({
+      data: {
+        actorId: user.id,
+        action: transition.auditAction,
+        entity: "Request",
+        entityId: request.id,
+        reason: reason ?? transition.historyAction,
+        previousValue: { status: request.status },
+        newValue: { status: transition.nextStatus }
+      }
+    })
+  ]);
+
+  const rejectedSideEffects = sideEffects
+    .map((result, index) => ({ result, name: index === 0 ? "history" : "auditLog" }))
+    .filter((item): item is { result: PromiseRejectedResult; name: string } => item.result.status === "rejected");
+
+  if (rejectedSideEffects.length) {
+    recordErrorLog({
+      userEmail: actor.email,
+      code: "REQUEST_STATUS_SIDE_EFFECT_WARNING",
+      message: rejectedSideEffects.map((item) => `${item.name}: ${item.result.reason instanceof Error ? item.result.reason.message : String(item.result.reason)}`).join(" | "),
+      route: "/api/requests/status",
+      action: "REQUEST_STATUS_SIDE_EFFECT",
+      severity: "WARNING",
+      metadata: { ...diagnostics, requestId: request.id, elapsedMs: Date.now() - startedAt }
+    });
+  }
+
+  const updated = await prisma.request.findUniqueOrThrow({
+    where: { id: request.id },
+    include: requestInclude
+  });
+
+  await notifyRequestStatusChangeSafely(updated, user.id, reason, actor.email);
+  recordErrorLog({
+    userEmail: actor.email,
+    code: "REQUEST_STATUS_FAST_PATH_OK",
+    message: "Solicitação enviada para análise do WFM.",
+    route: "/api/requests/status",
+    action: "REQUEST_STATUS_FAST_PATH",
+    severity: "INFO",
+    metadata: { ...diagnostics, requestId: request.id, elapsedMs: Date.now() - startedAt }
+  });
+
+  return { data: mapPrismaRequest(updated, user, actor), scheduleUpdated: false, persisted: true };
 }
 
 function canViewRequest(actor: Actor, user: ActiveUser, request: PrismaRequest) {
