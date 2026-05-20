@@ -458,6 +458,7 @@ type AttendanceSummary = {
 
 type AttendanceItem = {
   id: string;
+  attendanceRecordId?: string;
   employeeId: string;
   employeeName: string;
   wbLogin?: string;
@@ -2544,6 +2545,7 @@ export function SchedulesPage() {
   const [attendanceMessage, setAttendanceMessage] = useState("");
   const [attendanceSummary, setAttendanceSummary] = useState<AttendanceSummary | null>(null);
   const [pendingJustifications, setPendingJustifications] = useState<AttendanceItem[]>([]);
+  const [selectedAttendancePending, setSelectedAttendancePending] = useState<AttendanceItem | null>(null);
   const [pendingSupervisorFilter, setPendingSupervisorFilter] = useState("Todos");
   const [scheduleActorRole, setScheduleActorRole] = useState("COLABORADOR");
   const [schedulePeriod, setSchedulePeriod] = useState({ month: 5, year: 2026 });
@@ -2605,6 +2607,8 @@ export function SchedulesPage() {
   });
   const [savingWorkHourAdjustment, setSavingWorkHourAdjustment] = useState(false);
   const [attendanceForm, setAttendanceForm] = useState({
+    attendanceRecordId: "",
+    scheduleId: "",
     employeeId: "",
     date: "2026-05-15",
     shift: "Manhã",
@@ -2882,15 +2886,22 @@ export function SchedulesPage() {
   }
 
   function openPendingJustification(record: AttendanceItem) {
+    const attendanceRecordId = record.attendanceRecordId ?? (record.id && !record.id.startsWith("schedule:") ? record.id : "");
+    const scheduleId = record.scheduleId ?? (record.id?.startsWith("schedule:") ? record.id.replace("schedule:", "") : "");
+    setSelectedAttendancePending(record);
+    setAttendanceMessage("");
     setAttendanceForm({
-      ...attendanceForm,
+      attendanceRecordId,
+      scheduleId,
       employeeId: record.employeeId,
       date: record.dateIso ?? record.date,
       shift: cleanShiftName(record.shift) || "Manhã",
       status: statusFromScheduleCell(record.status),
-      absenceReason: record.absenceReason === "Sem justificativa" ? "" : record.absenceReason ?? "",
-      reasonCategory: record.reasonCategory ?? "Operacional",
-      supervisorJustification: "",
+      absenceReason: record.absenceReason && record.absenceReason !== "Sem justificativa" ? record.absenceReason : "Ausente",
+      reasonCategory: record.reasonCategory ?? "Cronograma",
+      supervisorJustification: record.supervisorJustification ?? "",
+      hasEvidence: false,
+      evidenceUrl: "",
       impactsAbs: record.impactsAbs,
       impactsCoverage: record.impactsCoverage
     });
@@ -2906,8 +2917,10 @@ export function SchedulesPage() {
     }
     const cellStatus = statusFromScheduleCell(value);
     const safeStatus = supervisorOccurrenceStatuses.includes(cellStatus) ? cellStatus : "Falta";
+    setSelectedAttendancePending(null);
     setAttendanceForm({
-      ...attendanceForm,
+      attendanceRecordId: "",
+      scheduleId: "",
       employeeId: targetEmployee.id,
       date: visibleScheduleDates[dayIndex] ?? `${schedulePeriod.year}-${String(schedulePeriod.month).padStart(2, "0")}-${String(dayIndex + 1).padStart(2, "0")}`,
       shift: cleanShiftName(targetEmployee.shift) || "Manhã",
@@ -2915,10 +2928,17 @@ export function SchedulesPage() {
       absenceReason: attendanceForm.absenceReason || "Outros",
       reasonCategory: attendanceForm.reasonCategory || "Cronograma",
       supervisorJustification: "",
+      hasEvidence: false,
+      evidenceUrl: "",
       impactsAbs: safeStatus === "Falta",
       impactsCoverage: ["Falta", "Atraso", "Saída antecipada", "Erro de cronograma"].includes(safeStatus)
     });
     setShowAttendance(true);
+  }
+
+  function closeAttendanceModal() {
+    setShowAttendance(false);
+    setSelectedAttendancePending(null);
   }
 
   async function saveScheduleEdit() {
@@ -3092,7 +3112,7 @@ export function SchedulesPage() {
       setAttendanceSummary(payload.summary);
       const employeeName = payload.data.employeeName ?? scheduleRows.find((row) => row.employee.id === attendanceForm.employeeId)?.employee.name ?? attendanceForm.employeeId;
       setAttendanceMessage(`${employeeName}: ${payload.data.status ?? attendanceForm.status} registrado. ABS/cobertura/auditoria atualizados.`);
-      setShowAttendance(false);
+      closeAttendanceModal();
       await refreshSchedules();
     } catch (error) {
       setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível salvar presença/ocorrência.");
@@ -4093,20 +4113,31 @@ export function SchedulesPage() {
                   {isScheduleSupervisor ? "Registra justificativa e AttendanceRecord sem alterar turno, entrada, saída ou marcar presença." : "Atualiza cronograma, mapa, cobertura, indicadores de ABS e auditoria."}
                 </p>
               </div>
-              <button onClick={() => setShowAttendance(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+              <button onClick={closeAttendanceModal} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
             </div>
             <div className="grid gap-4 md:grid-cols-2">
-              <label className="block">
-                <span className="mb-1.5 block text-sm font-bold text-muted">Colaborador</span>
-                <select value={attendanceForm.employeeId} onChange={(event) => setAttendanceForm({ ...attendanceForm, employeeId: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100">
-                  {employeeOptions.map((employee) => <option key={employee.id} value={employee.id}>{employeeOptionLabel(employee)}</option>)}
-                </select>
-              </label>
-              <FormInput label="Data" type="date" value={attendanceForm.date} onChange={(value) => setAttendanceForm({ ...attendanceForm, date: value })} />
-              <FormSelect label="Turno" value={attendanceForm.shift} options={availableShiftNames} onChange={(value) => setAttendanceForm({ ...attendanceForm, shift: value })} />
+              {selectedAttendancePending ? (
+                <div className="rounded-lg border border-blue-100 bg-blue-50 p-3">
+                  <span className="mb-1.5 block text-sm font-bold text-muted">Colaborador</span>
+                  <p className="text-sm font-extrabold text-navy-950">{selectedAttendancePending.employeeName}</p>
+                  <p className="mt-1 text-xs font-semibold text-blue-700">
+                    WB/Login: {selectedAttendancePending.wbLogin || "Não informado"} • Supervisor: {selectedAttendancePending.supervisor || "Sem supervisor"}
+                  </p>
+                </div>
+              ) : (
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-bold text-muted">Colaborador</span>
+                  <select value={attendanceForm.employeeId} onChange={(event) => setAttendanceForm({ ...attendanceForm, employeeId: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100">
+                    {employeeOptions.map((employee) => <option key={employee.id} value={employee.id}>{employeeOptionLabel(employee)}</option>)}
+                  </select>
+                </label>
+              )}
+              <FormInput disabled={Boolean(selectedAttendancePending)} label="Data" type="date" value={attendanceForm.date} onChange={(value) => setAttendanceForm({ ...attendanceForm, date: value })} />
+              <FormSelect disabled={Boolean(selectedAttendancePending)} label="Turno" value={attendanceForm.shift} options={availableShiftNames} onChange={(value) => setAttendanceForm({ ...attendanceForm, shift: value })} />
               <FormSelect
                 label="Status"
                 value={attendanceForm.status}
+                disabled={Boolean(selectedAttendancePending)}
                 options={attendanceStatusOptions}
                 onChange={(value) => {
                   const reasonRequired = statusNeedsReason(value);
@@ -4127,11 +4158,11 @@ export function SchedulesPage() {
                 <p className="mb-2 text-sm font-bold text-muted">Impactos</p>
                 <div className="flex flex-wrap gap-4 text-sm font-semibold text-navy-950">
                   <label className="flex items-center gap-2">
-                    <input type="checkbox" checked={attendanceForm.impactsAbs} onChange={(event) => setAttendanceForm({ ...attendanceForm, impactsAbs: event.target.checked })} />
+                    <input type="checkbox" disabled={Boolean(selectedAttendancePending)} checked={attendanceForm.impactsAbs} onChange={(event) => setAttendanceForm({ ...attendanceForm, impactsAbs: event.target.checked })} />
                     Impacta ABS
                   </label>
                   <label className="flex items-center gap-2">
-                    <input type="checkbox" checked={attendanceForm.impactsCoverage} onChange={(event) => setAttendanceForm({ ...attendanceForm, impactsCoverage: event.target.checked })} />
+                    <input type="checkbox" disabled={Boolean(selectedAttendancePending)} checked={attendanceForm.impactsCoverage} onChange={(event) => setAttendanceForm({ ...attendanceForm, impactsCoverage: event.target.checked })} />
                     Impacta cobertura
                   </label>
                 </div>

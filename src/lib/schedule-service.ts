@@ -150,6 +150,8 @@ export type AttendanceQuery = {
 };
 
 export type AttendanceInput = {
+  attendanceRecordId?: string;
+  scheduleId?: string;
   employeeId: string;
   date: string;
   shift: string;
@@ -702,56 +704,96 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
       include: { shift: true, supervisor: true, lob: true }
     });
     if (!employee) return { error: "Colaborador não encontrado." };
-    if (employee.supervisorId && employee.supervisorId !== user.employeeProfile.id) {
-      return { error: "Supervisor só pode justificar colaboradores vinculados ao seu time." };
-    }
 
     const status = uiToAttendanceStatus[input.status];
     if (!status) return { error: "Status de ocorrência inválido." };
 
-    const schedule = await prisma.schedule.findUnique({
-      where: { employeeId_date: { employeeId: employee.id, date } },
-      include: { shift: true }
-    });
-    if (!schedule) return { error: "Ocorrência de cronograma não encontrada para esta data. WFM/Admin precisa registrar a ocorrência antes da justificativa." };
+    const schedule = input.scheduleId
+      ? await prisma.schedule.findFirst({
+          where: { id: input.scheduleId, deletedAt: null },
+          include: { shift: true }
+        })
+      : await prisma.schedule.findUnique({
+          where: { employeeId_date: { employeeId: employee.id, date } },
+          include: { shift: true }
+        });
+    if (!schedule) return { error: "Registro de falta não encontrado." };
+    if (schedule.employeeId !== employee.id) {
+      return { error: "Colaborador da pendência não corresponde ao registro selecionado." };
+    }
     const shift = schedule.shift ?? employee.shift;
-    const existing = await prisma.attendanceRecord.findFirst({
-      where: {
-        employeeId: employee.id,
-        date,
-        OR: [{ scheduleId: schedule.id }, { shiftId: shift.id }]
-      }
-    });
-    if (!existing) return { error: "Nenhuma pendência de justificativa foi registrada para este colaborador/data." };
-    const existingStatus = scheduleToUiStatus[existing.status] ?? String(existing.status);
-    if (!supervisorJustificationStatuses.includes(existingStatus)) return { error: "Esta ocorrência não é justificável pelo Supervisor." };
+    const existing = input.attendanceRecordId
+      ? await prisma.attendanceRecord.findUnique({ where: { id: input.attendanceRecordId } })
+      : await prisma.attendanceRecord.findFirst({
+          where: {
+            employeeId: employee.id,
+            date,
+            OR: [{ scheduleId: schedule.id }, { shiftId: shift.id }]
+          },
+          orderBy: { updatedAt: "desc" }
+        });
+    if (existing?.employeeId && existing.employeeId !== employee.id) {
+      return { error: "Colaborador da pendência não corresponde ao registro selecionado." };
+    }
+    if (existing?.scheduleId && existing.scheduleId !== schedule.id) {
+      return { error: "Registro de falta não encontrado para o cronograma selecionado." };
+    }
+
+    const scheduleStatus = scheduleToUiStatus[schedule.status] ?? String(schedule.status);
+    const existingStatus = existing ? scheduleToUiStatus[existing.status] ?? String(existing.status) : scheduleStatus;
+    if (!supervisorJustificationStatuses.includes(scheduleStatus) && !supervisorJustificationStatuses.includes(existingStatus)) {
+      return { error: "Esta ocorrência não é justificável pelo Supervisor." };
+    }
+    const savedStatus = uiToAttendanceStatus[existingStatus] ?? status;
 
     const saved = await prisma.$transaction(async (tx) => {
-      const record = await tx.attendanceRecord.update({
-        where: { id: existing.id },
-        data: {
-          scheduleId: schedule.id,
-          status,
-          absenceReason: input.absenceReason,
-          reasonCategory: input.reasonCategory,
-          supervisorJustification: input.supervisorJustification,
-          hasEvidence: input.hasEvidence ?? false,
-          evidenceUrl: input.evidenceUrl,
-          isJustified: true,
-          impactsAbs: input.impactsAbs ?? impactsAbs(input.status, input.absenceReason),
-          impactsCoverage: input.impactsCoverage ?? impactsCoverage(input.status),
-          justifiedById: user.id,
-          justifiedAt: new Date()
-        }
-      });
+      const record = existing
+        ? await tx.attendanceRecord.update({
+            where: { id: existing.id },
+            data: {
+              scheduleId: schedule.id,
+              shiftId: shift.id,
+              status: savedStatus,
+              absenceReason: input.absenceReason,
+              reasonCategory: input.reasonCategory,
+              supervisorJustification: input.supervisorJustification,
+              hasEvidence: input.hasEvidence ?? false,
+              evidenceUrl: input.evidenceUrl,
+              isJustified: true,
+              impactsAbs: input.impactsAbs ?? impactsAbs(existingStatus, input.absenceReason),
+              impactsCoverage: input.impactsCoverage ?? impactsCoverage(existingStatus),
+              justifiedById: user.id,
+              justifiedAt: new Date()
+            }
+          })
+        : await tx.attendanceRecord.create({
+            data: {
+              employeeId: employee.id,
+              scheduleId: schedule.id,
+              date,
+              shiftId: shift.id,
+              status: savedStatus,
+              absenceReason: input.absenceReason,
+              reasonCategory: input.reasonCategory,
+              supervisorJustification: input.supervisorJustification,
+              hasEvidence: input.hasEvidence ?? false,
+              evidenceUrl: input.evidenceUrl,
+              isJustified: true,
+              impactsAbs: input.impactsAbs ?? impactsAbs(scheduleStatus, input.absenceReason),
+              impactsCoverage: input.impactsCoverage ?? impactsCoverage(scheduleStatus),
+              registeredById: user.id,
+              justifiedById: user.id,
+              justifiedAt: new Date()
+            }
+          });
 
       await tx.attendanceHistory.create({
         data: {
           attendanceRecordId: record.id,
           changedById: user.id,
-          previousStatus: existing?.status,
-          newStatus: status,
-          previousReason: existing?.absenceReason,
+          previousStatus: existing?.status ?? null,
+          newStatus: savedStatus,
+          previousReason: existing?.absenceReason ?? null,
           newReason: input.absenceReason,
           comment: input.supervisorJustification || input.absenceReason
         }
@@ -764,7 +806,7 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
           entity: "AttendanceRecord",
           entityId: record.id,
           reason: "Justificativa de ocorrência registrada pelo Supervisor",
-          previousValue: serialize(existing),
+          previousValue: existing ? serialize(existing) : null,
           newValue: serialize(record)
         }
       });
@@ -808,7 +850,7 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
         shift: cleanShiftName(shift.name) || "Sem turno",
         lob: employee.lob.name,
         supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
-        status: input.status,
+        status: scheduleToUiStatus[saved.status] ?? input.status,
         absenceReason: saved.absenceReason ?? undefined,
         reasonCategory: saved.reasonCategory ?? undefined,
         supervisorJustification: saved.supervisorJustification ?? undefined,
@@ -1238,6 +1280,7 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
         const validJustification = hasValidJustification(record);
         return {
           id: record?.id ?? `schedule:${schedule.id}`,
+          attendanceRecordId: record?.id,
           employeeId: schedule.employeeId,
           employeeName: schedule.employee.fullName,
           wbLogin: schedule.employee.wbLogin,

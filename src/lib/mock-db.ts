@@ -907,7 +907,6 @@ export function updateAttendance(actor: Actor, input: { employeeId: string; date
   const employee = db.employees.find((item) => item.id === input.employeeId);
   if (!employee) return { error: "Colaborador não encontrado." };
   if (actor.role === "COLABORADOR") return { error: "Colaborador não pode alterar presença." };
-  if (actor.role === "SUPERVISOR" && employee.supervisor !== actor.name) return { error: "Supervisor só pode justificar o próprio time." };
   if (!["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(actor.role)) return { error: "Sem permissão para alterar presença." };
 
   const impactsAbs = shouldImpactAbs(input.status, input.absenceReason);

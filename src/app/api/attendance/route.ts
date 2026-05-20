@@ -5,6 +5,8 @@ import { getApiActor } from "@/lib/api-actor";
 import { getOperationalAttendance, updateOperationalAttendance } from "@/lib/schedule-service";
 
 const schema = z.object({
+  attendanceRecordId: z.string().optional(),
+  scheduleId: z.string().optional(),
   employeeId: z.string().min(1),
   date: z.string().min(1),
   shift: z.string().min(1),
