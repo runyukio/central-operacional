@@ -74,13 +74,21 @@ export type RequestFilters = {
   priority?: string;
   requester?: string;
   assignee?: string;
+  assignedTo?: string;
   date?: string;
   startDate?: string;
   endDate?: string;
   lob?: string;
+  supervisor?: string;
+  supervisorId?: string;
   collaborator?: string;
+  employeeId?: string;
+  wbLogin?: string;
+  search?: string;
   pendingAction?: string | boolean;
   scope?: "mine" | "all";
+  page?: string | number;
+  limit?: string | number;
 };
 
 export type CreateRequestInput = {
@@ -113,16 +121,40 @@ export type RequestStatusActionInput = {
 export async function listOperationalRequests(actor: Actor, filters: RequestFilters = {}) {
   try {
     const user = await findActiveUser(actor.email);
-    if (!user) return allowDemoDataFallback ? listMockRequests(actor) : [];
+    if (!user) {
+      const fallback = allowDemoDataFallback ? listMockRequests(actor) : [];
+      return paginatedRequestResult(fallback, filters);
+    }
 
     const where: Prisma.RequestWhereInput = buildRequestWhere(actor, user, filters);
-    const requests = await prisma.request.findMany({
-      where,
-      include: requestInclude,
-      orderBy: { createdAt: "desc" }
-    });
+    const page = parsePositiveInteger(filters.page, 1);
+    const limit = parseRequestLimit(filters.limit);
+    const skip = (page - 1) * limit;
+    const summaryWhere = buildRequestWhere(actor, user, { ...filters, status: "Todos", page: 1 });
 
-    return requests.map((request) => mapPrismaRequest(request, user, actor));
+    const [total, requests, summary, supervisors] = await Promise.all([
+      prisma.request.count({ where }),
+      prisma.request.findMany({
+        where,
+        include: requestInclude,
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: limit
+      }),
+      summarizeRequests(summaryWhere),
+      listRequestSupervisors()
+    ]);
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+
+    return {
+      data: requests.map((request) => mapPrismaRequest(request, user, actor)),
+      total,
+      page,
+      limit,
+      totalPages,
+      summary,
+      supervisors
+    };
   } catch (error) {
     recordErrorLog({
       userEmail: actor.email,
@@ -132,7 +164,35 @@ export async function listOperationalRequests(actor: Actor, filters: RequestFilt
       action: "REQUEST_LIST",
       severity: "WARNING"
     });
-    return allowDemoDataFallback ? listMockRequests(actor) : [];
+    const fallback = allowDemoDataFallback ? listMockRequests(actor) : [];
+    return paginatedRequestResult(fallback, filters);
+  }
+}
+
+export async function getOperationalRequest(actor: Actor, id: string) {
+  try {
+    const user = await findActiveUser(actor.email);
+    if (!user && allowDemoDataFallback) {
+      return listMockRequests(actor).find((request) => request.id === id) ?? null;
+    }
+    if (!user) return null;
+
+    const request = await prisma.request.findFirst({
+      where: { deletedAt: null, OR: [{ id }, { code: id }] },
+      include: requestInclude
+    });
+    if (!request || !canViewRequest(actor, user, request)) return null;
+    return mapPrismaRequest(request, user, actor);
+  } catch (error) {
+    recordErrorLog({
+      userEmail: actor.email,
+      code: "REQUEST_DETAIL_DB_ERROR",
+      message: error instanceof Error ? error.message : "Falha ao carregar detalhe da solicitação",
+      route: "/api/requests",
+      action: "REQUEST_DETAIL",
+      severity: "WARNING"
+    });
+    return null;
   }
 }
 
@@ -666,6 +726,10 @@ function buildRequestWhere(actor: Actor, user: ActiveUser, filters: RequestFilte
         : mapped;
   }
   if (filters.priority && filters.priority !== "Todos" && filters.priority in uiToDbPriority) where.priority = uiToDbPriority[filters.priority as UiPriority];
+  if (filters.employeeId) andFilters.push({ employeeId: filters.employeeId });
+  if (filters.wbLogin) {
+    andFilters.push({ employee: { wbLogin: { contains: filters.wbLogin, mode: "insensitive" } } });
+  }
   if (filters.requester) {
     andFilters.push({
       OR: [
@@ -675,8 +739,41 @@ function buildRequestWhere(actor: Actor, user: ActiveUser, filters: RequestFilte
     });
   }
   if (filters.assignee) where.assignee = { name: { contains: filters.assignee, mode: "insensitive" } };
+  if (filters.assignedTo && filters.assignedTo !== "Todos") {
+    const assignedTo = filters.assignedTo.toLowerCase();
+    if (assignedTo === "supervisor") {
+      andFilters.push({ status: "ABERTO" });
+    } else if (assignedTo === "wfm") {
+      andFilters.push({ status: { in: ["EM_ANALISE", "AGUARDANDO_APROVACAO", "AJUSTE_SOLICITADO"] } });
+    } else if (assignedTo === "wfm/admin") {
+      andFilters.push({ status: "APROVADO" });
+    } else if (assignedTo === "nenhum") {
+      andFilters.push({ status: { in: ["RECUSADO", "CONCLUIDO", "CANCELADO"] } });
+    } else {
+      andFilters.push({ assignee: { name: { contains: filters.assignedTo, mode: "insensitive" } } });
+    }
+  }
   if (filters.lob && filters.lob !== "Todos") {
     andFilters.push({ employee: { lob: { name: { equals: filters.lob, mode: "insensitive" } } } });
+  }
+  const supervisorFilter = filters.supervisorId ?? filters.supervisor;
+  if (supervisorFilter && supervisorFilter !== "Todos") {
+    if (["SEM_SUPERVISOR", "NONE", "Sem supervisor"].includes(supervisorFilter)) {
+      andFilters.push({
+        OR: [
+          { employeeId: null },
+          { employee: { supervisorId: null } }
+        ]
+      });
+    } else {
+      andFilters.push({
+        OR: [
+          { employee: { supervisorId: supervisorFilter } },
+          { employee: { supervisor: { fullName: { contains: supervisorFilter, mode: "insensitive" } } } },
+          { employee: { supervisor: { wbLogin: { contains: supervisorFilter, mode: "insensitive" } } } }
+        ]
+      });
+    }
   }
   if (filters.collaborator) {
     andFilters.push({
@@ -685,6 +782,22 @@ function buildRequestWhere(actor: Actor, user: ActiveUser, filters: RequestFilte
         { employee: { wbLogin: { contains: filters.collaborator, mode: "insensitive" } } },
         { requester: { name: { contains: filters.collaborator, mode: "insensitive" } } },
         { requester: { email: { contains: filters.collaborator, mode: "insensitive" } } }
+      ]
+    });
+  }
+  if (filters.search?.trim()) {
+    const search = filters.search.trim();
+    andFilters.push({
+      OR: [
+        { code: { contains: search, mode: "insensitive" } },
+        { title: { contains: search, mode: "insensitive" } },
+        { description: { contains: search, mode: "insensitive" } },
+        { assignedArea: { contains: search, mode: "insensitive" } },
+        { type: { name: { contains: search, mode: "insensitive" } } },
+        { requester: { name: { contains: search, mode: "insensitive" } } },
+        { requester: { email: { contains: search, mode: "insensitive" } } },
+        { employee: { fullName: { contains: search, mode: "insensitive" } } },
+        { employee: { wbLogin: { contains: search, mode: "insensitive" } } }
       ]
     });
   }
@@ -712,6 +825,94 @@ function buildRequestWhere(actor: Actor, user: ActiveUser, filters: RequestFilte
 
 function isPendingActionFilter(value: RequestFilters["pendingAction"]) {
   return value === true || value === "true" || value === "1" || value === "sim";
+}
+
+const requestStatusLabels = ["Aberto", "Em análise", "Aprovado", "Recusado", "Concluído", "Cancelado"] as const;
+
+function parsePositiveInteger(value: RequestFilters["page"], fallback: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+function parseRequestLimit(value: RequestFilters["limit"]) {
+  const parsed = parsePositiveInteger(value, 50);
+  return Math.min(100, [25, 50, 100].includes(parsed) ? parsed : 50);
+}
+
+function emptyRequestSummary() {
+  return {
+    total: 0,
+    byStatus: requestStatusLabels.reduce((acc, status) => ({ ...acc, [status]: 0 }), {} as Record<UiRequestStatus, number>)
+  };
+}
+
+async function summarizeRequests(where: Prisma.RequestWhereInput) {
+  const [total, groups] = await Promise.all([
+    prisma.request.count({ where }),
+    prisma.request.groupBy({
+      by: ["status"],
+      where,
+      _count: { _all: true }
+    })
+  ]);
+  const summary = emptyRequestSummary();
+  summary.total = total;
+  groups.forEach((group) => {
+    const status = dbToUiStatus[group.status] ?? "Aberto";
+    summary.byStatus[status] = (summary.byStatus[status] ?? 0) + group._count._all;
+  });
+  return summary;
+}
+
+function summarizeUiRequests(requests: RequestRecord[]) {
+  const summary = emptyRequestSummary();
+  summary.total = requests.length;
+  requests.forEach((request) => {
+    summary.byStatus[request.status] = (summary.byStatus[request.status] ?? 0) + 1;
+  });
+  return summary;
+}
+
+function paginatedRequestResult(requests: RequestRecord[], filters: RequestFilters) {
+  const page = parsePositiveInteger(filters.page, 1);
+  const limit = parseRequestLimit(filters.limit);
+  const total = requests.length;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const safePage = Math.min(page, totalPages);
+  const start = (safePage - 1) * limit;
+  return {
+    data: requests.slice(start, start + limit),
+    total,
+    page: safePage,
+    limit,
+    totalPages,
+    summary: summarizeUiRequests(requests),
+    supervisors: [] as Array<{ id: string; name: string; wbLogin: string; email?: string }>
+  };
+}
+
+async function listRequestSupervisors() {
+  const supervisors = await prisma.employeeProfile.findMany({
+    where: {
+      deletedAt: null,
+      supervisees: { some: { deletedAt: null } }
+    },
+    select: {
+      id: true,
+      fullName: true,
+      wbLogin: true,
+      user: { select: { email: true } }
+    },
+    orderBy: { fullName: "asc" },
+    take: 500
+  });
+
+  return supervisors.map((supervisor) => ({
+    id: supervisor.id,
+    name: supervisor.fullName,
+    wbLogin: supervisor.wbLogin,
+    email: supervisor.user?.email
+  }));
 }
 
 function canViewRequest(actor: Actor, user: ActiveUser, request: PrismaRequest) {

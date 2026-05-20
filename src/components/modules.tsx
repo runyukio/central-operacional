@@ -149,6 +149,20 @@ type ClientRequest = {
   updatedAt?: string;
 };
 
+type RequestListResponse = {
+  data: ClientRequest[];
+  total?: number;
+  page?: number;
+  limit?: number;
+  totalPages?: number;
+  summary?: {
+    total: number;
+    byStatus: Record<string, number>;
+  };
+  supervisors?: Array<{ id: string; name: string; wbLogin: string; email?: string }>;
+  actor?: { role: string; name?: string };
+};
+
 type AnnouncementItem = {
   id: string;
   title: string;
@@ -5292,6 +5306,41 @@ export function RequestsPage() {
   );
 }
 
+const defaultPipelineFilters = {
+  search: "",
+  status: "Todos",
+  type: "Todos",
+  startDate: "",
+  endDate: "",
+  lob: "Todos",
+  supervisorId: "Todos",
+  collaborator: "",
+  wbLogin: "",
+  requester: "",
+  priority: "Todos",
+  assignedTo: "Todos",
+  pendingAction: "false",
+  limit: "50"
+};
+
+function requestedDateLabel(request: ClientRequest) {
+  const payload = request.payload ?? {};
+  return String(
+    payload.desiredDayOffRequestDate ??
+      payload.desiredDayOffDate ??
+      payload.requestedDate ??
+      payload.dayOffToSellDate ??
+      "-"
+  );
+}
+
+function paginationRange(page: number, limit: number, total: number) {
+  if (!total) return "Exibindo 0 de 0 solicitações";
+  const start = (page - 1) * limit + 1;
+  const end = Math.min(page * limit, total);
+  return `Exibindo ${start}-${end} de ${total} solicitações`;
+}
+
 export function RequestsKanbanPage() {
   const [requests, setRequests] = useState<ClientRequest[]>([]);
   const [selected, setSelected] = useState<ClientRequest | null>(null);
@@ -5300,24 +5349,86 @@ export function RequestsKanbanPage() {
   const [actionReason, setActionReason] = useState("");
   const [comment, setComment] = useState("");
   const [actionPending, setActionPending] = useState("");
-  const [pendingActionFilter, setPendingActionFilter] = useState("false");
-  const countByStatus = (status: string) => requests.filter((request) => request.status === status).length;
+  const [filters, setFilters] = useState(defaultPipelineFilters);
+  const [pagination, setPagination] = useState({ total: 0, page: 1, limit: 50, totalPages: 1 });
+  const [summary, setSummary] = useState<RequestListResponse["summary"]>({ total: 0, byStatus: {} });
+  const [supervisors, setSupervisors] = useState<RequestListResponse["supervisors"]>([]);
+  const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [viewMode, setViewMode] = useState<"table" | "kanban">("table");
+  const [loadError, setLoadError] = useState("");
+  const countByStatus = (status: string) => summary?.byStatus?.[status] ?? requests.filter((request) => request.status === status).length;
 
   useEffect(() => {
-    void loadKanbanRequests();
+    void loadKanbanRequests(defaultPipelineFilters, 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function loadKanbanRequests(nextPendingAction = pendingActionFilter) {
+  function buildPipelineParams(nextFilters = filters, nextPage = pagination.page) {
     const params = new URLSearchParams();
-    if (nextPendingAction === "true") params.set("pendingAction", "true");
-    apiJson<{ data: ClientRequest[]; actor?: { role: string } }>(`/api/requests?${params.toString()}`)
-      .then((payload) => {
-        setRequests(payload.data);
-        setActorRole(payload.actor?.role ?? "ADMIN");
-        setSelected((current) => payload.data.find((request) => request.id === current?.id) ?? payload.data[0] ?? null);
-      })
-      .catch(() => setRequests([]));
+    params.set("page", String(nextPage));
+    params.set("limit", nextFilters.limit);
+    Object.entries(nextFilters).forEach(([key, value]) => {
+      if (!value || value === "Todos" || value === "false") return;
+      params.set(key, value);
+    });
+    return params;
+  }
+
+  async function loadKanbanRequests(nextFilters = filters, nextPage = pagination.page) {
+    setLoading(true);
+    setLoadError("");
+    try {
+      const payload = await apiJson<RequestListResponse>(`/api/requests?${buildPipelineParams(nextFilters, nextPage).toString()}`);
+      const page = payload.page ?? nextPage;
+      const limit = payload.limit ?? Number(nextFilters.limit);
+      setRequests(payload.data);
+      setActorRole(payload.actor?.role ?? "ADMIN");
+      setPagination({
+        total: payload.total ?? payload.data.length,
+        page,
+        limit,
+        totalPages: payload.totalPages ?? 1
+      });
+      setSummary(payload.summary ?? { total: payload.total ?? payload.data.length, byStatus: {} });
+      setSupervisors(payload.supervisors ?? []);
+      setSelected((current) => (current ? payload.data.find((request) => request.id === current.id) ?? current : null));
+    } catch (error) {
+      setRequests([]);
+      setPagination({ total: 0, page: 1, limit: Number(nextFilters.limit), totalPages: 1 });
+      setLoadError(error instanceof Error ? error.message : "Não foi possível carregar a esteira.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function applyFilters(nextFilters = filters) {
+    setFilters(nextFilters);
+    void loadKanbanRequests(nextFilters, 1);
+  }
+
+  function clearFilters() {
+    setFilters(defaultPipelineFilters);
+    void loadKanbanRequests(defaultPipelineFilters, 1);
+  }
+
+  function goToPage(nextPage: number) {
+    const safePage = Math.min(Math.max(nextPage, 1), pagination.totalPages);
+    void loadKanbanRequests(filters, safePage);
+  }
+
+  async function openRequestDetail(request: ClientRequest) {
+    setSelected(request);
+    setDetailLoading(true);
+    try {
+      const payload = await apiJson<{ data: ClientRequest; actor?: { role: string } }>(`/api/requests?id=${encodeURIComponent(request.id)}`);
+      setSelected(payload.data);
+      setActorRole(payload.actor?.role ?? actorRole);
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : "Não foi possível carregar o detalhe da solicitação.");
+    } finally {
+      setDetailLoading(false);
+    }
   }
 
   async function moveStatus(id: string, status: string, actionInput?: Record<string, string>) {
@@ -5338,6 +5449,7 @@ export function RequestsKanbanPage() {
       setSelected(payload.data);
       setActionReason("");
       setActionMessage(payload.scheduleUpdated ? "Solicitação aprovada e cronograma atualizado." : `Solicitação ${payload.data.id} atualizada para ${payload.data.status}.`);
+      void loadKanbanRequests(filters, pagination.page);
     } catch (error) {
       setActionMessage(error instanceof Error ? error.message : "Não foi possível atualizar a solicitação.");
     } finally {
@@ -5360,6 +5472,7 @@ export function RequestsKanbanPage() {
       setSelected(payload.data);
       setComment("");
       setActionMessage("Comentário registrado.");
+      void loadKanbanRequests(filters, pagination.page);
     } catch (error) {
       setActionMessage(error instanceof Error ? error.message : "Não foi possível comentar.");
     }
@@ -5373,82 +5486,162 @@ export function RequestsKanbanPage() {
         icon={KanbanSquare}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={pendingActionFilter}
-              onChange={(event) => {
-                const value = event.target.value;
-                setPendingActionFilter(value);
-                void loadKanbanRequests(value);
-              }}
-              className="h-10 rounded-lg border border-border bg-white px-3 text-sm font-bold outline-none"
-            >
-              <option value="false">Todas</option>
-              <option value="true">Pendentes da minha ação</option>
-            </select>
+            <button onClick={() => setViewMode("table")} className={cn("h-10 rounded-lg border px-3 text-sm font-bold", viewMode === "table" ? "border-blue-600 bg-blue-600 text-white" : "border-border bg-white text-navy-950")}>Tabela</button>
+            <button onClick={() => setViewMode("kanban")} className={cn("h-10 rounded-lg border px-3 text-sm font-bold", viewMode === "kanban" ? "border-blue-600 bg-blue-600 text-white" : "border-border bg-white text-navy-950")}>Kanban</button>
+            <button onClick={() => loadKanbanRequests(filters, pagination.page)} className="flex h-10 items-center gap-2 rounded-lg border border-border bg-white px-3 text-sm font-bold text-navy-950">
+              <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+              Atualizar
+            </button>
             <TopActions />
           </div>
         }
       />
+      <div className="card mb-5 space-y-4 p-4">
+        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
+          <label className="relative block xl:col-span-2">
+            <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted" />
+            <input value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} className="h-10 w-full rounded-lg border border-border pl-9 pr-3 text-sm outline-none" placeholder="Buscar por colaborador, WB/Login, tipo ou ID" />
+          </label>
+          <select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
+            {["Todos", ...requestStatuses].map((status) => <option key={status}>{status}</option>)}
+          </select>
+          <select value={filters.type} onChange={(event) => setFilters({ ...filters, type: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
+            {["Todos", ...requestTypes].map((type) => <option key={type}>{type}</option>)}
+          </select>
+          <select value={filters.priority} onChange={(event) => setFilters({ ...filters, priority: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
+            {["Todos", ...requestPriorities].map((priority) => <option key={priority}>{priority}</option>)}
+          </select>
+          <select value={filters.pendingAction} onChange={(event) => setFilters({ ...filters, pendingAction: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
+            <option value="false">Todas as etapas</option>
+            <option value="true">Pendentes da minha ação</option>
+          </select>
+          <input type="date" value={filters.startDate} onChange={(event) => setFilters({ ...filters, startDate: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" aria-label="Data inicial" />
+          <input type="date" value={filters.endDate} onChange={(event) => setFilters({ ...filters, endDate: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" aria-label="Data final" />
+          <select value={filters.lob} onChange={(event) => setFilters({ ...filters, lob: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
+            {["Todos", "ALL", "CEC", "TNS", "ADS"].map((lob) => <option key={lob}>{lob}</option>)}
+          </select>
+          <select value={filters.supervisorId} onChange={(event) => setFilters({ ...filters, supervisorId: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
+            <option value="Todos">Todos os supervisores</option>
+            <option value="SEM_SUPERVISOR">Sem supervisor</option>
+            {(supervisors ?? []).map((supervisor) => (
+              <option key={supervisor.id} value={supervisor.id}>{supervisor.name} - {supervisor.wbLogin}</option>
+            ))}
+          </select>
+          <input value={filters.collaborator} onChange={(event) => setFilters({ ...filters, collaborator: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Colaborador" />
+          <input value={filters.wbLogin} onChange={(event) => setFilters({ ...filters, wbLogin: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="WB/Login" />
+          <input value={filters.requester} onChange={(event) => setFilters({ ...filters, requester: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Solicitante" />
+          <select value={filters.assignedTo} onChange={(event) => setFilters({ ...filters, assignedTo: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
+            {["Todos", "Supervisor", "WFM", "WFM/Admin", "Nenhum"].map((owner) => <option key={owner}>{owner}</option>)}
+          </select>
+          <select value={filters.limit} onChange={(event) => applyFilters({ ...filters, limit: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
+            {["25", "50", "100"].map((limit) => <option key={limit} value={limit}>{limit} por página</option>)}
+          </select>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm font-semibold text-muted">{paginationRange(pagination.page, pagination.limit, pagination.total)}</p>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => applyFilters()} className="h-10 rounded-lg bg-navy-950 px-4 text-sm font-extrabold text-white">Aplicar filtros</button>
+            <button onClick={clearFilters} className="h-10 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950">Limpar filtros</button>
+          </div>
+        </div>
+      </div>
       {actionMessage ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{actionMessage}</div> : null}
+      {loadError ? <div className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">Não foi possível carregar a esteira.</div> : null}
       <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         {[
-          ["Total de Solicitações", requests.length, UsersRound, "blue"],
+          ["Total de Solicitações", summary?.total ?? pagination.total, UsersRound, "blue"],
           ["Abertas", countByStatus("Aberto"), ClipboardList, "blue"],
           ["Em análise", countByStatus("Em análise"), Clock, "orange"],
           ["Aprovadas", countByStatus("Aprovado"), CheckCircle2, "green"],
           ["Recusadas", countByStatus("Recusado"), XCircle, "red"],
           ["Concluídas", countByStatus("Concluído"), ClipboardList, "cyan"]
         ].map(([title, value, Icon, tone]) => (
-          <StatCard key={String(title)} title={String(title)} value={String(value)} helper="Hoje" icon={Icon as never} tone={tone as never} />
+          <StatCard key={String(title)} title={String(title)} value={String(value)} helper="Filtros atuais" icon={Icon as never} tone={tone as never} />
         ))}
       </div>
-      {!requests.length ? <div className="mb-5"><EmptyState title="Nenhuma solicitação encontrada" description="As solicitações criadas pelos colaboradores aparecerão aqui." /></div> : null}
-      <div className="grid gap-4 xl:grid-cols-3 2xl:grid-cols-6">
-        {requestColumns.map((column, columnIndex) => (
-          <section key={column} className="card overflow-hidden">
-            <div className={cn("h-1", ["bg-blue-600", "bg-amber-500", "bg-emerald-500", "bg-red-500", "bg-slate-500", "bg-slate-400"][columnIndex])} />
-            <div className="flex items-center justify-between border-b border-border px-4 py-4">
-              <h2 className="font-extrabold text-navy-950">{column}</h2>
-              <span className="rounded-md bg-slate-100 px-2 py-1 text-sm font-bold text-navy-950">{requests.filter((request) => request.status === column).length}</span>
-            </div>
-            <div className="min-h-[440px] space-y-3 p-3">
-              {requests
-                .filter((request) => request.status === column)
-                .map((request) => {
-                  const Icon = getRequestIcon(request.type);
-                  const dayOffKind = dayOffKindFromRequest(request);
-                  return (
-                    <button key={request.id} onClick={() => setSelected(request)} className="w-full rounded-lg border border-border bg-white p-3 text-left shadow-soft transition hover:-translate-y-0.5 hover:shadow-card">
-                      <div className="flex items-start gap-3">
-                        <div className="grid h-10 w-10 place-items-center rounded-lg bg-blue-50 text-blue-600">
-                          <Icon className="h-5 w-5" />
+      {loading ? <div className="mb-5 rounded-lg border border-border bg-white p-4 text-sm font-bold text-muted">Carregando solicitações...</div> : null}
+      {!loading && !requests.length ? <div className="mb-5"><EmptyState title="Nenhuma solicitação encontrada para os filtros selecionados." description="Ajuste os filtros ou limpe a busca para visualizar a esteira." /></div> : null}
+      {viewMode === "table" ? (
+        <Panel title="Visão Tabela">
+          <SimpleTable
+            columns={["ID", "Criação", "Tipo", "Status", "Colaborador", "WB/Login", "LOB", "Supervisor", "Data solicitada", "Prioridade", "Próxima etapa", "Responsável", "Atualização", "Ações"]}
+            rows={requests.map((request) => [
+              <button key={`${request.id}-id`} onClick={() => openRequestDetail(request)} className="font-extrabold text-blue-600">{request.id}</button>,
+              request.createdAt ?? request.time,
+              <div key={`${request.id}-type`}><p className="font-bold text-navy-950">{request.type}</p><p className="line-clamp-1 text-xs text-muted">{request.title}</p></div>,
+              <StatusBadge key={`${request.id}-status`} status={request.status} />,
+              request.requester,
+              request.requesterWbLogin ?? "-",
+              request.lob ?? "-",
+              request.supervisor ?? "Sem supervisor",
+              requestedDateLabel(request),
+              <PriorityBadge key={`${request.id}-priority`} priority={request.priority} />,
+              request.nextStep ?? "-",
+              request.nextOwner ?? "Nenhum",
+              request.updatedAt ?? "-",
+              <button key={`${request.id}-detail`} onClick={() => openRequestDetail(request)} className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-bold text-blue-700">Ver detalhes</button>
+            ])}
+          />
+        </Panel>
+      ) : (
+        <div className="grid gap-4 xl:grid-cols-3 2xl:grid-cols-6">
+          {requestColumns.map((column, columnIndex) => (
+            <section key={column} className="card overflow-hidden">
+              <div className={cn("h-1", ["bg-blue-600", "bg-amber-500", "bg-emerald-500", "bg-red-500", "bg-slate-500", "bg-slate-400"][columnIndex])} />
+              <div className="flex items-center justify-between border-b border-border px-4 py-4">
+                <h2 className="font-extrabold text-navy-950">{column}</h2>
+                <span className="rounded-md bg-slate-100 px-2 py-1 text-sm font-bold text-navy-950">{countByStatus(column)}</span>
+              </div>
+              <div className="min-h-[440px] space-y-3 p-3">
+                {requests
+                  .filter((request) => request.status === column)
+                  .slice(0, 20)
+                  .map((request) => {
+                    const Icon = getRequestIcon(request.type);
+                    const dayOffKind = dayOffKindFromRequest(request);
+                    return (
+                      <button key={request.id} onClick={() => openRequestDetail(request)} className="w-full rounded-lg border border-border bg-white p-3 text-left shadow-soft transition hover:-translate-y-0.5 hover:shadow-card">
+                        <div className="flex items-start gap-3">
+                          <div className="grid h-10 w-10 place-items-center rounded-lg bg-blue-50 text-blue-600">
+                            <Icon className="h-5 w-5" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="font-extrabold text-navy-950">{request.type}</p>
+                            <p className="text-xs text-muted">{request.nextOwner ?? request.area}</p>
+                          </div>
                         </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="font-extrabold text-navy-950">{request.type}</p>
-                          <p className="text-xs text-muted">{request.area}</p>
+                        {dayOffKind ? (
+                          <div className="mt-3">
+                            <StatusBadge status={dayOffKindLabels[dayOffKind]} />
+                          </div>
+                        ) : null}
+                        <p className="mt-3 line-clamp-2 text-xs font-semibold text-muted">{request.title || request.description}</p>
+                        <div className="mt-4 flex items-center justify-between">
+                          <PriorityBadge priority={request.priority} />
+                          <span className="text-xs text-muted">{request.time}</span>
                         </div>
-                      </div>
-                      {dayOffKind ? (
-                        <div className="mt-3">
-                          <StatusBadge status={dayOffKindLabels[dayOffKind]} />
+                        <div className="mt-4 flex items-center gap-2">
+                          <span className="grid h-7 w-7 place-items-center rounded-full bg-slate-200 text-[11px] font-bold">{initials(request.requester)}</span>
+                          <span className="truncate text-xs font-semibold text-muted">{request.requester}</span>
                         </div>
-                      ) : null}
-                      <p className="mt-3 line-clamp-2 text-xs font-semibold text-muted">{request.title || request.description}</p>
-                      <div className="mt-4 flex items-center justify-between">
-                        <PriorityBadge priority={request.priority} />
-                        <span className="text-xs text-muted">{request.time}</span>
-                      </div>
-                      <div className="mt-4 flex items-center gap-2">
-                        <span className="grid h-7 w-7 place-items-center rounded-full bg-slate-200 text-[11px] font-bold">{initials(request.requester)}</span>
-                        <span className="text-xs font-semibold text-muted">{request.requester}</span>
-                      </div>
-                    </button>
-                  );
-                })}
-            </div>
-            <button className="w-full border-t border-border py-4 text-sm font-bold text-blue-600">+ Ver mais</button>
-          </section>
-        ))}
+                      </button>
+                    );
+                  })}
+              </div>
+              <button onClick={() => applyFilters({ ...filters, status: column })} className="w-full border-t border-border py-4 text-sm font-bold text-blue-600">Ver status na tabela</button>
+            </section>
+          ))}
+        </div>
+      )}
+      <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-white px-4 py-3">
+        <p className="text-sm font-semibold text-muted">{paginationRange(pagination.page, pagination.limit, pagination.total)}</p>
+        <div className="flex flex-wrap gap-2">
+          <button disabled={pagination.page <= 1 || loading} onClick={() => goToPage(1)} className="h-9 rounded-lg border border-border px-3 text-sm font-bold disabled:opacity-50">Primeira</button>
+          <button disabled={pagination.page <= 1 || loading} onClick={() => goToPage(pagination.page - 1)} className="h-9 rounded-lg border border-border px-3 text-sm font-bold disabled:opacity-50">Anterior</button>
+          <span className="grid h-9 place-items-center rounded-lg bg-slate-100 px-3 text-sm font-bold text-navy-950">Página {pagination.page} de {pagination.totalPages}</span>
+          <button disabled={pagination.page >= pagination.totalPages || loading} onClick={() => goToPage(pagination.page + 1)} className="h-9 rounded-lg border border-border px-3 text-sm font-bold disabled:opacity-50">Próxima</button>
+          <button disabled={pagination.page >= pagination.totalPages || loading} onClick={() => goToPage(pagination.totalPages)} className="h-9 rounded-lg border border-border px-3 text-sm font-bold disabled:opacity-50">Última</button>
+        </div>
       </div>
       {selected ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
@@ -5457,6 +5650,7 @@ export function RequestsKanbanPage() {
               <h2 className="text-lg font-extrabold text-navy-950">Detalhe da Solicitação</h2>
               <button onClick={() => setSelected(null)} className="text-2xl text-muted">×</button>
             </div>
+            {detailLoading ? <div className="mb-4 rounded-lg border border-border bg-slate-50 p-3 text-sm font-bold text-muted">Carregando detalhe completo...</div> : null}
             <RequestDetailContent selected={selected} actorRole={actorRole} actionReason={actionReason} setActionReason={setActionReason} comment={comment} setComment={setComment} onMove={moveStatus} onComment={submitComment} actionPending={actionPending} />
           </div>
         </div>

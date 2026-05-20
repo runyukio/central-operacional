@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getApiActor } from "@/lib/api-actor";
-import { createOperationalRequest, listOperationalRequests } from "@/lib/request-service";
+import { createOperationalRequest, getOperationalRequest, listOperationalRequests } from "@/lib/request-service";
 
 const createRequestSchema = z.object({
   type: z.string().min(1),
@@ -28,21 +28,36 @@ const createRequestSchema = z.object({
 export async function GET(request: Request) {
   const actor = await getApiActor();
   const url = new URL(request.url);
-  const data = await listOperationalRequests(actor, {
+  const detailId = url.searchParams.get("id") ?? url.searchParams.get("request");
+  if (detailId) {
+    const data = await getOperationalRequest(actor, detailId);
+    if (!data) return NextResponse.json({ error: "Solicitação não encontrada." }, { status: 404 });
+    return NextResponse.json({ data, actor: { role: actor.role, name: actor.name } });
+  }
+
+  const result = await listOperationalRequests(actor, {
     type: url.searchParams.get("type") ?? undefined,
     status: url.searchParams.get("status") ?? undefined,
     priority: url.searchParams.get("priority") ?? undefined,
     requester: url.searchParams.get("requester") ?? undefined,
     assignee: url.searchParams.get("assignee") ?? undefined,
+    assignedTo: url.searchParams.get("assignedTo") ?? undefined,
     date: url.searchParams.get("date") ?? undefined,
     startDate: url.searchParams.get("startDate") ?? undefined,
     endDate: url.searchParams.get("endDate") ?? undefined,
     lob: url.searchParams.get("lob") ?? undefined,
+    supervisor: url.searchParams.get("supervisor") ?? undefined,
+    supervisorId: url.searchParams.get("supervisorId") ?? undefined,
     collaborator: url.searchParams.get("collaborator") ?? undefined,
+    employeeId: url.searchParams.get("employeeId") ?? undefined,
+    wbLogin: url.searchParams.get("wbLogin") ?? undefined,
+    search: url.searchParams.get("search") ?? undefined,
     pendingAction: url.searchParams.get("pendingAction") ?? undefined,
-    scope: url.searchParams.get("scope") === "mine" ? "mine" : "all"
+    scope: url.searchParams.get("scope") === "mine" ? "mine" : "all",
+    page: url.searchParams.get("page") ?? undefined,
+    limit: url.searchParams.get("limit") ?? undefined
   });
-  return NextResponse.json({ data, actor: { role: actor.role, name: actor.name } });
+  return NextResponse.json({ ...result, actor: { role: actor.role, name: actor.name } });
 }
 
 export async function POST(request: Request) {
