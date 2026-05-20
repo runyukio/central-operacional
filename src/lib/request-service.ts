@@ -63,6 +63,7 @@ type RequestServiceError = {
   message?: string;
   type?: string;
   fieldErrors?: Record<string, string>;
+  details?: Record<string, unknown>;
   status?: number;
 };
 
@@ -313,6 +314,13 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
     return { error: "Informe o motivo da recusa." };
   }
 
+  const diagnostics: Record<string, unknown> = {
+    requestId: id,
+    targetStatus: status,
+    actorEmail: actor.email,
+    actorRole: actor.role
+  };
+
   try {
     const user = await findActiveUser(actor.email);
     if (!user && allowDemoDataFallback) {
@@ -322,6 +330,8 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
       return { error: result.error };
     }
     if (!user) return "FORBIDDEN" as const;
+    diagnostics.userId = user.id;
+    diagnostics.normalizedRole = normalizeRole(actor.role);
 
     const existing = await prisma.request.findFirst({
       where: { OR: [{ id }, { code: id }] },
@@ -329,6 +339,10 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
     });
 
     if (!existing) return null;
+    diagnostics.currentStatus = existing.status;
+    diagnostics.type = existing.type.name;
+    diagnostics.employeeId = existing.employeeId;
+    diagnostics.requesterId = existing.requesterId;
     const initialTransition = resolveRequestTransition(actor, user, existing, status);
     if (initialTransition === "FORBIDDEN") return "FORBIDDEN" as const;
     if ("error" in initialTransition) return initialTransition;
@@ -355,13 +369,14 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
           ? await applyDayOffRequestToSchedule(tx, current, user.id, actionInput)
           : { updated: false, message: "" };
 
+      const shouldUpdatePayload = transition.applySchedule && isDayOffRequest(current);
       const saved = await tx.request.update({
         where: { id: current.id },
         data: {
           status: transition.nextStatus,
           updatedAt: new Date(),
-          payload: transition.applySchedule && isDayOffRequest(current)
-            ? {
+          ...(shouldUpdatePayload
+            ? { payload: {
                 ...((current.payload ?? {}) as Prisma.InputJsonObject),
                 scheduleAppliedAt: new Date().toISOString(),
                 scheduleAppliedById: user.id,
@@ -370,8 +385,8 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
                 finalApprovedShift: actionInput.finalApprovedShift ?? null,
                 finalApprovedStartTime: actionInput.finalApprovedStartTime ?? null,
                 finalApprovedEndTime: actionInput.finalApprovedEndTime ?? null
-              }
-            : current.payload as Prisma.InputJsonValue,
+              } }
+            : {}),
           history: {
             create: {
               actorId: user.id,
@@ -437,9 +452,10 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
       message: error instanceof Error ? error.message : "Falha ao atualizar solicitação no banco",
       route: "/api/requests/status",
       action: "REQUEST_STATUS",
-      severity: "ERROR"
+      severity: "ERROR",
+      metadata: diagnostics
     });
-    if (!allowDemoDataFallback) return mapRequestStatusError(error);
+    if (!allowDemoDataFallback) return mapRequestStatusError(error, diagnostics);
     const result = updateMockRequestStatus(actor, id, status, reason, actionInput);
     if (!result || result === "FORBIDDEN") return result;
     if ("record" in result) return { data: result.record, scheduleUpdated: result.scheduleUpdated, persisted: false };
@@ -665,7 +681,7 @@ function mapRequestCreateError(error: unknown): RequestServiceError {
   };
 }
 
-function mapRequestStatusError(error: unknown): RequestServiceError {
+function mapRequestStatusError(error: unknown, diagnostics: Record<string, unknown> = {}): RequestServiceError {
   if (error instanceof Prisma.PrismaClientKnownRequestError) {
     if (error.code === "P2003") {
       return {
@@ -673,6 +689,7 @@ function mapRequestStatusError(error: unknown): RequestServiceError {
         message: "Não foi possível atualizar a solicitação porque há um vínculo obrigatório ausente ou inválido.",
         type: "RELATION_ERROR",
         fieldErrors: { request: "Revise usuário, histórico, auditoria e solicitação." },
+        details: { code: error.code, ...diagnostics },
         status: 400
       };
     }
@@ -682,16 +699,29 @@ function mapRequestStatusError(error: unknown): RequestServiceError {
         message: "Solicitação não encontrada.",
         type: "NOT_FOUND",
         fieldErrors: {},
+        details: { code: error.code, ...diagnostics },
         status: 404
       };
     }
   }
 
+  if (error instanceof Prisma.PrismaClientValidationError) {
+    return {
+      error: "Dados inválidos para atualizar a solicitação. Verifique status, histórico e payload.",
+      message: "Dados inválidos para atualizar a solicitação. Verifique status, histórico e payload.",
+      type: "PRISMA_VALIDATION_ERROR",
+      fieldErrors: { request: "Payload ou status inválido para o schema atual." },
+      details: diagnostics,
+      status: 400
+    };
+  }
+
   return {
-    error: "Não foi possível enviar para análise do WFM. Tente novamente ou contate o administrador.",
-    message: "Não foi possível enviar para análise do WFM. Tente novamente ou contate o administrador.",
+    error: error instanceof Error ? `Falha ao atualizar solicitação: ${error.message}` : "Não foi possível enviar para análise do WFM.",
+    message: error instanceof Error ? `Falha ao atualizar solicitação: ${error.message}` : "Não foi possível enviar para análise do WFM.",
     type: "REQUEST_STATUS_UPDATE_ERROR",
     fieldErrors: {},
+    details: diagnostics,
     status: 500
   };
 }
@@ -1229,7 +1259,7 @@ function normalizeDayOffKind(value: CreateRequestInput | PrismaRequest | string 
   const raw = String(payload.dayOffKind ?? payload.internalType ?? (value as CreateRequestInput).dayOffKind ?? "");
   if ((dayOffKinds as readonly string[]).includes(raw)) return raw as DayOffKind;
   if (/venda de folga|vender folga/i.test(typeName)) return "DAY_OFF_SELL";
-  if (/solicita(ç|c)[aã]o de dia de folga|dia de folga|folga solicitada/i.test(typeName)) return "DAY_OFF_REQUEST";
+  if (/solicita(ç|c)[aã]o de (dia de )?folga|dia de folga|folga solicitada|pedido de folga/i.test(typeName)) return "DAY_OFF_REQUEST";
   if (/troca de folga|trocar folga/i.test(typeName)) return "DAY_OFF_SWAP";
   return null;
 }

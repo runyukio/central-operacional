@@ -850,7 +850,7 @@ function dayOffKindFromRequest(request: Pick<ClientRequest, "type" | "payload"> 
   const raw = String(request.payload?.dayOffKind ?? request.payload?.internalType ?? "");
   if ((dayOffKinds as readonly string[]).includes(raw)) return raw as DayOffKind;
   if (/venda de folga/i.test(request.type)) return "DAY_OFF_SELL";
-  if (/dia de folga|folga solicitada/i.test(request.type)) return "DAY_OFF_REQUEST";
+  if (/solicita(ç|c)[aã]o de (dia de )?folga|dia de folga|folga solicitada|pedido de folga/i.test(request.type)) return "DAY_OFF_REQUEST";
   if (/troca de folga/i.test(request.type)) return "DAY_OFF_SWAP";
   return null;
 }
@@ -4793,7 +4793,7 @@ const requestStatuses = ["Aberto", "Em análise", "Aprovado", "Recusado", "Concl
 const requestColumns = ["Aberto", "Em análise", "Aprovado", "Recusado", "Concluído", "Cancelado"];
 
 function isDayOffRequest(type: string) {
-  return /troca de folga|venda de folga|dia de folga/i.test(type);
+  return /troca de folga|venda de folga|solicita(ç|c)[aã]o de (dia de )?folga|dia de folga|folga solicitada|pedido de folga/i.test(type);
 }
 
 function RequestDetailContent({

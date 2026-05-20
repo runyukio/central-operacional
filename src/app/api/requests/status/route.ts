@@ -46,14 +46,15 @@ export async function PATCH(request: Request) {
   }
 
   if (!("data" in result)) {
-    const errorResult = result as { error?: string; message?: string; type?: string; fieldErrors?: Record<string, string>; status?: number };
+    const errorResult = result as { error?: string; message?: string; type?: string; fieldErrors?: Record<string, string>; details?: Record<string, unknown>; status?: number };
     const message = errorResult.message ?? errorResult.error ?? "Não foi possível atualizar a solicitação.";
     return NextResponse.json({
       success: false,
       type: errorResult.type ?? "REQUEST_STATUS_ERROR",
       message,
       error: message,
-      fieldErrors: errorResult.fieldErrors ?? {}
+      fieldErrors: errorResult.fieldErrors ?? {},
+      details: errorResult.details ?? {}
     }, { status: errorResult.status ?? 400 });
   }
 
