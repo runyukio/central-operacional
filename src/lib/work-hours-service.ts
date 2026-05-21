@@ -79,6 +79,8 @@ export type ManualWorkHourInput = {
 type ValidationRow = {
   rowNumber: number;
   wbLogin: string;
+  originalWbLogin?: string;
+  normalizedWbLogin?: string;
   employeeId?: string;
   employeeName?: string;
   date?: Date;
@@ -94,6 +96,51 @@ type ValidationRow = {
   actualHours?: number;
   source?: string;
   observation?: string;
+};
+
+const workHourColumnAliases: Record<string, string> = {
+  wb_login: "wb_login",
+  wblogin: "wb_login",
+  wb: "wb_login",
+  login: "wb_login",
+  data: "data",
+  date: "data",
+  dia: "data",
+  entrada_real: "entrada_real",
+  entradareal: "entrada_real",
+  entrada: "entrada_real",
+  hora_entrada: "entrada_real",
+  entrada_realizada: "entrada_real",
+  saida_real: "saida_real",
+  saidareal: "saida_real",
+  saida: "saida_real",
+  hora_saida: "saida_real",
+  saida_realizada: "saida_real",
+  pausa_minutos: "pausa_minutos",
+  pausaminutos: "pausa_minutos",
+  pausa: "pausa_minutos",
+  intervalo: "pausa_minutos",
+  intervalo_minutos: "pausa_minutos",
+  horas_realizadas: "horas_realizadas",
+  horasrealizadas: "horas_realizadas",
+  horas: "horas_realizadas",
+  horas_liquidas: "horas_realizadas",
+  horas_realizadas_liquidas: "horas_realizadas",
+  sistema_origem: "sistema_origem",
+  sistemaorigem: "sistema_origem",
+  origem: "sistema_origem",
+  source: "sistema_origem",
+  observacao: "observacao",
+  observacoes: "observacao",
+  obs: "observacao",
+  observation: "observacao",
+  lob: "lob",
+  supervisor_wb_login: "supervisor_wb_login",
+  supervisorwblogin: "supervisor_wb_login",
+  supervisor_login: "supervisor_wb_login",
+  supervisor: "supervisor_wb_login",
+  turno: "turno",
+  shift: "turno"
 };
 
 export async function listOperationalWorkHours(actor: Actor, query: WorkHourQuery = {}) {
@@ -697,21 +744,38 @@ export async function exportOperationalWorkHoursCsv(actor: Actor, query: WorkHou
 
 async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
   const duplicateKeys = new Map<string, number>();
-  const normalizedRows = rows.map((row, index) => {
-    const wbLogin = text(row.wb_login).toUpperCase();
+  const normalizedRows = rows.map((rawRow, index) => {
+    const row = normalizeWorkHourImportRow(rawRow);
+    const originalWbLogin = text(row.wb_login);
+    const normalizedWbLogin = normalizeWbLogin(originalWbLogin);
     const date = parseImportDate(row.data);
-    const key = wbLogin && date ? `${wbLogin}:${formatDate(date)}` : "";
+    const key = normalizedWbLogin && date ? `${normalizedWbLogin}:${formatDate(date)}` : "";
     if (key) duplicateKeys.set(key, (duplicateKeys.get(key) ?? 0) + 1);
-    return { row, rowNumber: index + 1, wbLogin, date, key };
+    return { row, rowNumber: index + 1, wbLogin: originalWbLogin, normalizedWbLogin, date, key };
   });
 
-  const wbLogins = Array.from(new Set(normalizedRows.map((row) => row.wbLogin).filter(Boolean)));
+  const wbLogins = Array.from(new Set(normalizedRows.map((row) => row.normalizedWbLogin).filter(Boolean)));
   const employees = await prisma.employeeProfile.findMany({
-    where: { wbLogin: { in: wbLogins }, deletedAt: null },
+    where: { deletedAt: null },
     include: { lob: true, supervisor: true, shift: true }
   });
-  const employeeMap = new Map(employees.map((employee) => [employee.wbLogin.toUpperCase(), employee]));
-  const employeeIds = employees.map((employee) => employee.id);
+  const employeeMap = new Map(employees.map((employee) => [normalizeWbLogin(employee.wbLogin), employee]));
+  const missingWbLogins = wbLogins.filter((wbLogin) => !employeeMap.has(wbLogin));
+  console.info("[work-hours-import:validation]", {
+    totalRows: rows.length,
+    uniqueWbLogins: wbLogins.length,
+    firstNormalizedWbLogins: wbLogins.slice(0, 10),
+    employeeProfilesFound: wbLogins.length - missingWbLogins.length,
+    employeeProfilesMissing: missingWbLogins.length,
+    firstMissingWbLogins: missingWbLogins.slice(0, 20)
+  });
+  const matchedEmployees = Array.from(new Map(
+    normalizedRows
+      .map((row) => row.normalizedWbLogin ? employeeMap.get(row.normalizedWbLogin) : null)
+      .filter((employee): employee is (typeof employees)[number] => Boolean(employee))
+      .map((employee) => [employee.id, employee])
+  ).values());
+  const employeeIds = matchedEmployees.map((employee) => employee.id);
   const dates = Array.from(new Set(normalizedRows.map((row) => row.date?.getTime()).filter((value): value is number => Boolean(value)))).map((value) => new Date(value));
   const [schedules, existingRecords] = await Promise.all([
     employeeIds.length && dates.length
@@ -724,7 +788,7 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
   const scheduleMap = new Map(schedules.map((schedule) => [`${schedule.employeeId}:${schedule.date.getTime()}`, schedule]));
   const recordMap = new Map(existingRecords.map((record) => [`${record.employeeId}:${record.date.getTime()}`, record]));
 
-  return normalizedRows.map<ValidationRow>(({ row, rowNumber, wbLogin, date, key }) => {
+  return normalizedRows.map<ValidationRow>(({ row, rowNumber, wbLogin, normalizedWbLogin, date, key }) => {
     const errors: string[] = [];
     const warnings: string[] = [];
     if (!wbLogin) errors.push("WB/Login é obrigatório.");
@@ -732,8 +796,8 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
     else if (!date) errors.push("Data inválida. Use DD/MM/AAAA ou AAAA-MM-DD.");
     if (key && (duplicateKeys.get(key) ?? 0) > 1) errors.push("Linha duplicada no arquivo para o mesmo WB/Login + data.");
 
-    const employee = wbLogin ? employeeMap.get(wbLogin) : null;
-    if (wbLogin && !employee) errors.push("WB/Login não encontrado na base de funcionários.");
+    const employee = normalizedWbLogin ? employeeMap.get(normalizedWbLogin) : null;
+    if (wbLogin && !employee) errors.push(`WB/Login "${wbLogin}" não encontrado na base de funcionários. Normalizado: "${normalizedWbLogin}".`);
     if (employee && ["Inativo", "Desligado"].includes(employee.operationalStatus)) warnings.push("Colaborador está inativo ou desligado.");
 
     const actualStart = normalizeTime(row.entrada_real);
@@ -761,13 +825,15 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
       existingRecordId = recordMap.get(`${employee.id}:${date.getTime()}`)?.id;
       if (!schedule) warnings.push("Não existe cronograma para esse colaborador nessa data.");
       if (text(row.lob) && text(row.lob).toUpperCase() !== employee.lob.name.toUpperCase()) warnings.push("LOB no arquivo diferente da LOB do colaborador.");
-      if (text(row.supervisor_wb_login) && text(row.supervisor_wb_login).toUpperCase() !== (employee.supervisor?.wbLogin ?? "").toUpperCase()) warnings.push("Supervisor no arquivo diferente do supervisor do colaborador.");
+      if (text(row.supervisor_wb_login) && normalizeWbLogin(row.supervisor_wb_login) !== normalizeWbLogin(employee.supervisor?.wbLogin)) warnings.push("Supervisor no arquivo diferente do supervisor do colaborador.");
       if (existingRecordId) warnings.push("Registro já existe e será atualizado.");
     }
 
     return {
       rowNumber,
-      wbLogin,
+      wbLogin: employee?.wbLogin ?? wbLogin,
+      originalWbLogin: wbLogin,
+      normalizedWbLogin,
       employeeId: employee?.id,
       employeeName: employee?.fullName,
       date: date ?? undefined,
@@ -788,7 +854,13 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
 }
 
 function toImportPreview(rows: Array<Record<string, unknown>>, validation: ValidationRow[]) {
+  const uniqueNormalizedWbLogins = Array.from(new Set(validation.map((row) => row.normalizedWbLogin).filter(Boolean)));
+  const foundNormalizedWbLogins = Array.from(new Set(validation.filter((row) => row.employeeId).map((row) => row.normalizedWbLogin).filter(Boolean)));
+  const missingEmployeeRows = validation.filter((row) => row.normalizedWbLogin && !row.employeeId);
   return {
+    message: uniqueNormalizedWbLogins.length && !foundNormalizedWbLogins.length
+      ? "Nenhum WB/Login do arquivo foi encontrado no banco. Verifique se a base de funcionários foi importada no ambiente atual."
+      : undefined,
     totalRows: rows.length,
     validRows: validation.filter((row) => !row.errors.length).length,
     errorRows: validation.filter((row) => row.errors.length).length,
@@ -796,13 +868,17 @@ function toImportPreview(rows: Array<Record<string, unknown>>, validation: Valid
     createdRows: validation.filter((row) => !row.errors.length && row.action === "criar").length,
     updatedRows: validation.filter((row) => !row.errors.length && row.action === "atualizar").length,
     foundEmployees: validation.filter((row) => row.employeeId).length,
-    missingEmployees: validation.filter((row) => row.errors.includes("WB/Login não encontrado na base de funcionários.")).length,
+    missingEmployees: missingEmployeeRows.length,
+    uniqueWbLogins: uniqueNormalizedWbLogins.length,
+    foundUniqueWbLogins: foundNormalizedWbLogins.length,
+    missingWbLogins: Array.from(new Set(missingEmployeeRows.map((row) => row.normalizedWbLogin).filter(Boolean))).slice(0, 20),
     scheduleFoundRows: validation.filter((row) => row.hasSchedule).length,
     noScheduleRows: validation.filter((row) => !row.hasSchedule && !row.errors.length).length,
     rows: rows.map((row, index) => {
       const result = validation[index];
       return {
         ...row,
+        wb_login: result?.originalWbLogin ?? row.wb_login,
         data: result?.dateIso ?? row.data,
         entrada_real: result?.actualStart ?? row.entrada_real,
         saida_real: result?.actualEnd ?? row.saida_real,
@@ -813,6 +889,8 @@ function toImportPreview(rows: Array<Record<string, unknown>>, validation: Valid
     validation: validation.map((row) => ({
       rowNumber: row.rowNumber,
       wbLogin: row.wbLogin,
+      originalWbLogin: row.originalWbLogin ?? row.wbLogin,
+      normalizedWbLogin: row.normalizedWbLogin ?? "",
       employeeName: row.employeeName ?? "",
       date: row.dateIso ?? "",
       actualStart: row.actualStart ?? "",
@@ -1102,6 +1180,35 @@ function parseBreakMinutes(value: unknown) {
   return { minutes: Math.round(parsed) };
 }
 
+function normalizeWorkHourImportRow(row: Record<string, unknown>) {
+  return Object.entries(row).reduce<Record<string, unknown>>((normalized, [key, value]) => {
+    const normalizedKey = normalizeExcelHeaderKey(key);
+    const canonicalKey = workHourColumnAliases[normalizedKey] ?? normalizedKey;
+    if (!hasExcelValue(normalized[canonicalKey]) || hasExcelValue(value)) normalized[canonicalKey] = value;
+    return normalized;
+  }, {});
+}
+
+function normalizeExcelHeaderKey(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .trim()
+    .replace(/([a-z])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function normalizeWbLogin(value: unknown) {
+  return text(value)
+    .normalize("NFKC")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, "")
+    .toLowerCase();
+}
+
 function minutesBetween(start: string, end: string) {
   const [startHour, startMinute] = start.split(":").map(Number);
   const [endHour, endMinute] = end.split(":").map(Number);
@@ -1112,7 +1219,11 @@ function minutesBetween(start: string, end: string) {
 }
 
 function text(value: unknown) {
-  return String(value ?? "").trim();
+  return String(value ?? "")
+    .normalize("NFKC")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\u00A0/g, " ")
+    .trim();
 }
 
 function chunkArray<T>(items: T[], size: number) {
