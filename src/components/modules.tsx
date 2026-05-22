@@ -94,6 +94,7 @@ import {
 } from "@/lib/demo-data";
 import { cn, formatCurrency, initials } from "@/lib/utils";
 import { cleanShiftName, cleanShiftOptions, isBlockedShiftName, isSelectableShiftName, standardShiftNames } from "@/lib/shift-display";
+import { DEFAULT_PRODUCTIVE_HOURS, normalizeProductivePlannedHours, plannedProductiveHoursForStatus } from "@/lib/work-hours-rules";
 
 const scheduleImportColumns = ["wb_login", "data", "status", "turno", "entrada", "saida", "lob"] as const;
 const workHourImportColumns = ["wb_login", "data", "entrada_real", "saida_real", "pausa_minutos", "horas_realizadas", "sistema_origem", "observacao", "nome", "email", "lob", "supervisor_wb_login", "turno"] as const;
@@ -395,7 +396,7 @@ type WorkHourPreview = {
   missingWbLogins?: string[];
   scheduleFoundRows: number;
   noScheduleRows: number;
-  validation: Array<{ rowNumber: number; wbLogin: string; originalWbLogin?: string; normalizedWbLogin?: string; employeeName: string; date: string; actualStart?: string; actualEnd?: string; actualHours?: number; breakMinutes: number; errors: string[]; warnings: string[]; action: string; status: string }>;
+  validation: Array<{ rowNumber: number; wbLogin: string; originalWbLogin?: string; normalizedWbLogin?: string; employeeName: string; date: string; actualStart?: string; actualEnd?: string; actualHours?: number; breakMinutes: number; plannedHours?: number | null; differenceMinutes?: number | null; errors: string[]; warnings: string[]; action: string; status: string }>;
 };
 
 type RegistrationItem = {
@@ -1968,7 +1969,7 @@ export function MySchedulePage() {
           <Panel title="Resumo de Horas">
             {myWorkHours.length && myWorkHourSummary ? (
               <div className="grid gap-3">
-                <MetricPill value={`${myWorkHourSummary.plannedHours}h`} label="Horas previstas" />
+                <MetricPill value={`${myWorkHourSummary.plannedHours}h`} label="Horas produtivas previstas" />
                 <MetricPill value={`${myWorkHourSummary.actualHours}h`} label="Horas realizadas" />
                 <MetricPill value={formatBreakDuration(myWorkHourSummary.breakMinutes ?? 0)} label="Pausas totais" />
                 <MetricPill value={`${myWorkHourSummary.differenceHours}h`} label="Diferença" />
@@ -2912,7 +2913,7 @@ export function SchedulesPage() {
     const justification = plannedCell?.justification ?? null;
     const plannedStart = plannedCell?.startsAt || (statusNeedsTime(cellStatus) ? times.startsAt : "");
     const plannedEnd = plannedCell?.endsAt || (statusNeedsTime(cellStatus) ? times.endsAt : "");
-    const plannedHours = plannedStart && plannedEnd ? roundDecimal(minutesBetweenTimes(plannedStart, plannedEnd) / 60) : 0;
+    const plannedHours = plannedProductiveHoursForStatus(cellStatus) ?? 0;
     setScheduleEmployeeSearch(employeeOptionLabel(targetEmployee));
     setScheduleEditForm({
       scheduleId: plannedCell?.scheduleId ?? "",
@@ -2939,7 +2940,7 @@ export function SchedulesPage() {
       recordId: hourCell?.id ?? "",
       plannedStart: hourCell?.plannedStart || plannedStart,
       plannedEnd: hourCell?.plannedEnd || plannedEnd,
-      plannedHours: hourCell?.plannedHours ?? plannedHours,
+      plannedHours: normalizeProductivePlannedHours(hourCell?.plannedHours) ?? plannedHours,
       actualStart: hourCell?.actualStart ?? "",
       actualEnd: hourCell?.actualEnd ?? "",
       breakMinutes: String(hourCell?.breakMinutes ?? hourCell?.effectiveBreakMinutes ?? 0),
@@ -3317,7 +3318,7 @@ export function SchedulesPage() {
         detail: `${file.errorRows ?? 0} erro(s), ${file.warningRows ?? 0} alerta(s), ${file.importedRows} linha(s) válidas.`
       }))
   ] as Array<ScheduleAlertItem | null>).filter((item): item is ScheduleAlertItem => item !== null);
-  const plannedHours = scheduledCells * 8;
+  const plannedHours = scheduledCells * DEFAULT_PRODUCTIVE_HOURS;
   const scheduleTotalRows = schedulePagination.total || scheduleRows.length;
   const schedulePageStart = scheduleTotalRows && scheduleRows.length ? (schedulePagination.page - 1) * schedulePagination.limit + 1 : 0;
   const schedulePageEnd = scheduleTotalRows ? Math.min(schedulePagination.page * schedulePagination.limit, scheduleTotalRows) : 0;
@@ -3401,7 +3402,7 @@ export function SchedulesPage() {
       recordId: "",
       plannedStart: scheduleEditRequiresTime ? times.startsAt : "",
       plannedEnd: scheduleEditRequiresTime ? times.endsAt : "",
-      plannedHours: scheduleEditRequiresTime ? roundDecimal(minutesBetweenTimes(times.startsAt, times.endsAt) / 60) : 0,
+      plannedHours: plannedProductiveHoursForStatus(scheduleEditForm.status) ?? 0,
       actualStart: "",
       actualEnd: "",
       breakMinutes: "0",
@@ -3599,7 +3600,7 @@ export function SchedulesPage() {
             <MetricPill value={scheduleTotalRows} label="Colaboradores" />
             <MetricPill value={scheduleRows.length ? "100%" : "0%"} label="Cobertura Planejada" />
             <MetricPill value={`${attendanceSummary?.coverageRate ?? 0}%`} label="Cobertura Real" />
-            <MetricPill value={`${plannedHours}h`} label="Horas Programadas" />
+            <MetricPill value={`${plannedHours}h`} label="Horas produtivas programadas" />
             <MetricPill value={conflictCount} label="Conflitos" />
             <MetricPill value={`${attendanceSummary?.absRate ?? 0}%`} label="ABS" />
             <MetricPill value={attendanceSummary?.unjustified ?? 0} label="Pendências justificativa" />
@@ -3727,10 +3728,10 @@ export function SchedulesPage() {
             <DonutLegend
               total={`${attendanceSummary?.coverageRate ?? 0}%`}
               items={[
-                { label: "Programado", value: `${plannedHours}h`, color: "#10B981" },
+                { label: "Produtivo programado", value: `${plannedHours}h`, color: "#10B981" },
                 { label: "Atenção", value: "0h", color: "#F59E0B" },
-                { label: "Descoberto", value: `${unscheduledCount * 8}h`, color: "#EF4444" },
-                { label: "Sem programação", value: `${unscheduledCount * 8}h`, color: "#CBD5E1" }
+                { label: "Descoberto", value: `${unscheduledCount * DEFAULT_PRODUCTIVE_HOURS}h`, color: "#EF4444" },
+                { label: "Sem programação", value: `${unscheduledCount * DEFAULT_PRODUCTIVE_HOURS}h`, color: "#CBD5E1" }
               ]}
             />
           </Panel>
@@ -3971,6 +3972,7 @@ export function SchedulesPage() {
                     options={[...scheduleStatusOptions]}
                     onChange={(value) => {
                       const times = configuredTimesForShift(scheduleEditForm.shift);
+                      const plannedHours = plannedProductiveHoursForStatus(value) ?? 0;
                       setScheduleEditForm({
                         ...scheduleEditForm,
                         status: value,
@@ -3979,6 +3981,7 @@ export function SchedulesPage() {
                         observation: statusNeedsReason(value) ? scheduleEditForm.observation : scheduleEditForm.observation,
                         pendingJustification: statusNeedsReason(value) ? scheduleEditForm.pendingJustification : false
                       });
+                      setWorkHourForm((current) => ({ ...current, plannedHours }));
                     }}
                   />
                   <FormInput disabled={!canManageSchedules} label="Entrada prevista" value={scheduleEditForm.startsAt} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, startsAt: value })} />
@@ -4123,7 +4126,7 @@ export function SchedulesPage() {
                   <StatusBadge status={workHourForm.recordId ? workHourForm.status : selectedCellHasSchedule ? "Sem horas" : "Sem cronograma"} />
                 </div>
                 <div className="grid gap-3 md:grid-cols-3">
-                  <MetricPill value={workHourForm.plannedHours ? `${workHourForm.plannedHours}h` : "-"} label="Previsto" />
+                  <MetricPill value={workHourForm.plannedHours ? `${workHourForm.plannedHours}h` : "-"} label="Planejado produtivo" />
                   <MetricPill value={formatBreakDuration(manualBreakMinutesPreview)} label="Pausa" />
                   <MetricPill value={manualActualHoursPreview ? `${manualActualHoursPreview}h` : workHourForm.effectiveHours ? `${workHourForm.effectiveHours}h` : "-"} label="Realizado" />
                   <MetricPill value={manualActualHoursPreview || workHourForm.differenceMinutes ? formatHourDifference(manualDifferencePreview) : "-"} label="Diferença" />
@@ -4145,7 +4148,7 @@ export function SchedulesPage() {
                   {manualBreakIsInvalid
                     ? "A pausa não pode ser maior que o período entre entrada e saída."
                     : workHourForm.plannedHours
-                      ? `Status previsto após salvar: ${manualStatusPreview}.`
+                      ? `Status previsto após salvar: ${manualStatusPreview}. Base produtiva: ${DEFAULT_PRODUCTIVE_HOURS}h.`
                       : selectedCellHasSchedule
                         ? "Horas ainda não lançadas para este dia."
                         : "Sem cronograma vinculado para este dia."}
@@ -4556,7 +4559,7 @@ export function WorkHoursPage() {
     <div>
       <PageHeader
         title="Horas Operacionais"
-        description="Upload, conferência e ajuste das horas realizadas versus cronograma planejado"
+        description={`Upload, conferência e ajuste das horas produtivas realizadas versus base planejada de ${DEFAULT_PRODUCTIVE_HOURS}h`}
         icon={Clock}
         actions={
           <div className="flex flex-wrap gap-2">
@@ -4584,7 +4587,7 @@ export function WorkHoursPage() {
       {message ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
 
       <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="Horas previstas" value={`${summary?.plannedHours ?? 0}h`} helper="cronograma planejado" icon={Clock} tone="blue" />
+        <StatCard title="Horas previstas" value={`${summary?.plannedHours ?? 0}h`} helper={`base produtiva ${DEFAULT_PRODUCTIVE_HOURS}h/dia`} icon={Clock} tone="blue" />
         <StatCard title="Horas realizadas" value={`${summary?.actualHours ?? 0}h`} helper="apontamento importado" icon={CheckCircle2} tone="green" />
         <StatCard title="Diferença total" value={`${summary?.differenceHours ?? 0}h`} helper="realizado - previsto" icon={AlertTriangle} tone={(summary?.differenceHours ?? 0) < 0 ? "orange" : "cyan"} />
         <StatCard title="Ajustes pendentes" value={summary?.pendingAdjustments ?? 0} helper="aguardando WFM/Admin" icon={ClipboardList} tone={(summary?.pendingAdjustments ?? 0) ? "orange" : "green"} />
@@ -4644,7 +4647,7 @@ export function WorkHoursPage() {
                     <td className="px-4 py-3">{row.lob}</td>
                     <td className="px-4 py-3">{row.supervisor || "-"}</td>
                     <td className="px-4 py-3">{cleanShiftName(row.shift) || "-"}</td>
-                    <td className="px-4 py-3">{row.plannedStart || "--"} às {row.plannedEnd || "--"} • {row.plannedHours || 0}h</td>
+                    <td className="px-4 py-3">{row.plannedStart || "--"} às {row.plannedEnd || "--"} • {row.plannedHours || 0}h produtivas</td>
                     <td className="px-4 py-3">{row.actualStart || "--"} às {row.actualEnd || "--"} • {row.actualHours}h</td>
                     <td className="px-4 py-3">{formatBreakDuration(row.effectiveBreakMinutes ?? row.breakMinutes ?? 0)}</td>
                     <td className="px-4 py-3">{row.effectiveHours}h</td>
@@ -4707,7 +4710,9 @@ export function WorkHoursPage() {
                       <th className="px-3 py-2">Entrada</th>
                       <th className="px-3 py-2">Saída</th>
                       <th className="px-3 py-2">Pausa</th>
+                      <th className="px-3 py-2">Planejado</th>
                       <th className="px-3 py-2">Horas</th>
+                      <th className="px-3 py-2">Divergência</th>
                       <th className="px-3 py-2">Status</th>
                       <th className="px-3 py-2">Ação</th>
                       <th className="px-3 py-2">Erros/alertas</th>
@@ -4728,7 +4733,9 @@ export function WorkHoursPage() {
                         <td className="px-3 py-2">{row.actualStart || "-"}</td>
                         <td className="px-3 py-2">{row.actualEnd || "-"}</td>
                         <td className="px-3 py-2">{formatBreakDuration(row.breakMinutes ?? 0)}</td>
+                        <td className="px-3 py-2">{row.plannedHours === null || row.plannedHours === undefined ? "-" : `${row.plannedHours}h`}</td>
                         <td className="px-3 py-2">{row.actualHours ?? "-"}</td>
+                        <td className={cn("px-3 py-2 font-bold", (row.differenceMinutes ?? 0) < 0 ? "text-red-600" : (row.differenceMinutes ?? 0) > 0 ? "text-emerald-600" : "text-muted")}>{row.differenceMinutes === null || row.differenceMinutes === undefined ? "-" : formatHourDifference(row.differenceMinutes)}</td>
                         <td className="px-3 py-2"><StatusBadge status={row.status} /></td>
                         <td className="px-3 py-2">{row.action}</td>
                         <td className="px-3 py-2">
@@ -4746,7 +4753,7 @@ export function WorkHoursPage() {
                 <MetricPill value={preview.createdRows} label="Novos registros" />
                 <MetricPill value={preview.updatedRows} label="Atualizações" />
                 <MetricPill value={`${preview.foundUniqueWbLogins ?? 0}/${preview.uniqueWbLogins ?? 0}`} label="WB/Login encontrados" />
-                <p className="text-sm text-muted">WB/Login inexistente bloqueia a linha. Sem cronograma vinculado vira alerta e pode ser importado.</p>
+                <p className="text-sm text-muted">WB/Login inexistente bloqueia a linha. A divergência compara horas produtivas contra {DEFAULT_PRODUCTIVE_HOURS}h por dia produtivo.</p>
                 {preview.missingWbLogins?.length ? (
                   <div className="rounded-lg border border-red-100 bg-red-50 p-3 text-xs font-semibold text-red-700">
                     <p className="mb-1 font-extrabold">Primeiros WB/Login não encontrados</p>

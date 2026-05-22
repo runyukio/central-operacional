@@ -8,6 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { normalizeRole } from "@/lib/permissions";
 import { cleanShiftName, isBlockedShiftName, isSelectableShiftName, shiftLookupKey } from "@/lib/shift-display";
 import { calculateAbsenceRate, calculateCoverageRate, isAbsenceStatus, isPresentStatus, isScheduledStatus, normalizeOperationalStatus } from "@/lib/attendance-calculation";
+import { calculateProductiveDifferenceMinutes, isProductiveDifferenceWithinTolerance, plannedProductiveHoursForStatus } from "@/lib/work-hours-rules";
 
 const uiToScheduleStatus: Record<string, ScheduleStatus> = {
   Escalado: "ESCALADO",
@@ -415,12 +416,14 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         const record = schedule?.workHourRecords?.[0] ?? (schedule ? workHourByEmployeeDay.get(`${schedule.employeeId}:${schedule.date.getTime()}`) : undefined);
         if (!record) return null;
         const adjustment = record.adjustments?.[0];
-        const effectiveRecordStatus = schedule && record.status === "NO_SCHEDULE" ? "IMPORTED" : record.status;
+        const plannedHours = schedule ? plannedProductiveHoursForStatus(schedule.status) : null;
+        const differenceMinutes = plannedHours !== null ? calculateProductiveDifferenceMinutes(record.effectiveHours, plannedHours) : record.differenceMinutes;
+        const effectiveRecordStatus = resolveWorkHourStatusForSchedule(record.status, differenceMinutes);
         return {
           id: record.id,
           plannedStart: record.plannedStart ?? "",
           plannedEnd: record.plannedEnd ?? "",
-          plannedHours: record.plannedHours ?? 0,
+          plannedHours: plannedHours ?? 0,
           actualStart: record.actualStart ?? "",
           actualEnd: record.actualEnd ?? "",
           breakMinutes: record.breakMinutes ?? 0,
@@ -429,7 +432,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
           effectiveEnd: record.effectiveEnd ?? "",
           effectiveBreakMinutes: record.effectiveBreakMinutes ?? record.breakMinutes ?? 0,
           effectiveHours: record.effectiveHours,
-          differenceMinutes: record.differenceMinutes ?? 0,
+          differenceMinutes: differenceMinutes ?? 0,
           status: workHourStatusLabel(effectiveRecordStatus),
           rawStatus: effectiveRecordStatus,
           source: record.source ?? "",
@@ -1797,7 +1800,7 @@ async function resolveAttendanceForScheduleStatus(tx: Prisma.TransactionClient, 
 
 async function syncWorkHourRecordToSchedule(
   tx: Prisma.TransactionClient,
-  schedule: { id: string; employeeId: string; date: Date; startsAt: string | null; endsAt: string | null }
+  schedule: { id: string; employeeId: string; date: Date; startsAt: string | null; endsAt: string | null; status: ScheduleStatus }
 ) {
   const record = await tx.workHourRecord.findFirst({
     where: {
@@ -1809,12 +1812,10 @@ async function syncWorkHourRecordToSchedule(
   });
   if (!record) return;
 
-  const plannedHours = schedule.startsAt && schedule.endsAt
-    ? roundHours(minutesBetweenScheduleTimes(schedule.startsAt, schedule.endsAt) / 60)
-    : null;
+  const plannedHours = plannedProductiveHoursForStatus(schedule.status);
   const effectiveHours = record.effectiveHours ?? record.actualHours;
   const differenceMinutes = plannedHours !== null && Number.isFinite(effectiveHours)
-    ? Math.round((effectiveHours - plannedHours) * 60)
+    ? calculateProductiveDifferenceMinutes(effectiveHours, plannedHours)
     : null;
 
   await tx.workHourRecord.update({
@@ -1833,20 +1834,7 @@ async function syncWorkHourRecordToSchedule(
 function resolveWorkHourStatusForSchedule(status: WorkHourRecordStatus, differenceMinutes: number | null): WorkHourRecordStatus {
   if (["ADJUSTMENT_REQUESTED", "ADJUSTMENT_APPROVED", "ADJUSTMENT_REJECTED", "MANUALLY_CORRECTED"].includes(status)) return status;
   if (differenceMinutes === null) return status === "NO_SCHEDULE" ? "IMPORTED" : status;
-  return Math.abs(differenceMinutes) <= 5 ? "OK" : "DIVERGENT";
-}
-
-function minutesBetweenScheduleTimes(startsAt: string, endsAt: string) {
-  const [startHour = 0, startMinute = 0] = startsAt.split(":").map(Number);
-  const [endHour = 0, endMinute = 0] = endsAt.split(":").map(Number);
-  const start = startHour * 60 + startMinute;
-  let end = endHour * 60 + endMinute;
-  if (end < start) end += 24 * 60;
-  return Math.max(0, end - start);
-}
-
-function roundHours(value: number) {
-  return Math.round(value * 100) / 100;
+  return isProductiveDifferenceWithinTolerance(differenceMinutes) ? "OK" : "DIVERGENT";
 }
 
 async function notifyAttendanceImpact(tx: Prisma.TransactionClient, employeeId: string, attendanceRecordId: string, status: string, observation?: string) {

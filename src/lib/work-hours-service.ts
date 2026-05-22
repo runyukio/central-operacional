@@ -14,13 +14,20 @@ import { recordErrorLog } from "@/lib/mock-db";
 import { normalizeRole } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { cleanShiftName } from "@/lib/shift-display";
+import {
+  WORK_HOUR_TOLERANCE_MINUTES,
+  calculateProductiveDifferenceMinutes,
+  isProductiveDifferenceWithinTolerance,
+  normalizeProductivePlannedHours,
+  plannedProductiveHoursForStatus
+} from "@/lib/work-hours-rules";
 
 const uploadRoles = ["ADMIN", "GESTOR", "WFM"];
 const approvalRoles = ["ADMIN", "GESTOR", "WFM"];
 const manualEditRoles = ["ADMIN", "GESTOR", "WFM"];
 const viewRoles = ["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "COLABORADOR"];
 const requestAdjustmentRoles = ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"];
-const toleranceMinutes = 5;
+const toleranceMinutes = WORK_HOUR_TOLERANCE_MINUTES;
 
 type UserWithRole = Prisma.UserGetPayload<{ include: { role: true; employeeProfile: true } }>;
 
@@ -94,6 +101,8 @@ type ValidationRow = {
   actualEnd?: string;
   breakMinutes?: number;
   actualHours?: number;
+  plannedHours?: number | null;
+  differenceMinutes?: number | null;
   source?: string;
   observation?: string;
 };
@@ -177,7 +186,8 @@ export async function listOperationalWorkHours(actor: Actor, query: WorkHourQuer
             orderBy: { createdAt: "desc" },
             take: 1,
             select: { id: true, status: true, reason: true, createdAt: true, requestedBy: { select: { name: true } } }
-          }
+          },
+          schedule: { select: { status: true } }
         }
       }),
       prisma.workHourRecord.count({ where })
@@ -261,7 +271,7 @@ export async function commitOperationalWorkHoursImport(actor: Actor, input: Work
         const schedule = scheduleMap.get(`${rowValidation.employeeId!}:${rowValidation.date!.getTime()}`);
         const planned = schedule ? plannedFromSchedule(schedule) : { start: null, end: null, hours: null };
         const status = calculateRecordStatus(planned.hours, rowValidation.actualHours!, Boolean(schedule));
-        const differenceMinutes = planned.hours === null ? null : Math.round((rowValidation.actualHours! - planned.hours) * 60);
+        const differenceMinutes = planned.hours === null ? null : calculateProductiveDifferenceMinutes(rowValidation.actualHours!, planned.hours);
         return Prisma.sql`(
           ${randomUUID()},
           ${rowValidation.employeeId!},
@@ -492,7 +502,8 @@ export async function reviewWorkHourAdjustment(actor: Actor, input: WorkHourRevi
         return { adjustment: updatedAdjustment, record: updatedRecord };
       }
 
-      const nextDifference = adjustment.record.plannedHours === null ? null : Math.round((adjustment.requestedActualHours - (adjustment.record.plannedHours ?? 0)) * 60);
+      const plannedHours = normalizeProductivePlannedHours(adjustment.record.plannedHours);
+      const nextDifference = plannedHours === null ? null : calculateProductiveDifferenceMinutes(adjustment.requestedActualHours, plannedHours);
       const updatedRecord = await tx.workHourRecord.update({
         where: { id: adjustment.workHourRecordId },
         data: {
@@ -577,7 +588,7 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
       };
     }
 
-    const differenceMinutes = planned.hours === null ? null : Math.round((actualHours! - planned.hours) * 60);
+    const differenceMinutes = planned.hours === null ? null : calculateProductiveDifferenceMinutes(actualHours!, planned.hours);
     const baseStatus = calculateRecordStatus(planned.hours, actualHours!, Boolean(schedule));
     const status: WorkHourRecordStatus = baseStatus === "NO_SCHEDULE" ? "NO_SCHEDULE" : existing ? "MANUALLY_CORRECTED" : baseStatus;
 
@@ -828,6 +839,8 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
       if (text(row.supervisor_wb_login) && normalizeWbLogin(row.supervisor_wb_login) !== normalizeWbLogin(employee.supervisor?.wbLogin)) warnings.push("Supervisor no arquivo diferente do supervisor do colaborador.");
       if (existingRecordId) warnings.push("Registro já existe e será atualizado.");
     }
+    const plannedHours = schedule ? plannedProductiveHoursForStatus(schedule.status) : null;
+    const differenceMinutes = actualHours !== null && plannedHours !== null ? calculateProductiveDifferenceMinutes(actualHours, plannedHours) : null;
 
     return {
       rowNumber,
@@ -847,6 +860,8 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
       actualEnd: actualEnd ?? undefined,
       breakMinutes: parsedBreak.minutes,
       actualHours: actualHours ?? undefined,
+      plannedHours,
+      differenceMinutes,
       source: text(row.sistema_origem) || "upload-horas",
       observation: text(row.observacao)
     };
@@ -897,6 +912,8 @@ function toImportPreview(rows: Array<Record<string, unknown>>, validation: Valid
       actualEnd: row.actualEnd ?? "",
       actualHours: row.actualHours ?? 0,
       breakMinutes: row.breakMinutes ?? 0,
+      plannedHours: row.plannedHours,
+      differenceMinutes: row.differenceMinutes,
       errors: row.errors,
       warnings: row.warnings,
       action: row.action,
@@ -947,18 +964,22 @@ function isNoSupervisorFilter(value: string) {
 async function getWorkHoursSummary(where: Prisma.WorkHourRecordWhereInput) {
   const records = await prisma.workHourRecord.findMany({
     where,
-    select: { plannedHours: true, effectiveHours: true, adjustedHours: true, differenceMinutes: true, status: true, effectiveBreakMinutes: true, breakMinutes: true }
+    select: { plannedHours: true, effectiveHours: true, adjustedHours: true, differenceMinutes: true, status: true, effectiveBreakMinutes: true, breakMinutes: true, schedule: { select: { status: true } } }
   });
   const adjustments = await prisma.workHourAdjustmentRequest.groupBy({ by: ["status"], where: { record: { is: where } }, _count: { _all: true } }).catch(() => []);
   const adjustmentCount = (status: WorkHourAdjustmentStatus) => adjustments.find((item) => item.status === status)?._count._all ?? 0;
-  const plannedHours = records.reduce((sum, row) => sum + (row.plannedHours ?? 0), 0);
+  const plannedHours = records.reduce((sum, row) => sum + (productivePlannedHoursForRecord(row) ?? 0), 0);
   const effectiveHours = records.reduce((sum, row) => sum + row.effectiveHours, 0);
+  const differenceMinutesByRecord = records.map((row) => {
+    const planned = productivePlannedHoursForRecord(row);
+    return planned === null ? null : calculateProductiveDifferenceMinutes(row.effectiveHours, planned);
+  });
   return {
     plannedHours: roundHours(plannedHours),
     actualHours: roundHours(effectiveHours),
     differenceHours: roundHours(effectiveHours - plannedHours),
-    okRecords: records.filter((row) => row.status === "OK").length,
-    divergentRecords: records.filter((row) => row.status === "DIVERGENT").length,
+    okRecords: differenceMinutesByRecord.filter((difference) => difference !== null && isProductiveDifferenceWithinTolerance(difference)).length,
+    divergentRecords: differenceMinutesByRecord.filter((difference) => difference !== null && !isProductiveDifferenceWithinTolerance(difference)).length,
     noScheduleRecords: records.filter((row) => row.status === "NO_SCHEDULE").length,
     pendingAdjustments: adjustmentCount("ABERTO") + adjustmentCount("EM_ANALISE"),
     approvedAdjustments: adjustmentCount("APROVADO"),
@@ -968,18 +989,33 @@ async function getWorkHoursSummary(where: Prisma.WorkHourRecordWhereInput) {
   };
 }
 
+function productivePlannedHoursForRecord(record: { plannedHours?: number | null; schedule?: { status?: string | null } | null }) {
+  if (record.schedule?.status) return plannedProductiveHoursForStatus(record.schedule.status);
+  return normalizeProductivePlannedHours(record.plannedHours);
+}
+
+function displayWorkHourStatus(status: WorkHourRecordStatus, plannedHours: number | null, differenceMinutes: number | null): WorkHourRecordStatus {
+  if (["ADJUSTMENT_REQUESTED", "ADJUSTMENT_APPROVED", "ADJUSTMENT_REJECTED", "MANUALLY_CORRECTED"].includes(status)) return status;
+  if (plannedHours === null || differenceMinutes === null) return "NO_SCHEDULE";
+  return isProductiveDifferenceWithinTolerance(differenceMinutes) ? "OK" : "DIVERGENT";
+}
+
 async function getRecordWithRelations(id: string) {
   return prisma.workHourRecord.findUniqueOrThrow({
     where: { id },
     include: {
       employee: { select: { id: true, fullName: true, wbLogin: true, roleTitle: true, lob: { select: { name: true } }, shift: { select: { name: true } }, supervisor: { select: { id: true, fullName: true, wbLogin: true } } } },
-      adjustments: { orderBy: { createdAt: "desc" }, take: 1, select: { id: true, status: true, reason: true, createdAt: true, requestedBy: { select: { name: true } } } }
+      adjustments: { orderBy: { createdAt: "desc" }, take: 1, select: { id: true, status: true, reason: true, createdAt: true, requestedBy: { select: { name: true } } } },
+      schedule: { select: { status: true } }
     }
   });
 }
 
 function formatWorkHourRecord(record: any) {
   const adjustment = record.adjustments?.[0];
+  const plannedHours = productivePlannedHoursForRecord(record);
+  const differenceMinutes = plannedHours === null ? record.differenceMinutes ?? 0 : calculateProductiveDifferenceMinutes(record.effectiveHours, plannedHours);
+  const status = displayWorkHourStatus(record.status, plannedHours, differenceMinutes);
   return {
     id: record.id,
     employeeId: record.employeeId,
@@ -991,7 +1027,7 @@ function formatWorkHourRecord(record: any) {
     shift: cleanShiftName(record.employee?.shift?.name) || "",
     plannedStart: record.plannedStart ?? "",
     plannedEnd: record.plannedEnd ?? "",
-    plannedHours: record.plannedHours ?? 0,
+    plannedHours: plannedHours ?? 0,
     actualStart: record.actualStart ?? "",
     actualEnd: record.actualEnd ?? "",
     breakMinutes: record.breakMinutes ?? 0,
@@ -1004,9 +1040,9 @@ function formatWorkHourRecord(record: any) {
     effectiveEnd: record.effectiveEnd ?? "",
     effectiveBreakMinutes: record.effectiveBreakMinutes ?? record.breakMinutes ?? 0,
     effectiveHours: record.effectiveHours,
-    differenceMinutes: record.differenceMinutes ?? 0,
-    status: recordStatusLabel(record.status),
-    rawStatus: record.status,
+    differenceMinutes,
+    status: recordStatusLabel(status),
+    rawStatus: status,
     adjustmentId: adjustment?.id ?? "",
     adjustmentStatus: adjustment ? adjustmentStatusLabel(adjustment.status) : "Sem ajuste",
     adjustmentReason: adjustment?.reason ?? "",
@@ -1071,14 +1107,17 @@ function normalizeRequestedHours(input: WorkHourAdjustmentInput, current: { effe
 }
 
 function plannedFromSchedule(schedule: Schedule) {
-  if (!schedule.startsAt || !schedule.endsAt) return { start: schedule.startsAt, end: schedule.endsAt, hours: null };
-  return { start: schedule.startsAt, end: schedule.endsAt, hours: roundHours(minutesBetween(schedule.startsAt, schedule.endsAt) / 60) };
+  return {
+    start: schedule.startsAt,
+    end: schedule.endsAt,
+    hours: plannedProductiveHoursForStatus(schedule.status)
+  };
 }
 
 function calculateRecordStatus(plannedHours: number | null, actualHours: number, hasSchedule: boolean): WorkHourRecordStatus {
   if (!hasSchedule || plannedHours === null) return "NO_SCHEDULE";
-  const difference = Math.round((actualHours - plannedHours) * 60);
-  return Math.abs(difference) <= toleranceMinutes ? "OK" : "DIVERGENT";
+  const difference = calculateProductiveDifferenceMinutes(actualHours, plannedHours);
+  return isProductiveDifferenceWithinTolerance(difference, toleranceMinutes) ? "OK" : "DIVERGENT";
 }
 
 function resolvePeriod(query: WorkHourQuery) {
