@@ -9,7 +9,6 @@ export type NavItem = {
 
 const allRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "COLABORADOR", "WFM", "QUALIDADE", "RH", "TI"];
 const leadership: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"];
-const adminOps: AppRole[] = ["ADMIN", "GESTOR"];
 const peopleOps: AppRole[] = ["ADMIN", "GESTOR", "RH", "WFM"];
 const authenticatedOps: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI"];
 
@@ -31,10 +30,6 @@ export const navItems: NavItem[] = [
   { label: "Pesquisa de Clima", href: "/clima", icon: "HeartPulse", roles: ["ADMIN"] },
   { label: "Feedback Anônimo", href: "/feedback-anonimo", icon: "MessageCircleQuestion", roles: ["ADMIN"] },
   { label: "Tokens e Recompensas", href: "/tokens", icon: "Coins", roles: ["ADMIN"] },
-  { label: "Chat", href: "/chat", icon: "MessagesSquare", roles: ["ADMIN"] },
-  { label: "Relatórios", href: "/relatorios", icon: "FileBarChart", roles: ["ADMIN"] },
-  { label: "Auditoria", href: "/auditoria", icon: "ScrollText", roles: adminOps },
-  { label: "Uso da Plataforma", href: "/uso-plataforma", icon: "FileBarChart", roles: adminOps },
   { label: "Configurações", href: "/configuracoes", icon: "Settings", roles: ["ADMIN"] }
 ];
 

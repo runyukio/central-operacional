@@ -1,5 +1,5 @@
-import { PlatformUsagePage } from "@/components/modules";
+import { redirect } from "next/navigation";
 
 export default function UsoPlataformaRoute() {
-  return <PlatformUsagePage />;
+  redirect("/central-operacional");
 }

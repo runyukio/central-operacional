@@ -1,5 +1,5 @@
-import { AuditPage } from "@/components/modules";
+import { redirect } from "next/navigation";
 
 export default function AuditoriaRoute() {
-  return <AuditPage />;
+  redirect("/central-operacional");
 }

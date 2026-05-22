@@ -1,7 +1,5 @@
-import { ChatPage } from "@/components/modules";
-import { requireAdminRoute } from "@/lib/admin-route";
+import { redirect } from "next/navigation";
 
-export default async function ChatRoute() {
-  await requireAdminRoute();
-  return <ChatPage />;
+export default function ChatRoute() {
+  redirect("/central-operacional");
 }

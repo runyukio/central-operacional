@@ -1,7 +1,5 @@
-import { ReportsPage } from "@/components/modules";
-import { requireAdminRoute } from "@/lib/admin-route";
+import { redirect } from "next/navigation";
 
-export default async function RelatoriosRoute() {
-  await requireAdminRoute();
-  return <ReportsPage />;
+export default function RelatoriosRoute() {
+  redirect("/central-operacional");
 }
