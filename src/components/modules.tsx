@@ -778,6 +778,29 @@ function dateInputFromUtc(date: Date) {
   return dateInputFromParts(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
 }
 
+const operationalDatePartsFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/Sao_Paulo",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit"
+});
+
+function operationalTodayParts() {
+  const parts = operationalDatePartsFormatter.formatToParts(new Date());
+  const numberPart = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
+  return { year: numberPart("year"), month: numberPart("month"), day: numberPart("day") };
+}
+
+function currentOperationalMonth() {
+  const today = operationalTodayParts();
+  return { month: today.month, year: today.year };
+}
+
+function currentOperationalDateInput() {
+  const today = operationalTodayParts();
+  return dateInputFromParts(today.year, today.month, today.day);
+}
+
 function operationalDateFromParts(year: number, month: number, day: number) {
   return new Date(Date.UTC(year, month - 1, day, 12));
 }
@@ -1599,6 +1622,8 @@ export function OperationalCommandCenter() {
 
 export function MySchedulePage() {
   const [days, setDays] = useState<CalendarScheduleDay[]>(emptyCalendarDays());
+  const [mySchedulePeriod, setMySchedulePeriod] = useState(() => currentOperationalMonth());
+  const [loadingMySchedule, setLoadingMySchedule] = useState(false);
   const [scheduleInfo, setScheduleInfo] = useState<{ id: string; name: string; schedule: string; shift: string; lob: string } | null>(null);
   const [myWorkHours, setMyWorkHours] = useState<WorkHourRow[]>([]);
   const [myWorkHourSummary, setMyWorkHourSummary] = useState<WorkHourSummary | null>(null);
@@ -1629,23 +1654,47 @@ export function MySchedulePage() {
   });
 
   useEffect(() => {
-    apiJson<{ data: { scheduleDays: CalendarScheduleDay[]; ownEmployee?: { id: string; name: string; schedule: string; shift: string; lob: string } | null } }>("/api/schedules")
-      .then((payload) => {
-        setDays(payload.data.scheduleDays);
-        setScheduleInfo(payload.data.ownEmployee ? { ...payload.data.ownEmployee, shift: cleanShiftName(payload.data.ownEmployee.shift) || "Sem turno" } : null);
-      })
-      .catch(() => {
-        setDays(emptyCalendarDays());
-        setScheduleInfo(null);
-      });
     void loadMyRequests();
-    void loadMyWorkHours();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function loadMyWorkHours() {
+  useEffect(() => {
+    void loadMySchedule(mySchedulePeriod);
+    void loadMyWorkHours(mySchedulePeriod);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mySchedulePeriod.month, mySchedulePeriod.year]);
+
+  async function loadMySchedule(period = mySchedulePeriod) {
+    const range = monthRange(period.month, period.year);
+    const params = new URLSearchParams({
+      startDate: range.startDate,
+      endDate: range.endDate,
+      month: String(period.month),
+      year: String(period.year)
+    });
+    setLoadingMySchedule(true);
     try {
-      const payload = await apiJson<{ data: WorkHourRow[]; summary: WorkHourSummary }>("/api/work-hours?scope=mine&startDate=2026-05-01&endDate=2026-05-31&limit=100");
+      const payload = await apiJson<{ data: { scheduleDays: CalendarScheduleDay[]; ownEmployee?: { id: string; name: string; schedule: string; shift: string; lob: string } | null } }>(`/api/schedules?${params.toString()}`);
+      setDays(payload.data.scheduleDays.length ? payload.data.scheduleDays : emptyCalendarDays(period.month, period.year));
+      setScheduleInfo(payload.data.ownEmployee ? { ...payload.data.ownEmployee, shift: cleanShiftName(payload.data.ownEmployee.shift) || "Sem turno" } : null);
+    } catch {
+      setDays(emptyCalendarDays(period.month, period.year));
+      setScheduleInfo(null);
+    } finally {
+      setLoadingMySchedule(false);
+    }
+  }
+
+  async function loadMyWorkHours(period = mySchedulePeriod) {
+    const range = monthRange(period.month, period.year);
+    try {
+      const params = new URLSearchParams({
+        scope: "mine",
+        startDate: range.startDate,
+        endDate: range.endDate,
+        limit: "100"
+      });
+      const payload = await apiJson<{ data: WorkHourRow[]; summary: WorkHourSummary }>(`/api/work-hours?${params.toString()}`);
       setMyWorkHours(payload.data);
       setMyWorkHourSummary(payload.summary);
     } catch {
@@ -1745,9 +1794,8 @@ export function MySchedulePage() {
       setSelectedRequest(payload.data);
       setActionReason("");
       setDayOffMessage(payload.scheduleUpdated ? "Solicitação aprovada e cronograma atualizado." : `Solicitação movida para ${payload.data.status}.`);
-      apiJson<{ data: { scheduleDays: CalendarScheduleDay[] } }>("/api/schedules")
-        .then((schedulePayload) => setDays(schedulePayload.data.scheduleDays))
-        .catch(() => undefined);
+      await loadMySchedule(mySchedulePeriod);
+      await loadMyWorkHours(mySchedulePeriod);
     } catch (error) {
       setDayOffMessage(error instanceof Error ? error.message : "Não foi possível atualizar a solicitação.");
     } finally {
@@ -1793,9 +1841,18 @@ export function MySchedulePage() {
     done: myRequests.filter((request) => request.status === "Concluído").length,
     canceled: myRequests.filter((request) => request.status === "Cancelado").length
   };
+  const monthLabel = scheduleMonthFormatter.format(operationalDateFromParts(mySchedulePeriod.year, mySchedulePeriod.month, 1));
+  const todayIso = currentOperationalDateInput();
   const hasSchedule = days.some((day) => !day.outside && day.shift !== "Sem cronograma");
   const nextScheduleLabel = cleanShiftName(days.find((day) => !day.outside && !["Sem cronograma", "Folga", "Férias"].includes(day.label))?.label) || "";
   const workHourByDate = new Map(myWorkHours.map((row) => [row.date, row]));
+
+  function moveMyScheduleMonth(delta: number) {
+    setMySchedulePeriod((current) => {
+      const next = operationalDateFromParts(current.year, current.month + delta, 1);
+      return { month: next.getUTCMonth() + 1, year: next.getUTCFullYear() };
+    });
+  }
 
   return (
     <div>
@@ -1811,9 +1868,9 @@ export function MySchedulePage() {
         <section className="card overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border px-5 py-4">
             <div className="flex items-center gap-3">
-              <button className="grid h-10 w-10 place-items-center rounded-lg border border-border bg-white">‹</button>
-              <h2 className="text-xl font-extrabold text-navy-950">Maio 2026</h2>
-              <button className="grid h-10 w-10 place-items-center rounded-lg border border-border bg-white">›</button>
+              <button type="button" onClick={() => moveMyScheduleMonth(-1)} className="grid h-10 w-10 place-items-center rounded-lg border border-border bg-white" aria-label="Mês anterior">‹</button>
+              <h2 className="min-w-[140px] text-center text-xl font-extrabold capitalize text-navy-950">{monthLabel}</h2>
+              <button type="button" onClick={() => moveMyScheduleMonth(1)} className="grid h-10 w-10 place-items-center rounded-lg border border-border bg-white" aria-label="Próximo mês">›</button>
             </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <MetricPill value={hasSchedule && scheduleInfo ? `${scheduleInfo.schedule} - ${scheduleInfo.shift}` : "Sem cronograma"} label="Seu Cronograma" />
@@ -1821,7 +1878,11 @@ export function MySchedulePage() {
               <MetricPill value={hasSchedule && scheduleInfo ? scheduleInfo.lob : "Não vinculado"} label="Local" />
             </div>
           </div>
-          {!hasSchedule ? <div className="border-b border-border p-8"><EmptyState title="Nenhum cronograma encontrado" description="Seu cronograma ainda não foi importado ou vinculado ao seu cadastro." /></div> : null}
+          {loadingMySchedule ? (
+            <div className="border-b border-border p-8 text-center text-sm font-bold text-muted">Carregando cronograma deste mês...</div>
+          ) : !hasSchedule ? (
+            <div className="border-b border-border p-8"><EmptyState title="Nenhum cronograma encontrado para este mês." description="Você ainda pode navegar para outros meses normalmente." /></div>
+          ) : null}
           <div className="grid grid-cols-7 border-b border-border bg-white text-center text-sm font-bold text-navy-950">
             {["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((day) => (
               <div key={day} className="border-r border-border px-3 py-4 last:border-r-0">
@@ -1831,8 +1892,8 @@ export function MySchedulePage() {
           </div>
           <div className="grid grid-cols-7 bg-white">
             {days.map((day, index) => {
-              const isToday = day.date === 29 && !day.outside;
-              const dateKey = day.outside ? "" : day.dateIso ?? `2026-05-${String(day.date).padStart(2, "0")}`;
+              const isToday = day.dateIso === todayIso && !day.outside;
+              const dateKey = day.outside ? "" : day.dateIso ?? dateInputFromParts(mySchedulePeriod.year, mySchedulePeriod.month, day.date);
               const workHour = dateKey ? workHourByDate.get(dateKey) : undefined;
               const dayLabel = cleanShiftName(day.label) || day.label;
               const dayShift = cleanShiftName(day.shift) || day.shift;
@@ -4782,12 +4843,21 @@ function validateImportRows(rows: Array<Record<string, unknown>>) {
   return { errors, warnings };
 }
 
-function emptyCalendarDays() {
+function emptyCalendarDays(month = currentOperationalMonth().month, year = currentOperationalMonth().year) {
+  const first = operationalDateFromParts(year, month, 1);
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const leading = (first.getUTCDay() + 6) % 7;
   return Array.from({ length: 42 }).map((_, index) => {
-    const dayNumber = index - 3;
-    const outside = dayNumber < 1 || dayNumber > 31;
-    const date = outside ? (dayNumber < 1 ? 30 + dayNumber : dayNumber - 31) : dayNumber;
-    return { date, outside, dateIso: outside ? undefined : `2026-05-${String(date).padStart(2, "0")}`, shift: "Sem cronograma", label: "Sem cronograma" };
+    const dayNumber = index - leading + 1;
+    const outside = dayNumber < 1 || dayNumber > daysInMonth;
+    const actualDate = operationalDateFromParts(year, month, dayNumber);
+    return {
+      date: actualDate.getUTCDate(),
+      outside,
+      dateIso: outside ? undefined : dateInputFromParts(year, month, actualDate.getUTCDate()),
+      shift: "Sem cronograma",
+      label: "Sem cronograma"
+    };
   });
 }
 
