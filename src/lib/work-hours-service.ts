@@ -15,6 +15,7 @@ import { normalizeRole } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { cleanShiftName } from "@/lib/shift-display";
 import {
+  DEFAULT_PRODUCTIVE_HOURS,
   WORK_HOUR_TOLERANCE_MINUTES,
   calculateProductiveDifferenceMinutes,
   isProductiveDifferenceWithinTolerance,
@@ -60,7 +61,7 @@ export type WorkHourAdjustmentInput = {
   requestedActualStart?: string;
   requestedActualEnd?: string;
   requestedBreakMinutes?: number;
-  requestedActualHours?: number;
+  requestedActualHours?: unknown;
   reason?: string;
   justification?: string;
 };
@@ -77,7 +78,7 @@ export type ManualWorkHourInput = {
   actualStart?: string;
   actualEnd?: string;
   breakMinutes?: number;
-  actualHours?: number;
+  actualHours?: unknown;
   observation?: string;
   source?: string;
   confirmOverwrite?: boolean;
@@ -281,16 +282,16 @@ export async function commitOperationalWorkHoursImport(actor: Actor, input: Work
           ${planned.start},
           ${planned.end},
           ${planned.hours},
-          ${rowValidation.actualStart},
-          ${rowValidation.actualEnd},
+          ${rowValidation.actualStart ?? null},
+          ${rowValidation.actualEnd ?? null},
           ${rowValidation.breakMinutes ?? 0},
           ${rowValidation.actualHours!},
           ${null},
           ${null},
           ${null},
           ${null},
-          ${rowValidation.actualStart},
-          ${rowValidation.actualEnd},
+          ${rowValidation.actualStart ?? null},
+          ${rowValidation.actualEnd ?? null},
           ${rowValidation.breakMinutes ?? 0},
           ${rowValidation.actualHours!},
           ${differenceMinutes},
@@ -316,16 +317,16 @@ export async function commitOperationalWorkHoursImport(actor: Actor, input: Work
           "plannedStart" = EXCLUDED."plannedStart",
           "plannedEnd" = EXCLUDED."plannedEnd",
           "plannedHours" = EXCLUDED."plannedHours",
-          "actualStart" = EXCLUDED."actualStart",
-          "actualEnd" = EXCLUDED."actualEnd",
+          "actualStart" = COALESCE(EXCLUDED."actualStart", "WorkHourRecord"."actualStart"),
+          "actualEnd" = COALESCE(EXCLUDED."actualEnd", "WorkHourRecord"."actualEnd"),
           "breakMinutes" = EXCLUDED."breakMinutes",
           "actualHours" = EXCLUDED."actualHours",
           "adjustedStart" = NULL,
           "adjustedEnd" = NULL,
           "adjustedBreakMinutes" = NULL,
           "adjustedHours" = NULL,
-          "effectiveStart" = EXCLUDED."effectiveStart",
-          "effectiveEnd" = EXCLUDED."effectiveEnd",
+          "effectiveStart" = COALESCE(EXCLUDED."effectiveStart", "WorkHourRecord"."effectiveStart"),
+          "effectiveEnd" = COALESCE(EXCLUDED."effectiveEnd", "WorkHourRecord"."effectiveEnd"),
           "effectiveBreakMinutes" = EXCLUDED."effectiveBreakMinutes",
           "effectiveHours" = EXCLUDED."effectiveHours",
           "differenceMinutes" = EXCLUDED."differenceMinutes",
@@ -811,20 +812,21 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
     if (wbLogin && !employee) errors.push(`WB/Login "${wbLogin}" não encontrado na base de funcionários. Normalizado: "${normalizedWbLogin}".`);
     if (employee && ["Inativo", "Desligado"].includes(employee.operationalStatus)) warnings.push("Colaborador está inativo ou desligado.");
 
-    const actualStart = normalizeTime(row.entrada_real);
-    const actualEnd = normalizeTime(row.saida_real);
-    const parsedBreak = parseBreakMinutes(text(row.pausa_minutos) ? row.pausa_minutos : row.pausa);
+    const hasActualStart = hasExcelValue(row.entrada_real);
+    const hasActualEnd = hasExcelValue(row.saida_real);
+    const actualStart = hasActualStart ? normalizeTime(row.entrada_real) : null;
+    const actualEnd = hasActualEnd ? normalizeTime(row.saida_real) : null;
+    const parsedBreak = parseBreakMinutes(row.pausa_minutos);
     const explicitActualHours = parseHours(row.horas_realizadas);
-    if (!hasExcelValue(row.entrada_real)) errors.push("Entrada real é obrigatória.");
-    else if (!actualStart) errors.push("Entrada real inválida. Use 06:00, 06:00:00 ou decimal do Excel como 0,25.");
-    if (!hasExcelValue(row.saida_real)) errors.push("Saída real é obrigatória.");
-    else if (!actualEnd) errors.push("Saída real inválida. Use 06:00, 06:00:00 ou decimal do Excel como 0,25.");
+    if (hasActualStart && !actualStart) errors.push("Entrada real inválida. Use 06:00, 06:00:00 ou decimal do Excel como 0,25.");
+    if (hasActualEnd && !actualEnd) errors.push("Saída real inválida. Use 06:00, 06:00:00 ou decimal do Excel como 0,25.");
+    if (hasActualStart !== hasActualEnd) errors.push("Informe entrada_real e saida_real juntas, ou preencha apenas horas_realizadas.");
     if (parsedBreak.error) errors.push(parsedBreak.error);
     const grossMinutes = actualStart && actualEnd ? minutesBetween(actualStart, actualEnd) : null;
     if (grossMinutes !== null && parsedBreak.minutes > grossMinutes) errors.push("A pausa não pode ser maior que o período entre entrada e saída.");
     const calculatedActualHours = grossMinutes !== null ? roundHours((grossMinutes - parsedBreak.minutes) / 60) : null;
     const actualHours = explicitActualHours ?? calculatedActualHours;
-    if (actualHours === null) errors.push("Horas realizadas inválidas.");
+    if (actualHours === null) errors.push("Horas realizadas é obrigatória quando entrada/saída não forem informadas.");
     if (explicitActualHours !== null && calculatedActualHours !== null) {
       if (Math.abs(calculatedActualHours - explicitActualHours) > 0.1) warnings.push("Horas realizadas diferente do cálculo entre entrada_real, saida_real e pausa_minutos.");
     }
