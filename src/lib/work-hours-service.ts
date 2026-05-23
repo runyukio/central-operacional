@@ -8,7 +8,7 @@ import {
 } from "@prisma/client";
 
 import { createPermissionError, createValidationError, mapPrismaError } from "@/lib/api-errors";
-import { hasExcelValue, normalizeExcelDate, normalizeExcelTime } from "@/lib/excel-normalization";
+import { hasExcelValue, normalizeExcelDate } from "@/lib/excel-normalization";
 import type { Actor } from "@/lib/mock-db";
 import { recordErrorLog } from "@/lib/mock-db";
 import { normalizeRole } from "@/lib/permissions";
@@ -58,9 +58,6 @@ export type WorkHourImportInput = {
 
 export type WorkHourAdjustmentInput = {
   workHourRecordId: string;
-  requestedActualStart?: string;
-  requestedActualEnd?: string;
-  requestedBreakMinutes?: number;
   requestedActualHours?: unknown;
   reason?: string;
   justification?: string;
@@ -75,9 +72,6 @@ export type WorkHourReviewInput = {
 export type ManualWorkHourInput = {
   employeeId: string;
   date: string;
-  actualStart?: string;
-  actualEnd?: string;
-  breakMinutes?: number;
   actualHours?: unknown;
   observation?: string;
   source?: string;
@@ -97,10 +91,8 @@ type ValidationRow = {
   warnings: string[];
   action: "criar" | "atualizar" | "ignorar";
   hasSchedule: boolean;
+  scheduleStatus?: string;
   existingRecordId?: string;
-  actualStart?: string;
-  actualEnd?: string;
-  breakMinutes?: number;
   actualHours?: number;
   plannedHours?: number | null;
   differenceMinutes?: number | null;
@@ -116,21 +108,6 @@ const workHourColumnAliases: Record<string, string> = {
   data: "data",
   date: "data",
   dia: "data",
-  entrada_real: "entrada_real",
-  entradareal: "entrada_real",
-  entrada: "entrada_real",
-  hora_entrada: "entrada_real",
-  entrada_realizada: "entrada_real",
-  saida_real: "saida_real",
-  saidareal: "saida_real",
-  saida: "saida_real",
-  hora_saida: "saida_real",
-  saida_realizada: "saida_real",
-  pausa_minutos: "pausa_minutos",
-  pausaminutos: "pausa_minutos",
-  pausa: "pausa_minutos",
-  intervalo: "pausa_minutos",
-  intervalo_minutos: "pausa_minutos",
   horas_realizadas: "horas_realizadas",
   horasrealizadas: "horas_realizadas",
   horas: "horas_realizadas",
@@ -238,6 +215,9 @@ export async function commitOperationalWorkHoursImport(actor: Actor, input: Work
     if (hasErrors && !input.allowPartial) {
       return { error: "Existem erros na importação. Corrija ou confirme importação parcial.", preview: toImportPreview(input.rows, validation) };
     }
+    if (!validRows.length) {
+      return { error: "Nenhuma linha válida para importar. Corrija os erros do preview antes de confirmar.", preview: toImportPreview(input.rows, validation) };
+    }
 
     const batch = await prisma.workHourImportBatch.create({
       data: {
@@ -270,8 +250,11 @@ export async function commitOperationalWorkHoursImport(actor: Actor, input: Work
     for (const chunk of chunkArray(validRows, 500)) {
       const values = chunk.map((rowValidation) => {
         const schedule = scheduleMap.get(`${rowValidation.employeeId!}:${rowValidation.date!.getTime()}`);
-        const planned = schedule ? plannedFromSchedule(schedule) : { start: null, end: null, hours: null };
-        const status = calculateRecordStatus(planned.hours, rowValidation.actualHours!, Boolean(schedule));
+        if (!schedule) {
+          throw new Error(`Linha ${rowValidation.rowNumber} sem cronograma vinculado.`);
+        }
+        const planned = plannedFromSchedule(schedule);
+        const status = calculateRecordStatus(planned.hours, rowValidation.actualHours!, true);
         const differenceMinutes = planned.hours === null ? null : calculateProductiveDifferenceMinutes(rowValidation.actualHours!, planned.hours);
         return Prisma.sql`(
           ${randomUUID()},
@@ -282,17 +265,17 @@ export async function commitOperationalWorkHoursImport(actor: Actor, input: Work
           ${planned.start},
           ${planned.end},
           ${planned.hours},
-          ${rowValidation.actualStart ?? null},
-          ${rowValidation.actualEnd ?? null},
-          ${rowValidation.breakMinutes ?? 0},
+          ${null},
+          ${null},
+          ${0},
           ${rowValidation.actualHours!},
           ${null},
           ${null},
           ${null},
           ${null},
-          ${rowValidation.actualStart ?? null},
-          ${rowValidation.actualEnd ?? null},
-          ${rowValidation.breakMinutes ?? 0},
+          ${null},
+          ${null},
+          ${0},
           ${rowValidation.actualHours!},
           ${differenceMinutes},
           ${status}::"WorkHourRecordStatus",
@@ -317,16 +300,16 @@ export async function commitOperationalWorkHoursImport(actor: Actor, input: Work
           "plannedStart" = EXCLUDED."plannedStart",
           "plannedEnd" = EXCLUDED."plannedEnd",
           "plannedHours" = EXCLUDED."plannedHours",
-          "actualStart" = COALESCE(EXCLUDED."actualStart", "WorkHourRecord"."actualStart"),
-          "actualEnd" = COALESCE(EXCLUDED."actualEnd", "WorkHourRecord"."actualEnd"),
+          "actualStart" = NULL,
+          "actualEnd" = NULL,
           "breakMinutes" = EXCLUDED."breakMinutes",
           "actualHours" = EXCLUDED."actualHours",
           "adjustedStart" = NULL,
           "adjustedEnd" = NULL,
           "adjustedBreakMinutes" = NULL,
           "adjustedHours" = NULL,
-          "effectiveStart" = COALESCE(EXCLUDED."effectiveStart", "WorkHourRecord"."effectiveStart"),
-          "effectiveEnd" = COALESCE(EXCLUDED."effectiveEnd", "WorkHourRecord"."effectiveEnd"),
+          "effectiveStart" = NULL,
+          "effectiveEnd" = NULL,
           "effectiveBreakMinutes" = EXCLUDED."effectiveBreakMinutes",
           "effectiveHours" = EXCLUDED."effectiveHours",
           "differenceMinutes" = EXCLUDED."differenceMinutes",
@@ -397,7 +380,7 @@ export async function requestWorkHourAdjustment(actor: Actor, input: WorkHourAdj
     });
     if (!record) return { error: "Registro de horas não encontrado." };
     if (record.adjustments.length) return { error: "Já existe ajuste pendente para este registro." };
-    const requestedHours = normalizeRequestedHours(input, record);
+    const requestedHours = normalizeRequestedHours(input);
     if (requestedHours.error) {
       return createValidationError({ [requestedHours.field ?? "requestedActualHours"]: requestedHours.error });
     }
@@ -409,13 +392,13 @@ export async function requestWorkHourAdjustment(actor: Actor, input: WorkHourAdj
           employeeId: record.employeeId,
           requestedById: user.id,
           status: "EM_ANALISE",
-          currentActualStart: record.effectiveStart,
-          currentActualEnd: record.effectiveEnd,
-          currentBreakMinutes: record.effectiveBreakMinutes ?? record.breakMinutes ?? 0,
+          currentActualStart: null,
+          currentActualEnd: null,
+          currentBreakMinutes: 0,
           currentActualHours: record.effectiveHours,
-          requestedActualStart: requestedHours.start,
-          requestedActualEnd: requestedHours.end,
-          requestedBreakMinutes: requestedHours.breakMinutes,
+          requestedActualStart: null,
+          requestedActualEnd: null,
+          requestedBreakMinutes: 0,
           requestedActualHours: requestedHours.hours!,
           reason: input.reason!.trim(),
           justification: input.justification!.trim()
@@ -444,7 +427,7 @@ export async function requestWorkHourAdjustment(actor: Actor, input: WorkHourAdj
           entityId: created.id,
           reason: input.reason!.trim(),
           previousValue: { recordId: record.id, effectiveHours: record.effectiveHours },
-          newValue: { requestedHours: requestedHours.hours, requestedStart: requestedHours.start, requestedEnd: requestedHours.end, requestedBreakMinutes: requestedHours.breakMinutes }
+          newValue: { requestedHours: requestedHours.hours }
         }
       });
 
@@ -508,13 +491,13 @@ export async function reviewWorkHourAdjustment(actor: Actor, input: WorkHourRevi
       const updatedRecord = await tx.workHourRecord.update({
         where: { id: adjustment.workHourRecordId },
         data: {
-          adjustedStart: adjustment.requestedActualStart,
-          adjustedEnd: adjustment.requestedActualEnd,
-          adjustedBreakMinutes: adjustment.requestedBreakMinutes ?? 0,
+          adjustedStart: null,
+          adjustedEnd: null,
+          adjustedBreakMinutes: 0,
           adjustedHours: adjustment.requestedActualHours,
-          effectiveStart: adjustment.requestedActualStart,
-          effectiveEnd: adjustment.requestedActualEnd,
-          effectiveBreakMinutes: adjustment.requestedBreakMinutes ?? 0,
+          effectiveStart: null,
+          effectiveEnd: null,
+          effectiveBreakMinutes: 0,
           effectiveHours: adjustment.requestedActualHours,
           differenceMinutes: nextDifference,
           status: "ADJUSTMENT_APPROVED"
@@ -550,21 +533,9 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
   if (!input.employeeId) fieldErrors.employeeId = "Colaborador é obrigatório.";
   const date = parseImportDate(input.date);
   if (!date) fieldErrors.date = "Data inválida.";
-  const actualStart = normalizeTime(input.actualStart);
-  const actualEnd = normalizeTime(input.actualEnd);
-  if (!actualStart) fieldErrors.actualStart = "Entrada real é obrigatória.";
-  if (!actualEnd) fieldErrors.actualEnd = "Saída real é obrigatória.";
-  const parsedBreak = parseBreakMinutes(input.breakMinutes);
-  if (parsedBreak.error) fieldErrors.breakMinutes = parsedBreak.error;
-  const explicitHours = parseHours(input.actualHours);
-  const grossMinutes = actualStart && actualEnd ? minutesBetween(actualStart, actualEnd) : null;
-  if (grossMinutes !== null && parsedBreak.minutes > grossMinutes) fieldErrors.breakMinutes = "A pausa não pode ser maior que o período entre entrada e saída.";
-  const calculatedHours = grossMinutes !== null ? roundHours((grossMinutes - parsedBreak.minutes) / 60) : null;
-  if (explicitHours !== null && calculatedHours !== null && Math.abs(explicitHours - calculatedHours) > 0.1) {
-    fieldErrors.actualHours = "Horas realizadas devem considerar o desconto da pausa.";
-  }
-  const actualHours = calculatedHours ?? explicitHours;
-  if (actualHours === null) fieldErrors.actualHours = "Horas realizadas inválidas.";
+  const actualHours = parseHours(input.actualHours);
+  if (!hasExcelValue(input.actualHours)) fieldErrors.actualHours = "Horas realizadas são obrigatórias.";
+  else if (actualHours === null) fieldErrors.actualHours = "Horas realizadas inválidas. Horas realizadas devem ser um número ou formato HH:mm.";
   if (Object.keys(fieldErrors).length) return createValidationError(fieldErrors, "Existem campos inválidos para lançar horas.");
 
   try {
@@ -577,7 +548,13 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
     const schedule = await prisma.schedule.findUnique({
       where: { employeeId_date: { employeeId: employee.id, date: date! } }
     });
-    const planned = schedule ? plannedFromSchedule(schedule) : { start: null, end: null, hours: null };
+    if (!schedule) {
+      return createValidationError({ scheduleId: "Não existe cronograma para este colaborador nesta data. Crie o cronograma antes de lançar horas." }, "Não é possível lançar horas sem cronograma vinculado.");
+    }
+    const planned = plannedFromSchedule(schedule);
+    if (planned.hours === null) {
+      return createValidationError({ scheduleId: "Cronograma desta data não permite lançamento de horas produtivas." }, "Não é possível lançar horas neste cronograma.");
+    }
     const existing = await prisma.workHourRecord.findUnique({
       where: { employeeId_date: { employeeId: employee.id, date: date! } }
     });
@@ -590,29 +567,29 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
     }
 
     const differenceMinutes = planned.hours === null ? null : calculateProductiveDifferenceMinutes(actualHours!, planned.hours);
-    const baseStatus = calculateRecordStatus(planned.hours, actualHours!, Boolean(schedule));
-    const status: WorkHourRecordStatus = baseStatus === "NO_SCHEDULE" ? "NO_SCHEDULE" : existing ? "MANUALLY_CORRECTED" : baseStatus;
+    const baseStatus = calculateRecordStatus(planned.hours, actualHours!, true);
+    const status: WorkHourRecordStatus = existing ? "MANUALLY_CORRECTED" : baseStatus;
 
     const saved = await prisma.$transaction(async (tx) => {
       const record = await tx.workHourRecord.upsert({
         where: { employeeId_date: { employeeId: employee.id, date: date! } },
         update: {
-          scheduleId: schedule?.id ?? null,
+          scheduleId: schedule.id,
           wbLogin: employee.wbLogin,
           plannedStart: planned.start,
           plannedEnd: planned.end,
           plannedHours: planned.hours,
-          actualStart,
-          actualEnd,
-          breakMinutes: parsedBreak.minutes,
+          actualStart: null,
+          actualEnd: null,
+          breakMinutes: 0,
           actualHours: actualHours!,
           adjustedStart: null,
           adjustedEnd: null,
           adjustedBreakMinutes: null,
           adjustedHours: null,
-          effectiveStart: actualStart,
-          effectiveEnd: actualEnd,
-          effectiveBreakMinutes: parsedBreak.minutes,
+          effectiveStart: null,
+          effectiveEnd: null,
+          effectiveBreakMinutes: 0,
           effectiveHours: actualHours!,
           differenceMinutes,
           status,
@@ -622,19 +599,19 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
         },
         create: {
           employeeId: employee.id,
-          scheduleId: schedule?.id ?? null,
+          scheduleId: schedule.id,
           wbLogin: employee.wbLogin,
           date: date!,
           plannedStart: planned.start,
           plannedEnd: planned.end,
           plannedHours: planned.hours,
-          actualStart,
-          actualEnd,
-          breakMinutes: parsedBreak.minutes,
+          actualStart: null,
+          actualEnd: null,
+          breakMinutes: 0,
           actualHours: actualHours!,
-          effectiveStart: actualStart,
-          effectiveEnd: actualEnd,
-          effectiveBreakMinutes: parsedBreak.minutes,
+          effectiveStart: null,
+          effectiveEnd: null,
+          effectiveBreakMinutes: 0,
           effectiveHours: actualHours!,
           differenceMinutes,
           status,
@@ -671,7 +648,6 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
     return {
       success: true,
       message: existing ? "Horas atualizadas manualmente." : "Horas lançadas manualmente.",
-      warning: schedule ? undefined : "Este colaborador não possui cronograma vinculado nesta data.",
       data: formatWorkHourRecord(await getRecordWithRelations(saved.id))
     };
   } catch (error) {
@@ -693,23 +669,10 @@ export async function exportOperationalWorkHoursCsv(actor: Actor, query: WorkHou
     "lob",
     "supervisor",
     "turno",
-    "entrada_prevista",
-    "saida_prevista",
-    "horas_previstas",
-    "entrada_real",
-    "saida_real",
-    "pausa_minutos",
-    "pausa_formatada",
+    "horas_planejadas_produtivas",
     "horas_realizadas",
-    "horas_realizadas_liquidas",
-    "entrada_ajustada",
-    "saida_ajustada",
-    "pausa_ajustada_minutos",
-    "horas_ajustadas",
-    "horas_efetivas",
-    "diferenca_minutos",
+    "divergencia",
     "status",
-    "ajuste_status",
     "sistema_origem",
     "observacao"
   ];
@@ -720,23 +683,10 @@ export async function exportOperationalWorkHoursCsv(actor: Actor, query: WorkHou
     row.lob,
     row.supervisor,
     row.shift,
-    row.plannedStart,
-    row.plannedEnd,
     row.plannedHours,
-    row.actualStart,
-    row.actualEnd,
-    row.breakMinutes,
-    formatMinutes(row.breakMinutes),
-    row.actualHours,
     row.effectiveHours,
-    row.adjustedStart,
-    row.adjustedEnd,
-    row.adjustedBreakMinutes,
-    row.adjustedHours,
-    row.effectiveHours,
-    row.differenceMinutes,
+    formatHourDifferenceForExport(row.differenceMinutes),
     row.status,
-    row.adjustmentStatus,
     row.source,
     row.observation
   ]);
@@ -812,36 +762,23 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
     if (wbLogin && !employee) errors.push(`WB/Login "${wbLogin}" não encontrado na base de funcionários. Normalizado: "${normalizedWbLogin}".`);
     if (employee && ["Inativo", "Desligado"].includes(employee.operationalStatus)) warnings.push("Colaborador está inativo ou desligado.");
 
-    const hasActualStart = hasExcelValue(row.entrada_real);
-    const hasActualEnd = hasExcelValue(row.saida_real);
-    const actualStart = hasActualStart ? normalizeTime(row.entrada_real) : null;
-    const actualEnd = hasActualEnd ? normalizeTime(row.saida_real) : null;
-    const parsedBreak = parseBreakMinutes(row.pausa_minutos);
-    const explicitActualHours = parseHours(row.horas_realizadas);
-    if (hasActualStart && !actualStart) errors.push("Entrada real inválida. Use 06:00, 06:00:00 ou decimal do Excel como 0,25.");
-    if (hasActualEnd && !actualEnd) errors.push("Saída real inválida. Use 06:00, 06:00:00 ou decimal do Excel como 0,25.");
-    if (hasActualStart !== hasActualEnd) errors.push("Informe entrada_real e saida_real juntas, ou preencha apenas horas_realizadas.");
-    if (parsedBreak.error) errors.push(parsedBreak.error);
-    const grossMinutes = actualStart && actualEnd ? minutesBetween(actualStart, actualEnd) : null;
-    if (grossMinutes !== null && parsedBreak.minutes > grossMinutes) errors.push("A pausa não pode ser maior que o período entre entrada e saída.");
-    const calculatedActualHours = grossMinutes !== null ? roundHours((grossMinutes - parsedBreak.minutes) / 60) : null;
-    const actualHours = explicitActualHours ?? calculatedActualHours;
-    if (actualHours === null) errors.push("Horas realizadas é obrigatória quando entrada/saída não forem informadas.");
-    if (explicitActualHours !== null && calculatedActualHours !== null) {
-      if (Math.abs(calculatedActualHours - explicitActualHours) > 0.1) warnings.push("Horas realizadas diferente do cálculo entre entrada_real, saida_real e pausa_minutos.");
-    }
+    const hasActualHours = hasExcelValue(row.horas_realizadas);
+    const actualHours = parseHours(row.horas_realizadas);
+    if (!hasActualHours) errors.push("Horas realizadas são obrigatórias.");
+    else if (actualHours === null) errors.push("Horas realizadas inválidas. Horas realizadas devem ser um número ou formato HH:mm.");
 
     let schedule: Schedule | undefined;
     let existingRecordId: string | undefined;
     if (employee && date) {
       schedule = scheduleMap.get(`${employee.id}:${date.getTime()}`);
       existingRecordId = recordMap.get(`${employee.id}:${date.getTime()}`)?.id;
-      if (!schedule) warnings.push("Não existe cronograma para esse colaborador nessa data.");
+      if (!schedule) errors.push("Não existe cronograma para este colaborador nesta data. Importe ou crie o cronograma antes de subir as horas.");
       if (text(row.lob) && text(row.lob).toUpperCase() !== employee.lob.name.toUpperCase()) warnings.push("LOB no arquivo diferente da LOB do colaborador.");
       if (text(row.supervisor_wb_login) && normalizeWbLogin(row.supervisor_wb_login) !== normalizeWbLogin(employee.supervisor?.wbLogin)) warnings.push("Supervisor no arquivo diferente do supervisor do colaborador.");
       if (existingRecordId) warnings.push("Registro já existe e será atualizado.");
     }
     const plannedHours = schedule ? plannedProductiveHoursForStatus(schedule.status) : null;
+    if (schedule && plannedHours === null) errors.push("Cronograma desta data não permite lançamento de horas produtivas.");
     const differenceMinutes = actualHours !== null && plannedHours !== null ? calculateProductiveDifferenceMinutes(actualHours, plannedHours) : null;
 
     return {
@@ -857,10 +794,8 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
       warnings,
       action: errors.length ? "ignorar" : existingRecordId ? "atualizar" : "criar",
       hasSchedule: Boolean(schedule),
+      scheduleStatus: schedule?.status,
       existingRecordId,
-      actualStart: actualStart ?? undefined,
-      actualEnd: actualEnd ?? undefined,
-      breakMinutes: parsedBreak.minutes,
       actualHours: actualHours ?? undefined,
       plannedHours,
       differenceMinutes,
@@ -890,16 +825,13 @@ function toImportPreview(rows: Array<Record<string, unknown>>, validation: Valid
     foundUniqueWbLogins: foundNormalizedWbLogins.length,
     missingWbLogins: Array.from(new Set(missingEmployeeRows.map((row) => row.normalizedWbLogin).filter(Boolean))).slice(0, 20),
     scheduleFoundRows: validation.filter((row) => row.hasSchedule).length,
-    noScheduleRows: validation.filter((row) => !row.hasSchedule && !row.errors.length).length,
+    noScheduleRows: validation.filter((row) => !row.hasSchedule).length,
     rows: rows.map((row, index) => {
       const result = validation[index];
       return {
         ...row,
         wb_login: result?.originalWbLogin ?? row.wb_login,
         data: result?.dateIso ?? row.data,
-        entrada_real: result?.actualStart ?? row.entrada_real,
-        saida_real: result?.actualEnd ?? row.saida_real,
-        pausa_minutos: result?.breakMinutes ?? row.pausa_minutos,
         horas_realizadas: result?.actualHours ?? row.horas_realizadas
       };
     }),
@@ -910,10 +842,9 @@ function toImportPreview(rows: Array<Record<string, unknown>>, validation: Valid
       normalizedWbLogin: row.normalizedWbLogin ?? "",
       employeeName: row.employeeName ?? "",
       date: row.dateIso ?? "",
-      actualStart: row.actualStart ?? "",
-      actualEnd: row.actualEnd ?? "",
+      hasSchedule: row.hasSchedule,
+      scheduleStatus: row.scheduleStatus ?? "",
       actualHours: row.actualHours ?? 0,
-      breakMinutes: row.breakMinutes ?? 0,
       plannedHours: row.plannedHours,
       differenceMinutes: row.differenceMinutes,
       errors: row.errors,
@@ -966,7 +897,7 @@ function isNoSupervisorFilter(value: string) {
 async function getWorkHoursSummary(where: Prisma.WorkHourRecordWhereInput) {
   const records = await prisma.workHourRecord.findMany({
     where,
-    select: { plannedHours: true, effectiveHours: true, adjustedHours: true, differenceMinutes: true, status: true, effectiveBreakMinutes: true, breakMinutes: true, schedule: { select: { status: true } } }
+    select: { plannedHours: true, effectiveHours: true, adjustedHours: true, differenceMinutes: true, status: true, schedule: { select: { status: true } } }
   });
   const adjustments = await prisma.workHourAdjustmentRequest.groupBy({ by: ["status"], where: { record: { is: where } }, _count: { _all: true } }).catch(() => []);
   const adjustmentCount = (status: WorkHourAdjustmentStatus) => adjustments.find((item) => item.status === status)?._count._all ?? 0;
@@ -986,8 +917,7 @@ async function getWorkHoursSummary(where: Prisma.WorkHourRecordWhereInput) {
     pendingAdjustments: adjustmentCount("ABERTO") + adjustmentCount("EM_ANALISE"),
     approvedAdjustments: adjustmentCount("APROVADO"),
     rejectedAdjustments: adjustmentCount("RECUSADO"),
-    adjustedHours: roundHours(records.reduce((sum, row) => sum + (row.adjustedHours ?? 0), 0)),
-    breakMinutes: records.reduce((sum, row) => sum + (row.effectiveBreakMinutes ?? row.breakMinutes ?? 0), 0)
+    adjustedHours: roundHours(records.reduce((sum, row) => sum + (row.adjustedHours ?? 0), 0))
   };
 }
 
@@ -1030,17 +960,8 @@ function formatWorkHourRecord(record: any) {
     plannedStart: record.plannedStart ?? "",
     plannedEnd: record.plannedEnd ?? "",
     plannedHours: plannedHours ?? 0,
-    actualStart: record.actualStart ?? "",
-    actualEnd: record.actualEnd ?? "",
-    breakMinutes: record.breakMinutes ?? 0,
     actualHours: record.actualHours,
-    adjustedStart: record.adjustedStart ?? "",
-    adjustedEnd: record.adjustedEnd ?? "",
-    adjustedBreakMinutes: record.adjustedBreakMinutes ?? 0,
     adjustedHours: record.adjustedHours ?? 0,
-    effectiveStart: record.effectiveStart ?? "",
-    effectiveEnd: record.effectiveEnd ?? "",
-    effectiveBreakMinutes: record.effectiveBreakMinutes ?? record.breakMinutes ?? 0,
     effectiveHours: record.effectiveHours,
     differenceMinutes,
     status: recordStatusLabel(status),
@@ -1077,35 +998,15 @@ async function notifyReviewResult(tx: Prisma.TransactionClient, adjustment: any,
   }
 }
 
-function normalizeRequestedHours(input: WorkHourAdjustmentInput, current: { effectiveStart: string | null; effectiveEnd: string | null; effectiveHours: number; effectiveBreakMinutes?: number | null; breakMinutes?: number | null }): {
+function normalizeRequestedHours(input: WorkHourAdjustmentInput): {
   hours?: number;
-  start?: string | null;
-  end?: string | null;
-  breakMinutes?: number;
   error?: string;
   field?: string;
 } {
-  const requestedStart = normalizeTime(input.requestedActualStart);
-  const requestedEnd = normalizeTime(input.requestedActualEnd);
-  if (text(input.requestedActualStart) && !requestedStart) return { error: "Nova entrada inválida.", field: "requestedActualStart" };
-  if (text(input.requestedActualEnd) && !requestedEnd) return { error: "Nova saída inválida.", field: "requestedActualEnd" };
-  const start = requestedStart ?? current.effectiveStart;
-  const end = requestedEnd ?? current.effectiveEnd;
-  const parsedBreak = parseBreakMinutes(input.requestedBreakMinutes);
-  if (parsedBreak.error) return { error: parsedBreak.error, field: "requestedBreakMinutes" };
-  const breakMinutes = input.requestedBreakMinutes === undefined || input.requestedBreakMinutes === null
-    ? current.effectiveBreakMinutes ?? current.breakMinutes ?? 0
-    : parsedBreak.minutes;
-  const explicit = typeof input.requestedActualHours === "number" ? input.requestedActualHours : parseHours(input.requestedActualHours);
-  const grossMinutes = start && end ? minutesBetween(start, end) : null;
-  if (grossMinutes !== null && breakMinutes > grossMinutes) return { error: "A pausa não pode ser maior que o período entre entrada e saída.", field: "requestedBreakMinutes" };
-  const calculated = grossMinutes !== null ? roundHours((grossMinutes - breakMinutes) / 60) : null;
-  if (explicit !== null && calculated !== null && Math.abs(explicit - calculated) > 0.1) {
-    return { error: "Horas realizadas devem considerar o desconto da pausa.", field: "requestedActualHours" };
-  }
-  if (calculated !== null) return { hours: calculated, start, end, breakMinutes };
-  if (explicit !== null) return { hours: explicit, start, end, breakMinutes };
-  return { error: "Informe nova quantidade de horas ou nova entrada e saída.", field: "requestedActualHours" };
+  const explicit = parseHours(input.requestedActualHours);
+  if (explicit !== null) return { hours: explicit };
+  if (hasExcelValue(input.requestedActualHours)) return { error: "Horas realizadas inválidas. Horas realizadas devem ser um número ou formato HH:mm.", field: "requestedActualHours" };
+  return { error: "Horas solicitadas são obrigatórias.", field: "requestedActualHours" };
 }
 
 function plannedFromSchedule(schedule: Schedule) {
@@ -1179,10 +1080,6 @@ function parseImportDate(value: unknown) {
   return normalizeExcelDate(value);
 }
 
-function normalizeTime(value: unknown) {
-  return normalizeExcelTime(value);
-}
-
 function parseHours(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 24) return roundHours(value);
   const raw = text(value);
@@ -1197,28 +1094,6 @@ function parseHours(value: unknown) {
   }
   const parsed = Number(raw.replace(",", "."));
   return Number.isFinite(parsed) && parsed >= 0 && parsed <= 24 ? roundHours(parsed) : null;
-}
-
-function parseBreakMinutes(value: unknown) {
-  const raw = text(value);
-  if (!raw) return { minutes: 0 };
-  if (typeof value === "number" && Number.isFinite(value)) {
-    if (value < 0) return { minutes: 0, error: "Pausa não pode ser negativa." };
-    return { minutes: Math.round(value) };
-  }
-  const time = raw.match(/^(\d{1,2}):(\d{2})$/);
-  if (time) {
-    const hours = Number(time[1]);
-    const minutes = Number(time[2]);
-    if (minutes > 59) return { minutes: 0, error: "Pausa deve ser um número válido." };
-    return { minutes: hours * 60 + minutes };
-  }
-  const withHour = raw.toLowerCase().match(/^(\d+(?:[,.]\d+)?)\s*h(?:oras?)?$/);
-  if (withHour) return { minutes: Math.round(Number(withHour[1].replace(",", ".")) * 60) };
-  const parsed = Number(raw.replace(",", "."));
-  if (!Number.isFinite(parsed)) return { minutes: 0, error: "Pausa deve ser um número válido." };
-  if (parsed < 0) return { minutes: 0, error: "Pausa não pode ser negativa." };
-  return { minutes: Math.round(parsed) };
 }
 
 function normalizeWorkHourImportRow(row: Record<string, unknown>) {
@@ -1248,15 +1123,6 @@ function normalizeWbLogin(value: unknown) {
     .replace(/[\u200B-\u200D\uFEFF]/g, "")
     .replace(/\s+/g, "")
     .toLowerCase();
-}
-
-function minutesBetween(start: string, end: string) {
-  const [startHour, startMinute] = start.split(":").map(Number);
-  const [endHour, endMinute] = end.split(":").map(Number);
-  let startTotal = startHour * 60 + startMinute;
-  let endTotal = endHour * 60 + endMinute;
-  if (endTotal < startTotal) endTotal += 24 * 60;
-  return endTotal - startTotal;
 }
 
 function text(value: unknown) {
@@ -1289,11 +1155,14 @@ function csvCell(value: unknown) {
   return `"${String(value ?? "").replace(/"/g, '""')}"`;
 }
 
-function formatMinutes(minutes: number) {
-  const safeMinutes = Math.max(0, Math.round(minutes || 0));
-  const hours = Math.floor(safeMinutes / 60);
-  const remaining = safeMinutes % 60;
-  return hours ? `${hours}h${String(remaining).padStart(2, "0")}` : `${remaining}min`;
+function formatHourDifferenceForExport(minutes: number | null | undefined) {
+  if (minutes === null || minutes === undefined) return "";
+  const rounded = Math.round(minutes);
+  const sign = rounded > 0 ? "+" : rounded < 0 ? "-" : "";
+  const absolute = Math.abs(rounded);
+  const hours = Math.floor(absolute / 60);
+  const remaining = absolute % 60;
+  return hours ? `${sign}${hours}h${String(remaining).padStart(2, "0")}` : `${sign}${remaining}min`;
 }
 
 function serialize(value: unknown) {

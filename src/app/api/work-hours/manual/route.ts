@@ -8,10 +8,7 @@ import { upsertManualWorkHourRecord } from "@/lib/work-hours-service";
 const manualWorkHourSchema = z.object({
   employeeId: z.string().min(1),
   date: z.string().min(1),
-  actualStart: z.string().optional(),
-  actualEnd: z.string().optional(),
-  breakMinutes: z.coerce.number().optional(),
-  actualHours: z.coerce.number().optional(),
+  actualHours: z.union([z.string(), z.number()]).optional(),
   observation: z.string().optional(),
   source: z.string().optional(),
   confirmOverwrite: z.boolean().optional()
