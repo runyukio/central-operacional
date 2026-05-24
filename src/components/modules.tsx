@@ -94,7 +94,7 @@ import {
 } from "@/lib/demo-data";
 import { cn, formatCurrency, initials } from "@/lib/utils";
 import { cleanShiftName, cleanShiftOptions, isBlockedShiftName, isSelectableShiftName, standardShiftNames } from "@/lib/shift-display";
-import { DEFAULT_PRODUCTIVE_HOURS, normalizeProductivePlannedHours, plannedProductiveHoursForStatus } from "@/lib/work-hours-rules";
+import { DEFAULT_PRODUCTIVE_HOURS, canScheduleStatusReceiveWorkHours, normalizeProductivePlannedHours, workHoursBlockedReasonForSchedule } from "@/lib/work-hours-rules";
 
 const scheduleImportColumns = ["wb_login", "data", "status", "turno", "entrada", "saida", "lob"] as const;
 const workHourImportColumns = ["wb_login", "data", "horas_realizadas", "sistema_origem", "observacao"] as const;
@@ -386,7 +386,7 @@ type WorkHourPreview = {
   missingWbLogins?: string[];
   scheduleFoundRows: number;
   noScheduleRows: number;
-  validation: Array<{ rowNumber: number; wbLogin: string; originalWbLogin?: string; normalizedWbLogin?: string; employeeName: string; date: string; hasSchedule?: boolean; scheduleStatus?: string; actualHours?: number; plannedHours?: number | null; differenceMinutes?: number | null; errors: string[]; warnings: string[]; action: string; status: string }>;
+  validation: Array<{ rowNumber: number; wbLogin: string; originalWbLogin?: string; normalizedWbLogin?: string; employeeName: string; date: string; hasSchedule?: boolean; allowsWorkHours?: boolean; scheduleStatus?: string; actualHours?: number; plannedHours?: number | null; differenceMinutes?: number | null; errors: string[]; warnings: string[]; action: string; status: string }>;
 };
 
 type RegistrationItem = {
@@ -1886,6 +1886,8 @@ export function MySchedulePage() {
               const workHour = dateKey ? workHourByDate.get(dateKey) : undefined;
               const dayLabel = cleanShiftName(day.label) || day.label;
               const dayShift = cleanShiftName(day.shift) || day.shift;
+              const dayStatusForHours = statusFromScheduleCell(dayLabel);
+              const dayAllowsWorkHours = canScheduleStatusReceiveWorkHours(dayStatusForHours, { status: dayStatusForHours, shiftName: dayShift });
               return (
                 <div key={index} className={cn("min-h-[98px] border-r border-t border-border p-3 last:border-r-0", day.outside && "text-slate-300")}>
                   <div className={cn("mb-2 text-base font-bold", isToday && "grid h-8 w-8 place-items-center rounded-full bg-blue-600 text-white")}>{day.date}</div>
@@ -1901,6 +1903,8 @@ export function MySchedulePage() {
                           <p>Realizado: {workHour.effectiveHours}h</p>
                           <p className={cn(workHour.differenceMinutes < 0 ? "text-red-600" : workHour.differenceMinutes > 0 ? "text-emerald-600" : "text-muted")}>{workHour.status} • {formatHourDifference(workHour.differenceMinutes)}</p>
                         </div>
+                      ) : !dayAllowsWorkHours ? (
+                        <p className="rounded-md border border-slate-100 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-muted">Horas não aplicáveis para este status.</p>
                       ) : null}
                     </div>
                   ) : null}
@@ -2893,7 +2897,7 @@ export function SchedulesPage() {
     const justification = plannedCell?.justification ?? null;
     const plannedStart = plannedCell?.startsAt || (statusNeedsTime(cellStatus) ? times.startsAt : "");
     const plannedEnd = plannedCell?.endsAt || (statusNeedsTime(cellStatus) ? times.endsAt : "");
-    const plannedHours = plannedProductiveHoursForStatus(cellStatus) ?? 0;
+    const plannedHours = canScheduleStatusReceiveWorkHours(cellStatus, { status: cellStatus, startsAt: plannedStart, endsAt: plannedEnd, shiftName: shift }) ? DEFAULT_PRODUCTIVE_HOURS : 0;
     setScheduleEmployeeSearch(employeeOptionLabel(targetEmployee));
     setScheduleEditForm({
       scheduleId: plannedCell?.scheduleId ?? "",
@@ -3051,6 +3055,10 @@ export function SchedulesPage() {
     }
     if (!selectedCellHasSchedule) {
       setAttendanceMessage("Não é possível lançar horas sem cronograma vinculado.");
+      return;
+    }
+    if (!selectedScheduleAllowsWorkHours) {
+      setAttendanceMessage(selectedScheduleWorkHoursBlockReason);
       return;
     }
     const parsedActualHours = parseProductiveHoursInput(workHourForm.actualHours);
@@ -3323,14 +3331,26 @@ export function SchedulesPage() {
   const isScheduleSupervisor = normalizedScheduleActorRole === "SUPERVISOR";
   const selectedScheduleEmployee = employeeOptions.find((employee) => employee.id === scheduleEditForm.employeeId);
   const selectedCellHasSchedule = Boolean(scheduleEditForm.scheduleId);
+  const selectedScheduleWorkHoursGate = {
+    status: scheduleEditForm.status,
+    startsAt: scheduleEditForm.startsAt,
+    endsAt: scheduleEditForm.endsAt,
+    shiftName: scheduleEditForm.shift
+  };
+  const selectedScheduleAllowsWorkHours = selectedCellHasSchedule && canScheduleStatusReceiveWorkHours(scheduleEditForm.status, selectedScheduleWorkHoursGate);
+  const selectedScheduleWorkHoursBlockReason = selectedCellHasSchedule
+    ? workHoursBlockedReasonForSchedule(selectedScheduleWorkHoursGate)
+    : "Não é possível lançar horas sem cronograma vinculado.";
+  const plannedHoursForManualPreview = selectedScheduleAllowsWorkHours ? DEFAULT_PRODUCTIVE_HOURS : workHourForm.plannedHours;
   const canEditOfficialWorkHours = canManageSchedules;
+  const canEditSelectedWorkHours = canEditOfficialWorkHours && selectedScheduleAllowsWorkHours;
   const canEditSlotJustification = scheduleEditRequiresReason && (canManageSchedules || isScheduleSupervisor);
   const parsedManualActualHours = parseProductiveHoursInput(workHourForm.actualHours);
   const manualActualHoursPreview = parsedManualActualHours ?? workHourForm.effectiveHours ?? 0;
-  const manualDifferencePreview = manualActualHoursPreview && workHourForm.plannedHours
-    ? Math.round((manualActualHoursPreview - workHourForm.plannedHours) * 60)
+  const manualDifferencePreview = manualActualHoursPreview && plannedHoursForManualPreview
+    ? Math.round((manualActualHoursPreview - plannedHoursForManualPreview) * 60)
     : workHourForm.differenceMinutes;
-  const manualStatusPreview = workHourForm.plannedHours
+  const manualStatusPreview = plannedHoursForManualPreview
     ? Math.abs(manualDifferencePreview) <= 5 ? "OK" : "Divergente"
     : workHourForm.recordId ? workHourForm.status : selectedCellHasSchedule ? "Sem horas" : "Sem cronograma";
   const supervisorOccurrenceStatuses = ["Falta", "Atraso", "Saída antecipada", "Erro de cronograma"];
@@ -3347,22 +3367,24 @@ export function SchedulesPage() {
   function selectScheduleEmployee(employee: EmployeeClient) {
     const employeeShift = cleanShiftName(employee.shift) || scheduleEditForm.shift;
     const times = configuredTimesForShift(employeeShift);
+    const nextStartsAt = scheduleEditRequiresTime ? times.startsAt : scheduleEditForm.startsAt;
+    const nextEndsAt = scheduleEditRequiresTime ? times.endsAt : scheduleEditForm.endsAt;
     setScheduleEditForm((current) => ({
       ...current,
       scheduleId: "",
       employeeId: employee.id,
       shift: employeeShift || current.shift,
-      startsAt: scheduleEditRequiresTime ? times.startsAt : current.startsAt,
-      endsAt: scheduleEditRequiresTime ? times.endsAt : current.endsAt,
+      startsAt: nextStartsAt,
+      endsAt: nextEndsAt,
       lob: employee.lob || current.lob,
       supervisor: employee.supervisor || current.supervisor
     }));
     setWorkHourForm((current) => ({
       ...current,
       recordId: "",
-      plannedStart: scheduleEditRequiresTime ? times.startsAt : "",
-      plannedEnd: scheduleEditRequiresTime ? times.endsAt : "",
-      plannedHours: plannedProductiveHoursForStatus(scheduleEditForm.status) ?? 0,
+      plannedStart: nextStartsAt,
+      plannedEnd: nextEndsAt,
+      plannedHours: canScheduleStatusReceiveWorkHours(scheduleEditForm.status, { status: scheduleEditForm.status, startsAt: nextStartsAt, endsAt: nextEndsAt, shiftName: employeeShift }) ? DEFAULT_PRODUCTIVE_HOURS : 0,
       actualHours: "",
       effectiveHours: 0,
       differenceMinutes: 0,
@@ -3912,12 +3934,14 @@ export function SchedulesPage() {
                     options={[...scheduleStatusOptions]}
                     onChange={(value) => {
                       const times = configuredTimesForShift(scheduleEditForm.shift);
-                      const plannedHours = plannedProductiveHoursForStatus(value) ?? 0;
+                      const nextStartsAt = statusNeedsTime(value) ? scheduleEditForm.startsAt || times.startsAt : "";
+                      const nextEndsAt = statusNeedsTime(value) ? scheduleEditForm.endsAt || times.endsAt : "";
+                      const plannedHours = canScheduleStatusReceiveWorkHours(value, { status: value, startsAt: nextStartsAt, endsAt: nextEndsAt, shiftName: scheduleEditForm.shift }) ? DEFAULT_PRODUCTIVE_HOURS : 0;
                       setScheduleEditForm({
                         ...scheduleEditForm,
                         status: value,
-                        startsAt: statusNeedsTime(value) ? scheduleEditForm.startsAt || times.startsAt : "",
-                        endsAt: statusNeedsTime(value) ? scheduleEditForm.endsAt || times.endsAt : "",
+                        startsAt: nextStartsAt,
+                        endsAt: nextEndsAt,
                         observation: statusNeedsReason(value) ? scheduleEditForm.observation : scheduleEditForm.observation,
                         pendingJustification: statusNeedsReason(value) ? scheduleEditForm.pendingJustification : false
                       });
@@ -4066,22 +4090,30 @@ export function SchedulesPage() {
                   <StatusBadge status={workHourForm.recordId ? workHourForm.status : selectedCellHasSchedule ? "Sem horas" : "Sem cronograma"} />
                 </div>
                 <div className="grid gap-3 md:grid-cols-3">
-                  <MetricPill value={workHourForm.plannedHours ? `${workHourForm.plannedHours}h` : "-"} label="Planejado produtivo" />
+                  <MetricPill value={plannedHoursForManualPreview ? `${plannedHoursForManualPreview}h` : "-"} label="Planejado produtivo" />
                   <MetricPill value={manualActualHoursPreview ? `${manualActualHoursPreview}h` : "-"} label="Realizado produtivo" />
                   <MetricPill value={manualActualHoursPreview || workHourForm.differenceMinutes ? formatHourDifference(manualDifferencePreview) : "-"} label="Diferença" />
                 </div>
                 <div className="mt-4 grid gap-4 md:grid-cols-2">
                   <FormInput disabled label="Entrada prevista" value={workHourForm.plannedStart} onChange={() => undefined} />
                   <FormInput disabled label="Saída prevista" value={workHourForm.plannedEnd} onChange={() => undefined} />
-                  <FormInput disabled={!canEditOfficialWorkHours} label="Horas realizadas" value={workHourForm.actualHours} onChange={(value) => setWorkHourForm({ ...workHourForm, actualHours: value })} />
+                  {selectedScheduleAllowsWorkHours ? (
+                    <FormInput disabled={!canEditSelectedWorkHours} label="Horas realizadas" value={workHourForm.actualHours} onChange={(value) => setWorkHourForm({ ...workHourForm, actualHours: value })} />
+                  ) : (
+                    <div className="rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm font-semibold text-orange-800">
+                      Este status de cronograma não permite lançamento de horas realizadas.
+                    </div>
+                  )}
                   <FormInput disabled label="Origem" value={workHourForm.source || "Sem origem"} onChange={() => undefined} />
                   <label className="md:col-span-2">
                     <span className="mb-1.5 block text-sm font-bold text-muted">Observação das horas</span>
-                    <textarea disabled={!canEditOfficialWorkHours} value={workHourForm.observation} onChange={(event) => setWorkHourForm({ ...workHourForm, observation: event.target.value })} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500" placeholder="Motivo da correção, sistema de origem ou comentário operacional" />
+                    <textarea disabled={!canEditSelectedWorkHours} value={workHourForm.observation} onChange={(event) => setWorkHourForm({ ...workHourForm, observation: event.target.value })} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500" placeholder="Motivo da correção, sistema de origem ou comentário operacional" />
                   </label>
                 </div>
                 <div className={cn("mt-4 rounded-lg border px-4 py-3 text-sm font-semibold", manualStatusPreview === "OK" ? "border-emerald-100 bg-emerald-50 text-emerald-700" : manualStatusPreview === "Divergente" ? "border-orange-100 bg-orange-50 text-orange-700" : "border-blue-100 bg-blue-50 text-blue-700")}>
-                  {workHourForm.plannedHours
+                  {!selectedScheduleAllowsWorkHours
+                    ? selectedScheduleWorkHoursBlockReason
+                    : plannedHoursForManualPreview
                     ? `Status previsto após salvar: ${manualStatusPreview}. Base produtiva: ${DEFAULT_PRODUCTIVE_HOURS}h.`
                     : selectedCellHasSchedule
                       ? "Horas ainda não lançadas para este dia."
@@ -4089,7 +4121,7 @@ export function SchedulesPage() {
                   {workHourForm.adjustmentStatus && workHourForm.adjustmentStatus !== "Sem ajuste" ? ` Ajuste: ${workHourForm.adjustmentStatus}.` : ""}
                 </div>
                 {canEditOfficialWorkHours ? (
-                  <button disabled={savingWorkHour} onClick={() => saveManualWorkHours()} className="mt-4 w-full rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
+                  <button disabled={savingWorkHour || !selectedScheduleAllowsWorkHours} onClick={() => saveManualWorkHours()} className="mt-4 w-full rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
                     {savingWorkHour ? "Salvando horas..." : workHourForm.recordId ? "Salvar correção de horas" : "Lançar horas"}
                   </button>
                 ) : (
@@ -4104,7 +4136,7 @@ export function SchedulesPage() {
                       <h4 className="text-sm font-extrabold text-amber-900">Solicitar ajuste de horas</h4>
                       <p className="text-xs font-semibold text-amber-800">A solicitação vai para WFM/Admin e só vira hora oficial após aprovação.</p>
                     </div>
-                    {workHourForm.recordId ? (
+                    {workHourForm.recordId && selectedScheduleAllowsWorkHours ? (
                       <div className="grid gap-4 md:grid-cols-2">
                         <FormInput label="Horas solicitadas" value={workHourAdjustmentForm.requestedActualHours} onChange={(value) => setWorkHourAdjustmentForm({ ...workHourAdjustmentForm, requestedActualHours: value })} />
                         <div>
@@ -4118,6 +4150,8 @@ export function SchedulesPage() {
                           {savingWorkHourAdjustment ? "Enviando..." : "Solicitar ajuste para WFM/Admin"}
                         </button>
                       </div>
+                    ) : !selectedScheduleAllowsWorkHours ? (
+                      <p className="text-sm font-semibold text-amber-800">Este status não permite ajuste de horas realizadas.</p>
                     ) : (
                       <p className="text-sm font-semibold text-amber-800">Ainda não existe registro de horas para este dia. WFM/Admin precisa lançar ou importar as horas antes da solicitação de ajuste.</p>
                     )}
@@ -4583,7 +4617,7 @@ export function WorkHoursPage() {
                     <td className="px-4 py-3"><StatusBadge status={row.adjustmentStatus} /></td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-2">
-                        {canRequestAdjustment && !["Ajuste solicitado", "Ajuste aprovado"].includes(row.status) ? (
+                        {canRequestAdjustment && row.plannedHours > 0 && !["Ajuste solicitado", "Ajuste aprovado"].includes(row.status) ? (
                           <button onClick={() => openAdjustment(row)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">Solicitar ajuste</button>
                         ) : null}
                         {canApprove && row.adjustmentId && row.adjustmentStatus === "Em análise" ? (
@@ -4635,6 +4669,7 @@ export function WorkHoursPage() {
                       <th className="px-3 py-2">Data</th>
                       <th className="px-3 py-2">Cronograma</th>
                       <th className="px-3 py-2">Status cronograma</th>
+                      <th className="px-3 py-2">Aceita horas</th>
                       <th className="px-3 py-2">Planejado</th>
                       <th className="px-3 py-2">Horas</th>
                       <th className="px-3 py-2">Divergência</th>
@@ -4657,6 +4692,7 @@ export function WorkHoursPage() {
                         <td className="px-3 py-2">{row.date || "-"}</td>
                         <td className="px-3 py-2">{row.hasSchedule ? "Sim" : "Não"}</td>
                         <td className="px-3 py-2">{row.scheduleStatus || "-"}</td>
+                        <td className="px-3 py-2">{row.allowsWorkHours ? "Sim" : "Não"}</td>
                         <td className="px-3 py-2">{row.plannedHours === null || row.plannedHours === undefined ? "-" : `${row.plannedHours}h`}</td>
                         <td className="px-3 py-2">{row.actualHours ?? "-"}</td>
                         <td className={cn("px-3 py-2 font-bold", (row.differenceMinutes ?? 0) < 0 ? "text-red-600" : (row.differenceMinutes ?? 0) > 0 ? "text-emerald-600" : "text-muted")}>{row.differenceMinutes === null || row.differenceMinutes === undefined ? "-" : formatHourDifference(row.differenceMinutes)}</td>

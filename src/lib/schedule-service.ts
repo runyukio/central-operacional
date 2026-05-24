@@ -8,7 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { normalizeRole } from "@/lib/permissions";
 import { cleanShiftName, isBlockedShiftName, isSelectableShiftName, shiftLookupKey } from "@/lib/shift-display";
 import { calculateAbsenceRate, calculateCoverageRate, isAbsenceStatus, isPresentStatus, isScheduledStatus, normalizeOperationalStatus } from "@/lib/attendance-calculation";
-import { calculateProductiveDifferenceMinutes, isProductiveDifferenceWithinTolerance, plannedProductiveHoursForStatus } from "@/lib/work-hours-rules";
+import { calculateProductiveDifferenceMinutes, isProductiveDifferenceWithinTolerance, plannedProductiveHoursForSchedule } from "@/lib/work-hours-rules";
 
 const uiToScheduleStatus: Record<string, ScheduleStatus> = {
   Escalado: "ESCALADO",
@@ -404,7 +404,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         const record = schedule?.workHourRecords?.[0] ?? (schedule ? workHourByEmployeeDay.get(`${schedule.employeeId}:${schedule.date.getTime()}`) : undefined);
         if (!record) return null;
         const adjustment = record.adjustments?.[0];
-        const plannedHours = schedule ? plannedProductiveHoursForStatus(schedule.status) : null;
+        const plannedHours = schedule ? plannedProductiveHoursForSchedule(schedule) : null;
         const differenceMinutes = plannedHours !== null ? calculateProductiveDifferenceMinutes(record.effectiveHours, plannedHours) : record.differenceMinutes;
         const effectiveRecordStatus = resolveWorkHourStatusForSchedule(record.status, differenceMinutes);
         return {
@@ -1794,7 +1794,7 @@ async function syncWorkHourRecordToSchedule(
   });
   if (!record) return;
 
-  const plannedHours = plannedProductiveHoursForStatus(schedule.status);
+  const plannedHours = plannedProductiveHoursForSchedule(schedule);
   const effectiveHours = record.effectiveHours ?? record.actualHours;
   const differenceMinutes = plannedHours !== null && Number.isFinite(effectiveHours)
     ? calculateProductiveDifferenceMinutes(effectiveHours, plannedHours)
@@ -1815,7 +1815,7 @@ async function syncWorkHourRecordToSchedule(
 
 function resolveWorkHourStatusForSchedule(status: WorkHourRecordStatus, differenceMinutes: number | null): WorkHourRecordStatus {
   if (["ADJUSTMENT_REQUESTED", "ADJUSTMENT_APPROVED", "ADJUSTMENT_REJECTED", "MANUALLY_CORRECTED"].includes(status)) return status;
-  if (differenceMinutes === null) return status === "NO_SCHEDULE" ? "IMPORTED" : status;
+  if (differenceMinutes === null) return "NO_SCHEDULE";
   return isProductiveDifferenceWithinTolerance(differenceMinutes) ? "OK" : "DIVERGENT";
 }
 

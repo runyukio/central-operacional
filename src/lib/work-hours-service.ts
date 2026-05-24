@@ -19,8 +19,9 @@ import {
   WORK_HOUR_TOLERANCE_MINUTES,
   calculateProductiveDifferenceMinutes,
   isProductiveDifferenceWithinTolerance,
-  normalizeProductivePlannedHours,
-  plannedProductiveHoursForStatus
+  isWorkHoursAllowedForSchedule,
+  plannedProductiveHoursForSchedule,
+  workHoursBlockedReasonForSchedule
 } from "@/lib/work-hours-rules";
 
 const uploadRoles = ["ADMIN", "GESTOR", "WFM"];
@@ -91,6 +92,7 @@ type ValidationRow = {
   warnings: string[];
   action: "criar" | "atualizar" | "ignorar";
   hasSchedule: boolean;
+  allowsWorkHours: boolean;
   scheduleStatus?: string;
   existingRecordId?: string;
   actualHours?: number;
@@ -165,7 +167,7 @@ export async function listOperationalWorkHours(actor: Actor, query: WorkHourQuer
             take: 1,
             select: { id: true, status: true, reason: true, createdAt: true, requestedBy: { select: { name: true } } }
           },
-          schedule: { select: { status: true } }
+          schedule: { select: { status: true, startsAt: true, endsAt: true } }
         }
       }),
       prisma.workHourRecord.count({ where })
@@ -195,7 +197,8 @@ export async function previewOperationalWorkHoursImport(actor: Actor, rows: Arra
       errors: ["Você não tem permissão para importar horas."],
       warnings: [],
       action: "ignorar",
-      hasSchedule: false
+      hasSchedule: false,
+      allowsWorkHours: false
     })));
   }
 
@@ -253,13 +256,16 @@ export async function commitOperationalWorkHoursImport(actor: Actor, input: Work
         if (!schedule) {
           throw new Error(`Linha ${rowValidation.rowNumber} sem cronograma vinculado.`);
         }
+        if (!isWorkHoursAllowedForSchedule(schedule)) {
+          throw new Error(`Linha ${rowValidation.rowNumber}: ${workHoursBlockedReasonForSchedule(schedule)}`);
+        }
         const planned = plannedFromSchedule(schedule);
         const status = calculateRecordStatus(planned.hours, rowValidation.actualHours!, true);
         const differenceMinutes = planned.hours === null ? null : calculateProductiveDifferenceMinutes(rowValidation.actualHours!, planned.hours);
         return Prisma.sql`(
           ${randomUUID()},
           ${rowValidation.employeeId!},
-          ${schedule?.id ?? null},
+          ${schedule.id},
           ${rowValidation.wbLogin},
           ${rowValidation.date!},
           ${planned.start},
@@ -376,9 +382,16 @@ export async function requestWorkHourAdjustment(actor: Actor, input: WorkHourAdj
   try {
     const record = await prisma.workHourRecord.findUnique({
       where: { id: input.workHourRecordId },
-      include: { employee: { include: { user: true, supervisor: true } }, adjustments: { where: { status: { in: ["ABERTO", "EM_ANALISE"] } } } }
+      include: {
+        employee: { include: { user: true, supervisor: true } },
+        schedule: true,
+        adjustments: { where: { status: { in: ["ABERTO", "EM_ANALISE"] } } }
+      }
     });
     if (!record) return { error: "Registro de horas não encontrado." };
+    if (!isWorkHoursAllowedForSchedule(record.schedule)) {
+      return createValidationError({ scheduleId: workHoursBlockedReasonForSchedule(record.schedule) }, "Este status não permite ajuste de horas realizadas.");
+    }
     if (record.adjustments.length) return { error: "Já existe ajuste pendente para este registro." };
     const requestedHours = normalizeRequestedHours(input);
     if (requestedHours.error) {
@@ -467,7 +480,7 @@ export async function reviewWorkHourAdjustment(actor: Actor, input: WorkHourRevi
     const result = await prisma.$transaction(async (tx) => {
       const adjustment = await tx.workHourAdjustmentRequest.findUnique({
         where: { id: input.id },
-        include: { record: true, requestedBy: true, employee: { include: { user: true } } }
+        include: { record: { include: { schedule: true } }, requestedBy: true, employee: { include: { user: true } } }
       });
       if (!adjustment) throw new Error("Ajuste não encontrado.");
       if (!["ABERTO", "EM_ANALISE"].includes(adjustment.status)) throw new Error("Este ajuste já foi processado.");
@@ -486,7 +499,10 @@ export async function reviewWorkHourAdjustment(actor: Actor, input: WorkHourRevi
         return { adjustment: updatedAdjustment, record: updatedRecord };
       }
 
-      const plannedHours = normalizeProductivePlannedHours(adjustment.record.plannedHours);
+      if (!isWorkHoursAllowedForSchedule(adjustment.record.schedule)) {
+        throw new Error(workHoursBlockedReasonForSchedule(adjustment.record.schedule));
+      }
+      const plannedHours = productivePlannedHoursForRecord(adjustment.record);
       const nextDifference = plannedHours === null ? null : calculateProductiveDifferenceMinutes(adjustment.requestedActualHours, plannedHours);
       const updatedRecord = await tx.workHourRecord.update({
         where: { id: adjustment.workHourRecordId },
@@ -550,6 +566,9 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
     });
     if (!schedule) {
       return createValidationError({ scheduleId: "Não existe cronograma para este colaborador nesta data. Crie o cronograma antes de lançar horas." }, "Não é possível lançar horas sem cronograma vinculado.");
+    }
+    if (!isWorkHoursAllowedForSchedule(schedule)) {
+      return createValidationError({ scheduleId: workHoursBlockedReasonForSchedule(schedule) }, workHoursBlockedReasonForSchedule(schedule));
     }
     const planned = plannedFromSchedule(schedule);
     if (planned.hours === null) {
@@ -773,12 +792,13 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
       schedule = scheduleMap.get(`${employee.id}:${date.getTime()}`);
       existingRecordId = recordMap.get(`${employee.id}:${date.getTime()}`)?.id;
       if (!schedule) errors.push("Não existe cronograma para este colaborador nesta data. Importe ou crie o cronograma antes de subir as horas.");
+      else if (!isWorkHoursAllowedForSchedule(schedule)) errors.push(workHoursBlockedReasonForSchedule(schedule));
       if (text(row.lob) && text(row.lob).toUpperCase() !== employee.lob.name.toUpperCase()) warnings.push("LOB no arquivo diferente da LOB do colaborador.");
       if (text(row.supervisor_wb_login) && normalizeWbLogin(row.supervisor_wb_login) !== normalizeWbLogin(employee.supervisor?.wbLogin)) warnings.push("Supervisor no arquivo diferente do supervisor do colaborador.");
       if (existingRecordId) warnings.push("Registro já existe e será atualizado.");
     }
-    const plannedHours = schedule ? plannedProductiveHoursForStatus(schedule.status) : null;
-    if (schedule && plannedHours === null) errors.push("Cronograma desta data não permite lançamento de horas produtivas.");
+    const allowsWorkHours = isWorkHoursAllowedForSchedule(schedule);
+    const plannedHours = schedule ? plannedProductiveHoursForSchedule(schedule) : null;
     const differenceMinutes = actualHours !== null && plannedHours !== null ? calculateProductiveDifferenceMinutes(actualHours, plannedHours) : null;
 
     return {
@@ -794,6 +814,7 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
       warnings,
       action: errors.length ? "ignorar" : existingRecordId ? "atualizar" : "criar",
       hasSchedule: Boolean(schedule),
+      allowsWorkHours,
       scheduleStatus: schedule?.status,
       existingRecordId,
       actualHours: actualHours ?? undefined,
@@ -843,6 +864,7 @@ function toImportPreview(rows: Array<Record<string, unknown>>, validation: Valid
       employeeName: row.employeeName ?? "",
       date: row.dateIso ?? "",
       hasSchedule: row.hasSchedule,
+      allowsWorkHours: row.allowsWorkHours,
       scheduleStatus: row.scheduleStatus ?? "",
       actualHours: row.actualHours ?? 0,
       plannedHours: row.plannedHours,
@@ -897,7 +919,7 @@ function isNoSupervisorFilter(value: string) {
 async function getWorkHoursSummary(where: Prisma.WorkHourRecordWhereInput) {
   const records = await prisma.workHourRecord.findMany({
     where,
-    select: { plannedHours: true, effectiveHours: true, adjustedHours: true, differenceMinutes: true, status: true, schedule: { select: { status: true } } }
+    select: { plannedHours: true, effectiveHours: true, adjustedHours: true, differenceMinutes: true, status: true, schedule: { select: { status: true, startsAt: true, endsAt: true } } }
   });
   const adjustments = await prisma.workHourAdjustmentRequest.groupBy({ by: ["status"], where: { record: { is: where } }, _count: { _all: true } }).catch(() => []);
   const adjustmentCount = (status: WorkHourAdjustmentStatus) => adjustments.find((item) => item.status === status)?._count._all ?? 0;
@@ -921,9 +943,9 @@ async function getWorkHoursSummary(where: Prisma.WorkHourRecordWhereInput) {
   };
 }
 
-function productivePlannedHoursForRecord(record: { plannedHours?: number | null; schedule?: { status?: string | null } | null }) {
-  if (record.schedule?.status) return plannedProductiveHoursForStatus(record.schedule.status);
-  return normalizeProductivePlannedHours(record.plannedHours);
+function productivePlannedHoursForRecord(record: { plannedHours?: number | null; schedule?: { status?: string | null; startsAt?: string | null; endsAt?: string | null } | null }) {
+  if (record.schedule?.status) return plannedProductiveHoursForSchedule(record.schedule);
+  return null;
 }
 
 function displayWorkHourStatus(status: WorkHourRecordStatus, plannedHours: number | null, differenceMinutes: number | null): WorkHourRecordStatus {
@@ -938,7 +960,7 @@ async function getRecordWithRelations(id: string) {
     include: {
       employee: { select: { id: true, fullName: true, wbLogin: true, roleTitle: true, lob: { select: { name: true } }, shift: { select: { name: true } }, supervisor: { select: { id: true, fullName: true, wbLogin: true } } } },
       adjustments: { orderBy: { createdAt: "desc" }, take: 1, select: { id: true, status: true, reason: true, createdAt: true, requestedBy: { select: { name: true } } } },
-      schedule: { select: { status: true } }
+      schedule: { select: { status: true, startsAt: true, endsAt: true } }
     }
   });
 }
@@ -1013,7 +1035,7 @@ function plannedFromSchedule(schedule: Schedule) {
   return {
     start: schedule.startsAt,
     end: schedule.endsAt,
-    hours: plannedProductiveHoursForStatus(schedule.status)
+    hours: plannedProductiveHoursForSchedule(schedule)
   };
 }
 
