@@ -3,13 +3,18 @@ import { z } from "zod";
 
 import { getApiActor } from "@/lib/api-actor";
 import { errorResponse, errorStatus, mapZodError } from "@/lib/api-errors";
-import { listOperationalWorkHours, requestWorkHourAdjustment } from "@/lib/work-hours-service";
+import { deleteWorkHourRecord, listOperationalWorkHours, requestWorkHourAdjustment } from "@/lib/work-hours-service";
 
 const adjustmentSchema = z.object({
   workHourRecordId: z.string().min(1),
   requestedActualHours: z.union([z.string(), z.number()]).optional(),
   reason: z.string().optional(),
   justification: z.string().optional()
+});
+
+const deleteSchema = z.object({
+  workHourRecordId: z.string().min(1),
+  reason: z.string().optional()
 });
 
 export async function GET(request: Request) {
@@ -41,6 +46,16 @@ export async function POST(request: Request) {
 
   const actor = await getApiActor();
   const result = await requestWorkHourAdjustment(actor, parsed.data);
+  if ("error" in result) return NextResponse.json(result, { status: errorStatus(result as any) });
+  return NextResponse.json(result);
+}
+
+export async function DELETE(request: Request) {
+  const parsed = deleteSchema.safeParse(await request.json().catch(() => ({})));
+  if (!parsed.success) return errorResponse(mapZodError(parsed.error));
+
+  const actor = await getApiActor();
+  const result = await deleteWorkHourRecord(actor, parsed.data);
   if ("error" in result) return NextResponse.json(result, { status: errorStatus(result as any) });
   return NextResponse.json(result);
 }

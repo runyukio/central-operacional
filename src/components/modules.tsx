@@ -2679,6 +2679,7 @@ export function SchedulesPage() {
     adjustmentStatus: "Sem ajuste"
   });
   const [savingWorkHour, setSavingWorkHour] = useState(false);
+  const [deletingWorkHour, setDeletingWorkHour] = useState(false);
   const [workHourAdjustmentForm, setWorkHourAdjustmentForm] = useState({
     requestedActualHours: "",
     reason: "Erro de apontamento",
@@ -3106,6 +3107,48 @@ export function SchedulesPage() {
       setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível salvar as horas.");
     } finally {
       setSavingWorkHour(false);
+    }
+  }
+
+  async function deleteSelectedWorkHours() {
+    if (!workHourForm.recordId) {
+      setAttendanceMessage("Nenhum registro de horas selecionado para excluir.");
+      return;
+    }
+
+    const confirmed = window.confirm("Excluir as horas lançadas para este dia? O cronograma será mantido.");
+    if (!confirmed) return;
+
+    setDeletingWorkHour(true);
+    try {
+      await apiJson("/api/work-hours", {
+        method: "DELETE",
+        body: JSON.stringify({
+          workHourRecordId: workHourForm.recordId,
+          reason: "Exclusão pelo slot do cronograma"
+        })
+      });
+      setWorkHourForm({
+        recordId: "",
+        plannedStart: workHourForm.plannedStart,
+        plannedEnd: workHourForm.plannedEnd,
+        plannedHours: workHourForm.plannedHours,
+        actualHours: "",
+        effectiveHours: 0,
+        differenceMinutes: 0,
+        status: "Sem horas",
+        rawStatus: "",
+        source: "",
+        observation: "",
+        adjustmentId: "",
+        adjustmentStatus: "Sem ajuste"
+      });
+      setAttendanceMessage("Registro de horas excluído. O cronograma foi mantido.");
+      await refreshSchedules();
+    } catch (error) {
+      setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível excluir as horas.");
+    } finally {
+      setDeletingWorkHour(false);
     }
   }
 
@@ -4121,7 +4164,7 @@ export function SchedulesPage() {
                   {workHourForm.adjustmentStatus && workHourForm.adjustmentStatus !== "Sem ajuste" ? ` Ajuste: ${workHourForm.adjustmentStatus}.` : ""}
                 </div>
                 {canEditOfficialWorkHours ? (
-                  <button disabled={savingWorkHour || !selectedScheduleAllowsWorkHours} onClick={() => saveManualWorkHours()} className="mt-4 w-full rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
+                  <button disabled={savingWorkHour || deletingWorkHour || !selectedScheduleAllowsWorkHours} onClick={() => saveManualWorkHours()} className="mt-4 w-full rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
                     {savingWorkHour ? "Salvando horas..." : workHourForm.recordId ? "Salvar correção de horas" : "Lançar horas"}
                   </button>
                 ) : (
@@ -4129,6 +4172,11 @@ export function SchedulesPage() {
                     Supervisor não altera horas oficiais. Use a solicitação de ajuste abaixo.
                   </div>
                 )}
+                {canEditOfficialWorkHours && workHourForm.recordId ? (
+                  <button disabled={savingWorkHour || deletingWorkHour} onClick={deleteSelectedWorkHours} className="mt-3 w-full rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700 disabled:opacity-60">
+                    {deletingWorkHour ? "Excluindo horas..." : "Excluir horas deste dia"}
+                  </button>
+                ) : null}
 
                 {isScheduleSupervisor ? (
                   <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4">
@@ -4335,6 +4383,7 @@ export function WorkHoursPage() {
   const [showReview, setShowReview] = useState(false);
   const [adjustmentAction, setAdjustmentAction] = useState<"approve" | "reject">("approve");
   const [savingAdjustment, setSavingAdjustment] = useState(false);
+  const [deletingWorkHourId, setDeletingWorkHourId] = useState("");
   const [adjustmentForm, setAdjustmentForm] = useState({
     requestedActualHours: "",
     reason: "Erro de apontamento",
@@ -4346,6 +4395,7 @@ export function WorkHoursPage() {
   const normalizedRole = actorRole === "MANAGEMENT" ? "GESTOR" : actorRole;
   const canUpload = ["ADMIN", "GESTOR", "WFM"].includes(normalizedRole);
   const canApprove = ["ADMIN", "GESTOR", "WFM"].includes(normalizedRole);
+  const canDeleteWorkHours = ["ADMIN", "GESTOR", "WFM"].includes(normalizedRole);
   const canRequestAdjustment = ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(normalizedRole);
   const statusOptions = ["Todos", "OK", "Divergente", "Sem cronograma", "Ajuste solicitado", "Ajuste aprovado", "Ajuste recusado", "Importado", "Corrigido manualmente"];
   const sourceOptions = ["Todos", "MANUAL", "upload-horas"];
@@ -4506,6 +4556,29 @@ export function WorkHoursPage() {
     }
   }
 
+  async function deleteWorkHour(row: WorkHourRow) {
+    const confirmed = window.confirm(`Excluir as horas de ${row.employeeName} em ${row.date}? O cronograma e o colaborador serão mantidos.`);
+    if (!confirmed) return;
+
+    setDeletingWorkHourId(row.id);
+    setMessage("");
+    try {
+      await apiJson("/api/work-hours", {
+        method: "DELETE",
+        body: JSON.stringify({
+          workHourRecordId: row.id,
+          reason: "Exclusão pelo painel de Horas Operacionais"
+        })
+      });
+      setMessage("Registro de horas excluído.");
+      await loadWorkHours(rows.length === 1 && pagination.page > 1 ? pagination.page - 1 : pagination.page);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível excluir o registro de horas.");
+    } finally {
+      setDeletingWorkHourId("");
+    }
+  }
+
   function exportUrl() {
     const params = new URLSearchParams({ startDate: filters.startDate, endDate: filters.endDate });
     if (filters.lob !== "Todos") params.set("lob", filters.lob);
@@ -4625,6 +4698,11 @@ export function WorkHoursPage() {
                             <button onClick={() => openReview(row, "approve")} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white">Aprovar</button>
                             <button onClick={() => openReview(row, "reject")} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700">Recusar</button>
                           </>
+                        ) : null}
+                        {canDeleteWorkHours ? (
+                          <button disabled={deletingWorkHourId === row.id} onClick={() => deleteWorkHour(row)} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700 disabled:opacity-60">
+                            {deletingWorkHourId === row.id ? "Excluindo..." : "Excluir"}
+                          </button>
                         ) : null}
                       </div>
                     </td>

@@ -79,6 +79,11 @@ export type ManualWorkHourInput = {
   confirmOverwrite?: boolean;
 };
 
+export type DeleteWorkHourInput = {
+  workHourRecordId: string;
+  reason?: string;
+};
+
 type ValidationRow = {
   rowNumber: number;
   wbLogin: string;
@@ -672,6 +677,46 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
   } catch (error) {
     recordErrorLog({ userEmail: actor.email, code: "WORK_HOUR_MANUAL_UPSERT_ERROR", message: error instanceof Error ? error.message : "Falha ao lançar horas", action: "WORK_HOUR_MANUAL_UPSERT", severity: "ERROR" });
     return mapPrismaError(error) ?? { error: "Não foi possível salvar as horas manuais." };
+  }
+}
+
+export async function deleteWorkHourRecord(actor: Actor, input: DeleteWorkHourInput) {
+  const user = await getUser(actor);
+  if (!user || !manualEditRoles.includes(normalizeRole(user.role.name))) return createPermissionError("Você não tem permissão para excluir horas.");
+  if (!input.workHourRecordId) return createValidationError({ workHourRecordId: "Registro de horas é obrigatório." }, "Registro de horas é obrigatório.");
+
+  try {
+    const record = await prisma.workHourRecord.findUnique({
+      where: { id: input.workHourRecordId },
+      include: {
+        employee: { select: { id: true, fullName: true, wbLogin: true } },
+        schedule: { select: { id: true, date: true, status: true, startsAt: true, endsAt: true } },
+        adjustments: { select: { id: true, status: true, reason: true, requestedActualHours: true } },
+        histories: { select: { id: true, action: true, createdAt: true } }
+      }
+    });
+    if (!record) return createValidationError({ workHourRecordId: "Registro de horas não encontrado." }, "Registro de horas não encontrado.");
+
+    const reason = input.reason?.trim() || "Exclusão manual de horas operacionais";
+    await prisma.$transaction(async (tx) => {
+      await tx.workHourRecord.delete({ where: { id: record.id } });
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          action: AuditAction.EXCLUSAO,
+          entity: "WorkHourRecord",
+          entityId: record.id,
+          reason,
+          previousValue: serialize(record),
+          newValue: serialize(null)
+        }
+      });
+    });
+
+    return { success: true, message: "Registro de horas excluído." };
+  } catch (error) {
+    recordErrorLog({ userEmail: actor.email, code: "WORK_HOUR_DELETE_ERROR", message: error instanceof Error ? error.message : "Falha ao excluir horas", action: "WORK_HOUR_DELETE", severity: "ERROR" });
+    return mapPrismaError(error) ?? { error: "Não foi possível excluir o registro de horas." };
   }
 }
 
