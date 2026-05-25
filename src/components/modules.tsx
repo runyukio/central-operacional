@@ -319,6 +319,79 @@ type WorkHourRow = {
   observation: string;
 };
 
+type MonthlyAdvanceRecordClient = {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  wbLogin: string;
+  email?: string;
+  lob?: string;
+  supervisor: string;
+  supervisorId?: string;
+  employeeStatus?: string;
+  referenceMonth: string;
+  monthLabel: string;
+  optIn: boolean;
+  optInLabel: string;
+  amount: number;
+  hasDiscount: boolean;
+  discountAmount?: number | null;
+  discountReason?: string | null;
+  finalAmount: number;
+  status: string;
+  observation?: string | null;
+  updatedBy?: string;
+  updatedAt: string;
+  createdAt: string;
+};
+
+type MonthlyAdvanceCycle = {
+  referenceMonth: string;
+  label: string;
+  monthLabel: string;
+  locked: boolean;
+  closedMessage: string;
+  answered: boolean;
+  canRespond: boolean;
+  canRequestChange: boolean;
+  record: MonthlyAdvanceRecordClient | null;
+};
+
+type MonthlyAdvanceListResponse = {
+  data: MonthlyAdvanceRecordClient[];
+  summary: { total: number; optIn: number; optOut: number; amount: number; finalAmount: number };
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+  referenceMonth: string;
+  canManage: boolean;
+  canExport: boolean;
+};
+
+type MonthlyAdvanceImportPreview = {
+  totalRows: number;
+  validRows: number;
+  errorRows: number;
+  createdRows: number;
+  updatedRows: number;
+  foundEmployees: number;
+  missingEmployees: number;
+  rows: Array<{
+    rowNumber: number;
+    wbLogin: string;
+    referenceMonth: string;
+    optIn: boolean | null;
+    amount: number | null;
+    observation: string;
+    employeeId?: string;
+    employeeName?: string;
+    action?: "create" | "update";
+    errors: string[];
+    warnings: string[];
+  }>;
+};
+
 type ScheduleWorkHourCell = Pick<WorkHourRow, "id" | "plannedStart" | "plannedEnd" | "plannedHours" | "actualHours" | "effectiveHours" | "differenceMinutes" | "status" | "rawStatus" | "source" | "observation" | "adjustmentId" | "adjustmentStatus"> & {
   updatedAt?: string;
 };
@@ -797,6 +870,11 @@ function currentOperationalMonth() {
   return { month: today.month, year: today.year };
 }
 
+function currentOperationalMonthInput() {
+  const today = operationalTodayParts();
+  return `${today.year}-${String(today.month).padStart(2, "0")}`;
+}
+
 function currentOperationalDateInput() {
   const today = operationalTodayParts();
   return dateInputFromParts(today.year, today.month, today.day);
@@ -868,6 +946,7 @@ function isInvalidDateRange(range: { startDate: string; endDate: string }) {
 
 const scheduleWeekdayFormatter = new Intl.DateTimeFormat("pt-BR", { weekday: "short", timeZone: "America/Sao_Paulo" });
 const scheduleMonthFormatter = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric", timeZone: "America/Sao_Paulo" });
+const currencyFormatter = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 
 function formatScheduleDateHeader(dateIso: string) {
   const date = parseDateInput(dateIso);
@@ -1621,6 +1700,8 @@ export function MySchedulePage() {
   const [scheduleInfo, setScheduleInfo] = useState<{ id: string; name: string; schedule: string; shift: string; lob: string } | null>(null);
   const [myWorkHours, setMyWorkHours] = useState<WorkHourRow[]>([]);
   const [myWorkHourSummary, setMyWorkHourSummary] = useState<WorkHourSummary | null>(null);
+  const [monthlyAdvanceCycles, setMonthlyAdvanceCycles] = useState<MonthlyAdvanceCycle[]>([]);
+  const [savingMonthlyAdvance, setSavingMonthlyAdvance] = useState("");
   const [myRequests, setMyRequests] = useState<ClientRequest[]>([]);
   const [selectedRequest, setSelectedRequest] = useState<ClientRequest | null>(null);
   const [showDayOffModal, setShowDayOffModal] = useState(false);
@@ -1649,6 +1730,7 @@ export function MySchedulePage() {
 
   useEffect(() => {
     void loadMyRequests();
+    void loadMyMonthlyAdvance();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1697,6 +1779,15 @@ export function MySchedulePage() {
     }
   }
 
+  async function loadMyMonthlyAdvance() {
+    try {
+      const payload = await apiJson<{ data: MonthlyAdvanceCycle[] }>("/api/monthly-advance?scope=mine");
+      setMonthlyAdvanceCycles(payload.data);
+    } catch {
+      setMonthlyAdvanceCycles([]);
+    }
+  }
+
   async function loadMyRequests() {
     try {
       const payload = await apiJson<{ data: ClientRequest[]; actor?: { role: string; name: string } }>("/api/requests?scope=mine");
@@ -1705,6 +1796,51 @@ export function MySchedulePage() {
       setSelectedRequest((current) => (current ? payload.data.find((item) => item.id === current.id) ?? current : null));
     } catch {
       setMyRequests([]);
+    }
+  }
+
+  async function respondMonthlyAdvance(referenceMonth: string, optIn: boolean) {
+    if (savingMonthlyAdvance) return;
+    setSavingMonthlyAdvance(referenceMonth);
+    setDayOffMessage("");
+    try {
+      await apiJson<{ data: MonthlyAdvanceRecordClient }>("/api/monthly-advance", {
+        method: "POST",
+        body: JSON.stringify({ referenceMonth, optIn })
+      });
+      setDayOffMessage("Resposta do adiantamento mensal registrada com sucesso.");
+      await loadMyMonthlyAdvance();
+    } catch (error) {
+      setDayOffMessage(error instanceof Error ? error.message : "Não foi possível responder o adiantamento mensal.");
+    } finally {
+      setSavingMonthlyAdvance("");
+    }
+  }
+
+  async function requestMonthlyAdvanceChange(cycle: MonthlyAdvanceCycle) {
+    if (!cycle.record || savingMonthlyAdvance) return;
+    const requestedOptIn = !cycle.record.optIn;
+    const reason = window.prompt(`Informe o motivo para alterar ${cycle.monthLabel} para ${requestedOptIn ? "Sim" : "Não"}.`);
+    if (!reason?.trim()) return;
+    setSavingMonthlyAdvance(cycle.referenceMonth);
+    setDayOffMessage("");
+    try {
+      await apiJson<{ data: { id: string } }>("/api/monthly-advance/change-request", {
+        method: "POST",
+        body: JSON.stringify({
+          referenceMonth: cycle.referenceMonth,
+          requestedOptIn,
+          requestedAmount: cycle.record.amount,
+          reason,
+          observation: reason
+        })
+      });
+      setDayOffMessage("Solicitação de alteração do adiantamento aberta para análise do WFM.");
+      await loadMyRequests();
+    } catch (error) {
+      setDayOffMessage(error instanceof Error ? error.message : "Não foi possível abrir a solicitação de alteração.");
+    } finally {
+      setSavingMonthlyAdvance("");
     }
   }
 
@@ -1928,6 +2064,74 @@ export function MySchedulePage() {
         </section>
 
         <div className="space-y-5">
+          <Panel title="Adiantamento Mensal">
+            {monthlyAdvanceCycles.length ? (
+              <div className="grid gap-3">
+                {monthlyAdvanceCycles.map((cycle) => (
+                  <div key={cycle.referenceMonth} className="rounded-lg border border-border bg-white p-3">
+                    <div className="mb-2 flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-extrabold text-navy-950">{cycle.label}</p>
+                        <p className="text-xs font-semibold text-muted">{cycle.monthLabel}</p>
+                      </div>
+                      <StatusBadge status={cycle.locked ? "Concluído" : cycle.record?.optInLabel ?? "Pendente"} />
+                    </div>
+                    {cycle.locked ? (
+                      <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-muted">
+                        <p>{cycle.closedMessage}</p>
+                        {cycle.record ? (
+                          <p className="mt-1 text-navy-950">Status: {cycle.record.optInLabel} • Valor: {currencyFormatter.format(cycle.record.finalAmount)}</p>
+                        ) : null}
+                      </div>
+                    ) : cycle.record ? (
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <InfoLine label="Aderente" value={cycle.record.optInLabel} />
+                          <InfoLine label="Valor" value={currencyFormatter.format(cycle.record.finalAmount)} />
+                          <InfoLine label="Atualizado por" value={cycle.record.updatedBy ?? "Sistema"} />
+                          <InfoLine label="Atualizado em" value={cycle.record.updatedAt} />
+                        </div>
+                        {cycle.canRequestChange ? (
+                          <button
+                            type="button"
+                            disabled={savingMonthlyAdvance === cycle.referenceMonth}
+                            onClick={() => requestMonthlyAdvanceChange(cycle)}
+                            className="w-full rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-extrabold text-blue-700 disabled:opacity-50"
+                          >
+                            {savingMonthlyAdvance === cycle.referenceMonth ? "Enviando..." : "Solicitar alteração do adiantamento"}
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <p className="text-sm font-semibold text-muted">Deseja aderir ao adiantamento mensal para {cycle.monthLabel}?</p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            disabled={savingMonthlyAdvance === cycle.referenceMonth}
+                            onClick={() => respondMonthlyAdvance(cycle.referenceMonth, true)}
+                            className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-extrabold text-white disabled:opacity-50"
+                          >
+                            Sim
+                          </button>
+                          <button
+                            type="button"
+                            disabled={savingMonthlyAdvance === cycle.referenceMonth}
+                            onClick={() => respondMonthlyAdvance(cycle.referenceMonth, false)}
+                            className="rounded-lg border border-border bg-white px-3 py-2 text-sm font-extrabold text-navy-950 disabled:opacity-50"
+                          >
+                            Não
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState title="Adiantamento mensal indisponível" description="Não foi possível carregar os ciclos de resposta agora." />
+            )}
+          </Panel>
           <Panel title="Minhas Solicitações" action="Solicitar Folga" actionOnClick={() => setShowDayOffModal(true)}>
             <div className="mb-4 grid gap-2 md:grid-cols-2">
               <select value={requestFilters.status} onChange={(event) => setRequestFilters({ ...requestFilters, status: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
@@ -4955,7 +5159,7 @@ function shiftTagClass(value: string) {
   return map[value] ?? "bg-slate-100 text-slate-600";
 }
 
-const requestTypes = ["Troca de Folga", "Venda de Folga", "Solicitação de Dia de Folga", "Ajuste de cronograma", "Correção de cronograma", "Equipamento", "Acesso", "RH", "Qualidade", "WFM", "Operação", "Suporte geral"];
+const requestTypes = ["Troca de Folga", "Venda de Folga", "Solicitação de Dia de Folga", "Alteração de Adiantamento", "Ajuste de cronograma", "Correção de cronograma", "Equipamento", "Acesso", "RH", "Qualidade", "WFM", "Operação", "Suporte geral"];
 const requestPriorities = ["Baixa", "Média", "Alta", "Crítica"];
 const requestStatuses = ["Aberto", "Em análise", "Aprovado", "Recusado", "Concluído", "Cancelado"];
 const requestColumns = ["Aberto", "Em análise", "Aprovado", "Recusado", "Concluído", "Cancelado"];
@@ -5906,6 +6110,16 @@ export function EmployeeMapPage() {
   const [showResetPassword, setShowResetPassword] = useState(false);
   const [resetPasswordForm, setResetPasswordForm] = useState({ password: "", confirmPassword: "" });
   const [resettingPassword, setResettingPassword] = useState(false);
+  const [advanceRows, setAdvanceRows] = useState<MonthlyAdvanceRecordClient[]>([]);
+  const [advanceSummary, setAdvanceSummary] = useState<MonthlyAdvanceListResponse["summary"] | null>(null);
+  const [advanceReferenceMonth, setAdvanceReferenceMonth] = useState(() => currentOperationalMonthInput());
+  const [advanceOptInFilter, setAdvanceOptInFilter] = useState("Todos");
+  const [advanceSearch, setAdvanceSearch] = useState("");
+  const [advanceLoading, setAdvanceLoading] = useState(false);
+  const [advanceImportRows, setAdvanceImportRows] = useState<Array<Record<string, unknown>>>([]);
+  const [advancePreview, setAdvancePreview] = useState<MonthlyAdvanceImportPreview | null>(null);
+  const [advanceImporting, setAdvanceImporting] = useState(false);
+  const [advanceEditingId, setAdvanceEditingId] = useState("");
   const employeeMapLobs = ["Todos", ...Array.from(new Set(employeeSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? employeeRows.map((employee) => employee.lob).filter(Boolean)))];
   const employeeStatusOptions = ["Todos", "Ativos/Aprovados", "Nesting", "Pendentes", "Inativos", "Online", "Em Atendimento", "Offline"];
   const employeeSupervisorOptions = employeeSettings?.supervisors?.filter((supervisor) => supervisor.status !== "INACTIVE") ?? [];
@@ -5918,6 +6132,8 @@ export function EmployeeMapPage() {
   const canEditEmployeeOperational = ["ADMIN", "WFM", "RH", "HR", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
   const canEditOperationalBindings = ["ADMIN", "WFM", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
   const canEditPeopleData = ["ADMIN", "RH", "HR", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
+  const canViewMonthlyAdvance = ["ADMIN", "WFM", "RH", "HR", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
+  const canManageMonthlyAdvance = ["ADMIN", "WFM", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
   const employeeLobOptions = employeeSettings?.lobs.filter((lob) => lob.status !== "INACTIVE") ?? [];
   const employeeTeamOptions = employeeSettings?.teams?.filter((team) => team.status !== "INACTIVE" && (!lobDraft || team.lobId === lobDraft || team.lob === "ALL")) ?? [];
   const employeeShiftOptions = employeeSettings?.shifts.filter((shift) => shift.status !== "INACTIVE" && isSelectableShiftName(shift.name)) ?? [];
@@ -5928,6 +6144,7 @@ export function EmployeeMapPage() {
 
   useEffect(() => {
     void loadEmployees();
+    if (canViewMonthlyAdvance) void loadMonthlyAdvances();
     apiJson<{ data: SystemSettings }>("/api/settings")
       .then((payload) => setEmployeeSettings(payload.data))
       .catch(() => setEmployeeSettings(null));
@@ -5976,6 +6193,118 @@ export function EmployeeMapPage() {
     } finally {
       setEmployeeLoading(false);
     }
+  }
+
+  async function loadMonthlyAdvances(options?: { nextReferenceMonth?: string; nextLob?: string; nextSupervisor?: string; nextOptIn?: string; nextSearch?: string }) {
+    if (!canViewMonthlyAdvance) return;
+    setAdvanceLoading(true);
+    const nextReferenceMonth = options?.nextReferenceMonth ?? advanceReferenceMonth;
+    const nextLob = options?.nextLob ?? lobFilter;
+    const nextSupervisor = options?.nextSupervisor ?? supervisorFilter;
+    const nextOptIn = options?.nextOptIn ?? advanceOptInFilter;
+    const nextSearch = options?.nextSearch ?? advanceSearch;
+    const params = new URLSearchParams({ referenceMonth: nextReferenceMonth, limit: "100" });
+    if (nextLob !== "Todos") params.set("lob", nextLob);
+    if (nextSupervisor !== "Todos") params.set("supervisorId", nextSupervisor);
+    if (nextOptIn !== "Todos") params.set("optIn", nextOptIn);
+    if (nextSearch.trim()) params.set("search", nextSearch.trim());
+    try {
+      const payload = await apiJson<MonthlyAdvanceListResponse>(`/api/monthly-advance?${params.toString()}`);
+      setAdvanceRows(payload.data);
+      setAdvanceSummary(payload.summary);
+    } catch (error) {
+      setAdvanceRows([]);
+      setAdvanceSummary(null);
+      setEmployeeMessage(error instanceof Error ? error.message : "Não foi possível carregar adiantamento mensal.");
+    } finally {
+      setAdvanceLoading(false);
+    }
+  }
+
+  async function previewMonthlyAdvanceImport(file: File | null) {
+    if (!file || advanceImporting) return;
+    setAdvanceImporting(true);
+    setEmployeeMessage("");
+    try {
+      const workbook = XLSX.read(await file.arrayBuffer());
+      const sheetName = workbook.SheetNames.find((name) => /adiantamento/i.test(name)) ?? workbook.SheetNames[0];
+      const rows = sheetName ? XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[sheetName], { defval: "" }) : [];
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("referenceMonth", advanceReferenceMonth);
+      const payload = await apiJson<MonthlyAdvanceImportPreview>("/api/monthly-advance/import/preview", { method: "POST", body: formData });
+      setAdvanceImportRows(rows);
+      setAdvancePreview(payload);
+      setEmployeeMessage(payload.errorRows ? "Preview do adiantamento gerado com linhas para revisar." : "Preview do adiantamento gerado sem erros.");
+    } catch (error) {
+      setAdvancePreview(null);
+      setAdvanceImportRows([]);
+      setEmployeeMessage(error instanceof Error ? error.message : "Não foi possível validar o arquivo de adiantamento.");
+    } finally {
+      setAdvanceImporting(false);
+    }
+  }
+
+  async function commitMonthlyAdvanceImport() {
+    if (!advancePreview || advanceImporting) return;
+    setAdvanceImporting(true);
+    setEmployeeMessage("");
+    try {
+      const payload = await apiJson<{ data: { importedRows: number; createdRows: number; updatedRows: number } }>("/api/monthly-advance/import/commit", {
+        method: "POST",
+        body: JSON.stringify({ rows: advanceImportRows, referenceMonth: advanceReferenceMonth })
+      });
+      setEmployeeMessage(`Adiantamento importado: ${payload.data.importedRows} linha(s), ${payload.data.createdRows} criada(s), ${payload.data.updatedRows} atualizada(s).`);
+      setAdvancePreview(null);
+      setAdvanceImportRows([]);
+      await loadMonthlyAdvances();
+    } catch (error) {
+      setEmployeeMessage(error instanceof Error ? error.message : "Não foi possível importar adiantamento mensal.");
+    } finally {
+      setAdvanceImporting(false);
+    }
+  }
+
+  async function editMonthlyAdvance(record: MonthlyAdvanceRecordClient) {
+    if (!canManageMonthlyAdvance || advanceEditingId) return;
+    const optInAnswer = window.prompt("Aderente? Digite Sim ou Não.", record.optIn ? "Sim" : "Não");
+    if (!optInAnswer) return;
+    const normalizedOptIn = optInAnswer.trim().toLowerCase();
+    if (!["sim", "s", "true", "1", "não", "nao", "n", "false", "0"].includes(normalizedOptIn)) {
+      setEmployeeMessage("Aderente deve ser Sim ou Não.");
+      return;
+    }
+    const amountAnswer = window.prompt("Valor do adiantamento.", String(record.amount).replace(".", ","));
+    if (!amountAnswer) return;
+    const observation = window.prompt("Observação opcional.", record.observation ?? "") ?? "";
+    setAdvanceEditingId(record.id);
+    try {
+      await apiJson<{ data: MonthlyAdvanceRecordClient }>("/api/monthly-advance", {
+        method: "PATCH",
+        body: JSON.stringify({
+          employeeId: record.employeeId,
+          referenceMonth: record.referenceMonth,
+          optIn: ["sim", "s", "true", "1"].includes(normalizedOptIn),
+          amount: amountAnswer,
+          observation
+        })
+      });
+      setEmployeeMessage("Adiantamento mensal atualizado.");
+      await loadMonthlyAdvances();
+    } catch (error) {
+      setEmployeeMessage(error instanceof Error ? error.message : "Não foi possível atualizar adiantamento mensal.");
+    } finally {
+      setAdvanceEditingId("");
+    }
+  }
+
+  function exportMonthlyAdvanceCsv() {
+    const params = new URLSearchParams({ referenceMonth: advanceReferenceMonth });
+    if (lobFilter !== "Todos") params.set("lob", lobFilter);
+    if (supervisorFilter !== "Todos") params.set("supervisorId", supervisorFilter);
+    if (advanceOptInFilter !== "Todos") params.set("optIn", advanceOptInFilter);
+    if (advanceSearch.trim()) params.set("search", advanceSearch.trim());
+    window.location.href = `/api/monthly-advance/export?${params.toString()}`;
   }
 
   async function selectEmployee(employee: EmployeeClient) {
@@ -6145,6 +6474,92 @@ export function EmployeeMapPage() {
             <MetricPill value={employeeRows.filter((employee) => employee.status === "Em Atendimento").length} label="Em atendimento na página" />
             <MetricPill value={employeeRows.filter((employee) => employee.status === "Offline").length} label="Offline na página" />
           </div>
+          {canViewMonthlyAdvance ? (
+            <Panel title="Adiantamento">
+              <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+                <FormInput label="Mês" type="month" value={advanceReferenceMonth} onChange={setAdvanceReferenceMonth} />
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-bold text-muted">Aderente</span>
+                  <select value={advanceOptInFilter} onChange={(event) => setAdvanceOptInFilter(event.target.value)} className="h-11 w-full rounded-lg border border-border px-3 text-sm font-bold">
+                    <option value="Todos">Todos</option>
+                    <option value="Sim">Sim</option>
+                    <option value="Não">Não</option>
+                  </select>
+                </label>
+                <FormInput label="Buscar" value={advanceSearch} onChange={setAdvanceSearch} />
+                <div className="flex items-end gap-2 xl:col-span-3">
+                  <button type="button" onClick={() => loadMonthlyAdvances()} className="h-11 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white">Buscar</button>
+                  <button type="button" onClick={exportMonthlyAdvanceCsv} className="h-11 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950">Exportar filtros</button>
+                  {canManageMonthlyAdvance ? (
+                    <>
+                      <button type="button" onClick={() => downloadFile("/api/monthly-advance/template", "template_adiantamento_mensal.xlsx")} className="h-11 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950">Baixar template</button>
+                      <label className="grid h-11 cursor-pointer place-items-center rounded-lg border border-blue-200 bg-blue-50 px-4 text-sm font-bold text-blue-700">
+                        {advanceImporting ? "Importando..." : "Importar"}
+                        <input type="file" accept=".xlsx,.xls,.csv" className="hidden" disabled={advanceImporting} onChange={(event) => void previewMonthlyAdvanceImport(event.target.files?.[0] ?? null)} />
+                      </label>
+                    </>
+                  ) : null}
+                </div>
+              </div>
+              <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <MetricPill value={advanceSummary?.total ?? 0} label="Registros do mês" />
+                <MetricPill value={advanceSummary?.optIn ?? 0} label="Aderentes" />
+                <MetricPill value={advanceSummary?.optOut ?? 0} label="Não aderentes" />
+                <MetricPill value={currencyFormatter.format(advanceSummary?.finalAmount ?? 0)} label="Valor final" />
+              </div>
+              {advancePreview ? (
+                <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 p-3">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-sm font-bold text-blue-700">
+                      Preview: {advancePreview.validRows} válida(s), {advancePreview.errorRows} com erro, {advancePreview.createdRows} criação(ões), {advancePreview.updatedRows} atualização(ões).
+                    </p>
+                    <div className="flex gap-2">
+                      <button type="button" disabled={advanceImporting || !advancePreview.validRows} onClick={commitMonthlyAdvanceImport} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">Confirmar importação</button>
+                      <button type="button" disabled={advanceImporting} onClick={() => { setAdvancePreview(null); setAdvanceImportRows([]); }} className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-bold text-navy-950 disabled:opacity-50">Cancelar</button>
+                    </div>
+                  </div>
+                  <SimpleTable
+                    columns={["Linha", "WB/Login", "Colaborador", "Mês", "Aderente", "Valor", "Ação", "Erros"]}
+                    rows={advancePreview.rows.slice(0, 12).map((row) => [
+                      row.rowNumber,
+                      row.wbLogin || "-",
+                      row.employeeName ?? "Não encontrado",
+                      row.referenceMonth || "-",
+                      row.optIn === null ? "-" : row.optIn ? "Sim" : "Não",
+                      row.amount == null ? "-" : currencyFormatter.format(row.amount),
+                      row.action === "update" ? "Atualizar" : "Criar",
+                      row.errors.length ? <span key={`${row.rowNumber}-errors`} className="text-red-600">{row.errors.join(" ")}</span> : "OK"
+                    ])}
+                  />
+                  {advancePreview.rows.length > 12 ? <p className="mt-2 text-xs font-semibold text-muted">Mostrando 12 de {advancePreview.rows.length} linhas do preview.</p> : null}
+                </div>
+              ) : null}
+              {advanceLoading ? (
+                <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm font-bold text-blue-700">Carregando adiantamento mensal...</div>
+              ) : advanceRows.length ? (
+                <SimpleTable
+                  columns={["Mês", "Nome", "WB/Login", "LOB", "Supervisor", "Aderente", "Valor", "Atualizado por", "Ação"]}
+                  rows={advanceRows.map((record) => [
+                    record.monthLabel,
+                    record.employeeName,
+                    record.wbLogin,
+                    record.lob ?? "-",
+                    record.supervisor,
+                    <StatusBadge key={`${record.id}-opt`} status={record.optInLabel} />,
+                    currencyFormatter.format(record.finalAmount),
+                    record.updatedBy ?? "-",
+                    canManageMonthlyAdvance ? (
+                      <button key={`${record.id}-edit`} disabled={advanceEditingId === record.id} onClick={() => editMonthlyAdvance(record)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 disabled:opacity-50">
+                        {advanceEditingId === record.id ? "Salvando..." : "Editar"}
+                      </button>
+                    ) : "Visualizar"
+                  ])}
+                />
+              ) : (
+                <EmptyState title="Nenhum adiantamento encontrado" description="Use os filtros ou importe o template para criar os registros mensais." />
+              )}
+            </Panel>
+          ) : null}
           <Panel title="Funcionários">
             {employeeLoading ? (
               <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm font-bold text-blue-700">Carregando resumo dos colaboradores...</div>

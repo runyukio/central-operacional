@@ -22,7 +22,13 @@ const createRequestSchema = z.object({
   dayOffReason: z.string().optional(),
   urgency: z.enum(["Baixa", "Média", "Alta", "Crítica"]).optional(),
   justification: z.string().optional(),
-  attachmentUrl: z.string().optional()
+  attachmentUrl: z.string().optional(),
+  monthlyAdvanceReferenceMonth: z.string().optional(),
+  currentAdvanceOptIn: z.boolean().optional(),
+  requestedAdvanceOptIn: z.boolean().optional(),
+  currentAdvanceAmount: z.number().optional(),
+  requestedAdvanceAmount: z.number().optional(),
+  monthlyAdvanceReason: z.string().optional()
 });
 
 export async function GET(request: Request) {

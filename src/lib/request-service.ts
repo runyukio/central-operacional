@@ -8,6 +8,7 @@ import {
   recordErrorLog,
   updateRequestStatus as updateMockRequestStatus
 } from "@/lib/mock-db";
+import { applyApprovedMonthlyAdvanceChange, isMonthlyAdvanceRequestPayload } from "@/lib/monthly-advance-service";
 import { prisma } from "@/lib/prisma";
 import { canApproveRequest, normalizeRole } from "@/lib/permissions";
 import { cleanShiftName } from "@/lib/shift-display";
@@ -111,6 +112,12 @@ export type CreateRequestInput = {
   urgency?: UiPriority;
   justification?: string;
   attachmentUrl?: string;
+  monthlyAdvanceReferenceMonth?: string;
+  currentAdvanceOptIn?: boolean;
+  requestedAdvanceOptIn?: boolean;
+  currentAdvanceAmount?: number;
+  requestedAdvanceAmount?: number;
+  monthlyAdvanceReason?: string;
 };
 
 export type RequestStatusActionInput = {
@@ -227,6 +234,11 @@ export async function createOperationalRequest(actor: Actor, input: CreateReques
     if (isDayOffRequest(input) && requesterProfile?.id) {
       const dayOffError = await validateDayOffRequestInDatabase(requesterProfile.id, input);
       if (dayOffError) return { error: dayOffError };
+    }
+    if (isMonthlyAdvanceRequest(input) && !requesterProfile) {
+      return validationFailure("Seu usuário não está vinculado a um cadastro de colaborador. Contate o administrador.", {
+        employeeId: "Colaborador não vinculado ao usuário logado."
+      });
     }
 
     const request = await prisma.$transaction(async (tx) => {
@@ -371,8 +383,13 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
         transition.applySchedule && isDayOffRequest(current)
           ? await applyDayOffRequestToSchedule(tx, current, user.id, actionInput)
           : { updated: false, message: "" };
+      const advanceResult =
+        transition.applyMonthlyAdvance && isMonthlyAdvanceRequest(current)
+          ? await applyApprovedMonthlyAdvanceChange(tx, current, user.id)
+          : { updated: false, message: "" };
 
       const shouldUpdatePayload = transition.applySchedule && isDayOffRequest(current);
+      const shouldUpdateAdvancePayload = transition.applyMonthlyAdvance && isMonthlyAdvanceRequest(current);
       const saved = await tx.request.update({
         where: { id: current.id },
         data: {
@@ -389,6 +406,14 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
                 finalApprovedStartTime: actionInput.finalApprovedStartTime ?? null,
                 finalApprovedEndTime: actionInput.finalApprovedEndTime ?? null
               } }
+            : shouldUpdateAdvancePayload
+              ? { payload: {
+                  ...((current.payload ?? {}) as Prisma.InputJsonObject),
+                  monthlyAdvanceAppliedAt: new Date().toISOString(),
+                  monthlyAdvanceAppliedById: user.id,
+                  monthlyAdvanceApplicationStatus: advanceResult.updated ? "APPLIED" : "NOT_APPLIED",
+                  monthlyAdvanceApplicationMessage: advanceResult.message || null
+                } }
             : {}),
           history: {
             create: {
@@ -397,7 +422,12 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
               from: current.status,
               to: transition.nextStatus,
               reason,
-              metadata: transition.applySchedule && isDayOffRequest(current) ? { scheduleUpdated: scheduleResult.updated, scheduleMessage: scheduleResult.message } : undefined
+              metadata:
+                transition.applySchedule && isDayOffRequest(current)
+                  ? { scheduleUpdated: scheduleResult.updated, scheduleMessage: scheduleResult.message }
+                  : shouldUpdateAdvancePayload
+                    ? { monthlyAdvanceUpdated: advanceResult.updated, monthlyAdvanceMessage: advanceResult.message }
+                    : undefined
             }
           },
           comments: reason
@@ -422,6 +452,19 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
             to: transition.nextStatus,
             reason: scheduleResult.message,
             metadata: { scheduleUpdated: true }
+          }
+        });
+      }
+      if (transition.applyMonthlyAdvance && isMonthlyAdvanceRequest(current) && advanceResult.updated) {
+        await tx.requestHistory.create({
+          data: {
+            requestId: saved.id,
+            actorId: user.id,
+            action: "Adiantamento atualizado",
+            from: transition.nextStatus,
+            to: transition.nextStatus,
+            reason: advanceResult.message,
+            metadata: { monthlyAdvanceUpdated: true }
           }
         });
       }
@@ -574,6 +617,7 @@ type RequestTransition =
   | {
       nextStatus: DbRequestStatus;
       applySchedule: boolean;
+      applyMonthlyAdvance?: boolean;
       historyAction: string;
       auditAction: AuditAction;
       requesterTitle: string;
@@ -1111,6 +1155,7 @@ function resolveRequestTransition(actor: Actor, user: ActiveUser, request: Prism
   const isSupervisorStep = supervisorStepRoles.includes(role) && (role !== "SUPERVISOR" || isDayOffRequest(request));
   const isFinalApprover = wfmFinalRoles.includes(role);
   const isAdminLike = ["ADMIN", "GESTOR"].includes(role);
+  const isAdvanceChange = isMonthlyAdvanceRequest(request);
   const target = uiToDbStatus[targetStatus as keyof typeof uiToDbStatus];
 
   if ((terminalFlowStatuses as readonly string[]).includes(current) && !(current === "APROVADO" && target === "CONCLUIDO" && isFinalApprover)) {
@@ -1134,6 +1179,18 @@ function resolveRequestTransition(actor: Actor, user: ActiveUser, request: Prism
 
   if (target === "APROVADO") {
     if (current === "ABERTO") {
+      if (isAdvanceChange && isFinalApprover) {
+        return {
+          nextStatus: "APROVADO",
+          applySchedule: false,
+          applyMonthlyAdvance: true,
+          historyAction: "Aprovação de alteração de adiantamento",
+          auditAction: "APROVACAO",
+          requesterTitle: "Alteração de adiantamento aprovada",
+          requesterBody: "Sua solicitação de alteração de adiantamento foi aprovada.",
+          requesterNotificationType: "SUCCESS"
+        };
+      }
       if (!isSupervisorStep) {
         return role === "WFM"
           ? { error: "A solicitação precisa da aprovação do supervisor antes da aprovação final do WFM." }
@@ -1157,10 +1214,11 @@ function resolveRequestTransition(actor: Actor, user: ActiveUser, request: Prism
       return {
         nextStatus: "APROVADO",
         applySchedule: isDayOffRequest(request),
+        applyMonthlyAdvance: isAdvanceChange,
         historyAction: "Aprovação final WFM",
         auditAction: "APROVACAO",
-        requesterTitle: finalApprovalTitle(request.type.name),
-        requesterBody: finalApprovalBody(request.type.name),
+        requesterTitle: isAdvanceChange ? "Alteração de adiantamento aprovada" : finalApprovalTitle(request.type.name),
+        requesterBody: isAdvanceChange ? "Sua solicitação de alteração de adiantamento foi aprovada." : finalApprovalBody(request.type.name),
         requesterNotificationType: "SUCCESS",
         notifySupervisor: true,
         supervisorTitle: "Solicitação aprovada pelo WFM",
@@ -1173,8 +1231,8 @@ function resolveRequestTransition(actor: Actor, user: ActiveUser, request: Prism
 
   if (target === "RECUSADO") {
     if (current === "ABERTO") {
-      if (role === "WFM") return { error: "A solicitação precisa da primeira aprovação do supervisor antes da decisão final do WFM." };
-      if (!isSupervisorStep && !isAdminLike) return "FORBIDDEN";
+      if (role === "WFM" && !isAdvanceChange) return { error: "A solicitação precisa da primeira aprovação do supervisor antes da decisão final do WFM." };
+      if (!isSupervisorStep && !isAdminLike && !(isAdvanceChange && isFinalApprover)) return "FORBIDDEN";
     }
     if (current === "EM_ANALISE") {
       if (role === "SUPERVISOR") return { error: "Supervisor pode aprovar apenas a primeira etapa da solicitação." };
@@ -1334,6 +1392,12 @@ function validateCreateInput(input: CreateRequestInput) {
     if (!input.justification?.trim()) return "Justificativa é obrigatória.";
   }
 
+  if (isMonthlyAdvanceRequest(input)) {
+    if (!input.monthlyAdvanceReferenceMonth?.trim()) return "Mês de referência é obrigatório.";
+    if (typeof input.requestedAdvanceOptIn !== "boolean") return "Novo status solicitado do adiantamento é obrigatório.";
+    if (!input.description.trim()) return "Motivo é obrigatório.";
+  }
+
   return "";
 }
 
@@ -1356,8 +1420,27 @@ function payloadForInput(input: CreateRequestInput) {
     justification: input.justification || null,
     attachmentUrl: input.attachmentUrl || null,
     scheduleApplicationStatus: dayOffKind ? "PENDING" : null,
-    scaleIntegrationPending: Boolean(dayOffKind)
+    scaleIntegrationPending: Boolean(dayOffKind),
+    monthlyAdvanceChange: isMonthlyAdvanceRequest(input),
+    referenceMonth: input.monthlyAdvanceReferenceMonth || null,
+    currentOptIn: input.currentAdvanceOptIn ?? null,
+    requestedOptIn: input.requestedAdvanceOptIn ?? null,
+    currentAmount: input.currentAdvanceAmount ?? null,
+    requestedAmount: input.requestedAdvanceAmount ?? null,
+    reason: input.monthlyAdvanceReason || input.description || null
   };
+}
+
+function isMonthlyAdvanceRequest(value: CreateRequestInput | PrismaRequest | string) {
+  if (!value) return false;
+  const payload = typeof value === "string" ? null : ((value as PrismaRequest).payload ?? null);
+  const typeName =
+    typeof value === "string"
+      ? value
+      : "type" in value && typeof (value as PrismaRequest).type === "object"
+        ? (value as PrismaRequest).type.name
+        : (value as CreateRequestInput).type;
+  return /adiantamento/i.test(typeName) || isMonthlyAdvanceRequestPayload(payload);
 }
 
 function isDayOffRequest(value: CreateRequestInput | PrismaRequest | string) {
@@ -1632,6 +1715,7 @@ function areaForRequest(type: string) {
   if (/equipamento|acesso|suporte/i.test(type)) return /equipamento/i.test(type) ? "TI" : "Operações";
   if (/rh/i.test(type)) return "RH";
   if (/qualidade/i.test(type)) return "Qualidade";
+  if (/adiantamento/i.test(type)) return "WFM";
   if (/wfm|escala|folga|correção|correcao|ajuste/i.test(type)) return "WFM";
   return "Operações";
 }

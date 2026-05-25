@@ -301,6 +301,7 @@ model User {
   approvedWorkHourAdjustments  WorkHourAdjustmentRequest[] @relation("WorkHourAdjustmentApprovedBy")
   rejectedWorkHourAdjustments  WorkHourAdjustmentRequest[] @relation("WorkHourAdjustmentRejectedBy")
   workHourHistories       WorkHourHistory[]       @relation("WorkHourHistoryChangedBy")
+  monthlyAdvanceUpdates   MonthlyAdvanceRecord[]  @relation("MonthlyAdvanceUpdatedBy")
   createdAt               DateTime                @default(now())
   updatedAt               DateTime                @updatedAt
   deletedAt               DateTime?
@@ -377,6 +378,7 @@ model EmployeeProfile {
   attendanceRecords  AttendanceRecord[]
   workHourRecords    WorkHourRecord[]
   workHourAdjustments WorkHourAdjustmentRequest[]
+  monthlyAdvanceRecords MonthlyAdvanceRecord[]
   scheduleChanges    ScheduleChangeHistory[]
   requests           Request[]
   performanceMetrics PerformanceMetric[]
@@ -519,6 +521,31 @@ model Request {
   @@index([status, createdAt])
   @@index([priority])
   @@index([assignedArea])
+}
+
+model MonthlyAdvanceRecord {
+  id             String          @id @default(cuid())
+  employeeId     String
+  referenceMonth String
+  optIn          Boolean
+  amount         Decimal         @db.Decimal(10, 2)
+  hasDiscount    Boolean         @default(false)
+  discountAmount Decimal?        @db.Decimal(10, 2)
+  discountReason String?
+  finalAmount    Decimal         @db.Decimal(10, 2)
+  status         String          @default("ACTIVE")
+  observation    String?
+  updatedById    String?
+  employee       EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  updatedBy      User?           @relation("MonthlyAdvanceUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@unique([employeeId, referenceMonth])
+  @@index([referenceMonth])
+  @@index([employeeId])
+  @@index([optIn])
+  @@index([updatedById])
 }
 
 model RequestComment {

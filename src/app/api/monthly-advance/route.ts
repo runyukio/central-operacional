@@ -1,0 +1,83 @@
+import { NextResponse } from "next/server";
+import { z } from "zod";
+
+import { getApiActor } from "@/lib/api-actor";
+import {
+  getMyMonthlyAdvanceCycles,
+  listMonthlyAdvances,
+  parseAdvanceAmount,
+  parseAdvanceOptIn,
+  respondMonthlyAdvance,
+  upsertMonthlyAdvance
+} from "@/lib/monthly-advance-service";
+
+const respondSchema = z.object({
+  referenceMonth: z.string().min(1),
+  optIn: z.boolean()
+});
+
+const upsertSchema = z.object({
+  employeeId: z.string().optional(),
+  wbLogin: z.string().optional(),
+  referenceMonth: z.string().min(1),
+  optIn: z.boolean(),
+  amount: z.union([z.number(), z.string()]),
+  hasDiscount: z.boolean().optional(),
+  discountAmount: z.union([z.number(), z.string()]).optional(),
+  discountReason: z.string().optional(),
+  observation: z.string().optional()
+});
+
+export async function GET(request: Request) {
+  const actor = await getApiActor();
+  const url = new URL(request.url);
+  if (url.searchParams.get("scope") === "mine") {
+    const result = await getMyMonthlyAdvanceCycles(actor);
+    if ("error" in result) return NextResponse.json({ error: result.error, message: result.error }, { status: result.status ?? 400 });
+    return NextResponse.json(result);
+  }
+
+  const result = await listMonthlyAdvances(actor, {
+    referenceMonth: url.searchParams.get("referenceMonth") ?? undefined,
+    lob: url.searchParams.get("lob") ?? undefined,
+    supervisorId: url.searchParams.get("supervisorId") ?? undefined,
+    optIn: url.searchParams.get("optIn") ?? undefined,
+    search: url.searchParams.get("search") ?? undefined,
+    page: url.searchParams.get("page") ?? undefined,
+    limit: url.searchParams.get("limit") ?? undefined
+  });
+  if ("error" in result) return NextResponse.json({ error: result.error, message: result.error }, { status: result.status ?? 400 });
+  return NextResponse.json(result);
+}
+
+export async function POST(request: Request) {
+  const parsed = respondSchema.safeParse(await request.json());
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Dados inválidos para responder adiantamento mensal.", message: "Dados inválidos para responder adiantamento mensal." }, { status: 400 });
+  }
+  const actor = await getApiActor();
+  const result = await respondMonthlyAdvance(actor, parsed.data);
+  if ("error" in result) return NextResponse.json({ error: result.error, message: result.error }, { status: result.status ?? 400 });
+  return NextResponse.json(result, { status: 201 });
+}
+
+export async function PATCH(request: Request) {
+  const parsed = upsertSchema.safeParse(await request.json());
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Dados inválidos para atualizar adiantamento mensal.", message: "Dados inválidos para atualizar adiantamento mensal." }, { status: 400 });
+  }
+  const amount = parseAdvanceAmount(parsed.data.amount);
+  const discountAmount = parsed.data.discountAmount == null ? undefined : parseAdvanceAmount(parsed.data.discountAmount);
+  const optIn = parseAdvanceOptIn(parsed.data.optIn);
+  if (amount === null) return NextResponse.json({ error: "Valor inválido.", message: "Valor inválido." }, { status: 400 });
+  if (parsed.data.hasDiscount && discountAmount === null) return NextResponse.json({ error: "Valor de desconto inválido.", message: "Valor de desconto inválido." }, { status: 400 });
+  const actor = await getApiActor();
+  const result = await upsertMonthlyAdvance(actor, {
+    ...parsed.data,
+    optIn: Boolean(optIn),
+    amount,
+    discountAmount: discountAmount ?? undefined
+  });
+  if ("error" in result) return NextResponse.json({ error: result.error, message: result.error }, { status: result.status ?? 400 });
+  return NextResponse.json(result);
+}
