@@ -308,10 +308,13 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
       allowPartial
     });
     if (invalidRows.length && !allowPartial) {
-      return { error: "Existem linhas com erros críticos. Corrija o arquivo ou confirme importação parcial.", preview: { rows: validations } };
+      return { error: `Existem erros na importação de colaboradores. ${summarizeEmployeeImportErrors(validations)}`, preview: { rows: validations } };
     }
 
     const validRows = rows.filter((_, index) => !validations[index]?.errors.length);
+    if (!validRows.length) {
+      return { error: `Nenhuma linha válida para importar colaboradores. ${summarizeEmployeeImportErrors(validations)}`, preview: { rows: validations } };
+    }
     const normalizedValidRows = validRows.map((row) => normalizeEmployeeImportRow(row));
     const passwordHashByWbLogin = new Map<string, string>();
     await Promise.all(
@@ -598,6 +601,16 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
     if (mapped) return mapped;
     return { error: error instanceof Error ? `Não foi possível importar colaboradores: ${error.message}` : "Não foi possível importar colaboradores. Verifique os dados obrigatórios e duplicidades." };
   }
+}
+
+function summarizeEmployeeImportErrors(validation: EmployeeImportValidation[]) {
+  const issues = validation
+    .filter((row) => row.errors.length)
+    .slice(0, 8)
+    .map((row) => `Linha ${row.rowNumber}: ${row.errors.join(" ")}`);
+  if (!issues.length) return "Revise os alertas do preview.";
+  const remaining = validation.filter((row) => row.errors.length).length - issues.length;
+  return `${issues.join(" | ")}${remaining > 0 ? ` | +${remaining} linha(s) com erro.` : ""}`;
 }
 
 export async function listOperationalRegistrations(actor: Actor, query: RegistrationListQuery = {}) {

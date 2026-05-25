@@ -807,6 +807,37 @@ async function downloadFile(url: string, fallbackFileName: string) {
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 }
 
+function ImportIssueSummary({
+  rows,
+  title = "Principais erros encontrados",
+  max = 8
+}: {
+  rows: Array<{ rowNumber: number; errors: string[]; warnings?: string[] }>;
+  title?: string;
+  max?: number;
+}) {
+  const issues: Array<{ rowNumber: number; message: string; tone: "red" | "amber" }> = [
+    ...rows.flatMap((row) => row.errors.map((message) => ({ rowNumber: row.rowNumber, message, tone: "red" as const }))),
+    ...rows.flatMap((row) => (row.warnings ?? []).map((message) => ({ rowNumber: row.rowNumber, message, tone: "amber" as const })))
+  ].slice(0, max);
+  if (!issues.length) return null;
+  return (
+    <div className="rounded-lg border border-red-100 bg-red-50 p-3 text-xs font-semibold text-red-700">
+      <p className="mb-2 text-sm font-extrabold">{title}</p>
+      <div className="space-y-1">
+        {issues.map((issue, index) => (
+          <p key={`${issue.rowNumber}-${index}`} className={issue.tone === "red" ? "text-red-700" : "text-amber-700"}>
+            Linha {issue.rowNumber}: {issue.message}
+          </p>
+        ))}
+      </div>
+      {rows.flatMap((row) => [...row.errors, ...(row.warnings ?? [])]).length > issues.length ? (
+        <p className="mt-2 text-muted">Existem mais erros/alertas no preview abaixo.</p>
+      ) : null}
+    </div>
+  );
+}
+
 function statusNeedsReason(status: string) {
   return attendanceReasonStatuses.includes(status);
 }
@@ -2770,6 +2801,7 @@ export function RegistrationApprovalsPage() {
                   <MetricPill value={employeeImportPreview.registrosAtualizar ?? employeeImportPreview.rows.filter((row) => !row.errors.length && row.action === "atualizar").length} label="Atualizações" />
                   <MetricPill value={employeeImportPreview.duplicidades ?? employeeImportPreview.rows.filter((row) => [...row.errors, ...row.warnings].some((message) => /duplic|existente|uso/i.test(message))).length} label="Duplicidades" />
                 </div>
+                <ImportIssueSummary rows={employeeImportPreview.rows} title="Corrija estas linhas do arquivo de colaboradores" />
                 {employeeImportPreview.errorRows ? (
                   <label className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-700">
                     <input type="checkbox" checked={allowPartialEmployeeImport} onChange={(event) => setAllowPartialEmployeeImport(event.target.checked)} />
@@ -4525,24 +4557,29 @@ export function SchedulesPage() {
                 <table className="w-full min-w-[820px] text-left text-xs">
                   <thead className="bg-slate-50 font-bold text-muted">
                     <tr>
+                      <th className="px-3 py-2">Linha</th>
                       {[...scheduleImportColumns, "validacao"].map((column) => (
                         <th key={column} className="px-3 py-2">{column}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {((previewRows.length ? previewRows : templateRows) as Array<Record<string, unknown>>).slice(0, 300).map((row, index) => (
-                      <tr key={index}>
-                        {scheduleImportColumns.map((column) => (
-                          <td key={column} className="px-3 py-2">{String(row[column] ?? "")}</td>
-                        ))}
-                        <td className="px-3 py-2">
-                          {previewResult?.validation?.[index]
-                            ? [...previewResult.validation[index].errors, ...previewResult.validation[index].warnings].join(" | ") || previewResult.validation[index].action || "OK"
-                            : "OK"}
-                        </td>
-                      </tr>
-                    ))}
+                    {((previewRows.length ? previewRows : templateRows) as Array<Record<string, unknown>>).slice(0, 300).map((row, index) => {
+                      const rowValidation = previewResult?.validation?.[index];
+                      return (
+                        <tr key={index}>
+                          <td className="px-3 py-2 font-bold">{rowValidation?.rowNumber ?? index + 1}</td>
+                          {scheduleImportColumns.map((column) => (
+                            <td key={column} className="px-3 py-2">{String(row[column] ?? "")}</td>
+                          ))}
+                          <td className={cn("px-3 py-2 font-semibold", rowValidation?.errors.length ? "text-red-600" : rowValidation?.warnings.length ? "text-amber-600" : "text-muted")}>
+                            {rowValidation
+                              ? [...rowValidation.errors, ...rowValidation.warnings].join(" | ") || rowValidation.action || "OK"
+                              : "OK"}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -4553,6 +4590,9 @@ export function SchedulesPage() {
                 <MetricPill value={previewResult?.updatedRows ?? 0} label="Atualizações" />
                 <MetricPill value={previewResult?.missingEmployees ?? 0} label="WB/Login não encontrados" />
                 <p className="text-sm text-muted">Validações: WB/Login existente, data, status válido, turno, entrada, saída, LOB e conflito por pessoa/dia.</p>
+                {previewResult?.validation ? (
+                  <ImportIssueSummary rows={previewResult.validation} title="Corrija estas linhas do cronograma" />
+                ) : null}
                 {(previewRows.length > 300 || (previewResult?.validation.length ?? 0) > 300) ? <p className="text-xs font-semibold text-muted">Exibindo as primeiras 300 linhas no preview para manter a tela rápida. O commit processa todas as linhas válidas.</p> : null}
                 <button
                   onClick={commitImport}
@@ -5011,6 +5051,7 @@ export function WorkHoursPage() {
                 <MetricPill value={preview.scheduleFoundRows} label="Com cronograma" />
                 <MetricPill value={preview.noScheduleRows} label="Sem cronograma" />
                 <p className="text-sm text-muted">WB/Login inexistente ou ausência de cronograma bloqueia a linha. A divergência compara horas realizadas contra {DEFAULT_PRODUCTIVE_HOURS}h por dia produtivo.</p>
+                <ImportIssueSummary rows={preview.validation} title="Corrija estas linhas do upload de horas" />
                 {preview.missingWbLogins?.length ? (
                   <div className="rounded-lg border border-red-100 bg-red-50 p-3 text-xs font-semibold text-red-700">
                     <p className="mb-1 font-extrabold">Primeiros WB/Login não encontrados</p>

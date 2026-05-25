@@ -221,10 +221,10 @@ export async function commitOperationalWorkHoursImport(actor: Actor, input: Work
     const validRows = validation.filter((row) => !row.errors.length && row.employeeId && row.date && row.actualHours !== undefined);
 
     if (hasErrors && !input.allowPartial) {
-      return { error: "Existem erros na importação. Corrija ou confirme importação parcial.", preview: toImportPreview(input.rows, validation) };
+      return { error: `Existem erros na importação de horas. ${summarizeImportErrors(validation)}`, preview: toImportPreview(input.rows, validation) };
     }
     if (!validRows.length) {
-      return { error: "Nenhuma linha válida para importar. Corrija os erros do preview antes de confirmar.", preview: toImportPreview(input.rows, validation) };
+      return { error: `Nenhuma linha válida para importar horas. ${summarizeImportErrors(validation)}`, preview: toImportPreview(input.rows, validation) };
     }
 
     const batch = await prisma.workHourImportBatch.create({
@@ -370,7 +370,7 @@ export async function commitOperationalWorkHoursImport(actor: Actor, input: Work
     return { data: result, preview: toImportPreview(input.rows, validation) };
   } catch (error) {
     recordErrorLog({ userEmail: actor.email, code: "WORK_HOURS_IMPORT_ERROR", message: error instanceof Error ? error.message : "Falha ao importar horas", action: "WORK_HOURS_IMPORT", severity: "ERROR" });
-    return mapPrismaError(error) ?? { error: "Não foi possível importar horas operacionais." };
+    return mapPrismaError(error) ?? { error: error instanceof Error ? `Não foi possível importar horas operacionais: ${error.message}` : "Não foi possível importar horas operacionais." };
   }
 }
 
@@ -920,6 +920,16 @@ function toImportPreview(rows: Array<Record<string, unknown>>, validation: Valid
       status: row.errors.length ? "Erro" : row.warnings.length ? "Alerta" : "Válida"
     }))
   };
+}
+
+function summarizeImportErrors(validation: ValidationRow[]) {
+  const issues = validation
+    .filter((row) => row.errors.length)
+    .slice(0, 8)
+    .map((row) => `Linha ${row.rowNumber}: ${row.errors.join(" ")}`);
+  if (!issues.length) return "Revise os alertas do preview.";
+  const remaining = validation.filter((row) => row.errors.length).length - issues.length;
+  return `${issues.join(" | ")}${remaining > 0 ? ` | +${remaining} linha(s) com erro.` : ""}`;
 }
 
 function buildRecordWhere(user: UserWithRole, query: WorkHourQuery, period: { startDate: Date; endDate: Date }): Prisma.WorkHourRecordWhereInput {

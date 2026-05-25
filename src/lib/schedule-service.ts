@@ -970,9 +970,20 @@ export async function commitOperationalScheduleImport(actor: Actor, input: Sched
 
     const validation = await validateImportRowsInDb(input.rows);
     const hasErrors = validation.some((row) => row.errors.length);
-    if (hasErrors && !input.allowPartial) return { error: "Existem erros na importação. Corrija ou confirme importação parcial.", preview: toImportPreview(input.rows, validation) };
+    if (hasErrors && !input.allowPartial) {
+      return {
+        error: `Existem erros na importação do cronograma. ${summarizeImportErrors(validation)}`,
+        preview: toImportPreview(input.rows, validation)
+      };
+    }
 
     const validRows = validation.filter((row) => !row.errors.length && row.employeeId && row.date && row.status);
+    if (!validRows.length) {
+      return {
+        error: `Nenhuma linha válida para importar cronograma. ${summarizeImportErrors(validation)}`,
+        preview: toImportPreview(input.rows, validation)
+      };
+    }
     const importRecord = await prisma.scheduleImport.create({
       data: {
         fileName: input.fileName,
@@ -1096,7 +1107,7 @@ export async function commitOperationalScheduleImport(actor: Actor, input: Sched
   } catch (error) {
     recordErrorLog({ userEmail: actor.email, code: "SCHEDULE_IMPORT_DB_FALLBACK", message: error instanceof Error ? error.message : "Falha ao importar cronograma", action: "SCHEDULE_IMPORT", severity: "ERROR" });
     if (allowDemoDataFallback) return commitMockScheduleImport(actor, { ...input, allowPartial: Boolean(input.allowPartial) });
-    return { error: "Não foi possível importar o cronograma no banco." };
+    return { error: error instanceof Error ? `Não foi possível importar o cronograma no banco: ${error.message}` : "Não foi possível importar o cronograma no banco." };
   }
 }
 
@@ -1590,6 +1601,16 @@ function toImportPreview(rows: Array<Record<string, unknown>>, validation: Sched
       status: row.errors.length ? "Erro" : row.warnings.length ? "Alerta" : "Válida"
     }))
   };
+}
+
+function summarizeImportErrors(validation: ScheduleImportValidation[]) {
+  const issues = validation
+    .filter((row) => row.errors.length)
+    .slice(0, 8)
+    .map((row) => `Linha ${row.rowNumber}: ${row.errors.join(" ")}`);
+  if (!issues.length) return "Revise os alertas do preview.";
+  const remaining = validation.filter((row) => row.errors.length).length - issues.length;
+  return `${issues.join(" | ")}${remaining > 0 ? ` | +${remaining} linha(s) com erro.` : ""}`;
 }
 
 function validateAttendance(input: AttendanceInput) {
