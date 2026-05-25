@@ -75,12 +75,6 @@ export async function listOperationalEmployees(actor: Actor, query: EmployeeList
       role === "COLABORADOR" && user.employeeProfile
         ? { id: user.employeeProfile.id, deletedAt: null }
         : { deletedAt: null };
-    if (role === "SUPERVISOR" && user.employeeProfile) {
-      const supervisedCount = await prisma.employeeProfile.count({ where: { supervisorId: user.employeeProfile.id, deletedAt: null } });
-      employeeWhere = supervisedCount
-        ? { supervisorId: user.employeeProfile.id, deletedAt: null }
-        : { deletedAt: null };
-    }
     const employees = await prisma.employeeProfile.findMany({
       where: employeeWhere,
       include: {
@@ -161,10 +155,6 @@ async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeList
           ...(query.role ? { user: { role: { name: query.role } } } : {}),
           ...statusWhere
         };
-    if (role === "SUPERVISOR" && user.employeeProfile) {
-      const supervisedCount = await prisma.employeeProfile.count({ where: { supervisorId: user.employeeProfile.id, deletedAt: null } });
-      employeeWhere = supervisedCount ? { ...employeeWhere, supervisorId: user.employeeProfile.id } : employeeWhere;
-    }
 
     const total = await prisma.employeeProfile.count({ where: employeeWhere });
     const effectivePage = total > 0 && (page - 1) * limit >= total ? 1 : page;
@@ -226,12 +216,6 @@ export async function getOperationalEmployeeDetail(actor: Actor, id: string) {
     });
     if (!employee) return createNotFoundError("Colaborador não encontrado.");
     if (role === "COLABORADOR" && employee.userId !== user.id) return createPermissionError("Você não tem permissão para visualizar este colaborador.");
-    if (role === "SUPERVISOR" && user.employeeProfile?.id) {
-      const supervisedCount = await prisma.employeeProfile.count({ where: { supervisorId: user.employeeProfile.id, deletedAt: null } });
-      if (supervisedCount && employee.supervisorId !== user.employeeProfile.id && employee.id !== user.employeeProfile.id) {
-        return createPermissionError("Você não tem permissão para visualizar este colaborador.");
-      }
-    }
 
     const shouldLoadSensitive = canViewEmployeeSensitiveData({ role: actor.role, status: user.status }) || role === "COLABORADOR";
     const sensitive = shouldLoadSensitive ? await prisma.employeeSensitiveData.findUnique({ where: { employeeId: employee.id } }) : null;
@@ -346,17 +330,6 @@ async function listOperationalEmployeesLegacy(actor: Actor) {
   if (role === "COLABORADOR" && actorUser.employeeProfileId) {
     where = Prisma.sql`e.id = ${actorUser.employeeProfileId} AND e."deletedAt" IS NULL`;
   }
-  if (role === "SUPERVISOR" && actorUser.employeeProfileId) {
-    const [count] = await prisma.$queryRaw<Array<{ total: bigint }>>`
-      SELECT COUNT(*)::bigint AS total
-      FROM "EmployeeProfile" e
-      WHERE e."supervisorId" = ${actorUser.employeeProfileId} AND e."deletedAt" IS NULL
-    `;
-    if (Number(count?.total ?? 0) > 0) {
-      where = Prisma.sql`e."supervisorId" = ${actorUser.employeeProfileId} AND e."deletedAt" IS NULL`;
-    }
-  }
-
   const rows = await prisma.$queryRaw<LegacyEmployeeRow[]>(Prisma.sql`
     SELECT
       e.id,

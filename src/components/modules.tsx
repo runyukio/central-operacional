@@ -98,7 +98,7 @@ import { DEFAULT_PRODUCTIVE_HOURS, canScheduleStatusReceiveWorkHours, normalizeP
 
 const scheduleImportColumns = ["wb_login", "data", "status", "turno", "entrada", "saida", "lob"] as const;
 const workHourImportColumns = ["wb_login", "data", "horas_realizadas", "sistema_origem", "observacao"] as const;
-const scheduleStatusOptions = ["Escalado", "Presente", "Nesting", "Falta", "Atraso", "Saída antecipada", "Afastado", "Férias", "Treinamento", "Folga", "Troca aprovada", "Venda de folga aprovada", "Folga aprovada", "Sem cronograma", "Erro de cronograma"] as const;
+const scheduleStatusOptions = ["Escalado", "Presente", "Nesting", "Falta", "Atraso", "Saída antecipada", "Afastado", "Férias", "Treinamento", "Folga", "Troca aprovada", "Venda de folga aprovada", "Folga aprovada", "Desligado", "Sem cronograma", "Erro de cronograma"] as const;
 const attendanceReasonStatuses = ["Falta", "Atraso", "Saída antecipada", "Erro de cronograma"];
 const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Nesting", "Venda de folga aprovada"];
 const employeeOperationalStatusOptions = ["Ativo", "Nesting", "Inativo", "Pendente de cadastro", "Afastado", "Desligado", "Em treinamento", "Suspenso", "Online", "Em Atendimento", "Offline"];
@@ -122,6 +122,14 @@ const dayOffOptions: Array<{ kind: DayOffKind; title: string; description: strin
   { kind: "DAY_OFF_SELL", title: "Vender folga", description: "Trabalhar em um dia que hoje está como folga." },
   { kind: "DAY_OFF_REQUEST", title: "Solicitar dia de folga", description: "Pedir folga em uma data em que você está programado." }
 ];
+
+function isAgentRoleTitle(value: string) {
+  return /^(agente|agent|atendente|operador|moderador de conteudo|moderador de conteúdo|content moderator)$/i.test(value.trim());
+}
+
+function defaultOperationalRoleTitle(options: string[]) {
+  return options.find(isAgentRoleTitle) ?? options.find((option) => /agente|agent|atendente|operador|moderador/i.test(option)) ?? "Agente";
+}
 
 type ClientRequest = {
   id: string;
@@ -400,6 +408,7 @@ type SchedulePlannedCell = {
   scheduleId: string;
   startsAt: string;
   endsAt: string;
+  shiftName?: string;
   observation?: string;
   justification?: ScheduleJustificationCell | null;
 };
@@ -566,6 +575,7 @@ type AttendanceItem = {
 };
 
 type ScheduleGridRow = (typeof scheduleGridRows)[number] & {
+  dayShifts?: string[];
   plannedTimes?: Array<SchedulePlannedCell | null>;
   workHours?: Array<ScheduleWorkHourCell | null>;
 };
@@ -1012,6 +1022,7 @@ function dayOffKindFromRequest(request: Pick<ClientRequest, "type" | "payload"> 
 
 function primaryDayOffDate(request: ClientRequest) {
   const payload = request.payload ?? {};
+  if (/turno/i.test(request.type)) return String(payload.shiftChangeDate ?? payload.requestedDate ?? "-");
   const kind = dayOffKindFromRequest(request);
   if (kind === "DAY_OFF_SWAP") return String(payload.currentDayOffDate ?? "-");
   if (kind === "DAY_OFF_SELL") return String(payload.dayOffToSellDate ?? "-");
@@ -1024,7 +1035,7 @@ function getRequestIcon(type: string) {
   if (/qualidade/i.test(type)) return ShieldCheck;
   if (/rh|benef/i.test(type)) return HeartPulse;
   if (/suporte|acesso/i.test(type)) return Headphones;
-  if (/escala|folga|ponto/i.test(type)) return CalendarCheck;
+  if (/escala|folga|ponto|turno/i.test(type)) return CalendarCheck;
   return ClipboardList;
 }
 
@@ -1335,8 +1346,10 @@ export function OperationalCommandCenter() {
   const [attendanceSummary, setAttendanceSummary] = useState<AttendanceSummary | null>(null);
   const [dateRange, setDateRange] = useState({ startDate: "2026-05-01", endDate: "2026-05-31" });
   const [commandLobs, setCommandLobs] = useState<string[]>(["Todos"]);
+  const [commandRoleTitles, setCommandRoleTitles] = useState<string[]>(["Todos", "Agente"]);
   const [selectedCommandLob, setSelectedCommandLob] = useState("Todos");
   const [selectedCommandSupervisor, setSelectedCommandSupervisor] = useState("Todos");
+  const [selectedCommandRoleTitle, setSelectedCommandRoleTitle] = useState("Agente");
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [selectedAbsenceReason, setSelectedAbsenceReason] = useState<string | null>(null);
   const [absenceReasonPeople, setAbsenceReasonPeople] = useState<AttendanceItem[]>([]);
@@ -1350,15 +1363,22 @@ export function OperationalCommandCenter() {
   useEffect(() => {
     void loadCommandCenterSummary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateRange.startDate, dateRange.endDate, selectedCommandLob, selectedCommandSupervisor]);
+  }, [dateRange.startDate, dateRange.endDate, selectedCommandLob, selectedCommandSupervisor, selectedCommandRoleTitle]);
 
   useEffect(() => {
     apiJson<{ data: SystemSettings }>("/api/settings")
       .then((payload) => {
         const activeLobs = payload.data.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name);
+        const activeRoleTitles = payload.data.roleTitles.filter((title) => title.status !== "INACTIVE").map((title) => title.name).filter(Boolean);
+        const defaultRoleTitle = defaultOperationalRoleTitle(activeRoleTitles);
         setCommandLobs(["Todos", ...activeLobs]);
+        setCommandRoleTitles(["Todos", ...Array.from(new Set([...activeRoleTitles, defaultRoleTitle]))]);
+        setSelectedCommandRoleTitle((current) => (current && current !== "Agente" ? current : defaultRoleTitle));
       })
-      .catch(() => setCommandLobs(["Todos"]));
+      .catch(() => {
+        setCommandLobs(["Todos"]);
+        setCommandRoleTitles(["Todos", "Agente"]);
+      });
   }, []);
 
   async function loadCommandCenterSummary() {
@@ -1367,6 +1387,7 @@ export function OperationalCommandCenter() {
       const params = new URLSearchParams({ startDate: dateRange.startDate, endDate: dateRange.endDate });
       if (selectedCommandLob !== "Todos") params.set("lob", selectedCommandLob);
       if (selectedCommandSupervisor !== "Todos") params.set("supervisor", selectedCommandSupervisor);
+      if (selectedCommandRoleTitle !== "Todos") params.set("roleTitle", selectedCommandRoleTitle);
       const payload = await apiJson<{ summary: AttendanceSummary }>(`/api/attendance?${params.toString()}`);
       setAttendanceSummary(payload.summary);
     } catch {
@@ -1394,6 +1415,7 @@ export function OperationalCommandCenter() {
       }
       if (selectedCommandLob !== "Todos") params.set("lob", selectedCommandLob);
       if (selectedCommandSupervisor !== "Todos") params.set("supervisor", selectedCommandSupervisor);
+      if (selectedCommandRoleTitle !== "Todos") params.set("roleTitle", selectedCommandRoleTitle);
       const payload = await apiJson<{ data: AttendanceItem[] }>(`/api/attendance?${params.toString()}`);
       setAbsenceReasonPeople(payload.data);
     } catch {
@@ -1422,6 +1444,7 @@ export function OperationalCommandCenter() {
         supervisor
       });
       if (selectedCommandLob !== "Todos") params.set("lob", selectedCommandLob);
+      if (selectedCommandRoleTitle !== "Todos") params.set("roleTitle", selectedCommandRoleTitle);
       const payload = await apiJson<{ data: AttendanceItem[] }>(`/api/attendance?${params.toString()}`);
       setAbsSupervisorPeople(payload.data);
     } catch {
@@ -1521,6 +1544,16 @@ export function OperationalCommandCenter() {
             >
               {commandSupervisorOptions.map((supervisor) => (
                 <option key={supervisor} value={supervisor}>{supervisor === "Todos" ? "Todos os supervisores" : supervisor}</option>
+              ))}
+            </select>
+            <select
+              value={selectedCommandRoleTitle}
+              onChange={(event) => setSelectedCommandRoleTitle(event.target.value)}
+              className="premium-control h-11 px-3 text-sm font-extrabold text-navy-950 outline-none"
+              title="Cargo/Função"
+            >
+              {commandRoleTitles.map((roleTitle) => (
+                <option key={roleTitle} value={roleTitle}>{roleTitle === "Todos" ? "Todos os cargos" : roleTitle}</option>
               ))}
             </select>
             <label className="premium-control flex h-11 items-center gap-2 px-3 text-sm font-bold text-navy-900">
@@ -1731,13 +1764,16 @@ export function MySchedulePage() {
   const [scheduleInfo, setScheduleInfo] = useState<{ id: string; name: string; schedule: string; shift: string; lob: string } | null>(null);
   const [myWorkHours, setMyWorkHours] = useState<WorkHourRow[]>([]);
   const [myWorkHourSummary, setMyWorkHourSummary] = useState<WorkHourSummary | null>(null);
+  const [myScheduleShiftOptions, setMyScheduleShiftOptions] = useState<string[]>(Array.from(standardShiftNames).filter((shift) => shift !== "Folga"));
   const [monthlyAdvanceCycles, setMonthlyAdvanceCycles] = useState<MonthlyAdvanceCycle[]>([]);
   const [savingMonthlyAdvance, setSavingMonthlyAdvance] = useState("");
   const [myRequests, setMyRequests] = useState<ClientRequest[]>([]);
   const [selectedRequest, setSelectedRequest] = useState<ClientRequest | null>(null);
   const [showDayOffModal, setShowDayOffModal] = useState(false);
+  const [showShiftChangeModal, setShowShiftChangeModal] = useState(false);
   const [dayOffMessage, setDayOffMessage] = useState("");
   const [savingDayOff, setSavingDayOff] = useState(false);
+  const [savingShiftChange, setSavingShiftChange] = useState(false);
   const [actorRole, setActorRole] = useState("COLABORADOR");
   const [actionReason, setActionReason] = useState("");
   const [comment, setComment] = useState("");
@@ -1758,10 +1794,18 @@ export function MySchedulePage() {
     justification: "",
     attachmentUrl: ""
   });
+  const [shiftChangeForm, setShiftChangeForm] = useState({
+    date: currentOperationalDateInput(),
+    currentShift: "Sem turno",
+    desiredShift: "Manhã",
+    reason: "",
+    observation: ""
+  });
 
   useEffect(() => {
     void loadMyRequests();
     void loadMyMonthlyAdvance();
+    void loadMyScheduleSettings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1816,6 +1860,19 @@ export function MySchedulePage() {
       setMonthlyAdvanceCycles(payload.data);
     } catch {
       setMonthlyAdvanceCycles([]);
+    }
+  }
+
+  async function loadMyScheduleSettings() {
+    try {
+      const payload = await apiJson<{ data: SystemSettings }>("/api/settings");
+      const shifts = payload.data.shifts
+        .filter((shift) => shift.status !== "INACTIVE")
+        .map((shift) => cleanShiftName(shift.name))
+        .filter((shift) => shift && shift !== "Folga" && isSelectableShiftName(shift));
+      setMyScheduleShiftOptions(Array.from(new Set([...Array.from(standardShiftNames).filter((shift) => shift !== "Folga"), ...shifts])));
+    } catch {
+      setMyScheduleShiftOptions(Array.from(standardShiftNames).filter((shift) => shift !== "Folga"));
     }
   }
 
@@ -1937,6 +1994,73 @@ export function MySchedulePage() {
     }
   }
 
+  function shiftForScheduleDate(dateIso: string) {
+    const day = days.find((item) => item.dateIso === dateIso && !item.outside);
+    return cleanShiftName(day?.shift) || "Sem turno";
+  }
+
+  function openShiftChangeRequest(dateIso?: string) {
+    const targetDate = dateIso || currentOperationalDateInput();
+    const currentShift = shiftForScheduleDate(targetDate);
+    const desiredShift = ["Manhã", "Tarde", "Noite"].find((shift) => shift !== currentShift) ?? "Manhã";
+    setShiftChangeForm({
+      date: targetDate,
+      currentShift,
+      desiredShift,
+      reason: "",
+      observation: ""
+    });
+    setShowShiftChangeModal(true);
+  }
+
+  async function submitShiftChangeRequest() {
+    if (!shiftChangeForm.date) {
+      setDayOffMessage("Data da troca de turno é obrigatória.");
+      return;
+    }
+    if (!shiftChangeForm.desiredShift.trim()) {
+      setDayOffMessage("Novo turno solicitado é obrigatório.");
+      return;
+    }
+    if (!shiftChangeForm.reason.trim()) {
+      setDayOffMessage("Motivo da troca de turno é obrigatório.");
+      return;
+    }
+    if (cleanShiftName(shiftChangeForm.currentShift) === cleanShiftName(shiftChangeForm.desiredShift)) {
+      setDayOffMessage("O novo turno precisa ser diferente do turno atual.");
+      return;
+    }
+    setSavingShiftChange(true);
+    setDayOffMessage("");
+    try {
+      const payload = await apiJson<{ data: ClientRequest }>("/api/requests", {
+        method: "POST",
+        body: JSON.stringify({
+          type: "Troca de Turno",
+          title: "Troca de Turno",
+          priority: "Média",
+          description: shiftChangeForm.reason,
+          requestedDate: shiftChangeForm.date,
+          shiftChangeDate: shiftChangeForm.date,
+          currentShift: shiftChangeForm.currentShift,
+          desiredShift: shiftChangeForm.desiredShift,
+          shiftChangeReason: shiftChangeForm.reason,
+          shiftChangeObservation: shiftChangeForm.observation || undefined,
+          justification: shiftChangeForm.reason
+        })
+      });
+      setShowShiftChangeModal(false);
+      setMyRequests((items) => [payload.data, ...items]);
+      setSelectedRequest(payload.data);
+      setDayOffMessage(`Solicitação ${payload.data.id} de troca de turno enviada com sucesso.`);
+      await loadMyRequests();
+    } catch (error) {
+      setDayOffMessage(error instanceof Error ? error.message : "Não foi possível criar a solicitação de troca de turno.");
+    } finally {
+      setSavingShiftChange(false);
+    }
+  }
+
   async function moveMyRequest(id: string, status: string, actionInput?: Record<string, string>) {
     if (actionPending) return;
     const reason = actionReason.trim();
@@ -2004,9 +2128,13 @@ export function MySchedulePage() {
   };
   const monthLabel = scheduleMonthFormatter.format(operationalDateFromParts(mySchedulePeriod.year, mySchedulePeriod.month, 1));
   const todayIso = currentOperationalDateInput();
-  const hasSchedule = days.some((day) => !day.outside && day.shift !== "Sem cronograma");
-  const nextScheduleLabel = cleanShiftName(days.find((day) => !day.outside && !["Sem cronograma", "Folga", "Férias"].includes(day.label))?.label) || "";
+  const hasSchedule = days.some((day) => !day.outside && day.label !== "Sem cronograma");
+  const nextScheduleLabel = cleanShiftName(days.find((day) => !day.outside && !["Sem cronograma", "Folga", "Férias"].includes(day.label))?.shift) || "";
   const workHourByDate = new Map(myWorkHours.map((row) => [row.date, row]));
+  const shiftChangeOptions = Array.from(new Set([
+    ...myScheduleShiftOptions,
+    ...days.map((day) => cleanShiftName(day.shift)).filter((shift) => shift && shift !== "Folga" && shift !== "Sem turno" && shift !== "Sem cronograma")
+  ]));
 
   function moveMyScheduleMonth(delta: number) {
     setMySchedulePeriod((current) => {
@@ -2069,6 +2197,7 @@ export function MySchedulePage() {
                         <span className={cn("status-dot", dayShift === "Manhã" ? "bg-emerald-500" : dayShift === "Tarde" ? "bg-orange-500" : dayShift === "Noite" ? "bg-violet-600" : "bg-violet-300")} />
                         {dayLabel}
                       </span>
+                      <p className="rounded-md border border-slate-100 bg-slate-50 px-2 py-1 text-[11px] font-bold text-navy-900">Turno: {dayShift || "Sem turno"}</p>
                       {workHour ? (
                         <div className="rounded-md border border-blue-100 bg-white/80 px-2 py-1 text-[11px] font-bold text-navy-950">
                           <p>Planejado: {workHour.plannedHours || DEFAULT_PRODUCTIVE_HOURS}h</p>
@@ -2164,6 +2293,15 @@ export function MySchedulePage() {
             )}
           </Panel>
           <Panel title="Minhas Solicitações" action="Solicitar Folga" actionOnClick={() => setShowDayOffModal(true)}>
+            <div className="mb-3 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => openShiftChangeRequest()}
+                className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-extrabold text-blue-700"
+              >
+                Solicitar troca de turno
+              </button>
+            </div>
             <div className="mb-4 grid gap-2 md:grid-cols-2">
               <select value={requestFilters.status} onChange={(event) => setRequestFilters({ ...requestFilters, status: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
                 {["Todos", ...requestStatuses].map((status) => <option key={status}>{status}</option>)}
@@ -2288,6 +2426,51 @@ export function MySchedulePage() {
             </div>
             <button disabled={savingDayOff} onClick={submitDayOffRequest} className="mt-5 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
               {savingDayOff ? "Enviando..." : "Enviar solicitação de folga"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {showShiftChangeModal ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="card max-h-[88vh] w-full max-w-xl overflow-y-auto p-5">
+            <div className="mb-5 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-extrabold text-navy-950">Solicitar troca de turno</h2>
+                <p className="text-sm text-muted">A troca segue aprovação do Supervisor e análise final do WFM.</p>
+              </div>
+              <button onClick={() => setShowShiftChangeModal(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <FormInput
+                label="Data da troca"
+                type="date"
+                value={shiftChangeForm.date}
+                onChange={(value) => setShiftChangeForm((current) => ({ ...current, date: value, currentShift: shiftForScheduleDate(value) }))}
+              />
+              <FormInput label="Turno atual" value={shiftChangeForm.currentShift || "Sem turno"} disabled onChange={() => undefined} />
+              <FormSelect
+                label="Novo turno solicitado"
+                value={shiftChangeForm.desiredShift}
+                options={shiftChangeOptions}
+                onChange={(value) => setShiftChangeForm((current) => ({ ...current, desiredShift: value }))}
+              />
+              <FormInput
+                label="Observação opcional"
+                value={shiftChangeForm.observation}
+                onChange={(value) => setShiftChangeForm((current) => ({ ...current, observation: value }))}
+              />
+              <label className="md:col-span-2">
+                <span className="mb-1.5 block text-sm font-bold text-muted">Motivo</span>
+                <textarea
+                  value={shiftChangeForm.reason}
+                  onChange={(event) => setShiftChangeForm((current) => ({ ...current, reason: event.target.value }))}
+                  className="min-h-28 w-full rounded-lg border border-border p-3 outline-none"
+                  placeholder="Explique o motivo da troca de turno"
+                />
+              </label>
+            </div>
+            <button disabled={savingShiftChange} onClick={submitShiftChangeRequest} className="mt-5 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
+              {savingShiftChange ? "Enviando..." : "Enviar solicitação de troca de turno"}
             </button>
           </div>
         </div>
@@ -3139,11 +3322,11 @@ export function SchedulesPage() {
     }
     const cellStatus = statusFromScheduleCell(value);
     const employeeShift = cleanShiftName(targetEmployee.shift) || "Manhã";
-    const cellShift = cleanShiftName(value);
-    const shift = cellStatus === "Escalado" ? (availableShiftNames.includes(cellShift) ? cellShift : employeeShift) : employeeShift;
-    const times = configuredTimesForShift(shift);
     const plannedCell = targetRow?.plannedTimes?.[dayIndex] ?? null;
     const hourCell = targetRow?.workHours?.[dayIndex] ?? null;
+    const cellShift = cleanShiftName(plannedCell?.shiftName ?? targetRow?.dayShifts?.[dayIndex] ?? value);
+    const shift = availableShiftNames.includes(cellShift) ? cellShift : employeeShift;
+    const times = configuredTimesForShift(shift);
     const justification = plannedCell?.justification ?? null;
     const plannedStart = plannedCell?.startsAt || (statusNeedsTime(cellStatus) ? times.startsAt : "");
     const plannedEnd = plannedCell?.endsAt || (statusNeedsTime(cellStatus) ? times.endsAt : "");
@@ -3888,10 +4071,12 @@ export function SchedulesPage() {
                     <td className="px-4 py-3">{row.employee.lob}</td>
                     {row.days.map((value, index) => {
                       const hourCell = row.workHours?.[index] ?? null;
+                      const dayShift = row.dayShifts?.[index] ?? "Sem turno";
                       return (
                         <td key={`${row.employee.id}-${index}`} className="px-2 py-3 text-center">
                           <button onClick={() => openScheduleEditor(row, index, value)} className={cn("inline-flex min-w-[92px] flex-col items-center justify-center rounded-md px-2 py-2 text-xs font-bold transition hover:ring-2 hover:ring-blue-200", shiftTagClass(value), hourCell?.rawStatus === "DIVERGENT" && "ring-1 ring-orange-300", hourCell?.rawStatus === "ADJUSTMENT_REQUESTED" && "ring-1 ring-amber-400")}>
                             <span>{value}</span>
+                            <span className="mt-1 rounded bg-white/70 px-1.5 py-0.5 text-[10px] font-extrabold text-navy-900">{dayShift}</span>
                             {hourCell ? (
                               <span className={cn("mt-1 rounded px-1.5 py-0.5 text-[10px]", hourCell.rawStatus === "OK" ? "bg-emerald-100 text-emerald-700" : hourCell.rawStatus === "DIVERGENT" ? "bg-orange-100 text-orange-700" : hourCell.rawStatus === "ADJUSTMENT_REQUESTED" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700")}>
                                 Real: {hourCell.effectiveHours}h {hourCell.differenceMinutes ? formatHourDifference(hourCell.differenceMinutes) : ""}
@@ -5157,7 +5342,7 @@ function emptyCalendarDays(month = currentOperationalMonth().month, year = curre
       date: actualDate.getUTCDate(),
       outside,
       dateIso: outside ? undefined : dateInputFromParts(year, month, actualDate.getUTCDate()),
-      shift: "Sem cronograma",
+      shift: "Sem turno",
       label: "Sem cronograma"
     };
   });
@@ -5191,6 +5376,7 @@ function shiftTagClass(value: string) {
     "Troca aprovada": "bg-teal-50 text-teal-700",
     "Venda de folga aprovada": "bg-amber-50 text-amber-700",
     "Folga aprovada": "bg-emerald-50 text-emerald-700",
+    Desligado: "bg-slate-200 text-slate-700",
     "Sem cronograma": "bg-slate-50 text-slate-400",
     "Erro de cronograma": "bg-red-50 text-red-700",
     Feriado: "bg-pink-50 text-pink-700",
@@ -5200,7 +5386,7 @@ function shiftTagClass(value: string) {
   return map[value] ?? "bg-slate-100 text-slate-600";
 }
 
-const requestTypes = ["Troca de Folga", "Venda de Folga", "Solicitação de Dia de Folga", "Alteração de Adiantamento", "Ajuste de cronograma", "Correção de cronograma", "Equipamento", "Acesso", "RH", "Qualidade", "WFM", "Operação", "Suporte geral"];
+const requestTypes = ["Troca de Folga", "Venda de Folga", "Solicitação de Dia de Folga", "Troca de Turno", "Alteração de Adiantamento", "Ajuste de cronograma", "Correção de cronograma", "Equipamento", "Acesso", "RH", "Qualidade", "WFM", "Operação", "Suporte geral"];
 const requestPriorities = ["Baixa", "Média", "Alta", "Crítica"];
 const requestStatuses = ["Aberto", "Em análise", "Aprovado", "Recusado", "Concluído", "Cancelado"];
 const requestColumns = ["Aberto", "Em análise", "Aprovado", "Recusado", "Concluído", "Cancelado"];
@@ -5311,6 +5497,14 @@ function RequestDetailContent({
             <InfoLine label="Motivo" value={String(payload.dayOffReason ?? "-")} />
             <InfoLine label="Urgência" value={String(payload.urgency ?? selected.priority)} />
             <InfoLine label="Anexo" value={payload.attachmentUrl ? <a href={String(payload.attachmentUrl)} className="text-blue-700">Abrir</a> : "-"} />
+          </div>
+        ) : /turno/i.test(selected.type) ? (
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            <InfoLine label="Data da troca" value={String(payload.shiftChangeDate ?? payload.requestedDate ?? "-")} />
+            <InfoLine label="Turno atual" value={String(payload.currentShift ?? "-")} />
+            <InfoLine label="Novo turno solicitado" value={String(payload.desiredShift ?? "-")} />
+            <InfoLine label="Motivo" value={String(payload.shiftChangeReason ?? payload.reason ?? selected.description ?? "-")} />
+            <InfoLine label="Observação" value={String(payload.shiftChangeObservation ?? "-")} />
           </div>
         ) : payload.requestedDate ? (
           <p className="mt-3"><strong>Data desejada:</strong> {String(payload.requestedDate)}</p>

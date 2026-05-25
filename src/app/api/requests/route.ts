@@ -28,7 +28,12 @@ const createRequestSchema = z.object({
   requestedAdvanceOptIn: z.boolean().optional(),
   currentAdvanceAmount: z.number().optional(),
   requestedAdvanceAmount: z.number().optional(),
-  monthlyAdvanceReason: z.string().optional()
+  monthlyAdvanceReason: z.string().optional(),
+  shiftChangeDate: z.string().optional(),
+  currentShift: z.string().optional(),
+  desiredShift: z.string().optional(),
+  shiftChangeReason: z.string().optional(),
+  shiftChangeObservation: z.string().optional()
 });
 
 export async function GET(request: Request) {

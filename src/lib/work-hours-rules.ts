@@ -24,7 +24,8 @@ const blockedStatusLabels: Record<string, string> = {
   ERRO_DE_ESCALA: "Erro de cronograma",
   ERRO_CRONOGRAMA: "Erro de cronograma",
   ERRO_DE_CRONOGRAMA: "Erro de cronograma",
-  FOLGA_APROVADA: "Folga aprovada"
+  FOLGA_APROVADA: "Folga aprovada",
+  DESLIGADO: "Desligado"
 };
 
 type WorkHoursScheduleLike = {

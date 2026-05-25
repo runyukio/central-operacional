@@ -16,7 +16,8 @@ export type OperationalStatusKey =
   | "ERRO_ESCALA"
   | "FERIADO"
   | "CONFLITO"
-  | "DESCOBERTO";
+  | "DESCOBERTO"
+  | "DESLIGADO";
 
 const STATUS_ALIASES: Record<string, OperationalStatusKey> = {
   ESCALADO: "ESCALADO",
@@ -42,7 +43,8 @@ const STATUS_ALIASES: Record<string, OperationalStatusKey> = {
   ERRO_DE_CRONOGRAMA: "ERRO_ESCALA",
   FERIADO: "FERIADO",
   CONFLITO: "CONFLITO",
-  DESCOBERTO: "DESCOBERTO"
+  DESCOBERTO: "DESCOBERTO",
+  DESLIGADO: "DESLIGADO"
 };
 
 const SCHEDULED_STATUS_KEYS = new Set<OperationalStatusKey>([

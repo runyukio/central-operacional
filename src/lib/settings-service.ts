@@ -25,7 +25,7 @@ type ConfigRule = {
 };
 
 const essentialRoles = ["ADMIN", "GESTOR", "SUPERVISOR", "COLABORADOR", "WFM", "QUALIDADE", "RH", "TI"];
-const essentialDayOffTypes = ["Troca de Folga", "Venda de Folga", "Solicitação de Dia de Folga"];
+const essentialDayOffTypes = ["Troca de Folga", "Venda de Folga", "Solicitação de Dia de Folga", "Troca de Turno"];
 const permissionSeeds = [
   ["can_manage_users", "Gerenciar usuários"],
   ["can_manage_settings", "Gerenciar configurações"],

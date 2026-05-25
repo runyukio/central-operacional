@@ -118,6 +118,11 @@ export type CreateRequestInput = {
   currentAdvanceAmount?: number;
   requestedAdvanceAmount?: number;
   monthlyAdvanceReason?: string;
+  shiftChangeDate?: string;
+  currentShift?: string;
+  desiredShift?: string;
+  shiftChangeReason?: string;
+  shiftChangeObservation?: string;
 };
 
 export type RequestStatusActionInput = {
@@ -239,6 +244,15 @@ export async function createOperationalRequest(actor: Actor, input: CreateReques
       return validationFailure("Seu usuário não está vinculado a um cadastro de colaborador. Contate o administrador.", {
         employeeId: "Colaborador não vinculado ao usuário logado."
       });
+    }
+    if (isShiftChangeRequest(input) && !requesterProfile) {
+      return validationFailure("Seu usuário não está vinculado a um cadastro de colaborador. Contate o administrador.", {
+        employeeId: "Colaborador não vinculado ao usuário logado."
+      });
+    }
+    if (isShiftChangeRequest(input) && requesterProfile?.id) {
+      const shiftChangeError = await validateShiftChangeRequestInDatabase(requesterProfile.id, input);
+      if (shiftChangeError) return { error: shiftChangeError };
     }
 
     const request = await prisma.$transaction(async (tx) => {
@@ -387,9 +401,14 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
         transition.applyMonthlyAdvance && isMonthlyAdvanceRequest(current)
           ? await applyApprovedMonthlyAdvanceChange(tx, current, user.id)
           : { updated: false, message: "" };
+      const shiftChangeResult =
+        transition.applyShiftChange && isShiftChangeRequest(current)
+          ? await applyShiftChangeRequestToSchedule(tx, current, user.id)
+          : { updated: false, message: "" };
 
       const shouldUpdatePayload = transition.applySchedule && isDayOffRequest(current);
       const shouldUpdateAdvancePayload = transition.applyMonthlyAdvance && isMonthlyAdvanceRequest(current);
+      const shouldUpdateShiftPayload = transition.applyShiftChange && isShiftChangeRequest(current);
       const saved = await tx.request.update({
         where: { id: current.id },
         data: {
@@ -414,6 +433,14 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
                   monthlyAdvanceApplicationStatus: advanceResult.updated ? "APPLIED" : "NOT_APPLIED",
                   monthlyAdvanceApplicationMessage: advanceResult.message || null
                 } }
+              : shouldUpdateShiftPayload
+                ? { payload: {
+                    ...((current.payload ?? {}) as Prisma.InputJsonObject),
+                    shiftChangeAppliedAt: new Date().toISOString(),
+                    shiftChangeAppliedById: user.id,
+                    shiftChangeApplicationStatus: shiftChangeResult.updated ? "APPLIED" : "NOT_APPLIED",
+                    shiftChangeApplicationMessage: shiftChangeResult.message || null
+                  } }
             : {}),
           history: {
             create: {
@@ -427,6 +454,8 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
                   ? { scheduleUpdated: scheduleResult.updated, scheduleMessage: scheduleResult.message }
                   : shouldUpdateAdvancePayload
                     ? { monthlyAdvanceUpdated: advanceResult.updated, monthlyAdvanceMessage: advanceResult.message }
+                    : shouldUpdateShiftPayload
+                      ? { shiftChangeUpdated: shiftChangeResult.updated, shiftChangeMessage: shiftChangeResult.message }
                     : undefined
             }
           },
@@ -468,6 +497,19 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
           }
         });
       }
+      if (transition.applyShiftChange && isShiftChangeRequest(current) && shiftChangeResult.updated) {
+        await tx.requestHistory.create({
+          data: {
+            requestId: saved.id,
+            actorId: user.id,
+            action: "Turno atualizado",
+            from: transition.nextStatus,
+            to: transition.nextStatus,
+            reason: shiftChangeResult.message,
+            metadata: { shiftChangeUpdated: true }
+          }
+        });
+      }
 
       await tx.auditLog.create({
         data: {
@@ -486,8 +528,8 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
 
     await notifyRequestStatusChangeSafely(updated, user.id, reason, actor.email);
 
-    const historyMetadata = updated.history[0]?.metadata as { scheduleUpdated?: boolean } | null;
-    return { data: mapPrismaRequest(updated, user, actor), scheduleUpdated: Boolean(historyMetadata?.scheduleUpdated), persisted: true };
+    const historyMetadata = updated.history[0]?.metadata as { scheduleUpdated?: boolean; shiftChangeUpdated?: boolean } | null;
+    return { data: mapPrismaRequest(updated, user, actor), scheduleUpdated: Boolean(historyMetadata?.scheduleUpdated || historyMetadata?.shiftChangeUpdated), persisted: true };
   } catch (error) {
     if (error instanceof DomainError) {
       return validationFailure(error.message);
@@ -618,6 +660,7 @@ type RequestTransition =
       nextStatus: DbRequestStatus;
       applySchedule: boolean;
       applyMonthlyAdvance?: boolean;
+      applyShiftChange?: boolean;
       historyAction: string;
       auditAction: AuditAction;
       requesterTitle: string;
@@ -795,12 +838,6 @@ function buildRequestWhere(actor: Actor, user: ActiveUser, filters: RequestFilte
     where.requesterId = user.id;
   } else if (role === "COLABORADOR") {
     where.requesterId = user.id;
-  } else if (role === "SUPERVISOR") {
-    where.OR = [
-      ...(user.employeeProfile?.id ? [{ employee: { supervisorId: user.employeeProfile.id } }] : []),
-      { requesterId: user.id },
-      dayOffRequestTypeWhere()
-    ];
   } else if (role === "RH") {
     where.assignedArea = "RH";
   } else if (role === "TI") {
@@ -811,7 +848,7 @@ function buildRequestWhere(actor: Actor, user: ActiveUser, filters: RequestFilte
 
   if (isPendingActionFilter(filters.pendingAction)) {
     if (role === "SUPERVISOR") {
-      andFilters.push({ status: "ABERTO", ...dayOffRequestTypeWhere() });
+      andFilters.push({ status: "ABERTO", ...supervisorStepRequestTypeWhere() });
     } else if (role === "WFM") {
       andFilters.push({ status: { in: ["EM_ANALISE", "AGUARDANDO_APROVACAO", "AJUSTE_SOLICITADO"] } });
     } else if (["ADMIN", "GESTOR"].includes(role)) {
@@ -930,6 +967,17 @@ function dayOffRequestTypeWhere(): Prisma.RequestWhereInput {
     OR: [
       { type: { name: { contains: "folga", mode: "insensitive" } } },
       { type: { name: { contains: "day off", mode: "insensitive" } } }
+    ]
+  };
+}
+
+function supervisorStepRequestTypeWhere(): Prisma.RequestWhereInput {
+  return {
+    OR: [
+      { type: { name: { contains: "folga", mode: "insensitive" } } },
+      { type: { name: { contains: "day off", mode: "insensitive" } } },
+      { type: { name: { contains: "turno", mode: "insensitive" } } },
+      { type: { name: { contains: "shift", mode: "insensitive" } } }
     ]
   };
 }
@@ -1131,7 +1179,7 @@ function canViewRequest(actor: Actor, user: ActiveUser, request: PrismaRequest) 
   const role = normalizeRole(actor.role);
   if (["ADMIN", "GESTOR", "WFM"].includes(role)) return true;
   if (role === "COLABORADOR") return request.requesterId === user.id;
-  if (role === "SUPERVISOR") return isDayOffRequest(request) || request.employee?.supervisorId === user.employeeProfile?.id || request.requesterId === user.id;
+  if (role === "SUPERVISOR") return true;
   return canApproveRequest(actor, { area: request.assignedArea, type: request.type.name });
 }
 
@@ -1142,7 +1190,7 @@ function canMutateRequest(actor: Actor, userId: string, request: PrismaRequest, 
   }
   if (role === "COLABORADOR") return false;
   if (["ADMIN", "GESTOR", "WFM"].includes(role)) return true;
-  if (role === "SUPERVISOR") return isDayOffRequest(request.type.name);
+  if (role === "SUPERVISOR") return isDayOffRequest(request.type.name) || isShiftChangeRequest(request.type.name);
   return canApproveRequest(actor, { area: request.assignedArea, type: request.type.name });
 }
 
@@ -1152,7 +1200,8 @@ function resolveRequestTransition(actor: Actor, user: ActiveUser, request: Prism
   const role = normalizeRole(actor.role);
   const current = normalizeDbRequestStatus(request.status);
   const isRequester = request.requesterId === user.id;
-  const isSupervisorStep = supervisorStepRoles.includes(role) && (role !== "SUPERVISOR" || isDayOffRequest(request));
+  const isShiftChange = isShiftChangeRequest(request);
+  const isSupervisorStep = supervisorStepRoles.includes(role) && (role !== "SUPERVISOR" || isDayOffRequest(request) || isShiftChange);
   const isFinalApprover = wfmFinalRoles.includes(role);
   const isAdminLike = ["ADMIN", "GESTOR"].includes(role);
   const isAdvanceChange = isMonthlyAdvanceRequest(request);
@@ -1215,10 +1264,11 @@ function resolveRequestTransition(actor: Actor, user: ActiveUser, request: Prism
         nextStatus: "APROVADO",
         applySchedule: isDayOffRequest(request),
         applyMonthlyAdvance: isAdvanceChange,
+        applyShiftChange: isShiftChange,
         historyAction: "Aprovação final WFM",
         auditAction: "APROVACAO",
-        requesterTitle: isAdvanceChange ? "Alteração de adiantamento aprovada" : finalApprovalTitle(request.type.name),
-        requesterBody: isAdvanceChange ? "Sua solicitação de alteração de adiantamento foi aprovada." : finalApprovalBody(request.type.name),
+        requesterTitle: isAdvanceChange ? "Alteração de adiantamento aprovada" : isShiftChange ? "Troca de turno aprovada" : finalApprovalTitle(request.type.name),
+        requesterBody: isAdvanceChange ? "Sua solicitação de alteração de adiantamento foi aprovada." : isShiftChange ? "Sua troca de turno foi aprovada e aplicada ao Cronograma." : finalApprovalBody(request.type.name),
         requesterNotificationType: "SUCCESS",
         notifySupervisor: true,
         supervisorTitle: "Solicitação aprovada pelo WFM",
@@ -1310,7 +1360,7 @@ function mapPrismaRequest(request: PrismaRequest, user?: ActiveUser, actor?: Act
   const payload = (request.payload ?? {}) as Record<string, unknown>;
   const role = normalizeRole(actor?.role);
   const isAdminLike = ["ADMIN", "GESTOR"].includes(role);
-  const canSupervisorStep = isAdminLike || (role === "SUPERVISOR" && isDayOffRequest(request));
+  const canSupervisorStep = isAdminLike || (role === "SUPERVISOR" && (isDayOffRequest(request) || isShiftChangeRequest(request)));
   const canWfmFinal = isAdminLike || role === "WFM";
   return {
     id: request.code,
@@ -1398,6 +1448,14 @@ function validateCreateInput(input: CreateRequestInput) {
     if (!input.description.trim()) return "Motivo é obrigatório.";
   }
 
+  if (isShiftChangeRequest(input)) {
+    const targetDate = input.shiftChangeDate || input.requestedDate;
+    if (!targetDate) return "Data da troca de turno é obrigatória.";
+    if (!input.desiredShift?.trim()) return "Novo turno solicitado é obrigatório.";
+    if (!input.shiftChangeReason?.trim() && !input.justification?.trim() && !input.description.trim()) return "Motivo da troca de turno é obrigatório.";
+    if (input.currentShift && cleanShiftName(input.currentShift) === cleanShiftName(input.desiredShift)) return "O novo turno precisa ser diferente do turno atual.";
+  }
+
   return "";
 }
 
@@ -1427,7 +1485,14 @@ function payloadForInput(input: CreateRequestInput) {
     requestedOptIn: input.requestedAdvanceOptIn ?? null,
     currentAmount: input.currentAdvanceAmount ?? null,
     requestedAmount: input.requestedAdvanceAmount ?? null,
-    reason: input.monthlyAdvanceReason || input.description || null
+    reason: input.monthlyAdvanceReason || input.shiftChangeReason || input.description || null,
+    shiftChange: isShiftChangeRequest(input),
+    shiftChangeDate: input.shiftChangeDate || input.requestedDate || null,
+    currentShift: input.currentShift || null,
+    desiredShift: input.desiredShift || null,
+    shiftChangeReason: input.shiftChangeReason || input.justification || input.description || null,
+    shiftChangeObservation: input.shiftChangeObservation || null,
+    shiftChangeApplicationStatus: isShiftChangeRequest(input) ? "PENDING" : null
   };
 }
 
@@ -1445,6 +1510,17 @@ function isMonthlyAdvanceRequest(value: CreateRequestInput | PrismaRequest | str
 
 function isDayOffRequest(value: CreateRequestInput | PrismaRequest | string) {
   return Boolean(normalizeDayOffKind(value));
+}
+
+function isShiftChangeRequest(value: CreateRequestInput | PrismaRequest | string) {
+  const payload = typeof value === "string" ? {} : ((value as PrismaRequest).payload ?? {}) as Record<string, unknown>;
+  const typeName =
+    typeof value === "string"
+      ? value
+      : "type" in value && typeof (value as PrismaRequest).type === "object"
+        ? (value as PrismaRequest).type.name
+        : (value as CreateRequestInput).type;
+  return /troca de turno|shift change/i.test(typeName) || payload.shiftChange === true || String(payload.internalType ?? "").toUpperCase() === "SHIFT_CHANGE";
 }
 
 function normalizeDayOffKind(value: CreateRequestInput | PrismaRequest | string | null | undefined): DayOffKind | null {
@@ -1525,6 +1601,47 @@ async function duplicateDayOffRequest(employeeId: string, kind: DayOffKind, expe
   });
 
   return duplicate ? "Já existe uma solicitação de folga pendente para esta data." : "";
+}
+
+async function validateShiftChangeRequestInDatabase(employeeId: string, input: CreateRequestInput) {
+  const targetDate = parseDateOnly(input.shiftChangeDate || input.requestedDate);
+  if (!targetDate) return "Data da troca de turno inválida.";
+
+  const schedule = await prisma.schedule.findUnique({
+    where: { employeeId_date: { employeeId, date: targetDate } },
+    include: { shift: true }
+  });
+  if (!schedule) return "Não existe cronograma para esta data. A troca de turno não pode ser solicitada.";
+
+  const desiredShift = cleanShiftName(input.desiredShift);
+  if (!desiredShift) return "Novo turno solicitado é obrigatório.";
+  const targetShift = await prisma.shift.findFirst({
+    where: {
+      OR: [
+        { name: desiredShift },
+        { name: { startsWith: `${desiredShift} (` } }
+      ]
+    }
+  });
+  if (!targetShift) return "Turno solicitado não encontrado.";
+
+  const currentShift = cleanShiftName(schedule.shift?.name ?? input.currentShift);
+  if (currentShift && currentShift === desiredShift) return "O novo turno precisa ser diferente do turno atual.";
+  const targetDateKey = targetDate.toISOString().slice(0, 10);
+
+  const candidates = await prisma.request.findMany({
+    where: {
+      employeeId,
+      status: { in: [...pendingStatuses] },
+      type: { name: { contains: "turno", mode: "insensitive" } }
+    },
+    take: 20
+  });
+  const duplicate = candidates.some((request) => {
+    const payload = (request.payload ?? {}) as Record<string, unknown>;
+    return String(payload.shiftChangeDate ?? payload.requestedDate ?? "").slice(0, 10) === targetDateKey;
+  });
+  return duplicate ? "Já existe uma solicitação de troca de turno pendente para esta data." : "";
 }
 
 async function applyDayOffRequestToSchedule(tx: Prisma.TransactionClient, request: PrismaRequest, actorId: string, actionInput: RequestStatusActionInput) {
@@ -1705,6 +1822,74 @@ async function applyRequestedDayOffSchedule(tx: Prisma.TransactionClient, reques
   return { updated: true, message: "Dia de folga aplicado no cronograma." };
 }
 
+async function applyShiftChangeRequestToSchedule(tx: Prisma.TransactionClient, request: PrismaRequest, actorId: string) {
+  const payload = (request.payload ?? {}) as Record<string, unknown>;
+  if (payload.shiftChangeAppliedAt) throw new DomainError("Esta solicitação já teve a troca de turno aplicada.");
+  if (!request.employeeId) throw new DomainError("Solicitação sem colaborador vinculado para aplicar troca de turno.");
+
+  const targetDate = parseDateOnly(payload.shiftChangeDate ?? payload.requestedDate);
+  if (!targetDate) throw new DomainError("Data da troca de turno inválida.");
+
+  const desiredShift = cleanShiftName(String(payload.desiredShift ?? ""));
+  if (!desiredShift) throw new DomainError("Novo turno solicitado é obrigatório.");
+
+  const shift = await tx.shift.findFirst({
+    where: {
+      OR: [
+        { name: desiredShift },
+        { name: { startsWith: `${desiredShift} (` } }
+      ]
+    }
+  });
+  if (!shift) throw new DomainError("Turno solicitado não encontrado.");
+
+  const schedule = await tx.schedule.findUnique({
+    where: { employeeId_date: { employeeId: request.employeeId, date: targetDate } },
+    include: { shift: true, employee: true }
+  });
+  if (!schedule) throw new DomainError("Não existe cronograma para esta data. A troca de turno não pode ser aplicada.");
+
+  const before = serialize(schedule);
+  const after = await tx.schedule.update({
+    where: { id: schedule.id },
+    data: {
+      shiftId: shift.id,
+      startsAt: shift.startsAt,
+      endsAt: shift.endsAt,
+      observation: `Troca de turno aprovada pela solicitação ${request.code}`
+    },
+    include: { shift: true }
+  });
+
+  await tx.scheduleChangeHistory.create({
+    data: {
+      scheduleId: after.id,
+      employeeId: request.employeeId,
+      changedById: actorId,
+      date: targetDate,
+      before,
+      after: serialize(after),
+      previousValue: before,
+      newValue: serialize(after),
+      reason: `Troca de turno aprovada pela solicitação ${request.code}`
+    }
+  });
+
+  await tx.auditLog.create({
+    data: {
+      actorId,
+      action: "ALTERACAO_ESCALA",
+      entity: "Schedule",
+      entityId: after.id,
+      reason: `Troca de turno aprovada pela solicitação ${request.code}`,
+      previousValue: before,
+      newValue: serialize(after)
+    }
+  });
+
+  return { updated: true, message: "Troca de turno aprovada e aplicada ao Cronograma." };
+}
+
 function parseDateOnly(value: unknown) {
   if (!value) return null;
   const date = new Date(`${String(value).slice(0, 10)}T00:00:00.000Z`);
@@ -1716,6 +1901,7 @@ function areaForRequest(type: string) {
   if (/rh/i.test(type)) return "RH";
   if (/qualidade/i.test(type)) return "Qualidade";
   if (/adiantamento/i.test(type)) return "WFM";
+  if (/turno|shift/i.test(type)) return "WFM";
   if (/wfm|escala|folga|correção|correcao|ajuste/i.test(type)) return "WFM";
   return "Operações";
 }
@@ -1755,6 +1941,7 @@ function notificationBodyForStatus(status: UiRequestStatus, type: string, reason
 }
 
 function finalApprovalTitle(type: string) {
+  if (/turno/i.test(type)) return "Troca de turno aprovada";
   if (/venda/i.test(type)) return "Sua venda de folga foi aprovada";
   if (/dia de folga/i.test(type)) return "Sua solicitação de folga foi aprovada";
   if (/folga/i.test(type)) return "Sua troca de folga foi aprovada";
@@ -1762,6 +1949,7 @@ function finalApprovalTitle(type: string) {
 }
 
 function finalApprovalBody(type: string) {
+  if (/turno/i.test(type)) return "Sua troca de turno foi aprovada e seu cronograma foi atualizado.";
   if (/venda/i.test(type)) return "Sua venda de folga foi aprovada e seu cronograma foi atualizado.";
   if (/dia de folga/i.test(type)) return "Sua solicitação de folga foi aprovada e seu cronograma foi atualizado.";
   if (/folga/i.test(type)) return "Sua troca de folga foi aprovada e seu cronograma foi atualizado.";
@@ -1936,6 +2124,7 @@ async function notifyRequestSupervisor(tx: RequestNotificationClient, request: P
 }
 
 function dayOffApproverMessage(type: string) {
+  if (/turno/i.test(type)) return "Nova solicitação de troca de turno";
   if (/venda/i.test(type)) return "Nova solicitação de venda de folga";
   if (/dia de folga/i.test(type)) return "Nova solicitação de dia de folga";
   return "Nova solicitação de troca de folga";
