@@ -12,7 +12,9 @@ export async function GET(request: Request) {
     lob: searchParams.get("lob"),
     status: searchParams.get("status"),
     supervisorId: searchParams.get("supervisorId"),
-    shiftId: searchParams.get("shiftId")
+    shiftId: searchParams.get("shiftId"),
+    skill: searchParams.get("skill"),
+    wave: searchParams.get("wave")
   });
 
   if ("error" in result) return errorResponse(result, errorStatus(result));

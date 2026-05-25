@@ -441,6 +441,8 @@ type EmployeeImportPreview = {
       wbLogin: string;
       role: string;
       lob: string;
+      skill: string;
+      wave: string;
       createUser: boolean;
       passwordProvided: boolean;
     };
@@ -552,6 +554,8 @@ type EmployeeClient = (typeof employees)[number] & {
   team?: string;
   teamId?: string;
   supervisorId?: string;
+  skill?: string;
+  wave?: string;
   lobId?: string;
   shiftId?: string;
   admissionIso?: string;
@@ -593,6 +597,7 @@ type EmployeeListResponse = {
   page?: number;
   limit?: number;
   totalPages?: number;
+  filterOptions?: { skills: string[]; waves: string[] };
 };
 
 type ShiftReportItem = {
@@ -2108,6 +2113,8 @@ export function RegistrationApprovalsPage() {
     team: "Time Inicial",
     supervisor: "",
     shift: "Manhã",
+    skill: "",
+    wave: "",
     schedule: "6x1",
     roleTitle: "Atendente",
     employeeStatus: "Ativo",
@@ -2135,6 +2142,8 @@ export function RegistrationApprovalsPage() {
       team: op.team ?? "Time Inicial",
       supervisor: op.supervisor ?? "",
       shift: op.shift ?? "Manhã",
+      skill: op.skill ?? "",
+      wave: op.wave ?? "",
       schedule: op.schedule ?? "6x1",
       roleTitle: op.roleTitle ?? "Atendente",
       employeeStatus: op.employeeStatus === "Pendente de Cadastro" ? "Ativo" : op.employeeStatus ?? "Ativo",
@@ -2473,6 +2482,8 @@ export function RegistrationApprovalsPage() {
                   ["Time", "team"],
                   ["Supervisor", "supervisor"],
                   ["Turno", "shift"],
+                  ["Skill", "skill"],
+                  ["Wave", "wave"],
                   ["Cronograma", "schedule"],
                   ["Cargo/Função", "roleTitle"],
                   ["Status", "employeeStatus"],
@@ -2562,7 +2573,7 @@ export function RegistrationApprovalsPage() {
                   </label>
                 ) : null}
                 <SimpleTable
-                  columns={["Linha", "Nome", "WB/Login", "E-mail", "Status", "Ação", "CPF", "Role", "LOB", "Usuário", "Validação"]}
+                  columns={["Linha", "Nome", "WB/Login", "E-mail", "Status", "Ação", "CPF", "Role", "LOB", "Skill", "Wave", "Usuário", "Validação"]}
                   rows={employeeImportPreview.rows.slice(0, 80).map((row) => [
                     row.rowNumber,
                     row.preview.name || "-",
@@ -2573,6 +2584,8 @@ export function RegistrationApprovalsPage() {
                     row.preview.cpf || "CPF pendente",
                     row.preview.role || "-",
                     row.preview.lob || "-",
+                    row.preview.skill || "-",
+                    row.preview.wave || "-",
                     row.preview.createUser ? (row.preview.passwordProvided ? "Sim" : "Senha ausente") : "Não",
                     row.errors.length ? (
                       <div key={`${row.rowNumber}-errors`} className="space-y-1 text-xs font-bold text-red-600">
@@ -5857,7 +5870,10 @@ export function EmployeeMapPage() {
   const [lobFilter, setLobFilter] = useState("Todos");
   const [statusFilter, setStatusFilter] = useState("Todos");
   const [supervisorFilter, setSupervisorFilter] = useState("Todos");
+  const [skillFilter, setSkillFilter] = useState("Todos");
+  const [waveFilter, setWaveFilter] = useState("Todos");
   const [shiftFilter, setShiftFilter] = useState("Todos");
+  const [employeeFilterOptions, setEmployeeFilterOptions] = useState<{ skills: string[]; waves: string[] }>({ skills: [], waves: [] });
   const [employeePage, setEmployeePage] = useState(1);
   const [employeePagination, setEmployeePagination] = useState({ total: 0, page: 1, limit: 50, totalPages: 1 });
   const [editingEmployee, setEditingEmployee] = useState(false);
@@ -5869,6 +5885,8 @@ export function EmployeeMapPage() {
   const [roleTitleDraft, setRoleTitleDraft] = useState("");
   const [statusDraft, setStatusDraft] = useState("");
   const [roleDraft, setRoleDraft] = useState("");
+  const [skillDraft, setSkillDraft] = useState("");
+  const [waveDraft, setWaveDraft] = useState("");
   const [supervisorDraft, setSupervisorDraft] = useState("");
   const [lobDraft, setLobDraft] = useState("");
   const [teamDraft, setTeamDraft] = useState("");
@@ -5891,7 +5909,9 @@ export function EmployeeMapPage() {
   const employeeMapLobs = ["Todos", ...Array.from(new Set(employeeSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? employeeRows.map((employee) => employee.lob).filter(Boolean)))];
   const employeeStatusOptions = ["Todos", "Ativos/Aprovados", "Nesting", "Pendentes", "Inativos", "Online", "Em Atendimento", "Offline"];
   const employeeSupervisorOptions = employeeSettings?.supervisors?.filter((supervisor) => supervisor.status !== "INACTIVE") ?? [];
-  const hasEmployeeFilters = Boolean(query.trim()) || lobFilter !== "Todos" || statusFilter !== "Todos" || supervisorFilter !== "Todos" || shiftFilter !== "Todos";
+  const employeeSkillOptions = ["Todos", "SEM_SKILL", ...employeeFilterOptions.skills.filter(Boolean)];
+  const employeeWaveOptions = ["Todos", "SEM_WAVE", ...employeeFilterOptions.waves.filter(Boolean)];
+  const hasEmployeeFilters = Boolean(query.trim()) || lobFilter !== "Todos" || statusFilter !== "Todos" || supervisorFilter !== "Todos" || skillFilter !== "Todos" || waveFilter !== "Todos" || shiftFilter !== "Todos";
   const isAdmin = session?.user?.role === "ADMIN";
   const isSupervisorUser = session?.user?.role === "SUPERVISOR";
   const normalizedEmployeeMapRole = String(session?.user?.role ?? "").toUpperCase();
@@ -5914,12 +5934,14 @@ export function EmployeeMapPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function loadEmployees(options?: { nextQuery?: string; nextLob?: string; nextStatus?: string; nextSupervisor?: string; nextShift?: string; nextPage?: number }) {
+  async function loadEmployees(options?: { nextQuery?: string; nextLob?: string; nextStatus?: string; nextSupervisor?: string; nextSkill?: string; nextWave?: string; nextShift?: string; nextPage?: number }) {
     setEmployeeLoading(true);
     const nextQuery = options?.nextQuery ?? query;
     const nextLob = options?.nextLob ?? lobFilter;
     const nextStatus = options?.nextStatus ?? statusFilter;
     const nextSupervisor = options?.nextSupervisor ?? supervisorFilter;
+    const nextSkill = options?.nextSkill ?? skillFilter;
+    const nextWave = options?.nextWave ?? waveFilter;
     const nextShift = options?.nextShift ?? shiftFilter;
     const nextPage = options?.nextPage ?? employeePage;
     const params = new URLSearchParams({ summary: "true", limit: "50", page: String(nextPage) });
@@ -5927,15 +5949,18 @@ export function EmployeeMapPage() {
     if (nextLob !== "Todos") params.set("lob", nextLob);
     if (nextStatus !== "Todos") params.set("status", nextStatus);
     if (nextSupervisor !== "Todos") params.set("supervisorId", nextSupervisor);
+    if (nextSkill !== "Todos") params.set("skill", nextSkill);
+    if (nextWave !== "Todos") params.set("wave", nextWave);
     if (nextShift !== "Todos") params.set("shiftId", nextShift);
     try {
       const employeePayload = await apiJson<EmployeeListResponse>(`/api/employees?${params.toString()}`);
       if (!employeePayload.data?.length && Number(employeePayload.total ?? 0) > 0 && nextPage > 1) {
         setEmployeePage(1);
-        await loadEmployees({ nextQuery, nextLob, nextStatus, nextSupervisor, nextShift, nextPage: 1 });
+        await loadEmployees({ nextQuery, nextLob, nextStatus, nextSupervisor, nextSkill, nextWave, nextShift, nextPage: 1 });
         return;
       }
       setEmployeeRows(employeePayload.data);
+      setEmployeeFilterOptions(employeePayload.filterOptions ?? { skills: [], waves: [] });
       setEmployeePagination({
         total: employeePayload.total ?? employeePayload.data.length,
         page: employeePayload.page ?? nextPage,
@@ -5946,6 +5971,7 @@ export function EmployeeMapPage() {
       setSelected(null);
     } catch {
       setEmployeeRows([]);
+      setEmployeeFilterOptions({ skills: [], waves: [] });
       setEmployeePagination({ total: 0, page: 1, limit: 50, totalPages: 1 });
     } finally {
       setEmployeeLoading(false);
@@ -5977,6 +6003,8 @@ export function EmployeeMapPage() {
     setRoleTitleDraft(selected.role ?? "");
     setStatusDraft(selected.status ?? "");
     setRoleDraft(selected.systemRole ?? "COLABORADOR");
+    setSkillDraft(selected.skill ?? "");
+    setWaveDraft(selected.wave ?? "");
     setSupervisorDraft(selected.supervisorId ?? "");
     setLobDraft(selected.lobId ?? "");
     setTeamDraft(selected.teamId ?? "");
@@ -6012,6 +6040,8 @@ export function EmployeeMapPage() {
           roleTitle: roleTitleDraft,
           operationalStatus: statusDraft,
           roleName: isAdmin ? roleDraft : undefined,
+          skill: canEditEmployeeOperational ? skillDraft : undefined,
+          wave: canEditEmployeeOperational ? waveDraft : undefined,
           supervisorId: canEditOperationalBindings ? supervisorDraft : undefined,
           lobId: canEditOperationalBindings ? lobDraft || undefined : undefined,
           teamId: canEditOperationalBindings ? teamDraft || undefined : undefined,
@@ -6050,6 +6080,8 @@ export function EmployeeMapPage() {
     if (lobFilter !== "Todos") params.set("lob", lobFilter);
     if (statusFilter !== "Todos") params.set("status", statusFilter);
     if (supervisorFilter !== "Todos") params.set("supervisorId", supervisorFilter);
+    if (skillFilter !== "Todos") params.set("skill", skillFilter);
+    if (waveFilter !== "Todos") params.set("wave", waveFilter);
     if (shiftFilter !== "Todos") params.set("shiftId", shiftFilter);
     window.location.href = `/api/employees/export${params.toString() ? `?${params.toString()}` : ""}`;
   }
@@ -6079,8 +6111,8 @@ export function EmployeeMapPage() {
       {employeeMessage ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{employeeMessage}</div> : null}
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="space-y-5">
-          <div className="card grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-6">
-            <input value={query} onChange={(event) => setQuery(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm outline-none xl:col-span-2" placeholder="Nome, e-mail ou WB/Login" />
+          <div className="card grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-8">
+            <input value={query} onChange={(event) => setQuery(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm outline-none xl:col-span-2" placeholder="Nome, e-mail, WB/Login, Skill ou Wave" />
             <select value={lobFilter} onChange={(event) => setLobFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
               {employeeMapLobs.map((lob) => <option key={lob} value={lob}>{lob === "Todos" ? "Todas as LOBs" : lob}</option>)}
             </select>
@@ -6089,15 +6121,22 @@ export function EmployeeMapPage() {
             </select>
             <select value={supervisorFilter} onChange={(event) => setSupervisorFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
               <option value="Todos">Todos os supervisores</option>
+              <option value="SEM_SUPERVISOR">Sem supervisor</option>
               {employeeSupervisorOptions.map((supervisor) => <option key={supervisor.id} value={supervisor.id}>{supervisor.name}</option>)}
+            </select>
+            <select value={skillFilter} onChange={(event) => setSkillFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
+              {employeeSkillOptions.map((skill) => <option key={skill} value={skill}>{skill === "Todos" ? "Todas as skills" : skill === "SEM_SKILL" ? "Sem skill" : skill}</option>)}
+            </select>
+            <select value={waveFilter} onChange={(event) => setWaveFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
+              {employeeWaveOptions.map((wave) => <option key={wave} value={wave}>{wave === "Todos" ? "Todas as waves" : wave === "SEM_WAVE" ? "Sem wave" : wave}</option>)}
             </select>
             <select value={shiftFilter} onChange={(event) => setShiftFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
               <option value="Todos">Todos os turnos</option>
               {employeeShiftOptions.map((shift) => <option key={shift.id} value={shift.id}>{cleanShiftName(shift.name)}</option>)}
             </select>
-            <div className="flex gap-2 md:col-span-2 xl:col-span-6 xl:justify-end">
+            <div className="flex gap-2 md:col-span-2 xl:col-span-8 xl:justify-end">
               <button onClick={() => { setEmployeePage(1); void loadEmployees({ nextPage: 1 }); }} className="h-10 rounded-lg bg-blue-600 px-5 text-sm font-bold text-white">Buscar</button>
-              <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setShiftFilter("Todos"); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextShift: "Todos", nextPage: 1 }); }} className="h-10 rounded-lg border border-border px-5 text-sm font-bold">Limpar filtros</button>
+              <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextPage: 1 }); }} className="h-10 rounded-lg border border-border px-5 text-sm font-bold">Limpar filtros</button>
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -6112,7 +6151,7 @@ export function EmployeeMapPage() {
             ) : employeeRows.length ? (
               <>
                 <SimpleTable
-                  columns={["Nome", "E-mail", "WB/Login", "Cargo/Função", "Role", "LOB", "Supervisor", "Turno", "Status", "Ação"]}
+                  columns={["Nome", "E-mail", "WB/Login", "Cargo/Função", "Role", "LOB", "Skill", "Wave", "Supervisor", "Turno", "Status", "Ação"]}
                   rows={employeeRows.map((employee) => [
                     <button key={employee.id} onClick={() => selectEmployee(employee)} className="max-w-[180px] truncate font-bold text-blue-700" title={employee.name}>{employee.name}</button>,
                     <span key={`${employee.id}-email`} className="block max-w-[190px] truncate" title={employee.email ?? "-"}>{employee.email ?? "-"}</span>,
@@ -6120,6 +6159,8 @@ export function EmployeeMapPage() {
                     <span key={`${employee.id}-role`} className="block max-w-[160px] truncate" title={employee.role}>{employee.role}</span>,
                     employee.systemRole ?? "-",
                     employee.lob,
+                    employee.skill || "Sem skill",
+                    employee.wave || "Sem wave",
                     <span key={`${employee.id}-supervisor`} className="block max-w-[160px] truncate" title={employee.supervisor}>{employee.supervisor}</span>,
                     cleanShiftName(employee.shift) || "-",
                     <StatusBadge key={`${employee.id}-status`} status={employee.status} />,
@@ -6139,7 +6180,7 @@ export function EmployeeMapPage() {
                 <EmptyState title={hasEmployeeFilters ? "Nenhum colaborador encontrado para os filtros selecionados" : "Nenhum colaborador encontrado"} description={hasEmployeeFilters ? "Limpe os filtros para voltar a listar a base real disponível para seu perfil." : "Aprove cadastros ou importe colaboradores para iniciar a base."} />
                 {hasEmployeeFilters ? (
                   <div className="mt-3 text-center">
-                    <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setShiftFilter("Todos"); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextShift: "Todos", nextPage: 1 }); }} className="rounded-lg border border-border px-4 py-2 text-sm font-bold text-navy-950">Limpar filtros</button>
+                    <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextPage: 1 }); }} className="rounded-lg border border-border px-4 py-2 text-sm font-bold text-navy-950">Limpar filtros</button>
                   </div>
                 ) : null}
               </div>
@@ -6160,6 +6201,8 @@ export function EmployeeMapPage() {
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <InfoLine label="LOB" value={selected.lob} />
                 <InfoLine label="Supervisor" value={selected.supervisor} />
+                <InfoLine label="Skill" value={selected.skill || "Sem skill"} />
+                <InfoLine label="Wave" value={selected.wave || "Sem wave"} />
                 <InfoLine label="Turno" value={cleanShiftName(selected.shift) || "-"} />
                 <InfoLine label="Cronograma" value={selected.schedule} />
                 <InfoLine label="Admissão" value={selected.admission} />
@@ -6169,6 +6212,8 @@ export function EmployeeMapPage() {
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <InfoLine label="Cargo/Função" value={selected.role} />
                   <InfoLine label="LOB" value={selected.lob} />
+                  <InfoLine label="Skill" value={selected.skill || "Sem skill"} />
+                  <InfoLine label="Wave" value={selected.wave || "Sem wave"} />
                   <InfoLine label="Status atual" value={<StatusBadge status={selected.status} />} />
                   <InfoLine label="Supervisor vinculado" value={selected.supervisor} />
                   <InfoLine label="Última presença" value={selected.lastPresence ?? "Sem registro"} />
@@ -6212,6 +6257,8 @@ export function EmployeeMapPage() {
                             ) : (
                               <FormInput label="Cargo/Função" value={roleTitleDraft} onChange={setRoleTitleDraft} error={employeeFieldErrors.roleTitle} />
                             )}
+                            <FormInput label="Skill" value={skillDraft} onChange={setSkillDraft} error={employeeFieldErrors.skill} />
+                            <FormInput label="Wave" value={waveDraft} onChange={setWaveDraft} error={employeeFieldErrors.wave} />
                             {isAdmin ? <FormSelect label="Role/Permissão" value={roleDraft} options={employeeRoleOptions} onChange={setRoleDraft} error={employeeFieldErrors.roleName} /> : null}
                             {canEditOperationalBindings ? (
                               <label className="block">

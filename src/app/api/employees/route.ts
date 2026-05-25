@@ -21,6 +21,8 @@ const updateSchema = z.object({
   shiftId: z.string().trim().optional(),
   scheduleType: z.string().trim().optional(),
   contractType: z.string().trim().optional(),
+  skill: z.string().trim().optional(),
+  wave: z.string().trim().optional(),
   admissionDate: z.string().trim().optional(),
   trainingStartDate: z.string().trim().optional(),
   siteOperation: z.string().trim().optional(),
@@ -46,6 +48,8 @@ export async function GET(request: Request) {
     supervisorId: url.searchParams.get("supervisorId") ?? undefined,
     teamId: url.searchParams.get("teamId") ?? undefined,
     shiftId: url.searchParams.get("shiftId") ?? undefined,
+    skill: url.searchParams.get("skill") ?? undefined,
+    wave: url.searchParams.get("wave") ?? undefined,
     status: url.searchParams.get("status") ?? undefined,
     role: url.searchParams.get("role") ?? undefined
   });

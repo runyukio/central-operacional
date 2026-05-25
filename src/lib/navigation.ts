@@ -8,7 +8,7 @@ export type NavItem = {
 };
 
 const allRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "COLABORADOR", "WFM", "QUALIDADE", "RH", "TI"];
-const leadership: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"];
+const leadership: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH"];
 const peopleOps: AppRole[] = ["ADMIN", "GESTOR", "RH", "WFM"];
 const authenticatedOps: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI"];
 

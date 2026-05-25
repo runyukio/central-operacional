@@ -360,6 +360,8 @@ model EmployeeProfile {
   contractType       String?
   siteOperation      String?
   internalNotes      String?
+  skill              String?
+  wave               String?
   operationalStatus  String                  @default("Online")
   lobId              String
   teamId             String
@@ -392,6 +394,8 @@ model EmployeeProfile {
   @@index([teamId])
   @@index([supervisorId])
   @@index([shiftId])
+  @@index([skill])
+  @@index([wave])
   @@index([operationalStatus])
   @@index([deletedAt])
 }

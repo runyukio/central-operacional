@@ -10,6 +10,8 @@ const operationalSchema = z.object({
   team: z.string().min(1),
   supervisor: z.string().optional().default(""),
   shift: z.string().min(1),
+  skill: z.string().optional().default(""),
+  wave: z.string().optional().default(""),
   schedule: z.string().min(1),
   roleTitle: z.string().min(1),
   employeeStatus: z.string().min(1),

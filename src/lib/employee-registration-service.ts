@@ -26,6 +26,8 @@ export type RegistrationReviewInput = {
     team: string;
     supervisor: string;
     shift: string;
+    skill?: string;
+    wave?: string;
     schedule: string;
     roleTitle: string;
     employeeStatus: string;
@@ -72,6 +74,8 @@ export const employeeImportColumns = [
   "supervisor_email",
   "supervisor_nome",
   "turno",
+  "skill",
+  "wave",
   "escala_modelo",
   "status_colaborador",
   "tipo_contrato",
@@ -113,6 +117,8 @@ type EmployeeImportValidation = {
     wbLogin: string;
     role: string;
     lob: string;
+    skill: string;
+    wave: string;
     createUser: boolean;
     passwordProvided: boolean;
   };
@@ -326,6 +332,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
     let colaboradoresCriados = 0;
     let usuariosCriados = 0;
     let registrosAtualizados = 0;
+    let skillWaveUpdates = 0;
 
     for (const row of normalizedValidRows) {
       const role = await prisma.role.findUniqueOrThrow({ where: { name: row.roleName } });
@@ -411,6 +418,8 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
             preferredSchedule: row.preferredSchedule,
             team: row.teamName,
             supervisorWbLogin: row.supervisorWbLogin,
+            skill: row.skill,
+            wave: row.wave,
             scheduleType: row.scheduleType,
             contractType: row.contractType,
             admissionDate: admissionDate.toISOString(),
@@ -467,6 +476,10 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
         const existingByWb = await prisma.employeeProfile.findUnique({ where: { wbLogin: row.wbLogin } });
         const existingByUser = userId ? await prisma.employeeProfile.findUnique({ where: { userId } }) : null;
         const employeeId = existingByWb?.id ?? existingByUser?.id;
+        const existingEmployeeForUpdate = existingByWb ?? existingByUser ?? null;
+        if (existingEmployeeForUpdate && ((row.skill && row.skill !== (existingEmployeeForUpdate.skill ?? "")) || (row.wave && row.wave !== (existingEmployeeForUpdate.wave ?? "")))) {
+          skillWaveUpdates += 1;
+        }
         const employee = employeeId
           ? await prisma.employeeProfile.update({
             where: { id: employeeId },
@@ -482,6 +495,8 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               teamId: team.id,
               supervisorId: supervisor?.id,
               shiftId: shift.id,
+              ...(row.skill ? { skill: row.skill } : {}),
+              ...(row.wave ? { wave: row.wave } : {}),
               trainingStartDate,
               contractType: row.contractType || null,
               siteOperation: row.siteOperation || null,
@@ -507,6 +522,8 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               teamId: team.id,
               supervisorId: supervisor?.id,
               shiftId: shift.id,
+              skill: row.skill || null,
+              wave: row.wave || null,
               trainingStartDate,
               contractType: row.contractType || null,
               siteOperation: row.siteOperation || null,
@@ -548,7 +565,8 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
             errorRows: invalidRows.length,
             colaboradoresCriados,
             usuariosCriados,
-            registrosAtualizados
+            registrosAtualizados,
+            skillWaveUpdates
           }
         }
       });
@@ -568,6 +586,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
         colaboradoresCriados,
         usuariosCriados,
         registrosAtualizados,
+        skillWaveUpdates,
         ignoredRows: invalidRows.length,
         rows: validations
       }
@@ -736,7 +755,9 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
               lobId: lob.id,
               teamId: team.id,
               supervisorId: supervisor?.id,
-              shiftId: shift.id
+              shiftId: shift.id,
+              skill: op.skill?.trim() || null,
+              wave: op.wave?.trim() || null
             }
           })
         : await tx.employeeProfile.create({
@@ -751,7 +772,9 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
               lobId: lob.id,
               teamId: team.id,
               supervisorId: supervisor?.id,
-              shiftId: shift.id
+              shiftId: shift.id,
+              skill: op.skill?.trim() || null,
+              wave: op.wave?.trim() || null
             }
           });
 
@@ -887,7 +910,7 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     prisma.shift.findMany({ select: { name: true } }),
     prisma.employeeProfile.findMany({
       where: { wbLogin: { in: unique([...wbLogins, ...supervisorWbLogins]) }, deletedAt: null },
-      select: { id: true, userId: true, wbLogin: true, user: { select: { role: { select: { name: true } } } } }
+      select: { id: true, userId: true, wbLogin: true, skill: true, wave: true, user: { select: { role: { select: { name: true } } } } }
     }),
     cpfs.length ? prisma.employeeSensitiveData.findMany({ where: { cpf: { in: cpfs } }, select: { cpf: true, employeeId: true } }) : Promise.resolve([]),
     emails.length ? prisma.user.findMany({ where: { email: { in: emails }, status: "ACTIVE", deletedAt: null }, select: { id: true, email: true } }) : Promise.resolve([])
@@ -952,7 +975,11 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     if (row.wbLogin) seenWb.add(row.wbLogin);
 
     const activeByWb = row.wbLogin ? employeeByWb.get(row.wbLogin) ?? null : null;
-    if (activeByWb) warnings.push("WB/Login existente: o colaborador será atualizado.");
+    if (activeByWb) {
+      warnings.push("WB/Login existente: o colaborador será atualizado.");
+      if (row.skill && row.skill !== (activeByWb.skill ?? "")) warnings.push(`Skill será atualizada de ${activeByWb.skill || "vazio"} para ${row.skill}.`);
+      if (row.wave && row.wave !== (activeByWb.wave ?? "")) warnings.push(`Wave será atualizada de ${activeByWb.wave || "vazio"} para ${row.wave}.`);
+    }
     const activeByCpf = row.cpf ? activeEmployeeByCpfMap.get(row.cpf) ?? null : null;
     if (activeByCpf && activeByCpf.id !== activeByWb?.id) errors.push("Já existe colaborador ativo com este CPF.");
     const activeUser = row.email ? activeUserByEmail.get(row.email) ?? null : null;
@@ -976,6 +1003,8 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
         wbLogin: row.wbLogin,
         role: row.roleName,
         lob: row.lob,
+        skill: row.skill,
+        wave: row.wave,
         createUser: row.createUser,
         passwordProvided: Boolean(row.temporaryPassword)
       }
@@ -1024,6 +1053,8 @@ function normalizeEmployeeImportRow(raw: EmployeeImportRow) {
     supervisorEmail: text(raw.supervisor_email).toLowerCase(),
     supervisorName: text(raw.supervisor_nome),
     shift: normalizeShiftName(raw.turno),
+    skill: text(raw.skill),
+    wave: text(raw.wave),
     scheduleType: text(raw.escala_modelo) || text(raw.preferencia_horario) || "Não informado",
     employeeStatus: normalizeEmployeeStatus(raw.status_colaborador),
     contractType: normalizeContractType(raw.tipo_contrato),
