@@ -49,6 +49,27 @@ export function canAccessEmployeeMap(user: PermissionUser) {
   return isActiveUser(user) && ["ADMIN", "GESTOR", "RH", "WFM", "SUPERVISOR"].includes(role);
 }
 
+export function canAccessAdvanceModule(user: PermissionUser) {
+  const role = normalizeRole(user.role);
+  return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM"].includes(role);
+}
+
+export function canEditAdvanceRecords(user: PermissionUser) {
+  return canAccessAdvanceModule(user) && ["ADMIN", "GESTOR", "WFM"].includes(normalizeRole(user.role));
+}
+
+export function canImportAdvanceRecords(user: PermissionUser) {
+  return canEditAdvanceRecords(user);
+}
+
+export function canExportAdvanceRecords(user: PermissionUser) {
+  return canAccessAdvanceModule(user);
+}
+
+export function canDeleteAdvanceRecords(user: PermissionUser) {
+  return canEditAdvanceRecords(user);
+}
+
 export function canEditSchedule(user: PermissionUser) {
   const role = normalizeRole(user.role);
   return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM"].includes(role);

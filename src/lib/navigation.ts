@@ -1,4 +1,5 @@
 import type { AppRole } from "@/lib/demo-auth";
+import { normalizeRole } from "@/lib/permissions";
 
 export type NavItem = {
   label: string;
@@ -25,6 +26,7 @@ export const navItems: NavItem[] = [
   { label: "Comunicação / Mural", href: "/mural", icon: "Megaphone", roles: ["ADMIN"] },
   { label: "Qualidade e Feedback", href: "/qualidade", icon: "ShieldCheck", roles: ["ADMIN"] },
   { label: "Mapa de Funcionários", href: "/mapa-funcionarios", icon: "Map", roles: leadership },
+  { label: "Adiantamento", href: "/adiantamento", icon: "Coins", roles: ["ADMIN", "GESTOR", "WFM"] },
   { label: "Staff e Cobertura", href: "/staff-cobertura", icon: "UsersRound", roles: ["ADMIN"] },
   { label: "Equipamentos e Logística", href: "/equipamentos", icon: "MonitorCog", roles: ["ADMIN", "GESTOR", "TI"] },
   { label: "Pesquisa de Clima", href: "/clima", icon: "HeartPulse", roles: ["ADMIN"] },
@@ -34,10 +36,10 @@ export const navItems: NavItem[] = [
 ];
 
 export function getNavItems(role?: string) {
-  const normalizedRole = (role ?? "COLABORADOR") as AppRole;
+  const normalizedRole = normalizeRole(role);
   return navItems.filter((item) => item.roles.includes(normalizedRole));
 }
 
 export function getDefaultPathForRole(role?: string) {
-  return role === "COLABORADOR" ? "/minha-escala" : "/central-operacional";
+  return normalizeRole(role) === "COLABORADOR" ? "/minha-escala" : "/central-operacional";
 }

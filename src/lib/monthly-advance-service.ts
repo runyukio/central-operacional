@@ -1,4 +1,4 @@
-import { AuditAction, Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
 import { recordErrorLog } from "@/lib/mock-db";
@@ -48,6 +48,7 @@ export type MonthlyAdvanceFilters = {
   lob?: string;
   supervisorId?: string;
   optIn?: string;
+  hasDiscount?: string;
   search?: string;
   page?: string | number;
   limit?: string | number;
@@ -162,7 +163,7 @@ export async function listMonthlyAdvances(actor: Actor, filters: MonthlyAdvanceF
   if (!canViewMonthlyAdvance(role)) return { error: "Você não tem permissão para visualizar adiantamento mensal.", status: 403 };
 
   const referenceMonth = normalizeReferenceMonth(filters.referenceMonth, currentReferenceMonth());
-  const where: Prisma.MonthlyAdvanceRecordWhereInput = { referenceMonth };
+  const where: Prisma.MonthlyAdvanceRecordWhereInput = { referenceMonth, status: { not: "REMOVED" } };
   const and: Prisma.MonthlyAdvanceRecordWhereInput[] = [];
 
   if (role === "COLABORADOR") {
@@ -195,6 +196,11 @@ export async function listMonthlyAdvances(actor: Actor, filters: MonthlyAdvanceF
     if (optIn !== null) where.optIn = optIn;
   }
 
+  if (filters.hasDiscount && filters.hasDiscount !== "Todos") {
+    const hasDiscount = parseAdvanceOptIn(filters.hasDiscount);
+    if (hasDiscount !== null) where.hasDiscount = hasDiscount;
+  }
+
   if (filters.search?.trim()) {
     const search = filters.search.trim();
     and.push({
@@ -211,7 +217,7 @@ export async function listMonthlyAdvances(actor: Actor, filters: MonthlyAdvanceF
   const page = parsePositiveInteger(filters.page, 1);
   const limit = Math.min(parsePositiveInteger(filters.limit, 50), 5000);
   const skip = (page - 1) * limit;
-  const [total, records, aggregates] = await Promise.all([
+  const [total, records, aggregates, discountCount] = await Promise.all([
     prisma.monthlyAdvanceRecord.count({ where }),
     prisma.monthlyAdvanceRecord.findMany({
       where,
@@ -225,7 +231,8 @@ export async function listMonthlyAdvances(actor: Actor, filters: MonthlyAdvanceF
       where,
       _count: { _all: true },
       _sum: { amount: true, finalAmount: true }
-    })
+    }),
+    prisma.monthlyAdvanceRecord.count({ where: { ...where, hasDiscount: true } })
   ]);
 
   const totalPages = Math.max(1, Math.ceil(total / limit));
@@ -233,6 +240,7 @@ export async function listMonthlyAdvances(actor: Actor, filters: MonthlyAdvanceF
     total,
     optIn: aggregates.find((item) => item.optIn)?._count._all ?? 0,
     optOut: aggregates.find((item) => !item.optIn)?._count._all ?? 0,
+    hasDiscount: discountCount,
     amount: aggregates.reduce((sum, item) => sum + Number(item._sum.amount ?? 0), 0),
     finalAmount: aggregates.reduce((sum, item) => sum + Number(item._sum.finalAmount ?? 0), 0)
   };
@@ -259,7 +267,7 @@ export async function getMyMonthlyAdvanceCycles(actor: Actor) {
   const currentMonth = currentReferenceMonth();
   const months = [currentMonth, addReferenceMonths(currentMonth, 1)];
   const records = await prisma.monthlyAdvanceRecord.findMany({
-    where: { employeeId: employee.id, referenceMonth: { in: months } },
+    where: { employeeId: employee.id, referenceMonth: { in: months }, status: { not: "REMOVED" } },
     include: monthlyAdvanceInclude
   });
   const recordByMonth = new Map(records.map((record) => [record.referenceMonth, record]));
@@ -301,9 +309,20 @@ export async function respondMonthlyAdvance(actor: Actor, input: { referenceMont
   const existing = await prisma.monthlyAdvanceRecord.findUnique({
     where: { employeeId_referenceMonth: { employeeId: employee.id, referenceMonth } }
   });
-  if (existing) return { error: "Você já respondeu este ciclo. Para alterar, abra uma solicitação.", status: 409 };
+  if (existing && existing.status !== "REMOVED") return { error: "Você já respondeu este ciclo. Para alterar, abra uma solicitação.", status: 409 };
 
-  const record = await prisma.monthlyAdvanceRecord.create({
+  const record = existing ? await prisma.monthlyAdvanceRecord.update({
+    where: { id: existing.id },
+    data: {
+      optIn: input.optIn,
+      amount: decimal(0),
+      finalAmount: decimal(0),
+      status: "RESPONDIDO",
+      observation: "Resposta registrada pelo colaborador.",
+      updatedById: user.id
+    },
+    include: monthlyAdvanceInclude
+  }) : await prisma.monthlyAdvanceRecord.create({
     data: {
       employeeId: employee.id,
       referenceMonth,
@@ -409,11 +428,18 @@ export async function previewMonthlyAdvanceImport(actor: Actor, rawRows: Array<R
   if (!canManageMonthlyAdvance(normalizeRole(actor.role))) return { error: "Você não tem permissão para importar adiantamento mensal.", status: 403 };
 
   const fallback = normalizeReferenceMonth(fallbackReferenceMonth, currentReferenceMonth());
-  const employees = await prisma.employeeProfile.findMany({
-    where: { deletedAt: null },
-    include: employeeInclude
-  });
+  const normalizedWbLogins = Array.from(new Set(rawRows.map((row) => normalizeWbLogin(importRowWbLogin(row))).filter(Boolean)));
+  const employees = await findEmployeesByNormalizedWbLogins(normalizedWbLogins);
   const employeeByLogin = new Map(employees.map((employee) => [normalizeWbLogin(employee.wbLogin), employee]));
+  const missingWbLogins = normalizedWbLogins.filter((login) => !employeeByLogin.has(login));
+  console.info("[monthly-advance-import:validation]", {
+    totalRows: rawRows.length,
+    uniqueWbLogins: normalizedWbLogins.length,
+    firstNormalizedWbLogins: normalizedWbLogins.slice(0, 10),
+    employeeProfilesFound: normalizedWbLogins.length - missingWbLogins.length,
+    employeeProfilesMissing: missingWbLogins.length,
+    firstMissingWbLogins: missingWbLogins.slice(0, 20)
+  });
   const parsedRows = rawRows.map((raw, index) => parseImportRow(raw, index + 2, fallback, employeeByLogin));
   const keys = parsedRows
     .filter((row) => row.employeeId && row.referenceMonth)
@@ -433,6 +459,50 @@ export async function previewMonthlyAdvanceImport(actor: Actor, rawRows: Array<R
   }));
 
   return importPreviewPayload(rows);
+}
+
+export async function removeMonthlyAdvance(actor: Actor, id: string) {
+  const user = await findActiveUser(actor.email);
+  if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
+  if (!canDeleteMonthlyAdvance(normalizeRole(actor.role))) return { error: "Você não tem permissão para remover registros de adiantamento.", status: 403 };
+  const record = await prisma.monthlyAdvanceRecord.findUnique({
+    where: { id },
+    include: monthlyAdvanceInclude
+  });
+  if (!record || record.status === "REMOVED") return { error: "Registro de adiantamento não encontrado.", status: 404 };
+
+  const removed = await prisma.monthlyAdvanceRecord.update({
+    where: { id },
+    data: {
+      status: "REMOVED",
+      updatedById: user.id,
+      observation: record.observation ? `${record.observation}\nRegistro removido da lista ativa.` : "Registro removido da lista ativa."
+    },
+    include: monthlyAdvanceInclude
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      actorId: user.id,
+      action: "EXCLUSAO",
+      entity: "MonthlyAdvanceRecord",
+      entityId: record.id,
+      reason: "ADVANCE_RECORD_REMOVED",
+      previousValue: {
+        employeeId: record.employeeId,
+        referenceMonth: record.referenceMonth,
+        optIn: record.optIn,
+        amount: Number(record.amount),
+        hasDiscount: record.hasDiscount,
+        discountAmount: record.discountAmount != null ? Number(record.discountAmount) : null,
+        finalAmount: Number(record.finalAmount),
+        status: record.status
+      },
+      newValue: { status: "REMOVED", action: "ADVANCE_RECORD_REMOVED" }
+    }
+  });
+
+  return { data: mapMonthlyAdvanceRecord(removed) };
 }
 
 export async function commitMonthlyAdvanceImport(actor: Actor, rows: Array<Record<string, unknown>>, fallbackReferenceMonth?: string) {
@@ -550,7 +620,7 @@ export async function createMonthlyAdvanceChangeRequest(actor: Actor, input: {
   const current = await prisma.monthlyAdvanceRecord.findUnique({
     where: { employeeId_referenceMonth: { employeeId: employee.id, referenceMonth } }
   });
-  if (!current) return { error: "Responda o adiantamento mensal diretamente antes de abrir solicitação de alteração.", status: 400 };
+  if (!current || current.status === "REMOVED") return { error: "Responda o adiantamento mensal diretamente antes de abrir solicitação de alteração.", status: 400 };
 
   const duplicate = await prisma.request.findFirst({
     where: {
@@ -806,12 +876,12 @@ async function resolveEmployeeForUser(user: ActiveUser) {
 async function findEmployeeByWbLogin(wbLogin: string | undefined) {
   const normalized = normalizeWbLogin(wbLogin);
   if (!normalized) return null;
-  const employees = await prisma.employeeProfile.findMany({ where: { deletedAt: null }, include: employeeInclude });
-  return employees.find((employee) => normalizeWbLogin(employee.wbLogin) === normalized) ?? null;
+  const employees = await findEmployeesByNormalizedWbLogins([normalized]);
+  return employees[0] ?? null;
 }
 
 function canViewMonthlyAdvance(role: string) {
-  return ["ADMIN", "GESTOR", "WFM", "RH", "HR", "COLABORADOR"].includes(role);
+  return ["ADMIN", "GESTOR", "WFM", "COLABORADOR"].includes(role);
 }
 
 function canManageMonthlyAdvance(role: string) {
@@ -819,7 +889,11 @@ function canManageMonthlyAdvance(role: string) {
 }
 
 function canExportMonthlyAdvance(role: string) {
-  return ["ADMIN", "GESTOR", "WFM", "RH", "HR"].includes(role);
+  return ["ADMIN", "GESTOR", "WFM"].includes(role);
+}
+
+function canDeleteMonthlyAdvance(role: string) {
+  return ["ADMIN", "GESTOR", "WFM"].includes(role);
 }
 
 function formatMonthParts(year: number, month: number) {
@@ -857,6 +931,34 @@ function normalizeObjectKeys(raw: Record<string, unknown>) {
       value
     ])
   );
+}
+
+function importRowWbLogin(raw: Record<string, unknown>) {
+  const normalizedRaw = normalizeObjectKeys(raw);
+  return normalizedRaw.wb_login ?? normalizedRaw.login ?? normalizedRaw.wblogin ?? "";
+}
+
+async function findEmployeesByNormalizedWbLogins(normalizedWbLogins: string[]) {
+  if (!normalizedWbLogins.length) return [];
+  const chunks = chunkArray(normalizedWbLogins, 500);
+  const results = await Promise.all(
+    chunks.map((chunk) =>
+      prisma.employeeProfile.findMany({
+        where: {
+          deletedAt: null,
+          OR: chunk.map((wbLogin) => ({ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }))
+        },
+        include: employeeInclude
+      })
+    )
+  );
+  return Array.from(new Map(results.flat().map((employee) => [employee.id, employee])).values());
+}
+
+function chunkArray<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
+  return chunks;
 }
 
 async function nextRequestCode(tx: Prisma.TransactionClient) {

@@ -11,6 +11,7 @@ export async function GET(request: Request) {
     lob: url.searchParams.get("lob") ?? undefined,
     supervisorId: url.searchParams.get("supervisorId") ?? undefined,
     optIn: url.searchParams.get("optIn") ?? undefined,
+    hasDiscount: url.searchParams.get("hasDiscount") ?? undefined,
     search: url.searchParams.get("search") ?? undefined
   });
   if ("error" in result) return NextResponse.json({ error: result.error, message: result.error }, { status: result.status ?? 400 });

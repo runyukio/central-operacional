@@ -781,10 +781,7 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
   });
 
   const wbLogins = Array.from(new Set(normalizedRows.map((row) => row.normalizedWbLogin).filter(Boolean)));
-  const employees = await prisma.employeeProfile.findMany({
-    where: { deletedAt: null },
-    include: { lob: true, supervisor: true, shift: true }
-  });
+  const employees = wbLogins.length ? await findWorkHourEmployeesByWbLoginBatch(wbLogins) : [];
   const employeeMap = new Map(employees.map((employee) => [normalizeWbLogin(employee.wbLogin), employee]));
   const missingWbLogins = wbLogins.filter((wbLogin) => !employeeMap.has(wbLogin));
   console.info("[work-hours-import:validation]", {
@@ -1214,6 +1211,22 @@ function chunkArray<T>(items: T[], size: number) {
   const chunks: T[][] = [];
   for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
   return chunks;
+}
+
+async function findWorkHourEmployeesByWbLoginBatch(normalizedWbLogins: string[]) {
+  const chunks = chunkArray(normalizedWbLogins, 500);
+  const results = await Promise.all(
+    chunks.map((chunk) =>
+      prisma.employeeProfile.findMany({
+        where: {
+          deletedAt: null,
+          OR: chunk.map((wbLogin) => ({ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }))
+        },
+        include: { lob: true, supervisor: true, shift: true }
+      })
+    )
+  );
+  return Array.from(new Map(results.flat().map((employee) => [employee.id, employee])).values());
 }
 
 function roundHours(value: number) {

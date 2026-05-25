@@ -1486,7 +1486,7 @@ function attendanceReasonForSchedule(status: ScheduleStatus | AttendanceStatus |
 async function validateImportRowsInDb(rows: Array<Record<string, unknown>>): Promise<ScheduleImportValidation[]> {
   const duplicateKeys = new Map<string, number>();
   const normalizedRows = rows.map((row, index) => {
-    const wbLogin = text(row.wb_login).toUpperCase();
+    const wbLogin = normalizeWbLoginForImport(row.wb_login);
     const parsedDate = parseImportDate(row.data);
     const key = wbLogin && parsedDate ? `${wbLogin}:${parsedDate.getTime()}` : "";
     if (key) duplicateKeys.set(key, (duplicateKeys.get(key) ?? 0) + 1);
@@ -1496,15 +1496,12 @@ async function validateImportRowsInDb(rows: Array<Record<string, unknown>>): Pro
   const dates = Array.from(new Set(normalizedRows.map((row) => row.parsedDate?.getTime()).filter((value): value is number => Boolean(value)))).map((value) => new Date(value));
   const [employees, shifts, lobs] = await Promise.all([
     wbLogins.length
-      ? prisma.employeeProfile.findMany({
-        where: { deletedAt: null },
-        include: { shift: true, lob: true, supervisor: { select: { id: true, wbLogin: true, fullName: true } } }
-      })
+      ? findEmployeesByWbLoginBatch(wbLogins)
       : Promise.resolve([]),
     prisma.shift.findMany(),
     prisma.lob.findMany({ select: { id: true, name: true } })
   ]);
-  const employeeMap = new Map(employees.map((employee) => [employee.wbLogin.toUpperCase(), employee]));
+  const employeeMap = new Map(employees.map((employee) => [normalizeWbLoginForImport(employee.wbLogin), employee]));
   const employeeIds = employees.map((employee) => employee.id);
   const existingSchedules = employeeIds.length && dates.length
     ? await prisma.schedule.findMany({
@@ -2236,6 +2233,32 @@ function text(value: unknown) {
 
 function normalizeImportKey(value: string) {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toUpperCase().replace(/[\s/-]+/g, "_");
+}
+
+function normalizeWbLoginForImport(value: unknown) {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\u00A0/g, " ")
+    .trim()
+    .replace(/\s+/g, "")
+    .toLowerCase();
+}
+
+async function findEmployeesByWbLoginBatch(normalizedWbLogins: string[]) {
+  const chunks = chunkArray(normalizedWbLogins, 500);
+  const results = await Promise.all(
+    chunks.map((chunk) =>
+      prisma.employeeProfile.findMany({
+        where: {
+          deletedAt: null,
+          OR: chunk.map((wbLogin) => ({ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }))
+        },
+        include: { shift: true, lob: true, supervisor: { select: { id: true, wbLogin: true, fullName: true } } }
+      })
+    )
+  );
+  return Array.from(new Map(results.flat().map((employee) => [employee.id, employee])).values());
 }
 
 function chunkArray<T>(items: T[], size: number) {

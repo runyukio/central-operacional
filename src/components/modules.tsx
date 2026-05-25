@@ -101,7 +101,7 @@ const workHourImportColumns = ["wb_login", "data", "horas_realizadas", "sistema_
 const scheduleStatusOptions = ["Escalado", "Presente", "Nesting", "Falta", "Atraso", "Saída antecipada", "Afastado", "Férias", "Treinamento", "Folga", "Troca aprovada", "Venda de folga aprovada", "Folga aprovada", "Desligado", "Sem cronograma", "Erro de cronograma"] as const;
 const attendanceReasonStatuses = ["Falta", "Atraso", "Saída antecipada", "Erro de cronograma"];
 const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Nesting", "Venda de folga aprovada"];
-const employeeOperationalStatusOptions = ["Ativo", "Nesting", "Inativo", "Pendente de cadastro", "Afastado", "Desligado", "Em treinamento", "Suspenso", "Online", "Em Atendimento", "Offline"];
+const employeeOperationalStatusOptions = ["Ativo", "Nesting", "Inativo", "Pendente de cadastro", "Afastado", "Desligado", "Em treinamento", "Suspenso"];
 const absenceReasonOptions = ["Ausente", "Problema de saúde", "Emergência familiar", "Problema técnico", "Falta de equipamento", "Problema de internet", "Atraso", "Saída antecipada", "Afastamento", "Erro de cronograma", "Outros"];
 const timeBlockCategoryOptions = ["Administrativo", "Desenvolvimento", "Acompanhamento de operação", "Feedback", "Reunião", "Treinamento", "Suporte ao time", "Análise de indicadores", "Escalonamento / Ocorrência", "Pausa", "Outros"];
 const scheduleShiftTimes: Record<string, { startsAt: string; endsAt: string }> = {
@@ -367,7 +367,7 @@ type MonthlyAdvanceCycle = {
 
 type MonthlyAdvanceListResponse = {
   data: MonthlyAdvanceRecordClient[];
-  summary: { total: number; optIn: number; optOut: number; amount: number; finalAmount: number };
+  summary: { total: number; optIn: number; optOut: number; hasDiscount: number; amount: number; finalAmount: number };
   page: number;
   limit: number;
   total: number;
@@ -376,6 +376,10 @@ type MonthlyAdvanceListResponse = {
   canManage: boolean;
   canExport: boolean;
 };
+
+function employeeMapStatusLabel(status: string) {
+  return ["Online", "Em Atendimento", "Em atendimento", "Offline"].includes(status) ? "Ativo" : status;
+}
 
 type MonthlyAdvanceImportPreview = {
   totalRows: number;
@@ -914,6 +918,13 @@ function currentOperationalMonth() {
 function currentOperationalMonthInput() {
   const today = operationalTodayParts();
   return `${today.year}-${String(today.month).padStart(2, "0")}`;
+}
+
+function addMonthInput(value: string, delta: number) {
+  const [year, month] = value.split("-").map(Number);
+  if (!year || !month) return value;
+  const date = new Date(Date.UTC(year, month - 1 + delta, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
 function currentOperationalDateInput() {
@@ -4071,12 +4082,10 @@ export function SchedulesPage() {
                     <td className="px-4 py-3">{row.employee.lob}</td>
                     {row.days.map((value, index) => {
                       const hourCell = row.workHours?.[index] ?? null;
-                      const dayShift = row.dayShifts?.[index] ?? "Sem turno";
                       return (
                         <td key={`${row.employee.id}-${index}`} className="px-2 py-3 text-center">
                           <button onClick={() => openScheduleEditor(row, index, value)} className={cn("inline-flex min-w-[92px] flex-col items-center justify-center rounded-md px-2 py-2 text-xs font-bold transition hover:ring-2 hover:ring-blue-200", shiftTagClass(value), hourCell?.rawStatus === "DIVERGENT" && "ring-1 ring-orange-300", hourCell?.rawStatus === "ADJUSTMENT_REQUESTED" && "ring-1 ring-amber-400")}>
                             <span>{value}</span>
-                            <span className="mt-1 rounded bg-white/70 px-1.5 py-0.5 text-[10px] font-extrabold text-navy-900">{dayShift}</span>
                             {hourCell ? (
                               <span className={cn("mt-1 rounded px-1.5 py-0.5 text-[10px]", hourCell.rawStatus === "OK" ? "bg-emerald-100 text-emerald-700" : hourCell.rawStatus === "DIVERGENT" ? "bg-orange-100 text-orange-700" : hourCell.rawStatus === "ADJUSTMENT_REQUESTED" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700")}>
                                 Real: {hourCell.effectiveHours}h {hourCell.differenceMinutes ? formatHourDifference(hourCell.differenceMinutes) : ""}
@@ -6297,6 +6306,359 @@ export function RequestsKanbanPage() {
   );
 }
 
+export function AdvanceManagementPage() {
+  const { data: session } = useSession();
+  const [settings, setSettings] = useState<SystemSettings | null>(null);
+  const [message, setMessage] = useState("");
+  const [advanceRows, setAdvanceRows] = useState<MonthlyAdvanceRecordClient[]>([]);
+  const [advanceSummary, setAdvanceSummary] = useState<MonthlyAdvanceListResponse["summary"] | null>(null);
+  const [advanceReferenceMonth, setAdvanceReferenceMonth] = useState(() => currentOperationalMonthInput());
+  const [lobFilter, setLobFilter] = useState("Todos");
+  const [supervisorFilter, setSupervisorFilter] = useState("Todos");
+  const [advanceOptInFilter, setAdvanceOptInFilter] = useState("Todos");
+  const [advanceDiscountFilter, setAdvanceDiscountFilter] = useState("Todos");
+  const [advanceSearch, setAdvanceSearch] = useState("");
+  const [advanceLoading, setAdvanceLoading] = useState(false);
+  const [advanceImportRows, setAdvanceImportRows] = useState<Array<Record<string, unknown>>>([]);
+  const [advancePreview, setAdvancePreview] = useState<MonthlyAdvanceImportPreview | null>(null);
+  const [advanceImporting, setAdvanceImporting] = useState(false);
+  const [advanceEditingId, setAdvanceEditingId] = useState("");
+  const normalizedRole = String(session?.user?.role ?? "").toUpperCase();
+  const canManageMonthlyAdvance = ["ADMIN", "WFM", "GESTOR", "MANAGEMENT"].includes(normalizedRole);
+  const canDeleteMonthlyAdvance = canManageMonthlyAdvance;
+  const lobs = ["Todos", ...(settings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? [])];
+  const supervisors = settings?.supervisors?.filter((supervisor) => supervisor.status !== "INACTIVE") ?? [];
+  const currentMonth = currentOperationalMonthInput();
+  const nextMonth = addMonthInput(currentMonth, 1);
+
+  useEffect(() => {
+    void loadMonthlyAdvances();
+    apiJson<{ data: SystemSettings }>("/api/settings")
+      .then((payload) => setSettings(payload.data))
+      .catch(() => setSettings(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function loadMonthlyAdvances(options?: { nextReferenceMonth?: string; nextLob?: string; nextSupervisor?: string; nextOptIn?: string; nextDiscount?: string; nextSearch?: string }) {
+    setAdvanceLoading(true);
+    const nextReferenceMonth = options?.nextReferenceMonth ?? advanceReferenceMonth;
+    const nextLob = options?.nextLob ?? lobFilter;
+    const nextSupervisor = options?.nextSupervisor ?? supervisorFilter;
+    const nextOptIn = options?.nextOptIn ?? advanceOptInFilter;
+    const nextDiscount = options?.nextDiscount ?? advanceDiscountFilter;
+    const nextSearch = options?.nextSearch ?? advanceSearch;
+    const params = new URLSearchParams({ referenceMonth: nextReferenceMonth, limit: "100" });
+    if (nextLob !== "Todos") params.set("lob", nextLob);
+    if (nextSupervisor !== "Todos") params.set("supervisorId", nextSupervisor);
+    if (nextOptIn !== "Todos") params.set("optIn", nextOptIn);
+    if (nextDiscount !== "Todos") params.set("hasDiscount", nextDiscount);
+    if (nextSearch.trim()) params.set("search", nextSearch.trim());
+    try {
+      const payload = await apiJson<MonthlyAdvanceListResponse>(`/api/monthly-advance?${params.toString()}`);
+      setAdvanceRows(payload.data);
+      setAdvanceSummary(payload.summary);
+    } catch (error) {
+      setAdvanceRows([]);
+      setAdvanceSummary(null);
+      setMessage(error instanceof Error ? error.message : "Não foi possível carregar adiantamento mensal.");
+    } finally {
+      setAdvanceLoading(false);
+    }
+  }
+
+  async function previewMonthlyAdvanceImport(file: File | null) {
+    if (!file || advanceImporting || !canManageMonthlyAdvance) return;
+    setAdvanceImporting(true);
+    setMessage("");
+    try {
+      const workbook = XLSX.read(await file.arrayBuffer());
+      const sheetName = workbook.SheetNames.find((name) => /adiantamento/i.test(name)) ?? workbook.SheetNames[0];
+      const rows = sheetName ? XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[sheetName], { defval: "" }) : [];
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("referenceMonth", advanceReferenceMonth);
+      const payload = await apiJson<MonthlyAdvanceImportPreview>("/api/monthly-advance/import/preview", { method: "POST", body: formData });
+      setAdvanceImportRows(rows);
+      setAdvancePreview(payload);
+      setMessage(payload.errorRows ? "Preview do adiantamento gerado com linhas para revisar." : "Preview do adiantamento gerado sem erros.");
+    } catch (error) {
+      setAdvancePreview(null);
+      setAdvanceImportRows([]);
+      setMessage(error instanceof Error ? error.message : "Não foi possível validar o arquivo de adiantamento.");
+    } finally {
+      setAdvanceImporting(false);
+    }
+  }
+
+  async function commitMonthlyAdvanceImport() {
+    if (!advancePreview || advanceImporting || !canManageMonthlyAdvance) return;
+    setAdvanceImporting(true);
+    setMessage("");
+    try {
+      const payload = await apiJson<{ data: { importedRows: number; createdRows: number; updatedRows: number } }>("/api/monthly-advance/import/commit", {
+        method: "POST",
+        body: JSON.stringify({ rows: advanceImportRows, referenceMonth: advanceReferenceMonth })
+      });
+      setMessage(`Adiantamento importado: ${payload.data.importedRows} linha(s), ${payload.data.createdRows} criada(s), ${payload.data.updatedRows} atualizada(s).`);
+      setAdvancePreview(null);
+      setAdvanceImportRows([]);
+      await loadMonthlyAdvances();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível importar adiantamento mensal.");
+    } finally {
+      setAdvanceImporting(false);
+    }
+  }
+
+  async function editMonthlyAdvance(record: MonthlyAdvanceRecordClient, discountOverride?: { hasDiscount: boolean; discountAmount?: number; discountReason?: string }) {
+    if (!canManageMonthlyAdvance || advanceEditingId) return;
+    let optIn = record.optIn;
+    let amount: string | number = record.amount;
+    let observation = record.observation ?? "";
+    let hasDiscount = record.hasDiscount;
+    let discountAmount: string | number | undefined = record.discountAmount ?? undefined;
+    let discountReason = record.discountReason ?? "";
+
+    if (discountOverride) {
+      hasDiscount = discountOverride.hasDiscount;
+      discountAmount = discountOverride.discountAmount ?? undefined;
+      discountReason = discountOverride.discountReason ?? "";
+    } else {
+      const optInAnswer = window.prompt("Aderente? Digite Sim ou Não.", record.optIn ? "Sim" : "Não");
+      if (!optInAnswer) return;
+      const normalizedOptIn = optInAnswer.trim().toLowerCase();
+      if (!["sim", "s", "true", "1", "não", "nao", "n", "false", "0"].includes(normalizedOptIn)) {
+        setMessage("Aderente deve ser Sim ou Não.");
+        return;
+      }
+      optIn = ["sim", "s", "true", "1"].includes(normalizedOptIn);
+      const amountAnswer = window.prompt("Valor do adiantamento.", String(record.amount).replace(".", ","));
+      if (!amountAnswer) return;
+      amount = amountAnswer;
+      const discountAnswer = window.prompt("Possui desconto? Digite Sim ou Não.", record.hasDiscount ? "Sim" : "Não");
+      if (!discountAnswer) return;
+      const normalizedDiscount = discountAnswer.trim().toLowerCase();
+      hasDiscount = ["sim", "s", "true", "1"].includes(normalizedDiscount);
+      if (hasDiscount) {
+        const discountValue = window.prompt("Valor do desconto.", String(record.discountAmount ?? 0).replace(".", ","));
+        if (!discountValue) return;
+        discountAmount = discountValue;
+        discountReason = window.prompt("Motivo do desconto.", record.discountReason ?? "") ?? "";
+      } else {
+        discountAmount = undefined;
+        discountReason = "";
+      }
+      observation = window.prompt("Observação opcional.", record.observation ?? "") ?? "";
+    }
+
+    setAdvanceEditingId(record.id);
+    try {
+      await apiJson<{ data: MonthlyAdvanceRecordClient }>("/api/monthly-advance", {
+        method: "PATCH",
+        body: JSON.stringify({
+          employeeId: record.employeeId,
+          referenceMonth: record.referenceMonth,
+          optIn,
+          amount,
+          hasDiscount,
+          discountAmount,
+          discountReason,
+          observation
+        })
+      });
+      setMessage("Adiantamento mensal atualizado.");
+      await loadMonthlyAdvances();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível atualizar adiantamento mensal.");
+    } finally {
+      setAdvanceEditingId("");
+    }
+  }
+
+  async function applyDiscount(record: MonthlyAdvanceRecordClient) {
+    const discountValue = window.prompt("Valor do desconto.", String(record.discountAmount ?? 0).replace(".", ","));
+    if (!discountValue) return;
+    const parsed = Number(discountValue.replace(",", "."));
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      setMessage("Valor de desconto inválido.");
+      return;
+    }
+    const reason = window.prompt("Motivo do desconto.", record.discountReason ?? "") ?? "";
+    await editMonthlyAdvance(record, { hasDiscount: true, discountAmount: parsed, discountReason: reason });
+  }
+
+  async function removeDiscount(record: MonthlyAdvanceRecordClient) {
+    await editMonthlyAdvance(record, { hasDiscount: false });
+  }
+
+  async function removeMonthlyAdvanceRecord(record: MonthlyAdvanceRecordClient) {
+    if (!canDeleteMonthlyAdvance || advanceEditingId) return;
+    if (!window.confirm("Tem certeza que deseja remover este registro de adiantamento? Esta ação não altera dados do colaborador.")) return;
+    setAdvanceEditingId(record.id);
+    try {
+      await apiJson<{ data: MonthlyAdvanceRecordClient }>("/api/monthly-advance", {
+        method: "DELETE",
+        body: JSON.stringify({ id: record.id })
+      });
+      setMessage("Registro de adiantamento removido.");
+      await loadMonthlyAdvances();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível remover adiantamento mensal.");
+    } finally {
+      setAdvanceEditingId("");
+    }
+  }
+
+  function exportMonthlyAdvanceCsv(referenceMonth = advanceReferenceMonth) {
+    const params = new URLSearchParams({ referenceMonth });
+    if (lobFilter !== "Todos") params.set("lob", lobFilter);
+    if (supervisorFilter !== "Todos") params.set("supervisorId", supervisorFilter);
+    if (advanceOptInFilter !== "Todos") params.set("optIn", advanceOptInFilter);
+    if (advanceDiscountFilter !== "Todos") params.set("hasDiscount", advanceDiscountFilter);
+    if (advanceSearch.trim()) params.set("search", advanceSearch.trim());
+    window.location.href = `/api/monthly-advance/export?${params.toString()}`;
+  }
+
+  return (
+    <div>
+      <PageHeader
+        title="Adiantamento"
+        description="Gestão mensal de adesão, valores e exportações para operação financeira."
+        icon={Coins}
+        actions={(
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => exportMonthlyAdvanceCsv(currentMonth)} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Exportar mês atual</button>
+            <button type="button" onClick={() => exportMonthlyAdvanceCsv(nextMonth)} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Exportar próximo mês</button>
+          </div>
+        )}
+      />
+      {message ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
+      <div className="space-y-5">
+        <Panel title="Filtros e importação">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
+            <FormInput label="Mês de referência" type="month" value={advanceReferenceMonth} onChange={setAdvanceReferenceMonth} />
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-bold text-muted">LOB</span>
+              <select value={lobFilter} onChange={(event) => setLobFilter(event.target.value)} className="h-11 w-full rounded-lg border border-border px-3 text-sm font-bold">
+                {lobs.map((lob) => <option key={lob} value={lob}>{lob === "Todos" ? "Todas as LOBs" : lob}</option>)}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-bold text-muted">Supervisor</span>
+              <select value={supervisorFilter} onChange={(event) => setSupervisorFilter(event.target.value)} className="h-11 w-full rounded-lg border border-border px-3 text-sm font-bold">
+                <option value="Todos">Todos</option>
+                <option value="SEM_SUPERVISOR">Sem supervisor</option>
+                {supervisors.map((supervisor) => <option key={supervisor.id} value={supervisor.id}>{supervisor.name}</option>)}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-bold text-muted">Aderente</span>
+              <select value={advanceOptInFilter} onChange={(event) => setAdvanceOptInFilter(event.target.value)} className="h-11 w-full rounded-lg border border-border px-3 text-sm font-bold">
+                <option value="Todos">Todos</option>
+                <option value="Sim">Sim</option>
+                <option value="Não">Não</option>
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-bold text-muted">Com desconto</span>
+              <select value={advanceDiscountFilter} onChange={(event) => setAdvanceDiscountFilter(event.target.value)} className="h-11 w-full rounded-lg border border-border px-3 text-sm font-bold">
+                <option value="Todos">Todos</option>
+                <option value="Sim">Sim</option>
+                <option value="Não">Não</option>
+              </select>
+            </label>
+            <FormInput label="Colaborador / WB/Login" value={advanceSearch} onChange={setAdvanceSearch} />
+            <div className="flex items-end gap-2">
+              <button type="button" onClick={() => loadMonthlyAdvances()} className="h-11 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white">Buscar</button>
+              <button type="button" onClick={() => exportMonthlyAdvanceCsv()} className="h-11 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950">Exportar filtros</button>
+            </div>
+          </div>
+          {canManageMonthlyAdvance ? (
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button type="button" onClick={() => downloadFile("/api/monthly-advance/template", "template_adiantamento_mensal.xlsx")} className="h-10 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950">Baixar template</button>
+              <label className="grid h-10 cursor-pointer place-items-center rounded-lg border border-blue-200 bg-blue-50 px-4 text-sm font-bold text-blue-700">
+                {advanceImporting ? "Importando..." : "Importar template"}
+                <input type="file" accept=".xlsx,.xls,.csv" className="hidden" disabled={advanceImporting} onChange={(event) => void previewMonthlyAdvanceImport(event.target.files?.[0] ?? null)} />
+              </label>
+            </div>
+          ) : null}
+        </Panel>
+
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <MetricPill value={advanceSummary?.optIn ?? 0} label="Total aderentes" />
+          <MetricPill value={advanceSummary?.optOut ?? 0} label="Total não aderentes" />
+          <MetricPill value={currencyFormatter.format(advanceSummary?.amount ?? 0)} label="Valor total previsto" />
+          <MetricPill value={advanceSummary?.hasDiscount ?? 0} label="Total com desconto" />
+          <MetricPill value={currencyFormatter.format(advanceSummary?.finalAmount ?? 0)} label="Valor final estimado" />
+        </div>
+
+        {advancePreview ? (
+          <Panel title="Preview da importação">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm font-bold text-blue-700">
+                Preview: {advancePreview.validRows} válida(s), {advancePreview.errorRows} com erro, {advancePreview.createdRows} criação(ões), {advancePreview.updatedRows} atualização(ões).
+              </p>
+              <div className="flex gap-2">
+                <button type="button" disabled={advanceImporting || !advancePreview.validRows} onClick={commitMonthlyAdvanceImport} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">Confirmar importação</button>
+                <button type="button" disabled={advanceImporting} onClick={() => { setAdvancePreview(null); setAdvanceImportRows([]); }} className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-bold text-navy-950 disabled:opacity-50">Cancelar</button>
+              </div>
+            </div>
+            <SimpleTable
+              columns={["Linha", "WB/Login", "Colaborador", "Mês", "Aderente", "Valor", "Ação", "Erros"]}
+              rows={advancePreview.rows.slice(0, 12).map((row) => [
+                row.rowNumber,
+                row.wbLogin || "-",
+                row.employeeName ?? "Não encontrado",
+                row.referenceMonth || "-",
+                row.optIn === null ? "-" : row.optIn ? "Sim" : "Não",
+                row.amount == null ? "-" : currencyFormatter.format(row.amount),
+                row.action === "update" ? "Atualizar" : "Criar",
+                row.errors.length ? <span key={`${row.rowNumber}-errors`} className="text-red-600">{row.errors.join(" ")}</span> : "OK"
+              ])}
+            />
+            {advancePreview.rows.length > 12 ? <p className="mt-2 text-xs font-semibold text-muted">Mostrando 12 de {advancePreview.rows.length} linhas do preview.</p> : null}
+          </Panel>
+        ) : null}
+
+        <Panel title="Registros de Adiantamento">
+          {advanceLoading ? (
+            <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm font-bold text-blue-700">Carregando adiantamento mensal...</div>
+          ) : advanceRows.length ? (
+            <SimpleTable
+              columns={["Mês", "Nome", "WB/Login", "E-mail", "LOB", "Supervisor", "Aderente", "Valor", "Desconto", "Valor final", "Observação", "Atualizado por", "Atualizado em", "Ações"]}
+              rows={advanceRows.map((record) => [
+                record.monthLabel,
+                record.employeeName,
+                record.wbLogin,
+                record.email ?? "-",
+                record.lob ?? "-",
+                record.supervisor,
+                <StatusBadge key={`${record.id}-opt`} status={record.optInLabel} />,
+                currencyFormatter.format(record.amount),
+                record.hasDiscount ? currencyFormatter.format(record.discountAmount ?? 0) : "Não",
+                currencyFormatter.format(record.finalAmount),
+                record.observation ?? "-",
+                record.updatedBy ?? "-",
+                record.updatedAt,
+                canManageMonthlyAdvance ? (
+                  <div key={`${record.id}-actions`} className="flex flex-wrap gap-1">
+                    <button disabled={advanceEditingId === record.id} onClick={() => editMonthlyAdvance(record)} className="rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-bold text-blue-700 disabled:opacity-50">Editar</button>
+                    <button disabled={advanceEditingId === record.id} onClick={() => applyDiscount(record)} className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-bold text-amber-700 disabled:opacity-50">Aplicar desconto</button>
+                    {record.hasDiscount ? <button disabled={advanceEditingId === record.id} onClick={() => removeDiscount(record)} className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-bold text-slate-700 disabled:opacity-50">Remover desconto</button> : null}
+                    {canDeleteMonthlyAdvance ? <button disabled={advanceEditingId === record.id} onClick={() => removeMonthlyAdvanceRecord(record)} className="rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs font-bold text-red-700 disabled:opacity-50">Excluir</button> : null}
+                  </div>
+                ) : "Visualizar"
+              ])}
+            />
+          ) : (
+            <EmptyState title="Nenhum adiantamento encontrado" description="Use os filtros ou importe o template para criar os registros mensais." />
+          )}
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
 export function EmployeeMapPage() {
   const { data: session } = useSession();
   const [query, setQuery] = useState("");
@@ -6345,18 +6707,8 @@ export function EmployeeMapPage() {
   const [showResetPassword, setShowResetPassword] = useState(false);
   const [resetPasswordForm, setResetPasswordForm] = useState({ password: "", confirmPassword: "" });
   const [resettingPassword, setResettingPassword] = useState(false);
-  const [advanceRows, setAdvanceRows] = useState<MonthlyAdvanceRecordClient[]>([]);
-  const [advanceSummary, setAdvanceSummary] = useState<MonthlyAdvanceListResponse["summary"] | null>(null);
-  const [advanceReferenceMonth, setAdvanceReferenceMonth] = useState(() => currentOperationalMonthInput());
-  const [advanceOptInFilter, setAdvanceOptInFilter] = useState("Todos");
-  const [advanceSearch, setAdvanceSearch] = useState("");
-  const [advanceLoading, setAdvanceLoading] = useState(false);
-  const [advanceImportRows, setAdvanceImportRows] = useState<Array<Record<string, unknown>>>([]);
-  const [advancePreview, setAdvancePreview] = useState<MonthlyAdvanceImportPreview | null>(null);
-  const [advanceImporting, setAdvanceImporting] = useState(false);
-  const [advanceEditingId, setAdvanceEditingId] = useState("");
   const employeeMapLobs = ["Todos", ...Array.from(new Set(employeeSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? employeeRows.map((employee) => employee.lob).filter(Boolean)))];
-  const employeeStatusOptions = ["Todos", "Ativos/Aprovados", "Nesting", "Pendentes", "Inativos", "Online", "Em Atendimento", "Offline"];
+  const employeeStatusOptions = ["Todos", "Ativos/Aprovados", "Nesting", "Pendentes", "Inativos"];
   const employeeSupervisorOptions = employeeSettings?.supervisors?.filter((supervisor) => supervisor.status !== "INACTIVE") ?? [];
   const employeeSkillOptions = ["Todos", "SEM_SKILL", ...employeeFilterOptions.skills.filter(Boolean)];
   const employeeWaveOptions = ["Todos", "SEM_WAVE", ...employeeFilterOptions.waves.filter(Boolean)];
@@ -6367,8 +6719,6 @@ export function EmployeeMapPage() {
   const canEditEmployeeOperational = ["ADMIN", "WFM", "RH", "HR", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
   const canEditOperationalBindings = ["ADMIN", "WFM", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
   const canEditPeopleData = ["ADMIN", "RH", "HR", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
-  const canViewMonthlyAdvance = ["ADMIN", "WFM", "RH", "HR", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
-  const canManageMonthlyAdvance = ["ADMIN", "WFM", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
   const employeeLobOptions = employeeSettings?.lobs.filter((lob) => lob.status !== "INACTIVE") ?? [];
   const employeeTeamOptions = employeeSettings?.teams?.filter((team) => team.status !== "INACTIVE" && (!lobDraft || team.lobId === lobDraft || team.lob === "ALL")) ?? [];
   const employeeShiftOptions = employeeSettings?.shifts.filter((shift) => shift.status !== "INACTIVE" && isSelectableShiftName(shift.name)) ?? [];
@@ -6379,7 +6729,6 @@ export function EmployeeMapPage() {
 
   useEffect(() => {
     void loadEmployees();
-    if (canViewMonthlyAdvance) void loadMonthlyAdvances();
     apiJson<{ data: SystemSettings }>("/api/settings")
       .then((payload) => setEmployeeSettings(payload.data))
       .catch(() => setEmployeeSettings(null));
@@ -6430,118 +6779,6 @@ export function EmployeeMapPage() {
     }
   }
 
-  async function loadMonthlyAdvances(options?: { nextReferenceMonth?: string; nextLob?: string; nextSupervisor?: string; nextOptIn?: string; nextSearch?: string }) {
-    if (!canViewMonthlyAdvance) return;
-    setAdvanceLoading(true);
-    const nextReferenceMonth = options?.nextReferenceMonth ?? advanceReferenceMonth;
-    const nextLob = options?.nextLob ?? lobFilter;
-    const nextSupervisor = options?.nextSupervisor ?? supervisorFilter;
-    const nextOptIn = options?.nextOptIn ?? advanceOptInFilter;
-    const nextSearch = options?.nextSearch ?? advanceSearch;
-    const params = new URLSearchParams({ referenceMonth: nextReferenceMonth, limit: "100" });
-    if (nextLob !== "Todos") params.set("lob", nextLob);
-    if (nextSupervisor !== "Todos") params.set("supervisorId", nextSupervisor);
-    if (nextOptIn !== "Todos") params.set("optIn", nextOptIn);
-    if (nextSearch.trim()) params.set("search", nextSearch.trim());
-    try {
-      const payload = await apiJson<MonthlyAdvanceListResponse>(`/api/monthly-advance?${params.toString()}`);
-      setAdvanceRows(payload.data);
-      setAdvanceSummary(payload.summary);
-    } catch (error) {
-      setAdvanceRows([]);
-      setAdvanceSummary(null);
-      setEmployeeMessage(error instanceof Error ? error.message : "Não foi possível carregar adiantamento mensal.");
-    } finally {
-      setAdvanceLoading(false);
-    }
-  }
-
-  async function previewMonthlyAdvanceImport(file: File | null) {
-    if (!file || advanceImporting) return;
-    setAdvanceImporting(true);
-    setEmployeeMessage("");
-    try {
-      const workbook = XLSX.read(await file.arrayBuffer());
-      const sheetName = workbook.SheetNames.find((name) => /adiantamento/i.test(name)) ?? workbook.SheetNames[0];
-      const rows = sheetName ? XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[sheetName], { defval: "" }) : [];
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("referenceMonth", advanceReferenceMonth);
-      const payload = await apiJson<MonthlyAdvanceImportPreview>("/api/monthly-advance/import/preview", { method: "POST", body: formData });
-      setAdvanceImportRows(rows);
-      setAdvancePreview(payload);
-      setEmployeeMessage(payload.errorRows ? "Preview do adiantamento gerado com linhas para revisar." : "Preview do adiantamento gerado sem erros.");
-    } catch (error) {
-      setAdvancePreview(null);
-      setAdvanceImportRows([]);
-      setEmployeeMessage(error instanceof Error ? error.message : "Não foi possível validar o arquivo de adiantamento.");
-    } finally {
-      setAdvanceImporting(false);
-    }
-  }
-
-  async function commitMonthlyAdvanceImport() {
-    if (!advancePreview || advanceImporting) return;
-    setAdvanceImporting(true);
-    setEmployeeMessage("");
-    try {
-      const payload = await apiJson<{ data: { importedRows: number; createdRows: number; updatedRows: number } }>("/api/monthly-advance/import/commit", {
-        method: "POST",
-        body: JSON.stringify({ rows: advanceImportRows, referenceMonth: advanceReferenceMonth })
-      });
-      setEmployeeMessage(`Adiantamento importado: ${payload.data.importedRows} linha(s), ${payload.data.createdRows} criada(s), ${payload.data.updatedRows} atualizada(s).`);
-      setAdvancePreview(null);
-      setAdvanceImportRows([]);
-      await loadMonthlyAdvances();
-    } catch (error) {
-      setEmployeeMessage(error instanceof Error ? error.message : "Não foi possível importar adiantamento mensal.");
-    } finally {
-      setAdvanceImporting(false);
-    }
-  }
-
-  async function editMonthlyAdvance(record: MonthlyAdvanceRecordClient) {
-    if (!canManageMonthlyAdvance || advanceEditingId) return;
-    const optInAnswer = window.prompt("Aderente? Digite Sim ou Não.", record.optIn ? "Sim" : "Não");
-    if (!optInAnswer) return;
-    const normalizedOptIn = optInAnswer.trim().toLowerCase();
-    if (!["sim", "s", "true", "1", "não", "nao", "n", "false", "0"].includes(normalizedOptIn)) {
-      setEmployeeMessage("Aderente deve ser Sim ou Não.");
-      return;
-    }
-    const amountAnswer = window.prompt("Valor do adiantamento.", String(record.amount).replace(".", ","));
-    if (!amountAnswer) return;
-    const observation = window.prompt("Observação opcional.", record.observation ?? "") ?? "";
-    setAdvanceEditingId(record.id);
-    try {
-      await apiJson<{ data: MonthlyAdvanceRecordClient }>("/api/monthly-advance", {
-        method: "PATCH",
-        body: JSON.stringify({
-          employeeId: record.employeeId,
-          referenceMonth: record.referenceMonth,
-          optIn: ["sim", "s", "true", "1"].includes(normalizedOptIn),
-          amount: amountAnswer,
-          observation
-        })
-      });
-      setEmployeeMessage("Adiantamento mensal atualizado.");
-      await loadMonthlyAdvances();
-    } catch (error) {
-      setEmployeeMessage(error instanceof Error ? error.message : "Não foi possível atualizar adiantamento mensal.");
-    } finally {
-      setAdvanceEditingId("");
-    }
-  }
-
-  function exportMonthlyAdvanceCsv() {
-    const params = new URLSearchParams({ referenceMonth: advanceReferenceMonth });
-    if (lobFilter !== "Todos") params.set("lob", lobFilter);
-    if (supervisorFilter !== "Todos") params.set("supervisorId", supervisorFilter);
-    if (advanceOptInFilter !== "Todos") params.set("optIn", advanceOptInFilter);
-    if (advanceSearch.trim()) params.set("search", advanceSearch.trim());
-    window.location.href = `/api/monthly-advance/export?${params.toString()}`;
-  }
-
   async function selectEmployee(employee: EmployeeClient) {
     setSelected(employee);
     setSelectedEmployeeLoading(true);
@@ -6565,7 +6802,7 @@ export function EmployeeMapPage() {
     setUserStatusDraft(selected.userStatus ?? "ACTIVE");
     setWbDraft(selected.wb ?? "");
     setRoleTitleDraft(selected.role ?? "");
-    setStatusDraft(selected.status ?? "");
+    setStatusDraft(employeeMapStatusLabel(selected.status ?? ""));
     setRoleDraft(selected.systemRole ?? "COLABORADOR");
     setSkillDraft(selected.skill ?? "");
     setWaveDraft(selected.wave ?? "");
@@ -6671,7 +6908,7 @@ export function EmployeeMapPage() {
 
   return (
     <div>
-      <PageHeader title="Mapa de Funcionários" description="Monitore presença, status e dados operacionais da sua equipe" icon={UsersRound} actions={<button onClick={exportEmployeesCsv} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Exportar CSV</button>} />
+      <PageHeader title="Funcionários" description="Base operacional de colaboradores, vínculos e informações cadastrais." icon={UsersRound} actions={<button onClick={exportEmployeesCsv} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Exportar CSV</button>} />
       {employeeMessage ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{employeeMessage}</div> : null}
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="space-y-5">
@@ -6705,96 +6942,7 @@ export function EmployeeMapPage() {
           </div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <MetricPill value={employeePagination.total} label="Total encontrado" />
-            <MetricPill value={employeeRows.filter((employee) => employee.status === "Online").length} label="Online na página" />
-            <MetricPill value={employeeRows.filter((employee) => employee.status === "Em Atendimento").length} label="Em atendimento na página" />
-            <MetricPill value={employeeRows.filter((employee) => employee.status === "Offline").length} label="Offline na página" />
           </div>
-          {canViewMonthlyAdvance ? (
-            <Panel title="Adiantamento">
-              <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-                <FormInput label="Mês" type="month" value={advanceReferenceMonth} onChange={setAdvanceReferenceMonth} />
-                <label className="block">
-                  <span className="mb-1.5 block text-sm font-bold text-muted">Aderente</span>
-                  <select value={advanceOptInFilter} onChange={(event) => setAdvanceOptInFilter(event.target.value)} className="h-11 w-full rounded-lg border border-border px-3 text-sm font-bold">
-                    <option value="Todos">Todos</option>
-                    <option value="Sim">Sim</option>
-                    <option value="Não">Não</option>
-                  </select>
-                </label>
-                <FormInput label="Buscar" value={advanceSearch} onChange={setAdvanceSearch} />
-                <div className="flex items-end gap-2 xl:col-span-3">
-                  <button type="button" onClick={() => loadMonthlyAdvances()} className="h-11 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white">Buscar</button>
-                  <button type="button" onClick={exportMonthlyAdvanceCsv} className="h-11 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950">Exportar filtros</button>
-                  {canManageMonthlyAdvance ? (
-                    <>
-                      <button type="button" onClick={() => downloadFile("/api/monthly-advance/template", "template_adiantamento_mensal.xlsx")} className="h-11 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950">Baixar template</button>
-                      <label className="grid h-11 cursor-pointer place-items-center rounded-lg border border-blue-200 bg-blue-50 px-4 text-sm font-bold text-blue-700">
-                        {advanceImporting ? "Importando..." : "Importar"}
-                        <input type="file" accept=".xlsx,.xls,.csv" className="hidden" disabled={advanceImporting} onChange={(event) => void previewMonthlyAdvanceImport(event.target.files?.[0] ?? null)} />
-                      </label>
-                    </>
-                  ) : null}
-                </div>
-              </div>
-              <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                <MetricPill value={advanceSummary?.total ?? 0} label="Registros do mês" />
-                <MetricPill value={advanceSummary?.optIn ?? 0} label="Aderentes" />
-                <MetricPill value={advanceSummary?.optOut ?? 0} label="Não aderentes" />
-                <MetricPill value={currencyFormatter.format(advanceSummary?.finalAmount ?? 0)} label="Valor final" />
-              </div>
-              {advancePreview ? (
-                <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 p-3">
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                    <p className="text-sm font-bold text-blue-700">
-                      Preview: {advancePreview.validRows} válida(s), {advancePreview.errorRows} com erro, {advancePreview.createdRows} criação(ões), {advancePreview.updatedRows} atualização(ões).
-                    </p>
-                    <div className="flex gap-2">
-                      <button type="button" disabled={advanceImporting || !advancePreview.validRows} onClick={commitMonthlyAdvanceImport} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">Confirmar importação</button>
-                      <button type="button" disabled={advanceImporting} onClick={() => { setAdvancePreview(null); setAdvanceImportRows([]); }} className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-bold text-navy-950 disabled:opacity-50">Cancelar</button>
-                    </div>
-                  </div>
-                  <SimpleTable
-                    columns={["Linha", "WB/Login", "Colaborador", "Mês", "Aderente", "Valor", "Ação", "Erros"]}
-                    rows={advancePreview.rows.slice(0, 12).map((row) => [
-                      row.rowNumber,
-                      row.wbLogin || "-",
-                      row.employeeName ?? "Não encontrado",
-                      row.referenceMonth || "-",
-                      row.optIn === null ? "-" : row.optIn ? "Sim" : "Não",
-                      row.amount == null ? "-" : currencyFormatter.format(row.amount),
-                      row.action === "update" ? "Atualizar" : "Criar",
-                      row.errors.length ? <span key={`${row.rowNumber}-errors`} className="text-red-600">{row.errors.join(" ")}</span> : "OK"
-                    ])}
-                  />
-                  {advancePreview.rows.length > 12 ? <p className="mt-2 text-xs font-semibold text-muted">Mostrando 12 de {advancePreview.rows.length} linhas do preview.</p> : null}
-                </div>
-              ) : null}
-              {advanceLoading ? (
-                <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm font-bold text-blue-700">Carregando adiantamento mensal...</div>
-              ) : advanceRows.length ? (
-                <SimpleTable
-                  columns={["Mês", "Nome", "WB/Login", "LOB", "Supervisor", "Aderente", "Valor", "Atualizado por", "Ação"]}
-                  rows={advanceRows.map((record) => [
-                    record.monthLabel,
-                    record.employeeName,
-                    record.wbLogin,
-                    record.lob ?? "-",
-                    record.supervisor,
-                    <StatusBadge key={`${record.id}-opt`} status={record.optInLabel} />,
-                    currencyFormatter.format(record.finalAmount),
-                    record.updatedBy ?? "-",
-                    canManageMonthlyAdvance ? (
-                      <button key={`${record.id}-edit`} disabled={advanceEditingId === record.id} onClick={() => editMonthlyAdvance(record)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 disabled:opacity-50">
-                        {advanceEditingId === record.id ? "Salvando..." : "Editar"}
-                      </button>
-                    ) : "Visualizar"
-                  ])}
-                />
-              ) : (
-                <EmptyState title="Nenhum adiantamento encontrado" description="Use os filtros ou importe o template para criar os registros mensais." />
-              )}
-            </Panel>
-          ) : null}
           <Panel title="Funcionários">
             {employeeLoading ? (
               <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm font-bold text-blue-700">Carregando resumo dos colaboradores...</div>
@@ -6813,7 +6961,7 @@ export function EmployeeMapPage() {
                     employee.wave || "Sem wave",
                     <span key={`${employee.id}-supervisor`} className="block max-w-[160px] truncate" title={employee.supervisor}>{employee.supervisor}</span>,
                     cleanShiftName(employee.shift) || "-",
-                    <StatusBadge key={`${employee.id}-status`} status={employee.status} />,
+                    <StatusBadge key={`${employee.id}-status`} status={employeeMapStatusLabel(employee.status)} />,
                     <button key={`${employee.id}-action`} onClick={() => selectEmployee(employee)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">Ver detalhes</button>
                   ])}
                 />
@@ -6856,7 +7004,7 @@ export function EmployeeMapPage() {
                 <InfoLine label="Turno" value={cleanShiftName(selected.shift) || "-"} />
                 <InfoLine label="Cronograma" value={selected.schedule} />
                 <InfoLine label="Admissão" value={selected.admission} />
-                <InfoLine label="Status" value={selected.status} />
+                <InfoLine label="Status" value={employeeMapStatusLabel(selected.status)} />
               </div>
               <ProfileSection title="Dados Operacionais">
                 <div className="grid grid-cols-2 gap-3 text-sm">
@@ -6864,7 +7012,7 @@ export function EmployeeMapPage() {
                   <InfoLine label="LOB" value={selected.lob} />
                   <InfoLine label="Skill" value={selected.skill || "Sem skill"} />
                   <InfoLine label="Wave" value={selected.wave || "Sem wave"} />
-                  <InfoLine label="Status atual" value={<StatusBadge status={selected.status} />} />
+                  <InfoLine label="Status atual" value={<StatusBadge status={employeeMapStatusLabel(selected.status)} />} />
                   <InfoLine label="Supervisor vinculado" value={selected.supervisor} />
                   <InfoLine label="Última presença" value={selected.lastPresence ?? "Sem registro"} />
                   <InfoLine label="E-mail operacional" value={selected.email ?? "Restrito"} />

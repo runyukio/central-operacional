@@ -336,6 +336,13 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
     let usuariosCriados = 0;
     let registrosAtualizados = 0;
     let skillWaveUpdates = 0;
+    const existingProfilesByWb = new Map(
+      (await findEmployeeProfilesByWbLoginBatch(unique([
+        ...normalizedValidRows.map((row) => normalizeWbLoginForEmployeeImport(row.wbLogin)),
+        ...normalizedValidRows.map((row) => normalizeWbLoginForEmployeeImport(row.supervisorWbLogin))
+      ])))
+        .map((employee) => [normalizeWbLoginForEmployeeImport(employee.wbLogin), employee])
+    );
 
     for (const row of normalizedValidRows) {
       const role = await prisma.role.findUniqueOrThrow({ where: { name: row.roleName } });
@@ -347,7 +354,10 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
       const birthDate = row.birthDate ?? row.admissionDate ?? row.trainingStartDate ?? importDateFallback;
       const trainingStartDate = row.trainingStartDate ?? row.admissionDate ?? importDateFallback;
       const admissionDate = row.admissionDate ?? row.trainingStartDate ?? importDateFallback;
-      const supervisor = await findSupervisorForImport(prisma, row.supervisorWbLogin, row.supervisorEmail, row.supervisorName);
+      const supervisorFromWb = row.supervisorWbLogin ? existingProfilesByWb.get(normalizeWbLoginForEmployeeImport(row.supervisorWbLogin)) ?? null : null;
+      const supervisor = supervisorFromWb && supervisorFromWb.user && ["SUPERVISOR", "ADMIN"].includes(supervisorFromWb.user.role.name)
+        ? supervisorFromWb
+        : await findSupervisorForImport(prisma, "", row.supervisorEmail, row.supervisorName);
       const team = await prisma.team.upsert({
         where: { name_lobId: { name: row.teamName || (supervisor?.fullName ? `Time ${supervisor.fullName}` : "Time Inicial"), lobId: lob.id } },
         update: { supervisorId: supervisor?.id },
@@ -476,7 +486,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
           usuariosCriados += existingUser ? 0 : 1;
         }
 
-        const existingByWb = await prisma.employeeProfile.findUnique({ where: { wbLogin: row.wbLogin } });
+        const existingByWb = existingProfilesByWb.get(normalizeWbLoginForEmployeeImport(row.wbLogin)) ?? null;
         const existingByUser = userId ? await prisma.employeeProfile.findUnique({ where: { userId } }) : null;
         const employeeId = existingByWb?.id ?? existingByUser?.id;
         const existingEmployeeForUpdate = existingByWb ?? existingByUser ?? null;
@@ -913,18 +923,15 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
   const seenEmail = new Set<string>();
   const seenWb = new Set<string>();
   const unique = (values: string[]) => [...new Set(values.filter(Boolean))];
-  const wbLogins = unique(normalizedRows.map((row) => row.wbLogin));
-  const supervisorWbLogins = unique(normalizedRows.map((row) => row.supervisorWbLogin));
+  const wbLogins = unique(normalizedRows.map((row) => normalizeWbLoginForEmployeeImport(row.wbLogin)));
+  const supervisorWbLogins = unique(normalizedRows.map((row) => normalizeWbLoginForEmployeeImport(row.supervisorWbLogin)));
   const cpfs = unique(normalizedRows.map((row) => row.cpf ?? ""));
   const emails = unique(normalizedRows.map((row) => row.email));
   const [roles, lobs, shifts, employeesByWb, sensitiveMatches, activeUsers] = await Promise.all([
     prisma.role.findMany({ select: { name: true } }),
     prisma.lob.findMany({ select: { name: true } }),
     prisma.shift.findMany({ select: { name: true } }),
-    prisma.employeeProfile.findMany({
-      where: { wbLogin: { in: unique([...wbLogins, ...supervisorWbLogins]) }, deletedAt: null },
-      select: { id: true, userId: true, wbLogin: true, skill: true, wave: true, user: { select: { role: { select: { name: true } } } } }
-    }),
+    findEmployeeProfilesByWbLoginBatch(unique([...wbLogins, ...supervisorWbLogins])),
     cpfs.length ? prisma.employeeSensitiveData.findMany({ where: { cpf: { in: cpfs } }, select: { cpf: true, employeeId: true } }) : Promise.resolve([]),
     emails.length ? prisma.user.findMany({ where: { email: { in: emails }, status: "ACTIVE", deletedAt: null }, select: { id: true, email: true } }) : Promise.resolve([])
   ]);
@@ -933,7 +940,7 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
   const validShifts = new Set(shifts
     .filter((shift) => isSelectableShiftName(shift.name))
     .flatMap((shift) => [normalizeLookupKey(shift.name), normalizeLookupKey(cleanShiftName(shift.name))]));
-  const employeeByWb = new Map(employeesByWb.map((employee) => [employee.wbLogin, employee]));
+  const employeeByWb = new Map(employeesByWb.map((employee) => [normalizeWbLoginForEmployeeImport(employee.wbLogin), employee]));
   const activeUserByEmail = new Map(activeUsers.map((user) => [user.email.toLowerCase(), user]));
   const sensitiveEmployeeIds = unique(sensitiveMatches.map((item) => item.employeeId));
   const cpfEmployees = sensitiveEmployeeIds.length
@@ -982,12 +989,13 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
 
     if (row.cpf && seenCpf.has(row.cpf)) errors.push("CPF duplicado dentro do arquivo.");
     if (row.email && seenEmail.has(row.email)) errors.push("E-mail duplicado dentro do arquivo.");
-    if (row.wbLogin && seenWb.has(row.wbLogin)) errors.push("WB/Login duplicado dentro do arquivo.");
+    const normalizedRowWbLogin = normalizeWbLoginForEmployeeImport(row.wbLogin);
+    if (normalizedRowWbLogin && seenWb.has(normalizedRowWbLogin)) errors.push("WB/Login duplicado dentro do arquivo.");
     if (row.cpf) seenCpf.add(row.cpf);
     if (row.email) seenEmail.add(row.email);
-    if (row.wbLogin) seenWb.add(row.wbLogin);
+    if (normalizedRowWbLogin) seenWb.add(normalizedRowWbLogin);
 
-    const activeByWb = row.wbLogin ? employeeByWb.get(row.wbLogin) ?? null : null;
+    const activeByWb = normalizedRowWbLogin ? employeeByWb.get(normalizedRowWbLogin) ?? null : null;
     if (activeByWb) {
       warnings.push("WB/Login existente: o colaborador será atualizado.");
       if (row.skill && row.skill !== (activeByWb.skill ?? "")) warnings.push(`Skill será atualizada de ${activeByWb.skill || "vazio"} para ${row.skill}.`);
@@ -998,7 +1006,7 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     const activeUser = row.email ? activeUserByEmail.get(row.email) ?? null : null;
     if (activeUser && activeUser.id !== activeByWb?.userId) errors.push("Já existe usuário ativo com este e-mail.");
     if (row.supervisorWbLogin) {
-      const supervisor = employeeByWb.get(row.supervisorWbLogin);
+      const supervisor = employeeByWb.get(normalizeWbLoginForEmployeeImport(row.supervisorWbLogin));
       if (!supervisor) errors.push("Supervisor informado por WB/Login não encontrado.");
       if (supervisor?.user && !["SUPERVISOR", "ADMIN"].includes(supervisor.user.role.name)) errors.push("Supervisor informado precisa ter role SUPERVISOR ou ADMIN.");
     }
@@ -1238,6 +1246,43 @@ function normalizeContractType(value: unknown) {
 
 function normalizeLookupKey(value: string) {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toUpperCase().replace(/[\s/-]+/g, "_");
+}
+
+function unique(values: string[]) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function normalizeWbLoginForEmployeeImport(value: unknown) {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\u00A0/g, " ")
+    .trim()
+    .replace(/\s+/g, "")
+    .toLowerCase();
+}
+
+async function findEmployeeProfilesByWbLoginBatch(normalizedWbLogins: string[]) {
+  if (!normalizedWbLogins.length) return [];
+  const chunks = chunkArray(normalizedWbLogins, 500);
+  const results = await Promise.all(
+    chunks.map((chunk) =>
+      prisma.employeeProfile.findMany({
+        where: {
+          deletedAt: null,
+          OR: chunk.map((wbLogin) => ({ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }))
+        },
+        select: { id: true, userId: true, wbLogin: true, fullName: true, skill: true, wave: true, user: { select: { role: { select: { name: true } } } } }
+      })
+    )
+  );
+  return Array.from(new Map(results.flat().map((employee) => [employee.id, employee])).values());
+}
+
+function chunkArray<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
+  return chunks;
 }
 
 function hasImportValue(value: unknown) {
