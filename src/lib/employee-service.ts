@@ -7,6 +7,7 @@ import type { Actor } from "@/lib/mock-db";
 import { listEmployeesForActor as listMockEmployees, recordErrorLog } from "@/lib/mock-db";
 import { canAccessEmployeeMap, canViewEmployeeSensitiveData, normalizeRole } from "@/lib/permissions";
 import { createDuplicateError, createNotFoundError, createPermissionError, createRelationError, createServerError, createValidationError, mapPrismaError } from "@/lib/api-errors";
+import { normalizeJobTitle } from "@/lib/job-title-normalization";
 import { cleanShiftName } from "@/lib/shift-display";
 
 const allowDemoDataFallback = process.env.ALLOW_DEMO_LOGIN === "true" || process.env.ALLOW_DEMO_DATA === "true";
@@ -401,7 +402,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     const nextEmail = clean(input.email);
     const nextUserStatus = normalizeUserStatus(input.userStatus);
     const nextWbLogin = clean(input.wbLogin);
-    const nextRoleTitle = clean(input.roleTitle);
+    const nextRoleTitle = input.roleTitle === undefined ? undefined : normalizeJobTitle(input.roleTitle);
     const nextStatus = clean(input.operationalStatus);
     const nextRoleName = clean(input.roleName);
     const nextSupervisorId = cleanNullable(input.supervisorId);

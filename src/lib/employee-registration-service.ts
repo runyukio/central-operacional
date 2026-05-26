@@ -9,6 +9,7 @@ import {
   submitEmployeeRegistration as submitMockRegistration
 } from "@/lib/mock-db";
 import { mapPrismaError } from "@/lib/api-errors";
+import { normalizeJobTitle } from "@/lib/job-title-normalization";
 import { normalizeRole } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { cleanShiftName, isBlockedShiftName, isSelectableShiftName, shiftLookupKey } from "@/lib/shift-display";
@@ -771,7 +772,7 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
               userId: user.id,
               wbLogin: op.wbLogin,
               fullName: existing.fullName,
-              roleTitle: op.roleTitle,
+              roleTitle: normalizeJobTitle(op.roleTitle),
               admissionDate: parseDate(op.admissionDate),
               scheduleType: op.schedule,
               operationalStatus: approvedEmployeeStatus,
@@ -788,7 +789,7 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
               userId: user.id,
               wbLogin: op.wbLogin,
               fullName: existing.fullName,
-              roleTitle: op.roleTitle,
+              roleTitle: normalizeJobTitle(op.roleTitle),
               admissionDate: parseDate(op.admissionDate),
               scheduleType: op.schedule,
               operationalStatus: approvedEmployeeStatus,
@@ -1066,7 +1067,7 @@ function normalizeEmployeeImportRow(raw: EmployeeImportRow) {
     emergencyContactName: text(raw.nome_contato_emergencia) || "Não informado",
     emergencyContactRelationship: text(raw.parentesco_contato_emergencia) || "Não informado",
     wbLogin,
-    roleTitle: text(raw.cargo_funcao),
+    roleTitle: normalizeJobTitle(text(raw.cargo_funcao)),
     roleName,
     lob: normalizeLobName(raw.lob),
     teamName: text(raw.time),

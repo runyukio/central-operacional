@@ -95,6 +95,7 @@ import {
 import { cn, formatCurrency, initials } from "@/lib/utils";
 import { cleanShiftName, cleanShiftOptions, isBlockedShiftName, isSelectableShiftName, standardShiftNames } from "@/lib/shift-display";
 import { DEFAULT_PRODUCTIVE_HOURS, canScheduleStatusReceiveWorkHours, normalizeProductivePlannedHours, workHoursBlockedReasonForSchedule } from "@/lib/work-hours-rules";
+import { MONTHLY_ADVANCE_FIXED_AMOUNT } from "@/lib/monthly-advance-constants";
 
 const scheduleImportColumns = ["wb_login", "data", "status", "turno", "entrada", "saida", "lob"] as const;
 const workHourImportColumns = ["wb_login", "data", "horas_realizadas", "sistema_origem", "observacao"] as const;
@@ -124,11 +125,11 @@ const dayOffOptions: Array<{ kind: DayOffKind; title: string; description: strin
 ];
 
 function isAgentRoleTitle(value: string) {
-  return /^(agente|agent|atendente|operador|moderador de conteudo|moderador de conteúdo|content moderator)$/i.test(value.trim());
+  return /^(agente|agent|atendente|operador|content moderator)$/i.test(value.trim());
 }
 
 function defaultOperationalRoleTitle(options: string[]) {
-  return options.find(isAgentRoleTitle) ?? options.find((option) => /agente|agent|atendente|operador|moderador/i.test(option)) ?? "Agente";
+  return options.find(isAgentRoleTitle) ?? options.find((option) => /agente|agent|atendente|operador/i.test(option)) ?? "Agente";
 }
 
 type ClientRequest = {
@@ -342,10 +343,6 @@ type MonthlyAdvanceRecordClient = {
   optIn: boolean;
   optInLabel: string;
   amount: number;
-  hasDiscount: boolean;
-  discountAmount?: number | null;
-  discountReason?: string | null;
-  finalAmount: number;
   status: string;
   observation?: string | null;
   updatedBy?: string;
@@ -367,7 +364,7 @@ type MonthlyAdvanceCycle = {
 
 type MonthlyAdvanceListResponse = {
   data: MonthlyAdvanceRecordClient[];
-  summary: { total: number; optIn: number; optOut: number; hasDiscount: number; amount: number; finalAmount: number };
+  summary: { total: number; optIn: number; optOut: number; amount: number };
   page: number;
   limit: number;
   total: number;
@@ -1395,7 +1392,7 @@ export function OperationalCommandCenter() {
   async function loadCommandCenterSummary() {
     setLoadingSummary(true);
     try {
-      const params = new URLSearchParams({ startDate: dateRange.startDate, endDate: dateRange.endDate });
+      const params = new URLSearchParams({ startDate: dateRange.startDate, endDate: dateRange.endDate, summaryOnly: "true" });
       if (selectedCommandLob !== "Todos") params.set("lob", selectedCommandLob);
       if (selectedCommandSupervisor !== "Todos") params.set("supervisor", selectedCommandSupervisor);
       if (selectedCommandRoleTitle !== "Todos") params.set("roleTitle", selectedCommandRoleTitle);
@@ -1417,7 +1414,8 @@ export function OperationalCommandCenter() {
       const params = new URLSearchParams({
         startDate: dateRange.startDate,
         endDate: dateRange.endDate,
-        includeJustified: "true"
+        includeJustified: "true",
+        skipSummary: "true"
       });
       if (justification) {
         params.set("justification", justification);
@@ -1452,6 +1450,7 @@ export function OperationalCommandCenter() {
         startDate: dateRange.startDate,
         endDate: dateRange.endDate,
         includeJustified: "true",
+        skipSummary: "true",
         supervisor
       });
       if (selectedCommandLob !== "Todos") params.set("lob", selectedCommandLob);
@@ -1907,7 +1906,7 @@ export function MySchedulePage() {
         method: "POST",
         body: JSON.stringify({ referenceMonth, optIn })
       });
-      setDayOffMessage("Resposta do adiantamento mensal registrada com sucesso.");
+      setDayOffMessage(optIn ? "Adesão registrada com valor de R$300,00." : "Resposta do adiantamento mensal registrada com sucesso.");
       await loadMyMonthlyAdvance();
     } catch (error) {
       setDayOffMessage(error instanceof Error ? error.message : "Não foi possível responder o adiantamento mensal.");
@@ -1929,7 +1928,6 @@ export function MySchedulePage() {
         body: JSON.stringify({
           referenceMonth: cycle.referenceMonth,
           requestedOptIn,
-          requestedAmount: cycle.record.amount,
           reason,
           observation: reason
         })
@@ -2251,14 +2249,14 @@ export function MySchedulePage() {
                       <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-muted">
                         <p>{cycle.closedMessage}</p>
                         {cycle.record ? (
-                          <p className="mt-1 text-navy-950">Status: {cycle.record.optInLabel} • Valor: {currencyFormatter.format(cycle.record.finalAmount)}</p>
+                          <p className="mt-1 text-navy-950">Status: {cycle.record.optInLabel} • Valor: {currencyFormatter.format(cycle.record.amount)}</p>
                         ) : null}
                       </div>
                     ) : cycle.record ? (
                       <div className="space-y-3">
                         <div className="grid grid-cols-2 gap-2 text-xs">
                           <InfoLine label="Aderente" value={cycle.record.optInLabel} />
-                          <InfoLine label="Valor" value={currencyFormatter.format(cycle.record.finalAmount)} />
+                          <InfoLine label="Valor" value={currencyFormatter.format(cycle.record.amount)} />
                           <InfoLine label="Atualizado por" value={cycle.record.updatedBy ?? "Sistema"} />
                           <InfoLine label="Atualizado em" value={cycle.record.updatedAt} />
                         </div>
@@ -2276,6 +2274,9 @@ export function MySchedulePage() {
                     ) : (
                       <div className="space-y-3">
                         <p className="text-sm font-semibold text-muted">Deseja aderir ao adiantamento mensal para {cycle.monthLabel}?</p>
+                        <p className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-extrabold text-blue-700">
+                          Valor do adiantamento: {currencyFormatter.format(MONTHLY_ADVANCE_FIXED_AMOUNT)}
+                        </p>
                         <div className="grid grid-cols-2 gap-2">
                           <button
                             type="button"
@@ -2545,7 +2546,7 @@ export function RegistrationApprovalsPage() {
     skill: "",
     wave: "",
     schedule: "6x1",
-    roleTitle: "Atendente",
+    roleTitle: "Agente",
     employeeStatus: "Ativo",
     contractType: "PJ",
     admissionDate: "2026-05-04",
@@ -2574,7 +2575,7 @@ export function RegistrationApprovalsPage() {
       skill: op.skill ?? "",
       wave: op.wave ?? "",
       schedule: op.schedule ?? "6x1",
-      roleTitle: op.roleTitle ?? "Atendente",
+      roleTitle: op.roleTitle ?? "Agente",
       employeeStatus: op.employeeStatus === "Pendente de Cadastro" ? "Ativo" : op.employeeStatus ?? "Ativo",
       contractType: op.contractType ?? "PJ",
       admissionDate: op.admissionDate ?? "2026-05-04",
@@ -2785,7 +2786,7 @@ export function RegistrationApprovalsPage() {
   const selectedReviewClosed = selected ? ["Aprovado", "Ativo", "Recusado"].includes(selected.status) : false;
   const registrationLobOptions = registrationSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? ["ALL", "CEC", "TNS", "ADS"];
   const registrationShiftOptions = cleanShiftOptions(registrationSettings?.shifts.filter((shift) => shift.status !== "INACTIVE").map((shift) => shift.name), true);
-  const registrationRoleTitleOptions = registrationSettings?.roleTitles.filter((title) => title.status !== "INACTIVE").map((title) => title.name) ?? ["Atendente", "Supervisor", "WFM", "Qualidade", "RH"];
+  const registrationRoleTitleOptions = registrationSettings?.roleTitles.filter((title) => title.status !== "INACTIVE").map((title) => title.name) ?? ["Agente", "Supervisor", "WFM", "Qualidade", "RH"];
   const registrationStart = registrationPagination.total ? (registrationPagination.page - 1) * registrationPagination.limit + 1 : 0;
   const registrationEnd = Math.min(registrationPagination.page * registrationPagination.limit, registrationPagination.total);
 
@@ -3234,7 +3235,8 @@ export function SchedulesPage() {
       month: String(schedulePeriod.month),
       year: String(schedulePeriod.year),
       startDate: rangeOverride.startDate,
-      endDate: rangeOverride.endDate
+      endDate: rangeOverride.endDate,
+      skipSummary: "true"
     });
     if (filtersOverride.lob !== "Todos") params.set("lob", filtersOverride.lob);
     if (filtersOverride.supervisor !== "Todos") params.set("supervisor", filtersOverride.supervisor.trim());
@@ -3242,7 +3244,6 @@ export function SchedulesPage() {
     if (filtersOverride.collaborator.trim()) params.set("collaborator", filtersOverride.collaborator.trim());
     try {
       const payload = await apiJson<{ data: AttendanceItem[]; summary: AttendanceSummary }>(`/api/attendance?${params.toString()}`);
-      setAttendanceSummary(payload.summary);
       setPendingJustifications(payload.data.filter((record) => statusNeedsReason(record.status) && record.isJustified === false));
     } catch {
       setPendingJustifications([]);
@@ -6316,7 +6317,6 @@ export function AdvanceManagementPage() {
   const [lobFilter, setLobFilter] = useState("Todos");
   const [supervisorFilter, setSupervisorFilter] = useState("Todos");
   const [advanceOptInFilter, setAdvanceOptInFilter] = useState("Todos");
-  const [advanceDiscountFilter, setAdvanceDiscountFilter] = useState("Todos");
   const [advanceSearch, setAdvanceSearch] = useState("");
   const [advanceLoading, setAdvanceLoading] = useState(false);
   const [advanceImportRows, setAdvanceImportRows] = useState<Array<Record<string, unknown>>>([]);
@@ -6339,19 +6339,17 @@ export function AdvanceManagementPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function loadMonthlyAdvances(options?: { nextReferenceMonth?: string; nextLob?: string; nextSupervisor?: string; nextOptIn?: string; nextDiscount?: string; nextSearch?: string }) {
+  async function loadMonthlyAdvances(options?: { nextReferenceMonth?: string; nextLob?: string; nextSupervisor?: string; nextOptIn?: string; nextSearch?: string }) {
     setAdvanceLoading(true);
     const nextReferenceMonth = options?.nextReferenceMonth ?? advanceReferenceMonth;
     const nextLob = options?.nextLob ?? lobFilter;
     const nextSupervisor = options?.nextSupervisor ?? supervisorFilter;
     const nextOptIn = options?.nextOptIn ?? advanceOptInFilter;
-    const nextDiscount = options?.nextDiscount ?? advanceDiscountFilter;
     const nextSearch = options?.nextSearch ?? advanceSearch;
     const params = new URLSearchParams({ referenceMonth: nextReferenceMonth, limit: "100" });
     if (nextLob !== "Todos") params.set("lob", nextLob);
     if (nextSupervisor !== "Todos") params.set("supervisorId", nextSupervisor);
     if (nextOptIn !== "Todos") params.set("optIn", nextOptIn);
-    if (nextDiscount !== "Todos") params.set("hasDiscount", nextDiscount);
     if (nextSearch.trim()) params.set("search", nextSearch.trim());
     try {
       const payload = await apiJson<MonthlyAdvanceListResponse>(`/api/monthly-advance?${params.toString()}`);
@@ -6410,46 +6408,20 @@ export function AdvanceManagementPage() {
     }
   }
 
-  async function editMonthlyAdvance(record: MonthlyAdvanceRecordClient, discountOverride?: { hasDiscount: boolean; discountAmount?: number; discountReason?: string }) {
+  async function editMonthlyAdvance(record: MonthlyAdvanceRecordClient) {
     if (!canManageMonthlyAdvance || advanceEditingId) return;
     let optIn = record.optIn;
-    let amount: string | number = record.amount;
     let observation = record.observation ?? "";
-    let hasDiscount = record.hasDiscount;
-    let discountAmount: string | number | undefined = record.discountAmount ?? undefined;
-    let discountReason = record.discountReason ?? "";
 
-    if (discountOverride) {
-      hasDiscount = discountOverride.hasDiscount;
-      discountAmount = discountOverride.discountAmount ?? undefined;
-      discountReason = discountOverride.discountReason ?? "";
-    } else {
-      const optInAnswer = window.prompt("Aderente? Digite Sim ou Não.", record.optIn ? "Sim" : "Não");
-      if (!optInAnswer) return;
-      const normalizedOptIn = optInAnswer.trim().toLowerCase();
-      if (!["sim", "s", "true", "1", "não", "nao", "n", "false", "0"].includes(normalizedOptIn)) {
-        setMessage("Aderente deve ser Sim ou Não.");
-        return;
-      }
-      optIn = ["sim", "s", "true", "1"].includes(normalizedOptIn);
-      const amountAnswer = window.prompt("Valor do adiantamento.", String(record.amount).replace(".", ","));
-      if (!amountAnswer) return;
-      amount = amountAnswer;
-      const discountAnswer = window.prompt("Possui desconto? Digite Sim ou Não.", record.hasDiscount ? "Sim" : "Não");
-      if (!discountAnswer) return;
-      const normalizedDiscount = discountAnswer.trim().toLowerCase();
-      hasDiscount = ["sim", "s", "true", "1"].includes(normalizedDiscount);
-      if (hasDiscount) {
-        const discountValue = window.prompt("Valor do desconto.", String(record.discountAmount ?? 0).replace(".", ","));
-        if (!discountValue) return;
-        discountAmount = discountValue;
-        discountReason = window.prompt("Motivo do desconto.", record.discountReason ?? "") ?? "";
-      } else {
-        discountAmount = undefined;
-        discountReason = "";
-      }
-      observation = window.prompt("Observação opcional.", record.observation ?? "") ?? "";
+    const optInAnswer = window.prompt("Aderente? Digite Sim ou Não.", record.optIn ? "Sim" : "Não");
+    if (!optInAnswer) return;
+    const normalizedOptIn = optInAnswer.trim().toLowerCase();
+    if (!["sim", "s", "true", "1", "não", "nao", "n", "false", "0"].includes(normalizedOptIn)) {
+      setMessage("Aderente deve ser Sim ou Não.");
+      return;
     }
+    optIn = ["sim", "s", "true", "1"].includes(normalizedOptIn);
+    observation = window.prompt("Observação opcional.", record.observation ?? "") ?? "";
 
     setAdvanceEditingId(record.id);
     try {
@@ -6459,10 +6431,6 @@ export function AdvanceManagementPage() {
           employeeId: record.employeeId,
           referenceMonth: record.referenceMonth,
           optIn,
-          amount,
-          hasDiscount,
-          discountAmount,
-          discountReason,
           observation
         })
       });
@@ -6473,22 +6441,6 @@ export function AdvanceManagementPage() {
     } finally {
       setAdvanceEditingId("");
     }
-  }
-
-  async function applyDiscount(record: MonthlyAdvanceRecordClient) {
-    const discountValue = window.prompt("Valor do desconto.", String(record.discountAmount ?? 0).replace(".", ","));
-    if (!discountValue) return;
-    const parsed = Number(discountValue.replace(",", "."));
-    if (!Number.isFinite(parsed) || parsed < 0) {
-      setMessage("Valor de desconto inválido.");
-      return;
-    }
-    const reason = window.prompt("Motivo do desconto.", record.discountReason ?? "") ?? "";
-    await editMonthlyAdvance(record, { hasDiscount: true, discountAmount: parsed, discountReason: reason });
-  }
-
-  async function removeDiscount(record: MonthlyAdvanceRecordClient) {
-    await editMonthlyAdvance(record, { hasDiscount: false });
   }
 
   async function removeMonthlyAdvanceRecord(record: MonthlyAdvanceRecordClient) {
@@ -6514,7 +6466,6 @@ export function AdvanceManagementPage() {
     if (lobFilter !== "Todos") params.set("lob", lobFilter);
     if (supervisorFilter !== "Todos") params.set("supervisorId", supervisorFilter);
     if (advanceOptInFilter !== "Todos") params.set("optIn", advanceOptInFilter);
-    if (advanceDiscountFilter !== "Todos") params.set("hasDiscount", advanceDiscountFilter);
     if (advanceSearch.trim()) params.set("search", advanceSearch.trim());
     window.location.href = `/api/monthly-advance/export?${params.toString()}`;
   }
@@ -6535,7 +6486,7 @@ export function AdvanceManagementPage() {
       {message ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
       <div className="space-y-5">
         <Panel title="Filtros e importação">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
             <FormInput label="Mês de referência" type="month" value={advanceReferenceMonth} onChange={setAdvanceReferenceMonth} />
             <label className="block">
               <span className="mb-1.5 block text-sm font-bold text-muted">LOB</span>
@@ -6559,14 +6510,6 @@ export function AdvanceManagementPage() {
                 <option value="Não">Não</option>
               </select>
             </label>
-            <label className="block">
-              <span className="mb-1.5 block text-sm font-bold text-muted">Com desconto</span>
-              <select value={advanceDiscountFilter} onChange={(event) => setAdvanceDiscountFilter(event.target.value)} className="h-11 w-full rounded-lg border border-border px-3 text-sm font-bold">
-                <option value="Todos">Todos</option>
-                <option value="Sim">Sim</option>
-                <option value="Não">Não</option>
-              </select>
-            </label>
             <FormInput label="Colaborador / WB/Login" value={advanceSearch} onChange={setAdvanceSearch} />
             <div className="flex items-end gap-2">
               <button type="button" onClick={() => loadMonthlyAdvances()} className="h-11 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white">Buscar</button>
@@ -6584,12 +6527,10 @@ export function AdvanceManagementPage() {
           ) : null}
         </Panel>
 
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           <MetricPill value={advanceSummary?.optIn ?? 0} label="Total aderentes" />
           <MetricPill value={advanceSummary?.optOut ?? 0} label="Total não aderentes" />
           <MetricPill value={currencyFormatter.format(advanceSummary?.amount ?? 0)} label="Valor total previsto" />
-          <MetricPill value={advanceSummary?.hasDiscount ?? 0} label="Total com desconto" />
-          <MetricPill value={currencyFormatter.format(advanceSummary?.finalAmount ?? 0)} label="Valor final estimado" />
         </div>
 
         {advancePreview ? (
@@ -6625,7 +6566,7 @@ export function AdvanceManagementPage() {
             <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm font-bold text-blue-700">Carregando adiantamento mensal...</div>
           ) : advanceRows.length ? (
             <SimpleTable
-              columns={["Mês", "Nome", "WB/Login", "E-mail", "LOB", "Supervisor", "Aderente", "Valor", "Desconto", "Valor final", "Observação", "Atualizado por", "Atualizado em", "Ações"]}
+              columns={["Mês", "Nome", "WB/Login", "E-mail", "LOB", "Supervisor", "Aderente", "Valor", "Observação", "Atualizado por", "Atualizado em", "Ações"]}
               rows={advanceRows.map((record) => [
                 record.monthLabel,
                 record.employeeName,
@@ -6635,16 +6576,12 @@ export function AdvanceManagementPage() {
                 record.supervisor,
                 <StatusBadge key={`${record.id}-opt`} status={record.optInLabel} />,
                 currencyFormatter.format(record.amount),
-                record.hasDiscount ? currencyFormatter.format(record.discountAmount ?? 0) : "Não",
-                currencyFormatter.format(record.finalAmount),
                 record.observation ?? "-",
                 record.updatedBy ?? "-",
                 record.updatedAt,
                 canManageMonthlyAdvance ? (
                   <div key={`${record.id}-actions`} className="flex flex-wrap gap-1">
                     <button disabled={advanceEditingId === record.id} onClick={() => editMonthlyAdvance(record)} className="rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-bold text-blue-700 disabled:opacity-50">Editar</button>
-                    <button disabled={advanceEditingId === record.id} onClick={() => applyDiscount(record)} className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-bold text-amber-700 disabled:opacity-50">Aplicar desconto</button>
-                    {record.hasDiscount ? <button disabled={advanceEditingId === record.id} onClick={() => removeDiscount(record)} className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-bold text-slate-700 disabled:opacity-50">Remover desconto</button> : null}
                     {canDeleteMonthlyAdvance ? <button disabled={advanceEditingId === record.id} onClick={() => removeMonthlyAdvanceRecord(record)} className="rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs font-bold text-red-700 disabled:opacity-50">Excluir</button> : null}
                   </div>
                 ) : "Visualizar"

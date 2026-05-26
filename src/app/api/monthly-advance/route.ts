@@ -5,7 +5,6 @@ import { getApiActor } from "@/lib/api-actor";
 import {
   getMyMonthlyAdvanceCycles,
   listMonthlyAdvances,
-  parseAdvanceAmount,
   parseAdvanceOptIn,
   removeMonthlyAdvance,
   respondMonthlyAdvance,
@@ -22,10 +21,6 @@ const upsertSchema = z.object({
   wbLogin: z.string().optional(),
   referenceMonth: z.string().min(1),
   optIn: z.boolean(),
-  amount: z.union([z.number(), z.string()]),
-  hasDiscount: z.boolean().optional(),
-  discountAmount: z.union([z.number(), z.string()]).optional(),
-  discountReason: z.string().optional(),
   observation: z.string().optional()
 });
 
@@ -47,7 +42,6 @@ export async function GET(request: Request) {
     lob: url.searchParams.get("lob") ?? undefined,
     supervisorId: url.searchParams.get("supervisorId") ?? undefined,
     optIn: url.searchParams.get("optIn") ?? undefined,
-    hasDiscount: url.searchParams.get("hasDiscount") ?? undefined,
     search: url.searchParams.get("search") ?? undefined,
     page: url.searchParams.get("page") ?? undefined,
     limit: url.searchParams.get("limit") ?? undefined
@@ -83,17 +77,11 @@ export async function PATCH(request: Request) {
   if (!parsed.success) {
     return NextResponse.json({ error: "Dados inválidos para atualizar adiantamento mensal.", message: "Dados inválidos para atualizar adiantamento mensal." }, { status: 400 });
   }
-  const amount = parseAdvanceAmount(parsed.data.amount);
-  const discountAmount = parsed.data.discountAmount == null ? undefined : parseAdvanceAmount(parsed.data.discountAmount);
   const optIn = parseAdvanceOptIn(parsed.data.optIn);
-  if (amount === null) return NextResponse.json({ error: "Valor inválido.", message: "Valor inválido." }, { status: 400 });
-  if (parsed.data.hasDiscount && discountAmount === null) return NextResponse.json({ error: "Valor de desconto inválido.", message: "Valor de desconto inválido." }, { status: 400 });
   const actor = await getApiActor();
   const result = await upsertMonthlyAdvance(actor, {
     ...parsed.data,
-    optIn: Boolean(optIn),
-    amount,
-    discountAmount: discountAmount ?? undefined
+    optIn: Boolean(optIn)
   });
   if ("error" in result) return NextResponse.json({ error: result.error, message: result.error }, { status: result.status ?? 400 });
   return NextResponse.json(result);

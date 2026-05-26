@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
 import { recordErrorLog } from "@/lib/mock-db";
+import { MONTHLY_ADVANCE_FIXED_AMOUNT, monthlyAdvanceAmountForOptIn } from "@/lib/monthly-advance-constants";
 import { prisma } from "@/lib/prisma";
 import { normalizeRole } from "@/lib/permissions";
 
@@ -48,7 +49,6 @@ export type MonthlyAdvanceFilters = {
   lob?: string;
   supervisorId?: string;
   optIn?: string;
-  hasDiscount?: string;
   search?: string;
   page?: string | number;
   limit?: string | number;
@@ -93,6 +93,16 @@ export function formatReferenceMonth(referenceMonth: string) {
 
 export function isAdvanceMonthLockedForEmployee(referenceMonth: string) {
   return normalizeReferenceMonth(referenceMonth) === MONTHLY_ADVANCE_LOCKED_IMPLEMENTATION_MONTH;
+}
+
+export function employeeMonthlyAdvanceCycleMonths(date = new Date()) {
+  const currentMonth = currentReferenceMonth(date);
+  return [currentMonth, addReferenceMonths(currentMonth, 1)];
+}
+
+export function isEmployeeMonthlyAdvanceCycleOpen(referenceMonth: string, date = new Date()) {
+  const normalized = normalizeReferenceMonth(referenceMonth);
+  return Boolean(normalized) && employeeMonthlyAdvanceCycleMonths(date).includes(normalized);
 }
 
 export function normalizeReferenceMonth(value: unknown, fallback?: string) {
@@ -196,11 +206,6 @@ export async function listMonthlyAdvances(actor: Actor, filters: MonthlyAdvanceF
     if (optIn !== null) where.optIn = optIn;
   }
 
-  if (filters.hasDiscount && filters.hasDiscount !== "Todos") {
-    const hasDiscount = parseAdvanceOptIn(filters.hasDiscount);
-    if (hasDiscount !== null) where.hasDiscount = hasDiscount;
-  }
-
   if (filters.search?.trim()) {
     const search = filters.search.trim();
     and.push({
@@ -217,7 +222,7 @@ export async function listMonthlyAdvances(actor: Actor, filters: MonthlyAdvanceF
   const page = parsePositiveInteger(filters.page, 1);
   const limit = Math.min(parsePositiveInteger(filters.limit, 50), 5000);
   const skip = (page - 1) * limit;
-  const [total, records, aggregates, discountCount] = await Promise.all([
+  const [total, records, aggregates] = await Promise.all([
     prisma.monthlyAdvanceRecord.count({ where }),
     prisma.monthlyAdvanceRecord.findMany({
       where,
@@ -229,20 +234,17 @@ export async function listMonthlyAdvances(actor: Actor, filters: MonthlyAdvanceF
     prisma.monthlyAdvanceRecord.groupBy({
       by: ["optIn"],
       where,
-      _count: { _all: true },
-      _sum: { amount: true, finalAmount: true }
-    }),
-    prisma.monthlyAdvanceRecord.count({ where: { ...where, hasDiscount: true } })
+      _count: { _all: true }
+    })
   ]);
 
   const totalPages = Math.max(1, Math.ceil(total / limit));
+  const optInCount = aggregates.find((item) => item.optIn)?._count._all ?? 0;
   const summary = {
     total,
-    optIn: aggregates.find((item) => item.optIn)?._count._all ?? 0,
+    optIn: optInCount,
     optOut: aggregates.find((item) => !item.optIn)?._count._all ?? 0,
-    hasDiscount: discountCount,
-    amount: aggregates.reduce((sum, item) => sum + Number(item._sum.amount ?? 0), 0),
-    finalAmount: aggregates.reduce((sum, item) => sum + Number(item._sum.finalAmount ?? 0), 0)
+    amount: optInCount * MONTHLY_ADVANCE_FIXED_AMOUNT
   };
 
   return {
@@ -264,8 +266,7 @@ export async function getMyMonthlyAdvanceCycles(actor: Actor) {
   const employee = await resolveEmployeeForUser(user);
   if (!employee) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
 
-  const currentMonth = currentReferenceMonth();
-  const months = [currentMonth, addReferenceMonths(currentMonth, 1)];
+  const months = employeeMonthlyAdvanceCycleMonths();
   const records = await prisma.monthlyAdvanceRecord.findMany({
     where: { employeeId: employee.id, referenceMonth: { in: months }, status: { not: "REMOVED" } },
     include: monthlyAdvanceInclude
@@ -305,18 +306,25 @@ export async function respondMonthlyAdvance(actor: Actor, input: { referenceMont
   if (isAdvanceMonthLockedForEmployee(referenceMonth)) {
     return { error: "Este ciclo já foi fechado e pago. Alterações para este mês não estão disponíveis.", status: 403 };
   }
+  if (!isEmployeeMonthlyAdvanceCycleOpen(referenceMonth)) {
+    return { error: "Este mês não está aberto para resposta direta. Responda apenas o mês atual ou o próximo mês no Meu Cronograma.", status: 403 };
+  }
 
   const existing = await prisma.monthlyAdvanceRecord.findUnique({
     where: { employeeId_referenceMonth: { employeeId: employee.id, referenceMonth } }
   });
   if (existing && existing.status !== "REMOVED") return { error: "Você já respondeu este ciclo. Para alterar, abra uma solicitação.", status: 409 };
 
+  const amount = monthlyAdvanceAmountForOptIn(input.optIn);
   const record = existing ? await prisma.monthlyAdvanceRecord.update({
     where: { id: existing.id },
     data: {
       optIn: input.optIn,
-      amount: decimal(0),
-      finalAmount: decimal(0),
+      amount: decimal(amount),
+      hasDiscount: false,
+      discountAmount: null,
+      discountReason: null,
+      finalAmount: decimal(amount),
       status: "RESPONDIDO",
       observation: "Resposta registrada pelo colaborador.",
       updatedById: user.id
@@ -327,8 +335,11 @@ export async function respondMonthlyAdvance(actor: Actor, input: { referenceMont
       employeeId: employee.id,
       referenceMonth,
       optIn: input.optIn,
-      amount: decimal(0),
-      finalAmount: decimal(0),
+      amount: decimal(amount),
+      hasDiscount: false,
+      discountAmount: null,
+      discountReason: null,
+      finalAmount: decimal(amount),
       status: "RESPONDIDO",
       observation: "Resposta registrada pelo colaborador.",
       updatedById: user.id
@@ -343,7 +354,7 @@ export async function respondMonthlyAdvance(actor: Actor, input: { referenceMont
       entity: "MonthlyAdvanceRecord",
       entityId: record.id,
       reason: "Resposta de adiantamento mensal",
-      newValue: { employeeId: employee.id, referenceMonth, optIn: input.optIn, amount: 0 }
+      newValue: { employeeId: employee.id, referenceMonth, optIn: input.optIn, amount }
     }
   });
 
@@ -355,10 +366,6 @@ export async function upsertMonthlyAdvance(actor: Actor, input: {
   wbLogin?: string;
   referenceMonth: string;
   optIn: boolean;
-  amount: number;
-  hasDiscount?: boolean;
-  discountAmount?: number;
-  discountReason?: string;
   observation?: string;
 }) {
   const user = await findActiveUser(actor.email);
@@ -372,21 +379,20 @@ export async function upsertMonthlyAdvance(actor: Actor, input: {
 
   const referenceMonth = normalizeReferenceMonth(input.referenceMonth);
   if (!referenceMonth) return { error: "Mês de referência inválido.", status: 400 };
-  if (input.amount < 0 || !Number.isFinite(input.amount)) return { error: "Valor inválido.", status: 400 };
+  const amount = monthlyAdvanceAmountForOptIn(input.optIn);
 
   const previous = await prisma.monthlyAdvanceRecord.findUnique({
     where: { employeeId_referenceMonth: { employeeId: employee.id, referenceMonth } }
   });
-  const finalAmount = calculateFinalAmount(input.amount, input.hasDiscount, input.discountAmount);
   const record = await prisma.monthlyAdvanceRecord.upsert({
     where: { employeeId_referenceMonth: { employeeId: employee.id, referenceMonth } },
     update: {
       optIn: input.optIn,
-      amount: decimal(input.amount),
-      hasDiscount: Boolean(input.hasDiscount),
-      discountAmount: input.discountAmount != null ? decimal(input.discountAmount) : null,
-      discountReason: input.discountReason?.trim() || null,
-      finalAmount: decimal(finalAmount),
+      amount: decimal(amount),
+      hasDiscount: false,
+      discountAmount: null,
+      discountReason: null,
+      finalAmount: decimal(amount),
       status: "ACTIVE",
       observation: input.observation?.trim() || null,
       updatedById: user.id
@@ -395,11 +401,11 @@ export async function upsertMonthlyAdvance(actor: Actor, input: {
       employeeId: employee.id,
       referenceMonth,
       optIn: input.optIn,
-      amount: decimal(input.amount),
-      hasDiscount: Boolean(input.hasDiscount),
-      discountAmount: input.discountAmount != null ? decimal(input.discountAmount) : null,
-      discountReason: input.discountReason?.trim() || null,
-      finalAmount: decimal(finalAmount),
+      amount: decimal(amount),
+      hasDiscount: false,
+      discountAmount: null,
+      discountReason: null,
+      finalAmount: decimal(amount),
       status: "ACTIVE",
       observation: input.observation?.trim() || null,
       updatedById: user.id
@@ -415,7 +421,7 @@ export async function upsertMonthlyAdvance(actor: Actor, input: {
       entityId: record.id,
       reason: previous ? "Adiantamento mensal atualizado" : "Adiantamento mensal criado",
       previousValue: previous ? { optIn: previous.optIn, amount: Number(previous.amount), observation: previous.observation } : undefined,
-      newValue: { employeeId: employee.id, referenceMonth, optIn: input.optIn, amount: input.amount, observation: input.observation ?? null }
+      newValue: { employeeId: employee.id, referenceMonth, optIn: input.optIn, amount, observation: input.observation ?? null }
     }
   });
 
@@ -493,9 +499,6 @@ export async function removeMonthlyAdvance(actor: Actor, id: string) {
         referenceMonth: record.referenceMonth,
         optIn: record.optIn,
         amount: Number(record.amount),
-        hasDiscount: record.hasDiscount,
-        discountAmount: record.discountAmount != null ? Number(record.discountAmount) : null,
-        finalAmount: Number(record.finalAmount),
         status: record.status
       },
       newValue: { status: "REMOVED", action: "ADVANCE_RECORD_REMOVED" }
@@ -518,14 +521,34 @@ export async function commitMonthlyAdvanceImport(actor: Actor, rows: Array<Recor
   let createdRows = 0;
   let updatedRows = 0;
   for (const row of validRows) {
-    const result = await upsertMonthlyAdvance(actor, {
-      employeeId: row.employeeId,
-      referenceMonth: row.referenceMonth,
-      optIn: Boolean(row.optIn),
-      amount: Number(row.amount),
-      observation: row.observation
+    const amount = monthlyAdvanceAmountForOptIn(Boolean(row.optIn));
+    await prisma.monthlyAdvanceRecord.upsert({
+      where: { employeeId_referenceMonth: { employeeId: row.employeeId!, referenceMonth: row.referenceMonth } },
+      update: {
+        optIn: Boolean(row.optIn),
+        amount: decimal(amount),
+        hasDiscount: false,
+        discountAmount: null,
+        discountReason: null,
+        finalAmount: decimal(amount),
+        status: "ACTIVE",
+        observation: row.observation || null,
+        updatedById: user.id
+      },
+      create: {
+        employeeId: row.employeeId!,
+        referenceMonth: row.referenceMonth,
+        optIn: Boolean(row.optIn),
+        amount: decimal(amount),
+        hasDiscount: false,
+        discountAmount: null,
+        discountReason: null,
+        finalAmount: decimal(amount),
+        status: "ACTIVE",
+        observation: row.observation || null,
+        updatedById: user.id
+      }
     });
-    if ("error" in result) continue;
     if (row.action === "update") updatedRows += 1;
     else createdRows += 1;
   }
@@ -565,9 +588,6 @@ export async function exportMonthlyAdvances(actor: Actor, filters: MonthlyAdvanc
     "status_colaborador",
     "aderente",
     "valor",
-    "possui_desconto",
-    "valor_desconto",
-    "valor_final",
     "observacao",
     "atualizado_por",
     "atualizado_em"
@@ -583,9 +603,6 @@ export async function exportMonthlyAdvances(actor: Actor, filters: MonthlyAdvanc
       record.employeeStatus ?? "",
       record.optIn ? "Sim" : "Não",
       record.amount.toFixed(2),
-      record.hasDiscount ? "Sim" : "Não",
-      record.discountAmount?.toFixed(2) ?? "",
-      record.finalAmount.toFixed(2),
       record.observation ?? "",
       record.updatedBy ?? "",
       record.updatedAt
@@ -602,7 +619,6 @@ export async function createMonthlyAdvanceChangeRequest(actor: Actor, input: {
   requestedOptIn: boolean;
   reason: string;
   observation?: string;
-  requestedAmount?: number;
 }) {
   const user = await findActiveUser(actor.email);
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
@@ -614,6 +630,9 @@ export async function createMonthlyAdvanceChangeRequest(actor: Actor, input: {
   if (!referenceMonth) return { error: "Mês de referência inválido.", status: 400 };
   if (isAdvanceMonthLockedForEmployee(referenceMonth)) {
     return { error: "Este ciclo já foi fechado e pago. Alterações para este mês não estão disponíveis.", status: 403 };
+  }
+  if (!isEmployeeMonthlyAdvanceCycleOpen(referenceMonth)) {
+    return { error: "Este mês está disponível apenas como histórico. Solicitações de alteração só podem ser abertas para o mês atual ou o próximo mês.", status: 403 };
   }
   if (!input.reason.trim()) return { error: "Motivo é obrigatório.", status: 400 };
 
@@ -656,7 +675,7 @@ export async function createMonthlyAdvanceChangeRequest(actor: Actor, input: {
           currentOptIn: current.optIn,
           requestedOptIn: input.requestedOptIn,
           currentAmount: Number(current.amount),
-          requestedAmount: input.requestedAmount ?? Number(current.amount),
+          requestedAmount: monthlyAdvanceAmountForOptIn(input.requestedOptIn),
           reason: input.reason.trim(),
           observation: input.observation?.trim() || null
         },
@@ -714,7 +733,7 @@ export async function applyApprovedMonthlyAdvanceChange(tx: Prisma.TransactionCl
   if (!referenceMonth) throw new Error("Mês de referência inválido na solicitação de adiantamento.");
   const requestedOptIn = parseAdvanceOptIn(payload.requestedOptIn);
   if (requestedOptIn === null) throw new Error("Aderência solicitada inválida na solicitação de adiantamento.");
-  const requestedAmount = parseAdvanceAmount(payload.requestedAmount) ?? 0;
+  const requestedAmount = monthlyAdvanceAmountForOptIn(requestedOptIn);
   const previous = await tx.monthlyAdvanceRecord.findUnique({
     where: { employeeId_referenceMonth: { employeeId: request.employeeId, referenceMonth } }
   });
@@ -723,6 +742,9 @@ export async function applyApprovedMonthlyAdvanceChange(tx: Prisma.TransactionCl
     update: {
       optIn: requestedOptIn,
       amount: decimal(requestedAmount),
+      hasDiscount: false,
+      discountAmount: null,
+      discountReason: null,
       finalAmount: decimal(requestedAmount),
       status: "ACTIVE",
       observation: String(payload.observation ?? payload.reason ?? "").trim() || null,
@@ -733,6 +755,9 @@ export async function applyApprovedMonthlyAdvanceChange(tx: Prisma.TransactionCl
       referenceMonth,
       optIn: requestedOptIn,
       amount: decimal(requestedAmount),
+      hasDiscount: false,
+      discountAmount: null,
+      discountReason: null,
       finalAmount: decimal(requestedAmount),
       status: "ACTIVE",
       observation: String(payload.observation ?? payload.reason ?? "").trim() || null,
@@ -769,7 +794,7 @@ function parseImportRow(
   const normalizedLogin = normalizeWbLogin(wbLogin);
   const referenceMonth = normalizeReferenceMonth(normalizedRaw.mes_referencia ?? normalizedRaw.reference_month ?? normalizedRaw.mes ?? "", fallbackReferenceMonth);
   const optIn = parseAdvanceOptIn(normalizedRaw.aderente ?? normalizedRaw.opt_in ?? normalizedRaw.optin);
-  const amount = parseAdvanceAmount(normalizedRaw.valor ?? normalizedRaw.amount);
+  const amount = optIn === null ? null : monthlyAdvanceAmountForOptIn(optIn);
   const observation = String(normalizedRaw.observacao ?? normalizedRaw.observation ?? "").trim();
   const employee = normalizedLogin ? employeeByLogin.get(normalizedLogin) : null;
   const errors: string[] = [];
@@ -778,7 +803,6 @@ function parseImportRow(
   else if (!employee) errors.push("WB/Login não encontrado.");
   if (!referenceMonth) errors.push("Mês de referência inválido.");
   if (optIn === null) errors.push("Aderente deve ser Sim ou Não.");
-  if (amount === null) errors.push("Valor inválido.");
 
   return {
     rowNumber,
@@ -822,11 +846,7 @@ function mapMonthlyAdvanceRecord(record: Prisma.MonthlyAdvanceRecordGetPayload<{
     monthLabel: formatReferenceMonth(record.referenceMonth),
     optIn: record.optIn,
     optInLabel: record.optIn ? "Sim" : "Não",
-    amount: Number(record.amount),
-    hasDiscount: record.hasDiscount,
-    discountAmount: record.discountAmount != null ? Number(record.discountAmount) : null,
-    discountReason: record.discountReason,
-    finalAmount: Number(record.finalAmount),
+    amount: monthlyAdvanceAmountForOptIn(record.optIn),
     status: record.status,
     observation: record.observation,
     updatedBy: record.updatedBy?.name,
@@ -907,11 +927,6 @@ function roundMoney(value: number) {
 
 function decimal(value: number) {
   return new Prisma.Decimal(roundMoney(value).toFixed(2));
-}
-
-function calculateFinalAmount(amount: number, hasDiscount?: boolean, discountAmount?: number) {
-  if (!hasDiscount) return amount;
-  return Math.max(0, amount - Math.max(0, discountAmount ?? 0));
 }
 
 function parsePositiveInteger(value: string | number | undefined, fallback: number) {
