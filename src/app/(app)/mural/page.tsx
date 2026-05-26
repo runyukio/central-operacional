@@ -1,7 +1,5 @@
-import { MuralPage } from "@/components/modules";
-import { requireAdminRoute } from "@/lib/admin-route";
+import { InactiveModulePage } from "@/components/inactive-module-page";
 
 export default async function MuralRoute() {
-  await requireAdminRoute();
-  return <MuralPage />;
+  return <InactiveModulePage title="Comunicação / Mural" />;
 }

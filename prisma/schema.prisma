@@ -100,6 +100,7 @@ enum ClimateQuestionType {
   TEXTO_LIVRE
   MULTIPLA_ESCOLHA
   SIM_NAO
+  NPS_0_10
 }
 
 enum AnonymousFeedbackStatus {
@@ -107,6 +108,7 @@ enum AnonymousFeedbackStatus {
   EM_ANALISE
   PLANO_DE_ACAO
   CONCLUIDO
+  ARQUIVADO
 }
 
 enum TokenTransactionType {
@@ -705,11 +707,20 @@ model ClimateSurvey {
   title       String
   description String
   status      String            @default("Ativa")
+  anonymous   Boolean           @default(true)
+  targetType  String            @default("TODOS")
+  targetValue String?
+  createdById String?
   startsAt    DateTime
   endsAt      DateTime
   questions   ClimateQuestion[]
   answers     ClimateAnswer[]
+  responses   ClimateSurveyResponse[]
   createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([status, startsAt, endsAt])
+  @@index([targetType, targetValue])
 }
 
 model ClimateQuestion {
@@ -728,12 +739,33 @@ model ClimateAnswer {
   id           String          @id @default(cuid())
   surveyId     String
   questionId   String
+  responseId   String?
   respondentId String?
   value        Json
   survey       ClimateSurvey   @relation(fields: [surveyId], references: [id], onDelete: Cascade)
   question     ClimateQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  response     ClimateSurveyResponse? @relation(fields: [responseId], references: [id], onDelete: Cascade)
   respondent   User?           @relation(fields: [respondentId], references: [id], onDelete: SetNull)
   createdAt    DateTime        @default(now())
+
+  @@index([surveyId, respondentId])
+  @@index([responseId])
+}
+
+model ClimateSurveyResponse {
+  id               String          @id @default(cuid())
+  surveyId         String
+  respondentUserId String?
+  employeeId       String?
+  submittedAt      DateTime        @default(now())
+  metadata         Json?
+  survey           ClimateSurvey   @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+  answers          ClimateAnswer[]
+
+  @@unique([surveyId, respondentUserId])
+  @@index([surveyId])
+  @@index([respondentUserId])
+  @@index([employeeId])
 }
 
 model AnonymousFeedback {
@@ -742,10 +774,22 @@ model AnonymousFeedback {
   message     String
   evidenceUrl String?
   status      AnonymousFeedbackStatus @default(RECEBIDO)
+  urgency     String                  @default("MEDIA")
+  allowContact Boolean                @default(false)
+  contactUserId String?
+  lobId       String?
+  jobTitle    String?
+  resolvedAt  DateTime?
+  resolvedById String?
   theme       String?
   actionPlan  ActionPlan?
   createdAt   DateTime                @default(now())
   updatedAt   DateTime                @updatedAt
+
+  @@index([status, createdAt])
+  @@index([category])
+  @@index([urgency])
+  @@index([lobId])
 }
 
 model ActionPlan {

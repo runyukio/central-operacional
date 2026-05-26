@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import {
   Bar,
@@ -2459,12 +2459,9 @@ export function MySchedulePage() {
               <EmptyState title="Horas ainda não importadas" description="Horas ainda não importadas para este período." />
             )}
           </Panel>
-          <Panel title="Comunicados Recentes">
-            <EmptyState title="Comunicados recentes" description="Nenhum comunicado disponível no momento." />
-          </Panel>
         </div>
       </div>
-      <div className="grid gap-5 lg:grid-cols-2">
+      <div className="grid gap-5">
         <Panel title="Status das Solicitações">
           <div className="grid grid-cols-2 divide-x divide-y divide-border rounded-lg border border-border md:grid-cols-6 md:divide-y-0">
             <MetricPill value={requestSummary.total} label="Total" />
@@ -2474,9 +2471,6 @@ export function MySchedulePage() {
             <MetricPill value={requestSummary.refused} label="Recusadas" />
             <MetricPill value={requestSummary.done} label="Concluídas" />
           </div>
-        </Panel>
-        <Panel title="Meu Desempenho">
-          <EmptyState title="Desempenho ainda não disponível" description="Os indicadores de desempenho serão exibidos quando houver dados reais importados ou cadastrados." />
         </Panel>
       </div>
       {showDayOffModal ? (
@@ -8859,165 +8853,594 @@ function coverageTone(value: number) {
   return "bg-red-100 text-red-700";
 }
 
-export function ClimatePage() {
-  const [answered, setAnswered] = useState(false);
-  const [climateComment, setClimateComment] = useState("");
+type AnonymousFeedbackClient = {
+  id: string;
+  category: string;
+  urgency: string;
+  urgencyLabel: string;
+  comment: string;
+  status: string;
+  statusLabel: string;
+  allowContact: boolean;
+  contact?: { name: string; email: string; wbLogin: string } | null;
+  lob?: string | null;
+  jobTitle?: string | null;
+  createdAt: string;
+  resolvedAt?: string | null;
+};
 
-  async function submitClimateAnswer() {
-    await apiJson<{ data: unknown }>("/api/climate/answers", {
-      method: "POST",
-      body: JSON.stringify({
-        surveyId: "CLM-05",
-        answers: [
-          { questionId: "q1", value: 4 },
-          { questionId: "q2", value: "Sim" },
-          { questionId: "q3", value: "Ferramentas" },
-          { questionId: "q4", value: climateComment }
-        ]
-      })
+type AnonymousFeedbackListResponse = {
+  data: AnonymousFeedbackClient[];
+  summary: {
+    total: number;
+    new: number;
+    inReview: number;
+    resolved: number;
+    archived: number;
+    critical: number;
+  };
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+};
+
+type ClimateQuestionClient = {
+  id: string;
+  text: string;
+  type: string;
+  typeLabel: string;
+  options: string[];
+  required: boolean;
+  order: number;
+};
+
+type ClimateSurveyClient = {
+  id: string;
+  title: string;
+  description: string;
+  status: string;
+  anonymous: boolean;
+  targetType?: string;
+  targetValue?: string | null;
+  startsAt: string;
+  endsAt: string;
+  answered?: boolean;
+  questions: ClimateQuestionClient[];
+  results?: {
+    responseCount: number;
+    satisfactionAverage: number | null;
+    nps: number | null;
+    questions: Array<{
+      id: string;
+      question: string;
+      type: string;
+      answers: number;
+      average: number | null;
+      distribution: Record<string, number>;
+      comments: string[];
+    }>;
+  };
+};
+
+type ClimateSurveyListResponse =
+  | {
+      mode: "admin";
+      data: ClimateSurveyClient[];
+      summary: {
+        open: number;
+        totalResponses: number;
+        responseRate: number | null;
+        satisfactionAverage: number | null;
+        nps: number | null;
+      };
+    }
+  | {
+      mode: "collaborator";
+      data: ClimateSurveyClient[];
+    };
+
+const anonymousCategories = ["Liderança", "Cronograma", "Ferramentas / acessos", "Ambiente", "Comunicação", "Carga de trabalho", "Sugestão", "Problema operacional", "Outro"];
+const urgencyOptions = ["Baixa", "Média", "Alta", "Crítica"];
+const feedbackStatusOptions = ["Todos", "Novo", "Em análise", "Resolvido", "Arquivado"];
+const climateQuestionTypeOptions = [
+  ["ESCALA_1_5", "Escala 1 a 5"],
+  ["SIM_NAO", "Sim/Não"],
+  ["MULTIPLA_ESCOLHA", "Múltipla escolha"],
+  ["TEXTO_LIVRE", "Texto livre"],
+  ["NPS_0_10", "NPS 0 a 10"]
+] as const;
+
+function ptDate(value: string) {
+  return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeZone: "America/Sao_Paulo" }).format(new Date(value));
+}
+
+function dateInputPlusDays(days: number) {
+  const base = parseDateInput(currentOperationalDateInput()) ?? new Date();
+  base.setUTCDate(base.getUTCDate() + days);
+  return dateInputFromUtc(base);
+}
+
+export function ClimatePage() {
+  const { data: session } = useSession();
+  const role = String(session?.user?.role ?? "COLABORADOR").toUpperCase();
+  const isAdmin = role === "ADMIN";
+  const [payload, setPayload] = useState<ClimateSurveyListResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+  const [selectedSurveyId, setSelectedSurveyId] = useState<string>("");
+  const [answers, setAnswers] = useState<Record<string, string | number>>({});
+  const [submittingSurveyId, setSubmittingSurveyId] = useState("");
+  const [creatingSurvey, setCreatingSurvey] = useState(false);
+  const [editingSurveyId, setEditingSurveyId] = useState("");
+  const [newSurvey, setNewSurvey] = useState({
+    title: "",
+    description: "",
+    startsAt: currentOperationalDateInput(),
+    endsAt: dateInputPlusDays(14),
+    anonymous: true,
+    status: "ABERTA",
+    targetType: "TODOS",
+    targetValue: ""
+  });
+
+  const surveys = payload?.data ?? [];
+  const selectedSurvey = selectedSurveyId ? surveys.find((survey) => survey.id === selectedSurveyId) ?? surveys[0] : surveys[0];
+
+  useEffect(() => {
+    void loadClimateSurveys();
+  }, []);
+
+  async function loadClimateSurveys() {
+    setLoading(true);
+    try {
+      const result = await apiJson<ClimateSurveyListResponse>("/api/climate/surveys");
+      setPayload(result);
+      setSelectedSurveyId((current) => current || result.data[0]?.id || "");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível carregar Pesquisa de Clima.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveSurvey() {
+    setCreatingSurvey(true);
+    setMessage("");
+    try {
+      await apiJson<{ data: ClimateSurveyClient }>("/api/climate/surveys", {
+        method: editingSurveyId ? "PATCH" : "POST",
+        body: JSON.stringify(editingSurveyId ? { id: editingSurveyId, ...newSurvey } : newSurvey)
+      });
+      setMessage(editingSurveyId ? "Pesquisa atualizada com sucesso." : "Pesquisa criada com sucesso.");
+      setNewSurvey({ ...newSurvey, title: "", description: "" });
+      setEditingSurveyId("");
+      await loadClimateSurveys();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível salvar a pesquisa.");
+    } finally {
+      setCreatingSurvey(false);
+    }
+  }
+
+  function editSurvey(survey: ClimateSurveyClient) {
+    setEditingSurveyId(survey.id);
+    setNewSurvey({
+      title: survey.title,
+      description: survey.description,
+      startsAt: survey.startsAt.slice(0, 10),
+      endsAt: survey.endsAt.slice(0, 10),
+      anonymous: survey.anonymous,
+      status: survey.status,
+      targetType: survey.targetType ?? "TODOS",
+      targetValue: survey.targetValue ?? ""
     });
-    setAnswered(true);
+    setSelectedSurveyId(survey.id);
+  }
+
+  async function updateSurveyStatus(id: string, status: string) {
+    setMessage("");
+    try {
+      await apiJson<{ data: ClimateSurveyClient }>("/api/climate/surveys", {
+        method: "PATCH",
+        body: JSON.stringify({ id, status })
+      });
+      setMessage(status === "ENCERRADA" ? "Pesquisa encerrada." : "Status da pesquisa atualizado.");
+      await loadClimateSurveys();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível atualizar a pesquisa.");
+    }
+  }
+
+  async function submitClimateSurvey(survey: ClimateSurveyClient) {
+    setSubmittingSurveyId(survey.id);
+    setMessage("");
+    try {
+      await apiJson<{ data: { message: string } }>("/api/climate/answers", {
+        method: "POST",
+        body: JSON.stringify({
+          surveyId: survey.id,
+          answers: survey.questions.map((question) => ({ questionId: question.id, value: answers[question.id] ?? "" }))
+        })
+      });
+      setMessage("Pesquisa respondida com sucesso.");
+      setAnswers({});
+      await loadClimateSurveys();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível salvar sua resposta.");
+    } finally {
+      setSubmittingSurveyId("");
+    }
+  }
+
+  function renderQuestionInput(question: ClimateQuestionClient) {
+    const value = answers[question.id] ?? (question.type === "ESCALA_1_5" ? 3 : "");
+    if (question.type === "ESCALA_1_5" || question.type === "NPS_0_10") {
+      const max = question.type === "NPS_0_10" ? 10 : 5;
+      return (
+        <div className="mt-3 flex items-center gap-4">
+          <input
+            type="range"
+            min="1"
+            max={max}
+            value={Number(value) || 1}
+            onChange={(event) => setAnswers((current) => ({ ...current, [question.id]: Number(event.target.value) }))}
+            className="w-full"
+          />
+          <span className="w-10 rounded-lg bg-blue-50 px-2 py-1 text-center text-sm font-black text-blue-700">{value}</span>
+        </div>
+      );
+    }
+    if (question.type === "SIM_NAO") {
+      return (
+        <select value={String(value)} onChange={(event) => setAnswers((current) => ({ ...current, [question.id]: event.target.value }))} className="mt-3 h-11 w-full rounded-lg border border-border px-3">
+          <option value="">Selecione</option>
+          <option>Sim</option>
+          <option>Não</option>
+        </select>
+      );
+    }
+    if (question.type === "MULTIPLA_ESCOLHA") {
+      return (
+        <select value={String(value)} onChange={(event) => setAnswers((current) => ({ ...current, [question.id]: event.target.value }))} className="mt-3 h-11 w-full rounded-lg border border-border px-3">
+          <option value="">Selecione</option>
+          {question.options.map((option) => <option key={option}>{option}</option>)}
+        </select>
+      );
+    }
+    return (
+      <textarea
+        value={String(value)}
+        onChange={(event) => setAnswers((current) => ({ ...current, [question.id]: event.target.value }))}
+        className="mt-3 min-h-24 w-full rounded-lg border border-border p-3 outline-none"
+        placeholder="Escreva sua resposta"
+      />
+    );
+  }
+
+  if (isAdmin) {
+    const adminPayload = payload?.mode === "admin" ? payload : null;
+    return (
+      <div>
+        <PageHeader title="Pesquisa de Clima" description="Pesquisas reais para resposta dos colaboradores e consolidação administrativa." icon={HeartPulse} actions={<TopActions />} />
+        {message ? <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
+        <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <StatCard title="Pesquisas abertas" value={adminPayload?.summary.open ?? 0} helper="ciclos ativos" icon={HeartPulse} tone="blue" />
+          <StatCard title="Total de respostas" value={adminPayload?.summary.totalResponses ?? 0} helper="respostas salvas" icon={UsersRound} tone="green" />
+          <StatCard title="Média de satisfação" value={adminPayload?.summary.satisfactionAverage ?? "-"} helper="escala 1 a 5" icon={Star} tone="gold" />
+          <StatCard title="NPS" value={adminPayload?.summary.nps ?? "-"} helper="quando houver pergunta NPS" icon={Target} tone="orange" />
+        </div>
+        <div className="grid gap-5 xl:grid-cols-[420px_minmax(0,1fr)]">
+          <Panel title={editingSurveyId ? "Editar pesquisa em rascunho" : "Criar pesquisa"}>
+            <div className="space-y-3">
+              <input value={newSurvey.title} onChange={(event) => setNewSurvey({ ...newSurvey, title: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3" placeholder="Título" />
+              <textarea value={newSurvey.description} onChange={(event) => setNewSurvey({ ...newSurvey, description: event.target.value })} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none" placeholder="Descrição" />
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="block text-sm font-bold text-muted">Início<input type="date" value={newSurvey.startsAt} onChange={(event) => setNewSurvey({ ...newSurvey, startsAt: event.target.value })} className="mt-1 h-10 w-full rounded-lg border border-border px-3" /></label>
+                <label className="block text-sm font-bold text-muted">Fim<input type="date" value={newSurvey.endsAt} onChange={(event) => setNewSurvey({ ...newSurvey, endsAt: event.target.value })} className="mt-1 h-10 w-full rounded-lg border border-border px-3" /></label>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <select value={newSurvey.status} onChange={(event) => setNewSurvey({ ...newSurvey, status: event.target.value })} className="h-10 rounded-lg border border-border px-3">
+                  <option value="RASCUNHO">Rascunho</option>
+                  <option value="ABERTA">Aberta</option>
+                  <option value="ENCERRADA">Encerrada</option>
+                </select>
+                <select value={newSurvey.targetType} onChange={(event) => setNewSurvey({ ...newSurvey, targetType: event.target.value })} className="h-10 rounded-lg border border-border px-3">
+                  <option value="TODOS">Todos</option>
+                  <option value="AGENTES">Agentes</option>
+                  <option value="LOB">LOB específica</option>
+                  <option value="CARGO_FUNCAO">Cargo/Função</option>
+                  <option value="SUPERVISOR">Supervisor</option>
+                </select>
+              </div>
+              <input value={newSurvey.targetValue} onChange={(event) => setNewSurvey({ ...newSurvey, targetValue: event.target.value })} className="h-10 w-full rounded-lg border border-border px-3" placeholder="Valor do público alvo, se aplicável" />
+              <label className="flex items-center gap-2 text-sm font-bold text-navy-950">
+                <input type="checkbox" checked={newSurvey.anonymous} onChange={(event) => setNewSurvey({ ...newSurvey, anonymous: event.target.checked })} />
+                Pesquisa anônima
+              </label>
+              <div className="rounded-lg bg-slate-50 p-3 text-xs font-semibold leading-5 text-muted">
+                Sem perguntas customizadas, o sistema cria o template padrão de clima com escala 1 a 5 e campos abertos.
+              </div>
+              <div className="flex flex-wrap gap-2">
+              <button type="button" disabled={creatingSurvey || !newSurvey.title.trim()} onClick={saveSurvey} className="premium-button h-11 px-4 text-sm font-extrabold disabled:opacity-60">
+                {creatingSurvey ? "Salvando..." : editingSurveyId ? "Salvar alterações" : "Criar pesquisa"}
+              </button>
+              {editingSurveyId ? (
+                <button type="button" onClick={() => { setEditingSurveyId(""); setNewSurvey({ ...newSurvey, title: "", description: "", status: "ABERTA" }); }} className="h-11 rounded-lg border border-border px-4 text-sm font-bold">
+                  Cancelar edição
+                </button>
+              ) : null}
+              </div>
+            </div>
+          </Panel>
+          <div className="space-y-5">
+            <Panel title="Pesquisas">
+              {loading ? (
+                <EmptyState title="Carregando pesquisas" description="Buscando dados reais no banco." />
+              ) : surveys.length ? (
+                <SimpleTable
+                  columns={["Pesquisa", "Período", "Status", "Respostas", "Ações"]}
+                  rows={surveys.map((survey) => [
+                    <button key={`${survey.id}-title`} type="button" onClick={() => setSelectedSurveyId(survey.id)} className="text-left font-extrabold text-blue-700">{survey.title}</button>,
+                    `${ptDate(survey.startsAt)} até ${ptDate(survey.endsAt)}`,
+                    <StatusBadge key={`${survey.id}-status`} status={survey.status} />,
+                    survey.results?.responseCount ?? 0,
+                    <div key={`${survey.id}-actions`} className="flex flex-wrap gap-2">
+                      <button type="button" onClick={() => updateSurveyStatus(survey.id, "ABERTA")} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Abrir</button>
+                      <button type="button" onClick={() => updateSurveyStatus(survey.id, "ENCERRADA")} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Encerrar</button>
+                      {survey.status === "RASCUNHO" ? <button type="button" onClick={() => editSurvey(survey)} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Editar</button> : null}
+                    </div>
+                  ])}
+                />
+              ) : (
+                <EmptyState title="Nenhuma pesquisa criada ainda." description="Crie uma pesquisa para começar a coletar respostas." />
+              )}
+            </Panel>
+            <Panel title="Resultados da pesquisa selecionada" action="Exportar" actionOnClick={() => void downloadFile("/api/climate/surveys/export", "pesquisa_clima.csv").catch((error) => setMessage(error.message))}>
+              {selectedSurvey?.results ? (
+                <div className="space-y-4">
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <MetricPill value={selectedSurvey.results.responseCount} label="Respostas" />
+                    <MetricPill value={selectedSurvey.results.satisfactionAverage ?? "-"} label="Média" />
+                    <MetricPill value={selectedSurvey.results.nps ?? "-"} label="NPS" />
+                  </div>
+                  <div className="space-y-3">
+                    {selectedSurvey.results.questions.map((question) => (
+                      <div key={question.id} className="rounded-lg border border-border p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="font-extrabold text-navy-950">{question.question}</p>
+                          <StatusBadge status={question.average === null ? `${question.answers} resposta(s)` : `Média ${question.average}`} />
+                        </div>
+                        {Object.keys(question.distribution).length ? (
+                          <p className="mt-2 text-xs font-semibold text-muted">{Object.entries(question.distribution).map(([label, count]) => `${label}: ${count}`).join(" | ")}</p>
+                        ) : null}
+                        {question.comments.length ? (
+                          <div className="mt-3 space-y-2">
+                            {question.comments.slice(0, 4).map((comment, index) => (
+                              <p key={`${question.id}-${index}`} className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-navy-900">{comment}</p>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <EmptyState title="Nenhuma resposta registrada." description="Os resultados aparecem aqui após a primeira resposta." />
+              )}
+            </Panel>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
     <div>
-      <PageHeader title="Pesquisa de Clima" description="Crie, responda e acompanhe pesquisas de satisfação, engajamento e eNPS." icon={HeartPulse} actions={<TopActions />} />
-      <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="Participação" value="82%" change="+6 p.p." helper="vs última pesquisa" icon={UsersRound} tone="blue" />
-        <StatCard title="Satisfação" value="4,2/5" change="+0,3" helper="média geral" icon={HeartPulse} tone="green" />
-        <StatCard title="Engajamento" value="78%" change="+5%" helper="colaboradores ativos" icon={Trophy} tone="purple" />
-        <StatCard title="eNPS interno" value="54" change="+8" helper="zona de qualidade" icon={Target} tone="orange" />
-      </div>
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
-        <Panel title="Responder Pesquisa Ativa">
-          {answered ? (
-            <EmptyState title="Resposta registrada" description="Obrigado. A resposta foi computada sem expor dados sensíveis no consolidado." />
-          ) : (
-            <div className="space-y-4">
-              {["Como você avalia seu ambiente de trabalho?", "Você recomendaria a Central como um bom lugar para trabalhar?", "Qual tema merece mais atenção?"].map((question, index) => (
-                <label key={question} className="block rounded-lg border border-border p-4">
-                  <span className="text-sm font-bold text-navy-950">{question}</span>
-                  {index === 0 ? (
-                    <input type="range" min="1" max="5" defaultValue="4" className="mt-4 w-full" />
-                  ) : (
-                    <select className="mt-3 h-11 w-full rounded-lg border border-border px-3">
-                      <option>{index === 1 ? "Sim" : "Ferramentas"}</option>
-                      <option>{index === 1 ? "Não" : "Liderança"}</option>
-                      <option>Processos</option>
-                      <option>Ambiente</option>
-                    </select>
-                  )}
-                </label>
-              ))}
-              <textarea value={climateComment} onChange={(event) => setClimateComment(event.target.value)} className="min-h-28 w-full rounded-lg border border-border p-3 outline-none" placeholder="Deixe uma sugestão de melhoria" />
-              <button onClick={submitClimateAnswer} className="rounded-lg bg-blue-600 px-5 py-3 text-sm font-bold text-white">Enviar resposta</button>
-            </div>
-          )}
-        </Panel>
-        <div className="space-y-5">
-          <Panel title="Temas Recorrentes">
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={climateThemes} layout="vertical">
-                  <CartesianGrid stroke="#E8EDF5" horizontal={false} />
-                  <XAxis type="number" hide />
-                  <YAxis dataKey="theme" type="category" width={90} />
-                  <Tooltip />
-                  <Bar dataKey="value" fill="#2563EB" radius={[0, 8, 8, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </Panel>
-          <Panel title="Plano de Ação">
-            <MiniAlertList
-              items={[
-                { title: "Revisar estabilidade das ferramentas", status: "Em andamento", tone: "blue" },
-                { title: "Rodada com líderes de turno", status: "Planejado", tone: "orange" },
-                { title: "Simplificar fluxo de aprovação", status: "Novo", tone: "green" }
-              ]}
-            />
-          </Panel>
-        </div>
-      </div>
+      <PageHeader title="Pesquisa de Clima" description="Responda pesquisas abertas e acompanhe pendências." icon={HeartPulse} actions={<TopActions />} />
+      {message ? <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
+      <Panel title="Pesquisas abertas">
+        {loading ? (
+          <EmptyState title="Carregando pesquisas" description="Buscando pesquisas abertas." />
+        ) : surveys.length ? (
+          <div className="space-y-4">
+            {surveys.map((survey) => (
+              <div key={survey.id} className="rounded-lg border border-border p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="font-black text-navy-950">{survey.title}</h2>
+                    <p className="mt-1 text-sm text-muted">{survey.description}</p>
+                    <p className="mt-2 text-xs font-bold text-muted">Prazo: {ptDate(survey.endsAt)} · {survey.anonymous ? "Anônima" : "Identificada"}</p>
+                  </div>
+                  <StatusBadge status={survey.answered ? "Respondida" : "Pendente"} />
+                </div>
+                {survey.answered ? (
+                  <EmptyState title="Pesquisa respondida com sucesso." description="Obrigado por contribuir." />
+                ) : (
+                  <div className="mt-4 space-y-3">
+                    {survey.questions.map((question) => (
+                      <label key={question.id} className="block rounded-lg border border-border p-3">
+                        <span className="text-sm font-bold text-navy-950">{question.order}. {question.text}</span>
+                        {renderQuestionInput(question)}
+                      </label>
+                    ))}
+                    <button type="button" disabled={submittingSurveyId === survey.id} onClick={() => submitClimateSurvey(survey)} className="premium-button h-11 px-4 text-sm font-extrabold disabled:opacity-60">
+                      {submittingSurveyId === survey.id ? "Enviando..." : "Enviar resposta"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <EmptyState title="Nenhuma pesquisa aberta no momento." description="Quando houver uma pesquisa disponível, ela aparecerá aqui." />
+        )}
+      </Panel>
     </div>
   );
 }
 
 export function AnonymousFeedbackPage() {
+  const { data: session } = useSession();
+  const role = String(session?.user?.role ?? "COLABORADOR").toUpperCase();
+  const isAdmin = role === "ADMIN";
   const [submitted, setSubmitted] = useState(false);
-  const [anonymousForm, setAnonymousForm] = useState({ category: "Estrutura", message: "" });
+  const [message, setMessage] = useState("");
+  const [anonymousForm, setAnonymousForm] = useState({ category: "Liderança", urgency: "Média", comment: "", allowContact: false });
+  const [feedbackPayload, setFeedbackPayload] = useState<AnonymousFeedbackListResponse | null>(null);
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [feedbackFilters, setFeedbackFilters] = useState({ status: "Todos", urgency: "Todos", category: "Todos", search: "" });
+
+  const loadAnonymousFeedback = useCallback(async () => {
+    setFeedbackLoading(true);
+    const params = new URLSearchParams();
+    if (feedbackFilters.status !== "Todos") params.set("status", feedbackFilters.status);
+    if (feedbackFilters.urgency !== "Todos") params.set("urgency", feedbackFilters.urgency);
+    if (feedbackFilters.category !== "Todos") params.set("category", feedbackFilters.category);
+    if (feedbackFilters.search.trim()) params.set("search", feedbackFilters.search.trim());
+    try {
+      const payload = await apiJson<AnonymousFeedbackListResponse>(`/api/anonymous-feedback?${params.toString()}`);
+      setFeedbackPayload(payload);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível carregar feedbacks.");
+    } finally {
+      setFeedbackLoading(false);
+    }
+  }, [feedbackFilters.category, feedbackFilters.search, feedbackFilters.status, feedbackFilters.urgency]);
+
+  useEffect(() => {
+    if (isAdmin) void loadAnonymousFeedback();
+  }, [isAdmin, loadAnonymousFeedback]);
 
   async function submitAnonymousFeedback() {
-    await apiJson<{ data: unknown }>("/api/anonymous-feedback", {
-      method: "POST",
-      body: JSON.stringify({ ...anonymousForm, message: anonymousForm.message || "Sugestão registrada anonimamente para análise do RH." })
-    });
-    setSubmitted(true);
+    setMessage("");
+    try {
+      const payload = await apiJson<{ data: { message: string } }>("/api/anonymous-feedback", {
+        method: "POST",
+        body: JSON.stringify(anonymousForm)
+      });
+      setSubmitted(true);
+      setMessage(payload.data.message);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível enviar o feedback.");
+    }
+  }
+
+  async function updateFeedbackStatus(id: string, status: string) {
+    setMessage("");
+    try {
+      await apiJson<{ data: AnonymousFeedbackClient }>("/api/anonymous-feedback", {
+        method: "PATCH",
+        body: JSON.stringify({ id, status })
+      });
+      setMessage("Status atualizado.");
+      await loadAnonymousFeedback();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível atualizar o status.");
+    }
+  }
+
+  if (isAdmin) {
+    const summary = feedbackPayload?.summary;
+    const exportParams = new URLSearchParams();
+    if (feedbackFilters.status !== "Todos") exportParams.set("status", feedbackFilters.status);
+    if (feedbackFilters.urgency !== "Todos") exportParams.set("urgency", feedbackFilters.urgency);
+    if (feedbackFilters.category !== "Todos") exportParams.set("category", feedbackFilters.category);
+    if (feedbackFilters.search.trim()) exportParams.set("search", feedbackFilters.search.trim());
+    return (
+      <div>
+        <PageHeader title="Feedback Anônimo" description="Acompanhe manifestações anônimas sem expor a identidade do colaborador." icon={MessageCircle} actions={<TopActions />} />
+        {message ? <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
+        <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+          <StatCard title="Total" value={summary?.total ?? 0} helper="feedbacks recebidos" icon={MessageCircle} tone="blue" />
+          <StatCard title="Novos" value={summary?.new ?? 0} helper="aguardando leitura" icon={Send} tone="cyan" />
+          <StatCard title="Em análise" value={summary?.inReview ?? 0} helper="em tratamento" icon={RefreshCw} tone="orange" />
+          <StatCard title="Resolvidos" value={summary?.resolved ?? 0} helper="concluídos" icon={CheckCircle2} tone="green" />
+          <StatCard title="Críticos" value={summary?.critical ?? 0} helper="urgência crítica" icon={AlertTriangle} tone="red" />
+        </div>
+        <Panel title="Feedbacks recebidos" action="Exportar" actionOnClick={() => void downloadFile(`/api/anonymous-feedback/export?${exportParams.toString()}`, "feedback_anonimo.csv").catch((error) => setMessage(error.message))}>
+          <div className="mb-4 grid gap-3 md:grid-cols-4">
+            <select value={feedbackFilters.status} onChange={(event) => setFeedbackFilters({ ...feedbackFilters, status: event.target.value })} className="h-10 rounded-lg border border-border px-3">
+              {feedbackStatusOptions.map((option) => <option key={option}>{option}</option>)}
+            </select>
+            <select value={feedbackFilters.urgency} onChange={(event) => setFeedbackFilters({ ...feedbackFilters, urgency: event.target.value })} className="h-10 rounded-lg border border-border px-3">
+              <option>Todos</option>
+              {urgencyOptions.map((option) => <option key={option}>{option}</option>)}
+            </select>
+            <select value={feedbackFilters.category} onChange={(event) => setFeedbackFilters({ ...feedbackFilters, category: event.target.value })} className="h-10 rounded-lg border border-border px-3">
+              <option>Todos</option>
+              {anonymousCategories.map((option) => <option key={option}>{option}</option>)}
+            </select>
+            <div className="flex gap-2">
+              <input value={feedbackFilters.search} onChange={(event) => setFeedbackFilters({ ...feedbackFilters, search: event.target.value })} className="h-10 min-w-0 flex-1 rounded-lg border border-border px-3" placeholder="Buscar comentário" />
+              <button type="button" onClick={loadAnonymousFeedback} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">Buscar</button>
+            </div>
+          </div>
+          {feedbackLoading ? (
+            <EmptyState title="Carregando feedbacks" description="Buscando dados reais no banco." />
+          ) : feedbackPayload?.data.length ? (
+            <SimpleTable
+              columns={["Data", "Categoria", "Urgência", "LOB", "Comentário", "Status", "Ações"]}
+              rows={feedbackPayload.data.map((feedback) => [
+                ptDate(feedback.createdAt),
+                feedback.category,
+                <PriorityBadge key={`${feedback.id}-urgency`} priority={feedback.urgencyLabel} />,
+                feedback.lob ?? "-",
+                <div key={`${feedback.id}-comment`} className="max-w-[420px]">
+                  <p className="line-clamp-3 text-sm">{feedback.comment}</p>
+                  {feedback.allowContact ? <span className="mt-2 inline-flex rounded-md bg-blue-50 px-2 py-1 text-[11px] font-extrabold text-blue-700">Contato permitido</span> : null}
+                </div>,
+                <StatusBadge key={`${feedback.id}-status`} status={feedback.statusLabel} />,
+                <div key={`${feedback.id}-actions`} className="flex flex-wrap gap-2">
+                  <button type="button" onClick={() => updateFeedbackStatus(feedback.id, "Em análise")} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Em análise</button>
+                  <button type="button" onClick={() => updateFeedbackStatus(feedback.id, "Resolvido")} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Resolver</button>
+                  <button type="button" onClick={() => updateFeedbackStatus(feedback.id, "Arquivado")} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Arquivar</button>
+                </div>
+              ])}
+            />
+          ) : (
+            <EmptyState title="Nenhum feedback recebido ainda." description="Os feedbacks enviados pelos colaboradores aparecerão aqui." />
+          )}
+        </Panel>
+      </div>
+    );
   }
 
   return (
     <div>
-      <PageHeader title="Feedback Anônimo" description="Canal seguro para registrar percepções consolidadas para RH e gestão." icon={MessageCircle} actions={<TopActions />} />
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_430px]">
-        <Panel title="Enviar feedback anônimo">
-          {submitted ? (
-            <EmptyState title="Feedback recebido" description="A identidade do colaborador não será exibida nos painéis de RH/Gestão." />
-          ) : (
+      <PageHeader title="Feedback Anônimo" description="Canal seguro para registrar percepções, sugestões e problemas operacionais." icon={MessageCircle} actions={<TopActions />} />
+      {message ? <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
+      <Panel title="Enviar feedback anônimo">
+        {submitted ? (
+          <EmptyState title="Feedback enviado com sucesso." description="Obrigado por compartilhar sua percepção." />
+        ) : (
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
             <div className="space-y-4">
               <label className="block">
                 <span className="mb-1.5 block text-sm font-bold text-muted">Categoria</span>
                 <select value={anonymousForm.category} onChange={(event) => setAnonymousForm({ ...anonymousForm, category: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3">
-                  <option>Estrutura</option>
-                  <option>Liderança</option>
-                  <option>Processos</option>
-                  <option>Ferramentas</option>
-                  <option>Ambiente</option>
-                  <option>Outros</option>
+                  {anonymousCategories.map((category) => <option key={category}>{category}</option>)}
                 </select>
               </label>
               <label className="block">
-                <span className="mb-1.5 block text-sm font-bold text-muted">Mensagem</span>
-                <textarea value={anonymousForm.message} onChange={(event) => setAnonymousForm({ ...anonymousForm, message: event.target.value })} className="min-h-40 w-full rounded-lg border border-border p-3 outline-none" placeholder="Descreva a situação, oportunidade ou sugestão" />
+                <span className="mb-1.5 block text-sm font-bold text-muted">Nível de urgência</span>
+                <select value={anonymousForm.urgency} onChange={(event) => setAnonymousForm({ ...anonymousForm, urgency: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3">
+                  {urgencyOptions.map((urgency) => <option key={urgency}>{urgency}</option>)}
+                </select>
               </label>
               <label className="block">
-                <span className="mb-1.5 block text-sm font-bold text-muted">Evidência opcional</span>
-                <input type="file" className="w-full rounded-lg border border-border p-3 text-sm" />
+                <span className="mb-1.5 block text-sm font-bold text-muted">Comentário</span>
+                <textarea value={anonymousForm.comment} onChange={(event) => setAnonymousForm({ ...anonymousForm, comment: event.target.value })} className="min-h-40 w-full rounded-lg border border-border p-3 outline-none" placeholder="Descreva a situação, oportunidade ou sugestão" />
               </label>
-              <button onClick={submitAnonymousFeedback} className="rounded-lg bg-blue-600 px-5 py-3 text-sm font-bold text-white">Enviar anonimamente</button>
+              <label className="flex items-center gap-2 text-sm font-bold text-navy-950">
+                <input type="checkbox" checked={anonymousForm.allowContact} onChange={(event) => setAnonymousForm({ ...anonymousForm, allowContact: event.target.checked })} />
+                Desejo permitir contato sobre este feedback
+              </label>
+              <button type="button" onClick={submitAnonymousFeedback} disabled={!anonymousForm.comment.trim()} className="premium-button h-11 px-5 text-sm font-extrabold disabled:opacity-60">Enviar feedback</button>
             </div>
-          )}
-        </Panel>
-        <div className="space-y-5">
-          <Panel title="Dashboard RH/Gestão">
-            <div className="grid grid-cols-2 gap-3">
-              <MetricPill value={42} label="Recebidos" />
-              <MetricPill value={18} label="Em análise" />
-              <MetricPill value={9} label="Planos de ação" />
-              <MetricPill value={15} label="Concluídos" />
+            <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm font-semibold leading-6 text-blue-800">
+              O feedback é salvo sem nome, e-mail ou WB/Login. Somente dados agregados como LOB e cargo podem ser usados para análise consolidada. Se você permitir contato, o Admin verá essa autorização de forma explícita.
             </div>
-          </Panel>
-          <Panel title="Classificação por tema">
-            <MiniAlertList
-              items={[
-                { title: "Ferramentas", status: "34%", tone: "orange" },
-                { title: "Liderança", status: "27%", tone: "blue" },
-                { title: "Processos", status: "21%", tone: "green" },
-                { title: "Ambiente", status: "18%", tone: "blue" }
-              ]}
-            />
-          </Panel>
-          <Panel title="Status">
-            <MiniAlertList
-              items={[
-                { title: "Recebido", status: "12", tone: "blue" },
-                { title: "Em análise", status: "18", tone: "orange" },
-                { title: "Plano de ação", status: "9", tone: "green" },
-                { title: "Concluído", status: "15", tone: "green" }
-              ]}
-            />
-          </Panel>
-        </div>
-      </div>
+          </div>
+        )}
+      </Panel>
     </div>
   );
 }

@@ -1,8 +1,5 @@
-import { redirect } from "next/navigation";
-
-import { requireAdminRoute } from "@/lib/admin-route";
+import { InactiveModulePage } from "@/components/inactive-module-page";
 
 export default async function ComunicacaoRoute() {
-  await requireAdminRoute();
-  redirect("/mural");
+  return <InactiveModulePage title="Comunicação / Mural" />;
 }

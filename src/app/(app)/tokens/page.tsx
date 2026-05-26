@@ -1,7 +1,5 @@
-import { TokensPage } from "@/components/modules";
-import { requireAdminRoute } from "@/lib/admin-route";
+import { redirect } from "next/navigation";
 
 export default async function TokensRoute() {
-  await requireAdminRoute();
-  return <TokensPage />;
+  redirect("/central-operacional");
 }

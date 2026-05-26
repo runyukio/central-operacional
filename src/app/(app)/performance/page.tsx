@@ -1,7 +1,5 @@
-import { PerformancePage } from "@/components/modules";
-import { requireAdminRoute } from "@/lib/admin-route";
+import { InactiveModulePage } from "@/components/inactive-module-page";
 
 export default async function PerformanceRoute() {
-  await requireAdminRoute();
-  return <PerformancePage />;
+  return <InactiveModulePage title="Performance" />;
 }

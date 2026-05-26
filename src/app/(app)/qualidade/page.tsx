@@ -1,7 +1,5 @@
-import { QualityPage } from "@/components/modules";
-import { requireAdminRoute } from "@/lib/admin-route";
+import { InactiveModulePage } from "@/components/inactive-module-page";
 
 export default async function QualidadeRoute() {
-  await requireAdminRoute();
-  return <QualityPage />;
+  return <InactiveModulePage title="Qualidade e Feedback" />;
 }

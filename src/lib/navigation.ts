@@ -21,18 +21,13 @@ export const navItems: NavItem[] = [
   { label: "Horas Operacionais", href: "/horas-operacionais", icon: "Clock", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"] },
   { label: "Solicitações", href: "/solicitacoes", icon: "ClipboardList", roles: authenticatedOps },
   { label: "Esteiras", href: "/esteiras", icon: "KanbanSquare", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH", "TI", "QUALIDADE"] },
-  { label: "Report de Turno", href: "/report-turno", icon: "ClipboardCheck", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"] },
-  { label: "Performance", href: "/performance", icon: "Trophy", roles: ["ADMIN"] },
-  { label: "Comunicação / Mural", href: "/mural", icon: "Megaphone", roles: ["ADMIN"] },
-  { label: "Qualidade e Feedback", href: "/qualidade", icon: "ShieldCheck", roles: ["ADMIN"] },
   { label: "Mapa de Funcionários", href: "/mapa-funcionarios", icon: "Map", roles: leadership },
   { label: "Hierarquia", href: "/hierarquia", icon: "UsersRound", roles: ["ADMIN", "GESTOR", "WFM", "RH", "SUPERVISOR"] },
   { label: "Adiantamento", href: "/adiantamento", icon: "Coins", roles: ["ADMIN", "GESTOR", "WFM"] },
   { label: "Staff e Cobertura", href: "/staff-cobertura", icon: "UsersRound", roles: ["ADMIN"] },
   { label: "Equipamentos e Logística", href: "/equipamentos", icon: "MonitorCog", roles: ["ADMIN", "GESTOR", "TI"] },
-  { label: "Pesquisa de Clima", href: "/clima", icon: "HeartPulse", roles: ["ADMIN"] },
-  { label: "Feedback Anônimo", href: "/feedback-anonimo", icon: "MessageCircleQuestion", roles: ["ADMIN"] },
-  { label: "Tokens e Recompensas", href: "/tokens", icon: "Coins", roles: ["ADMIN"] },
+  { label: "Pesquisa de Clima", href: "/clima", icon: "HeartPulse", roles: ["ADMIN", "COLABORADOR"] },
+  { label: "Feedback Anônimo", href: "/feedback-anonimo", icon: "MessageCircleQuestion", roles: ["ADMIN", "COLABORADOR"] },
   { label: "Configurações", href: "/configuracoes", icon: "Settings", roles: ["ADMIN"] }
 ];
 
