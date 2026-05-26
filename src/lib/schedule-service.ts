@@ -6,6 +6,7 @@ import { commitScheduleImport as commitMockScheduleImport, getAttendanceSummary 
 import { hasExcelValue, normalizeExcelDate, normalizeExcelTime } from "@/lib/excel-normalization";
 import { prisma } from "@/lib/prisma";
 import { normalizeRole } from "@/lib/permissions";
+import { logPerformanceMetric } from "@/lib/performance-logger";
 import { cleanShiftName, isBlockedShiftName, isSelectableShiftName, shiftLookupKey } from "@/lib/shift-display";
 import { calculateAbsenceRate, calculateCoverageRate, isAbsenceStatus, isPresentStatus, isScheduledStatus, normalizeOperationalStatus } from "@/lib/attendance-calculation";
 import { calculateProductiveDifferenceMinutes, isProductiveDifferenceWithinTolerance, plannedProductiveHoursForSchedule } from "@/lib/work-hours-rules";
@@ -151,6 +152,8 @@ export type AttendanceQuery = {
   reason?: string;
   justification?: "pending" | "justified" | string;
   includeJustified?: boolean | string;
+  summaryOnly?: boolean | string;
+  skipSummary?: boolean | string;
 };
 
 export type AttendanceInput = {
@@ -203,6 +206,7 @@ type ScheduleImportValidation = {
 };
 
 export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery = {}) {
+  const startedAt = Date.now();
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
     if (!user) return allowDemoDataFallback ? getMockSchedulesForActor(actor) : emptyOperationalSchedules();
@@ -227,13 +231,38 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         ? { id: user.employeeProfile.id }
         : employeeFilters(query, search);
     const supervisorFilter = await scheduleSupervisorFilter(query.supervisor);
-    const scheduleRows = await prisma.schedule.findMany({
-      where: {
-        ...scheduleWhere,
-        ...(supervisorFilter ?? {}),
-        employee: employeeWhere
-      },
+    const scheduleQueryWhere: Prisma.ScheduleWhereInput = {
+      ...scheduleWhere,
+      ...(supervisorFilter ?? {}),
+      employee: employeeWhere
+    };
+    const scheduleEmployeeMatches = await prisma.schedule.findMany({
+      where: scheduleQueryWhere,
       select: {
+        employeeId: true,
+        employee: { select: { fullName: true } }
+      },
+      orderBy: [{ employee: { fullName: "asc" } }, { employeeId: "asc" }]
+    });
+    const groupedEmployeeIds: string[] = [];
+    const seenEmployeeIds = new Set<string>();
+    scheduleEmployeeMatches.forEach((row) => {
+      if (seenEmployeeIds.has(row.employeeId)) return;
+      seenEmployeeIds.add(row.employeeId);
+      groupedEmployeeIds.push(row.employeeId);
+    });
+    const totalSchedules = groupedEmployeeIds.length;
+    const totalPages = Math.max(1, Math.ceil(totalSchedules / limit));
+    const page = totalSchedules > 0 && requestedPage > totalPages ? 1 : requestedPage;
+    const visibleEmployeeIds = role === "COLABORADOR" ? groupedEmployeeIds.slice(0, 1) : groupedEmployeeIds.slice((page - 1) * limit, page * limit);
+    const visibleEmployeeOrder = new Map(visibleEmployeeIds.map((employeeId, index) => [employeeId, index]));
+    const scheduleRows = visibleEmployeeIds.length
+      ? await prisma.schedule.findMany({
+        where: {
+          ...scheduleQueryWhere,
+          employeeId: { in: visibleEmployeeIds }
+        },
+        select: {
         id: true,
         employeeId: true,
         date: true,
@@ -312,8 +341,9 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
           }
         }
       },
-      orderBy: [{ date: "asc" }, { employeeId: "asc" }]
-    });
+        orderBy: [{ date: "asc" }, { employeeId: "asc" }]
+      })
+      : [];
     const scheduleEmployeeIds = Array.from(new Set(scheduleRows.map((schedule) => schedule.employeeId)));
     const relatedWorkHourRecords = scheduleEmployeeIds.length
       ? await prisma.workHourRecord.findMany({
@@ -357,11 +387,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         grouped.set(schedule.employeeId, { employee: schedule.employee, schedules: [schedule] });
       }
     });
-    const groupedEmployees = Array.from(grouped.values()).sort((a, b) => a.employee.fullName.localeCompare(b.employee.fullName, "pt-BR"));
-    const totalSchedules = groupedEmployees.length;
-    const totalPages = Math.max(1, Math.ceil(totalSchedules / limit));
-    const page = totalSchedules > 0 && requestedPage > totalPages ? 1 : requestedPage;
-    const visibleEmployees = role === "COLABORADOR" ? groupedEmployees.slice(0, 1) : groupedEmployees.slice((page - 1) * limit, page * limit);
+    const visibleEmployees = Array.from(grouped.values()).sort((a, b) => (visibleEmployeeOrder.get(a.employee.id) ?? 0) - (visibleEmployeeOrder.get(b.employee.id) ?? 0));
 
     const scheduleGridRows = visibleEmployees.map(({ employee, schedules }) => {
       const scheduleByDate = new Map(schedules.map((item) => [dateKey(item.date), item]));
@@ -472,9 +498,9 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       return { ...day, shift, label };
     });
 
-    const imports = await prisma.scheduleImport.findMany({ orderBy: { createdAt: "desc" }, include: { importedBy: true } });
+    const imports = await prisma.scheduleImport.findMany({ orderBy: { createdAt: "desc" }, include: { importedBy: true }, take: 20 });
 
-    return {
+    const response = {
       scheduleDays,
       scheduleGridRows,
       ownEmployee: own
@@ -509,7 +535,19 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         totalPages
       }
     };
+    logPerformanceMetric("schedules.list", startedAt, {
+      role,
+      startDate: dateKey(period.start),
+      endDate: dateKey(period.end),
+      page,
+      limit,
+      employeesMatched: totalSchedules,
+      employeesReturned: scheduleGridRows.length,
+      scheduleRows: scheduleRows.length
+    });
+    return response;
   } catch (error) {
+    logPerformanceMetric("schedules.list.error", startedAt, { error: true });
     recordErrorLog({ userEmail: actor.email, code: "SCHEDULE_LIST_DB_FALLBACK", message: error instanceof Error ? error.message : "Falha ao listar cronogramas", action: "SCHEDULE_LIST", severity: "WARNING" });
     return allowDemoDataFallback ? getMockSchedulesForActor(actor) : emptyOperationalSchedules();
   }
@@ -1217,6 +1255,7 @@ export async function exportOperationalSchedulesCsv(actor: Actor, query: Schedul
 }
 
 export async function getOperationalAttendance(actor: Actor, query: AttendanceQuery = {}) {
+  const startedAt = Date.now();
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
     if (!user) {
@@ -1238,7 +1277,7 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
     const includeJustified = query.includeJustified === true || query.includeJustified === "true";
     const extraFilters: Prisma.ScheduleWhereInput[] = [];
     if (lobFilter) extraFilters.push({ employee: { lob: { name: lobFilter } } });
-    if (roleTitleFilter && roleTitleFilter !== "Todos") extraFilters.push({ employee: { roleTitle: { contains: roleTitleFilter, mode: "insensitive" } } });
+    if (roleTitleFilter && roleTitleFilter !== "Todos") extraFilters.push({ employee: { roleTitle: roleTitleFilter } });
     const supervisorWhere = await scheduleSupervisorFilter(supervisorFilter);
     if (supervisorWhere) extraFilters.push(supervisorWhere);
     if (statusFilter) extraFilters.push({ status: statusFilter });
@@ -1268,6 +1307,32 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
       role === "COLABORADOR" && user.employeeProfile
         ? { ...baseWhere, employeeId: user.employeeProfile.id }
         : baseWhere;
+    const summaryFilters: AttendanceSummaryFilters = {
+      lob: lobFilter,
+      supervisor: query.supervisor,
+      shift: query.shift,
+      collaborator: query.collaborator,
+      roleTitle: query.roleTitle,
+      employeeId: role === "COLABORADOR" && user.employeeProfile ? user.employeeProfile.id : undefined,
+      teamSupervisorId: undefined
+    };
+    const summaryOnly = query.summaryOnly === true || query.summaryOnly === "true";
+    const skipSummary = query.skipSummary === true || query.skipSummary === "true";
+    if (summaryOnly) {
+      const summary = await getAttendanceSummaryFromDb(period, summaryFilters);
+      logPerformanceMetric("attendance.summary-only", startedAt, {
+        role,
+        startDate: period ? dateKey(period.start) : null,
+        endDate: period ? dateKey(period.end) : null,
+        lob: lobFilter ?? "Todos",
+        supervisor: query.supervisor ?? "Todos",
+        roleTitle: query.roleTitle ?? "Todos"
+      });
+      return {
+        data: [],
+        summary
+      };
+    }
     const schedules = await prisma.schedule.findMany({
       where: scheduleWhere,
       include: {
@@ -1298,8 +1363,7 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
       return isPendingJustificationForSchedule(schedule.status, record);
     });
 
-    return {
-      data: activeSchedules.map((schedule) => {
+    const data = activeSchedules.map((schedule) => {
         const record = schedule.attendanceRecords[0];
         const status = scheduleToUiStatus[schedule.status] ?? schedule.status;
         const validJustification = hasValidJustification(record);
@@ -1328,18 +1392,22 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
           justifiedAt: validJustification && record?.justifiedAt ? formatDateTime(record.justifiedAt) : undefined,
           updatedAt: formatDateTime(record?.updatedAt ?? schedule.updatedAt)
         };
-      }),
-      summary: await getAttendanceSummaryFromDb(period, {
-        lob: lobFilter,
-        supervisor: query.supervisor,
-        shift: query.shift,
-        collaborator: query.collaborator,
-        roleTitle: query.roleTitle,
-        employeeId: role === "COLABORADOR" && user.employeeProfile ? user.employeeProfile.id : undefined,
-        teamSupervisorId: undefined
-      })
+      });
+    const summary = skipSummary ? emptyAttendanceSummary() : await getAttendanceSummaryFromDb(period, summaryFilters);
+    logPerformanceMetric("attendance.list", startedAt, {
+      role,
+      mode: skipSummary ? "detail" : "list-with-summary",
+      startDate: period ? dateKey(period.start) : null,
+      endDate: period ? dateKey(period.end) : null,
+      schedulesFetched: schedules.length,
+      recordsReturned: data.length
+    });
+    return {
+      data,
+      summary
     };
   } catch (error) {
+    logPerformanceMetric("attendance.list.error", startedAt, { error: true });
     recordErrorLog({ userEmail: actor.email, code: "ATTENDANCE_LIST_DB_FALLBACK", message: error instanceof Error ? error.message : "Falha ao listar presença", action: "ATTENDANCE_LIST", severity: "WARNING" });
     return allowDemoDataFallback ? { data: listMockAttendanceRecords(actor), summary: getMockAttendanceSummary(actor) } : { data: [], summary: emptyAttendanceSummary() };
   }
@@ -1891,6 +1959,7 @@ async function notifyAttendanceImpact(tx: Prisma.TransactionClient, employeeId: 
 }
 
 async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeriod>, filters: AttendanceSummaryFilters = {}) {
+  const startedAt = Date.now();
   const shiftFilter = cleanShiftName(filters.shift);
   const search = filters.collaborator?.trim();
   const statusFilter = filters.status && filters.status !== "Todos" ? uiToScheduleStatus[filters.status] : undefined;
@@ -1906,7 +1975,7 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
         { user: { email: { contains: search, mode: "insensitive" } } }
       ]
     } : {}),
-    ...(filters.roleTitle && filters.roleTitle !== "Todos" ? { roleTitle: { contains: filters.roleTitle, mode: "insensitive" } } : {})
+    ...(filters.roleTitle && filters.roleTitle !== "Todos" ? { roleTitle: filters.roleTitle } : {})
   };
   const scheduleShiftWhere: Prisma.ScheduleWhereInput =
     shiftFilter && shiftFilter !== "Todos" && shiftFilter !== "Folga"
@@ -1929,25 +1998,35 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
       employee: employeeWhere
     },
     select: {
+      id: true,
       status: true,
       shift: { select: { name: true } },
       supervisorId: true,
-      employee: { select: { shift: { select: { name: true } }, supervisor: { select: { fullName: true } } } },
-      attendanceRecords: {
-        orderBy: { updatedAt: "desc" },
-        take: 1,
+      employee: { select: { shift: { select: { name: true } }, supervisor: { select: { fullName: true } } } }
+    }
+  });
+  const statusFor = (schedule: (typeof schedules)[number]) => normalizeOperationalStatus(schedule.status);
+  const absenceScheduleIds = schedules.filter((schedule) => isAbsenceStatus(statusFor(schedule))).map((schedule) => schedule.id);
+  const attendanceRecords = absenceScheduleIds.length
+    ? await prisma.attendanceRecord.findMany({
+        where: { scheduleId: { in: absenceScheduleIds } },
+        orderBy: [{ scheduleId: "asc" }, { updatedAt: "desc" }],
         select: {
+          scheduleId: true,
           status: true,
           absenceReason: true,
           impactsAbs: true,
           isJustified: true,
           updatedAt: true
         }
-      }
-    }
+      })
+    : [];
+  const attendanceRecordByScheduleId = new Map<string, (typeof attendanceRecords)[number]>();
+  attendanceRecords.forEach((record) => {
+    if (!record.scheduleId || attendanceRecordByScheduleId.has(record.scheduleId)) return;
+    attendanceRecordByScheduleId.set(record.scheduleId, record);
   });
   const supervisorNameById = await supervisorNameMap(schedules.map((schedule) => schedule.supervisorId));
-  const statusFor = (schedule: (typeof schedules)[number]) => normalizeOperationalStatus(schedule.status);
   const planned = schedules.filter((schedule) => isScheduledStatus(statusFor(schedule))).length;
   const present = schedules.filter((schedule) => isPresentStatus(statusFor(schedule))).length;
   const absent = schedules.filter((schedule) => isAbsenceStatus(statusFor(schedule))).length;
@@ -1955,7 +2034,7 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
   const absRate = calculateAbsenceRate(planned, absent);
   const absenceSchedules = schedules
     .filter((schedule) => isAbsenceStatus(statusFor(schedule)))
-    .map((schedule) => ({ schedule, record: schedule.attendanceRecords[0] }));
+    .map((schedule) => ({ schedule, record: attendanceRecordByScheduleId.get(schedule.id) }));
   const byShift = schedules.reduce<Record<string, { planned: number; present: number; absent: number; gap: number }>>((acc, schedule) => {
     const shiftName = cleanShiftName(schedule.shift?.name ?? schedule.employee.shift?.name) || "Sem turno";
     const status = statusFor(schedule);
@@ -1974,7 +2053,7 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
   const bySupervisor = schedules.reduce<Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; absRate: number }>>((acc, schedule) => {
     const supervisorName = resolveSupervisorName(schedule, supervisorNameById);
     const status = statusFor(schedule);
-    const record = schedule.attendanceRecords[0];
+    const record = attendanceRecordByScheduleId.get(schedule.id);
     acc[supervisorName] ??= { planned: 0, present: 0, absent: 0, unjustified: 0, justified: 0, absRate: 0 };
     if (isScheduledStatus(status)) acc[supervisorName].planned += 1;
     if (isPresentStatus(status)) acc[supervisorName].present += 1;
@@ -1991,7 +2070,7 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
   }, {});
   const unjustified = absenceSchedules.filter((item) => isPendingJustificationForSchedule(item.schedule.status, item.record)).length;
   const justified = absenceSchedules.filter((item) => hasValidJustification(item.record)).length;
-  return {
+  const summary = {
     planned,
     present,
     absent,
@@ -2007,6 +2086,15 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     byShift,
     bySupervisor
   };
+  logPerformanceMetric("attendance.summary-db", startedAt, {
+    startDate: period ? dateKey(period.start) : null,
+    endDate: period ? dateKey(period.end) : null,
+    schedules: schedules.length,
+    absenceSchedules: absenceScheduleIds.length,
+    attendanceRecords: attendanceRecords.length,
+    roleTitle: filters.roleTitle ?? "Todos"
+  });
+  return summary;
 }
 
 function emptyAttendanceSummary() {
@@ -2161,7 +2249,7 @@ function employeeFilters(query: ScheduleQuery, search?: string): Prisma.Employee
     } : {}),
     ...(query.lob && query.lob !== "Todos" ? { lob: { name: query.lob } } : {}),
     ...(shiftFilter && shiftFilter !== "Todos" && shiftFilter !== "Folga" ? { shift: { OR: [{ name: shiftFilter }, { name: { startsWith: `${shiftFilter} (` } }] } } : {}),
-    ...(query.roleTitle && query.roleTitle !== "Todos" ? { roleTitle: { contains: query.roleTitle, mode: "insensitive" } } : {})
+    ...(query.roleTitle && query.roleTitle !== "Todos" ? { roleTitle: query.roleTitle } : {})
   };
 }
 

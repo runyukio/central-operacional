@@ -449,23 +449,17 @@ export async function requestWorkHourAdjustment(actor: Actor, input: WorkHourAdj
         }
       });
 
-      const approvers = await tx.user.findMany({ where: { status: "ACTIVE", role: { name: { in: approvalRoles } } }, select: { id: true } });
-      for (const approver of approvers) {
-        await tx.notification.create({
-          data: {
-            userId: approver.id,
-            title: "Novo ajuste de horas aguardando análise",
-            body: `${user.name} solicitou ajuste para ${record.employee.fullName}.`,
-            category: "Horas Operacionais",
-            type: "INFO",
-            entity: "WorkHourAdjustmentRequest",
-            entityId: created.id,
-            href: "/horas-operacionais"
-          }
-        });
-      }
-
       return created;
+    });
+
+    notifyWorkHourAdjustmentApprovers(adjustment.id, user.name, record.employee.fullName).catch((error) => {
+      recordErrorLog({
+        userEmail: actor.email,
+        code: "WORK_HOUR_ADJUSTMENT_NOTIFICATION_WARNING",
+        message: error instanceof Error ? error.message : "Falha ao notificar aprovadores do ajuste de horas",
+        action: "WORK_HOUR_ADJUSTMENT_NOTIFICATION",
+        severity: "WARNING"
+      });
     });
 
     return { success: true, message: "Ajuste de horas solicitado.", data: formatAdjustment(adjustment) };
@@ -969,30 +963,56 @@ function isNoSupervisorFilter(value: string) {
 }
 
 async function getWorkHoursSummary(where: Prisma.WorkHourRecordWhereInput) {
-  const records = await prisma.workHourRecord.findMany({
-    where,
-    select: { plannedHours: true, effectiveHours: true, adjustedHours: true, differenceMinutes: true, status: true, schedule: { select: { status: true, startsAt: true, endsAt: true } } }
-  });
-  const adjustments = await prisma.workHourAdjustmentRequest.groupBy({ by: ["status"], where: { record: { is: where } }, _count: { _all: true } }).catch(() => []);
+  const productiveWhere: Prisma.WorkHourRecordWhereInput = { AND: [where, { status: { not: "NO_SCHEDULE" } }] };
+  const okWhere: Prisma.WorkHourRecordWhereInput = {
+    AND: [productiveWhere, { differenceMinutes: { gte: -toleranceMinutes, lte: toleranceMinutes } }]
+  };
+  const divergentWhere: Prisma.WorkHourRecordWhereInput = {
+    AND: [productiveWhere, { OR: [{ differenceMinutes: { lt: -toleranceMinutes } }, { differenceMinutes: { gt: toleranceMinutes } }] }]
+  };
+  const [totals, okRecords, divergentRecords, noScheduleRecords, adjustments] = await Promise.all([
+    prisma.workHourRecord.aggregate({
+      where: productiveWhere,
+      _count: { _all: true },
+      _sum: { effectiveHours: true, adjustedHours: true }
+    }),
+    prisma.workHourRecord.count({ where: okWhere }),
+    prisma.workHourRecord.count({ where: divergentWhere }),
+    prisma.workHourRecord.count({ where: { AND: [where, { status: "NO_SCHEDULE" }] } }),
+    prisma.workHourAdjustmentRequest.groupBy({ by: ["status"], where: { record: { is: where } }, _count: { _all: true } }).catch(() => [])
+  ]);
   const adjustmentCount = (status: WorkHourAdjustmentStatus) => adjustments.find((item) => item.status === status)?._count._all ?? 0;
-  const plannedHours = records.reduce((sum, row) => sum + (productivePlannedHoursForRecord(row) ?? 0), 0);
-  const effectiveHours = records.reduce((sum, row) => sum + row.effectiveHours, 0);
-  const differenceMinutesByRecord = records.map((row) => {
-    const planned = productivePlannedHoursForRecord(row);
-    return planned === null ? null : calculateProductiveDifferenceMinutes(row.effectiveHours, planned);
-  });
+  const plannedHours = (totals._count._all ?? 0) * DEFAULT_PRODUCTIVE_HOURS;
+  const effectiveHours = Number(totals._sum.effectiveHours ?? 0);
   return {
     plannedHours: roundHours(plannedHours),
     actualHours: roundHours(effectiveHours),
     differenceHours: roundHours(effectiveHours - plannedHours),
-    okRecords: differenceMinutesByRecord.filter((difference) => difference !== null && isProductiveDifferenceWithinTolerance(difference)).length,
-    divergentRecords: differenceMinutesByRecord.filter((difference) => difference !== null && !isProductiveDifferenceWithinTolerance(difference)).length,
-    noScheduleRecords: records.filter((row) => row.status === "NO_SCHEDULE").length,
+    okRecords,
+    divergentRecords,
+    noScheduleRecords,
     pendingAdjustments: adjustmentCount("ABERTO") + adjustmentCount("EM_ANALISE"),
     approvedAdjustments: adjustmentCount("APROVADO"),
     rejectedAdjustments: adjustmentCount("RECUSADO"),
-    adjustedHours: roundHours(records.reduce((sum, row) => sum + (row.adjustedHours ?? 0), 0))
+    adjustedHours: roundHours(Number(totals._sum.adjustedHours ?? 0))
   };
+}
+
+async function notifyWorkHourAdjustmentApprovers(adjustmentId: string, requesterName: string, employeeName: string) {
+  const approvers = await prisma.user.findMany({ where: { status: "ACTIVE", role: { name: { in: approvalRoles } } }, select: { id: true } });
+  if (!approvers.length) return;
+  await prisma.notification.createMany({
+    data: approvers.map((approver) => ({
+      userId: approver.id,
+      title: "Novo ajuste de horas aguardando análise",
+      body: `${requesterName} solicitou ajuste para ${employeeName}.`,
+      category: "Horas Operacionais",
+      type: "INFO" as const,
+      entity: "WorkHourAdjustmentRequest",
+      entityId: adjustmentId,
+      href: "/horas-operacionais"
+    }))
+  });
 }
 
 function productivePlannedHoursForRecord(record: { plannedHours?: number | null; schedule?: { status?: string | null; startsAt?: string | null; endsAt?: string | null } | null }) {

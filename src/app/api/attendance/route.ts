@@ -37,7 +37,9 @@ export async function GET(request: Request) {
     roleTitle: url.searchParams.get("roleTitle") ?? undefined,
     reason: url.searchParams.get("reason") ?? undefined,
     justification: url.searchParams.get("justification") ?? undefined,
-    includeJustified: url.searchParams.get("includeJustified") ?? undefined
+    includeJustified: url.searchParams.get("includeJustified") ?? undefined,
+    summaryOnly: url.searchParams.get("summaryOnly") ?? undefined,
+    skipSummary: url.searchParams.get("skipSummary") ?? undefined
   }));
 }
 

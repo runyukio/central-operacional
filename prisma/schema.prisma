@@ -397,6 +397,7 @@ model EmployeeProfile {
   @@index([teamId])
   @@index([supervisorId])
   @@index([shiftId])
+  @@index([roleTitle])
   @@index([skill])
   @@index([wave])
   @@index([operationalStatus])
@@ -425,6 +426,9 @@ model Schedule {
 
   @@unique([employeeId, date])
   @@index([date, status])
+  @@index([date, lobId])
+  @@index([date, supervisorId])
+  @@index([date, shiftId])
   @@index([employeeId])
   @@index([lobId])
   @@index([supervisorId])
@@ -520,6 +524,10 @@ model Request {
   @@index([typeId])
   @@index([assigneeId])
   @@index([status, createdAt])
+  @@index([status, updatedAt])
+  @@index([employeeId, status, createdAt])
+  @@index([typeId, status, createdAt])
+  @@index([assignedArea, status, createdAt])
   @@index([priority])
   @@index([assignedArea])
 }
@@ -544,6 +552,8 @@ model MonthlyAdvanceRecord {
 
   @@unique([employeeId, referenceMonth])
   @@index([referenceMonth])
+  @@index([referenceMonth, optIn])
+  @@index([referenceMonth, status])
   @@index([employeeId])
   @@index([optIn])
   @@index([updatedById])
@@ -762,6 +772,12 @@ model Equipment {
   createdAt   DateTime           @default(now())
   updatedAt   DateTime           @updatedAt
   deletedAt   DateTime?
+
+  @@index([employeeId])
+  @@index([status])
+  @@index([deletedAt])
+  @@index([status, updatedAt])
+  @@index([deliveredAt])
 }
 
 model EquipmentHistory {
@@ -1126,8 +1142,10 @@ model AttendanceRecord {
 
   @@unique([employeeId, date, shiftId])
   @@index([date, status])
+  @@index([date, isJustified])
   @@index([employeeId])
   @@index([scheduleId])
+  @@index([scheduleId, updatedAt])
   @@index([isJustified])
   @@index([registeredById])
   @@index([justifiedById])
@@ -1202,8 +1220,10 @@ model WorkHourRecord {
 
   @@unique([employeeId, date])
   @@index([employeeId])
+  @@index([scheduleId])
   @@index([wbLogin])
   @@index([date])
+  @@index([date, status])
   @@index([status])
   @@index([importBatchId])
 }

@@ -85,6 +85,13 @@ export type EquipmentPreviewRow = {
   normalized?: EquipmentInput;
 };
 
+type ResponsibleEmployee = Prisma.EmployeeProfileGetPayload<{ include: { user: true } }>;
+type ResponsibleLookup = {
+  byId: Map<string, ResponsibleEmployee>;
+  byWbLogin: Map<string, ResponsibleEmployee>;
+  byEmail: Map<string, ResponsibleEmployee>;
+};
+
 async function getActorUser(actor: Actor) {
   return prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
 }
@@ -147,6 +154,34 @@ async function findResponsible(input: EquipmentInput) {
     });
     if (matches.length === 1) return matches[0];
   }
+  return null;
+}
+
+async function buildResponsibleLookup(inputs: EquipmentInput[]): Promise<ResponsibleLookup> {
+  const ids = Array.from(new Set(inputs.map((input) => input.responsibleEmployeeId?.trim()).filter(Boolean) as string[]));
+  const wbLogins = Array.from(new Set(inputs.map((input) => input.responsavelWbLogin?.trim().toLowerCase()).filter(Boolean) as string[]));
+  const emails = Array.from(new Set(inputs.map((input) => input.responsavelEmail?.trim().toLowerCase()).filter(Boolean) as string[]));
+  const or: Prisma.EmployeeProfileWhereInput[] = [];
+  if (ids.length) or.push({ id: { in: ids } });
+  wbLogins.forEach((wbLogin) => or.push({ wbLogin: { equals: wbLogin, mode: "insensitive" } }));
+  emails.forEach((email) => or.push({ user: { email: { equals: email, mode: "insensitive" } } }));
+  const employees = or.length
+    ? await prisma.employeeProfile.findMany({ where: { deletedAt: null, OR: or }, include: { user: true } })
+    : [];
+  return {
+    byId: new Map(employees.map((employee) => [employee.id, employee])),
+    byWbLogin: new Map(employees.map((employee) => [employee.wbLogin.toLowerCase(), employee])),
+    byEmail: new Map(employees.flatMap((employee) => employee.user?.email ? [[employee.user.email.toLowerCase(), employee] as const] : []))
+  };
+}
+
+function findResponsibleInLookup(input: EquipmentInput, lookup: ResponsibleLookup) {
+  const id = input.responsibleEmployeeId?.trim();
+  if (id) return lookup.byId.get(id) ?? null;
+  const wbLogin = input.responsavelWbLogin?.trim().toLowerCase();
+  if (wbLogin) return lookup.byWbLogin.get(wbLogin) ?? null;
+  const email = input.responsavelEmail?.trim().toLowerCase();
+  if (email) return lookup.byEmail.get(email) ?? null;
   return null;
 }
 
@@ -221,7 +256,7 @@ export async function listEquipment(actor: Actor, query: EquipmentQuery = {}) {
   if (normalizeRole(user.role.name) === "SUPERVISOR" && user.employeeProfile) filters.push({ employee: { supervisorId: user.employeeProfile.id } });
 
   const where: Prisma.EquipmentWhereInput = { deletedAt: null, ...(filters.length ? { AND: filters } : {}) };
-  const [rows, filteredEquipment] = await Promise.all([
+  const [rows, total, statusGroups, pending] = await Promise.all([
     prisma.equipment.findMany({
       where,
       include: {
@@ -231,18 +266,23 @@ export async function listEquipment(actor: Actor, query: EquipmentQuery = {}) {
       orderBy: { updatedAt: "desc" },
       take: 300
     }),
-    prisma.equipment.findMany({ where, select: { status: true, employeeId: true } })
+    prisma.equipment.count({ where }),
+    prisma.equipment.groupBy({ by: ["status"], where, _count: { _all: true } }),
+    prisma.equipment.count({ where: { AND: [where, { OR: [{ employeeId: null }, { status: { in: ["PERDIDO", "BLOQUEADO"] } }] }] } })
   ]);
+  const statusCount = (statuses: EquipmentStatus[]) => statusGroups
+    .filter((item) => statuses.includes(item.status))
+    .reduce((sum, item) => sum + item._count._all, 0);
 
   return {
     data: rows.map(formatEquipment),
     summary: {
-      total: filteredEquipment.length,
-      inUse: filteredEquipment.filter((item) => ["ENTREGUE", "FUNCIONANDO"].includes(item.status)).length,
-      available: filteredEquipment.filter((item) => item.status === "DISPONIVEL").length,
-      maintenance: filteredEquipment.filter((item) => ["EM_MANUTENCAO", "EM_ATENCAO", "INOPERANTE"].includes(item.status)).length,
-      returned: filteredEquipment.filter((item) => ["DEVOLVIDO", "SUBSTITUIDO"].includes(item.status)).length,
-      pending: filteredEquipment.filter((item) => !item.employeeId || ["PERDIDO", "BLOQUEADO"].includes(item.status)).length
+      total,
+      inUse: statusCount(["ENTREGUE", "FUNCIONANDO"]),
+      available: statusCount(["DISPONIVEL"]),
+      maintenance: statusCount(["EM_MANUTENCAO", "EM_ATENCAO", "INOPERANTE"]),
+      returned: statusCount(["DEVOLVIDO", "SUBSTITUIDO"]),
+      pending
     },
     canManage: canManageEquipmentRole(user.role.name)
   };
@@ -340,25 +380,33 @@ export async function previewEquipmentImport(actor: Actor, rows: Array<Record<st
   const codes = rows.map((row) => text(row.numero_serie)).filter(Boolean);
   const existing = await prisma.equipment.findMany({ where: { code: { in: codes }, deletedAt: null }, select: { code: true } });
   const existingCodes = new Set(existing.map((item) => item.code.toLowerCase()));
-  const previewRows: EquipmentPreviewRow[] = [];
-  for (const [index, row] of rows.entries()) {
-    const numeroSerie = text(row.numero_serie);
-    const type = normalizeType(text(row.tipo_equipamento));
-    const model = text(row.modelo);
+  const normalizedRows = rows.map((row) => {
     const status = normalizeStatus(text(row.status));
     const deliveredAt = parseDate(text(row.data_entrega));
-    const normalized: EquipmentInput = {
-      numeroSerie,
-      tipoEquipamento: type,
-      modelo: model,
-      status: status ? equipmentStatusLabels[status] : text(row.status),
-      dataEntrega: deliveredAt?.toISOString().slice(0, 10) ?? text(row.data_entrega),
-      responsavelWbLogin: text(row.responsavel_wb_login),
-      responsavelEmail: text(row.responsavel_email),
-      responsavelNome: text(row.responsavel_nome),
-      observacao: text(row.observacao)
+    return {
+      numeroSerie: text(row.numero_serie),
+      type: normalizeType(text(row.tipo_equipamento)),
+      model: text(row.modelo),
+      status,
+      deliveredAt,
+      normalized: {
+        numeroSerie: text(row.numero_serie),
+        tipoEquipamento: normalizeType(text(row.tipo_equipamento)),
+        modelo: text(row.modelo),
+        status: status ? equipmentStatusLabels[status] : text(row.status),
+        dataEntrega: deliveredAt?.toISOString().slice(0, 10) ?? text(row.data_entrega),
+        responsavelWbLogin: text(row.responsavel_wb_login),
+        responsavelEmail: text(row.responsavel_email),
+        responsavelNome: text(row.responsavel_nome),
+        observacao: text(row.observacao)
+      } satisfies EquipmentInput
     };
-    const responsible = await findResponsible(normalized);
+  });
+  const responsibleLookup = await buildResponsibleLookup(normalizedRows.map((row) => row.normalized));
+  const previewRows: EquipmentPreviewRow[] = [];
+  for (const [index, row] of normalizedRows.entries()) {
+    const { numeroSerie, type, model, status, deliveredAt } = row;
+    const responsible = findResponsibleInLookup(row.normalized, responsibleLookup) ?? await findResponsible({ responsavelNome: row.normalized.responsavelNome });
     const errors: string[] = [];
     const warnings: string[] = [];
     if (!numeroSerie) errors.push("Número de série é obrigatório.");
@@ -372,13 +420,13 @@ export async function previewEquipmentImport(actor: Actor, rows: Array<Record<st
       numeroSerie,
       type,
       model,
-      status: status ? equipmentStatusLabels[status] : text(row.status),
-      responsible: responsible?.fullName ?? text(row.responsavel_nome) ?? text(row.responsavel_wb_login) ?? "Sem responsável",
-      deliveredAt: deliveredAt ? formatDate(deliveredAt) : text(row.data_entrega),
+      status: status ? equipmentStatusLabels[status] : row.normalized.status ?? "",
+      responsible: responsible?.fullName ?? row.normalized.responsavelNome ?? row.normalized.responsavelWbLogin ?? "Sem responsável",
+      deliveredAt: deliveredAt ? formatDate(deliveredAt) : row.normalized.dataEntrega ?? "",
       action: errors.length ? "ignore" : existingCodes.has(numeroSerie.toLowerCase()) ? "update" : "create",
       errors,
       warnings,
-      normalized: { ...normalized, responsibleEmployeeId: responsible?.id }
+      normalized: { ...row.normalized, responsibleEmployeeId: responsible?.id }
     });
   }
 
@@ -403,10 +451,9 @@ export async function commitEquipmentImport(actor: Actor, rows: EquipmentPreview
   let createdRows = 0;
   let updatedRows = 0;
   for (const row of validRows) {
-    const existing = await prisma.equipment.findFirst({ where: { code: row.numeroSerie, deletedAt: null }, select: { id: true } });
     const result = await saveEquipment(actor, row.normalized!);
     if (!("error" in result)) {
-      if (existing) updatedRows += 1;
+      if (row.action === "update") updatedRows += 1;
       else createdRows += 1;
     }
   }

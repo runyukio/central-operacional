@@ -149,7 +149,7 @@ export async function listOperationalRequests(actor: Actor, filters: RequestFilt
       prisma.request.count({ where }),
       prisma.request.findMany({
         where,
-        include: requestInclude,
+        include: requestListInclude,
         orderBy: { createdAt: "desc" },
         skip,
         take: limit
@@ -627,7 +627,7 @@ export async function addOperationalRequestComment(actor: Actor, id: string, bod
   }
 }
 
-const requestInclude = {
+const requestListInclude = {
   type: true,
   requester: true,
   assignee: true,
@@ -636,7 +636,11 @@ const requestInclude = {
       lob: true,
       supervisor: true
     }
-  },
+  }
+};
+
+const requestInclude = {
+  ...requestListInclude,
   comments: {
     include: { author: true },
     orderBy: { createdAt: "desc" as const },
@@ -650,6 +654,8 @@ const requestInclude = {
 };
 
 type PrismaRequest = Prisma.RequestGetPayload<{ include: typeof requestInclude }>;
+type PrismaRequestSummary = Prisma.RequestGetPayload<{ include: typeof requestListInclude }>;
+type PrismaRequestForDisplay = PrismaRequest | PrismaRequestSummary;
 type ActiveUser = NonNullable<Awaited<ReturnType<typeof findActiveUser>>>;
 type DbRequestStatus = (typeof uiToDbStatus)[keyof typeof uiToDbStatus];
 type NotificationKind = "INFO" | "SUCCESS" | "WARNING" | "ERROR" | "REQUEST" | "APPROVAL";
@@ -1356,12 +1362,14 @@ function normalizeDbRequestStatus(status: string): DbRequestStatus {
   return (Object.values(uiToDbStatus) as string[]).includes(status) ? (status as DbRequestStatus) : "ABERTO";
 }
 
-function mapPrismaRequest(request: PrismaRequest, user?: ActiveUser, actor?: Actor): RequestRecord {
+function mapPrismaRequest(request: PrismaRequestForDisplay, user?: ActiveUser, actor?: Actor): RequestRecord {
   const payload = (request.payload ?? {}) as Record<string, unknown>;
   const role = normalizeRole(actor?.role);
   const isAdminLike = ["ADMIN", "GESTOR"].includes(role);
   const canSupervisorStep = isAdminLike || (role === "SUPERVISOR" && (isDayOffRequest(request) || isShiftChangeRequest(request)));
   const canWfmFinal = isAdminLike || role === "WFM";
+  const history = "history" in request ? request.history : [];
+  const comments = "comments" in request ? request.comments : [];
   return {
     id: request.code,
     type: request.type.name,
@@ -1382,13 +1390,13 @@ function mapPrismaRequest(request: PrismaRequest, user?: ActiveUser, actor?: Act
     time: formatDateTime(request.createdAt),
     description: request.description,
     payload,
-    history: request.history.map((item) => ({
+    history: history.map((item) => ({
       at: formatDateTime(item.createdAt),
       actor: item.actor.name,
       action: item.action ?? actionForStatus(dbToUiStatus[item.to] ?? "Aberto"),
       reason: item.reason ?? undefined
     })),
-    comments: request.comments.map((comment) => ({
+    comments: comments.map((comment) => ({
       at: formatDateTime(comment.createdAt),
       author: comment.author.name,
       body: comment.message
@@ -1409,7 +1417,7 @@ function nextStepForRequest(status: string) {
   return "Acompanhar";
 }
 
-function nextOwnerForRequest(request: PrismaRequest) {
+function nextOwnerForRequest(request: PrismaRequestForDisplay) {
   const normalized = normalizeDbRequestStatus(request.status);
   if (normalized === "ABERTO") return request.employee?.supervisor?.fullName ?? "Supervisor responsável";
   if (normalized === "EM_ANALISE") return "WFM";
@@ -1496,41 +1504,41 @@ function payloadForInput(input: CreateRequestInput) {
   };
 }
 
-function isMonthlyAdvanceRequest(value: CreateRequestInput | PrismaRequest | string) {
+function isMonthlyAdvanceRequest(value: CreateRequestInput | PrismaRequestForDisplay | string) {
   if (!value) return false;
-  const payload = typeof value === "string" ? null : ((value as PrismaRequest).payload ?? null);
+  const payload = typeof value === "string" ? null : ((value as PrismaRequestForDisplay).payload ?? null);
   const typeName =
     typeof value === "string"
       ? value
-      : "type" in value && typeof (value as PrismaRequest).type === "object"
-        ? (value as PrismaRequest).type.name
+      : "type" in value && typeof (value as PrismaRequestForDisplay).type === "object"
+        ? (value as PrismaRequestForDisplay).type.name
         : (value as CreateRequestInput).type;
   return /adiantamento/i.test(typeName) || isMonthlyAdvanceRequestPayload(payload);
 }
 
-function isDayOffRequest(value: CreateRequestInput | PrismaRequest | string) {
+function isDayOffRequest(value: CreateRequestInput | PrismaRequestForDisplay | string) {
   return Boolean(normalizeDayOffKind(value));
 }
 
-function isShiftChangeRequest(value: CreateRequestInput | PrismaRequest | string) {
-  const payload = typeof value === "string" ? {} : ((value as PrismaRequest).payload ?? {}) as Record<string, unknown>;
+function isShiftChangeRequest(value: CreateRequestInput | PrismaRequestForDisplay | string) {
+  const payload = typeof value === "string" ? {} : ((value as PrismaRequestForDisplay).payload ?? {}) as Record<string, unknown>;
   const typeName =
     typeof value === "string"
       ? value
-      : "type" in value && typeof (value as PrismaRequest).type === "object"
-        ? (value as PrismaRequest).type.name
+      : "type" in value && typeof (value as PrismaRequestForDisplay).type === "object"
+        ? (value as PrismaRequestForDisplay).type.name
         : (value as CreateRequestInput).type;
   return /troca de turno|shift change/i.test(typeName) || payload.shiftChange === true || String(payload.internalType ?? "").toUpperCase() === "SHIFT_CHANGE";
 }
 
-function normalizeDayOffKind(value: CreateRequestInput | PrismaRequest | string | null | undefined): DayOffKind | null {
+function normalizeDayOffKind(value: CreateRequestInput | PrismaRequestForDisplay | string | null | undefined): DayOffKind | null {
   if (!value) return null;
-  const payload = typeof value === "string" ? {} : ((value as PrismaRequest).payload ?? {}) as Record<string, unknown>;
+  const payload = typeof value === "string" ? {} : ((value as PrismaRequestForDisplay).payload ?? {}) as Record<string, unknown>;
   const typeName =
     typeof value === "string"
       ? value
-      : "type" in value && typeof (value as PrismaRequest).type === "object"
-        ? (value as PrismaRequest).type.name
+      : "type" in value && typeof (value as PrismaRequestForDisplay).type === "object"
+        ? (value as PrismaRequestForDisplay).type.name
         : (value as CreateRequestInput).type;
   const raw = String(payload.dayOffKind ?? payload.internalType ?? (value as CreateRequestInput).dayOffKind ?? "");
   if ((dayOffKinds as readonly string[]).includes(raw)) return raw as DayOffKind;
