@@ -731,12 +731,18 @@ export async function createMonthlyAdvanceChangeRequest(actor: Actor, input: {
   });
   if (duplicate) return { error: `Já existe uma solicitação pendente para este ciclo (${duplicate.code}).`, status: 409 };
 
+  const type = await prisma.requestType.findUnique({
+    where: { name: "Alteração de Adiantamento" },
+    select: { id: true, name: true }
+  });
+  if (!type) {
+    return {
+      error: "Tipo de solicitação Alteração de Adiantamento não está configurado. Rode o seed de produção antes de usar este fluxo.",
+      status: 500
+    };
+  }
+
   const request = await prisma.$transaction(async (tx) => {
-    const type = await tx.requestType.upsert({
-      where: { name: "Alteração de Adiantamento" },
-      update: { area: "WFM" },
-      create: { name: "Alteração de Adiantamento", area: "WFM", slaHours: 24, requiresApproval: true }
-    });
     const created = await tx.request.create({
       data: {
         code: await nextRequestCode(tx),

@@ -435,11 +435,13 @@ model Schedule {
   @@index([date, lobId])
   @@index([date, supervisorId])
   @@index([date, shiftId])
+  @@index([date, deletedAt])
   @@index([employeeId])
   @@index([lobId])
   @@index([supervisorId])
   @@index([shiftId])
   @@index([status])
+  @@index([deletedAt])
 }
 
 model ScheduleImport {
@@ -1191,8 +1193,10 @@ model AttendanceRecord {
   @@unique([employeeId, date, shiftId])
   @@index([date, status])
   @@index([date, isJustified])
+  @@index([employeeId, date])
   @@index([employeeId])
   @@index([scheduleId])
+  @@index([scheduleId, isJustified])
   @@index([scheduleId, updatedAt])
   @@index([isJustified])
   @@index([registeredById])
@@ -1271,6 +1275,7 @@ model WorkHourRecord {
   @@index([scheduleId])
   @@index([wbLogin])
   @@index([date])
+  @@index([date, employeeId])
   @@index([date, status])
   @@index([status])
   @@index([importBatchId])

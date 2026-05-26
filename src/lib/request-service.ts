@@ -255,13 +255,19 @@ export async function createOperationalRequest(actor: Actor, input: CreateReques
       if (shiftChangeError) return { error: shiftChangeError };
     }
 
-    const request = await prisma.$transaction(async (tx) => {
-      const type = await tx.requestType.upsert({
-        where: { name: input.type },
-        update: { area },
-        create: { name: input.type, area, slaHours: input.priority === "Crítica" ? 4 : 24, requiresApproval: true }
+    const type = await prisma.requestType.findUnique({
+      where: { name: input.type },
+      select: { id: true }
+    });
+    if (!type) {
+      return validationFailure(`Tipo de solicitação "${input.type}" não está configurado. Rode o seed de produção antes de usar este fluxo.`, {
+        type: "Tipo de solicitação não encontrado."
+      }, {
+        seedCommand: "npm run db:seed:prod"
       });
+    }
 
+    const request = await prisma.$transaction(async (tx) => {
       const created = await tx.request.create({
         data: {
           code: await nextRequestCode(tx),

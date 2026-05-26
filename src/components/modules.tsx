@@ -3270,7 +3270,7 @@ export function SchedulesPage() {
   });
 
   useEffect(() => {
-    void refreshSchedules(1);
+    void refreshSchedules(1, scheduleFilters, scheduleDateRange, { includeImports: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [schedulePeriod.month, schedulePeriod.year, scheduleFilters.lob]);
 
@@ -3319,7 +3319,7 @@ export function SchedulesPage() {
     }
   }
 
-  async function refreshSchedules(pageOverride = schedulePagination.page, filtersOverride = scheduleFilters, rangeOverride = scheduleDateRange) {
+  async function refreshSchedules(pageOverride = schedulePagination.page, filtersOverride = scheduleFilters, rangeOverride = scheduleDateRange, options: { includeImports?: boolean } = {}) {
     try {
       const params = new URLSearchParams({
         month: String(schedulePeriod.month),
@@ -3335,9 +3335,10 @@ export function SchedulesPage() {
         status: filtersOverride.status,
         skill: filtersOverride.skill,
         roleTitle: filtersOverride.roleTitle,
-        skipSummary: "true"
+        skipSummary: "true",
+        includeImports: options.includeImports ? "true" : "false"
       });
-      const payload = await apiJson<{ data: { scheduleGridRows: typeof scheduleRows; imports: ScheduleImportHistory[]; attendanceSummary?: AttendanceSummary; daysInMonth?: number; dateColumns?: string[]; pagination?: { page: number; limit: number; total: number; totalPages: number } }; actor?: { role: string; name: string } }>(`/api/schedules?${params.toString()}`);
+      const payload = await apiJson<{ data: { scheduleGridRows: typeof scheduleRows; imports?: ScheduleImportHistory[]; attendanceSummary?: AttendanceSummary; daysInMonth?: number; dateColumns?: string[]; pagination?: { page: number; limit: number; total: number; totalPages: number } }; actor?: { role: string; name: string } }>(`/api/schedules?${params.toString()}`);
       setScheduleActorRole(payload.actor?.role ?? "COLABORADOR");
       setScheduleRows(payload.data.scheduleGridRows);
       setSchedulePagination(payload.data.pagination ?? { page: pageOverride, limit: schedulePagination.limit, total: payload.data.scheduleGridRows.length, totalPages: 1 });
@@ -3346,7 +3347,7 @@ export function SchedulesPage() {
         setAttendanceForm((current) => payload.data.scheduleGridRows.some((row) => row.employee.id === current.employeeId) ? current : { ...current, employeeId: payload.data.scheduleGridRows[0].employee.id });
         setScheduleEditForm((current) => payload.data.scheduleGridRows.some((row) => row.employee.id === current.employeeId) ? current : { ...current, employeeId: payload.data.scheduleGridRows[0].employee.id, lob: payload.data.scheduleGridRows[0].employee.lob, supervisor: payload.data.scheduleGridRows[0].employee.supervisor });
       }
-      setImportHistory(payload.data.imports);
+      if (payload.data.imports) setImportHistory(payload.data.imports);
       if (payload.data.attendanceSummary) setAttendanceSummary(payload.data.attendanceSummary);
       else setAttendanceSummary(null);
       void refreshScheduleSummary(rangeOverride, filtersOverride);

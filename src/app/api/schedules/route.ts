@@ -38,7 +38,8 @@ export async function GET(request: Request) {
       skill: url.searchParams.get("skill") ?? undefined,
       page: Number(url.searchParams.get("page")) || undefined,
       limit: Number(url.searchParams.get("limit")) || undefined,
-      skipSummary: url.searchParams.get("skipSummary") ?? undefined
+      skipSummary: url.searchParams.get("skipSummary") ?? undefined,
+      includeImports: url.searchParams.get("includeImports") ?? undefined
     }),
     actor: { role: actor.role, name: actor.name }
   });

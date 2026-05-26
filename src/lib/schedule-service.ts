@@ -85,6 +85,7 @@ const uiToAttendanceStatus: Record<string, AttendanceStatus> = {
 
 export const statusesRequiringReason = ["Falta", "Atraso", "Saída antecipada", "Erro de escala", "Erro de cronograma"];
 const supervisorJustificationStatuses = ["Falta", "Atraso", "Saída antecipada", "Erro de escala", "Erro de cronograma"];
+const scheduleStatusesRequiringJustification: ScheduleStatus[] = ["FALTA", "ATRASO", "SAIDA_ANTECIPADA", "ERRO_ESCALA"];
 
 const defaultShiftTimes: Record<string, { startsAt: string; endsAt: string }> = {
   Manhã: { startsAt: "08:00", endsAt: "14:00" },
@@ -131,6 +132,7 @@ export type ScheduleQuery = {
   page?: number;
   limit?: number;
   skipSummary?: boolean | string;
+  includeImports?: boolean | string;
 };
 
 export type ScheduleRemoveInput = {
@@ -330,7 +332,14 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       role === "COLABORADOR" && user.employeeProfile
         ? { id: user.employeeProfile.id }
         : employeeFilters(query, search);
+    const phaseTimings: Record<string, number> = {};
+    let phaseStartedAt = Date.now();
+    const markPhase = (name: string) => {
+      phaseTimings[name] = Date.now() - phaseStartedAt;
+      phaseStartedAt = Date.now();
+    };
     const supervisorFilter = await scheduleSupervisorFilter(query.supervisor);
+    markPhase("supervisorFilterMs");
     const scheduleQueryWhere: Prisma.ScheduleWhereInput = {
       ...scheduleWhere,
       ...(supervisorFilter ?? {}),
@@ -346,6 +355,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       }
     };
     const totalSchedules = await prisma.employeeProfile.count({ where: employeePageWhere });
+    markPhase("employeeCountMs");
     const totalPages = Math.max(1, Math.ceil(totalSchedules / limit));
     const page = totalSchedules > 0 && requestedPage > totalPages ? 1 : requestedPage;
     const employeePage = totalSchedules
@@ -357,6 +367,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         take: role === "COLABORADOR" ? 1 : limit
       })
       : [];
+    markPhase("employeePageMs");
     const visibleEmployeeIds = employeePage.map((employee) => employee.id);
     const visibleEmployeeOrder = new Map(visibleEmployeeIds.map((employeeId, index) => [employeeId, index]));
     const scheduleRows = visibleEmployeeIds.length
@@ -413,6 +424,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         orderBy: [{ date: "asc" }, { employeeId: "asc" }]
       })
       : [];
+    markPhase("scheduleRowsMs");
     const scheduleEmployeeIds = Array.from(new Set(scheduleRows.map((schedule) => schedule.employeeId)));
     const relatedWorkHourRecords = scheduleEmployeeIds.length
       ? await prisma.workHourRecord.findMany({
@@ -443,6 +455,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
           }
         })
       : [];
+    markPhase("workHoursMs");
     const workHourByEmployeeDay = new Map(
       relatedWorkHourRecords.map((record) => [`${record.employeeId}:${record.date.getTime()}`, record])
     );
@@ -530,7 +543,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
     };
     });
 
-    const own = user.employeeProfile
+    const own = role === "COLABORADOR" && user.employeeProfile
       ? await prisma.employeeProfile.findUnique({
         where: { id: user.employeeProfile.id },
         select: {
@@ -567,8 +580,29 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       const shift = schedule ? cleanShiftName(schedule.shift?.name ?? own?.shift.name) || "Sem turno" : "Sem turno";
       return { ...day, shift, label };
     });
+    markPhase("ownScheduleMs");
 
-    const imports = await prisma.scheduleImport.findMany({ orderBy: { createdAt: "desc" }, include: { importedBy: true }, take: 20 });
+    const includeImports = query.includeImports === true || query.includeImports === "true";
+    const imports = includeImports
+      ? await prisma.scheduleImport.findMany({
+          orderBy: { createdAt: "desc" },
+          select: {
+            id: true,
+            fileName: true,
+            validRows: true,
+            totalRows: true,
+            errorRows: true,
+            warnings: true,
+            status: true,
+            createdAt: true,
+            importedBy: { select: { name: true } }
+          },
+          take: 5
+        })
+      : null;
+    markPhase("importsMs");
+    const attendanceSummary = query.skipSummary === true || query.skipSummary === "true" ? null : await getAttendanceSummaryFromDb(period, query);
+    markPhase("attendanceSummaryMs");
 
     const response = {
       scheduleDays,
@@ -582,7 +616,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
           lob: own.lob.name
         }
         : null,
-      imports: imports.map((item) => ({
+      imports: imports?.map((item) => ({
         id: item.id,
         fileName: item.fileName,
         importedRows: item.validRows,
@@ -593,7 +627,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         createdAt: formatDateTime(item.createdAt),
         user: item.importedBy.name
       })),
-      attendanceSummary: query.skipSummary === true || query.skipSummary === "true" ? null : await getAttendanceSummaryFromDb(period, query),
+      attendanceSummary,
       month: period.month,
       year: period.year,
       daysInMonth: dateColumns.length,
@@ -613,7 +647,16 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       limit,
       employeesMatched: totalSchedules,
       employeesReturned: scheduleGridRows.length,
-      scheduleRows: scheduleRows.length
+      scheduleRows: scheduleRows.length,
+      workHourRows: relatedWorkHourRecords.length,
+      phaseSupervisorFilterMs: phaseTimings.supervisorFilterMs,
+      phaseEmployeeCountMs: phaseTimings.employeeCountMs,
+      phaseEmployeePageMs: phaseTimings.employeePageMs,
+      phaseScheduleRowsMs: phaseTimings.scheduleRowsMs,
+      phaseWorkHoursMs: phaseTimings.workHoursMs,
+      phaseOwnScheduleMs: phaseTimings.ownScheduleMs,
+      phaseImportsMs: phaseTimings.importsMs,
+      phaseAttendanceSummaryMs: phaseTimings.attendanceSummaryMs
     });
     return response;
   } catch (error) {
@@ -1423,6 +1466,14 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
     const reasonFilter = query.reason?.trim();
     const justificationFilter = query.justification?.trim().toLowerCase();
     const includeJustified = query.includeJustified === true || query.includeJustified === "true";
+    const summaryOnly = query.summaryOnly === true || query.summaryOnly === "true";
+    const skipSummary = query.skipSummary === true || query.skipSummary === "true";
+    const pendingJustificationMode =
+      !summaryOnly &&
+      !includeJustified &&
+      !reasonFilter &&
+      (!justificationFilter || justificationFilter === "pending") &&
+      !statusFilter;
     const extraFilters: Prisma.ScheduleWhereInput[] = [];
     if (lobFilter) extraFilters.push({ employee: { lob: { name: lobFilter } } });
     if (roleTitleFilter && roleTitleFilter !== "Todos") extraFilters.push({ employee: { roleTitle: roleTitleFilter } });
@@ -1430,6 +1481,7 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
     const supervisorWhere = await scheduleSupervisorFilter(supervisorFilter);
     if (supervisorWhere) extraFilters.push(supervisorWhere);
     if (statusFilter) extraFilters.push({ status: statusFilter });
+    if (pendingJustificationMode) extraFilters.push({ status: { in: scheduleStatusesRequiringJustification } });
     if (collaboratorFilter) {
       extraFilters.push({
         OR: [
@@ -1466,8 +1518,6 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
       employeeId: role === "COLABORADOR" && user.employeeProfile ? user.employeeProfile.id : undefined,
       teamSupervisorId: undefined
     };
-    const summaryOnly = query.summaryOnly === true || query.summaryOnly === "true";
-    const skipSummary = query.skipSummary === true || query.skipSummary === "true";
     if (summaryOnly) {
       const summary = await getAttendanceSummaryFromDb(period, summaryFilters);
       logPerformanceMetric("attendance.summary-only", startedAt, {
@@ -1553,7 +1603,9 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
       startDate: period ? dateKey(period.start) : null,
       endDate: period ? dateKey(period.end) : null,
       schedulesFetched: schedules.length,
-      recordsReturned: data.length
+      recordsReturned: data.length,
+      pendingJustificationMode,
+      dbStatusFilterApplied: pendingJustificationMode
     });
     return {
       data,

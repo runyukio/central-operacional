@@ -42,6 +42,26 @@ const settingsEmployeeSelect = {
   shift: { select: { name: true } }
 } satisfies Prisma.EmployeeProfileSelect;
 
+const settingsUserSelect = {
+  id: true,
+  name: true,
+  email: true,
+  status: true,
+  createdAt: true,
+  role: { select: { name: true, label: true } },
+  employeeProfile: { select: { id: true, fullName: true } }
+} satisfies Prisma.UserSelect;
+
+const settingsTeamInclude = {
+  lob: true,
+  supervisor: {
+    select: {
+      fullName: true,
+      user: { select: { email: true } }
+    }
+  }
+} satisfies Prisma.TeamInclude;
+
 type SettingsEmployee = Prisma.EmployeeProfileGetPayload<{ select: typeof settingsEmployeeSelect }>;
 
 const essentialRoles = ["ADMIN", "GESTOR", "SUPERVISOR", "COLABORADOR", "WFM", "QUALIDADE", "RH", "TI"];
@@ -90,7 +110,6 @@ const configKeys = {
 export async function getSystemSettings(actor: Actor) {
   try {
     await assertAuthenticated(actor);
-    await ensureCoreSettings();
     if (normalizeRole(actor.role) !== "ADMIN") {
       return { data: await getLimitedSystemSettings() };
     }
@@ -119,13 +138,13 @@ export async function getSystemSettings(actor: Actor) {
       tokenRules,
       generalSettings
     ] = await Promise.all([
-      prisma.user.findMany({ where: { deletedAt: null }, include: { role: true, employeeProfile: true }, orderBy: { name: "asc" }, take: 300 }),
+      prisma.user.findMany({ where: { deletedAt: null }, select: settingsUserSelect, orderBy: { name: "asc" }, take: 300 }),
       prisma.lob.findMany({ orderBy: { name: "asc" } }),
       prisma.shift.findMany({ orderBy: { name: "asc" } }),
       prisma.role.findMany({ orderBy: { name: "asc" } }),
       prisma.permission.findMany({ orderBy: { key: "asc" } }),
       prisma.requestType.findMany({ orderBy: { name: "asc" } }),
-      prisma.team.findMany({ include: { lob: true, supervisor: { include: { user: true } } }, orderBy: { name: "asc" } }),
+      prisma.team.findMany({ include: settingsTeamInclude, orderBy: { name: "asc" } }),
       prisma.employeeProfile.findMany({ where: { deletedAt: null }, select: settingsEmployeeSelect, orderBy: { fullName: "asc" }, take: 500 }),
       readStatusMap(configKeys.lobStatus),
       readStatusMap(configKeys.shiftStatus),
@@ -214,7 +233,7 @@ async function getLimitedSystemSettings() {
     prisma.lob.findMany({ orderBy: { name: "asc" } }),
     prisma.shift.findMany({ orderBy: { name: "asc" } }),
     prisma.requestType.findMany({ orderBy: { name: "asc" } }),
-    prisma.team.findMany({ include: { lob: true, supervisor: { include: { user: true } } }, orderBy: { name: "asc" } }),
+    prisma.team.findMany({ include: settingsTeamInclude, orderBy: { name: "asc" } }),
     prisma.employeeProfile.findMany({ where: { deletedAt: null }, select: settingsEmployeeSelect, orderBy: { fullName: "asc" }, take: 500 }),
     readStatusMap(configKeys.lobStatus),
     readStatusMap(configKeys.shiftStatus),
