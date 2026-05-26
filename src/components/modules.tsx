@@ -9278,15 +9278,14 @@ export function ClimatePage() {
 }
 
 export function AnonymousFeedbackPage() {
-  const { data: session } = useSession();
-  const role = String(session?.user?.role ?? "COLABORADOR").toUpperCase();
-  const isAdmin = role === "ADMIN";
   const [submitted, setSubmitted] = useState(false);
   const [message, setMessage] = useState("");
   const [anonymousForm, setAnonymousForm] = useState({ category: "Liderança", urgency: "Média", comment: "", allowContact: false });
   const [feedbackPayload, setFeedbackPayload] = useState<AnonymousFeedbackListResponse | null>(null);
   const [feedbackLoading, setFeedbackLoading] = useState(false);
-  const [feedbackFilters, setFeedbackFilters] = useState({ status: "Todos", urgency: "Todos", category: "Todos", search: "" });
+  const [feedbackView, setFeedbackView] = useState<"loading" | "admin" | "submit">("loading");
+  const [selectedFeedback, setSelectedFeedback] = useState<AnonymousFeedbackClient | null>(null);
+  const [feedbackFilters, setFeedbackFilters] = useState({ status: "Todos", urgency: "Todos", category: "Todos", startDate: "", endDate: "", lob: "", jobTitle: "", search: "" });
 
   const loadAnonymousFeedback = useCallback(async () => {
     setFeedbackLoading(true);
@@ -9294,20 +9293,29 @@ export function AnonymousFeedbackPage() {
     if (feedbackFilters.status !== "Todos") params.set("status", feedbackFilters.status);
     if (feedbackFilters.urgency !== "Todos") params.set("urgency", feedbackFilters.urgency);
     if (feedbackFilters.category !== "Todos") params.set("category", feedbackFilters.category);
+    if (feedbackFilters.startDate) params.set("startDate", feedbackFilters.startDate);
+    if (feedbackFilters.endDate) params.set("endDate", feedbackFilters.endDate);
+    if (feedbackFilters.lob.trim()) params.set("lob", feedbackFilters.lob.trim());
+    if (feedbackFilters.jobTitle.trim()) params.set("jobTitle", feedbackFilters.jobTitle.trim());
     if (feedbackFilters.search.trim()) params.set("search", feedbackFilters.search.trim());
     try {
       const payload = await apiJson<AnonymousFeedbackListResponse>(`/api/anonymous-feedback?${params.toString()}`);
       setFeedbackPayload(payload);
+      setFeedbackView("admin");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Não foi possível carregar feedbacks.");
+      if (error instanceof ApiRequestError && error.status === 403) {
+        setFeedbackView("submit");
+      } else {
+        setMessage(error instanceof Error ? error.message : "Não foi possível carregar feedbacks.");
+      }
     } finally {
       setFeedbackLoading(false);
     }
-  }, [feedbackFilters.category, feedbackFilters.search, feedbackFilters.status, feedbackFilters.urgency]);
+  }, [feedbackFilters.category, feedbackFilters.endDate, feedbackFilters.jobTitle, feedbackFilters.lob, feedbackFilters.search, feedbackFilters.startDate, feedbackFilters.status, feedbackFilters.urgency]);
 
   useEffect(() => {
-    if (isAdmin) void loadAnonymousFeedback();
-  }, [isAdmin, loadAnonymousFeedback]);
+    void loadAnonymousFeedback();
+  }, [loadAnonymousFeedback]);
 
   async function submitAnonymousFeedback() {
     setMessage("");
@@ -9337,12 +9345,27 @@ export function AnonymousFeedbackPage() {
     }
   }
 
-  if (isAdmin) {
+  if (feedbackView === "loading") {
+    return (
+      <div>
+        <PageHeader title="Feedback Anônimo" description="Canal seguro para registrar percepções, sugestões e problemas operacionais." icon={MessageCircle} actions={<TopActions />} />
+        <Panel title="Carregando">
+          <EmptyState title="Carregando Feedback Anônimo" description="Verificando sua permissão de acesso." />
+        </Panel>
+      </div>
+    );
+  }
+
+  if (feedbackView === "admin") {
     const summary = feedbackPayload?.summary;
     const exportParams = new URLSearchParams();
     if (feedbackFilters.status !== "Todos") exportParams.set("status", feedbackFilters.status);
     if (feedbackFilters.urgency !== "Todos") exportParams.set("urgency", feedbackFilters.urgency);
     if (feedbackFilters.category !== "Todos") exportParams.set("category", feedbackFilters.category);
+    if (feedbackFilters.startDate) exportParams.set("startDate", feedbackFilters.startDate);
+    if (feedbackFilters.endDate) exportParams.set("endDate", feedbackFilters.endDate);
+    if (feedbackFilters.lob.trim()) exportParams.set("lob", feedbackFilters.lob.trim());
+    if (feedbackFilters.jobTitle.trim()) exportParams.set("jobTitle", feedbackFilters.jobTitle.trim());
     if (feedbackFilters.search.trim()) exportParams.set("search", feedbackFilters.search.trim());
     return (
       <div>
@@ -9356,7 +9379,7 @@ export function AnonymousFeedbackPage() {
           <StatCard title="Críticos" value={summary?.critical ?? 0} helper="urgência crítica" icon={AlertTriangle} tone="red" />
         </div>
         <Panel title="Feedbacks recebidos" action="Exportar" actionOnClick={() => void downloadFile(`/api/anonymous-feedback/export?${exportParams.toString()}`, "feedback_anonimo.csv").catch((error) => setMessage(error.message))}>
-          <div className="mb-4 grid gap-3 md:grid-cols-4">
+          <div className="mb-4 grid gap-3 md:grid-cols-4 xl:grid-cols-8">
             <select value={feedbackFilters.status} onChange={(event) => setFeedbackFilters({ ...feedbackFilters, status: event.target.value })} className="h-10 rounded-lg border border-border px-3">
               {feedbackStatusOptions.map((option) => <option key={option}>{option}</option>)}
             </select>
@@ -9368,7 +9391,11 @@ export function AnonymousFeedbackPage() {
               <option>Todos</option>
               {anonymousCategories.map((option) => <option key={option}>{option}</option>)}
             </select>
-            <div className="flex gap-2">
+            <input type="date" value={feedbackFilters.startDate} onChange={(event) => setFeedbackFilters({ ...feedbackFilters, startDate: event.target.value })} className="h-10 rounded-lg border border-border px-3" />
+            <input type="date" value={feedbackFilters.endDate} onChange={(event) => setFeedbackFilters({ ...feedbackFilters, endDate: event.target.value })} className="h-10 rounded-lg border border-border px-3" />
+            <input value={feedbackFilters.lob} onChange={(event) => setFeedbackFilters({ ...feedbackFilters, lob: event.target.value })} className="h-10 rounded-lg border border-border px-3" placeholder="LOB" />
+            <input value={feedbackFilters.jobTitle} onChange={(event) => setFeedbackFilters({ ...feedbackFilters, jobTitle: event.target.value })} className="h-10 rounded-lg border border-border px-3" placeholder="Cargo/Função" />
+            <div className="flex gap-2 xl:col-span-1">
               <input value={feedbackFilters.search} onChange={(event) => setFeedbackFilters({ ...feedbackFilters, search: event.target.value })} className="h-10 min-w-0 flex-1 rounded-lg border border-border px-3" placeholder="Buscar comentário" />
               <button type="button" onClick={loadAnonymousFeedback} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">Buscar</button>
             </div>
@@ -9377,18 +9404,20 @@ export function AnonymousFeedbackPage() {
             <EmptyState title="Carregando feedbacks" description="Buscando dados reais no banco." />
           ) : feedbackPayload?.data.length ? (
             <SimpleTable
-              columns={["Data", "Categoria", "Urgência", "LOB", "Comentário", "Status", "Ações"]}
+              columns={["Data", "Categoria", "Urgência", "LOB", "Cargo/Função", "Comentário", "Status", "Contato", "Ações"]}
               rows={feedbackPayload.data.map((feedback) => [
                 ptDate(feedback.createdAt),
                 feedback.category,
                 <PriorityBadge key={`${feedback.id}-urgency`} priority={feedback.urgencyLabel} />,
                 feedback.lob ?? "-",
+                feedback.jobTitle ?? "-",
                 <div key={`${feedback.id}-comment`} className="max-w-[420px]">
                   <p className="line-clamp-3 text-sm">{feedback.comment}</p>
-                  {feedback.allowContact ? <span className="mt-2 inline-flex rounded-md bg-blue-50 px-2 py-1 text-[11px] font-extrabold text-blue-700">Contato permitido</span> : null}
                 </div>,
                 <StatusBadge key={`${feedback.id}-status`} status={feedback.statusLabel} />,
+                feedback.allowContact ? <StatusBadge key={`${feedback.id}-contact`} status="Contato permitido" /> : "Não permitido",
                 <div key={`${feedback.id}-actions`} className="flex flex-wrap gap-2">
+                  <button type="button" onClick={() => setSelectedFeedback(feedback)} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Ver</button>
                   <button type="button" onClick={() => updateFeedbackStatus(feedback.id, "Em análise")} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Em análise</button>
                   <button type="button" onClick={() => updateFeedbackStatus(feedback.id, "Resolvido")} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Resolver</button>
                   <button type="button" onClick={() => updateFeedbackStatus(feedback.id, "Arquivado")} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Arquivar</button>
@@ -9399,6 +9428,46 @@ export function AnonymousFeedbackPage() {
             <EmptyState title="Nenhum feedback recebido ainda." description="Os feedbacks enviados pelos colaboradores aparecerão aqui." />
           )}
         </Panel>
+        {selectedFeedback ? (
+          <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+            <div className="card max-h-[88vh] w-full max-w-2xl overflow-y-auto p-5">
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-extrabold text-navy-950">Detalhe do feedback</h2>
+                  <p className="text-sm text-muted">{ptDate(selectedFeedback.createdAt)} · {selectedFeedback.category}</p>
+                </div>
+                <button type="button" onClick={() => setSelectedFeedback(null)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+              </div>
+              <div className="space-y-3">
+                <div className="flex flex-wrap gap-2">
+                  <PriorityBadge priority={selectedFeedback.urgencyLabel} />
+                  <StatusBadge status={selectedFeedback.statusLabel} />
+                  {selectedFeedback.allowContact ? <StatusBadge status="Contato permitido" /> : null}
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="rounded-lg border border-border p-3">
+                    <p className="text-xs font-extrabold uppercase tracking-wide text-muted">LOB</p>
+                    <p className="mt-1 font-bold text-navy-950">{selectedFeedback.lob ?? "-"}</p>
+                  </div>
+                  <div className="rounded-lg border border-border p-3">
+                    <p className="text-xs font-extrabold uppercase tracking-wide text-muted">Cargo/Função</p>
+                    <p className="mt-1 font-bold text-navy-950">{selectedFeedback.jobTitle ?? "-"}</p>
+                  </div>
+                </div>
+                <div className="rounded-lg border border-border p-3">
+                  <p className="text-xs font-extrabold uppercase tracking-wide text-muted">Comentário</p>
+                  <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-navy-950">{selectedFeedback.comment}</p>
+                </div>
+                {selectedFeedback.allowContact && selectedFeedback.contact ? (
+                  <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-800">
+                    <p className="font-extrabold">Contato permitido pelo colaborador</p>
+                    <p className="mt-1">{selectedFeedback.contact.name} · {selectedFeedback.contact.email} · {selectedFeedback.contact.wbLogin}</p>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -9436,7 +9505,7 @@ export function AnonymousFeedbackPage() {
               <button type="button" onClick={submitAnonymousFeedback} disabled={!anonymousForm.comment.trim()} className="premium-button h-11 px-5 text-sm font-extrabold disabled:opacity-60">Enviar feedback</button>
             </div>
             <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm font-semibold leading-6 text-blue-800">
-              O feedback é salvo sem nome, e-mail ou WB/Login. Somente dados agregados como LOB e cargo podem ser usados para análise consolidada. Se você permitir contato, o Admin verá essa autorização de forma explícita.
+              O feedback é salvo sem nome, e-mail ou WB/Login. Somente dados agregados como LOB e cargo podem ser usados para análise consolidada. Se você permitir contato, perfis autorizados verão essa autorização de forma explícita.
             </div>
           </div>
         )}

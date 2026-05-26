@@ -1,11 +1,13 @@
 import type { AppRole } from "@/lib/demo-auth";
-import { isAgentJobTitle } from "@/lib/job-title-normalization";
+import { isAgentJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
 
 export type PermissionUser = {
   role?: string | null;
   email?: string | null;
   name?: string | null;
   status?: string | null;
+  roleTitle?: string | null;
+  jobTitle?: string | null;
 };
 
 export type PermissionEmployee = {
@@ -90,6 +92,34 @@ export function canAccessEmployeeMap(user: PermissionUser) {
 export function canAccessAdvanceModule(user: PermissionUser) {
   const role = normalizeRole(user.role);
   return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM"].includes(role);
+}
+
+export function canAccessAnonymousFeedback(user: PermissionUser) {
+  return canViewAnonymousFeedbackAdmin(user) || canSubmitAnonymousFeedback(user);
+}
+
+export function canSubmitAnonymousFeedback(user: PermissionUser) {
+  return isActiveUser(user) && Boolean(user.email) && !canViewAnonymousFeedbackAdmin(user);
+}
+
+export function canViewAnonymousFeedbackAdmin(user: PermissionUser) {
+  const role = normalizeRole(user.role);
+  if (!isActiveUser(user)) return false;
+  if (["ADMIN", "GESTOR"].includes(role)) return true;
+  return isAnonymousFeedbackLeadershipTitle(user.roleTitle ?? user.jobTitle);
+}
+
+export function canManageAnonymousFeedback(user: PermissionUser) {
+  return canViewAnonymousFeedbackAdmin(user);
+}
+
+export function canExportAnonymousFeedback(user: PermissionUser) {
+  return canViewAnonymousFeedbackAdmin(user);
+}
+
+function isAnonymousFeedbackLeadershipTitle(value?: string | null) {
+  const title = normalizeComparableJobTitle(value);
+  return ["coordenador", "coordenadora", "gestor", "gestora", "gerente", "manager", "management"].includes(title);
 }
 
 export function canAccessHierarchy(user: PermissionUser) {

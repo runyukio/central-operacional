@@ -14,6 +14,7 @@ export async function GET(request: Request) {
       urgency: url.searchParams.get("urgency") ?? undefined,
       status: url.searchParams.get("status") ?? undefined,
       lobId: url.searchParams.get("lobId") ?? undefined,
+      lob: url.searchParams.get("lob") ?? undefined,
       jobTitle: url.searchParams.get("jobTitle") ?? undefined,
       search: url.searchParams.get("search") ?? undefined
     });

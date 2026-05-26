@@ -1,7 +1,14 @@
 import { AnonymousFeedbackStatus, ClimateQuestionType, Prisma } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
-import { isAgentEmployee, normalizeRole } from "@/lib/permissions";
+import {
+  canExportAnonymousFeedback,
+  canManageAnonymousFeedback,
+  canSubmitAnonymousFeedback,
+  canViewAnonymousFeedbackAdmin,
+  isAgentEmployee,
+  normalizeRole
+} from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
 export class EngagementError extends Error {
@@ -61,6 +68,7 @@ export type AnonymousFeedbackFilters = {
   urgency?: string;
   status?: string;
   lobId?: string;
+  lob?: string;
   jobTitle?: string;
   search?: string;
   page?: number;
@@ -115,11 +123,11 @@ const defaultClimateQuestions = [
 
 export async function listAnonymousFeedback(actor: Actor, filters: AnonymousFeedbackFilters = {}) {
   const user = await requireUser(actor);
-  requireAdmin(user);
+  requireAnonymousFeedbackAdmin(user);
 
   const page = Math.max(1, Number(filters.page) || 1);
   const limit = Math.min(100, Math.max(1, Number(filters.limit) || 25));
-  const where = buildAnonymousFeedbackWhere(filters);
+  const where = await buildAnonymousFeedbackWhere(filters);
 
   const [items, total, statusCounts, urgencyCounts] = await Promise.all([
     prisma.anonymousFeedback.findMany({
@@ -170,8 +178,11 @@ export async function listAnonymousFeedback(actor: Actor, filters: AnonymousFeed
 
 export async function createAnonymousFeedback(actor: Actor, input: AnonymousFeedbackInput) {
   const user = await requireUser(actor);
-  if (normalizeRole(user.role.name) !== "COLABORADOR") {
-    throw new EngagementError("Apenas colaboradores podem enviar Feedback Anônimo.", 403);
+  if (!user.employeeProfile) {
+    throw new EngagementError("Seu usuário não está vinculado a um cadastro de colaborador.", 403);
+  }
+  if (!canSubmitAnonymousFeedback(permissionUserFromAuthenticatedUser(user))) {
+    throw new EngagementError("Seu perfil possui acesso administrativo ao Feedback Anônimo. Use a visão administrativa.", 403);
   }
   const category = input.category.trim();
   const message = input.comment.trim();
@@ -219,7 +230,7 @@ export async function createAnonymousFeedback(actor: Actor, input: AnonymousFeed
 
 export async function updateAnonymousFeedbackStatus(actor: Actor, input: { id: string; status: string }) {
   const user = await requireUser(actor);
-  requireAdmin(user);
+  requireAnonymousFeedbackManager(user);
   const status = normalizeFeedbackStatus(input.status);
   const current = await prisma.anonymousFeedback.findUnique({ where: { id: input.id } });
   if (!current) throw new EngagementError("Feedback não encontrado.", 404);
@@ -249,6 +260,10 @@ export async function updateAnonymousFeedbackStatus(actor: Actor, input: { id: s
 }
 
 export async function exportAnonymousFeedbackCsv(actor: Actor, filters: AnonymousFeedbackFilters = {}) {
+  const user = await requireUser(actor);
+  if (!canExportAnonymousFeedback(permissionUserFromAuthenticatedUser(user))) {
+    throw new EngagementError("Você não tem permissão para exportar Feedback Anônimo.", 403);
+  }
   const result = await listAnonymousFeedback(actor, { ...filters, page: 1, limit: 10000 });
   const rows = result.data.map((item) => [
     item.createdAt,
@@ -527,7 +542,7 @@ export async function exportClimateSurveyCsv(actor: Actor) {
   return toCsv(["pesquisa", "data_resposta", "pergunta", "resposta", "lob", "cargo_funcao", "supervisor", "anonima"], rows);
 }
 
-function buildAnonymousFeedbackWhere(filters: AnonymousFeedbackFilters): Prisma.AnonymousFeedbackWhereInput {
+async function buildAnonymousFeedbackWhere(filters: AnonymousFeedbackFilters): Promise<Prisma.AnonymousFeedbackWhereInput> {
   const where: Prisma.AnonymousFeedbackWhereInput = {};
   const status = filters.status && filters.status !== "Todos" ? normalizeFeedbackStatus(filters.status) : null;
   const urgency = filters.urgency && filters.urgency !== "Todos" ? normalizeUrgency(filters.urgency) : null;
@@ -535,7 +550,14 @@ function buildAnonymousFeedbackWhere(filters: AnonymousFeedbackFilters): Prisma.
   if (urgency) where.urgency = urgency;
   if (filters.category && filters.category !== "Todos") where.category = filters.category;
   if (filters.lobId && filters.lobId !== "Todos") where.lobId = filters.lobId;
-  if (filters.jobTitle && filters.jobTitle !== "Todos") where.jobTitle = filters.jobTitle;
+  if (filters.lob?.trim() && filters.lob !== "Todos") {
+    const lobs = await prisma.lob.findMany({
+      where: { name: { contains: filters.lob.trim(), mode: "insensitive" } },
+      select: { id: true }
+    });
+    where.lobId = lobs.length ? { in: lobs.map((lob) => lob.id) } : "__sem_lob_compativel__";
+  }
+  if (filters.jobTitle && filters.jobTitle !== "Todos") where.jobTitle = { contains: filters.jobTitle, mode: "insensitive" };
   if (filters.search?.trim()) {
     where.message = { contains: filters.search.trim(), mode: "insensitive" };
   }
@@ -681,6 +703,28 @@ function requireAdmin(user: AuthenticatedUser) {
   if (normalizeRole(user.role.name) !== "ADMIN") {
     throw new EngagementError("Apenas ADMIN pode executar esta ação.", 403);
   }
+}
+
+function requireAnonymousFeedbackAdmin(user: AuthenticatedUser) {
+  if (!canViewAnonymousFeedbackAdmin(permissionUserFromAuthenticatedUser(user))) {
+    throw new EngagementError("Você não tem permissão para visualizar os feedbacks recebidos.", 403);
+  }
+}
+
+function requireAnonymousFeedbackManager(user: AuthenticatedUser) {
+  if (!canManageAnonymousFeedback(permissionUserFromAuthenticatedUser(user))) {
+    throw new EngagementError("Você não tem permissão para gerenciar Feedback Anônimo.", 403);
+  }
+}
+
+function permissionUserFromAuthenticatedUser(user: AuthenticatedUser) {
+  return {
+    email: user.email,
+    name: user.name,
+    role: user.role.name,
+    status: user.status,
+    roleTitle: user.employeeProfile?.roleTitle ?? null
+  };
 }
 
 function normalizeUrgency(value?: string | null) {
