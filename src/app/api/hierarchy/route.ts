@@ -3,11 +3,11 @@ import { z } from "zod";
 
 import { getApiActor } from "@/lib/api-actor";
 import { errorResponse, errorStatus, mapZodError } from "@/lib/api-errors";
-import { exportHierarchyCsv, getHierarchy, updateEmployeeManager } from "@/lib/hierarchy-service";
+import { exportHierarchyCsv, getHierarchy, updateEmployeeSupervisor } from "@/lib/hierarchy-service";
 
 const updateSchema = z.object({
   employeeId: z.string().min(1),
-  managerId: z.string().trim().nullable().optional()
+  supervisorId: z.string().trim().nullable().optional()
 });
 
 export async function GET(request: Request) {
@@ -19,7 +19,6 @@ export async function GET(request: Request) {
     lobId: url.searchParams.get("lobId") ?? undefined,
     lob: url.searchParams.get("lob") ?? undefined,
     supervisorId: url.searchParams.get("supervisorId") ?? undefined,
-    managerId: url.searchParams.get("managerId") ?? undefined,
     roleTitle: url.searchParams.get("roleTitle") ?? undefined,
     status: url.searchParams.get("status") ?? undefined
   };
@@ -46,7 +45,7 @@ export async function PATCH(request: Request) {
   if (!parsed.success) return errorResponse(mapZodError(parsed.error));
 
   const actor = await getApiActor();
-  const result = await updateEmployeeManager(actor, parsed.data);
+  const result = await updateEmployeeSupervisor(actor, parsed.data);
   if ("error" in result) return errorResponse(result, errorStatus(result));
   return NextResponse.json(result);
 }

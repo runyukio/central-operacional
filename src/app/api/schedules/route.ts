@@ -28,6 +28,7 @@ export async function GET(request: Request) {
       endDate: url.searchParams.get("endDate") ?? undefined,
       month: Number(url.searchParams.get("month")) || undefined,
       year: Number(url.searchParams.get("year")) || undefined,
+      view: url.searchParams.get("view") === "mine" ? "mine" : undefined,
       collaborator: url.searchParams.get("collaborator") ?? undefined,
       lob: url.searchParams.get("lob") ?? undefined,
       supervisor: url.searchParams.get("supervisor") ?? undefined,
@@ -35,7 +36,8 @@ export async function GET(request: Request) {
       status: url.searchParams.get("status") ?? undefined,
       roleTitle: url.searchParams.get("roleTitle") ?? undefined,
       page: Number(url.searchParams.get("page")) || undefined,
-      limit: Number(url.searchParams.get("limit")) || undefined
+      limit: Number(url.searchParams.get("limit")) || undefined,
+      skipSummary: url.searchParams.get("skipSummary") ?? undefined
     }),
     actor: { role: actor.role, name: actor.name }
   });

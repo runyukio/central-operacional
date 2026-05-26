@@ -12,7 +12,6 @@ export type HierarchyQuery = {
   lobId?: string;
   lob?: string;
   supervisorId?: string;
-  managerId?: string;
   roleTitle?: string;
   status?: string;
 };
@@ -23,13 +22,11 @@ const hierarchyEmployeeSelect = {
   wbLogin: true,
   roleTitle: true,
   operationalStatus: true,
-  managerId: true,
   supervisorId: true,
   user: { select: { email: true, status: true } },
   lob: { select: { id: true, name: true } },
   supervisor: { select: { id: true, fullName: true, wbLogin: true } },
-  manager: { select: { id: true, fullName: true, wbLogin: true, roleTitle: true } },
-  _count: { select: { directReports: true } }
+  _count: { select: { supervisees: true } }
 } satisfies Prisma.EmployeeProfileSelect;
 
 type HierarchyEmployee = Prisma.EmployeeProfileGetPayload<{ select: typeof hierarchyEmployeeSelect }>;
@@ -43,8 +40,6 @@ export type HierarchyEmployeeClient = {
   lob: string;
   lobId: string;
   status: string;
-  managerId: string;
-  managerName: string;
   supervisorId: string;
   supervisorName: string;
   directReports: number;
@@ -69,13 +64,13 @@ export async function getHierarchy(actor: Actor, query: HierarchyQuery = {}) {
     });
 
     const employeeById = new Map(employees.map((employee) => [employee.id, employee]));
-    const childrenByManager = new Map<string, HierarchyEmployee[]>();
+    const childrenBySupervisor = new Map<string, HierarchyEmployee[]>();
     const roots: HierarchyEmployee[] = [];
     employees.forEach((employee) => {
-      if (employee.managerId && employeeById.has(employee.managerId)) {
-        const current = childrenByManager.get(employee.managerId) ?? [];
+      if (employee.supervisorId && employeeById.has(employee.supervisorId)) {
+        const current = childrenBySupervisor.get(employee.supervisorId) ?? [];
         current.push(employee);
-        childrenByManager.set(employee.managerId, current);
+        childrenBySupervisor.set(employee.supervisorId, current);
       } else {
         roots.push(employee);
       }
@@ -86,7 +81,7 @@ export async function getHierarchy(actor: Actor, query: HierarchyQuery = {}) {
       if (totalReportsById.has(employeeId)) return totalReportsById.get(employeeId)!;
       if (visited.has(employeeId)) return 0;
       visited.add(employeeId);
-      const children = childrenByManager.get(employeeId) ?? [];
+      const children = childrenBySupervisor.get(employeeId) ?? [];
       const total = children.reduce((sum, child) => sum + 1 + countReports(child.id, new Set(visited)), 0);
       totalReportsById.set(employeeId, total);
       return total;
@@ -97,13 +92,13 @@ export async function getHierarchy(actor: Actor, query: HierarchyQuery = {}) {
       if (visited.has(employee.id)) return;
       visited.add(employee.id);
       levelById.set(employee.id, level);
-      (childrenByManager.get(employee.id) ?? []).forEach((child) => assignLevel(child, level + 1, new Set(visited)));
+      (childrenBySupervisor.get(employee.id) ?? []).forEach((child) => assignLevel(child, level + 1, new Set(visited)));
     };
     roots.forEach((employee) => assignLevel(employee, 0));
 
     const matchesFilters = (employee: HierarchyEmployee) => {
       const search = query.search?.trim().toLowerCase();
-      const searchText = [employee.fullName, employee.wbLogin, employee.user?.email, employee.roleTitle, employee.lob.name, employee.manager?.fullName, employee.supervisor?.fullName]
+      const searchText = [employee.fullName, employee.wbLogin, employee.user?.email, employee.roleTitle, employee.lob.name, employee.supervisor?.fullName]
         .join(" ")
         .toLowerCase();
       if (search && !searchText.includes(search)) return false;
@@ -115,11 +110,6 @@ export async function getHierarchy(actor: Actor, query: HierarchyQuery = {}) {
         if (isNoneFilter(query.supervisorId)) {
           if (employee.supervisorId) return false;
         } else if (employee.supervisorId !== query.supervisorId) return false;
-      }
-      if (query.managerId && query.managerId !== "Todos") {
-        if (isNoneFilter(query.managerId)) {
-          if (employee.managerId) return false;
-        } else if (employee.managerId !== query.managerId) return false;
       }
       return true;
     };
@@ -134,22 +124,20 @@ export async function getHierarchy(actor: Actor, query: HierarchyQuery = {}) {
       lob: employee.lob.name,
       lobId: employee.lob.id,
       status: employee.operationalStatus,
-      managerId: employee.managerId ?? "",
-      managerName: employee.manager?.fullName ?? "Sem gestor",
       supervisorId: employee.supervisorId ?? "",
       supervisorName: employee.supervisor?.fullName ?? "Sem supervisor",
-      directReports: childrenByManager.get(employee.id)?.length ?? employee._count.directReports,
+      directReports: childrenBySupervisor.get(employee.id)?.length ?? employee._count.supervisees,
       totalReports: totalReportsById.get(employee.id) ?? 0,
       level
     });
     const buildNode = (employee: HierarchyEmployee, level = 0): HierarchyNode => ({
       ...toClient(employee, level),
-      children: (childrenByManager.get(employee.id) ?? [])
-        .filter((child) => displayedIds.has(child.id) || hasDisplayedDescendant(child.id, childrenByManager, displayedIds))
+      children: (childrenBySupervisor.get(employee.id) ?? [])
+        .filter((child) => displayedIds.has(child.id) || hasDisplayedDescendant(child.id, childrenBySupervisor, displayedIds))
         .map((child) => buildNode(child, level + 1))
     });
     const tree = roots
-      .filter((employee) => displayedIds.has(employee.id) || hasDisplayedDescendant(employee.id, childrenByManager, displayedIds))
+      .filter((employee) => displayedIds.has(employee.id) || hasDisplayedDescendant(employee.id, childrenBySupervisor, displayedIds))
       .map((employee) => buildNode(employee));
     const flat = employees.filter((employee) => displayedIds.has(employee.id)).map((employee) => toClient(employee));
 
@@ -157,8 +145,8 @@ export async function getHierarchy(actor: Actor, query: HierarchyQuery = {}) {
     const selected = selectedEmployee
       ? {
           ...toClient(selectedEmployee),
-          direct: (childrenByManager.get(selectedEmployee.id) ?? []).map((employee) => toClient(employee, 1)),
-          all: collectReports(selectedEmployee.id, childrenByManager).map((employee) => toClient(employee))
+          direct: (childrenBySupervisor.get(selectedEmployee.id) ?? []).map((employee) => toClient(employee, 1)),
+          all: collectReports(selectedEmployee.id, childrenBySupervisor).map((employee) => toClient(employee))
         }
       : null;
 
@@ -169,8 +157,8 @@ export async function getHierarchy(actor: Actor, query: HierarchyQuery = {}) {
         selected,
         summary: {
           total: employees.length,
-          withoutManager: roots.length,
-          withManager: employees.length - roots.length
+          withoutSupervisor: roots.length,
+          withSupervisor: employees.length - roots.length
         },
         canEdit: canManageHierarchy({ role: actor.role, status: user.status }),
         canExport: canAccessHierarchy({ role: actor.role, status: user.status }),
@@ -183,39 +171,39 @@ export async function getHierarchy(actor: Actor, query: HierarchyQuery = {}) {
   }
 }
 
-export async function updateEmployeeManager(actor: Actor, input: { employeeId: string; managerId?: string | null }) {
+export async function updateEmployeeSupervisor(actor: Actor, input: { employeeId: string; supervisorId?: string | null }) {
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
     if (!user) return createPermissionError("Usuário não autenticado.");
     if (!canManageHierarchy({ role: actor.role, status: user.status })) return createPermissionError("Você não tem permissão para editar hierarquia.");
 
-    const managerId = input.managerId?.trim() || null;
-    if (managerId && managerId === input.employeeId) {
-      return createValidationError({ managerId: "O colaborador não pode ser gestor de si mesmo." }, "O colaborador não pode ser gestor de si mesmo.");
+    const supervisorId = input.supervisorId?.trim() || null;
+    if (supervisorId && supervisorId === input.employeeId) {
+      return createValidationError({ supervisorId: "O colaborador não pode ser supervisor de si mesmo." }, "O colaborador não pode ser supervisor de si mesmo.");
     }
 
     const employee = await prisma.employeeProfile.findFirst({
       where: { id: input.employeeId, deletedAt: null },
-      select: { id: true, fullName: true, managerId: true }
+      select: { id: true, fullName: true, supervisorId: true }
     });
     if (!employee) return createNotFoundError("Colaborador não encontrado.");
 
-    let manager: { id: string; fullName: string } | null = null;
-    if (managerId) {
-      manager = await prisma.employeeProfile.findFirst({
-        where: { id: managerId, deletedAt: null },
+    let supervisor: { id: string; fullName: string } | null = null;
+    if (supervisorId) {
+      supervisor = await prisma.employeeProfile.findFirst({
+        where: { id: supervisorId, deletedAt: null },
         select: { id: true, fullName: true }
       });
-      if (!manager) return createRelationError("Superior hierárquico não encontrado.", { managerId: "Superior hierárquico não encontrado." });
-      if (await wouldCreateHierarchyCycle(employee.id, manager.id)) {
-        return createValidationError({ managerId: "Essa alteração criaria um ciclo na hierarquia." }, "Essa alteração criaria um ciclo na hierarquia.");
+      if (!supervisor) return createRelationError("Supervisor não encontrado.", { supervisorId: "Supervisor não encontrado." });
+      if (await wouldCreateHierarchyCycle(employee.id, supervisor.id)) {
+        return createValidationError({ supervisorId: "Essa alteração criaria um ciclo de supervisão." }, "Essa alteração criaria um ciclo de supervisão.");
       }
     }
 
     const updated = await prisma.$transaction(async (tx) => {
       const record = await tx.employeeProfile.update({
         where: { id: employee.id },
-        data: { managerId },
+        data: { supervisorId },
         select: hierarchyEmployeeSelect
       });
       await tx.auditLog.create({
@@ -224,9 +212,9 @@ export async function updateEmployeeManager(actor: Actor, input: { employeeId: s
           action: "EDICAO",
           entity: "EmployeeProfile",
           entityId: employee.id,
-          reason: "Atualização de superior hierárquico",
-          previousValue: { managerId: employee.managerId },
-          newValue: { managerId, action: managerId ? "HIERARCHY_MANAGER_ASSIGNED" : "HIERARCHY_MANAGER_REMOVED" }
+          reason: "SUPERVISOR_CHANGED",
+          previousValue: { supervisorId: employee.supervisorId },
+          newValue: { supervisorId, action: supervisorId ? "SUPERVISOR_ASSIGNED" : "SUPERVISOR_REMOVED" }
         }
       });
       return record;
@@ -243,7 +231,7 @@ export async function exportHierarchyCsv(actor: Actor, query: HierarchyQuery = {
   const result = await getHierarchy(actor, query);
   if ("error" in result) return result;
   const rows = result.data.employees;
-  const headers = ["nome", "wb_login", "email", "cargo_funcao", "lob", "status", "supervisor_operacional", "superior_hierarquico", "nivel_hierarquico", "subordinados_diretos", "subordinados_totais"];
+  const headers = ["nome", "wb_login", "email", "cargo_funcao", "lob", "status", "supervisor", "nivel_hierarquico", "subordinados_diretos", "subordinados_totais"];
   const csv = [
     headers.map(csvCell).join(";"),
     ...rows.map((employee) => [
@@ -254,7 +242,6 @@ export async function exportHierarchyCsv(actor: Actor, query: HierarchyQuery = {
       employee.lob,
       employee.status,
       employee.supervisorName,
-      employee.managerName,
       employee.level,
       employee.directReports,
       employee.totalReports
@@ -263,37 +250,37 @@ export async function exportHierarchyCsv(actor: Actor, query: HierarchyQuery = {
   return { csv: `\uFEFF${csv}`, fileName: `hierarquia_${new Date().toISOString().slice(0, 10)}.csv` };
 }
 
-async function wouldCreateHierarchyCycle(employeeId: string, managerId: string) {
+async function wouldCreateHierarchyCycle(employeeId: string, supervisorId: string) {
   const seen = new Set<string>();
-  let currentId: string | null = managerId;
+  let currentId: string | null = supervisorId;
   for (let depth = 0; currentId && depth < 500; depth += 1) {
     if (currentId === employeeId) return true;
     if (seen.has(currentId)) return true;
     seen.add(currentId);
-    const current: { managerId: string | null } | null = await prisma.employeeProfile.findFirst({
+    const current: { supervisorId: string | null } | null = await prisma.employeeProfile.findFirst({
       where: { id: currentId, deletedAt: null },
-      select: { managerId: true }
+      select: { supervisorId: true }
     });
-    currentId = current?.managerId ?? null;
+    currentId = current?.supervisorId ?? null;
   }
   return false;
 }
 
-function collectReports(employeeId: string, childrenByManager: Map<string, HierarchyEmployee[]>, visited = new Set<string>()): HierarchyEmployee[] {
+function collectReports(employeeId: string, childrenBySupervisor: Map<string, HierarchyEmployee[]>, visited = new Set<string>()): HierarchyEmployee[] {
   if (visited.has(employeeId)) return [];
   visited.add(employeeId);
-  const children = childrenByManager.get(employeeId) ?? [];
-  return children.flatMap((child) => [child, ...collectReports(child.id, childrenByManager, visited)]);
+  const children = childrenBySupervisor.get(employeeId) ?? [];
+  return children.flatMap((child) => [child, ...collectReports(child.id, childrenBySupervisor, visited)]);
 }
 
-function hasDisplayedDescendant(employeeId: string, childrenByManager: Map<string, HierarchyEmployee[]>, displayedIds: Set<string>, visited = new Set<string>()): boolean {
+function hasDisplayedDescendant(employeeId: string, childrenBySupervisor: Map<string, HierarchyEmployee[]>, displayedIds: Set<string>, visited = new Set<string>()): boolean {
   if (visited.has(employeeId)) return false;
   visited.add(employeeId);
-  return (childrenByManager.get(employeeId) ?? []).some((child) => displayedIds.has(child.id) || hasDisplayedDescendant(child.id, childrenByManager, displayedIds, visited));
+  return (childrenBySupervisor.get(employeeId) ?? []).some((child) => displayedIds.has(child.id) || hasDisplayedDescendant(child.id, childrenBySupervisor, displayedIds, visited));
 }
 
 function isNoneFilter(value: string) {
-  return /^(sem_gestor|sem\s*gestor|sem_manager|none|null|sem_supervisor|sem\s*supervisor)$/i.test(value.trim());
+  return /^(none|null|sem_supervisor|sem\s*supervisor)$/i.test(value.trim());
 }
 
 function csvCell(value: unknown) {

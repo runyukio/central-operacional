@@ -12,7 +12,6 @@ export async function GET(request: Request) {
     lob: searchParams.get("lob"),
     status: searchParams.get("status"),
     supervisorId: searchParams.get("supervisorId"),
-    managerId: searchParams.get("managerId"),
     shiftId: searchParams.get("shiftId"),
     skill: searchParams.get("skill"),
     wave: searchParams.get("wave")
