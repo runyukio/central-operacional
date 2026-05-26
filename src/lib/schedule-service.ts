@@ -782,18 +782,43 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
   if (!input.absenceReason?.trim()) return { error: "Motivo obrigatório para justificar a ocorrência." };
   if (!input.supervisorJustification?.trim()) return { error: "Justificativa obrigatória para encerrar a pendência." };
 
+  const startedAt = Date.now();
+  const timings: Record<string, number> = {};
+  let supervisorWbLogin: string | undefined;
+  const mark = (key: string) => {
+    timings[key] = Date.now() - startedAt;
+  };
+  const logSupervisorJustificationTiming = (extra: Record<string, string | number | boolean | null | undefined> = {}) => {
+    const isTargetSupervisor = supervisorWbLogin?.toLowerCase() === "wb_diogenesl";
+    logPerformanceMetric("attendance.supervisor-justify", startedAt, {
+      ...timings,
+      supervisorWbLogin: isTargetSupervisor ? supervisorWbLogin : undefined,
+      targetSupervisor: isTargetSupervisor,
+      hasAttendanceRecordId: Boolean(input.attendanceRecordId),
+      hasScheduleId: Boolean(input.scheduleId),
+      employeeId: input.employeeId,
+      scheduleId: input.scheduleId ?? null,
+      attendanceRecordId: input.attendanceRecordId ?? null,
+      ...extra
+    }, isTargetSupervisor ? 0 : undefined);
+  };
+
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
+    mark("sessionLookupMs");
     if (!user) return { error: "Usuário ativo não encontrado para justificar ocorrência." };
     if (!user.employeeProfile) return { error: "Supervisor sem perfil de funcionário vinculado." };
+    supervisorWbLogin = user.employeeProfile.wbLogin;
 
     const date = parseDateOnly(input.date);
     if (!date) return { error: "Data inválida." };
+    mark("inputValidationMs");
 
     const employee = await prisma.employeeProfile.findFirst({
       where: { id: input.employeeId, deletedAt: null },
       include: { shift: true, supervisor: true, lob: true }
     });
+    mark("employeeLookupMs");
     if (!employee) return { error: "Colaborador não encontrado." };
 
     const status = uiToAttendanceStatus[input.status];
@@ -808,6 +833,7 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
           where: { employeeId_date: { employeeId: employee.id, date } },
           include: { shift: true }
         });
+    mark("scheduleLookupMs");
     if (!schedule) return { error: "Registro de falta não encontrado." };
     if (schedule.employeeId !== employee.id) {
       return { error: "Colaborador da pendência não corresponde ao registro selecionado." };
@@ -823,6 +849,7 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
           },
           orderBy: { updatedAt: "desc" }
         });
+    mark("attendanceLookupMs");
     if (existing?.employeeId && existing.employeeId !== employee.id) {
       return { error: "Colaborador da pendência não corresponde ao registro selecionado." };
     }
@@ -836,6 +863,53 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
       return { error: "Esta ocorrência não é justificável pelo Supervisor." };
     }
     const savedStatus = uiToAttendanceStatus[existingStatus] ?? status;
+    const nextHasEvidence = input.hasEvidence ?? false;
+    const nextImpactsAbs = input.impactsAbs ?? impactsAbs(existingStatus, input.absenceReason);
+    const nextImpactsCoverage = input.impactsCoverage ?? impactsCoverage(existingStatus);
+    const toResponseData = (record: NonNullable<typeof existing>) => ({
+      id: record.id,
+      employeeId: employee.id,
+      employeeName: employee.fullName,
+      wbLogin: employee.wbLogin,
+      date: formatDate(date),
+      dateIso: dateKey(date),
+      scheduleId: schedule.id,
+      shift: cleanShiftName(shift.name) || "Sem turno",
+      lob: employee.lob.name,
+      supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
+      status: scheduleToUiStatus[record.status] ?? input.status,
+      absenceReason: record.absenceReason ?? undefined,
+      reasonCategory: record.reasonCategory ?? undefined,
+      supervisorJustification: record.supervisorJustification ?? undefined,
+      isJustified: record.isJustified,
+      impactsAbs: record.impactsAbs,
+      impactsCoverage: record.impactsCoverage,
+      registeredBy: user.name,
+      registeredAt: formatDateTime(record.registeredAt),
+      justifiedBy: user.name,
+      justifiedAt: record.justifiedAt ? formatDateTime(record.justifiedAt) : undefined,
+      updatedAt: formatDateTime(record.updatedAt)
+    });
+
+    if (
+      existing?.isJustified &&
+      existing.status === savedStatus &&
+      (existing.absenceReason ?? "") === (input.absenceReason ?? "") &&
+      (existing.reasonCategory ?? "") === (input.reasonCategory ?? "") &&
+      (existing.supervisorJustification ?? "") === (input.supervisorJustification ?? "") &&
+      existing.hasEvidence === nextHasEvidence &&
+      (existing.evidenceUrl ?? "") === (input.evidenceUrl ?? "") &&
+      existing.impactsAbs === nextImpactsAbs &&
+      existing.impactsCoverage === nextImpactsCoverage
+    ) {
+      mark("idempotentReturnMs");
+      logSupervisorJustificationTiming({ result: "already-justified" });
+      return {
+        data: toResponseData(existing),
+        message: "Esta ocorrência já foi justificada."
+      };
+    }
+    mark("preSaveValidationMs");
 
     const saved = await prisma.$transaction(async (tx) => {
       const record = existing
@@ -848,11 +922,11 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
               absenceReason: input.absenceReason,
               reasonCategory: input.reasonCategory,
               supervisorJustification: input.supervisorJustification,
-              hasEvidence: input.hasEvidence ?? false,
+              hasEvidence: nextHasEvidence,
               evidenceUrl: input.evidenceUrl,
               isJustified: true,
-              impactsAbs: input.impactsAbs ?? impactsAbs(existingStatus, input.absenceReason),
-              impactsCoverage: input.impactsCoverage ?? impactsCoverage(existingStatus),
+              impactsAbs: nextImpactsAbs,
+              impactsCoverage: nextImpactsCoverage,
               justifiedById: user.id,
               justifiedAt: new Date()
             }
@@ -867,11 +941,11 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
               absenceReason: input.absenceReason,
               reasonCategory: input.reasonCategory,
               supervisorJustification: input.supervisorJustification,
-              hasEvidence: input.hasEvidence ?? false,
+              hasEvidence: nextHasEvidence,
               evidenceUrl: input.evidenceUrl,
               isJustified: true,
-              impactsAbs: input.impactsAbs ?? impactsAbs(scheduleStatus, input.absenceReason),
-              impactsCoverage: input.impactsCoverage ?? impactsCoverage(scheduleStatus),
+              impactsAbs: nextImpactsAbs,
+              impactsCoverage: nextImpactsCoverage,
               registeredById: user.id,
               justifiedById: user.id,
               justifiedAt: new Date()
@@ -902,64 +976,62 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
         }
       });
 
-      const reviewers = await tx.user.findMany({
-        where: {
-          status: "ACTIVE",
-          deletedAt: null,
-          id: { not: user.id },
-          role: { name: { in: ["ADMIN", "WFM", "GESTOR"] } }
-        },
-        select: { id: true }
-      });
-      if (reviewers.length) {
-        await tx.notification.createMany({
-          data: reviewers.map((reviewer) => ({
-            userId: reviewer.id,
-            title: "Justificativa de ocorrência enviada",
-            body: `${user.name} justificou uma ocorrência de ${employee.fullName}.`,
-            category: "Presença",
-            type: "INFO",
-            entity: "AttendanceRecord",
-            entityId: record.id,
-            href: "/escalas"
-          }))
-        });
-      }
-
       return record;
-    });
+    }, { maxWait: 10000, timeout: 15000 });
+    mark("transactionMs");
 
+    void notifySupervisorJustificationReviewers({
+      actorUserId: user.id,
+      actorName: user.name,
+      employeeName: employee.fullName,
+      attendanceRecordId: saved.id
+    }).catch((notificationError) => {
+      recordErrorLog({
+        userEmail: actor.email,
+        code: "SUPERVISOR_ATTENDANCE_NOTIFICATION_ERROR",
+        message: notificationError instanceof Error ? notificationError.message : "Falha ao notificar justificativa",
+        action: "ATTENDANCE_JUSTIFY_NOTIFICATION",
+        severity: "WARNING"
+      });
+    });
+    mark("notificationQueuedMs");
+    logSupervisorJustificationTiming({ result: "saved" });
     return {
-      data: {
-        id: saved.id,
-        employeeId: employee.id,
-        employeeName: employee.fullName,
-        wbLogin: employee.wbLogin,
-        date: formatDate(date),
-        dateIso: dateKey(date),
-        scheduleId: schedule.id,
-        shift: cleanShiftName(shift.name) || "Sem turno",
-        lob: employee.lob.name,
-        supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
-        status: scheduleToUiStatus[saved.status] ?? input.status,
-        absenceReason: saved.absenceReason ?? undefined,
-        reasonCategory: saved.reasonCategory ?? undefined,
-        supervisorJustification: saved.supervisorJustification ?? undefined,
-        isJustified: saved.isJustified,
-        impactsAbs: saved.impactsAbs,
-        impactsCoverage: saved.impactsCoverage,
-        registeredBy: user.name,
-        registeredAt: formatDateTime(saved.registeredAt),
-        justifiedBy: user.name,
-        justifiedAt: saved.justifiedAt ? formatDateTime(saved.justifiedAt) : undefined,
-        updatedAt: formatDateTime(saved.updatedAt)
-      },
-      summary: await getAttendanceSummaryFromDb(resolveAttendancePeriod({ month: date.getUTCMonth() + 1, year: date.getUTCFullYear() }))
+      data: toResponseData(saved),
+      message: "Justificativa salva com sucesso."
     };
   } catch (error) {
+    mark("errorMs");
+    logSupervisorJustificationTiming({ result: "error" });
     recordErrorLog({ userEmail: actor.email, code: "SUPERVISOR_ATTENDANCE_JUSTIFICATION_ERROR", message: error instanceof Error ? error.message : "Falha ao justificar ocorrência", action: "ATTENDANCE_JUSTIFY", severity: "ERROR" });
     return { error: "Não foi possível salvar a justificativa da ocorrência." };
   }
+}
+
+async function notifySupervisorJustificationReviewers(input: { actorUserId: string; actorName: string; employeeName: string; attendanceRecordId: string }) {
+  const reviewers = await prisma.user.findMany({
+    where: {
+      status: "ACTIVE",
+      deletedAt: null,
+      id: { not: input.actorUserId },
+      role: { name: { in: ["ADMIN", "WFM", "GESTOR"] } }
+    },
+    select: { id: true }
+  });
+  if (!reviewers.length) return;
+
+  await prisma.notification.createMany({
+    data: reviewers.map((reviewer) => ({
+      userId: reviewer.id,
+      title: "Justificativa de ocorrência enviada",
+      body: `${input.actorName} justificou uma ocorrência de ${input.employeeName}.`,
+      category: "Presença",
+      type: "INFO",
+      entity: "AttendanceRecord",
+      entityId: input.attendanceRecordId,
+      href: "/escalas"
+    }))
+  });
 }
 
 export async function removeOperationalSchedules(actor: Actor, input: ScheduleRemoveInput) {

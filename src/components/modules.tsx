@@ -3766,27 +3766,37 @@ export function SchedulesPage() {
   }
 
   async function saveAttendance() {
+    if (savingJustification) return;
     if (statusNeedsReason(attendanceForm.status) && !attendanceForm.absenceReason.trim() && !attendanceForm.supervisorJustification.trim()) {
       setAttendanceMessage("Motivo/observação obrigatório para falta, atraso, saída antecipada ou erro de cronograma.");
       return;
     }
 
+    setSavingJustification(true);
     try {
-      const payload = await apiJson<{ data: Partial<AttendanceItem>; summary: AttendanceSummary }>("/api/attendance", {
+      const payload = await apiJson<{ data: Partial<AttendanceItem>; summary?: AttendanceSummary; message?: string }>("/api/attendance", {
         method: "POST",
         body: JSON.stringify(attendanceForm)
       });
-      setAttendanceSummary(payload.summary);
+      if (payload.summary) setAttendanceSummary(payload.summary);
       const employeeName = payload.data.employeeName ?? scheduleRows.find((row) => row.employee.id === attendanceForm.employeeId)?.employee.name ?? attendanceForm.employeeId;
-      setAttendanceMessage(`${employeeName}: ${payload.data.status ?? attendanceForm.status} registrado. ABS/cobertura/auditoria atualizados.`);
+      setAttendanceMessage(payload.message ?? `${employeeName}: ${payload.data.status ?? attendanceForm.status} registrado. ABS/cobertura/auditoria atualizados.`);
       closeAttendanceModal();
-      await refreshSchedules();
+      if (isScheduleSupervisor) {
+        void refreshAttendanceForSchedulePeriod(scheduleDateRange, scheduleFilters);
+        void refreshScheduleSummary(scheduleDateRange, scheduleFilters);
+      } else {
+        void refreshSchedules();
+      }
     } catch (error) {
       setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível salvar presença/ocorrência.");
+    } finally {
+      setSavingJustification(false);
     }
   }
 
   async function saveSlotJustification() {
+    if (savingJustification) return;
     if (!scheduleEditForm.employeeId || !scheduleEditForm.date) {
       setAttendanceMessage("Colaborador e data são obrigatórios para revisar a justificativa.");
       return;
@@ -3806,9 +3816,11 @@ export function SchedulesPage() {
 
     setSavingJustification(true);
     try {
-      const payload = await apiJson<{ data: Partial<AttendanceItem>; summary: AttendanceSummary }>("/api/attendance", {
+      const payload = await apiJson<{ data: Partial<AttendanceItem>; summary?: AttendanceSummary; message?: string }>("/api/attendance", {
         method: "POST",
         body: JSON.stringify({
+          attendanceRecordId: selectedScheduleJustification?.id,
+          scheduleId: scheduleEditForm.scheduleId || undefined,
           employeeId: scheduleEditForm.employeeId,
           date: scheduleEditForm.date,
           shift: scheduleEditForm.shift,
@@ -3822,7 +3834,7 @@ export function SchedulesPage() {
           impactsCoverage: ["Falta", "Atraso", "Saída antecipada", "Erro de cronograma"].includes(scheduleEditForm.status)
         })
       });
-      setAttendanceSummary(payload.summary);
+      if (payload.summary) setAttendanceSummary(payload.summary);
       setSelectedScheduleJustification({
         id: payload.data.id,
         status: payload.data.status ?? scheduleEditForm.status,
@@ -3839,8 +3851,14 @@ export function SchedulesPage() {
         justifiedAt: payload.data.justifiedAt,
         updatedAt: payload.data.updatedAt
       });
-      setAttendanceMessage("Justificativa atualizada com sucesso.");
-      await refreshSchedules();
+      setAttendanceMessage(payload.message ?? "Justificativa atualizada com sucesso.");
+      setPendingJustifications((items) => items.filter((record) => {
+        if (payload.data.id && (record.id === payload.data.id || record.attendanceRecordId === payload.data.id)) return false;
+        if (scheduleEditForm.scheduleId && record.scheduleId === scheduleEditForm.scheduleId) return false;
+        return !(record.employeeId === scheduleEditForm.employeeId && (record.dateIso ?? record.date) === scheduleEditForm.date);
+      }));
+      void refreshAttendanceForSchedulePeriod(scheduleDateRange, scheduleFilters);
+      void refreshScheduleSummary(scheduleDateRange, scheduleFilters);
     } catch (error) {
       setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível atualizar a justificativa.");
     } finally {
@@ -4845,7 +4863,9 @@ export function SchedulesPage() {
               <MetricPill value={attendanceSummary?.absent ?? 0} label="Ausências" />
               <MetricPill value={attendanceSummary?.riskLevel ?? "Adequado"} label="Risco" />
             </div>
-            <button onClick={saveAttendance} className="mt-5 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white">Salvar registro</button>
+            <button disabled={savingJustification} onClick={saveAttendance} className="mt-5 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
+              {savingJustification ? "Salvando justificativa..." : "Salvar registro"}
+            </button>
           </div>
         </div>
       ) : null}
