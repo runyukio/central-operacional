@@ -28,6 +28,7 @@ export async function GET(request: Request) {
     shift: url.searchParams.get("shift") ?? undefined,
     collaborator: url.searchParams.get("collaborator") ?? undefined,
     wbLogin: url.searchParams.get("wbLogin") ?? undefined,
+    employeeStatus: url.searchParams.get("employeeStatus") ?? undefined,
     status: url.searchParams.get("status") ?? undefined,
     divergentOnly: url.searchParams.get("divergentOnly") === "true",
     pendingOnly: url.searchParams.get("pendingOnly") === "true",

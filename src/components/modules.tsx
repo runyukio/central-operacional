@@ -309,6 +309,7 @@ type WorkHourRow = {
   id: string;
   employeeName: string;
   wbLogin: string;
+  employeeStatus: string;
   date: string;
   lob: string;
   supervisor: string;
@@ -469,7 +470,7 @@ type WorkHourPreview = {
   missingWbLogins?: string[];
   scheduleFoundRows: number;
   noScheduleRows: number;
-  validation: Array<{ rowNumber: number; wbLogin: string; originalWbLogin?: string; normalizedWbLogin?: string; employeeName: string; date: string; hasSchedule?: boolean; allowsWorkHours?: boolean; scheduleStatus?: string; actualHours?: number; plannedHours?: number | null; differenceMinutes?: number | null; errors: string[]; warnings: string[]; action: string; status: string }>;
+  validation: Array<{ rowNumber: number; wbLogin: string; originalWbLogin?: string; normalizedWbLogin?: string; employeeName: string; employeeStatus?: string; date: string; hasSchedule?: boolean; allowsWorkHours?: boolean; scheduleStatus?: string; actualHours?: number; plannedHours?: number | null; differenceMinutes?: number | null; errors: string[]; warnings: string[]; action: string; status: string }>;
 };
 
 type RegistrationItem = {
@@ -4930,6 +4931,7 @@ export function WorkHoursPage() {
     supervisor: "",
     shift: "Todos",
     collaborator: "",
+    employeeStatus: "Todos",
     status: "Todos",
     source: "Todos",
     divergentOnly: false,
@@ -4962,6 +4964,7 @@ export function WorkHoursPage() {
   const canApprove = ["ADMIN", "GESTOR", "WFM"].includes(normalizedRole);
   const canDeleteWorkHours = ["ADMIN", "GESTOR", "WFM"].includes(normalizedRole);
   const canRequestAdjustment = ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(normalizedRole);
+  const employeeWorkHourStatusOptions = ["Todos", "Ativos", "Desligados/Inativos"];
   const statusOptions = ["Todos", "OK", "Divergente", "Sem cronograma", "Ajuste solicitado", "Ajuste aprovado", "Ajuste recusado", "Importado", "Corrigido manualmente"];
   const sourceOptions = ["Todos", "MANUAL", "upload-horas"];
   const lobOptions = ["Todos", ...(settings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? Array.from(new Set(rows.map((row) => row.lob).filter(Boolean))))];
@@ -4987,6 +4990,7 @@ export function WorkHoursPage() {
       if (filters.supervisor) params.set("supervisor", filters.supervisor);
       if (filters.shift !== "Todos") params.set("shift", filters.shift);
       if (filters.collaborator) params.set("collaborator", filters.collaborator);
+      if (filters.employeeStatus !== "Todos") params.set("employeeStatus", filters.employeeStatus);
       if (filters.status !== "Todos") params.set("status", filters.status);
       if (filters.source !== "Todos") params.set("source", filters.source);
       if (filters.divergentOnly) params.set("divergentOnly", "true");
@@ -5150,8 +5154,12 @@ export function WorkHoursPage() {
     if (filters.supervisor) params.set("supervisor", filters.supervisor);
     if (filters.shift !== "Todos") params.set("shift", filters.shift);
     if (filters.collaborator) params.set("collaborator", filters.collaborator);
+    if (filters.employeeStatus !== "Todos") params.set("employeeStatus", filters.employeeStatus);
     if (filters.status !== "Todos") params.set("status", filters.status);
     if (filters.source !== "Todos") params.set("source", filters.source);
+    if (filters.divergentOnly) params.set("divergentOnly", "true");
+    if (filters.pendingOnly) params.set("pendingOnly", "true");
+    if (filters.noScheduleOnly) params.set("noScheduleOnly", "true");
     return `/api/work-hours/export?${params.toString()}`;
   }
 
@@ -5200,18 +5208,19 @@ export function WorkHoursPage() {
       </div>
 
       <section className="card mb-5 p-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-9">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-10">
           <FormInput label="Data inicial" type="date" value={filters.startDate} onChange={(value) => setFilters({ ...filters, startDate: value })} />
           <FormInput label="Data final" type="date" value={filters.endDate} onChange={(value) => setFilters({ ...filters, endDate: value })} />
           <FormSelect label="LOB" value={filters.lob} options={lobOptions} onChange={(value) => setFilters({ ...filters, lob: value })} />
           <FormInput label="Supervisor" value={filters.supervisor} onChange={(value) => setFilters({ ...filters, supervisor: value })} />
           <FormSelect label="Turno" value={filters.shift} options={shiftOptions} onChange={(value) => setFilters({ ...filters, shift: value })} />
           <FormInput label="Colaborador/WB" value={filters.collaborator} onChange={(value) => setFilters({ ...filters, collaborator: value })} />
+          <FormSelect label="Status colaborador" value={filters.employeeStatus} options={employeeWorkHourStatusOptions} onChange={(value) => setFilters({ ...filters, employeeStatus: value })} />
           <FormSelect label="Status" value={filters.status} options={statusOptions} onChange={(value) => setFilters({ ...filters, status: value })} />
           <FormSelect label="Origem" value={filters.source} options={sourceOptions} onChange={(value) => setFilters({ ...filters, source: value })} />
           <div className="flex items-end gap-2">
             <button onClick={() => loadWorkHours(1)} className="h-11 flex-1 rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
-            <button onClick={() => { setFilters({ startDate: "2026-05-01", endDate: "2026-05-31", lob: "Todos", supervisor: "", shift: "Todos", collaborator: "", status: "Todos", source: "Todos", divergentOnly: false, pendingOnly: false, noScheduleOnly: false }); setTimeout(() => void loadWorkHours(1), 0); }} className="h-11 rounded-lg border border-border bg-white px-3 text-sm font-bold">Limpar</button>
+            <button onClick={() => { setFilters({ startDate: "2026-05-01", endDate: "2026-05-31", lob: "Todos", supervisor: "", shift: "Todos", collaborator: "", employeeStatus: "Todos", status: "Todos", source: "Todos", divergentOnly: false, pendingOnly: false, noScheduleOnly: false }); setTimeout(() => void loadWorkHours(1), 0); }} className="h-11 rounded-lg border border-border bg-white px-3 text-sm font-bold">Limpar</button>
           </div>
         </div>
         <div className="mt-3 flex flex-wrap gap-3 text-sm font-semibold text-navy-950">
@@ -5231,10 +5240,10 @@ export function WorkHoursPage() {
         </div>
         <div className="overflow-x-auto">
           {rows.length ? (
-            <table className="w-full min-w-[1240px] text-left text-sm">
+            <table className="w-full min-w-[1360px] text-left text-sm">
               <thead className="border-b border-border bg-slate-50 text-xs font-bold uppercase tracking-wide text-muted">
                 <tr>
-                  {["Data", "Colaborador", "WB/Login", "LOB", "Supervisor", "Turno", "Horas planejadas", "Horas realizadas", "Dif.", "Status", "Origem", "Observação", "Ajuste", "Ações"].map((column) => <th key={column} className="px-4 py-3">{column}</th>)}
+                  {["Data", "Colaborador", "WB/Login", "Status colaborador", "LOB", "Supervisor", "Turno", "Horas planejadas", "Horas realizadas", "Dif.", "Status", "Origem", "Observação", "Ajuste", "Ações"].map((column) => <th key={column} className="px-4 py-3">{column}</th>)}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border bg-white">
@@ -5243,6 +5252,7 @@ export function WorkHoursPage() {
                     <td className="px-4 py-3 font-bold text-navy-950">{row.date}</td>
                     <td className="px-4 py-3">{row.employeeName}</td>
                     <td className="px-4 py-3">{row.wbLogin}</td>
+                    <td className="px-4 py-3"><StatusBadge status={row.employeeStatus || "Sem status"} /></td>
                     <td className="px-4 py-3">{row.lob}</td>
                     <td className="px-4 py-3">{row.supervisor || "-"}</td>
                     <td className="px-4 py-3">{cleanShiftName(row.shift) || "-"}</td>
@@ -5303,12 +5313,13 @@ export function WorkHoursPage() {
                 {preview.message ? (
                   <div className="border-b border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-700">{preview.message}</div>
                 ) : null}
-                <table className="w-full min-w-[980px] text-left text-xs">
+                <table className="w-full min-w-[1060px] text-left text-xs">
                   <thead className="bg-slate-50 font-bold text-muted">
                     <tr>
                       <th className="px-3 py-2">Linha</th>
                       <th className="px-3 py-2">WB/Login</th>
                       <th className="px-3 py-2">Colaborador</th>
+                      <th className="px-3 py-2">Status colaborador</th>
                       <th className="px-3 py-2">Data</th>
                       <th className="px-3 py-2">Cronograma</th>
                       <th className="px-3 py-2">Status cronograma</th>
@@ -5332,6 +5343,7 @@ export function WorkHoursPage() {
                           ) : null}
                         </td>
                         <td className="px-3 py-2">{row.employeeName || "-"}</td>
+                        <td className="px-3 py-2">{row.employeeStatus || "-"}</td>
                         <td className="px-3 py-2">{row.date || "-"}</td>
                         <td className="px-3 py-2">{row.hasSchedule ? "Sim" : "Não"}</td>
                         <td className="px-3 py-2">{row.scheduleStatus || "-"}</td>
@@ -5358,7 +5370,7 @@ export function WorkHoursPage() {
                 <MetricPill value={`${preview.foundUniqueWbLogins ?? 0}/${preview.uniqueWbLogins ?? 0}`} label="WB/Login encontrados" />
                 <MetricPill value={preview.scheduleFoundRows} label="Com cronograma" />
                 <MetricPill value={preview.noScheduleRows} label="Sem cronograma" />
-                <p className="text-sm text-muted">WB/Login inexistente ou ausência de cronograma bloqueia a linha. A divergência compara horas realizadas contra {DEFAULT_PRODUCTIVE_HOURS}h por dia produtivo.</p>
+                <p className="text-sm text-muted">WB/Login inexistente ou ausência de cronograma bloqueia a linha. Colaborador desligado/inativo vira alerta para invoice, não erro. A divergência compara horas realizadas contra {DEFAULT_PRODUCTIVE_HOURS}h por dia produtivo.</p>
                 <ImportIssueSummary rows={preview.validation} title="Corrija estas linhas do upload de horas" />
                 {preview.missingWbLogins?.length ? (
                   <div className="rounded-lg border border-red-100 bg-red-50 p-3 text-xs font-semibold text-red-700">

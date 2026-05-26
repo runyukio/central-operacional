@@ -30,6 +30,24 @@ const manualEditRoles = ["ADMIN", "GESTOR", "WFM"];
 const viewRoles = ["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "COLABORADOR"];
 const requestAdjustmentRoles = ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"];
 const toleranceMinutes = WORK_HOUR_TOLERANCE_MINUTES;
+const workHourExportLimit = 10000;
+const inactiveEmployeeStatusLabels = [
+  "Inativo",
+  "Inativa",
+  "INACTIVE",
+  "Desativado",
+  "Desativada",
+  "DISABLED",
+  "Desligado",
+  "Desligada",
+  "TERMINATED",
+  "Terminado",
+  "Terminada",
+  "Suspenso",
+  "Suspensa",
+  "SUSPENDED"
+];
+const inactiveEmployeeStatusTokens = new Set(inactiveEmployeeStatusLabels.map((status) => normalizeStatusToken(status)));
 
 type UserWithRole = Prisma.UserGetPayload<{ include: { role: true; employeeProfile: true } }>;
 
@@ -41,6 +59,7 @@ export type WorkHourQuery = {
   shift?: string;
   collaborator?: string;
   wbLogin?: string;
+  employeeStatus?: string;
   status?: string;
   divergentOnly?: boolean;
   pendingOnly?: boolean;
@@ -91,6 +110,7 @@ type ValidationRow = {
   normalizedWbLogin?: string;
   employeeId?: string;
   employeeName?: string;
+  employeeStatus?: string;
   date?: Date;
   dateIso?: string;
   errors: string[];
@@ -146,7 +166,9 @@ export async function listOperationalWorkHours(actor: Actor, query: WorkHourQuer
 
     const period = resolvePeriod(query);
     const page = Math.max(1, Number(query.page) || 1);
-    const limit = Math.min(100, Math.max(10, Number(query.limit) || 50));
+    const requestedLimit = Number(query.limit) || 50;
+    const maxLimit = requestedLimit > 100 ? workHourExportLimit : 100;
+    const limit = Math.min(maxLimit, Math.max(10, requestedLimit));
     const where = buildRecordWhere(user, query, period);
 
     const [records, total] = await prisma.$transaction([
@@ -161,6 +183,7 @@ export async function listOperationalWorkHours(actor: Actor, query: WorkHourQuer
               id: true,
               fullName: true,
               wbLogin: true,
+              operationalStatus: true,
               roleTitle: true,
               lob: { select: { name: true } },
               shift: { select: { name: true } },
@@ -718,12 +741,13 @@ export async function exportOperationalWorkHoursCsv(actor: Actor, query: WorkHou
   const user = await getUser(actor);
   if (!user || !["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(normalizeRole(user.role.name))) return createPermissionError("Você não tem permissão para exportar horas.");
 
-  const result = await listOperationalWorkHours(actor, { ...query, page: 1, limit: 100 });
+  const result = await listOperationalWorkHours(actor, { ...query, page: 1, limit: workHourExportLimit });
   if ("error" in result) return result;
   const headers = [
     "data",
     "nome",
     "wb_login",
+    "status_colaborador",
     "lob",
     "supervisor",
     "turno",
@@ -738,6 +762,7 @@ export async function exportOperationalWorkHoursCsv(actor: Actor, query: WorkHou
     row.date,
     row.employeeName,
     row.wbLogin,
+    row.employeeStatus,
     row.lob,
     row.supervisor,
     row.shift,
@@ -789,7 +814,7 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
   const matchedEmployees = Array.from(new Map(
     normalizedRows
       .map((row) => row.normalizedWbLogin ? employeeMap.get(row.normalizedWbLogin) : null)
-      .filter((employee): employee is (typeof employees)[number] => Boolean(employee))
+      .filter((employee): employee is (typeof employees)[number] => Boolean(employee && !employee.deletedAt))
       .map((employee) => [employee.id, employee])
   ).values());
   const employeeIds = matchedEmployees.map((employee) => employee.id);
@@ -814,8 +839,10 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
     if (key && (duplicateKeys.get(key) ?? 0) > 1) errors.push("Linha duplicada no arquivo para o mesmo WB/Login + data.");
 
     const employee = normalizedWbLogin ? employeeMap.get(normalizedWbLogin) : null;
-    if (wbLogin && !employee) errors.push(`WB/Login "${wbLogin}" não encontrado na base de funcionários. Normalizado: "${normalizedWbLogin}".`);
-    if (employee && ["Inativo", "Desligado"].includes(employee.operationalStatus)) warnings.push("Colaborador está inativo ou desligado.");
+    const eligibleEmployee = employee && !employee.deletedAt ? employee : null;
+    if (wbLogin && !employee) errors.push("WB/Login não encontrado na base de funcionários.");
+    if (employee?.deletedAt) errors.push("Colaborador removido/deletado não pode receber horas.");
+    if (eligibleEmployee && isInactiveEmployeeStatusForWorkHours(eligibleEmployee.operationalStatus)) warnings.push("Colaborador desligado/inativo encontrado. Horas permitidas para fins de invoice.");
 
     const hasActualHours = hasExcelValue(row.horas_realizadas);
     const actualHours = parseHours(row.horas_realizadas);
@@ -824,13 +851,13 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
 
     let schedule: Schedule | undefined;
     let existingRecordId: string | undefined;
-    if (employee && date) {
-      schedule = scheduleMap.get(`${employee.id}:${date.getTime()}`);
-      existingRecordId = recordMap.get(`${employee.id}:${date.getTime()}`)?.id;
+    if (eligibleEmployee && date) {
+      schedule = scheduleMap.get(`${eligibleEmployee.id}:${date.getTime()}`);
+      existingRecordId = recordMap.get(`${eligibleEmployee.id}:${date.getTime()}`)?.id;
       if (!schedule) errors.push("Não existe cronograma para este colaborador nesta data. Importe ou crie o cronograma antes de subir as horas.");
       else if (!isWorkHoursAllowedForSchedule(schedule)) errors.push(workHoursBlockedReasonForSchedule(schedule));
-      if (text(row.lob) && text(row.lob).toUpperCase() !== employee.lob.name.toUpperCase()) warnings.push("LOB no arquivo diferente da LOB do colaborador.");
-      if (text(row.supervisor_wb_login) && normalizeWbLogin(row.supervisor_wb_login) !== normalizeWbLogin(employee.supervisor?.wbLogin)) warnings.push("Supervisor no arquivo diferente do supervisor do colaborador.");
+      if (text(row.lob) && text(row.lob).toUpperCase() !== eligibleEmployee.lob.name.toUpperCase()) warnings.push("LOB no arquivo diferente da LOB do colaborador.");
+      if (text(row.supervisor_wb_login) && normalizeWbLogin(row.supervisor_wb_login) !== normalizeWbLogin(eligibleEmployee.supervisor?.wbLogin)) warnings.push("Supervisor no arquivo diferente do supervisor do colaborador.");
       if (existingRecordId) warnings.push("Registro já existe e será atualizado.");
     }
     const allowsWorkHours = isWorkHoursAllowedForSchedule(schedule);
@@ -839,11 +866,12 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
 
     return {
       rowNumber,
-      wbLogin: employee?.wbLogin ?? wbLogin,
+      wbLogin: eligibleEmployee?.wbLogin ?? employee?.wbLogin ?? wbLogin,
       originalWbLogin: wbLogin,
       normalizedWbLogin,
-      employeeId: employee?.id,
+      employeeId: eligibleEmployee?.id,
       employeeName: employee?.fullName,
+      employeeStatus: employee?.operationalStatus,
       date: date ?? undefined,
       dateIso: date ? formatDate(date) : undefined,
       errors,
@@ -898,6 +926,7 @@ function toImportPreview(rows: Array<Record<string, unknown>>, validation: Valid
       originalWbLogin: row.originalWbLogin ?? row.wbLogin,
       normalizedWbLogin: row.normalizedWbLogin ?? "",
       employeeName: row.employeeName ?? "",
+      employeeStatus: row.employeeStatus ?? "",
       date: row.dateIso ?? "",
       hasSchedule: row.hasSchedule,
       allowsWorkHours: row.allowsWorkHours,
@@ -955,11 +984,47 @@ function buildRecordWhere(user: UserWithRole, query: WorkHourQuery, period: { st
   if (query.pendingOnly) where.status = "ADJUSTMENT_REQUESTED";
   if (query.noScheduleOnly) where.status = "NO_SCHEDULE";
   if (query.source && query.source !== "Todos") where.source = { equals: query.source, mode: "insensitive" };
+  const employeeStatusFilter = buildEmployeeStatusFilter(query.employeeStatus);
+  if (employeeStatusFilter) where.employee = { AND: [where.employee as Prisma.EmployeeProfileWhereInput, employeeStatusFilter] };
   return where;
 }
 
 function isNoSupervisorFilter(value: string) {
   return /^(sem\s*supervisor|sem_supervisor|none|no_supervisor|null)$/i.test(value.trim());
+}
+
+function buildEmployeeStatusFilter(status?: string): Prisma.EmployeeProfileWhereInput | null {
+  const rawStatus = text(status);
+  const normalized = normalizeStatusToken(rawStatus);
+  if (!normalized || normalized === "TODOS") return null;
+  if (["ATIVO", "ATIVOS", "ACTIVE"].includes(normalized)) return { NOT: inactiveEmployeeStatusWhere() };
+  if (["INATIVO", "INATIVOS", "DESATIVADO", "DESATIVADOS", "DESLIGADO", "DESLIGADOS", "DESLIGADOS_INATIVOS", "INATIVOS_DESLIGADOS"].includes(normalized)) {
+    return inactiveEmployeeStatusWhere();
+  }
+  return { operationalStatus: { equals: rawStatus, mode: "insensitive" } };
+}
+
+function inactiveEmployeeStatusWhere(): Prisma.EmployeeProfileWhereInput {
+  return {
+    OR: inactiveEmployeeStatusLabels.map((status) => ({
+      operationalStatus: { equals: status, mode: "insensitive" as const }
+    }))
+  };
+}
+
+function isInactiveEmployeeStatusForWorkHours(status: unknown) {
+  const normalized = normalizeStatusToken(status);
+  return inactiveEmployeeStatusTokens.has(normalized) || ["INATIVO", "DESATIVADO", "DESLIGADO", "INACTIVE", "DISABLED", "TERMINATED", "SUSPENS"].some((token) => normalized.includes(token));
+}
+
+function normalizeStatusToken(value: unknown) {
+  return text(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }
 
 async function getWorkHoursSummary(where: Prisma.WorkHourRecordWhereInput) {
@@ -1030,7 +1095,7 @@ async function getRecordWithRelations(id: string) {
   return prisma.workHourRecord.findUniqueOrThrow({
     where: { id },
     include: {
-      employee: { select: { id: true, fullName: true, wbLogin: true, roleTitle: true, lob: { select: { name: true } }, shift: { select: { name: true } }, supervisor: { select: { id: true, fullName: true, wbLogin: true } } } },
+      employee: { select: { id: true, fullName: true, wbLogin: true, operationalStatus: true, roleTitle: true, lob: { select: { name: true } }, shift: { select: { name: true } }, supervisor: { select: { id: true, fullName: true, wbLogin: true } } } },
       adjustments: { orderBy: { createdAt: "desc" }, take: 1, select: { id: true, status: true, reason: true, createdAt: true, requestedBy: { select: { name: true } } } },
       schedule: { select: { status: true, startsAt: true, endsAt: true } }
     }
@@ -1047,6 +1112,7 @@ function formatWorkHourRecord(record: any) {
     employeeId: record.employeeId,
     employeeName: record.employee?.fullName ?? "",
     wbLogin: record.wbLogin,
+    employeeStatus: record.employee?.operationalStatus ?? "",
     date: formatDate(record.date),
     lob: record.employee?.lob?.name ?? "",
     supervisor: record.employee?.supervisor?.fullName ?? "",
@@ -1239,7 +1305,6 @@ async function findWorkHourEmployeesByWbLoginBatch(normalizedWbLogins: string[])
     chunks.map((chunk) =>
       prisma.employeeProfile.findMany({
         where: {
-          deletedAt: null,
           OR: chunk.map((wbLogin) => ({ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }))
         },
         include: { lob: true, supervisor: true, shift: true }
