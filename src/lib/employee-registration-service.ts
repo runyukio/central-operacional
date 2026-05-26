@@ -74,6 +74,9 @@ export const employeeImportColumns = [
   "supervisor_wb_login",
   "supervisor_email",
   "supervisor_nome",
+  "gestor_wb_login",
+  "gestor_email",
+  "gestor_nome",
   "turno",
   "skill",
   "wave",
@@ -118,6 +121,7 @@ type EmployeeImportValidation = {
     wbLogin: string;
     role: string;
     lob: string;
+    manager: string;
     skill: string;
     wave: string;
     createUser: boolean;
@@ -337,13 +341,27 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
     let usuariosCriados = 0;
     let registrosAtualizados = 0;
     let skillWaveUpdates = 0;
-    const existingProfilesByWb = new Map(
-      (await findEmployeeProfilesByWbLoginBatch(unique([
+    let hierarchyUpdates = 0;
+    const managerEmails = unique(normalizedValidRows.map((row) => row.managerEmail));
+    const managerNames = unique(normalizedValidRows.map((row) => row.managerName));
+    const employeeProfileCandidates = await findEmployeeProfilesByWbLoginBatch(unique([
         ...normalizedValidRows.map((row) => normalizeWbLoginForEmployeeImport(row.wbLogin)),
-        ...normalizedValidRows.map((row) => normalizeWbLoginForEmployeeImport(row.supervisorWbLogin))
-      ])))
-        .map((employee) => [normalizeWbLoginForEmployeeImport(employee.wbLogin), employee])
-    );
+        ...normalizedValidRows.map((row) => normalizeWbLoginForEmployeeImport(row.supervisorWbLogin)),
+        ...normalizedValidRows.map((row) => normalizeWbLoginForEmployeeImport(row.managerWbLogin))
+      ]));
+    const existingProfilesByWb = new Map(employeeProfileCandidates.map((employee) => [normalizeWbLoginForEmployeeImport(employee.wbLogin), employee]));
+    const managersByEmail = managerEmails.length
+      ? await prisma.employeeProfile.findMany({ where: { deletedAt: null, user: { email: { in: managerEmails } } }, select: { id: true, fullName: true, wbLogin: true, user: { select: { email: true } } } })
+      : [];
+    const managersByName = managerNames.length
+      ? await prisma.employeeProfile.findMany({ where: { deletedAt: null, OR: managerNames.map((name) => ({ fullName: { equals: name, mode: "insensitive" as const } })) }, select: { id: true, fullName: true, wbLogin: true } })
+      : [];
+    const managerByEmail = buildEmployeeByEmailMap(managersByEmail);
+    const managersByNameKey = new Map<string, typeof managersByName>();
+    managersByName.forEach((employee) => {
+      const key = normalizeLookupKey(employee.fullName);
+      managersByNameKey.set(key, [...(managersByNameKey.get(key) ?? []), employee]);
+    });
 
     for (const row of normalizedValidRows) {
       const role = await prisma.role.findUniqueOrThrow({ where: { name: row.roleName } });
@@ -359,6 +377,11 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
       const supervisor = supervisorFromWb && supervisorFromWb.user && ["SUPERVISOR", "ADMIN"].includes(supervisorFromWb.user.role.name)
         ? supervisorFromWb
         : await findSupervisorForImport(prisma, "", row.supervisorEmail, row.supervisorName);
+      const manager = resolveImportManager(row, existingProfilesByWb, managerByEmail, managersByNameKey).employee;
+      const existingByWb = existingProfilesByWb.get(normalizeWbLoginForEmployeeImport(row.wbLogin)) ?? null;
+      if (manager && existingByWb && await wouldCreateImportManagerCycle(existingByWb.id, manager.id)) {
+        throw new Error(`Linha ${validRows[normalizedValidRows.indexOf(row)] ? normalizedValidRows.indexOf(row) + 1 : ""}: essa alteração criaria um ciclo na hierarquia.`);
+      }
       const team = await prisma.team.upsert({
         where: { name_lobId: { name: row.teamName || (supervisor?.fullName ? `Time ${supervisor.fullName}` : "Time Inicial"), lobId: lob.id } },
         update: { supervisorId: supervisor?.id },
@@ -432,6 +455,10 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
             preferredSchedule: row.preferredSchedule,
             team: row.teamName,
             supervisorWbLogin: row.supervisorWbLogin,
+            managerWbLogin: row.managerWbLogin,
+            managerEmail: row.managerEmail,
+            managerName: row.managerName,
+            manager: manager?.fullName ?? null,
             skill: row.skill,
             wave: row.wave,
             scheduleType: row.scheduleType,
@@ -487,13 +514,13 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
           usuariosCriados += existingUser ? 0 : 1;
         }
 
-        const existingByWb = existingProfilesByWb.get(normalizeWbLoginForEmployeeImport(row.wbLogin)) ?? null;
         const existingByUser = userId ? await prisma.employeeProfile.findUnique({ where: { userId } }) : null;
         const employeeId = existingByWb?.id ?? existingByUser?.id;
         const existingEmployeeForUpdate = existingByWb ?? existingByUser ?? null;
         if (existingEmployeeForUpdate && ((row.skill && row.skill !== (existingEmployeeForUpdate.skill ?? "")) || (row.wave && row.wave !== (existingEmployeeForUpdate.wave ?? "")))) {
           skillWaveUpdates += 1;
         }
+        if (manager && existingEmployeeForUpdate?.managerId !== manager.id) hierarchyUpdates += 1;
         const employee = employeeId
           ? await prisma.employeeProfile.update({
             where: { id: employeeId },
@@ -508,6 +535,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               lobId: lob.id,
               teamId: team.id,
               supervisorId: supervisor?.id,
+              ...(manager ? { managerId: manager.id } : {}),
               shiftId: shift.id,
               ...(row.skill ? { skill: row.skill } : {}),
               ...(row.wave ? { wave: row.wave } : {}),
@@ -535,6 +563,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               lobId: lob.id,
               teamId: team.id,
               supervisorId: supervisor?.id,
+              managerId: manager?.id ?? null,
               shiftId: shift.id,
               skill: row.skill || null,
               wave: row.wave || null,
@@ -580,7 +609,8 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
             colaboradoresCriados,
             usuariosCriados,
             registrosAtualizados,
-            skillWaveUpdates
+            skillWaveUpdates,
+            hierarchyUpdates
           }
         }
       });
@@ -601,6 +631,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
         usuariosCriados,
         registrosAtualizados,
         skillWaveUpdates,
+        hierarchyUpdates,
         ignoredRows: invalidRows.length,
         rows: validations
       }
@@ -926,13 +957,22 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
   const unique = (values: string[]) => [...new Set(values.filter(Boolean))];
   const wbLogins = unique(normalizedRows.map((row) => normalizeWbLoginForEmployeeImport(row.wbLogin)));
   const supervisorWbLogins = unique(normalizedRows.map((row) => normalizeWbLoginForEmployeeImport(row.supervisorWbLogin)));
+  const managerWbLogins = unique(normalizedRows.map((row) => normalizeWbLoginForEmployeeImport(row.managerWbLogin)));
+  const managerEmails = unique(normalizedRows.map((row) => row.managerEmail));
+  const managerNames = unique(normalizedRows.map((row) => row.managerName));
   const cpfs = unique(normalizedRows.map((row) => row.cpf ?? ""));
   const emails = unique(normalizedRows.map((row) => row.email));
-  const [roles, lobs, shifts, employeesByWb, sensitiveMatches, activeUsers] = await Promise.all([
+  const [roles, lobs, shifts, employeesByWb, managersByEmail, managersByName, sensitiveMatches, activeUsers] = await Promise.all([
     prisma.role.findMany({ select: { name: true } }),
     prisma.lob.findMany({ select: { name: true } }),
     prisma.shift.findMany({ select: { name: true } }),
-    findEmployeeProfilesByWbLoginBatch(unique([...wbLogins, ...supervisorWbLogins])),
+    findEmployeeProfilesByWbLoginBatch(unique([...wbLogins, ...supervisorWbLogins, ...managerWbLogins])),
+    managerEmails.length
+      ? prisma.employeeProfile.findMany({ where: { deletedAt: null, user: { email: { in: managerEmails } } }, select: { id: true, fullName: true, wbLogin: true, user: { select: { email: true } } } })
+      : Promise.resolve([]),
+    managerNames.length
+      ? prisma.employeeProfile.findMany({ where: { deletedAt: null, OR: managerNames.map((name) => ({ fullName: { equals: name, mode: "insensitive" as const } })) }, select: { id: true, fullName: true, wbLogin: true } })
+      : Promise.resolve([]),
     cpfs.length ? prisma.employeeSensitiveData.findMany({ where: { cpf: { in: cpfs } }, select: { cpf: true, employeeId: true } }) : Promise.resolve([]),
     emails.length ? prisma.user.findMany({ where: { email: { in: emails }, status: "ACTIVE", deletedAt: null }, select: { id: true, email: true } }) : Promise.resolve([])
   ]);
@@ -942,6 +982,12 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     .filter((shift) => isSelectableShiftName(shift.name))
     .flatMap((shift) => [normalizeLookupKey(shift.name), normalizeLookupKey(cleanShiftName(shift.name))]));
   const employeeByWb = new Map(employeesByWb.map((employee) => [normalizeWbLoginForEmployeeImport(employee.wbLogin), employee]));
+  const managerByEmail = buildEmployeeByEmailMap(managersByEmail);
+  const managersByNameKey = new Map<string, typeof managersByName>();
+  managersByName.forEach((employee) => {
+    const key = normalizeLookupKey(employee.fullName);
+    managersByNameKey.set(key, [...(managersByNameKey.get(key) ?? []), employee]);
+  });
   const activeUserByEmail = new Map(activeUsers.map((user) => [user.email.toLowerCase(), user]));
   const sensitiveEmployeeIds = unique(sensitiveMatches.map((item) => item.employeeId));
   const cpfEmployees = sensitiveEmployeeIds.length
@@ -1011,6 +1057,16 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
       if (!supervisor) errors.push("Supervisor informado por WB/Login não encontrado.");
       if (supervisor?.user && !["SUPERVISOR", "ADMIN"].includes(supervisor.user.role.name)) errors.push("Supervisor informado precisa ter role SUPERVISOR ou ADMIN.");
     }
+    const manager = resolveImportManager(row, employeeByWb, managerByEmail, managersByNameKey);
+    if (row.managerWbLogin || row.managerEmail || row.managerName) {
+      if (!manager.employee) errors.push(manager.error ?? "Superior hierárquico informado não encontrado.");
+      if (manager.employee && normalizedRowWbLogin && normalizeWbLoginForEmployeeImport(manager.employee.wbLogin) === normalizedRowWbLogin) {
+        errors.push("O colaborador não pode ser gestor de si mesmo.");
+      }
+      if (manager.employee && activeByWb?.managerId && activeByWb.managerId !== manager.employee.id) {
+        warnings.push(`Superior hierárquico será atualizado para ${manager.employee.fullName}.`);
+      }
+    }
 
     validations.push({
       rowNumber: index + 1,
@@ -1025,6 +1081,7 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
         wbLogin: row.wbLogin,
         role: row.roleName,
         lob: row.lob,
+        manager: manager.employee?.fullName ?? row.managerWbLogin ?? row.managerEmail ?? row.managerName,
         skill: row.skill,
         wave: row.wave,
         createUser: row.createUser,
@@ -1074,6 +1131,9 @@ function normalizeEmployeeImportRow(raw: EmployeeImportRow) {
     supervisorWbLogin: text(raw.supervisor_wb_login),
     supervisorEmail: text(raw.supervisor_email).toLowerCase(),
     supervisorName: text(raw.supervisor_nome),
+    managerWbLogin: text(raw.gestor_wb_login) || text(raw.manager_wb_login),
+    managerEmail: (text(raw.gestor_email) || text(raw.manager_email)).toLowerCase(),
+    managerName: text(raw.gestor_nome) || text(raw.manager_name),
     shift: normalizeShiftName(raw.turno),
     skill: text(raw.skill),
     wave: text(raw.wave),
@@ -1154,6 +1214,51 @@ async function findSupervisorForImport(tx: Prisma.TransactionClient, wbLogin: st
   }
   if (name) return tx.employeeProfile.findFirst({ where: { fullName: { contains: name, mode: "insensitive" } } });
   return null;
+}
+
+function resolveImportManager(
+  row: ReturnType<typeof normalizeEmployeeImportRow>,
+  employeeByWb: ReadonlyMap<string, { id: string; wbLogin: string; fullName: string }>,
+  managerByEmail: ReadonlyMap<string, { id: string; wbLogin: string; fullName: string }>,
+  managersByNameKey: ReadonlyMap<string, Array<{ id: string; wbLogin: string; fullName: string }>>
+) {
+  const wbLogin = normalizeWbLoginForEmployeeImport(row.managerWbLogin);
+  if (wbLogin) {
+    const employee = employeeByWb.get(wbLogin) ?? null;
+    return employee ? { employee } : { employee: null, error: "Superior hierárquico informado por WB/Login não encontrado." };
+  }
+  if (row.managerEmail) {
+    const employee = managerByEmail.get(row.managerEmail.toLowerCase()) ?? null;
+    return employee ? { employee } : { employee: null, error: "Superior hierárquico informado por e-mail não encontrado." };
+  }
+  if (row.managerName) {
+    const matches = managersByNameKey.get(normalizeLookupKey(row.managerName)) ?? [];
+    if (matches.length > 1) return { employee: null, error: "Superior hierárquico por nome encontrou mais de um colaborador. Use gestor_wb_login." };
+    return matches[0] ? { employee: matches[0] } : { employee: null, error: "Superior hierárquico informado por nome não encontrado." };
+  }
+  return { employee: null, error: undefined };
+}
+
+function buildEmployeeByEmailMap<T extends { user: { email: string } | null }>(employees: T[]) {
+  const map = new Map<string, T>();
+  employees.forEach((employee) => {
+    const email = employee.user?.email?.toLowerCase();
+    if (email) map.set(email, employee);
+  });
+  return map;
+}
+
+async function wouldCreateImportManagerCycle(employeeId: string, managerId: string) {
+  const visited = new Set<string>();
+  let currentId: string | null = managerId;
+  for (let depth = 0; currentId && depth < 500; depth += 1) {
+    if (currentId === employeeId) return true;
+    if (visited.has(currentId)) return true;
+    visited.add(currentId);
+    const current: { managerId: string | null } | null = await prisma.employeeProfile.findFirst({ where: { id: currentId, deletedAt: null }, select: { managerId: true } });
+    currentId = current?.managerId ?? null;
+  }
+  return false;
 }
 
 function normalizeImportRole(value: string) {
@@ -1273,7 +1378,7 @@ async function findEmployeeProfilesByWbLoginBatch(normalizedWbLogins: string[]) 
           deletedAt: null,
           OR: chunk.map((wbLogin) => ({ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }))
         },
-        select: { id: true, userId: true, wbLogin: true, fullName: true, skill: true, wave: true, user: { select: { role: { select: { name: true } } } } }
+        select: { id: true, userId: true, wbLogin: true, fullName: true, skill: true, wave: true, managerId: true, user: { select: { role: { select: { name: true } } } } }
       })
     )
   );

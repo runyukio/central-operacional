@@ -5,7 +5,7 @@ import { Prisma, type EmployeeSensitiveData, type UserStatus } from "@prisma/cli
 import { prisma } from "@/lib/prisma";
 import type { Actor } from "@/lib/mock-db";
 import { listEmployeesForActor as listMockEmployees, recordErrorLog } from "@/lib/mock-db";
-import { canAccessEmployeeMap, canViewEmployeeSensitiveData, normalizeRole } from "@/lib/permissions";
+import { canAccessEmployeeMap, canManageHierarchy, canViewEmployeeSensitiveData, normalizeRole } from "@/lib/permissions";
 import { createDuplicateError, createNotFoundError, createPermissionError, createRelationError, createServerError, createValidationError, mapPrismaError } from "@/lib/api-errors";
 import { normalizeJobTitle } from "@/lib/job-title-normalization";
 import { cleanShiftName } from "@/lib/shift-display";
@@ -17,6 +17,8 @@ const employeeInclude = {
   team: true,
   shift: true,
   supervisor: true,
+  manager: true,
+  _count: { select: { directReports: true } },
   equipments: true
 } satisfies Prisma.EmployeeProfileInclude;
 
@@ -33,6 +35,7 @@ export type EmployeeAdminUpdateInput = {
   lobId?: string;
   teamId?: string;
   supervisorId?: string;
+  managerId?: string | null;
   shiftId?: string;
   scheduleType?: string;
   contractType?: string;
@@ -56,6 +59,7 @@ export type EmployeeListQuery = {
   lob?: string;
   lobId?: string;
   supervisorId?: string;
+  managerId?: string;
   teamId?: string;
   shiftId?: string;
   skill?: string;
@@ -142,6 +146,7 @@ async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeList
                   { skill: { contains: search, mode: "insensitive" } },
                   { wave: { contains: search, mode: "insensitive" } },
                   { lob: { name: { contains: search, mode: "insensitive" } } },
+                  { manager: { fullName: { contains: search, mode: "insensitive" } } },
                   { supervisor: { fullName: { contains: search, mode: "insensitive" } } }
                 ]
               }
@@ -149,6 +154,7 @@ async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeList
           ...(query.lob && query.lob !== "Todos" ? { lob: { name: { equals: query.lob, mode: "insensitive" } } } : {}),
           ...(query.lobId ? { lobId: query.lobId } : {}),
           ...buildSupervisorFilterWhere(query.supervisorId),
+          ...buildManagerFilterWhere(query.managerId),
           ...(query.teamId ? { teamId: query.teamId } : {}),
           ...(query.shiftId ? { shiftId: query.shiftId } : {}),
           ...buildNullableTextFilterWhere("skill", query.skill),
@@ -281,13 +287,15 @@ type EmployeeSummaryRow = {
   lobId: string;
   teamId: string;
   supervisorId: string | null;
+  managerId: string | null;
   shiftId: string;
   user: { email: string; status: UserStatus; role: { name: string } } | null;
   lob: { name: string };
   team: { name: string };
   supervisor: { fullName: string } | null;
+  manager: { fullName: string } | null;
   shift: { name: string };
-  _count: { equipments: number; schedules: number };
+  _count: { equipments: number; schedules: number; directReports: number };
 };
 
 const employeeSummarySelect = {
@@ -304,13 +312,15 @@ const employeeSummarySelect = {
   lobId: true,
   teamId: true,
   supervisorId: true,
+  managerId: true,
   shiftId: true,
   user: { select: { email: true, status: true, role: { select: { name: true } } } },
   lob: { select: { name: true } },
   team: { select: { name: true } },
   supervisor: { select: { fullName: true } },
+  manager: { select: { fullName: true } },
   shift: { select: { name: true } },
-  _count: { select: { equipments: true, schedules: true } }
+  _count: { select: { equipments: true, schedules: true, directReports: true } }
 } satisfies Prisma.EmployeeProfileSelect;
 
 async function listOperationalEmployeesLegacy(actor: Actor) {
@@ -396,6 +406,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     if (!canEditPeopleData && sensitivePeopleFields.some((field) => input[field] !== undefined)) return createPermissionError("Você não tem permissão para editar dados cadastrais/contratuais.");
     if (!canEditOperational && operationalBindingFields.some((field) => input[field] !== undefined)) return createPermissionError("Você não tem permissão para editar vínculos operacionais.");
     if (!canEditProfileOperational && profileOperationalFields.some((field) => input[field] !== undefined)) return createPermissionError("Você não tem permissão para editar dados operacionais.");
+    if (input.managerId !== undefined && !canManageHierarchy({ role: actor.role, status: user.status })) return createPermissionError("Você não tem permissão para editar superior hierárquico.");
 
     const nextFullName = clean(input.fullName);
     const nextSocialName = cleanNullable(input.socialName);
@@ -406,6 +417,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     const nextStatus = clean(input.operationalStatus);
     const nextRoleName = clean(input.roleName);
     const nextSupervisorId = cleanNullable(input.supervisorId);
+    const nextManagerId = cleanNullable(input.managerId);
     const nextLobId = clean(input.lobId);
     const nextTeamId = clean(input.teamId);
     const nextShiftId = clean(input.shiftId);
@@ -436,6 +448,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     if (input.operationalStatus !== undefined && !nextStatus) return createValidationError({ operationalStatus: "Status do colaborador é obrigatório." });
     if (input.scheduleType !== undefined && !nextScheduleType) return createValidationError({ scheduleType: "Cronograma é obrigatório." });
     if (input.stateUf !== undefined && nextStateUf && nextStateUf.length !== 2) return createValidationError({ stateUf: "Estado/UF deve ter 2 letras." });
+    if (nextManagerId && nextManagerId === employee.id) return createValidationError({ managerId: "O colaborador não pode ser gestor de si mesmo." }, "O colaborador não pode ser gestor de si mesmo.");
 
     let targetRoleId: string | undefined;
     if (nextRoleName) {
@@ -461,6 +474,13 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
       const supervisor = await prisma.employeeProfile.findFirst({ where: { id: nextSupervisorId, deletedAt: null }, include: { user: { include: { role: true } } } });
       if (!supervisor?.user || !["SUPERVISOR", "ADMIN"].includes(supervisor.user.role.name)) {
         return createRelationError("Supervisor selecionado não existe ou não é elegível.", { supervisorId: "Selecione um supervisor com role SUPERVISOR ou ADMIN." });
+      }
+    }
+    if (nextManagerId) {
+      const manager = await prisma.employeeProfile.findFirst({ where: { id: nextManagerId, deletedAt: null }, select: { id: true } });
+      if (!manager) return createRelationError("Superior hierárquico não encontrado.", { managerId: "Superior hierárquico não encontrado." });
+      if (await wouldCreateManagerCycle(employee.id, nextManagerId)) {
+        return createValidationError({ managerId: "Essa alteração criaria um ciclo na hierarquia." }, "Essa alteração criaria um ciclo na hierarquia.");
       }
     }
     if (nextLobId) {
@@ -501,6 +521,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
           ...(nextRoleTitle ? { roleTitle: nextRoleTitle } : {}),
           ...(nextStatus ? { operationalStatus: nextStatus } : {}),
           ...(nextSupervisorId !== undefined ? { supervisorId: nextSupervisorId || null } : {}),
+          ...(nextManagerId !== undefined ? { managerId: nextManagerId || null } : {}),
           ...(nextLobId ? { lobId: nextLobId } : {}),
           ...(nextTeamId ? { teamId: nextTeamId } : {}),
           ...(nextShiftId ? { shiftId: nextShiftId } : {}),
@@ -545,7 +566,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
   }
 }
 
-export async function exportOperationalEmployeesCsv(actor: Actor, filters: { query?: string | null; lob?: string | null; status?: string | null; supervisorId?: string | null; shiftId?: string | null; skill?: string | null; wave?: string | null }) {
+export async function exportOperationalEmployeesCsv(actor: Actor, filters: { query?: string | null; lob?: string | null; status?: string | null; supervisorId?: string | null; managerId?: string | null; shiftId?: string | null; skill?: string | null; wave?: string | null }) {
   const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
   if (!user) return createPermissionError("Usuário não autenticado.");
   if (!canAccessEmployeeMap({ role: actor.role, status: user.status })) return createPermissionError("Você não tem permissão para exportar o Mapa de Funcionários.");
@@ -557,6 +578,7 @@ export async function exportOperationalEmployeesCsv(actor: Actor, filters: { que
   const lob = clean(filters.lob);
   const status = clean(filters.status);
   const supervisorId = clean(filters.supervisorId);
+  const managerId = clean(filters.managerId);
   const shiftId = clean(filters.shiftId);
   const skill = clean(filters.skill);
   const wave = clean(filters.wave);
@@ -566,10 +588,11 @@ export async function exportOperationalEmployeesCsv(actor: Actor, filters: { que
     const matchesLob = !lob || lob === "Todos" || employee.lob === lob;
     const matchesStatus = !status || status === "Todos" || matchesEmployeeStatusFilter(employee.status, row.userStatus, status);
     const matchesSupervisor = !supervisorId || supervisorId === "Todos" || (isNoneFilter(supervisorId) ? !row.supervisorId : row.supervisorId === supervisorId);
+    const matchesManager = !managerId || managerId === "Todos" || (isNoneFilter(managerId) ? !row.managerId : row.managerId === managerId);
     const matchesShift = !shiftId || row.shiftId === shiftId;
     const matchesSkill = !skill || skill === "Todos" || (isNoneFilter(skill) ? !row.skill : String(row.skill ?? "").toLowerCase() === skill.toLowerCase());
     const matchesWave = !wave || wave === "Todos" || (isNoneFilter(wave) ? !row.wave : String(row.wave ?? "").toLowerCase() === wave.toLowerCase());
-    return matchesQuery && matchesLob && matchesStatus && matchesSupervisor && matchesShift && matchesSkill && matchesWave;
+    return matchesQuery && matchesLob && matchesStatus && matchesSupervisor && matchesManager && matchesShift && matchesSkill && matchesWave;
   });
 
   const columns = employeeExportColumns(role);
@@ -672,6 +695,9 @@ function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: 
     teamId: employee.teamId,
     supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
     supervisorId: employee.supervisorId ?? "",
+    manager: employee.manager?.fullName ?? "Sem gestor",
+    managerId: employee.managerId ?? "",
+    directReports: employee._count.directReports,
     skill: employee.skill ?? "",
     wave: employee.wave ?? "",
     shift: cleanShiftName(employee.shift.name) || "Sem turno",
@@ -742,6 +768,9 @@ function mapLegacyEmployee(employee: LegacyEmployeeRow, role: string) {
     teamId: employee.teamId,
     supervisor: employee.supervisor ?? "Sem supervisor",
     supervisorId: employee.supervisorId ?? "",
+    manager: "Sem gestor",
+    managerId: "",
+    directReports: 0,
     skill: employee.skill ?? "",
     wave: employee.wave ?? "",
     shift: cleanShiftName(employee.shift) || "Sem turno",
@@ -793,6 +822,9 @@ function mapEmployeeSummary(employee: EmployeeSummaryRow, role: string) {
     teamId: employee.teamId,
     supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
     supervisorId: employee.supervisorId ?? "",
+    manager: employee.manager?.fullName ?? "Sem gestor",
+    managerId: employee.managerId ?? "",
+    directReports: employee._count.directReports,
     skill: employee.skill ?? "",
     wave: employee.wave ?? "",
     shift: cleanShiftName(employee.shift.name) || "Sem turno",
@@ -842,6 +874,8 @@ function employeeExportColumns(role: string) {
     col("lob", (employee) => employee.lob),
     col("time", (employee) => employee.team),
     col("supervisor", (employee) => employee.supervisor),
+    col("superior_hierarquico", (employee) => employee.manager),
+    col("subordinados_diretos", (employee) => employee.directReports),
     col("skill", (employee) => employee.skill),
     col("wave", (employee) => employee.wave),
     col("turno", (employee) => employee.shift),
@@ -921,6 +955,13 @@ function buildSupervisorFilterWhere(value: unknown): Prisma.EmployeeProfileWhere
   if (!raw || isAllFilter(raw)) return {};
   if (isNoneFilter(raw)) return { supervisorId: null };
   return { supervisorId: raw };
+}
+
+function buildManagerFilterWhere(value: unknown): Prisma.EmployeeProfileWhereInput {
+  const raw = clean(value);
+  if (!raw || isAllFilter(raw)) return {};
+  if (isNoneFilter(raw)) return { managerId: null };
+  return { managerId: raw };
 }
 
 function buildNullableTextFilterWhere(field: "skill" | "wave", value: unknown): Prisma.EmployeeProfileWhereInput {
@@ -1036,7 +1077,7 @@ function isAllFilter(value: string) {
 }
 
 function isNoneFilter(value: string) {
-  return ["NONE", "SEM", "SEM_SUPERVISOR", "SEM_SUPERVISAO", "SEM_SKILL", "SEM_WAVE"].includes(normalizeStatusToken(value));
+  return ["NONE", "SEM", "SEM_SUPERVISOR", "SEM_SUPERVISAO", "SEM_GESTOR", "SEM_MANAGER", "SEM_SKILL", "SEM_WAVE"].includes(normalizeStatusToken(value));
 }
 
 function normalizeStatusToken(value: unknown) {
@@ -1110,6 +1151,7 @@ function serializeEmployeeForAudit(employee: EmployeeWithRelations) {
     lobId: employee.lobId,
     teamId: employee.teamId,
     supervisorId: employee.supervisorId,
+    managerId: employee.managerId,
     skill: employee.skill,
     wave: employee.wave,
     shiftId: employee.shiftId,
@@ -1124,6 +1166,22 @@ function serializeEmployeeForAudit(employee: EmployeeWithRelations) {
     stateUf: employee.stateUf,
     preferredSchedule: employee.preferredSchedule
   };
+}
+
+async function wouldCreateManagerCycle(employeeId: string, managerId: string) {
+  const visited = new Set<string>();
+  let currentId: string | null = managerId;
+  for (let depth = 0; currentId && depth < 500; depth += 1) {
+    if (currentId === employeeId) return true;
+    if (visited.has(currentId)) return true;
+    visited.add(currentId);
+    const current: { managerId: string | null } | null = await prisma.employeeProfile.findFirst({
+      where: { id: currentId, deletedAt: null },
+      select: { managerId: true }
+    });
+    currentId = current?.managerId ?? null;
+  }
+  return false;
 }
 
 function jsonToText(value: Prisma.JsonValue | null): string {

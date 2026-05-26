@@ -524,6 +524,7 @@ type EmployeeImportPreview = {
       wbLogin: string;
       role: string;
       lob: string;
+      manager: string;
       skill: string;
       wave: string;
       createUser: boolean;
@@ -619,7 +620,7 @@ type SystemSettings = {
   requestTypes: Array<{ id: string; name: string; area: string; slaHours: number; requiresApproval: boolean; status?: "ACTIVE" | "INACTIVE"; essential?: boolean }>;
   teams?: Array<{ id: string; name: string; lobId: string; lob: string; supervisorId?: string; supervisorName?: string; supervisorEmail?: string; status: "ACTIVE" | "INACTIVE" }>;
   supervisors?: Array<{ id: string; name: string; email?: string; lobId?: string; lob?: string; teamId?: string; team?: string; supervisees?: number; status?: string }>;
-  employees?: Array<{ id: string; name: string; email?: string; wb?: string; roleTitle?: string; roleName?: string; lobId?: string; lob?: string; teamId?: string; team?: string; supervisorId?: string; supervisorName?: string; shiftId?: string; shift?: string; status?: string }>;
+  employees?: Array<{ id: string; name: string; email?: string; wb?: string; roleTitle?: string; roleName?: string; lobId?: string; lob?: string; teamId?: string; team?: string; supervisorId?: string; supervisorName?: string; managerId?: string; managerName?: string; shiftId?: string; shift?: string; status?: string }>;
   roleTitles: Array<{ name: string; status: "ACTIVE" | "INACTIVE" }>;
   defaultMonth: string;
   slaRules?: Array<Record<string, unknown> & { id: string; name: string; status: "ACTIVE" | "INACTIVE" }>;
@@ -638,6 +639,10 @@ type EmployeeClient = (typeof employees)[number] & {
   team?: string;
   teamId?: string;
   supervisorId?: string;
+  manager?: string;
+  managerId?: string;
+  directReports?: number;
+  totalReports?: number;
   skill?: string;
   wave?: string;
   lobId?: string;
@@ -682,6 +687,40 @@ type EmployeeListResponse = {
   limit?: number;
   totalPages?: number;
   filterOptions?: { skills: string[]; waves: string[] };
+};
+
+type HierarchyEmployeeClient = {
+  id: string;
+  name: string;
+  wbLogin: string;
+  email: string;
+  roleTitle: string;
+  lob: string;
+  lobId: string;
+  status: string;
+  managerId: string;
+  managerName: string;
+  supervisorId: string;
+  supervisorName: string;
+  directReports: number;
+  totalReports: number;
+  level: number;
+};
+
+type HierarchyNode = HierarchyEmployeeClient & {
+  children: HierarchyNode[];
+};
+
+type HierarchyResponse = {
+  data: {
+    tree: HierarchyNode[];
+    employees: HierarchyEmployeeClient[];
+    selected: (HierarchyEmployeeClient & { direct: HierarchyEmployeeClient[]; all: HierarchyEmployeeClient[] }) | null;
+    summary: { total: number; withManager: number; withoutManager: number };
+    canEdit: boolean;
+    canExport: boolean;
+    actorRole: string;
+  };
 };
 
 type ShiftReportItem = {
@@ -3055,7 +3094,7 @@ export function RegistrationApprovalsPage() {
                   </label>
                 ) : null}
                 <SimpleTable
-                  columns={["Linha", "Nome", "WB/Login", "E-mail", "Status", "Ação", "CPF", "Role", "LOB", "Skill", "Wave", "Usuário", "Validação"]}
+                  columns={["Linha", "Nome", "WB/Login", "E-mail", "Status", "Ação", "CPF", "Role", "LOB", "Gestor", "Skill", "Wave", "Usuário", "Validação"]}
                   rows={employeeImportPreview.rows.slice(0, 80).map((row) => [
                     row.rowNumber,
                     row.preview.name || "-",
@@ -3066,6 +3105,7 @@ export function RegistrationApprovalsPage() {
                     row.preview.cpf || "CPF pendente",
                     row.preview.role || "-",
                     row.preview.lob || "-",
+                    row.preview.manager || "Sem gestor",
                     row.preview.skill || "-",
                     row.preview.wave || "-",
                     row.preview.createUser ? (row.preview.passwordProvided ? "Sim" : "Senha ausente") : "Não",
@@ -6681,6 +6721,7 @@ export function EmployeeMapPage() {
   const [lobFilter, setLobFilter] = useState("Todos");
   const [statusFilter, setStatusFilter] = useState("Todos");
   const [supervisorFilter, setSupervisorFilter] = useState("Todos");
+  const [managerFilter, setManagerFilter] = useState("Todos");
   const [skillFilter, setSkillFilter] = useState("Todos");
   const [waveFilter, setWaveFilter] = useState("Todos");
   const [shiftFilter, setShiftFilter] = useState("Todos");
@@ -6699,6 +6740,7 @@ export function EmployeeMapPage() {
   const [skillDraft, setSkillDraft] = useState("");
   const [waveDraft, setWaveDraft] = useState("");
   const [supervisorDraft, setSupervisorDraft] = useState("");
+  const [managerDraft, setManagerDraft] = useState("");
   const [lobDraft, setLobDraft] = useState("");
   const [teamDraft, setTeamDraft] = useState("");
   const [shiftDraft, setShiftDraft] = useState("");
@@ -6720,14 +6762,16 @@ export function EmployeeMapPage() {
   const employeeMapLobs = ["Todos", ...Array.from(new Set(employeeSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? employeeRows.map((employee) => employee.lob).filter(Boolean)))];
   const employeeStatusOptions = ["Todos", "Ativos/Aprovados", "Nesting", "Pendentes", "Inativos"];
   const employeeSupervisorOptions = employeeSettings?.supervisors?.filter((supervisor) => supervisor.status !== "INACTIVE") ?? [];
+  const employeeManagerOptions = employeeSettings?.employees?.filter((employee) => employee.status !== "INACTIVE") ?? [];
   const employeeSkillOptions = ["Todos", "SEM_SKILL", ...employeeFilterOptions.skills.filter(Boolean)];
   const employeeWaveOptions = ["Todos", "SEM_WAVE", ...employeeFilterOptions.waves.filter(Boolean)];
-  const hasEmployeeFilters = Boolean(query.trim()) || lobFilter !== "Todos" || statusFilter !== "Todos" || supervisorFilter !== "Todos" || skillFilter !== "Todos" || waveFilter !== "Todos" || shiftFilter !== "Todos";
+  const hasEmployeeFilters = Boolean(query.trim()) || lobFilter !== "Todos" || statusFilter !== "Todos" || supervisorFilter !== "Todos" || managerFilter !== "Todos" || skillFilter !== "Todos" || waveFilter !== "Todos" || shiftFilter !== "Todos";
   const isAdmin = session?.user?.role === "ADMIN";
   const isSupervisorUser = session?.user?.role === "SUPERVISOR";
   const normalizedEmployeeMapRole = String(session?.user?.role ?? "").toUpperCase();
   const canEditEmployeeOperational = ["ADMIN", "WFM", "RH", "HR", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
   const canEditOperationalBindings = ["ADMIN", "WFM", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
+  const canEditHierarchyBindings = ["ADMIN", "WFM", "RH", "HR"].includes(normalizedEmployeeMapRole);
   const canEditPeopleData = ["ADMIN", "RH", "HR", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
   const employeeLobOptions = employeeSettings?.lobs.filter((lob) => lob.status !== "INACTIVE") ?? [];
   const employeeTeamOptions = employeeSettings?.teams?.filter((team) => team.status !== "INACTIVE" && (!lobDraft || team.lobId === lobDraft || team.lob === "ALL")) ?? [];
@@ -6745,12 +6789,13 @@ export function EmployeeMapPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function loadEmployees(options?: { nextQuery?: string; nextLob?: string; nextStatus?: string; nextSupervisor?: string; nextSkill?: string; nextWave?: string; nextShift?: string; nextPage?: number }) {
+  async function loadEmployees(options?: { nextQuery?: string; nextLob?: string; nextStatus?: string; nextSupervisor?: string; nextManager?: string; nextSkill?: string; nextWave?: string; nextShift?: string; nextPage?: number }) {
     setEmployeeLoading(true);
     const nextQuery = options?.nextQuery ?? query;
     const nextLob = options?.nextLob ?? lobFilter;
     const nextStatus = options?.nextStatus ?? statusFilter;
     const nextSupervisor = options?.nextSupervisor ?? supervisorFilter;
+    const nextManager = options?.nextManager ?? managerFilter;
     const nextSkill = options?.nextSkill ?? skillFilter;
     const nextWave = options?.nextWave ?? waveFilter;
     const nextShift = options?.nextShift ?? shiftFilter;
@@ -6760,6 +6805,7 @@ export function EmployeeMapPage() {
     if (nextLob !== "Todos") params.set("lob", nextLob);
     if (nextStatus !== "Todos") params.set("status", nextStatus);
     if (nextSupervisor !== "Todos") params.set("supervisorId", nextSupervisor);
+    if (nextManager !== "Todos") params.set("managerId", nextManager);
     if (nextSkill !== "Todos") params.set("skill", nextSkill);
     if (nextWave !== "Todos") params.set("wave", nextWave);
     if (nextShift !== "Todos") params.set("shiftId", nextShift);
@@ -6767,7 +6813,7 @@ export function EmployeeMapPage() {
       const employeePayload = await apiJson<EmployeeListResponse>(`/api/employees?${params.toString()}`);
       if (!employeePayload.data?.length && Number(employeePayload.total ?? 0) > 0 && nextPage > 1) {
         setEmployeePage(1);
-        await loadEmployees({ nextQuery, nextLob, nextStatus, nextSupervisor, nextSkill, nextWave, nextShift, nextPage: 1 });
+        await loadEmployees({ nextQuery, nextLob, nextStatus, nextSupervisor, nextManager, nextSkill, nextWave, nextShift, nextPage: 1 });
         return;
       }
       setEmployeeRows(employeePayload.data);
@@ -6817,6 +6863,7 @@ export function EmployeeMapPage() {
     setSkillDraft(selected.skill ?? "");
     setWaveDraft(selected.wave ?? "");
     setSupervisorDraft(selected.supervisorId ?? "");
+    setManagerDraft(selected.managerId ?? "");
     setLobDraft(selected.lobId ?? "");
     setTeamDraft(selected.teamId ?? "");
     setShiftDraft(selected.shiftId ?? "");
@@ -6854,6 +6901,7 @@ export function EmployeeMapPage() {
           skill: canEditEmployeeOperational ? skillDraft : undefined,
           wave: canEditEmployeeOperational ? waveDraft : undefined,
           supervisorId: canEditOperationalBindings ? supervisorDraft : undefined,
+          managerId: canEditHierarchyBindings ? managerDraft : undefined,
           lobId: canEditOperationalBindings ? lobDraft || undefined : undefined,
           teamId: canEditOperationalBindings ? teamDraft || undefined : undefined,
           shiftId: canEditOperationalBindings ? shiftDraft || undefined : undefined,
@@ -6891,6 +6939,7 @@ export function EmployeeMapPage() {
     if (lobFilter !== "Todos") params.set("lob", lobFilter);
     if (statusFilter !== "Todos") params.set("status", statusFilter);
     if (supervisorFilter !== "Todos") params.set("supervisorId", supervisorFilter);
+    if (managerFilter !== "Todos") params.set("managerId", managerFilter);
     if (skillFilter !== "Todos") params.set("skill", skillFilter);
     if (waveFilter !== "Todos") params.set("wave", waveFilter);
     if (shiftFilter !== "Todos") params.set("shiftId", shiftFilter);
@@ -6922,7 +6971,7 @@ export function EmployeeMapPage() {
       {employeeMessage ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{employeeMessage}</div> : null}
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="space-y-5">
-          <div className="card grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-8">
+          <div className="card grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-9">
             <input value={query} onChange={(event) => setQuery(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm outline-none xl:col-span-2" placeholder="Nome, e-mail, WB/Login, Skill ou Wave" />
             <select value={lobFilter} onChange={(event) => setLobFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
               {employeeMapLobs.map((lob) => <option key={lob} value={lob}>{lob === "Todos" ? "Todas as LOBs" : lob}</option>)}
@@ -6935,6 +6984,11 @@ export function EmployeeMapPage() {
               <option value="SEM_SUPERVISOR">Sem supervisor</option>
               {employeeSupervisorOptions.map((supervisor) => <option key={supervisor.id} value={supervisor.id}>{supervisor.name}</option>)}
             </select>
+            <select value={managerFilter} onChange={(event) => setManagerFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
+              <option value="Todos">Todos os gestores</option>
+              <option value="SEM_GESTOR">Sem gestor</option>
+              {employeeManagerOptions.map((employee) => <option key={employee.id} value={employee.id}>{employee.name} - {employee.roleTitle || employee.roleName || "colaborador"}</option>)}
+            </select>
             <select value={skillFilter} onChange={(event) => setSkillFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
               {employeeSkillOptions.map((skill) => <option key={skill} value={skill}>{skill === "Todos" ? "Todas as skills" : skill === "SEM_SKILL" ? "Sem skill" : skill}</option>)}
             </select>
@@ -6945,9 +6999,9 @@ export function EmployeeMapPage() {
               <option value="Todos">Todos os turnos</option>
               {employeeShiftOptions.map((shift) => <option key={shift.id} value={shift.id}>{cleanShiftName(shift.name)}</option>)}
             </select>
-            <div className="flex gap-2 md:col-span-2 xl:col-span-8 xl:justify-end">
+            <div className="flex gap-2 md:col-span-2 xl:col-span-9 xl:justify-end">
               <button onClick={() => { setEmployeePage(1); void loadEmployees({ nextPage: 1 }); }} className="h-10 rounded-lg bg-blue-600 px-5 text-sm font-bold text-white">Buscar</button>
-              <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextPage: 1 }); }} className="h-10 rounded-lg border border-border px-5 text-sm font-bold">Limpar filtros</button>
+              <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setManagerFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextManager: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextPage: 1 }); }} className="h-10 rounded-lg border border-border px-5 text-sm font-bold">Limpar filtros</button>
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -6959,7 +7013,7 @@ export function EmployeeMapPage() {
             ) : employeeRows.length ? (
               <>
                 <SimpleTable
-                  columns={["Nome", "E-mail", "WB/Login", "Cargo/Função", "Role", "LOB", "Skill", "Wave", "Supervisor", "Turno", "Status", "Ação"]}
+                  columns={["Nome", "E-mail", "WB/Login", "Cargo/Função", "Role", "LOB", "Skill", "Wave", "Supervisor", "Superior", "Turno", "Status", "Ação"]}
                   rows={employeeRows.map((employee) => [
                     <button key={employee.id} onClick={() => selectEmployee(employee)} className="max-w-[180px] truncate font-bold text-blue-700" title={employee.name}>{employee.name}</button>,
                     <span key={`${employee.id}-email`} className="block max-w-[190px] truncate" title={employee.email ?? "-"}>{employee.email ?? "-"}</span>,
@@ -6970,6 +7024,7 @@ export function EmployeeMapPage() {
                     employee.skill || "Sem skill",
                     employee.wave || "Sem wave",
                     <span key={`${employee.id}-supervisor`} className="block max-w-[160px] truncate" title={employee.supervisor}>{employee.supervisor}</span>,
+                    <span key={`${employee.id}-manager`} className="block max-w-[160px] truncate" title={employee.manager ?? "Sem gestor"}>{employee.manager ?? "Sem gestor"}</span>,
                     cleanShiftName(employee.shift) || "-",
                     <StatusBadge key={`${employee.id}-status`} status={employeeMapStatusLabel(employee.status)} />,
                     <button key={`${employee.id}-action`} onClick={() => selectEmployee(employee)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">Ver detalhes</button>
@@ -6988,7 +7043,7 @@ export function EmployeeMapPage() {
                 <EmptyState title={hasEmployeeFilters ? "Nenhum colaborador encontrado para os filtros selecionados" : "Nenhum colaborador encontrado"} description={hasEmployeeFilters ? "Limpe os filtros para voltar a listar a base real disponível para seu perfil." : "Aprove cadastros ou importe colaboradores para iniciar a base."} />
                 {hasEmployeeFilters ? (
                   <div className="mt-3 text-center">
-                    <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextPage: 1 }); }} className="rounded-lg border border-border px-4 py-2 text-sm font-bold text-navy-950">Limpar filtros</button>
+                    <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setManagerFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextManager: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextPage: 1 }); }} className="rounded-lg border border-border px-4 py-2 text-sm font-bold text-navy-950">Limpar filtros</button>
                   </div>
                 ) : null}
               </div>
@@ -7009,6 +7064,8 @@ export function EmployeeMapPage() {
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <InfoLine label="LOB" value={selected.lob} />
                 <InfoLine label="Supervisor" value={selected.supervisor} />
+                <InfoLine label="Superior" value={selected.manager ?? "Sem gestor"} />
+                <InfoLine label="Subordinados" value={selected.directReports ?? 0} />
                 <InfoLine label="Skill" value={selected.skill || "Sem skill"} />
                 <InfoLine label="Wave" value={selected.wave || "Sem wave"} />
                 <InfoLine label="Turno" value={cleanShiftName(selected.shift) || "-"} />
@@ -7024,6 +7081,8 @@ export function EmployeeMapPage() {
                   <InfoLine label="Wave" value={selected.wave || "Sem wave"} />
                   <InfoLine label="Status atual" value={<StatusBadge status={employeeMapStatusLabel(selected.status)} />} />
                   <InfoLine label="Supervisor vinculado" value={selected.supervisor} />
+                  <InfoLine label="Superior hierárquico" value={selected.manager ?? "Sem gestor"} />
+                  <InfoLine label="Subordinados diretos" value={selected.directReports ?? 0} />
                   <InfoLine label="Última presença" value={selected.lastPresence ?? "Sem registro"} />
                   <InfoLine label="E-mail operacional" value={selected.email ?? "Restrito"} />
                 </div>
@@ -7096,6 +7155,18 @@ export function EmployeeMapPage() {
                                   ))}
                                 </select>
                                 {employeeFieldErrors.supervisorId ? <span className="mt-1 block text-xs font-bold text-red-600">{employeeFieldErrors.supervisorId}</span> : null}
+                              </label>
+                            ) : null}
+                            {canEditHierarchyBindings ? (
+                              <label className="block">
+                                <span className="mb-1.5 block text-sm font-bold text-muted">Superior hierárquico</span>
+                                <select value={managerDraft} onChange={(event) => setManagerDraft(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100", employeeFieldErrors.managerId ? "border-red-300 bg-red-50/40" : "border-border")}>
+                                  <option value="">Sem gestor</option>
+                                  {employeeManagerOptions.filter((employee) => employee.id !== selected.id).map((employee) => (
+                                    <option key={employee.id} value={employee.id}>{employee.name} - {employee.roleTitle || employee.roleName || employee.wb || "colaborador"}</option>
+                                  ))}
+                                </select>
+                                {employeeFieldErrors.managerId ? <span className="mt-1 block text-xs font-bold text-red-600">{employeeFieldErrors.managerId}</span> : null}
                               </label>
                             ) : null}
                             {canEditOperationalBindings ? (
@@ -7227,6 +7298,281 @@ export function EmployeeMapPage() {
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+export function HierarchyPage() {
+  const [payload, setPayload] = useState<HierarchyResponse["data"] | null>(null);
+  const [settings, setSettings] = useState<SystemSettings | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [lobFilter, setLobFilter] = useState("Todos");
+  const [roleFilter, setRoleFilter] = useState("Todos");
+  const [statusFilter, setStatusFilter] = useState("Todos");
+  const [supervisorFilter, setSupervisorFilter] = useState("Todos");
+  const [managerFilter, setManagerFilter] = useState("Todos");
+  const [selected, setSelected] = useState<HierarchyResponse["data"]["selected"]>(null);
+  const [managerDraft, setManagerDraft] = useState("");
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const managerOptions = settings?.employees ?? [];
+  const supervisorOptions = settings?.supervisors?.filter((supervisor) => supervisor.status !== "INACTIVE") ?? [];
+  const roleOptions = settings?.roleTitles?.filter((roleTitle) => roleTitle.status !== "INACTIVE").map((roleTitle) => roleTitle.name) ?? [];
+  const lobOptions = settings?.lobs?.filter((lob) => lob.status !== "INACTIVE") ?? [];
+
+  useEffect(() => {
+    void loadHierarchy();
+    apiJson<{ data: SystemSettings }>("/api/settings")
+      .then((result) => setSettings(result.data))
+      .catch(() => setSettings(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function loadHierarchy(overrides?: Partial<{ employeeId: string; search: string; lobId: string; roleTitle: string; status: string; supervisorId: string; managerId: string }>) {
+    setLoading(true);
+    setMessage("");
+    const params = new URLSearchParams();
+    const nextSearch = overrides?.search ?? searchQuery;
+    const nextLob = overrides?.lobId ?? lobFilter;
+    const nextRole = overrides?.roleTitle ?? roleFilter;
+    const nextStatus = overrides?.status ?? statusFilter;
+    const nextSupervisor = overrides?.supervisorId ?? supervisorFilter;
+    const nextManager = overrides?.managerId ?? managerFilter;
+    const nextEmployeeId = overrides?.employeeId ?? selected?.id ?? "";
+    if (nextSearch.trim()) params.set("search", nextSearch.trim());
+    if (nextLob !== "Todos") params.set("lobId", nextLob);
+    if (nextRole !== "Todos") params.set("roleTitle", nextRole);
+    if (nextStatus !== "Todos") params.set("status", nextStatus);
+    if (nextSupervisor !== "Todos") params.set("supervisorId", nextSupervisor);
+    if (nextManager !== "Todos") params.set("managerId", nextManager);
+    if (nextEmployeeId) params.set("employeeId", nextEmployeeId);
+    try {
+      const result = await apiJson<HierarchyResponse>(`/api/hierarchy?${params.toString()}`);
+      setPayload(result.data);
+      setSelected(result.data.selected);
+      setManagerDraft(result.data.selected?.managerId ?? "");
+      setExpandedIds((current) => {
+        if (current.size) return current;
+        return new Set(result.data.tree.map((node) => node.id));
+      });
+    } catch (error) {
+      setPayload(null);
+      setSelected(null);
+      setMessage(error instanceof Error ? error.message : "Não foi possível carregar a Hierarquia.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function hierarchyParams(extra?: Record<string, string>) {
+    const params = new URLSearchParams();
+    if (searchQuery.trim()) params.set("search", searchQuery.trim());
+    if (lobFilter !== "Todos") params.set("lobId", lobFilter);
+    if (roleFilter !== "Todos") params.set("roleTitle", roleFilter);
+    if (statusFilter !== "Todos") params.set("status", statusFilter);
+    if (supervisorFilter !== "Todos") params.set("supervisorId", supervisorFilter);
+    if (managerFilter !== "Todos") params.set("managerId", managerFilter);
+    Object.entries(extra ?? {}).forEach(([key, value]) => {
+      if (value) params.set(key, value);
+    });
+    return params;
+  }
+
+  function exportHierarchy() {
+    window.location.href = `/api/hierarchy?${hierarchyParams({ export: "csv" }).toString()}`;
+  }
+
+  async function selectHierarchyEmployee(employee: HierarchyEmployeeClient) {
+    await loadHierarchy({ employeeId: employee.id });
+  }
+
+  function toggleHierarchyNode(employeeId: string) {
+    setExpandedIds((current) => {
+      const next = new Set(current);
+      if (next.has(employeeId)) next.delete(employeeId);
+      else next.add(employeeId);
+      return next;
+    });
+  }
+
+  async function saveHierarchyManager() {
+    if (!selected || saving) return;
+    setSaving(true);
+    setMessage("");
+    try {
+      await apiJson<{ data: unknown }>("/api/hierarchy", {
+        method: "PATCH",
+        body: JSON.stringify({ employeeId: selected.id, managerId: managerDraft || null })
+      });
+      setMessage("Hierarquia atualizada com sucesso.");
+      await loadHierarchy({ employeeId: selected.id });
+    } catch (error) {
+      setMessage(error instanceof ApiRequestError ? error.message : error instanceof Error ? error.message : "Não foi possível atualizar a hierarquia.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function clearHierarchyFilters() {
+    setSearchQuery("");
+    setLobFilter("Todos");
+    setRoleFilter("Todos");
+    setStatusFilter("Todos");
+    setSupervisorFilter("Todos");
+    setManagerFilter("Todos");
+    setSelected(null);
+    void loadHierarchy({ search: "", lobId: "Todos", roleTitle: "Todos", status: "Todos", supervisorId: "Todos", managerId: "Todos", employeeId: "" });
+  }
+
+  function renderHierarchyNode(node: HierarchyNode) {
+    const isOpen = expandedIds.has(node.id);
+    return (
+      <div key={node.id} className="space-y-2">
+        <div className="flex items-center gap-2 rounded-lg border border-border bg-white p-3" style={{ marginLeft: `${Math.min(node.level, 6) * 18}px` }}>
+          <button onClick={() => toggleHierarchyNode(node.id)} className="grid h-8 w-8 place-items-center rounded-lg border border-border text-navy-950 disabled:opacity-30" disabled={!node.children.length} title={node.children.length ? "Expandir/recolher" : "Sem subordinados"}>
+            <ChevronRight className={cn("h-4 w-4 transition-transform", isOpen ? "rotate-90" : "")} />
+          </button>
+          <button onClick={() => selectHierarchyEmployee(node)} className="min-w-0 flex-1 text-left">
+            <span className="block truncate text-sm font-black text-blue-700">{node.name}</span>
+            <span className="block truncate text-xs font-semibold text-muted">{node.roleTitle} • {node.wbLogin} • {node.lob}</span>
+          </button>
+          <StatusBadge status={node.status} />
+          <span className="rounded-lg border border-blue-100 bg-blue-50 px-2 py-1 text-xs font-bold text-blue-700">{node.totalReports} abaixo</span>
+        </div>
+        {isOpen && node.children.length ? <div className="space-y-2">{node.children.map(renderHierarchyNode)}</div> : null}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <PageHeader
+        title="Hierarquia"
+        description="Estrutura organizacional por superior hierárquico, cargo e colaboradores."
+        icon={UsersRound}
+        actions={<button onClick={exportHierarchy} className="premium-control flex h-10 items-center gap-2 px-4 text-sm font-extrabold text-navy-950"><Download className="h-4 w-4" /> Exportar</button>}
+      />
+      {message ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
+        <div className="space-y-5">
+          <div className="card grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-7">
+            <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm outline-none xl:col-span-2" placeholder="Buscar por nome, WB/Login ou e-mail" />
+            <select value={lobFilter} onChange={(event) => setLobFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
+              <option value="Todos">Todas as LOBs</option>
+              {lobOptions.map((lob) => <option key={lob.id} value={lob.id}>{lob.name}</option>)}
+            </select>
+            <select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
+              <option value="Todos">Todos os cargos</option>
+              {roleOptions.map((roleTitle) => <option key={roleTitle} value={roleTitle}>{roleTitle}</option>)}
+            </select>
+            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
+              <option value="Todos">Todos os status</option>
+              {employeeOperationalStatusOptions.map((status) => <option key={status} value={status}>{status}</option>)}
+            </select>
+            <select value={managerFilter} onChange={(event) => setManagerFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
+              <option value="Todos">Todos os gestores</option>
+              <option value="SEM_GESTOR">Sem gestor</option>
+              {managerOptions.map((employee) => <option key={employee.id} value={employee.id}>{employee.name} - {employee.roleTitle || employee.wb}</option>)}
+            </select>
+            <select value={supervisorFilter} onChange={(event) => setSupervisorFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
+              <option value="Todos">Todos os supervisores</option>
+              <option value="SEM_SUPERVISOR">Sem supervisor</option>
+              {supervisorOptions.map((supervisor) => <option key={supervisor.id} value={supervisor.id}>{supervisor.name}</option>)}
+            </select>
+            <div className="flex gap-2 md:col-span-2 xl:col-span-7 xl:justify-end">
+              <button onClick={() => loadHierarchy({ employeeId: selected?.id ?? "" })} className="h-10 rounded-lg bg-blue-600 px-5 text-sm font-bold text-white">Buscar</button>
+              <button onClick={clearHierarchyFilters} className="h-10 rounded-lg border border-border px-5 text-sm font-bold">Limpar filtros</button>
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <MetricPill value={payload?.summary.total ?? 0} label="Colaboradores" />
+            <MetricPill value={payload?.summary.withManager ?? 0} label="Com gestor" />
+            <MetricPill value={payload?.summary.withoutManager ?? 0} label="Sem gestor" />
+          </div>
+          <Panel title="Árvore hierárquica">
+            {loading ? (
+              <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm font-bold text-blue-700">Carregando hierarquia...</div>
+            ) : payload?.tree.length ? (
+              <div className="space-y-2">{payload.tree.map(renderHierarchyNode)}</div>
+            ) : (
+              <EmptyState title="Nenhum vínculo encontrado" description="Ajuste os filtros ou cadastre o superior hierárquico no Mapa de Funcionários." />
+            )}
+          </Panel>
+        </div>
+        <div className="space-y-5">
+          <Panel title="Detalhe">
+            {selected ? (
+              <div className="space-y-4">
+                <div className="flex items-center gap-3">
+                  <span className="grid h-14 w-14 place-items-center rounded-full bg-blue-600 font-bold text-white">{initials(selected.name)}</span>
+                  <div>
+                    <h2 className="text-lg font-extrabold text-navy-950">{selected.name}</h2>
+                    <p className="text-sm text-muted">{selected.wbLogin} • {selected.roleTitle}</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <InfoLine label="LOB" value={selected.lob} />
+                  <InfoLine label="Status" value={<StatusBadge status={selected.status} />} />
+                  <InfoLine label="Superior" value={selected.managerName} />
+                  <InfoLine label="Supervisor" value={selected.supervisorName} />
+                  <InfoLine label="Subordinados diretos" value={selected.direct.length} />
+                  <InfoLine label="Total abaixo" value={selected.all.length} />
+                </div>
+                {payload?.canEdit ? (
+                  <ProfileSection title="Editar superior hierárquico">
+                    <div className="grid gap-3">
+                      <label className="block">
+                        <span className="mb-1.5 block text-sm font-bold text-muted">Superior hierárquico</span>
+                        <select value={managerDraft} onChange={(event) => setManagerDraft(event.target.value)} className="h-11 w-full rounded-lg border border-border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100">
+                          <option value="">Sem gestor</option>
+                          {managerOptions.filter((employee) => employee.id !== selected.id).map((employee) => (
+                            <option key={employee.id} value={employee.id}>{employee.name} - {employee.roleTitle || employee.roleName || employee.wb}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <button disabled={saving} onClick={saveHierarchyManager} className="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">
+                        {saving ? "Salvando..." : "Salvar hierarquia"}
+                      </button>
+                    </div>
+                  </ProfileSection>
+                ) : null}
+                <ProfileSection title="Subordinados diretos">
+                  {selected.direct.length ? (
+                    <div className="space-y-2">
+                      {selected.direct.map((employee) => (
+                        <button key={employee.id} onClick={() => selectHierarchyEmployee(employee)} className="flex w-full items-center justify-between rounded-lg border border-border bg-white p-3 text-left">
+                          <span>
+                            <span className="block text-sm font-black text-blue-700">{employee.name}</span>
+                            <span className="block text-xs font-semibold text-muted">{employee.roleTitle} • {employee.wbLogin}</span>
+                          </span>
+                          <span className="text-xs font-bold text-muted">{employee.totalReports} abaixo</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted">Sem subordinados diretos.</p>
+                  )}
+                </ProfileSection>
+                <ProfileSection title="Todos abaixo">
+                  {selected.all.length ? (
+                    <SimpleTable
+                      columns={["Nome", "WB/Login", "Cargo", "Gestor direto"]}
+                      rows={selected.all.map((employee) => [employee.name, employee.wbLogin, employee.roleTitle, employee.managerName])}
+                    />
+                  ) : (
+                    <p className="text-sm text-muted">Nenhum colaborador abaixo deste nível.</p>
+                  )}
+                </ProfileSection>
+                <a href={`/mapa-funcionarios`} className="block rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-center text-sm font-bold text-blue-700">Ver no Mapa de Funcionários</a>
+              </div>
+            ) : (
+              <EmptyState title="Nenhum colaborador selecionado" description="Clique em um nome na árvore para ver diretos e indiretos." />
+            )}
+          </Panel>
+        </div>
+      </div>
     </div>
   );
 }

@@ -368,11 +368,14 @@ model EmployeeProfile {
   lobId              String
   teamId             String
   supervisorId       String?
+  managerId          String?
   shiftId            String
   lob                Lob                     @relation(fields: [lobId], references: [id])
   team               Team                    @relation("TeamEmployees", fields: [teamId], references: [id])
   supervisor         EmployeeProfile?        @relation("SupervisorTree", fields: [supervisorId], references: [id])
   supervisees        EmployeeProfile[]       @relation("SupervisorTree")
+  manager            EmployeeProfile?        @relation("EmployeeHierarchy", fields: [managerId], references: [id], onDelete: SetNull)
+  directReports      EmployeeProfile[]       @relation("EmployeeHierarchy")
   supervisedTeams    Team[]                  @relation("TeamSupervisor")
   shift              Shift                   @relation(fields: [shiftId], references: [id])
   schedules          Schedule[]
@@ -396,6 +399,7 @@ model EmployeeProfile {
   @@index([lobId])
   @@index([teamId])
   @@index([supervisorId])
+  @@index([managerId])
   @@index([shiftId])
   @@index([roleTitle])
   @@index([skill])
