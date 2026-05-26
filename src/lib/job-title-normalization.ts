@@ -1,11 +1,15 @@
 export const AGENT_JOB_TITLE = "Agente";
+const agentJobTitleAliases = new Set(["agente", "agent", "moderador de conteudo", "content moderator"]);
 
 export function normalizeJobTitle(value: unknown) {
   const raw = String(value ?? "").trim().replace(/\s+/g, " ");
   if (!raw) return raw;
-  const comparable = normalizeComparableJobTitle(raw);
-  if (comparable === "moderador de conteudo") return AGENT_JOB_TITLE;
+  if (isAgentJobTitle(raw)) return AGENT_JOB_TITLE;
   return raw;
+}
+
+export function isAgentJobTitle(value: unknown) {
+  return agentJobTitleAliases.has(normalizeComparableJobTitle(value));
 }
 
 export function normalizeComparableJobTitle(value: unknown) {

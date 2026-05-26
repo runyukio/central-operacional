@@ -5,9 +5,9 @@ import { Prisma, type EmployeeSensitiveData, type UserStatus } from "@prisma/cli
 import { prisma } from "@/lib/prisma";
 import type { Actor } from "@/lib/mock-db";
 import { listEmployeesForActor as listMockEmployees, recordErrorLog } from "@/lib/mock-db";
-import { canAccessEmployeeMap, canManageHierarchy, canViewEmployeeSensitiveData, normalizeRole } from "@/lib/permissions";
+import { canAccessEmployeeMap, canEditEmployeeData, canManageHierarchy, canViewEmployeeSensitiveData, normalizeRole } from "@/lib/permissions";
 import { createDuplicateError, createNotFoundError, createPermissionError, createRelationError, createServerError, createValidationError, mapPrismaError } from "@/lib/api-errors";
-import { normalizeJobTitle } from "@/lib/job-title-normalization";
+import { isAgentJobTitle, normalizeJobTitle } from "@/lib/job-title-normalization";
 import { cleanShiftName } from "@/lib/shift-display";
 
 const allowDemoDataFallback = process.env.ALLOW_DEMO_LOGIN === "true" || process.env.ALLOW_DEMO_DATA === "true";
@@ -80,18 +80,22 @@ export async function listOperationalEmployees(actor: Actor, query: EmployeeList
       role === "COLABORADOR" && user.employeeProfile
         ? { id: user.employeeProfile.id, deletedAt: null }
         : { deletedAt: null };
+    const limit = Math.min(10000, Math.max(1, Number(query.limit) || 200));
     const employees = await prisma.employeeProfile.findMany({
       where: employeeWhere,
       include: {
         ...employeeInclude
       },
       orderBy: { fullName: "asc" },
-      take: 200
+      take: limit
     });
 
     const shouldLoadSensitive = canViewEmployeeSensitiveData({ role: actor.role, status: user.status }) || role === "COLABORADOR";
+    const sensitiveEmployeeIds = role === "RH"
+      ? employees.filter((employee) => canViewEmployeeSensitiveData({ role: actor.role, status: user.status }, { roleTitle: employee.roleTitle })).map((employee) => employee.id)
+      : employees.map((employee) => employee.id);
     const sensitiveRows = employees.length && shouldLoadSensitive
-      ? await prisma.employeeSensitiveData.findMany({ where: { employeeId: { in: employees.map((employee) => employee.id) } } })
+      ? await prisma.employeeSensitiveData.findMany({ where: { employeeId: { in: sensitiveEmployeeIds } } })
       : [];
     const sensitiveByEmployee = new Map(sensitiveRows.map((item) => [item.employeeId, item]));
 
@@ -224,7 +228,7 @@ export async function getOperationalEmployeeDetail(actor: Actor, id: string) {
     if (!employee) return createNotFoundError("Colaborador não encontrado.");
     if (role === "COLABORADOR" && employee.userId !== user.id) return createPermissionError("Você não tem permissão para visualizar este colaborador.");
 
-    const shouldLoadSensitive = canViewEmployeeSensitiveData({ role: actor.role, status: user.status }) || role === "COLABORADOR";
+    const shouldLoadSensitive = canViewEmployeeSensitiveData({ role: actor.role, status: user.status }, { roleTitle: employee.roleTitle, email: employee.user?.email }) || role === "COLABORADOR";
     const sensitive = shouldLoadSensitive ? await prisma.employeeSensitiveData.findUnique({ where: { employeeId: employee.id } }) : null;
     return { data: mapEmployee(employee, role, sensitive ?? undefined) };
   } catch (error) {
@@ -391,6 +395,9 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
       include: { ...employeeInclude }
     });
     if (!employee) return createNotFoundError("Colaborador não encontrado.");
+    if (role === "RH" && !canEditEmployeeData({ role: actor.role, status: user.status }, { roleTitle: employee.roleTitle })) {
+      return createPermissionError("RH possui acesso completo apenas a colaboradores com cargo/função Agente.");
+    }
 
     const actorIsAdmin = role === "ADMIN";
     const canEditOperational = ["ADMIN", "GESTOR", "WFM"].includes(role);
@@ -414,6 +421,9 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     const nextUserStatus = normalizeUserStatus(input.userStatus);
     const nextWbLogin = clean(input.wbLogin);
     const nextRoleTitle = input.roleTitle === undefined ? undefined : normalizeJobTitle(input.roleTitle);
+    if (role === "RH" && input.roleTitle !== undefined && nextRoleTitle && !isAgentJobTitle(nextRoleTitle)) {
+      return createPermissionError("RH pode alterar cargo/função apenas dentro do grupo Agente.");
+    }
     const nextStatus = clean(input.operationalStatus);
     const nextRoleName = clean(input.roleName);
     const nextSupervisorId = cleanNullable(input.supervisorId);
@@ -572,7 +582,7 @@ export async function exportOperationalEmployeesCsv(actor: Actor, filters: { que
   if (!canAccessEmployeeMap({ role: actor.role, status: user.status })) return createPermissionError("Você não tem permissão para exportar o Mapa de Funcionários.");
 
   const role = normalizeRole(actor.role);
-  const rowsResult = await listOperationalEmployees(actor);
+  const rowsResult = await listOperationalEmployees(actor, { summary: false, limit: 10000 });
   const rows = Array.isArray(rowsResult) ? rowsResult : rowsResult.data;
   const query = clean(filters.query)?.toLowerCase() ?? "";
   const lob = clean(filters.lob);
@@ -681,13 +691,15 @@ export async function resetEmployeeUserPassword(actor: Actor, input: { employeeI
 type EmployeeWithRelations = Prisma.EmployeeProfileGetPayload<{ include: typeof employeeInclude }>;
 
 function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: EmployeeSensitiveData) {
-  const canViewSensitive = ["ADMIN", "GESTOR", "RH"].includes(role);
-  const canViewBank = ["ADMIN", "GESTOR"].includes(role);
-  const canViewContact = ["ADMIN", "GESTOR", "RH", "TI"].includes(role);
+  const canViewSensitive = canViewEmployeeSensitiveData({ role }, { roleTitle: employee.roleTitle, email: employee.user?.email });
+  const canViewBank = ["ADMIN", "GESTOR"].includes(role) || (role === "RH" && canViewSensitive);
+  const canViewContact = ["ADMIN", "GESTOR", "TI"].includes(role) || (role === "RH" && canViewSensitive) || role === "COLABORADOR";
+  const canViewPeopleProfile = canViewSensitive || ["ADMIN", "GESTOR", "COLABORADOR"].includes(role);
+  const canEditData = canEditEmployeeData({ role }, { roleTitle: employee.roleTitle, email: employee.user?.email });
   return {
     id: employee.id,
     name: employee.fullName,
-    socialName: employee.socialName ?? "",
+    socialName: canViewPeopleProfile ? employee.socialName ?? "" : "",
     wb: employee.wbLogin,
     lob: employee.lob.name,
     lobId: employee.lobId,
@@ -709,21 +721,26 @@ function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: 
     equipment: employee.equipments.length,
     admission: formatDate(employee.admissionDate),
     admissionIso: toDateInput(employee.admissionDate),
-    trainingStartDate: employee.trainingStartDate ? formatDate(employee.trainingStartDate) : "",
-    trainingStartDateIso: employee.trainingStartDate ? toDateInput(employee.trainingStartDate) : "",
-    contractType: employee.contractType ?? "",
+    trainingStartDate: canViewPeopleProfile && employee.trainingStartDate ? formatDate(employee.trainingStartDate) : "",
+    trainingStartDateIso: canViewPeopleProfile && employee.trainingStartDate ? toDateInput(employee.trainingStartDate) : "",
+    contractType: canViewPeopleProfile ? employee.contractType ?? "" : "",
     siteOperation: employee.siteOperation ?? "",
-    internalNotes: employee.internalNotes ?? "",
-    primaryPhone: employee.primaryPhone ?? "",
-    city: employee.city ?? "",
-    stateUf: employee.stateUf ?? "",
-    preferredSchedule: employee.preferredSchedule ?? "",
+    internalNotes: canViewSensitive || ["ADMIN", "GESTOR"].includes(role) ? employee.internalNotes ?? "" : "",
+    primaryPhone: canViewPeopleProfile ? employee.primaryPhone ?? "" : "",
+    city: canViewPeopleProfile ? employee.city ?? "" : "",
+    stateUf: canViewPeopleProfile ? employee.stateUf ?? "" : "",
+    preferredSchedule: canViewPeopleProfile ? employee.preferredSchedule ?? "" : "",
     role: employee.roleTitle,
     email: employee.user?.email,
     userStatus: employee.user?.status ?? "",
     userId: employee.userId,
     systemRole: employee.user?.role?.name,
+    isAgent: isAgentJobTitle(employee.roleTitle),
     canViewSensitive,
+    canEditEmployeeData: canEditData,
+    canEditPeopleData: canEditData && ["ADMIN", "GESTOR", "RH"].includes(role),
+    canEditOperationalData: canEditData && ["ADMIN", "GESTOR", "RH", "WFM"].includes(role),
+    canEditHierarchyData: canEditData && ["ADMIN", "RH", "WFM"].includes(role),
     restrictedSections: {
       cadastrais: canViewSensitive || role === "COLABORADOR",
       contato: canViewContact || role === "COLABORADOR",
@@ -756,7 +773,8 @@ function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: 
 }
 
 function mapLegacyEmployee(employee: LegacyEmployeeRow, role: string) {
-  const canViewSensitive = ["ADMIN", "GESTOR", "RH"].includes(role);
+  const canViewSensitive = canViewEmployeeSensitiveData({ role }, { roleTitle: employee.roleTitle, email: employee.email });
+  const canEditData = canEditEmployeeData({ role }, { roleTitle: employee.roleTitle, email: employee.email });
   return {
     id: employee.id,
     name: employee.fullName,
@@ -796,7 +814,12 @@ function mapLegacyEmployee(employee: LegacyEmployeeRow, role: string) {
     userId: employee.userId ?? undefined,
     userStatus: employee.userStatus ?? "",
     systemRole: employee.systemRole ?? undefined,
+    isAgent: isAgentJobTitle(employee.roleTitle),
     canViewSensitive,
+    canEditEmployeeData: canEditData,
+    canEditPeopleData: canEditData && ["ADMIN", "GESTOR", "RH"].includes(role),
+    canEditOperationalData: canEditData && ["ADMIN", "GESTOR", "RH", "WFM"].includes(role),
+    canEditHierarchyData: canEditData && ["ADMIN", "RH", "WFM"].includes(role),
     restrictedSections: {
       cadastrais: false,
       contato: false,
@@ -810,7 +833,8 @@ function mapLegacyEmployee(employee: LegacyEmployeeRow, role: string) {
 }
 
 function mapEmployeeSummary(employee: EmployeeSummaryRow, role: string) {
-  const canViewSensitive = ["ADMIN", "GESTOR", "RH"].includes(role);
+  const canViewSensitive = canViewEmployeeSensitiveData({ role }, { roleTitle: employee.roleTitle, email: employee.user?.email });
+  const canEditData = canEditEmployeeData({ role }, { roleTitle: employee.roleTitle, email: employee.user?.email });
   return {
     id: employee.id,
     name: employee.fullName,
@@ -850,7 +874,12 @@ function mapEmployeeSummary(employee: EmployeeSummaryRow, role: string) {
     userStatus: employee.user?.status ?? "",
     userId: employee.userId ?? undefined,
     systemRole: employee.user?.role.name,
+    isAgent: isAgentJobTitle(employee.roleTitle),
     canViewSensitive,
+    canEditEmployeeData: canEditData,
+    canEditPeopleData: canEditData && ["ADMIN", "GESTOR", "RH"].includes(role),
+    canEditOperationalData: canEditData && ["ADMIN", "GESTOR", "RH", "WFM"].includes(role),
+    canEditHierarchyData: canEditData && ["ADMIN", "RH", "WFM"].includes(role),
     hasSchedule: employee._count.schedules > 0,
     restrictedSections: {
       cadastrais: false,
@@ -903,9 +932,13 @@ function employeeExportColumns(role: string) {
       ...people,
       col("cpf", (employee) => employee.sensitive?.cpf ?? employee.maskedSensitive?.cpf),
       col("rg", (employee) => employee.sensitive?.rg ?? employee.maskedSensitive?.rg),
+      col("cnpj", (employee) => employee.sensitive?.cnpj),
       col("data_nascimento", (employee) => employee.sensitive?.birthDate),
       col("endereco", (employee) => employee.sensitive?.address),
-      col("contato_emergencia", (employee) => employee.sensitive?.emergencyContactData)
+      col("dados_bancarios_pix", (employee) => employee.sensitive?.bankData),
+      col("contato_emergencia", (employee) => employee.sensitive?.emergencyContactData),
+      col("dados_familiares", (employee) => employee.sensitive?.familyData),
+      col("usuario_ativo", (employee) => employee.userId ? "Sim" : "Não")
     ];
   }
   if (role !== "ADMIN" && role !== "GESTOR") return operational;

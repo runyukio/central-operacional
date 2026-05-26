@@ -658,7 +658,12 @@ type EmployeeClient = (typeof employees)[number] & {
   city?: string;
   stateUf?: string;
   preferredSchedule?: string;
+  isAgent?: boolean;
   canViewSensitive?: boolean;
+  canEditEmployeeData?: boolean;
+  canEditPeopleData?: boolean;
+  canEditOperationalData?: boolean;
+  canEditHierarchyData?: boolean;
   restrictedSections?: Record<string, boolean>;
   sensitive?: {
     cpf: string;
@@ -6785,6 +6790,9 @@ export function EmployeeMapPage() {
   const canEditOperationalBindings = ["ADMIN", "WFM", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
   const canEditHierarchyBindings = ["ADMIN", "WFM", "RH", "HR"].includes(normalizedEmployeeMapRole);
   const canEditPeopleData = ["ADMIN", "RH", "HR", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
+  const selectedCanEditEmployeeOperational = canEditEmployeeOperational && (selected?.canEditOperationalData ?? true);
+  const selectedCanEditPeopleData = canEditPeopleData && (selected?.canEditPeopleData ?? true);
+  const selectedCanEditHierarchyBindings = canEditHierarchyBindings && (selected?.canEditHierarchyData ?? true);
   const employeeLobOptions = employeeSettings?.lobs.filter((lob) => lob.status !== "INACTIVE") ?? [];
   const employeeTeamOptions = employeeSettings?.teams?.filter((team) => team.status !== "INACTIVE" && (!lobDraft || team.lobId === lobDraft || team.lob === "ALL")) ?? [];
   const employeeShiftOptions = employeeSettings?.shifts.filter((shift) => shift.status !== "INACTIVE" && isSelectableShiftName(shift.name)) ?? [];
@@ -6902,31 +6910,31 @@ export function EmployeeMapPage() {
         method: "PATCH",
         body: JSON.stringify({
           id: selected.id,
-          fullName: canEditPeopleData ? nameDraft : undefined,
-          socialName: canEditPeopleData ? socialNameDraft : undefined,
-          email: canEditPeopleData ? emailDraft : undefined,
+          fullName: selectedCanEditPeopleData ? nameDraft : undefined,
+          socialName: selectedCanEditPeopleData ? socialNameDraft : undefined,
+          email: selectedCanEditPeopleData ? emailDraft : undefined,
           userStatus: isAdmin ? userStatusDraft : undefined,
           wbLogin: isAdmin ? wbDraft : undefined,
           roleTitle: roleTitleDraft,
           operationalStatus: statusDraft,
           roleName: isAdmin ? roleDraft : undefined,
-          skill: canEditEmployeeOperational ? skillDraft : undefined,
-          wave: canEditEmployeeOperational ? waveDraft : undefined,
+          skill: selectedCanEditEmployeeOperational ? skillDraft : undefined,
+          wave: selectedCanEditEmployeeOperational ? waveDraft : undefined,
           supervisorId: canEditOperationalBindings ? supervisorDraft : undefined,
-          managerId: canEditHierarchyBindings ? managerDraft : undefined,
+          managerId: selectedCanEditHierarchyBindings ? managerDraft : undefined,
           lobId: canEditOperationalBindings ? lobDraft || undefined : undefined,
           teamId: canEditOperationalBindings ? teamDraft || undefined : undefined,
           shiftId: canEditOperationalBindings ? shiftDraft || undefined : undefined,
           scheduleType: canEditOperationalBindings ? scheduleDraft : undefined,
-          contractType: canEditPeopleData ? contractDraft : undefined,
-          admissionDate: canEditPeopleData ? admissionDraft : undefined,
-          trainingStartDate: canEditPeopleData ? trainingDraft : undefined,
+          contractType: selectedCanEditPeopleData ? contractDraft : undefined,
+          admissionDate: selectedCanEditPeopleData ? admissionDraft : undefined,
+          trainingStartDate: selectedCanEditPeopleData ? trainingDraft : undefined,
           siteOperation: canEditOperationalBindings ? siteDraft : undefined,
-          internalNotes: canEditEmployeeOperational ? internalNotesDraft : undefined,
-          primaryPhone: canEditPeopleData ? primaryPhoneDraft : undefined,
-          city: canEditPeopleData ? cityDraft : undefined,
-          stateUf: canEditPeopleData ? stateUfDraft : undefined,
-          preferredSchedule: canEditPeopleData ? preferredScheduleDraft : undefined
+          internalNotes: selectedCanEditEmployeeOperational ? internalNotesDraft : undefined,
+          primaryPhone: selectedCanEditPeopleData ? primaryPhoneDraft : undefined,
+          city: selectedCanEditPeopleData ? cityDraft : undefined,
+          stateUf: selectedCanEditPeopleData ? stateUfDraft : undefined,
+          preferredSchedule: selectedCanEditPeopleData ? preferredScheduleDraft : undefined
         })
       });
       setEmployeeRows((items) => items.map((employee) => (employee.id === payload.data.id ? payload.data : employee)));
@@ -7098,7 +7106,7 @@ export function EmployeeMapPage() {
                   <InfoLine label="Última presença" value={selected.lastPresence ?? "Sem registro"} />
                   <InfoLine label="E-mail operacional" value={selected.email ?? "Restrito"} />
                 </div>
-                {canEditEmployeeOperational ? (
+                {selectedCanEditEmployeeOperational ? (
                   <div className="mt-3 grid gap-3">
                     <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm font-semibold text-blue-700">
                       Dados aprovados podem ser ajustados administrativamente. Todas as alterações ficam registradas em auditoria.
@@ -7169,7 +7177,7 @@ export function EmployeeMapPage() {
                                 {employeeFieldErrors.supervisorId ? <span className="mt-1 block text-xs font-bold text-red-600">{employeeFieldErrors.supervisorId}</span> : null}
                               </label>
                             ) : null}
-                            {canEditHierarchyBindings ? (
+                            {selectedCanEditHierarchyBindings ? (
                               <label className="block">
                                 <span className="mb-1.5 block text-sm font-bold text-muted">Superior hierárquico</span>
                                 <select value={managerDraft} onChange={(event) => setManagerDraft(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100", employeeFieldErrors.managerId ? "border-red-300 bg-red-50/40" : "border-border")}>
@@ -7197,13 +7205,13 @@ export function EmployeeMapPage() {
                         </ProfileSection>
                         <ProfileSection title="Contrato e Datas">
                           <div className="grid gap-3 md:grid-cols-2">
-                            {canEditPeopleData ? <FormSelect label="Tipo de contrato" value={contractDraft} options={contractOptions} onChange={setContractDraft} error={employeeFieldErrors.contractType} /> : null}
-                            {canEditPeopleData ? <FormInput label="Data de admissão" type="date" value={admissionDraft} onChange={setAdmissionDraft} error={employeeFieldErrors.admissionDate} /> : null}
-                            {canEditPeopleData ? <FormInput label="Início do treinamento" type="date" value={trainingDraft} onChange={setTrainingDraft} error={employeeFieldErrors.trainingStartDate} /> : null}
+                            {selectedCanEditPeopleData ? <FormSelect label="Tipo de contrato" value={contractDraft} options={contractOptions} onChange={setContractDraft} error={employeeFieldErrors.contractType} /> : null}
+                            {selectedCanEditPeopleData ? <FormInput label="Data de admissão" type="date" value={admissionDraft} onChange={setAdmissionDraft} error={employeeFieldErrors.admissionDate} /> : null}
+                            {selectedCanEditPeopleData ? <FormInput label="Início do treinamento" type="date" value={trainingDraft} onChange={setTrainingDraft} error={employeeFieldErrors.trainingStartDate} /> : null}
                             {isAdmin ? <FormSelect label="Usuário ativo/inativo" value={userStatusDraft} options={["ACTIVE", "INACTIVE", "BLOCKED"]} onChange={setUserStatusDraft} error={employeeFieldErrors.userStatus} /> : null}
                           </div>
                         </ProfileSection>
-                        {canEditPeopleData ? (
+                        {selectedCanEditPeopleData ? (
                           <ProfileSection title="Contato Operacional">
                             <div className="grid gap-3 md:grid-cols-2">
                               <FormInput label="Contato principal" value={primaryPhoneDraft} onChange={setPrimaryPhoneDraft} error={employeeFieldErrors.primaryPhone} />

@@ -1,4 +1,5 @@
 import type { AppRole } from "@/lib/demo-auth";
+import { isAgentJobTitle } from "@/lib/job-title-normalization";
 
 export type PermissionUser = {
   role?: string | null;
@@ -9,6 +10,8 @@ export type PermissionUser = {
 
 export type PermissionEmployee = {
   email?: string | null;
+  roleTitle?: string | null;
+  role?: string | null;
   supervisor?: string | null;
   supervisorEmail?: string | null;
   teamId?: string | null;
@@ -39,9 +42,44 @@ export function isActiveUser(user: PermissionUser) {
   return !user.status || user.status === "ACTIVE" || user.status === "Ativo";
 }
 
-export function canViewEmployeeSensitiveData(user: PermissionUser) {
+export function isAgentEmployee(employee?: PermissionEmployee | null) {
+  return isAgentJobTitle(employee?.roleTitle ?? employee?.role);
+}
+
+export function canViewEmployeeDetails(user: PermissionUser, employee?: PermissionEmployee | null) {
   const role = normalizeRole(user.role);
-  return isActiveUser(user) && ["ADMIN", "GESTOR", "RH"].includes(role);
+  if (!isActiveUser(user)) return false;
+  if (["ADMIN", "GESTOR", "RH", "WFM", "SUPERVISOR"].includes(role)) return true;
+  if (role === "COLABORADOR") return Boolean(user.email && employee?.email === user.email);
+  return false;
+}
+
+export function canViewEmployeeSensitiveData(user: PermissionUser, employee?: PermissionEmployee | null) {
+  const role = normalizeRole(user.role);
+  if (!isActiveUser(user)) return false;
+  if (["ADMIN", "GESTOR"].includes(role)) return true;
+  if (role === "RH") return employee ? isAgentEmployee(employee) : true;
+  return false;
+}
+
+export function canEditEmployeeData(user: PermissionUser, employee?: PermissionEmployee | null) {
+  const role = normalizeRole(user.role);
+  if (!isActiveUser(user)) return false;
+  if (["ADMIN", "GESTOR"].includes(role)) return true;
+  if (role === "RH") return employee ? isAgentEmployee(employee) : true;
+  if (role === "WFM") return true;
+  return false;
+}
+
+export function canExportEmployeeData(user: PermissionUser) {
+  return canAccessEmployeeMap(user);
+}
+
+export function sanitizeEmployeeForRole<T extends Record<string, unknown>>(employee: T, user: PermissionUser): T {
+  if (canViewEmployeeSensitiveData(user, employee as PermissionEmployee)) return employee;
+  const clone = { ...employee };
+  delete clone.sensitive;
+  return clone;
 }
 
 export function canAccessEmployeeMap(user: PermissionUser) {
