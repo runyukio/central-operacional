@@ -127,6 +127,7 @@ export type ScheduleQuery = {
   shift?: string;
   status?: string;
   roleTitle?: string;
+  skill?: string;
   page?: number;
   limit?: number;
   skipSummary?: boolean | string;
@@ -151,6 +152,7 @@ export type AttendanceQuery = {
   collaborator?: string;
   status?: string;
   roleTitle?: string;
+  skill?: string;
   reason?: string;
   justification?: "pending" | "justified" | string;
   includeJustified?: boolean | string;
@@ -196,7 +198,7 @@ export type AttendanceInput = {
   impactsCoverage?: boolean;
 };
 
-type AttendanceSummaryFilters = Partial<Pick<ScheduleQuery, "lob" | "supervisor" | "shift" | "collaborator" | "status" | "roleTitle">> & {
+type AttendanceSummaryFilters = Partial<Pick<ScheduleQuery, "lob" | "supervisor" | "shift" | "collaborator" | "status" | "roleTitle" | "skill">> & {
   employeeId?: string;
   teamSupervisorId?: string;
 };
@@ -400,6 +402,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
             operationalStatus: true,
             admissionDate: true,
             roleTitle: true,
+            skill: true,
             user: { select: { email: true } },
             lob: { select: { name: true } },
             shift: { select: { name: true } },
@@ -472,7 +475,8 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         productivity: null,
         equipment: 0,
         admission: formatDate(employee.admissionDate),
-        role: employee.roleTitle
+        role: employee.roleTitle,
+        skill: employee.skill ?? ""
       },
       days: dateColumns.map((date) => {
         const schedule = scheduleByDate.get(dateKey(date));
@@ -1369,7 +1373,7 @@ export async function exportOperationalSchedulesCsv(actor: Actor, query: Schedul
       }
     }).catch(() => undefined);
 
-    const headers = ["wb_login", "nome", "email", "data", "status", "turno", "entrada", "saida", "lob", "supervisor", "horas_realizadas", "observacao", "atualizado_em"];
+    const headers = ["wb_login", "nome", "email", "data", "status", "turno", "skill", "entrada", "saida", "lob", "supervisor", "horas_realizadas", "observacao", "atualizado_em"];
     const rows = schedules.map((schedule) => {
       const workHour = schedule.workHourRecords[0] ?? fallbackWorkHourByEmployeeDay.get(`${schedule.employeeId}:${schedule.date.getTime()}`);
       return [
@@ -1379,6 +1383,7 @@ export async function exportOperationalSchedulesCsv(actor: Actor, query: Schedul
         dateKey(schedule.date),
         scheduleToUiStatus[schedule.status] ?? schedule.status,
         cleanShiftName(schedule.shift?.name ?? schedule.employee.shift?.name) || "",
+        schedule.employee.skill ?? "",
         schedule.startsAt ?? "",
         schedule.endsAt ?? "",
         schedule.employee.lob.name,
@@ -1414,12 +1419,14 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
     const shiftFilter = cleanShiftName(query.shift);
     const statusFilter = query.status && query.status !== "Todos" ? uiToScheduleStatus[query.status] : undefined;
     const roleTitleFilter = query.roleTitle?.trim();
+    const skillFilter = employeeSkillFilter(query.skill);
     const reasonFilter = query.reason?.trim();
     const justificationFilter = query.justification?.trim().toLowerCase();
     const includeJustified = query.includeJustified === true || query.includeJustified === "true";
     const extraFilters: Prisma.ScheduleWhereInput[] = [];
     if (lobFilter) extraFilters.push({ employee: { lob: { name: lobFilter } } });
     if (roleTitleFilter && roleTitleFilter !== "Todos") extraFilters.push({ employee: { roleTitle: roleTitleFilter } });
+    if (skillFilter) extraFilters.push({ employee: skillFilter });
     const supervisorWhere = await scheduleSupervisorFilter(supervisorFilter);
     if (supervisorWhere) extraFilters.push(supervisorWhere);
     if (statusFilter) extraFilters.push({ status: statusFilter });
@@ -1455,6 +1462,7 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
       shift: query.shift,
       collaborator: query.collaborator,
       roleTitle: query.roleTitle,
+      skill: query.skill,
       employeeId: role === "COLABORADOR" && user.employeeProfile ? user.employeeProfile.id : undefined,
       teamSupervisorId: undefined
     };
@@ -1468,7 +1476,8 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
         endDate: period ? dateKey(period.end) : null,
         lob: lobFilter ?? "Todos",
         supervisor: query.supervisor ?? "Todos",
-        roleTitle: query.roleTitle ?? "Todos"
+        roleTitle: query.roleTitle ?? "Todos",
+        skill: query.skill ?? "Todos"
       });
       return {
         data: [],
@@ -2190,19 +2199,23 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
   const search = filters.collaborator?.trim();
   const statusFilter = filters.status && filters.status !== "Todos" ? uiToScheduleStatus[filters.status] : undefined;
   const supervisorFilter = await scheduleSupervisorFilter(filters.supervisor);
-  const employeeWhere: Prisma.EmployeeProfileWhereInput = {
-    ...(filters.employeeId ? { id: filters.employeeId } : {}),
-    ...(filters.teamSupervisorId ? { supervisorId: filters.teamSupervisorId } : {}),
-    ...(filters.lob && filters.lob !== "Todos" ? { lob: { name: filters.lob } } : {}),
-    ...(search ? {
+  const employeeFilterParts: Prisma.EmployeeProfileWhereInput[] = [];
+  if (filters.employeeId) employeeFilterParts.push({ id: filters.employeeId });
+  if (filters.teamSupervisorId) employeeFilterParts.push({ supervisorId: filters.teamSupervisorId });
+  if (filters.lob && filters.lob !== "Todos") employeeFilterParts.push({ lob: { name: filters.lob } });
+  if (search) {
+    employeeFilterParts.push({
       OR: [
         { fullName: { contains: search, mode: "insensitive" } },
         { wbLogin: { contains: search, mode: "insensitive" } },
         { user: { email: { contains: search, mode: "insensitive" } } }
       ]
-    } : {}),
-    ...(filters.roleTitle && filters.roleTitle !== "Todos" ? { roleTitle: filters.roleTitle } : {})
-  };
+    });
+  }
+  if (filters.roleTitle && filters.roleTitle !== "Todos") employeeFilterParts.push({ roleTitle: filters.roleTitle });
+  const summarySkillFilter = employeeSkillFilter(filters.skill);
+  if (summarySkillFilter) employeeFilterParts.push(summarySkillFilter);
+  const employeeWhere: Prisma.EmployeeProfileWhereInput = employeeFilterParts.length ? { AND: employeeFilterParts } : {};
   const scheduleShiftWhere: Prisma.ScheduleWhereInput =
     shiftFilter && shiftFilter !== "Todos" && shiftFilter !== "Folga"
       ? {
@@ -2305,7 +2318,8 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     schedules: schedules.length,
     absenceSchedules: absenceScheduleIds.length,
     attendanceRecords: attendanceRecords.length,
-    roleTitle: filters.roleTitle ?? "Todos"
+    roleTitle: filters.roleTitle ?? "Todos",
+    skill: filters.skill ?? "Todos"
   });
   return summary;
 }
@@ -2469,22 +2483,37 @@ function resolveAttendancePeriod(query: AttendanceQuery) {
 
 function employeeFilters(query: ScheduleQuery, search?: string): Prisma.EmployeeProfileWhereInput {
   const shiftFilter = cleanShiftName(query.shift);
-  return {
-    ...(search ? {
+  const filters: Prisma.EmployeeProfileWhereInput[] = [];
+  if (search) {
+    filters.push({
       OR: [
         { fullName: { contains: search, mode: "insensitive" } },
         { wbLogin: { contains: search, mode: "insensitive" } },
         { user: { email: { contains: search, mode: "insensitive" } } }
       ]
-    } : {}),
-    ...(query.lob && query.lob !== "Todos" ? { lob: { name: query.lob } } : {}),
-    ...(shiftFilter && shiftFilter !== "Todos" && shiftFilter !== "Folga" ? { shift: { OR: [{ name: shiftFilter }, { name: { startsWith: `${shiftFilter} (` } }] } } : {}),
-    ...(query.roleTitle && query.roleTitle !== "Todos" ? { roleTitle: query.roleTitle } : {})
-  };
+    });
+  }
+  if (query.lob && query.lob !== "Todos") filters.push({ lob: { name: query.lob } });
+  if (shiftFilter && shiftFilter !== "Todos" && shiftFilter !== "Folga") filters.push({ shift: { OR: [{ name: shiftFilter }, { name: { startsWith: `${shiftFilter} (` } }] } });
+  if (query.roleTitle && query.roleTitle !== "Todos") filters.push({ roleTitle: query.roleTitle });
+  const skillFilter = employeeSkillFilter(query.skill);
+  if (skillFilter) filters.push(skillFilter);
+  return filters.length ? { AND: filters } : {};
+}
+
+function employeeSkillFilter(value?: string | null): Prisma.EmployeeProfileWhereInput | null {
+  const raw = value?.trim();
+  if (!raw || raw === "Todos") return null;
+  if (isNoSkillFilter(raw)) return { OR: [{ skill: null }, { skill: "" }] };
+  return { skill: { equals: raw, mode: "insensitive" } };
 }
 
 function isNoSupervisorFilter(value: string) {
   return /^(sem\s*supervisor|sem_supervisor|none|no_supervisor|null)$/i.test(value.trim());
+}
+
+function isNoSkillFilter(value: string) {
+  return /^(sem\s*skill|sem_skill|none|no_skill|null)$/i.test(value.trim());
 }
 
 async function supervisorNameMap(supervisorIds: Array<string | null | undefined>) {

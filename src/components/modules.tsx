@@ -3190,6 +3190,7 @@ export function SchedulesPage() {
   const [scheduleEmployeeSearch, setScheduleEmployeeSearch] = useState("");
   const [loadingScheduleEmployeeSearch, setLoadingScheduleEmployeeSearch] = useState(false);
   const [scheduleSettings, setScheduleSettings] = useState<SystemSettings | null>(null);
+  const [scheduleSkillFilterOptions, setScheduleSkillFilterOptions] = useState<string[]>([]);
   const [importHistory, setImportHistory] = useState<ScheduleImportHistory[]>([]);
   const [showScheduleAlerts, setShowScheduleAlerts] = useState(false);
   const [showScheduleImports, setShowScheduleImports] = useState(false);
@@ -3206,7 +3207,7 @@ export function SchedulesPage() {
   const [scheduleDateError, setScheduleDateError] = useState("");
   const [scheduleDateColumns, setScheduleDateColumns] = useState<string[]>([]);
   const [schedulePagination, setSchedulePagination] = useState({ page: 1, limit: 75, total: 0, totalPages: 1 });
-  const [scheduleFilters, setScheduleFilters] = useState({ collaborator: "", lob: "Todos", supervisor: "Todos", shift: "Todos", status: "Todos", roleTitle: "" });
+  const [scheduleFilters, setScheduleFilters] = useState({ collaborator: "", lob: "Todos", supervisor: "Todos", shift: "Todos", status: "Todos", skill: "Todos", roleTitle: "" });
   const [scheduleEditForm, setScheduleEditForm] = useState({
     scheduleId: "",
     employeeId: "",
@@ -3299,13 +3300,14 @@ export function SchedulesPage() {
   async function loadScheduleSupportData() {
     try {
       const [employeePayload, settingsPayload] = await Promise.all([
-        apiJson<{ data: EmployeeClient[] }>("/api/employees"),
+        apiJson<EmployeeListResponse>("/api/employees"),
         apiJson<{ data: SystemSettings }>("/api/settings")
       ]);
       const activeEmployees = employeePayload.data
         .filter((employee) => employee.status !== "Inativo")
         .map((employee) => ({ ...employee, shift: cleanShiftName(employee.shift) || "Manhã" }));
       setScheduleEmployees(activeEmployees);
+      setScheduleSkillFilterOptions(employeePayload.filterOptions?.skills ?? []);
       setScheduleSettings(settingsPayload.data);
       if (activeEmployees.length) {
         setAttendanceForm((current) => current.employeeId ? current : { ...current, employeeId: activeEmployees[0].id, shift: activeEmployees[0].shift });
@@ -3313,6 +3315,7 @@ export function SchedulesPage() {
       }
     } catch {
       setScheduleEmployees([]);
+      setScheduleSkillFilterOptions([]);
     }
   }
 
@@ -3330,6 +3333,7 @@ export function SchedulesPage() {
         supervisor: filtersOverride.supervisor,
         shift: filtersOverride.shift,
         status: filtersOverride.status,
+        skill: filtersOverride.skill,
         roleTitle: filtersOverride.roleTitle,
         skipSummary: "true"
       });
@@ -3366,6 +3370,7 @@ export function SchedulesPage() {
       if (filtersOverride.shift !== "Todos") params.set("shift", filtersOverride.shift);
       if (filtersOverride.collaborator.trim()) params.set("collaborator", filtersOverride.collaborator.trim());
       if (filtersOverride.status !== "Todos") params.set("status", filtersOverride.status);
+      if (filtersOverride.skill !== "Todos") params.set("skill", filtersOverride.skill);
       if (filtersOverride.roleTitle && filtersOverride.roleTitle !== "Todos") params.set("roleTitle", filtersOverride.roleTitle);
       const payload = await apiJson<{ summary: AttendanceSummary }>(`/api/attendance?${params.toString()}`);
       setAttendanceSummary(payload.summary);
@@ -3386,6 +3391,7 @@ export function SchedulesPage() {
     if (filtersOverride.supervisor !== "Todos") params.set("supervisor", filtersOverride.supervisor.trim());
     if (filtersOverride.shift !== "Todos") params.set("shift", filtersOverride.shift);
     if (filtersOverride.collaborator.trim()) params.set("collaborator", filtersOverride.collaborator.trim());
+    if (filtersOverride.skill !== "Todos") params.set("skill", filtersOverride.skill);
     try {
       const payload = await apiJson<{ data: AttendanceItem[]; summary: AttendanceSummary }>(`/api/attendance?${params.toString()}`);
       setPendingJustifications(payload.data.filter((record) => statusNeedsReason(record.status) && record.isJustified === false));
@@ -3434,7 +3440,7 @@ export function SchedulesPage() {
   }
 
   function clearScheduleFilters() {
-    const clearedFilters = { collaborator: "", lob: "Todos", supervisor: "Todos", shift: "Todos", status: "Todos", roleTitle: "" };
+    const clearedFilters = { collaborator: "", lob: "Todos", supervisor: "Todos", shift: "Todos", status: "Todos", skill: "Todos", roleTitle: "" };
     const clearedRange = monthRange(schedulePeriod.month, schedulePeriod.year);
     setScheduleFilters(clearedFilters);
     setScheduleRangeMode("month");
@@ -3967,6 +3973,11 @@ export function SchedulesPage() {
   const availableShiftNames = cleanShiftOptions(configuredShifts, true);
   const uniqueLobs = ["Todos", ...Array.from(new Set([...configuredLobs, ...scheduleRows.map((row) => row.employee.lob).filter(Boolean), ...scheduleEmployees.map((employee) => employee.lob).filter(Boolean)]))];
   const uniqueSupervisors = ["Todos", ...Array.from(new Set(["Sem supervisor", ...scheduleRows.map((row) => row.employee.supervisor || "Sem supervisor"), ...scheduleEmployees.map((employee) => employee.supervisor || "Sem supervisor")].filter(Boolean)))];
+  const uniqueSkills = [
+    "Todos",
+    "SEM_SKILL",
+    ...Array.from(new Set([...scheduleSkillFilterOptions, ...scheduleRows.map((row) => (row.employee as EmployeeClient).skill), ...scheduleEmployees.map((employee) => employee.skill)].filter((skill): skill is string => Boolean(skill?.trim()) && skill !== "SEM_SKILL")))
+  ];
   const pendingSupervisorOptions = Array.from(
     new Map([
       ["Todos", "Todos"],
@@ -4067,6 +4078,7 @@ export function SchedulesPage() {
     if (scheduleFilters.supervisor !== "Todos") params.set("supervisor", scheduleFilters.supervisor);
     if (scheduleFilters.shift !== "Todos") params.set("shift", scheduleFilters.shift);
     if (scheduleFilters.status !== "Todos") params.set("status", scheduleFilters.status);
+    if (scheduleFilters.skill !== "Todos") params.set("skill", scheduleFilters.skill);
     if (scheduleFilters.roleTitle) params.set("roleTitle", scheduleFilters.roleTitle);
     return `/api/schedules/export?${params.toString()}`;
   }
@@ -4086,28 +4098,28 @@ export function SchedulesPage() {
   return (
     <div>
       <PageHeader title="Cronogramas Consolidados" description="Visão consolidada dos cronogramas da operação" icon={CalendarCheck} actions={<TopActions />} />
-      <div className="card mb-5 p-4">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <div className="card mb-4 p-3">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2.5">
           <div className="flex items-center gap-2">
-            <button onClick={() => moveScheduleMonth(-1)} className="h-10 rounded-lg border border-border bg-white px-3 text-sm font-bold">Mês anterior</button>
-            <div className="premium-control h-10 px-4 text-sm font-extrabold capitalize text-navy-950">{monthLabel}</div>
-            <button onClick={() => moveScheduleMonth(1)} className="h-10 rounded-lg border border-border bg-white px-3 text-sm font-bold">Próximo mês</button>
+            <button onClick={() => moveScheduleMonth(-1)} className="h-9 rounded-lg border border-border bg-white px-3 text-sm font-bold">Mês anterior</button>
+            <div className="premium-control h-9 px-3.5 text-sm font-extrabold capitalize text-navy-950">{monthLabel}</div>
+            <button onClick={() => moveScheduleMonth(1)} className="h-9 rounded-lg border border-border bg-white px-3 text-sm font-bold">Próximo mês</button>
           </div>
           <div className="flex gap-2">
-            <select value={schedulePeriod.month} onChange={(event) => updateSchedulePeriod({ ...schedulePeriod, month: Number(event.target.value) })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
+            <select value={schedulePeriod.month} onChange={(event) => updateSchedulePeriod({ ...schedulePeriod, month: Number(event.target.value) })} className="h-9 rounded-lg border border-border px-3 text-sm font-bold outline-none">
               {Array.from({ length: 12 }).map((_, index) => <option key={index + 1} value={index + 1}>{String(index + 1).padStart(2, "0")}</option>)}
             </select>
-            <input value={schedulePeriod.year} onChange={(event) => updateSchedulePeriod({ ...schedulePeriod, year: Number(event.target.value) || 2026 })} className="h-10 w-24 rounded-lg border border-border px-3 text-sm font-bold outline-none" />
+            <input value={schedulePeriod.year} onChange={(event) => updateSchedulePeriod({ ...schedulePeriod, year: Number(event.target.value) || 2026 })} className="h-9 w-24 rounded-lg border border-border px-3 text-sm font-bold outline-none" />
           </div>
         </div>
-        <div className="mb-4 flex flex-wrap items-end gap-3">
+        <div className="mb-3 flex flex-wrap items-end gap-2.5">
           <div className="flex rounded-lg border border-border bg-white p-1">
             {(["day", "week", "month"] as const).map((mode) => (
               <button
                 key={mode}
                 type="button"
                 onClick={() => applyScheduleQuickRange(mode)}
-                className={cn("h-9 rounded-md px-3 text-sm font-extrabold transition", scheduleRangeMode === mode ? "bg-blue-600 text-white shadow-soft" : "text-navy-950 hover:bg-blue-50")}
+                className={cn("h-8 rounded-md px-2.5 text-sm font-extrabold transition", scheduleRangeMode === mode ? "bg-blue-600 text-white shadow-soft" : "text-navy-950 hover:bg-blue-50")}
               >
                 {mode === "day" ? "Dia" : mode === "week" ? "Semana" : "Mês"}
               </button>
@@ -4122,7 +4134,7 @@ export function SchedulesPage() {
                 setScheduleRangeMode("custom");
                 setScheduleDateRange((current) => ({ ...current, startDate: event.target.value }));
               }}
-              className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"
+              className="h-9 rounded-lg border border-border px-3 text-sm font-bold outline-none"
             />
           </label>
           <label className="block">
@@ -4134,19 +4146,22 @@ export function SchedulesPage() {
                 setScheduleRangeMode("custom");
                 setScheduleDateRange((current) => ({ ...current, endDate: event.target.value }));
               }}
-              className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"
+              className="h-9 rounded-lg border border-border px-3 text-sm font-bold outline-none"
             />
           </label>
-          <button type="button" onClick={applyScheduleDateRange} className="h-10 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white">Aplicar datas</button>
+          <button type="button" onClick={applyScheduleDateRange} className="h-9 rounded-lg bg-blue-600 px-3.5 text-sm font-bold text-white">Aplicar datas</button>
           {scheduleDateError ? <span className="text-sm font-bold text-red-600">{scheduleDateError}</span> : null}
         </div>
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
-          <input value={scheduleFilters.collaborator} onChange={(event) => setScheduleFilters({ ...scheduleFilters, collaborator: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Nome, WB ou e-mail" />
-          <select value={scheduleFilters.lob} onChange={(event) => setScheduleFilters({ ...scheduleFilters, lob: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">{uniqueLobs.map((item) => <option key={item}>{item}</option>)}</select>
-          <select value={scheduleFilters.supervisor} onChange={(event) => setScheduleFilters({ ...scheduleFilters, supervisor: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">{uniqueSupervisors.map((item) => <option key={item}>{item}</option>)}</select>
-          <select value={scheduleFilters.shift} onChange={(event) => setScheduleFilters({ ...scheduleFilters, shift: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">{uniqueShifts.map((item) => <option key={item}>{item}</option>)}</select>
-          <select value={scheduleFilters.status} onChange={(event) => setScheduleFilters({ ...scheduleFilters, status: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">{["Todos", ...scheduleStatusOptions].map((item) => <option key={item}>{item}</option>)}</select>
-          <input value={scheduleFilters.roleTitle} onChange={(event) => setScheduleFilters({ ...scheduleFilters, roleTitle: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Cargo/Função" />
+        <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-8">
+          <input value={scheduleFilters.collaborator} onChange={(event) => setScheduleFilters({ ...scheduleFilters, collaborator: event.target.value })} className="h-9 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Nome, WB ou e-mail" />
+          <select value={scheduleFilters.lob} onChange={(event) => setScheduleFilters({ ...scheduleFilters, lob: event.target.value })} className="h-9 rounded-lg border border-border px-3 text-sm font-bold outline-none">{uniqueLobs.map((item) => <option key={item}>{item}</option>)}</select>
+          <select value={scheduleFilters.supervisor} onChange={(event) => setScheduleFilters({ ...scheduleFilters, supervisor: event.target.value })} className="h-9 rounded-lg border border-border px-3 text-sm font-bold outline-none">{uniqueSupervisors.map((item) => <option key={item}>{item}</option>)}</select>
+          <select value={scheduleFilters.shift} onChange={(event) => setScheduleFilters({ ...scheduleFilters, shift: event.target.value })} className="h-9 rounded-lg border border-border px-3 text-sm font-bold outline-none">{uniqueShifts.map((item) => <option key={item}>{item}</option>)}</select>
+          <select value={scheduleFilters.status} onChange={(event) => setScheduleFilters({ ...scheduleFilters, status: event.target.value })} className="h-9 rounded-lg border border-border px-3 text-sm font-bold outline-none">{["Todos", ...scheduleStatusOptions].map((item) => <option key={item}>{item}</option>)}</select>
+          <select value={scheduleFilters.skill} onChange={(event) => setScheduleFilters({ ...scheduleFilters, skill: event.target.value })} className="h-9 rounded-lg border border-border px-3 text-sm font-bold outline-none">
+            {uniqueSkills.map((skill) => <option key={skill} value={skill}>{skill === "Todos" ? "Todas as skills" : skill === "SEM_SKILL" ? "Sem skill" : skill}</option>)}
+          </select>
+          <input value={scheduleFilters.roleTitle} onChange={(event) => setScheduleFilters({ ...scheduleFilters, roleTitle: event.target.value })} className="h-9 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Cargo/Função" />
           <div className="grid grid-cols-2 gap-2">
             <button onClick={applyScheduleFilters} className="rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
             <button
@@ -4159,10 +4174,10 @@ export function SchedulesPage() {
         </div>
       </div>
       {canManageSchedules ? <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(event) => handleFile(event.target.files?.[0])} /> : null}
-      <div className="mb-5 flex flex-wrap gap-3">
+      <div className="mb-4 flex flex-wrap gap-2.5">
         {canManageSchedules ? (
           <>
-            <button onClick={() => fileInputRef.current?.click()} className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft">
+            <button onClick={() => fileInputRef.current?.click()} className="flex h-10 items-center gap-2 rounded-lg border border-border bg-white px-3.5 text-sm font-bold text-navy-950 shadow-soft">
               <Upload className="h-4 w-4" />
               Upload Excel
             </button>
@@ -4170,19 +4185,19 @@ export function SchedulesPage() {
               type="button"
               disabled={downloadingScheduleTemplate}
               onClick={downloadScheduleTemplate}
-              className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex h-10 items-center gap-2 rounded-lg border border-border bg-white px-3.5 text-sm font-bold text-navy-950 shadow-soft disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Download className="h-4 w-4" />
               {downloadingScheduleTemplate ? "Baixando..." : "Baixar Template"}
             </button>
             <a
               href={scheduleExportUrl()}
-              className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft"
+              className="flex h-10 items-center gap-2 rounded-lg border border-border bg-white px-3.5 text-sm font-bold text-navy-950 shadow-soft"
             >
               <FileSpreadsheet className="h-4 w-4" />
               Baixar Cronogramas Consolidados
             </a>
-            <button onClick={() => openScheduleEditor(undefined, 0, "Escalado")} className="flex h-11 items-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white shadow-soft">
+            <button onClick={() => openScheduleEditor(undefined, 0, "Escalado")} className="flex h-10 items-center gap-2 rounded-lg bg-blue-600 px-3.5 text-sm font-bold text-white shadow-soft">
               <Plus className="h-4 w-4" />
               Adicionar cronograma manual
             </button>
@@ -4193,7 +4208,7 @@ export function SchedulesPage() {
               Este perfil visualiza a grade. Justificativas ficam com Supervisores autorizados; upload, adição manual e presença ficam com WFM/Admin.
             </div>
             {canExportSchedules ? (
-              <a href={scheduleExportUrl()} className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft">
+              <a href={scheduleExportUrl()} className="flex h-10 items-center gap-2 rounded-lg border border-border bg-white px-3.5 text-sm font-bold text-navy-950 shadow-soft">
                 <FileSpreadsheet className="h-4 w-4" />
                 Baixar Cronogramas Consolidados
               </a>
@@ -4213,9 +4228,9 @@ export function SchedulesPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_410px]">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_390px]">
         <section className="card overflow-hidden">
-          <div className="grid gap-3 border-b border-border p-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 min-[1800px]:grid-cols-7">
+          <div className="grid gap-2.5 border-b border-border p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 min-[1800px]:grid-cols-7">
             <MetricPill value={scheduleTotalRows} label="Colaboradores" />
             <MetricPill value={scheduleRows.length ? "100%" : "0%"} label="Cobertura Planejada" />
             <MetricPill value={`${attendanceSummary?.coverageRate ?? 0}%`} label="Cobertura Real" />
@@ -4225,37 +4240,37 @@ export function SchedulesPage() {
             <MetricPill value={attendanceSummary?.unjustified ?? 0} label="Pendências justificativa" />
           </div>
           <div className="overflow-x-auto">
-            {scheduleRows.length ? <table className="w-full min-w-[1040px] border-collapse text-sm">
+            {scheduleRows.length ? <table className="w-full min-w-[1040px] border-collapse text-[12.5px]">
               <thead>
                 <tr className="border-b border-border bg-slate-50 text-left text-xs font-bold uppercase tracking-wide text-muted">
-                  <th className="px-4 py-3">Colaborador</th>
-                  <th className="px-4 py-3">Cargo</th>
-                  <th className="px-4 py-3">LOB</th>
+                  <th className="px-3 py-2.5">Colaborador</th>
+                  <th className="px-3 py-2.5">Cargo</th>
+                  <th className="px-3 py-2.5">LOB</th>
                   {visibleScheduleDates.map((dateIso) => (
-                    <th key={dateIso} className="px-2 py-3 text-center">{formatScheduleDateHeader(dateIso)}</th>
+                    <th key={dateIso} className="px-1.5 py-2.5 text-center">{formatScheduleDateHeader(dateIso)}</th>
                   ))}
-                  <th className="px-4 py-3 text-center">Ação</th>
+                  <th className="px-3 py-2.5 text-center">Ação</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/70 bg-white">
                 {scheduleRows.map((row) => (
                   <tr key={row.employee.id} className="hover:bg-blue-50/30">
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-3">
-                        <span className="grid h-9 w-9 place-items-center rounded-full bg-emerald-500 text-xs font-bold text-white">{initials(row.employee.name)}</span>
+                    <td className="px-3 py-2.5">
+                      <div className="flex items-center gap-2.5">
+                        <span className="grid h-8 w-8 place-items-center rounded-full bg-emerald-500 text-xs font-bold text-white">{initials(row.employee.name)}</span>
                         <div>
                           <p className="font-bold text-navy-950">{row.employee.name}</p>
                           <p className="text-xs text-muted">{row.employee.role}</p>
                         </div>
                       </div>
                     </td>
-                    <td className="px-4 py-3">{row.employee.role}</td>
-                    <td className="px-4 py-3">{row.employee.lob}</td>
+                    <td className="px-3 py-2.5">{row.employee.role}</td>
+                    <td className="px-3 py-2.5">{row.employee.lob}</td>
                     {row.days.map((value, index) => {
                       const hourCell = row.workHours?.[index] ?? null;
                       return (
-                        <td key={`${row.employee.id}-${index}`} className="px-2 py-3 text-center">
-                          <button onClick={() => openScheduleEditor(row, index, value)} className={cn("inline-flex min-w-[92px] flex-col items-center justify-center rounded-md px-2 py-2 text-xs font-bold transition hover:ring-2 hover:ring-blue-200", shiftTagClass(value), hourCell?.rawStatus === "DIVERGENT" && "ring-1 ring-orange-300", hourCell?.rawStatus === "ADJUSTMENT_REQUESTED" && "ring-1 ring-amber-400")}>
+                        <td key={`${row.employee.id}-${index}`} className="px-1.5 py-2.5 text-center">
+                          <button onClick={() => openScheduleEditor(row, index, value)} className={cn("inline-flex min-w-[84px] flex-col items-center justify-center rounded-md px-2 py-1.5 text-xs font-bold leading-tight transition hover:ring-2 hover:ring-blue-200", shiftTagClass(value), hourCell?.rawStatus === "DIVERGENT" && "ring-1 ring-orange-300", hourCell?.rawStatus === "ADJUSTMENT_REQUESTED" && "ring-1 ring-amber-400")}>
                             <span>{value}</span>
                             {hourCell ? (
                               <span className={cn("mt-1 rounded px-1.5 py-0.5 text-[10px]", hourCell.rawStatus === "OK" ? "bg-emerald-100 text-emerald-700" : hourCell.rawStatus === "DIVERGENT" ? "bg-orange-100 text-orange-700" : hourCell.rawStatus === "ADJUSTMENT_REQUESTED" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700")}>
@@ -4268,7 +4283,7 @@ export function SchedulesPage() {
                         </td>
                       );
                     })}
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-3 py-2.5 text-center">
                       <button onClick={() => isScheduleSupervisor ? openAttendanceJustification(row, 0, row.days[0] ?? "Falta") : openScheduleEditor(row, 0, row.days[0] ?? "Escalado")} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
                         {isScheduleSupervisor ? "Justificar" : "Editar"}
                       </button>

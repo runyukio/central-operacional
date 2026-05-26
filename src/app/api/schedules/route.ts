@@ -35,6 +35,7 @@ export async function GET(request: Request) {
       shift: url.searchParams.get("shift") ?? undefined,
       status: url.searchParams.get("status") ?? undefined,
       roleTitle: url.searchParams.get("roleTitle") ?? undefined,
+      skill: url.searchParams.get("skill") ?? undefined,
       page: Number(url.searchParams.get("page")) || undefined,
       limit: Number(url.searchParams.get("limit")) || undefined,
       skipSummary: url.searchParams.get("skipSummary") ?? undefined

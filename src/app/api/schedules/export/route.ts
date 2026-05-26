@@ -17,7 +17,8 @@ export async function GET(request: Request) {
     supervisor: url.searchParams.get("supervisor") ?? undefined,
     shift: url.searchParams.get("shift") ?? undefined,
     status: url.searchParams.get("status") ?? undefined,
-    roleTitle: url.searchParams.get("roleTitle") ?? undefined
+    roleTitle: url.searchParams.get("roleTitle") ?? undefined,
+    skill: url.searchParams.get("skill") ?? undefined
   });
 
   if ("error" in result) {

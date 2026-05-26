@@ -35,6 +35,7 @@ export async function GET(request: Request) {
     collaborator: url.searchParams.get("collaborator") ?? undefined,
     status: url.searchParams.get("status") ?? undefined,
     roleTitle: url.searchParams.get("roleTitle") ?? undefined,
+    skill: url.searchParams.get("skill") ?? undefined,
     reason: url.searchParams.get("reason") ?? undefined,
     justification: url.searchParams.get("justification") ?? undefined,
     includeJustified: url.searchParams.get("includeJustified") ?? undefined,
