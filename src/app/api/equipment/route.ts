@@ -37,7 +37,9 @@ export async function GET(request: Request) {
     wbLogin: url.searchParams.get("wbLogin") ?? undefined,
     model: url.searchParams.get("model") ?? undefined,
     deliveredFrom: url.searchParams.get("deliveredFrom") ?? url.searchParams.get("deliveryDateFrom") ?? undefined,
-    deliveredTo: url.searchParams.get("deliveredTo") ?? url.searchParams.get("deliveryDateTo") ?? undefined
+    deliveredTo: url.searchParams.get("deliveredTo") ?? url.searchParams.get("deliveryDateTo") ?? undefined,
+    page: Number(url.searchParams.get("page")) || undefined,
+    limit: Number(url.searchParams.get("limit")) || undefined
   }));
 }
 

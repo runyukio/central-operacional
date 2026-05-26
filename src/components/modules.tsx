@@ -103,7 +103,7 @@ const scheduleStatusOptions = ["Escalado", "Presente", "Nesting", "Falta", "Atra
 const attendanceReasonStatuses = ["Falta", "Atraso", "Saída antecipada", "Erro de cronograma"];
 const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Nesting", "Venda de folga aprovada"];
 const employeeOperationalStatusOptions = ["Ativo", "Nesting", "Inativo", "Pendente de cadastro", "Afastado", "Desligado", "Em treinamento", "Suspenso"];
-const absenceReasonOptions = ["Ausente", "Problema de saúde", "Emergência familiar", "Problema técnico", "Falta de equipamento", "Problema de internet", "Atraso", "Saída antecipada", "Afastamento", "Erro de cronograma", "Outros"];
+const absenceReasonOptions = ["Não informado", "Ausente", "Problema de saúde", "Emergência familiar", "Problema técnico", "Falta de equipamento", "Problema de internet", "Atraso", "Saída antecipada", "Afastamento", "Erro de cronograma", "Outros"];
 const timeBlockCategoryOptions = ["Administrativo", "Desenvolvimento", "Acompanhamento de operação", "Feedback", "Reunião", "Treinamento", "Suporte ao time", "Análise de indicadores", "Escalonamento / Ocorrência", "Pausa", "Outros"];
 const scheduleShiftTimes: Record<string, { startsAt: string; endsAt: string }> = {
   Manhã: { startsAt: "08:00", endsAt: "14:00" },
@@ -802,7 +802,19 @@ class ApiRequestError extends Error {
   }
 }
 
+const apiResponseCache = new Map<string, { expiresAt: number; payload: unknown }>();
+const cachedGetTtls: Array<{ pattern: RegExp; ttlMs: number }> = [
+  { pattern: /^\/api\/settings(?:\?|$)/, ttlMs: 60_000 }
+];
+
 async function apiJson<T>(url: string, options?: RequestInit) {
+  const method = String(options?.method ?? "GET").toUpperCase();
+  const cacheRule = method === "GET" ? cachedGetTtls.find((rule) => rule.pattern.test(url)) : undefined;
+  if (cacheRule) {
+    const cached = apiResponseCache.get(url);
+    if (cached && cached.expiresAt > Date.now()) return cached.payload as T;
+  }
+
   const response = await fetch(url, {
     ...options,
     headers: options?.body instanceof FormData ? options.headers : { "Content-Type": "application/json", ...(options?.headers ?? {}) }
@@ -831,6 +843,14 @@ async function apiJson<T>(url: string, options?: RequestInit) {
       type: payload.type,
       status: response.status
     });
+  }
+  if (method !== "GET") {
+    for (const key of apiResponseCache.keys()) {
+      if (key.startsWith("/api/settings")) apiResponseCache.delete(key);
+    }
+  }
+  if (cacheRule) {
+    apiResponseCache.set(url, { expiresAt: Date.now() + cacheRule.ttlMs, payload });
   }
   return payload;
 }
@@ -1372,13 +1392,13 @@ function FormInput({ label, value, onChange, type = "text", error, disabled = fa
   );
 }
 
-function FormSelect({ label, value, options, onChange, error, disabled = false }: { label: string; value: string; options: string[]; onChange: (value: string) => void; error?: string; disabled?: boolean }) {
+function FormSelect({ label, value, options, onChange, error, disabled = false, emptyLabel = "Não informado" }: { label: string; value: string; options: string[]; onChange: (value: string) => void; error?: string; disabled?: boolean; emptyLabel?: string }) {
   return (
     <label className="block">
       <span className="mb-1.5 block text-sm font-bold text-muted">{label}</span>
       <select value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500", error ? "border-red-300 bg-red-50/40" : "border-border")}>
         {options.map((option) => (
-          <option key={option} value={option}>{option || "Não informado"}</option>
+          <option key={option} value={option}>{option || emptyLabel}</option>
         ))}
       </select>
       {error ? <span className="mt-1 block text-xs font-bold text-red-600">{error}</span> : null}
@@ -4834,7 +4854,7 @@ export function SchedulesPage() {
                   });
                 }}
               />
-              <FormSelect label={attendanceRequiresReason ? "Motivo obrigatório" : "Motivo (opcional)"} value={attendanceForm.absenceReason} options={["", ...absenceReasonOptions]} onChange={(value) => setAttendanceForm({ ...attendanceForm, absenceReason: value })} />
+              <FormSelect label={attendanceRequiresReason ? "Motivo obrigatório" : "Motivo (opcional)"} value={attendanceForm.absenceReason} options={["", ...absenceReasonOptions]} emptyLabel="Selecione um motivo" onChange={(value) => setAttendanceForm({ ...attendanceForm, absenceReason: value })} />
               <FormSelect label="Categoria" value={attendanceForm.reasonCategory} options={["Pessoas", "Sistema", "Ferramenta", "Equipamento", "Cronograma", "Treinamento", "Outros"]} onChange={(value) => setAttendanceForm({ ...attendanceForm, reasonCategory: value })} />
               <FormInput label="Anexo/evidência (opcional)" value={attendanceForm.evidenceUrl} onChange={(value) => setAttendanceForm({ ...attendanceForm, hasEvidence: Boolean(value), evidenceUrl: value })} />
               <div className="rounded-lg border border-border bg-slate-50 p-3">
@@ -6232,6 +6252,7 @@ export function RequestsKanbanPage() {
     }
 
     setActionPending(`${id}:${status}`);
+    const previousStatus = requests.find((request) => request.id === id)?.status;
     try {
       const payload = await apiJson<{ data: ClientRequest; scheduleUpdated: boolean }>("/api/requests/status", {
         method: "PATCH",
@@ -6239,9 +6260,21 @@ export function RequestsKanbanPage() {
       });
       setRequests((items) => items.map((request) => (request.id === id ? payload.data : request)));
       setSelected(payload.data);
+      if (previousStatus && previousStatus !== payload.data.status) {
+        setSummary((current) => {
+          const base = current ?? { total: pagination.total, byStatus: {} };
+          return {
+            ...base,
+            byStatus: {
+              ...base.byStatus,
+              [previousStatus]: Math.max(0, (base.byStatus?.[previousStatus] ?? 0) - 1),
+              [payload.data.status]: (base.byStatus?.[payload.data.status] ?? 0) + 1
+            }
+          }
+        });
+      }
       setActionReason("");
       setActionMessage(payload.scheduleUpdated ? "Solicitação aprovada e cronograma atualizado." : payload.data.status === "Em análise" ? "Solicitação enviada para análise do WFM." : `Solicitação ${payload.data.id} atualizada para ${payload.data.status}.`);
-      void loadKanbanRequests(filters, pagination.page);
     } catch (error) {
       setActionMessage(error instanceof Error ? error.message : "Não foi possível atualizar a solicitação.");
     } finally {
@@ -7993,21 +8026,27 @@ export function EquipmentPage() {
   const [equipmentPreview, setEquipmentPreview] = useState<EquipmentImportPreview | null>(null);
   const [savingEquipment, setSavingEquipment] = useState(false);
   const [importingEquipment, setImportingEquipment] = useState(false);
+  const [equipmentPagination, setEquipmentPagination] = useState({ page: 1, limit: 50, total: 0, totalPages: 1 });
 
   useEffect(() => {
     void refreshEquipment();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function refreshEquipment(filters = equipmentFilters) {
-    const params = new URLSearchParams();
+  async function refreshEquipment(filters = equipmentFilters, page = equipmentPagination.page) {
+    const params = new URLSearchParams({ page: String(page), limit: String(equipmentPagination.limit) });
     Object.entries(filters).forEach(([key, value]) => {
       if (value && value !== "Todos") params.set(key, value);
     });
-    const payload = await apiJson<{ data: EquipmentItem[]; summary: EquipmentSummary; canManage: boolean }>(`/api/equipment?${params.toString()}`);
+    const payload = await apiJson<{ data: EquipmentItem[]; summary: EquipmentSummary; canManage: boolean; pagination?: typeof equipmentPagination }>(`/api/equipment?${params.toString()}`);
+    if (!payload.data.length && (payload.pagination?.total ?? 0) > 0 && page > 1) {
+      await refreshEquipment(filters, 1);
+      return;
+    }
     setRows(payload.data);
     setSummary(payload.summary);
     setCanManage(payload.canManage);
+    setEquipmentPagination(payload.pagination ?? { page, limit: equipmentPagination.limit, total: payload.data.length, totalPages: 1 });
     setAppliedEquipmentFilters(filters);
   }
 
@@ -8031,7 +8070,7 @@ export function EquipmentPage() {
       });
       setEquipmentMessage(payload.message);
       setEquipmentForm({ id: "", numeroSerie: "", tipoEquipamento: "Notebook", modelo: "", responsavel: "", dataEntrega: new Date().toISOString().slice(0, 10), status: "Disponível", observacao: "" });
-      await refreshEquipment();
+      await refreshEquipment(equipmentFilters, equipmentPagination.page);
     } catch (error) {
       setEquipmentMessage(error instanceof Error ? error.message : "Não foi possível salvar o equipamento.");
     } finally {
@@ -8057,7 +8096,7 @@ export function EquipmentPage() {
     if (!window.confirm("Tem certeza que deseja remover este equipamento da lista ativa?")) return;
     const payload = await apiJson<{ message: string }>(`/api/equipment?id=${encodeURIComponent(id)}`, { method: "DELETE" });
     setEquipmentMessage(payload.message);
-    await refreshEquipment();
+    await refreshEquipment(equipmentFilters, equipmentPagination.page);
   }
 
   async function previewEquipmentFile(file?: File) {
@@ -8078,7 +8117,7 @@ export function EquipmentPage() {
       });
       setEquipmentMessage(`${payload.message} Criados: ${payload.summary.createdRows}. Atualizados: ${payload.summary.updatedRows}. Ignorados: ${payload.summary.skippedRows}.`);
       setEquipmentPreview(null);
-      await refreshEquipment();
+      await refreshEquipment(equipmentFilters, 1);
     } catch (error) {
       setEquipmentMessage(error instanceof Error ? error.message : "Não foi possível importar equipamentos.");
     } finally {
@@ -8103,7 +8142,7 @@ export function EquipmentPage() {
   const equipmentCardHelper = (defaultHelper: string) => hasEquipmentFilters ? equipmentCardContext : defaultHelper;
   function clearEquipmentFilters() {
     setEquipmentFilters(emptyEquipmentFilters);
-    void refreshEquipment(emptyEquipmentFilters);
+    void refreshEquipment(emptyEquipmentFilters, 1);
   }
   const equipmentExportUrl = () => {
     const params = new URLSearchParams();
@@ -8153,7 +8192,7 @@ export function EquipmentPage() {
               <input type="date" value={equipmentFilters.deliveredTo} onChange={(event) => setEquipmentFilters({ ...equipmentFilters, deliveredTo: event.target.value })} className="h-10 w-full rounded-lg border border-border px-3 text-sm outline-none" />
             </label>
             <div className="grid grid-cols-2 gap-2 xl:col-span-2">
-              <button onClick={() => void refreshEquipment()} className="h-10 rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
+              <button onClick={() => void refreshEquipment(equipmentFilters, 1)} className="h-10 rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
               <button onClick={clearEquipmentFilters} className="h-10 rounded-lg border border-border bg-white px-3 text-sm font-bold text-navy-950">Limpar filtros</button>
             </div>
           </div>
@@ -8173,24 +8212,42 @@ export function EquipmentPage() {
             ) : null}
           </div>
           {rows.length ? (
-            <SimpleTable
-              columns={["Nº série", "Tipo", "Modelo", "Responsável", "WB/Login", "Entrega", "Status", "Ações"]}
-              rows={rows.map((item) => [
-                item.serial ?? item.code,
-                item.type,
-                item.model ?? "",
-                item.employee,
-                item.employeeWbLogin ?? "",
-                item.delivered,
-                <StatusBadge key={`${item.code}-s`} status={item.status} />,
-                canManage ? (
-                  <div key={`${item.code}-actions`} className="flex flex-wrap gap-2">
-                    <button onClick={() => editEquipment(item)} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Editar</button>
-                    <button onClick={() => void removeEquipment(item.id)} className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-bold text-red-600">Inativar</button>
-                  </div>
-                ) : "Visualização"
-              ])}
-            />
+            <>
+              <SimpleTable
+                columns={["Nº série", "Tipo", "Modelo", "Responsável", "WB/Login", "Entrega", "Status", "Ações"]}
+                rows={rows.map((item) => [
+                  item.serial ?? item.code,
+                  item.type,
+                  item.model ?? "",
+                  item.employee,
+                  item.employeeWbLogin ?? "",
+                  item.delivered,
+                  <StatusBadge key={`${item.code}-s`} status={item.status} />,
+                  canManage ? (
+                    <div key={`${item.code}-actions`} className="flex flex-wrap gap-2">
+                      <button onClick={() => editEquipment(item)} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Editar</button>
+                      <button onClick={() => void removeEquipment(item.id)} className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-bold text-red-600">Inativar</button>
+                    </div>
+                  ) : "Visualização"
+                ])}
+              />
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-muted">
+                <span>
+                  {equipmentPagination.total
+                    ? `Exibindo ${(equipmentPagination.page - 1) * equipmentPagination.limit + 1}-${Math.min(equipmentPagination.page * equipmentPagination.limit, equipmentPagination.total)} de ${equipmentPagination.total} equipamentos`
+                    : "Nenhum equipamento"}
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  <button disabled={equipmentPagination.page <= 1} onClick={() => void refreshEquipment(appliedEquipmentFilters, 1)} className="h-9 rounded-lg border border-border bg-white px-3 text-xs font-bold text-navy-950 disabled:cursor-not-allowed disabled:opacity-45">Primeira</button>
+                  <button disabled={equipmentPagination.page <= 1} onClick={() => void refreshEquipment(appliedEquipmentFilters, equipmentPagination.page - 1)} className="h-9 rounded-lg border border-border bg-white px-3 text-xs font-bold text-navy-950 disabled:cursor-not-allowed disabled:opacity-45">Anterior</button>
+                  <span className="grid h-9 min-w-24 place-items-center rounded-lg border border-blue-100 bg-blue-50 px-3 text-xs font-extrabold text-blue-700">
+                    {equipmentPagination.page} de {equipmentPagination.totalPages}
+                  </span>
+                  <button disabled={equipmentPagination.page >= equipmentPagination.totalPages} onClick={() => void refreshEquipment(appliedEquipmentFilters, equipmentPagination.page + 1)} className="h-9 rounded-lg border border-border bg-white px-3 text-xs font-bold text-navy-950 disabled:cursor-not-allowed disabled:opacity-45">Próxima</button>
+                  <button disabled={equipmentPagination.page >= equipmentPagination.totalPages} onClick={() => void refreshEquipment(appliedEquipmentFilters, equipmentPagination.totalPages)} className="h-9 rounded-lg border border-border bg-white px-3 text-xs font-bold text-navy-950 disabled:cursor-not-allowed disabled:opacity-45">Última</button>
+                </div>
+              </div>
+            </>
           ) : (
             <EmptyState title={hasEquipmentFilters ? "Nenhum equipamento encontrado para os filtros selecionados." : "Nenhum equipamento cadastrado."} description={hasEquipmentFilters ? "Ajuste ou limpe os filtros para ampliar a busca." : "Cadastre ou importe equipamentos para começar."} />
           )}

@@ -201,6 +201,15 @@ type AttendanceSummaryFilters = Partial<Pick<ScheduleQuery, "lob" | "supervisor"
   teamSupervisorId?: string;
 };
 
+type LatestAttendanceRecordBySchedule = {
+  scheduleId: string | null;
+  status: AttendanceStatus;
+  absenceReason: string | null;
+  impactsAbs: boolean;
+  isJustified: boolean;
+  updatedAt: Date;
+};
+
 export type ScheduleImportInput = {
   fileName: string;
   allowPartial?: boolean;
@@ -734,42 +743,46 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
 }
 
 export async function updateOperationalAttendance(actor: Actor, input: AttendanceInput) {
-  const validationError = validateAttendance(input);
+  const normalizedInput: AttendanceInput = {
+    ...input,
+    absenceReason: normalizeAttendanceReason(input.absenceReason) ?? ""
+  };
+  const validationError = validateAttendance(normalizedInput);
   if (validationError) return { error: validationError };
   const role = normalizeRole(actor.role);
 
   if (role === "SUPERVISOR") {
-    return justifyAttendanceAsSupervisor(actor, input);
+    return justifyAttendanceAsSupervisor(actor, normalizedInput);
   }
 
-  const defaultTimes = defaultShiftTimes[cleanShiftName(input.shift)] ?? defaultShiftTimes.Manhã;
+  const defaultTimes = defaultShiftTimes[cleanShiftName(normalizedInput.shift)] ?? defaultShiftTimes.Manhã;
 
   const scheduleResult = await editOperationalSchedule(actor, {
-    employeeId: input.employeeId,
-    date: input.date,
-    shift: cleanShiftName(input.shift) || input.shift,
-    status: input.status,
-    observation: input.supervisorJustification || input.absenceReason,
-    absenceReason: input.absenceReason,
-    reasonCategory: input.reasonCategory,
-    supervisorJustification: input.supervisorJustification,
-    startsAt: needsTime(input.status) ? defaultTimes.startsAt : "",
-    endsAt: needsTime(input.status) ? defaultTimes.endsAt : "",
-    impactsAbs: input.impactsAbs,
-    impactsCoverage: input.impactsCoverage,
-    hasEvidence: input.hasEvidence,
-    evidenceUrl: input.evidenceUrl
+    employeeId: normalizedInput.employeeId,
+    date: normalizedInput.date,
+    shift: cleanShiftName(normalizedInput.shift) || normalizedInput.shift,
+    status: normalizedInput.status,
+    observation: normalizedInput.supervisorJustification || normalizedInput.absenceReason,
+    absenceReason: normalizedInput.absenceReason,
+    reasonCategory: normalizedInput.reasonCategory,
+    supervisorJustification: normalizedInput.supervisorJustification,
+    startsAt: needsTime(normalizedInput.status) ? defaultTimes.startsAt : "",
+    endsAt: needsTime(normalizedInput.status) ? defaultTimes.endsAt : "",
+    impactsAbs: normalizedInput.impactsAbs,
+    impactsCoverage: normalizedInput.impactsCoverage,
+    hasEvidence: normalizedInput.hasEvidence,
+    evidenceUrl: normalizedInput.evidenceUrl
   });
 
   if ("error" in scheduleResult) return scheduleResult;
   return {
     data: {
-      employeeId: input.employeeId,
-      date: input.date,
-      shift: cleanShiftName(input.shift) || input.shift,
-      status: input.status,
-      absenceReason: input.absenceReason,
-      supervisorJustification: input.supervisorJustification
+      employeeId: normalizedInput.employeeId,
+      date: normalizedInput.date,
+      shift: cleanShiftName(normalizedInput.shift) || normalizedInput.shift,
+      status: normalizedInput.status,
+      absenceReason: normalizedInput.absenceReason,
+      supervisorJustification: normalizedInput.supervisorJustification
     },
     summary: scheduleResult.summary
   };
@@ -1917,6 +1930,14 @@ function validateAttendance(input: AttendanceInput) {
   return "";
 }
 
+function normalizeAttendanceReason(value?: string | null) {
+  const reason = value?.trim();
+  if (!reason) return undefined;
+  const key = normalizeImportKey(reason);
+  if (key === "NAO_INFORMADO" || key === "NOT_INFORMED") return "Não informado";
+  return reason;
+}
+
 function requiresReason(status: string) {
   return statusesRequiringReason.includes(status);
 }
@@ -2212,20 +2233,7 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
   });
   const statusFor = (schedule: (typeof schedules)[number]) => normalizeOperationalStatus(schedule.status);
   const absenceScheduleIds = schedules.filter((schedule) => isAbsenceStatus(statusFor(schedule))).map((schedule) => schedule.id);
-  const attendanceRecords = absenceScheduleIds.length
-    ? await prisma.attendanceRecord.findMany({
-        where: { scheduleId: { in: absenceScheduleIds } },
-        orderBy: [{ scheduleId: "asc" }, { updatedAt: "desc" }],
-        select: {
-          scheduleId: true,
-          status: true,
-          absenceReason: true,
-          impactsAbs: true,
-          isJustified: true,
-          updatedAt: true
-        }
-      })
-    : [];
+  const attendanceRecords = await latestAttendanceRecordsForSchedules(absenceScheduleIds);
   const attendanceRecordByScheduleId = new Map<string, (typeof attendanceRecords)[number]>();
   attendanceRecords.forEach((record) => {
     if (!record.scheduleId || attendanceRecordByScheduleId.has(record.scheduleId)) return;
@@ -2300,6 +2308,22 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     roleTitle: filters.roleTitle ?? "Todos"
   });
   return summary;
+}
+
+async function latestAttendanceRecordsForSchedules(scheduleIds: string[]) {
+  if (!scheduleIds.length) return [] as LatestAttendanceRecordBySchedule[];
+  return prisma.$queryRaw<LatestAttendanceRecordBySchedule[]>(Prisma.sql`
+    SELECT DISTINCT ON ("scheduleId")
+      "scheduleId",
+      "status",
+      "absenceReason",
+      "impactsAbs",
+      "isJustified",
+      "updatedAt"
+    FROM "AttendanceRecord"
+    WHERE "scheduleId" IN (${Prisma.join(scheduleIds)})
+    ORDER BY "scheduleId" ASC, "updatedAt" DESC
+  `);
 }
 
 function emptyAttendanceSummary() {

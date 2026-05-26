@@ -25,6 +25,25 @@ type ConfigRule = {
   [key: string]: unknown;
 };
 
+const settingsEmployeeSelect = {
+  id: true,
+  fullName: true,
+  wbLogin: true,
+  roleTitle: true,
+  operationalStatus: true,
+  lobId: true,
+  teamId: true,
+  supervisorId: true,
+  shiftId: true,
+  user: { select: { email: true, role: { select: { name: true } } } },
+  lob: { select: { name: true } },
+  team: { select: { name: true } },
+  supervisor: { select: { fullName: true } },
+  shift: { select: { name: true } }
+} satisfies Prisma.EmployeeProfileSelect;
+
+type SettingsEmployee = Prisma.EmployeeProfileGetPayload<{ select: typeof settingsEmployeeSelect }>;
+
 const essentialRoles = ["ADMIN", "GESTOR", "SUPERVISOR", "COLABORADOR", "WFM", "QUALIDADE", "RH", "TI"];
 const essentialDayOffTypes = ["Troca de Folga", "Venda de Folga", "Solicitação de Dia de Folga", "Troca de Turno"];
 const permissionSeeds = [
@@ -107,7 +126,7 @@ export async function getSystemSettings(actor: Actor) {
       prisma.permission.findMany({ orderBy: { key: "asc" } }),
       prisma.requestType.findMany({ orderBy: { name: "asc" } }),
       prisma.team.findMany({ include: { lob: true, supervisor: { include: { user: true } } }, orderBy: { name: "asc" } }),
-      prisma.employeeProfile.findMany({ where: { deletedAt: null }, include: { user: { include: { role: true } }, lob: true, team: true, supervisor: true, shift: true }, orderBy: { fullName: "asc" }, take: 500 }),
+      prisma.employeeProfile.findMany({ where: { deletedAt: null }, select: settingsEmployeeSelect, orderBy: { fullName: "asc" }, take: 500 }),
       readStatusMap(configKeys.lobStatus),
       readStatusMap(configKeys.shiftStatus),
       readStatusMap(configKeys.teamStatus),
@@ -123,6 +142,8 @@ export async function getSystemSettings(actor: Actor) {
       readRuleList(configKeys.tokenRules),
       readObjectConfig<Record<string, unknown>>(configKeys.generalSettings, defaultGeneralSettings())
     ]);
+
+    const superviseeCounts = countSuperviseesBySupervisor(employees);
 
     return {
       data: {
@@ -144,7 +165,7 @@ export async function getSystemSettings(actor: Actor) {
         requestTypes: requestTypes.map((type) => ({ id: type.id, name: type.name, area: type.area, slaHours: type.slaHours, requiresApproval: type.requiresApproval, status: requestTypeStatus[type.id] ?? "ACTIVE", essential: essentialDayOffTypes.includes(type.name) })),
         teams: teams.map((team) => ({ id: team.id, name: team.name, lobId: team.lobId, lob: team.lob.name, supervisorId: team.supervisorId ?? "", supervisorName: team.supervisor?.fullName ?? "", supervisorEmail: team.supervisor?.user?.email ?? "", status: teamStatus[team.id] ?? "ACTIVE" })),
         supervisors: employees
-          .filter((employee) => canBeSupervisorOption(employee, employees))
+          .filter((employee) => canBeSupervisorOption(employee, superviseeCounts))
           .map((employee) => ({
             id: employee.id,
             name: employee.fullName,
@@ -153,7 +174,7 @@ export async function getSystemSettings(actor: Actor) {
             lob: employee.lob.name,
             teamId: employee.teamId,
             team: employee.team.name,
-            supervisees: employees.filter((item) => item.supervisorId === employee.id).length,
+            supervisees: superviseeCounts.get(employee.id) ?? 0,
             status: employee.operationalStatus
           })),
         employees: employees.map((employee) => ({
@@ -194,7 +215,7 @@ async function getLimitedSystemSettings() {
     prisma.shift.findMany({ orderBy: { name: "asc" } }),
     prisma.requestType.findMany({ orderBy: { name: "asc" } }),
     prisma.team.findMany({ include: { lob: true, supervisor: { include: { user: true } } }, orderBy: { name: "asc" } }),
-    prisma.employeeProfile.findMany({ where: { deletedAt: null }, include: { user: { include: { role: true } }, lob: true, team: true, supervisor: true, shift: true }, orderBy: { fullName: "asc" }, take: 500 }),
+    prisma.employeeProfile.findMany({ where: { deletedAt: null }, select: settingsEmployeeSelect, orderBy: { fullName: "asc" }, take: 500 }),
     readStatusMap(configKeys.lobStatus),
     readStatusMap(configKeys.shiftStatus),
     readStatusMap(configKeys.teamStatus),
@@ -204,6 +225,8 @@ async function getLimitedSystemSettings() {
     readObjectConfig<Record<string, unknown>>(configKeys.generalSettings, defaultGeneralSettings())
   ]);
 
+  const superviseeCounts = countSuperviseesBySupervisor(employees);
+
   return {
     ...emptySettings(),
     lobs: lobs.map((lob) => ({ id: lob.id, name: lob.name, label: lob.name, description: lob.description ?? "", status: lobStatus[lob.id] ?? "ACTIVE", active: (lobStatus[lob.id] ?? "ACTIVE") === "ACTIVE", system: lob.name === "ALL", isSystem: lob.name === "ALL" })),
@@ -211,7 +234,7 @@ async function getLimitedSystemSettings() {
     requestTypes: requestTypes.map((type) => ({ id: type.id, name: type.name, area: type.area, slaHours: type.slaHours, requiresApproval: type.requiresApproval, status: requestTypeStatus[type.id] ?? "ACTIVE", essential: essentialDayOffTypes.includes(type.name) })),
     teams: teams.map((team) => ({ id: team.id, name: team.name, lobId: team.lobId, lob: team.lob.name, supervisorId: team.supervisorId ?? "", supervisorName: team.supervisor?.fullName ?? "", supervisorEmail: team.supervisor?.user?.email ?? "", status: teamStatus[team.id] ?? "ACTIVE" })),
     supervisors: employees
-      .filter((employee) => canBeSupervisorOption(employee, employees))
+      .filter((employee) => canBeSupervisorOption(employee, superviseeCounts))
       .map((employee) => ({
         id: employee.id,
         name: employee.fullName,
@@ -220,7 +243,7 @@ async function getLimitedSystemSettings() {
         lob: employee.lob.name,
         teamId: employee.teamId,
         team: employee.team.name,
-        supervisees: employees.filter((item) => item.supervisorId === employee.id).length,
+        supervisees: superviseeCounts.get(employee.id) ?? 0,
         status: employee.operationalStatus
       })),
     employees: employees.map((employee) => ({
@@ -625,16 +648,25 @@ async function auditSettings(tx: Prisma.TransactionClient, actorId: string, acti
 
 function canBeSupervisorOption(
   employee: { id: string; roleTitle: string | null; operationalStatus: string | null; user?: { role?: { name: string } | null } | null },
-  employees: Array<{ supervisorId: string | null }>
+  superviseeCounts: Map<string, number>
 ) {
   const status = text(employee.operationalStatus).toUpperCase();
-  const alreadySupervises = employees.some((item) => item.supervisorId === employee.id);
+  const alreadySupervises = (superviseeCounts.get(employee.id) ?? 0) > 0;
   const roleName = employee.user?.role?.name ?? "";
   return status !== "INACTIVE" && status !== "INATIVO" && (
     alreadySupervises ||
     canBeSupervisorJobTitle(employee.roleTitle) ||
     ["SUPERVISOR", "GESTOR", "MANAGEMENT", "WFM", "ADMIN"].includes(roleName)
   );
+}
+
+function countSuperviseesBySupervisor(employees: Array<{ supervisorId: string | null }>) {
+  const counts = new Map<string, number>();
+  employees.forEach((employee) => {
+    if (!employee.supervisorId) return;
+    counts.set(employee.supervisorId, (counts.get(employee.supervisorId) ?? 0) + 1);
+  });
+  return counts;
 }
 
 function defaultPermissionsForRole(roleName: string) {

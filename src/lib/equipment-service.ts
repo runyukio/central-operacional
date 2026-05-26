@@ -35,6 +35,17 @@ const statusAliases: Record<string, EquipmentStatus> = {
 };
 
 const allowedTypes = ["Notebook", "Desktop", "Monitor", "Headset", "Mouse", "Teclado", "Cadeira", "Celular", "Outro"];
+const responsibleEmployeeSelect = {
+  id: true,
+  wbLogin: true,
+  fullName: true,
+  user: { select: { email: true } }
+} satisfies Prisma.EmployeeProfileSelect;
+
+const equipmentListInclude = {
+  employee: { select: responsibleEmployeeSelect },
+  histories: { orderBy: { createdAt: "desc" as const }, take: 1 }
+} satisfies Prisma.EquipmentInclude;
 
 export type EquipmentInput = {
   id?: string;
@@ -69,6 +80,8 @@ export type EquipmentQuery = {
   deliveredTo?: string;
   deliveryDateFrom?: string;
   deliveryDateTo?: string;
+  page?: number;
+  limit?: number;
 };
 
 export type EquipmentPreviewRow = {
@@ -85,7 +98,7 @@ export type EquipmentPreviewRow = {
   normalized?: EquipmentInput;
 };
 
-type ResponsibleEmployee = Prisma.EmployeeProfileGetPayload<{ include: { user: true } }>;
+type ResponsibleEmployee = Prisma.EmployeeProfileGetPayload<{ select: typeof responsibleEmployeeSelect }>;
 type ResponsibleLookup = {
   byId: Map<string, ResponsibleEmployee>;
   byWbLogin: Map<string, ResponsibleEmployee>;
@@ -166,7 +179,7 @@ async function buildResponsibleLookup(inputs: EquipmentInput[]): Promise<Respons
   wbLogins.forEach((wbLogin) => or.push({ wbLogin: { equals: wbLogin, mode: "insensitive" } }));
   emails.forEach((email) => or.push({ user: { email: { equals: email, mode: "insensitive" } } }));
   const employees = or.length
-    ? await prisma.employeeProfile.findMany({ where: { deletedAt: null, OR: or }, include: { user: true } })
+    ? await prisma.employeeProfile.findMany({ where: { deletedAt: null, OR: or }, select: responsibleEmployeeSelect })
     : [];
   return {
     byId: new Map(employees.map((employee) => [employee.id, employee])),
@@ -185,7 +198,7 @@ function findResponsibleInLookup(input: EquipmentInput, lookup: ResponsibleLooku
   return null;
 }
 
-function formatEquipment(equipment: Prisma.EquipmentGetPayload<{ include: { employee: { include: { user: true } }; histories: true } }>) {
+function formatEquipment(equipment: Prisma.EquipmentGetPayload<{ include: typeof equipmentListInclude }>) {
   const lastHistory = equipment.histories[0];
   return {
     id: equipment.id,
@@ -255,16 +268,16 @@ export async function listEquipment(actor: Actor, query: EquipmentQuery = {}) {
   if (deliveredFrom || deliveredTo) filters.push({ deliveredAt: { ...(deliveredFrom ? { gte: deliveredFrom } : {}), ...(deliveredTo ? { lte: deliveredTo } : {}) } });
   if (normalizeRole(user.role.name) === "SUPERVISOR" && user.employeeProfile) filters.push({ employee: { supervisorId: user.employeeProfile.id } });
 
+  const page = Math.max(1, Number(query.page) || 1);
+  const limit = Math.min(100, Math.max(25, Number(query.limit) || 50));
   const where: Prisma.EquipmentWhereInput = { deletedAt: null, ...(filters.length ? { AND: filters } : {}) };
   const [rows, total, statusGroups, pending] = await Promise.all([
     prisma.equipment.findMany({
       where,
-      include: {
-        employee: { include: { user: true } },
-        histories: { orderBy: { createdAt: "desc" }, take: 1 }
-      },
+      include: equipmentListInclude,
       orderBy: { updatedAt: "desc" },
-      take: 300
+      skip: (page - 1) * limit,
+      take: limit
     }),
     prisma.equipment.count({ where }),
     prisma.equipment.groupBy({ by: ["status"], where, _count: { _all: true } }),
@@ -284,7 +297,13 @@ export async function listEquipment(actor: Actor, query: EquipmentQuery = {}) {
       returned: statusCount(["DEVOLVIDO", "SUBSTITUIDO"]),
       pending
     },
-    canManage: canManageEquipmentRole(user.role.name)
+    canManage: canManageEquipmentRole(user.role.name),
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / limit))
+    }
   };
 }
 
