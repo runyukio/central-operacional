@@ -6774,6 +6774,9 @@ export function EmployeeMapPage() {
   const [showResetPassword, setShowResetPassword] = useState(false);
   const [resetPasswordForm, setResetPasswordForm] = useState({ password: "", confirmPassword: "" });
   const [resettingPassword, setResettingPassword] = useState(false);
+  const [showDeleteEmployee, setShowDeleteEmployee] = useState(false);
+  const [deleteEmployeeForm, setDeleteEmployeeForm] = useState({ reason: "", confirmation: "" });
+  const [deletingEmployee, setDeletingEmployee] = useState(false);
   const employeeMapLobs = ["Todos", ...Array.from(new Set(employeeSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? employeeRows.map((employee) => employee.lob).filter(Boolean)))];
   const employeeStatusOptions = ["Todos", "Ativos/Aprovados", "Nesting", "Pendentes", "Inativos"];
   const employeeSupervisorOptions = employeeSettings?.supervisors?.filter((supervisor) => supervisor.status !== "INACTIVE") ?? [];
@@ -6975,6 +6978,28 @@ export function EmployeeMapPage() {
     }
   }
 
+  async function deleteSelectedEmployee() {
+    if (!selected || deletingEmployee) return;
+    setDeletingEmployee(true);
+    setEmployeeMessage("");
+    try {
+      const payload = await apiJson<{ message: string }>(`/api/employees/${selected.id}`, {
+        method: "DELETE",
+        body: JSON.stringify(deleteEmployeeForm)
+      });
+      setEmployeeRows((items) => items.filter((employee) => employee.id !== selected.id));
+      setSelected(null);
+      setShowDeleteEmployee(false);
+      setDeleteEmployeeForm({ reason: "", confirmation: "" });
+      setEmployeeMessage(payload.message ?? "Cadastro excluído com sucesso.");
+      await loadEmployees({ nextPage: employeePage });
+    } catch (error) {
+      setEmployeeMessage(error instanceof ApiRequestError ? error.message : error instanceof Error ? error.message : "Não foi possível excluir o cadastro.");
+    } finally {
+      setDeletingEmployee(false);
+    }
+  }
+
   return (
     <div>
       <PageHeader title="Funcionários" description="Base operacional de colaboradores, vínculos e informações cadastrais." icon={UsersRound} actions={<button onClick={exportEmployeesCsv} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Exportar CSV</button>} />
@@ -7094,13 +7119,18 @@ export function EmployeeMapPage() {
                       Dados aprovados podem ser ajustados administrativamente. Todas as alterações ficam registradas em auditoria.
                     </div>
                     {!editingEmployee ? (
-                      <div className="grid gap-2 sm:grid-cols-2">
+                      <div className="grid gap-2 sm:grid-cols-3">
                         <button onClick={() => setEditingEmployee(true)} className="rounded-lg bg-blue-600 px-3 py-2.5 text-sm font-bold text-white">
                           Editar dados
                         </button>
                         {isAdmin ? (
                           <button onClick={() => setShowResetPassword(true)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5 text-sm font-bold text-blue-700">
                             Resetar senha
+                          </button>
+                        ) : null}
+                        {isAdmin ? (
+                          <button onClick={() => setShowDeleteEmployee(true)} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm font-bold text-red-700">
+                            Excluir cadastro
                           </button>
                         ) : null}
                       </div>
@@ -7207,6 +7237,11 @@ export function EmployeeMapPage() {
                               Resetar senha
                             </button>
                           ) : null}
+                          {isAdmin ? (
+                            <button disabled={savingEmployee} onClick={() => setShowDeleteEmployee(true)} className="rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm font-bold text-red-700 disabled:opacity-50">
+                              Excluir cadastro
+                            </button>
+                          ) : null}
                         </div>
                         <p className="text-xs font-semibold text-muted">Mudar cargo não muda permissão automaticamente. Role/Permissão só muda quando Admin altera explicitamente.</p>
                       </div>
@@ -7288,6 +7323,35 @@ export function EmployeeMapPage() {
           </div>
         </div>
       ) : null}
+      {showDeleteEmployee && selected ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="card w-full max-w-lg p-5">
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-extrabold text-navy-950">Excluir cadastro do banco de dados</h2>
+                <p className="text-sm text-muted">{selected.name} • {selected.wb}</p>
+              </div>
+              <button onClick={() => setShowDeleteEmployee(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+            </div>
+            <div className="space-y-4">
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-800">
+                Esta ação pode remover permanentemente dados do colaborador. Use apenas para cadastros incorretos, duplicados ou testes. Para colaboradores reais com histórico, utilize Inativar colaborador.
+              </div>
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-bold text-muted">Motivo obrigatório</span>
+                <textarea value={deleteEmployeeForm.reason} onChange={(event) => setDeleteEmployeeForm((current) => ({ ...current, reason: event.target.value }))} className="min-h-24 w-full rounded-lg border border-border p-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100" placeholder="Descreva por que este cadastro deve ser excluído." />
+              </label>
+              <FormInput label="Digite EXCLUIR para confirmar" value={deleteEmployeeForm.confirmation} onChange={(value) => setDeleteEmployeeForm((current) => ({ ...current, confirmation: value }))} />
+              <div className="grid gap-2 sm:grid-cols-2">
+                <button disabled={deletingEmployee} onClick={() => setShowDeleteEmployee(false)} className="rounded-lg border border-border bg-white px-4 py-3 text-sm font-bold text-navy-950 disabled:opacity-50">Cancelar</button>
+                <button disabled={deletingEmployee || deleteEmployeeForm.confirmation !== "EXCLUIR" || !deleteEmployeeForm.reason.trim()} onClick={deleteSelectedEmployee} className="rounded-lg bg-red-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-50">
+                  {deletingEmployee ? "Excluindo..." : "Excluir definitivamente"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -7340,8 +7404,9 @@ export function HierarchyPage() {
       setSelected(result.data.selected);
       setSupervisorDraft(result.data.selected?.supervisorId ?? "");
       setExpandedIds((current) => {
-        if (current.size) return current;
-        return new Set(result.data.tree.map((node) => node.id));
+        const next = new Set(current);
+        result.data.tree.forEach((node) => next.add(node.id));
+        return next;
       });
     } catch (error) {
       setPayload(null);
@@ -7415,17 +7480,23 @@ export function HierarchyPage() {
     return (
       <div key={node.id} className="space-y-2">
         <div className="flex items-center gap-2 rounded-lg border border-border bg-white p-3" style={{ marginLeft: `${Math.min(node.level, 6) * 18}px` }}>
-          <button onClick={() => toggleHierarchyNode(node.id)} className="grid h-8 w-8 place-items-center rounded-lg border border-border text-navy-950 disabled:opacity-30" disabled={!node.children.length} title={node.children.length ? "Expandir/recolher" : "Sem subordinados"}>
+          <button type="button" onClick={() => toggleHierarchyNode(node.id)} className="grid h-8 w-8 place-items-center rounded-lg border border-border text-navy-950" title={node.children.length ? "Expandir/recolher" : "Nenhum colaborador abaixo"} aria-expanded={isOpen}>
             <ChevronRight className={cn("h-4 w-4 transition-transform", isOpen ? "rotate-90" : "")} />
           </button>
-          <button onClick={() => selectHierarchyEmployee(node)} className="min-w-0 flex-1 text-left">
+          <button type="button" onClick={() => selectHierarchyEmployee(node)} className="min-w-0 flex-1 text-left">
             <span className="block truncate text-sm font-black text-blue-700">{node.name}</span>
             <span className="block truncate text-xs font-semibold text-muted">{node.roleTitle} • {node.wbLogin} • {node.lob}</span>
           </button>
           <StatusBadge status={node.status} />
           <span className="rounded-lg border border-blue-100 bg-blue-50 px-2 py-1 text-xs font-bold text-blue-700">{node.totalReports} abaixo</span>
         </div>
-        {isOpen && node.children.length ? <div className="space-y-2">{node.children.map(renderHierarchyNode)}</div> : null}
+        {isOpen ? (
+          node.children.length ? <div className="space-y-2">{node.children.map(renderHierarchyNode)}</div> : (
+            <div className="rounded-lg border border-dashed border-border bg-slate-50 p-3 text-xs font-bold text-muted" style={{ marginLeft: `${Math.min(node.level + 1, 7) * 18}px` }}>
+              Nenhum colaborador abaixo.
+            </div>
+          )
+        ) : null}
       </div>
     );
   }

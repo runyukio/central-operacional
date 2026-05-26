@@ -130,12 +130,15 @@ export async function getHierarchy(actor: Actor, query: HierarchyQuery = {}) {
       totalReports: totalReportsById.get(employee.id) ?? 0,
       level
     });
-    const buildNode = (employee: HierarchyEmployee, level = 0): HierarchyNode => ({
-      ...toClient(employee, level),
-      children: (childrenBySupervisor.get(employee.id) ?? [])
-        .filter((child) => displayedIds.has(child.id) || hasDisplayedDescendant(child.id, childrenBySupervisor, displayedIds))
-        .map((child) => buildNode(child, level + 1))
-    });
+    const buildNode = (employee: HierarchyEmployee, level = 0, includeAllDescendants = displayedIds.has(employee.id)): HierarchyNode => {
+      const children = (childrenBySupervisor.get(employee.id) ?? [])
+        .filter((child) => includeAllDescendants || displayedIds.has(child.id) || hasDisplayedDescendant(child.id, childrenBySupervisor, displayedIds))
+        .map((child) => buildNode(child, level + 1, includeAllDescendants || displayedIds.has(child.id)));
+      return {
+        ...toClient(employee, level),
+        children
+      };
+    };
     const tree = roots
       .filter((employee) => displayedIds.has(employee.id) || hasDisplayedDescendant(employee.id, childrenBySupervisor, displayedIds))
       .map((employee) => buildNode(employee));

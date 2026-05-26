@@ -65,6 +65,12 @@ export type EmployeeListQuery = {
   role?: string;
 };
 
+export type EmployeeDeleteInput = {
+  id: string;
+  reason: string;
+  confirmation: string;
+};
+
 export async function listOperationalEmployees(actor: Actor, query: EmployeeListQuery = {}) {
   if (query.summary) return listOperationalEmployeesSummary(actor, query);
   try {
@@ -673,6 +679,105 @@ export async function resetEmployeeUserPassword(actor: Actor, input: { employeeI
   }
 }
 
+export async function deleteOperationalEmployee(actor: Actor, input: EmployeeDeleteInput) {
+  try {
+    const admin = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
+    if (!admin) return createPermissionError("Usuário não autenticado.");
+    if (normalizeRole(actor.role) !== "ADMIN") return createPermissionError("Apenas ADMIN pode excluir cadastros.");
+
+    const reason = clean(input.reason);
+    if (!reason) return createValidationError({ reason: "Motivo da exclusão é obrigatório." }, "Motivo da exclusão é obrigatório.");
+    if (String(input.confirmation ?? "").trim() !== "EXCLUIR") {
+      return createValidationError({ confirmation: "Confirmação inválida. Digite EXCLUIR para continuar." }, "Confirmação inválida. Digite EXCLUIR para continuar.");
+    }
+
+    const employee = await prisma.employeeProfile.findFirst({
+      where: { id: input.id, deletedAt: null },
+      include: { user: { include: { role: true } }, lob: true, team: true, supervisor: true, shift: true }
+    });
+    if (!employee) return createNotFoundError("Colaborador não encontrado.");
+
+    const dependencies = await getEmployeeDeleteDependencies(employee.id, employee.userId);
+    const blockers = Object.entries(dependencies.critical).filter(([, count]) => count > 0);
+    if (employee.user?.role?.name === "ADMIN" && employee.user.status === "ACTIVE") {
+      const activeAdmins = await prisma.user.count({ where: { status: "ACTIVE", deletedAt: null, role: { name: "ADMIN" }, id: { not: employee.user.id } } });
+      if (activeAdmins <= 0) {
+        await auditEmployeeDelete(admin.id, employee, reason, "DELETE_EMPLOYEE_BLOCKED", dependencies, { reason: "LAST_ADMIN" });
+        return createPermissionError("Não é permitido excluir o último ADMIN ativo.");
+      }
+    }
+
+    if (blockers.length) {
+      await auditEmployeeDelete(admin.id, employee, reason, "DELETE_EMPLOYEE_BLOCKED", dependencies, { blockers: Object.fromEntries(blockers) });
+      return createRelationError("Este cadastro possui histórico operacional vinculado. Use Inativar colaborador para preservar auditoria.", {
+        dependencies: blockers.map(([name, count]) => `${name}: ${count}`).join(", ")
+      });
+    }
+
+    const now = new Date();
+    const deletedWbLogin = buildDeletedIdentifier("wb", employee.wbLogin, employee.id);
+    const deletedEmail = employee.user ? buildDeletedEmail(employee.user.email, employee.user.id) : null;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.employeeSensitiveData.deleteMany({ where: { employeeId: employee.id } });
+      await tx.employeeRegistrationRequest.updateMany({
+        where: { OR: [{ createdEmployeeProfileId: employee.id }, ...(employee.userId ? [{ createdUserId: employee.userId }] : [])] },
+        data: { status: "INATIVO", deletedAt: now, reviewedById: admin.id, reviewedAt: now, reviewNotes: `Cadastro excluído por ADMIN. Motivo: ${reason}` }
+      });
+      await tx.employeeProfile.update({
+        where: { id: employee.id },
+        data: {
+          wbLogin: deletedWbLogin,
+          operationalStatus: "Inativo",
+          deletedAt: now
+        }
+      });
+      if (employee.userId && deletedEmail) {
+        await tx.user.update({
+          where: { id: employee.userId },
+          data: {
+            email: deletedEmail,
+            status: "INACTIVE",
+            deletedAt: now
+          }
+        });
+      }
+      await tx.auditLog.create({
+        data: {
+          actorId: admin.id,
+          action: "EXCLUSAO",
+          entity: "EmployeeProfile",
+          entityId: employee.id,
+          reason: "SOFT_DELETE_EMPLOYEE_COMPLETED",
+          previousValue: serializeEmployeeForAudit(employee as EmployeeWithRelations),
+          newValue: {
+            reason,
+            deletedAt: now.toISOString(),
+            deletionType: "soft-delete",
+            dependencies,
+            deletedWbLogin,
+            userId: employee.userId,
+            deletedEmail
+          }
+        }
+      });
+    });
+
+    return { success: true, message: "Cadastro excluído com sucesso." };
+  } catch (error) {
+    console.error("[employee] erro ao excluir cadastro", error);
+    recordErrorLog({
+      userEmail: actor.email,
+      code: "EMPLOYEE_DELETE_DB_ERROR",
+      message: error instanceof Error ? error.message : "Falha ao excluir cadastro",
+      route: "/api/employees/[id]",
+      action: "EMPLOYEE_DELETE",
+      severity: "ERROR"
+    });
+    return mapPrismaError(error) ?? createServerError(error, "Não foi possível excluir o cadastro.");
+  }
+}
+
 type EmployeeWithRelations = Prisma.EmployeeProfileGetPayload<{ include: typeof employeeInclude }>;
 
 function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: EmployeeSensitiveData) {
@@ -1192,6 +1297,125 @@ async function wouldCreateSupervisorCycle(employeeId: string, supervisorId: stri
     currentId = current?.supervisorId ?? null;
   }
   return false;
+}
+
+async function getEmployeeDeleteDependencies(employeeId: string, userId?: string | null) {
+  const [
+    supervisees,
+    supervisedTeams,
+    schedules,
+    scheduleChanges,
+    attendanceRecords,
+    workHourRecords,
+    workHourAdjustments,
+    requestsByEmployee,
+    requestsByUser,
+    equipments,
+    equipmentTickets,
+    monthlyAdvances,
+    shiftReportAbsences,
+    performanceMetrics,
+    qualityFeedbacks,
+    tokenTransactions,
+    rewardRedemptions,
+    tokenBalance,
+    storedFiles,
+    registrations,
+    auditLogs
+  ] = await Promise.all([
+    prisma.employeeProfile.count({ where: { supervisorId: employeeId, deletedAt: null } }),
+    prisma.team.count({ where: { supervisorId: employeeId } }),
+    prisma.schedule.count({ where: { employeeId, deletedAt: null } }),
+    prisma.scheduleChangeHistory.count({ where: { employeeId } }),
+    prisma.attendanceRecord.count({ where: { employeeId } }),
+    prisma.workHourRecord.count({ where: { employeeId } }),
+    prisma.workHourAdjustmentRequest.count({ where: { employeeId } }),
+    prisma.request.count({ where: { employeeId, deletedAt: null } }),
+    userId ? prisma.request.count({ where: { OR: [{ requesterId: userId }, { assigneeId: userId }], deletedAt: null } }) : Promise.resolve(0),
+    prisma.equipment.count({ where: { employeeId, deletedAt: null } }),
+    prisma.equipmentTicket.count({ where: { employeeId } }),
+    prisma.monthlyAdvanceRecord.count({ where: { employeeId, status: { not: "REMOVED" } } }),
+    prisma.shiftReportAbsence.count({ where: { employeeId } }),
+    prisma.performanceMetric.count({ where: { employeeId } }),
+    prisma.qualityFeedback.count({ where: { employeeId } }),
+    prisma.tokenTransaction.count({ where: { employeeId } }),
+    prisma.rewardRedemption.count({ where: { employeeId } }),
+    prisma.tokenBalance.count({ where: { employeeId } }),
+    prisma.storedFile.count({ where: { employeeId, deletedAt: null } }),
+    prisma.employeeRegistrationRequest.count({ where: { OR: [{ createdEmployeeProfileId: employeeId }, ...(userId ? [{ createdUserId: userId }] : [])], deletedAt: null } }),
+    prisma.auditLog.count({ where: { entity: "EmployeeProfile", entityId: employeeId } })
+  ]);
+
+  return {
+    critical: {
+      supervisees,
+      supervisedTeams,
+      schedules,
+      scheduleChanges,
+      attendanceRecords,
+      workHourRecords,
+      workHourAdjustments,
+      requests: requestsByEmployee + requestsByUser,
+      equipments,
+      equipmentTickets,
+      monthlyAdvances,
+      shiftReportAbsences,
+      performanceMetrics,
+      qualityFeedbacks,
+      tokenTransactions,
+      rewardRedemptions,
+      tokenBalance,
+      storedFiles
+    },
+    preserved: {
+      registrations,
+      auditLogs
+    }
+  };
+}
+
+async function auditEmployeeDelete(
+  actorId: string,
+  employee: Prisma.EmployeeProfileGetPayload<{ include: { user: { include: { role: true } } } }>,
+  reason: string,
+  action: string,
+  dependencies: Awaited<ReturnType<typeof getEmployeeDeleteDependencies>>,
+  extra: Record<string, unknown> = {}
+) {
+  await prisma.auditLog.create({
+    data: {
+      actorId,
+      action: "EXCLUSAO",
+      entity: "EmployeeProfile",
+      entityId: employee.id,
+      reason: action,
+      previousValue: {
+        id: employee.id,
+        fullName: employee.fullName,
+        wbLogin: employee.wbLogin,
+        userId: employee.userId,
+        role: employee.user?.role?.name,
+        status: employee.operationalStatus
+      },
+      newValue: {
+        reason,
+        dependencies,
+        ...extra
+      }
+    }
+  }).catch((error) => {
+    console.error("[employee] falha ao auditar tentativa de exclusão", error);
+  });
+}
+
+function buildDeletedIdentifier(prefix: string, value: string, id: string) {
+  const suffix = `${Date.now()}-${id.slice(-6)}`;
+  const compact = String(value ?? "").replace(/\s+/g, "").slice(0, 32);
+  return `${prefix}-deleted-${suffix}-${compact}`;
+}
+
+function buildDeletedEmail(email: string, id: string) {
+  return `deleted-${id.slice(-8)}-${Date.now()}@deleted.local`;
 }
 
 function jsonToText(value: Prisma.JsonValue | null): string {
