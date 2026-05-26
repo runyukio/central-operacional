@@ -357,6 +357,7 @@ type MonthlyAdvanceCycle = {
   monthLabel: string;
   locked: boolean;
   closedMessage: string;
+  deadlineMessage?: string;
   answered: boolean;
   canRespond: boolean;
   canRequestChange: boolean;
@@ -2335,16 +2336,9 @@ export function MySchedulePage() {
                         <p className="text-sm font-extrabold text-navy-950">{cycle.label}</p>
                         <p className="text-xs font-semibold text-muted">{cycle.monthLabel}</p>
                       </div>
-                      <StatusBadge status={cycle.locked ? "Concluído" : cycle.record?.optInLabel ?? "Pendente"} />
+                      <StatusBadge status={cycle.record?.optInLabel ?? (cycle.locked ? "Fechado" : "Pendente")} />
                     </div>
-                    {cycle.locked ? (
-                      <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-muted">
-                        <p>{cycle.closedMessage}</p>
-                        {cycle.record ? (
-                          <p className="mt-1 text-navy-950">Status: {cycle.record.optInLabel} • Valor: {currencyFormatter.format(cycle.record.amount)}</p>
-                        ) : null}
-                      </div>
-                    ) : cycle.record ? (
+                    {cycle.record ? (
                       <div className="space-y-3">
                         <div className="grid grid-cols-2 gap-2 text-xs">
                           <InfoLine label="Aderente" value={cycle.record.optInLabel} />
@@ -2352,6 +2346,9 @@ export function MySchedulePage() {
                           <InfoLine label="Atualizado por" value={cycle.record.updatedBy ?? "Sistema"} />
                           <InfoLine label="Atualizado em" value={cycle.record.updatedAt} />
                         </div>
+                        {cycle.closedMessage ? (
+                          <p className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">{cycle.closedMessage}</p>
+                        ) : null}
                         {cycle.canRequestChange ? (
                           <button
                             type="button"
@@ -2363,8 +2360,15 @@ export function MySchedulePage() {
                           </button>
                         ) : null}
                       </div>
+                    ) : !cycle.canRespond ? (
+                      <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-muted">
+                        <p>{cycle.closedMessage || cycle.deadlineMessage || "Este mês não está aberto para resposta direta."}</p>
+                      </div>
                     ) : (
                       <div className="space-y-3">
+                        {cycle.deadlineMessage ? (
+                          <p className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-extrabold text-blue-700">{cycle.deadlineMessage}</p>
+                        ) : null}
                         <p className="text-sm font-semibold text-muted">Deseja aderir ao adiantamento mensal para {cycle.monthLabel}?</p>
                         <p className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-extrabold text-blue-700">
                           Valor do adiantamento: {currencyFormatter.format(MONTHLY_ADVANCE_FIXED_AMOUNT)}

@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { normalizeRole } from "@/lib/permissions";
 
 export const MONTHLY_ADVANCE_LOCKED_IMPLEMENTATION_MONTH = "2026-05";
+export const MONTHLY_ADVANCE_RESPONSE_DEADLINE_DAY = 18;
 const TIME_ZONE = "America/Sao_Paulo";
 const MONTH_NAMES = [
   "Janeiro",
@@ -79,10 +80,18 @@ export function currentReferenceMonth(date = new Date()) {
   return `${year}-${month}`;
 }
 
+export function getCurrentReferenceMonth(date = new Date()) {
+  return currentReferenceMonth(date);
+}
+
 export function addReferenceMonths(referenceMonth: string, delta: number) {
   const [year, month] = referenceMonth.split("-").map(Number);
   const date = new Date(Date.UTC(year, (month || 1) - 1 + delta, 1));
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+export function getNextReferenceMonth(date = new Date()) {
+  return addReferenceMonths(getCurrentReferenceMonth(date), 1);
 }
 
 export function formatReferenceMonth(referenceMonth: string) {
@@ -91,13 +100,39 @@ export function formatReferenceMonth(referenceMonth: string) {
   return `${name}/${year}`;
 }
 
-export function isAdvanceMonthLockedForEmployee(referenceMonth: string) {
-  return normalizeReferenceMonth(referenceMonth) === MONTHLY_ADVANCE_LOCKED_IMPLEMENTATION_MONTH;
+export function isAdvanceCurrentMonthOpen(today = new Date()) {
+  return dayOfMonthInOperationTimeZone(today) <= MONTHLY_ADVANCE_RESPONSE_DEADLINE_DAY;
+}
+
+export function isAdvanceMonthOpenForEmployee(referenceMonth: string, today = new Date(), options: { answered?: boolean } = {}) {
+  const normalized = normalizeReferenceMonth(referenceMonth);
+  if (!normalized || options.answered) return false;
+  if (normalized === MONTHLY_ADVANCE_LOCKED_IMPLEMENTATION_MONTH) return false;
+
+  const currentMonth = getCurrentReferenceMonth(today);
+  const nextMonth = getNextReferenceMonth(today);
+  if (normalized === currentMonth) return isAdvanceCurrentMonthOpen(today);
+  if (normalized === nextMonth) return true;
+  return false;
+}
+
+export function isAdvanceMonthLockedForEmployee(referenceMonth: string, today = new Date(), options: { answered?: boolean } = {}) {
+  const normalized = normalizeReferenceMonth(referenceMonth);
+  if (!normalized) return true;
+  if (normalized === MONTHLY_ADVANCE_LOCKED_IMPLEMENTATION_MONTH) return true;
+  if (options.answered) return true;
+
+  const currentMonth = getCurrentReferenceMonth(today);
+  const nextMonth = getNextReferenceMonth(today);
+  if (normalized < currentMonth) return true;
+  if (normalized === currentMonth) return !isAdvanceCurrentMonthOpen(today);
+  if (normalized === nextMonth) return false;
+  return true;
 }
 
 export function employeeMonthlyAdvanceCycleMonths(date = new Date()) {
-  const currentMonth = currentReferenceMonth(date);
-  return [currentMonth, addReferenceMonths(currentMonth, 1)];
+  const currentMonth = getCurrentReferenceMonth(date);
+  return [currentMonth, getNextReferenceMonth(date)];
 }
 
 export function isEmployeeMonthlyAdvanceCycleOpen(referenceMonth: string, date = new Date()) {
@@ -136,6 +171,44 @@ export function normalizeWbLogin(value: unknown) {
     .replace(/[\u200B-\u200D\uFEFF]/g, "")
     .replace(/\s+/g, "")
     .toLowerCase();
+}
+
+function dayOfMonthInOperationTimeZone(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TIME_ZONE,
+    day: "2-digit"
+  }).formatToParts(date);
+  return Number(parts.find((part) => part.type === "day")?.value ?? date.getDate());
+}
+
+function isImplementationLockedMonth(referenceMonth: string) {
+  return normalizeReferenceMonth(referenceMonth) === MONTHLY_ADVANCE_LOCKED_IMPLEMENTATION_MONTH;
+}
+
+function monthlyAdvanceClosedMessage(referenceMonth: string, today = new Date(), answered = false) {
+  const normalized = normalizeReferenceMonth(referenceMonth);
+  if (isImplementationLockedMonth(normalized)) return "Este ciclo já foi fechado e pago. Alterações para este mês não estão disponíveis.";
+  if (answered) return "Para alterar uma resposta já registrada ou solicitar exceção após o prazo, abra uma solicitação.";
+  if (normalized === getCurrentReferenceMonth(today) && !isAdvanceCurrentMonthOpen(today)) {
+    return "O prazo para responder o adiantamento deste mês encerrou no dia 18.";
+  }
+  if (normalized && normalized < getCurrentReferenceMonth(today)) return "Este mês está disponível apenas como histórico.";
+  if (normalized && normalized !== getCurrentReferenceMonth(today) && normalized !== getNextReferenceMonth(today)) {
+    return "Este mês não está aberto para resposta direta.";
+  }
+  return "";
+}
+
+function monthlyAdvanceDeadlineMessage(referenceMonth: string, today = new Date(), answered = false) {
+  if (answered || isImplementationLockedMonth(referenceMonth)) return "";
+  const normalized = normalizeReferenceMonth(referenceMonth);
+  if (normalized === getCurrentReferenceMonth(today)) {
+    return isAdvanceCurrentMonthOpen(today)
+      ? "Você pode responder o adiantamento deste mês até o dia 18."
+      : "O prazo para responder o adiantamento deste mês encerrou no dia 18.";
+  }
+  if (normalized === getNextReferenceMonth(today)) return "Você já pode responder o adiantamento do próximo mês.";
+  return "";
 }
 
 export function parseAdvanceOptIn(value: unknown): boolean | null {
@@ -266,7 +339,8 @@ export async function getMyMonthlyAdvanceCycles(actor: Actor) {
   const employee = await resolveEmployeeForUser(user);
   if (!employee) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
 
-  const months = employeeMonthlyAdvanceCycleMonths();
+  const today = new Date();
+  const months = employeeMonthlyAdvanceCycleMonths(today);
   const records = await prisma.monthlyAdvanceRecord.findMany({
     where: { employeeId: employee.id, referenceMonth: { in: months }, status: { not: "REMOVED" } },
     include: monthlyAdvanceInclude
@@ -276,17 +350,20 @@ export async function getMyMonthlyAdvanceCycles(actor: Actor) {
   return {
     data: months.map((referenceMonth, index) => {
       const record = recordByMonth.get(referenceMonth);
-      const locked = isAdvanceMonthLockedForEmployee(referenceMonth);
       const answered = Boolean(record);
+      const locked = isAdvanceMonthLockedForEmployee(referenceMonth, today, { answered });
+      const canRespond = isAdvanceMonthOpenForEmployee(referenceMonth, today, { answered });
+      const canRequestChange = !isImplementationLockedMonth(referenceMonth) && answered && isEmployeeMonthlyAdvanceCycleOpen(referenceMonth, today);
       return {
         referenceMonth,
         label: index === 0 ? "Mês atual" : "Próximo mês",
         monthLabel: formatReferenceMonth(referenceMonth),
         locked,
-        closedMessage: locked ? "Este ciclo já foi fechado e pago. Alterações para este mês não estão disponíveis." : "",
+        closedMessage: monthlyAdvanceClosedMessage(referenceMonth, today, answered),
+        deadlineMessage: monthlyAdvanceDeadlineMessage(referenceMonth, today, answered),
         answered,
-        canRespond: !locked && !answered,
-        canRequestChange: !locked && answered,
+        canRespond,
+        canRequestChange,
         record: record ? mapMonthlyAdvanceRecord(record) : null
       };
     })
@@ -302,7 +379,8 @@ export async function respondMonthlyAdvance(actor: Actor, input: { referenceMont
 
   const referenceMonth = normalizeReferenceMonth(input.referenceMonth);
   if (!referenceMonth) return { error: "Mês de referência inválido.", status: 400 };
-  if (isAdvanceMonthLockedForEmployee(referenceMonth)) {
+  const today = new Date();
+  if (isImplementationLockedMonth(referenceMonth)) {
     return { error: "Este ciclo já foi fechado e pago. Alterações para este mês não estão disponíveis.", status: 403 };
   }
   if (!isEmployeeMonthlyAdvanceCycleOpen(referenceMonth)) {
@@ -313,6 +391,9 @@ export async function respondMonthlyAdvance(actor: Actor, input: { referenceMont
     where: { employeeId_referenceMonth: { employeeId: employee.id, referenceMonth } }
   });
   if (existing && existing.status !== "REMOVED") return { error: "Você já respondeu este ciclo. Para alterar, abra uma solicitação.", status: 409 };
+  if (!isAdvanceMonthOpenForEmployee(referenceMonth, today)) {
+    return { error: monthlyAdvanceClosedMessage(referenceMonth, today, false) || "Este mês não está aberto para resposta direta.", status: 403 };
+  }
 
   const amount = monthlyAdvanceAmountForOptIn(input.optIn);
   const record = existing ? await prisma.monthlyAdvanceRecord.update({
@@ -626,7 +707,7 @@ export async function createMonthlyAdvanceChangeRequest(actor: Actor, input: {
 
   const referenceMonth = normalizeReferenceMonth(input.referenceMonth);
   if (!referenceMonth) return { error: "Mês de referência inválido.", status: 400 };
-  if (isAdvanceMonthLockedForEmployee(referenceMonth)) {
+  if (isImplementationLockedMonth(referenceMonth)) {
     return { error: "Este ciclo já foi fechado e pago. Alterações para este mês não estão disponíveis.", status: 403 };
   }
   if (!isEmployeeMonthlyAdvanceCycleOpen(referenceMonth)) {
