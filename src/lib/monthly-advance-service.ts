@@ -296,7 +296,6 @@ export async function getMyMonthlyAdvanceCycles(actor: Actor) {
 export async function respondMonthlyAdvance(actor: Actor, input: { referenceMonth: string; optIn: boolean }) {
   const user = await findActiveUser(actor.email);
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
-  if (normalizeRole(actor.role) !== "COLABORADOR") return { error: "A resposta direta do adiantamento é exclusiva do colaborador.", status: 403 };
 
   const employee = await resolveEmployeeForUser(user);
   if (!employee) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
@@ -326,7 +325,7 @@ export async function respondMonthlyAdvance(actor: Actor, input: { referenceMont
       discountReason: null,
       finalAmount: decimal(amount),
       status: "RESPONDIDO",
-      observation: "Resposta registrada pelo colaborador.",
+      observation: "Resposta registrada pelo usuário.",
       updatedById: user.id
     },
     include: monthlyAdvanceInclude
@@ -341,7 +340,7 @@ export async function respondMonthlyAdvance(actor: Actor, input: { referenceMont
       discountReason: null,
       finalAmount: decimal(amount),
       status: "RESPONDIDO",
-      observation: "Resposta registrada pelo colaborador.",
+      observation: "Resposta registrada pelo usuário.",
       updatedById: user.id
     },
     include: monthlyAdvanceInclude
@@ -622,7 +621,6 @@ export async function createMonthlyAdvanceChangeRequest(actor: Actor, input: {
 }) {
   const user = await findActiveUser(actor.email);
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
-  if (normalizeRole(actor.role) !== "COLABORADOR") return { error: "A solicitação de alteração deve ser aberta pelo colaborador.", status: 403 };
   const employee = await resolveEmployeeForUser(user);
   if (!employee) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
 
@@ -874,8 +872,8 @@ const monthlyAdvanceInclude = {
 } satisfies Prisma.MonthlyAdvanceRecordInclude;
 
 async function findActiveUser(email: string) {
-  return prisma.user.findUnique({
-    where: { email },
+  return prisma.user.findFirst({
+    where: { email, status: "ACTIVE" },
     include: { role: true, employeeProfile: true }
   });
 }
