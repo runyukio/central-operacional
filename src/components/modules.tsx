@@ -801,11 +801,14 @@ function fileNameFromDisposition(disposition: string | null, fallback: string) {
   return plainMatch?.[1] ?? fallback;
 }
 
-async function downloadFile(url: string, fallbackFileName: string) {
+async function downloadFile(url: string, fallbackFileName: string, fallbackErrorMessage = "Não foi possível baixar o arquivo. Tente novamente.") {
   const response = await fetch(url, { cache: "no-store" });
-  if (!response.ok) throw new Error("Não foi possível baixar o template. Tente novamente.");
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { error?: string; message?: string } | null;
+    throw new Error(payload?.message ?? payload?.error ?? fallbackErrorMessage);
+  }
   const blob = await response.blob();
-  if (!blob.size) throw new Error("Não foi possível baixar o template. Tente novamente.");
+  if (!blob.size) throw new Error(fallbackErrorMessage);
   const fileName = fileNameFromDisposition(response.headers.get("Content-Disposition"), fallbackFileName);
   const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -1363,6 +1366,8 @@ export function OperationalCommandCenter() {
   const [absenceReasonPeople, setAbsenceReasonPeople] = useState<AttendanceItem[]>([]);
   const [loadingAbsenceReasonPeople, setLoadingAbsenceReasonPeople] = useState(false);
   const [absenceReasonError, setAbsenceReasonError] = useState("");
+  const [absenceReasonExportError, setAbsenceReasonExportError] = useState("");
+  const [exportingJustifiedAbsences, setExportingJustifiedAbsences] = useState(false);
   const [selectedAbsSupervisor, setSelectedAbsSupervisor] = useState<string | null>(null);
   const [absSupervisorPeople, setAbsSupervisorPeople] = useState<AttendanceItem[]>([]);
   const [loadingAbsSupervisorPeople, setLoadingAbsSupervisorPeople] = useState(false);
@@ -1409,6 +1414,7 @@ export function OperationalCommandCenter() {
     setSelectedAbsenceReason(justification === "justified" ? "Faltas justificadas" : reason);
     setAbsenceReasonPeople([]);
     setAbsenceReasonError("");
+    setAbsenceReasonExportError("");
     setLoadingAbsenceReasonPeople(true);
     try {
       const params = new URLSearchParams({
@@ -1438,6 +1444,35 @@ export function OperationalCommandCenter() {
     setSelectedAbsenceReason(null);
     setAbsenceReasonPeople([]);
     setAbsenceReasonError("");
+    setAbsenceReasonExportError("");
+  }
+
+  async function exportJustifiedAbsences() {
+    if (selectedAbsenceReason !== "Faltas justificadas") return;
+    setAbsenceReasonExportError("");
+    if (!absenceReasonPeople.length) {
+      setAbsenceReasonExportError("Nenhuma falta justificada encontrada para exportar.");
+      return;
+    }
+    setExportingJustifiedAbsences(true);
+    try {
+      const params = new URLSearchParams({
+        startDate: dateRange.startDate,
+        endDate: dateRange.endDate
+      });
+      if (selectedCommandLob !== "Todos") params.set("lob", selectedCommandLob);
+      if (selectedCommandSupervisor !== "Todos") params.set("supervisor", selectedCommandSupervisor);
+      if (selectedCommandRoleTitle !== "Todos") params.set("roleTitle", selectedCommandRoleTitle);
+      await downloadFile(
+        `/api/attendance/justified-absences/export?${params.toString()}`,
+        `faltas_justificadas_${dateRange.startDate}_${dateRange.endDate}.csv`,
+        "Não foi possível exportar as faltas justificadas. Tente novamente."
+      );
+    } catch (error) {
+      setAbsenceReasonExportError(error instanceof Error ? error.message : "Não foi possível exportar as faltas justificadas. Tente novamente.");
+    } finally {
+      setExportingJustifiedAbsences(false);
+    }
   }
 
   async function openAbsSupervisorPeople(supervisor: string) {
@@ -1694,8 +1729,23 @@ export function OperationalCommandCenter() {
                   {selectedAbsenceReason} • {dateRange.startDate} até {dateRange.endDate} • {selectedCommandLob === "Todos" ? "Todas as LOBs" : selectedCommandLob}
                 </p>
               </div>
-              <button onClick={closeAbsenceReasonPeople} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+              <div className="flex items-center gap-2">
+                {selectedAbsenceReason === "Faltas justificadas" ? (
+                  <button
+                    type="button"
+                    disabled={exportingJustifiedAbsences || loadingAbsenceReasonPeople}
+                    onClick={() => void exportJustifiedAbsences()}
+                    className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-extrabold text-navy-950 hover:border-blue-200 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {exportingJustifiedAbsences ? "Exportando..." : "Exportar"}
+                  </button>
+                ) : null}
+                <button onClick={closeAbsenceReasonPeople} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+              </div>
             </div>
+            {absenceReasonExportError ? (
+              <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-700">{absenceReasonExportError}</div>
+            ) : null}
             {loadingAbsenceReasonPeople ? (
               <div className="rounded-xl border border-border p-8 text-center text-sm font-bold text-muted">Carregando pessoas deste motivo...</div>
             ) : absenceReasonError ? (
@@ -1828,6 +1878,7 @@ export function MySchedulePage() {
   async function loadMySchedule(period = mySchedulePeriod) {
     const range = monthRange(period.month, period.year);
     const params = new URLSearchParams({
+      view: "mine",
       startDate: range.startDate,
       endDate: range.endDate,
       month: String(period.month),
@@ -3148,7 +3199,6 @@ export function SchedulesPage() {
 
   useEffect(() => {
     void refreshSchedules(1);
-    void refreshAttendanceForSchedulePeriod();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [schedulePeriod.month, schedulePeriod.year, scheduleFilters.lob]);
 
@@ -3209,7 +3259,8 @@ export function SchedulesPage() {
         supervisor: filtersOverride.supervisor,
         shift: filtersOverride.shift,
         status: filtersOverride.status,
-        roleTitle: filtersOverride.roleTitle
+        roleTitle: filtersOverride.roleTitle,
+        skipSummary: "true"
       });
       const payload = await apiJson<{ data: { scheduleGridRows: typeof scheduleRows; imports: ScheduleImportHistory[]; attendanceSummary?: AttendanceSummary; daysInMonth?: number; dateColumns?: string[]; pagination?: { page: number; limit: number; total: number; totalPages: number } }; actor?: { role: string; name: string } }>(`/api/schedules?${params.toString()}`);
       setScheduleActorRole(payload.actor?.role ?? "COLABORADOR");
@@ -3221,12 +3272,34 @@ export function SchedulesPage() {
         setScheduleEditForm((current) => payload.data.scheduleGridRows.some((row) => row.employee.id === current.employeeId) ? current : { ...current, employeeId: payload.data.scheduleGridRows[0].employee.id, lob: payload.data.scheduleGridRows[0].employee.lob, supervisor: payload.data.scheduleGridRows[0].employee.supervisor });
       }
       setImportHistory(payload.data.imports);
-      setAttendanceSummary(payload.data.attendanceSummary ?? null);
+      if (payload.data.attendanceSummary) setAttendanceSummary(payload.data.attendanceSummary);
+      else setAttendanceSummary(null);
+      void refreshScheduleSummary(rangeOverride, filtersOverride);
       void refreshAttendanceForSchedulePeriod(rangeOverride, filtersOverride);
     } catch {
       setScheduleRows([]);
       setScheduleDateColumns([]);
       setSchedulePagination((current) => ({ ...current, page: 1, total: 0, totalPages: 1 }));
+    }
+  }
+
+  async function refreshScheduleSummary(rangeOverride = scheduleDateRange, filtersOverride = scheduleFilters) {
+    try {
+      const params = new URLSearchParams({
+        startDate: rangeOverride.startDate,
+        endDate: rangeOverride.endDate,
+        summaryOnly: "true"
+      });
+      if (filtersOverride.lob !== "Todos") params.set("lob", filtersOverride.lob);
+      if (filtersOverride.supervisor !== "Todos") params.set("supervisor", filtersOverride.supervisor);
+      if (filtersOverride.shift !== "Todos") params.set("shift", filtersOverride.shift);
+      if (filtersOverride.collaborator.trim()) params.set("collaborator", filtersOverride.collaborator.trim());
+      if (filtersOverride.status !== "Todos") params.set("status", filtersOverride.status);
+      if (filtersOverride.roleTitle && filtersOverride.roleTitle !== "Todos") params.set("roleTitle", filtersOverride.roleTitle);
+      const payload = await apiJson<{ summary: AttendanceSummary }>(`/api/attendance?${params.toString()}`);
+      setAttendanceSummary(payload.summary);
+    } catch {
+      setAttendanceSummary(null);
     }
   }
 

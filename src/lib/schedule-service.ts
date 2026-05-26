@@ -120,6 +120,7 @@ export type ScheduleQuery = {
   endDate?: string;
   month?: number;
   year?: number;
+  view?: "mine" | "grid";
   collaborator?: string;
   lob?: string;
   supervisor?: string;
@@ -128,6 +129,7 @@ export type ScheduleQuery = {
   roleTitle?: string;
   page?: number;
   limit?: number;
+  skipSummary?: boolean | string;
 };
 
 export type ScheduleRemoveInput = {
@@ -154,6 +156,28 @@ export type AttendanceQuery = {
   includeJustified?: boolean | string;
   summaryOnly?: boolean | string;
   skipSummary?: boolean | string;
+};
+
+type AttendanceExportRow = {
+  employeeName: string;
+  wbLogin?: string;
+  email?: string;
+  date: string;
+  dateIso?: string;
+  shift: string;
+  lob?: string;
+  supervisor?: string;
+  roleTitle?: string;
+  status: string;
+  absenceReason?: string;
+  reasonCategory?: string;
+  supervisorJustification?: string;
+  isJustified?: boolean;
+  registeredBy: string;
+  registeredAt: string;
+  justifiedBy?: string;
+  justifiedAt?: string;
+  updatedAt?: string;
 };
 
 export type AttendanceInput = {
@@ -225,6 +249,71 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       ...(shiftFilter === "Folga" && (!query.status || query.status === "Todos") ? { status: "FOLGA" } : {}),
       ...(query.status && query.status !== "Todos" ? { status: uiToScheduleStatus[query.status] ?? undefined } : {})
     };
+    if (query.view === "mine") {
+      const own = user.employeeProfile
+        ? await prisma.employeeProfile.findUnique({
+          where: { id: user.employeeProfile.id },
+          select: {
+            id: true,
+            fullName: true,
+            scheduleType: true,
+            lob: { select: { name: true } },
+            shift: { select: { name: true } },
+            schedules: {
+              where: scheduleWhere,
+              select: {
+                date: true,
+                status: true,
+                shift: { select: { name: true } },
+                attendanceRecords: {
+                  orderBy: { updatedAt: "desc" },
+                  take: 1,
+                  select: { status: true, absenceReason: true, isJustified: true, updatedAt: true }
+                }
+              },
+              orderBy: { date: "asc" }
+            }
+          }
+        })
+        : null;
+      const ownScheduleByDate = new Map((own?.schedules ?? []).map((item) => [dateKey(item.date), item]));
+      const scheduleDayCells = isFullMonthPeriod(period) ? calendarCells(period.year, period.month) : dateColumns.map((date) => ({ date: date.getUTCDate(), dateIso: dateKey(date), outside: false }));
+      const scheduleDays = scheduleDayCells.map((day) => {
+        if (day.outside) return { ...day, shift: "Sem turno", label: "Sem cronograma" };
+        const schedule = ownScheduleByDate.get(day.dateIso);
+        const label = schedule
+          ? (scheduleStatusRequiresJustification(schedule.status) ? attendanceDisplayLabel(schedule.attendanceRecords) : null) ?? (scheduleToUiStatus[schedule.status] ?? "Escalado")
+          : "Sem cronograma";
+        const shift = schedule ? cleanShiftName(schedule.shift?.name ?? own?.shift.name) || "Sem turno" : "Sem turno";
+        return { ...day, shift, label };
+      });
+      logPerformanceMetric("schedules.mine", startedAt, {
+        role,
+        startDate: dateKey(period.start),
+        endDate: dateKey(period.end),
+        scheduleRows: own?.schedules.length ?? 0
+      });
+      return {
+        scheduleDays,
+        scheduleGridRows: [],
+        ownEmployee: own
+          ? {
+            id: own.id,
+            name: own.fullName,
+            schedule: own.scheduleType,
+            shift: cleanShiftName(own.shift.name) || "Sem turno",
+            lob: own.lob.name
+          }
+          : null,
+        imports: [],
+        attendanceSummary: emptyAttendanceSummary(),
+        month: period.month,
+        year: period.year,
+        daysInMonth: dateColumns.length,
+        dateColumns: dateColumns.map(dateKey),
+        pagination: { page: 1, limit, total: own?.schedules.length ? 1 : 0, totalPages: 1 }
+      };
+    }
     const search = query.collaborator?.trim();
     const employeeWhere: Prisma.EmployeeProfileWhereInput =
       role === "COLABORADOR" && user.employeeProfile
@@ -236,25 +325,28 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       ...(supervisorFilter ?? {}),
       employee: employeeWhere
     };
-    const scheduleEmployeeMatches = await prisma.schedule.findMany({
-      where: scheduleQueryWhere,
-      select: {
-        employeeId: true,
-        employee: { select: { fullName: true } }
-      },
-      orderBy: [{ employee: { fullName: "asc" } }, { employeeId: "asc" }]
-    });
-    const groupedEmployeeIds: string[] = [];
-    const seenEmployeeIds = new Set<string>();
-    scheduleEmployeeMatches.forEach((row) => {
-      if (seenEmployeeIds.has(row.employeeId)) return;
-      seenEmployeeIds.add(row.employeeId);
-      groupedEmployeeIds.push(row.employeeId);
-    });
-    const totalSchedules = groupedEmployeeIds.length;
+    const employeePageWhere: Prisma.EmployeeProfileWhereInput = {
+      ...employeeWhere,
+      schedules: {
+        some: {
+          ...scheduleWhere,
+          ...(supervisorFilter ?? {})
+        }
+      }
+    };
+    const totalSchedules = await prisma.employeeProfile.count({ where: employeePageWhere });
     const totalPages = Math.max(1, Math.ceil(totalSchedules / limit));
     const page = totalSchedules > 0 && requestedPage > totalPages ? 1 : requestedPage;
-    const visibleEmployeeIds = role === "COLABORADOR" ? groupedEmployeeIds.slice(0, 1) : groupedEmployeeIds.slice((page - 1) * limit, page * limit);
+    const employeePage = totalSchedules
+      ? await prisma.employeeProfile.findMany({
+        where: employeePageWhere,
+        select: { id: true },
+        orderBy: [{ fullName: "asc" }, { id: "asc" }],
+        skip: role === "COLABORADOR" ? 0 : (page - 1) * limit,
+        take: role === "COLABORADOR" ? 1 : limit
+      })
+      : [];
+    const visibleEmployeeIds = employeePage.map((employee) => employee.id);
     const visibleEmployeeOrder = new Map(visibleEmployeeIds.map((employeeId, index) => [employeeId, index]));
     const scheduleRows = visibleEmployeeIds.length
       ? await prisma.schedule.findMany({
@@ -287,42 +379,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
             justifiedAt: true,
             updatedAt: true,
             registeredBy: { select: { name: true } },
-            justifiedBy: { select: { name: true } },
-            histories: {
-              orderBy: { createdAt: "desc" },
-              take: 5,
-              select: {
-                previousStatus: true,
-                newStatus: true,
-                previousReason: true,
-                newReason: true,
-                comment: true,
-                createdAt: true,
-                changedBy: { select: { name: true } }
-              }
-            }
-          }
-        },
-        workHourRecords: {
-          orderBy: { updatedAt: "desc" },
-          take: 1,
-          select: {
-            id: true,
-            plannedStart: true,
-            plannedEnd: true,
-            plannedHours: true,
-            actualHours: true,
-            effectiveHours: true,
-            differenceMinutes: true,
-            status: true,
-            source: true,
-            observation: true,
-            updatedAt: true,
-            adjustments: {
-              orderBy: { createdAt: "desc" },
-              take: 1,
-              select: { id: true, status: true, reason: true, createdAt: true }
-            }
+            justifiedBy: { select: { name: true } }
           }
         },
         employee: {
@@ -434,7 +491,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       }),
       workHours: dateColumns.map((date) => {
         const schedule = scheduleByDate.get(dateKey(date));
-        const record = schedule?.workHourRecords?.[0] ?? (schedule ? workHourByEmployeeDay.get(`${schedule.employeeId}:${schedule.date.getTime()}`) : undefined);
+        const record = schedule ? workHourByEmployeeDay.get(`${schedule.employeeId}:${schedule.date.getTime()}`) : undefined;
         if (!record) return null;
         const adjustment = record.adjustments?.[0];
         const plannedHours = schedule ? plannedProductiveHoursForSchedule(schedule) : null;
@@ -523,7 +580,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         createdAt: formatDateTime(item.createdAt),
         user: item.importedBy.name
       })),
-      attendanceSummary: await getAttendanceSummaryFromDb(period, query),
+      attendanceSummary: query.skipSummary === true || query.skipSummary === "true" ? null : await getAttendanceSummaryFromDb(period, query),
       month: period.month,
       year: period.year,
       daysInMonth: dateColumns.length,
@@ -1373,12 +1430,14 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
           employeeId: schedule.employeeId,
           employeeName: schedule.employee.fullName,
           wbLogin: schedule.employee.wbLogin,
+          email: schedule.employee.user?.email ?? "",
           date: formatDate(schedule.date),
           dateIso: dateKey(schedule.date),
           scheduleId: schedule.id,
           shift: cleanShiftName(schedule.shift?.name ?? schedule.employee.shift.name) || "Sem turno",
           lob: schedule.employee.lob.name,
           supervisor: resolveSupervisorName(schedule, supervisorNameById),
+          roleTitle: schedule.employee.roleTitle ?? "Sem cargo",
           status,
           absenceReason: attendanceReasonForSchedule(schedule.status, record),
           reasonCategory: validJustification ? record?.reasonCategory ?? undefined : undefined,
@@ -1410,6 +1469,80 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
     logPerformanceMetric("attendance.list.error", startedAt, { error: true });
     recordErrorLog({ userEmail: actor.email, code: "ATTENDANCE_LIST_DB_FALLBACK", message: error instanceof Error ? error.message : "Falha ao listar presença", action: "ATTENDANCE_LIST", severity: "WARNING" });
     return allowDemoDataFallback ? { data: listMockAttendanceRecords(actor), summary: getMockAttendanceSummary(actor) } : { data: [], summary: emptyAttendanceSummary() };
+  }
+}
+
+export async function exportJustifiedAbsencesCsv(actor: Actor, query: AttendanceQuery = {}) {
+  try {
+    const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
+    if (!user) return { error: "Usuário ativo não encontrado para exportar faltas justificadas.", status: 401 };
+    const role = normalizeRole(actor.role);
+    if (!["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "RH", "QUALIDADE", "TI"].includes(role)) {
+      return { error: "Você não tem permissão para exportar faltas justificadas.", status: 403 };
+    }
+
+    const result = await getOperationalAttendance(actor, {
+      ...query,
+      includeJustified: "true",
+      justification: "justified",
+      skipSummary: "true"
+    });
+    if ("error" in result) return { error: result.error, status: 400 };
+
+    const rows = (result.data as AttendanceExportRow[]).filter((record) => record.status === "Falta" && record.isJustified);
+    if (!rows.length) return { error: "Nenhuma falta justificada encontrada para exportar.", status: 404 };
+
+    await prisma.auditLog.create({
+      data: {
+        actorId: user.id,
+        action: "UPLOAD",
+        entity: "AttendanceRecord",
+        reason: "Exportação CSV de Faltas Justificadas",
+        newValue: { action: "EXPORT_JUSTIFIED_ABSENCES", filters: query, exportedRows: rows.length }
+      }
+    }).catch(() => undefined);
+
+    const headers = [
+      "data",
+      "colaborador",
+      "wb_login",
+      "email",
+      "lob",
+      "supervisor",
+      "turno",
+      "cargo_funcao",
+      "status_cronograma",
+      "status_justificativa",
+      "motivo_justificativa",
+      "categoria_justificativa",
+      "observacao_justificativa",
+      "justificado_por",
+      "justificado_em",
+      "atualizado_em"
+    ];
+    const body = rows.map((record) => [
+      record.dateIso ?? record.date,
+      record.employeeName,
+      record.wbLogin ?? "",
+      record.email ?? "",
+      record.lob ?? "",
+      record.supervisor ?? "Sem supervisor",
+      record.shift,
+      record.roleTitle ?? "Sem cargo",
+      record.status,
+      "Justificado",
+      record.absenceReason ?? "",
+      record.reasonCategory ?? "",
+      record.supervisorJustification ?? "",
+      record.justifiedBy ?? record.registeredBy ?? "Sistema",
+      record.justifiedAt ?? "",
+      record.updatedAt ?? record.justifiedAt ?? record.registeredAt
+    ]);
+
+    return { csv: `\uFEFF${[headers, ...body].map((row) => row.map(csvCell).join(";")).join("\n")}`, rows: rows.length };
+  } catch (error) {
+    recordErrorLog({ userEmail: actor.email, code: "JUSTIFIED_ABSENCES_EXPORT_ERROR", message: error instanceof Error ? error.message : "Falha ao exportar faltas justificadas", action: "ATTENDANCE_EXPORT", severity: "ERROR" });
+    return { error: "Não foi possível exportar as faltas justificadas. Tente novamente.", status: 500 };
   }
 }
 
@@ -2002,7 +2135,7 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
       status: true,
       shift: { select: { name: true } },
       supervisorId: true,
-      employee: { select: { shift: { select: { name: true } }, supervisor: { select: { fullName: true } } } }
+      employee: { select: { supervisorId: true, shift: { select: { name: true } } } }
     }
   });
   const statusFor = (schedule: (typeof schedules)[number]) => normalizeOperationalStatus(schedule.status);
@@ -2026,7 +2159,7 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     if (!record.scheduleId || attendanceRecordByScheduleId.has(record.scheduleId)) return;
     attendanceRecordByScheduleId.set(record.scheduleId, record);
   });
-  const supervisorNameById = await supervisorNameMap(schedules.map((schedule) => schedule.supervisorId));
+  const supervisorNameById = await supervisorNameMap(schedules.flatMap((schedule) => [schedule.supervisorId, schedule.employee.supervisorId]));
   const planned = schedules.filter((schedule) => isScheduledStatus(statusFor(schedule))).length;
   const present = schedules.filter((schedule) => isPresentStatus(statusFor(schedule))).length;
   const absent = schedules.filter((schedule) => isAbsenceStatus(statusFor(schedule))).length;
@@ -2116,8 +2249,9 @@ function emptyAttendanceSummary() {
   };
 }
 
-function resolveSupervisorName(schedule: { supervisorId?: string | null; employee?: { supervisor?: { fullName: string } | null } | null }, supervisorNameById?: Map<string, string>) {
-  return (schedule.supervisorId ? supervisorNameById?.get(schedule.supervisorId) : "") || schedule.employee?.supervisor?.fullName?.trim() || "Sem supervisor";
+function resolveSupervisorName(schedule: { supervisorId?: string | null; employee?: { supervisorId?: string | null; supervisor?: { fullName: string } | null } | null }, supervisorNameById?: Map<string, string>) {
+  const supervisorId = schedule.supervisorId ?? schedule.employee?.supervisorId;
+  return (supervisorId ? supervisorNameById?.get(supervisorId) : "") || schedule.employee?.supervisor?.fullName?.trim() || "Sem supervisor";
 }
 
 function statusToOperational(status: string) {
