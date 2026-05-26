@@ -1,7 +1,5 @@
-import { StaffCoveragePage } from "@/components/modules";
-import { requireAdminRoute } from "@/lib/admin-route";
+import { InactiveModulePage } from "@/components/inactive-module-page";
 
 export default async function StaffCoberturaRoute() {
-  await requireAdminRoute();
-  return <StaffCoveragePage />;
+  return <InactiveModulePage title="Staff e Cobertura" />;
 }

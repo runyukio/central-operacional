@@ -193,7 +193,17 @@ export async function listOperationalWorkHours(actor: Actor, query: WorkHourQuer
           adjustments: {
             orderBy: { createdAt: "desc" },
             take: 1,
-            select: { id: true, status: true, reason: true, createdAt: true, requestedBy: { select: { name: true } } }
+            select: {
+              id: true,
+              status: true,
+              currentActualHours: true,
+              requestedActualHours: true,
+              reason: true,
+              justification: true,
+              rejectionReason: true,
+              createdAt: true,
+              requestedBy: { select: { name: true } }
+            }
           },
           schedule: { select: { status: true, startsAt: true, endsAt: true } }
         }
@@ -426,6 +436,7 @@ export async function requestWorkHourAdjustment(actor: Actor, input: WorkHourAdj
       return createValidationError({ [requestedHours.field ?? "requestedActualHours"]: requestedHours.error });
     }
 
+    const adjustmentDifferenceMinutes = calculateAdjustmentDifferenceMinutes(record.effectiveHours, requestedHours.hours!);
     const adjustment = await prisma.$transaction(async (tx) => {
       const created = await tx.workHourAdjustmentRequest.create({
         data: {
@@ -456,7 +467,13 @@ export async function requestWorkHourAdjustment(actor: Actor, input: WorkHourAdj
           changedById: user.id,
           action: "ADJUSTMENT_REQUESTED",
           previousValue: { status: record.status },
-          newValue: { status: "ADJUSTMENT_REQUESTED", adjustmentId: created.id },
+          newValue: {
+            status: "ADJUSTMENT_REQUESTED",
+            adjustmentId: created.id,
+            currentActualHours: record.effectiveHours,
+            requestedActualHours: requestedHours.hours,
+            adjustmentDifferenceMinutes
+          },
           reason: input.reason!.trim()
         }
       });
@@ -468,7 +485,12 @@ export async function requestWorkHourAdjustment(actor: Actor, input: WorkHourAdj
           entityId: created.id,
           reason: input.reason!.trim(),
           previousValue: { recordId: record.id, effectiveHours: record.effectiveHours },
-          newValue: { requestedHours: requestedHours.hours }
+          newValue: {
+            requestedHours: requestedHours.hours,
+            adjustmentDifferenceMinutes,
+            reason: input.reason!.trim(),
+            justification: input.justification!.trim()
+          }
         }
       });
 
@@ -756,7 +778,13 @@ export async function exportOperationalWorkHoursCsv(actor: Actor, query: WorkHou
     "divergencia",
     "status",
     "sistema_origem",
-    "observacao"
+    "observacao",
+    "ajuste_solicitado",
+    "diferenca_ajuste",
+    "status_ajuste",
+    "motivo_ajuste",
+    "solicitado_por",
+    "solicitado_em"
   ];
   const csvRows = result.data.map((row) => [
     row.date,
@@ -771,7 +799,13 @@ export async function exportOperationalWorkHoursCsv(actor: Actor, query: WorkHou
     formatHourDifferenceForExport(row.differenceMinutes),
     row.status,
     row.source,
-    row.observation
+    row.observation,
+    row.adjustmentRequestedHours ?? "",
+    formatHourDifferenceForExport(row.adjustmentDifferenceMinutes),
+    row.adjustmentStatus === "Sem ajuste" ? "" : row.adjustmentStatus,
+    row.adjustmentReason,
+    row.adjustmentRequestedBy,
+    row.adjustmentRequestedAt
   ]);
 
   await prisma.auditLog.create({
@@ -1096,7 +1130,21 @@ async function getRecordWithRelations(id: string) {
     where: { id },
     include: {
       employee: { select: { id: true, fullName: true, wbLogin: true, operationalStatus: true, roleTitle: true, lob: { select: { name: true } }, shift: { select: { name: true } }, supervisor: { select: { id: true, fullName: true, wbLogin: true } } } },
-      adjustments: { orderBy: { createdAt: "desc" }, take: 1, select: { id: true, status: true, reason: true, createdAt: true, requestedBy: { select: { name: true } } } },
+      adjustments: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        select: {
+          id: true,
+          status: true,
+          currentActualHours: true,
+          requestedActualHours: true,
+          reason: true,
+          justification: true,
+          rejectionReason: true,
+          createdAt: true,
+          requestedBy: { select: { name: true } }
+        }
+      },
       schedule: { select: { status: true, startsAt: true, endsAt: true } }
     }
   });
@@ -1104,6 +1152,9 @@ async function getRecordWithRelations(id: string) {
 
 function formatWorkHourRecord(record: any) {
   const adjustment = record.adjustments?.[0];
+  const adjustmentDifferenceMinutes = adjustment
+    ? calculateAdjustmentDifferenceMinutes(adjustment.currentActualHours ?? record.effectiveHours, adjustment.requestedActualHours)
+    : null;
   const plannedHours = productivePlannedHoursForRecord(record);
   const differenceMinutes = plannedHours === null ? record.differenceMinutes ?? 0 : calculateProductiveDifferenceMinutes(record.effectiveHours, plannedHours);
   const status = displayWorkHourStatus(record.status, plannedHours, differenceMinutes);
@@ -1128,7 +1179,14 @@ function formatWorkHourRecord(record: any) {
     rawStatus: status,
     adjustmentId: adjustment?.id ?? "",
     adjustmentStatus: adjustment ? adjustmentStatusLabel(adjustment.status) : "Sem ajuste",
+    adjustmentCurrentHours: adjustment?.currentActualHours ?? null,
+    adjustmentRequestedHours: adjustment?.requestedActualHours ?? null,
+    adjustmentDifferenceMinutes,
     adjustmentReason: adjustment?.reason ?? "",
+    adjustmentJustification: adjustment?.justification ?? "",
+    adjustmentRejectionReason: adjustment?.rejectionReason ?? "",
+    adjustmentRequestedBy: adjustment?.requestedBy?.name ?? "",
+    adjustmentRequestedAt: adjustment ? formatDateTime(adjustment.createdAt) : "",
     source: record.source ?? "",
     observation: record.observation ?? "",
     createdAt: formatDateTime(record.createdAt),
@@ -1136,8 +1194,30 @@ function formatWorkHourRecord(record: any) {
   };
 }
 
-function formatAdjustment(adjustment: { id: string; status: WorkHourAdjustmentStatus; reason: string; createdAt: Date }) {
-  return { id: adjustment.id, status: adjustmentStatusLabel(adjustment.status), reason: adjustment.reason, createdAt: formatDateTime(adjustment.createdAt) };
+function formatAdjustment(adjustment: {
+  id: string;
+  status: WorkHourAdjustmentStatus;
+  currentActualHours?: number | null;
+  requestedActualHours?: number | null;
+  reason: string;
+  justification?: string | null;
+  createdAt: Date;
+}) {
+  return {
+    id: adjustment.id,
+    status: adjustmentStatusLabel(adjustment.status),
+    currentActualHours: adjustment.currentActualHours ?? null,
+    requestedActualHours: adjustment.requestedActualHours ?? null,
+    adjustmentDifferenceMinutes: calculateAdjustmentDifferenceMinutes(adjustment.currentActualHours, adjustment.requestedActualHours),
+    reason: adjustment.reason,
+    justification: adjustment.justification ?? "",
+    createdAt: formatDateTime(adjustment.createdAt)
+  };
+}
+
+function calculateAdjustmentDifferenceMinutes(currentHours: number | null | undefined, requestedHours: number | null | undefined) {
+  if (currentHours === null || currentHours === undefined || requestedHours === null || requestedHours === undefined) return null;
+  return Math.round((requestedHours - currentHours) * 60);
 }
 
 async function writeReviewHistory(tx: Prisma.TransactionClient, userId: string, recordId: string, action: string, before: unknown, after: unknown, reason?: string) {
@@ -1165,8 +1245,8 @@ function normalizeRequestedHours(input: WorkHourAdjustmentInput): {
 } {
   const explicit = parseHours(input.requestedActualHours);
   if (explicit !== null) return { hours: explicit };
-  if (hasExcelValue(input.requestedActualHours)) return { error: "Horas realizadas inválidas. Horas realizadas devem ser um número ou formato HH:mm.", field: "requestedActualHours" };
-  return { error: "Horas solicitadas são obrigatórias.", field: "requestedActualHours" };
+  if (hasExcelValue(input.requestedActualHours)) return { error: "Horas solicitadas inválidas. Horas solicitadas devem ser um número ou formato HH:mm.", field: "requestedActualHours" };
+  return { error: "Nova hora solicitada é obrigatória.", field: "requestedActualHours" };
 }
 
 function plannedFromSchedule(schedule: Schedule) {

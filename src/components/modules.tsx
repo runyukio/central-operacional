@@ -325,6 +325,14 @@ type WorkHourRow = {
   rawStatus?: string;
   adjustmentId?: string;
   adjustmentStatus: string;
+  adjustmentCurrentHours?: number | null;
+  adjustmentRequestedHours?: number | null;
+  adjustmentDifferenceMinutes?: number | null;
+  adjustmentReason?: string;
+  adjustmentJustification?: string;
+  adjustmentRejectionReason?: string;
+  adjustmentRequestedBy?: string;
+  adjustmentRequestedAt?: string;
   source: string;
   observation: string;
 };
@@ -2325,6 +2333,9 @@ export function MySchedulePage() {
                           <p>Planejado: {workHour.plannedHours || DEFAULT_PRODUCTIVE_HOURS}h</p>
                           <p>Realizado: {workHour.effectiveHours}h</p>
                           <p className={cn(workHour.differenceMinutes < 0 ? "text-red-600" : workHour.differenceMinutes > 0 ? "text-emerald-600" : "text-muted")}>{workHour.status} • {formatHourDifference(workHour.differenceMinutes)}</p>
+                          {workHour.adjustmentStatus && workHour.adjustmentStatus !== "Sem ajuste" ? (
+                            <p className="mt-1 rounded bg-amber-50 px-1.5 py-1 text-amber-800">Ajuste de horas {workHour.adjustmentStatus.toLowerCase()}</p>
+                          ) : null}
                         </div>
                       ) : !dayAllowsWorkHours ? (
                         <p className="rounded-md border border-slate-100 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-muted">Horas não aplicáveis para este status.</p>
@@ -3738,9 +3749,13 @@ export function SchedulesPage() {
       setAttendanceMessage("Motivo e justificativa são obrigatórios para solicitar ajuste de horas.");
       return;
     }
+    if (!workHourAdjustmentForm.requestedActualHours.trim()) {
+      setAttendanceMessage("Nova hora solicitada é obrigatória.");
+      return;
+    }
     const requestedActualHours = parseProductiveHoursInput(workHourAdjustmentForm.requestedActualHours);
     if (requestedActualHours === null) {
-      setAttendanceMessage("Horas solicitadas inválidas. Use número ou formato HH:mm.");
+      setAttendanceMessage("Horas solicitadas devem ser um número ou formato HH:mm.");
       return;
     }
     setSavingWorkHourAdjustment(true);
@@ -3985,6 +4000,10 @@ export function SchedulesPage() {
   const canEditSlotJustification = scheduleEditRequiresReason && (canManageSchedules || isScheduleSupervisor);
   const parsedManualActualHours = parseProductiveHoursInput(workHourForm.actualHours);
   const manualActualHoursPreview = parsedManualActualHours ?? workHourForm.effectiveHours ?? 0;
+  const parsedScheduleAdjustmentHours = parseProductiveHoursInput(workHourAdjustmentForm.requestedActualHours);
+  const scheduleAdjustmentDifferenceMinutes = parsedScheduleAdjustmentHours !== null
+    ? Math.round((parsedScheduleAdjustmentHours - (workHourForm.effectiveHours ?? 0)) * 60)
+    : null;
   const manualDifferencePreview = manualActualHoursPreview && plannedHoursForManualPreview
     ? Math.round((manualActualHoursPreview - plannedHoursForManualPreview) * 60)
     : workHourForm.differenceMinutes;
@@ -4781,7 +4800,10 @@ export function SchedulesPage() {
                     </div>
                     {workHourForm.recordId && selectedScheduleAllowsWorkHours ? (
                       <div className="grid gap-4 md:grid-cols-2">
-                        <FormInput label="Horas solicitadas" value={workHourAdjustmentForm.requestedActualHours} onChange={(value) => setWorkHourAdjustmentForm({ ...workHourAdjustmentForm, requestedActualHours: value })} />
+                        <InfoLine label="Hora realizada atual" value={`${workHourForm.effectiveHours || 0}h`} />
+                        <InfoLine label="Divergência atual" value={formatHourDifference(workHourForm.differenceMinutes || 0)} />
+                        <InfoLine label="Diferença do ajuste" value={scheduleAdjustmentDifferenceMinutes === null ? "-" : formatHourDifference(scheduleAdjustmentDifferenceMinutes)} />
+                        <FormInput label="Nova hora solicitada" value={workHourAdjustmentForm.requestedActualHours} onChange={(value) => setWorkHourAdjustmentForm({ ...workHourAdjustmentForm, requestedActualHours: value })} />
                         <div>
                           <FormSelect label="Motivo" value={workHourAdjustmentForm.reason} options={["Erro de apontamento", "Sistema não capturou horário", "Feedback/treinamento durante o turno", "Problema técnico", "Ajuste manual autorizado", "Erro no upload", "Atividade operacional fora do sistema", "Outro"]} onChange={(value) => setWorkHourAdjustmentForm({ ...workHourAdjustmentForm, reason: value })} />
                         </div>
@@ -5008,6 +5030,10 @@ export function WorkHoursPage() {
   const sourceOptions = ["Todos", "MANUAL", "upload-horas"];
   const lobOptions = ["Todos", ...(settings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? Array.from(new Set(rows.map((row) => row.lob).filter(Boolean))))];
   const shiftOptions = ["Todos", ...cleanShiftOptions(settings?.shifts.filter((shift) => shift.status !== "INACTIVE").map((shift) => shift.name) ?? rows.map((row) => row.shift), true)];
+  const adjustmentRequestedHoursPreview = parseProductiveHoursInput(adjustmentForm.requestedActualHours);
+  const selectedAdjustmentDifferenceMinutes = selectedRow && adjustmentRequestedHoursPreview !== null
+    ? Math.round((adjustmentRequestedHoursPreview - selectedRow.effectiveHours) * 60)
+    : null;
 
   useEffect(() => {
     apiJson<{ data: SystemSettings }>("/api/settings").then((payload) => setSettings(payload.data)).catch(() => undefined);
@@ -5120,10 +5146,15 @@ export function WorkHoursPage() {
     if (!selectedRow) return;
     setSavingAdjustment(true);
     setMessage("");
+    if (!adjustmentForm.requestedActualHours.trim()) {
+      setSavingAdjustment(false);
+      setMessage("Nova hora solicitada é obrigatória.");
+      return;
+    }
     const requestedActualHours = parseProductiveHoursInput(adjustmentForm.requestedActualHours);
     if (requestedActualHours === null) {
       setSavingAdjustment(false);
-      setMessage("Horas solicitadas inválidas. Use número ou formato HH:mm.");
+      setMessage("Horas solicitadas devem ser um número ou formato HH:mm.");
       return;
     }
     try {
@@ -5279,7 +5310,7 @@ export function WorkHoursPage() {
         </div>
         <div className="overflow-x-auto">
           {rows.length ? (
-            <table className="w-full min-w-[1360px] text-left text-sm">
+            <table className="w-full min-w-[1480px] text-left text-sm">
               <thead className="border-b border-border bg-slate-50 text-xs font-bold uppercase tracking-wide text-muted">
                 <tr>
                   {["Data", "Colaborador", "WB/Login", "Status colaborador", "LOB", "Supervisor", "Turno", "Horas planejadas", "Horas realizadas", "Dif.", "Status", "Origem", "Observação", "Ajuste", "Ações"].map((column) => <th key={column} className="px-4 py-3">{column}</th>)}
@@ -5301,7 +5332,21 @@ export function WorkHoursPage() {
                     <td className="px-4 py-3"><StatusBadge status={row.status} /></td>
                     <td className="px-4 py-3">{row.source || "-"}</td>
                     <td className="px-4 py-3">{row.observation || "-"}</td>
-                    <td className="px-4 py-3"><StatusBadge status={row.adjustmentStatus} /></td>
+                    <td className="px-4 py-3">
+                      {row.adjustmentId ? (
+                        <div className="min-w-[180px] space-y-1">
+                          <StatusBadge status={row.adjustmentStatus} />
+                          <p className="text-xs font-semibold text-muted">Atual: {row.adjustmentCurrentHours ?? row.effectiveHours}h</p>
+                          <p className="text-xs font-semibold text-navy-950">Solicitado: {row.adjustmentRequestedHours ?? "-"}h</p>
+                          <p className={cn("text-xs font-bold", (row.adjustmentDifferenceMinutes ?? 0) < 0 ? "text-red-600" : (row.adjustmentDifferenceMinutes ?? 0) > 0 ? "text-emerald-600" : "text-muted")}>
+                            Ajuste: {row.adjustmentDifferenceMinutes === null || row.adjustmentDifferenceMinutes === undefined ? "-" : formatHourDifference(row.adjustmentDifferenceMinutes)}
+                          </p>
+                          {row.adjustmentRequestedBy ? <p className="text-[11px] font-semibold text-muted">Por {row.adjustmentRequestedBy} em {row.adjustmentRequestedAt}</p> : null}
+                        </div>
+                      ) : (
+                        <StatusBadge status="Sem ajuste" />
+                      )}
+                    </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-2">
                         {canRequestAdjustment && row.plannedHours > 0 && !["Ajuste solicitado", "Ajuste aprovado"].includes(row.status) ? (
@@ -5438,7 +5483,15 @@ export function WorkHoursPage() {
               <button onClick={() => setShowAdjustment(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
             </div>
             <div className="grid gap-4 md:grid-cols-2">
-              <FormInput label="Horas solicitadas" value={adjustmentForm.requestedActualHours} onChange={(value) => setAdjustmentForm({ ...adjustmentForm, requestedActualHours: value })} />
+              <InfoLine label="Colaborador" value={selectedRow.employeeName} />
+              <InfoLine label="WB/Login" value={selectedRow.wbLogin} />
+              <InfoLine label="Data" value={selectedRow.date} />
+              <InfoLine label="Cronograma vinculado" value={selectedRow.plannedHours > 0 ? "Sim" : "Não"} />
+              <InfoLine label="Horas planejadas produtivas" value={`${selectedRow.plannedHours || DEFAULT_PRODUCTIVE_HOURS}h`} />
+              <InfoLine label="Hora realizada atual" value={`${selectedRow.effectiveHours}h`} />
+              <InfoLine label="Divergência atual" value={formatHourDifference(selectedRow.differenceMinutes)} />
+              <InfoLine label="Diferença do ajuste" value={selectedAdjustmentDifferenceMinutes === null ? "-" : formatHourDifference(selectedAdjustmentDifferenceMinutes)} />
+              <FormInput label="Nova hora solicitada" value={adjustmentForm.requestedActualHours} onChange={(value) => setAdjustmentForm({ ...adjustmentForm, requestedActualHours: value })} />
               <div>
                 <FormSelect label="Motivo" value={adjustmentForm.reason} options={["Erro de apontamento", "Sistema não capturou horário", "Feedback/treinamento durante o turno", "Problema técnico", "Ajuste manual autorizado", "Erro no upload", "Atividade operacional fora do sistema", "Outro"]} onChange={(value) => setAdjustmentForm({ ...adjustmentForm, reason: value })} />
               </div>
@@ -5463,6 +5516,17 @@ export function WorkHoursPage() {
                 <p className="text-sm text-muted">{selectedRow.employeeName} • {selectedRow.date}</p>
               </div>
               <button onClick={() => setShowReview(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+            </div>
+            <div className="mb-4 grid gap-3 md:grid-cols-2">
+              <InfoLine label="Hora realizada atual" value={`${selectedRow.adjustmentCurrentHours ?? selectedRow.effectiveHours}h`} />
+              <InfoLine label="Hora solicitada" value={selectedRow.adjustmentRequestedHours === null || selectedRow.adjustmentRequestedHours === undefined ? "-" : `${selectedRow.adjustmentRequestedHours}h`} />
+              <InfoLine label="Diferença solicitada" value={selectedRow.adjustmentDifferenceMinutes === null || selectedRow.adjustmentDifferenceMinutes === undefined ? "-" : formatHourDifference(selectedRow.adjustmentDifferenceMinutes)} />
+              <InfoLine label="Status do ajuste" value={selectedRow.adjustmentStatus} />
+              <InfoLine label="Motivo" value={selectedRow.adjustmentReason || "-"} />
+              <InfoLine label="Solicitado por" value={selectedRow.adjustmentRequestedBy || "-"} />
+              <div className="md:col-span-2">
+                <InfoLine label="Justificativa" value={selectedRow.adjustmentJustification || "-"} />
+              </div>
             </div>
             {adjustmentAction === "reject" ? (
               <label>

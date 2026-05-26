@@ -24,7 +24,6 @@ export const navItems: NavItem[] = [
   { label: "Mapa de Funcionários", href: "/mapa-funcionarios", icon: "Map", roles: leadership },
   { label: "Hierarquia", href: "/hierarquia", icon: "UsersRound", roles: ["ADMIN", "GESTOR", "WFM", "RH", "SUPERVISOR"] },
   { label: "Adiantamento", href: "/adiantamento", icon: "Coins", roles: ["ADMIN", "GESTOR", "WFM"] },
-  { label: "Staff e Cobertura", href: "/staff-cobertura", icon: "UsersRound", roles: ["ADMIN"] },
   { label: "Equipamentos e Logística", href: "/equipamentos", icon: "MonitorCog", roles: ["ADMIN", "GESTOR", "TI"] },
   { label: "Feedback Anônimo", href: "/feedback-anonimo", icon: "MessageCircleQuestion", roles: allRoles },
   { label: "Configurações", href: "/configuracoes", icon: "Settings", roles: ["ADMIN"] }
