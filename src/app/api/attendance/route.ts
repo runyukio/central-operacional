@@ -40,7 +40,9 @@ export async function GET(request: Request) {
     justification: url.searchParams.get("justification") ?? undefined,
     includeJustified: url.searchParams.get("includeJustified") ?? undefined,
     summaryOnly: url.searchParams.get("summaryOnly") ?? undefined,
-    skipSummary: url.searchParams.get("skipSummary") ?? undefined
+    skipSummary: url.searchParams.get("skipSummary") ?? undefined,
+    detailType: url.searchParams.get("detailType") ?? undefined,
+    employeeId: url.searchParams.get("employeeId") ?? undefined
   }));
 }
 

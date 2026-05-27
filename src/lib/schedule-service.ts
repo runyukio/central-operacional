@@ -9,8 +9,9 @@ import { canEditSchedule, canImportCronogramas, normalizeRole } from "@/lib/perm
 import { auditPermissionDenied } from "@/lib/permission-audit";
 import { logPerformanceMetric } from "@/lib/performance-logger";
 import { cleanShiftName, isBlockedShiftName, isSelectableShiftName, shiftCategoryName, shiftLookupKey } from "@/lib/shift-display";
-import { calculateAbsenceRate, calculateCoverageRate, isAbsenceStatus, isPresentStatus, isScheduledStatus, normalizeOperationalStatus } from "@/lib/attendance-calculation";
+import { calculateAbsenceRate, calculateCoverageRate, getAbsenceStatuses, getPresentStatuses, getScheduledStatuses, isAbsenceStatus, isPresentStatus, isScheduledStatus, normalizeOperationalStatus } from "@/lib/attendance-calculation";
 import { calculateProductiveDifferenceMinutes, isProductiveDifferenceWithinTolerance, plannedProductiveHoursForSchedule } from "@/lib/work-hours-rules";
+import { isAgentJobTitle } from "@/lib/job-title-normalization";
 
 const uiToScheduleStatus: Record<string, ScheduleStatus> = {
   Escalado: "ESCALADO",
@@ -161,6 +162,8 @@ export type AttendanceQuery = {
   includeJustified?: boolean | string;
   summaryOnly?: boolean | string;
   skipSummary?: boolean | string;
+  detailType?: "scheduled" | "present" | "absences" | "lobAbs" | "agentAbsences" | string;
+  employeeId?: string;
 };
 
 type AttendanceExportRow = {
@@ -1513,11 +1516,13 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
     const skillFilter = employeeSkillFilter(query.skill);
     const reasonFilter = query.reason?.trim();
     const justificationFilter = query.justification?.trim().toLowerCase();
+    const detailType = query.detailType?.trim();
     const includeJustified = query.includeJustified === true || query.includeJustified === "true";
     const summaryOnly = query.summaryOnly === true || query.summaryOnly === "true";
     const skipSummary = query.skipSummary === true || query.skipSummary === "true";
     const pendingJustificationMode =
       !summaryOnly &&
+      !detailType &&
       !includeJustified &&
       !reasonFilter &&
       (!justificationFilter || justificationFilter === "pending") &&
@@ -1526,9 +1531,13 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
     if (lobFilter) extraFilters.push({ employee: { lob: { name: lobFilter } } });
     if (roleTitleFilter && roleTitleFilter !== "Todos") extraFilters.push({ employee: { roleTitle: roleTitleFilter } });
     if (skillFilter) extraFilters.push({ employee: skillFilter });
+    if (query.employeeId) extraFilters.push({ employeeId: query.employeeId });
     const supervisorWhere = await scheduleSupervisorFilter(supervisorFilter);
     if (supervisorWhere) extraFilters.push(supervisorWhere);
     if (statusFilter) extraFilters.push({ status: statusFilter });
+    if (detailType === "scheduled") extraFilters.push({ status: { in: getScheduledStatuses() as ScheduleStatus[] } });
+    if (detailType === "present") extraFilters.push({ status: { in: getPresentStatuses() as ScheduleStatus[] } });
+    if (["absences", "lobAbs", "agentAbsences"].includes(detailType ?? "")) extraFilters.push({ status: { in: getAbsenceStatuses() as ScheduleStatus[] } });
     if (pendingJustificationMode) extraFilters.push({ status: { in: scheduleStatusesRequiringJustification } });
     if (collaboratorFilter) {
       extraFilters.push({
@@ -1600,6 +1609,9 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
     const supervisorNameById = await supervisorNameMap(schedules.map((schedule) => schedule.supervisorId));
     const activeSchedules = schedules.filter((schedule) => {
       const record = schedule.attendanceRecords[0];
+      if (detailType === "scheduled") return isScheduledStatus(schedule.status);
+      if (detailType === "present") return isPresentStatus(schedule.status);
+      if (["absences", "lobAbs", "agentAbsences"].includes(detailType ?? "")) return isAbsenceStatus(schedule.status);
       if (includeJustified || reasonFilter || justificationFilter) {
         if (!isAbsenceStatus(schedule.status)) return false;
         if (reasonFilter && attendanceReasonForSchedule(schedule.status, record) !== reasonFilter) return false;
@@ -2343,7 +2355,17 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
       status: true,
       shift: { select: { name: true } },
       supervisorId: true,
-      employee: { select: { supervisorId: true, shift: { select: { name: true } } } }
+      employee: {
+        select: {
+          id: true,
+          fullName: true,
+          wbLogin: true,
+          roleTitle: true,
+          supervisorId: true,
+          shift: { select: { name: true } },
+          lob: { select: { name: true } }
+        }
+      }
     }
   });
   const statusFor = (schedule: (typeof schedules)[number]) => normalizeOperationalStatus(schedule.status);
@@ -2396,6 +2418,57 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     acc[supervisorName].absRate = calculateAbsenceRate(acc[supervisorName].planned, acc[supervisorName].absent);
     return acc;
   }, {});
+  const byLob = schedules.reduce<Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; absRate: number }>>((acc, schedule) => {
+    const lobName = schedule.employee.lob?.name?.trim() || "Sem LOB";
+    const status = statusFor(schedule);
+    const record = attendanceRecordByScheduleId.get(schedule.id);
+    acc[lobName] ??= { planned: 0, present: 0, absent: 0, unjustified: 0, justified: 0, absRate: 0 };
+    if (isScheduledStatus(status)) acc[lobName].planned += 1;
+    if (isPresentStatus(status)) acc[lobName].present += 1;
+    if (isAbsenceStatus(status)) {
+      acc[lobName].absent += 1;
+      if (isPendingJustificationForSchedule(schedule.status, record)) {
+        acc[lobName].unjustified += 1;
+      } else if (hasValidJustification(record)) {
+        acc[lobName].justified += 1;
+      }
+    }
+    acc[lobName].absRate = calculateAbsenceRate(acc[lobName].planned, acc[lobName].absent);
+    return acc;
+  }, {});
+  const topAbsenceAgentMap = schedules.reduce<Record<string, { employeeId: string; name: string; wbLogin: string; supervisor: string; lob: string; planned: number; absent: number; unjustified: number; justified: number; absRate: number }>>((acc, schedule) => {
+    if (!isAgentJobTitle(schedule.employee.roleTitle)) return acc;
+    const status = statusFor(schedule);
+    const record = attendanceRecordByScheduleId.get(schedule.id);
+    const employeeId = schedule.employee.id;
+    acc[employeeId] ??= {
+      employeeId,
+      name: schedule.employee.fullName,
+      wbLogin: schedule.employee.wbLogin,
+      supervisor: resolveSupervisorName(schedule, supervisorNameById),
+      lob: schedule.employee.lob?.name?.trim() || "Sem LOB",
+      planned: 0,
+      absent: 0,
+      unjustified: 0,
+      justified: 0,
+      absRate: 0
+    };
+    if (isScheduledStatus(status)) acc[employeeId].planned += 1;
+    if (isAbsenceStatus(status)) {
+      acc[employeeId].absent += 1;
+      if (isPendingJustificationForSchedule(schedule.status, record)) {
+        acc[employeeId].unjustified += 1;
+      } else if (hasValidJustification(record)) {
+        acc[employeeId].justified += 1;
+      }
+    }
+    acc[employeeId].absRate = calculateAbsenceRate(acc[employeeId].planned, acc[employeeId].absent);
+    return acc;
+  }, {});
+  const topAbsenceAgents = Object.values(topAbsenceAgentMap)
+    .filter((agent) => agent.absent > 0)
+    .sort((a, b) => b.absent - a.absent || b.unjustified - a.unjustified || a.name.localeCompare(b.name, "pt-BR"))
+    .slice(0, 6);
   const unjustified = absenceSchedules.filter((item) => isPendingJustificationForSchedule(item.schedule.status, item.record)).length;
   const justified = absenceSchedules.filter((item) => hasValidJustification(item.record)).length;
   const summary = {
@@ -2412,7 +2485,9 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     riskLevel: coverageRate >= 95 ? "Excelente" : coverageRate >= 90 ? "Adequado" : coverageRate >= 85 ? "Atenção" : "Crítico",
     byReason,
     byShift,
-    bySupervisor
+    bySupervisor,
+    byLob,
+    topAbsenceAgents
   };
   logPerformanceMetric("attendance.summary-db", startedAt, {
     startDate: period ? dateKey(period.start) : null,
@@ -2457,7 +2532,9 @@ function emptyAttendanceSummary() {
     riskLevel: "Adequado",
     byReason: {},
     byShift: {},
-    bySupervisor: {}
+    bySupervisor: {},
+    byLob: {},
+    topAbsenceAgents: []
   };
 }
 

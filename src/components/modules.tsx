@@ -558,6 +558,8 @@ type AttendanceSummary = {
   byReason: Record<string, number>;
   byShift?: Record<string, { planned: number; present: number; absent: number; gap: number }>;
   bySupervisor?: Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; absRate: number }>;
+  byLob?: Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; absRate: number }>;
+  topAbsenceAgents?: Array<{ employeeId: string; name: string; wbLogin: string; supervisor: string; lob: string; planned: number; absent: number; unjustified: number; justified: number; absRate: number }>;
 };
 
 type AttendanceItem = {
@@ -572,6 +574,7 @@ type AttendanceItem = {
   shift: string;
   lob?: string;
   supervisor?: string;
+  roleTitle?: string;
   status: string;
   absenceReason?: string;
   reasonCategory?: string;
@@ -1445,6 +1448,18 @@ export function OperationalCommandCenter() {
   const [absSupervisorPeople, setAbsSupervisorPeople] = useState<AttendanceItem[]>([]);
   const [loadingAbsSupervisorPeople, setLoadingAbsSupervisorPeople] = useState(false);
   const [absSupervisorError, setAbsSupervisorError] = useState("");
+  const [selectedCommandDetail, setSelectedCommandDetail] = useState<{ type: "scheduled" | "present" | "absences"; title: string } | null>(null);
+  const [commandDetailPeople, setCommandDetailPeople] = useState<AttendanceItem[]>([]);
+  const [loadingCommandDetailPeople, setLoadingCommandDetailPeople] = useState(false);
+  const [commandDetailError, setCommandDetailError] = useState("");
+  const [selectedLobAbs, setSelectedLobAbs] = useState<string | null>(null);
+  const [lobAbsPeople, setLobAbsPeople] = useState<AttendanceItem[]>([]);
+  const [loadingLobAbsPeople, setLoadingLobAbsPeople] = useState(false);
+  const [lobAbsError, setLobAbsError] = useState("");
+  const [selectedAgentAbsences, setSelectedAgentAbsences] = useState<{ employeeId: string; name: string } | null>(null);
+  const [agentAbsencePeople, setAgentAbsencePeople] = useState<AttendanceItem[]>([]);
+  const [loadingAgentAbsencePeople, setLoadingAgentAbsencePeople] = useState(false);
+  const [agentAbsenceError, setAgentAbsenceError] = useState("");
 
   useEffect(() => {
     void loadCommandCenterSummary();
@@ -1511,6 +1526,102 @@ export function OperationalCommandCenter() {
     } finally {
       setLoadingAbsenceReasonPeople(false);
     }
+  }
+
+  function appendCommandFilters(params: URLSearchParams, options: { includeSupervisor?: boolean; includeLob?: boolean; includeRoleTitle?: boolean } = {}) {
+    const { includeSupervisor = true, includeLob = true, includeRoleTitle = true } = options;
+    if (includeLob && selectedCommandLob !== "Todos") params.set("lob", selectedCommandLob);
+    if (includeSupervisor && selectedCommandSupervisor !== "Todos") params.set("supervisor", selectedCommandSupervisor);
+    if (includeRoleTitle && selectedCommandRoleTitle !== "Todos") params.set("roleTitle", selectedCommandRoleTitle);
+  }
+
+  async function openCommandDetailPeople(type: "scheduled" | "present" | "absences", title: string) {
+    setSelectedCommandDetail({ type, title });
+    setCommandDetailPeople([]);
+    setCommandDetailError("");
+    setLoadingCommandDetailPeople(true);
+    try {
+      const params = new URLSearchParams({
+        startDate: dateRange.startDate,
+        endDate: dateRange.endDate,
+        detailType: type,
+        includeJustified: "true",
+        skipSummary: "true"
+      });
+      appendCommandFilters(params);
+      const payload = await apiJson<{ data: AttendanceItem[] }>(`/api/attendance?${params.toString()}`);
+      setCommandDetailPeople(payload.data);
+    } catch {
+      setCommandDetailError("Não foi possível carregar as pessoas deste indicador.");
+    } finally {
+      setLoadingCommandDetailPeople(false);
+    }
+  }
+
+  function closeCommandDetailPeople() {
+    setSelectedCommandDetail(null);
+    setCommandDetailPeople([]);
+    setCommandDetailError("");
+  }
+
+  async function openLobAbsPeople(lob: string) {
+    setSelectedLobAbs(lob);
+    setLobAbsPeople([]);
+    setLobAbsError("");
+    setLoadingLobAbsPeople(true);
+    try {
+      const params = new URLSearchParams({
+        startDate: dateRange.startDate,
+        endDate: dateRange.endDate,
+        detailType: "lobAbs",
+        lob,
+        includeJustified: "true",
+        skipSummary: "true"
+      });
+      appendCommandFilters(params, { includeLob: false });
+      const payload = await apiJson<{ data: AttendanceItem[] }>(`/api/attendance?${params.toString()}`);
+      setLobAbsPeople(payload.data);
+    } catch {
+      setLobAbsError("Não foi possível carregar as faltas desta LOB.");
+    } finally {
+      setLoadingLobAbsPeople(false);
+    }
+  }
+
+  function closeLobAbsPeople() {
+    setSelectedLobAbs(null);
+    setLobAbsPeople([]);
+    setLobAbsError("");
+  }
+
+  async function openAgentAbsencePeople(agent: { employeeId: string; name: string }) {
+    setSelectedAgentAbsences(agent);
+    setAgentAbsencePeople([]);
+    setAgentAbsenceError("");
+    setLoadingAgentAbsencePeople(true);
+    try {
+      const params = new URLSearchParams({
+        startDate: dateRange.startDate,
+        endDate: dateRange.endDate,
+        detailType: "agentAbsences",
+        employeeId: agent.employeeId,
+        includeJustified: "true",
+        skipSummary: "true"
+      });
+      appendCommandFilters(params);
+      const payload = await apiJson<{ data: AttendanceItem[] }>(`/api/attendance?${params.toString()}`);
+      setAgentAbsencePeople(payload.data);
+    } catch {
+      setAgentAbsenceError("Não foi possível carregar as faltas deste agente.");
+    } finally {
+      setLoadingAgentAbsencePeople(false);
+    }
+  }
+
+  function closeAgentAbsencePeople() {
+    setSelectedAgentAbsences(null);
+    setAgentAbsencePeople([]);
+    setAgentAbsenceError("");
   }
 
   function closeAbsenceReasonPeople() {
@@ -1613,23 +1724,18 @@ export function OperationalCommandCenter() {
     riskLevel: "Sem dados",
     byReason: {},
     byShift: {},
-    bySupervisor: {}
+    bySupervisor: {},
+    byLob: {},
+    topAbsenceAgents: []
   };
   const stats = [
-    { title: "Pessoas Escaladas", value: summary.planned, change: summary.planned ? "100%" : "0%", helper: "base atual", icon: Users, tone: "blue" as const },
-    { title: "Presentes", value: summary.present, change: `${summary.coverageRate}%`, helper: "cobertura real", icon: UserCheck, tone: "green" as const },
-    { title: "Faltas", value: summary.absent, change: `${summary.absRate}%`, helper: "ABS", icon: XCircle, tone: "orange" as const },
+    { title: "Pessoas Escaladas", value: summary.planned, change: summary.planned ? "100%" : "0%", helper: "base atual", icon: Users, tone: "blue" as const, action: () => void openCommandDetailPeople("scheduled", "Pessoas Escaladas") },
+    { title: "Presentes", value: summary.present, change: `${summary.coverageRate}%`, helper: "cobertura real", icon: UserCheck, tone: "green" as const, action: () => void openCommandDetailPeople("present", "Presentes") },
+    { title: "Faltas", value: summary.absent, change: `${summary.absRate}%`, helper: "ABS", icon: XCircle, tone: "orange" as const, action: () => void openCommandDetailPeople("absences", "Faltas") },
     { title: "Faltas sem justificativa", value: summary.unjustified, helper: "pendentes", icon: AlertTriangle, tone: summary.unjustified ? "red" as const : "green" as const, action: () => void openAbsenceReasonPeople("Sem justificativa", "pending") },
     { title: "Faltas justificadas", value: summary.justified ?? 0, helper: "com motivo registrado", icon: CheckCircle2, tone: (summary.justified ?? 0) ? "green" as const : "blue" as const, action: () => void openAbsenceReasonPeople("Faltas justificadas", "justified") },
-    { title: "Atrasos", value: summary.late, helper: "turno atual", icon: Clock, tone: "gold" as const },
-    { title: "Saídas antecipadas", value: summary.earlyLeave, helper: "turno atual", icon: AlertTriangle, tone: "red" as const },
     { title: "Risco de Cobertura", value: summary.riskLevel, change: `${summary.gap}`, helper: "gap real", icon: ShieldCheck, tone: summary.riskLevel === "Crítico" ? "red" as const : "purple" as const }
   ];
-  const commandPresenceByShift = Object.entries(summary.byShift ?? {}).map(([shift, values]) => ({
-    shift,
-    escalados: values.planned,
-    presentes: values.present
-  }));
   const commandAbsenceReasons = Object.entries(summary.byReason)
     .filter(([, value]) => value > 0)
     .map(([name, value], index) => ({ name, value, fill: ["#071B3A", "#14B8A6", "#F59E0B", "#7C3AED", "#94A3B8"][index % 5] }));
@@ -1637,6 +1743,22 @@ export function OperationalCommandCenter() {
   const commandAbsBySupervisor = Object.entries(summary.bySupervisor ?? {})
     .map(([supervisor, values]) => ({ supervisor, ...values }))
     .sort((a, b) => b.absent - a.absent || b.absRate - a.absRate || a.supervisor.localeCompare(b.supervisor, "pt-BR"));
+  const commandAbsByLob = Object.entries(summary.byLob ?? {})
+    .map(([lob, values]) => ({ lob, ...values }))
+    .sort((a, b) => b.absRate - a.absRate || b.absent - a.absent || a.lob.localeCompare(b.lob, "pt-BR"));
+  const commandTopAbsenceAgents = summary.topAbsenceAgents ?? [];
+  const commandPeopleRows = (records: AttendanceItem[]) => records.map((record) => [
+    record.employeeName,
+    record.wbLogin ?? "-",
+    record.date,
+    record.lob ?? "-",
+    record.supervisor ?? "Sem supervisor",
+    record.shift,
+    record.roleTitle ?? "-",
+    <StatusBadge key={`${record.id}-status`} status={record.status} />,
+    record.impactsAbs ? record.absenceReason ?? (record.isJustified ? "Justificada" : "Sem justificativa") : "-",
+    <a key={`${record.id}-open`} href={`/escalas?startDate=${record.dateIso ?? dateRange.startDate}&collaborator=${encodeURIComponent(record.employeeName)}`} className="text-xs font-extrabold text-blue-600 hover:underline">Abrir no Cronograma</a>
+  ]);
 
   return (
     <div>
@@ -1718,26 +1840,63 @@ export function OperationalCommandCenter() {
           )
         ))}
       </div>
-      <div className="grid gap-5 xl:grid-cols-3">
-        <Panel title="Presença por Turno">
-          {commandPresenceByShift.length ? <div className="h-[280px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={commandPresenceByShift}>
-                <CartesianGrid stroke="#E8EDF5" vertical={false} />
-                <XAxis dataKey="shift" tickLine={false} axisLine={false} />
-                <YAxis tickLine={false} axisLine={false} />
-                <Tooltip />
-                <Bar dataKey="escalados" fill="#93C5FD" radius={[8, 8, 0, 0]} />
-                <Line type="monotone" dataKey="presentes" stroke="#071B3A" strokeWidth={3} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div> : <EmptyState title="Sem cronograma nesta data" description="Selecione uma data com registros reais de cronograma para visualizar presença por turno." />}
-          <div className="mt-4 rounded-lg bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
-            {summary.planned ? `Cobertura real atual: ${summary.coverageRate}%` : "Sem cronograma importado para o período de teste."}
-          </div>
+      <div className="space-y-5">
+        <Panel title="ABS por Supervisor">
+          {commandAbsBySupervisor.length ? (
+            <div className="grid max-h-[360px] gap-3 overflow-y-auto pr-1 md:grid-cols-2 xl:grid-cols-3">
+              {commandAbsBySupervisor.map((item) => (
+                <button
+                  key={item.supervisor}
+                  type="button"
+                  onClick={() => void openAbsSupervisorPeople(item.supervisor)}
+                  className="w-full rounded-lg border border-border bg-white p-3 text-left transition hover:border-blue-200 hover:bg-blue-50"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="min-w-0 truncate text-sm font-extrabold text-navy-950">{item.supervisor}</span>
+                    <span className="rounded-md bg-orange-50 px-2 py-1 text-xs font-black text-orange-700">{item.absRate}% ABS</span>
+                  </div>
+                  <div className="mt-3 grid grid-cols-4 gap-2 text-center text-xs">
+                    <MetricMini label="Escaladas" value={item.planned} />
+                    <MetricMini label="Faltas" value={item.absent} />
+                    <MetricMini label="Sem just." value={item.unjustified} />
+                    <MetricMini label="Justif." value={item.justified} />
+                  </div>
+                </button>
+              ))}
+            </div>
+          ) : <EmptyState title="Sem ABS por supervisor" description="A visão será exibida quando houver cronogramas no período selecionado." />}
         </Panel>
 
-        <Panel title="Ausências por Motivo">
+        <div className="grid gap-5 xl:grid-cols-3">
+          <Panel title="Agentes com maior quantidade de faltas">
+            {commandTopAbsenceAgents.length ? (
+              <div className="max-h-[340px] space-y-2 overflow-y-auto pr-1">
+                {commandTopAbsenceAgents.map((agent, index) => (
+                  <button
+                    key={agent.employeeId}
+                    type="button"
+                    onClick={() => void openAgentAbsencePeople({ employeeId: agent.employeeId, name: agent.name })}
+                    className="w-full rounded-lg border border-border bg-white p-3 text-left transition hover:border-blue-200 hover:bg-blue-50"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-extrabold text-navy-950">#{index + 1} {agent.name}</p>
+                        <p className="truncate text-xs font-semibold text-muted">{agent.wbLogin || "-"} • {agent.lob} • {agent.supervisor}</p>
+                      </div>
+                      <span className="rounded-md bg-red-50 px-2 py-1 text-xs font-black text-red-700">{agent.absent} faltas</span>
+                    </div>
+                    <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+                      <MetricMini label="Sem just." value={agent.unjustified} />
+                      <MetricMini label="Justif." value={agent.justified} />
+                      <MetricMini label="ABS indiv." value={`${agent.absRate}%`} />
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : <EmptyState title="Nenhuma falta encontrada" description="O ranking aparecerá quando houver faltas de agentes nos filtros selecionados." />}
+          </Panel>
+
+          <Panel title="Ausências por Motivo">
           {commandAbsenceReasons.length ? <div className="grid gap-4 md:grid-cols-[220px_1fr]">
             <div className="h-[260px]">
               <ResponsiveContainer width="100%" height="100%">
@@ -1763,34 +1922,119 @@ export function OperationalCommandCenter() {
               ))}
             </div>
           </div> : <EmptyState title="Sem faltas registradas" description="Os motivos aparecerão quando houver registros reais de presença ou ocorrência." />}
-        </Panel>
+          </Panel>
 
-        <Panel title="ABS por Supervisor">
-          {commandAbsBySupervisor.length ? (
-            <div className="max-h-[320px] space-y-2 overflow-y-auto pr-1">
-              {commandAbsBySupervisor.map((item) => (
-                <button
-                  key={item.supervisor}
-                  type="button"
-                  onClick={() => void openAbsSupervisorPeople(item.supervisor)}
-                  className="w-full rounded-lg border border-border bg-white p-3 text-left transition hover:border-blue-200 hover:bg-blue-50"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate text-sm font-extrabold text-navy-950">{item.supervisor}</span>
-                    <span className="rounded-md bg-orange-50 px-2 py-1 text-xs font-black text-orange-700">{item.absRate}% ABS</span>
-                  </div>
-                  <div className="mt-3 grid grid-cols-4 gap-2 text-center text-xs">
-                    <MetricMini label="Escaladas" value={item.planned} />
-                    <MetricMini label="Faltas" value={item.absent} />
-                    <MetricMini label="Sem just." value={item.unjustified} />
-                    <MetricMini label="Justif." value={item.justified} />
-                  </div>
-                </button>
-              ))}
-            </div>
-          ) : <EmptyState title="Sem ABS por supervisor" description="A visão será exibida quando houver cronogramas no período selecionado." />}
-        </Panel>
+          <Panel title="ABS por LOB">
+            {commandAbsByLob.length ? (
+              <div className="max-h-[340px] space-y-2 overflow-y-auto pr-1">
+                {commandAbsByLob.map((item) => (
+                  <button
+                    key={item.lob}
+                    type="button"
+                    onClick={() => void openLobAbsPeople(item.lob)}
+                    className="w-full rounded-lg border border-border bg-white p-3 text-left transition hover:border-blue-200 hover:bg-blue-50"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="min-w-0 truncate text-sm font-extrabold text-navy-950">{item.lob}</span>
+                      <span className="rounded-md bg-orange-50 px-2 py-1 text-xs font-black text-orange-700">{item.absRate}% ABS</span>
+                    </div>
+                    <div className="mt-3 grid grid-cols-4 gap-2 text-center text-xs">
+                      <MetricMini label="Escaladas" value={item.planned} />
+                      <MetricMini label="Faltas" value={item.absent} />
+                      <MetricMini label="Sem just." value={item.unjustified} />
+                      <MetricMini label="Justif." value={item.justified} />
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : <EmptyState title="Sem ABS por LOB" description="A visão será exibida quando houver cronogramas no período selecionado." />}
+          </Panel>
+        </div>
       </div>
+
+      {selectedCommandDetail ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="card max-h-[90vh] w-full max-w-6xl overflow-y-auto p-5">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-extrabold text-navy-950">{selectedCommandDetail.title}</h2>
+                <p className="text-sm font-semibold text-muted">
+                  {dateRange.startDate} até {dateRange.endDate} • {selectedCommandLob === "Todos" ? "Todas as LOBs" : selectedCommandLob}
+                </p>
+              </div>
+              <button onClick={closeCommandDetailPeople} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+            </div>
+            {loadingCommandDetailPeople ? (
+              <div className="rounded-xl border border-border p-8 text-center text-sm font-bold text-muted">Carregando pessoas deste indicador...</div>
+            ) : commandDetailError ? (
+              <EmptyState title="Não foi possível carregar" description={commandDetailError} />
+            ) : commandDetailPeople.length ? (
+              <SimpleTable
+                columns={["Colaborador", "WB/Login", "Data", "LOB", "Supervisor", "Turno", "Cargo/Função", "Status do cronograma", "Justificativa", "Ação"]}
+                rows={commandPeopleRows(commandDetailPeople)}
+              />
+            ) : (
+              <EmptyState title="Nenhum colaborador encontrado para os filtros selecionados." description="A lista respeita o período e os filtros aplicados na Central Operacional." />
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {selectedAgentAbsences ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="card max-h-[90vh] w-full max-w-6xl overflow-y-auto p-5">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-extrabold text-navy-950">Faltas do agente</h2>
+                <p className="text-sm font-semibold text-muted">
+                  {selectedAgentAbsences.name} • {dateRange.startDate} até {dateRange.endDate}
+                </p>
+              </div>
+              <button onClick={closeAgentAbsencePeople} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+            </div>
+            {loadingAgentAbsencePeople ? (
+              <div className="rounded-xl border border-border p-8 text-center text-sm font-bold text-muted">Carregando faltas deste agente...</div>
+            ) : agentAbsenceError ? (
+              <EmptyState title="Não foi possível carregar" description={agentAbsenceError} />
+            ) : agentAbsencePeople.length ? (
+              <SimpleTable
+                columns={["Colaborador", "WB/Login", "Data", "LOB", "Supervisor", "Turno", "Cargo/Função", "Status do cronograma", "Justificativa", "Ação"]}
+                rows={commandPeopleRows(agentAbsencePeople)}
+              />
+            ) : (
+              <EmptyState title="Nenhuma falta encontrada para os filtros selecionados." description="A lista respeita o período e os filtros aplicados na Central Operacional." />
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {selectedLobAbs ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="card max-h-[90vh] w-full max-w-6xl overflow-y-auto p-5">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-extrabold text-navy-950">ABS por LOB</h2>
+                <p className="text-sm font-semibold text-muted">
+                  {selectedLobAbs} • {dateRange.startDate} até {dateRange.endDate}
+                </p>
+              </div>
+              <button onClick={closeLobAbsPeople} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+            </div>
+            {loadingLobAbsPeople ? (
+              <div className="rounded-xl border border-border p-8 text-center text-sm font-bold text-muted">Carregando faltas desta LOB...</div>
+            ) : lobAbsError ? (
+              <EmptyState title="Não foi possível carregar" description={lobAbsError} />
+            ) : lobAbsPeople.length ? (
+              <SimpleTable
+                columns={["Colaborador", "WB/Login", "Data", "LOB", "Supervisor", "Turno", "Cargo/Função", "Status do cronograma", "Justificativa", "Ação"]}
+                rows={commandPeopleRows(lobAbsPeople)}
+              />
+            ) : (
+              <EmptyState title="Nenhum colaborador encontrado para os filtros selecionados." description="A lista respeita o período e os filtros aplicados na Central Operacional." />
+            )}
+          </div>
+        </div>
+      ) : null}
 
       {selectedAbsenceReason ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
