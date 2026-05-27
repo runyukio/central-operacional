@@ -1675,8 +1675,8 @@ export function OperationalCommandCenter() {
         lob: group.lob,
         skipSummary: "true"
       });
-      if (group.shift) params.set("shift", group.shift);
       appendCommandFilters(params, { includeLob: false });
+      if (group.shift) params.set("shift", group.shift);
       const payload = await apiJson<{ data: ActivePeopleItem[] }>(`/api/attendance?${params.toString()}`);
       const allowedShifts = group.shifts?.length ? new Set(group.shifts) : null;
       setActivePeople(allowedShifts ? payload.data.filter((item) => allowedShifts.has(shiftCategoryName(item.shift))) : payload.data);
@@ -1821,15 +1821,26 @@ export function OperationalCommandCenter() {
     .sort((a, b) => b.absRate - a.absRate || b.absent - a.absent || a.lob.localeCompare(b.lob, "pt-BR"));
   const commandTopAbsenceAgents = summary.topAbsenceAgents ?? [];
   const commandActivePeopleByLobShift = summary.activePeopleByLobAndShift ?? [];
-  const activePeopleShiftColumns = ["Manhã", "Tarde", "Noite"].filter((shift) => selectedCommandShift === "Todos" || selectedCommandShift === shift);
+  const activePeopleShiftColumns = ["Manhã", "Tarde", "Noite"];
+  const activePeopleTrainingColumn = "Em treinamento";
   const activePeopleShiftCount = (row: { shifts: Record<string, number> }, targetShift: string) => Object.entries(row.shifts)
     .reduce((total, [shift, count]) => total + (shiftCategoryName(shift) === targetShift ? count : 0), 0);
   const activePeopleVisibleRows = commandActivePeopleByLobShift
     .map((row) => ({
       ...row,
+      trainingTotal: activePeopleShiftCount(row, activePeopleTrainingColumn),
       visibleTotal: activePeopleShiftColumns.reduce((total, shift) => total + activePeopleShiftCount(row, shift), 0)
     }))
-    .filter((row) => row.visibleTotal > 0);
+    .filter((row) => row.visibleTotal > 0 || row.trainingTotal > 0);
+  const activePeopleColumnTotals = activePeopleShiftColumns.map((shift) => ({
+    shift,
+    total: activePeopleVisibleRows.reduce((sum, row) => sum + activePeopleShiftCount(row, shift), 0)
+  }));
+  const activePeopleTrainingTotal = activePeopleVisibleRows.reduce((sum, row) => sum + row.trainingTotal, 0);
+  const activePeopleGrandTotal = activePeopleVisibleRows.reduce((sum, row) => sum + row.visibleTotal, 0);
+  const absBarColor = (value: number) => value >= 8 ? "bg-red-500" : value >= 5 ? "bg-orange-500" : value >= 3 ? "bg-amber-400" : "bg-emerald-500";
+  const absTextColor = (value: number) => value >= 8 ? "text-red-600" : value >= 5 ? "text-orange-600" : value >= 3 ? "text-amber-600" : "text-emerald-600";
+  const absBarWidth = (value: number) => `${Math.min(100, Math.max(value > 0 ? 4 : 0, value))}%`;
   const commandPeopleRows = (records: AttendanceItem[]) => records.map((record) => [
     record.employeeName,
     record.wbLogin ?? "-",
@@ -1958,24 +1969,32 @@ export function OperationalCommandCenter() {
         <div className="grid gap-5 xl:grid-cols-2">
           <Panel title="ABS por Supervisor">
             {commandAbsBySupervisor.length ? (
-              <div className="max-h-[360px] space-y-3 overflow-y-auto pr-1">
+              <div className="max-h-[420px] overflow-auto pr-1">
+                <div className="grid grid-cols-[minmax(160px,1.6fr)_minmax(120px,1fr)_70px_74px_58px_68px_78px] gap-3 border-b border-border px-2 pb-2 text-[10px] font-black uppercase tracking-wide text-muted">
+                  <span>Supervisor</span>
+                  <span>ABS</span>
+                  <span className="text-center">ABS %</span>
+                  <span className="text-center">Escaladas</span>
+                  <span className="text-center">Faltas</span>
+                  <span className="text-center">Sem just.</span>
+                  <span className="text-center">Justificadas</span>
+                </div>
                 {commandAbsBySupervisor.map((item) => (
                   <button
                     key={item.supervisor}
                     type="button"
                     onClick={() => void openAbsSupervisorPeople(item.supervisor)}
-                    className="w-full rounded-lg border border-border bg-white p-3 text-left transition hover:border-blue-200 hover:bg-blue-50"
+                    className="grid w-full grid-cols-[minmax(160px,1.6fr)_minmax(120px,1fr)_70px_74px_58px_68px_78px] items-center gap-3 border-b border-border/70 px-2 py-3 text-left transition last:border-b-0 hover:bg-blue-50/55"
                   >
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="min-w-0 truncate text-sm font-extrabold text-navy-950">{item.supervisor}</span>
-                      <span className="rounded-md bg-orange-50 px-2 py-1 text-xs font-black text-orange-700">{item.absRate}% ABS</span>
+                    <span className="min-w-0 truncate text-sm font-extrabold text-navy-950" title={item.supervisor}>{item.supervisor}</span>
+                    <div className="h-2 rounded-full bg-slate-100">
+                      <div className={cn("h-2 rounded-full", absBarColor(item.absRate))} style={{ width: absBarWidth(item.absRate) }} />
                     </div>
-                    <div className="mt-3 grid grid-cols-4 gap-2 text-center text-xs">
-                      <MetricMini label="Escaladas" value={item.planned} />
-                      <MetricMini label="Faltas" value={item.absent} />
-                      <MetricMini label="Sem just." value={item.unjustified} />
-                      <MetricMini label="Justif." value={item.justified} />
-                    </div>
+                    <span className={cn("text-center text-xs font-black", absTextColor(item.absRate))}>{item.absRate}%</span>
+                    <span className="text-center text-xs font-extrabold text-navy-950">{item.planned}</span>
+                    <span className="text-center text-xs font-extrabold text-navy-950">{item.absent}</span>
+                    <span className="text-center text-xs font-extrabold text-navy-950">{item.unjustified}</span>
+                    <span className="text-center text-xs font-extrabold text-navy-950">{item.justified}</span>
                   </button>
                 ))}
               </div>
@@ -1983,16 +2002,20 @@ export function OperationalCommandCenter() {
           </Panel>
 
           <Panel title="Pessoas Ativas por LOB e Turno">
-            {activePeopleVisibleRows.length && activePeopleShiftColumns.length ? (
-              <div className="max-h-[360px] overflow-auto pr-1">
-                <table className="w-full min-w-[520px] text-left text-xs">
+            {activePeopleVisibleRows.length ? (
+              <div className="max-h-[420px] overflow-auto pr-1">
+                <table className="w-full min-w-[680px] text-left text-xs">
                   <thead className="sticky top-0 z-10 bg-white text-[10px] font-black uppercase tracking-wide text-muted">
                     <tr className="border-b border-border">
                       <th className="px-2 py-2">LOB</th>
                       {activePeopleShiftColumns.map((shift) => (
                         <th key={shift} className="px-2 py-2 text-center">{shift}</th>
                       ))}
-                      <th className="px-2 py-2 text-center">Total</th>
+                      <th className="px-2 py-2 text-center text-violet-700">Em treinamento</th>
+                      <th className="px-2 py-2 text-center">
+                        <span className="block">Total</span>
+                        <span className="block text-[9px] normal-case tracking-normal text-muted">(não inclui treinamento)</span>
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/70">
@@ -2014,6 +2037,16 @@ export function OperationalCommandCenter() {
                         <td className="px-2 py-2 text-center">
                           <button
                             type="button"
+                            disabled={!row.trainingTotal}
+                            onClick={() => void openActivePeopleGroup({ lob: row.lob, shifts: [activePeopleTrainingColumn] })}
+                            className="rounded-md px-2 py-1 font-black text-violet-700 transition hover:bg-violet-50 disabled:cursor-default disabled:text-muted disabled:hover:bg-transparent"
+                          >
+                            {row.trainingTotal}
+                          </button>
+                        </td>
+                        <td className="px-2 py-2 text-center">
+                          <button
+                            type="button"
                             onClick={() => void openActivePeopleGroup({ lob: row.lob, shifts: activePeopleShiftColumns })}
                             className="rounded-md bg-slate-50 px-2 py-1 font-black text-navy-950 transition hover:bg-blue-100 hover:text-blue-700"
                           >
@@ -2022,47 +2055,57 @@ export function OperationalCommandCenter() {
                         </td>
                       </tr>
                     ))}
+                    <tr className="bg-slate-50 font-black text-navy-950">
+                      <td className="px-2 py-3">TOTAL</td>
+                      {activePeopleColumnTotals.map((column) => (
+                        <td key={`total-${column.shift}`} className="px-2 py-3 text-center">{column.total}</td>
+                      ))}
+                      <td className="px-2 py-3 text-center text-violet-700">{activePeopleTrainingTotal}</td>
+                      <td className="px-2 py-3 text-center">{activePeopleGrandTotal}</td>
+                    </tr>
                   </tbody>
                 </table>
+                <p className="mt-3 text-[11px] font-semibold text-blue-600">Total não inclui colaboradores em treinamento.</p>
               </div>
-            ) : <EmptyState title="Sem pessoas ativas" description="A matriz exibe apenas Manhã, Tarde e Noite para os filtros aplicados." />}
+            ) : <EmptyState title="Sem pessoas ativas" description="A matriz exibe Manhã, Tarde, Noite e treinamento para os filtros aplicados." />}
           </Panel>
         </div>
 
         <div className="grid gap-5 xl:grid-cols-3">
           <Panel title="Agentes com maior quantidade de faltas">
             {commandTopAbsenceAgents.length ? (
-              <div className="max-h-[680px] space-y-2 overflow-y-auto pr-1">
+              <div className="max-h-[520px] divide-y divide-border/70 overflow-y-auto pr-1">
                 {commandTopAbsenceAgents.map((agent, index) => (
                   <button
                     key={agent.employeeId}
                     type="button"
                     onClick={() => void openAgentAbsencePeople({ employeeId: agent.employeeId, name: agent.name })}
-                    className="flex min-h-[106px] w-full flex-col rounded-lg border border-border bg-white p-3 text-left transition hover:border-blue-200 hover:bg-blue-50"
+                    className="grid min-h-[76px] w-full grid-cols-[28px_minmax(0,1fr)_72px] items-center gap-2 py-2.5 text-left transition hover:bg-blue-50/55"
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-extrabold leading-tight text-navy-950" title={agent.name}>#{index + 1} {agent.name}</p>
-                        <p className="mt-1 truncate text-xs font-semibold leading-tight text-muted" title={`${agent.wbLogin || "-"} • ${agent.lob} • ${agent.supervisor}`}>
-                          {agent.wbLogin || "-"} • {agent.lob} • {agent.supervisor}
-                        </p>
+                    <span className={cn("grid h-7 w-7 place-items-center rounded-full text-xs font-black", index < 3 ? "bg-amber-400 text-white" : "bg-slate-200 text-navy-700")}>{index + 1}</span>
+                    <div className="min-w-0">
+                      <div className="flex min-w-0 items-center justify-between gap-2">
+                        <p className="min-w-0 truncate text-sm font-extrabold leading-tight text-navy-950" title={agent.name}>{agent.name}</p>
                       </div>
-                      <span className="shrink-0 rounded-md bg-red-50 px-2 py-1 text-xs font-black leading-none text-red-700">{agent.absent} faltas</span>
+                      <p className="mt-0.5 truncate text-xs font-semibold leading-tight text-muted" title={`${agent.wbLogin || "-"} • ${agent.lob} • ${agent.supervisor}`}>
+                        {agent.wbLogin || "-"} • {agent.lob} • {agent.supervisor}
+                      </p>
+                      <div className="mt-1.5 grid grid-cols-3 divide-x divide-border rounded-md bg-slate-50 text-center text-[10px]">
+                        <div className="px-1 py-1">
+                          <span className="block font-black leading-tight text-navy-950">{agent.unjustified}</span>
+                          <span className="block truncate font-black uppercase leading-tight text-muted">Sem just.</span>
+                        </div>
+                        <div className="px-1 py-1">
+                          <span className="block font-black leading-tight text-navy-950">{agent.justified}</span>
+                          <span className="block truncate font-black uppercase leading-tight text-muted">Justificadas</span>
+                        </div>
+                        <div className="px-1 py-1">
+                          <span className="block font-black leading-tight text-navy-950">{agent.absRate}%</span>
+                          <span className="block truncate font-black uppercase leading-tight text-muted">ABS indiv.</span>
+                        </div>
+                      </div>
                     </div>
-                    <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
-                      <div className="min-h-[38px] rounded-md bg-slate-50 px-2 py-1.5">
-                        <span className="block truncate text-[10px] font-black uppercase leading-tight text-muted">Sem just.</span>
-                        <span className="block text-sm font-extrabold leading-tight text-navy-950">{agent.unjustified}</span>
-                      </div>
-                      <div className="min-h-[38px] rounded-md bg-slate-50 px-2 py-1.5">
-                        <span className="block truncate text-[10px] font-black uppercase leading-tight text-muted">Justif.</span>
-                        <span className="block text-sm font-extrabold leading-tight text-navy-950">{agent.justified}</span>
-                      </div>
-                      <div className="min-h-[38px] rounded-md bg-slate-50 px-2 py-1.5">
-                        <span className="block truncate text-[10px] font-black uppercase leading-tight text-muted">ABS indiv.</span>
-                        <span className="block text-sm font-extrabold leading-tight text-navy-950">{agent.absRate}%</span>
-                      </div>
-                    </div>
+                    <span className="justify-self-end rounded-md bg-red-50 px-2 py-1 text-xs font-black leading-none text-red-700">{agent.absent} faltas</span>
                   </button>
                 ))}
               </div>
@@ -2085,7 +2128,7 @@ export function OperationalCommandCenter() {
             </div>
             <div className="flex flex-col justify-center space-y-3">
               {commandAbsenceReasons.map((reason) => (
-                <button key={reason.name} type="button" onClick={() => void openAbsenceReasonPeople(reason.name)} className="flex items-center justify-between gap-3 rounded-lg border border-transparent px-2 py-2 text-left text-sm transition hover:border-blue-100 hover:bg-blue-50">
+                <button key={reason.name} type="button" onClick={() => void openAbsenceReasonPeople(reason.name)} className={cn("flex items-center justify-between gap-3 rounded-lg border border-transparent px-2 py-2 text-left text-sm transition hover:border-blue-100 hover:bg-blue-50", reason.name === "Sem justificativa" && "bg-amber-50/60")}>
                   <span className="flex items-center gap-2 font-semibold text-navy-950">
                     <span className="status-dot" style={{ backgroundColor: reason.fill }} />
                     {reason.name}
@@ -2099,27 +2142,31 @@ export function OperationalCommandCenter() {
 
           <Panel title="ABS por LOB">
             {commandAbsByLob.length ? (
-              <div
-                className="grid max-h-[360px] min-h-[300px] gap-2 overflow-y-auto pr-1"
-                style={commandAbsByLob.length <= 5 ? { gridTemplateRows: `repeat(${commandAbsByLob.length}, minmax(0, 1fr))` } : undefined}
-              >
+              <div className="max-h-[420px] overflow-auto pr-1">
+                <div className="grid grid-cols-[72px_minmax(120px,1fr)_120px_70px_86px] gap-3 border-b border-border px-2 pb-2 text-[10px] font-black uppercase tracking-wide text-muted">
+                  <span>LOB</span>
+                  <span>ABS</span>
+                  <span className="text-center">Faltas / Escaladas</span>
+                  <span className="text-center">Sem just.</span>
+                  <span className="text-center">Justificadas</span>
+                </div>
                 {commandAbsByLob.map((item) => (
                   <button
                     key={item.lob}
                     type="button"
                     onClick={() => void openLobAbsPeople(item.lob)}
-                    className="flex min-h-0 w-full flex-col justify-center rounded-lg border border-border bg-white px-3 py-2 text-left transition hover:border-blue-200 hover:bg-blue-50"
+                    className="grid w-full grid-cols-[72px_minmax(120px,1fr)_120px_70px_86px] items-center gap-3 border-b border-border/70 px-2 py-4 text-left transition last:border-b-0 hover:bg-blue-50/55"
                   >
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="min-w-0 truncate text-sm font-extrabold text-navy-950">{item.lob}</span>
-                      <span className="rounded-md bg-orange-50 px-2 py-1 text-xs font-black text-orange-700">{item.absRate}% ABS</span>
+                    <span className="min-w-0 truncate text-sm font-extrabold text-navy-950" title={item.lob}>{item.lob}</span>
+                    <div className="grid grid-cols-[48px_1fr] items-center gap-2">
+                      <span className={cn("text-xs font-black", absTextColor(item.absRate))}>{item.absRate}%</span>
+                      <div className="h-2 rounded-full bg-slate-100">
+                        <div className={cn("h-2 rounded-full", absBarColor(item.absRate))} style={{ width: absBarWidth(item.absRate) }} />
+                      </div>
                     </div>
-                    <div className="mt-2 grid grid-cols-4 gap-1.5 text-center text-xs">
-                      <div className="rounded-md bg-slate-50 px-2 py-1"><span className="block text-[10px] font-black uppercase text-muted">Escaladas</span><span className="font-extrabold text-navy-950">{item.planned}</span></div>
-                      <div className="rounded-md bg-slate-50 px-2 py-1"><span className="block text-[10px] font-black uppercase text-muted">Faltas</span><span className="font-extrabold text-navy-950">{item.absent}</span></div>
-                      <div className="rounded-md bg-slate-50 px-2 py-1"><span className="block text-[10px] font-black uppercase text-muted">Sem just.</span><span className="font-extrabold text-navy-950">{item.unjustified}</span></div>
-                      <div className="rounded-md bg-slate-50 px-2 py-1"><span className="block text-[10px] font-black uppercase text-muted">Justif.</span><span className="font-extrabold text-navy-950">{item.justified}</span></div>
-                    </div>
+                    <span className="text-center text-xs font-extrabold text-navy-950">{item.absent} / {item.planned}</span>
+                    <span className="text-center text-xs font-extrabold text-navy-950">{item.unjustified}</span>
+                    <span className="text-center text-xs font-extrabold text-navy-950">{item.justified}</span>
                   </button>
                 ))}
               </div>

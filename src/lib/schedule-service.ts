@@ -127,26 +127,12 @@ const inactiveEmployeeStatusValues = [
   "Removido",
   "DELETED"
 ];
-const activeHeadcountExcludedStatusKeys = new Set([
-  ...inactiveEmployeeStatusKeys,
+const trainingEmployeeStatusKeys = new Set([
   "EM_TREINAMENTO",
   "TREINAMENTO",
   "TRAINING",
   "IN_TRAINING"
 ]);
-const activeHeadcountExcludedStatusValues = [
-  ...inactiveEmployeeStatusValues,
-  "Em treinamento",
-  "EM_TREINAMENTO",
-  "em treinamento",
-  "Treinamento",
-  "TREINAMENTO",
-  "treinamento",
-  "Training",
-  "TRAINING",
-  "In training",
-  "IN_TRAINING"
-];
 
 export type ScheduleEditInput = {
   employeeId: string;
@@ -2626,7 +2612,11 @@ function employeeStatusLookupKey(status: unknown) {
 function isActiveEmployeeStatus(status: unknown) {
   const key = employeeStatusLookupKey(status);
   if (!key) return true;
-  return !activeHeadcountExcludedStatusKeys.has(key);
+  return !inactiveEmployeeStatusKeys.has(key);
+}
+
+function isTrainingEmployeeStatus(status: unknown) {
+  return trainingEmployeeStatusKeys.has(employeeStatusLookupKey(status));
 }
 
 async function employeeSupervisorFilter(value?: string | null): Promise<Prisma.EmployeeProfileWhereInput | null> {
@@ -2669,7 +2659,7 @@ function employeeShiftCategoryFilter(value?: string | null): Prisma.EmployeeProf
 async function activeEmployeeWhere(filters: AttendanceSummaryFilters = {}) {
   const filterParts: Prisma.EmployeeProfileWhereInput[] = [
     { deletedAt: null },
-    { NOT: { operationalStatus: { in: activeHeadcountExcludedStatusValues } } }
+    { NOT: { operationalStatus: { in: inactiveEmployeeStatusValues } } }
   ];
   if (filters.lob && filters.lob !== "Todos") filterParts.push({ lob: { name: filters.lob } });
   if (filters.roleTitle && filters.roleTitle !== "Todos") filterParts.push({ roleTitle: filters.roleTitle });
@@ -2703,6 +2693,7 @@ async function activeEmployeeRows(filters: AttendanceSummaryFilters = {}) {
   });
   return employees.filter((employee) => {
     if (!isActiveEmployeeStatus(employee.operationalStatus)) return false;
+    if (shiftFilter === "Em treinamento") return isTrainingEmployeeStatus(employee.operationalStatus);
     if (shiftFilter && shiftFilter !== "Todos" && shiftCategoryName(employee.shift?.name) !== shiftFilter) return false;
     return true;
   });
@@ -2713,10 +2704,11 @@ async function getActivePeopleByLobAndShift(filters: AttendanceSummaryFilters = 
   const grouped = new Map<string, ActivePeopleByLobShiftRow>();
   employees.forEach((employee) => {
     const lob = employee.lob?.name?.trim() || "Sem LOB";
-    const shift = shiftCategoryName(employee.shift?.name) || "Sem turno";
+    const isTraining = isTrainingEmployeeStatus(employee.operationalStatus);
+    const shift = isTraining ? "Em treinamento" : shiftCategoryName(employee.shift?.name) || "Sem turno";
     const row = grouped.get(lob) ?? { lob, shifts: {}, total: 0 };
     row.shifts[shift] = (row.shifts[shift] ?? 0) + 1;
-    row.total += 1;
+    if (!isTraining) row.total += 1;
     grouped.set(lob, row);
   });
   return Array.from(grouped.values()).sort((a, b) => b.total - a.total || a.lob.localeCompare(b.lob, "pt-BR"));
@@ -2733,7 +2725,7 @@ async function listActivePeopleByLobAndShift(filters: AttendanceSummaryFilters =
     roleTitle: employee.roleTitle ?? "Sem cargo",
     lob: employee.lob?.name ?? "Sem LOB",
     supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
-    shift: shiftCategoryName(employee.shift?.name) || "Sem turno",
+    shift: isTrainingEmployeeStatus(employee.operationalStatus) ? "Em treinamento" : shiftCategoryName(employee.shift?.name) || "Sem turno",
     skill: employee.skill ?? "",
     employeeStatus: employee.operationalStatus
   }));
