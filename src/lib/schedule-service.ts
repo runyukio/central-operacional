@@ -5,7 +5,8 @@ import type { Actor } from "@/lib/mock-db";
 import { commitScheduleImport as commitMockScheduleImport, getAttendanceSummary as getMockAttendanceSummary, getSchedulesForActor as getMockSchedulesForActor, listAttendanceRecords as listMockAttendanceRecords, previewScheduleRows as previewMockScheduleRows, recordErrorLog, updateAttendance as updateMockAttendance } from "@/lib/mock-db";
 import { hasExcelValue, normalizeExcelDate, normalizeExcelTime } from "@/lib/excel-normalization";
 import { prisma } from "@/lib/prisma";
-import { normalizeRole } from "@/lib/permissions";
+import { canEditSchedule, canImportCronogramas, normalizeRole } from "@/lib/permissions";
+import { auditPermissionDenied } from "@/lib/permission-audit";
 import { logPerformanceMetric } from "@/lib/performance-logger";
 import { cleanShiftName, isBlockedShiftName, isSelectableShiftName, shiftCategoryName, shiftLookupKey } from "@/lib/shift-display";
 import { calculateAbsenceRate, calculateCoverageRate, isAbsenceStatus, isPresentStatus, isScheduledStatus, normalizeOperationalStatus } from "@/lib/attendance-calculation";
@@ -699,7 +700,14 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
     if (!user && allowDemoDataFallback) return editMockSchedule(actor, input);
     if (!user) return { error: "Usuário ativo não encontrado para editar cronograma." };
-    if (!["ADMIN", "GESTOR", "WFM"].includes(normalizeRole(actor.role))) return { error: "Sem permissão para editar cronograma." };
+    const actorRole = normalizeRole(actor.role);
+    if (!canEditSchedule({ role: actor.role, status: user.status })) {
+      const reason = actorRole === "SUPERVISOR"
+        ? "Supervisor pode justificar ou solicitar ajuste, mas não pode alterar o Cronograma diretamente."
+        : "Sem permissão para editar cronograma.";
+      await auditPermissionDenied(actor, { action: "SCHEDULE_UPDATE", entity: "Schedule", reason, entityId: input.employeeId });
+      return { error: reason };
+    }
 
     const date = parseDateOnly(input.date);
     if (!date) return { error: "Data inválida." };
@@ -1106,7 +1114,14 @@ export async function removeOperationalSchedules(actor: Actor, input: ScheduleRe
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
     if (!user) return { error: "Usuário ativo não encontrado para remover cronograma." };
-    if (!["ADMIN", "GESTOR", "WFM"].includes(normalizeRole(actor.role))) return { error: "Sem permissão para remover cronogramas." };
+    const actorRole = normalizeRole(actor.role);
+    if (!canEditSchedule({ role: actor.role, status: user.status })) {
+      const reason = actorRole === "SUPERVISOR"
+        ? "Supervisor pode justificar ou solicitar ajuste, mas não pode alterar o Cronograma diretamente."
+        : "Sem permissão para remover cronogramas.";
+      await auditPermissionDenied(actor, { action: "SCHEDULE_DELETE", entity: "Schedule", reason, entityId: input.employeeId });
+      return { error: reason };
+    }
     if (!input.employeeId) return { error: "Informe o colaborador." };
 
     const employee = await prisma.employeeProfile.findUnique({ where: { id: input.employeeId } });
@@ -1176,12 +1191,15 @@ export async function removeOperationalSchedules(actor: Actor, input: ScheduleRe
 }
 
 export async function previewOperationalScheduleImport(actor: Actor, rows: Array<Record<string, unknown>>) {
-  if (!["ADMIN", "GESTOR", "WFM"].includes(normalizeRole(actor.role))) {
+  const actorRole = normalizeRole(actor.role);
+  if (!canImportCronogramas({ role: actor.role, status: "ACTIVE" })) {
+    const reason = actorRole === "SUPERVISOR" ? "Apenas WFM ou ADMIN podem importar Cronogramas." : "Sem permissão para importar cronograma.";
+    await auditPermissionDenied(actor, { action: "SCHEDULE_IMPORT_PREVIEW", entity: "ScheduleImport", reason });
     return toImportPreview(
       rows,
       rows.map((_, index) => ({
         rowNumber: index + 1,
-        errors: ["Sem permissão para importar cronograma. RH visualiza; Supervisor apenas visualiza e justifica ocorrências."],
+        errors: [reason],
         warnings: [],
         action: "ignorar" as const
       }))
@@ -1209,7 +1227,12 @@ export async function commitOperationalScheduleImport(actor: Actor, input: Sched
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
     if (!user && allowDemoDataFallback) return commitMockScheduleImport(actor, { ...input, allowPartial: Boolean(input.allowPartial) });
     if (!user) return { error: "Usuário ativo não encontrado para importar cronograma." };
-    if (!["ADMIN", "GESTOR", "WFM"].includes(normalizeRole(actor.role))) return { error: "Sem permissão para importar cronograma." };
+    const actorRole = normalizeRole(actor.role);
+    if (!canImportCronogramas({ role: actor.role, status: user.status })) {
+      const reason = actorRole === "SUPERVISOR" ? "Apenas WFM ou ADMIN podem importar Cronogramas." : "Sem permissão para importar cronograma.";
+      await auditPermissionDenied(actor, { action: "SCHEDULE_IMPORT_COMMIT", entity: "ScheduleImport", reason });
+      return { error: reason };
+    }
 
     const validation = await validateImportRowsInDb(input.rows);
     const hasErrors = validation.some((row) => row.errors.length);

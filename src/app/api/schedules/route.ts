@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getApiActor } from "@/lib/api-actor";
+import { createPermissionError, errorResponse } from "@/lib/api-errors";
+import { canUpdateScheduleSlot } from "@/lib/permissions";
+import { auditPermissionDenied } from "@/lib/permission-audit";
 import { editOperationalSchedule, getOperationalSchedules, removeOperationalSchedules } from "@/lib/schedule-service";
 
 const editSchema = z.object({
@@ -52,6 +55,11 @@ export async function PATCH(request: Request) {
   }
 
   const actor = await getApiActor();
+  if (!canUpdateScheduleSlot({ role: actor.role, status: "ACTIVE" })) {
+    const reason = actor.role === "SUPERVISOR" ? "Supervisor pode justificar ou solicitar ajuste, mas não pode alterar o Cronograma diretamente." : "Sem permissão para editar cronograma.";
+    await auditPermissionDenied(actor, { action: "SCHEDULE_UPDATE", entity: "Schedule", reason, entityId: parsed.data.employeeId });
+    return errorResponse(createPermissionError(reason));
+  }
   const result = await editOperationalSchedule(actor, parsed.data);
   if ("error" in result) {
     return NextResponse.json({ error: result.error }, { status: 409 });
@@ -74,6 +82,11 @@ export async function DELETE(request: Request) {
   }
 
   const actor = await getApiActor();
+  if (!canUpdateScheduleSlot({ role: actor.role, status: "ACTIVE" })) {
+    const reason = actor.role === "SUPERVISOR" ? "Supervisor pode justificar ou solicitar ajuste, mas não pode alterar o Cronograma diretamente." : "Sem permissão para remover cronogramas.";
+    await auditPermissionDenied(actor, { action: "SCHEDULE_DELETE", entity: "Schedule", reason, entityId: parsed.data.employeeId });
+    return errorResponse(createPermissionError(reason));
+  }
   const result = await removeOperationalSchedules(actor, parsed.data);
   if ("error" in result) return NextResponse.json({ error: result.error }, { status: 409 });
 

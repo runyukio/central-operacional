@@ -2,11 +2,20 @@ import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 
 import { getApiActor } from "@/lib/api-actor";
-import { createServerError, createValidationError, errorResponse } from "@/lib/api-errors";
+import { createPermissionError, createServerError, createValidationError, errorResponse } from "@/lib/api-errors";
+import { canImportCronogramas } from "@/lib/permissions";
+import { auditPermissionDenied } from "@/lib/permission-audit";
 import { previewOperationalScheduleImport } from "@/lib/schedule-service";
 
 export async function POST(request: Request) {
   try {
+    const actor = await getApiActor();
+    if (!canImportCronogramas({ role: actor.role, status: "ACTIVE" })) {
+      const reason = actor.role === "SUPERVISOR" ? "Apenas WFM ou ADMIN podem importar Cronogramas." : "Sem permissão para importar cronograma.";
+      await auditPermissionDenied(actor, { action: "SCHEDULE_IMPORT_PREVIEW", entity: "ScheduleImport", reason });
+      return errorResponse(createPermissionError(reason));
+    }
+
     const formData = await request.formData();
     const file = formData.get("file");
 
@@ -20,7 +29,6 @@ export async function POST(request: Request) {
     const sheet = workbook.Sheets[sheetName];
     const rows = XLSX.utils.sheet_to_json<Record<string, string>>(sheet, { defval: "" });
     console.info("[schedule-import:preview-route]", { fileName: file.name, sheetName, totalRows: rows.length, headers: Object.keys(rows[0] ?? {}).slice(0, 40) });
-    const actor = await getApiActor();
     return NextResponse.json({ fileName: file.name, ...(await previewOperationalScheduleImport(actor, rows)) });
   } catch (error) {
     console.error("[schedule-import:preview-route] falha inesperada", error);

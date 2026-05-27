@@ -153,6 +153,45 @@ export function canEditSchedule(user: PermissionUser) {
   return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM"].includes(role);
 }
 
+export function canImportWorkHours(user: PermissionUser) {
+  return canEditWorkHours(user);
+}
+
+export function canEditWorkHours(user: PermissionUser) {
+  const role = normalizeRole(user.role);
+  return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM"].includes(role);
+}
+
+export function canApproveWorkHourAdjustment(user: PermissionUser) {
+  return canEditWorkHours(user);
+}
+
+export function canRequestWorkHourAdjustment(user: PermissionUser) {
+  const role = normalizeRole(user.role);
+  return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(role);
+}
+
+export function canImportCronogramas(user: PermissionUser) {
+  return canEditSchedule(user);
+}
+
+export function canCreateCronogramaManually(user: PermissionUser) {
+  return canEditSchedule(user);
+}
+
+export function canUpdateScheduleSlot(user: PermissionUser) {
+  return canEditSchedule(user);
+}
+
+export function canApproveRegistration(user: PermissionUser) {
+  const role = normalizeRole(user.role);
+  return isActiveUser(user) && ["ADMIN", "GESTOR", "RH", "WFM"].includes(role);
+}
+
+export function canEditEmployeeSensitiveData(user: PermissionUser, employee?: PermissionEmployee | null) {
+  return canEditEmployeeData(user, employee) && canViewEmployeeSensitiveData(user, employee);
+}
+
 export function canAccessSettings(user: PermissionUser) {
   return isActiveUser(user) && normalizeRole(user.role) === "ADMIN";
 }
@@ -174,16 +213,15 @@ export function canManageOperationalSettings(user: PermissionUser) {
 }
 
 export function canImportSchedules(user: PermissionUser) {
-  const role = normalizeRole(user.role);
-  return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM"].includes(role);
+  return canImportCronogramas(user);
 }
 
 export function canAddScheduleManually(user: PermissionUser) {
-  return canImportSchedules(user);
+  return canCreateCronogramaManually(user);
 }
 
 export function canMarkPresent(user: PermissionUser) {
-  return canImportSchedules(user);
+  return canUpdateScheduleSlot(user);
 }
 
 export function canApproveRequest(user: PermissionUser, request?: { area?: string | null; type?: string | null }) {
@@ -194,7 +232,11 @@ export function canApproveRequest(user: PermissionUser, request?: { area?: strin
   if (role === "RH") return request ? /(rh|clima|cadastral|pessoas)/i.test(`${request.area} ${request.type}`) : true;
   if (role === "TI") return request ? /(ti|equipamento|notebook|acesso|suporte)/i.test(`${request.area} ${request.type}`) : true;
   if (role === "QUALIDADE") return request ? /(qualidade|feedback)/i.test(`${request.area} ${request.type}`) : true;
-  return role === "SUPERVISOR";
+  if (role === "SUPERVISOR") {
+    if (!request) return false;
+    return /(folga|day\s*off|troca|turno|escala)/i.test(`${request.area ?? ""} ${request.type ?? ""}`);
+  }
+  return false;
 }
 
 export function canViewTeam(user: PermissionUser, employee?: PermissionEmployee) {

@@ -11,7 +11,14 @@ import { createPermissionError, createValidationError, mapPrismaError } from "@/
 import { hasExcelValue, normalizeExcelDate } from "@/lib/excel-normalization";
 import type { Actor } from "@/lib/mock-db";
 import { recordErrorLog } from "@/lib/mock-db";
-import { normalizeRole } from "@/lib/permissions";
+import {
+  canApproveWorkHourAdjustment,
+  canEditWorkHours,
+  canImportWorkHours,
+  canRequestWorkHourAdjustment,
+  normalizeRole
+} from "@/lib/permissions";
+import { auditPermissionDenied } from "@/lib/permission-audit";
 import { prisma } from "@/lib/prisma";
 import { cleanShiftName, shiftCategoryName } from "@/lib/shift-display";
 import {
@@ -228,11 +235,14 @@ export async function listOperationalWorkHours(actor: Actor, query: WorkHourQuer
 
 export async function previewOperationalWorkHoursImport(actor: Actor, rows: Array<Record<string, unknown>>) {
   const user = await getUser(actor);
-  if (!user || !uploadRoles.includes(normalizeRole(user.role.name))) {
+  const role = normalizeRole(user?.role.name ?? actor.role);
+  if (!user || !canImportWorkHours({ role: user.role.name, status: user.status })) {
+    const reason = role === "SUPERVISOR" ? "Apenas WFM ou ADMIN podem importar Horas Operacionais." : "Você não tem permissão para importar horas.";
+    await auditPermissionDenied(actor, { action: "WORK_HOURS_IMPORT_PREVIEW", entity: "WorkHourRecord", reason });
     return toImportPreview(rows, rows.map((_, index) => ({
       rowNumber: index + 1,
       wbLogin: text(rows[index]?.wb_login),
-      errors: ["Você não tem permissão para importar horas."],
+      errors: [reason],
       warnings: [],
       action: "ignorar",
       hasSchedule: false,
@@ -246,7 +256,12 @@ export async function previewOperationalWorkHoursImport(actor: Actor, rows: Arra
 
 export async function commitOperationalWorkHoursImport(actor: Actor, input: WorkHourImportInput) {
   const user = await getUser(actor);
-  if (!user || !uploadRoles.includes(normalizeRole(user.role.name))) return createPermissionError("Você não tem permissão para importar horas.");
+  const role = normalizeRole(user?.role.name ?? actor.role);
+  if (!user || !canImportWorkHours({ role: user.role.name, status: user.status })) {
+    const reason = role === "SUPERVISOR" ? "Apenas WFM ou ADMIN podem importar Horas Operacionais." : "Você não tem permissão para importar horas.";
+    await auditPermissionDenied(actor, { action: "WORK_HOURS_IMPORT_COMMIT", entity: "WorkHourRecord", reason });
+    return createPermissionError(reason);
+  }
 
   try {
     const validation = await validateWorkHourRows(input.rows);
@@ -409,7 +424,7 @@ export async function commitOperationalWorkHoursImport(actor: Actor, input: Work
 
 export async function requestWorkHourAdjustment(actor: Actor, input: WorkHourAdjustmentInput) {
   const user = await getUser(actor);
-  if (!user || !requestAdjustmentRoles.includes(normalizeRole(user.role.name))) return createPermissionError("Você não tem permissão para solicitar ajuste de horas.");
+  if (!user || !canRequestWorkHourAdjustment({ role: user.role.name, status: user.status })) return createPermissionError("Você não tem permissão para solicitar ajuste de horas.");
 
   const fieldErrors: Record<string, string> = {};
   if (!input.workHourRecordId) fieldErrors.workHourRecordId = "Registro de horas é obrigatório.";
@@ -516,7 +531,12 @@ export async function requestWorkHourAdjustment(actor: Actor, input: WorkHourAdj
 
 export async function reviewWorkHourAdjustment(actor: Actor, input: WorkHourReviewInput) {
   const user = await getUser(actor);
-  if (!user || !approvalRoles.includes(normalizeRole(user.role.name))) return createPermissionError("Você não tem permissão para aprovar este ajuste.");
+  const role = normalizeRole(user?.role.name ?? actor.role);
+  if (!user || !canApproveWorkHourAdjustment({ role: user.role.name, status: user.status })) {
+    const reason = role === "SUPERVISOR" ? "Supervisor pode solicitar ajuste de horas, mas não pode alterar horas oficiais." : "Você não tem permissão para aprovar este ajuste.";
+    await auditPermissionDenied(actor, { action: "WORK_HOUR_ADJUSTMENT_REVIEW", entity: "WorkHourAdjustmentRequest", reason, entityId: input.id });
+    return createPermissionError(reason);
+  }
   if (!input.id) return createValidationError({ id: "Ajuste é obrigatório." });
   if (input.action === "reject" && !input.rejectionReason?.trim()) return createValidationError({ rejectionReason: "Motivo da recusa é obrigatório." });
 
@@ -587,7 +607,12 @@ export async function reviewWorkHourAdjustment(actor: Actor, input: WorkHourRevi
 
 export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWorkHourInput) {
   const user = await getUser(actor);
-  if (!user || !manualEditRoles.includes(normalizeRole(user.role.name))) return createPermissionError("Você não tem permissão para lançar horas.");
+  const role = normalizeRole(user?.role.name ?? actor.role);
+  if (!user || !canEditWorkHours({ role: user.role.name, status: user.status })) {
+    const reason = role === "SUPERVISOR" ? "Supervisor pode solicitar ajuste de horas, mas não pode alterar horas oficiais." : "Você não tem permissão para lançar horas.";
+    await auditPermissionDenied(actor, { action: "WORK_HOURS_MANUAL_UPSERT", entity: "WorkHourRecord", reason, entityId: input.employeeId });
+    return createPermissionError(reason);
+  }
 
   const fieldErrors: Record<string, string> = {};
   if (!input.employeeId) fieldErrors.employeeId = "Colaborador é obrigatório.";
@@ -721,7 +746,12 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
 
 export async function deleteWorkHourRecord(actor: Actor, input: DeleteWorkHourInput) {
   const user = await getUser(actor);
-  if (!user || !manualEditRoles.includes(normalizeRole(user.role.name))) return createPermissionError("Você não tem permissão para excluir horas.");
+  const role = normalizeRole(user?.role.name ?? actor.role);
+  if (!user || !canEditWorkHours({ role: user.role.name, status: user.status })) {
+    const reason = role === "SUPERVISOR" ? "Supervisor pode solicitar ajuste de horas, mas não pode alterar horas oficiais." : "Você não tem permissão para excluir horas.";
+    await auditPermissionDenied(actor, { action: "WORK_HOURS_DELETE", entity: "WorkHourRecord", reason, entityId: input.workHourRecordId });
+    return createPermissionError(reason);
+  }
   if (!input.workHourRecordId) return createValidationError({ workHourRecordId: "Registro de horas é obrigatório." }, "Registro de horas é obrigatório.");
 
   try {

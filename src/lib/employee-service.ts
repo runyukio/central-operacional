@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import type { Actor } from "@/lib/mock-db";
 import { listEmployeesForActor as listMockEmployees, recordErrorLog } from "@/lib/mock-db";
 import { canAccessEmployeeMap, canEditEmployeeData, canViewEmployeeSensitiveData, normalizeRole } from "@/lib/permissions";
+import { auditPermissionDenied } from "@/lib/permission-audit";
 import { createDuplicateError, createNotFoundError, createPermissionError, createRelationError, createServerError, createValidationError, mapPrismaError } from "@/lib/api-errors";
 import { canBeSupervisorJobTitle, isAgentJobTitle, normalizeJobTitle } from "@/lib/job-title-normalization";
 import { cleanShiftName } from "@/lib/shift-display";
@@ -385,7 +386,11 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
     if (!user) return createPermissionError("Usuário não autenticado.");
     const role = normalizeRole(actor.role);
-    if (!["ADMIN", "GESTOR", "RH", "WFM"].includes(role)) return createPermissionError("Você não tem permissão para editar dados operacionais.");
+    if (!["ADMIN", "GESTOR", "RH", "WFM"].includes(role)) {
+      const reason = role === "SUPERVISOR" ? "Supervisor não possui permissão para editar cadastros." : "Você não tem permissão para editar dados operacionais.";
+      await auditPermissionDenied(actor, { action: "EMPLOYEE_UPDATE", entity: "EmployeeProfile", reason, entityId: input.id });
+      return createPermissionError(reason);
+    }
 
     const employee = await prisma.employeeProfile.findFirst({
       where: { id: input.id, deletedAt: null },
@@ -631,7 +636,11 @@ export async function resetEmployeeUserPassword(actor: Actor, input: { employeeI
   try {
     const admin = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
     if (!admin) return { error: "Usuário não autenticado." };
-    if (normalizeRole(actor.role) !== "ADMIN") return { error: "Apenas Admin pode resetar senha." };
+    if (normalizeRole(actor.role) !== "ADMIN") {
+      const reason = normalizeRole(actor.role) === "SUPERVISOR" ? "Supervisor não possui permissão para resetar senha." : "Apenas Admin pode resetar senha.";
+      await auditPermissionDenied(actor, { action: "USER_PASSWORD_RESET", entity: "User", reason, entityId: input.employeeId });
+      return { error: reason };
+    }
     if (!input.password || input.password.length < 8) return { error: "A nova senha deve ter pelo menos 8 caracteres." };
     if (input.password !== input.confirmPassword) return { error: "A confirmação de senha não confere." };
 
@@ -683,7 +692,11 @@ export async function deleteOperationalEmployee(actor: Actor, input: EmployeeDel
   try {
     const admin = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
     if (!admin) return createPermissionError("Usuário não autenticado.");
-    if (normalizeRole(actor.role) !== "ADMIN") return createPermissionError("Apenas ADMIN pode excluir cadastros.");
+    if (normalizeRole(actor.role) !== "ADMIN") {
+      const reason = normalizeRole(actor.role) === "SUPERVISOR" ? "Supervisor não possui permissão para editar cadastros." : "Apenas ADMIN pode excluir cadastros.";
+      await auditPermissionDenied(actor, { action: "EMPLOYEE_DELETE", entity: "EmployeeProfile", reason, entityId: input.id });
+      return createPermissionError(reason);
+    }
 
     const reason = clean(input.reason);
     if (!reason) return createValidationError({ reason: "Motivo da exclusão é obrigatório." }, "Motivo da exclusão é obrigatório.");
