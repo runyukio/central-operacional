@@ -90,7 +90,22 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
   const isCollaborator = role === "COLABORADOR";
   const [notifications, setNotifications] = useState<HeaderNotification[]>([]);
   const [notificationOpen, setNotificationOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const unreadNotifications = notifications.filter((notification) => !notification.isRead).length;
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem("sidebarCollapsed");
+    if (stored === "true") setSidebarCollapsed(true);
+    if (stored === "false") setSidebarCollapsed(false);
+  }, []);
+
+  function toggleSidebar() {
+    setSidebarCollapsed((current) => {
+      const next = !current;
+      window.localStorage.setItem("sidebarCollapsed", String(next));
+      return next;
+    });
+  }
 
   useEffect(() => {
     fetch("/api/notifications", { cache: "no-store" })
@@ -120,24 +135,38 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
   }
 
   return (
-    <div className="min-h-screen bg-surface text-ink">
-      <aside className="navy-gradient fixed inset-y-0 left-0 z-40 hidden w-[224px] border-r border-white/10 text-white shadow-2xl lg:flex lg:flex-col">
-        <div className="flex h-16 items-center gap-2.5 border-b border-white/10 px-3.5">
+    <div className="min-h-screen bg-surface text-ink lg:flex">
+      <aside
+        className={cn(
+          "navy-gradient sticky top-0 z-40 hidden h-screen shrink-0 border-r border-white/10 text-white shadow-2xl transition-[width] duration-200 lg:flex lg:flex-col",
+          sidebarCollapsed ? "w-[72px]" : "w-[224px]"
+        )}
+      >
+        <div className={cn("flex h-16 items-center border-b border-white/10 px-3.5", sidebarCollapsed ? "justify-center" : "gap-2.5")}>
           <div className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 shadow-lg shadow-blue-950/40 ring-1 ring-white/20">
             <Sparkles className="h-[18px] w-[18px]" />
           </div>
-          <div>
+          <div className={cn("min-w-0 transition-opacity duration-150", sidebarCollapsed && "sr-only")}>
             <p className="text-[15px] font-black leading-tight tracking-tight">Central</p>
             <p className="text-[15px] font-black leading-tight tracking-tight">Operacional</p>
           </div>
         </div>
 
-        <div className="flex items-center justify-between px-3.5 py-2.5">
-          <span className="text-[10.5px] font-extrabold uppercase tracking-[0.2em] text-blue-100/65">Menu</span>
-          <Menu className="h-4 w-4 text-blue-100/70" />
+        <div className={cn("flex items-center px-3.5 py-2.5", sidebarCollapsed ? "justify-center" : "justify-between")}>
+          <span className={cn("text-[10.5px] font-extrabold uppercase tracking-[0.2em] text-blue-100/65", sidebarCollapsed && "sr-only")}>Menu</span>
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            className="grid h-8 w-8 place-items-center rounded-lg text-blue-100/80 transition hover:bg-white/10 hover:text-white"
+            aria-label={sidebarCollapsed ? "Expandir menu lateral" : "Recolher menu lateral"}
+            aria-expanded={!sidebarCollapsed}
+            title={sidebarCollapsed ? "Expandir menu lateral" : "Recolher menu lateral"}
+          >
+            <Menu className="h-4 w-4" />
+          </button>
         </div>
 
-        <nav className="sidebar-scroll flex-1 space-y-0.5 overflow-y-auto px-2 pb-3">
+        <nav className={cn("sidebar-scroll flex-1 space-y-0.5 overflow-y-auto pb-3", sidebarCollapsed ? "px-2.5" : "px-2")}>
           {navItems.map((item) => {
             const Icon = icons[item.icon as keyof typeof icons] ?? LayoutDashboard;
             const active = pathname === item.href || (item.href !== "/central-operacional" && pathname.startsWith(item.href));
@@ -145,8 +174,11 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
               <Link
                 key={item.href}
                 href={item.href}
+                aria-label={item.label}
+                title={sidebarCollapsed ? item.label : undefined}
                 className={cn(
-                  "group relative flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[11.5px] font-bold text-blue-50/86 transition",
+                  "group relative flex items-center rounded-lg py-1.5 text-[11.5px] font-bold text-blue-50/86 transition",
+                  sidebarCollapsed ? "justify-center px-0" : "gap-2 px-2.5",
                   active
                     ? "bg-gradient-to-r from-blue-600 to-blue-500 text-white shadow-lg shadow-blue-950/35 ring-1 ring-white/10"
                     : "hover:bg-white/9 hover:text-white"
@@ -154,13 +186,18 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
               >
                 {active ? <span className="absolute -left-2.5 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r-full bg-blue-300" /> : null}
                 <Icon className={cn("h-3.5 w-3.5 shrink-0", active ? "text-white" : "text-blue-100/88")} />
-                <span className="truncate">{item.label}</span>
+                <span className={cn("truncate", sidebarCollapsed && "sr-only")}>{item.label}</span>
+                {sidebarCollapsed ? (
+                  <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 z-50 hidden -translate-y-1/2 whitespace-nowrap rounded-md bg-navy-950 px-2 py-1 text-xs font-bold text-white shadow-xl group-hover:block group-focus-visible:block">
+                    {item.label}
+                  </span>
+                ) : null}
               </Link>
             );
           })}
         </nav>
 
-        <div className="border-t border-white/10 p-2.5">
+        <div className={cn("border-t border-white/10 p-2.5", sidebarCollapsed && "hidden")}>
           <div className="rounded-xl border border-white/10 bg-white/8 p-2.5 shadow-lg shadow-navy-950/20">
             <p className="text-[12.5px] font-semibold">{isCollaborator ? "Precisa de ajuda?" : "Filtros por página"}</p>
             <p className="mt-1 text-[11.5px] leading-4 text-blue-100/75">
@@ -170,7 +207,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
         </div>
       </aside>
 
-      <main className="min-h-screen lg:pl-[224px]">
+      <main className="min-h-screen min-w-0 flex-1">
         <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border/80 bg-white/94 px-4 shadow-[0_8px_24px_rgba(7,27,58,0.035)] backdrop-blur-xl md:px-5">
           <div className="flex min-w-0 flex-1 items-center gap-2.5">
             <button className="premium-control grid h-9 w-9 place-items-center text-navy-900 lg:hidden">
