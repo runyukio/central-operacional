@@ -1679,7 +1679,7 @@ export function OperationalCommandCenter() {
       appendCommandFilters(params, { includeLob: false });
       const payload = await apiJson<{ data: ActivePeopleItem[] }>(`/api/attendance?${params.toString()}`);
       const allowedShifts = group.shifts?.length ? new Set(group.shifts) : null;
-      setActivePeople(allowedShifts ? payload.data.filter((item) => allowedShifts.has(item.shift ?? "Sem turno")) : payload.data);
+      setActivePeople(allowedShifts ? payload.data.filter((item) => allowedShifts.has(shiftCategoryName(item.shift))) : payload.data);
     } catch {
       setActivePeopleError("Não foi possível carregar as pessoas ativas deste grupo.");
     } finally {
@@ -1822,10 +1822,12 @@ export function OperationalCommandCenter() {
   const commandTopAbsenceAgents = summary.topAbsenceAgents ?? [];
   const commandActivePeopleByLobShift = summary.activePeopleByLobAndShift ?? [];
   const activePeopleShiftColumns = ["Manhã", "Tarde", "Noite"].filter((shift) => selectedCommandShift === "Todos" || selectedCommandShift === shift);
+  const activePeopleShiftCount = (row: { shifts: Record<string, number> }, targetShift: string) => Object.entries(row.shifts)
+    .reduce((total, [shift, count]) => total + (shiftCategoryName(shift) === targetShift ? count : 0), 0);
   const activePeopleVisibleRows = commandActivePeopleByLobShift
     .map((row) => ({
       ...row,
-      visibleTotal: activePeopleShiftColumns.reduce((total, shift) => total + (row.shifts[shift] ?? 0), 0)
+      visibleTotal: activePeopleShiftColumns.reduce((total, shift) => total + activePeopleShiftCount(row, shift), 0)
     }))
     .filter((row) => row.visibleTotal > 0);
   const commandPeopleRows = (records: AttendanceItem[]) => records.map((record) => [
@@ -2001,11 +2003,11 @@ export function OperationalCommandCenter() {
                           <td key={`${row.lob}-${shift}`} className="px-2 py-2 text-center">
                             <button
                               type="button"
-                              disabled={!row.shifts[shift]}
+                              disabled={!activePeopleShiftCount(row, shift)}
                               onClick={() => void openActivePeopleGroup({ lob: row.lob, shift })}
                               className="rounded-md px-2 py-1 font-black text-blue-700 transition hover:bg-blue-100 disabled:cursor-default disabled:text-muted disabled:hover:bg-transparent"
                             >
-                              {row.shifts[shift] ?? 0}
+                              {activePeopleShiftCount(row, shift)}
                             </button>
                           </td>
                         ))}

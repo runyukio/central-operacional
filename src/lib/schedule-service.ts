@@ -127,6 +127,26 @@ const inactiveEmployeeStatusValues = [
   "Removido",
   "DELETED"
 ];
+const activeHeadcountExcludedStatusKeys = new Set([
+  ...inactiveEmployeeStatusKeys,
+  "EM_TREINAMENTO",
+  "TREINAMENTO",
+  "TRAINING",
+  "IN_TRAINING"
+]);
+const activeHeadcountExcludedStatusValues = [
+  ...inactiveEmployeeStatusValues,
+  "Em treinamento",
+  "EM_TREINAMENTO",
+  "em treinamento",
+  "Treinamento",
+  "TREINAMENTO",
+  "treinamento",
+  "Training",
+  "TRAINING",
+  "In training",
+  "IN_TRAINING"
+];
 
 export type ScheduleEditInput = {
   employeeId: string;
@@ -2606,7 +2626,7 @@ function employeeStatusLookupKey(status: unknown) {
 function isActiveEmployeeStatus(status: unknown) {
   const key = employeeStatusLookupKey(status);
   if (!key) return true;
-  return !inactiveEmployeeStatusKeys.has(key);
+  return !activeHeadcountExcludedStatusKeys.has(key);
 }
 
 async function employeeSupervisorFilter(value?: string | null): Promise<Prisma.EmployeeProfileWhereInput | null> {
@@ -2649,7 +2669,7 @@ function employeeShiftCategoryFilter(value?: string | null): Prisma.EmployeeProf
 async function activeEmployeeWhere(filters: AttendanceSummaryFilters = {}) {
   const filterParts: Prisma.EmployeeProfileWhereInput[] = [
     { deletedAt: null },
-    { NOT: { operationalStatus: { in: inactiveEmployeeStatusValues } } }
+    { NOT: { operationalStatus: { in: activeHeadcountExcludedStatusValues } } }
   ];
   if (filters.lob && filters.lob !== "Todos") filterParts.push({ lob: { name: filters.lob } });
   if (filters.roleTitle && filters.roleTitle !== "Todos") filterParts.push({ roleTitle: filters.roleTitle });
