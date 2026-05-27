@@ -1479,7 +1479,7 @@ export function OperationalCommandCenter() {
   const [agentAbsencePeople, setAgentAbsencePeople] = useState<AttendanceItem[]>([]);
   const [loadingAgentAbsencePeople, setLoadingAgentAbsencePeople] = useState(false);
   const [agentAbsenceError, setAgentAbsenceError] = useState("");
-  const [selectedActivePeopleGroup, setSelectedActivePeopleGroup] = useState<{ lob: string; shift?: string } | null>(null);
+  const [selectedActivePeopleGroup, setSelectedActivePeopleGroup] = useState<{ lob: string; shift?: string; shifts?: string[] } | null>(null);
   const [activePeople, setActivePeople] = useState<ActivePeopleItem[]>([]);
   const [loadingActivePeople, setLoadingActivePeople] = useState(false);
   const [activePeopleError, setActivePeopleError] = useState("");
@@ -1664,7 +1664,7 @@ export function OperationalCommandCenter() {
     setAgentAbsenceError("");
   }
 
-  async function openActivePeopleGroup(group: { lob: string; shift?: string }) {
+  async function openActivePeopleGroup(group: { lob: string; shift?: string; shifts?: string[] }) {
     setSelectedActivePeopleGroup(group);
     setActivePeople([]);
     setActivePeopleError("");
@@ -1678,7 +1678,8 @@ export function OperationalCommandCenter() {
       if (group.shift) params.set("shift", group.shift);
       appendCommandFilters(params, { includeLob: false });
       const payload = await apiJson<{ data: ActivePeopleItem[] }>(`/api/attendance?${params.toString()}`);
-      setActivePeople(payload.data);
+      const allowedShifts = group.shifts?.length ? new Set(group.shifts) : null;
+      setActivePeople(allowedShifts ? payload.data.filter((item) => allowedShifts.has(item.shift ?? "Sem turno")) : payload.data);
     } catch {
       setActivePeopleError("Não foi possível carregar as pessoas ativas deste grupo.");
     } finally {
@@ -1820,10 +1821,13 @@ export function OperationalCommandCenter() {
     .sort((a, b) => b.absRate - a.absRate || b.absent - a.absent || a.lob.localeCompare(b.lob, "pt-BR"));
   const commandTopAbsenceAgents = summary.topAbsenceAgents ?? [];
   const commandActivePeopleByLobShift = summary.activePeopleByLobAndShift ?? [];
-  const activePeopleShiftColumns = Array.from(new Set([
-    ...(["Manhã", "Tarde", "Noite", "Sem turno"].filter((shift) => selectedCommandShift === "Todos" || shift === selectedCommandShift)),
-    ...commandActivePeopleByLobShift.flatMap((row) => Object.keys(row.shifts)).filter((shift) => selectedCommandShift === "Todos" || shift === selectedCommandShift)
-  ]));
+  const activePeopleShiftColumns = ["Manhã", "Tarde", "Noite"].filter((shift) => selectedCommandShift === "Todos" || selectedCommandShift === shift);
+  const activePeopleVisibleRows = commandActivePeopleByLobShift
+    .map((row) => ({
+      ...row,
+      visibleTotal: activePeopleShiftColumns.reduce((total, shift) => total + (row.shifts[shift] ?? 0), 0)
+    }))
+    .filter((row) => row.visibleTotal > 0);
   const commandPeopleRows = (records: AttendanceItem[]) => records.map((record) => [
     record.employeeName,
     record.wbLogin ?? "-",
@@ -1977,9 +1981,9 @@ export function OperationalCommandCenter() {
           </Panel>
 
           <Panel title="Pessoas Ativas por LOB e Turno">
-            {commandActivePeopleByLobShift.length ? (
+            {activePeopleVisibleRows.length && activePeopleShiftColumns.length ? (
               <div className="max-h-[360px] overflow-auto pr-1">
-                <table className="w-full min-w-[620px] text-left text-xs">
+                <table className="w-full min-w-[520px] text-left text-xs">
                   <thead className="sticky top-0 z-10 bg-white text-[10px] font-black uppercase tracking-wide text-muted">
                     <tr className="border-b border-border">
                       <th className="px-2 py-2">LOB</th>
@@ -1990,7 +1994,7 @@ export function OperationalCommandCenter() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/70">
-                    {commandActivePeopleByLobShift.map((row) => (
+                    {activePeopleVisibleRows.map((row) => (
                       <tr key={row.lob} className="hover:bg-blue-50/35">
                         <td className="px-2 py-2 font-extrabold text-navy-950">{row.lob}</td>
                         {activePeopleShiftColumns.map((shift) => (
@@ -2008,10 +2012,10 @@ export function OperationalCommandCenter() {
                         <td className="px-2 py-2 text-center">
                           <button
                             type="button"
-                            onClick={() => void openActivePeopleGroup({ lob: row.lob })}
+                            onClick={() => void openActivePeopleGroup({ lob: row.lob, shifts: activePeopleShiftColumns })}
                             className="rounded-md bg-slate-50 px-2 py-1 font-black text-navy-950 transition hover:bg-blue-100 hover:text-blue-700"
                           >
-                            {row.total}
+                            {row.visibleTotal}
                           </button>
                         </td>
                       </tr>
@@ -2019,32 +2023,32 @@ export function OperationalCommandCenter() {
                   </tbody>
                 </table>
               </div>
-            ) : <EmptyState title="Sem pessoas ativas" description="A visão será exibida quando houver colaboradores ativos para os filtros aplicados." />}
+            ) : <EmptyState title="Sem pessoas ativas" description="A matriz exibe apenas Manhã, Tarde e Noite para os filtros aplicados." />}
           </Panel>
         </div>
 
         <div className="grid gap-5 xl:grid-cols-3">
           <Panel title="Agentes com maior quantidade de faltas">
             {commandTopAbsenceAgents.length ? (
-              <div className="max-h-[340px] space-y-2 overflow-y-auto pr-1">
+              <div className="grid max-h-[360px] min-h-[300px] gap-2 overflow-y-auto pr-1" style={{ gridTemplateRows: `repeat(${commandTopAbsenceAgents.length}, minmax(0, 1fr))` }}>
                 {commandTopAbsenceAgents.map((agent, index) => (
                   <button
                     key={agent.employeeId}
                     type="button"
                     onClick={() => void openAgentAbsencePeople({ employeeId: agent.employeeId, name: agent.name })}
-                    className="w-full rounded-lg border border-border bg-white p-3 text-left transition hover:border-blue-200 hover:bg-blue-50"
+                    className="flex min-h-0 w-full flex-col justify-center rounded-lg border border-border bg-white px-3 py-2 text-left transition hover:border-blue-200 hover:bg-blue-50"
                   >
-                    <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="text-sm font-extrabold text-navy-950">#{index + 1} {agent.name}</p>
+                        <p className="truncate text-sm font-extrabold text-navy-950">#{index + 1} {agent.name}</p>
                         <p className="truncate text-xs font-semibold text-muted">{agent.wbLogin || "-"} • {agent.lob} • {agent.supervisor}</p>
                       </div>
                       <span className="rounded-md bg-red-50 px-2 py-1 text-xs font-black text-red-700">{agent.absent} faltas</span>
                     </div>
-                    <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
-                      <MetricMini label="Sem just." value={agent.unjustified} />
-                      <MetricMini label="Justif." value={agent.justified} />
-                      <MetricMini label="ABS indiv." value={`${agent.absRate}%`} />
+                    <div className="mt-2 grid grid-cols-3 gap-1.5 text-center text-xs">
+                      <div className="rounded-md bg-slate-50 px-2 py-1"><span className="block text-[10px] font-black uppercase text-muted">Sem just.</span><span className="font-extrabold text-navy-950">{agent.unjustified}</span></div>
+                      <div className="rounded-md bg-slate-50 px-2 py-1"><span className="block text-[10px] font-black uppercase text-muted">Justif.</span><span className="font-extrabold text-navy-950">{agent.justified}</span></div>
+                      <div className="rounded-md bg-slate-50 px-2 py-1"><span className="block text-[10px] font-black uppercase text-muted">ABS</span><span className="font-extrabold text-navy-950">{agent.absRate}%</span></div>
                     </div>
                   </button>
                 ))}
@@ -2082,23 +2086,26 @@ export function OperationalCommandCenter() {
 
           <Panel title="ABS por LOB">
             {commandAbsByLob.length ? (
-              <div className="max-h-[340px] space-y-2 overflow-y-auto pr-1">
+              <div
+                className="grid max-h-[360px] min-h-[300px] gap-2 overflow-y-auto pr-1"
+                style={commandAbsByLob.length <= 5 ? { gridTemplateRows: `repeat(${commandAbsByLob.length}, minmax(0, 1fr))` } : undefined}
+              >
                 {commandAbsByLob.map((item) => (
                   <button
                     key={item.lob}
                     type="button"
                     onClick={() => void openLobAbsPeople(item.lob)}
-                    className="w-full rounded-lg border border-border bg-white p-3 text-left transition hover:border-blue-200 hover:bg-blue-50"
+                    className="flex min-h-0 w-full flex-col justify-center rounded-lg border border-border bg-white px-3 py-2 text-left transition hover:border-blue-200 hover:bg-blue-50"
                   >
                     <div className="flex items-center justify-between gap-3">
                       <span className="min-w-0 truncate text-sm font-extrabold text-navy-950">{item.lob}</span>
                       <span className="rounded-md bg-orange-50 px-2 py-1 text-xs font-black text-orange-700">{item.absRate}% ABS</span>
                     </div>
-                    <div className="mt-3 grid grid-cols-4 gap-2 text-center text-xs">
-                      <MetricMini label="Escaladas" value={item.planned} />
-                      <MetricMini label="Faltas" value={item.absent} />
-                      <MetricMini label="Sem just." value={item.unjustified} />
-                      <MetricMini label="Justif." value={item.justified} />
+                    <div className="mt-2 grid grid-cols-4 gap-1.5 text-center text-xs">
+                      <div className="rounded-md bg-slate-50 px-2 py-1"><span className="block text-[10px] font-black uppercase text-muted">Escaladas</span><span className="font-extrabold text-navy-950">{item.planned}</span></div>
+                      <div className="rounded-md bg-slate-50 px-2 py-1"><span className="block text-[10px] font-black uppercase text-muted">Faltas</span><span className="font-extrabold text-navy-950">{item.absent}</span></div>
+                      <div className="rounded-md bg-slate-50 px-2 py-1"><span className="block text-[10px] font-black uppercase text-muted">Sem just.</span><span className="font-extrabold text-navy-950">{item.unjustified}</span></div>
+                      <div className="rounded-md bg-slate-50 px-2 py-1"><span className="block text-[10px] font-black uppercase text-muted">Justif.</span><span className="font-extrabold text-navy-950">{item.justified}</span></div>
                     </div>
                   </button>
                 ))}
