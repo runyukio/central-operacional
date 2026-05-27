@@ -560,6 +560,7 @@ type AttendanceSummary = {
   bySupervisor?: Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; absRate: number }>;
   byLob?: Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; absRate: number }>;
   topAbsenceAgents?: Array<{ employeeId: string; name: string; wbLogin: string; supervisor: string; lob: string; planned: number; absent: number; unjustified: number; justified: number; absRate: number }>;
+  activePeopleByLobAndShift?: Array<{ lob: string; shifts: Record<string, number>; total: number }>;
 };
 
 type AttendanceItem = {
@@ -587,6 +588,20 @@ type AttendanceItem = {
   justifiedBy?: string;
   justifiedAt?: string;
   updatedAt?: string;
+};
+
+type ActivePeopleItem = {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  wbLogin?: string;
+  email?: string;
+  roleTitle?: string;
+  lob?: string;
+  supervisor?: string;
+  shift?: string;
+  skill?: string;
+  employeeStatus?: string;
 };
 
 type ScheduleGridRow = (typeof scheduleGridRows)[number] & {
@@ -1434,9 +1449,13 @@ export function OperationalCommandCenter() {
   const [dateRange, setDateRange] = useState({ startDate: "2026-05-01", endDate: "2026-05-31" });
   const [commandLobs, setCommandLobs] = useState<string[]>(["Todos"]);
   const [commandRoleTitles, setCommandRoleTitles] = useState<string[]>(["Todos", "Agente"]);
+  const [commandShiftOptions, setCommandShiftOptions] = useState<string[]>(["Todos", "Sem turno", ...Array.from(standardShiftNames)]);
+  const [commandSkillOptions, setCommandSkillOptions] = useState<string[]>(["Todos", "SEM_SKILL"]);
   const [selectedCommandLob, setSelectedCommandLob] = useState("Todos");
   const [selectedCommandSupervisor, setSelectedCommandSupervisor] = useState("Todos");
   const [selectedCommandRoleTitle, setSelectedCommandRoleTitle] = useState("Agente");
+  const [selectedCommandShift, setSelectedCommandShift] = useState("Todos");
+  const [selectedCommandSkill, setSelectedCommandSkill] = useState("Todos");
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [selectedAbsenceReason, setSelectedAbsenceReason] = useState<string | null>(null);
   const [absenceReasonPeople, setAbsenceReasonPeople] = useState<AttendanceItem[]>([]);
@@ -1460,26 +1479,41 @@ export function OperationalCommandCenter() {
   const [agentAbsencePeople, setAgentAbsencePeople] = useState<AttendanceItem[]>([]);
   const [loadingAgentAbsencePeople, setLoadingAgentAbsencePeople] = useState(false);
   const [agentAbsenceError, setAgentAbsenceError] = useState("");
+  const [selectedActivePeopleGroup, setSelectedActivePeopleGroup] = useState<{ lob: string; shift?: string } | null>(null);
+  const [activePeople, setActivePeople] = useState<ActivePeopleItem[]>([]);
+  const [loadingActivePeople, setLoadingActivePeople] = useState(false);
+  const [activePeopleError, setActivePeopleError] = useState("");
 
   useEffect(() => {
     void loadCommandCenterSummary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateRange.startDate, dateRange.endDate, selectedCommandLob, selectedCommandSupervisor, selectedCommandRoleTitle]);
+  }, [dateRange.startDate, dateRange.endDate, selectedCommandLob, selectedCommandSupervisor, selectedCommandRoleTitle, selectedCommandShift, selectedCommandSkill]);
 
   useEffect(() => {
     apiJson<{ data: SystemSettings }>("/api/settings")
       .then((payload) => {
         const activeLobs = payload.data.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name);
         const activeRoleTitles = payload.data.roleTitles.filter((title) => title.status !== "INACTIVE").map((title) => title.name).filter(Boolean);
+        const activeShiftCategories = payload.data.shifts.filter((shift) => shift.status !== "INACTIVE").map((shift) => shiftCategoryName(shift.name));
         const defaultRoleTitle = defaultOperationalRoleTitle(activeRoleTitles);
         setCommandLobs(["Todos", ...activeLobs]);
         setCommandRoleTitles(["Todos", ...Array.from(new Set([...activeRoleTitles, defaultRoleTitle]))]);
+        setCommandShiftOptions(["Todos", "Sem turno", ...cleanShiftOptions(activeShiftCategories, true)]);
         setSelectedCommandRoleTitle((current) => (current && current !== "Agente" ? current : defaultRoleTitle));
       })
       .catch(() => {
         setCommandLobs(["Todos"]);
         setCommandRoleTitles(["Todos", "Agente"]);
+        setCommandShiftOptions(["Todos", "Sem turno", ...Array.from(standardShiftNames)]);
       });
+  }, []);
+
+  useEffect(() => {
+    apiJson<EmployeeListResponse>("/api/employees?limit=10")
+      .then((payload) => {
+        setCommandSkillOptions(["Todos", "SEM_SKILL", ...(payload.filterOptions?.skills ?? []).filter(Boolean)]);
+      })
+      .catch(() => setCommandSkillOptions(["Todos", "SEM_SKILL"]));
   }, []);
 
   async function loadCommandCenterSummary() {
@@ -1489,6 +1523,8 @@ export function OperationalCommandCenter() {
       if (selectedCommandLob !== "Todos") params.set("lob", selectedCommandLob);
       if (selectedCommandSupervisor !== "Todos") params.set("supervisor", selectedCommandSupervisor);
       if (selectedCommandRoleTitle !== "Todos") params.set("roleTitle", selectedCommandRoleTitle);
+      if (selectedCommandShift !== "Todos") params.set("shift", selectedCommandShift);
+      if (selectedCommandSkill !== "Todos") params.set("skill", selectedCommandSkill);
       const payload = await apiJson<{ summary: AttendanceSummary }>(`/api/attendance?${params.toString()}`);
       setAttendanceSummary(payload.summary);
     } catch {
@@ -1519,6 +1555,8 @@ export function OperationalCommandCenter() {
       if (selectedCommandLob !== "Todos") params.set("lob", selectedCommandLob);
       if (selectedCommandSupervisor !== "Todos") params.set("supervisor", selectedCommandSupervisor);
       if (selectedCommandRoleTitle !== "Todos") params.set("roleTitle", selectedCommandRoleTitle);
+      if (selectedCommandShift !== "Todos") params.set("shift", selectedCommandShift);
+      if (selectedCommandSkill !== "Todos") params.set("skill", selectedCommandSkill);
       const payload = await apiJson<{ data: AttendanceItem[] }>(`/api/attendance?${params.toString()}`);
       setAbsenceReasonPeople(payload.data);
     } catch {
@@ -1533,6 +1571,8 @@ export function OperationalCommandCenter() {
     if (includeLob && selectedCommandLob !== "Todos") params.set("lob", selectedCommandLob);
     if (includeSupervisor && selectedCommandSupervisor !== "Todos") params.set("supervisor", selectedCommandSupervisor);
     if (includeRoleTitle && selectedCommandRoleTitle !== "Todos") params.set("roleTitle", selectedCommandRoleTitle);
+    if (selectedCommandShift !== "Todos") params.set("shift", selectedCommandShift);
+    if (selectedCommandSkill !== "Todos") params.set("skill", selectedCommandSkill);
   }
 
   async function openCommandDetailPeople(type: "scheduled" | "present" | "absences", title: string) {
@@ -1624,6 +1664,34 @@ export function OperationalCommandCenter() {
     setAgentAbsenceError("");
   }
 
+  async function openActivePeopleGroup(group: { lob: string; shift?: string }) {
+    setSelectedActivePeopleGroup(group);
+    setActivePeople([]);
+    setActivePeopleError("");
+    setLoadingActivePeople(true);
+    try {
+      const params = new URLSearchParams({
+        detailType: "activePeople",
+        lob: group.lob,
+        skipSummary: "true"
+      });
+      if (group.shift) params.set("shift", group.shift);
+      appendCommandFilters(params, { includeLob: false });
+      const payload = await apiJson<{ data: ActivePeopleItem[] }>(`/api/attendance?${params.toString()}`);
+      setActivePeople(payload.data);
+    } catch {
+      setActivePeopleError("Não foi possível carregar as pessoas ativas deste grupo.");
+    } finally {
+      setLoadingActivePeople(false);
+    }
+  }
+
+  function closeActivePeopleGroup() {
+    setSelectedActivePeopleGroup(null);
+    setActivePeople([]);
+    setActivePeopleError("");
+  }
+
   function closeAbsenceReasonPeople() {
     setSelectedAbsenceReason(null);
     setAbsenceReasonPeople([]);
@@ -1647,6 +1715,8 @@ export function OperationalCommandCenter() {
       if (selectedCommandLob !== "Todos") params.set("lob", selectedCommandLob);
       if (selectedCommandSupervisor !== "Todos") params.set("supervisor", selectedCommandSupervisor);
       if (selectedCommandRoleTitle !== "Todos") params.set("roleTitle", selectedCommandRoleTitle);
+      if (selectedCommandShift !== "Todos") params.set("shift", selectedCommandShift);
+      if (selectedCommandSkill !== "Todos") params.set("skill", selectedCommandSkill);
       await downloadFile(
         `/api/attendance/justified-absences/export?${params.toString()}`,
         `faltas_justificadas_${dateRange.startDate}_${dateRange.endDate}.xlsx`,
@@ -1674,6 +1744,8 @@ export function OperationalCommandCenter() {
       });
       if (selectedCommandLob !== "Todos") params.set("lob", selectedCommandLob);
       if (selectedCommandRoleTitle !== "Todos") params.set("roleTitle", selectedCommandRoleTitle);
+      if (selectedCommandShift !== "Todos") params.set("shift", selectedCommandShift);
+      if (selectedCommandSkill !== "Todos") params.set("skill", selectedCommandSkill);
       const payload = await apiJson<{ data: AttendanceItem[] }>(`/api/attendance?${params.toString()}`);
       setAbsSupervisorPeople(payload.data);
     } catch {
@@ -1747,6 +1819,11 @@ export function OperationalCommandCenter() {
     .map(([lob, values]) => ({ lob, ...values }))
     .sort((a, b) => b.absRate - a.absRate || b.absent - a.absent || a.lob.localeCompare(b.lob, "pt-BR"));
   const commandTopAbsenceAgents = summary.topAbsenceAgents ?? [];
+  const commandActivePeopleByLobShift = summary.activePeopleByLobAndShift ?? [];
+  const activePeopleShiftColumns = Array.from(new Set([
+    ...(["Manhã", "Tarde", "Noite", "Sem turno"].filter((shift) => selectedCommandShift === "Todos" || shift === selectedCommandShift)),
+    ...commandActivePeopleByLobShift.flatMap((row) => Object.keys(row.shifts)).filter((shift) => selectedCommandShift === "Todos" || shift === selectedCommandShift)
+  ]));
   const commandPeopleRows = (records: AttendanceItem[]) => records.map((record) => [
     record.employeeName,
     record.wbLogin ?? "-",
@@ -1758,6 +1835,17 @@ export function OperationalCommandCenter() {
     <StatusBadge key={`${record.id}-status`} status={record.status} />,
     record.impactsAbs ? record.absenceReason ?? (record.isJustified ? "Justificada" : "Sem justificativa") : "-",
     <a key={`${record.id}-open`} href={`/escalas?startDate=${record.dateIso ?? dateRange.startDate}&collaborator=${encodeURIComponent(record.employeeName)}`} className="text-xs font-extrabold text-blue-600 hover:underline">Abrir no Cronograma</a>
+  ]);
+  const activePeopleRows = (records: ActivePeopleItem[]) => records.map((record) => [
+    record.employeeName,
+    record.wbLogin ?? "-",
+    record.email ?? "-",
+    record.roleTitle ?? "-",
+    record.lob ?? "Sem LOB",
+    record.supervisor ?? "Sem supervisor",
+    record.shift ?? "Sem turno",
+    record.skill || "-",
+    record.employeeStatus ?? "-"
   ]);
 
   return (
@@ -1794,6 +1882,26 @@ export function OperationalCommandCenter() {
             >
               {commandRoleTitles.map((roleTitle) => (
                 <option key={roleTitle} value={roleTitle}>{roleTitle === "Todos" ? "Todos os cargos" : roleTitle}</option>
+              ))}
+            </select>
+            <select
+              value={selectedCommandShift}
+              onChange={(event) => setSelectedCommandShift(event.target.value)}
+              className="premium-control h-11 px-3 text-sm font-extrabold text-navy-950 outline-none"
+              title="Turno"
+            >
+              {commandShiftOptions.map((shift) => (
+                <option key={shift} value={shift}>{shift === "Todos" ? "Todos os turnos" : shift}</option>
+              ))}
+            </select>
+            <select
+              value={selectedCommandSkill}
+              onChange={(event) => setSelectedCommandSkill(event.target.value)}
+              className="premium-control h-11 px-3 text-sm font-extrabold text-navy-950 outline-none"
+              title="Skill"
+            >
+              {commandSkillOptions.map((skill) => (
+                <option key={skill} value={skill}>{skill === "Todos" ? "Todas as skills" : skill === "SEM_SKILL" ? "Sem skill" : skill}</option>
               ))}
             </select>
             <label className="premium-control flex h-11 items-center gap-2 px-3 text-sm font-bold text-navy-900">
@@ -1841,31 +1949,79 @@ export function OperationalCommandCenter() {
         ))}
       </div>
       <div className="space-y-5">
-        <Panel title="ABS por Supervisor">
-          {commandAbsBySupervisor.length ? (
-            <div className="grid max-h-[360px] gap-3 overflow-y-auto pr-1 md:grid-cols-2 xl:grid-cols-3">
-              {commandAbsBySupervisor.map((item) => (
-                <button
-                  key={item.supervisor}
-                  type="button"
-                  onClick={() => void openAbsSupervisorPeople(item.supervisor)}
-                  className="w-full rounded-lg border border-border bg-white p-3 text-left transition hover:border-blue-200 hover:bg-blue-50"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0 truncate text-sm font-extrabold text-navy-950">{item.supervisor}</span>
-                    <span className="rounded-md bg-orange-50 px-2 py-1 text-xs font-black text-orange-700">{item.absRate}% ABS</span>
-                  </div>
-                  <div className="mt-3 grid grid-cols-4 gap-2 text-center text-xs">
-                    <MetricMini label="Escaladas" value={item.planned} />
-                    <MetricMini label="Faltas" value={item.absent} />
-                    <MetricMini label="Sem just." value={item.unjustified} />
-                    <MetricMini label="Justif." value={item.justified} />
-                  </div>
-                </button>
-              ))}
-            </div>
-          ) : <EmptyState title="Sem ABS por supervisor" description="A visão será exibida quando houver cronogramas no período selecionado." />}
-        </Panel>
+        <div className="grid gap-5 xl:grid-cols-2">
+          <Panel title="ABS por Supervisor">
+            {commandAbsBySupervisor.length ? (
+              <div className="max-h-[360px] space-y-3 overflow-y-auto pr-1">
+                {commandAbsBySupervisor.map((item) => (
+                  <button
+                    key={item.supervisor}
+                    type="button"
+                    onClick={() => void openAbsSupervisorPeople(item.supervisor)}
+                    className="w-full rounded-lg border border-border bg-white p-3 text-left transition hover:border-blue-200 hover:bg-blue-50"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="min-w-0 truncate text-sm font-extrabold text-navy-950">{item.supervisor}</span>
+                      <span className="rounded-md bg-orange-50 px-2 py-1 text-xs font-black text-orange-700">{item.absRate}% ABS</span>
+                    </div>
+                    <div className="mt-3 grid grid-cols-4 gap-2 text-center text-xs">
+                      <MetricMini label="Escaladas" value={item.planned} />
+                      <MetricMini label="Faltas" value={item.absent} />
+                      <MetricMini label="Sem just." value={item.unjustified} />
+                      <MetricMini label="Justif." value={item.justified} />
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : <EmptyState title="Sem ABS por supervisor" description="A visão será exibida quando houver cronogramas no período selecionado." />}
+          </Panel>
+
+          <Panel title="Pessoas Ativas por LOB e Turno">
+            {commandActivePeopleByLobShift.length ? (
+              <div className="max-h-[360px] overflow-auto pr-1">
+                <table className="w-full min-w-[620px] text-left text-xs">
+                  <thead className="sticky top-0 z-10 bg-white text-[10px] font-black uppercase tracking-wide text-muted">
+                    <tr className="border-b border-border">
+                      <th className="px-2 py-2">LOB</th>
+                      {activePeopleShiftColumns.map((shift) => (
+                        <th key={shift} className="px-2 py-2 text-center">{shift}</th>
+                      ))}
+                      <th className="px-2 py-2 text-center">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/70">
+                    {commandActivePeopleByLobShift.map((row) => (
+                      <tr key={row.lob} className="hover:bg-blue-50/35">
+                        <td className="px-2 py-2 font-extrabold text-navy-950">{row.lob}</td>
+                        {activePeopleShiftColumns.map((shift) => (
+                          <td key={`${row.lob}-${shift}`} className="px-2 py-2 text-center">
+                            <button
+                              type="button"
+                              disabled={!row.shifts[shift]}
+                              onClick={() => void openActivePeopleGroup({ lob: row.lob, shift })}
+                              className="rounded-md px-2 py-1 font-black text-blue-700 transition hover:bg-blue-100 disabled:cursor-default disabled:text-muted disabled:hover:bg-transparent"
+                            >
+                              {row.shifts[shift] ?? 0}
+                            </button>
+                          </td>
+                        ))}
+                        <td className="px-2 py-2 text-center">
+                          <button
+                            type="button"
+                            onClick={() => void openActivePeopleGroup({ lob: row.lob })}
+                            className="rounded-md bg-slate-50 px-2 py-1 font-black text-navy-950 transition hover:bg-blue-100 hover:text-blue-700"
+                          >
+                            {row.total}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : <EmptyState title="Sem pessoas ativas" description="A visão será exibida quando houver colaboradores ativos para os filtros aplicados." />}
+          </Panel>
+        </div>
 
         <div className="grid gap-5 xl:grid-cols-3">
           <Panel title="Agentes com maior quantidade de faltas">
@@ -2031,6 +2187,34 @@ export function OperationalCommandCenter() {
               />
             ) : (
               <EmptyState title="Nenhum colaborador encontrado para os filtros selecionados." description="A lista respeita o período e os filtros aplicados na Central Operacional." />
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {selectedActivePeopleGroup ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="card max-h-[90vh] w-full max-w-6xl overflow-y-auto p-5">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-extrabold text-navy-950">Pessoas Ativas por LOB e Turno</h2>
+                <p className="text-sm font-semibold text-muted">
+                  {selectedActivePeopleGroup.lob}{selectedActivePeopleGroup.shift ? ` • ${selectedActivePeopleGroup.shift}` : " • Todos os turnos"}
+                </p>
+              </div>
+              <button onClick={closeActivePeopleGroup} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+            </div>
+            {loadingActivePeople ? (
+              <div className="rounded-xl border border-border p-8 text-center text-sm font-bold text-muted">Carregando pessoas ativas...</div>
+            ) : activePeopleError ? (
+              <EmptyState title="Não foi possível carregar" description={activePeopleError} />
+            ) : activePeople.length ? (
+              <SimpleTable
+                columns={["Nome", "WB/Login", "E-mail", "Cargo/Função", "LOB", "Supervisor", "Turno", "Skill", "Status do colaborador"]}
+                rows={activePeopleRows(activePeople)}
+              />
+            ) : (
+              <EmptyState title="Nenhuma pessoa ativa encontrada" description="A lista respeita os filtros aplicados na Central Operacional." />
             )}
           </div>
         </div>

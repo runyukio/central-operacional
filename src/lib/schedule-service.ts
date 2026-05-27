@@ -97,6 +97,36 @@ const defaultShiftTimes: Record<string, { startsAt: string; endsAt: string }> = 
 };
 
 const allowDemoDataFallback = process.env.ALLOW_DEMO_LOGIN === "true" || process.env.ALLOW_DEMO_DATA === "true";
+const inactiveEmployeeStatusKeys = new Set([
+  "INATIVO",
+  "INACTIVE",
+  "DESATIVADO",
+  "DISABLED",
+  "DESLIGADO",
+  "TERMINATED",
+  "SUSPENSO",
+  "SUSPENDED",
+  "AFASTADO",
+  "PENDENTE_DE_CADASTRO",
+  "PENDING_REGISTRATION",
+  "REMOVIDO",
+  "DELETED"
+]);
+const inactiveEmployeeStatusValues = [
+  "Inativo",
+  "INACTIVE",
+  "Desativado",
+  "DISABLED",
+  "Desligado",
+  "TERMINATED",
+  "Suspenso",
+  "SUSPENDED",
+  "Afastado",
+  "Pendente de cadastro",
+  "PENDING_REGISTRATION",
+  "Removido",
+  "DELETED"
+];
 
 export type ScheduleEditInput = {
   employeeId: string;
@@ -186,6 +216,12 @@ type AttendanceExportRow = {
   justifiedBy?: string;
   justifiedAt?: string;
   updatedAt?: string;
+};
+
+type ActivePeopleByLobShiftRow = {
+  lob: string;
+  shifts: Record<string, number>;
+  total: number;
 };
 
 export type AttendanceInput = {
@@ -1589,6 +1625,22 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
         summary
       };
     }
+    if (detailType === "activePeople") {
+      const data = await listActivePeopleByLobAndShift(summaryFilters);
+      logPerformanceMetric("attendance.active-people-detail", startedAt, {
+        role,
+        recordsReturned: data.length,
+        lob: lobFilter ?? "Todos",
+        supervisor: query.supervisor ?? "Todos",
+        roleTitle: query.roleTitle ?? "Todos",
+        shift: query.shift ?? "Todos",
+        skill: query.skill ?? "Todos"
+      });
+      return {
+        data,
+        summary: emptyAttendanceSummary()
+      };
+    }
     const schedules = await prisma.schedule.findMany({
       where: scheduleWhere,
       include: {
@@ -2469,6 +2521,7 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     .filter((agent) => agent.absent > 0)
     .sort((a, b) => b.absent - a.absent || b.unjustified - a.unjustified || a.name.localeCompare(b.name, "pt-BR"))
     .slice(0, 6);
+  const activePeopleByLobAndShift = await getActivePeopleByLobAndShift(filters);
   const unjustified = absenceSchedules.filter((item) => isPendingJustificationForSchedule(item.schedule.status, item.record)).length;
   const justified = absenceSchedules.filter((item) => hasValidJustification(item.record)).length;
   const summary = {
@@ -2487,7 +2540,8 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     byShift,
     bySupervisor,
     byLob,
-    topAbsenceAgents
+    topAbsenceAgents,
+    activePeopleByLobAndShift
   };
   logPerformanceMetric("attendance.summary-db", startedAt, {
     startDate: period ? dateKey(period.start) : null,
@@ -2534,8 +2588,135 @@ function emptyAttendanceSummary() {
     byShift: {},
     bySupervisor: {},
     byLob: {},
-    topAbsenceAgents: []
+    topAbsenceAgents: [],
+    activePeopleByLobAndShift: []
   };
+}
+
+function employeeStatusLookupKey(status: unknown) {
+  return String(status ?? "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function isActiveEmployeeStatus(status: unknown) {
+  const key = employeeStatusLookupKey(status);
+  if (!key) return true;
+  return !inactiveEmployeeStatusKeys.has(key);
+}
+
+async function employeeSupervisorFilter(value?: string | null): Promise<Prisma.EmployeeProfileWhereInput | null> {
+  const raw = value?.trim();
+  if (!raw || raw === "Todos") return null;
+  if (isNoSupervisorFilter(raw)) return { supervisorId: null };
+
+  const supervisors = await prisma.employeeProfile.findMany({
+    where: { fullName: { contains: raw, mode: "insensitive" } },
+    select: { id: true }
+  });
+  const ids = supervisors.map((supervisor) => supervisor.id);
+  return {
+    OR: [
+      ...(ids.length ? [{ supervisorId: { in: ids } }] : []),
+      { supervisor: { fullName: { contains: raw, mode: "insensitive" } } }
+    ]
+  };
+}
+
+function employeeShiftCategoryFilter(value?: string | null): Prisma.EmployeeProfileWhereInput | null {
+  const category = shiftCategoryName(value);
+  if (!category || category === "Todos") return null;
+  if (category === "Sem turno") {
+    return {
+      shift: {
+        OR: [
+          { name: { equals: "Sem turno", mode: "insensitive" } },
+          { name: { equals: "Sem escala", mode: "insensitive" } },
+          { name: { equals: "SEM_TURNO", mode: "insensitive" } },
+          { name: { equals: "NONE", mode: "insensitive" } }
+        ]
+      }
+    };
+  }
+  const shiftWhere = shiftNameCategoryWhere(category);
+  return shiftWhere ? { shift: shiftWhere } : null;
+}
+
+async function activeEmployeeWhere(filters: AttendanceSummaryFilters = {}) {
+  const filterParts: Prisma.EmployeeProfileWhereInput[] = [
+    { deletedAt: null },
+    { NOT: { operationalStatus: { in: inactiveEmployeeStatusValues } } }
+  ];
+  if (filters.lob && filters.lob !== "Todos") filterParts.push({ lob: { name: filters.lob } });
+  if (filters.roleTitle && filters.roleTitle !== "Todos") filterParts.push({ roleTitle: filters.roleTitle });
+  const supervisorFilter = await employeeSupervisorFilter(filters.supervisor);
+  if (supervisorFilter) filterParts.push(supervisorFilter);
+  const skillFilter = employeeSkillFilter(filters.skill);
+  if (skillFilter) filterParts.push(skillFilter);
+  const shiftFilter = employeeShiftCategoryFilter(filters.shift);
+  if (shiftFilter) filterParts.push(shiftFilter);
+  return { AND: filterParts };
+}
+
+async function activeEmployeeRows(filters: AttendanceSummaryFilters = {}) {
+  const where = await activeEmployeeWhere(filters);
+  const shiftFilter = shiftCategoryName(filters.shift);
+  const employees = await prisma.employeeProfile.findMany({
+    where,
+    select: {
+      id: true,
+      fullName: true,
+      wbLogin: true,
+      roleTitle: true,
+      skill: true,
+      operationalStatus: true,
+      user: { select: { email: true } },
+      lob: { select: { name: true } },
+      supervisor: { select: { fullName: true } },
+      shift: { select: { name: true } }
+    },
+    orderBy: [{ lob: { name: "asc" } }, { shift: { name: "asc" } }, { fullName: "asc" }]
+  });
+  return employees.filter((employee) => {
+    if (!isActiveEmployeeStatus(employee.operationalStatus)) return false;
+    if (shiftFilter && shiftFilter !== "Todos" && shiftCategoryName(employee.shift?.name) !== shiftFilter) return false;
+    return true;
+  });
+}
+
+async function getActivePeopleByLobAndShift(filters: AttendanceSummaryFilters = {}) {
+  const employees = await activeEmployeeRows(filters);
+  const grouped = new Map<string, ActivePeopleByLobShiftRow>();
+  employees.forEach((employee) => {
+    const lob = employee.lob?.name?.trim() || "Sem LOB";
+    const shift = shiftCategoryName(employee.shift?.name) || "Sem turno";
+    const row = grouped.get(lob) ?? { lob, shifts: {}, total: 0 };
+    row.shifts[shift] = (row.shifts[shift] ?? 0) + 1;
+    row.total += 1;
+    grouped.set(lob, row);
+  });
+  return Array.from(grouped.values()).sort((a, b) => b.total - a.total || a.lob.localeCompare(b.lob, "pt-BR"));
+}
+
+async function listActivePeopleByLobAndShift(filters: AttendanceSummaryFilters = {}) {
+  const employees = await activeEmployeeRows(filters);
+  return employees.map((employee) => ({
+    id: employee.id,
+    employeeId: employee.id,
+    employeeName: employee.fullName,
+    wbLogin: employee.wbLogin,
+    email: employee.user?.email ?? "",
+    roleTitle: employee.roleTitle ?? "Sem cargo",
+    lob: employee.lob?.name ?? "Sem LOB",
+    supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
+    shift: shiftCategoryName(employee.shift?.name) || "Sem turno",
+    skill: employee.skill ?? "",
+    employeeStatus: employee.operationalStatus
+  }));
 }
 
 function resolveSupervisorName(schedule: { supervisorId?: string | null; employee?: { supervisorId?: string | null; supervisor?: { fullName: string } | null } | null }, supervisorNameById?: Map<string, string>) {
