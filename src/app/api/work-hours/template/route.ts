@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 
+import { getApiActor } from "@/lib/api-actor";
+import { canImportWorkHours } from "@/lib/permissions";
+
 const columns = [
   "wb_login",
   "data",
@@ -10,6 +13,11 @@ const columns = [
 ];
 
 export async function GET() {
+  const actor = await getApiActor();
+  if (!canImportWorkHours({ role: actor.role, status: "ACTIVE" })) {
+    return NextResponse.json({ error: "Apenas WFM ou ADMIN podem importar Horas Operacionais." }, { status: 403 });
+  }
+
   const workbook = XLSX.utils.book_new();
   const worksheet = XLSX.utils.aoa_to_sheet([
     columns,

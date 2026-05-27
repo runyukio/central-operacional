@@ -90,6 +90,33 @@ const permissionSeeds = [
   ["can_manage_coverage_rules", "Gerenciar regras de cobertura"]
 ] as const;
 
+const supervisorAllowedPermissionKeys = new Set([
+  "can_view_employee_map",
+  "can_justify_attendance",
+  "can_approve_day_off_supervisor_step"
+]);
+
+const supervisorBlockedPermissionKeys = new Set([
+  "can_manage_users",
+  "can_manage_settings",
+  "can_manage_lobs",
+  "can_manage_schedules",
+  "can_import_schedules",
+  "can_add_schedule_manually",
+  "can_edit_schedule_full",
+  "can_mark_present",
+  "can_approve_day_off_wfm_step",
+  "can_edit_employee_data",
+  "can_view_sensitive_employee_data",
+  "can_export_employee_data",
+  "can_manage_registrations",
+  "can_reset_password",
+  "can_access_audit_logs",
+  "can_manage_shift_reports",
+  "can_manage_tokens",
+  "can_manage_coverage_rules"
+]);
+
 const configKeys = {
   lobStatus: "settings.lobStatus",
   shiftStatus: "settings.shiftStatus",
@@ -179,7 +206,7 @@ export async function getSystemSettings(actor: Actor) {
         })),
         lobs: lobs.map((lob) => ({ id: lob.id, name: lob.name, label: lob.name, description: lob.description ?? "", status: lobStatus[lob.id] ?? "ACTIVE", active: (lobStatus[lob.id] ?? "ACTIVE") === "ACTIVE", system: lob.name === "ALL", isSystem: lob.name === "ALL" })),
         shifts: formatShiftsForSettings(shifts, shiftStatus),
-        roles: roles.map((role) => ({ id: role.id, name: role.name, label: role.label, description: role.description ?? "", status: roleStatus[role.id] ?? "ACTIVE", essential: essentialRoles.includes(role.name), permissions: rolePermissions[role.name] ?? defaultPermissionsForRole(role.name) })),
+        roles: roles.map((role) => ({ id: role.id, name: role.name, label: role.label, description: role.description ?? "", status: roleStatus[role.id] ?? "ACTIVE", essential: essentialRoles.includes(role.name), permissions: permissionsForRole(role.name, rolePermissions) })),
         permissions: permissions.map((permission) => ({ id: permission.id, key: permission.key, label: permission.label, description: permission.description ?? "", status: permissionStatus[permission.id] ?? "ACTIVE" })),
         requestTypes: requestTypes.map((type) => ({ id: type.id, name: type.name, area: type.area, slaHours: type.slaHours, requiresApproval: type.requiresApproval, status: requestTypeStatus[type.id] ?? "ACTIVE", essential: essentialDayOffTypes.includes(type.name) })),
         teams: teams.map((team) => ({ id: team.id, name: team.name, lobId: team.lobId, lob: team.lob.name, supervisorId: team.supervisorId ?? "", supervisorName: team.supervisor?.fullName ?? "", supervisorEmail: team.supervisor?.user?.email ?? "", status: teamStatus[team.id] ?? "ACTIVE" })),
@@ -404,11 +431,15 @@ async function savePermission(tx: Prisma.TransactionClient, adminId: string, act
   const roleName = text(action.roleName);
   if (roleName) {
     if (roleName === "ADMIN" && action.granted === false) return { error: "Não é permitido remover permissões críticas do ADMIN." };
+    if (roleName === "SUPERVISOR" && action.granted !== false && !supervisorAllowedPermissionKeys.has(permission.key)) {
+      return { error: "Supervisor não pode receber permissões administrativas de WFM/Admin." };
+    }
     const current = await readObjectConfig<Record<string, string[]>>(configKeys.rolePermissions, {}, tx);
-    const currentList = new Set(current[roleName] ?? defaultPermissionsForRole(roleName));
+    const sanitized = sanitizeRolePermissions(current);
+    const currentList = new Set(sanitized[roleName] ?? defaultPermissionsForRole(roleName));
     if (action.granted === false) currentList.delete(permission.key);
     else currentList.add(permission.key);
-    await writeJsonConfig(tx, configKeys.rolePermissions, { ...current, [roleName]: Array.from(currentList) }, "Permissões por role");
+    await writeJsonConfig(tx, configKeys.rolePermissions, sanitizeRolePermissions({ ...sanitized, [roleName]: Array.from(currentList) }), "Permissões por role");
   }
   await auditSettings(tx, adminId, id ? "EDICAO" : "CRIACAO", "Permission", permission.id, action);
   return { data: permission };
@@ -560,8 +591,8 @@ async function ensureCoreSettings() {
   for (const role of essentialRoles) next[role] ??= defaultPermissionsForRole(role);
   await prisma.systemConfig.upsert({
     where: { key: configKeys.rolePermissions },
-    update: { value: next as Prisma.InputJsonValue },
-    create: { key: configKeys.rolePermissions, value: next as Prisma.InputJsonValue, description: "Permissões por role" }
+    update: { value: sanitizeRolePermissions(next) as Prisma.InputJsonValue },
+    create: { key: configKeys.rolePermissions, value: sanitizeRolePermissions(next) as Prisma.InputJsonValue, description: "Permissões por role" }
   });
 }
 
@@ -691,10 +722,24 @@ function countSuperviseesBySupervisor(employees: Array<{ supervisorId: string | 
 function defaultPermissionsForRole(roleName: string) {
   if (roleName === "ADMIN") return permissionSeeds.map(([key]) => key);
   if (roleName === "WFM") return ["can_manage_schedules", "can_import_schedules", "can_add_schedule_manually", "can_edit_schedule_full", "can_mark_present", "can_approve_day_off_wfm_step", "can_manage_coverage_rules", "can_view_employee_map"];
-  if (roleName === "SUPERVISOR") return ["can_view_employee_map", "can_justify_attendance", "can_approve_day_off_supervisor_step", "can_manage_shift_reports"];
+  if (roleName === "SUPERVISOR") return Array.from(supervisorAllowedPermissionKeys);
   if (roleName === "RH") return ["can_manage_registrations", "can_view_employee_map", "can_view_sensitive_employee_data"];
   if (roleName === "GESTOR") return ["can_view_employee_map", "can_export_employee_data", "can_access_audit_logs"];
   return [];
+}
+
+function permissionsForRole(roleName: string, rolePermissions: Record<string, string[]>) {
+  const sanitized = sanitizeRolePermissions(rolePermissions);
+  return sanitized[roleName] ?? defaultPermissionsForRole(roleName);
+}
+
+function sanitizeRolePermissions(rolePermissions: Record<string, string[]>) {
+  const next: Record<string, string[]> = { ...rolePermissions };
+  const supervisorPermissions = new Set(next.SUPERVISOR ?? defaultPermissionsForRole("SUPERVISOR"));
+  supervisorBlockedPermissionKeys.forEach((permission) => supervisorPermissions.delete(permission));
+  supervisorAllowedPermissionKeys.forEach((permission) => supervisorPermissions.add(permission));
+  next.SUPERVISOR = Array.from(supervisorPermissions).filter((permission) => supervisorAllowedPermissionKeys.has(permission));
+  return next;
 }
 
 function defaultGeneralSettings() {

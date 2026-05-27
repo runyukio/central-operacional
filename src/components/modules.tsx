@@ -5266,10 +5266,12 @@ export function WorkHoursPage() {
                 Upload horas
               </button>
             ) : null}
-            <button type="button" disabled={downloadingWorkHourTemplate} onClick={downloadWorkHourTemplate} className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft disabled:cursor-not-allowed disabled:opacity-60">
-              <Download className="h-4 w-4" />
-              {downloadingWorkHourTemplate ? "Baixando..." : "Baixar template"}
-            </button>
+            {canUpload ? (
+              <button type="button" disabled={downloadingWorkHourTemplate} onClick={downloadWorkHourTemplate} className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft disabled:cursor-not-allowed disabled:opacity-60">
+                <Download className="h-4 w-4" />
+                {downloadingWorkHourTemplate ? "Baixando..." : "Baixar template"}
+              </button>
+            ) : null}
             {["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(normalizedRole) ? (
               <a href={exportUrl()} className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft">
                 <FileText className="h-4 w-4" />

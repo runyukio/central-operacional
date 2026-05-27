@@ -1,7 +1,15 @@
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 
+import { getApiActor } from "@/lib/api-actor";
+import { canAccessAdvanceModule } from "@/lib/permissions";
+
 export async function GET() {
+  const actor = await getApiActor();
+  if (!canAccessAdvanceModule({ role: actor.role, status: "ACTIVE" })) {
+    return NextResponse.json({ error: "Você não tem permissão para baixar template de adiantamento." }, { status: 403 });
+  }
+
   const rows = [
     {
       wb_login: "wb_exemplo01",

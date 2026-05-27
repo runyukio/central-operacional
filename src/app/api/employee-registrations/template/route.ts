@@ -1,9 +1,16 @@
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 
+import { getApiActor } from "@/lib/api-actor";
 import { employeeImportColumns } from "@/lib/employee-registration-service";
+import { canApproveRegistration } from "@/lib/permissions";
 
 export async function GET() {
+  const actor = await getApiActor();
+  if (!canApproveRegistration({ role: actor.role, status: "ACTIVE" })) {
+    return NextResponse.json({ error: "Supervisor não possui permissão para aprovar ou editar cadastros." }, { status: 403 });
+  }
+
   const sample = Object.fromEntries(employeeImportColumns.map((column) => [column, ""]));
   const worksheet = XLSX.utils.json_to_sheet([sample], { header: [...employeeImportColumns] });
   const workbook = XLSX.utils.book_new();

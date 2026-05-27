@@ -1,9 +1,17 @@
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 
+import { getApiActor } from "@/lib/api-actor";
+import { canImportCronogramas } from "@/lib/permissions";
+
 const columns = ["wb_login", "data", "status", "turno", "entrada", "saida", "lob"];
 
 export async function GET() {
+  const actor = await getApiActor();
+  if (!canImportCronogramas({ role: actor.role, status: "ACTIVE" })) {
+    return NextResponse.json({ error: "Apenas WFM ou ADMIN podem importar Cronogramas." }, { status: 403 });
+  }
+
   const workbook = XLSX.utils.book_new();
   const worksheet = XLSX.utils.aoa_to_sheet([
     columns,
