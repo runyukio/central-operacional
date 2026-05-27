@@ -1,14 +1,15 @@
 import { NextResponse } from "next/server";
 
 import { getApiActor } from "@/lib/api-actor";
-import { exportJustifiedAbsencesCsv } from "@/lib/schedule-service";
+import { exportJustifiedAbsencesXlsxData } from "@/lib/schedule-service";
+import { buildXlsxResponse } from "@/lib/xlsx-export";
 
 export async function GET(request: Request) {
   const actor = await getApiActor();
   const url = new URL(request.url);
   const startDate = url.searchParams.get("startDate") ?? undefined;
   const endDate = url.searchParams.get("endDate") ?? undefined;
-  const result = await exportJustifiedAbsencesCsv(actor, {
+  const result = await exportJustifiedAbsencesXlsxData(actor, {
     date: url.searchParams.get("date") ?? undefined,
     startDate,
     endDate,
@@ -27,13 +28,5 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: result.error, message: result.error }, { status: result.status ?? 400 });
   }
 
-  const fileStart = startDate ?? "inicio";
-  const fileEnd = endDate ?? startDate ?? "fim";
-  return new NextResponse(result.csv, {
-    headers: {
-      "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename="faltas_justificadas_${fileStart}_${fileEnd}.csv"`,
-      "Cache-Control": "no-store"
-    }
-  });
+  return buildXlsxResponse(result);
 }

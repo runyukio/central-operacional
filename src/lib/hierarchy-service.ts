@@ -230,14 +230,14 @@ export async function updateEmployeeSupervisor(actor: Actor, input: { employeeId
   }
 }
 
-export async function exportHierarchyCsv(actor: Actor, query: HierarchyQuery = {}) {
+export async function exportHierarchyXlsxData(actor: Actor, query: HierarchyQuery = {}) {
   const result = await getHierarchy(actor, query);
   if ("error" in result) return result;
   const rows = result.data.employees;
   const headers = ["nome", "wb_login", "email", "cargo_funcao", "lob", "status", "supervisor", "nivel_hierarquico", "subordinados_diretos", "subordinados_totais"];
-  const csv = [
-    headers.map(csvCell).join(";"),
-    ...rows.map((employee) => [
+  return {
+    headers,
+    rows: rows.map((employee) => [
       employee.name,
       employee.wbLogin,
       employee.email,
@@ -248,9 +248,10 @@ export async function exportHierarchyCsv(actor: Actor, query: HierarchyQuery = {
       employee.level,
       employee.directReports,
       employee.totalReports
-    ].map(csvCell).join(";"))
-  ].join("\n");
-  return { csv: `\uFEFF${csv}`, fileName: `hierarquia_${new Date().toISOString().slice(0, 10)}.csv` };
+    ]),
+    sheetName: "Hierarquia",
+    fileName: `hierarquia_${new Date().toISOString().slice(0, 10)}.xlsx`
+  };
 }
 
 async function wouldCreateHierarchyCycle(employeeId: string, supervisorId: string) {
@@ -284,8 +285,4 @@ function hasDisplayedDescendant(employeeId: string, childrenBySupervisor: Map<st
 
 function isNoneFilter(value: string) {
   return /^(none|null|sem_supervisor|sem\s*supervisor)$/i.test(value.trim());
-}
-
-function csvCell(value: unknown) {
-  return `"${String(value ?? "").replace(/"/g, '""')}"`;
 }

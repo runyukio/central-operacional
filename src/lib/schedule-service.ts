@@ -1354,7 +1354,7 @@ export async function commitOperationalScheduleImport(actor: Actor, input: Sched
   }
 }
 
-export async function exportOperationalSchedulesCsv(actor: Actor, query: ScheduleQuery = {}) {
+export async function exportOperationalSchedulesXlsxData(actor: Actor, query: ScheduleQuery = {}) {
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
     if (!user) return { error: "Usuário ativo não encontrado para exportar cronograma." };
@@ -1429,7 +1429,7 @@ export async function exportOperationalSchedulesCsv(actor: Actor, query: Schedul
         actorId: user.id,
         action: "UPLOAD",
         entity: "Schedule",
-        reason: "Exportação CSV de Cronogramas Consolidados",
+        reason: "Exportação XLSX de Cronogramas Consolidados",
         newValue: { filters: query, exportedRows: schedules.length }
       }
     }).catch(() => undefined);
@@ -1455,7 +1455,14 @@ export async function exportOperationalSchedulesCsv(actor: Actor, query: Schedul
       ];
     });
 
-    return { csv: [headers, ...rows].map((row) => row.map(csvCell).join(";")).join("\n") };
+    const start = dateKey(period.start);
+    const end = dateKey(period.end);
+    return {
+      headers,
+      rows,
+      sheetName: "Cronogramas",
+      fileName: start === end ? `cronogramas_${start}.xlsx` : `cronogramas_${start}_a_${end}.xlsx`
+    };
   } catch (error) {
     recordErrorLog({ userEmail: actor.email, code: "SCHEDULE_EXPORT_ERROR", message: error instanceof Error ? error.message : "Falha ao exportar cronogramas", action: "SCHEDULE_EXPORT", severity: "ERROR" });
     return { error: "Não foi possível baixar Cronogramas Consolidados." };
@@ -1634,7 +1641,7 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
   }
 }
 
-export async function exportJustifiedAbsencesCsv(actor: Actor, query: AttendanceQuery = {}) {
+export async function exportJustifiedAbsencesXlsxData(actor: Actor, query: AttendanceQuery = {}) {
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
     if (!user) return { error: "Usuário ativo não encontrado para exportar faltas justificadas.", status: 401 };
@@ -1659,7 +1666,7 @@ export async function exportJustifiedAbsencesCsv(actor: Actor, query: Attendance
         actorId: user.id,
         action: "UPLOAD",
         entity: "AttendanceRecord",
-        reason: "Exportação CSV de Faltas Justificadas",
+        reason: "Exportação XLSX de Faltas Justificadas",
         newValue: { action: "EXPORT_JUSTIFIED_ABSENCES", filters: query, exportedRows: rows.length }
       }
     }).catch(() => undefined);
@@ -1701,7 +1708,15 @@ export async function exportJustifiedAbsencesCsv(actor: Actor, query: Attendance
       record.updatedAt ?? record.justifiedAt ?? record.registeredAt
     ]);
 
-    return { csv: `\uFEFF${[headers, ...body].map((row) => row.map(csvCell).join(";")).join("\n")}`, rows: rows.length };
+    const start = query.startDate ?? query.date ?? new Date().toISOString().slice(0, 10);
+    const end = query.endDate ?? start;
+    return {
+      headers,
+      rows: body,
+      count: rows.length,
+      sheetName: "Faltas justificadas",
+      fileName: start === end ? `faltas_justificadas_${start}.xlsx` : `faltas_justificadas_${start}_a_${end}.xlsx`
+    };
   } catch (error) {
     recordErrorLog({ userEmail: actor.email, code: "JUSTIFIED_ABSENCES_EXPORT_ERROR", message: error instanceof Error ? error.message : "Falha ao exportar faltas justificadas", action: "ATTENDANCE_EXPORT", severity: "ERROR" });
     return { error: "Não foi possível exportar as faltas justificadas. Tente novamente.", status: 500 };
@@ -2725,8 +2740,4 @@ function formatDateTime(date: Date) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(date);
-}
-
-function csvCell(value: unknown) {
-  return `"${String(value ?? "").replace(/"/g, '""')}"`;
 }

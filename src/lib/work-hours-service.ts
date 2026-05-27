@@ -759,10 +759,11 @@ export async function deleteWorkHourRecord(actor: Actor, input: DeleteWorkHourIn
   }
 }
 
-export async function exportOperationalWorkHoursCsv(actor: Actor, query: WorkHourQuery = {}) {
+export async function exportOperationalWorkHoursXlsxData(actor: Actor, query: WorkHourQuery = {}) {
   const user = await getUser(actor);
   if (!user || !["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(normalizeRole(user.role.name))) return createPermissionError("Você não tem permissão para exportar horas.");
 
+  const period = resolvePeriod(query);
   const result = await listOperationalWorkHours(actor, { ...query, page: 1, limit: workHourExportLimit });
   if ("error" in result) return result;
   const headers = [
@@ -786,7 +787,7 @@ export async function exportOperationalWorkHoursCsv(actor: Actor, query: WorkHou
     "solicitado_por",
     "solicitado_em"
   ];
-  const csvRows = result.data.map((row) => [
+  const rows = result.data.map((row) => [
     row.date,
     row.employeeName,
     row.wbLogin,
@@ -813,12 +814,19 @@ export async function exportOperationalWorkHoursCsv(actor: Actor, query: WorkHou
       actorId: user.id,
       action: AuditAction.UPLOAD,
       entity: "WorkHourRecord",
-      reason: "Exportação CSV de horas operacionais",
+      reason: "Exportação XLSX de horas operacionais",
       newValue: { filters: query, exportedRows: result.data.length }
     }
   }).catch(() => undefined);
 
-  return { csv: [headers, ...csvRows].map((row) => row.map(csvCell).join(";")).join("\n") };
+  const start = formatDate(period.startDate);
+  const end = formatDate(period.endDate);
+  return {
+    headers,
+    rows,
+    sheetName: "Horas",
+    fileName: start === end ? `horas_operacionais_${start}.xlsx` : `horas_operacionais_${start}_a_${end}.xlsx`
+  };
 }
 
 async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
@@ -1429,10 +1437,6 @@ function formatDate(date: Date) {
 
 function formatDateTime(date: Date) {
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short", timeZone: "America/Sao_Paulo" }).format(date);
-}
-
-function csvCell(value: unknown) {
-  return `"${String(value ?? "").replace(/"/g, '""')}"`;
 }
 
 function formatHourDifferenceForExport(minutes: number | null | undefined) {

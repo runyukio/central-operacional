@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 
 import { getApiActor } from "@/lib/api-actor";
-import { EngagementError, exportAnonymousFeedbackCsv } from "@/lib/engagement-service";
+import { EngagementError, exportAnonymousFeedbackXlsxData } from "@/lib/engagement-service";
+import { buildXlsxResponse } from "@/lib/xlsx-export";
 
 export async function GET(request: Request) {
   const actor = await getApiActor();
   const url = new URL(request.url);
   try {
-    const csv = await exportAnonymousFeedbackCsv(actor, {
+    const payload = await exportAnonymousFeedbackXlsxData(actor, {
       startDate: url.searchParams.get("startDate") ?? undefined,
       endDate: url.searchParams.get("endDate") ?? undefined,
       category: url.searchParams.get("category") ?? undefined,
@@ -18,12 +19,7 @@ export async function GET(request: Request) {
       jobTitle: url.searchParams.get("jobTitle") ?? undefined,
       search: url.searchParams.get("search") ?? undefined
     });
-    return new NextResponse(csv, {
-      headers: {
-        "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="feedback_anonimo.csv"`
-      }
-    });
+    return buildXlsxResponse(payload);
   } catch (error) {
     if (error instanceof EngagementError) {
       return NextResponse.json({ error: error.message, message: error.message }, { status: error.status });

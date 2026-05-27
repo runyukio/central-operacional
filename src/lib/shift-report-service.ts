@@ -426,7 +426,14 @@ export async function exportShiftReports(actor: Actor, query: ShiftReportQuery =
     report.followUpOwner,
     report.followUpDueDate
   ]);
-  return { csv: [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n"), data: payload.data, dashboard: payload.dashboard };
+  return {
+    headers,
+    rows,
+    sheetName: "Reports de turno",
+    fileName: `report_turno_${new Date().toISOString().slice(0, 10)}.xlsx`,
+    data: payload.data,
+    dashboard: payload.dashboard
+  };
 }
 
 function formatReport(
@@ -526,8 +533,4 @@ function emptyDashboard() {
 
 function splitText(value?: string) {
   return String(value ?? "").split(/[;\n]/).map((item) => item.trim()).filter(Boolean);
-}
-
-function csvCell(value: unknown) {
-  return `"${String(value ?? "").replaceAll('"', '""')}"`;
 }

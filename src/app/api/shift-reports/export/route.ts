@@ -2,11 +2,12 @@ import { NextResponse } from "next/server";
 
 import { getApiActor } from "@/lib/api-actor";
 import { exportShiftReports } from "@/lib/shift-report-service";
+import { buildXlsxResponse } from "@/lib/xlsx-export";
 
 export async function GET(request: Request) {
   const actor = await getApiActor();
   const url = new URL(request.url);
-  const format = url.searchParams.get("format") ?? "csv";
+  const format = url.searchParams.get("format") ?? "xlsx";
   const payload = await exportShiftReports(actor, {
     startDate: url.searchParams.get("startDate") ?? undefined,
     endDate: url.searchParams.get("endDate") ?? undefined,
@@ -23,10 +24,5 @@ export async function GET(request: Request) {
     return NextResponse.json({ reports: payload.data, dashboard: payload.dashboard });
   }
 
-  return new NextResponse(payload.csv, {
-    headers: {
-      "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": 'attachment; filename="reports_turno.csv"'
-    }
-  });
+  return buildXlsxResponse(payload);
 }

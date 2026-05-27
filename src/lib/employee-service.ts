@@ -569,14 +569,14 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
   }
 }
 
-export async function exportOperationalEmployeesCsv(actor: Actor, filters: { query?: string | null; lob?: string | null; status?: string | null; supervisorId?: string | null; shiftId?: string | null; skill?: string | null; wave?: string | null }) {
+export async function exportOperationalEmployeesXlsxData(actor: Actor, filters: { query?: string | null; lob?: string | null; status?: string | null; supervisorId?: string | null; shiftId?: string | null; skill?: string | null; wave?: string | null }) {
   const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
   if (!user) return createPermissionError("Usuário não autenticado.");
   if (!canAccessEmployeeMap({ role: actor.role, status: user.status })) return createPermissionError("Você não tem permissão para exportar o Mapa de Funcionários.");
 
   const role = normalizeRole(actor.role);
   const rowsResult = await listOperationalEmployees(actor, { summary: false, limit: 10000 });
-  const rows = Array.isArray(rowsResult) ? rowsResult : rowsResult.data;
+  const employees = Array.isArray(rowsResult) ? rowsResult : rowsResult.data;
   const query = clean(filters.query)?.toLowerCase() ?? "";
   const lob = clean(filters.lob);
   const status = clean(filters.status);
@@ -584,7 +584,7 @@ export async function exportOperationalEmployeesCsv(actor: Actor, filters: { que
   const shiftId = clean(filters.shiftId);
   const skill = clean(filters.skill);
   const wave = clean(filters.wave);
-  const filteredRows = rows.filter((employee) => {
+  const filteredRows = employees.filter((employee) => {
     const row = employee as Record<string, any>;
     const matchesQuery = !query || [employee.name, employee.wb, employee.email, employee.role, employee.lob, row.supervisor, row.skill, row.wave].join(" ").toLowerCase().includes(query);
     const matchesLob = !lob || lob === "Todos" || employee.lob === lob;
@@ -597,10 +597,8 @@ export async function exportOperationalEmployeesCsv(actor: Actor, filters: { que
   });
 
   const columns = employeeExportColumns(role);
-  const csv = [
-    columns.map((column) => csvEscape(column.header)).join(","),
-    ...filteredRows.map((employee) => columns.map((column) => csvEscape(column.value(employee))).join(","))
-  ].join("\n");
+  const headers = columns.map((column) => column.header);
+  const exportRows = filteredRows.map((employee) => columns.map((column) => String(column.value(employee) ?? "")));
 
   await prisma.auditLog.create({
     data: {
@@ -608,13 +606,13 @@ export async function exportOperationalEmployeesCsv(actor: Actor, filters: { que
       action: "EDICAO",
       entity: "EmployeeProfile",
       entityId: "employee-map",
-      reason: `Exportação CSV do Mapa de Funcionários (${role})`,
+      reason: `Exportação XLSX do Mapa de Funcionários (${role})`,
       previousValue: {},
       newValue: {
         role,
         filters,
         exportedRows: filteredRows.length,
-        columns: columns.map((column) => column.header)
+        columns: headers
       }
     }
   }).catch((error) => {
@@ -622,8 +620,10 @@ export async function exportOperationalEmployeesCsv(actor: Actor, filters: { que
   });
 
   return {
-    csv: `\uFEFF${csv}`,
-    fileName: `mapa-funcionarios-${new Date().toISOString().slice(0, 10)}.csv`
+    headers,
+    rows: exportRows,
+    sheetName: "Funcionarios",
+    fileName: `funcionarios_${new Date().toISOString().slice(0, 10)}.xlsx`
   };
 }
 
@@ -1078,10 +1078,6 @@ function buildNullableTextFilterWhere(field: "skill" | "wave", value: unknown): 
   if (!raw || isAllFilter(raw)) return {};
   if (isNoneFilter(raw)) return { OR: [{ [field]: null }, { [field]: "" }] } as Prisma.EmployeeProfileWhereInput;
   return { [field]: { equals: raw, mode: "insensitive" } } as Prisma.EmployeeProfileWhereInput;
-}
-
-function csvEscape(value: unknown) {
-  return `"${String(value ?? "").replace(/"/g, '""')}"`;
 }
 
 function paginatedEmployees<T>(data: T[], total: number, page: number, limit: number) {

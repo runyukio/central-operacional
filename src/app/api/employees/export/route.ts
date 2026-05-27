@@ -1,13 +1,12 @@
-import { NextResponse } from "next/server";
-
 import { getApiActor } from "@/lib/api-actor";
 import { errorResponse, errorStatus } from "@/lib/api-errors";
-import { exportOperationalEmployeesCsv } from "@/lib/employee-service";
+import { exportOperationalEmployeesXlsxData } from "@/lib/employee-service";
+import { buildXlsxResponse } from "@/lib/xlsx-export";
 
 export async function GET(request: Request) {
   const actor = await getApiActor();
   const { searchParams } = new URL(request.url);
-  const result = await exportOperationalEmployeesCsv(actor, {
+  const result = await exportOperationalEmployeesXlsxData(actor, {
     query: searchParams.get("q"),
     lob: searchParams.get("lob"),
     status: searchParams.get("status"),
@@ -19,10 +18,5 @@ export async function GET(request: Request) {
 
   if ("error" in result) return errorResponse(result, errorStatus(result));
 
-  return new NextResponse(result.csv, {
-    headers: {
-      "Content-Type": "text/csv;charset=utf-8",
-      "Content-Disposition": `attachment; filename="${result.fileName}"`
-    }
-  });
+  return buildXlsxResponse(result);
 }

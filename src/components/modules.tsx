@@ -1535,7 +1535,7 @@ export function OperationalCommandCenter() {
       if (selectedCommandRoleTitle !== "Todos") params.set("roleTitle", selectedCommandRoleTitle);
       await downloadFile(
         `/api/attendance/justified-absences/export?${params.toString()}`,
-        `faltas_justificadas_${dateRange.startDate}_${dateRange.endDate}.csv`,
+        `faltas_justificadas_${dateRange.startDate}_${dateRange.endDate}.xlsx`,
         "Não foi possível exportar as faltas justificadas. Tente novamente."
       );
     } catch (error) {
@@ -5273,7 +5273,7 @@ export function WorkHoursPage() {
             {["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(normalizedRole) ? (
               <a href={exportUrl()} className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft">
                 <FileText className="h-4 w-4" />
-                Exportar CSV
+                Exportar XLSX
               </a>
             ) : null}
           </div>
@@ -6720,7 +6720,7 @@ export function AdvanceManagementPage() {
     }
   }
 
-  function exportMonthlyAdvanceCsv(referenceMonth = advanceReferenceMonth) {
+  function exportMonthlyAdvanceXlsx(referenceMonth = advanceReferenceMonth) {
     const params = new URLSearchParams({ referenceMonth });
     if (lobFilter !== "Todos") params.set("lob", lobFilter);
     if (supervisorFilter !== "Todos") params.set("supervisorId", supervisorFilter);
@@ -6737,8 +6737,8 @@ export function AdvanceManagementPage() {
         icon={Coins}
         actions={(
           <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => exportMonthlyAdvanceCsv(currentMonth)} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Exportar mês atual</button>
-            <button type="button" onClick={() => exportMonthlyAdvanceCsv(nextMonth)} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Exportar próximo mês</button>
+            <button type="button" onClick={() => exportMonthlyAdvanceXlsx(currentMonth)} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Exportar mês atual</button>
+            <button type="button" onClick={() => exportMonthlyAdvanceXlsx(nextMonth)} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Exportar próximo mês</button>
           </div>
         )}
       />
@@ -6772,7 +6772,7 @@ export function AdvanceManagementPage() {
             <FormInput label="Colaborador / WB/Login" value={advanceSearch} onChange={setAdvanceSearch} />
             <div className="flex items-end gap-2">
               <button type="button" onClick={() => loadMonthlyAdvances()} className="h-11 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white">Buscar</button>
-              <button type="button" onClick={() => exportMonthlyAdvanceCsv()} className="h-11 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950">Exportar filtros</button>
+              <button type="button" onClick={() => exportMonthlyAdvanceXlsx()} className="h-11 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950">Exportar filtros</button>
             </div>
           </div>
           {canManageMonthlyAdvance ? (
@@ -7076,7 +7076,7 @@ export function EmployeeMapPage() {
     }
   }
 
-  function exportEmployeesCsv() {
+  function exportEmployeesXlsx() {
     const params = new URLSearchParams();
     if (query.trim()) params.set("q", query.trim());
     if (lobFilter !== "Todos") params.set("lob", lobFilter);
@@ -7131,7 +7131,7 @@ export function EmployeeMapPage() {
 
   return (
     <div>
-      <PageHeader title="Funcionários" description="Base operacional de colaboradores, vínculos e informações cadastrais." icon={UsersRound} actions={<button onClick={exportEmployeesCsv} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Exportar CSV</button>} />
+      <PageHeader title="Funcionários" description="Base operacional de colaboradores, vínculos e informações cadastrais." icon={UsersRound} actions={<button onClick={exportEmployeesXlsx} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Exportar XLSX</button>} />
       {employeeMessage ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{employeeMessage}</div> : null}
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="space-y-5">
@@ -8285,7 +8285,7 @@ export function EquipmentPage() {
             </div>
           ) : null}
           <div className="mb-4 flex flex-wrap gap-2">
-            <a href={equipmentExportUrl()} className="flex h-10 items-center gap-2 rounded-lg border border-border bg-white px-3 text-sm font-bold"><Download className="h-4 w-4" />Exportar CSV</a>
+            <a href={equipmentExportUrl()} className="flex h-10 items-center gap-2 rounded-lg border border-border bg-white px-3 text-sm font-bold"><Download className="h-4 w-4" />Exportar XLSX</a>
             {canManage ? (
               <>
                 <button type="button" onClick={() => void downloadFile("/api/equipment/template", "template_equipamentos.xlsx").catch((error) => setEquipmentMessage(error.message))} className="flex h-10 items-center gap-2 rounded-lg border border-border bg-white px-3 text-sm font-bold"><FileSpreadsheet className="h-4 w-4" />Baixar template</button>
@@ -8786,7 +8786,7 @@ export function ShiftReportPage() {
               <MiniAlertList items={(dashboard?.briefing.mainRisks ?? []).slice(0, 4).map((risk) => ({ title: risk, status: "Risco", tone: "orange" }))} />
               <div className="grid gap-2">
                 <button onClick={copyBriefing} className="flex h-11 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white"><Copy className="h-4 w-4" />Copiar resumo para IA</button>
-                <a href={reportExportUrl()} className="flex h-11 items-center justify-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold"><Download className="h-4 w-4" />Exportar CSV</a>
+                <a href={reportExportUrl()} className="flex h-11 items-center justify-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold"><Download className="h-4 w-4" />Exportar XLSX</a>
                 <a href={reportExportUrl("json")} className="flex h-11 items-center justify-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold"><FileJson className="h-4 w-4" />Exportar JSON</a>
               </div>
             </div>
@@ -9352,7 +9352,7 @@ export function ClimatePage() {
                 <EmptyState title="Nenhuma pesquisa criada ainda." description="Crie uma pesquisa para começar a coletar respostas." />
               )}
             </Panel>
-            <Panel title="Resultados da pesquisa selecionada" action="Exportar" actionOnClick={() => void downloadFile("/api/climate/surveys/export", "pesquisa_clima.csv").catch((error) => setMessage(error.message))}>
+            <Panel title="Resultados da pesquisa selecionada" action="Exportar" actionOnClick={() => void downloadFile("/api/climate/surveys/export", "pesquisa_clima.xlsx").catch((error) => setMessage(error.message))}>
               {selectedSurvey?.results ? (
                 <div className="space-y-4">
                   <div className="grid gap-3 md:grid-cols-3">
@@ -9537,7 +9537,7 @@ export function AnonymousFeedbackPage() {
           <StatCard title="Resolvidos" value={summary?.resolved ?? 0} helper="concluídos" icon={CheckCircle2} tone="green" />
           <StatCard title="Críticos" value={summary?.critical ?? 0} helper="urgência crítica" icon={AlertTriangle} tone="red" />
         </div>
-        <Panel title="Feedbacks recebidos" action="Exportar" actionOnClick={() => void downloadFile(`/api/anonymous-feedback/export?${exportParams.toString()}`, "feedback_anonimo.csv").catch((error) => setMessage(error.message))}>
+        <Panel title="Feedbacks recebidos" action="Exportar" actionOnClick={() => void downloadFile(`/api/anonymous-feedback/export?${exportParams.toString()}`, "feedback_anonimo.xlsx").catch((error) => setMessage(error.message))}>
           <div className="mb-4 grid gap-3 md:grid-cols-4 xl:grid-cols-8">
             <select value={feedbackFilters.status} onChange={(event) => setFeedbackFilters({ ...feedbackFilters, status: event.target.value })} className="h-10 rounded-lg border border-border px-3">
               {feedbackStatusOptions.map((option) => <option key={option}>{option}</option>)}
@@ -9836,7 +9836,7 @@ export function ReportsPage() {
               <h2 className="mt-4 text-lg font-extrabold text-navy-950">{report.title}</h2>
               <p className="mt-2 text-sm text-muted">{report.records}</p>
               <p className="mt-5 flex items-center gap-2 text-sm font-bold text-blue-600">
-                Exportar CSV <ChevronRight className="h-4 w-4" />
+                Exportar XLSX <ChevronRight className="h-4 w-4" />
               </p>
             </a>
           );

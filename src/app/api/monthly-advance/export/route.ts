@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getApiActor } from "@/lib/api-actor";
 import { exportMonthlyAdvances } from "@/lib/monthly-advance-service";
+import { buildXlsxResponse } from "@/lib/xlsx-export";
 
 export async function GET(request: Request) {
   const actor = await getApiActor();
@@ -14,11 +15,6 @@ export async function GET(request: Request) {
     search: url.searchParams.get("search") ?? undefined
   });
   if ("error" in result) return NextResponse.json({ error: result.error, message: result.error }, { status: result.status ?? 400 });
-  const exported = result as { data: string; fileName: string };
-  return new NextResponse(exported.data, {
-    headers: {
-      "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename="${exported.fileName}"`
-    }
-  });
+  if (!("headers" in result)) return NextResponse.json({ error: "Não foi possível exportar adiantamento.", message: "Não foi possível exportar adiantamento." }, { status: 400 });
+  return buildXlsxResponse(result);
 }

@@ -259,7 +259,7 @@ export async function updateAnonymousFeedbackStatus(actor: Actor, input: { id: s
   return { data: serializeAnonymousFeedback(updated, new Map(), new Map()) };
 }
 
-export async function exportAnonymousFeedbackCsv(actor: Actor, filters: AnonymousFeedbackFilters = {}) {
+export async function exportAnonymousFeedbackXlsxData(actor: Actor, filters: AnonymousFeedbackFilters = {}) {
   const user = await requireUser(actor);
   if (!canExportAnonymousFeedback(permissionUserFromAuthenticatedUser(user))) {
     throw new EngagementError("Você não tem permissão para exportar Feedback Anônimo.", 403);
@@ -276,7 +276,12 @@ export async function exportAnonymousFeedbackCsv(actor: Actor, filters: Anonymou
     item.allowContact ? "Sim" : "Não",
     item.resolvedAt ?? ""
   ]);
-  return toCsv(["data", "categoria", "urgencia", "status", "comentario", "lob", "cargo_funcao", "contato_permitido", "resolvido_em"], rows);
+  return {
+    headers: ["data", "categoria", "urgencia", "status", "comentario", "lob", "cargo_funcao", "contato_permitido", "resolvido_em"],
+    rows,
+    sheetName: "Feedback",
+    fileName: `feedback_anonimo_${new Date().toISOString().slice(0, 10)}.xlsx`
+  };
 }
 
 export async function listClimateSurveys(actor: Actor) {
@@ -508,7 +513,7 @@ export async function submitClimateSurveyAnswer(actor: Actor, input: ClimateAnsw
   return { data: { id: created.id, message: "Pesquisa respondida com sucesso." } };
 }
 
-export async function exportClimateSurveyCsv(actor: Actor) {
+export async function exportClimateSurveyXlsxData(actor: Actor) {
   const user = await requireUser(actor);
   requireAdmin(user);
   const surveys = await prisma.climateSurvey.findMany({
@@ -539,7 +544,12 @@ export async function exportClimateSurveyCsv(actor: Actor) {
     }
   }
 
-  return toCsv(["pesquisa", "data_resposta", "pergunta", "resposta", "lob", "cargo_funcao", "supervisor", "anonima"], rows);
+  return {
+    headers: ["pesquisa", "data_resposta", "pergunta", "resposta", "lob", "cargo_funcao", "supervisor", "anonima"],
+    rows,
+    sheetName: "Pesquisa de Clima",
+    fileName: `pesquisa_clima_${new Date().toISOString().slice(0, 10)}.xlsx`
+  };
 }
 
 async function buildAnonymousFeedbackWhere(filters: AnonymousFeedbackFilters): Promise<Prisma.AnonymousFeedbackWhereInput> {
@@ -876,13 +886,4 @@ function normalizeToken(value?: string | null) {
 
 function countMap<T extends string>(entries: Array<[T, number]>) {
   return Object.fromEntries(entries) as Record<T, number>;
-}
-
-function toCsv(headers: string[], rows: Array<Array<string | number | boolean | null | undefined>>) {
-  return [headers, ...rows].map((row) => row.map(escapeCsv).join(";")).join("\n");
-}
-
-function escapeCsv(value: string | number | boolean | null | undefined) {
-  const text = String(value ?? "");
-  return `"${text.replace(/"/g, '""')}"`;
 }

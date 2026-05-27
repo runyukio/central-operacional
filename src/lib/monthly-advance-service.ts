@@ -658,7 +658,7 @@ export async function commitMonthlyAdvanceImport(actor: Actor, rows: Array<Recor
 export async function exportMonthlyAdvances(actor: Actor, filters: MonthlyAdvanceFilters = {}) {
   const result = await listMonthlyAdvances(actor, { ...filters, page: 1, limit: 5000 });
   if ("error" in result) return result;
-  const rows = [csvRow([
+  const headers = [
     "mes_referencia",
     "nome",
     "wb_login",
@@ -671,9 +671,8 @@ export async function exportMonthlyAdvances(actor: Actor, filters: MonthlyAdvanc
     "observacao",
     "atualizado_por",
     "atualizado_em"
-  ])];
-  result.data.forEach((record) => {
-    rows.push(csvRow([
+  ];
+  const rows = result.data.map((record) => [
       record.referenceMonth,
       record.employeeName,
       record.wbLogin,
@@ -686,11 +685,12 @@ export async function exportMonthlyAdvances(actor: Actor, filters: MonthlyAdvanc
       record.observation ?? "",
       record.updatedBy ?? "",
       record.updatedAt
-    ]));
-  });
+    ]);
   return {
-    data: `\uFEFF${rows.join("\n")}`,
-    fileName: `adiantamento_${result.referenceMonth}.csv`
+    headers,
+    rows,
+    sheetName: "Adiantamento",
+    fileName: `adiantamento_${result.referenceMonth}.xlsx`
   };
 }
 
@@ -1104,10 +1104,4 @@ function formatDateTime(value: Date) {
     timeStyle: "short",
     timeZone: TIME_ZONE
   }).format(value);
-}
-
-function csvRow(values: Array<string | number | boolean>) {
-  return values
-    .map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`)
-    .join(";");
 }

@@ -2,12 +2,13 @@ import { NextResponse } from "next/server";
 
 import { getApiActor } from "@/lib/api-actor";
 import { errorStatus } from "@/lib/api-errors";
-import { exportOperationalSchedulesCsv } from "@/lib/schedule-service";
+import { exportOperationalSchedulesXlsxData } from "@/lib/schedule-service";
+import { buildXlsxResponse } from "@/lib/xlsx-export";
 
 export async function GET(request: Request) {
   const actor = await getApiActor();
   const url = new URL(request.url);
-  const result = await exportOperationalSchedulesCsv(actor, {
+  const result = await exportOperationalSchedulesXlsxData(actor, {
     startDate: url.searchParams.get("startDate") ?? undefined,
     endDate: url.searchParams.get("endDate") ?? undefined,
     month: Number(url.searchParams.get("month")) || undefined,
@@ -25,10 +26,5 @@ export async function GET(request: Request) {
     return NextResponse.json(result, { status: errorStatus(result as any) || 403 });
   }
 
-  return new NextResponse(result.csv, {
-    headers: {
-      "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": 'attachment; filename="cronogramas_consolidados.csv"'
-    }
-  });
+  return buildXlsxResponse(result);
 }

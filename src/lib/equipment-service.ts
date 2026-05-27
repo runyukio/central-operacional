@@ -483,11 +483,16 @@ export async function commitEquipmentImport(actor: Actor, rows: EquipmentPreview
   };
 }
 
-export async function exportEquipmentCsv(actor: Actor, query: EquipmentQuery = {}) {
+export async function exportEquipmentXlsxData(actor: Actor, query: EquipmentQuery = {}) {
   const payload = await listEquipment(actor, query);
   const headers = ["numero_serie", "tipo_equipamento", "modelo", "responsavel", "responsavel_wb_login", "data_entrega", "status", "observacao"];
   const rows = payload.data.map((item) => [item.serial, item.type, item.model, item.employee, item.employeeWbLogin, item.delivered, item.status, item.observation]);
-  return [headers, ...rows].map((row) => row.map(csvCell).join(";")).join("\n");
+  return {
+    headers,
+    rows,
+    sheetName: "Equipamentos",
+    fileName: `equipamentos_${new Date().toISOString().slice(0, 10)}.xlsx`
+  };
 }
 
 function emptyEquipmentSummary() {
@@ -500,8 +505,4 @@ function emptyPreviewSummary() {
 
 function text(value: unknown) {
   return String(value ?? "").trim();
-}
-
-function csvCell(value: unknown) {
-  return `"${String(value ?? "").replaceAll('"', '""')}"`;
 }

@@ -1,12 +1,11 @@
-import { NextResponse } from "next/server";
-
 import { getApiActor } from "@/lib/api-actor";
-import { exportEquipmentCsv } from "@/lib/equipment-service";
+import { exportEquipmentXlsxData } from "@/lib/equipment-service";
+import { buildXlsxResponse } from "@/lib/xlsx-export";
 
 export async function GET(request: Request) {
   const actor = await getApiActor();
   const url = new URL(request.url);
-  const csv = await exportEquipmentCsv(actor, {
+  const payload = await exportEquipmentXlsxData(actor, {
     status: url.searchParams.get("status") ?? undefined,
     type: url.searchParams.get("type") ?? undefined,
     search: url.searchParams.get("search") ?? undefined,
@@ -18,10 +17,5 @@ export async function GET(request: Request) {
     deliveredFrom: url.searchParams.get("deliveredFrom") ?? url.searchParams.get("deliveryDateFrom") ?? undefined,
     deliveredTo: url.searchParams.get("deliveredTo") ?? url.searchParams.get("deliveryDateTo") ?? undefined
   });
-  return new NextResponse(csv, {
-    headers: {
-      "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": 'attachment; filename="equipamentos.csv"'
-    }
-  });
+  return buildXlsxResponse(payload);
 }
