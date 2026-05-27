@@ -814,6 +814,8 @@ const apiResponseCache = new Map<string, { expiresAt: number; payload: unknown }
 const cachedGetTtls: Array<{ pattern: RegExp; ttlMs: number }> = [
   { pattern: /^\/api\/settings(?:\?|$)/, ttlMs: 60_000 }
 ];
+const IMPORT_PREVIEW_ROW_LIMIT = 200;
+const IMPORT_PREVIEW_ISSUE_LIMIT = 50;
 
 async function apiJson<T>(url: string, options?: RequestInit) {
   const method = String(options?.method ?? "GET").toUpperCase();
@@ -894,29 +896,30 @@ async function downloadFile(url: string, fallbackFileName: string, fallbackError
 function ImportIssueSummary({
   rows,
   title = "Principais erros encontrados",
-  max = 8
+  max = IMPORT_PREVIEW_ISSUE_LIMIT
 }: {
   rows: Array<{ rowNumber: number; errors: string[]; warnings?: string[] }>;
   title?: string;
   max?: number;
 }) {
-  const issues: Array<{ rowNumber: number; message: string; tone: "red" | "amber" }> = [
+  const allIssues: Array<{ rowNumber: number; message: string; tone: "red" | "amber" }> = [
     ...rows.flatMap((row) => row.errors.map((message) => ({ rowNumber: row.rowNumber, message, tone: "red" as const }))),
     ...rows.flatMap((row) => (row.warnings ?? []).map((message) => ({ rowNumber: row.rowNumber, message, tone: "amber" as const })))
-  ].slice(0, max);
+  ];
+  const issues = allIssues.slice(0, max);
   if (!issues.length) return null;
   return (
     <div className="rounded-lg border border-red-100 bg-red-50 p-3 text-xs font-semibold text-red-700">
       <p className="mb-2 text-sm font-extrabold">{title}</p>
-      <div className="space-y-1">
+      <div className="max-h-48 space-y-1 overflow-y-auto pr-1">
         {issues.map((issue, index) => (
           <p key={`${issue.rowNumber}-${index}`} className={issue.tone === "red" ? "text-red-700" : "text-amber-700"}>
             Linha {issue.rowNumber}: {issue.message}
           </p>
         ))}
       </div>
-      {rows.flatMap((row) => [...row.errors, ...(row.warnings ?? [])]).length > issues.length ? (
-        <p className="mt-2 text-muted">Existem mais erros/alertas no preview abaixo.</p>
+      {allIssues.length > issues.length ? (
+        <p className="mt-2 text-muted">Mostrando {issues.length} de {allIssues.length} erros/alertas. Revise o arquivo completo ou baixe o relatório quando disponível.</p>
       ) : null}
     </div>
   );
@@ -3083,14 +3086,17 @@ export function RegistrationApprovalsPage() {
       </div>
       {showEmployeeImport ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
-          <div className="card max-h-[88vh] w-full max-w-5xl overflow-y-auto p-5">
-            <div className="mb-5 flex items-center justify-between gap-4">
+          <div className="card flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden">
+            <div className="shrink-0 border-b border-border px-5 py-4">
+              <div className="flex items-center justify-between gap-4">
               <div>
                 <h2 className="text-lg font-extrabold text-navy-950">Importar colaboradores</h2>
                 <p className="text-sm text-muted">{employeeImportFileName || "Arquivo Excel"} • preview antes de salvar</p>
               </div>
               <button onClick={() => setShowEmployeeImport(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+              </div>
             </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-5">
             {importingEmployees && !employeeImportPreview ? (
               <div className="space-y-4">
                 <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">
@@ -3121,40 +3127,45 @@ export function RegistrationApprovalsPage() {
                 {employeeImportPreview.errorRows ? (
                   <label className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-700">
                     <input type="checkbox" checked={allowPartialEmployeeImport} onChange={(event) => setAllowPartialEmployeeImport(event.target.checked)} />
-                    Importar somente linhas válidas e ignorar linhas com erro
-                  </label>
+                  Importar somente linhas válidas e ignorar linhas com erro
+                </label>
+              ) : null}
+                <div className="max-h-[52vh] overflow-y-auto pr-1">
+                  <SimpleTable
+                    columns={["Linha", "Nome", "WB/Login", "E-mail", "Status", "Ação", "CPF", "Role", "LOB", "Supervisor", "Skill", "Wave", "Usuário", "Validação"]}
+                    rows={employeeImportPreview.rows.slice(0, IMPORT_PREVIEW_ROW_LIMIT).map((row) => [
+                      row.rowNumber,
+                      row.preview.name || "-",
+                      row.preview.wbLogin || "-",
+                      row.preview.email || "-",
+                      <StatusBadge key={`${row.rowNumber}-status`} status={row.status ?? (row.errors.length ? "Erro" : row.warnings.length ? "Alerta" : "Válida")} />,
+                      row.action ?? (row.errors.length ? "ignorar" : "criar"),
+                      row.preview.cpf || "CPF pendente",
+                      row.preview.role || "-",
+                      row.preview.lob || "-",
+                      row.preview.supervisor || "Sem supervisor",
+                      row.preview.skill || "-",
+                      row.preview.wave || "-",
+                      row.preview.createUser ? (row.preview.passwordProvided ? "Sim" : "Senha ausente") : "Não",
+                      row.errors.length ? (
+                        <div key={`${row.rowNumber}-errors`} className="space-y-1 text-xs font-bold text-red-600">
+                          {row.errors.map((error) => <p key={error}>{error}</p>)}
+                        </div>
+                      ) : row.warnings.length ? (
+                        <div key={`${row.rowNumber}-warnings`} className="space-y-1 text-xs font-bold text-amber-600">
+                          {row.warnings.map((warning) => <p key={warning}>{warning}</p>)}
+                        </div>
+                      ) : <StatusBadge key={`${row.rowNumber}-ok`} status="Válida" />
+                    ])}
+                  />
+                </div>
+                {employeeImportPreview.rows.length > IMPORT_PREVIEW_ROW_LIMIT ? (
+                  <p className="text-xs font-semibold text-muted">Exibindo as primeiras {IMPORT_PREVIEW_ROW_LIMIT} linhas do preview. O arquivo completo será processado na confirmação.</p>
                 ) : null}
-                <SimpleTable
-                  columns={["Linha", "Nome", "WB/Login", "E-mail", "Status", "Ação", "CPF", "Role", "LOB", "Supervisor", "Skill", "Wave", "Usuário", "Validação"]}
-                  rows={employeeImportPreview.rows.slice(0, 80).map((row) => [
-                    row.rowNumber,
-                    row.preview.name || "-",
-                    row.preview.wbLogin || "-",
-                    row.preview.email || "-",
-                    <StatusBadge key={`${row.rowNumber}-status`} status={row.status ?? (row.errors.length ? "Erro" : row.warnings.length ? "Alerta" : "Válida")} />,
-                    row.action ?? (row.errors.length ? "ignorar" : "criar"),
-                    row.preview.cpf || "CPF pendente",
-                    row.preview.role || "-",
-                    row.preview.lob || "-",
-                    row.preview.supervisor || "Sem supervisor",
-                    row.preview.skill || "-",
-                    row.preview.wave || "-",
-                    row.preview.createUser ? (row.preview.passwordProvided ? "Sim" : "Senha ausente") : "Não",
-                    row.errors.length ? (
-                      <div key={`${row.rowNumber}-errors`} className="space-y-1 text-xs font-bold text-red-600">
-                        {row.errors.map((error) => <p key={error}>{error}</p>)}
-                      </div>
-                    ) : row.warnings.length ? (
-                      <div key={`${row.rowNumber}-warnings`} className="space-y-1 text-xs font-bold text-amber-600">
-                        {row.warnings.map((warning) => <p key={warning}>{warning}</p>)}
-                      </div>
-                    ) : <StatusBadge key={`${row.rowNumber}-ok`} status="Válida" />
-                  ])}
-                />
                 <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
                   CPF vazio é permitido e aparece como CPF pendente. Quando `criar_usuario = sim`, a coluna `senha_temporaria` é obrigatória e será salva apenas como hash. O Admin deve comunicar a senha manualmente.
                 </div>
-                <div className="flex flex-wrap justify-end gap-3">
+                <div className="sticky bottom-0 z-10 -mx-5 -mb-5 flex flex-wrap justify-end gap-3 border-t border-border bg-white/95 px-5 py-3 backdrop-blur">
                   <button onClick={() => setShowEmployeeImport(false)} className="rounded-lg border border-border px-4 py-3 text-sm font-bold">Cancelar</button>
                   <button
                     disabled={importingEmployees || (!allowPartialEmployeeImport && employeeImportPreview.errorRows > 0)}
@@ -3166,6 +3177,7 @@ export function RegistrationApprovalsPage() {
                 </div>
               </div>
             ) : <EmptyState title="Nenhum preview disponível" description="Selecione um arquivo de colaboradores para validar antes da importação." />}
+            </div>
           </div>
         </div>
       ) : null}
@@ -4931,18 +4943,18 @@ export function SchedulesPage() {
 
       {showPreview ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
-          <div className="card max-h-[84vh] w-full max-w-5xl overflow-hidden">
-            <div className="flex items-center justify-between border-b border-border px-5 py-4">
+          <div className="card flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden">
+            <div className="shrink-0 flex items-center justify-between border-b border-border px-5 py-4">
               <div>
                 <h2 className="text-lg font-extrabold text-navy-950">Preview da importação</h2>
                 <p className="text-sm text-muted">{previewResult?.totalRows ?? previewRows.length} linhas carregadas para validação visual.</p>
               </div>
               <button onClick={() => setShowPreview(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
             </div>
-            <div className="grid gap-4 p-5 lg:grid-cols-[1fr_280px]">
-              <div className="overflow-auto rounded-lg border border-border">
+            <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto p-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+              <div className="max-h-[56vh] min-h-[260px] overflow-auto rounded-lg border border-border">
                 <table className="w-full min-w-[820px] text-left text-xs">
-                  <thead className="bg-slate-50 font-bold text-muted">
+                  <thead className="sticky top-0 z-10 bg-slate-50 font-bold text-muted">
                     <tr>
                       <th className="px-3 py-2">Linha</th>
                       {[...scheduleImportColumns, "validacao"].map((column) => (
@@ -4951,7 +4963,7 @@ export function SchedulesPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {((previewRows.length ? previewRows : templateRows) as Array<Record<string, unknown>>).slice(0, 300).map((row, index) => {
+                    {((previewRows.length ? previewRows : templateRows) as Array<Record<string, unknown>>).slice(0, IMPORT_PREVIEW_ROW_LIMIT).map((row, index) => {
                       const rowValidation = previewResult?.validation?.[index];
                       return (
                         <tr key={index}>
@@ -4970,7 +4982,7 @@ export function SchedulesPage() {
                   </tbody>
                 </table>
               </div>
-              <div className="space-y-3">
+              <div className="max-h-[56vh] min-h-0 space-y-3 overflow-y-auto pr-1">
                 <StatusBadge status={validation.errors ? `${validation.errors} erros` : "Sem erros críticos"} />
                 <StatusBadge status={`${validation.warnings} alertas`} />
                 <MetricPill value={previewResult?.createdRows ?? 0} label="Novos cronogramas" />
@@ -4980,14 +4992,17 @@ export function SchedulesPage() {
                 {previewResult?.validation ? (
                   <ImportIssueSummary rows={previewResult.validation} title="Corrija estas linhas do cronograma" />
                 ) : null}
-                {(previewRows.length > 300 || (previewResult?.validation.length ?? 0) > 300) ? <p className="text-xs font-semibold text-muted">Exibindo as primeiras 300 linhas no preview para manter a tela rápida. O commit processa todas as linhas válidas.</p> : null}
-                <button
-                  onClick={commitImport}
-                  className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white"
-                >
-                  Confirmar importação
-                </button>
+                {(previewRows.length > IMPORT_PREVIEW_ROW_LIMIT || (previewResult?.validation.length ?? 0) > IMPORT_PREVIEW_ROW_LIMIT) ? <p className="text-xs font-semibold text-muted">Exibindo as primeiras {IMPORT_PREVIEW_ROW_LIMIT} linhas do preview. O arquivo completo será processado na confirmação.</p> : null}
               </div>
+            </div>
+            <div className="shrink-0 flex flex-wrap justify-end gap-3 border-t border-border bg-white px-5 py-3">
+              <button onClick={() => setShowPreview(false)} className="rounded-lg border border-border px-4 py-3 text-sm font-bold">Cancelar</button>
+              <button
+                onClick={commitImport}
+                className="rounded-lg bg-blue-600 px-5 py-3 text-sm font-bold text-white"
+              >
+                Confirmar importação
+              </button>
             </div>
           </div>
         </div>
@@ -5404,21 +5419,21 @@ export function WorkHoursPage() {
 
       {showPreview && preview ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
-          <div className="card max-h-[86vh] w-full max-w-6xl overflow-hidden">
-            <div className="flex items-center justify-between border-b border-border px-5 py-4">
+          <div className="card flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden">
+            <div className="shrink-0 flex items-center justify-between border-b border-border px-5 py-4">
               <div>
                 <h2 className="text-lg font-extrabold text-navy-950">Preview do upload de horas</h2>
                 <p className="text-sm text-muted">{preview.fileName} • {preview.totalRows} linha(s)</p>
               </div>
               <button onClick={() => setShowPreview(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
             </div>
-            <div className="grid gap-4 p-5 lg:grid-cols-[1fr_300px]">
-              <div className="max-h-[58vh] overflow-auto rounded-lg border border-border">
+            <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto p-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+              <div className="max-h-[56vh] min-h-[260px] overflow-auto rounded-lg border border-border">
                 {preview.message ? (
                   <div className="border-b border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-700">{preview.message}</div>
                 ) : null}
                 <table className="w-full min-w-[1060px] text-left text-xs">
-                  <thead className="bg-slate-50 font-bold text-muted">
+                  <thead className="sticky top-0 z-10 bg-slate-50 font-bold text-muted">
                     <tr>
                       <th className="px-3 py-2">Linha</th>
                       <th className="px-3 py-2">WB/Login</th>
@@ -5437,7 +5452,7 @@ export function WorkHoursPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border bg-white">
-                    {preview.validation.slice(0, 300).map((row) => (
+                    {preview.validation.slice(0, IMPORT_PREVIEW_ROW_LIMIT).map((row) => (
                       <tr key={row.rowNumber}>
                         <td className="px-3 py-2 font-bold">{row.rowNumber}</td>
                         <td className="px-3 py-2">
@@ -5465,7 +5480,7 @@ export function WorkHoursPage() {
                   </tbody>
                 </table>
               </div>
-              <div className="space-y-3">
+              <div className="max-h-[56vh] min-h-0 space-y-3 overflow-y-auto pr-1">
                 <MetricPill value={preview.validRows} label="Linhas válidas" />
                 <MetricPill value={preview.errorRows} label="Linhas com erro" />
                 <MetricPill value={preview.warningRows} label="Alertas" />
@@ -5479,14 +5494,20 @@ export function WorkHoursPage() {
                 {preview.missingWbLogins?.length ? (
                   <div className="rounded-lg border border-red-100 bg-red-50 p-3 text-xs font-semibold text-red-700">
                     <p className="mb-1 font-extrabold">Primeiros WB/Login não encontrados</p>
-                    <p className="break-words">{preview.missingWbLogins.join(", ")}</p>
+                    <p className="max-h-32 overflow-y-auto break-words pr-1">{preview.missingWbLogins.slice(0, IMPORT_PREVIEW_ISSUE_LIMIT).join(", ")}</p>
+                    {preview.missingWbLogins.length > IMPORT_PREVIEW_ISSUE_LIMIT ? (
+                      <p className="mt-2 text-muted">Mostrando {IMPORT_PREVIEW_ISSUE_LIMIT} de {preview.missingWbLogins.length} WB/Login não encontrados.</p>
+                    ) : null}
                   </div>
                 ) : null}
-                {preview.validation.length > 300 ? <p className="text-xs font-semibold text-muted">Exibindo as primeiras 300 linhas no preview para manter a tela rápida. O commit processa todas as linhas válidas.</p> : null}
-                <button disabled={savingImport || preview.validRows === 0} onClick={commitWorkHourImport} className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
-                  {savingImport ? "Importando..." : "Confirmar importação"}
-                </button>
+                {preview.validation.length > IMPORT_PREVIEW_ROW_LIMIT ? <p className="text-xs font-semibold text-muted">Exibindo as primeiras {IMPORT_PREVIEW_ROW_LIMIT} linhas do preview. O arquivo completo será processado na confirmação.</p> : null}
               </div>
+            </div>
+            <div className="shrink-0 flex flex-wrap justify-end gap-3 border-t border-border bg-white px-5 py-3">
+              <button onClick={() => setShowPreview(false)} className="rounded-lg border border-border px-4 py-3 text-sm font-bold">Cancelar</button>
+              <button disabled={savingImport || preview.validRows === 0} onClick={commitWorkHourImport} className="rounded-lg bg-blue-600 px-5 py-3 text-sm font-bold text-white disabled:opacity-60">
+                {savingImport ? "Importando..." : "Confirmar importação"}
+              </button>
             </div>
           </div>
         </div>
@@ -6796,29 +6817,38 @@ export function AdvanceManagementPage() {
 
         {advancePreview ? (
           <Panel title="Preview da importação">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-              <p className="text-sm font-bold text-blue-700">
-                Preview: {advancePreview.validRows} válida(s), {advancePreview.errorRows} com erro, {advancePreview.createdRows} criação(ões), {advancePreview.updatedRows} atualização(ões).
-              </p>
-              <div className="flex gap-2">
-                <button type="button" disabled={advanceImporting || !advancePreview.validRows} onClick={commitMonthlyAdvanceImport} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">Confirmar importação</button>
-                <button type="button" disabled={advanceImporting} onClick={() => { setAdvancePreview(null); setAdvanceImportRows([]); }} className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-bold text-navy-950 disabled:opacity-50">Cancelar</button>
+            <div className="flex max-h-[72vh] flex-col overflow-hidden">
+              <div className="shrink-0 pb-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-sm font-bold text-blue-700">
+                    Preview: {advancePreview.validRows} válida(s), {advancePreview.errorRows} com erro, {advancePreview.createdRows} criação(ões), {advancePreview.updatedRows} atualização(ões).
+                  </p>
+                  <div className="flex gap-2">
+                    <button type="button" disabled={advanceImporting || !advancePreview.validRows} onClick={commitMonthlyAdvanceImport} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">Confirmar importação</button>
+                    <button type="button" disabled={advanceImporting} onClick={() => { setAdvancePreview(null); setAdvanceImportRows([]); }} className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-bold text-navy-950 disabled:opacity-50">Cancelar</button>
+                  </div>
+                </div>
+              </div>
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+                <ImportIssueSummary rows={advancePreview.rows} title="Corrija estas linhas do adiantamento" />
+                <div className="max-h-[48vh] overflow-y-auto">
+                  <SimpleTable
+                    columns={["Linha", "WB/Login", "Colaborador", "Mês", "Aderente", "Valor", "Ação", "Erros"]}
+                    rows={advancePreview.rows.slice(0, IMPORT_PREVIEW_ROW_LIMIT).map((row) => [
+                      row.rowNumber,
+                      row.wbLogin || "-",
+                      row.employeeName ?? "Não encontrado",
+                      row.referenceMonth || "-",
+                      row.optIn === null ? "-" : row.optIn ? "Sim" : "Não",
+                      row.amount == null ? "-" : currencyFormatter.format(row.amount),
+                      row.action === "update" ? "Atualizar" : "Criar",
+                      row.errors.length ? <span key={`${row.rowNumber}-errors`} className="text-red-600">{row.errors.join(" ")}</span> : "OK"
+                    ])}
+                  />
+                </div>
+                {advancePreview.rows.length > IMPORT_PREVIEW_ROW_LIMIT ? <p className="text-xs font-semibold text-muted">Exibindo as primeiras {IMPORT_PREVIEW_ROW_LIMIT} linhas do preview. O arquivo completo será processado na confirmação.</p> : null}
               </div>
             </div>
-            <SimpleTable
-              columns={["Linha", "WB/Login", "Colaborador", "Mês", "Aderente", "Valor", "Ação", "Erros"]}
-              rows={advancePreview.rows.slice(0, 12).map((row) => [
-                row.rowNumber,
-                row.wbLogin || "-",
-                row.employeeName ?? "Não encontrado",
-                row.referenceMonth || "-",
-                row.optIn === null ? "-" : row.optIn ? "Sim" : "Não",
-                row.amount == null ? "-" : currencyFormatter.format(row.amount),
-                row.action === "update" ? "Atualizar" : "Criar",
-                row.errors.length ? <span key={`${row.rowNumber}-errors`} className="text-red-600">{row.errors.join(" ")}</span> : "OK"
-              ])}
-            />
-            {advancePreview.rows.length > 12 ? <p className="mt-2 text-xs font-semibold text-muted">Mostrando 12 de {advancePreview.rows.length} linhas do preview.</p> : null}
           </Panel>
         ) : null}
 
@@ -8373,28 +8403,34 @@ export function EquipmentPage() {
       </div>
       {equipmentPreview ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
-          <div className="card max-h-[88vh] w-full max-w-5xl overflow-y-auto p-5">
-            <div className="mb-5 flex items-start justify-between gap-3">
+          <div className="card flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden">
+            <div className="shrink-0 flex items-start justify-between gap-3 border-b border-border px-5 py-4">
               <div>
                 <h2 className="text-lg font-extrabold text-navy-950">Preview da importação de equipamentos</h2>
                 <p className="text-sm text-muted">Total: {equipmentPreview.summary.totalRows} • Válidas: {equipmentPreview.summary.validRows} • Erros: {equipmentPreview.summary.errorRows} • Alertas: {equipmentPreview.summary.warningRows}</p>
               </div>
               <button onClick={() => setEquipmentPreview(null)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
             </div>
-            <SimpleTable
-              columns={["Linha", "Série", "Tipo", "Modelo", "Responsável", "Status", "Ação", "Erros/alertas"]}
-              rows={equipmentPreview.rows.slice(0, 80).map((row) => [
-                row.rowNumber,
-                row.numeroSerie,
-                row.type,
-                row.model,
-                row.responsible,
-                <StatusBadge key={`${row.rowNumber}-status`} status={row.errors.length ? "Erro" : row.status} />,
-                row.action === "update" ? "Atualizar" : row.action === "create" ? "Criar" : "Ignorar",
-                [...row.errors, ...row.warnings].join(" | ") || "Linha válida"
-              ])}
-            />
-            <div className="mt-5 flex flex-wrap justify-end gap-3">
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
+              <ImportIssueSummary rows={equipmentPreview.rows} title="Corrija estas linhas do arquivo de equipamentos" />
+              <div className="max-h-[56vh] overflow-y-auto">
+                <SimpleTable
+                  columns={["Linha", "Série", "Tipo", "Modelo", "Responsável", "Status", "Ação", "Erros/alertas"]}
+                  rows={equipmentPreview.rows.slice(0, IMPORT_PREVIEW_ROW_LIMIT).map((row) => [
+                    row.rowNumber,
+                    row.numeroSerie,
+                    row.type,
+                    row.model,
+                    row.responsible,
+                    <StatusBadge key={`${row.rowNumber}-status`} status={row.errors.length ? "Erro" : row.status} />,
+                    row.action === "update" ? "Atualizar" : row.action === "create" ? "Criar" : "Ignorar",
+                    [...row.errors, ...row.warnings].join(" | ") || "Linha válida"
+                  ])}
+                />
+              </div>
+              {equipmentPreview.rows.length > IMPORT_PREVIEW_ROW_LIMIT ? <p className="text-xs font-semibold text-muted">Exibindo as primeiras {IMPORT_PREVIEW_ROW_LIMIT} linhas do preview. O arquivo completo será processado na confirmação.</p> : null}
+            </div>
+            <div className="shrink-0 flex flex-wrap justify-end gap-3 border-t border-border bg-white px-5 py-3">
               <button onClick={() => setEquipmentPreview(null)} className="h-11 rounded-lg border border-border px-4 text-sm font-bold">Cancelar</button>
               <button disabled={importingEquipment || equipmentPreview.summary.errorRows > 0} onClick={commitEquipmentFile} className="h-11 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">
                 {importingEquipment ? "Importando..." : "Confirmar importação"}
