@@ -93,7 +93,7 @@ import {
   topPerformers
 } from "@/lib/demo-data";
 import { cn, formatCurrency, initials } from "@/lib/utils";
-import { cleanShiftName, cleanShiftOptions, isBlockedShiftName, isSelectableShiftName, standardShiftNames } from "@/lib/shift-display";
+import { cleanShiftName, cleanShiftOptions, isBlockedShiftName, isSelectableShiftName, shiftCategoryName, standardShiftNames } from "@/lib/shift-display";
 import { DEFAULT_PRODUCTIVE_HOURS, canScheduleStatusReceiveWorkHours, normalizeProductivePlannedHours, workHoursBlockedReasonForSchedule } from "@/lib/work-hours-rules";
 import { MONTHLY_ADVANCE_FIXED_AMOUNT } from "@/lib/monthly-advance-constants";
 
@@ -3971,6 +3971,7 @@ export function SchedulesPage() {
     .slice(0, 60);
   const configuredLobs = scheduleSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? [];
   const configuredShifts = scheduleSettings?.shifts.filter((shift) => shift.status !== "INACTIVE" && isSelectableShiftName(shift.name)).map((shift) => cleanShiftName(shift.name)) ?? [];
+  const configuredShiftCategories = scheduleSettings?.shifts.filter((shift) => shift.status !== "INACTIVE" && isSelectableShiftName(shift.name)).map((shift) => shiftCategoryName(shift.name)) ?? [];
   const availableShiftNames = cleanShiftOptions(configuredShifts, true);
   const uniqueLobs = ["Todos", ...Array.from(new Set([...configuredLobs, ...scheduleRows.map((row) => row.employee.lob).filter(Boolean), ...scheduleEmployees.map((employee) => employee.lob).filter(Boolean)]))];
   const uniqueSupervisors = ["Todos", ...Array.from(new Set(["Sem supervisor", ...scheduleRows.map((row) => row.employee.supervisor || "Sem supervisor"), ...scheduleEmployees.map((employee) => employee.supervisor || "Sem supervisor")].filter(Boolean)))];
@@ -3989,7 +3990,7 @@ export function SchedulesPage() {
       ...pendingJustifications.map((record) => [record.supervisor || "Sem supervisor", record.supervisor || "Sem supervisor"] as const)
     ]).entries()
   ).map(([value, label]) => ({ value, label }));
-  const uniqueShifts = ["Todos", ...availableShiftNames];
+  const uniqueShifts = ["Todos", "Sem turno", ...cleanShiftOptions(configuredShiftCategories, true)];
   const normalizedScheduleActorRole = scheduleActorRole === "MANAGEMENT" ? "GESTOR" : scheduleActorRole === "HR" ? "RH" : scheduleActorRole;
   const canManageSchedules = ["ADMIN", "GESTOR", "WFM"].includes(normalizedScheduleActorRole);
   const canExportSchedules = ["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "RH"].includes(normalizedScheduleActorRole);
@@ -5045,7 +5046,8 @@ export function WorkHoursPage() {
   const statusOptions = ["Todos", "OK", "Divergente", "Sem cronograma", "Ajuste solicitado", "Ajuste aprovado", "Ajuste recusado", "Importado", "Corrigido manualmente"];
   const sourceOptions = ["Todos", "MANUAL", "upload-horas"];
   const lobOptions = ["Todos", ...(settings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? Array.from(new Set(rows.map((row) => row.lob).filter(Boolean))))];
-  const shiftOptions = ["Todos", ...cleanShiftOptions(settings?.shifts.filter((shift) => shift.status !== "INACTIVE").map((shift) => shift.name) ?? rows.map((row) => row.shift), true)];
+  const workHourShiftCategories = settings?.shifts.filter((shift) => shift.status !== "INACTIVE").map((shift) => shiftCategoryName(shift.name)) ?? rows.map((row) => shiftCategoryName(row.shift));
+  const shiftOptions = ["Todos", "Sem turno", ...cleanShiftOptions(workHourShiftCategories, true)];
   const adjustmentRequestedHoursPreview = parseProductiveHoursInput(adjustmentForm.requestedActualHours);
   const selectedAdjustmentDifferenceMinutes = selectedRow && adjustmentRequestedHoursPreview !== null
     ? Math.round((adjustmentRequestedHoursPreview - selectedRow.effectiveHours) * 60)

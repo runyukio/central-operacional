@@ -13,7 +13,7 @@ import type { Actor } from "@/lib/mock-db";
 import { recordErrorLog } from "@/lib/mock-db";
 import { normalizeRole } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
-import { cleanShiftName } from "@/lib/shift-display";
+import { cleanShiftName, shiftCategoryName } from "@/lib/shift-display";
 import {
   DEFAULT_PRODUCTIVE_HOURS,
   WORK_HOUR_TOLERANCE_MINUTES,
@@ -1002,10 +1002,8 @@ function buildRecordWhere(user: UserWithRole, query: WorkHourQuery, period: { st
         : { supervisor: { fullName: { contains: query.supervisor, mode: "insensitive" } } })
     };
   }
-  const shiftFilter = cleanShiftName(query.shift);
-  if (shiftFilter && shiftFilter !== "Todos" && shiftFilter !== "Folga") {
-    where.employee = { ...(where.employee as Prisma.EmployeeProfileWhereInput), shift: { OR: [{ name: shiftFilter }, { name: { startsWith: `${shiftFilter} (` } }] } };
-  }
+  const shiftWhere = workHourShiftCategoryWhere(query.shift);
+  if (shiftWhere) where.AND = [shiftWhere];
   if (query.collaborator || query.wbLogin) {
     const search = query.collaborator || query.wbLogin || "";
     where.OR = [
@@ -1036,6 +1034,33 @@ function buildEmployeeStatusFilter(status?: string): Prisma.EmployeeProfileWhere
     return inactiveEmployeeStatusWhere();
   }
   return { operationalStatus: { equals: rawStatus, mode: "insensitive" } };
+}
+
+function workHourShiftCategoryWhere(value?: string | null): Prisma.WorkHourRecordWhereInput | null {
+  const category = shiftCategoryName(value);
+  if (!category || category === "Todos") return null;
+  if (category === "Sem turno") return { scheduleId: "__sem_turno__" };
+  const shiftWhere = shiftNameCategoryWhere(category);
+  if (!shiftWhere) return null;
+  return {
+    OR: [
+      { schedule: { is: { shift: shiftWhere } } },
+      { schedule: { is: { shiftId: null } }, employee: { shift: shiftWhere } },
+      { scheduleId: null, employee: { shift: shiftWhere } }
+    ]
+  };
+}
+
+function shiftNameCategoryWhere(value?: string | null): Prisma.ShiftWhereInput | null {
+  const category = shiftCategoryName(value);
+  if (!category || category === "Todos" || category === "Sem turno") return null;
+  return {
+    OR: [
+      { name: { equals: category, mode: "insensitive" } },
+      { name: { startsWith: `${category} `, mode: "insensitive" } },
+      { name: { startsWith: `${category}(`, mode: "insensitive" } }
+    ]
+  };
 }
 
 function inactiveEmployeeStatusWhere(): Prisma.EmployeeProfileWhereInput {

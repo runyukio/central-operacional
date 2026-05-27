@@ -1,51 +1,11 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
 
-import { getApiActor } from "@/lib/api-actor";
-import { errorResponse, errorStatus, mapZodError } from "@/lib/api-errors";
-import { exportHierarchyCsv, getHierarchy, updateEmployeeSupervisor } from "@/lib/hierarchy-service";
+const inactiveResponse = () => NextResponse.json({ error: "Este módulo está temporariamente inativo." }, { status: 410 });
 
-const updateSchema = z.object({
-  employeeId: z.string().min(1),
-  supervisorId: z.string().trim().nullable().optional()
-});
-
-export async function GET(request: Request) {
-  const actor = await getApiActor();
-  const url = new URL(request.url);
-  const query = {
-    employeeId: url.searchParams.get("employeeId") ?? undefined,
-    search: url.searchParams.get("search") ?? undefined,
-    lobId: url.searchParams.get("lobId") ?? undefined,
-    lob: url.searchParams.get("lob") ?? undefined,
-    supervisorId: url.searchParams.get("supervisorId") ?? undefined,
-    roleTitle: url.searchParams.get("roleTitle") ?? undefined,
-    status: url.searchParams.get("status") ?? undefined
-  };
-
-  if (url.searchParams.get("export") === "csv") {
-    const result = await exportHierarchyCsv(actor, query);
-    if ("error" in result) return errorResponse(result, errorStatus(result));
-    return new NextResponse(result.csv, {
-      headers: {
-        "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="${result.fileName}"`,
-        "Cache-Control": "no-store"
-      }
-    });
-  }
-
-  const result = await getHierarchy(actor, query);
-  if ("error" in result) return errorResponse(result, errorStatus(result));
-  return NextResponse.json(result);
+export async function GET() {
+  return inactiveResponse();
 }
 
-export async function PATCH(request: Request) {
-  const parsed = updateSchema.safeParse(await request.json());
-  if (!parsed.success) return errorResponse(mapZodError(parsed.error));
-
-  const actor = await getApiActor();
-  const result = await updateEmployeeSupervisor(actor, parsed.data);
-  if ("error" in result) return errorResponse(result, errorStatus(result));
-  return NextResponse.json(result);
+export async function PATCH() {
+  return inactiveResponse();
 }

@@ -7,7 +7,7 @@ import { hasExcelValue, normalizeExcelDate, normalizeExcelTime } from "@/lib/exc
 import { prisma } from "@/lib/prisma";
 import { normalizeRole } from "@/lib/permissions";
 import { logPerformanceMetric } from "@/lib/performance-logger";
-import { cleanShiftName, isBlockedShiftName, isSelectableShiftName, shiftLookupKey } from "@/lib/shift-display";
+import { cleanShiftName, isBlockedShiftName, isSelectableShiftName, shiftCategoryName, shiftLookupKey } from "@/lib/shift-display";
 import { calculateAbsenceRate, calculateCoverageRate, isAbsenceStatus, isPresentStatus, isScheduledStatus, normalizeOperationalStatus } from "@/lib/attendance-calculation";
 import { calculateProductiveDifferenceMinutes, isProductiveDifferenceWithinTolerance, plannedProductiveHoursForSchedule } from "@/lib/work-hours-rules";
 
@@ -254,13 +254,21 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
     const dateColumns = datesBetween(period.start, period.end);
     const requestedPage = Math.max(1, Number(query.page) || 1);
     const limit = Math.min(100, Math.max(25, Number(query.limit) || 75));
-    const shiftFilter = cleanShiftName(query.shift);
+    const shiftFilter = shiftCategoryName(query.shift);
+    const scheduleShiftWhere = scheduleShiftCategoryWhere(query.shift);
+    const statusFilter = query.status && query.status !== "Todos" ? uiToScheduleStatus[query.status] : undefined;
+    const scheduleAndFilters: Prisma.ScheduleWhereInput[] = [];
+    if (shiftFilter === "Folga" && !statusFilter) {
+      scheduleAndFilters.push({ OR: [{ status: "FOLGA" }, ...(scheduleShiftWhere ? [scheduleShiftWhere] : [])] });
+    } else if (scheduleShiftWhere) {
+      scheduleAndFilters.push(scheduleShiftWhere);
+    }
     const scheduleWhere: Prisma.ScheduleWhereInput = {
       deletedAt: null,
       date: { gte: period.start, lte: period.end },
       ...(query.supervisor && query.supervisor !== "Todos" && isNoSupervisorFilter(query.supervisor) ? { supervisorId: null } : {}),
-      ...(shiftFilter === "Folga" && (!query.status || query.status === "Todos") ? { status: "FOLGA" } : {}),
-      ...(query.status && query.status !== "Todos" ? { status: uiToScheduleStatus[query.status] ?? undefined } : {})
+      ...(statusFilter ? { status: statusFilter } : {}),
+      ...(scheduleAndFilters.length ? { AND: scheduleAndFilters } : {})
     };
     if (query.view === "mine") {
       const own = user.employeeProfile
@@ -1356,12 +1364,22 @@ export async function exportOperationalSchedulesCsv(actor: Actor, query: Schedul
     const period = resolvePeriod(query);
     const search = query.collaborator?.trim();
     const supervisorFilter = await scheduleSupervisorFilter(query.supervisor);
+    const shiftFilter = shiftCategoryName(query.shift);
+    const scheduleShiftWhere = scheduleShiftCategoryWhere(query.shift);
+    const statusFilter = query.status && query.status !== "Todos" ? uiToScheduleStatus[query.status] : undefined;
+    const scheduleAndFilters: Prisma.ScheduleWhereInput[] = [];
+    if (shiftFilter === "Folga" && !statusFilter) {
+      scheduleAndFilters.push({ OR: [{ status: "FOLGA" }, ...(scheduleShiftWhere ? [scheduleShiftWhere] : [])] });
+    } else if (scheduleShiftWhere) {
+      scheduleAndFilters.push(scheduleShiftWhere);
+    }
     const where: Prisma.ScheduleWhereInput = {
       deletedAt: null,
       date: { gte: period.start, lte: period.end },
-      ...(query.status && query.status !== "Todos" ? { status: uiToScheduleStatus[query.status] ?? undefined } : {}),
+      ...(statusFilter ? { status: statusFilter } : {}),
       ...(query.supervisor && query.supervisor !== "Todos" && isNoSupervisorFilter(query.supervisor) ? { supervisorId: null } : {}),
       ...(supervisorFilter ?? {}),
+      ...(scheduleAndFilters.length ? { AND: scheduleAndFilters } : {}),
       employee: {
         deletedAt: null,
         ...employeeFilters(query, search)
@@ -1459,7 +1477,7 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
     const lobFilter = query.lob && query.lob !== "Todos" ? query.lob : undefined;
     const supervisorFilter = query.supervisor?.trim();
     const collaboratorFilter = query.collaborator?.trim();
-    const shiftFilter = cleanShiftName(query.shift);
+    const shiftFilter = shiftCategoryName(query.shift);
     const statusFilter = query.status && query.status !== "Todos" ? uiToScheduleStatus[query.status] : undefined;
     const roleTitleFilter = query.roleTitle?.trim();
     const skillFilter = employeeSkillFilter(query.skill);
@@ -1491,13 +1509,11 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
         ]
       });
     }
-    if (shiftFilter && shiftFilter !== "Todos") {
-      extraFilters.push({
-        OR: [
-          { shift: { name: { startsWith: shiftFilter, mode: "insensitive" } } },
-          { employee: { shift: { name: { startsWith: shiftFilter, mode: "insensitive" } } } }
-        ]
-      });
+    const scheduleShiftWhere = scheduleShiftCategoryWhere(query.shift);
+    if (shiftFilter === "Folga" && !statusFilter) {
+      extraFilters.push({ OR: [{ status: "FOLGA" }, ...(scheduleShiftWhere ? [scheduleShiftWhere] : [])] });
+    } else if (scheduleShiftWhere) {
+      extraFilters.push(scheduleShiftWhere);
     }
     const baseWhere: Prisma.ScheduleWhereInput = {
       deletedAt: null,
@@ -2247,7 +2263,7 @@ async function notifyAttendanceImpact(tx: Prisma.TransactionClient, employeeId: 
 
 async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeriod>, filters: AttendanceSummaryFilters = {}) {
   const startedAt = Date.now();
-  const shiftFilter = cleanShiftName(filters.shift);
+  const shiftFilter = shiftCategoryName(filters.shift);
   const search = filters.collaborator?.trim();
   const statusFilter = filters.status && filters.status !== "Todos" ? uiToScheduleStatus[filters.status] : undefined;
   const supervisorFilter = await scheduleSupervisorFilter(filters.supervisor);
@@ -2268,24 +2284,20 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
   const summarySkillFilter = employeeSkillFilter(filters.skill);
   if (summarySkillFilter) employeeFilterParts.push(summarySkillFilter);
   const employeeWhere: Prisma.EmployeeProfileWhereInput = employeeFilterParts.length ? { AND: employeeFilterParts } : {};
-  const scheduleShiftWhere: Prisma.ScheduleWhereInput =
-    shiftFilter && shiftFilter !== "Todos" && shiftFilter !== "Folga"
-      ? {
-          OR: [
-            { shift: { name: shiftFilter } },
-            { shift: { name: { startsWith: `${shiftFilter} (` } } },
-            { shiftId: null, employee: { shift: { OR: [{ name: shiftFilter }, { name: { startsWith: `${shiftFilter} (` } }] } } }
-          ]
-        }
-      : {};
+  const scheduleShiftWhere = scheduleShiftCategoryWhere(filters.shift);
+  const scheduleAndFilters: Prisma.ScheduleWhereInput[] = [];
+  if (supervisorFilter) scheduleAndFilters.push(supervisorFilter);
+  if (shiftFilter === "Folga" && !statusFilter) {
+    scheduleAndFilters.push({ OR: [{ status: "FOLGA" }, ...(scheduleShiftWhere ? [scheduleShiftWhere] : [])] });
+  } else if (scheduleShiftWhere) {
+    scheduleAndFilters.push(scheduleShiftWhere);
+  }
   const schedules = await prisma.schedule.findMany({
     where: {
       deletedAt: null,
       ...(period ? { date: { gte: period.start, lte: period.end } } : {}),
       ...(statusFilter ? { status: statusFilter } : {}),
-      ...(supervisorFilter ?? {}),
-      ...(shiftFilter === "Folga" && !statusFilter ? { status: "FOLGA" } : {}),
-      ...scheduleShiftWhere,
+      ...(scheduleAndFilters.length ? { AND: scheduleAndFilters } : {}),
       employee: employeeWhere
     },
     select: {
@@ -2534,7 +2546,6 @@ function resolveAttendancePeriod(query: AttendanceQuery) {
 }
 
 function employeeFilters(query: ScheduleQuery, search?: string): Prisma.EmployeeProfileWhereInput {
-  const shiftFilter = cleanShiftName(query.shift);
   const filters: Prisma.EmployeeProfileWhereInput[] = [];
   if (search) {
     filters.push({
@@ -2546,11 +2557,36 @@ function employeeFilters(query: ScheduleQuery, search?: string): Prisma.Employee
     });
   }
   if (query.lob && query.lob !== "Todos") filters.push({ lob: { name: query.lob } });
-  if (shiftFilter && shiftFilter !== "Todos" && shiftFilter !== "Folga") filters.push({ shift: { OR: [{ name: shiftFilter }, { name: { startsWith: `${shiftFilter} (` } }] } });
   if (query.roleTitle && query.roleTitle !== "Todos") filters.push({ roleTitle: query.roleTitle });
   const skillFilter = employeeSkillFilter(query.skill);
   if (skillFilter) filters.push(skillFilter);
   return filters.length ? { AND: filters } : {};
+}
+
+function shiftNameCategoryWhere(value?: string | null): Prisma.ShiftWhereInput | null {
+  const category = shiftCategoryName(value);
+  if (!category || category === "Todos" || category === "Sem turno") return null;
+  return {
+    OR: [
+      { name: { equals: category, mode: "insensitive" } },
+      { name: { startsWith: `${category} `, mode: "insensitive" } },
+      { name: { startsWith: `${category}(`, mode: "insensitive" } }
+    ]
+  };
+}
+
+function scheduleShiftCategoryWhere(value?: string | null): Prisma.ScheduleWhereInput | null {
+  const category = shiftCategoryName(value);
+  if (!category || category === "Todos") return null;
+  if (category === "Sem turno") return { shiftId: "__sem_turno__" };
+  const shiftWhere = shiftNameCategoryWhere(category);
+  if (!shiftWhere) return null;
+  return {
+    OR: [
+      { shift: shiftWhere },
+      { shiftId: null, employee: { shift: shiftWhere } }
+    ]
+  };
 }
 
 function employeeSkillFilter(value?: string | null): Prisma.EmployeeProfileWhereInput | null {
