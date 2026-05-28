@@ -10,7 +10,7 @@ import { auditPermissionDenied } from "@/lib/permission-audit";
 import { logPerformanceMetric } from "@/lib/performance-logger";
 import { cleanShiftName, isBlockedShiftName, isSelectableShiftName, shiftCategoryName, shiftLookupKey } from "@/lib/shift-display";
 import { calculateAbsenceRate, calculateCoverageRate, getAbsenceStatuses, getPresentStatuses, getScheduledStatuses, isAbsenceStatus, isPresentStatus, isScheduledStatus, normalizeOperationalStatus } from "@/lib/attendance-calculation";
-import { calculateProductiveDifferenceMinutes, isProductiveDifferenceWithinTolerance, plannedProductiveHoursForSchedule } from "@/lib/work-hours-rules";
+import { calculateProductiveDifferenceMinutes, formatWorkHours, isProductiveDifferenceWithinTolerance, plannedProductiveHoursForSchedule } from "@/lib/work-hours-rules";
 import { isAgentJobTitle } from "@/lib/job-title-normalization";
 
 const uiToScheduleStatus: Record<string, ScheduleStatus> = {
@@ -1521,7 +1521,7 @@ export async function exportOperationalSchedulesXlsxData(actor: Actor, query: Sc
         schedule.endsAt ?? "",
         schedule.employee.lob.name,
         schedule.employee.supervisor?.fullName ?? "Sem supervisor",
-        workHour ? String(workHour.effectiveHours ?? workHour.actualHours) : "Não lançado",
+        workHour ? formatWorkHours(workHour.effectiveHours ?? workHour.actualHours) : "Não lançado",
         schedule.observation ?? "",
         formatDateTime(schedule.updatedAt)
       ];

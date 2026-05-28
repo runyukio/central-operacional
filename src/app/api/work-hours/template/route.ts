@@ -21,7 +21,7 @@ export async function GET() {
   const workbook = XLSX.utils.book_new();
   const worksheet = XLSX.utils.aoa_to_sheet([
     columns,
-    ["WB1001", "2026-05-15", "8", "Sistema Ponto", "Exemplo de horas realizadas"]
+    ["WB1001", "2026-05-15", "8:00", "Sistema Ponto", "Exemplo de horas realizadas"]
   ]);
   XLSX.utils.book_append_sheet(workbook, worksheet, "Horas");
   const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;

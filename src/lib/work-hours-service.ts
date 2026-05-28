@@ -25,9 +25,13 @@ import {
   DEFAULT_PRODUCTIVE_HOURS,
   WORK_HOUR_TOLERANCE_MINUTES,
   calculateProductiveDifferenceMinutes,
+  formatSignedMinutesToHHMM,
+  formatWorkHours,
   isProductiveDifferenceWithinTolerance,
   isWorkHoursAllowedForSchedule,
+  parseWorkHoursToMinutes,
   plannedProductiveHoursForSchedule,
+  workHoursFromMinutes,
   workHoursBlockedReasonForSchedule
 } from "@/lib/work-hours-rules";
 
@@ -620,7 +624,7 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
   if (!date) fieldErrors.date = "Data inválida.";
   const actualHours = parseHours(input.actualHours);
   if (!hasExcelValue(input.actualHours)) fieldErrors.actualHours = "Horas realizadas são obrigatórias.";
-  else if (actualHours === null) fieldErrors.actualHours = "Horas realizadas inválidas. Horas realizadas devem ser um número ou formato HH:mm.";
+  else if (actualHours === null) fieldErrors.actualHours = "Horas realizadas inválidas. Use formato HH:mm, como 8:30, ou decimal, como 8,5.";
   if (Object.keys(fieldErrors).length) return createValidationError(fieldErrors, "Existem campos inválidos para lançar horas.");
 
   try {
@@ -825,13 +829,13 @@ export async function exportOperationalWorkHoursXlsxData(actor: Actor, query: Wo
     row.lob,
     row.supervisor,
     row.shift,
-    row.plannedHours,
-    row.effectiveHours,
+    formatWorkHours(row.plannedHours),
+    formatWorkHours(row.effectiveHours),
     formatHourDifferenceForExport(row.differenceMinutes),
     row.status,
     row.source,
     row.observation,
-    row.adjustmentRequestedHours ?? "",
+    row.adjustmentRequestedHours === null || row.adjustmentRequestedHours === undefined ? "" : formatWorkHours(row.adjustmentRequestedHours),
     formatHourDifferenceForExport(row.adjustmentDifferenceMinutes),
     row.adjustmentStatus === "Sem ajuste" ? "" : row.adjustmentStatus,
     row.adjustmentReason,
@@ -919,7 +923,7 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
     const hasActualHours = hasExcelValue(row.horas_realizadas);
     const actualHours = parseHours(row.horas_realizadas);
     if (!hasActualHours) errors.push("Horas realizadas são obrigatórias.");
-    else if (actualHours === null) errors.push("Horas realizadas inválidas. Horas realizadas devem ser um número ou formato HH:mm.");
+    else if (actualHours === null) errors.push("Horas realizadas inválidas. Use formato HH:mm, como 8:30, ou decimal, como 8,5.");
 
     let schedule: Schedule | undefined;
     let existingRecordId: string | undefined;
@@ -989,7 +993,7 @@ function toImportPreview(rows: Array<Record<string, unknown>>, validation: Valid
         ...row,
         wb_login: result?.originalWbLogin ?? row.wb_login,
         data: result?.dateIso ?? row.data,
-        horas_realizadas: result?.actualHours ?? row.horas_realizadas
+        horas_realizadas: result?.actualHours === undefined ? row.horas_realizadas : formatWorkHours(result.actualHours)
       };
     }),
     validation: validation.map((row) => ({
@@ -1003,9 +1007,12 @@ function toImportPreview(rows: Array<Record<string, unknown>>, validation: Valid
       hasSchedule: row.hasSchedule,
       allowsWorkHours: row.allowsWorkHours,
       scheduleStatus: row.scheduleStatus ?? "",
-      actualHours: row.actualHours ?? 0,
+      actualHours: row.actualHours,
+      actualHoursLabel: row.actualHours === undefined ? "" : formatWorkHours(row.actualHours),
       plannedHours: row.plannedHours,
+      plannedHoursLabel: row.plannedHours === null || row.plannedHours === undefined ? "" : formatWorkHours(row.plannedHours),
       differenceMinutes: row.differenceMinutes,
+      differenceLabel: row.differenceMinutes === null || row.differenceMinutes === undefined ? "" : formatHourDifferenceForExport(row.differenceMinutes),
       errors: row.errors,
       warnings: row.warnings,
       action: row.action,
@@ -1308,7 +1315,7 @@ function normalizeRequestedHours(input: WorkHourAdjustmentInput): {
 } {
   const explicit = parseHours(input.requestedActualHours);
   if (explicit !== null) return { hours: explicit };
-  if (hasExcelValue(input.requestedActualHours)) return { error: "Horas solicitadas inválidas. Horas solicitadas devem ser um número ou formato HH:mm.", field: "requestedActualHours" };
+  if (hasExcelValue(input.requestedActualHours)) return { error: "Horas solicitadas inválidas. Use formato HH:mm, como 8:30, ou decimal, como 8,5.", field: "requestedActualHours" };
   return { error: "Nova hora solicitada é obrigatória.", field: "requestedActualHours" };
 }
 
@@ -1384,19 +1391,8 @@ function parseImportDate(value: unknown) {
 }
 
 function parseHours(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 24) return roundHours(value);
-  const raw = text(value);
-  if (!raw) return null;
-  const time = raw.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
-  if (time) {
-    const hour = Number(time[1]);
-    const minute = Number(time[2]);
-    const second = Number(time[3] ?? 0);
-    if (hour > 24 || minute > 59 || second > 59) return null;
-    return roundHours(hour + minute / 60);
-  }
-  const parsed = Number(raw.replace(",", "."));
-  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 24 ? roundHours(parsed) : null;
+  const minutes = parseWorkHoursToMinutes(value);
+  return minutes === null ? null : roundHours(workHoursFromMinutes(minutes));
 }
 
 function normalizeWorkHourImportRow(row: Record<string, unknown>) {
@@ -1471,12 +1467,7 @@ function formatDateTime(date: Date) {
 
 function formatHourDifferenceForExport(minutes: number | null | undefined) {
   if (minutes === null || minutes === undefined) return "";
-  const rounded = Math.round(minutes);
-  const sign = rounded > 0 ? "+" : rounded < 0 ? "-" : "";
-  const absolute = Math.abs(rounded);
-  const hours = Math.floor(absolute / 60);
-  const remaining = absolute % 60;
-  return hours ? `${sign}${hours}h${String(remaining).padStart(2, "0")}` : `${sign}${remaining}min`;
+  return formatSignedMinutesToHHMM(minutes);
 }
 
 function serialize(value: unknown) {

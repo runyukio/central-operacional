@@ -95,7 +95,17 @@ import {
 } from "@/lib/demo-data";
 import { cn, formatCurrency, initials } from "@/lib/utils";
 import { cleanShiftName, cleanShiftOptions, isBlockedShiftName, isSelectableShiftName, shiftCategoryName, standardShiftNames } from "@/lib/shift-display";
-import { DEFAULT_PRODUCTIVE_HOURS, canScheduleStatusReceiveWorkHours, normalizeProductivePlannedHours, workHoursBlockedReasonForSchedule } from "@/lib/work-hours-rules";
+import {
+  DEFAULT_PRODUCTIVE_HOURS,
+  canScheduleStatusReceiveWorkHours,
+  formatMinutesToHHMM,
+  formatSignedMinutesToHHMM,
+  formatWorkHours,
+  normalizeProductivePlannedHours,
+  parseWorkHoursToMinutes,
+  workHoursBlockedReasonForSchedule,
+  workHoursFromMinutes
+} from "@/lib/work-hours-rules";
 import { MONTHLY_ADVANCE_FIXED_AMOUNT } from "@/lib/monthly-advance-constants";
 
 const scheduleImportColumns = ["wb_login", "data", "status", "turno", "entrada", "saida", "lob"] as const;
@@ -480,7 +490,7 @@ type WorkHourPreview = {
   missingWbLogins?: string[];
   scheduleFoundRows: number;
   noScheduleRows: number;
-  validation: Array<{ rowNumber: number; wbLogin: string; originalWbLogin?: string; normalizedWbLogin?: string; employeeName: string; employeeStatus?: string; date: string; hasSchedule?: boolean; allowsWorkHours?: boolean; scheduleStatus?: string; actualHours?: number; plannedHours?: number | null; differenceMinutes?: number | null; errors: string[]; warnings: string[]; action: string; status: string }>;
+  validation: Array<{ rowNumber: number; wbLogin: string; originalWbLogin?: string; normalizedWbLogin?: string; employeeName: string; employeeStatus?: string; date: string; hasSchedule?: boolean; allowsWorkHours?: boolean; scheduleStatus?: string; actualHours?: number; actualHoursLabel?: string; plannedHours?: number | null; plannedHoursLabel?: string; differenceMinutes?: number | null; differenceLabel?: string; errors: string[]; warnings: string[]; action: string; status: string }>;
 };
 
 type RegistrationItem = {
@@ -962,23 +972,21 @@ function employeeOptionLabel(employee: { name: string; wb?: string; email?: stri
   return employee.name;
 }
 
-function roundDecimal(value: number) {
-  return Math.round(value * 100) / 100;
-}
+const workHoursInputErrorMessage = "Horas realizadas inválidas. Use formato HH:mm, como 8:30, ou decimal, como 8,5.";
+const requestedHoursInputErrorMessage = "Horas solicitadas devem ser um número ou formato HH:mm, como 8:30, ou decimal, como 8,5.";
 
 function parseProductiveHoursInput(value: string) {
-  const raw = value.trim();
-  if (!raw) return null;
-  const time = raw.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
-  if (time) {
-    const hour = Number(time[1]);
-    const minute = Number(time[2]);
-    const second = Number(time[3] ?? 0);
-    if (hour > 24 || minute > 59 || second > 59) return null;
-    return roundDecimal(hour + minute / 60);
-  }
-  const parsed = Number(raw.replace(",", "."));
-  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 24 ? roundDecimal(parsed) : null;
+  const minutes = parseWorkHoursToMinutes(value);
+  return minutes === null ? null : workHoursFromMinutes(minutes);
+}
+
+function formatWorkHourValue(value: unknown, fallback = "-") {
+  const formatted = formatWorkHours(value);
+  return formatted || fallback;
+}
+
+function formatWorkHourSummaryDifference(hours?: number | null) {
+  return formatSignedMinutesToHHMM(Math.round((hours ?? 0) * 60)) || "0:00";
 }
 
 function dateInputFromParts(year: number, month: number, day: number) {
@@ -1099,13 +1107,9 @@ function formatScheduleDateHeader(dateIso: string) {
   return `${String(date.getUTCDate()).padStart(2, "0")} ${weekday}`;
 }
 
-function formatHourDifference(minutes: number) {
-  if (!minutes) return "0min";
-  const sign = minutes > 0 ? "+" : "-";
-  const absolute = Math.abs(minutes);
-  const hours = Math.floor(absolute / 60);
-  const remainingMinutes = absolute % 60;
-  return hours ? `${sign}${hours}h${String(remainingMinutes).padStart(2, "0")}` : `${sign}${remainingMinutes}min`;
+function formatHourDifference(minutes: number | null | undefined) {
+  if (minutes === null || minutes === undefined) return "-";
+  return formatSignedMinutesToHHMM(minutes) || "0:00";
 }
 
 function statusFromScheduleCell(value: string) {
@@ -2868,8 +2872,8 @@ export function MySchedulePage() {
                       <p className="rounded-md border border-slate-100 bg-slate-50 px-2 py-1 text-[11px] font-bold text-navy-900">Turno: {dayShift || "Sem turno"}</p>
                       {workHour ? (
                         <div className="rounded-md border border-blue-100 bg-white/80 px-2 py-1 text-[11px] font-bold text-navy-950">
-                          <p>Planejado: {workHour.plannedHours || DEFAULT_PRODUCTIVE_HOURS}h</p>
-                          <p>Realizado: {workHour.effectiveHours}h</p>
+                          <p>Planejado: {formatWorkHourValue(workHour.plannedHours || DEFAULT_PRODUCTIVE_HOURS)}</p>
+                          <p>Realizado: {formatWorkHourValue(workHour.effectiveHours)}</p>
                           <p className={cn(workHour.differenceMinutes < 0 ? "text-red-600" : workHour.differenceMinutes > 0 ? "text-emerald-600" : "text-muted")}>{workHour.status} • {formatHourDifference(workHour.differenceMinutes)}</p>
                           {workHour.adjustmentStatus && workHour.adjustmentStatus !== "Sem ajuste" ? (
                             <p className="mt-1 rounded bg-amber-50 px-1.5 py-1 text-amber-800">Ajuste de horas {workHour.adjustmentStatus.toLowerCase()}</p>
@@ -3016,10 +3020,10 @@ export function MySchedulePage() {
           <Panel title="Resumo de Horas">
             {myWorkHours.length && myWorkHourSummary ? (
               <div className="grid gap-3">
-                <MetricPill value={`${myWorkHourSummary.plannedHours}h`} label="Horas produtivas previstas" />
-                <MetricPill value={`${myWorkHourSummary.actualHours}h`} label="Horas realizadas" />
-                <MetricPill value={`${myWorkHourSummary.differenceHours}h`} label="Diferença" />
-                <MetricPill value={`${myWorkHourSummary.adjustedHours}h`} label="Horas ajustadas" />
+                <MetricPill value={formatWorkHourValue(myWorkHourSummary.plannedHours, "0:00")} label="Horas produtivas previstas" />
+                <MetricPill value={formatWorkHourValue(myWorkHourSummary.actualHours, "0:00")} label="Horas realizadas" />
+                <MetricPill value={formatWorkHourSummaryDifference(myWorkHourSummary.differenceHours)} label="Diferença" />
+                <MetricPill value={formatWorkHourValue(myWorkHourSummary.adjustedHours, "0:00")} label="Horas ajustadas" />
                 <MetricPill value={myWorkHourSummary.pendingAdjustments} label="Ajustes pendentes" />
                 <MetricPill value={myWorkHourSummary.divergentRecords} label="Dias com divergência" />
                 <MetricPill value={myWorkHourSummary.noScheduleRecords} label="Dias sem cronograma vinculado" />
@@ -4068,7 +4072,7 @@ export function SchedulesPage() {
       plannedStart: hourCell?.plannedStart || plannedStart,
       plannedEnd: hourCell?.plannedEnd || plannedEnd,
       plannedHours: normalizeProductivePlannedHours(hourCell?.plannedHours) ?? plannedHours,
-      actualHours: hourCell?.actualHours ? String(hourCell.actualHours) : "",
+      actualHours: hourCell?.actualHours === null || hourCell?.actualHours === undefined ? "" : formatWorkHourValue(hourCell.actualHours, ""),
       effectiveHours: hourCell?.effectiveHours ?? 0,
       differenceMinutes: hourCell?.differenceMinutes ?? 0,
       status: hourCell?.status ?? (plannedCell ? "Sem horas" : "Sem cronograma"),
@@ -4079,7 +4083,7 @@ export function SchedulesPage() {
       adjustmentStatus: hourCell?.adjustmentStatus ?? "Sem ajuste"
     });
     setWorkHourAdjustmentForm({
-      requestedActualHours: hourCell?.effectiveHours ? String(hourCell.effectiveHours) : "",
+      requestedActualHours: hourCell?.effectiveHours === null || hourCell?.effectiveHours === undefined ? "" : formatWorkHourValue(hourCell.effectiveHours, ""),
       reason: "Erro de apontamento",
       justification: ""
     });
@@ -4206,7 +4210,7 @@ export function SchedulesPage() {
     }
     const parsedActualHours = parseProductiveHoursInput(workHourForm.actualHours);
     if (parsedActualHours === null) {
-      setAttendanceMessage("Horas realizadas inválidas. Use número ou formato HH:mm.");
+      setAttendanceMessage(workHoursInputErrorMessage);
       return;
     }
     if (workHourForm.recordId && workHourForm.source && !/^manual$/i.test(workHourForm.source) && !confirmOverwrite) {
@@ -4233,7 +4237,7 @@ export function SchedulesPage() {
         plannedStart: payload.data.plannedStart,
         plannedEnd: payload.data.plannedEnd,
         plannedHours: payload.data.plannedHours,
-        actualHours: String(payload.data.actualHours),
+        actualHours: formatWorkHourValue(payload.data.actualHours, ""),
         effectiveHours: payload.data.effectiveHours,
         differenceMinutes: payload.data.differenceMinutes,
         status: payload.data.status,
@@ -4309,7 +4313,7 @@ export function SchedulesPage() {
     }
     const requestedActualHours = parseProductiveHoursInput(workHourAdjustmentForm.requestedActualHours);
     if (requestedActualHours === null) {
-      setAttendanceMessage("Horas solicitadas devem ser um número ou formato HH:mm.");
+      setAttendanceMessage(requestedHoursInputErrorMessage);
       return;
     }
     setSavingWorkHourAdjustment(true);
@@ -4560,11 +4564,12 @@ export function SchedulesPage() {
   const canEditSlotJustification = scheduleEditRequiresReason && (canManageSchedules || isScheduleSupervisor);
   const parsedManualActualHours = parseProductiveHoursInput(workHourForm.actualHours);
   const manualActualHoursPreview = parsedManualActualHours ?? workHourForm.effectiveHours ?? 0;
+  const hasManualActualHoursPreview = parsedManualActualHours !== null || Boolean(workHourForm.recordId);
   const parsedScheduleAdjustmentHours = parseProductiveHoursInput(workHourAdjustmentForm.requestedActualHours);
   const scheduleAdjustmentDifferenceMinutes = parsedScheduleAdjustmentHours !== null
     ? Math.round((parsedScheduleAdjustmentHours - (workHourForm.effectiveHours ?? 0)) * 60)
     : null;
-  const manualDifferencePreview = manualActualHoursPreview && plannedHoursForManualPreview
+  const manualDifferencePreview = hasManualActualHoursPreview && plannedHoursForManualPreview
     ? Math.round((manualActualHoursPreview - plannedHoursForManualPreview) * 60)
     : workHourForm.differenceMinutes;
   const manualStatusPreview = plannedHoursForManualPreview
@@ -4783,7 +4788,7 @@ export function SchedulesPage() {
             <MetricPill value={scheduleTotalRows} label="Colaboradores" />
             <MetricPill value={scheduleRows.length ? "100%" : "0%"} label="Cobertura Planejada" />
             <MetricPill value={`${attendanceSummary?.coverageRate ?? 0}%`} label="Cobertura Real" />
-            <MetricPill value={`${plannedHours}h`} label="Horas produtivas programadas" />
+            <MetricPill value={formatWorkHourValue(plannedHours, "0:00")} label="Horas produtivas programadas" />
             <MetricPill value={conflictCount} label="Conflitos" />
             <MetricPill value={`${attendanceSummary?.absRate ?? 0}%`} label="ABS" />
             <MetricPill value={attendanceSummary?.unjustified ?? 0} label="Pendências justificativa" />
@@ -4823,7 +4828,7 @@ export function SchedulesPage() {
                             <span>{value}</span>
                             {hourCell ? (
                               <span className={cn("mt-1 rounded px-1.5 py-0.5 text-[10px]", hourCell.rawStatus === "OK" ? "bg-emerald-100 text-emerald-700" : hourCell.rawStatus === "DIVERGENT" ? "bg-orange-100 text-orange-700" : hourCell.rawStatus === "ADJUSTMENT_REQUESTED" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700")}>
-                                Real: {hourCell.effectiveHours}h {hourCell.differenceMinutes ? formatHourDifference(hourCell.differenceMinutes) : ""}
+                                Real: {formatWorkHourValue(hourCell.effectiveHours)} {hourCell.differenceMinutes ? formatHourDifference(hourCell.differenceMinutes) : ""}
                               </span>
                             ) : (
                               <span className="mt-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">Sem horas</span>
@@ -4911,10 +4916,10 @@ export function SchedulesPage() {
             <DonutLegend
               total={`${attendanceSummary?.coverageRate ?? 0}%`}
               items={[
-                { label: "Produtivo programado", value: `${plannedHours}h`, color: "#10B981" },
-                { label: "Atenção", value: "0h", color: "#F59E0B" },
-                { label: "Descoberto", value: `${unscheduledCount * DEFAULT_PRODUCTIVE_HOURS}h`, color: "#EF4444" },
-                { label: "Sem programação", value: `${unscheduledCount * DEFAULT_PRODUCTIVE_HOURS}h`, color: "#CBD5E1" }
+                { label: "Produtivo programado", value: formatWorkHourValue(plannedHours, "0:00"), color: "#10B981" },
+                { label: "Atenção", value: "0:00", color: "#F59E0B" },
+                { label: "Descoberto", value: formatWorkHourValue(unscheduledCount * DEFAULT_PRODUCTIVE_HOURS, "0:00"), color: "#EF4444" },
+                { label: "Sem programação", value: formatWorkHourValue(unscheduledCount * DEFAULT_PRODUCTIVE_HOURS, "0:00"), color: "#CBD5E1" }
               ]}
             />
           </Panel>
@@ -5311,9 +5316,9 @@ export function SchedulesPage() {
                   <StatusBadge status={workHourForm.recordId ? workHourForm.status : selectedCellHasSchedule ? "Sem horas" : "Sem cronograma"} />
                 </div>
                 <div className="grid gap-3 md:grid-cols-3">
-                  <MetricPill value={plannedHoursForManualPreview ? `${plannedHoursForManualPreview}h` : "-"} label="Planejado produtivo" />
-                  <MetricPill value={manualActualHoursPreview ? `${manualActualHoursPreview}h` : "-"} label="Realizado produtivo" />
-                  <MetricPill value={manualActualHoursPreview || workHourForm.differenceMinutes ? formatHourDifference(manualDifferencePreview) : "-"} label="Diferença" />
+                  <MetricPill value={plannedHoursForManualPreview ? formatWorkHourValue(plannedHoursForManualPreview) : "-"} label="Planejado produtivo" />
+                  <MetricPill value={hasManualActualHoursPreview ? formatWorkHourValue(manualActualHoursPreview, "0:00") : "-"} label="Realizado produtivo" />
+                  <MetricPill value={hasManualActualHoursPreview || workHourForm.differenceMinutes ? formatHourDifference(manualDifferencePreview) : "-"} label="Diferença" />
                 </div>
                 <div className="mt-4 grid gap-4 md:grid-cols-2">
                   <FormInput disabled label="Entrada prevista" value={workHourForm.plannedStart} onChange={() => undefined} />
@@ -5335,7 +5340,7 @@ export function SchedulesPage() {
                   {!selectedScheduleAllowsWorkHours
                     ? selectedScheduleWorkHoursBlockReason
                     : plannedHoursForManualPreview
-                    ? `Status previsto após salvar: ${manualStatusPreview}. Base produtiva: ${DEFAULT_PRODUCTIVE_HOURS}h.`
+                    ? `Status previsto após salvar: ${manualStatusPreview}. Base produtiva: ${formatWorkHourValue(DEFAULT_PRODUCTIVE_HOURS)}.`
                     : selectedCellHasSchedule
                       ? "Horas ainda não lançadas para este dia."
                       : "Sem cronograma vinculado para este dia."}
@@ -5364,7 +5369,7 @@ export function SchedulesPage() {
                     </div>
                     {workHourForm.recordId && selectedScheduleAllowsWorkHours ? (
                       <div className="grid gap-4 md:grid-cols-2">
-                        <InfoLine label="Hora realizada atual" value={`${workHourForm.effectiveHours || 0}h`} />
+                        <InfoLine label="Hora realizada atual" value={formatWorkHourValue(workHourForm.effectiveHours || 0, "0:00")} />
                         <InfoLine label="Divergência atual" value={formatHourDifference(workHourForm.differenceMinutes || 0)} />
                         <InfoLine label="Diferença do ajuste" value={scheduleAdjustmentDifferenceMinutes === null ? "-" : formatHourDifference(scheduleAdjustmentDifferenceMinutes)} />
                         <FormInput label="Nova hora solicitada" value={workHourAdjustmentForm.requestedActualHours} onChange={(value) => setWorkHourAdjustmentForm({ ...workHourAdjustmentForm, requestedActualHours: value })} />
@@ -5695,7 +5700,7 @@ export function WorkHoursPage() {
   function openAdjustment(row: WorkHourRow) {
     setSelectedRow(row);
     setAdjustmentForm({
-      requestedActualHours: row.effectiveHours ? String(row.effectiveHours).replace(".", ",") : "",
+      requestedActualHours: formatWorkHourValue(row.effectiveHours, ""),
       reason: "Erro de apontamento",
       justification: "",
       rejectionReason: ""
@@ -5706,7 +5711,7 @@ export function WorkHoursPage() {
   function openReview(row: WorkHourRow, action: "approve" | "reject") {
     setSelectedRow(row);
     setAdjustmentAction(action);
-    setAdjustmentForm({ ...adjustmentForm, requestedActualHours: row.effectiveHours ? String(row.effectiveHours).replace(".", ",") : adjustmentForm.requestedActualHours, rejectionReason: "" });
+    setAdjustmentForm({ ...adjustmentForm, requestedActualHours: formatWorkHourValue(row.effectiveHours, adjustmentForm.requestedActualHours), rejectionReason: "" });
     setShowReview(true);
   }
 
@@ -5722,7 +5727,7 @@ export function WorkHoursPage() {
     const requestedActualHours = parseProductiveHoursInput(adjustmentForm.requestedActualHours);
     if (requestedActualHours === null) {
       setSavingAdjustment(false);
-      setMessage("Horas solicitadas devem ser um número ou formato HH:mm.");
+      setMessage(requestedHoursInputErrorMessage);
       return;
     }
     try {
@@ -5805,7 +5810,7 @@ export function WorkHoursPage() {
     <div>
       <PageHeader
         title="Horas Operacionais"
-        description={`Upload, conferência e ajuste das horas produtivas realizadas versus base planejada de ${DEFAULT_PRODUCTIVE_HOURS}h`}
+        description={`Upload, conferência e ajuste das horas produtivas realizadas versus base planejada de ${formatWorkHourValue(DEFAULT_PRODUCTIVE_HOURS)}`}
         icon={Clock}
         actions={
           <div className="flex flex-wrap gap-2">
@@ -5835,16 +5840,16 @@ export function WorkHoursPage() {
       {message ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
 
       <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="Horas previstas" value={`${summary?.plannedHours ?? 0}h`} helper={`base produtiva ${DEFAULT_PRODUCTIVE_HOURS}h/dia`} icon={Clock} tone="blue" />
-        <StatCard title="Horas realizadas" value={`${summary?.actualHours ?? 0}h`} helper="apontamento importado" icon={CheckCircle2} tone="green" />
-        <StatCard title="Diferença total" value={`${summary?.differenceHours ?? 0}h`} helper="realizado - previsto" icon={AlertTriangle} tone={(summary?.differenceHours ?? 0) < 0 ? "orange" : "cyan"} />
+        <StatCard title="Horas previstas" value={formatWorkHourValue(summary?.plannedHours ?? 0, "0:00")} helper={`base produtiva ${formatWorkHourValue(DEFAULT_PRODUCTIVE_HOURS)}/dia`} icon={Clock} tone="blue" />
+        <StatCard title="Horas realizadas" value={formatWorkHourValue(summary?.actualHours ?? 0, "0:00")} helper="apontamento importado" icon={CheckCircle2} tone="green" />
+        <StatCard title="Diferença total" value={formatWorkHourSummaryDifference(summary?.differenceHours ?? 0)} helper="realizado - previsto" icon={AlertTriangle} tone={(summary?.differenceHours ?? 0) < 0 ? "orange" : "cyan"} />
         <StatCard title="Ajustes pendentes" value={summary?.pendingAdjustments ?? 0} helper="aguardando WFM/Admin" icon={ClipboardList} tone={(summary?.pendingAdjustments ?? 0) ? "orange" : "green"} />
       </div>
       <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricPill value={summary?.okRecords ?? 0} label="Registros OK" />
         <MetricPill value={summary?.divergentRecords ?? 0} label="Divergentes" />
         <MetricPill value={summary?.noScheduleRecords ?? 0} label="Sem cronograma vinculado" />
-        <MetricPill value={`${summary?.adjustedHours ?? 0}h`} label="Horas ajustadas" />
+        <MetricPill value={formatWorkHourValue(summary?.adjustedHours ?? 0, "0:00")} label="Horas ajustadas" />
       </div>
 
       <section className="card mb-5 p-4">
@@ -5896,9 +5901,9 @@ export function WorkHoursPage() {
                     <td className="px-4 py-3">{row.lob}</td>
                     <td className="px-4 py-3">{row.supervisor || "-"}</td>
                     <td className="px-4 py-3">{cleanShiftName(row.shift) || "-"}</td>
-                    <td className="px-4 py-3">{row.plannedHours || 0}h produtivas</td>
-                    <td className="px-4 py-3">{row.effectiveHours}h</td>
-                    <td className={cn("px-4 py-3 font-bold", row.differenceMinutes < 0 ? "text-red-600" : row.differenceMinutes > 0 ? "text-emerald-600" : "text-muted")}>{row.differenceMinutes}min</td>
+                    <td className="px-4 py-3">{formatWorkHourValue(row.plannedHours || 0, "0:00")} produtivas</td>
+                    <td className="px-4 py-3">{formatWorkHourValue(row.effectiveHours, "0:00")}</td>
+                    <td className={cn("px-4 py-3 font-bold", row.differenceMinutes < 0 ? "text-red-600" : row.differenceMinutes > 0 ? "text-emerald-600" : "text-muted")}>{formatHourDifference(row.differenceMinutes)}</td>
                     <td className="px-4 py-3"><StatusBadge status={row.status} /></td>
                     <td className="px-4 py-3">{row.source || "-"}</td>
                     <td className="px-4 py-3">{row.observation || "-"}</td>
@@ -5906,8 +5911,8 @@ export function WorkHoursPage() {
                       {row.adjustmentId ? (
                         <div className="min-w-[180px] space-y-1">
                           <StatusBadge status={row.adjustmentStatus} />
-                          <p className="text-xs font-semibold text-muted">Atual: {row.adjustmentCurrentHours ?? row.effectiveHours}h</p>
-                          <p className="text-xs font-semibold text-navy-950">Solicitado: {row.adjustmentRequestedHours ?? "-"}h</p>
+                          <p className="text-xs font-semibold text-muted">Atual: {formatWorkHourValue(row.adjustmentCurrentHours ?? row.effectiveHours, "0:00")}</p>
+                          <p className="text-xs font-semibold text-navy-950">Solicitado: {row.adjustmentRequestedHours === null || row.adjustmentRequestedHours === undefined ? "-" : formatWorkHourValue(row.adjustmentRequestedHours)}</p>
                           <p className={cn("text-xs font-bold", (row.adjustmentDifferenceMinutes ?? 0) < 0 ? "text-red-600" : (row.adjustmentDifferenceMinutes ?? 0) > 0 ? "text-emerald-600" : "text-muted")}>
                             Ajuste: {row.adjustmentDifferenceMinutes === null || row.adjustmentDifferenceMinutes === undefined ? "-" : formatHourDifference(row.adjustmentDifferenceMinutes)}
                           </p>
@@ -6002,9 +6007,9 @@ export function WorkHoursPage() {
                         <td className="px-3 py-2">{row.hasSchedule ? "Sim" : "Não"}</td>
                         <td className="px-3 py-2">{row.scheduleStatus || "-"}</td>
                         <td className="px-3 py-2">{row.allowsWorkHours ? "Sim" : "Não"}</td>
-                        <td className="px-3 py-2">{row.plannedHours === null || row.plannedHours === undefined ? "-" : `${row.plannedHours}h`}</td>
-                        <td className="px-3 py-2">{row.actualHours ?? "-"}</td>
-                        <td className={cn("px-3 py-2 font-bold", (row.differenceMinutes ?? 0) < 0 ? "text-red-600" : (row.differenceMinutes ?? 0) > 0 ? "text-emerald-600" : "text-muted")}>{row.differenceMinutes === null || row.differenceMinutes === undefined ? "-" : formatHourDifference(row.differenceMinutes)}</td>
+                        <td className="px-3 py-2">{row.plannedHoursLabel || (row.plannedHours === null || row.plannedHours === undefined ? "-" : formatWorkHourValue(row.plannedHours))}</td>
+                        <td className="px-3 py-2">{row.actualHoursLabel || (row.actualHours === null || row.actualHours === undefined ? "-" : formatWorkHourValue(row.actualHours))}</td>
+                        <td className={cn("px-3 py-2 font-bold", (row.differenceMinutes ?? 0) < 0 ? "text-red-600" : (row.differenceMinutes ?? 0) > 0 ? "text-emerald-600" : "text-muted")}>{row.differenceLabel || (row.differenceMinutes === null || row.differenceMinutes === undefined ? "-" : formatHourDifference(row.differenceMinutes))}</td>
                         <td className="px-3 py-2"><StatusBadge status={row.status} /></td>
                         <td className="px-3 py-2">{row.action}</td>
                         <td className="px-3 py-2">
@@ -6024,7 +6029,7 @@ export function WorkHoursPage() {
                 <MetricPill value={`${preview.foundUniqueWbLogins ?? 0}/${preview.uniqueWbLogins ?? 0}`} label="WB/Login encontrados" />
                 <MetricPill value={preview.scheduleFoundRows} label="Com cronograma" />
                 <MetricPill value={preview.noScheduleRows} label="Sem cronograma" />
-                <p className="text-sm text-muted">WB/Login inexistente ou ausência de cronograma bloqueia a linha. Colaborador desligado/inativo vira alerta para invoice, não erro. A divergência compara horas realizadas contra {DEFAULT_PRODUCTIVE_HOURS}h por dia produtivo.</p>
+                <p className="text-sm text-muted">WB/Login inexistente ou ausência de cronograma bloqueia a linha. Colaborador desligado/inativo vira alerta para invoice, não erro. A divergência compara horas realizadas contra {formatWorkHourValue(DEFAULT_PRODUCTIVE_HOURS)} por dia produtivo.</p>
                 <ImportIssueSummary rows={preview.validation} title="Corrija estas linhas do upload de horas" />
                 {preview.missingWbLogins?.length ? (
                   <div className="rounded-lg border border-red-100 bg-red-50 p-3 text-xs font-semibold text-red-700">
@@ -6063,8 +6068,8 @@ export function WorkHoursPage() {
               <InfoLine label="WB/Login" value={selectedRow.wbLogin} />
               <InfoLine label="Data" value={selectedRow.date} />
               <InfoLine label="Cronograma vinculado" value={selectedRow.plannedHours > 0 ? "Sim" : "Não"} />
-              <InfoLine label="Horas planejadas produtivas" value={`${selectedRow.plannedHours || DEFAULT_PRODUCTIVE_HOURS}h`} />
-              <InfoLine label="Hora realizada atual" value={`${selectedRow.effectiveHours}h`} />
+              <InfoLine label="Horas planejadas produtivas" value={formatWorkHourValue(selectedRow.plannedHours || DEFAULT_PRODUCTIVE_HOURS)} />
+              <InfoLine label="Hora realizada atual" value={formatWorkHourValue(selectedRow.effectiveHours, "0:00")} />
               <InfoLine label="Divergência atual" value={formatHourDifference(selectedRow.differenceMinutes)} />
               <InfoLine label="Diferença do ajuste" value={selectedAdjustmentDifferenceMinutes === null ? "-" : formatHourDifference(selectedAdjustmentDifferenceMinutes)} />
               <FormInput label="Nova hora solicitada" value={adjustmentForm.requestedActualHours} onChange={(value) => setAdjustmentForm({ ...adjustmentForm, requestedActualHours: value })} />
@@ -6094,8 +6099,8 @@ export function WorkHoursPage() {
               <button onClick={() => setShowReview(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
             </div>
             <div className="mb-4 grid gap-3 md:grid-cols-2">
-              <InfoLine label="Hora realizada atual" value={`${selectedRow.adjustmentCurrentHours ?? selectedRow.effectiveHours}h`} />
-              <InfoLine label="Hora solicitada" value={selectedRow.adjustmentRequestedHours === null || selectedRow.adjustmentRequestedHours === undefined ? "-" : `${selectedRow.adjustmentRequestedHours}h`} />
+              <InfoLine label="Hora realizada atual" value={formatWorkHourValue(selectedRow.adjustmentCurrentHours ?? selectedRow.effectiveHours, "0:00")} />
+              <InfoLine label="Hora solicitada" value={selectedRow.adjustmentRequestedHours === null || selectedRow.adjustmentRequestedHours === undefined ? "-" : formatWorkHourValue(selectedRow.adjustmentRequestedHours)} />
               <InfoLine label="Diferença solicitada" value={selectedRow.adjustmentDifferenceMinutes === null || selectedRow.adjustmentDifferenceMinutes === undefined ? "-" : formatHourDifference(selectedRow.adjustmentDifferenceMinutes)} />
               <InfoLine label="Status do ajuste" value={selectedRow.adjustmentStatus} />
               <InfoLine label="Motivo" value={selectedRow.adjustmentReason || "-"} />
@@ -9000,10 +9005,7 @@ function formatTimeFromMinutes(minutes: number) {
 }
 
 function formatDuration(minutes: number) {
-  const hours = Math.floor(minutes / 60);
-  const remainder = minutes % 60;
-  if (!hours) return `${remainder}min`;
-  return remainder ? `${hours}h${String(remainder).padStart(2, "0")}` : `${hours}h`;
+  return formatMinutesToHHMM(minutes);
 }
 
 function summarizeTimeBlocks(blocks: ShiftReportTimeBlock[]) {
@@ -9207,7 +9209,7 @@ export function ShiftReportPage() {
 
   const timeSummary = summarizeTimeBlocks(form.timeBlocks);
   const totalTimeMinutes = Object.values(timeSummary).reduce((sum, minutes) => sum + minutes, 0);
-  const timeCategoryChart = Object.entries(dashboard?.timeByCategory ?? {}).map(([name, minutes]) => ({ name, horas: Math.round((minutes / 60) * 100) / 100 }));
+  const timeCategoryChart = Object.entries(dashboard?.timeByCategory ?? {}).map(([name, minutes]) => ({ name, minutos: minutes }));
   const reportExportUrl = (format?: string) => {
     const params = new URLSearchParams();
     Object.entries(reportFilters).forEach(([key, value]) => {
@@ -9372,9 +9374,9 @@ export function ShiftReportPage() {
                     <BarChart data={timeCategoryChart}>
                       <CartesianGrid stroke="#E8EDF5" vertical={false} />
                       <XAxis dataKey="name" />
-                      <YAxis allowDecimals={false} />
-                      <Tooltip />
-                      <Bar dataKey="horas" fill="#0F766E" radius={[8, 8, 0, 0]} />
+                      <YAxis allowDecimals={false} tickFormatter={(value) => formatDuration(Number(value))} />
+                      <Tooltip formatter={(value) => [formatDuration(Number(value)), "Tempo"]} />
+                      <Bar dataKey="minutos" fill="#0F766E" radius={[8, 8, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>

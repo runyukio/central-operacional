@@ -95,3 +95,64 @@ export function calculateProductiveDifferenceMinutes(actualHours: number, planne
 export function isProductiveDifferenceWithinTolerance(differenceMinutes: number, toleranceMinutes = WORK_HOUR_TOLERANCE_MINUTES) {
   return Math.abs(differenceMinutes) <= toleranceMinutes;
 }
+
+export function parseWorkHoursToMinutes(value: unknown) {
+  if (value instanceof Date && Number.isFinite(value.getTime())) {
+    const minutes = value.getUTCHours() * 60 + value.getUTCMinutes() + Math.round(value.getUTCSeconds() / 60);
+    return minutes >= 0 && minutes <= 24 * 60 ? minutes : null;
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (value < 0 || value > 24) return null;
+    return Math.round(value * 60);
+  }
+
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+
+  const time = raw.match(/^(\d{1,3}):(\d{2})(?::(\d{2}))?$/);
+  if (time) {
+    const hours = Number(time[1]);
+    const minutes = Number(time[2]);
+    const seconds = Number(time[3] ?? 0);
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes) || !Number.isFinite(seconds)) return null;
+    if (hours > 24 || minutes > 59 || seconds > 59) return null;
+    const total = hours * 60 + minutes + Math.round(seconds / 60);
+    return total <= 24 * 60 ? total : null;
+  }
+
+  const decimal = Number(raw.replace(",", "."));
+  if (!Number.isFinite(decimal) || decimal < 0 || decimal > 24) return null;
+  return Math.round(decimal * 60);
+}
+
+export function workHoursFromMinutes(minutes: number) {
+  return Math.round(minutes) / 60;
+}
+
+export function formatMinutesToHHMM(minutes: number, options: { showPositiveSign?: boolean } = {}) {
+  if (!Number.isFinite(minutes)) return "0:00";
+  const rounded = Math.round(minutes);
+  const sign = rounded < 0 ? "-" : options.showPositiveSign && rounded > 0 ? "+" : "";
+  const absolute = Math.abs(rounded);
+  const hours = Math.floor(absolute / 60);
+  const remainingMinutes = absolute % 60;
+  return `${sign}${hours}:${String(remainingMinutes).padStart(2, "0")}`;
+}
+
+export function formatSignedMinutesToHHMM(minutes: number | null | undefined) {
+  if (minutes === null || minutes === undefined) return "";
+  return formatMinutesToHHMM(minutes, { showPositiveSign: true });
+}
+
+export function formatWorkHours(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return formatMinutesToHHMM(Math.round(value * 60));
+  }
+  const minutes = parseWorkHoursToMinutes(value);
+  return minutes === null ? "" : formatMinutesToHHMM(minutes);
+}
+
+export function normalizeWorkHoursInput(value: unknown) {
+  return formatWorkHours(value);
+}
