@@ -751,8 +751,9 @@ function parseRequired(value: unknown) {
   if (!hasExcelValue(value)) return null;
   if (typeof value === "number") return Number.isInteger(value) && value >= 0 ? value : null;
   const raw = String(value ?? "").trim();
-  if (!/^\d+$/.test(raw)) return null;
-  return Number(raw);
+  if (!/^\d+(?:[,.]0+)?$/.test(raw)) return null;
+  const parsed = Number(raw.replace(",", "."));
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function resolvePeriod(query: StaffCoverageQuery) {

@@ -12,7 +12,11 @@ export async function POST(request: Request) {
   }
 
   const workbook = XLSX.read(await file.arrayBuffer(), { cellDates: true });
-  const sheetName = workbook.SheetNames.find((name) => /requerido|staff|cobertura/i.test(name)) ?? workbook.SheetNames[0];
+  const sheetName = workbook.SheetNames.length === 1
+    ? workbook.SheetNames[0]
+    : workbook.SheetNames.find((name) => /^(requerido|staff|staff e cobertura)$/i.test(name.trim()))
+      ?? workbook.SheetNames.find((name) => /requerido|staff|cobertura/i.test(name))
+      ?? workbook.SheetNames[0];
   const sheet = sheetName ? workbook.Sheets[sheetName] : null;
   if (!sheet) {
     return NextResponse.json({ success: false, error: "Planilha de requerido não encontrada.", message: "Planilha de requerido não encontrada.", rows: [] }, { status: 400 });

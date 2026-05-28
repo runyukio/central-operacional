@@ -17,6 +17,14 @@ export function normalizeExcelDate(value: unknown) {
   }
 
   const raw = String(value ?? "").trim();
+  if (/^\d+(?:[,.]\d+)?$/.test(raw)) {
+    const serial = Number(raw.replace(",", "."));
+    if (Number.isFinite(serial) && serial > 0 && serial < 100000) {
+      const excelEpoch = Date.UTC(1899, 11, 30);
+      return dateOnly(new Date(excelEpoch + serial * 24 * 60 * 60 * 1000));
+    }
+  }
+
   const br = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   if (br) return buildUtcDate(Number(br[3]), Number(br[2]), Number(br[1]));
 
@@ -81,4 +89,3 @@ function timeFromExcelNumber(value: number) {
 function formatTime(hour: number, minute: number) {
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
-
