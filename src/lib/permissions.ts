@@ -94,6 +94,20 @@ export function canAccessAdvanceModule(user: PermissionUser) {
   return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM"].includes(role);
 }
 
+export function canAccessStaffCoverage(user: PermissionUser) {
+  const role = normalizeRole(user.role);
+  return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(role);
+}
+
+export function canManageStaffCoverageRequirements(user: PermissionUser) {
+  const role = normalizeRole(user.role);
+  return isActiveUser(user) && ["ADMIN", "WFM"].includes(role);
+}
+
+export function canExportStaffCoverage(user: PermissionUser) {
+  return canAccessStaffCoverage(user);
+}
+
 export function canAccessAnonymousFeedback(user: PermissionUser) {
   return canViewAnonymousFeedbackAdmin(user) || canSubmitAnonymousFeedback(user);
 }
