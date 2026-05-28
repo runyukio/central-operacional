@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { AuditAction, CoverageRisk, Prisma, type ScheduleStatus } from "@prisma/client";
 
 import { createPermissionError } from "@/lib/api-errors";
@@ -99,7 +100,38 @@ type StaffCoverageSchedule = Prisma.ScheduleGetPayload<{
   };
 }> & { coverageLobId: string; coverageLobName: string };
 
-type RequirementRecord = Prisma.StaffCoverageGetPayload<{ include: { lob: true; shift: true } }>;
+type RequirementRecord = {
+  id: string;
+  date: Date;
+  lobId: string;
+  shiftId: string;
+  plannedStaff: number;
+  requiredStaff: number;
+  coveragePercent: number;
+  gap: number;
+  risk: CoverageRisk;
+  observation: string | null;
+  lob: { id: string; name: string };
+  shift: { id: string; name: string };
+};
+
+type StaffCoverageImportWriteRow = {
+  id: string;
+  date: Date;
+  dateKey: string;
+  lobId: string;
+  lob: string;
+  shiftId: string;
+  shift: string;
+  required: number;
+  available: number;
+  gap: number;
+  coveragePercent: number;
+  risk: CoverageRisk;
+  observation: string;
+};
+
+let staffCoverageExtendedColumnsCache: boolean | null = null;
 
 export type StaffCoverageQuery = {
   startDate?: string;
@@ -140,7 +172,8 @@ export async function listStaffCoverage(actor: Actor, query: StaffCoverageQuery 
     if (!canAccessStaffCoverage(permissionUser(user))) return createPermissionError("Você não tem permissão para visualizar Staff e Cobertura.");
 
     const period = resolvePeriod(query);
-    const requirements = await listRequirements(period, query);
+    const hasExtendedColumns = await hasStaffCoverageExtendedColumns();
+    const requirements = await listRequirements(period, query, hasExtendedColumns);
     const schedules = await listCoverageSchedules(period, query);
     const computed = buildCoverageRows(requirements, schedules, query);
 
@@ -312,82 +345,42 @@ export async function commitStaffCoverageImport(actor: Actor, rows: StaffCoverag
     const period = rowsPeriod(validRows);
     const schedules = await listCoverageSchedules(period, {});
     const availability = availabilityMap(schedules);
-    let createdRows = 0;
-    let updatedRows = 0;
-
-    await prisma.$transaction(async (tx) => {
-      for (const row of validRows) {
-        const date = parseDate(row.date)!;
-        const available = availability.get(`${row.date}|${row.lobId}|${row.shift}`)?.count ?? 0;
-        const metrics = coverageMetrics(available, row.required ?? 0);
-        const before = await tx.staffCoverage.findUnique({
-          where: { date_lobId_shiftId: { date, lobId: row.lobId!, shiftId: row.shiftId! } },
-          select: { id: true, requiredStaff: true, plannedStaff: true, gap: true, observation: true }
-        });
-        const saved = await tx.staffCoverage.upsert({
-          where: { date_lobId_shiftId: { date, lobId: row.lobId!, shiftId: row.shiftId! } },
-          create: {
-            date,
-            lobId: row.lobId!,
-            shiftId: row.shiftId!,
-            requiredStaff: row.required ?? 0,
-            plannedStaff: available,
-            coveragePercent: metrics.coveragePercent,
-            gap: metrics.gap,
-            risk: metrics.risk,
-            observation: row.observation || null,
-            createdById: user.id,
-            updatedById: user.id
-          },
-          update: {
-            requiredStaff: row.required ?? 0,
-            plannedStaff: available,
-            coveragePercent: metrics.coveragePercent,
-            gap: metrics.gap,
-            risk: metrics.risk,
-            observation: row.observation || null,
-            updatedById: user.id
-          }
-        });
-        if (before) updatedRows += 1;
-        else createdRows += 1;
-        await tx.auditLog.create({
-          data: {
-            actorId: user.id,
-            action: before ? AuditAction.EDICAO : AuditAction.CRIACAO,
-            entity: "StaffCoverageRequirement",
-            entityId: saved.id,
-            reason: `Importação de requerido de Staff e Cobertura${fileName ? ` (${fileName})` : ""}`,
-            previousValue: serialize(before),
-            newValue: serialize({
-              date: row.date,
-              lob: row.lob,
-              shift: row.shift,
-              requiredStaff: row.required,
-              plannedStaff: available,
-              gap: metrics.gap,
-              observation: row.observation
-            })
-          }
-        });
-      }
-
-      await tx.auditLog.create({
-        data: {
-          actorId: user.id,
-          action: AuditAction.IMPORTACAO,
-          entity: "StaffCoverageRequirement",
-          entityId: `staff-coverage-import-${Date.now()}`,
-          reason: `Importação de requerido semanal: ${createdRows} criado(s), ${updatedRows} atualizado(s)`,
-          newValue: { fileName, totalRows: rows.length, importedRows: validRows.length, createdRows, updatedRows }
-        }
-      });
+    const writeRows = validRows.map((row) => {
+      const date = parseDate(row.date)!;
+      const available = availability.get(`${row.date}|${row.lobId}|${row.shift}`)?.count ?? 0;
+      const metrics = coverageMetrics(available, row.required ?? 0);
+      return {
+        id: randomUUID(),
+        date,
+        dateKey: row.date,
+        lobId: row.lobId!,
+        lob: row.lob,
+        shiftId: row.shiftId!,
+        shift: row.shift,
+        required: row.required ?? 0,
+        available,
+        gap: metrics.gap,
+        coveragePercent: metrics.coveragePercent,
+        risk: metrics.risk,
+        observation: row.observation
+      } satisfies StaffCoverageImportWriteRow;
     });
+    const existing = await prisma.staffCoverage.findMany({
+      where: { OR: writeRows.map((row) => ({ date: row.date, lobId: row.lobId, shiftId: row.shiftId })) },
+      select: { id: true, date: true, lobId: true, shiftId: true }
+    });
+    const existingKeys = new Set(existing.map((row) => `${formatDateKey(row.date)}|${row.lobId}|${row.shiftId}`));
+    const createdRows = writeRows.filter((row) => !existingKeys.has(`${row.dateKey}|${row.lobId}|${row.shiftId}`)).length;
+    const updatedRows = writeRows.length - createdRows;
+    const hasExtendedColumns = await hasStaffCoverageExtendedColumns();
+
+    await upsertStaffCoverageRows(writeRows, user.id, hasExtendedColumns);
+    await auditStaffCoverageImport(user.id, writeRows, existingKeys, { fileName, totalRows: rows.length, createdRows, updatedRows });
 
     return { success: true, createdRows, updatedRows, importedRows: validRows.length };
   } catch (error) {
     recordErrorLog({ userEmail: actor.email, code: "STAFF_COVERAGE_COMMIT_ERROR", message: errorMessage(error), action: "STAFF_COVERAGE_COMMIT", severity: "ERROR" });
-    return { error: "Não foi possível importar o requerido de Staff e Cobertura.", message: "Não foi possível importar o requerido de Staff e Cobertura.", status: 500 };
+    return { error: staffCoverageCommitUserMessage(error), message: staffCoverageCommitUserMessage(error), status: 500 };
   }
 }
 
@@ -444,6 +437,111 @@ export async function exportStaffCoverageXlsxData(actor: Actor, query: StaffCove
       }
     ]
   };
+}
+
+async function upsertStaffCoverageRows(rows: StaffCoverageImportWriteRow[], userId: string, hasExtendedColumns: boolean) {
+  for (const chunk of chunkArray(rows, 100)) {
+    if (hasExtendedColumns) {
+      await prisma.$executeRaw(Prisma.sql`
+        INSERT INTO "StaffCoverage" (
+          "id", "date", "lobId", "shiftId", "plannedStaff", "requiredStaff", "coveragePercent", "gap", "risk",
+          "observation", "createdById", "updatedById", "createdAt", "updatedAt"
+        )
+        VALUES ${Prisma.join(chunk.map((row) => Prisma.sql`
+          (
+            ${row.id},
+            ${row.date},
+            ${row.lobId},
+            ${row.shiftId},
+            ${row.available},
+            ${row.required},
+            ${row.coveragePercent},
+            ${row.gap},
+            ${row.risk}::"CoverageRisk",
+            ${row.observation || null},
+            ${userId},
+            ${userId},
+            NOW(),
+            NOW()
+          )
+        `))}
+        ON CONFLICT ("date", "lobId", "shiftId") DO UPDATE SET
+          "plannedStaff" = EXCLUDED."plannedStaff",
+          "requiredStaff" = EXCLUDED."requiredStaff",
+          "coveragePercent" = EXCLUDED."coveragePercent",
+          "gap" = EXCLUDED."gap",
+          "risk" = EXCLUDED."risk",
+          "observation" = EXCLUDED."observation",
+          "updatedById" = EXCLUDED."updatedById",
+          "updatedAt" = NOW()
+      `);
+      continue;
+    }
+
+    await prisma.$executeRaw(Prisma.sql`
+      INSERT INTO "StaffCoverage" (
+        "id", "date", "lobId", "shiftId", "plannedStaff", "requiredStaff", "coveragePercent", "gap", "risk"
+      )
+      VALUES ${Prisma.join(chunk.map((row) => Prisma.sql`
+        (
+          ${row.id},
+          ${row.date},
+          ${row.lobId},
+          ${row.shiftId},
+          ${row.available},
+          ${row.required},
+          ${row.coveragePercent},
+          ${row.gap},
+          ${row.risk}::"CoverageRisk"
+        )
+      `))}
+      ON CONFLICT ("date", "lobId", "shiftId") DO UPDATE SET
+        "plannedStaff" = EXCLUDED."plannedStaff",
+        "requiredStaff" = EXCLUDED."requiredStaff",
+        "coveragePercent" = EXCLUDED."coveragePercent",
+        "gap" = EXCLUDED."gap",
+        "risk" = EXCLUDED."risk"
+    `);
+  }
+}
+
+async function auditStaffCoverageImport(userId: string, rows: StaffCoverageImportWriteRow[], existingKeys: Set<string>, summary: { fileName?: string; totalRows: number; createdRows: number; updatedRows: number }) {
+  try {
+    await prisma.auditLog.createMany({
+      data: rows.map((row) => {
+        const existing = existingKeys.has(`${row.dateKey}|${row.lobId}|${row.shiftId}`);
+        return {
+          actorId: userId,
+          action: existing ? AuditAction.EDICAO : AuditAction.CRIACAO,
+          entity: "StaffCoverageRequirement",
+          entityId: `${row.dateKey}-${row.lobId}-${row.shiftId}`,
+          reason: `Importação de requerido de Staff e Cobertura${summary.fileName ? ` (${summary.fileName})` : ""}`,
+          previousValue: {},
+          newValue: serialize({
+            date: row.dateKey,
+            lob: row.lob,
+            shift: row.shift,
+            requiredStaff: row.required,
+            plannedStaff: row.available,
+            gap: row.gap,
+            observation: row.observation
+          })
+        };
+      })
+    });
+    await prisma.auditLog.create({
+      data: {
+        actorId: userId,
+        action: AuditAction.IMPORTACAO,
+        entity: "StaffCoverageRequirement",
+        entityId: `staff-coverage-import-${Date.now()}`,
+        reason: `Importação de requerido semanal: ${summary.createdRows} criado(s), ${summary.updatedRows} atualizado(s)`,
+        newValue: { fileName: summary.fileName, totalRows: summary.totalRows, importedRows: rows.length, createdRows: summary.createdRows, updatedRows: summary.updatedRows }
+      }
+    });
+  } catch (error) {
+    console.error("[staff-coverage] Falha ao gerar AuditLog da importação", error);
+  }
 }
 
 function buildCoverageRows(requirements: RequirementRecord[], schedules: StaffCoverageSchedule[], query: StaffCoverageQuery) {
@@ -559,14 +657,39 @@ function availabilityMap(schedules: StaffCoverageSchedule[]) {
   return map;
 }
 
-async function listRequirements(period: { startDate: Date; endDate: Date }, query: StaffCoverageQuery) {
+async function listRequirements(period: { startDate: Date; endDate: Date }, query: StaffCoverageQuery, hasExtendedColumns: boolean) {
   const where: Prisma.StaffCoverageWhereInput = {
     date: { gte: period.startDate, lte: period.endDate }
   };
   if (query.lob && query.lob !== "Todos") where.lob = { name: { equals: query.lob, mode: "insensitive" } };
   const shift = normalizeProductiveShift(query.shift);
   if (shift) where.shift = { OR: [{ name: { equals: shift, mode: "insensitive" } }, { name: { startsWith: shift, mode: "insensitive" } }] };
-  return prisma.staffCoverage.findMany({ where, include: { lob: true, shift: true }, orderBy: [{ date: "asc" }, { lob: { name: "asc" } }, { shift: { name: "asc" } }] });
+  const baseSelect = {
+    id: true,
+    date: true,
+    lobId: true,
+    shiftId: true,
+    plannedStaff: true,
+    requiredStaff: true,
+    coveragePercent: true,
+    gap: true,
+    risk: true,
+    lob: { select: { id: true, name: true } },
+    shift: { select: { id: true, name: true } }
+  } satisfies Prisma.StaffCoverageSelect;
+  if (hasExtendedColumns) {
+    return prisma.staffCoverage.findMany({
+      where,
+      select: { ...baseSelect, observation: true },
+      orderBy: [{ date: "asc" }, { lob: { name: "asc" } }, { shift: { name: "asc" } }]
+    }) as Promise<RequirementRecord[]>;
+  }
+  const rows = await prisma.staffCoverage.findMany({
+    where,
+    select: baseSelect,
+    orderBy: [{ date: "asc" }, { lob: { name: "asc" } }, { shift: { name: "asc" } }]
+  });
+  return rows.map((row) => ({ ...row, observation: null }));
 }
 
 async function listCoverageSchedules(period: { startDate: Date; endDate: Date }, query: StaffCoverageQuery) {
@@ -756,6 +879,23 @@ function parseRequired(value: unknown) {
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
+async function hasStaffCoverageExtendedColumns() {
+  if (staffCoverageExtendedColumnsCache !== null) return staffCoverageExtendedColumnsCache;
+  try {
+    const result = await prisma.$queryRaw<Array<{ count: number | bigint }>>(Prisma.sql`
+      SELECT COUNT(*)::int AS count
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'StaffCoverage'
+        AND column_name IN ('observation', 'createdById', 'updatedById', 'createdAt', 'updatedAt')
+    `);
+    staffCoverageExtendedColumnsCache = Number(result[0]?.count ?? 0) === 5;
+  } catch {
+    staffCoverageExtendedColumnsCache = false;
+  }
+  return staffCoverageExtendedColumnsCache;
+}
+
 function resolvePeriod(query: StaffCoverageQuery) {
   const today = new Date();
   const startDate = parseDate(query.startDate ?? "") ?? new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
@@ -825,8 +965,25 @@ function serialize(value: unknown) {
   return value ? JSON.parse(JSON.stringify(value)) : {};
 }
 
+function chunkArray<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
+  return chunks;
+}
+
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function staffCoverageCommitUserMessage(error: unknown) {
+  const message = errorMessage(error);
+  if (/transaction already closed|timeout|P2028/i.test(message)) {
+    return "A importação demorou mais do que o banco permitiu. O processamento em lote foi ajustado; tente importar novamente.";
+  }
+  if (/column .*does not exist|createdById|updatedById|observation|createdAt|updatedAt/i.test(message)) {
+    return "A migration de Staff e Cobertura ainda não foi aplicada no banco online. Rode npx prisma migrate deploy e tente novamente.";
+  }
+  return "Não foi possível importar o requerido de Staff e Cobertura.";
 }
 
 function emptyPreviewSummary() {
