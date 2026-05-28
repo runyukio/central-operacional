@@ -738,6 +738,10 @@ function emptyOperationalSchedules(period = resolvePeriod({}), pagination = { pa
 }
 
 export async function editOperationalSchedule(actor: Actor, input: ScheduleEditInput) {
+  input = {
+    ...input,
+    absenceReason: normalizeAttendanceReason(input.absenceReason) ?? ""
+  };
   const validationError = validateScheduleEdit(input);
   if (validationError) return { error: validationError };
 
@@ -1556,7 +1560,7 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
     const statusFilter = query.status && query.status !== "Todos" ? uiToScheduleStatus[query.status] : undefined;
     const roleTitleFilter = query.roleTitle?.trim();
     const skillFilter = employeeSkillFilter(query.skill);
-    const reasonFilter = query.reason?.trim();
+    const reasonFilter = normalizeAttendanceReason(query.reason?.trim());
     const justificationFilter = query.justification?.trim().toLowerCase();
     const detailType = query.detailType?.trim();
     const includeJustified = query.includeJustified === true || query.includeJustified === "true";
@@ -1894,7 +1898,7 @@ function formatScheduleJustification(status: ScheduleStatus | AttendanceStatus |
     id: latest.id,
     status: scheduleToUiStatus[String(latest.status)] ?? String(latest.status),
     justificationStatus: latest.isJustified ? "Justificado" : "Justificativa pendente",
-    absenceReason: latest.absenceReason ?? "Sem justificativa",
+    absenceReason: attendanceReasonLabel(latest),
     reasonCategory: latest.reasonCategory ?? undefined,
     supervisorJustification: latest.supervisorJustification ?? undefined,
     isJustified: latest.isJustified,
@@ -1908,8 +1912,8 @@ function formatScheduleJustification(status: ScheduleStatus | AttendanceStatus |
     history: latest.histories?.map((history) => ({
       previousStatus: history.previousStatus ? scheduleToUiStatus[String(history.previousStatus)] ?? String(history.previousStatus) : undefined,
       newStatus: scheduleToUiStatus[String(history.newStatus)] ?? String(history.newStatus),
-      previousReason: history.previousReason ?? undefined,
-      newReason: history.newReason ?? undefined,
+      previousReason: normalizeJustificationReasonLabel(history.previousReason) ?? undefined,
+      newReason: normalizeJustificationReasonLabel(history.newReason) ?? undefined,
       comment: history.comment ?? undefined,
       changedBy: history.changedBy?.name ?? "Sistema",
       createdAt: formatDateTime(history.createdAt)
@@ -1946,7 +1950,7 @@ function isPendingJustificationForSchedule(status: ScheduleStatus | AttendanceSt
 
 function attendanceReasonLabel(record?: { absenceReason: string | null } | null) {
   const reason = record?.absenceReason?.trim();
-  return reason && reason !== "Sem justificativa" ? reason : "Sem justificativa";
+  return normalizeJustificationReasonLabel(reason) ?? "Sem justificativa";
 }
 
 function attendanceReasonForSchedule(status: ScheduleStatus | AttendanceStatus | string, record?: { isJustified: boolean; absenceReason: string | null } | null) {
@@ -2120,7 +2124,18 @@ function normalizeAttendanceReason(value?: string | null) {
   if (!reason) return undefined;
   const key = normalizeImportKey(reason);
   if (key === "NAO_INFORMADO" || key === "NOT_INFORMED") return "Não informado";
+  if (isDeprecatedAtrasoReasonKey(key)) return "Outros";
   return reason;
+}
+
+function normalizeJustificationReasonLabel(value?: string | null) {
+  const reason = value?.trim();
+  if (!reason || reason === "Sem justificativa") return undefined;
+  return normalizeAttendanceReason(reason) ?? undefined;
+}
+
+function isDeprecatedAtrasoReasonKey(key: string) {
+  return ["ATRASO", "ATRASADO", "ATRASADA", "LATE"].includes(key);
 }
 
 function requiresReason(status: string) {
