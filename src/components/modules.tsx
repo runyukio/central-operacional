@@ -116,6 +116,7 @@ const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Nesting", "Venda 
 const employeeOperationalStatusOptions = ["Ativo", "Nesting", "Inativo", "Pendente de cadastro", "Afastado", "Desligado", "Em treinamento", "Suspenso"];
 const absenceReasonOptions = ["Não informado", "Ausente", "Problema de saúde", "Emergência familiar", "Problema técnico", "Falta de equipamento", "Problema de internet", "Saída antecipada", "Afastamento", "Erro de cronograma", "Outros"];
 const timeBlockCategoryOptions = ["Administrativo", "Desenvolvimento", "Acompanhamento de operação", "Feedback", "Reunião", "Treinamento", "Suporte ao time", "Análise de indicadores", "Escalonamento / Ocorrência", "Pausa", "Outros"];
+const commandAbsSupervisorColumns = "minmax(220px,1.8fr) minmax(160px,1.2fr) minmax(76px,.55fr) minmax(92px,.65fr) minmax(78px,.55fr) minmax(94px,.7fr) minmax(112px,.75fr)";
 const scheduleShiftTimes: Record<string, { startsAt: string; endsAt: string }> = {
   Manhã: { startsAt: "08:00", endsAt: "14:00" },
   Tarde: { startsAt: "14:00", endsAt: "20:00" },
@@ -2014,24 +2015,28 @@ export function OperationalCommandCenter() {
           <Panel title="ABS por Supervisor">
             {commandAbsBySupervisor.length ? (
               <div className="max-h-[320px] overflow-auto pr-1">
-                <div className="grid min-w-[680px] grid-cols-[minmax(150px,1.6fr)_minmax(96px,1fr)_58px_64px_48px_58px_70px] gap-2 border-b border-border px-1.5 pb-1.5 text-[9.5px] font-black uppercase tracking-wide text-muted">
-                  <span>Supervisor</span>
-                  <span>ABS</span>
-                  <span className="text-center">ABS %</span>
-                  <span className="text-center">Escaladas</span>
-                  <span className="text-center">Faltas</span>
-                  <span className="text-center">Sem just.</span>
-                  <span className="text-center">Justificadas</span>
+                <div
+                  className="grid min-w-[900px] gap-3 border-b border-border px-2 pb-2 text-[10.5px] font-black uppercase tracking-wide text-muted"
+                  style={{ gridTemplateColumns: commandAbsSupervisorColumns }}
+                >
+                  <span className="whitespace-nowrap">Supervisor</span>
+                  <span className="whitespace-nowrap">ABS</span>
+                  <span className="whitespace-nowrap text-center">ABS %</span>
+                  <span className="whitespace-nowrap text-center">Escaladas</span>
+                  <span className="whitespace-nowrap text-center">Faltas</span>
+                  <span className="whitespace-nowrap text-center">Sem just.</span>
+                  <span className="whitespace-nowrap text-center">Justificadas</span>
                 </div>
                 {commandAbsBySupervisor.map((item) => (
                   <button
                     key={item.supervisor}
                     type="button"
                     onClick={() => void openAbsSupervisorPeople(item.supervisor)}
-                    className="grid min-w-[680px] w-full grid-cols-[minmax(150px,1.6fr)_minmax(96px,1fr)_58px_64px_48px_58px_70px] items-center gap-2 border-b border-border/70 px-1.5 py-2 text-left transition last:border-b-0 hover:bg-blue-50/55"
+                    className="grid min-w-[900px] w-full items-center gap-3 border-b border-border/70 px-2 py-2 text-left transition last:border-b-0 hover:bg-blue-50/55"
+                    style={{ gridTemplateColumns: commandAbsSupervisorColumns }}
                   >
                     <span className="min-w-0 truncate text-[12.5px] font-extrabold text-navy-950" title={item.supervisor}>{item.supervisor}</span>
-                    <div className="h-2 rounded-full bg-slate-100">
+                    <div className="min-w-0 h-2 rounded-full bg-slate-100">
                       <div className={cn("h-2 rounded-full", absBarColor(item.absRate))} style={{ width: absBarWidth(item.absRate) }} />
                     </div>
                     <span className={cn("text-center text-[11.5px] font-black", absTextColor(item.absRate))}>{item.absRate}%</span>
