@@ -816,7 +816,9 @@ function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: 
     shift: cleanShiftName(employee.shift.name) || "Sem turno",
     shiftId: employee.shiftId,
     schedule: employee.scheduleType,
-    status: employee.operationalStatus,
+    status: displayEmployeeStatus(employee.operationalStatus),
+    employeeStatus: displayEmployeeStatus(employee.operationalStatus),
+    employeeStatusRaw: employee.operationalStatus,
     quality: null,
     productivity: null,
     equipment: employee.equipments.length,
@@ -833,7 +835,8 @@ function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: 
     preferredSchedule: canViewPeopleProfile ? employee.preferredSchedule ?? "" : "",
     role: employee.roleTitle,
     email: employee.user?.email,
-    userStatus: employee.user?.status ?? "",
+    userStatus: displayUserStatus(employee.user?.status),
+    userStatusRaw: employee.user?.status ?? "",
     userId: employee.userId,
     systemRole: employee.user?.role?.name,
     isAgent: isAgentJobTitle(employee.roleTitle),
@@ -893,7 +896,9 @@ function mapLegacyEmployee(employee: LegacyEmployeeRow, role: string) {
     shift: cleanShiftName(employee.shift) || "Sem turno",
     shiftId: employee.shiftId,
     schedule: employee.scheduleType,
-    status: employee.operationalStatus,
+    status: displayEmployeeStatus(employee.operationalStatus),
+    employeeStatus: displayEmployeeStatus(employee.operationalStatus),
+    employeeStatusRaw: employee.operationalStatus,
     quality: null,
     productivity: null,
     equipment: 0,
@@ -911,7 +916,8 @@ function mapLegacyEmployee(employee: LegacyEmployeeRow, role: string) {
     role: employee.roleTitle,
     email: employee.email ?? undefined,
     userId: employee.userId ?? undefined,
-    userStatus: employee.userStatus ?? "",
+    userStatus: displayUserStatus(employee.userStatus),
+    userStatusRaw: employee.userStatus ?? "",
     systemRole: employee.systemRole ?? undefined,
     isAgent: isAgentJobTitle(employee.roleTitle),
     canViewSensitive,
@@ -951,7 +957,9 @@ function mapEmployeeSummary(employee: EmployeeSummaryRow, role: string) {
     shift: cleanShiftName(employee.shift.name) || "Sem turno",
     shiftId: employee.shiftId,
     schedule: employee.scheduleType,
-    status: employee.operationalStatus,
+    status: displayEmployeeStatus(employee.operationalStatus),
+    employeeStatus: displayEmployeeStatus(employee.operationalStatus),
+    employeeStatusRaw: employee.operationalStatus,
     quality: null,
     productivity: null,
     equipment: employee._count.equipments,
@@ -968,7 +976,8 @@ function mapEmployeeSummary(employee: EmployeeSummaryRow, role: string) {
     preferredSchedule: "",
     role: employee.roleTitle,
     email: employee.user?.email,
-    userStatus: employee.user?.status ?? "",
+    userStatus: displayUserStatus(employee.user?.status),
+    userStatusRaw: employee.user?.status ?? "",
     userId: employee.userId ?? undefined,
     systemRole: employee.user?.role.name,
     isAgent: isAgentJobTitle(employee.roleTitle),
@@ -1004,7 +1013,7 @@ function employeeExportColumns(role: string) {
     col("skill", (employee) => employee.skill),
     col("wave", (employee) => employee.wave),
     col("turno", (employee) => employee.shift),
-    col("status_colaborador", (employee) => employee.status),
+    col("status_colaborador", (employee) => employee.employeeStatus ?? displayEmployeeStatus(employee.status)),
     col("status_usuario", (employee) => employee.userStatus),
     col("preferencia_horario", (employee) => employee.preferredSchedule),
     col("cronograma_vinculado", (employee) => employee.schedule ? "Sim" : "Não")
@@ -1101,6 +1110,77 @@ function paginatedEmployees<T>(data: T[], total: number, page: number, limit: nu
     limit,
     totalPages: Math.max(1, Math.ceil(total / limit))
   };
+}
+
+const employeeStatusDisplayAliases: Record<string, string> = {
+  ACTIVE: "Ativo",
+  ATIVO: "Ativo",
+  ATIVA: "Ativo",
+  APPROVED: "Ativo",
+  APROVADO: "Ativo",
+  APROVADA: "Ativo",
+  ONLINE: "Ativo",
+  EM_ATENDIMENTO: "Ativo",
+  ESCALADO: "Ativo",
+  PRESENTE: "Ativo",
+  FALTA: "Ativo",
+  AUSENTE: "Ativo",
+  FOLGA: "Ativo",
+  FERIAS: "Ativo",
+  ATRASO: "Ativo",
+  SAIDA_ANTECIPADA: "Ativo",
+  TROCA_APROVADA: "Ativo",
+  VENDA_FOLGA_APROVADA: "Ativo",
+  VENDA_DE_FOLGA_APROVADA: "Ativo",
+  FOLGA_APROVADA: "Ativo",
+  SEM_ESCALA: "Ativo",
+  SEM_CRONOGRAMA: "Ativo",
+  ERRO_ESCALA: "Ativo",
+  ERRO_DE_ESCALA: "Ativo",
+  ERRO_CRONOGRAMA: "Ativo",
+  ERRO_DE_CRONOGRAMA: "Ativo",
+  DESCOBERTO: "Ativo",
+  CONFLITO: "Ativo",
+  FERIADO: "Ativo",
+  INACTIVE: "Inativo",
+  INATIVO: "Inativo",
+  INATIVA: "Inativo",
+  OFFLINE: "Inativo",
+  DESATIVADO: "Desativado",
+  DESATIVADA: "Desativado",
+  DESLIGADO: "Desligado",
+  DESLIGADA: "Desligado",
+  BLOCKED: "Inativo",
+  BLOQUEADO: "Inativo",
+  SUSPENSO: "Inativo",
+  SUSPENSA: "Inativo",
+  EM_TREINAMENTO: "Em treinamento",
+  TREINAMENTO: "Em treinamento",
+  NESTING: "Nesting",
+  AFASTADO: "Afastado",
+  PENDING: "Pendente de cadastro",
+  PENDENTE: "Pendente de cadastro",
+  PENDENTE_CADASTRO: "Pendente de cadastro",
+  PENDENTE_DE_CADASTRO: "Pendente de cadastro",
+  PENDENTE_APROVACAO: "Pendente de cadastro",
+  PENDENTE_APROVAÇÃO: "Pendente de cadastro"
+};
+
+function displayEmployeeStatus(status: unknown) {
+  const raw = clean(status);
+  if (!raw) return "";
+  const token = normalizeStatusToken(raw);
+  return employeeStatusDisplayAliases[token] ?? raw;
+}
+
+function displayUserStatus(status: unknown) {
+  const token = normalizeStatusToken(status);
+  const labels: Record<string, string> = {
+    ACTIVE: "Ativo",
+    INACTIVE: "Inativo",
+    BLOCKED: "Bloqueado"
+  };
+  return labels[token] ?? clean(status);
 }
 
 const activeEmployeeStatusTokens = new Set([

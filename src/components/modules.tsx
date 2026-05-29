@@ -394,7 +394,38 @@ type MonthlyAdvanceListResponse = {
 };
 
 function employeeMapStatusLabel(status: string) {
-  return ["Online", "Em Atendimento", "Em atendimento", "Offline"].includes(status) ? "Ativo" : status;
+  const key = String(status ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  const labels: Record<string, string> = {
+    ONLINE: "Ativo",
+    EM_ATENDIMENTO: "Ativo",
+    OFFLINE: "Inativo",
+    ESCALADO: "Ativo",
+    PRESENTE: "Ativo",
+    FALTA: "Ativo",
+    FOLGA: "Ativo",
+    FERIAS: "Ativo",
+    ATRASO: "Ativo",
+    SAIDA_ANTECIPADA: "Ativo",
+    TROCA_APROVADA: "Ativo",
+    VENDA_FOLGA_APROVADA: "Ativo",
+    FOLGA_APROVADA: "Ativo",
+    SEM_ESCALA: "Ativo",
+    SEM_CRONOGRAMA: "Ativo",
+    ERRO_ESCALA: "Ativo",
+    ERRO_DE_CRONOGRAMA: "Ativo",
+    TREINAMENTO: "Em treinamento",
+    EM_TREINAMENTO: "Em treinamento",
+    ACTIVE: "Ativo",
+    INACTIVE: "Inativo",
+    BLOCKED: "Inativo"
+  };
+  return labels[key] ?? status;
 }
 
 type MonthlyAdvanceImportPreview = {
