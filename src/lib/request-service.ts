@@ -1317,9 +1317,10 @@ function resolveRequestTransition(actor: Actor, user: ActiveUser, request: Prism
   if (target === "CONCLUIDO") {
     if (role === "SUPERVISOR") return { error: "Supervisor pode aprovar apenas a primeira etapa da solicitação." };
     if (current !== "APROVADO" || !isFinalApprover) return "FORBIDDEN";
+    const payload = (request.payload ?? {}) as Record<string, unknown>;
     return {
       nextStatus: "CONCLUIDO",
-      applySchedule: false,
+      applySchedule: isDayOffRequest(request) && !payload.scheduleAppliedAt && payload.scheduleApplicationStatus !== "APPLIED",
       historyAction: "Conclusão administrativa",
       auditAction: "EDICAO",
       requesterTitle: "Solicitação concluída",
@@ -1662,7 +1663,7 @@ async function applyDayOffRequestToSchedule(tx: Prisma.TransactionClient, reques
   const kind = normalizeDayOffKind(request);
   if (!kind) return { updated: false, message: "" };
   const payload = (request.payload ?? {}) as Record<string, unknown>;
-  if (payload.scheduleAppliedAt) throw new DomainError("Esta solicitação já teve o cronograma aplicado.");
+  if (payload.scheduleAppliedAt || payload.scheduleApplicationStatus === "APPLIED") throw new DomainError("Esta solicitação já foi aplicada ao Cronograma.");
   if (!request.employeeId) throw new DomainError("Solicitação sem colaborador vinculado para aplicar cronograma.");
 
   const employee = await tx.employeeProfile.findUnique({ where: { id: request.employeeId }, include: { shift: true } });
@@ -1680,54 +1681,33 @@ async function applySwapSchedule(tx: Prisma.TransactionClient, request: PrismaRe
 
   const current = await tx.schedule.findUnique({ where: { employeeId_date: { employeeId: employee.id, date: currentDate } }, include: { shift: true } });
   const desired = await tx.schedule.findUnique({ where: { employeeId_date: { employeeId: employee.id, date: desiredDate } }, include: { shift: true } });
-  if (!current || !desired) throw new DomainError("Cronograma não encontrado para as duas datas da troca.");
+  if (!current) throw new DomainError("Não foi possível aplicar a troca: data atual da folga sem cronograma.");
+  if (!desired) throw new DomainError("Não foi possível aplicar a troca: nova data desejada sem cronograma.");
   if (current.status !== "FOLGA") throw new DomainError("A data atual não está como folga no cronograma.");
   if (desired.status === "FOLGA") throw new DomainError("A nova data desejada já está como folga.");
 
   const before = { current: serialize(current), desired: serialize(desired) };
 
-  const currentAfter = await tx.schedule.upsert({
-    where: { employeeId_date: { employeeId: employee.id, date: currentDate } },
-    update: {
+  const currentAfter = await tx.schedule.update({
+    where: { id: current.id },
+    data: {
       shiftId: desired.shiftId,
       startsAt: desired.startsAt,
       endsAt: desired.endsAt,
-      status: desired.status,
-      observation: `Troca de folga aprovada pela solicitação ${request.code}`
-    },
-    create: {
-      employeeId: employee.id,
-      shiftId: desired.shiftId,
-      date: currentDate,
-      startsAt: desired.startsAt,
-      endsAt: desired.endsAt,
-      status: desired.status,
+      status: "TROCA_APROVADA",
       source: "day-off-swap",
-      lobId: employee.lobId,
-      supervisorId: employee.supervisorId,
       observation: `Troca de folga aprovada pela solicitação ${request.code}`
     }
   });
 
-  const desiredAfter = await tx.schedule.upsert({
-    where: { employeeId_date: { employeeId: employee.id, date: desiredDate } },
-    update: {
+  const desiredAfter = await tx.schedule.update({
+    where: { id: desired.id },
+    data: {
       shiftId: null,
       startsAt: null,
       endsAt: null,
-      status: "FOLGA",
-      observation: `Nova folga aprovada pela solicitação ${request.code}`
-    },
-    create: {
-      employeeId: employee.id,
-      shiftId: null,
-      date: desiredDate,
-      startsAt: null,
-      endsAt: null,
-      status: "FOLGA",
+      status: "FOLGA_APROVADA",
       source: "day-off-swap",
-      lobId: employee.lobId,
-      supervisorId: employee.supervisorId,
       observation: `Nova folga aprovada pela solicitação ${request.code}`
     }
   });
@@ -1745,6 +1725,16 @@ async function applySwapSchedule(tx: Prisma.TransactionClient, request: PrismaRe
       reason: `Troca de folga aprovada pela solicitação ${request.code}`
     }
   });
+  await auditScheduleApplication(tx, {
+    actorId,
+    request,
+    scheduleId: currentAfter.id,
+    employeeId: employee.id,
+    date: currentDate,
+    before: before.current,
+    after: serialize(currentAfter),
+    reason: `Troca de folga aplicada ao Cronograma pela solicitação ${request.code}`
+  });
   await tx.scheduleChangeHistory.create({
     data: {
       scheduleId: desiredAfter.id,
@@ -1758,15 +1748,25 @@ async function applySwapSchedule(tx: Prisma.TransactionClient, request: PrismaRe
       reason: `Troca de folga aprovada pela solicitação ${request.code}`
     }
   });
+  await auditScheduleApplication(tx, {
+    actorId,
+    request,
+    scheduleId: desiredAfter.id,
+    employeeId: employee.id,
+    date: desiredDate,
+    before: before.desired,
+    after: serialize(desiredAfter),
+    reason: `Folga aprovada aplicada ao Cronograma pela troca ${request.code}`
+  });
 
-  return { updated: true, message: "Troca de folga aplicada no cronograma." };
+  return { updated: true, message: "Troca de folga aplicada no Cronograma: data atual marcada como Troca aprovada e nova data marcada como Folga aprovada." };
 }
 
 async function applySellSchedule(tx: Prisma.TransactionClient, request: PrismaRequest, employee: { id: string; shiftId: string; lobId: string; supervisorId: string | null; shift: { id: string; name: string; startsAt: string; endsAt: string } }, actorId: string, payload: Record<string, unknown>, actionInput: RequestStatusActionInput) {
   const targetDate = parseDateOnly(payload.dayOffToSellDate);
   if (!targetDate) throw new DomainError("Data da venda de folga inválida.");
   const schedule = await tx.schedule.findUnique({ where: { employeeId_date: { employeeId: employee.id, date: targetDate } }, include: { shift: true } });
-  if (!schedule) throw new DomainError("Cronograma não encontrado para a data da venda de folga.");
+  if (!schedule) throw new DomainError("Não existe cronograma para esta data. Não foi possível aplicar a venda de folga.");
   if (schedule.status !== "FOLGA") throw new DomainError("A data selecionada não está como folga.");
 
   const shiftName = cleanShiftName(actionInput.finalApprovedShift || String(payload.availabilityShift ?? employee.shift.name)) || employee.shift.name;
@@ -1778,7 +1778,7 @@ async function applySellSchedule(tx: Prisma.TransactionClient, request: PrismaRe
       shiftId: finalShift.id,
       startsAt: actionInput.finalApprovedStartTime || String(payload.preferredStartTime ?? "") || finalShift.startsAt,
       endsAt: actionInput.finalApprovedEndTime || String(payload.preferredEndTime ?? "") || finalShift.endsAt,
-      status: "ESCALADO",
+      status: "VENDA_FOLGA_APROVADA",
       source: "day-off-sell",
       observation: `Venda de folga aprovada pela solicitação ${request.code}`
     }
@@ -1797,14 +1797,24 @@ async function applySellSchedule(tx: Prisma.TransactionClient, request: PrismaRe
       reason: `Venda de folga aprovada pela solicitação ${request.code}`
     }
   });
-  return { updated: true, message: "Venda de folga aplicada no cronograma." };
+  await auditScheduleApplication(tx, {
+    actorId,
+    request,
+    scheduleId: after.id,
+    employeeId: employee.id,
+    date: targetDate,
+    before,
+    after: serialize(after),
+    reason: `Venda de folga aplicada ao Cronograma pela solicitação ${request.code}`
+  });
+  return { updated: true, message: "Venda de folga aprovada aplicada no Cronograma." };
 }
 
 async function applyRequestedDayOffSchedule(tx: Prisma.TransactionClient, request: PrismaRequest, employee: { id: string }, actorId: string, payload: Record<string, unknown>) {
   const targetDate = parseDateOnly(payload.desiredDayOffRequestDate ?? payload.desiredDayOffDate ?? payload.requestedDate);
   if (!targetDate) throw new DomainError("Data desejada para folga inválida.");
   const schedule = await tx.schedule.findUnique({ where: { employeeId_date: { employeeId: employee.id, date: targetDate } }, include: { shift: true } });
-  if (!schedule) throw new DomainError("Cronograma não encontrado para a data desejada.");
+  if (!schedule) throw new DomainError("Não existe cronograma para esta data. Não foi possível aplicar a folga.");
   if (schedule.status === "FOLGA") throw new DomainError("A data desejada já está como folga.");
 
   const before = serialize(schedule);
@@ -1814,7 +1824,7 @@ async function applyRequestedDayOffSchedule(tx: Prisma.TransactionClient, reques
       shiftId: null,
       startsAt: null,
       endsAt: null,
-      status: "FOLGA",
+      status: "FOLGA_APROVADA",
       source: "day-off-request",
       observation: `Folga aprovada pela solicitação ${request.code}`
     }
@@ -1833,7 +1843,57 @@ async function applyRequestedDayOffSchedule(tx: Prisma.TransactionClient, reques
       reason: `Dia de folga aprovado pela solicitação ${request.code}`
     }
   });
-  return { updated: true, message: "Dia de folga aplicado no cronograma." };
+  await auditScheduleApplication(tx, {
+    actorId,
+    request,
+    scheduleId: after.id,
+    employeeId: employee.id,
+    date: targetDate,
+    before,
+    after: serialize(after),
+    reason: `Solicitação de folga aplicada ao Cronograma pela solicitação ${request.code}`
+  });
+  return { updated: true, message: "Folga aprovada aplicada no Cronograma." };
+}
+
+async function auditScheduleApplication(
+  tx: Prisma.TransactionClient,
+  input: {
+    actorId: string;
+    request: PrismaRequest;
+    scheduleId: string;
+    employeeId: string;
+    date: Date;
+    before: Prisma.JsonValue;
+    after: Prisma.JsonValue;
+    reason: string;
+  }
+) {
+  await tx.auditLog.create({
+    data: {
+      actorId: input.actorId,
+      action: "ALTERACAO_ESCALA",
+      entity: "Schedule",
+      entityId: input.scheduleId,
+      reason: input.reason,
+      previousValue: {
+        requestId: input.request.id,
+        requestCode: input.request.code,
+        requestType: input.request.type.name,
+        employeeId: input.employeeId,
+        date: input.date.toISOString().slice(0, 10),
+        schedule: input.before
+      },
+      newValue: {
+        requestId: input.request.id,
+        requestCode: input.request.code,
+        requestType: input.request.type.name,
+        employeeId: input.employeeId,
+        date: input.date.toISOString().slice(0, 10),
+        schedule: input.after
+      }
+    }
+  });
 }
 
 async function applyShiftChangeRequestToSchedule(tx: Prisma.TransactionClient, request: PrismaRequest, actorId: string) {
