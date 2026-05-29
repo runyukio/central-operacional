@@ -5179,7 +5179,7 @@ export function SchedulesPage() {
                   />
                   <FormSelect
                     disabled={!canManageSchedules}
-                    label="Status"
+                    label="Status do cronograma"
                     value={scheduleEditForm.status}
                     options={[...scheduleStatusOptions]}
                     onChange={(value) => {
@@ -5428,7 +5428,7 @@ export function SchedulesPage() {
               <div>
                 <h2 className="text-lg font-extrabold text-navy-950">{isScheduleSupervisor ? "Justificar ocorrência" : "Marcar presença/ocorrência"}</h2>
                 <p className="text-sm text-muted">
-                  {isScheduleSupervisor ? "Registra justificativa e AttendanceRecord sem alterar turno, entrada, saída ou marcar presença." : "Atualiza cronograma, mapa, cobertura, indicadores de ABS e auditoria."}
+                  {isScheduleSupervisor ? "Registra justificativa e AttendanceRecord sem alterar turno, entrada, saída ou marcar presença." : "Atualiza o status do cronograma, cobertura, indicadores de ABS e auditoria."}
                 </p>
               </div>
               <button onClick={closeAttendanceModal} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
@@ -5453,7 +5453,7 @@ export function SchedulesPage() {
               <FormInput disabled={Boolean(selectedAttendancePending)} label="Data" type="date" value={attendanceForm.date} onChange={(value) => setAttendanceForm({ ...attendanceForm, date: value })} />
               <FormSelect disabled={Boolean(selectedAttendancePending)} label="Turno" value={attendanceForm.shift} options={availableShiftNames} onChange={(value) => setAttendanceForm({ ...attendanceForm, shift: value })} />
               <FormSelect
-                label="Status"
+                label="Status do cronograma"
                 value={attendanceForm.status}
                 disabled={Boolean(selectedAttendancePending)}
                 options={attendanceStatusOptions}
@@ -7768,7 +7768,7 @@ export function EmployeeMapPage() {
             ) : employeeRows.length ? (
               <>
                 <SimpleTable
-                  columns={["Nome", "E-mail", "WB/Login", "Cargo/Função", "Role", "LOB", "Skill", "Wave", "Supervisor", "Turno", "Status", "Ação"]}
+                  columns={["Nome", "E-mail", "WB/Login", "Cargo/Função", "Role", "LOB", "Skill", "Wave", "Supervisor", "Turno", "Status do colaborador", "Ação"]}
                   rows={employeeRows.map((employee) => [
                     <button key={employee.id} onClick={() => selectEmployee(employee)} className="max-w-[180px] truncate font-bold text-blue-700" title={employee.name}>{employee.name}</button>,
                     <span key={`${employee.id}-email`} className="block max-w-[190px] truncate" title={employee.email ?? "-"}>{employee.email ?? "-"}</span>,
@@ -7824,7 +7824,7 @@ export function EmployeeMapPage() {
                 <InfoLine label="Turno" value={cleanShiftName(selected.shift) || "-"} />
                 <InfoLine label="Cronograma" value={selected.schedule} />
                 <InfoLine label="Admissão" value={selected.admission} />
-                <InfoLine label="Status" value={employeeMapStatusLabel(selected.status)} />
+                <InfoLine label="Status do colaborador" value={employeeMapStatusLabel(selected.status)} />
               </div>
               <ProfileSection title="Dados Operacionais">
                 <div className="grid grid-cols-2 gap-3 text-sm">
@@ -7832,7 +7832,7 @@ export function EmployeeMapPage() {
                   <InfoLine label="LOB" value={selected.lob} />
                   <InfoLine label="Skill" value={selected.skill || "Sem skill"} />
                   <InfoLine label="Wave" value={selected.wave || "Sem wave"} />
-                  <InfoLine label="Status atual" value={<StatusBadge status={employeeMapStatusLabel(selected.status)} />} />
+                  <InfoLine label="Status do colaborador" value={<StatusBadge status={employeeMapStatusLabel(selected.status)} />} />
                   <InfoLine label="Supervisor vinculado" value={selected.supervisor} />
                   <InfoLine label="Subordinados diretos" value={selected.directReports ?? 0} />
                   <InfoLine label="Última presença" value={selected.lastPresence ?? "Sem registro"} />
@@ -7923,7 +7923,7 @@ export function EmployeeMapPage() {
                                 {employeeFieldErrors.shiftId ? <span className="mt-1 block text-xs font-bold text-red-600">{employeeFieldErrors.shiftId}</span> : null}
                               </label>
                             ) : null}
-                            <FormSelect label="Status" value={statusDraft} options={operationalStatusOptions} onChange={setStatusDraft} error={employeeFieldErrors.operationalStatus} />
+                            <FormSelect label="Status do colaborador" value={statusDraft} options={operationalStatusOptions} onChange={setStatusDraft} error={employeeFieldErrors.operationalStatus} />
                             {canEditOperationalBindings ? <FormInput label="Cronograma" value={scheduleDraft} onChange={setScheduleDraft} error={employeeFieldErrors.scheduleType} /> : null}
                             {canEditOperationalBindings ? <FormInput label="Site/Operação" value={siteDraft} onChange={setSiteDraft} error={employeeFieldErrors.siteOperation} /> : null}
                           </div>

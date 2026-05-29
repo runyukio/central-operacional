@@ -827,7 +827,6 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
       }
       await syncWorkHourRecordToSchedule(tx, schedule);
 
-      await tx.employeeProfile.update({ where: { id: employee.id }, data: { operationalStatus: statusToOperational(input.status) } });
       await tx.auditLog.create({
         data: {
           actorId: user.id,
@@ -2749,13 +2748,6 @@ async function listActivePeopleByLobAndShift(filters: AttendanceSummaryFilters =
 function resolveSupervisorName(schedule: { supervisorId?: string | null; employee?: { supervisorId?: string | null; supervisor?: { fullName: string } | null } | null }, supervisorNameById?: Map<string, string>) {
   const supervisorId = schedule.supervisorId ?? schedule.employee?.supervisorId;
   return (supervisorId ? supervisorNameById?.get(supervisorId) : "") || schedule.employee?.supervisor?.fullName?.trim() || "Sem supervisor";
-}
-
-function statusToOperational(status: string) {
-  if (status === "Presente") return "Online";
-  if (status === "Atraso" || status === "Saída antecipada") return "Em Atendimento";
-  if (["Falta", "Afastado"].includes(status)) return "Offline";
-  return status;
 }
 
 function workHourStatusLabel(status: string) {

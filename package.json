@@ -28,6 +28,7 @@
     "db:migrate-justification-atraso-to-outros": "tsx scripts/migrate-justification-reason-atraso-to-outros.ts",
     "db:cleanup-work-hours": "tsx scripts/cleanup-work-hours.ts",
     "db:reconcile-invalid-work-hours": "tsx scripts/reconcile-invalid-work-hours.ts",
+    "db:reconcile-employee-status": "tsx scripts/reconcile-employee-status.ts",
     "db:normalize-job-title-agente": "tsx scripts/normalize-job-title-agente.ts",
     "db:fix-june-advance-amount": "tsx scripts/fix-june-advance-amount.ts",
     "db:migrate-manager-to-supervisor": "tsx scripts/migrate-manager-to-supervisor.ts",
