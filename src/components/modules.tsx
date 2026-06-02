@@ -1536,6 +1536,7 @@ export function OperationalCommandCenter() {
   const [absenceReasonError, setAbsenceReasonError] = useState("");
   const [absenceReasonExportError, setAbsenceReasonExportError] = useState("");
   const [exportingJustifiedAbsences, setExportingJustifiedAbsences] = useState(false);
+  const [exportingUnjustifiedAbsences, setExportingUnjustifiedAbsences] = useState(false);
   const [selectedAbsSupervisor, setSelectedAbsSupervisor] = useState<string | null>(null);
   const [absSupervisorPeople, setAbsSupervisorPeople] = useState<AttendanceItem[]>([]);
   const [loadingAbsSupervisorPeople, setLoadingAbsSupervisorPeople] = useState(false);
@@ -1800,6 +1801,36 @@ export function OperationalCommandCenter() {
       setAbsenceReasonExportError(error instanceof Error ? error.message : "Não foi possível exportar as faltas justificadas. Tente novamente.");
     } finally {
       setExportingJustifiedAbsences(false);
+    }
+  }
+
+  async function exportUnjustifiedAbsences() {
+    if (selectedAbsenceReason !== "Sem justificativa") return;
+    setAbsenceReasonExportError("");
+    if (!absenceReasonPeople.length) {
+      setAbsenceReasonExportError("Nenhuma falta sem justificativa encontrada para exportar.");
+      return;
+    }
+    setExportingUnjustifiedAbsences(true);
+    try {
+      const params = new URLSearchParams({
+        startDate: dateRange.startDate,
+        endDate: dateRange.endDate
+      });
+      if (selectedCommandLob !== "Todos") params.set("lob", selectedCommandLob);
+      if (selectedCommandSupervisor !== "Todos") params.set("supervisor", selectedCommandSupervisor);
+      if (selectedCommandRoleTitle !== "Todos") params.set("roleTitle", selectedCommandRoleTitle);
+      if (selectedCommandShift !== "Todos") params.set("shift", selectedCommandShift);
+      if (selectedCommandSkill !== "Todos") params.set("skill", selectedCommandSkill);
+      await downloadFile(
+        `/api/attendance/unjustified-absences/export?${params.toString()}`,
+        `faltas_sem_justificativa_${dateRange.startDate}_${dateRange.endDate}.xlsx`,
+        "Não foi possível exportar as faltas sem justificativa. Tente novamente."
+      );
+    } catch (error) {
+      setAbsenceReasonExportError(error instanceof Error ? error.message : "Não foi possível exportar as faltas sem justificativa. Tente novamente.");
+    } finally {
+      setExportingUnjustifiedAbsences(false);
     }
   }
 
@@ -2397,6 +2428,16 @@ export function OperationalCommandCenter() {
                 </p>
               </div>
               <div className="flex items-center gap-2">
+                {selectedAbsenceReason === "Sem justificativa" ? (
+                  <button
+                    type="button"
+                    disabled={exportingUnjustifiedAbsences || loadingAbsenceReasonPeople}
+                    onClick={() => void exportUnjustifiedAbsences()}
+                    className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-extrabold text-navy-950 hover:border-blue-200 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {exportingUnjustifiedAbsences ? "Exportando..." : "Exportar"}
+                  </button>
+                ) : null}
                 {selectedAbsenceReason === "Faltas justificadas" ? (
                   <button
                     type="button"

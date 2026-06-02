@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getApiActor } from "@/lib/api-actor";
-import { exportJustifiedAbsencesXlsxData } from "@/lib/schedule-service";
+import { exportUnjustifiedAbsencesXlsxData } from "@/lib/schedule-service";
 import { buildXlsxResponse } from "@/lib/xlsx-export";
 
 export async function GET(request: Request) {
@@ -9,7 +9,7 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const startDate = url.searchParams.get("startDate") ?? undefined;
   const endDate = url.searchParams.get("endDate") ?? undefined;
-  const result = await exportJustifiedAbsencesXlsxData(actor, {
+  const result = await exportUnjustifiedAbsencesXlsxData(actor, {
     date: url.searchParams.get("date") ?? undefined,
     startDate,
     endDate,

@@ -1819,6 +1819,88 @@ export async function exportJustifiedAbsencesXlsxData(actor: Actor, query: Atten
   }
 }
 
+export async function exportUnjustifiedAbsencesXlsxData(actor: Actor, query: AttendanceQuery = {}) {
+  try {
+    const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
+    if (!user) return { error: "Usuário ativo não encontrado para exportar faltas sem justificativa.", status: 401 };
+    const role = normalizeRole(actor.role);
+    if (!["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "RH", "QUALIDADE", "TI"].includes(role)) {
+      return { error: "Você não tem permissão para exportar faltas sem justificativa.", status: 403 };
+    }
+
+    const result = await getOperationalAttendance(actor, {
+      ...query,
+      includeJustified: "true",
+      justification: "pending",
+      skipSummary: "true"
+    });
+    if ("error" in result) return { error: result.error, status: 400 };
+
+    const rows = (result.data as AttendanceExportRow[]).filter((record) => record.status === "Falta" && !record.isJustified);
+    if (!rows.length) return { error: "Nenhuma falta sem justificativa encontrada para exportar.", status: 404 };
+
+    await prisma.auditLog.create({
+      data: {
+        actorId: user.id,
+        action: "UPLOAD",
+        entity: "AttendanceRecord",
+        reason: "Exportação XLSX de Faltas sem Justificativa",
+        newValue: { action: "EXPORT_UNJUSTIFIED_ABSENCES", filters: query, exportedRows: rows.length }
+      }
+    }).catch(() => undefined);
+
+    const headers = [
+      "data",
+      "colaborador",
+      "wb_login",
+      "email",
+      "lob",
+      "supervisor",
+      "turno",
+      "cargo_funcao",
+      "status_cronograma",
+      "status_justificativa",
+      "motivo_justificativa",
+      "categoria_justificativa",
+      "observacao_justificativa",
+      "registrado_por",
+      "registrado_em",
+      "atualizado_em"
+    ];
+    const body = rows.map((record) => [
+      record.dateIso ?? record.date,
+      record.employeeName,
+      record.wbLogin ?? "",
+      record.email ?? "",
+      record.lob ?? "",
+      record.supervisor ?? "Sem supervisor",
+      record.shift,
+      record.roleTitle ?? "Sem cargo",
+      record.status,
+      "Sem justificativa",
+      record.absenceReason ?? "Sem justificativa",
+      record.reasonCategory ?? "",
+      record.supervisorJustification ?? "",
+      record.registeredBy ?? "Sistema",
+      record.registeredAt ?? "",
+      record.updatedAt ?? record.registeredAt
+    ]);
+
+    const start = query.startDate ?? query.date ?? new Date().toISOString().slice(0, 10);
+    const end = query.endDate ?? start;
+    return {
+      headers,
+      rows: body,
+      count: rows.length,
+      sheetName: "Faltas sem justificativa",
+      fileName: start === end ? `faltas_sem_justificativa_${start}.xlsx` : `faltas_sem_justificativa_${start}_a_${end}.xlsx`
+    };
+  } catch (error) {
+    recordErrorLog({ userEmail: actor.email, code: "UNJUSTIFIED_ABSENCES_EXPORT_ERROR", message: error instanceof Error ? error.message : "Falha ao exportar faltas sem justificativa", action: "ATTENDANCE_EXPORT", severity: "ERROR" });
+    return { error: "Não foi possível exportar as faltas sem justificativa. Tente novamente.", status: 500 };
+  }
+}
+
 function editMockSchedule(actor: Actor, input: ScheduleEditInput) {
   const attendance = updateMockAttendance(actor, {
     employeeId: input.employeeId,
