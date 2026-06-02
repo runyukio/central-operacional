@@ -173,7 +173,9 @@ export async function listOperationalWorkHours(actor: Actor, query: WorkHourQuer
     const user = await getUser(actor);
     if (!user) return { error: "Usuário não encontrado ou inativo." };
     const role = normalizeRole(user.role.name);
-    if (!viewRoles.includes(role)) return createPermissionError("Você não tem permissão para visualizar horas operacionais.");
+    if (!viewRoles.includes(role) && query.scope !== "mine") {
+      return createPermissionError("Você não tem permissão para visualizar horas operacionais.");
+    }
 
     const period = resolvePeriod(query);
     const page = Math.max(1, Number(query.page) || 1);

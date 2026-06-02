@@ -20,7 +20,7 @@ const deleteSchema = z.object({
 export async function GET(request: Request) {
   const actor = await getApiActor();
   const url = new URL(request.url);
-  const data = await listOperationalWorkHours(actor, {
+  const result = await listOperationalWorkHours(actor, {
     startDate: url.searchParams.get("startDate") ?? undefined,
     endDate: url.searchParams.get("endDate") ?? undefined,
     lob: url.searchParams.get("lob") ?? undefined,
@@ -38,7 +38,8 @@ export async function GET(request: Request) {
     page: Number(url.searchParams.get("page") ?? 1),
     limit: Number(url.searchParams.get("limit") ?? 50)
   });
-  return NextResponse.json(data);
+  if ("error" in result) return NextResponse.json(result, { status: "type" in result ? errorStatus(result as any) : 400 });
+  return NextResponse.json(result);
 }
 
 export async function POST(request: Request) {

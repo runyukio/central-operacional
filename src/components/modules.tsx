@@ -714,6 +714,8 @@ type EmployeeClient = (typeof employees)[number] & {
   lobId?: string;
   shiftId?: string;
   admissionIso?: string;
+  terminationDate?: string;
+  terminationDateIso?: string;
   trainingStartDate?: string;
   trainingStartDateIso?: string;
   contractType?: string;
@@ -2615,8 +2617,8 @@ export function MySchedulePage() {
         limit: "100"
       });
       const payload = await apiJson<{ data: WorkHourRow[]; summary: WorkHourSummary }>(`/api/work-hours?${params.toString()}`);
-      setMyWorkHours(payload.data);
-      setMyWorkHourSummary(payload.summary);
+      setMyWorkHours(Array.isArray(payload.data) ? payload.data : []);
+      setMyWorkHourSummary(payload.summary ?? null);
     } catch {
       setMyWorkHours([]);
       setMyWorkHourSummary(null);
@@ -7560,6 +7562,7 @@ export function EmployeeMapPage() {
   const [contractDraft, setContractDraft] = useState("");
   const [admissionDraft, setAdmissionDraft] = useState("");
   const [trainingDraft, setTrainingDraft] = useState("");
+  const [terminationDraft, setTerminationDraft] = useState("");
   const [siteDraft, setSiteDraft] = useState("");
   const [primaryPhoneDraft, setPrimaryPhoneDraft] = useState("");
   const [cityDraft, setCityDraft] = useState("");
@@ -7683,6 +7686,7 @@ export function EmployeeMapPage() {
     setContractDraft(selected.contractType ?? "");
     setAdmissionDraft(selected.admissionIso ?? "");
     setTrainingDraft(selected.trainingStartDateIso ?? "");
+    setTerminationDraft(selected.terminationDateIso ?? "");
     setSiteDraft(selected.siteOperation ?? "");
     setPrimaryPhoneDraft(selected.primaryPhone ?? "");
     setCityDraft(selected.city ?? "");
@@ -7720,6 +7724,7 @@ export function EmployeeMapPage() {
           contractType: selectedCanEditPeopleData ? contractDraft : undefined,
           admissionDate: selectedCanEditPeopleData ? admissionDraft : undefined,
           trainingStartDate: selectedCanEditPeopleData ? trainingDraft : undefined,
+          terminationDate: selectedCanEditPeopleData ? terminationDraft : undefined,
           siteOperation: canEditOperationalBindings ? siteDraft : undefined,
           internalNotes: selectedCanEditEmployeeOperational ? internalNotesDraft : undefined,
           primaryPhone: selectedCanEditPeopleData ? primaryPhoneDraft : undefined,
@@ -7896,6 +7901,7 @@ export function EmployeeMapPage() {
                 <InfoLine label="Turno" value={cleanShiftName(selected.shift) || "-"} />
                 <InfoLine label="Cronograma" value={selected.schedule} />
                 <InfoLine label="Admissão" value={selected.admission} />
+                <InfoLine label="Desligamento" value={selected.terminationDate || "Não informada"} />
                 <InfoLine label="Status do colaborador" value={employeeMapStatusLabel(selected.status)} />
               </div>
               <ProfileSection title="Dados Operacionais">
@@ -8005,6 +8011,7 @@ export function EmployeeMapPage() {
                             {selectedCanEditPeopleData ? <FormSelect label="Tipo de contrato" value={contractDraft} options={contractOptions} onChange={setContractDraft} error={employeeFieldErrors.contractType} /> : null}
                             {selectedCanEditPeopleData ? <FormInput label="Data de admissão" type="date" value={admissionDraft} onChange={setAdmissionDraft} error={employeeFieldErrors.admissionDate} /> : null}
                             {selectedCanEditPeopleData ? <FormInput label="Início do treinamento" type="date" value={trainingDraft} onChange={setTrainingDraft} error={employeeFieldErrors.trainingStartDate} /> : null}
+                            {selectedCanEditPeopleData ? <FormInput label="Data de desligamento" type="date" value={terminationDraft} onChange={setTerminationDraft} error={employeeFieldErrors.terminationDate} /> : null}
                             {isAdmin ? <FormSelect label="Usuário ativo/inativo" value={userStatusDraft} options={["ACTIVE", "INACTIVE", "BLOCKED"]} onChange={setUserStatusDraft} error={employeeFieldErrors.userStatus} /> : null}
                           </div>
                         </ProfileSection>
