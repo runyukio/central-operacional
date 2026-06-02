@@ -1599,6 +1599,8 @@ export function OperationalCommandCenter() {
   const [attritionPeople, setAttritionPeople] = useState<AttritionEmployeeItem[]>([]);
   const [loadingAttritionPeople, setLoadingAttritionPeople] = useState(false);
   const [attritionPeopleError, setAttritionPeopleError] = useState("");
+  const [attritionExportError, setAttritionExportError] = useState("");
+  const [exportingAttrition, setExportingAttrition] = useState(false);
 
   useEffect(() => {
     void loadCommandCenterSummary();
@@ -1813,6 +1815,7 @@ export function OperationalCommandCenter() {
     setSelectedAttritionGroup(group);
     setAttritionPeople([]);
     setAttritionPeopleError("");
+    setAttritionExportError("");
     setLoadingAttritionPeople(true);
     try {
       const params = new URLSearchParams({
@@ -1837,6 +1840,31 @@ export function OperationalCommandCenter() {
     setSelectedAttritionGroup(null);
     setAttritionPeople([]);
     setAttritionPeopleError("");
+    setAttritionExportError("");
+  }
+
+  async function exportAttrition() {
+    if (!selectedAttritionGroup) return;
+    setAttritionExportError("");
+    setExportingAttrition(true);
+    try {
+      const params = new URLSearchParams({
+        startDate: dateRange.startDate,
+        endDate: dateRange.endDate
+      });
+      appendCommandFilters(params, { includeLob: false });
+      if (selectedAttritionGroup.lob) params.set("lob", selectedAttritionGroup.lob);
+      else if (selectedCommandLob !== "Todos") params.set("lob", selectedCommandLob);
+      await downloadFile(
+        `/api/attendance/attrition/export?${params.toString()}`,
+        `attrition_${dateRange.startDate}_${dateRange.endDate}.xlsx`,
+        "Não foi possível exportar Attrition. Tente novamente."
+      );
+    } catch (error) {
+      setAttritionExportError(error instanceof Error ? error.message : "Não foi possível exportar Attrition. Tente novamente.");
+    } finally {
+      setExportingAttrition(false);
+    }
   }
 
   function closeAbsenceReasonPeople() {
@@ -2441,10 +2469,12 @@ export function OperationalCommandCenter() {
           <Panel title="Attrition por LOB">
             {commandAttritionByLob.length ? (
               <div className="max-h-[280px] overflow-auto pr-1">
-                <div className="grid min-w-[620px] grid-cols-[72px_minmax(140px,1fr)_112px_96px_86px] gap-2 border-b border-border px-1.5 pb-1.5 text-[9.5px] font-black uppercase tracking-wide text-muted">
+                <div className="grid min-w-[760px] grid-cols-[72px_minmax(140px,1fr)_104px_78px_78px_86px_76px] gap-2 border-b border-border px-1.5 pb-1.5 text-[9.5px] font-black uppercase tracking-wide text-muted">
                   <span>LOB</span>
                   <span>Attrition</span>
                   <span className="text-center">Desligamentos</span>
+                  <span className="text-center">HC inicial</span>
+                  <span className="text-center">HC final</span>
                   <span className="text-center">HC médio</span>
                   <span className="text-center">%</span>
                 </div>
@@ -2453,13 +2483,15 @@ export function OperationalCommandCenter() {
                     key={item.lob}
                     type="button"
                     onClick={() => void openAttritionPeople({ title: `Attrition por LOB: ${item.lob}`, lob: item.lob })}
-                    className="grid min-w-[620px] w-full grid-cols-[72px_minmax(140px,1fr)_112px_96px_86px] items-center gap-2 border-b border-border/70 px-1.5 py-2.5 text-left transition last:border-b-0 hover:bg-blue-50/55"
+                    className="grid min-w-[760px] w-full grid-cols-[72px_minmax(140px,1fr)_104px_78px_78px_86px_76px] items-center gap-2 border-b border-border/70 px-1.5 py-2.5 text-left transition last:border-b-0 hover:bg-blue-50/55"
                   >
                     <span className="min-w-0 truncate text-[12.5px] font-extrabold text-navy-950" title={item.lob}>{item.lob}</span>
                     <div className="h-2 rounded-full bg-slate-100">
                       <div className={cn("h-2 rounded-full", absBarColor(item.attritionRate))} style={{ width: absBarWidth(item.attritionRate) }} />
                     </div>
                     <span className="text-center text-[11.5px] font-extrabold text-navy-950">{item.terminations}</span>
+                    <span className="text-center text-[11.5px] font-extrabold text-navy-950">{item.hcStart}</span>
+                    <span className="text-center text-[11.5px] font-extrabold text-navy-950">{item.hcEnd}</span>
                     <span className="text-center text-[11.5px] font-extrabold text-navy-950">{item.hcAverage}</span>
                     <span className={cn("text-center text-[11.5px] font-black", absTextColor(item.attritionRate))}>{item.attritionRate}%</span>
                   </button>
@@ -2592,8 +2624,21 @@ export function OperationalCommandCenter() {
                   {dateRange.startDate} até {dateRange.endDate} • {selectedAttritionGroup.lob ?? (selectedCommandLob === "Todos" ? "Todas as LOBs" : selectedCommandLob)}
                 </p>
               </div>
-              <button onClick={closeAttritionPeople} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={exportingAttrition || loadingAttritionPeople}
+                  onClick={() => void exportAttrition()}
+                  className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-extrabold text-navy-950 hover:border-blue-200 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {exportingAttrition ? "Exportando..." : "Exportar"}
+                </button>
+                <button onClick={closeAttritionPeople} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+              </div>
             </div>
+            {attritionExportError ? (
+              <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-700">{attritionExportError}</div>
+            ) : null}
             {loadingAttritionPeople ? (
               <div className="rounded-xl border border-border p-8 text-center text-sm font-bold text-muted">Carregando desligamentos...</div>
             ) : attritionPeopleError ? (

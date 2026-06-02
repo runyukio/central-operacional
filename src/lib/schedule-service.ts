@@ -239,6 +239,12 @@ type AttritionSummaryRow = {
   attritionRate: number;
 };
 
+type AttritionEmployeeForCalculation = {
+  admissionDate: Date | null;
+  terminationDate: Date | null;
+  operationalStatus: string | null;
+};
+
 export type AttendanceInput = {
   attendanceRecordId?: string;
   scheduleId?: string;
@@ -1926,6 +1932,83 @@ export async function exportUnjustifiedAbsencesXlsxData(actor: Actor, query: Att
   }
 }
 
+export async function exportAttritionXlsxData(actor: Actor, query: AttendanceQuery = {}) {
+  try {
+    const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
+    if (!user) return { error: "Usuário ativo não encontrado para exportar Attrition.", status: 401 };
+    const role = normalizeRole(actor.role);
+    if (!["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(role)) {
+      return { error: "Você não tem permissão para exportar Attrition.", status: 403 };
+    }
+
+    const period = resolveAttendancePeriod(query);
+    if (!period) return { error: "Informe um período válido para exportar Attrition.", status: 400 };
+    const summaryFilters: AttendanceSummaryFilters = {
+      lob: query.lob && query.lob !== "Todos" ? query.lob : undefined,
+      supervisor: query.supervisor,
+      shift: query.shift,
+      collaborator: query.collaborator,
+      roleTitle: query.roleTitle,
+      skill: query.skill,
+      employeeId: role === "COLABORADOR" && user.employeeProfile ? user.employeeProfile.id : undefined
+    };
+    const attrition = await getAttritionSummary(period, summaryFilters);
+    const terminations = await listAttritionTerminations(period, summaryFilters);
+    const start = dateKey(period.start);
+    const end = dateKey(period.end);
+    const summaryRows = [attrition.total, ...attrition.byLob].map((row) => [
+      start,
+      end,
+      row.lob,
+      row.terminations,
+      row.hcStart,
+      row.hcEnd,
+      row.hcAverage,
+      row.attritionRate
+    ]);
+    const terminationRows = terminations.map((employee) => [
+      employee.employeeName,
+      employee.wbLogin ?? "",
+      employee.email ?? "",
+      employee.lob ?? "",
+      employee.supervisor ?? "Sem supervisor",
+      employee.roleTitle ?? "",
+      employee.skill ?? "",
+      employee.wave ?? "",
+      employee.admissionDateIso ?? "",
+      employee.terminationDateIso ?? "",
+      employee.employeeStatus ?? ""
+    ]);
+
+    await prisma.auditLog.create({
+      data: {
+        actorId: user.id,
+        action: "UPLOAD",
+        entity: "EmployeeProfile",
+        reason: "Exportação XLSX de Attrition",
+        newValue: { action: "EXPORT_ATTRITION", filters: query, exportedRows: terminationRows.length }
+      }
+    }).catch(() => undefined);
+
+    return {
+      fileName: start === end ? `attrition_${start}.xlsx` : `attrition_${start}_a_${end}.xlsx`,
+      sheetName: "Resumo attrition",
+      headers: ["periodo_inicio", "periodo_fim", "lob", "desligamentos", "hc_inicial", "hc_final", "hc_medio", "attrition_percentual"],
+      rows: summaryRows,
+      sheets: [
+        {
+          sheetName: "Desligados",
+          headers: ["nome", "wb_login", "email", "lob", "supervisor", "cargo_funcao", "skill", "wave", "data_admissao", "data_desligamento", "status_colaborador"],
+          rows: terminationRows
+        }
+      ]
+    };
+  } catch (error) {
+    recordErrorLog({ userEmail: actor.email, code: "ATTRITION_EXPORT_ERROR", message: error instanceof Error ? error.message : "Falha ao exportar Attrition", action: "ATTENDANCE_EXPORT", severity: "ERROR" });
+    return { error: "Não foi possível exportar Attrition. Tente novamente.", status: 500 };
+  }
+}
+
 function editMockSchedule(actor: Actor, input: ScheduleEditInput) {
   const attendance = updateMockAttendance(actor, {
     employeeId: input.employeeId,
@@ -2885,23 +2968,50 @@ async function attritionEmployeeWhere(filters: AttendanceSummaryFilters = {}) {
 
 function attritionRate(terminations: number, hcAverage: number) {
   if (!hcAverage) return 0;
-  return Number(((terminations / hcAverage) * 100).toFixed(1));
+  return Number(((terminations / hcAverage) * 100).toFixed(2));
 }
 
-function attritionRow(lob: string, employees: Array<{ admissionDate: Date | null; terminationDate: Date | null }>, period: NonNullable<ReturnType<typeof resolveAttendancePeriod>>): AttritionSummaryRow {
+function isAttritionActiveStatus(status: unknown) {
+  const key = employeeStatusLookupKey(status);
+  return key === "ATIVO" || key === "ACTIVE";
+}
+
+function isAttritionTerminatedStatus(status: unknown) {
+  const key = employeeStatusLookupKey(status);
+  return key === "DESLIGADO" || key === "TERMINATED";
+}
+
+function isAttritionEligibleStatus(status: unknown) {
+  return isAttritionActiveStatus(status) || isAttritionTerminatedStatus(status);
+}
+
+function wasActiveAtBoundary(employee: AttritionEmployeeForCalculation, boundary: Date, boundaryType: "start" | "end") {
+  if (!isAttritionEligibleStatus(employee.operationalStatus)) return false;
+  if (isAttritionTerminatedStatus(employee.operationalStatus) && !employee.terminationDate) return false;
+  const admittedByBoundary = !employee.admissionDate || employee.admissionDate <= boundary;
+  const notTerminatedByBoundary =
+    boundaryType === "start"
+      ? !employee.terminationDate || employee.terminationDate >= boundary
+      : !employee.terminationDate || employee.terminationDate > boundary;
+  return admittedByBoundary && notTerminatedByBoundary;
+}
+
+function isAttritionTerminationInPeriod(employee: AttritionEmployeeForCalculation, period: NonNullable<ReturnType<typeof resolveAttendancePeriod>>) {
+  return Boolean(
+    isAttritionTerminatedStatus(employee.operationalStatus) &&
+      employee.terminationDate &&
+      employee.terminationDate >= period.start &&
+      employee.terminationDate <= period.end
+  );
+}
+
+function attritionRow(lob: string, employees: AttritionEmployeeForCalculation[], period: NonNullable<ReturnType<typeof resolveAttendancePeriod>>): AttritionSummaryRow {
   const startBoundary = period.start;
   const endBoundary = period.end;
-  const hcStart = employees.filter((employee) => {
-    const admittedAtStart = !employee.admissionDate || employee.admissionDate <= startBoundary;
-    const notTerminatedBeforeStart = !employee.terminationDate || employee.terminationDate >= startBoundary;
-    return admittedAtStart && notTerminatedBeforeStart;
-  }).length;
-  const hcEnd = employees.filter((employee) => {
-    const admittedAtEnd = !employee.admissionDate || employee.admissionDate <= endBoundary;
-    const notTerminatedByEnd = !employee.terminationDate || employee.terminationDate > endBoundary;
-    return admittedAtEnd && notTerminatedByEnd;
-  }).length;
-  const terminations = employees.filter((employee) => employee.terminationDate && employee.terminationDate >= startBoundary && employee.terminationDate <= endBoundary).length;
+  const eligibleEmployees = employees.filter((employee) => isAttritionEligibleStatus(employee.operationalStatus));
+  const hcStart = eligibleEmployees.filter((employee) => wasActiveAtBoundary(employee, startBoundary, "start")).length;
+  const hcEnd = eligibleEmployees.filter((employee) => wasActiveAtBoundary(employee, endBoundary, "end")).length;
+  const terminations = eligibleEmployees.filter((employee) => isAttritionTerminationInPeriod(employee, period)).length;
   const hcAverage = Number(((hcStart + hcEnd) / 2).toFixed(1));
   return {
     lob,
@@ -2920,6 +3030,7 @@ async function getAttritionSummary(period: NonNullable<ReturnType<typeof resolve
     select: {
       admissionDate: true,
       terminationDate: true,
+      operationalStatus: true,
       lob: { select: { name: true } }
     }
   });
@@ -2964,7 +3075,7 @@ async function listAttritionTerminations(period: NonNullable<ReturnType<typeof r
     orderBy: [{ terminationDate: "desc" }, { fullName: "asc" }],
     take: 5000
   });
-  return employees.map((employee) => ({
+  return employees.filter((employee) => isAttritionTerminationInPeriod(employee, period)).map((employee) => ({
     id: employee.id,
     employeeId: employee.id,
     employeeName: employee.fullName,
