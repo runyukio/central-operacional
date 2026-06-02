@@ -230,6 +230,15 @@ type ActivePeopleByLobShiftRow = {
   total: number;
 };
 
+type AttritionSummaryRow = {
+  lob: string;
+  terminations: number;
+  hcStart: number;
+  hcEnd: number;
+  hcAverage: number;
+  attritionRate: number;
+};
+
 export type AttendanceInput = {
   attendanceRecordId?: string;
   scheduleId?: string;
@@ -1650,6 +1659,22 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
         summary: emptyAttendanceSummary()
       };
     }
+    if (detailType === "attrition") {
+      const data = period ? await listAttritionTerminations(period, summaryFilters) : [];
+      logPerformanceMetric("attendance.attrition-detail", startedAt, {
+        role,
+        recordsReturned: data.length,
+        lob: lobFilter ?? "Todos",
+        supervisor: query.supervisor ?? "Todos",
+        roleTitle: query.roleTitle ?? "Todos",
+        shift: query.shift ?? "Todos",
+        skill: query.skill ?? "Todos"
+      });
+      return {
+        data,
+        summary: emptyAttendanceSummary()
+      };
+    }
     const schedules = await prisma.schedule.findMany({
       where: scheduleWhere,
       include: {
@@ -2624,6 +2649,7 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     .sort((a, b) => b.absent - a.absent || b.unjustified - a.unjustified || a.name.localeCompare(b.name, "pt-BR"))
     .slice(0, 6);
   const activePeopleByLobAndShift = await getActivePeopleByLobAndShift(filters);
+  const attrition = period ? await getAttritionSummary(period, filters) : emptyAttritionSummary();
   const unjustified = absenceSchedules.filter((item) => isPendingJustificationForSchedule(item.schedule.status, item.record)).length;
   const justified = absenceSchedules.filter((item) => hasValidJustification(item.record)).length;
   const summary = {
@@ -2643,7 +2669,8 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     bySupervisor,
     byLob,
     topAbsenceAgents,
-    activePeopleByLobAndShift
+    activePeopleByLobAndShift,
+    attrition
   };
   logPerformanceMetric("attendance.summary-db", startedAt, {
     startDate: period ? dateKey(period.start) : null,
@@ -2691,7 +2718,8 @@ function emptyAttendanceSummary() {
     bySupervisor: {},
     byLob: {},
     topAbsenceAgents: [],
-    activePeopleByLobAndShift: []
+    activePeopleByLobAndShift: [],
+    attrition: emptyAttritionSummary()
   };
 }
 
@@ -2823,6 +2851,134 @@ async function listActivePeopleByLobAndShift(filters: AttendanceSummaryFilters =
     supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
     shift: isTrainingEmployeeStatus(employee.operationalStatus) ? "Em treinamento" : shiftCategoryName(employee.shift?.name) || "Sem turno",
     skill: employee.skill ?? "",
+    employeeStatus: employee.operationalStatus
+  }));
+}
+
+function emptyAttritionSummary() {
+  return {
+    total: {
+      lob: "Total",
+      terminations: 0,
+      hcStart: 0,
+      hcEnd: 0,
+      hcAverage: 0,
+      attritionRate: 0
+    },
+    byLob: [] as AttritionSummaryRow[]
+  };
+}
+
+async function attritionEmployeeWhere(filters: AttendanceSummaryFilters = {}) {
+  const filterParts: Prisma.EmployeeProfileWhereInput[] = [{ deletedAt: null }];
+  if (filters.lob && filters.lob !== "Todos") filterParts.push({ lob: { name: filters.lob } });
+  if (filters.roleTitle && filters.roleTitle !== "Todos") filterParts.push({ roleTitle: filters.roleTitle });
+  const supervisorFilter = await employeeSupervisorFilter(filters.supervisor);
+  if (supervisorFilter) filterParts.push(supervisorFilter);
+  const skillFilter = employeeSkillFilter(filters.skill);
+  if (skillFilter) filterParts.push(skillFilter);
+  const shiftFilter = employeeShiftCategoryFilter(filters.shift);
+  if (shiftFilter) filterParts.push(shiftFilter);
+  if (filters.employeeId) filterParts.push({ id: filters.employeeId });
+  return { AND: filterParts };
+}
+
+function attritionRate(terminations: number, hcAverage: number) {
+  if (!hcAverage) return 0;
+  return Number(((terminations / hcAverage) * 100).toFixed(1));
+}
+
+function attritionRow(lob: string, employees: Array<{ admissionDate: Date | null; terminationDate: Date | null }>, period: NonNullable<ReturnType<typeof resolveAttendancePeriod>>): AttritionSummaryRow {
+  const startBoundary = period.start;
+  const endBoundary = period.end;
+  const hcStart = employees.filter((employee) => {
+    const admittedAtStart = !employee.admissionDate || employee.admissionDate <= startBoundary;
+    const notTerminatedBeforeStart = !employee.terminationDate || employee.terminationDate >= startBoundary;
+    return admittedAtStart && notTerminatedBeforeStart;
+  }).length;
+  const hcEnd = employees.filter((employee) => {
+    const admittedAtEnd = !employee.admissionDate || employee.admissionDate <= endBoundary;
+    const notTerminatedByEnd = !employee.terminationDate || employee.terminationDate > endBoundary;
+    return admittedAtEnd && notTerminatedByEnd;
+  }).length;
+  const terminations = employees.filter((employee) => employee.terminationDate && employee.terminationDate >= startBoundary && employee.terminationDate <= endBoundary).length;
+  const hcAverage = Number(((hcStart + hcEnd) / 2).toFixed(1));
+  return {
+    lob,
+    terminations,
+    hcStart,
+    hcEnd,
+    hcAverage,
+    attritionRate: attritionRate(terminations, hcAverage)
+  };
+}
+
+async function getAttritionSummary(period: NonNullable<ReturnType<typeof resolveAttendancePeriod>>, filters: AttendanceSummaryFilters = {}) {
+  const where = await attritionEmployeeWhere(filters);
+  const employees = await prisma.employeeProfile.findMany({
+    where,
+    select: {
+      admissionDate: true,
+      terminationDate: true,
+      lob: { select: { name: true } }
+    }
+  });
+  const total = attritionRow("Total", employees, period);
+  const byLobMap = new Map<string, typeof employees>();
+  employees.forEach((employee) => {
+    const lob = employee.lob?.name?.trim() || "Sem LOB";
+    const list = byLobMap.get(lob) ?? [];
+    list.push(employee);
+    byLobMap.set(lob, list);
+  });
+  const byLob = Array.from(byLobMap.entries())
+    .map(([lob, rows]) => attritionRow(lob, rows, period))
+    .filter((row) => row.terminations > 0 || row.hcAverage > 0)
+    .sort((a, b) => b.attritionRate - a.attritionRate || b.terminations - a.terminations || a.lob.localeCompare(b.lob, "pt-BR"));
+  return { total, byLob };
+}
+
+async function listAttritionTerminations(period: NonNullable<ReturnType<typeof resolveAttendancePeriod>>, filters: AttendanceSummaryFilters = {}) {
+  const where = await attritionEmployeeWhere(filters);
+  const employees = await prisma.employeeProfile.findMany({
+    where: {
+      AND: [
+        where,
+        { terminationDate: { gte: period.start, lte: period.end } }
+      ]
+    },
+    select: {
+      id: true,
+      fullName: true,
+      wbLogin: true,
+      roleTitle: true,
+      skill: true,
+      wave: true,
+      admissionDate: true,
+      terminationDate: true,
+      operationalStatus: true,
+      user: { select: { email: true } },
+      lob: { select: { name: true } },
+      supervisor: { select: { fullName: true } }
+    },
+    orderBy: [{ terminationDate: "desc" }, { fullName: "asc" }],
+    take: 5000
+  });
+  return employees.map((employee) => ({
+    id: employee.id,
+    employeeId: employee.id,
+    employeeName: employee.fullName,
+    wbLogin: employee.wbLogin,
+    email: employee.user?.email ?? "",
+    lob: employee.lob?.name ?? "Sem LOB",
+    supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
+    roleTitle: employee.roleTitle ?? "Sem cargo",
+    skill: employee.skill ?? "",
+    wave: employee.wave ?? "",
+    admissionDate: employee.admissionDate ? formatDate(employee.admissionDate) : "",
+    admissionDateIso: employee.admissionDate ? dateKey(employee.admissionDate) : "",
+    terminationDate: employee.terminationDate ? formatDate(employee.terminationDate) : "",
+    terminationDateIso: employee.terminationDate ? dateKey(employee.terminationDate) : "",
     employeeStatus: employee.operationalStatus
   }));
 }

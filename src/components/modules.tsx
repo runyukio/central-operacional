@@ -601,6 +601,10 @@ type AttendanceSummary = {
   byLob?: Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; absRate: number }>;
   topAbsenceAgents?: Array<{ employeeId: string; name: string; wbLogin: string; supervisor: string; lob: string; planned: number; absent: number; unjustified: number; justified: number; absRate: number }>;
   activePeopleByLobAndShift?: Array<{ lob: string; shifts: Record<string, number>; total: number }>;
+  attrition?: {
+    total: { lob: string; terminations: number; hcStart: number; hcEnd: number; hcAverage: number; attritionRate: number };
+    byLob: Array<{ lob: string; terminations: number; hcStart: number; hcEnd: number; hcAverage: number; attritionRate: number }>;
+  };
 };
 
 type AttendanceItem = {
@@ -641,6 +645,24 @@ type ActivePeopleItem = {
   supervisor?: string;
   shift?: string;
   skill?: string;
+  employeeStatus?: string;
+};
+
+type AttritionEmployeeItem = {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  wbLogin?: string;
+  email?: string;
+  lob?: string;
+  supervisor?: string;
+  roleTitle?: string;
+  skill?: string;
+  wave?: string;
+  admissionDate?: string;
+  admissionDateIso?: string;
+  terminationDate?: string;
+  terminationDateIso?: string;
   employeeStatus?: string;
 };
 
@@ -1573,6 +1595,10 @@ export function OperationalCommandCenter() {
   const [activePeople, setActivePeople] = useState<ActivePeopleItem[]>([]);
   const [loadingActivePeople, setLoadingActivePeople] = useState(false);
   const [activePeopleError, setActivePeopleError] = useState("");
+  const [selectedAttritionGroup, setSelectedAttritionGroup] = useState<{ title: string; lob?: string } | null>(null);
+  const [attritionPeople, setAttritionPeople] = useState<AttritionEmployeeItem[]>([]);
+  const [loadingAttritionPeople, setLoadingAttritionPeople] = useState(false);
+  const [attritionPeopleError, setAttritionPeopleError] = useState("");
 
   useEffect(() => {
     void loadCommandCenterSummary();
@@ -1783,6 +1809,36 @@ export function OperationalCommandCenter() {
     setActivePeopleError("");
   }
 
+  async function openAttritionPeople(group: { title: string; lob?: string }) {
+    setSelectedAttritionGroup(group);
+    setAttritionPeople([]);
+    setAttritionPeopleError("");
+    setLoadingAttritionPeople(true);
+    try {
+      const params = new URLSearchParams({
+        startDate: dateRange.startDate,
+        endDate: dateRange.endDate,
+        detailType: "attrition",
+        skipSummary: "true"
+      });
+      appendCommandFilters(params, { includeLob: false });
+      if (group.lob) params.set("lob", group.lob);
+      else if (selectedCommandLob !== "Todos") params.set("lob", selectedCommandLob);
+      const payload = await apiJson<{ data: AttritionEmployeeItem[] }>(`/api/attendance?${params.toString()}`);
+      setAttritionPeople(payload.data);
+    } catch {
+      setAttritionPeopleError("Não foi possível carregar os desligamentos deste período.");
+    } finally {
+      setLoadingAttritionPeople(false);
+    }
+  }
+
+  function closeAttritionPeople() {
+    setSelectedAttritionGroup(null);
+    setAttritionPeople([]);
+    setAttritionPeopleError("");
+  }
+
   function closeAbsenceReasonPeople() {
     setSelectedAbsenceReason(null);
     setAbsenceReasonPeople([]);
@@ -1919,7 +1975,11 @@ export function OperationalCommandCenter() {
     byShift: {},
     bySupervisor: {},
     byLob: {},
-    topAbsenceAgents: []
+    topAbsenceAgents: [],
+    attrition: {
+      total: { lob: "Total", terminations: 0, hcStart: 0, hcEnd: 0, hcAverage: 0, attritionRate: 0 },
+      byLob: []
+    }
   };
   const stats = [
     { title: "Pessoas Escaladas", value: summary.planned, change: summary.planned ? "100%" : "0%", helper: "base atual", icon: Users, tone: "blue" as const, action: () => void openCommandDetailPeople("scheduled", "Pessoas Escaladas") },
@@ -1941,6 +2001,8 @@ export function OperationalCommandCenter() {
     .sort((a, b) => b.absRate - a.absRate || b.absent - a.absent || a.lob.localeCompare(b.lob, "pt-BR"));
   const commandTopAbsenceAgents = summary.topAbsenceAgents ?? [];
   const commandActivePeopleByLobShift = summary.activePeopleByLobAndShift ?? [];
+  const commandAttrition = summary.attrition ?? { total: { lob: "Total", terminations: 0, hcStart: 0, hcEnd: 0, hcAverage: 0, attritionRate: 0 }, byLob: [] };
+  const commandAttritionByLob = commandAttrition.byLob ?? [];
   const activePeopleShiftColumns = ["Manhã", "Tarde", "Noite"];
   const activePeopleTrainingColumn = "Em treinamento";
   const activePeopleShiftCount = (row: { shifts: Record<string, number> }, targetShift: string) => Object.entries(row.shifts)
@@ -1982,6 +2044,19 @@ export function OperationalCommandCenter() {
     record.supervisor ?? "Sem supervisor",
     record.shift ?? "Sem turno",
     record.skill || "-",
+    record.employeeStatus ?? "-"
+  ]);
+  const attritionPeopleRows = (records: AttritionEmployeeItem[]) => records.map((record) => [
+    record.employeeName,
+    record.wbLogin ?? "-",
+    record.email ?? "-",
+    record.lob ?? "Sem LOB",
+    record.supervisor ?? "Sem supervisor",
+    record.roleTitle ?? "-",
+    record.skill || "-",
+    record.wave || "-",
+    record.admissionDate || "-",
+    record.terminationDate || "-",
     record.employeeStatus ?? "-"
   ]);
 
@@ -2319,6 +2394,80 @@ export function OperationalCommandCenter() {
             ) : <EmptyState title="Sem ABS por LOB" description="A visão será exibida quando houver cronogramas no período selecionado." />}
           </Panel>
         </div>
+
+        <div className="grid gap-4 xl:grid-cols-[.75fr_1.25fr]">
+          <Panel title="Attrition Total">
+            <button
+              type="button"
+              onClick={() => void openAttritionPeople({ title: "Attrition Total" })}
+              className="w-full rounded-xl border border-border bg-white p-4 text-left transition hover:border-blue-200 hover:bg-blue-50/45"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-black uppercase tracking-wide text-muted">Período considerado</p>
+                  <p className="mt-1 text-sm font-extrabold text-navy-950">{dateRange.startDate} até {dateRange.endDate}</p>
+                </div>
+                <div className="grid h-10 w-10 place-items-center rounded-xl bg-red-50 text-red-600">
+                  <HeartPulse className="h-5 w-5" />
+                </div>
+              </div>
+              <div className="mt-4 flex items-end justify-between gap-4">
+                <div>
+                  <p className="text-[34px] font-black leading-none text-navy-950">{commandAttrition.total.attritionRate}%</p>
+                  <p className="mt-1 text-xs font-bold text-muted">Attrition do período</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xl font-black text-navy-950">{commandAttrition.total.terminations}</p>
+                  <p className="text-xs font-bold text-muted">desligamento(s)</p>
+                </div>
+              </div>
+              <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+                <div className="rounded-lg bg-slate-50 px-2 py-2">
+                  <p className="text-[10px] font-black uppercase text-muted">HC início</p>
+                  <p className="text-sm font-black text-navy-950">{commandAttrition.total.hcStart}</p>
+                </div>
+                <div className="rounded-lg bg-slate-50 px-2 py-2">
+                  <p className="text-[10px] font-black uppercase text-muted">HC fim</p>
+                  <p className="text-sm font-black text-navy-950">{commandAttrition.total.hcEnd}</p>
+                </div>
+                <div className="rounded-lg bg-slate-50 px-2 py-2">
+                  <p className="text-[10px] font-black uppercase text-muted">HC médio</p>
+                  <p className="text-sm font-black text-navy-950">{commandAttrition.total.hcAverage}</p>
+                </div>
+              </div>
+            </button>
+          </Panel>
+
+          <Panel title="Attrition por LOB">
+            {commandAttritionByLob.length ? (
+              <div className="max-h-[280px] overflow-auto pr-1">
+                <div className="grid min-w-[620px] grid-cols-[72px_minmax(140px,1fr)_112px_96px_86px] gap-2 border-b border-border px-1.5 pb-1.5 text-[9.5px] font-black uppercase tracking-wide text-muted">
+                  <span>LOB</span>
+                  <span>Attrition</span>
+                  <span className="text-center">Desligamentos</span>
+                  <span className="text-center">HC médio</span>
+                  <span className="text-center">%</span>
+                </div>
+                {commandAttritionByLob.map((item) => (
+                  <button
+                    key={item.lob}
+                    type="button"
+                    onClick={() => void openAttritionPeople({ title: `Attrition por LOB: ${item.lob}`, lob: item.lob })}
+                    className="grid min-w-[620px] w-full grid-cols-[72px_minmax(140px,1fr)_112px_96px_86px] items-center gap-2 border-b border-border/70 px-1.5 py-2.5 text-left transition last:border-b-0 hover:bg-blue-50/55"
+                  >
+                    <span className="min-w-0 truncate text-[12.5px] font-extrabold text-navy-950" title={item.lob}>{item.lob}</span>
+                    <div className="h-2 rounded-full bg-slate-100">
+                      <div className={cn("h-2 rounded-full", absBarColor(item.attritionRate))} style={{ width: absBarWidth(item.attritionRate) }} />
+                    </div>
+                    <span className="text-center text-[11.5px] font-extrabold text-navy-950">{item.terminations}</span>
+                    <span className="text-center text-[11.5px] font-extrabold text-navy-950">{item.hcAverage}</span>
+                    <span className={cn("text-center text-[11.5px] font-black", absTextColor(item.attritionRate))}>{item.attritionRate}%</span>
+                  </button>
+                ))}
+              </div>
+            ) : <EmptyState title="Sem desligamentos no período" description="O cálculo usa Data de Desligamento e respeita os filtros da Central." />}
+          </Panel>
+        </div>
       </div>
 
       {selectedCommandDetail ? (
@@ -2428,6 +2577,34 @@ export function OperationalCommandCenter() {
               />
             ) : (
               <EmptyState title="Nenhuma pessoa ativa encontrada" description="A lista respeita os filtros aplicados na Central Operacional." />
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {selectedAttritionGroup ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="card max-h-[90vh] w-full max-w-6xl overflow-y-auto p-5">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-extrabold text-navy-950">{selectedAttritionGroup.title}</h2>
+                <p className="text-sm font-semibold text-muted">
+                  {dateRange.startDate} até {dateRange.endDate} • {selectedAttritionGroup.lob ?? (selectedCommandLob === "Todos" ? "Todas as LOBs" : selectedCommandLob)}
+                </p>
+              </div>
+              <button onClick={closeAttritionPeople} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+            </div>
+            {loadingAttritionPeople ? (
+              <div className="rounded-xl border border-border p-8 text-center text-sm font-bold text-muted">Carregando desligamentos...</div>
+            ) : attritionPeopleError ? (
+              <EmptyState title="Não foi possível carregar" description={attritionPeopleError} />
+            ) : attritionPeople.length ? (
+              <SimpleTable
+                columns={["Nome", "WB/Login", "E-mail", "LOB", "Supervisor", "Cargo/Função", "Skill", "Wave", "Admissão", "Desligamento", "Status do colaborador"]}
+                rows={attritionPeopleRows(attritionPeople)}
+              />
+            ) : (
+              <EmptyState title="Nenhum desligamento encontrado" description="A lista considera apenas colaboradores com Data de Desligamento dentro do período filtrado." />
             )}
           </div>
         </div>
@@ -9621,7 +9798,7 @@ export function StaffCoveragePage() {
       setPayload(data);
       setMessage("");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Não foi possível carregar Staff e Cobertura.");
+      setMessage(error instanceof Error ? error.message : "Não foi possível carregar Requerido.");
     } finally {
       setLoading(false);
     }
@@ -9675,9 +9852,9 @@ export function StaffCoveragePage() {
   const exportCoverage = async () => {
     const params = new URLSearchParams(filters);
     try {
-      await downloadFile(`/api/staff-coverage/export?${params.toString()}`, "staff_cobertura.xlsx", "Não foi possível exportar Staff e Cobertura.");
+      await downloadFile(`/api/staff-coverage/export?${params.toString()}`, "requerido.xlsx", "Não foi possível exportar Requerido.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Não foi possível exportar Staff e Cobertura.");
+      setMessage(error instanceof Error ? error.message : "Não foi possível exportar Requerido.");
     }
   };
 
@@ -9696,7 +9873,7 @@ export function StaffCoveragePage() {
       const result = await apiJson<StaffCoverageDetailsResponse>(`/api/staff-coverage/details?${params.toString()}`);
       setDetails(result);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Não foi possível abrir o detalhe da cobertura.");
+      setMessage(error instanceof Error ? error.message : "Não foi possível abrir o detalhe do Requerido.");
     } finally {
       setDetailsLoading(false);
     }
@@ -9712,7 +9889,7 @@ export function StaffCoveragePage() {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Staff e Cobertura"
+        title="Requerido"
         description="Requerido semanal cruzado com agentes disponíveis no Cronograma."
         icon={UsersRound}
         actions={<TopActions />}
@@ -9756,7 +9933,7 @@ export function StaffCoveragePage() {
             {payload?.permissions.canImport ? (
               <>
                 <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={(event) => void previewRequirementFile(event.target.files?.[0])} />
-                <button onClick={() => void downloadFile("/api/staff-coverage/template", "template_staff_cobertura.xlsx").catch((error) => setMessage(error instanceof Error ? error.message : "Não foi possível baixar o template."))} className="premium-control h-9 px-3 text-xs font-extrabold text-navy-950">
+                <button onClick={() => void downloadFile("/api/staff-coverage/template", "template_requerido.xlsx").catch((error) => setMessage(error instanceof Error ? error.message : "Não foi possível baixar o template."))} className="premium-control h-9 px-3 text-xs font-extrabold text-navy-950">
                   Template
                 </button>
                 <button onClick={() => fileInputRef.current?.click()} disabled={importing} className="inline-flex h-9 items-center gap-2 rounded-lg bg-blue-600 px-3 text-xs font-extrabold text-white disabled:opacity-60">
@@ -9786,7 +9963,7 @@ export function StaffCoveragePage() {
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.4fr_.8fr]">
-        <Panel title="Cobertura por data, LOB e turno">
+        <Panel title="Requerido por data, LOB e turno">
           <div className="overflow-x-auto">
             <table className="w-full min-w-[980px] border-collapse text-sm">
               <thead>
@@ -9814,7 +9991,7 @@ export function StaffCoveragePage() {
                     <td className="max-w-[220px] truncate px-3 py-2 text-muted" title={row.observation}>{row.observation || "-"}</td>
                   </tr>
                 )) : (
-                  <tr><td colSpan={8} className="px-3 py-8"><EmptyState title="Nenhuma cobertura encontrada" description="Importe o requerido semanal ou ajuste os filtros do período." /></td></tr>
+                  <tr><td colSpan={8} className="px-3 py-8"><EmptyState title="Nenhum requerido encontrado" description="Importe o requerido semanal ou ajuste os filtros do período." /></td></tr>
                 )}
               </tbody>
             </table>

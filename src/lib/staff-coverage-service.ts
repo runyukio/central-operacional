@@ -169,7 +169,7 @@ export async function listStaffCoverage(actor: Actor, query: StaffCoverageQuery 
   try {
     const user = await getUser(actor);
     if (!user) return createPermissionError("Usuário não encontrado ou inativo.");
-    if (!canAccessStaffCoverage(permissionUser(user))) return createPermissionError("Você não tem permissão para visualizar Staff e Cobertura.");
+    if (!canAccessStaffCoverage(permissionUser(user))) return createPermissionError("Você não tem permissão para visualizar Requerido.");
 
     const period = resolvePeriod(query);
     const hasExtendedColumns = await hasStaffCoverageExtendedColumns();
@@ -193,7 +193,7 @@ export async function listStaffCoverage(actor: Actor, query: StaffCoverageQuery 
     };
   } catch (error) {
     recordErrorLog({ userEmail: actor.email, code: "STAFF_COVERAGE_LIST_ERROR", message: errorMessage(error), action: "STAFF_COVERAGE_LIST", severity: "ERROR" });
-    return { error: "Não foi possível carregar Staff e Cobertura.", message: "Não foi possível carregar Staff e Cobertura." };
+    return { error: "Não foi possível carregar Requerido.", message: "Não foi possível carregar Requerido." };
   }
 }
 
@@ -201,7 +201,7 @@ export async function getStaffCoverageDetails(actor: Actor, query: StaffCoverage
   try {
     const user = await getUser(actor);
     if (!user) return createPermissionError("Usuário não encontrado ou inativo.");
-    if (!canAccessStaffCoverage(permissionUser(user))) return createPermissionError("Você não tem permissão para visualizar Staff e Cobertura.");
+    if (!canAccessStaffCoverage(permissionUser(user))) return createPermissionError("Você não tem permissão para visualizar Requerido.");
     if (!query.date || !query.lob || !query.shift) return { error: "Informe data, LOB e turno.", message: "Informe data, LOB e turno.", status: 400 };
 
     const date = parseDate(query.date);
@@ -240,7 +240,7 @@ export async function getStaffCoverageDetails(actor: Actor, query: StaffCoverage
     };
   } catch (error) {
     recordErrorLog({ userEmail: actor.email, code: "STAFF_COVERAGE_DETAILS_ERROR", message: errorMessage(error), action: "STAFF_COVERAGE_DETAILS", severity: "ERROR" });
-    return { error: "Não foi possível carregar os agentes da cobertura.", message: "Não foi possível carregar os agentes da cobertura." };
+    return { error: "Não foi possível carregar os agentes disponíveis.", message: "Não foi possível carregar os agentes disponíveis." };
   }
 }
 
@@ -249,7 +249,7 @@ export async function previewStaffCoverageImport(actor: Actor, rows: Array<Recor
     const user = await getUser(actor);
     if (!user) return { success: false, error: "Usuário não encontrado ou inativo.", message: "Usuário não encontrado ou inativo.", rows: [], summary: emptyPreviewSummary() };
     if (!canManageStaffCoverageRequirements(permissionUser(user))) {
-      return { success: false, error: "Apenas WFM ou ADMIN podem importar requerido de Staff e Cobertura.", message: "Apenas WFM ou ADMIN podem importar requerido de Staff e Cobertura.", rows: [], summary: emptyPreviewSummary() };
+      return { success: false, error: "Apenas WFM ou ADMIN podem importar Requerido.", message: "Apenas WFM ou ADMIN podem importar Requerido.", rows: [], summary: emptyPreviewSummary() };
     }
 
     const normalizedRows = rows.map(normalizeImportRow);
@@ -336,7 +336,7 @@ export async function commitStaffCoverageImport(actor: Actor, rows: StaffCoverag
     const user = await getUser(actor);
     if (!user) return { error: "Usuário não encontrado ou inativo.", message: "Usuário não encontrado ou inativo.", status: 403 };
     if (!canManageStaffCoverageRequirements(permissionUser(user))) {
-      return { error: "Apenas WFM ou ADMIN podem importar requerido de Staff e Cobertura.", message: "Apenas WFM ou ADMIN podem importar requerido de Staff e Cobertura.", status: 403 };
+      return { error: "Apenas WFM ou ADMIN podem importar Requerido.", message: "Apenas WFM ou ADMIN podem importar Requerido.", status: 403 };
     }
 
     const validRows = rows.filter((row) => !row.errors?.length && row.date && row.lobId && row.shiftId && row.required !== null && row.required !== undefined);
@@ -387,7 +387,7 @@ export async function commitStaffCoverageImport(actor: Actor, rows: StaffCoverag
 export async function exportStaffCoverageXlsxData(actor: Actor, query: StaffCoverageQuery = {}): Promise<XlsxExportPayload | ReturnType<typeof createPermissionError>> {
   const user = await getUser(actor);
   if (!user) return createPermissionError("Usuário não encontrado ou inativo.");
-  if (!canExportStaffCoverage(permissionUser(user))) return createPermissionError("Você não tem permissão para exportar Staff e Cobertura.");
+  if (!canExportStaffCoverage(permissionUser(user))) return createPermissionError("Você não tem permissão para exportar Requerido.");
 
   const result = await listStaffCoverage(actor, { ...query, page: 1, limit: coverageExportLimit, includeAgents: true });
   if ("error" in result) return result as ReturnType<typeof createPermissionError>;
@@ -419,14 +419,14 @@ export async function exportStaffCoverageXlsxData(actor: Actor, query: StaffCove
       action: AuditAction.UPLOAD,
       entity: "StaffCoverageExport",
       entityId: `staff-coverage-export-${Date.now()}`,
-      reason: "Exportação XLSX de Staff e Cobertura",
+      reason: "Exportação XLSX de Requerido",
       newValue: { filters: query, rows: result.data.length, agents: agents.length }
     }
   });
 
   return {
-    fileName: fileNameForPeriod("staff_cobertura", result.period.startDate, result.period.endDate),
-    sheetName: "cobertura",
+    fileName: fileNameForPeriod("requerido", result.period.startDate, result.period.endDate),
+    sheetName: "requerido",
     headers: ["data", "dia_semana", "lob", "turno", "requerido", "disponivel", "gap", "status", "observacao"],
     rows,
     sheets: [
@@ -515,7 +515,7 @@ async function auditStaffCoverageImport(userId: string, rows: StaffCoverageImpor
           action: existing ? AuditAction.EDICAO : AuditAction.CRIACAO,
           entity: "StaffCoverageRequirement",
           entityId: `${row.dateKey}-${row.lobId}-${row.shiftId}`,
-          reason: `Importação de requerido de Staff e Cobertura${summary.fileName ? ` (${summary.fileName})` : ""}`,
+          reason: `Importação de Requerido${summary.fileName ? ` (${summary.fileName})` : ""}`,
           previousValue: {},
           newValue: serialize({
             date: row.dateKey,
@@ -981,9 +981,9 @@ function staffCoverageCommitUserMessage(error: unknown) {
     return "A importação demorou mais do que o banco permitiu. O processamento em lote foi ajustado; tente importar novamente.";
   }
   if (/column .*does not exist|createdById|updatedById|observation|createdAt|updatedAt/i.test(message)) {
-    return "A migration de Staff e Cobertura ainda não foi aplicada no banco online. Rode npx prisma migrate deploy e tente novamente.";
+    return "A migration de Requerido ainda não foi aplicada no banco online. Rode npx prisma migrate deploy e tente novamente.";
   }
-  return "Não foi possível importar o requerido de Staff e Cobertura.";
+  return "Não foi possível importar o Requerido.";
 }
 
 function emptyPreviewSummary() {

@@ -24,7 +24,7 @@ export async function GET() {
   return new NextResponse(body, {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": 'attachment; filename="template_staff_cobertura.xlsx"',
+      "Content-Disposition": 'attachment; filename="template_requerido.xlsx"',
       "Content-Length": String(body.byteLength),
       "Cache-Control": "no-store"
     }
