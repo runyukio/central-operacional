@@ -26,6 +26,8 @@ const updateSchema = z.object({
   admissionDate: z.string().trim().optional(),
   trainingStartDate: z.string().trim().optional(),
   terminationDate: z.string().trim().optional(),
+  terminationType: z.string().trim().optional(),
+  terminationReason: z.string().trim().optional(),
   siteOperation: z.string().trim().optional(),
   internalNotes: z.string().trim().optional(),
   primaryPhone: z.string().trim().optional(),

@@ -716,6 +716,8 @@ type EmployeeClient = (typeof employees)[number] & {
   admissionIso?: string;
   terminationDate?: string;
   terminationDateIso?: string;
+  terminationType?: string;
+  terminationReason?: string;
   trainingStartDate?: string;
   trainingStartDateIso?: string;
   contractType?: string;
@@ -1063,6 +1065,13 @@ function currentOperationalDateInput() {
   return dateInputFromParts(today.year, today.month, today.day);
 }
 
+function offsetOperationalDateInput(days: number) {
+  const today = operationalTodayParts();
+  const date = operationalDateFromParts(today.year, today.month, today.day);
+  date.setUTCDate(date.getUTCDate() + days);
+  return dateInputFromUtc(date);
+}
+
 function operationalDateFromParts(year: number, month: number, day: number) {
   return new Date(Date.UTC(year, month - 1, day, 12));
 }
@@ -1077,6 +1086,11 @@ function parseDateInput(value: string) {
 function monthRange(month: number, year: number) {
   const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
   return { startDate: dateInputFromParts(year, month, 1), endDate: dateInputFromParts(year, month, lastDay) };
+}
+
+function currentOperationalMonthRange() {
+  const period = currentOperationalMonth();
+  return monthRange(period.month, period.year);
 }
 
 function anchorForSchedulePeriod(period: { month: number; year: number }, currentStartDate?: string) {
@@ -1257,7 +1271,7 @@ export function EmployeeRegistrationPublicPage() {
     sex: "Não informar",
     maritalStatus: "Solteiro(a)",
     educationLevel: "Ensino médio",
-    trainingStartDate: "2026-05-04",
+    trainingStartDate: currentOperationalDateInput(),
     preferredSchedule: "Manhã",
     requestedLob: "ALL",
     bankName: "",
@@ -1521,7 +1535,7 @@ function CommandStatCard({ title, value, change, helper, icon: Icon, tone = "blu
 
 export function OperationalCommandCenter() {
   const [attendanceSummary, setAttendanceSummary] = useState<AttendanceSummary | null>(null);
-  const [dateRange, setDateRange] = useState({ startDate: "2026-05-01", endDate: "2026-05-31" });
+  const [dateRange, setDateRange] = useState(() => currentOperationalMonthRange());
   const [commandLobs, setCommandLobs] = useState<string[]>(["Todos"]);
   const [commandRoleTitles, setCommandRoleTitles] = useState<string[]>(["Todos", "Agente"]);
   const [commandShiftOptions, setCommandShiftOptions] = useState<string[]>(["Todos", "Sem turno", ...Array.from(standardShiftNames)]);
@@ -2551,14 +2565,14 @@ export function MySchedulePage() {
   const [requestFilters, setRequestFilters] = useState({ status: "Todos", type: "Todos", priority: "Todos", query: "" });
   const [dayOffForm, setDayOffForm] = useState({
     kind: "DAY_OFF_SWAP" as DayOffKind,
-    currentDayOffDate: "2026-05-03",
-    desiredDayOffDate: "2026-05-06",
-    dayOffToSellDate: "2026-05-03",
+    currentDayOffDate: offsetOperationalDateInput(1),
+    desiredDayOffDate: offsetOperationalDateInput(4),
+    dayOffToSellDate: offsetOperationalDateInput(1),
     availabilityShift: "Manhã",
     preferredStartTime: "",
     preferredEndTime: "",
     acknowledgement: false,
-    desiredDayOffRequestDate: "2026-05-08",
+    desiredDayOffRequestDate: offsetOperationalDateInput(5),
     dayOffReason: "Pessoal",
     urgency: "Média" as ClientRequest["priority"],
     justification: "",
@@ -3310,8 +3324,8 @@ export function RegistrationApprovalsPage() {
     roleTitle: "Agente",
     employeeStatus: "Ativo",
     contractType: "PJ",
-    admissionDate: "2026-05-04",
-    trainingDate: "2026-05-04",
+    admissionDate: currentOperationalDateInput(),
+    trainingDate: currentOperationalDateInput(),
     site: "Remoto",
     internalNotes: "Complementado por RH/Admin/WFM."
   });
@@ -3339,8 +3353,8 @@ export function RegistrationApprovalsPage() {
       roleTitle: op.roleTitle ?? "Agente",
       employeeStatus: op.employeeStatus === "Pendente de Cadastro" ? "Ativo" : op.employeeStatus ?? "Ativo",
       contractType: op.contractType ?? "PJ",
-      admissionDate: op.admissionDate ?? "2026-05-04",
-      trainingDate: op.trainingDate ?? "2026-05-04",
+      admissionDate: op.admissionDate ?? currentOperationalDateInput(),
+      trainingDate: op.trainingDate ?? currentOperationalDateInput(),
       site: op.site ?? "Remoto",
       internalNotes: op.internalNotes ?? "Complementado por RH/Admin/WFM."
     });
@@ -3850,9 +3864,9 @@ export function SchedulesPage() {
   const [selectedAttendancePending, setSelectedAttendancePending] = useState<AttendanceItem | null>(null);
   const [pendingSupervisorFilter, setPendingSupervisorFilter] = useState("Todos");
   const [scheduleActorRole, setScheduleActorRole] = useState("COLABORADOR");
-  const [schedulePeriod, setSchedulePeriod] = useState({ month: 5, year: 2026 });
+  const [schedulePeriod, setSchedulePeriod] = useState(() => currentOperationalMonth());
   const [scheduleRangeMode, setScheduleRangeMode] = useState<ScheduleRangeMode>("month");
-  const [scheduleDateRange, setScheduleDateRange] = useState(monthRange(5, 2026));
+  const [scheduleDateRange, setScheduleDateRange] = useState(() => currentOperationalMonthRange());
   const [scheduleDateError, setScheduleDateError] = useState("");
   const [scheduleDateColumns, setScheduleDateColumns] = useState<string[]>([]);
   const [schedulePagination, setSchedulePagination] = useState({ page: 1, limit: 75, total: 0, totalPages: 1 });
@@ -3860,7 +3874,7 @@ export function SchedulesPage() {
   const [scheduleEditForm, setScheduleEditForm] = useState({
     scheduleId: "",
     employeeId: "",
-    date: "2026-05-01",
+    date: currentOperationalDateInput(),
     shift: "Manhã",
     startsAt: "06:00",
     endsAt: "14:00",
@@ -3906,7 +3920,7 @@ export function SchedulesPage() {
     attendanceRecordId: "",
     scheduleId: "",
     employeeId: "",
-    date: "2026-05-15",
+    date: currentOperationalDateInput(),
     shift: "Manhã",
     status: "Falta",
     absenceReason: "Ausente",
@@ -5655,9 +5669,8 @@ export function WorkHoursPage() {
   const [rows, setRows] = useState<WorkHourRow[]>([]);
   const [summary, setSummary] = useState<WorkHourSummary | null>(null);
   const [pagination, setPagination] = useState({ page: 1, limit: 50, total: 0, totalPages: 1 });
-  const [filters, setFilters] = useState({
-    startDate: "2026-05-01",
-    endDate: "2026-05-31",
+  const [filters, setFilters] = useState(() => ({
+    ...currentOperationalMonthRange(),
     lob: "Todos",
     supervisor: "",
     shift: "Todos",
@@ -5668,7 +5681,7 @@ export function WorkHoursPage() {
     divergentOnly: false,
     pendingOnly: false,
     noScheduleOnly: false
-  });
+  }));
   const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
@@ -5963,7 +5976,7 @@ export function WorkHoursPage() {
           <FormSelect label="Origem" value={filters.source} options={sourceOptions} onChange={(value) => setFilters({ ...filters, source: value })} />
           <div className="flex items-end gap-2">
             <button onClick={() => loadWorkHours(1)} className="h-11 flex-1 rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
-            <button onClick={() => { setFilters({ startDate: "2026-05-01", endDate: "2026-05-31", lob: "Todos", supervisor: "", shift: "Todos", collaborator: "", employeeStatus: "Todos", status: "Todos", source: "Todos", divergentOnly: false, pendingOnly: false, noScheduleOnly: false }); setTimeout(() => void loadWorkHours(1), 0); }} className="h-11 rounded-lg border border-border bg-white px-3 text-sm font-bold">Limpar</button>
+            <button onClick={() => { setFilters({ ...currentOperationalMonthRange(), lob: "Todos", supervisor: "", shift: "Todos", collaborator: "", employeeStatus: "Todos", status: "Todos", source: "Todos", divergentOnly: false, pendingOnly: false, noScheduleOnly: false }); setTimeout(() => void loadWorkHours(1), 0); }} className="h-11 rounded-lg border border-border bg-white px-3 text-sm font-bold">Limpar</button>
           </div>
         </div>
         <div className="mt-3 flex flex-wrap gap-3 text-sm font-semibold text-navy-950">
@@ -6230,7 +6243,7 @@ export function WorkHoursPage() {
 const templateRows = [
   {
     wb_login: "WB1001",
-    data: "2026-05-15",
+    data: currentOperationalDateInput(),
     status: "Escalado",
     turno: "Manhã",
     entrada: "06:00",
@@ -6512,14 +6525,14 @@ export function RequestsPage() {
     priority: "Média",
     requestedDate: "",
     dayOffKind: "DAY_OFF_SWAP" as DayOffKind,
-    currentDayOffDate: "2026-05-03",
-    desiredDayOffDate: "2026-05-06",
-    dayOffToSellDate: "2026-05-03",
+    currentDayOffDate: offsetOperationalDateInput(1),
+    desiredDayOffDate: offsetOperationalDateInput(4),
+    dayOffToSellDate: offsetOperationalDateInput(1),
     availabilityShift: "Manhã",
     preferredStartTime: "",
     preferredEndTime: "",
     acknowledgement: false,
-    desiredDayOffRequestDate: "2026-05-08",
+    desiredDayOffRequestDate: offsetOperationalDateInput(5),
     dayOffReason: "Pessoal",
     urgency: "Média",
     justification: "",
@@ -7563,6 +7576,8 @@ export function EmployeeMapPage() {
   const [admissionDraft, setAdmissionDraft] = useState("");
   const [trainingDraft, setTrainingDraft] = useState("");
   const [terminationDraft, setTerminationDraft] = useState("");
+  const [terminationTypeDraft, setTerminationTypeDraft] = useState("");
+  const [terminationReasonDraft, setTerminationReasonDraft] = useState("");
   const [siteDraft, setSiteDraft] = useState("");
   const [primaryPhoneDraft, setPrimaryPhoneDraft] = useState("");
   const [cityDraft, setCityDraft] = useState("");
@@ -7597,6 +7612,7 @@ export function EmployeeMapPage() {
   const employeeRoleTitleOptions = employeeSettings?.roleTitles.filter((title) => title.status !== "INACTIVE").map((title) => title.name) ?? [];
   const employeeRoleOptions = employeeSettings?.roles.filter((roleItem) => roleItem.status !== "INACTIVE").map((roleItem) => roleItem.name) ?? ["COLABORADOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI", "GESTOR", "ADMIN"];
   const contractOptions = ["CLT", "PJ", "Temporário", "Estágio", "Terceiro", "Outro"];
+  const terminationTypeOptions = ["", "Voluntário", "Involuntário"];
   const operationalStatusOptions = employeeOperationalStatusOptions;
 
   useEffect(() => {
@@ -7687,6 +7703,8 @@ export function EmployeeMapPage() {
     setAdmissionDraft(selected.admissionIso ?? "");
     setTrainingDraft(selected.trainingStartDateIso ?? "");
     setTerminationDraft(selected.terminationDateIso ?? "");
+    setTerminationTypeDraft(selected.terminationType ?? "");
+    setTerminationReasonDraft(selected.terminationReason ?? "");
     setSiteDraft(selected.siteOperation ?? "");
     setPrimaryPhoneDraft(selected.primaryPhone ?? "");
     setCityDraft(selected.city ?? "");
@@ -7725,6 +7743,8 @@ export function EmployeeMapPage() {
           admissionDate: selectedCanEditPeopleData ? admissionDraft : undefined,
           trainingStartDate: selectedCanEditPeopleData ? trainingDraft : undefined,
           terminationDate: selectedCanEditPeopleData ? terminationDraft : undefined,
+          terminationType: selectedCanEditPeopleData ? terminationTypeDraft : undefined,
+          terminationReason: selectedCanEditPeopleData ? terminationReasonDraft : undefined,
           siteOperation: canEditOperationalBindings ? siteDraft : undefined,
           internalNotes: selectedCanEditEmployeeOperational ? internalNotesDraft : undefined,
           primaryPhone: selectedCanEditPeopleData ? primaryPhoneDraft : undefined,
@@ -7902,6 +7922,8 @@ export function EmployeeMapPage() {
                 <InfoLine label="Cronograma" value={selected.schedule} />
                 <InfoLine label="Admissão" value={selected.admission} />
                 <InfoLine label="Desligamento" value={selected.terminationDate || "Não informada"} />
+                <InfoLine label="Tipo de desligamento" value={selected.terminationType || "Não informado"} />
+                <InfoLine label="Motivo do desligamento" value={selected.terminationReason || "Não informado"} />
                 <InfoLine label="Status do colaborador" value={employeeMapStatusLabel(selected.status)} />
               </div>
               <ProfileSection title="Dados Operacionais">
@@ -8012,6 +8034,8 @@ export function EmployeeMapPage() {
                             {selectedCanEditPeopleData ? <FormInput label="Data de admissão" type="date" value={admissionDraft} onChange={setAdmissionDraft} error={employeeFieldErrors.admissionDate} /> : null}
                             {selectedCanEditPeopleData ? <FormInput label="Início do treinamento" type="date" value={trainingDraft} onChange={setTrainingDraft} error={employeeFieldErrors.trainingStartDate} /> : null}
                             {selectedCanEditPeopleData ? <FormInput label="Data de desligamento" type="date" value={terminationDraft} onChange={setTerminationDraft} error={employeeFieldErrors.terminationDate} /> : null}
+                            {selectedCanEditPeopleData ? <FormSelect label="Tipo de desligamento" value={terminationTypeDraft} options={terminationTypeOptions} onChange={setTerminationTypeDraft} error={employeeFieldErrors.terminationType} /> : null}
+                            {selectedCanEditPeopleData ? <FormInput label="Motivo do desligamento" value={terminationReasonDraft} onChange={setTerminationReasonDraft} error={employeeFieldErrors.terminationReason} /> : null}
                             {isAdmin ? <FormSelect label="Usuário ativo/inativo" value={userStatusDraft} options={["ACTIVE", "INACTIVE", "BLOCKED"]} onChange={setUserStatusDraft} error={employeeFieldErrors.userStatus} /> : null}
                           </div>
                         </ProfileSection>
@@ -8698,7 +8722,7 @@ export function QualityPage() {
           <SimpleTable
             columns={["Data/Hora", "Colaborador", "Tipo", "Tema", "Qualidade", "Status", "Feedback"]}
             rows={feedbacks.map((feedback, index) => [
-              feedback.createdAt ?? `23/05/2026 0${Math.max(4, 9 - index)}:15`,
+              feedback.createdAt ?? `${currentOperationalDateInput().split("-").reverse().join("/")} 0${Math.max(4, 9 - index)}:15`,
               feedback.employee,
               feedback.type,
               feedback.theme,
@@ -11040,7 +11064,7 @@ export function SettingsPage() {
   const [roleTitleDraft, setRoleTitleDraft] = useState({ previousName: "", name: "", status: "ACTIVE" as "ACTIVE" | "INACTIVE" });
   const [ruleDraft, setRuleDraft] = useState({ id: "", name: "", requestType: "", priority: "Média", hours: "24", role: "WFM", lob: "ALL", shift: "", staffRequired: "1", points: "1", status: "ACTIVE" as "ACTIVE" | "INACTIVE" });
   const [generalDraft, setGeneralDraft] = useState<Record<string, unknown>>({});
-  const [defaultMonthDraft, setDefaultMonthDraft] = useState("2026-05");
+  const [defaultMonthDraft, setDefaultMonthDraft] = useState(() => currentOperationalMonthInput());
   const [savingSettings, setSavingSettings] = useState(false);
 
   useEffect(() => {

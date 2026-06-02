@@ -43,6 +43,8 @@ export type EmployeeAdminUpdateInput = {
   admissionDate?: string;
   trainingStartDate?: string;
   terminationDate?: string;
+  terminationType?: string;
+  terminationReason?: string;
   siteOperation?: string;
   internalNotes?: string;
   primaryPhone?: string;
@@ -264,6 +266,8 @@ type LegacyEmployeeRow = {
   roleTitle: string;
   admissionDate: Date;
   terminationDate: Date | null;
+  terminationType: string | null;
+  terminationReason: string | null;
   scheduleType: string;
   operationalStatus: string;
   skill: string | null;
@@ -289,6 +293,8 @@ type EmployeeSummaryRow = {
   roleTitle: string;
   admissionDate: Date;
   terminationDate: Date | null;
+  terminationType: string | null;
+  terminationReason: string | null;
   scheduleType: string;
   operationalStatus: string;
   skill: string | null;
@@ -313,6 +319,8 @@ const employeeSummarySelect = {
   roleTitle: true,
   admissionDate: true,
   terminationDate: true,
+  terminationType: true,
+  terminationReason: true,
   scheduleType: true,
   operationalStatus: true,
   skill: true,
@@ -356,6 +364,8 @@ async function listOperationalEmployeesLegacy(actor: Actor) {
       e."roleTitle",
       e."admissionDate",
       NULL::timestamp AS "terminationDate",
+      NULL::text AS "terminationType",
+      NULL::text AS "terminationReason",
       e."scheduleType",
       e."operationalStatus",
       e."skill",
@@ -413,7 +423,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     if (!canEditOperational && !canEditPeopleData) return createPermissionError("Você não tem permissão para editar dados do colaborador.");
 
     const adminOnlyFields: Array<keyof EmployeeAdminUpdateInput> = ["wbLogin", "roleName", "userStatus"];
-    const sensitivePeopleFields: Array<keyof EmployeeAdminUpdateInput> = ["fullName", "socialName", "email", "primaryPhone", "city", "stateUf", "preferredSchedule", "contractType", "admissionDate", "trainingStartDate", "terminationDate"];
+    const sensitivePeopleFields: Array<keyof EmployeeAdminUpdateInput> = ["fullName", "socialName", "email", "primaryPhone", "city", "stateUf", "preferredSchedule", "contractType", "admissionDate", "trainingStartDate", "terminationDate", "terminationType", "terminationReason"];
     const operationalBindingFields: Array<keyof EmployeeAdminUpdateInput> = ["lobId", "teamId", "supervisorId", "shiftId", "scheduleType", "siteOperation"];
     const profileOperationalFields: Array<keyof EmployeeAdminUpdateInput> = ["roleTitle", "operationalStatus", "internalNotes", "skill", "wave"];
     if (!actorIsAdmin && adminOnlyFields.some((field) => input[field] !== undefined)) return createPermissionError("Apenas Admin pode alterar WB/Login, role ou status de acesso.");
@@ -443,6 +453,11 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     if ("error" in nextTrainingDate) return createValidationError({ trainingStartDate: nextTrainingDate.error });
     const nextTerminationDate = parseDateInput(input.terminationDate, "Data de desligamento inválida.");
     if ("error" in nextTerminationDate) return createValidationError({ terminationDate: nextTerminationDate.error });
+    const nextTerminationType = normalizeTerminationType(input.terminationType);
+    if (input.terminationType !== undefined && nextTerminationType === undefined && clean(input.terminationType)) {
+      return createValidationError({ terminationType: "Tipo de desligamento inválido. Use Voluntário ou Involuntário." });
+    }
+    const nextTerminationReason = cleanNullable(input.terminationReason);
     const nextSiteOperation = cleanNullable(input.siteOperation);
     const nextInternalNotes = cleanNullable(input.internalNotes);
     const nextSkill = cleanNullable(input.skill);
@@ -545,6 +560,8 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
           ...(nextAdmissionDate.value ? { admissionDate: nextAdmissionDate.value } : {}),
           ...(input.trainingStartDate !== undefined ? { trainingStartDate: nextTrainingDate.value ?? null } : {}),
           ...(input.terminationDate !== undefined ? { terminationDate: nextTerminationDate.value ?? null } : {}),
+          ...(input.terminationType !== undefined ? { terminationType: nextTerminationType ?? null } : {}),
+          ...(input.terminationReason !== undefined ? { terminationReason: nextTerminationReason } : {}),
           ...(input.siteOperation !== undefined ? { siteOperation: nextSiteOperation } : {}),
           ...(input.internalNotes !== undefined ? { internalNotes: nextInternalNotes } : {}),
           ...(input.skill !== undefined ? { skill: nextSkill } : {}),
@@ -806,6 +823,7 @@ function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: 
   const canViewBank = ["ADMIN", "GESTOR"].includes(role) || (role === "RH" && canViewSensitive);
   const canViewContact = ["ADMIN", "GESTOR", "TI"].includes(role) || (role === "RH" && canViewSensitive) || role === "COLABORADOR";
   const canViewPeopleProfile = canViewSensitive || ["ADMIN", "GESTOR", "COLABORADOR"].includes(role);
+  const canViewTerminationData = canViewPeopleProfile || role === "WFM";
   const canEditData = canEditEmployeeData({ role }, { roleTitle: employee.roleTitle, email: employee.user?.email });
   return {
     id: employee.id,
@@ -832,8 +850,10 @@ function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: 
     equipment: employee.equipments.length,
     admission: formatDate(employee.admissionDate),
     admissionIso: toDateInput(employee.admissionDate),
-    terminationDate: canViewPeopleProfile && employee.terminationDate ? formatDate(employee.terminationDate) : "",
-    terminationDateIso: canViewPeopleProfile && employee.terminationDate ? toDateInput(employee.terminationDate) : "",
+    terminationDate: canViewTerminationData && employee.terminationDate ? formatDate(employee.terminationDate) : "",
+    terminationDateIso: canViewTerminationData && employee.terminationDate ? toDateInput(employee.terminationDate) : "",
+    terminationType: canViewTerminationData ? employee.terminationType ?? "" : "",
+    terminationReason: canViewTerminationData ? employee.terminationReason ?? "" : "",
     trainingStartDate: canViewPeopleProfile && employee.trainingStartDate ? formatDate(employee.trainingStartDate) : "",
     trainingStartDateIso: canViewPeopleProfile && employee.trainingStartDate ? toDateInput(employee.trainingStartDate) : "",
     contractType: canViewPeopleProfile ? employee.contractType ?? "" : "",
@@ -916,6 +936,8 @@ function mapLegacyEmployee(employee: LegacyEmployeeRow, role: string) {
     admissionIso: toDateInput(employee.admissionDate),
     terminationDate: "",
     terminationDateIso: "",
+    terminationType: "",
+    terminationReason: "",
     trainingStartDate: "",
     trainingStartDateIso: "",
     contractType: "",
@@ -951,6 +973,7 @@ function mapLegacyEmployee(employee: LegacyEmployeeRow, role: string) {
 
 function mapEmployeeSummary(employee: EmployeeSummaryRow, role: string) {
   const canViewSensitive = canViewEmployeeSensitiveData({ role }, { roleTitle: employee.roleTitle, email: employee.user?.email });
+  const canViewTerminationData = canViewSensitive || ["ADMIN", "GESTOR", "WFM"].includes(role);
   const canEditData = canEditEmployeeData({ role }, { roleTitle: employee.roleTitle, email: employee.user?.email });
   return {
     id: employee.id,
@@ -977,8 +1000,10 @@ function mapEmployeeSummary(employee: EmployeeSummaryRow, role: string) {
     equipment: employee._count.equipments,
     admission: formatDate(employee.admissionDate),
     admissionIso: toDateInput(employee.admissionDate),
-    terminationDate: canViewSensitive && employee.terminationDate ? formatDate(employee.terminationDate) : "",
-    terminationDateIso: canViewSensitive && employee.terminationDate ? toDateInput(employee.terminationDate) : "",
+    terminationDate: canViewTerminationData && employee.terminationDate ? formatDate(employee.terminationDate) : "",
+    terminationDateIso: canViewTerminationData && employee.terminationDate ? toDateInput(employee.terminationDate) : "",
+    terminationType: canViewTerminationData ? employee.terminationType ?? "" : "",
+    terminationReason: canViewTerminationData ? employee.terminationReason ?? "" : "",
     trainingStartDate: "",
     trainingStartDateIso: "",
     contractType: "",
@@ -1030,6 +1055,8 @@ function employeeExportColumns(role: string) {
     col("status_colaborador", (employee) => employee.employeeStatus ?? displayEmployeeStatus(employee.status)),
     col("status_usuario", (employee) => employee.userStatus),
     col("data_desligamento", (employee) => employee.terminationDate),
+    col("tipo_desligamento", (employee) => employee.terminationType),
+    col("motivo_desligamento", (employee) => employee.terminationReason),
     col("preferencia_horario", (employee) => employee.preferredSchedule),
     col("cronograma_vinculado", (employee) => employee.schedule ? "Sim" : "Não")
   ];
@@ -1303,9 +1330,24 @@ function normalizeStatusToken(value: unknown) {
     .toUpperCase();
 }
 
+function normalizeTerminationType(value: unknown) {
+  const raw = clean(value);
+  if (!raw) return undefined;
+  const token = normalizeStatusToken(raw);
+  const map: Record<string, string> = {
+    VOLUNTARIO: "Voluntário",
+    VOLUNTARIA: "Voluntário",
+    VOLUNTARY: "Voluntário",
+    INVOLUNTARIO: "Involuntário",
+    INVOLUNTARIA: "Involuntário",
+    INVOLUNTARY: "Involuntário"
+  };
+  return map[token];
+}
+
 function isMissingEmployeeProfileColumnError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error ?? "");
-  return /EmployeeProfile\.(socialName|primaryPhone|city|stateUf|preferredSchedule|trainingStartDate|terminationDate|contractType|siteOperation|internalNotes|skill|wave)|column .* does not exist/i.test(message);
+  return /EmployeeProfile\.(socialName|primaryPhone|city|stateUf|preferredSchedule|trainingStartDate|terminationDate|terminationType|terminationReason|contractType|siteOperation|internalNotes|skill|wave)|column .* does not exist/i.test(message);
 }
 
 function formatDate(date: Date) {
@@ -1372,6 +1414,8 @@ function serializeEmployeeForAudit(employee: EmployeeWithRelations) {
     admissionDate: employee.admissionDate,
     trainingStartDate: employee.trainingStartDate,
     terminationDate: employee.terminationDate,
+    terminationType: employee.terminationType,
+    terminationReason: employee.terminationReason,
     siteOperation: employee.siteOperation,
     internalNotes: employee.internalNotes,
     primaryPhone: employee.primaryPhone,

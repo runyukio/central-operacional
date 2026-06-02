@@ -363,6 +363,8 @@ model EmployeeProfile {
   admissionDate      DateTime
   trainingStartDate  DateTime?
   terminationDate    DateTime?
+  terminationType    String?
+  terminationReason  String?
   scheduleType       String
   contractType       String?
   siteOperation      String?

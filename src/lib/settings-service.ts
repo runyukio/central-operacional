@@ -181,7 +181,7 @@ export async function getSystemSettings(actor: Actor) {
       readStatusMap(configKeys.requestTypeStatus),
       readObjectConfig<Record<string, string[]>>(configKeys.rolePermissions, {}),
       readRoleTitles(),
-      readStringConfig(configKeys.defaultMonth, "2026-05"),
+      readStringConfig(configKeys.defaultMonth, "2026-06"),
       readRuleList(configKeys.slaRules),
       readRuleList(configKeys.approvalRules),
       readRuleList(configKeys.coverageRules),
@@ -267,7 +267,7 @@ async function getLimitedSystemSettings() {
     readStatusMap(configKeys.teamStatus),
     readStatusMap(configKeys.requestTypeStatus),
     readRoleTitles(),
-    readStringConfig(configKeys.defaultMonth, "2026-05"),
+    readStringConfig(configKeys.defaultMonth, "2026-06"),
     readObjectConfig<Record<string, unknown>>(configKeys.generalSettings, defaultGeneralSettings())
   ]);
 
@@ -745,7 +745,7 @@ function sanitizeRolePermissions(rolePermissions: Record<string, string[]>) {
 function defaultGeneralSettings() {
   return {
     operationName: "Central Operacional",
-    defaultMonth: "2026-05",
+    defaultMonth: "2026-06",
     timezone: "America/Sao_Paulo",
     enableScheduleUpload: true,
     enableDayOffRequests: true,
@@ -769,7 +769,7 @@ function emptySettings() {
     supervisors: [],
     employees: [],
     roleTitles: [],
-    defaultMonth: "2026-05",
+    defaultMonth: "2026-06",
     slaRules: [],
     approvalRules: [],
     coverageRules: [],

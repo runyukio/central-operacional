@@ -1335,9 +1335,24 @@ function calculateRecordStatus(plannedHours: number | null, actualHours: number,
   return isProductiveDifferenceWithinTolerance(difference, toleranceMinutes) ? "OK" : "DIVERGENT";
 }
 
+function currentOperationalMonthBounds() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit"
+  }).formatToParts(new Date());
+  const year = Number(parts.find((part) => part.type === "year")?.value);
+  const month = Number(parts.find((part) => part.type === "month")?.value);
+  return {
+    startDate: new Date(Date.UTC(year, month - 1, 1)),
+    endDate: new Date(Date.UTC(year, month, 0))
+  };
+}
+
 function resolvePeriod(query: WorkHourQuery) {
-  const startDate = parseImportDate(query.startDate) ?? new Date(Date.UTC(2026, 4, 1));
-  const endDate = parseImportDate(query.endDate) ?? new Date(Date.UTC(2026, 4, 31));
+  const defaultPeriod = currentOperationalMonthBounds();
+  const startDate = parseImportDate(query.startDate) ?? defaultPeriod.startDate;
+  const endDate = parseImportDate(query.endDate) ?? defaultPeriod.endDate;
   endDate.setUTCHours(23, 59, 59, 999);
   return { startDate, endDate };
 }

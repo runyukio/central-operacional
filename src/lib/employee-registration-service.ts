@@ -84,6 +84,8 @@ export const employeeImportColumns = [
   "data_admissao",
   "data_inicio_treinamento",
   "data_desligamento",
+  "tipo_desligamento",
+  "motivo_desligamento",
   "site_operacao",
   "preferencia_horario",
   "banco",
@@ -459,6 +461,8 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
             admissionDate: admissionDate.toISOString(),
             trainingStartDate: trainingStartDate.toISOString(),
             terminationDate: row.terminationDate?.toISOString() ?? null,
+            terminationType: row.terminationType,
+            terminationReason: row.terminationReason,
             siteOperation: row.siteOperation
           } as Prisma.InputJsonObject,
           history: [{ at: new Date().toISOString(), actor: actor.name, action: "Cadastro importado e aprovado via Excel", notes: batchId }] as Prisma.InputJsonArray,
@@ -534,6 +538,8 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               ...(row.wave ? { wave: row.wave } : {}),
               trainingStartDate,
               ...(row.terminationDate ? { terminationDate: row.terminationDate } : {}),
+              ...(row.terminationType ? { terminationType: row.terminationType } : {}),
+              ...(row.terminationReason ? { terminationReason: row.terminationReason } : {}),
               contractType: row.contractType || null,
               siteOperation: row.siteOperation || null,
               internalNotes: row.notes || null,
@@ -562,6 +568,8 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               wave: row.wave || null,
               trainingStartDate,
               terminationDate: row.terminationDate,
+              terminationType: row.terminationType || null,
+              terminationReason: row.terminationReason || null,
               contractType: row.contractType || null,
               siteOperation: row.siteOperation || null,
               internalNotes: row.notes || null,
@@ -1036,6 +1044,9 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     if (hasImportValue(rows[index]?.data_admissao) && !row.admissionDate) errors.push("Data de admissão inválida.");
     if (hasImportValue(rows[index]?.data_inicio_treinamento) && !row.trainingStartDate) errors.push("Data de início do treinamento inválida.");
     if (hasImportValue(rows[index]?.data_desligamento) && !row.terminationDate) errors.push("Data de desligamento inválida.");
+    if (hasImportValue(rows[index]?.tipo_desligamento) && !row.terminationType) errors.push("Tipo de desligamento inválido. Use Voluntário ou Involuntário.");
+    if (isAttritionStatus(row.employeeStatus) && !row.terminationDate) warnings.push("Status de desligamento/inatividade sem data_desligamento. Para attrition, informe a data de desligamento.");
+    if (row.terminationDate && !isAttritionStatus(row.employeeStatus)) warnings.push("Data de desligamento preenchida, mas status_colaborador não está Inativo ou Desligado.");
     if (row.stateUf && !/^[A-Z]{2}$/.test(row.stateUf)) errors.push("Estado UF deve ter 2 letras.");
     if (row.zipCode && !/^\d{5}-?\d{3}$/.test(row.zipCode)) warnings.push("CEP fora do padrão 00000-000.");
     if (row.primaryPhone && !/^\d{2}\s?\d{4,5}-?\d{4}$/.test(row.primaryPhone.replace(/[()]/g, ""))) warnings.push("Contato principal fora do padrão brasileiro.");
@@ -1143,6 +1154,8 @@ function normalizeEmployeeImportRow(raw: EmployeeImportRow) {
     admissionDate: parseImportDate(raw.data_admissao),
     trainingStartDate: parseImportDate(raw.data_inicio_treinamento),
     terminationDate: parseImportDate(raw.data_desligamento),
+    terminationType: normalizeTerminationType(raw.tipo_desligamento),
+    terminationReason: text(raw.motivo_desligamento),
     siteOperation: text(raw.site_operacao),
     preferredSchedule: text(raw.preferencia_horario) || "Não informado",
     bankName: text(raw.banco) || "Não informado",
@@ -1318,6 +1331,26 @@ function normalizeEmployeeStatus(value: unknown) {
     SUSPENSO: "Suspenso"
   };
   return map[key] ?? raw;
+}
+
+function isAttritionStatus(value: unknown) {
+  const key = normalizeLookupKey(text(value));
+  return ["INATIVO", "INACTIVE", "DESLIGADO", "DESLIGADA", "TERMINATED", "DESATIVADO", "DESATIVADA"].includes(key);
+}
+
+function normalizeTerminationType(value: unknown) {
+  const raw = text(value);
+  if (!raw) return "";
+  const key = normalizeLookupKey(raw);
+  const map: Record<string, string> = {
+    VOLUNTARIO: "Voluntário",
+    VOLUNTARIA: "Voluntário",
+    VOLUNTARY: "Voluntário",
+    INVOLUNTARIO: "Involuntário",
+    INVOLUNTARIA: "Involuntário",
+    INVOLUNTARY: "Involuntário"
+  };
+  return map[key] ?? "";
 }
 
 function normalizeContractType(value: unknown) {
