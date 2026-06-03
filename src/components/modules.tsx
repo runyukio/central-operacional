@@ -33,18 +33,21 @@ import {
   FileJson,
   FileSpreadsheet,
   FileText,
+  Frown,
   Headphones,
   HeartPulse,
   KanbanSquare,
   Laptop,
   LockKeyhole,
   Megaphone,
+  Meh,
   MessageCircle,
   Plus,
   RefreshCw,
   Search,
   Send,
   ShieldCheck,
+  Smile,
   Star,
   Target,
   Trophy,
@@ -112,6 +115,7 @@ const scheduleStatusOptions = ["Escalado", "Presente", "Nesting", "Falta", "Atra
 const attendanceReasonStatuses = ["Falta", "Atraso", "Saída antecipada", "Erro de cronograma"];
 const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Nesting", "Venda de folga aprovada"];
 const employeeOperationalStatusOptions = ["Ativo", "Nesting", "Inativo", "Pendente de cadastro", "Afastado", "Desligado", "Em treinamento", "Suspenso"];
+const pcdDisabilityTypeOptions = ["", "Física", "Auditiva", "Visual", "Intelectual", "Psicossocial", "Múltipla", "Neurodivergente", "Outra", "Prefiro não informar"];
 const absenceReasonOptions = ["Não informado", "Problema de saúde", "Emergência familiar", "Problema técnico", "Falta de equipamento", "Problema de internet", "Saída antecipada", "Afastamento", "Erro de cronograma", "Outros"];
 const timeBlockCategoryOptions = ["Administrativo", "Desenvolvimento", "Acompanhamento de operação", "Feedback", "Reunião", "Treinamento", "Suporte ao time", "Análise de indicadores", "Escalonamento / Ocorrência", "Pausa", "Outros"];
 const scheduleShiftTimes: Record<string, { startsAt: string; endsAt: string }> = {
@@ -538,6 +542,11 @@ type RegistrationItem = {
   emergencyPhone: string;
   birthDate: string;
   educationLevel: string;
+  ethnicity?: string;
+  sexualOrientation?: string;
+  isPcd?: string;
+  pcdDisabilityType?: string;
+  pcdDisabilityOther?: string;
   preferredSchedule: string;
   trainingStartDate: string;
   reviewNotes?: string;
@@ -577,6 +586,9 @@ type EmployeeImportPreview = {
       supervisor: string;
       skill: string;
       wave: string;
+      isPcd?: string;
+      pcdDisabilityType?: string;
+      pcdDisabilityOther?: string;
       createUser: boolean;
       passwordProvided: boolean;
     };
@@ -758,7 +770,9 @@ type EmployeeClient = (typeof employees)[number] & {
   contractType?: string;
   ethnicity?: string;
   sexualOrientation?: string;
-  isCpd?: string;
+  isPcd?: string;
+  pcdDisabilityType?: string;
+  pcdDisabilityOther?: string;
   firstJob?: string;
   hasTelemarketingExperience?: string;
   telemarketingWhere?: string;
@@ -802,7 +816,7 @@ type EmployeeListResponse = {
   page?: number;
   limit?: number;
   totalPages?: number;
-  filterOptions?: { skills: string[]; waves: string[] };
+  filterOptions?: { skills: string[]; waves: string[]; statuses?: string[] };
 };
 
 type HierarchyEmployeeClient = {
@@ -1272,7 +1286,9 @@ const registrationFieldLabels: Record<string, string> = {
   educationLevel: "Escolaridade",
   ethnicity: "Etnia",
   sexualOrientation: "Orientação sexual",
-  isCpd: "É CPD?",
+  isPcd: "É PCD?",
+  pcdDisabilityType: "Tipo de deficiência",
+  pcdDisabilityOther: "Especifique o tipo de deficiência",
   firstJob: "Primeiro emprego?",
   hasTelemarketingExperience: "Já trabalhou em telemarketing?",
   telemarketingWhere: "Onde trabalhou em telemarketing?",
@@ -1319,7 +1335,9 @@ export function EmployeeRegistrationPublicPage() {
     educationLevel: "Ensino médio",
     ethnicity: "",
     sexualOrientation: "",
-    isCpd: "",
+    isPcd: "",
+    pcdDisabilityType: "",
+    pcdDisabilityOther: "",
     firstJob: "",
     hasTelemarketingExperience: "",
     telemarketingWhere: "",
@@ -1381,7 +1399,22 @@ export function EmployeeRegistrationPublicPage() {
       <FormSelect label="Escolaridade" value={form.educationLevel} error={fieldError("educationLevel")} options={["Ensino médio", "Superior cursando", "Superior completo", "Pós-graduação"]} onChange={(value) => updateField("educationLevel", value)} />
       <FormSelect label="Etnia" value={form.ethnicity} error={fieldError("ethnicity")} options={["", "Branca", "Preta", "Parda", "Amarela", "Indígena", "Prefiro não informar"]} onChange={(value) => updateField("ethnicity", value)} />
       <FormSelect label="Orientação sexual" value={form.sexualOrientation} error={fieldError("sexualOrientation")} options={["", "Heterossexual", "Homossexual", "Bissexual", "Assexual", "Outra", "Prefiro não informar"]} onChange={(value) => updateField("sexualOrientation", value)} />
-      <FormSelect label="É CPD?" value={form.isCpd} error={fieldError("isCpd")} options={["", "Sim", "Não", "Prefiro não informar"]} onChange={(value) => updateField("isCpd", value)} />
+      <FormSelect label="É PCD?" value={form.isPcd} error={fieldError("isPcd")} options={["", "Sim", "Não", "Prefiro não informar"]} onChange={(value) => {
+        updateField("isPcd", value);
+        if (value !== "Sim") {
+          updateField("pcdDisabilityType", "");
+          updateField("pcdDisabilityOther", "");
+        }
+      }} />
+      {form.isPcd === "Sim" ? (
+        <FormSelect label="Tipo de deficiência" value={form.pcdDisabilityType} error={fieldError("pcdDisabilityType")} options={pcdDisabilityTypeOptions} onChange={(value) => {
+          updateField("pcdDisabilityType", value);
+          if (value !== "Outra") updateField("pcdDisabilityOther", "");
+        }} />
+      ) : null}
+      {form.isPcd === "Sim" && form.pcdDisabilityType === "Outra" ? (
+        <FormInput label="Especifique o tipo de deficiência" value={form.pcdDisabilityOther} error={fieldError("pcdDisabilityOther")} onChange={(value) => updateField("pcdDisabilityOther", value)} />
+      ) : null}
       <FormSelect label="Primeiro emprego?" value={form.firstJob} error={fieldError("firstJob")} options={["", "Sim", "Não"]} onChange={(value) => updateField("firstJob", value)} />
       <FormSelect label="Já trabalhou em telemarketing?" value={form.hasTelemarketingExperience} error={fieldError("hasTelemarketingExperience")} options={["", "Sim", "Não"]} onChange={(value) => {
         updateField("hasTelemarketingExperience", value);
@@ -1434,7 +1467,8 @@ export function EmployeeRegistrationPublicPage() {
         ["Gênero", form.sex],
         ["Etnia", form.ethnicity],
         ["Orientação sexual", form.sexualOrientation],
-        ["CPD", form.isCpd],
+        ["PCD", form.isPcd],
+        ...(form.isPcd === "Sim" ? [["Tipo de deficiência", form.pcdDisabilityType], ...(form.pcdDisabilityType === "Outra" ? [["Especificação da deficiência", form.pcdDisabilityOther]] : [])] : []),
         ["Primeiro emprego", form.firstJob],
         ["Telemarketing", form.hasTelemarketingExperience],
         ["PIX principal", `${form.pixKeyType}: ${form.pixKey}`]
@@ -2067,7 +2101,7 @@ export function OperationalCommandCenter() {
       average: 0,
       responses: 0,
       interpretation: "Sem respostas no período",
-      distribution: { "Muito ruim": 0, Ruim: 0, Neutro: 0, Bom: 0, "Muito bom": 0 },
+      distribution: { Triste: 0, Normal: 0, Feliz: 0 },
       byLob: [],
       bySupervisor: [],
       byRoleTitle: []
@@ -2077,11 +2111,12 @@ export function OperationalCommandCenter() {
     average: 0,
     responses: 0,
     interpretation: "Sem respostas no período",
-    distribution: { "Muito ruim": 0, Ruim: 0, Neutro: 0, Bom: 0, "Muito bom": 0 },
+    distribution: { Triste: 0, Normal: 0, Feliz: 0 },
     byLob: [],
     bySupervisor: [],
     byRoleTitle: []
   };
+  const commandMoodOption = commandMood.responses ? moodOptionForScore(commandMood.average) : null;
   const stats = [
     { title: "Pessoas Escaladas", value: summary.planned, change: summary.planned ? "100%" : "0%", helper: "base atual", icon: Users, tone: "blue" as const, action: () => void openCommandDetailPeople("scheduled", "Pessoas Escaladas") },
     { title: "Presentes", value: summary.present, change: `${summary.coverageRate}%`, helper: "cobertura real", icon: UserCheck, tone: "green" as const, action: () => void openCommandDetailPeople("present", "Presentes") },
@@ -2090,10 +2125,10 @@ export function OperationalCommandCenter() {
     { title: "Faltas justificadas", value: summary.justified ?? 0, helper: "com motivo registrado", icon: CheckCircle2, tone: (summary.justified ?? 0) ? "green" as const : "blue" as const, action: () => void openAbsenceReasonPeople("Faltas justificadas", "justified") },
     {
       title: "Medidor de Humor",
-      value: commandMood.responses ? `${commandMood.average} / 5` : "Sem dados",
+      value: commandMood.responses ? commandMoodOption?.label ?? commandMood.interpretation : "Sem dados",
       change: commandMood.responses ? `${commandMood.responses} respostas` : undefined,
       helper: commandMood.interpretation,
-      icon: HeartPulse,
+      icon: commandMoodOption?.icon ?? HeartPulse,
       tone: commandMood.average <= 2 && commandMood.responses ? "red" as const : commandMood.average <= 3 && commandMood.responses ? "orange" as const : "purple" as const,
       action: () => setShowMoodDetail(true)
     }
@@ -3051,7 +3086,7 @@ export function MySchedulePage() {
       const date = currentOperationalDateInput();
       const payload = await apiJson<{ data: { id: string; date: string; moodScore: number; moodLabel: string; comment: string } | null }>(`/api/mood?date=${date}`);
       setTodayMood(payload.data);
-      if (payload.data) setMoodForm({ moodScore: payload.data.moodScore, comment: payload.data.comment ?? "" });
+      if (payload.data) setMoodForm({ moodScore: normalizeMoodScoreForUi(payload.data.moodScore), comment: payload.data.comment ?? "" });
     } catch {
       setTodayMood(null);
     }
@@ -3342,6 +3377,8 @@ export function MySchedulePage() {
     ...myScheduleShiftOptions,
     ...days.map((day) => cleanShiftName(day.shift)).filter((shift) => shift && shift !== "Folga" && shift !== "Sem turno" && shift !== "Sem cronograma")
   ]));
+  const currentMoodOption = moodOptionForScore(moodForm.moodScore);
+  const CurrentMoodIcon = currentMoodOption.icon;
 
   function moveMyScheduleMonth(delta: number) {
     setMySchedulePeriod((current) => {
@@ -3439,30 +3476,46 @@ export function MySchedulePage() {
               <div>
                 <p className="text-sm font-semibold text-muted">Como está seu humor hoje?</p>
                 {todayMood ? (
-                  <p className="mt-1 text-xs font-bold text-blue-700">Resposta atual: {todayMood.moodLabel}</p>
+                  <span
+                    className={cn(
+                      "mt-2 inline-grid h-8 w-8 place-items-center rounded-full border bg-white shadow-soft",
+                      currentMoodOption.selected
+                    )}
+                    title={`Resposta atual: ${todayMood.moodLabel}`}
+                    aria-label={`Resposta atual: ${todayMood.moodLabel}`}
+                  >
+                    <CurrentMoodIcon className="h-[18px] w-[18px]" aria-hidden="true" />
+                  </span>
                 ) : null}
               </div>
-              <div className="grid grid-cols-5 gap-1.5">
-                {[
-                  { score: 1, label: "Muito ruim" },
-                  { score: 2, label: "Ruim" },
-                  { score: 3, label: "Neutro" },
-                  { score: 4, label: "Bom" },
-                  { score: 5, label: "Muito bom" }
-                ].map((option) => (
+              <div className="grid grid-cols-3 gap-2">
+                {operationalMoodOptions.map((option) => {
+                  const Icon = option.icon;
+                  const selectedMood = moodForm.moodScore === option.score;
+                  return (
                   <button
                     key={option.score}
                     type="button"
                     onClick={() => setMoodForm((current) => ({ ...current, moodScore: option.score }))}
                     title={option.label}
+                    aria-label={option.label}
                     className={cn(
-                      "rounded-lg border px-2 py-2 text-xs font-black transition",
-                      moodForm.moodScore === option.score ? "border-blue-500 bg-blue-50 text-blue-700" : "border-border bg-white text-muted hover:bg-slate-50"
+                      "group grid min-h-[82px] place-items-center rounded-2xl border bg-white transition hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50/50 focus:outline-none focus:ring-2 focus:ring-blue-100",
+                      selectedMood ? option.selected : "border-border text-muted"
                     )}
                   >
-                    {option.score}
+                    <span
+                      className={cn(
+                        "grid h-12 w-12 place-items-center rounded-full ring-1 transition",
+                        selectedMood ? cn("bg-white/80", option.ring) : "bg-slate-50 ring-slate-100 group-hover:bg-white"
+                      )}
+                    >
+                      <Icon className={cn("h-7 w-7", selectedMood ? "" : option.tone)} aria-hidden="true" />
+                    </span>
+                    <span className="sr-only">{option.label}</span>
                   </button>
-                ))}
+                  );
+                })}
               </div>
               <textarea
                 value={moodForm.comment}
@@ -3795,16 +3848,14 @@ export function RegistrationApprovalsPage() {
   const [reviewingAction, setReviewingAction] = useState<"approve" | "reject" | "request_adjustment" | null>(null);
   const [deletingRegistration, setDeletingRegistration] = useState(false);
   const [reviewNotes, setReviewNotes] = useState("Dados conferidos. Aprovação liberada para ativação.");
-  const [operational, setOperational] = useState({
-    wbLogin: "",
-    lob: "CEC",
-    team: "Time Inicial",
-    supervisor: "",
-    shift: "Manhã",
-    skill: "",
-    wave: "",
-    schedule: "6x1",
-    roleTitle: "Agente",
+	  const [operational, setOperational] = useState({
+	    wbLogin: "",
+	    lob: "CEC",
+	    supervisor: "",
+	    shift: "Manhã",
+	    skill: "",
+	    wave: "",
+	    roleTitle: "Agente",
     employeeStatus: "Ativo",
     contractType: "PJ",
     admissionDate: currentOperationalDateInput(),
@@ -3824,16 +3875,14 @@ export function RegistrationApprovalsPage() {
   useEffect(() => {
     if (!selected) return;
     const op = selected.operationalData ?? {};
-    setOperational({
-      wbLogin: op.wbLogin ?? selected.email.split("@")[0],
-      lob: op.lob ?? "CEC",
-      team: op.team ?? "Time Inicial",
-      supervisor: op.supervisor ?? "",
-      shift: op.shift ?? "Manhã",
-      skill: op.skill ?? "",
-      wave: op.wave ?? "",
-      schedule: op.schedule ?? "6x1",
-      roleTitle: op.roleTitle ?? "Agente",
+	    setOperational({
+	      wbLogin: op.wbLogin ?? selected.email.split("@")[0],
+	      lob: op.lob ?? "CEC",
+	      supervisor: op.supervisor ?? "",
+	      shift: op.shift ?? "Manhã",
+	      skill: op.skill ?? "",
+	      wave: op.wave ?? "",
+	      roleTitle: op.roleTitle ?? "Agente",
       employeeStatus: op.employeeStatus === "Pendente de Cadastro" ? "Ativo" : op.employeeStatus ?? "Ativo",
       contractType: op.contractType ?? "PJ",
       admissionDate: op.admissionDate ?? currentOperationalDateInput(),
@@ -3967,12 +4016,10 @@ export function RegistrationApprovalsPage() {
     }
     if (action === "approve") {
       const missing = [
-        ["WB/Login", operational.wbLogin],
-        ["LOB", operational.lob],
-        ["Time", operational.team],
-        ["Turno", operational.shift],
-        ["Cronograma", operational.schedule],
-        ["Cargo/Função", operational.roleTitle],
+	        ["WB/Login", operational.wbLogin],
+	        ["LOB", operational.lob],
+	        ["Turno", operational.shift],
+	        ["Cargo/Função", operational.roleTitle],
         ["Status", operational.employeeStatus],
         ["Admissão", operational.admissionDate],
         ["Início de Nesting", operational.nestingStartDate],
@@ -4163,17 +4210,25 @@ export function RegistrationApprovalsPage() {
                 <LockKeyhole className="mr-2 inline h-4 w-4" />
                 Dados pessoais, bancários e familiares só aparecem para perfis autorizados.
               </div>
+              <div className="rounded-lg border border-border bg-slate-50 p-3">
+                <p className="mb-2 text-sm font-bold text-navy-950">Dados cadastrais adicionais</p>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <InfoLine label="Etnia" value={selected.ethnicity || "Não informado"} />
+                  <InfoLine label="Orientação sexual" value={selected.sexualOrientation || "Não informado"} />
+                  <InfoLine label="PCD" value={selected.isPcd || "Não informado"} />
+                  {selected.isPcd === "Sim" ? <InfoLine label="Tipo de deficiência" value={selected.pcdDisabilityType || "Não informado"} /> : null}
+                  {selected.isPcd === "Sim" && selected.pcdDisabilityType === "Outra" ? <InfoLine label="Especificação da deficiência" value={selected.pcdDisabilityOther || "Não informado"} /> : null}
+                </div>
+              </div>
               <div className="grid gap-3 md:grid-cols-2">
                 {[
-                  ["WB/Login", "wbLogin"],
-                  ["LOB", "lob"],
-                  ["Time", "team"],
-                  ["Supervisor", "supervisor"],
-                  ["Turno", "shift"],
-                  ["Skill", "skill"],
-                  ["Wave", "wave"],
-                  ["Cronograma", "schedule"],
-                  ["Cargo/Função", "roleTitle"],
+	                  ["WB/Login", "wbLogin"],
+	                  ["LOB", "lob"],
+	                  ["Supervisor", "supervisor"],
+	                  ["Turno", "shift"],
+	                  ["Skill", "skill"],
+	                  ["Wave", "wave"],
+	                  ["Cargo/Função", "roleTitle"],
                   ["Status", "employeeStatus"],
                   ["Contrato", "contractType"],
                   ["Admissão", "admissionDate"],
@@ -4266,7 +4321,7 @@ export function RegistrationApprovalsPage() {
               ) : null}
                 <div className="max-h-[52vh] overflow-y-auto pr-1">
                   <SimpleTable
-                    columns={["Linha", "Nome", "WB/Login", "E-mail", "Status", "Ação", "CPF", "Role", "LOB", "Supervisor", "Skill", "Wave", "Usuário", "Validação"]}
+                    columns={["Linha", "Nome", "WB/Login", "E-mail", "Status", "Ação", "CPF", "Role", "LOB", "Supervisor", "Skill", "Wave", "PCD", "Tipo deficiência", "Usuário", "Validação"]}
                     rows={employeeImportPreview.rows.slice(0, IMPORT_PREVIEW_ROW_LIMIT).map((row) => [
                       row.rowNumber,
                       row.preview.name || "-",
@@ -4280,6 +4335,8 @@ export function RegistrationApprovalsPage() {
                       row.preview.supervisor || "Sem supervisor",
                       row.preview.skill || "-",
                       row.preview.wave || "-",
+                      row.preview.isPcd || "-",
+                      row.preview.isPcd === "Sim" ? [row.preview.pcdDisabilityType || "-", row.preview.pcdDisabilityType === "Outra" && row.preview.pcdDisabilityOther ? `(${row.preview.pcdDisabilityOther})` : ""].filter(Boolean).join(" ") : "-",
                       row.preview.createUser ? (row.preview.passwordProvided ? "Sim" : "Senha ausente") : "Não",
                       row.errors.length ? (
                         <div key={`${row.rowNumber}-errors`} className="space-y-1 text-xs font-bold text-red-600">
@@ -6814,6 +6871,22 @@ const requestTypes = ["Troca de Folga", "Venda de Folga", "Solicitação de Dia 
 const requestPriorities = ["Baixa", "Média", "Alta", "Crítica"];
 const requestStatuses = ["Aberto", "Em análise", "Aprovado", "Recusado", "Concluído", "Cancelado"];
 const requestColumns = ["Aberto", "Em análise", "Aprovado", "Recusado", "Concluído", "Cancelado"];
+const operationalMoodOptions = [
+  { score: 1, label: "Triste", icon: Frown, tone: "text-red-500", selected: "border-red-300 bg-red-50 text-red-600 shadow-sm shadow-red-100", ring: "ring-red-100" },
+  { score: 3, label: "Normal", icon: Meh, tone: "text-amber-500", selected: "border-amber-300 bg-amber-50 text-amber-600 shadow-sm shadow-amber-100", ring: "ring-amber-100" },
+  { score: 5, label: "Feliz", icon: Smile, tone: "text-emerald-500", selected: "border-emerald-300 bg-emerald-50 text-emerald-600 shadow-sm shadow-emerald-100", ring: "ring-emerald-100" }
+];
+
+function normalizeMoodScoreForUi(score: number) {
+  if (score <= 2) return 1;
+  if (score >= 4) return 5;
+  return 3;
+}
+
+function moodOptionForScore(score: number) {
+  const normalizedScore = normalizeMoodScoreForUi(score);
+  return operationalMoodOptions.find((option) => option.score === normalizedScore) ?? operationalMoodOptions[1];
+}
 
 function isDayOffRequest(type: string) {
   return /troca de folga|venda de folga|solicita(ç|c)[aã]o de (dia de )?folga|dia de folga|folga solicitada|pedido de folga/i.test(type);
@@ -8051,7 +8124,7 @@ export function EmployeeMapPage() {
   const [skillFilter, setSkillFilter] = useState("Todos");
   const [waveFilter, setWaveFilter] = useState("Todos");
   const [shiftFilter, setShiftFilter] = useState("Todos");
-  const [employeeFilterOptions, setEmployeeFilterOptions] = useState<{ skills: string[]; waves: string[] }>({ skills: [], waves: [] });
+  const [employeeFilterOptions, setEmployeeFilterOptions] = useState<{ skills: string[]; waves: string[]; statuses?: string[] }>({ skills: [], waves: [], statuses: [] });
   const [employeePage, setEmployeePage] = useState(1);
   const [employeePagination, setEmployeePagination] = useState({ total: 0, page: 1, limit: 50, totalPages: 1 });
   const [editingEmployee, setEditingEmployee] = useState(false);
@@ -8067,9 +8140,7 @@ export function EmployeeMapPage() {
   const [waveDraft, setWaveDraft] = useState("");
   const [supervisorDraft, setSupervisorDraft] = useState("");
   const [lobDraft, setLobDraft] = useState("");
-  const [teamDraft, setTeamDraft] = useState("");
   const [shiftDraft, setShiftDraft] = useState("");
-  const [scheduleDraft, setScheduleDraft] = useState("");
   const [contractDraft, setContractDraft] = useState("");
   const [admissionDraft, setAdmissionDraft] = useState("");
   const [nestingStartDraft, setNestingStartDraft] = useState("");
@@ -8077,6 +8148,14 @@ export function EmployeeMapPage() {
   const [terminationDraft, setTerminationDraft] = useState("");
   const [terminationTypeDraft, setTerminationTypeDraft] = useState("");
   const [terminationReasonDraft, setTerminationReasonDraft] = useState("");
+  const [ethnicityDraft, setEthnicityDraft] = useState("");
+  const [sexualOrientationDraft, setSexualOrientationDraft] = useState("");
+  const [isPcdDraft, setIsPcdDraft] = useState("");
+  const [pcdDisabilityTypeDraft, setPcdDisabilityTypeDraft] = useState("");
+  const [pcdDisabilityOtherDraft, setPcdDisabilityOtherDraft] = useState("");
+  const [firstJobDraft, setFirstJobDraft] = useState("");
+  const [hasTelemarketingExperienceDraft, setHasTelemarketingExperienceDraft] = useState("");
+  const [telemarketingWhereDraft, setTelemarketingWhereDraft] = useState("");
   const [primaryPhoneDraft, setPrimaryPhoneDraft] = useState("");
   const [cityDraft, setCityDraft] = useState("");
   const [stateUfDraft, setStateUfDraft] = useState("");
@@ -8091,7 +8170,7 @@ export function EmployeeMapPage() {
   const [deleteEmployeeForm, setDeleteEmployeeForm] = useState({ reason: "", confirmation: "" });
   const [deletingEmployee, setDeletingEmployee] = useState(false);
   const employeeMapLobs = ["Todos", ...Array.from(new Set(employeeSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? employeeRows.map((employee) => employee.lob).filter(Boolean)))];
-  const employeeStatusOptions = ["Todos", "Ativos/Aprovados", "Nesting", "Pendentes", "Inativos"];
+  const employeeStatusOptions = ["Todos", ...Array.from(new Set((employeeFilterOptions.statuses?.length ? employeeFilterOptions.statuses : employeeOperationalStatusOptions).filter(Boolean)))];
   const employeeSupervisorOptions = employeeSettings?.supervisors?.filter((supervisor) => supervisor.status !== "INACTIVE") ?? [];
   const employeeSkillOptions = ["Todos", "SEM_SKILL", ...employeeFilterOptions.skills.filter(Boolean)];
   const employeeWaveOptions = ["Todos", "SEM_WAVE", ...employeeFilterOptions.waves.filter(Boolean)];
@@ -8105,12 +8184,14 @@ export function EmployeeMapPage() {
   const selectedCanEditEmployeeOperational = canEditEmployeeOperational && (selected?.canEditOperationalData ?? true);
   const selectedCanEditPeopleData = canEditPeopleData && (selected?.canEditPeopleData ?? true);
   const employeeLobOptions = employeeSettings?.lobs.filter((lob) => lob.status !== "INACTIVE") ?? [];
-  const employeeTeamOptions = employeeSettings?.teams?.filter((team) => team.status !== "INACTIVE" && (!lobDraft || team.lobId === lobDraft || team.lob === "ALL")) ?? [];
   const employeeShiftOptions = employeeSettings?.shifts.filter((shift) => shift.status !== "INACTIVE" && isSelectableShiftName(shift.name)) ?? [];
   const employeeRoleTitleOptions = employeeSettings?.roleTitles.filter((title) => title.status !== "INACTIVE").map((title) => title.name) ?? [];
   const employeeRoleOptions = employeeSettings?.roles.filter((roleItem) => roleItem.status !== "INACTIVE").map((roleItem) => roleItem.name) ?? ["COLABORADOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI", "GESTOR", "ADMIN"];
   const contractOptions = ["CLT", "PJ", "Temporário", "Estágio", "Terceiro", "Outro"];
   const terminationTypeOptions = ["", "Voluntário", "Involuntário"];
+  const ethnicityOptions = ["", "Branca", "Preta", "Parda", "Amarela", "Indígena", "Prefiro não informar"];
+  const sexualOrientationOptions = ["", "Heterossexual", "Homossexual", "Bissexual", "Assexual", "Outra", "Prefiro não informar"];
+  const yesNoPreferNotOptions = ["", "Sim", "Não", "Prefiro não informar"];
   const operationalStatusOptions = employeeOperationalStatusOptions;
 
   useEffect(() => {
@@ -8134,7 +8215,7 @@ export function EmployeeMapPage() {
     const params = new URLSearchParams({ summary: "true", limit: "50", page: String(nextPage) });
     if (nextQuery.trim()) params.set("search", nextQuery.trim());
     if (nextLob !== "Todos") params.set("lob", nextLob);
-    if (nextStatus !== "Todos") params.set("status", nextStatus);
+	    if (nextStatus !== "Todos") params.set("status_colaborador", nextStatus);
     if (nextSupervisor !== "Todos") params.set("supervisorId", nextSupervisor);
     if (nextSkill !== "Todos") params.set("skill", nextSkill);
     if (nextWave !== "Todos") params.set("wave", nextWave);
@@ -8147,7 +8228,7 @@ export function EmployeeMapPage() {
         return;
       }
       setEmployeeRows(employeePayload.data);
-      setEmployeeFilterOptions(employeePayload.filterOptions ?? { skills: [], waves: [] });
+	      setEmployeeFilterOptions(employeePayload.filterOptions ?? { skills: [], waves: [], statuses: [] });
       setEmployeePagination({
         total: employeePayload.total ?? employeePayload.data.length,
         page: employeePayload.page ?? nextPage,
@@ -8158,7 +8239,7 @@ export function EmployeeMapPage() {
       setSelected(null);
     } catch {
       setEmployeeRows([]);
-      setEmployeeFilterOptions({ skills: [], waves: [] });
+	      setEmployeeFilterOptions({ skills: [], waves: [], statuses: [] });
       setEmployeePagination({ total: 0, page: 1, limit: 50, totalPages: 1 });
     } finally {
       setEmployeeLoading(false);
@@ -8194,9 +8275,7 @@ export function EmployeeMapPage() {
     setWaveDraft(selected.wave ?? "");
     setSupervisorDraft(selected.supervisorId ?? "");
     setLobDraft(selected.lobId ?? "");
-    setTeamDraft(selected.teamId ?? "");
-    setShiftDraft(selected.shiftId ?? "");
-    setScheduleDraft(selected.schedule ?? "");
+	    setShiftDraft(selected.shiftId ?? "");
     setContractDraft(selected.contractType ?? "");
     setAdmissionDraft(selected.admissionIso ?? "");
     setNestingStartDraft(selected.nestingStartDateIso ?? "");
@@ -8204,6 +8283,14 @@ export function EmployeeMapPage() {
     setTerminationDraft(selected.terminationDateIso ?? "");
     setTerminationTypeDraft(selected.terminationType ?? "");
     setTerminationReasonDraft(selected.terminationReason ?? "");
+    setEthnicityDraft(selected.ethnicity ?? "");
+    setSexualOrientationDraft(selected.sexualOrientation ?? "");
+    setIsPcdDraft(selected.isPcd ?? "");
+    setPcdDisabilityTypeDraft(selected.pcdDisabilityType ?? "");
+    setPcdDisabilityOtherDraft(selected.pcdDisabilityOther ?? "");
+    setFirstJobDraft(selected.firstJob ?? "");
+    setHasTelemarketingExperienceDraft(selected.hasTelemarketingExperience ?? "");
+    setTelemarketingWhereDraft(selected.telemarketingWhere ?? "");
     setPrimaryPhoneDraft(selected.primaryPhone ?? "");
     setCityDraft(selected.city ?? "");
     setStateUfDraft(selected.stateUf ?? "");
@@ -8234,17 +8321,23 @@ export function EmployeeMapPage() {
           wave: selectedCanEditEmployeeOperational ? waveDraft : undefined,
           supervisorId: canEditOperationalBindings ? supervisorDraft : undefined,
           lobId: canEditOperationalBindings ? lobDraft || undefined : undefined,
-          teamId: canEditOperationalBindings ? teamDraft || undefined : undefined,
-          shiftId: canEditOperationalBindings ? shiftDraft || undefined : undefined,
-          scheduleType: canEditOperationalBindings ? scheduleDraft : undefined,
+	          shiftId: canEditOperationalBindings ? shiftDraft || undefined : undefined,
           contractType: selectedCanEditPeopleData ? contractDraft : undefined,
           admissionDate: selectedCanEditPeopleData ? admissionDraft : undefined,
           nestingStartDate: selectedCanEditEmployeeOperational ? nestingStartDraft : undefined,
           goLiveDate: selectedCanEditEmployeeOperational ? goLiveDraft : undefined,
-          terminationDate: selectedCanEditPeopleData ? terminationDraft : undefined,
-          terminationType: selectedCanEditPeopleData ? terminationTypeDraft : undefined,
-          terminationReason: selectedCanEditPeopleData ? terminationReasonDraft : undefined,
-          internalNotes: selectedCanEditEmployeeOperational ? internalNotesDraft : undefined,
+	          terminationDate: selectedCanEditPeopleData ? terminationDraft : undefined,
+	          terminationType: selectedCanEditPeopleData ? terminationTypeDraft : undefined,
+	          terminationReason: selectedCanEditPeopleData ? terminationReasonDraft : undefined,
+	          ethnicity: selectedCanEditPeopleData ? ethnicityDraft : undefined,
+	          sexualOrientation: selectedCanEditPeopleData ? sexualOrientationDraft : undefined,
+          isPcd: selectedCanEditPeopleData ? isPcdDraft : undefined,
+          pcdDisabilityType: selectedCanEditPeopleData ? pcdDisabilityTypeDraft : undefined,
+          pcdDisabilityOther: selectedCanEditPeopleData ? pcdDisabilityOtherDraft : undefined,
+	          firstJob: selectedCanEditPeopleData ? firstJobDraft : undefined,
+	          hasTelemarketingExperience: selectedCanEditPeopleData ? hasTelemarketingExperienceDraft : undefined,
+	          telemarketingWhere: selectedCanEditPeopleData ? telemarketingWhereDraft : undefined,
+	          internalNotes: selectedCanEditEmployeeOperational ? internalNotesDraft : undefined,
           primaryPhone: selectedCanEditPeopleData ? primaryPhoneDraft : undefined,
           city: selectedCanEditPeopleData ? cityDraft : undefined,
           stateUf: selectedCanEditPeopleData ? stateUfDraft : undefined,
@@ -8271,7 +8364,7 @@ export function EmployeeMapPage() {
     const params = new URLSearchParams();
     if (query.trim()) params.set("q", query.trim());
     if (lobFilter !== "Todos") params.set("lob", lobFilter);
-    if (statusFilter !== "Todos") params.set("status", statusFilter);
+	    if (statusFilter !== "Todos") params.set("status_colaborador", statusFilter);
     if (supervisorFilter !== "Todos") params.set("supervisorId", supervisorFilter);
     if (skillFilter !== "Todos") params.set("skill", skillFilter);
     if (waveFilter !== "Todos") params.set("wave", waveFilter);
@@ -8332,7 +8425,7 @@ export function EmployeeMapPage() {
               {employeeMapLobs.map((lob) => <option key={lob} value={lob}>{lob === "Todos" ? "Todas as LOBs" : lob}</option>)}
             </select>
             <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
-              {employeeStatusOptions.map((status) => <option key={status} value={status}>{status === "Todos" ? "Todos os status" : status}</option>)}
+	              {employeeStatusOptions.map((status) => <option key={status} value={status}>{status}</option>)}
             </select>
             <select value={supervisorFilter} onChange={(event) => setSupervisorFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
               <option value="Todos">Todos os supervisores</option>
@@ -8492,18 +8585,9 @@ export function EmployeeMapPage() {
                                 {employeeFieldErrors.lobId ? <span className="mt-1 block text-xs font-bold text-red-600">{employeeFieldErrors.lobId}</span> : null}
                               </label>
                             ) : null}
-                            {canEditOperationalBindings ? (
-                              <label className="block">
-                                <span className="mb-1.5 block text-sm font-bold text-muted">Time</span>
-                                <select value={teamDraft} onChange={(event) => setTeamDraft(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100", employeeFieldErrors.teamId ? "border-red-300 bg-red-50/40" : "border-border")}>
-                                  {employeeTeamOptions.map((team) => <option key={team.id} value={team.id}>{team.name} - {team.lob}</option>)}
-                                </select>
-                                {employeeFieldErrors.teamId ? <span className="mt-1 block text-xs font-bold text-red-600">{employeeFieldErrors.teamId}</span> : null}
-                              </label>
-                            ) : null}
-                            {canEditOperationalBindings ? (
-                              <label className="block">
-                                <span className="mb-1.5 block text-sm font-bold text-muted">Supervisor</span>
+	                            {canEditOperationalBindings ? (
+	                              <label className="block">
+	                                <span className="mb-1.5 block text-sm font-bold text-muted">Supervisor</span>
                                 <select value={supervisorDraft} onChange={(event) => setSupervisorDraft(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100", employeeFieldErrors.supervisorId ? "border-red-300 bg-red-50/40" : "border-border")}>
                                   <option value="">Sem supervisor</option>
                                   {(employeeSettings?.supervisors ?? []).map((supervisor) => (
@@ -8537,17 +8621,53 @@ export function EmployeeMapPage() {
                             {isAdmin ? <FormSelect label="Usuário ativo/inativo" value={userStatusDraft} options={["ACTIVE", "INACTIVE", "BLOCKED"]} onChange={setUserStatusDraft} error={employeeFieldErrors.userStatus} /> : null}
                           </div>
                         </ProfileSection>
-                        {selectedCanEditPeopleData ? (
-                          <ProfileSection title="Contato Operacional">
-                            <div className="grid gap-3 md:grid-cols-2">
-                              <FormInput label="Contato principal" value={primaryPhoneDraft} onChange={setPrimaryPhoneDraft} error={employeeFieldErrors.primaryPhone} />
-                              <FormInput label="Cidade" value={cityDraft} onChange={setCityDraft} error={employeeFieldErrors.city} />
-                              <FormInput label="Estado/UF" value={stateUfDraft} onChange={setStateUfDraft} error={employeeFieldErrors.stateUf} />
-                              <FormInput label="Preferência de horário" value={preferredScheduleDraft} onChange={setPreferredScheduleDraft} error={employeeFieldErrors.preferredSchedule} />
-                            </div>
-                          </ProfileSection>
-                        ) : null}
-                        <ProfileSection title="Observações">
+	                        {selectedCanEditPeopleData ? (
+	                          <ProfileSection title="Contato Operacional">
+	                            <div className="grid gap-3 md:grid-cols-2">
+	                              <FormInput label="Contato principal" value={primaryPhoneDraft} onChange={setPrimaryPhoneDraft} error={employeeFieldErrors.primaryPhone} />
+	                              <FormInput label="Cidade" value={cityDraft} onChange={setCityDraft} error={employeeFieldErrors.city} />
+	                              <FormInput label="Estado/UF" value={stateUfDraft} onChange={setStateUfDraft} error={employeeFieldErrors.stateUf} />
+	                              <FormInput label="Preferência de horário" value={preferredScheduleDraft} onChange={setPreferredScheduleDraft} error={employeeFieldErrors.preferredSchedule} />
+	                            </div>
+	                          </ProfileSection>
+	                        ) : null}
+	                        {selectedCanEditPeopleData ? (
+	                          <ProfileSection title="Dados cadastrais adicionais">
+	                            <div className="grid gap-3 md:grid-cols-2">
+	                              <FormSelect label="Etnia" value={ethnicityDraft} options={ethnicityOptions} onChange={setEthnicityDraft} error={employeeFieldErrors.ethnicity} />
+	                              <FormSelect label="Orientação sexual" value={sexualOrientationDraft} options={sexualOrientationOptions} onChange={setSexualOrientationDraft} error={employeeFieldErrors.sexualOrientation} />
+                              <FormSelect label="É PCD?" value={isPcdDraft} options={yesNoPreferNotOptions} onChange={(value) => {
+                                setIsPcdDraft(value);
+                                if (value !== "Sim") {
+                                  setPcdDisabilityTypeDraft("");
+                                  setPcdDisabilityOtherDraft("");
+                                }
+                              }} error={employeeFieldErrors.isPcd} />
+                              {isPcdDraft === "Sim" ? (
+                                <FormSelect label="Tipo de deficiência" value={pcdDisabilityTypeDraft} options={pcdDisabilityTypeOptions} onChange={(value) => {
+                                  setPcdDisabilityTypeDraft(value);
+                                  if (value !== "Outra") setPcdDisabilityOtherDraft("");
+                                }} error={employeeFieldErrors.pcdDisabilityType} />
+                              ) : null}
+                              {isPcdDraft === "Sim" && pcdDisabilityTypeDraft === "Outra" ? (
+                                <FormInput label="Especifique o tipo de deficiência" value={pcdDisabilityOtherDraft} onChange={setPcdDisabilityOtherDraft} error={employeeFieldErrors.pcdDisabilityOther} />
+                              ) : null}
+	                              <FormSelect label="Primeiro emprego?" value={firstJobDraft} options={["", "Sim", "Não"]} onChange={setFirstJobDraft} error={employeeFieldErrors.firstJob} />
+	                              <FormSelect
+	                                label="Já trabalhou em telemarketing?"
+	                                value={hasTelemarketingExperienceDraft}
+	                                options={["", "Sim", "Não"]}
+	                                onChange={(value) => {
+	                                  setHasTelemarketingExperienceDraft(value);
+	                                  if (value === "Não") setTelemarketingWhereDraft("Não se aplica");
+	                                }}
+	                                error={employeeFieldErrors.hasTelemarketingExperience}
+	                              />
+	                              <FormInput label="Onde trabalhou em telemarketing?" value={telemarketingWhereDraft} onChange={setTelemarketingWhereDraft} error={employeeFieldErrors.telemarketingWhere} />
+	                            </div>
+	                          </ProfileSection>
+	                        ) : null}
+	                        <ProfileSection title="Observações">
                           <textarea value={internalNotesDraft} onChange={(event) => setInternalNotesDraft(event.target.value)} className={cn("min-h-24 w-full rounded-lg border p-3 text-sm outline-none", employeeFieldErrors.internalNotes ? "border-red-300 bg-red-50/40" : "border-border")} placeholder="Observações internas da operação" />
                           {employeeFieldErrors.internalNotes ? <span className="mt-1 block text-xs font-bold text-red-600">{employeeFieldErrors.internalNotes}</span> : null}
                         </ProfileSection>
@@ -8575,12 +8695,14 @@ export function EmployeeMapPage() {
                   </div>
                 ) : null}
               </ProfileSection>
-              {!isSupervisorUser && (selected.ethnicity || selected.sexualOrientation || selected.isCpd || selected.firstJob || selected.hasTelemarketingExperience || selected.telemarketingWhere) ? (
-                <ProfileSection title="Dados cadastrais adicionais">
-                  <div className="grid grid-cols-2 gap-3 text-sm">
-                    <InfoLine label="Etnia" value={selected.ethnicity || "Não informado"} />
-                    <InfoLine label="Orientação sexual" value={selected.sexualOrientation || "Não informado"} />
-                    <InfoLine label="CPD" value={selected.isCpd || "Não informado"} />
+              {!isSupervisorUser && (selected.ethnicity || selected.sexualOrientation || selected.isPcd || selected.pcdDisabilityType || selected.pcdDisabilityOther || selected.firstJob || selected.hasTelemarketingExperience || selected.telemarketingWhere) ? (
+	                <ProfileSection title="Dados cadastrais adicionais">
+	                  <div className="grid grid-cols-2 gap-3 text-sm">
+	                    <InfoLine label="Etnia" value={selected.ethnicity || "Não informado"} />
+	                    <InfoLine label="Orientação sexual" value={selected.sexualOrientation || "Não informado"} />
+                    <InfoLine label="PCD" value={selected.isPcd || "Não informado"} />
+                    {selected.isPcd === "Sim" ? <InfoLine label="Tipo de deficiência" value={selected.pcdDisabilityType || "Não informado"} /> : null}
+                    {selected.isPcd === "Sim" && selected.pcdDisabilityType === "Outra" ? <InfoLine label="Especificação da deficiência" value={selected.pcdDisabilityOther || "Não informado"} /> : null}
                     <InfoLine label="Primeiro emprego" value={selected.firstJob || "Não informado"} />
                     <InfoLine label="Já trabalhou em telemarketing" value={selected.hasTelemarketingExperience || "Não informado"} />
                     <InfoLine label="Onde trabalhou em telemarketing" value={selected.telemarketingWhere || "Não informado"} />

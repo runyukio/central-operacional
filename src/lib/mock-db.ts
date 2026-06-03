@@ -228,10 +228,10 @@ export type EmployeeRegistrationRecord = {
 export type RegistrationOperationalData = {
   wbLogin: string;
   lob: string;
-  team: string;
+  team?: string;
   supervisor: string;
   shift: string;
-  schedule: string;
+  schedule?: string;
   roleTitle: string;
   employeeStatus: string;
   contractType: string;
@@ -611,7 +611,7 @@ export function reviewEmployeeRegistration(
     lob: operationalData.lob,
     supervisor: operationalData.supervisor,
     shift: operationalData.shift,
-    schedule: operationalData.schedule,
+    schedule: operationalData.schedule ?? "Não informado",
     status: operationalData.employeeStatus,
     quality: 92,
     productivity: 88,

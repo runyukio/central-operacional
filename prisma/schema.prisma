@@ -368,7 +368,9 @@ model EmployeeProfile {
   terminationReason  String?
   ethnicity          String?
   sexualOrientation  String?
-  isCpd              String?
+  isPcd              String?
+  pcdDisabilityType  String?
+  pcdDisabilityOther String?
   firstJob           String?
   hasTelemarketingExperience String?
   telemarketingWhere String?
@@ -1088,7 +1090,9 @@ model EmployeeRegistrationRequest {
   secondaryPixKeyType          String?
   ethnicity                    String?
   sexualOrientation            String?
-  isCpd                        String?
+  isPcd                        String?
+  pcdDisabilityType            String?
+  pcdDisabilityOther           String?
   firstJob                     String?
   hasTelemarketingExperience   String?
   telemarketingWhere           String?

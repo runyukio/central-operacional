@@ -5,15 +5,13 @@ import { getApiActor } from "@/lib/api-actor";
 import { reviewOperationalRegistration } from "@/lib/employee-registration-service";
 
 const operationalSchema = z.object({
-  wbLogin: z.string().min(1),
-  lob: z.string().min(1),
-  team: z.string().min(1),
-  supervisor: z.string().optional().default(""),
-  shift: z.string().min(1),
-  skill: z.string().optional().default(""),
-  wave: z.string().optional().default(""),
-  schedule: z.string().min(1),
-  roleTitle: z.string().min(1),
+	  wbLogin: z.string().min(1),
+	  lob: z.string().min(1),
+	  supervisor: z.string().optional().default(""),
+	  shift: z.string().min(1),
+	  skill: z.string().optional().default(""),
+	  wave: z.string().optional().default(""),
+	  roleTitle: z.string().min(1),
   employeeStatus: z.string().min(1),
   contractType: z.string().min(1),
   admissionDate: z.string().min(1),

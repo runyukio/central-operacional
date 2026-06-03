@@ -17,23 +17,25 @@ import { cleanShiftName, isBlockedShiftName, isSelectableShiftName, shiftLookupK
 import type { RegistrationInput } from "@/lib/registration-validation";
 
 const allowDemoDataFallback = process.env.ALLOW_DEMO_LOGIN === "true" || process.env.ALLOW_DEMO_DATA === "true";
+const internalDefaultTeamName = "Time Inicial";
+const internalDefaultScheduleType = "Não informado";
+const pcdDisabilityTypeOptions = ["Física", "Auditiva", "Visual", "Intelectual", "Psicossocial", "Múltipla", "Neurodivergente", "Outra", "Prefiro não informar"] as const;
+const validPcdDisabilityTypes = new Set<string>(pcdDisabilityTypeOptions);
 
 export type RegistrationReviewInput = {
   id: string;
   action: "approve" | "reject" | "request_adjustment";
   reviewNotes: string;
-  operationalData?: {
-    wbLogin: string;
-    lob: string;
-    team: string;
-    supervisor: string;
-    shift: string;
-    skill?: string;
-    wave?: string;
-    schedule: string;
-    roleTitle: string;
-    employeeStatus: string;
-    contractType: string;
+	  operationalData?: {
+	    wbLogin: string;
+	    lob: string;
+	    supervisor: string;
+	    shift: string;
+	    skill?: string;
+	    wave?: string;
+	    roleTitle: string;
+	    employeeStatus: string;
+	    contractType: string;
     admissionDate: string;
     nestingStartDate: string;
     goLiveDate: string;
@@ -50,10 +52,12 @@ export const employeeImportColumns = [
   "rg",
   "orgao_expedidor_uf",
   "data_nascimento",
-  "genero",
-  "etnia",
-  "orientacao_sexual",
-  "eh_cpd",
+	  "genero",
+	  "etnia",
+	  "orientacao_sexual",
+  "eh_pcd",
+  "tipo_deficiencia",
+  "tipo_deficiencia_outro",
   "primeiro_emprego",
   "ja_trabalhou_telemarketing",
   "onde_trabalhou_telemarketing",
@@ -74,11 +78,10 @@ export const employeeImportColumns = [
   "nome_contato_emergencia",
   "parentesco_contato_emergencia",
   "wb_login",
-  "cargo_funcao",
-  "role_permissao",
-  "lob",
-  "time",
-  "supervisor_wb_login",
+	  "cargo_funcao",
+	  "role_permissao",
+	  "lob",
+	  "supervisor_wb_login",
   "supervisor_email",
   "supervisor_nome",
   "turno",
@@ -127,6 +130,9 @@ type EmployeeImportValidation = {
     supervisor: string;
     skill: string;
     wave: string;
+    isPcd: string;
+    pcdDisabilityType: string;
+    pcdDisabilityOther: string;
     createUser: boolean;
     passwordProvided: boolean;
     currentStatus?: string;
@@ -396,10 +402,11 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
       if (supervisor && existingByWb && await wouldCreateImportSupervisorCycle(existingByWb.id, supervisor.id)) {
         throw new Error(`Linha ${validRows[normalizedValidRows.indexOf(row)] ? normalizedValidRows.indexOf(row) + 1 : ""}: essa alteração criaria um ciclo de supervisor.`);
       }
+      const internalTeamName = row.teamName || (supervisor?.fullName ? `Time ${supervisor.fullName}` : internalDefaultTeamName);
       const team = await prisma.team.upsert({
-        where: { name_lobId: { name: row.teamName || (supervisor?.fullName ? `Time ${supervisor.fullName}` : "Time Inicial"), lobId: lob.id } },
+        where: { name_lobId: { name: internalTeamName, lobId: lob.id } },
         update: { supervisorId: supervisor?.id },
-        create: { name: row.teamName || (supervisor?.fullName ? `Time ${supervisor.fullName}` : "Time Inicial"), lobId: lob.id, supervisorId: supervisor?.id }
+        create: { name: internalTeamName, lobId: lob.id, supervisorId: supervisor?.id }
       });
 
         const registrationOr: Prisma.EmployeeRegistrationRequestWhereInput[] = [
@@ -440,7 +447,9 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
           sex: row.sex,
           ethnicity: row.ethnicity || null,
           sexualOrientation: row.sexualOrientation || null,
-          isCpd: row.isCpd || null,
+          isPcd: row.isPcd || null,
+          pcdDisabilityType: row.isPcd === "Sim" ? row.pcdDisabilityType || null : null,
+          pcdDisabilityOther: row.isPcd === "Sim" && row.pcdDisabilityType === "Outra" ? row.pcdDisabilityOther || null : null,
           firstJob: row.firstJob || null,
           hasTelemarketingExperience: row.hasTelemarketingExperience || null,
           telemarketingWhere: row.telemarketingWhere || null,
@@ -473,15 +482,13 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
             employeeStatus: row.employeeStatus,
             cpfPending: !row.cpf,
             preferredSchedule: row.preferredSchedule,
-            team: row.teamName,
-            supervisorWbLogin: row.supervisorWbLogin,
+	            supervisorWbLogin: row.supervisorWbLogin,
             supervisorEmail: row.supervisorEmail,
             supervisorName: row.supervisorName,
             supervisor: supervisor?.fullName ?? null,
             skill: row.skill,
             wave: row.wave,
-            scheduleType: row.scheduleType,
-            contractType: row.contractType,
+	            contractType: row.contractType,
             admissionDate: admissionDate.toISOString(),
             trainingStartDate: trainingStartDate.toISOString(),
             nestingStartDate: row.nestingStartDate?.toISOString() ?? null,
@@ -556,7 +563,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               socialName: row.socialName || null,
               roleTitle: row.roleTitle,
               admissionDate,
-              scheduleType: row.scheduleType,
+	              scheduleType: internalDefaultScheduleType,
               operationalStatus: row.employeeStatus,
               lobId: lob.id,
               teamId: team.id,
@@ -570,7 +577,9 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               ...(row.terminationReason ? { terminationReason: row.terminationReason } : {}),
               ethnicity: row.ethnicity || null,
               sexualOrientation: row.sexualOrientation || null,
-              isCpd: row.isCpd || null,
+              isPcd: row.isPcd || null,
+              pcdDisabilityType: row.isPcd === "Sim" ? row.pcdDisabilityType || null : null,
+              pcdDisabilityOther: row.isPcd === "Sim" && row.pcdDisabilityType === "Outra" ? row.pcdDisabilityOther || null : null,
               firstJob: row.firstJob || null,
               hasTelemarketingExperience: row.hasTelemarketingExperience || null,
               telemarketingWhere: row.telemarketingWhere || null,
@@ -594,7 +603,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               socialName: row.socialName || null,
               roleTitle: row.roleTitle,
               admissionDate,
-              scheduleType: row.scheduleType,
+	              scheduleType: internalDefaultScheduleType,
               operationalStatus: row.employeeStatus,
               lobId: lob.id,
               teamId: team.id,
@@ -608,7 +617,9 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               terminationReason: row.terminationReason || null,
               ethnicity: row.ethnicity || null,
               sexualOrientation: row.sexualOrientation || null,
-              isCpd: row.isCpd || null,
+              isPcd: row.isPcd || null,
+              pcdDisabilityType: row.isPcd === "Sim" ? row.pcdDisabilityType || null : null,
+              pcdDisabilityOther: row.isPcd === "Sim" && row.pcdDisabilityType === "Outra" ? row.pcdDisabilityOther || null : null,
               firstJob: row.firstJob || null,
               hasTelemarketingExperience: row.hasTelemarketingExperience || null,
               telemarketingWhere: row.telemarketingWhere || null,
@@ -838,11 +849,12 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
       const supervisor = op.supervisor
         ? await tx.employeeProfile.findFirst({ where: { OR: [{ fullName: op.supervisor }, { wbLogin: op.supervisor }] } })
         : null;
-      const team = await tx.team.upsert({
-        where: { name_lobId: { name: op.team, lobId: lob.id } },
-        update: { supervisorId: supervisor?.id },
-        create: { name: op.team, lobId: lob.id, supervisorId: supervisor?.id }
-      });
+	      const internalTeamName = supervisor?.fullName ? `Time ${supervisor.fullName}` : internalDefaultTeamName;
+	      const team = await tx.team.upsert({
+	        where: { name_lobId: { name: internalTeamName, lobId: lob.id } },
+	        update: { supervisorId: supervisor?.id },
+	        create: { name: internalTeamName, lobId: lob.id, supervisorId: supervisor?.id }
+	      });
       const approvedEmployeeStatus = !op.employeeStatus || op.employeeStatus === "Pendente de Cadastro" ? "Ativo" : op.employeeStatus;
       const collaboratorRole = await tx.role.findUniqueOrThrow({ where: { name: "COLABORADOR" } });
       const user = existingUser
@@ -887,7 +899,7 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
               trainingStartDate: parseDate(op.admissionDate),
               nestingStartDate: parseDate(op.nestingStartDate),
               goLiveDate: parseDate(op.goLiveDate),
-              scheduleType: op.schedule,
+	              scheduleType: internalDefaultScheduleType,
               operationalStatus: approvedEmployeeStatus,
               lobId: lob.id,
               teamId: team.id,
@@ -907,7 +919,7 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
               trainingStartDate: parseDate(op.admissionDate),
               nestingStartDate: parseDate(op.nestingStartDate),
               goLiveDate: parseDate(op.goLiveDate),
-              scheduleType: op.schedule,
+	              scheduleType: internalDefaultScheduleType,
               operationalStatus: approvedEmployeeStatus,
               lobId: lob.id,
               teamId: team.id,
@@ -1106,6 +1118,11 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     if (!text(rows[index]?.role_permissao)) errors.push("Role/Permissão obrigatória.");
     if (!row.lob) errors.push("LOB obrigatória.");
     if (!row.employeeStatus) errors.push("Status do colaborador obrigatório.");
+    if (!row.isPcd) errors.push("É PCD? obrigatório.");
+    if (hasImportValue(rows[index]?.eh_pcd) && !row.isPcd) errors.push("É PCD? inválido. Use Sim, Não ou Prefiro não informar.");
+    if (row.isPcd === "Sim" && !row.pcdDisabilityType) errors.push("Tipo de deficiência é obrigatório quando PCD for Sim.");
+    if (row.pcdDisabilityType && !validPcdDisabilityTypes.has(row.pcdDisabilityType)) errors.push("Tipo de deficiência inválido.");
+    if (row.isPcd === "Sim" && row.pcdDisabilityType === "Outra" && !row.pcdDisabilityOther) errors.push("Especifique o tipo de deficiência.");
     if (!hasImportValue(rows[index]?.criar_usuario)) errors.push("criar_usuario obrigatório.");
     if (row.lob && text(rows[index]?.lob).toLowerCase() === "todos") errors.push("Todos é opção de filtro. Para atuação transversal use a LOB real ALL.");
     if (row.lob && !validLobs.has(row.lob.toUpperCase())) errors.push(`LOB ${row.lob} não existe em Configurações.`);
@@ -1180,6 +1197,9 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
         supervisor: supervisor.employee?.fullName ?? row.supervisorWbLogin ?? row.supervisorEmail ?? row.supervisorName,
         skill: row.skill,
         wave: row.wave,
+        isPcd: row.isPcd,
+        pcdDisabilityType: row.pcdDisabilityType,
+        pcdDisabilityOther: row.pcdDisabilityOther,
         createUser: row.createUser,
         passwordProvided: Boolean(row.temporaryPassword),
         currentStatus: activeByWb?.operationalStatus ?? "",
@@ -1209,7 +1229,9 @@ function normalizeEmployeeImportRow(raw: EmployeeImportRow) {
     sex: text(raw.genero) || text(raw.sexo) || "Não informado",
     ethnicity: text(raw.etnia),
     sexualOrientation: text(raw.orientacao_sexual),
-    isCpd: text(raw.eh_cpd),
+    isPcd: normalizeYesNoPrefer(raw.eh_pcd),
+    pcdDisabilityType: normalizePcdDisabilityType(raw.tipo_deficiencia),
+    pcdDisabilityOther: text(raw.tipo_deficiencia_outro),
     firstJob: text(raw.primeiro_emprego),
     hasTelemarketingExperience: text(raw.ja_trabalhou_telemarketing),
     telemarketingWhere: text(raw.onde_trabalhou_telemarketing),
@@ -1233,14 +1255,14 @@ function normalizeEmployeeImportRow(raw: EmployeeImportRow) {
     roleTitle: normalizeJobTitle(text(raw.cargo_funcao)),
     roleName,
     lob: normalizeLobName(raw.lob),
-    teamName: text(raw.time),
+	    teamName: "",
     supervisorWbLogin: text(raw.supervisor_wb_login) || text(raw.gestor_wb_login) || text(raw.manager_wb_login) || text(raw.superior_wb_login) || text(raw.superior_hierarquico_wb_login),
     supervisorEmail: (text(raw.supervisor_email) || text(raw.gestor_email) || text(raw.manager_email) || text(raw.superior_email) || text(raw.superior_hierarquico_email)).toLowerCase(),
     supervisorName: text(raw.supervisor_nome) || text(raw.gestor_nome) || text(raw.manager_name) || text(raw.superior_nome) || text(raw.superior_hierarquico_nome),
     shift: normalizeShiftName(raw.turno),
     skill: text(raw.skill),
     wave: text(raw.wave),
-    scheduleType: text(raw.escala_modelo) || text(raw.preferencia_horario) || "Não informado",
+	    scheduleType: internalDefaultScheduleType,
     employeeStatus: normalizeEmployeeStatus(raw.status_colaborador),
     contractType: normalizeContractType(raw.tipo_contrato),
     admissionDate: parseImportDate(raw.data_admissao),
@@ -1304,7 +1326,9 @@ function sensitiveDataFromImport(row: ReturnType<typeof normalizeEmployeeImportR
       socialName: row.socialName,
       ethnicity: row.ethnicity,
       sexualOrientation: row.sexualOrientation,
-      isCpd: row.isCpd,
+      isPcd: row.isPcd,
+      pcdDisabilityType: row.pcdDisabilityType,
+      pcdDisabilityOther: row.pcdDisabilityOther,
       firstJob: row.firstJob,
       hasTelemarketingExperience: row.hasTelemarketingExperience,
       telemarketingWhere: row.telemarketingWhere
@@ -1364,6 +1388,54 @@ function normalizeImportRole(value: string) {
 
 function parseImportBoolean(value: unknown) {
   return ["sim", "s", "yes", "y", "true", "1"].includes(text(value).toLowerCase());
+}
+
+function normalizeYesNoPrefer(value: unknown) {
+  const raw = text(value);
+  if (!raw) return "";
+  const key = normalizeLookupKey(raw);
+  const map: Record<string, string> = {
+    SIM: "Sim",
+    S: "Sim",
+    YES: "Sim",
+    Y: "Sim",
+    TRUE: "Sim",
+    "1": "Sim",
+    NAO: "Não",
+    N: "Não",
+    NO: "Não",
+    FALSE: "Não",
+    "0": "Não",
+    PREFIRO_NAO_INFORMAR: "Prefiro não informar",
+    PREFIRO_N_INFORMAR: "Prefiro não informar",
+    NAO_INFORMAR: "Prefiro não informar"
+  };
+  return map[key] ?? "";
+}
+
+function normalizePcdDisabilityType(value: unknown) {
+  const raw = text(value);
+  if (!raw) return "";
+  const key = normalizeLookupKey(raw);
+  const map: Record<string, string> = {
+    FISICA: "Física",
+    FISICO: "Física",
+    AUDITIVA: "Auditiva",
+    AUDITIVO: "Auditiva",
+    VISUAL: "Visual",
+    INTELECTUAL: "Intelectual",
+    PSICOSSOCIAL: "Psicossocial",
+    MULTIPLA: "Múltipla",
+    MULTIPLO: "Múltipla",
+    NEURODIVERGENTE: "Neurodivergente",
+    NEURAL: "Neurodivergente",
+    OUTRA: "Outra",
+    OUTRO: "Outra",
+    PREFIRO_NAO_INFORMAR: "Prefiro não informar",
+    PREFIRO_N_INFORMAR: "Prefiro não informar",
+    NAO_INFORMAR: "Prefiro não informar"
+  };
+  return map[key] ?? raw;
 }
 
 function parseImportDate(value: unknown) {
@@ -1584,6 +1656,11 @@ function mapRegistration(item: EmployeeRegistrationRequest) {
     emergencyPhone: item.emergencyPhone,
     birthDate: formatDate(item.birthDate),
     educationLevel: item.educationLevel,
+    ethnicity: item.ethnicity ?? "",
+    sexualOrientation: item.sexualOrientation ?? "",
+    isPcd: item.isPcd ?? "",
+    pcdDisabilityType: item.pcdDisabilityType ?? "",
+    pcdDisabilityOther: item.pcdDisabilityOther ?? "",
     preferredSchedule: item.preferredSchedule,
     trainingStartDate: formatDate(item.trainingStartDate),
     reviewNotes: item.reviewNotes ?? undefined,
@@ -1660,7 +1737,9 @@ function sensitiveData(item: EmployeeRegistrationRequest) {
       socialName: item.socialName,
       ethnicity: item.ethnicity,
       sexualOrientation: item.sexualOrientation,
-      isCpd: item.isCpd,
+      isPcd: item.isPcd,
+      pcdDisabilityType: item.pcdDisabilityType,
+      pcdDisabilityOther: item.pcdDisabilityOther,
       firstJob: item.firstJob,
       hasTelemarketingExperience: item.hasTelemarketingExperience,
       telemarketingWhere: item.telemarketingWhere

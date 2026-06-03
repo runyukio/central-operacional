@@ -9,7 +9,7 @@ export async function GET(request: Request) {
   const result = await exportOperationalEmployeesXlsxData(actor, {
     query: searchParams.get("q"),
     lob: searchParams.get("lob"),
-    status: searchParams.get("status"),
+	    status: searchParams.get("status_colaborador") ?? searchParams.get("employeeStatus") ?? searchParams.get("status"),
     supervisorId: searchParams.get("supervisorId"),
     shiftId: searchParams.get("shiftId"),
     skill: searchParams.get("skill"),

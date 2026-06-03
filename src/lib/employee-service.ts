@@ -33,10 +33,8 @@ export type EmployeeAdminUpdateInput = {
   operationalStatus?: string;
   roleName?: string;
   lobId?: string;
-  teamId?: string;
   supervisorId?: string;
   shiftId?: string;
-  scheduleType?: string;
   contractType?: string;
   skill?: string;
   wave?: string;
@@ -49,7 +47,9 @@ export type EmployeeAdminUpdateInput = {
   terminationReason?: string;
   ethnicity?: string;
   sexualOrientation?: string;
-  isCpd?: string;
+  isPcd?: string;
+  pcdDisabilityType?: string;
+  pcdDisabilityOther?: string;
   firstJob?: string;
   hasTelemarketingExperience?: string;
   telemarketingWhere?: string;
@@ -150,7 +150,7 @@ async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeList
     const search = clean(query.search)?.trim();
     const statusWhere = buildEmployeeStatusWhere(query.status);
 
-    let employeeWhere: Prisma.EmployeeProfileWhereInput =
+    const baseEmployeeWhere: Prisma.EmployeeProfileWhereInput =
       role === "COLABORADOR" && user.employeeProfile
         ? { id: user.employeeProfile.id, deletedAt: null }
         : {
@@ -176,9 +176,11 @@ async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeList
           ...(query.shiftId ? { shiftId: query.shiftId } : {}),
           ...buildNullableTextFilterWhere("skill", query.skill),
           ...buildNullableTextFilterWhere("wave", query.wave),
-          ...(query.role ? { user: { role: { name: query.role } } } : {}),
-          ...statusWhere
-        };
+	          ...(query.role ? { user: { role: { name: query.role } } } : {}),
+	        };
+    const employeeWhere: Prisma.EmployeeProfileWhereInput = hasWhereInput(statusWhere)
+      ? { AND: [baseEmployeeWhere, statusWhere] }
+      : baseEmployeeWhere;
 
     const total = await prisma.employeeProfile.count({ where: employeeWhere });
     const effectivePage = total > 0 && (page - 1) * limit >= total ? 1 : page;
@@ -208,7 +210,7 @@ async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeList
       });
     }
 
-    const filterOptions = await getEmployeeFilterOptions(employeeWhere);
+	    const filterOptions = await getEmployeeFilterOptions(baseEmployeeWhere);
     return {
       ...paginatedEmployees(employees.map((employee) => mapEmployeeSummary(employee, role)), total, effectivePage, limit),
       filterOptions
@@ -431,8 +433,8 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     if (!canEditOperational && !canEditPeopleData) return createPermissionError("Você não tem permissão para editar dados do colaborador.");
 
     const adminOnlyFields: Array<keyof EmployeeAdminUpdateInput> = ["wbLogin", "roleName", "userStatus"];
-    const sensitivePeopleFields: Array<keyof EmployeeAdminUpdateInput> = ["fullName", "socialName", "email", "primaryPhone", "city", "stateUf", "preferredSchedule", "contractType", "admissionDate", "trainingStartDate", "terminationDate", "terminationType", "terminationReason", "ethnicity", "sexualOrientation", "isCpd", "firstJob", "hasTelemarketingExperience", "telemarketingWhere"];
-    const operationalBindingFields: Array<keyof EmployeeAdminUpdateInput> = ["lobId", "teamId", "supervisorId", "shiftId", "scheduleType", "siteOperation"];
+    const sensitivePeopleFields: Array<keyof EmployeeAdminUpdateInput> = ["fullName", "socialName", "email", "primaryPhone", "city", "stateUf", "preferredSchedule", "contractType", "admissionDate", "trainingStartDate", "terminationDate", "terminationType", "terminationReason", "ethnicity", "sexualOrientation", "isPcd", "pcdDisabilityType", "pcdDisabilityOther", "firstJob", "hasTelemarketingExperience", "telemarketingWhere"];
+    const operationalBindingFields: Array<keyof EmployeeAdminUpdateInput> = ["lobId", "supervisorId", "shiftId", "siteOperation"];
     const profileOperationalFields: Array<keyof EmployeeAdminUpdateInput> = ["roleTitle", "operationalStatus", "internalNotes", "skill", "wave", "nestingStartDate", "goLiveDate"];
     if (!actorIsAdmin && adminOnlyFields.some((field) => input[field] !== undefined)) return createPermissionError("Apenas Admin pode alterar WB/Login, role ou status de acesso.");
     if (!canEditPeopleData && sensitivePeopleFields.some((field) => input[field] !== undefined)) return createPermissionError("Você não tem permissão para editar dados cadastrais/contratuais.");
@@ -451,9 +453,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     const nextRoleName = clean(input.roleName);
     const nextSupervisorId = cleanNullable(input.supervisorId);
     const nextLobId = clean(input.lobId);
-    const nextTeamId = clean(input.teamId);
     const nextShiftId = clean(input.shiftId);
-    const nextScheduleType = clean(input.scheduleType);
     const nextContractType = cleanNullable(input.contractType);
     const nextAdmissionDate = parseDateInput(input.admissionDate, "Data de admissão inválida.");
     if ("error" in nextAdmissionDate) return createValidationError({ admissionDate: nextAdmissionDate.error });
@@ -473,7 +473,12 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     const nextSiteOperation = cleanNullable(input.siteOperation);
     const nextEthnicity = cleanNullable(input.ethnicity);
     const nextSexualOrientation = cleanNullable(input.sexualOrientation);
-    const nextIsCpd = cleanNullable(input.isCpd);
+    const nextIsPcd = cleanNullable(input.isPcd);
+    const nextPcdDisabilityType = cleanNullable(input.pcdDisabilityType);
+    const nextPcdDisabilityOther = cleanNullable(input.pcdDisabilityOther);
+    const effectiveIsPcd = input.isPcd !== undefined ? nextIsPcd : employee.isPcd ?? null;
+    const effectivePcdDisabilityType = input.pcdDisabilityType !== undefined ? nextPcdDisabilityType : employee.pcdDisabilityType ?? null;
+    const effectivePcdDisabilityOther = input.pcdDisabilityOther !== undefined ? nextPcdDisabilityOther : employee.pcdDisabilityOther ?? null;
     const nextFirstJob = cleanNullable(input.firstJob);
     const nextHasTelemarketingExperience = cleanNullable(input.hasTelemarketingExperience);
     const nextTelemarketingWhere = cleanNullable(input.telemarketingWhere);
@@ -491,12 +496,12 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     if (input.email !== undefined && (!nextEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail))) return createValidationError({ email: "E-mail inválido." });
     if (input.wbLogin !== undefined && !nextWbLogin) return createValidationError({ wbLogin: "WB/Login obrigatório." });
     if (input.lobId !== undefined && !nextLobId) return createValidationError({ lobId: "LOB é obrigatória." });
-    if (input.teamId !== undefined && !nextTeamId) return createValidationError({ teamId: "Time é obrigatório." });
     if (input.shiftId !== undefined && !nextShiftId) return createValidationError({ shiftId: "Turno é obrigatório." });
     if (input.roleTitle !== undefined && !nextRoleTitle) return createValidationError({ roleTitle: "Cargo/Função é obrigatório." });
     if (input.operationalStatus !== undefined && !nextStatus) return createValidationError({ operationalStatus: "Status do colaborador é obrigatório." });
-    if (input.scheduleType !== undefined && !nextScheduleType) return createValidationError({ scheduleType: "Cronograma é obrigatório." });
     if (input.stateUf !== undefined && nextStateUf && nextStateUf.length !== 2) return createValidationError({ stateUf: "Estado/UF deve ter 2 letras." });
+    if ((input.isPcd !== undefined || input.pcdDisabilityType !== undefined) && effectiveIsPcd === "Sim" && !effectivePcdDisabilityType) return createValidationError({ pcdDisabilityType: "Tipo de deficiência é obrigatório quando PCD for Sim." });
+    if ((input.isPcd !== undefined || input.pcdDisabilityType !== undefined || input.pcdDisabilityOther !== undefined) && effectiveIsPcd === "Sim" && effectivePcdDisabilityType === "Outra" && !effectivePcdDisabilityOther) return createValidationError({ pcdDisabilityOther: "Especifique o tipo de deficiência." });
     if (nextSupervisorId && nextSupervisorId === employee.id) return createValidationError({ supervisorId: "O colaborador não pode ser supervisor de si mesmo." }, "O colaborador não pode ser supervisor de si mesmo.");
 
     let targetRoleId: string | undefined;
@@ -536,10 +541,6 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
       const lob = await prisma.lob.findUnique({ where: { id: nextLobId } });
       if (!lob) return createRelationError("LOB selecionada não foi encontrada.", { lobId: "LOB selecionada não existe ou está inativa." });
     }
-    if (nextTeamId) {
-      const team = await prisma.team.findUnique({ where: { id: nextTeamId } });
-      if (!team) return createRelationError("Time selecionado não foi encontrado.", { teamId: "Selecione um time válido." });
-    }
     if (nextShiftId) {
       const shift = await prisma.shift.findUnique({ where: { id: nextShiftId } });
       if (!shift) return createRelationError("Turno selecionado não foi encontrado.", { shiftId: "Selecione um turno válido." });
@@ -571,9 +572,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
           ...(nextStatus ? { operationalStatus: nextStatus } : {}),
           ...(nextSupervisorId !== undefined ? { supervisorId: nextSupervisorId || null } : {}),
           ...(nextLobId ? { lobId: nextLobId } : {}),
-          ...(nextTeamId ? { teamId: nextTeamId } : {}),
           ...(nextShiftId ? { shiftId: nextShiftId } : {}),
-          ...(nextScheduleType ? { scheduleType: nextScheduleType } : {}),
           ...(input.contractType !== undefined ? { contractType: nextContractType } : {}),
           ...(nextAdmissionDate.value ? { admissionDate: nextAdmissionDate.value } : {}),
           ...(input.trainingStartDate !== undefined ? { trainingStartDate: nextTrainingDate.value ?? null } : {}),
@@ -584,7 +583,9 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
           ...(input.terminationReason !== undefined ? { terminationReason: nextTerminationReason } : {}),
           ...(input.ethnicity !== undefined ? { ethnicity: nextEthnicity } : {}),
           ...(input.sexualOrientation !== undefined ? { sexualOrientation: nextSexualOrientation } : {}),
-          ...(input.isCpd !== undefined ? { isCpd: nextIsCpd } : {}),
+          ...(input.isPcd !== undefined ? { isPcd: nextIsPcd } : {}),
+          ...(input.pcdDisabilityType !== undefined || input.isPcd !== undefined ? { pcdDisabilityType: effectiveIsPcd === "Sim" ? effectivePcdDisabilityType : null } : {}),
+          ...(input.pcdDisabilityOther !== undefined || input.pcdDisabilityType !== undefined || input.isPcd !== undefined ? { pcdDisabilityOther: effectiveIsPcd === "Sim" && effectivePcdDisabilityType === "Outra" ? effectivePcdDisabilityOther : null } : {}),
           ...(input.firstJob !== undefined ? { firstJob: nextFirstJob } : {}),
           ...(input.hasTelemarketingExperience !== undefined ? { hasTelemarketingExperience: nextHasTelemarketingExperience } : {}),
           ...(input.telemarketingWhere !== undefined ? { telemarketingWhere: nextTelemarketingWhere } : {}),
@@ -890,7 +891,9 @@ function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: 
     contractType: canViewPeopleProfile ? employee.contractType ?? "" : "",
     ethnicity: canViewDiversityData ? employee.ethnicity ?? "" : "",
     sexualOrientation: canViewDiversityData ? employee.sexualOrientation ?? "" : "",
-    isCpd: canViewDiversityData ? employee.isCpd ?? "" : "",
+    isPcd: canViewDiversityData ? employee.isPcd ?? "" : "",
+    pcdDisabilityType: canViewDiversityData ? employee.pcdDisabilityType ?? "" : "",
+    pcdDisabilityOther: canViewDiversityData ? employee.pcdDisabilityOther ?? "" : "",
     firstJob: canViewDiversityData ? employee.firstJob ?? "" : "",
     hasTelemarketingExperience: canViewDiversityData ? employee.hasTelemarketingExperience ?? "" : "",
     telemarketingWhere: canViewDiversityData ? employee.telemarketingWhere ?? "" : "",
@@ -984,7 +987,9 @@ function mapLegacyEmployee(employee: LegacyEmployeeRow, role: string) {
     contractType: "",
     ethnicity: "",
     sexualOrientation: "",
-    isCpd: "",
+    isPcd: "",
+    pcdDisabilityType: "",
+    pcdDisabilityOther: "",
     firstJob: "",
     hasTelemarketingExperience: "",
     telemarketingWhere: "",
@@ -1060,7 +1065,9 @@ function mapEmployeeSummary(employee: EmployeeSummaryRow, role: string) {
     contractType: "",
     ethnicity: "",
     sexualOrientation: "",
-    isCpd: "",
+    isPcd: "",
+    pcdDisabilityType: "",
+    pcdDisabilityOther: "",
     firstJob: "",
     hasTelemarketingExperience: "",
     telemarketingWhere: "",
@@ -1108,7 +1115,7 @@ function employeeExportColumns(role: string) {
     col("skill", (employee) => employee.skill),
     col("wave", (employee) => employee.wave),
     col("turno", (employee) => employee.shift),
-    col("status_colaborador", (employee) => employee.employeeStatus ?? displayEmployeeStatus(employee.status)),
+    col("status_colaborador", (employee) => employee.employeeStatus),
     col("status_usuario", (employee) => employee.userStatus),
     col("data_desligamento", (employee) => employee.terminationDate),
     col("tipo_desligamento", (employee) => employee.terminationType),
@@ -1119,7 +1126,9 @@ function employeeExportColumns(role: string) {
   const diversity = [
     col("etnia", (employee) => employee.ethnicity),
     col("orientacao_sexual", (employee) => employee.sexualOrientation),
-    col("eh_cpd", (employee) => employee.isCpd),
+    col("eh_pcd", (employee) => employee.isPcd),
+    col("tipo_deficiencia", (employee) => employee.pcdDisabilityType),
+    col("tipo_deficiencia_outro", (employee) => employee.pcdDisabilityOther),
     col("primeiro_emprego", (employee) => employee.firstJob),
     col("ja_trabalhou_telemarketing", (employee) => employee.hasTelemarketingExperience),
     col("onde_trabalhou_telemarketing", (employee) => employee.telemarketingWhere)
@@ -1175,7 +1184,7 @@ function col(header: string, value: (employee: Record<string, any>) => unknown) 
 }
 
 async function getEmployeeFilterOptions(where: Prisma.EmployeeProfileWhereInput) {
-  const [skillRows, waveRows] = await Promise.all([
+  const [skillRows, waveRows, statusRows] = await Promise.all([
     prisma.employeeProfile.findMany({
       where: { ...where, skill: { not: null } },
       distinct: ["skill"],
@@ -1187,11 +1196,23 @@ async function getEmployeeFilterOptions(where: Prisma.EmployeeProfileWhereInput)
       distinct: ["wave"],
       select: { wave: true },
       orderBy: { wave: "asc" }
+    }),
+    prisma.employeeProfile.findMany({
+      where: { ...where, operationalStatus: { not: "" } },
+      distinct: ["operationalStatus"],
+      select: { operationalStatus: true },
+      orderBy: { operationalStatus: "asc" }
     })
   ]);
+  const statuses = Array.from(new Set(
+    statusRows
+      .map((row) => displayEmployeeStatus(row.operationalStatus))
+      .filter(isSelectableEmployeeStatusOption)
+  )).sort(employeeStatusSort);
   return {
     skills: skillRows.map((row) => row.skill).filter((value): value is string => Boolean(value?.trim())),
-    waves: waveRows.map((row) => row.wave).filter((value): value is string => Boolean(value?.trim()))
+    waves: waveRows.map((row) => row.wave).filter((value): value is string => Boolean(value?.trim())),
+    statuses: statuses.length ? statuses : officialEmployeeStatusOptions
   };
 }
 
@@ -1273,6 +1294,20 @@ const employeeStatusDisplayAliases: Record<string, string> = {
   PENDENTE_APROVAÇÃO: "Pendente de cadastro"
 };
 
+const officialEmployeeStatusOptions = ["Ativo", "Desligado", "Em treinamento", "Nesting", "Inativo", "Desativado", "Afastado", "Suspenso", "Pendente de cadastro"];
+
+const employeeStatusFilterAliases: Record<string, string[]> = {
+  Ativo: ["Ativo", "ATIVO", "ACTIVE"],
+  Desligado: ["Desligado", "DESLIGADO"],
+  "Em treinamento": ["Em treinamento", "EM_TREINAMENTO"],
+  Nesting: ["Nesting", "NESTING"],
+  Inativo: ["Inativo", "INATIVO", "INACTIVE"],
+  Desativado: ["Desativado", "DESATIVADO"],
+  Afastado: ["Afastado", "AFASTADO"],
+  Suspenso: ["Suspenso", "SUSPENSO"],
+  "Pendente de cadastro": ["Pendente de cadastro", "PENDENTE_CADASTRO"]
+};
+
 function displayEmployeeStatus(status: unknown) {
   const raw = clean(status);
   if (!raw) return "";
@@ -1336,45 +1371,39 @@ const inactiveEmployeeStatusTokens = new Set([
 function buildEmployeeStatusWhere(status: unknown): Prisma.EmployeeProfileWhereInput {
   const raw = clean(status);
   if (!raw || isAllFilter(raw)) return {};
-  const token = normalizeStatusToken(raw);
-  if (["ATIVOS_APROVADOS", "ATIVOS", "ATIVO", "ACTIVE", "APROVADOS", "APROVADO", "APPROVED"].includes(token)) {
-    return {
-      OR: [
-        { operationalStatus: { in: ["ACTIVE", "ATIVO", "Ativo", "APPROVED", "APROVADO", "Aprovado", "Online", "Em Atendimento", "Em treinamento", "EM_TREINAMENTO", "NESTING", "Nesting", "nesting"] } },
-        { user: { status: "ACTIVE" } }
-      ]
-    };
-  }
-  if (token === "PENDENTES" || pendingEmployeeStatusTokens.has(token)) {
-    return {
-      operationalStatus: {
-        in: ["PENDING", "PENDENTE", "Pendente", "Pendente de cadastro", "PENDENTE_CADASTRO", "PENDENTE_APROVACAO", "PENDENTE_APROVAÇÃO"]
-      }
-    };
-  }
-  if (token === "INATIVOS" || inactiveEmployeeStatusTokens.has(token)) {
-    return {
-      OR: [
-        { operationalStatus: { in: ["INACTIVE", "INATIVO", "Inativo", "Offline", "DESLIGADO", "Desligado", "SUSPENSO", "Suspenso"] } },
-        { user: { status: { in: ["INACTIVE", "BLOCKED"] } } }
-      ]
-    };
-  }
-  return { operationalStatus: { contains: raw, mode: "insensitive" } };
+  const canonical = canonicalEmployeeStatusLabel(raw);
+  const values = canonical ? employeeStatusFilterAliases[canonical] : [raw];
+  return { OR: values.map((value) => ({ operationalStatus: { equals: value, mode: "insensitive" } })) };
 }
 
-function matchesEmployeeStatusFilter(status: unknown, userStatus: unknown, filter: unknown) {
+function matchesEmployeeStatusFilter(status: unknown, _userStatus: unknown, filter: unknown) {
   const rawFilter = clean(filter);
   if (!rawFilter || isAllFilter(rawFilter)) return true;
-  const token = normalizeStatusToken(rawFilter);
-  const employeeToken = normalizeStatusToken(status);
-  const userToken = normalizeStatusToken(userStatus);
-  if (["ATIVOS_APROVADOS", "ATIVOS", "ATIVO", "ACTIVE", "APROVADOS", "APROVADO", "APPROVED"].includes(token)) {
-    return activeEmployeeStatusTokens.has(employeeToken) || userToken === "ACTIVE";
-  }
-  if (token === "PENDENTES" || pendingEmployeeStatusTokens.has(token)) return pendingEmployeeStatusTokens.has(employeeToken);
-  if (token === "INATIVOS" || inactiveEmployeeStatusTokens.has(token)) return inactiveEmployeeStatusTokens.has(employeeToken) || ["INACTIVE", "BLOCKED"].includes(userToken);
-  return employeeToken.includes(token);
+  const canonical = canonicalEmployeeStatusLabel(rawFilter);
+  const values = canonical ? employeeStatusFilterAliases[canonical] : [rawFilter];
+  return values.some((value) => normalizeStatusToken(value) === normalizeStatusToken(status));
+}
+
+function canonicalEmployeeStatusLabel(value: unknown) {
+  const token = normalizeStatusToken(value);
+  return officialEmployeeStatusOptions.find((status) => normalizeStatusToken(status) === token);
+}
+
+function isSelectableEmployeeStatusOption(value: string) {
+  return Boolean(canonicalEmployeeStatusLabel(value));
+}
+
+function employeeStatusSort(a: string, b: string) {
+  const aIndex = officialEmployeeStatusOptions.indexOf(a);
+  const bIndex = officialEmployeeStatusOptions.indexOf(b);
+  if (aIndex >= 0 && bIndex >= 0) return aIndex - bIndex;
+  if (aIndex >= 0) return -1;
+  if (bIndex >= 0) return 1;
+  return a.localeCompare(b, "pt-BR");
+}
+
+function hasWhereInput(where: Prisma.EmployeeProfileWhereInput) {
+  return Object.keys(where).length > 0;
 }
 
 function isAllFilter(value: string) {

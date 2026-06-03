@@ -17,9 +17,7 @@ const updateSchema = z.object({
   roleName: z.string().trim().optional(),
   supervisorId: z.string().trim().optional(),
   lobId: z.string().trim().optional(),
-  teamId: z.string().trim().optional(),
   shiftId: z.string().trim().optional(),
-  scheduleType: z.string().trim().optional(),
   contractType: z.string().trim().optional(),
   skill: z.string().trim().optional(),
   wave: z.string().trim().optional(),
@@ -32,7 +30,9 @@ const updateSchema = z.object({
   terminationReason: z.string().trim().optional(),
   ethnicity: z.string().trim().optional(),
   sexualOrientation: z.string().trim().optional(),
-  isCpd: z.string().trim().optional(),
+  isPcd: z.string().trim().optional(),
+  pcdDisabilityType: z.string().trim().optional(),
+  pcdDisabilityOther: z.string().trim().optional(),
   firstJob: z.string().trim().optional(),
   hasTelemarketingExperience: z.string().trim().optional(),
   telemarketingWhere: z.string().trim().optional(),
@@ -57,11 +57,10 @@ export async function GET(request: Request) {
     lob: url.searchParams.get("lob") ?? undefined,
     lobId: url.searchParams.get("lobId") ?? undefined,
     supervisorId: url.searchParams.get("supervisorId") ?? undefined,
-    teamId: url.searchParams.get("teamId") ?? undefined,
     shiftId: url.searchParams.get("shiftId") ?? undefined,
     skill: url.searchParams.get("skill") ?? undefined,
     wave: url.searchParams.get("wave") ?? undefined,
-    status: url.searchParams.get("status") ?? undefined,
+    status: url.searchParams.get("status_colaborador") ?? url.searchParams.get("employeeStatus") ?? url.searchParams.get("status") ?? undefined,
     role: url.searchParams.get("role") ?? undefined
   });
   if (Array.isArray(result)) return NextResponse.json({ data: result, total: result.length, page, limit, totalPages: 1 });

@@ -54,7 +54,9 @@ export const registrationPayloadSchema = z.object({
   educationLevel: requiredString("Escolaridade é obrigatória."),
   ethnicity: requiredString("Etnia é obrigatória."),
   sexualOrientation: requiredString("Orientação sexual é obrigatória."),
-  isCpd: requiredString("Informe se é CPD."),
+  isPcd: requiredString("Informe se é PCD."),
+  pcdDisabilityType: optionalString,
+  pcdDisabilityOther: optionalString,
   firstJob: requiredString("Informe se este é o primeiro emprego."),
   hasTelemarketingExperience: requiredString("Informe se já trabalhou em telemarketing."),
   telemarketingWhere: optionalString,
@@ -85,6 +87,29 @@ export const registrationPayloadSchema = z.object({
       message: "As senhas informadas não conferem."
     });
   }
+
+  if (data.isPcd === "Sim" && !data.pcdDisabilityType?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["pcdDisabilityType"],
+      message: "Tipo de deficiência é obrigatório quando PCD for Sim."
+    });
+  }
+
+  if (data.isPcd === "Sim" && data.pcdDisabilityType === "Outra" && !data.pcdDisabilityOther?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["pcdDisabilityOther"],
+      message: "Especifique o tipo de deficiência."
+    });
+  }
+
+  if (data.isPcd !== "Sim") {
+    data.pcdDisabilityType = undefined;
+    data.pcdDisabilityOther = undefined;
+  }
+
+  if (data.pcdDisabilityType !== "Outra") data.pcdDisabilityOther = undefined;
 
   if (data.hasTelemarketingExperience === "Não" && !data.telemarketingWhere) {
     data.telemarketingWhere = "Não se aplica";
