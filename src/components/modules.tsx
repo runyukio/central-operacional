@@ -175,6 +175,8 @@ type ClientRequest = {
 type CoverageImpactClient = {
   requestId: string;
   requestType: string;
+  impactStatus?: "IMPACTA" | "NAO_IMPACTA" | "SEM_REQUERIDO";
+  impactDirection?: "MELHORA" | "PIORA" | "NEUTRO";
   impacts: Array<{
     date: string;
     label: string;
@@ -186,6 +188,8 @@ type CoverageImpactClient = {
     impactDelta: number;
     projectedAvailable: number;
     projectedGap: number | null;
+    impactStatus?: "IMPACTA" | "NAO_IMPACTA" | "SEM_REQUERIDO";
+    impactDirection?: "MELHORA" | "PIORA" | "NEUTRO";
     result: "IMPROVES" | "WORSENS" | "NEUTRAL" | "NO_REQUIREMENT" | "NO_SCHEDULE";
     message?: string;
   }>;
@@ -193,6 +197,11 @@ type CoverageImpactClient = {
   badgeLabel: string;
   badgeTone: "red" | "green" | "blue" | "slate" | "orange";
   summary: string;
+};
+
+type CoverageWarningDialogState = {
+  impact: CoverageImpactClient;
+  onConfirm: () => Promise<void>;
 };
 
 type RequestListResponse = {
@@ -1268,20 +1277,46 @@ function primaryDayOffDate(request: ClientRequest) {
   return String(payload.requestedDate ?? "-");
 }
 
-function coverageImpactToneClass(tone?: CoverageImpactClient["badgeTone"]) {
-  if (tone === "red") return "border-red-200 bg-red-50 text-red-700";
-  if (tone === "green") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  if (tone === "orange") return "border-amber-200 bg-amber-50 text-amber-700";
-  if (tone === "blue") return "border-blue-200 bg-blue-50 text-blue-700";
+function normalizedImpactStatus(impact?: CoverageImpactClient | null) {
+  if (!impact) return null;
+  if (impact.impactStatus) return impact.impactStatus;
+  if (impact.hasCriticalWarning) return "IMPACTA";
+  if (impact.impacts.some((row) => row.result === "NO_REQUIREMENT" || row.result === "NO_SCHEDULE")) return "SEM_REQUERIDO";
+  return "NAO_IMPACTA";
+}
+
+function normalizedRowImpactStatus(row: CoverageImpactClient["impacts"][number]) {
+  if (row.impactStatus) return row.impactStatus;
+  if (row.required === null || row.projectedGap === null || row.result === "NO_REQUIREMENT" || row.result === "NO_SCHEDULE") return "SEM_REQUERIDO";
+  return row.projectedGap < 0 ? "IMPACTA" : "NAO_IMPACTA";
+}
+
+function impactStatusLabel(status?: string | null) {
+  if (status === "IMPACTA") return "Impacta";
+  if (status === "SEM_REQUERIDO") return "Sem requerido";
+  return "Não impacta";
+}
+
+function impactDirectionLabel(direction?: string | null) {
+  if (direction === "MELHORA") return "Melhora cobertura";
+  if (direction === "PIORA") return "Reduz cobertura";
+  return "Neutro";
+}
+
+function coverageImpactToneClass(status?: string | null) {
+  if (status === "IMPACTA") return "border-red-200 bg-red-50 text-red-700";
+  if (status === "NAO_IMPACTA") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "SEM_REQUERIDO") return "border-slate-200 bg-slate-50 text-slate-700";
   return "border-slate-200 bg-slate-50 text-slate-700";
 }
 
 function CoverageImpactBadge({ impact }: { impact?: CoverageImpactClient | null }) {
   if (!impact) return null;
+  const status = normalizedImpactStatus(impact);
   return (
-    <span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-extrabold", coverageImpactToneClass(impact.badgeTone))}>
-      {impact.hasCriticalWarning ? <AlertTriangle className="h-3 w-3" /> : null}
-      Impacto: {impact.badgeLabel}
+    <span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-extrabold", coverageImpactToneClass(status))}>
+      {status === "IMPACTA" ? <AlertTriangle className="h-3 w-3" /> : null}
+      {impactStatusLabel(status)}
     </span>
   );
 }
@@ -1291,22 +1326,17 @@ function coverageValue(value: number | null | undefined) {
   return value > 0 ? `+${value}` : String(value);
 }
 
-function coverageResultLabel(result: CoverageImpactClient["impacts"][number]["result"]) {
-  if (result === "WORSENS") return "Piora cobertura";
-  if (result === "IMPROVES") return "Melhora cobertura";
-  if (result === "NO_REQUIREMENT") return "Sem requerido";
-  if (result === "NO_SCHEDULE") return "Sem cronograma";
-  return "Neutro";
-}
-
 function CoverageImpactBlock({ impact }: { impact?: CoverageImpactClient | null }) {
   if (!impact) return null;
+  const status = normalizedImpactStatus(impact);
   return (
-    <div className={cn("rounded-lg border p-4", impact.hasCriticalWarning ? "border-red-200 bg-red-50/70" : "border-blue-100 bg-blue-50/60")}>
+    <div className="rounded-lg border border-border bg-white p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <p className="text-sm font-extrabold text-navy-950">Impacto no Requerido</p>
-          <p className="text-xs font-semibold text-muted">{impact.summary}</p>
+          <p className="text-sm font-extrabold text-navy-950">Impacto</p>
+          <p className="text-xs font-semibold text-muted">
+            {status === "IMPACTA" ? "Após a alteração, a cobertura prevista ficará abaixo do requerido." : status === "SEM_REQUERIDO" ? "Não há requerido cadastrado para ao menos um cenário." : "Cobertura prevista permanece dentro do requerido."}
+          </p>
         </div>
         <CoverageImpactBadge impact={impact} />
       </div>
@@ -1315,8 +1345,8 @@ function CoverageImpactBlock({ impact }: { impact?: CoverageImpactClient | null 
           <div key={`${row.date}-${row.label}-${index}`} className="rounded-lg border border-white/80 bg-white p-3 text-sm shadow-soft">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <p className="font-extrabold text-navy-950">{row.label}</p>
-              <span className={cn("rounded-full border px-2 py-1 text-[11px] font-extrabold", coverageImpactToneClass(row.result === "WORSENS" ? "red" : row.result === "IMPROVES" ? "green" : row.result === "NO_REQUIREMENT" || row.result === "NO_SCHEDULE" ? "orange" : "slate"))}>
-                {coverageResultLabel(row.result)}
+              <span className={cn("rounded-full border px-2 py-1 text-[11px] font-extrabold", coverageImpactToneClass(normalizedRowImpactStatus(row)))}>
+                {impactStatusLabel(normalizedRowImpactStatus(row))}
               </span>
             </div>
             <div className="grid gap-2 md:grid-cols-4">
@@ -1329,6 +1359,7 @@ function CoverageImpactBlock({ impact }: { impact?: CoverageImpactClient | null 
               <InfoLine label="Impacto" value={coverageValue(row.impactDelta)} />
               <InfoLine label="Gap previsto" value={coverageValue(row.projectedGap)} />
             </div>
+            {row.impactDirection ? <p className="mt-2 text-xs font-semibold text-muted">{impactDirectionLabel(row.impactDirection)}.</p> : null}
             {row.message ? <p className="mt-2 text-xs font-semibold text-muted">{row.message}</p> : null}
           </div>
         ))}
@@ -1343,14 +1374,54 @@ function coverageImpactFromError(error: unknown): CoverageImpactClient | null {
   return payload?.coverageImpact ?? payload?.details?.coverageImpact ?? null;
 }
 
-function confirmCoverageWarning(error: unknown) {
-  const impact = coverageImpactFromError(error);
-  if (!impact) return false;
-  const critical = impact.impacts.find((row) => row.result === "WORSENS");
-  const message = critical
-    ? `Atenção: esta aprovação pode piorar a cobertura do dia.\n\nData: ${critical.date}\nLOB: ${critical.lob}\nTurno: ${critical.shift}\nRequerido: ${critical.required ?? "Sem requerido"}\nDisponível atual: ${critical.currentAvailable}\nGap atual: ${coverageValue(critical.currentGap)}\nDisponível previsto: ${critical.projectedAvailable}\nGap previsto: ${coverageValue(critical.projectedGap)}\n\nAprovar mesmo assim?`
-    : `${impact.summary}\n\nAprovar mesmo assim?`;
-  return window.confirm(message);
+function CoverageWarningDialog({ warning, onClose }: { warning: CoverageWarningDialogState | null; onClose: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+  if (!warning) return null;
+  const critical = warning.impact.impacts.find((row) => normalizedRowImpactStatus(row) === "IMPACTA") ?? warning.impact.impacts[0];
+  const confirm = async () => {
+    if (confirming) return;
+    setConfirming(true);
+    try {
+      await warning.onConfirm();
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[70] grid place-items-center bg-navy-950/45 p-4 backdrop-blur-sm">
+      <div className="card w-full max-w-lg p-5">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wide text-muted">Impacto no Requerido</p>
+            <h2 className="mt-1 text-lg font-extrabold text-navy-950">Aprovação com impacto operacional</h2>
+          </div>
+          <CoverageImpactBadge impact={warning.impact} />
+        </div>
+        <p className="mb-4 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+          Após esta alteração, a cobertura prevista ficará abaixo do requerido.
+        </p>
+        {critical ? (
+          <div className="grid gap-2 rounded-lg border border-border bg-slate-50 p-3 text-sm md:grid-cols-2">
+            <InfoLine label="Data" value={critical.date} />
+            <InfoLine label="LOB" value={critical.lob} />
+            <InfoLine label="Turno" value={critical.shift} />
+            <InfoLine label="Requerido" value={critical.required ?? "Sem requerido"} />
+            <InfoLine label="Disponível atual" value={critical.currentAvailable} />
+            <InfoLine label="Disponível previsto" value={critical.projectedAvailable} />
+            <InfoLine label="Gap atual" value={coverageValue(critical.currentGap)} />
+            <InfoLine label="Gap previsto" value={coverageValue(critical.projectedGap)} />
+          </div>
+        ) : null}
+        <div className="mt-5 grid grid-cols-2 gap-3">
+          <button disabled={confirming} onClick={onClose} className="rounded-lg border border-border bg-white px-4 py-3 text-sm font-bold text-navy-950 disabled:opacity-60">Voltar</button>
+          <button disabled={confirming} onClick={confirm} className="rounded-lg bg-red-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
+            {confirming ? "Aprovando..." : "Aprovar mesmo assim"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function getRequestIcon(type: string) {
@@ -3076,6 +3147,7 @@ export function MySchedulePage() {
   const [actionReason, setActionReason] = useState("");
   const [comment, setComment] = useState("");
   const [actionPending, setActionPending] = useState("");
+  const [coverageWarning, setCoverageWarning] = useState<CoverageWarningDialogState | null>(null);
   const [requestFilters, setRequestFilters] = useState({ status: "Todos", type: "Todos", priority: "Todos", query: "" });
   const [dayOffForm, setDayOffForm] = useState({
     kind: "DAY_OFF_SWAP" as DayOffKind,
@@ -3444,14 +3516,24 @@ export function MySchedulePage() {
     try {
       await applyPayload(await patchStatus());
     } catch (error) {
-      if (confirmCoverageWarning(error)) {
-        try {
-          await applyPayload(await patchStatus(true));
-          return;
-        } catch (retryError) {
-          setDayOffMessage(retryError instanceof Error ? retryError.message : "Não foi possível atualizar a solicitação.");
-          return;
-        }
+      const impact = coverageImpactFromError(error);
+      if (impact) {
+        setCoverageWarning({
+          impact,
+          onConfirm: async () => {
+            setActionPending(`${id}:${status}`);
+            try {
+              await applyPayload(await patchStatus(true));
+              setCoverageWarning(null);
+            } catch (retryError) {
+              setDayOffMessage(retryError instanceof Error ? retryError.message : "Não foi possível atualizar a solicitação.");
+              setCoverageWarning(null);
+            } finally {
+              setActionPending("");
+            }
+          }
+        });
+        return;
       }
       setDayOffMessage(error instanceof Error ? error.message : "Não foi possível atualizar a solicitação.");
     } finally {
@@ -3938,6 +4020,7 @@ export function MySchedulePage() {
           </div>
         </div>
       ) : null}
+      <CoverageWarningDialog warning={coverageWarning} onClose={() => setCoverageWarning(null)} />
     </div>
   );
 }
@@ -7210,6 +7293,7 @@ export function RequestsPage() {
   const [actionReason, setActionReason] = useState("");
   const [comment, setComment] = useState("");
   const [actionPending, setActionPending] = useState("");
+  const [coverageWarning, setCoverageWarning] = useState<CoverageWarningDialogState | null>(null);
   const [filters, setFilters] = useState({
     type: "Todos",
     status: "Todos",
@@ -7289,14 +7373,24 @@ export function RequestsPage() {
     try {
       applyPayload(await patchStatus());
     } catch (error) {
-      if (confirmCoverageWarning(error)) {
-        try {
-          applyPayload(await patchStatus(true));
-          return;
-        } catch (retryError) {
-          setActionMessage(retryError instanceof Error ? retryError.message : "Não foi possível atualizar a solicitação.");
-          return;
-        }
+      const impact = coverageImpactFromError(error);
+      if (impact) {
+        setCoverageWarning({
+          impact,
+          onConfirm: async () => {
+            setActionPending(`${id}:${status}`);
+            try {
+              applyPayload(await patchStatus(true));
+              setCoverageWarning(null);
+            } catch (retryError) {
+              setActionMessage(retryError instanceof Error ? retryError.message : "Não foi possível atualizar a solicitação.");
+              setCoverageWarning(null);
+            } finally {
+              setActionPending("");
+            }
+          }
+        });
+        return;
       }
       setActionMessage(error instanceof Error ? error.message : "Não foi possível atualizar a solicitação.");
     } finally {
@@ -7559,6 +7653,7 @@ export function RequestsPage() {
           </div>
         </div>
       ) : null}
+      <CoverageWarningDialog warning={coverageWarning} onClose={() => setCoverageWarning(null)} />
     </div>
   );
 }
@@ -7606,6 +7701,7 @@ export function RequestsKanbanPage() {
   const [actionReason, setActionReason] = useState("");
   const [comment, setComment] = useState("");
   const [actionPending, setActionPending] = useState("");
+  const [coverageWarning, setCoverageWarning] = useState<CoverageWarningDialogState | null>(null);
   const [filters, setFilters] = useState(defaultPipelineFilters);
   const [pagination, setPagination] = useState({ total: 0, page: 1, limit: 50, totalPages: 1 });
   const [summary, setSummary] = useState<RequestListResponse["summary"]>({ total: 0, byStatus: {} });
@@ -7760,14 +7856,24 @@ export function RequestsKanbanPage() {
     try {
       applyPayload(await patchStatus());
     } catch (error) {
-      if (confirmCoverageWarning(error)) {
-        try {
-          applyPayload(await patchStatus(true));
-          return;
-        } catch (retryError) {
-          setActionMessage(retryError instanceof Error ? retryError.message : "Não foi possível atualizar a solicitação.");
-          return;
-        }
+      const impact = coverageImpactFromError(error);
+      if (impact) {
+        setCoverageWarning({
+          impact,
+          onConfirm: async () => {
+            setActionPending(`${id}:${status}`);
+            try {
+              applyPayload(await patchStatus(true));
+              setCoverageWarning(null);
+            } catch (retryError) {
+              setActionMessage(retryError instanceof Error ? retryError.message : "Não foi possível atualizar a solicitação.");
+              setCoverageWarning(null);
+            } finally {
+              setActionPending("");
+            }
+          }
+        });
+        return;
       }
       setActionMessage(error instanceof Error ? error.message : "Não foi possível atualizar a solicitação.");
     } finally {
@@ -7975,6 +8081,7 @@ export function RequestsKanbanPage() {
           </div>
         </div>
       ) : null}
+      <CoverageWarningDialog warning={coverageWarning} onClose={() => setCoverageWarning(null)} />
     </div>
   );
 }

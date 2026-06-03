@@ -90,6 +90,8 @@ type RequestServiceError = {
 };
 
 type CoverageImpactResult = "IMPROVES" | "WORSENS" | "NEUTRAL" | "NO_REQUIREMENT" | "NO_SCHEDULE";
+type CoverageImpactStatus = "IMPACTA" | "NAO_IMPACTA" | "SEM_REQUERIDO";
+type CoverageImpactDirection = "MELHORA" | "PIORA" | "NEUTRO";
 
 type CoverageImpactRow = {
   date: string;
@@ -104,6 +106,8 @@ type CoverageImpactRow = {
   impactDelta: number;
   projectedAvailable: number;
   projectedGap: number | null;
+  impactStatus: CoverageImpactStatus;
+  impactDirection: CoverageImpactDirection;
   result: CoverageImpactResult;
   message?: string;
 };
@@ -111,6 +115,8 @@ type CoverageImpactRow = {
 type CoverageImpactSummary = {
   requestId: string;
   requestType: string;
+  impactStatus: CoverageImpactStatus;
+  impactDirection: CoverageImpactDirection;
   impacts: CoverageImpactRow[];
   hasCriticalWarning: boolean;
   badgeLabel: string;
@@ -1544,12 +1550,12 @@ function coverageWarningFailure(coverageImpact: CoverageImpactSummary): RequestS
 }
 
 function coverageWarningMessage(coverageImpact: CoverageImpactSummary) {
-  const worst = coverageImpact.impacts.find((impact) => impact.result === "WORSENS");
-  if (!worst) return "Atenção: esta solicitação pode piorar a cobertura prevista.";
+  const worst = coverageImpact.impacts.find((impact) => impact.impactStatus === "IMPACTA");
+  if (!worst) return "Atenção: a cobertura prevista ficará abaixo do requerido.";
   const required = worst.required === null ? "sem requerido cadastrado" : `requerido ${worst.required}`;
   const currentGap = worst.currentGap === null ? "sem gap atual" : `gap atual ${formatSignedNumber(worst.currentGap)}`;
   const projectedGap = worst.projectedGap === null ? "sem gap previsto" : `gap previsto ${formatSignedNumber(worst.projectedGap)}`;
-  return `Atenção: esta solicitação piora a cobertura prevista para ${worst.date} (${worst.lob} / ${worst.shift}). Cenário: ${required}, disponível atual ${worst.currentAvailable}, ${currentGap}. Se aprovada, disponível previsto ${worst.projectedAvailable} e ${projectedGap}.`;
+  return `Atenção: a cobertura prevista ficará abaixo do requerido para ${worst.date} (${worst.lob} / ${worst.shift}). Cenário: ${required}, disponível atual ${worst.currentAvailable}, ${currentGap}. Se aprovada, disponível previsto ${worst.projectedAvailable} e ${projectedGap}.`;
 }
 
 function coverageWarningAuditData(actorId: string, request: PrismaRequestForDisplay, coverageImpact: CoverageImpactSummary) {
@@ -1587,6 +1593,8 @@ async function calculateCoverageImpactForRequestData(request: PrismaRequestForDi
       impactDelta: 0,
       projectedAvailable: 0,
       projectedGap: null,
+      impactStatus: "SEM_REQUERIDO",
+      impactDirection: "NEUTRO",
       result: "NO_SCHEDULE",
       message: "Não foi possível calcular impacto porque a solicitação não possui colaborador vinculado."
     }]);
@@ -1611,6 +1619,8 @@ async function calculateCoverageImpactForRequestData(request: PrismaRequestForDi
       impactDelta: 0,
       projectedAvailable: 0,
       projectedGap: null,
+      impactStatus: "SEM_REQUERIDO",
+      impactDirection: "NEUTRO",
       result: "NO_SCHEDULE",
       message: "Não foi possível calcular impacto porque o colaborador não foi encontrado."
     }]);
@@ -1707,6 +1717,8 @@ async function buildCoverageImpactRow(input: {
       impactDelta: 0,
       projectedAvailable: 0,
       projectedGap: null,
+      impactStatus: "SEM_REQUERIDO",
+      impactDirection: "NEUTRO",
       result: "NO_SCHEDULE",
       message: input.date
         ? "Não foi possível calcular impacto porque não existe cronograma para o dia solicitado."
@@ -1731,6 +1743,8 @@ async function buildCoverageImpactRow(input: {
       impactDelta: 0,
       projectedAvailable: 0,
       projectedGap: null,
+      impactStatus: "SEM_REQUERIDO",
+      impactDirection: "NEUTRO",
       result: "NO_REQUIREMENT",
       message: input.message ?? "Não foi possível identificar turno produtivo para calcular impacto."
     };
@@ -1745,6 +1759,8 @@ async function buildCoverageImpactRow(input: {
   const projectedAvailable = currentAvailable + impactDelta;
   const currentGap = required === null ? null : currentAvailable - required;
   const projectedGap = required === null ? null : projectedAvailable - required;
+  const status = impactStatusForGap(required, projectedGap);
+  const direction = impactDirectionForGap(currentGap, projectedGap);
 
   return {
     date: dateKey,
@@ -1759,29 +1775,25 @@ async function buildCoverageImpactRow(input: {
     impactDelta,
     projectedAvailable,
     projectedGap,
-    result: impactResult(required, currentGap, projectedGap),
+    impactStatus: status,
+    impactDirection: direction,
+    result: legacyImpactResult(status, direction),
     message: input.message ?? (required === null ? "Não há requerido cadastrado para esta data, LOB e turno." : undefined)
   };
 }
 
 function summarizeCoverageImpact(request: PrismaRequestForDisplay, impacts: CoverageImpactRow[]): CoverageImpactSummary {
-  const hasCriticalWarning = impacts.some((impact) => impact.result === "WORSENS");
-  const hasImprovement = impacts.some((impact) => impact.result === "IMPROVES");
+  const impactStatus = summaryImpactStatus(impacts);
+  const impactDirection = summaryImpactDirection(impacts);
+  const hasCriticalWarning = impactStatus === "IMPACTA";
   const hasNoSchedule = impacts.some((impact) => impact.result === "NO_SCHEDULE");
-  const hasNoRequirement = impacts.some((impact) => impact.result === "NO_REQUIREMENT");
-  const badgeLabel = hasCriticalWarning
-    ? "Piora cobertura"
-    : hasImprovement
-      ? "Melhora cobertura"
-      : hasNoSchedule
-        ? "Sem cronograma"
-        : hasNoRequirement
-          ? "Sem requerido"
-          : "Neutro";
-  const badgeTone: CoverageImpactSummary["badgeTone"] = hasCriticalWarning ? "red" : hasImprovement ? "green" : hasNoSchedule || hasNoRequirement ? "orange" : "slate";
+  const badgeLabel = impactStatus === "IMPACTA" ? "Impacta" : impactStatus === "SEM_REQUERIDO" ? "Sem requerido" : "Não impacta";
+  const badgeTone: CoverageImpactSummary["badgeTone"] = impactStatus === "IMPACTA" ? "red" : impactStatus === "SEM_REQUERIDO" || hasNoSchedule ? "orange" : "green";
   return {
     requestId: request.id,
     requestType: request.type.name,
+    impactStatus,
+    impactDirection,
     impacts,
     hasCriticalWarning,
     badgeLabel,
@@ -1790,11 +1802,35 @@ function summarizeCoverageImpact(request: PrismaRequestForDisplay, impacts: Cove
   };
 }
 
-function impactResult(required: number | null, currentGap: number | null, projectedGap: number | null): CoverageImpactResult {
-  if (required === null || currentGap === null || projectedGap === null) return "NO_REQUIREMENT";
-  if (projectedGap < currentGap) return "WORSENS";
-  if (projectedGap > currentGap) return "IMPROVES";
+function impactStatusForGap(required: number | null, projectedGap: number | null): CoverageImpactStatus {
+  if (required === null || projectedGap === null) return "SEM_REQUERIDO";
+  return projectedGap < 0 ? "IMPACTA" : "NAO_IMPACTA";
+}
+
+function impactDirectionForGap(currentGap: number | null, projectedGap: number | null): CoverageImpactDirection {
+  if (currentGap === null || projectedGap === null) return "NEUTRO";
+  if (projectedGap > currentGap) return "MELHORA";
+  if (projectedGap < currentGap) return "PIORA";
+  return "NEUTRO";
+}
+
+function legacyImpactResult(status: CoverageImpactStatus, direction: CoverageImpactDirection): CoverageImpactResult {
+  if (status === "SEM_REQUERIDO") return "NO_REQUIREMENT";
+  if (direction === "MELHORA") return "IMPROVES";
+  if (direction === "PIORA") return "WORSENS";
   return "NEUTRAL";
+}
+
+function summaryImpactStatus(impacts: CoverageImpactRow[]): CoverageImpactStatus {
+  if (impacts.some((impact) => impact.impactStatus === "IMPACTA")) return "IMPACTA";
+  if (impacts.some((impact) => impact.impactStatus === "SEM_REQUERIDO")) return "SEM_REQUERIDO";
+  return "NAO_IMPACTA";
+}
+
+function summaryImpactDirection(impacts: CoverageImpactRow[]): CoverageImpactDirection {
+  if (impacts.some((impact) => impact.impactDirection === "PIORA")) return "PIORA";
+  if (impacts.some((impact) => impact.impactDirection === "MELHORA")) return "MELHORA";
+  return "NEUTRO";
 }
 
 function impactSummaryText(label: string, impacts: CoverageImpactRow[]) {

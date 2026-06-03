@@ -50,6 +50,8 @@ export type RequestRecord = {
   coverageImpact?: {
     requestId: string;
     requestType: string;
+    impactStatus?: string;
+    impactDirection?: string;
     impacts: Array<Record<string, unknown>>;
     hasCriticalWarning: boolean;
     badgeLabel: string;
