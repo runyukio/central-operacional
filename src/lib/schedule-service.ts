@@ -3023,11 +3023,9 @@ function emptyMoodSummary(): MoodSummary {
     responses: 0,
     interpretation: "Sem respostas no período",
     distribution: {
-      "Muito ruim": 0,
-      Ruim: 0,
-      Neutro: 0,
-      Bom: 0,
-      "Muito bom": 0
+      Triste: 0,
+      Normal: 0,
+      Feliz: 0
     },
     byLob: [],
     bySupervisor: [],
@@ -3050,7 +3048,7 @@ async function attritionEmployeeWhere(filters: AttendanceSummaryFilters = {}) {
 }
 
 async function getMoodSummary(period: NonNullable<ReturnType<typeof resolveAttendancePeriod>>, filters: AttendanceSummaryFilters = {}) {
-  const employeeWhere = await attritionEmployeeWhere(filters);
+  const employeeWhere = await attritionEmployeeWhere({ ...filters, roleTitle: "Todos" });
   const records = await prisma.employeeMoodRecord.findMany({
     where: {
       date: { gte: period.start, lte: period.end },

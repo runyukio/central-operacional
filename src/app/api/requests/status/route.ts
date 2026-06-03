@@ -11,7 +11,8 @@ const updateStatusSchema = z.object({
   actionInput: z.object({
     finalApprovedShift: z.string().optional(),
     finalApprovedStartTime: z.string().optional(),
-    finalApprovedEndTime: z.string().optional()
+    finalApprovedEndTime: z.string().optional(),
+    confirmCoverageWarning: z.union([z.boolean(), z.string()]).optional()
   }).optional()
 });
 
@@ -54,7 +55,8 @@ export async function PATCH(request: Request) {
       message,
       error: message,
       fieldErrors: errorResult.fieldErrors ?? {},
-      details: errorResult.details ?? {}
+      details: errorResult.details ?? {},
+      coverageImpact: errorResult.details?.coverageImpact
     }, { status: errorResult.status ?? 400 });
   }
 

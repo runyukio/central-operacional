@@ -47,6 +47,15 @@ export type RequestRecord = {
   createdAt?: string;
   updatedAt?: string;
   payload: Record<string, unknown>;
+  coverageImpact?: {
+    requestId: string;
+    requestType: string;
+    impacts: Array<Record<string, unknown>>;
+    hasCriticalWarning: boolean;
+    badgeLabel: string;
+    badgeTone: string;
+    summary: string;
+  } | null;
   history: Array<{ at: string; actor: string; action: string; reason?: string }>;
   comments: Array<{ at: string; author: string; body: string }>;
 };

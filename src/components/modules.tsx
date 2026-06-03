@@ -165,10 +165,34 @@ type ClientRequest = {
   time: string;
   description?: string;
   payload?: Record<string, unknown>;
+  coverageImpact?: CoverageImpactClient | null;
   history?: Array<{ at: string; actor: string; action: string; reason?: string }>;
   comments?: Array<{ at: string; author: string; body: string }>;
   createdAt?: string;
   updatedAt?: string;
+};
+
+type CoverageImpactClient = {
+  requestId: string;
+  requestType: string;
+  impacts: Array<{
+    date: string;
+    label: string;
+    lob: string;
+    shift: string;
+    required: number | null;
+    currentAvailable: number;
+    currentGap: number | null;
+    impactDelta: number;
+    projectedAvailable: number;
+    projectedGap: number | null;
+    result: "IMPROVES" | "WORSENS" | "NEUTRAL" | "NO_REQUIREMENT" | "NO_SCHEDULE";
+    message?: string;
+  }>;
+  hasCriticalWarning: boolean;
+  badgeLabel: string;
+  badgeTone: "red" | "green" | "blue" | "slate" | "orange";
+  summary: string;
 };
 
 type RequestListResponse = {
@@ -917,13 +941,15 @@ class ApiRequestError extends Error {
   fields?: Record<string, string>;
   type?: string;
   status?: number;
+  payload?: unknown;
 
-  constructor(message: string, options?: { fields?: Record<string, string>; type?: string; status?: number }) {
+  constructor(message: string, options?: { fields?: Record<string, string>; type?: string; status?: number; payload?: unknown }) {
     super(message);
     this.name = "ApiRequestError";
     this.fields = options?.fields;
     this.type = options?.type;
     this.status = options?.status;
+    this.payload = options?.payload;
   }
 }
 
@@ -968,7 +994,8 @@ async function apiJson<T>(url: string, options?: RequestInit) {
     throw new ApiRequestError(payload.error ?? payload.message ?? "Erro ao processar solicitação", {
       fields: payload.fieldErrors ?? payload.fields,
       type: payload.type,
-      status: response.status
+      status: response.status,
+      payload
     });
   }
   if (method !== "GET") {
@@ -1239,6 +1266,91 @@ function primaryDayOffDate(request: ClientRequest) {
   if (kind === "DAY_OFF_SELL") return String(payload.dayOffToSellDate ?? "-");
   if (kind === "DAY_OFF_REQUEST") return String(payload.desiredDayOffRequestDate ?? payload.desiredDayOffDate ?? payload.requestedDate ?? "-");
   return String(payload.requestedDate ?? "-");
+}
+
+function coverageImpactToneClass(tone?: CoverageImpactClient["badgeTone"]) {
+  if (tone === "red") return "border-red-200 bg-red-50 text-red-700";
+  if (tone === "green") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (tone === "orange") return "border-amber-200 bg-amber-50 text-amber-700";
+  if (tone === "blue") return "border-blue-200 bg-blue-50 text-blue-700";
+  return "border-slate-200 bg-slate-50 text-slate-700";
+}
+
+function CoverageImpactBadge({ impact }: { impact?: CoverageImpactClient | null }) {
+  if (!impact) return null;
+  return (
+    <span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-extrabold", coverageImpactToneClass(impact.badgeTone))}>
+      {impact.hasCriticalWarning ? <AlertTriangle className="h-3 w-3" /> : null}
+      Impacto: {impact.badgeLabel}
+    </span>
+  );
+}
+
+function coverageValue(value: number | null | undefined) {
+  if (value === null || value === undefined) return "-";
+  return value > 0 ? `+${value}` : String(value);
+}
+
+function coverageResultLabel(result: CoverageImpactClient["impacts"][number]["result"]) {
+  if (result === "WORSENS") return "Piora cobertura";
+  if (result === "IMPROVES") return "Melhora cobertura";
+  if (result === "NO_REQUIREMENT") return "Sem requerido";
+  if (result === "NO_SCHEDULE") return "Sem cronograma";
+  return "Neutro";
+}
+
+function CoverageImpactBlock({ impact }: { impact?: CoverageImpactClient | null }) {
+  if (!impact) return null;
+  return (
+    <div className={cn("rounded-lg border p-4", impact.hasCriticalWarning ? "border-red-200 bg-red-50/70" : "border-blue-100 bg-blue-50/60")}>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-sm font-extrabold text-navy-950">Impacto no Requerido</p>
+          <p className="text-xs font-semibold text-muted">{impact.summary}</p>
+        </div>
+        <CoverageImpactBadge impact={impact} />
+      </div>
+      <div className="space-y-2">
+        {impact.impacts.map((row, index) => (
+          <div key={`${row.date}-${row.label}-${index}`} className="rounded-lg border border-white/80 bg-white p-3 text-sm shadow-soft">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <p className="font-extrabold text-navy-950">{row.label}</p>
+              <span className={cn("rounded-full border px-2 py-1 text-[11px] font-extrabold", coverageImpactToneClass(row.result === "WORSENS" ? "red" : row.result === "IMPROVES" ? "green" : row.result === "NO_REQUIREMENT" || row.result === "NO_SCHEDULE" ? "orange" : "slate"))}>
+                {coverageResultLabel(row.result)}
+              </span>
+            </div>
+            <div className="grid gap-2 md:grid-cols-4">
+              <InfoLine label="Data" value={row.date} />
+              <InfoLine label="LOB" value={row.lob} />
+              <InfoLine label="Turno" value={row.shift} />
+              <InfoLine label="Requerido" value={row.required ?? "Sem requerido"} />
+              <InfoLine label="Disponível atual" value={row.currentAvailable} />
+              <InfoLine label="Gap atual" value={coverageValue(row.currentGap)} />
+              <InfoLine label="Impacto" value={coverageValue(row.impactDelta)} />
+              <InfoLine label="Gap previsto" value={coverageValue(row.projectedGap)} />
+            </div>
+            {row.message ? <p className="mt-2 text-xs font-semibold text-muted">{row.message}</p> : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function coverageImpactFromError(error: unknown): CoverageImpactClient | null {
+  if (!(error instanceof ApiRequestError) || error.type !== "COVERAGE_WARNING") return null;
+  const payload = error.payload as { coverageImpact?: CoverageImpactClient; details?: { coverageImpact?: CoverageImpactClient } } | undefined;
+  return payload?.coverageImpact ?? payload?.details?.coverageImpact ?? null;
+}
+
+function confirmCoverageWarning(error: unknown) {
+  const impact = coverageImpactFromError(error);
+  if (!impact) return false;
+  const critical = impact.impacts.find((row) => row.result === "WORSENS");
+  const message = critical
+    ? `Atenção: esta aprovação pode piorar a cobertura do dia.\n\nData: ${critical.date}\nLOB: ${critical.lob}\nTurno: ${critical.shift}\nRequerido: ${critical.required ?? "Sem requerido"}\nDisponível atual: ${critical.currentAvailable}\nGap atual: ${coverageValue(critical.currentGap)}\nDisponível previsto: ${critical.projectedAvailable}\nGap previsto: ${coverageValue(critical.projectedGap)}\n\nAprovar mesmo assim?`
+    : `${impact.summary}\n\nAprovar mesmo assim?`;
+  return window.confirm(message);
 }
 
 function getRequestIcon(type: string) {
@@ -3312,18 +3424,35 @@ export function MySchedulePage() {
     }
 
     setActionPending(`${id}:${status}`);
-    try {
-      const payload = await apiJson<{ data: ClientRequest; scheduleUpdated: boolean }>("/api/requests/status", {
-        method: "PATCH",
-        body: JSON.stringify({ id, status, reason: reason || undefined, actionInput })
-      });
+    const patchStatus = (confirmed = false) => apiJson<{ data: ClientRequest; scheduleUpdated: boolean }>("/api/requests/status", {
+      method: "PATCH",
+      body: JSON.stringify({
+        id,
+        status,
+        reason: reason || undefined,
+        actionInput: { ...(actionInput ?? {}), ...(confirmed ? { confirmCoverageWarning: "true" } : {}) }
+      })
+    });
+    const applyPayload = async (payload: { data: ClientRequest; scheduleUpdated: boolean }) => {
       setMyRequests((items) => items.map((item) => (item.id === id ? payload.data : item)));
       setSelectedRequest(payload.data);
       setActionReason("");
       setDayOffMessage(payload.scheduleUpdated ? "Solicitação aprovada e cronograma atualizado." : `Solicitação movida para ${payload.data.status}.`);
       await loadMySchedule(mySchedulePeriod);
       await loadMyWorkHours(mySchedulePeriod);
+    };
+    try {
+      await applyPayload(await patchStatus());
     } catch (error) {
+      if (confirmCoverageWarning(error)) {
+        try {
+          await applyPayload(await patchStatus(true));
+          return;
+        } catch (retryError) {
+          setDayOffMessage(retryError instanceof Error ? retryError.message : "Não foi possível atualizar a solicitação.");
+          return;
+        }
+      }
       setDayOffMessage(error instanceof Error ? error.message : "Não foi possível atualizar a solicitação.");
     } finally {
       setActionPending("");
@@ -7012,6 +7141,8 @@ function RequestDetailContent({
         ) : null}
       </div>
 
+      {dayOffKind ? <CoverageImpactBlock impact={selected.coverageImpact} /> : null}
+
       {dayOffKind === "DAY_OFF_SELL" && canWfmFinal && !isApproved && !isProcessed ? (
         <div className="rounded-lg border border-blue-100 bg-blue-50 p-4">
           <p className="mb-3 text-sm font-bold text-navy-950">Definição final do aprovador</p>
@@ -7140,16 +7271,33 @@ export function RequestsPage() {
     }
 
     setActionPending(`${id}:${status}`);
-    try {
-      const payload = await apiJson<{ data: ClientRequest; scheduleUpdated: boolean }>("/api/requests/status", {
-        method: "PATCH",
-        body: JSON.stringify({ id, status, reason: reason || `Movido para ${status}.`, actionInput })
-      });
+    const patchStatus = (confirmed = false) => apiJson<{ data: ClientRequest; scheduleUpdated: boolean }>("/api/requests/status", {
+      method: "PATCH",
+      body: JSON.stringify({
+        id,
+        status,
+        reason: reason || `Movido para ${status}.`,
+        actionInput: { ...(actionInput ?? {}), ...(confirmed ? { confirmCoverageWarning: "true" } : {}) }
+      })
+    });
+    const applyPayload = (payload: { data: ClientRequest; scheduleUpdated: boolean }) => {
       setRequests((items) => items.map((item) => (item.id === id ? payload.data : item)));
       setSelected((item) => (item?.id === id ? payload.data : item));
       setActionReason("");
       setActionMessage(payload.scheduleUpdated ? "Troca de folga aprovada e cronograma atualizado automaticamente." : payload.data.status === "Em análise" ? "Solicitação enviada para análise do WFM." : `Solicitação ${payload.data.id} movida para ${payload.data.status}.`);
+    };
+    try {
+      applyPayload(await patchStatus());
     } catch (error) {
+      if (confirmCoverageWarning(error)) {
+        try {
+          applyPayload(await patchStatus(true));
+          return;
+        } catch (retryError) {
+          setActionMessage(retryError instanceof Error ? retryError.message : "Não foi possível atualizar a solicitação.");
+          return;
+        }
+      }
       setActionMessage(error instanceof Error ? error.message : "Não foi possível atualizar a solicitação.");
     } finally {
       setActionPending("");
@@ -7289,13 +7437,14 @@ export function RequestsPage() {
         <Panel title="Lista de Solicitações">
           {requests.length ? (
             <SimpleTable
-              columns={["Código", "Tipo", "Solicitante", "Prioridade", "Status", "Área", "Data"]}
+              columns={["Código", "Tipo", "Solicitante", "Prioridade", "Status", "Impacto", "Área", "Data"]}
               rows={requests.map((request) => [
                 <button key={request.id} onClick={() => setSelected(request)} className="font-extrabold text-blue-600">{request.id}</button>,
                 <div key={`${request.id}-type`}><p className="font-bold text-navy-950">{request.type}</p><p className="text-xs text-muted">{request.title}</p></div>,
                 request.requester,
                 <PriorityBadge key={`${request.id}-p`} priority={request.priority} />,
                 <StatusBadge key={`${request.id}-s`} status={request.status} />,
+                <CoverageImpactBadge key={`${request.id}-impact`} impact={request.coverageImpact} />,
                 request.area,
                 request.time
               ])}
@@ -7580,11 +7729,16 @@ export function RequestsKanbanPage() {
 
     setActionPending(`${id}:${status}`);
     const previousStatus = requests.find((request) => request.id === id)?.status;
-    try {
-      const payload = await apiJson<{ data: ClientRequest; scheduleUpdated: boolean }>("/api/requests/status", {
-        method: "PATCH",
-        body: JSON.stringify({ id, status, reason: reason || `Movido para ${status} pela esteira.`, actionInput })
-      });
+    const patchStatus = (confirmed = false) => apiJson<{ data: ClientRequest; scheduleUpdated: boolean }>("/api/requests/status", {
+      method: "PATCH",
+      body: JSON.stringify({
+        id,
+        status,
+        reason: reason || `Movido para ${status} pela esteira.`,
+        actionInput: { ...(actionInput ?? {}), ...(confirmed ? { confirmCoverageWarning: "true" } : {}) }
+      })
+    });
+    const applyPayload = (payload: { data: ClientRequest; scheduleUpdated: boolean }) => {
       setRequests((items) => items.map((request) => (request.id === id ? payload.data : request)));
       setSelected(payload.data);
       if (previousStatus && previousStatus !== payload.data.status) {
@@ -7597,12 +7751,24 @@ export function RequestsKanbanPage() {
               [previousStatus]: Math.max(0, (base.byStatus?.[previousStatus] ?? 0) - 1),
               [payload.data.status]: (base.byStatus?.[payload.data.status] ?? 0) + 1
             }
-          }
+          };
         });
       }
       setActionReason("");
       setActionMessage(payload.scheduleUpdated ? "Solicitação aprovada e cronograma atualizado." : payload.data.status === "Em análise" ? "Solicitação enviada para análise do WFM." : `Solicitação ${payload.data.id} atualizada para ${payload.data.status}.`);
+    };
+    try {
+      applyPayload(await patchStatus());
     } catch (error) {
+      if (confirmCoverageWarning(error)) {
+        try {
+          applyPayload(await patchStatus(true));
+          return;
+        } catch (retryError) {
+          setActionMessage(retryError instanceof Error ? retryError.message : "Não foi possível atualizar a solicitação.");
+          return;
+        }
+      }
       setActionMessage(error instanceof Error ? error.message : "Não foi possível atualizar a solicitação.");
     } finally {
       setActionPending("");
@@ -7716,12 +7882,13 @@ export function RequestsKanbanPage() {
       {viewMode === "table" ? (
         <Panel title="Visão Tabela">
           <SimpleTable
-            columns={["ID", "Criação", "Tipo", "Status", "Colaborador", "WB/Login", "LOB", "Supervisor", "Data solicitada", "Prioridade", "Próxima etapa", "Responsável", "Atualização", "Ações"]}
+            columns={["ID", "Criação", "Tipo", "Status", "Impacto", "Colaborador", "WB/Login", "LOB", "Supervisor", "Data solicitada", "Prioridade", "Próxima etapa", "Responsável", "Atualização", "Ações"]}
             rows={requests.map((request) => [
               <button key={`${request.id}-id`} onClick={() => openRequestDetail(request)} className="font-extrabold text-blue-600">{request.id}</button>,
               request.createdAt ?? request.time,
               <div key={`${request.id}-type`}><p className="font-bold text-navy-950">{request.type}</p><p className="line-clamp-1 text-xs text-muted">{request.title}</p></div>,
               <StatusBadge key={`${request.id}-status`} status={request.status} />,
+              <CoverageImpactBadge key={`${request.id}-impact`} impact={request.coverageImpact} />,
               request.requester,
               request.requesterWbLogin ?? "-",
               request.lob ?? "-",
@@ -7763,8 +7930,9 @@ export function RequestsKanbanPage() {
                           </div>
                         </div>
                         {dayOffKind ? (
-                          <div className="mt-3">
+                          <div className="mt-3 flex flex-wrap gap-2">
                             <StatusBadge status={dayOffKindLabels[dayOffKind]} />
+                            <CoverageImpactBadge impact={request.coverageImpact} />
                           </div>
                         ) : null}
                         <p className="mt-3 line-clamp-2 text-xs font-semibold text-muted">{request.title || request.description}</p>

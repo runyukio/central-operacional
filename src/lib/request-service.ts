@@ -1,4 +1,4 @@
-import { AuditAction, Prisma } from "@prisma/client";
+import { AuditAction, Prisma, type ScheduleStatus } from "@prisma/client";
 
 import type { Actor, Priority as UiPriority, RequestRecord, RequestStatus as UiRequestStatus } from "@/lib/mock-db";
 import {
@@ -9,9 +9,10 @@ import {
   updateRequestStatus as updateMockRequestStatus
 } from "@/lib/mock-db";
 import { applyApprovedMonthlyAdvanceChange, isMonthlyAdvanceRequestPayload } from "@/lib/monthly-advance-service";
+import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import { prisma } from "@/lib/prisma";
 import { canApproveRequest, normalizeRole } from "@/lib/permissions";
-import { cleanShiftName } from "@/lib/shift-display";
+import { cleanShiftName, shiftCategoryName } from "@/lib/shift-display";
 
 const uiToDbStatus = {
   Aberto: "ABERTO",
@@ -56,6 +57,26 @@ const wfmFinalRoles = ["ADMIN", "GESTOR", "WFM"];
 const supervisorStepRoles = ["ADMIN", "GESTOR", "SUPERVISOR"];
 const terminalFlowStatuses = ["APROVADO", "CONCLUIDO", "RECUSADO", "CANCELADO"] as const;
 const allowDemoDataFallback = process.env.ALLOW_DEMO_LOGIN === "true" || process.env.ALLOW_DEMO_DATA === "true";
+const productiveShiftCategories = ["Manhã", "Tarde", "Noite"] as const;
+const coverageStatuses = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "ATRASO", "SAIDA_ANTECIPADA", "VENDA_FOLGA_APROVADA"]);
+const inactiveCoverageEmployeeStatuses = new Set([
+  "inativo",
+  "inativa",
+  "inactive",
+  "desativado",
+  "desativada",
+  "disabled",
+  "desligado",
+  "desligada",
+  "terminated",
+  "suspenso",
+  "suspensa",
+  "suspended",
+  "em treinamento",
+  "treinamento",
+  "training",
+  "nesting"
+]);
 
 class DomainError extends Error {}
 
@@ -66,6 +87,35 @@ type RequestServiceError = {
   fieldErrors?: Record<string, string>;
   details?: Record<string, unknown>;
   status?: number;
+};
+
+type CoverageImpactResult = "IMPROVES" | "WORSENS" | "NEUTRAL" | "NO_REQUIREMENT" | "NO_SCHEDULE";
+
+type CoverageImpactRow = {
+  date: string;
+  label: string;
+  lob: string;
+  lobId?: string;
+  shift: string;
+  shiftId?: string;
+  required: number | null;
+  currentAvailable: number;
+  currentGap: number | null;
+  impactDelta: number;
+  projectedAvailable: number;
+  projectedGap: number | null;
+  result: CoverageImpactResult;
+  message?: string;
+};
+
+type CoverageImpactSummary = {
+  requestId: string;
+  requestType: string;
+  impacts: CoverageImpactRow[];
+  hasCriticalWarning: boolean;
+  badgeLabel: string;
+  badgeTone: "red" | "green" | "blue" | "slate" | "orange";
+  summary: string;
 };
 
 type RequestNotificationClient = Pick<Prisma.TransactionClient, "user" | "employeeProfile" | "notification">;
@@ -132,6 +182,7 @@ export type RequestStatusActionInput = {
   finalApprovedShift?: string;
   finalApprovedStartTime?: string;
   finalApprovedEndTime?: string;
+  confirmCoverageWarning?: boolean | string;
 };
 
 export async function listOperationalRequests(actor: Actor, filters: RequestFilters = {}) {
@@ -163,7 +214,7 @@ export async function listOperationalRequests(actor: Actor, filters: RequestFilt
     const totalPages = Math.max(1, Math.ceil(total / limit));
 
     return {
-      data: requests.map((request) => mapPrismaRequest(request, user, actor)),
+      data: await Promise.all(requests.map((request) => mapPrismaRequestWithImpact(request, user, actor))),
       total,
       page,
       limit,
@@ -198,7 +249,7 @@ export async function getOperationalRequest(actor: Actor, id: string) {
       include: requestInclude
     });
     if (!request || !canViewRequest(actor, user, request)) return null;
-    return mapPrismaRequest(request, user, actor);
+    return mapPrismaRequestWithImpact(request, user, actor);
   } catch (error) {
     recordErrorLog({
       userEmail: actor.email,
@@ -319,7 +370,7 @@ export async function createOperationalRequest(actor: Actor, input: CreateReques
 
     await notifyRequestCreationSafely(request.id, request.code, input.type, user.id, user.name, area, requesterProfile?.supervisorId, actor.email);
 
-    return { data: mapPrismaRequest(request, user, actor), persisted: true };
+    return { data: await mapPrismaRequestWithImpact(request, user, actor), persisted: true };
   } catch (error) {
     const mapped = mapRequestCreateError(error);
     recordErrorLog({
@@ -381,8 +432,16 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
     if (initialTransition === "FORBIDDEN") return "FORBIDDEN" as const;
     if ("error" in initialTransition) return initialTransition;
 
+    const coverageImpact =
+      shouldCheckCoverageWarning(existing, initialTransition)
+        ? await calculateCoverageImpactForRequestData(existing, actionInput)
+        : null;
+    if (coverageImpact?.hasCriticalWarning && !isCoverageWarningConfirmed(actionInput)) {
+      return coverageWarningFailure(coverageImpact);
+    }
+
     if (isSupervisorSendToWfm(actor, existing, initialTransition)) {
-      return sendSupervisorRequestToWfmAnalysis(actor, user, existing, initialTransition, reason, diagnostics);
+      return sendSupervisorRequestToWfmAnalysis(actor, user, existing, initialTransition, reason, diagnostics, coverageImpact);
     }
 
     const updated = await prisma.$transaction(async (tx) => {
@@ -532,13 +591,19 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
         }
       });
 
+      if (coverageImpact?.hasCriticalWarning && isCoverageWarningConfirmed(actionInput)) {
+        await tx.auditLog.create({
+          data: coverageWarningAuditData(user.id, current, coverageImpact)
+        });
+      }
+
       return saved;
     }, { maxWait: 10000, timeout: 15000 });
 
     await notifyRequestStatusChangeSafely(updated, user.id, reason, actor.email);
 
     const historyMetadata = updated.history[0]?.metadata as { scheduleUpdated?: boolean; shiftChangeUpdated?: boolean } | null;
-    return { data: mapPrismaRequest(updated, user, actor), scheduleUpdated: Boolean(historyMetadata?.scheduleUpdated || historyMetadata?.shiftChangeUpdated), persisted: true };
+    return { data: await mapPrismaRequestWithImpact(updated, user, actor), scheduleUpdated: Boolean(historyMetadata?.scheduleUpdated || historyMetadata?.shiftChangeUpdated), persisted: true };
   } catch (error) {
     if (error instanceof DomainError) {
       return validationFailure(error.message);
@@ -619,7 +684,7 @@ export async function addOperationalRequestComment(actor: Actor, id: string, bod
       return tx.request.findUniqueOrThrow({ where: { id: existing.id }, include: requestInclude });
     });
 
-    return { data: mapPrismaRequest(updated, user, actor), persisted: true };
+    return { data: await mapPrismaRequestWithImpact(updated, user, actor), persisted: true };
   } catch (error) {
     recordErrorLog({
       userEmail: actor.email,
@@ -665,6 +730,12 @@ const requestInclude = {
 type PrismaRequest = Prisma.RequestGetPayload<{ include: typeof requestInclude }>;
 type PrismaRequestSummary = Prisma.RequestGetPayload<{ include: typeof requestListInclude }>;
 type PrismaRequestForDisplay = PrismaRequest | PrismaRequestSummary;
+type CoverageImpactEmployee = Prisma.EmployeeProfileGetPayload<{
+  include: {
+    lob: { select: { id: true; name: true } };
+    shift: { select: { id: true; name: true } };
+  };
+}>;
 type ActiveUser = NonNullable<Awaited<ReturnType<typeof findActiveUser>>>;
 type DbRequestStatus = (typeof uiToDbStatus)[keyof typeof uiToDbStatus];
 type NotificationKind = "INFO" | "SUCCESS" | "WARNING" | "ERROR" | "REQUEST" | "APPROVAL";
@@ -1109,7 +1180,8 @@ async function sendSupervisorRequestToWfmAnalysis(
   request: PrismaRequest,
   transition: Exclude<RequestTransition, "FORBIDDEN" | { error: string }>,
   reason: string | undefined,
-  diagnostics: Record<string, unknown>
+  diagnostics: Record<string, unknown>,
+  coverageImpact?: CoverageImpactSummary | null
 ) {
   const startedAt = Date.now();
   diagnostics.fastPath = "SUPERVISOR_SEND_TO_WFM";
@@ -1152,7 +1224,14 @@ async function sendSupervisorRequestToWfmAnalysis(
         previousValue: { status: request.status },
         newValue: { status: transition.nextStatus }
       }
-    })
+    }),
+    ...(coverageImpact?.hasCriticalWarning
+      ? [
+          prisma.auditLog.create({
+            data: coverageWarningAuditData(user.id, request, coverageImpact)
+          })
+        ]
+      : [])
   ]);
 
   const rejectedSideEffects = sideEffects
@@ -1187,7 +1266,7 @@ async function sendSupervisorRequestToWfmAnalysis(
     metadata: { ...diagnostics, requestId: request.id, elapsedMs: Date.now() - startedAt }
   });
 
-  return { data: mapPrismaRequest(updated, user, actor), scheduleUpdated: false, persisted: true };
+  return { data: await mapPrismaRequestWithImpact(updated, user, actor), scheduleUpdated: false, persisted: true };
 }
 
 function canViewRequest(actor: Actor, user: ActiveUser, request: PrismaRequest) {
@@ -1414,6 +1493,412 @@ function mapPrismaRequest(request: PrismaRequestForDisplay, user?: ActiveUser, a
     createdAt: formatDateTime(request.createdAt),
     updatedAt: formatDateTime(request.updatedAt)
   };
+}
+
+async function mapPrismaRequestWithImpact(request: PrismaRequestForDisplay, user?: ActiveUser, actor?: Actor) {
+  const record = mapPrismaRequest(request, user, actor);
+  if (!isDayOffRequest(request)) return record;
+  try {
+    return {
+      ...record,
+      coverageImpact: await calculateCoverageImpactForRequestData(request)
+    };
+  } catch (error) {
+    recordErrorLog({
+      userEmail: actor?.email,
+      code: "REQUEST_COVERAGE_IMPACT_MAP_WARNING",
+      message: error instanceof Error ? error.message : "Falha ao calcular impacto no Requerido",
+      route: "/api/requests",
+      action: "REQUEST_COVERAGE_IMPACT",
+      severity: "WARNING",
+      metadata: { requestId: request.id, code: request.code }
+    });
+    return {
+      ...record,
+      coverageImpact: null
+    };
+  }
+}
+
+function shouldCheckCoverageWarning(request: PrismaRequestForDisplay, transition: RequestTransition) {
+  if (!isResolvedRequestTransition(transition)) return false;
+  if (!isDayOffRequest(request)) return false;
+  if (transition.auditAction !== "APROVACAO") return false;
+  return transition.nextStatus === "EM_ANALISE" || transition.nextStatus === "APROVADO" || transition.applySchedule;
+}
+
+function isCoverageWarningConfirmed(actionInput: RequestStatusActionInput) {
+  return actionInput.confirmCoverageWarning === true || String(actionInput.confirmCoverageWarning ?? "").toLowerCase() === "true";
+}
+
+function coverageWarningFailure(coverageImpact: CoverageImpactSummary): RequestServiceError {
+  const message = coverageWarningMessage(coverageImpact);
+  return {
+    error: message,
+    message,
+    type: "COVERAGE_WARNING",
+    status: 409,
+    fieldErrors: {},
+    details: { coverageImpact }
+  };
+}
+
+function coverageWarningMessage(coverageImpact: CoverageImpactSummary) {
+  const worst = coverageImpact.impacts.find((impact) => impact.result === "WORSENS");
+  if (!worst) return "Atenção: esta solicitação pode piorar a cobertura prevista.";
+  const required = worst.required === null ? "sem requerido cadastrado" : `requerido ${worst.required}`;
+  const currentGap = worst.currentGap === null ? "sem gap atual" : `gap atual ${formatSignedNumber(worst.currentGap)}`;
+  const projectedGap = worst.projectedGap === null ? "sem gap previsto" : `gap previsto ${formatSignedNumber(worst.projectedGap)}`;
+  return `Atenção: esta solicitação piora a cobertura prevista para ${worst.date} (${worst.lob} / ${worst.shift}). Cenário: ${required}, disponível atual ${worst.currentAvailable}, ${currentGap}. Se aprovada, disponível previsto ${worst.projectedAvailable} e ${projectedGap}.`;
+}
+
+function coverageWarningAuditData(actorId: string, request: PrismaRequestForDisplay, coverageImpact: CoverageImpactSummary) {
+  return {
+    actorId,
+    action: AuditAction.APROVACAO,
+    entity: "Request",
+    entityId: request.id,
+    reason: "REQUEST_APPROVED_WITH_COVERAGE_WARNING",
+    previousValue: {
+      requestId: request.id,
+      requestCode: request.code,
+      requestType: request.type.name
+    },
+    newValue: {
+      confirmedCoverageWarning: true,
+      coverageImpact
+    }
+  };
+}
+
+async function calculateCoverageImpactForRequestData(request: PrismaRequestForDisplay, actionInput: RequestStatusActionInput = {}): Promise<CoverageImpactSummary | null> {
+  const kind = normalizeDayOffKind(request);
+  if (!kind) return null;
+  const payload = (request.payload ?? {}) as Record<string, unknown>;
+  if (!request.employeeId) {
+    return summarizeCoverageImpact(request, [{
+      date: "-",
+      label: "Solicitação sem colaborador",
+      lob: "-",
+      shift: "-",
+      required: null,
+      currentAvailable: 0,
+      currentGap: null,
+      impactDelta: 0,
+      projectedAvailable: 0,
+      projectedGap: null,
+      result: "NO_SCHEDULE",
+      message: "Não foi possível calcular impacto porque a solicitação não possui colaborador vinculado."
+    }]);
+  }
+
+  const employee = await prisma.employeeProfile.findUnique({
+    where: { id: request.employeeId },
+    include: {
+      lob: { select: { id: true, name: true } },
+      shift: { select: { id: true, name: true } }
+    }
+  });
+  if (!employee) {
+    return summarizeCoverageImpact(request, [{
+      date: "-",
+      label: "Colaborador não encontrado",
+      lob: "-",
+      shift: "-",
+      required: null,
+      currentAvailable: 0,
+      currentGap: null,
+      impactDelta: 0,
+      projectedAvailable: 0,
+      projectedGap: null,
+      result: "NO_SCHEDULE",
+      message: "Não foi possível calcular impacto porque o colaborador não foi encontrado."
+    }]);
+  }
+
+  const impacts: CoverageImpactRow[] = [];
+  const addImpact = async (input: {
+    label: string;
+    date: Date | null;
+    schedule: Awaited<ReturnType<typeof findScheduleForImpact>> | null;
+    targetShiftName?: string | null;
+    impactDelta: number;
+    message?: string;
+  }) => {
+    impacts.push(await buildCoverageImpactRow({ ...input, request, employee }));
+  };
+
+  if (kind === "DAY_OFF_SWAP") {
+    const currentDate = parseDateOnly(payload.currentDayOffDate ?? payload.dataAtual);
+    const desiredDate = parseDateOnly(payload.desiredDayOffDate ?? payload.dataDesejada);
+    const [currentSchedule, desiredSchedule] = await Promise.all([
+      currentDate ? findScheduleForImpact(request.employeeId, currentDate) : Promise.resolve(null),
+      desiredDate ? findScheduleForImpact(request.employeeId, desiredDate) : Promise.resolve(null)
+    ]);
+    const desiredShift = desiredSchedule ? scheduleShiftCategoryForImpact(desiredSchedule, employee.shift?.name) : employee.shift?.name;
+    const desiredLosesCoverage = desiredSchedule ? scheduleCountsAsCoverageForImpact(desiredSchedule, desiredShift) : false;
+
+    await addImpact({
+      label: "Dia que passará a trabalhar",
+      date: currentDate,
+      schedule: currentSchedule,
+      targetShiftName: desiredShift,
+      impactDelta: 1
+    });
+    await addImpact({
+      label: "Dia que deixará de trabalhar",
+      date: desiredDate,
+      schedule: desiredSchedule,
+      targetShiftName: desiredShift,
+      impactDelta: desiredLosesCoverage ? -1 : 0,
+      message: desiredLosesCoverage ? undefined : "Este slot atualmente não conta como cobertura disponível."
+    });
+  } else if (kind === "DAY_OFF_SELL") {
+    const targetDate = parseDateOnly(payload.dayOffToSellDate);
+    const schedule = targetDate ? await findScheduleForImpact(request.employeeId, targetDate) : null;
+    await addImpact({
+      label: "Venda de folga aprovada",
+      date: targetDate,
+      schedule,
+      targetShiftName: actionInput.finalApprovedShift || String(payload.availabilityShift ?? employee.shift?.name ?? ""),
+      impactDelta: 1
+    });
+  } else {
+    const targetDate = parseDateOnly(payload.desiredDayOffRequestDate ?? payload.desiredDayOffDate ?? payload.requestedDate);
+    const schedule = targetDate ? await findScheduleForImpact(request.employeeId, targetDate) : null;
+    const shift = schedule ? scheduleShiftCategoryForImpact(schedule, employee.shift?.name) : employee.shift?.name;
+    const losesCoverage = schedule ? scheduleCountsAsCoverageForImpact(schedule, shift) : false;
+    await addImpact({
+      label: "Folga aprovada",
+      date: targetDate,
+      schedule,
+      targetShiftName: shift,
+      impactDelta: losesCoverage ? -1 : 0,
+      message: losesCoverage ? undefined : "Este slot atualmente não conta como cobertura disponível."
+    });
+  }
+
+  return summarizeCoverageImpact(request, impacts);
+}
+
+async function buildCoverageImpactRow(input: {
+  request: PrismaRequestForDisplay;
+  employee: CoverageImpactEmployee;
+  label: string;
+  date: Date | null;
+  schedule: Awaited<ReturnType<typeof findScheduleForImpact>> | null;
+  targetShiftName?: string | null;
+  impactDelta: number;
+  message?: string;
+}): Promise<CoverageImpactRow> {
+  const dateKey = input.date ? formatDateKey(input.date) : "-";
+  const employee = input.employee;
+  if (!input.date || !input.schedule) {
+    return {
+      date: dateKey,
+      label: input.label,
+      lob: employee.lob?.name ?? "-",
+      lobId: employee.lobId,
+      shift: normalizeProductiveShiftForImpact(input.targetShiftName ?? employee.shift?.name) || shiftCategoryName(input.targetShiftName ?? employee.shift?.name) || "-",
+      shiftId: employee.shiftId,
+      required: null,
+      currentAvailable: 0,
+      currentGap: null,
+      impactDelta: 0,
+      projectedAvailable: 0,
+      projectedGap: null,
+      result: "NO_SCHEDULE",
+      message: input.date
+        ? "Não foi possível calcular impacto porque não existe cronograma para o dia solicitado."
+        : "Data da solicitação inválida."
+    };
+  }
+
+  const lobId = input.schedule.lobId ?? employee.lobId;
+  const lob = await resolveImpactLob(lobId, employee.lob);
+  const shift = normalizeProductiveShiftForImpact(input.targetShiftName ?? scheduleShiftCategoryForImpact(input.schedule, employee.shift?.name));
+  if (!shift) {
+    return {
+      date: dateKey,
+      label: input.label,
+      lob: lob.name,
+      lobId,
+      shift: shiftCategoryName(input.targetShiftName ?? input.schedule.shift?.name ?? employee.shift?.name) || "-",
+      shiftId: input.schedule.shiftId ?? employee.shiftId,
+      required: null,
+      currentAvailable: 0,
+      currentGap: null,
+      impactDelta: 0,
+      projectedAvailable: 0,
+      projectedGap: null,
+      result: "NO_REQUIREMENT",
+      message: input.message ?? "Não foi possível identificar turno produtivo para calcular impacto."
+    };
+  }
+
+  const [requirement, currentAvailable] = await Promise.all([
+    findRequirementForImpact(input.date, lobId, shift),
+    countAvailableCoverageForImpact(input.date, lobId, shift)
+  ]);
+  const required = requirement?.requiredStaff ?? null;
+  const impactDelta = input.impactDelta;
+  const projectedAvailable = currentAvailable + impactDelta;
+  const currentGap = required === null ? null : currentAvailable - required;
+  const projectedGap = required === null ? null : projectedAvailable - required;
+
+  return {
+    date: dateKey,
+    label: input.label,
+    lob: lob.name,
+    lobId,
+    shift,
+    shiftId: requirement?.shiftId ?? input.schedule.shiftId ?? employee.shiftId,
+    required,
+    currentAvailable,
+    currentGap,
+    impactDelta,
+    projectedAvailable,
+    projectedGap,
+    result: impactResult(required, currentGap, projectedGap),
+    message: input.message ?? (required === null ? "Não há requerido cadastrado para esta data, LOB e turno." : undefined)
+  };
+}
+
+function summarizeCoverageImpact(request: PrismaRequestForDisplay, impacts: CoverageImpactRow[]): CoverageImpactSummary {
+  const hasCriticalWarning = impacts.some((impact) => impact.result === "WORSENS");
+  const hasImprovement = impacts.some((impact) => impact.result === "IMPROVES");
+  const hasNoSchedule = impacts.some((impact) => impact.result === "NO_SCHEDULE");
+  const hasNoRequirement = impacts.some((impact) => impact.result === "NO_REQUIREMENT");
+  const badgeLabel = hasCriticalWarning
+    ? "Piora cobertura"
+    : hasImprovement
+      ? "Melhora cobertura"
+      : hasNoSchedule
+        ? "Sem cronograma"
+        : hasNoRequirement
+          ? "Sem requerido"
+          : "Neutro";
+  const badgeTone: CoverageImpactSummary["badgeTone"] = hasCriticalWarning ? "red" : hasImprovement ? "green" : hasNoSchedule || hasNoRequirement ? "orange" : "slate";
+  return {
+    requestId: request.id,
+    requestType: request.type.name,
+    impacts,
+    hasCriticalWarning,
+    badgeLabel,
+    badgeTone,
+    summary: impactSummaryText(badgeLabel, impacts)
+  };
+}
+
+function impactResult(required: number | null, currentGap: number | null, projectedGap: number | null): CoverageImpactResult {
+  if (required === null || currentGap === null || projectedGap === null) return "NO_REQUIREMENT";
+  if (projectedGap < currentGap) return "WORSENS";
+  if (projectedGap > currentGap) return "IMPROVES";
+  return "NEUTRAL";
+}
+
+function impactSummaryText(label: string, impacts: CoverageImpactRow[]) {
+  const first = impacts[0];
+  if (!first) return label;
+  if (impacts.length === 1) {
+    const gap = first.projectedGap === null ? "sem gap previsto" : `gap previsto ${formatSignedNumber(first.projectedGap)}`;
+    return `${label}: ${first.date} • ${first.lob} • ${first.shift} • ${gap}`;
+  }
+  return `${label}: ${impacts.length} cenários avaliados.`;
+}
+
+async function findScheduleForImpact(employeeId: string, date: Date) {
+  return prisma.schedule.findFirst({
+    where: { employeeId, date, deletedAt: null },
+    include: {
+      shift: { select: { id: true, name: true } },
+      employee: {
+        select: {
+          id: true,
+          fullName: true,
+          roleTitle: true,
+          operationalStatus: true,
+          lob: { select: { id: true, name: true } },
+          shift: { select: { id: true, name: true } }
+        }
+      }
+    }
+  });
+}
+
+async function findRequirementForImpact(date: Date, lobId: string, shift: string) {
+  return prisma.staffCoverage.findFirst({
+    where: {
+      date,
+      lobId,
+      shift: { OR: [{ name: { equals: shift, mode: "insensitive" } }, { name: { startsWith: shift, mode: "insensitive" } }] }
+    },
+    include: { shift: { select: { id: true, name: true } } }
+  });
+}
+
+async function countAvailableCoverageForImpact(date: Date, lobId: string, shift: string) {
+  const schedules = await prisma.schedule.findMany({
+    where: {
+      date,
+      deletedAt: null,
+      OR: [{ lobId }, { lobId: null, employee: { lobId } }],
+      employee: { deletedAt: null }
+    },
+    include: {
+      shift: { select: { id: true, name: true } },
+      employee: {
+        select: {
+          roleTitle: true,
+          operationalStatus: true,
+          lob: { select: { id: true, name: true } },
+          shift: { select: { id: true, name: true } }
+        }
+      }
+    }
+  });
+  return schedules.filter((schedule) => {
+    const scheduleLobId = schedule.lobId ?? schedule.employee.lob.id;
+    if (scheduleLobId !== lobId) return false;
+    if (!isAgentJobTitle(schedule.employee.roleTitle)) return false;
+    if (!isCoverageEmployeeActiveForImpact(schedule.employee.operationalStatus)) return false;
+    if (scheduleShiftCategoryForImpact(schedule, schedule.employee.shift?.name) !== shift) return false;
+    return scheduleCountsAsCoverageForImpact(schedule, shift);
+  }).length;
+}
+
+async function resolveImpactLob(lobId: string, employeeLob: { id: string; name: string }) {
+  if (employeeLob.id === lobId) return employeeLob;
+  return (await prisma.lob.findUnique({ where: { id: lobId }, select: { id: true, name: true } })) ?? employeeLob;
+}
+
+function scheduleShiftCategoryForImpact(schedule: { shift?: { name: string } | null; employee?: { shift?: { name: string } | null } }, fallback?: string | null) {
+  return normalizeProductiveShiftForImpact(schedule.shift?.name ?? schedule.employee?.shift?.name ?? fallback) || shiftCategoryName(schedule.shift?.name ?? schedule.employee?.shift?.name ?? fallback);
+}
+
+function normalizeProductiveShiftForImpact(value?: string | null) {
+  const shift = shiftCategoryName(value);
+  return (productiveShiftCategories as readonly string[]).includes(shift) ? shift : "";
+}
+
+function scheduleCountsAsCoverageForImpact(schedule: { status: ScheduleStatus; shift?: { name: string } | null; employee?: { shift?: { name: string } | null } }, shiftOverride?: string | null) {
+  const shift = normalizeProductiveShiftForImpact(shiftOverride ?? schedule.shift?.name ?? schedule.employee?.shift?.name);
+  if (!shift) return false;
+  if (coverageStatuses.has(schedule.status)) return true;
+  return schedule.status === "TROCA_APROVADA";
+}
+
+function isCoverageEmployeeActiveForImpact(value?: string | null) {
+  const normalized = String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+  return !inactiveCoverageEmployeeStatuses.has(normalized);
+}
+
+function formatSignedNumber(value: number) {
+  return value > 0 ? `+${value}` : String(value);
 }
 
 function nextStepForRequest(status: string) {
@@ -2357,4 +2842,8 @@ function formatDateTime(date: Date) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(date);
+}
+
+function formatDateKey(date: Date) {
+  return date.toISOString().slice(0, 10);
 }
