@@ -726,6 +726,27 @@ type ScheduleGridRow = (typeof scheduleGridRows)[number] & {
   workHours?: Array<ScheduleWorkHourCell | null>;
 };
 
+type ScheduleMetrics = {
+  quantity: number;
+};
+
+type ScheduleMetricsPayload = {
+  quantity?: number | string;
+  totalSlots?: number | string;
+};
+
+function countValidScheduleSlots(rows: ScheduleGridRow[]) {
+  return rows.reduce((total, row) => total + row.days.filter((value) => value !== "Sem cronograma").length, 0);
+}
+
+function normalizeScheduleMetrics(metrics: ScheduleMetricsPayload | undefined, rows: ScheduleGridRow[]): ScheduleMetrics {
+  const rawQuantity = metrics?.quantity ?? metrics?.totalSlots;
+  const quantity = typeof rawQuantity === "number" ? rawQuantity : Number(rawQuantity);
+  return {
+    quantity: Number.isFinite(quantity) ? quantity : countValidScheduleSlots(rows)
+  };
+}
+
 type CalendarScheduleDay = {
   date: number;
   outside: boolean;
@@ -4612,6 +4633,7 @@ export function SchedulesPage() {
   const [showPendingJustifications, setShowPendingJustifications] = useState(false);
   const [attendanceMessage, setAttendanceMessage] = useState("");
   const [attendanceSummary, setAttendanceSummary] = useState<AttendanceSummary | null>(null);
+  const [scheduleMetrics, setScheduleMetrics] = useState<ScheduleMetrics>({ quantity: 0 });
   const [pendingJustifications, setPendingJustifications] = useState<AttendanceItem[]>([]);
   const [selectedAttendancePending, setSelectedAttendancePending] = useState<AttendanceItem | null>(null);
   const [pendingSupervisorFilter, setPendingSupervisorFilter] = useState("Todos");
@@ -4753,9 +4775,10 @@ export function SchedulesPage() {
         skipSummary: "true",
         includeImports: options.includeImports ? "true" : "false"
       });
-      const payload = await apiJson<{ data: { scheduleGridRows: typeof scheduleRows; imports?: ScheduleImportHistory[]; attendanceSummary?: AttendanceSummary; daysInMonth?: number; dateColumns?: string[]; pagination?: { page: number; limit: number; total: number; totalPages: number } }; actor?: { role: string; name: string } }>(`/api/schedules?${params.toString()}`);
+      const payload = await apiJson<{ data: { scheduleGridRows: typeof scheduleRows; imports?: ScheduleImportHistory[]; attendanceSummary?: AttendanceSummary; scheduleMetrics?: ScheduleMetricsPayload; daysInMonth?: number; dateColumns?: string[]; pagination?: { page: number; limit: number; total: number; totalPages: number } }; actor?: { role: string; name: string } }>(`/api/schedules?${params.toString()}`);
       setScheduleActorRole(payload.actor?.role ?? "COLABORADOR");
       setScheduleRows(payload.data.scheduleGridRows);
+      setScheduleMetrics(normalizeScheduleMetrics(payload.data.scheduleMetrics, payload.data.scheduleGridRows));
       setSchedulePagination(payload.data.pagination ?? { page: pageOverride, limit: schedulePagination.limit, total: payload.data.scheduleGridRows.length, totalPages: 1 });
       setScheduleDateColumns(payload.data.dateColumns ?? []);
       if (payload.data.scheduleGridRows.length) {
@@ -4769,6 +4792,7 @@ export function SchedulesPage() {
       void refreshAttendanceForSchedulePeriod(rangeOverride, filtersOverride);
     } catch {
       setScheduleRows([]);
+      setScheduleMetrics({ quantity: 0 });
       setScheduleDateColumns([]);
       setSchedulePagination((current) => ({ ...current, page: 1, total: 0, totalPages: 1 }));
     }
@@ -5367,6 +5391,7 @@ export function SchedulesPage() {
   ] as Array<ScheduleAlertItem | null>).filter((item): item is ScheduleAlertItem => item !== null);
   const plannedHours = scheduledCells * DEFAULT_PRODUCTIVE_HOURS;
   const scheduleTotalRows = schedulePagination.total || scheduleRows.length;
+  const scheduleQuantity = scheduleMetrics.quantity;
   const schedulePageStart = scheduleTotalRows && scheduleRows.length ? (schedulePagination.page - 1) * schedulePagination.limit + 1 : 0;
   const schedulePageEnd = scheduleTotalRows ? Math.min(schedulePagination.page * schedulePagination.limit, scheduleTotalRows) : 0;
   const monthLabel = scheduleMonthFormatter.format(operationalDateFromParts(schedulePeriod.year, schedulePeriod.month, 1));
@@ -5664,7 +5689,7 @@ export function SchedulesPage() {
             <MetricPill value={scheduleRows.length ? "100%" : "0%"} label="Cobertura Planejada" />
             <MetricPill value={`${attendanceSummary?.coverageRate ?? 0}%`} label="Cobertura Real" />
             <MetricPill value={formatWorkHourValue(plannedHours, "0:00")} label="Horas produtivas programadas" />
-            <MetricPill value={conflictCount} label="Conflitos" />
+            <MetricPill value={scheduleQuantity} label="Quantidade" />
             <MetricPill value={`${attendanceSummary?.absRate ?? 0}%`} label="ABS" />
             <MetricPill value={attendanceSummary?.unjustified ?? 0} label="Pendências justificativa" />
           </div>

@@ -400,6 +400,9 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
           : null,
         imports: [],
         attendanceSummary: emptyAttendanceSummary(),
+        scheduleMetrics: {
+          quantity: (own?.schedules ?? []).filter((schedule) => schedule.status !== "SEM_ESCALA").length
+        },
         month: period.month,
         year: period.year,
         daysInMonth: dateColumns.length,
@@ -436,6 +439,15 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
     };
     const totalSchedules = await prisma.employeeProfile.count({ where: employeePageWhere });
     markPhase("employeeCountMs");
+    const totalValidScheduleSlots = statusFilter === "SEM_ESCALA"
+      ? 0
+      : await prisma.schedule.count({
+        where: {
+          ...scheduleQueryWhere,
+          status: statusFilter ?? { not: "SEM_ESCALA" }
+        }
+      });
+    markPhase("slotCountMs");
     const totalPages = Math.max(1, Math.ceil(totalSchedules / limit));
     const page = totalSchedules > 0 && requestedPage > totalPages ? 1 : requestedPage;
     const employeePage = totalSchedules
@@ -708,6 +720,9 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         user: item.importedBy.name
       })),
       attendanceSummary,
+      scheduleMetrics: {
+        quantity: totalValidScheduleSlots
+      },
       month: period.month,
       year: period.year,
       daysInMonth: dateColumns.length,
@@ -727,10 +742,12 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       limit,
       employeesMatched: totalSchedules,
       employeesReturned: scheduleGridRows.length,
+      totalValidScheduleSlots,
       scheduleRows: scheduleRows.length,
       workHourRows: relatedWorkHourRecords.length,
       phaseSupervisorFilterMs: phaseTimings.supervisorFilterMs,
       phaseEmployeeCountMs: phaseTimings.employeeCountMs,
+      phaseSlotCountMs: phaseTimings.slotCountMs,
       phaseEmployeePageMs: phaseTimings.employeePageMs,
       phaseScheduleRowsMs: phaseTimings.scheduleRowsMs,
       phaseWorkHoursMs: phaseTimings.workHoursMs,
@@ -759,6 +776,9 @@ function emptyOperationalSchedules(period = resolvePeriod({}), pagination = { pa
     daysInMonth: dateColumns.length,
     dateColumns: dateColumns.map(dateKey),
     attendanceSummary: emptyAttendanceSummary(),
+    scheduleMetrics: {
+      quantity: 0
+    },
     pagination
   };
 }
