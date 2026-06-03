@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getApiActor } from "@/lib/api-actor";
-import { deleteEquipment, listEquipment, saveEquipment } from "@/lib/equipment-service";
+import { deleteEquipment, getEquipmentHistory, inactivateEquipment, listEquipment, saveEquipment } from "@/lib/equipment-service";
 
 const schema = z.object({
   id: z.string().optional(),
@@ -27,6 +27,12 @@ const schema = z.object({
 export async function GET(request: Request) {
   const actor = await getApiActor();
   const url = new URL(request.url);
+  const historyId = url.searchParams.get("historyId");
+  if (historyId) {
+    const result = await getEquipmentHistory(actor, historyId);
+    if ("error" in result) return NextResponse.json({ error: result.error }, { status: 404 });
+    return NextResponse.json(result);
+  }
   return NextResponse.json(await listEquipment(actor, {
     status: url.searchParams.get("status") ?? undefined,
     type: url.searchParams.get("type") ?? undefined,
@@ -74,7 +80,9 @@ export async function DELETE(request: Request) {
   const url = new URL(request.url);
   const id = url.searchParams.get("id");
   if (!id) return NextResponse.json({ error: "Informe o equipamento." }, { status: 400 });
-  const result = await deleteEquipment(actor, id);
+  const action = url.searchParams.get("action");
+  const reason = url.searchParams.get("reason") ?? undefined;
+  const result = action === "inactivate" ? await inactivateEquipment(actor, id, reason) : await deleteEquipment(actor, id);
   if ("error" in result) return NextResponse.json({ error: result.error }, { status: 409 });
   return NextResponse.json(result);
 }

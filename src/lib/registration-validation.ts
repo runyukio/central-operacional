@@ -8,6 +8,10 @@ function requiredString(message: string) {
 }
 
 const optionalString = z.string().optional().transform((value) => cleanOptional(value));
+const optionalFormattedPhone = z.string().optional().transform((value) => {
+  const cleaned = cleanOptional(value);
+  return cleaned ? formatPhone(cleaned) : undefined;
+}).refine((value) => !value || isFormattedPhone(value), "Contato de emergência inválido. Use 00 0000-0000 ou 00 00000-0000.");
 
 export type RegistrationInput = z.infer<typeof registrationPayloadSchema>;
 
@@ -35,9 +39,9 @@ export const registrationPayloadSchema = z.object({
   stateUf: z.string().trim().toUpperCase().refine((value) => ufOptions.has(value), "UF inválida. Use a sigla do estado, exemplo SP."),
   zipCode: z.string().transform(formatZipCode).refine((value) => /^\d{2}\.\d{3}-\d{3}$/.test(value), "CEP inválido. Use 00.000-000."),
   primaryPhone: z.string().transform(formatPhone).refine(isFormattedPhone, "Contato principal inválido. Use 00 0000-0000 ou 00 00000-0000."),
-  emergencyPhone: z.string().transform(formatPhone).refine(isFormattedPhone, "Contato de emergência inválido. Use 00 0000-0000 ou 00 00000-0000."),
-  emergencyContactName: requiredString("Nome do contato de emergência é obrigatório."),
-  emergencyContactRelationship: requiredString("Parentesco do contato de emergência é obrigatório."),
+  emergencyPhone: optionalFormattedPhone,
+  emergencyContactName: optionalString,
+  emergencyContactRelationship: optionalString,
   birthDate: dateString("Data de nascimento é obrigatória.", { noFuture: true }),
   email: z.string().trim().toLowerCase().email("E-mail inválido."),
   password: z.string({ required_error: "Senha é obrigatória." }).min(8, "Senha deve ter pelo menos 8 caracteres."),
@@ -45,19 +49,20 @@ export const registrationPayloadSchema = z.object({
   rg: requiredString("RG é obrigatório."),
   rgIssuer: requiredString("Órgão expedidor e UF são obrigatórios."),
   cpf: z.string().transform(formatCpf).refine(isValidCpf, "CPF inválido. Use 000.000.000-00."),
-  sex: requiredString("Sexo é obrigatório."),
+  sex: requiredString("Gênero é obrigatório."),
   maritalStatus: requiredString("Estado civil é obrigatório."),
   educationLevel: requiredString("Escolaridade é obrigatória."),
-  trainingStartDate: dateString("Data de início do treinamento é obrigatória."),
-  preferredSchedule: requiredString("Preferência de horário é obrigatória."),
-  requestedLob: optionalString.refine((value) => !value || value.toLowerCase() !== "todos", "Todos é opção de filtro. Para atuação transversal use ALL."),
+  ethnicity: requiredString("Etnia é obrigatória."),
+  sexualOrientation: requiredString("Orientação sexual é obrigatória."),
+  isCpd: requiredString("Informe se é CPD."),
+  firstJob: requiredString("Informe se este é o primeiro emprego."),
+  hasTelemarketingExperience: requiredString("Informe se já trabalhou em telemarketing."),
+  telemarketingWhere: optionalString,
   bankName: requiredString("Banco é obrigatório."),
   bankAgency: requiredString("Agência com dígito é obrigatória."),
   bankAccount: requiredString("Conta corrente com dígito é obrigatória."),
   pixKey: requiredString("Chave PIX é obrigatória."),
   pixKeyType: z.enum(pixKeyTypes, { errorMap: () => ({ message: "Tipo de chave PIX inválido." }) }),
-  secondaryPixKey: optionalString,
-  secondaryPixKeyType: z.union([z.literal(""), z.enum(pixKeyTypes)]).optional().transform((value) => cleanOptional(value)),
   socialName: optionalString,
   hasChildren: z.preprocess((value) => value === "Sim" ? true : value === "Não" ? false : value, z.boolean({ required_error: "Informe se tem filhos." })),
   childrenCount: z.preprocess((value) => value === "" || value === null || typeof value === "undefined" ? undefined : Number(value), z.number().int("Quantidade de filhos deve ser um número inteiro.").nonnegative("Quantidade de filhos não pode ser negativa.").optional()),
@@ -81,19 +86,15 @@ export const registrationPayloadSchema = z.object({
     });
   }
 
-  if (data.secondaryPixKey && !data.secondaryPixKeyType) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["secondaryPixKeyType"],
-      message: "Informe o tipo da chave PIX secundária."
-    });
+  if (data.hasTelemarketingExperience === "Não" && !data.telemarketingWhere) {
+    data.telemarketingWhere = "Não se aplica";
   }
 
-  if (!data.secondaryPixKey && data.secondaryPixKeyType) {
+  if (data.hasTelemarketingExperience === "Sim" && !data.telemarketingWhere?.trim()) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      path: ["secondaryPixKey"],
-      message: "Informe a chave PIX secundária ou deixe o tipo vazio."
+      path: ["telemarketingWhere"],
+      message: "Informe onde trabalhou em telemarketing."
     });
   }
 });

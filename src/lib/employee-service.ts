@@ -42,9 +42,17 @@ export type EmployeeAdminUpdateInput = {
   wave?: string;
   admissionDate?: string;
   trainingStartDate?: string;
+  nestingStartDate?: string;
+  goLiveDate?: string;
   terminationDate?: string;
   terminationType?: string;
   terminationReason?: string;
+  ethnicity?: string;
+  sexualOrientation?: string;
+  isCpd?: string;
+  firstJob?: string;
+  hasTelemarketingExperience?: string;
+  telemarketingWhere?: string;
   siteOperation?: string;
   internalNotes?: string;
   primaryPhone?: string;
@@ -423,9 +431,9 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     if (!canEditOperational && !canEditPeopleData) return createPermissionError("Você não tem permissão para editar dados do colaborador.");
 
     const adminOnlyFields: Array<keyof EmployeeAdminUpdateInput> = ["wbLogin", "roleName", "userStatus"];
-    const sensitivePeopleFields: Array<keyof EmployeeAdminUpdateInput> = ["fullName", "socialName", "email", "primaryPhone", "city", "stateUf", "preferredSchedule", "contractType", "admissionDate", "trainingStartDate", "terminationDate", "terminationType", "terminationReason"];
+    const sensitivePeopleFields: Array<keyof EmployeeAdminUpdateInput> = ["fullName", "socialName", "email", "primaryPhone", "city", "stateUf", "preferredSchedule", "contractType", "admissionDate", "trainingStartDate", "terminationDate", "terminationType", "terminationReason", "ethnicity", "sexualOrientation", "isCpd", "firstJob", "hasTelemarketingExperience", "telemarketingWhere"];
     const operationalBindingFields: Array<keyof EmployeeAdminUpdateInput> = ["lobId", "teamId", "supervisorId", "shiftId", "scheduleType", "siteOperation"];
-    const profileOperationalFields: Array<keyof EmployeeAdminUpdateInput> = ["roleTitle", "operationalStatus", "internalNotes", "skill", "wave"];
+    const profileOperationalFields: Array<keyof EmployeeAdminUpdateInput> = ["roleTitle", "operationalStatus", "internalNotes", "skill", "wave", "nestingStartDate", "goLiveDate"];
     if (!actorIsAdmin && adminOnlyFields.some((field) => input[field] !== undefined)) return createPermissionError("Apenas Admin pode alterar WB/Login, role ou status de acesso.");
     if (!canEditPeopleData && sensitivePeopleFields.some((field) => input[field] !== undefined)) return createPermissionError("Você não tem permissão para editar dados cadastrais/contratuais.");
     if (!canEditOperational && operationalBindingFields.some((field) => input[field] !== undefined)) return createPermissionError("Você não tem permissão para editar vínculos operacionais.");
@@ -451,6 +459,10 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     if ("error" in nextAdmissionDate) return createValidationError({ admissionDate: nextAdmissionDate.error });
     const nextTrainingDate = parseDateInput(input.trainingStartDate, "Data de treinamento inválida.");
     if ("error" in nextTrainingDate) return createValidationError({ trainingStartDate: nextTrainingDate.error });
+    const nextNestingStartDate = parseDateInput(input.nestingStartDate, "Data de início de Nesting inválida.");
+    if ("error" in nextNestingStartDate) return createValidationError({ nestingStartDate: nextNestingStartDate.error });
+    const nextGoLiveDate = parseDateInput(input.goLiveDate, "Data de Go Live inválida.");
+    if ("error" in nextGoLiveDate) return createValidationError({ goLiveDate: nextGoLiveDate.error });
     const nextTerminationDate = parseDateInput(input.terminationDate, "Data de desligamento inválida.");
     if ("error" in nextTerminationDate) return createValidationError({ terminationDate: nextTerminationDate.error });
     const nextTerminationType = normalizeTerminationType(input.terminationType);
@@ -459,6 +471,12 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     }
     const nextTerminationReason = cleanNullable(input.terminationReason);
     const nextSiteOperation = cleanNullable(input.siteOperation);
+    const nextEthnicity = cleanNullable(input.ethnicity);
+    const nextSexualOrientation = cleanNullable(input.sexualOrientation);
+    const nextIsCpd = cleanNullable(input.isCpd);
+    const nextFirstJob = cleanNullable(input.firstJob);
+    const nextHasTelemarketingExperience = cleanNullable(input.hasTelemarketingExperience);
+    const nextTelemarketingWhere = cleanNullable(input.telemarketingWhere);
     const nextInternalNotes = cleanNullable(input.internalNotes);
     const nextSkill = cleanNullable(input.skill);
     const nextWave = cleanNullable(input.wave);
@@ -559,9 +577,17 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
           ...(input.contractType !== undefined ? { contractType: nextContractType } : {}),
           ...(nextAdmissionDate.value ? { admissionDate: nextAdmissionDate.value } : {}),
           ...(input.trainingStartDate !== undefined ? { trainingStartDate: nextTrainingDate.value ?? null } : {}),
+          ...(input.nestingStartDate !== undefined ? { nestingStartDate: nextNestingStartDate.value ?? null } : {}),
+          ...(input.goLiveDate !== undefined ? { goLiveDate: nextGoLiveDate.value ?? null } : {}),
           ...(input.terminationDate !== undefined ? { terminationDate: nextTerminationDate.value ?? null } : {}),
           ...(input.terminationType !== undefined ? { terminationType: nextTerminationType ?? null } : {}),
           ...(input.terminationReason !== undefined ? { terminationReason: nextTerminationReason } : {}),
+          ...(input.ethnicity !== undefined ? { ethnicity: nextEthnicity } : {}),
+          ...(input.sexualOrientation !== undefined ? { sexualOrientation: nextSexualOrientation } : {}),
+          ...(input.isCpd !== undefined ? { isCpd: nextIsCpd } : {}),
+          ...(input.firstJob !== undefined ? { firstJob: nextFirstJob } : {}),
+          ...(input.hasTelemarketingExperience !== undefined ? { hasTelemarketingExperience: nextHasTelemarketingExperience } : {}),
+          ...(input.telemarketingWhere !== undefined ? { telemarketingWhere: nextTelemarketingWhere } : {}),
           ...(input.siteOperation !== undefined ? { siteOperation: nextSiteOperation } : {}),
           ...(input.internalNotes !== undefined ? { internalNotes: nextInternalNotes } : {}),
           ...(input.skill !== undefined ? { skill: nextSkill } : {}),
@@ -823,6 +849,7 @@ function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: 
   const canViewBank = ["ADMIN", "GESTOR"].includes(role) || (role === "RH" && canViewSensitive);
   const canViewContact = ["ADMIN", "GESTOR", "TI"].includes(role) || (role === "RH" && canViewSensitive) || role === "COLABORADOR";
   const canViewPeopleProfile = canViewSensitive || ["ADMIN", "GESTOR", "COLABORADOR"].includes(role);
+  const canViewDiversityData = ["ADMIN", "GESTOR", "RH", "WFM"].includes(role) && role !== "SUPERVISOR";
   const canViewTerminationData = canViewPeopleProfile || role === "WFM";
   const canEditData = canEditEmployeeData({ role }, { roleTitle: employee.roleTitle, email: employee.user?.email });
   return {
@@ -856,7 +883,17 @@ function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: 
     terminationReason: canViewTerminationData ? employee.terminationReason ?? "" : "",
     trainingStartDate: canViewPeopleProfile && employee.trainingStartDate ? formatDate(employee.trainingStartDate) : "",
     trainingStartDateIso: canViewPeopleProfile && employee.trainingStartDate ? toDateInput(employee.trainingStartDate) : "",
+    nestingStartDate: employee.nestingStartDate ? formatDate(employee.nestingStartDate) : "",
+    nestingStartDateIso: employee.nestingStartDate ? toDateInput(employee.nestingStartDate) : "",
+    goLiveDate: employee.goLiveDate ? formatDate(employee.goLiveDate) : "",
+    goLiveDateIso: employee.goLiveDate ? toDateInput(employee.goLiveDate) : "",
     contractType: canViewPeopleProfile ? employee.contractType ?? "" : "",
+    ethnicity: canViewDiversityData ? employee.ethnicity ?? "" : "",
+    sexualOrientation: canViewDiversityData ? employee.sexualOrientation ?? "" : "",
+    isCpd: canViewDiversityData ? employee.isCpd ?? "" : "",
+    firstJob: canViewDiversityData ? employee.firstJob ?? "" : "",
+    hasTelemarketingExperience: canViewDiversityData ? employee.hasTelemarketingExperience ?? "" : "",
+    telemarketingWhere: canViewDiversityData ? employee.telemarketingWhere ?? "" : "",
     siteOperation: employee.siteOperation ?? "",
     internalNotes: canViewSensitive || ["ADMIN", "GESTOR"].includes(role) ? employee.internalNotes ?? "" : "",
     primaryPhone: canViewPeopleProfile ? employee.primaryPhone ?? "" : "",
@@ -940,7 +977,17 @@ function mapLegacyEmployee(employee: LegacyEmployeeRow, role: string) {
     terminationReason: "",
     trainingStartDate: "",
     trainingStartDateIso: "",
+    nestingStartDate: "",
+    nestingStartDateIso: "",
+    goLiveDate: "",
+    goLiveDateIso: "",
     contractType: "",
+    ethnicity: "",
+    sexualOrientation: "",
+    isCpd: "",
+    firstJob: "",
+    hasTelemarketingExperience: "",
+    telemarketingWhere: "",
     siteOperation: "",
     internalNotes: "",
     primaryPhone: "",
@@ -1006,7 +1053,17 @@ function mapEmployeeSummary(employee: EmployeeSummaryRow, role: string) {
     terminationReason: canViewTerminationData ? employee.terminationReason ?? "" : "",
     trainingStartDate: "",
     trainingStartDateIso: "",
+    nestingStartDate: "",
+    nestingStartDateIso: "",
+    goLiveDate: "",
+    goLiveDateIso: "",
     contractType: "",
+    ethnicity: "",
+    sexualOrientation: "",
+    isCpd: "",
+    firstJob: "",
+    hasTelemarketingExperience: "",
+    telemarketingWhere: "",
     siteOperation: "",
     internalNotes: "",
     primaryPhone: "",
@@ -1046,7 +1103,6 @@ function employeeExportColumns(role: string) {
     col("cargo_funcao", (employee) => employee.role),
     col("role_permissao", (employee) => employee.systemRole),
     col("lob", (employee) => employee.lob),
-    col("time", (employee) => employee.team),
     col("supervisor", (employee) => employee.supervisor),
     col("subordinados_diretos", (employee) => employee.directReports),
     col("skill", (employee) => employee.skill),
@@ -1057,10 +1113,19 @@ function employeeExportColumns(role: string) {
     col("data_desligamento", (employee) => employee.terminationDate),
     col("tipo_desligamento", (employee) => employee.terminationType),
     col("motivo_desligamento", (employee) => employee.terminationReason),
-    col("preferencia_horario", (employee) => employee.preferredSchedule),
-    col("cronograma_vinculado", (employee) => employee.schedule ? "Sim" : "Não")
+    col("data_inicio_nesting", (employee) => employee.nestingStartDate),
+    col("data_go_live", (employee) => employee.goLiveDate)
   ];
-  if (role === "SUPERVISOR" || role === "WFM" || role === "QUALIDADE") return operational;
+  const diversity = [
+    col("etnia", (employee) => employee.ethnicity),
+    col("orientacao_sexual", (employee) => employee.sexualOrientation),
+    col("eh_cpd", (employee) => employee.isCpd),
+    col("primeiro_emprego", (employee) => employee.firstJob),
+    col("ja_trabalhou_telemarketing", (employee) => employee.hasTelemarketingExperience),
+    col("onde_trabalhou_telemarketing", (employee) => employee.telemarketingWhere)
+  ];
+  if (role === "SUPERVISOR" || role === "QUALIDADE") return operational;
+  if (role === "WFM") return [...operational, ...diversity];
 
   const people = [
     col("nome_social", (employee) => employee.socialName),
@@ -1069,13 +1134,12 @@ function employeeExportColumns(role: string) {
     col("estado_uf", (employee) => employee.stateUf),
     col("tipo_contrato", (employee) => employee.contractType),
     col("data_admissao", (employee) => employee.admission),
-    col("data_inicio_treinamento", (employee) => employee.trainingStartDate),
-    col("site_operacao", (employee) => employee.siteOperation),
     col("observacoes_internas", (employee) => employee.internalNotes)
   ];
   if (role === "RH") {
     return [
       ...operational,
+      ...diversity,
       ...people,
       col("cpf", (employee) => employee.sensitive?.cpf ?? employee.maskedSensitive?.cpf),
       col("rg", (employee) => employee.sensitive?.rg ?? employee.maskedSensitive?.rg),
@@ -1092,6 +1156,7 @@ function employeeExportColumns(role: string) {
 
   return [
     ...operational,
+    ...diversity,
     ...people,
     col("cpf", (employee) => employee.sensitive?.cpf ?? employee.maskedSensitive?.cpf),
     col("rg", (employee) => employee.sensitive?.rg ?? employee.maskedSensitive?.rg),

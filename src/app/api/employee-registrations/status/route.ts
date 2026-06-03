@@ -17,8 +17,8 @@ const operationalSchema = z.object({
   employeeStatus: z.string().min(1),
   contractType: z.string().min(1),
   admissionDate: z.string().min(1),
-  trainingDate: z.string().min(1),
-  site: z.string().min(1),
+  nestingStartDate: z.string().min(1),
+  goLiveDate: z.string().min(1),
   internalNotes: z.string().optional()
 });
 

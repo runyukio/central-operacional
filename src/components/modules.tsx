@@ -112,7 +112,7 @@ const scheduleStatusOptions = ["Escalado", "Presente", "Nesting", "Falta", "Atra
 const attendanceReasonStatuses = ["Falta", "Atraso", "Saída antecipada", "Erro de cronograma"];
 const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Nesting", "Venda de folga aprovada"];
 const employeeOperationalStatusOptions = ["Ativo", "Nesting", "Inativo", "Pendente de cadastro", "Afastado", "Desligado", "Em treinamento", "Suspenso"];
-const absenceReasonOptions = ["Não informado", "Ausente", "Problema de saúde", "Emergência familiar", "Problema técnico", "Falta de equipamento", "Problema de internet", "Saída antecipada", "Afastamento", "Erro de cronograma", "Outros"];
+const absenceReasonOptions = ["Não informado", "Problema de saúde", "Emergência familiar", "Problema técnico", "Falta de equipamento", "Problema de internet", "Saída antecipada", "Afastamento", "Erro de cronograma", "Outros"];
 const timeBlockCategoryOptions = ["Administrativo", "Desenvolvimento", "Acompanhamento de operação", "Feedback", "Reunião", "Treinamento", "Suporte ao time", "Análise de indicadores", "Escalonamento / Ocorrência", "Pausa", "Outros"];
 const scheduleShiftTimes: Record<string, { startsAt: string; endsAt: string }> = {
   Manhã: { startsAt: "08:00", endsAt: "14:00" },
@@ -605,6 +605,15 @@ type AttendanceSummary = {
     total: { lob: string; terminations: number; hcStart: number; hcEnd: number; hcAverage: number; attritionRate: number };
     byLob: Array<{ lob: string; terminations: number; hcStart: number; hcEnd: number; hcAverage: number; attritionRate: number }>;
   };
+  mood?: {
+    average: number;
+    responses: number;
+    interpretation: string;
+    distribution: Record<string, number>;
+    byLob: Array<{ label: string; responses: number; average: number; interpretation: string }>;
+    bySupervisor: Array<{ label: string; responses: number; average: number; interpretation: string }>;
+    byRoleTitle: Array<{ label: string; responses: number; average: number; interpretation: string }>;
+  };
 };
 
 type AttendanceItem = {
@@ -742,7 +751,17 @@ type EmployeeClient = (typeof employees)[number] & {
   terminationReason?: string;
   trainingStartDate?: string;
   trainingStartDateIso?: string;
+  nestingStartDate?: string;
+  nestingStartDateIso?: string;
+  goLiveDate?: string;
+  goLiveDateIso?: string;
   contractType?: string;
+  ethnicity?: string;
+  sexualOrientation?: string;
+  isCpd?: string;
+  firstJob?: string;
+  hasTelemarketingExperience?: string;
+  telemarketingWhere?: string;
   siteOperation?: string;
   internalNotes?: string;
   primaryPhone?: string;
@@ -1196,7 +1215,11 @@ function dayOffKindFromRequest(request: Pick<ClientRequest, "type" | "payload"> 
 
 function primaryDayOffDate(request: ClientRequest) {
   const payload = request.payload ?? {};
-  if (/turno/i.test(request.type)) return String(payload.shiftChangeDate ?? payload.requestedDate ?? "-");
+  if (/turno/i.test(request.type)) {
+    const start = String(payload.shiftChangeStartDate ?? payload.shiftChangeDate ?? payload.requestedDate ?? "-");
+    const end = String(payload.shiftChangeEndDate ?? "");
+    return end && end !== start ? `${start} a ${end}` : start;
+  }
   const kind = dayOffKindFromRequest(request);
   if (kind === "DAY_OFF_SWAP") return String(payload.currentDayOffDate ?? "-");
   if (kind === "DAY_OFF_SELL") return String(payload.dayOffToSellDate ?? "-");
@@ -1220,7 +1243,7 @@ function getRewardIcon(name: string) {
   return Award;
 }
 
-const registrationSteps = ["Dados pessoais", "Endereço e contato", "Documentos", "Dados bancários", "Operacional", "Revisão"];
+const registrationSteps = ["Dados pessoais", "Endereço e contato", "Documentos", "Dados bancários", "Revisão"];
 
 const registrationFieldLabels: Record<string, string> = {
   cnpj: "CNPJ",
@@ -1244,19 +1267,20 @@ const registrationFieldLabels: Record<string, string> = {
   rg: "RG",
   rgIssuer: "Órgão expedidor e UF",
   cpf: "CPF",
-  sex: "Sexo",
+  sex: "Gênero",
   maritalStatus: "Estado civil",
   educationLevel: "Escolaridade",
-  trainingStartDate: "Data de início do treinamento",
-  preferredSchedule: "Preferência de horário",
-  requestedLob: "LOB",
+  ethnicity: "Etnia",
+  sexualOrientation: "Orientação sexual",
+  isCpd: "É CPD?",
+  firstJob: "Primeiro emprego?",
+  hasTelemarketingExperience: "Já trabalhou em telemarketing?",
+  telemarketingWhere: "Onde trabalhou em telemarketing?",
   bankName: "Banco",
   bankAgency: "Agência",
   bankAccount: "Conta corrente",
   pixKey: "Chave PIX",
   pixKeyType: "Tipo de chave PIX",
-  secondaryPixKey: "Chave PIX secundária",
-  secondaryPixKeyType: "Tipo da chave PIX secundária",
   hasChildren: "Tem filhos?",
   childrenCount: "Quantidade de filhos",
   notes: "Observações"
@@ -1290,19 +1314,20 @@ export function EmployeeRegistrationPublicPage() {
     rg: "",
     rgIssuer: "",
     cpf: "",
-    sex: "Não informar",
+    sex: "Prefiro não informar",
     maritalStatus: "Solteiro(a)",
     educationLevel: "Ensino médio",
-    trainingStartDate: currentOperationalDateInput(),
-    preferredSchedule: "Manhã",
-    requestedLob: "ALL",
+    ethnicity: "",
+    sexualOrientation: "",
+    isCpd: "",
+    firstJob: "",
+    hasTelemarketingExperience: "",
+    telemarketingWhere: "",
     bankName: "",
     bankAgency: "",
     bankAccount: "",
     pixKey: "",
     pixKeyType: "CPF",
-    secondaryPixKey: "",
-    secondaryPixKeyType: "",
     socialName: "",
     hasChildren: false,
     childrenCount: 0,
@@ -1351,9 +1376,18 @@ export function EmployeeRegistrationPublicPage() {
       <FormInput label="Senha" type="password" value={form.password} error={fieldError("password")} onChange={(value) => updateField("password", value)} />
       <FormInput label="Confirmar senha" type="password" value={form.confirmPassword} error={fieldError("confirmPassword")} onChange={(value) => updateField("confirmPassword", value)} />
       <FormInput label="Data de nascimento" type="date" value={form.birthDate} error={fieldError("birthDate")} onChange={(value) => updateField("birthDate", value)} />
-      <FormSelect label="Sexo" value={form.sex} error={fieldError("sex")} options={["Feminino", "Masculino", "Não informar"]} onChange={(value) => updateField("sex", value)} />
+      <FormSelect label="Gênero" value={form.sex} error={fieldError("sex")} options={["Feminino", "Masculino", "Não binário", "Prefiro não informar"]} onChange={(value) => updateField("sex", value)} />
       <FormSelect label="Estado civil" value={form.maritalStatus} error={fieldError("maritalStatus")} options={["Solteiro(a)", "Casado(a)", "Divorciado(a)", "União estável"]} onChange={(value) => updateField("maritalStatus", value)} />
       <FormSelect label="Escolaridade" value={form.educationLevel} error={fieldError("educationLevel")} options={["Ensino médio", "Superior cursando", "Superior completo", "Pós-graduação"]} onChange={(value) => updateField("educationLevel", value)} />
+      <FormSelect label="Etnia" value={form.ethnicity} error={fieldError("ethnicity")} options={["", "Branca", "Preta", "Parda", "Amarela", "Indígena", "Prefiro não informar"]} onChange={(value) => updateField("ethnicity", value)} />
+      <FormSelect label="Orientação sexual" value={form.sexualOrientation} error={fieldError("sexualOrientation")} options={["", "Heterossexual", "Homossexual", "Bissexual", "Assexual", "Outra", "Prefiro não informar"]} onChange={(value) => updateField("sexualOrientation", value)} />
+      <FormSelect label="É CPD?" value={form.isCpd} error={fieldError("isCpd")} options={["", "Sim", "Não", "Prefiro não informar"]} onChange={(value) => updateField("isCpd", value)} />
+      <FormSelect label="Primeiro emprego?" value={form.firstJob} error={fieldError("firstJob")} options={["", "Sim", "Não"]} onChange={(value) => updateField("firstJob", value)} />
+      <FormSelect label="Já trabalhou em telemarketing?" value={form.hasTelemarketingExperience} error={fieldError("hasTelemarketingExperience")} options={["", "Sim", "Não"]} onChange={(value) => {
+        updateField("hasTelemarketingExperience", value);
+        if (value === "Não") updateField("telemarketingWhere", "Não se aplica");
+      }} />
+      <FormInput label="Onde trabalhou em telemarketing?" value={form.telemarketingWhere} error={fieldError("telemarketingWhere")} onChange={(value) => updateField("telemarketingWhere", value)} />
       <FormSelect label="Tem filhos?" value={form.hasChildren ? "Sim" : "Não"} error={fieldError("hasChildren")} options={["Não", "Sim"]} onChange={(value) => updateField("hasChildren", value === "Sim")} />
       {form.hasChildren ? <FormInput label="Quantidade de filhos" type="number" value={String(form.childrenCount)} error={fieldError("childrenCount")} onChange={(value) => updateField("childrenCount", Number(value))} /> : null}
     </div>,
@@ -1361,15 +1395,15 @@ export function EmployeeRegistrationPublicPage() {
       <FormSelect label="Tipo de endereço" value={form.addressType} error={fieldError("addressType")} options={["Rua", "Avenida", "Alameda"]} onChange={(value) => updateField("addressType", value)} />
       <FormInput label="Endereço" value={form.addressName} error={fieldError("addressName")} onChange={(value) => updateField("addressName", value)} />
       <FormInput label="Número" value={form.addressNumber} error={fieldError("addressNumber")} onChange={(value) => updateField("addressNumber", value)} />
-      <FormInput label="Complemento" value={form.complement} error={fieldError("complement")} onChange={(value) => updateField("complement", value)} />
+      <FormInput label="Complemento (opcional)" value={form.complement} error={fieldError("complement")} onChange={(value) => updateField("complement", value)} />
       <FormInput label="Bairro" value={form.neighborhood} error={fieldError("neighborhood")} onChange={(value) => updateField("neighborhood", value)} />
       <FormInput label="Cidade" value={form.city} error={fieldError("city")} onChange={(value) => updateField("city", value)} />
       <FormInput label="UF" value={form.stateUf} error={fieldError("stateUf")} onChange={(value) => updateField("stateUf", value.toUpperCase().slice(0, 2))} />
       <FormInput label="CEP" value={form.zipCode} error={fieldError("zipCode")} onChange={(value) => updateField("zipCode", value)} />
       <FormInput label="Contato principal" value={form.primaryPhone} error={fieldError("primaryPhone")} onChange={(value) => updateField("primaryPhone", value)} />
-      <FormInput label="Contato de emergência" value={form.emergencyPhone} error={fieldError("emergencyPhone")} onChange={(value) => updateField("emergencyPhone", value)} />
-      <FormInput label="Nome do contato de emergência" value={form.emergencyContactName} error={fieldError("emergencyContactName")} onChange={(value) => updateField("emergencyContactName", value)} />
-      <FormInput label="Parentesco" value={form.emergencyContactRelationship} error={fieldError("emergencyContactRelationship")} onChange={(value) => updateField("emergencyContactRelationship", value)} />
+      <FormInput label="Contato de emergência (opcional)" value={form.emergencyPhone} error={fieldError("emergencyPhone")} onChange={(value) => updateField("emergencyPhone", value)} />
+      <FormInput label="Nome do contato de emergência (opcional)" value={form.emergencyContactName} error={fieldError("emergencyContactName")} onChange={(value) => updateField("emergencyContactName", value)} />
+      <FormInput label="Parentesco (opcional)" value={form.emergencyContactRelationship} error={fieldError("emergencyContactRelationship")} onChange={(value) => updateField("emergencyContactRelationship", value)} />
     </div>,
     <div key="docs" className="grid gap-4 md:grid-cols-2">
       <FormInput label="E-mail" type="email" value={form.email} error={fieldError("email")} onChange={(value) => updateField("email", value)} />
@@ -1384,13 +1418,6 @@ export function EmployeeRegistrationPublicPage() {
       <FormInput label="Conta corrente com dígito" value={form.bankAccount} error={fieldError("bankAccount")} onChange={(value) => updateField("bankAccount", value)} />
       <FormInput label="Chave PIX" value={form.pixKey} error={fieldError("pixKey")} onChange={(value) => updateField("pixKey", value)} />
       <FormSelect label="Tipo de chave PIX" value={form.pixKeyType} error={fieldError("pixKeyType")} options={["CPF", "CNPJ", "E-mail", "Telefone", "Aleatória"]} onChange={(value) => updateField("pixKeyType", value)} />
-      <FormInput label="Chave PIX secundária (opcional)" value={form.secondaryPixKey} error={fieldError("secondaryPixKey")} onChange={(value) => updateField("secondaryPixKey", value)} />
-      <FormSelect label="Tipo de chave PIX secundária (opcional)" value={form.secondaryPixKeyType} error={fieldError("secondaryPixKeyType")} options={["", "CPF", "CNPJ", "E-mail", "Telefone", "Aleatória"]} onChange={(value) => updateField("secondaryPixKeyType", value)} />
-    </div>,
-    <div key="ops" className="grid gap-4 md:grid-cols-2">
-      <FormInput label="Data de início do treinamento" type="date" value={form.trainingStartDate} error={fieldError("trainingStartDate")} onChange={(value) => updateField("trainingStartDate", value)} />
-      <FormSelect label="Preferência de horário" value={form.preferredSchedule} error={fieldError("preferredSchedule")} options={Array.from(standardShiftNames)} onChange={(value) => updateField("preferredSchedule", value)} />
-      <FormSelect label="LOB" value={form.requestedLob} error={fieldError("requestedLob")} options={["ALL", "CEC", "TNS", "ADS"]} onChange={(value) => updateField("requestedLob", value)} />
       <label className="md:col-span-2">
         <span className="mb-1.5 block text-sm font-bold text-muted">Observações adicionais</span>
         <textarea value={form.notes} onChange={(event) => updateField("notes", event.target.value)} className={cn("min-h-28 w-full rounded-lg border p-3 outline-none", fieldError("notes") ? "border-red-300 bg-red-50/40" : "border-border")} />
@@ -1404,9 +1431,12 @@ export function EmployeeRegistrationPublicPage() {
         ["CPF", form.cpf],
         ["CNPJ", form.cnpj],
         ["Cidade/UF", `${form.city}/${form.stateUf}`],
-        ["Treinamento", form.trainingStartDate],
-        ["Preferência", form.preferredSchedule],
-        ["LOB", form.requestedLob],
+        ["Gênero", form.sex],
+        ["Etnia", form.ethnicity],
+        ["Orientação sexual", form.sexualOrientation],
+        ["CPD", form.isCpd],
+        ["Primeiro emprego", form.firstJob],
+        ["Telemarketing", form.hasTelemarketingExperience],
         ["PIX principal", `${form.pixKeyType}: ${form.pixKey}`]
       ].map(([label, value]) => (
         <InfoLine key={label} label={label} value={value} />
@@ -1583,6 +1613,7 @@ export function OperationalCommandCenter() {
   const [commandDetailPeople, setCommandDetailPeople] = useState<AttendanceItem[]>([]);
   const [loadingCommandDetailPeople, setLoadingCommandDetailPeople] = useState(false);
   const [commandDetailError, setCommandDetailError] = useState("");
+  const [exportingCommandDetail, setExportingCommandDetail] = useState(false);
   const [selectedLobAbs, setSelectedLobAbs] = useState<string | null>(null);
   const [lobAbsPeople, setLobAbsPeople] = useState<AttendanceItem[]>([]);
   const [loadingLobAbsPeople, setLoadingLobAbsPeople] = useState(false);
@@ -1601,6 +1632,7 @@ export function OperationalCommandCenter() {
   const [attritionPeopleError, setAttritionPeopleError] = useState("");
   const [attritionExportError, setAttritionExportError] = useState("");
   const [exportingAttrition, setExportingAttrition] = useState(false);
+  const [showMoodDetail, setShowMoodDetail] = useState(false);
 
   useEffect(() => {
     void loadCommandCenterSummary();
@@ -1720,6 +1752,29 @@ export function OperationalCommandCenter() {
     setSelectedCommandDetail(null);
     setCommandDetailPeople([]);
     setCommandDetailError("");
+  }
+
+  async function exportCommandDetailPeople() {
+    if (!selectedCommandDetail || !["present", "absences"].includes(selectedCommandDetail.type)) return;
+    setExportingCommandDetail(true);
+    setCommandDetailError("");
+    try {
+      const params = new URLSearchParams({
+        startDate: dateRange.startDate,
+        endDate: dateRange.endDate,
+        detailType: selectedCommandDetail.type
+      });
+      appendCommandFilters(params);
+      await downloadFile(
+        `/api/attendance/details/export?${params.toString()}`,
+        `${selectedCommandDetail.type === "present" ? "presentes" : "faltas"}_${dateRange.startDate}_${dateRange.endDate}.xlsx`,
+        "Não foi possível exportar este indicador."
+      );
+    } catch (error) {
+      setCommandDetailError(error instanceof Error ? error.message : "Não foi possível exportar este indicador.");
+    } finally {
+      setExportingCommandDetail(false);
+    }
   }
 
   async function openLobAbsPeople(lob: string) {
@@ -2007,7 +2062,25 @@ export function OperationalCommandCenter() {
     attrition: {
       total: { lob: "Total", terminations: 0, hcStart: 0, hcEnd: 0, hcAverage: 0, attritionRate: 0 },
       byLob: []
+    },
+    mood: {
+      average: 0,
+      responses: 0,
+      interpretation: "Sem respostas no período",
+      distribution: { "Muito ruim": 0, Ruim: 0, Neutro: 0, Bom: 0, "Muito bom": 0 },
+      byLob: [],
+      bySupervisor: [],
+      byRoleTitle: []
     }
+  };
+  const commandMood = summary.mood ?? {
+    average: 0,
+    responses: 0,
+    interpretation: "Sem respostas no período",
+    distribution: { "Muito ruim": 0, Ruim: 0, Neutro: 0, Bom: 0, "Muito bom": 0 },
+    byLob: [],
+    bySupervisor: [],
+    byRoleTitle: []
   };
   const stats = [
     { title: "Pessoas Escaladas", value: summary.planned, change: summary.planned ? "100%" : "0%", helper: "base atual", icon: Users, tone: "blue" as const, action: () => void openCommandDetailPeople("scheduled", "Pessoas Escaladas") },
@@ -2015,7 +2088,15 @@ export function OperationalCommandCenter() {
     { title: "Faltas", value: summary.absent, change: `${summary.absRate}%`, helper: "ABS", icon: XCircle, tone: "orange" as const, action: () => void openCommandDetailPeople("absences", "Faltas") },
     { title: "Faltas sem justificativa", value: summary.unjustified, helper: "pendentes", icon: AlertTriangle, tone: summary.unjustified ? "red" as const : "green" as const, action: () => void openAbsenceReasonPeople("Sem justificativa", "pending") },
     { title: "Faltas justificadas", value: summary.justified ?? 0, helper: "com motivo registrado", icon: CheckCircle2, tone: (summary.justified ?? 0) ? "green" as const : "blue" as const, action: () => void openAbsenceReasonPeople("Faltas justificadas", "justified") },
-    { title: "Risco de Cobertura", value: summary.riskLevel, change: `${summary.gap}`, helper: "gap real", icon: ShieldCheck, tone: summary.riskLevel === "Crítico" ? "red" as const : "purple" as const }
+    {
+      title: "Medidor de Humor",
+      value: commandMood.responses ? `${commandMood.average} / 5` : "Sem dados",
+      change: commandMood.responses ? `${commandMood.responses} respostas` : undefined,
+      helper: commandMood.interpretation,
+      icon: HeartPulse,
+      tone: commandMood.average <= 2 && commandMood.responses ? "red" as const : commandMood.average <= 3 && commandMood.responses ? "orange" as const : "purple" as const,
+      action: () => setShowMoodDetail(true)
+    }
   ];
   const commandAbsenceReasons = Object.entries(summary.byReason)
     .filter(([, value]) => value > 0)
@@ -2086,6 +2167,19 @@ export function OperationalCommandCenter() {
     record.admissionDate || "-",
     record.terminationDate || "-",
     record.employeeStatus ?? "-"
+  ]);
+  const moodDistributionRows = Object.entries(commandMood.distribution)
+    .filter(([, count]) => count > 0)
+    .map(([label, count]) => [
+      label,
+      count,
+      commandMood.responses ? `${Number(((count / commandMood.responses) * 100).toFixed(1))}%` : "0%"
+    ]);
+  const moodGroupRows = (records: Array<{ label: string; responses: number; average: number; interpretation: string }>) => records.map((record) => [
+    record.label,
+    record.responses,
+    `${record.average} / 5`,
+    record.interpretation
   ]);
 
   return (
@@ -2512,7 +2606,19 @@ export function OperationalCommandCenter() {
                   {dateRange.startDate} até {dateRange.endDate} • {selectedCommandLob === "Todos" ? "Todas as LOBs" : selectedCommandLob}
                 </p>
               </div>
-              <button onClick={closeCommandDetailPeople} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+              <div className="flex items-center gap-2">
+                {["present", "absences"].includes(selectedCommandDetail.type) ? (
+                  <button
+                    type="button"
+                    disabled={exportingCommandDetail || loadingCommandDetailPeople}
+                    onClick={() => void exportCommandDetailPeople()}
+                    className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-extrabold text-navy-950 hover:border-blue-200 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {exportingCommandDetail ? "Exportando..." : "Exportar"}
+                  </button>
+                ) : null}
+                <button onClick={closeCommandDetailPeople} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+              </div>
             </div>
             {loadingCommandDetailPeople ? (
               <div className="rounded-xl border border-border p-8 text-center text-sm font-bold text-muted">Carregando pessoas deste indicador...</div>
@@ -2650,6 +2756,45 @@ export function OperationalCommandCenter() {
               />
             ) : (
               <EmptyState title="Nenhum desligamento encontrado" description="A lista considera apenas colaboradores com Data de Desligamento dentro do período filtrado." />
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {showMoodDetail ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="card max-h-[90vh] w-full max-w-5xl overflow-y-auto p-5">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-extrabold text-navy-950">Medidor de Humor</h2>
+                <p className="text-sm font-semibold text-muted">
+                  {dateRange.startDate} até {dateRange.endDate} • consolidado operacional
+                </p>
+              </div>
+              <button onClick={() => setShowMoodDetail(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+            </div>
+            <div className="mb-5 grid gap-3 md:grid-cols-3">
+              <MetricPill value={commandMood.responses ? `${commandMood.average} / 5` : "Sem dados"} label="Média de humor" />
+              <MetricPill value={commandMood.responses} label="Respostas" />
+              <MetricPill value={commandMood.interpretation} label="Classificação" />
+            </div>
+            {commandMood.responses ? (
+              <div className="grid gap-5 lg:grid-cols-2">
+                <Panel title="Distribuição">
+                  <SimpleTable columns={["Humor", "Respostas", "%"]} rows={moodDistributionRows} />
+                </Panel>
+                <Panel title="Por LOB">
+                  <SimpleTable columns={["LOB", "Respostas", "Média", "Classificação"]} rows={moodGroupRows(commandMood.byLob)} />
+                </Panel>
+                <Panel title="Por Supervisor">
+                  <SimpleTable columns={["Supervisor", "Respostas", "Média", "Classificação"]} rows={moodGroupRows(commandMood.bySupervisor)} />
+                </Panel>
+                <Panel title="Por Cargo/Função">
+                  <SimpleTable columns={["Cargo/Função", "Respostas", "Média", "Classificação"]} rows={moodGroupRows(commandMood.byRoleTitle)} />
+                </Panel>
+              </div>
+            ) : (
+              <EmptyState title="Sem respostas no período" description="As respostas registradas no Meu Cronograma aparecerão aqui de forma consolidada." />
             )}
           </div>
         </div>
@@ -2801,17 +2946,24 @@ export function MySchedulePage() {
     attachmentUrl: ""
   });
   const [shiftChangeForm, setShiftChangeForm] = useState({
+    changeType: "Temporária" as "Fixa" | "Temporária",
     date: currentOperationalDateInput(),
+    startDate: currentOperationalDateInput(),
+    endDate: currentOperationalDateInput(),
     currentShift: "Sem turno",
     desiredShift: "Manhã",
     reason: "",
     observation: ""
   });
+  const [todayMood, setTodayMood] = useState<{ id: string; date: string; moodScore: number; moodLabel: string; comment: string } | null>(null);
+  const [moodForm, setMoodForm] = useState({ moodScore: 3, comment: "" });
+  const [savingMood, setSavingMood] = useState(false);
 
   useEffect(() => {
     void loadMyRequests();
     void loadMyMonthlyAdvance();
     void loadMyScheduleSettings();
+    void loadMyMood();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -2891,6 +3043,39 @@ export function MySchedulePage() {
       setSelectedRequest((current) => (current ? payload.data.find((item) => item.id === current.id) ?? current : null));
     } catch {
       setMyRequests([]);
+    }
+  }
+
+  async function loadMyMood() {
+    try {
+      const date = currentOperationalDateInput();
+      const payload = await apiJson<{ data: { id: string; date: string; moodScore: number; moodLabel: string; comment: string } | null }>(`/api/mood?date=${date}`);
+      setTodayMood(payload.data);
+      if (payload.data) setMoodForm({ moodScore: payload.data.moodScore, comment: payload.data.comment ?? "" });
+    } catch {
+      setTodayMood(null);
+    }
+  }
+
+  async function submitMood() {
+    if (savingMood) return;
+    setSavingMood(true);
+    setDayOffMessage("");
+    try {
+      const payload = await apiJson<{ data: { id: string; date: string; moodScore: number; moodLabel: string; comment: string }; message?: string }>("/api/mood", {
+        method: "POST",
+        body: JSON.stringify({
+          date: currentOperationalDateInput(),
+          moodScore: moodForm.moodScore,
+          comment: moodForm.comment || undefined
+        })
+      });
+      setTodayMood(payload.data);
+      setDayOffMessage(payload.message ?? "Humor registrado com sucesso.");
+    } catch (error) {
+      setDayOffMessage(error instanceof Error ? error.message : "Não foi possível registrar seu humor.");
+    } finally {
+      setSavingMood(false);
     }
   }
 
@@ -3010,7 +3195,10 @@ export function MySchedulePage() {
     const currentShift = shiftForScheduleDate(targetDate);
     const desiredShift = ["Manhã", "Tarde", "Noite"].find((shift) => shift !== currentShift) ?? "Manhã";
     setShiftChangeForm({
+      changeType: "Temporária",
       date: targetDate,
+      startDate: targetDate,
+      endDate: targetDate,
       currentShift,
       desiredShift,
       reason: "",
@@ -3020,8 +3208,18 @@ export function MySchedulePage() {
   }
 
   async function submitShiftChangeRequest() {
-    if (!shiftChangeForm.date) {
-      setDayOffMessage("Data da troca de turno é obrigatória.");
+    const startDate = shiftChangeForm.startDate || shiftChangeForm.date;
+    const endDate = shiftChangeForm.endDate;
+    if (!startDate) {
+      setDayOffMessage(shiftChangeForm.changeType === "Fixa" ? "Data de início da vigência é obrigatória." : "Data inicial da troca de turno é obrigatória.");
+      return;
+    }
+    if (shiftChangeForm.changeType === "Temporária" && !endDate) {
+      setDayOffMessage("Data final da troca de turno temporária é obrigatória.");
+      return;
+    }
+    if (shiftChangeForm.changeType === "Temporária" && endDate < startDate) {
+      setDayOffMessage("Data final não pode ser anterior à data inicial.");
       return;
     }
     if (!shiftChangeForm.desiredShift.trim()) {
@@ -3046,8 +3244,11 @@ export function MySchedulePage() {
           title: "Troca de Turno",
           priority: "Média",
           description: shiftChangeForm.reason,
-          requestedDate: shiftChangeForm.date,
-          shiftChangeDate: shiftChangeForm.date,
+          requestedDate: startDate,
+          shiftChangeType: shiftChangeForm.changeType,
+          shiftChangeDate: startDate,
+          shiftChangeStartDate: startDate,
+          shiftChangeEndDate: shiftChangeForm.changeType === "Temporária" ? endDate : undefined,
           currentShift: shiftChangeForm.currentShift,
           desiredShift: shiftChangeForm.desiredShift,
           shiftChangeReason: shiftChangeForm.reason,
@@ -3233,6 +3434,52 @@ export function MySchedulePage() {
         </section>
 
         <div className="space-y-5">
+          <Panel title="Humor Operacional">
+            <div className="space-y-3">
+              <div>
+                <p className="text-sm font-semibold text-muted">Como está seu humor hoje?</p>
+                {todayMood ? (
+                  <p className="mt-1 text-xs font-bold text-blue-700">Resposta atual: {todayMood.moodLabel}</p>
+                ) : null}
+              </div>
+              <div className="grid grid-cols-5 gap-1.5">
+                {[
+                  { score: 1, label: "Muito ruim" },
+                  { score: 2, label: "Ruim" },
+                  { score: 3, label: "Neutro" },
+                  { score: 4, label: "Bom" },
+                  { score: 5, label: "Muito bom" }
+                ].map((option) => (
+                  <button
+                    key={option.score}
+                    type="button"
+                    onClick={() => setMoodForm((current) => ({ ...current, moodScore: option.score }))}
+                    title={option.label}
+                    className={cn(
+                      "rounded-lg border px-2 py-2 text-xs font-black transition",
+                      moodForm.moodScore === option.score ? "border-blue-500 bg-blue-50 text-blue-700" : "border-border bg-white text-muted hover:bg-slate-50"
+                    )}
+                  >
+                    {option.score}
+                  </button>
+                ))}
+              </div>
+              <textarea
+                value={moodForm.comment}
+                onChange={(event) => setMoodForm((current) => ({ ...current, comment: event.target.value }))}
+                className="min-h-20 w-full rounded-lg border border-border p-3 text-sm outline-none"
+                placeholder="Comentário opcional"
+              />
+              <button
+                type="button"
+                disabled={savingMood}
+                onClick={() => void submitMood()}
+                className="w-full rounded-lg bg-blue-600 px-3 py-2 text-sm font-extrabold text-white disabled:opacity-50"
+              >
+                {savingMood ? "Salvando..." : todayMood ? "Atualizar humor" : "Registrar humor"}
+              </button>
+            </div>
+          </Panel>
           <Panel title="Adiantamento Mensal">
             {monthlyAdvanceCycles.length ? (
               <div className="grid gap-3">
@@ -3450,12 +3697,26 @@ export function MySchedulePage() {
               <button onClick={() => setShowShiftChangeModal(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
             </div>
             <div className="grid gap-4 md:grid-cols-2">
-              <FormInput
-                label="Data da troca"
-                type="date"
-                value={shiftChangeForm.date}
-                onChange={(value) => setShiftChangeForm((current) => ({ ...current, date: value, currentShift: shiftForScheduleDate(value) }))}
+              <FormSelect
+                label="Tipo de troca"
+                value={shiftChangeForm.changeType}
+                options={["Temporária", "Fixa"]}
+                onChange={(value) => setShiftChangeForm((current) => ({ ...current, changeType: value as "Fixa" | "Temporária" }))}
               />
+              <FormInput
+                label={shiftChangeForm.changeType === "Fixa" ? "Início da vigência" : "Data inicial"}
+                type="date"
+                value={shiftChangeForm.startDate}
+                onChange={(value) => setShiftChangeForm((current) => ({ ...current, date: value, startDate: value, currentShift: shiftForScheduleDate(value) }))}
+              />
+              {shiftChangeForm.changeType === "Temporária" ? (
+                <FormInput
+                  label="Data final"
+                  type="date"
+                  value={shiftChangeForm.endDate}
+                  onChange={(value) => setShiftChangeForm((current) => ({ ...current, endDate: value }))}
+                />
+              ) : null}
               <FormInput label="Turno atual" value={shiftChangeForm.currentShift || "Sem turno"} disabled onChange={() => undefined} />
               <FormSelect
                 label="Novo turno solicitado"
@@ -3547,8 +3808,8 @@ export function RegistrationApprovalsPage() {
     employeeStatus: "Ativo",
     contractType: "PJ",
     admissionDate: currentOperationalDateInput(),
-    trainingDate: currentOperationalDateInput(),
-    site: "Remoto",
+    nestingStartDate: currentOperationalDateInput(),
+    goLiveDate: currentOperationalDateInput(),
     internalNotes: "Complementado por RH/Admin/WFM."
   });
 
@@ -3576,8 +3837,8 @@ export function RegistrationApprovalsPage() {
       employeeStatus: op.employeeStatus === "Pendente de Cadastro" ? "Ativo" : op.employeeStatus ?? "Ativo",
       contractType: op.contractType ?? "PJ",
       admissionDate: op.admissionDate ?? currentOperationalDateInput(),
-      trainingDate: op.trainingDate ?? currentOperationalDateInput(),
-      site: op.site ?? "Remoto",
+      nestingStartDate: op.nestingStartDate ?? currentOperationalDateInput(),
+      goLiveDate: op.goLiveDate ?? currentOperationalDateInput(),
       internalNotes: op.internalNotes ?? "Complementado por RH/Admin/WFM."
     });
   }, [selected]);
@@ -3714,8 +3975,8 @@ export function RegistrationApprovalsPage() {
         ["Cargo/Função", operational.roleTitle],
         ["Status", operational.employeeStatus],
         ["Admissão", operational.admissionDate],
-        ["Treinamento", operational.trainingDate],
-        ["Site/Operação", operational.site]
+        ["Início de Nesting", operational.nestingStartDate],
+        ["Go Live", operational.goLiveDate]
       ].filter(([, value]) => !String(value).trim()).map(([label]) => label);
       if (missing.length) {
         setMessageTone("error");
@@ -3894,8 +4155,8 @@ export function RegistrationApprovalsPage() {
               <div className="grid grid-cols-2 gap-3">
                 <InfoLine label="CPF" value={selected.cpf} />
                 <InfoLine label="CNPJ" value={selected.cnpj} />
-                <InfoLine label="Treinamento" value={selected.trainingStartDate} />
-                <InfoLine label="Preferência" value={selected.preferredSchedule} />
+                <InfoLine label="Nascimento" value={selected.birthDate} />
+                <InfoLine label="Escolaridade" value={selected.educationLevel} />
                 <InfoLine label="Senha cadastrada" value={selected.hasPassword ? "Sim" : "Não"} />
               </div>
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-700">
@@ -3916,8 +4177,8 @@ export function RegistrationApprovalsPage() {
                   ["Status", "employeeStatus"],
                   ["Contrato", "contractType"],
                   ["Admissão", "admissionDate"],
-                  ["Treinamento", "trainingDate"],
-                  ["Site/Operação", "site"]
+                  ["Início de Nesting", "nestingStartDate"],
+                  ["Go Live", "goLiveDate"]
                 ].map(([label, key]) => (
                   <label key={key} className="block">
                     <span className="mb-1 block text-xs font-bold text-muted">{label}</span>
@@ -4108,7 +4369,7 @@ export function SchedulesPage() {
   });
   const [selectedScheduleJustification, setSelectedScheduleJustification] = useState<ScheduleJustificationCell | null>(null);
   const [justificationDraft, setJustificationDraft] = useState({
-    absenceReason: "Ausente",
+    absenceReason: "Problema de saúde",
     reasonCategory: "Cronograma",
     supervisorJustification: "",
     hasEvidence: false,
@@ -4145,7 +4406,7 @@ export function SchedulesPage() {
     date: currentOperationalDateInput(),
     shift: "Manhã",
     status: "Falta",
-    absenceReason: "Ausente",
+    absenceReason: "Problema de saúde",
     reasonCategory: "Cronograma",
     supervisorJustification: "",
     hasEvidence: false,
@@ -4395,7 +4656,7 @@ export function SchedulesPage() {
     });
     setSelectedScheduleJustification(justification);
     setJustificationDraft({
-      absenceReason: justification?.absenceReason && justification.absenceReason !== "Sem justificativa" ? justification.absenceReason : "Ausente",
+      absenceReason: justification?.absenceReason && justification.absenceReason !== "Sem justificativa" ? justification.absenceReason : "Problema de saúde",
       reasonCategory: justification?.reasonCategory ?? "Cronograma",
       supervisorJustification: justification?.supervisorJustification ?? "",
       hasEvidence: false,
@@ -4430,7 +4691,7 @@ export function SchedulesPage() {
     setScheduleEmployeeSearchResults([]);
     setSelectedScheduleJustification(null);
     setJustificationDraft({
-      absenceReason: "Ausente",
+      absenceReason: "Problema de saúde",
       reasonCategory: "Cronograma",
       supervisorJustification: "",
       hasEvidence: false,
@@ -4450,7 +4711,7 @@ export function SchedulesPage() {
       date: record.dateIso ?? record.date,
       shift: cleanShiftName(record.shift) || "Manhã",
       status: statusFromScheduleCell(record.status),
-      absenceReason: record.absenceReason && record.absenceReason !== "Sem justificativa" ? record.absenceReason : "Ausente",
+      absenceReason: record.absenceReason && record.absenceReason !== "Sem justificativa" ? record.absenceReason : "Problema de saúde",
       reasonCategory: record.reasonCategory ?? "Cronograma",
       supervisorJustification: record.supervisorJustification ?? "",
       hasEvidence: false,
@@ -4865,6 +5126,15 @@ export function SchedulesPage() {
     "SEM_SKILL",
     ...Array.from(new Set([...scheduleSkillFilterOptions, ...scheduleRows.map((row) => (row.employee as EmployeeClient).skill), ...scheduleEmployees.map((employee) => employee.skill)].filter((skill): skill is string => Boolean(skill?.trim()) && skill !== "SEM_SKILL")))
   ];
+  const uniqueRoleTitles = [
+    "Todos",
+    "Sem cargo",
+    ...Array.from(new Set([
+      ...(scheduleSettings?.roleTitles.filter((title) => title.status !== "INACTIVE").map((title) => title.name) ?? []),
+      ...scheduleRows.map((row) => row.employee.role),
+      ...scheduleEmployees.map((employee) => employee.role)
+    ].filter((roleTitle): roleTitle is string => Boolean(roleTitle?.trim()) && roleTitle !== "Sem cargo")))
+  ];
   const pendingSupervisorOptions = Array.from(
     new Map([
       ["Todos", "Todos"],
@@ -5049,7 +5319,9 @@ export function SchedulesPage() {
           <select value={scheduleFilters.skill} onChange={(event) => setScheduleFilters({ ...scheduleFilters, skill: event.target.value })} className="h-9 rounded-lg border border-border px-3 text-sm font-bold outline-none">
             {uniqueSkills.map((skill) => <option key={skill} value={skill}>{skill === "Todos" ? "Todas as skills" : skill === "SEM_SKILL" ? "Sem skill" : skill}</option>)}
           </select>
-          <input value={scheduleFilters.roleTitle} onChange={(event) => setScheduleFilters({ ...scheduleFilters, roleTitle: event.target.value })} className="h-9 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Cargo/Função" />
+          <select value={scheduleFilters.roleTitle || "Todos"} onChange={(event) => setScheduleFilters({ ...scheduleFilters, roleTitle: event.target.value === "Todos" ? "" : event.target.value })} className="h-9 rounded-lg border border-border px-3 text-sm font-bold outline-none">
+            {uniqueRoleTitles.map((roleTitle) => <option key={roleTitle} value={roleTitle}>{roleTitle}</option>)}
+          </select>
           <div className="grid grid-cols-2 gap-2">
             <button onClick={applyScheduleFilters} className="rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
             <button
@@ -6586,7 +6858,7 @@ function RequestDetailContent({
   const canWfmFinal = selected.status === "Em análise" && Boolean(selected.canWfmFinal);
   const canReject = canSupervisorStep || canWfmFinal;
   const canConclude = selected.status === "Aprovado" && Boolean(selected.canWfmFinal);
-  const canCancel = !isProcessed && !isApproved && ((actorRole === "COLABORADOR" && selected.status === "Aberto") || Boolean(selected.canWfmFinal));
+  const canCancel = !isProcessed && !isApproved && actorRole === "COLABORADOR" && selected.status === "Aberto";
   const buttonsDisabled = Boolean(actionPending) || isProcessed;
   const actionInput = dayOffKind === "DAY_OFF_SELL" && canWfmFinal ? approvalData : undefined;
   const stageText: Record<string, string> = {
@@ -6652,7 +6924,11 @@ function RequestDetailContent({
           </div>
         ) : /turno/i.test(selected.type) ? (
           <div className="mt-3 grid gap-2 md:grid-cols-2">
-            <InfoLine label="Data da troca" value={String(payload.shiftChangeDate ?? payload.requestedDate ?? "-")} />
+            <InfoLine label="Tipo de troca" value={String(payload.shiftChangeType ?? "Temporária")} />
+            <InfoLine label="Data inicial" value={String(payload.shiftChangeStartDate ?? payload.shiftChangeDate ?? payload.requestedDate ?? "-")} />
+            {payload.shiftChangeType === "Temporária" || payload.shiftChangeEndDate ? (
+              <InfoLine label="Data final" value={String(payload.shiftChangeEndDate ?? "-")} />
+            ) : null}
             <InfoLine label="Turno atual" value={String(payload.currentShift ?? "-")} />
             <InfoLine label="Novo turno solicitado" value={String(payload.desiredShift ?? "-")} />
             <InfoLine label="Motivo" value={String(payload.shiftChangeReason ?? payload.reason ?? selected.description ?? "-")} />
@@ -7796,11 +8072,11 @@ export function EmployeeMapPage() {
   const [scheduleDraft, setScheduleDraft] = useState("");
   const [contractDraft, setContractDraft] = useState("");
   const [admissionDraft, setAdmissionDraft] = useState("");
-  const [trainingDraft, setTrainingDraft] = useState("");
+  const [nestingStartDraft, setNestingStartDraft] = useState("");
+  const [goLiveDraft, setGoLiveDraft] = useState("");
   const [terminationDraft, setTerminationDraft] = useState("");
   const [terminationTypeDraft, setTerminationTypeDraft] = useState("");
   const [terminationReasonDraft, setTerminationReasonDraft] = useState("");
-  const [siteDraft, setSiteDraft] = useState("");
   const [primaryPhoneDraft, setPrimaryPhoneDraft] = useState("");
   const [cityDraft, setCityDraft] = useState("");
   const [stateUfDraft, setStateUfDraft] = useState("");
@@ -7923,11 +8199,11 @@ export function EmployeeMapPage() {
     setScheduleDraft(selected.schedule ?? "");
     setContractDraft(selected.contractType ?? "");
     setAdmissionDraft(selected.admissionIso ?? "");
-    setTrainingDraft(selected.trainingStartDateIso ?? "");
+    setNestingStartDraft(selected.nestingStartDateIso ?? "");
+    setGoLiveDraft(selected.goLiveDateIso ?? "");
     setTerminationDraft(selected.terminationDateIso ?? "");
     setTerminationTypeDraft(selected.terminationType ?? "");
     setTerminationReasonDraft(selected.terminationReason ?? "");
-    setSiteDraft(selected.siteOperation ?? "");
     setPrimaryPhoneDraft(selected.primaryPhone ?? "");
     setCityDraft(selected.city ?? "");
     setStateUfDraft(selected.stateUf ?? "");
@@ -7963,11 +8239,11 @@ export function EmployeeMapPage() {
           scheduleType: canEditOperationalBindings ? scheduleDraft : undefined,
           contractType: selectedCanEditPeopleData ? contractDraft : undefined,
           admissionDate: selectedCanEditPeopleData ? admissionDraft : undefined,
-          trainingStartDate: selectedCanEditPeopleData ? trainingDraft : undefined,
+          nestingStartDate: selectedCanEditEmployeeOperational ? nestingStartDraft : undefined,
+          goLiveDate: selectedCanEditEmployeeOperational ? goLiveDraft : undefined,
           terminationDate: selectedCanEditPeopleData ? terminationDraft : undefined,
           terminationType: selectedCanEditPeopleData ? terminationTypeDraft : undefined,
           terminationReason: selectedCanEditPeopleData ? terminationReasonDraft : undefined,
-          siteOperation: canEditOperationalBindings ? siteDraft : undefined,
           internalNotes: selectedCanEditEmployeeOperational ? internalNotesDraft : undefined,
           primaryPhone: selectedCanEditPeopleData ? primaryPhoneDraft : undefined,
           city: selectedCanEditPeopleData ? cityDraft : undefined,
@@ -8141,8 +8417,9 @@ export function EmployeeMapPage() {
                 <InfoLine label="Skill" value={selected.skill || "Sem skill"} />
                 <InfoLine label="Wave" value={selected.wave || "Sem wave"} />
                 <InfoLine label="Turno" value={cleanShiftName(selected.shift) || "-"} />
-                <InfoLine label="Cronograma" value={selected.schedule} />
                 <InfoLine label="Admissão" value={selected.admission} />
+                <InfoLine label="Início de Nesting" value={selected.nestingStartDate || "Não informado"} />
+                <InfoLine label="Go Live" value={selected.goLiveDate || "Não informado"} />
                 <InfoLine label="Desligamento" value={selected.terminationDate || "Não informada"} />
                 <InfoLine label="Tipo de desligamento" value={selected.terminationType || "Não informado"} />
                 <InfoLine label="Motivo do desligamento" value={selected.terminationReason || "Não informado"} />
@@ -8246,15 +8523,14 @@ export function EmployeeMapPage() {
                               </label>
                             ) : null}
                             <FormSelect label="Status do colaborador" value={statusDraft} options={operationalStatusOptions} onChange={setStatusDraft} error={employeeFieldErrors.operationalStatus} />
-                            {canEditOperationalBindings ? <FormInput label="Cronograma" value={scheduleDraft} onChange={setScheduleDraft} error={employeeFieldErrors.scheduleType} /> : null}
-                            {canEditOperationalBindings ? <FormInput label="Site/Operação" value={siteDraft} onChange={setSiteDraft} error={employeeFieldErrors.siteOperation} /> : null}
                           </div>
                         </ProfileSection>
                         <ProfileSection title="Contrato e Datas">
                           <div className="grid gap-3 md:grid-cols-2">
                             {selectedCanEditPeopleData ? <FormSelect label="Tipo de contrato" value={contractDraft} options={contractOptions} onChange={setContractDraft} error={employeeFieldErrors.contractType} /> : null}
                             {selectedCanEditPeopleData ? <FormInput label="Data de admissão" type="date" value={admissionDraft} onChange={setAdmissionDraft} error={employeeFieldErrors.admissionDate} /> : null}
-                            {selectedCanEditPeopleData ? <FormInput label="Início do treinamento" type="date" value={trainingDraft} onChange={setTrainingDraft} error={employeeFieldErrors.trainingStartDate} /> : null}
+                            {selectedCanEditEmployeeOperational ? <FormInput label="Data de início de Nesting" type="date" value={nestingStartDraft} onChange={setNestingStartDraft} error={employeeFieldErrors.nestingStartDate} /> : null}
+                            {selectedCanEditEmployeeOperational ? <FormInput label="Data de Go Live" type="date" value={goLiveDraft} onChange={setGoLiveDraft} error={employeeFieldErrors.goLiveDate} /> : null}
                             {selectedCanEditPeopleData ? <FormInput label="Data de desligamento" type="date" value={terminationDraft} onChange={setTerminationDraft} error={employeeFieldErrors.terminationDate} /> : null}
                             {selectedCanEditPeopleData ? <FormSelect label="Tipo de desligamento" value={terminationTypeDraft} options={terminationTypeOptions} onChange={setTerminationTypeDraft} error={employeeFieldErrors.terminationType} /> : null}
                             {selectedCanEditPeopleData ? <FormInput label="Motivo do desligamento" value={terminationReasonDraft} onChange={setTerminationReasonDraft} error={employeeFieldErrors.terminationReason} /> : null}
@@ -8299,6 +8575,18 @@ export function EmployeeMapPage() {
                   </div>
                 ) : null}
               </ProfileSection>
+              {!isSupervisorUser && (selected.ethnicity || selected.sexualOrientation || selected.isCpd || selected.firstJob || selected.hasTelemarketingExperience || selected.telemarketingWhere) ? (
+                <ProfileSection title="Dados cadastrais adicionais">
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <InfoLine label="Etnia" value={selected.ethnicity || "Não informado"} />
+                    <InfoLine label="Orientação sexual" value={selected.sexualOrientation || "Não informado"} />
+                    <InfoLine label="CPD" value={selected.isCpd || "Não informado"} />
+                    <InfoLine label="Primeiro emprego" value={selected.firstJob || "Não informado"} />
+                    <InfoLine label="Já trabalhou em telemarketing" value={selected.hasTelemarketingExperience || "Não informado"} />
+                    <InfoLine label="Onde trabalhou em telemarketing" value={selected.telemarketingWhere || "Não informado"} />
+                  </div>
+                </ProfileSection>
+              ) : null}
               {isSupervisorUser ? (
                 <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm font-semibold text-blue-700">
                   Visão operacional do Supervisor: dados pessoais, bancários, familiares, documentos e contatos de emergência ficam ocultos.
@@ -9030,6 +9318,8 @@ export function EquipmentPage() {
   const [savingEquipment, setSavingEquipment] = useState(false);
   const [importingEquipment, setImportingEquipment] = useState(false);
   const [equipmentPagination, setEquipmentPagination] = useState({ page: 1, limit: 50, total: 0, totalPages: 1 });
+  const [equipmentHistory, setEquipmentHistory] = useState<{ equipment: EquipmentItem; history: Array<{ id: string; action: string; reason: string; actor: string; createdAt: string }> } | null>(null);
+  const [loadingEquipmentHistory, setLoadingEquipmentHistory] = useState(false);
 
   useEffect(() => {
     void refreshEquipment();
@@ -9094,12 +9384,34 @@ export function EquipmentPage() {
     });
   }
 
-  async function removeEquipment(id?: string) {
+  async function inactivateEquipmentRow(id?: string) {
     if (!id) return;
-    if (!window.confirm("Tem certeza que deseja remover este equipamento da lista ativa?")) return;
-    const payload = await apiJson<{ message: string }>(`/api/equipment?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (!window.confirm("Tem certeza que deseja inativar este equipamento? Ele continuará no histórico.")) return;
+    const payload = await apiJson<{ message: string }>(`/api/equipment?id=${encodeURIComponent(id)}&action=inactivate`, { method: "DELETE" });
     setEquipmentMessage(payload.message);
     await refreshEquipment(equipmentFilters, equipmentPagination.page);
+  }
+
+  async function deleteEquipmentRow(id?: string) {
+    if (!id) return;
+    const reason = window.prompt("Informe o motivo da exclusão do equipamento.");
+    if (!reason?.trim()) return;
+    const payload = await apiJson<{ message: string }>(`/api/equipment?id=${encodeURIComponent(id)}&reason=${encodeURIComponent(reason.trim())}`, { method: "DELETE" });
+    setEquipmentMessage(payload.message);
+    await refreshEquipment(equipmentFilters, equipmentPagination.page);
+  }
+
+  async function openEquipmentHistory(id?: string) {
+    if (!id) return;
+    setLoadingEquipmentHistory(true);
+    try {
+      const payload = await apiJson<{ data: { equipment: EquipmentItem; history: Array<{ id: string; action: string; reason: string; actor: string; createdAt: string }> } }>(`/api/equipment?historyId=${encodeURIComponent(id)}`);
+      setEquipmentHistory(payload.data);
+    } catch (error) {
+      setEquipmentMessage(error instanceof Error ? error.message : "Não foi possível carregar o histórico do equipamento.");
+    } finally {
+      setLoadingEquipmentHistory(false);
+    }
   }
 
   async function previewEquipmentFile(file?: File) {
@@ -9219,7 +9531,7 @@ export function EquipmentPage() {
               <SimpleTable
                 columns={["Nº série", "Tipo", "Modelo", "Responsável", "WB/Login", "Entrega", "Status", "Ações"]}
                 rows={rows.map((item) => [
-                  item.serial ?? item.code,
+                  <button key={`${item.code}-history`} type="button" onClick={() => void openEquipmentHistory(item.id)} className="font-extrabold text-blue-700 hover:underline">{item.serial ?? item.code}</button>,
                   item.type,
                   item.model ?? "",
                   item.employee,
@@ -9229,7 +9541,8 @@ export function EquipmentPage() {
                   canManage ? (
                     <div key={`${item.code}-actions`} className="flex flex-wrap gap-2">
                       <button onClick={() => editEquipment(item)} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Editar</button>
-                      <button onClick={() => void removeEquipment(item.id)} className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-bold text-red-600">Inativar</button>
+                      <button onClick={() => void inactivateEquipmentRow(item.id)} className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-bold text-amber-700">Inativar</button>
+                      <button onClick={() => void deleteEquipmentRow(item.id)} className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-bold text-red-600">Excluir</button>
                     </div>
                   ) : "Visualização"
                 ])}
@@ -9325,6 +9638,43 @@ export function EquipmentPage() {
                 {importingEquipment ? "Importando..." : "Confirmar importação"}
               </button>
             </div>
+          </div>
+        </div>
+      ) : null}
+      {equipmentHistory ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="card max-h-[90vh] w-full max-w-3xl overflow-y-auto p-5">
+            <div className="mb-5 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-extrabold text-navy-950">Histórico do equipamento</h2>
+                <p className="text-sm font-semibold text-muted">{equipmentHistory.equipment.serial ?? equipmentHistory.equipment.code} • {equipmentHistory.equipment.type} • {equipmentHistory.equipment.status}</p>
+              </div>
+              <button onClick={() => setEquipmentHistory(null)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+            </div>
+            <div className="mb-4 grid gap-2 md:grid-cols-2">
+              <InfoLine label="Modelo" value={equipmentHistory.equipment.model ?? "-"} />
+              <InfoLine label="Responsável atual" value={equipmentHistory.equipment.employee} />
+              <InfoLine label="WB/Login" value={equipmentHistory.equipment.employeeWbLogin ?? "-"} />
+              <InfoLine label="Data de entrega" value={equipmentHistory.equipment.delivered} />
+            </div>
+            {loadingEquipmentHistory ? (
+              <p className="rounded-lg border border-border p-4 text-sm font-bold text-muted">Carregando histórico...</p>
+            ) : equipmentHistory.history.length ? (
+              <div className="space-y-2">
+                {equipmentHistory.history.map((entry) => (
+                  <div key={entry.id} className="rounded-lg border border-border bg-white p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="font-extrabold text-navy-950">{entry.action}</p>
+                      <p className="text-xs font-bold text-muted">{new Date(entry.createdAt).toLocaleString("pt-BR")}</p>
+                    </div>
+                    <p className="mt-1 text-xs font-semibold text-muted">Por {entry.actor}</p>
+                    {entry.reason ? <p className="mt-2 text-sm text-navy-900">{entry.reason}</p> : null}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState title="Sem histórico registrado" description="As próximas alterações de responsável, status ou dados do equipamento aparecerão aqui." />
+            )}
           </div>
         </div>
       ) : null}

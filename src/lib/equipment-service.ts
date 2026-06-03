@@ -65,6 +65,7 @@ export type EquipmentInput = {
   status?: string;
   observation?: string;
   observacao?: string;
+  importMode?: boolean;
 };
 
 export type EquipmentQuery = {
@@ -327,7 +328,17 @@ export async function saveEquipment(actor: Actor, input: EquipmentInput) {
 
   const existing = input.id
     ? await prisma.equipment.findFirst({ where: { id: input.id, deletedAt: null }, include: { employee: true } })
-    : await prisma.equipment.findFirst({ where: { code, deletedAt: null }, include: { employee: true } });
+    : input.importMode
+      ? await prisma.equipment.findFirst({ where: { code, deletedAt: null }, include: { employee: true } })
+      : null;
+  const duplicateBySerial = await prisma.equipment.findFirst({
+    where: {
+      code,
+      deletedAt: null,
+      ...(input.id ? { id: { not: input.id } } : {})
+    }
+  });
+  if (duplicateBySerial && !input.importMode) return { error: "Já existe equipamento cadastrado com este número de série." };
 
   const saved = await prisma.$transaction(async (tx) => {
     const data = {
@@ -389,7 +400,67 @@ export async function deleteEquipment(actor: Actor, id: string) {
       }
     });
   });
-  return { success: true, message: "Equipamento removido da lista ativa." };
+  return { success: true, message: "Equipamento excluído com sucesso." };
+}
+
+export async function inactivateEquipment(actor: Actor, id: string, reason?: string) {
+  const user = await getActorUser(actor);
+  if (!user || !canManageEquipmentRole(user.role.name)) return { error: "Você não tem permissão para inativar equipamentos." };
+  const existing = await prisma.equipment.findFirst({ where: { id, deletedAt: null } });
+  if (!existing) return { error: "Equipamento não encontrado." };
+  const updated = await prisma.$transaction(async (tx) => {
+    const record = await tx.equipment.update({ where: { id }, data: { status: "BLOQUEADO" } });
+    await tx.equipmentHistory.create({
+      data: {
+        equipmentId: id,
+        actorId: user.id,
+        action: "Inativação de equipamento",
+        before: serialize(existing),
+        after: serialize(record),
+        reason: reason || "Equipamento inativado manualmente"
+      }
+    });
+    await tx.auditLog.create({
+      data: {
+        actorId: user.id,
+        action: "EDICAO",
+        entity: "Equipment",
+        entityId: id,
+        reason: reason || "Equipamento inativado manualmente",
+        previousValue: serialize(existing),
+        newValue: serialize(record)
+      }
+    });
+    return record;
+  });
+  return { success: true, data: updated, message: "Equipamento inativado com sucesso." };
+}
+
+export async function getEquipmentHistory(actor: Actor, id: string) {
+  const user = await getActorUser(actor);
+  if (!user || !canViewEquipmentRole(user.role.name)) return { error: "Você não tem permissão para visualizar histórico de equipamentos." };
+  const equipment = await prisma.equipment.findFirst({
+    where: { id, deletedAt: null },
+    include: {
+      employee: { select: responsibleEmployeeSelect },
+      histories: { orderBy: { createdAt: "desc" }, include: { actor: { select: { name: true, email: true } } } }
+    }
+  });
+  if (!equipment) return { error: "Equipamento não encontrado." };
+  return {
+    data: {
+      equipment: formatEquipment({ ...equipment, histories: equipment.histories.slice(0, 1) }),
+      history: equipment.histories.map((history) => ({
+        id: history.id,
+        action: history.action,
+        reason: history.reason ?? "",
+        actor: history.actor?.name ?? history.actor?.email ?? "Sistema",
+        createdAt: history.createdAt.toISOString(),
+        before: history.before,
+        after: history.after
+      }))
+    }
+  };
 }
 
 export async function previewEquipmentImport(actor: Actor, rows: Array<Record<string, unknown>>) {
@@ -417,7 +488,8 @@ export async function previewEquipmentImport(actor: Actor, rows: Array<Record<st
         responsavelWbLogin: text(row.responsavel_wb_login),
         responsavelEmail: text(row.responsavel_email),
         responsavelNome: text(row.responsavel_nome),
-        observacao: text(row.observacao)
+        observacao: text(row.observacao),
+        importMode: true
       } satisfies EquipmentInput
     };
   });

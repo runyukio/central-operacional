@@ -46,7 +46,7 @@ export const presenceByShift = [
 ];
 
 export const absenceReasons = [
-  { name: "Ausente", value: 48, fill: "#071B3A" },
+  { name: "Problema de saúde", value: 48, fill: "#071B3A" },
   { name: "Falta Justificada", value: 32, fill: "#14B8A6" },
   { name: "Transporte", value: 20, fill: "#F59E0B" },
   { name: "Problemas Pessoais", value: 18, fill: "#7C3AED" },

@@ -12,6 +12,7 @@ import { cleanShiftName, isBlockedShiftName, isSelectableShiftName, shiftCategor
 import { calculateAbsenceRate, calculateCoverageRate, getAbsenceStatuses, getPresentStatuses, getScheduledStatuses, isAbsenceStatus, isPresentStatus, isScheduledStatus, normalizeOperationalStatus } from "@/lib/attendance-calculation";
 import { calculateProductiveDifferenceMinutes, formatWorkHours, isProductiveDifferenceWithinTolerance, plannedProductiveHoursForSchedule } from "@/lib/work-hours-rules";
 import { isAgentJobTitle } from "@/lib/job-title-normalization";
+import { moodGroupSummary, moodInterpretation, moodLabel, type MoodGroupSummary } from "@/lib/mood-service";
 
 const uiToScheduleStatus: Record<string, ScheduleStatus> = {
   Escalado: "ESCALADO",
@@ -243,6 +244,16 @@ type AttritionEmployeeForCalculation = {
   admissionDate: Date | null;
   terminationDate: Date | null;
   operationalStatus: string | null;
+};
+
+type MoodSummary = {
+  average: number;
+  responses: number;
+  interpretation: string;
+  distribution: Record<string, number>;
+  byLob: MoodGroupSummary[];
+  bySupervisor: MoodGroupSummary[];
+  byRoleTitle: MoodGroupSummary[];
 };
 
 export type AttendanceInput = {
@@ -1932,6 +1943,56 @@ export async function exportUnjustifiedAbsencesXlsxData(actor: Actor, query: Att
   }
 }
 
+export async function exportAttendanceDetailXlsxData(actor: Actor, query: AttendanceQuery = {}) {
+  const detailType = query.detailType === "present" ? "present" : query.detailType === "absences" ? "absences" : "";
+  if (!detailType) return { error: "Tipo de detalhe inválido para exportação.", status: 400 };
+  const attendance = await getOperationalAttendance(actor, {
+    ...query,
+    detailType,
+    includeJustified: true,
+    skipSummary: true
+  });
+  if ("error" in attendance) return attendance;
+  const data = (attendance.data ?? []) as AttendanceExportRow[];
+  const label = detailType === "present" ? "presentes" : "faltas";
+  return {
+    headers: [
+      "data",
+      "colaborador",
+      "wb_login",
+      "email",
+      "lob",
+      "supervisor",
+      "turno",
+      "cargo_funcao",
+      "skill",
+      "status_cronograma",
+      "status_justificativa",
+      "motivo_justificativa",
+      "observacao",
+      "atualizado_em"
+    ],
+    rows: data.map((item) => [
+      item.date,
+      item.employeeName,
+      item.wbLogin ?? "",
+      item.email ?? "",
+      item.lob ?? "",
+      item.supervisor ?? "",
+      item.shift,
+      item.roleTitle ?? "",
+      "",
+      item.status,
+      item.isJustified ? "Justificada" : item.absenceReason === "Sem justificativa" ? "Sem justificativa" : "-",
+      item.absenceReason ?? "",
+      item.supervisorJustification ?? "",
+      item.updatedAt ?? item.registeredAt
+    ]),
+    sheetName: detailType === "present" ? "Presentes" : "Faltas",
+    fileName: `${label}_${query.startDate ?? "inicio"}_${query.endDate ?? "fim"}.xlsx`
+  };
+}
+
 export async function exportAttritionXlsxData(actor: Actor, query: AttendanceQuery = {}) {
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
@@ -2313,6 +2374,7 @@ function normalizeAttendanceReason(value?: string | null) {
   if (!reason) return undefined;
   const key = normalizeImportKey(reason);
   if (key === "NAO_INFORMADO" || key === "NOT_INFORMED") return "Não informado";
+  if (key === "AUSENTE") return "Problema de saúde";
   if (isDeprecatedAtrasoReasonKey(key)) return "Outros";
   return reason;
 }
@@ -2733,6 +2795,7 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     .slice(0, 6);
   const activePeopleByLobAndShift = await getActivePeopleByLobAndShift(filters);
   const attrition = period ? await getAttritionSummary(period, filters) : emptyAttritionSummary();
+  const mood = period ? await getMoodSummary(period, filters) : emptyMoodSummary();
   const unjustified = absenceSchedules.filter((item) => isPendingJustificationForSchedule(item.schedule.status, item.record)).length;
   const justified = absenceSchedules.filter((item) => hasValidJustification(item.record)).length;
   const summary = {
@@ -2753,7 +2816,8 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     byLob,
     topAbsenceAgents,
     activePeopleByLobAndShift,
-    attrition
+    attrition,
+    mood
   };
   logPerformanceMetric("attendance.summary-db", startedAt, {
     startDate: period ? dateKey(period.start) : null,
@@ -2802,7 +2866,8 @@ function emptyAttendanceSummary() {
     byLob: {},
     topAbsenceAgents: [],
     activePeopleByLobAndShift: [],
-    attrition: emptyAttritionSummary()
+    attrition: emptyAttritionSummary(),
+    mood: emptyMoodSummary()
   };
 }
 
@@ -2952,6 +3017,24 @@ function emptyAttritionSummary() {
   };
 }
 
+function emptyMoodSummary(): MoodSummary {
+  return {
+    average: 0,
+    responses: 0,
+    interpretation: "Sem respostas no período",
+    distribution: {
+      "Muito ruim": 0,
+      Ruim: 0,
+      Neutro: 0,
+      Bom: 0,
+      "Muito bom": 0
+    },
+    byLob: [],
+    bySupervisor: [],
+    byRoleTitle: []
+  };
+}
+
 async function attritionEmployeeWhere(filters: AttendanceSummaryFilters = {}) {
   const filterParts: Prisma.EmployeeProfileWhereInput[] = [{ deletedAt: null }];
   if (filters.lob && filters.lob !== "Todos") filterParts.push({ lob: { name: filters.lob } });
@@ -2964,6 +3047,43 @@ async function attritionEmployeeWhere(filters: AttendanceSummaryFilters = {}) {
   if (shiftFilter) filterParts.push(shiftFilter);
   if (filters.employeeId) filterParts.push({ id: filters.employeeId });
   return { AND: filterParts };
+}
+
+async function getMoodSummary(period: NonNullable<ReturnType<typeof resolveAttendancePeriod>>, filters: AttendanceSummaryFilters = {}) {
+  const employeeWhere = await attritionEmployeeWhere(filters);
+  const records = await prisma.employeeMoodRecord.findMany({
+    where: {
+      date: { gte: period.start, lte: period.end },
+      employee: employeeWhere
+    },
+    select: {
+      moodScore: true,
+      employee: {
+        select: {
+          roleTitle: true,
+          lob: { select: { name: true } },
+          supervisor: { select: { fullName: true } }
+        }
+      }
+    }
+  });
+  if (!records.length) return emptyMoodSummary();
+  const scoreTotal = records.reduce((sum, record) => sum + record.moodScore, 0);
+  const average = Number((scoreTotal / records.length).toFixed(2));
+  const distribution = emptyMoodSummary().distribution;
+  records.forEach((record) => {
+    const label = moodLabel(record.moodScore);
+    distribution[label] = (distribution[label] ?? 0) + 1;
+  });
+  return {
+    average,
+    responses: records.length,
+    interpretation: moodInterpretation(average, records.length),
+    distribution,
+    byLob: moodGroupSummary(records, "lob"),
+    bySupervisor: moodGroupSummary(records, "supervisor"),
+    byRoleTitle: moodGroupSummary(records, "roleTitle")
+  };
 }
 
 function attritionRate(terminations: number, hcAverage: number) {

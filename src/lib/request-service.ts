@@ -118,7 +118,10 @@ export type CreateRequestInput = {
   currentAdvanceAmount?: number;
   requestedAdvanceAmount?: number;
   monthlyAdvanceReason?: string;
+  shiftChangeType?: string;
   shiftChangeDate?: string;
+  shiftChangeStartDate?: string;
+  shiftChangeEndDate?: string;
   currentShift?: string;
   desiredShift?: string;
   shiftChangeReason?: string;
@@ -1464,8 +1467,12 @@ function validateCreateInput(input: CreateRequestInput) {
   }
 
   if (isShiftChangeRequest(input)) {
-    const targetDate = input.shiftChangeDate || input.requestedDate;
-    if (!targetDate) return "Data da troca de turno é obrigatória.";
+    const changeType = normalizeShiftChangeType(input.shiftChangeType);
+    const startDate = input.shiftChangeStartDate || input.shiftChangeDate || input.requestedDate;
+    const endDate = input.shiftChangeEndDate;
+    if (!startDate) return changeType === "Fixa" ? "Data de início da vigência é obrigatória." : "Data inicial da troca de turno é obrigatória.";
+    if (changeType === "Temporária" && !endDate) return "Data final da troca de turno temporária é obrigatória.";
+    if (changeType === "Temporária" && startDate && endDate && endDate < startDate) return "Data final não pode ser anterior à data inicial.";
     if (!input.desiredShift?.trim()) return "Novo turno solicitado é obrigatório.";
     if (!input.shiftChangeReason?.trim() && !input.justification?.trim() && !input.description.trim()) return "Motivo da troca de turno é obrigatório.";
     if (input.currentShift && cleanShiftName(input.currentShift) === cleanShiftName(input.desiredShift)) return "O novo turno precisa ser diferente do turno atual.";
@@ -1502,7 +1509,10 @@ function payloadForInput(input: CreateRequestInput) {
     requestedAmount: input.requestedAdvanceAmount ?? null,
     reason: input.monthlyAdvanceReason || input.shiftChangeReason || input.description || null,
     shiftChange: isShiftChangeRequest(input),
-    shiftChangeDate: input.shiftChangeDate || input.requestedDate || null,
+    shiftChangeType: normalizeShiftChangeType(input.shiftChangeType),
+    shiftChangeDate: input.shiftChangeStartDate || input.shiftChangeDate || input.requestedDate || null,
+    shiftChangeStartDate: input.shiftChangeStartDate || input.shiftChangeDate || input.requestedDate || null,
+    shiftChangeEndDate: input.shiftChangeEndDate || null,
     currentShift: input.currentShift || null,
     desiredShift: input.desiredShift || null,
     shiftChangeReason: input.shiftChangeReason || input.justification || input.description || null,
@@ -1536,6 +1546,15 @@ function isShiftChangeRequest(value: CreateRequestInput | PrismaRequestForDispla
         ? (value as PrismaRequestForDisplay).type.name
         : (value as CreateRequestInput).type;
   return /troca de turno|shift change/i.test(typeName) || payload.shiftChange === true || String(payload.internalType ?? "").toUpperCase() === "SHIFT_CHANGE";
+}
+
+function normalizeShiftChangeType(value: unknown): "Fixa" | "Temporária" {
+  const normalized = String(value ?? "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase();
+  return normalized === "FIXA" || normalized === "FIXO" || normalized === "PERMANENTE" ? "Fixa" : "Temporária";
 }
 
 function normalizeDayOffKind(value: CreateRequestInput | PrismaRequestForDisplay | string | null | undefined): DayOffKind | null {
@@ -1619,14 +1638,12 @@ async function duplicateDayOffRequest(employeeId: string, kind: DayOffKind, expe
 }
 
 async function validateShiftChangeRequestInDatabase(employeeId: string, input: CreateRequestInput) {
-  const targetDate = parseDateOnly(input.shiftChangeDate || input.requestedDate);
-  if (!targetDate) return "Data da troca de turno inválida.";
-
-  const schedule = await prisma.schedule.findUnique({
-    where: { employeeId_date: { employeeId, date: targetDate } },
-    include: { shift: true }
-  });
-  if (!schedule) return "Não existe cronograma para esta data. A troca de turno não pode ser solicitada.";
+  const changeType = normalizeShiftChangeType(input.shiftChangeType);
+  const startDate = parseDateOnly(input.shiftChangeStartDate || input.shiftChangeDate || input.requestedDate);
+  const endDate = parseDateOnly(input.shiftChangeEndDate);
+  if (!startDate) return "Data da troca de turno inválida.";
+  if (changeType === "Temporária" && !endDate) return "Data final da troca de turno temporária inválida.";
+  if (changeType === "Temporária" && endDate && endDate < startDate) return "Data final não pode ser anterior à data inicial.";
 
   const desiredShift = cleanShiftName(input.desiredShift);
   if (!desiredShift) return "Novo turno solicitado é obrigatório.";
@@ -1640,9 +1657,24 @@ async function validateShiftChangeRequestInDatabase(employeeId: string, input: C
   });
   if (!targetShift) return "Turno solicitado não encontrado.";
 
-  const currentShift = cleanShiftName(schedule.shift?.name ?? input.currentShift);
+  const firstSchedule = await prisma.schedule.findUnique({
+    where: { employeeId_date: { employeeId, date: startDate } },
+    include: { shift: true }
+  });
+  if (changeType === "Temporária") {
+    const scheduleCount = await prisma.schedule.count({
+      where: {
+        employeeId,
+        deletedAt: null,
+        date: { gte: startDate, lte: endDate ?? startDate }
+      }
+    });
+    if (!scheduleCount) return "Não existe cronograma para este período. A troca de turno não pode ser solicitada.";
+  }
+
+  const currentShift = cleanShiftName(firstSchedule?.shift?.name ?? input.currentShift);
   if (currentShift && currentShift === desiredShift) return "O novo turno precisa ser diferente do turno atual.";
-  const targetDateKey = targetDate.toISOString().slice(0, 10);
+  const targetDateKey = startDate.toISOString().slice(0, 10);
 
   const candidates = await prisma.request.findMany({
     where: {
@@ -1654,7 +1686,7 @@ async function validateShiftChangeRequestInDatabase(employeeId: string, input: C
   });
   const duplicate = candidates.some((request) => {
     const payload = (request.payload ?? {}) as Record<string, unknown>;
-    return String(payload.shiftChangeDate ?? payload.requestedDate ?? "").slice(0, 10) === targetDateKey;
+    return String(payload.shiftChangeStartDate ?? payload.shiftChangeDate ?? payload.requestedDate ?? "").slice(0, 10) === targetDateKey;
   });
   return duplicate ? "Já existe uma solicitação de troca de turno pendente para esta data." : "";
 }
@@ -1901,8 +1933,12 @@ async function applyShiftChangeRequestToSchedule(tx: Prisma.TransactionClient, r
   if (payload.shiftChangeAppliedAt) throw new DomainError("Esta solicitação já teve a troca de turno aplicada.");
   if (!request.employeeId) throw new DomainError("Solicitação sem colaborador vinculado para aplicar troca de turno.");
 
-  const targetDate = parseDateOnly(payload.shiftChangeDate ?? payload.requestedDate);
-  if (!targetDate) throw new DomainError("Data da troca de turno inválida.");
+  const changeType = normalizeShiftChangeType(payload.shiftChangeType);
+  const startDate = parseDateOnly(payload.shiftChangeStartDate ?? payload.shiftChangeDate ?? payload.requestedDate);
+  const endDate = parseDateOnly(payload.shiftChangeEndDate);
+  if (!startDate) throw new DomainError("Data da troca de turno inválida.");
+  if (changeType === "Temporária" && !endDate) throw new DomainError("Data final da troca de turno temporária inválida.");
+  if (changeType === "Temporária" && endDate && endDate < startDate) throw new DomainError("Data final não pode ser anterior à data inicial.");
 
   const desiredShift = cleanShiftName(String(payload.desiredShift ?? ""));
   if (!desiredShift) throw new DomainError("Novo turno solicitado é obrigatório.");
@@ -1917,51 +1953,135 @@ async function applyShiftChangeRequestToSchedule(tx: Prisma.TransactionClient, r
   });
   if (!shift) throw new DomainError("Turno solicitado não encontrado.");
 
-  const schedule = await tx.schedule.findUnique({
-    where: { employeeId_date: { employeeId: request.employeeId, date: targetDate } },
-    include: { shift: true, employee: true }
-  });
-  if (!schedule) throw new DomainError("Não existe cronograma para esta data. A troca de turno não pode ser aplicada.");
+  if (changeType === "Fixa") {
+    const employee = await tx.employeeProfile.findUnique({
+      where: { id: request.employeeId },
+      include: { shift: true }
+    });
+    if (!employee) throw new DomainError("Colaborador não encontrado para aplicar troca de turno.");
+    const employeeBefore = serialize({ id: employee.id, shiftId: employee.shiftId, shift: employee.shift?.name ?? null });
+    const updatedEmployee = await tx.employeeProfile.update({
+      where: { id: request.employeeId },
+      data: { shiftId: shift.id },
+      include: { shift: true }
+    });
+    const employeeAfter = serialize({ id: updatedEmployee.id, shiftId: updatedEmployee.shiftId, shift: updatedEmployee.shift?.name ?? null });
+    await tx.auditLog.create({
+      data: {
+        actorId,
+        action: "EDICAO",
+        entity: "EmployeeProfile",
+        entityId: request.employeeId,
+        reason: `Troca de turno fixa aprovada pela solicitação ${request.code}`,
+        previousValue: employeeBefore,
+        newValue: employeeAfter
+      }
+    });
 
-  const before = serialize(schedule);
-  const after = await tx.schedule.update({
-    where: { id: schedule.id },
-    data: {
-      shiftId: shift.id,
-      startsAt: shift.startsAt,
-      endsAt: shift.endsAt,
-      observation: `Troca de turno aprovada pela solicitação ${request.code}`
-    },
-    include: { shift: true }
-  });
-
-  await tx.scheduleChangeHistory.create({
-    data: {
-      scheduleId: after.id,
-      employeeId: request.employeeId,
-      changedById: actorId,
-      date: targetDate,
-      before,
-      after: serialize(after),
-      previousValue: before,
-      newValue: serialize(after),
-      reason: `Troca de turno aprovada pela solicitação ${request.code}`
+    const schedules = await tx.schedule.findMany({
+      where: {
+        employeeId: request.employeeId,
+        deletedAt: null,
+        date: { gte: startDate }
+      },
+      include: { shift: true },
+      orderBy: { date: "asc" }
+    });
+    for (const schedule of schedules) {
+      const before = serialize(schedule);
+      const after = await tx.schedule.update({
+        where: { id: schedule.id },
+        data: {
+          shiftId: shift.id,
+          startsAt: shift.startsAt,
+          endsAt: shift.endsAt,
+          observation: `Troca de turno fixa aprovada pela solicitação ${request.code}`
+        },
+        include: { shift: true }
+      });
+      await tx.scheduleChangeHistory.create({
+        data: {
+          scheduleId: after.id,
+          employeeId: request.employeeId,
+          changedById: actorId,
+          date: schedule.date,
+          before,
+          after: serialize(after),
+          previousValue: before,
+          newValue: serialize(after),
+          reason: `Troca de turno fixa aprovada pela solicitação ${request.code}`
+        }
+      });
     }
+    await tx.auditLog.create({
+      data: {
+        actorId,
+        action: "ALTERACAO_ESCALA",
+        entity: "Schedule",
+        entityId: request.id,
+        reason: `Troca de turno fixa aplicada em ${schedules.length} cronograma(s).`,
+        newValue: { requestId: request.id, startDate: startDate.toISOString().slice(0, 10), desiredShift, schedulesUpdated: schedules.length }
+      }
+    });
+    return { updated: true, message: `Troca de turno fixa aprovada. Turno cadastral atualizado e ${schedules.length} cronograma(s) futuro(s) ajustado(s).` };
+  }
+
+  const schedules = await tx.schedule.findMany({
+    where: {
+      employeeId: request.employeeId,
+      deletedAt: null,
+      date: { gte: startDate, lte: endDate ?? startDate }
+    },
+    include: { shift: true },
+    orderBy: { date: "asc" }
   });
+  if (!schedules.length) throw new DomainError("Não existe cronograma para este período. A troca de turno não pode ser aplicada.");
+
+  for (const schedule of schedules) {
+    const before = serialize(schedule);
+    const after = await tx.schedule.update({
+      where: { id: schedule.id },
+      data: {
+        shiftId: shift.id,
+        startsAt: shift.startsAt,
+        endsAt: shift.endsAt,
+        observation: `Troca de turno temporária aprovada pela solicitação ${request.code}`
+      },
+      include: { shift: true }
+    });
+    await tx.scheduleChangeHistory.create({
+      data: {
+        scheduleId: after.id,
+        employeeId: request.employeeId,
+        changedById: actorId,
+        date: schedule.date,
+        before,
+        after: serialize(after),
+        previousValue: before,
+        newValue: serialize(after),
+        reason: `Troca de turno temporária aprovada pela solicitação ${request.code}`
+      }
+    });
+  }
 
   await tx.auditLog.create({
     data: {
       actorId,
       action: "ALTERACAO_ESCALA",
       entity: "Schedule",
-      entityId: after.id,
-      reason: `Troca de turno aprovada pela solicitação ${request.code}`,
-      previousValue: before,
-      newValue: serialize(after)
+      entityId: request.id,
+      reason: `Troca de turno temporária aplicada em ${schedules.length} cronograma(s).`,
+      newValue: {
+        requestId: request.id,
+        startDate: startDate.toISOString().slice(0, 10),
+        endDate: (endDate ?? startDate).toISOString().slice(0, 10),
+        desiredShift,
+        schedulesUpdated: schedules.length
+      }
     }
   });
 
-  return { updated: true, message: "Troca de turno aprovada e aplicada ao Cronograma." };
+  return { updated: true, message: `Troca de turno temporária aprovada e aplicada em ${schedules.length} cronograma(s).` };
 }
 
 function parseDateOnly(value: unknown) {

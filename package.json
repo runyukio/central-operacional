@@ -23,6 +23,7 @@
     "db:reset-admin": "tsx prisma/reset-admin.ts",
     "db:cleanup-shifts": "tsx prisma/cleanup-shifts.ts",
     "db:migrate-ausente-to-falta": "tsx scripts/migrate-ausente-to-falta.ts",
+    "db:migrate-ausente-to-problema-saude": "tsx scripts/migrate-absence-reason-ausente-to-problema-saude.ts",
     "db:reconcile-attendance": "tsx scripts/reconcile-attendance-justifications.ts",
     "db:reconcile-absence-justifications": "tsx scripts/reconcile-absence-justifications.ts",
     "db:migrate-justification-atraso-to-outros": "tsx scripts/migrate-justification-reason-atraso-to-outros.ts",

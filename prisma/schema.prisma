@@ -307,6 +307,7 @@ model User {
   monthlyAdvanceUpdates   MonthlyAdvanceRecord[]  @relation("MonthlyAdvanceUpdatedBy")
   createdStaffCoverages   StaffCoverage[]         @relation("StaffCoverageCreatedBy")
   updatedStaffCoverages   StaffCoverage[]         @relation("StaffCoverageUpdatedBy")
+  moodRecords             EmployeeMoodRecord[]
   createdAt               DateTime                @default(now())
   updatedAt               DateTime                @updatedAt
   deletedAt               DateTime?
@@ -365,6 +366,14 @@ model EmployeeProfile {
   terminationDate    DateTime?
   terminationType    String?
   terminationReason  String?
+  ethnicity          String?
+  sexualOrientation  String?
+  isCpd              String?
+  firstJob           String?
+  hasTelemarketingExperience String?
+  telemarketingWhere String?
+  nestingStartDate   DateTime?
+  goLiveDate         DateTime?
   scheduleType       String
   contractType       String?
   siteOperation      String?
@@ -399,6 +408,7 @@ model EmployeeProfile {
   tokenBalance       TokenBalance?
   tokenTransactions  TokenTransaction[]
   rewardRedemptions  RewardRedemption[]
+  moodRecords        EmployeeMoodRecord[]
   createdAt          DateTime                @default(now())
   updatedAt          DateTime                @updatedAt
   deletedAt          DateTime?
@@ -1076,6 +1086,14 @@ model EmployeeRegistrationRequest {
   pixKeyType                   String
   secondaryPixKey              String?
   secondaryPixKeyType          String?
+  ethnicity                    String?
+  sexualOrientation            String?
+  isCpd                        String?
+  firstJob                     String?
+  hasTelemarketingExperience   String?
+  telemarketingWhere           String?
+  nestingStartDate             DateTime?
+  goLiveDate                   DateTime?
   socialName                   String?
   hasChildren                  Boolean                    @default(false)
   childrenCount                Int?
@@ -1094,6 +1112,24 @@ model EmployeeRegistrationRequest {
   @@unique([cpf])
   @@unique([email])
   @@index([status, submittedAt])
+}
+
+model EmployeeMoodRecord {
+  id         String          @id @default(cuid())
+  employeeId String
+  userId     String
+  date       DateTime
+  moodScore  Int
+  moodLabel  String
+  comment    String?
+  employee   EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  @@unique([employeeId, date])
+  @@index([date])
+  @@index([moodScore])
 }
 
 model EmployeeSensitiveData {

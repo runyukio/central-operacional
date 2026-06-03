@@ -35,8 +35,8 @@ export type RegistrationReviewInput = {
     employeeStatus: string;
     contractType: string;
     admissionDate: string;
-    trainingDate: string;
-    site: string;
+    nestingStartDate: string;
+    goLiveDate: string;
     internalNotes?: string;
   };
 };
@@ -50,7 +50,13 @@ export const employeeImportColumns = [
   "rg",
   "orgao_expedidor_uf",
   "data_nascimento",
-  "sexo",
+  "genero",
+  "etnia",
+  "orientacao_sexual",
+  "eh_cpd",
+  "primeiro_emprego",
+  "ja_trabalhou_telemarketing",
+  "onde_trabalhou_telemarketing",
   "estado_civil",
   "escolaridade",
   "tem_filhos",
@@ -78,23 +84,19 @@ export const employeeImportColumns = [
   "turno",
   "skill",
   "wave",
-  "escala_modelo",
   "status_colaborador",
   "tipo_contrato",
   "data_admissao",
-  "data_inicio_treinamento",
+  "data_inicio_nesting",
+  "data_go_live",
   "data_desligamento",
   "tipo_desligamento",
   "motivo_desligamento",
-  "site_operacao",
-  "preferencia_horario",
   "banco",
   "agencia",
   "conta_corrente",
   "chave_pix",
   "tipo_chave_pix",
-  "chave_pix_secundaria",
-  "tipo_chave_pix_secundaria",
   "observacoes",
   "criar_usuario",
   "senha_temporaria"
@@ -113,7 +115,7 @@ type EmployeeImportValidation = {
   rowNumber: number;
   errors: string[];
   warnings: string[];
-  action: "criar" | "atualizar" | "ignorar";
+  action: "criar" | "atualizar" | "inativar_acesso" | "ignorar";
   status: "Válida" | "Erro" | "Alerta";
   preview: {
     name: string;
@@ -127,6 +129,10 @@ type EmployeeImportValidation = {
     wave: string;
     createUser: boolean;
     passwordProvided: boolean;
+    currentStatus?: string;
+    newStatus?: string;
+    userWillBeInactivated?: boolean;
+    terminationDate?: string;
   };
 };
 
@@ -186,8 +192,6 @@ export async function submitOperationalRegistration(input: RegistrationInput) {
       password,
       confirmPassword: _confirmPassword,
       birthDate,
-      trainingStartDate,
-      requestedLob,
       email: _inputEmail,
       ...registrationData
     } = input;
@@ -198,15 +202,19 @@ export async function submitOperationalRegistration(input: RegistrationInput) {
       const baseData = {
         ...registrationData,
         email,
+        emergencyPhone: registrationData.emergencyPhone ?? "",
+        emergencyContactName: registrationData.emergencyContactName ?? "",
+        emergencyContactRelationship: registrationData.emergencyContactRelationship ?? "",
         passwordHash,
         birthDate: parseDate(birthDate),
-        trainingStartDate: parseDate(trainingStartDate),
+        trainingStartDate: new Date(),
+        preferredSchedule: "Não informado",
         status: "PENDENTE_APROVACAO" as const,
         submittedAt: new Date(),
         reviewedById: null,
         reviewedAt: null,
         reviewNotes: null,
-        operationalData: requestedLob ? { lob: normalizeLobName(requestedLob) } as Prisma.InputJsonObject : Prisma.JsonNull,
+        operationalData: Prisma.JsonNull,
         deletedAt: null
       };
 
@@ -266,7 +274,16 @@ export async function submitOperationalRegistration(input: RegistrationInput) {
     const normalized = normalizeRegistrationError(error);
     console.error("[registration] erro ao salvar cadastro", error);
     recordErrorLog({ code: normalized.type, message: technicalMessage(error), action: "REGISTRATION_CREATE", severity: "ERROR" });
-    return allowDemoDataFallback ? submitMockRegistration(input) : normalized;
+    return allowDemoDataFallback
+      ? submitMockRegistration({
+          ...input,
+          emergencyPhone: input.emergencyPhone ?? "",
+          emergencyContactName: input.emergencyContactName ?? "",
+          emergencyContactRelationship: input.emergencyContactRelationship ?? "",
+          trainingStartDate: new Date().toISOString().slice(0, 10),
+          preferredSchedule: "Não informado"
+        })
+      : normalized;
   }
 }
 
@@ -343,6 +360,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
     let registrosAtualizados = 0;
     let skillWaveUpdates = 0;
     let hierarchyUpdates = 0;
+    let accessInactivated = 0;
     const supervisorEmails = unique(normalizedValidRows.map((row) => row.supervisorEmail));
     const supervisorNames = unique(normalizedValidRows.map((row) => row.supervisorName));
     const employeeProfileCandidates = await findEmployeeProfilesByWbLoginBatch(unique([
@@ -420,6 +438,12 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
           rgIssuer: row.rgIssuer,
           cpf: row.cpf,
           sex: row.sex,
+          ethnicity: row.ethnicity || null,
+          sexualOrientation: row.sexualOrientation || null,
+          isCpd: row.isCpd || null,
+          firstJob: row.firstJob || null,
+          hasTelemarketingExperience: row.hasTelemarketingExperience || null,
+          telemarketingWhere: row.telemarketingWhere || null,
           maritalStatus: row.maritalStatus,
           educationLevel: row.educationLevel,
           trainingStartDate,
@@ -460,10 +484,11 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
             contractType: row.contractType,
             admissionDate: admissionDate.toISOString(),
             trainingStartDate: trainingStartDate.toISOString(),
+            nestingStartDate: row.nestingStartDate?.toISOString() ?? null,
+            goLiveDate: row.goLiveDate?.toISOString() ?? null,
             terminationDate: row.terminationDate?.toISOString() ?? null,
             terminationType: row.terminationType,
-            terminationReason: row.terminationReason,
-            siteOperation: row.siteOperation
+            terminationReason: row.terminationReason
           } as Prisma.InputJsonObject,
           history: [{ at: new Date().toISOString(), actor: actor.name, action: "Cadastro importado e aprovado via Excel", notes: batchId }] as Prisma.InputJsonArray,
           deletedAt: null
@@ -477,6 +502,8 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
           : await prisma.employeeRegistrationRequest.create({ data: registrationData });
         if (existingRegistration) registrosAtualizados += 1;
 
+        const shouldInactivateAccess = isAttritionStatus(row.employeeStatus);
+        const accessDisabledAt = shouldInactivateAccess ? new Date() : null;
         let userId: string | undefined;
         if (row.createUser) {
           const existingUser = row.email ? await prisma.user.findUnique({ where: { email: row.email } }) : null;
@@ -487,12 +514,12 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
                 name: row.name,
                 passwordHash: passwordHash!,
                 roleId: role.id,
-                status: "ACTIVE",
-                mustChangePassword: true,
-                temporaryPassword: true,
+                status: shouldInactivateAccess ? "INACTIVE" : "ACTIVE",
+                mustChangePassword: !shouldInactivateAccess,
+                temporaryPassword: !shouldInactivateAccess,
                 lastPasswordResetAt: new Date(),
                 passwordResetById: permission.user.id,
-                deletedAt: null
+                deletedAt: accessDisabledAt
               }
             })
             : await prisma.user.create({
@@ -501,11 +528,12 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
                 name: row.name,
                 passwordHash: passwordHash!,
                 roleId: role.id,
-                status: "ACTIVE",
-                mustChangePassword: true,
-                temporaryPassword: true,
+                status: shouldInactivateAccess ? "INACTIVE" : "ACTIVE",
+                mustChangePassword: !shouldInactivateAccess,
+                temporaryPassword: !shouldInactivateAccess,
                 lastPasswordResetAt: new Date(),
-                passwordResetById: permission.user.id
+                passwordResetById: permission.user.id,
+                deletedAt: accessDisabledAt
               }
             });
           userId = user.id;
@@ -540,8 +568,16 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               ...(row.terminationDate ? { terminationDate: row.terminationDate } : {}),
               ...(row.terminationType ? { terminationType: row.terminationType } : {}),
               ...(row.terminationReason ? { terminationReason: row.terminationReason } : {}),
+              ethnicity: row.ethnicity || null,
+              sexualOrientation: row.sexualOrientation || null,
+              isCpd: row.isCpd || null,
+              firstJob: row.firstJob || null,
+              hasTelemarketingExperience: row.hasTelemarketingExperience || null,
+              telemarketingWhere: row.telemarketingWhere || null,
+              ...(row.nestingStartDate ? { nestingStartDate: row.nestingStartDate } : {}),
+              ...(row.goLiveDate ? { goLiveDate: row.goLiveDate } : {}),
               contractType: row.contractType || null,
-              siteOperation: row.siteOperation || null,
+              siteOperation: null,
               internalNotes: row.notes || null,
               primaryPhone: row.primaryPhone || null,
               city: row.city || null,
@@ -570,8 +606,16 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               terminationDate: row.terminationDate,
               terminationType: row.terminationType || null,
               terminationReason: row.terminationReason || null,
+              ethnicity: row.ethnicity || null,
+              sexualOrientation: row.sexualOrientation || null,
+              isCpd: row.isCpd || null,
+              firstJob: row.firstJob || null,
+              hasTelemarketingExperience: row.hasTelemarketingExperience || null,
+              telemarketingWhere: row.telemarketingWhere || null,
+              nestingStartDate: row.nestingStartDate,
+              goLiveDate: row.goLiveDate,
               contractType: row.contractType || null,
-              siteOperation: row.siteOperation || null,
+              siteOperation: null,
               internalNotes: row.notes || null,
               primaryPhone: row.primaryPhone || null,
               city: row.city || null,
@@ -581,6 +625,19 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
             }
           });
         if (!employeeId) colaboradoresCriados += 1;
+
+        if (shouldInactivateAccess && employee.userId) {
+          await prisma.user.update({
+            where: { id: employee.userId },
+            data: {
+              status: "INACTIVE",
+              mustChangePassword: false,
+              temporaryPassword: false,
+              deletedAt: accessDisabledAt ?? new Date()
+            }
+          });
+          accessInactivated += 1;
+        }
 
         await prisma.employeeSensitiveData.upsert({
           where: { employeeId: employee.id },
@@ -612,7 +669,8 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
             usuariosCriados,
             registrosAtualizados,
             skillWaveUpdates,
-            hierarchyUpdates
+            hierarchyUpdates,
+            accessInactivated
           }
         }
       });
@@ -634,6 +692,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
         registrosAtualizados,
         skillWaveUpdates,
         hierarchyUpdates,
+        accessInactivated,
         ignoredRows: invalidRows.length,
         rows: validations
       }
@@ -737,6 +796,19 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
     if (input.action === "approve" && !isSelectableShiftName(input.operationalData?.shift)) {
       return { error: "Turno selecionado não é uma opção padrão válida." };
     }
+    if (input.action === "approve" && input.operationalData) {
+      const requiredFields: Array<[keyof NonNullable<RegistrationReviewInput["operationalData"]>, string]> = [
+        ["lob", "LOB"],
+        ["shift", "Turno"],
+        ["wave", "Wave"],
+        ["roleTitle", "Cargo/Função"],
+        ["admissionDate", "Data de admissão"],
+        ["nestingStartDate", "Data de início de Nesting"],
+        ["goLiveDate", "Data de Go Live"]
+      ];
+      const missing = requiredFields.filter(([field]) => !String(input.operationalData?.[field] ?? "").trim()).map(([, label]) => label);
+      if (missing.length) return { error: `Preencha os campos obrigatórios da aprovação: ${missing.join(", ")}.` };
+    }
 
     const result = await prisma.$transaction(async (tx) => {
       if (input.action !== "approve") {
@@ -812,6 +884,9 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
               fullName: existing.fullName,
               roleTitle: normalizeJobTitle(op.roleTitle),
               admissionDate: parseDate(op.admissionDate),
+              trainingStartDate: parseDate(op.admissionDate),
+              nestingStartDate: parseDate(op.nestingStartDate),
+              goLiveDate: parseDate(op.goLiveDate),
               scheduleType: op.schedule,
               operationalStatus: approvedEmployeeStatus,
               lobId: lob.id,
@@ -829,6 +904,9 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
               fullName: existing.fullName,
               roleTitle: normalizeJobTitle(op.roleTitle),
               admissionDate: parseDate(op.admissionDate),
+              trainingStartDate: parseDate(op.admissionDate),
+              nestingStartDate: parseDate(op.nestingStartDate),
+              goLiveDate: parseDate(op.goLiveDate),
               scheduleType: op.schedule,
               operationalStatus: approvedEmployeeStatus,
               lobId: lob.id,
@@ -1043,10 +1121,13 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     if (hasImportValue(rows[index]?.data_nascimento) && !row.birthDate) errors.push("Data de nascimento inválida.");
     if (hasImportValue(rows[index]?.data_admissao) && !row.admissionDate) errors.push("Data de admissão inválida.");
     if (hasImportValue(rows[index]?.data_inicio_treinamento) && !row.trainingStartDate) errors.push("Data de início do treinamento inválida.");
+    if (hasImportValue(rows[index]?.data_inicio_nesting) && !row.nestingStartDate) errors.push("Data de início de Nesting inválida.");
+    if (hasImportValue(rows[index]?.data_go_live) && !row.goLiveDate) errors.push("Data de Go Live inválida.");
     if (hasImportValue(rows[index]?.data_desligamento) && !row.terminationDate) errors.push("Data de desligamento inválida.");
     if (hasImportValue(rows[index]?.tipo_desligamento) && !row.terminationType) errors.push("Tipo de desligamento inválido. Use Voluntário ou Involuntário.");
     if (isAttritionStatus(row.employeeStatus) && !row.terminationDate) warnings.push("Status de desligamento/inatividade sem data_desligamento. Para attrition, informe a data de desligamento.");
     if (row.terminationDate && !isAttritionStatus(row.employeeStatus)) warnings.push("Data de desligamento preenchida, mas status_colaborador não está Inativo ou Desligado.");
+    if (isAttritionStatus(row.employeeStatus)) warnings.push("Acesso vinculado será inativado e o histórico será preservado.");
     if (row.stateUf && !/^[A-Z]{2}$/.test(row.stateUf)) errors.push("Estado UF deve ter 2 letras.");
     if (row.zipCode && !/^\d{5}-?\d{3}$/.test(row.zipCode)) warnings.push("CEP fora do padrão 00000-000.");
     if (row.primaryPhone && !/^\d{2}\s?\d{4,5}-?\d{4}$/.test(row.primaryPhone.replace(/[()]/g, ""))) warnings.push("Contato principal fora do padrão brasileiro.");
@@ -1082,11 +1163,12 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
       }
     }
 
+    const willInactivateUser = isAttritionStatus(row.employeeStatus);
     validations.push({
       rowNumber: index + 1,
       errors,
       warnings,
-      action: errors.length ? "ignorar" : activeByWb ? "atualizar" : "criar",
+      action: errors.length ? "ignorar" : willInactivateUser ? "inativar_acesso" : activeByWb ? "atualizar" : "criar",
       status: errors.length ? "Erro" : warnings.length ? "Alerta" : "Válida",
       preview: {
         name: row.name,
@@ -1099,7 +1181,11 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
         skill: row.skill,
         wave: row.wave,
         createUser: row.createUser,
-        passwordProvided: Boolean(row.temporaryPassword)
+        passwordProvided: Boolean(row.temporaryPassword),
+        currentStatus: activeByWb?.operationalStatus ?? "",
+        newStatus: row.employeeStatus,
+        userWillBeInactivated: willInactivateUser,
+        terminationDate: row.terminationDate ? row.terminationDate.toISOString().slice(0, 10) : ""
       }
     });
   }
@@ -1120,7 +1206,13 @@ function normalizeEmployeeImportRow(raw: EmployeeImportRow) {
     rg: text(raw.rg),
     rgIssuer: text(raw.orgao_expedidor_uf),
     birthDate: parseImportDate(raw.data_nascimento),
-    sex: text(raw.sexo) || "Não informado",
+    sex: text(raw.genero) || text(raw.sexo) || "Não informado",
+    ethnicity: text(raw.etnia),
+    sexualOrientation: text(raw.orientacao_sexual),
+    isCpd: text(raw.eh_cpd),
+    firstJob: text(raw.primeiro_emprego),
+    hasTelemarketingExperience: text(raw.ja_trabalhou_telemarketing),
+    telemarketingWhere: text(raw.onde_trabalhou_telemarketing),
     maritalStatus: text(raw.estado_civil) || "Não informado",
     educationLevel: text(raw.escolaridade) || "Não informado",
     hasChildren: parseImportBoolean(raw.tem_filhos),
@@ -1152,7 +1244,9 @@ function normalizeEmployeeImportRow(raw: EmployeeImportRow) {
     employeeStatus: normalizeEmployeeStatus(raw.status_colaborador),
     contractType: normalizeContractType(raw.tipo_contrato),
     admissionDate: parseImportDate(raw.data_admissao),
-    trainingStartDate: parseImportDate(raw.data_inicio_treinamento),
+    trainingStartDate: parseImportDate(raw.data_inicio_treinamento) ?? parseImportDate(raw.data_admissao),
+    nestingStartDate: parseImportDate(raw.data_inicio_nesting),
+    goLiveDate: parseImportDate(raw.data_go_live),
     terminationDate: parseImportDate(raw.data_desligamento),
     terminationType: normalizeTerminationType(raw.tipo_desligamento),
     terminationReason: text(raw.motivo_desligamento),
@@ -1193,9 +1287,7 @@ function sensitiveDataFromImport(row: ReturnType<typeof normalizeEmployeeImportR
       bankAgency: row.bankAgency,
       bankAccount: row.bankAccount,
       pixKey: row.pixKey,
-      pixKeyType: row.pixKeyType,
-      secondaryPixKey: row.secondaryPixKey,
-      secondaryPixKeyType: row.secondaryPixKeyType
+      pixKeyType: row.pixKeyType
     },
     emergencyContactData: {
       name: row.emergencyContactName,
@@ -1207,9 +1299,15 @@ function sensitiveDataFromImport(row: ReturnType<typeof normalizeEmployeeImportR
       hasChildren: row.hasChildren,
       childrenCount: row.childrenCount,
       maritalStatus: row.maritalStatus,
-      sex: row.sex,
+      gender: row.sex,
       educationLevel: row.educationLevel,
-      socialName: row.socialName
+      socialName: row.socialName,
+      ethnicity: row.ethnicity,
+      sexualOrientation: row.sexualOrientation,
+      isCpd: row.isCpd,
+      firstJob: row.firstJob,
+      hasTelemarketingExperience: row.hasTelemarketingExperience,
+      telemarketingWhere: row.telemarketingWhere
     }
   };
 }
@@ -1396,7 +1494,7 @@ async function findEmployeeProfilesByWbLoginBatch(normalizedWbLogins: string[]) 
           deletedAt: null,
           OR: chunk.map((wbLogin) => ({ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }))
         },
-        select: { id: true, userId: true, wbLogin: true, fullName: true, skill: true, wave: true, supervisorId: true, user: { select: { role: { select: { name: true } } } } }
+        select: { id: true, userId: true, wbLogin: true, fullName: true, skill: true, wave: true, supervisorId: true, operationalStatus: true, user: { select: { role: { select: { name: true } } } } }
       })
     )
   );
@@ -1545,9 +1643,7 @@ function sensitiveData(item: EmployeeRegistrationRequest) {
       bankAgency: item.bankAgency,
       bankAccount: item.bankAccount,
       pixKey: item.pixKey,
-      pixKeyType: item.pixKeyType,
-      secondaryPixKey: item.secondaryPixKey,
-      secondaryPixKeyType: item.secondaryPixKeyType
+      pixKeyType: item.pixKeyType
     },
     emergencyContactData: {
       name: item.emergencyContactName,
@@ -1559,9 +1655,15 @@ function sensitiveData(item: EmployeeRegistrationRequest) {
       hasChildren: item.hasChildren,
       childrenCount: item.childrenCount,
       maritalStatus: item.maritalStatus,
-      sex: item.sex,
+      gender: item.sex,
       educationLevel: item.educationLevel,
-      socialName: item.socialName
+      socialName: item.socialName,
+      ethnicity: item.ethnicity,
+      sexualOrientation: item.sexualOrientation,
+      isCpd: item.isCpd,
+      firstJob: item.firstJob,
+      hasTelemarketingExperience: item.hasTelemarketingExperience,
+      telemarketingWhere: item.telemarketingWhere
     }
   };
 }

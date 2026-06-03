@@ -236,8 +236,8 @@ export type RegistrationOperationalData = {
   employeeStatus: string;
   contractType: string;
   admissionDate: string;
-  trainingDate: string;
-  site: string;
+  nestingStartDate: string;
+  goLiveDate: string;
   internalNotes?: string;
 };
 
@@ -1428,8 +1428,8 @@ function defaultOperationalData(record: EmployeeRegistrationRecord): Registratio
     employeeStatus: "Online",
     contractType: "PJ",
     admissionDate: record.trainingStartDate,
-    trainingDate: record.trainingStartDate,
-    site: "Remoto",
+    nestingStartDate: record.trainingStartDate,
+    goLiveDate: record.trainingStartDate,
     internalNotes: "Criado via aprovação cadastral."
   };
 }
@@ -1637,7 +1637,7 @@ function createInitialDb(): MockDb {
       onlineAgents: 37,
       absCount: 3,
       absJustification: "2 ausentes em análise e 1 problema técnico.",
-      absentEmployees: [{ employeeId: employees[4].id, employeeName: employees[4].name, absenceReason: "Ausente", observation: "Aguardando justificativa", impactsAbs: true, impactsCoverage: true }],
+      absentEmployees: [{ employeeId: employees[4].id, employeeName: employees[4].name, absenceReason: "Problema de saúde", observation: "Aguardando justificativa", impactsAbs: true, impactsCoverage: true }],
       queueStatusStart: "Fila estável, TMA dentro da meta",
       queueStatusEnd: "Fila em atenção por absenteísmo",
       backlogStart: 18,

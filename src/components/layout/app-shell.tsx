@@ -197,14 +197,14 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
           })}
         </nav>
 
-        <div className={cn("border-t border-white/10 p-2.5", sidebarCollapsed && "hidden")}>
+        {isCollaborator ? <div className={cn("border-t border-white/10 p-2.5", sidebarCollapsed && "hidden")}>
           <div className="rounded-xl border border-white/10 bg-white/8 p-2.5 shadow-lg shadow-navy-950/20">
-            <p className="text-[12.5px] font-semibold">{isCollaborator ? "Precisa de ajuda?" : "Filtros por página"}</p>
+            <p className="text-[12.5px] font-semibold">Precisa de ajuda?</p>
             <p className="mt-1 text-[11.5px] leading-4 text-blue-100/75">
-              {isCollaborator ? "Fale com o RH ou supervisor." : "Use os filtros funcionais dentro de cada módulo."}
+              Fale com o RH ou supervisor.
             </p>
           </div>
-        </div>
+        </div> : null}
       </aside>
 
       <main className="min-h-screen min-w-0 flex-1">
