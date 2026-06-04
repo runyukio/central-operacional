@@ -5007,7 +5007,7 @@ export function SchedulesPage() {
   });
   const [selectedScheduleJustification, setSelectedScheduleJustification] = useState<ScheduleJustificationCell | null>(null);
   const [justificationDraft, setJustificationDraft] = useState({
-    absenceReason: "Problema de saúde",
+    absenceReason: "",
     reasonCategory: "Cronograma",
     supervisorJustification: "",
     hasEvidence: false,
@@ -5044,7 +5044,7 @@ export function SchedulesPage() {
     date: currentOperationalDateInput(),
     shift: "Manhã",
     status: "Falta",
-    absenceReason: "Problema de saúde",
+    absenceReason: "",
     reasonCategory: "Cronograma",
     supervisorJustification: "",
     hasEvidence: false,
@@ -5296,7 +5296,7 @@ export function SchedulesPage() {
     });
     setSelectedScheduleJustification(justification);
     setJustificationDraft({
-      absenceReason: justification?.absenceReason && justification.absenceReason !== "Sem justificativa" ? justification.absenceReason : "Problema de saúde",
+      absenceReason: justification?.absenceReason && justification.absenceReason !== "Sem justificativa" ? justification.absenceReason : "",
       reasonCategory: justification?.reasonCategory ?? "Cronograma",
       supervisorJustification: justification?.supervisorJustification ?? "",
       hasEvidence: false,
@@ -5331,7 +5331,7 @@ export function SchedulesPage() {
     setScheduleEmployeeSearchResults([]);
     setSelectedScheduleJustification(null);
     setJustificationDraft({
-      absenceReason: "Problema de saúde",
+      absenceReason: "",
       reasonCategory: "Cronograma",
       supervisorJustification: "",
       hasEvidence: false,
@@ -5351,7 +5351,7 @@ export function SchedulesPage() {
       date: record.dateIso ?? record.date,
       shift: cleanShiftName(record.shift) || "Manhã",
       status: statusFromScheduleCell(record.status),
-      absenceReason: record.absenceReason && record.absenceReason !== "Sem justificativa" ? record.absenceReason : "Problema de saúde",
+      absenceReason: record.absenceReason && record.absenceReason !== "Sem justificativa" ? record.absenceReason : "",
       reasonCategory: record.reasonCategory ?? "Cronograma",
       supervisorJustification: record.supervisorJustification ?? "",
       hasEvidence: false,
@@ -5379,7 +5379,7 @@ export function SchedulesPage() {
       date: visibleScheduleDates[dayIndex] ?? `${schedulePeriod.year}-${String(schedulePeriod.month).padStart(2, "0")}-${String(dayIndex + 1).padStart(2, "0")}`,
       shift: cleanShiftName(targetEmployee.shift) || "Manhã",
       status: safeStatus,
-      absenceReason: attendanceForm.absenceReason || "Outros",
+      absenceReason: "",
       reasonCategory: attendanceForm.reasonCategory || "Cronograma",
       supervisorJustification: "",
       hasEvidence: false,
@@ -5408,8 +5408,12 @@ export function SchedulesPage() {
       setAttendanceMessage("Turno, entrada e saída são obrigatórios para Escalado, Presente ou Nesting.");
       return;
     }
-    if (statusNeedsReason(scheduleEditForm.status) && !scheduleEditForm.observation.trim() && !scheduleEditForm.pendingJustification) {
-      setAttendanceMessage("Informe uma observação ou marque como sem justificativa no momento.");
+    if (statusNeedsReason(scheduleEditForm.status) && !scheduleEditForm.pendingJustification && !justificationDraft.absenceReason.trim()) {
+      setAttendanceMessage("Selecione o motivo da ocorrência ou marque como sem justificativa no momento.");
+      return;
+    }
+    if (statusNeedsReason(scheduleEditForm.status) && !scheduleEditForm.observation.trim() && !justificationDraft.supervisorJustification.trim() && !scheduleEditForm.pendingJustification) {
+      setAttendanceMessage("Informe uma observação/descrição ou marque como sem justificativa no momento.");
       return;
     }
 
@@ -5417,7 +5421,14 @@ export function SchedulesPage() {
     try {
       const payload = await apiJson<{ data: unknown; summary: AttendanceSummary; schedules: { scheduleGridRows: typeof scheduleGridRows; attendanceSummary?: AttendanceSummary } }>("/api/schedules", {
         method: "PATCH",
-        body: JSON.stringify(scheduleEditForm)
+        body: JSON.stringify({
+          ...scheduleEditForm,
+          absenceReason: statusNeedsReason(scheduleEditForm.status) && !scheduleEditForm.pendingJustification ? justificationDraft.absenceReason : undefined,
+          reasonCategory: statusNeedsReason(scheduleEditForm.status) && !scheduleEditForm.pendingJustification ? justificationDraft.reasonCategory || "Cronograma" : undefined,
+          supervisorJustification: statusNeedsReason(scheduleEditForm.status) && !scheduleEditForm.pendingJustification ? justificationDraft.supervisorJustification || scheduleEditForm.observation : undefined,
+          hasEvidence: statusNeedsReason(scheduleEditForm.status) && !scheduleEditForm.pendingJustification ? justificationDraft.hasEvidence : undefined,
+          evidenceUrl: statusNeedsReason(scheduleEditForm.status) && !scheduleEditForm.pendingJustification ? justificationDraft.evidenceUrl : undefined
+        })
       });
       setAttendanceSummary(payload.schedules.attendanceSummary ?? payload.summary);
       setAttendanceMessage("Cronograma atualizado com histórico, auditoria e indicadores de presença/cobertura.");
@@ -6531,7 +6542,7 @@ export function SchedulesPage() {
                             <p className="text-xs font-semibold text-muted">Supervisor revisa ocorrências do time; WFM/Admin pode corrigir motivo, categoria e observação.</p>
                           </div>
                           <div className="grid gap-4 md:grid-cols-2">
-                            <FormSelect label="Motivo da justificativa" value={justificationDraft.absenceReason} options={[...absenceReasonOptions]} onChange={(value) => setJustificationDraft({ ...justificationDraft, absenceReason: value })} />
+                            <FormSelect label="Motivo da justificativa" value={justificationDraft.absenceReason} options={["", ...absenceReasonOptions]} emptyLabel="Selecione um motivo" onChange={(value) => setJustificationDraft({ ...justificationDraft, absenceReason: value })} />
                             <FormSelect label="Categoria" value={justificationDraft.reasonCategory} options={["Cronograma", "Operacional", "Saúde", "Infraestrutura", "Equipamentos", "Internet", "Outros"]} onChange={(value) => setJustificationDraft({ ...justificationDraft, reasonCategory: value })} />
                             <label className="md:col-span-2">
                               <span className="mb-1.5 block text-sm font-bold text-muted">Observação</span>

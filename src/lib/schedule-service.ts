@@ -2596,8 +2596,7 @@ function requiresReason(status: string) {
 }
 
 function classifiedScheduleStatusForInput(input: Pick<ScheduleEditInput, "status" | "absenceReason" | "observation" | "pendingJustification">, fallbackStatus: ScheduleStatus): ScheduleStatus {
-  if (fallbackStatus === "FALTA_JUSTIFICADA" || fallbackStatus === "FALTA_INJUSTIFICADA") return fallbackStatus;
-  if (fallbackStatus !== "FALTA" || isPendingJustificationInput(input as ScheduleEditInput)) return fallbackStatus;
+  if (!["FALTA", "FALTA_JUSTIFICADA", "FALTA_INJUSTIFICADA"].includes(fallbackStatus) || isPendingJustificationInput(input as ScheduleEditInput)) return fallbackStatus;
   const reason = normalizeAttendanceReason(input.absenceReason);
   const classification = getAbsenceReasonClassification(reason);
   return classification ? scheduleStatusForAbsenceClassification(classification) : fallbackStatus;

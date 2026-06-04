@@ -14,10 +14,15 @@ const editSchema = z.object({
   startsAt: z.string().optional(),
   endsAt: z.string().optional(),
   status: z.string().min(1),
+  absenceReason: z.string().optional(),
+  reasonCategory: z.string().optional(),
+  supervisorJustification: z.string().optional(),
   lob: z.string().optional(),
   supervisor: z.string().optional(),
   observation: z.string().optional(),
   pendingJustification: z.boolean().optional(),
+  hasEvidence: z.boolean().optional(),
+  evidenceUrl: z.string().optional(),
   impactsAbs: z.boolean().optional(),
   impactsCoverage: z.boolean().optional()
 });
