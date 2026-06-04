@@ -103,6 +103,13 @@ const uiToAttendanceStatus: Record<string, AttendanceStatus> = {
 export const statusesRequiringReason = ["Falta", "Falta Justificada", "Falta Injustificada", "Erro de escala", "Erro de cronograma"];
 const supervisorJustificationStatuses = ["Falta", "Falta Justificada", "Falta Injustificada", "Erro de escala", "Erro de cronograma"];
 const scheduleStatusesRequiringJustification: ScheduleStatus[] = ["FALTA", "FALTA_JUSTIFICADA", "FALTA_INJUSTIFICADA", "ERRO_ESCALA"];
+const manuallyBlockedScheduleStatusLabels = new Set([
+  "Falta Justificada",
+  "Falta Injustificada",
+  "Troca aprovada",
+  "Venda de folga aprovada",
+  "Folga aprovada"
+]);
 
 const defaultShiftTimes: Record<string, { startsAt: string; endsAt: string }> = {
   Manhã: { startsAt: "08:00", endsAt: "14:00" },
@@ -819,6 +826,11 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
         : "Sem permissão para editar cronograma.";
       await auditPermissionDenied(actor, { action: "SCHEDULE_UPDATE", entity: "Schedule", reason, entityId: input.employeeId });
       return { error: reason };
+    }
+    if (manuallyBlockedScheduleStatusLabels.has(input.status)) {
+      return {
+        error: "Este status é controlado pelo fluxo de justificativas ou Solicitações/Esteira e não pode ser aplicado manualmente pelo slot."
+      };
     }
 
     const date = parseDateOnly(input.date);

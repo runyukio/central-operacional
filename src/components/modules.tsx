@@ -111,8 +111,10 @@ import { MONTHLY_ADVANCE_FIXED_AMOUNT } from "@/lib/monthly-advance-constants";
 const scheduleImportColumns = ["wb_login", "data", "status", "turno", "entrada", "saida", "lob"] as const;
 const workHourImportColumns = ["wb_login", "data", "horas_realizadas", "sistema_origem", "observacao"] as const;
 const scheduleStatusOptions = ["Escalado", "Presente", "Nesting", "Falta", "Falta Justificada", "Falta Injustificada", "Afastado", "Férias", "Treinamento", "Folga", "Troca aprovada", "Venda de folga aprovada", "Folga aprovada", "Desligado", "Sem cronograma", "Erro de cronograma"] as const;
-const attendanceReasonStatuses = ["Falta", "Falta Justificada", "Falta Injustificada", "Erro de cronograma"];
-const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Nesting", "Venda de folga aprovada"];
+const scheduleEditableStatusOptions = ["Escalado", "Presente", "Nesting", "Falta", "Afastado", "Férias", "Treinamento", "Folga", "Desligado", "Sem cronograma", "Erro de cronograma"] as const;
+const workflowManagedScheduleStatuses = ["Troca aprovada", "Venda de folga aprovada", "Folga aprovada"] as const;
+const attendanceReasonStatuses = ["Falta", "Erro de cronograma"];
+const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Nesting"];
 const employeeOperationalStatusOptions = ["Ativo", "Nesting", "Inativo", "Pendente de cadastro", "Afastado", "Desligado", "Em treinamento", "Suspenso"];
 const pcdDisabilityTypeOptions = ["", "Física", "Auditiva", "Visual", "Intelectual", "Psicossocial", "Múltipla", "Neurodivergente", "Outra", "Prefiro não informar"];
 const absenceReasonOptions = ["Problema de saúde", "Erro de programação de escala", "Problema técnico corporativo", "Emergência familiar", "Não informado", "Problema técnico pessoal", "Problema de transporte", "Problema pessoal", "Erro de visualização de escala", "Outros"];
@@ -1340,6 +1342,7 @@ function formatHourDifference(minutes: number | null | undefined) {
 function statusFromScheduleCell(value: string) {
   const baseStatus = /^(.+?)\s+(sem justificativa|justificada)$/i.test(value) ? value.replace(/\s+(sem justificativa|justificada)$/i, "") : value;
   if (baseStatus === "Ausente") return "Falta";
+  if (baseStatus === "Falta Justificada" || baseStatus === "Falta Injustificada") return "Falta";
   return ["Manhã", "Tarde", "Noite"].includes(cleanShiftName(baseStatus)) ? "Escalado" : baseStatus;
 }
 
@@ -5384,8 +5387,8 @@ export function SchedulesPage() {
       supervisorJustification: "",
       hasEvidence: false,
       evidenceUrl: "",
-      impactsAbs: ["Falta", "Falta Justificada", "Falta Injustificada"].includes(safeStatus),
-      impactsCoverage: ["Falta", "Falta Justificada", "Falta Injustificada", "Atraso", "Saída antecipada", "Erro de cronograma"].includes(safeStatus)
+      impactsAbs: safeStatus === "Falta",
+      impactsCoverage: safeStatus === "Falta" || safeStatus === "Erro de cronograma"
     });
     setShowAttendance(true);
   }
@@ -5675,8 +5678,8 @@ export function SchedulesPage() {
           supervisorJustification: justificationDraft.supervisorJustification,
           hasEvidence: justificationDraft.hasEvidence,
           evidenceUrl: justificationDraft.evidenceUrl,
-          impactsAbs: ["Falta", "Falta Justificada", "Falta Injustificada"].includes(scheduleEditForm.status),
-          impactsCoverage: ["Falta", "Falta Justificada", "Falta Injustificada", "Atraso", "Saída antecipada", "Erro de cronograma"].includes(scheduleEditForm.status)
+          impactsAbs: scheduleEditForm.status === "Falta",
+          impactsCoverage: scheduleEditForm.status === "Falta" || scheduleEditForm.status === "Erro de cronograma"
         })
       });
       if (payload.summary) setAttendanceSummary(payload.summary);
@@ -5744,7 +5747,7 @@ export function SchedulesPage() {
       title: `${filteredPendingJustifications.length} justificativas pendentes`,
       status: String(filteredPendingJustifications.length),
       tone: "orange" as const,
-      detail: "Faltas, atrasos ou saídas antecipadas aguardando justificativa do supervisor."
+      detail: "Faltas ou erros de cronograma aguardando justificativa do supervisor."
     } : null,
     ...importHistory
       .filter((file) => (file.errorRows ?? 0) > 0 || (file.warningRows ?? 0) > 0 || /erro|falha|partial|parcial/i.test(file.status))
@@ -5839,12 +5842,15 @@ export function SchedulesPage() {
   const manualStatusPreview = plannedHoursForManualPreview
     ? Math.abs(manualDifferencePreview) <= 5 ? "OK" : "Divergente"
     : workHourForm.recordId ? workHourForm.status : selectedCellHasSchedule ? "Sem horas" : "Sem cronograma";
-  const supervisorOccurrenceStatuses = ["Falta", "Falta Justificada", "Falta Injustificada", "Erro de cronograma"];
-  const scheduleEditStatusOptions = withCurrentScheduleStatus([...scheduleStatusOptions], scheduleEditForm.status);
+  const supervisorOccurrenceStatuses = ["Falta", "Erro de cronograma"];
+  const selectedScheduleStatusIsWorkflowManaged = (workflowManagedScheduleStatuses as readonly string[]).includes(scheduleEditForm.status);
+  const scheduleEditStatusOptions = selectedScheduleStatusIsWorkflowManaged
+    ? withCurrentScheduleStatus([...scheduleEditableStatusOptions], scheduleEditForm.status)
+    : [...scheduleEditableStatusOptions];
   const attendanceStatusOptions = withCurrentScheduleStatus(
     isScheduleSupervisor
       ? supervisorOccurrenceStatuses
-      : [...scheduleStatusOptions].filter((status) => status !== "Escalado"),
+      : [...scheduleEditableStatusOptions].filter((status) => status !== "Escalado"),
     attendanceForm.status
   );
 
@@ -6178,7 +6184,7 @@ export function SchedulesPage() {
             ) : (
               <EmptyState
                 title={pendingSupervisorFilter === "Todos" ? "Sem pendências" : "Sem pendências para este supervisor"}
-                description={pendingSupervisorFilter === "Todos" ? "Faltas, atrasos ou saídas antecipadas sem justificativa aparecerão aqui." : "Nenhuma pendência de justificativa encontrada para este supervisor."}
+                description={pendingSupervisorFilter === "Todos" ? "Faltas ou erros de cronograma sem justificativa aparecerão aqui." : "Nenhuma pendência de justificativa encontrada para este supervisor."}
               />
             )}
           </Panel>
@@ -6424,7 +6430,7 @@ export function SchedulesPage() {
                     }}
                   />
                   <FormSelect
-                    disabled={!canManageSchedules}
+                    disabled={!canManageSchedules || selectedScheduleStatusIsWorkflowManaged}
                     label="Status do cronograma"
                     value={scheduleEditForm.status}
                     options={scheduleEditStatusOptions}
@@ -6450,7 +6456,7 @@ export function SchedulesPage() {
                   <FormInput disabled={!canManageSchedules} label="Supervisor" value={scheduleEditForm.supervisor} onChange={(value) => setScheduleEditForm({ ...scheduleEditForm, supervisor: value })} />
                   <label className="md:col-span-2">
                     <span className="mb-1.5 block text-sm font-bold text-muted">{scheduleEditRequiresReason ? "Motivo/observação obrigatória" : "Observação do cronograma"}</span>
-                    <textarea disabled={!canManageSchedules} value={scheduleEditForm.observation} onChange={(event) => setScheduleEditForm({ ...scheduleEditForm, observation: event.target.value })} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500" placeholder={scheduleEditRequiresReason ? "Obrigatório para falta, atraso, saída antecipada ou erro de cronograma" : "Opcional para este status"} />
+                    <textarea disabled={!canManageSchedules} value={scheduleEditForm.observation} onChange={(event) => setScheduleEditForm({ ...scheduleEditForm, observation: event.target.value })} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500" placeholder={scheduleEditRequiresReason ? "Obrigatório para falta ou erro de cronograma" : "Opcional para este status"} />
                   </label>
                   {scheduleEditRequiresReason && canManageSchedules ? (
                     <label className="md:col-span-2 flex items-start gap-3 rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm font-semibold text-orange-800">
@@ -6470,7 +6476,9 @@ export function SchedulesPage() {
                   ) : null}
                 </div>
                 <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
-                  {canManageSchedules ? scheduleEditForm.pendingJustification ? "A célula ficará destacada como pendente de justificativa até o Supervisor justificar." : scheduleEditRequiresTime ? "Este status exige turno, entrada e saída." : "Este status permite entrada/saída vazias." : "Supervisor visualiza o cronograma e solicita ajustes; WFM/Admin altera o planejado."}
+                  {selectedScheduleStatusIsWorkflowManaged
+                    ? "Este status veio de Solicitações/Esteira e não pode ser aplicado manualmente pelo slot."
+                    : canManageSchedules ? scheduleEditForm.pendingJustification ? "A célula ficará destacada como pendente de justificativa até o Supervisor justificar." : scheduleEditRequiresTime ? "Este status exige turno, entrada e saída." : "Este status permite entrada/saída vazias." : "Supervisor visualiza o cronograma e solicita ajustes; WFM/Admin altera o planejado."}
                 </div>
                 <div className="mt-4 rounded-xl border border-border bg-slate-50 p-4">
                   <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
@@ -6571,8 +6579,8 @@ export function SchedulesPage() {
                 </div>
                 {canManageSchedules ? (
                   <>
-                    <button disabled={savingSchedule} onClick={saveScheduleEdit} className="mt-4 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
-                      {savingSchedule ? "Salvando..." : "Salvar edição do cronograma"}
+                    <button disabled={savingSchedule || selectedScheduleStatusIsWorkflowManaged} onClick={saveScheduleEdit} className="mt-4 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
+                      {selectedScheduleStatusIsWorkflowManaged ? "Status controlado pela Esteira" : savingSchedule ? "Salvando..." : "Salvar edição do cronograma"}
                     </button>
                     <button disabled={savingSchedule} onClick={() => removeSelectedEmployeeSchedule("month")} className="mt-3 w-full rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700 disabled:opacity-60">
                       Remover cronograma do colaborador neste mês
@@ -6678,7 +6686,7 @@ export function SchedulesPage() {
               <div>
                 <h2 className="text-lg font-extrabold text-navy-950">{isScheduleSupervisor ? "Justificar ocorrência" : "Marcar presença/ocorrência"}</h2>
                 <p className="text-sm text-muted">
-                  {isScheduleSupervisor ? "Registra justificativa e AttendanceRecord sem alterar turno, entrada, saída ou marcar presença." : "Atualiza o status do cronograma, cobertura, indicadores de ABS e auditoria."}
+                  {isScheduleSupervisor ? "Registra a justificativa da ocorrência sem alterar o fluxo operacional." : "Atualiza o status do cronograma e registra auditoria."}
                 </p>
               </div>
               <button onClick={closeAttendanceModal} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
@@ -6714,27 +6722,13 @@ export function SchedulesPage() {
                     status: value,
                     absenceReason: reasonRequired ? attendanceForm.absenceReason : "",
                     supervisorJustification: reasonRequired ? attendanceForm.supervisorJustification : "",
-                    impactsAbs: ["Falta", "Falta Justificada", "Falta Injustificada"].includes(value),
-                    impactsCoverage: ["Falta", "Falta Justificada", "Falta Injustificada", "Atraso", "Saída antecipada", "Sem cronograma"].includes(value)
+                    impactsAbs: value === "Falta",
+                    impactsCoverage: value === "Falta" || value === "Sem cronograma"
                   });
                 }}
               />
               <FormSelect label={attendanceRequiresReason ? "Motivo obrigatório" : "Motivo (opcional)"} value={attendanceForm.absenceReason} options={["", ...absenceReasonOptions]} emptyLabel="Selecione um motivo" onChange={(value) => setAttendanceForm({ ...attendanceForm, absenceReason: value })} />
               <FormSelect label="Categoria" value={attendanceForm.reasonCategory} options={["Pessoas", "Sistema", "Ferramenta", "Equipamento", "Cronograma", "Treinamento", "Outros"]} onChange={(value) => setAttendanceForm({ ...attendanceForm, reasonCategory: value })} />
-              <FormInput label="Anexo/evidência (opcional)" value={attendanceForm.evidenceUrl} onChange={(value) => setAttendanceForm({ ...attendanceForm, hasEvidence: Boolean(value), evidenceUrl: value })} />
-              <div className="rounded-lg border border-border bg-slate-50 p-3">
-                <p className="mb-2 text-sm font-bold text-muted">Impactos</p>
-                <div className="flex flex-wrap gap-4 text-sm font-semibold text-navy-950">
-                  <label className="flex items-center gap-2">
-                    <input type="checkbox" disabled={Boolean(selectedAttendancePending)} checked={attendanceForm.impactsAbs} onChange={(event) => setAttendanceForm({ ...attendanceForm, impactsAbs: event.target.checked })} />
-                    Impacta ABS
-                  </label>
-                  <label className="flex items-center gap-2">
-                    <input type="checkbox" disabled={Boolean(selectedAttendancePending)} checked={attendanceForm.impactsCoverage} onChange={(event) => setAttendanceForm({ ...attendanceForm, impactsCoverage: event.target.checked })} />
-                    Impacta cobertura
-                  </label>
-                </div>
-              </div>
               <label className="md:col-span-2">
                 <span className="mb-1.5 block text-sm font-bold text-muted">{attendanceRequiresReason ? "Justificativa do supervisor obrigatória se não houver motivo" : "Justificativa do supervisor (opcional)"}</span>
                 <textarea value={attendanceForm.supervisorJustification} onChange={(event) => setAttendanceForm({ ...attendanceForm, supervisorJustification: event.target.value })} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none" />
@@ -6742,11 +6736,6 @@ export function SchedulesPage() {
             </div>
             <div className="mt-5 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
               {isScheduleSupervisor ? "Supervisor não pode marcar Presente nem alterar o cronograma planejado. A validação/correção final fica com WFM/Admin." : attendanceRequiresReason ? "Este status exige motivo ou observação antes de salvar." : "Este status não exige motivo obrigatório."}
-            </div>
-            <div className="mt-5 grid gap-3 md:grid-cols-3">
-              <MetricPill value={`${attendanceSummary?.coverageRate ?? 0}%`} label="Cobertura atual" />
-              <MetricPill value={attendanceSummary?.absent ?? 0} label="Ausências" />
-              <MetricPill value={attendanceSummary?.riskLevel ?? "Adequado"} label="Risco" />
             </div>
             <button disabled={savingJustification} onClick={saveAttendance} className="mt-5 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
               {savingJustification ? "Salvando justificativa..." : "Salvar registro"}
