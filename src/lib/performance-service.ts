@@ -662,11 +662,18 @@ function summarizeRows(rows: AgentPerformanceRow[]) {
 }
 
 function calculateQuality(records: Array<Pick<QualityRecordForMetrics, "concatKey" | "finalResult">>) {
-  const correctRows = records.filter((record) => record.finalResult === "Correct").length;
+  const totalConcatKeys = new Set<string>();
+  const correctConcatKeys = new Set<string>();
+  for (const record of records) {
+    const concatKey = record.concatKey?.trim();
+    if (!concatKey) continue;
+    totalConcatKeys.add(concatKey);
+    if (record.finalResult === "Correct") correctConcatKeys.add(concatKey);
+  }
   return {
-    qualityCorrect: correctRows,
-    qualityTotal: records.length,
-    quality: percent(correctRows, records.length)
+    qualityCorrect: correctConcatKeys.size,
+    qualityTotal: totalConcatKeys.size,
+    quality: percent(correctConcatKeys.size, totalConcatKeys.size)
   };
 }
 
