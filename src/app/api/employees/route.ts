@@ -25,6 +25,8 @@ const updateSchema = z.object({
   trainingStartDate: z.string().trim().optional(),
   nestingStartDate: z.string().trim().optional(),
   goLiveDate: z.string().trim().optional(),
+  workStartTime: z.string().trim().optional(),
+  workEndTime: z.string().trim().optional(),
   terminationDate: z.string().trim().optional(),
   terminationType: z.string().trim().optional(),
   terminationReason: z.string().trim().optional(),

@@ -31,6 +31,8 @@ export type RegistrationReviewInput = {
 	    lob: string;
 	    supervisor: string;
 	    shift: string;
+	    workStartTime: string;
+	    workEndTime: string;
 	    skill?: string;
 	    wave?: string;
 	    roleTitle: string;
@@ -85,6 +87,8 @@ export const employeeImportColumns = [
   "supervisor_email",
   "supervisor_nome",
   "turno",
+  "horario_entrada",
+  "horario_saida",
   "skill",
   "wave",
   "status_colaborador",
@@ -130,6 +134,8 @@ type EmployeeImportValidation = {
     supervisor: string;
     skill: string;
     wave: string;
+    workStartTime: string;
+    workEndTime: string;
     isPcd: string;
     pcdDisabilityType: string;
     pcdDisabilityOther: string;
@@ -569,6 +575,8 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               teamId: team.id,
               supervisorId: supervisor?.id,
               shiftId: shift.id,
+              ...(row.workStartTime ? { workStartTime: row.workStartTime } : {}),
+              ...(row.workEndTime ? { workEndTime: row.workEndTime } : {}),
               ...(row.skill ? { skill: row.skill } : {}),
               ...(row.wave ? { wave: row.wave } : {}),
               trainingStartDate,
@@ -609,6 +617,8 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               teamId: team.id,
               supervisorId: supervisor?.id,
               shiftId: shift.id,
+              workStartTime: row.workStartTime || null,
+              workEndTime: row.workEndTime || null,
               skill: row.skill || null,
               wave: row.wave || null,
               trainingStartDate,
@@ -811,6 +821,8 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
       const requiredFields: Array<[keyof NonNullable<RegistrationReviewInput["operationalData"]>, string]> = [
         ["lob", "LOB"],
         ["shift", "Turno"],
+        ["workStartTime", "Horário de entrada"],
+        ["workEndTime", "Horário de saída"],
         ["wave", "Wave"],
         ["roleTitle", "Cargo/Função"],
         ["admissionDate", "Data de admissão"],
@@ -819,6 +831,10 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
       ];
       const missing = requiredFields.filter(([field]) => !String(input.operationalData?.[field] ?? "").trim()).map(([, label]) => label);
       if (missing.length) return { error: `Preencha os campos obrigatórios da aprovação: ${missing.join(", ")}.` };
+      const invalidWorkStart = normalizeWorkTime(input.operationalData.workStartTime);
+      if (!invalidWorkStart) return { error: "Horário de entrada inválido.", fields: { workStartTime: "Horário de entrada inválido." } };
+      const invalidWorkEnd = normalizeWorkTime(input.operationalData.workEndTime);
+      if (!invalidWorkEnd) return { error: "Horário de saída inválido.", fields: { workEndTime: "Horário de saída inválido." } };
     }
 
     const result = await prisma.$transaction(async (tx) => {
@@ -838,7 +854,13 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
         return updated;
       }
 
-      const op = { ...input.operationalData!, lob: normalizeLobName(input.operationalData!.lob), shift: cleanShiftName(input.operationalData!.shift) || "Manhã" };
+      const op = {
+        ...input.operationalData!,
+        lob: normalizeLobName(input.operationalData!.lob),
+        shift: cleanShiftName(input.operationalData!.shift) || "Manhã",
+        workStartTime: normalizeWorkTime(input.operationalData!.workStartTime) ?? "",
+        workEndTime: normalizeWorkTime(input.operationalData!.workEndTime) ?? ""
+      };
       const lob = await tx.lob.upsert({
         where: { name: op.lob },
         update: op.lob === "ALL" ? { description: "Atuação transversal / staff / multi-LOB" } : {},
@@ -899,6 +921,8 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
               trainingStartDate: parseDate(op.admissionDate),
               nestingStartDate: parseDate(op.nestingStartDate),
               goLiveDate: parseDate(op.goLiveDate),
+              workStartTime: op.workStartTime,
+              workEndTime: op.workEndTime,
 	              scheduleType: internalDefaultScheduleType,
               operationalStatus: approvedEmployeeStatus,
               lobId: lob.id,
@@ -919,6 +943,8 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
               trainingStartDate: parseDate(op.admissionDate),
               nestingStartDate: parseDate(op.nestingStartDate),
               goLiveDate: parseDate(op.goLiveDate),
+              workStartTime: op.workStartTime,
+              workEndTime: op.workEndTime,
 	              scheduleType: internalDefaultScheduleType,
               operationalStatus: approvedEmployeeStatus,
               lobId: lob.id,
@@ -1142,6 +1168,8 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     if (hasImportValue(rows[index]?.data_go_live) && !row.goLiveDate) errors.push("Data de Go Live inválida.");
     if (hasImportValue(rows[index]?.data_desligamento) && !row.terminationDate) errors.push("Data de desligamento inválida.");
     if (hasImportValue(rows[index]?.tipo_desligamento) && !row.terminationType) errors.push("Tipo de desligamento inválido. Use Voluntário ou Involuntário.");
+    if (hasImportValue(rows[index]?.horario_entrada ?? rows[index]?.entrada) && !row.workStartTime) errors.push("Horário de entrada inválido.");
+    if (hasImportValue(rows[index]?.horario_saida ?? rows[index]?.saida) && !row.workEndTime) errors.push("Horário de saída inválido.");
     if (isAttritionStatus(row.employeeStatus) && !row.terminationDate) warnings.push("Status de desligamento/inatividade sem data_desligamento. Para attrition, informe a data de desligamento.");
     if (row.terminationDate && !isAttritionStatus(row.employeeStatus)) warnings.push("Data de desligamento preenchida, mas status_colaborador não está Inativo ou Desligado.");
     if (isAttritionStatus(row.employeeStatus)) warnings.push("Acesso vinculado será inativado e o histórico será preservado.");
@@ -1164,6 +1192,11 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
       warnings.push("WB/Login existente: o colaborador será atualizado.");
       if (row.skill && row.skill !== (activeByWb.skill ?? "")) warnings.push(`Skill será atualizada de ${activeByWb.skill || "vazio"} para ${row.skill}.`);
       if (row.wave && row.wave !== (activeByWb.wave ?? "")) warnings.push(`Wave será atualizada de ${activeByWb.wave || "vazio"} para ${row.wave}.`);
+      if (row.workStartTime && row.workStartTime !== (activeByWb.workStartTime ?? "")) warnings.push(`Horário de entrada será atualizado de ${activeByWb.workStartTime || "vazio"} para ${row.workStartTime}.`);
+      if (row.workEndTime && row.workEndTime !== (activeByWb.workEndTime ?? "")) warnings.push(`Horário de saída será atualizado de ${activeByWb.workEndTime || "vazio"} para ${row.workEndTime}.`);
+    } else {
+      if (!row.workStartTime) errors.push("Horário de entrada é obrigatório.");
+      if (!row.workEndTime) errors.push("Horário de saída é obrigatório.");
     }
     const activeByCpf = row.cpf ? activeEmployeeByCpfMap.get(row.cpf) ?? null : null;
     if (activeByCpf && activeByCpf.id !== activeByWb?.id) errors.push("Já existe colaborador ativo com este CPF.");
@@ -1197,6 +1230,8 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
         supervisor: supervisor.employee?.fullName ?? row.supervisorWbLogin ?? row.supervisorEmail ?? row.supervisorName,
         skill: row.skill,
         wave: row.wave,
+        workStartTime: row.workStartTime ?? "",
+        workEndTime: row.workEndTime ?? "",
         isPcd: row.isPcd,
         pcdDisabilityType: row.pcdDisabilityType,
         pcdDisabilityOther: row.pcdDisabilityOther,
@@ -1260,6 +1295,8 @@ function normalizeEmployeeImportRow(raw: EmployeeImportRow) {
     supervisorEmail: (text(raw.supervisor_email) || text(raw.gestor_email) || text(raw.manager_email) || text(raw.superior_email) || text(raw.superior_hierarquico_email)).toLowerCase(),
     supervisorName: text(raw.supervisor_nome) || text(raw.gestor_nome) || text(raw.manager_name) || text(raw.superior_nome) || text(raw.superior_hierarquico_nome),
     shift: normalizeShiftName(raw.turno),
+    workStartTime: normalizeWorkTime(raw.horario_entrada ?? raw.entrada),
+    workEndTime: normalizeWorkTime(raw.horario_saida ?? raw.saida),
     skill: text(raw.skill),
     wave: text(raw.wave),
 	    scheduleType: internalDefaultScheduleType,
@@ -1454,6 +1491,17 @@ function parseImportDate(value: unknown) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+function normalizeWorkTime(value: unknown) {
+  if (!hasImportValue(value)) return "";
+  const raw = text(value);
+  const match = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!match) return "";
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return "";
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
 function isCpfFormat(value: string) {
   const digits = value.replace(/\D/g, "");
   return digits.length === 11;
@@ -1566,7 +1614,7 @@ async function findEmployeeProfilesByWbLoginBatch(normalizedWbLogins: string[]) 
           deletedAt: null,
           OR: chunk.map((wbLogin) => ({ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }))
         },
-        select: { id: true, userId: true, wbLogin: true, fullName: true, skill: true, wave: true, supervisorId: true, operationalStatus: true, user: { select: { role: { select: { name: true } } } } }
+        select: { id: true, userId: true, wbLogin: true, fullName: true, skill: true, wave: true, workStartTime: true, workEndTime: true, supervisorId: true, operationalStatus: true, user: { select: { role: { select: { name: true } } } } }
       })
     )
   );

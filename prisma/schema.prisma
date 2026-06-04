@@ -376,6 +376,8 @@ model EmployeeProfile {
   telemarketingWhere String?
   nestingStartDate   DateTime?
   goLiveDate         DateTime?
+  workStartTime      String?
+  workEndTime        String?
   scheduleType       String
   contractType       String?
   siteOperation      String?

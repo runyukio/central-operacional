@@ -42,6 +42,8 @@ export type EmployeeAdminUpdateInput = {
   trainingStartDate?: string;
   nestingStartDate?: string;
   goLiveDate?: string;
+  workStartTime?: string;
+  workEndTime?: string;
   terminationDate?: string;
   terminationType?: string;
   terminationReason?: string;
@@ -278,6 +280,8 @@ type LegacyEmployeeRow = {
   terminationDate: Date | null;
   terminationType: string | null;
   terminationReason: string | null;
+  workStartTime: string | null;
+  workEndTime: string | null;
   scheduleType: string;
   operationalStatus: string;
   skill: string | null;
@@ -305,6 +309,8 @@ type EmployeeSummaryRow = {
   terminationDate: Date | null;
   terminationType: string | null;
   terminationReason: string | null;
+  workStartTime: string | null;
+  workEndTime: string | null;
   scheduleType: string;
   operationalStatus: string;
   skill: string | null;
@@ -331,6 +337,8 @@ const employeeSummarySelect = {
   terminationDate: true,
   terminationType: true,
   terminationReason: true,
+  workStartTime: true,
+  workEndTime: true,
   scheduleType: true,
   operationalStatus: true,
   skill: true,
@@ -376,6 +384,8 @@ async function listOperationalEmployeesLegacy(actor: Actor) {
       NULL::timestamp AS "terminationDate",
       NULL::text AS "terminationType",
       NULL::text AS "terminationReason",
+      NULL::text AS "workStartTime",
+      NULL::text AS "workEndTime",
       e."scheduleType",
       e."operationalStatus",
       e."skill",
@@ -435,7 +445,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     const adminOnlyFields: Array<keyof EmployeeAdminUpdateInput> = ["wbLogin", "roleName", "userStatus"];
     const sensitivePeopleFields: Array<keyof EmployeeAdminUpdateInput> = ["fullName", "socialName", "email", "primaryPhone", "city", "stateUf", "preferredSchedule", "contractType", "admissionDate", "trainingStartDate", "terminationDate", "terminationType", "terminationReason", "ethnicity", "sexualOrientation", "isPcd", "pcdDisabilityType", "pcdDisabilityOther", "firstJob", "hasTelemarketingExperience", "telemarketingWhere"];
     const operationalBindingFields: Array<keyof EmployeeAdminUpdateInput> = ["lobId", "supervisorId", "shiftId", "siteOperation"];
-    const profileOperationalFields: Array<keyof EmployeeAdminUpdateInput> = ["roleTitle", "operationalStatus", "internalNotes", "skill", "wave", "nestingStartDate", "goLiveDate"];
+    const profileOperationalFields: Array<keyof EmployeeAdminUpdateInput> = ["roleTitle", "operationalStatus", "internalNotes", "skill", "wave", "nestingStartDate", "goLiveDate", "workStartTime", "workEndTime"];
     if (!actorIsAdmin && adminOnlyFields.some((field) => input[field] !== undefined)) return createPermissionError("Apenas Admin pode alterar WB/Login, role ou status de acesso.");
     if (!canEditPeopleData && sensitivePeopleFields.some((field) => input[field] !== undefined)) return createPermissionError("Você não tem permissão para editar dados cadastrais/contratuais.");
     if (!canEditOperational && operationalBindingFields.some((field) => input[field] !== undefined)) return createPermissionError("Você não tem permissão para editar vínculos operacionais.");
@@ -463,6 +473,10 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     if ("error" in nextNestingStartDate) return createValidationError({ nestingStartDate: nextNestingStartDate.error });
     const nextGoLiveDate = parseDateInput(input.goLiveDate, "Data de Go Live inválida.");
     if ("error" in nextGoLiveDate) return createValidationError({ goLiveDate: nextGoLiveDate.error });
+    const nextWorkStartTime = normalizeWorkTimeInput(input.workStartTime, "Horário de entrada inválido.");
+    if ("error" in nextWorkStartTime) return createValidationError({ workStartTime: nextWorkStartTime.error });
+    const nextWorkEndTime = normalizeWorkTimeInput(input.workEndTime, "Horário de saída inválido.");
+    if ("error" in nextWorkEndTime) return createValidationError({ workEndTime: nextWorkEndTime.error });
     const nextTerminationDate = parseDateInput(input.terminationDate, "Data de desligamento inválida.");
     if ("error" in nextTerminationDate) return createValidationError({ terminationDate: nextTerminationDate.error });
     const nextTerminationType = normalizeTerminationType(input.terminationType);
@@ -578,6 +592,8 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
           ...(input.trainingStartDate !== undefined ? { trainingStartDate: nextTrainingDate.value ?? null } : {}),
           ...(input.nestingStartDate !== undefined ? { nestingStartDate: nextNestingStartDate.value ?? null } : {}),
           ...(input.goLiveDate !== undefined ? { goLiveDate: nextGoLiveDate.value ?? null } : {}),
+          ...(input.workStartTime !== undefined ? { workStartTime: nextWorkStartTime.value ?? null } : {}),
+          ...(input.workEndTime !== undefined ? { workEndTime: nextWorkEndTime.value ?? null } : {}),
           ...(input.terminationDate !== undefined ? { terminationDate: nextTerminationDate.value ?? null } : {}),
           ...(input.terminationType !== undefined ? { terminationType: nextTerminationType ?? null } : {}),
           ...(input.terminationReason !== undefined ? { terminationReason: nextTerminationReason } : {}),
@@ -888,6 +904,8 @@ function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: 
     nestingStartDateIso: employee.nestingStartDate ? toDateInput(employee.nestingStartDate) : "",
     goLiveDate: employee.goLiveDate ? formatDate(employee.goLiveDate) : "",
     goLiveDateIso: employee.goLiveDate ? toDateInput(employee.goLiveDate) : "",
+    workStartTime: employee.workStartTime ?? "",
+    workEndTime: employee.workEndTime ?? "",
     contractType: canViewPeopleProfile ? employee.contractType ?? "" : "",
     ethnicity: canViewDiversityData ? employee.ethnicity ?? "" : "",
     sexualOrientation: canViewDiversityData ? employee.sexualOrientation ?? "" : "",
@@ -984,6 +1002,8 @@ function mapLegacyEmployee(employee: LegacyEmployeeRow, role: string) {
     nestingStartDateIso: "",
     goLiveDate: "",
     goLiveDateIso: "",
+    workStartTime: "",
+    workEndTime: "",
     contractType: "",
     ethnicity: "",
     sexualOrientation: "",
@@ -1062,6 +1082,8 @@ function mapEmployeeSummary(employee: EmployeeSummaryRow, role: string) {
     nestingStartDateIso: "",
     goLiveDate: "",
     goLiveDateIso: "",
+    workStartTime: employee.workStartTime ?? "",
+    workEndTime: employee.workEndTime ?? "",
     contractType: "",
     ethnicity: "",
     sexualOrientation: "",
@@ -1115,6 +1137,8 @@ function employeeExportColumns(role: string) {
     col("skill", (employee) => employee.skill),
     col("wave", (employee) => employee.wave),
     col("turno", (employee) => employee.shift),
+    col("horario_entrada", (employee) => employee.workStartTime),
+    col("horario_saida", (employee) => employee.workEndTime),
     col("status_colaborador", (employee) => employee.employeeStatus),
     col("status_usuario", (employee) => employee.userStatus),
     col("data_desligamento", (employee) => employee.terminationDate),
@@ -1441,7 +1465,7 @@ function normalizeTerminationType(value: unknown) {
 
 function isMissingEmployeeProfileColumnError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error ?? "");
-  return /EmployeeProfile\.(socialName|primaryPhone|city|stateUf|preferredSchedule|trainingStartDate|terminationDate|terminationType|terminationReason|contractType|siteOperation|internalNotes|skill|wave)|column .* does not exist/i.test(message);
+  return /EmployeeProfile\.(socialName|primaryPhone|city|stateUf|preferredSchedule|trainingStartDate|terminationDate|terminationType|terminationReason|workStartTime|workEndTime|contractType|siteOperation|internalNotes|skill|wave)|column .* does not exist/i.test(message);
 }
 
 function formatDate(date: Date) {
@@ -1487,6 +1511,18 @@ function parseDateInput(value: unknown, error: string): { value?: Date | null } 
   return { value: date };
 }
 
+function normalizeWorkTimeInput(value: unknown, error: string): { value?: string | null } | { error: string } {
+  if (value === undefined) return { value: undefined };
+  const raw = clean(value);
+  if (!raw) return { value: null };
+  const match = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!match) return { error };
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return { error };
+  return { value: `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}` };
+}
+
 function serializeEmployeeForAudit(employee: EmployeeWithRelations) {
   return {
     fullName: employee.fullName,
@@ -1503,6 +1539,8 @@ function serializeEmployeeForAudit(employee: EmployeeWithRelations) {
     skill: employee.skill,
     wave: employee.wave,
     shiftId: employee.shiftId,
+    workStartTime: employee.workStartTime,
+    workEndTime: employee.workEndTime,
     scheduleType: employee.scheduleType,
     contractType: employee.contractType,
     admissionDate: employee.admissionDate,

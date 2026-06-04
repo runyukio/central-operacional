@@ -619,6 +619,8 @@ type EmployeeImportPreview = {
       supervisor: string;
       skill: string;
       wave: string;
+      workStartTime?: string;
+      workEndTime?: string;
       isPcd?: string;
       pcdDisabilityType?: string;
       pcdDisabilityOther?: string;
@@ -821,6 +823,8 @@ type EmployeeClient = (typeof employees)[number] & {
   nestingStartDateIso?: string;
   goLiveDate?: string;
   goLiveDateIso?: string;
+  workStartTime?: string;
+  workEndTime?: string;
   contractType?: string;
   ethnicity?: string;
   sexualOrientation?: string;
@@ -4060,6 +4064,17 @@ function normalizeEmployeeImportSheetRow(row: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(row).map(([key, value]) => [normalizeExcelKey(key), value]));
 }
 
+function normalizeClockTime(value: string) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const match = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!match) return "";
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return "";
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
 export function RegistrationApprovalsPage() {
   const employeeImportInputRef = useRef<HTMLInputElement | null>(null);
   const [items, setItems] = useState<RegistrationItem[]>([]);
@@ -4081,11 +4096,14 @@ export function RegistrationApprovalsPage() {
   const [reviewingAction, setReviewingAction] = useState<"approve" | "reject" | "request_adjustment" | null>(null);
   const [deletingRegistration, setDeletingRegistration] = useState(false);
   const [reviewNotes, setReviewNotes] = useState("Dados conferidos. Aprovação liberada para ativação.");
+  const [reviewFieldErrors, setReviewFieldErrors] = useState<Record<string, string>>({});
 	  const [operational, setOperational] = useState({
 	    wbLogin: "",
 	    lob: "CEC",
 	    supervisor: "",
 	    shift: "Manhã",
+	    workStartTime: "",
+	    workEndTime: "",
 	    skill: "",
 	    wave: "",
 	    roleTitle: "Agente",
@@ -4113,6 +4131,8 @@ export function RegistrationApprovalsPage() {
 	      lob: op.lob ?? "CEC",
 	      supervisor: op.supervisor ?? "",
 	      shift: op.shift ?? "Manhã",
+	      workStartTime: op.workStartTime ?? "",
+	      workEndTime: op.workEndTime ?? "",
 	      skill: op.skill ?? "",
 	      wave: op.wave ?? "",
 	      roleTitle: op.roleTitle ?? "Agente",
@@ -4123,6 +4143,7 @@ export function RegistrationApprovalsPage() {
       goLiveDate: op.goLiveDate ?? currentOperationalDateInput(),
       internalNotes: op.internalNotes ?? "Complementado por RH/Admin/WFM."
     });
+    setReviewFieldErrors({});
   }, [selected]);
 
   async function refreshRegistrations(nextPage = registrationPagination.page, nextLimit = registrationPagination.limit, nextFilters = registrationFilters) {
@@ -4237,6 +4258,7 @@ export function RegistrationApprovalsPage() {
 
   async function review(action: "approve" | "reject" | "request_adjustment") {
     if (!selected) return;
+    setReviewFieldErrors({});
     if ((action === "reject" || action === "request_adjustment") && !reviewNotes.trim()) {
       setMessageTone("error");
       setMessage(action === "reject" ? "Informe o motivo da recusa." : "Informe o comentário do ajuste solicitado.");
@@ -4248,21 +4270,37 @@ export function RegistrationApprovalsPage() {
       return;
     }
     if (action === "approve") {
-      const missing = [
-	        ["WB/Login", operational.wbLogin],
-	        ["LOB", operational.lob],
-	        ["Turno", operational.shift],
-	        ["Cargo/Função", operational.roleTitle],
-        ["Status", operational.employeeStatus],
-        ["Admissão", operational.admissionDate],
-        ["Início de Nesting", operational.nestingStartDate],
-        ["Go Live", operational.goLiveDate]
-      ].filter(([, value]) => !String(value).trim()).map(([label]) => label);
+      const fieldLabels: Record<string, string> = {
+        wbLogin: "WB/Login",
+        lob: "LOB",
+        shift: "Turno",
+        workStartTime: "Horário de entrada",
+        workEndTime: "Horário de saída",
+        roleTitle: "Cargo/Função",
+        employeeStatus: "Status",
+        admissionDate: "Admissão",
+        nestingStartDate: "Início de Nesting",
+        goLiveDate: "Go Live"
+      };
+      const requiredKeys = Object.keys(fieldLabels) as Array<keyof typeof operational>;
+      const nextErrors: Record<string, string> = {};
+      requiredKeys.forEach((key) => {
+        if (!String(operational[key] ?? "").trim()) nextErrors[key] = `${fieldLabels[key]} é obrigatório.`;
+      });
+      if (operational.workStartTime && !normalizeClockTime(operational.workStartTime)) nextErrors.workStartTime = "Horário de entrada inválido.";
+      if (operational.workEndTime && !normalizeClockTime(operational.workEndTime)) nextErrors.workEndTime = "Horário de saída inválido.";
+      const missing = Object.entries(nextErrors).map(([key]) => fieldLabels[key] ?? key);
       if (missing.length) {
+        setReviewFieldErrors(nextErrors);
         setMessageTone("error");
         setMessage(`Preencha os dados operacionais obrigatórios antes de aprovar: ${missing.join(", ")}.`);
         return;
       }
+      setOperational((current) => ({
+        ...current,
+        workStartTime: normalizeClockTime(current.workStartTime),
+        workEndTime: normalizeClockTime(current.workEndTime)
+      }));
     }
 
     setReviewingAction(action);
@@ -4283,6 +4321,7 @@ export function RegistrationApprovalsPage() {
       setMessage(action === "approve" ? "Cadastro aprovado, usuário liberado e Mapa de Funcionários atualizado." : action === "reject" ? "Cadastro recusado com justificativa registrada." : "Ajuste solicitado ao colaborador.");
     } catch (err) {
       setMessageTone("error");
+      if (err instanceof ApiRequestError) setReviewFieldErrors(err.fields ?? {});
       setMessage(err instanceof ApiRequestError ? err.message : err instanceof Error ? err.message : "Não foi possível revisar o cadastro.");
     } finally {
       setReviewingAction(null);
@@ -4459,6 +4498,8 @@ export function RegistrationApprovalsPage() {
 	                  ["LOB", "lob"],
 	                  ["Supervisor", "supervisor"],
 	                  ["Turno", "shift"],
+	                  ["Horário de entrada", "workStartTime"],
+	                  ["Horário de saída", "workEndTime"],
 	                  ["Skill", "skill"],
 	                  ["Wave", "wave"],
 	                  ["Cargo/Função", "roleTitle"],
@@ -4471,14 +4512,15 @@ export function RegistrationApprovalsPage() {
                   <label key={key} className="block">
                     <span className="mb-1 block text-xs font-bold text-muted">{label}</span>
                     {key === "lob" || key === "shift" || key === "roleTitle" || key === "employeeStatus" ? (
-                      <select value={operational[key as keyof typeof operational]} onChange={(event) => setOperational({ ...operational, [key]: event.target.value })} className="h-10 w-full rounded-lg border border-border px-3 text-sm outline-none">
+                      <select value={operational[key as keyof typeof operational]} onChange={(event) => setOperational({ ...operational, [key]: event.target.value })} className={cn("h-10 w-full rounded-lg border px-3 text-sm outline-none", reviewFieldErrors[key] || reviewFieldErrors[`operationalData.${key}`] ? "border-red-300 bg-red-50/40" : "border-border")}>
                         {(key === "lob" ? registrationLobOptions : key === "shift" ? registrationShiftOptions : key === "roleTitle" ? registrationRoleTitleOptions : employeeOperationalStatusOptions).map((option) => (
                           <option key={option} value={option}>{option}</option>
                         ))}
                       </select>
                     ) : (
-                      <input value={operational[key as keyof typeof operational]} onChange={(event) => setOperational({ ...operational, [key]: event.target.value })} className="h-10 w-full rounded-lg border border-border px-3 text-sm outline-none" />
+                      <input value={operational[key as keyof typeof operational]} onChange={(event) => setOperational({ ...operational, [key]: event.target.value })} className={cn("h-10 w-full rounded-lg border px-3 text-sm outline-none", reviewFieldErrors[key] || reviewFieldErrors[`operationalData.${key}`] ? "border-red-300 bg-red-50/40" : "border-border")} placeholder={key === "workStartTime" || key === "workEndTime" ? "HH:mm" : undefined} />
                     )}
+                    {reviewFieldErrors[key] || reviewFieldErrors[`operationalData.${key}`] ? <span className="mt-1 block text-xs font-bold text-red-600">{reviewFieldErrors[key] ?? reviewFieldErrors[`operationalData.${key}`]}</span> : null}
                   </label>
                 ))}
               </div>
@@ -4554,7 +4596,7 @@ export function RegistrationApprovalsPage() {
               ) : null}
                 <div className="max-h-[52vh] overflow-y-auto pr-1">
                   <SimpleTable
-                    columns={["Linha", "Nome", "WB/Login", "E-mail", "Status", "Ação", "CPF", "Role", "LOB", "Supervisor", "Skill", "Wave", "PCD", "Tipo deficiência", "Usuário", "Validação"]}
+                    columns={["Linha", "Nome", "WB/Login", "E-mail", "Status", "Ação", "CPF", "Role", "LOB", "Supervisor", "Entrada", "Saída", "Skill", "Wave", "PCD", "Tipo deficiência", "Usuário", "Validação"]}
                     rows={employeeImportPreview.rows.slice(0, IMPORT_PREVIEW_ROW_LIMIT).map((row) => [
                       row.rowNumber,
                       row.preview.name || "-",
@@ -4566,6 +4608,8 @@ export function RegistrationApprovalsPage() {
                       row.preview.role || "-",
                       row.preview.lob || "-",
                       row.preview.supervisor || "Sem supervisor",
+                      row.preview.workStartTime || "-",
+                      row.preview.workEndTime || "-",
                       row.preview.skill || "-",
                       row.preview.wave || "-",
                       row.preview.isPcd || "-",
@@ -8441,6 +8485,8 @@ export function EmployeeMapPage() {
   const [supervisorDraft, setSupervisorDraft] = useState("");
   const [lobDraft, setLobDraft] = useState("");
   const [shiftDraft, setShiftDraft] = useState("");
+  const [workStartTimeDraft, setWorkStartTimeDraft] = useState("");
+  const [workEndTimeDraft, setWorkEndTimeDraft] = useState("");
   const [contractDraft, setContractDraft] = useState("");
   const [admissionDraft, setAdmissionDraft] = useState("");
   const [nestingStartDraft, setNestingStartDraft] = useState("");
@@ -8576,6 +8622,8 @@ export function EmployeeMapPage() {
     setSupervisorDraft(selected.supervisorId ?? "");
     setLobDraft(selected.lobId ?? "");
 	    setShiftDraft(selected.shiftId ?? "");
+    setWorkStartTimeDraft(selected.workStartTime ?? "");
+    setWorkEndTimeDraft(selected.workEndTime ?? "");
     setContractDraft(selected.contractType ?? "");
     setAdmissionDraft(selected.admissionIso ?? "");
     setNestingStartDraft(selected.nestingStartDateIso ?? "");
@@ -8620,8 +8668,10 @@ export function EmployeeMapPage() {
           skill: selectedCanEditEmployeeOperational ? skillDraft : undefined,
           wave: selectedCanEditEmployeeOperational ? waveDraft : undefined,
           supervisorId: canEditOperationalBindings ? supervisorDraft : undefined,
-          lobId: canEditOperationalBindings ? lobDraft || undefined : undefined,
+	          lobId: canEditOperationalBindings ? lobDraft || undefined : undefined,
 	          shiftId: canEditOperationalBindings ? shiftDraft || undefined : undefined,
+          workStartTime: selectedCanEditEmployeeOperational ? workStartTimeDraft : undefined,
+          workEndTime: selectedCanEditEmployeeOperational ? workEndTimeDraft : undefined,
           contractType: selectedCanEditPeopleData ? contractDraft : undefined,
           admissionDate: selectedCanEditPeopleData ? admissionDraft : undefined,
           nestingStartDate: selectedCanEditEmployeeOperational ? nestingStartDraft : undefined,
@@ -8810,6 +8860,8 @@ export function EmployeeMapPage() {
                 <InfoLine label="Skill" value={selected.skill || "Sem skill"} />
                 <InfoLine label="Wave" value={selected.wave || "Sem wave"} />
                 <InfoLine label="Turno" value={cleanShiftName(selected.shift) || "-"} />
+                <InfoLine label="Horário de entrada" value={selected.workStartTime || "Não informado"} />
+                <InfoLine label="Horário de saída" value={selected.workEndTime || "Não informado"} />
                 <InfoLine label="Admissão" value={selected.admission} />
                 <InfoLine label="Início de Nesting" value={selected.nestingStartDate || "Não informado"} />
                 <InfoLine label="Go Live" value={selected.goLiveDate || "Não informado"} />
@@ -8824,6 +8876,8 @@ export function EmployeeMapPage() {
                   <InfoLine label="LOB" value={selected.lob} />
                   <InfoLine label="Skill" value={selected.skill || "Sem skill"} />
                   <InfoLine label="Wave" value={selected.wave || "Sem wave"} />
+                  <InfoLine label="Horário de entrada" value={selected.workStartTime || "Não informado"} />
+                  <InfoLine label="Horário de saída" value={selected.workEndTime || "Não informado"} />
                   <InfoLine label="Status do colaborador" value={<StatusBadge status={employeeMapStatusLabel(selected.status)} />} />
                   <InfoLine label="Supervisor vinculado" value={selected.supervisor} />
                   <InfoLine label="Subordinados diretos" value={selected.directReports ?? 0} />
@@ -8906,6 +8960,8 @@ export function EmployeeMapPage() {
                                 {employeeFieldErrors.shiftId ? <span className="mt-1 block text-xs font-bold text-red-600">{employeeFieldErrors.shiftId}</span> : null}
                               </label>
                             ) : null}
+                            <FormInput label="Horário de entrada" value={workStartTimeDraft} onChange={setWorkStartTimeDraft} error={employeeFieldErrors.workStartTime} />
+                            <FormInput label="Horário de saída" value={workEndTimeDraft} onChange={setWorkEndTimeDraft} error={employeeFieldErrors.workEndTime} />
                             <FormSelect label="Status do colaborador" value={statusDraft} options={operationalStatusOptions} onChange={setStatusDraft} error={employeeFieldErrors.operationalStatus} />
                           </div>
                         </ProfileSection>

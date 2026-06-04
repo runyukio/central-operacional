@@ -9,6 +9,8 @@ const operationalSchema = z.object({
 	  lob: z.string().min(1),
 	  supervisor: z.string().optional().default(""),
 	  shift: z.string().min(1),
+	  workStartTime: z.string().min(1, "Horário de entrada é obrigatório."),
+	  workEndTime: z.string().min(1, "Horário de saída é obrigatório."),
 	  skill: z.string().optional().default(""),
 	  wave: z.string().optional().default(""),
 	  roleTitle: z.string().min(1),
