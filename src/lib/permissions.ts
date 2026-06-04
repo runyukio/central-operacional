@@ -119,7 +119,7 @@ export function canSubmitAnonymousFeedback(user: PermissionUser) {
 export function canViewAnonymousFeedbackAdmin(user: PermissionUser) {
   const role = normalizeRole(user.role);
   if (!isActiveUser(user)) return false;
-  if (["ADMIN", "GESTOR"].includes(role)) return true;
+  if (["ADMIN", "GESTOR", "RH"].includes(role)) return true;
   return isAnonymousFeedbackLeadershipTitle(user.roleTitle ?? user.jobTitle);
 }
 
