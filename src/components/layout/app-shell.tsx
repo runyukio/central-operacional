@@ -91,6 +91,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
   const [notifications, setNotifications] = useState<HeaderNotification[]>([]);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const unreadNotifications = notifications.filter((notification) => !notification.isRead).length;
 
   useEffect(() => {
@@ -106,6 +107,30 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
       return next;
     });
   }
+
+  function closeMobileMenu() {
+    setMobileMenuOpen(false);
+  }
+
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!mobileMenuOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setMobileMenuOpen(false);
+    }
+
+    window.addEventListener("keydown", handleEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [mobileMenuOpen]);
 
   useEffect(() => {
     fetch("/api/notifications", { cache: "no-store" })
@@ -207,10 +232,98 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
         </div> : null}
       </aside>
 
+      <div
+        className={cn("fixed inset-0 z-[70] lg:hidden", mobileMenuOpen ? "pointer-events-auto" : "pointer-events-none")}
+        aria-hidden={!mobileMenuOpen}
+      >
+        <button
+          type="button"
+          aria-label="Fechar menu lateral"
+          onClick={closeMobileMenu}
+          className={cn(
+            "absolute inset-0 bg-navy-950/55 opacity-0 backdrop-blur-[2px] transition-opacity duration-200",
+            mobileMenuOpen && "opacity-100"
+          )}
+        />
+        <aside
+          id="mobile-sidebar"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Menu lateral"
+          className={cn(
+            "navy-gradient fixed inset-y-0 left-0 z-[80] flex h-[100dvh] w-[284px] max-w-[86vw] flex-col border-r border-white/10 text-white shadow-2xl transition-transform duration-200",
+            mobileMenuOpen ? "translate-x-0" : "-translate-x-full"
+          )}
+        >
+          <div className="flex h-16 items-center justify-between gap-3 border-b border-white/10 px-4">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <div className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 shadow-lg shadow-blue-950/40 ring-1 ring-white/20">
+                <Sparkles className="h-[18px] w-[18px]" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[15px] font-black leading-tight tracking-tight">Central</p>
+                <p className="text-[15px] font-black leading-tight tracking-tight">Operacional</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={closeMobileMenu}
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-blue-100/85 transition hover:bg-white/10 hover:text-white"
+              aria-label="Fechar menu lateral"
+            >
+              ×
+            </button>
+          </div>
+
+          <nav className="sidebar-scroll flex-1 space-y-1 overflow-y-auto px-2.5 py-3">
+            {navItems.map((item) => {
+              const Icon = icons[item.icon as keyof typeof icons] ?? LayoutDashboard;
+              const active = pathname === item.href || (item.href !== "/central-operacional" && pathname.startsWith(item.href));
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  onClick={closeMobileMenu}
+                  aria-label={item.label}
+                  className={cn(
+                    "relative flex min-w-0 items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-bold text-blue-50/88 transition",
+                    active
+                      ? "bg-gradient-to-r from-blue-600 to-blue-500 text-white shadow-lg shadow-blue-950/35 ring-1 ring-white/10"
+                      : "hover:bg-white/9 hover:text-white"
+                  )}
+                >
+                  {active ? <span className="absolute -left-2.5 top-1/2 h-7 w-1 -translate-y-1/2 rounded-r-full bg-blue-300" /> : null}
+                  <Icon className={cn("h-4 w-4 shrink-0", active ? "text-white" : "text-blue-100/88")} />
+                  <span className="min-w-0 truncate">{item.label}</span>
+                </Link>
+              );
+            })}
+          </nav>
+
+          {isCollaborator ? (
+            <div className="border-t border-white/10 p-3">
+              <div className="rounded-xl border border-white/10 bg-white/8 p-3 shadow-lg shadow-navy-950/20">
+                <p className="text-[12.5px] font-semibold">Precisa de ajuda?</p>
+                <p className="mt-1 text-[11.5px] leading-4 text-blue-100/75">
+                  Fale com o RH ou supervisor.
+                </p>
+              </div>
+            </div>
+          ) : null}
+        </aside>
+      </div>
+
       <main className="min-h-screen min-w-0 flex-1">
         <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border/80 bg-white/94 px-4 shadow-[0_8px_24px_rgba(7,27,58,0.035)] backdrop-blur-xl md:px-5">
           <div className="flex min-w-0 flex-1 items-center gap-2.5">
-            <button className="premium-control grid h-9 w-9 place-items-center text-navy-900 lg:hidden">
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen(true)}
+              className="premium-control grid h-9 w-9 place-items-center text-navy-900 lg:hidden"
+              aria-label="Abrir menu lateral"
+              aria-controls="mobile-sidebar"
+              aria-expanded={mobileMenuOpen}
+            >
               <Menu className="h-5 w-5" />
             </button>
             <div className="premium-control hidden h-9 w-full max-w-[420px] items-center gap-2.5 px-3 text-muted md:flex">

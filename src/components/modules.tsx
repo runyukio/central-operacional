@@ -2415,14 +2415,12 @@ export function OperationalCommandCenter() {
     .filter(([, count]) => count > 0)
     .map(([label, count]) => [
       label,
-      count,
-      commandMood.responses ? `${Number(((count / commandMood.responses) * 100).toFixed(1))}%` : "0%"
+      count
     ]);
   const moodGroupRows = (records: Array<{ label: string; responses: number; average: number; interpretation: string }>) => records.map((record) => [
     record.label,
     record.responses,
-    `${record.average} / 5`,
-    record.interpretation
+    `${record.average} / 5`
   ]);
 
   return (
@@ -3005,40 +3003,53 @@ export function OperationalCommandCenter() {
       ) : null}
 
       {showMoodDetail ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
-          <div className="card max-h-[90vh] w-full max-w-5xl overflow-y-auto p-5">
-            <div className="mb-5 flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-lg font-extrabold text-navy-950">Medidor de Humor</h2>
-                <p className="text-sm font-semibold text-muted">
-                  {dateRange.startDate} até {dateRange.endDate} • consolidado operacional
-                </p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy-950/40 p-2 backdrop-blur-sm sm:p-4">
+          <div className="card flex max-h-[94vh] w-[96vw] max-w-[1460px] flex-col overflow-hidden sm:max-h-[92vh]">
+            <div className="flex shrink-0 items-start justify-between gap-4 border-b border-border bg-gradient-to-b from-white to-slate-50/80 px-4 py-3.5 sm:px-5">
+              <div className="flex min-w-0 gap-3">
+                <span className="mt-0.5 grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-violet-50 text-violet-600 ring-1 ring-violet-100">
+                  <HeartPulse className="h-5 w-5" />
+                </span>
+                <div className="min-w-0">
+                  <h2 className="text-lg font-extrabold leading-tight text-navy-950">Medidor de Humor</h2>
+                  <p className="text-sm font-semibold text-muted">{dateRange.startDate} até {dateRange.endDate}</p>
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-400">Consolidado operacional</p>
+                </div>
               </div>
-              <button onClick={() => setShowMoodDetail(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+              <button
+                type="button"
+                onClick={() => setShowMoodDetail(false)}
+                className="grid h-9 w-9 shrink-0 place-items-center rounded-lg hover:bg-slate-100"
+                aria-label="Fechar Medidor de Humor"
+              >
+                ×
+              </button>
             </div>
-            <div className="mb-5 grid gap-3 md:grid-cols-3">
-              <MetricPill value={commandMood.responses ? `${commandMood.average} / 5` : "Sem dados"} label="Média de humor" />
-              <MetricPill value={commandMood.responses} label="Respostas" />
-              <MetricPill value={commandMood.interpretation} label="Classificação" />
-            </div>
-            {commandMood.responses ? (
-              <div className="grid gap-5 lg:grid-cols-2">
-                <Panel title="Distribuição">
-                  <SimpleTable columns={["Humor", "Respostas", "%"]} rows={moodDistributionRows} />
-                </Panel>
-                <Panel title="Por LOB">
-                  <SimpleTable columns={["LOB", "Respostas", "Média", "Classificação"]} rows={moodGroupRows(commandMood.byLob)} />
-                </Panel>
-                <Panel title="Por Supervisor">
-                  <SimpleTable columns={["Supervisor", "Respostas", "Média", "Classificação"]} rows={moodGroupRows(commandMood.bySupervisor)} />
-                </Panel>
-                <Panel title="Por Cargo/Função">
-                  <SimpleTable columns={["Cargo/Função", "Respostas", "Média", "Classificação"]} rows={moodGroupRows(commandMood.byRoleTitle)} />
-                </Panel>
+            <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+              <div className="mb-4 grid gap-3 md:grid-cols-3">
+                <MetricPill value={commandMood.responses ? `${commandMood.average} / 5` : "Sem dados"} label="Média de humor" />
+                <MetricPill value={commandMood.responses} label="Respostas" />
+                <MetricPill value={commandMood.interpretation} label="Classificação" />
               </div>
-            ) : (
-              <EmptyState title="Sem respostas no período" description="As respostas registradas no Meu Cronograma aparecerão aqui de forma consolidada." />
-            )}
+              {commandMood.responses ? (
+                <div className="grid gap-4 xl:grid-cols-2">
+                  <MoodDetailPanel title="Distribuição">
+                    <MoodDetailTable columns={["Humor", "Respostas"]} rows={moodDistributionRows} />
+                  </MoodDetailPanel>
+                  <MoodDetailPanel title="Por LOB">
+                    <MoodDetailTable columns={["LOB", "Respostas", "Média"]} rows={moodGroupRows(commandMood.byLob)} />
+                  </MoodDetailPanel>
+                  <MoodDetailPanel title="Por Supervisor">
+                    <MoodDetailTable columns={["Supervisor", "Respostas", "Média"]} rows={moodGroupRows(commandMood.bySupervisor)} />
+                  </MoodDetailPanel>
+                  <MoodDetailPanel title="Por Cargo/Função">
+                    <MoodDetailTable columns={["Cargo/Função", "Respostas", "Média"]} rows={moodGroupRows(commandMood.byRoleTitle)} />
+                  </MoodDetailPanel>
+                </div>
+              ) : (
+                <EmptyState title="Sem respostas no período" description="As respostas registradas no Meu Cronograma aparecerão aqui de forma consolidada." />
+              )}
+            </div>
           </div>
         </div>
       ) : null}
@@ -7167,6 +7178,52 @@ function normalizeMoodScoreForUi(score: number) {
 function moodOptionForScore(score: number) {
   const normalizedScore = normalizeMoodScoreForUi(score);
   return operationalMoodOptions.find((option) => option.score === normalizedScore) ?? operationalMoodOptions[1];
+}
+
+function MoodDetailPanel({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="min-w-0 overflow-hidden rounded-xl border border-border bg-white shadow-soft">
+      <div className="border-b border-border bg-gradient-to-b from-slate-50 to-white px-3.5 py-2.5">
+        <h3 className="text-sm font-black leading-tight text-navy-950">{title}</h3>
+      </div>
+      <div className="p-3">{children}</div>
+    </section>
+  );
+}
+
+function MoodDetailTable({ columns, rows }: { columns: string[]; rows: Array<Array<React.ReactNode>> }) {
+  return (
+    <div className="max-h-[330px] overflow-y-auto rounded-lg border border-border bg-white">
+      <table className="w-full table-fixed border-collapse text-left text-[12.5px]">
+        <thead className="sticky top-0 z-10">
+          <tr className="border-b border-border bg-slate-50 text-[10.5px] font-black uppercase tracking-wide text-muted shadow-sm">
+            {columns.map((column, index) => (
+              <th key={column} className={cn("px-3 py-2 leading-tight", index === 0 ? "w-[52%] text-left" : "text-right")}>
+                {column}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border/70">
+          {rows.map((row, rowIndex) => (
+            <tr key={rowIndex} className="transition-colors hover:bg-blue-50/35">
+              {row.map((cell, cellIndex) => (
+                <td
+                  key={cellIndex}
+                  className={cn(
+                    "px-3 py-2.5 align-middle leading-snug",
+                    cellIndex === 0 ? "break-words font-bold text-navy-950" : "text-right font-extrabold text-navy-900"
+                  )}
+                >
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 function isDayOffRequest(type: string) {
