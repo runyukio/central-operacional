@@ -83,7 +83,6 @@ import {
   communicationCategories,
   employees,
   notificationItems,
-  performanceEvolution,
   pinnedAnnouncements,
   qualityFeedback,
   reportCards,
@@ -91,7 +90,6 @@ import {
   scheduleGridRows,
   scheduleRequests,
   settingsSections,
-  teamRanking,
   tokenHistory,
   topPerformers
 } from "@/lib/demo-data";
@@ -9968,63 +9966,555 @@ export function MuralPage() {
 }
 
 export function PerformancePage() {
+  const { data: session } = useSession();
+  const defaultedTab = useRef(false);
+  const [activeTab, setActiveTab] = useState<"mine" | "wfh">("mine");
+  const [filters, setFilters] = useState(() => ({
+    ...currentOperationalMonthRange(),
+    lob: "Todos",
+    supervisorId: "Todos",
+    employeeId: "Todos",
+    role: "Todos",
+    skill: "Todos"
+  }));
+  const [payload, setPayload] = useState<PerformanceDashboardResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+  const [qualityPreview, setQualityPreview] = useState<PerformancePreviewResponse | null>(null);
+  const [productionPreview, setProductionPreview] = useState<PerformancePreviewResponse | null>(null);
+  const [qualityFileName, setQualityFileName] = useState("");
+  const [productionFileName, setProductionFileName] = useState("");
+  const [importing, setImporting] = useState<"" | "quality" | "production">("");
+  const [selectedAgent, setSelectedAgent] = useState<AgentPerformanceClient | null>(null);
+  const qualityInputRef = useRef<HTMLInputElement | null>(null);
+  const productionInputRef = useRef<HTMLInputElement | null>(null);
+  const sessionRole = String((session?.user as { role?: string } | undefined)?.role ?? "").toUpperCase();
+  const sessionCanWfh = ["ADMIN", "WFM", "SUPERVISOR", "RH", "GESTOR", "COORDENADOR", "GERENTE", "MANAGEMENT"].includes(sessionRole);
+
+  useEffect(() => {
+    if (!defaultedTab.current && sessionRole) {
+      setActiveTab(sessionCanWfh ? "wfh" : "mine");
+      defaultedTab.current = true;
+    }
+  }, [sessionCanWfh, sessionRole]);
+
+  const loadPerformance = useCallback(async () => {
+    setLoading(true);
+    const params = new URLSearchParams({
+      view: activeTab,
+      startDate: filters.startDate,
+      endDate: filters.endDate
+    });
+    if (activeTab === "wfh") {
+      if (filters.lob !== "Todos") params.set("lob", filters.lob);
+      if (filters.supervisorId !== "Todos") params.set("supervisorId", filters.supervisorId);
+      if (filters.employeeId !== "Todos") params.set("employeeId", filters.employeeId);
+      if (filters.role !== "Todos") params.set("role", filters.role);
+      if (filters.skill !== "Todos") params.set("skill", filters.skill);
+    }
+    try {
+      const data = await apiJson<PerformanceDashboardResponse>(`/api/performance?${params.toString()}`);
+      setPayload(data);
+      setMessage("");
+    } catch (error) {
+      setPayload(null);
+      setMessage(error instanceof Error ? error.message : "Não foi possível carregar Performance.");
+    } finally {
+      setLoading(false);
+    }
+  }, [activeTab, filters]);
+
+  useEffect(() => {
+    void loadPerformance();
+  }, [loadPerformance]);
+
+  useEffect(() => {
+    if (payload?.mode !== "wfh") return;
+    setSelectedAgent((current) => current ? payload.ranking.find((agent) => agent.employeeId === current.employeeId) ?? null : null);
+  }, [payload]);
+
+  const canShowWfh = payload?.mode === "mine" ? payload.canAccessWfh : payload?.mode === "wfh" ? true : sessionCanWfh;
+  const wfhPayload = payload?.mode === "wfh" ? payload : null;
+  const minePayload = payload?.mode === "mine" ? payload : null;
+
+  async function previewPerformanceFile(type: "quality" | "production", file?: File | null) {
+    if (!file) return;
+    setImporting(type);
+    if (type === "quality") setQualityFileName(file.name);
+    else setProductionFileName(file.name);
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const result = await apiJson<PerformancePreviewResponse>(`/api/performance/import/${type}/preview`, { method: "POST", body: formData });
+      if (type === "quality") setQualityPreview(result);
+      else setProductionPreview(result);
+      setMessage(result.summary.errorRows ? "Revise os erros do preview antes de confirmar." : "Preview gerado. Confirme para importar a base.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível validar o arquivo de Performance.");
+    } finally {
+      setImporting("");
+      if (qualityInputRef.current) qualityInputRef.current.value = "";
+      if (productionInputRef.current) productionInputRef.current.value = "";
+    }
+  }
+
+  async function commitPerformanceImport(type: "quality" | "production") {
+    const preview = type === "quality" ? qualityPreview : productionPreview;
+    if (!preview || preview.summary.errorRows || importing) return;
+    setImporting(type);
+    try {
+      const result = await apiJson<{ importedRows: number; createdRows: number; updatedRows: number }>(`/api/performance/import/${type}/commit`, {
+        method: "POST",
+        body: JSON.stringify({ rows: preview.rows, fileName: type === "quality" ? qualityFileName : productionFileName })
+      });
+      setMessage(`Base importada: ${result.createdRows} criado(s), ${result.updatedRows} atualizado(s), ${result.importedRows} linha(s) válida(s).`);
+      if (type === "quality") setQualityPreview(null);
+      else setProductionPreview(null);
+      await loadPerformance();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível importar a base de Performance.");
+    } finally {
+      setImporting("");
+    }
+  }
+
+  function updateFilter(key: keyof typeof filters, value: string) {
+    setFilters((current) => ({ ...current, [key]: value }));
+  }
+
+  function exportPerformance() {
+    const params = new URLSearchParams({
+      startDate: filters.startDate,
+      endDate: filters.endDate
+    });
+    if (filters.lob !== "Todos") params.set("lob", filters.lob);
+    if (filters.supervisorId !== "Todos") params.set("supervisorId", filters.supervisorId);
+    if (filters.employeeId !== "Todos") params.set("employeeId", filters.employeeId);
+    if (filters.role !== "Todos") params.set("role", filters.role);
+    if (filters.skill !== "Todos") params.set("skill", filters.skill);
+    window.location.href = `/api/performance/export?${params.toString()}`;
+  }
+
   return (
-    <div>
-      <PageHeader title="Performance e Reconhecimento" description="Acompanhe indicadores, reconheça talentos e impulsione resultados" icon={Trophy} actions={<TopActions />} />
-      <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <StatCard title="Produtividade" value="122%" change="+12,5%" helper="vs mês anterior" icon={Trophy} tone="purple" />
-        <StatCard title="Qualidade" value="96,4%" change="+3,1%" helper="vs mês anterior" icon={ShieldCheck} tone="green" />
-        <StatCard title="Presença" value="94,8%" change="+2,4%" helper="vs mês anterior" icon={UsersRound} tone="blue" />
-        <StatCard title="Aderência" value="91,2%" change="+4,8%" helper="vs mês anterior" icon={Target} tone="orange" />
-        <StatCard title="Meta Atingida" value="112%" change="+8,7%" helper="vs mês anterior" icon={Award} tone="gold" />
+    <div className="space-y-4">
+      <PageHeader
+        title="Performance"
+        description="Indicadores oficiais de Qualidade, Submit, AHT e ABS conectados ao cadastro e ao Cronograma."
+        icon={Trophy}
+        actions={<TopActions />}
+      />
+
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-white p-2 shadow-sm">
+        <button onClick={() => setActiveTab("mine")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", activeTab === "mine" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>Minha Performance</button>
+        {canShowWfh ? <button onClick={() => setActiveTab("wfh")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", activeTab === "wfh" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>WFH</button> : null}
       </div>
-      <div className="grid gap-5 xl:grid-cols-[1.2fr_1fr_420px]">
-        <Panel title="Evolução da Performance (Mês Atual)">
-          <div className="h-[300px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={performanceEvolution}>
-                <CartesianGrid stroke="#E8EDF5" />
-                <XAxis dataKey="day" />
-                <YAxis />
-                <Tooltip />
-                <Line dataKey="produtividade" stroke="#6D28D9" strokeWidth={3} />
-                <Line dataKey="qualidade" stroke="#10B981" strokeWidth={3} />
-                <Line dataKey="aderencia" stroke="#F97316" strokeWidth={3} />
-              </LineChart>
-            </ResponsiveContainer>
+
+      <div className="rounded-xl border border-border bg-white p-3 shadow-sm">
+        <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-[140px_140px_repeat(5,minmax(130px,1fr))_auto]">
+          <FormInput label="Data inicial" type="date" value={filters.startDate} onChange={(value) => updateFilter("startDate", value)} />
+          <FormInput label="Data final" type="date" value={filters.endDate} onChange={(value) => updateFilter("endDate", value)} />
+          {activeTab === "wfh" ? (
+            <>
+              <PerformanceSelect label="LOB" value={filters.lob} onChange={(value) => updateFilter("lob", value)} options={wfhPayload?.filters.lobs ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todas as LOBs" : value} />
+              <PerformanceSelect label="Supervisor" value={filters.supervisorId} onChange={(value) => updateFilter("supervisorId", value)} options={(wfhPayload?.filters.supervisors ?? [{ id: "Todos", name: "Todos os supervisores" }]).map((item) => item.id)} optionLabel={(value) => wfhPayload?.filters.supervisors.find((item) => item.id === value)?.name ?? value} />
+              <PerformanceSelect label="Agente" value={filters.employeeId} onChange={(value) => updateFilter("employeeId", value)} options={(wfhPayload?.filters.employees ?? [{ id: "Todos", name: "Todos os agentes", wbLogin: "" }]).map((item) => item.id)} optionLabel={(value) => {
+                const item = wfhPayload?.filters.employees.find((employee) => employee.id === value);
+                return item ? (item.wbLogin ? `${item.name} · ${item.wbLogin}` : item.name) : value;
+              }} />
+              <PerformanceSelect label="Cargo/Função" value={filters.role} onChange={(value) => updateFilter("role", value)} options={wfhPayload?.filters.roles ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todos os cargos" : value} />
+              <PerformanceSelect label="Skill" value={filters.skill} onChange={(value) => updateFilter("skill", value)} options={wfhPayload?.filters.skills ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todas as skills" : value === "SEM_SKILL" ? "Sem skill" : value} />
+            </>
+          ) : <div className="hidden xl:block xl:col-span-5" />}
+          <div className="flex items-end justify-end gap-2 md:col-span-3 xl:col-span-1">
+            <button onClick={() => void loadPerformance()} className="inline-flex h-9 items-center gap-2 rounded-lg bg-navy-950 px-3 text-xs font-extrabold text-white">
+              <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} /> Atualizar
+            </button>
+            {activeTab === "wfh" && wfhPayload?.canExport ? <button onClick={exportPerformance} className="premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold text-navy-950"><Download className="h-4 w-4" /> Exportar</button> : null}
           </div>
-        </Panel>
-        <Panel title="Ranking de Equipes">
-          <SimpleTable columns={["Posição", "Equipe", "Prod.", "Qual.", "Total"]} rows={teamRanking.map((row) => [row[0], row[1], row[2], row[3], row[5]])} />
-        </Panel>
-        <Panel title="Top Performers do Mês" action="Ver todos">
-          <div className="grid gap-3 sm:grid-cols-2">
-            {topPerformers.slice(0, 4).map((performer, index) => (
-              <div key={performer.name} className="rounded-lg border border-border p-4 text-center">
-                <span className="inline-flex rounded-md bg-blue-600 px-2 py-1 text-xs font-bold text-white">{index + 1}º</span>
-                <div className="mx-auto mt-3 grid h-16 w-16 place-items-center rounded-full bg-slate-100 font-bold">{initials(performer.name)}</div>
-                <p className="mt-2 font-bold text-navy-950">{performer.name}</p>
-                <p className="text-xs text-muted">{performer.role}</p>
-                <StatusBadge status={`${performer.performance} Performance`} />
-              </div>
-            ))}
-          </div>
-        </Panel>
-      </div>
-      <Panel title="Melhores do Mês" action="Ver histórico">
-        <div className="grid gap-4 md:grid-cols-5">
-          {["Produtividade", "Qualidade", "Presença", "Aderência", "Atitude e Colaboração"].map((category, index) => (
-            <div key={category} className="rounded-lg border border-border p-5 text-center">
-              <Star className="mx-auto h-9 w-9 text-amber-400" />
-              <p className="mt-3 text-sm font-bold text-blue-600">{category}</p>
-              <p className="mt-1 font-extrabold text-navy-950">{topPerformers[index]?.name ?? "Equipe"}</p>
-              <p className="text-lg font-extrabold text-blue-600">{index === 4 ? "Votos da equipe" : topPerformers[index]?.performance}</p>
-            </div>
-          ))}
         </div>
-      </Panel>
+      </div>
+
+      {message ? <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
+      {loading ? <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">Carregando Performance...</div> : null}
+
+      {minePayload ? (
+        <div className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <StatCard title="Minha Qualidade" value={formatPerformancePercent(minePayload.summary.mine.quality)} helper={`${minePayload.summary.mine.qualityCorrect}/${minePayload.summary.mine.qualityTotal} auditorias`} icon={ShieldCheck} tone="green" />
+            <StatCard title="Qualidade média LOB" value={formatPerformancePercent(minePayload.summary.lobAverage.quality)} helper="consolidado sem nomes" icon={UsersRound} tone="blue" />
+            <StatCard title="Meu Submit" value={formatPerformanceNumber(minePayload.summary.mine.submit)} helper="casos moderados" icon={FileSpreadsheet} tone="purple" />
+            <StatCard title="Submit médio LOB" value={formatPerformanceNumber(minePayload.summary.lobAverage.submit)} helper="consolidado da LOB" icon={ClipboardList} tone="cyan" />
+            <StatCard title="Meu AHT" value={formatPerformanceAht(minePayload.summary.mine.ahtSeconds)} helper="moderação / submits" icon={Clock} tone="orange" />
+            <StatCard title="AHT médio LOB" value={formatPerformanceAht(minePayload.summary.lobAverage.ahtSeconds)} helper="consolidado da LOB" icon={Target} tone="gold" />
+            <StatCard title="Meu ABS" value={formatPerformancePercent(minePayload.summary.mine.abs)} helper={`${minePayload.summary.mine.absences}/${minePayload.summary.mine.scheduledDays} dias`} icon={AlertTriangle} tone={minePayload.summary.mine.abs > 0 ? "red" : "green"} />
+            <StatCard title="ABS médio LOB" value={formatPerformancePercent(minePayload.summary.lobAverage.abs)} helper="faltas / escalas válidas" icon={CalendarCheck} tone="blue" />
+          </div>
+
+          {hasPerformanceData(minePayload.summary.mine) ? (
+            <div className="grid gap-4 xl:grid-cols-[1.2fr_.8fr]">
+              <Panel title="Minha evolução semanal">
+                <div className="h-[290px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={minePayload.weekly}>
+                      <CartesianGrid stroke="#E8EDF5" />
+                      <XAxis dataKey="weekLabel" tick={{ fontSize: 11 }} />
+                      <YAxis />
+                      <Tooltip formatter={(value, name) => [formatPerformanceChartValue(Number(value), String(name)), performanceMetricLabel(String(name))]} />
+                      <Line dataKey="quality" stroke="#10B981" strokeWidth={3} name="quality" />
+                      <Line dataKey="abs" stroke="#EF4444" strokeWidth={3} name="abs" />
+                      <Line dataKey="ahtSeconds" stroke="#F97316" strokeWidth={3} name="ahtSeconds" />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </Panel>
+              <Panel title="Tabela semanal">
+                <SimpleTable columns={["Semana", "Qualidade", "Submit", "AHT", "ABS"]} rows={minePayload.summary.mine.weekly.map((week) => [week.weekLabel, formatPerformancePercent(week.quality), formatPerformanceNumber(week.submit), formatPerformanceAht(week.ahtSeconds), formatPerformancePercent(week.abs)])} />
+              </Panel>
+            </div>
+          ) : (
+            <EmptyState title="Ainda não há dados de performance para o período selecionado." description="Quando Qualidade, Produção e Cronograma estiverem disponíveis, seus indicadores aparecerão aqui." />
+          )}
+        </div>
+      ) : null}
+
+      {wfhPayload ? (
+        <div className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <StatCard title="Qualidade média" value={formatPerformancePercent(wfhPayload.summary.quality)} helper={`${wfhPayload.summary.qualityCorrect}/${wfhPayload.summary.qualityTotal} auditorias`} icon={ShieldCheck} tone="green" />
+            <StatCard title="AHT médio" value={formatPerformanceAht(wfhPayload.summary.ahtSeconds)} helper="moderação / submits" icon={Clock} tone="orange" />
+            <StatCard title="Submit total" value={formatPerformanceNumber(wfhPayload.summary.submit)} helper="casos no período" icon={FileSpreadsheet} tone="purple" />
+            <StatCard title="ABS médio" value={formatPerformancePercent(wfhPayload.summary.abs)} helper={`${wfhPayload.summary.absences}/${wfhPayload.summary.scheduledDays} dias`} icon={AlertTriangle} tone={wfhPayload.summary.abs > 0 ? "red" : "green"} />
+            <StatCard title="Agentes com dados" value={wfhPayload.summary.agentsWithData} helper="Qualidade, produção ou ABS" icon={UsersRound} tone="blue" />
+            <StatCard title="Linhas importadas" value={formatPerformanceNumber(wfhPayload.summary.importedRows)} helper="últimos lotes listados" icon={Upload} tone="cyan" />
+            <StatCard title="Última importação" value={wfhPayload.summary.lastImport || "-"} helper="Qualidade ou produção" icon={CalendarDays} tone="gold" />
+          </div>
+
+          {wfhPayload.canImport ? (
+            <div className="grid gap-4 xl:grid-cols-2">
+              <PerformanceImportPanel
+                title="Upload de Qualidade"
+                description="Base com audit_time, audit_name, final_result, case_order_id, audit_case_order_id, LOB e Concat."
+                inputRef={qualityInputRef}
+                loading={importing === "quality"}
+                onTemplate={() => void downloadFile("/api/performance/template?type=quality", "template_performance_qualidade.xlsx").catch((error) => setMessage(error instanceof Error ? error.message : "Não foi possível baixar o template."))}
+                onFile={(file) => void previewPerformanceFile("quality", file)}
+              />
+              <PerformanceImportPanel
+                title="Upload de Produção, AHT e Volume"
+                description="Base com BZ_time, BZ_day, AHT(s), Latency, submit_num, queue_id, Moderation e Agentes."
+                inputRef={productionInputRef}
+                loading={importing === "production"}
+                onTemplate={() => void downloadFile("/api/performance/template?type=production", "template_performance_producao.xlsx").catch((error) => setMessage(error instanceof Error ? error.message : "Não foi possível baixar o template."))}
+                onFile={(file) => void previewPerformanceFile("production", file)}
+              />
+            </div>
+          ) : null}
+
+          <div className="grid gap-4 xl:grid-cols-[1.2fr_.8fr]">
+            <Panel title="Ranking de Agentes">
+              {wfhPayload.ranking.length ? (
+                <SimpleTable
+                  columns={["Agente", "WB/Login", "LOB", "Supervisor", "Qualidade", "Submit", "AHT", "ABS"]}
+                  rows={wfhPayload.ranking.map((agent) => [
+                    <button key={agent.employeeId} onClick={() => setSelectedAgent(agent)} className="max-w-[180px] truncate font-extrabold text-blue-700" title={agent.employeeName}>{agent.employeeName}</button>,
+                    agent.wbLogin,
+                    agent.lob,
+                    agent.supervisor,
+                    formatPerformancePercent(agent.quality),
+                    formatPerformanceNumber(agent.submit),
+                    formatPerformanceAht(agent.ahtSeconds),
+                    formatPerformancePercent(agent.abs)
+                  ])}
+                />
+              ) : (
+                <EmptyState title="Nenhum dado importado ainda." description="Importe uma base de Qualidade ou Produção para visualizar os indicadores." />
+              )}
+            </Panel>
+            <Panel title="Evolução Semanal">
+              <div className="h-[300px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={wfhPayload.weekly}>
+                    <CartesianGrid stroke="#E8EDF5" />
+                    <XAxis dataKey="weekLabel" tick={{ fontSize: 11 }} />
+                    <YAxis />
+                    <Tooltip formatter={(value, name) => [formatPerformanceChartValue(Number(value), String(name)), performanceMetricLabel(String(name))]} />
+                    <Bar dataKey="submit" fill="#2563EB" name="submit" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="quality" fill="#10B981" name="quality" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="abs" fill="#EF4444" name="abs" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </Panel>
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+            <Panel title="Detalhamento Individual">
+              {selectedAgent ? (
+                <div className="space-y-3">
+                  <div className="rounded-lg border border-blue-100 bg-blue-50 p-3">
+                    <p className="text-sm font-extrabold text-navy-950">{selectedAgent.employeeName}</p>
+                    <p className="text-xs font-bold text-blue-700">{selectedAgent.wbLogin} · {selectedAgent.lob} · {selectedAgent.supervisor}</p>
+                  </div>
+                  <SimpleTable columns={["Semana", "Qualidade", "Submit", "AHT", "ABS"]} rows={selectedAgent.weekly.map((week) => [week.weekLabel, formatPerformancePercent(week.quality), formatPerformanceNumber(week.submit), formatPerformanceAht(week.ahtSeconds), formatPerformancePercent(week.abs)])} />
+                </div>
+              ) : (
+                <EmptyState title="Selecione um agente" description="Clique em um nome do ranking para abrir o histórico semanal individual." />
+              )}
+            </Panel>
+            <Panel title="Histórico de Importações">
+              {wfhPayload.imports.length ? (
+                <div className="space-y-2">
+                  {wfhPayload.imports.map((item) => (
+                    <div key={item.id} className="rounded-lg border border-border p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-extrabold text-navy-950" title={item.fileName}>{item.fileName}</p>
+                          <p className="text-xs font-bold text-muted">{item.type === "QUALITY" ? "Qualidade" : "Produção"} · {item.importedAt}</p>
+                        </div>
+                        <StatusBadge status={item.status} />
+                      </div>
+                      <div className="mt-2 grid grid-cols-3 gap-2 text-xs font-bold text-muted">
+                        <span>Válidas: <b className="text-navy-950">{item.rowsValid}</b></span>
+                        <span>Novas: <b className="text-navy-950">{item.rowsInserted}</b></span>
+                        <span>Atual.: <b className="text-navy-950">{item.rowsUpdated}</b></span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState title="Sem importações" description="O histórico aparecerá após o primeiro commit de Qualidade ou Produção." />
+              )}
+            </Panel>
+          </div>
+        </div>
+      ) : null}
+
+      {qualityPreview ? (
+        <PerformancePreviewModal title="Preview da base de Qualidade" fileName={qualityFileName} preview={qualityPreview} importing={importing === "quality"} onClose={() => setQualityPreview(null)} onCommit={() => void commitPerformanceImport("quality")} />
+      ) : null}
+      {productionPreview ? (
+        <PerformancePreviewModal title="Preview da base de Produção" fileName={productionFileName} preview={productionPreview} importing={importing === "production"} onClose={() => setProductionPreview(null)} onCommit={() => void commitPerformanceImport("production")} />
+      ) : null}
     </div>
   );
+}
+
+function PerformanceSelect({ label, value, options, optionLabel, onChange }: { label: string; value: string; options: string[]; optionLabel?: (value: string) => string; onChange: (value: string) => void }) {
+  return (
+    <label className="text-xs font-bold text-muted">
+      {label}
+      <select value={value} onChange={(event) => onChange(event.target.value)} className="premium-control mt-1 h-9 w-full px-3 text-sm font-bold text-navy-950">
+        {options.map((option) => <option key={option} value={option}>{optionLabel?.(option) ?? option}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function PerformanceImportPanel({ title, description, inputRef, loading, onTemplate, onFile }: { title: string; description: string; inputRef: { current: HTMLInputElement | null }; loading: boolean; onTemplate: () => void; onFile: (file?: File | null) => void }) {
+  return (
+    <Panel title={title}>
+      <div className="space-y-3">
+        <p className="text-sm font-semibold text-muted">{description}</p>
+        <input ref={(element) => { inputRef.current = element; }} type="file" accept=".xlsx,.xls" className="hidden" onChange={(event) => onFile(event.target.files?.[0])} />
+        <div className="flex flex-wrap gap-2">
+          <button onClick={onTemplate} className="premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold text-navy-950"><Download className="h-4 w-4" /> Template</button>
+          <button disabled={loading} onClick={() => inputRef.current?.click()} className="inline-flex h-9 items-center gap-2 rounded-lg bg-blue-600 px-3 text-xs font-extrabold text-white disabled:opacity-60"><Upload className="h-4 w-4" /> {loading ? "Validando..." : "Importar XLSX"}</button>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function PerformancePreviewModal({ title, fileName, preview, importing, onClose, onCommit }: { title: string; fileName: string; preview: PerformancePreviewResponse; importing: boolean; onClose: () => void; onCommit: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy-950/45 p-4">
+      <div className="flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-start justify-between border-b border-border px-5 py-4">
+          <div>
+            <h2 className="text-lg font-extrabold text-navy-950">{title}</h2>
+            <p className="text-sm font-semibold text-muted">{fileName || "Arquivo importado"} · {preview.summary.totalRows} linha(s)</p>
+          </div>
+          <button onClick={onClose} className="rounded-lg border border-border px-3 py-2 text-sm font-bold text-navy-950">Fechar</button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          <div className="grid gap-3 md:grid-cols-6">
+            <MetricPill value={preview.summary.validRows} label="Linhas válidas" />
+            <MetricPill value={preview.summary.errorRows} label="Com erro" />
+            <MetricPill value={preview.summary.warningRows} label="Alertas" />
+            <MetricPill value={preview.summary.createdRows} label="Novos" />
+            <MetricPill value={preview.summary.updatedRows} label="Atualizações" />
+            <MetricPill value={preview.summary.missingEmployees} label="WB/Login ausente" />
+          </div>
+          <ImportIssueSummary rows={preview.rows.map((row) => ({ rowNumber: row.rowNumber, errors: row.errors, warnings: row.warnings }))} />
+          <div className="mt-4 max-h-[52vh] overflow-auto rounded-xl border border-border">
+            <table className="w-full min-w-[1080px] text-sm">
+              <thead className="sticky top-0 bg-white text-left text-xs font-extrabold uppercase text-muted">
+                <tr>{["Linha", "WB/Login", "Colaborador", "LOB", "Data", "Chave única", "Ação", "Erros/alertas"].map((column) => <th key={column} className="px-3 py-2">{column}</th>)}</tr>
+              </thead>
+              <tbody>
+                {preview.rows.slice(0, IMPORT_PREVIEW_ROW_LIMIT).map((row) => (
+                  <tr key={row.rowNumber} className="border-t border-slate-100">
+                    <td className="px-3 py-2 font-bold">{row.rowNumber}</td>
+                    <td className="px-3 py-2">{row.wbLogin || "-"}</td>
+                    <td className="px-3 py-2">{row.employeeName || "-"}</td>
+                    <td className="px-3 py-2">{row.lob || "-"}</td>
+                    <td className="px-3 py-2">{row.date || "-"}</td>
+                    <td className="max-w-[220px] truncate px-3 py-2" title={row.uniqueKey}>{row.uniqueKey || "-"}</td>
+                    <td className="px-3 py-2"><StatusBadge status={row.action === "update" ? "Atualizar" : row.action === "create" ? "Criar" : "Ignorar"} /></td>
+                    <td className={cn("px-3 py-2 text-xs font-bold", row.errors.length ? "text-red-600" : row.warnings.length ? "text-amber-600" : "text-muted")}>{[...row.errors, ...row.warnings].join(" | ") || "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {preview.rows.length > IMPORT_PREVIEW_ROW_LIMIT ? <p className="mt-2 text-xs font-bold text-muted">Exibindo as primeiras {IMPORT_PREVIEW_ROW_LIMIT} linhas. A confirmação processa todas as linhas válidas.</p> : null}
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-4">
+          <button onClick={onClose} className="premium-control h-9 px-4 text-sm font-extrabold text-navy-950">Cancelar</button>
+          <button disabled={Boolean(preview.summary.errorRows) || importing} onClick={onCommit} className="h-9 rounded-lg bg-navy-950 px-4 text-sm font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-50">Confirmar importação</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type PerformanceMetricSummary = {
+  quality: number;
+  qualityCorrect: number;
+  qualityTotal: number;
+  submit: number;
+  ahtSeconds: number;
+  moderationSeconds: number;
+  abs: number;
+  absences: number;
+  scheduledDays: number;
+};
+
+type PerformanceWeeklyMetric = PerformanceMetricSummary & {
+  weekStart: string;
+  weekEnd: string;
+  weekLabel: string;
+  lobAverage?: PerformanceMetricSummary;
+  operationAverage?: PerformanceMetricSummary;
+};
+
+type AgentPerformanceClient = PerformanceMetricSummary & {
+  employeeId: string;
+  employeeName: string;
+  wbLogin: string;
+  lob: string;
+  supervisor: string;
+  roleTitle: string;
+  skill: string;
+  weekly: PerformanceWeeklyMetric[];
+};
+
+type PerformanceMineResponse = {
+  mode: "mine";
+  canAccessWfh: boolean;
+  period: { startDate: string; endDate: string };
+  summary: {
+    mine: AgentPerformanceClient;
+    lobAverage: PerformanceMetricSummary;
+    operationAverage: PerformanceMetricSummary;
+  };
+  weekly: PerformanceWeeklyMetric[];
+};
+
+type PerformanceWfhResponse = {
+  mode: "wfh";
+  canImport: boolean;
+  canExport: boolean;
+  period: { startDate: string; endDate: string };
+  summary: PerformanceMetricSummary & {
+    agentsWithData: number;
+    importedRows: number;
+    lastImport: string;
+  };
+  ranking: AgentPerformanceClient[];
+  weekly: PerformanceWeeklyMetric[];
+  filters: {
+    lobs: string[];
+    skills: string[];
+    roles: string[];
+    supervisors: Array<{ id: string; name: string }>;
+    employees: Array<{ id: string; name: string; wbLogin: string }>;
+  };
+  imports: Array<{
+    id: string;
+    type: string;
+    fileName: string;
+    rowsTotal: number;
+    rowsValid: number;
+    rowsError: number;
+    rowsInserted: number;
+    rowsUpdated: number;
+    status: string;
+    importedBy: string;
+    importedAt: string;
+  }>;
+};
+
+type PerformanceDashboardResponse = PerformanceMineResponse | PerformanceWfhResponse;
+
+type PerformancePreviewResponse = {
+  success: boolean;
+  rows: Array<{
+    rowNumber: number;
+    type: "QUALITY" | "PRODUCTION";
+    wbLogin: string;
+    employeeId?: string;
+    employeeName?: string;
+    lob?: string;
+    lobId?: string;
+    date: string;
+    uniqueKey: string;
+    action: "create" | "update" | "ignore";
+    errors: string[];
+    warnings: string[];
+    payload: Record<string, unknown>;
+  }>;
+  summary: {
+    totalRows: number;
+    validRows: number;
+    errorRows: number;
+    warningRows: number;
+    createdRows: number;
+    updatedRows: number;
+    foundEmployees: number;
+    missingEmployees: number;
+    missingWbLogins: string[];
+  };
+};
+
+function hasPerformanceData(metrics: PerformanceMetricSummary) {
+  return metrics.qualityTotal > 0 || metrics.submit > 0 || metrics.scheduledDays > 0;
+}
+
+function formatPerformancePercent(value: number) {
+  return `${Number(value || 0).toLocaleString("pt-BR", { minimumFractionDigits: Number.isInteger(value) ? 0 : 1, maximumFractionDigits: 1 })}%`;
+}
+
+function formatPerformanceNumber(value: number) {
+  return Number(value || 0).toLocaleString("pt-BR");
+}
+
+function formatPerformanceAht(seconds: number) {
+  const total = Math.round(Number(seconds || 0));
+  const minutes = Math.floor(total / 60);
+  const rest = total % 60;
+  return minutes > 0 ? `${minutes}:${String(rest).padStart(2, "0")}` : `${rest}s`;
+}
+
+function performanceMetricLabel(key: string) {
+  const map: Record<string, string> = { quality: "Qualidade", submit: "Submit", ahtSeconds: "AHT", abs: "ABS" };
+  return map[key] ?? key;
+}
+
+function formatPerformanceChartValue(value: number, key: string) {
+  if (key === "quality" || key === "abs") return formatPerformancePercent(value);
+  if (key === "ahtSeconds") return formatPerformanceAht(value);
+  return formatPerformanceNumber(value);
 }
 
 export function QualityPage() {

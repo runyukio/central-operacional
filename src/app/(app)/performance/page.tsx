@@ -1,5 +1,5 @@
-import { InactiveModulePage } from "@/components/inactive-module-page";
+import { PerformancePage } from "@/components/modules";
 
 export default async function PerformanceRoute() {
-  return <InactiveModulePage title="Performance" />;
+  return <PerformancePage />;
 }

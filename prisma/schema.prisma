@@ -300,6 +300,7 @@ model User {
   justifiedAttendances    AttendanceRecord[]      @relation("AttendanceJustifiedBy")
   attendanceHistories     AttendanceHistory[]     @relation("AttendanceHistoryChangedBy")
   workHourImports         WorkHourImportBatch[]   @relation("WorkHourImportUploadedBy")
+  performanceImports      PerformanceImportBatch[] @relation("PerformanceImportUploadedBy")
   requestedWorkHourAdjustments WorkHourAdjustmentRequest[] @relation("WorkHourAdjustmentRequestedBy")
   approvedWorkHourAdjustments  WorkHourAdjustmentRequest[] @relation("WorkHourAdjustmentApprovedBy")
   rejectedWorkHourAdjustments  WorkHourAdjustmentRequest[] @relation("WorkHourAdjustmentRejectedBy")
@@ -320,6 +321,8 @@ model Lob {
   teams          Team[]
   employees      EmployeeProfile[]
   staffCoverages StaffCoverage[]
+  qualityRecords QualityRecord[]
+  productionRecords ProductionRecord[]
   createdAt      DateTime          @default(now())
 }
 
@@ -409,6 +412,8 @@ model EmployeeProfile {
   scheduleChanges    ScheduleChangeHistory[]
   requests           Request[]
   performanceMetrics PerformanceMetric[]
+  qualityRecords     QualityRecord[]
+  productionRecords  ProductionRecord[]
   qualityFeedbacks   QualityFeedback[]       @relation("FeedbackEmployee")
   equipments         Equipment[]
   equipmentTickets   EquipmentTicket[]
@@ -698,6 +703,84 @@ model PerformanceMetric {
   employee     EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
   @@unique([employeeId, period])
+}
+
+model PerformanceImportBatch {
+  id           String          @id @default(cuid())
+  type         String
+  fileName     String
+  rowsTotal    Int             @default(0)
+  rowsValid    Int             @default(0)
+  rowsError    Int             @default(0)
+  rowsInserted Int             @default(0)
+  rowsUpdated  Int             @default(0)
+  status       String          @default("SUCCESS")
+  errorSummary String?
+  importedById String?
+  importedBy   User?           @relation("PerformanceImportUploadedBy", fields: [importedById], references: [id], onDelete: SetNull)
+  qualityRecords QualityRecord[]
+  productionRecords ProductionRecord[]
+  importedAt   DateTime        @default(now())
+  createdAt    DateTime        @default(now())
+
+  @@index([type])
+  @@index([importedAt])
+  @@index([importedById])
+}
+
+model QualityRecord {
+  id               String                 @id @default(cuid())
+  auditTime        DateTime
+  auditDate        DateTime
+  wbLogin          String
+  employeeId       String?
+  employee         EmployeeProfile?       @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  finalResult      String
+  caseOrderId      String
+  auditCaseOrderId String
+  concatKey        String                 @unique
+  lobId            String?
+  lob              Lob?                   @relation(fields: [lobId], references: [id], onDelete: SetNull)
+  rawLob           String?
+  importBatchId    String?
+  importBatch      PerformanceImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  @@index([employeeId])
+  @@index([wbLogin])
+  @@index([auditDate])
+  @@index([lobId])
+  @@index([finalResult])
+  @@index([employeeId, auditDate])
+}
+
+model ProductionRecord {
+  id                String                 @id @default(cuid())
+  bzTime            DateTime
+  bzDay             DateTime
+  wbLogin           String
+  employeeId        String?
+  employee          EmployeeProfile?       @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  ahtSeconds        Float?
+  latencyMinutesSum Float?
+  submitNum         Int
+  queueId           String
+  moderationSeconds Float
+  lobId             String?
+  lob               Lob?                   @relation(fields: [lobId], references: [id], onDelete: SetNull)
+  productionKey     String                 @unique
+  importBatchId     String?
+  importBatch       PerformanceImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  @@index([employeeId])
+  @@index([wbLogin])
+  @@index([bzDay])
+  @@index([lobId])
+  @@index([queueId])
+  @@index([employeeId, bzDay])
 }
 
 model QualityFeedback {

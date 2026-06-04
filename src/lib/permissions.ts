@@ -99,6 +99,27 @@ export function canAccessStaffCoverage(user: PermissionUser) {
   return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(role);
 }
 
+export function canAccessPerformance(user: PermissionUser) {
+  return isActiveUser(user);
+}
+
+export function canAccessPerformanceWfh(user: PermissionUser) {
+  const role = normalizeRole(user.role);
+  if (!isActiveUser(user)) return false;
+  if (["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "RH", "COORDENADOR", "GERENTE", "MANAGEMENT"].includes(role)) return true;
+  const title = normalizeComparableJobTitle(user.roleTitle ?? user.jobTitle);
+  return ["coordenador", "coordenadora", "gerente", "manager", "management"].includes(title);
+}
+
+export function canImportPerformance(user: PermissionUser) {
+  const role = normalizeRole(user.role);
+  return isActiveUser(user) && ["ADMIN", "WFM"].includes(role);
+}
+
+export function canExportPerformance(user: PermissionUser) {
+  return canAccessPerformanceWfh(user);
+}
+
 export function canManageStaffCoverageRequirements(user: PermissionUser) {
   const role = normalizeRole(user.role);
   return isActiveUser(user) && ["ADMIN", "WFM"].includes(role);

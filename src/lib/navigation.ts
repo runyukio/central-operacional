@@ -20,6 +20,7 @@ export const navItems: NavItem[] = [
   { label: "Cronogramas", href: "/escalas", icon: "CalendarRange", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH"] },
   { label: "Horas Operacionais", href: "/horas-operacionais", icon: "Clock", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"] },
   { label: "Requerido", href: "/staff-cobertura", icon: "UsersRound", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"] },
+  { label: "Performance", href: "/performance", icon: "Trophy", roles: allRoles },
   { label: "Solicitações", href: "/solicitacoes", icon: "ClipboardList", roles: authenticatedOps },
   { label: "Esteiras", href: "/esteiras", icon: "KanbanSquare", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH", "TI", "QUALIDADE"] },
   { label: "Mapa de Funcionários", href: "/mapa-funcionarios", icon: "Map", roles: leadership },
