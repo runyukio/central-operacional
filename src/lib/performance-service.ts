@@ -98,7 +98,8 @@ type AgentPerformanceRow = PerformanceMetrics & {
 };
 
 const agentRoleTitleAliases = ["Agente", "Agent", "Moderador de Conteúdo", "Content Moderator"];
-const scheduledStatuses = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "FALTA", "ATRASO", "SAIDA_ANTECIPADA", "TROCA_APROVADA", "VENDA_FOLGA_APROVADA", "FOLGA_APROVADA"]);
+const scheduledStatuses = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "FALTA", "FALTA_JUSTIFICADA", "FALTA_INJUSTIFICADA", "ATRASO", "SAIDA_ANTECIPADA", "TROCA_APROVADA", "VENDA_FOLGA_APROVADA", "FOLGA_APROVADA"]);
+const absenceStatuses = new Set<ScheduleStatus>(["FALTA", "FALTA_JUSTIFICADA", "FALTA_INJUSTIFICADA"]);
 const qualityMetricSelect = {
   auditDate: true,
   concatKey: true,
@@ -640,7 +641,7 @@ function buildWeeklyMetrics(employeeId: string, week: WeekRange, qualityRecords:
   for (const schedule of schedules) {
     if (schedule.employeeId !== employeeId || !isDateInRange(schedule.date, week.start, week.end)) continue;
     if (scheduledStatuses.has(schedule.status)) scheduledDays += 1;
-    if (schedule.status === "FALTA") absences += 1;
+    if (absenceStatuses.has(schedule.status)) absences += 1;
   }
   return {
     weekStart: formatDateKey(week.start),

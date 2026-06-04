@@ -13,6 +13,8 @@ const productiveStatusKeys = new Set([
 
 const blockedStatusLabels: Record<string, string> = {
   FALTA: "Falta",
+  FALTA_JUSTIFICADA: "Falta Justificada",
+  FALTA_INJUSTIFICADA: "Falta Injustificada",
   FOLGA: "Folga",
   FERIAS: "Férias",
   AFASTADO: "Afastado",

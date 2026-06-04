@@ -21,6 +21,8 @@ const statusLabels: Record<string, string> = {
   PRESENTE: "Presente",
   AUSENTE: "Falta",
   FALTA: "Falta",
+  FALTA_JUSTIFICADA: "Falta Justificada",
+  FALTA_INJUSTIFICADA: "Falta Injustificada",
   ATRASO: "Atraso",
   SAIDA_ANTECIPADA: "Saída antecipada",
   AFASTADO: "Afastado",

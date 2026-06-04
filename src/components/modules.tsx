@@ -110,12 +110,12 @@ import { MONTHLY_ADVANCE_FIXED_AMOUNT } from "@/lib/monthly-advance-constants";
 
 const scheduleImportColumns = ["wb_login", "data", "status", "turno", "entrada", "saida", "lob"] as const;
 const workHourImportColumns = ["wb_login", "data", "horas_realizadas", "sistema_origem", "observacao"] as const;
-const scheduleStatusOptions = ["Escalado", "Presente", "Nesting", "Falta", "Atraso", "Saída antecipada", "Afastado", "Férias", "Treinamento", "Folga", "Troca aprovada", "Venda de folga aprovada", "Folga aprovada", "Desligado", "Sem cronograma", "Erro de cronograma"] as const;
-const attendanceReasonStatuses = ["Falta", "Atraso", "Saída antecipada", "Erro de cronograma"];
+const scheduleStatusOptions = ["Escalado", "Presente", "Nesting", "Falta", "Falta Justificada", "Falta Injustificada", "Atraso", "Saída antecipada", "Afastado", "Férias", "Treinamento", "Folga", "Troca aprovada", "Venda de folga aprovada", "Folga aprovada", "Desligado", "Sem cronograma", "Erro de cronograma"] as const;
+const attendanceReasonStatuses = ["Falta", "Falta Justificada", "Falta Injustificada", "Atraso", "Saída antecipada", "Erro de cronograma"];
 const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Nesting", "Venda de folga aprovada"];
 const employeeOperationalStatusOptions = ["Ativo", "Nesting", "Inativo", "Pendente de cadastro", "Afastado", "Desligado", "Em treinamento", "Suspenso"];
 const pcdDisabilityTypeOptions = ["", "Física", "Auditiva", "Visual", "Intelectual", "Psicossocial", "Múltipla", "Neurodivergente", "Outra", "Prefiro não informar"];
-const absenceReasonOptions = ["Não informado", "Problema de saúde", "Emergência familiar", "Problema técnico", "Falta de equipamento", "Problema de internet", "Saída antecipada", "Afastamento", "Erro de cronograma", "Outros"];
+const absenceReasonOptions = ["Problema de saúde", "Erro de programação de escala", "Problema técnico corporativo", "Emergência familiar", "Não informado", "Problema técnico pessoal", "Problema de transporte", "Problema pessoal", "Erro de visualização de escala", "Outros"];
 const timeBlockCategoryOptions = ["Administrativo", "Desenvolvimento", "Acompanhamento de operação", "Feedback", "Reunião", "Treinamento", "Suporte ao time", "Análise de indicadores", "Escalonamento / Ocorrência", "Pausa", "Outros"];
 const scheduleShiftTimes: Record<string, { startsAt: string; endsAt: string }> = {
   Manhã: { startsAt: "08:00", endsAt: "14:00" },
@@ -505,6 +505,8 @@ type ScheduleJustificationCell = {
   status: string;
   justificationStatus: string;
   absenceReason?: string;
+  reasonClassification?: string;
+  reasonClassificationLabel?: string;
   reasonCategory?: string;
   supervisorJustification?: string;
   isJustified?: boolean;
@@ -638,14 +640,15 @@ type AttendanceSummary = {
   earlyLeave: number;
   unjustified: number;
   justified?: number;
+  classifiedUnjustified?: number;
   coverageRate: number;
   gap: number;
   riskLevel: string;
   byReason: Record<string, number>;
   byShift?: Record<string, { planned: number; present: number; absent: number; gap: number }>;
-  bySupervisor?: Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; absRate: number }>;
-  byLob?: Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; absRate: number }>;
-  topAbsenceAgents?: Array<{ employeeId: string; name: string; wbLogin: string; supervisor: string; lob: string; planned: number; absent: number; unjustified: number; justified: number; absRate: number }>;
+  bySupervisor?: Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; classifiedUnjustified?: number; absRate: number }>;
+  byLob?: Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; classifiedUnjustified?: number; absRate: number }>;
+  topAbsenceAgents?: Array<{ employeeId: string; name: string; wbLogin: string; supervisor: string; lob: string; planned: number; absent: number; unjustified: number; justified: number; classifiedUnjustified?: number; absRate: number }>;
   activePeopleByLobAndShift?: Array<{ lob: string; shifts: Record<string, number>; total: number }>;
   attrition?: {
     total: { lob: string; terminations: number; hcStart: number; hcEnd: number; hcAverage: number; attritionRate: number };
@@ -677,6 +680,7 @@ type AttendanceItem = {
   roleTitle?: string;
   status: string;
   absenceReason?: string;
+  reasonClassification?: string;
   reasonCategory?: string;
   supervisorJustification?: string;
   isJustified?: boolean;
@@ -2071,6 +2075,7 @@ export function OperationalCommandCenter() {
   const [absenceReasonExportError, setAbsenceReasonExportError] = useState("");
   const [exportingJustifiedAbsences, setExportingJustifiedAbsences] = useState(false);
   const [exportingUnjustifiedAbsences, setExportingUnjustifiedAbsences] = useState(false);
+  const [exportingClassifiedUnjustifiedAbsences, setExportingClassifiedUnjustifiedAbsences] = useState(false);
   const [selectedAbsSupervisor, setSelectedAbsSupervisor] = useState<string | null>(null);
   const [absSupervisorPeople, setAbsSupervisorPeople] = useState<AttendanceItem[]>([]);
   const [loadingAbsSupervisorPeople, setLoadingAbsSupervisorPeople] = useState(false);
@@ -2150,8 +2155,8 @@ export function OperationalCommandCenter() {
     }
   }
 
-  async function openAbsenceReasonPeople(reason: string, justification?: "pending" | "justified") {
-    setSelectedAbsenceReason(justification === "justified" ? "Faltas justificadas" : reason);
+  async function openAbsenceReasonPeople(reason: string, justification?: "pending" | "justified" | "unjustified") {
+    setSelectedAbsenceReason(justification === "justified" ? "Faltas justificadas" : justification === "unjustified" ? "Faltas injustificadas" : reason);
     setAbsenceReasonPeople([]);
     setAbsenceReasonError("");
     setAbsenceReasonExportError("");
@@ -2455,6 +2460,36 @@ export function OperationalCommandCenter() {
     }
   }
 
+  async function exportClassifiedUnjustifiedAbsences() {
+    if (selectedAbsenceReason !== "Faltas injustificadas") return;
+    setAbsenceReasonExportError("");
+    if (!absenceReasonPeople.length) {
+      setAbsenceReasonExportError("Nenhuma falta injustificada encontrada para exportar.");
+      return;
+    }
+    setExportingClassifiedUnjustifiedAbsences(true);
+    try {
+      const params = new URLSearchParams({
+        startDate: dateRange.startDate,
+        endDate: dateRange.endDate
+      });
+      if (selectedCommandLob !== "Todos") params.set("lob", selectedCommandLob);
+      if (selectedCommandSupervisor !== "Todos") params.set("supervisor", selectedCommandSupervisor);
+      if (selectedCommandRoleTitle !== "Todos") params.set("roleTitle", selectedCommandRoleTitle);
+      if (selectedCommandShift !== "Todos") params.set("shift", selectedCommandShift);
+      if (selectedCommandSkill !== "Todos") params.set("skill", selectedCommandSkill);
+      await downloadFile(
+        `/api/attendance/classified-unjustified-absences/export?${params.toString()}`,
+        `faltas_injustificadas_${dateRange.startDate}_${dateRange.endDate}.xlsx`,
+        "Não foi possível exportar as faltas injustificadas. Tente novamente."
+      );
+    } catch (error) {
+      setAbsenceReasonExportError(error instanceof Error ? error.message : "Não foi possível exportar as faltas injustificadas. Tente novamente.");
+    } finally {
+      setExportingClassifiedUnjustifiedAbsences(false);
+    }
+  }
+
   async function openAbsSupervisorPeople(supervisor: string) {
     setSelectedAbsSupervisor(supervisor);
     setAbsSupervisorPeople([]);
@@ -2517,6 +2552,7 @@ export function OperationalCommandCenter() {
     earlyLeave: 0,
     unjustified: 0,
     justified: 0,
+    classifiedUnjustified: 0,
     coverageRate: 0,
     gap: 0,
     riskLevel: "Sem dados",
@@ -2554,7 +2590,8 @@ export function OperationalCommandCenter() {
     { title: "Presentes", value: summary.present, change: `${summary.coverageRate}%`, helper: "cobertura real", icon: UserCheck, tone: "green" as const, action: () => void openCommandDetailPeople("present", "Presentes") },
     { title: "Faltas", value: summary.absent, change: `${summary.absRate}%`, helper: "ABS", icon: XCircle, tone: "orange" as const, action: () => void openCommandDetailPeople("absences", "Faltas") },
     { title: "Faltas sem justificativa", value: summary.unjustified, helper: "pendentes", icon: AlertTriangle, tone: summary.unjustified ? "red" as const : "green" as const, action: () => void openAbsenceReasonPeople("Sem justificativa", "pending") },
-    { title: "Faltas justificadas", value: summary.justified ?? 0, helper: "com motivo registrado", icon: CheckCircle2, tone: (summary.justified ?? 0) ? "green" as const : "blue" as const, action: () => void openAbsenceReasonPeople("Faltas justificadas", "justified") },
+    { title: "Faltas justificadas", value: summary.justified ?? 0, helper: "motivo justificado", icon: CheckCircle2, tone: (summary.justified ?? 0) ? "green" as const : "blue" as const, action: () => void openAbsenceReasonPeople("Faltas justificadas", "justified") },
+    { title: "Faltas injustificadas", value: summary.classifiedUnjustified ?? 0, helper: "motivo injustificado", icon: AlertTriangle, tone: (summary.classifiedUnjustified ?? 0) ? "red" as const : "blue" as const, action: () => void openAbsenceReasonPeople("Faltas injustificadas", "unjustified") },
     {
       title: "Medidor de Humor",
       value: commandMood.responses ? commandMoodOption?.label ?? commandMood.interpretation : "Sem dados",
@@ -3309,6 +3346,16 @@ export function OperationalCommandCenter() {
                     {exportingJustifiedAbsences ? "Exportando..." : "Exportar"}
                   </button>
                 ) : null}
+                {selectedAbsenceReason === "Faltas injustificadas" ? (
+                  <button
+                    type="button"
+                    disabled={exportingClassifiedUnjustifiedAbsences || loadingAbsenceReasonPeople}
+                    onClick={() => void exportClassifiedUnjustifiedAbsences()}
+                    className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-extrabold text-navy-950 hover:border-blue-200 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {exportingClassifiedUnjustifiedAbsences ? "Exportando..." : "Exportar"}
+                  </button>
+                ) : null}
                 <button onClick={closeAbsenceReasonPeople} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
               </div>
             </div>
@@ -3321,7 +3368,7 @@ export function OperationalCommandCenter() {
               <EmptyState title="Não foi possível carregar" description={absenceReasonError} />
             ) : absenceReasonPeople.length ? (
               <SimpleTable
-                columns={["Colaborador", "WB/Login", "Data", "Turno", "LOB", "Supervisor", "Status", "Motivo", "Categoria", "Observação", "Justificado por", "Justificado em", "Ação"]}
+                columns={["Colaborador", "WB/Login", "Data", "Turno", "LOB", "Supervisor", "Status", "Motivo", "Classificação", "Categoria", "Observação", "Justificado por", "Justificado em", "Ação"]}
                 rows={absenceReasonPeople.map((record) => [
                   record.employeeName,
                   record.wbLogin ?? "-",
@@ -3331,6 +3378,7 @@ export function OperationalCommandCenter() {
                   record.supervisor ?? "Sem supervisor",
                   <StatusBadge key={`${record.id}-status`} status={record.status} />,
                   record.absenceReason ?? "Sem justificativa",
+                  record.reasonClassification === "JUSTIFIED" ? "Justificado" : record.reasonClassification === "UNJUSTIFIED" ? "Injustificado" : "-",
                   record.reasonCategory ?? "-",
                   <span key={`${record.id}-note`} className="block max-w-[260px] truncate" title={record.supervisorJustification ?? ""}>{record.supervisorJustification ?? "-"}</span>,
                   record.justifiedBy ?? record.registeredBy ?? "Sistema",
@@ -5336,8 +5384,8 @@ export function SchedulesPage() {
       supervisorJustification: "",
       hasEvidence: false,
       evidenceUrl: "",
-      impactsAbs: safeStatus === "Falta",
-      impactsCoverage: ["Falta", "Atraso", "Saída antecipada", "Erro de cronograma"].includes(safeStatus)
+      impactsAbs: ["Falta", "Falta Justificada", "Falta Injustificada"].includes(safeStatus),
+      impactsCoverage: ["Falta", "Falta Justificada", "Falta Injustificada", "Atraso", "Saída antecipada", "Erro de cronograma"].includes(safeStatus)
     });
     setShowAttendance(true);
   }
@@ -5547,9 +5595,15 @@ export function SchedulesPage() {
 
   async function saveAttendance() {
     if (savingJustification) return;
-    if (statusNeedsReason(attendanceForm.status) && !attendanceForm.absenceReason.trim() && !attendanceForm.supervisorJustification.trim()) {
-      setAttendanceMessage("Motivo/observação obrigatório para falta, atraso, saída antecipada ou erro de cronograma.");
-      return;
+    if (statusNeedsReason(attendanceForm.status)) {
+      if (!attendanceForm.absenceReason.trim()) {
+        setAttendanceMessage("Motivo da ocorrência é obrigatório.");
+        return;
+      }
+      if (!attendanceForm.supervisorJustification.trim()) {
+        setAttendanceMessage("Descrição da ocorrência é obrigatória.");
+        return;
+      }
     }
 
     setSavingJustification(true);
@@ -5586,11 +5640,11 @@ export function SchedulesPage() {
       return;
     }
     if (!justificationDraft.absenceReason.trim()) {
-      setAttendanceMessage("Motivo da justificativa é obrigatório.");
+      setAttendanceMessage("Motivo da ocorrência é obrigatório.");
       return;
     }
     if (!justificationDraft.supervisorJustification.trim()) {
-      setAttendanceMessage("Observação é obrigatória para esta justificativa.");
+      setAttendanceMessage("Descrição da ocorrência é obrigatória.");
       return;
     }
 
@@ -5610,16 +5664,18 @@ export function SchedulesPage() {
           supervisorJustification: justificationDraft.supervisorJustification,
           hasEvidence: justificationDraft.hasEvidence,
           evidenceUrl: justificationDraft.evidenceUrl,
-          impactsAbs: scheduleEditForm.status === "Falta",
-          impactsCoverage: ["Falta", "Atraso", "Saída antecipada", "Erro de cronograma"].includes(scheduleEditForm.status)
+          impactsAbs: ["Falta", "Falta Justificada", "Falta Injustificada"].includes(scheduleEditForm.status),
+          impactsCoverage: ["Falta", "Falta Justificada", "Falta Injustificada", "Atraso", "Saída antecipada", "Erro de cronograma"].includes(scheduleEditForm.status)
         })
       });
       if (payload.summary) setAttendanceSummary(payload.summary);
       setSelectedScheduleJustification({
         id: payload.data.id,
         status: payload.data.status ?? scheduleEditForm.status,
-        justificationStatus: payload.data.isJustified === false ? "Justificativa pendente" : "Justificado",
+        justificationStatus: payload.data.isJustified === false ? "Justificativa pendente" : payload.data.reasonClassification === "UNJUSTIFIED" ? "Injustificado" : "Justificado",
         absenceReason: payload.data.absenceReason,
+        reasonClassification: payload.data.reasonClassification,
+        reasonClassificationLabel: payload.data.reasonClassification === "JUSTIFIED" ? "Justificado" : payload.data.reasonClassification === "UNJUSTIFIED" ? "Injustificado" : undefined,
         reasonCategory: payload.data.reasonCategory,
         supervisorJustification: payload.data.supervisorJustification,
         isJustified: payload.data.isJustified,
@@ -5772,7 +5828,7 @@ export function SchedulesPage() {
   const manualStatusPreview = plannedHoursForManualPreview
     ? Math.abs(manualDifferencePreview) <= 5 ? "OK" : "Divergente"
     : workHourForm.recordId ? workHourForm.status : selectedCellHasSchedule ? "Sem horas" : "Sem cronograma";
-  const supervisorOccurrenceStatuses = ["Falta", "Atraso", "Saída antecipada", "Erro de cronograma"];
+  const supervisorOccurrenceStatuses = ["Falta", "Falta Justificada", "Falta Injustificada", "Atraso", "Saída antecipada", "Erro de cronograma"];
   const attendanceStatusOptions = isScheduleSupervisor
     ? supervisorOccurrenceStatuses
     : [...scheduleStatusOptions].filter((status) => status !== "Escalado");
@@ -6430,6 +6486,10 @@ export function SchedulesPage() {
                           <span className="mt-1 block font-extrabold text-navy-950">{selectedScheduleJustification?.absenceReason ?? "Sem justificativa"}</span>
                         </div>
                         <div className="rounded-lg border border-border bg-white p-3">
+                          <span className="block text-xs font-bold uppercase tracking-wide text-muted">Classificação</span>
+                          <span className="mt-1 block font-extrabold text-navy-950">{selectedScheduleJustification?.reasonClassificationLabel ?? (selectedScheduleJustification?.reasonClassification === "JUSTIFIED" ? "Justificado" : selectedScheduleJustification?.reasonClassification === "UNJUSTIFIED" ? "Injustificado" : "Pendente")}</span>
+                        </div>
+                        <div className="rounded-lg border border-border bg-white p-3">
                           <span className="block text-xs font-bold uppercase tracking-wide text-muted">Categoria</span>
                           <span className="mt-1 block font-extrabold text-navy-950">{selectedScheduleJustification?.reasonCategory ?? "Não informada"}</span>
                         </div>
@@ -6639,8 +6699,8 @@ export function SchedulesPage() {
                     status: value,
                     absenceReason: reasonRequired ? attendanceForm.absenceReason : "",
                     supervisorJustification: reasonRequired ? attendanceForm.supervisorJustification : "",
-                    impactsAbs: value === "Falta",
-                    impactsCoverage: ["Falta", "Atraso", "Saída antecipada", "Sem cronograma"].includes(value)
+                    impactsAbs: ["Falta", "Falta Justificada", "Falta Injustificada"].includes(value),
+                    impactsCoverage: ["Falta", "Falta Justificada", "Falta Injustificada", "Atraso", "Saída antecipada", "Sem cronograma"].includes(value)
                   });
                 }}
               />
@@ -7373,6 +7433,8 @@ function shiftTagClass(value: string) {
     Escalado: "bg-blue-50 text-blue-700",
     Presente: "bg-emerald-50 text-emerald-700",
     Falta: "bg-red-100 text-red-800",
+    "Falta Justificada": "bg-emerald-50 text-emerald-700",
+    "Falta Injustificada": "bg-red-100 text-red-800",
     "Falta sem justificativa": "border border-red-300 bg-red-100 text-red-900 shadow-sm shadow-red-100",
     "Atraso sem justificativa": "border border-orange-300 bg-orange-100 text-orange-900 shadow-sm shadow-orange-100",
     "Saída antecipada sem justificativa": "border border-orange-300 bg-orange-100 text-orange-900 shadow-sm shadow-orange-100",

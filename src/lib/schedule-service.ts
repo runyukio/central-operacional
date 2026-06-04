@@ -13,11 +13,19 @@ import { calculateAbsenceRate, calculateCoverageRate, getAbsenceStatuses, getPre
 import { calculateProductiveDifferenceMinutes, formatWorkHours, isProductiveDifferenceWithinTolerance, plannedProductiveHoursForSchedule } from "@/lib/work-hours-rules";
 import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import { moodGroupSummary, moodInterpretation, moodLabel, type MoodGroupSummary } from "@/lib/mood-service";
+import {
+  absenceReasonClassificationLabel,
+  getAbsenceReasonClassification,
+  normalizeAbsenceReasonForInput,
+  scheduleStatusForAbsenceClassification
+} from "@/lib/absence-reasons";
 
 const uiToScheduleStatus: Record<string, ScheduleStatus> = {
   Escalado: "ESCALADO",
   Presente: "PRESENTE",
   Falta: "FALTA",
+  "Falta Justificada": "FALTA_JUSTIFICADA",
+  "Falta Injustificada": "FALTA_INJUSTIFICADA",
   Atraso: "ATRASO",
   "Saída antecipada": "SAIDA_ANTECIPADA",
   Afastado: "AFASTADO",
@@ -42,6 +50,8 @@ const allowedScheduleImportStatusKeys = new Set([
   "ESCALADO",
   "PRESENTE",
   "FALTA",
+  "FALTA_JUSTIFICADA",
+  "FALTA_INJUSTIFICADA",
   "ATRASO",
   "SAIDA_ANTECIPADA",
   "AFASTADO",
@@ -53,6 +63,8 @@ const allowedScheduleImportStatusKeys = new Set([
   "VENDA_DE_FOLGA_APROVADA",
   "VENDA_FOLGA_APROVADA",
   "FOLGA_APROVADA",
+  "FALTA_JUSTIFICADA",
+  "FALTA_INJUSTIFICADA",
   "SEM_ESCALA",
   "SEM_CRONOGRAMA",
   "ERRO_DE_ESCALA",
@@ -71,6 +83,8 @@ const scheduleToUiStatus: Record<string, string> = {
 const uiToAttendanceStatus: Record<string, AttendanceStatus> = {
   Presente: "PRESENTE",
   Falta: "FALTA",
+  "Falta Justificada": "FALTA",
+  "Falta Injustificada": "FALTA",
   Atraso: "ATRASO",
   "Saída antecipada": "SAIDA_ANTECIPADA",
   Afastado: "AFASTADO",
@@ -86,9 +100,9 @@ const uiToAttendanceStatus: Record<string, AttendanceStatus> = {
   "Erro de cronograma": "ERRO_ESCALA"
 };
 
-export const statusesRequiringReason = ["Falta", "Atraso", "Saída antecipada", "Erro de escala", "Erro de cronograma"];
-const supervisorJustificationStatuses = ["Falta", "Atraso", "Saída antecipada", "Erro de escala", "Erro de cronograma"];
-const scheduleStatusesRequiringJustification: ScheduleStatus[] = ["FALTA", "ATRASO", "SAIDA_ANTECIPADA", "ERRO_ESCALA"];
+export const statusesRequiringReason = ["Falta", "Falta Justificada", "Falta Injustificada", "Atraso", "Saída antecipada", "Erro de escala", "Erro de cronograma"];
+const supervisorJustificationStatuses = ["Falta", "Falta Justificada", "Falta Injustificada", "Atraso", "Saída antecipada", "Erro de escala", "Erro de cronograma"];
+const scheduleStatusesRequiringJustification: ScheduleStatus[] = ["FALTA", "FALTA_JUSTIFICADA", "FALTA_INJUSTIFICADA", "ATRASO", "SAIDA_ANTECIPADA", "ERRO_ESCALA"];
 
 const defaultShiftTimes: Record<string, { startsAt: string; endsAt: string }> = {
   Manhã: { startsAt: "08:00", endsAt: "14:00" },
@@ -215,6 +229,7 @@ type AttendanceExportRow = {
   roleTitle?: string;
   status: string;
   absenceReason?: string;
+  reasonClassification?: string;
   reasonCategory?: string;
   supervisorJustification?: string;
   isJustified?: boolean;
@@ -281,6 +296,7 @@ type LatestAttendanceRecordBySchedule = {
   scheduleId: string | null;
   status: AttendanceStatus;
   absenceReason: string | null;
+  reasonClassification: string | null;
   impactsAbs: boolean;
   isJustified: boolean;
   updatedAt: Date;
@@ -361,7 +377,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
                 attendanceRecords: {
                   orderBy: { updatedAt: "desc" },
                   take: 1,
-                  select: { status: true, absenceReason: true, isJustified: true, updatedAt: true }
+              select: { status: true, absenceReason: true, reasonClassification: true, isJustified: true, updatedAt: true }
                 }
               },
               orderBy: { date: "asc" }
@@ -375,7 +391,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         if (day.outside) return { ...day, shift: "Sem turno", label: "Sem cronograma" };
         const schedule = ownScheduleByDate.get(day.dateIso);
         const label = schedule
-          ? (scheduleStatusRequiresJustification(schedule.status) ? attendanceDisplayLabel(schedule.attendanceRecords) : null) ?? (scheduleToUiStatus[schedule.status] ?? "Escalado")
+          ? (scheduleStatusRequiresJustification(schedule.status) ? attendanceDisplayLabel(schedule.attendanceRecords, schedule.status) : null) ?? (scheduleToUiStatus[schedule.status] ?? "Escalado")
           : "Sem cronograma";
         const shift = schedule ? cleanShiftName(schedule.shift?.name ?? own?.shift.name) || "Sem turno" : "Sem turno";
         return { ...day, shift, label };
@@ -484,6 +500,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
             id: true,
             status: true,
             absenceReason: true,
+            reasonClassification: true,
             reasonCategory: true,
             supervisorJustification: true,
             isJustified: true,
@@ -586,7 +603,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       days: dateColumns.map((date) => {
         const schedule = scheduleByDate.get(dateKey(date));
         if (!schedule) return "Sem cronograma";
-        const attendanceLabel = scheduleStatusRequiresJustification(schedule.status) ? attendanceDisplayLabel(schedule.attendanceRecords) : null;
+        const attendanceLabel = scheduleStatusRequiresJustification(schedule.status) ? attendanceDisplayLabel(schedule.attendanceRecords, schedule.status) : null;
         if (attendanceLabel) return attendanceLabel;
         return scheduleToUiStatus[schedule.status] ?? schedule.status;
       }),
@@ -653,7 +670,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
               attendanceRecords: {
                 orderBy: { updatedAt: "desc" },
                 take: 1,
-                select: { status: true, absenceReason: true, isJustified: true, updatedAt: true }
+                select: { status: true, absenceReason: true, reasonClassification: true, isJustified: true, updatedAt: true }
               }
             },
             orderBy: { date: "asc" }
@@ -667,7 +684,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       if (day.outside) return { ...day, shift: "Sem turno", label: "Sem cronograma" };
       const schedule = ownScheduleByDate.get(day.dateIso);
       const label = schedule
-        ? (scheduleStatusRequiresJustification(schedule.status) ? attendanceDisplayLabel(schedule.attendanceRecords) : null) ?? (scheduleToUiStatus[schedule.status] ?? "Escalado")
+        ? (scheduleStatusRequiresJustification(schedule.status) ? attendanceDisplayLabel(schedule.attendanceRecords, schedule.status) : null) ?? (scheduleToUiStatus[schedule.status] ?? "Escalado")
         : "Sem cronograma";
       const shift = schedule ? cleanShiftName(schedule.shift?.name ?? own?.shift.name) || "Sem turno" : "Sem turno";
       return { ...day, shift, label };
@@ -821,7 +838,8 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
         }
       })
       : null;
-    const status = uiToScheduleStatus[input.status] ?? "ESCALADO";
+    const requestedStatus = uiToScheduleStatus[input.status] ?? "ESCALADO";
+    const status = classifiedScheduleStatusForInput(input, requestedStatus);
     const before = await prisma.schedule.findUnique({ where: { employeeId_date: { employeeId: employee.id, date } }, include: { shift: true } });
 
     const saved = await prisma.$transaction(async (tx) => {
@@ -937,7 +955,7 @@ export async function updateOperationalAttendance(actor: Actor, input: Attendanc
       employeeId: normalizedInput.employeeId,
       date: normalizedInput.date,
       shift: cleanShiftName(normalizedInput.shift) || normalizedInput.shift,
-      status: normalizedInput.status,
+      status: "data" in scheduleResult ? scheduleToUiStatus[String(scheduleResult.data.status)] ?? normalizedInput.status : normalizedInput.status,
       absenceReason: normalizedInput.absenceReason,
       supervisorJustification: normalizedInput.supervisorJustification
     },
@@ -949,8 +967,9 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
   if (!supervisorJustificationStatuses.includes(input.status)) {
     return { error: "Supervisor só pode justificar ocorrências. Presença, cronograma, folga, férias e treinamento são atualizados pelo WFM/Admin." };
   }
-  if (!input.absenceReason?.trim()) return { error: "Motivo obrigatório para justificar a ocorrência." };
-  if (!input.supervisorJustification?.trim()) return { error: "Justificativa obrigatória para encerrar a pendência." };
+  if (!input.absenceReason?.trim()) return { error: "Motivo da ocorrência é obrigatório." };
+  if (!normalizeAttendanceReason(input.absenceReason)) return { error: "Motivo inválido." };
+  if (!input.supervisorJustification?.trim()) return { error: "Descrição da ocorrência é obrigatória." };
 
   const startedAt = Date.now();
   const timings: Record<string, number> = {};
@@ -1032,9 +1051,13 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
     if (!supervisorJustificationStatuses.includes(scheduleStatus) && !supervisorJustificationStatuses.includes(existingStatus)) {
       return { error: "Esta ocorrência não é justificável pelo Supervisor." };
     }
+    const normalizedReason = normalizeAttendanceReason(input.absenceReason);
+    const reasonClassification = getAbsenceReasonClassification(normalizedReason);
+    if (!normalizedReason || !reasonClassification) return { error: "Motivo inválido." };
     const savedStatus = uiToAttendanceStatus[existingStatus] ?? status;
+    const nextScheduleStatus = isAbsenceStatus(schedule.status) ? scheduleStatusForAbsenceClassification(reasonClassification) : schedule.status;
     const nextHasEvidence = input.hasEvidence ?? false;
-    const nextImpactsAbs = input.impactsAbs ?? impactsAbs(existingStatus, input.absenceReason);
+    const nextImpactsAbs = input.impactsAbs ?? impactsAbs(existingStatus, normalizedReason);
     const nextImpactsCoverage = input.impactsCoverage ?? impactsCoverage(existingStatus);
     const toResponseData = (record: NonNullable<typeof existing>) => ({
       id: record.id,
@@ -1047,8 +1070,9 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
       shift: cleanShiftName(shift.name) || "Sem turno",
       lob: employee.lob.name,
       supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
-      status: scheduleToUiStatus[record.status] ?? input.status,
+      status: scheduleToUiStatus[nextScheduleStatus] ?? scheduleToUiStatus[record.status] ?? input.status,
       absenceReason: record.absenceReason ?? undefined,
+      reasonClassification: record.reasonClassification ?? undefined,
       reasonCategory: record.reasonCategory ?? undefined,
       supervisorJustification: record.supervisorJustification ?? undefined,
       isJustified: record.isJustified,
@@ -1064,9 +1088,11 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
     if (
       existing?.isJustified &&
       existing.status === savedStatus &&
-      (existing.absenceReason ?? "") === (input.absenceReason ?? "") &&
+      (existing.absenceReason ?? "") === normalizedReason &&
+      (existing.reasonClassification ?? "") === reasonClassification &&
       (existing.reasonCategory ?? "") === (input.reasonCategory ?? "") &&
       (existing.supervisorJustification ?? "") === (input.supervisorJustification ?? "") &&
+      schedule.status === nextScheduleStatus &&
       existing.hasEvidence === nextHasEvidence &&
       (existing.evidenceUrl ?? "") === (input.evidenceUrl ?? "") &&
       existing.impactsAbs === nextImpactsAbs &&
@@ -1089,8 +1115,9 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
               scheduleId: schedule.id,
               shiftId: shift.id,
               status: savedStatus,
-              absenceReason: input.absenceReason,
+              absenceReason: normalizedReason,
               reasonCategory: input.reasonCategory,
+              reasonClassification,
               supervisorJustification: input.supervisorJustification,
               hasEvidence: nextHasEvidence,
               evidenceUrl: input.evidenceUrl,
@@ -1108,8 +1135,9 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
               date,
               shiftId: shift.id,
               status: savedStatus,
-              absenceReason: input.absenceReason,
+              absenceReason: normalizedReason,
               reasonCategory: input.reasonCategory,
+              reasonClassification,
               supervisorJustification: input.supervisorJustification,
               hasEvidence: nextHasEvidence,
               evidenceUrl: input.evidenceUrl,
@@ -1129,10 +1157,35 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
           previousStatus: existing?.status ?? null,
           newStatus: savedStatus,
           previousReason: existing?.absenceReason ?? null,
-          newReason: input.absenceReason,
-          comment: input.supervisorJustification || input.absenceReason
+          newReason: normalizedReason,
+          comment: input.supervisorJustification || normalizedReason
         }
       });
+
+      let savedSchedule = schedule;
+      if (schedule.status !== nextScheduleStatus) {
+        savedSchedule = await tx.schedule.update({
+          where: { id: schedule.id },
+          data: {
+            status: nextScheduleStatus,
+            observation: input.supervisorJustification || normalizedReason
+          },
+          include: { shift: true }
+        });
+        await tx.scheduleChangeHistory.create({
+          data: {
+            scheduleId: schedule.id,
+            employeeId: employee.id,
+            changedById: user.id,
+            date,
+            before: serialize(schedule),
+            after: serialize(savedSchedule),
+            previousValue: { status: schedule.status },
+            newValue: { status: nextScheduleStatus, reasonClassification, absenceReason: normalizedReason },
+            reason: `Status atualizado automaticamente por justificativa: ${absenceReasonClassificationLabel(reasonClassification)}`
+          }
+        });
+      }
 
       await tx.auditLog.create({
         data: {
@@ -1142,7 +1195,7 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
           entityId: record.id,
           reason: "Justificativa de ocorrência registrada pelo Supervisor",
           previousValue: existing ? serialize(existing) : null,
-          newValue: serialize(record)
+          newValue: { ...serialize(record), scheduleStatusBefore: schedule.status, scheduleStatusAfter: savedSchedule.status, reasonClassification }
         }
       });
 
@@ -1519,6 +1572,13 @@ export async function exportOperationalSchedulesXlsxData(actor: Actor, query: Sc
           orderBy: { updatedAt: "desc" },
           take: 1,
           select: { effectiveHours: true, actualHours: true, updatedAt: true }
+        },
+        attendanceRecords: {
+          orderBy: { updatedAt: "desc" },
+          take: 1,
+          include: {
+            justifiedBy: { select: { name: true } }
+          }
         }
       },
       orderBy: [{ date: "asc" }, { employee: { fullName: "asc" } }]
@@ -1551,9 +1611,11 @@ export async function exportOperationalSchedulesXlsxData(actor: Actor, query: Sc
       }
     }).catch(() => undefined);
 
-    const headers = ["wb_login", "nome", "email", "data", "status", "turno", "skill", "entrada", "saida", "lob", "supervisor", "horas_realizadas", "observacao", "atualizado_em"];
+    const headers = ["wb_login", "nome", "email", "data", "status", "turno", "skill", "entrada", "saida", "lob", "supervisor", "horas_realizadas", "status_justificativa", "motivo_justificativa", "classificacao_motivo", "descricao_ocorrencia", "justificado_por", "justificado_em", "observacao", "atualizado_em"];
     const rows = schedules.map((schedule) => {
       const workHour = schedule.workHourRecords[0] ?? fallbackWorkHourByEmployeeDay.get(`${schedule.employeeId}:${schedule.date.getTime()}`);
+      const attendance = schedule.attendanceRecords[0];
+      const classificationLabel = absenceReasonClassificationLabel(attendance?.reasonClassification ?? getAbsenceReasonClassification(attendance?.absenceReason));
       return [
         schedule.employee.wbLogin,
         schedule.employee.fullName,
@@ -1567,6 +1629,12 @@ export async function exportOperationalSchedulesXlsxData(actor: Actor, query: Sc
         schedule.employee.lob.name,
         schedule.employee.supervisor?.fullName ?? "Sem supervisor",
         workHour ? formatWorkHours(workHour.effectiveHours ?? workHour.actualHours) : "Não lançado",
+        schedule.status === "FALTA_JUSTIFICADA" ? "Justificada" : schedule.status === "FALTA_INJUSTIFICADA" ? "Injustificada" : isPendingJustificationForSchedule(schedule.status, attendance) ? "Sem justificativa" : "",
+        attendanceReasonForSchedule(schedule.status, attendance),
+        classificationLabel,
+        attendance?.supervisorJustification ?? "",
+        attendance?.justifiedBy?.name ?? "",
+        attendance?.justifiedAt ? formatDateTime(attendance.justifiedAt) : "",
         schedule.observation ?? "",
         formatDateTime(schedule.updatedAt)
       ];
@@ -1739,7 +1807,8 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
         if (!isAbsenceStatus(schedule.status)) return false;
         if (reasonFilter && attendanceReasonForSchedule(schedule.status, record) !== reasonFilter) return false;
         if (justificationFilter === "pending") return isPendingJustificationForSchedule(schedule.status, record);
-        if (justificationFilter === "justified") return hasValidJustification(record);
+        if (justificationFilter === "justified") return isJustifiedAbsenceForSchedule(schedule.status, record);
+        if (justificationFilter === "unjustified") return isClassifiedUnjustifiedAbsenceForSchedule(schedule.status, record);
         return true;
       }
       return isPendingJustificationForSchedule(schedule.status, record);
@@ -1765,6 +1834,7 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
           roleTitle: schedule.employee.roleTitle ?? "Sem cargo",
           status,
           absenceReason: attendanceReasonForSchedule(schedule.status, record),
+          reasonClassification: validJustification ? record?.reasonClassification ?? getAbsenceReasonClassification(record?.absenceReason) ?? undefined : undefined,
           reasonCategory: validJustification ? record?.reasonCategory ?? undefined : undefined,
           supervisorJustification: validJustification ? record?.supervisorJustification ?? undefined : undefined,
           isJustified: validJustification,
@@ -1816,7 +1886,7 @@ export async function exportJustifiedAbsencesXlsxData(actor: Actor, query: Atten
     });
     if ("error" in result) return { error: result.error, status: 400 };
 
-    const rows = (result.data as AttendanceExportRow[]).filter((record) => record.status === "Falta" && record.isJustified);
+    const rows = (result.data as AttendanceExportRow[]).filter((record) => record.status === "Falta Justificada" || record.reasonClassification === "JUSTIFIED");
     if (!rows.length) return { error: "Nenhuma falta justificada encontrada para exportar.", status: 404 };
 
     await prisma.auditLog.create({
@@ -1841,6 +1911,7 @@ export async function exportJustifiedAbsencesXlsxData(actor: Actor, query: Atten
       "status_cronograma",
       "status_justificativa",
       "motivo_justificativa",
+      "classificacao_motivo",
       "categoria_justificativa",
       "observacao_justificativa",
       "justificado_por",
@@ -1859,6 +1930,7 @@ export async function exportJustifiedAbsencesXlsxData(actor: Actor, query: Atten
       record.status,
       "Justificado",
       record.absenceReason ?? "",
+      absenceReasonClassificationLabel(record.reasonClassification),
       record.reasonCategory ?? "",
       record.supervisorJustification ?? "",
       record.justifiedBy ?? record.registeredBy ?? "Sistema",
@@ -1923,6 +1995,7 @@ export async function exportUnjustifiedAbsencesXlsxData(actor: Actor, query: Att
       "status_cronograma",
       "status_justificativa",
       "motivo_justificativa",
+      "classificacao_motivo",
       "categoria_justificativa",
       "observacao_justificativa",
       "registrado_por",
@@ -1941,6 +2014,7 @@ export async function exportUnjustifiedAbsencesXlsxData(actor: Actor, query: Att
       record.status,
       "Sem justificativa",
       record.absenceReason ?? "Sem justificativa",
+      "",
       record.reasonCategory ?? "",
       record.supervisorJustification ?? "",
       record.registeredBy ?? "Sistema",
@@ -1960,6 +2034,90 @@ export async function exportUnjustifiedAbsencesXlsxData(actor: Actor, query: Att
   } catch (error) {
     recordErrorLog({ userEmail: actor.email, code: "UNJUSTIFIED_ABSENCES_EXPORT_ERROR", message: error instanceof Error ? error.message : "Falha ao exportar faltas sem justificativa", action: "ATTENDANCE_EXPORT", severity: "ERROR" });
     return { error: "Não foi possível exportar as faltas sem justificativa. Tente novamente.", status: 500 };
+  }
+}
+
+export async function exportClassifiedUnjustifiedAbsencesXlsxData(actor: Actor, query: AttendanceQuery = {}) {
+  try {
+    const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
+    if (!user) return { error: "Usuário ativo não encontrado para exportar faltas injustificadas.", status: 401 };
+    const role = normalizeRole(actor.role);
+    if (!["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "RH", "QUALIDADE", "TI"].includes(role)) {
+      return { error: "Você não tem permissão para exportar faltas injustificadas.", status: 403 };
+    }
+
+    const result = await getOperationalAttendance(actor, {
+      ...query,
+      includeJustified: "true",
+      justification: "unjustified",
+      skipSummary: "true"
+    });
+    if ("error" in result) return { error: result.error, status: 400 };
+
+    const rows = (result.data as AttendanceExportRow[]).filter((record) => record.status === "Falta Injustificada" || record.reasonClassification === "UNJUSTIFIED");
+    if (!rows.length) return { error: "Nenhuma falta injustificada encontrada para exportar.", status: 404 };
+
+    await prisma.auditLog.create({
+      data: {
+        actorId: user.id,
+        action: "UPLOAD",
+        entity: "AttendanceRecord",
+        reason: "Exportação XLSX de Faltas Injustificadas",
+        newValue: { action: "EXPORT_CLASSIFIED_UNJUSTIFIED_ABSENCES", filters: query, exportedRows: rows.length }
+      }
+    }).catch(() => undefined);
+
+    const headers = [
+      "data",
+      "colaborador",
+      "wb_login",
+      "email",
+      "lob",
+      "supervisor",
+      "turno",
+      "cargo_funcao",
+      "status_cronograma",
+      "status_justificativa",
+      "motivo_justificativa",
+      "classificacao_motivo",
+      "categoria_justificativa",
+      "observacao_justificativa",
+      "justificado_por",
+      "justificado_em",
+      "atualizado_em"
+    ];
+    const body = rows.map((record) => [
+      record.dateIso ?? record.date,
+      record.employeeName,
+      record.wbLogin ?? "",
+      record.email ?? "",
+      record.lob ?? "",
+      record.supervisor ?? "Sem supervisor",
+      record.shift,
+      record.roleTitle ?? "Sem cargo",
+      record.status,
+      "Injustificado",
+      record.absenceReason ?? "",
+      absenceReasonClassificationLabel(record.reasonClassification),
+      record.reasonCategory ?? "",
+      record.supervisorJustification ?? "",
+      record.justifiedBy ?? record.registeredBy ?? "Sistema",
+      record.justifiedAt ?? "",
+      record.updatedAt ?? record.justifiedAt ?? record.registeredAt
+    ]);
+
+    const start = query.startDate ?? query.date ?? new Date().toISOString().slice(0, 10);
+    const end = query.endDate ?? start;
+    return {
+      headers,
+      rows: body,
+      count: rows.length,
+      sheetName: "Faltas injustificadas",
+      fileName: start === end ? `faltas_injustificadas_${start}.xlsx` : `faltas_injustificadas_${start}_a_${end}.xlsx`
+    };
+  } catch (error) {
+    recordErrorLog({ userEmail: actor.email, code: "CLASSIFIED_UNJUSTIFIED_ABSENCES_EXPORT_ERROR", message: error instanceof Error ? error.message : "Falha ao exportar faltas injustificadas", action: "ATTENDANCE_EXPORT", severity: "ERROR" });
+    return { error: "Não foi possível exportar as faltas injustificadas. Tente novamente.", status: 500 };
   }
 }
 
@@ -1989,6 +2147,7 @@ export async function exportAttendanceDetailXlsxData(actor: Actor, query: Attend
       "status_cronograma",
       "status_justificativa",
       "motivo_justificativa",
+      "classificacao_motivo",
       "observacao",
       "atualizado_em"
     ],
@@ -2003,8 +2162,9 @@ export async function exportAttendanceDetailXlsxData(actor: Actor, query: Attend
       item.roleTitle ?? "",
       "",
       item.status,
-      item.isJustified ? "Justificada" : item.absenceReason === "Sem justificativa" ? "Sem justificativa" : "-",
+      item.status === "Falta Justificada" || item.reasonClassification === "JUSTIFIED" ? "Justificada" : item.status === "Falta Injustificada" || item.reasonClassification === "UNJUSTIFIED" ? "Injustificada" : item.absenceReason === "Sem justificativa" ? "Sem justificativa" : "-",
       item.absenceReason ?? "",
+      absenceReasonClassificationLabel(item.reasonClassification),
       item.supervisorJustification ?? "",
       item.updatedAt ?? item.registeredAt
     ]),
@@ -2109,7 +2269,11 @@ function validateScheduleEdit(input: ScheduleEditInput) {
   if (!input.date) return "Data obrigatória.";
   if (!input.status) return "Status obrigatório.";
   if (needsTime(input.status) && (!input.shift || !input.startsAt || !input.endsAt)) return "Turno, entrada e saída são obrigatórios para Escalado, Presente ou Nesting.";
-  if (requiresReason(input.status) && !input.observation?.trim() && !input.pendingJustification) return "Motivo ou observação obrigatório para este status, exceto quando marcado como sem justificativa.";
+  if (requiresReason(input.status) && !input.pendingJustification) {
+    if (!input.absenceReason?.trim()) return "Motivo da ocorrência é obrigatório.";
+    if (!normalizeAttendanceReason(input.absenceReason)) return "Motivo inválido.";
+    if (!input.observation?.trim() && !input.supervisorJustification?.trim()) return "Descrição da ocorrência é obrigatória.";
+  }
   return "";
 }
 
@@ -2118,18 +2282,25 @@ function isPendingJustificationInput(input: ScheduleEditInput) {
   return requiresReason(input.status) && (Boolean(input.pendingJustification) || !observation || /^sem justificativa/i.test(observation));
 }
 
-function attendanceDisplayLabel(records: Array<{ status: AttendanceStatus | string; isJustified: boolean; updatedAt: Date }>) {
+function attendanceDisplayLabel(records: Array<{ status: AttendanceStatus | string; isJustified: boolean; reasonClassification?: string | null; updatedAt: Date }>, scheduleStatus?: ScheduleStatus | string) {
+  if (scheduleStatus === "FALTA_JUSTIFICADA" || scheduleStatus === "FALTA_INJUSTIFICADA") {
+    return scheduleToUiStatus[String(scheduleStatus)] ?? String(scheduleStatus);
+  }
   const latest = [...records].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
   if (!latest) return null;
   const status = scheduleToUiStatus[String(latest.status)] ?? String(latest.status);
   if (!requiresReason(status)) return null;
-  return latest.isJustified ? `${status} justificada` : `${status} sem justificativa`;
+  if (!latest.isJustified) return `${status} sem justificativa`;
+  if (latest.reasonClassification === "JUSTIFIED") return "Falta Justificada";
+  if (latest.reasonClassification === "UNJUSTIFIED") return "Falta Injustificada";
+  return `${status} justificada`;
 }
 
 type AttendanceJustificationRecord = {
   id: string;
   status: AttendanceStatus | string;
   absenceReason: string | null;
+  reasonClassification: string | null;
   reasonCategory: string | null;
   supervisorJustification: string | null;
   isJustified: boolean;
@@ -2154,21 +2325,27 @@ type AttendanceJustificationRecord = {
 function formatScheduleJustification(status: ScheduleStatus | AttendanceStatus | string, records: AttendanceJustificationRecord[]) {
   if (!scheduleStatusRequiresJustification(status)) return null;
   const latest = [...records].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
+  const statusClassification = status === "FALTA_JUSTIFICADA" ? "JUSTIFIED" : status === "FALTA_INJUSTIFICADA" ? "UNJUSTIFIED" : null;
   if (!latest) {
     return {
       status: scheduleToUiStatus[String(status)] ?? String(status),
-      justificationStatus: "Justificativa pendente",
-      isJustified: false,
+      justificationStatus: statusClassification ? absenceReasonClassificationLabel(statusClassification) : "Justificativa pendente",
+      reasonClassification: statusClassification ?? undefined,
+      reasonClassificationLabel: statusClassification ? absenceReasonClassificationLabel(statusClassification) : undefined,
+      isJustified: Boolean(statusClassification),
       absenceReason: "Sem justificativa",
       impactsAbs: true,
       impactsCoverage: true
     };
   }
+  const effectiveClassification = latest.reasonClassification ?? statusClassification ?? getAbsenceReasonClassification(latest.absenceReason);
   return {
     id: latest.id,
-    status: scheduleToUiStatus[String(latest.status)] ?? String(latest.status),
-    justificationStatus: latest.isJustified ? "Justificado" : "Justificativa pendente",
+    status: scheduleToUiStatus[String(status)] ?? scheduleToUiStatus[String(latest.status)] ?? String(latest.status),
+    justificationStatus: latest.isJustified ? absenceReasonClassificationLabel(effectiveClassification) || "Justificado" : "Justificativa pendente",
     absenceReason: attendanceReasonLabel(latest),
+    reasonClassification: effectiveClassification ?? undefined,
+    reasonClassificationLabel: absenceReasonClassificationLabel(effectiveClassification) || undefined,
     reasonCategory: latest.reasonCategory ?? undefined,
     supervisorJustification: latest.supervisorJustification ?? undefined,
     isJustified: latest.isJustified,
@@ -2214,8 +2391,21 @@ function hasValidJustification(record?: { isJustified: boolean; absenceReason: s
 }
 
 function isPendingJustificationForSchedule(status: ScheduleStatus | AttendanceStatus | string, record?: { isJustified: boolean; absenceReason: string | null } | null) {
+  if (status === "FALTA_JUSTIFICADA" || status === "FALTA_INJUSTIFICADA") return false;
   if (!scheduleStatusRequiresJustification(status)) return false;
   return !hasValidJustification(record);
+}
+
+function isJustifiedAbsenceForSchedule(status: ScheduleStatus | AttendanceStatus | string, record?: { isJustified: boolean; reasonClassification?: string | null; absenceReason: string | null } | null) {
+  if (!isAbsenceStatus(status)) return false;
+  if (status === "FALTA_JUSTIFICADA") return true;
+  return Boolean(record?.isJustified && (record.reasonClassification === "JUSTIFIED" || getAbsenceReasonClassification(record.absenceReason) === "JUSTIFIED"));
+}
+
+function isClassifiedUnjustifiedAbsenceForSchedule(status: ScheduleStatus | AttendanceStatus | string, record?: { isJustified: boolean; reasonClassification?: string | null; absenceReason: string | null } | null) {
+  if (!isAbsenceStatus(status)) return false;
+  if (status === "FALTA_INJUSTIFICADA") return true;
+  return Boolean(record?.isJustified && (record.reasonClassification === "UNJUSTIFIED" || getAbsenceReasonClassification(record.absenceReason) === "UNJUSTIFIED"));
 }
 
 function attendanceReasonLabel(record?: { absenceReason: string | null } | null) {
@@ -2383,20 +2573,16 @@ function summarizeImportErrors(validation: ScheduleImportValidation[]) {
 }
 
 function validateAttendance(input: AttendanceInput) {
-  if (requiresReason(input.status) && !input.absenceReason?.trim() && !input.supervisorJustification?.trim()) {
-    return "Motivo/observação obrigatório para falta, atraso, saída antecipada ou erro de cronograma.";
+  if (requiresReason(input.status)) {
+    if (!input.absenceReason?.trim()) return "Motivo da ocorrência é obrigatório.";
+    if (!normalizeAttendanceReason(input.absenceReason)) return "Motivo inválido.";
+    if (!input.supervisorJustification?.trim()) return "Descrição da ocorrência é obrigatória.";
   }
   return "";
 }
 
 function normalizeAttendanceReason(value?: string | null) {
-  const reason = value?.trim();
-  if (!reason) return undefined;
-  const key = normalizeImportKey(reason);
-  if (key === "NAO_INFORMADO" || key === "NOT_INFORMED") return "Não informado";
-  if (key === "AUSENTE") return "Problema de saúde";
-  if (isDeprecatedAtrasoReasonKey(key)) return "Outros";
-  return reason;
+  return normalizeAbsenceReasonForInput(value);
 }
 
 function normalizeJustificationReasonLabel(value?: string | null) {
@@ -2405,12 +2591,16 @@ function normalizeJustificationReasonLabel(value?: string | null) {
   return normalizeAttendanceReason(reason) ?? undefined;
 }
 
-function isDeprecatedAtrasoReasonKey(key: string) {
-  return ["ATRASO", "ATRASADO", "ATRASADA", "LATE"].includes(key);
-}
-
 function requiresReason(status: string) {
   return statusesRequiringReason.includes(status);
+}
+
+function classifiedScheduleStatusForInput(input: Pick<ScheduleEditInput, "status" | "absenceReason" | "observation" | "pendingJustification">, fallbackStatus: ScheduleStatus): ScheduleStatus {
+  if (fallbackStatus === "FALTA_JUSTIFICADA" || fallbackStatus === "FALTA_INJUSTIFICADA") return fallbackStatus;
+  if (fallbackStatus !== "FALTA" || isPendingJustificationInput(input as ScheduleEditInput)) return fallbackStatus;
+  const reason = normalizeAttendanceReason(input.absenceReason);
+  const classification = getAbsenceReasonClassification(reason);
+  return classification ? scheduleStatusForAbsenceClassification(classification) : fallbackStatus;
 }
 
 function needsTime(status: string) {
@@ -2442,7 +2632,7 @@ function impactsAbs(status: string, _reason?: string) {
 }
 
 function impactsCoverage(status: string) {
-  return ["Falta", "Atraso", "Saída antecipada", "Sem escala", "Sem cronograma"].includes(status);
+  return ["Falta", "Falta Justificada", "Falta Injustificada", "Atraso", "Saída antecipada", "Sem escala", "Sem cronograma"].includes(status);
 }
 
 async function upsertAttendance(tx: Prisma.TransactionClient, userId: string, employeeId: string, scheduleId: string, date: Date, input: ScheduleEditInput) {
@@ -2464,6 +2654,7 @@ async function upsertAttendance(tx: Prisma.TransactionClient, userId: string, em
   const requiresJustification = requiresReason(input.status);
   const savedReason = pendingJustification ? "Sem justificativa" : requiresJustification ? explicitReason || observation || null : null;
   const savedJustification = pendingJustification ? null : explicitJustification || observation || null;
+  const reasonClassification = !pendingJustification && savedReason ? getAbsenceReasonClassification(savedReason) : null;
   const absImpact = input.impactsAbs ?? impactsAbs(input.status, savedReason ?? undefined);
   const coverageImpact = input.impactsCoverage ?? impactsCoverage(input.status);
   const saved = existing
@@ -2474,6 +2665,7 @@ async function upsertAttendance(tx: Prisma.TransactionClient, userId: string, em
           status,
           absenceReason: savedReason,
           reasonCategory: requiresJustification ? explicitCategory || "Cronograma" : null,
+          reasonClassification,
           supervisorJustification: savedJustification,
           isJustified: !requiresJustification || !pendingJustification,
           impactsAbs: absImpact,
@@ -2493,6 +2685,7 @@ async function upsertAttendance(tx: Prisma.TransactionClient, userId: string, em
           status,
           absenceReason: savedReason,
           reasonCategory: requiresJustification ? explicitCategory || "Cronograma" : undefined,
+          reasonClassification,
           supervisorJustification: savedJustification,
           isJustified: !requiresJustification || !pendingJustification,
           impactsAbs: absImpact,
@@ -2550,6 +2743,7 @@ async function resolveAttendanceForScheduleStatus(tx: Prisma.TransactionClient, 
         status: resolvedStatus,
         absenceReason: null,
         reasonCategory: null,
+        reasonClassification: null,
         supervisorJustification: null,
         isJustified: true,
         impactsAbs: false,
@@ -2744,43 +2938,47 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     acc[key] = (acc[key] ?? 0) + 1;
     return acc;
   }, {});
-  const bySupervisor = schedules.reduce<Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; absRate: number }>>((acc, schedule) => {
+  const bySupervisor = schedules.reduce<Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; classifiedUnjustified: number; absRate: number }>>((acc, schedule) => {
     const supervisorName = resolveSupervisorName(schedule, supervisorNameById);
     const status = statusFor(schedule);
     const record = attendanceRecordByScheduleId.get(schedule.id);
-    acc[supervisorName] ??= { planned: 0, present: 0, absent: 0, unjustified: 0, justified: 0, absRate: 0 };
+    acc[supervisorName] ??= { planned: 0, present: 0, absent: 0, unjustified: 0, justified: 0, classifiedUnjustified: 0, absRate: 0 };
     if (isScheduledStatus(status)) acc[supervisorName].planned += 1;
     if (isPresentStatus(status)) acc[supervisorName].present += 1;
     if (isAbsenceStatus(status)) {
       acc[supervisorName].absent += 1;
       if (isPendingJustificationForSchedule(schedule.status, record)) {
         acc[supervisorName].unjustified += 1;
-      } else if (hasValidJustification(record)) {
+      } else if (isJustifiedAbsenceForSchedule(schedule.status, record)) {
         acc[supervisorName].justified += 1;
+      } else if (isClassifiedUnjustifiedAbsenceForSchedule(schedule.status, record)) {
+        acc[supervisorName].classifiedUnjustified += 1;
       }
     }
     acc[supervisorName].absRate = calculateAbsenceRate(acc[supervisorName].planned, acc[supervisorName].absent);
     return acc;
   }, {});
-  const byLob = schedules.reduce<Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; absRate: number }>>((acc, schedule) => {
+  const byLob = schedules.reduce<Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; classifiedUnjustified: number; absRate: number }>>((acc, schedule) => {
     const lobName = schedule.employee.lob?.name?.trim() || "Sem LOB";
     const status = statusFor(schedule);
     const record = attendanceRecordByScheduleId.get(schedule.id);
-    acc[lobName] ??= { planned: 0, present: 0, absent: 0, unjustified: 0, justified: 0, absRate: 0 };
+    acc[lobName] ??= { planned: 0, present: 0, absent: 0, unjustified: 0, justified: 0, classifiedUnjustified: 0, absRate: 0 };
     if (isScheduledStatus(status)) acc[lobName].planned += 1;
     if (isPresentStatus(status)) acc[lobName].present += 1;
     if (isAbsenceStatus(status)) {
       acc[lobName].absent += 1;
       if (isPendingJustificationForSchedule(schedule.status, record)) {
         acc[lobName].unjustified += 1;
-      } else if (hasValidJustification(record)) {
+      } else if (isJustifiedAbsenceForSchedule(schedule.status, record)) {
         acc[lobName].justified += 1;
+      } else if (isClassifiedUnjustifiedAbsenceForSchedule(schedule.status, record)) {
+        acc[lobName].classifiedUnjustified += 1;
       }
     }
     acc[lobName].absRate = calculateAbsenceRate(acc[lobName].planned, acc[lobName].absent);
     return acc;
   }, {});
-  const topAbsenceAgentMap = schedules.reduce<Record<string, { employeeId: string; name: string; wbLogin: string; supervisor: string; lob: string; planned: number; absent: number; unjustified: number; justified: number; absRate: number }>>((acc, schedule) => {
+  const topAbsenceAgentMap = schedules.reduce<Record<string, { employeeId: string; name: string; wbLogin: string; supervisor: string; lob: string; planned: number; absent: number; unjustified: number; justified: number; classifiedUnjustified: number; absRate: number }>>((acc, schedule) => {
     if (!isAgentJobTitle(schedule.employee.roleTitle)) return acc;
     const status = statusFor(schedule);
     const record = attendanceRecordByScheduleId.get(schedule.id);
@@ -2795,6 +2993,7 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
       absent: 0,
       unjustified: 0,
       justified: 0,
+      classifiedUnjustified: 0,
       absRate: 0
     };
     if (isScheduledStatus(status)) acc[employeeId].planned += 1;
@@ -2802,8 +3001,10 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
       acc[employeeId].absent += 1;
       if (isPendingJustificationForSchedule(schedule.status, record)) {
         acc[employeeId].unjustified += 1;
-      } else if (hasValidJustification(record)) {
+      } else if (isJustifiedAbsenceForSchedule(schedule.status, record)) {
         acc[employeeId].justified += 1;
+      } else if (isClassifiedUnjustifiedAbsenceForSchedule(schedule.status, record)) {
+        acc[employeeId].classifiedUnjustified += 1;
       }
     }
     acc[employeeId].absRate = calculateAbsenceRate(acc[employeeId].planned, acc[employeeId].absent);
@@ -2817,7 +3018,8 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
   const attrition = period ? await getAttritionSummary(period, filters) : emptyAttritionSummary();
   const mood = period ? await getMoodSummary(period, filters) : emptyMoodSummary();
   const unjustified = absenceSchedules.filter((item) => isPendingJustificationForSchedule(item.schedule.status, item.record)).length;
-  const justified = absenceSchedules.filter((item) => hasValidJustification(item.record)).length;
+  const justified = absenceSchedules.filter((item) => isJustifiedAbsenceForSchedule(item.schedule.status, item.record)).length;
+  const classifiedUnjustified = absenceSchedules.filter((item) => isClassifiedUnjustifiedAbsenceForSchedule(item.schedule.status, item.record)).length;
   const summary = {
     planned,
     present,
@@ -2827,6 +3029,7 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     earlyLeave: schedules.filter((schedule) => statusFor(schedule) === "SAIDA_ANTECIPADA").length,
     unjustified,
     justified,
+    classifiedUnjustified,
     coverageRate,
     gap: present - planned,
     riskLevel: coverageRate >= 95 ? "Excelente" : coverageRate >= 90 ? "Adequado" : coverageRate >= 85 ? "Atenção" : "Crítico",
@@ -2858,6 +3061,7 @@ async function latestAttendanceRecordsForSchedules(scheduleIds: string[]) {
       "scheduleId",
       "status",
       "absenceReason",
+      "reasonClassification",
       "impactsAbs",
       "isJustified",
       "updatedAt"
@@ -2877,6 +3081,7 @@ function emptyAttendanceSummary() {
     earlyLeave: 0,
     unjustified: 0,
     justified: 0,
+    classifiedUnjustified: 0,
     coverageRate: 0,
     gap: 0,
     riskLevel: "Adequado",

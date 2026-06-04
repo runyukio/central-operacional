@@ -27,6 +27,7 @@
     "db:reconcile-attendance": "tsx scripts/reconcile-attendance-justifications.ts",
     "db:reconcile-absence-justifications": "tsx scripts/reconcile-absence-justifications.ts",
     "db:migrate-justification-atraso-to-outros": "tsx scripts/migrate-justification-reason-atraso-to-outros.ts",
+    "db:migrate-absence-reasons-classification": "tsx scripts/migrate-absence-reasons-to-classification.ts",
     "db:cleanup-work-hours": "tsx scripts/cleanup-work-hours.ts",
     "db:reconcile-invalid-work-hours": "tsx scripts/reconcile-invalid-work-hours.ts",
     "db:reconcile-employee-status": "tsx scripts/reconcile-employee-status.ts",

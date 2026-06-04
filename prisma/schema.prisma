@@ -19,6 +19,8 @@ enum ScheduleStatus {
   PRESENTE
   AUSENTE
   FALTA
+  FALTA_JUSTIFICADA
+  FALTA_INJUSTIFICADA
   ATRASO
   SAIDA_ANTECIPADA
   AFASTADO
@@ -1320,6 +1322,7 @@ model AttendanceRecord {
   status                  AttendanceStatus
   absenceReason           String?
   reasonCategory          String?
+  reasonClassification    String?
   supervisorJustification String?
   hasEvidence             Boolean             @default(false)
   evidenceUrl             String?
@@ -1348,6 +1351,7 @@ model AttendanceRecord {
   @@index([scheduleId, isJustified])
   @@index([scheduleId, updatedAt])
   @@index([isJustified])
+  @@index([reasonClassification])
   @@index([registeredById])
   @@index([justifiedById])
 }
