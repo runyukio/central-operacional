@@ -100,9 +100,9 @@ const uiToAttendanceStatus: Record<string, AttendanceStatus> = {
   "Erro de cronograma": "ERRO_ESCALA"
 };
 
-export const statusesRequiringReason = ["Falta", "Falta Justificada", "Falta Injustificada", "Atraso", "Saída antecipada", "Erro de escala", "Erro de cronograma"];
-const supervisorJustificationStatuses = ["Falta", "Falta Justificada", "Falta Injustificada", "Atraso", "Saída antecipada", "Erro de escala", "Erro de cronograma"];
-const scheduleStatusesRequiringJustification: ScheduleStatus[] = ["FALTA", "FALTA_JUSTIFICADA", "FALTA_INJUSTIFICADA", "ATRASO", "SAIDA_ANTECIPADA", "ERRO_ESCALA"];
+export const statusesRequiringReason = ["Falta", "Falta Justificada", "Falta Injustificada", "Erro de escala", "Erro de cronograma"];
+const supervisorJustificationStatuses = ["Falta", "Falta Justificada", "Falta Injustificada", "Erro de escala", "Erro de cronograma"];
+const scheduleStatusesRequiringJustification: ScheduleStatus[] = ["FALTA", "FALTA_JUSTIFICADA", "FALTA_INJUSTIFICADA", "ERRO_ESCALA"];
 
 const defaultShiftTimes: Record<string, { startsAt: string; endsAt: string }> = {
   Manhã: { startsAt: "08:00", endsAt: "14:00" },

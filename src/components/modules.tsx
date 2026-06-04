@@ -110,8 +110,8 @@ import { MONTHLY_ADVANCE_FIXED_AMOUNT } from "@/lib/monthly-advance-constants";
 
 const scheduleImportColumns = ["wb_login", "data", "status", "turno", "entrada", "saida", "lob"] as const;
 const workHourImportColumns = ["wb_login", "data", "horas_realizadas", "sistema_origem", "observacao"] as const;
-const scheduleStatusOptions = ["Escalado", "Presente", "Nesting", "Falta", "Falta Justificada", "Falta Injustificada", "Atraso", "Saída antecipada", "Afastado", "Férias", "Treinamento", "Folga", "Troca aprovada", "Venda de folga aprovada", "Folga aprovada", "Desligado", "Sem cronograma", "Erro de cronograma"] as const;
-const attendanceReasonStatuses = ["Falta", "Falta Justificada", "Falta Injustificada", "Atraso", "Saída antecipada", "Erro de cronograma"];
+const scheduleStatusOptions = ["Escalado", "Presente", "Nesting", "Falta", "Falta Justificada", "Falta Injustificada", "Afastado", "Férias", "Treinamento", "Folga", "Troca aprovada", "Venda de folga aprovada", "Folga aprovada", "Desligado", "Sem cronograma", "Erro de cronograma"] as const;
+const attendanceReasonStatuses = ["Falta", "Falta Justificada", "Falta Injustificada", "Erro de cronograma"];
 const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Nesting", "Venda de folga aprovada"];
 const employeeOperationalStatusOptions = ["Ativo", "Nesting", "Inativo", "Pendente de cadastro", "Afastado", "Desligado", "Em treinamento", "Suspenso"];
 const pcdDisabilityTypeOptions = ["", "Física", "Auditiva", "Visual", "Intelectual", "Psicossocial", "Múltipla", "Neurodivergente", "Outra", "Prefiro não informar"];
@@ -5839,10 +5839,14 @@ export function SchedulesPage() {
   const manualStatusPreview = plannedHoursForManualPreview
     ? Math.abs(manualDifferencePreview) <= 5 ? "OK" : "Divergente"
     : workHourForm.recordId ? workHourForm.status : selectedCellHasSchedule ? "Sem horas" : "Sem cronograma";
-  const supervisorOccurrenceStatuses = ["Falta", "Falta Justificada", "Falta Injustificada", "Atraso", "Saída antecipada", "Erro de cronograma"];
-  const attendanceStatusOptions = isScheduleSupervisor
-    ? supervisorOccurrenceStatuses
-    : [...scheduleStatusOptions].filter((status) => status !== "Escalado");
+  const supervisorOccurrenceStatuses = ["Falta", "Falta Justificada", "Falta Injustificada", "Erro de cronograma"];
+  const scheduleEditStatusOptions = withCurrentScheduleStatus([...scheduleStatusOptions], scheduleEditForm.status);
+  const attendanceStatusOptions = withCurrentScheduleStatus(
+    isScheduleSupervisor
+      ? supervisorOccurrenceStatuses
+      : [...scheduleStatusOptions].filter((status) => status !== "Escalado"),
+    attendanceForm.status
+  );
 
   function configuredTimesForShift(shift: string) {
     const cleanedShift = cleanShiftName(shift) || "Manhã";
@@ -6423,7 +6427,7 @@ export function SchedulesPage() {
                     disabled={!canManageSchedules}
                     label="Status do cronograma"
                     value={scheduleEditForm.status}
-                    options={[...scheduleStatusOptions]}
+                    options={scheduleEditStatusOptions}
                     onChange={(value) => {
                       const times = configuredTimesForShift(scheduleEditForm.shift);
                       const nextStartsAt = statusNeedsTime(value) ? scheduleEditForm.startsAt || times.startsAt : "";
@@ -7418,6 +7422,10 @@ function validateImportRows(rows: Array<Record<string, unknown>>) {
   return { errors, warnings };
 }
 
+function withCurrentScheduleStatus(options: string[], current: string) {
+  return current && !options.includes(current) ? [current, ...options] : options;
+}
+
 function emptyCalendarDays(month = currentOperationalMonth().month, year = currentOperationalMonth().year) {
   const first = operationalDateFromParts(year, month, 1);
   const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
@@ -7438,40 +7446,40 @@ function emptyCalendarDays(month = currentOperationalMonth().month, year = curre
 
 function shiftTagClass(value: string) {
   const map: Record<string, string> = {
-    Manhã: "bg-blue-50 text-blue-700",
-    Tarde: "bg-blue-50 text-blue-700",
-    Noite: "bg-blue-50 text-blue-700",
-    Escalado: "bg-blue-50 text-blue-700",
-    Presente: "bg-emerald-50 text-emerald-700",
-    Falta: "bg-red-100 text-red-800",
-    "Falta Justificada": "bg-emerald-50 text-emerald-700",
-    "Falta Injustificada": "bg-red-100 text-red-800",
+    Manhã: "border border-sky-200 bg-sky-50 text-sky-800",
+    Tarde: "border border-amber-200 bg-amber-50 text-amber-800",
+    Noite: "border border-indigo-200 bg-indigo-50 text-indigo-800",
+    Escalado: "border border-blue-200 bg-blue-50 text-blue-800",
+    Presente: "border border-emerald-200 bg-emerald-50 text-emerald-800",
+    Falta: "border border-rose-300 bg-rose-100 text-rose-900",
+    "Falta Justificada": "border border-teal-200 bg-teal-50 text-teal-800",
+    "Falta Injustificada": "border border-red-300 bg-red-100 text-red-900",
     "Falta sem justificativa": "border border-red-300 bg-red-100 text-red-900 shadow-sm shadow-red-100",
-    "Atraso sem justificativa": "border border-orange-300 bg-orange-100 text-orange-900 shadow-sm shadow-orange-100",
+    "Atraso sem justificativa": "border border-yellow-300 bg-yellow-100 text-yellow-900 shadow-sm shadow-yellow-100",
     "Saída antecipada sem justificativa": "border border-orange-300 bg-orange-100 text-orange-900 shadow-sm shadow-orange-100",
     "Afastado sem justificativa": "border border-violet-300 bg-violet-100 text-violet-900 shadow-sm shadow-violet-100",
     "Erro de cronograma sem justificativa": "border border-red-300 bg-red-100 text-red-900 shadow-sm shadow-red-100",
-    "Falta justificada": "bg-amber-50 text-amber-800",
-    "Atraso justificada": "bg-amber-50 text-amber-800",
-    "Saída antecipada justificada": "bg-amber-50 text-amber-800",
-    "Afastado justificada": "bg-amber-50 text-amber-800",
-    "Erro de cronograma justificada": "bg-amber-50 text-amber-800",
-    Atraso: "bg-orange-50 text-orange-700",
-    "Saída antecipada": "bg-orange-100 text-orange-800",
-    Afastado: "bg-violet-50 text-violet-700",
-    Férias: "bg-sky-50 text-sky-700",
-    Treinamento: "bg-purple-50 text-purple-700",
-    Nesting: "bg-fuchsia-50 text-fuchsia-700",
-    Folga: "bg-slate-100 text-slate-600",
-    "Troca aprovada": "bg-teal-50 text-teal-700",
-    "Venda de folga aprovada": "bg-amber-50 text-amber-700",
-    "Folga aprovada": "bg-emerald-50 text-emerald-700",
-    Desligado: "bg-slate-200 text-slate-700",
-    "Sem cronograma": "bg-slate-50 text-slate-400",
-    "Erro de cronograma": "bg-red-50 text-red-700",
-    Feriado: "bg-pink-50 text-pink-700",
-    Conflito: "bg-red-50 text-red-600",
-    Descoberto: "border border-dashed border-red-400 text-red-600"
+    "Falta justificada": "border border-teal-200 bg-teal-50 text-teal-800",
+    "Atraso justificada": "border border-yellow-200 bg-yellow-50 text-yellow-800",
+    "Saída antecipada justificada": "border border-orange-200 bg-orange-50 text-orange-800",
+    "Afastado justificada": "border border-violet-200 bg-violet-50 text-violet-800",
+    "Erro de cronograma justificada": "border border-amber-200 bg-amber-50 text-amber-800",
+    Atraso: "border border-yellow-200 bg-yellow-50 text-yellow-800",
+    "Saída antecipada": "border border-orange-200 bg-orange-50 text-orange-800",
+    Afastado: "border border-violet-200 bg-violet-50 text-violet-800",
+    Férias: "border border-cyan-200 bg-cyan-50 text-cyan-800",
+    Treinamento: "border border-purple-200 bg-purple-50 text-purple-800",
+    Nesting: "border border-fuchsia-200 bg-fuchsia-50 text-fuchsia-800",
+    Folga: "border border-slate-200 bg-slate-100 text-slate-700",
+    "Troca aprovada": "border border-indigo-200 bg-indigo-50 text-indigo-800",
+    "Venda de folga aprovada": "border border-amber-300 bg-amber-100 text-amber-900",
+    "Folga aprovada": "border border-lime-200 bg-lime-50 text-lime-800",
+    Desligado: "border border-zinc-300 bg-zinc-200 text-zinc-800",
+    "Sem cronograma": "border border-slate-200 bg-slate-50 text-slate-400",
+    "Erro de cronograma": "border border-red-300 bg-red-50 text-red-800",
+    Feriado: "border border-pink-200 bg-pink-50 text-pink-800",
+    Conflito: "border border-red-300 bg-red-50 text-red-700",
+    Descoberto: "border border-dashed border-red-400 bg-white text-red-700"
   };
   return map[value] ?? "bg-slate-100 text-slate-600";
 }
