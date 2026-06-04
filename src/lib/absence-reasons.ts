@@ -28,7 +28,7 @@ const justifiedReasonKeys = new Set(justifiedAbsenceReasons.map(reasonKey));
 const unjustifiedReasonKeys = new Set(unjustifiedAbsenceReasons.map(reasonKey));
 
 const legacyReasonMap = new Map<string, string>([
-  ["AUSENTE", "Não informado"],
+  ["AUSENTE", "Problema de saúde"],
   ["ATRASO", "Outros"],
   ["ATRASADO", "Outros"],
   ["ATRASADA", "Outros"],
@@ -54,7 +54,7 @@ const historicalReasonMap = new Map<string, string>([
   ["PROBLEMA_TECNICO", "Problema técnico pessoal"],
   ["ERRO_DE_CRONOGRAMA", "Erro de visualização de escala"],
   ["ERRO_CRONOGRAMA", "Erro de visualização de escala"],
-  ["AUSENTE", "Não informado"],
+  ["AUSENTE", "Problema de saúde"],
   ["ATRASO", "Outros"],
   ["LATE", "Outros"]
 ]);
