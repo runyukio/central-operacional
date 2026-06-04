@@ -357,26 +357,13 @@ export async function commitQualityImport(actor: Actor, rows: PerformancePreview
 async function commitQualityRows(user: AuthenticatedUser, rows: PerformancePreviewRow[], fileName = "qualidade.xlsx", batchId?: string) {
   const validRows = rows.filter((row) => row.type === "QUALITY" && !row.errors.length && row.employeeId && row.uniqueKey);
   if (!validRows.length) throw new PerformanceError("Não há linhas válidas para importar.", 400);
-  const createdRows = validRows.filter((row) => row.action === "create").length;
-  const updatedRows = validRows.filter((row) => row.action === "update").length;
+  const createdRows = validRows.length;
+  const updatedRows = 0;
   const batch = await upsertImportBatch(user, "QUALITY", fileName, rows, validRows.length, createdRows, updatedRows, batchId);
 
   for (const chunk of chunks(validRows, 100)) {
-    await prisma.$transaction(chunk.map((row) => prisma.qualityRecord.upsert({
-      where: { concatKey: String(row.payload.concatKey) },
-      update: {
-        auditTime: new Date(String(row.payload.auditTime)),
-        auditDate: parseDate(String(row.payload.auditDate))!,
-        wbLogin: row.wbLogin,
-        employeeId: row.employeeId,
-        finalResult: String(row.payload.finalResult),
-        caseOrderId: String(row.payload.caseOrderId),
-        auditCaseOrderId: String(row.payload.auditCaseOrderId),
-        lobId: row.lobId ?? null,
-        rawLob: String(row.payload.rawLob ?? "") || null,
-        importBatchId: batch.id
-      },
-      create: {
+    await prisma.qualityRecord.createMany({
+      data: chunk.map((row) => ({
         auditTime: new Date(String(row.payload.auditTime)),
         auditDate: parseDate(String(row.payload.auditDate))!,
         wbLogin: row.wbLogin,
@@ -388,8 +375,8 @@ async function commitQualityRows(user: AuthenticatedUser, rows: PerformancePrevi
         lobId: row.lobId ?? null,
         rawLob: String(row.payload.rawLob ?? "") || null,
         importBatchId: batch.id
-      }
-    })));
+      }))
+    });
   }
   if (!batchId) await auditImport(user.id, "QUALITY", batch.id, { fileName, rowsTotal: rows.length, rowsValid: validRows.length, createdRows, updatedRows });
   return { success: true, importedRows: validRows.length, createdRows, updatedRows, batchId: batch.id };
@@ -674,16 +661,11 @@ function summarizeRows(rows: AgentPerformanceRow[]) {
 }
 
 function calculateQuality(records: Array<Pick<QualityRecordForMetrics, "concatKey" | "finalResult">>) {
-  const totalConcatKeys = new Set<string>();
-  const correctConcatKeys = new Set<string>();
-  for (const record of records) {
-    totalConcatKeys.add(record.concatKey);
-    if (record.finalResult === "Correct") correctConcatKeys.add(record.concatKey);
-  }
+  const correctRows = records.filter((record) => record.finalResult === "Correct").length;
   return {
-    qualityCorrect: correctConcatKeys.size,
-    qualityTotal: totalConcatKeys.size,
-    quality: percent(correctConcatKeys.size, totalConcatKeys.size)
+    qualityCorrect: correctRows,
+    qualityTotal: records.length,
+    quality: percent(correctRows, records.length)
   };
 }
 
@@ -748,10 +730,7 @@ function hasAnyData(row: AgentPerformanceRow) {
 }
 
 async function markExistingQualityRows(previewRows: PerformancePreviewRow[]) {
-  const validKeys = unique(previewRows.filter((row) => !row.errors.length && row.uniqueKey).map((row) => row.uniqueKey));
-  const existing = validKeys.length ? await prisma.qualityRecord.findMany({ where: { concatKey: { in: validKeys } }, select: { concatKey: true } }) : [];
-  const existingKeys = new Set(existing.map((row) => row.concatKey));
-  return buildPreviewResult(previewRows.map((row) => row.errors.length ? row : { ...row, action: existingKeys.has(row.uniqueKey) ? "update" : "create" }));
+  return buildPreviewResult(previewRows.map((row) => row.errors.length ? row : { ...row, action: "create" }));
 }
 
 async function markExistingProductionRows(previewRows: PerformancePreviewRow[]) {

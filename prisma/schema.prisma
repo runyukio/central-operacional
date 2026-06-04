@@ -738,7 +738,7 @@ model QualityRecord {
   finalResult      String
   caseOrderId      String
   auditCaseOrderId String
-  concatKey        String                 @unique
+  concatKey        String
   lobId            String?
   lob              Lob?                   @relation(fields: [lobId], references: [id], onDelete: SetNull)
   rawLob           String?
@@ -749,6 +749,7 @@ model QualityRecord {
 
   @@index([employeeId])
   @@index([wbLogin])
+  @@index([concatKey])
   @@index([auditDate])
   @@index([lobId])
   @@index([finalResult])

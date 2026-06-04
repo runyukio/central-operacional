@@ -10391,7 +10391,7 @@ function PerformancePreviewModal({ title, fileName, preview, importing, onClose,
           <div className="mt-4 max-h-[52vh] overflow-auto rounded-xl border border-border">
             <table className="w-full min-w-[1080px] text-sm">
               <thead className="sticky top-0 bg-white text-left text-xs font-extrabold uppercase text-muted">
-                <tr>{["Linha", "WB/Login", "Colaborador", "LOB", "Data", "Chave única", "Ação", "Erros/alertas"].map((column) => <th key={column} className="px-3 py-2">{column}</th>)}</tr>
+                <tr>{["Linha", "WB/Login", "Colaborador", "LOB", "Data", "Identificador", "Ação", "Erros/alertas"].map((column) => <th key={column} className="px-3 py-2">{column}</th>)}</tr>
               </thead>
               <tbody>
                 {preview.rows.slice(0, IMPORT_PREVIEW_ROW_LIMIT).map((row) => (
