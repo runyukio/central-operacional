@@ -104,6 +104,8 @@ const qualityMetricSelect = {
   auditDate: true,
   concatKey: true,
   finalResult: true,
+  caseOrderId: true,
+  auditCaseOrderId: true,
   employeeId: true
 } satisfies Prisma.QualityRecordSelect;
 const productionMetricSelect = {
@@ -157,8 +159,8 @@ export async function getPerformanceDashboard(actor: Actor, query: PerformanceQu
       },
       weekly: mine.weekly.map((week) => ({
         ...week,
-        lobAverage: summarizeRows(lobRows.map((row) => ({ ...row, weekly: row.weekly.filter((item) => item.weekStart === week.weekStart) }))),
-        operationAverage: summarizeRows(operationRows.map((row) => ({ ...row, weekly: row.weekly.filter((item) => item.weekStart === week.weekStart) })))
+        lobAverage: summarizeWeeklyRows(lobRows.flatMap((row) => row.weekly.filter((item) => item.weekStart === week.weekStart))),
+        operationAverage: summarizeWeeklyRows(operationRows.flatMap((row) => row.weekly.filter((item) => item.weekStart === week.weekStart)))
       }))
     };
   }
@@ -246,7 +248,7 @@ async function previewQualityRows(rawRows: Record<string, unknown>[], options: P
     const caseOrderId = text(rowValue(row, ["质检case_order_id", "case_order_id", "case order id"]));
     const auditCaseOrderId = text(rowValue(row, ["audit_case_order_id", "audit case order id"]));
     const rawLob = text(rowValue(row, ["lob"]));
-    const concatKey = text(rowValue(row, ["concat", "concatkey", "concat_key"])) || (caseOrderId && auditCaseOrderId ? `${caseOrderId}-${auditCaseOrderId}` : "");
+    const concatKey = buildQualityTaskKey(caseOrderId, auditCaseOrderId);
 
     if (!wbLogin) errors.push("WB/Login é obrigatório.");
     else if (!employee) errors.push("WB/Login não encontrado no cadastro.");
@@ -608,7 +610,11 @@ async function buildAgentRows(employees: PerformanceEmployee[], period: Period) 
   const weeks = weeksInPeriod(period);
   return employees.map((employee) => {
     const weekly = weeks.map((week) => buildWeeklyMetrics(employee.id, week, qualityRecords, productionRecords, schedules));
-    const periodMetrics = summarizeWeeklyRows(weekly);
+    const employeeQualityRecords = qualityRecords.filter((record) => record.employeeId === employee.id);
+    const periodMetrics = {
+      ...summarizeWeeklyRows(weekly),
+      ...calculateQuality(employeeQualityRecords)
+    };
     return {
       employeeId: employee.id,
       employeeName: employee.fullName,
@@ -624,7 +630,7 @@ async function buildAgentRows(employees: PerformanceEmployee[], period: Period) 
 }
 
 function buildWeeklyMetrics(employeeId: string, week: WeekRange, qualityRecords: QualityRecordForMetrics[], productionRecords: ProductionRecordForMetrics[], schedules: ScheduleRecordForMetrics[]): WeeklyMetricRow {
-  const weekQualityRecords: Array<Pick<QualityRecordForMetrics, "concatKey" | "finalResult">> = [];
+  const weekQualityRecords: QualityRecordForMetrics[] = [];
   let submit = 0;
   let moderationSeconds = 0;
   let absences = 0;
@@ -658,23 +664,53 @@ function buildWeeklyMetrics(employeeId: string, week: WeekRange, qualityRecords:
 }
 
 function summarizeRows(rows: AgentPerformanceRow[]) {
-  return summarizeWeeklyRows(rows.flatMap((row) => row.weekly));
+  const qualityCorrect = rows.reduce((sum, row) => sum + row.qualityCorrect, 0);
+  const qualityTotal = rows.reduce((sum, row) => sum + row.qualityTotal, 0);
+  const submit = rows.reduce((sum, row) => sum + row.submit, 0);
+  const moderationSeconds = rows.reduce((sum, row) => sum + row.moderationSeconds, 0);
+  const absences = rows.reduce((sum, row) => sum + row.absences, 0);
+  const scheduledDays = rows.reduce((sum, row) => sum + row.scheduledDays, 0);
+  return {
+    qualityCorrect,
+    qualityTotal,
+    quality: percent(qualityCorrect, qualityTotal),
+    submit,
+    moderationSeconds: round2(moderationSeconds),
+    ahtSeconds: submit > 0 ? round2(moderationSeconds / submit) : 0,
+    absences,
+    scheduledDays,
+    abs: percent(absences, scheduledDays)
+  };
 }
 
-function calculateQuality(records: Array<Pick<QualityRecordForMetrics, "concatKey" | "finalResult">>) {
+function calculateQuality(records: QualityRecordForMetrics[]) {
   const totalConcatKeys = new Set<string>();
   const correctConcatKeys = new Set<string>();
   for (const record of records) {
-    const concatKey = record.concatKey?.trim();
+    const concatKey = qualityTaskKey(record);
     if (!concatKey) continue;
     totalConcatKeys.add(concatKey);
-    if (record.finalResult === "Correct") correctConcatKeys.add(concatKey);
+    if (isCorrectQualityResult(record.finalResult)) correctConcatKeys.add(concatKey);
   }
   return {
     qualityCorrect: correctConcatKeys.size,
     qualityTotal: totalConcatKeys.size,
     quality: percent(correctConcatKeys.size, totalConcatKeys.size)
   };
+}
+
+function qualityTaskKey(record: Pick<QualityRecordForMetrics, "caseOrderId" | "auditCaseOrderId" | "concatKey">) {
+  return buildQualityTaskKey(record.caseOrderId, record.auditCaseOrderId) || record.concatKey?.trim() || "";
+}
+
+function buildQualityTaskKey(caseOrderId?: string | null, auditCaseOrderId?: string | null) {
+  const caseKey = caseOrderId?.trim();
+  const auditKey = auditCaseOrderId?.trim();
+  return caseKey && auditKey ? `${caseKey}${auditKey}` : "";
+}
+
+function isCorrectQualityResult(value?: string | null) {
+  return value?.trim().toLowerCase() === "correct";
 }
 
 function summarizeWeeklyRows(rows: WeeklyMetricRow[]): PerformanceMetrics {
