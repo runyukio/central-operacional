@@ -99,7 +99,6 @@ type AgentPerformanceRow = PerformanceMetrics & {
 
 const agentRoleTitleAliases = ["Agente", "Agent", "Moderador de Conteúdo", "Content Moderator"];
 const scheduledStatuses = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "FALTA", "ATRASO", "SAIDA_ANTECIPADA", "TROCA_APROVADA", "VENDA_FOLGA_APROVADA", "FOLGA_APROVADA"]);
-const qualityResults = new Set(["Correct", "Incorrect"]);
 const qualityMetricSelect = {
   auditDate: true,
   concatKey: true,
@@ -243,8 +242,7 @@ async function previewQualityRows(rawRows: Record<string, unknown>[], options: P
     const wbLogin = normalizeWbLogin(text(rowValue(row, ["audit_name", "audit name", "wb_login", "wb login"])));
     const employee = employeeByLogin.get(wbLogin);
     const auditTime = normalizeExcelDate(rowValue(row, ["audit_time", "audit time", "data"]));
-    const rawResult = text(rowValue(row, ["final_result", "final result", "resultado"]));
-    const finalResult = normalizeQualityResult(rawResult);
+    const finalResult = text(rowValue(row, ["final_result", "final result", "resultado"]));
     const caseOrderId = text(rowValue(row, ["质检case_order_id", "case_order_id", "case order id"]));
     const auditCaseOrderId = text(rowValue(row, ["audit_case_order_id", "audit case order id"]));
     const rawLob = text(rowValue(row, ["lob"]));
@@ -253,7 +251,7 @@ async function previewQualityRows(rawRows: Record<string, unknown>[], options: P
     if (!wbLogin) errors.push("WB/Login é obrigatório.");
     else if (!employee) errors.push("WB/Login não encontrado no cadastro.");
     if (!auditTime) errors.push("Data da auditoria inválida.");
-    if (!finalResult) errors.push("Resultado de auditoria inválido.");
+    if (!finalResult) warnings.push("final_result vazio; linha importada com valor em branco.");
     if (!caseOrderId) errors.push("Case Order ID é obrigatório.");
     if (!auditCaseOrderId) errors.push("Audit Case Order ID é obrigatório.");
     if (!concatKey) errors.push("Concat inválido.");
@@ -644,16 +642,14 @@ async function buildAgentRows(employees: PerformanceEmployee[], period: Period) 
 }
 
 function buildWeeklyMetrics(employeeId: string, week: WeekRange, qualityRecords: QualityRecordForMetrics[], productionRecords: ProductionRecordForMetrics[], schedules: ScheduleRecordForMetrics[]): WeeklyMetricRow {
-  const qualitySet = new Set<string>();
-  const correctSet = new Set<string>();
+  const weekQualityRecords: Array<Pick<QualityRecordForMetrics, "concatKey" | "finalResult">> = [];
   let submit = 0;
   let moderationSeconds = 0;
   let absences = 0;
   let scheduledDays = 0;
   for (const record of qualityRecords) {
     if (record.employeeId !== employeeId || !isDateInRange(record.auditDate, week.start, week.end)) continue;
-    qualitySet.add(record.concatKey);
-    if (record.finalResult === "Correct") correctSet.add(record.concatKey);
+    weekQualityRecords.push(record);
   }
   for (const record of productionRecords) {
     if (record.employeeId !== employeeId || !isDateInRange(record.bzDay, week.start, week.end)) continue;
@@ -669,9 +665,7 @@ function buildWeeklyMetrics(employeeId: string, week: WeekRange, qualityRecords:
     weekStart: formatDateKey(week.start),
     weekEnd: formatDateKey(week.end),
     weekLabel: `${formatDisplayDate(week.start)} a ${formatDisplayDate(week.end)}`,
-    qualityCorrect: correctSet.size,
-    qualityTotal: qualitySet.size,
-    quality: percent(correctSet.size, qualitySet.size),
+    ...calculateQuality(weekQualityRecords),
     submit,
     moderationSeconds: round2(moderationSeconds),
     ahtSeconds: submit > 0 ? round2(moderationSeconds / submit) : 0,
@@ -683,6 +677,20 @@ function buildWeeklyMetrics(employeeId: string, week: WeekRange, qualityRecords:
 
 function summarizeRows(rows: AgentPerformanceRow[]) {
   return summarizeWeeklyRows(rows.flatMap((row) => row.weekly));
+}
+
+function calculateQuality(records: Array<Pick<QualityRecordForMetrics, "concatKey" | "finalResult">>) {
+  const totalConcatKeys = new Set<string>();
+  const correctConcatKeys = new Set<string>();
+  for (const record of records) {
+    totalConcatKeys.add(record.concatKey);
+    if (record.finalResult === "Correct") correctConcatKeys.add(record.concatKey);
+  }
+  return {
+    qualityCorrect: correctConcatKeys.size,
+    qualityTotal: totalConcatKeys.size,
+    quality: percent(correctConcatKeys.size, totalConcatKeys.size)
+  };
 }
 
 function summarizeWeeklyRows(rows: WeeklyMetricRow[]): PerformanceMetrics {
@@ -986,13 +994,6 @@ function text(value: unknown) {
 
 function normalizeWbLogin(value: string) {
   return value.trim().toLowerCase();
-}
-
-function normalizeQualityResult(value: string) {
-  const raw = value.trim().toLowerCase();
-  if (raw === "correct") return "Correct";
-  if (raw === "incorrect") return "Incorrect";
-  return "";
 }
 
 function parseNumber(value: unknown) {
