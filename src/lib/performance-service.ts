@@ -243,7 +243,7 @@ async function previewQualityRows(rawRows: Record<string, unknown>[], options: P
     const warnings: string[] = [];
     const wbLogin = normalizeWbLogin(text(rowValue(row, ["audit_name", "audit name", "wb_login", "wb login"])));
     const employee = employeeByLogin.get(wbLogin);
-    const auditTime = normalizeExcelDate(rowValue(row, ["audit_time", "audit time", "data"]));
+    const auditTime = normalizeExcelDate(rowValue(row, ["audit_time", "audit_time(年月日)", "audit time", "data"]));
     const finalResult = text(rowValue(row, ["final_result", "final result", "resultado"]));
     const caseOrderId = text(rowValue(row, ["质检case_order_id", "case_order_id", "case order id"]));
     const auditCaseOrderId = text(rowValue(row, ["audit_case_order_id", "audit case order id"]));
@@ -266,7 +266,7 @@ async function previewQualityRows(rawRows: Record<string, unknown>[], options: P
       employeeName: employee?.fullName,
       lob: rawLob || employee?.lob?.name || "",
       lobId: employee?.lobId ?? undefined,
-      date: auditTime ? formatDateKey(auditTime) : text(rowValue(row, ["audit_time", "audit time"])),
+      date: auditTime ? formatDateKey(auditTime) : text(rowValue(row, ["audit_time", "audit_time(年月日)", "audit time"])),
       uniqueKey: concatKey,
       action: errors.length ? "ignore" : "create",
       errors,
