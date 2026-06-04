@@ -8,12 +8,19 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   try {
+    const contentType = request.headers.get("content-type") ?? "";
+    const actor = await getApiActor();
+    if (contentType.includes("application/json")) {
+      const body = await request.json().catch(() => ({}));
+      const rows = Array.isArray(body.rows) ? body.rows : [];
+      const rowOffset = Number.isFinite(Number(body.rowOffset)) ? Number(body.rowOffset) : 0;
+      return NextResponse.json(await previewQualityImport(actor, rows, { rowNumberOffset: rowOffset }));
+    }
     const file = (await request.formData()).get("file");
     if (!(file instanceof File)) {
       return NextResponse.json({ success: false, error: "Arquivo de Qualidade é obrigatório.", message: "Arquivo de Qualidade é obrigatório.", rows: [] }, { status: 400 });
     }
     const rows = readRowsFromWorkbook(await file.arrayBuffer(), ["qualidade", "quality"]);
-    const actor = await getApiActor();
     return NextResponse.json(await previewQualityImport(actor, rows));
   } catch (error) {
     return performanceImportErrorResponse(error, "Não foi possível validar a base de Qualidade.");

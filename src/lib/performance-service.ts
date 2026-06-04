@@ -64,6 +64,10 @@ export type PerformancePreviewRow = {
   payload: Record<string, unknown>;
 };
 
+type PerformancePreviewOptions = {
+  rowNumberOffset?: number;
+};
+
 type PerformanceMetrics = {
   quality: number;
   qualityCorrect: number;
@@ -199,9 +203,33 @@ export async function getPerformanceDashboard(actor: Actor, query: PerformanceQu
   };
 }
 
-export async function previewQualityImport(actor: Actor, rawRows: Record<string, unknown>[]) {
+export async function previewQualityImport(actor: Actor, rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
   const user = await requireActiveUser(actor);
   requireImportPermission(user);
+  return previewQualityRows(rawRows, options);
+}
+
+export async function previewProductionImport(actor: Actor, rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
+  const user = await requireActiveUser(actor);
+  requireImportPermission(user);
+  return previewProductionRows(rawRows, options);
+}
+
+export async function commitQualityRawImport(actor: Actor, rawRows: Record<string, unknown>[], fileName = "qualidade.xlsx", batchId?: string, rowNumberOffset = 0) {
+  const user = await requireActiveUser(actor);
+  requireImportPermission(user);
+  const preview = await previewQualityRows(rawRows, { rowNumberOffset });
+  return commitQualityRows(user, preview.rows, fileName, batchId);
+}
+
+export async function commitProductionRawImport(actor: Actor, rawRows: Record<string, unknown>[], fileName = "producao.xlsx", batchId?: string, rowNumberOffset = 0) {
+  const user = await requireActiveUser(actor);
+  requireImportPermission(user);
+  const preview = await previewProductionRows(rawRows, { rowNumberOffset });
+  return commitProductionRows(user, preview.rows, fileName, batchId);
+}
+
+async function previewQualityRows(rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
   const normalizedRows = rawRows.map(normalizeObjectKeys);
   const wbLogins = unique(normalizedRows.map((row) => normalizeWbLogin(text(rowValue(row, ["audit_name", "audit name", "wb_login", "wb login"])))).filter(Boolean));
   const employees = await findEmployeesByWbLogins(wbLogins);
@@ -209,7 +237,7 @@ export async function previewQualityImport(actor: Actor, rawRows: Record<string,
   const seen = new Map<string, number>();
 
   const previewRows: PerformancePreviewRow[] = normalizedRows.map((row, index) => {
-    const rowNumber = index + 2;
+    const rowNumber = (options.rowNumberOffset ?? 0) + index + 2;
     const errors: string[] = [];
     const warnings: string[] = [];
     const wbLogin = normalizeWbLogin(text(rowValue(row, ["audit_name", "audit name", "wb_login", "wb login"])));
@@ -263,9 +291,7 @@ export async function previewQualityImport(actor: Actor, rawRows: Record<string,
   return markExistingQualityRows(previewRows);
 }
 
-export async function previewProductionImport(actor: Actor, rawRows: Record<string, unknown>[]) {
-  const user = await requireActiveUser(actor);
-  requireImportPermission(user);
+async function previewProductionRows(rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
   const normalizedRows = rawRows.map(normalizeObjectKeys);
   const wbLogins = unique(normalizedRows.map((row) => normalizeWbLogin(text(rowValue(row, ["agentes", "agente", "wb_login", "wb login"])))).filter(Boolean));
   const employees = await findEmployeesByWbLogins(wbLogins);
@@ -273,7 +299,7 @@ export async function previewProductionImport(actor: Actor, rawRows: Record<stri
   const seen = new Map<string, number>();
 
   const previewRows: PerformancePreviewRow[] = normalizedRows.map((row, index) => {
-    const rowNumber = index + 2;
+    const rowNumber = (options.rowNumberOffset ?? 0) + index + 2;
     const errors: string[] = [];
     const warnings: string[] = [];
     const wbLogin = normalizeWbLogin(text(rowValue(row, ["agentes", "agente", "wb_login", "wb login"])));
@@ -333,24 +359,15 @@ export async function previewProductionImport(actor: Actor, rawRows: Record<stri
 export async function commitQualityImport(actor: Actor, rows: PerformancePreviewRow[], fileName = "qualidade.xlsx") {
   const user = await requireActiveUser(actor);
   requireImportPermission(user);
+  return commitQualityRows(user, rows, fileName);
+}
+
+async function commitQualityRows(user: AuthenticatedUser, rows: PerformancePreviewRow[], fileName = "qualidade.xlsx", batchId?: string) {
   const validRows = rows.filter((row) => row.type === "QUALITY" && !row.errors.length && row.employeeId && row.uniqueKey);
   if (!validRows.length) throw new PerformanceError("Não há linhas válidas para importar.", 400);
   const createdRows = validRows.filter((row) => row.action === "create").length;
   const updatedRows = validRows.filter((row) => row.action === "update").length;
-  const batch = await prisma.performanceImportBatch.create({
-    data: {
-      type: "QUALITY",
-      fileName,
-      rowsTotal: rows.length,
-      rowsValid: validRows.length,
-      rowsError: rows.filter((row) => row.errors.length).length,
-      rowsInserted: createdRows,
-      rowsUpdated: updatedRows,
-      status: rows.some((row) => row.errors.length) ? "PARTIAL" : "SUCCESS",
-      errorSummary: rows.filter((row) => row.errors.length).slice(0, 20).map((row) => `Linha ${row.rowNumber}: ${row.errors.join("; ")}`).join(" | ") || null,
-      importedById: user.id
-    }
-  });
+  const batch = await upsertImportBatch(user, "QUALITY", fileName, rows, validRows.length, createdRows, updatedRows, batchId);
 
   for (const chunk of chunks(validRows, 100)) {
     await prisma.$transaction(chunk.map((row) => prisma.qualityRecord.upsert({
@@ -382,31 +399,22 @@ export async function commitQualityImport(actor: Actor, rows: PerformancePreview
       }
     })));
   }
-  await auditImport(user.id, "QUALITY", batch.id, { fileName, rowsTotal: rows.length, rowsValid: validRows.length, createdRows, updatedRows });
+  if (!batchId) await auditImport(user.id, "QUALITY", batch.id, { fileName, rowsTotal: rows.length, rowsValid: validRows.length, createdRows, updatedRows });
   return { success: true, importedRows: validRows.length, createdRows, updatedRows, batchId: batch.id };
 }
 
 export async function commitProductionImport(actor: Actor, rows: PerformancePreviewRow[], fileName = "producao.xlsx") {
   const user = await requireActiveUser(actor);
   requireImportPermission(user);
+  return commitProductionRows(user, rows, fileName);
+}
+
+async function commitProductionRows(user: AuthenticatedUser, rows: PerformancePreviewRow[], fileName = "producao.xlsx", batchId?: string) {
   const validRows = rows.filter((row) => row.type === "PRODUCTION" && !row.errors.length && row.employeeId && row.uniqueKey);
   if (!validRows.length) throw new PerformanceError("Não há linhas válidas para importar.", 400);
   const createdRows = validRows.filter((row) => row.action === "create").length;
   const updatedRows = validRows.filter((row) => row.action === "update").length;
-  const batch = await prisma.performanceImportBatch.create({
-    data: {
-      type: "PRODUCTION",
-      fileName,
-      rowsTotal: rows.length,
-      rowsValid: validRows.length,
-      rowsError: rows.filter((row) => row.errors.length).length,
-      rowsInserted: createdRows,
-      rowsUpdated: updatedRows,
-      status: rows.some((row) => row.errors.length) ? "PARTIAL" : "SUCCESS",
-      errorSummary: rows.filter((row) => row.errors.length).slice(0, 20).map((row) => `Linha ${row.rowNumber}: ${row.errors.join("; ")}`).join(" | ") || null,
-      importedById: user.id
-    }
-  });
+  const batch = await upsertImportBatch(user, "PRODUCTION", fileName, rows, validRows.length, createdRows, updatedRows, batchId);
 
   for (const chunk of chunks(validRows, 100)) {
     await prisma.$transaction(chunk.map((row) => prisma.productionRecord.upsert({
@@ -440,7 +448,7 @@ export async function commitProductionImport(actor: Actor, rows: PerformancePrev
       }
     })));
   }
-  await auditImport(user.id, "PRODUCTION", batch.id, { fileName, rowsTotal: rows.length, rowsValid: validRows.length, createdRows, updatedRows });
+  if (!batchId) await auditImport(user.id, "PRODUCTION", batch.id, { fileName, rowsTotal: rows.length, rowsValid: validRows.length, createdRows, updatedRows });
   return { success: true, importedRows: validRows.length, createdRows, updatedRows, batchId: batch.id };
 }
 
@@ -749,6 +757,62 @@ async function markExistingProductionRows(previewRows: PerformancePreviewRow[]) 
   const existing = validKeys.length ? await prisma.productionRecord.findMany({ where: { productionKey: { in: validKeys } }, select: { productionKey: true } }) : [];
   const existingKeys = new Set(existing.map((row) => row.productionKey));
   return buildPreviewResult(previewRows.map((row) => row.errors.length ? row : { ...row, action: existingKeys.has(row.uniqueKey) ? "update" : "create" }));
+}
+
+async function upsertImportBatch(
+  user: AuthenticatedUser,
+  type: "QUALITY" | "PRODUCTION",
+  fileName: string,
+  rows: PerformancePreviewRow[],
+  rowsValid: number,
+  rowsInserted: number,
+  rowsUpdated: number,
+  batchId?: string
+) {
+  const rowsError = rows.filter((row) => row.errors.length).length;
+  const errorSummary = previewErrorSummary(rows);
+  if (batchId) {
+    const existing = await prisma.performanceImportBatch.findUnique({
+      where: { id: batchId },
+      select: { id: true, type: true, status: true, errorSummary: true }
+    });
+    if (!existing || existing.type !== type) throw new PerformanceError("Lote de importação inválido para esta base.", 400);
+    const nextErrorSummary = [existing.errorSummary, errorSummary].filter(Boolean).join(" | ").slice(0, 4000) || null;
+    return prisma.performanceImportBatch.update({
+      where: { id: batchId },
+      data: {
+        rowsTotal: { increment: rows.length },
+        rowsValid: { increment: rowsValid },
+        rowsError: { increment: rowsError },
+        rowsInserted: { increment: rowsInserted },
+        rowsUpdated: { increment: rowsUpdated },
+        status: existing.status === "PARTIAL" || rowsError ? "PARTIAL" : "SUCCESS",
+        errorSummary: nextErrorSummary
+      }
+    });
+  }
+  return prisma.performanceImportBatch.create({
+    data: {
+      type,
+      fileName,
+      rowsTotal: rows.length,
+      rowsValid,
+      rowsError,
+      rowsInserted,
+      rowsUpdated,
+      status: rowsError ? "PARTIAL" : "SUCCESS",
+      errorSummary,
+      importedById: user.id
+    }
+  });
+}
+
+function previewErrorSummary(rows: PerformancePreviewRow[]) {
+  return rows
+    .filter((row) => row.errors.length)
+    .slice(0, 20)
+    .map((row) => `Linha ${row.rowNumber}: ${row.errors.join("; ")}`)
+    .join(" | ") || null;
 }
 
 function buildPreviewResult(rows: PerformancePreviewRow[]) {

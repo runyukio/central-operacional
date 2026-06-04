@@ -1052,6 +1052,7 @@ const cachedGetTtls: Array<{ pattern: RegExp; ttlMs: number }> = [
 ];
 const IMPORT_PREVIEW_ROW_LIMIT = 200;
 const IMPORT_PREVIEW_ISSUE_LIMIT = 50;
+const PERFORMANCE_IMPORT_CHUNK_SIZE = 250;
 
 async function apiJson<T>(url: string, options?: RequestInit) {
   const method = String(options?.method ?? "GET").toUpperCase();
@@ -9988,6 +9989,8 @@ export function PerformancePage() {
   const [selectedAgent, setSelectedAgent] = useState<AgentPerformanceClient | null>(null);
   const qualityInputRef = useRef<HTMLInputElement | null>(null);
   const productionInputRef = useRef<HTMLInputElement | null>(null);
+  const qualityRawRowsRef = useRef<Array<Record<string, unknown>>>([]);
+  const productionRawRowsRef = useRef<Array<Record<string, unknown>>>([]);
   const sessionRole = String((session?.user as { role?: string } | undefined)?.role ?? "").toUpperCase();
   const sessionCanWfh = ["ADMIN", "WFM", "SUPERVISOR", "RH", "GESTOR", "COORDENADOR", "GERENTE", "MANAGEMENT"].includes(sessionRole);
 
@@ -10042,13 +10045,29 @@ export function PerformancePage() {
     setImporting(type);
     if (type === "quality") setQualityFileName(file.name);
     else setProductionFileName(file.name);
-    const formData = new FormData();
-    formData.append("file", file);
     try {
-      const result = await apiJson<PerformancePreviewResponse>(`/api/performance/import/${type}/preview`, { method: "POST", body: formData });
-      if (type === "quality") setQualityPreview(result);
-      else setProductionPreview(result);
-      setMessage(result.summary.errorRows ? "Revise os erros do preview antes de confirmar." : "Preview gerado. Confirme para importar a base.");
+      const rawRows = await readPerformanceWorkbookRows(file, type);
+      if (!rawRows.length) throw new Error("O arquivo não possui linhas para importar.");
+      if (type === "quality") {
+        qualityRawRowsRef.current = rawRows;
+        setQualityPreview(null);
+      } else {
+        productionRawRowsRef.current = rawRows;
+        setProductionPreview(null);
+      }
+      let aggregate = emptyPerformancePreview();
+      for (let index = 0; index < rawRows.length; index += PERFORMANCE_IMPORT_CHUNK_SIZE) {
+        setMessage(`Validando ${type === "quality" ? "Qualidade" : "Produção"}: ${Math.min(index + PERFORMANCE_IMPORT_CHUNK_SIZE, rawRows.length)} de ${rawRows.length} linha(s).`);
+        const result = await apiJson<PerformancePreviewResponse>(`/api/performance/import/${type}/preview`, {
+          method: "POST",
+          body: JSON.stringify({ rows: rawRows.slice(index, index + PERFORMANCE_IMPORT_CHUNK_SIZE), rowOffset: index })
+        });
+        aggregate = mergePerformancePreview(aggregate, result);
+      }
+      if (type === "quality") setQualityPreview(aggregate);
+      else setProductionPreview(aggregate);
+      const hiddenRows = aggregate.summary.totalRows > aggregate.rows.length ? ` Exibindo amostra de ${aggregate.rows.length} linha(s) para evitar payload grande.` : "";
+      setMessage(aggregate.summary.errorRows ? `Revise os erros do preview antes de confirmar.${hiddenRows}` : `Preview gerado. Confirme para importar a base.${hiddenRows}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Não foi possível validar o arquivo de Performance.");
     } finally {
@@ -10063,13 +10082,36 @@ export function PerformancePage() {
     if (!preview || preview.summary.errorRows || importing) return;
     setImporting(type);
     try {
-      const result = await apiJson<{ importedRows: number; createdRows: number; updatedRows: number }>(`/api/performance/import/${type}/commit`, {
-        method: "POST",
-        body: JSON.stringify({ rows: preview.rows, fileName: type === "quality" ? qualityFileName : productionFileName })
-      });
-      setMessage(`Base importada: ${result.createdRows} criado(s), ${result.updatedRows} atualizado(s), ${result.importedRows} linha(s) válida(s).`);
-      if (type === "quality") setQualityPreview(null);
-      else setProductionPreview(null);
+      const rawRows = type === "quality" ? qualityRawRowsRef.current : productionRawRowsRef.current;
+      if (!rawRows.length) throw new Error("Arquivo original não encontrado para confirmar. Gere o preview novamente.");
+      let batchId = "";
+      let importedRows = 0;
+      let createdRows = 0;
+      let updatedRows = 0;
+      for (let index = 0; index < rawRows.length; index += PERFORMANCE_IMPORT_CHUNK_SIZE) {
+        setMessage(`Importando ${type === "quality" ? "Qualidade" : "Produção"}: ${Math.min(index + PERFORMANCE_IMPORT_CHUNK_SIZE, rawRows.length)} de ${rawRows.length} linha(s).`);
+        const result = await apiJson<{ importedRows: number; createdRows: number; updatedRows: number; batchId: string }>(`/api/performance/import/${type}/commit`, {
+          method: "POST",
+          body: JSON.stringify({
+            rawRows: rawRows.slice(index, index + PERFORMANCE_IMPORT_CHUNK_SIZE),
+            fileName: type === "quality" ? qualityFileName : productionFileName,
+            batchId,
+            rowOffset: index
+          })
+        });
+        batchId = result.batchId;
+        importedRows += result.importedRows;
+        createdRows += result.createdRows;
+        updatedRows += result.updatedRows;
+      }
+      setMessage(`Base importada: ${createdRows} criado(s), ${updatedRows} atualizado(s), ${importedRows} linha(s) válida(s).`);
+      if (type === "quality") {
+        qualityRawRowsRef.current = [];
+        setQualityPreview(null);
+      } else {
+        productionRawRowsRef.current = [];
+        setProductionPreview(null);
+      }
       await loadPerformance();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Não foi possível importar a base de Performance.");
@@ -10367,7 +10409,7 @@ function PerformancePreviewModal({ title, fileName, preview, importing, onClose,
               </tbody>
             </table>
           </div>
-          {preview.rows.length > IMPORT_PREVIEW_ROW_LIMIT ? <p className="mt-2 text-xs font-bold text-muted">Exibindo as primeiras {IMPORT_PREVIEW_ROW_LIMIT} linhas. A confirmação processa todas as linhas válidas.</p> : null}
+          {preview.summary.totalRows > preview.rows.length ? <p className="mt-2 text-xs font-bold text-muted">Exibindo amostra de {preview.rows.length} linha(s) de {preview.summary.totalRows}. A confirmação processa todas as linhas válidas em blocos pequenos.</p> : null}
         </div>
         <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-4">
           <button onClick={onClose} className="premium-control h-9 px-4 text-sm font-extrabold text-navy-950">Cancelar</button>
@@ -10376,6 +10418,56 @@ function PerformancePreviewModal({ title, fileName, preview, importing, onClose,
       </div>
     </div>
   );
+}
+
+async function readPerformanceWorkbookRows(file: File, type: "quality" | "production") {
+  const workbook = XLSX.read(await file.arrayBuffer(), { cellDates: true });
+  const preferredSheets = type === "quality" ? ["qualidade", "quality"] : ["producao", "produção", "production"];
+  const sheetName = workbook.SheetNames.find((name) => preferredSheets.includes(normalizePerformanceSheetName(name))) ?? workbook.SheetNames[0];
+  const sheet = sheetName ? workbook.Sheets[sheetName] : null;
+  if (!sheet) throw new Error(type === "quality" ? "Planilha de Qualidade não encontrada." : "Planilha de Produção não encontrada.");
+  return XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+}
+
+function normalizePerformanceSheetName(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+}
+
+function emptyPerformancePreview(): PerformancePreviewResponse {
+  return {
+    success: true,
+    rows: [],
+    summary: {
+      totalRows: 0,
+      validRows: 0,
+      errorRows: 0,
+      warningRows: 0,
+      createdRows: 0,
+      updatedRows: 0,
+      foundEmployees: 0,
+      missingEmployees: 0,
+      missingWbLogins: []
+    }
+  };
+}
+
+function mergePerformancePreview(current: PerformancePreviewResponse, next: PerformancePreviewResponse): PerformancePreviewResponse {
+  const missingWbLogins = Array.from(new Set([...current.summary.missingWbLogins, ...next.summary.missingWbLogins]));
+  return {
+    success: current.success && next.success,
+    rows: [...current.rows, ...next.rows].slice(0, IMPORT_PREVIEW_ROW_LIMIT),
+    summary: {
+      totalRows: current.summary.totalRows + next.summary.totalRows,
+      validRows: current.summary.validRows + next.summary.validRows,
+      errorRows: current.summary.errorRows + next.summary.errorRows,
+      warningRows: current.summary.warningRows + next.summary.warningRows,
+      createdRows: current.summary.createdRows + next.summary.createdRows,
+      updatedRows: current.summary.updatedRows + next.summary.updatedRows,
+      foundEmployees: current.summary.foundEmployees + next.summary.foundEmployees,
+      missingEmployees: missingWbLogins.length,
+      missingWbLogins
+    }
+  };
 }
 
 type PerformanceMetricSummary = {
