@@ -374,6 +374,9 @@ model EmployeeProfile {
   firstJob           String?
   hasTelemarketingExperience String?
   telemarketingWhere String?
+  additionalDataCompletedAt DateTime?
+  additionalDataUpdatedAt   DateTime?
+  additionalDataSource      String?
   nestingStartDate   DateTime?
   goLiveDate         DateTime?
   workStartTime      String?

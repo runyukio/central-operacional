@@ -51,6 +51,7 @@ import {
   Star,
   Target,
   Trophy,
+  UserCircle,
   UserPlus,
   Upload,
   UserCheck,
@@ -866,6 +867,66 @@ type EmployeeClient = (typeof employees)[number] & {
   };
   attendanceHistory?: AttendanceItem[];
   lastPresence?: string;
+};
+
+type AdditionalRegistrationDataForm = {
+  ethnicity: string;
+  sexualOrientation: string;
+  isPcd: string;
+  pcdDisabilityType: string;
+  pcdDisabilityOther: string;
+  firstJob: string;
+  hasTelemarketingExperience: string;
+  telemarketingWhere: string;
+};
+
+type AdditionalRegistrationDataResponse = {
+  data: {
+    completed: boolean;
+    pending: boolean;
+    href: string;
+    profile: AdditionalRegistrationDataForm & {
+      id: string;
+      name: string;
+      wbLogin: string;
+      additionalDataCompletedAt?: string;
+      additionalDataUpdatedAt?: string;
+    };
+  };
+  message?: string;
+};
+
+type AdditionalDataTrackingRow = {
+  id: string;
+  name: string;
+  wbLogin: string;
+  email: string;
+  lob: string;
+  supervisor: string;
+  roleTitle: string;
+  skill: string;
+  wave: string;
+  employeeStatus: string;
+  additionalDataStatus: "Concluído" | "Pendente";
+  additionalDataCompletedAt: string;
+  ethnicity?: string;
+  sexualOrientation?: string;
+  isPcd?: string;
+  pcdDisabilityType?: string;
+  pcdDisabilityOther?: string;
+  firstJob?: string;
+  hasTelemarketingExperience?: string;
+  telemarketingWhere?: string;
+};
+
+type AdditionalDataTrackingResponse = {
+  data: AdditionalDataTrackingRow[];
+  summary: {
+    total: number;
+    completed: number;
+    pending: number;
+    completionRate: number;
+  };
 };
 
 type EmployeeListResponse = {
@@ -1776,6 +1837,170 @@ function FormSelect({ label, value, options, onChange, error, disabled = false, 
       </select>
       {error ? <span className="mt-1 block text-xs font-bold text-red-600">{error}</span> : null}
     </label>
+  );
+}
+
+const additionalDataEmptyForm: AdditionalRegistrationDataForm = {
+  ethnicity: "",
+  sexualOrientation: "",
+  isPcd: "",
+  pcdDisabilityType: "",
+  pcdDisabilityOther: "",
+  firstJob: "",
+  hasTelemarketingExperience: "",
+  telemarketingWhere: ""
+};
+
+export function AdditionalRegistrationDataPage() {
+  const [form, setForm] = useState<AdditionalRegistrationDataForm>(additionalDataEmptyForm);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [completedAt, setCompletedAt] = useState("");
+  const [profileName, setProfileName] = useState("");
+
+  useEffect(() => {
+    void loadAdditionalData();
+  }, []);
+
+  async function loadAdditionalData() {
+    setLoading(true);
+    setMessage("");
+    try {
+      const payload = await apiJson<AdditionalRegistrationDataResponse>("/api/employee-additional-data");
+      setForm({
+        ethnicity: payload.data.profile.ethnicity ?? "",
+        sexualOrientation: payload.data.profile.sexualOrientation ?? "",
+        isPcd: payload.data.profile.isPcd ?? "",
+        pcdDisabilityType: payload.data.profile.pcdDisabilityType ?? "",
+        pcdDisabilityOther: payload.data.profile.pcdDisabilityOther ?? "",
+        firstJob: payload.data.profile.firstJob ?? "",
+        hasTelemarketingExperience: payload.data.profile.hasTelemarketingExperience ?? "",
+        telemarketingWhere: payload.data.profile.telemarketingWhere ?? ""
+      });
+      setCompletedAt(payload.data.profile.additionalDataCompletedAt ?? "");
+      setProfileName(payload.data.profile.name ?? "");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível carregar seus dados cadastrais adicionais.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function updateAdditionalDataField<K extends keyof AdditionalRegistrationDataForm>(field: K, value: AdditionalRegistrationDataForm[K]) {
+    setFieldErrors((current) => {
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  async function submitAdditionalData() {
+    if (saving) return;
+    setSaving(true);
+    setMessage("");
+    setFieldErrors({});
+    try {
+      const payload = await apiJson<AdditionalRegistrationDataResponse>("/api/employee-additional-data", {
+        method: "POST",
+        body: JSON.stringify(form)
+      });
+      setMessage(payload.message ?? "Dados cadastrais adicionais atualizados com sucesso.");
+      setCompletedAt(payload.data.profile.additionalDataCompletedAt ?? "");
+      setForm({
+        ethnicity: payload.data.profile.ethnicity ?? "",
+        sexualOrientation: payload.data.profile.sexualOrientation ?? "",
+        isPcd: payload.data.profile.isPcd ?? "",
+        pcdDisabilityType: payload.data.profile.pcdDisabilityType ?? "",
+        pcdDisabilityOther: payload.data.profile.pcdDisabilityOther ?? "",
+        firstJob: payload.data.profile.firstJob ?? "",
+        hasTelemarketingExperience: payload.data.profile.hasTelemarketingExperience ?? "",
+        telemarketingWhere: payload.data.profile.telemarketingWhere ?? ""
+      });
+    } catch (error) {
+      if (error instanceof ApiRequestError) {
+        setFieldErrors(error.fields ?? {});
+        setMessage(error.message);
+      } else {
+        setMessage(error instanceof Error ? error.message : "Não foi possível salvar seus dados cadastrais adicionais.");
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div>
+      <PageHeader
+        title="Dados Cadastrais Adicionais"
+        description="Atualize informações cadastrais complementares de forma segura."
+        icon={UserCircle}
+      />
+      {message ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
+      {loading ? (
+        <Panel title="Carregando">
+          <EmptyState title="Carregando seus dados" description="Buscando seu cadastro vinculado ao usuário logado." />
+        </Panel>
+      ) : (
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+          <Panel title="Questionário">
+            <div className="grid gap-4 md:grid-cols-2">
+              <FormSelect label="Etnia" value={form.ethnicity} options={["", "Branca", "Preta", "Parda", "Amarela", "Indígena", "Prefiro não informar"]} onChange={(value) => updateAdditionalDataField("ethnicity", value)} error={fieldErrors.ethnicity} />
+              <FormSelect label="Orientação sexual" value={form.sexualOrientation} options={["", "Heterossexual", "Homossexual", "Bissexual", "Assexual", "Outra", "Prefiro não informar"]} onChange={(value) => updateAdditionalDataField("sexualOrientation", value)} error={fieldErrors.sexualOrientation} />
+              <FormSelect label="É PCD?" value={form.isPcd} options={["", "Sim", "Não", "Prefiro não informar"]} onChange={(value) => {
+                updateAdditionalDataField("isPcd", value);
+                if (value !== "Sim") {
+                  updateAdditionalDataField("pcdDisabilityType", "");
+                  updateAdditionalDataField("pcdDisabilityOther", "");
+                }
+              }} error={fieldErrors.isPcd} />
+              {form.isPcd === "Sim" ? (
+                <FormSelect label="Tipo de deficiência" value={form.pcdDisabilityType} options={pcdDisabilityTypeOptions} onChange={(value) => {
+                  updateAdditionalDataField("pcdDisabilityType", value);
+                  if (value !== "Outra") updateAdditionalDataField("pcdDisabilityOther", "");
+                }} error={fieldErrors.pcdDisabilityType} />
+              ) : null}
+              {form.isPcd === "Sim" && form.pcdDisabilityType === "Outra" ? (
+                <FormInput label="Especifique o tipo de deficiência" value={form.pcdDisabilityOther} onChange={(value) => updateAdditionalDataField("pcdDisabilityOther", value)} error={fieldErrors.pcdDisabilityOther} />
+              ) : null}
+              <FormSelect label="Primeiro emprego?" value={form.firstJob} options={["", "Sim", "Não"]} onChange={(value) => updateAdditionalDataField("firstJob", value)} error={fieldErrors.firstJob} />
+              <FormSelect label="Já trabalhou em telemarketing?" value={form.hasTelemarketingExperience} options={["", "Sim", "Não"]} onChange={(value) => {
+                updateAdditionalDataField("hasTelemarketingExperience", value);
+                if (value === "Não") updateAdditionalDataField("telemarketingWhere", "Não se aplica");
+                if (value === "Sim" && form.telemarketingWhere === "Não se aplica") updateAdditionalDataField("telemarketingWhere", "");
+              }} error={fieldErrors.hasTelemarketingExperience} />
+              {form.hasTelemarketingExperience === "Sim" ? (
+                <FormInput label="Onde trabalhou em telemarketing?" value={form.telemarketingWhere} onChange={(value) => updateAdditionalDataField("telemarketingWhere", value)} error={fieldErrors.telemarketingWhere} />
+              ) : null}
+            </div>
+            <div className="mt-5 flex flex-wrap justify-end gap-3">
+              <a href="/minha-escala" className="rounded-lg border border-border px-4 py-3 text-sm font-bold text-navy-950">Voltar</a>
+              <button type="button" disabled={saving} onClick={() => void submitAdditionalData()} className="rounded-lg bg-blue-600 px-5 py-3 text-sm font-bold text-white disabled:opacity-60">
+                {saving ? "Salvando..." : "Salvar dados"}
+              </button>
+            </div>
+          </Panel>
+          <Panel title="Status">
+            <div className="space-y-3 text-sm text-muted">
+              <div className="rounded-xl border border-border bg-slate-50 p-3">
+                <p className="text-xs font-extrabold uppercase tracking-wide text-muted">Colaborador</p>
+                <p className="mt-1 font-black text-navy-950">{profileName || "Cadastro vinculado"}</p>
+              </div>
+              <div className="rounded-xl border border-border bg-slate-50 p-3">
+                <p className="text-xs font-extrabold uppercase tracking-wide text-muted">Atualização</p>
+                <p className="mt-1 font-black text-navy-950">{completedAt ? "Concluída" : "Pendente"}</p>
+                {completedAt ? <p className="mt-1 text-xs font-semibold text-muted">{completedAt}</p> : null}
+              </div>
+              <p className="leading-6">
+                Esses dados são tratados como sensíveis. Supervisores não visualizam etnia, orientação sexual ou informações de PCD.
+              </p>
+            </div>
+          </Panel>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -3213,12 +3438,14 @@ export function MySchedulePage() {
   const [todayMood, setTodayMood] = useState<{ id: string; date: string; moodScore: number; moodLabel: string; comment: string } | null>(null);
   const [moodForm, setMoodForm] = useState({ moodScore: 3, comment: "" });
   const [savingMood, setSavingMood] = useState(false);
+  const [additionalDataPending, setAdditionalDataPending] = useState(false);
 
   useEffect(() => {
     void loadMyRequests();
     void loadMyMonthlyAdvance();
     void loadMyScheduleSettings();
     void loadMyMood();
+    void loadMyAdditionalDataStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -3309,6 +3536,15 @@ export function MySchedulePage() {
       if (payload.data) setMoodForm({ moodScore: normalizeMoodScoreForUi(payload.data.moodScore), comment: payload.data.comment ?? "" });
     } catch {
       setTodayMood(null);
+    }
+  }
+
+  async function loadMyAdditionalDataStatus() {
+    try {
+      const payload = await apiJson<AdditionalRegistrationDataResponse>("/api/employee-additional-data");
+      setAdditionalDataPending(Boolean(payload.data.pending));
+    } catch {
+      setAdditionalDataPending(false);
     }
   }
 
@@ -3643,6 +3879,15 @@ export function MySchedulePage() {
       />
       {dayOffMessage ? (
         <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{dayOffMessage}</div>
+      ) : null}
+      {additionalDataPending ? (
+        <div className="mb-5 flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-navy-950">Atualização cadastral pendente</p>
+            <p className="mt-1 text-xs font-semibold text-amber-800">Complete seus Dados Cadastrais Adicionais.</p>
+          </div>
+          <a href="/meus-dados/adicionais" className="rounded-lg bg-amber-500 px-4 py-2 text-center text-xs font-extrabold text-white shadow-soft">Responder agora</a>
+        </div>
       ) : null}
       <div className="mb-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_520px]">
         <section className="card overflow-hidden">
@@ -8526,6 +8771,9 @@ export function EmployeeMapPage() {
   const [waveFilter, setWaveFilter] = useState("Todos");
   const [shiftFilter, setShiftFilter] = useState("Todos");
   const [employeeFilterOptions, setEmployeeFilterOptions] = useState<{ skills: string[]; waves: string[]; statuses?: string[] }>({ skills: [], waves: [], statuses: [] });
+  const [additionalDataStatusFilter, setAdditionalDataStatusFilter] = useState("Todos");
+  const [additionalDataTracking, setAdditionalDataTracking] = useState<AdditionalDataTrackingResponse | null>(null);
+  const [additionalDataTrackingLoading, setAdditionalDataTrackingLoading] = useState(false);
   const [employeePage, setEmployeePage] = useState(1);
   const [employeePagination, setEmployeePagination] = useState({ total: 0, page: 1, limit: 50, totalPages: 1 });
   const [editingEmployee, setEditingEmployee] = useState(false);
@@ -8581,6 +8829,7 @@ export function EmployeeMapPage() {
   const isAdmin = session?.user?.role === "ADMIN";
   const isSupervisorUser = session?.user?.role === "SUPERVISOR";
   const normalizedEmployeeMapRole = String(session?.user?.role ?? "").toUpperCase();
+  const canViewAdditionalDataTracking = ["ADMIN", "RH", "HR", "WFM"].includes(normalizedEmployeeMapRole);
   const canEditEmployeeOperational = ["ADMIN", "WFM", "RH", "HR", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
   const canEditOperationalBindings = ["ADMIN", "WFM", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
   const canEditPeopleData = ["ADMIN", "RH", "HR", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
@@ -8604,6 +8853,11 @@ export function EmployeeMapPage() {
       .catch(() => setEmployeeSettings(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (canViewAdditionalDataTracking) void loadAdditionalDataTracking();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canViewAdditionalDataTracking, additionalDataStatusFilter]);
 
   async function loadEmployees(options?: { nextQuery?: string; nextLob?: string; nextStatus?: string; nextSupervisor?: string; nextSkill?: string; nextWave?: string; nextShift?: string; nextPage?: number }) {
     setEmployeeLoading(true);
@@ -8646,6 +8900,32 @@ export function EmployeeMapPage() {
       setEmployeePagination({ total: 0, page: 1, limit: 50, totalPages: 1 });
     } finally {
       setEmployeeLoading(false);
+    }
+  }
+
+  async function loadAdditionalDataTracking(options?: { nextQuery?: string; nextLob?: string; nextSupervisor?: string; nextSkill?: string; nextWave?: string; nextStatus?: string }) {
+    if (!canViewAdditionalDataTracking) return;
+    setAdditionalDataTrackingLoading(true);
+    const params = new URLSearchParams({ scope: "tracking" });
+    const nextQuery = options?.nextQuery ?? query;
+    const nextLob = options?.nextLob ?? lobFilter;
+    const nextSupervisor = options?.nextSupervisor ?? supervisorFilter;
+    const nextSkill = options?.nextSkill ?? skillFilter;
+    const nextWave = options?.nextWave ?? waveFilter;
+    const nextStatus = options?.nextStatus ?? additionalDataStatusFilter;
+    if (nextStatus !== "Todos") params.set("status", nextStatus);
+    if (nextQuery.trim()) params.set("search", nextQuery.trim());
+    if (nextLob !== "Todos") params.set("lob", nextLob);
+    if (nextSupervisor !== "Todos") params.set("supervisorId", nextSupervisor);
+    if (nextSkill !== "Todos") params.set("skill", nextSkill);
+    if (nextWave !== "Todos") params.set("wave", nextWave);
+    try {
+      const payload = await apiJson<AdditionalDataTrackingResponse>(`/api/employee-additional-data?${params.toString()}`);
+      setAdditionalDataTracking(payload);
+    } catch {
+      setAdditionalDataTracking(null);
+    } finally {
+      setAdditionalDataTrackingLoading(false);
     }
   }
 
@@ -8779,6 +9059,17 @@ export function EmployeeMapPage() {
     window.location.href = `/api/employees/export${params.toString() ? `?${params.toString()}` : ""}`;
   }
 
+  function exportAdditionalDataTracking() {
+    const params = new URLSearchParams();
+    if (additionalDataStatusFilter !== "Todos") params.set("status", additionalDataStatusFilter);
+    if (query.trim()) params.set("search", query.trim());
+    if (lobFilter !== "Todos") params.set("lob", lobFilter);
+    if (supervisorFilter !== "Todos") params.set("supervisorId", supervisorFilter);
+    if (skillFilter !== "Todos") params.set("skill", skillFilter);
+    if (waveFilter !== "Todos") params.set("wave", waveFilter);
+    window.location.href = `/api/employee-additional-data/export${params.toString() ? `?${params.toString()}` : ""}`;
+  }
+
   async function resetSelectedPassword() {
     if (!selected || resettingPassword) return;
     setResettingPassword(true);
@@ -8850,13 +9141,55 @@ export function EmployeeMapPage() {
               {employeeShiftOptions.map((shift) => <option key={shift.id} value={shift.id}>{cleanShiftName(shift.name)}</option>)}
             </select>
             <div className="flex gap-2 md:col-span-2 xl:col-span-9 xl:justify-end">
-              <button onClick={() => { setEmployeePage(1); void loadEmployees({ nextPage: 1 }); }} className="h-10 rounded-lg bg-blue-600 px-5 text-sm font-bold text-white">Buscar</button>
-              <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextPage: 1 }); }} className="h-10 rounded-lg border border-border px-5 text-sm font-bold">Limpar filtros</button>
+              <button onClick={() => { setEmployeePage(1); void loadEmployees({ nextPage: 1 }); void loadAdditionalDataTracking(); }} className="h-10 rounded-lg bg-blue-600 px-5 text-sm font-bold text-white">Buscar</button>
+              <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setAdditionalDataStatusFilter("Todos"); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextPage: 1 }); void loadAdditionalDataTracking({ nextQuery: "", nextLob: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextStatus: "Todos" }); }} className="h-10 rounded-lg border border-border px-5 text-sm font-bold">Limpar filtros</button>
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <MetricPill value={employeePagination.total} label="Total encontrado" />
           </div>
+          {canViewAdditionalDataTracking ? (
+            <Panel title="Dados Cadastrais Adicionais" action="Exportar" actionOnClick={exportAdditionalDataTracking}>
+              <div className="mb-4 grid gap-3 md:grid-cols-[repeat(4,minmax(0,1fr))_auto]">
+                <MetricPill value={additionalDataTracking?.summary.total ?? 0} label="Ativos com login" />
+                <MetricPill value={additionalDataTracking?.summary.completed ?? 0} label="Responderam" />
+                <MetricPill value={additionalDataTracking?.summary.pending ?? 0} label="Pendentes" />
+                <MetricPill value={`${additionalDataTracking?.summary.completionRate ?? 0}%`} label="% concluído" />
+                <div className="flex gap-2 md:col-span-4 xl:col-span-1">
+                  <select
+                    value={additionalDataStatusFilter}
+                    onChange={(event) => setAdditionalDataStatusFilter(event.target.value)}
+                    className="h-10 min-w-0 flex-1 rounded-lg border border-border px-3 text-sm font-bold"
+                  >
+                    <option>Todos</option>
+                    <option>Concluído</option>
+                    <option>Pendente</option>
+                  </select>
+                  <button type="button" onClick={() => void loadAdditionalDataTracking()} className="h-10 rounded-lg border border-border px-3 text-xs font-extrabold text-navy-950">Atualizar</button>
+                </div>
+              </div>
+              {additionalDataTrackingLoading ? (
+                <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm font-bold text-blue-700">Carregando acompanhamento...</div>
+              ) : additionalDataTracking?.data.length ? (
+                <SimpleTable
+                  columns={["Nome", "WB/Login", "E-mail", "LOB", "Supervisor", "Cargo/Função", "Status colaborador", "Dados adicionais", "Conclusão"]}
+                  rows={additionalDataTracking.data.slice(0, 50).map((row) => [
+                    row.name,
+                    row.wbLogin,
+                    row.email || "-",
+                    row.lob,
+                    row.supervisor,
+                    row.roleTitle,
+                    <StatusBadge key={`${row.id}-employee-status`} status={row.employeeStatus || "Sem status"} />,
+                    <StatusBadge key={`${row.id}-additional-status`} status={row.additionalDataStatus} />,
+                    row.additionalDataCompletedAt || "-"
+                  ])}
+                />
+              ) : (
+                <EmptyState title="Nenhum colaborador encontrado" description="O acompanhamento respeita os filtros aplicados no Mapa de Funcionários." />
+              )}
+            </Panel>
+          ) : null}
           <Panel title="Funcionários">
             {employeeLoading ? (
               <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm font-bold text-blue-700">Carregando resumo dos colaboradores...</div>

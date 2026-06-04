@@ -1,5 +1,6 @@
 import type { Actor, InternalNotificationRecord } from "@/lib/mock-db";
 import { listNotifications as listMockNotifications, markNotificationRead as markMockNotificationRead, recordErrorLog } from "@/lib/mock-db";
+import { ensureAdditionalRegistrationDataNotificationForUser } from "@/lib/additional-registration-data-service";
 import { prisma } from "@/lib/prisma";
 
 const allowDemoDataFallback = process.env.ALLOW_DEMO_LOGIN === "true" || process.env.ALLOW_DEMO_DATA === "true";
@@ -8,6 +9,7 @@ export async function listInternalNotifications(actor: Actor) {
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email } });
     if (!user) return allowDemoDataFallback ? listMockNotifications(actor) : [];
+    await ensureAdditionalRegistrationDataNotificationForUser(user.id).catch(() => undefined);
 
     const notifications = await prisma.notification.findMany({
       where: { userId: user.id, deletedAt: null },
