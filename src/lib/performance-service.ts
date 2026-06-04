@@ -233,7 +233,6 @@ async function previewQualityRows(rawRows: Record<string, unknown>[], options: P
   const wbLogins = unique(normalizedRows.map((row) => normalizeWbLogin(text(rowValue(row, ["audit_name", "audit name", "wb_login", "wb login"])))).filter(Boolean));
   const employees = await findEmployeesByWbLogins(wbLogins);
   const employeeByLogin = new Map(employees.map((employee) => [normalizeWbLogin(employee.wbLogin), employee]));
-  const seen = new Map<string, number>();
 
   const previewRows: PerformancePreviewRow[] = normalizedRows.map((row, index) => {
     const rowNumber = (options.rowNumberOffset ?? 0) + index + 2;
@@ -255,11 +254,6 @@ async function previewQualityRows(rawRows: Record<string, unknown>[], options: P
     if (!caseOrderId) errors.push("Case Order ID é obrigatório.");
     if (!auditCaseOrderId) errors.push("Audit Case Order ID é obrigatório.");
     if (!concatKey) errors.push("Concat inválido.");
-    if (concatKey) {
-      const first = seen.get(concatKey);
-      if (first) warnings.push(`Concat duplicado no arquivo. Primeira ocorrência na linha ${first}; será tratado por upsert.`);
-      else seen.set(concatKey, rowNumber);
-    }
 
     return {
       rowNumber,
