@@ -14,7 +14,8 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: false, error: "Apenas ADMIN ou WFM podem baixar templates de Performance.", message: "Apenas ADMIN ou WFM podem baixar templates de Performance." }, { status: 403 });
     }
     const url = new URL(request.url);
-    const type = url.searchParams.get("type") === "production" ? "production" : "quality";
+    const requestedType = url.searchParams.get("type");
+    const type = requestedType === "production" ? "production" : requestedType === "tns-quality" ? "tns-quality" : "quality";
     return buildXlsxResponse(performanceTemplate(type));
   } catch (error) {
     if (error instanceof PerformanceError) {

@@ -303,6 +303,7 @@ model User {
   attendanceHistories     AttendanceHistory[]     @relation("AttendanceHistoryChangedBy")
   workHourImports         WorkHourImportBatch[]   @relation("WorkHourImportUploadedBy")
   performanceImports      PerformanceImportBatch[] @relation("PerformanceImportUploadedBy")
+  workSessionExports      WorkSessionDailySummary[] @relation("WorkSessionSummaryExportedBy")
   requestedWorkHourAdjustments WorkHourAdjustmentRequest[] @relation("WorkHourAdjustmentRequestedBy")
   approvedWorkHourAdjustments  WorkHourAdjustmentRequest[] @relation("WorkHourAdjustmentApprovedBy")
   rejectedWorkHourAdjustments  WorkHourAdjustmentRequest[] @relation("WorkHourAdjustmentRejectedBy")
@@ -324,6 +325,7 @@ model Lob {
   employees      EmployeeProfile[]
   staffCoverages StaffCoverage[]
   qualityRecords QualityRecord[]
+  tnsQualityRecords TnsQualityRecord[]
   productionRecords ProductionRecord[]
   createdAt      DateTime          @default(now())
 }
@@ -415,7 +417,11 @@ model EmployeeProfile {
   requests           Request[]
   performanceMetrics PerformanceMetric[]
   qualityRecords     QualityRecord[]
+  tnsQualityRecords  TnsQualityRecord[]
   productionRecords  ProductionRecord[]
+  workSessionDevices  WorkSessionDevice[]
+  workSessionEvents   WorkSessionEvent[]
+  workSessionDailySummaries WorkSessionDailySummary[]
   qualityFeedbacks   QualityFeedback[]       @relation("FeedbackEmployee")
   equipments         Equipment[]
   equipmentTickets   EquipmentTicket[]
@@ -721,6 +727,7 @@ model PerformanceImportBatch {
   importedById String?
   importedBy   User?           @relation("PerformanceImportUploadedBy", fields: [importedById], references: [id], onDelete: SetNull)
   qualityRecords QualityRecord[]
+  tnsQualityRecords TnsQualityRecord[]
   productionRecords ProductionRecord[]
   importedAt   DateTime        @default(now())
   createdAt    DateTime        @default(now())
@@ -758,6 +765,33 @@ model QualityRecord {
   @@index([employeeId, auditDate])
 }
 
+model TnsQualityRecord {
+  id               String                 @id @default(cuid())
+  auditDate        DateTime
+  wbLogin          String
+  employeeId       String?
+  employee         EmployeeProfile?       @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  lobId            String?
+  lob              Lob?                   @relation(fields: [lobId], references: [id], onDelete: SetNull)
+  rawLob           String?
+  sampling         Int                    @default(0)
+  mislabeled       Int                    @default(0)
+  leakage          Int                    @default(0)
+  falsePositive    Int                    @default(0)
+  sourceKey        String?
+  importBatchId    String?
+  importBatch      PerformanceImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  @@index([employeeId])
+  @@index([wbLogin])
+  @@index([auditDate])
+  @@index([lobId])
+  @@index([sourceKey])
+  @@index([employeeId, auditDate])
+}
+
 model ProductionRecord {
   id                String                 @id @default(cuid())
   bzTime            DateTime
@@ -784,6 +818,72 @@ model ProductionRecord {
   @@index([lobId])
   @@index([queueId])
   @@index([employeeId, bzDay])
+}
+
+model WorkSessionDevice {
+  id                String             @id @default(cuid())
+  employeeId        String
+  employee          EmployeeProfile    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  wbLogin           String
+  hostname          String?
+  deviceFingerprint String?
+  deviceTokenHash   String?
+  status            String             @default("ACTIVE")
+  lastSeenAt        DateTime?
+  agentVersion      String?
+  events            WorkSessionEvent[]
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  revokedAt         DateTime?
+
+  @@index([employeeId])
+  @@index([wbLogin])
+  @@index([status])
+  @@index([lastSeenAt])
+  @@index([revokedAt])
+}
+
+model WorkSessionEvent {
+  id             String            @id @default(cuid())
+  employeeId     String
+  employee       EmployeeProfile   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  deviceId       String
+  device         WorkSessionDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  eventType      String
+  eventTimestamp DateTime
+  receivedAt     DateTime          @default(now())
+  timezone       String?
+  source         String?
+  metadata       Json?
+  createdAt      DateTime          @default(now())
+
+  @@index([employeeId, eventTimestamp])
+  @@index([deviceId, eventTimestamp])
+  @@index([eventType])
+  @@index([eventTimestamp])
+}
+
+model WorkSessionDailySummary {
+  id              String          @id @default(cuid())
+  employeeId      String
+  employee        EmployeeProfile @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  date            DateTime
+  activeMinutes   Int             @default(0)
+  inactiveMinutes Int             @default(0)
+  firstLoginAt    DateTime?
+  lastLogoutAt    DateTime?
+  lastEventAt     DateTime?
+  currentStatus   String          @default("Desconhecido")
+  exportedById    String?
+  exportedBy      User?           @relation("WorkSessionSummaryExportedBy", fields: [exportedById], references: [id], onDelete: SetNull)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@unique([employeeId, date])
+  @@index([employeeId, date])
+  @@index([date])
+  @@index([currentStatus])
+  @@index([lastEventAt])
 }
 
 model QualityFeedback {

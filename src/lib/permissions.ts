@@ -33,6 +33,10 @@ const roleAliases: Record<string, AppRole> = {
   TI: "TI",
   MANAGEMENT: "GESTOR",
   GESTOR: "GESTOR",
+  COORDENADOR: "COORDENADOR",
+  COORDINATOR: "COORDENADOR",
+  GERENTE: "GERENTE",
+  MANAGER: "GERENTE",
   ADMIN: "ADMIN"
 };
 
@@ -97,6 +101,18 @@ export function canAccessAdvanceModule(user: PermissionUser) {
 export function canAccessStaffCoverage(user: PermissionUser) {
   const role = normalizeRole(user.role);
   return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(role);
+}
+
+export function canAccessWorkSessionMonitoring(user: PermissionUser) {
+  const role = normalizeRole(user.role);
+  if (!isActiveUser(user)) return false;
+  if (["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "COORDENADOR", "GERENTE"].includes(role)) return true;
+  const title = normalizeComparableJobTitle(user.roleTitle ?? user.jobTitle);
+  return ["gestor", "gestora", "coordenador", "coordenadora", "gerente", "manager", "management"].includes(title);
+}
+
+export function canExportWorkSessionMonitoring(user: PermissionUser) {
+  return canAccessWorkSessionMonitoring(user);
 }
 
 export function canAccessPerformance(user: PermissionUser) {

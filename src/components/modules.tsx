@@ -10052,14 +10052,18 @@ export function PerformancePage() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [qualityPreview, setQualityPreview] = useState<PerformancePreviewResponse | null>(null);
+  const [tnsQualityPreview, setTnsQualityPreview] = useState<PerformancePreviewResponse | null>(null);
   const [productionPreview, setProductionPreview] = useState<PerformancePreviewResponse | null>(null);
   const [qualityFileName, setQualityFileName] = useState("");
+  const [tnsQualityFileName, setTnsQualityFileName] = useState("");
   const [productionFileName, setProductionFileName] = useState("");
-  const [importing, setImporting] = useState<"" | "quality" | "production">("");
+  const [importing, setImporting] = useState<"" | PerformanceImportKind>("");
   const [selectedAgent, setSelectedAgent] = useState<AgentPerformanceClient | null>(null);
   const qualityInputRef = useRef<HTMLInputElement | null>(null);
+  const tnsQualityInputRef = useRef<HTMLInputElement | null>(null);
   const productionInputRef = useRef<HTMLInputElement | null>(null);
   const qualityRawRowsRef = useRef<Array<Record<string, unknown>>>([]);
+  const tnsQualityRawRowsRef = useRef<Array<Record<string, unknown>>>([]);
   const productionRawRowsRef = useRef<Array<Record<string, unknown>>>([]);
   const sessionRole = String((session?.user as { role?: string } | undefined)?.role ?? "").toUpperCase();
   const sessionCanWfh = ["ADMIN", "WFM", "SUPERVISOR", "RH", "GESTOR", "COORDENADOR", "GERENTE", "MANAGEMENT"].includes(sessionRole);
@@ -10110,10 +10114,11 @@ export function PerformancePage() {
   const wfhPayload = payload?.mode === "wfh" ? payload : null;
   const minePayload = payload?.mode === "mine" ? payload : null;
 
-  async function previewPerformanceFile(type: "quality" | "production", file?: File | null) {
+  async function previewPerformanceFile(type: PerformanceImportKind, file?: File | null) {
     if (!file) return;
     setImporting(type);
     if (type === "quality") setQualityFileName(file.name);
+    else if (type === "tns-quality") setTnsQualityFileName(file.name);
     else setProductionFileName(file.name);
     try {
       const rawRows = await readPerformanceWorkbookRows(file, type);
@@ -10121,13 +10126,16 @@ export function PerformancePage() {
       if (type === "quality") {
         qualityRawRowsRef.current = rawRows;
         setQualityPreview(null);
+      } else if (type === "tns-quality") {
+        tnsQualityRawRowsRef.current = rawRows;
+        setTnsQualityPreview(null);
       } else {
         productionRawRowsRef.current = rawRows;
         setProductionPreview(null);
       }
       let aggregate = emptyPerformancePreview();
       for (let index = 0; index < rawRows.length; index += PERFORMANCE_IMPORT_CHUNK_SIZE) {
-        setMessage(`Validando ${type === "quality" ? "Qualidade" : "Produção"}: ${Math.min(index + PERFORMANCE_IMPORT_CHUNK_SIZE, rawRows.length)} de ${rawRows.length} linha(s).`);
+        setMessage(`Validando ${performanceImportLabel(type)}: ${Math.min(index + PERFORMANCE_IMPORT_CHUNK_SIZE, rawRows.length)} de ${rawRows.length} linha(s).`);
         const result = await apiJson<PerformancePreviewResponse>(`/api/performance/import/${type}/preview`, {
           method: "POST",
           body: JSON.stringify({ rows: rawRows.slice(index, index + PERFORMANCE_IMPORT_CHUNK_SIZE), rowOffset: index })
@@ -10135,6 +10143,7 @@ export function PerformancePage() {
         aggregate = mergePerformancePreview(aggregate, result);
       }
       if (type === "quality") setQualityPreview(aggregate);
+      else if (type === "tns-quality") setTnsQualityPreview(aggregate);
       else setProductionPreview(aggregate);
       const hiddenRows = aggregate.summary.totalRows > aggregate.rows.length ? ` Exibindo amostra de ${aggregate.rows.length} linha(s) para evitar payload grande.` : "";
       setMessage(aggregate.summary.errorRows ? `Revise os erros do preview antes de confirmar.${hiddenRows}` : `Preview gerado. Confirme para importar a base.${hiddenRows}`);
@@ -10143,28 +10152,29 @@ export function PerformancePage() {
     } finally {
       setImporting("");
       if (qualityInputRef.current) qualityInputRef.current.value = "";
+      if (tnsQualityInputRef.current) tnsQualityInputRef.current.value = "";
       if (productionInputRef.current) productionInputRef.current.value = "";
     }
   }
 
-  async function commitPerformanceImport(type: "quality" | "production") {
-    const preview = type === "quality" ? qualityPreview : productionPreview;
+  async function commitPerformanceImport(type: PerformanceImportKind) {
+    const preview = type === "quality" ? qualityPreview : type === "tns-quality" ? tnsQualityPreview : productionPreview;
     if (!preview || preview.summary.errorRows || importing) return;
     setImporting(type);
     try {
-      const rawRows = type === "quality" ? qualityRawRowsRef.current : productionRawRowsRef.current;
+      const rawRows = type === "quality" ? qualityRawRowsRef.current : type === "tns-quality" ? tnsQualityRawRowsRef.current : productionRawRowsRef.current;
       if (!rawRows.length) throw new Error("Arquivo original não encontrado para confirmar. Gere o preview novamente.");
       let batchId = "";
       let importedRows = 0;
       let createdRows = 0;
       let updatedRows = 0;
       for (let index = 0; index < rawRows.length; index += PERFORMANCE_IMPORT_CHUNK_SIZE) {
-        setMessage(`Importando ${type === "quality" ? "Qualidade" : "Produção"}: ${Math.min(index + PERFORMANCE_IMPORT_CHUNK_SIZE, rawRows.length)} de ${rawRows.length} linha(s).`);
+        setMessage(`Importando ${performanceImportLabel(type)}: ${Math.min(index + PERFORMANCE_IMPORT_CHUNK_SIZE, rawRows.length)} de ${rawRows.length} linha(s).`);
         const result = await apiJson<{ importedRows: number; createdRows: number; updatedRows: number; batchId: string }>(`/api/performance/import/${type}/commit`, {
           method: "POST",
           body: JSON.stringify({
             rawRows: rawRows.slice(index, index + PERFORMANCE_IMPORT_CHUNK_SIZE),
-            fileName: type === "quality" ? qualityFileName : productionFileName,
+            fileName: type === "quality" ? qualityFileName : type === "tns-quality" ? tnsQualityFileName : productionFileName,
             batchId,
             rowOffset: index
           })
@@ -10178,6 +10188,9 @@ export function PerformancePage() {
       if (type === "quality") {
         qualityRawRowsRef.current = [];
         setQualityPreview(null);
+      } else if (type === "tns-quality") {
+        tnsQualityRawRowsRef.current = [];
+        setTnsQualityPreview(null);
       } else {
         productionRawRowsRef.current = [];
         setProductionPreview(null);
@@ -10252,7 +10265,7 @@ export function PerformancePage() {
       {minePayload ? (
         <div className="space-y-4">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <StatCard title="Minha Qualidade" value={formatPerformancePercent(minePayload.summary.mine.quality)} helper={`${minePayload.summary.mine.qualityCorrect}/${minePayload.summary.mine.qualityTotal} auditorias`} icon={ShieldCheck} tone="green" />
+            <StatCard title="Minha Qualidade" value={formatPerformancePercent(minePayload.summary.mine.quality)} helper={`${minePayload.summary.mine.qualityCorrect}/${minePayload.summary.mine.qualityTotal} tasks distintas`} icon={ShieldCheck} tone="green" />
             <StatCard title="Qualidade média LOB" value={formatPerformancePercent(minePayload.summary.lobAverage.quality)} helper="consolidado sem nomes" icon={UsersRound} tone="blue" />
             <StatCard title="Meu Submit" value={formatPerformanceNumber(minePayload.summary.mine.submit)} helper="casos moderados" icon={FileSpreadsheet} tone="purple" />
             <StatCard title="Submit médio LOB" value={formatPerformanceNumber(minePayload.summary.lobAverage.submit)} helper="consolidado da LOB" icon={ClipboardList} tone="cyan" />
@@ -10292,7 +10305,7 @@ export function PerformancePage() {
       {wfhPayload ? (
         <div className="space-y-4">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <StatCard title="Qualidade média" value={formatPerformancePercent(wfhPayload.summary.quality)} helper={`${wfhPayload.summary.qualityCorrect}/${wfhPayload.summary.qualityTotal} auditorias`} icon={ShieldCheck} tone="green" />
+            <StatCard title="Qualidade média" value={formatPerformancePercent(wfhPayload.summary.quality)} helper={`${wfhPayload.summary.qualityCorrect}/${wfhPayload.summary.qualityTotal} tasks distintas`} icon={ShieldCheck} tone="green" />
             <StatCard title="AHT médio" value={formatPerformanceAht(wfhPayload.summary.ahtSeconds)} helper="moderação / submits" icon={Clock} tone="orange" />
             <StatCard title="Submit total" value={formatPerformanceNumber(wfhPayload.summary.submit)} helper="casos no período" icon={FileSpreadsheet} tone="purple" />
             <StatCard title="ABS médio" value={formatPerformancePercent(wfhPayload.summary.abs)} helper={`${wfhPayload.summary.absences}/${wfhPayload.summary.scheduledDays} dias`} icon={AlertTriangle} tone={wfhPayload.summary.abs > 0 ? "red" : "green"} />
@@ -10302,14 +10315,22 @@ export function PerformancePage() {
           </div>
 
           {wfhPayload.canImport ? (
-            <div className="grid gap-4 xl:grid-cols-2">
+            <div className="grid gap-4 xl:grid-cols-3">
               <PerformanceImportPanel
-                title="Upload de Qualidade"
+                title="Upload de Qualidade ADS"
                 description="Base com audit_time, audit_name, final_result, case_order_id, audit_case_order_id, LOB e Concat."
                 inputRef={qualityInputRef}
                 loading={importing === "quality"}
                 onTemplate={() => void downloadFile("/api/performance/template?type=quality", "template_performance_qualidade.xlsx").catch((error) => setMessage(error instanceof Error ? error.message : "Não foi possível baixar o template."))}
                 onFile={(file) => void previewPerformanceFile("quality", file)}
+              />
+              <PerformanceImportPanel
+                title="Upload de Qualidade TNS"
+                description="Base com WB/Login, data, Sampling, Mislabeled, Leakage e False Positive."
+                inputRef={tnsQualityInputRef}
+                loading={importing === "tns-quality"}
+                onTemplate={() => void downloadFile("/api/performance/template?type=tns-quality", "template_performance_qualidade_tns.xlsx").catch((error) => setMessage(error instanceof Error ? error.message : "Não foi possível baixar o template."))}
+                onFile={(file) => void previewPerformanceFile("tns-quality", file)}
               />
               <PerformanceImportPanel
                 title="Upload de Produção, AHT e Volume"
@@ -10326,11 +10347,12 @@ export function PerformancePage() {
             <Panel title="Ranking de Agentes">
               {wfhPayload.ranking.length ? (
                 <SimpleTable
-                  columns={["Agente", "WB/Login", "LOB", "Supervisor", "Qualidade", "Submit", "AHT", "ABS"]}
+                  columns={["Agente", "WB/Login", "LOB", "Regra", "Supervisor", "Qualidade", "Submit", "AHT", "ABS"]}
                   rows={wfhPayload.ranking.map((agent) => [
                     <button key={agent.employeeId} onClick={() => setSelectedAgent(agent)} className="max-w-[180px] truncate font-extrabold text-blue-700" title={agent.employeeName}>{agent.employeeName}</button>,
                     agent.wbLogin,
                     agent.lob,
+                    performanceQualityRuleLabel(agent.qualityRule),
                     agent.supervisor,
                     formatPerformancePercent(agent.quality),
                     formatPerformanceNumber(agent.submit),
@@ -10365,9 +10387,9 @@ export function PerformancePage() {
                 <div className="space-y-3">
                   <div className="rounded-lg border border-blue-100 bg-blue-50 p-3">
                     <p className="text-sm font-extrabold text-navy-950">{selectedAgent.employeeName}</p>
-                    <p className="text-xs font-bold text-blue-700">{selectedAgent.wbLogin} · {selectedAgent.lob} · {selectedAgent.supervisor}</p>
+                    <p className="text-xs font-bold text-blue-700">{selectedAgent.wbLogin} · {selectedAgent.lob} · {performanceQualityRuleLabel(selectedAgent.qualityRule)} · {selectedAgent.supervisor}</p>
                   </div>
-                  <SimpleTable columns={["Semana", "Qualidade", "Submit", "AHT", "ABS"]} rows={selectedAgent.weekly.map((week) => [week.weekLabel, formatPerformancePercent(week.quality), formatPerformanceNumber(week.submit), formatPerformanceAht(week.ahtSeconds), formatPerformancePercent(week.abs)])} />
+                  <SimpleTable columns={["Semana", "Regra", "Qualidade", "Submit", "AHT", "ABS"]} rows={selectedAgent.weekly.map((week) => [week.weekLabel, performanceQualityRuleLabel(week.qualityRule), formatPerformancePercent(week.quality), formatPerformanceNumber(week.submit), formatPerformanceAht(week.ahtSeconds), formatPerformancePercent(week.abs)])} />
                 </div>
               ) : (
                 <EmptyState title="Selecione um agente" description="Clique em um nome do ranking para abrir o histórico semanal individual." />
@@ -10381,7 +10403,7 @@ export function PerformancePage() {
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <p className="truncate text-sm font-extrabold text-navy-950" title={item.fileName}>{item.fileName}</p>
-                          <p className="text-xs font-bold text-muted">{item.type === "QUALITY" ? "Qualidade" : "Produção"} · {item.importedAt}</p>
+                          <p className="text-xs font-bold text-muted">{performanceImportBatchLabel(item.type)} · {item.importedAt}</p>
                         </div>
                         <StatusBadge status={item.status} />
                       </div>
@@ -10403,6 +10425,9 @@ export function PerformancePage() {
 
       {qualityPreview ? (
         <PerformancePreviewModal title="Preview da base de Qualidade" fileName={qualityFileName} preview={qualityPreview} importing={importing === "quality"} onClose={() => setQualityPreview(null)} onCommit={() => void commitPerformanceImport("quality")} />
+      ) : null}
+      {tnsQualityPreview ? (
+        <PerformancePreviewModal title="Preview da base de Qualidade TNS" fileName={tnsQualityFileName} preview={tnsQualityPreview} importing={importing === "tns-quality"} onClose={() => setTnsQualityPreview(null)} onCommit={() => void commitPerformanceImport("tns-quality")} />
       ) : null}
       {productionPreview ? (
         <PerformancePreviewModal title="Preview da base de Produção" fileName={productionFileName} preview={productionPreview} importing={importing === "production"} onClose={() => setProductionPreview(null)} onCommit={() => void commitPerformanceImport("production")} />
@@ -10490,13 +10515,37 @@ function PerformancePreviewModal({ title, fileName, preview, importing, onClose,
   );
 }
 
-async function readPerformanceWorkbookRows(file: File, type: "quality" | "production") {
+async function readPerformanceWorkbookRows(file: File, type: PerformanceImportKind) {
   const workbook = XLSX.read(await file.arrayBuffer(), { cellDates: true });
-  const preferredSheets = type === "quality" ? ["qualidade", "quality"] : ["producao", "produção", "production"];
+  const preferredSheets = type === "quality"
+    ? ["qualidade", "quality"]
+    : type === "tns-quality"
+      ? ["qualidade_tns", "qualidade tns", "tns quality", "quality tns", "tns"]
+      : ["producao", "produção", "production"];
   const sheetName = workbook.SheetNames.find((name) => preferredSheets.includes(normalizePerformanceSheetName(name))) ?? workbook.SheetNames[0];
   const sheet = sheetName ? workbook.Sheets[sheetName] : null;
-  if (!sheet) throw new Error(type === "quality" ? "Planilha de Qualidade não encontrada." : "Planilha de Produção não encontrada.");
+  if (!sheet) throw new Error(type === "quality" ? "Planilha de Qualidade não encontrada." : type === "tns-quality" ? "Planilha de Qualidade TNS não encontrada." : "Planilha de Produção não encontrada.");
   return XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+}
+
+function performanceImportLabel(type: PerformanceImportKind) {
+  if (type === "quality") return "Qualidade ADS";
+  if (type === "tns-quality") return "Qualidade TNS";
+  return "Produção";
+}
+
+function performanceImportBatchLabel(type: string) {
+  if (type === "QUALITY") return "Qualidade ADS";
+  if (type === "TNS_QUALITY") return "Qualidade TNS";
+  if (type === "PRODUCTION") return "Produção";
+  return type;
+}
+
+function performanceQualityRuleLabel(rule?: string) {
+  if (rule === "ADS_QUALITY") return "ADS";
+  if (rule === "TNS_QUALITY") return "TNS";
+  if (rule === "MIXED") return "Mista";
+  return "Sem regra";
 }
 
 function normalizePerformanceSheetName(value: string) {
@@ -10542,6 +10591,10 @@ function mergePerformancePreview(current: PerformancePreviewResponse, next: Perf
 
 type PerformanceMetricSummary = {
   quality: number;
+  qualityRule: string;
+  qualityNumerator: number;
+  qualityDenominator: number;
+  qualityErrors: number;
   qualityCorrect: number;
   qualityTotal: number;
   submit: number;
@@ -10619,11 +10672,13 @@ type PerformanceWfhResponse = {
 
 type PerformanceDashboardResponse = PerformanceMineResponse | PerformanceWfhResponse;
 
+type PerformanceImportKind = "quality" | "tns-quality" | "production";
+
 type PerformancePreviewResponse = {
   success: boolean;
   rows: Array<{
     rowNumber: number;
-    type: "QUALITY" | "PRODUCTION";
+    type: "QUALITY" | "TNS_QUALITY" | "PRODUCTION";
     wbLogin: string;
     employeeId?: string;
     employeeName?: string;
@@ -10677,6 +10732,298 @@ function formatPerformanceChartValue(value: number, key: string) {
   if (key === "quality" || key === "abs") return formatPerformancePercent(value);
   if (key === "ahtSeconds") return formatPerformanceAht(value);
   return formatPerformanceNumber(value);
+}
+
+type WorkSessionRow = {
+  employeeId: string;
+  employeeName: string;
+  wbLogin: string;
+  lob: string;
+  supervisor: string;
+  roleTitle: string;
+  skill: string;
+  currentStatus: string;
+  firstLoginAt: string;
+  lastLogoutAt: string;
+  lastEventAt: string;
+  lastSyncAt: string;
+  activeMinutes: number;
+  inactiveMinutes: number;
+  activeTime: string;
+  inactiveTime: string;
+  deviceId: string;
+  device: string;
+  agentVersion: string;
+};
+
+type WorkSessionDashboardResponse = {
+  success: boolean;
+  date: string;
+  summary: {
+    activeNow: number;
+    locked: number;
+    offline: number;
+    suspended: number;
+    unknown: number;
+    totalActiveMinutes: number;
+    totalActiveTime: string;
+    averageLastSync: string;
+  };
+  filters: {
+    lobs: string[];
+    supervisors: Array<{ id: string; name: string }>;
+    roles: string[];
+    skills: string[];
+    statuses: string[];
+    employees: Array<{ id: string; name: string; wbLogin: string }>;
+  };
+  data: WorkSessionRow[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+  note: string;
+  privacy: string;
+};
+
+type WorkSessionEventsResponse = {
+  success: boolean;
+  employee: {
+    id: string;
+    name: string;
+    wbLogin: string;
+    lob: string;
+    supervisor: string;
+  };
+  summary: {
+    currentStatus: string;
+    activeTime: string;
+    inactiveTime: string;
+    firstLoginAt: string;
+    lastLogoutAt: string;
+    lastEventAt: string;
+  } | null;
+  events: Array<{
+    id: string;
+    time: string;
+    eventType: string;
+    resultingStatus: string;
+    device: string;
+    agentVersion: string;
+  }>;
+};
+
+function todayInputValue() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString().slice(0, 10);
+}
+
+function buildWorkSessionParams(filters: Record<string, string>) {
+  const params = new URLSearchParams({ date: filters.date, page: filters.page ?? "1", limit: filters.limit ?? "100" });
+  if (filters.lob !== "Todos") params.set("lob", filters.lob);
+  if (filters.supervisor !== "Todos") params.set("supervisor", filters.supervisor);
+  if (filters.roleTitle !== "Todos") params.set("roleTitle", filters.roleTitle);
+  if (filters.skill !== "Todos") params.set("skill", filters.skill);
+  if (filters.status !== "Todos") params.set("status", filters.status);
+  if (filters.employeeId !== "Todos") params.set("employeeId", filters.employeeId);
+  if (filters.wbLogin.trim()) params.set("wbLogin", filters.wbLogin.trim());
+  if (filters.collaborator.trim()) params.set("collaborator", filters.collaborator.trim());
+  return params;
+}
+
+function workSessionEventLabel(eventType: string) {
+  const labels: Record<string, string> = {
+    LOGIN: "Login",
+    UNLOCK: "Desbloqueio",
+    HEARTBEAT: "Heartbeat",
+    LOCK: "Bloqueio",
+    LOGOUT: "Logout",
+    SHUTDOWN: "Desligamento",
+    SLEEP: "Suspensão",
+    WAKE: "Retorno"
+  };
+  return labels[eventType] ?? eventType;
+}
+
+export function WorkSessionMonitoringPage() {
+  const [filters, setFilters] = useState(() => ({
+    date: todayInputValue(),
+    lob: "Todos",
+    supervisor: "Todos",
+    roleTitle: "Todos",
+    skill: "Todos",
+    status: "Todos",
+    employeeId: "Todos",
+    wbLogin: "",
+    collaborator: "",
+    page: "1",
+    limit: "100"
+  }));
+  const [payload, setPayload] = useState<WorkSessionDashboardResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+  const [selected, setSelected] = useState<WorkSessionRow | null>(null);
+  const [detail, setDetail] = useState<WorkSessionEventsResponse | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  const loadWorkSessions = useCallback(async () => {
+    setLoading(true);
+    setMessage("");
+    try {
+      const params = buildWorkSessionParams(filters);
+      setPayload(await apiJson<WorkSessionDashboardResponse>(`/api/work-session/current-status?${params.toString()}`));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível carregar Monitoramento de Jornada.");
+    } finally {
+      setLoading(false);
+    }
+  }, [filters]);
+
+  useEffect(() => {
+    void loadWorkSessions();
+  }, [loadWorkSessions]);
+
+  function updateFilter(key: keyof typeof filters, value: string) {
+    setFilters((current) => ({ ...current, [key]: value, page: "1" }));
+  }
+
+  async function openDetail(row: WorkSessionRow) {
+    setSelected(row);
+    setDetail(null);
+    setDetailLoading(true);
+    try {
+      const params = new URLSearchParams({ employeeId: row.employeeId, date: filters.date });
+      setDetail(await apiJson<WorkSessionEventsResponse>(`/api/work-session/events?${params.toString()}`));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível carregar a linha do tempo.");
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  function exportWorkSessions() {
+    const params = buildWorkSessionParams(filters);
+    params.delete("page");
+    params.delete("limit");
+    void downloadFile(`/api/work-session/export?${params.toString()}`, `monitoramento_jornada_${filters.date}.xlsx`, "Não foi possível exportar Monitoramento de Jornada.").catch((error) => setMessage(error.message));
+  }
+
+  const rows = payload?.data ?? [];
+  const summary = payload?.summary;
+  const employeeOptions = payload?.filters.employees ?? [{ id: "Todos", name: "Todos os colaboradores", wbLogin: "" }];
+
+  return (
+    <div className="space-y-4">
+      <PageHeader
+        title="Monitoramento de Jornada"
+        description="Visão separada de eventos de sessão do Agent, sem substituir Horas Operacionais oficiais."
+        icon={HeartPulse}
+        actions={<TopActions />}
+      />
+
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <StatCard title="Ativos agora" value={summary?.activeNow ?? 0} helper="sessão desbloqueada" icon={UserCheck} tone="green" />
+        <StatCard title="Bloqueados" value={summary?.locked ?? 0} helper="estação bloqueada" icon={LockKeyhole} tone="orange" />
+        <StatCard title="Offline" value={summary?.offline ?? 0} helper="sem sessão ou heartbeat" icon={XCircle} tone="red" />
+        <StatCard title="Tempo ativo total hoje" value={summary?.totalActiveTime ?? "0:00"} helper="captura de sessão" icon={Clock} tone="blue" />
+        <StatCard title="Sincronização" value={summary?.averageLastSync ?? "Sem dados"} helper="últimos eventos" icon={RefreshCw} tone="cyan" />
+      </div>
+
+      <div className="rounded-xl border border-border bg-white p-3 shadow-sm">
+        <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-[140px_repeat(6,minmax(130px,1fr))_minmax(170px,1fr)_auto]">
+          <FormInput label="Data" type="date" value={filters.date} onChange={(value) => updateFilter("date", value)} />
+          <PerformanceSelect label="LOB" value={filters.lob} onChange={(value) => updateFilter("lob", value)} options={payload?.filters.lobs ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todas as LOBs" : value} />
+          <PerformanceSelect label="Supervisor" value={filters.supervisor} onChange={(value) => updateFilter("supervisor", value)} options={(payload?.filters.supervisors ?? [{ id: "Todos", name: "Todos os supervisores" }]).map((item) => item.id)} optionLabel={(value) => payload?.filters.supervisors.find((item) => item.id === value)?.name ?? value} />
+          <PerformanceSelect label="Cargo/Função" value={filters.roleTitle} onChange={(value) => updateFilter("roleTitle", value)} options={payload?.filters.roles ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todos os cargos" : value} />
+          <PerformanceSelect label="Skill" value={filters.skill} onChange={(value) => updateFilter("skill", value)} options={payload?.filters.skills ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todas as skills" : value === "SEM_SKILL" ? "Sem skill" : value} />
+          <PerformanceSelect label="Status atual" value={filters.status} onChange={(value) => updateFilter("status", value)} options={payload?.filters.statuses ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todos os status" : value} />
+          <PerformanceSelect label="Colaborador" value={filters.employeeId} onChange={(value) => updateFilter("employeeId", value)} options={employeeOptions.map((item) => item.id)} optionLabel={(value) => {
+            const employee = employeeOptions.find((item) => item.id === value);
+            return employee ? (employee.wbLogin ? `${employee.name} · ${employee.wbLogin}` : employee.name) : value;
+          }} />
+          <FormInput label="Busca / WB/Login" value={filters.collaborator} onChange={(value) => updateFilter("collaborator", value)} />
+          <div className="flex items-end justify-end gap-2 md:col-span-3 xl:col-span-1">
+            <button type="button" onClick={() => void loadWorkSessions()} className="inline-flex h-9 items-center gap-2 rounded-lg bg-navy-950 px-3 text-xs font-extrabold text-white">
+              <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} /> Atualizar
+            </button>
+            <button type="button" onClick={exportWorkSessions} className="premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold text-navy-950">
+              <Download className="h-4 w-4" /> Exportar
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {payload?.note ? <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{payload.note}</div> : null}
+      {payload?.privacy ? <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700">{payload.privacy}</div> : null}
+      {message ? <div className="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm font-bold text-red-600">{message}</div> : null}
+      {loading ? <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">Carregando Monitoramento de Jornada...</div> : null}
+
+      <Panel title="Status atual dos colaboradores">
+        {rows.length ? (
+          <SimpleTable
+            columns={["Colaborador", "WB/Login", "LOB", "Supervisor", "Cargo/Função", "Status atual", "Primeiro login", "Último evento", "Tempo ativo", "Tempo inativo", "Última sincronização", "Dispositivo"]}
+            rows={rows.map((row) => [
+              <button key={row.employeeId} type="button" onClick={() => void openDetail(row)} className="max-w-[210px] truncate text-left font-extrabold text-blue-700" title={row.employeeName}>{row.employeeName}</button>,
+              row.wbLogin,
+              row.lob,
+              row.supervisor,
+              row.roleTitle || "-",
+              <StatusBadge key={row.currentStatus} status={row.currentStatus} />,
+              row.firstLoginAt || "-",
+              row.lastEventAt || "-",
+              row.activeTime,
+              row.inactiveTime,
+              row.lastSyncAt || "-",
+              <span key={row.deviceId || row.employeeId} className="inline-flex max-w-[180px] items-center gap-1 truncate" title={row.device}><Laptop className="h-4 w-4 shrink-0 text-blue-600" /> {row.device}</span>
+            ])}
+          />
+        ) : (
+          <EmptyState title="Nenhum evento de jornada encontrado" description="Os colaboradores aparecerão aqui quando houver usuário ativo, dispositivo vinculado ou filtros compatíveis." />
+        )}
+      </Panel>
+
+      {selected ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy-950/45 p-4">
+          <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+              <div className="min-w-0">
+                <h2 className="text-lg font-extrabold text-navy-950">{selected.employeeName}</h2>
+                <p className="text-sm font-bold text-blue-700">{selected.wbLogin} · {selected.lob} · {selected.supervisor}</p>
+              </div>
+              <button type="button" onClick={() => { setSelected(null); setDetail(null); }} className="rounded-lg border border-border px-3 py-2 text-sm font-bold text-navy-950">Fechar</button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-5">
+              {detailLoading ? <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm font-bold text-blue-700">Carregando linha do tempo...</div> : null}
+              <div className="grid gap-3 md:grid-cols-4">
+                <MetricPill value={detail?.summary?.currentStatus ?? selected.currentStatus} label="Status atual" />
+                <MetricPill value={detail?.summary?.activeTime ?? selected.activeTime} label="Tempo ativo" />
+                <MetricPill value={detail?.summary?.inactiveTime ?? selected.inactiveTime} label="Tempo inativo" />
+                <MetricPill value={detail?.summary?.lastEventAt || selected.lastEventAt || "-"} label="Último evento" />
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <InfoLine label="Dispositivo" value={selected.device} />
+                <InfoLine label="Versão do Agent" value={selected.agentVersion || "-"} />
+                <InfoLine label="Primeiro login do dia" value={detail?.summary?.firstLoginAt || selected.firstLoginAt || "-"} />
+                <InfoLine label="Último logout" value={detail?.summary?.lastLogoutAt || selected.lastLogoutAt || "-"} />
+              </div>
+              <div className="mt-4 rounded-lg border border-border">
+                <div className="border-b border-border bg-slate-50 px-3 py-2 text-sm font-black text-navy-950">Linha do tempo de eventos</div>
+                <div className="divide-y divide-border">
+                  {detail?.events.length ? detail.events.map((event) => (
+                    <div key={event.id} className="grid gap-2 px-3 py-3 text-sm md:grid-cols-[140px_1fr_160px_1fr]">
+                      <span className="font-bold text-muted">{event.time}</span>
+                      <span className="font-extrabold text-navy-950">{workSessionEventLabel(event.eventType)}</span>
+                      <StatusBadge status={event.resultingStatus} />
+                      <span className="truncate text-muted" title={`${event.device} ${event.agentVersion}`}>{event.device}{event.agentVersion ? ` · ${event.agentVersion}` : ""}</span>
+                    </div>
+                  )) : (
+                    <div className="p-4"><EmptyState title="Sem eventos neste dia" description="A linha do tempo será preenchida conforme o Agent enviar eventos de sessão." /></div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export function QualityPage() {

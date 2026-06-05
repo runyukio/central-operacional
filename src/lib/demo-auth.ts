@@ -1,4 +1,4 @@
-export type AppRole = "ADMIN" | "GESTOR" | "SUPERVISOR" | "COLABORADOR" | "WFM" | "QUALIDADE" | "RH" | "TI";
+export type AppRole = "ADMIN" | "GESTOR" | "SUPERVISOR" | "COLABORADOR" | "WFM" | "QUALIDADE" | "RH" | "TI" | "COORDENADOR" | "GERENTE";
 
 export const demoUsers = [
   { email: "admin@central.com", name: "Admin Central", role: "ADMIN", label: "Administrador" },

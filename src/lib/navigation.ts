@@ -8,10 +8,11 @@ export type NavItem = {
   roles: AppRole[];
 };
 
-const allRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "COLABORADOR", "WFM", "QUALIDADE", "RH", "TI"];
-const leadership: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH"];
+const allRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "COLABORADOR", "WFM", "QUALIDADE", "RH", "TI", "COORDENADOR", "GERENTE"];
+const leadership: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH", "COORDENADOR", "GERENTE"];
 const peopleOps: AppRole[] = ["ADMIN", "GESTOR", "RH", "WFM"];
 const authenticatedOps: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI"];
+const journeyMonitoringRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "COORDENADOR", "GERENTE"];
 
 export const navItems: NavItem[] = [
   { label: "Central Operacional", href: "/central-operacional", icon: "LayoutDashboard", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI"] },
@@ -19,6 +20,7 @@ export const navItems: NavItem[] = [
   { label: "Cadastros", href: "/cadastros", icon: "UserPlus", roles: peopleOps },
   { label: "Cronogramas", href: "/escalas", icon: "CalendarRange", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH"] },
   { label: "Horas Operacionais", href: "/horas-operacionais", icon: "Clock", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"] },
+  { label: "Monitoramento de Jornada", href: "/monitoramento-jornada", icon: "HeartPulse", roles: journeyMonitoringRoles },
   { label: "Requerido", href: "/staff-cobertura", icon: "UsersRound", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"] },
   { label: "Performance", href: "/performance", icon: "Trophy", roles: allRoles },
   { label: "Solicitações", href: "/solicitacoes", icon: "ClipboardList", roles: authenticatedOps },
