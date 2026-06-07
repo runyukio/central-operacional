@@ -18,7 +18,11 @@ export async function GET(request: Request) {
       lob: url.searchParams.get("lob") ?? undefined,
       supervisorId: url.searchParams.get("supervisorId") ?? undefined,
       role: url.searchParams.get("role") ?? undefined,
-      skill: url.searchParams.get("skill") ?? undefined
+      skill: url.searchParams.get("skill") ?? undefined,
+      employeeStatus: url.searchParams.get("employeeStatus") ?? undefined,
+      wfhStatus: url.searchParams.get("wfhStatus") ?? undefined,
+      sortBy: readSortBy(url.searchParams.get("sortBy")),
+      sortDirection: readSortDirection(url.searchParams.get("sortDirection"))
     };
     return buildXlsxResponse(await exportPerformanceXlsxData(actor, query));
   } catch (error) {
@@ -28,4 +32,12 @@ export async function GET(request: Request) {
     console.error("[performance/export] erro inesperado", error);
     return NextResponse.json({ success: false, error: "Não foi possível exportar Performance.", message: "Não foi possível exportar Performance." }, { status: 500 });
   }
+}
+
+function readSortBy(value: string | null): PerformanceQuery["sortBy"] {
+  return value === "quality" || value === "submit" || value === "aht" || value === "abs" ? value : undefined;
+}
+
+function readSortDirection(value: string | null): PerformanceQuery["sortDirection"] {
+  return value === "asc" || value === "desc" ? value : undefined;
 }

@@ -20,6 +20,8 @@ import * as XLSX from "xlsx";
 import {
   type LucideIcon,
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   Award,
   CalendarCheck,
   CalendarDays,
@@ -1823,10 +1825,20 @@ export function EmployeeRegistrationPublicPage() {
 }
 
 function FormInput({ label, value, onChange, type = "text", error, disabled = false }: { label: string; value: string; onChange: (value: string) => void; type?: string; error?: string; disabled?: boolean }) {
+  function openDatePicker(input: HTMLInputElement) {
+    if (type !== "date" || disabled) return;
+    const picker = input as HTMLInputElement & { showPicker?: () => void };
+    try {
+      picker.showPicker?.();
+    } catch {
+      input.focus();
+    }
+  }
+
   return (
     <label className="block">
       <span className="mb-1.5 block text-sm font-bold text-muted">{label}</span>
-      <input type={type} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500", error ? "border-red-300 bg-red-50/40" : "border-border")} />
+      <input type={type} value={value} disabled={disabled} onClick={(event) => openDatePicker(event.currentTarget)} onChange={(event) => onChange(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500", type === "date" && "cursor-pointer", error ? "border-red-300 bg-red-50/40" : "border-border")} />
       {error ? <span className="mt-1 block text-xs font-bold text-red-600">{error}</span> : null}
     </label>
   );
@@ -10046,8 +10058,11 @@ export function PerformancePage() {
     supervisorId: "Todos",
     employeeId: "Todos",
     role: "Todos",
-    skill: "Todos"
+    skill: "Todos",
+    employeeStatus: "Todos",
+    wfhStatus: "Todos"
   }));
+  const [performanceSort, setPerformanceSort] = useState<PerformanceSortState>({ by: "", direction: "desc" });
   const [payload, setPayload] = useState<PerformanceDashboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -10088,6 +10103,12 @@ export function PerformancePage() {
       if (filters.employeeId !== "Todos") params.set("employeeId", filters.employeeId);
       if (filters.role !== "Todos") params.set("role", filters.role);
       if (filters.skill !== "Todos") params.set("skill", filters.skill);
+      if (filters.employeeStatus !== "Todos") params.set("employeeStatus", filters.employeeStatus);
+      if (filters.wfhStatus !== "Todos") params.set("wfhStatus", filters.wfhStatus);
+      if (performanceSort.by) {
+        params.set("sortBy", performanceSort.by);
+        params.set("sortDirection", performanceSort.direction);
+      }
     }
     try {
       const data = await apiJson<PerformanceDashboardResponse>(`/api/performance?${params.toString()}`);
@@ -10099,7 +10120,7 @@ export function PerformancePage() {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, filters]);
+  }, [activeTab, filters, performanceSort]);
 
   useEffect(() => {
     void loadPerformance();
@@ -10207,6 +10228,10 @@ export function PerformancePage() {
     setFilters((current) => ({ ...current, [key]: value }));
   }
 
+  function updatePerformanceSort(by: PerformanceSortableMetric) {
+    setPerformanceSort((current) => current.by === by ? { by, direction: current.direction === "desc" ? "asc" : "desc" } : { by, direction: "desc" });
+  }
+
   function exportPerformance() {
     const params = new URLSearchParams({
       startDate: filters.startDate,
@@ -10217,6 +10242,12 @@ export function PerformancePage() {
     if (filters.employeeId !== "Todos") params.set("employeeId", filters.employeeId);
     if (filters.role !== "Todos") params.set("role", filters.role);
     if (filters.skill !== "Todos") params.set("skill", filters.skill);
+    if (filters.employeeStatus !== "Todos") params.set("employeeStatus", filters.employeeStatus);
+    if (filters.wfhStatus !== "Todos") params.set("wfhStatus", filters.wfhStatus);
+    if (performanceSort.by) {
+      params.set("sortBy", performanceSort.by);
+      params.set("sortDirection", performanceSort.direction);
+    }
     window.location.href = `/api/performance/export?${params.toString()}`;
   }
 
@@ -10234,8 +10265,8 @@ export function PerformancePage() {
         {canShowWfh ? <button onClick={() => setActiveTab("wfh")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", activeTab === "wfh" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>WFH</button> : null}
       </div>
 
-      <div className="rounded-xl border border-border bg-white p-3 shadow-sm">
-        <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-[140px_140px_repeat(5,minmax(130px,1fr))_auto]">
+      <div className="rounded-xl border border-border bg-white p-2.5 shadow-sm">
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-[130px_130px_repeat(7,minmax(116px,1fr))_auto]">
           <FormInput label="Data inicial" type="date" value={filters.startDate} onChange={(value) => updateFilter("startDate", value)} />
           <FormInput label="Data final" type="date" value={filters.endDate} onChange={(value) => updateFilter("endDate", value)} />
           {activeTab === "wfh" ? (
@@ -10248,9 +10279,11 @@ export function PerformancePage() {
               }} />
               <PerformanceSelect label="Cargo/Função" value={filters.role} onChange={(value) => updateFilter("role", value)} options={wfhPayload?.filters.roles ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todos os cargos" : value} />
               <PerformanceSelect label="Skill" value={filters.skill} onChange={(value) => updateFilter("skill", value)} options={wfhPayload?.filters.skills ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todas as skills" : value === "SEM_SKILL" ? "Sem skill" : value} />
+              <PerformanceSelect label="Status do agente" value={filters.employeeStatus} onChange={(value) => updateFilter("employeeStatus", value)} options={["Todos", "Ativo", "Desligado"]} />
+              <PerformanceSelect label="WFH" value={filters.wfhStatus} onChange={(value) => updateFilter("wfhStatus", value)} options={["Todos", "Qualificado", "Não-qualificado"]} />
             </>
-          ) : <div className="hidden xl:block xl:col-span-5" />}
-          <div className="flex items-end justify-end gap-2 md:col-span-3 xl:col-span-1">
+          ) : <div className="hidden lg:block lg:col-span-2 2xl:col-span-7" />}
+          <div className="flex items-end justify-end gap-2 sm:col-span-2 lg:col-span-4 2xl:col-span-1">
             <button onClick={() => void loadPerformance()} className="inline-flex h-9 items-center gap-2 rounded-lg bg-navy-950 px-3 text-xs font-extrabold text-white">
               <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} /> Atualizar
             </button>
@@ -10303,63 +10336,21 @@ export function PerformancePage() {
       ) : null}
 
       {wfhPayload ? (
-        <div className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <StatCard title="Qualidade média" value={formatPerformancePercent(wfhPayload.summary.quality)} helper={`${wfhPayload.summary.qualityCorrect}/${wfhPayload.summary.qualityTotal} tasks distintas`} icon={ShieldCheck} tone="green" />
-            <StatCard title="AHT médio" value={formatPerformanceAht(wfhPayload.summary.ahtSeconds)} helper="moderação / submits" icon={Clock} tone="orange" />
-            <StatCard title="Submit total" value={formatPerformanceNumber(wfhPayload.summary.submit)} helper="casos no período" icon={FileSpreadsheet} tone="purple" />
-            <StatCard title="ABS médio" value={formatPerformancePercent(wfhPayload.summary.abs)} helper={`${wfhPayload.summary.absences}/${wfhPayload.summary.scheduledDays} dias`} icon={AlertTriangle} tone={wfhPayload.summary.abs > 0 ? "red" : "green"} />
-            <StatCard title="Agentes com dados" value={wfhPayload.summary.agentsWithData} helper="Qualidade, produção ou ABS" icon={UsersRound} tone="blue" />
-            <StatCard title="Linhas importadas" value={formatPerformanceNumber(wfhPayload.summary.importedRows)} helper="últimos lotes listados" icon={Upload} tone="cyan" />
-            <StatCard title="Última importação" value={wfhPayload.summary.lastImport || "-"} helper="Qualidade ou produção" icon={CalendarDays} tone="gold" />
+        <div className="space-y-3">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7">
+            <PerformanceMetricCard title="Qualidade média" value={formatPerformancePercent(wfhPayload.summary.quality)} helper={`${wfhPayload.summary.qualityCorrect}/${wfhPayload.summary.qualityTotal} tasks`} icon={ShieldCheck} tone="green" />
+            <PerformanceMetricCard title="AHT médio" value={formatPerformanceAht(wfhPayload.summary.ahtSeconds)} helper="moderação / submit" icon={Clock} tone="orange" />
+            <PerformanceMetricCard title="Submit total" value={formatPerformanceNumber(wfhPayload.summary.submit)} helper="casos no período" icon={FileSpreadsheet} tone="purple" />
+            <PerformanceMetricCard title="ABS médio" value={formatPerformancePercent(wfhPayload.summary.abs)} helper={`${wfhPayload.summary.absences}/${wfhPayload.summary.scheduledDays} dias`} icon={AlertTriangle} tone={wfhPayload.summary.abs > 0 ? "red" : "green"} />
+            <PerformanceMetricCard title="Agentes com dados" value={wfhPayload.summary.agentsWithData} helper="base filtrada" icon={UsersRound} tone="blue" />
+            <PerformanceMetricCard title="Linhas importadas" value={formatPerformanceNumber(wfhPayload.summary.importedRows)} helper="últimos lotes" icon={Upload} tone="cyan" />
+            <PerformanceMetricCard title="Última importação" value={wfhPayload.summary.lastImport || "-"} helper="Qualidade ou produção" icon={CalendarDays} tone="gold" />
           </div>
 
-          {wfhPayload.canImport ? (
-            <div className="grid gap-4 xl:grid-cols-3">
-              <PerformanceImportPanel
-                title="Upload de Qualidade ADS"
-                description="Base com audit_time, audit_name, final_result, case_order_id, audit_case_order_id, LOB e Concat."
-                inputRef={qualityInputRef}
-                loading={importing === "quality"}
-                onTemplate={() => void downloadFile("/api/performance/template?type=quality", "template_performance_qualidade.xlsx").catch((error) => setMessage(error instanceof Error ? error.message : "Não foi possível baixar o template."))}
-                onFile={(file) => void previewPerformanceFile("quality", file)}
-              />
-              <PerformanceImportPanel
-                title="Upload de Qualidade TNS"
-                description="Base com WB/Login, data, Sampling, Mislabeled, Leakage e False Positive."
-                inputRef={tnsQualityInputRef}
-                loading={importing === "tns-quality"}
-                onTemplate={() => void downloadFile("/api/performance/template?type=tns-quality", "template_performance_qualidade_tns.xlsx").catch((error) => setMessage(error instanceof Error ? error.message : "Não foi possível baixar o template."))}
-                onFile={(file) => void previewPerformanceFile("tns-quality", file)}
-              />
-              <PerformanceImportPanel
-                title="Upload de Produção, AHT e Volume"
-                description="Base com BZ_time, BZ_day, AHT(s), Latency, submit_num, queue_id, Moderation e Agentes."
-                inputRef={productionInputRef}
-                loading={importing === "production"}
-                onTemplate={() => void downloadFile("/api/performance/template?type=production", "template_performance_producao.xlsx").catch((error) => setMessage(error instanceof Error ? error.message : "Não foi possível baixar o template."))}
-                onFile={(file) => void previewPerformanceFile("production", file)}
-              />
-            </div>
-          ) : null}
-
-          <div className="grid gap-4 xl:grid-cols-[1.2fr_.8fr]">
+          <div className="grid gap-3 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,.65fr)]">
             <Panel title="Ranking de Agentes">
               {wfhPayload.ranking.length ? (
-                <SimpleTable
-                  columns={["Agente", "WB/Login", "LOB", "Regra", "Supervisor", "Qualidade", "Submit", "AHT", "ABS"]}
-                  rows={wfhPayload.ranking.map((agent) => [
-                    <button key={agent.employeeId} onClick={() => setSelectedAgent(agent)} className="max-w-[180px] truncate font-extrabold text-blue-700" title={agent.employeeName}>{agent.employeeName}</button>,
-                    agent.wbLogin,
-                    agent.lob,
-                    performanceQualityRuleLabel(agent.qualityRule),
-                    agent.supervisor,
-                    formatPerformancePercent(agent.quality),
-                    formatPerformanceNumber(agent.submit),
-                    formatPerformanceAht(agent.ahtSeconds),
-                    formatPerformancePercent(agent.abs)
-                  ])}
-                />
+                <PerformanceRankingTable rows={wfhPayload.ranking} sort={performanceSort} onSort={updatePerformanceSort} onSelect={setSelectedAgent} />
               ) : (
                 <EmptyState title="Nenhum dado importado ainda." description="Importe uma base de Qualidade ou Produção para visualizar os indicadores." />
               )}
@@ -10381,13 +10372,48 @@ export function PerformancePage() {
             </Panel>
           </div>
 
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+          {wfhPayload.canImport ? (
+            <div className="grid gap-2 md:grid-cols-3">
+              <PerformanceImportPanel
+                title="Upload de Qualidade ADS"
+                description="final_result, case_order_id e audit_case_order_id."
+                inputRef={qualityInputRef}
+                loading={importing === "quality"}
+                onTemplate={() => void downloadFile("/api/performance/template?type=quality", "template_performance_qualidade.xlsx").catch((error) => setMessage(error instanceof Error ? error.message : "Não foi possível baixar o template."))}
+                onFile={(file) => void previewPerformanceFile("quality", file)}
+              />
+              <PerformanceImportPanel
+                title="Upload de Qualidade TNS"
+                description="Sampling, Mislabeled, Leakage e False Positive."
+                inputRef={tnsQualityInputRef}
+                loading={importing === "tns-quality"}
+                onTemplate={() => void downloadFile("/api/performance/template?type=tns-quality", "template_performance_qualidade_tns.xlsx").catch((error) => setMessage(error instanceof Error ? error.message : "Não foi possível baixar o template."))}
+                onFile={(file) => void previewPerformanceFile("tns-quality", file)}
+              />
+              <PerformanceImportPanel
+                title="Upload de Produção, AHT e Volume"
+                description="BZ_time, submit_num, queue_id, Moderation e Agentes."
+                inputRef={productionInputRef}
+                loading={importing === "production"}
+                onTemplate={() => void downloadFile("/api/performance/template?type=production", "template_performance_producao.xlsx").catch((error) => setMessage(error instanceof Error ? error.message : "Não foi possível baixar o template."))}
+                onFile={(file) => void previewPerformanceFile("production", file)}
+              />
+            </div>
+          ) : null}
+
+          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_420px]">
             <Panel title="Detalhamento Individual">
               {selectedAgent ? (
                 <div className="space-y-3">
                   <div className="rounded-lg border border-blue-100 bg-blue-50 p-3">
-                    <p className="text-sm font-extrabold text-navy-950">{selectedAgent.employeeName}</p>
-                    <p className="text-xs font-bold text-blue-700">{selectedAgent.wbLogin} · {selectedAgent.lob} · {performanceQualityRuleLabel(selectedAgent.qualityRule)} · {selectedAgent.supervisor}</p>
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-extrabold text-navy-950">{selectedAgent.employeeName}</p>
+                        <p className="text-xs font-bold text-blue-700">{selectedAgent.wbLogin} · {selectedAgent.lob} · {performanceQualityRuleLabel(selectedAgent.qualityRule)} · {selectedAgent.supervisor}</p>
+                      </div>
+                      <StatusBadge status={selectedAgent.wfhStatusLabel} />
+                    </div>
+                    <p className="mt-2 text-xs font-bold text-muted">Status: {selectedAgent.employeeStatus || "-"} · Submit médio/dia: {formatPerformanceNumber(selectedAgent.submitAveragePerDay)}</p>
                   </div>
                   <SimpleTable columns={["Semana", "Regra", "Qualidade", "Submit", "AHT", "ABS"]} rows={selectedAgent.weekly.map((week) => [week.weekLabel, performanceQualityRuleLabel(week.qualityRule), formatPerformancePercent(week.quality), formatPerformanceNumber(week.submit), formatPerformanceAht(week.ahtSeconds), formatPerformancePercent(week.abs)])} />
                 </div>
@@ -10436,6 +10462,91 @@ export function PerformancePage() {
   );
 }
 
+function PerformanceMetricCard({ title, value, helper, icon: Icon, tone }: { title: string; value: string | number; helper: string; icon: LucideIcon; tone: string }) {
+  const toneClass = performanceToneClass(tone);
+  return (
+    <div className="rounded-lg border border-border bg-white p-3 shadow-sm">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate text-[11px] font-extrabold uppercase tracking-wide text-muted">{title}</p>
+          <p className="mt-1 truncate text-xl font-black text-navy-950" title={String(value)}>{value}</p>
+        </div>
+        <span className={cn("grid h-8 w-8 shrink-0 place-items-center rounded-lg", toneClass)}>
+          <Icon className="h-4 w-4" />
+        </span>
+      </div>
+      <p className="mt-1 truncate text-[11px] font-bold text-muted" title={helper}>{helper}</p>
+    </div>
+  );
+}
+
+function performanceToneClass(tone: string) {
+  const map: Record<string, string> = {
+    green: "bg-emerald-50 text-emerald-600",
+    blue: "bg-blue-50 text-blue-600",
+    purple: "bg-purple-50 text-purple-600",
+    cyan: "bg-cyan-50 text-cyan-600",
+    orange: "bg-orange-50 text-orange-600",
+    gold: "bg-amber-50 text-amber-600",
+    red: "bg-red-50 text-red-600"
+  };
+  return map[tone] ?? "bg-slate-50 text-slate-600";
+}
+
+function PerformanceRankingTable({ rows, sort, onSort, onSelect }: { rows: AgentPerformanceClient[]; sort: PerformanceSortState; onSort: (by: PerformanceSortableMetric) => void; onSelect: (row: AgentPerformanceClient) => void }) {
+  const columns: Array<{ key: string; label: string; sortBy?: PerformanceSortableMetric; align?: "right" }> = [
+    { key: "agent", label: "Agente" },
+    { key: "wb", label: "WB/Login" },
+    { key: "lob", label: "LOB" },
+    { key: "wfh", label: "WFH" },
+    { key: "rule", label: "Regra" },
+    { key: "supervisor", label: "Supervisor" },
+    { key: "quality", label: "Qualidade", sortBy: "quality", align: "right" },
+    { key: "submit", label: "Submit", sortBy: "submit", align: "right" },
+    { key: "aht", label: "AHT", sortBy: "aht", align: "right" },
+    { key: "abs", label: "ABS", sortBy: "abs", align: "right" }
+  ];
+
+  return (
+    <div className="overflow-auto rounded-xl border border-border">
+      <table className="w-full min-w-[1120px] text-sm">
+        <thead className="sticky top-0 bg-white text-left text-[11px] font-extrabold uppercase text-muted">
+          <tr>
+            {columns.map((column) => (
+              <th key={column.key} className={cn("px-3 py-2", column.align === "right" && "text-right")}>
+                {column.sortBy ? (
+                  <button onClick={() => onSort(column.sortBy!)} className={cn("inline-flex items-center gap-1 rounded-md px-1 py-0.5 hover:bg-blue-50 hover:text-blue-700", column.align === "right" && "justify-end")}>
+                    {column.label}
+                    {sort.by === column.sortBy ? (sort.direction === "desc" ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />) : <span className="h-3.5 w-3.5" />}
+                  </button>
+                ) : column.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((agent) => (
+            <tr key={agent.employeeId} className="border-t border-slate-100">
+              <td className="px-3 py-2">
+                <button onClick={() => onSelect(agent)} className="max-w-[190px] truncate font-extrabold text-blue-700" title={agent.employeeName}>{agent.employeeName}</button>
+              </td>
+              <td className="px-3 py-2 font-bold text-navy-950">{agent.wbLogin}</td>
+              <td className="px-3 py-2">{agent.lob}</td>
+              <td className="px-3 py-2"><StatusBadge status={agent.wfhStatusLabel} /></td>
+              <td className="px-3 py-2">{performanceQualityRuleLabel(agent.qualityRule)}</td>
+              <td className="max-w-[180px] truncate px-3 py-2" title={agent.supervisor}>{agent.supervisor}</td>
+              <td className="px-3 py-2 text-right font-extrabold">{formatPerformancePercent(agent.quality)}</td>
+              <td className="px-3 py-2 text-right font-extrabold">{formatPerformanceNumber(agent.submit)}</td>
+              <td className="px-3 py-2 text-right font-extrabold">{formatPerformanceAht(agent.ahtSeconds)}</td>
+              <td className="px-3 py-2 text-right font-extrabold">{formatPerformancePercent(agent.abs)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function PerformanceSelect({ label, value, options, optionLabel, onChange }: { label: string; value: string; options: string[]; optionLabel?: (value: string) => string; onChange: (value: string) => void }) {
   return (
     <label className="text-xs font-bold text-muted">
@@ -10449,16 +10560,20 @@ function PerformanceSelect({ label, value, options, optionLabel, onChange }: { l
 
 function PerformanceImportPanel({ title, description, inputRef, loading, onTemplate, onFile }: { title: string; description: string; inputRef: { current: HTMLInputElement | null }; loading: boolean; onTemplate: () => void; onFile: (file?: File | null) => void }) {
   return (
-    <Panel title={title}>
-      <div className="space-y-3">
-        <p className="text-sm font-semibold text-muted">{description}</p>
-        <input ref={(element) => { inputRef.current = element; }} type="file" accept=".xlsx,.xls" className="hidden" onChange={(event) => onFile(event.target.files?.[0])} />
-        <div className="flex flex-wrap gap-2">
-          <button onClick={onTemplate} className="premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold text-navy-950"><Download className="h-4 w-4" /> Template</button>
-          <button disabled={loading} onClick={() => inputRef.current?.click()} className="inline-flex h-9 items-center gap-2 rounded-lg bg-blue-600 px-3 text-xs font-extrabold text-white disabled:opacity-60"><Upload className="h-4 w-4" /> {loading ? "Validando..." : "Importar XLSX"}</button>
+    <div className="rounded-lg border border-border bg-white p-3 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-extrabold text-navy-950">{title}</p>
+          <p className="mt-1 line-clamp-2 text-xs font-semibold text-muted">{description}</p>
         </div>
+        <Upload className="h-4 w-4 shrink-0 text-blue-600" />
       </div>
-    </Panel>
+      <input ref={(element) => { inputRef.current = element; }} type="file" accept=".xlsx,.xls" className="hidden" onChange={(event) => onFile(event.target.files?.[0])} />
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button onClick={onTemplate} className="premium-control inline-flex h-8 items-center gap-2 px-2.5 text-xs font-extrabold text-navy-950"><Download className="h-3.5 w-3.5" /> Template</button>
+        <button disabled={loading} onClick={() => inputRef.current?.click()} className="inline-flex h-8 items-center gap-2 rounded-lg bg-blue-600 px-2.5 text-xs font-extrabold text-white disabled:opacity-60"><Upload className="h-3.5 w-3.5" /> {loading ? "Validando..." : "Importar XLSX"}</button>
+      </div>
+    </div>
   );
 }
 
@@ -10621,6 +10736,11 @@ type AgentPerformanceClient = PerformanceMetricSummary & {
   supervisor: string;
   roleTitle: string;
   skill: string;
+  employeeStatus: string;
+  wfhStatus: "QUALIFIED" | "NOT_QUALIFIED";
+  wfhStatusLabel: string;
+  submitAveragePerDay: number;
+  wfhFailedCriteria: string[];
   weekly: PerformanceWeeklyMetric[];
 };
 
@@ -10673,6 +10793,8 @@ type PerformanceWfhResponse = {
 type PerformanceDashboardResponse = PerformanceMineResponse | PerformanceWfhResponse;
 
 type PerformanceImportKind = "quality" | "tns-quality" | "production";
+type PerformanceSortableMetric = "quality" | "submit" | "aht" | "abs";
+type PerformanceSortState = { by: "" | PerformanceSortableMetric; direction: "asc" | "desc" };
 
 type PerformancePreviewResponse = {
   success: boolean;

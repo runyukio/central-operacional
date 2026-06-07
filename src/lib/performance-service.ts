@@ -38,6 +38,9 @@ type ProductionRecordForMetrics = Prisma.ProductionRecordGetPayload<{ select: ty
 type ScheduleRecordForMetrics = Prisma.ScheduleGetPayload<{ select: typeof scheduleMetricSelect }>;
 
 type QualityRule = "ADS_QUALITY" | "TNS_QUALITY" | "UNKNOWN" | "MIXED";
+type PerformanceSortBy = "quality" | "submit" | "aht" | "abs";
+type PerformanceSortDirection = "asc" | "desc";
+type WfhStatus = "QUALIFIED" | "NOT_QUALIFIED";
 
 export type PerformanceQuery = {
   view?: "mine" | "wfh";
@@ -49,6 +52,10 @@ export type PerformanceQuery = {
   supervisorId?: string;
   role?: string;
   skill?: string;
+  employeeStatus?: string;
+  wfhStatus?: string;
+  sortBy?: PerformanceSortBy;
+  sortDirection?: PerformanceSortDirection;
 };
 
 export type PerformancePreviewRow = {
@@ -101,6 +108,11 @@ type AgentPerformanceRow = PerformanceMetrics & {
   supervisor: string;
   roleTitle: string;
   skill: string;
+  employeeStatus: string;
+  wfhStatus: WfhStatus;
+  wfhStatusLabel: string;
+  submitAveragePerDay: number;
+  wfhFailedCriteria: string[];
   weekly: WeeklyMetricRow[];
 };
 
@@ -182,7 +194,7 @@ export async function getPerformanceDashboard(actor: Actor, query: PerformanceQu
 
   if (!canAccessPerformanceWfh(permissionUser(user))) throw new PerformanceError("Você não tem permissão para acessar WFH.", 403);
   const employees = await listPerformanceEmployees(query, { defaultAgentsOnly: true });
-  const rows = await buildAgentRows(employees, period);
+  const rows = sortAgentRows(filterRowsByWfhStatus(await buildAgentRows(employees, period), query.wfhStatus), query);
   const imports = await prisma.performanceImportBatch.findMany({
     orderBy: { importedAt: "desc" },
     take: 12,
@@ -201,7 +213,7 @@ export async function getPerformanceDashboard(actor: Actor, query: PerformanceQu
       importedRows: imports.reduce((sum, item) => sum + item.rowsValid, 0),
       lastImport: imports[0] ? formatDateTime(imports[0].importedAt) : ""
     },
-    ranking: rows.sort((a, b) => b.quality - a.quality || b.submit - a.submit).slice(0, 200),
+    ranking: rows.slice(0, 200),
     weekly: buildWeeklyEvolution(rows, period),
     filters,
     imports: imports.map((item) => ({
@@ -579,15 +591,18 @@ export async function exportPerformanceXlsxData(actor: Actor, query: Performance
   return {
     fileName: `performance_wfh_${new Date().toISOString().slice(0, 10)}.xlsx`,
     sheetName: "Ranking",
-    headers: ["semana_inicio", "semana_fim", "agente", "wb_login", "lob_colaborador", "supervisor", "regra_qualidade_aplicada", "qualidade", "numerador_qualidade", "denominador_qualidade", "submit", "aht_segundos", "aht_formatado", "abs", "faltas", "dias_escalados_validos"],
+    headers: ["semana_inicio", "semana_fim", "agente", "wb_login", "status_colaborador", "lob_colaborador", "supervisor", "regra_qualidade_aplicada", "wfh_status", "submit_medio_dia", "qualidade", "numerador_qualidade", "denominador_qualidade", "submit", "aht_segundos", "aht_formatado", "abs", "faltas", "dias_escalados_validos"],
     rows: dashboard.ranking.flatMap((agent) => agent.weekly.map((week) => [
       week.weekStart,
       week.weekEnd,
       agent.employeeName,
       agent.wbLogin,
+      agent.employeeStatus,
       agent.lob,
       agent.supervisor,
       week.qualityRule,
+      agent.wfhStatusLabel,
+      agent.submitAveragePerDay,
       `${week.quality}%`,
       week.qualityNumerator,
       week.qualityDenominator,
@@ -677,6 +692,44 @@ function summarizeQualityRule(rules: QualityRule[]): QualityRule {
   return meaningful.length === 1 ? meaningful[0] : "MIXED";
 }
 
+function buildPerformanceEmployeeStatusWhere(filter?: string): Prisma.EmployeeProfileWhereInput | null {
+  const status = normalizeEmployeeStatusFilter(filter);
+  if (!status) return null;
+  const values = status === "Ativo" ? ["Ativo", "ATIVO", "ACTIVE", "Online", "ONLINE", "Aprovado", "APROVADO"] : ["Desligado", "DESLIGADO", "Desligada", "DESLIGADA"];
+  return { OR: values.map((value) => ({ operationalStatus: { equals: value, mode: "insensitive" } })) };
+}
+
+function normalizeEmployeeStatusFilter(filter?: string) {
+  const value = filter?.trim();
+  if (!value || value === "Todos" || value === "ALL") return "";
+  const token = normalizeTextToken(value);
+  if (["ativo", "active"].includes(token)) return "Ativo";
+  if (["desligado", "desligada", "terminated"].includes(token)) return "Desligado";
+  return "";
+}
+
+function displayPerformanceEmployeeStatus(status?: string | null) {
+  const raw = status?.trim() ?? "";
+  if (!raw) return "";
+  const token = normalizeTextToken(raw);
+  if (["active", "ativo", "ativa", "online", "aprovado", "aprovada"].includes(token)) return "Ativo";
+  if (["desligado", "desligada", "terminated"].includes(token)) return "Desligado";
+  return raw;
+}
+
+function normalizeWfhStatusFilter(filter?: string): WfhStatus | "" {
+  const value = filter?.trim();
+  if (!value || value === "Todos" || value === "ALL") return "";
+  const token = normalizeTextToken(value);
+  if (["qualified", "qualificado"].includes(token)) return "QUALIFIED";
+  if (["not_qualified", "not-qualified", "nao_qualificado", "nao-qualificado", "não_qualificado", "não-qualificado", "naoqualificado", "nãoqualificado"].includes(token)) return "NOT_QUALIFIED";
+  return "";
+}
+
+function normalizeTextToken(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase().replace(/\s+/g, "_");
+}
+
 async function listPerformanceEmployees(query: PerformanceQuery = {}, options: { defaultAgentsOnly?: boolean } = {}) {
   const where: Prisma.EmployeeProfileWhereInput = { deletedAt: null };
   const and: Prisma.EmployeeProfileWhereInput[] = [];
@@ -691,6 +744,8 @@ async function listPerformanceEmployees(query: PerformanceQuery = {}, options: {
     and.push(query.supervisorId === "SEM_SUPERVISOR" ? { supervisorId: null } : { supervisorId: query.supervisorId });
   }
   if (query.skill && query.skill !== "Todos") and.push(query.skill === "SEM_SKILL" ? { OR: [{ skill: null }, { skill: "" }] } : { skill: { equals: query.skill, mode: "insensitive" } });
+  const employeeStatusWhere = buildPerformanceEmployeeStatusWhere(query.employeeStatus);
+  if (employeeStatusWhere) and.push(employeeStatusWhere);
   if (and.length) where.AND = and;
 
   const employees = await prisma.employeeProfile.findMany({
@@ -773,6 +828,7 @@ async function buildAgentRows(employees: PerformanceEmployee[], period: Period) 
       ...summarizeWeeklyRows(weekly),
       ...calculateQualityByRule(qualityRule, employeeQualityRecords, employeeTnsQualityRecords)
     };
+    const wfhQualification = calculateWfhQualification(periodMetrics, period);
     return {
       employeeId: employee.id,
       employeeName: employee.fullName,
@@ -781,7 +837,9 @@ async function buildAgentRows(employees: PerformanceEmployee[], period: Period) 
       supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
       roleTitle: employee.roleTitle,
       skill: employee.skill ?? "",
+      employeeStatus: displayPerformanceEmployeeStatus(employee.operationalStatus),
       weekly,
+      ...wfhQualification,
       ...periodMetrics
     };
   });
@@ -957,6 +1015,64 @@ function buildWeeklyEvolution(rows: AgentPerformanceRow[], period: Period) {
   });
 }
 
+function calculateWfhQualification(metrics: Pick<PerformanceMetrics, "quality" | "submit" | "ahtSeconds" | "abs">, period: Period) {
+  const days = daysInPeriod(period);
+  const submitAveragePerDay = days > 0 ? round2(metrics.submit / days) : 0;
+  const failedCriteria: string[] = [];
+  if (!isValidMetric(metrics.quality) || metrics.quality < 95) failedCriteria.push("Qualidade < 95%");
+  if (!isValidMetric(metrics.abs) || metrics.abs > 5) failedCriteria.push("ABS > 5%");
+  if (!isValidMetric(submitAveragePerDay) || submitAveragePerDay < 370) failedCriteria.push("Submit médio/dia < 370");
+  if (!isValidMetric(metrics.ahtSeconds) || metrics.ahtSeconds >= 50) failedCriteria.push("AHT >= 50s");
+  const wfhStatus: WfhStatus = failedCriteria.length ? "NOT_QUALIFIED" : "QUALIFIED";
+  return {
+    wfhStatus,
+    wfhStatusLabel: wfhStatus === "QUALIFIED" ? "Qualificado" : "Não-qualificado",
+    submitAveragePerDay,
+    wfhFailedCriteria: failedCriteria
+  };
+}
+
+function daysInPeriod(period: Period) {
+  const start = Date.UTC(period.start.getUTCFullYear(), period.start.getUTCMonth(), period.start.getUTCDate());
+  const end = Date.UTC(period.end.getUTCFullYear(), period.end.getUTCMonth(), period.end.getUTCDate());
+  if (end < start) return 0;
+  return Math.floor((end - start) / 86_400_000) + 1;
+}
+
+function isValidMetric(value: number) {
+  return Number.isFinite(value);
+}
+
+function filterRowsByWfhStatus(rows: AgentPerformanceRow[], filter?: string) {
+  const status = normalizeWfhStatusFilter(filter);
+  if (!status) return rows;
+  return rows.filter((row) => row.wfhStatus === status);
+}
+
+function sortAgentRows(rows: AgentPerformanceRow[], query: PerformanceQuery) {
+  const sortBy = query.sortBy && ["quality", "submit", "aht", "abs"].includes(query.sortBy) ? query.sortBy : "quality";
+  const direction = query.sortDirection === "asc" ? "asc" : "desc";
+  const multiplier = direction === "asc" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const aValue = sortablePerformanceValue(a, sortBy);
+    const bValue = sortablePerformanceValue(b, sortBy);
+    const aValid = Number.isFinite(aValue);
+    const bValid = Number.isFinite(bValue);
+    if (!aValid && !bValid) return a.employeeName.localeCompare(b.employeeName, "pt-BR");
+    if (!aValid) return 1;
+    if (!bValid) return -1;
+    if (aValue !== bValue) return (aValue - bValue) * multiplier;
+    return a.employeeName.localeCompare(b.employeeName, "pt-BR");
+  });
+}
+
+function sortablePerformanceValue(row: AgentPerformanceRow, sortBy: PerformanceSortBy) {
+  if (sortBy === "quality") return row.qualityDenominator > 0 ? row.quality : Number.NaN;
+  if (sortBy === "aht") return row.submit > 0 ? row.ahtSeconds : Number.NaN;
+  if (sortBy === "abs") return row.scheduledDays > 0 ? row.abs : Number.NaN;
+  return row[sortBy];
+}
+
 function emptyAgentRow(employee: PerformanceEmployee, period: Period): AgentPerformanceRow {
   const qualityRule = getQualityRuleByEmployee(employee);
   const weekly = weeksInPeriod(period).map((week) => ({
@@ -973,7 +1089,9 @@ function emptyAgentRow(employee: PerformanceEmployee, period: Period): AgentPerf
     supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
     roleTitle: employee.roleTitle,
     skill: employee.skill ?? "",
+    employeeStatus: displayPerformanceEmployeeStatus(employee.operationalStatus),
     weekly,
+    ...calculateWfhQualification(emptyMetrics(qualityRule), period),
     ...emptyMetrics(qualityRule)
   };
 }
