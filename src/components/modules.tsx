@@ -10347,30 +10347,13 @@ export function PerformancePage() {
             <PerformanceMetricCard title="Última importação" value={wfhPayload.summary.lastImport || "-"} helper="Qualidade ou produção" icon={CalendarDays} tone="gold" />
           </div>
 
-          <div className="grid gap-3 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,.65fr)]">
-            <Panel title="Ranking de Agentes">
-              {wfhPayload.ranking.length ? (
-                <PerformanceRankingTable rows={wfhPayload.ranking} sort={performanceSort} onSort={updatePerformanceSort} onSelect={setSelectedAgent} />
-              ) : (
-                <EmptyState title="Nenhum dado importado ainda." description="Importe uma base de Qualidade ou Produção para visualizar os indicadores." />
-              )}
-            </Panel>
-            <Panel title="Evolução Semanal">
-              <div className="h-[300px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={wfhPayload.weekly}>
-                    <CartesianGrid stroke="#E8EDF5" />
-                    <XAxis dataKey="weekLabel" tick={{ fontSize: 11 }} />
-                    <YAxis />
-                    <Tooltip formatter={(value, name) => [formatPerformanceChartValue(Number(value), String(name)), performanceMetricLabel(String(name))]} />
-                    <Bar dataKey="submit" fill="#2563EB" name="submit" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="quality" fill="#10B981" name="quality" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="abs" fill="#EF4444" name="abs" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </Panel>
-          </div>
+          <Panel title="Ranking de Agentes">
+            {wfhPayload.ranking.length ? (
+              <PerformanceRankingTable rows={wfhPayload.ranking} sort={performanceSort} onSort={updatePerformanceSort} onSelect={setSelectedAgent} />
+            ) : (
+              <EmptyState title="Nenhum dado importado ainda." description="Importe uma base de Qualidade ou Produção para visualizar os indicadores." />
+            )}
+          </Panel>
 
           {wfhPayload.canImport ? (
             <div className="grid gap-2 md:grid-cols-3">
@@ -10411,7 +10394,7 @@ export function PerformancePage() {
                         <p className="text-sm font-extrabold text-navy-950">{selectedAgent.employeeName}</p>
                         <p className="text-xs font-bold text-blue-700">{selectedAgent.wbLogin} · {selectedAgent.lob} · {performanceQualityRuleLabel(selectedAgent.qualityRule)} · {selectedAgent.supervisor}</p>
                       </div>
-                      <StatusBadge status={selectedAgent.wfhStatusLabel} />
+                      <PerformanceWfhBadge status={selectedAgent.wfhStatus} label={selectedAgent.wfhStatusLabel} />
                     </div>
                     <p className="mt-2 text-xs font-bold text-muted">Status: {selectedAgent.employeeStatus || "-"} · Submit médio/dia: {formatPerformanceNumber(selectedAgent.submitAveragePerDay)}</p>
                   </div>
@@ -10493,6 +10476,18 @@ function performanceToneClass(tone: string) {
   return map[tone] ?? "bg-slate-50 text-slate-600";
 }
 
+function PerformanceWfhBadge({ status, label }: { status: "QUALIFIED" | "NOT_QUALIFIED"; label: string }) {
+  const isQualified = status === "QUALIFIED";
+  return (
+    <span className={cn(
+      "inline-flex items-center whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-extrabold",
+      isQualified ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700"
+    )}>
+      {label}
+    </span>
+  );
+}
+
 function PerformanceRankingTable({ rows, sort, onSort, onSelect }: { rows: AgentPerformanceClient[]; sort: PerformanceSortState; onSort: (by: PerformanceSortableMetric) => void; onSelect: (row: AgentPerformanceClient) => void }) {
   const columns: Array<{ key: string; label: string; sortBy?: PerformanceSortableMetric; align?: "right" }> = [
     { key: "agent", label: "Agente" },
@@ -10532,7 +10527,7 @@ function PerformanceRankingTable({ rows, sort, onSort, onSelect }: { rows: Agent
               </td>
               <td className="px-3 py-2 font-bold text-navy-950">{agent.wbLogin}</td>
               <td className="px-3 py-2">{agent.lob}</td>
-              <td className="px-3 py-2"><StatusBadge status={agent.wfhStatusLabel} /></td>
+              <td className="px-3 py-2"><PerformanceWfhBadge status={agent.wfhStatus} label={agent.wfhStatusLabel} /></td>
               <td className="px-3 py-2">{performanceQualityRuleLabel(agent.qualityRule)}</td>
               <td className="max-w-[180px] truncate px-3 py-2" title={agent.supervisor}>{agent.supervisor}</td>
               <td className="px-3 py-2 text-right font-extrabold">{formatPerformancePercent(agent.quality)}</td>
