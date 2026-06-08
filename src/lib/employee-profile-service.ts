@@ -5,6 +5,7 @@ import { createNotFoundError, createPermissionError, createServerError, type Api
 import { getEmployeeBillingPreview } from "@/lib/billing-service";
 import { getPerformanceDashboard } from "@/lib/performance-service";
 import { canAccessPerformanceWfh, normalizeRole } from "@/lib/permissions";
+import { logPerformanceMetric } from "@/lib/performance-logger";
 import { prisma } from "@/lib/prisma";
 import { cleanShiftName } from "@/lib/shift-display";
 
@@ -19,7 +20,7 @@ const profileEmployeeInclude = {
 type ProfileUser = Prisma.UserGetPayload<{ include: { role: true; employeeProfile: true } }>;
 type ProfileEmployee = Prisma.EmployeeProfileGetPayload<{ include: typeof profileEmployeeInclude }>;
 
-const managerRoles = new Set(["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH", "COORDENADOR", "GERENTE", "QUALIDADE", "TI"]);
+const thirdPartyProfileRoles = new Set(["ADMIN", "GESTOR", "WFM", "RH", "COORDENADOR", "GERENTE"]);
 const diversityRoles = new Set(["ADMIN", "GESTOR", "RH", "WFM"]);
 const scheduledStatuses = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "FALTA", "FALTA_JUSTIFICADA", "FALTA_INJUSTIFICADA", "ATRASO", "SAIDA_ANTECIPADA", "TROCA_APROVADA", "VENDA_FOLGA_APROVADA", "FOLGA_APROVADA"]);
 const presentStatuses = new Set<ScheduleStatus>(["PRESENTE", "ATRASO", "SAIDA_ANTECIPADA"]);
@@ -32,7 +33,7 @@ export async function searchEmployeeProfiles(actor: Actor, query: string, limit 
   if (q.length < 2) return { data: [] };
 
   const role = normalizeRole(user.role.name);
-  const canSearchAll = managerRoles.has(role);
+  const canSearchAll = canViewThirdPartyProfiles(user);
   if (!canSearchAll && !user.employeeProfile) return { data: [] };
 
   const where: Prisma.EmployeeProfileWhereInput = {
@@ -90,6 +91,7 @@ export async function searchEmployeeProfiles(actor: Actor, query: string, limit 
 }
 
 export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: string) {
+  const startedAt = Date.now();
   try {
     const viewer = await findViewer(actor);
     if (!viewer) return createPermissionError("Usuário não autenticado.");
@@ -106,20 +108,20 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
 
     const period = currentMonthPeriod();
     const [schedule, workHours, requests, equipments, mood, performance, billing] = await Promise.all([
-      buildScheduleSummary(employee.id, period),
-      buildWorkHoursSummary(employee.id, period),
-      buildRequestsSummary(employee),
-      buildEquipmentSummary(employee.id),
-      buildMoodSummary(employee.id, period),
-      buildPerformanceSummary(actor, viewer, employee, period),
-      getEmployeeBillingPreview(employee.id)
+      profileSection("schedule", employee.id, buildScheduleSummary(employee.id, period)),
+      profileSection("work_hours", employee.id, buildWorkHoursSummary(employee.id, period)),
+      profileSection("requests", employee.id, buildRequestsSummary(employee)),
+      profileSection("equipment", employee.id, buildEquipmentSummary(employee.id)),
+      profileSection("mood", employee.id, buildMoodSummary(employee.id, period)),
+      profileSection("performance", employee.id, buildPerformanceSummary(actor, viewer, employee, period)),
+      profileSection("billing_preview", employee.id, getEmployeeBillingPreview(employee.id))
     ]);
 
     const viewerRole = normalizeRole(viewer.role.name);
     const isOwnProfile = viewer.employeeProfile?.id === employee.id;
     const canViewDiversityData = isOwnProfile || diversityRoles.has(viewerRole);
 
-    return {
+    const response = {
       data: {
         viewer: {
           role: viewerRole,
@@ -138,8 +140,24 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
         updatedAt: formatDateTime(new Date())
       }
     };
+    logPerformanceMetric("profile.summary", startedAt, {
+      viewerRole,
+      isOwnProfile,
+      employeeId: employee.id,
+      sections: 7
+    });
+    return response;
   } catch (error) {
     return createServerError(error, "Não foi possível carregar o perfil do colaborador.");
+  }
+}
+
+async function profileSection<T>(label: string, employeeId: string, promise: Promise<T>) {
+  const startedAt = Date.now();
+  try {
+    return await promise;
+  } finally {
+    logPerformanceMetric(`profile.section.${label}`, startedAt, { employeeId });
   }
 }
 
@@ -153,7 +171,11 @@ function findViewer(actor: Actor) {
 function canViewProfile(viewer: ProfileUser, employee: ProfileEmployee) {
   if (viewer.status !== "ACTIVE") return false;
   if (viewer.employeeProfile?.id === employee.id || employee.userId === viewer.id) return true;
-  return managerRoles.has(normalizeRole(viewer.role.name));
+  return canViewThirdPartyProfiles(viewer);
+}
+
+function canViewThirdPartyProfiles(viewer: ProfileUser) {
+  return viewer.status === "ACTIVE" && thirdPartyProfileRoles.has(normalizeRole(viewer.role.name));
 }
 
 function mapProfileEmployee(employee: ProfileEmployee, canViewDiversityData: boolean) {

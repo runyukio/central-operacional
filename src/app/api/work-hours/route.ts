@@ -23,6 +23,7 @@ export async function GET(request: Request) {
   const result = await listOperationalWorkHours(actor, {
     startDate: url.searchParams.get("startDate") ?? undefined,
     endDate: url.searchParams.get("endDate") ?? undefined,
+    employeeId: url.searchParams.get("employeeId") ?? undefined,
     lob: url.searchParams.get("lob") ?? undefined,
     supervisor: url.searchParams.get("supervisor") ?? undefined,
     shift: url.searchParams.get("shift") ?? undefined,

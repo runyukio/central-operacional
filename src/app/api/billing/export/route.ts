@@ -15,6 +15,7 @@ export async function GET(request: Request) {
     supervisorId: url.searchParams.get("supervisorId"),
     skill: url.searchParams.get("skill"),
     shiftId: url.searchParams.get("shiftId"),
+    employeeId: url.searchParams.get("employeeId"),
     employeeStatus: url.searchParams.get("employeeStatus"),
     invoiceStatus: url.searchParams.get("invoiceStatus"),
     cycleStatus: url.searchParams.get("cycleStatus"),

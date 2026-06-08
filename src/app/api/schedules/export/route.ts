@@ -13,6 +13,7 @@ export async function GET(request: Request) {
     endDate: url.searchParams.get("endDate") ?? undefined,
     month: Number(url.searchParams.get("month")) || undefined,
     year: Number(url.searchParams.get("year")) || undefined,
+    employeeId: url.searchParams.get("employeeId") ?? undefined,
     collaborator: url.searchParams.get("collaborator") ?? undefined,
     lob: url.searchParams.get("lob") ?? undefined,
     supervisor: url.searchParams.get("supervisor") ?? undefined,

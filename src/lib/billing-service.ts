@@ -50,6 +50,7 @@ export type BillingDashboardFilters = {
   supervisorId?: string | null;
   skill?: string | null;
   shiftId?: string | null;
+  employeeId?: string | null;
   employeeStatus?: string | null;
   invoiceStatus?: string | null;
   cycleStatus?: string | null;
@@ -953,6 +954,7 @@ async function listBillingEmployees(filters: BillingDashboardFilters) {
   if (filters.supervisorId && filters.supervisorId !== "Todos") and.push({ supervisorId: filters.supervisorId });
   if (filters.skill && filters.skill !== "Todos") and.push({ skill: { equals: filters.skill, mode: "insensitive" } });
   if (filters.shiftId && filters.shiftId !== "Todos") and.push({ shiftId: filters.shiftId });
+  if (filters.employeeId) and.push({ id: filters.employeeId });
   if (filters.employeeStatus === "Ativo") and.push({ operationalStatus: { equals: "Ativo", mode: "insensitive" } });
   if (filters.employeeStatus === "Desligado") and.push({ operationalStatus: { equals: "Desligado", mode: "insensitive" } });
   const search = filters.search?.trim();

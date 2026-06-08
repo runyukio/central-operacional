@@ -65,6 +65,7 @@ type UserWithRole = Prisma.UserGetPayload<{ include: { role: true; employeeProfi
 export type WorkHourQuery = {
   startDate?: string;
   endDate?: string;
+  employeeId?: string;
   lob?: string;
   supervisor?: string;
   shift?: string;
@@ -1040,6 +1041,7 @@ function buildRecordWhere(user: UserWithRole, query: WorkHourQuery, period: { st
     employee: { deletedAt: null }
   };
   if (role === "COLABORADOR" || query.scope === "mine") where.employeeId = user.employeeProfile?.id ?? "__none__";
+  else if (query.employeeId) where.employeeId = query.employeeId;
   if (query.lob && query.lob !== "Todos") where.employee = { ...(where.employee as Prisma.EmployeeProfileWhereInput), lob: { name: query.lob } };
   if (query.supervisor && query.supervisor !== "Todos") {
     where.employee = {

@@ -37,6 +37,7 @@ export async function GET(request: Request) {
       month: Number(url.searchParams.get("month")) || undefined,
       year: Number(url.searchParams.get("year")) || undefined,
       view: url.searchParams.get("view") === "mine" ? "mine" : undefined,
+      employeeId: url.searchParams.get("employeeId") ?? undefined,
       collaborator: url.searchParams.get("collaborator") ?? undefined,
       lob: url.searchParams.get("lob") ?? undefined,
       supervisor: url.searchParams.get("supervisor") ?? undefined,

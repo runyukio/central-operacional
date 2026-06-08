@@ -106,8 +106,19 @@ type BillingPayload = {
 
 type TabKey = "lob" | "employees" | "hours" | "adjustments" | "rates";
 
+function billingQueryParam(name: string) {
+  if (typeof window === "undefined") return "";
+  return new URLSearchParams(window.location.search).get(name) ?? "";
+}
+
+function billingInitialTab(): TabKey {
+  const tab = billingQueryParam("tab");
+  return tab === "employees" || tab === "hours" || tab === "adjustments" || tab === "rates" ? tab : "lob";
+}
+
 export function BillingPage() {
-  const [referenceMonth, setReferenceMonth] = useState("2026-06");
+  const [referenceMonth, setReferenceMonth] = useState(billingQueryParam("referenceMonth") || "2026-06");
+  const [employeeId] = useState(billingQueryParam("employeeId"));
   const [search, setSearch] = useState("");
   const [employeeStatus, setEmployeeStatus] = useState("Ambos");
   const [invoiceStatus, setInvoiceStatus] = useState("Todos");
@@ -116,7 +127,7 @@ export function BillingPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState<TabKey>("lob");
+  const [activeTab, setActiveTab] = useState<TabKey>(billingInitialTab);
   const [rateDraft, setRateDraft] = useState<Record<string, string>>({});
   const [adjustmentDraft, setAdjustmentDraft] = useState({ type: "Correção", description: "", amount: "", employeeInvoiceId: "" });
   const data = payload?.data;
@@ -127,6 +138,7 @@ export function BillingPage() {
     setError("");
     const params = new URLSearchParams({ referenceMonth });
     params.set("section", activeTab);
+    if (employeeId) params.set("employeeId", employeeId);
     if (search.trim()) params.set("search", search.trim());
     if (employeeStatus !== "Ambos") params.set("employeeStatus", employeeStatus);
     if (invoiceStatus !== "Todos") params.set("invoiceStatus", invoiceStatus);
@@ -141,7 +153,7 @@ export function BillingPage() {
     } finally {
       setLoading(false);
     }
-  }, [referenceMonth, search, employeeStatus, invoiceStatus, activeTab]);
+  }, [referenceMonth, employeeId, search, employeeStatus, invoiceStatus, activeTab]);
 
   useEffect(() => {
     void load();
@@ -196,11 +208,12 @@ export function BillingPage() {
 
   const exportHref = useMemo(() => {
     const params = new URLSearchParams({ referenceMonth });
+    if (employeeId) params.set("employeeId", employeeId);
     if (search.trim()) params.set("search", search.trim());
     if (employeeStatus !== "Ambos") params.set("employeeStatus", employeeStatus);
     if (invoiceStatus !== "Todos") params.set("invoiceStatus", invoiceStatus);
     return `/api/billing/export?${params.toString()}`;
-  }, [referenceMonth, search, employeeStatus, invoiceStatus]);
+  }, [referenceMonth, employeeId, search, employeeStatus, invoiceStatus]);
 
   if (loading && !payload) {
     return (

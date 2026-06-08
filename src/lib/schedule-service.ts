@@ -182,6 +182,7 @@ export type ScheduleQuery = {
   month?: number;
   year?: number;
   view?: "mine" | "grid";
+  employeeId?: string;
   collaborator?: string;
   lob?: string;
   supervisor?: string;
@@ -3565,6 +3566,7 @@ function resolveAttendancePeriod(query: AttendanceQuery) {
 
 function employeeFilters(query: ScheduleQuery, search?: string): Prisma.EmployeeProfileWhereInput {
   const filters: Prisma.EmployeeProfileWhereInput[] = [];
+  if (query.employeeId) filters.push({ id: query.employeeId });
   if (search) {
     filters.push({
       OR: [

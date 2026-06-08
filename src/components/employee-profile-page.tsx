@@ -181,6 +181,8 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
     );
   }
 
+  const profileLinks = buildProfileActionLinks(data);
+
   return (
     <div className="space-y-4">
       <PageHeader
@@ -242,7 +244,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
           </div>
         </Panel>
 
-        <Panel title={`Cronograma (${data.schedule.periodLabel})`} action="Ver completo" actionOnClick={() => window.location.assign(`/meu-cronograma?month=${encodeURIComponent(data.schedule.referenceMonth)}`)}>
+        <Panel title={`Cronograma (${data.schedule.periodLabel})`} action="Ver completo" actionOnClick={() => window.location.assign(profileLinks.schedule)}>
           <div className="grid gap-2 sm:grid-cols-3">
             <MetricBox label="Escalados" value={data.schedule.scheduledDays} />
             <MetricBox label="Presentes" value={data.schedule.presentDays} />
@@ -263,7 +265,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
           </div>
         </Panel>
 
-        <Panel title={`Horas (${data.workHours.periodLabel})`} action="Ver detalhes">
+        <Panel title={`Horas (${data.workHours.periodLabel})`} action="Ver detalhes" actionOnClick={() => window.location.assign(profileLinks.workHours)}>
           <div className="grid gap-2 sm:grid-cols-2">
             <MetricBox label="Planejadas" value={data.workHours.plannedHours} />
             <MetricBox label="Realizadas" value={data.workHours.actualHours} />
@@ -276,7 +278,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
 
       <div className={cn("grid gap-4", data.billing ? "xl:grid-cols-2 2xl:grid-cols-4" : "xl:grid-cols-3")}>
         {data.billing ? (
-          <Panel title="Prévia de Invoice" action="Ver detalhes" actionOnClick={() => window.location.assign("/meu-perfil/invoice")}>
+          <Panel title="Prévia de Invoice" action="Ver detalhes" actionOnClick={() => window.location.assign(profileLinks.invoice)}>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <p className="text-sm font-black text-navy-950">{data.billing.monthLabel}</p>
@@ -298,7 +300,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
           </Panel>
         ) : null}
 
-        <Panel title="Performance">
+        <Panel title="Performance" action="Ver histórico" actionOnClick={() => window.location.assign(profileLinks.performance)}>
           {data.performance ? (
             <div className="grid gap-2 text-sm sm:grid-cols-2">
               <InfoLine label="Qualidade" value={formatPercent(data.performance.quality)} />
@@ -313,7 +315,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
           )}
         </Panel>
 
-        <Panel title="Solicitações" action="Ver todas">
+        <Panel title="Solicitações" action="Ver todas" actionOnClick={() => window.location.assign(profileLinks.requests)}>
           <div className="mb-3 grid grid-cols-2 gap-2">
             <MetricBox label="Abertas" value={data.requests.open} />
             <MetricBox label="Em análise" value={data.requests.inAnalysis} />
@@ -354,7 +356,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
-        <Panel title="Equipamentos">
+        <Panel title="Equipamentos" action="Ver todos" actionOnClick={() => window.location.assign(profileLinks.equipment)}>
           {data.equipments.items.length ? (
             <div className="grid gap-2">
               {data.equipments.items.map((item) => (
@@ -409,6 +411,43 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
       <p className="pb-2 text-right text-xs font-semibold text-muted">Dados atualizados em {data.updatedAt}. Informações exibidas conforme sua permissão de acesso.</p>
     </div>
   );
+}
+
+function buildProfileActionLinks(data: ProfilePayload["data"]) {
+  const employeeId = encodeURIComponent(data.employee.id);
+  const referenceMonth = data.schedule.referenceMonth;
+  const { month, year, startDate, endDate } = monthParams(referenceMonth);
+  const ownProfile = data.viewer.isOwnProfile;
+  return {
+    schedule: ownProfile
+      ? `/minha-escala?month=${encodeURIComponent(referenceMonth)}`
+      : `/escalas?employeeId=${employeeId}&month=${month}&year=${year}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`,
+    workHours: ownProfile
+      ? `/minha-escala?month=${encodeURIComponent(referenceMonth)}`
+      : `/horas-operacionais?employeeId=${employeeId}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`,
+    performance: ownProfile
+      ? `/performance?view=mine&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`
+      : `/performance?view=wfh&employeeId=${employeeId}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`,
+    requests: `/solicitacoes?employeeId=${employeeId}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`,
+    equipment: `/equipamentos?responsibleId=${employeeId}`,
+    invoice: ownProfile
+      ? `/meu-perfil/invoice?referenceMonth=${encodeURIComponent(data.billing?.referenceMonth ?? referenceMonth)}`
+      : `/billing?employeeId=${employeeId}&referenceMonth=${encodeURIComponent(data.billing?.referenceMonth ?? referenceMonth)}&tab=employees`
+  };
+}
+
+function monthParams(referenceMonth: string) {
+  const [yearRaw, monthRaw] = referenceMonth.split("-").map(Number);
+  const year = Number.isFinite(yearRaw) ? yearRaw : new Date().getUTCFullYear();
+  const month = Number.isFinite(monthRaw) ? monthRaw : new Date().getUTCMonth() + 1;
+  const start = new Date(Date.UTC(year, month - 1, 1));
+  const end = new Date(Date.UTC(year, month, 0));
+  return {
+    year,
+    month,
+    startDate: start.toISOString().slice(0, 10),
+    endDate: end.toISOString().slice(0, 10)
+  };
 }
 
 function CompactInfo({ label, value }: { label: string; value: React.ReactNode }) {

@@ -1278,6 +1278,34 @@ function currentOperationalMonthRange() {
   return monthRange(period.month, period.year);
 }
 
+function currentUrlSearchParams() {
+  if (typeof window === "undefined") return new URLSearchParams();
+  return new URLSearchParams(window.location.search);
+}
+
+function queryParam(name: string) {
+  return currentUrlSearchParams().get(name) ?? "";
+}
+
+function initialMonthFromUrl(fallback = currentOperationalMonth()) {
+  const params = currentUrlSearchParams();
+  const monthInput = params.get("month");
+  if (monthInput?.includes("-")) {
+    const [year, month] = monthInput.split("-").map(Number);
+    if (year && month) return { year, month };
+  }
+  const month = Number(params.get("month"));
+  const year = Number(params.get("year"));
+  return month && year ? { month, year } : fallback;
+}
+
+function initialDateRangeFromUrl(fallback = currentOperationalMonthRange()) {
+  const params = currentUrlSearchParams();
+  const startDate = params.get("startDate") ?? "";
+  const endDate = params.get("endDate") ?? "";
+  return startDate && endDate ? { startDate, endDate } : fallback;
+}
+
 function anchorForSchedulePeriod(period: { month: number; year: number }, currentStartDate?: string) {
   const parsed = parseDateInput(currentStartDate ?? "");
   const day = parsed?.getUTCDate() ?? 1;
@@ -5001,13 +5029,13 @@ export function SchedulesPage() {
   const [selectedAttendancePending, setSelectedAttendancePending] = useState<AttendanceItem | null>(null);
   const [pendingSupervisorFilter, setPendingSupervisorFilter] = useState("Todos");
   const [scheduleActorRole, setScheduleActorRole] = useState("COLABORADOR");
-  const [schedulePeriod, setSchedulePeriod] = useState(() => currentOperationalMonth());
+  const [schedulePeriod, setSchedulePeriod] = useState(() => initialMonthFromUrl());
   const [scheduleRangeMode, setScheduleRangeMode] = useState<ScheduleRangeMode>("month");
-  const [scheduleDateRange, setScheduleDateRange] = useState(() => currentOperationalMonthRange());
+  const [scheduleDateRange, setScheduleDateRange] = useState(() => initialDateRangeFromUrl(monthRange(initialMonthFromUrl().month, initialMonthFromUrl().year)));
   const [scheduleDateError, setScheduleDateError] = useState("");
   const [scheduleDateColumns, setScheduleDateColumns] = useState<string[]>([]);
   const [schedulePagination, setSchedulePagination] = useState({ page: 1, limit: 75, total: 0, totalPages: 1 });
-  const [scheduleFilters, setScheduleFilters] = useState({ collaborator: "", lob: "Todos", supervisor: "Todos", shift: "Todos", status: "Todos", skill: "Todos", roleTitle: "" });
+  const [scheduleFilters, setScheduleFilters] = useState({ employeeId: queryParam("employeeId"), collaborator: "", lob: "Todos", supervisor: "Todos", shift: "Todos", status: "Todos", skill: "Todos", roleTitle: "" });
   const [scheduleEditForm, setScheduleEditForm] = useState({
     scheduleId: "",
     employeeId: "",
@@ -5135,6 +5163,7 @@ export function SchedulesPage() {
         status: filtersOverride.status,
         skill: filtersOverride.skill,
         roleTitle: filtersOverride.roleTitle,
+        employeeId: filtersOverride.employeeId,
         skipSummary: "true",
         includeImports: options.includeImports ? "true" : "false"
       });
@@ -5172,6 +5201,7 @@ export function SchedulesPage() {
       if (filtersOverride.supervisor !== "Todos") params.set("supervisor", filtersOverride.supervisor);
       if (filtersOverride.shift !== "Todos") params.set("shift", filtersOverride.shift);
       if (filtersOverride.collaborator.trim()) params.set("collaborator", filtersOverride.collaborator.trim());
+      if (filtersOverride.employeeId) params.set("employeeId", filtersOverride.employeeId);
       if (filtersOverride.status !== "Todos") params.set("status", filtersOverride.status);
       if (filtersOverride.skill !== "Todos") params.set("skill", filtersOverride.skill);
       if (filtersOverride.roleTitle && filtersOverride.roleTitle !== "Todos") params.set("roleTitle", filtersOverride.roleTitle);
@@ -5194,6 +5224,7 @@ export function SchedulesPage() {
     if (filtersOverride.supervisor !== "Todos") params.set("supervisor", filtersOverride.supervisor.trim());
     if (filtersOverride.shift !== "Todos") params.set("shift", filtersOverride.shift);
     if (filtersOverride.collaborator.trim()) params.set("collaborator", filtersOverride.collaborator.trim());
+    if (filtersOverride.employeeId) params.set("employeeId", filtersOverride.employeeId);
     if (filtersOverride.skill !== "Todos") params.set("skill", filtersOverride.skill);
     try {
       const payload = await apiJson<{ data: AttendanceItem[]; summary: AttendanceSummary }>(`/api/attendance?${params.toString()}`);
@@ -5243,7 +5274,7 @@ export function SchedulesPage() {
   }
 
   function clearScheduleFilters() {
-    const clearedFilters = { collaborator: "", lob: "Todos", supervisor: "Todos", shift: "Todos", status: "Todos", skill: "Todos", roleTitle: "" };
+    const clearedFilters = { employeeId: "", collaborator: "", lob: "Todos", supervisor: "Todos", shift: "Todos", status: "Todos", skill: "Todos", roleTitle: "" };
     const clearedRange = monthRange(schedulePeriod.month, schedulePeriod.year);
     setScheduleFilters(clearedFilters);
     setScheduleRangeMode("month");
@@ -5921,6 +5952,7 @@ export function SchedulesPage() {
       endDate: scheduleDateRange.endDate
     });
     if (scheduleFilters.collaborator) params.set("collaborator", scheduleFilters.collaborator);
+    if (scheduleFilters.employeeId) params.set("employeeId", scheduleFilters.employeeId);
     if (scheduleFilters.lob !== "Todos") params.set("lob", scheduleFilters.lob);
     if (scheduleFilters.supervisor !== "Todos") params.set("supervisor", scheduleFilters.supervisor);
     if (scheduleFilters.shift !== "Todos") params.set("shift", scheduleFilters.shift);
@@ -6868,7 +6900,8 @@ export function WorkHoursPage() {
   const [summary, setSummary] = useState<WorkHourSummary | null>(null);
   const [pagination, setPagination] = useState({ page: 1, limit: 50, total: 0, totalPages: 1 });
   const [filters, setFilters] = useState(() => ({
-    ...currentOperationalMonthRange(),
+    ...initialDateRangeFromUrl(),
+    employeeId: queryParam("employeeId"),
     lob: "Todos",
     supervisor: "",
     shift: "Todos",
@@ -6934,6 +6967,7 @@ export function WorkHoursPage() {
         limit: String(pagination.limit)
       });
       if (filters.lob !== "Todos") params.set("lob", filters.lob);
+      if (filters.employeeId) params.set("employeeId", filters.employeeId);
       if (filters.supervisor) params.set("supervisor", filters.supervisor);
       if (filters.shift !== "Todos") params.set("shift", filters.shift);
       if (filters.collaborator) params.set("collaborator", filters.collaborator);
@@ -7103,6 +7137,7 @@ export function WorkHoursPage() {
   function exportUrl() {
     const params = new URLSearchParams({ startDate: filters.startDate, endDate: filters.endDate });
     if (filters.lob !== "Todos") params.set("lob", filters.lob);
+    if (filters.employeeId) params.set("employeeId", filters.employeeId);
     if (filters.supervisor) params.set("supervisor", filters.supervisor);
     if (filters.shift !== "Todos") params.set("shift", filters.shift);
     if (filters.collaborator) params.set("collaborator", filters.collaborator);
@@ -7174,7 +7209,7 @@ export function WorkHoursPage() {
           <FormSelect label="Origem" value={filters.source} options={sourceOptions} onChange={(value) => setFilters({ ...filters, source: value })} />
           <div className="flex items-end gap-2">
             <button onClick={() => loadWorkHours(1)} className="h-11 flex-1 rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
-            <button onClick={() => { setFilters({ ...currentOperationalMonthRange(), lob: "Todos", supervisor: "", shift: "Todos", collaborator: "", employeeStatus: "Todos", status: "Todos", source: "Todos", divergentOnly: false, pendingOnly: false, noScheduleOnly: false }); setTimeout(() => void loadWorkHours(1), 0); }} className="h-11 rounded-lg border border-border bg-white px-3 text-sm font-bold">Limpar</button>
+            <button onClick={() => { setFilters({ ...currentOperationalMonthRange(), employeeId: "", lob: "Todos", supervisor: "", shift: "Todos", collaborator: "", employeeStatus: "Todos", status: "Todos", source: "Todos", divergentOnly: false, pendingOnly: false, noScheduleOnly: false }); setTimeout(() => void loadWorkHours(1), 0); }} className="h-11 rounded-lg border border-border bg-white px-3 text-sm font-bold">Limpar</button>
           </div>
         </div>
         <div className="mt-3 flex flex-wrap gap-3 text-sm font-semibold text-navy-950">
@@ -7782,14 +7817,15 @@ export function RequestsPage() {
   const [actionPending, setActionPending] = useState("");
   const [coverageWarning, setCoverageWarning] = useState<CoverageWarningDialogState | null>(null);
   const [filters, setFilters] = useState({
+    employeeId: queryParam("employeeId"),
     type: "Todos",
     status: "Todos",
     priority: "Todos",
     requester: "",
     collaborator: "",
     lob: "Todos",
-    startDate: "",
-    endDate: "",
+    startDate: queryParam("startDate"),
+    endDate: queryParam("endDate"),
     pendingAction: "false"
   });
   const [newRequest, setNewRequest] = useState({
@@ -10088,13 +10124,15 @@ export function MuralPage() {
 
 export function PerformancePage() {
   const { data: session } = useSession();
-  const defaultedTab = useRef(false);
-  const [activeTab, setActiveTab] = useState<"mine" | "wfh">("mine");
+  const requestedPerformanceView = queryParam("view");
+  const hasRequestedPerformanceView = requestedPerformanceView === "mine" || requestedPerformanceView === "wfh";
+  const defaultedTab = useRef(hasRequestedPerformanceView);
+  const [activeTab, setActiveTab] = useState<"mine" | "wfh">(requestedPerformanceView === "wfh" ? "wfh" : "mine");
   const [filters, setFilters] = useState(() => ({
-    ...currentOperationalMonthRange(),
+    ...initialDateRangeFromUrl(),
     lob: "Todos",
     supervisorId: "Todos",
-    employeeId: "Todos",
+    employeeId: queryParam("employeeId") || "Todos",
     role: "Todos",
     skill: "Todos",
     employeeStatus: "Todos",
@@ -11324,9 +11362,10 @@ export function EquipmentPage() {
   const [summary, setSummary] = useState<EquipmentSummary>({ total: 0, inUse: 0, available: 0, maintenance: 0, returned: 0, pending: 0 });
   const [canManage, setCanManage] = useState(false);
   const [equipmentMessage, setEquipmentMessage] = useState("");
-  const emptyEquipmentFilters = { search: "", serialNumber: "", status: "Todos", type: "Todos", responsible: "", model: "", deliveredFrom: "", deliveredTo: "" };
-  const [equipmentFilters, setEquipmentFilters] = useState(emptyEquipmentFilters);
-  const [appliedEquipmentFilters, setAppliedEquipmentFilters] = useState(emptyEquipmentFilters);
+  const emptyEquipmentFilters = { search: "", serialNumber: "", status: "Todos", type: "Todos", responsible: "", responsibleId: "", model: "", deliveredFrom: "", deliveredTo: "" };
+  const initialEquipmentFilters = { ...emptyEquipmentFilters, responsibleId: queryParam("responsibleId") };
+  const [equipmentFilters, setEquipmentFilters] = useState(initialEquipmentFilters);
+  const [appliedEquipmentFilters, setAppliedEquipmentFilters] = useState(initialEquipmentFilters);
   const [equipmentForm, setEquipmentForm] = useState({
     id: "",
     numeroSerie: "",
