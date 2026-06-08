@@ -54,14 +54,19 @@ export type BillingDashboardFilters = {
   invoiceStatus?: string | null;
   cycleStatus?: string | null;
   search?: string | null;
+  section?: string | null;
 };
 
+type BillingDashboardSection = "lob" | "employees" | "hours" | "adjustments" | "rates" | "all";
 type BillingRates = Record<(typeof DEFAULT_RATE_CONFIGS)[number]["key"], number>;
 type InvoiceExtra = {
   status?: string;
   approvedByEmployeeAt?: Date;
   approvedByEmployeeUserId?: string;
 };
+type InvoiceCalculation = Awaited<ReturnType<typeof calculateEmployeeInvoice>>;
+
+const PERFORMANCE_DEBUG = process.env.PERFORMANCE_DEBUG === "true";
 
 export async function getBillingDashboard(actor: Actor, filters: BillingDashboardFilters = {}) {
   const user = await findActiveUser(actor.email);
@@ -71,20 +76,31 @@ export async function getBillingDashboard(actor: Actor, filters: BillingDashboar
   const referenceMonth = normalizeBillingMonth(filters.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
 
+  const startedAt = Date.now();
+  const section = normalizeBillingSection(filters.section);
   const [cycle, rates] = await Promise.all([
-    ensureBillingCycle(referenceMonth),
+    prisma.billingCycle.findUnique({ where: { referenceMonth } }),
     getBillingRates()
   ]);
-  const invoices = await syncBillingInvoicesForCycle(cycle.id, referenceMonth, cycle.status, rates, filters);
+  const invoices = await buildBillingInvoicesReadModel(referenceMonth, rates, cycle, filters, {
+    includeHourDetails: section === "hours" || section === "all"
+  });
   const filteredInvoices = filterInvoices(invoices, filters);
-  const summary = buildDashboardSummary(filteredInvoices, cycle.status);
+  const cycleStatus = cycle?.status ?? "ABERTO";
+  const summary = buildDashboardSummary(filteredInvoices, cycleStatus);
   const byLob = buildLobSummary(filteredInvoices);
-  const adjustments = await listCycleAdjustments(cycle.id);
-  const adjustmentRequests = await listInvoiceAdjustmentRequests(cycle.id);
-  const rateConfigs = await listBillingRateConfigs();
+  const [adjustments, adjustmentRequests, rateConfigs] = await Promise.all([
+    cycle && (section === "adjustments" || section === "all") ? listCycleAdjustments(cycle.id) : Promise.resolve([]),
+    cycle && (section === "adjustments" || section === "all") ? listInvoiceAdjustmentRequests(cycle.id) : Promise.resolve([]),
+    section === "rates" || section === "all" ? listBillingRateConfigs() : Promise.resolve([])
+  ]);
 
-  await updateCycleTotals(cycle.id, filteredInvoices);
-  const freshCycle = await prisma.billingCycle.findUnique({ where: { id: cycle.id } });
+  logPerformance("billing.dashboard", startedAt, {
+    referenceMonth,
+    section,
+    employees: filteredInvoices.length,
+    hasCycle: Boolean(cycle)
+  });
 
   return {
     data: {
@@ -93,7 +109,7 @@ export async function getBillingDashboard(actor: Actor, filters: BillingDashboar
       startDate: filters.startDate || monthPeriod(referenceMonth).startInput,
       endDate: filters.endDate || monthPeriod(referenceMonth).endInput,
       startMonth: BILLING_START_MONTH,
-      cycle: mapCycle(freshCycle ?? cycle),
+      cycle: mapCycle(cycle ?? virtualBillingCycle(referenceMonth)),
       summary,
       byLob,
       invoices: filteredInvoices,
@@ -254,13 +270,18 @@ export async function submitInvoiceAdjustmentRequest(actor: Actor, input: {
     select: { id: true }
   });
   if (duplicate) return { error: "Já existe uma solicitação de ajuste aberta para este ciclo.", status: 409 };
+  const requestType = await prisma.requestType.findUnique({
+    where: { name: BILLING_REQUEST_TYPE_NAME },
+    select: { id: true }
+  });
+  if (!requestType) {
+    return {
+      error: "Tipo de solicitação Ajuste de Invoice não está configurado. Rode as migrations/seeds antes de usar este fluxo.",
+      status: 500
+    };
+  }
 
   const created = await prisma.$transaction(async (tx) => {
-    const type = await tx.requestType.upsert({
-      where: { name: BILLING_REQUEST_TYPE_NAME },
-      update: { area: "Billing", requiresApproval: true },
-      create: { name: BILLING_REQUEST_TYPE_NAME, area: "Billing", slaHours: 48, requiresApproval: true }
-    });
     const request = await tx.request.create({
       data: {
         code: await nextRequestCode(tx),
@@ -268,7 +289,7 @@ export async function submitInvoiceAdjustmentRequest(actor: Actor, input: {
         description: input.description.trim(),
         requesterId: user.id,
         employeeId: user.employeeProfile!.id,
-        typeId: type.id,
+        typeId: requestType.id,
         assignedArea: "Supervisor",
         priority: "MEDIA",
         status: RequestStatus.ABERTO,
@@ -595,7 +616,7 @@ export async function createBillingAdjustment(actor: Actor, input: {
 }
 
 export async function exportBilling(actor: Actor, filters: BillingDashboardFilters = {}): Promise<XlsxExportPayload | { error: string; status?: number }> {
-  const result = await getBillingDashboard(actor, filters);
+  const result = await getBillingDashboard(actor, { ...filters, section: "all" });
   if ("error" in result) return result;
   const data = result.data;
 
@@ -648,14 +669,186 @@ export async function exportBilling(actor: Actor, filters: BillingDashboardFilte
   };
 }
 
-async function syncBillingInvoicesForCycle(cycleId: string, referenceMonth: string, cycleStatus: string, rates: BillingRates, filters: BillingDashboardFilters) {
+async function buildBillingInvoicesReadModel(
+  referenceMonth: string,
+  rates: BillingRates,
+  cycle: { id: string; status: string } | null,
+  filters: BillingDashboardFilters,
+  options: { includeHourDetails: boolean }
+) {
+  const startedAt = Date.now();
   const employees = await listBillingEmployees(filters);
-  const invoices = [];
+  const employeeIds = employees.map((employee) => employee.id);
+  if (!employeeIds.length) return [] as InvoiceCalculation[];
+
+  const period = monthPeriod(referenceMonth);
+  const today = startOfUtcDay(new Date());
+  const projectionStart = new Date(Math.max(period.start.getTime(), today.getTime() + 24 * 60 * 60 * 1000));
+  const lobIds = Array.from(new Set(employees.map((employee) => employee.lobId).filter(Boolean))) as string[];
+
+  const [workHours, schedules, advances, persistedInvoices] = await Promise.all([
+    prisma.workHourRecord.findMany({
+      where: {
+        employeeId: { in: employeeIds },
+        date: { gte: period.start, lte: period.end },
+        status: { in: BILLABLE_WORK_HOUR_STATUSES }
+      },
+      select: { employeeId: true, date: true, effectiveHours: true, status: true },
+      orderBy: { date: "asc" }
+    }),
+    projectionStart.getTime() <= period.end.getTime()
+      ? prisma.schedule.findMany({
+        where: {
+          employeeId: { in: employeeIds },
+          deletedAt: null,
+          date: { gte: projectionStart, lte: period.end },
+          status: { in: Array.from(PROJECTABLE_SCHEDULE_STATUSES) }
+        },
+        select: { employeeId: true, date: true, status: true, shift: { select: { name: true } } },
+        orderBy: { date: "asc" }
+      })
+      : Promise.resolve([]),
+    prisma.monthlyAdvanceRecord.findMany({
+      where: { employeeId: { in: employeeIds }, referenceMonth },
+      select: { employeeId: true, optIn: true, amount: true, finalAmount: true }
+    }),
+    cycle
+      ? prisma.billingEmployeeInvoice.findMany({
+        where: { billingCycleId: cycle.id, employeeId: { in: employeeIds } },
+        select: { id: true, employeeId: true, status: true, approvedByEmployeeAt: true, approvedByEmployeeUserId: true }
+      })
+      : Promise.resolve([])
+  ]);
+
+  const persistedByEmployee = new Map(persistedInvoices.map((invoice) => [invoice.employeeId, invoice]));
+  const invoiceEmployeeById = new Map(persistedInvoices.map((invoice) => [invoice.id, invoice.employeeId]));
+  const invoiceIds = persistedInvoices.map((invoice) => invoice.id);
+
+  const [adjustmentRows, openRequests] = cycle
+    ? await Promise.all([
+      prisma.billingAdjustment.findMany({
+        where: {
+          billingCycleId: cycle.id,
+          deletedAt: null,
+          OR: [
+            { employeeId: { in: employeeIds } },
+            ...(lobIds.length ? [{ lobId: { in: lobIds } }] : []),
+            ...(invoiceIds.length ? [{ employeeInvoiceId: { in: invoiceIds } }] : [])
+          ]
+        },
+        select: { id: true, type: true, amount: true, employeeId: true, lobId: true, employeeInvoiceId: true }
+      }),
+      invoiceIds.length
+        ? prisma.invoiceAdjustmentRequest.findMany({
+          where: { employeeInvoiceId: { in: invoiceIds }, status: { in: [...OPEN_ADJUSTMENT_STATUSES] } },
+          select: { employeeInvoiceId: true }
+        })
+        : Promise.resolve([])
+    ])
+    : [[], []];
+
+  const workHoursByEmployee = groupBy(workHours, (record) => record.employeeId);
+  const schedulesByEmployee = groupBy(schedules, (schedule) => schedule.employeeId);
+  const advanceByEmployee = new Map(advances.map((advance) => [advance.employeeId, advance]));
+  const openAdjustmentInvoiceIds = new Set(openRequests.map((request) => request.employeeInvoiceId));
+  const employeesByLob = new Map<string, string[]>();
   for (const employee of employees) {
-    const calculated = await calculateEmployeeInvoice(employee, referenceMonth, rates, cycleId, cycleStatus);
-    const invoice = await upsertEmployeeInvoice(cycleId, calculated);
-    invoices.push({ ...calculated, id: invoice.id, status: invoice.status, approvedByEmployeeAt: invoice.approvedByEmployeeAt ? formatDateTime(invoice.approvedByEmployeeAt) : "" });
+    if (!employee.lobId) continue;
+    employeesByLob.set(employee.lobId, [...(employeesByLob.get(employee.lobId) ?? []), employee.id]);
   }
+  const adjustmentsByEmployee = new Map<string, typeof adjustmentRows>();
+  for (const row of adjustmentRows) {
+    const targetEmployeeIds = row.employeeId
+      ? [row.employeeId]
+      : row.employeeInvoiceId
+        ? [invoiceEmployeeById.get(row.employeeInvoiceId)].filter(Boolean) as string[]
+        : row.lobId
+          ? (employeesByLob.get(row.lobId) ?? [])
+          : [];
+    for (const employeeId of targetEmployeeIds) {
+      adjustmentsByEmployee.set(employeeId, [...(adjustmentsByEmployee.get(employeeId) ?? []), row]);
+    }
+  }
+
+  const invoices: InvoiceCalculation[] = [];
+  for (const employee of employees) {
+    const rate = resolveHourlyRate(employee, rates);
+    const employeeWorkHours = workHoursByEmployee.get(employee.id) ?? [];
+    const approvedByDate = new Map(employeeWorkHours.map((record) => [dateKey(record.date), Math.max(0, Math.round(Number(record.effectiveHours ?? 0) * 60))]));
+    const approvedMinutes = Array.from(approvedByDate.values()).reduce((sum, minutes) => sum + minutes, 0);
+    const approvedDetails = options.includeHourDetails
+      ? employeeWorkHours.map((record) => ({
+        kind: "APPROVED" as const,
+        date: dateInput(record.date),
+        shift: employee.shift ? cleanShiftName(employee.shift.name) : "",
+        minutes: Math.max(0, Math.round(Number(record.effectiveHours ?? 0) * 60)),
+        amount: roundMoney(Math.max(0, Number(record.effectiveHours ?? 0)) * rate.hourlyRate)
+      }))
+      : [];
+    const projectedSchedules = (schedulesByEmployee.get(employee.id) ?? []).filter((schedule) => !approvedByDate.has(dateKey(schedule.date)));
+    const projectedMinutes = projectedSchedules.length * 480;
+    const projectedDetails = options.includeHourDetails
+      ? projectedSchedules.map((schedule) => ({
+        kind: "PROJECTED" as const,
+        date: dateInput(schedule.date),
+        shift: schedule.shift ? cleanShiftName(schedule.shift.name) : "",
+        minutes: 480,
+        amount: roundMoney(8 * rate.hourlyRate)
+      }))
+      : [];
+    const totalConsideredMinutes = approvedMinutes + projectedMinutes;
+    const grossAmount = roundMoney((totalConsideredMinutes / 60) * rate.hourlyRate);
+    const advance = advanceByEmployee.get(employee.id);
+    const adjustmentRowsForEmployee = adjustmentsByEmployee.get(employee.id) ?? [];
+    const persisted = persistedByEmployee.get(employee.id);
+    const status = persisted?.status ?? defaultInvoiceStatusForCycle(cycle?.status);
+    const advanceAmount = advance?.optIn ? roundMoney(Number(advance.finalAmount ?? advance.amount ?? MONTHLY_ADVANCE_FIXED_AMOUNT)) : 0;
+    const campaignAmount = roundMoney(adjustmentRowsForEmployee.filter((row) => normalizeComparableJobTitle(row.type) === "campanha").reduce((sum, row) => sum + Number(row.amount), 0));
+    const adjustmentAmount = roundMoney(adjustmentRowsForEmployee.filter((row) => normalizeComparableJobTitle(row.type) !== "campanha").reduce((sum, row) => sum + Number(row.amount), 0));
+    const finalAmount = roundMoney(grossAmount - advanceAmount + campaignAmount + adjustmentAmount);
+
+    invoices.push({
+      id: persisted?.id ?? "",
+      referenceMonth,
+      employeeId: employee.id,
+      employeeName: employee.fullName,
+      wbLogin: employee.wbLogin,
+      email: employee.user?.email ?? "",
+      employeeStatus: employee.operationalStatus ?? "",
+      lob: employee.lob?.name ?? "Sem LOB",
+      lobId: employee.lobId,
+      supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
+      supervisorId: employee.supervisorId ?? "",
+      skill: employee.skill ?? "",
+      officialShift: employee.shift ? cleanShiftName(employee.shift.name) : "Sem turno",
+      officialShiftId: employee.shiftId,
+      status,
+      statusLabel: invoiceStatusLabel(status),
+      approvedByEmployeeAt: persisted?.approvedByEmployeeAt ? formatDateTime(persisted.approvedByEmployeeAt) : "",
+      approvedMinutes,
+      projectedMinutes,
+      projectedDays: projectedSchedules.length,
+      totalConsideredMinutes,
+      hourlyRate: rate.hourlyRate,
+      billingRule: rate.billingRule,
+      grossAmount,
+      advanceAmount,
+      campaignAmount,
+      adjustmentAmount,
+      finalAmount,
+      hasOpenAdjustment: persisted ? openAdjustmentInvoiceIds.has(persisted.id) : false,
+      hourDetails: [...approvedDetails, ...projectedDetails]
+    });
+  }
+
+  logPerformance("billing.invoices.read_model", startedAt, {
+    employees: employees.length,
+    workHourRows: workHours.length,
+    scheduleRows: schedules.length,
+    adjustmentRows: adjustmentRows.length,
+    includeHourDetails: options.includeHourDetails
+  });
+
   return invoices;
 }
 
@@ -993,6 +1186,40 @@ function canEmployeeRequestAdjustment(cycleStatus: string | null | undefined, in
 
 function defaultInvoiceStatusForCycle(cycleStatus?: string | null) {
   return cycleStatus === "FINALIZADO_CONFERENCIA" ? "DISPONIVEL_APROVACAO" : "EM_PREVISAO";
+}
+
+function normalizeBillingSection(section?: string | null): BillingDashboardSection {
+  if (section === "employees" || section === "hours" || section === "adjustments" || section === "rates" || section === "all") return section;
+  return "lob";
+}
+
+function virtualBillingCycle(referenceMonth: string) {
+  return {
+    id: "",
+    referenceMonth,
+    status: "ABERTO",
+    grossAmount: 0,
+    adjustmentsAmount: 0,
+    finalAmount: 0,
+    totalApprovedMinutes: 0,
+    finalizedAt: null,
+    closedAt: null,
+    updatedAt: new Date()
+  };
+}
+
+function groupBy<T>(items: T[], keyOf: (item: T) => string) {
+  const grouped = new Map<string, T[]>();
+  for (const item of items) {
+    const key = keyOf(item);
+    grouped.set(key, [...(grouped.get(key) ?? []), item]);
+  }
+  return grouped;
+}
+
+function logPerformance(label: string, startedAt: number, details: Record<string, unknown>) {
+  if (!PERFORMANCE_DEBUG) return;
+  console.info("[performance]", { label, durationMs: Date.now() - startedAt, ...details });
 }
 
 function requireBillingAccess(user: ActiveUser | null) {

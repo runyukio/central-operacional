@@ -60,6 +60,13 @@ type BillingPayload = {
       finalAmount: number;
       approvedByEmployeeAt: string;
       hasOpenAdjustment: boolean;
+      hourDetails?: Array<{
+        kind: "APPROVED" | "PROJECTED";
+        date: string;
+        shift: string;
+        minutes: number;
+        amount: number;
+      }>;
     }>;
     adjustments: Array<{
       id: string;
@@ -113,11 +120,13 @@ export function BillingPage() {
   const [rateDraft, setRateDraft] = useState<Record<string, string>>({});
   const [adjustmentDraft, setAdjustmentDraft] = useState({ type: "Correção", description: "", amount: "", employeeInvoiceId: "" });
   const data = payload?.data;
+  const billingButtonClass = "inline-flex items-center justify-center gap-2 leading-none";
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     const params = new URLSearchParams({ referenceMonth });
+    params.set("section", activeTab);
     if (search.trim()) params.set("search", search.trim());
     if (employeeStatus !== "Ambos") params.set("employeeStatus", employeeStatus);
     if (invoiceStatus !== "Todos") params.set("invoiceStatus", invoiceStatus);
@@ -132,7 +141,7 @@ export function BillingPage() {
     } finally {
       setLoading(false);
     }
-  }, [referenceMonth, search, employeeStatus, invoiceStatus]);
+  }, [referenceMonth, search, employeeStatus, invoiceStatus, activeTab]);
 
   useEffect(() => {
     void load();
@@ -170,13 +179,17 @@ export function BillingPage() {
   }
 
   async function createAdjustment() {
+    const target = adjustmentDraft.employeeInvoiceId;
+    const employeeId = target.startsWith("employee:") ? target.replace("employee:", "") : null;
+    const employeeInvoiceId = target && !employeeId ? target : null;
     await postBilling({
       action: "create-adjustment",
       referenceMonth,
       type: adjustmentDraft.type,
       description: adjustmentDraft.description,
       amount: Number(adjustmentDraft.amount.replace(",", ".")),
-      employeeInvoiceId: adjustmentDraft.employeeInvoiceId || null
+      employeeInvoiceId,
+      employeeId
     }, "Ajuste manual criado.");
     setAdjustmentDraft({ type: "Correção", description: "", amount: "", employeeInvoiceId: "" });
   }
@@ -193,7 +206,7 @@ export function BillingPage() {
     return (
       <>
         <PageHeader title="Billing" description="Carregando cálculo mensal com base nas horas aprovadas." icon={CircleDollarSign} />
-        <EmptyState title="Carregando Billing" description="Buscando horas aprovadas, adiantamentos e ajustes do ciclo." />
+        <BillingSkeleton />
       </>
     );
   }
@@ -242,10 +255,10 @@ export function BillingPage() {
             <input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void load()} placeholder="Buscar colaborador" className="premium-control h-10 w-full px-3 text-sm font-bold" />
           </Label>
           <div className="flex items-end gap-2">
-            <button type="button" onClick={() => void load()} disabled={saving || loading} className="premium-button h-10 flex-1 px-3 text-sm font-extrabold">
+            <button type="button" onClick={() => void load()} disabled={saving || loading} className={cn("premium-button h-10 flex-1 px-3 text-sm font-extrabold", billingButtonClass)}>
               <RefreshCw className="h-4 w-4" /> Aplicar
             </button>
-            <a href={exportHref} className="premium-control inline-flex h-10 items-center gap-2 px-3 text-sm font-extrabold text-blue-700">
+            <a href={exportHref} className="premium-control inline-flex h-10 items-center justify-center gap-2 px-3 text-sm font-extrabold leading-none text-blue-700">
               <Download className="h-4 w-4" /> XLSX
             </a>
           </div>
@@ -280,7 +293,7 @@ export function BillingPage() {
                   ["adjustments", "Ajustes"],
                   ["rates", "Configurações de valores"]
                 ] as Array<[TabKey, string]>).map(([key, label]) => (
-                  <button key={key} type="button" onClick={() => setActiveTab(key)} className={cn("rounded-lg px-3 py-2 text-xs font-black", activeTab === key ? "bg-blue-600 text-white" : "text-muted hover:bg-blue-50 hover:text-blue-700")}>
+                  <button key={key} type="button" onClick={() => setActiveTab(key)} className={cn("inline-flex items-center justify-center rounded-lg px-3 py-2 text-xs font-black leading-none", activeTab === key ? "bg-blue-600 text-white" : "text-muted hover:bg-blue-50 hover:text-blue-700")}>
                     {label}
                   </button>
                 ))}
@@ -311,16 +324,16 @@ export function BillingPage() {
                   <InfoLine label="Valor final" value={formatCurrency(data.summary.finalAmount)} />
                 </div>
                 <div className="mt-3 grid gap-2">
-                  <button disabled={saving} onClick={() => postBilling({ action: "set-cycle-status", referenceMonth, status: "EM_REVISAO" }, "Ciclo marcado como Em revisão.")} className="premium-control h-9 px-3 text-xs font-black text-navy-950">Marcar em revisão</button>
-                  <button disabled={saving} onClick={() => postBilling({ action: "set-cycle-status", referenceMonth, status: "FINALIZADO_CONFERENCIA" }, "Ciclo liberado para conferência dos colaboradores.")} className="premium-button h-9 px-3 text-xs font-black">
+                  <button disabled={saving} onClick={() => postBilling({ action: "set-cycle-status", referenceMonth, status: "EM_REVISAO" }, "Ciclo marcado como Em revisão.")} className="premium-control inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none text-navy-950">Marcar em revisão</button>
+                  <button disabled={saving} onClick={() => postBilling({ action: "set-cycle-status", referenceMonth, status: "FINALIZADO_CONFERENCIA" }, "Ciclo liberado para conferência dos colaboradores.")} className="premium-button inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none">
                     <Send className="h-4 w-4" /> Liberar conferência
                   </button>
-                  <button disabled={saving} onClick={() => postBilling({ action: "set-cycle-status", referenceMonth, status: "FECHADO" }, "Ciclo fechado.")} className="premium-control h-9 px-3 text-xs font-black text-navy-950">Fechar ciclo</button>
+                  <button disabled={saving} onClick={() => postBilling({ action: "set-cycle-status", referenceMonth, status: "FECHADO" }, "Ciclo fechado.")} className="premium-control inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none text-navy-950">Fechar ciclo</button>
                 </div>
               </Panel>
               <Panel title="Exportar Billing">
                 <p className="text-sm font-semibold text-muted">Gera XLSX com Consolidado, Por LOB, Por Colaborador, Detalhamento de Horas, Ajustes, Aprovações e Configurações.</p>
-                <a href={exportHref} className="premium-button mt-3 inline-flex h-10 w-full items-center justify-center gap-2 px-3 text-sm font-extrabold">
+                <a href={exportHref} className="premium-button mt-3 inline-flex h-10 w-full items-center justify-center gap-2 px-3 text-sm font-extrabold leading-none">
                   <Download className="h-4 w-4" /> Exportar XLSX
                 </a>
               </Panel>
@@ -359,7 +372,7 @@ function EmployeeTable({ rows }: { rows: BillingPayload["data"]["invoices"] }) {
 }
 
 function HourDetailsTable({ rows }: { rows: BillingPayload["data"]["invoices"] }) {
-  const details = rows.flatMap((row) => (row as any).hourDetails?.map((detail: any) => [detail.date, row.employeeName, row.wbLogin, row.lob, detail.kind === "PROJECTED" ? "Projetado" : "Aprovado", minutesToHours(detail.minutes), formatCurrency(detail.amount)]) ?? []);
+  const details = rows.flatMap((row) => row.hourDetails?.map((detail) => [detail.date, row.employeeName, row.wbLogin, row.lob, detail.kind === "PROJECTED" ? "Projetado" : "Aprovado", minutesToHours(detail.minutes), formatCurrency(detail.amount)]) ?? []);
   return <Table columns={["Data", "Colaborador", "WB/Login", "LOB", "Tipo", "Horas", "Valor"]} rows={details} />;
 }
 
@@ -377,10 +390,10 @@ function AdjustmentForm({ draft, setDraft, invoices, saving, onSubmit }: { draft
         </select>
         <select value={draft.employeeInvoiceId} onChange={(event) => setDraft({ ...draft, employeeInvoiceId: event.target.value })} className="premium-control h-10 px-3 text-sm font-bold">
           <option value="">Ciclo/LOB geral</option>
-          {invoices.map((invoice) => <option key={invoice.id} value={invoice.id}>{invoice.employeeName}</option>)}
+          {invoices.map((invoice) => <option key={invoice.id || invoice.employeeId} value={invoice.id || `employee:${invoice.employeeId}`}>{invoice.employeeName}</option>)}
         </select>
         <input value={draft.amount} onChange={(event) => setDraft({ ...draft, amount: event.target.value })} placeholder="Valor R$" className="premium-control h-10 px-3 text-sm font-bold" />
-        <button disabled={saving} onClick={onSubmit} className="premium-button h-10 px-3 text-sm font-extrabold"><Save className="h-4 w-4" /> Criar ajuste</button>
+        <button disabled={saving} onClick={onSubmit} className="premium-button inline-flex h-10 items-center justify-center gap-2 px-3 text-sm font-extrabold leading-none"><Save className="h-4 w-4" /> Criar ajuste</button>
       </div>
       <textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Descrição do ajuste" className="premium-control mt-2 min-h-[72px] w-full px-3 py-2 text-sm font-semibold" />
     </div>
@@ -407,7 +420,26 @@ function RatesTable({ rows, draft, setDraft, saving, onSave }: { rows: BillingPa
           </label>
         ))}
       </div>
-      <button disabled={saving} onClick={onSave} className="premium-button h-10 px-4 text-sm font-extrabold"><Save className="h-4 w-4" /> Salvar valores</button>
+      <button disabled={saving} onClick={onSave} className="premium-button inline-flex h-10 items-center justify-center gap-2 px-4 text-sm font-extrabold leading-none"><Save className="h-4 w-4" /> Salvar valores</button>
+    </div>
+  );
+}
+
+function BillingSkeleton() {
+  return (
+    <div className="space-y-4">
+      <section className="card p-3">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          {Array.from({ length: 5 }).map((_, index) => <div key={index} className="h-14 animate-pulse rounded-xl bg-slate-100" />)}
+        </div>
+      </section>
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+        {Array.from({ length: 6 }).map((_, index) => <div key={index} className="h-24 animate-pulse rounded-xl border border-border bg-white" />)}
+      </div>
+      <div className="grid gap-3 xl:grid-cols-[1fr_360px]">
+        <div className="h-80 animate-pulse rounded-xl border border-border bg-white" />
+        <div className="h-80 animate-pulse rounded-xl border border-border bg-white" />
+      </div>
     </div>
   );
 }

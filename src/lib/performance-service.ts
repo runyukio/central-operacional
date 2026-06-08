@@ -87,6 +87,7 @@ type PerformanceMetrics = {
   qualityCorrect: number;
   qualityTotal: number;
   submit: number;
+  submitTotal: number;
   ahtSeconds: number;
   moderationSeconds: number;
   abs: number;
@@ -181,8 +182,8 @@ export async function getPerformanceDashboard(actor: Actor, query: PerformanceQu
       period: periodPayload(period),
       summary: {
         mine,
-        lobAverage: summarizeRows(lobRows),
-        operationAverage: summarizeRows(operationRows)
+        lobAverage: summarizeRows(lobRows, period),
+        operationAverage: summarizeRows(operationRows, period)
       },
       weekly: mine.weekly.map((week) => ({
         ...week,
@@ -208,7 +209,7 @@ export async function getPerformanceDashboard(actor: Actor, query: PerformanceQu
     canExport: canExportPerformance(permissionUser(user)),
     period: periodPayload(period),
     summary: {
-      ...summarizeRows(rows),
+      ...summarizeRows(rows, period),
       agentsWithData: rows.filter(hasAnyData).length,
       importedRows: imports.reduce((sum, item) => sum + item.rowsValid, 0),
       lastImport: imports[0] ? formatDateTime(imports[0].importedAt) : ""
@@ -591,28 +592,32 @@ export async function exportPerformanceXlsxData(actor: Actor, query: Performance
   return {
     fileName: `performance_wfh_${new Date().toISOString().slice(0, 10)}.xlsx`,
     sheetName: "Ranking",
-    headers: ["semana_inicio", "semana_fim", "agente", "wb_login", "status_colaborador", "lob_colaborador", "supervisor", "regra_qualidade_aplicada", "wfh_status", "submit_medio_dia", "qualidade", "numerador_qualidade", "denominador_qualidade", "submit", "aht_segundos", "aht_formatado", "abs", "faltas", "dias_escalados_validos"],
-    rows: dashboard.ranking.flatMap((agent) => agent.weekly.map((week) => [
-      week.weekStart,
-      week.weekEnd,
-      agent.employeeName,
-      agent.wbLogin,
-      agent.employeeStatus,
-      agent.lob,
-      agent.supervisor,
-      week.qualityRule,
-      agent.wfhStatusLabel,
-      agent.submitAveragePerDay,
-      `${week.quality}%`,
-      week.qualityNumerator,
-      week.qualityDenominator,
-      week.submit,
-      week.ahtSeconds,
-      formatAht(week.ahtSeconds),
-      `${week.abs}%`,
-      week.absences,
-      week.scheduledDays
-    ]))
+    headers: ["semana_inicio", "semana_fim", "agente", "wb_login", "status_colaborador", "lob_colaborador", "supervisor", "regra_qualidade_aplicada", "wfh_status", "submit_medio_dia", "submit_total", "dias_periodo", "qualidade", "numerador_qualidade", "denominador_qualidade", "aht_segundos", "aht_formatado", "abs", "faltas", "dias_escalados_validos"],
+    rows: dashboard.ranking.flatMap((agent) => agent.weekly.map((week) => {
+      const submit = calculateDailySubmit(week.submitTotal, parseDate(week.weekStart) ?? new Date(week.weekStart), parseDate(week.weekEnd) ?? new Date(week.weekEnd));
+      return [
+        week.weekStart,
+        week.weekEnd,
+        agent.employeeName,
+        agent.wbLogin,
+        agent.employeeStatus,
+        agent.lob,
+        agent.supervisor,
+        week.qualityRule,
+        agent.wfhStatusLabel,
+        week.submit,
+        week.submitTotal,
+        submit.daysCount,
+        `${week.quality}%`,
+        week.qualityNumerator,
+        week.qualityDenominator,
+        week.ahtSeconds,
+        formatAht(week.ahtSeconds),
+        `${week.abs}%`,
+        week.absences,
+        week.scheduledDays
+      ];
+    }))
   };
 }
 
@@ -825,7 +830,7 @@ async function buildAgentRows(employees: PerformanceEmployee[], period: Period) 
     const employeeQualityRecords = qualityRecords.filter((record) => record.employeeId === employee.id);
     const employeeTnsQualityRecords = tnsQualityRecords.filter((record) => record.employeeId === employee.id);
     const periodMetrics = {
-      ...summarizeWeeklyRows(weekly),
+      ...summarizeWeeklyRows(weekly, period),
       ...calculateQualityByRule(qualityRule, employeeQualityRecords, employeeTnsQualityRecords)
     };
     const wfhQualification = calculateWfhQualification(periodMetrics, period);
@@ -848,7 +853,7 @@ async function buildAgentRows(employees: PerformanceEmployee[], period: Period) 
 function buildWeeklyMetrics(employeeId: string, week: WeekRange, qualityRule: QualityRule, qualityRecords: QualityRecordForMetrics[], tnsQualityRecords: TnsQualityRecordForMetrics[], productionRecords: ProductionRecordForMetrics[], schedules: ScheduleRecordForMetrics[]): WeeklyMetricRow {
   const weekQualityRecords: QualityRecordForMetrics[] = [];
   const weekTnsQualityRecords: TnsQualityRecordForMetrics[] = [];
-  let submit = 0;
+  let submitTotal = 0;
   let moderationSeconds = 0;
   let absences = 0;
   let scheduledDays = 0;
@@ -862,7 +867,7 @@ function buildWeeklyMetrics(employeeId: string, week: WeekRange, qualityRule: Qu
   }
   for (const record of productionRecords) {
     if (record.employeeId !== employeeId || !isDateInRange(record.bzDay, week.start, week.end)) continue;
-    submit += record.submitNum;
+    submitTotal += record.submitNum;
     moderationSeconds += record.moderationSeconds;
   }
   for (const schedule of schedules) {
@@ -875,23 +880,25 @@ function buildWeeklyMetrics(employeeId: string, week: WeekRange, qualityRule: Qu
     weekEnd: formatDateKey(week.end),
     weekLabel: `${formatDisplayDate(week.start)} a ${formatDisplayDate(week.end)}`,
     ...calculateQualityByRule(qualityRule, weekQualityRecords, weekTnsQualityRecords),
-    submit,
+    submit: calculateDailySubmit(submitTotal, week.start, week.end).submitAveragePerDay,
+    submitTotal,
     moderationSeconds: round2(moderationSeconds),
-    ahtSeconds: submit > 0 ? round2(moderationSeconds / submit) : 0,
+    ahtSeconds: submitTotal > 0 ? round2(moderationSeconds / submitTotal) : 0,
     absences,
     scheduledDays,
     abs: percent(absences, scheduledDays)
   };
 }
 
-function summarizeRows(rows: AgentPerformanceRow[]) {
+function summarizeRows(rows: AgentPerformanceRow[], period: Period) {
   const qualityNumerator = rows.reduce((sum, row) => sum + row.qualityNumerator, 0);
   const qualityDenominator = rows.reduce((sum, row) => sum + row.qualityDenominator, 0);
-  const submit = rows.reduce((sum, row) => sum + row.submit, 0);
+  const submitTotal = rows.reduce((sum, row) => sum + row.submitTotal, 0);
   const moderationSeconds = rows.reduce((sum, row) => sum + row.moderationSeconds, 0);
   const absences = rows.reduce((sum, row) => sum + row.absences, 0);
   const scheduledDays = rows.reduce((sum, row) => sum + row.scheduledDays, 0);
   const qualityRule = summarizeQualityRule(rows.map((row) => row.qualityRule));
+  const submit = calculateDailySubmit(submitTotal, period.start, period.end);
   return {
     qualityRule,
     qualityNumerator,
@@ -900,9 +907,10 @@ function summarizeRows(rows: AgentPerformanceRow[]) {
     qualityCorrect: qualityNumerator,
     qualityTotal: qualityDenominator,
     quality: percent(qualityNumerator, qualityDenominator),
-    submit,
+    submit: submit.submitAveragePerDay,
+    submitTotal,
     moderationSeconds: round2(moderationSeconds),
-    ahtSeconds: submit > 0 ? round2(moderationSeconds / submit) : 0,
+    ahtSeconds: submitTotal > 0 ? round2(moderationSeconds / submitTotal) : 0,
     absences,
     scheduledDays,
     abs: percent(absences, scheduledDays)
@@ -978,14 +986,16 @@ function isCorrectQualityResult(value?: string | null) {
   return value?.trim().toLowerCase() === "correct";
 }
 
-function summarizeWeeklyRows(rows: WeeklyMetricRow[]): PerformanceMetrics {
+function summarizeWeeklyRows(rows: WeeklyMetricRow[], period?: Period): PerformanceMetrics {
   const qualityNumerator = rows.reduce((sum, row) => sum + row.qualityNumerator, 0);
   const qualityDenominator = rows.reduce((sum, row) => sum + row.qualityDenominator, 0);
-  const submit = rows.reduce((sum, row) => sum + row.submit, 0);
+  const submitTotal = rows.reduce((sum, row) => sum + row.submitTotal, 0);
   const moderationSeconds = rows.reduce((sum, row) => sum + row.moderationSeconds, 0);
   const absences = rows.reduce((sum, row) => sum + row.absences, 0);
   const scheduledDays = rows.reduce((sum, row) => sum + row.scheduledDays, 0);
   const qualityRule = summarizeQualityRule(rows.map((row) => row.qualityRule));
+  const range = period ?? weeklyRowsPeriod(rows);
+  const submit = range ? calculateDailySubmit(submitTotal, range.start, range.end) : { submitAveragePerDay: 0, daysCount: 0 };
   return {
     qualityRule,
     qualityNumerator,
@@ -994,9 +1004,10 @@ function summarizeWeeklyRows(rows: WeeklyMetricRow[]): PerformanceMetrics {
     qualityCorrect: qualityNumerator,
     qualityTotal: qualityDenominator,
     quality: percent(qualityNumerator, qualityDenominator),
-    submit,
+    submit: submit.submitAveragePerDay,
+    submitTotal,
     moderationSeconds: round2(moderationSeconds),
-    ahtSeconds: submit > 0 ? round2(moderationSeconds / submit) : 0,
+    ahtSeconds: submitTotal > 0 ? round2(moderationSeconds / submitTotal) : 0,
     absences,
     scheduledDays,
     abs: percent(absences, scheduledDays)
@@ -1016,8 +1027,7 @@ function buildWeeklyEvolution(rows: AgentPerformanceRow[], period: Period) {
 }
 
 function calculateWfhQualification(metrics: Pick<PerformanceMetrics, "quality" | "submit" | "ahtSeconds" | "abs">, period: Period) {
-  const days = daysInPeriod(period);
-  const submitAveragePerDay = days > 0 ? round2(metrics.submit / days) : 0;
+  const submitAveragePerDay = Number.isFinite(metrics.submit) ? round2(metrics.submit) : 0;
   const failedCriteria: string[] = [];
   if (!isValidMetric(metrics.quality) || metrics.quality < 95) failedCriteria.push("Qualidade < 95%");
   if (!isValidMetric(metrics.abs) || metrics.abs > 5) failedCriteria.push("ABS > 5%");
@@ -1029,6 +1039,25 @@ function calculateWfhQualification(metrics: Pick<PerformanceMetrics, "quality" |
     wfhStatusLabel: wfhStatus === "QUALIFIED" ? "Qualificado" : "Não-qualificado",
     submitAveragePerDay,
     wfhFailedCriteria: failedCriteria
+  };
+}
+
+export function calculateDailySubmit(totalSubmit: number, startDate: Date, endDate: Date) {
+  const safeTotal = Number.isFinite(Number(totalSubmit)) ? Number(totalSubmit) : 0;
+  const daysCount = daysInPeriod({ start: startDate, end: endDate });
+  return {
+    submitAveragePerDay: daysCount > 0 ? round2(safeTotal / daysCount) : 0,
+    daysCount
+  };
+}
+
+function weeklyRowsPeriod(rows: WeeklyMetricRow[]): Period | null {
+  const starts = rows.map((row) => parseDate(row.weekStart)).filter((date): date is Date => Boolean(date));
+  const ends = rows.map((row) => parseDate(row.weekEnd)).filter((date): date is Date => Boolean(date));
+  if (!starts.length || !ends.length) return null;
+  return {
+    start: new Date(Math.min(...starts.map((date) => date.getTime()))),
+    end: new Date(Math.max(...ends.map((date) => date.getTime())))
   };
 }
 
@@ -1068,7 +1097,7 @@ function sortAgentRows(rows: AgentPerformanceRow[], query: PerformanceQuery) {
 
 function sortablePerformanceValue(row: AgentPerformanceRow, sortBy: PerformanceSortBy) {
   if (sortBy === "quality") return row.qualityDenominator > 0 ? row.quality : Number.NaN;
-  if (sortBy === "aht") return row.submit > 0 ? row.ahtSeconds : Number.NaN;
+  if (sortBy === "aht") return row.submitTotal > 0 ? row.ahtSeconds : Number.NaN;
   if (sortBy === "abs") return row.scheduledDays > 0 ? row.abs : Number.NaN;
   return row[sortBy];
 }
@@ -1097,11 +1126,11 @@ function emptyAgentRow(employee: PerformanceEmployee, period: Period): AgentPerf
 }
 
 function emptyMetrics(qualityRule: QualityRule = "UNKNOWN"): PerformanceMetrics {
-  return { ...emptyQualityMetrics(qualityRule), submit: 0, ahtSeconds: 0, moderationSeconds: 0, abs: 0, absences: 0, scheduledDays: 0 };
+  return { ...emptyQualityMetrics(qualityRule), submit: 0, submitTotal: 0, ahtSeconds: 0, moderationSeconds: 0, abs: 0, absences: 0, scheduledDays: 0 };
 }
 
 function hasAnyData(row: AgentPerformanceRow) {
-  return row.qualityTotal > 0 || row.submit > 0 || row.scheduledDays > 0;
+  return row.qualityTotal > 0 || row.submitTotal > 0 || row.scheduledDays > 0;
 }
 
 async function markExistingQualityRows(previewRows: PerformancePreviewRow[]) {

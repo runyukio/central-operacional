@@ -10338,8 +10338,8 @@ export function PerformancePage() {
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <StatCard title="Minha Qualidade" value={formatPerformancePercent(minePayload.summary.mine.quality)} helper={`${minePayload.summary.mine.qualityCorrect}/${minePayload.summary.mine.qualityTotal} tasks distintas`} icon={ShieldCheck} tone="green" />
             <StatCard title="Qualidade média LOB" value={formatPerformancePercent(minePayload.summary.lobAverage.quality)} helper="consolidado sem nomes" icon={UsersRound} tone="blue" />
-            <StatCard title="Meu Submit" value={formatPerformanceNumber(minePayload.summary.mine.submit)} helper="casos moderados" icon={FileSpreadsheet} tone="purple" />
-            <StatCard title="Submit médio LOB" value={formatPerformanceNumber(minePayload.summary.lobAverage.submit)} helper="consolidado da LOB" icon={ClipboardList} tone="cyan" />
+            <StatCard title="Meu Submit/dia" value={formatPerformanceNumber(minePayload.summary.mine.submit)} helper="média diária" icon={FileSpreadsheet} tone="purple" />
+            <StatCard title="Submit/dia LOB" value={formatPerformanceNumber(minePayload.summary.lobAverage.submit)} helper="média diária da LOB" icon={ClipboardList} tone="cyan" />
             <StatCard title="Meu AHT" value={formatPerformanceAht(minePayload.summary.mine.ahtSeconds)} helper="moderação / submits" icon={Clock} tone="orange" />
             <StatCard title="AHT médio LOB" value={formatPerformanceAht(minePayload.summary.lobAverage.ahtSeconds)} helper="consolidado da LOB" icon={Target} tone="gold" />
             <StatCard title="Meu ABS" value={formatPerformancePercent(minePayload.summary.mine.abs)} helper={`${minePayload.summary.mine.absences}/${minePayload.summary.mine.scheduledDays} dias`} icon={AlertTriangle} tone={minePayload.summary.mine.abs > 0 ? "red" : "green"} />
@@ -10364,7 +10364,7 @@ export function PerformancePage() {
                 </div>
               </Panel>
               <Panel title="Tabela semanal">
-                <SimpleTable columns={["Semana", "Qualidade", "Submit", "AHT", "ABS"]} rows={minePayload.summary.mine.weekly.map((week) => [week.weekLabel, formatPerformancePercent(week.quality), formatPerformanceNumber(week.submit), formatPerformanceAht(week.ahtSeconds), formatPerformancePercent(week.abs)])} />
+                <SimpleTable columns={["Semana", "Qualidade", "Submit/dia", "AHT", "ABS"]} rows={minePayload.summary.mine.weekly.map((week) => [week.weekLabel, formatPerformancePercent(week.quality), formatPerformanceNumber(week.submit), formatPerformanceAht(week.ahtSeconds), formatPerformancePercent(week.abs)])} />
               </Panel>
             </div>
           ) : (
@@ -10378,7 +10378,7 @@ export function PerformancePage() {
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7">
             <PerformanceMetricCard title="Qualidade média" value={formatPerformancePercent(wfhPayload.summary.quality)} helper={`${wfhPayload.summary.qualityCorrect}/${wfhPayload.summary.qualityTotal} tasks`} icon={ShieldCheck} tone="green" />
             <PerformanceMetricCard title="AHT médio" value={formatPerformanceAht(wfhPayload.summary.ahtSeconds)} helper="moderação / submit" icon={Clock} tone="orange" />
-            <PerformanceMetricCard title="Submit total" value={formatPerformanceNumber(wfhPayload.summary.submit)} helper="casos no período" icon={FileSpreadsheet} tone="purple" />
+            <PerformanceMetricCard title="Submit diário" value={formatPerformanceNumber(wfhPayload.summary.submit)} helper="média diária" icon={FileSpreadsheet} tone="purple" />
             <PerformanceMetricCard title="ABS médio" value={formatPerformancePercent(wfhPayload.summary.abs)} helper={`${wfhPayload.summary.absences}/${wfhPayload.summary.scheduledDays} dias`} icon={AlertTriangle} tone={wfhPayload.summary.abs > 0 ? "red" : "green"} />
             <PerformanceMetricCard title="Agentes com dados" value={wfhPayload.summary.agentsWithData} helper="base filtrada" icon={UsersRound} tone="blue" />
             <PerformanceMetricCard title="Linhas importadas" value={formatPerformanceNumber(wfhPayload.summary.importedRows)} helper="últimos lotes" icon={Upload} tone="cyan" />
@@ -10436,7 +10436,7 @@ export function PerformancePage() {
                     </div>
                     <p className="mt-2 text-xs font-bold text-muted">Status: {selectedAgent.employeeStatus || "-"} · Submit médio/dia: {formatPerformanceNumber(selectedAgent.submitAveragePerDay)}</p>
                   </div>
-                  <SimpleTable columns={["Semana", "Regra", "Qualidade", "Submit", "AHT", "ABS"]} rows={selectedAgent.weekly.map((week) => [week.weekLabel, performanceQualityRuleLabel(week.qualityRule), formatPerformancePercent(week.quality), formatPerformanceNumber(week.submit), formatPerformanceAht(week.ahtSeconds), formatPerformancePercent(week.abs)])} />
+                  <SimpleTable columns={["Semana", "Regra", "Qualidade", "Submit/dia", "AHT", "ABS"]} rows={selectedAgent.weekly.map((week) => [week.weekLabel, performanceQualityRuleLabel(week.qualityRule), formatPerformancePercent(week.quality), formatPerformanceNumber(week.submit), formatPerformanceAht(week.ahtSeconds), formatPerformancePercent(week.abs)])} />
                 </div>
               ) : (
                 <EmptyState title="Selecione um agente" description="Clique em um nome do ranking para abrir o histórico semanal individual." />
@@ -10535,7 +10535,7 @@ function PerformanceRankingTable({ rows, sort, onSort, onSelect }: { rows: Agent
     { key: "rule", label: "Regra" },
     { key: "supervisor", label: "Supervisor" },
     { key: "quality", label: "Qualidade", sortBy: "quality", align: "right" },
-    { key: "submit", label: "Submit", sortBy: "submit", align: "right" },
+    { key: "submit", label: "Submit/dia", sortBy: "submit", align: "right" },
     { key: "aht", label: "AHT", sortBy: "aht", align: "right" },
     { key: "abs", label: "ABS", sortBy: "abs", align: "right" }
   ];
@@ -10746,6 +10746,7 @@ type PerformanceMetricSummary = {
   qualityCorrect: number;
   qualityTotal: number;
   submit: number;
+  submitTotal: number;
   ahtSeconds: number;
   moderationSeconds: number;
   abs: number;
@@ -10879,7 +10880,7 @@ function formatPerformanceAht(seconds: number) {
 }
 
 function performanceMetricLabel(key: string) {
-  const map: Record<string, string> = { quality: "Qualidade", submit: "Submit", ahtSeconds: "AHT", abs: "ABS" };
+  const map: Record<string, string> = { quality: "Qualidade", submit: "Submit/dia", ahtSeconds: "AHT", abs: "ABS" };
   return map[key] ?? key;
 }
 

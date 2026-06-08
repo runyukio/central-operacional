@@ -224,6 +224,7 @@ async function buildScheduleSummary(employeeId: string, period: Period) {
 
   return {
     periodLabel: monthLabel(period.start),
+    referenceMonth: formatDateInput(period.start).slice(0, 7),
     scheduledDays: schedules.filter((item) => scheduledStatuses.has(item.status)).length,
     presentDays: schedules.filter((item) => presentStatuses.has(item.status)).length,
     absenceDays: schedules.filter((item) => absenceStatuses.has(item.status)).length,

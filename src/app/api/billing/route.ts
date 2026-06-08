@@ -24,7 +24,8 @@ export async function GET(request: Request) {
     employeeStatus: url.searchParams.get("employeeStatus"),
     invoiceStatus: url.searchParams.get("invoiceStatus"),
     cycleStatus: url.searchParams.get("cycleStatus"),
-    search: url.searchParams.get("search")
+    search: url.searchParams.get("search"),
+    section: url.searchParams.get("section")
   });
   if ("error" in result) return NextResponse.json({ error: result.error, message: result.error }, { status: result.status ?? 400 });
   return NextResponse.json(result);

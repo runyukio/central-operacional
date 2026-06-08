@@ -11,7 +11,6 @@ import {
   Mail,
   MapPin,
   ShieldCheck,
-  Target,
   UserCircle
 } from "lucide-react";
 
@@ -69,6 +68,7 @@ type ProfilePayload = {
     };
     schedule: {
       periodLabel: string;
+      referenceMonth: string;
       scheduledDays: number;
       presentDays: number;
       absenceDays: number;
@@ -222,13 +222,13 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <StatCard title="Qualidade" value={data.performance ? formatPercent(data.performance.quality) : "-"} helper={qualityRuleLabel(data.performance?.qualityRule)} icon={ShieldCheck} tone="green" />
-        <StatCard title="Submit" value={data.performance ? formatNumber(data.performance.submit) : "-"} helper="período atual" icon={ClipboardList} tone="purple" />
+        <StatCard title="Submit/dia" value={data.performance ? formatNumber(data.performance.submit) : "-"} helper="média diária" icon={ClipboardList} tone="purple" />
         <StatCard title="AHT" value={data.performance ? formatAht(data.performance.ahtSeconds) : "-"} helper="médio" icon={Clock} tone="orange" />
         <StatCard title="ABS" value={data.performance ? formatPercent(data.performance.abs) : "-"} helper={`${data.schedule.absenceDays}/${data.schedule.scheduledDays} dias`} icon={AlertTriangle} tone={(data.performance?.abs ?? 0) > 0 ? "red" : "green"} />
-        <StatCard title="WFH" value={data.performance?.wfhStatusLabel || "Sem dados"} helper="critérios do período" icon={Target} tone={data.performance?.wfhStatus === "QUALIFIED" ? "green" : "red"} />
+        <StatCard title="Feedback / Humor" value={data.mood.responses ? data.mood.label : "Sem registros"} helper={`${data.mood.responses} resposta(s) no mês`} icon={HeartPulse} tone="orange" />
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-3">
+      <div className="grid gap-4 xl:grid-cols-[0.95fr_1.2fr_1fr]">
         <Panel title="Dados Operacionais">
           <div className="grid gap-2 text-sm sm:grid-cols-2">
             <InfoLine label="Cargo/Função" value={data.employee.roleTitle} />
@@ -242,7 +242,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
           </div>
         </Panel>
 
-        <Panel title={`Cronograma (${data.schedule.periodLabel})`} action="Ver completo">
+        <Panel title={`Cronograma (${data.schedule.periodLabel})`} action="Ver completo" actionOnClick={() => window.location.assign(`/meu-cronograma?month=${encodeURIComponent(data.schedule.referenceMonth)}`)}>
           <div className="grid gap-2 sm:grid-cols-3">
             <MetricBox label="Escalados" value={data.schedule.scheduledDays} />
             <MetricBox label="Presentes" value={data.schedule.presentDays} />
@@ -274,7 +274,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
         </Panel>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-3">
+      <div className={cn("grid gap-4", data.billing ? "xl:grid-cols-2 2xl:grid-cols-4" : "xl:grid-cols-3")}>
         {data.billing ? (
           <Panel title="Prévia de Invoice" action="Ver detalhes" actionOnClick={() => window.location.assign("/meu-perfil/invoice")}>
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -302,7 +302,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
           {data.performance ? (
             <div className="grid gap-2 text-sm sm:grid-cols-2">
               <InfoLine label="Qualidade" value={formatPercent(data.performance.quality)} />
-              <InfoLine label="Submit" value={formatNumber(data.performance.submit)} />
+              <InfoLine label="Submit/dia" value={formatNumber(data.performance.submit)} />
               <InfoLine label="AHT" value={formatAht(data.performance.ahtSeconds)} />
               <InfoLine label="ABS" value={formatPercent(data.performance.abs)} />
               <InfoLine label="WFH" value={<WfhBadge status={data.performance.wfhStatus} label={data.performance.wfhStatusLabel} />} />
@@ -441,11 +441,14 @@ function MetricBox({ label, value, tone = "blue" }: { label: string; value: Reac
 
 function ScheduleChip({ day }: { day: { day: string; weekday: string; status: string; date: string } }) {
   const tone = scheduleTone(day.status);
+  const shortStatus = abbreviateScheduleStatus(day.status);
   return (
-    <div title={`${day.date} • ${day.status}`} className={cn("min-h-[64px] rounded-lg border p-2 text-center", tone)}>
-      <p className="text-[10px] font-black uppercase tracking-wide opacity-70">{day.weekday}</p>
-      <p className="text-base font-black leading-none">{day.day}</p>
-      <p className="mt-1 line-clamp-2 text-[10px] font-extrabold leading-[11px]">{day.status}</p>
+    <div title={`${day.date} • ${day.status}`} className={cn("grid h-[76px] min-w-0 place-items-center overflow-hidden rounded-lg border p-1.5 text-center", tone)}>
+      <div className="min-w-0">
+        <p className="truncate text-[9px] font-black uppercase leading-none tracking-wide opacity-70">{day.weekday}</p>
+        <p className="mt-1 text-base font-black leading-none">{day.day}</p>
+        <p className="mx-auto mt-1 line-clamp-2 max-w-full text-[10px] font-extrabold leading-[11px]">{shortStatus}</p>
+      </div>
     </div>
   );
 }
@@ -465,6 +468,25 @@ function scheduleTone(status: string) {
   if (normalized.includes("folga")) return "border-slate-200 bg-slate-50 text-slate-700";
   if (normalized.includes("escalado")) return "border-blue-200 bg-blue-50 text-blue-700";
   return "border-slate-200 bg-slate-50 text-slate-700";
+}
+
+function abbreviateScheduleStatus(status: string) {
+  const normalized = status.toLowerCase();
+  if (normalized.includes("presente")) return "Pres.";
+  if (normalized.includes("escalado")) return "Escal.";
+  if (normalized.includes("falta justificada")) return "F. Just.";
+  if (normalized.includes("falta injustificada")) return "F. Injust.";
+  if (normalized.includes("falta")) return "Falta";
+  if (normalized.includes("venda")) return "Venda";
+  if (normalized.includes("troca")) return "Troca";
+  if (normalized.includes("sem cronograma")) return "Sem cron.";
+  if (normalized.includes("folga aprovada")) return "Folga aprov.";
+  if (normalized.includes("folga")) return "Folga";
+  if (normalized.includes("férias") || normalized.includes("ferias")) return "Férias";
+  if (normalized.includes("afastado")) return "Afast.";
+  if (normalized.includes("treinamento")) return "Trein.";
+  if (normalized.includes("nesting")) return "Nesting";
+  return status;
 }
 
 function formatPercent(value: number) {
