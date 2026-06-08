@@ -28,14 +28,14 @@ export default function LoginPage() {
       email,
       password,
       redirect: false,
-      callbackUrl: "/central-operacional"
+      callbackUrl: "/"
     });
     setLoading(false);
     if (result?.error) {
       setError("E-mail ou senha inválidos.");
       return;
     }
-    router.push(result?.url ?? "/central-operacional");
+    router.push(result?.url ?? "/");
     router.refresh();
   }
 

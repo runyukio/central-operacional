@@ -2,7 +2,7 @@ import { getToken } from "next-auth/jwt";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-import { getDefaultPathForRole, navItems } from "@/lib/navigation";
+import { canAccessPathForRole, getDefaultPathForRole } from "@/lib/navigation";
 
 export async function middleware(request: NextRequest) {
   const token = await getToken({ req: request });
@@ -19,9 +19,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL("/alterar-senha", request.url));
   }
 
-  const protectedItem = navItems.find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
-
-  if (protectedItem && !protectedItem.roles.includes(role as never)) {
+  if (!canAccessPathForRole(pathname, role)) {
     return NextResponse.redirect(new URL(getDefaultPathForRole(role), request.url));
   }
 

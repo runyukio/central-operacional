@@ -1,0 +1,449 @@
+"use client";
+
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import {
+  AlertTriangle,
+  ClipboardList,
+  Clock,
+  HeartPulse,
+  Laptop,
+  Mail,
+  MapPin,
+  ShieldCheck,
+  Target,
+  UserCircle
+} from "lucide-react";
+
+import { EmptyState, PageHeader, Panel, StatCard, StatusBadge } from "@/components/ui/primitives";
+import { cn } from "@/lib/utils";
+
+type ProfilePayload = {
+  data: {
+    viewer: {
+      role: string;
+      isOwnProfile: boolean;
+      canViewDiversityData: boolean;
+      canViewSensitiveData: boolean;
+    };
+    employee: {
+      id: string;
+      name: string;
+      socialName: string;
+      initials: string;
+      wbLogin: string;
+      email: string;
+      roleTitle: string;
+      lob: string;
+      team: string;
+      supervisor: string;
+      shift: string;
+      skill: string;
+      wave: string;
+      status: string;
+      userStatus: string;
+      systemRole: string;
+      admissionDate: string;
+      terminationDate: string;
+      terminationType: string;
+      terminationReason: string;
+      contractType: string;
+      primaryPhone: string;
+      city: string;
+      stateUf: string;
+      workStartTime: string;
+      workEndTime: string;
+      nestingStartDate: string;
+      goLiveDate: string;
+      additionalDataCompletedAt: string;
+      additionalData: null | {
+        ethnicity: string;
+        sexualOrientation: string;
+        isPcd: string;
+        pcdDisabilityType: string;
+        pcdDisabilityOther: string;
+        firstJob: string;
+        hasTelemarketingExperience: string;
+        telemarketingWhere: string;
+      };
+    };
+    schedule: {
+      periodLabel: string;
+      scheduledDays: number;
+      presentDays: number;
+      absenceDays: number;
+      nextShift: null | { date: string; status: string; shift: string; startsAt: string; endsAt: string };
+      days: Array<{ id: string; date: string; day: string; weekday: string; status: string; shift: string }>;
+    };
+    workHours: {
+      periodLabel: string;
+      plannedHours: string;
+      actualHours: string;
+      difference: string;
+      pendingAdjustments: number;
+      lastRecordAt: string;
+    };
+    performance: null | {
+      quality: number;
+      submit: number;
+      ahtSeconds: number;
+      abs: number;
+      wfhStatus: string;
+      wfhStatusLabel: string;
+      qualityRule: string;
+    };
+    requests: {
+      open: number;
+      inAnalysis: number;
+      recent: Array<{ id: string; code: string; title: string; type: string; status: string; createdAt: string }>;
+    };
+    equipments: {
+      total: number;
+      items: Array<{ id: string; type: string; model: string; serial: string; status: string; deliveredAt: string }>;
+    };
+    mood: {
+      average: number;
+      responses: number;
+      label: string;
+      lastResponseAt: string;
+      lastLabel: string;
+    };
+    updatedAt: string;
+  };
+};
+
+export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
+  const [payload, setPayload] = useState<ProfilePayload | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError("");
+    const url = employeeId ? `/api/employees/${encodeURIComponent(employeeId)}/profile` : "/api/employees/me/profile";
+    fetch(url, { cache: "no-store" })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error ?? data.message ?? "Não foi possível carregar o perfil.");
+        return data as ProfilePayload;
+      })
+      .then((data) => {
+        if (active) setPayload(data);
+      })
+      .catch((err) => {
+        if (active) setError(err instanceof Error ? err.message : "Não foi possível carregar o perfil.");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [employeeId]);
+
+  const data = payload?.data;
+  const title = data?.viewer.isOwnProfile ? "Meu Perfil" : "Perfil do Colaborador";
+  const statusTone = data?.employee.status.toLowerCase().includes("deslig") || data?.employee.status.toLowerCase().includes("inativo") ? "bg-slate-100 text-slate-600" : "bg-emerald-50 text-emerald-700";
+
+  if (loading) {
+    return (
+      <>
+        <PageHeader title="Meu Perfil" description="Carregando informações consolidadas." icon={UserCircle} />
+        <EmptyState title="Carregando perfil" description="Buscando dados reais do colaborador, cronograma e indicadores." />
+      </>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <>
+        <PageHeader title="Meu Perfil" description="Não foi possível abrir o perfil solicitado." icon={UserCircle} />
+        <EmptyState title="Acesso indisponível" description={error || "Você não tem permissão para visualizar este perfil."} />
+      </>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <PageHeader
+        title={title}
+        description={data.viewer.isOwnProfile ? "Seus dados e informações consolidadas." : "Resumo operacional do colaborador selecionado."}
+        icon={UserCircle}
+        actions={data.viewer.isOwnProfile ? <Link href="/meus-dados/adicionais" className="premium-control inline-flex h-9 items-center px-3 text-xs font-extrabold text-blue-700">Atualizar dados adicionais</Link> : null}
+      />
+
+      <section className="card overflow-hidden">
+        <div className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex min-w-0 items-center gap-3.5">
+            <div className="relative grid h-20 w-20 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-blue-600 to-blue-700 text-2xl font-black text-white shadow-lg shadow-blue-950/20">
+              {data.employee.initials}
+              <span className="absolute -bottom-1 -right-1 h-4 w-4 rounded-full border-2 border-white bg-emerald-500" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <h2 className="min-w-0 break-words text-2xl font-black leading-tight text-navy-950">{data.employee.name}</h2>
+                <span className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-extrabold text-blue-700">{data.employee.roleTitle}</span>
+              </div>
+              {data.employee.socialName ? <p className="mt-1 text-sm font-semibold text-muted">Nome social: {data.employee.socialName}</p> : null}
+              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs font-bold text-muted">
+                <span>{data.employee.wbLogin}</span>
+                <span className="inline-flex items-center gap-1"><Mail className="h-3.5 w-3.5" /> {data.employee.email || "Sem e-mail"}</span>
+                <span className="inline-flex items-center gap-1"><MapPin className="h-3.5 w-3.5" /> {data.employee.lob}</span>
+                <span>Supervisor: {data.employee.supervisor}</span>
+              </div>
+            </div>
+          </div>
+          <div className="grid gap-2 text-sm sm:grid-cols-2 lg:min-w-[260px]">
+            <CompactInfo label="Status" value={<span className={cn("inline-flex rounded-md px-2 py-1 text-xs font-black", statusTone)}>{data.employee.status}</span>} />
+            <CompactInfo label="Usuário" value={data.employee.userStatus} />
+            <CompactInfo label="Admissão" value={data.employee.admissionDate || "Não informado"} />
+            <CompactInfo label="Turno" value={data.employee.shift} />
+          </div>
+        </div>
+      </section>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <StatCard title="Qualidade" value={data.performance ? formatPercent(data.performance.quality) : "-"} helper={qualityRuleLabel(data.performance?.qualityRule)} icon={ShieldCheck} tone="green" />
+        <StatCard title="Submit" value={data.performance ? formatNumber(data.performance.submit) : "-"} helper="período atual" icon={ClipboardList} tone="purple" />
+        <StatCard title="AHT" value={data.performance ? formatAht(data.performance.ahtSeconds) : "-"} helper="médio" icon={Clock} tone="orange" />
+        <StatCard title="ABS" value={data.performance ? formatPercent(data.performance.abs) : "-"} helper={`${data.schedule.absenceDays}/${data.schedule.scheduledDays} dias`} icon={AlertTriangle} tone={(data.performance?.abs ?? 0) > 0 ? "red" : "green"} />
+        <StatCard title="WFH" value={data.performance?.wfhStatusLabel || "Sem dados"} helper="critérios do período" icon={Target} tone={data.performance?.wfhStatus === "QUALIFIED" ? "green" : "red"} />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-3">
+        <Panel title="Dados Operacionais">
+          <div className="grid gap-2 text-sm sm:grid-cols-2">
+            <InfoLine label="Cargo/Função" value={data.employee.roleTitle} />
+            <InfoLine label="LOB" value={data.employee.lob} />
+            <InfoLine label="Time" value={data.employee.team} />
+            <InfoLine label="Skill" value={data.employee.skill} />
+            <InfoLine label="Wave" value={data.employee.wave} />
+            <InfoLine label="Entrada" value={data.employee.workStartTime || "Não informado"} />
+            <InfoLine label="Saída" value={data.employee.workEndTime || "Não informado"} />
+            <InfoLine label="Go Live" value={data.employee.goLiveDate || "Não informado"} />
+          </div>
+        </Panel>
+
+        <Panel title={`Cronograma (${data.schedule.periodLabel})`} action="Ver completo">
+          <div className="grid gap-2 sm:grid-cols-3">
+            <MetricBox label="Escalados" value={data.schedule.scheduledDays} />
+            <MetricBox label="Presentes" value={data.schedule.presentDays} />
+            <MetricBox label="Faltas" value={data.schedule.absenceDays} />
+          </div>
+          <div className="mt-3 rounded-lg border border-border bg-slate-50 p-3 text-sm">
+            <p className="text-xs font-black uppercase tracking-wide text-muted">Próximo turno</p>
+            {data.schedule.nextShift ? (
+              <p className="mt-1 font-bold text-navy-950">
+                {data.schedule.nextShift.date} • {data.schedule.nextShift.status} • {data.schedule.nextShift.shift}
+              </p>
+            ) : (
+              <p className="mt-1 font-bold text-muted">Sem próximo cronograma.</p>
+            )}
+          </div>
+          <div className="mt-3 grid grid-cols-4 gap-2 sm:grid-cols-7">
+            {data.schedule.days.length ? data.schedule.days.map((day) => <ScheduleChip key={day.id} day={day} />) : <div className="col-span-full text-sm font-semibold text-muted">Sem cronograma no mês.</div>}
+          </div>
+        </Panel>
+
+        <Panel title={`Horas (${data.workHours.periodLabel})`} action="Ver detalhes">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <MetricBox label="Planejadas" value={data.workHours.plannedHours} />
+            <MetricBox label="Realizadas" value={data.workHours.actualHours} />
+            <MetricBox label="Divergência" value={data.workHours.difference} tone={data.workHours.difference.startsWith("-") ? "red" : "green"} />
+            <MetricBox label="Ajustes pendentes" value={data.workHours.pendingAdjustments} />
+          </div>
+          <p className="mt-3 text-xs font-semibold text-muted">Último lançamento: {data.workHours.lastRecordAt || "Sem registro"}</p>
+        </Panel>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-3">
+        <Panel title="Performance">
+          {data.performance ? (
+            <div className="grid gap-2 text-sm sm:grid-cols-2">
+              <InfoLine label="Qualidade" value={formatPercent(data.performance.quality)} />
+              <InfoLine label="Submit" value={formatNumber(data.performance.submit)} />
+              <InfoLine label="AHT" value={formatAht(data.performance.ahtSeconds)} />
+              <InfoLine label="ABS" value={formatPercent(data.performance.abs)} />
+              <InfoLine label="WFH" value={<WfhBadge status={data.performance.wfhStatus} label={data.performance.wfhStatusLabel} />} />
+              <InfoLine label="Regra" value={qualityRuleLabel(data.performance.qualityRule)} />
+            </div>
+          ) : (
+            <EmptyState title="Sem performance no período" description="Importe Qualidade/Produção ou ajuste o período no módulo Performance." />
+          )}
+        </Panel>
+
+        <Panel title="Solicitações" action="Ver todas">
+          <div className="mb-3 grid grid-cols-2 gap-2">
+            <MetricBox label="Abertas" value={data.requests.open} />
+            <MetricBox label="Em análise" value={data.requests.inAnalysis} />
+          </div>
+          {data.requests.recent.length ? (
+            <div className="space-y-2">
+              {data.requests.recent.map((request) => (
+                <div key={request.id} className="rounded-lg border border-border bg-white p-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-extrabold text-navy-950">{request.title}</p>
+                      <p className="mt-1 text-xs font-semibold text-muted">{request.code} • {request.type} • {request.createdAt}</p>
+                    </div>
+                    <StatusBadge status={request.status} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm font-semibold text-muted">Sem solicitações recentes.</p>
+          )}
+        </Panel>
+
+        <Panel title="Feedback / Humor">
+          <div className="flex items-center gap-3">
+            <div className="grid h-12 w-12 place-items-center rounded-xl bg-orange-50 text-orange-500">
+              <HeartPulse className="h-6 w-6" />
+            </div>
+            <div>
+              <p className="text-2xl font-black text-navy-950">{data.mood.average ? `${data.mood.average}/5` : "-"}</p>
+              <p className="text-sm font-bold text-muted">{data.mood.label} • {data.mood.responses} resposta(s)</p>
+            </div>
+          </div>
+          <p className="mt-3 text-sm font-semibold text-muted">
+            Última resposta: {data.mood.lastResponseAt ? `${data.mood.lastResponseAt} • ${data.mood.lastLabel}` : "Sem registro no período"}
+          </p>
+        </Panel>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Panel title="Equipamentos">
+          {data.equipments.items.length ? (
+            <div className="grid gap-2">
+              {data.equipments.items.map((item) => (
+                <div key={item.id} className="flex min-w-0 items-center gap-3 rounded-lg border border-border bg-white p-3">
+                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-blue-50 text-blue-600">
+                    <Laptop className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-extrabold text-navy-950">{item.model || item.type}</p>
+                    <p className="truncate text-xs font-semibold text-muted">Série: {item.serial || "Não informado"} • Entrega: {item.deliveredAt || "Não informada"}</p>
+                  </div>
+                  <StatusBadge status={item.status} />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <EmptyState title="Sem equipamento vinculado" description="Equipamentos aparecerão aqui quando houver vínculo ativo." />
+          )}
+        </Panel>
+
+        <Panel title="Dados Cadastrais">
+          <div className="grid gap-2 text-sm sm:grid-cols-2">
+            <InfoLine label="Telefone" value={data.employee.primaryPhone || "Não informado"} />
+            <InfoLine label="Cidade/UF" value={[data.employee.city, data.employee.stateUf].filter(Boolean).join(" / ") || "Não informado"} />
+            <InfoLine label="Contrato" value={data.employee.contractType || "Não informado"} />
+            <InfoLine label="Desligamento" value={data.employee.terminationDate || "Não informado"} />
+            <InfoLine label="Tipo desligamento" value={data.employee.terminationType || "Não informado"} />
+            <InfoLine label="Motivo desligamento" value={data.employee.terminationReason || "Não informado"} />
+          </div>
+          {data.employee.additionalData ? (
+            <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50/60 p-3">
+              <p className="mb-2 text-xs font-black uppercase tracking-wide text-blue-700">Dados adicionais</p>
+              <div className="grid gap-2 text-sm sm:grid-cols-2">
+                <InfoLine label="Etnia" value={data.employee.additionalData.ethnicity || "Não informado"} />
+                <InfoLine label="Orientação sexual" value={data.employee.additionalData.sexualOrientation || "Não informado"} />
+                <InfoLine label="É PCD?" value={data.employee.additionalData.isPcd || "Não informado"} />
+                <InfoLine label="Tipo deficiência" value={data.employee.additionalData.pcdDisabilityType || "Não informado"} />
+                <InfoLine label="Primeiro emprego" value={data.employee.additionalData.firstJob || "Não informado"} />
+                <InfoLine label="Telemarketing" value={data.employee.additionalData.hasTelemarketingExperience || "Não informado"} />
+                <InfoLine label="Onde trabalhou" value={data.employee.additionalData.telemarketingWhere || "Não informado"} />
+                <InfoLine label="Concluído em" value={data.employee.additionalDataCompletedAt || "Pendente"} />
+              </div>
+            </div>
+          ) : (
+            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-muted">
+              Dados sensíveis ocultos para este perfil de acesso.
+            </div>
+          )}
+        </Panel>
+      </div>
+
+      <p className="pb-2 text-right text-xs font-semibold text-muted">Dados atualizados em {data.updatedAt}. Informações exibidas conforme sua permissão de acesso.</p>
+    </div>
+  );
+}
+
+function CompactInfo({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="min-w-0 rounded-lg border border-border bg-slate-50 px-3 py-2">
+      <p className="text-[10px] font-black uppercase tracking-wide text-muted">{label}</p>
+      <div className="mt-1 min-w-0 break-words text-sm font-extrabold text-navy-950">{value || "-"}</div>
+    </div>
+  );
+}
+
+function InfoLine({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[11px] font-black uppercase tracking-wide text-muted">{label}</p>
+      <div className="mt-1 min-w-0 break-words font-bold text-navy-950">{value || "-"}</div>
+    </div>
+  );
+}
+
+function MetricBox({ label, value, tone = "blue" }: { label: string; value: React.ReactNode; tone?: "blue" | "green" | "red" }) {
+  const toneClass = tone === "red" ? "text-red-600" : tone === "green" ? "text-emerald-600" : "text-blue-700";
+  return (
+    <div className="rounded-lg border border-border bg-white p-3 text-center">
+      <p className={cn("text-lg font-black leading-none", toneClass)}>{value}</p>
+      <p className="mt-1 text-[11px] font-extrabold uppercase tracking-wide text-muted">{label}</p>
+    </div>
+  );
+}
+
+function ScheduleChip({ day }: { day: { day: string; weekday: string; status: string; date: string } }) {
+  const tone = scheduleTone(day.status);
+  return (
+    <div title={`${day.date} • ${day.status}`} className={cn("min-h-[64px] rounded-lg border p-2 text-center", tone)}>
+      <p className="text-[10px] font-black uppercase tracking-wide opacity-70">{day.weekday}</p>
+      <p className="text-base font-black leading-none">{day.day}</p>
+      <p className="mt-1 line-clamp-2 text-[10px] font-extrabold leading-[11px]">{day.status}</p>
+    </div>
+  );
+}
+
+function WfhBadge({ status, label }: { status: string; label: string }) {
+  return (
+    <span className={cn("inline-flex rounded-md px-2 py-1 text-xs font-black", status === "QUALIFIED" ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700")}>
+      {label || "Sem dados"}
+    </span>
+  );
+}
+
+function scheduleTone(status: string) {
+  const normalized = status.toLowerCase();
+  if (normalized.includes("presente")) return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  if (normalized.includes("falta")) return "border-red-200 bg-red-50 text-red-700";
+  if (normalized.includes("folga")) return "border-slate-200 bg-slate-50 text-slate-700";
+  if (normalized.includes("escalado")) return "border-blue-200 bg-blue-50 text-blue-700";
+  return "border-slate-200 bg-slate-50 text-slate-700";
+}
+
+function formatPercent(value: number) {
+  return `${formatNumber(value, 1)}%`;
+}
+
+function formatNumber(value: number, decimals = 0) {
+  if (!Number.isFinite(value)) return "-";
+  return new Intl.NumberFormat("pt-BR", { maximumFractionDigits: decimals, minimumFractionDigits: decimals }).format(value);
+}
+
+function formatAht(seconds: number) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "-";
+  return `${formatNumber(seconds, 0)}s`;
+}
+
+function qualityRuleLabel(value?: string) {
+  if (value === "ADS_QUALITY") return "Regra ADS";
+  if (value === "TNS_QUALITY") return "Regra TNS";
+  if (value === "MIXED") return "Regra mista";
+  return "Sem regra";
+}

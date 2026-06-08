@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import {
@@ -1348,6 +1349,26 @@ function statusFromScheduleCell(value: string) {
   return ["Manhã", "Tarde", "Noite"].includes(cleanShiftName(baseStatus)) ? "Escalado" : baseStatus;
 }
 
+function scheduleSlotDisplayLabel(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "falta justificada") return "Falta Just.";
+  if (normalized === "falta injustificada") return "Falta Injust.";
+  if (normalized.includes("sem justificativa")) return "Falta s/ just.";
+  if (normalized === "venda de folga aprovada") return "Venda folga";
+  if (normalized === "folga aprovada") return "Folga aprov.";
+  if (normalized === "saída antecipada" || normalized === "saida antecipada") return "Saída ant.";
+  if (normalized === "sem cronograma") return "Sem cron.";
+  if (normalized === "erro de cronograma") return "Erro cron.";
+  return value;
+}
+
+function scheduleSlotStatusTextClass(value: string) {
+  const label = scheduleSlotDisplayLabel(value);
+  if (label.length > 14) return "text-[9px] leading-[10px]";
+  if (label.length > 10) return "text-[9.5px] leading-[10.5px]";
+  return "text-[10.5px] leading-[11.5px]";
+}
+
 function dayOffKindFromRequest(request: Pick<ClientRequest, "type" | "payload"> | { type: string; payload?: Record<string, unknown> }): DayOffKind | null {
   const raw = String(request.payload?.dayOffKind ?? request.payload?.internalType ?? "");
   if ((dayOffKinds as readonly string[]).includes(raw)) return raw as DayOffKind;
@@ -2627,6 +2648,8 @@ export function OperationalCommandCenter() {
   const commandAbsByLob = Object.entries(summary.byLob ?? {})
     .map(([lob, values]) => ({ lob, ...values }))
     .sort((a, b) => b.absRate - a.absRate || b.absent - a.absent || a.lob.localeCompare(b.lob, "pt-BR"));
+  const maxSupervisorAbsRate = Math.max(1, ...commandAbsBySupervisor.map((item) => item.absRate));
+  const maxLobAbsRate = Math.max(1, ...commandAbsByLob.map((item) => item.absRate));
   const commandTopAbsenceAgents = summary.topAbsenceAgents ?? [];
   const commandActivePeopleByLobShift = summary.activePeopleByLobAndShift ?? [];
   const commandAttrition = summary.attrition ?? { total: { lob: "Total", terminations: 0, hcStart: 0, hcEnd: 0, hcAverage: 0, attritionRate: 0 }, byLob: [] };
@@ -2651,6 +2674,7 @@ export function OperationalCommandCenter() {
   const absBarColor = (value: number) => value >= 8 ? "bg-red-500" : value >= 5 ? "bg-orange-500" : value >= 3 ? "bg-amber-400" : "bg-emerald-500";
   const absTextColor = (value: number) => value >= 8 ? "text-red-600" : value >= 5 ? "text-orange-600" : value >= 3 ? "text-amber-600" : "text-emerald-600";
   const absBarWidth = (value: number) => `${Math.min(100, Math.max(value > 0 ? 4 : 0, value))}%`;
+  const rankingBarWidth = (value: number, maxValue: number) => `${Math.min(100, Math.max(value > 0 ? 7 : 0, (value / Math.max(maxValue, 1)) * 100))}%`;
   const commandPeopleRows = (records: AttendanceItem[]) => records.map((record) => [
     record.employeeName,
     record.wbLogin ?? "-",
@@ -2788,7 +2812,7 @@ export function OperationalCommandCenter() {
           </div>
         }
       />
-      <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+      <div className="mb-3 grid gap-2.5 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
         {stats.map((stat) => (
           stat.action ? (
             <button key={stat.title} type="button" onClick={stat.action} className="h-full text-left">
@@ -2799,71 +2823,48 @@ export function OperationalCommandCenter() {
           )
         ))}
       </div>
-      <div className="space-y-4">
-        <div className="grid gap-4 xl:grid-cols-2">
+      <div className="space-y-3">
+        <div className="grid gap-3 xl:grid-cols-[1.25fr_.95fr]">
           <Panel title="ABS por Supervisor">
             {commandAbsBySupervisor.length ? (
-              <div className="max-h-[320px] overflow-auto pr-1">
-                <table className="w-full min-w-[1060px] table-fixed border-collapse text-left">
-                  <colgroup>
-                    <col className="w-[260px]" />
-                    <col className="w-[220px]" />
-                    <col className="w-[90px]" />
-                    <col className="w-[125px]" />
-                    <col className="w-[95px]" />
-                    <col className="w-[120px]" />
-                    <col className="w-[150px]" />
-                  </colgroup>
-                  <thead className="sticky top-0 z-10 bg-white text-[10.5px] font-black uppercase tracking-wide text-muted">
-                    <tr className="border-b border-border">
-                      <th className="whitespace-nowrap px-2 pb-2 text-left">Supervisor</th>
-                      <th className="whitespace-nowrap px-2 pb-2 text-left">ABS</th>
-                      <th className="whitespace-nowrap px-2 pb-2 text-center">ABS %</th>
-                      <th className="whitespace-nowrap px-2 pb-2 text-center">Escaladas</th>
-                      <th className="whitespace-nowrap px-2 pb-2 text-center">Faltas</th>
-                      <th className="whitespace-nowrap px-2 pb-2 text-center">Sem just.</th>
-                      <th className="whitespace-nowrap px-2 pb-2 text-center">Justificadas</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border/70">
-                    {commandAbsBySupervisor.map((item) => (
-                      <tr
-                        key={item.supervisor}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => void openAbsSupervisorPeople(item.supervisor)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === " ") {
-                            event.preventDefault();
-                            void openAbsSupervisorPeople(item.supervisor);
-                          }
-                        }}
-                        className="cursor-pointer transition hover:bg-blue-50/55 focus:bg-blue-50/70 focus:outline-none"
-                      >
-                        <td className="px-2 py-2">
-                          <span className="block truncate text-[12.5px] font-extrabold text-navy-950" title={item.supervisor}>{item.supervisor}</span>
-                        </td>
-                        <td className="px-2 py-2">
-                          <div className="h-2 rounded-full bg-slate-100">
-                            <div className={cn("h-2 rounded-full", absBarColor(item.absRate))} style={{ width: absBarWidth(item.absRate) }} />
-                          </div>
-                        </td>
-                        <td className={cn("px-2 py-2 text-center text-[11.5px] font-black", absTextColor(item.absRate))}>{item.absRate}%</td>
-                        <td className="px-2 py-2 text-center text-[11.5px] font-extrabold text-navy-950">{item.planned}</td>
-                        <td className="px-2 py-2 text-center text-[11.5px] font-extrabold text-navy-950">{item.absent}</td>
-                        <td className="px-2 py-2 text-center text-[11.5px] font-extrabold text-navy-950">{item.unjustified}</td>
-                        <td className="px-2 py-2 text-center text-[11.5px] font-extrabold text-navy-950">{item.justified}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="max-h-[310px] overflow-y-auto pr-1">
+                <div className="grid grid-cols-[minmax(140px,1.2fr)_minmax(120px,1fr)_72px_64px_72px_82px] gap-2 border-b border-border px-1.5 pb-1.5 text-[9.5px] font-black uppercase tracking-wide text-muted max-lg:hidden">
+                  <span>Supervisor</span>
+                  <span>ABS</span>
+                  <span className="text-center">Escaladas</span>
+                  <span className="text-center">Faltas</span>
+                  <span className="text-center">Sem just.</span>
+                  <span className="text-center">Justificadas</span>
+                </div>
+                <div className="divide-y divide-border/70">
+                  {commandAbsBySupervisor.map((item) => (
+                    <button
+                      key={item.supervisor}
+                      type="button"
+                      onClick={() => void openAbsSupervisorPeople(item.supervisor)}
+                      className="grid w-full grid-cols-1 gap-1.5 px-1.5 py-2 text-left transition hover:bg-blue-50/55 lg:grid-cols-[minmax(140px,1.2fr)_minmax(120px,1fr)_72px_64px_72px_82px] lg:items-center lg:gap-2"
+                    >
+                      <span className="min-w-0 truncate text-[12.5px] font-extrabold text-navy-950" title={item.supervisor}>{item.supervisor}</span>
+                      <span className="grid min-w-0 grid-cols-[46px_1fr] items-center gap-2">
+                        <span className={cn("text-[11.5px] font-black", absTextColor(item.absRate))}>{item.absRate}%</span>
+                        <span className="h-2 rounded-full bg-slate-100">
+                          <span className={cn("block h-2 rounded-full", absBarColor(item.absRate))} style={{ width: rankingBarWidth(item.absRate, maxSupervisorAbsRate) }} />
+                        </span>
+                      </span>
+                      <span className="text-[11.5px] font-extrabold text-navy-950 lg:text-center"><span className="lg:hidden">Escaladas: </span>{item.planned}</span>
+                      <span className="text-[11.5px] font-extrabold text-navy-950 lg:text-center"><span className="lg:hidden">Faltas: </span>{item.absent}</span>
+                      <span className="text-[11.5px] font-extrabold text-navy-950 lg:text-center"><span className="lg:hidden">Sem just.: </span>{item.unjustified}</span>
+                      <span className="text-[11.5px] font-extrabold text-navy-950 lg:text-center"><span className="lg:hidden">Justificadas: </span>{item.justified}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             ) : <EmptyState title="Sem ABS por supervisor" description="A visão será exibida quando houver cronogramas no período selecionado." />}
           </Panel>
 
           <Panel title="Pessoas Ativas por LOB e Turno">
             {activePeopleVisibleRows.length ? (
-              <div className="max-h-[320px] overflow-auto pr-1">
+              <div className="max-h-[310px] overflow-auto pr-1">
                 <table className="w-full min-w-[620px] text-left text-[11.5px]">
                   <thead className="sticky top-0 z-10 bg-white text-[10px] font-black uppercase tracking-wide text-muted">
                     <tr className="border-b border-border">
@@ -2931,22 +2932,82 @@ export function OperationalCommandCenter() {
           </Panel>
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-3">
+        <div className="grid gap-3 xl:grid-cols-3">
+          <Panel title="Ausências por Motivo">
+          {commandAbsenceReasons.length ? <div className="grid gap-2.5 md:grid-cols-[140px_1fr]">
+            <div className="h-[160px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={commandAbsenceReasons} dataKey="value" innerRadius={38} outerRadius={62} paddingAngle={2}>
+                    {commandAbsenceReasons.map((entry) => (
+                      <Cell key={entry.name} fill={entry.fill} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="flex max-h-[220px] flex-col justify-center space-y-1.5 overflow-y-auto pr-1">
+              {commandAbsenceReasons.map((reason) => (
+                <button key={reason.name} type="button" onClick={() => void openAbsenceReasonPeople(reason.name)} className={cn("grid grid-cols-[minmax(0,1fr)_36px_76px] items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 text-left text-[12px] transition hover:border-blue-100 hover:bg-blue-50", reason.name === "Sem justificativa" && "bg-amber-50/70")}>
+                  <span className="flex min-w-0 items-center gap-2 font-semibold text-navy-950">
+                    <span className="status-dot" style={{ backgroundColor: reason.fill }} />
+                    <span className="truncate" title={reason.name}>{reason.name}</span>
+                  </span>
+                  <span className="text-right font-black text-navy-950">{reason.value}</span>
+                  <span className="text-right text-[10.5px] font-extrabold text-blue-600">Ver pessoas</span>
+                </button>
+              ))}
+            </div>
+          </div> : <EmptyState title="Sem faltas registradas" description="Os motivos aparecerão quando houver registros reais de presença ou ocorrência." />}
+          </Panel>
+
+          <Panel title="ABS por LOB">
+            {commandAbsByLob.length ? (
+              <div className="max-h-[300px] overflow-y-auto overflow-x-hidden pr-1">
+                <div className="grid grid-cols-[46px_minmax(72px,1fr)_72px_50px_52px] gap-1.5 border-b border-border px-1.5 pb-1.5 text-[9px] font-black uppercase tracking-wide text-muted">
+                  <span>LOB</span>
+                  <span>ABS</span>
+                  <span className="text-center">Faltas/Esc.</span>
+                  <span className="text-center">Sem Just.</span>
+                  <span className="text-center">Justif.</span>
+                </div>
+                {commandAbsByLob.map((item) => (
+                  <button
+                    key={item.lob}
+                    type="button"
+                    onClick={() => void openLobAbsPeople(item.lob)}
+                    className="grid w-full grid-cols-[46px_minmax(72px,1fr)_72px_50px_52px] items-center gap-1.5 border-b border-border/70 px-1.5 py-2.5 text-left transition last:border-b-0 hover:bg-blue-50/55"
+                  >
+                    <span className="min-w-0 truncate text-[11.5px] font-extrabold text-navy-950" title={item.lob}>{item.lob}</span>
+                    <div className="grid min-w-0 grid-cols-[38px_1fr] items-center gap-1.5">
+                      <span className={cn("text-[11px] font-black", absTextColor(item.absRate))}>{item.absRate}%</span>
+                      <div className="h-2 rounded-full bg-slate-100">
+                        <div className={cn("h-2 rounded-full", absBarColor(item.absRate))} style={{ width: rankingBarWidth(item.absRate, maxLobAbsRate) }} />
+                      </div>
+                    </div>
+                    <span className="text-center text-[11px] font-extrabold text-navy-950">{item.absent}/{item.planned}</span>
+                    <span className="text-center text-[11px] font-extrabold text-navy-950">{item.unjustified}</span>
+                    <span className="text-center text-[11px] font-extrabold text-navy-950">{item.justified}</span>
+                  </button>
+                ))}
+              </div>
+            ) : <EmptyState title="Sem ABS por LOB" description="A visão será exibida quando houver cronogramas no período selecionado." />}
+          </Panel>
+
           <Panel title="Agentes com maior quantidade de faltas">
             {commandTopAbsenceAgents.length ? (
-              <div className="max-h-[360px] divide-y divide-border/70 overflow-y-auto pr-1">
+              <div className="max-h-[300px] divide-y divide-border/70 overflow-y-auto pr-1">
                 {commandTopAbsenceAgents.map((agent, index) => (
                   <button
                     key={agent.employeeId}
                     type="button"
                     onClick={() => void openAgentAbsencePeople({ employeeId: agent.employeeId, name: agent.name })}
-                    className="grid min-h-[58px] w-full grid-cols-[24px_minmax(0,1fr)_64px] items-center gap-2 py-1.5 text-left transition hover:bg-blue-50/55"
+                    className="grid min-h-[56px] w-full grid-cols-[24px_minmax(0,1fr)_64px] items-center gap-2 py-1.5 text-left transition hover:bg-blue-50/55"
                   >
                     <span className={cn("grid h-6 w-6 place-items-center rounded-full text-[11px] font-black", index < 3 ? "bg-amber-400 text-white" : "bg-slate-200 text-navy-700")}>{index + 1}</span>
                     <div className="min-w-0">
-                      <div className="flex min-w-0 items-center justify-between gap-2">
-                        <p className="min-w-0 truncate text-[12.5px] font-extrabold leading-tight text-navy-950" title={agent.name}>{agent.name}</p>
-                      </div>
+                      <p className="truncate text-[12.5px] font-extrabold leading-tight text-navy-950" title={agent.name}>{agent.name}</p>
                       <p className="mt-0.5 truncate text-[11px] font-semibold leading-tight text-muted" title={`${agent.wbLogin || "-"} • ${agent.lob} • ${agent.supervisor}`}>
                         {agent.wbLogin || "-"} • {agent.lob} • {agent.supervisor}
                       </p>
@@ -2971,70 +3032,9 @@ export function OperationalCommandCenter() {
               </div>
             ) : <EmptyState title="Nenhuma falta encontrada" description="O ranking aparecerá quando houver faltas de agentes nos filtros selecionados." />}
           </Panel>
-
-          <Panel title="Ausências por Motivo">
-          {commandAbsenceReasons.length ? <div className="grid gap-3 md:grid-cols-[180px_1fr]">
-            <div className="h-[210px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={commandAbsenceReasons} dataKey="value" innerRadius={50} outerRadius={82} paddingAngle={2}>
-                    {commandAbsenceReasons.map((entry) => (
-                      <Cell key={entry.name} fill={entry.fill} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="flex max-h-[260px] flex-col justify-center space-y-1.5 overflow-y-auto pr-1">
-              {commandAbsenceReasons.map((reason) => (
-                <button key={reason.name} type="button" onClick={() => void openAbsenceReasonPeople(reason.name)} className={cn("flex items-center justify-between gap-2 rounded-lg border border-transparent px-2 py-1.5 text-left text-[12px] transition hover:border-blue-100 hover:bg-blue-50", reason.name === "Sem justificativa" && "bg-amber-50/60")}>
-                  <span className="flex min-w-0 items-center gap-2 font-semibold text-navy-950">
-                    <span className="status-dot" style={{ backgroundColor: reason.fill }} />
-                    <span className="truncate" title={reason.name}>{reason.name}</span>
-                  </span>
-                  <span className="flex shrink-0 items-center gap-1.5 font-bold text-muted">{reason.value}<span className="text-[10.5px] text-blue-600">Ver pessoas</span></span>
-                </button>
-              ))}
-            </div>
-          </div> : <EmptyState title="Sem faltas registradas" description="Os motivos aparecerão quando houver registros reais de presença ou ocorrência." />}
-          </Panel>
-
-          <Panel title="ABS por LOB">
-            {commandAbsByLob.length ? (
-              <div className="max-h-[360px] overflow-auto pr-1">
-                <div className="grid min-w-[520px] grid-cols-[56px_minmax(96px,1fr)_104px_58px_72px] gap-2 border-b border-border px-1.5 pb-1.5 text-[9.5px] font-black uppercase tracking-wide text-muted">
-                  <span>LOB</span>
-                  <span>ABS</span>
-                  <span className="text-center">Faltas / Escaladas</span>
-                  <span className="text-center">Sem just.</span>
-                  <span className="text-center">Justificadas</span>
-                </div>
-                {commandAbsByLob.map((item) => (
-                  <button
-                    key={item.lob}
-                    type="button"
-                    onClick={() => void openLobAbsPeople(item.lob)}
-                    className="grid min-w-[520px] w-full grid-cols-[56px_minmax(96px,1fr)_104px_58px_72px] items-center gap-2 border-b border-border/70 px-1.5 py-2.5 text-left transition last:border-b-0 hover:bg-blue-50/55"
-                  >
-                    <span className="min-w-0 truncate text-[12.5px] font-extrabold text-navy-950" title={item.lob}>{item.lob}</span>
-                    <div className="grid grid-cols-[42px_1fr] items-center gap-1.5">
-                      <span className={cn("text-[11.5px] font-black", absTextColor(item.absRate))}>{item.absRate}%</span>
-                      <div className="h-2 rounded-full bg-slate-100">
-                        <div className={cn("h-2 rounded-full", absBarColor(item.absRate))} style={{ width: absBarWidth(item.absRate) }} />
-                      </div>
-                    </div>
-                    <span className="text-center text-[11.5px] font-extrabold text-navy-950">{item.absent} / {item.planned}</span>
-                    <span className="text-center text-[11.5px] font-extrabold text-navy-950">{item.unjustified}</span>
-                    <span className="text-center text-[11.5px] font-extrabold text-navy-950">{item.justified}</span>
-                  </button>
-                ))}
-              </div>
-            ) : <EmptyState title="Sem ABS por LOB" description="A visão será exibida quando houver cronogramas no período selecionado." />}
-          </Panel>
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-[.75fr_1.25fr]">
+        <div className="grid gap-3 xl:grid-cols-[.75fr_1.25fr]">
           <Panel title="Attrition Total">
             <button
               type="button"
@@ -3079,14 +3079,14 @@ export function OperationalCommandCenter() {
 
           <Panel title="Attrition por LOB">
             {commandAttritionByLob.length ? (
-              <div className="max-h-[280px] overflow-auto pr-1">
-                <div className="grid min-w-[760px] grid-cols-[72px_minmax(140px,1fr)_104px_78px_78px_86px_76px] gap-2 border-b border-border px-1.5 pb-1.5 text-[9.5px] font-black uppercase tracking-wide text-muted">
+              <div className="max-h-[280px] overflow-y-auto overflow-x-hidden pr-1 max-md:overflow-x-auto">
+                <div className="grid min-w-0 grid-cols-[60px_minmax(90px,1fr)_58px_62px_56px_60px_42px] gap-1.5 border-b border-border px-1.5 pb-1.5 text-[9px] font-black uppercase tracking-wide text-muted max-md:min-w-[620px]">
                   <span>LOB</span>
                   <span>Attrition</span>
-                  <span className="text-center">Desligamentos</span>
-                  <span className="text-center">HC inicial</span>
-                  <span className="text-center">HC final</span>
-                  <span className="text-center">HC médio</span>
+                  <span className="text-center">Deslig.</span>
+                  <span className="text-center">HC Inicial</span>
+                  <span className="text-center">HC Final</span>
+                  <span className="text-center">HC Médio</span>
                   <span className="text-center">%</span>
                 </div>
                 {commandAttritionByLob.map((item) => (
@@ -3094,17 +3094,17 @@ export function OperationalCommandCenter() {
                     key={item.lob}
                     type="button"
                     onClick={() => void openAttritionPeople({ title: `Attrition por LOB: ${item.lob}`, lob: item.lob })}
-                    className="grid min-w-[760px] w-full grid-cols-[72px_minmax(140px,1fr)_104px_78px_78px_86px_76px] items-center gap-2 border-b border-border/70 px-1.5 py-2.5 text-left transition last:border-b-0 hover:bg-blue-50/55"
+                    className="grid min-w-0 w-full grid-cols-[60px_minmax(90px,1fr)_58px_62px_56px_60px_42px] items-center gap-1.5 border-b border-border/70 px-1.5 py-2.5 text-left transition last:border-b-0 hover:bg-blue-50/55 max-md:min-w-[620px]"
                   >
-                    <span className="min-w-0 truncate text-[12.5px] font-extrabold text-navy-950" title={item.lob}>{item.lob}</span>
-                    <div className="h-2 rounded-full bg-slate-100">
+                    <span className="min-w-0 truncate text-[11.5px] font-extrabold text-navy-950" title={item.lob}>{item.lob}</span>
+                    <div className="min-w-0 h-2 rounded-full bg-slate-100">
                       <div className={cn("h-2 rounded-full", absBarColor(item.attritionRate))} style={{ width: absBarWidth(item.attritionRate) }} />
                     </div>
-                    <span className="text-center text-[11.5px] font-extrabold text-navy-950">{item.terminations}</span>
-                    <span className="text-center text-[11.5px] font-extrabold text-navy-950">{item.hcStart}</span>
-                    <span className="text-center text-[11.5px] font-extrabold text-navy-950">{item.hcEnd}</span>
-                    <span className="text-center text-[11.5px] font-extrabold text-navy-950">{item.hcAverage}</span>
-                    <span className={cn("text-center text-[11.5px] font-black", absTextColor(item.attritionRate))}>{item.attritionRate}%</span>
+                    <span className="text-center text-[11px] font-extrabold text-navy-950">{item.terminations}</span>
+                    <span className="text-center text-[11px] font-extrabold text-navy-950">{item.hcStart}</span>
+                    <span className="text-center text-[11px] font-extrabold text-navy-950">{item.hcEnd}</span>
+                    <span className="text-center text-[11px] font-extrabold text-navy-950">{item.hcAverage}</span>
+                    <span className={cn("text-center text-[11px] font-black", absTextColor(item.attritionRate))}>{item.attritionRate}%</span>
                   </button>
                 ))}
               </div>
@@ -4006,7 +4006,7 @@ export function MySchedulePage() {
                           ) : null}
                         </div>
                       ) : !dayAllowsWorkHours ? (
-                        <p className="rounded-md border border-slate-100 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-muted">Horas não aplicáveis para este status.</p>
+                        <p className="rounded-md border border-slate-100 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-muted">Sem horas</p>
                       ) : null}
                     </div>
                   ) : null}
@@ -4992,6 +4992,7 @@ export function SchedulesPage() {
   const [importHistory, setImportHistory] = useState<ScheduleImportHistory[]>([]);
   const [showScheduleAlerts, setShowScheduleAlerts] = useState(false);
   const [showScheduleImports, setShowScheduleImports] = useState(false);
+  const [scheduleAnalysisPanelOpen, setScheduleAnalysisPanelOpen] = useState(true);
   const [showPendingJustifications, setShowPendingJustifications] = useState(false);
   const [attendanceMessage, setAttendanceMessage] = useState("");
   const [attendanceSummary, setAttendanceSummary] = useState<AttendanceSummary | null>(null);
@@ -5773,6 +5774,12 @@ export function SchedulesPage() {
   const plannedHours = scheduledCells * DEFAULT_PRODUCTIVE_HOURS;
   const scheduleTotalRows = schedulePagination.total || scheduleRows.length;
   const scheduleQuantity = scheduleMetrics.quantity;
+  const scheduleSummaryItems = [
+    { label: "Colaboradores", value: scheduleTotalRows },
+    { label: "Quantidade", value: scheduleQuantity },
+    { label: "ABS", value: `${attendanceSummary?.absRate ?? 0}%` },
+    { label: "Pendências", value: attendanceSummary?.unjustified ?? 0 }
+  ];
   const schedulePageStart = scheduleTotalRows && scheduleRows.length ? (schedulePagination.page - 1) * schedulePagination.limit + 1 : 0;
   const schedulePageEnd = scheduleTotalRows ? Math.min(schedulePagination.page * schedulePagination.limit, scheduleTotalRows) : 0;
   const monthLabel = scheduleMonthFormatter.format(operationalDateFromParts(schedulePeriod.year, schedulePeriod.month, 1));
@@ -6070,62 +6077,88 @@ export function SchedulesPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_390px]">
+      <div className={cn("grid gap-3", scheduleAnalysisPanelOpen ? "xl:grid-cols-[minmax(0,1fr)_360px]" : "xl:grid-cols-1")}>
         <section className="card overflow-hidden">
-          <div className="grid gap-2.5 border-b border-border p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 min-[1800px]:grid-cols-7">
-            <MetricPill value={scheduleTotalRows} label="Colaboradores" />
-            <MetricPill value={scheduleRows.length ? "100%" : "0%"} label="Cobertura Planejada" />
-            <MetricPill value={`${attendanceSummary?.coverageRate ?? 0}%`} label="Cobertura Real" />
-            <MetricPill value={formatWorkHourValue(plannedHours, "0:00")} label="Horas produtivas programadas" />
-            <MetricPill value={scheduleQuantity} label="Quantidade" />
-            <MetricPill value={`${attendanceSummary?.absRate ?? 0}%`} label="ABS" />
-            <MetricPill value={attendanceSummary?.unjustified ?? 0} label="Pendências justificativa" />
+          <div className="flex flex-col gap-2 border-b border-border bg-gradient-to-b from-white to-slate-50/65 px-3 py-2 lg:flex-row lg:items-center lg:justify-between">
+            <div className="grid min-w-0 flex-1 grid-cols-2 gap-2 sm:grid-cols-4">
+              {scheduleSummaryItems.map((item) => (
+                <div key={item.label} className="min-w-0 rounded-lg border border-border bg-white px-3 py-2 text-center shadow-soft">
+                  <p className="truncate text-[18px] font-black leading-none text-navy-950" title={String(item.value)}>{item.value}</p>
+                  <p className="mt-1 truncate text-[10px] font-extrabold uppercase tracking-wide text-muted" title={item.label}>{item.label}</p>
+                </div>
+              ))}
+            </div>
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setScheduleAnalysisPanelOpen((open) => !open)}
+                className="h-9 rounded-lg border border-blue-100 bg-blue-50 px-3 text-[11.5px] font-extrabold text-blue-700 hover:border-blue-200 hover:bg-blue-100"
+              >
+                {scheduleAnalysisPanelOpen ? "Ocultar painel" : "Mostrar painel"}
+              </button>
+            </div>
           </div>
           <div className="overflow-x-auto">
-            {scheduleRows.length ? <table className="w-full min-w-[1040px] border-collapse text-[12.5px]">
+            {scheduleRows.length ? <table className="w-full min-w-[960px] border-collapse text-[11.5px]">
               <thead>
                 <tr className="border-b border-border bg-slate-50 text-left text-xs font-bold uppercase tracking-wide text-muted">
-                  <th className="px-3 py-2.5">Colaborador</th>
-                  <th className="px-3 py-2.5">Cargo</th>
-                  <th className="px-3 py-2.5">LOB</th>
+                  <th className="px-3 py-2">Colaborador</th>
+                  <th className="px-3 py-2">Cargo</th>
+                  <th className="px-3 py-2">LOB</th>
                   {visibleScheduleDates.map((dateIso) => (
-                    <th key={dateIso} className="px-1.5 py-2.5 text-center">{formatScheduleDateHeader(dateIso)}</th>
+                    <th key={dateIso} className="px-1.5 py-2 text-center">{formatScheduleDateHeader(dateIso)}</th>
                   ))}
-                  <th className="px-3 py-2.5 text-center">Ação</th>
+                  <th className="px-3 py-2 text-center">Ação</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/70 bg-white">
                 {scheduleRows.map((row) => (
                   <tr key={row.employee.id} className="hover:bg-blue-50/30">
-                    <td className="px-3 py-2.5">
+                    <td className="px-3 py-2">
                       <div className="flex items-center gap-2.5">
-                        <span className="grid h-8 w-8 place-items-center rounded-full bg-emerald-500 text-xs font-bold text-white">{initials(row.employee.name)}</span>
+                        <span className="grid h-7 w-7 place-items-center rounded-full bg-emerald-500 text-[11px] font-bold text-white">{initials(row.employee.name)}</span>
                         <div>
                           <p className="font-bold text-navy-950">{row.employee.name}</p>
-                          <p className="text-xs text-muted">{row.employee.role}</p>
                         </div>
                       </div>
                     </td>
-                    <td className="px-3 py-2.5">{row.employee.role}</td>
-                    <td className="px-3 py-2.5">{row.employee.lob}</td>
+                    <td className="px-3 py-2">{row.employee.role}</td>
+                    <td className="px-3 py-2">{row.employee.lob}</td>
                     {row.days.map((value, index) => {
                       const hourCell = row.workHours?.[index] ?? null;
+                      const slotLabel = scheduleSlotDisplayLabel(value);
+                      const slotStatusTextClass = scheduleSlotStatusTextClass(value);
                       return (
-                        <td key={`${row.employee.id}-${index}`} className="px-1.5 py-2.5 text-center">
-                          <button onClick={() => openScheduleEditor(row, index, value)} className={cn("inline-flex min-w-[84px] flex-col items-center justify-center rounded-md px-2 py-1.5 text-xs font-bold leading-tight transition hover:ring-2 hover:ring-blue-200", shiftTagClass(value), hourCell?.rawStatus === "DIVERGENT" && "ring-1 ring-orange-300", hourCell?.rawStatus === "ADJUSTMENT_REQUESTED" && "ring-1 ring-amber-400")}>
-                            <span>{value}</span>
+                        <td key={`${row.employee.id}-${index}`} className="px-1 py-1.5 text-center">
+                          <button
+                            type="button"
+                            title={value}
+                            onClick={() => openScheduleEditor(row, index, value)}
+                            className={cn(
+                              "inline-flex h-[68px] w-[92px] flex-col items-center justify-center gap-1 overflow-hidden rounded-md px-1.5 py-1.5 text-center font-bold transition hover:ring-2 hover:ring-blue-200",
+                              shiftTagClass(value),
+                              hourCell?.rawStatus === "DIVERGENT" && "ring-1 ring-orange-300",
+                              hourCell?.rawStatus === "ADJUSTMENT_REQUESTED" && "ring-1 ring-amber-400"
+                            )}
+                          >
+                            <span
+                              className={cn("block h-[30px] w-full overflow-hidden text-center", slotStatusTextClass)}
+                              style={{ display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 2, wordBreak: "break-word" }}
+                            >
+                              {slotLabel}
+                            </span>
                             {hourCell ? (
-                              <span className={cn("mt-1 rounded px-1.5 py-0.5 text-[10px]", hourCell.rawStatus === "OK" ? "bg-emerald-100 text-emerald-700" : hourCell.rawStatus === "DIVERGENT" ? "bg-orange-100 text-orange-700" : hourCell.rawStatus === "ADJUSTMENT_REQUESTED" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700")}>
-                                Real: {formatWorkHourValue(hourCell.effectiveHours)} {hourCell.differenceMinutes ? formatHourDifference(hourCell.differenceMinutes) : ""}
+                              <span className={cn("grid h-[18px] w-[70px] place-items-center rounded px-1.5 text-[10px] leading-none", hourCell.rawStatus === "OK" ? "bg-emerald-100 text-emerald-700" : hourCell.rawStatus === "DIVERGENT" ? "bg-orange-100 text-orange-700" : hourCell.rawStatus === "ADJUSTMENT_REQUESTED" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700")}>
+                                {formatWorkHourValue(hourCell.effectiveHours)}
                               </span>
                             ) : (
-                              <span className="mt-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">Sem horas</span>
+                              <span className="grid h-[18px] w-[70px] place-items-center rounded bg-slate-100 px-1.5 text-[10px] leading-none text-slate-500 whitespace-nowrap">Sem horas</span>
                             )}
                           </button>
                         </td>
                       );
                     })}
-                    <td className="px-3 py-2.5 text-center">
+                    <td className="px-3 py-2 text-center">
                       <button onClick={() => isScheduleSupervisor ? openAttendanceJustification(row, 0, row.days[0] ?? "Falta") : openScheduleEditor(row, 0, row.days[0] ?? "Escalado")} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
                         {isScheduleSupervisor ? "Justificar" : "Editar"}
                       </button>
@@ -6154,7 +6187,8 @@ export function SchedulesPage() {
           </div>
         </section>
 
-        <div className="space-y-5">
+        {scheduleAnalysisPanelOpen ? (
+        <aside className="space-y-3">
           <Panel
             title="Pendências de Justificativa"
             action={filteredPendingJustifications.length ? `${filteredPendingJustifications.length} aberta(s)` : undefined}
@@ -6228,7 +6262,8 @@ export function SchedulesPage() {
               </div>
             )) : <EmptyState title="Nenhuma importação" description="Os arquivos importados aparecerão aqui." />}
           </Panel>
-        </div>
+        </aside>
+        ) : null}
       </div>
 
       {showPendingJustifications ? (
@@ -9290,7 +9325,10 @@ export function EmployeeMapPage() {
                     <span key={`${employee.id}-supervisor`} className="block max-w-[160px] truncate" title={employee.supervisor}>{employee.supervisor}</span>,
                     cleanShiftName(employee.shift) || "-",
                     <StatusBadge key={`${employee.id}-status`} status={employeeMapStatusLabel(employee.status)} />,
-                    <button key={`${employee.id}-action`} onClick={() => selectEmployee(employee)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">Ver detalhes</button>
+                    <div key={`${employee.id}-action`} className="flex flex-wrap gap-1.5">
+                      <Link href={`/perfil/${employee.id}`} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">Ver perfil</Link>
+                      <button onClick={() => selectEmployee(employee)} className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-bold text-navy-950">Detalhe</button>
+                    </div>
                   ])}
                 />
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm text-muted">

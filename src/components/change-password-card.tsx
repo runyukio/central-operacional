@@ -65,9 +65,9 @@ export function ChangePasswordCard({ initialEmail = "", showEmail = true, forceM
           email: payload.email ?? email,
           password: newPassword,
           redirect: false,
-          callbackUrl: payload.defaultPath ?? "/central-operacional"
+          callbackUrl: payload.defaultPath ?? "/"
         });
-        router.push(login?.url ?? payload.defaultPath ?? "/central-operacional");
+        router.push(login?.url ?? payload.defaultPath ?? "/");
         router.refresh();
         return;
       }

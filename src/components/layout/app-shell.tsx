@@ -1,14 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Bell,
   CalendarDays,
   CalendarRange,
   ChevronDown,
+  ChevronRight,
   ClipboardCheck,
   ClipboardList,
   Clock,
@@ -63,7 +64,8 @@ const icons = {
   MessagesSquare,
   FileBarChart,
   ScrollText,
-  Settings
+  Settings,
+  UserCircle
 };
 
 type ShellUser = {
@@ -82,8 +84,22 @@ type HeaderNotification = {
   createdAt: string;
 };
 
+type GlobalSearchResult = {
+  type: "employee";
+  id: string;
+  name: string;
+  socialName?: string;
+  wbLogin: string;
+  email?: string;
+  jobTitle?: string;
+  lob?: string;
+  status?: string;
+  avatarInitials?: string;
+};
+
 export function AppShell({ children, user }: { children: React.ReactNode; user: ShellUser }) {
   const pathname = usePathname();
+  const router = useRouter();
   const { theme, toggleTheme } = useTheme();
   const role = user.role ?? "COLABORADOR";
   const navItems = getNavItems(role);
@@ -92,6 +108,11 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [globalSearch, setGlobalSearch] = useState("");
+  const [globalSearchResults, setGlobalSearchResults] = useState<GlobalSearchResult[]>([]);
+  const [globalSearchLoading, setGlobalSearchLoading] = useState(false);
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  const searchRef = useRef<HTMLDivElement>(null);
   const unreadNotifications = notifications.filter((notification) => !notification.isRead).length;
 
   useEffect(() => {
@@ -139,6 +160,35 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
       .catch(() => undefined);
   }, []);
 
+  useEffect(() => {
+    const query = globalSearch.trim();
+    if (query.length < 2) {
+      setGlobalSearchResults([]);
+      setGlobalSearchLoading(false);
+      return undefined;
+    }
+    setGlobalSearchLoading(true);
+    const timeout = window.setTimeout(() => {
+      fetch(`/api/search/global?q=${encodeURIComponent(query)}&limit=12`, { cache: "no-store" })
+        .then((response) => response.json())
+        .then((payload: { results?: GlobalSearchResult[] }) => {
+          setGlobalSearchResults(payload.results ?? []);
+          setGlobalSearchOpen(true);
+        })
+        .catch(() => setGlobalSearchResults([]))
+        .finally(() => setGlobalSearchLoading(false));
+    }, 300);
+    return () => window.clearTimeout(timeout);
+  }, [globalSearch]);
+
+  useEffect(() => {
+    function handleOutsideClick(event: MouseEvent) {
+      if (!searchRef.current?.contains(event.target as Node)) setGlobalSearchOpen(false);
+    }
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, []);
+
   async function markAllNotificationsRead() {
     const response = await fetch("/api/notifications", {
       method: "PATCH",
@@ -157,6 +207,18 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
     });
     const payload = (await response.json()) as { data?: HeaderNotification[] };
     setNotifications(payload.data ?? []);
+  }
+
+  function openSearchResult(result: GlobalSearchResult) {
+    setGlobalSearch("");
+    setGlobalSearchResults([]);
+    setGlobalSearchOpen(false);
+    router.push(`/perfil/${result.id}`);
+  }
+
+  function navItemIsActive(item: ReturnType<typeof getNavItems>[number]) {
+    if (item.href === "/meu-perfil" && pathname.startsWith("/perfil/")) return true;
+    return pathname === item.href || (item.href !== "/central-operacional" && pathname.startsWith(item.href));
   }
 
   return (
@@ -194,7 +256,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
         <nav className={cn("sidebar-scroll flex-1 space-y-0.5 overflow-y-auto pb-3", sidebarCollapsed ? "px-2.5" : "px-2")}>
           {navItems.map((item) => {
             const Icon = icons[item.icon as keyof typeof icons] ?? LayoutDashboard;
-            const active = pathname === item.href || (item.href !== "/central-operacional" && pathname.startsWith(item.href));
+            const active = navItemIsActive(item);
             return (
               <Link
                 key={item.href}
@@ -278,7 +340,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
           <nav className="sidebar-scroll flex-1 space-y-1 overflow-y-auto px-2.5 py-3">
             {navItems.map((item) => {
               const Icon = icons[item.icon as keyof typeof icons] ?? LayoutDashboard;
-              const active = pathname === item.href || (item.href !== "/central-operacional" && pathname.startsWith(item.href));
+              const active = navItemIsActive(item);
               return (
                 <Link
                   key={item.href}
@@ -326,12 +388,51 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
             >
               <Menu className="h-5 w-5" />
             </button>
-            <div className="premium-control hidden h-9 w-full max-w-[420px] items-center gap-2.5 px-3 text-muted md:flex">
-              <Search className="h-4 w-4" />
+            <div ref={searchRef} className="relative hidden w-full max-w-[440px] md:block">
+              <div className="premium-control flex h-9 w-full items-center gap-2.5 px-3 text-muted">
+                <Search className="h-4 w-4 shrink-0" />
               <input
+                value={globalSearch}
+                onChange={(event) => {
+                  setGlobalSearch(event.target.value);
+                  setGlobalSearchOpen(true);
+                }}
+                onFocus={() => setGlobalSearchOpen(true)}
                 className="w-full border-0 bg-transparent text-sm outline-none"
                 placeholder="Pesquisar pessoas, cronogramas, solicitações..."
               />
+              </div>
+              {globalSearchOpen && globalSearch.trim().length >= 2 ? (
+                <div className="absolute left-0 top-11 z-50 w-full overflow-hidden rounded-2xl border border-border bg-white shadow-2xl shadow-navy-950/15">
+                  {globalSearchLoading ? (
+                    <div className="px-4 py-3 text-sm font-bold text-blue-700">Buscando colaboradores...</div>
+                  ) : globalSearchResults.length ? (
+                    <div className="max-h-[360px] overflow-y-auto p-1.5">
+                      {globalSearchResults.map((result) => (
+                        <button
+                          key={`${result.type}-${result.id}`}
+                          type="button"
+                          onClick={() => openSearchResult(result)}
+                          className="flex w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-blue-50"
+                        >
+                          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-blue-600 text-xs font-black text-white">
+                            {result.avatarInitials || result.name.slice(0, 2).toUpperCase()}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-black text-navy-950">{result.name}</span>
+                            <span className="block truncate text-xs font-semibold text-muted">
+                              {result.wbLogin} • {result.jobTitle || "Sem cargo"} • {result.lob || "Sem LOB"} • {result.status || "Sem status"}
+                            </span>
+                          </span>
+                          <ChevronRight className="h-4 w-4 shrink-0 text-blue-500" />
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="px-4 py-4 text-sm font-semibold text-muted">Nenhum resultado encontrado.</div>
+                  )}
+                </div>
+              ) : null}
             </div>
           </div>
 
