@@ -309,6 +309,14 @@ model User {
   rejectedWorkHourAdjustments  WorkHourAdjustmentRequest[] @relation("WorkHourAdjustmentRejectedBy")
   workHourHistories       WorkHourHistory[]       @relation("WorkHourHistoryChangedBy")
   monthlyAdvanceUpdates   MonthlyAdvanceRecord[]  @relation("MonthlyAdvanceUpdatedBy")
+  billingCyclesFinalized  BillingCycle[]          @relation("BillingCycleFinalizedBy")
+  billingCyclesClosed     BillingCycle[]          @relation("BillingCycleClosedBy")
+  billingInvoiceApprovals BillingEmployeeInvoice[] @relation("BillingInvoiceApprovedBy")
+  billingInvoiceReopens   BillingEmployeeInvoice[] @relation("BillingInvoiceReopenedBy")
+  billingAdjustmentsCreated BillingAdjustment[]    @relation("BillingAdjustmentCreatedBy")
+  invoiceAdjustmentSupervisorChecks InvoiceAdjustmentRequest[] @relation("InvoiceAdjustmentSupervisorCheckedBy")
+  invoiceAdjustmentAdminDecisions InvoiceAdjustmentRequest[] @relation("InvoiceAdjustmentAdminDecidedBy")
+  billingRateUpdates      BillingRateConfig[]     @relation("BillingRateUpdatedBy")
   createdStaffCoverages   StaffCoverage[]         @relation("StaffCoverageCreatedBy")
   updatedStaffCoverages   StaffCoverage[]         @relation("StaffCoverageUpdatedBy")
   moodRecords             EmployeeMoodRecord[]
@@ -327,6 +335,7 @@ model Lob {
   qualityRecords QualityRecord[]
   tnsQualityRecords TnsQualityRecord[]
   productionRecords ProductionRecord[]
+  billingAdjustments BillingAdjustment[]
   createdAt      DateTime          @default(now())
 }
 
@@ -413,6 +422,9 @@ model EmployeeProfile {
   workHourRecords    WorkHourRecord[]
   workHourAdjustments WorkHourAdjustmentRequest[]
   monthlyAdvanceRecords MonthlyAdvanceRecord[]
+  billingInvoices    BillingEmployeeInvoice[]
+  billingAdjustments BillingAdjustment[]
+  invoiceAdjustmentRequests InvoiceAdjustmentRequest[]
   scheduleChanges    ScheduleChangeHistory[]
   requests           Request[]
   performanceMetrics PerformanceMetric[]
@@ -558,6 +570,7 @@ model Request {
   history       RequestHistory[]
   approvalFlows ApprovalFlow[]
   redemptions   RewardRedemption[]
+  invoiceAdjustmentRequest InvoiceAdjustmentRequest?
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt
   deletedAt     DateTime?
@@ -599,6 +612,154 @@ model MonthlyAdvanceRecord {
   @@index([referenceMonth, status])
   @@index([employeeId])
   @@index([optIn])
+  @@index([updatedById])
+}
+
+model BillingCycle {
+  id                   String                   @id @default(cuid())
+  referenceMonth       String                   @unique
+  status               String                   @default("ABERTO")
+  grossAmount          Decimal                  @default(0) @db.Decimal(12, 2)
+  adjustmentsAmount    Decimal                  @default(0) @db.Decimal(12, 2)
+  finalAmount          Decimal                  @default(0) @db.Decimal(12, 2)
+  totalApprovedMinutes Int                      @default(0)
+  finalizedAt          DateTime?
+  finalizedById        String?
+  finalizedBy          User?                    @relation("BillingCycleFinalizedBy", fields: [finalizedById], references: [id], onDelete: SetNull)
+  closedAt             DateTime?
+  closedById           String?
+  closedBy             User?                    @relation("BillingCycleClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
+  sentAt               DateTime?
+  paidAt               DateTime?
+  notes                String?
+  invoices             BillingEmployeeInvoice[]
+  adjustments          BillingAdjustment[]
+  invoiceAdjustmentRequests InvoiceAdjustmentRequest[]
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
+
+  @@index([referenceMonth])
+  @@index([status])
+}
+
+model BillingEmployeeInvoice {
+  id                       String                    @id @default(cuid())
+  billingCycleId           String
+  employeeId               String
+  referenceMonth           String
+  status                   String                    @default("EM_PREVISAO")
+  approvedMinutes          Int                       @default(0)
+  projectedMinutes         Int                       @default(0)
+  totalConsideredMinutes   Int                       @default(0)
+  hourlyRate               Decimal                   @default(0) @db.Decimal(10, 2)
+  billingRule              String
+  grossAmount              Decimal                   @default(0) @db.Decimal(12, 2)
+  advanceAmount            Decimal                   @default(0) @db.Decimal(12, 2)
+  campaignAmount           Decimal                   @default(0) @db.Decimal(12, 2)
+  adjustmentAmount         Decimal                   @default(0) @db.Decimal(12, 2)
+  finalAmount              Decimal                   @default(0) @db.Decimal(12, 2)
+  approvedByEmployeeAt     DateTime?
+  approvedByEmployeeUserId String?
+  approvedByEmployeeUser   User?                     @relation("BillingInvoiceApprovedBy", fields: [approvedByEmployeeUserId], references: [id], onDelete: SetNull)
+  reopenedAt               DateTime?
+  reopenedById             String?
+  reopenedBy               User?                     @relation("BillingInvoiceReopenedBy", fields: [reopenedById], references: [id], onDelete: SetNull)
+  billingCycle             BillingCycle              @relation(fields: [billingCycleId], references: [id], onDelete: Cascade)
+  employee                 EmployeeProfile           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  adjustments              BillingAdjustment[]
+  adjustmentRequests       InvoiceAdjustmentRequest[]
+  createdAt                DateTime                  @default(now())
+  updatedAt                DateTime                  @updatedAt
+
+  @@unique([billingCycleId, employeeId])
+  @@index([employeeId, referenceMonth])
+  @@index([referenceMonth])
+  @@index([status])
+  @@index([billingRule])
+}
+
+model BillingAdjustment {
+  id                String                  @id @default(cuid())
+  billingCycleId    String
+  employeeInvoiceId String?
+  referenceMonth    String
+  type              String
+  description       String
+  amount            Decimal                 @db.Decimal(12, 2)
+  employeeId        String?
+  lobId             String?
+  observation       String?
+  createdById       String
+  billingCycle      BillingCycle            @relation(fields: [billingCycleId], references: [id], onDelete: Cascade)
+  employeeInvoice   BillingEmployeeInvoice? @relation(fields: [employeeInvoiceId], references: [id], onDelete: SetNull)
+  employee          EmployeeProfile?        @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  lob               Lob?                    @relation(fields: [lobId], references: [id], onDelete: SetNull)
+  createdBy         User                    @relation("BillingAdjustmentCreatedBy", fields: [createdById], references: [id])
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+  deletedAt         DateTime?
+
+  @@index([billingCycleId])
+  @@index([employeeInvoiceId])
+  @@index([employeeId])
+  @@index([lobId])
+  @@index([referenceMonth])
+  @@index([type])
+  @@index([deletedAt])
+}
+
+model InvoiceAdjustmentRequest {
+  id                    String                 @id @default(cuid())
+  billingCycleId         String
+  employeeInvoiceId      String
+  employeeId             String
+  requestId              String?                @unique
+  type                   String
+  questionedItem         String
+  description            String
+  supervisorChecked      Boolean                @default(false)
+  supervisorObservation  String?
+  supervisorCheckedById  String?
+  supervisorCheckedAt    DateTime?
+  adminDecision          String?
+  adminFinalResponse     String?
+  adminAdjustmentAmount  Decimal?               @db.Decimal(12, 2)
+  adminFinalMinutes      Int?
+  adminDecidedById       String?
+  adminDecidedAt         DateTime?
+  status                 String                 @default("AGUARDANDO_SUPERVISOR")
+  billingCycle           BillingCycle           @relation(fields: [billingCycleId], references: [id], onDelete: Cascade)
+  employeeInvoice        BillingEmployeeInvoice @relation(fields: [employeeInvoiceId], references: [id], onDelete: Cascade)
+  employee               EmployeeProfile        @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  request                Request?               @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  supervisorCheckedBy    User?                  @relation("InvoiceAdjustmentSupervisorCheckedBy", fields: [supervisorCheckedById], references: [id], onDelete: SetNull)
+  adminDecidedBy         User?                  @relation("InvoiceAdjustmentAdminDecidedBy", fields: [adminDecidedById], references: [id], onDelete: SetNull)
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
+  completedAt            DateTime?
+
+  @@index([billingCycleId])
+  @@index([employeeInvoiceId])
+  @@index([employeeId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model BillingRateConfig {
+  id            String    @id @default(cuid())
+  key           String    @unique
+  label         String
+  value         Decimal   @db.Decimal(10, 2)
+  active        Boolean   @default(true)
+  effectiveFrom DateTime  @default(now())
+  effectiveTo   DateTime?
+  updatedById   String?
+  updatedBy     User?     @relation("BillingRateUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([active])
+  @@index([effectiveFrom])
   @@index([updatedById])
 }
 

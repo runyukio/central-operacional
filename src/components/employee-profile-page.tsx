@@ -108,6 +108,23 @@ type ProfilePayload = {
       lastResponseAt: string;
       lastLabel: string;
     };
+    billing: null | {
+      referenceMonth: string;
+      monthLabel: string;
+      status: string;
+      cycleStatus: string;
+      approvedHours: string;
+      projectedHours: string;
+      projectedDays: number;
+      totalHours: string;
+      hourlyRate: number;
+      grossAmount: number;
+      advanceAmount: number;
+      campaignAmount: number;
+      adjustmentAmount: number;
+      finalAmount: number;
+      message: string;
+    };
     updatedAt: string;
   };
 };
@@ -258,6 +275,29 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
       </div>
 
       <div className="grid gap-4 xl:grid-cols-3">
+        {data.billing ? (
+          <Panel title="Prévia de Invoice" action="Ver detalhes" actionOnClick={() => window.location.assign("/meu-perfil/invoice")}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-sm font-black text-navy-950">{data.billing.monthLabel}</p>
+                <p className="text-xs font-semibold text-muted">{data.billing.message}</p>
+              </div>
+              <StatusBadge status={invoiceStatusLabel(data.billing.status)} />
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <MetricBox label="Horas aprovadas" value={data.billing.approvedHours} tone="green" />
+              <MetricBox label="Horas projetadas" value={data.billing.projectedHours} />
+              <MetricBox label="Valor bruto" value={formatCurrency(data.billing.grossAmount)} />
+              <MetricBox label="Previsão final" value={formatCurrency(data.billing.finalAmount)} tone="green" />
+            </div>
+            <div className="mt-3 rounded-lg border border-border bg-slate-50 p-3 text-sm">
+              <InfoLine label="Adiantamento" value={data.billing.advanceAmount ? `-${formatCurrency(data.billing.advanceAmount)}` : "Sem desconto"} />
+              <InfoLine label="Valor/hora" value={formatCurrency(data.billing.hourlyRate)} />
+              <InfoLine label="Total de horas" value={data.billing.totalHours} />
+            </div>
+          </Panel>
+        ) : null}
+
         <Panel title="Performance">
           {data.performance ? (
             <div className="grid gap-2 text-sm sm:grid-cols-2">
@@ -446,4 +486,21 @@ function qualityRuleLabel(value?: string) {
   if (value === "TNS_QUALITY") return "Regra TNS";
   if (value === "MIXED") return "Regra mista";
   return "Sem regra";
+}
+
+function formatCurrency(value: number) {
+  return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(Number.isFinite(value) ? value : 0);
+}
+
+function invoiceStatusLabel(value: string) {
+  const labels: Record<string, string> = {
+    EM_PREVISAO: "Em previsão",
+    DISPONIVEL_APROVACAO: "Disponível para aprovação",
+    APROVADO_COLABORADOR: "Aprovado pelo colaborador",
+    AGUARDANDO_SUPERVISOR: "Aguardando supervisor",
+    AGUARDANDO_ADMIN: "Aguardando Admin",
+    AJUSTE_CONCLUIDO: "Ajuste concluído",
+    FECHADO: "Fechado"
+  };
+  return labels[value] ?? value;
 }

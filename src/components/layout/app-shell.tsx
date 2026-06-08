@@ -69,6 +69,7 @@ const icons = {
 };
 
 type ShellUser = {
+  id?: string | null;
   name?: string | null;
   email?: string | null;
   role?: string;
@@ -97,12 +98,12 @@ type GlobalSearchResult = {
   avatarInitials?: string;
 };
 
-export function AppShell({ children, user }: { children: React.ReactNode; user: ShellUser }) {
+export function AppShell({ children, user, billingAccess = false }: { children: React.ReactNode; user: ShellUser; billingAccess?: boolean }) {
   const pathname = usePathname();
   const router = useRouter();
   const { theme, toggleTheme } = useTheme();
   const role = user.role ?? "COLABORADOR";
-  const navItems = getNavItems(role);
+  const navItems = getNavItems(role).filter((item) => item.href !== "/billing" || billingAccess);
   const isCollaborator = role === "COLABORADOR";
   const [notifications, setNotifications] = useState<HeaderNotification[]>([]);
   const [notificationOpen, setNotificationOpen] = useState(false);

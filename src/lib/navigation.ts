@@ -29,6 +29,7 @@ export const navItems: NavItem[] = [
   { label: "Performance", href: "/performance", icon: "Trophy", roles: allRoles },
   { label: "Equipamentos e Logística", href: "/equipamentos", icon: "MonitorCog", roles: ["ADMIN", "GESTOR", "TI"] },
   { label: "Feedback Anônimo", href: "/feedback-anonimo", icon: "MessageCircleQuestion", roles: allRoles },
+  { label: "Billing", href: "/billing", icon: "Coins", roles: ["ADMIN"] },
   { label: "Configurações", href: "/configuracoes", icon: "Settings", roles: ["ADMIN"] }
 ];
 

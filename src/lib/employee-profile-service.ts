@@ -2,6 +2,7 @@ import { Prisma, type EquipmentStatus, type RequestStatus, type ScheduleStatus, 
 
 import type { Actor } from "@/lib/mock-db";
 import { createNotFoundError, createPermissionError, createServerError, type ApiErrorPayload } from "@/lib/api-errors";
+import { getEmployeeBillingPreview } from "@/lib/billing-service";
 import { getPerformanceDashboard } from "@/lib/performance-service";
 import { canAccessPerformanceWfh, normalizeRole } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
@@ -104,13 +105,14 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
     if (!canViewProfile(viewer, employee)) return createPermissionError("Você não tem permissão para visualizar este perfil.");
 
     const period = currentMonthPeriod();
-    const [schedule, workHours, requests, equipments, mood, performance] = await Promise.all([
+    const [schedule, workHours, requests, equipments, mood, performance, billing] = await Promise.all([
       buildScheduleSummary(employee.id, period),
       buildWorkHoursSummary(employee.id, period),
       buildRequestsSummary(employee),
       buildEquipmentSummary(employee.id),
       buildMoodSummary(employee.id, period),
-      buildPerformanceSummary(actor, viewer, employee, period)
+      buildPerformanceSummary(actor, viewer, employee, period),
+      getEmployeeBillingPreview(employee.id)
     ]);
 
     const viewerRole = normalizeRole(viewer.role.name);
@@ -132,6 +134,7 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
         requests,
         equipments,
         mood,
+        billing,
         updatedAt: formatDateTime(new Date())
       }
     };

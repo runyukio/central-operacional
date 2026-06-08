@@ -2,6 +2,7 @@ import { getToken } from "next-auth/jwt";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
+import { canAccessBilling } from "@/lib/billing-permissions";
 import { canAccessPathForRole, getDefaultPathForRole } from "@/lib/navigation";
 
 export async function middleware(request: NextRequest) {
@@ -17,6 +18,10 @@ export async function middleware(request: NextRequest) {
   const role = String(token.role ?? "COLABORADOR");
   if (token.mustChangePassword && pathname !== "/alterar-senha") {
     return NextResponse.redirect(new URL("/alterar-senha", request.url));
+  }
+
+  if ((pathname === "/billing" || pathname.startsWith("/billing/")) && !canAccessBilling({ id: token.sub, email: token.email, name: token.name })) {
+    return NextResponse.redirect(new URL(getDefaultPathForRole(role), request.url));
   }
 
   if (!canAccessPathForRole(pathname, role)) {
