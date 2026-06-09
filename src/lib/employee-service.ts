@@ -1228,15 +1228,16 @@ async function getEmployeeFilterOptions(where: Prisma.EmployeeProfileWhereInput)
       orderBy: { operationalStatus: "asc" }
     })
   ]);
-  const statuses = Array.from(new Set(
-    statusRows
+  const statuses = Array.from(new Set([
+    ...officialEmployeeStatusOptions,
+    ...statusRows
       .map((row) => displayEmployeeStatus(row.operationalStatus))
       .filter(isSelectableEmployeeStatusOption)
-  )).sort(employeeStatusSort);
+  ])).sort(employeeStatusSort);
   return {
     skills: skillRows.map((row) => row.skill).filter((value): value is string => Boolean(value?.trim())),
     waves: waveRows.map((row) => row.wave).filter((value): value is string => Boolean(value?.trim())),
-    statuses: statuses.length ? statuses : officialEmployeeStatusOptions
+    statuses
   };
 }
 
@@ -1302,6 +1303,10 @@ const employeeStatusDisplayAliases: Record<string, string> = {
   DESATIVADA: "Desativado",
   DESLIGADO: "Desligado",
   DESLIGADA: "Desligado",
+  DESLIGADO_EM_TREINAMENTO: "Desligado em Treinamento",
+  DESLIGADA_EM_TREINAMENTO: "Desligado em Treinamento",
+  DESLIGADO_TREINAMENTO: "Desligado em Treinamento",
+  DESLIGADA_TREINAMENTO: "Desligado em Treinamento",
   BLOCKED: "Inativo",
   BLOQUEADO: "Inativo",
   SUSPENSO: "Inativo",
@@ -1318,11 +1323,21 @@ const employeeStatusDisplayAliases: Record<string, string> = {
   PENDENTE_APROVAÇÃO: "Pendente de cadastro"
 };
 
-const officialEmployeeStatusOptions = ["Ativo", "Desligado", "Em treinamento", "Nesting", "Inativo", "Desativado", "Afastado", "Suspenso", "Pendente de cadastro"];
+const officialEmployeeStatusOptions = ["Ativo", "Em treinamento", "Nesting", "Desligado", "Desligado em Treinamento", "Inativo", "Desativado"];
 
 const employeeStatusFilterAliases: Record<string, string[]> = {
   Ativo: ["Ativo", "ATIVO", "ACTIVE"],
   Desligado: ["Desligado", "DESLIGADO"],
+  "Desligado em Treinamento": [
+    "Desligado em Treinamento",
+    "Desligada em Treinamento",
+    "DESLIGADO_EM_TREINAMENTO",
+    "DESLIGADA_EM_TREINAMENTO",
+    "Desligado treinamento",
+    "Desligada treinamento",
+    "DESLIGADO_TREINAMENTO",
+    "DESLIGADA_TREINAMENTO"
+  ],
   "Em treinamento": ["Em treinamento", "EM_TREINAMENTO"],
   Nesting: ["Nesting", "NESTING"],
   Inativo: ["Inativo", "INATIVO", "INACTIVE"],
@@ -1385,6 +1400,10 @@ const inactiveEmployeeStatusTokens = new Set([
   "OFFLINE",
   "DESLIGADO",
   "DESLIGADA",
+  "DESLIGADO_EM_TREINAMENTO",
+  "DESLIGADA_EM_TREINAMENTO",
+  "DESLIGADO_TREINAMENTO",
+  "DESLIGADA_TREINAMENTO",
   "CANCELLED",
   "CANCELADO",
   "CANCELADA",
@@ -1410,6 +1429,8 @@ function matchesEmployeeStatusFilter(status: unknown, _userStatus: unknown, filt
 
 function canonicalEmployeeStatusLabel(value: unknown) {
   const token = normalizeStatusToken(value);
+  const alias = employeeStatusDisplayAliases[token];
+  if (alias && officialEmployeeStatusOptions.includes(alias)) return alias;
   return officialEmployeeStatusOptions.find((status) => normalizeStatusToken(status) === token);
 }
 

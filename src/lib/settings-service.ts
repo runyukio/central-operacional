@@ -703,7 +703,8 @@ function canBeSupervisorOption(
   const status = text(employee.operationalStatus).toUpperCase();
   const alreadySupervises = (superviseeCounts.get(employee.id) ?? 0) > 0;
   const roleName = employee.user?.role?.name ?? "";
-  return status !== "INACTIVE" && status !== "INATIVO" && (
+  const inactiveStatuses = new Set(["INACTIVE", "INATIVO", "DESLIGADO", "DESLIGADO EM TREINAMENTO", "DESATIVADO"]);
+  return !inactiveStatuses.has(status) && (
     alreadySupervises ||
     canBeSupervisorJobTitle(employee.roleTitle) ||
     ["SUPERVISOR", "GESTOR", "MANAGEMENT", "WFM", "ADMIN"].includes(roleName)

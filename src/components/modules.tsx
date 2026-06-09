@@ -118,7 +118,7 @@ const scheduleEditableStatusOptions = ["Escalado", "Presente", "Nesting", "Falta
 const workflowManagedScheduleStatuses = ["Troca aprovada", "Venda de folga aprovada", "Folga aprovada"] as const;
 const attendanceReasonStatuses = ["Falta", "Erro de cronograma"];
 const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Nesting"];
-const employeeOperationalStatusOptions = ["Ativo", "Nesting", "Inativo", "Pendente de cadastro", "Afastado", "Desligado", "Em treinamento", "Suspenso"];
+const employeeOperationalStatusOptions = ["Ativo", "Em treinamento", "Nesting", "Desligado", "Desligado em Treinamento", "Inativo", "Desativado"];
 const pcdDisabilityTypeOptions = ["", "Física", "Auditiva", "Visual", "Intelectual", "Psicossocial", "Múltipla", "Neurodivergente", "Outra", "Prefiro não informar"];
 const absenceReasonOptions = ["Problema de saúde", "Erro de programação de escala", "Problema técnico corporativo", "Emergência familiar", "Não informado", "Problema técnico pessoal", "Problema de transporte", "Problema pessoal", "Erro de visualização de escala", "Outros"];
 const timeBlockCategoryOptions = ["Administrativo", "Desenvolvimento", "Acompanhamento de operação", "Feedback", "Reunião", "Treinamento", "Suporte ao time", "Análise de indicadores", "Escalonamento / Ocorrência", "Pausa", "Outros"];
@@ -462,6 +462,14 @@ function employeeMapStatusLabel(status: string) {
     ERRO_DE_CRONOGRAMA: "Ativo",
     TREINAMENTO: "Em treinamento",
     EM_TREINAMENTO: "Em treinamento",
+    DESLIGADO: "Desligado",
+    DESLIGADA: "Desligado",
+    DESLIGADO_EM_TREINAMENTO: "Desligado em Treinamento",
+    DESLIGADA_EM_TREINAMENTO: "Desligado em Treinamento",
+    DESLIGADO_TREINAMENTO: "Desligado em Treinamento",
+    DESLIGADA_TREINAMENTO: "Desligado em Treinamento",
+    DESATIVADO: "Desativado",
+    DESATIVADA: "Desativado",
     ACTIVE: "Ativo",
     INACTIVE: "Inativo",
     BLOCKED: "Inativo"
@@ -632,6 +640,10 @@ type EmployeeImportPreview = {
       pcdDisabilityOther?: string;
       createUser: boolean;
       passwordProvided: boolean;
+      currentStatus?: string;
+      newStatus?: string;
+      userWillBeInactivated?: boolean;
+      terminationDate?: string;
     };
   }>;
 };
@@ -4942,14 +4954,18 @@ export function RegistrationApprovalsPage() {
               ) : null}
                 <div className="max-h-[52vh] overflow-y-auto pr-1">
                   <SimpleTable
-                    columns={["Linha", "Nome", "WB/Login", "E-mail", "Status", "Ação", "CPF", "Role", "LOB", "Supervisor", "Entrada", "Saída", "Skill", "Wave", "PCD", "Tipo deficiência", "Usuário", "Validação"]}
+                    columns={["Linha", "Nome", "WB/Login", "E-mail", "Status", "Ação", "Status atual", "Novo status", "Usuário inativado", "Desligamento", "CPF", "Role", "LOB", "Supervisor", "Entrada", "Saída", "Skill", "Wave", "PCD", "Tipo deficiência", "Usuário", "Validação"]}
                     rows={employeeImportPreview.rows.slice(0, IMPORT_PREVIEW_ROW_LIMIT).map((row) => [
                       row.rowNumber,
                       row.preview.name || "-",
                       row.preview.wbLogin || "-",
                       row.preview.email || "-",
                       <StatusBadge key={`${row.rowNumber}-status`} status={row.status ?? (row.errors.length ? "Erro" : row.warnings.length ? "Alerta" : "Válida")} />,
-                      row.action ?? (row.errors.length ? "ignorar" : "criar"),
+                      row.action === "inativar_acesso" ? "Inativar acesso e atualizar status" : row.action ?? (row.errors.length ? "ignorar" : "criar"),
+                      row.preview.currentStatus || "-",
+                      row.preview.newStatus || "-",
+                      row.preview.userWillBeInactivated ? "Sim" : "Não",
+                      row.preview.terminationDate || "-",
                       row.preview.cpf || "CPF pendente",
                       row.preview.role || "-",
                       row.preview.lob || "-",

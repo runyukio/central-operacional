@@ -125,6 +125,11 @@ const inactiveEmployeeStatusKeys = new Set([
   "DESATIVADO",
   "DISABLED",
   "DESLIGADO",
+  "DESLIGADA",
+  "DESLIGADO_EM_TREINAMENTO",
+  "DESLIGADA_EM_TREINAMENTO",
+  "DESLIGADO_TREINAMENTO",
+  "DESLIGADA_TREINAMENTO",
   "TERMINATED",
   "SUSPENSO",
   "SUSPENDED",
@@ -140,6 +145,15 @@ const inactiveEmployeeStatusValues = [
   "Desativado",
   "DISABLED",
   "Desligado",
+  "Desligada",
+  "Desligado em Treinamento",
+  "Desligada em Treinamento",
+  "DESLIGADO_EM_TREINAMENTO",
+  "DESLIGADA_EM_TREINAMENTO",
+  "Desligado treinamento",
+  "Desligada treinamento",
+  "DESLIGADO_TREINAMENTO",
+  "DESLIGADA_TREINAMENTO",
   "TERMINATED",
   "Suspenso",
   "SUSPENDED",
@@ -3410,6 +3424,12 @@ async function listAttritionTerminations(period: NonNullable<ReturnType<typeof r
     where: {
       AND: [
         where,
+        {
+          OR: [
+            { operationalStatus: { equals: "Desligado", mode: "insensitive" } },
+            { operationalStatus: { equals: "TERMINATED", mode: "insensitive" } }
+          ]
+        },
         { terminationDate: { gte: period.start, lte: period.end } }
       ]
     },

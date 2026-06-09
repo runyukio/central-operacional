@@ -515,7 +515,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
           : await prisma.employeeRegistrationRequest.create({ data: registrationData });
         if (existingRegistration) registrosAtualizados += 1;
 
-        const shouldInactivateAccess = isAttritionStatus(row.employeeStatus);
+        const shouldInactivateAccess = isAccessInactiveEmployeeStatus(row.employeeStatus);
         const accessDisabledAt = shouldInactivateAccess ? new Date() : null;
         let userId: string | undefined;
         if (row.createUser) {
@@ -1170,9 +1170,10 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     if (hasImportValue(rows[index]?.tipo_desligamento) && !row.terminationType) errors.push("Tipo de desligamento inválido. Use Voluntário ou Involuntário.");
     if (hasImportValue(rows[index]?.horario_entrada ?? rows[index]?.entrada) && !row.workStartTime) errors.push("Horário de entrada inválido.");
     if (hasImportValue(rows[index]?.horario_saida ?? rows[index]?.saida) && !row.workEndTime) errors.push("Horário de saída inválido.");
-    if (isAttritionStatus(row.employeeStatus) && !row.terminationDate) warnings.push("Status de desligamento/inatividade sem data_desligamento. Para attrition, informe a data de desligamento.");
-    if (row.terminationDate && !isAttritionStatus(row.employeeStatus)) warnings.push("Data de desligamento preenchida, mas status_colaborador não está Inativo ou Desligado.");
-    if (isAttritionStatus(row.employeeStatus)) warnings.push("Acesso vinculado será inativado e o histórico será preservado.");
+    if (isOperationalTerminationStatus(row.employeeStatus) && !row.terminationDate) warnings.push("Colaborador marcado como Desligado sem data de desligamento.");
+    if (isTrainingTerminationStatus(row.employeeStatus) && !row.terminationDate) warnings.push("Colaborador marcado como Desligado em Treinamento sem data de desligamento.");
+    if (row.terminationDate && !isAccessInactiveEmployeeStatus(row.employeeStatus)) warnings.push("Data de desligamento preenchida, mas status_colaborador não está Desligado, Desligado em Treinamento, Inativo ou Desativado.");
+    if (isAccessInactiveEmployeeStatus(row.employeeStatus)) warnings.push("Acesso vinculado será inativado e o histórico será preservado.");
     if (row.stateUf && !/^[A-Z]{2}$/.test(row.stateUf)) errors.push("Estado UF deve ter 2 letras.");
     if (row.zipCode && !/^\d{5}-?\d{3}$/.test(row.zipCode)) warnings.push("CEP fora do padrão 00000-000.");
     if (row.primaryPhone && !/^\d{2}\s?\d{4,5}-?\d{4}$/.test(row.primaryPhone.replace(/[()]/g, ""))) warnings.push("Contato principal fora do padrão brasileiro.");
@@ -1213,7 +1214,7 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
       }
     }
 
-    const willInactivateUser = isAttritionStatus(row.employeeStatus);
+    const willInactivateUser = isAccessInactiveEmployeeStatus(row.employeeStatus);
     validations.push({
       rowNumber: index + 1,
       errors,
@@ -1546,14 +1547,41 @@ function normalizeEmployeeStatus(value: unknown) {
     NESTING: "Nesting",
     AFASTADO: "Afastado",
     DESLIGADO: "Desligado",
+    DESLIGADA: "Desligado",
+    DESLIGADO_EM_TREINAMENTO: "Desligado em Treinamento",
+    DESLIGADA_EM_TREINAMENTO: "Desligado em Treinamento",
+    DESLIGADO_TREINAMENTO: "Desligado em Treinamento",
+    DESLIGADA_TREINAMENTO: "Desligado em Treinamento",
     SUSPENSO: "Suspenso"
   };
   return map[key] ?? raw;
 }
 
-function isAttritionStatus(value: unknown) {
+function isOperationalTerminationStatus(value: unknown) {
   const key = normalizeLookupKey(text(value));
-  return ["INATIVO", "INACTIVE", "DESLIGADO", "DESLIGADA", "TERMINATED", "DESATIVADO", "DESATIVADA"].includes(key);
+  return ["DESLIGADO", "DESLIGADA", "TERMINATED"].includes(key);
+}
+
+function isTrainingTerminationStatus(value: unknown) {
+  const key = normalizeLookupKey(text(value));
+  return ["DESLIGADO_EM_TREINAMENTO", "DESLIGADA_EM_TREINAMENTO", "DESLIGADO_TREINAMENTO", "DESLIGADA_TREINAMENTO"].includes(key);
+}
+
+function isAccessInactiveEmployeeStatus(value: unknown) {
+  const key = normalizeLookupKey(text(value));
+  return [
+    "INATIVO",
+    "INACTIVE",
+    "DESLIGADO",
+    "DESLIGADA",
+    "TERMINATED",
+    "DESLIGADO_EM_TREINAMENTO",
+    "DESLIGADA_EM_TREINAMENTO",
+    "DESLIGADO_TREINAMENTO",
+    "DESLIGADA_TREINAMENTO",
+    "DESATIVADO",
+    "DESATIVADA"
+  ].includes(key);
 }
 
 function normalizeTerminationType(value: unknown) {
