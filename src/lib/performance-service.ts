@@ -34,10 +34,11 @@ type PerformanceEmployee = Prisma.EmployeeProfileGetPayload<{
 
 type QualityRecordForMetrics = Prisma.QualityRecordGetPayload<{ select: typeof qualityMetricSelect }>;
 type TnsQualityRecordForMetrics = Prisma.TnsQualityRecordGetPayload<{ select: typeof tnsQualityMetricSelect }>;
+type CecQualityRecordForMetrics = Prisma.CecQualityRecordGetPayload<{ select: typeof cecQualityMetricSelect }>;
 type ProductionRecordForMetrics = Prisma.ProductionRecordGetPayload<{ select: typeof productionMetricSelect }>;
 type ScheduleRecordForMetrics = Prisma.ScheduleGetPayload<{ select: typeof scheduleMetricSelect }>;
 
-type QualityRule = "ADS_QUALITY" | "TNS_QUALITY" | "UNKNOWN" | "MIXED";
+type QualityRule = "ADS_QUALITY" | "TNS_QUALITY" | "CEC_QUALITY" | "UNKNOWN" | "MIXED";
 type PerformanceSortBy = "quality" | "submit" | "aht" | "abs";
 type PerformanceSortDirection = "asc" | "desc";
 type WfhStatus = "QUALIFIED" | "NOT_QUALIFIED";
@@ -60,7 +61,7 @@ export type PerformanceQuery = {
 
 export type PerformancePreviewRow = {
   rowNumber: number;
-  type: "QUALITY" | "TNS_QUALITY" | "PRODUCTION";
+  type: "QUALITY" | "TNS_QUALITY" | "CEC_QUALITY" | "PRODUCTION";
   wbLogin: string;
   employeeId?: string;
   employeeName?: string;
@@ -76,6 +77,7 @@ export type PerformancePreviewRow = {
 
 type PerformancePreviewOptions = {
   rowNumberOffset?: number;
+  yearReference?: number;
 };
 
 type PerformanceMetrics = {
@@ -136,6 +138,13 @@ const tnsQualityMetricSelect = {
   falsePositive: true,
   employeeId: true
 } satisfies Prisma.TnsQualityRecordSelect;
+const cecQualityMetricSelect = {
+  qualityDate: true,
+  weekNumber: true,
+  passQuantity: true,
+  failQuantity: true,
+  employeeId: true
+} satisfies Prisma.CecQualityRecordSelect;
 const productionMetricSelect = {
   bzDay: true,
   submitNum: true,
@@ -251,6 +260,12 @@ export async function previewTnsQualityImport(actor: Actor, rawRows: Record<stri
   return previewTnsQualityRows(rawRows, options);
 }
 
+export async function previewCecQualityImport(actor: Actor, rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
+  const user = await requireActiveUser(actor);
+  requireImportPermission(user);
+  return previewCecQualityRows(rawRows, options);
+}
+
 export async function commitQualityRawImport(actor: Actor, rawRows: Record<string, unknown>[], fileName = "qualidade.xlsx", batchId?: string, rowNumberOffset = 0) {
   const user = await requireActiveUser(actor);
   requireImportPermission(user);
@@ -263,6 +278,13 @@ export async function commitTnsQualityRawImport(actor: Actor, rawRows: Record<st
   requireImportPermission(user);
   const preview = await previewTnsQualityRows(rawRows, { rowNumberOffset });
   return commitTnsQualityRows(user, preview.rows, fileName, batchId);
+}
+
+export async function commitCecQualityRawImport(actor: Actor, rawRows: Record<string, unknown>[], fileName = "qualidade_cec.xlsx", batchId?: string, rowNumberOffset = 0, yearReference?: number) {
+  const user = await requireActiveUser(actor);
+  requireImportPermission(user);
+  const preview = await previewCecQualityRows(rawRows, { rowNumberOffset, yearReference });
+  return commitCecQualityRows(user, preview.rows, fileName, batchId);
 }
 
 export async function commitProductionRawImport(actor: Actor, rawRows: Record<string, unknown>[], fileName = "producao.xlsx", batchId?: string, rowNumberOffset = 0) {
@@ -295,6 +317,7 @@ async function previewQualityRows(rawRows: Record<string, unknown>[], options: P
     if (!wbLogin) errors.push("WB/Login é obrigatório.");
     else if (!employee) errors.push("WB/Login não encontrado no cadastro.");
     else if (qualityRule === "TNS_QUALITY") warnings.push("Este agente pertence à operação TNS. A qualidade dele deve ser calculada pela base TNS.");
+    else if (qualityRule === "CEC_QUALITY") warnings.push("Este agente pertence à operação CEC. A qualidade dele deve ser calculada pela base CEC.");
     else if (qualityRule === "UNKNOWN") warnings.push("Colaborador sem LOB cadastrada ou com LOB sem regra de qualidade.");
     if (!auditTime) errors.push("Data da auditoria inválida.");
     if (!finalResult) warnings.push("final_result vazio; linha importada com valor em branco.");
@@ -357,6 +380,7 @@ async function previewTnsQualityRows(rawRows: Record<string, unknown>[], options
     if (!wbLogin) errors.push("WB/Login é obrigatório.");
     else if (!employee) errors.push("WB/Login não encontrado no cadastro.");
     else if (qualityRule === "ADS_QUALITY") warnings.push("Este agente pertence à ADS. A qualidade dele deve ser calculada pela base ADS.");
+    else if (qualityRule === "CEC_QUALITY") warnings.push("Este agente pertence à CEC. A qualidade dele deve ser calculada pela base CEC.");
     else if (qualityRule === "UNKNOWN") warnings.push("Colaborador sem LOB cadastrada ou com LOB sem regra de qualidade.");
     if (!auditDate) errors.push("Data da qualidade TNS inválida.");
     if (sampling === null || sampling < 0) errors.push("Sampling inválido.");
@@ -390,6 +414,71 @@ async function previewTnsQualityRows(rawRows: Record<string, unknown>[], options
   });
 
   return markExistingTnsQualityRows(previewRows);
+}
+
+async function previewCecQualityRows(rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
+  const normalizedRows = rawRows.map(normalizeObjectKeys);
+  const yearReference = normalizeYearReference(options.yearReference);
+  const wbLogins = unique(normalizedRows.map((row) => normalizeWbLogin(text(rowValue(row, ["wb", "wb_login", "wb login", "agente", "agent"])))).filter(Boolean));
+  const employees = await findEmployeesByWbLogins(wbLogins);
+  const employeeByLogin = new Map(employees.map((employee) => [normalizeWbLogin(employee.wbLogin), employee]));
+  const seen = new Map<string, number>();
+
+  const previewRows: PerformancePreviewRow[] = normalizedRows.map((row, index) => {
+    const rowNumber = (options.rowNumberOffset ?? 0) + index + 2;
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    const wbLogin = normalizeWbLogin(text(rowValue(row, ["wb", "wb_login", "wb login", "agente", "agent"])));
+    const employee = employeeByLogin.get(wbLogin);
+    const weekNumber = parseWeekNumber(rowValue(row, ["week", "semana"]));
+    const passQuantity = parseInteger(rowValue(row, ["pass quantity", "pass_quantity", "passquantity", "pass"]));
+    const failQuantity = parseInteger(rowValue(row, ["fail quantity", "fail_quantity", "failquantity", "fail"]));
+    const qualityRule = getQualityRuleByEmployee(employee);
+    const weekRange = yearReference && weekNumber ? getIsoWeekDateRange(yearReference, weekNumber) : null;
+    const expandedDates = weekRange ? datesInRange(weekRange.start, weekRange.end).map(formatDateKey) : [];
+    const uniqueKey = yearReference && weekNumber && wbLogin ? `${wbLogin}|${yearReference}-W${String(weekNumber).padStart(2, "0")}` : "";
+
+    if (!yearReference) errors.push("Ano de referência não informado.");
+    if (!wbLogin) errors.push("WB/Login é obrigatório.");
+    else if (!employee) errors.push("WB/Login não encontrado no cadastro.");
+    else if (qualityRule !== "CEC_QUALITY") warnings.push("Agente não está cadastrado como CEC. Verifique se este arquivo pertence à operação correta.");
+    if (!weekNumber) errors.push("Week inválida.");
+    if (passQuantity === null || passQuantity < 0) errors.push("Pass Quantity inválido.");
+    if (failQuantity === null || failQuantity < 0) errors.push("Fail Quantity inválido.");
+    if ((passQuantity ?? 0) + (failQuantity ?? 0) === 0) warnings.push("Pass + Fail = 0; qualidade ficará sem base no cálculo.");
+    if (uniqueKey) {
+      const first = seen.get(uniqueKey);
+      if (first) warnings.push(`Duplicidade da mesma semana/agente no arquivo. Primeira ocorrência na linha ${first}; será tratada por upsert.`);
+      else seen.set(uniqueKey, rowNumber);
+    }
+
+    return {
+      rowNumber,
+      type: "CEC_QUALITY",
+      wbLogin,
+      employeeId: employee?.id,
+      employeeName: employee?.fullName,
+      lob: employee?.lob?.name ?? "",
+      lobId: employee?.lobId ?? undefined,
+      date: weekRange ? `${formatDateKey(weekRange.start)} a ${formatDateKey(weekRange.end)}` : "",
+      uniqueKey,
+      action: errors.length ? "ignore" : "create",
+      errors,
+      warnings,
+      payload: {
+        yearReference,
+        weekNumber,
+        weekStartDate: weekRange ? formatDateKey(weekRange.start) : "",
+        weekEndDate: weekRange ? formatDateKey(weekRange.end) : "",
+        expandedDates,
+        expandedCount: expandedDates.length,
+        passQuantity,
+        failQuantity
+      }
+    };
+  });
+
+  return markExistingCecQualityRows(previewRows);
 }
 
 async function previewProductionRows(rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
@@ -469,6 +558,12 @@ export async function commitTnsQualityImport(actor: Actor, rows: PerformancePrev
   return commitTnsQualityRows(user, rows, fileName);
 }
 
+export async function commitCecQualityImport(actor: Actor, rows: PerformancePreviewRow[], fileName = "qualidade_cec.xlsx") {
+  const user = await requireActiveUser(actor);
+  requireImportPermission(user);
+  return commitCecQualityRows(user, rows, fileName);
+}
+
 async function commitQualityRows(user: AuthenticatedUser, rows: PerformancePreviewRow[], fileName = "qualidade.xlsx", batchId?: string) {
   const validRows = rows.filter((row) => row.type === "QUALITY" && !row.errors.length && row.employeeId && row.uniqueKey);
   if (!validRows.length) throw new PerformanceError("Não há linhas válidas para importar.", 400);
@@ -523,6 +618,59 @@ async function commitTnsQualityRows(user: AuthenticatedUser, rows: PerformancePr
   }
   if (!batchId) await auditImport(user.id, "TNS_QUALITY", batch.id, { fileName, rowsTotal: rows.length, rowsValid: validRows.length, createdRows, updatedRows });
   return { success: true, importedRows: validRows.length, createdRows, updatedRows, batchId: batch.id };
+}
+
+async function commitCecQualityRows(user: AuthenticatedUser, rows: PerformancePreviewRow[], fileName = "qualidade_cec.xlsx", batchId?: string) {
+  const validRows = rows.filter((row) => row.type === "CEC_QUALITY" && !row.errors.length && row.employeeId && row.uniqueKey && Array.isArray(row.payload.expandedDates));
+  if (!validRows.length) throw new PerformanceError("Não há linhas válidas para importar.", 400);
+  const expandedRows = validRows.reduce((sum, row) => sum + (Array.isArray(row.payload.expandedDates) ? row.payload.expandedDates.length : 0), 0);
+  const createdRows = validRows.filter((row) => row.action === "create").reduce((sum, row) => sum + (Array.isArray(row.payload.expandedDates) ? row.payload.expandedDates.length : 0), 0);
+  const updatedRows = Math.max(0, expandedRows - createdRows);
+  const batch = await upsertImportBatch(user, "CEC_QUALITY", fileName, rows, validRows.length, createdRows, updatedRows, batchId);
+
+  for (const chunk of chunks(validRows, 50)) {
+    const operations = chunk.flatMap((row) => {
+      const weekNumber = Number(row.payload.weekNumber);
+      const weekStartDate = parseDate(String(row.payload.weekStartDate))!;
+      const weekEndDate = parseDate(String(row.payload.weekEndDate))!;
+      const passQuantity = Number(row.payload.passQuantity ?? 0);
+      const failQuantity = Number(row.payload.failQuantity ?? 0);
+      const expandedDates = Array.isArray(row.payload.expandedDates) ? row.payload.expandedDates.map((date) => String(date)) : [];
+
+      return expandedDates.map((date) => {
+        const qualityDate = parseDate(date)!;
+        return prisma.cecQualityRecord.upsert({
+          where: { wbLogin_weekNumber_qualityDate: { wbLogin: row.wbLogin, weekNumber, qualityDate } },
+          update: {
+            employeeId: row.employeeId,
+            weekStartDate,
+            weekEndDate,
+            passQuantity,
+            failQuantity,
+            lobId: row.lobId ?? null,
+            importBatchId: batch.id,
+            originalRowNumber: row.rowNumber
+          },
+          create: {
+            wbLogin: row.wbLogin,
+            employeeId: row.employeeId,
+            weekNumber,
+            weekStartDate,
+            weekEndDate,
+            qualityDate,
+            passQuantity,
+            failQuantity,
+            lobId: row.lobId ?? null,
+            importBatchId: batch.id,
+            originalRowNumber: row.rowNumber
+          }
+        });
+      });
+    });
+    await prisma.$transaction(operations);
+  }
+  if (!batchId) await auditImport(user.id, "CEC_QUALITY", batch.id, { fileName, rowsTotal: rows.length, rowsValid: validRows.length, expandedRows, createdRows, updatedRows });
+  return { success: true, importedRows: expandedRows, createdRows, updatedRows, batchId: batch.id };
 }
 
 export async function commitProductionImport(actor: Actor, rows: PerformancePreviewRow[], fileName = "producao.xlsx") {
@@ -621,7 +769,7 @@ export async function exportPerformanceXlsxData(actor: Actor, query: Performance
   };
 }
 
-export function performanceTemplate(type: "quality" | "tns-quality" | "production"): XlsxExportPayload {
+export function performanceTemplate(type: "quality" | "tns-quality" | "cec-quality" | "production"): XlsxExportPayload {
   if (type === "quality") {
     return {
       fileName: "template_performance_qualidade.xlsx",
@@ -635,6 +783,14 @@ export function performanceTemplate(type: "quality" | "tns-quality" | "productio
       fileName: "template_performance_qualidade_tns.xlsx",
       sheetName: "qualidade_tns",
       headers: ["audit_date", "wb_login", "LOB", "Sampling", "Mislabeled", "Leakage", "False Positive", "source_key"],
+      rows: []
+    };
+  }
+  if (type === "cec-quality") {
+    return {
+      fileName: "template_performance_qualidade_cec.xlsx",
+      sheetName: "Planilha1",
+      headers: ["WB", "Week", "Pass Quantity", "Fail Quantity"],
       rows: []
     };
   }
@@ -688,6 +844,7 @@ export function getQualityRuleByEmployee(employee?: { lob?: { name?: string | nu
   if (!lobName) return "UNKNOWN";
   if (lobName === "ads") return "ADS_QUALITY";
   if (["tns", "video", "comments"].includes(lobName)) return "TNS_QUALITY";
+  if (lobName === "cec") return "CEC_QUALITY";
   return "UNKNOWN";
 }
 
@@ -804,7 +961,7 @@ async function getPerformanceFilterOptions() {
 async function buildAgentRows(employees: PerformanceEmployee[], period: Period) {
   if (!employees.length) return [];
   const employeeIds = employees.map((employee) => employee.id);
-  const [qualityRecords, tnsQualityRecords, productionRecords, schedules] = await Promise.all([
+  const [qualityRecords, tnsQualityRecords, cecQualityRecords, productionRecords, schedules] = await Promise.all([
     prisma.qualityRecord.findMany({
       where: { employeeId: { in: employeeIds }, auditDate: { gte: period.start, lte: period.end } },
       select: qualityMetricSelect
@@ -812,6 +969,10 @@ async function buildAgentRows(employees: PerformanceEmployee[], period: Period) 
     prisma.tnsQualityRecord.findMany({
       where: { employeeId: { in: employeeIds }, auditDate: { gte: period.start, lte: period.end } },
       select: tnsQualityMetricSelect
+    }),
+    prisma.cecQualityRecord.findMany({
+      where: { employeeId: { in: employeeIds }, qualityDate: { gte: period.start, lte: period.end } },
+      select: cecQualityMetricSelect
     }),
     prisma.productionRecord.findMany({
       where: { employeeId: { in: employeeIds }, bzDay: { gte: period.start, lte: period.end } },
@@ -826,12 +987,13 @@ async function buildAgentRows(employees: PerformanceEmployee[], period: Period) 
   const weeks = weeksInPeriod(period);
   return employees.map((employee) => {
     const qualityRule = getQualityRuleByEmployee(employee);
-    const weekly = weeks.map((week) => buildWeeklyMetrics(employee.id, week, qualityRule, qualityRecords, tnsQualityRecords, productionRecords, schedules));
+    const weekly = weeks.map((week) => buildWeeklyMetrics(employee.id, week, qualityRule, qualityRecords, tnsQualityRecords, cecQualityRecords, productionRecords, schedules));
     const employeeQualityRecords = qualityRecords.filter((record) => record.employeeId === employee.id);
     const employeeTnsQualityRecords = tnsQualityRecords.filter((record) => record.employeeId === employee.id);
+    const employeeCecQualityRecords = cecQualityRecords.filter((record) => record.employeeId === employee.id);
     const periodMetrics = {
       ...summarizeWeeklyRows(weekly, period),
-      ...calculateQualityByRule(qualityRule, employeeQualityRecords, employeeTnsQualityRecords)
+      ...calculateQualityByRule(qualityRule, employeeQualityRecords, employeeTnsQualityRecords, employeeCecQualityRecords)
     };
     const wfhQualification = calculateWfhQualification(periodMetrics, period);
     return {
@@ -850,9 +1012,10 @@ async function buildAgentRows(employees: PerformanceEmployee[], period: Period) 
   });
 }
 
-function buildWeeklyMetrics(employeeId: string, week: WeekRange, qualityRule: QualityRule, qualityRecords: QualityRecordForMetrics[], tnsQualityRecords: TnsQualityRecordForMetrics[], productionRecords: ProductionRecordForMetrics[], schedules: ScheduleRecordForMetrics[]): WeeklyMetricRow {
+function buildWeeklyMetrics(employeeId: string, week: WeekRange, qualityRule: QualityRule, qualityRecords: QualityRecordForMetrics[], tnsQualityRecords: TnsQualityRecordForMetrics[], cecQualityRecords: CecQualityRecordForMetrics[], productionRecords: ProductionRecordForMetrics[], schedules: ScheduleRecordForMetrics[]): WeeklyMetricRow {
   const weekQualityRecords: QualityRecordForMetrics[] = [];
   const weekTnsQualityRecords: TnsQualityRecordForMetrics[] = [];
+  const weekCecQualityRecords: CecQualityRecordForMetrics[] = [];
   let submitTotal = 0;
   let moderationSeconds = 0;
   let absences = 0;
@@ -864,6 +1027,10 @@ function buildWeeklyMetrics(employeeId: string, week: WeekRange, qualityRule: Qu
   for (const record of tnsQualityRecords) {
     if (record.employeeId !== employeeId || !isDateInRange(record.auditDate, week.start, week.end)) continue;
     weekTnsQualityRecords.push(record);
+  }
+  for (const record of cecQualityRecords) {
+    if (record.employeeId !== employeeId || !isDateInRange(record.qualityDate, week.start, week.end)) continue;
+    weekCecQualityRecords.push(record);
   }
   for (const record of productionRecords) {
     if (record.employeeId !== employeeId || !isDateInRange(record.bzDay, week.start, week.end)) continue;
@@ -879,7 +1046,7 @@ function buildWeeklyMetrics(employeeId: string, week: WeekRange, qualityRule: Qu
     weekStart: formatDateKey(week.start),
     weekEnd: formatDateKey(week.end),
     weekLabel: `${formatDisplayDate(week.start)} a ${formatDisplayDate(week.end)}`,
-    ...calculateQualityByRule(qualityRule, weekQualityRecords, weekTnsQualityRecords),
+    ...calculateQualityByRule(qualityRule, weekQualityRecords, weekTnsQualityRecords, weekCecQualityRecords),
     submit: calculateDailySubmit(submitTotal, week.start, week.end).submitAveragePerDay,
     submitTotal,
     moderationSeconds: round2(moderationSeconds),
@@ -917,9 +1084,10 @@ function summarizeRows(rows: AgentPerformanceRow[], period: Period) {
   };
 }
 
-function calculateQualityByRule(qualityRule: QualityRule, adsRecords: QualityRecordForMetrics[], tnsRecords: TnsQualityRecordForMetrics[]) {
+function calculateQualityByRule(qualityRule: QualityRule, adsRecords: QualityRecordForMetrics[], tnsRecords: TnsQualityRecordForMetrics[], cecRecords: CecQualityRecordForMetrics[] = []) {
   if (qualityRule === "ADS_QUALITY") return calculateAdsQuality(adsRecords);
   if (qualityRule === "TNS_QUALITY") return calculateTnsQuality(tnsRecords);
+  if (qualityRule === "CEC_QUALITY") return calculateCecQuality(cecRecords);
   return emptyQualityMetrics(qualityRule);
 }
 
@@ -957,6 +1125,21 @@ function calculateTnsQuality(records: TnsQualityRecordForMetrics[]) {
     qualityCorrect: numerator,
     qualityTotal: sampling,
     quality: percent(numerator, sampling)
+  };
+}
+
+function calculateCecQuality(records: CecQualityRecordForMetrics[]) {
+  const pass = records.reduce((sum, record) => sum + record.passQuantity, 0);
+  const fail = records.reduce((sum, record) => sum + record.failQuantity, 0);
+  const total = pass + fail;
+  return {
+    qualityRule: "CEC_QUALITY" as const,
+    qualityNumerator: pass,
+    qualityDenominator: total,
+    qualityErrors: fail,
+    qualityCorrect: pass,
+    qualityTotal: total,
+    quality: percent(pass, total)
   };
 }
 
@@ -1141,6 +1324,31 @@ async function markExistingTnsQualityRows(previewRows: PerformancePreviewRow[]) 
   return buildPreviewResult(previewRows.map((row) => row.errors.length ? row : { ...row, action: "create" }));
 }
 
+async function markExistingCecQualityRows(previewRows: PerformancePreviewRow[]) {
+  const validRows = previewRows.filter((row) => !row.errors.length && row.wbLogin && Number(row.payload.weekNumber) && Array.isArray(row.payload.expandedDates));
+  const existingKeys = new Set<string>();
+  for (const chunk of chunks(validRows, 40)) {
+    const existing = await prisma.cecQualityRecord.findMany({
+      where: {
+        OR: chunk.flatMap((row) => {
+          const weekNumber = Number(row.payload.weekNumber);
+          const expandedDates = Array.isArray(row.payload.expandedDates) ? row.payload.expandedDates.map((date) => String(date)) : [];
+          return expandedDates.map((date) => ({ wbLogin: row.wbLogin, weekNumber, qualityDate: parseDate(date)! }));
+        })
+      },
+      select: { wbLogin: true, weekNumber: true, qualityDate: true }
+    });
+    for (const row of existing) existingKeys.add(cecQualityExistingKey(row.wbLogin, row.weekNumber, row.qualityDate));
+  }
+  return buildPreviewResult(previewRows.map((row) => {
+    if (row.errors.length) return row;
+    const weekNumber = Number(row.payload.weekNumber);
+    const expandedDates = Array.isArray(row.payload.expandedDates) ? row.payload.expandedDates.map((date) => String(date)) : [];
+    const hasExisting = expandedDates.some((date) => existingKeys.has(cecQualityExistingKey(row.wbLogin, weekNumber, parseDate(date)!)));
+    return { ...row, action: hasExisting ? "update" : "create" };
+  }));
+}
+
 async function markExistingProductionRows(previewRows: PerformancePreviewRow[]) {
   const validKeys = unique(previewRows.filter((row) => !row.errors.length && row.uniqueKey).map((row) => row.uniqueKey));
   const existing = validKeys.length ? await prisma.productionRecord.findMany({ where: { productionKey: { in: validKeys } }, select: { productionKey: true } }) : [];
@@ -1150,7 +1358,7 @@ async function markExistingProductionRows(previewRows: PerformancePreviewRow[]) 
 
 async function upsertImportBatch(
   user: AuthenticatedUser,
-  type: "QUALITY" | "TNS_QUALITY" | "PRODUCTION",
+  type: "QUALITY" | "TNS_QUALITY" | "CEC_QUALITY" | "PRODUCTION",
   fileName: string,
   rows: PerformancePreviewRow[],
   rowsValid: number,
@@ -1216,6 +1424,7 @@ function buildPreviewResult(rows: PerformancePreviewRow[]) {
       warningRows: rows.filter((row) => row.warnings.length).length,
       createdRows: rows.filter((row) => !row.errors.length && row.action === "create").length,
       updatedRows: rows.filter((row) => !row.errors.length && row.action === "update").length,
+      expandedRows: rows.reduce((sum, row) => sum + (row.type === "CEC_QUALITY" && !row.errors.length ? Number(row.payload.expandedCount ?? 0) : 0), 0),
       foundEmployees: rows.filter((row) => row.employeeId).length,
       missingEmployees: missingWbLogins.length,
       missingWbLogins
@@ -1268,6 +1477,19 @@ function weeksInPeriod(period: Period): WeekRange[] {
     weeks.push({ start: cursor, end: addDays(cursor, 6) });
   }
   return weeks;
+}
+
+function getIsoWeekDateRange(year: number, weekNumber: number): WeekRange {
+  const januaryFourth = utcDate(year, 1, 4);
+  const weekOneStart = startOfWeekMonday(januaryFourth);
+  const start = addDays(weekOneStart, (weekNumber - 1) * 7);
+  return { start, end: addDays(start, 6) };
+}
+
+function datesInRange(start: Date, end: Date) {
+  const dates: Date[] = [];
+  for (let cursor = start; cursor <= end; cursor = addDays(cursor, 1)) dates.push(cursor);
+  return dates;
 }
 
 function startOfWeekMonday(date: Date) {
@@ -1391,9 +1613,26 @@ function parseInteger(value: unknown) {
   return parsed === null ? null : Math.round(parsed);
 }
 
+function parseWeekNumber(value: unknown) {
+  const raw = text(value);
+  if (!raw) return null;
+  const match = raw.match(/\d{1,2}/);
+  const parsed = match ? Number(match[0]) : Number(raw);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 53 ? parsed : null;
+}
+
+function normalizeYearReference(value: unknown) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 2000 && parsed <= 2100 ? parsed : null;
+}
+
 function nullableNumber(value: unknown) {
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function cecQualityExistingKey(wbLogin: string, weekNumber: number, qualityDate: Date) {
+  return `${normalizeWbLogin(wbLogin)}|${weekNumber}|${formatDateKey(qualityDate)}`;
 }
 
 function unique<T>(values: T[]) {

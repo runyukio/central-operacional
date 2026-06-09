@@ -334,6 +334,7 @@ model Lob {
   staffCoverages StaffCoverage[]
   qualityRecords QualityRecord[]
   tnsQualityRecords TnsQualityRecord[]
+  cecQualityRecords CecQualityRecord[]
   productionRecords ProductionRecord[]
   billingAdjustments BillingAdjustment[]
   createdAt      DateTime          @default(now())
@@ -430,6 +431,7 @@ model EmployeeProfile {
   performanceMetrics PerformanceMetric[]
   qualityRecords     QualityRecord[]
   tnsQualityRecords  TnsQualityRecord[]
+  cecQualityRecords  CecQualityRecord[]
   productionRecords  ProductionRecord[]
   workSessionDevices  WorkSessionDevice[]
   workSessionEvents   WorkSessionEvent[]
@@ -889,6 +891,7 @@ model PerformanceImportBatch {
   importedBy   User?           @relation("PerformanceImportUploadedBy", fields: [importedById], references: [id], onDelete: SetNull)
   qualityRecords QualityRecord[]
   tnsQualityRecords TnsQualityRecord[]
+  cecQualityRecords CecQualityRecord[]
   productionRecords ProductionRecord[]
   importedAt   DateTime        @default(now())
   createdAt    DateTime        @default(now())
@@ -951,6 +954,37 @@ model TnsQualityRecord {
   @@index([lobId])
   @@index([sourceKey])
   @@index([employeeId, auditDate])
+}
+
+model CecQualityRecord {
+  id                String                 @id @default(cuid())
+  wbLogin           String
+  employeeId        String?
+  employee          EmployeeProfile?       @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  weekNumber        Int
+  weekStartDate     DateTime
+  weekEndDate       DateTime
+  qualityDate       DateTime
+  passQuantity      Int                    @default(0)
+  failQuantity      Int                    @default(0)
+  lobId             String?
+  lob               Lob?                   @relation(fields: [lobId], references: [id], onDelete: SetNull)
+  importBatchId     String?
+  importBatch       PerformanceImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
+  originalRowNumber Int?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  @@unique([wbLogin, weekNumber, qualityDate])
+  @@index([employeeId])
+  @@index([wbLogin])
+  @@index([qualityDate])
+  @@index([weekNumber])
+  @@index([lobId])
+  @@index([importBatchId])
+  @@index([employeeId, qualityDate])
+  @@index([weekNumber, employeeId])
+  @@index([employeeId, weekNumber])
 }
 
 model ProductionRecord {

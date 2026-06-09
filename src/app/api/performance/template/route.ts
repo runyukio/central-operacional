@@ -15,7 +15,7 @@ export async function GET(request: Request) {
     }
     const url = new URL(request.url);
     const requestedType = url.searchParams.get("type");
-    const type = requestedType === "production" ? "production" : requestedType === "tns-quality" ? "tns-quality" : "quality";
+    const type = requestedType === "production" ? "production" : requestedType === "tns-quality" ? "tns-quality" : requestedType === "cec-quality" ? "cec-quality" : "quality";
     return buildXlsxResponse(performanceTemplate(type));
   } catch (error) {
     if (error instanceof PerformanceError) {

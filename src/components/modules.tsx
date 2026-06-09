@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import {
   Bar,
@@ -10160,17 +10160,22 @@ export function PerformancePage() {
   const [message, setMessage] = useState("");
   const [qualityPreview, setQualityPreview] = useState<PerformancePreviewResponse | null>(null);
   const [tnsQualityPreview, setTnsQualityPreview] = useState<PerformancePreviewResponse | null>(null);
+  const [cecQualityPreview, setCecQualityPreview] = useState<PerformancePreviewResponse | null>(null);
   const [productionPreview, setProductionPreview] = useState<PerformancePreviewResponse | null>(null);
   const [qualityFileName, setQualityFileName] = useState("");
   const [tnsQualityFileName, setTnsQualityFileName] = useState("");
+  const [cecQualityFileName, setCecQualityFileName] = useState("");
   const [productionFileName, setProductionFileName] = useState("");
+  const [cecQualityYear, setCecQualityYear] = useState(() => String(new Date().getFullYear()));
   const [importing, setImporting] = useState<"" | PerformanceImportKind>("");
   const [selectedAgent, setSelectedAgent] = useState<AgentPerformanceClient | null>(null);
   const qualityInputRef = useRef<HTMLInputElement | null>(null);
   const tnsQualityInputRef = useRef<HTMLInputElement | null>(null);
+  const cecQualityInputRef = useRef<HTMLInputElement | null>(null);
   const productionInputRef = useRef<HTMLInputElement | null>(null);
   const qualityRawRowsRef = useRef<Array<Record<string, unknown>>>([]);
   const tnsQualityRawRowsRef = useRef<Array<Record<string, unknown>>>([]);
+  const cecQualityRawRowsRef = useRef<Array<Record<string, unknown>>>([]);
   const productionRawRowsRef = useRef<Array<Record<string, unknown>>>([]);
   const sessionRole = String((session?.user as { role?: string } | undefined)?.role ?? "").toUpperCase();
   const sessionCanWfh = ["ADMIN", "WFM", "SUPERVISOR", "RH", "GESTOR", "COORDENADOR", "GERENTE", "MANAGEMENT"].includes(sessionRole);
@@ -10232,6 +10237,7 @@ export function PerformancePage() {
     setImporting(type);
     if (type === "quality") setQualityFileName(file.name);
     else if (type === "tns-quality") setTnsQualityFileName(file.name);
+    else if (type === "cec-quality") setCecQualityFileName(file.name);
     else setProductionFileName(file.name);
     try {
       const rawRows = await readPerformanceWorkbookRows(file, type);
@@ -10242,6 +10248,9 @@ export function PerformancePage() {
       } else if (type === "tns-quality") {
         tnsQualityRawRowsRef.current = rawRows;
         setTnsQualityPreview(null);
+      } else if (type === "cec-quality") {
+        cecQualityRawRowsRef.current = rawRows;
+        setCecQualityPreview(null);
       } else {
         productionRawRowsRef.current = rawRows;
         setProductionPreview(null);
@@ -10251,12 +10260,13 @@ export function PerformancePage() {
         setMessage(`Validando ${performanceImportLabel(type)}: ${Math.min(index + PERFORMANCE_IMPORT_CHUNK_SIZE, rawRows.length)} de ${rawRows.length} linha(s).`);
         const result = await apiJson<PerformancePreviewResponse>(`/api/performance/import/${type}/preview`, {
           method: "POST",
-          body: JSON.stringify({ rows: rawRows.slice(index, index + PERFORMANCE_IMPORT_CHUNK_SIZE), rowOffset: index })
+          body: JSON.stringify({ rows: rawRows.slice(index, index + PERFORMANCE_IMPORT_CHUNK_SIZE), rowOffset: index, yearReference: type === "cec-quality" ? cecQualityYear : undefined })
         });
         aggregate = mergePerformancePreview(aggregate, result);
       }
       if (type === "quality") setQualityPreview(aggregate);
       else if (type === "tns-quality") setTnsQualityPreview(aggregate);
+      else if (type === "cec-quality") setCecQualityPreview(aggregate);
       else setProductionPreview(aggregate);
       const hiddenRows = aggregate.summary.totalRows > aggregate.rows.length ? ` Exibindo amostra de ${aggregate.rows.length} linha(s) para evitar payload grande.` : "";
       setMessage(aggregate.summary.errorRows ? `Revise os erros do preview antes de confirmar.${hiddenRows}` : `Preview gerado. Confirme para importar a base.${hiddenRows}`);
@@ -10266,16 +10276,17 @@ export function PerformancePage() {
       setImporting("");
       if (qualityInputRef.current) qualityInputRef.current.value = "";
       if (tnsQualityInputRef.current) tnsQualityInputRef.current.value = "";
+      if (cecQualityInputRef.current) cecQualityInputRef.current.value = "";
       if (productionInputRef.current) productionInputRef.current.value = "";
     }
   }
 
   async function commitPerformanceImport(type: PerformanceImportKind) {
-    const preview = type === "quality" ? qualityPreview : type === "tns-quality" ? tnsQualityPreview : productionPreview;
+    const preview = type === "quality" ? qualityPreview : type === "tns-quality" ? tnsQualityPreview : type === "cec-quality" ? cecQualityPreview : productionPreview;
     if (!preview || preview.summary.errorRows || importing) return;
     setImporting(type);
     try {
-      const rawRows = type === "quality" ? qualityRawRowsRef.current : type === "tns-quality" ? tnsQualityRawRowsRef.current : productionRawRowsRef.current;
+      const rawRows = type === "quality" ? qualityRawRowsRef.current : type === "tns-quality" ? tnsQualityRawRowsRef.current : type === "cec-quality" ? cecQualityRawRowsRef.current : productionRawRowsRef.current;
       if (!rawRows.length) throw new Error("Arquivo original não encontrado para confirmar. Gere o preview novamente.");
       let batchId = "";
       let importedRows = 0;
@@ -10287,9 +10298,10 @@ export function PerformancePage() {
           method: "POST",
           body: JSON.stringify({
             rawRows: rawRows.slice(index, index + PERFORMANCE_IMPORT_CHUNK_SIZE),
-            fileName: type === "quality" ? qualityFileName : type === "tns-quality" ? tnsQualityFileName : productionFileName,
+            fileName: type === "quality" ? qualityFileName : type === "tns-quality" ? tnsQualityFileName : type === "cec-quality" ? cecQualityFileName : productionFileName,
             batchId,
-            rowOffset: index
+            rowOffset: index,
+            yearReference: type === "cec-quality" ? cecQualityYear : undefined
           })
         });
         batchId = result.batchId;
@@ -10304,6 +10316,9 @@ export function PerformancePage() {
       } else if (type === "tns-quality") {
         tnsQualityRawRowsRef.current = [];
         setTnsQualityPreview(null);
+      } else if (type === "cec-quality") {
+        cecQualityRawRowsRef.current = [];
+        setCecQualityPreview(null);
       } else {
         productionRawRowsRef.current = [];
         setProductionPreview(null);
@@ -10448,7 +10463,7 @@ export function PerformancePage() {
           </Panel>
 
           {wfhPayload.canImport ? (
-            <div className="grid gap-2 md:grid-cols-3">
+            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
               <PerformanceImportPanel
                 title="Upload de Qualidade ADS"
                 description="final_result, case_order_id e audit_case_order_id."
@@ -10464,6 +10479,22 @@ export function PerformancePage() {
                 loading={importing === "tns-quality"}
                 onTemplate={() => void downloadFile("/api/performance/template?type=tns-quality", "template_performance_qualidade_tns.xlsx").catch((error) => setMessage(error instanceof Error ? error.message : "Não foi possível baixar o template."))}
                 onFile={(file) => void previewPerformanceFile("tns-quality", file)}
+              />
+              <PerformanceImportPanel
+                title="Upload de Qualidade CEC"
+                description="WB, Week, Pass Quantity e Fail Quantity."
+                inputRef={cecQualityInputRef}
+                loading={importing === "cec-quality"}
+                extra={(
+                  <FormInput
+                    label="Ano de referência"
+                    type="number"
+                    value={cecQualityYear}
+                    onChange={setCecQualityYear}
+                  />
+                )}
+                onTemplate={() => void downloadFile("/api/performance/template?type=cec-quality", "template_performance_qualidade_cec.xlsx").catch((error) => setMessage(error instanceof Error ? error.message : "Não foi possível baixar o template."))}
+                onFile={(file) => void previewPerformanceFile("cec-quality", file)}
               />
               <PerformanceImportPanel
                 title="Upload de Produção, AHT e Volume"
@@ -10529,6 +10560,9 @@ export function PerformancePage() {
       ) : null}
       {tnsQualityPreview ? (
         <PerformancePreviewModal title="Preview da base de Qualidade TNS" fileName={tnsQualityFileName} preview={tnsQualityPreview} importing={importing === "tns-quality"} onClose={() => setTnsQualityPreview(null)} onCommit={() => void commitPerformanceImport("tns-quality")} />
+      ) : null}
+      {cecQualityPreview ? (
+        <PerformancePreviewModal title="Preview da base de Qualidade CEC" fileName={cecQualityFileName} preview={cecQualityPreview} importing={importing === "cec-quality"} onClose={() => setCecQualityPreview(null)} onCommit={() => void commitPerformanceImport("cec-quality")} />
       ) : null}
       {productionPreview ? (
         <PerformancePreviewModal title="Preview da base de Produção" fileName={productionFileName} preview={productionPreview} importing={importing === "production"} onClose={() => setProductionPreview(null)} onCommit={() => void commitPerformanceImport("production")} />
@@ -10645,7 +10679,7 @@ function PerformanceSelect({ label, value, options, optionLabel, onChange }: { l
   );
 }
 
-function PerformanceImportPanel({ title, description, inputRef, loading, onTemplate, onFile }: { title: string; description: string; inputRef: { current: HTMLInputElement | null }; loading: boolean; onTemplate: () => void; onFile: (file?: File | null) => void }) {
+function PerformanceImportPanel({ title, description, inputRef, loading, extra, onTemplate, onFile }: { title: string; description: string; inputRef: { current: HTMLInputElement | null }; loading: boolean; extra?: ReactNode; onTemplate: () => void; onFile: (file?: File | null) => void }) {
   return (
     <div className="rounded-lg border border-border bg-white p-3 shadow-sm">
       <div className="flex items-start justify-between gap-3">
@@ -10655,6 +10689,7 @@ function PerformanceImportPanel({ title, description, inputRef, loading, onTempl
         </div>
         <Upload className="h-4 w-4 shrink-0 text-blue-600" />
       </div>
+      {extra ? <div className="mt-3">{extra}</div> : null}
       <input ref={(element) => { inputRef.current = element; }} type="file" accept=".xlsx,.xls" className="hidden" onChange={(event) => onFile(event.target.files?.[0])} />
       <div className="mt-3 flex flex-wrap gap-2">
         <button onClick={onTemplate} className="premium-control inline-flex h-8 items-center gap-2 px-2.5 text-xs font-extrabold text-navy-950"><Download className="h-3.5 w-3.5" /> Template</button>
@@ -10676,12 +10711,13 @@ function PerformancePreviewModal({ title, fileName, preview, importing, onClose,
           <button onClick={onClose} className="rounded-lg border border-border px-3 py-2 text-sm font-bold text-navy-950">Fechar</button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
-          <div className="grid gap-3 md:grid-cols-6">
+          <div className="grid gap-3 md:grid-cols-6 xl:grid-cols-7">
             <MetricPill value={preview.summary.validRows} label="Linhas válidas" />
             <MetricPill value={preview.summary.errorRows} label="Com erro" />
             <MetricPill value={preview.summary.warningRows} label="Alertas" />
             <MetricPill value={preview.summary.createdRows} label="Novos" />
             <MetricPill value={preview.summary.updatedRows} label="Atualizações" />
+            {preview.summary.expandedRows ? <MetricPill value={preview.summary.expandedRows} label="Registros gerados" /> : null}
             <MetricPill value={preview.summary.missingEmployees} label="WB/Login ausente" />
           </div>
           <ImportIssueSummary rows={preview.rows.map((row) => ({ rowNumber: row.rowNumber, errors: row.errors, warnings: row.warnings }))} />
@@ -10723,22 +10759,26 @@ async function readPerformanceWorkbookRows(file: File, type: PerformanceImportKi
     ? ["qualidade", "quality"]
     : type === "tns-quality"
       ? ["qualidade_tns", "qualidade tns", "tns quality", "quality tns", "tns"]
-      : ["producao", "produção", "production"];
+      : type === "cec-quality"
+        ? ["planilha1", "qualidade cec", "qualidade_cec", "cec quality", "quality cec", "cec"]
+        : ["producao", "produção", "production"];
   const sheetName = workbook.SheetNames.find((name) => preferredSheets.includes(normalizePerformanceSheetName(name))) ?? workbook.SheetNames[0];
   const sheet = sheetName ? workbook.Sheets[sheetName] : null;
-  if (!sheet) throw new Error(type === "quality" ? "Planilha de Qualidade não encontrada." : type === "tns-quality" ? "Planilha de Qualidade TNS não encontrada." : "Planilha de Produção não encontrada.");
+  if (!sheet) throw new Error(type === "quality" ? "Planilha de Qualidade não encontrada." : type === "tns-quality" ? "Planilha de Qualidade TNS não encontrada." : type === "cec-quality" ? "Planilha de Qualidade CEC não encontrada." : "Planilha de Produção não encontrada.");
   return XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
 }
 
 function performanceImportLabel(type: PerformanceImportKind) {
   if (type === "quality") return "Qualidade ADS";
   if (type === "tns-quality") return "Qualidade TNS";
+  if (type === "cec-quality") return "Qualidade CEC";
   return "Produção";
 }
 
 function performanceImportBatchLabel(type: string) {
   if (type === "QUALITY") return "Qualidade ADS";
   if (type === "TNS_QUALITY") return "Qualidade TNS";
+  if (type === "CEC_QUALITY") return "Qualidade CEC";
   if (type === "PRODUCTION") return "Produção";
   return type;
 }
@@ -10746,6 +10786,7 @@ function performanceImportBatchLabel(type: string) {
 function performanceQualityRuleLabel(rule?: string) {
   if (rule === "ADS_QUALITY") return "ADS";
   if (rule === "TNS_QUALITY") return "TNS";
+  if (rule === "CEC_QUALITY") return "CEC";
   if (rule === "MIXED") return "Mista";
   return "Sem regra";
 }
@@ -10765,6 +10806,7 @@ function emptyPerformancePreview(): PerformancePreviewResponse {
       warningRows: 0,
       createdRows: 0,
       updatedRows: 0,
+      expandedRows: 0,
       foundEmployees: 0,
       missingEmployees: 0,
       missingWbLogins: []
@@ -10784,6 +10826,7 @@ function mergePerformancePreview(current: PerformancePreviewResponse, next: Perf
       warningRows: current.summary.warningRows + next.summary.warningRows,
       createdRows: current.summary.createdRows + next.summary.createdRows,
       updatedRows: current.summary.updatedRows + next.summary.updatedRows,
+      expandedRows: current.summary.expandedRows + next.summary.expandedRows,
       foundEmployees: current.summary.foundEmployees + next.summary.foundEmployees,
       missingEmployees: missingWbLogins.length,
       missingWbLogins
@@ -10880,7 +10923,7 @@ type PerformanceWfhResponse = {
 
 type PerformanceDashboardResponse = PerformanceMineResponse | PerformanceWfhResponse;
 
-type PerformanceImportKind = "quality" | "tns-quality" | "production";
+type PerformanceImportKind = "quality" | "tns-quality" | "cec-quality" | "production";
 type PerformanceSortableMetric = "quality" | "submit" | "aht" | "abs";
 type PerformanceSortState = { by: "" | PerformanceSortableMetric; direction: "asc" | "desc" };
 
@@ -10888,7 +10931,7 @@ type PerformancePreviewResponse = {
   success: boolean;
   rows: Array<{
     rowNumber: number;
-    type: "QUALITY" | "TNS_QUALITY" | "PRODUCTION";
+    type: "QUALITY" | "TNS_QUALITY" | "CEC_QUALITY" | "PRODUCTION";
     wbLogin: string;
     employeeId?: string;
     employeeName?: string;
@@ -10908,6 +10951,7 @@ type PerformancePreviewResponse = {
     warningRows: number;
     createdRows: number;
     updatedRows: number;
+    expandedRows: number;
     foundEmployees: number;
     missingEmployees: number;
     missingWbLogins: string[];
