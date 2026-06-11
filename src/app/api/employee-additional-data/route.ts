@@ -17,7 +17,9 @@ const additionalDataSchema = z.object({
   pcdDisabilityOther: z.string().trim().optional(),
   firstJob: z.string().trim().optional(),
   hasTelemarketingExperience: z.string().trim().optional(),
-  telemarketingWhere: z.string().trim().optional()
+  telemarketingWhere: z.string().trim().optional(),
+  pixKeyType: z.string().trim().optional(),
+  pixKey: z.string().trim().optional()
 });
 
 export async function GET(request: Request) {

@@ -13,6 +13,22 @@ const sexualOrientationOptions = new Set(["Heterossexual", "Homossexual", "Bisse
 const yesNoPreferOptions = new Set(["Sim", "Não", "Prefiro não informar"]);
 const yesNoOptions = new Set(["Sim", "Não"]);
 const disabilityTypeOptions = new Set(["Física", "Auditiva", "Visual", "Intelectual", "Psicossocial", "Múltipla", "Neurodivergente", "Outra", "Prefiro não informar"]);
+const pixKeyTypeOptions = new Set(["CPF", "CNPJ", "E-mail", "Telefone", "Chave aleatória"]);
+const pixKeyTypeAliases: Record<string, string> = {
+  ALEATORIA: "Chave aleatória",
+  ALEATÓRIA: "Chave aleatória",
+  CHAVE_ALEATORIA: "Chave aleatória",
+  CHAVE_ALEATÓRIA: "Chave aleatória",
+  CHAVEALEATORIA: "Chave aleatória",
+  CHAVEALEATÓRIA: "Chave aleatória",
+  EMAIL: "E-mail",
+  E_MAIL: "E-mail",
+  EEMAIL: "E-mail",
+  TELEFONE: "Telefone",
+  PHONE: "Telefone",
+  CPF: "CPF",
+  CNPJ: "CNPJ"
+};
 
 type AuthenticatedUser = Prisma.UserGetPayload<{
   include: {
@@ -37,6 +53,8 @@ export type AdditionalRegistrationDataInput = {
   firstJob?: string;
   hasTelemarketingExperience?: string;
   telemarketingWhere?: string;
+  pixKeyType?: string;
+  pixKey?: string;
 };
 
 export class AdditionalRegistrationDataError extends Error {
@@ -71,8 +89,15 @@ export async function saveOwnAdditionalRegistrationData(actor: Actor, input: Add
   const employee = requireLinkedEmployee(user);
   const normalized = validateAdditionalDataInput(input);
   const now = new Date();
+  const previousPixKey = employee.pixKey ?? "";
+  const previousPixKeyType = employee.pixKeyType ?? "";
+  const pixChanged = previousPixKey !== normalized.pixKey || normalizePixKeyType(previousPixKeyType) !== normalized.pixKeyType;
 
   const updated = await prisma.$transaction(async (tx) => {
+    const sensitive = await tx.employeeSensitiveData.findUnique({
+      where: { employeeId: employee.id },
+      select: { bankData: true }
+    });
     const saved = await tx.employeeProfile.update({
       where: { id: employee.id },
       data: {
@@ -117,6 +142,41 @@ export async function saveOwnAdditionalRegistrationData(actor: Actor, input: Add
       }
     }).catch(() => undefined);
 
+    if (sensitive) {
+      const bankData = jsonObject(sensitive.bankData);
+      await tx.employeeSensitiveData.update({
+        where: { employeeId: employee.id },
+        data: {
+          bankData: {
+            ...bankData,
+            pixKey: normalized.pixKey,
+            pixKeyType: normalized.pixKeyType
+          }
+        }
+      });
+    }
+
+    if (pixChanged) {
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          action: "EDICAO",
+          entity: "EmployeeProfile",
+          entityId: employee.id,
+          previousValue: {
+            pixKeyType: previousPixKeyType ? normalizePixKeyType(previousPixKeyType) : "",
+            pixKeyMasked: maskPixKey(previousPixKey, previousPixKeyType)
+          },
+          newValue: {
+            pixKeyType: normalized.pixKeyType,
+            pixKeyMasked: maskPixKey(normalized.pixKey, normalized.pixKeyType),
+            source: "Meu Perfil > Atualizar Dados Adicionais"
+          },
+          reason: "PIX_KEY_UPDATED_BY_EMPLOYEE"
+        }
+      }).catch(() => undefined);
+    }
+
     return saved;
   });
 
@@ -127,7 +187,7 @@ export async function saveOwnAdditionalRegistrationData(actor: Actor, input: Add
       href: ADDITIONAL_DATA_HREF,
       profile: serializeOwnAdditionalData(updated)
     },
-    message: "Dados cadastrais adicionais atualizados com sucesso."
+    message: pixChanged ? "Chave PIX atualizada com sucesso." : "Dados cadastrais adicionais atualizados com sucesso."
   };
 }
 
@@ -375,7 +435,9 @@ function validateAdditionalDataInput(input: AdditionalRegistrationDataInput) {
     pcdDisabilityOther: clean(input.pcdDisabilityOther),
     firstJob: clean(input.firstJob),
     hasTelemarketingExperience: clean(input.hasTelemarketingExperience),
-    telemarketingWhere: clean(input.telemarketingWhere)
+    telemarketingWhere: clean(input.telemarketingWhere),
+    pixKeyType: normalizePixKeyType(input.pixKeyType),
+    pixKey: clean(input.pixKey)
   };
 
   if (!data.ethnicity || !ethnicityOptions.has(data.ethnicity)) fields.ethnicity = "Informe sua etnia.";
@@ -386,6 +448,12 @@ function validateAdditionalDataInput(input: AdditionalRegistrationDataInput) {
   if (!data.firstJob || !yesNoOptions.has(data.firstJob)) fields.firstJob = "Informe se este é seu primeiro emprego.";
   if (!data.hasTelemarketingExperience || !yesNoOptions.has(data.hasTelemarketingExperience)) fields.hasTelemarketingExperience = "Informe se já trabalhou em telemarketing.";
   if (data.hasTelemarketingExperience === "Sim" && !data.telemarketingWhere) fields.telemarketingWhere = "Informe onde trabalhou em telemarketing.";
+  if (!data.pixKeyType || !pixKeyTypeOptions.has(data.pixKeyType)) fields.pixKeyType = "Tipo da Chave PIX é obrigatório.";
+  if (!data.pixKey) fields.pixKey = "Chave PIX é obrigatória.";
+  if (data.pixKey && data.pixKeyType) {
+    const pixError = validatePixKeyByType(data.pixKeyType, data.pixKey);
+    if (pixError) fields.pixKey = pixError;
+  }
 
   if (Object.keys(fields).length) {
     throw new AdditionalRegistrationDataError("Revise os campos obrigatórios.", 400, fields);
@@ -399,13 +467,15 @@ function validateAdditionalDataInput(input: AdditionalRegistrationDataInput) {
     pcdDisabilityOther: data.isPcd === "Sim" && data.pcdDisabilityType === "Outra" ? data.pcdDisabilityOther : null,
     firstJob: data.firstJob,
     hasTelemarketingExperience: data.hasTelemarketingExperience,
-    telemarketingWhere: data.hasTelemarketingExperience === "Sim" ? data.telemarketingWhere : "Não se aplica"
+    telemarketingWhere: data.hasTelemarketingExperience === "Sim" ? data.telemarketingWhere : "Não se aplica",
+    pixKeyType: data.pixKeyType,
+    pixKey: data.pixKey
   };
 }
 
-function isAdditionalRegistrationDataComplete(employee: Pick<AdditionalDataProfile, "additionalDataCompletedAt" | "ethnicity" | "sexualOrientation" | "isPcd" | "pcdDisabilityType" | "pcdDisabilityOther" | "firstJob" | "hasTelemarketingExperience" | "telemarketingWhere">) {
-  if (employee.additionalDataCompletedAt) return true;
-  if (!employee.ethnicity || !employee.sexualOrientation || !employee.isPcd || !employee.firstJob || !employee.hasTelemarketingExperience) return false;
+function isAdditionalRegistrationDataComplete(employee: Pick<AdditionalDataProfile, "additionalDataCompletedAt" | "ethnicity" | "sexualOrientation" | "isPcd" | "pcdDisabilityType" | "pcdDisabilityOther" | "firstJob" | "hasTelemarketingExperience" | "telemarketingWhere" | "pixKey" | "pixKeyType">) {
+  if (employee.additionalDataCompletedAt && employee.pixKey && employee.pixKeyType) return true;
+  if (!employee.ethnicity || !employee.sexualOrientation || !employee.isPcd || !employee.firstJob || !employee.hasTelemarketingExperience || !employee.pixKey || !employee.pixKeyType) return false;
   if (employee.isPcd === "Sim" && !employee.pcdDisabilityType) return false;
   if (employee.isPcd === "Sim" && employee.pcdDisabilityType === "Outra" && !employee.pcdDisabilityOther) return false;
   if (employee.hasTelemarketingExperience === "Sim" && !employee.telemarketingWhere) return false;
@@ -425,6 +495,8 @@ function serializeOwnAdditionalData(employee: AdditionalDataProfile) {
     firstJob: employee.firstJob ?? "",
     hasTelemarketingExperience: employee.hasTelemarketingExperience ?? "",
     telemarketingWhere: employee.telemarketingWhere ?? "",
+    pixKeyType: normalizePixKeyType(employee.pixKeyType) || "",
+    pixKey: employee.pixKey ?? "",
     additionalDataCompletedAt: employee.additionalDataCompletedAt ? formatDateTime(employee.additionalDataCompletedAt) : "",
     additionalDataUpdatedAt: employee.additionalDataUpdatedAt ? formatDateTime(employee.additionalDataUpdatedAt) : ""
   };
@@ -501,6 +573,61 @@ function isActiveEmployeeProfile(employee: { deletedAt?: Date | null; operationa
 
 function clean(value?: string | null) {
   return String(value ?? "").trim();
+}
+
+function normalizePixKeyType(value?: string | null) {
+  const raw = clean(value);
+  if (!raw) return "";
+  if (pixKeyTypeOptions.has(raw)) return raw;
+  const normalized = raw
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toUpperCase();
+  return pixKeyTypeAliases[normalized] ?? raw;
+}
+
+function validatePixKeyByType(type: string, pixKey: string) {
+  const digits = pixKey.replace(/\D/g, "");
+  if (type === "CPF" && digits.length !== 11) return "Chave PIX CPF deve ter 11 dígitos.";
+  if (type === "CNPJ" && digits.length !== 14) return "Chave PIX CNPJ deve ter 14 dígitos.";
+  if (type === "E-mail" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(pixKey)) return "Chave PIX e-mail inválida.";
+  if (type === "Telefone" && (digits.length < 10 || digits.length > 13)) return "Chave PIX telefone deve conter DDD.";
+  return "";
+}
+
+function jsonObject(value: Prisma.JsonValue | null | undefined): Prisma.JsonObject {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Prisma.JsonObject : {};
+}
+
+function maskPixKey(value?: string | null, type?: string | null) {
+  const raw = clean(value);
+  if (!raw) return "";
+  const normalizedType = normalizePixKeyType(type);
+  if (normalizedType === "E-mail") {
+    const [local, domain] = raw.split("@");
+    if (!domain) return maskMiddle(raw);
+    return `${local.slice(0, 1)}**@${domain}`;
+  }
+  if (normalizedType === "CPF") {
+    const digits = raw.replace(/\D/g, "");
+    return digits.length >= 11 ? `***.${digits.slice(3, 6)}.${digits.slice(6, 9)}-**` : maskMiddle(raw);
+  }
+  if (normalizedType === "CNPJ") {
+    const digits = raw.replace(/\D/g, "");
+    return digits.length >= 14 ? `**.${digits.slice(2, 5)}.${digits.slice(5, 8)}/****-${digits.slice(12, 14)}` : maskMiddle(raw);
+  }
+  if (normalizedType === "Telefone") {
+    const digits = raw.replace(/\D/g, "");
+    return digits.length >= 10 ? `(**) *****-${digits.slice(-4)}` : maskMiddle(raw);
+  }
+  return raw.length > 8 ? `${raw.slice(0, 4)}...${raw.slice(-4)}` : maskMiddle(raw);
+}
+
+function maskMiddle(value: string) {
+  if (value.length <= 2) return "*".repeat(value.length);
+  return `${value.slice(0, 1)}${"*".repeat(Math.min(6, value.length - 2))}${value.slice(-1)}`;
 }
 
 function safeTrackingFilters(filters: AdditionalDataTrackingFilters) {

@@ -61,6 +61,8 @@ export type EmployeeAdminUpdateInput = {
   city?: string;
   stateUf?: string;
   preferredSchedule?: string;
+  pixKey?: string;
+  pixKeyType?: string;
 };
 
 export type EmployeeListQuery = {
@@ -581,6 +583,8 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
           ...(input.city !== undefined ? { city: nextCity } : {}),
           ...(input.stateUf !== undefined ? { stateUf: nextStateUf || null } : {}),
           ...(input.preferredSchedule !== undefined ? { preferredSchedule: nextPreferredSchedule } : {}),
+          ...(input.pixKey !== undefined ? { pixKey: clean(input.pixKey) || null } : {}),
+          ...(input.pixKeyType !== undefined ? { pixKeyType: clean(input.pixKeyType) || null } : {}),
           ...(nextWbLogin ? { wbLogin: nextWbLogin } : {}),
           ...(nextRoleTitle ? { roleTitle: nextRoleTitle } : {}),
           ...(nextStatus ? { operationalStatus: nextStatus } : {}),
@@ -863,6 +867,7 @@ type EmployeeWithRelations = Prisma.EmployeeProfileGetPayload<{ include: typeof 
 
 function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: EmployeeSensitiveData) {
   const canViewSensitive = canViewEmployeeSensitiveData({ role }, { roleTitle: employee.roleTitle, email: employee.user?.email });
+  const canViewPix = ["ADMIN", "GESTOR", "WFM"].includes(role) || (role === "RH" && canViewSensitive) || role === "COLABORADOR";
   const canViewBank = ["ADMIN", "GESTOR"].includes(role) || (role === "RH" && canViewSensitive);
   const canViewContact = ["ADMIN", "GESTOR", "TI"].includes(role) || (role === "RH" && canViewSensitive) || role === "COLABORADOR";
   const canViewPeopleProfile = canViewSensitive || ["ADMIN", "GESTOR", "COLABORADOR"].includes(role);
@@ -921,6 +926,8 @@ function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: 
     city: canViewPeopleProfile ? employee.city ?? "" : "",
     stateUf: canViewPeopleProfile ? employee.stateUf ?? "" : "",
     preferredSchedule: canViewPeopleProfile ? employee.preferredSchedule ?? "" : "",
+    pixKeyType: canViewPix ? employee.pixKeyType ?? pixKeyFromBankData(sensitive?.bankData).pixKeyType : "",
+    pixKey: canViewPix ? employee.pixKey ?? pixKeyFromBankData(sensitive?.bankData).pixKey : "",
     role: employee.roleTitle,
     email: employee.user?.email,
     userStatus: displayUserStatus(employee.user?.status),
@@ -937,7 +944,7 @@ function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: 
       cadastrais: canViewSensitive || role === "COLABORADOR",
       contato: canViewContact || role === "COLABORADOR",
       emergencia: canViewContact || canViewSensitive,
-      bancarios: canViewBank,
+      bancarios: canViewBank || canViewPix,
       familia: canViewSensitive
     },
     sensitive: sensitive && canViewSensitive
@@ -949,6 +956,8 @@ function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: 
         birthDate: formatDate(sensitive.birthDate),
         address: jsonToText(sensitive.address),
         bankData: canViewBank ? jsonToText(sensitive.bankData) : "Acesso restrito",
+        pixKeyType: canViewPix ? employee.pixKeyType ?? pixKeyFromBankData(sensitive.bankData).pixKeyType : "",
+        pixKey: canViewPix ? employee.pixKey ?? pixKeyFromBankData(sensitive.bankData).pixKey : "",
         emergencyContactData: canViewContact ? jsonToText(sensitive.emergencyContactData) : "Acesso restrito",
         familyData: jsonToText(sensitive.familyData)
       }
@@ -958,6 +967,8 @@ function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: 
         cpf: maskDocument(sensitive.cpf),
         rg: maskDocument(sensitive.rg),
         bankData: canViewBank ? jsonToText(sensitive.bankData) : "Acesso restrito",
+        pixKeyType: canViewPix ? employee.pixKeyType ?? pixKeyFromBankData(sensitive.bankData).pixKeyType : "",
+        pixKey: canViewPix ? maskPixKey(employee.pixKey ?? pixKeyFromBankData(sensitive.bankData).pixKey, employee.pixKeyType ?? pixKeyFromBankData(sensitive.bankData).pixKeyType) : "Acesso restrito",
         emergencyContactData: canViewContact ? jsonToText(sensitive.emergencyContactData) : "Acesso restrito"
       }
       : undefined
@@ -1019,6 +1030,8 @@ function mapLegacyEmployee(employee: LegacyEmployeeRow, role: string) {
     city: "",
     stateUf: "",
     preferredSchedule: "",
+    pixKeyType: "",
+    pixKey: "",
     role: employee.roleTitle,
     email: employee.email ?? undefined,
     userId: employee.userId ?? undefined,
@@ -1099,6 +1112,8 @@ function mapEmployeeSummary(employee: EmployeeSummaryRow, role: string) {
     city: "",
     stateUf: "",
     preferredSchedule: "",
+    pixKeyType: "",
+    pixKey: "",
     role: employee.roleTitle,
     email: employee.user?.email,
     userStatus: displayUserStatus(employee.user?.status),
@@ -1157,8 +1172,12 @@ function employeeExportColumns(role: string) {
     col("ja_trabalhou_telemarketing", (employee) => employee.hasTelemarketingExperience),
     col("onde_trabalhou_telemarketing", (employee) => employee.telemarketingWhere)
   ];
+  const pixColumns = [
+    col("tipo_chave_pix", (employee) => employee.sensitive?.pixKeyType ?? employee.maskedSensitive?.pixKeyType ?? employee.pixKeyType),
+    col("chave_pix", (employee) => employee.sensitive?.pixKey ?? employee.maskedSensitive?.pixKey ?? employee.pixKey)
+  ];
   if (role === "SUPERVISOR" || role === "QUALIDADE") return operational;
-  if (role === "WFM") return [...operational, ...diversity];
+  if (role === "WFM") return [...operational, ...diversity, ...pixColumns];
 
   const people = [
     col("nome_social", (employee) => employee.socialName),
@@ -1180,6 +1199,7 @@ function employeeExportColumns(role: string) {
       col("data_nascimento", (employee) => employee.sensitive?.birthDate),
       col("endereco", (employee) => employee.sensitive?.address),
       col("dados_bancarios_pix", (employee) => employee.sensitive?.bankData),
+      ...pixColumns,
       col("contato_emergencia", (employee) => employee.sensitive?.emergencyContactData),
       col("dados_familiares", (employee) => employee.sensitive?.familyData),
       col("usuario_ativo", (employee) => employee.userId ? "Sim" : "Não")
@@ -1197,6 +1217,7 @@ function employeeExportColumns(role: string) {
     col("data_nascimento", (employee) => employee.sensitive?.birthDate),
     col("endereco", (employee) => employee.sensitive?.address),
     col("dados_bancarios_pix", (employee) => employee.sensitive?.bankData),
+    ...pixColumns,
     col("contato_emergencia", (employee) => employee.sensitive?.emergencyContactData),
     col("dados_familiares", (employee) => employee.sensitive?.familyData),
     col("usuario_ativo", (employee) => employee.userId ? "Sim" : "Não")
@@ -1486,7 +1507,7 @@ function normalizeTerminationType(value: unknown) {
 
 function isMissingEmployeeProfileColumnError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error ?? "");
-  return /EmployeeProfile\.(socialName|primaryPhone|city|stateUf|preferredSchedule|trainingStartDate|terminationDate|terminationType|terminationReason|workStartTime|workEndTime|contractType|siteOperation|internalNotes|skill|wave)|column .* does not exist/i.test(message);
+  return /EmployeeProfile\.(socialName|primaryPhone|city|stateUf|preferredSchedule|pixKey|pixKeyType|trainingStartDate|terminationDate|terminationType|terminationReason|workStartTime|workEndTime|contractType|siteOperation|internalNotes|skill|wave)|column .* does not exist/i.test(message);
 }
 
 function formatDate(date: Date) {
@@ -1730,8 +1751,45 @@ function jsonToText(value: Prisma.JsonValue | null): string {
     .join(" | ");
 }
 
+function pixKeyFromBankData(value?: Prisma.JsonValue | null) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { pixKey: "", pixKeyType: "" };
+  const data = value as Prisma.JsonObject;
+  return {
+    pixKey: typeof data.pixKey === "string" ? data.pixKey : "",
+    pixKeyType: typeof data.pixKeyType === "string" ? data.pixKeyType : ""
+  };
+}
+
 function maskDocument(value?: string | null) {
   const digits = String(value ?? "").replace(/\D/g, "");
   if (digits.length <= 2) return "***";
   return `***${digits.slice(-2)}`;
+}
+
+function maskPixKey(value?: string | null, type?: string | null) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const normalizedType = String(type ?? "").trim().toLowerCase();
+  if (normalizedType.includes("mail")) {
+    const [local, domain] = raw.split("@");
+    return domain ? `${local.slice(0, 1)}**@${domain}` : maskGeneric(raw);
+  }
+  if (normalizedType.includes("cpf")) {
+    const digits = raw.replace(/\D/g, "");
+    return digits.length >= 11 ? `***.${digits.slice(3, 6)}.${digits.slice(6, 9)}-**` : maskGeneric(raw);
+  }
+  if (normalizedType.includes("cnpj")) {
+    const digits = raw.replace(/\D/g, "");
+    return digits.length >= 14 ? `**.${digits.slice(2, 5)}.${digits.slice(5, 8)}/****-${digits.slice(12, 14)}` : maskGeneric(raw);
+  }
+  if (normalizedType.includes("telefone")) {
+    const digits = raw.replace(/\D/g, "");
+    return digits.length >= 10 ? `(**) *****-${digits.slice(-4)}` : maskGeneric(raw);
+  }
+  return raw.length > 8 ? `${raw.slice(0, 4)}...${raw.slice(-4)}` : maskGeneric(raw);
+}
+
+function maskGeneric(value: string) {
+  if (value.length <= 2) return "*".repeat(value.length);
+  return `${value.slice(0, 1)}${"*".repeat(Math.min(6, value.length - 2))}${value.slice(-1)}`;
 }

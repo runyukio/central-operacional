@@ -224,7 +224,9 @@ function mapProfileEmployee(employee: ProfileEmployee, canViewDiversityData: boo
         pcdDisabilityOther: employee.pcdDisabilityOther ?? "",
         firstJob: employee.firstJob ?? "",
         hasTelemarketingExperience: employee.hasTelemarketingExperience ?? "",
-        telemarketingWhere: employee.telemarketingWhere ?? ""
+        telemarketingWhere: employee.telemarketingWhere ?? "",
+        pixKeyType: employee.pixKeyType ?? "",
+        pixKey: employee.pixKey ?? ""
       }
       : null
   };

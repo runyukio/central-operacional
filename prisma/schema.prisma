@@ -377,6 +377,8 @@ model EmployeeProfile {
   city               String?
   stateUf            String?
   preferredSchedule  String?
+  pixKey             String?
+  pixKeyType         String?
   roleTitle          String
   admissionDate      DateTime
   trainingStartDate  DateTime?
