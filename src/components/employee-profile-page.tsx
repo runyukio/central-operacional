@@ -64,6 +64,8 @@ type ProfilePayload = {
         firstJob: string;
         hasTelemarketingExperience: string;
         telemarketingWhere: string;
+        pixKeyType?: string;
+        pixKey?: string;
       };
     };
     schedule: {
@@ -189,7 +191,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
         title={title}
         description={data.viewer.isOwnProfile ? "Seus dados e informações consolidadas." : "Resumo operacional do colaborador selecionado."}
         icon={UserCircle}
-        actions={data.viewer.isOwnProfile ? <Link href="/meus-dados/adicionais" className="premium-control inline-flex h-9 items-center px-3 text-xs font-extrabold text-blue-700">Atualizar dados adicionais</Link> : null}
+        actions={data.viewer.isOwnProfile ? <Link href="/meus-dados/adicionais" className="premium-control inline-flex h-9 items-center px-3 text-xs font-extrabold text-blue-700">Atualizar dados adicionais/PIX</Link> : null}
       />
 
       <section className="card overflow-hidden">
@@ -397,6 +399,8 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
                 <InfoLine label="Primeiro emprego" value={data.employee.additionalData.firstJob || "Não informado"} />
                 <InfoLine label="Telemarketing" value={data.employee.additionalData.hasTelemarketingExperience || "Não informado"} />
                 <InfoLine label="Onde trabalhou" value={data.employee.additionalData.telemarketingWhere || "Não informado"} />
+                <InfoLine label="Tipo da Chave PIX" value={data.employee.additionalData.pixKeyType || "Não informado"} />
+                <InfoLine label="Chave PIX" value={data.employee.additionalData.pixKey || "Não informada"} />
                 <InfoLine label="Concluído em" value={data.employee.additionalDataCompletedAt || "Pendente"} />
               </div>
             </div>

@@ -2060,7 +2060,7 @@ export function AdditionalRegistrationDataPage() {
     <div>
       <PageHeader
         title="Dados Cadastrais Adicionais"
-        description="Atualize informações cadastrais complementares de forma segura."
+        description="Atualize informações cadastrais complementares, incluindo sua Chave PIX."
         icon={UserCircle}
       />
       {message ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
@@ -2072,6 +2072,23 @@ export function AdditionalRegistrationDataPage() {
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
           <Panel title="Questionário">
             <div className="grid gap-4 md:grid-cols-2">
+              <div className="md:col-span-2">
+                <div className="rounded-xl border border-blue-100 bg-blue-50/55 p-4">
+                  <div className="mb-3 flex items-start gap-3">
+                    <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white text-blue-600 shadow-soft">
+                      <Coins className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-black text-navy-950">Dados de pagamento</h3>
+                      <p className="mt-1 text-xs font-semibold leading-5 text-muted">Mantenha sua Chave PIX atualizada para evitar impactos no processamento do pagamento.</p>
+                    </div>
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <FormSelect label="Tipo da Chave PIX" value={form.pixKeyType} options={pixKeyTypeOptions} onChange={(value) => updateAdditionalDataField("pixKeyType", value)} error={fieldErrors.pixKeyType} emptyLabel="Selecione" />
+                    <FormInput label="Chave PIX" value={form.pixKey} onChange={(value) => updateAdditionalDataField("pixKey", value)} error={fieldErrors.pixKey} />
+                  </div>
+                </div>
+              </div>
               <FormSelect label="Etnia" value={form.ethnicity} options={["", "Branca", "Preta", "Parda", "Amarela", "Indígena", "Prefiro não informar"]} onChange={(value) => updateAdditionalDataField("ethnicity", value)} error={fieldErrors.ethnicity} />
               <FormSelect label="Orientação sexual" value={form.sexualOrientation} options={["", "Heterossexual", "Homossexual", "Bissexual", "Assexual", "Outra", "Prefiro não informar"]} onChange={(value) => updateAdditionalDataField("sexualOrientation", value)} error={fieldErrors.sexualOrientation} />
               <FormSelect label="É PCD?" value={form.isPcd} options={["", "Sim", "Não", "Prefiro não informar"]} onChange={(value) => {
@@ -2099,23 +2116,6 @@ export function AdditionalRegistrationDataPage() {
               {form.hasTelemarketingExperience === "Sim" ? (
                 <FormInput label="Onde trabalhou em telemarketing?" value={form.telemarketingWhere} onChange={(value) => updateAdditionalDataField("telemarketingWhere", value)} error={fieldErrors.telemarketingWhere} />
               ) : null}
-              <div className="md:col-span-2">
-                <div className="rounded-xl border border-blue-100 bg-blue-50/55 p-4">
-                  <div className="mb-3 flex items-start gap-3">
-                    <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white text-blue-600 shadow-soft">
-                      <Coins className="h-5 w-5" />
-                    </div>
-                    <div>
-                      <h3 className="text-sm font-black text-navy-950">Dados de pagamento</h3>
-                      <p className="mt-1 text-xs font-semibold leading-5 text-muted">Mantenha sua Chave PIX atualizada para evitar impactos no processamento do pagamento.</p>
-                    </div>
-                  </div>
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <FormSelect label="Tipo da Chave PIX" value={form.pixKeyType} options={pixKeyTypeOptions} onChange={(value) => updateAdditionalDataField("pixKeyType", value)} error={fieldErrors.pixKeyType} emptyLabel="Selecione" />
-                    <FormInput label="Chave PIX" value={form.pixKey} onChange={(value) => updateAdditionalDataField("pixKey", value)} error={fieldErrors.pixKey} />
-                  </div>
-                </div>
-              </div>
             </div>
             <div className="mt-5 flex flex-wrap justify-end gap-3">
               <a href="/minha-escala" className="rounded-lg border border-border px-4 py-3 text-sm font-bold text-navy-950">Voltar</a>

@@ -1,4 +1,4 @@
-import { AuditAction, EmployeeRegistrationRequest, EmployeeRegistrationStatus, Prisma } from "@prisma/client";
+import { AuditAction, EmployeeProfile, EmployeeRegistrationRequest, EmployeeRegistrationStatus, EmployeeSensitiveData, Prisma } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
 import type { Actor } from "@/lib/mock-db";
@@ -21,6 +21,7 @@ const internalDefaultTeamName = "Time Inicial";
 const internalDefaultScheduleType = "Não informado";
 const pcdDisabilityTypeOptions = ["Física", "Auditiva", "Visual", "Intelectual", "Psicossocial", "Múltipla", "Neurodivergente", "Outra", "Prefiro não informar"] as const;
 const validPcdDisabilityTypes = new Set<string>(pcdDisabilityTypeOptions);
+const registrationDeleteAdminEmails = new Set(["pedro.stigliani88@gmail.com"]);
 
 export type RegistrationReviewInput = {
   id: string;
@@ -600,6 +601,8 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               city: row.city || null,
               stateUf: row.stateUf || null,
               preferredSchedule: row.preferredSchedule || null,
+              pixKey: row.pixKey || null,
+              pixKeyType: row.pixKeyType || null,
               deletedAt: null
             }
           })
@@ -642,6 +645,8 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               city: row.city || null,
               stateUf: row.stateUf || null,
               preferredSchedule: row.preferredSchedule || null,
+              pixKey: row.pixKey || null,
+              pixKeyType: row.pixKeyType || null,
               deletedAt: null
             }
           });
@@ -908,36 +913,42 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
 
       const profileByWb = await tx.employeeProfile.findUnique({ where: { wbLogin: op.wbLogin } });
       const profileByUser = await tx.employeeProfile.findUnique({ where: { userId: user.id } });
-      const profileId = profileByWb?.id ?? profileByUser?.id;
-      const employee = profileId
+      const existingProfile = profileByWb ?? profileByUser;
+      const operationalProfileData = cleanPatchPayload({
+        userId: user.id,
+        wbLogin: op.wbLogin,
+        roleTitle: normalizeJobTitle(op.roleTitle),
+        admissionDate: parseDate(op.admissionDate),
+        trainingStartDate: parseDate(op.admissionDate),
+        nestingStartDate: parseDate(op.nestingStartDate),
+        goLiveDate: parseDate(op.goLiveDate),
+        workStartTime: op.workStartTime,
+        workEndTime: op.workEndTime,
+        scheduleType: internalDefaultScheduleType,
+        operationalStatus: approvedEmployeeStatus,
+        contractType: op.contractType?.trim(),
+        internalNotes: op.internalNotes?.trim(),
+        lobId: lob.id,
+        teamId: team.id,
+        supervisorId: supervisor?.id,
+        shiftId: shift.id,
+        skill: op.skill?.trim(),
+        wave: op.wave?.trim()
+      });
+      const employee = existingProfile
         ? await tx.employeeProfile.update({
-            where: { id: profileId },
+            where: { id: existingProfile.id },
             data: {
-              userId: user.id,
-              wbLogin: op.wbLogin,
-              fullName: existing.fullName,
-              roleTitle: normalizeJobTitle(op.roleTitle),
-              admissionDate: parseDate(op.admissionDate),
-              trainingStartDate: parseDate(op.admissionDate),
-              nestingStartDate: parseDate(op.nestingStartDate),
-              goLiveDate: parseDate(op.goLiveDate),
-              workStartTime: op.workStartTime,
-              workEndTime: op.workEndTime,
-	              scheduleType: internalDefaultScheduleType,
-              operationalStatus: approvedEmployeeStatus,
-              lobId: lob.id,
-              teamId: team.id,
-              supervisorId: supervisor?.id,
-              shiftId: shift.id,
-              skill: op.skill?.trim() || null,
-              wave: op.wave?.trim() || null
+              ...missingProfileRegistrationData(existingProfile, existing),
+              ...operationalProfileData
             }
           })
         : await tx.employeeProfile.create({
             data: {
+              ...profileRegistrationCreateData(existing),
+              ...operationalProfileData,
               userId: user.id,
               wbLogin: op.wbLogin,
-              fullName: existing.fullName,
               roleTitle: normalizeJobTitle(op.roleTitle),
               admissionDate: parseDate(op.admissionDate),
               trainingStartDate: parseDate(op.admissionDate),
@@ -956,11 +967,17 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
             }
           });
 
-      await tx.employeeSensitiveData.upsert({
-        where: { employeeId: employee.id },
-        update: sensitiveData(existing),
-        create: { employeeId: employee.id, ...sensitiveData(existing) }
-      });
+      const currentSensitiveData = await tx.employeeSensitiveData.findUnique({ where: { employeeId: employee.id } });
+      if (currentSensitiveData) {
+        await tx.employeeSensitiveData.update({
+          where: { employeeId: employee.id },
+          data: mergeSensitiveRegistrationData(currentSensitiveData, existing)
+        });
+      } else {
+        await tx.employeeSensitiveData.create({
+          data: { employeeId: employee.id, ...sensitiveData(existing) }
+        });
+      }
 
       const updated = await tx.employeeRegistrationRequest.update({
         where: { id: existing.id },
@@ -1011,10 +1028,11 @@ export async function deleteOperationalRegistration(actor: Actor, id: string) {
     if (!reviewer) return { error: "Usuário não autenticado." };
 
     const role = normalizeRole(actor.role);
+    const isRegistrationDeleteAdmin = role === "ADMIN" || registrationDeleteAdminEmails.has(String(actor.email ?? "").trim().toLowerCase());
     const hasDeletePermission = reviewer.permissions.some((item) =>
       item.granted && ["CADASTRO_EXCLUIR", "cadastros.excluir", "employee_registration.delete"].includes(item.permission.key)
     );
-    if (role !== "ADMIN" && !hasDeletePermission) {
+    if (!isRegistrationDeleteAdmin && !hasDeletePermission) {
       const reason = role === "SUPERVISOR" ? "Supervisor não possui permissão para aprovar ou editar cadastros." : "Apenas Admin ou usuários com permissão específica podem excluir cadastros.";
       await auditPermissionDenied(actor, { action: "REGISTRATION_DELETE", entity: "EmployeeRegistrationRequest", reason, entityId: id });
       return { error: reason };
@@ -1024,7 +1042,7 @@ export async function deleteOperationalRegistration(actor: Actor, id: string) {
     if (!existing) return { error: "Cadastro não encontrado." };
 
     const isLinked = Boolean(existing.createdUserId || existing.createdEmployeeProfileId || ["APROVADO", "ATIVO"].includes(existing.status));
-    if (isLinked && role !== "ADMIN") return { error: "Cadastros aprovados só podem ser inativados por Admin." };
+    if (isLinked && !isRegistrationDeleteAdmin) return { error: "Cadastros aprovados só podem ser inativados por Admin." };
 
     const now = new Date();
     const updated = await prisma.$transaction(async (tx) => {
@@ -1772,6 +1790,94 @@ function registrationStatusLabel(status: EmployeeRegistrationStatus) {
 function appendHistory(history: Prisma.JsonValue | null | undefined, actor: string, action: string, notes?: string) {
   const current = Array.isArray(history) ? history : [];
   return [{ at: new Date().toISOString(), actor, action, notes }, ...current] as Prisma.InputJsonArray;
+}
+
+function isBlankPatchValue(value: unknown) {
+  return value === undefined || value === null || (typeof value === "string" && value.trim() === "");
+}
+
+function cleanPatchPayload<T extends Record<string, unknown>>(payload: T): Partial<T> {
+  return Object.fromEntries(Object.entries(payload).filter(([, value]) => !isBlankPatchValue(value))) as Partial<T>;
+}
+
+function optionalRegistrationText(value?: string | null) {
+  const text = String(value ?? "").trim();
+  return text || undefined;
+}
+
+function profileRegistrationCreateData(item: EmployeeRegistrationRequest) {
+  return {
+    fullName: item.fullName,
+    ...cleanPatchPayload({
+      socialName: optionalRegistrationText(item.socialName),
+      primaryPhone: optionalRegistrationText(item.primaryPhone),
+      city: optionalRegistrationText(item.city),
+      stateUf: optionalRegistrationText(item.stateUf),
+      preferredSchedule: optionalRegistrationText(item.preferredSchedule),
+      pixKey: optionalRegistrationText(item.pixKey),
+      pixKeyType: optionalRegistrationText(item.pixKeyType),
+      ethnicity: optionalRegistrationText(item.ethnicity),
+      sexualOrientation: optionalRegistrationText(item.sexualOrientation),
+      isPcd: optionalRegistrationText(item.isPcd),
+      pcdDisabilityType: optionalRegistrationText(item.pcdDisabilityType),
+      pcdDisabilityOther: optionalRegistrationText(item.pcdDisabilityOther),
+      firstJob: optionalRegistrationText(item.firstJob),
+      hasTelemarketingExperience: optionalRegistrationText(item.hasTelemarketingExperience),
+      telemarketingWhere: optionalRegistrationText(item.telemarketingWhere)
+    })
+  };
+}
+
+function missingProfileRegistrationData(profile: EmployeeProfile, item: EmployeeRegistrationRequest) {
+  return cleanPatchPayload({
+    fullName: isBlankPatchValue(profile.fullName) ? item.fullName : undefined,
+    socialName: isBlankPatchValue(profile.socialName) ? item.socialName : undefined,
+    primaryPhone: isBlankPatchValue(profile.primaryPhone) ? item.primaryPhone : undefined,
+    city: isBlankPatchValue(profile.city) ? item.city : undefined,
+    stateUf: isBlankPatchValue(profile.stateUf) ? item.stateUf : undefined,
+    preferredSchedule: isBlankPatchValue(profile.preferredSchedule) ? item.preferredSchedule : undefined,
+    pixKey: isBlankPatchValue(profile.pixKey) ? item.pixKey : undefined,
+    pixKeyType: isBlankPatchValue(profile.pixKeyType) ? item.pixKeyType : undefined,
+    ethnicity: isBlankPatchValue(profile.ethnicity) ? item.ethnicity : undefined,
+    sexualOrientation: isBlankPatchValue(profile.sexualOrientation) ? item.sexualOrientation : undefined,
+    isPcd: isBlankPatchValue(profile.isPcd) ? item.isPcd : undefined,
+    pcdDisabilityType: isBlankPatchValue(profile.pcdDisabilityType) ? item.pcdDisabilityType : undefined,
+    pcdDisabilityOther: isBlankPatchValue(profile.pcdDisabilityOther) ? item.pcdDisabilityOther : undefined,
+    firstJob: isBlankPatchValue(profile.firstJob) ? item.firstJob : undefined,
+    hasTelemarketingExperience: isBlankPatchValue(profile.hasTelemarketingExperience) ? item.hasTelemarketingExperience : undefined,
+    telemarketingWhere: isBlankPatchValue(profile.telemarketingWhere) ? item.telemarketingWhere : undefined
+  });
+}
+
+function jsonRecord(value: Prisma.JsonValue | null | undefined): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function mergeRegistrationJson(current: Prisma.JsonValue | null | undefined, incoming: Record<string, unknown>) {
+  const merged: Record<string, Prisma.InputJsonValue> = {};
+  for (const [key, value] of Object.entries(jsonRecord(current))) {
+    if (!isBlankPatchValue(value)) merged[key] = value as Prisma.InputJsonValue;
+  }
+  for (const [key, value] of Object.entries(incoming)) {
+    if (!isBlankPatchValue(value)) merged[key] = value as Prisma.InputJsonValue;
+  }
+  return merged as Prisma.InputJsonObject;
+}
+
+function mergeSensitiveRegistrationData(current: EmployeeSensitiveData, item: EmployeeRegistrationRequest) {
+  const incoming = sensitiveData(item);
+  return {
+    cpf: optionalRegistrationText(incoming.cpf) ?? current.cpf,
+    rg: optionalRegistrationText(incoming.rg) ?? current.rg,
+    rgIssuer: optionalRegistrationText(incoming.rgIssuer) ?? current.rgIssuer,
+    cnpj: optionalRegistrationText(incoming.cnpj) ?? current.cnpj,
+    birthDate: incoming.birthDate ?? current.birthDate,
+    address: mergeRegistrationJson(current.address, incoming.address),
+    bankData: mergeRegistrationJson(current.bankData, incoming.bankData),
+    emergencyContactData: mergeRegistrationJson(current.emergencyContactData, incoming.emergencyContactData),
+    familyData: mergeRegistrationJson(current.familyData, incoming.familyData)
+  };
 }
 
 function sensitiveData(item: EmployeeRegistrationRequest) {
