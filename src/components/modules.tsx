@@ -621,6 +621,8 @@ type EmployeeImportPreview = {
     rowNumber: number;
     errors: string[];
     warnings: string[];
+    changes?: string[];
+    keptFields?: string[];
     action?: string;
     status?: string;
     preview: {
@@ -5069,7 +5071,7 @@ export function RegistrationApprovalsPage() {
               ) : null}
                 <div className="max-h-[52vh] overflow-y-auto pr-1">
                   <SimpleTable
-                    columns={["Linha", "Nome", "WB/Login", "E-mail", "Status", "Ação", "Status atual", "Novo status", "Usuário inativado", "Desligamento", "CPF", "Role", "LOB", "Supervisor", "Entrada", "Saída", "Skill", "Wave", "PCD", "Tipo deficiência", "Usuário", "Validação"]}
+                    columns={["Linha", "Nome", "WB/Login", "E-mail", "Status", "Ação", "Atualiza", "Mantém", "Status atual", "Novo status", "Usuário inativado", "Desligamento", "CPF", "Role", "LOB", "Supervisor", "Entrada", "Saída", "Skill", "Wave", "PCD", "Tipo deficiência", "Usuário", "Validação"]}
                     rows={employeeImportPreview.rows.slice(0, IMPORT_PREVIEW_ROW_LIMIT).map((row) => [
                       row.rowNumber,
                       row.preview.name || "-",
@@ -5077,6 +5079,8 @@ export function RegistrationApprovalsPage() {
                       row.preview.email || "-",
                       <StatusBadge key={`${row.rowNumber}-status`} status={row.status ?? (row.errors.length ? "Erro" : row.warnings.length ? "Alerta" : "Válida")} />,
                       row.action === "inativar_acesso" ? "Inativar acesso e atualizar status" : row.action ?? (row.errors.length ? "ignorar" : "criar"),
+                      row.changes?.length ? <div key={`${row.rowNumber}-changes`} className="max-w-48 space-y-1 text-xs font-semibold text-blue-700">{row.changes.slice(0, 3).map((change) => <p key={change}>{change}</p>)}{row.changes.length > 3 ? <p>+{row.changes.length - 3} campos</p> : null}</div> : "-",
+                      row.keptFields?.length ? <div key={`${row.rowNumber}-kept`} className="max-w-44 text-xs font-semibold text-slate-500">{row.keptFields.slice(0, 5).join(", ")}{row.keptFields.length > 5 ? "..." : ""}</div> : "-",
                       row.preview.currentStatus || "-",
                       row.preview.newStatus || "-",
                       row.preview.userWillBeInactivated ? "Sim" : "Não",
@@ -5108,7 +5112,7 @@ export function RegistrationApprovalsPage() {
                   <p className="text-xs font-semibold text-muted">Exibindo as primeiras {IMPORT_PREVIEW_ROW_LIMIT} linhas do preview. O arquivo completo será processado na confirmação.</p>
                 ) : null}
                 <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
-                  CPF vazio é permitido e aparece como CPF pendente. Quando `criar_usuario = sim`, a coluna `senha_temporaria` é obrigatória e será salva apenas como hash. O Admin deve comunicar a senha manualmente.
+                  Campos vazios no arquivo não sobrescrevem dados existentes. Eles aparecem como mantidos no preview. CPF vazio é permitido e aparece como CPF pendente. Quando `criar_usuario = sim`, a coluna `senha_temporaria` é obrigatória e será salva apenas como hash. O Admin deve comunicar a senha manualmente.
                 </div>
                 <div className="sticky bottom-0 z-10 -mx-5 -mb-5 flex flex-wrap justify-end gap-3 border-t border-border bg-white/95 px-5 py-3 backdrop-blur">
                   <button onClick={() => setShowEmployeeImport(false)} className="rounded-lg border border-border px-4 py-3 text-sm font-bold">Cancelar</button>

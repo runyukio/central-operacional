@@ -123,6 +123,8 @@ type EmployeeImportValidation = {
   rowNumber: number;
   errors: string[];
   warnings: string[];
+  changes?: string[];
+  keptFields?: string[];
   action: "criar" | "atualizar" | "inativar_acesso" | "ignorar";
   status: "Válida" | "Erro" | "Alerta";
   preview: {
@@ -148,6 +150,43 @@ type EmployeeImportValidation = {
     terminationDate?: string;
   };
 };
+
+type NormalizedEmployeeImportRow = ReturnType<typeof normalizeEmployeeImportRow>;
+
+const importFieldLabels: Array<{ label: string; keys: string[] }> = [
+  { label: "Nome", keys: ["nome"] },
+  { label: "Nome social", keys: ["nome_social"] },
+  { label: "E-mail", keys: ["email"] },
+  { label: "CPF", keys: ["cpf"] },
+  { label: "RG", keys: ["rg"] },
+  { label: "CNPJ", keys: ["cnpj"] },
+  { label: "Data de nascimento", keys: ["data_nascimento"] },
+  { label: "Cidade", keys: ["cidade"] },
+  { label: "UF", keys: ["estado_uf"] },
+  { label: "Telefone", keys: ["contato_principal"] },
+  { label: "Chave PIX", keys: ["chave_pix"] },
+  { label: "Tipo da Chave PIX", keys: ["tipo_chave_pix"] },
+  { label: "LOB", keys: ["lob"] },
+  { label: "Supervisor", keys: ["supervisor_wb_login", "supervisor_email", "supervisor_nome"] },
+  { label: "Turno", keys: ["turno"] },
+  { label: "Horário de entrada", keys: ["horario_entrada", "entrada"] },
+  { label: "Horário de saída", keys: ["horario_saida", "saida"] },
+  { label: "Cargo/Função", keys: ["cargo_funcao"] },
+  { label: "Skill", keys: ["skill"] },
+  { label: "Wave", keys: ["wave"] },
+  { label: "Status do colaborador", keys: ["status_colaborador"] },
+  { label: "Tipo de contrato", keys: ["tipo_contrato"] },
+  { label: "Data de admissão", keys: ["data_admissao"] },
+  { label: "Data de início de Nesting", keys: ["data_inicio_nesting"] },
+  { label: "Data de Go Live", keys: ["data_go_live"] },
+  { label: "Data de desligamento", keys: ["data_desligamento"] },
+  { label: "Etnia", keys: ["etnia"] },
+  { label: "Orientação sexual", keys: ["orientacao_sexual"] },
+  { label: "É PCD?", keys: ["eh_pcd"] },
+  { label: "Tipo de deficiência", keys: ["tipo_deficiencia"] },
+  { label: "Primeiro emprego", keys: ["primeiro_emprego"] },
+  { label: "Telemarketing", keys: ["ja_trabalhou_telemarketing"] }
+];
 
 export async function submitOperationalRegistration(input: RegistrationInput) {
   try {
@@ -381,6 +420,10 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
         ...normalizedValidRows.map((row) => normalizeWbLoginForEmployeeImport(row.supervisorWbLogin))
       ]));
     const existingProfilesByWb = new Map(employeeProfileCandidates.map((employee) => [normalizeWbLoginForEmployeeImport(employee.wbLogin), employee]));
+    const existingSensitiveData = employeeProfileCandidates.length
+      ? await prisma.employeeSensitiveData.findMany({ where: { employeeId: { in: employeeProfileCandidates.map((employee) => employee.id) } } })
+      : [];
+    const sensitiveByEmployeeId = new Map(existingSensitiveData.map((item) => [item.employeeId, item]));
     const supervisorsByEmail = supervisorEmails.length
       ? await prisma.employeeProfile.findMany({ where: { deletedAt: null, user: { email: { in: supervisorEmails } } }, select: { id: true, fullName: true, wbLogin: true, user: { select: { email: true } } } })
       : [];
@@ -394,27 +437,37 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
       supervisorsByNameKey.set(key, [...(supervisorsByNameKey.get(key) ?? []), employee]);
     });
 
-    for (const row of normalizedValidRows) {
-      const role = await prisma.role.findUniqueOrThrow({ where: { name: row.roleName } });
-      const lob = await prisma.lob.findUniqueOrThrow({ where: { name: row.lob } });
+    for (let rowIndex = 0; rowIndex < normalizedValidRows.length; rowIndex += 1) {
+      const row = normalizedValidRows[rowIndex];
+      const rawRow = validRows[rowIndex] ?? {};
+      const existingByWb = existingProfilesByWb.get(normalizeWbLoginForEmployeeImport(row.wbLogin)) ?? null;
+      const isExistingEmployeeImport = Boolean(existingByWb);
+      const role = row.roleName ? await prisma.role.findUniqueOrThrow({ where: { name: row.roleName } }) : null;
+      if (!role && (row.createUser || !isExistingEmployeeImport)) throw new Error(`Linha ${rowIndex + 1}: Role/Permissão obrigatória.`);
+      const lob = row.lob ? await prisma.lob.findUniqueOrThrow({ where: { name: row.lob } }) : null;
+      if (!lob && !isExistingEmployeeImport) throw new Error(`Linha ${rowIndex + 1}: LOB obrigatória.`);
       const shift = row.shift
         ? await prisma.shift.findFirstOrThrow({ where: { OR: [{ name: row.shift }, { name: { startsWith: `${row.shift} (` } }] } })
-        : fallbackShift!;
-      const importDateFallback = new Date();
-      const birthDate = row.birthDate ?? row.admissionDate ?? row.trainingStartDate ?? importDateFallback;
-      const trainingStartDate = row.trainingStartDate ?? row.admissionDate ?? importDateFallback;
-      const admissionDate = row.admissionDate ?? row.trainingStartDate ?? importDateFallback;
+        : isExistingEmployeeImport
+          ? null
+          : fallbackShift!;
       const supervisor = resolveImportSupervisor(row, existingProfilesByWb, supervisorByEmail, supervisorsByNameKey).employee;
-      const existingByWb = existingProfilesByWb.get(normalizeWbLoginForEmployeeImport(row.wbLogin)) ?? null;
       if (supervisor && existingByWb && await wouldCreateImportSupervisorCycle(existingByWb.id, supervisor.id)) {
-        throw new Error(`Linha ${validRows[normalizedValidRows.indexOf(row)] ? normalizedValidRows.indexOf(row) + 1 : ""}: essa alteração criaria um ciclo de supervisor.`);
+        throw new Error(`Linha ${rowIndex + 1}: essa alteração criaria um ciclo de supervisor.`);
       }
+      const currentSensitiveData = existingByWb ? sensitiveByEmployeeId.get(existingByWb.id) ?? null : null;
+      const importDateFallback = new Date();
+      const birthDate = row.birthDate ?? currentSensitiveData?.birthDate ?? row.admissionDate ?? row.trainingStartDate ?? existingByWb?.admissionDate ?? importDateFallback;
+      const trainingStartDate = row.trainingStartDate ?? row.admissionDate ?? existingByWb?.trainingStartDate ?? existingByWb?.admissionDate ?? importDateFallback;
+      const admissionDate = row.admissionDate ?? row.trainingStartDate ?? existingByWb?.admissionDate ?? importDateFallback;
       const internalTeamName = row.teamName || (supervisor?.fullName ? `Time ${supervisor.fullName}` : internalDefaultTeamName);
-      const team = await prisma.team.upsert({
-        where: { name_lobId: { name: internalTeamName, lobId: lob.id } },
-        update: { supervisorId: supervisor?.id },
-        create: { name: internalTeamName, lobId: lob.id, supervisorId: supervisor?.id }
-      });
+      const team = lob
+        ? await prisma.team.upsert({
+          where: { name_lobId: { name: internalTeamName, lobId: lob.id } },
+          update: { supervisorId: supervisor?.id },
+          create: { name: internalTeamName, lobId: lob.id, supervisorId: supervisor?.id }
+        })
+        : null;
 
         const registrationOr: Prisma.EmployeeRegistrationRequestWhereInput[] = [
           ...(row.cpf ? [{ cpf: row.cpf }] : []),
@@ -511,10 +564,21 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
         const registration = existingRegistration
           ? await prisma.employeeRegistrationRequest.update({
             where: { id: existingRegistration.id },
-            data: registrationData
+            data: buildRegistrationImportUpdateData(rawRow, row, {
+              birthDate,
+              trainingStartDate,
+              admissionDate,
+              batchId,
+              actorName: actor.name,
+              reviewerId: permission.user.id,
+              existingOperationalData: existingRegistration.operationalData,
+              existingHistory: existingRegistration.history,
+              supervisorName: supervisor?.fullName ?? null
+            })
           })
-          : await prisma.employeeRegistrationRequest.create({ data: registrationData });
-        if (existingRegistration) registrosAtualizados += 1;
+          : isExistingEmployeeImport
+            ? null
+            : await prisma.employeeRegistrationRequest.create({ data: registrationData });
 
         const shouldInactivateAccess = isAccessInactiveEmployeeStatus(row.employeeStatus);
         const accessDisabledAt = shouldInactivateAccess ? new Date() : null;
@@ -527,7 +591,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               data: {
                 name: row.name,
                 passwordHash: passwordHash!,
-                roleId: role.id,
+                roleId: role!.id,
                 status: shouldInactivateAccess ? "INACTIVE" : "ACTIVE",
                 mustChangePassword: !shouldInactivateAccess,
                 temporaryPassword: !shouldInactivateAccess,
@@ -541,7 +605,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
                 email: row.email,
                 name: row.name,
                 passwordHash: passwordHash!,
-                roleId: role.id,
+                roleId: role!.id,
                 status: shouldInactivateAccess ? "INACTIVE" : "ACTIVE",
                 mustChangePassword: !shouldInactivateAccess,
                 temporaryPassword: !shouldInactivateAccess,
@@ -561,51 +625,20 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
           skillWaveUpdates += 1;
         }
         if (supervisor && existingEmployeeForUpdate?.supervisorId !== supervisor.id) hierarchyUpdates += 1;
+        const employeeUpdateData = buildEmployeeImportUpdateData(rawRow, row, {
+          userId,
+          lobId: lob?.id,
+          teamId: team?.id,
+          supervisorId: supervisor?.id,
+          shiftId: shift?.id
+        });
         const employee = employeeId
-          ? await prisma.employeeProfile.update({
+          ? Object.keys(employeeUpdateData).length
+            ? await prisma.employeeProfile.update({
             where: { id: employeeId },
-            data: {
-              userId,
-              fullName: row.name,
-              socialName: row.socialName || null,
-              roleTitle: row.roleTitle,
-              admissionDate,
-	              scheduleType: internalDefaultScheduleType,
-              operationalStatus: row.employeeStatus,
-              lobId: lob.id,
-              teamId: team.id,
-              supervisorId: supervisor?.id,
-              shiftId: shift.id,
-              ...(row.workStartTime ? { workStartTime: row.workStartTime } : {}),
-              ...(row.workEndTime ? { workEndTime: row.workEndTime } : {}),
-              ...(row.skill ? { skill: row.skill } : {}),
-              ...(row.wave ? { wave: row.wave } : {}),
-              trainingStartDate,
-              ...(row.terminationDate ? { terminationDate: row.terminationDate } : {}),
-              ...(row.terminationType ? { terminationType: row.terminationType } : {}),
-              ...(row.terminationReason ? { terminationReason: row.terminationReason } : {}),
-              ethnicity: row.ethnicity || null,
-              sexualOrientation: row.sexualOrientation || null,
-              isPcd: row.isPcd || null,
-              pcdDisabilityType: row.isPcd === "Sim" ? row.pcdDisabilityType || null : null,
-              pcdDisabilityOther: row.isPcd === "Sim" && row.pcdDisabilityType === "Outra" ? row.pcdDisabilityOther || null : null,
-              firstJob: row.firstJob || null,
-              hasTelemarketingExperience: row.hasTelemarketingExperience || null,
-              telemarketingWhere: row.telemarketingWhere || null,
-              ...(row.nestingStartDate ? { nestingStartDate: row.nestingStartDate } : {}),
-              ...(row.goLiveDate ? { goLiveDate: row.goLiveDate } : {}),
-              contractType: row.contractType || null,
-              siteOperation: null,
-              internalNotes: row.notes || null,
-              primaryPhone: row.primaryPhone || null,
-              city: row.city || null,
-              stateUf: row.stateUf || null,
-              preferredSchedule: row.preferredSchedule || null,
-              pixKey: row.pixKey || null,
-              pixKeyType: row.pixKeyType || null,
-              deletedAt: null
-            }
-          })
+            data: employeeUpdateData
+            })
+            : existingEmployeeForUpdate!
           : await prisma.employeeProfile.create({
             data: {
               userId,
@@ -616,10 +649,10 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               admissionDate,
 	              scheduleType: internalDefaultScheduleType,
               operationalStatus: row.employeeStatus,
-              lobId: lob.id,
-              teamId: team.id,
+              lobId: lob!.id,
+              teamId: team!.id,
               supervisorId: supervisor?.id,
-              shiftId: shift.id,
+              shiftId: shift!.id,
               workStartTime: row.workStartTime || null,
               workEndTime: row.workEndTime || null,
               skill: row.skill || null,
@@ -651,6 +684,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
             }
           });
         if (!employeeId) colaboradoresCriados += 1;
+        else registrosAtualizados += 1;
 
         if (shouldInactivateAccess && employee.userId) {
           await prisma.user.update({
@@ -665,19 +699,32 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
           accessInactivated += 1;
         }
 
-        await prisma.employeeSensitiveData.upsert({
-          where: { employeeId: employee.id },
-          update: sensitiveDataFromImport(row, birthDate),
-          create: { employeeId: employee.id, ...sensitiveDataFromImport(row, birthDate) }
-        });
-
-        await prisma.employeeRegistrationRequest.update({
-          where: { id: registration.id },
-          data: {
-            createdUserId: userId,
-            createdEmployeeProfileId: employee.id
+        const currentEmployeeSensitiveData = currentSensitiveData
+          ?? sensitiveByEmployeeId.get(employee.id)
+          ?? (employeeId ? await prisma.employeeSensitiveData.findUnique({ where: { employeeId: employee.id } }) : null);
+        if (currentEmployeeSensitiveData) {
+          const sensitiveUpdateData = buildSensitiveImportUpdateData(rawRow, row, birthDate, currentEmployeeSensitiveData);
+          if (Object.keys(sensitiveUpdateData).length) {
+            await prisma.employeeSensitiveData.update({
+              where: { employeeId: employee.id },
+              data: sensitiveUpdateData
+            });
           }
-        });
+        } else {
+          await prisma.employeeSensitiveData.create({
+            data: { employeeId: employee.id, ...sensitiveDataFromImport(row, birthDate) }
+          });
+        }
+
+        if (registration) {
+          await prisma.employeeRegistrationRequest.update({
+            where: { id: registration.id },
+            data: {
+              ...(userId ? { createdUserId: userId } : {}),
+              createdEmployeeProfileId: employee.id
+            }
+          });
+        }
       }
 
       await prisma.auditLog.create({
@@ -1152,46 +1199,51 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
 
   const validations: EmployeeImportValidation[] = [];
   for (let index = 0; index < rows.length; index += 1) {
+    const rawRow = rows[index] ?? {};
     const row = normalizedRows[index];
     const errors: string[] = [];
     const warnings: string[] = [];
+    const normalizedRowWbLogin = normalizeWbLoginForEmployeeImport(row.wbLogin);
+    const activeByWb = normalizedRowWbLogin ? employeeByWb.get(normalizedRowWbLogin) ?? null : null;
+    const isExistingEmployeeImport = Boolean(activeByWb);
 
-    if (!row.name) errors.push("Nome obrigatório.");
     if (!row.wbLogin) errors.push("WB/Login obrigatório.");
-    if (!row.roleTitle) errors.push("Cargo/Função obrigatório.");
-    if (!text(rows[index]?.role_permissao)) errors.push("Role/Permissão obrigatória.");
-    if (!row.lob) errors.push("LOB obrigatória.");
-    if (!row.employeeStatus) errors.push("Status do colaborador obrigatório.");
-    if (!row.isPcd) errors.push("É PCD? obrigatório.");
-    if (hasImportValue(rows[index]?.eh_pcd) && !row.isPcd) errors.push("É PCD? inválido. Use Sim, Não ou Prefiro não informar.");
+    if (!isExistingEmployeeImport && !row.name) errors.push("Nome obrigatório.");
+    if (!isExistingEmployeeImport && !row.roleTitle) errors.push("Cargo/Função obrigatório.");
+    if ((row.createUser || !isExistingEmployeeImport) && !text(rawRow.role_permissao)) errors.push("Role/Permissão obrigatória.");
+    if (!isExistingEmployeeImport && !row.lob) errors.push("LOB obrigatória.");
+    if (!isExistingEmployeeImport && !row.employeeStatus) errors.push("Status do colaborador obrigatório.");
+    if (!isExistingEmployeeImport && !row.isPcd) errors.push("É PCD? obrigatório.");
+    if (hasImportValue(rawRow.eh_pcd) && !row.isPcd) errors.push("É PCD? inválido. Use Sim, Não ou Prefiro não informar.");
     if (row.isPcd === "Sim" && !row.pcdDisabilityType) errors.push("Tipo de deficiência é obrigatório quando PCD for Sim.");
     if (row.pcdDisabilityType && !validPcdDisabilityTypes.has(row.pcdDisabilityType)) errors.push("Tipo de deficiência inválido.");
     if (row.isPcd === "Sim" && row.pcdDisabilityType === "Outra" && !row.pcdDisabilityOther) errors.push("Especifique o tipo de deficiência.");
-    if (!hasImportValue(rows[index]?.criar_usuario)) errors.push("criar_usuario obrigatório.");
-    if (row.lob && text(rows[index]?.lob).toLowerCase() === "todos") errors.push("Todos é opção de filtro. Para atuação transversal use a LOB real ALL.");
+    if (!isExistingEmployeeImport && !hasImportValue(rawRow.criar_usuario)) errors.push("criar_usuario obrigatório.");
+    if (row.lob && text(rawRow.lob).toLowerCase() === "todos") errors.push("Todos é opção de filtro. Para atuação transversal use a LOB real ALL.");
     if (row.lob && !validLobs.has(row.lob.toUpperCase())) errors.push(`LOB ${row.lob} não existe em Configurações.`);
     if (row.shift && isBlockedShiftName(row.shift)) {
       const blockedKey = shiftLookupKey(cleanShiftName(row.shift));
       errors.push(blockedKey === "PLANTAO" ? "Plantão não é um turno ativo." : "Férias deve ser usada como status de cronograma, não como turno.");
     } else if (row.shift && (!isSelectableShiftName(row.shift) || !validShifts.has(normalizeLookupKey(cleanShiftName(row.shift))))) errors.push(`Turno ${row.shift} não existe em Configurações.`);
     if (row.cpf && !isCpfFormat(row.cpf)) errors.push("CPF inválido.");
-    if (!row.cpf) warnings.push("CPF pendente: o colaborador será importado com cadastro incompleto para complemento posterior.");
+    if (!isExistingEmployeeImport && !row.cpf) warnings.push("CPF pendente: o colaborador será importado com cadastro incompleto para complemento posterior.");
+    if (row.createUser && !row.name) errors.push("Nome obrigatório quando criar_usuario = sim.");
     if (row.createUser && !row.email) errors.push("E-mail obrigatório quando criar_usuario = sim.");
     if (row.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) errors.push("E-mail inválido.");
-    if (!validRoles.has(row.roleName)) errors.push(`Role/permissão inválida: ${row.roleName}.`);
-    if (hasImportValue(rows[index]?.data_nascimento) && !row.birthDate) errors.push("Data de nascimento inválida.");
-    if (hasImportValue(rows[index]?.data_admissao) && !row.admissionDate) errors.push("Data de admissão inválida.");
-    if (hasImportValue(rows[index]?.data_inicio_treinamento) && !row.trainingStartDate) errors.push("Data de início do treinamento inválida.");
-    if (hasImportValue(rows[index]?.data_inicio_nesting) && !row.nestingStartDate) errors.push("Data de início de Nesting inválida.");
-    if (hasImportValue(rows[index]?.data_go_live) && !row.goLiveDate) errors.push("Data de Go Live inválida.");
-    if (hasImportValue(rows[index]?.data_desligamento) && !row.terminationDate) errors.push("Data de desligamento inválida.");
-    if (hasImportValue(rows[index]?.tipo_desligamento) && !row.terminationType) errors.push("Tipo de desligamento inválido. Use Voluntário ou Involuntário.");
-    if (hasImportValue(rows[index]?.horario_entrada ?? rows[index]?.entrada) && !row.workStartTime) errors.push("Horário de entrada inválido.");
-    if (hasImportValue(rows[index]?.horario_saida ?? rows[index]?.saida) && !row.workEndTime) errors.push("Horário de saída inválido.");
-    if (isOperationalTerminationStatus(row.employeeStatus) && !row.terminationDate) warnings.push("Colaborador marcado como Desligado sem data de desligamento.");
-    if (isTrainingTerminationStatus(row.employeeStatus) && !row.terminationDate) warnings.push("Colaborador marcado como Desligado em Treinamento sem data de desligamento.");
-    if (row.terminationDate && !isAccessInactiveEmployeeStatus(row.employeeStatus)) warnings.push("Data de desligamento preenchida, mas status_colaborador não está Desligado, Desligado em Treinamento, Inativo ou Desativado.");
-    if (isAccessInactiveEmployeeStatus(row.employeeStatus)) warnings.push("Acesso vinculado será inativado e o histórico será preservado.");
+    if (row.roleName && !validRoles.has(row.roleName)) errors.push(`Role/permissão inválida: ${row.roleName}.`);
+    if (hasImportValue(rawRow.data_nascimento) && !row.birthDate) errors.push("Data de nascimento inválida.");
+    if (hasImportValue(rawRow.data_admissao) && !row.admissionDate) errors.push("Data de admissão inválida.");
+    if (hasImportValue(rawRow.data_inicio_treinamento) && !row.trainingStartDate) errors.push("Data de início do treinamento inválida.");
+    if (hasImportValue(rawRow.data_inicio_nesting) && !row.nestingStartDate) errors.push("Data de início de Nesting inválida.");
+    if (hasImportValue(rawRow.data_go_live) && !row.goLiveDate) errors.push("Data de Go Live inválida.");
+    if (hasImportValue(rawRow.data_desligamento) && !row.terminationDate) errors.push("Data de desligamento inválida.");
+    if (hasImportValue(rawRow.tipo_desligamento) && !row.terminationType) errors.push("Tipo de desligamento inválido. Use Voluntário ou Involuntário.");
+    if (hasAnyImportValue(rawRow, ["horario_entrada", "entrada"]) && !row.workStartTime) errors.push("Horário de entrada inválido.");
+    if (hasAnyImportValue(rawRow, ["horario_saida", "saida"]) && !row.workEndTime) errors.push("Horário de saída inválido.");
+    if (hasAnyImportValue(rawRow, ["status_colaborador"]) && isOperationalTerminationStatus(row.employeeStatus) && !row.terminationDate && !activeByWb?.terminationDate) warnings.push("Colaborador marcado como Desligado sem data de desligamento.");
+    if (hasAnyImportValue(rawRow, ["status_colaborador"]) && isTrainingTerminationStatus(row.employeeStatus) && !row.terminationDate && !activeByWb?.terminationDate) warnings.push("Colaborador marcado como Desligado em Treinamento sem data de desligamento.");
+    if (row.terminationDate && hasAnyImportValue(rawRow, ["status_colaborador"]) && !isAccessInactiveEmployeeStatus(row.employeeStatus)) warnings.push("Data de desligamento preenchida, mas status_colaborador não está Desligado, Desligado em Treinamento, Inativo ou Desativado.");
+    if (hasAnyImportValue(rawRow, ["status_colaborador"]) && isAccessInactiveEmployeeStatus(row.employeeStatus)) warnings.push("Acesso vinculado será inativado e o histórico será preservado.");
     if (row.stateUf && !/^[A-Z]{2}$/.test(row.stateUf)) errors.push("Estado UF deve ter 2 letras.");
     if (row.zipCode && !/^\d{5}-?\d{3}$/.test(row.zipCode)) warnings.push("CEP fora do padrão 00000-000.");
     if (row.primaryPhone && !/^\d{2}\s?\d{4,5}-?\d{4}$/.test(row.primaryPhone.replace(/[()]/g, ""))) warnings.push("Contato principal fora do padrão brasileiro.");
@@ -1200,13 +1252,11 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
 
     if (row.cpf && seenCpf.has(row.cpf)) errors.push("CPF duplicado dentro do arquivo.");
     if (row.email && seenEmail.has(row.email)) errors.push("E-mail duplicado dentro do arquivo.");
-    const normalizedRowWbLogin = normalizeWbLoginForEmployeeImport(row.wbLogin);
     if (normalizedRowWbLogin && seenWb.has(normalizedRowWbLogin)) errors.push("WB/Login duplicado dentro do arquivo.");
     if (row.cpf) seenCpf.add(row.cpf);
     if (row.email) seenEmail.add(row.email);
     if (normalizedRowWbLogin) seenWb.add(normalizedRowWbLogin);
 
-    const activeByWb = normalizedRowWbLogin ? employeeByWb.get(normalizedRowWbLogin) ?? null : null;
     if (activeByWb) {
       warnings.push("WB/Login existente: o colaborador será atualizado.");
       if (row.skill && row.skill !== (activeByWb.skill ?? "")) warnings.push(`Skill será atualizada de ${activeByWb.skill || "vazio"} para ${row.skill}.`);
@@ -1233,10 +1283,15 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     }
 
     const willInactivateUser = isAccessInactiveEmployeeStatus(row.employeeStatus);
+    const keptFields = activeByWb ? getEmptyImportedFieldLabels(rawRow) : [];
+    const changes = activeByWb ? buildEmployeeImportChangeLabels(rawRow, row, activeByWb, supervisor.employee ?? null) : [];
+    if (keptFields.length) warnings.push(`Campos vazios serão mantidos: ${keptFields.slice(0, 8).join(", ")}${keptFields.length > 8 ? "..." : ""}.`);
     validations.push({
       rowNumber: index + 1,
       errors,
       warnings,
+      changes,
+      keptFields,
       action: errors.length ? "ignorar" : willInactivateUser ? "inativar_acesso" : activeByWb ? "atualizar" : "criar",
       status: errors.length ? "Erro" : warnings.length ? "Alerta" : "Válida",
       preview: {
@@ -1390,6 +1445,222 @@ function sensitiveDataFromImport(row: ReturnType<typeof normalizeEmployeeImportR
       telemarketingWhere: row.telemarketingWhere
     }
   };
+}
+
+function buildEmployeeImportUpdateData(
+  raw: EmployeeImportRow,
+  row: NormalizedEmployeeImportRow,
+  relations: {
+    userId?: string;
+    lobId?: string;
+    teamId?: string;
+    supervisorId?: string;
+    shiftId?: string;
+  }
+): Prisma.EmployeeProfileUncheckedUpdateInput {
+  const data: Prisma.EmployeeProfileUncheckedUpdateInput = {};
+  if (relations.userId) data.userId = relations.userId;
+  if (shouldPatchImportField(raw, ["nome"])) data.fullName = row.name;
+  if (shouldPatchImportField(raw, ["nome_social"])) data.socialName = row.socialName;
+  if (shouldPatchImportField(raw, ["cargo_funcao"])) data.roleTitle = row.roleTitle;
+  if (shouldPatchImportField(raw, ["data_admissao"]) && row.admissionDate) data.admissionDate = row.admissionDate;
+  if (shouldPatchImportField(raw, ["data_inicio_treinamento"]) && row.trainingStartDate) data.trainingStartDate = row.trainingStartDate;
+  if (shouldPatchImportField(raw, ["status_colaborador"])) data.operationalStatus = row.employeeStatus;
+  if (relations.lobId && shouldPatchImportField(raw, ["lob"])) data.lobId = relations.lobId;
+  if (relations.teamId && shouldPatchImportField(raw, ["lob"])) data.teamId = relations.teamId;
+  if (shouldPatchImportField(raw, ["supervisor_wb_login", "supervisor_email", "supervisor_nome"])) data.supervisorId = relations.supervisorId ?? null;
+  if (relations.shiftId && shouldPatchImportField(raw, ["turno"])) data.shiftId = relations.shiftId;
+  if (shouldPatchImportField(raw, ["horario_entrada", "entrada"])) data.workStartTime = row.workStartTime;
+  if (shouldPatchImportField(raw, ["horario_saida", "saida"])) data.workEndTime = row.workEndTime;
+  if (shouldPatchImportField(raw, ["skill"])) data.skill = row.skill;
+  if (shouldPatchImportField(raw, ["wave"])) data.wave = row.wave;
+  if (shouldPatchImportField(raw, ["data_desligamento"]) && row.terminationDate) data.terminationDate = row.terminationDate;
+  if (shouldPatchImportField(raw, ["tipo_desligamento"])) data.terminationType = row.terminationType;
+  if (shouldPatchImportField(raw, ["motivo_desligamento"])) data.terminationReason = row.terminationReason;
+  if (shouldPatchImportField(raw, ["etnia"])) data.ethnicity = row.ethnicity;
+  if (shouldPatchImportField(raw, ["orientacao_sexual"])) data.sexualOrientation = row.sexualOrientation;
+  if (shouldPatchImportField(raw, ["eh_pcd"])) {
+    data.isPcd = row.isPcd;
+    if (row.isPcd !== "Sim") {
+      data.pcdDisabilityType = null;
+      data.pcdDisabilityOther = null;
+    }
+  }
+  if (shouldPatchImportField(raw, ["tipo_deficiencia"])) data.pcdDisabilityType = row.pcdDisabilityType;
+  if (shouldPatchImportField(raw, ["tipo_deficiencia_outro"])) data.pcdDisabilityOther = row.pcdDisabilityOther;
+  if (shouldPatchImportField(raw, ["primeiro_emprego"])) data.firstJob = row.firstJob;
+  if (shouldPatchImportField(raw, ["ja_trabalhou_telemarketing"])) data.hasTelemarketingExperience = row.hasTelemarketingExperience;
+  if (shouldPatchImportField(raw, ["onde_trabalhou_telemarketing"])) data.telemarketingWhere = row.telemarketingWhere;
+  if (shouldPatchImportField(raw, ["data_inicio_nesting"]) && row.nestingStartDate) data.nestingStartDate = row.nestingStartDate;
+  if (shouldPatchImportField(raw, ["data_go_live"]) && row.goLiveDate) data.goLiveDate = row.goLiveDate;
+  if (shouldPatchImportField(raw, ["tipo_contrato"])) data.contractType = row.contractType;
+  if (shouldPatchImportField(raw, ["observacoes"])) data.internalNotes = row.notes;
+  if (shouldPatchImportField(raw, ["contato_principal"])) data.primaryPhone = row.primaryPhone;
+  if (shouldPatchImportField(raw, ["cidade"])) data.city = row.city;
+  if (shouldPatchImportField(raw, ["estado_uf"])) data.stateUf = row.stateUf;
+  if (shouldPatchImportField(raw, ["preferencia_horario"])) data.preferredSchedule = row.preferredSchedule;
+  if (shouldPatchImportField(raw, ["chave_pix"])) data.pixKey = row.pixKey;
+  if (shouldPatchImportField(raw, ["tipo_chave_pix"])) data.pixKeyType = row.pixKeyType;
+  return data;
+}
+
+function buildSensitiveImportUpdateData(
+  raw: EmployeeImportRow,
+  row: NormalizedEmployeeImportRow,
+  birthDate: Date,
+  current: EmployeeSensitiveData
+): Prisma.EmployeeSensitiveDataUncheckedUpdateInput {
+  const data: Prisma.EmployeeSensitiveDataUncheckedUpdateInput = {};
+  if (shouldPatchImportField(raw, ["cpf"])) data.cpf = row.cpf;
+  if (shouldPatchImportField(raw, ["rg"])) data.rg = row.rg;
+  if (shouldPatchImportField(raw, ["orgao_expedidor_uf"])) data.rgIssuer = row.rgIssuer;
+  if (shouldPatchImportField(raw, ["cnpj"])) data.cnpj = row.cnpj;
+  if (shouldPatchImportField(raw, ["data_nascimento"])) data.birthDate = birthDate;
+
+  const address = mergeRegistrationJson(current.address, {
+    type: shouldPatchImportField(raw, ["endereco_tipo"]) ? row.addressType : undefined,
+    name: shouldPatchImportField(raw, ["endereco"]) ? row.address : undefined,
+    number: shouldPatchImportField(raw, ["numero"]) ? row.addressNumber : undefined,
+    complement: shouldPatchImportField(raw, ["complemento"]) ? row.complement : undefined,
+    neighborhood: shouldPatchImportField(raw, ["bairro"]) ? row.neighborhood : undefined,
+    city: shouldPatchImportField(raw, ["cidade"]) ? row.city : undefined,
+    stateUf: shouldPatchImportField(raw, ["estado_uf"]) ? row.stateUf : undefined,
+    zipCode: shouldPatchImportField(raw, ["cep"]) ? row.zipCode : undefined
+  });
+  if (hasAnyImportValue(raw, ["endereco_tipo", "endereco", "numero", "complemento", "bairro", "cidade", "estado_uf", "cep"])) data.address = address;
+
+  const bankData = mergeRegistrationJson(current.bankData, {
+    bankName: shouldPatchImportField(raw, ["banco"]) ? row.bankName : undefined,
+    bankAgency: shouldPatchImportField(raw, ["agencia"]) ? row.bankAgency : undefined,
+    bankAccount: shouldPatchImportField(raw, ["conta_corrente"]) ? row.bankAccount : undefined,
+    pixKey: shouldPatchImportField(raw, ["chave_pix"]) ? row.pixKey : undefined,
+    pixKeyType: shouldPatchImportField(raw, ["tipo_chave_pix"]) ? row.pixKeyType : undefined
+  });
+  if (hasAnyImportValue(raw, ["banco", "agencia", "conta_corrente", "chave_pix", "tipo_chave_pix"])) data.bankData = bankData;
+
+  const emergencyContactData = mergeRegistrationJson(current.emergencyContactData, {
+    name: shouldPatchImportField(raw, ["nome_contato_emergencia"]) ? row.emergencyContactName : undefined,
+    phone: shouldPatchImportField(raw, ["contato_emergencia"]) ? row.emergencyPhone : undefined,
+    relationship: shouldPatchImportField(raw, ["parentesco_contato_emergencia"]) ? row.emergencyContactRelationship : undefined,
+    primaryPhone: shouldPatchImportField(raw, ["contato_principal"]) ? row.primaryPhone : undefined
+  });
+  if (hasAnyImportValue(raw, ["nome_contato_emergencia", "contato_emergencia", "parentesco_contato_emergencia", "contato_principal"])) data.emergencyContactData = emergencyContactData;
+
+  const familyData = mergeRegistrationJson(current.familyData, {
+    hasChildren: shouldPatchImportField(raw, ["tem_filhos"]) ? row.hasChildren : undefined,
+    childrenCount: shouldPatchImportField(raw, ["quantidade_filhos"]) ? row.childrenCount : undefined,
+    maritalStatus: shouldPatchImportField(raw, ["estado_civil"]) ? row.maritalStatus : undefined,
+    gender: shouldPatchImportField(raw, ["genero", "sexo"]) ? row.sex : undefined,
+    educationLevel: shouldPatchImportField(raw, ["escolaridade"]) ? row.educationLevel : undefined,
+    socialName: shouldPatchImportField(raw, ["nome_social"]) ? row.socialName : undefined,
+    ethnicity: shouldPatchImportField(raw, ["etnia"]) ? row.ethnicity : undefined,
+    sexualOrientation: shouldPatchImportField(raw, ["orientacao_sexual"]) ? row.sexualOrientation : undefined,
+    isPcd: shouldPatchImportField(raw, ["eh_pcd"]) ? row.isPcd : undefined,
+    pcdDisabilityType: shouldPatchImportField(raw, ["tipo_deficiencia"]) ? row.pcdDisabilityType : undefined,
+    pcdDisabilityOther: shouldPatchImportField(raw, ["tipo_deficiencia_outro"]) ? row.pcdDisabilityOther : undefined,
+    firstJob: shouldPatchImportField(raw, ["primeiro_emprego"]) ? row.firstJob : undefined,
+    hasTelemarketingExperience: shouldPatchImportField(raw, ["ja_trabalhou_telemarketing"]) ? row.hasTelemarketingExperience : undefined,
+    telemarketingWhere: shouldPatchImportField(raw, ["onde_trabalhou_telemarketing"]) ? row.telemarketingWhere : undefined
+  });
+  if (hasAnyImportValue(raw, ["tem_filhos", "quantidade_filhos", "estado_civil", "genero", "sexo", "escolaridade", "nome_social", "etnia", "orientacao_sexual", "eh_pcd", "tipo_deficiencia", "tipo_deficiencia_outro", "primeiro_emprego", "ja_trabalhou_telemarketing", "onde_trabalhou_telemarketing"])) data.familyData = familyData;
+  return data;
+}
+
+function buildRegistrationImportUpdateData(
+  raw: EmployeeImportRow,
+  row: NormalizedEmployeeImportRow,
+  context: {
+    birthDate: Date;
+    trainingStartDate: Date;
+    admissionDate: Date;
+    batchId: string;
+    actorName: string;
+    reviewerId: string;
+    existingOperationalData: Prisma.JsonValue | null;
+    existingHistory: Prisma.JsonValue | null;
+    supervisorName: string | null;
+  }
+): Prisma.EmployeeRegistrationRequestUpdateInput {
+  const data: Prisma.EmployeeRegistrationRequestUpdateInput = {
+    status: "APROVADO",
+    reviewedById: context.reviewerId,
+    reviewedAt: new Date(),
+    reviewNotes: "Importado via Excel e aprovado automaticamente.",
+    history: appendHistory(context.existingHistory, context.actorName, "Cadastro importado e aprovado via Excel", context.batchId),
+    deletedAt: null
+  };
+  if (shouldPatchImportField(raw, ["cnpj"])) data.cnpj = row.cnpj;
+  if (shouldPatchImportField(raw, ["nome"])) data.fullName = row.name;
+  if (shouldPatchImportField(raw, ["endereco_tipo"])) data.addressType = row.addressType;
+  if (shouldPatchImportField(raw, ["endereco"])) data.addressName = row.address;
+  if (shouldPatchImportField(raw, ["numero"])) data.addressNumber = row.addressNumber;
+  if (shouldPatchImportField(raw, ["complemento"])) data.complement = row.complement;
+  if (shouldPatchImportField(raw, ["bairro"])) data.neighborhood = row.neighborhood;
+  if (shouldPatchImportField(raw, ["cidade"])) data.city = row.city;
+  if (shouldPatchImportField(raw, ["estado_uf"])) data.stateUf = row.stateUf;
+  if (shouldPatchImportField(raw, ["cep"])) data.zipCode = row.zipCode;
+  if (shouldPatchImportField(raw, ["contato_principal"])) data.primaryPhone = row.primaryPhone;
+  if (shouldPatchImportField(raw, ["contato_emergencia"])) data.emergencyPhone = row.emergencyPhone;
+  if (shouldPatchImportField(raw, ["nome_contato_emergencia"])) data.emergencyContactName = row.emergencyContactName;
+  if (shouldPatchImportField(raw, ["parentesco_contato_emergencia"])) data.emergencyContactRelationship = row.emergencyContactRelationship;
+  if (shouldPatchImportField(raw, ["data_nascimento"])) data.birthDate = context.birthDate;
+  if (shouldPatchImportField(raw, ["email"])) data.email = row.email;
+  if (shouldPatchImportField(raw, ["rg"])) data.rg = row.rg;
+  if (shouldPatchImportField(raw, ["orgao_expedidor_uf"])) data.rgIssuer = row.rgIssuer;
+  if (shouldPatchImportField(raw, ["cpf"])) data.cpf = row.cpf;
+  if (shouldPatchImportField(raw, ["genero", "sexo"])) data.sex = row.sex;
+  if (shouldPatchImportField(raw, ["etnia"])) data.ethnicity = row.ethnicity;
+  if (shouldPatchImportField(raw, ["orientacao_sexual"])) data.sexualOrientation = row.sexualOrientation;
+  if (shouldPatchImportField(raw, ["eh_pcd"])) data.isPcd = row.isPcd;
+  if (shouldPatchImportField(raw, ["tipo_deficiencia"])) data.pcdDisabilityType = row.pcdDisabilityType;
+  if (shouldPatchImportField(raw, ["tipo_deficiencia_outro"])) data.pcdDisabilityOther = row.pcdDisabilityOther;
+  if (shouldPatchImportField(raw, ["primeiro_emprego"])) data.firstJob = row.firstJob;
+  if (shouldPatchImportField(raw, ["ja_trabalhou_telemarketing"])) data.hasTelemarketingExperience = row.hasTelemarketingExperience;
+  if (shouldPatchImportField(raw, ["onde_trabalhou_telemarketing"])) data.telemarketingWhere = row.telemarketingWhere;
+  if (shouldPatchImportField(raw, ["estado_civil"])) data.maritalStatus = row.maritalStatus;
+  if (shouldPatchImportField(raw, ["escolaridade"])) data.educationLevel = row.educationLevel;
+  if (shouldPatchImportField(raw, ["data_inicio_treinamento"]) || shouldPatchImportField(raw, ["data_admissao"])) data.trainingStartDate = context.trainingStartDate;
+  if (shouldPatchImportField(raw, ["preferencia_horario"])) data.preferredSchedule = row.preferredSchedule;
+  if (shouldPatchImportField(raw, ["banco"])) data.bankName = row.bankName;
+  if (shouldPatchImportField(raw, ["agencia"])) data.bankAgency = row.bankAgency;
+  if (shouldPatchImportField(raw, ["conta_corrente"])) data.bankAccount = row.bankAccount;
+  if (shouldPatchImportField(raw, ["chave_pix"])) data.pixKey = row.pixKey;
+  if (shouldPatchImportField(raw, ["tipo_chave_pix"])) data.pixKeyType = row.pixKeyType;
+  if (shouldPatchImportField(raw, ["chave_pix_secundaria"])) data.secondaryPixKey = row.secondaryPixKey;
+  if (shouldPatchImportField(raw, ["tipo_chave_pix_secundaria"])) data.secondaryPixKeyType = row.secondaryPixKeyType;
+  if (shouldPatchImportField(raw, ["nome_social"])) data.socialName = row.socialName;
+  if (shouldPatchImportField(raw, ["tem_filhos"])) data.hasChildren = row.hasChildren;
+  if (shouldPatchImportField(raw, ["quantidade_filhos"])) data.childrenCount = row.childrenCount;
+  if (shouldPatchImportField(raw, ["observacoes"])) data.notes = row.notes;
+  if (shouldPatchImportField(raw, ["data_inicio_nesting"])) data.nestingStartDate = row.nestingStartDate;
+  if (shouldPatchImportField(raw, ["data_go_live"])) data.goLiveDate = row.goLiveDate;
+
+  data.operationalData = mergeRegistrationJson(context.existingOperationalData, {
+    origin: "IMPORT_EXCEL",
+    importBatchId: context.batchId,
+    wbLogin: row.wbLogin,
+    lob: shouldPatchImportField(raw, ["lob"]) ? row.lob : undefined,
+    supervisorInformado: hasAnyImportValue(raw, ["supervisor_nome", "supervisor_email", "supervisor_wb_login"]) ? row.supervisorName || row.supervisorEmail || row.supervisorWbLogin : undefined,
+    shift: shouldPatchImportField(raw, ["turno"]) ? row.shift : undefined,
+    roleTitle: shouldPatchImportField(raw, ["cargo_funcao"]) ? row.roleTitle : undefined,
+    employeeStatus: shouldPatchImportField(raw, ["status_colaborador"]) ? row.employeeStatus : undefined,
+    preferredSchedule: shouldPatchImportField(raw, ["preferencia_horario"]) ? row.preferredSchedule : undefined,
+    supervisorWbLogin: shouldPatchImportField(raw, ["supervisor_wb_login"]) ? row.supervisorWbLogin : undefined,
+    supervisorEmail: shouldPatchImportField(raw, ["supervisor_email"]) ? row.supervisorEmail : undefined,
+    supervisorName: shouldPatchImportField(raw, ["supervisor_nome"]) ? row.supervisorName : undefined,
+    supervisor: context.supervisorName,
+    skill: shouldPatchImportField(raw, ["skill"]) ? row.skill : undefined,
+    wave: shouldPatchImportField(raw, ["wave"]) ? row.wave : undefined,
+    contractType: shouldPatchImportField(raw, ["tipo_contrato"]) ? row.contractType : undefined,
+    admissionDate: shouldPatchImportField(raw, ["data_admissao"]) ? context.admissionDate.toISOString() : undefined,
+    trainingStartDate: shouldPatchImportField(raw, ["data_inicio_treinamento"]) ? context.trainingStartDate.toISOString() : undefined,
+    nestingStartDate: shouldPatchImportField(raw, ["data_inicio_nesting"]) ? row.nestingStartDate?.toISOString() : undefined,
+    goLiveDate: shouldPatchImportField(raw, ["data_go_live"]) ? row.goLiveDate?.toISOString() : undefined,
+    terminationDate: shouldPatchImportField(raw, ["data_desligamento"]) ? row.terminationDate?.toISOString() : undefined,
+    terminationType: shouldPatchImportField(raw, ["tipo_desligamento"]) ? row.terminationType : undefined,
+    terminationReason: shouldPatchImportField(raw, ["motivo_desligamento"]) ? row.terminationReason : undefined
+  });
+  return data;
 }
 
 function resolveImportSupervisor(
@@ -1660,7 +1931,49 @@ async function findEmployeeProfilesByWbLoginBatch(normalizedWbLogins: string[]) 
           deletedAt: null,
           OR: chunk.map((wbLogin) => ({ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }))
         },
-        select: { id: true, userId: true, wbLogin: true, fullName: true, skill: true, wave: true, workStartTime: true, workEndTime: true, supervisorId: true, operationalStatus: true, user: { select: { role: { select: { name: true } } } } }
+        select: {
+          id: true,
+          userId: true,
+          wbLogin: true,
+          fullName: true,
+          socialName: true,
+          primaryPhone: true,
+          city: true,
+          stateUf: true,
+          preferredSchedule: true,
+          pixKey: true,
+          pixKeyType: true,
+          roleTitle: true,
+          admissionDate: true,
+          trainingStartDate: true,
+          terminationDate: true,
+          terminationType: true,
+          terminationReason: true,
+          ethnicity: true,
+          sexualOrientation: true,
+          isPcd: true,
+          pcdDisabilityType: true,
+          pcdDisabilityOther: true,
+          firstJob: true,
+          hasTelemarketingExperience: true,
+          telemarketingWhere: true,
+          nestingStartDate: true,
+          goLiveDate: true,
+          workStartTime: true,
+          workEndTime: true,
+          scheduleType: true,
+          contractType: true,
+          siteOperation: true,
+          internalNotes: true,
+          skill: true,
+          wave: true,
+          operationalStatus: true,
+          lobId: true,
+          teamId: true,
+          supervisorId: true,
+          shiftId: true,
+          user: { select: { role: { select: { name: true } } } }
+        }
       })
     )
   );
@@ -1677,6 +1990,69 @@ function hasImportValue(value: unknown) {
   if (value instanceof Date) return true;
   if (typeof value === "number") return true;
   return text(value) !== "";
+}
+
+function hasImportColumn(row: EmployeeImportRow, key: string) {
+  return Object.prototype.hasOwnProperty.call(row, key);
+}
+
+function hasAnyImportValue(row: EmployeeImportRow, keys: string[]) {
+  return keys.some((key) => hasImportValue(row[key]));
+}
+
+function hasAnyImportColumn(row: EmployeeImportRow, keys: string[]) {
+  return keys.some((key) => hasImportColumn(row, key));
+}
+
+function shouldPatchImportField(row: EmployeeImportRow, keys: string[]) {
+  return hasAnyImportColumn(row, keys) && hasAnyImportValue(row, keys);
+}
+
+function getEmptyImportedFieldLabels(row: EmployeeImportRow) {
+  return importFieldLabels
+    .filter((field) => hasAnyImportColumn(row, field.keys) && !hasAnyImportValue(row, field.keys))
+    .map((field) => field.label);
+}
+
+function dateCompareKey(value: Date | null | undefined) {
+  return value ? value.toISOString().slice(0, 10) : "";
+}
+
+function buildEmployeeImportChangeLabels(
+  raw: EmployeeImportRow,
+  row: NormalizedEmployeeImportRow,
+  existing: Partial<EmployeeProfile>,
+  supervisor: { id: string; fullName: string } | null
+) {
+  const changes: string[] = [];
+  const pushText = (label: string, keys: string[], next: string | null | undefined, current: string | null | undefined) => {
+    if (shouldPatchImportField(raw, keys) && (next ?? "") !== (current ?? "")) changes.push(`${label}: ${current || "vazio"} → ${next || "vazio"}`);
+  };
+  const pushDate = (label: string, keys: string[], next: Date | null | undefined, current: Date | null | undefined) => {
+    if (shouldPatchImportField(raw, keys) && dateCompareKey(next) !== dateCompareKey(current)) changes.push(`${label}: ${dateCompareKey(current) || "vazio"} → ${dateCompareKey(next) || "vazio"}`);
+  };
+
+  pushText("Nome", ["nome"], row.name, existing.fullName);
+  pushText("Nome social", ["nome_social"], row.socialName, existing.socialName);
+  pushText("Cargo/Função", ["cargo_funcao"], row.roleTitle, existing.roleTitle);
+  pushText("Status", ["status_colaborador"], row.employeeStatus, existing.operationalStatus);
+  pushText("Skill", ["skill"], row.skill, existing.skill);
+  pushText("Wave", ["wave"], row.wave, existing.wave);
+  pushText("Horário de entrada", ["horario_entrada", "entrada"], row.workStartTime, existing.workStartTime);
+  pushText("Horário de saída", ["horario_saida", "saida"], row.workEndTime, existing.workEndTime);
+  pushText("Tipo de contrato", ["tipo_contrato"], row.contractType, existing.contractType);
+  pushText("Telefone", ["contato_principal"], row.primaryPhone, existing.primaryPhone);
+  pushText("Cidade", ["cidade"], row.city, existing.city);
+  pushText("UF", ["estado_uf"], row.stateUf, existing.stateUf);
+  pushText("Chave PIX", ["chave_pix"], row.pixKey, existing.pixKey);
+  pushText("Tipo da Chave PIX", ["tipo_chave_pix"], row.pixKeyType, existing.pixKeyType);
+  pushDate("Data de admissão", ["data_admissao"], row.admissionDate, existing.admissionDate);
+  pushDate("Data de início de treinamento", ["data_inicio_treinamento"], row.trainingStartDate, existing.trainingStartDate);
+  pushDate("Data de início de Nesting", ["data_inicio_nesting"], row.nestingStartDate, existing.nestingStartDate);
+  pushDate("Data de Go Live", ["data_go_live"], row.goLiveDate, existing.goLiveDate);
+  pushDate("Data de desligamento", ["data_desligamento"], row.terminationDate, existing.terminationDate);
+  if (shouldPatchImportField(raw, ["supervisor_wb_login", "supervisor_email", "supervisor_nome"]) && supervisor?.id !== existing.supervisorId) changes.push(`Supervisor: ${supervisor?.fullName ?? "vazio"}`);
+  return changes;
 }
 
 function isReusableRegistration(item: EmployeeRegistrationRequest) {
