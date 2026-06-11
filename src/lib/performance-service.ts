@@ -173,12 +173,12 @@ export async function getPerformanceDashboard(actor: Actor, query: PerformanceQu
   const user = await requireActiveUser(actor);
   if (!canAccessPerformance(permissionUser(user))) throw new PerformanceError("Você não tem permissão para acessar Performance.", 403);
   const role = normalizeRole(user.role.name);
-  const view = query.view ?? (role === "COLABORADOR" ? "mine" : "wfh");
+  const view = role === "CLIENT" ? "wfh" : query.view ?? (role === "COLABORADOR" ? "mine" : "wfh");
   const period = resolvePeriod(query);
 
   if (view === "mine" || role === "COLABORADOR") {
     const ownEmployee = requireOwnEmployee(user);
-    const operationEmployees = await listPerformanceEmployees({}, { defaultAgentsOnly: true });
+    const operationEmployees = await listPerformanceEmployees({}, { defaultAgentsOnly: true }, period.end);
     const ownLobEmployees = operationEmployees.filter((employee) => employee.lobId === ownEmployee.lobId);
     const ownRows = await buildAgentRows([ownEmployee as PerformanceEmployee], period);
     const lobRows = await buildAgentRows(ownLobEmployees, period);
@@ -203,14 +203,15 @@ export async function getPerformanceDashboard(actor: Actor, query: PerformanceQu
   }
 
   if (!canAccessPerformanceWfh(permissionUser(user))) throw new PerformanceError("Você não tem permissão para acessar WFH.", 403);
-  const employees = await listPerformanceEmployees(query, { defaultAgentsOnly: true });
+  const employees = await listPerformanceEmployees(query, { defaultAgentsOnly: true }, period.end);
   const rows = sortAgentRows(filterRowsByWfhStatus(await buildAgentRows(employees, period), query.wfhStatus), query);
-  const imports = await prisma.performanceImportBatch.findMany({
+  const isClientView = role === "CLIENT";
+  const imports = isClientView ? [] : await prisma.performanceImportBatch.findMany({
     orderBy: { importedAt: "desc" },
     take: 12,
     include: { importedBy: { select: { name: true, email: true } } }
   });
-  const filters = await getPerformanceFilterOptions();
+  const filters = await getPerformanceFilterOptions(period.end);
 
   return {
     mode: "wfh" as const,
@@ -879,6 +880,11 @@ function displayPerformanceEmployeeStatus(status?: string | null) {
   return raw;
 }
 
+function shouldShowEmployeeForPerformancePeriod(employee: { terminationDate?: Date | null }, referenceDate?: Date | null) {
+  if (!referenceDate || !employee.terminationDate) return true;
+  return formatDateKey(referenceDate) < formatDateKey(employee.terminationDate);
+}
+
 function normalizeWfhStatusFilter(filter?: string): WfhStatus | "" {
   const value = filter?.trim();
   if (!value || value === "Todos" || value === "ALL") return "";
@@ -892,7 +898,7 @@ function normalizeTextToken(value: string) {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase().replace(/\s+/g, "_");
 }
 
-async function listPerformanceEmployees(query: PerformanceQuery = {}, options: { defaultAgentsOnly?: boolean } = {}) {
+async function listPerformanceEmployees(query: PerformanceQuery = {}, options: { defaultAgentsOnly?: boolean } = {}, referenceDate?: Date) {
   const where: Prisma.EmployeeProfileWhereInput = { deletedAt: null };
   const and: Prisma.EmployeeProfileWhereInput[] = [];
   if (options.defaultAgentsOnly && (!query.role || query.role === "Todos")) {
@@ -908,6 +914,7 @@ async function listPerformanceEmployees(query: PerformanceQuery = {}, options: {
   if (query.skill && query.skill !== "Todos") and.push(query.skill === "SEM_SKILL" ? { OR: [{ skill: null }, { skill: "" }] } : { skill: { equals: query.skill, mode: "insensitive" } });
   const employeeStatusWhere = buildPerformanceEmployeeStatusWhere(query.employeeStatus);
   if (employeeStatusWhere) and.push(employeeStatusWhere);
+  if (referenceDate) and.push({ OR: [{ terminationDate: null }, { terminationDate: { gt: referenceDate } }] });
   if (and.length) where.AND = and;
 
   const employees = await prisma.employeeProfile.findMany({
@@ -920,10 +927,11 @@ async function listPerformanceEmployees(query: PerformanceQuery = {}, options: {
     orderBy: { fullName: "asc" },
     take: 3000
   });
-  return options.defaultAgentsOnly && (!query.role || query.role === "Todos") ? employees.filter((employee) => isAgentJobTitle(employee.roleTitle)) : employees;
+  const dateFilteredEmployees = employees.filter((employee) => shouldShowEmployeeForPerformancePeriod(employee, referenceDate));
+  return options.defaultAgentsOnly && (!query.role || query.role === "Todos") ? dateFilteredEmployees.filter((employee) => isAgentJobTitle(employee.roleTitle)) : dateFilteredEmployees;
 }
 
-async function getPerformanceFilterOptions() {
+async function getPerformanceFilterOptions(referenceDate?: Date) {
   const employees = await prisma.employeeProfile.findMany({
     where: { deletedAt: null },
     select: {
@@ -932,12 +940,13 @@ async function getPerformanceFilterOptions() {
       wbLogin: true,
       roleTitle: true,
       skill: true,
+      terminationDate: true,
       lob: { select: { name: true } },
       supervisor: { select: { id: true, fullName: true } }
     },
     orderBy: { fullName: "asc" }
   });
-  const agents = employees.filter((employee) => isAgentJobTitle(employee.roleTitle));
+  const agents = employees.filter((employee) => isAgentJobTitle(employee.roleTitle) && shouldShowEmployeeForPerformancePeriod(employee, referenceDate));
   const supervisors = new Map<string, string>();
   for (const employee of agents) {
     if (employee.supervisor?.id) supervisors.set(employee.supervisor.id, employee.supervisor.fullName);

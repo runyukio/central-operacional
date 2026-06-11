@@ -15,7 +15,8 @@ async function main() {
     ["WFM", "WFM / Planejamento"],
     ["QUALIDADE", "Qualidade"],
     ["RH", "RH"],
-    ["TI", "Logística / TI"]
+    ["TI", "Logística / TI"],
+    ["CLIENT", "Cliente"]
   ] as const;
 
   for (const [name, label] of roles) {

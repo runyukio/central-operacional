@@ -860,6 +860,8 @@ type EmployeeClient = (typeof employees)[number] & {
   city?: string;
   stateUf?: string;
   preferredSchedule?: string;
+  pixKeyType?: string;
+  pixKey?: string;
   isAgent?: boolean;
   canViewSensitive?: boolean;
   canEditEmployeeData?: boolean;
@@ -875,6 +877,8 @@ type EmployeeClient = (typeof employees)[number] & {
     birthDate: string;
     address: string;
     bankData: string;
+    pixKeyType?: string;
+    pixKey?: string;
     emergencyContactData: string;
     familyData: string;
   };
@@ -882,6 +886,8 @@ type EmployeeClient = (typeof employees)[number] & {
     cpf: string;
     rg: string;
     bankData: string;
+    pixKeyType?: string;
+    pixKey?: string;
     emergencyContactData: string;
   };
   attendanceHistory?: AttendanceItem[];
@@ -897,6 +903,8 @@ type AdditionalRegistrationDataForm = {
   firstJob: string;
   hasTelemarketingExperience: string;
   telemarketingWhere: string;
+  pixKeyType: string;
+  pixKey: string;
 };
 
 type AdditionalRegistrationDataResponse = {
@@ -1927,8 +1935,12 @@ const additionalDataEmptyForm: AdditionalRegistrationDataForm = {
   pcdDisabilityOther: "",
   firstJob: "",
   hasTelemarketingExperience: "",
-  telemarketingWhere: ""
+  telemarketingWhere: "",
+  pixKeyType: "",
+  pixKey: ""
 };
+
+const pixKeyTypeOptions = ["", "CPF", "CNPJ", "E-mail", "Telefone", "Chave aleatória"];
 
 export function AdditionalRegistrationDataPage() {
   const [form, setForm] = useState<AdditionalRegistrationDataForm>(additionalDataEmptyForm);
@@ -1938,6 +1950,8 @@ export function AdditionalRegistrationDataPage() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [completedAt, setCompletedAt] = useState("");
   const [profileName, setProfileName] = useState("");
+  const [pixConfirmationOpen, setPixConfirmationOpen] = useState(false);
+  const [pixAcknowledged, setPixAcknowledged] = useState(false);
 
   useEffect(() => {
     void loadAdditionalData();
@@ -1956,7 +1970,9 @@ export function AdditionalRegistrationDataPage() {
         pcdDisabilityOther: payload.data.profile.pcdDisabilityOther ?? "",
         firstJob: payload.data.profile.firstJob ?? "",
         hasTelemarketingExperience: payload.data.profile.hasTelemarketingExperience ?? "",
-        telemarketingWhere: payload.data.profile.telemarketingWhere ?? ""
+        telemarketingWhere: payload.data.profile.telemarketingWhere ?? "",
+        pixKeyType: payload.data.profile.pixKeyType ?? "",
+        pixKey: payload.data.profile.pixKey ?? ""
       });
       setCompletedAt(payload.data.profile.additionalDataCompletedAt ?? "");
       setProfileName(payload.data.profile.name ?? "");
@@ -1976,8 +1992,32 @@ export function AdditionalRegistrationDataPage() {
     setForm((current) => ({ ...current, [field]: value }));
   }
 
+  function validatePixBeforeConfirmation() {
+    const errors: Record<string, string> = {};
+    if (!form.pixKeyType) errors.pixKeyType = "Tipo da Chave PIX é obrigatório.";
+    if (!form.pixKey.trim()) errors.pixKey = "Chave PIX é obrigatória.";
+    if (Object.keys(errors).length) {
+      setFieldErrors((current) => ({ ...current, ...errors }));
+      setMessage("Revise os campos obrigatórios de pagamento.");
+      return false;
+    }
+    return true;
+  }
+
+  function openPixConfirmation() {
+    if (saving) return;
+    setMessage("");
+    if (!validatePixBeforeConfirmation()) return;
+    setPixAcknowledged(false);
+    setPixConfirmationOpen(true);
+  }
+
   async function submitAdditionalData() {
     if (saving) return;
+    if (!pixAcknowledged) {
+      setFieldErrors((current) => ({ ...current, pixAcknowledgement: "Confirme que está ciente antes de salvar." }));
+      return;
+    }
     setSaving(true);
     setMessage("");
     setFieldErrors({});
@@ -1996,14 +2036,20 @@ export function AdditionalRegistrationDataPage() {
         pcdDisabilityOther: payload.data.profile.pcdDisabilityOther ?? "",
         firstJob: payload.data.profile.firstJob ?? "",
         hasTelemarketingExperience: payload.data.profile.hasTelemarketingExperience ?? "",
-        telemarketingWhere: payload.data.profile.telemarketingWhere ?? ""
+        telemarketingWhere: payload.data.profile.telemarketingWhere ?? "",
+        pixKeyType: payload.data.profile.pixKeyType ?? "",
+        pixKey: payload.data.profile.pixKey ?? ""
       });
+      setPixConfirmationOpen(false);
+      setPixAcknowledged(false);
     } catch (error) {
       if (error instanceof ApiRequestError) {
         setFieldErrors(error.fields ?? {});
         setMessage(error.message);
+        setPixConfirmationOpen(false);
       } else {
         setMessage(error instanceof Error ? error.message : "Não foi possível salvar seus dados cadastrais adicionais.");
+        setPixConfirmationOpen(false);
       }
     } finally {
       setSaving(false);
@@ -2053,10 +2099,27 @@ export function AdditionalRegistrationDataPage() {
               {form.hasTelemarketingExperience === "Sim" ? (
                 <FormInput label="Onde trabalhou em telemarketing?" value={form.telemarketingWhere} onChange={(value) => updateAdditionalDataField("telemarketingWhere", value)} error={fieldErrors.telemarketingWhere} />
               ) : null}
+              <div className="md:col-span-2">
+                <div className="rounded-xl border border-blue-100 bg-blue-50/55 p-4">
+                  <div className="mb-3 flex items-start gap-3">
+                    <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white text-blue-600 shadow-soft">
+                      <Coins className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-black text-navy-950">Dados de pagamento</h3>
+                      <p className="mt-1 text-xs font-semibold leading-5 text-muted">Mantenha sua Chave PIX atualizada para evitar impactos no processamento do pagamento.</p>
+                    </div>
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <FormSelect label="Tipo da Chave PIX" value={form.pixKeyType} options={pixKeyTypeOptions} onChange={(value) => updateAdditionalDataField("pixKeyType", value)} error={fieldErrors.pixKeyType} emptyLabel="Selecione" />
+                    <FormInput label="Chave PIX" value={form.pixKey} onChange={(value) => updateAdditionalDataField("pixKey", value)} error={fieldErrors.pixKey} />
+                  </div>
+                </div>
+              </div>
             </div>
             <div className="mt-5 flex flex-wrap justify-end gap-3">
               <a href="/minha-escala" className="rounded-lg border border-border px-4 py-3 text-sm font-bold text-navy-950">Voltar</a>
-              <button type="button" disabled={saving} onClick={() => void submitAdditionalData()} className="rounded-lg bg-blue-600 px-5 py-3 text-sm font-bold text-white disabled:opacity-60">
+              <button type="button" disabled={saving} onClick={openPixConfirmation} className="rounded-lg bg-blue-600 px-5 py-3 text-sm font-bold text-white disabled:opacity-60">
                 {saving ? "Salvando..." : "Salvar dados"}
               </button>
             </div>
@@ -2079,6 +2142,58 @@ export function AdditionalRegistrationDataPage() {
           </Panel>
         </div>
       )}
+      {pixConfirmationOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy-950/45 px-4 py-6 backdrop-blur-sm">
+          <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-border bg-gradient-to-b from-white to-blue-50/70 px-5 py-4">
+              <div className="flex items-start gap-3">
+                <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-orange-50 text-orange-600">
+                  <AlertTriangle className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-black text-navy-950">Confirmar atualização da Chave PIX</h2>
+                  <p className="mt-1 text-sm font-semibold leading-5 text-muted">Confirme os dados antes de salvar.</p>
+                </div>
+              </div>
+              <button type="button" onClick={() => setPixConfirmationOpen(false)} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-muted hover:bg-slate-100">×</button>
+            </div>
+            <div className="space-y-4 px-5 py-5">
+              <div className="rounded-xl border border-border bg-slate-50 p-4">
+                <p className="text-xs font-extrabold uppercase tracking-wide text-muted">Tipo da Chave PIX</p>
+                <p className="mt-1 break-words text-sm font-black text-navy-950">{form.pixKeyType || "Não informado"}</p>
+                <p className="mt-3 text-xs font-extrabold uppercase tracking-wide text-muted">Chave PIX</p>
+                <p className="mt-1 break-words text-sm font-black text-navy-950">{form.pixKey || "Não informada"}</p>
+              </div>
+              <p className="text-sm font-semibold leading-6 text-navy-950">
+                Confirme se a Chave PIX informada está correta. Caso a chave esteja incorreta, inválida ou pertença a outra pessoa, isso pode impactar o processamento do seu pagamento.
+              </p>
+              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-orange-200 bg-orange-50 p-4">
+                <input
+                  type="checkbox"
+                  checked={pixAcknowledged}
+                  onChange={(event) => {
+                    setPixAcknowledged(event.target.checked);
+                    setFieldErrors((current) => {
+                      const next = { ...current };
+                      delete next.pixAcknowledgement;
+                      return next;
+                    });
+                  }}
+                  className="mt-1 h-4 w-4 rounded border-orange-300 text-blue-600"
+                />
+                <span className="text-sm font-bold leading-6 text-orange-800">Estou ciente de que a Chave PIX informada é minha responsabilidade e que dados incorretos podem impactar meu pagamento.</span>
+              </label>
+              {fieldErrors.pixAcknowledgement ? <p className="text-xs font-bold text-red-600">{fieldErrors.pixAcknowledgement}</p> : null}
+            </div>
+            <div className="flex flex-wrap justify-end gap-3 border-t border-border bg-slate-50 px-5 py-4">
+              <button type="button" disabled={saving} onClick={() => setPixConfirmationOpen(false)} className="rounded-lg border border-border bg-white px-4 py-2.5 text-sm font-bold text-navy-950 disabled:opacity-60">Voltar</button>
+              <button type="button" disabled={saving || !pixAcknowledged} onClick={() => void submitAdditionalData()} className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">
+                {saving ? "Salvando..." : "Confirmar e salvar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -9655,7 +9770,13 @@ export function EmployeeMapPage() {
                     )}
                   </ProfileSection>
                   <ProfileSection title="Dados Bancários">
-                    {selected.restrictedSections?.bancarios ? <InfoLine label="Banco/PIX" value={selected.sensitive?.bankData ?? selected.maskedSensitive?.bankData} /> : <RestrictedSection />}
+                    {selected.restrictedSections?.bancarios ? (
+                      <div className="grid gap-3 text-sm">
+                        <InfoLine label="Banco/PIX" value={selected.sensitive?.bankData ?? selected.maskedSensitive?.bankData} />
+                        <InfoLine label="Tipo da Chave PIX" value={selected.sensitive?.pixKeyType ?? selected.maskedSensitive?.pixKeyType ?? selected.pixKeyType ?? "Não informado"} />
+                        <InfoLine label="Chave PIX" value={selected.sensitive?.pixKey ?? selected.maskedSensitive?.pixKey ?? selected.pixKey ?? "Não informada"} />
+                      </div>
+                    ) : <RestrictedSection />}
                   </ProfileSection>
                 </>
               )}
@@ -10178,23 +10299,32 @@ export function PerformancePage() {
   const cecQualityRawRowsRef = useRef<Array<Record<string, unknown>>>([]);
   const productionRawRowsRef = useRef<Array<Record<string, unknown>>>([]);
   const sessionRole = String((session?.user as { role?: string } | undefined)?.role ?? "").toUpperCase();
-  const sessionCanWfh = ["ADMIN", "WFM", "SUPERVISOR", "RH", "GESTOR", "COORDENADOR", "GERENTE", "MANAGEMENT"].includes(sessionRole);
+  const isClientRole = sessionRole === "CLIENT";
+  const sessionCanWfh = ["ADMIN", "WFM", "SUPERVISOR", "RH", "GESTOR", "COORDENADOR", "GERENTE", "MANAGEMENT", "CLIENT"].includes(sessionRole);
+  const visibleActiveTab = isClientRole ? "wfh" : activeTab;
 
   useEffect(() => {
+    if (isClientRole && activeTab !== "wfh") {
+      setActiveTab("wfh");
+      defaultedTab.current = true;
+      return;
+    }
     if (!defaultedTab.current && sessionRole) {
       setActiveTab(sessionCanWfh ? "wfh" : "mine");
       defaultedTab.current = true;
     }
-  }, [sessionCanWfh, sessionRole]);
+  }, [activeTab, isClientRole, sessionCanWfh, sessionRole]);
 
   const loadPerformance = useCallback(async () => {
+    if (!sessionRole) return;
+    const effectiveTab = isClientRole ? "wfh" : activeTab;
     setLoading(true);
     const params = new URLSearchParams({
-      view: activeTab,
+      view: effectiveTab,
       startDate: filters.startDate,
       endDate: filters.endDate
     });
-    if (activeTab === "wfh") {
+    if (effectiveTab === "wfh") {
       if (filters.lob !== "Todos") params.set("lob", filters.lob);
       if (filters.supervisorId !== "Todos") params.set("supervisorId", filters.supervisorId);
       if (filters.employeeId !== "Todos") params.set("employeeId", filters.employeeId);
@@ -10217,7 +10347,7 @@ export function PerformancePage() {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, filters, performanceSort]);
+  }, [activeTab, filters, isClientRole, performanceSort, sessionRole]);
 
   useEffect(() => {
     void loadPerformance();
@@ -10368,15 +10498,15 @@ export function PerformancePage() {
       />
 
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-white p-2 shadow-sm">
-        <button onClick={() => setActiveTab("mine")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", activeTab === "mine" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>Minha Performance</button>
-        {canShowWfh ? <button onClick={() => setActiveTab("wfh")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", activeTab === "wfh" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>WFH</button> : null}
+        {!isClientRole ? <button onClick={() => setActiveTab("mine")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", visibleActiveTab === "mine" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>Minha Performance</button> : null}
+        {canShowWfh ? <button onClick={() => setActiveTab("wfh")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", visibleActiveTab === "wfh" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>WFH</button> : null}
       </div>
 
       <div className="rounded-xl border border-border bg-white p-2.5 shadow-sm">
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-[130px_130px_repeat(7,minmax(116px,1fr))_auto]">
           <FormInput label="Data inicial" type="date" value={filters.startDate} onChange={(value) => updateFilter("startDate", value)} />
           <FormInput label="Data final" type="date" value={filters.endDate} onChange={(value) => updateFilter("endDate", value)} />
-          {activeTab === "wfh" ? (
+          {visibleActiveTab === "wfh" ? (
             <>
               <PerformanceSelect label="LOB" value={filters.lob} onChange={(value) => updateFilter("lob", value)} options={wfhPayload?.filters.lobs ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todas as LOBs" : value} />
               <PerformanceSelect label="Supervisor" value={filters.supervisorId} onChange={(value) => updateFilter("supervisorId", value)} options={(wfhPayload?.filters.supervisors ?? [{ id: "Todos", name: "Todos os supervisores" }]).map((item) => item.id)} optionLabel={(value) => wfhPayload?.filters.supervisors.find((item) => item.id === value)?.name ?? value} />
@@ -10394,7 +10524,7 @@ export function PerformancePage() {
             <button onClick={() => void loadPerformance()} className="inline-flex h-9 items-center gap-2 rounded-lg bg-navy-950 px-3 text-xs font-extrabold text-white">
               <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} /> Atualizar
             </button>
-            {activeTab === "wfh" && wfhPayload?.canExport ? <button onClick={exportPerformance} className="premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold text-navy-950"><Download className="h-4 w-4" /> Exportar</button> : null}
+            {visibleActiveTab === "wfh" && wfhPayload?.canExport ? <button onClick={exportPerformance} className="premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold text-navy-950"><Download className="h-4 w-4" /> Exportar</button> : null}
           </div>
         </div>
       </div>
@@ -10444,14 +10574,14 @@ export function PerformancePage() {
 
       {wfhPayload ? (
         <div className="space-y-3">
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7">
+          <div className={cn("grid gap-2 sm:grid-cols-2 lg:grid-cols-4", isClientRole ? "2xl:grid-cols-5" : "2xl:grid-cols-7")}>
             <PerformanceMetricCard title="Qualidade média" value={formatPerformancePercent(wfhPayload.summary.quality)} helper={`${wfhPayload.summary.qualityCorrect}/${wfhPayload.summary.qualityTotal} tasks`} icon={ShieldCheck} tone="green" />
             <PerformanceMetricCard title="AHT médio" value={formatPerformanceAht(wfhPayload.summary.ahtSeconds)} helper="moderação / submit" icon={Clock} tone="orange" />
             <PerformanceMetricCard title="Submit diário" value={formatPerformanceNumber(wfhPayload.summary.submit)} helper="média diária" icon={FileSpreadsheet} tone="purple" />
             <PerformanceMetricCard title="ABS médio" value={formatPerformancePercent(wfhPayload.summary.abs)} helper={`${wfhPayload.summary.absences}/${wfhPayload.summary.scheduledDays} dias`} icon={AlertTriangle} tone={wfhPayload.summary.abs > 0 ? "red" : "green"} />
             <PerformanceMetricCard title="Agentes com dados" value={wfhPayload.summary.agentsWithData} helper="base filtrada" icon={UsersRound} tone="blue" />
-            <PerformanceMetricCard title="Linhas importadas" value={formatPerformanceNumber(wfhPayload.summary.importedRows)} helper="últimos lotes" icon={Upload} tone="cyan" />
-            <PerformanceMetricCard title="Última importação" value={wfhPayload.summary.lastImport || "-"} helper="Qualidade ou produção" icon={CalendarDays} tone="gold" />
+            {!isClientRole ? <PerformanceMetricCard title="Linhas importadas" value={formatPerformanceNumber(wfhPayload.summary.importedRows)} helper="últimos lotes" icon={Upload} tone="cyan" /> : null}
+            {!isClientRole ? <PerformanceMetricCard title="Última importação" value={wfhPayload.summary.lastImport || "-"} helper="Qualidade ou produção" icon={CalendarDays} tone="gold" /> : null}
           </div>
 
           <Panel title="Ranking de Agentes">
@@ -10507,7 +10637,7 @@ export function PerformancePage() {
             </div>
           ) : null}
 
-          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_420px]">
+          <div className={cn("grid gap-3", isClientRole ? "xl:grid-cols-1" : "xl:grid-cols-[minmax(0,1fr)_420px]")}>
             <Panel title="Detalhamento Individual">
               {selectedAgent ? (
                 <div className="space-y-3">
@@ -10527,7 +10657,7 @@ export function PerformancePage() {
                 <EmptyState title="Selecione um agente" description="Clique em um nome do ranking para abrir o histórico semanal individual." />
               )}
             </Panel>
-            <Panel title="Histórico de Importações">
+            {!isClientRole ? <Panel title="Histórico de Importações">
               {wfhPayload.imports.length ? (
                 <div className="space-y-2">
                   {wfhPayload.imports.map((item) => (
@@ -10550,7 +10680,7 @@ export function PerformancePage() {
               ) : (
                 <EmptyState title="Sem importações" description="O histórico aparecerá após o primeiro commit de Qualidade ou Produção." />
               )}
-            </Panel>
+            </Panel> : null}
           </div>
         </div>
       ) : null}

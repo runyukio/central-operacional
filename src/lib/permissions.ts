@@ -37,6 +37,7 @@ const roleAliases: Record<string, AppRole> = {
   COORDINATOR: "COORDENADOR",
   GERENTE: "GERENTE",
   MANAGER: "GERENTE",
+  CLIENT: "CLIENT",
   ADMIN: "ADMIN"
 };
 
@@ -122,7 +123,7 @@ export function canAccessPerformance(user: PermissionUser) {
 export function canAccessPerformanceWfh(user: PermissionUser) {
   const role = normalizeRole(user.role);
   if (!isActiveUser(user)) return false;
-  if (["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "RH", "COORDENADOR", "GERENTE", "MANAGEMENT"].includes(role)) return true;
+  if (["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "RH", "COORDENADOR", "GERENTE", "MANAGEMENT", "CLIENT"].includes(role)) return true;
   const title = normalizeComparableJobTitle(user.roleTitle ?? user.jobTitle);
   return ["coordenador", "coordenadora", "gerente", "manager", "management"].includes(title);
 }
@@ -133,7 +134,7 @@ export function canImportPerformance(user: PermissionUser) {
 }
 
 export function canExportPerformance(user: PermissionUser) {
-  return canAccessPerformanceWfh(user);
+  return normalizeRole(user.role) !== "CLIENT" && canAccessPerformanceWfh(user);
 }
 
 export function canManageStaffCoverageRequirements(user: PermissionUser) {

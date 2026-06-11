@@ -539,7 +539,8 @@ function roleLabel(role: string) {
     WFM: "WFM",
     QUALIDADE: "Qualidade",
     RH: "RH",
-    TI: "Logística / TI"
+    TI: "Logística / TI",
+    CLIENT: "Cliente"
   };
   return labels[role] ?? role;
 }

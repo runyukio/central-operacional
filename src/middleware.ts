@@ -25,6 +25,9 @@ export async function middleware(request: NextRequest) {
   }
 
   if (!canAccessPathForRole(pathname, role)) {
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json({ success: false, error: "Você não tem permissão para acessar esta página.", message: "Você não tem permissão para acessar esta página." }, { status: 403 });
+    }
     return NextResponse.redirect(new URL(getDefaultPathForRole(role), request.url));
   }
 
