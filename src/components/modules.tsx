@@ -97,6 +97,7 @@ import {
   topPerformers
 } from "@/lib/demo-data";
 import { cn, formatCurrency, initials } from "@/lib/utils";
+import { getPixKeyFormatHint, PIX_KEY_TYPES, validatePixKey } from "@/lib/pix-key";
 import { cleanShiftName, cleanShiftOptions, isBlockedShiftName, isSelectableShiftName, shiftCategoryName, standardShiftNames } from "@/lib/shift-display";
 import {
   DEFAULT_PRODUCTIVE_HOURS,
@@ -1798,7 +1799,7 @@ export function EmployeeRegistrationPublicPage() {
       <FormInput label="Agência com dígito" value={form.bankAgency} error={fieldError("bankAgency")} onChange={(value) => updateField("bankAgency", value)} />
       <FormInput label="Conta corrente com dígito" value={form.bankAccount} error={fieldError("bankAccount")} onChange={(value) => updateField("bankAccount", value)} />
       <FormInput label="Chave PIX" value={form.pixKey} error={fieldError("pixKey")} onChange={(value) => updateField("pixKey", value)} />
-      <FormSelect label="Tipo de chave PIX" value={form.pixKeyType} error={fieldError("pixKeyType")} options={["CPF", "CNPJ", "E-mail", "Telefone", "Aleatória"]} onChange={(value) => updateField("pixKeyType", value)} />
+      <FormSelect label="Tipo de chave PIX" value={form.pixKeyType} error={fieldError("pixKeyType")} options={[...PIX_KEY_TYPES]} onChange={(value) => updateField("pixKeyType", value)} />
       <label className="md:col-span-2">
         <span className="mb-1.5 block text-sm font-bold text-muted">Observações adicionais</span>
         <textarea value={form.notes} onChange={(event) => updateField("notes", event.target.value)} className={cn("min-h-28 w-full rounded-lg border p-3 outline-none", fieldError("notes") ? "border-red-300 bg-red-50/40" : "border-border")} />
@@ -1942,7 +1943,7 @@ const additionalDataEmptyForm: AdditionalRegistrationDataForm = {
   pixKey: ""
 };
 
-const pixKeyTypeOptions = ["", "CPF", "CNPJ", "E-mail", "Telefone", "Chave aleatória"];
+const pixKeyTypeOptions = ["", ...PIX_KEY_TYPES];
 
 export function AdditionalRegistrationDataPage() {
   const [form, setForm] = useState<AdditionalRegistrationDataForm>(additionalDataEmptyForm);
@@ -1996,13 +1997,20 @@ export function AdditionalRegistrationDataPage() {
 
   function validatePixBeforeConfirmation() {
     const errors: Record<string, string> = {};
-    if (!form.pixKeyType) errors.pixKeyType = "Tipo da Chave PIX é obrigatório.";
-    if (!form.pixKey.trim()) errors.pixKey = "Chave PIX é obrigatória.";
+    const pixValidation = validatePixKey(form.pixKeyType, form.pixKey);
+    if (!pixValidation.valid) {
+      errors[pixValidation.field ?? "pixKey"] = pixValidation.message ?? "Chave PIX inválida.";
+    }
     if (Object.keys(errors).length) {
       setFieldErrors((current) => ({ ...current, ...errors }));
       setMessage("Revise os campos obrigatórios de pagamento.");
       return false;
     }
+    setForm((current) => ({
+      ...current,
+      pixKeyType: pixValidation.pixKeyType,
+      pixKey: pixValidation.normalizedValue
+    }));
     return true;
   }
 
@@ -2087,7 +2095,10 @@ export function AdditionalRegistrationDataPage() {
                   </div>
                   <div className="grid gap-4 md:grid-cols-2">
                     <FormSelect label="Tipo da Chave PIX" value={form.pixKeyType} options={pixKeyTypeOptions} onChange={(value) => updateAdditionalDataField("pixKeyType", value)} error={fieldErrors.pixKeyType} emptyLabel="Selecione" />
-                    <FormInput label="Chave PIX" value={form.pixKey} onChange={(value) => updateAdditionalDataField("pixKey", value)} error={fieldErrors.pixKey} />
+                    <div>
+                      <FormInput label="Chave PIX" value={form.pixKey} onChange={(value) => updateAdditionalDataField("pixKey", value)} error={fieldErrors.pixKey} />
+                      <p className="mt-1 text-xs font-semibold text-muted">{getPixKeyFormatHint(form.pixKeyType)}</p>
+                    </div>
                   </div>
                 </div>
               </div>

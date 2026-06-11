@@ -1,7 +1,8 @@
 import { z } from "zod";
 
+import { normalizePixKeyType, validatePixKey } from "@/lib/pix-key";
+
 const ufOptions = new Set(["AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO"]);
-const pixKeyTypes = ["CPF", "CNPJ", "E-mail", "Telefone", "Aleatória"] as const;
 
 function requiredString(message: string) {
   return z.string({ required_error: message }).trim().min(1, message);
@@ -64,7 +65,7 @@ export const registrationPayloadSchema = z.object({
   bankAgency: requiredString("Agência com dígito é obrigatória."),
   bankAccount: requiredString("Conta corrente com dígito é obrigatória."),
   pixKey: requiredString("Chave PIX é obrigatória."),
-  pixKeyType: z.enum(pixKeyTypes, { errorMap: () => ({ message: "Tipo de chave PIX inválido." }) }),
+  pixKeyType: requiredString("Tipo da Chave PIX é obrigatório.").transform(normalizePixKeyType),
   socialName: optionalString,
   hasChildren: z.preprocess((value) => value === "Sim" ? true : value === "Não" ? false : value, z.boolean({ required_error: "Informe se tem filhos." })),
   childrenCount: z.preprocess((value) => value === "" || value === null || typeof value === "undefined" ? undefined : Number(value), z.number().int("Quantidade de filhos deve ser um número inteiro.").nonnegative("Quantidade de filhos não pode ser negativa.").optional()),
@@ -121,6 +122,18 @@ export const registrationPayloadSchema = z.object({
       path: ["telemarketingWhere"],
       message: "Informe onde trabalhou em telemarketing."
     });
+  }
+
+  const pixValidation = validatePixKey(data.pixKeyType, data.pixKey);
+  if (!pixValidation.valid) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [pixValidation.field ?? "pixKey"],
+      message: pixValidation.message ?? "Chave PIX inválida."
+    });
+  } else {
+    data.pixKeyType = pixValidation.pixKeyType;
+    data.pixKey = pixValidation.normalizedValue;
   }
 });
 

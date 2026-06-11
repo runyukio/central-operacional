@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
 import { normalizeRole } from "@/lib/permissions";
+import { maskPixKey, normalizePixKeyType, validatePixKey } from "@/lib/pix-key";
 import { prisma } from "@/lib/prisma";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
@@ -13,22 +14,6 @@ const sexualOrientationOptions = new Set(["Heterossexual", "Homossexual", "Bisse
 const yesNoPreferOptions = new Set(["Sim", "Não", "Prefiro não informar"]);
 const yesNoOptions = new Set(["Sim", "Não"]);
 const disabilityTypeOptions = new Set(["Física", "Auditiva", "Visual", "Intelectual", "Psicossocial", "Múltipla", "Neurodivergente", "Outra", "Prefiro não informar"]);
-const pixKeyTypeOptions = new Set(["CPF", "CNPJ", "E-mail", "Telefone", "Chave aleatória"]);
-const pixKeyTypeAliases: Record<string, string> = {
-  ALEATORIA: "Chave aleatória",
-  ALEATÓRIA: "Chave aleatória",
-  CHAVE_ALEATORIA: "Chave aleatória",
-  CHAVE_ALEATÓRIA: "Chave aleatória",
-  CHAVEALEATORIA: "Chave aleatória",
-  CHAVEALEATÓRIA: "Chave aleatória",
-  EMAIL: "E-mail",
-  E_MAIL: "E-mail",
-  EEMAIL: "E-mail",
-  TELEFONE: "Telefone",
-  PHONE: "Telefone",
-  CPF: "CPF",
-  CNPJ: "CNPJ"
-};
 
 type AuthenticatedUser = Prisma.UserGetPayload<{
   include: {
@@ -439,6 +424,7 @@ function validateAdditionalDataInput(input: AdditionalRegistrationDataInput) {
     pixKeyType: normalizePixKeyType(input.pixKeyType),
     pixKey: clean(input.pixKey)
   };
+  const pixValidation = validatePixKey(data.pixKeyType, data.pixKey);
 
   if (!data.ethnicity || !ethnicityOptions.has(data.ethnicity)) fields.ethnicity = "Informe sua etnia.";
   if (!data.sexualOrientation || !sexualOrientationOptions.has(data.sexualOrientation)) fields.sexualOrientation = "Informe sua orientação sexual.";
@@ -448,12 +434,7 @@ function validateAdditionalDataInput(input: AdditionalRegistrationDataInput) {
   if (!data.firstJob || !yesNoOptions.has(data.firstJob)) fields.firstJob = "Informe se este é seu primeiro emprego.";
   if (!data.hasTelemarketingExperience || !yesNoOptions.has(data.hasTelemarketingExperience)) fields.hasTelemarketingExperience = "Informe se já trabalhou em telemarketing.";
   if (data.hasTelemarketingExperience === "Sim" && !data.telemarketingWhere) fields.telemarketingWhere = "Informe onde trabalhou em telemarketing.";
-  if (!data.pixKeyType || !pixKeyTypeOptions.has(data.pixKeyType)) fields.pixKeyType = "Tipo da Chave PIX é obrigatório.";
-  if (!data.pixKey) fields.pixKey = "Chave PIX é obrigatória.";
-  if (data.pixKey && data.pixKeyType) {
-    const pixError = validatePixKeyByType(data.pixKeyType, data.pixKey);
-    if (pixError) fields.pixKey = pixError;
-  }
+  if (!pixValidation.valid) fields[pixValidation.field ?? "pixKey"] = pixValidation.message ?? "Chave PIX inválida.";
 
   if (Object.keys(fields).length) {
     throw new AdditionalRegistrationDataError("Revise os campos obrigatórios.", 400, fields);
@@ -468,8 +449,8 @@ function validateAdditionalDataInput(input: AdditionalRegistrationDataInput) {
     firstJob: data.firstJob,
     hasTelemarketingExperience: data.hasTelemarketingExperience,
     telemarketingWhere: data.hasTelemarketingExperience === "Sim" ? data.telemarketingWhere : "Não se aplica",
-    pixKeyType: data.pixKeyType,
-    pixKey: data.pixKey
+    pixKeyType: pixValidation.pixKeyType,
+    pixKey: pixValidation.normalizedValue
   };
 }
 
@@ -575,59 +556,8 @@ function clean(value?: string | null) {
   return String(value ?? "").trim();
 }
 
-function normalizePixKeyType(value?: string | null) {
-  const raw = clean(value);
-  if (!raw) return "";
-  if (pixKeyTypeOptions.has(raw)) return raw;
-  const normalized = raw
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .replace(/[^a-zA-Z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .toUpperCase();
-  return pixKeyTypeAliases[normalized] ?? raw;
-}
-
-function validatePixKeyByType(type: string, pixKey: string) {
-  const digits = pixKey.replace(/\D/g, "");
-  if (type === "CPF" && digits.length !== 11) return "Chave PIX CPF deve ter 11 dígitos.";
-  if (type === "CNPJ" && digits.length !== 14) return "Chave PIX CNPJ deve ter 14 dígitos.";
-  if (type === "E-mail" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(pixKey)) return "Chave PIX e-mail inválida.";
-  if (type === "Telefone" && (digits.length < 10 || digits.length > 13)) return "Chave PIX telefone deve conter DDD.";
-  return "";
-}
-
 function jsonObject(value: Prisma.JsonValue | null | undefined): Prisma.JsonObject {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Prisma.JsonObject : {};
-}
-
-function maskPixKey(value?: string | null, type?: string | null) {
-  const raw = clean(value);
-  if (!raw) return "";
-  const normalizedType = normalizePixKeyType(type);
-  if (normalizedType === "E-mail") {
-    const [local, domain] = raw.split("@");
-    if (!domain) return maskMiddle(raw);
-    return `${local.slice(0, 1)}**@${domain}`;
-  }
-  if (normalizedType === "CPF") {
-    const digits = raw.replace(/\D/g, "");
-    return digits.length >= 11 ? `***.${digits.slice(3, 6)}.${digits.slice(6, 9)}-**` : maskMiddle(raw);
-  }
-  if (normalizedType === "CNPJ") {
-    const digits = raw.replace(/\D/g, "");
-    return digits.length >= 14 ? `**.${digits.slice(2, 5)}.${digits.slice(5, 8)}/****-${digits.slice(12, 14)}` : maskMiddle(raw);
-  }
-  if (normalizedType === "Telefone") {
-    const digits = raw.replace(/\D/g, "");
-    return digits.length >= 10 ? `(**) *****-${digits.slice(-4)}` : maskMiddle(raw);
-  }
-  return raw.length > 8 ? `${raw.slice(0, 4)}...${raw.slice(-4)}` : maskMiddle(raw);
-}
-
-function maskMiddle(value: string) {
-  if (value.length <= 2) return "*".repeat(value.length);
-  return `${value.slice(0, 1)}${"*".repeat(Math.min(6, value.length - 2))}${value.slice(-1)}`;
 }
 
 function safeTrackingFilters(filters: AdditionalDataTrackingFilters) {

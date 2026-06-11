@@ -9,6 +9,7 @@ import { canAccessEmployeeMap, canEditEmployeeData, canViewEmployeeSensitiveData
 import { auditPermissionDenied } from "@/lib/permission-audit";
 import { createDuplicateError, createNotFoundError, createPermissionError, createRelationError, createServerError, createValidationError, mapPrismaError } from "@/lib/api-errors";
 import { canBeSupervisorJobTitle, isAgentJobTitle, normalizeJobTitle } from "@/lib/job-title-normalization";
+import { maskPixKey, validatePixKey } from "@/lib/pix-key";
 import { cleanShiftName } from "@/lib/shift-display";
 
 const allowDemoDataFallback = process.env.ALLOW_DEMO_LOGIN === "true" || process.env.ALLOW_DEMO_DATA === "true";
@@ -445,7 +446,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     if (!canEditOperational && !canEditPeopleData) return createPermissionError("Você não tem permissão para editar dados do colaborador.");
 
     const adminOnlyFields: Array<keyof EmployeeAdminUpdateInput> = ["wbLogin", "roleName", "userStatus"];
-    const sensitivePeopleFields: Array<keyof EmployeeAdminUpdateInput> = ["fullName", "socialName", "email", "primaryPhone", "city", "stateUf", "preferredSchedule", "contractType", "admissionDate", "trainingStartDate", "terminationDate", "terminationType", "terminationReason", "ethnicity", "sexualOrientation", "isPcd", "pcdDisabilityType", "pcdDisabilityOther", "firstJob", "hasTelemarketingExperience", "telemarketingWhere"];
+    const sensitivePeopleFields: Array<keyof EmployeeAdminUpdateInput> = ["fullName", "socialName", "email", "primaryPhone", "city", "stateUf", "preferredSchedule", "contractType", "admissionDate", "trainingStartDate", "terminationDate", "terminationType", "terminationReason", "ethnicity", "sexualOrientation", "isPcd", "pcdDisabilityType", "pcdDisabilityOther", "firstJob", "hasTelemarketingExperience", "telemarketingWhere", "pixKey", "pixKeyType"];
     const operationalBindingFields: Array<keyof EmployeeAdminUpdateInput> = ["lobId", "supervisorId", "shiftId", "siteOperation"];
     const profileOperationalFields: Array<keyof EmployeeAdminUpdateInput> = ["roleTitle", "operationalStatus", "internalNotes", "skill", "wave", "nestingStartDate", "goLiveDate", "workStartTime", "workEndTime"];
     if (!actorIsAdmin && adminOnlyFields.some((field) => input[field] !== undefined)) return createPermissionError("Apenas Admin pode alterar WB/Login, role ou status de acesso.");
@@ -505,6 +506,19 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     const nextCity = cleanNullable(input.city);
     const nextStateUf = cleanNullable(input.stateUf)?.toUpperCase() ?? undefined;
     const nextPreferredSchedule = cleanNullable(input.preferredSchedule);
+    const hasPixUpdate = input.pixKey !== undefined || input.pixKeyType !== undefined;
+    const pixValidation = hasPixUpdate
+      ? validatePixKey(
+        input.pixKeyType !== undefined ? input.pixKeyType : employee.pixKeyType,
+        input.pixKey !== undefined ? input.pixKey : employee.pixKey
+      )
+      : null;
+    const previousPixKey = employee.pixKey ?? "";
+    const previousPixKeyType = employee.pixKeyType ?? "";
+    const pixChanged = Boolean(
+      pixValidation?.valid
+      && (previousPixKey !== pixValidation.normalizedValue || previousPixKeyType !== pixValidation.pixKeyType)
+    );
 
     const hasAnyUpdate = Object.entries(input).some(([key, value]) => key !== "id" && value !== undefined);
     if (!hasAnyUpdate) return createValidationError({ form: "Informe ao menos um campo para atualizar." });
@@ -516,6 +530,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     if (input.roleTitle !== undefined && !nextRoleTitle) return createValidationError({ roleTitle: "Cargo/Função é obrigatório." });
     if (input.operationalStatus !== undefined && !nextStatus) return createValidationError({ operationalStatus: "Status do colaborador é obrigatório." });
     if (input.stateUf !== undefined && nextStateUf && nextStateUf.length !== 2) return createValidationError({ stateUf: "Estado/UF deve ter 2 letras." });
+    if (pixValidation && !pixValidation.valid) return createValidationError({ [pixValidation.field ?? "pixKey"]: pixValidation.message ?? "Chave PIX inválida." });
     if ((input.isPcd !== undefined || input.pcdDisabilityType !== undefined) && effectiveIsPcd === "Sim" && !effectivePcdDisabilityType) return createValidationError({ pcdDisabilityType: "Tipo de deficiência é obrigatório quando PCD for Sim." });
     if ((input.isPcd !== undefined || input.pcdDisabilityType !== undefined || input.pcdDisabilityOther !== undefined) && effectiveIsPcd === "Sim" && effectivePcdDisabilityType === "Outra" && !effectivePcdDisabilityOther) return createValidationError({ pcdDisabilityOther: "Especifique o tipo de deficiência." });
     if (nextSupervisorId && nextSupervisorId === employee.id) return createValidationError({ supervisorId: "O colaborador não pode ser supervisor de si mesmo." }, "O colaborador não pode ser supervisor de si mesmo.");
@@ -583,8 +598,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
           ...(input.city !== undefined ? { city: nextCity } : {}),
           ...(input.stateUf !== undefined ? { stateUf: nextStateUf || null } : {}),
           ...(input.preferredSchedule !== undefined ? { preferredSchedule: nextPreferredSchedule } : {}),
-          ...(input.pixKey !== undefined ? { pixKey: clean(input.pixKey) || null } : {}),
-          ...(input.pixKeyType !== undefined ? { pixKeyType: clean(input.pixKeyType) || null } : {}),
+          ...(pixValidation?.valid ? { pixKey: pixValidation.normalizedValue, pixKeyType: pixValidation.pixKeyType } : {}),
           ...(nextWbLogin ? { wbLogin: nextWbLogin } : {}),
           ...(nextRoleTitle ? { roleTitle: nextRoleTitle } : {}),
           ...(nextStatus ? { operationalStatus: nextStatus } : {}),
@@ -616,6 +630,24 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
         },
         include: { ...employeeInclude }
       });
+      if (pixValidation?.valid) {
+        const sensitive = await tx.employeeSensitiveData.findUnique({
+          where: { employeeId: employee.id },
+          select: { bankData: true }
+        });
+        if (sensitive) {
+          await tx.employeeSensitiveData.update({
+            where: { employeeId: employee.id },
+            data: {
+              bankData: {
+                ...jsonObject(sensitive.bankData),
+                pixKey: pixValidation.normalizedValue,
+                pixKeyType: pixValidation.pixKeyType
+              }
+            }
+          });
+        }
+      }
       await tx.auditLog.create({
         data: {
           actorId: user.id,
@@ -627,6 +659,27 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
           newValue: serializeEmployeeForAudit(record)
         }
       });
+      if (pixChanged && pixValidation?.valid) {
+        await tx.auditLog.create({
+          data: {
+            actorId: user.id,
+            action: "EDICAO",
+            entity: "EmployeeProfile",
+            entityId: employee.id,
+            reason: "PIX_KEY_UPDATED",
+            previousValue: {
+              pixKeyType: previousPixKeyType,
+              pixKeyMasked: maskPixKey(previousPixKey, previousPixKeyType),
+              source: "Mapa de Funcionários"
+            },
+            newValue: {
+              pixKeyType: pixValidation.pixKeyType,
+              pixKeyMasked: maskPixKey(pixValidation.normalizedValue, pixValidation.pixKeyType),
+              source: "Mapa de Funcionários"
+            }
+          }
+        }).catch(() => undefined);
+      }
       return record;
     });
 
@@ -1751,6 +1804,10 @@ function jsonToText(value: Prisma.JsonValue | null): string {
     .join(" | ");
 }
 
+function jsonObject(value: Prisma.JsonValue | null | undefined): Prisma.JsonObject {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Prisma.JsonObject : {};
+}
+
 function pixKeyFromBankData(value?: Prisma.JsonValue | null) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { pixKey: "", pixKeyType: "" };
   const data = value as Prisma.JsonObject;
@@ -1764,32 +1821,4 @@ function maskDocument(value?: string | null) {
   const digits = String(value ?? "").replace(/\D/g, "");
   if (digits.length <= 2) return "***";
   return `***${digits.slice(-2)}`;
-}
-
-function maskPixKey(value?: string | null, type?: string | null) {
-  const raw = String(value ?? "").trim();
-  if (!raw) return "";
-  const normalizedType = String(type ?? "").trim().toLowerCase();
-  if (normalizedType.includes("mail")) {
-    const [local, domain] = raw.split("@");
-    return domain ? `${local.slice(0, 1)}**@${domain}` : maskGeneric(raw);
-  }
-  if (normalizedType.includes("cpf")) {
-    const digits = raw.replace(/\D/g, "");
-    return digits.length >= 11 ? `***.${digits.slice(3, 6)}.${digits.slice(6, 9)}-**` : maskGeneric(raw);
-  }
-  if (normalizedType.includes("cnpj")) {
-    const digits = raw.replace(/\D/g, "");
-    return digits.length >= 14 ? `**.${digits.slice(2, 5)}.${digits.slice(5, 8)}/****-${digits.slice(12, 14)}` : maskGeneric(raw);
-  }
-  if (normalizedType.includes("telefone")) {
-    const digits = raw.replace(/\D/g, "");
-    return digits.length >= 10 ? `(**) *****-${digits.slice(-4)}` : maskGeneric(raw);
-  }
-  return raw.length > 8 ? `${raw.slice(0, 4)}...${raw.slice(-4)}` : maskGeneric(raw);
-}
-
-function maskGeneric(value: string) {
-  if (value.length <= 2) return "*".repeat(value.length);
-  return `${value.slice(0, 1)}${"*".repeat(Math.min(6, value.length - 2))}${value.slice(-1)}`;
 }

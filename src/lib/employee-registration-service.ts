@@ -12,6 +12,7 @@ import { mapPrismaError } from "@/lib/api-errors";
 import { normalizeJobTitle } from "@/lib/job-title-normalization";
 import { canApproveRegistration, normalizeRole } from "@/lib/permissions";
 import { auditPermissionDenied } from "@/lib/permission-audit";
+import { normalizePixKeyType, validatePixKey } from "@/lib/pix-key";
 import { prisma } from "@/lib/prisma";
 import { cleanShiftName, isBlockedShiftName, isSelectableShiftName, shiftLookupKey } from "@/lib/shift-display";
 import type { RegistrationInput } from "@/lib/registration-validation";
@@ -148,6 +149,8 @@ type EmployeeImportValidation = {
     newStatus?: string;
     userWillBeInactivated?: boolean;
     terminationDate?: string;
+    pixKeyType?: string;
+    pixKey?: string;
   };
 };
 
@@ -1230,6 +1233,17 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     if (row.createUser && !row.name) errors.push("Nome obrigatório quando criar_usuario = sim.");
     if (row.createUser && !row.email) errors.push("E-mail obrigatório quando criar_usuario = sim.");
     if (row.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) errors.push("E-mail inválido.");
+    const pixKeyProvided = hasImportValue(rawRow.chave_pix);
+    const pixKeyTypeProvided = hasImportValue(rawRow.tipo_chave_pix);
+    if (!isExistingEmployeeImport && !pixKeyTypeProvided) errors.push("Tipo da Chave PIX é obrigatório.");
+    if (!isExistingEmployeeImport && !pixKeyProvided) errors.push("Chave PIX é obrigatória.");
+    if (isExistingEmployeeImport && pixKeyProvided !== pixKeyTypeProvided) {
+      warnings.push("Tipo da Chave PIX e Chave PIX precisam estar preenchidos juntos; valor atual será mantido.");
+    }
+    if (pixKeyProvided && pixKeyTypeProvided) {
+      const pixValidation = validatePixKey(row.pixKeyType, row.pixKey);
+      if (!pixValidation.valid) errors.push(pixValidation.message ?? "Chave PIX inválida.");
+    }
     if (row.roleName && !validRoles.has(row.roleName)) errors.push(`Role/permissão inválida: ${row.roleName}.`);
     if (hasImportValue(rawRow.data_nascimento) && !row.birthDate) errors.push("Data de nascimento inválida.");
     if (hasImportValue(rawRow.data_admissao) && !row.admissionDate) errors.push("Data de admissão inválida.");
@@ -1314,7 +1328,9 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
         currentStatus: activeByWb?.operationalStatus ?? "",
         newStatus: row.employeeStatus,
         userWillBeInactivated: willInactivateUser,
-        terminationDate: row.terminationDate ? row.terminationDate.toISOString().slice(0, 10) : ""
+        terminationDate: row.terminationDate ? row.terminationDate.toISOString().slice(0, 10) : "",
+        pixKeyType: row.pixKeyType,
+        pixKey: row.pixKey
       }
     });
   }
@@ -1326,6 +1342,9 @@ function normalizeEmployeeImportRow(raw: EmployeeImportRow) {
   const email = text(raw.email).toLowerCase();
   const wbLogin = text(raw.wb_login);
   const roleName = normalizeImportRole(text(raw.role_permissao));
+  const pixKeyType = normalizePixKeyType(text(raw.tipo_chave_pix));
+  const pixKey = text(raw.chave_pix);
+  const pixValidation = pixKeyType || pixKey ? validatePixKey(pixKeyType, pixKey) : null;
   return {
     cnpj: text(raw.cnpj),
     name: text(raw.nome),
@@ -1388,8 +1407,8 @@ function normalizeEmployeeImportRow(raw: EmployeeImportRow) {
     bankName: text(raw.banco) || "Não informado",
     bankAgency: text(raw.agencia) || "Não informado",
     bankAccount: text(raw.conta_corrente) || "Não informado",
-    pixKey: text(raw.chave_pix) || "Não informado",
-    pixKeyType: text(raw.tipo_chave_pix) || "Não informado",
+    pixKey: pixValidation?.valid ? pixValidation.normalizedValue : pixKey,
+    pixKeyType: pixValidation?.valid ? pixValidation.pixKeyType : pixKeyType,
     secondaryPixKey: text(raw.chave_pix_secundaria),
     secondaryPixKeyType: text(raw.tipo_chave_pix_secundaria),
     notes: text(raw.observacoes),
@@ -1499,8 +1518,10 @@ function buildEmployeeImportUpdateData(
   if (shouldPatchImportField(raw, ["cidade"])) data.city = row.city;
   if (shouldPatchImportField(raw, ["estado_uf"])) data.stateUf = row.stateUf;
   if (shouldPatchImportField(raw, ["preferencia_horario"])) data.preferredSchedule = row.preferredSchedule;
-  if (shouldPatchImportField(raw, ["chave_pix"])) data.pixKey = row.pixKey;
-  if (shouldPatchImportField(raw, ["tipo_chave_pix"])) data.pixKeyType = row.pixKeyType;
+  if (shouldPatchImportPix(raw)) {
+    data.pixKey = row.pixKey;
+    data.pixKeyType = row.pixKeyType;
+  }
   return data;
 }
 
@@ -1533,8 +1554,8 @@ function buildSensitiveImportUpdateData(
     bankName: shouldPatchImportField(raw, ["banco"]) ? row.bankName : undefined,
     bankAgency: shouldPatchImportField(raw, ["agencia"]) ? row.bankAgency : undefined,
     bankAccount: shouldPatchImportField(raw, ["conta_corrente"]) ? row.bankAccount : undefined,
-    pixKey: shouldPatchImportField(raw, ["chave_pix"]) ? row.pixKey : undefined,
-    pixKeyType: shouldPatchImportField(raw, ["tipo_chave_pix"]) ? row.pixKeyType : undefined
+    pixKey: shouldPatchImportPix(raw) ? row.pixKey : undefined,
+    pixKeyType: shouldPatchImportPix(raw) ? row.pixKeyType : undefined
   });
   if (hasAnyImportValue(raw, ["banco", "agencia", "conta_corrente", "chave_pix", "tipo_chave_pix"])) data.bankData = bankData;
 
@@ -1624,8 +1645,10 @@ function buildRegistrationImportUpdateData(
   if (shouldPatchImportField(raw, ["banco"])) data.bankName = row.bankName;
   if (shouldPatchImportField(raw, ["agencia"])) data.bankAgency = row.bankAgency;
   if (shouldPatchImportField(raw, ["conta_corrente"])) data.bankAccount = row.bankAccount;
-  if (shouldPatchImportField(raw, ["chave_pix"])) data.pixKey = row.pixKey;
-  if (shouldPatchImportField(raw, ["tipo_chave_pix"])) data.pixKeyType = row.pixKeyType;
+  if (shouldPatchImportPix(raw)) {
+    data.pixKey = row.pixKey;
+    data.pixKeyType = row.pixKeyType;
+  }
   if (shouldPatchImportField(raw, ["chave_pix_secundaria"])) data.secondaryPixKey = row.secondaryPixKey;
   if (shouldPatchImportField(raw, ["tipo_chave_pix_secundaria"])) data.secondaryPixKeyType = row.secondaryPixKeyType;
   if (shouldPatchImportField(raw, ["nome_social"])) data.socialName = row.socialName;
@@ -2008,6 +2031,10 @@ function shouldPatchImportField(row: EmployeeImportRow, keys: string[]) {
   return hasAnyImportColumn(row, keys) && hasAnyImportValue(row, keys);
 }
 
+function shouldPatchImportPix(row: EmployeeImportRow) {
+  return hasImportValue(row.chave_pix) && hasImportValue(row.tipo_chave_pix);
+}
+
 function getEmptyImportedFieldLabels(row: EmployeeImportRow) {
   return importFieldLabels
     .filter((field) => hasAnyImportColumn(row, field.keys) && !hasAnyImportValue(row, field.keys))
@@ -2044,8 +2071,10 @@ function buildEmployeeImportChangeLabels(
   pushText("Telefone", ["contato_principal"], row.primaryPhone, existing.primaryPhone);
   pushText("Cidade", ["cidade"], row.city, existing.city);
   pushText("UF", ["estado_uf"], row.stateUf, existing.stateUf);
-  pushText("Chave PIX", ["chave_pix"], row.pixKey, existing.pixKey);
-  pushText("Tipo da Chave PIX", ["tipo_chave_pix"], row.pixKeyType, existing.pixKeyType);
+  if (shouldPatchImportPix(raw)) {
+    pushText("Chave PIX", ["chave_pix"], row.pixKey, existing.pixKey);
+    pushText("Tipo da Chave PIX", ["tipo_chave_pix"], row.pixKeyType, existing.pixKeyType);
+  }
   pushDate("Data de admissão", ["data_admissao"], row.admissionDate, existing.admissionDate);
   pushDate("Data de início de treinamento", ["data_inicio_treinamento"], row.trainingStartDate, existing.trainingStartDate);
   pushDate("Data de início de Nesting", ["data_inicio_nesting"], row.nestingStartDate, existing.nestingStartDate);
