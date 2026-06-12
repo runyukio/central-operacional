@@ -10,6 +10,13 @@ export type PixKeyValidationResult = {
   field?: "pixKeyType" | "pixKey";
 };
 
+export type PixKeyStandardizationResult = PixKeyValidationResult & {
+  status: "VALID" | "NORMALIZABLE" | "INVALID" | "MISSING_TYPE" | "MISSING_KEY";
+  currentValue: string;
+  canApply: boolean;
+  changed: boolean;
+};
+
 const pixKeyTypeAliases: Record<string, PixKeyType> = {
   CPF: "CPF",
   CNPJ: "CNPJ",
@@ -82,6 +89,69 @@ export function validatePixKey(pixKeyType?: string | null, pixKey?: string | nul
   return valid(normalizedType, normalizedKey);
 }
 
+export function standardizeExistingPixKey(pixKeyType?: string | null, pixKey?: string | null): PixKeyStandardizationResult {
+  const currentType = cleanPixValue(pixKeyType);
+  const currentValue = cleanPixValue(pixKey);
+  const normalizedType = normalizePixKeyType(currentType);
+
+  if (!normalizedType || !(PIX_KEY_TYPES as readonly string[]).includes(normalizedType)) {
+    return standardizationResult({
+      status: currentValue ? "MISSING_TYPE" : "INVALID",
+      pixKeyType: normalizedType,
+      currentValue,
+      normalizedValue: currentValue,
+      valid: false,
+      canApply: false,
+      message: currentValue ? "Tipo da Chave PIX ausente ou inválido." : "Tipo da Chave PIX é obrigatório.",
+      field: "pixKeyType"
+    });
+  }
+
+  if (!currentValue) {
+    return standardizationResult({
+      status: "MISSING_KEY",
+      pixKeyType: normalizedType,
+      currentValue,
+      normalizedValue: currentValue,
+      valid: false,
+      canApply: false,
+      message: "Chave PIX é obrigatória.",
+      field: "pixKey"
+    });
+  }
+
+  const strictValidation = validatePixKey(normalizedType, currentValue);
+  if (strictValidation.valid) {
+    return standardizationResult({
+      ...strictValidation,
+      status: currentType === strictValidation.pixKeyType && currentValue === strictValidation.normalizedValue ? "VALID" : "NORMALIZABLE",
+      currentValue,
+      canApply: currentType !== strictValidation.pixKeyType || currentValue !== strictValidation.normalizedValue
+    });
+  }
+
+  const legacyCandidate = buildLegacyPixCandidate(normalizedType, currentValue);
+  if (legacyCandidate) {
+    const legacyValidation = validatePixKey(normalizedType, legacyCandidate);
+    if (legacyValidation.valid) {
+      return standardizationResult({
+        ...legacyValidation,
+        status: "NORMALIZABLE",
+        currentValue,
+        canApply: currentType !== legacyValidation.pixKeyType || currentValue !== legacyValidation.normalizedValue,
+        message: "Valor pode ser normalizado com segurança."
+      });
+    }
+  }
+
+  return standardizationResult({
+    ...strictValidation,
+    status: "INVALID",
+    currentValue,
+    canApply: false
+  });
+}
+
 export function getPixKeyFormatHint(type?: string | null) {
   const normalizedType = normalizePixKeyType(type);
   if (normalizedType === "CPF") return "Informe apenas números, com 11 dígitos.";
@@ -114,8 +184,43 @@ function invalid(message: string, field: "pixKeyType" | "pixKey", pixKeyType: st
   return { valid: false, pixKeyType, normalizedValue, message, field };
 }
 
+function standardizationResult(result: Omit<PixKeyStandardizationResult, "changed">): PixKeyStandardizationResult {
+  return {
+    ...result,
+    changed: result.canApply
+  };
+}
+
+function buildLegacyPixCandidate(type: string, value: string) {
+  if (type === "CPF") {
+    const digits = onlyDigits(value);
+    return digits.length === 11 ? digits : "";
+  }
+  if (type === "CNPJ") {
+    const digits = onlyDigits(value);
+    return digits.length === 14 ? digits : "";
+  }
+  if (type === "E-mail") {
+    return value.trim().toLowerCase();
+  }
+  if (type === "Telefone") {
+    const digits = onlyDigits(value);
+    if (digits.length === 10 || digits.length === 11) return `+55${digits}`;
+    if (digits.startsWith("55") && (digits.length === 12 || digits.length === 13)) return `+${digits}`;
+    return "";
+  }
+  if (type === "Chave aleatória") {
+    return value.trim();
+  }
+  return "";
+}
+
 function cleanPixValue(value?: string | null) {
   return String(value ?? "").trim();
+}
+
+function onlyDigits(value: string) {
+  return value.replace(/\D/g, "");
 }
 
 function maskMiddle(value: string) {

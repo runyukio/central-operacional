@@ -3,6 +3,7 @@ import { Prisma, type EquipmentStatus, type RequestStatus, type ScheduleStatus, 
 import type { Actor } from "@/lib/mock-db";
 import { createNotFoundError, createPermissionError, createServerError, type ApiErrorPayload } from "@/lib/api-errors";
 import { getEmployeeBillingPreview } from "@/lib/billing-service";
+import { getDefaultDatePeriod } from "@/lib/default-date-range";
 import { getPerformanceDashboard } from "@/lib/performance-service";
 import { canAccessPerformanceWfh, normalizeRole } from "@/lib/permissions";
 import { logPerformanceMetric } from "@/lib/performance-logger";
@@ -416,10 +417,8 @@ type Period = {
 };
 
 function currentMonthPeriod(): Period {
-  const today = new Date();
-  const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
-  const end = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0, 23, 59, 59, 999));
-  return { start, end };
+  const period = getDefaultDatePeriod();
+  return { start: period.start, end: period.end };
 }
 
 function startOfTodayUtc() {

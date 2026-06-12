@@ -21,6 +21,7 @@ export async function GET(request: Request) {
       skill: url.searchParams.get("skill") ?? undefined,
       employeeStatus: url.searchParams.get("employeeStatus") ?? undefined,
       wfhStatus: url.searchParams.get("wfhStatus") ?? undefined,
+      wbLogins: url.searchParams.get("wbLogins") ?? undefined,
       sortBy: readSortBy(url.searchParams.get("sortBy")),
       sortDirection: readSortDirection(url.searchParams.get("sortDirection"))
     };

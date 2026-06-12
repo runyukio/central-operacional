@@ -9,7 +9,10 @@ import {
   normalizeRole
 } from "@/lib/permissions";
 import { isAgentJobTitle } from "@/lib/job-title-normalization";
+import { parseWbLoginBatch } from "@/lib/batch-wb-filter";
+import { getDefaultDatePeriod } from "@/lib/default-date-range";
 import { prisma } from "@/lib/prisma";
+import { calculateWfhStatus, type WfhEligibilityStatus, type WfhMonitoringStatus } from "@/lib/wfh-rules";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
 type AuthenticatedUser = Prisma.UserGetPayload<{
@@ -37,11 +40,11 @@ type TnsQualityRecordForMetrics = Prisma.TnsQualityRecordGetPayload<{ select: ty
 type CecQualityRecordForMetrics = Prisma.CecQualityRecordGetPayload<{ select: typeof cecQualityMetricSelect }>;
 type ProductionRecordForMetrics = Prisma.ProductionRecordGetPayload<{ select: typeof productionMetricSelect }>;
 type ScheduleRecordForMetrics = Prisma.ScheduleGetPayload<{ select: typeof scheduleMetricSelect }>;
+type AttendanceRecordForMetrics = Prisma.AttendanceRecordGetPayload<{ select: typeof attendanceMetricSelect }>;
 
 type QualityRule = "ADS_QUALITY" | "TNS_QUALITY" | "CEC_QUALITY" | "UNKNOWN" | "MIXED";
 type PerformanceSortBy = "quality" | "submit" | "aht" | "abs";
 type PerformanceSortDirection = "asc" | "desc";
-type WfhStatus = "QUALIFIED" | "NOT_QUALIFIED";
 
 export type PerformanceQuery = {
   view?: "mine" | "wfh";
@@ -55,6 +58,7 @@ export type PerformanceQuery = {
   skill?: string;
   employeeStatus?: string;
   wfhStatus?: string;
+  wbLogins?: string[] | string;
   sortBy?: PerformanceSortBy;
   sortDirection?: PerformanceSortDirection;
 };
@@ -94,6 +98,7 @@ type PerformanceMetrics = {
   moderationSeconds: number;
   abs: number;
   absences: number;
+  unjustifiedAbsences: number;
   scheduledDays: number;
 };
 
@@ -112,10 +117,14 @@ type AgentPerformanceRow = PerformanceMetrics & {
   roleTitle: string;
   skill: string;
   employeeStatus: string;
-  wfhStatus: WfhStatus;
+  wfhStatus: WfhEligibilityStatus;
   wfhStatusLabel: string;
+  wfhMonitoringStatus: WfhMonitoringStatus;
+  wfhMonitoringLabel: string;
+  wfhRule: string;
   submitAveragePerDay: number;
   wfhFailedCriteria: string[];
+  wfhReasons: string[];
   weekly: WeeklyMetricRow[];
 };
 
@@ -156,6 +165,13 @@ const scheduleMetricSelect = {
   status: true,
   employeeId: true
 } satisfies Prisma.ScheduleSelect;
+const attendanceMetricSelect = {
+  date: true,
+  status: true,
+  isJustified: true,
+  reasonClassification: true,
+  employeeId: true
+} satisfies Prisma.AttendanceRecordSelect;
 
 export class PerformanceError extends Error {
   status: number;
@@ -212,6 +228,7 @@ export async function getPerformanceDashboard(actor: Actor, query: PerformanceQu
     include: { importedBy: { select: { name: true, email: true } } }
   });
   const filters = await getPerformanceFilterOptions(period.end);
+  const batchWb = await resolveBatchWbInfo(query.wbLogins);
 
   return {
     mode: "wfh" as const,
@@ -226,7 +243,10 @@ export async function getPerformanceDashboard(actor: Actor, query: PerformanceQu
     },
     ranking: rows.slice(0, 200),
     weekly: buildWeeklyEvolution(rows, period),
-    filters,
+    filters: {
+      ...filters,
+      batchWb
+    },
     imports: imports.map((item) => ({
       id: item.id,
       type: item.type,
@@ -741,7 +761,7 @@ export async function exportPerformanceXlsxData(actor: Actor, query: Performance
   return {
     fileName: `performance_wfh_${new Date().toISOString().slice(0, 10)}.xlsx`,
     sheetName: "Ranking",
-    headers: ["semana_inicio", "semana_fim", "agente", "wb_login", "status_colaborador", "lob_colaborador", "supervisor", "regra_qualidade_aplicada", "wfh_status", "submit_medio_dia", "submit_total", "dias_periodo", "qualidade", "numerador_qualidade", "denominador_qualidade", "aht_segundos", "aht_formatado", "abs", "faltas", "dias_escalados_validos"],
+    headers: ["semana_inicio", "semana_fim", "agente", "wb_login", "status_colaborador", "lob_colaborador", "supervisor", "regra_qualidade_aplicada", "wfh_status", "wfh_monitoramento", "wfh_motivos", "submit_medio_dia", "submit_total", "dias_periodo", "qualidade", "numerador_qualidade", "denominador_qualidade", "aht_segundos", "aht_formatado", "abs", "faltas", "faltas_injustificadas", "dias_escalados_validos"],
     rows: dashboard.ranking.flatMap((agent) => agent.weekly.map((week) => {
       const submit = calculateDailySubmit(week.submitTotal, parseDate(week.weekStart) ?? new Date(week.weekStart), parseDate(week.weekEnd) ?? new Date(week.weekEnd));
       return [
@@ -754,6 +774,8 @@ export async function exportPerformanceXlsxData(actor: Actor, query: Performance
         agent.supervisor,
         week.qualityRule,
         agent.wfhStatusLabel,
+        agent.wfhMonitoringLabel,
+        agent.wfhReasons.join("; "),
         week.submit,
         week.submitTotal,
         submit.daysCount,
@@ -764,6 +786,7 @@ export async function exportPerformanceXlsxData(actor: Actor, query: Performance
         formatAht(week.ahtSeconds),
         `${week.abs}%`,
         week.absences,
+        week.unjustifiedAbsences,
         week.scheduledDays
       ];
     }))
@@ -857,8 +880,23 @@ function summarizeQualityRule(rules: QualityRule[]): QualityRule {
 
 function buildPerformanceEmployeeStatusWhere(filter?: string): Prisma.EmployeeProfileWhereInput | null {
   const status = normalizeEmployeeStatusFilter(filter);
-  if (!status) return null;
-  const values = status === "Ativo" ? ["Ativo", "ATIVO", "ACTIVE", "Online", "ONLINE", "Aprovado", "APROVADO"] : ["Desligado", "DESLIGADO", "Desligada", "DESLIGADA"];
+  if (!status) {
+    return {
+      NOT: {
+        OR: [
+          { operationalStatus: { equals: "Desligado", mode: "insensitive" } },
+          { operationalStatus: { equals: "Desligada", mode: "insensitive" } },
+          { operationalStatus: { equals: "DESLIGADO", mode: "insensitive" } },
+          { operationalStatus: { equals: "DESLIGADA", mode: "insensitive" } }
+        ]
+      }
+    };
+  }
+  const values = status === "Ativo"
+    ? ["Ativo", "ATIVO", "ACTIVE", "Online", "ONLINE", "Aprovado", "APROVADO"]
+    : status === "Afastado"
+      ? ["Afastado", "AFASTADO"]
+      : ["Desligado", "DESLIGADO", "Desligada", "DESLIGADA"];
   return { OR: values.map((value) => ({ operationalStatus: { equals: value, mode: "insensitive" } })) };
 }
 
@@ -867,6 +905,7 @@ function normalizeEmployeeStatusFilter(filter?: string) {
   if (!value || value === "Todos" || value === "ALL") return "";
   const token = normalizeTextToken(value);
   if (["ativo", "active"].includes(token)) return "Ativo";
+  if (["afastado", "away", "leave"].includes(token)) return "Afastado";
   if (["desligado", "desligada", "terminated"].includes(token)) return "Desligado";
   return "";
 }
@@ -876,8 +915,21 @@ function displayPerformanceEmployeeStatus(status?: string | null) {
   if (!raw) return "";
   const token = normalizeTextToken(raw);
   if (["active", "ativo", "ativa", "online", "aprovado", "aprovada"].includes(token)) return "Ativo";
+  if (["afastado"].includes(token)) return "Afastado";
   if (["desligado", "desligada", "terminated"].includes(token)) return "Desligado";
   return raw;
+}
+
+function isOperationallyTerminated(status?: string | null) {
+  const token = normalizeTextToken(status ?? "");
+  return ["desligado", "desligada", "terminated"].includes(token);
+}
+
+function isUnjustifiedAbsenceRecord(record: Pick<AttendanceRecordForMetrics, "status" | "isJustified" | "reasonClassification">) {
+  const status = String(record.status);
+  const classification = record.reasonClassification?.trim().toUpperCase();
+  if (classification === "UNJUSTIFIED") return true;
+  return ["FALTA", "AUSENTE"].includes(status) && !record.isJustified;
 }
 
 function shouldShowEmployeeForPerformancePeriod(employee: { terminationDate?: Date | null }, referenceDate?: Date | null) {
@@ -885,12 +937,14 @@ function shouldShowEmployeeForPerformancePeriod(employee: { terminationDate?: Da
   return formatDateKey(referenceDate) < formatDateKey(employee.terminationDate);
 }
 
-function normalizeWfhStatusFilter(filter?: string): WfhStatus | "" {
+function normalizeWfhStatusFilter(filter?: string): WfhEligibilityStatus | "" {
   const value = filter?.trim();
   if (!value || value === "Todos" || value === "ALL") return "";
   const token = normalizeTextToken(value);
   if (["qualified", "qualificado"].includes(token)) return "QUALIFIED";
   if (["not_qualified", "not-qualified", "nao_qualificado", "nao-qualificado", "não_qualificado", "não-qualificado", "naoqualificado", "nãoqualificado"].includes(token)) return "NOT_QUALIFIED";
+  if (["insufficient_data", "dados_insuficientes"].includes(token)) return "INSUFFICIENT_DATA";
+  if (["not_applicable", "na", "n_a", "nao_aplicavel", "não_aplicavel"].includes(token)) return "NOT_APPLICABLE";
   return "";
 }
 
@@ -901,12 +955,17 @@ function normalizeTextToken(value: string) {
 async function listPerformanceEmployees(query: PerformanceQuery = {}, options: { defaultAgentsOnly?: boolean } = {}, referenceDate?: Date) {
   const where: Prisma.EmployeeProfileWhereInput = { deletedAt: null };
   const and: Prisma.EmployeeProfileWhereInput[] = [];
+  const batch = parseWbLoginBatch(query.wbLogins ?? "");
   if (options.defaultAgentsOnly && (!query.role || query.role === "Todos")) {
     and.push({ OR: agentRoleTitleAliases.map((roleTitle) => ({ roleTitle: { equals: roleTitle, mode: "insensitive" } })) });
   } else if (query.role && query.role !== "Todos") {
     and.push({ roleTitle: { equals: query.role, mode: "insensitive" } });
   }
-  if (query.employeeId && query.employeeId !== "Todos") and.push({ id: query.employeeId });
+  const identityFilters: Prisma.EmployeeProfileWhereInput[] = [];
+  if (query.employeeId && query.employeeId !== "Todos") identityFilters.push({ id: query.employeeId });
+  if (batch.normalizedValues.length) identityFilters.push({ OR: batch.normalizedValues.map((wbLogin) => ({ wbLogin: { equals: wbLogin, mode: "insensitive" } })) });
+  if (identityFilters.length === 1) and.push(identityFilters[0]);
+  else if (identityFilters.length > 1) and.push({ OR: identityFilters });
   if (query.lob && query.lob !== "Todos") and.push({ lob: { name: { equals: query.lob, mode: "insensitive" } } });
   if (query.supervisorId && query.supervisorId !== "Todos") {
     and.push(query.supervisorId === "SEM_SUPERVISOR" ? { supervisorId: null } : { supervisorId: query.supervisorId });
@@ -914,7 +973,7 @@ async function listPerformanceEmployees(query: PerformanceQuery = {}, options: {
   if (query.skill && query.skill !== "Todos") and.push(query.skill === "SEM_SKILL" ? { OR: [{ skill: null }, { skill: "" }] } : { skill: { equals: query.skill, mode: "insensitive" } });
   const employeeStatusWhere = buildPerformanceEmployeeStatusWhere(query.employeeStatus);
   if (employeeStatusWhere) and.push(employeeStatusWhere);
-  if (referenceDate) and.push({ OR: [{ terminationDate: null }, { terminationDate: { gt: referenceDate } }] });
+  if (referenceDate && normalizeEmployeeStatusFilter(query.employeeStatus) !== "Desligado") and.push({ OR: [{ terminationDate: null }, { terminationDate: { gt: referenceDate } }] });
   if (and.length) where.AND = and;
 
   const employees = await prisma.employeeProfile.findMany({
@@ -927,7 +986,8 @@ async function listPerformanceEmployees(query: PerformanceQuery = {}, options: {
     orderBy: { fullName: "asc" },
     take: 3000
   });
-  const dateFilteredEmployees = employees.filter((employee) => shouldShowEmployeeForPerformancePeriod(employee, referenceDate));
+  const shouldApplyTerminationCutoff = normalizeEmployeeStatusFilter(query.employeeStatus) !== "Desligado";
+  const dateFilteredEmployees = shouldApplyTerminationCutoff ? employees.filter((employee) => shouldShowEmployeeForPerformancePeriod(employee, referenceDate)) : employees;
   return options.defaultAgentsOnly && (!query.role || query.role === "Todos") ? dateFilteredEmployees.filter((employee) => isAgentJobTitle(employee.roleTitle)) : dateFilteredEmployees;
 }
 
@@ -940,13 +1000,14 @@ async function getPerformanceFilterOptions(referenceDate?: Date) {
       wbLogin: true,
       roleTitle: true,
       skill: true,
+      operationalStatus: true,
       terminationDate: true,
       lob: { select: { name: true } },
       supervisor: { select: { id: true, fullName: true } }
     },
     orderBy: { fullName: "asc" }
   });
-  const agents = employees.filter((employee) => isAgentJobTitle(employee.roleTitle) && shouldShowEmployeeForPerformancePeriod(employee, referenceDate));
+  const agents = employees.filter((employee) => isAgentJobTitle(employee.roleTitle) && !isOperationallyTerminated(employee.operationalStatus) && shouldShowEmployeeForPerformancePeriod(employee, referenceDate));
   const supervisors = new Map<string, string>();
   for (const employee of agents) {
     if (employee.supervisor?.id) supervisors.set(employee.supervisor.id, employee.supervisor.fullName);
@@ -967,10 +1028,30 @@ async function getPerformanceFilterOptions(referenceDate?: Date) {
   };
 }
 
+async function resolveBatchWbInfo(input?: PerformanceQuery["wbLogins"]) {
+  const parsed = parseWbLoginBatch(input ?? "");
+  if (!parsed.normalizedValues.length) {
+    return { applied: [] as string[], notFound: [] as string[], duplicatesRemoved: parsed.duplicatesRemoved };
+  }
+  const records = await prisma.employeeProfile.findMany({
+    where: {
+      deletedAt: null,
+      OR: parsed.normalizedValues.map((wbLogin) => ({ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }))
+    },
+    select: { wbLogin: true }
+  });
+  const foundByNormalized = new Map(records.map((record) => [normalizeWbLogin(record.wbLogin), record.wbLogin]));
+  return {
+    applied: parsed.normalizedValues.map((value) => foundByNormalized.get(value)).filter((value): value is string => Boolean(value)),
+    notFound: parsed.values.filter((value) => !foundByNormalized.has(normalizeWbLogin(value))),
+    duplicatesRemoved: parsed.duplicatesRemoved
+  };
+}
+
 async function buildAgentRows(employees: PerformanceEmployee[], period: Period) {
   if (!employees.length) return [];
   const employeeIds = employees.map((employee) => employee.id);
-  const [qualityRecords, tnsQualityRecords, cecQualityRecords, productionRecords, schedules] = await Promise.all([
+  const [qualityRecords, tnsQualityRecords, cecQualityRecords, productionRecords, schedules, attendanceRecords] = await Promise.all([
     prisma.qualityRecord.findMany({
       where: { employeeId: { in: employeeIds }, auditDate: { gte: period.start, lte: period.end } },
       select: qualityMetricSelect
@@ -990,13 +1071,17 @@ async function buildAgentRows(employees: PerformanceEmployee[], period: Period) 
     prisma.schedule.findMany({
       where: { employeeId: { in: employeeIds }, date: { gte: period.start, lte: period.end }, deletedAt: null },
       select: scheduleMetricSelect
+    }),
+    prisma.attendanceRecord.findMany({
+      where: { employeeId: { in: employeeIds }, date: { gte: period.start, lte: period.end } },
+      select: attendanceMetricSelect
     })
   ]);
 
   const weeks = weeksInPeriod(period);
   return employees.map((employee) => {
     const qualityRule = getQualityRuleByEmployee(employee);
-    const weekly = weeks.map((week) => buildWeeklyMetrics(employee.id, week, qualityRule, qualityRecords, tnsQualityRecords, cecQualityRecords, productionRecords, schedules));
+    const weekly = weeks.map((week) => buildWeeklyMetrics(employee.id, week, qualityRule, qualityRecords, tnsQualityRecords, cecQualityRecords, productionRecords, schedules, attendanceRecords));
     const employeeQualityRecords = qualityRecords.filter((record) => record.employeeId === employee.id);
     const employeeTnsQualityRecords = tnsQualityRecords.filter((record) => record.employeeId === employee.id);
     const employeeCecQualityRecords = cecQualityRecords.filter((record) => record.employeeId === employee.id);
@@ -1004,7 +1089,18 @@ async function buildAgentRows(employees: PerformanceEmployee[], period: Period) 
       ...summarizeWeeklyRows(weekly, period),
       ...calculateQualityByRule(qualityRule, employeeQualityRecords, employeeTnsQualityRecords, employeeCecQualityRecords)
     };
-    const wfhQualification = calculateWfhQualification(periodMetrics, period);
+    const wfhQualification = calculateWfhStatus(
+      {
+        lob: employee.lob?.name ?? "",
+        admissionDate: employee.admissionDate,
+        hasDisciplinaryIncidentData: false,
+        hasSlaData: false,
+        hasCurrentWfhStatusData: false
+      },
+      periodMetrics,
+      weekly,
+      period.end
+    );
     return {
       employeeId: employee.id,
       employeeName: employee.fullName,
@@ -1016,18 +1112,20 @@ async function buildAgentRows(employees: PerformanceEmployee[], period: Period) 
       employeeStatus: displayPerformanceEmployeeStatus(employee.operationalStatus),
       weekly,
       ...wfhQualification,
-      ...periodMetrics
+      ...periodMetrics,
+      submitAveragePerDay: periodMetrics.submit
     };
   });
 }
 
-function buildWeeklyMetrics(employeeId: string, week: WeekRange, qualityRule: QualityRule, qualityRecords: QualityRecordForMetrics[], tnsQualityRecords: TnsQualityRecordForMetrics[], cecQualityRecords: CecQualityRecordForMetrics[], productionRecords: ProductionRecordForMetrics[], schedules: ScheduleRecordForMetrics[]): WeeklyMetricRow {
+function buildWeeklyMetrics(employeeId: string, week: WeekRange, qualityRule: QualityRule, qualityRecords: QualityRecordForMetrics[], tnsQualityRecords: TnsQualityRecordForMetrics[], cecQualityRecords: CecQualityRecordForMetrics[], productionRecords: ProductionRecordForMetrics[], schedules: ScheduleRecordForMetrics[], attendanceRecords: AttendanceRecordForMetrics[]): WeeklyMetricRow {
   const weekQualityRecords: QualityRecordForMetrics[] = [];
   const weekTnsQualityRecords: TnsQualityRecordForMetrics[] = [];
   const weekCecQualityRecords: CecQualityRecordForMetrics[] = [];
   let submitTotal = 0;
   let moderationSeconds = 0;
   let absences = 0;
+  const unjustifiedAbsenceDates = new Set<string>();
   let scheduledDays = 0;
   for (const record of qualityRecords) {
     if (record.employeeId !== employeeId || !isDateInRange(record.auditDate, week.start, week.end)) continue;
@@ -1050,6 +1148,11 @@ function buildWeeklyMetrics(employeeId: string, week: WeekRange, qualityRule: Qu
     if (schedule.employeeId !== employeeId || !isDateInRange(schedule.date, week.start, week.end)) continue;
     if (scheduledStatuses.has(schedule.status)) scheduledDays += 1;
     if (absenceStatuses.has(schedule.status)) absences += 1;
+    if (schedule.status === "FALTA_INJUSTIFICADA") unjustifiedAbsenceDates.add(formatDateKey(schedule.date));
+  }
+  for (const record of attendanceRecords) {
+    if (record.employeeId !== employeeId || !isDateInRange(record.date, week.start, week.end)) continue;
+    if (isUnjustifiedAbsenceRecord(record)) unjustifiedAbsenceDates.add(formatDateKey(record.date));
   }
   return {
     weekStart: formatDateKey(week.start),
@@ -1061,6 +1164,7 @@ function buildWeeklyMetrics(employeeId: string, week: WeekRange, qualityRule: Qu
     moderationSeconds: round2(moderationSeconds),
     ahtSeconds: submitTotal > 0 ? round2(moderationSeconds / submitTotal) : 0,
     absences,
+    unjustifiedAbsences: unjustifiedAbsenceDates.size,
     scheduledDays,
     abs: percent(absences, scheduledDays)
   };
@@ -1072,6 +1176,7 @@ function summarizeRows(rows: AgentPerformanceRow[], period: Period) {
   const submitTotal = rows.reduce((sum, row) => sum + row.submitTotal, 0);
   const moderationSeconds = rows.reduce((sum, row) => sum + row.moderationSeconds, 0);
   const absences = rows.reduce((sum, row) => sum + row.absences, 0);
+  const unjustifiedAbsences = rows.reduce((sum, row) => sum + row.unjustifiedAbsences, 0);
   const scheduledDays = rows.reduce((sum, row) => sum + row.scheduledDays, 0);
   const qualityRule = summarizeQualityRule(rows.map((row) => row.qualityRule));
   const submit = calculateDailySubmit(submitTotal, period.start, period.end);
@@ -1088,6 +1193,7 @@ function summarizeRows(rows: AgentPerformanceRow[], period: Period) {
     moderationSeconds: round2(moderationSeconds),
     ahtSeconds: submitTotal > 0 ? round2(moderationSeconds / submitTotal) : 0,
     absences,
+    unjustifiedAbsences,
     scheduledDays,
     abs: percent(absences, scheduledDays)
   };
@@ -1184,6 +1290,7 @@ function summarizeWeeklyRows(rows: WeeklyMetricRow[], period?: Period): Performa
   const submitTotal = rows.reduce((sum, row) => sum + row.submitTotal, 0);
   const moderationSeconds = rows.reduce((sum, row) => sum + row.moderationSeconds, 0);
   const absences = rows.reduce((sum, row) => sum + row.absences, 0);
+  const unjustifiedAbsences = rows.reduce((sum, row) => sum + row.unjustifiedAbsences, 0);
   const scheduledDays = rows.reduce((sum, row) => sum + row.scheduledDays, 0);
   const qualityRule = summarizeQualityRule(rows.map((row) => row.qualityRule));
   const range = period ?? weeklyRowsPeriod(rows);
@@ -1201,6 +1308,7 @@ function summarizeWeeklyRows(rows: WeeklyMetricRow[], period?: Period): Performa
     moderationSeconds: round2(moderationSeconds),
     ahtSeconds: submitTotal > 0 ? round2(moderationSeconds / submitTotal) : 0,
     absences,
+    unjustifiedAbsences,
     scheduledDays,
     abs: percent(absences, scheduledDays)
   };
@@ -1216,22 +1324,6 @@ function buildWeeklyEvolution(rows: AgentPerformanceRow[], period: Period) {
       ...summarizeWeeklyRows(weeklyRows)
     };
   });
-}
-
-function calculateWfhQualification(metrics: Pick<PerformanceMetrics, "quality" | "submit" | "ahtSeconds" | "abs">, period: Period) {
-  const submitAveragePerDay = Number.isFinite(metrics.submit) ? round2(metrics.submit) : 0;
-  const failedCriteria: string[] = [];
-  if (!isValidMetric(metrics.quality) || metrics.quality < 95) failedCriteria.push("Qualidade < 95%");
-  if (!isValidMetric(metrics.abs) || metrics.abs > 5) failedCriteria.push("ABS > 5%");
-  if (!isValidMetric(submitAveragePerDay) || submitAveragePerDay < 370) failedCriteria.push("Submit médio/dia < 370");
-  if (!isValidMetric(metrics.ahtSeconds) || metrics.ahtSeconds >= 50) failedCriteria.push("AHT >= 50s");
-  const wfhStatus: WfhStatus = failedCriteria.length ? "NOT_QUALIFIED" : "QUALIFIED";
-  return {
-    wfhStatus,
-    wfhStatusLabel: wfhStatus === "QUALIFIED" ? "Qualificado" : "Não-qualificado",
-    submitAveragePerDay,
-    wfhFailedCriteria: failedCriteria
-  };
 }
 
 export function calculateDailySubmit(totalSubmit: number, startDate: Date, endDate: Date) {
@@ -1258,10 +1350,6 @@ function daysInPeriod(period: Period) {
   const end = Date.UTC(period.end.getUTCFullYear(), period.end.getUTCMonth(), period.end.getUTCDate());
   if (end < start) return 0;
   return Math.floor((end - start) / 86_400_000) + 1;
-}
-
-function isValidMetric(value: number) {
-  return Number.isFinite(value);
 }
 
 function filterRowsByWfhStatus(rows: AgentPerformanceRow[], filter?: string) {
@@ -1312,13 +1400,25 @@ function emptyAgentRow(employee: PerformanceEmployee, period: Period): AgentPerf
     skill: employee.skill ?? "",
     employeeStatus: displayPerformanceEmployeeStatus(employee.operationalStatus),
     weekly,
-    ...calculateWfhQualification(emptyMetrics(qualityRule), period),
-    ...emptyMetrics(qualityRule)
+    ...calculateWfhStatus(
+      {
+        lob: employee.lob?.name ?? "",
+        admissionDate: employee.admissionDate,
+        hasDisciplinaryIncidentData: false,
+        hasSlaData: false,
+        hasCurrentWfhStatusData: false
+      },
+      emptyMetrics(qualityRule),
+      weekly,
+      period.end
+    ),
+    ...emptyMetrics(qualityRule),
+    submitAveragePerDay: 0
   };
 }
 
 function emptyMetrics(qualityRule: QualityRule = "UNKNOWN"): PerformanceMetrics {
-  return { ...emptyQualityMetrics(qualityRule), submit: 0, submitTotal: 0, ahtSeconds: 0, moderationSeconds: 0, abs: 0, absences: 0, scheduledDays: 0 };
+  return { ...emptyQualityMetrics(qualityRule), submit: 0, submitTotal: 0, ahtSeconds: 0, moderationSeconds: 0, abs: 0, absences: 0, unjustifiedAbsences: 0, scheduledDays: 0 };
 }
 
 function hasAnyData(row: AgentPerformanceRow) {
@@ -1470,12 +1570,10 @@ function resolvePeriod(query: PerformanceQuery): Period {
     const [year, month] = query.month.split("-").map(Number);
     return { start: utcDate(year, month, 1), end: utcDate(year, month + 1, 0) };
   }
-  const now = new Date();
-  const defaultStart = utcDate(now.getUTCFullYear(), now.getUTCMonth() + 1, 1);
-  const defaultEnd = utcDate(now.getUTCFullYear(), now.getUTCMonth() + 2, 0);
+  const defaultPeriod = getDefaultDatePeriod();
   return {
-    start: parseDate(query.startDate) ?? defaultStart,
-    end: parseDate(query.endDate) ?? defaultEnd
+    start: parseDate(query.startDate) ?? defaultPeriod.start,
+    end: parseDate(query.endDate) ?? defaultPeriod.end
   };
 }
 

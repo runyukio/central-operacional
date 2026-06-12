@@ -36,6 +36,7 @@
     "db:normalize-job-title-agente": "tsx scripts/normalize-job-title-agente.ts",
     "db:fix-june-advance-amount": "tsx scripts/fix-june-advance-amount.ts",
     "db:migrate-manager-to-supervisor": "tsx scripts/migrate-manager-to-supervisor.ts",
+    "db:standardize-pix-keys": "tsx scripts/standardize-pix-keys.ts",
     "seed:demo": "tsx prisma/seed.ts",
     "seed:prod": "tsx prisma/seed-prod.ts",
     "seed:local": "tsx prisma/seed-prod.ts",

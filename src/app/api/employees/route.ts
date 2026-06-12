@@ -63,7 +63,8 @@ export async function GET(request: Request) {
     skill: url.searchParams.get("skill") ?? undefined,
     wave: url.searchParams.get("wave") ?? undefined,
     status: url.searchParams.get("status_colaborador") ?? url.searchParams.get("employeeStatus") ?? url.searchParams.get("status") ?? undefined,
-    role: url.searchParams.get("role") ?? undefined
+    role: url.searchParams.get("role") ?? undefined,
+    wbLogins: url.searchParams.get("wbLogins") ?? undefined
   });
   if (Array.isArray(result)) return NextResponse.json({ data: result, total: result.length, page, limit, totalPages: 1 });
   return NextResponse.json(result);

@@ -61,6 +61,7 @@ enum AnnouncementStatus {
   RASCUNHO
   AGENDADO
   PUBLICADO
+  INATIVO
   ARQUIVADO
 }
 
@@ -820,17 +821,32 @@ model Announcement {
   title          String
   content        String
   category       String
+  contentType    String             @default("Texto simples")
+  imageUrl       String?
+  mediaUrl       String?
+  externalUrl    String?
+  attachmentUrl  String?
   targetAudience String
+  targetRoles    Json?
+  targetLobIds   Json?
   authorId       String
+  authorRole     String?
   status         AnnouncementStatus @default(PUBLICADO)
+  priority       Priority           @default(MEDIA)
   isPinned       Boolean            @default(false)
   requiresRead   Boolean            @default(false)
   publishAt      DateTime           @default(now())
+  expiresAt      DateTime?
+  archivedAt     DateTime?
   author         User               @relation(fields: [authorId], references: [id])
   reads          AnnouncementRead[]
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
   deletedAt      DateTime?
+
+  @@index([status, publishAt])
+  @@index([isPinned, priority, publishAt])
+  @@index([expiresAt])
 }
 
 model AnnouncementRead {

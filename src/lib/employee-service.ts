@@ -9,6 +9,7 @@ import { canAccessEmployeeMap, canEditEmployeeData, canViewEmployeeSensitiveData
 import { auditPermissionDenied } from "@/lib/permission-audit";
 import { createDuplicateError, createNotFoundError, createPermissionError, createRelationError, createServerError, createValidationError, mapPrismaError } from "@/lib/api-errors";
 import { canBeSupervisorJobTitle, isAgentJobTitle, normalizeJobTitle } from "@/lib/job-title-normalization";
+import { normalizeWbLogin, parseWbLoginBatch } from "@/lib/batch-wb-filter";
 import { maskPixKey, validatePixKey } from "@/lib/pix-key";
 import { cleanShiftName } from "@/lib/shift-display";
 
@@ -80,6 +81,7 @@ export type EmployeeListQuery = {
   wave?: string;
   status?: string;
   role?: string;
+  wbLogins?: string[] | string;
 };
 
 export type EmployeeDeleteInput = {
@@ -154,8 +156,9 @@ async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeList
     if (!canAccessEmployeeMap({ role: actor.role, status: user.status })) return paginatedEmployees([], 0, page, limit);
     const search = clean(query.search)?.trim();
     const statusWhere = buildEmployeeStatusWhere(query.status);
+    const batch = parseWbLoginBatch(query.wbLogins ?? "");
 
-    const baseEmployeeWhere: Prisma.EmployeeProfileWhereInput =
+    let baseEmployeeWhere: Prisma.EmployeeProfileWhereInput =
       role === "COLABORADOR" && user.employeeProfile
         ? { id: user.employeeProfile.id, deletedAt: null }
         : {
@@ -183,6 +186,14 @@ async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeList
           ...buildNullableTextFilterWhere("wave", query.wave),
 	          ...(query.role ? { user: { role: { name: query.role } } } : {}),
 	        };
+    if (!(role === "COLABORADOR" && user.employeeProfile) && batch.normalizedValues.length) {
+      baseEmployeeWhere = {
+        AND: [
+          baseEmployeeWhere,
+          { OR: batch.normalizedValues.map((wbLogin) => ({ wbLogin: { equals: wbLogin, mode: "insensitive" } })) }
+        ]
+      };
+    }
     const employeeWhere: Prisma.EmployeeProfileWhereInput = hasWhereInput(statusWhere)
       ? { AND: [baseEmployeeWhere, statusWhere] }
       : baseEmployeeWhere;
@@ -216,9 +227,11 @@ async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeList
     }
 
 	    const filterOptions = await getEmployeeFilterOptions(baseEmployeeWhere);
+    const batchWb = await resolveEmployeeBatchWb(query.wbLogins);
     return {
       ...paginatedEmployees(employees.map((employee) => mapEmployeeSummary(employee, role)), total, effectivePage, limit),
-      filterOptions
+      filterOptions,
+      batchWb
     };
   } catch (error) {
     recordErrorLog({
@@ -1281,6 +1294,26 @@ function col(header: string, value: (employee: Record<string, any>) => unknown) 
   return { header, value: (employee: Record<string, any>) => value(employee) ?? "" };
 }
 
+async function resolveEmployeeBatchWb(input?: EmployeeListQuery["wbLogins"]) {
+  const parsed = parseWbLoginBatch(input ?? "");
+  if (!parsed.normalizedValues.length) {
+    return { applied: [] as string[], notFound: [] as string[], duplicatesRemoved: parsed.duplicatesRemoved };
+  }
+  const employees = await prisma.employeeProfile.findMany({
+    where: {
+      deletedAt: null,
+      OR: parsed.normalizedValues.map((wbLogin) => ({ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }))
+    },
+    select: { wbLogin: true }
+  });
+  const found = new Set(employees.map((employee) => normalizeWbLogin(employee.wbLogin)));
+  return {
+    applied: parsed.values.filter((value) => found.has(normalizeWbLogin(value))),
+    notFound: parsed.values.filter((value) => !found.has(normalizeWbLogin(value))),
+    duplicatesRemoved: parsed.duplicatesRemoved
+  };
+}
+
 async function getEmployeeFilterOptions(where: Prisma.EmployeeProfileWhereInput) {
   const [skillRows, waveRows, statusRows] = await Promise.all([
     prisma.employeeProfile.findMany({
@@ -1397,7 +1430,7 @@ const employeeStatusDisplayAliases: Record<string, string> = {
   PENDENTE_APROVAÇÃO: "Pendente de cadastro"
 };
 
-const officialEmployeeStatusOptions = ["Ativo", "Em treinamento", "Nesting", "Desligado", "Desligado em Treinamento", "Inativo", "Desativado"];
+const officialEmployeeStatusOptions = ["Ativo", "Em treinamento", "Nesting", "Afastado", "Desligado", "Desligado em Treinamento", "Inativo", "Desativado"];
 
 const employeeStatusFilterAliases: Record<string, string[]> = {
   Ativo: ["Ativo", "ATIVO", "ACTIVE"],

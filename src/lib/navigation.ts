@@ -23,6 +23,7 @@ export const navItems: NavItem[] = [
   { label: "Cronogramas", href: "/escalas", icon: "CalendarRange", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH"] },
   { label: "Horas Operacionais", href: "/horas-operacionais", icon: "Clock", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"] },
   { label: "Solicitações", href: "/solicitacoes", icon: "ClipboardList", roles: authenticatedOps },
+  { label: "Mural", href: "/mural", icon: "Megaphone", roles: nonClientRoles },
   { label: "Esteiras", href: "/esteiras", icon: "KanbanSquare", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH", "TI", "QUALIDADE"] },
   { label: "Mapa de Funcionários", href: "/mapa-funcionarios", icon: "Map", roles: leadership },
   { label: "Adiantamento", href: "/adiantamento", icon: "Coins", roles: ["ADMIN", "GESTOR", "WFM"] },

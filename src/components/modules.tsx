@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { type InputHTMLAttributes, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import {
   Bar,
@@ -79,14 +79,10 @@ import {
   StatusBadge
 } from "@/components/ui/primitives";
 import {
-  announcements,
   auditLogs,
   chatMessages,
   climateThemes,
-  communicationCategories,
   employees,
-  notificationItems,
-  pinnedAnnouncements,
   qualityFeedback,
   reportCards,
   rewards,
@@ -96,6 +92,8 @@ import {
   tokenHistory,
   topPerformers
 } from "@/lib/demo-data";
+import { parseWbLoginBatch, serializeWbLogins } from "@/lib/batch-wb-filter";
+import { getDefaultDateRange } from "@/lib/default-date-range";
 import { cn, formatCurrency, initials } from "@/lib/utils";
 import { getPixKeyFormatHint, PIX_KEY_TYPES, validatePixKey } from "@/lib/pix-key";
 import { cleanShiftName, cleanShiftOptions, isBlockedShiftName, isSelectableShiftName, shiftCategoryName, standardShiftNames } from "@/lib/shift-display";
@@ -119,7 +117,7 @@ const scheduleEditableStatusOptions = ["Escalado", "Presente", "Nesting", "Falta
 const workflowManagedScheduleStatuses = ["Troca aprovada", "Venda de folga aprovada", "Folga aprovada"] as const;
 const attendanceReasonStatuses = ["Falta", "Erro de cronograma"];
 const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Nesting"];
-const employeeOperationalStatusOptions = ["Ativo", "Em treinamento", "Nesting", "Desligado", "Desligado em Treinamento", "Inativo", "Desativado"];
+const employeeOperationalStatusOptions = ["Ativo", "Em treinamento", "Nesting", "Afastado", "Desligado", "Desligado em Treinamento", "Inativo", "Desativado"];
 const pcdDisabilityTypeOptions = ["", "Física", "Auditiva", "Visual", "Intelectual", "Psicossocial", "Múltipla", "Neurodivergente", "Outra", "Prefiro não informar"];
 const absenceReasonOptions = ["Problema de saúde", "Erro de programação de escala", "Problema técnico corporativo", "Emergência familiar", "Não informado", "Problema técnico pessoal", "Problema de transporte", "Problema pessoal", "Erro de visualização de escala", "Outros"];
 const timeBlockCategoryOptions = ["Administrativo", "Desenvolvimento", "Acompanhamento de operação", "Feedback", "Reunião", "Treinamento", "Suporte ao time", "Análise de indicadores", "Escalonamento / Ocorrência", "Pausa", "Outros"];
@@ -221,17 +219,6 @@ type RequestListResponse = {
   };
   supervisors?: Array<{ id: string; name: string; wbLogin: string; email?: string }>;
   actor?: { role: string; name?: string };
-};
-
-type AnnouncementItem = {
-  id: string;
-  title: string;
-  category: string;
-  body: string;
-  date: string;
-  area: string;
-  status: string;
-  read?: boolean;
 };
 
 type QualityFeedbackItem = {
@@ -966,6 +953,7 @@ type EmployeeListResponse = {
   limit?: number;
   totalPages?: number;
   filterOptions?: { skills: string[]; waves: string[]; statuses?: string[] };
+  batchWb?: { applied: string[]; notFound: string[]; duplicatesRemoved: number };
 };
 
 type HierarchyEmployeeClient = {
@@ -1297,8 +1285,7 @@ function monthRange(month: number, year: number) {
 }
 
 function currentOperationalMonthRange() {
-  const period = currentOperationalMonth();
-  return monthRange(period.month, period.year);
+  return getDefaultDateRange();
 }
 
 function currentUrlSearchParams() {
@@ -1418,6 +1405,13 @@ function scheduleSlotStatusTextClass(value: string) {
   if (label.length > 14) return "text-[9px] leading-[10px]";
   if (label.length > 10) return "text-[9.5px] leading-[10.5px]";
   return "text-[10.5px] leading-[11.5px]";
+}
+
+const scheduleWorkCountStatuses = new Set(["Escalado", "Presente", "Atraso", "Saída antecipada", "Saida antecipada", "Troca aprovada", "Venda de folga aprovada", "Nesting"]);
+const scheduleDayOffCountStatuses = new Set(["Folga", "Folga aprovada"]);
+
+function countScheduleStatuses(days: string[], statusSet: Set<string>) {
+  return days.reduce((total, value) => total + (statusSet.has(scheduleSlotDisplayLabel(value)) || statusSet.has(value) ? 1 : 0), 0);
 }
 
 function dayOffKindFromRequest(request: Pick<ClientRequest, "type" | "payload"> | { type: string; payload?: Record<string, unknown> }): DayOffKind | null {
@@ -1702,11 +1696,19 @@ export function EmployeeRegistrationPublicPage() {
   });
 
   function updateField(name: string, value: string | boolean | number) {
-    setForm((current) => ({ ...current, [name]: value }));
+    setForm((current) => {
+      if (name === "pixKey") return { ...current, pixKey: formatPixKeyInputValue(current.pixKeyType, String(value)) };
+      if (name === "pixKeyType") {
+        const pixKeyType = String(value);
+        return { ...current, pixKeyType, pixKey: formatPixKeyInputValue(pixKeyType, current.pixKey) };
+      }
+      return { ...current, [name]: value };
+    });
     setFieldErrors((current) => {
       if (!current[name]) return current;
       const next = { ...current };
       delete next[name];
+      if (name === "pixKeyType") delete next.pixKey;
       return next;
     });
   }
@@ -1798,7 +1800,10 @@ export function EmployeeRegistrationPublicPage() {
       <FormInput label="Banco" value={form.bankName} error={fieldError("bankName")} onChange={(value) => updateField("bankName", value)} />
       <FormInput label="Agência com dígito" value={form.bankAgency} error={fieldError("bankAgency")} onChange={(value) => updateField("bankAgency", value)} />
       <FormInput label="Conta corrente com dígito" value={form.bankAccount} error={fieldError("bankAccount")} onChange={(value) => updateField("bankAccount", value)} />
-      <FormInput label="Chave PIX" value={form.pixKey} error={fieldError("pixKey")} onChange={(value) => updateField("pixKey", value)} />
+      <div>
+        <FormInput label="Chave PIX" value={form.pixKey} error={fieldError("pixKey")} onChange={(value) => updateField("pixKey", value)} {...getPixInputProps(form.pixKeyType)} />
+        <p className="mt-1 text-xs font-semibold text-muted">{getPixKeyFormatHint(form.pixKeyType)}</p>
+      </div>
       <FormSelect label="Tipo de chave PIX" value={form.pixKeyType} error={fieldError("pixKeyType")} options={[...PIX_KEY_TYPES]} onChange={(value) => updateField("pixKeyType", value)} />
       <label className="md:col-span-2">
         <span className="mb-1.5 block text-sm font-bold text-muted">Observações adicionais</span>
@@ -1896,7 +1901,19 @@ export function EmployeeRegistrationPublicPage() {
   );
 }
 
-function FormInput({ label, value, onChange, type = "text", error, disabled = false }: { label: string; value: string; onChange: (value: string) => void; type?: string; error?: string; disabled?: boolean }) {
+type FormInputProps = {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  type?: string;
+  error?: string;
+  disabled?: boolean;
+  placeholder?: string;
+  maxLength?: number;
+  inputMode?: InputHTMLAttributes<HTMLInputElement>["inputMode"];
+};
+
+function FormInput({ label, value, onChange, type = "text", error, disabled = false, placeholder, maxLength, inputMode }: FormInputProps) {
   function openDatePicker(input: HTMLInputElement) {
     if (type !== "date" || disabled) return;
     const picker = input as HTMLInputElement & { showPicker?: () => void };
@@ -1910,7 +1927,7 @@ function FormInput({ label, value, onChange, type = "text", error, disabled = fa
   return (
     <label className="block">
       <span className="mb-1.5 block text-sm font-bold text-muted">{label}</span>
-      <input type={type} value={value} disabled={disabled} onClick={(event) => openDatePicker(event.currentTarget)} onChange={(event) => onChange(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500", type === "date" && "cursor-pointer", error ? "border-red-300 bg-red-50/40" : "border-border")} />
+      <input type={type} value={value} disabled={disabled} placeholder={placeholder} maxLength={maxLength} inputMode={inputMode} onClick={(event) => openDatePicker(event.currentTarget)} onChange={(event) => onChange(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500", type === "date" && "cursor-pointer", error ? "border-red-300 bg-red-50/40" : "border-border")} />
       {error ? <span className="mt-1 block text-xs font-bold text-red-600">{error}</span> : null}
     </label>
   );
@@ -1944,6 +1961,28 @@ const additionalDataEmptyForm: AdditionalRegistrationDataForm = {
 };
 
 const pixKeyTypeOptions = ["", ...PIX_KEY_TYPES];
+
+function formatPixKeyInputValue(type: string, value: string) {
+  if (type === "CPF") return value.replace(/\D/g, "").slice(0, 11);
+  if (type === "CNPJ") return value.replace(/\D/g, "").slice(0, 14);
+  if (type === "E-mail") return value.replace(/\s/g, "").toLowerCase();
+  if (type === "Telefone") {
+    const compact = value.trim().replace(/[^\d+]/g, "");
+    if (!compact) return "";
+    const digits = compact.replace(/\D/g, "").slice(0, 13);
+    return compact.startsWith("+") ? `+${digits}` : digits;
+  }
+  return value;
+}
+
+function getPixInputProps(type: string): Pick<FormInputProps, "placeholder" | "maxLength" | "inputMode" | "type"> {
+  if (type === "CPF") return { placeholder: "Somente números, 11 dígitos", maxLength: 11, inputMode: "numeric" };
+  if (type === "CNPJ") return { placeholder: "Somente números, 14 dígitos", maxLength: 14, inputMode: "numeric" };
+  if (type === "E-mail") return { placeholder: "exemplo@email.com", type: "email", inputMode: "email" };
+  if (type === "Telefone") return { placeholder: "+5511930211909", maxLength: 14, inputMode: "tel" };
+  if (type === "Chave aleatória") return { placeholder: "Informe sua chave aleatória PIX" };
+  return { placeholder: "Selecione o tipo da Chave PIX" };
+}
 
 export function AdditionalRegistrationDataPage() {
   const [form, setForm] = useState<AdditionalRegistrationDataForm>(additionalDataEmptyForm);
@@ -1990,9 +2029,19 @@ export function AdditionalRegistrationDataPage() {
     setFieldErrors((current) => {
       const next = { ...current };
       delete next[field];
+      if (field === "pixKeyType") delete next.pixKey;
       return next;
     });
-    setForm((current) => ({ ...current, [field]: value }));
+    setForm((current) => {
+      if (field === "pixKey") {
+        return { ...current, pixKey: formatPixKeyInputValue(current.pixKeyType, String(value)) };
+      }
+      if (field === "pixKeyType") {
+        const pixKeyType = String(value);
+        return { ...current, pixKeyType, pixKey: formatPixKeyInputValue(pixKeyType, current.pixKey) };
+      }
+      return { ...current, [field]: value };
+    });
   }
 
   function validatePixBeforeConfirmation() {
@@ -2096,7 +2145,7 @@ export function AdditionalRegistrationDataPage() {
                   <div className="grid gap-4 md:grid-cols-2">
                     <FormSelect label="Tipo da Chave PIX" value={form.pixKeyType} options={pixKeyTypeOptions} onChange={(value) => updateAdditionalDataField("pixKeyType", value)} error={fieldErrors.pixKeyType} emptyLabel="Selecione" />
                     <div>
-                      <FormInput label="Chave PIX" value={form.pixKey} onChange={(value) => updateAdditionalDataField("pixKey", value)} error={fieldErrors.pixKey} />
+                      <FormInput label="Chave PIX" value={form.pixKey} onChange={(value) => updateAdditionalDataField("pixKey", value)} error={fieldErrors.pixKey} {...getPixInputProps(form.pixKeyType)} />
                       <p className="mt-1 text-xs font-semibold text-muted">{getPixKeyFormatHint(form.pixKeyType)}</p>
                     </div>
                   </div>
@@ -6277,12 +6326,14 @@ export function SchedulesPage() {
             </div>
           </div>
           <div className="overflow-x-auto">
-            {scheduleRows.length ? <table className="w-full min-w-[960px] border-collapse text-[11.5px]">
+            {scheduleRows.length ? <table className="w-full min-w-[1080px] border-collapse text-[11.5px]">
               <thead>
                 <tr className="border-b border-border bg-slate-50 text-left text-xs font-bold uppercase tracking-wide text-muted">
                   <th className="px-3 py-2">Colaborador</th>
                   <th className="px-3 py-2">Cargo</th>
                   <th className="px-3 py-2">LOB</th>
+                  <th className="px-2 py-2 text-center">Escala</th>
+                  <th className="px-2 py-2 text-center">Folga</th>
                   {visibleScheduleDates.map((dateIso) => (
                     <th key={dateIso} className="px-1.5 py-2 text-center">{formatScheduleDateHeader(dateIso)}</th>
                   ))}
@@ -6290,7 +6341,10 @@ export function SchedulesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/70 bg-white">
-                {scheduleRows.map((row) => (
+                {scheduleRows.map((row) => {
+                  const workDays = countScheduleStatuses(row.days, scheduleWorkCountStatuses);
+                  const dayOffDays = countScheduleStatuses(row.days, scheduleDayOffCountStatuses);
+                  return (
                   <tr key={row.employee.id} className="hover:bg-blue-50/30">
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-2.5">
@@ -6302,6 +6356,8 @@ export function SchedulesPage() {
                     </td>
                     <td className="px-3 py-2">{row.employee.role}</td>
                     <td className="px-3 py-2">{row.employee.lob}</td>
+                    <td className="px-2 py-2 text-center"><span className="inline-flex min-w-10 justify-center rounded-full border border-blue-100 bg-blue-50 px-2 py-1 text-xs font-black text-blue-700">{workDays}</span></td>
+                    <td className="px-2 py-2 text-center"><span className="inline-flex min-w-10 justify-center rounded-full border border-emerald-100 bg-emerald-50 px-2 py-1 text-xs font-black text-emerald-700">{dayOffDays}</span></td>
                     {row.days.map((value, index) => {
                       const hourCell = row.workHours?.[index] ?? null;
                       const slotLabel = scheduleSlotDisplayLabel(value);
@@ -6342,7 +6398,8 @@ export function SchedulesPage() {
                       </button>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table> : <div className="p-8"><EmptyState title="Nenhum cronograma importado" description="Importe um cronograma para começar a visualizar a operação." /></div>}
           </div>
@@ -9068,6 +9125,9 @@ export function EmployeeMapPage() {
   const [skillFilter, setSkillFilter] = useState("Todos");
   const [waveFilter, setWaveFilter] = useState("Todos");
   const [shiftFilter, setShiftFilter] = useState("Todos");
+  const [employeeBatchWbs, setEmployeeBatchWbs] = useState<string[]>([]);
+  const [employeeBatchText, setEmployeeBatchText] = useState("");
+  const [employeeBatchOpen, setEmployeeBatchOpen] = useState(false);
   const [employeeFilterOptions, setEmployeeFilterOptions] = useState<{ skills: string[]; waves: string[]; statuses?: string[] }>({ skills: [], waves: [], statuses: [] });
   const [additionalDataStatusFilter, setAdditionalDataStatusFilter] = useState("Todos");
   const [additionalDataTracking, setAdditionalDataTracking] = useState<AdditionalDataTrackingResponse | null>(null);
@@ -9123,7 +9183,7 @@ export function EmployeeMapPage() {
   const employeeSupervisorOptions = employeeSettings?.supervisors?.filter((supervisor) => supervisor.status !== "INACTIVE") ?? [];
   const employeeSkillOptions = ["Todos", "SEM_SKILL", ...employeeFilterOptions.skills.filter(Boolean)];
   const employeeWaveOptions = ["Todos", "SEM_WAVE", ...employeeFilterOptions.waves.filter(Boolean)];
-  const hasEmployeeFilters = Boolean(query.trim()) || lobFilter !== "Todos" || statusFilter !== "Todos" || supervisorFilter !== "Todos" || skillFilter !== "Todos" || waveFilter !== "Todos" || shiftFilter !== "Todos";
+  const hasEmployeeFilters = Boolean(query.trim()) || employeeBatchWbs.length > 0 || lobFilter !== "Todos" || statusFilter !== "Todos" || supervisorFilter !== "Todos" || skillFilter !== "Todos" || waveFilter !== "Todos" || shiftFilter !== "Todos";
   const isAdmin = session?.user?.role === "ADMIN";
   const isSupervisorUser = session?.user?.role === "SUPERVISOR";
   const normalizedEmployeeMapRole = String(session?.user?.role ?? "").toUpperCase();
@@ -9157,7 +9217,7 @@ export function EmployeeMapPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canViewAdditionalDataTracking, additionalDataStatusFilter]);
 
-  async function loadEmployees(options?: { nextQuery?: string; nextLob?: string; nextStatus?: string; nextSupervisor?: string; nextSkill?: string; nextWave?: string; nextShift?: string; nextPage?: number }) {
+  async function loadEmployees(options?: { nextQuery?: string; nextLob?: string; nextStatus?: string; nextSupervisor?: string; nextSkill?: string; nextWave?: string; nextShift?: string; nextBatchWbs?: string[]; nextPage?: number }) {
     setEmployeeLoading(true);
     const nextQuery = options?.nextQuery ?? query;
     const nextLob = options?.nextLob ?? lobFilter;
@@ -9166,6 +9226,7 @@ export function EmployeeMapPage() {
     const nextSkill = options?.nextSkill ?? skillFilter;
     const nextWave = options?.nextWave ?? waveFilter;
     const nextShift = options?.nextShift ?? shiftFilter;
+    const nextBatchWbs = options?.nextBatchWbs ?? employeeBatchWbs;
     const nextPage = options?.nextPage ?? employeePage;
     const params = new URLSearchParams({ summary: "true", limit: "50", page: String(nextPage) });
     if (nextQuery.trim()) params.set("search", nextQuery.trim());
@@ -9175,15 +9236,21 @@ export function EmployeeMapPage() {
     if (nextSkill !== "Todos") params.set("skill", nextSkill);
     if (nextWave !== "Todos") params.set("wave", nextWave);
     if (nextShift !== "Todos") params.set("shiftId", nextShift);
+    if (nextBatchWbs.length) params.set("wbLogins", serializeWbLogins(nextBatchWbs));
     try {
       const employeePayload = await apiJson<EmployeeListResponse>(`/api/employees?${params.toString()}`);
       if (!employeePayload.data?.length && Number(employeePayload.total ?? 0) > 0 && nextPage > 1) {
         setEmployeePage(1);
-        await loadEmployees({ nextQuery, nextLob, nextStatus, nextSupervisor, nextSkill, nextWave, nextShift, nextPage: 1 });
+        await loadEmployees({ nextQuery, nextLob, nextStatus, nextSupervisor, nextSkill, nextWave, nextShift, nextBatchWbs, nextPage: 1 });
         return;
       }
       setEmployeeRows(employeePayload.data);
 	      setEmployeeFilterOptions(employeePayload.filterOptions ?? { skills: [], waves: [], statuses: [] });
+      if (employeePayload.batchWb?.notFound.length) {
+        setEmployeeMessage(`${employeePayload.batchWb.applied.length} login(s) aplicados. ${employeePayload.batchWb.notFound.length} não encontrado(s): ${employeePayload.batchWb.notFound.join(", ")}.`);
+      } else if (employeeMessage.includes("login(s) aplicados")) {
+        setEmployeeMessage("");
+      }
       setEmployeePagination({
         total: employeePayload.total ?? employeePayload.data.length,
         page: employeePayload.page ?? nextPage,
@@ -9199,6 +9266,34 @@ export function EmployeeMapPage() {
     } finally {
       setEmployeeLoading(false);
     }
+  }
+
+  function addEmployeeBatchWbs() {
+    const parsed = parseWbLoginBatch(employeeBatchText);
+    if (!parsed.values.length) {
+      setEmployeeMessage("Cole um ou mais WB/Login para aplicar o filtro em lote.");
+      return;
+    }
+    const nextBatchWbs = Array.from(new Set([...employeeBatchWbs, ...parsed.values]));
+    setEmployeeBatchWbs(nextBatchWbs);
+    setEmployeeBatchText("");
+    setEmployeeBatchOpen(false);
+    setEmployeePage(1);
+    setEmployeeMessage(`${parsed.values.length} login(s) adicionados ao filtro em lote${parsed.duplicatesRemoved ? `; ${parsed.duplicatesRemoved} duplicado(s) ignorado(s)` : ""}.`);
+    void loadEmployees({ nextBatchWbs, nextPage: 1 });
+  }
+
+  function removeEmployeeBatchWb(value: string) {
+    const nextBatchWbs = employeeBatchWbs.filter((item) => item !== value);
+    setEmployeeBatchWbs(nextBatchWbs);
+    setEmployeePage(1);
+    void loadEmployees({ nextBatchWbs, nextPage: 1 });
+  }
+
+  function clearEmployeeBatchWbs() {
+    setEmployeeBatchWbs([]);
+    setEmployeePage(1);
+    void loadEmployees({ nextBatchWbs: [], nextPage: 1 });
   }
 
   async function loadAdditionalDataTracking(options?: { nextQuery?: string; nextLob?: string; nextSupervisor?: string; nextSkill?: string; nextWave?: string; nextStatus?: string }) {
@@ -9438,9 +9533,41 @@ export function EmployeeMapPage() {
               <option value="Todos">Todos os turnos</option>
               {employeeShiftOptions.map((shift) => <option key={shift.id} value={shift.id}>{cleanShiftName(shift.name)}</option>)}
             </select>
+            <div className="rounded-lg border border-dashed border-blue-200 bg-blue-50/50 p-3 md:col-span-2 xl:col-span-9">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-black uppercase text-blue-700">Filtro em lote por WB/Login</p>
+                  <p className="text-xs font-semibold text-muted">Cole vários logins e combine com LOB, status, supervisor, skill, wave e turno.</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={() => setEmployeeBatchOpen((current) => !current)} className="inline-flex h-8 items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 text-xs font-extrabold text-blue-700">
+                    <Plus className="h-3.5 w-3.5" /> Adicionar múltiplos
+                  </button>
+                  {employeeBatchWbs.length ? <button type="button" onClick={clearEmployeeBatchWbs} className="h-8 rounded-lg border border-border bg-white px-3 text-xs font-extrabold text-navy-950">Limpar WBs</button> : null}
+                </div>
+              </div>
+              {employeeBatchOpen ? (
+                <div className="mt-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
+                  <textarea value={employeeBatchText} onChange={(event) => setEmployeeBatchText(event.target.value)} className="min-h-24 rounded-lg border border-border bg-white p-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100" placeholder={"wb_joao01\nwb_maria02; wb_pedro03"} />
+                  <div className="flex items-end">
+                    <button type="button" onClick={addEmployeeBatchWbs} className="h-10 rounded-lg bg-blue-600 px-4 text-sm font-extrabold text-white">Aplicar lote</button>
+                  </div>
+                </div>
+              ) : null}
+              {employeeBatchWbs.length ? (
+                <div className="mt-3 flex max-h-24 flex-wrap gap-2 overflow-y-auto pr-1">
+                  {employeeBatchWbs.map((value) => (
+                    <span key={value} className="inline-flex items-center gap-2 rounded-full border border-blue-200 bg-white px-3 py-1 text-xs font-extrabold text-blue-700">
+                      {value}
+                      <button type="button" onClick={() => removeEmployeeBatchWb(value)} className="text-blue-400 hover:text-red-600">×</button>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
             <div className="flex gap-2 md:col-span-2 xl:col-span-9 xl:justify-end">
               <button onClick={() => { setEmployeePage(1); void loadEmployees({ nextPage: 1 }); void loadAdditionalDataTracking(); }} className="h-10 rounded-lg bg-blue-600 px-5 text-sm font-bold text-white">Buscar</button>
-              <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setAdditionalDataStatusFilter("Todos"); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextPage: 1 }); void loadAdditionalDataTracking({ nextQuery: "", nextLob: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextStatus: "Todos" }); }} className="h-10 rounded-lg border border-border px-5 text-sm font-bold">Limpar filtros</button>
+              <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setEmployeeBatchWbs([]); setAdditionalDataStatusFilter("Todos"); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextBatchWbs: [], nextPage: 1 }); void loadAdditionalDataTracking({ nextQuery: "", nextLob: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextStatus: "Todos" }); }} className="h-10 rounded-lg border border-border px-5 text-sm font-bold">Limpar filtros</button>
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -9526,7 +9653,7 @@ export function EmployeeMapPage() {
                 <EmptyState title={hasEmployeeFilters ? "Nenhum colaborador encontrado para os filtros selecionados" : "Nenhum colaborador encontrado"} description={hasEmployeeFilters ? "Limpe os filtros para voltar a listar a base real disponível para seu perfil." : "Aprove cadastros ou importe colaboradores para iniciar a base."} />
                 {hasEmployeeFilters ? (
                   <div className="mt-3 text-center">
-                    <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextPage: 1 }); }} className="rounded-lg border border-border px-4 py-2 text-sm font-bold text-navy-950">Limpar filtros</button>
+                    <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setEmployeeBatchWbs([]); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextBatchWbs: [], nextPage: 1 }); }} className="rounded-lg border border-border px-4 py-2 text-sm font-bold text-navy-950">Limpar filtros</button>
                   </div>
                 ) : null}
               </div>
@@ -10166,110 +10293,513 @@ function InfoLine({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
+type MuralPostClient = {
+  id: string;
+  title: string;
+  content: string;
+  contentType: string;
+  imageUrl?: string;
+  mediaUrl?: string;
+  externalUrl?: string;
+  attachmentUrl?: string;
+  targetRoles: string[];
+  targetLobIds: string[];
+  authorName: string;
+  authorEmail?: string;
+  authorRole: string;
+  status: string;
+  priority: string;
+  isPinned: boolean;
+  requiresRead?: boolean;
+  publishAt: string;
+  expiresAt?: string;
+  archivedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  canManage: boolean;
+};
+
+type MuralBirthdayClient = {
+  employeeId: string;
+  name: string;
+  lob: string;
+  day: number;
+  month: number;
+  dateLabel: string;
+  isToday: boolean;
+};
+
+type MuralBirthdaysPayload = {
+  today: MuralBirthdayClient[];
+  month: MuralBirthdayClient[];
+};
+
+type MuralPostFormState = {
+  title: string;
+  content: string;
+  contentType: string;
+  imageUrl: string;
+  mediaUrl: string;
+  externalUrl: string;
+  attachmentUrl: string;
+  targetRoles: string[];
+  targetLobIds: string[];
+  priority: string;
+  isPinned: boolean;
+  status: string;
+  expiresAt: string;
+};
+
+const muralTargetRoles = [
+  { value: "TODOS", label: "Todos" },
+  { value: "AGENTES", label: "Agentes" },
+  { value: "SUPERVISORES", label: "Supervisores" },
+  { value: "ADMINISTRADORES", label: "Administradores" },
+  { value: "WFM", label: "WFM" },
+  { value: "RH", label: "RH" },
+  { value: "GESTAO", label: "Gestão" }
+];
+
+const muralContentTypes = ["Texto simples", "Texto com link", "Imagem", "Vídeo", "Anexo", "Comunicado fixado", "Novidade do sistema", "Campanha interna"];
+
+function emptyMuralPostForm(): MuralPostFormState {
+  return {
+    title: "",
+    content: "",
+    contentType: "Texto simples",
+    imageUrl: "",
+    mediaUrl: "",
+    externalUrl: "",
+    attachmentUrl: "",
+    targetRoles: ["TODOS"],
+    targetLobIds: [],
+    priority: "MEDIA",
+    isPinned: false,
+    status: "PUBLICADO",
+    expiresAt: ""
+  };
+}
+
+function muralPriorityLabel(priority: string) {
+  const labels: Record<string, string> = {
+    BAIXA: "Baixa",
+    MEDIA: "Média",
+    ALTA: "Alta",
+    CRITICA: "Crítica"
+  };
+  return labels[priority] ?? priority;
+}
+
+function muralContentIcon(type: string) {
+  const normalized = normalizePerformanceSheetName(type);
+  if (normalized.includes("video")) return Send;
+  if (normalized.includes("anexo")) return FileText;
+  if (normalized.includes("campanha")) return Star;
+  if (normalized.includes("sistema")) return ShieldCheck;
+  if (normalized.includes("link")) return Copy;
+  return Megaphone;
+}
+
+function muralFormToPreview(form: MuralPostFormState): MuralPostClient {
+  const now = new Date().toISOString();
+  return {
+    id: "preview",
+    title: form.title || "Título do aviso",
+    content: form.content || "Resumo do comunicado aparecerá aqui.",
+    contentType: form.contentType,
+    imageUrl: form.imageUrl,
+    mediaUrl: form.mediaUrl,
+    externalUrl: form.externalUrl,
+    attachmentUrl: form.attachmentUrl,
+    targetRoles: form.targetRoles,
+    targetLobIds: form.targetLobIds,
+    authorName: "Preview",
+    authorRole: "ADMIN",
+    status: form.status,
+    priority: form.priority,
+    isPinned: form.isPinned,
+    publishAt: now,
+    expiresAt: form.expiresAt,
+    createdAt: now,
+    updatedAt: now,
+    canManage: true
+  };
+}
+
+function formatDateTimeShort(value?: string) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "America/Sao_Paulo"
+  });
+}
+
+function MuralPostVisual({ post, large = false }: { post: Pick<MuralPostClient, "title" | "contentType" | "imageUrl">; large?: boolean }) {
+  const Icon = muralContentIcon(post.contentType);
+  const hasImage = Boolean(post.imageUrl?.trim());
+  return (
+    <div
+      className={cn(
+        "relative overflow-hidden bg-blue-950",
+        large ? "min-h-[260px]" : "min-h-[160px] md:min-h-full"
+      )}
+      style={hasImage ? { backgroundImage: `linear-gradient(135deg, rgba(15, 23, 42, .34), rgba(37, 99, 235, .28)), url("${post.imageUrl}")`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}
+    >
+      {!hasImage ? (
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,.7),transparent_34%),linear-gradient(135deg,#0f172a,#1d4ed8)]" />
+      ) : null}
+      <div className="relative flex h-full min-h-[inherit] flex-col justify-between p-4 text-white">
+        <span className="inline-flex w-fit items-center gap-2 rounded-full bg-white/18 px-3 py-1 text-xs font-extrabold backdrop-blur">
+          <Icon className="h-4 w-4" />
+          {post.contentType}
+        </span>
+        {!hasImage ? (
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wide text-blue-100">Mural</p>
+            <p className="mt-1 line-clamp-2 text-xl font-black">{post.title}</p>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export function MuralPage() {
-  const [items, setItems] = useState<AnnouncementItem[]>(announcements.map((item, index) => ({ id: `ANN-${index + 1}`, ...item })));
+  const [posts, setPosts] = useState<MuralPostClient[]>([]);
+  const [birthdays, setBirthdays] = useState<MuralBirthdaysPayload>({ today: [], month: [] });
+  const [muralLoading, setMuralLoading] = useState(true);
+  const [muralMessage, setMuralMessage] = useState("");
+  const [canManageMural, setCanManageMural] = useState(false);
+  const [selectedPost, setSelectedPost] = useState<MuralPostClient | null>(null);
+  const [editingPost, setEditingPost] = useState<MuralPostClient | null>(null);
+  const [muralFormOpen, setMuralFormOpen] = useState(false);
+  const [muralForm, setMuralForm] = useState<MuralPostFormState>(() => emptyMuralPostForm());
+  const [muralLobs, setMuralLobs] = useState<Array<{ id: string; name: string }>>([]);
+  const [savingMuralPost, setSavingMuralPost] = useState(false);
+  const [muralFilters, setMuralFilters] = useState({ q: "", status: "Todos", priority: "Todos", contentType: "Todos", lobId: "Todos" });
 
   useEffect(() => {
-    apiJson<{ data: AnnouncementItem[] }>("/api/announcements")
-      .then((payload) => setItems(payload.data))
-      .catch(() => setItems(announcements.map((item, index) => ({ id: `ANN-${index + 1}`, ...item }))));
+    void loadMural();
+    apiJson<{ data: SystemSettings }>("/api/settings")
+      .then((payload) => setMuralLobs(payload.data.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => ({ id: lob.id, name: lob.name }))))
+      .catch(() => setMuralLobs([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function confirmRead(announcementId: string) {
-    const payload = await apiJson<{ data: AnnouncementItem[] }>("/api/announcements/read", {
-      method: "POST",
-      body: JSON.stringify({ announcementId })
+  async function loadMural() {
+    setMuralLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (muralFilters.q.trim()) params.set("q", muralFilters.q.trim());
+      if (muralFilters.priority !== "Todos") params.set("priority", muralFilters.priority);
+      if (muralFilters.contentType !== "Todos") params.set("contentType", muralFilters.contentType);
+      if (muralFilters.lobId !== "Todos") params.set("lobId", muralFilters.lobId);
+      if (canManageMural && muralFilters.status !== "Todos") params.set("status", muralFilters.status);
+      const [postsPayload, birthdayPayload] = await Promise.all([
+        apiJson<{ data: MuralPostClient[]; canManage: boolean }>(`/api/mural/posts${params.toString() ? `?${params.toString()}` : ""}`),
+        apiJson<{ data: MuralBirthdaysPayload; canManage: boolean }>("/api/mural/birthdays")
+      ]);
+      setPosts(postsPayload.data);
+      setBirthdays(birthdayPayload.data);
+      setCanManageMural(postsPayload.canManage);
+      setMuralMessage("");
+    } catch (error) {
+      setPosts([]);
+      setMuralMessage(error instanceof Error ? error.message : "Não foi possível carregar o mural. Tente novamente.");
+    } finally {
+      setMuralLoading(false);
+    }
+  }
+
+  function openNewMuralPost() {
+    setEditingPost(null);
+    setMuralForm(emptyMuralPostForm());
+    setMuralFormOpen(true);
+  }
+
+  function openEditMuralPost(post: MuralPostClient) {
+    setEditingPost(post);
+    setMuralForm({
+      title: post.title,
+      content: post.content,
+      contentType: post.contentType,
+      imageUrl: post.imageUrl ?? "",
+      mediaUrl: post.mediaUrl ?? "",
+      externalUrl: post.externalUrl ?? "",
+      attachmentUrl: post.attachmentUrl ?? "",
+      targetRoles: post.targetRoles.length ? post.targetRoles : ["TODOS"],
+      targetLobIds: post.targetLobIds,
+      priority: post.priority,
+      isPinned: post.isPinned,
+      status: post.status,
+      expiresAt: post.expiresAt ? post.expiresAt.slice(0, 10) : ""
     });
-    setItems(payload.data);
+    setMuralFormOpen(true);
+  }
+
+  async function saveMuralPost() {
+    setSavingMuralPost(true);
+    try {
+      await apiJson(editingPost ? `/api/mural/posts/${editingPost.id}` : "/api/mural/posts", {
+        method: editingPost ? "PUT" : "POST",
+        body: JSON.stringify(muralForm)
+      });
+      setMuralFormOpen(false);
+      setEditingPost(null);
+      await loadMural();
+      setMuralMessage(editingPost ? "Aviso atualizado com sucesso." : "Aviso criado com sucesso.");
+    } catch (error) {
+      setMuralMessage(error instanceof Error ? error.message : "Não foi possível salvar o aviso.");
+    } finally {
+      setSavingMuralPost(false);
+    }
+  }
+
+  async function changeMuralPostStatus(post: MuralPostClient, status: string) {
+    try {
+      await apiJson(`/api/mural/posts/${post.id}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status })
+      });
+      await loadMural();
+      setMuralMessage("Status do aviso atualizado.");
+    } catch (error) {
+      setMuralMessage(error instanceof Error ? error.message : "Não foi possível atualizar o aviso.");
+    }
+  }
+
+  function updateMuralTargetRole(role: string, checked: boolean) {
+    setMuralForm((current) => {
+      const next = checked ? [...current.targetRoles, role] : current.targetRoles.filter((item) => item !== role);
+      return { ...current, targetRoles: role === "TODOS" && checked ? ["TODOS"] : Array.from(new Set(next.filter((item) => item !== "TODOS" || role === "TODOS"))) };
+    });
+  }
+
+  function updateMuralTargetLob(lobId: string, checked: boolean) {
+    setMuralForm((current) => ({ ...current, targetLobIds: checked ? Array.from(new Set([...current.targetLobIds, lobId])) : current.targetLobIds.filter((item) => item !== lobId) }));
   }
 
   return (
-    <div>
-      <PageHeader title="Mural de Avisos" description="Fique por dentro das comunicações, avisos e campanhas da empresa." icon={Megaphone} actions={<TopActions />} />
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_430px]">
+    <div className="space-y-4">
+      <PageHeader
+        title="Mural de Avisos"
+        description="Fique por dentro dos comunicados, campanhas e novidades."
+        icon={Megaphone}
+        actions={<div className="flex flex-wrap gap-2">{canManageMural ? <button onClick={openNewMuralPost} className="inline-flex h-10 items-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white"><Plus className="h-4 w-4" /> Novo aviso</button> : null}<TopActions /></div>}
+      />
+      {muralMessage ? <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{muralMessage}</div> : null}
+      {muralLoading ? <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">Carregando mural...</div> : null}
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="space-y-5">
           <div className="overflow-hidden rounded-xl bg-navy-950 text-white shadow-card">
-            <div className="grid min-h-[240px] gap-6 p-8 md:grid-cols-[1fr_360px] md:items-center">
+            <div className="grid min-h-[210px] gap-5 p-6 md:grid-cols-[1fr_320px] md:items-center">
               <div>
-                <span className="rounded-md bg-white/14 px-3 py-1 text-xs font-bold uppercase">Campanha do mês</span>
-                <h2 className="mt-5 text-3xl font-extrabold">Juntos, vamos mais longe!</h2>
-                <p className="mt-3 max-w-xl text-blue-100">Participe da campanha de engajamento e concorra a prêmios incríveis. Cada ação faz a diferença.</p>
-                <button className="mt-6 rounded-lg bg-blue-600 px-5 py-3 text-sm font-bold">Saiba mais</button>
+                <span className="rounded-md bg-white/14 px-3 py-1 text-xs font-bold uppercase">Comunicação interna</span>
+                <h2 className="mt-5 text-3xl font-extrabold">Avisos importantes em um só lugar</h2>
+                <p className="mt-3 max-w-xl text-blue-100">Comunicados com segmentação por perfil e LOB, imagens, links e campanhas internas.</p>
               </div>
-              <div className="hidden h-44 rounded-xl bg-[linear-gradient(135deg,rgba(37,99,235,.55),rgba(124,58,237,.28)),url('https://images.unsplash.com/photo-1552664730-d307ca884978?auto=format&fit=crop&w=900&q=80')] bg-cover bg-center md:block" />
+              <div className="hidden h-40 rounded-xl bg-[linear-gradient(135deg,rgba(37,99,235,.52),rgba(2,6,23,.55)),url('https://images.unsplash.com/photo-1552664730-d307ca884978?auto=format&fit=crop&w=900&q=80')] bg-cover bg-center md:block" />
             </div>
           </div>
-          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
-            <section>
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-lg font-extrabold text-navy-950">Comunicados Importantes</h2>
-                <button className="text-sm font-bold text-blue-600">Ver todos</button>
-              </div>
-              <div className="grid gap-4 md:grid-cols-3">
-                {items.map((item) => (
-                  <div key={item.id} className="card p-4">
-                    <StatusBadge status={item.category} />
-                    <h3 className="mt-4 font-extrabold text-navy-950">{item.title}</h3>
-                    <p className="mt-2 min-h-10 text-sm text-muted">{item.body}</p>
-                    <div className="mt-5 flex items-center justify-between text-xs text-muted">
-                      <span>{item.date}</span>
-                      <button onClick={() => confirmRead(item.id)} className={cn("rounded-lg px-3 py-2 font-bold text-white", item.read ? "bg-emerald-600" : "bg-blue-600")}>
-                        {item.read ? "Lido" : "Confirmar Leitura"}
-                      </button>
+          <div className="rounded-xl border border-border bg-white p-3 shadow-sm">
+            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[minmax(180px,1fr)_150px_170px_170px_170px_auto]">
+              <input value={muralFilters.q} onChange={(event) => setMuralFilters({ ...muralFilters, q: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Buscar aviso..." />
+              {canManageMural ? (
+                <select value={muralFilters.status} onChange={(event) => setMuralFilters({ ...muralFilters, status: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
+                  {["Todos", "PUBLICADO", "RASCUNHO", "INATIVO", "ARQUIVADO"].map((item) => <option key={item}>{item}</option>)}
+                </select>
+              ) : <span className="hidden xl:block" />}
+              <select value={muralFilters.priority} onChange={(event) => setMuralFilters({ ...muralFilters, priority: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
+                {["Todos", "BAIXA", "MEDIA", "ALTA", "CRITICA"].map((item) => <option key={item}>{item}</option>)}
+              </select>
+              <select value={muralFilters.contentType} onChange={(event) => setMuralFilters({ ...muralFilters, contentType: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
+                {["Todos", ...muralContentTypes].map((item) => <option key={item}>{item}</option>)}
+              </select>
+              <select value={muralFilters.lobId} onChange={(event) => setMuralFilters({ ...muralFilters, lobId: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
+                <option value="Todos">Todas as LOBs</option>
+                {muralLobs.map((lob) => <option key={lob.id} value={lob.id}>{lob.name}</option>)}
+              </select>
+              <button type="button" onClick={() => void loadMural()} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-navy-950 px-4 text-sm font-extrabold text-white">
+                <RefreshCw className={cn("h-4 w-4", muralLoading && "animate-spin")} /> Filtrar
+              </button>
+            </div>
+          </div>
+          <section className="space-y-3">
+            <h2 className="text-lg font-extrabold text-navy-950">Comunicados</h2>
+            {posts.length ? (
+              <div className="space-y-3">
+                {posts.map((post) => (
+                  <article key={post.id} className={cn("card overflow-hidden p-0", post.isPinned && "ring-1 ring-blue-200")}>
+                    <div className="grid gap-0 md:grid-cols-[210px_minmax(0,1fr)]">
+                      <MuralPostVisual post={post} />
+                      <div className="flex min-w-0 flex-col p-4">
+                        <div className="flex flex-wrap items-center gap-2">
+                          {post.isPinned ? <StatusBadge status="Fixado" /> : null}
+                          <StatusBadge status={muralPriorityLabel(post.priority)} />
+                          {canManageMural ? <StatusBadge status={post.status} /> : null}
+                        </div>
+                        <h3 className="mt-3 text-lg font-extrabold text-navy-950">{post.title}</h3>
+                        <p className="mt-2 line-clamp-2 text-sm text-muted">{post.content}</p>
+                        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs font-semibold text-muted">
+                          <span>{post.authorName} • {post.authorRole} • {formatDateTimeShort(post.publishAt)}</span>
+                          <div className="flex flex-wrap gap-2">
+                            <button onClick={() => setSelectedPost(post)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">Ver detalhes</button>
+                            {canManageMural ? <button onClick={() => openEditMuralPost(post)} className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-bold text-navy-950">Editar</button> : null}
+                            {canManageMural && post.status !== "ARQUIVADO" ? <button onClick={() => void changeMuralPostStatus(post, "ARQUIVADO")} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">Arquivar</button> : null}
+                          </div>
+                        </div>
+                      </div>
                     </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <EmptyState title="Nenhum comunicado disponível" description="Quando houver avisos destinados ao seu perfil, eles aparecerão aqui." />
+            )}
+          </section>
+        </div>
+        <aside className="space-y-4">
+          <Panel title="Aniversariantes de hoje">
+            {birthdays.today.length ? birthdays.today.map((item) => (
+              <div key={item.employeeId} className="mb-3 flex items-center gap-3 rounded-lg border border-border p-3 last:mb-0">
+                <span className="grid h-10 w-10 place-items-center rounded-full bg-blue-50 font-black text-blue-700">{initials(item.name)}</span>
+                <div>
+                  <p className="font-extrabold text-navy-950">{item.name}</p>
+                  <p className="text-xs font-semibold text-muted">{item.lob} • {item.dateLabel}</p>
+                </div>
+              </div>
+            )) : <EmptyState title="Nenhum aniversariante hoje" description="A lista usa apenas dia e mês da data de nascimento." />}
+          </Panel>
+          <Panel title="Aniversariantes do mês">
+            {birthdays.month.length ? (
+              <div className="max-h-[360px] space-y-2 overflow-y-auto pr-1">
+                {birthdays.month.map((item) => (
+                  <div key={item.employeeId} className="flex items-center justify-between rounded-lg border border-border px-3 py-2 text-sm">
+                    <span className="truncate font-bold text-navy-950">{item.name}</span>
+                    <span className="text-xs font-extrabold text-blue-700">{item.dateLabel}</span>
                   </div>
                 ))}
               </div>
-            </section>
-            <Panel title="Avisos Fixados" action="Ver todos">
-              {pinnedAnnouncements.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <div key={item.title} className="mb-4 flex items-center gap-3 border-b border-border pb-4 last:mb-0 last:border-b-0 last:pb-0">
-                    <div className={cn("grid h-11 w-11 place-items-center rounded-lg", item.tone === "red" ? "bg-red-50 text-red-500" : "bg-emerald-50 text-emerald-600")}>
-                      <Icon className="h-5 w-5" />
-                    </div>
-                    <div>
-                      <p className="font-bold text-navy-950">{item.title}</p>
-                      <p className="text-xs text-muted">{item.subtitle}</p>
-                    </div>
-                  </div>
-                );
-              })}
-            </Panel>
-          </div>
-          <Panel title="Categorias de Comunicação">
-            <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-              {communicationCategories.map((category) => {
-                const Icon = category.icon;
-                return (
-                  <div key={category.label} className="rounded-lg border border-border p-4">
-                    <Icon className="h-7 w-7 text-blue-600" />
-                    <p className="mt-3 text-sm font-bold text-navy-950">{category.label}</p>
-                    <p className="text-xs font-bold text-blue-600">{category.count}</p>
-                  </div>
-                );
-              })}
+            ) : <EmptyState title="Nenhum dado de aniversário disponível" description="Quando houver data de nascimento cadastrada, ela aparece aqui sem mostrar o ano." />}
+          </Panel>
+          <Panel title="Dicas do Mural">
+            <div className="space-y-3 text-sm font-semibold text-muted">
+              <p>Posts podem ser direcionados por perfil e LOB.</p>
+              <p>Imagens, vídeos e anexos usam links externos seguros.</p>
+              <p>Comunicados fixados aparecem primeiro no feed.</p>
             </div>
           </Panel>
-        </div>
-        <Panel title="Notificações">
-          <div className="mb-4 grid grid-cols-2 rounded-lg bg-slate-50 p-1 text-center text-sm font-bold">
-            <button className="rounded-md bg-white py-2 text-blue-600 shadow-soft">Não lidas 5</button>
-            <button className="py-2 text-muted">Recentes</button>
-          </div>
-          <div className="space-y-3">
-            {notificationItems.map((item) => (
-              <div key={item.title} className="rounded-lg border border-border bg-white p-4">
-                <p className="font-bold text-navy-950">{item.title}</p>
-                <p className="text-sm text-muted">{item.body}</p>
-                <p className="mt-2 text-xs text-muted">{item.date}</p>
-              </div>
-            ))}
-          </div>
-          <button onClick={() => confirmRead("ALL")} className="mt-5 w-full rounded-lg border border-border px-4 py-3 text-sm font-bold text-blue-600">Marcar todas como lidas</button>
-        </Panel>
+        </aside>
       </div>
+
+      {selectedPost ? (
+        <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-navy-950/45 p-4">
+          <div className="w-full max-w-3xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <MuralPostVisual post={selectedPost} large />
+            <div className="p-5">
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                {selectedPost.isPinned ? <StatusBadge status="Fixado" /> : null}
+                <StatusBadge status={muralPriorityLabel(selectedPost.priority)} />
+                <StatusBadge status={selectedPost.contentType} />
+              </div>
+              <h2 className="text-2xl font-black text-navy-950">{selectedPost.title}</h2>
+              <p className="mt-3 whitespace-pre-line text-sm leading-6 text-navy-800">{selectedPost.content}</p>
+              <div className="mt-5 grid gap-3 rounded-xl border border-border bg-slate-50 p-4 text-sm sm:grid-cols-2">
+                <InfoLine label="Autor" value={`${selectedPost.authorName} • ${selectedPost.authorRole}`} />
+                <InfoLine label="Publicado em" value={formatDateTimeShort(selectedPost.publishAt)} />
+                <InfoLine label="Público-alvo" value={selectedPost.targetRoles.join(", ") || "Todos"} />
+                <InfoLine label="Expira em" value={selectedPost.expiresAt ? formatDateTimeShort(selectedPost.expiresAt) : "Sem expiração"} />
+              </div>
+              <div className="mt-5 flex flex-wrap justify-end gap-2">
+                {selectedPost.externalUrl ? <a href={selectedPost.externalUrl} target="_blank" rel="noopener noreferrer" className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white">Abrir link</a> : null}
+                {selectedPost.mediaUrl ? <a href={selectedPost.mediaUrl} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700">Abrir mídia</a> : null}
+                {selectedPost.attachmentUrl ? <a href={selectedPost.attachmentUrl} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-border px-4 py-2 text-sm font-bold text-navy-950">Abrir anexo</a> : null}
+                <button onClick={() => setSelectedPost(null)} className="rounded-lg border border-border px-4 py-2 text-sm font-bold text-navy-950">Fechar</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {muralFormOpen ? (
+        <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-navy-950/45 p-4">
+          <div className="w-full max-w-4xl rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-border px-5 py-4">
+              <div>
+                <h2 className="text-xl font-black text-navy-950">{editingPost ? "Editar aviso" : "Novo aviso"}</h2>
+                <p className="text-sm text-muted">Use links externos para imagem, mídia ou anexos.</p>
+              </div>
+              <button onClick={() => setMuralFormOpen(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+            </div>
+            <div className="grid max-h-[75vh] gap-4 overflow-y-auto p-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+              <div className="space-y-3">
+                <FormInput label="Título" value={muralForm.title} onChange={(value) => setMuralForm({ ...muralForm, title: value })} />
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-bold text-muted">Conteúdo</span>
+                  <textarea value={muralForm.content} onChange={(event) => setMuralForm({ ...muralForm, content: event.target.value })} className="min-h-32 w-full rounded-lg border border-border p-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100" />
+                </label>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <FormSelect label="Tipo" value={muralForm.contentType} options={muralContentTypes} onChange={(value) => setMuralForm({ ...muralForm, contentType: value })} />
+                  <FormSelect label="Prioridade" value={muralForm.priority} options={["BAIXA", "MEDIA", "ALTA", "CRITICA"]} onChange={(value) => setMuralForm({ ...muralForm, priority: value })} />
+                  <FormInput label="URL da imagem/capa" value={muralForm.imageUrl} onChange={(value) => setMuralForm({ ...muralForm, imageUrl: value })} />
+                  <FormInput label="URL de mídia" value={muralForm.mediaUrl} onChange={(value) => setMuralForm({ ...muralForm, mediaUrl: value })} />
+                  <FormInput label="Link externo" value={muralForm.externalUrl} onChange={(value) => setMuralForm({ ...muralForm, externalUrl: value })} />
+                  <FormInput label="URL de anexo" value={muralForm.attachmentUrl} onChange={(value) => setMuralForm({ ...muralForm, attachmentUrl: value })} />
+                  <FormInput label="Expira em" type="date" value={muralForm.expiresAt} onChange={(value) => setMuralForm({ ...muralForm, expiresAt: value })} />
+                  <FormSelect label="Status" value={muralForm.status} options={["RASCUNHO", "PUBLICADO", "INATIVO", "ARQUIVADO"]} onChange={(value) => setMuralForm({ ...muralForm, status: value })} />
+                </div>
+                <label className="flex items-center gap-2 rounded-lg border border-border p-3 text-sm font-bold">
+                  <input type="checkbox" checked={muralForm.isPinned} onChange={(event) => setMuralForm({ ...muralForm, isPinned: event.target.checked })} />
+                  Fixar aviso no topo
+                </label>
+                <div>
+                  <p className="mb-2 text-sm font-bold text-muted">Público-alvo</p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {muralTargetRoles.map((role) => (
+                      <label key={role.value} className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-bold">
+                        <input type="checkbox" checked={muralForm.targetRoles.includes(role.value)} onChange={(event) => updateMuralTargetRole(role.value, event.target.checked)} />
+                        {role.label}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="mb-2 text-sm font-bold text-muted">LOB alvo</p>
+                  <div className="grid max-h-40 gap-2 overflow-y-auto sm:grid-cols-2">
+                    {muralLobs.map((lob) => (
+                      <label key={lob.id} className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-bold">
+                        <input type="checkbox" checked={muralForm.targetLobIds.includes(lob.id)} onChange={(event) => updateMuralTargetLob(lob.id, event.target.checked)} />
+                        {lob.name}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div>
+                <p className="mb-2 text-sm font-bold text-muted">Preview</p>
+                <article className="card overflow-hidden p-0">
+                  <MuralPostVisual post={muralFormToPreview(muralForm)} />
+                  <div className="p-4">
+                    <StatusBadge status={muralPriorityLabel(muralForm.priority)} />
+                    <h3 className="mt-3 font-black text-navy-950">{muralForm.title || "Título do aviso"}</h3>
+                    <p className="mt-2 line-clamp-3 text-sm text-muted">{muralForm.content || "Resumo do comunicado aparecerá aqui."}</p>
+                  </div>
+                </article>
+              </div>
+            </div>
+            <div className="flex flex-wrap justify-end gap-2 border-t border-border bg-slate-50 px-5 py-4">
+              <button onClick={() => setMuralFormOpen(false)} className="rounded-lg border border-border bg-white px-4 py-2 text-sm font-bold text-navy-950">Cancelar</button>
+              <button disabled={savingMuralPost} onClick={() => void saveMuralPost()} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-60">{savingMuralPost ? "Salvando..." : "Salvar aviso"}</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -10288,12 +10818,15 @@ export function PerformancePage() {
     role: "Todos",
     skill: "Todos",
     employeeStatus: "Todos",
-    wfhStatus: "Todos"
+    wfhStatus: "Todos",
+    wbLogins: [] as string[]
   }));
   const [performanceSort, setPerformanceSort] = useState<PerformanceSortState>({ by: "", direction: "desc" });
   const [payload, setPayload] = useState<PerformanceDashboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
+  const [batchWbText, setBatchWbText] = useState("");
+  const [batchWbOpen, setBatchWbOpen] = useState(false);
   const [qualityPreview, setQualityPreview] = useState<PerformancePreviewResponse | null>(null);
   const [tnsQualityPreview, setTnsQualityPreview] = useState<PerformancePreviewResponse | null>(null);
   const [cecQualityPreview, setCecQualityPreview] = useState<PerformancePreviewResponse | null>(null);
@@ -10347,6 +10880,7 @@ export function PerformancePage() {
       if (filters.skill !== "Todos") params.set("skill", filters.skill);
       if (filters.employeeStatus !== "Todos") params.set("employeeStatus", filters.employeeStatus);
       if (filters.wfhStatus !== "Todos") params.set("wfhStatus", filters.wfhStatus);
+      if (filters.wbLogins.length) params.set("wbLogins", serializeWbLogins(filters.wbLogins));
       if (performanceSort.by) {
         params.set("sortBy", performanceSort.by);
         params.set("sortDirection", performanceSort.direction);
@@ -10355,7 +10889,11 @@ export function PerformancePage() {
     try {
       const data = await apiJson<PerformanceDashboardResponse>(`/api/performance?${params.toString()}`);
       setPayload(data);
-      setMessage("");
+      if (data.mode === "wfh" && data.filters.batchWb?.notFound.length) {
+        setMessage(`${data.filters.batchWb.applied.length} login(s) aplicados. ${data.filters.batchWb.notFound.length} não encontrado(s): ${data.filters.batchWb.notFound.join(", ")}.`);
+      } else {
+        setMessage("");
+      }
     } catch (error) {
       setPayload(null);
       setMessage(error instanceof Error ? error.message : "Não foi possível carregar Performance.");
@@ -10476,8 +11014,24 @@ export function PerformancePage() {
     }
   }
 
-  function updateFilter(key: keyof typeof filters, value: string) {
+  function updateFilter(key: string, value: string) {
     setFilters((current) => ({ ...current, [key]: value }));
+  }
+
+  function addPerformanceBatchWbs() {
+    const parsed = parseWbLoginBatch(batchWbText);
+    if (!parsed.values.length) {
+      setMessage("Cole um ou mais WB/Login para aplicar o filtro em lote.");
+      return;
+    }
+    setFilters((current) => ({ ...current, wbLogins: Array.from(new Set([...current.wbLogins, ...parsed.values])) }));
+    setBatchWbText("");
+    setBatchWbOpen(false);
+    setMessage(`${parsed.values.length} login(s) adicionados ao filtro em lote${parsed.duplicatesRemoved ? `; ${parsed.duplicatesRemoved} duplicado(s) ignorado(s)` : ""}.`);
+  }
+
+  function removePerformanceBatchWb(value: string) {
+    setFilters((current) => ({ ...current, wbLogins: current.wbLogins.filter((item) => item !== value) }));
   }
 
   function updatePerformanceSort(by: PerformanceSortableMetric) {
@@ -10496,6 +11050,7 @@ export function PerformancePage() {
     if (filters.skill !== "Todos") params.set("skill", filters.skill);
     if (filters.employeeStatus !== "Todos") params.set("employeeStatus", filters.employeeStatus);
     if (filters.wfhStatus !== "Todos") params.set("wfhStatus", filters.wfhStatus);
+    if (filters.wbLogins.length) params.set("wbLogins", serializeWbLogins(filters.wbLogins));
     if (performanceSort.by) {
       params.set("sortBy", performanceSort.by);
       params.set("sortDirection", performanceSort.direction);
@@ -10531,8 +11086,8 @@ export function PerformancePage() {
               }} />
               <PerformanceSelect label="Cargo/Função" value={filters.role} onChange={(value) => updateFilter("role", value)} options={wfhPayload?.filters.roles ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todos os cargos" : value} />
               <PerformanceSelect label="Skill" value={filters.skill} onChange={(value) => updateFilter("skill", value)} options={wfhPayload?.filters.skills ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todas as skills" : value === "SEM_SKILL" ? "Sem skill" : value} />
-              <PerformanceSelect label="Status do agente" value={filters.employeeStatus} onChange={(value) => updateFilter("employeeStatus", value)} options={["Todos", "Ativo", "Desligado"]} />
-              <PerformanceSelect label="WFH" value={filters.wfhStatus} onChange={(value) => updateFilter("wfhStatus", value)} options={["Todos", "Qualificado", "Não-qualificado"]} />
+              <PerformanceSelect label="Status do agente" value={filters.employeeStatus} onChange={(value) => updateFilter("employeeStatus", value)} options={["Todos", "Ativo", "Afastado", "Desligado"]} />
+              <PerformanceSelect label="WFH" value={filters.wfhStatus} onChange={(value) => updateFilter("wfhStatus", value)} options={["Todos", "Qualificado", "Não-qualificado", "Dados insuficientes", "Não aplicável"]} />
             </>
           ) : <div className="hidden lg:block lg:col-span-2 2xl:col-span-7" />}
           <div className="flex items-end justify-end gap-2 sm:col-span-2 lg:col-span-4 2xl:col-span-1">
@@ -10542,6 +11097,40 @@ export function PerformancePage() {
             {visibleActiveTab === "wfh" && wfhPayload?.canExport ? <button onClick={exportPerformance} className="premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold text-navy-950"><Download className="h-4 w-4" /> Exportar</button> : null}
           </div>
         </div>
+        {visibleActiveTab === "wfh" ? (
+          <div className="mt-2 rounded-lg border border-dashed border-blue-200 bg-blue-50/50 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-black uppercase text-blue-700">Filtro em lote por WB/Login</p>
+                <p className="text-xs font-semibold text-muted">Cole vários logins separados por linha, vírgula, ponto e vírgula, tab ou espaço.</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => setBatchWbOpen((current) => !current)} className="inline-flex h-8 items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 text-xs font-extrabold text-blue-700">
+                  <Plus className="h-3.5 w-3.5" /> Adicionar múltiplos
+                </button>
+                {filters.wbLogins.length ? <button type="button" onClick={() => setFilters((current) => ({ ...current, wbLogins: [] }))} className="h-8 rounded-lg border border-border bg-white px-3 text-xs font-extrabold text-navy-950">Limpar todos</button> : null}
+              </div>
+            </div>
+            {batchWbOpen ? (
+              <div className="mt-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
+                <textarea value={batchWbText} onChange={(event) => setBatchWbText(event.target.value)} className="min-h-24 rounded-lg border border-border bg-white p-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100" placeholder={"wb_joao01\nwb_maria02, wb_pedro03"} />
+                <div className="flex items-end">
+                  <button type="button" onClick={addPerformanceBatchWbs} className="h-10 rounded-lg bg-blue-600 px-4 text-sm font-extrabold text-white">Aplicar lote</button>
+                </div>
+              </div>
+            ) : null}
+            {filters.wbLogins.length ? (
+              <div className="mt-3 flex max-h-24 flex-wrap gap-2 overflow-y-auto pr-1">
+                {filters.wbLogins.map((value) => (
+                  <span key={value} className="inline-flex items-center gap-2 rounded-full border border-blue-200 bg-white px-3 py-1 text-xs font-extrabold text-blue-700">
+                    {value}
+                    <button type="button" onClick={() => removePerformanceBatchWb(value)} className="text-blue-400 hover:text-red-600">×</button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       {message ? <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
@@ -10662,9 +11251,14 @@ export function PerformancePage() {
                         <p className="text-sm font-extrabold text-navy-950">{selectedAgent.employeeName}</p>
                         <p className="text-xs font-bold text-blue-700">{selectedAgent.wbLogin} · {selectedAgent.lob} · {performanceQualityRuleLabel(selectedAgent.qualityRule)} · {selectedAgent.supervisor}</p>
                       </div>
-                      <PerformanceWfhBadge status={selectedAgent.wfhStatus} label={selectedAgent.wfhStatusLabel} />
+                      <PerformanceWfhBadge status={selectedAgent.wfhStatus} label={selectedAgent.wfhStatusLabel} title={selectedAgent.wfhReasons.join(" | ")} />
                     </div>
-                    <p className="mt-2 text-xs font-bold text-muted">Status: {selectedAgent.employeeStatus || "-"} · Submit médio/dia: {formatPerformanceNumber(selectedAgent.submitAveragePerDay)}</p>
+                    <p className="mt-2 text-xs font-bold text-muted">Status: {selectedAgent.employeeStatus || "-"} · Submit médio/dia: {formatPerformanceNumber(selectedAgent.submitAveragePerDay)} · Monitoramento: {selectedAgent.wfhMonitoringLabel}</p>
+                    {selectedAgent.wfhReasons.length ? (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {selectedAgent.wfhReasons.map((reason) => <span key={reason} className="rounded-full border border-blue-100 bg-white px-2 py-1 text-[11px] font-bold text-navy-700">{reason}</span>)}
+                      </div>
+                    ) : null}
                   </div>
                   <SimpleTable columns={["Semana", "Regra", "Qualidade", "Submit/dia", "AHT", "ABS"]} rows={selectedAgent.weekly.map((week) => [week.weekLabel, performanceQualityRuleLabel(week.qualityRule), formatPerformancePercent(week.quality), formatPerformanceNumber(week.submit), formatPerformanceAht(week.ahtSeconds), formatPerformancePercent(week.abs)])} />
                 </div>
@@ -10747,13 +11341,16 @@ function performanceToneClass(tone: string) {
   return map[tone] ?? "bg-slate-50 text-slate-600";
 }
 
-function PerformanceWfhBadge({ status, label }: { status: "QUALIFIED" | "NOT_QUALIFIED"; label: string }) {
-  const isQualified = status === "QUALIFIED";
+function PerformanceWfhBadge({ status, label, title }: { status: WfhEligibilityClientStatus; label: string; title?: string }) {
+  const className = status === "QUALIFIED"
+    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+    : status === "NOT_APPLICABLE"
+      ? "border-slate-200 bg-slate-50 text-slate-600"
+      : status === "INSUFFICIENT_DATA"
+        ? "border-amber-200 bg-amber-50 text-amber-700"
+        : "border-red-200 bg-red-50 text-red-700";
   return (
-    <span className={cn(
-      "inline-flex items-center whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-extrabold",
-      isQualified ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700"
-    )}>
+    <span title={title} className={cn("inline-flex items-center whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-extrabold", className)}>
       {label}
     </span>
   );
@@ -10798,7 +11395,7 @@ function PerformanceRankingTable({ rows, sort, onSort, onSelect }: { rows: Agent
               </td>
               <td className="px-3 py-2 font-bold text-navy-950">{agent.wbLogin}</td>
               <td className="px-3 py-2">{agent.lob}</td>
-              <td className="px-3 py-2"><PerformanceWfhBadge status={agent.wfhStatus} label={agent.wfhStatusLabel} /></td>
+              <td className="px-3 py-2"><PerformanceWfhBadge status={agent.wfhStatus} label={agent.wfhStatusLabel} title={agent.wfhReasons.join(" | ")} /></td>
               <td className="px-3 py-2">{performanceQualityRuleLabel(agent.qualityRule)}</td>
               <td className="max-w-[180px] truncate px-3 py-2" title={agent.supervisor}>{agent.supervisor}</td>
               <td className="px-3 py-2 text-right font-extrabold">{formatPerformancePercent(agent.quality)}</td>
@@ -10993,6 +11590,7 @@ type PerformanceMetricSummary = {
   moderationSeconds: number;
   abs: number;
   absences: number;
+  unjustifiedAbsences: number;
   scheduledDays: number;
 };
 
@@ -11004,6 +11602,9 @@ type PerformanceWeeklyMetric = PerformanceMetricSummary & {
   operationAverage?: PerformanceMetricSummary;
 };
 
+type WfhEligibilityClientStatus = "QUALIFIED" | "NOT_QUALIFIED" | "NOT_APPLICABLE" | "INSUFFICIENT_DATA";
+type WfhMonitoringClientStatus = "NOT_MONITORED" | "AT_RISK" | "RETURN_REQUIRED";
+
 type AgentPerformanceClient = PerformanceMetricSummary & {
   employeeId: string;
   employeeName: string;
@@ -11013,10 +11614,14 @@ type AgentPerformanceClient = PerformanceMetricSummary & {
   roleTitle: string;
   skill: string;
   employeeStatus: string;
-  wfhStatus: "QUALIFIED" | "NOT_QUALIFIED";
+  wfhStatus: WfhEligibilityClientStatus;
   wfhStatusLabel: string;
+  wfhMonitoringStatus: WfhMonitoringClientStatus;
+  wfhMonitoringLabel: string;
+  wfhRule: string;
   submitAveragePerDay: number;
   wfhFailedCriteria: string[];
+  wfhReasons: string[];
   weekly: PerformanceWeeklyMetric[];
 };
 
@@ -11050,6 +11655,7 @@ type PerformanceWfhResponse = {
     roles: string[];
     supervisors: Array<{ id: string; name: string }>;
     employees: Array<{ id: string; name: string; wbLogin: string }>;
+    batchWb?: { applied: string[]; notFound: string[]; duplicatesRemoved: number };
   };
   imports: Array<{
     id: string;

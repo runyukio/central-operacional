@@ -1,5 +1,5 @@
-import { InactiveModulePage } from "@/components/inactive-module-page";
+import { MuralPage } from "@/components/modules";
 
 export default async function MuralRoute() {
-  return <InactiveModulePage title="Comunicação / Mural" />;
+  return <MuralPage />;
 }

@@ -150,6 +150,7 @@ export async function getSystemSettings(actor: Actor) {
       requestTypes,
       teams,
       employees,
+      supervisorEmployees,
       lobStatus,
       shiftStatus,
       teamStatus,
@@ -173,6 +174,7 @@ export async function getSystemSettings(actor: Actor) {
       prisma.requestType.findMany({ orderBy: { name: "asc" } }),
       prisma.team.findMany({ include: settingsTeamInclude, orderBy: { name: "asc" } }),
       prisma.employeeProfile.findMany({ where: { deletedAt: null }, select: settingsEmployeeSelect, orderBy: { fullName: "asc" }, take: 500 }),
+      findSupervisorSettingEmployees(),
       readStatusMap(configKeys.lobStatus),
       readStatusMap(configKeys.shiftStatus),
       readStatusMap(configKeys.teamStatus),
@@ -210,7 +212,7 @@ export async function getSystemSettings(actor: Actor) {
         permissions: permissions.map((permission) => ({ id: permission.id, key: permission.key, label: permission.label, description: permission.description ?? "", status: permissionStatus[permission.id] ?? "ACTIVE" })),
         requestTypes: requestTypes.map((type) => ({ id: type.id, name: type.name, area: type.area, slaHours: type.slaHours, requiresApproval: type.requiresApproval, status: requestTypeStatus[type.id] ?? "ACTIVE", essential: essentialDayOffTypes.includes(type.name) })),
         teams: teams.map((team) => ({ id: team.id, name: team.name, lobId: team.lobId, lob: team.lob.name, supervisorId: team.supervisorId ?? "", supervisorName: team.supervisor?.fullName ?? "", supervisorEmail: team.supervisor?.user?.email ?? "", status: teamStatus[team.id] ?? "ACTIVE" })),
-        supervisors: employees
+        supervisors: supervisorEmployees
           .filter((employee) => canBeSupervisorOption(employee, superviseeCounts))
           .map((employee) => ({
             id: employee.id,
@@ -256,12 +258,13 @@ export async function getSystemSettings(actor: Actor) {
 }
 
 async function getLimitedSystemSettings() {
-  const [lobs, shifts, requestTypes, teams, employees, lobStatus, shiftStatus, teamStatus, requestTypeStatus, roleTitles, defaultMonth, generalSettings] = await Promise.all([
+  const [lobs, shifts, requestTypes, teams, employees, supervisorEmployees, lobStatus, shiftStatus, teamStatus, requestTypeStatus, roleTitles, defaultMonth, generalSettings] = await Promise.all([
     prisma.lob.findMany({ orderBy: { name: "asc" } }),
     prisma.shift.findMany({ orderBy: { name: "asc" } }),
     prisma.requestType.findMany({ orderBy: { name: "asc" } }),
     prisma.team.findMany({ include: settingsTeamInclude, orderBy: { name: "asc" } }),
     prisma.employeeProfile.findMany({ where: { deletedAt: null }, select: settingsEmployeeSelect, orderBy: { fullName: "asc" }, take: 500 }),
+    findSupervisorSettingEmployees(),
     readStatusMap(configKeys.lobStatus),
     readStatusMap(configKeys.shiftStatus),
     readStatusMap(configKeys.teamStatus),
@@ -279,7 +282,7 @@ async function getLimitedSystemSettings() {
     shifts: formatShiftsForSettings(shifts, shiftStatus),
     requestTypes: requestTypes.map((type) => ({ id: type.id, name: type.name, area: type.area, slaHours: type.slaHours, requiresApproval: type.requiresApproval, status: requestTypeStatus[type.id] ?? "ACTIVE", essential: essentialDayOffTypes.includes(type.name) })),
     teams: teams.map((team) => ({ id: team.id, name: team.name, lobId: team.lobId, lob: team.lob.name, supervisorId: team.supervisorId ?? "", supervisorName: team.supervisor?.fullName ?? "", supervisorEmail: team.supervisor?.user?.email ?? "", status: teamStatus[team.id] ?? "ACTIVE" })),
-    supervisors: employees
+    supervisors: supervisorEmployees
       .filter((employee) => canBeSupervisorOption(employee, superviseeCounts))
       .map((employee) => ({
         id: employee.id,
@@ -696,14 +699,33 @@ async function auditSettings(tx: Prisma.TransactionClient, actorId: string, acti
   });
 }
 
+async function findSupervisorSettingEmployees() {
+  const supervisorRoles = ["SUPERVISOR", "GESTOR", "MANAGEMENT", "WFM", "ADMIN"];
+  return prisma.employeeProfile.findMany({
+    where: {
+      deletedAt: null,
+      OR: [
+        { roleTitle: { contains: "supervisor", mode: "insensitive" } },
+        { roleTitle: { contains: "gestor", mode: "insensitive" } },
+        { roleTitle: { contains: "coordenador", mode: "insensitive" } },
+        { roleTitle: { contains: "gerente", mode: "insensitive" } },
+        { user: { role: { name: { in: supervisorRoles } } } },
+        { supervisees: { some: { deletedAt: null } } }
+      ]
+    },
+    select: settingsEmployeeSelect,
+    orderBy: { fullName: "asc" }
+  });
+}
+
 function canBeSupervisorOption(
   employee: { id: string; roleTitle: string | null; operationalStatus: string | null; user?: { role?: { name: string } | null } | null },
   superviseeCounts: Map<string, number>
 ) {
-  const status = text(employee.operationalStatus).toUpperCase();
+  const status = text(employee.operationalStatus).normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toUpperCase().replace(/\s+/g, "_");
   const alreadySupervises = (superviseeCounts.get(employee.id) ?? 0) > 0;
-  const roleName = employee.user?.role?.name ?? "";
-  const inactiveStatuses = new Set(["INACTIVE", "INATIVO", "DESLIGADO", "DESLIGADO EM TREINAMENTO", "DESATIVADO"]);
+  const roleName = text(employee.user?.role?.name).toUpperCase();
+  const inactiveStatuses = new Set(["INACTIVE", "INATIVO", "DESLIGADO", "DESLIGADO_EM_TREINAMENTO", "DESATIVADO"]);
   return !inactiveStatuses.has(status) && (
     alreadySupervises ||
     canBeSupervisorJobTitle(employee.roleTitle) ||
