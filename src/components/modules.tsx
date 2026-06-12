@@ -24,6 +24,7 @@ import {
   ArrowDown,
   ArrowUp,
   Award,
+  Bold,
   CalendarCheck,
   CalendarDays,
   CheckCircle2,
@@ -39,12 +40,16 @@ import {
   Frown,
   Headphones,
   HeartPulse,
+  ImageIcon,
+  Italic,
   KanbanSquare,
   Laptop,
   LockKeyhole,
   Megaphone,
   Meh,
   MessageCircle,
+  Pin,
+  PlayCircle,
   Plus,
   RefreshCw,
   Search,
@@ -10392,12 +10397,102 @@ function muralPriorityLabel(priority: string) {
 
 function muralContentIcon(type: string) {
   const normalized = normalizePerformanceSheetName(type);
-  if (normalized.includes("video")) return Send;
+  if (normalized.includes("video")) return PlayCircle;
+  if (normalized.includes("imagem")) return ImageIcon;
   if (normalized.includes("anexo")) return FileText;
   if (normalized.includes("campanha")) return Star;
   if (normalized.includes("sistema")) return ShieldCheck;
   if (normalized.includes("link")) return Copy;
+  if (normalized.includes("fixado")) return Pin;
   return Megaphone;
+}
+
+function muralVisualTheme(type: string) {
+  const normalized = normalizePerformanceSheetName(type);
+  if (normalized.includes("video")) return "from-indigo-950 via-blue-800 to-violet-500";
+  if (normalized.includes("imagem")) return "from-sky-950 via-blue-700 to-cyan-400";
+  if (normalized.includes("anexo")) return "from-slate-950 via-slate-700 to-blue-400";
+  if (normalized.includes("campanha")) return "from-blue-950 via-indigo-700 to-amber-400";
+  if (normalized.includes("sistema")) return "from-emerald-950 via-blue-800 to-emerald-400";
+  if (normalized.includes("link")) return "from-navy-950 via-blue-700 to-sky-400";
+  if (normalized.includes("fixado")) return "from-blue-950 via-blue-700 to-violet-400";
+  return "from-navy-950 via-blue-800 to-cyan-500";
+}
+
+function muralAudienceLabel(roles: string[]) {
+  if (!roles.length || roles.includes("TODOS")) return "Todos";
+  const labels = new Map(muralTargetRoles.map((role) => [role.value, role.label]));
+  return roles.map((role) => labels.get(role) ?? role).join(", ");
+}
+
+function stripMuralMarkdown(value: string) {
+  return value.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/\*([^*]+)\*/g, "$1").trim();
+}
+
+type MuralMarkdownPart = {
+  text: string;
+  style: "normal" | "bold" | "italic";
+};
+
+function findClosingSingleAsterisk(value: string, start: number) {
+  for (let index = start; index < value.length; index += 1) {
+    if (value[index] === "*" && value[index - 1] !== "*" && value[index + 1] !== "*") return index;
+  }
+  return -1;
+}
+
+function parseMuralMarkdown(value: string): MuralMarkdownPart[] {
+  const parts: MuralMarkdownPart[] = [];
+  let cursor = 0;
+
+  while (cursor < value.length) {
+    const boldStart = value.indexOf("**", cursor);
+    let italicStart = value.indexOf("*", cursor);
+    while (italicStart !== -1 && value[italicStart + 1] === "*") {
+      italicStart = value.indexOf("*", italicStart + 2);
+    }
+
+    const candidates = [boldStart, italicStart].filter((index) => index >= 0);
+    if (!candidates.length) {
+      parts.push({ text: value.slice(cursor), style: "normal" });
+      break;
+    }
+
+    const nextStart = Math.min(...candidates);
+    if (nextStart > cursor) parts.push({ text: value.slice(cursor, nextStart), style: "normal" });
+
+    if (nextStart === boldStart) {
+      const end = value.indexOf("**", nextStart + 2);
+      if (end === -1) {
+        parts.push({ text: value.slice(nextStart), style: "normal" });
+        break;
+      }
+      parts.push({ text: value.slice(nextStart + 2, end), style: "bold" });
+      cursor = end + 2;
+    } else {
+      const end = findClosingSingleAsterisk(value, nextStart + 1);
+      if (end === -1) {
+        parts.push({ text: value.slice(nextStart), style: "normal" });
+        break;
+      }
+      parts.push({ text: value.slice(nextStart + 1, end), style: "italic" });
+      cursor = end + 1;
+    }
+  }
+
+  return parts.filter((part) => part.text.length > 0);
+}
+
+function MuralFormattedText({ content, className }: { content: string; className?: string }) {
+  return (
+    <span className={cn("whitespace-pre-line", className)}>
+      {parseMuralMarkdown(content).map((part, index) => {
+        if (part.style === "bold") return <strong key={`${part.style}-${index}`} className="font-extrabold text-navy-950">{part.text}</strong>;
+        if (part.style === "italic") return <em key={`${part.style}-${index}`} className="italic">{part.text}</em>;
+        return <span key={`${part.style}-${index}`}>{part.text}</span>;
+      })}
+    </span>
+  );
 }
 
 function muralFormToPreview(form: MuralPostFormState): MuralPostClient {
@@ -10444,6 +10539,7 @@ function MuralPostVisual({ post, large = false }: { post: Pick<MuralPostClient, 
   const Icon = muralContentIcon(post.contentType);
   const [imageFailed, setImageFailed] = useState(false);
   const hasImage = Boolean(post.imageUrl?.trim()) && !imageFailed;
+  const placeholderGradient = muralVisualTheme(post.contentType);
 
   useEffect(() => {
     setImageFailed(false);
@@ -10453,7 +10549,7 @@ function MuralPostVisual({ post, large = false }: { post: Pick<MuralPostClient, 
     <div
       className={cn(
         "relative overflow-hidden bg-blue-950",
-        large ? "min-h-[260px]" : "min-h-[160px] md:min-h-full"
+        large ? "min-h-[300px]" : "min-h-[210px] md:min-h-full"
       )}
     >
       {hasImage ? (
@@ -10463,7 +10559,7 @@ function MuralPostVisual({ post, large = false }: { post: Pick<MuralPostClient, 
         </>
       ) : null}
       {!hasImage ? (
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,.7),transparent_34%),linear-gradient(135deg,#0f172a,#1d4ed8)]" />
+        <div className={cn("absolute inset-0 bg-gradient-to-br", placeholderGradient)} />
       ) : null}
       <div className="relative flex h-full min-h-[inherit] flex-col justify-between p-4 text-white">
         <span className="inline-flex w-fit items-center gap-2 rounded-full bg-white/18 px-3 py-1 text-xs font-extrabold backdrop-blur">
@@ -10471,14 +10567,56 @@ function MuralPostVisual({ post, large = false }: { post: Pick<MuralPostClient, 
           {post.contentType}
         </span>
         {!hasImage ? (
-          <div>
-            <p className="text-xs font-bold uppercase tracking-wide text-blue-100">Mural</p>
-            <p className="mt-1 line-clamp-2 text-xl font-black">{post.title}</p>
+          <div className="grid flex-1 place-items-center py-4">
+            <div className="grid h-20 w-20 place-items-center rounded-2xl bg-white/16 shadow-lg ring-1 ring-white/20 backdrop-blur">
+              <Icon className="h-10 w-10" />
+            </div>
           </div>
         ) : null}
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wide text-blue-100">Mural</p>
+          {!hasImage ? (
+            <p className="mt-1 line-clamp-2 text-xl font-black">{post.title}</p>
+          ) : (
+            <p className="mt-1 text-sm font-extrabold text-white/90">Comunicado visual</p>
+          )}
+        </div>
       </div>
     </div>
   );
+}
+
+function MuralHeroCard({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-white/14 bg-white/10 p-3 backdrop-blur">
+      <Icon className="h-4 w-4 text-blue-100" />
+      <p className="mt-3 text-xs font-bold uppercase tracking-wide text-blue-100">{label}</p>
+      <p className="mt-1 text-sm font-black text-white">{value}</p>
+    </div>
+  );
+}
+
+function MuralBirthdayItem({ item, compact = false }: { item: MuralBirthdayClient; compact?: boolean }) {
+  return (
+    <div className={cn("flex items-center gap-3 rounded-lg border border-border bg-white p-3", compact && "p-2")}>
+      <span className={cn("grid place-items-center rounded-full bg-blue-50 font-black text-blue-700", compact ? "h-9 w-9 text-xs" : "h-10 w-10")}>{initials(item.name)}</span>
+      <div className="min-w-0 flex-1">
+        <p className="truncate font-extrabold text-navy-950">{item.name}</p>
+        <p className="text-xs font-semibold text-muted">{item.lob} • {item.dateLabel}</p>
+      </div>
+    </div>
+  );
+}
+
+function applyMarkdownToText(value: string, start: number, end: number, marker: "**" | "*") {
+  const fallback = marker === "**" ? "texto em negrito" : "texto em itálico";
+  const selected = value.slice(start, end) || fallback;
+  const next = `${value.slice(0, start)}${marker}${selected}${marker}${value.slice(end)}`;
+  return {
+    next,
+    selectionStart: start + marker.length,
+    selectionEnd: start + marker.length + selected.length
+  };
 }
 
 type MuralCoverDraft = {
@@ -10565,6 +10703,7 @@ export function MuralPage() {
   const [uploadingMuralCover, setUploadingMuralCover] = useState(false);
   const muralCoverInputRef = useRef<HTMLInputElement | null>(null);
   const muralCoverImageRef = useRef<HTMLImageElement | null>(null);
+  const muralContentInputRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     void loadMural();
@@ -10717,6 +10856,20 @@ export function MuralPage() {
     setMuralForm((current) => ({ ...current, targetLobIds: checked ? Array.from(new Set([...current.targetLobIds, lobId])) : current.targetLobIds.filter((item) => item !== lobId) }));
   }
 
+  function formatMuralContent(marker: "**" | "*") {
+    const textarea = muralContentInputRef.current;
+    const start = textarea?.selectionStart ?? muralForm.content.length;
+    const end = textarea?.selectionEnd ?? muralForm.content.length;
+    const formatted = applyMarkdownToText(muralForm.content, start, end, marker);
+    setMuralForm((current) => ({ ...current, content: formatted.next }));
+    requestAnimationFrame(() => {
+      const input = muralContentInputRef.current;
+      if (!input) return;
+      input.focus();
+      input.setSelectionRange(formatted.selectionStart, formatted.selectionEnd);
+    });
+  }
+
   return (
     <div className="space-y-4">
       <PageHeader
@@ -10729,14 +10882,21 @@ export function MuralPage() {
       {muralLoading ? <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">Carregando mural...</div> : null}
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="space-y-5">
-          <div className="overflow-hidden rounded-xl bg-navy-950 text-white shadow-card">
-            <div className="grid min-h-[210px] gap-5 p-6 md:grid-cols-[1fr_320px] md:items-center">
-              <div>
-                <span className="rounded-md bg-white/14 px-3 py-1 text-xs font-bold uppercase">Comunicação interna</span>
+          <div className="overflow-hidden rounded-2xl bg-[radial-gradient(circle_at_top_right,rgba(96,165,250,.34),transparent_30%),linear-gradient(135deg,#061a3d,#0b2f73_52%,#0f766e)] text-white shadow-card">
+            <div className="grid min-h-[220px] gap-6 p-6 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-center">
+              <div className="max-w-3xl">
+                <span className="inline-flex items-center gap-2 rounded-full bg-white/14 px-3 py-1 text-xs font-bold uppercase tracking-wide">
+                  <Megaphone className="h-4 w-4" />
+                  Canal interno
+                </span>
                 <h2 className="mt-5 text-3xl font-extrabold">Avisos importantes em um só lugar</h2>
-                <p className="mt-3 max-w-xl text-blue-100">Comunicados com segmentação por perfil e LOB, imagens, links e campanhas internas.</p>
+                <p className="mt-3 max-w-2xl text-sm leading-6 text-blue-50 md:text-base">Acompanhe comunicados, campanhas, novidades e orientações da operação de forma simples e centralizada.</p>
               </div>
-              <div className="hidden h-40 rounded-xl bg-[linear-gradient(135deg,rgba(37,99,235,.52),rgba(2,6,23,.55)),url('https://images.unsplash.com/photo-1552664730-d307ca884978?auto=format&fit=crop&w=900&q=80')] bg-cover bg-center md:block" />
+              <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
+                <MuralHeroCard icon={Megaphone} label="Feed" value="Comunicados recentes" />
+                <MuralHeroCard icon={Star} label="Campanhas" value="Destaques internos" />
+                <MuralHeroCard icon={UsersRound} label="Públicos" value="Por perfil e LOB" />
+              </div>
             </div>
           </div>
           <div className="rounded-xl border border-border bg-white p-3 shadow-sm">
@@ -10767,23 +10927,30 @@ export function MuralPage() {
             {posts.length ? (
               <div className="space-y-3">
                 {posts.map((post) => (
-                  <article key={post.id} className={cn("card overflow-hidden p-0", post.isPinned && "ring-1 ring-blue-200")}>
-                    <div className="grid gap-0 md:grid-cols-[210px_minmax(0,1fr)]">
+                  <article key={post.id} className={cn("card overflow-hidden p-0 transition hover:-translate-y-0.5 hover:shadow-lg", post.isPinned && "ring-1 ring-blue-200")}>
+                    <div className="grid gap-0 md:grid-cols-[260px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)]">
                       <MuralPostVisual post={post} />
-                      <div className="flex min-w-0 flex-col p-4">
+                      <div className="flex min-w-0 flex-col gap-4 p-5">
                         <div className="flex flex-wrap items-center gap-2">
                           {post.isPinned ? <StatusBadge status="Fixado" /> : null}
+                          <StatusBadge status={post.contentType} />
                           <StatusBadge status={muralPriorityLabel(post.priority)} />
+                          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-extrabold text-slate-600">{muralAudienceLabel(post.targetRoles)}</span>
                           {canManageMural ? <StatusBadge status={post.status} /> : null}
                         </div>
-                        <h3 className="mt-3 text-lg font-extrabold text-navy-950">{post.title}</h3>
-                        <p className="mt-2 line-clamp-2 text-sm text-muted">{post.content}</p>
-                        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs font-semibold text-muted">
-                          <span>{post.authorName} • {post.authorRole} • {formatDateTimeShort(post.publishAt)}</span>
-                          <div className="flex flex-wrap gap-2">
-                            <button onClick={() => setSelectedPost(post)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">Ver detalhes</button>
-                            {canManageMural ? <button onClick={() => openEditMuralPost(post)} className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-bold text-navy-950">Editar</button> : null}
-                            {canManageMural && post.status !== "ARQUIVADO" ? <button onClick={() => void changeMuralPostStatus(post, "ARQUIVADO")} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">Arquivar</button> : null}
+                        <div className="min-w-0 flex-1">
+                          <h3 className="line-clamp-2 text-xl font-black text-navy-950">{post.title}</h3>
+                          <p className="mt-2 line-clamp-3 text-sm leading-6 text-muted">{stripMuralMarkdown(post.content)}</p>
+                        </div>
+                        <div className="flex flex-wrap items-end justify-between gap-3">
+                          <div className="min-w-0 text-xs font-semibold text-muted">
+                            <p className="truncate font-extrabold text-navy-950">{post.authorName} • {post.authorRole}</p>
+                            <p>{formatDateTimeShort(post.publishAt)}</p>
+                          </div>
+                          <div className="flex flex-wrap justify-end gap-2">
+                            <button onClick={() => setSelectedPost(post)} className="inline-flex h-9 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 px-3 text-xs font-bold text-blue-700">Ver detalhes</button>
+                            {canManageMural ? <button onClick={() => openEditMuralPost(post)} className="inline-flex h-9 items-center justify-center rounded-lg border border-border bg-white px-3 text-xs font-bold text-navy-950">Editar</button> : null}
+                            {canManageMural && post.status !== "ARQUIVADO" ? <button onClick={() => void changeMuralPostStatus(post, "ARQUIVADO")} className="inline-flex h-9 items-center justify-center rounded-lg border border-amber-200 bg-amber-50 px-3 text-xs font-bold text-amber-700">Arquivar</button> : null}
                           </div>
                         </div>
                       </div>
@@ -10799,12 +10966,8 @@ export function MuralPage() {
         <aside className="space-y-4">
           <Panel title="Aniversariantes de hoje">
             {birthdays.today.length ? birthdays.today.map((item) => (
-              <div key={item.employeeId} className="mb-3 flex items-center gap-3 rounded-lg border border-border p-3 last:mb-0">
-                <span className="grid h-10 w-10 place-items-center rounded-full bg-blue-50 font-black text-blue-700">{initials(item.name)}</span>
-                <div>
-                  <p className="font-extrabold text-navy-950">{item.name}</p>
-                  <p className="text-xs font-semibold text-muted">{item.lob} • {item.dateLabel}</p>
-                </div>
+              <div key={item.employeeId} className="mb-3 last:mb-0">
+                <MuralBirthdayItem item={item} />
               </div>
             )) : <EmptyState title="Nenhum aniversariante hoje" description="A lista usa apenas dia e mês da data de nascimento." />}
           </Panel>
@@ -10812,20 +10975,10 @@ export function MuralPage() {
             {birthdays.month.length ? (
               <div className="max-h-[360px] space-y-2 overflow-y-auto pr-1">
                 {birthdays.month.map((item) => (
-                  <div key={item.employeeId} className="flex items-center justify-between rounded-lg border border-border px-3 py-2 text-sm">
-                    <span className="truncate font-bold text-navy-950">{item.name}</span>
-                    <span className="text-xs font-extrabold text-blue-700">{item.dateLabel}</span>
-                  </div>
+                  <MuralBirthdayItem key={item.employeeId} item={item} compact />
                 ))}
               </div>
             ) : <EmptyState title="Nenhum dado de aniversário disponível" description="Quando houver data de nascimento cadastrada, ela aparece aqui sem mostrar o ano." />}
-          </Panel>
-          <Panel title="Dicas do Mural">
-            <div className="space-y-3 text-sm font-semibold text-muted">
-              <p>Posts podem ser direcionados por perfil e LOB.</p>
-              <p>Imagens, vídeos e anexos usam links externos seguros.</p>
-              <p>Comunicados fixados aparecem primeiro no feed.</p>
-            </div>
           </Panel>
         </aside>
       </div>
@@ -10841,11 +10994,13 @@ export function MuralPage() {
                 <StatusBadge status={selectedPost.contentType} />
               </div>
               <h2 className="text-2xl font-black text-navy-950">{selectedPost.title}</h2>
-              <p className="mt-3 whitespace-pre-line text-sm leading-6 text-navy-800">{selectedPost.content}</p>
+              <div className="mt-3 rounded-xl border border-border bg-white p-4 text-sm leading-7 text-navy-800">
+                <MuralFormattedText content={selectedPost.content} />
+              </div>
               <div className="mt-5 grid gap-3 rounded-xl border border-border bg-slate-50 p-4 text-sm sm:grid-cols-2">
                 <InfoLine label="Autor" value={`${selectedPost.authorName} • ${selectedPost.authorRole}`} />
                 <InfoLine label="Publicado em" value={formatDateTimeShort(selectedPost.publishAt)} />
-                <InfoLine label="Público-alvo" value={selectedPost.targetRoles.join(", ") || "Todos"} />
+                <InfoLine label="Público-alvo" value={muralAudienceLabel(selectedPost.targetRoles)} />
                 <InfoLine label="Expira em" value={selectedPost.expiresAt ? formatDateTimeShort(selectedPost.expiresAt) : "Sem expiração"} />
               </div>
               <div className="mt-5 flex flex-wrap justify-end gap-2">
@@ -10874,7 +11029,18 @@ export function MuralPage() {
                 <FormInput label="Título" value={muralForm.title} onChange={(value) => setMuralForm({ ...muralForm, title: value })} />
                 <label className="block">
                   <span className="mb-1.5 block text-sm font-bold text-muted">Conteúdo</span>
-                  <textarea value={muralForm.content} onChange={(event) => setMuralForm({ ...muralForm, content: event.target.value })} className="min-h-32 w-full rounded-lg border border-border p-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100" />
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-100 bg-blue-50/45 px-3 py-2">
+                    <p className="text-xs font-semibold text-blue-800">Você pode usar **negrito** e *itálico* no texto.</p>
+                    <div className="flex gap-1">
+                      <button type="button" onClick={() => formatMuralContent("**")} className="grid h-8 w-8 place-items-center rounded-md border border-blue-200 bg-white text-blue-700 hover:bg-blue-50" title="Negrito">
+                        <Bold className="h-4 w-4" />
+                      </button>
+                      <button type="button" onClick={() => formatMuralContent("*")} className="grid h-8 w-8 place-items-center rounded-md border border-blue-200 bg-white text-blue-700 hover:bg-blue-50" title="Itálico">
+                        <Italic className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                  <textarea ref={muralContentInputRef} value={muralForm.content} onChange={(event) => setMuralForm({ ...muralForm, content: event.target.value })} className="min-h-36 w-full rounded-lg border border-border p-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100" />
                 </label>
                 <div className="grid gap-3 md:grid-cols-2">
                   <FormSelect label="Tipo" value={muralForm.contentType} options={muralContentTypes} onChange={(value) => setMuralForm({ ...muralForm, contentType: value })} />
@@ -10949,7 +11115,9 @@ export function MuralPage() {
                   <div className="p-4">
                     <StatusBadge status={muralPriorityLabel(muralForm.priority)} />
                     <h3 className="mt-3 font-black text-navy-950">{muralForm.title || "Título do aviso"}</h3>
-                    <p className="mt-2 line-clamp-3 text-sm text-muted">{muralForm.content || "Resumo do comunicado aparecerá aqui."}</p>
+                    <div className="mt-2 line-clamp-3 text-sm leading-6 text-muted">
+                      <MuralFormattedText content={muralForm.content || "Resumo do comunicado aparecerá aqui."} />
+                    </div>
                   </div>
                 </article>
               </div>
