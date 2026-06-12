@@ -19,6 +19,9 @@ export async function GET(request: Request) {
     employeeStatus: url.searchParams.get("employeeStatus"),
     invoiceStatus: url.searchParams.get("invoiceStatus"),
     cycleStatus: url.searchParams.get("cycleStatus"),
+    roleTitle: url.searchParams.get("roleTitle"),
+    billingRule: url.searchParams.get("billingRule"),
+    adjustmentType: url.searchParams.get("adjustmentType"),
     search: url.searchParams.get("search")
   });
   if ("error" in result) return NextResponse.json({ error: result.error, message: result.error }, { status: result.status ?? 400 });

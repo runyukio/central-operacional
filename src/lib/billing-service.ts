@@ -25,11 +25,41 @@ const BILLABLE_WORK_HOUR_STATUSES: WorkHourRecordStatus[] = [
 const PROJECTABLE_SCHEDULE_STATUSES = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "VENDA_FOLGA_APROVADA", "TROCA_APROVADA"]);
 
 const DEFAULT_RATE_CONFIGS = [
-  { key: "MORNING_HOURLY_RATE", label: "Valor hora Manhã", value: 11.36 },
-  { key: "AFTERNOON_HOURLY_RATE", label: "Valor hora Tarde", value: 11.36 },
-  { key: "NIGHT_HOURLY_RATE", label: "Valor hora Noite", value: 13.1 },
-  { key: "BILINGUAL_HOURLY_RATE", label: "Valor hora Bilingual", value: 62.5 },
-  { key: "RA_HOURLY_RATE", label: "Valor hora RA", value: 14.2 }
+  { key: "BILINGUAL_HOURLY_RATE", label: "Bilingual", value: 62.5, group: "SPECIAL", displayName: "Bilingual" },
+  { key: "RA_HOURLY_RATE", label: "RA", value: 14.2, group: "SPECIAL", displayName: "RA" },
+  { key: "MORNING_HOURLY_RATE", label: "Agente Manhã", value: 11.36, group: "AGENT", displayName: "Agente", shiftBucket: "MANHA" },
+  { key: "AFTERNOON_HOURLY_RATE", label: "Agente Tarde", value: 11.36, group: "AGENT", displayName: "Agente", shiftBucket: "TARDE" },
+  { key: "NIGHT_HOURLY_RATE", label: "Agente Noite", value: 13.1, group: "AGENT", displayName: "Agente", shiftBucket: "NOITE" },
+  { key: "STAFF_COORDINATOR_DAY_RATE", label: "Coordinator Manhã/Tarde", value: 51.14, group: "STAFF", skillKey: "coordinator", displayName: "Coordinator", shiftBucket: "DIA" },
+  { key: "STAFF_COORDINATOR_NIGHT_RATE", label: "Coordinator Noite", value: 58.81, group: "STAFF", skillKey: "coordinator", displayName: "Coordinator", shiftBucket: "NOITE" },
+  { key: "STAFF_IT_TEAM_DAY_RATE", label: "TI Manhã/Tarde", value: 31.25, group: "STAFF", skillKey: "it_team", displayName: "TI", shiftBucket: "DIA" },
+  { key: "STAFF_IT_TEAM_NIGHT_RATE", label: "TI Noite", value: 35.94, group: "STAFF", skillKey: "it_team", displayName: "TI", shiftBucket: "NOITE" },
+  { key: "STAFF_QUALITY_ANALYST_DAY_RATE", label: "Quality Analyst Manhã/Tarde", value: 28.41, group: "STAFF", skillKey: "quality_analyst", displayName: "Quality Analyst", shiftBucket: "DIA" },
+  { key: "STAFF_QUALITY_ANALYST_NIGHT_RATE", label: "Quality Analyst Noite", value: 32.67, group: "STAFF", skillKey: "quality_analyst", displayName: "Quality Analyst", shiftBucket: "NOITE" },
+  { key: "STAFF_RTA_DAY_RATE", label: "RTA Manhã/Tarde", value: 17.05, group: "STAFF", skillKey: "rta", displayName: "RTA", shiftBucket: "DIA" },
+  { key: "STAFF_RTA_NIGHT_RATE", label: "RTA Noite", value: 19.6, group: "STAFF", skillKey: "rta", displayName: "RTA", shiftBucket: "NOITE" },
+  { key: "STAFF_SUPERVISOR_DAY_RATE", label: "Supervisor Manhã/Tarde", value: 34.09, group: "STAFF", skillKey: "supervisor", displayName: "Supervisor", shiftBucket: "DIA" },
+  { key: "STAFF_SUPERVISOR_NIGHT_RATE", label: "Supervisor Noite", value: 39.2, group: "STAFF", skillKey: "supervisor", displayName: "Supervisor", shiftBucket: "NOITE" },
+  { key: "STAFF_TRAINER_DAY_RATE", label: "Trainer Manhã/Tarde", value: 28.41, group: "STAFF", skillKey: "trainer", displayName: "Trainer", shiftBucket: "DIA" },
+  { key: "STAFF_TRAINER_NIGHT_RATE", label: "Trainer Noite", value: 32.67, group: "STAFF", skillKey: "trainer", displayName: "Trainer", shiftBucket: "NOITE" },
+  { key: "STAFF_WFM_I_DAY_RATE", label: "WFM I Manhã/Tarde", value: 28.41, group: "STAFF", skillKey: "wfm_i", displayName: "WFM I", shiftBucket: "DIA" },
+  { key: "STAFF_WFM_I_NIGHT_RATE", label: "WFM I Noite", value: 32.67, group: "STAFF", skillKey: "wfm_i", displayName: "WFM I", shiftBucket: "NOITE" },
+  { key: "STAFF_WFM_II_DAY_RATE", label: "WFM II Manhã/Tarde", value: 36.93, group: "STAFF", skillKey: "wfm_ii", displayName: "WFM II", shiftBucket: "DIA" },
+  { key: "STAFF_WFM_II_NIGHT_RATE", label: "WFM II Noite", value: 42.47, group: "STAFF", skillKey: "wfm_ii", displayName: "WFM II", shiftBucket: "NOITE" },
+  { key: "STAFF_WFM_III_DAY_RATE", label: "WFM III Manhã/Tarde", value: 42.61, group: "STAFF", skillKey: "wfm_iii", displayName: "WFM III", shiftBucket: "DIA" },
+  { key: "STAFF_WFM_III_NIGHT_RATE", label: "WFM III Noite", value: 49.01, group: "STAFF", skillKey: "wfm_iii", displayName: "WFM III", shiftBucket: "NOITE" }
+] as const;
+
+const STAFF_RATE_RULES = [
+  { skillKey: "coordinator", displayName: "Coordinator", dayKey: "STAFF_COORDINATOR_DAY_RATE", nightKey: "STAFF_COORDINATOR_NIGHT_RATE", aliases: ["coordinator", "coordenador", "coordenadora"] },
+  { skillKey: "it_team", displayName: "TI", dayKey: "STAFF_IT_TEAM_DAY_RATE", nightKey: "STAFF_IT_TEAM_NIGHT_RATE", aliases: ["it team", "it", "ti", "logistica/ti", "logistica ti"] },
+  { skillKey: "quality_analyst", displayName: "Quality Analyst", dayKey: "STAFF_QUALITY_ANALYST_DAY_RATE", nightKey: "STAFF_QUALITY_ANALYST_NIGHT_RATE", aliases: ["quality analyst", "quality", "qa", "analista de qualidade", "qualidade"] },
+  { skillKey: "rta", displayName: "RTA", dayKey: "STAFF_RTA_DAY_RATE", nightKey: "STAFF_RTA_NIGHT_RATE", aliases: ["rta"] },
+  { skillKey: "supervisor", displayName: "Supervisor", dayKey: "STAFF_SUPERVISOR_DAY_RATE", nightKey: "STAFF_SUPERVISOR_NIGHT_RATE", aliases: ["supervisor", "supervisora"] },
+  { skillKey: "trainer", displayName: "Trainer", dayKey: "STAFF_TRAINER_DAY_RATE", nightKey: "STAFF_TRAINER_NIGHT_RATE", aliases: ["trainer", "treinador", "treinadora"] },
+  { skillKey: "wfm_i", displayName: "WFM I", dayKey: "STAFF_WFM_I_DAY_RATE", nightKey: "STAFF_WFM_I_NIGHT_RATE", aliases: ["wfm i", "wfmi", "wfm 1"] },
+  { skillKey: "wfm_ii", displayName: "WFM II", dayKey: "STAFF_WFM_II_DAY_RATE", nightKey: "STAFF_WFM_II_NIGHT_RATE", aliases: ["wfm ii", "wfmii", "wfm 2"] },
+  { skillKey: "wfm_iii", displayName: "WFM III", dayKey: "STAFF_WFM_III_DAY_RATE", nightKey: "STAFF_WFM_III_NIGHT_RATE", aliases: ["wfm iii", "wfmiii", "wfm 3"] }
 ] as const;
 
 type ActiveUser = NonNullable<Awaited<ReturnType<typeof findActiveUser>>>;
@@ -54,6 +84,9 @@ export type BillingDashboardFilters = {
   employeeStatus?: string | null;
   invoiceStatus?: string | null;
   cycleStatus?: string | null;
+  roleTitle?: string | null;
+  billingRule?: string | null;
+  adjustmentType?: string | null;
   search?: string | null;
   section?: string | null;
 };
@@ -116,7 +149,8 @@ export async function getBillingDashboard(actor: Actor, filters: BillingDashboar
       invoices: filteredInvoices,
       adjustments,
       adjustmentRequests,
-      rateConfigs
+      rateConfigs,
+      filterOptions: buildBillingFilterOptions(invoices)
     }
   };
 }
@@ -174,7 +208,7 @@ export async function getEmployeeBillingPreview(employeeId: string) {
     where: { id: employeeId, deletedAt: null },
     include: { user: true, lob: true, supervisor: true, shift: true }
   });
-  if (!employee || !isAgentJobTitle(employee.roleTitle)) return null;
+  if (!employee || !isBillableEmployee(employee)) return null;
   const cycle = await prisma.billingCycle.findUnique({ where: { referenceMonth } });
   const invoice = await calculateEmployeeInvoice(employee, referenceMonth, await getBillingRates(), cycle?.id ?? null, cycle?.status);
   const persisted = cycle
@@ -548,7 +582,7 @@ export async function saveBillingRates(actor: Actor, input: Record<string, numbe
       const before = await tx.billingRateConfig.findUnique({ where: { key } });
       const record = await tx.billingRateConfig.upsert({
         where: { key },
-        update: { value: decimal(value), active: true, updatedById: user!.id },
+        update: { label: config.label, value: decimal(value), active: true, updatedById: user!.id },
         create: { key, label: config.label, value: decimal(value), active: true, updatedById: user!.id }
       });
       await tx.auditLog.create({
@@ -588,7 +622,9 @@ export async function createBillingAdjustment(actor: Actor, input: {
   if (!input.type?.trim()) return { error: "Tipo de ajuste é obrigatório.", status: 400 };
   if (!input.description?.trim()) return { error: "Descrição do ajuste é obrigatória.", status: 400 };
   if (!Number.isFinite(Number(input.amount))) return { error: "Valor do ajuste inválido.", status: 400 };
+  if (normalizeComparableJobTitle(input.type) === "penalty") return { error: "Tipo de ajuste Penalty não é permitido no Billing.", status: 400 };
   const cycle = await ensureBillingCycle(referenceMonth);
+  const amount = normalizeBillingAdjustmentAmount(input.type, Number(input.amount));
   const adjustment = await prisma.billingAdjustment.create({
     data: {
       billingCycleId: cycle.id,
@@ -596,7 +632,7 @@ export async function createBillingAdjustment(actor: Actor, input: {
       referenceMonth,
       type: input.type.trim(),
       description: input.description.trim(),
-      amount: decimal(input.amount),
+      amount: decimal(amount),
       employeeId: input.employeeId || null,
       lobId: input.lobId || null,
       observation: input.observation?.trim() || null,
@@ -643,13 +679,13 @@ export async function exportBilling(actor: Actor, filters: BillingDashboardFilte
       },
       {
         sheetName: "Por Colaborador",
-        headers: ["nome", "wb_login", "status_colaborador", "lob", "supervisor", "skill", "turno_oficial", "regra_billing", "valor_hora", "horas_aprovadas", "horas_projetadas", "total_horas", "valor_bruto", "adiantamento", "campanha", "ajustes", "valor_final", "status_invoice", "aprovado_em"],
-        rows: data.invoices.map((row) => [row.employeeName, row.wbLogin, row.employeeStatus, row.lob, row.supervisor, row.skill, row.officialShift, row.billingRule, moneyText(row.hourlyRate), minutesToHoursLabel(row.approvedMinutes), minutesToHoursLabel(row.projectedMinutes), minutesToHoursLabel(row.totalConsideredMinutes), moneyText(row.grossAmount), moneyText(row.advanceAmount), moneyText(row.campaignAmount), moneyText(row.adjustmentAmount), moneyText(row.finalAmount), row.statusLabel, row.approvedByEmployeeAt || ""])
+        headers: ["nome", "wb_login", "cargo_funcao", "skill", "status_colaborador", "lob", "supervisor", "turno_oficial", "regra_billing", "valor_hora", "horas_aprovadas", "horas_projetadas", "total_horas", "valor_bruto", "adiantamento", "campanha", "bonus", "desconto", "correcao", "ajustes_total", "valor_final", "status_invoice", "aprovado_em"],
+        rows: data.invoices.map((row) => [row.employeeName, row.wbLogin, row.roleTitle, row.skill, row.employeeStatus, row.lob, row.supervisor, row.officialShift, row.billingRuleLabel || row.billingRule, moneyText(row.hourlyRate), minutesToHoursLabel(row.approvedMinutes), minutesToHoursLabel(row.projectedMinutes), minutesToHoursLabel(row.totalConsideredMinutes), moneyText(row.grossAmount), moneyText(row.advanceAmount), moneyText(row.campaignAmount), moneyText(row.bonusAmount), moneyText(row.discountAmount), moneyText(row.correctionAmount), moneyText(row.adjustmentAmount), moneyText(row.finalAmount), row.statusLabel, row.approvedByEmployeeAt || ""])
       },
       {
         sheetName: "Detalhamento de Horas",
-        headers: ["data", "nome", "wb_login", "status_colaborador", "lob", "supervisor", "skill", "turno_oficial", "turno_slot", "horas_aprovadas", "valor_hora", "valor_calculado"],
-        rows: data.invoices.flatMap((row) => row.hourDetails.map((detail) => [detail.date, row.employeeName, row.wbLogin, row.employeeStatus, row.lob, row.supervisor, row.skill, row.officialShift, detail.shift, minutesToHoursLabel(detail.minutes), moneyText(row.hourlyRate), moneyText(detail.amount)]))
+        headers: ["data", "nome", "wb_login", "status_colaborador", "lob", "supervisor", "skill", "cargo_funcao", "turno_oficial", "turno_slot", "horas_aprovadas", "valor_hora", "valor_calculado", "regra_billing"],
+        rows: data.invoices.flatMap((row) => row.hourDetails.map((detail) => [detail.date, row.employeeName, row.wbLogin, row.employeeStatus, row.lob, row.supervisor, row.skill, row.roleTitle, row.officialShift, detail.shift, minutesToHoursLabel(detail.minutes), moneyText(row.hourlyRate), moneyText(detail.amount), row.billingRuleLabel || row.billingRule]))
       },
       {
         sheetName: "Ajustes",
@@ -663,8 +699,8 @@ export async function exportBilling(actor: Actor, filters: BillingDashboardFilte
       },
       {
         sheetName: "Configurações",
-        headers: ["regra", "valor", "vigente_desde", "atualizado_por", "atualizado_em"],
-        rows: data.rateConfigs.map((row) => [row.label, moneyText(row.value), row.effectiveFrom, row.updatedBy || "", row.updatedAt])
+        headers: ["skill", "nome_exibido", "turno", "valor", "ativo", "vigente_desde", "atualizado_por", "atualizado_em"],
+        rows: data.rateConfigs.map((row) => [row.skillKey || row.key, row.displayName || row.label, row.shiftBucket || row.group, moneyText(row.value), row.active ? "Sim" : "Não", row.effectiveFrom, row.updatedBy || "", row.updatedAt])
       }
     ]
   };
@@ -801,11 +837,17 @@ async function buildBillingInvoicesReadModel(
     const grossAmount = roundMoney((totalConsideredMinutes / 60) * rate.hourlyRate);
     const advance = advanceByEmployee.get(employee.id);
     const adjustmentRowsForEmployee = adjustmentsByEmployee.get(employee.id) ?? [];
+    const adjustmentBreakdown = buildAdjustmentBreakdown(adjustmentRowsForEmployee);
     const persisted = persistedByEmployee.get(employee.id);
     const status = persisted?.status ?? defaultInvoiceStatusForCycle(cycle?.status);
-    const advanceAmount = advance?.optIn ? roundMoney(Number(advance.finalAmount ?? advance.amount ?? MONTHLY_ADVANCE_FIXED_AMOUNT)) : 0;
-    const campaignAmount = roundMoney(adjustmentRowsForEmployee.filter((row) => normalizeComparableJobTitle(row.type) === "campanha").reduce((sum, row) => sum + Number(row.amount), 0));
-    const adjustmentAmount = roundMoney(adjustmentRowsForEmployee.filter((row) => normalizeComparableJobTitle(row.type) !== "campanha").reduce((sum, row) => sum + Number(row.amount), 0));
+    const automaticAdvanceAmount = advance?.optIn ? roundMoney(Number(advance.finalAmount ?? advance.amount ?? MONTHLY_ADVANCE_FIXED_AMOUNT)) : 0;
+    const advanceAmount = roundMoney(automaticAdvanceAmount + adjustmentBreakdown.manualAdvanceAmount);
+    const campaignAmount = adjustmentBreakdown.campaignAmount;
+    const bonusAmount = adjustmentBreakdown.bonusAmount;
+    const discountAmount = adjustmentBreakdown.discountAmount;
+    const correctionAmount = adjustmentBreakdown.correctionAmount;
+    const otherAdjustmentAmount = adjustmentBreakdown.otherAdjustmentAmount;
+    const adjustmentAmount = roundMoney(bonusAmount + correctionAmount + otherAdjustmentAmount - discountAmount);
     const finalAmount = roundMoney(grossAmount - advanceAmount + campaignAmount + adjustmentAmount);
 
     invoices.push({
@@ -815,6 +857,7 @@ async function buildBillingInvoicesReadModel(
       employeeName: employee.fullName,
       wbLogin: employee.wbLogin,
       email: employee.user?.email ?? "",
+      roleTitle: employee.roleTitle,
       employeeStatus: employee.operationalStatus ?? "",
       lob: employee.lob?.name ?? "Sem LOB",
       lobId: employee.lobId,
@@ -832,11 +875,21 @@ async function buildBillingInvoicesReadModel(
       totalConsideredMinutes,
       hourlyRate: rate.hourlyRate,
       billingRule: rate.billingRule,
+      billingRuleLabel: rate.billingRuleLabel,
+      billingRateSource: rate.billingRateSource,
+      billingWarning: rate.billingWarning,
       grossAmount,
       advanceAmount,
+      automaticAdvanceAmount,
+      manualAdvanceAmount: adjustmentBreakdown.manualAdvanceAmount,
       campaignAmount,
+      bonusAmount,
+      discountAmount,
+      correctionAmount,
+      otherAdjustmentAmount,
       adjustmentAmount,
       finalAmount,
+      adjustmentTypes: adjustmentBreakdown.types,
       hasOpenAdjustment: persisted ? openAdjustmentInvoiceIds.has(persisted.id) : false,
       hourDetails: [...approvedDetails, ...projectedDetails]
     });
@@ -905,9 +958,15 @@ async function calculateEmployeeInvoice(employee: BillingEmployee, referenceMont
   }));
   const totalConsideredMinutes = approvedMinutes + projectedMinutes;
   const grossAmount = roundMoney((totalConsideredMinutes / 60) * rate.hourlyRate);
-  const advanceAmount = advance?.optIn ? roundMoney(Number(advance.finalAmount ?? advance.amount ?? MONTHLY_ADVANCE_FIXED_AMOUNT)) : 0;
-  const campaignAmount = roundMoney(adjustmentRows.filter((row) => normalizeComparableJobTitle(row.type) === "campanha").reduce((sum, row) => sum + Number(row.amount), 0));
-  const adjustmentAmount = roundMoney(adjustmentRows.filter((row) => normalizeComparableJobTitle(row.type) !== "campanha").reduce((sum, row) => sum + Number(row.amount), 0));
+  const adjustmentBreakdown = buildAdjustmentBreakdown(adjustmentRows);
+  const automaticAdvanceAmount = advance?.optIn ? roundMoney(Number(advance.finalAmount ?? advance.amount ?? MONTHLY_ADVANCE_FIXED_AMOUNT)) : 0;
+  const advanceAmount = roundMoney(automaticAdvanceAmount + adjustmentBreakdown.manualAdvanceAmount);
+  const campaignAmount = adjustmentBreakdown.campaignAmount;
+  const bonusAmount = adjustmentBreakdown.bonusAmount;
+  const discountAmount = adjustmentBreakdown.discountAmount;
+  const correctionAmount = adjustmentBreakdown.correctionAmount;
+  const otherAdjustmentAmount = adjustmentBreakdown.otherAdjustmentAmount;
+  const adjustmentAmount = roundMoney(bonusAmount + correctionAmount + otherAdjustmentAmount - discountAmount);
   const finalAmount = roundMoney(grossAmount - advanceAmount + campaignAmount + adjustmentAmount);
 
   return {
@@ -917,6 +976,7 @@ async function calculateEmployeeInvoice(employee: BillingEmployee, referenceMont
     employeeName: employee.fullName,
     wbLogin: employee.wbLogin,
     email: employee.user?.email ?? "",
+    roleTitle: employee.roleTitle,
     employeeStatus: employee.operationalStatus ?? "",
     lob: employee.lob?.name ?? "Sem LOB",
     lobId: employee.lobId,
@@ -934,11 +994,21 @@ async function calculateEmployeeInvoice(employee: BillingEmployee, referenceMont
     totalConsideredMinutes,
     hourlyRate: rate.hourlyRate,
     billingRule: rate.billingRule,
+    billingRuleLabel: rate.billingRuleLabel,
+    billingRateSource: rate.billingRateSource,
+    billingWarning: rate.billingWarning,
     grossAmount,
     advanceAmount,
+    automaticAdvanceAmount,
+    manualAdvanceAmount: adjustmentBreakdown.manualAdvanceAmount,
     campaignAmount,
+    bonusAmount,
+    discountAmount,
+    correctionAmount,
+    otherAdjustmentAmount,
     adjustmentAmount,
     finalAmount,
+    adjustmentTypes: adjustmentBreakdown.types,
     hasOpenAdjustment: false,
     hourDetails: [...approvedDetails, ...projectedDetails]
   };
@@ -946,15 +1016,18 @@ async function calculateEmployeeInvoice(employee: BillingEmployee, referenceMont
 
 async function listBillingEmployees(filters: BillingDashboardFilters) {
   const where: Prisma.EmployeeProfileWhereInput = {
-    deletedAt: null,
-    roleTitle: { contains: "agente", mode: "insensitive" }
+    deletedAt: null
   };
   const and: Prisma.EmployeeProfileWhereInput[] = [];
   if (filters.lob && filters.lob !== "Todos") and.push({ lobId: filters.lob });
   if (filters.supervisorId && filters.supervisorId !== "Todos") and.push({ supervisorId: filters.supervisorId });
-  if (filters.skill && filters.skill !== "Todos") and.push({ skill: { equals: filters.skill, mode: "insensitive" } });
+  if (filters.skill && filters.skill !== "Todos") {
+    if (filters.skill === "Sem skill") and.push({ OR: [{ skill: null }, { skill: "" }] });
+    else and.push({ skill: { equals: filters.skill, mode: "insensitive" } });
+  }
   if (filters.shiftId && filters.shiftId !== "Todos") and.push({ shiftId: filters.shiftId });
   if (filters.employeeId) and.push({ id: filters.employeeId });
+  if (filters.roleTitle && filters.roleTitle !== "Todos") and.push({ roleTitle: { equals: filters.roleTitle, mode: "insensitive" } });
   if (filters.employeeStatus === "Ativo") and.push({ operationalStatus: { equals: "Ativo", mode: "insensitive" } });
   if (filters.employeeStatus === "Desligado") and.push({ operationalStatus: { equals: "Desligado", mode: "insensitive" } });
   const search = filters.search?.trim();
@@ -963,7 +1036,11 @@ async function listBillingEmployees(filters: BillingDashboardFilters) {
       OR: [
         { fullName: { contains: search, mode: "insensitive" } },
         { wbLogin: { contains: search, mode: "insensitive" } },
-        { user: { email: { contains: search, mode: "insensitive" } } }
+        { roleTitle: { contains: search, mode: "insensitive" } },
+        { skill: { contains: search, mode: "insensitive" } },
+        { user: { email: { contains: search, mode: "insensitive" } } },
+        { lob: { name: { contains: search, mode: "insensitive" } } },
+        { supervisor: { fullName: { contains: search, mode: "insensitive" } } }
       ]
     });
   }
@@ -974,12 +1051,19 @@ async function listBillingEmployees(filters: BillingDashboardFilters) {
     include: { user: true, lob: true, supervisor: true, shift: true },
     orderBy: [{ lob: { name: "asc" } }, { fullName: "asc" }]
   });
-  return employees.filter((employee) => isAgentJobTitle(employee.roleTitle));
+  return employees.filter((employee) => isBillableEmployee(employee));
 }
 
-function filterInvoices<T extends { status: string }>(invoices: T[], filters: BillingDashboardFilters) {
-  if (!filters.invoiceStatus || filters.invoiceStatus === "Todos") return invoices;
-  return invoices.filter((invoice) => invoice.status === filters.invoiceStatus);
+function filterInvoices<T extends { status: string; billingRule?: string; adjustmentTypes?: string[] }>(invoices: T[], filters: BillingDashboardFilters) {
+  return invoices.filter((invoice) => {
+    if (filters.invoiceStatus && filters.invoiceStatus !== "Todos" && invoice.status !== filters.invoiceStatus) return false;
+    if (filters.billingRule && filters.billingRule !== "Todos" && invoice.billingRule !== filters.billingRule) return false;
+    if (filters.adjustmentType && filters.adjustmentType !== "Todos") {
+      const target = normalizeComparableJobTitle(filters.adjustmentType);
+      if (!invoice.adjustmentTypes?.some((type) => normalizeComparableJobTitle(type) === target)) return false;
+    }
+    return true;
+  });
 }
 
 async function upsertEmployeeInvoice(cycleId: string, calculated: Awaited<ReturnType<typeof calculateEmployeeInvoice>>, extra: InvoiceExtra = {}) {
@@ -1064,6 +1148,10 @@ async function listBillingRateConfigs() {
       label: config.label,
       value: config.value,
       active: true,
+      group: config.group,
+      skillKey: "skillKey" in config ? config.skillKey : "",
+      displayName: config.displayName,
+      shiftBucket: "shiftBucket" in config ? config.shiftBucket : "",
       effectiveFrom: "",
       updatedBy: "",
       updatedAt: ""
@@ -1073,12 +1161,134 @@ async function listBillingRateConfigs() {
 
 function resolveHourlyRate(employee: BillingEmployee, rates: BillingRates) {
   const skill = normalizeComparableJobTitle(employee.skill);
-  if (skill.includes("bilingual") || skill.includes("bilingue")) return { hourlyRate: rates.BILINGUAL_HOURLY_RATE, billingRule: "BILINGUAL" };
-  if (skill === "ra") return { hourlyRate: rates.RA_HOURLY_RATE, billingRule: "RA" };
-  const shift = normalizeComparableJobTitle(cleanShiftName(employee.shift?.name ?? ""));
-  if (shift.includes("noite")) return { hourlyRate: rates.NIGHT_HOURLY_RATE, billingRule: "TURNO_NOITE" };
-  if (shift.includes("tarde")) return { hourlyRate: rates.AFTERNOON_HOURLY_RATE, billingRule: "TURNO_TARDE" };
-  return { hourlyRate: rates.MORNING_HOURLY_RATE, billingRule: "TURNO_MANHA" };
+  if (skill.includes("bilingual") || skill.includes("bilingue")) {
+    return {
+      hourlyRate: rates.BILINGUAL_HOURLY_RATE,
+      billingRule: "BILINGUAL",
+      billingRuleLabel: "Bilingual",
+      billingRateSource: "Skill Bilingual"
+    };
+  }
+  if (skill === "ra") {
+    return {
+      hourlyRate: rates.RA_HOURLY_RATE,
+      billingRule: "RA",
+      billingRuleLabel: "RA",
+      billingRateSource: "Skill RA"
+    };
+  }
+
+  const shiftBucket = officialShiftBucket(employee.shift?.name);
+  if (!shiftBucket) {
+    return {
+      hourlyRate: 0,
+      billingRule: "TURNO_NAO_CADASTRADO",
+      billingRuleLabel: "Turno oficial não cadastrado",
+      billingRateSource: "Cadastro do colaborador",
+      billingWarning: "Turno oficial não cadastrado."
+    };
+  }
+
+  const staffRule = resolveStaffRateRule(employee.skill);
+  if (staffRule) {
+    const rateKey = shiftBucket === "NOITE" ? staffRule.nightKey : staffRule.dayKey;
+    const shiftLabel = shiftBucket === "NOITE" ? "Noite" : "Manhã/Tarde";
+    return {
+      hourlyRate: rates[rateKey],
+      billingRule: `SKILL_${staffRule.skillKey}_${shiftBucket}`,
+      billingRuleLabel: `Skill ${staffRule.displayName} + Turno ${shiftLabel}`,
+      billingRateSource: `Skill ${staffRule.displayName}`
+    };
+  }
+
+  if (isAgentJobTitle(employee.roleTitle)) {
+    if (shiftBucket === "NOITE") {
+      return {
+        hourlyRate: rates.NIGHT_HOURLY_RATE,
+        billingRule: "AGENTE_NOITE",
+        billingRuleLabel: "Agente + Turno Noite",
+        billingRateSource: "Cargo/Função Agente"
+      };
+    }
+    if (shiftBucket === "TARDE") {
+      return {
+        hourlyRate: rates.AFTERNOON_HOURLY_RATE,
+        billingRule: "AGENTE_TARDE",
+        billingRuleLabel: "Agente + Turno Tarde",
+        billingRateSource: "Cargo/Função Agente"
+      };
+    }
+    return {
+      hourlyRate: rates.MORNING_HOURLY_RATE,
+      billingRule: "AGENTE_MANHA",
+      billingRuleLabel: "Agente + Turno Manhã",
+      billingRateSource: "Cargo/Função Agente"
+    };
+  }
+
+  return {
+    hourlyRate: 0,
+    billingRule: "VALOR_NAO_CONFIGURADO",
+    billingRuleLabel: "Valor/hora não configurado",
+    billingRateSource: "Sem regra aplicável",
+    billingWarning: "Valor/hora não configurado para este cargo/skill."
+  };
+}
+
+function isBillableEmployee(employee: Pick<BillingEmployee, "roleTitle" | "skill">) {
+  return isAgentJobTitle(employee.roleTitle) || Boolean(resolveStaffRateRule(employee.skill)) || isSpecialBillingSkill(employee.skill);
+}
+
+function isSpecialBillingSkill(value?: string | null) {
+  const skill = normalizeComparableJobTitle(value);
+  return skill.includes("bilingual") || skill.includes("bilingue") || skill === "ra";
+}
+
+function resolveStaffRateRule(value?: string | null) {
+  const skill = normalizeComparableJobTitle(value);
+  return STAFF_RATE_RULES.find((rule) => rule.aliases.some((alias) => normalizeComparableJobTitle(alias) === skill)) ?? null;
+}
+
+function officialShiftBucket(value?: string | null): "MANHA" | "TARDE" | "NOITE" | null {
+  const shift = normalizeComparableJobTitle(cleanShiftName(value ?? ""));
+  if (!shift) return null;
+  if (shift.includes("noite")) return "NOITE";
+  if (shift.includes("tarde")) return "TARDE";
+  if (shift.includes("manha") || shift.includes("manhã")) return "MANHA";
+  return null;
+}
+
+function buildAdjustmentBreakdown(rows: Array<{ type: string; amount: Prisma.Decimal | number }>) {
+  const breakdown = {
+    campaignAmount: 0,
+    bonusAmount: 0,
+    discountAmount: 0,
+    correctionAmount: 0,
+    manualAdvanceAmount: 0,
+    otherAdjustmentAmount: 0,
+    types: [] as string[]
+  };
+  const typeNames = new Set<string>();
+  for (const row of rows) {
+    const type = row.type.trim() || "Ajuste";
+    const normalized = normalizeComparableJobTitle(type);
+    const amount = roundMoney(Number(row.amount));
+    typeNames.add(type);
+    if (normalized === "campanha") breakdown.campaignAmount = roundMoney(breakdown.campaignAmount + amount);
+    else if (normalized === "bonus" || normalized === "bonificacao") breakdown.bonusAmount = roundMoney(breakdown.bonusAmount + amount);
+    else if (normalized === "desconto") breakdown.discountAmount = roundMoney(breakdown.discountAmount + Math.abs(amount));
+    else if (normalized === "adiantamento") breakdown.manualAdvanceAmount = roundMoney(breakdown.manualAdvanceAmount + Math.abs(amount));
+    else if (normalized === "correcao" || normalized === "correção") breakdown.correctionAmount = roundMoney(breakdown.correctionAmount + amount);
+    else breakdown.otherAdjustmentAmount = roundMoney(breakdown.otherAdjustmentAmount + amount);
+  }
+  breakdown.types = Array.from(typeNames).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  return breakdown;
+}
+
+function normalizeBillingAdjustmentAmount(type: string, amount: number) {
+  const normalized = normalizeComparableJobTitle(type);
+  if (normalized === "desconto" || normalized === "adiantamento") return -Math.abs(amount);
+  return amount;
 }
 
 function buildDashboardSummary(invoices: Array<{ grossAmount: number; advanceAmount: number; campaignAmount: number; adjustmentAmount: number; finalAmount: number; approvedMinutes: number; totalConsideredMinutes: number; employeeId: string }>, cycleStatus: string) {
@@ -1095,6 +1305,44 @@ function buildDashboardSummary(invoices: Array<{ grossAmount: number; advanceAmo
     cycleStatus,
     cycleStatusLabel: cycleStatusLabel(cycleStatus)
   };
+}
+
+function buildBillingFilterOptions(invoices: Array<{
+  lobId?: string | null;
+  lob: string;
+  supervisorId?: string | null;
+  supervisor: string;
+  roleTitle?: string;
+  skill?: string;
+  officialShiftId?: string | null;
+  officialShift?: string;
+  billingRule?: string;
+  billingRuleLabel?: string;
+  adjustmentTypes?: string[];
+}>) {
+  return {
+    lobs: uniqueOptionPairs(invoices.map((row) => ({ value: row.lobId ?? "", label: row.lob }))).filter((item) => item.value),
+    supervisors: uniqueOptionPairs(invoices.map((row) => ({ value: row.supervisorId ?? "", label: row.supervisor }))).filter((item) => item.value),
+    roleTitles: uniqueTextOptions(invoices.map((row) => row.roleTitle)),
+    skills: uniqueTextOptions(invoices.map((row) => row.skill || "Sem skill")),
+    shifts: uniqueOptionPairs(invoices.map((row) => ({ value: row.officialShiftId ?? "", label: row.officialShift ?? "" }))).filter((item) => item.value),
+    billingRules: uniqueOptionPairs(invoices.map((row) => ({ value: row.billingRule ?? "", label: row.billingRuleLabel ?? row.billingRule ?? "" }))).filter((item) => item.value),
+    adjustmentTypes: uniqueTextOptions(invoices.flatMap((row) => row.adjustmentTypes ?? []))
+  };
+}
+
+function uniqueTextOptions(values: Array<string | null | undefined>) {
+  return Array.from(new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "pt-BR"));
+}
+
+function uniqueOptionPairs(values: Array<{ value: string; label: string }>) {
+  const options = new Map<string, string>();
+  for (const item of values) {
+    const value = item.value.trim();
+    const label = item.label.trim();
+    if (value && label && !options.has(value)) options.set(value, label);
+  }
+  return Array.from(options.entries()).map(([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
 }
 
 function buildLobSummary(invoices: Array<{ lob: string; employeeId: string; approvedMinutes: number; grossAmount: number; advanceAmount: number; campaignAmount: number; adjustmentAmount: number; finalAmount: number }>) {
@@ -1434,12 +1682,17 @@ function mapAdjustmentRequest(row: Prisma.InvoiceAdjustmentRequestGetPayload<{ i
 
 function mapRateConfig(row: Prisma.BillingRateConfigGetPayload<{ include?: { updatedBy: true } }> | Prisma.BillingRateConfigGetPayload<{}>) {
   const withUser = row as Prisma.BillingRateConfigGetPayload<{ include: { updatedBy: true } }>;
+  const config = DEFAULT_RATE_CONFIGS.find((item) => item.key === row.key);
   return {
     id: row.id,
     key: row.key,
-    label: row.label,
+    label: config?.label ?? row.label,
     value: Number(row.value),
     active: row.active,
+    group: config?.group ?? "CUSTOM",
+    skillKey: config && "skillKey" in config ? config.skillKey : "",
+    displayName: config?.displayName ?? row.label,
+    shiftBucket: config && "shiftBucket" in config ? config.shiftBucket : "",
     effectiveFrom: formatDate(row.effectiveFrom),
     updatedBy: withUser.updatedBy?.name ?? "",
     updatedAt: formatDateTime(row.updatedAt)

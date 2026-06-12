@@ -16,3 +16,4 @@ node_modules
 .next.stale
 .env.local.backup
 *.backup
+.vercel
