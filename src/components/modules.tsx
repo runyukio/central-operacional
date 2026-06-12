@@ -3960,6 +3960,16 @@ export function MySchedulePage() {
     }
   }
 
+  function openDayOffRequestModal() {
+    setDayOffMessage("");
+    setShowDayOffModal(true);
+  }
+
+  function selectDayOffKind(kind: DayOffKind) {
+    setDayOffMessage("");
+    setDayOffForm((current) => ({ ...current, kind }));
+  }
+
   function shiftForScheduleDate(dateIso: string) {
     const day = days.find((item) => item.dateIso === dateIso && !item.outside);
     return cleanShiftName(day?.shift) || "Sem turno";
@@ -4146,6 +4156,11 @@ export function MySchedulePage() {
   ]));
   const currentMoodOption = moodOptionForScore(moodForm.moodScore);
   const CurrentMoodIcon = currentMoodOption.icon;
+  const dayOffSubmitLabel = dayOffForm.kind === "DAY_OFF_SWAP"
+    ? "Enviar troca de folga"
+    : dayOffForm.kind === "DAY_OFF_SELL"
+      ? "Enviar venda de folga"
+      : "Enviar solicitação de dia de folga";
 
   function moveMyScheduleMonth(delta: number) {
     setMySchedulePeriod((current) => {
@@ -4383,7 +4398,7 @@ export function MySchedulePage() {
               <EmptyState title="Adiantamento mensal indisponível" description="Não foi possível carregar os ciclos de resposta agora." />
             )}
           </Panel>
-          <Panel title="Minhas Solicitações" action="Solicitar Folga" actionOnClick={() => setShowDayOffModal(true)}>
+          <Panel title="Minhas Solicitações" action="Solicitar Folga" actionOnClick={openDayOffRequestModal}>
             <div className="mb-3 flex flex-wrap justify-end gap-2">
               <button
                 type="button"
@@ -4464,11 +4479,14 @@ export function MySchedulePage() {
                 <h2 className="text-lg font-extrabold text-navy-950">Solicitar Folga</h2>
                 <p className="text-sm text-muted">Qual tipo de solicitação de folga você deseja abrir?</p>
               </div>
-              <button onClick={() => setShowDayOffModal(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+              <button type="button" onClick={() => setShowDayOffModal(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
             </div>
+            {dayOffMessage ? (
+              <div role="alert" className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{dayOffMessage}</div>
+            ) : null}
             <div className="grid gap-3 md:grid-cols-3">
               {dayOffOptions.map((option) => (
-                <button key={option.kind} onClick={() => setDayOffForm({ ...dayOffForm, kind: option.kind })} className={cn("rounded-lg border p-4 text-left transition", dayOffForm.kind === option.kind ? "border-blue-500 bg-blue-50 text-blue-700" : "border-border bg-white text-navy-950 hover:bg-slate-50")}>
+                <button type="button" key={option.kind} onClick={() => selectDayOffKind(option.kind)} className={cn("rounded-lg border p-4 text-left transition", dayOffForm.kind === option.kind ? "border-blue-500 bg-blue-50 text-blue-700" : "border-border bg-white text-navy-950 hover:bg-slate-50")}>
                   <p className="font-extrabold">{option.title}</p>
                   <p className="mt-1 text-xs text-muted">{option.description}</p>
                 </button>
@@ -4509,8 +4527,8 @@ export function MySchedulePage() {
             <div className="mt-5 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
               Toda solicitação depende de aprovação e será registrada com histórico, auditoria e notificação interna.
             </div>
-            <button disabled={savingDayOff} onClick={submitDayOffRequest} className="mt-5 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
-              {savingDayOff ? "Enviando..." : "Enviar solicitação de folga"}
+            <button type="button" disabled={savingDayOff} onClick={() => void submitDayOffRequest()} className="mt-5 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
+              {savingDayOff ? "Enviando..." : dayOffSubmitLabel}
             </button>
           </div>
         </div>

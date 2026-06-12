@@ -59,6 +59,7 @@ const terminalFlowStatuses = ["APROVADO", "CONCLUIDO", "RECUSADO", "CANCELADO"] 
 const allowDemoDataFallback = process.env.ALLOW_DEMO_LOGIN === "true" || process.env.ALLOW_DEMO_DATA === "true";
 const productiveShiftCategories = ["Manhã", "Tarde", "Noite"] as const;
 const coverageStatuses = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "ATRASO", "SAIDA_ANTECIPADA", "VENDA_FOLGA_APROVADA"]);
+const dayOffScheduleStatuses = new Set<ScheduleStatus>(["FOLGA", "FOLGA_APROVADA"]);
 const inactiveCoverageEmployeeStatuses = new Set([
   "inativo",
   "inativa",
@@ -1924,6 +1925,10 @@ function scheduleCountsAsCoverageForImpact(schedule: { status: ScheduleStatus; s
   return schedule.status === "TROCA_APROVADA";
 }
 
+function isScheduleDayOffStatus(status?: ScheduleStatus | null) {
+  return Boolean(status && dayOffScheduleStatuses.has(status));
+}
+
 function isCoverageEmployeeActiveForImpact(value?: string | null) {
   const normalized = String(value ?? "")
     .normalize("NFD")
@@ -2119,8 +2124,8 @@ async function validateDayOffRequestInDatabase(employeeId: string, input: Create
     if (!current.date || !desired.date) return "Datas da troca de folga inválidas.";
     if (employeeScheduleCount && !current.schedule) return "Data atual da folga fora do período de cronograma carregado.";
     if (employeeScheduleCount && !desired.schedule) return "Nova data desejada fora do período de cronograma carregado.";
-    if (current.schedule && current.schedule.status !== "FOLGA") return "A data atual informada não está registrada como folga para este colaborador.";
-    if (desired.schedule && desired.schedule.status === "FOLGA") return "A nova data desejada já está registrada como folga.";
+    if (current.schedule && !isScheduleDayOffStatus(current.schedule.status)) return "A data atual informada não está registrada como folga para este colaborador.";
+    if (desired.schedule && isScheduleDayOffStatus(desired.schedule.status)) return "A nova data desejada já está registrada como folga.";
     return duplicateDayOffRequest(employeeId, kind, { currentDayOffDate: input.currentDayOffDate, desiredDayOffDate: input.desiredDayOffDate });
   }
 
@@ -2128,7 +2133,7 @@ async function validateDayOffRequestInDatabase(employeeId: string, input: Create
     const target = await findSchedule(input.dayOffToSellDate);
     if (!target.date) return "Data da folga que deseja vender inválida.";
     if (employeeScheduleCount && !target.schedule) return "Data da folga fora do período de cronograma carregado.";
-    if (target.schedule && target.schedule.status !== "FOLGA") return "A data selecionada não está registrada como folga.";
+    if (target.schedule && !isScheduleDayOffStatus(target.schedule.status)) return "A data selecionada não está registrada como folga.";
     return duplicateDayOffRequest(employeeId, kind, { dayOffToSellDate: input.dayOffToSellDate });
   }
 
@@ -2136,7 +2141,7 @@ async function validateDayOffRequestInDatabase(employeeId: string, input: Create
   const target = await findSchedule(targetDate);
   if (!target.date) return "Data desejada para folga inválida.";
   if (employeeScheduleCount && !target.schedule) return "Data desejada fora do período de cronograma carregado.";
-  if (target.schedule && target.schedule.status === "FOLGA") return "A data desejada já está registrada como folga.";
+  if (target.schedule && isScheduleDayOffStatus(target.schedule.status)) return "A data desejada já está registrada como folga.";
   return duplicateDayOffRequest(employeeId, kind, { desiredDayOffRequestDate: targetDate });
 }
 
@@ -2236,8 +2241,8 @@ async function applySwapSchedule(tx: Prisma.TransactionClient, request: PrismaRe
   const desired = await tx.schedule.findUnique({ where: { employeeId_date: { employeeId: employee.id, date: desiredDate } }, include: { shift: true } });
   if (!current) throw new DomainError("Não foi possível aplicar a troca: data atual da folga sem cronograma.");
   if (!desired) throw new DomainError("Não foi possível aplicar a troca: nova data desejada sem cronograma.");
-  if (current.status !== "FOLGA") throw new DomainError("A data atual não está como folga no cronograma.");
-  if (desired.status === "FOLGA") throw new DomainError("A nova data desejada já está como folga.");
+  if (!isScheduleDayOffStatus(current.status)) throw new DomainError("A data atual não está como folga no cronograma.");
+  if (isScheduleDayOffStatus(desired.status)) throw new DomainError("A nova data desejada já está como folga.");
 
   const before = { current: serialize(current), desired: serialize(desired) };
 
@@ -2320,7 +2325,7 @@ async function applySellSchedule(tx: Prisma.TransactionClient, request: PrismaRe
   if (!targetDate) throw new DomainError("Data da venda de folga inválida.");
   const schedule = await tx.schedule.findUnique({ where: { employeeId_date: { employeeId: employee.id, date: targetDate } }, include: { shift: true } });
   if (!schedule) throw new DomainError("Não existe cronograma para esta data. Não foi possível aplicar a venda de folga.");
-  if (schedule.status !== "FOLGA") throw new DomainError("A data selecionada não está como folga.");
+  if (!isScheduleDayOffStatus(schedule.status)) throw new DomainError("A data selecionada não está como folga.");
 
   const shiftName = cleanShiftName(actionInput.finalApprovedShift || String(payload.availabilityShift ?? employee.shift.name)) || employee.shift.name;
   const finalShift = (await tx.shift.findFirst({ where: { OR: [{ name: shiftName }, { name: { startsWith: `${shiftName} (` } }] } })) ?? employee.shift;
@@ -2368,7 +2373,7 @@ async function applyRequestedDayOffSchedule(tx: Prisma.TransactionClient, reques
   if (!targetDate) throw new DomainError("Data desejada para folga inválida.");
   const schedule = await tx.schedule.findUnique({ where: { employeeId_date: { employeeId: employee.id, date: targetDate } }, include: { shift: true } });
   if (!schedule) throw new DomainError("Não existe cronograma para esta data. Não foi possível aplicar a folga.");
-  if (schedule.status === "FOLGA") throw new DomainError("A data desejada já está como folga.");
+  if (isScheduleDayOffStatus(schedule.status)) throw new DomainError("A data desejada já está como folga.");
 
   const before = serialize(schedule);
   const after = await tx.schedule.update({
