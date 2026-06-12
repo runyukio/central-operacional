@@ -123,8 +123,7 @@ http://localhost:3000
 10. Login admin local:
 
 ```text
-admin@central.com
-Central@123
+
 ```
 
 Fluxo real para testar:
