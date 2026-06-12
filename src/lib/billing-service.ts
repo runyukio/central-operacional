@@ -12,6 +12,7 @@ import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
 export const BILLING_START_MONTH = "2026-06";
 
+const BILLING_PJ_ONLY_MESSAGE = "Billing disponível apenas para colaboradores PJ.";
 const BILLING_REQUEST_TYPE_NAME = "Ajuste de Invoice";
 const OPEN_ADJUSTMENT_STATUSES = ["AGUARDANDO_SUPERVISOR", "AGUARDANDO_ADMIN"] as const;
 const BILLABLE_WORK_HOUR_STATUSES: WorkHourRecordStatus[] = [
@@ -159,6 +160,7 @@ export async function getMyBillingInvoice(actor: Actor, referenceMonthInput?: st
   const user = await findActiveUser(actor.email);
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
   if (!user.employeeProfile) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
+  if (!isBillingEligibleContract(user.employeeProfile.contractType)) return { error: BILLING_PJ_ONLY_MESSAGE, status: 403 };
 
   const referenceMonth = normalizeBillingMonth(referenceMonthInput);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
@@ -243,6 +245,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: { referenceMo
   const user = await findActiveUser(actor.email);
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
   if (!user.employeeProfile) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
+  if (!isBillingEligibleContract(user.employeeProfile.contractType)) return { error: BILLING_PJ_ONLY_MESSAGE, status: 403 };
 
   const referenceMonth = normalizeBillingMonth(input.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
@@ -285,6 +288,7 @@ export async function submitInvoiceAdjustmentRequest(actor: Actor, input: {
   const user = await findActiveUser(actor.email);
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
   if (!user.employeeProfile) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
+  if (!isBillingEligibleContract(user.employeeProfile.contractType)) return { error: BILLING_PJ_ONLY_MESSAGE, status: 403 };
 
   const referenceMonth = normalizeBillingMonth(input.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
@@ -624,6 +628,8 @@ export async function createBillingAdjustment(actor: Actor, input: {
   if (!Number.isFinite(Number(input.amount))) return { error: "Valor do ajuste inválido.", status: 400 };
   if (normalizeComparableJobTitle(input.type) === "penalty") return { error: "Tipo de ajuste Penalty não é permitido no Billing.", status: 400 };
   const cycle = await ensureBillingCycle(referenceMonth);
+  const targetDenied = await validateBillingAdjustmentTarget(input);
+  if (targetDenied) return targetDenied;
   const amount = normalizeBillingAdjustmentAmount(input.type, Number(input.amount));
   const adjustment = await prisma.billingAdjustment.create({
     data: {
@@ -1235,8 +1241,39 @@ function resolveHourlyRate(employee: BillingEmployee, rates: BillingRates) {
   };
 }
 
-function isBillableEmployee(employee: Pick<BillingEmployee, "roleTitle" | "skill">) {
+function isBillableEmployee(employee: Pick<BillingEmployee, "roleTitle" | "skill" | "contractType">) {
+  if (!isBillingEligibleContract(employee.contractType)) return false;
   return isAgentJobTitle(employee.roleTitle) || Boolean(resolveStaffRateRule(employee.skill)) || isSpecialBillingSkill(employee.skill);
+}
+
+function isBillingEligibleContract(value?: string | null) {
+  const contract = normalizeComparableJobTitle(value).replace(/[^a-z0-9]/g, "");
+  return contract === "pj" || contract === "pessoajuridica" || contract === "pessoajuridico";
+}
+
+async function validateBillingAdjustmentTarget(input: { employeeInvoiceId?: string | null; employeeId?: string | null }) {
+  if (input.employeeInvoiceId) {
+    const invoice = await prisma.billingEmployeeInvoice.findUnique({
+      where: { id: input.employeeInvoiceId },
+      select: {
+        id: true,
+        employee: { select: { contractType: true } }
+      }
+    });
+    if (!invoice) return { error: "Invoice do colaborador não encontrado.", status: 404 };
+    if (!isBillingEligibleContract(invoice.employee.contractType)) return { error: BILLING_PJ_ONLY_MESSAGE, status: 403 };
+  }
+
+  if (input.employeeId) {
+    const employee = await prisma.employeeProfile.findFirst({
+      where: { id: input.employeeId, deletedAt: null },
+      select: { contractType: true }
+    });
+    if (!employee) return { error: "Colaborador não encontrado.", status: 404 };
+    if (!isBillingEligibleContract(employee.contractType)) return { error: BILLING_PJ_ONLY_MESSAGE, status: 403 };
+  }
+
+  return null;
 }
 
 function isSpecialBillingSkill(value?: string | null) {

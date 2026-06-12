@@ -319,7 +319,7 @@ export function BillingPage() {
     <div className="space-y-4">
       <PageHeader
         title="Billing"
-        description="Cálculo de invoice com base nas horas aprovadas oficiais."
+        description="Cálculo de invoice para colaboradores PJ com base nas horas aprovadas oficiais."
         icon={CircleDollarSign}
         actions={<StatusBadge status="Acesso restrito" />}
       />
@@ -403,7 +403,7 @@ export function BillingPage() {
             </a>
           </div>
         </div>
-        <p className="mt-2 text-xs font-semibold text-muted">Billing disponível a partir de Junho/2026. Ciclos anteriores ficam bloqueados.</p>
+        <p className="mt-2 text-xs font-semibold text-muted">Billing disponível a partir de Junho/2026 apenas para colaboradores PJ. Ciclos anteriores ficam bloqueados.</p>
       </section>
 
       {message || error ? (

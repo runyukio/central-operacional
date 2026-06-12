@@ -115,7 +115,7 @@ export function MyInvoicePage() {
   if (error && !payload) {
     return (
       <>
-        <PageHeader title="Invoice do mês" description="Billing disponível a partir de Junho/2026." icon={FileText} />
+        <PageHeader title="Invoice do mês" description="Billing disponível a partir de Junho/2026 para colaboradores PJ." icon={FileText} />
         <EmptyState title="Invoice indisponível" description={error} />
       </>
     );
@@ -127,7 +127,7 @@ export function MyInvoicePage() {
     <div className="space-y-4">
       <PageHeader
         title="Invoice do mês"
-        description="Confira sua previsão e, quando liberado, aprove ou solicite ajuste."
+        description="Confira sua previsão PJ e, quando liberado, aprove ou solicite ajuste."
         icon={FileText}
         actions={<Link href="/meu-perfil" className="premium-control inline-flex h-9 items-center px-3 text-sm font-extrabold text-blue-700">Voltar ao perfil</Link>}
       />
