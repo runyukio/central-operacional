@@ -10442,15 +10442,26 @@ function formatDateTimeShort(value?: string) {
 
 function MuralPostVisual({ post, large = false }: { post: Pick<MuralPostClient, "title" | "contentType" | "imageUrl">; large?: boolean }) {
   const Icon = muralContentIcon(post.contentType);
-  const hasImage = Boolean(post.imageUrl?.trim());
+  const [imageFailed, setImageFailed] = useState(false);
+  const hasImage = Boolean(post.imageUrl?.trim()) && !imageFailed;
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [post.imageUrl]);
+
   return (
     <div
       className={cn(
         "relative overflow-hidden bg-blue-950",
         large ? "min-h-[260px]" : "min-h-[160px] md:min-h-full"
       )}
-      style={hasImage ? { backgroundImage: `linear-gradient(135deg, rgba(15, 23, 42, .34), rgba(37, 99, 235, .28)), url("${post.imageUrl}")`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}
     >
+      {hasImage ? (
+        <>
+          <img src={post.imageUrl} alt="" onError={() => setImageFailed(true)} className="absolute inset-0 h-full w-full object-cover" />
+          <div className="absolute inset-0 bg-gradient-to-br from-navy-950/35 to-blue-700/25" />
+        </>
+      ) : null}
       {!hasImage ? (
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,.7),transparent_34%),linear-gradient(135deg,#0f172a,#1d4ed8)]" />
       ) : null}
@@ -10470,6 +10481,71 @@ function MuralPostVisual({ post, large = false }: { post: Pick<MuralPostClient, 
   );
 }
 
+type MuralCoverDraft = {
+  sourceUrl: string;
+  fileName: string;
+};
+
+type MuralCoverUploadResponse = {
+  data: {
+    imageUrl: string;
+    fileId: string;
+    storagePath: string;
+  };
+};
+
+const muralCoverOutputWidth = 1200;
+const muralCoverOutputHeight = 675;
+const muralCoverMaxBytes = 5 * 1024 * 1024;
+const muralCoverMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function safeMuralCoverFileName(fileName: string) {
+  const base = fileName.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9._-]/g, "_") || "mural-cover";
+  return `${base}-${Date.now()}.jpg`;
+}
+
+async function buildCroppedMuralCoverFile(image: HTMLImageElement, fileName: string, crop: { x: number; y: number; zoom: number }) {
+  const canvas = document.createElement("canvas");
+  canvas.width = muralCoverOutputWidth;
+  canvas.height = muralCoverOutputHeight;
+
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Não foi possível preparar o recorte da imagem.");
+
+  const naturalWidth = image.naturalWidth;
+  const naturalHeight = image.naturalHeight;
+  const targetRatio = muralCoverOutputWidth / muralCoverOutputHeight;
+  const sourceRatio = naturalWidth / naturalHeight;
+  const zoom = clampNumber(crop.zoom, 1, 2.5);
+
+  let cropWidth: number;
+  let cropHeight: number;
+  if (sourceRatio > targetRatio) {
+    cropHeight = naturalHeight / zoom;
+    cropWidth = cropHeight * targetRatio;
+  } else {
+    cropWidth = naturalWidth / zoom;
+    cropHeight = cropWidth / targetRatio;
+  }
+
+  const centerX = (clampNumber(crop.x, 0, 100) / 100) * naturalWidth;
+  const centerY = (clampNumber(crop.y, 0, 100) / 100) * naturalHeight;
+  const sourceX = clampNumber(centerX - cropWidth / 2, 0, naturalWidth - cropWidth);
+  const sourceY = clampNumber(centerY - cropHeight / 2, 0, naturalHeight - cropHeight);
+
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, muralCoverOutputWidth, muralCoverOutputHeight);
+  context.drawImage(image, sourceX, sourceY, cropWidth, cropHeight, 0, 0, muralCoverOutputWidth, muralCoverOutputHeight);
+
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.88));
+  if (!blob) throw new Error("Não foi possível gerar a imagem recortada.");
+  return new File([blob], safeMuralCoverFileName(fileName), { type: "image/jpeg" });
+}
+
 export function MuralPage() {
   const [posts, setPosts] = useState<MuralPostClient[]>([]);
   const [birthdays, setBirthdays] = useState<MuralBirthdaysPayload>({ today: [], month: [] });
@@ -10483,6 +10559,12 @@ export function MuralPage() {
   const [muralLobs, setMuralLobs] = useState<Array<{ id: string; name: string }>>([]);
   const [savingMuralPost, setSavingMuralPost] = useState(false);
   const [muralFilters, setMuralFilters] = useState({ q: "", status: "Todos", priority: "Todos", contentType: "Todos", lobId: "Todos" });
+  const [muralCoverDraft, setMuralCoverDraft] = useState<MuralCoverDraft | null>(null);
+  const [muralCoverCrop, setMuralCoverCrop] = useState({ x: 50, y: 50, zoom: 1 });
+  const [muralCoverError, setMuralCoverError] = useState("");
+  const [uploadingMuralCover, setUploadingMuralCover] = useState(false);
+  const muralCoverInputRef = useRef<HTMLInputElement | null>(null);
+  const muralCoverImageRef = useRef<HTMLImageElement | null>(null);
 
   useEffect(() => {
     void loadMural();
@@ -10518,12 +10600,14 @@ export function MuralPage() {
   }
 
   function openNewMuralPost() {
+    clearMuralCoverDraft();
     setEditingPost(null);
     setMuralForm(emptyMuralPostForm());
     setMuralFormOpen(true);
   }
 
   function openEditMuralPost(post: MuralPostClient) {
+    clearMuralCoverDraft();
     setEditingPost(post);
     setMuralForm({
       title: post.title,
@@ -10541,6 +10625,54 @@ export function MuralPage() {
       expiresAt: post.expiresAt ? post.expiresAt.slice(0, 10) : ""
     });
     setMuralFormOpen(true);
+  }
+
+  function clearMuralCoverDraft() {
+    setMuralCoverDraft((current) => {
+      if (current?.sourceUrl.startsWith("blob:")) URL.revokeObjectURL(current.sourceUrl);
+      return null;
+    });
+    setMuralCoverError("");
+    setUploadingMuralCover(false);
+  }
+
+  function handleMuralCoverFile(file?: File | null) {
+    setMuralCoverError("");
+    if (!file) return;
+    if (!muralCoverMimeTypes.has(file.type)) {
+      setMuralCoverError("Use uma imagem PNG, JPG, JPEG ou WEBP.");
+      return;
+    }
+    if (file.size > muralCoverMaxBytes) {
+      setMuralCoverError("Imagem acima do limite de 5 MB.");
+      return;
+    }
+    clearMuralCoverDraft();
+    setMuralCoverCrop({ x: 50, y: 50, zoom: 1 });
+    setMuralCoverDraft({ sourceUrl: URL.createObjectURL(file), fileName: file.name });
+  }
+
+  async function uploadMuralCoverCrop() {
+    const image = muralCoverImageRef.current;
+    if (!muralCoverDraft || !image) return;
+    setUploadingMuralCover(true);
+    setMuralCoverError("");
+    try {
+      const file = await buildCroppedMuralCoverFile(image, muralCoverDraft.fileName, muralCoverCrop);
+      const formData = new FormData();
+      formData.set("file", file);
+      const response = await apiJson<MuralCoverUploadResponse>("/api/mural/uploads/cover", {
+        method: "POST",
+        body: formData
+      });
+      setMuralForm((current) => ({ ...current, imageUrl: response.data.imageUrl }));
+      clearMuralCoverDraft();
+      setMuralMessage("Imagem de capa enviada com sucesso.");
+    } catch (error) {
+      setMuralCoverError(error instanceof Error ? error.message : "Não foi possível enviar a imagem recortada.");
+    } finally {
+      setUploadingMuralCover(false);
+    }
   }
 
   async function saveMuralPost() {
@@ -10733,9 +10865,9 @@ export function MuralPage() {
             <div className="flex items-center justify-between border-b border-border px-5 py-4">
               <div>
                 <h2 className="text-xl font-black text-navy-950">{editingPost ? "Editar aviso" : "Novo aviso"}</h2>
-                <p className="text-sm text-muted">Use links externos para imagem, mídia ou anexos.</p>
+                <p className="text-sm text-muted">Envie uma capa recortada pelo sistema ou use uma URL pública de mídia/anexo.</p>
               </div>
-              <button onClick={() => setMuralFormOpen(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+              <button onClick={() => { clearMuralCoverDraft(); setMuralFormOpen(false); }} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
             </div>
             <div className="grid max-h-[75vh] gap-4 overflow-y-auto p-5 lg:grid-cols-[minmax(0,1fr)_320px]">
               <div className="space-y-3">
@@ -10747,7 +10879,36 @@ export function MuralPage() {
                 <div className="grid gap-3 md:grid-cols-2">
                   <FormSelect label="Tipo" value={muralForm.contentType} options={muralContentTypes} onChange={(value) => setMuralForm({ ...muralForm, contentType: value })} />
                   <FormSelect label="Prioridade" value={muralForm.priority} options={["BAIXA", "MEDIA", "ALTA", "CRITICA"]} onChange={(value) => setMuralForm({ ...muralForm, priority: value })} />
-                  <FormInput label="URL da imagem/capa" value={muralForm.imageUrl} onChange={(value) => setMuralForm({ ...muralForm, imageUrl: value })} />
+                  <div className="space-y-3 rounded-xl border border-blue-100 bg-blue-50/40 p-3 md:col-span-2">
+                    <input
+                      ref={muralCoverInputRef}
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      className="hidden"
+                      onChange={(event) => {
+                        handleMuralCoverFile(event.currentTarget.files?.[0]);
+                        event.currentTarget.value = "";
+                      }}
+                    />
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-extrabold text-navy-950">Imagem/capa do aviso</p>
+                        <p className="text-xs font-semibold text-muted">Envie PNG, JPG ou WEBP até 5 MB. O recorte final fica em 16:9.</p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button type="button" onClick={() => muralCoverInputRef.current?.click()} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 text-xs font-extrabold text-white">
+                          <Upload className="h-4 w-4" /> Enviar imagem
+                        </button>
+                        {muralForm.imageUrl ? (
+                          <button type="button" onClick={() => setMuralForm({ ...muralForm, imageUrl: "" })} className="inline-flex h-9 items-center justify-center rounded-lg border border-border bg-white px-3 text-xs font-extrabold text-navy-950">
+                            Remover capa
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                    {muralCoverError ? <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700">{muralCoverError}</p> : null}
+                    <FormInput label="Ou cole uma URL pública da imagem" value={muralForm.imageUrl} onChange={(value) => setMuralForm({ ...muralForm, imageUrl: value })} />
+                  </div>
                   <FormInput label="URL de mídia" value={muralForm.mediaUrl} onChange={(value) => setMuralForm({ ...muralForm, mediaUrl: value })} />
                   <FormInput label="Link externo" value={muralForm.externalUrl} onChange={(value) => setMuralForm({ ...muralForm, externalUrl: value })} />
                   <FormInput label="URL de anexo" value={muralForm.attachmentUrl} onChange={(value) => setMuralForm({ ...muralForm, attachmentUrl: value })} />
@@ -10794,8 +10955,64 @@ export function MuralPage() {
               </div>
             </div>
             <div className="flex flex-wrap justify-end gap-2 border-t border-border bg-slate-50 px-5 py-4">
-              <button onClick={() => setMuralFormOpen(false)} className="rounded-lg border border-border bg-white px-4 py-2 text-sm font-bold text-navy-950">Cancelar</button>
+              <button onClick={() => { clearMuralCoverDraft(); setMuralFormOpen(false); }} className="rounded-lg border border-border bg-white px-4 py-2 text-sm font-bold text-navy-950">Cancelar</button>
               <button disabled={savingMuralPost} onClick={() => void saveMuralPost()} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-60">{savingMuralPost ? "Salvando..." : "Salvar aviso"}</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {muralCoverDraft ? (
+        <div className="fixed inset-0 z-[60] grid place-items-center overflow-y-auto bg-navy-950/55 p-4">
+          <div className="w-full max-w-3xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-border px-5 py-4">
+              <div>
+                <h2 className="text-xl font-black text-navy-950">Ajustar recorte da capa</h2>
+                <p className="text-sm text-muted">Centralize o assunto principal. A imagem será salva em 1200x675.</p>
+              </div>
+              <button onClick={clearMuralCoverDraft} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+            </div>
+            <div className="space-y-4 p-5">
+              <div className="overflow-hidden rounded-xl border border-border bg-slate-100">
+                <div className="relative aspect-video overflow-hidden">
+                  <img
+                    ref={muralCoverImageRef}
+                    src={muralCoverDraft.sourceUrl}
+                    alt="Prévia da capa"
+                    className="absolute inset-0 h-full w-full object-cover"
+                    style={{
+                      objectPosition: `${muralCoverCrop.x}% ${muralCoverCrop.y}%`,
+                      width: `${muralCoverCrop.zoom * 100}%`,
+                      height: `${muralCoverCrop.zoom * 100}%`,
+                      left: `${(1 - muralCoverCrop.zoom) * 50}%`,
+                      top: `${(1 - muralCoverCrop.zoom) * 50}%`
+                    }}
+                  />
+                  <div className="pointer-events-none absolute inset-0 ring-1 ring-inset ring-white/70" />
+                </div>
+              </div>
+              <div className="grid gap-3 md:grid-cols-3">
+                <label className="rounded-lg border border-border bg-white p-3">
+                  <span className="text-xs font-extrabold uppercase text-muted">Horizontal</span>
+                  <input type="range" min="0" max="100" value={muralCoverCrop.x} onChange={(event) => setMuralCoverCrop({ ...muralCoverCrop, x: Number(event.target.value) })} className="mt-2 w-full" />
+                </label>
+                <label className="rounded-lg border border-border bg-white p-3">
+                  <span className="text-xs font-extrabold uppercase text-muted">Vertical</span>
+                  <input type="range" min="0" max="100" value={muralCoverCrop.y} onChange={(event) => setMuralCoverCrop({ ...muralCoverCrop, y: Number(event.target.value) })} className="mt-2 w-full" />
+                </label>
+                <label className="rounded-lg border border-border bg-white p-3">
+                  <span className="text-xs font-extrabold uppercase text-muted">Aproximação</span>
+                  <input type="range" min="1" max="2.5" step="0.05" value={muralCoverCrop.zoom} onChange={(event) => setMuralCoverCrop({ ...muralCoverCrop, zoom: Number(event.target.value) })} className="mt-2 w-full" />
+                </label>
+              </div>
+              {muralCoverError ? <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-700">{muralCoverError}</p> : null}
+            </div>
+            <div className="flex flex-wrap justify-end gap-2 border-t border-border bg-slate-50 px-5 py-4">
+              <button type="button" onClick={clearMuralCoverDraft} className="rounded-lg border border-border bg-white px-4 py-2 text-sm font-bold text-navy-950">Voltar</button>
+              <button type="button" disabled={uploadingMuralCover} onClick={() => void uploadMuralCoverCrop()} className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-60">
+                {uploadingMuralCover ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                {uploadingMuralCover ? "Enviando..." : "Salvar capa"}
+              </button>
             </div>
           </div>
         </div>

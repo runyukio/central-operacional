@@ -11,7 +11,8 @@ export const storageBuckets = {
   "equipment-evidence": { maxBytes: 10 * 1024 * 1024, extensions: [".pdf", ".png", ".jpg", ".jpeg"], roles: ["ADMIN", "GESTOR", "TI"] },
   "employee-documents": { maxBytes: 5 * 1024 * 1024, extensions: [".pdf", ".png", ".jpg", ".jpeg", ".docx"], roles: ["ADMIN", "GESTOR", "RH"] },
   "absence-evidence": { maxBytes: 5 * 1024 * 1024, extensions: [".pdf", ".png", ".jpg", ".jpeg"], roles: ["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "RH"] },
-  "shift-report-attachments": { maxBytes: 10 * 1024 * 1024, extensions: [".pdf", ".png", ".jpg", ".jpeg", ".docx", ".xlsx", ".csv"], roles: ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"] }
+  "shift-report-attachments": { maxBytes: 10 * 1024 * 1024, extensions: [".pdf", ".png", ".jpg", ".jpeg", ".docx", ".xlsx", ".csv"], roles: ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"] },
+  "mural-media": { maxBytes: 5 * 1024 * 1024, extensions: [".png", ".jpg", ".jpeg", ".webp"], roles: ["ADMIN"] }
 } as const;
 
 export type StorageBucket = keyof typeof storageBuckets;
@@ -79,6 +80,36 @@ export async function uploadPrivateObject(bucket: StorageBucket, path: string, f
   return { storagePath: path, skipped: false };
 }
 
+export async function uploadPublicObject(bucket: StorageBucket, path: string, file: File) {
+  if (!isStorageConfigured()) {
+    return uploadLocalPublicObject(bucket, path, file);
+  }
+
+  const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/${bucket}/${path}`, {
+    method: "POST",
+    headers: {
+      apikey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
+      Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+      "Content-Type": file.type || "application/octet-stream",
+      "x-upsert": "false"
+    },
+    body: await file.arrayBuffer()
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(text || "Falha ao enviar arquivo para Supabase Storage.");
+  }
+
+  return { storagePath: path, publicUrl: getPublicObjectUrl(bucket, path), skipped: false };
+}
+
+export function getPublicObjectUrl(bucket: StorageBucket, path: string) {
+  const baseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").replace(/\/+$/, "");
+  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+  return `${baseUrl}/storage/v1/object/public/${bucket}/${encodedPath}`;
+}
+
 async function uploadLocalObject(bucket: StorageBucket, path: string, file: File) {
   const safePath = path.replace(/^\/+/, "").replace(/\.\./g, "");
   const relativePath = `${bucket}/${safePath}`;
@@ -87,6 +118,21 @@ async function uploadLocalObject(bucket: StorageBucket, path: string, file: File
   await writeFile(absolutePath, Buffer.from(await file.arrayBuffer()));
   return {
     storagePath: relativePath,
+    localPath: absolutePath,
+    skipped: false,
+    provider: "local"
+  };
+}
+
+async function uploadLocalPublicObject(bucket: StorageBucket, path: string, file: File) {
+  const safePath = path.replace(/^\/+/, "").replace(/\.\./g, "");
+  const relativePath = `uploads/${bucket}/${safePath}`;
+  const absolutePath = resolve(process.cwd(), "public", relativePath);
+  await mkdir(dirname(absolutePath), { recursive: true });
+  await writeFile(absolutePath, Buffer.from(await file.arrayBuffer()));
+  return {
+    storagePath: safePath,
+    publicUrl: `/${relativePath}`,
     localPath: absolutePath,
     skipped: false,
     provider: "local"

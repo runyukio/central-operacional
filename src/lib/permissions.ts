@@ -38,7 +38,10 @@ const roleAliases: Record<string, AppRole> = {
   GERENTE: "GERENTE",
   MANAGER: "GERENTE",
   CLIENT: "CLIENT",
-  ADMIN: "ADMIN"
+  ADMIN: "ADMIN",
+  ADMINISTRADOR: "ADMIN",
+  ADMINISTRADORA: "ADMIN",
+  "ADMIN CENTRAL": "ADMIN"
 };
 
 export function normalizeRole(role?: string | null): AppRole {

@@ -47,7 +47,9 @@ Implementacao do pacote WFH ADS/CEC, Mural de Avisos, filtros em lote por WB/Log
 - Adicionados campos de Mural em migration: tipo de conteudo, URLs externas, publico-alvo por role/LOB, prioridade, expiracao, arquivamento e role do autor.
 - CLIENT permanece sem acesso ao Mural; segue restrito a Performance.
 - ADMIN gerencia no MVP; demais perfis internos visualizam posts publicados destinados ao role/LOB.
-- Sem upload local de arquivos: somente URLs externas validadas.
+- Capa do aviso pode ser enviada para Supabase Storage pelo bucket publico `mural-media`.
+- Upload da capa abre recorte visual 16:9 antes de salvar, gerando imagem final em 1200x675.
+- URLs externas continuam permitidas para imagem, midia e anexos.
 - Aniversarios usam `EmployeeSensitiveData.birthDate`, mostrando apenas dia/mes, nome e LOB.
 
 ## Filtros em lote
@@ -102,7 +104,7 @@ Implementacao do pacote WFH ADS/CEC, Mural de Avisos, filtros em lote por WB/Log
 - Historico disciplinar ainda nao possui base confiavel conectada para WFH; criterio retorna dados insuficientes quando necessario.
 - SLA CEC ainda nao possui base confiavel conectada; criterio retorna dados insuficientes quando necessario.
 - Status atual real de quem ja esta em WFH nao possui base confiavel conectada; monitoramento fica `NOT_MONITORED` ate a base existir.
-- Upload de midia do Mural nao foi implementado por seguranca; usar URLs externas.
+- Upload de capa do Mural foi implementado via Supabase Storage. Videos, anexos e outras midias seguem por URL externa para evitar upload inseguro fora do bucket controlado.
 
 ## Proximos passos recomendados
 
