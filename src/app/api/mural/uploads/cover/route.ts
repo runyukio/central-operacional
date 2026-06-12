@@ -59,14 +59,28 @@ export async function POST(request: Request) {
       }
     }, { status: 201 });
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Erro ao enviar capa do Mural";
+    console.error("[mural/uploads/cover] erro ao enviar capa", error);
     recordErrorLog({
       userEmail: actor.email,
       code: "MURAL_COVER_UPLOAD_ERROR",
-      message: error instanceof Error ? error.message : "Erro ao enviar capa do Mural",
+      message: errorMessage,
       route: "/api/mural/uploads/cover",
       action: "UPLOAD",
       severity: "ERROR"
     });
-    return NextResponse.json({ error: "Não foi possível enviar a imagem do Mural. Tente novamente." }, { status: 500 });
+    return NextResponse.json({ error: muralUploadErrorMessage(errorMessage) }, { status: 500 });
   }
+}
+
+function muralUploadErrorMessage(message: string) {
+  const normalized = message.toLowerCase();
+  if (normalized.includes("supabase storage não configurado")) return message;
+  if (normalized.includes("bucket") && (normalized.includes("not found") || normalized.includes("não encontrado") || normalized.includes("not exist"))) {
+    return "Bucket mural-media não encontrado no Supabase. Rode a migration ou crie o bucket público mural-media antes de enviar capas.";
+  }
+  if (normalized.includes("row-level security") || normalized.includes("policy")) {
+    return "O bucket mural-media existe, mas a política do Supabase Storage bloqueou o upload. Revise permissões/RLS do bucket.";
+  }
+  return "Não foi possível enviar a imagem do Mural. Verifique a configuração do Supabase Storage e tente novamente.";
 }

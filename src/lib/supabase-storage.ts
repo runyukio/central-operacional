@@ -82,6 +82,9 @@ export async function uploadPrivateObject(bucket: StorageBucket, path: string, f
 
 export async function uploadPublicObject(bucket: StorageBucket, path: string, file: File) {
   if (!isStorageConfigured()) {
+    if (process.env.NODE_ENV === "production" || process.env.VERCEL === "1") {
+      throw new Error("Supabase Storage não configurado. Verifique NEXT_PUBLIC_SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY no ambiente de produção.");
+    }
     return uploadLocalPublicObject(bucket, path, file);
   }
 
