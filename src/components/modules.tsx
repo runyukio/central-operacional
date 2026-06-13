@@ -141,7 +141,7 @@ const dayOffKindLabels: Record<DayOffKind, string> = {
 };
 const dayOffOptions: Array<{ kind: DayOffKind; title: string; description: string }> = [
   { kind: "DAY_OFF_SWAP", title: "Trocar folga", description: "Mover uma folga para outra data já programada." },
-  { kind: "DAY_OFF_SELL", title: "Vender folga", description: "Trabalhar em uma folga comum ou folga aprovada por troca." },
+  { kind: "DAY_OFF_SELL", title: "Vender folga", description: "Trabalhar em uma Folga, Folga aprovada ou Troca aprovada." },
   { kind: "DAY_OFF_REQUEST", title: "Solicitar dia de folga", description: "Pedir folga em uma data em que você está programado." }
 ];
 
@@ -4503,7 +4503,7 @@ export function MySchedulePage() {
               ) : null}
               {dayOffForm.kind === "DAY_OFF_SELL" ? (
                 <>
-                  <FormInput label="Data da folga que deseja vender" type="date" value={dayOffForm.dayOffToSellDate} onChange={(value) => setDayOffForm({ ...dayOffForm, dayOffToSellDate: value })} helper="Pode ser uma Folga ou Folga aprovada por troca." />
+                  <FormInput label="Data da folga que deseja vender" type="date" value={dayOffForm.dayOffToSellDate} onChange={(value) => setDayOffForm({ ...dayOffForm, dayOffToSellDate: value })} helper="Pode ser Folga, Folga aprovada ou Troca aprovada." />
                   <FormSelect label="Turno desejado" value={dayOffForm.availabilityShift} options={Array.from(standardShiftNames)} onChange={(value) => setDayOffForm({ ...dayOffForm, availabilityShift: value })} />
                   <FormInput label="Horário preferencial de entrada" value={dayOffForm.preferredStartTime} onChange={(value) => setDayOffForm({ ...dayOffForm, preferredStartTime: value })} />
                   <FormInput label="Horário preferencial de saída" value={dayOffForm.preferredEndTime} onChange={(value) => setDayOffForm({ ...dayOffForm, preferredEndTime: value })} />

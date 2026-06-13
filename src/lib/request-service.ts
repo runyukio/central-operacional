@@ -59,7 +59,8 @@ const terminalFlowStatuses = ["APROVADO", "CONCLUIDO", "RECUSADO", "CANCELADO"] 
 const allowDemoDataFallback = process.env.ALLOW_DEMO_LOGIN === "true" || process.env.ALLOW_DEMO_DATA === "true";
 const productiveShiftCategories = ["Manhã", "Tarde", "Noite"] as const;
 const coverageStatuses = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "ATRASO", "SAIDA_ANTECIPADA", "VENDA_FOLGA_APROVADA"]);
-const sellableDayOffScheduleStatuses = new Set<ScheduleStatus>(["FOLGA", "FOLGA_APROVADA"]);
+const dayOffScheduleStatuses = new Set<ScheduleStatus>(["FOLGA", "FOLGA_APROVADA"]);
+const sellableDayOffScheduleStatuses = new Set<ScheduleStatus>(["FOLGA", "FOLGA_APROVADA", "TROCA_APROVADA"]);
 const inactiveCoverageEmployeeStatuses = new Set([
   "inativo",
   "inativa",
@@ -1926,6 +1927,10 @@ function scheduleCountsAsCoverageForImpact(schedule: { status: ScheduleStatus; s
 }
 
 function isScheduleDayOffStatus(status?: ScheduleStatus | null) {
+  return Boolean(status && dayOffScheduleStatuses.has(status));
+}
+
+function isSellableDayOffStatus(status?: ScheduleStatus | null) {
   return Boolean(status && sellableDayOffScheduleStatuses.has(status));
 }
 
@@ -2133,7 +2138,7 @@ async function validateDayOffRequestInDatabase(employeeId: string, input: Create
     const target = await findSchedule(input.dayOffToSellDate);
     if (!target.date) return "Data da folga que deseja vender inválida.";
     if (employeeScheduleCount && !target.schedule) return "Data da folga fora do período de cronograma carregado.";
-    if (target.schedule && !isScheduleDayOffStatus(target.schedule.status)) return "A data selecionada não está registrada como folga comum ou folga aprovada por troca.";
+    if (target.schedule && !isSellableDayOffStatus(target.schedule.status)) return "A data selecionada não está registrada como Folga, Folga aprovada ou Troca aprovada.";
     return duplicateDayOffRequest(employeeId, kind, { dayOffToSellDate: input.dayOffToSellDate });
   }
 
@@ -2325,7 +2330,7 @@ async function applySellSchedule(tx: Prisma.TransactionClient, request: PrismaRe
   if (!targetDate) throw new DomainError("Data da venda de folga inválida.");
   const schedule = await tx.schedule.findUnique({ where: { employeeId_date: { employeeId: employee.id, date: targetDate } }, include: { shift: true } });
   if (!schedule) throw new DomainError("Não existe cronograma para esta data. Não foi possível aplicar a venda de folga.");
-  if (!isScheduleDayOffStatus(schedule.status)) throw new DomainError("A data selecionada não está como folga comum ou folga aprovada por troca.");
+  if (!isSellableDayOffStatus(schedule.status)) throw new DomainError("A data selecionada não está como Folga, Folga aprovada ou Troca aprovada.");
 
   const shiftName = cleanShiftName(actionInput.finalApprovedShift || String(payload.availabilityShift ?? employee.shift.name)) || employee.shift.name;
   const finalShift = (await tx.shift.findFirst({ where: { OR: [{ name: shiftName }, { name: { startsWith: `${shiftName} (` } }] } })) ?? employee.shift;
