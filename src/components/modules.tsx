@@ -13847,7 +13847,9 @@ export function ShiftReportPage() {
 
 export function StaffCoveragePage() {
   const initialRange = currentStaffCoverageWeekRange();
+  const [view, setView] = useState<"AGENTS" | "STAFF">("AGENTS");
   const [payload, setPayload] = useState<StaffCoverageResponse | null>(null);
+  const [staffPayload, setStaffPayload] = useState<RequiredStaffCoverageResponse | null>(null);
   const [filters, setFilters] = useState({
     startDate: initialRange.startDate,
     endDate: initialRange.endDate,
@@ -13859,6 +13861,8 @@ export function StaffCoveragePage() {
   });
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [staffLoading, setStaffLoading] = useState(false);
+  const [showRtaCoverage, setShowRtaCoverage] = useState(false);
   const [message, setMessage] = useState("");
   const [importing, setImporting] = useState(false);
   const [preview, setPreview] = useState<StaffCoveragePreviewResponse | null>(null);
@@ -13891,9 +13895,33 @@ export function StaffCoveragePage() {
     }
   }, [filters, page]);
 
+  const loadStaffCoverage = useCallback(async () => {
+    setStaffLoading(true);
+    const params = new URLSearchParams({
+      startDate: filters.startDate,
+      endDate: filters.endDate,
+      lob: filters.lob,
+      shift: filters.shift,
+      supervisor: filters.supervisor
+    });
+    try {
+      const data = await apiJson<RequiredStaffCoverageResponse>(`/api/staff-coverage/staff?${params.toString()}`);
+      setStaffPayload(data);
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível carregar cobertura STAFF.");
+    } finally {
+      setStaffLoading(false);
+    }
+  }, [filters.endDate, filters.lob, filters.shift, filters.startDate, filters.supervisor]);
+
   useEffect(() => {
-    void loadCoverage();
-  }, [loadCoverage]);
+    if (view === "AGENTS") void loadCoverage();
+  }, [loadCoverage, view]);
+
+  useEffect(() => {
+    if (view === "STAFF") void loadStaffCoverage();
+  }, [loadStaffCoverage, view]);
 
   const updateFilter = (key: keyof typeof filters, value: string) => {
     setFilters((current) => ({ ...current, [key]: value }));
@@ -13968,8 +13996,8 @@ export function StaffCoveragePage() {
 
   const summary = payload?.summary;
   const rows = payload?.data ?? [];
-  const lobs = optionList(payload?.filters.lobs, filters.lob);
-  const supervisors = optionList(payload?.filters.supervisors, filters.supervisor);
+  const lobs = optionList(view === "STAFF" ? staffPayload?.filters.lobs : payload?.filters.lobs, filters.lob);
+  const supervisors = optionList(view === "STAFF" ? staffPayload?.filters.staff : payload?.filters.supervisors, filters.supervisor);
   const skills = optionList(payload?.filters.skills, filters.skill);
   const shifts = ["Todos", "Manhã", "Tarde", "Noite"];
 
@@ -13977,13 +14005,28 @@ export function StaffCoveragePage() {
     <div className="space-y-4">
       <PageHeader
         title="Requerido"
-        description="Requerido semanal cruzado com agentes disponíveis no Cronograma."
+        description="Requerido operacional e cobertura de staff por escala."
         icon={UsersRound}
         actions={<TopActions />}
       />
 
+      <div className="inline-flex rounded-xl border border-border bg-white p-1 shadow-sm">
+        {(["AGENTS", "STAFF"] as const).map((item) => (
+          <button
+            key={item}
+            onClick={() => setView(item)}
+            className={cn(
+              "h-9 rounded-lg px-4 text-xs font-extrabold transition",
+              view === item ? "bg-blue-600 text-white shadow-sm" : "text-muted hover:bg-blue-50 hover:text-blue-700"
+            )}
+          >
+            {item}
+          </button>
+        ))}
+      </div>
+
       <div className="rounded-xl border border-border bg-white p-3 shadow-sm">
-        <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-[140px_140px_140px_140px_170px_140px_130px_1fr]">
+        <div className={cn("grid gap-2 md:grid-cols-3", view === "AGENTS" ? "xl:grid-cols-[140px_140px_140px_140px_170px_140px_130px_1fr]" : "xl:grid-cols-[140px_140px_140px_140px_190px_1fr]")}>
           <FormInput label="Data inicial" type="date" value={filters.startDate} onChange={(value) => updateFilter("startDate", value)} />
           <FormInput label="Data final" type="date" value={filters.endDate} onChange={(value) => updateFilter("endDate", value)} />
           <label className="text-xs font-bold text-muted">
@@ -13999,25 +14042,29 @@ export function StaffCoveragePage() {
             </select>
           </label>
           <label className="text-xs font-bold text-muted">
-            Supervisor
+            {view === "STAFF" ? "Supervisor/POC/RTA" : "Supervisor"}
             <select value={filters.supervisor} onChange={(event) => updateFilter("supervisor", event.target.value)} className="premium-control mt-1 h-9 w-full px-3 text-sm font-bold text-navy-950">
-              {supervisors.map((supervisor) => <option key={supervisor} value={supervisor}>{supervisor === "Todos" ? "Todos os supervisores" : supervisor}</option>)}
+              {supervisors.map((supervisor) => <option key={supervisor} value={supervisor}>{supervisor === "Todos" ? (view === "STAFF" ? "Todos os staff" : "Todos os supervisores") : supervisor}</option>)}
             </select>
           </label>
-          <label className="text-xs font-bold text-muted">
-            Skill
-            <select value={filters.skill} onChange={(event) => updateFilter("skill", event.target.value)} className="premium-control mt-1 h-9 w-full px-3 text-sm font-bold text-navy-950">
-              {skills.map((skill) => <option key={skill} value={skill}>{skill === "Todas" ? "Todas as skills" : skill}</option>)}
-            </select>
-          </label>
-          <label className="text-xs font-bold text-muted">
-            Cargo/Função
-            <select value={filters.roleTitle} onChange={(event) => updateFilter("roleTitle", event.target.value)} className="premium-control mt-1 h-9 w-full px-3 text-sm font-bold text-navy-950">
-              <option value="Agente">Agente</option>
-            </select>
-          </label>
+          {view === "AGENTS" ? (
+            <>
+              <label className="text-xs font-bold text-muted">
+                Skill
+                <select value={filters.skill} onChange={(event) => updateFilter("skill", event.target.value)} className="premium-control mt-1 h-9 w-full px-3 text-sm font-bold text-navy-950">
+                  {skills.map((skill) => <option key={skill} value={skill}>{skill === "Todas" ? "Todas as skills" : skill}</option>)}
+                </select>
+              </label>
+              <label className="text-xs font-bold text-muted">
+                Cargo/Função
+                <select value={filters.roleTitle} onChange={(event) => updateFilter("roleTitle", event.target.value)} className="premium-control mt-1 h-9 w-full px-3 text-sm font-bold text-navy-950">
+                  <option value="Agente">Agente</option>
+                </select>
+              </label>
+            </>
+          ) : null}
           <div className="flex flex-wrap items-end justify-end gap-2">
-            {payload?.permissions.canImport ? (
+            {view === "AGENTS" && payload?.permissions.canImport ? (
               <>
                 <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={(event) => void previewRequirementFile(event.target.files?.[0])} />
                 <button onClick={() => void downloadFile("/api/staff-coverage/template", "template_requerido.xlsx").catch((error) => setMessage(error instanceof Error ? error.message : "Não foi possível baixar o template."))} className="premium-control h-9 px-3 text-xs font-extrabold text-navy-950">
@@ -14028,11 +14075,16 @@ export function StaffCoveragePage() {
                 </button>
               </>
             ) : null}
-            <button onClick={() => void exportCoverage()} className="premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold text-navy-950">
+            {view === "AGENTS" ? <button onClick={() => void exportCoverage()} className="premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold text-navy-950">
               <Download className="h-4 w-4" /> Exportar
-            </button>
-            <button onClick={() => void loadCoverage()} className="inline-flex h-9 items-center gap-2 rounded-lg bg-navy-950 px-3 text-xs font-extrabold text-white">
-              <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} /> Atualizar
+            </button> : null}
+            {view === "STAFF" ? (
+              <button onClick={() => setShowRtaCoverage((current) => !current)} className={cn("premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold", showRtaCoverage ? "border-blue-200 bg-blue-50 text-blue-700" : "text-navy-950")}>
+                <Headphones className="h-4 w-4" /> COM RTA
+              </button>
+            ) : null}
+            <button onClick={() => view === "AGENTS" ? void loadCoverage() : void loadStaffCoverage()} className="inline-flex h-9 items-center gap-2 rounded-lg bg-navy-950 px-3 text-xs font-extrabold text-white">
+              <RefreshCw className={cn("h-4 w-4", (view === "AGENTS" ? loading : staffLoading) && "animate-spin")} /> Atualizar
             </button>
           </div>
         </div>
@@ -14040,6 +14092,10 @@ export function StaffCoveragePage() {
 
       {message ? <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
 
+      {view === "STAFF" ? (
+        <RequiredStaffCoverageView payload={staffPayload} loading={staffLoading} showRta={showRtaCoverage} />
+      ) : (
+      <>
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
         <StatCard title="Total requerido" value={summary?.totalRequired ?? 0} helper="arquivo semanal" icon={ClipboardList} tone="blue" />
         <StatCard title="Total disponível" value={summary?.totalAvailable ?? 0} helper="agentes no cronograma" icon={UserCheck} tone="green" />
@@ -14132,6 +14188,8 @@ export function StaffCoveragePage() {
           <StaffCoverageSummaryList rows={payload?.byShift ?? []} />
         </Panel>
       </div>
+      </>
+      )}
 
       {preview ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy-950/45 p-4">
@@ -14312,6 +14370,222 @@ type StaffCoverageDetailsResponse = {
   data: StaffCoverageAgentClient[];
   pagination: { page: number; limit: number; total: number; totalPages: number };
 };
+
+type RequiredStaffPersonClient = {
+  id: string;
+  name: string;
+  wbLogin: string;
+  skill: string;
+  lob: "ADS" | "CEC" | "TNS";
+  role: "SUPERVISOR" | "POC" | "RTA";
+  shift: "Manhã" | "Tarde" | "Noite";
+  scheduleStatus: string;
+};
+
+type RequiredStaffLobCellClient = {
+  lob: "ADS" | "CEC" | "TNS";
+  status: "COMPLETE" | "PARTIAL_SUPERVISOR" | "PARTIAL_POC" | "NONE";
+  label: string;
+  supervisors: RequiredStaffPersonClient[];
+  pocs: RequiredStaffPersonClient[];
+  rtas: RequiredStaffPersonClient[];
+};
+
+type RequiredStaffShiftRowClient = {
+  date: string;
+  dateLabel: string;
+  weekday: string;
+  isWeekend: boolean;
+  shift: "Manhã" | "Tarde" | "Noite";
+  companySupervisors: RequiredStaffPersonClient[];
+  supervisorStatus: "OK" | "CRITICAL";
+  rtas: RequiredStaffPersonClient[];
+  lobs: RequiredStaffLobCellClient[];
+};
+
+type RequiredStaffCriticalRowClient = {
+  date: string;
+  dateLabel: string;
+  weekday: string;
+  shift: "Manhã" | "Tarde" | "Noite";
+  lob: "ADS" | "CEC" | "TNS" | "Geral";
+  severity: "Crítico" | "Alto" | "Médio" | "Baixo";
+  problem: string;
+  observation: string;
+  score: number;
+};
+
+type RequiredStaffCoverageResponse = {
+  period: { startDate: string; endDate: string };
+  summary: {
+    shiftsWithSupervisor: number;
+    shiftsWithoutSupervisor: number;
+    completeCoverage: number;
+    partialCoverage: number;
+    noCoverage: number;
+    mostCriticalLob: string;
+    criticalDay: string;
+    weekendRisk: number;
+  };
+  rows: RequiredStaffShiftRowClient[];
+  critical: RequiredStaffCriticalRowClient[];
+  filters: { lobs: string[]; shifts: string[]; staff: string[] };
+};
+
+function RequiredStaffCoverageView({ payload, loading, showRta }: { payload: RequiredStaffCoverageResponse | null; loading: boolean; showRta: boolean }) {
+  const rows = payload?.rows ?? [];
+  const lobs = rows[0]?.lobs.map((cell) => cell.lob) ?? ["ADS", "CEC", "TNS"];
+  const summary = payload?.summary;
+  const rtaRows = rows.map((row) => ({
+    key: `${row.date}-${row.shift}`,
+    date: row.dateLabel,
+    weekday: row.weekday,
+    shift: row.shift,
+    count: row.rtas.length,
+    names: staffNames(row.rtas)
+  }));
+
+  if (loading && !payload) {
+    return <div className="rounded-xl border border-border bg-white p-8 text-center text-sm font-bold text-muted">Carregando cobertura STAFF...</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+        <StatCard title="Turnos com supervisor" value={summary?.shiftsWithSupervisor ?? 0} helper="mínimo na empresa" icon={ShieldCheck} tone="green" />
+        <StatCard title="Sem supervisor" value={summary?.shiftsWithoutSupervisor ?? 0} helper="turnos críticos" icon={AlertTriangle} tone={(summary?.shiftsWithoutSupervisor ?? 0) > 0 ? "red" : "green"} />
+        <StatCard title="Cobertura completa" value={summary?.completeCoverage ?? 0} helper="Supervisor + POC" icon={UserCheck} tone="green" />
+        <StatCard title="Cobertura parcial" value={summary?.partialCoverage ?? 0} helper="apenas uma ponta" icon={Clock} tone="orange" />
+        <StatCard title="Sem cobertura" value={summary?.noCoverage ?? 0} helper="sem Supervisor/POC" icon={XCircle} tone={(summary?.noCoverage ?? 0) > 0 ? "red" : "green"} />
+        <StatCard title="Risco fim de semana" value={summary?.weekendRisk ?? 0} helper={`LOB crítica: ${summary?.mostCriticalLob ?? "-"}`} icon={CalendarDays} tone={(summary?.weekendRisk ?? 0) > 0 ? "red" : "blue"} />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[1.4fr_.8fr]">
+        <Panel title="Heatmap de cobertura STAFF">
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-xs font-bold text-muted">
+            <span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">Verde = Supervisor + POC</span>
+            <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-700">Amarelo = parcial</span>
+            <span className="rounded-full bg-red-50 px-2 py-1 text-red-700">Vermelho = sem cobertura</span>
+            <span className="rounded-full bg-blue-50 px-2 py-1 text-blue-700">Supervisor mínimo é geral por turno</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[980px] border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs font-extrabold uppercase text-muted">
+                  <th className="px-3 py-2">Data</th>
+                  <th className="px-3 py-2">Turno</th>
+                  <th className="px-3 py-2">Supervisor empresa</th>
+                  {lobs.map((lob) => <th key={lob} className="px-3 py-2 text-center">{lob}</th>)}
+                  {showRta ? <th className="px-3 py-2 text-center">RTA</th> : null}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={`${row.date}-${row.shift}`} className={cn("border-b border-slate-100 align-top", row.isWeekend && "bg-slate-50/60")}>
+                    <td className="px-3 py-2 font-bold text-navy-950">
+                      {row.dateLabel}
+                      <p className="text-xs font-semibold text-muted">{row.weekday}{row.isWeekend ? " · fim de semana" : ""}</p>
+                    </td>
+                    <td className="px-3 py-2 font-extrabold text-navy-950">{row.shift}</td>
+                    <td className="px-3 py-2">
+                      <span className={cn("rounded-full px-2 py-1 text-xs font-extrabold", row.companySupervisors.length ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700")}>
+                        {row.companySupervisors.length ? "OK" : "Crítico"}
+                      </span>
+                      <p className="mt-1 max-w-[180px] truncate text-xs font-semibold text-muted" title={staffNames(row.companySupervisors)}>{staffNames(row.companySupervisors) || "Sem Supervisor"}</p>
+                    </td>
+                    {row.lobs.map((cell) => <td key={cell.lob} className="px-2 py-2"><RequiredStaffCoverageCell cell={cell} showRta={showRta} /></td>)}
+                    {showRta ? (
+                      <td className="px-3 py-2 text-center">
+                        <span className={cn("rounded-full px-2 py-1 text-xs font-extrabold", row.rtas.length ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-muted")}>
+                          {row.rtas.length ? `${row.rtas.length} RTA` : "Sem RTA"}
+                        </span>
+                        <p className="mt-1 max-w-[160px] truncate text-xs font-semibold text-muted" title={staffNames(row.rtas)}>{staffNames(row.rtas) || "-"}</p>
+                      </td>
+                    ) : null}
+                  </tr>
+                ))}
+                {!rows.length ? <tr><td colSpan={showRta ? 7 : 6} className="px-3 py-8"><EmptyState title="Sem escala STAFF" description="Não foram encontrados Supervisores, POCs ou RTAs por skill no período filtrado." /></td></tr> : null}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+
+        <Panel title="Dias mais críticos">
+          <div className="space-y-2">
+            {(payload?.critical ?? []).map((item) => (
+              <div key={`${item.date}-${item.shift}-${item.lob}-${item.problem}`} className="rounded-lg border border-border p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-extrabold text-navy-950">{item.dateLabel} · {item.shift} · {item.lob}</p>
+                    <p className="text-xs font-semibold text-muted">{item.weekday} · {item.problem}</p>
+                  </div>
+                  <span className={cn("rounded-full px-2 py-1 text-xs font-extrabold", severityTone(item.severity))}>{item.severity}</span>
+                </div>
+                <p className="mt-2 text-xs font-semibold text-muted">{item.observation}</p>
+              </div>
+            ))}
+            {!payload?.critical.length ? <EmptyState title="Sem criticidade" description="Nenhum ponto crítico no período filtrado." /> : null}
+          </div>
+        </Panel>
+      </div>
+
+      {showRta ? (
+        <Panel title="Cobertura RTA por turno">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs font-extrabold uppercase text-muted">
+                  {["Data", "Turno", "Status", "Quantidade", "RTAs escalados"].map((column) => <th key={column} className="px-3 py-2">{column}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {rtaRows.map((row) => (
+                  <tr key={row.key} className="border-b border-slate-100">
+                    <td className="px-3 py-2 font-bold text-navy-950">{row.date}<p className="text-xs font-semibold text-muted">{row.weekday}</p></td>
+                    <td className="px-3 py-2">{row.shift}</td>
+                    <td className="px-3 py-2"><span className={cn("rounded-full px-2 py-1 text-xs font-extrabold", row.count ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-muted")}>{row.count ? "RTA presente" : "Sem RTA"}</span></td>
+                    <td className="px-3 py-2 text-center font-extrabold">{row.count}</td>
+                    <td className="px-3 py-2 text-muted">{row.names || "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      ) : null}
+    </div>
+  );
+}
+
+function RequiredStaffCoverageCell({ cell, showRta }: { cell: RequiredStaffLobCellClient; showRta: boolean }) {
+  return (
+    <div className={cn("min-h-[108px] rounded-xl border p-3 text-left", requiredStaffCellTone(cell.status))}>
+      <p className="text-xs font-extrabold uppercase">{cell.label}</p>
+      <div className="mt-2 space-y-1 text-xs font-semibold">
+        <p className="truncate" title={staffNames(cell.supervisors)}>Sup: {staffNames(cell.supervisors) || "-"}</p>
+        <p className="truncate" title={staffNames(cell.pocs)}>POC: {staffNames(cell.pocs) || "-"}</p>
+        {showRta ? <p className="truncate" title={staffNames(cell.rtas)}>RTA: {staffNames(cell.rtas) || "-"}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function staffNames(items: RequiredStaffPersonClient[]) {
+  return items.map((item) => item.name).join(", ");
+}
+
+function requiredStaffCellTone(status: RequiredStaffLobCellClient["status"]) {
+  if (status === "COMPLETE") return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  if (status === "NONE") return "border-red-200 bg-red-50 text-red-800";
+  return "border-amber-200 bg-amber-50 text-amber-800";
+}
+
+function severityTone(severity: RequiredStaffCriticalRowClient["severity"]) {
+  if (severity === "Crítico") return "bg-red-100 text-red-700";
+  if (severity === "Alto") return "bg-orange-100 text-orange-700";
+  if (severity === "Médio") return "bg-amber-100 text-amber-700";
+  return "bg-slate-100 text-muted";
+}
 
 function StaffCoverageSummaryList({ rows }: { rows: StaffCoverageSummaryRow[] }) {
   if (!rows.length) return <EmptyState title="Sem dados" description="Importe requerido ou ajuste os filtros." />;

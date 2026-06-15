@@ -111,3 +111,69 @@ Implementacao do pacote WFH ADS/CEC, Mural de Avisos, filtros em lote por WB/Log
 - Conectar base oficial de disciplina e SLA CEC para reduzir `Dados insuficientes`.
 - Conectar status oficial de colaborador em WFH para ativar monitoramento/retorno automatico.
 - Avaliar liberacao granular de publicacao no Mural para RH/WFM/Supervisor.
+
+---
+
+# Implementation Log - 2026-06-15 - Requerido STAFF
+
+## Resumo
+
+Adicionada uma segunda visao na aba Requerido com alternancia por botoes `AGENTS` e `STAFF`.
+
+## Arquivos principais alterados
+
+- `src/components/modules.tsx`
+- `src/lib/required-staff-service.ts`
+- `src/app/api/staff-coverage/staff/route.ts`
+
+## AGENTS
+
+- A visao `AGENTS` continua usando a API existente `/api/staff-coverage`.
+- Importacao, exportacao, filtros e detalhe de agentes foram preservados.
+- A logica de requerido operacional de agentes nao foi alterada.
+
+## STAFF
+
+- Criada API `GET /api/staff-coverage/staff`.
+- A visao `STAFF` calcula cobertura com base na escala do periodo filtrado.
+- Supervisores, POCs e RTAs sao identificados pela `skill` do colaborador.
+- Normalizacoes contemplam `Supervisor`, `Sup`, `TL`, `Team Leader`, `Supervisao`, `POC`, `Ponto Focal`, `RTA` e `Real Time`.
+- Apenas LOBs `ADS`, `CEC` e `TNS` entram no heatmap.
+
+## Regras implementadas
+
+- Turnos fixos considerados: `Manha`, `Tarde` e `Noite`.
+- O turno `Noite` e mantido como turno do dia da escala, evitando deslocar o registro para o dia seguinte.
+- Regra minima geral: cada data + turno deve ter pelo menos 1 Supervisor na empresa.
+- POC e RTA nao substituem a regra minima de Supervisor.
+- Cobertura por LOB:
+  - Verde: Supervisor + POC.
+  - Amarelo: apenas Supervisor ou apenas POC.
+  - Vermelho: sem Supervisor e sem POC.
+- RTA aparece como cobertura complementar ao ativar o botao `COM RTA`.
+- Pessoas de folga, ferias, afastadas, desligadas, ausentes ou sem turno valido nao contam como cobertura.
+
+## Dias mais criticos
+
+- Criado quadro com os 10 pontos mais criticos.
+- A ordenacao prioriza:
+  - turno sem Supervisor na empresa;
+  - falha em final de semana;
+  - LOB sem Supervisor e sem POC;
+  - coberturas parciais;
+  - ausencia de RTA como agravante complementar.
+
+## Visual
+
+- Mantido o padrao atual de cards, filtros, tabelas, badges e paineis.
+- Adicionados cards resumidos para turnos com/sem Supervisor, cobertura completa/parcial/sem cobertura e risco em final de semana.
+- Heatmap usa cores suaves consistentes com o restante do sistema.
+
+## Validacoes executadas
+
+- `npm run typecheck`: aprovado.
+- `npm run build`: aprovado.
+
+## Pendencias
+
+- Validacao visual manual em ambiente local ainda recomendada com dados reais de escala.
