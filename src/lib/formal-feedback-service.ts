@@ -91,6 +91,7 @@ export const formalFeedbackCategories = [
 
 const creatorRoles = new Set(["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH", "COORDENADOR", "GERENTE"]);
 const allFeedbackRoles = new Set(["ADMIN", "GESTOR", "WFM", "RH", "COORDENADOR", "GERENTE"]);
+const formalFeedbackEnabled = false;
 
 const statusLabels: Record<FormalFeedbackStatus, string> = {
   PENDENTE_CIENCIA: "Pendente de ciência",
@@ -542,6 +543,7 @@ async function getFormalFeedbackEmployeeOptionsForUser(user: FormalFeedbackUser)
 }
 
 async function requireUser(actor: Actor): Promise<FormalFeedbackUser> {
+  if (!formalFeedbackEnabled) throw new FormalFeedbackError("Este módulo está temporariamente inativo.", 410);
   if (!actor.email) throw new FormalFeedbackError("Faça login para acessar Feedback Formal.", 401);
   const user = await prisma.user.findUnique({
     where: { email: actor.email },

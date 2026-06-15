@@ -1,5 +1,5 @@
-import { FormalFeedbackPage } from "@/components/modules";
+import { InactiveModulePage } from "@/components/inactive-module-page";
 
 export default async function FeedbacksRoute() {
-  return <FormalFeedbackPage />;
+  return <InactiveModulePage title="Feedback Formal" />;
 }

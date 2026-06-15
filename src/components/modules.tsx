@@ -10337,6 +10337,16 @@ type MuralPostClient = {
   priority: string;
   isPinned: boolean;
   requiresRead?: boolean;
+  requiresAcknowledgement?: boolean;
+  acknowledgedByViewer?: boolean;
+  viewerAcknowledgedAt?: string;
+  acknowledgementStatus?: string;
+  acknowledgementSummary?: null | {
+    eligible: number;
+    acknowledged: number;
+    pending: number;
+    adherence: number | null;
+  };
   publishAt: string;
   expiresAt?: string;
   archivedAt?: string;
@@ -10372,8 +10382,43 @@ type MuralPostFormState = {
   targetLobIds: string[];
   priority: string;
   isPinned: boolean;
+  requiresAcknowledgement: boolean;
   status: string;
   expiresAt: string;
+};
+
+type MuralAcknowledgementRow = {
+  userId: string;
+  employeeId: string;
+  name: string;
+  wbLogin: string;
+  email: string;
+  role: string;
+  lobId: string;
+  lob: string;
+  supervisorId: string;
+  supervisor: string;
+  status: string;
+  acknowledgedAt: string;
+};
+
+type MuralAcknowledgementPayload = {
+  post: {
+    id: string;
+    title: string;
+    createdAt: string;
+    targetRoles: string[];
+    targetLobIds: string[];
+  };
+  targetLobs: string[];
+  summary: {
+    eligible: number;
+    acknowledged: number;
+    pending: number;
+    adherence: number | null;
+  };
+  data: MuralAcknowledgementRow[];
+  canManage: boolean;
 };
 
 const muralTargetRoles = [
@@ -10383,7 +10428,8 @@ const muralTargetRoles = [
   { value: "ADMINISTRADORES", label: "Administradores" },
   { value: "WFM", label: "WFM" },
   { value: "RH", label: "RH" },
-  { value: "GESTAO", label: "Gestão" }
+  { value: "GESTAO", label: "Gestão" },
+  { value: "CLIENT", label: "Client" }
 ];
 
 const muralContentTypes = ["Texto simples", "Texto com link", "Imagem", "Vídeo", "Anexo", "Comunicado fixado", "Novidade do sistema", "Campanha interna"];
@@ -10401,6 +10447,7 @@ function emptyMuralPostForm(): MuralPostFormState {
     targetLobIds: [],
     priority: "MEDIA",
     isPinned: false,
+    requiresAcknowledgement: false,
     status: "PUBLICADO",
     expiresAt: ""
   };
@@ -10534,6 +10581,11 @@ function muralFormToPreview(form: MuralPostFormState): MuralPostClient {
     status: form.status,
     priority: form.priority,
     isPinned: form.isPinned,
+    requiresAcknowledgement: form.requiresAcknowledgement,
+    acknowledgedByViewer: false,
+    viewerAcknowledgedAt: "",
+    acknowledgementStatus: form.requiresAcknowledgement ? "Pendente de ciência" : "Não exige ciência",
+    acknowledgementSummary: null,
     publishAt: now,
     expiresAt: form.expiresAt,
     createdAt: now,
@@ -10625,6 +10677,16 @@ function MuralBirthdayItem({ item, compact = false }: { item: MuralBirthdayClien
         <p className="truncate font-extrabold text-navy-950">{item.name}</p>
         <p className="text-xs font-semibold text-muted">{item.lob} • {item.dateLabel}</p>
       </div>
+    </div>
+  );
+}
+
+function MuralAckMetric({ label, value, tone = "blue" }: { label: string; value: ReactNode; tone?: "blue" | "green" | "red" }) {
+  const toneClass = tone === "red" ? "text-red-600" : tone === "green" ? "text-emerald-600" : "text-blue-700";
+  return (
+    <div className="rounded-lg border border-border bg-white p-3 text-center">
+      <p className={cn("text-lg font-black leading-none", toneClass)}>{value}</p>
+      <p className="mt-1 text-[11px] font-extrabold uppercase tracking-wide text-muted">{label}</p>
     </div>
   );
 }
@@ -10722,9 +10784,16 @@ export function MuralPage() {
   const [muralCoverCrop, setMuralCoverCrop] = useState({ x: 50, y: 50, zoom: 1 });
   const [muralCoverError, setMuralCoverError] = useState("");
   const [uploadingMuralCover, setUploadingMuralCover] = useState(false);
+  const [acknowledgePost, setAcknowledgePost] = useState<MuralPostClient | null>(null);
+  const [acknowledgingPost, setAcknowledgingPost] = useState(false);
+  const [acknowledgementLoading, setAcknowledgementLoading] = useState(false);
+  const [acknowledgementPanel, setAcknowledgementPanel] = useState<MuralAcknowledgementPayload | null>(null);
+  const [acknowledgementFilters, setAcknowledgementFilters] = useState({ status: "Todos", lobId: "Todos", role: "Todos", supervisorId: "Todos", q: "" });
   const muralCoverInputRef = useRef<HTMLInputElement | null>(null);
   const muralCoverImageRef = useRef<HTMLImageElement | null>(null);
   const muralContentInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const openedMuralPostFromUrl = useRef(false);
+  const muralPostIdFromUrl = queryParam("postId");
 
   useEffect(() => {
     void loadMural();
@@ -10750,6 +10819,15 @@ export function MuralPage() {
       setPosts(postsPayload.data);
       setBirthdays(birthdayPayload.data);
       setCanManageMural(postsPayload.canManage);
+      if (muralPostIdFromUrl && !openedMuralPostFromUrl.current) {
+        openedMuralPostFromUrl.current = true;
+        const postFromList = postsPayload.data.find((post) => post.id === muralPostIdFromUrl);
+        if (postFromList) {
+          void openMuralPostDetail(postFromList);
+        } else {
+          void loadMuralPostDetail(muralPostIdFromUrl);
+        }
+      }
       setMuralMessage("");
     } catch (error) {
       setPosts([]);
@@ -10781,6 +10859,7 @@ export function MuralPage() {
       targetLobIds: post.targetLobIds,
       priority: post.priority,
       isPinned: post.isPinned,
+      requiresAcknowledgement: Boolean(post.requiresAcknowledgement),
       status: post.status,
       expiresAt: post.expiresAt ? post.expiresAt.slice(0, 10) : ""
     });
@@ -10864,6 +10943,76 @@ export function MuralPage() {
     } catch (error) {
       setMuralMessage(error instanceof Error ? error.message : "Não foi possível atualizar o aviso.");
     }
+  }
+
+  async function loadMuralPostDetail(postId: string) {
+    try {
+      const response = await apiJson<{ data: MuralPostClient; canManage: boolean }>(`/api/mural/posts/${encodeURIComponent(postId)}`);
+      await openMuralPostDetail(response.data);
+    } catch (error) {
+      setMuralMessage(error instanceof Error ? error.message : "Não foi possível abrir o comunicado.");
+    }
+  }
+
+  async function openMuralPostDetail(post: MuralPostClient) {
+    setSelectedPost(post);
+    setAcknowledgementPanel(null);
+    if (post.requiresAcknowledgement && (post.canManage || canManageMural)) {
+      await loadMuralAcknowledgements(post.id);
+    }
+  }
+
+  function muralAcknowledgementParams(overrides: Partial<typeof acknowledgementFilters> = {}) {
+    const nextFilters = { ...acknowledgementFilters, ...overrides };
+    const params = new URLSearchParams();
+    if (nextFilters.status !== "Todos") params.set("status", nextFilters.status);
+    if (nextFilters.lobId !== "Todos") params.set("lobId", nextFilters.lobId);
+    if (nextFilters.role !== "Todos") params.set("role", nextFilters.role);
+    if (nextFilters.supervisorId !== "Todos") params.set("supervisorId", nextFilters.supervisorId);
+    if (nextFilters.q.trim()) params.set("q", nextFilters.q.trim());
+    return params;
+  }
+
+  async function loadMuralAcknowledgements(postId: string, overrides: Partial<typeof acknowledgementFilters> = {}) {
+    setAcknowledgementLoading(true);
+    try {
+      const params = muralAcknowledgementParams(overrides);
+      const response = await apiJson<MuralAcknowledgementPayload>(`/api/mural/posts/${encodeURIComponent(postId)}/acknowledgements${params.toString() ? `?${params.toString()}` : ""}`);
+      setAcknowledgementPanel(response);
+    } catch (error) {
+      setMuralMessage(error instanceof Error ? error.message : "Não foi possível carregar aderência de ciência.");
+    } finally {
+      setAcknowledgementLoading(false);
+    }
+  }
+
+  async function confirmMuralAcknowledgement() {
+    if (!acknowledgePost) return;
+    setAcknowledgingPost(true);
+    try {
+      const response = await apiJson<{ data: MuralPostClient | null; message: string }>(`/api/mural/posts/${encodeURIComponent(acknowledgePost.id)}/acknowledge`, {
+        method: "POST"
+      });
+      if (response.data) {
+        setPosts((current) => current.map((post) => post.id === response.data?.id ? response.data : post));
+        setSelectedPost((current) => current?.id === response.data?.id ? response.data : current);
+      }
+      setAcknowledgePost(null);
+      setMuralMessage(response.message || "Ciência registrada com sucesso.");
+      if (response.data?.requiresAcknowledgement && (response.data.canManage || canManageMural)) {
+        await loadMuralAcknowledgements(response.data.id);
+      }
+    } catch (error) {
+      setMuralMessage(error instanceof Error ? error.message : "Não foi possível registrar ciência.");
+    } finally {
+      setAcknowledgingPost(false);
+    }
+  }
+
+  function exportMuralAcknowledgements(postId: string) {
+    const params = muralAcknowledgementParams();
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    return downloadFile(`/api/mural/posts/${encodeURIComponent(postId)}/acknowledgements/export${suffix}`, "aderencia_mural.xlsx", "Não foi possível exportar aderência do Mural.");
   }
 
   function updateMuralTargetRole(role: string, checked: boolean) {
@@ -10956,12 +11105,23 @@ export function MuralPage() {
                           {post.isPinned ? <StatusBadge status="Fixado" /> : null}
                           <StatusBadge status={post.contentType} />
                           <StatusBadge status={muralPriorityLabel(post.priority)} />
+                          {post.requiresAcknowledgement ? <StatusBadge status="Exige ciência" /> : null}
                           <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-extrabold text-slate-600">{muralAudienceLabel(post.targetRoles)}</span>
                           {canManageMural ? <StatusBadge status={post.status} /> : null}
+                          {post.requiresAcknowledgement && !canManageMural ? <StatusBadge status={post.acknowledgementStatus ?? "Pendente"} /> : null}
                         </div>
                         <div className="min-w-0 flex-1">
                           <h3 className="line-clamp-2 text-xl font-black text-navy-950">{post.title}</h3>
                           <p className="mt-2 line-clamp-3 text-sm leading-6 text-muted">{stripMuralMarkdown(post.content)}</p>
+                          {post.requiresAcknowledgement && post.acknowledgementSummary && canManageMural ? (
+                            <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50/50 p-3">
+                              <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs font-extrabold text-blue-900">
+                                <span>{post.acknowledgementSummary.acknowledged}/{post.acknowledgementSummary.eligible} cientes</span>
+                                <span>{post.acknowledgementSummary.adherence ?? 0}% aderência</span>
+                              </div>
+                              <ProgressLine label="Aderência de ciência" value={post.acknowledgementSummary.adherence ?? 0} tone="blue" />
+                            </div>
+                          ) : null}
                         </div>
                         <div className="flex flex-wrap items-end justify-between gap-3">
                           <div className="min-w-0 text-xs font-semibold text-muted">
@@ -10969,7 +11129,10 @@ export function MuralPage() {
                             <p>{formatDateTimeShort(post.publishAt)}</p>
                           </div>
                           <div className="flex flex-wrap justify-end gap-2">
-                            <button onClick={() => setSelectedPost(post)} className="inline-flex h-9 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 px-3 text-xs font-bold text-blue-700">Ver detalhes</button>
+                            {post.requiresAcknowledgement && !post.acknowledgedByViewer && !canManageMural ? (
+                              <button onClick={() => setAcknowledgePost(post)} className="inline-flex h-9 items-center justify-center rounded-lg bg-blue-600 px-3 text-xs font-bold text-white">Estou ciente</button>
+                            ) : null}
+                            <button onClick={() => void openMuralPostDetail(post)} className="inline-flex h-9 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 px-3 text-xs font-bold text-blue-700">Ver detalhes</button>
                             {canManageMural ? <button onClick={() => openEditMuralPost(post)} className="inline-flex h-9 items-center justify-center rounded-lg border border-border bg-white px-3 text-xs font-bold text-navy-950">Editar</button> : null}
                             {canManageMural && post.status !== "ARQUIVADO" ? <button onClick={() => void changeMuralPostStatus(post, "ARQUIVADO")} className="inline-flex h-9 items-center justify-center rounded-lg border border-amber-200 bg-amber-50 px-3 text-xs font-bold text-amber-700">Arquivar</button> : null}
                           </div>
@@ -11013,6 +11176,8 @@ export function MuralPage() {
                 {selectedPost.isPinned ? <StatusBadge status="Fixado" /> : null}
                 <StatusBadge status={muralPriorityLabel(selectedPost.priority)} />
                 <StatusBadge status={selectedPost.contentType} />
+                {selectedPost.requiresAcknowledgement ? <StatusBadge status="Exige ciência" /> : null}
+                {selectedPost.requiresAcknowledgement && !canManageMural ? <StatusBadge status={selectedPost.acknowledgementStatus ?? "Pendente"} /> : null}
               </div>
               <h2 className="text-2xl font-black text-navy-950">{selectedPost.title}</h2>
               <div className="mt-3 rounded-xl border border-border bg-white p-4 text-sm leading-7 text-navy-800">
@@ -11023,13 +11188,155 @@ export function MuralPage() {
                 <InfoLine label="Publicado em" value={formatDateTimeShort(selectedPost.publishAt)} />
                 <InfoLine label="Público-alvo" value={muralAudienceLabel(selectedPost.targetRoles)} />
                 <InfoLine label="Expira em" value={selectedPost.expiresAt ? formatDateTimeShort(selectedPost.expiresAt) : "Sem expiração"} />
+                {selectedPost.requiresAcknowledgement && selectedPost.acknowledgedByViewer ? <InfoLine label="Ciência" value={`Ciente em ${formatDateTimeShort(selectedPost.viewerAcknowledgedAt)}`} /> : null}
               </div>
+              {selectedPost.requiresAcknowledgement && canManageMural ? (
+                <div className="mt-5 rounded-xl border border-blue-100 bg-blue-50/40 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-base font-black text-navy-950">Aderência de ciência</h3>
+                      <p className="text-sm font-semibold text-muted">Acompanha apenas usuários elegíveis pelo público-alvo do comunicado.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void exportMuralAcknowledgements(selectedPost.id).catch((error) => setMuralMessage(error.message))}
+                      className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 text-xs font-extrabold text-white"
+                    >
+                      <Download className="h-4 w-4" /> Exportar XLSX
+                    </button>
+                  </div>
+                  {acknowledgementPanel ? (
+                    <>
+                      <div className="mt-4 grid gap-3 sm:grid-cols-4">
+                        <MuralAckMetric label="Elegíveis" value={acknowledgementPanel.summary.eligible} />
+                        <MuralAckMetric label="Cientes" value={acknowledgementPanel.summary.acknowledged} tone="green" />
+                        <MuralAckMetric label="Pendentes" value={acknowledgementPanel.summary.pending} tone={acknowledgementPanel.summary.pending ? "red" : "green"} />
+                        <MuralAckMetric label="Aderência" value={`${acknowledgementPanel.summary.adherence ?? 0}%`} tone="blue" />
+                      </div>
+                      <div className="mt-4">
+                        <ProgressLine label="Aderência total" value={acknowledgementPanel.summary.adherence ?? 0} tone="blue" />
+                      </div>
+                      <div className="mt-4 grid gap-2 md:grid-cols-[minmax(160px,1fr)_130px_140px_140px_auto]">
+                        <input
+                          value={acknowledgementFilters.q}
+                          onChange={(event) => setAcknowledgementFilters({ ...acknowledgementFilters, q: event.target.value })}
+                          className="h-9 rounded-lg border border-border px-3 text-sm outline-none"
+                          placeholder="Buscar nome, WB ou e-mail"
+                        />
+                        <select
+                          value={acknowledgementFilters.status}
+                          onChange={(event) => setAcknowledgementFilters({ ...acknowledgementFilters, status: event.target.value })}
+                          className="h-9 rounded-lg border border-border px-3 text-xs font-bold"
+                        >
+                          {["Todos", "Ciente", "Pendente"].map((item) => <option key={item}>{item}</option>)}
+                        </select>
+                        <select
+                          value={acknowledgementFilters.role}
+                          onChange={(event) => setAcknowledgementFilters({ ...acknowledgementFilters, role: event.target.value })}
+                          className="h-9 rounded-lg border border-border px-3 text-xs font-bold"
+                        >
+                          {["Todos", "COLABORADOR", "SUPERVISOR", "ADMIN", "WFM", "RH", "GESTOR", "COORDENADOR", "GERENTE", "CLIENT"].map((item) => <option key={item}>{item}</option>)}
+                        </select>
+                        <select
+                          value={acknowledgementFilters.lobId}
+                          onChange={(event) => setAcknowledgementFilters({ ...acknowledgementFilters, lobId: event.target.value })}
+                          className="h-9 rounded-lg border border-border px-3 text-xs font-bold"
+                        >
+                          <option value="Todos">Todas as LOBs</option>
+                          {muralLobs.map((lob) => <option key={lob.id} value={lob.id}>{lob.name}</option>)}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => void loadMuralAcknowledgements(selectedPost.id)}
+                          className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-blue-200 bg-white px-3 text-xs font-extrabold text-blue-700"
+                        >
+                          <RefreshCw className={cn("h-4 w-4", acknowledgementLoading && "animate-spin")} /> Filtrar
+                        </button>
+                      </div>
+                      <div className="mt-4 max-h-72 overflow-auto rounded-xl border border-border bg-white">
+                        <table className="min-w-full text-left text-xs">
+                          <thead className="sticky top-0 bg-slate-50 text-muted">
+                            <tr>
+                              {["Nome", "WB/Login", "Role", "LOB", "Supervisor", "Status", "Ciente em"].map((header) => (
+                                <th key={header} className="px-3 py-2 font-black uppercase tracking-wide">{header}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {acknowledgementPanel.data.length ? acknowledgementPanel.data.map((row) => (
+                              <tr key={row.userId} className="border-t border-border">
+                                <td className="px-3 py-2 font-extrabold text-navy-950">{row.name}</td>
+                                <td className="px-3 py-2 font-semibold text-muted">{row.wbLogin || "-"}</td>
+                                <td className="px-3 py-2 font-semibold text-muted">{row.role}</td>
+                                <td className="px-3 py-2 font-semibold text-muted">{row.lob}</td>
+                                <td className="px-3 py-2 font-semibold text-muted">{row.supervisor || "-"}</td>
+                                <td className="px-3 py-2"><StatusBadge status={row.status} /></td>
+                                <td className="px-3 py-2 font-semibold text-muted">{row.acknowledgedAt ? formatDateTimeShort(row.acknowledgedAt) : "-"}</td>
+                              </tr>
+                            )) : (
+                              <tr>
+                                <td colSpan={7} className="px-3 py-6 text-center font-bold text-muted">Nenhum usuário encontrado nos filtros.</td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="mt-4 rounded-lg border border-blue-100 bg-white px-3 py-2 text-sm font-bold text-blue-700">
+                      {acknowledgementLoading ? "Carregando aderência..." : "Aderência ainda não carregada."}
+                    </p>
+                  )}
+                </div>
+              ) : null}
               <div className="mt-5 flex flex-wrap justify-end gap-2">
                 {selectedPost.externalUrl ? <a href={selectedPost.externalUrl} target="_blank" rel="noopener noreferrer" className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white">Abrir link</a> : null}
                 {selectedPost.mediaUrl ? <a href={selectedPost.mediaUrl} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700">Abrir mídia</a> : null}
                 {selectedPost.attachmentUrl ? <a href={selectedPost.attachmentUrl} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-border px-4 py-2 text-sm font-bold text-navy-950">Abrir anexo</a> : null}
+                {selectedPost.requiresAcknowledgement && !selectedPost.acknowledgedByViewer && !canManageMural ? (
+                  <button onClick={() => setAcknowledgePost(selectedPost)} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white">Estou ciente</button>
+                ) : null}
                 <button onClick={() => setSelectedPost(null)} className="rounded-lg border border-border px-4 py-2 text-sm font-bold text-navy-950">Fechar</button>
               </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {acknowledgePost ? (
+        <div className="fixed inset-0 z-[55] grid place-items-center overflow-y-auto bg-navy-950/50 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl">
+            <div className="border-b border-border px-5 py-4">
+              <h2 className="text-xl font-black text-navy-950">Confirmar ciência</h2>
+              <p className="mt-1 text-sm font-semibold text-muted">Confirme que você leu e está ciente deste comunicado.</p>
+            </div>
+            <div className="space-y-3 p-5">
+              <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
+                <p className="text-xs font-black uppercase tracking-wide text-blue-700">Comunicado</p>
+                <p className="mt-1 line-clamp-2 text-base font-extrabold text-navy-950">{acknowledgePost.title}</p>
+              </div>
+              <p className="text-sm leading-6 text-muted">
+                Sua confirmação ficará registrada com data e hora para acompanhamento de aderência do Mural.
+              </p>
+            </div>
+            <div className="flex flex-wrap justify-end gap-2 border-t border-border bg-slate-50 px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setAcknowledgePost(null)}
+                disabled={acknowledgingPost}
+                className="rounded-lg border border-border bg-white px-4 py-2 text-sm font-bold text-navy-950 disabled:opacity-60"
+              >
+                Voltar
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmMuralAcknowledgement()}
+                disabled={acknowledgingPost}
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-60"
+              >
+                {acknowledgingPost ? <RefreshCw className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                {acknowledgingPost ? "Registrando..." : "Confirmar ciência"}
+              </button>
             </div>
           </div>
         </div>
@@ -11106,6 +11413,13 @@ export function MuralPage() {
                   <input type="checkbox" checked={muralForm.isPinned} onChange={(event) => setMuralForm({ ...muralForm, isPinned: event.target.checked })} />
                   Fixar aviso no topo
                 </label>
+                <label className="flex items-start gap-3 rounded-lg border border-blue-100 bg-blue-50/50 p-3 text-sm">
+                  <input className="mt-1" type="checkbox" checked={muralForm.requiresAcknowledgement} onChange={(event) => setMuralForm({ ...muralForm, requiresAcknowledgement: event.target.checked })} />
+                  <span>
+                    <span className="block font-extrabold text-navy-950">Exigir ciência dos leitores</span>
+                    <span className="mt-1 block text-xs font-semibold text-muted">Quando ativado, os usuários do público-alvo deverão confirmar que leram este comunicado.</span>
+                  </span>
+                </label>
                 <div>
                   <p className="mb-2 text-sm font-bold text-muted">Público-alvo</p>
                   <div className="grid gap-2 sm:grid-cols-2">
@@ -11134,7 +11448,10 @@ export function MuralPage() {
                 <article className="card overflow-hidden p-0">
                   <MuralPostVisual post={muralFormToPreview(muralForm)} />
                   <div className="p-4">
-                    <StatusBadge status={muralPriorityLabel(muralForm.priority)} />
+                    <div className="flex flex-wrap gap-2">
+                      <StatusBadge status={muralPriorityLabel(muralForm.priority)} />
+                      {muralForm.requiresAcknowledgement ? <StatusBadge status="Exige ciência" /> : null}
+                    </div>
                     <h3 className="mt-3 font-black text-navy-950">{muralForm.title || "Título do aviso"}</h3>
                     <div className="mt-2 line-clamp-3 text-sm leading-6 text-muted">
                       <MuralFormattedText content={muralForm.content || "Resumo do comunicado aparecerá aqui."} />

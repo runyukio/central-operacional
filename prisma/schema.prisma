@@ -299,6 +299,7 @@ model User {
   approvalSteps                     ApprovalStep[]
   authoredAnnouncements             Announcement[]
   announcementReads                 AnnouncementRead[]
+  muralPostAcknowledgements         MuralPostAcknowledgement[]
   notifications                     Notification[]
   authoredFeedbacks                 QualityFeedback[]           @relation("FeedbackAuthor")
   createdFormalFeedbacks            FormalFeedback[]            @relation("FormalFeedbackAuthor")
@@ -456,6 +457,7 @@ model EmployeeProfile {
   workSessionDailySummaries  WorkSessionDailySummary[]
   qualityFeedbacks           QualityFeedback[]           @relation("FeedbackEmployee")
   formalFeedbacks            FormalFeedback[]            @relation("FormalFeedbackEmployee")
+  muralPostAcknowledgements  MuralPostAcknowledgement[]
   equipments                 Equipment[]
   equipmentTickets           EquipmentTicket[]
   tokenBalance               TokenBalance?
@@ -833,32 +835,34 @@ model ApprovalStep {
 }
 
 model Announcement {
-  id             String             @id @default(cuid())
-  title          String
-  content        String
-  category       String
-  contentType    String             @default("Texto simples")
-  imageUrl       String?
-  mediaUrl       String?
-  externalUrl    String?
-  attachmentUrl  String?
-  targetAudience String
-  targetRoles    Json?
-  targetLobIds   Json?
-  authorId       String
-  authorRole     String?
-  status         AnnouncementStatus @default(PUBLICADO)
-  priority       Priority           @default(MEDIA)
-  isPinned       Boolean            @default(false)
-  requiresRead   Boolean            @default(false)
-  publishAt      DateTime           @default(now())
-  expiresAt      DateTime?
-  archivedAt     DateTime?
-  author         User               @relation(fields: [authorId], references: [id])
-  reads          AnnouncementRead[]
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @updatedAt
-  deletedAt      DateTime?
+  id                      String                     @id @default(cuid())
+  title                   String
+  content                 String
+  category                String
+  contentType             String                     @default("Texto simples")
+  imageUrl                String?
+  mediaUrl                String?
+  externalUrl             String?
+  attachmentUrl           String?
+  targetAudience          String
+  targetRoles             Json?
+  targetLobIds            Json?
+  authorId                String
+  authorRole              String?
+  status                  AnnouncementStatus         @default(PUBLICADO)
+  priority                Priority                   @default(MEDIA)
+  isPinned                Boolean                    @default(false)
+  requiresRead            Boolean                    @default(false)
+  requiresAcknowledgement Boolean                    @default(false)
+  publishAt               DateTime                   @default(now())
+  expiresAt               DateTime?
+  archivedAt              DateTime?
+  author                  User                       @relation(fields: [authorId], references: [id])
+  reads                   AnnouncementRead[]
+  acknowledgements        MuralPostAcknowledgement[]
+  createdAt               DateTime                   @default(now())
+  updatedAt               DateTime                   @updatedAt
+  deletedAt               DateTime?
 
   @@index([status, publishAt])
   @@index([isPinned, priority, publishAt])
@@ -874,6 +878,27 @@ model AnnouncementRead {
   user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([announcementId, userId])
+}
+
+model MuralPostAcknowledgement {
+  id                     String           @id @default(cuid())
+  postId                 String
+  userId                 String
+  employeeId             String?
+  acknowledgedAt         DateTime         @default(now())
+  roleAtAcknowledgement  String
+  lobIdAtAcknowledgement String?
+  post                   Announcement     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user                   User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  employee               EmployeeProfile? @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  createdAt              DateTime         @default(now())
+
+  @@unique([postId, userId])
+  @@index([postId])
+  @@index([userId])
+  @@index([employeeId])
+  @@index([acknowledgedAt])
+  @@index([postId, acknowledgedAt])
 }
 
 model Notification {

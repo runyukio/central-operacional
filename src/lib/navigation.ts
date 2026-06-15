@@ -10,11 +10,11 @@ export type NavItem = {
 
 const nonClientRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "COLABORADOR", "WFM", "QUALIDADE", "RH", "TI", "COORDENADOR", "GERENTE"];
 const performanceRoles: AppRole[] = [...nonClientRoles, "CLIENT"];
+const muralRoles: AppRole[] = [...nonClientRoles, "CLIENT"];
 const centralRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI", "COORDENADOR", "GERENTE"];
 const leadership: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH", "COORDENADOR", "GERENTE"];
 const peopleOps: AppRole[] = ["ADMIN", "GESTOR", "RH", "WFM"];
 const authenticatedOps: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI"];
-const formalFeedbackRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "COLABORADOR", "WFM", "RH", "COORDENADOR", "GERENTE"];
 
 export const navItems: NavItem[] = [
   { label: "Central Operacional", href: "/central-operacional", icon: "LayoutDashboard", roles: centralRoles },
@@ -24,14 +24,13 @@ export const navItems: NavItem[] = [
   { label: "Cronogramas", href: "/escalas", icon: "CalendarRange", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH"] },
   { label: "Horas Operacionais", href: "/horas-operacionais", icon: "Clock", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"] },
   { label: "Solicitações", href: "/solicitacoes", icon: "ClipboardList", roles: authenticatedOps },
-  { label: "Mural", href: "/mural", icon: "Megaphone", roles: nonClientRoles },
+  { label: "Mural", href: "/mural", icon: "Megaphone", roles: muralRoles },
   { label: "Esteiras", href: "/esteiras", icon: "KanbanSquare", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH", "TI", "QUALIDADE"] },
   { label: "Mapa de Funcionários", href: "/mapa-funcionarios", icon: "Map", roles: leadership },
   { label: "Adiantamento", href: "/adiantamento", icon: "Coins", roles: ["ADMIN", "GESTOR", "WFM"] },
   { label: "Requerido", href: "/staff-cobertura", icon: "UsersRound", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"] },
   { label: "Performance", href: "/performance", icon: "Trophy", roles: performanceRoles },
   { label: "Equipamentos e Logística", href: "/equipamentos", icon: "MonitorCog", roles: ["ADMIN", "GESTOR", "TI"] },
-  { label: "Feedback Formal", href: "/feedbacks", icon: "MessagesSquare", roles: formalFeedbackRoles },
   { label: "Feedback Anônimo", href: "/feedback-anonimo", icon: "MessageCircleQuestion", roles: nonClientRoles },
   { label: "Billing", href: "/billing", icon: "Coins", roles: ["ADMIN"] },
   { label: "Configurações", href: "/configuracoes", icon: "Settings", roles: ["ADMIN"] }
@@ -54,6 +53,8 @@ export function canAccessPathForRole(pathname: string, role?: string) {
     if (pathname === "/" || pathname === "/alterar-senha") return true;
     if (pathname === "/performance" || pathname.startsWith("/performance/")) return true;
     if (pathname === "/api/performance" || pathname.startsWith("/api/performance/")) return true;
+    if (pathname === "/mural" || pathname.startsWith("/mural/")) return true;
+    if (pathname === "/api/mural" || pathname.startsWith("/api/mural/")) return true;
     return false;
   }
   if (pathname === "/meu-perfil" || pathname.startsWith("/perfil/")) return nonClientRoles.includes(normalizedRole);
