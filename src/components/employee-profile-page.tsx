@@ -498,8 +498,15 @@ function ScheduleChip({ day }: { day: { day: string; weekday: string; status: st
 }
 
 function WfhBadge({ status, label }: { status: string; label: string }) {
+  const tone = status === "QUALIFIED"
+    ? "bg-emerald-50 text-emerald-700"
+    : status === "PENDING_VALIDATION" || status === "INSUFFICIENT_DATA"
+      ? "bg-amber-50 text-amber-700"
+      : status === "NOT_APPLICABLE"
+        ? "bg-slate-50 text-slate-600"
+        : "bg-red-50 text-red-700";
   return (
-    <span className={cn("inline-flex rounded-md px-2 py-1 text-xs font-black", status === "QUALIFIED" ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700")}>
+    <span className={cn("inline-flex rounded-md px-2 py-1 text-xs font-black", tone)}>
       {label || "Sem dados"}
     </span>
   );

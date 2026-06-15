@@ -941,8 +941,9 @@ function normalizeWfhStatusFilter(filter?: string): WfhEligibilityStatus | "" {
   const value = filter?.trim();
   if (!value || value === "Todos" || value === "ALL") return "";
   const token = normalizeTextToken(value);
-  if (["qualified", "qualificado"].includes(token)) return "QUALIFIED";
-  if (["not_qualified", "not-qualified", "nao_qualificado", "nao-qualificado", "não_qualificado", "não-qualificado", "naoqualificado", "nãoqualificado"].includes(token)) return "NOT_QUALIFIED";
+  if (["qualified", "qualificado", "qualificado_para_home"].includes(token)) return "QUALIFIED";
+  if (["pending_validation", "aguardando_validacao", "aguardando_validação"].includes(token)) return "PENDING_VALIDATION";
+  if (["not_qualified", "not-qualified", "nao_qualificado", "nao-qualificado", "não_qualificado", "não-qualificado", "naoqualificado", "nãoqualificado", "nao_qualificado_para_home", "não_qualificado_para_home"].includes(token)) return "NOT_QUALIFIED";
   if (["insufficient_data", "dados_insuficientes"].includes(token)) return "INSUFFICIENT_DATA";
   if (["not_applicable", "na", "n_a", "nao_aplicavel", "não_aplicavel"].includes(token)) return "NOT_APPLICABLE";
   return "";

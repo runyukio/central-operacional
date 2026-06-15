@@ -11906,7 +11906,7 @@ export function PerformancePage() {
               <PerformanceSelect label="Cargo/Função" value={filters.role} onChange={(value) => updateFilter("role", value)} options={wfhPayload?.filters.roles ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todos os cargos" : value} />
               <PerformanceSelect label="Skill" value={filters.skill} onChange={(value) => updateFilter("skill", value)} options={wfhPayload?.filters.skills ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todas as skills" : value === "SEM_SKILL" ? "Sem skill" : value} />
               <PerformanceSelect label="Status do agente" value={filters.employeeStatus} onChange={(value) => updateFilter("employeeStatus", value)} options={["Todos", "Ativo", "Afastado", "Desligado"]} />
-              <PerformanceSelect label="WFH" value={filters.wfhStatus} onChange={(value) => updateFilter("wfhStatus", value)} options={["Todos", "Qualificado", "Não-qualificado", "Dados insuficientes", "Não aplicável"]} />
+              <PerformanceSelect label="WFH" value={filters.wfhStatus} onChange={(value) => updateFilter("wfhStatus", value)} options={["Todos", "Qualificado para Home", "Aguardando Validação", "Não Qualificado para Home", "Dados insuficientes", "Não aplicável"]} />
             </>
           ) : <div className="hidden lg:block lg:col-span-2 2xl:col-span-7" />}
           <div className="flex items-end justify-end gap-2 sm:col-span-2 lg:col-span-4 2xl:col-span-1">
@@ -12165,7 +12165,7 @@ function PerformanceWfhBadge({ status, label, title }: { status: WfhEligibilityC
     ? "border-emerald-200 bg-emerald-50 text-emerald-700"
     : status === "NOT_APPLICABLE"
       ? "border-slate-200 bg-slate-50 text-slate-600"
-      : status === "INSUFFICIENT_DATA"
+      : status === "INSUFFICIENT_DATA" || status === "PENDING_VALIDATION"
         ? "border-amber-200 bg-amber-50 text-amber-700"
         : "border-red-200 bg-red-50 text-red-700";
   return (
@@ -12421,7 +12421,7 @@ type PerformanceWeeklyMetric = PerformanceMetricSummary & {
   operationAverage?: PerformanceMetricSummary;
 };
 
-type WfhEligibilityClientStatus = "QUALIFIED" | "NOT_QUALIFIED" | "NOT_APPLICABLE" | "INSUFFICIENT_DATA";
+type WfhEligibilityClientStatus = "QUALIFIED" | "PENDING_VALIDATION" | "NOT_QUALIFIED" | "NOT_APPLICABLE" | "INSUFFICIENT_DATA";
 type WfhMonitoringClientStatus = "NOT_MONITORED" | "AT_RISK" | "RETURN_REQUIRED";
 
 type AgentPerformanceClient = PerformanceMetricSummary & {
