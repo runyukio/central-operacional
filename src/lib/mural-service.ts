@@ -511,6 +511,14 @@ function viewerAudiences(user: Pick<MuralEligibleUser | MuralUser, "role">) {
   return [role, ...(roleAudienceMap[role] ?? [])].map(normalizeAudienceToken);
 }
 
+function roleMatchesAcknowledgementFilter(role: string, filter: string) {
+  const roleToken = normalizeRole(role);
+  const filterToken = normalizeAudienceToken(filter);
+  if (!filterToken || filterToken === "TODOS") return true;
+  const audiences = [roleToken, ...(roleAudienceMap[roleToken] ?? [])].map(normalizeAudienceToken);
+  return audiences.includes(filterToken);
+}
+
 function mapMuralPost(post: MuralPostWithAuthor, user: MuralUser, canManage: boolean, acknowledgementSummary?: MuralAcknowledgementSummary) {
   const ownAcknowledgement = post.acknowledgements[0]?.acknowledgedAt ?? null;
   return {
@@ -603,6 +611,8 @@ async function getEligibleAcknowledgementUsers(post: Pick<AnnouncementForAcknowl
   });
   return users.filter((user) => {
     if (user.employeeProfile?.deletedAt) return false;
+    // Aderência do Mural é sempre a interseção entre público-alvo e LOB alvo do comunicado.
+    // Usuários fora de qualquer uma dessas duas regras não entram como cientes nem pendentes.
     return isPostTargetedToUser(post, user);
   });
 }
@@ -644,7 +654,7 @@ async function buildAcknowledgementPanel(post: AnnouncementForAcknowledgement, f
       if (normalizedStatus === "CIENTE" && row.status !== "Ciente") return false;
       if (normalizedStatus === "PENDENTE" && row.status !== "Pendente") return false;
       if (filters.lobId && filters.lobId !== "Todos" && row.lobId !== filters.lobId) return false;
-      if (roleFilter && roleFilter !== "TODOS" && row.role !== roleFilter) return false;
+      if (!roleMatchesAcknowledgementFilter(row.role, roleFilter)) return false;
       if (filters.supervisorId && filters.supervisorId !== "Todos" && row.supervisorId !== filters.supervisorId) return false;
       if (search && !normalizeSearch(`${row.name} ${row.wbLogin} ${row.email}`).includes(search)) return false;
       return true;

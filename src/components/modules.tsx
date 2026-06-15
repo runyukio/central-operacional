@@ -387,6 +387,7 @@ type MonthlyAdvanceRecordClient = {
   employeeName: string;
   wbLogin: string;
   email?: string;
+  contractType?: string;
   lob?: string;
   supervisor: string;
   supervisorId?: string;
@@ -426,6 +427,7 @@ type MonthlyAdvanceListResponse = {
   referenceMonth: string;
   canManage: boolean;
   canExport: boolean;
+  message?: string;
 };
 
 function employeeMapStatusLabel(status: string) {
@@ -488,6 +490,7 @@ type MonthlyAdvanceImportPreview = {
     observation: string;
     employeeId?: string;
     employeeName?: string;
+    contractType?: string;
     action?: "create" | "update";
     errors: string[];
     warnings: string[];
@@ -3683,6 +3686,7 @@ export function MySchedulePage() {
   const [myWorkHourSummary, setMyWorkHourSummary] = useState<WorkHourSummary | null>(null);
   const [myScheduleShiftOptions, setMyScheduleShiftOptions] = useState<string[]>(Array.from(standardShiftNames).filter((shift) => shift !== "Folga"));
   const [monthlyAdvanceCycles, setMonthlyAdvanceCycles] = useState<MonthlyAdvanceCycle[]>([]);
+  const [monthlyAdvanceNotice, setMonthlyAdvanceNotice] = useState("");
   const [savingMonthlyAdvance, setSavingMonthlyAdvance] = useState("");
   const [myRequests, setMyRequests] = useState<ClientRequest[]>([]);
   const [selectedRequest, setSelectedRequest] = useState<ClientRequest | null>(null);
@@ -3784,10 +3788,12 @@ export function MySchedulePage() {
 
   async function loadMyMonthlyAdvance() {
     try {
-      const payload = await apiJson<{ data: MonthlyAdvanceCycle[] }>("/api/monthly-advance?scope=mine");
+      const payload = await apiJson<{ data: MonthlyAdvanceCycle[]; message?: string }>("/api/monthly-advance?scope=mine");
       setMonthlyAdvanceCycles(payload.data);
+      setMonthlyAdvanceNotice(payload.message ?? "");
     } catch {
       setMonthlyAdvanceCycles([]);
+      setMonthlyAdvanceNotice("");
     }
   }
 
@@ -4398,7 +4404,7 @@ export function MySchedulePage() {
                 ))}
               </div>
             ) : (
-              <EmptyState title="Adiantamento mensal indisponível" description="Não foi possível carregar os ciclos de resposta agora." />
+              <EmptyState title="Adiantamento mensal indisponível" description={monthlyAdvanceNotice || "Não foi possível carregar os ciclos de resposta agora."} />
             )}
           </Panel>
           <Panel title="Minhas Solicitações" action="Solicitar Folga" actionOnClick={openDayOffRequestModal}>
@@ -5256,7 +5262,9 @@ export function SchedulesPage() {
   const [scheduleDateError, setScheduleDateError] = useState("");
   const [scheduleDateColumns, setScheduleDateColumns] = useState<string[]>([]);
   const [schedulePagination, setSchedulePagination] = useState({ page: 1, limit: 75, total: 0, totalPages: 1 });
-  const [scheduleFilters, setScheduleFilters] = useState({ employeeId: queryParam("employeeId"), collaborator: "", lob: "Todos", supervisor: "Todos", shift: "Todos", status: "Todos", skill: "Todos", roleTitle: "" });
+  const [scheduleFilters, setScheduleFilters] = useState({ employeeId: queryParam("employeeId"), collaborator: "", lob: "Todos", supervisor: "Todos", shift: "Todos", status: "Todos", skill: "Todos", roleTitle: "", wbLogins: queryParam("wbLogins") });
+  const [scheduleBatchText, setScheduleBatchText] = useState("");
+  const [scheduleBatchOpen, setScheduleBatchOpen] = useState(false);
   const [scheduleEditForm, setScheduleEditForm] = useState({
     scheduleId: "",
     employeeId: "",
@@ -5388,7 +5396,9 @@ export function SchedulesPage() {
         skipSummary: "true",
         includeImports: options.includeImports ? "true" : "false"
       });
-      const payload = await apiJson<{ data: { scheduleGridRows: typeof scheduleRows; imports?: ScheduleImportHistory[]; attendanceSummary?: AttendanceSummary; scheduleMetrics?: ScheduleMetricsPayload; daysInMonth?: number; dateColumns?: string[]; pagination?: { page: number; limit: number; total: number; totalPages: number } }; actor?: { role: string; name: string } }>(`/api/schedules?${params.toString()}`);
+      const batchWbs = scheduleBatchValues(filtersOverride);
+      if (batchWbs.length) params.set("wbLogins", serializeWbLogins(batchWbs));
+      const payload = await apiJson<{ data: { scheduleGridRows: typeof scheduleRows; imports?: ScheduleImportHistory[]; attendanceSummary?: AttendanceSummary; scheduleMetrics?: ScheduleMetricsPayload; daysInMonth?: number; dateColumns?: string[]; pagination?: { page: number; limit: number; total: number; totalPages: number }; batchWb?: { applied: string[]; notFound: string[]; duplicatesRemoved: number } }; actor?: { role: string; name: string } }>(`/api/schedules?${params.toString()}`);
       setScheduleActorRole(payload.actor?.role ?? "COLABORADOR");
       setScheduleRows(payload.data.scheduleGridRows);
       setScheduleMetrics(normalizeScheduleMetrics(payload.data.scheduleMetrics, payload.data.scheduleGridRows));
@@ -5401,6 +5411,11 @@ export function SchedulesPage() {
       if (payload.data.imports) setImportHistory(payload.data.imports);
       if (payload.data.attendanceSummary) setAttendanceSummary(payload.data.attendanceSummary);
       else setAttendanceSummary(null);
+      if (payload.data.batchWb?.notFound.length) {
+        setAttendanceMessage(`${payload.data.batchWb.applied.length} login(s) aplicados. ${payload.data.batchWb.notFound.length} não encontrado(s): ${payload.data.batchWb.notFound.join(", ")}.`);
+      } else if (attendanceMessage.includes("login(s) aplicados")) {
+        setAttendanceMessage("");
+      }
       void refreshScheduleSummary(rangeOverride, filtersOverride);
       void refreshAttendanceForSchedulePeriod(rangeOverride, filtersOverride);
     } catch {
@@ -5426,6 +5441,8 @@ export function SchedulesPage() {
       if (filtersOverride.status !== "Todos") params.set("status", filtersOverride.status);
       if (filtersOverride.skill !== "Todos") params.set("skill", filtersOverride.skill);
       if (filtersOverride.roleTitle && filtersOverride.roleTitle !== "Todos") params.set("roleTitle", filtersOverride.roleTitle);
+      const batchWbs = scheduleBatchValues(filtersOverride);
+      if (batchWbs.length) params.set("wbLogins", serializeWbLogins(batchWbs));
       const payload = await apiJson<{ summary: AttendanceSummary }>(`/api/attendance?${params.toString()}`);
       setAttendanceSummary(payload.summary);
     } catch {
@@ -5447,6 +5464,8 @@ export function SchedulesPage() {
     if (filtersOverride.collaborator.trim()) params.set("collaborator", filtersOverride.collaborator.trim());
     if (filtersOverride.employeeId) params.set("employeeId", filtersOverride.employeeId);
     if (filtersOverride.skill !== "Todos") params.set("skill", filtersOverride.skill);
+    const batchWbs = scheduleBatchValues(filtersOverride);
+    if (batchWbs.length) params.set("wbLogins", serializeWbLogins(batchWbs));
     try {
       const payload = await apiJson<{ data: AttendanceItem[]; summary: AttendanceSummary }>(`/api/attendance?${params.toString()}`);
       setPendingJustifications(payload.data.filter((record) => statusNeedsReason(record.status) && record.isJustified === false));
@@ -5495,13 +5514,49 @@ export function SchedulesPage() {
   }
 
   function clearScheduleFilters() {
-    const clearedFilters = { employeeId: "", collaborator: "", lob: "Todos", supervisor: "Todos", shift: "Todos", status: "Todos", skill: "Todos", roleTitle: "" };
+    const clearedFilters = { employeeId: "", collaborator: "", lob: "Todos", supervisor: "Todos", shift: "Todos", status: "Todos", skill: "Todos", roleTitle: "", wbLogins: "" };
     const clearedRange = monthRange(schedulePeriod.month, schedulePeriod.year);
     setScheduleFilters(clearedFilters);
+    setScheduleBatchText("");
+    setScheduleBatchOpen(false);
     setScheduleRangeMode("month");
     setScheduleDateRange(clearedRange);
     setScheduleDateError("");
     void refreshSchedules(1, clearedFilters, clearedRange);
+  }
+
+  function scheduleBatchValues(filters = scheduleFilters) {
+    return parseWbLoginBatch(filters.wbLogins).values;
+  }
+
+  function addScheduleBatchWbs() {
+    const parsed = parseWbLoginBatch(scheduleBatchText);
+    if (!parsed.values.length) {
+      setAttendanceMessage("Cole um ou mais WB/Login para aplicar o filtro em lote.");
+      return;
+    }
+    const nextValues = parseWbLoginBatch([...scheduleBatchValues(), ...parsed.values]).values;
+    const nextFilters = { ...scheduleFilters, wbLogins: serializeWbLogins(nextValues) };
+    setScheduleFilters(nextFilters);
+    setScheduleBatchText("");
+    setScheduleBatchOpen(false);
+    setAttendanceMessage(`${parsed.values.length} login(s) adicionados ao filtro em lote${parsed.duplicatesRemoved ? `; ${parsed.duplicatesRemoved} duplicado(s) ignorado(s)` : ""}.`);
+    void refreshSchedules(1, nextFilters, scheduleDateRange);
+  }
+
+  function removeScheduleBatchWb(value: string) {
+    const nextValues = scheduleBatchValues().filter((item) => item !== value);
+    const nextFilters = { ...scheduleFilters, wbLogins: serializeWbLogins(nextValues) };
+    setScheduleFilters(nextFilters);
+    void refreshSchedules(1, nextFilters, scheduleDateRange);
+  }
+
+  function clearScheduleBatchWbs() {
+    const nextFilters = { ...scheduleFilters, wbLogins: "" };
+    setScheduleFilters(nextFilters);
+    setScheduleBatchText("");
+    setScheduleBatchOpen(false);
+    void refreshSchedules(1, nextFilters, scheduleDateRange);
   }
 
   async function handleFile(file?: File) {
@@ -6038,6 +6093,7 @@ export function SchedulesPage() {
   const visibleScheduleDates = scheduleDateColumns.length
     ? scheduleDateColumns
     : dateInputsBetween(scheduleDateRange.startDate, scheduleDateRange.endDate);
+  const scheduleBatchWbs = scheduleBatchValues();
   const scheduleRowEmployees = scheduleRows.map((row) => row.employee as EmployeeClient);
   const employeeOptions = Array.from(
     new Map([...scheduleEmployees, ...scheduleRowEmployees, ...scheduleEmployeeSearchResults].map((employee) => [employee.id, employee])).values()
@@ -6180,6 +6236,7 @@ export function SchedulesPage() {
     if (scheduleFilters.status !== "Todos") params.set("status", scheduleFilters.status);
     if (scheduleFilters.skill !== "Todos") params.set("skill", scheduleFilters.skill);
     if (scheduleFilters.roleTitle) params.set("roleTitle", scheduleFilters.roleTitle);
+    if (scheduleBatchWbs.length) params.set("wbLogins", serializeWbLogins(scheduleBatchWbs));
     return `/api/schedules/export?${params.toString()}`;
   }
 
@@ -6264,6 +6321,38 @@ export function SchedulesPage() {
           <select value={scheduleFilters.roleTitle || "Todos"} onChange={(event) => setScheduleFilters({ ...scheduleFilters, roleTitle: event.target.value === "Todos" ? "" : event.target.value })} className="h-9 rounded-lg border border-border px-3 text-sm font-bold outline-none">
             {uniqueRoleTitles.map((roleTitle) => <option key={roleTitle} value={roleTitle}>{roleTitle}</option>)}
           </select>
+          <div className="rounded-lg border border-dashed border-blue-200 bg-blue-50/50 p-3 md:col-span-2 xl:col-span-8">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-black uppercase text-blue-700">Filtro em lote por WB/Login</p>
+                <p className="text-xs font-semibold text-muted">Cole vários logins e combine com período, LOB, supervisor, turno, status, skill e cargo.</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => setScheduleBatchOpen((current) => !current)} className="inline-flex h-8 items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 text-xs font-extrabold text-blue-700">
+                  <Plus className="h-3.5 w-3.5" /> Adicionar múltiplos
+                </button>
+                {scheduleBatchWbs.length ? <button type="button" onClick={clearScheduleBatchWbs} className="h-8 rounded-lg border border-border bg-white px-3 text-xs font-extrabold text-navy-950">Limpar WBs</button> : null}
+              </div>
+            </div>
+            {scheduleBatchOpen ? (
+              <div className="mt-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
+                <textarea value={scheduleBatchText} onChange={(event) => setScheduleBatchText(event.target.value)} className="min-h-24 rounded-lg border border-border bg-white p-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100" placeholder={"wb_joao01\nwb_maria02; wb_pedro03"} />
+                <div className="flex items-end">
+                  <button type="button" onClick={addScheduleBatchWbs} className="h-10 rounded-lg bg-blue-600 px-4 text-sm font-extrabold text-white">Aplicar lote</button>
+                </div>
+              </div>
+            ) : null}
+            {scheduleBatchWbs.length ? (
+              <div className="mt-3 flex max-h-24 flex-wrap gap-2 overflow-y-auto pr-1">
+                {scheduleBatchWbs.map((value) => (
+                  <span key={value} className="inline-flex items-center gap-2 rounded-full border border-blue-200 bg-white px-3 py-1 text-xs font-extrabold text-blue-700">
+                    {value}
+                    <button type="button" onClick={() => removeScheduleBatchWb(value)} className="text-blue-400 hover:text-red-600">×</button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
           <div className="grid grid-cols-2 gap-2">
             <button onClick={applyScheduleFilters} className="rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
             <button
@@ -9005,7 +9094,7 @@ export function AdvanceManagementPage() {
     <div>
       <PageHeader
         title="Adiantamento"
-        description="Gestão mensal de adesão, valores e exportações para operação financeira."
+        description="Gestão mensal de adesão, valores e exportações para colaboradores PJ."
         icon={Coins}
         actions={(
           <div className="flex flex-wrap gap-2">
@@ -9082,11 +9171,12 @@ export function AdvanceManagementPage() {
                 <ImportIssueSummary rows={advancePreview.rows} title="Corrija estas linhas do adiantamento" />
                 <div className="max-h-[48vh] overflow-y-auto">
                   <SimpleTable
-                    columns={["Linha", "WB/Login", "Colaborador", "Mês", "Aderente", "Valor", "Ação", "Erros"]}
+                    columns={["Linha", "WB/Login", "Colaborador", "Contrato", "Mês", "Aderente", "Valor", "Ação", "Erros"]}
                     rows={advancePreview.rows.slice(0, IMPORT_PREVIEW_ROW_LIMIT).map((row) => [
                       row.rowNumber,
                       row.wbLogin || "-",
                       row.employeeName ?? "Não encontrado",
+                      row.contractType || "-",
                       row.referenceMonth || "-",
                       row.optIn === null ? "-" : row.optIn ? "Sim" : "Não",
                       row.amount == null ? "-" : currencyFormatter.format(row.amount),
@@ -9106,11 +9196,12 @@ export function AdvanceManagementPage() {
             <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm font-bold text-blue-700">Carregando adiantamento mensal...</div>
           ) : advanceRows.length ? (
             <SimpleTable
-              columns={["Mês", "Nome", "WB/Login", "E-mail", "LOB", "Supervisor", "Aderente", "Valor", "Observação", "Atualizado por", "Atualizado em", "Ações"]}
+              columns={["Mês", "Nome", "WB/Login", "Contrato", "E-mail", "LOB", "Supervisor", "Aderente", "Valor", "Observação", "Atualizado por", "Atualizado em", "Ações"]}
               rows={advanceRows.map((record) => [
                 record.monthLabel,
                 record.employeeName,
                 record.wbLogin,
+                record.contractType || "PJ",
                 record.email ?? "-",
                 record.lob ?? "-",
                 record.supervisor,
@@ -11195,7 +11286,7 @@ export function MuralPage() {
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <h3 className="text-base font-black text-navy-950">Aderência de ciência</h3>
-                      <p className="text-sm font-semibold text-muted">Acompanha apenas usuários elegíveis pelo público-alvo do comunicado.</p>
+                      <p className="text-sm font-semibold text-muted">Acompanha apenas usuários elegíveis pelo público-alvo e pela LOB alvo do comunicado.</p>
                     </div>
                     <button
                       type="button"
@@ -11235,7 +11326,8 @@ export function MuralPage() {
                           onChange={(event) => setAcknowledgementFilters({ ...acknowledgementFilters, role: event.target.value })}
                           className="h-9 rounded-lg border border-border px-3 text-xs font-bold"
                         >
-                          {["Todos", "COLABORADOR", "SUPERVISOR", "ADMIN", "WFM", "RH", "GESTOR", "COORDENADOR", "GERENTE", "CLIENT"].map((item) => <option key={item}>{item}</option>)}
+                          <option value="Todos">Todos os públicos</option>
+                          {muralTargetRoles.filter((role) => role.value !== "TODOS").map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}
                         </select>
                         <select
                           value={acknowledgementFilters.lobId}
