@@ -10,7 +10,7 @@ import { shiftCategoryName, shiftLookupKey } from "@/lib/shift-display";
 
 const productiveShiftCategories = ["Manhã", "Tarde", "Noite"] as const;
 const requiredLobs = ["ADS", "CEC", "TNS"] as const;
-const coverageStatuses = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "ATRASO", "SAIDA_ANTECIPADA", "TROCA_APROVADA", "VENDA_FOLGA_APROVADA", "NESTING"]);
+const coverageStatuses = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "VENDA_FOLGA_APROVADA"]);
 const unavailableEmployeeTokens = new Set([
   "afastado",
   "afastada",
@@ -165,9 +165,10 @@ async function listStaffSchedules(period: { startDate: Date; endDate: Date }, qu
 }
 
 function scheduleMatchesStaffCoverage(schedule: StaffSchedule, query: RequiredStaffQuery) {
+  const role = classifyStaffBySkill(schedule.employee.skill);
   const lob = canonicalLob(schedule.coverageLobName);
-  if (!lob) return false;
-  if (!classifyStaffBySkill(schedule.employee.skill)) return false;
+  if (!role) return false;
+  if (role !== "RTA" && !lob) return false;
   if (!coverageStatuses.has(schedule.status)) return false;
   if (!isEmployeeAvailable(schedule.employee.operationalStatus)) return false;
   if (schedule.employee.terminationDate && formatDateKey(schedule.date) >= formatDateKey(schedule.employee.terminationDate)) return false;
@@ -198,8 +199,8 @@ function buildStaffCoverage(period: { startDate: Date; endDate: Date }, schedule
     const dateKey = formatDateKey(date);
     const isWeekend = isWeekendDate(date);
     for (const shift of selectedShifts) {
-      const companySupervisors = requiredLobs.flatMap((lob) => byKey.get(personKey(dateKey, shift, lob, "SUPERVISOR")) ?? []);
-      const shiftRtas = requiredLobs.flatMap((lob) => byKey.get(personKey(dateKey, shift, lob, "RTA")) ?? []);
+      const companySupervisors = uniquePeople(requiredLobs.flatMap((lob) => byKey.get(personKey(dateKey, shift, lob, "SUPERVISOR")) ?? []));
+      const shiftRtas = uniquePeople(requiredLobs.flatMap((lob) => byKey.get(personKey(dateKey, shift, lob, "RTA")) ?? []));
       rows.push({
         date: dateKey,
         dateLabel: formatDatePtBr(date),
@@ -328,10 +329,13 @@ function buildCriticalRows(rows: RequiredStaffShiftRow[]): RequiredStaffCritical
 function groupPeople(people: RequiredStaffPersonWithDate[]) {
   const map = new Map<string, RequiredStaffPerson[]>();
   for (const person of people) {
-    const key = personKey(person.date, person.shift, person.lob, person.role);
-    const current = map.get(key) ?? [];
-    current.push(person);
-    map.set(key, current);
+    const lobs = person.role === "RTA" ? requiredLobs : [person.lob];
+    for (const lob of lobs) {
+      const key = personKey(person.date, person.shift, lob, person.role);
+      const current = map.get(key) ?? [];
+      current.push({ ...person, lob });
+      map.set(key, uniquePeople(current));
+    }
   }
   return map;
 }
@@ -344,13 +348,14 @@ function formatStaffPerson(schedule: StaffSchedule): RequiredStaffPersonWithDate
   const role = classifyStaffBySkill(schedule.employee.skill);
   const lob = canonicalLob(schedule.coverageLobName);
   const shift = scheduleShiftCategory(schedule);
-  if (!role || !lob || !shift) return null;
+  if (!role || !shift) return null;
+  if (role !== "RTA" && !lob) return null;
   return {
     id: schedule.employee.id,
     name: schedule.employee.fullName,
     wbLogin: schedule.employee.wbLogin,
     skill: schedule.employee.skill ?? "",
-    lob,
+    lob: lob ?? "ADS",
     role,
     shift,
     date: formatDateKey(schedule.date),
@@ -363,7 +368,17 @@ function classifyStaffBySkill(skill?: string | null): StaffRole | null {
   if (!key) return null;
   if (key === "POC" || key.includes("POC") || key.includes("POINT_OF_CONTACT") || key.includes("PONTO_FOCAL")) return "POC";
   if (key === "RTA" || key.includes("RTA") || key.includes("REAL_TIME")) return "RTA";
-  if (key === "SUP" || key === "TL" || key.includes("SUPERVISOR") || key.includes("SUPERVISAO") || key.includes("TEAM_LEADER")) return "SUPERVISOR";
+  if (
+    key === "SUP" ||
+    key === "TL" ||
+    key.includes("SUPERVISOR") ||
+    key.includes("SUPERVISAO") ||
+    key.includes("TEAM_LEADER") ||
+    key.includes("TEAMLEADER") ||
+    key.includes("LEADER") ||
+    key.includes("LIDER") ||
+    key.includes("LIDERANCA")
+  ) return "SUPERVISOR";
   return null;
 }
 
@@ -392,8 +407,17 @@ function canonicalLob(value?: unknown): RequiredLob | null {
   const key = lookupKey(value);
   if (key === "ADS" || key.includes("ADS")) return "ADS";
   if (key === "CEC" || key.includes("CEC")) return "CEC";
-  if (key === "TNS" || key.includes("TNS")) return "TNS";
+  if (key === "TNS" || key.includes("TNS") || key.includes("VIDEO") || key.includes("COMMENTS") || key.includes("COMMENT")) return "TNS";
   return null;
+}
+
+function uniquePeople<T extends RequiredStaffPerson>(items: T[]) {
+  const map = new Map<string, T>();
+  for (const item of items) {
+    const key = item.id || item.wbLogin || item.name;
+    if (!map.has(key)) map.set(key, item);
+  }
+  return Array.from(map.values());
 }
 
 function normalizeProductiveShift(value?: unknown): ProductiveShiftCategory | null {

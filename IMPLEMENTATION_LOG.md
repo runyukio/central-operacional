@@ -177,3 +177,12 @@ Adicionada uma segunda visao na aba Requerido com alternancia por botoes `AGENTS
 ## Pendencias
 
 - Validacao visual manual em ambiente local ainda recomendada com dados reais de escala.
+
+## Ajuste posterior - 2026-06-15
+
+- RTA passou a ser tratado como cobertura geral do turno, cobrindo ADS, CEC e TNS ao ativar `COM RTA`.
+- RTAs deixam de depender da LOB cadastrada para entrar na analise de staff.
+- `Video`, `Comments` e variacoes passam a ser normalizados como TNS para cobertura de Supervisor/POC.
+- A deteccao de Supervisores por skill foi ampliada para variações como `Leader`, `Lider`, `Lideranca`, `TeamLeader`, `TL`, `Sup`, `Supervisor` e `Supervisao`.
+- A lista geral de Supervisor/RTA remove duplicidade quando o mesmo RTA cobre as tres LOBs.
+- A cobertura STAFF considera somente registros de escala com status `Escalado`, `Presente` ou `Venda de folga aprovada`.
