@@ -23,6 +23,7 @@ const MONTH_NAMES = [
   "Novembro",
   "Dezembro"
 ];
+const MONTHLY_ADVANCE_PJ_ONLY_MESSAGE = "Adiantamento mensal disponível apenas para colaboradores PJ.";
 
 const monthNameIndex = new Map(
   MONTH_NAMES.map((name, index) => [
@@ -39,6 +40,7 @@ type AdvanceEmployee = {
   id: string;
   wbLogin: string;
   fullName: string;
+  contractType?: string | null;
   user?: { email: string } | null;
   lob?: { id: string; name: string } | null;
   supervisor?: { id: string; fullName: string; wbLogin: string; user?: { email: string } | null } | null;
@@ -64,6 +66,7 @@ export type MonthlyAdvanceImportRow = {
   observation: string;
   employeeId?: string;
   employeeName?: string;
+  contractType?: string;
   action?: "create" | "update";
   errors: string[];
   warnings: string[];
@@ -247,11 +250,12 @@ export async function listMonthlyAdvances(actor: Actor, filters: MonthlyAdvanceF
 
   const referenceMonth = normalizeReferenceMonth(filters.referenceMonth, currentReferenceMonth());
   const where: Prisma.MonthlyAdvanceRecordWhereInput = { referenceMonth, status: { not: "REMOVED" } };
-  const and: Prisma.MonthlyAdvanceRecordWhereInput[] = [];
+  const and: Prisma.MonthlyAdvanceRecordWhereInput[] = [{ employee: monthlyAdvanceEligibleEmployeeWhere() }];
 
   if (role === "COLABORADOR") {
     const employee = await resolveEmployeeForUser(user);
     if (!employee) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
+    if (!isMonthlyAdvanceEligibleContract(employee.contractType)) return { error: MONTHLY_ADVANCE_PJ_ONLY_MESSAGE, status: 403 };
     where.employeeId = employee.id;
   }
 
@@ -338,6 +342,9 @@ export async function getMyMonthlyAdvanceCycles(actor: Actor) {
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
   const employee = await resolveEmployeeForUser(user);
   if (!employee) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
+  if (!isMonthlyAdvanceEligibleContract(employee.contractType)) {
+    return { data: [], message: MONTHLY_ADVANCE_PJ_ONLY_MESSAGE };
+  }
 
   const today = new Date();
   const months = employeeMonthlyAdvanceCycleMonths(today);
@@ -376,6 +383,7 @@ export async function respondMonthlyAdvance(actor: Actor, input: { referenceMont
 
   const employee = await resolveEmployeeForUser(user);
   if (!employee) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
+  if (!isMonthlyAdvanceEligibleContract(employee.contractType)) return { error: MONTHLY_ADVANCE_PJ_ONLY_MESSAGE, status: 403 };
 
   const referenceMonth = normalizeReferenceMonth(input.referenceMonth);
   if (!referenceMonth) return { error: "Mês de referência inválido.", status: 400 };
@@ -456,6 +464,7 @@ export async function upsertMonthlyAdvance(actor: Actor, input: {
     ? await prisma.employeeProfile.findFirst({ where: { id: input.employeeId, deletedAt: null }, include: employeeInclude })
     : await findEmployeeByWbLogin(input.wbLogin);
   if (!employee) return { error: "WB/Login não encontrado.", status: 404 };
+  if (!isMonthlyAdvanceEligibleContract(employee.contractType)) return { error: MONTHLY_ADVANCE_PJ_ONLY_MESSAGE, status: 400 };
 
   const referenceMonth = normalizeReferenceMonth(input.referenceMonth);
   if (!referenceMonth) return { error: "Mês de referência inválido.", status: 400 };
@@ -663,6 +672,7 @@ export async function exportMonthlyAdvances(actor: Actor, filters: MonthlyAdvanc
     "nome",
     "wb_login",
     "email",
+    "tipo_contrato",
     "lob",
     "supervisor",
     "status_colaborador",
@@ -677,6 +687,7 @@ export async function exportMonthlyAdvances(actor: Actor, filters: MonthlyAdvanc
       record.employeeName,
       record.wbLogin,
       record.email ?? "",
+      record.contractType ?? "",
       record.lob ?? "",
       record.supervisor,
       record.employeeStatus ?? "",
@@ -704,6 +715,7 @@ export async function createMonthlyAdvanceChangeRequest(actor: Actor, input: {
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
   const employee = await resolveEmployeeForUser(user);
   if (!employee) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
+  if (!isMonthlyAdvanceEligibleContract(employee.contractType)) return { error: MONTHLY_ADVANCE_PJ_ONLY_MESSAGE, status: 403 };
 
   const referenceMonth = normalizeReferenceMonth(input.referenceMonth);
   if (!referenceMonth) return { error: "Mês de referência inválido.", status: 400 };
@@ -818,6 +830,13 @@ export async function applyApprovedMonthlyAdvanceChange(tx: Prisma.TransactionCl
   if (!referenceMonth) throw new Error("Mês de referência inválido na solicitação de adiantamento.");
   const requestedOptIn = parseAdvanceOptIn(payload.requestedOptIn);
   if (requestedOptIn === null) throw new Error("Aderência solicitada inválida na solicitação de adiantamento.");
+  const employee = await tx.employeeProfile.findUnique({
+    where: { id: request.employeeId },
+    select: { contractType: true }
+  });
+  if (!isMonthlyAdvanceEligibleContract(employee?.contractType)) {
+    return { updated: false, message: MONTHLY_ADVANCE_PJ_ONLY_MESSAGE };
+  }
   const requestedAmount = monthlyAdvanceAmountForOptIn(requestedOptIn);
   const previous = await tx.monthlyAdvanceRecord.findUnique({
     where: { employeeId_referenceMonth: { employeeId: request.employeeId, referenceMonth } }
@@ -886,6 +905,7 @@ function parseImportRow(
 
   if (!normalizedLogin) errors.push("WB/Login é obrigatório.");
   else if (!employee) errors.push("WB/Login não encontrado.");
+  else if (!isMonthlyAdvanceEligibleContract(employee.contractType)) errors.push(MONTHLY_ADVANCE_PJ_ONLY_MESSAGE);
   if (!referenceMonth) errors.push("Mês de referência inválido.");
   if (optIn === null) errors.push("Aderente deve ser Sim ou Não.");
 
@@ -898,6 +918,7 @@ function parseImportRow(
     observation,
     employeeId: employee?.id,
     employeeName: employee?.fullName,
+    contractType: employee?.contractType ?? "",
     errors,
     warnings: []
   };
@@ -927,6 +948,7 @@ function mapMonthlyAdvanceRecord(record: Prisma.MonthlyAdvanceRecordGetPayload<{
     supervisor: record.employee.supervisor?.fullName ?? "Sem supervisor",
     supervisorId: record.employee.supervisorId,
     employeeStatus: record.employee.operationalStatus,
+    contractType: record.employee.contractType ?? "",
     referenceMonth: record.referenceMonth,
     monthLabel: formatReferenceMonth(record.referenceMonth),
     optIn: record.optIn,
@@ -999,6 +1021,28 @@ function canExportMonthlyAdvance(role: string) {
 
 function canDeleteMonthlyAdvance(role: string) {
   return ["ADMIN", "GESTOR", "WFM"].includes(role);
+}
+
+function monthlyAdvanceEligibleEmployeeWhere(): Prisma.EmployeeProfileWhereInput {
+  return {
+    OR: [
+      { contractType: { equals: "PJ", mode: "insensitive" } },
+      { contractType: { equals: "Pessoa Jurídica", mode: "insensitive" } },
+      { contractType: { equals: "Pessoa Juridica", mode: "insensitive" } },
+      { contractType: { equals: "Pessoa Jurídico", mode: "insensitive" } },
+      { contractType: { equals: "Pessoa Juridico", mode: "insensitive" } }
+    ]
+  };
+}
+
+function isMonthlyAdvanceEligibleContract(value?: string | null) {
+  const contract = String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  return contract === "pj" || contract === "pessoajuridica" || contract === "pessoajuridico";
 }
 
 function formatMonthParts(year: number, month: number) {

@@ -20,7 +20,8 @@ export async function GET(request: Request) {
     shift: url.searchParams.get("shift") ?? undefined,
     status: url.searchParams.get("status") ?? undefined,
     roleTitle: url.searchParams.get("roleTitle") ?? undefined,
-    skill: url.searchParams.get("skill") ?? undefined
+    skill: url.searchParams.get("skill") ?? undefined,
+    wbLogins: url.searchParams.get("wbLogins") ?? undefined
   });
 
   if ("error" in result) {

@@ -832,6 +832,7 @@ type EmployeeClient = (typeof employees)[number] & {
   lobId?: string;
   shiftId?: string;
   admissionIso?: string;
+  seniority?: string;
   terminationDate?: string;
   terminationDateIso?: string;
   terminationType?: string;
@@ -9738,7 +9739,7 @@ export function EmployeeMapPage() {
             ) : employeeRows.length ? (
               <>
                 <SimpleTable
-                  columns={["Nome", "E-mail", "WB/Login", "Cargo/Função", "Role", "LOB", "Skill", "Wave", "Supervisor", "Turno", "Status do colaborador", "Ação"]}
+                  columns={["Nome", "E-mail", "WB/Login", "Cargo/Função", "Role", "LOB", "Skill", "Wave", "Supervisor", "Turno", "Senioridade", "Status do colaborador", "Ação"]}
                   rows={employeeRows.map((employee) => [
                     <button key={employee.id} onClick={() => selectEmployee(employee)} className="max-w-[180px] truncate font-bold text-blue-700" title={employee.name}>{employee.name}</button>,
                     <span key={`${employee.id}-email`} className="block max-w-[190px] truncate" title={employee.email ?? "-"}>{employee.email ?? "-"}</span>,
@@ -9750,6 +9751,7 @@ export function EmployeeMapPage() {
                     employee.wave || "Sem wave",
                     <span key={`${employee.id}-supervisor`} className="block max-w-[160px] truncate" title={employee.supervisor}>{employee.supervisor}</span>,
                     cleanShiftName(employee.shift) || "-",
+                    <StatusBadge key={`${employee.id}-seniority`} status={employee.seniority || "Não informado"} />,
                     <StatusBadge key={`${employee.id}-status`} status={employeeMapStatusLabel(employee.status)} />,
                     <div key={`${employee.id}-action`} className="flex flex-wrap gap-1.5">
                       <Link href={`/perfil/${employee.id}`} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">Ver perfil</Link>
@@ -9798,6 +9800,7 @@ export function EmployeeMapPage() {
                 <InfoLine label="Horário de entrada" value={selected.workStartTime || "Não informado"} />
                 <InfoLine label="Horário de saída" value={selected.workEndTime || "Não informado"} />
                 <InfoLine label="Admissão" value={selected.admission} />
+                <InfoLine label="Senioridade" value={selected.seniority || "Não informado"} />
                 <InfoLine label="Início de Nesting" value={selected.nestingStartDate || "Não informado"} />
                 <InfoLine label="Go Live" value={selected.goLiveDate || "Não informado"} />
                 <InfoLine label="Desligamento" value={selected.terminationDate || "Não informada"} />
@@ -11665,6 +11668,7 @@ export function PerformancePage() {
   const isClientRole = sessionRole === "CLIENT";
   const sessionCanWfh = ["ADMIN", "WFM", "SUPERVISOR", "RH", "GESTOR", "COORDENADOR", "GERENTE", "MANAGEMENT", "CLIENT"].includes(sessionRole);
   const visibleActiveTab = isClientRole ? "wfh" : activeTab;
+  const shouldWaitForDefaultPerformanceTab = Boolean(sessionRole && !hasRequestedPerformanceView && !defaultedTab.current);
 
   useEffect(() => {
     if (isClientRole && activeTab !== "wfh") {
@@ -11679,7 +11683,7 @@ export function PerformancePage() {
   }, [activeTab, isClientRole, sessionCanWfh, sessionRole]);
 
   const loadPerformance = useCallback(async () => {
-    if (!sessionRole) return;
+    if (!sessionRole || shouldWaitForDefaultPerformanceTab) return;
     const effectiveTab = isClientRole ? "wfh" : activeTab;
     setLoading(true);
     const params = new URLSearchParams({
@@ -11715,7 +11719,7 @@ export function PerformancePage() {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, filters, isClientRole, performanceSort, sessionRole]);
+  }, [activeTab, filters, isClientRole, performanceSort, sessionRole, shouldWaitForDefaultPerformanceTab]);
 
   useEffect(() => {
     void loadPerformance();

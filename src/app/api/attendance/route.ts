@@ -36,6 +36,7 @@ export async function GET(request: Request) {
     status: url.searchParams.get("status") ?? undefined,
     roleTitle: url.searchParams.get("roleTitle") ?? undefined,
     skill: url.searchParams.get("skill") ?? undefined,
+    wbLogins: url.searchParams.get("wbLogins") ?? undefined,
     reason: url.searchParams.get("reason") ?? undefined,
     justification: url.searchParams.get("justification") ?? undefined,
     includeJustified: url.searchParams.get("includeJustified") ?? undefined,

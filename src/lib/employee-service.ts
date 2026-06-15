@@ -965,6 +965,7 @@ function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: 
     equipment: employee.equipments.length,
     admission: formatDate(employee.admissionDate),
     admissionIso: toDateInput(employee.admissionDate),
+    seniority: employeeSeniorityGroup(employee.admissionDate),
     terminationDate: canViewTerminationData && employee.terminationDate ? formatDate(employee.terminationDate) : "",
     terminationDateIso: canViewTerminationData && employee.terminationDate ? toDateInput(employee.terminationDate) : "",
     terminationType: canViewTerminationData ? employee.terminationType ?? "" : "",
@@ -1069,6 +1070,7 @@ function mapLegacyEmployee(employee: LegacyEmployeeRow, role: string) {
     equipment: 0,
     admission: formatDate(employee.admissionDate),
     admissionIso: toDateInput(employee.admissionDate),
+    seniority: employeeSeniorityGroup(employee.admissionDate),
     terminationDate: "",
     terminationDateIso: "",
     terminationType: "",
@@ -1151,6 +1153,7 @@ function mapEmployeeSummary(employee: EmployeeSummaryRow, role: string) {
     equipment: employee._count.equipments,
     admission: formatDate(employee.admissionDate),
     admissionIso: toDateInput(employee.admissionDate),
+    seniority: employeeSeniorityGroup(employee.admissionDate),
     terminationDate: canViewTerminationData && employee.terminationDate ? formatDate(employee.terminationDate) : "",
     terminationDateIso: canViewTerminationData && employee.terminationDate ? toDateInput(employee.terminationDate) : "",
     terminationType: canViewTerminationData ? employee.terminationType ?? "" : "",
@@ -1222,6 +1225,7 @@ function employeeExportColumns(role: string) {
     col("horario_saida", (employee) => employee.workEndTime),
     col("status_colaborador", (employee) => employee.employeeStatus),
     col("status_usuario", (employee) => employee.userStatus),
+    col("senioridade", (employee) => employee.seniority),
     col("data_desligamento", (employee) => employee.terminationDate),
     col("tipo_desligamento", (employee) => employee.terminationType),
     col("motivo_desligamento", (employee) => employee.terminationReason),
@@ -1594,6 +1598,18 @@ function normalizeTerminationType(value: unknown) {
 function isMissingEmployeeProfileColumnError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error ?? "");
   return /EmployeeProfile\.(socialName|primaryPhone|city|stateUf|preferredSchedule|pixKey|pixKeyType|trainingStartDate|terminationDate|terminationType|terminationReason|workStartTime|workEndTime|contractType|siteOperation|internalNotes|skill|wave)|column .* does not exist/i.test(message);
+}
+
+function employeeSeniorityGroup(admissionDate?: Date | null) {
+  if (!admissionDate || Number.isNaN(admissionDate.getTime())) return "Não informado";
+  const now = new Date();
+  let completedMonths = (now.getFullYear() - admissionDate.getFullYear()) * 12 + now.getMonth() - admissionDate.getMonth();
+  if (now.getDate() < admissionDate.getDate()) completedMonths -= 1;
+  const months = Math.max(0, completedMonths);
+  if (months < 3) return "-3m";
+  if (months < 6) return "3-6m";
+  if (months < 12) return "6-12m";
+  return "+12m";
 }
 
 function formatDate(date: Date) {

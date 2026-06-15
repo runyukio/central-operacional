@@ -13,6 +13,7 @@ import { calculateAbsenceRate, calculateCoverageRate, getAbsenceStatuses, getPre
 import { calculateProductiveDifferenceMinutes, formatWorkHours, isProductiveDifferenceWithinTolerance, plannedProductiveHoursForSchedule } from "@/lib/work-hours-rules";
 import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import { moodGroupSummary, moodInterpretation, moodLabel, type MoodGroupSummary } from "@/lib/mood-service";
+import { normalizeWbLogin, parseWbLoginBatch } from "@/lib/batch-wb-filter";
 import {
   absenceReasonClassificationLabel,
   getAbsenceReasonClassification,
@@ -204,6 +205,7 @@ export type ScheduleQuery = {
   status?: string;
   roleTitle?: string;
   skill?: string;
+  wbLogins?: string[] | string;
   page?: number;
   limit?: number;
   skipSummary?: boolean | string;
@@ -237,6 +239,7 @@ export type AttendanceQuery = {
   skipSummary?: boolean | string;
   detailType?: "scheduled" | "present" | "absences" | "lobAbs" | "agentAbsences" | string;
   employeeId?: string;
+  wbLogins?: string[] | string;
 };
 
 type AttendanceExportRow = {
@@ -309,7 +312,7 @@ export type AttendanceInput = {
   impactsCoverage?: boolean;
 };
 
-type AttendanceSummaryFilters = Partial<Pick<ScheduleQuery, "lob" | "supervisor" | "shift" | "collaborator" | "status" | "roleTitle" | "skill">> & {
+type AttendanceSummaryFilters = Partial<Pick<ScheduleQuery, "lob" | "supervisor" | "shift" | "collaborator" | "status" | "roleTitle" | "skill" | "wbLogins">> & {
   employeeId?: string;
   teamSupervisorId?: string;
 };
@@ -733,6 +736,7 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
       : null;
     markPhase("importsMs");
     const attendanceSummary = query.skipSummary === true || query.skipSummary === "true" ? null : await getAttendanceSummaryFromDb(period, query);
+    const batchWb = role === "COLABORADOR" ? { applied: [] as string[], notFound: [] as string[], duplicatesRemoved: 0 } : await resolveScheduleBatchWb(query.wbLogins);
     markPhase("attendanceSummaryMs");
 
     const response = {
@@ -771,7 +775,8 @@ export async function getOperationalSchedules(actor: Actor, query: ScheduleQuery
         limit,
         total: totalSchedules,
         totalPages
-      }
+      },
+      batchWb
     };
     logPerformanceMetric("schedules.list", startedAt, {
       role,
@@ -1718,6 +1723,14 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
     if (roleTitleFilter && roleTitleFilter !== "Todos") extraFilters.push({ employee: { roleTitle: roleTitleFilter } });
     if (skillFilter) extraFilters.push({ employee: skillFilter });
     if (query.employeeId) extraFilters.push({ employeeId: query.employeeId });
+    const batch = parseWbLoginBatch(query.wbLogins ?? "");
+    if (batch.normalizedValues.length) {
+      extraFilters.push({
+        employee: {
+          OR: batch.normalizedValues.map((wbLogin) => ({ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }))
+        }
+      });
+    }
     const supervisorWhere = await scheduleSupervisorFilter(supervisorFilter);
     if (supervisorWhere) extraFilters.push(supervisorWhere);
     if (statusFilter) extraFilters.push({ status: statusFilter });
@@ -1756,6 +1769,7 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
       collaborator: query.collaborator,
       roleTitle: query.roleTitle,
       skill: query.skill,
+      wbLogins: query.wbLogins,
       employeeId: role === "COLABORADOR" && user.employeeProfile ? user.employeeProfile.id : undefined,
       teamSupervisorId: undefined
     };
@@ -2218,6 +2232,7 @@ export async function exportAttritionXlsxData(actor: Actor, query: AttendanceQue
       collaborator: query.collaborator,
       roleTitle: query.roleTitle,
       skill: query.skill,
+      wbLogins: query.wbLogins,
       employeeId: role === "COLABORADOR" && user.employeeProfile ? user.employeeProfile.id : undefined
     };
     const attrition = await getAttritionSummary(period, summaryFilters);
@@ -2885,6 +2900,12 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
   if (filters.employeeId) employeeFilterParts.push({ id: filters.employeeId });
   if (filters.teamSupervisorId) employeeFilterParts.push({ supervisorId: filters.teamSupervisorId });
   if (filters.lob && filters.lob !== "Todos") employeeFilterParts.push({ lob: { name: filters.lob } });
+  const batch = parseWbLoginBatch(filters.wbLogins ?? "");
+  if (batch.normalizedValues.length) {
+    employeeFilterParts.push({
+      OR: batch.normalizedValues.map((wbLogin) => ({ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }))
+    });
+  }
   if (search) {
     employeeFilterParts.push({
       OR: [
@@ -3185,6 +3206,12 @@ async function activeEmployeeWhere(filters: AttendanceSummaryFilters = {}) {
     { NOT: { operationalStatus: { in: inactiveEmployeeStatusValues } } }
   ];
   if (filters.lob && filters.lob !== "Todos") filterParts.push({ lob: { name: filters.lob } });
+  const batch = parseWbLoginBatch(filters.wbLogins ?? "");
+  if (batch.normalizedValues.length) {
+    filterParts.push({
+      OR: batch.normalizedValues.map((wbLogin) => ({ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }))
+    });
+  }
   if (filters.roleTitle && filters.roleTitle !== "Todos") filterParts.push({ roleTitle: filters.roleTitle });
   const supervisorFilter = await employeeSupervisorFilter(filters.supervisor);
   if (supervisorFilter) filterParts.push(supervisorFilter);
@@ -3287,6 +3314,12 @@ function emptyMoodSummary(): MoodSummary {
 async function attritionEmployeeWhere(filters: AttendanceSummaryFilters = {}) {
   const filterParts: Prisma.EmployeeProfileWhereInput[] = [{ deletedAt: null }];
   if (filters.lob && filters.lob !== "Todos") filterParts.push({ lob: { name: filters.lob } });
+  const batch = parseWbLoginBatch(filters.wbLogins ?? "");
+  if (batch.normalizedValues.length) {
+    filterParts.push({
+      OR: batch.normalizedValues.map((wbLogin) => ({ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }))
+    });
+  }
   if (filters.roleTitle && filters.roleTitle !== "Todos") filterParts.push({ roleTitle: filters.roleTitle });
   const supervisorFilter = await employeeSupervisorFilter(filters.supervisor);
   if (supervisorFilter) filterParts.push(supervisorFilter);
@@ -3587,6 +3620,12 @@ function resolveAttendancePeriod(query: AttendanceQuery) {
 function employeeFilters(query: ScheduleQuery, search?: string): Prisma.EmployeeProfileWhereInput {
   const filters: Prisma.EmployeeProfileWhereInput[] = [];
   if (query.employeeId) filters.push({ id: query.employeeId });
+  const batch = parseWbLoginBatch(query.wbLogins ?? "");
+  if (batch.normalizedValues.length) {
+    filters.push({
+      OR: batch.normalizedValues.map((wbLogin) => ({ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }))
+    });
+  }
   if (search) {
     filters.push({
       OR: [
@@ -3601,6 +3640,26 @@ function employeeFilters(query: ScheduleQuery, search?: string): Prisma.Employee
   const skillFilter = employeeSkillFilter(query.skill);
   if (skillFilter) filters.push(skillFilter);
   return filters.length ? { AND: filters } : {};
+}
+
+async function resolveScheduleBatchWb(input?: ScheduleQuery["wbLogins"]) {
+  const parsed = parseWbLoginBatch(input ?? "");
+  if (!parsed.normalizedValues.length) {
+    return { applied: [] as string[], notFound: [] as string[], duplicatesRemoved: parsed.duplicatesRemoved };
+  }
+  const employees = await prisma.employeeProfile.findMany({
+    where: {
+      deletedAt: null,
+      OR: parsed.normalizedValues.map((wbLogin) => ({ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }))
+    },
+    select: { wbLogin: true }
+  });
+  const foundByNormalized = new Map(employees.map((employee) => [normalizeWbLogin(employee.wbLogin), employee.wbLogin]));
+  return {
+    applied: parsed.normalizedValues.map((value) => foundByNormalized.get(value)).filter((value): value is string => Boolean(value)),
+    notFound: parsed.values.filter((value) => !foundByNormalized.has(normalizeWbLogin(value))),
+    duplicatesRemoved: parsed.duplicatesRemoved
+  };
 }
 
 function shiftNameCategoryWhere(value?: string | null): Prisma.ShiftWhereInput | null {
