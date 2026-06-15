@@ -237,10 +237,22 @@ function buildLobCell(lob: RequiredLob, date: string, shift: ProductiveShiftCate
   const supervisors = byKey.get(personKey(date, shift, lob, "SUPERVISOR")) ?? [];
   const pocs = byKey.get(personKey(date, shift, lob, "POC")) ?? [];
   const rtas = includeRta ? byKey.get(personKey(date, shift, lob, "RTA")) ?? [] : [];
-  if (supervisors.length && pocs.length) return { lob, status: "COMPLETE", label: "Supervisor + POC", supervisors, pocs, rtas };
-  if (supervisors.length) return { lob, status: "PARTIAL_SUPERVISOR", label: "Apenas Supervisor", supervisors, pocs, rtas };
-  if (pocs.length) return { lob, status: "PARTIAL_POC", label: "Apenas POC", supervisors, pocs, rtas };
-  return { lob, status: "NONE", label: "Sem Supervisor e sem POC", supervisors, pocs, rtas };
+  if (supervisors.length) {
+    const complements = [pocs.length ? "POC" : null, rtas.length ? "RTA" : null].filter(Boolean);
+    return {
+      lob,
+      status: "COMPLETE",
+      label: complements.length ? `Supervisor + ${complements.join(" + ")}` : "Supervisor",
+      supervisors,
+      pocs,
+      rtas
+    };
+  }
+  if (pocs.length || rtas.length) {
+    const coverage = [pocs.length ? "POC" : null, rtas.length ? "RTA" : null].filter(Boolean).join(" + ");
+    return { lob, status: "PARTIAL_POC", label: coverage ? `Apenas ${coverage}` : "Cobertura parcial", supervisors, pocs, rtas };
+  }
+  return { lob, status: "NONE", label: includeRta ? "Sem Supervisor, POC ou RTA" : "Sem Supervisor e sem POC", supervisors, pocs, rtas };
 }
 
 function summarizeStaffRows(rows: RequiredStaffShiftRow[]) {
@@ -292,8 +304,8 @@ function buildCriticalRows(rows: RequiredStaffShiftRow[], includeRta: boolean): 
           shift: row.shift,
           lob: cell.lob,
           severity: row.isWeekend || !row.companySupervisors.length ? "Alto" : "Alto",
-          problem: "Sem Supervisor e sem POC",
-          observation: row.isWeekend ? "Falha de report em final de semana." : "Não há cobertura de report para a LOB.",
+          problem: includeRta ? "Sem Supervisor, POC ou RTA" : "Sem Supervisor e sem POC",
+          observation: row.isWeekend ? "Falha de cobertura em final de semana." : "Não há cobertura para a LOB.",
           score: 70 + (row.isWeekend ? 15 : 0) + (!row.companySupervisors.length ? 20 : 0)
         });
       } else if (cell.status === "PARTIAL_SUPERVISOR" || cell.status === "PARTIAL_POC") {
@@ -305,24 +317,10 @@ function buildCriticalRows(rows: RequiredStaffShiftRow[], includeRta: boolean): 
           lob: cell.lob,
           severity: "Médio",
           problem: cell.label,
-          observation: "Cobertura parcial: ha Supervisor ou POC, mas nao ambos.",
+          observation: includeRta ? "Cobertura parcial: ha POC ou RTA, mas sem Supervisor da LOB." : "Cobertura parcial: ha POC, mas sem Supervisor da LOB.",
           score: 35 + (row.isWeekend ? 10 : 0)
         });
       }
-    }
-
-    if (includeRta && !row.rtas.length) {
-      critical.push({
-        date: row.date,
-        dateLabel: row.dateLabel,
-        weekday: row.weekday,
-        shift: row.shift,
-        lob: "Geral",
-        severity: "Baixo",
-        problem: "Sem RTA no turno",
-        observation: "RTA é informação complementar e não substitui Supervisor/POC.",
-        score: 10 + (row.isWeekend ? 5 : 0)
-      });
     }
   }
   return critical.sort((a, b) => b.score - a.score || `${a.date}|${a.shift}|${a.lob}`.localeCompare(`${b.date}|${b.shift}|${b.lob}`)).slice(0, 10);

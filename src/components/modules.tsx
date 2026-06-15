@@ -14515,14 +14515,6 @@ function RequiredStaffCoverageView({ payload, loading, showRta }: { payload: Req
   const rows = payload?.rows ?? [];
   const lobs = rows[0]?.lobs.map((cell) => cell.lob) ?? ["ADS", "CEC", "TNS"];
   const summary = payload?.summary;
-  const rtaRows = rows.map((row) => ({
-    key: `${row.date}-${row.shift}`,
-    date: row.dateLabel,
-    weekday: row.weekday,
-    shift: row.shift,
-    count: row.rtas.length,
-    people: row.rtas
-  }));
 
   if (loading && !payload) {
     return <div className="rounded-xl border border-border bg-white p-8 text-center text-sm font-bold text-muted">Carregando cobertura STAFF...</div>;
@@ -14533,9 +14525,9 @@ function RequiredStaffCoverageView({ payload, loading, showRta }: { payload: Req
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
         <StatCard title="Turnos com supervisor" value={summary?.shiftsWithSupervisor ?? 0} helper="mínimo na empresa" icon={ShieldCheck} tone="green" />
         <StatCard title="Sem supervisor" value={summary?.shiftsWithoutSupervisor ?? 0} helper="turnos críticos" icon={AlertTriangle} tone={(summary?.shiftsWithoutSupervisor ?? 0) > 0 ? "red" : "green"} />
-        <StatCard title="Cobertura completa" value={summary?.completeCoverage ?? 0} helper="Supervisor + POC" icon={UserCheck} tone="green" />
-        <StatCard title="Cobertura parcial" value={summary?.partialCoverage ?? 0} helper="Supervisor ou POC" icon={Clock} tone="orange" />
-        <StatCard title="Sem cobertura" value={summary?.noCoverage ?? 0} helper="sem Supervisor/POC" icon={XCircle} tone={(summary?.noCoverage ?? 0) > 0 ? "red" : "green"} />
+        <StatCard title="Com supervisor" value={summary?.completeCoverage ?? 0} helper="verde no heatmap" icon={UserCheck} tone="green" />
+        <StatCard title="POC/RTA" value={summary?.partialCoverage ?? 0} helper={showRta ? "amarelo: POC ou RTA" : "amarelo: POC"} icon={Clock} tone="orange" />
+        <StatCard title="Sem cobertura" value={summary?.noCoverage ?? 0} helper={showRta ? "sem Supervisor/POC/RTA" : "sem Supervisor/POC"} icon={XCircle} tone={(summary?.noCoverage ?? 0) > 0 ? "red" : "green"} />
         <StatCard title="Risco fim de semana" value={summary?.weekendRisk ?? 0} helper={`LOB crítica: ${summary?.mostCriticalLob ?? "-"}`} icon={CalendarDays} tone={(summary?.weekendRisk ?? 0) > 0 ? "red" : "blue"} />
       </div>
 
@@ -14549,10 +14541,10 @@ function RequiredStaffCoverageView({ payload, loading, showRta }: { payload: Req
       <div className={cn("grid gap-4", showCriticalDays && "xl:grid-cols-[minmax(0,1fr)_360px]")}>
         <Panel title="Heatmap de cobertura STAFF">
           <div className="mb-3 flex flex-wrap items-center gap-2 text-xs font-bold text-muted">
-            <span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">Verde = Supervisor + POC</span>
-            <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-700">Amarelo = Supervisor ou POC</span>
-            <span className="rounded-full bg-red-50 px-2 py-1 text-red-700">Vermelho = sem Supervisor e sem POC</span>
-            {showRta ? <span className="rounded-full bg-blue-50 px-2 py-1 text-blue-700">RTA exibido como complemento</span> : null}
+            <span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">Verde = Supervisor</span>
+            <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-700">{showRta ? "Amarelo = POC ou RTA" : "Amarelo = POC"}</span>
+            <span className="rounded-full bg-red-50 px-2 py-1 text-red-700">{showRta ? "Vermelho = sem Supervisor/POC/RTA" : "Vermelho = sem Supervisor/POC"}</span>
+            {showRta ? <span className="rounded-full bg-blue-50 px-2 py-1 text-blue-700">RTA ativo na cobertura</span> : null}
             <span className="rounded-full bg-blue-50 px-2 py-1 text-blue-700">Supervisor mínimo é geral por turno</span>
           </div>
           <div className="max-w-full overflow-x-auto">
@@ -14621,31 +14613,6 @@ function RequiredStaffCoverageView({ payload, loading, showRta }: { payload: Req
           </Panel>
         ) : null}
       </div>
-
-      {showRta ? (
-        <Panel title="Cobertura RTA por turno">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px] text-sm">
-              <thead>
-                <tr className="border-b border-border text-left text-xs font-extrabold uppercase text-muted">
-                  {["Data", "Turno", "Status", "Quantidade", "RTAs escalados"].map((column) => <th key={column} className="px-3 py-2">{column}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {rtaRows.map((row) => (
-                  <tr key={row.key} className="border-b border-slate-100">
-                    <td className="px-3 py-2 font-bold text-navy-950">{row.date}<p className="text-xs font-semibold text-muted">{row.weekday}</p></td>
-                    <td className="px-3 py-2">{row.shift}</td>
-                    <td className="px-3 py-2"><span className={cn("rounded-full px-2 py-1 text-xs font-extrabold", row.count ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-muted")}>{row.count ? "RTA presente" : "Sem RTA"}</span></td>
-                    <td className="px-3 py-2 text-center font-extrabold">{row.count}</td>
-                    <td className="px-3 py-2 text-muted"><StaffNameList items={row.people} empty="-" /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Panel>
-      ) : null}
     </div>
   );
 }

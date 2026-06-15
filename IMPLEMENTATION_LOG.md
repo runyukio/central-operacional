@@ -217,3 +217,18 @@ Adicionada uma segunda visao na aba Requerido com alternancia por botoes `AGENTS
   - `npm run build`: aprovado.
 - Pendencia:
   - Validacao visual manual em navegador com dados reais segue recomendada para conferir diferentes niveis de zoom.
+
+## Ajuste posterior - 2026-06-15 - RTA como cobertura
+
+- Corrigida a regra mais recente da visao STAFF do Requerido:
+  - Verde = existe Supervisor na LOB/turno.
+  - Amarelo = nao existe Supervisor, mas existe POC ou RTA.
+  - Vermelho = nao existe Supervisor, POC nem RTA.
+- O modo `COM RTA` permanece ligado por padrao e agora o RTA volta a influenciar a cobertura amarela.
+- Ao alternar para `SEM RTA`, RTAs saem da visualizacao e da conta de cobertura; POC continua deixando a celula amarela.
+- Removido o painel final `Cobertura RTA por turno`; os RTAs ficam visiveis apenas no heatmap quando `COM RTA` esta ligado.
+- Mantida a regra minima geral de Supervisor por turno da empresa.
+- Arquivos alterados nesta etapa:
+  - `src/lib/required-staff-service.ts`
+  - `src/components/modules.tsx`
+  - `IMPLEMENTATION_LOG.md`

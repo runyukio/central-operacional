@@ -232,8 +232,8 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
         <StatCard title="Feedback / Humor" value={data.mood.responses ? data.mood.label : "Sem registros"} helper={`${data.mood.responses} resposta(s) no mês`} icon={HeartPulse} tone="orange" />
       </div>
 
-      <div className="grid w-full gap-4 md:grid-cols-2 xl:grid-cols-12">
-        <div className="min-w-0 xl:col-span-4">
+      <div className="grid w-full gap-4 xl:grid-cols-12 xl:items-start">
+        <div className="grid min-w-0 gap-4 md:grid-cols-2 xl:col-span-4 xl:block xl:space-y-4">
           <Panel title="Dados Operacionais">
             <div className="grid gap-x-3 gap-y-2 text-[13px] sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
               <InfoLine label="Cargo/Função" value={data.employee.roleTitle} />
@@ -246,45 +246,8 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
               <InfoLine label="Go Live" value={data.employee.goLiveDate || "Não informado"} />
             </div>
           </Panel>
-        </div>
 
-        <div className="min-w-0 md:col-span-2 xl:col-span-5">
-          <Panel title={`Cronograma (${data.schedule.periodLabel})`} action="Ver completo" actionOnClick={() => window.location.assign(profileLinks.schedule)}>
-            <div className="grid gap-2 sm:grid-cols-3">
-              <MetricBox label="Escalados" value={data.schedule.scheduledDays} />
-              <MetricBox label="Presentes" value={data.schedule.presentDays} />
-              <MetricBox label="Faltas" value={data.schedule.absenceDays} />
-            </div>
-            <div className="mt-3 rounded-lg border border-border bg-slate-50 p-3 text-sm">
-              <p className="text-xs font-black uppercase tracking-wide text-muted">Próximo turno</p>
-              {data.schedule.nextShift ? (
-                <p className="mt-1 font-bold text-navy-950">
-                  {data.schedule.nextShift.date} • {data.schedule.nextShift.status} • {data.schedule.nextShift.shift}
-                </p>
-              ) : (
-                <p className="mt-1 font-bold text-muted">Sem próximo cronograma.</p>
-              )}
-            </div>
-            <div className="mt-3 grid grid-cols-4 gap-2 sm:grid-cols-7">
-              {data.schedule.days.length ? data.schedule.days.map((day) => <ScheduleChip key={day.id} day={day} />) : <div className="col-span-full text-sm font-semibold text-muted">Sem cronograma no mês.</div>}
-            </div>
-          </Panel>
-        </div>
-
-        <div className="min-w-0 xl:col-span-3">
-          <Panel title={`Horas (${data.workHours.periodLabel})`} action="Ver detalhes" actionOnClick={() => window.location.assign(profileLinks.workHours)}>
-            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
-              <MetricBox label="Planejadas" value={data.workHours.plannedHours} />
-              <MetricBox label="Realizadas" value={data.workHours.actualHours} />
-              <MetricBox label="Divergência" value={data.workHours.difference} tone={data.workHours.difference.startsWith("-") ? "red" : "green"} />
-              <MetricBox label="Ajustes pendentes" value={data.workHours.pendingAdjustments} />
-            </div>
-            <p className="mt-3 text-xs font-semibold text-muted">Último lançamento: {data.workHours.lastRecordAt || "Sem registro"}</p>
-          </Panel>
-        </div>
-
-        {data.billing ? (
-          <div className="min-w-0 xl:col-span-3">
+          {data.billing ? (
             <Panel title="Prévia de Invoice" action="Ver detalhes" actionOnClick={() => window.location.assign(profileLinks.invoice)}>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
@@ -305,27 +268,31 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
                 <InfoLine label="Total de horas" value={data.billing.totalHours} />
               </div>
             </Panel>
-          </div>
-        ) : null}
-
-        <div className={cn("min-w-0", data.billing ? "xl:col-span-3" : "xl:col-span-4")}>
-          <Panel title="Performance" action="Ver histórico" actionOnClick={() => window.location.assign(profileLinks.performance)}>
-            {data.performance ? (
-              <div className="grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
-                <InfoLine label="Qualidade" value={formatPercent(data.performance.quality)} />
-                <InfoLine label="Submit/dia" value={formatNumber(data.performance.submit)} />
-                <InfoLine label="AHT" value={formatAht(data.performance.ahtSeconds)} />
-                <InfoLine label="ABS" value={formatPercent(data.performance.abs)} />
-                <InfoLine label="WFH" value={<WfhBadge status={data.performance.wfhStatus} label={data.performance.wfhStatusLabel} />} />
-                <InfoLine label="Regra" value={qualityRuleLabel(data.performance.qualityRule)} />
-              </div>
-            ) : (
-              <EmptyState title="Sem performance no período" description="Importe Qualidade/Produção ou ajuste o período no módulo Performance." />
-            )}
-          </Panel>
+          ) : null}
         </div>
 
-        <div className={cn("min-w-0", data.billing ? "xl:col-span-3" : "xl:col-span-4")}>
+        <div className="grid min-w-0 gap-4 xl:col-span-5">
+          <Panel title={`Cronograma (${data.schedule.periodLabel})`} action="Ver completo" actionOnClick={() => window.location.assign(profileLinks.schedule)}>
+            <div className="grid gap-2 sm:grid-cols-3">
+              <MetricBox label="Escalados" value={data.schedule.scheduledDays} />
+              <MetricBox label="Presentes" value={data.schedule.presentDays} />
+              <MetricBox label="Faltas" value={data.schedule.absenceDays} />
+            </div>
+            <div className="mt-3 rounded-lg border border-border bg-slate-50 p-3 text-sm">
+              <p className="text-xs font-black uppercase tracking-wide text-muted">Próximo turno</p>
+              {data.schedule.nextShift ? (
+                <p className="mt-1 font-bold text-navy-950">
+                  {data.schedule.nextShift.date} • {data.schedule.nextShift.status} • {data.schedule.nextShift.shift}
+                </p>
+              ) : (
+                <p className="mt-1 font-bold text-muted">Sem próximo cronograma.</p>
+              )}
+            </div>
+            <div className="mt-3 grid grid-cols-4 gap-2 sm:grid-cols-7">
+              {data.schedule.days.length ? data.schedule.days.map((day) => <ScheduleChip key={day.id} day={day} />) : <div className="col-span-full text-sm font-semibold text-muted">Sem cronograma no mês.</div>}
+            </div>
+          </Panel>
+
           <Panel title="Solicitações" action="Ver todas" actionOnClick={() => window.location.assign(profileLinks.requests)}>
             <div className="mb-3 grid grid-cols-2 gap-2">
               <MetricBox label="Abertas" value={data.requests.open} />
@@ -351,7 +318,32 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
           </Panel>
         </div>
 
-        <div className={cn("min-w-0", data.billing ? "xl:col-span-3" : "xl:col-span-4")}>
+        <div className="grid min-w-0 gap-4 md:grid-cols-2 xl:col-span-3 xl:grid-cols-1">
+          <Panel title={`Horas (${data.workHours.periodLabel})`} action="Ver detalhes" actionOnClick={() => window.location.assign(profileLinks.workHours)}>
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+              <MetricBox label="Planejadas" value={data.workHours.plannedHours} />
+              <MetricBox label="Realizadas" value={data.workHours.actualHours} />
+              <MetricBox label="Divergência" value={data.workHours.difference} tone={data.workHours.difference.startsWith("-") ? "red" : "green"} />
+              <MetricBox label="Ajustes pendentes" value={data.workHours.pendingAdjustments} />
+            </div>
+            <p className="mt-3 text-xs font-semibold text-muted">Último lançamento: {data.workHours.lastRecordAt || "Sem registro"}</p>
+          </Panel>
+
+          <Panel title="Performance" action="Ver histórico" actionOnClick={() => window.location.assign(profileLinks.performance)}>
+            {data.performance ? (
+              <div className="grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+                <InfoLine label="Qualidade" value={formatPercent(data.performance.quality)} />
+                <InfoLine label="Submit/dia" value={formatNumber(data.performance.submit)} />
+                <InfoLine label="AHT" value={formatAht(data.performance.ahtSeconds)} />
+                <InfoLine label="ABS" value={formatPercent(data.performance.abs)} />
+                <InfoLine label="WFH" value={<WfhBadge status={data.performance.wfhStatus} label={data.performance.wfhStatusLabel} />} />
+                <InfoLine label="Regra" value={qualityRuleLabel(data.performance.qualityRule)} />
+              </div>
+            ) : (
+              <EmptyState title="Sem performance no período" description="Importe Qualidade/Produção ou ajuste o período no módulo Performance." />
+            )}
+          </Panel>
+
           <Panel title="Feedback / Humor">
             <div className="flex items-center gap-3">
               <div className="grid h-12 w-12 place-items-center rounded-xl bg-orange-50 text-orange-500">
@@ -368,7 +360,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
           </Panel>
         </div>
 
-        <div className="min-w-0 xl:col-span-6">
+        <div className="grid min-w-0 gap-4 xl:col-span-12 xl:grid-cols-2">
           <Panel title="Equipamentos" action="Ver todos" actionOnClick={() => window.location.assign(profileLinks.equipment)}>
             {data.equipments.items.length ? (
               <div className="grid gap-2">
@@ -389,9 +381,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
               <EmptyState title="Sem equipamento vinculado" description="Equipamentos aparecerão aqui quando houver vínculo ativo." />
             )}
           </Panel>
-        </div>
 
-        <div className="min-w-0 xl:col-span-6">
           <Panel title="Dados Cadastrais">
             <div className="grid gap-2 text-sm sm:grid-cols-2">
               <InfoLine label="Telefone" value={data.employee.primaryPhone || "Não informado"} />
