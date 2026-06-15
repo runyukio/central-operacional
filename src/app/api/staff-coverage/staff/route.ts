@@ -12,7 +12,8 @@ export async function GET(request: Request) {
     endDate: url.searchParams.get("endDate") ?? undefined,
     lob: url.searchParams.get("lob") ?? undefined,
     shift: url.searchParams.get("shift") ?? undefined,
-    supervisor: url.searchParams.get("supervisor") ?? undefined
+    supervisor: url.searchParams.get("supervisor") ?? undefined,
+    includeRta: url.searchParams.get("includeRta") ?? undefined
   });
   if ("error" in result) return NextResponse.json(result, { status: errorStatus(result as any) });
   return NextResponse.json(result);

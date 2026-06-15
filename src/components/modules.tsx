@@ -13902,7 +13902,8 @@ export function StaffCoveragePage() {
       endDate: filters.endDate,
       lob: filters.lob,
       shift: filters.shift,
-      supervisor: filters.supervisor
+      supervisor: filters.supervisor,
+      includeRta: showRtaCoverage ? "true" : "false"
     });
     try {
       const data = await apiJson<RequiredStaffCoverageResponse>(`/api/staff-coverage/staff?${params.toString()}`);
@@ -13913,7 +13914,7 @@ export function StaffCoveragePage() {
     } finally {
       setStaffLoading(false);
     }
-  }, [filters.endDate, filters.lob, filters.shift, filters.startDate, filters.supervisor]);
+  }, [filters.endDate, filters.lob, filters.shift, filters.startDate, filters.supervisor, showRtaCoverage]);
 
   useEffect(() => {
     if (view === "AGENTS") void loadCoverage();
@@ -14080,7 +14081,7 @@ export function StaffCoveragePage() {
             </button> : null}
             {view === "STAFF" ? (
               <button onClick={() => setShowRtaCoverage((current) => !current)} className={cn("premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold", showRtaCoverage ? "border-blue-200 bg-blue-50 text-blue-700" : "text-navy-950")}>
-                <Headphones className="h-4 w-4" /> COM RTA
+                <Headphones className="h-4 w-4" /> {showRtaCoverage ? "SEM RTA" : "COM RTA"}
               </button>
             ) : null}
             <button onClick={() => view === "AGENTS" ? void loadCoverage() : void loadStaffCoverage()} className="inline-flex h-9 items-center gap-2 rounded-lg bg-navy-950 px-3 text-xs font-extrabold text-white">
@@ -14384,7 +14385,7 @@ type RequiredStaffPersonClient = {
 
 type RequiredStaffLobCellClient = {
   lob: "ADS" | "CEC" | "TNS";
-  status: "COMPLETE" | "PARTIAL_SUPERVISOR" | "PARTIAL_POC" | "NONE";
+  status: "COMPLETE" | "PARTIAL_POC" | "PARTIAL_RTA" | "NONE";
   label: string;
   supervisors: RequiredStaffPersonClient[];
   pocs: RequiredStaffPersonClient[];
@@ -14454,18 +14455,18 @@ function RequiredStaffCoverageView({ payload, loading, showRta }: { payload: Req
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
         <StatCard title="Turnos com supervisor" value={summary?.shiftsWithSupervisor ?? 0} helper="mínimo na empresa" icon={ShieldCheck} tone="green" />
         <StatCard title="Sem supervisor" value={summary?.shiftsWithoutSupervisor ?? 0} helper="turnos críticos" icon={AlertTriangle} tone={(summary?.shiftsWithoutSupervisor ?? 0) > 0 ? "red" : "green"} />
-        <StatCard title="Cobertura completa" value={summary?.completeCoverage ?? 0} helper="Supervisor + POC" icon={UserCheck} tone="green" />
-        <StatCard title="Cobertura parcial" value={summary?.partialCoverage ?? 0} helper="apenas uma ponta" icon={Clock} tone="orange" />
-        <StatCard title="Sem cobertura" value={summary?.noCoverage ?? 0} helper="sem Supervisor/POC" icon={XCircle} tone={(summary?.noCoverage ?? 0) > 0 ? "red" : "green"} />
+        <StatCard title="Cobertura completa" value={summary?.completeCoverage ?? 0} helper="com Supervisor" icon={UserCheck} tone="green" />
+        <StatCard title="Cobertura parcial" value={summary?.partialCoverage ?? 0} helper={showRta ? "POC ou RTA" : "apenas POC"} icon={Clock} tone="orange" />
+        <StatCard title="Sem cobertura" value={summary?.noCoverage ?? 0} helper={showRta ? "sem Supervisor/POC/RTA" : "sem Supervisor/POC"} icon={XCircle} tone={(summary?.noCoverage ?? 0) > 0 ? "red" : "green"} />
         <StatCard title="Risco fim de semana" value={summary?.weekendRisk ?? 0} helper={`LOB crítica: ${summary?.mostCriticalLob ?? "-"}`} icon={CalendarDays} tone={(summary?.weekendRisk ?? 0) > 0 ? "red" : "blue"} />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.4fr_.8fr]">
         <Panel title="Heatmap de cobertura STAFF">
           <div className="mb-3 flex flex-wrap items-center gap-2 text-xs font-bold text-muted">
-            <span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">Verde = Supervisor + POC</span>
-            <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-700">Amarelo = parcial</span>
-            <span className="rounded-full bg-red-50 px-2 py-1 text-red-700">Vermelho = sem cobertura</span>
+            <span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">Verde = Supervisor</span>
+            <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-700">Amarelo = {showRta ? "POC ou RTA" : "POC"}</span>
+            <span className="rounded-full bg-red-50 px-2 py-1 text-red-700">Vermelho = sem ninguém</span>
             <span className="rounded-full bg-blue-50 px-2 py-1 text-blue-700">Supervisor mínimo é geral por turno</span>
           </div>
           <div className="overflow-x-auto">

@@ -60,6 +60,7 @@ export type RequiredStaffQuery = {
   lob?: string;
   shift?: string;
   supervisor?: string;
+  includeRta?: boolean | string;
 };
 
 export type RequiredStaffPerson = {
@@ -77,7 +78,7 @@ type RequiredStaffPersonWithDate = RequiredStaffPerson & { date: string };
 
 export type RequiredStaffLobCell = {
   lob: RequiredLob;
-  status: "COMPLETE" | "PARTIAL_SUPERVISOR" | "PARTIAL_POC" | "NONE";
+  status: "COMPLETE" | "PARTIAL_POC" | "PARTIAL_RTA" | "NONE";
   label: string;
   supervisors: RequiredStaffPerson[];
   pocs: RequiredStaffPerson[];
@@ -191,6 +192,7 @@ function buildStaffCoverage(period: { startDate: Date; endDate: Date }, schedule
   const dates = datesInRange(period.startDate, period.endDate);
   const visibleLobs = visibleLobList(query.lob);
   const selectedShifts = visibleShiftList(query.shift);
+  const includeRta = parseBoolean(query.includeRta);
   const people = schedules.map(formatStaffPerson).filter((person): person is RequiredStaffPersonWithDate => Boolean(person));
   const byKey = groupPeople(people);
   const rows: RequiredStaffShiftRow[] = [];
@@ -210,7 +212,7 @@ function buildStaffCoverage(period: { startDate: Date; endDate: Date }, schedule
         companySupervisors,
         supervisorStatus: companySupervisors.length ? "OK" : "CRITICAL",
         rtas: shiftRtas,
-        lobs: visibleLobs.map((lob) => buildLobCell(lob, dateKey, shift, byKey))
+        lobs: visibleLobs.map((lob) => buildLobCell(lob, dateKey, shift, byKey, includeRta))
       });
     }
   }
@@ -231,14 +233,14 @@ function buildStaffCoverage(period: { startDate: Date; endDate: Date }, schedule
   };
 }
 
-function buildLobCell(lob: RequiredLob, date: string, shift: ProductiveShiftCategory, byKey: Map<string, RequiredStaffPerson[]>): RequiredStaffLobCell {
+function buildLobCell(lob: RequiredLob, date: string, shift: ProductiveShiftCategory, byKey: Map<string, RequiredStaffPerson[]>, includeRta: boolean): RequiredStaffLobCell {
   const supervisors = byKey.get(personKey(date, shift, lob, "SUPERVISOR")) ?? [];
   const pocs = byKey.get(personKey(date, shift, lob, "POC")) ?? [];
   const rtas = byKey.get(personKey(date, shift, lob, "RTA")) ?? [];
-  if (supervisors.length && pocs.length) return { lob, status: "COMPLETE", label: "Supervisor + POC", supervisors, pocs, rtas };
-  if (supervisors.length) return { lob, status: "PARTIAL_SUPERVISOR", label: "Apenas Supervisor", supervisors, pocs, rtas };
-  if (pocs.length) return { lob, status: "PARTIAL_POC", label: "Apenas POC", supervisors, pocs, rtas };
-  return { lob, status: "NONE", label: "Sem Supervisor e sem POC", supervisors, pocs, rtas };
+  if (supervisors.length) return { lob, status: "COMPLETE", label: supervisorCoverageLabel(pocs, includeRta ? rtas : []), supervisors, pocs, rtas };
+  if (pocs.length) return { lob, status: "PARTIAL_POC", label: includeRta && rtas.length ? "POC + RTA" : "Apenas POC", supervisors, pocs, rtas };
+  if (includeRta && rtas.length) return { lob, status: "PARTIAL_RTA", label: "Apenas RTA", supervisors, pocs, rtas };
+  return { lob, status: "NONE", label: includeRta ? "Sem Supervisor, POC ou RTA" : "Sem Supervisor e sem POC", supervisors, pocs, rtas };
 }
 
 function summarizeStaffRows(rows: RequiredStaffShiftRow[]) {
@@ -256,7 +258,7 @@ function summarizeStaffRows(rows: RequiredStaffShiftRow[]) {
     shiftsWithSupervisor: rows.filter((row) => row.companySupervisors.length).length,
     shiftsWithoutSupervisor: noSupervisorRows.length,
     completeCoverage: rows.reduce((sum, row) => sum + row.lobs.filter((cell) => cell.status === "COMPLETE").length, 0),
-    partialCoverage: rows.reduce((sum, row) => sum + row.lobs.filter((cell) => cell.status === "PARTIAL_SUPERVISOR" || cell.status === "PARTIAL_POC").length, 0),
+    partialCoverage: rows.reduce((sum, row) => sum + row.lobs.filter((cell) => cell.status === "PARTIAL_POC" || cell.status === "PARTIAL_RTA").length, 0),
     noCoverage: rows.reduce((sum, row) => sum + row.lobs.filter((cell) => cell.status === "NONE").length, 0),
     mostCriticalLob,
     criticalDay,
@@ -294,7 +296,7 @@ function buildCriticalRows(rows: RequiredStaffShiftRow[]): RequiredStaffCritical
           observation: row.isWeekend ? "Falha de report em final de semana." : "Não há cobertura de report para a LOB.",
           score: 70 + (row.isWeekend ? 15 : 0) + (!row.companySupervisors.length ? 20 : 0)
         });
-      } else if (cell.status === "PARTIAL_SUPERVISOR" || cell.status === "PARTIAL_POC") {
+      } else if (cell.status === "PARTIAL_POC" || cell.status === "PARTIAL_RTA") {
         critical.push({
           date: row.date,
           dateLabel: row.dateLabel,
@@ -303,7 +305,7 @@ function buildCriticalRows(rows: RequiredStaffShiftRow[]): RequiredStaffCritical
           lob: cell.lob,
           severity: "Médio",
           problem: cell.label,
-          observation: "Cobertura parcial: falta uma ponta da dupla Supervisor/POC.",
+          observation: "Cobertura parcial: ha POC ou RTA, mas sem Supervisor.",
           score: 35 + (row.isWeekend ? 10 : 0)
         });
       }
@@ -411,6 +413,13 @@ function canonicalLob(value?: unknown): RequiredLob | null {
   return null;
 }
 
+function supervisorCoverageLabel(pocs: RequiredStaffPerson[], rtas: RequiredStaffPerson[]) {
+  const complements = [];
+  if (pocs.length) complements.push("POC");
+  if (rtas.length) complements.push("RTA");
+  return complements.length ? `Supervisor + ${complements.join(" + ")}` : "Supervisor presente";
+}
+
 function uniquePeople<T extends RequiredStaffPerson>(items: T[]) {
   const map = new Map<string, T>();
   for (const item of items) {
@@ -418,6 +427,11 @@ function uniquePeople<T extends RequiredStaffPerson>(items: T[]) {
     if (!map.has(key)) map.set(key, item);
   }
   return Array.from(map.values());
+}
+
+function parseBoolean(value?: boolean | string) {
+  if (typeof value === "boolean") return value;
+  return ["1", "true", "sim", "yes"].includes(String(value ?? "").toLowerCase());
 }
 
 function normalizeProductiveShift(value?: unknown): ProductiveShiftCategory | null {

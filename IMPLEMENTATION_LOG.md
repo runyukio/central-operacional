@@ -147,10 +147,10 @@ Adicionada uma segunda visao na aba Requerido com alternancia por botoes `AGENTS
 - Regra minima geral: cada data + turno deve ter pelo menos 1 Supervisor na empresa.
 - POC e RTA nao substituem a regra minima de Supervisor.
 - Cobertura por LOB:
-  - Verde: Supervisor + POC.
-  - Amarelo: apenas Supervisor ou apenas POC.
-  - Vermelho: sem Supervisor e sem POC.
-- RTA aparece como cobertura complementar ao ativar o botao `COM RTA`.
+  - Verde: Supervisor presente.
+  - Amarelo: POC presente ou RTA presente quando o modo `COM RTA` estiver ativo.
+  - Vermelho: sem Supervisor, POC e, no modo `COM RTA`, sem RTA.
+- O botao `COM RTA` recalcula a cobertura e alterna para `SEM RTA` quando ativo.
 - Pessoas de folga, ferias, afastadas, desligadas, ausentes ou sem turno valido nao contam como cobertura.
 
 ## Dias mais criticos
@@ -186,3 +186,4 @@ Adicionada uma segunda visao na aba Requerido com alternancia por botoes `AGENTS
 - A deteccao de Supervisores por skill foi ampliada para variações como `Leader`, `Lider`, `Lideranca`, `TeamLeader`, `TL`, `Sup`, `Supervisor` e `Supervisao`.
 - A lista geral de Supervisor/RTA remove duplicidade quando o mesmo RTA cobre as tres LOBs.
 - A cobertura STAFF considera somente registros de escala com status `Escalado`, `Presente` ou `Venda de folga aprovada`.
+- A regra visual foi ajustada: Supervisor deixa a celula verde; POC ou RTA deixam amarela; sem ninguem deixa vermelha. RTA so influencia a cor quando `COM RTA` esta ativo.
