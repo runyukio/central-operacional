@@ -147,10 +147,10 @@ Adicionada uma segunda visao na aba Requerido com alternancia por botoes `AGENTS
 - Regra minima geral: cada data + turno deve ter pelo menos 1 Supervisor na empresa.
 - POC e RTA nao substituem a regra minima de Supervisor.
 - Cobertura por LOB:
-  - Verde: Supervisor presente.
-  - Amarelo: POC presente ou RTA presente quando o modo `COM RTA` estiver ativo.
-  - Vermelho: sem Supervisor, POC e, no modo `COM RTA`, sem RTA.
-- O botao `COM RTA` recalcula a cobertura e alterna para `SEM RTA` quando ativo.
+  - Verde: Supervisor + POC.
+  - Amarelo: Supervisor ou POC.
+  - Vermelho: sem Supervisor e sem POC.
+- RTA e exibido como informacao complementar no modo `COM RTA`, sem alterar a cor principal da cobertura.
 - Pessoas de folga, ferias, afastadas, desligadas, ausentes ou sem turno valido nao contam como cobertura.
 
 ## Dias mais criticos
@@ -186,4 +186,34 @@ Adicionada uma segunda visao na aba Requerido com alternancia por botoes `AGENTS
 - A deteccao de Supervisores por skill foi ampliada para variações como `Leader`, `Lider`, `Lideranca`, `TeamLeader`, `TL`, `Sup`, `Supervisor` e `Supervisao`.
 - A lista geral de Supervisor/RTA remove duplicidade quando o mesmo RTA cobre as tres LOBs.
 - A cobertura STAFF considera somente registros de escala com status `Escalado`, `Presente` ou `Venda de folga aprovada`.
-- A regra visual foi ajustada: Supervisor deixa a celula verde; POC ou RTA deixam amarela; sem ninguem deixa vermelha. RTA so influencia a cor quando `COM RTA` esta ativo.
+- A regra visual final foi consolidada no ajuste de usabilidade: Supervisor + POC deixa a celula verde; apenas Supervisor ou apenas POC deixa amarela; sem ambos deixa vermelha. RTA nao altera a cor principal.
+
+## Ajuste posterior - 2026-06-15 - Usabilidade STAFF
+
+- Adicionado controle para recolher/exibir o quadro `Dias mais criticos`.
+- Quando `Dias mais criticos` esta oculto, o heatmap ocupa a largura disponivel sem deixar coluna vazia.
+- Corrigido o controle `COM RTA` / `SEM RTA`:
+  - a visao STAFF inicia com `COM RTA` ligado por padrao;
+  - ao desligar, o controle passa a exibir `SEM RTA`;
+  - RTAs deixam de aparecer nas celulas, no quadro complementar e na criticidade quando o modo esta desligado.
+- Ajustada a regra principal do heatmap para nao usar RTA na cor da cobertura:
+  - Verde = Supervisor + POC;
+  - Amarelo = Supervisor ou POC;
+  - Vermelho = sem Supervisor e sem POC.
+- RTA permanece como informacao complementar e continua cobrindo ADS, CEC e TNS quando exibido.
+- Nomes de Supervisores, POCs e RTAs passam a ser exibidos em linhas separadas, agrupados por funcao.
+- Adicionados limites de altura e scroll interno nas celulas para evitar estouro com muitos nomes.
+- Ajustada a data padrao da visao STAFF:
+  - Data inicial = dia atual;
+  - Data final = ultimo dia do mes atual;
+  - alteracoes manuais de data nao sao sobrescritas ao alternar visualizacoes.
+- Reforcados `overflow-x`, larguras minimas e scroll interno do heatmap para melhorar leitura com zoom 90%, 100%, 110% e 125%.
+- Arquivos alterados nesta etapa:
+  - `src/components/modules.tsx`
+  - `src/lib/required-staff-service.ts`
+  - `IMPLEMENTATION_LOG.md`
+- Validacoes executadas:
+  - `npm run typecheck`: aprovado.
+  - `npm run build`: aprovado.
+- Pendencia:
+  - Validacao visual manual em navegador com dados reais segue recomendada para conferir diferentes niveis de zoom.

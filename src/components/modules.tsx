@@ -12079,7 +12079,17 @@ export function PerformancePage() {
                       </div>
                     ) : null}
                   </div>
-                  <SimpleTable columns={["Semana", "Regra", "Qualidade", "Submit/dia", "AHT", "ABS"]} rows={selectedAgent.weekly.map((week) => [week.weekLabel, performanceQualityRuleLabel(week.qualityRule), formatPerformancePercent(week.quality), formatPerformanceNumber(week.submit), formatPerformanceAht(week.ahtSeconds), formatPerformancePercent(week.abs)])} />
+                  <SimpleTable
+                    columns={["Semana", "Regra", "Qualidade", "Submit/dia", "AHT", "ABS"]}
+                    rows={selectedAgent.weekly.map((week) => [
+                      week.weekLabel,
+                      performanceQualityRuleLabel(week.qualityRule),
+                      <PerformanceMetricBadge key={`${week.weekStart}-quality`} metric="quality" metrics={week} />,
+                      <PerformanceMetricBadge key={`${week.weekStart}-submit`} metric="submit" metrics={week} />,
+                      <PerformanceMetricBadge key={`${week.weekStart}-aht`} metric="aht" metrics={week} />,
+                      <PerformanceMetricBadge key={`${week.weekStart}-abs`} metric="abs" metrics={week} />
+                    ])}
+                  />
                 </div>
               ) : (
                 <EmptyState title="Selecione um agente" description="Clique em um nome do ranking para abrir o histórico semanal individual." />
@@ -12175,6 +12185,22 @@ function PerformanceWfhBadge({ status, label, title }: { status: WfhEligibilityC
   );
 }
 
+function PerformanceMetricBadge({ metric, metrics }: { metric: PerformanceMetricKind; metrics: PerformanceMetricSummary }) {
+  const assessment = assessPerformanceMetric(metric, metrics);
+  const className = assessment.status === "PASS"
+    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+    : assessment.status === "FAIL"
+      ? "border-red-200 bg-red-50 text-red-700"
+      : assessment.status === "MISSING"
+        ? "border-amber-200 bg-amber-50 text-amber-700"
+        : "border-slate-200 bg-slate-50 text-slate-600";
+  return (
+    <span title={assessment.title} className={cn("inline-flex min-w-[76px] items-center justify-center rounded-full border px-2.5 py-1 text-[11px] font-extrabold", className)}>
+      {formatPerformanceMetricForBadge(metric, metrics)}
+    </span>
+  );
+}
+
 function PerformanceRankingTable({ rows, sort, onSort, onSelect }: { rows: AgentPerformanceClient[]; sort: PerformanceSortState; onSort: (by: PerformanceSortableMetric) => void; onSelect: (row: AgentPerformanceClient) => void }) {
   const columns: Array<{ key: string; label: string; sortBy?: PerformanceSortableMetric; align?: "right" }> = [
     { key: "agent", label: "Agente" },
@@ -12217,10 +12243,10 @@ function PerformanceRankingTable({ rows, sort, onSort, onSelect }: { rows: Agent
               <td className="px-3 py-2"><PerformanceWfhBadge status={agent.wfhStatus} label={agent.wfhStatusLabel} title={agent.wfhReasons.join(" | ")} /></td>
               <td className="px-3 py-2">{performanceQualityRuleLabel(agent.qualityRule)}</td>
               <td className="max-w-[180px] truncate px-3 py-2" title={agent.supervisor}>{agent.supervisor}</td>
-              <td className="px-3 py-2 text-right font-extrabold">{formatPerformancePercent(agent.quality)}</td>
-              <td className="px-3 py-2 text-right font-extrabold">{formatPerformanceNumber(agent.submit)}</td>
-              <td className="px-3 py-2 text-right font-extrabold">{formatPerformanceAht(agent.ahtSeconds)}</td>
-              <td className="px-3 py-2 text-right font-extrabold">{formatPerformancePercent(agent.abs)}</td>
+              <td className="px-3 py-2 text-right"><PerformanceMetricBadge metric="quality" metrics={agent} /></td>
+              <td className="px-3 py-2 text-right"><PerformanceMetricBadge metric="submit" metrics={agent} /></td>
+              <td className="px-3 py-2 text-right"><PerformanceMetricBadge metric="aht" metrics={agent} /></td>
+              <td className="px-3 py-2 text-right"><PerformanceMetricBadge metric="abs" metrics={agent} /></td>
             </tr>
           ))}
         </tbody>
@@ -12350,6 +12376,44 @@ function performanceQualityRuleLabel(rule?: string) {
   if (rule === "CEC_QUALITY") return "CEC";
   if (rule === "MIXED") return "Mista";
   return "Sem regra";
+}
+
+function assessPerformanceMetric(metric: PerformanceMetricKind, metrics: PerformanceMetricSummary): PerformanceMetricAssessment {
+  const targets = performanceTargetsForRule(metrics.qualityRule);
+  if (!targets) return { status: "NEUTRAL", title: "Regra de meta não configurada para esta operação." };
+  if (metric === "quality") {
+    if (metrics.qualityDenominator <= 0) return { status: "MISSING", title: "Sem base de qualidade para avaliar a meta." };
+    return metrics.quality >= targets.quality
+      ? { status: "PASS", title: `Dentro da meta: qualidade >= ${targets.quality}%.` }
+      : { status: "FAIL", title: `Fora da meta: qualidade precisa ser >= ${targets.quality}%.` };
+  }
+  if (metric === "submit") {
+    return metrics.submit >= targets.submit
+      ? { status: "PASS", title: `Dentro da meta: produtividade >= ${targets.submit}/dia.` }
+      : { status: "FAIL", title: `Fora da meta: produtividade precisa ser >= ${targets.submit}/dia.` };
+  }
+  if (metric === "aht") {
+    if (targets.ahtSeconds == null) return { status: "NEUTRAL", title: "AHT não é critério de classificação para esta operação." };
+    return metrics.ahtSeconds <= targets.ahtSeconds
+      ? { status: "PASS", title: `Dentro da meta: AHT <= ${targets.ahtSeconds}s.` }
+      : { status: "FAIL", title: `Fora da meta: AHT precisa ser <= ${targets.ahtSeconds}s.` };
+  }
+  return metrics.abs <= targets.abs
+    ? { status: "PASS", title: `Dentro da meta: ABS <= ${targets.abs}%. ABS 0% é válido e positivo.` }
+    : { status: "FAIL", title: `Fora da meta: ABS precisa ser <= ${targets.abs}%.` };
+}
+
+function performanceTargetsForRule(rule?: string): null | { quality: number; submit: number; ahtSeconds?: number; abs: number } {
+  if (rule === "CEC_QUALITY") return { quality: 90, submit: 70, abs: 5 };
+  if (rule === "ADS_QUALITY" || rule === "TNS_QUALITY") return { quality: 95, submit: 350, ahtSeconds: 60, abs: 5 };
+  return null;
+}
+
+function formatPerformanceMetricForBadge(metric: PerformanceMetricKind, metrics: PerformanceMetricSummary) {
+  if (metric === "quality") return formatPerformancePercent(metrics.quality);
+  if (metric === "submit") return formatPerformanceNumber(metrics.submit);
+  if (metric === "aht") return formatPerformanceAht(metrics.ahtSeconds);
+  return formatPerformancePercent(metrics.abs);
 }
 
 function normalizePerformanceSheetName(value: string) {
@@ -12496,6 +12560,8 @@ type PerformanceDashboardResponse = PerformanceMineResponse | PerformanceWfhResp
 type PerformanceImportKind = "quality" | "tns-quality" | "cec-quality" | "production";
 type PerformanceSortableMetric = "quality" | "submit" | "aht" | "abs";
 type PerformanceSortState = { by: "" | PerformanceSortableMetric; direction: "asc" | "desc" };
+type PerformanceMetricKind = "quality" | "submit" | "aht" | "abs";
+type PerformanceMetricAssessment = { status: "PASS" | "FAIL" | "MISSING" | "NEUTRAL"; title: string };
 
 type PerformancePreviewResponse = {
   success: boolean;
@@ -13847,6 +13913,7 @@ export function ShiftReportPage() {
 
 export function StaffCoveragePage() {
   const initialRange = currentStaffCoverageWeekRange();
+  const staffInitialRange = currentMonthRemainingRange();
   const [view, setView] = useState<"AGENTS" | "STAFF">("AGENTS");
   const [payload, setPayload] = useState<StaffCoverageResponse | null>(null);
   const [staffPayload, setStaffPayload] = useState<RequiredStaffCoverageResponse | null>(null);
@@ -13862,7 +13929,8 @@ export function StaffCoveragePage() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [staffLoading, setStaffLoading] = useState(false);
-  const [showRtaCoverage, setShowRtaCoverage] = useState(false);
+  const [showRtaCoverage, setShowRtaCoverage] = useState(true);
+  const [dateFilterTouched, setDateFilterTouched] = useState(false);
   const [message, setMessage] = useState("");
   const [importing, setImporting] = useState(false);
   const [preview, setPreview] = useState<StaffCoveragePreviewResponse | null>(null);
@@ -13925,8 +13993,17 @@ export function StaffCoveragePage() {
   }, [loadStaffCoverage, view]);
 
   const updateFilter = (key: keyof typeof filters, value: string) => {
+    if (key === "startDate" || key === "endDate") setDateFilterTouched(true);
     setFilters((current) => ({ ...current, [key]: value }));
     setPage(1);
+  };
+
+  const changeRequiredView = (nextView: "AGENTS" | "STAFF") => {
+    setView(nextView);
+    if (nextView === "STAFF" && !dateFilterTouched) {
+      setFilters((current) => ({ ...current, startDate: staffInitialRange.startDate, endDate: staffInitialRange.endDate }));
+      setPage(1);
+    }
   };
 
   const previewRequirementFile = async (file?: File | null) => {
@@ -14015,7 +14092,7 @@ export function StaffCoveragePage() {
         {(["AGENTS", "STAFF"] as const).map((item) => (
           <button
             key={item}
-            onClick={() => setView(item)}
+            onClick={() => changeRequiredView(item)}
             className={cn(
               "h-9 rounded-lg px-4 text-xs font-extrabold transition",
               view === item ? "bg-blue-600 text-white shadow-sm" : "text-muted hover:bg-blue-50 hover:text-blue-700"
@@ -14080,8 +14157,8 @@ export function StaffCoveragePage() {
               <Download className="h-4 w-4" /> Exportar
             </button> : null}
             {view === "STAFF" ? (
-              <button onClick={() => setShowRtaCoverage((current) => !current)} className={cn("premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold", showRtaCoverage ? "border-blue-200 bg-blue-50 text-blue-700" : "text-navy-950")}>
-                <Headphones className="h-4 w-4" /> {showRtaCoverage ? "SEM RTA" : "COM RTA"}
+              <button type="button" onClick={() => setShowRtaCoverage((current) => !current)} className={cn("inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-xs font-extrabold transition", showRtaCoverage ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-slate-50 text-slate-600")}>
+                <Headphones className="h-4 w-4" /> {showRtaCoverage ? "COM RTA" : "SEM RTA"}
               </button>
             ) : null}
             <button onClick={() => view === "AGENTS" ? void loadCoverage() : void loadStaffCoverage()} className="inline-flex h-9 items-center gap-2 rounded-lg bg-navy-950 px-3 text-xs font-extrabold text-white">
@@ -14385,7 +14462,7 @@ type RequiredStaffPersonClient = {
 
 type RequiredStaffLobCellClient = {
   lob: "ADS" | "CEC" | "TNS";
-  status: "COMPLETE" | "PARTIAL_POC" | "PARTIAL_RTA" | "NONE";
+  status: "COMPLETE" | "PARTIAL_SUPERVISOR" | "PARTIAL_POC" | "NONE";
   label: string;
   supervisors: RequiredStaffPersonClient[];
   pocs: RequiredStaffPersonClient[];
@@ -14434,6 +14511,7 @@ type RequiredStaffCoverageResponse = {
 };
 
 function RequiredStaffCoverageView({ payload, loading, showRta }: { payload: RequiredStaffCoverageResponse | null; loading: boolean; showRta: boolean }) {
+  const [showCriticalDays, setShowCriticalDays] = useState(true);
   const rows = payload?.rows ?? [];
   const lobs = rows[0]?.lobs.map((cell) => cell.lob) ?? ["ADS", "CEC", "TNS"];
   const summary = payload?.summary;
@@ -14443,7 +14521,7 @@ function RequiredStaffCoverageView({ payload, loading, showRta }: { payload: Req
     weekday: row.weekday,
     shift: row.shift,
     count: row.rtas.length,
-    names: staffNames(row.rtas)
+    people: row.rtas
   }));
 
   if (loading && !payload) {
@@ -14455,22 +14533,30 @@ function RequiredStaffCoverageView({ payload, loading, showRta }: { payload: Req
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
         <StatCard title="Turnos com supervisor" value={summary?.shiftsWithSupervisor ?? 0} helper="mínimo na empresa" icon={ShieldCheck} tone="green" />
         <StatCard title="Sem supervisor" value={summary?.shiftsWithoutSupervisor ?? 0} helper="turnos críticos" icon={AlertTriangle} tone={(summary?.shiftsWithoutSupervisor ?? 0) > 0 ? "red" : "green"} />
-        <StatCard title="Cobertura completa" value={summary?.completeCoverage ?? 0} helper="com Supervisor" icon={UserCheck} tone="green" />
-        <StatCard title="Cobertura parcial" value={summary?.partialCoverage ?? 0} helper={showRta ? "POC ou RTA" : "apenas POC"} icon={Clock} tone="orange" />
-        <StatCard title="Sem cobertura" value={summary?.noCoverage ?? 0} helper={showRta ? "sem Supervisor/POC/RTA" : "sem Supervisor/POC"} icon={XCircle} tone={(summary?.noCoverage ?? 0) > 0 ? "red" : "green"} />
+        <StatCard title="Cobertura completa" value={summary?.completeCoverage ?? 0} helper="Supervisor + POC" icon={UserCheck} tone="green" />
+        <StatCard title="Cobertura parcial" value={summary?.partialCoverage ?? 0} helper="Supervisor ou POC" icon={Clock} tone="orange" />
+        <StatCard title="Sem cobertura" value={summary?.noCoverage ?? 0} helper="sem Supervisor/POC" icon={XCircle} tone={(summary?.noCoverage ?? 0) > 0 ? "red" : "green"} />
         <StatCard title="Risco fim de semana" value={summary?.weekendRisk ?? 0} helper={`LOB crítica: ${summary?.mostCriticalLob ?? "-"}`} icon={CalendarDays} tone={(summary?.weekendRisk ?? 0) > 0 ? "red" : "blue"} />
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[1.4fr_.8fr]">
+      <div className="flex justify-end">
+        <button type="button" onClick={() => setShowCriticalDays((current) => !current)} className="premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold text-navy-950">
+          {showCriticalDays ? <ChevronRight className="h-4 w-4 rotate-90" /> : <ChevronRight className="h-4 w-4" />}
+          {showCriticalDays ? "Ocultar dias críticos" : "Mostrar dias críticos"}
+        </button>
+      </div>
+
+      <div className={cn("grid gap-4", showCriticalDays && "xl:grid-cols-[minmax(0,1fr)_360px]")}>
         <Panel title="Heatmap de cobertura STAFF">
           <div className="mb-3 flex flex-wrap items-center gap-2 text-xs font-bold text-muted">
-            <span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">Verde = Supervisor</span>
-            <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-700">Amarelo = {showRta ? "POC ou RTA" : "POC"}</span>
-            <span className="rounded-full bg-red-50 px-2 py-1 text-red-700">Vermelho = sem ninguém</span>
+            <span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">Verde = Supervisor + POC</span>
+            <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-700">Amarelo = Supervisor ou POC</span>
+            <span className="rounded-full bg-red-50 px-2 py-1 text-red-700">Vermelho = sem Supervisor e sem POC</span>
+            {showRta ? <span className="rounded-full bg-blue-50 px-2 py-1 text-blue-700">RTA exibido como complemento</span> : null}
             <span className="rounded-full bg-blue-50 px-2 py-1 text-blue-700">Supervisor mínimo é geral por turno</span>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[980px] border-collapse text-sm">
+          <div className="max-w-full overflow-x-auto">
+            <table className="w-full min-w-[1120px] border-collapse text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-xs font-extrabold uppercase text-muted">
                   <th className="px-3 py-2">Data</th>
@@ -14492,7 +14578,9 @@ function RequiredStaffCoverageView({ payload, loading, showRta }: { payload: Req
                       <span className={cn("rounded-full px-2 py-1 text-xs font-extrabold", row.companySupervisors.length ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700")}>
                         {row.companySupervisors.length ? "OK" : "Crítico"}
                       </span>
-                      <p className="mt-1 max-w-[180px] truncate text-xs font-semibold text-muted" title={staffNames(row.companySupervisors)}>{staffNames(row.companySupervisors) || "Sem Supervisor"}</p>
+                      <div className="mt-2 max-h-28 max-w-[190px] overflow-y-auto pr-1">
+                        <StaffNameList items={row.companySupervisors} empty="Sem Supervisor" />
+                      </div>
                     </td>
                     {row.lobs.map((cell) => <td key={cell.lob} className="px-2 py-2"><RequiredStaffCoverageCell cell={cell} showRta={showRta} /></td>)}
                     {showRta ? (
@@ -14500,7 +14588,9 @@ function RequiredStaffCoverageView({ payload, loading, showRta }: { payload: Req
                         <span className={cn("rounded-full px-2 py-1 text-xs font-extrabold", row.rtas.length ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-muted")}>
                           {row.rtas.length ? `${row.rtas.length} RTA` : "Sem RTA"}
                         </span>
-                        <p className="mt-1 max-w-[160px] truncate text-xs font-semibold text-muted" title={staffNames(row.rtas)}>{staffNames(row.rtas) || "-"}</p>
+                        <div className="mx-auto mt-2 max-h-28 max-w-[180px] overflow-y-auto pr-1 text-left">
+                          <StaffNameList items={row.rtas} empty="-" />
+                        </div>
                       </td>
                     ) : null}
                   </tr>
@@ -14511,23 +14601,25 @@ function RequiredStaffCoverageView({ payload, loading, showRta }: { payload: Req
           </div>
         </Panel>
 
-        <Panel title="Dias mais críticos">
-          <div className="space-y-2">
-            {(payload?.critical ?? []).map((item) => (
-              <div key={`${item.date}-${item.shift}-${item.lob}-${item.problem}`} className="rounded-lg border border-border p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-extrabold text-navy-950">{item.dateLabel} · {item.shift} · {item.lob}</p>
-                    <p className="text-xs font-semibold text-muted">{item.weekday} · {item.problem}</p>
+        {showCriticalDays ? (
+          <Panel title="Dias mais críticos">
+            <div className="max-h-[640px] space-y-2 overflow-y-auto pr-1">
+              {(payload?.critical ?? []).map((item) => (
+                <div key={`${item.date}-${item.shift}-${item.lob}-${item.problem}`} className="rounded-lg border border-border p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-extrabold text-navy-950">{item.dateLabel} · {item.shift} · {item.lob}</p>
+                      <p className="text-xs font-semibold text-muted">{item.weekday} · {item.problem}</p>
+                    </div>
+                    <span className={cn("rounded-full px-2 py-1 text-xs font-extrabold", severityTone(item.severity))}>{item.severity}</span>
                   </div>
-                  <span className={cn("rounded-full px-2 py-1 text-xs font-extrabold", severityTone(item.severity))}>{item.severity}</span>
+                  <p className="mt-2 text-xs font-semibold text-muted">{item.observation}</p>
                 </div>
-                <p className="mt-2 text-xs font-semibold text-muted">{item.observation}</p>
-              </div>
-            ))}
-            {!payload?.critical.length ? <EmptyState title="Sem criticidade" description="Nenhum ponto crítico no período filtrado." /> : null}
-          </div>
-        </Panel>
+              ))}
+              {!payload?.critical.length ? <EmptyState title="Sem criticidade" description="Nenhum ponto crítico no período filtrado." /> : null}
+            </div>
+          </Panel>
+        ) : null}
       </div>
 
       {showRta ? (
@@ -14546,7 +14638,7 @@ function RequiredStaffCoverageView({ payload, loading, showRta }: { payload: Req
                     <td className="px-3 py-2">{row.shift}</td>
                     <td className="px-3 py-2"><span className={cn("rounded-full px-2 py-1 text-xs font-extrabold", row.count ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-muted")}>{row.count ? "RTA presente" : "Sem RTA"}</span></td>
                     <td className="px-3 py-2 text-center font-extrabold">{row.count}</td>
-                    <td className="px-3 py-2 text-muted">{row.names || "-"}</td>
+                    <td className="px-3 py-2 text-muted"><StaffNameList items={row.people} empty="-" /></td>
                   </tr>
                 ))}
               </tbody>
@@ -14560,13 +14652,35 @@ function RequiredStaffCoverageView({ payload, loading, showRta }: { payload: Req
 
 function RequiredStaffCoverageCell({ cell, showRta }: { cell: RequiredStaffLobCellClient; showRta: boolean }) {
   return (
-    <div className={cn("min-h-[108px] rounded-xl border p-3 text-left", requiredStaffCellTone(cell.status))}>
+    <div className={cn("min-h-[132px] rounded-xl border p-3 text-left", requiredStaffCellTone(cell.status))}>
       <p className="text-xs font-extrabold uppercase">{cell.label}</p>
-      <div className="mt-2 space-y-1 text-xs font-semibold">
-        <p className="truncate" title={staffNames(cell.supervisors)}>Sup: {staffNames(cell.supervisors) || "-"}</p>
-        <p className="truncate" title={staffNames(cell.pocs)}>POC: {staffNames(cell.pocs) || "-"}</p>
-        {showRta ? <p className="truncate" title={staffNames(cell.rtas)}>RTA: {staffNames(cell.rtas) || "-"}</p> : null}
+      <div className="mt-2 max-h-44 space-y-2 overflow-y-auto pr-1 text-xs font-semibold">
+        <StaffRoleGroup label="Supervisor" items={cell.supervisors} />
+        <StaffRoleGroup label="POC" items={cell.pocs} />
+        {showRta ? <StaffRoleGroup label="RTA" items={cell.rtas} /> : null}
       </div>
+    </div>
+  );
+}
+
+function StaffRoleGroup({ label, items }: { label: string; items: RequiredStaffPersonClient[] }) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[10px] font-black uppercase tracking-wide opacity-70">{label}</p>
+      <StaffNameList items={items} empty="-" />
+    </div>
+  );
+}
+
+function StaffNameList({ items, empty }: { items: RequiredStaffPersonClient[]; empty: string }) {
+  if (!items.length) return <p className="break-words text-xs font-semibold opacity-75">{empty}</p>;
+  return (
+    <div className="space-y-0.5" title={staffNames(items)}>
+      {items.map((item) => (
+        <p key={`${item.id}-${item.role}-${item.lob}`} className="break-words text-xs font-semibold leading-snug">
+          {item.name}
+        </p>
+      ))}
     </div>
   );
 }
@@ -14616,6 +14730,13 @@ function currentStaffCoverageWeekRange() {
   start.setUTCDate(anchor.getUTCDate() + mondayOffset);
   const end = new Date(start);
   end.setUTCDate(start.getUTCDate() + 6);
+  return { startDate: dateInputFromUtc(start), endDate: dateInputFromUtc(end) };
+}
+
+function currentMonthRemainingRange() {
+  const start = parseDateInput(currentOperationalDateInput()) ?? new Date();
+  const end = new Date(start);
+  end.setUTCMonth(start.getUTCMonth() + 1, 0);
   return { startDate: dateInputFromUtc(start), endDate: dateInputFromUtc(end) };
 }
 

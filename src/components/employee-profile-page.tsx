@@ -232,185 +232,198 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
         <StatCard title="Feedback / Humor" value={data.mood.responses ? data.mood.label : "Sem registros"} helper={`${data.mood.responses} resposta(s) no mês`} icon={HeartPulse} tone="orange" />
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[0.95fr_1.2fr_1fr]">
-        <Panel title="Dados Operacionais">
-          <div className="grid gap-2 text-sm sm:grid-cols-2">
-            <InfoLine label="Cargo/Função" value={data.employee.roleTitle} />
-            <InfoLine label="LOB" value={data.employee.lob} />
-            <InfoLine label="Time" value={data.employee.team} />
-            <InfoLine label="Skill" value={data.employee.skill} />
-            <InfoLine label="Wave" value={data.employee.wave} />
-            <InfoLine label="Entrada" value={data.employee.workStartTime || "Não informado"} />
-            <InfoLine label="Saída" value={data.employee.workEndTime || "Não informado"} />
-            <InfoLine label="Go Live" value={data.employee.goLiveDate || "Não informado"} />
-          </div>
-        </Panel>
-
-        <Panel title={`Cronograma (${data.schedule.periodLabel})`} action="Ver completo" actionOnClick={() => window.location.assign(profileLinks.schedule)}>
-          <div className="grid gap-2 sm:grid-cols-3">
-            <MetricBox label="Escalados" value={data.schedule.scheduledDays} />
-            <MetricBox label="Presentes" value={data.schedule.presentDays} />
-            <MetricBox label="Faltas" value={data.schedule.absenceDays} />
-          </div>
-          <div className="mt-3 rounded-lg border border-border bg-slate-50 p-3 text-sm">
-            <p className="text-xs font-black uppercase tracking-wide text-muted">Próximo turno</p>
-            {data.schedule.nextShift ? (
-              <p className="mt-1 font-bold text-navy-950">
-                {data.schedule.nextShift.date} • {data.schedule.nextShift.status} • {data.schedule.nextShift.shift}
-              </p>
-            ) : (
-              <p className="mt-1 font-bold text-muted">Sem próximo cronograma.</p>
-            )}
-          </div>
-          <div className="mt-3 grid grid-cols-4 gap-2 sm:grid-cols-7">
-            {data.schedule.days.length ? data.schedule.days.map((day) => <ScheduleChip key={day.id} day={day} />) : <div className="col-span-full text-sm font-semibold text-muted">Sem cronograma no mês.</div>}
-          </div>
-        </Panel>
-
-        <Panel title={`Horas (${data.workHours.periodLabel})`} action="Ver detalhes" actionOnClick={() => window.location.assign(profileLinks.workHours)}>
-          <div className="grid gap-2 sm:grid-cols-2">
-            <MetricBox label="Planejadas" value={data.workHours.plannedHours} />
-            <MetricBox label="Realizadas" value={data.workHours.actualHours} />
-            <MetricBox label="Divergência" value={data.workHours.difference} tone={data.workHours.difference.startsWith("-") ? "red" : "green"} />
-            <MetricBox label="Ajustes pendentes" value={data.workHours.pendingAdjustments} />
-          </div>
-          <p className="mt-3 text-xs font-semibold text-muted">Último lançamento: {data.workHours.lastRecordAt || "Sem registro"}</p>
-        </Panel>
-      </div>
-
-      <div className={cn("grid gap-4", data.billing ? "xl:grid-cols-2 2xl:grid-cols-5" : "xl:grid-cols-4")}>
-        {data.billing ? (
-          <Panel title="Prévia de Invoice" action="Ver detalhes" actionOnClick={() => window.location.assign(profileLinks.invoice)}>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <p className="text-sm font-black text-navy-950">{data.billing.monthLabel}</p>
-                <p className="text-xs font-semibold text-muted">{data.billing.message}</p>
-              </div>
-              <StatusBadge status={invoiceStatusLabel(data.billing.status)} />
-            </div>
-            <div className="mt-3 grid gap-2 sm:grid-cols-2">
-              <MetricBox label="Horas aprovadas" value={data.billing.approvedHours} tone="green" />
-              <MetricBox label="Horas projetadas" value={data.billing.projectedHours} />
-              <MetricBox label="Valor bruto" value={formatCurrency(data.billing.grossAmount)} />
-              <MetricBox label="Previsão final" value={formatCurrency(data.billing.finalAmount)} tone="green" />
-            </div>
-            <div className="mt-3 rounded-lg border border-border bg-slate-50 p-3 text-sm">
-              <InfoLine label="Adiantamento" value={data.billing.advanceAmount ? `-${formatCurrency(data.billing.advanceAmount)}` : "Sem desconto"} />
-              <InfoLine label="Valor/hora" value={formatCurrency(data.billing.hourlyRate)} />
-              <InfoLine label="Total de horas" value={data.billing.totalHours} />
+      <div className="grid w-full gap-4 md:grid-cols-2 xl:grid-cols-12">
+        <div className="min-w-0 xl:col-span-4">
+          <Panel title="Dados Operacionais">
+            <div className="grid gap-x-3 gap-y-2 text-[13px] sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+              <InfoLine label="Cargo/Função" value={data.employee.roleTitle} />
+              <InfoLine label="LOB" value={data.employee.lob} />
+              <InfoLine label="Time" value={data.employee.team} />
+              <InfoLine label="Skill" value={data.employee.skill} />
+              <InfoLine label="Wave" value={data.employee.wave} />
+              <InfoLine label="Entrada" value={data.employee.workStartTime || "Não informado"} />
+              <InfoLine label="Saída" value={data.employee.workEndTime || "Não informado"} />
+              <InfoLine label="Go Live" value={data.employee.goLiveDate || "Não informado"} />
             </div>
           </Panel>
+        </div>
+
+        <div className="min-w-0 md:col-span-2 xl:col-span-5">
+          <Panel title={`Cronograma (${data.schedule.periodLabel})`} action="Ver completo" actionOnClick={() => window.location.assign(profileLinks.schedule)}>
+            <div className="grid gap-2 sm:grid-cols-3">
+              <MetricBox label="Escalados" value={data.schedule.scheduledDays} />
+              <MetricBox label="Presentes" value={data.schedule.presentDays} />
+              <MetricBox label="Faltas" value={data.schedule.absenceDays} />
+            </div>
+            <div className="mt-3 rounded-lg border border-border bg-slate-50 p-3 text-sm">
+              <p className="text-xs font-black uppercase tracking-wide text-muted">Próximo turno</p>
+              {data.schedule.nextShift ? (
+                <p className="mt-1 font-bold text-navy-950">
+                  {data.schedule.nextShift.date} • {data.schedule.nextShift.status} • {data.schedule.nextShift.shift}
+                </p>
+              ) : (
+                <p className="mt-1 font-bold text-muted">Sem próximo cronograma.</p>
+              )}
+            </div>
+            <div className="mt-3 grid grid-cols-4 gap-2 sm:grid-cols-7">
+              {data.schedule.days.length ? data.schedule.days.map((day) => <ScheduleChip key={day.id} day={day} />) : <div className="col-span-full text-sm font-semibold text-muted">Sem cronograma no mês.</div>}
+            </div>
+          </Panel>
+        </div>
+
+        <div className="min-w-0 xl:col-span-3">
+          <Panel title={`Horas (${data.workHours.periodLabel})`} action="Ver detalhes" actionOnClick={() => window.location.assign(profileLinks.workHours)}>
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+              <MetricBox label="Planejadas" value={data.workHours.plannedHours} />
+              <MetricBox label="Realizadas" value={data.workHours.actualHours} />
+              <MetricBox label="Divergência" value={data.workHours.difference} tone={data.workHours.difference.startsWith("-") ? "red" : "green"} />
+              <MetricBox label="Ajustes pendentes" value={data.workHours.pendingAdjustments} />
+            </div>
+            <p className="mt-3 text-xs font-semibold text-muted">Último lançamento: {data.workHours.lastRecordAt || "Sem registro"}</p>
+          </Panel>
+        </div>
+
+        {data.billing ? (
+          <div className="min-w-0 xl:col-span-3">
+            <Panel title="Prévia de Invoice" action="Ver detalhes" actionOnClick={() => window.location.assign(profileLinks.invoice)}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-black text-navy-950">{data.billing.monthLabel}</p>
+                  <p className="text-xs font-semibold text-muted">{data.billing.message}</p>
+                </div>
+                <StatusBadge status={invoiceStatusLabel(data.billing.status)} />
+              </div>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+                <MetricBox label="Horas aprovadas" value={data.billing.approvedHours} tone="green" />
+                <MetricBox label="Horas projetadas" value={data.billing.projectedHours} />
+                <MetricBox label="Valor bruto" value={formatCurrency(data.billing.grossAmount)} />
+                <MetricBox label="Previsão final" value={formatCurrency(data.billing.finalAmount)} tone="green" />
+              </div>
+              <div className="mt-3 rounded-lg border border-border bg-slate-50 p-3 text-sm">
+                <InfoLine label="Adiantamento" value={data.billing.advanceAmount ? `-${formatCurrency(data.billing.advanceAmount)}` : "Sem desconto"} />
+                <InfoLine label="Valor/hora" value={formatCurrency(data.billing.hourlyRate)} />
+                <InfoLine label="Total de horas" value={data.billing.totalHours} />
+              </div>
+            </Panel>
+          </div>
         ) : null}
 
-        <Panel title="Performance" action="Ver histórico" actionOnClick={() => window.location.assign(profileLinks.performance)}>
-          {data.performance ? (
-            <div className="grid gap-2 text-sm sm:grid-cols-2">
-              <InfoLine label="Qualidade" value={formatPercent(data.performance.quality)} />
-              <InfoLine label="Submit/dia" value={formatNumber(data.performance.submit)} />
-              <InfoLine label="AHT" value={formatAht(data.performance.ahtSeconds)} />
-              <InfoLine label="ABS" value={formatPercent(data.performance.abs)} />
-              <InfoLine label="WFH" value={<WfhBadge status={data.performance.wfhStatus} label={data.performance.wfhStatusLabel} />} />
-              <InfoLine label="Regra" value={qualityRuleLabel(data.performance.qualityRule)} />
-            </div>
-          ) : (
-            <EmptyState title="Sem performance no período" description="Importe Qualidade/Produção ou ajuste o período no módulo Performance." />
-          )}
-        </Panel>
+        <div className={cn("min-w-0", data.billing ? "xl:col-span-3" : "xl:col-span-4")}>
+          <Panel title="Performance" action="Ver histórico" actionOnClick={() => window.location.assign(profileLinks.performance)}>
+            {data.performance ? (
+              <div className="grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+                <InfoLine label="Qualidade" value={formatPercent(data.performance.quality)} />
+                <InfoLine label="Submit/dia" value={formatNumber(data.performance.submit)} />
+                <InfoLine label="AHT" value={formatAht(data.performance.ahtSeconds)} />
+                <InfoLine label="ABS" value={formatPercent(data.performance.abs)} />
+                <InfoLine label="WFH" value={<WfhBadge status={data.performance.wfhStatus} label={data.performance.wfhStatusLabel} />} />
+                <InfoLine label="Regra" value={qualityRuleLabel(data.performance.qualityRule)} />
+              </div>
+            ) : (
+              <EmptyState title="Sem performance no período" description="Importe Qualidade/Produção ou ajuste o período no módulo Performance." />
+            )}
+          </Panel>
+        </div>
 
-        <Panel title="Solicitações" action="Ver todas" actionOnClick={() => window.location.assign(profileLinks.requests)}>
-          <div className="mb-3 grid grid-cols-2 gap-2">
-            <MetricBox label="Abertas" value={data.requests.open} />
-            <MetricBox label="Em análise" value={data.requests.inAnalysis} />
-          </div>
-          {data.requests.recent.length ? (
-            <div className="space-y-2">
-              {data.requests.recent.map((request) => (
-                <div key={request.id} className="rounded-lg border border-border bg-white p-2.5">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-extrabold text-navy-950">{request.title}</p>
-                      <p className="mt-1 text-xs font-semibold text-muted">{request.code} • {request.type} • {request.createdAt}</p>
+        <div className={cn("min-w-0", data.billing ? "xl:col-span-3" : "xl:col-span-4")}>
+          <Panel title="Solicitações" action="Ver todas" actionOnClick={() => window.location.assign(profileLinks.requests)}>
+            <div className="mb-3 grid grid-cols-2 gap-2">
+              <MetricBox label="Abertas" value={data.requests.open} />
+              <MetricBox label="Em análise" value={data.requests.inAnalysis} />
+            </div>
+            {data.requests.recent.length ? (
+              <div className="space-y-2">
+                {data.requests.recent.map((request) => (
+                  <div key={request.id} className="rounded-lg border border-border bg-white p-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-extrabold text-navy-950">{request.title}</p>
+                        <p className="mt-1 text-xs font-semibold text-muted">{request.code} • {request.type} • {request.createdAt}</p>
+                      </div>
+                      <StatusBadge status={request.status} />
                     </div>
-                    <StatusBadge status={request.status} />
                   </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-sm font-semibold text-muted">Sem solicitações recentes.</p>
-          )}
-        </Panel>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm font-semibold text-muted">Sem solicitações recentes.</p>
+            )}
+          </Panel>
+        </div>
 
-        <Panel title="Feedback / Humor">
-          <div className="flex items-center gap-3">
-            <div className="grid h-12 w-12 place-items-center rounded-xl bg-orange-50 text-orange-500">
-              <HeartPulse className="h-6 w-6" />
-            </div>
-            <div>
-              <p className="text-2xl font-black text-navy-950">{data.mood.average ? `${data.mood.average}/5` : "-"}</p>
-              <p className="text-sm font-bold text-muted">{data.mood.label} • {data.mood.responses} resposta(s)</p>
-            </div>
-          </div>
-          <p className="mt-3 text-sm font-semibold text-muted">
-            Última resposta: {data.mood.lastResponseAt ? `${data.mood.lastResponseAt} • ${data.mood.lastLabel}` : "Sem registro no período"}
-          </p>
-        </Panel>
-
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-2">
-        <Panel title="Equipamentos" action="Ver todos" actionOnClick={() => window.location.assign(profileLinks.equipment)}>
-          {data.equipments.items.length ? (
-            <div className="grid gap-2">
-              {data.equipments.items.map((item) => (
-                <div key={item.id} className="flex min-w-0 items-center gap-3 rounded-lg border border-border bg-white p-3">
-                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-blue-50 text-blue-600">
-                    <Laptop className="h-5 w-5" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-extrabold text-navy-950">{item.model || item.type}</p>
-                    <p className="truncate text-xs font-semibold text-muted">Série: {item.serial || "Não informado"} • Entrega: {item.deliveredAt || "Não informada"}</p>
-                  </div>
-                  <StatusBadge status={item.status} />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <EmptyState title="Sem equipamento vinculado" description="Equipamentos aparecerão aqui quando houver vínculo ativo." />
-          )}
-        </Panel>
-
-        <Panel title="Dados Cadastrais">
-          <div className="grid gap-2 text-sm sm:grid-cols-2">
-            <InfoLine label="Telefone" value={data.employee.primaryPhone || "Não informado"} />
-            <InfoLine label="Cidade/UF" value={[data.employee.city, data.employee.stateUf].filter(Boolean).join(" / ") || "Não informado"} />
-            <InfoLine label="Contrato" value={data.employee.contractType || "Não informado"} />
-            <InfoLine label="Desligamento" value={data.employee.terminationDate || "Não informado"} />
-            <InfoLine label="Tipo desligamento" value={data.employee.terminationType || "Não informado"} />
-            <InfoLine label="Motivo desligamento" value={data.employee.terminationReason || "Não informado"} />
-          </div>
-          {data.employee.additionalData ? (
-            <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50/60 p-3">
-              <p className="mb-2 text-xs font-black uppercase tracking-wide text-blue-700">Dados adicionais</p>
-              <div className="grid gap-2 text-sm sm:grid-cols-2">
-                <InfoLine label="Etnia" value={data.employee.additionalData.ethnicity || "Não informado"} />
-                <InfoLine label="Orientação sexual" value={data.employee.additionalData.sexualOrientation || "Não informado"} />
-                <InfoLine label="É PCD?" value={data.employee.additionalData.isPcd || "Não informado"} />
-                <InfoLine label="Tipo deficiência" value={data.employee.additionalData.pcdDisabilityType || "Não informado"} />
-                <InfoLine label="Primeiro emprego" value={data.employee.additionalData.firstJob || "Não informado"} />
-                <InfoLine label="Telemarketing" value={data.employee.additionalData.hasTelemarketingExperience || "Não informado"} />
-                <InfoLine label="Onde trabalhou" value={data.employee.additionalData.telemarketingWhere || "Não informado"} />
-                <InfoLine label="Tipo da Chave PIX" value={data.employee.additionalData.pixKeyType || "Não informado"} />
-                <InfoLine label="Chave PIX" value={data.employee.additionalData.pixKey || "Não informada"} />
-                <InfoLine label="Concluído em" value={data.employee.additionalDataCompletedAt || "Pendente"} />
+        <div className={cn("min-w-0", data.billing ? "xl:col-span-3" : "xl:col-span-4")}>
+          <Panel title="Feedback / Humor">
+            <div className="flex items-center gap-3">
+              <div className="grid h-12 w-12 place-items-center rounded-xl bg-orange-50 text-orange-500">
+                <HeartPulse className="h-6 w-6" />
+              </div>
+              <div>
+                <p className="text-2xl font-black text-navy-950">{data.mood.average ? `${data.mood.average}/5` : "-"}</p>
+                <p className="text-sm font-bold text-muted">{data.mood.label} • {data.mood.responses} resposta(s)</p>
               </div>
             </div>
-          ) : (
-            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-muted">
-              Dados sensíveis ocultos para este perfil de acesso.
+            <p className="mt-3 text-sm font-semibold text-muted">
+              Última resposta: {data.mood.lastResponseAt ? `${data.mood.lastResponseAt} • ${data.mood.lastLabel}` : "Sem registro no período"}
+            </p>
+          </Panel>
+        </div>
+
+        <div className="min-w-0 xl:col-span-6">
+          <Panel title="Equipamentos" action="Ver todos" actionOnClick={() => window.location.assign(profileLinks.equipment)}>
+            {data.equipments.items.length ? (
+              <div className="grid gap-2">
+                {data.equipments.items.map((item) => (
+                  <div key={item.id} className="flex min-w-0 items-center gap-3 rounded-lg border border-border bg-white p-3">
+                    <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-blue-50 text-blue-600">
+                      <Laptop className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-extrabold text-navy-950">{item.model || item.type}</p>
+                      <p className="truncate text-xs font-semibold text-muted">Série: {item.serial || "Não informado"} • Entrega: {item.deliveredAt || "Não informada"}</p>
+                    </div>
+                    <StatusBadge status={item.status} />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState title="Sem equipamento vinculado" description="Equipamentos aparecerão aqui quando houver vínculo ativo." />
+            )}
+          </Panel>
+        </div>
+
+        <div className="min-w-0 xl:col-span-6">
+          <Panel title="Dados Cadastrais">
+            <div className="grid gap-2 text-sm sm:grid-cols-2">
+              <InfoLine label="Telefone" value={data.employee.primaryPhone || "Não informado"} />
+              <InfoLine label="Cidade/UF" value={[data.employee.city, data.employee.stateUf].filter(Boolean).join(" / ") || "Não informado"} />
+              <InfoLine label="Contrato" value={data.employee.contractType || "Não informado"} />
+              <InfoLine label="Desligamento" value={data.employee.terminationDate || "Não informado"} />
+              <InfoLine label="Tipo desligamento" value={data.employee.terminationType || "Não informado"} />
+              <InfoLine label="Motivo desligamento" value={data.employee.terminationReason || "Não informado"} />
             </div>
-          )}
-        </Panel>
+            {data.employee.additionalData ? (
+              <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50/60 p-3">
+                <p className="mb-2 text-xs font-black uppercase tracking-wide text-blue-700">Dados adicionais</p>
+                <div className="grid gap-2 text-sm sm:grid-cols-2">
+                  <InfoLine label="Etnia" value={data.employee.additionalData.ethnicity || "Não informado"} />
+                  <InfoLine label="Orientação sexual" value={data.employee.additionalData.sexualOrientation || "Não informado"} />
+                  <InfoLine label="É PCD?" value={data.employee.additionalData.isPcd || "Não informado"} />
+                  <InfoLine label="Tipo deficiência" value={data.employee.additionalData.pcdDisabilityType || "Não informado"} />
+                  <InfoLine label="Primeiro emprego" value={data.employee.additionalData.firstJob || "Não informado"} />
+                  <InfoLine label="Telemarketing" value={data.employee.additionalData.hasTelemarketingExperience || "Não informado"} />
+                  <InfoLine label="Onde trabalhou" value={data.employee.additionalData.telemarketingWhere || "Não informado"} />
+                  <InfoLine label="Tipo da Chave PIX" value={data.employee.additionalData.pixKeyType || "Não informado"} />
+                  <InfoLine label="Chave PIX" value={data.employee.additionalData.pixKey || "Não informada"} />
+                  <InfoLine label="Concluído em" value={data.employee.additionalDataCompletedAt || "Pendente"} />
+                </div>
+              </div>
+            ) : (
+              <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-muted">
+                Dados sensíveis ocultos para este perfil de acesso.
+              </div>
+            )}
+          </Panel>
+        </div>
       </div>
 
       <p className="pb-2 text-right text-xs font-semibold text-muted">Dados atualizados em {data.updatedAt}. Informações exibidas conforme sua permissão de acesso.</p>
