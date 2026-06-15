@@ -4,6 +4,7 @@ import type { Actor } from "@/lib/mock-db";
 import { createNotFoundError, createPermissionError, createServerError, type ApiErrorPayload } from "@/lib/api-errors";
 import { getEmployeeBillingPreview } from "@/lib/billing-service";
 import { getDefaultDatePeriod } from "@/lib/default-date-range";
+import { getFormalFeedbackProfileSummary } from "@/lib/formal-feedback-service";
 import { getPerformanceDashboard } from "@/lib/performance-service";
 import { canAccessPerformanceWfh, normalizeRole } from "@/lib/permissions";
 import { logPerformanceMetric } from "@/lib/performance-logger";
@@ -108,14 +109,15 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
     if (!canViewProfile(viewer, employee)) return createPermissionError("Você não tem permissão para visualizar este perfil.");
 
     const period = currentMonthPeriod();
-    const [schedule, workHours, requests, equipments, mood, performance, billing] = await Promise.all([
+    const [schedule, workHours, requests, equipments, mood, performance, billing, formalFeedback] = await Promise.all([
       profileSection("schedule", employee.id, buildScheduleSummary(employee.id, period)),
       profileSection("work_hours", employee.id, buildWorkHoursSummary(employee.id, period)),
       profileSection("requests", employee.id, buildRequestsSummary(employee)),
       profileSection("equipment", employee.id, buildEquipmentSummary(employee.id)),
       profileSection("mood", employee.id, buildMoodSummary(employee.id, period)),
       profileSection("performance", employee.id, buildPerformanceSummary(actor, viewer, employee, period)),
-      profileSection("billing_preview", employee.id, getEmployeeBillingPreview(employee.id))
+      profileSection("billing_preview", employee.id, getEmployeeBillingPreview(employee.id)),
+      profileSection("formal_feedback", employee.id, getFormalFeedbackProfileSummary(actor, employee.id))
     ]);
 
     const viewerRole = normalizeRole(viewer.role.name);
@@ -138,6 +140,7 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
         equipments,
         mood,
         billing,
+        formalFeedback,
         updatedAt: formatDateTime(new Date())
       }
     };
@@ -145,7 +148,7 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
       viewerRole,
       isOwnProfile,
       employeeId: employee.id,
-      sections: 7
+      sections: 8
     });
     return response;
   } catch (error) {

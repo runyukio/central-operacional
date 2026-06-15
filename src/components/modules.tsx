@@ -48,6 +48,7 @@ import {
   Megaphone,
   Meh,
   MessageCircle,
+  MessagesSquare,
   Pin,
   PlayCircle,
   Plus,
@@ -13949,6 +13950,70 @@ function staffCoverageStatusTone(status: string) {
   return "bg-blue-50 text-blue-700";
 }
 
+type FormalFeedbackEmployeeOption = {
+  id: string;
+  name: string;
+  wbLogin: string;
+  email: string;
+  roleTitle: string;
+  skill: string;
+  lob: string;
+  supervisor: string;
+};
+
+type FormalFeedbackClient = {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  wbLogin: string;
+  employeeEmail: string;
+  lob: string;
+  supervisor: string;
+  authorId: string;
+  authorName: string;
+  authorRole: string;
+  type: string;
+  typeLabel: string;
+  category: string;
+  title: string;
+  description: string;
+  status: string;
+  statusLabel: string;
+  sentAt: string;
+  viewedAt: string;
+  acknowledgedAt: string;
+  acknowledgedBy: string;
+  employeeResponse: string;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string;
+};
+
+type FormalFeedbackListResponse = {
+  data: FormalFeedbackClient[];
+  summary: {
+    total: number;
+    pending: number;
+    viewed: number;
+    acknowledged: number;
+    positive: number;
+    corrective: number;
+  };
+  permissions: {
+    canCreate: boolean;
+    canExport: boolean;
+  };
+  viewer: {
+    employeeId: string;
+    role: string;
+  };
+  options: {
+    categories: string[];
+    employees: FormalFeedbackEmployeeOption[];
+  };
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+};
+
 type AnonymousFeedbackClient = {
   id: string;
   category: string;
@@ -14036,6 +14101,9 @@ type ClimateSurveyListResponse =
 const anonymousCategories = ["Liderança", "Cronograma", "Ferramentas / acessos", "Ambiente", "Comunicação", "Carga de trabalho", "Sugestão", "Problema operacional", "Outro"];
 const urgencyOptions = ["Baixa", "Média", "Alta", "Crítica"];
 const feedbackStatusOptions = ["Todos", "Novo", "Em análise", "Resolvido", "Arquivado"];
+const formalFeedbackTypeOptions = ["Todos", "Positivo", "Corretivo"];
+const formalFeedbackStatusOptions = ["Todos", "Pendente de ciência", "Visualizado", "Ciente", "Arquivado"];
+const fallbackFormalFeedbackCategories = ["Produtividade", "Qualidade", "ABS / Presença", "Atrasos", "Conduta", "Comportamento", "Reconhecimento positivo", "Alinhamento operacional", "Comunicação", "Outro"];
 const climateQuestionTypeOptions = [
   ["ESCALA_1_5", "Escala 1 a 5"],
   ["SIM_NAO", "Sim/Não"],
@@ -14369,6 +14437,379 @@ export function ClimatePage() {
           <EmptyState title="Nenhuma pesquisa aberta no momento." description="Quando houver uma pesquisa disponível, ela aparecerá aqui." />
         )}
       </Panel>
+    </div>
+  );
+}
+
+export function FormalFeedbackPage() {
+  const defaultRange = getDefaultDateRange();
+  const initialDetailOpenedRef = useRef(false);
+  const [payload, setPayload] = useState<FormalFeedbackListResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [selectedFeedback, setSelectedFeedback] = useState<FormalFeedbackClient | null>(null);
+  const [acknowledgeOpen, setAcknowledgeOpen] = useState(false);
+  const [acknowledgeResponse, setAcknowledgeResponse] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [filters, setFilters] = useState({
+    employeeId: "",
+    startDate: defaultRange.startDate,
+    endDate: defaultRange.endDate,
+    status: "Todos",
+    type: "Todos",
+    category: "Todos",
+    lob: "",
+    supervisor: "",
+    jobTitle: "",
+    skill: "",
+    search: ""
+  });
+  const [draft, setDraft] = useState({
+    employeeId: "",
+    type: "Positivo",
+    category: "Produtividade",
+    title: "",
+    description: ""
+  });
+
+  const loadFeedbacks = useCallback(async () => {
+    setLoading(true);
+    const params = buildFormalFeedbackParams(filters);
+    try {
+      const nextPayload = await apiJson<FormalFeedbackListResponse>(`/api/feedbacks?${params.toString()}`);
+      setPayload(nextPayload);
+      setMessage("");
+      if (!draft.employeeId && nextPayload.options.employees[0]) {
+        setDraft((current) => ({ ...current, employeeId: current.employeeId || nextPayload.options.employees[0].id }));
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível carregar Feedback Formal.");
+    } finally {
+      setLoading(false);
+    }
+  }, [draft.employeeId, filters]);
+
+  useEffect(() => {
+    void loadFeedbacks();
+  }, [loadFeedbacks]);
+
+  useEffect(() => {
+    const employeeIdFromUrl = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("employeeId") : null;
+    if (employeeIdFromUrl) setFilters((current) => ({ ...current, employeeId: employeeIdFromUrl }));
+  }, []);
+
+  useEffect(() => {
+    if (initialDetailOpenedRef.current) return;
+    const idFromUrl = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("id") : null;
+    if (!idFromUrl) return;
+    initialDetailOpenedRef.current = true;
+    setMessage("");
+    apiJson<{ data: FormalFeedbackClient }>(`/api/feedbacks/${encodeURIComponent(idFromUrl)}`)
+      .then((detail) => setSelectedFeedback(detail.data))
+      .catch((error) => setMessage(error instanceof Error ? error.message : "Não foi possível abrir o feedback."));
+  }, []);
+
+  const categories = payload?.options.categories.length ? payload.options.categories : fallbackFormalFeedbackCategories;
+  const summary = payload?.summary;
+  const canCreate = Boolean(payload?.permissions.canCreate);
+  const canExport = Boolean(payload?.permissions.canExport);
+  const viewerEmployeeId = payload?.viewer.employeeId ?? "";
+  const exportParams = buildFormalFeedbackParams(filters);
+
+  async function openFeedbackDetail(id: string) {
+    setMessage("");
+    try {
+      const detail = await apiJson<{ data: FormalFeedbackClient }>(`/api/feedbacks/${encodeURIComponent(id)}`);
+      setSelectedFeedback(detail.data);
+      void loadFeedbacks();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível abrir o feedback.");
+    }
+  }
+
+  async function createFeedback() {
+    setSaving(true);
+    setMessage("");
+    try {
+      const response = await apiJson<{ data: FormalFeedbackClient; message: string }>("/api/feedbacks", {
+        method: "POST",
+        body: JSON.stringify(draft)
+      });
+      setMessage(response.message);
+      setDraft((current) => ({ ...current, title: "", description: "" }));
+      await loadFeedbacks();
+      setSelectedFeedback(response.data);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível criar Feedback Formal.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function confirmAcknowledge() {
+    if (!selectedFeedback) return;
+    setSaving(true);
+    setMessage("");
+    try {
+      const response = await apiJson<{ data: FormalFeedbackClient; message: string }>(`/api/feedbacks/${encodeURIComponent(selectedFeedback.id)}/acknowledge`, {
+        method: "POST",
+        body: JSON.stringify({ response: acknowledgeResponse })
+      });
+      setSelectedFeedback(response.data);
+      setAcknowledgeOpen(false);
+      setAcknowledgeResponse("");
+      setMessage(response.message);
+      await loadFeedbacks();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível confirmar ciência.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function archiveFeedback(feedback: FormalFeedbackClient) {
+    setSaving(true);
+    setMessage("");
+    try {
+      const response = await apiJson<{ data: FormalFeedbackClient; message: string }>(`/api/feedbacks/${encodeURIComponent(feedback.id)}/archive`, {
+        method: "PATCH"
+      });
+      setSelectedFeedback(response.data);
+      setMessage(response.message);
+      await loadFeedbacks();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível arquivar feedback.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div>
+      <PageHeader
+        title="Feedback Formal"
+        description="Feedbacks formais enviados pela liderança, com ciência do colaborador e histórico rastreável."
+        icon={MessagesSquare}
+        actions={<TopActions />}
+      />
+
+      {message ? <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
+
+      <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+        <StatCard title="Total" value={summary?.total ?? 0} helper="feedbacks no filtro" icon={MessagesSquare} tone="blue" />
+        <StatCard title="Pendentes" value={summary?.pending ?? 0} helper="aguardando ciência" icon={Clock} tone="orange" />
+        <StatCard title="Visualizados" value={summary?.viewed ?? 0} helper="lidos pelo agente" icon={UserCheck} tone="purple" />
+        <StatCard title="Cientes" value={summary?.acknowledged ?? 0} helper="ciência registrada" icon={CheckCircle2} tone="green" />
+        <StatCard title="Positivos" value={summary?.positive ?? 0} helper="reconhecimentos" icon={Award} tone="green" />
+        <StatCard title="Corretivos" value={summary?.corrective ?? 0} helper="alinhamentos" icon={AlertTriangle} tone="red" />
+      </div>
+
+      {canCreate ? (
+        <Panel title="Novo feedback formal">
+          <div className="grid gap-3 xl:grid-cols-[1.1fr_180px_220px_1fr]">
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-bold text-muted">Colaborador</span>
+              <select value={draft.employeeId} onChange={(event) => setDraft({ ...draft, employeeId: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 text-sm font-bold">
+                {payload?.options.employees.length ? payload.options.employees.map((employee) => (
+                  <option key={employee.id} value={employee.id}>
+                    {employee.name} · {employee.wbLogin} · {employee.lob}
+                  </option>
+                )) : <option value="">Nenhum agente disponível</option>}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-bold text-muted">Tipo</span>
+              <select value={draft.type} onChange={(event) => setDraft({ ...draft, type: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 text-sm font-bold">
+                {formalFeedbackTypeOptions.filter((option) => option !== "Todos").map((option) => <option key={option}>{option}</option>)}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-bold text-muted">Categoria</span>
+              <select value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 text-sm font-bold">
+                {categories.map((category) => <option key={category}>{category}</option>)}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-bold text-muted">Título</span>
+              <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 text-sm font-bold" placeholder="Resumo do feedback" />
+            </label>
+          </div>
+          <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(0,1fr)_180px] xl:items-end">
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-bold text-muted">Descrição</span>
+              <textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} className="min-h-28 w-full rounded-lg border border-border p-3 text-sm font-semibold outline-none" placeholder="Descreva o contexto de forma objetiva e respeitosa." />
+            </label>
+            <button type="button" onClick={createFeedback} disabled={saving || !draft.employeeId || !draft.title.trim() || !draft.description.trim()} className="premium-button h-11 px-4 text-sm font-extrabold disabled:opacity-60">
+              {saving ? "Enviando..." : "Enviar feedback"}
+            </button>
+          </div>
+        </Panel>
+      ) : null}
+
+      <Panel title="Feedbacks formais" action={canExport ? "Exportar XLSX" : undefined} actionOnClick={canExport ? () => void downloadFile(`/api/feedbacks/export?${exportParams.toString()}`, "feedback_formal.xlsx").catch((error) => setMessage(error.message)) : undefined}>
+        <div className="mb-4 grid gap-3 md:grid-cols-4 xl:grid-cols-9">
+          <input type="date" value={filters.startDate} onChange={(event) => setFilters({ ...filters, startDate: event.target.value })} className="h-10 rounded-lg border border-border px-3" />
+          <input type="date" value={filters.endDate} onChange={(event) => setFilters({ ...filters, endDate: event.target.value })} className="h-10 rounded-lg border border-border px-3" />
+          <select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })} className="h-10 rounded-lg border border-border px-3">
+            {formalFeedbackStatusOptions.map((option) => <option key={option}>{option}</option>)}
+          </select>
+          <select value={filters.type} onChange={(event) => setFilters({ ...filters, type: event.target.value })} className="h-10 rounded-lg border border-border px-3">
+            {formalFeedbackTypeOptions.map((option) => <option key={option}>{option}</option>)}
+          </select>
+          <select value={filters.category} onChange={(event) => setFilters({ ...filters, category: event.target.value })} className="h-10 rounded-lg border border-border px-3">
+            <option>Todos</option>
+            {categories.map((category) => <option key={category}>{category}</option>)}
+          </select>
+          <input value={filters.lob} onChange={(event) => setFilters({ ...filters, lob: event.target.value })} className="h-10 rounded-lg border border-border px-3" placeholder="LOB" />
+          <input value={filters.supervisor} onChange={(event) => setFilters({ ...filters, supervisor: event.target.value })} className="h-10 rounded-lg border border-border px-3" placeholder="Supervisor" />
+          <input value={filters.skill} onChange={(event) => setFilters({ ...filters, skill: event.target.value })} className="h-10 rounded-lg border border-border px-3" placeholder="Skill" />
+          <div className="flex gap-2">
+            <input value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} className="h-10 min-w-0 flex-1 rounded-lg border border-border px-3" placeholder="Buscar" />
+            <button type="button" onClick={loadFeedbacks} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">Filtrar</button>
+          </div>
+        </div>
+
+        {loading ? (
+          <EmptyState title="Carregando feedbacks" description="Buscando feedbacks formais conforme sua permissão." />
+        ) : payload?.data.length ? (
+          <SimpleTable
+            columns={["Data", "Colaborador", "LOB", "Autor", "Tipo", "Categoria", "Título", "Status", "Ciente em", "Ações"]}
+            rows={payload.data.map((feedback) => [
+              feedback.sentAt,
+              <div key={`${feedback.id}-employee`} className="min-w-[160px]">
+                <p className="font-extrabold text-navy-950">{feedback.employeeName}</p>
+                <p className="text-xs font-semibold text-muted">{feedback.wbLogin}</p>
+              </div>,
+              feedback.lob,
+              feedback.authorName,
+              <FormalFeedbackTypeBadge key={`${feedback.id}-type`} type={feedback.typeLabel} />,
+              feedback.category,
+              <span key={`${feedback.id}-title`} className="line-clamp-2 max-w-[260px] text-sm font-bold">{feedback.title}</span>,
+              <StatusBadge key={`${feedback.id}-status`} status={feedback.statusLabel} />,
+              feedback.acknowledgedAt || "-",
+              <div key={`${feedback.id}-actions`} className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => openFeedbackDetail(feedback.id)} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Ver</button>
+                {feedback.employeeId === viewerEmployeeId && !["CIENTE", "ARQUIVADO"].includes(feedback.status) ? (
+                  <button type="button" onClick={() => { setSelectedFeedback(feedback); setAcknowledgeOpen(true); }} className="rounded-lg bg-blue-600 px-2 py-1 text-xs font-bold text-white">Ciência</button>
+                ) : null}
+              </div>
+            ])}
+          />
+        ) : (
+          <EmptyState title="Nenhum feedback formal encontrado." description="Feedbacks enviados pela liderança aparecerão aqui conforme sua permissão." />
+        )}
+      </Panel>
+
+      {selectedFeedback ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="card max-h-[88vh] w-full max-w-3xl overflow-y-auto p-5">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <FormalFeedbackTypeBadge type={selectedFeedback.typeLabel} />
+                  <StatusBadge status={selectedFeedback.statusLabel} />
+                </div>
+                <h2 className="mt-3 text-xl font-black text-navy-950">{selectedFeedback.title}</h2>
+                <p className="mt-1 text-sm font-semibold text-muted">{selectedFeedback.sentAt} · {selectedFeedback.category}</p>
+              </div>
+              <button type="button" onClick={() => setSelectedFeedback(null)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <InfoBox label="Colaborador" value={`${selectedFeedback.employeeName} · ${selectedFeedback.wbLogin}`} />
+              <InfoBox label="Supervisor" value={selectedFeedback.supervisor} />
+              <InfoBox label="Autor" value={`${selectedFeedback.authorName} · ${selectedFeedback.authorRole}`} />
+              <InfoBox label="Ciência" value={selectedFeedback.acknowledgedAt || "Pendente"} />
+            </div>
+            <div className="mt-4 rounded-xl border border-border bg-slate-50 p-4">
+              <p className="text-xs font-black uppercase tracking-wide text-muted">Descrição do feedback</p>
+              <p className="mt-2 whitespace-pre-wrap text-sm font-semibold leading-6 text-navy-950">{selectedFeedback.description}</p>
+            </div>
+            {selectedFeedback.employeeResponse ? (
+              <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 p-4">
+                <p className="text-xs font-black uppercase tracking-wide text-blue-700">Resposta/observação do agente</p>
+                <p className="mt-2 whitespace-pre-wrap text-sm font-semibold leading-6 text-blue-900">{selectedFeedback.employeeResponse}</p>
+              </div>
+            ) : null}
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              {selectedFeedback.employeeId === viewerEmployeeId && !["CIENTE", "ARQUIVADO"].includes(selectedFeedback.status) ? (
+                <button type="button" onClick={() => setAcknowledgeOpen(true)} className="premium-button h-10 px-4 text-sm font-extrabold">Confirmar ciência</button>
+              ) : null}
+              {canExport && selectedFeedback.status !== "ARQUIVADO" ? (
+                <button type="button" onClick={() => archiveFeedback(selectedFeedback)} disabled={saving} className="h-10 rounded-lg border border-border px-4 text-sm font-extrabold text-navy-950 disabled:opacity-60">Arquivar</button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {acknowledgeOpen && selectedFeedback ? (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-navy-950/45 p-4 backdrop-blur-sm">
+          <div className="card w-full max-w-xl overflow-hidden">
+            <div className="border-b border-border bg-gradient-to-b from-white to-blue-50/70 px-5 py-4">
+              <h2 className="text-lg font-black text-navy-950">Confirmar ciência</h2>
+              <p className="mt-1 text-sm font-semibold text-muted">Confirme que você leu este feedback. Você pode adicionar uma observação, se desejar.</p>
+            </div>
+            <div className="p-5">
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-bold text-muted">Observação/resposta do agente (opcional)</span>
+                <textarea value={acknowledgeResponse} onChange={(event) => setAcknowledgeResponse(event.target.value)} className="min-h-32 w-full rounded-lg border border-border p-3 text-sm font-semibold outline-none" placeholder="Escreva uma observação, se quiser registrar contexto." />
+              </label>
+              <div className="mt-5 flex justify-end gap-2">
+                <button type="button" onClick={() => setAcknowledgeOpen(false)} className="h-10 rounded-lg border border-border px-4 text-sm font-extrabold text-navy-950">Voltar</button>
+                <button type="button" onClick={confirmAcknowledge} disabled={saving} className="premium-button h-10 px-4 text-sm font-extrabold disabled:opacity-60">
+                  {saving ? "Confirmando..." : "Confirmar ciência"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function buildFormalFeedbackParams(filters: {
+  employeeId?: string;
+  startDate: string;
+  endDate: string;
+  status: string;
+  type: string;
+  category: string;
+  lob: string;
+  supervisor: string;
+  jobTitle: string;
+  skill: string;
+  search: string;
+}) {
+  const params = new URLSearchParams();
+  if (filters.employeeId) params.set("employeeId", filters.employeeId);
+  if (filters.startDate) params.set("startDate", filters.startDate);
+  if (filters.endDate) params.set("endDate", filters.endDate);
+  if (filters.status !== "Todos") params.set("status", filters.status);
+  if (filters.type !== "Todos") params.set("type", filters.type);
+  if (filters.category !== "Todos") params.set("category", filters.category);
+  if (filters.lob.trim()) params.set("lob", filters.lob.trim());
+  if (filters.supervisor.trim()) params.set("supervisor", filters.supervisor.trim());
+  if (filters.jobTitle.trim()) params.set("jobTitle", filters.jobTitle.trim());
+  if (filters.skill.trim()) params.set("skill", filters.skill.trim());
+  if (filters.search.trim()) params.set("search", filters.search.trim());
+  return params;
+}
+
+function FormalFeedbackTypeBadge({ type }: { type: string }) {
+  const positive = type.toLowerCase().includes("positivo");
+  return (
+    <span className={cn("inline-flex rounded-md px-2 py-1 text-[11px] font-extrabold", positive ? "bg-emerald-50 text-emerald-700" : "bg-orange-50 text-orange-700")}>
+      {type}
+    </span>
+  );
+}
+
+function InfoBox({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="rounded-xl border border-border bg-white p-3">
+      <p className="text-xs font-black uppercase tracking-wide text-muted">{label}</p>
+      <div className="mt-1 break-words text-sm font-extrabold text-navy-950">{value || "-"}</div>
     </div>
   );
 }

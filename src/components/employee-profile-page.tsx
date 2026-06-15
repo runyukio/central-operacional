@@ -127,6 +127,32 @@ type ProfilePayload = {
       finalAmount: number;
       message: string;
     };
+    formalFeedback: {
+      pending: number;
+      totalMonth: number;
+      latest: null | {
+        id: string;
+        typeLabel: string;
+        category: string;
+        title: string;
+        statusLabel: string;
+        sentAt: string;
+        authorName: string;
+        acknowledgedAt: string;
+        employeeResponse: string;
+      };
+      recent: Array<{
+        id: string;
+        typeLabel: string;
+        category: string;
+        title: string;
+        statusLabel: string;
+        sentAt: string;
+        authorName: string;
+        acknowledgedAt: string;
+        employeeResponse: string;
+      }>;
+    };
     updatedAt: string;
   };
 };
@@ -278,7 +304,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
         </Panel>
       </div>
 
-      <div className={cn("grid gap-4", data.billing ? "xl:grid-cols-2 2xl:grid-cols-4" : "xl:grid-cols-3")}>
+      <div className={cn("grid gap-4", data.billing ? "xl:grid-cols-2 2xl:grid-cols-5" : "xl:grid-cols-4")}>
         {data.billing ? (
           <Panel title="Prévia de Invoice" action="Ver detalhes" actionOnClick={() => window.location.assign(profileLinks.invoice)}>
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -354,6 +380,40 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
           <p className="mt-3 text-sm font-semibold text-muted">
             Última resposta: {data.mood.lastResponseAt ? `${data.mood.lastResponseAt} • ${data.mood.lastLabel}` : "Sem registro no período"}
           </p>
+        </Panel>
+
+        <Panel title="Feedbacks Recebidos" action="Ver feedbacks" actionOnClick={() => window.location.assign(profileLinks.formalFeedback)}>
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+            <MetricBox label="Pendentes de ciência" value={data.formalFeedback.pending} tone={data.formalFeedback.pending ? "red" : "green"} />
+            <MetricBox label="Total no mês" value={data.formalFeedback.totalMonth} />
+          </div>
+          <div className="mt-3 rounded-lg border border-border bg-slate-50 p-3 text-sm">
+            <p className="text-xs font-black uppercase tracking-wide text-muted">Último feedback</p>
+            {data.formalFeedback.latest ? (
+              <div className="mt-2">
+                <p className="line-clamp-2 font-extrabold text-navy-950">{data.formalFeedback.latest.title}</p>
+                <p className="mt-1 text-xs font-bold text-muted">{data.formalFeedback.latest.category} • {data.formalFeedback.latest.typeLabel} • {data.formalFeedback.latest.authorName}</p>
+                <StatusBadge status={data.formalFeedback.latest.statusLabel} />
+              </div>
+            ) : (
+              <p className="mt-1 font-bold text-muted">Sem feedback formal registrado.</p>
+            )}
+          </div>
+          {data.formalFeedback.recent.length ? (
+            <div className="mt-3 space-y-2">
+              {data.formalFeedback.recent.slice(0, 3).map((feedback) => (
+                <div key={feedback.id} className="rounded-lg border border-border bg-white p-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="line-clamp-1 text-sm font-extrabold text-navy-950">{feedback.title}</p>
+                      <p className="mt-1 text-xs font-semibold text-muted">{feedback.sentAt} • {feedback.category}</p>
+                    </div>
+                    <StatusBadge status={feedback.statusLabel} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </Panel>
       </div>
 
@@ -434,6 +494,7 @@ function buildProfileActionLinks(data: ProfilePayload["data"]) {
       : `/performance?view=wfh&employeeId=${employeeId}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`,
     requests: `/solicitacoes?employeeId=${employeeId}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`,
     equipment: `/equipamentos?responsibleId=${employeeId}`,
+    formalFeedback: `/feedbacks?employeeId=${employeeId}`,
     invoice: ownProfile
       ? `/meu-perfil/invoice?referenceMonth=${encodeURIComponent(data.billing?.referenceMonth ?? referenceMonth)}`
       : `/billing?employeeId=${employeeId}&referenceMonth=${encodeURIComponent(data.billing?.referenceMonth ?? referenceMonth)}&tab=employees`

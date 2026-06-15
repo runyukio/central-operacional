@@ -14,6 +14,7 @@ const centralRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "QUALID
 const leadership: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH", "COORDENADOR", "GERENTE"];
 const peopleOps: AppRole[] = ["ADMIN", "GESTOR", "RH", "WFM"];
 const authenticatedOps: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI"];
+const formalFeedbackRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "COLABORADOR", "WFM", "RH", "COORDENADOR", "GERENTE"];
 
 export const navItems: NavItem[] = [
   { label: "Central Operacional", href: "/central-operacional", icon: "LayoutDashboard", roles: centralRoles },
@@ -30,6 +31,7 @@ export const navItems: NavItem[] = [
   { label: "Requerido", href: "/staff-cobertura", icon: "UsersRound", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"] },
   { label: "Performance", href: "/performance", icon: "Trophy", roles: performanceRoles },
   { label: "Equipamentos e Logística", href: "/equipamentos", icon: "MonitorCog", roles: ["ADMIN", "GESTOR", "TI"] },
+  { label: "Feedback Formal", href: "/feedbacks", icon: "MessagesSquare", roles: formalFeedbackRoles },
   { label: "Feedback Anônimo", href: "/feedback-anonimo", icon: "MessageCircleQuestion", roles: nonClientRoles },
   { label: "Billing", href: "/billing", icon: "Coins", roles: ["ADMIN"] },
   { label: "Configurações", href: "/configuracoes", icon: "Settings", roles: ["ADMIN"] }

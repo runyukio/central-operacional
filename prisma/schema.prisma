@@ -114,6 +114,18 @@ enum AnonymousFeedbackStatus {
   ARQUIVADO
 }
 
+enum FormalFeedbackType {
+  POSITIVO
+  CORRETIVO
+}
+
+enum FormalFeedbackStatus {
+  PENDENTE_CIENCIA
+  VISUALIZADO
+  CIENTE
+  ARQUIVADO
+}
+
 enum TokenTransactionType {
   GANHO
   RESGATE
@@ -265,80 +277,83 @@ model UserPermission {
 }
 
 model User {
-  id                      String                  @id @default(cuid())
-  email                   String                  @unique
-  name                    String
-  passwordHash            String
-  mustChangePassword      Boolean                 @default(false)
-  passwordChangedAt       DateTime?
-  temporaryPassword       Boolean                 @default(false)
-  lastPasswordResetAt     DateTime?
-  passwordResetById       String?
-  avatarUrl               String?
-  status                  UserStatus              @default(ACTIVE)
-  roleId                  String
-  role                    Role                    @relation(fields: [roleId], references: [id])
-  permissions             UserPermission[]
-  employeeProfile         EmployeeProfile?
-  requestedRequests       Request[]               @relation("RequestRequester")
-  assignedRequests        Request[]               @relation("RequestAssignee")
-  requestComments         RequestComment[]
-  requestHistory          RequestHistory[]
-  approvalSteps           ApprovalStep[]
-  authoredAnnouncements   Announcement[]
-  announcementReads       AnnouncementRead[]
-  notifications           Notification[]
-  authoredFeedbacks       QualityFeedback[]       @relation("FeedbackAuthor")
-  qualityMaterials        QualityMaterial[]
-  climateAnswers          ClimateAnswer[]
-  rewardRedemptions       RewardRedemption[]
-  chatParticipants        ChatParticipant[]
-  chatMessages            ChatMessage[]
-  auditLogs               AuditLog[]
-  scheduleImports         ScheduleImport[]
-  scheduleChangeHistories ScheduleChangeHistory[]
-  equipmentHistories      EquipmentHistory[]
-  equipmentTickets        EquipmentTicket[]
-  registeredAttendances   AttendanceRecord[]      @relation("AttendanceRegisteredBy")
-  justifiedAttendances    AttendanceRecord[]      @relation("AttendanceJustifiedBy")
-  attendanceHistories     AttendanceHistory[]     @relation("AttendanceHistoryChangedBy")
-  workHourImports         WorkHourImportBatch[]   @relation("WorkHourImportUploadedBy")
-  performanceImports      PerformanceImportBatch[] @relation("PerformanceImportUploadedBy")
-  workSessionExports      WorkSessionDailySummary[] @relation("WorkSessionSummaryExportedBy")
-  requestedWorkHourAdjustments WorkHourAdjustmentRequest[] @relation("WorkHourAdjustmentRequestedBy")
-  approvedWorkHourAdjustments  WorkHourAdjustmentRequest[] @relation("WorkHourAdjustmentApprovedBy")
-  rejectedWorkHourAdjustments  WorkHourAdjustmentRequest[] @relation("WorkHourAdjustmentRejectedBy")
-  workHourHistories       WorkHourHistory[]       @relation("WorkHourHistoryChangedBy")
-  monthlyAdvanceUpdates   MonthlyAdvanceRecord[]  @relation("MonthlyAdvanceUpdatedBy")
-  billingCyclesFinalized  BillingCycle[]          @relation("BillingCycleFinalizedBy")
-  billingCyclesClosed     BillingCycle[]          @relation("BillingCycleClosedBy")
-  billingInvoiceApprovals BillingEmployeeInvoice[] @relation("BillingInvoiceApprovedBy")
-  billingInvoiceReopens   BillingEmployeeInvoice[] @relation("BillingInvoiceReopenedBy")
-  billingAdjustmentsCreated BillingAdjustment[]    @relation("BillingAdjustmentCreatedBy")
-  invoiceAdjustmentSupervisorChecks InvoiceAdjustmentRequest[] @relation("InvoiceAdjustmentSupervisorCheckedBy")
-  invoiceAdjustmentAdminDecisions InvoiceAdjustmentRequest[] @relation("InvoiceAdjustmentAdminDecidedBy")
-  billingRateUpdates      BillingRateConfig[]     @relation("BillingRateUpdatedBy")
-  createdStaffCoverages   StaffCoverage[]         @relation("StaffCoverageCreatedBy")
-  updatedStaffCoverages   StaffCoverage[]         @relation("StaffCoverageUpdatedBy")
-  moodRecords             EmployeeMoodRecord[]
-  createdAt               DateTime                @default(now())
-  updatedAt               DateTime                @updatedAt
-  deletedAt               DateTime?
+  id                                String                      @id @default(cuid())
+  email                             String                      @unique
+  name                              String
+  passwordHash                      String
+  mustChangePassword                Boolean                     @default(false)
+  passwordChangedAt                 DateTime?
+  temporaryPassword                 Boolean                     @default(false)
+  lastPasswordResetAt               DateTime?
+  passwordResetById                 String?
+  avatarUrl                         String?
+  status                            UserStatus                  @default(ACTIVE)
+  roleId                            String
+  role                              Role                        @relation(fields: [roleId], references: [id])
+  permissions                       UserPermission[]
+  employeeProfile                   EmployeeProfile?
+  requestedRequests                 Request[]                   @relation("RequestRequester")
+  assignedRequests                  Request[]                   @relation("RequestAssignee")
+  requestComments                   RequestComment[]
+  requestHistory                    RequestHistory[]
+  approvalSteps                     ApprovalStep[]
+  authoredAnnouncements             Announcement[]
+  announcementReads                 AnnouncementRead[]
+  notifications                     Notification[]
+  authoredFeedbacks                 QualityFeedback[]           @relation("FeedbackAuthor")
+  createdFormalFeedbacks            FormalFeedback[]            @relation("FormalFeedbackAuthor")
+  updatedFormalFeedbacks            FormalFeedback[]            @relation("FormalFeedbackUpdatedBy")
+  acknowledgedFormalFeedbacks       FormalFeedback[]            @relation("FormalFeedbackAcknowledgedBy")
+  qualityMaterials                  QualityMaterial[]
+  climateAnswers                    ClimateAnswer[]
+  rewardRedemptions                 RewardRedemption[]
+  chatParticipants                  ChatParticipant[]
+  chatMessages                      ChatMessage[]
+  auditLogs                         AuditLog[]
+  scheduleImports                   ScheduleImport[]
+  scheduleChangeHistories           ScheduleChangeHistory[]
+  equipmentHistories                EquipmentHistory[]
+  equipmentTickets                  EquipmentTicket[]
+  registeredAttendances             AttendanceRecord[]          @relation("AttendanceRegisteredBy")
+  justifiedAttendances              AttendanceRecord[]          @relation("AttendanceJustifiedBy")
+  attendanceHistories               AttendanceHistory[]         @relation("AttendanceHistoryChangedBy")
+  workHourImports                   WorkHourImportBatch[]       @relation("WorkHourImportUploadedBy")
+  performanceImports                PerformanceImportBatch[]    @relation("PerformanceImportUploadedBy")
+  workSessionExports                WorkSessionDailySummary[]   @relation("WorkSessionSummaryExportedBy")
+  requestedWorkHourAdjustments      WorkHourAdjustmentRequest[] @relation("WorkHourAdjustmentRequestedBy")
+  approvedWorkHourAdjustments       WorkHourAdjustmentRequest[] @relation("WorkHourAdjustmentApprovedBy")
+  rejectedWorkHourAdjustments       WorkHourAdjustmentRequest[] @relation("WorkHourAdjustmentRejectedBy")
+  workHourHistories                 WorkHourHistory[]           @relation("WorkHourHistoryChangedBy")
+  monthlyAdvanceUpdates             MonthlyAdvanceRecord[]      @relation("MonthlyAdvanceUpdatedBy")
+  billingCyclesFinalized            BillingCycle[]              @relation("BillingCycleFinalizedBy")
+  billingCyclesClosed               BillingCycle[]              @relation("BillingCycleClosedBy")
+  billingInvoiceApprovals           BillingEmployeeInvoice[]    @relation("BillingInvoiceApprovedBy")
+  billingInvoiceReopens             BillingEmployeeInvoice[]    @relation("BillingInvoiceReopenedBy")
+  billingAdjustmentsCreated         BillingAdjustment[]         @relation("BillingAdjustmentCreatedBy")
+  invoiceAdjustmentSupervisorChecks InvoiceAdjustmentRequest[]  @relation("InvoiceAdjustmentSupervisorCheckedBy")
+  invoiceAdjustmentAdminDecisions   InvoiceAdjustmentRequest[]  @relation("InvoiceAdjustmentAdminDecidedBy")
+  billingRateUpdates                BillingRateConfig[]         @relation("BillingRateUpdatedBy")
+  createdStaffCoverages             StaffCoverage[]             @relation("StaffCoverageCreatedBy")
+  updatedStaffCoverages             StaffCoverage[]             @relation("StaffCoverageUpdatedBy")
+  moodRecords                       EmployeeMoodRecord[]
+  createdAt                         DateTime                    @default(now())
+  updatedAt                         DateTime                    @updatedAt
+  deletedAt                         DateTime?
 }
 
 model Lob {
-  id             String            @id @default(cuid())
-  name           String            @unique
-  description    String?
-  teams          Team[]
-  employees      EmployeeProfile[]
-  staffCoverages StaffCoverage[]
-  qualityRecords QualityRecord[]
-  tnsQualityRecords TnsQualityRecord[]
-  cecQualityRecords CecQualityRecord[]
-  productionRecords ProductionRecord[]
+  id                 String              @id @default(cuid())
+  name               String              @unique
+  description        String?
+  teams              Team[]
+  employees          EmployeeProfile[]
+  staffCoverages     StaffCoverage[]
+  qualityRecords     QualityRecord[]
+  tnsQualityRecords  TnsQualityRecord[]
+  cecQualityRecords  CecQualityRecord[]
+  productionRecords  ProductionRecord[]
   billingAdjustments BillingAdjustment[]
-  createdAt      DateTime          @default(now())
+  createdAt          DateTime            @default(now())
 }
 
 model Team {
@@ -368,87 +383,88 @@ model Shift {
 }
 
 model EmployeeProfile {
-  id                 String                  @id @default(cuid())
-  userId             String?                 @unique
-  user               User?                   @relation(fields: [userId], references: [id], onDelete: SetNull)
-  wbLogin            String                  @unique
-  fullName           String
-  socialName         String?
-  primaryPhone       String?
-  city               String?
-  stateUf            String?
-  preferredSchedule  String?
-  pixKey             String?
-  pixKeyType         String?
-  roleTitle          String
-  admissionDate      DateTime
-  trainingStartDate  DateTime?
-  terminationDate    DateTime?
-  terminationType    String?
-  terminationReason  String?
-  ethnicity          String?
-  sexualOrientation  String?
-  isPcd              String?
-  pcdDisabilityType  String?
-  pcdDisabilityOther String?
-  firstJob           String?
+  id                         String                      @id @default(cuid())
+  userId                     String?                     @unique
+  user                       User?                       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  wbLogin                    String                      @unique
+  fullName                   String
+  socialName                 String?
+  primaryPhone               String?
+  city                       String?
+  stateUf                    String?
+  preferredSchedule          String?
+  pixKey                     String?
+  pixKeyType                 String?
+  roleTitle                  String
+  admissionDate              DateTime
+  trainingStartDate          DateTime?
+  terminationDate            DateTime?
+  terminationType            String?
+  terminationReason          String?
+  ethnicity                  String?
+  sexualOrientation          String?
+  isPcd                      String?
+  pcdDisabilityType          String?
+  pcdDisabilityOther         String?
+  firstJob                   String?
   hasTelemarketingExperience String?
-  telemarketingWhere String?
-  additionalDataCompletedAt DateTime?
-  additionalDataUpdatedAt   DateTime?
-  additionalDataSource      String?
-  nestingStartDate   DateTime?
-  goLiveDate         DateTime?
-  workStartTime      String?
-  workEndTime        String?
-  scheduleType       String
-  contractType       String?
-  siteOperation      String?
-  internalNotes      String?
-  skill              String?
-  wave               String?
-  operationalStatus  String                  @default("Online")
-  lobId              String
-  teamId             String
-  supervisorId       String?
-  managerId          String?
-  shiftId            String
-  lob                Lob                     @relation(fields: [lobId], references: [id])
-  team               Team                    @relation("TeamEmployees", fields: [teamId], references: [id])
-  supervisor         EmployeeProfile?        @relation("SupervisorTree", fields: [supervisorId], references: [id])
-  supervisees        EmployeeProfile[]       @relation("SupervisorTree")
-  manager            EmployeeProfile?        @relation("EmployeeHierarchy", fields: [managerId], references: [id], onDelete: SetNull)
-  directReports      EmployeeProfile[]       @relation("EmployeeHierarchy")
-  supervisedTeams    Team[]                  @relation("TeamSupervisor")
-  shift              Shift                   @relation(fields: [shiftId], references: [id])
-  schedules          Schedule[]
-  attendanceRecords  AttendanceRecord[]
-  workHourRecords    WorkHourRecord[]
-  workHourAdjustments WorkHourAdjustmentRequest[]
-  monthlyAdvanceRecords MonthlyAdvanceRecord[]
-  billingInvoices    BillingEmployeeInvoice[]
-  billingAdjustments BillingAdjustment[]
-  invoiceAdjustmentRequests InvoiceAdjustmentRequest[]
-  scheduleChanges    ScheduleChangeHistory[]
-  requests           Request[]
-  performanceMetrics PerformanceMetric[]
-  qualityRecords     QualityRecord[]
-  tnsQualityRecords  TnsQualityRecord[]
-  cecQualityRecords  CecQualityRecord[]
-  productionRecords  ProductionRecord[]
-  workSessionDevices  WorkSessionDevice[]
-  workSessionEvents   WorkSessionEvent[]
-  workSessionDailySummaries WorkSessionDailySummary[]
-  qualityFeedbacks   QualityFeedback[]       @relation("FeedbackEmployee")
-  equipments         Equipment[]
-  equipmentTickets   EquipmentTicket[]
-  tokenBalance       TokenBalance?
-  tokenTransactions  TokenTransaction[]
-  rewardRedemptions  RewardRedemption[]
-  moodRecords        EmployeeMoodRecord[]
-  createdAt          DateTime                @default(now())
-  updatedAt          DateTime                @updatedAt
-  deletedAt          DateTime?
+  telemarketingWhere         String?
+  additionalDataCompletedAt  DateTime?
+  additionalDataUpdatedAt    DateTime?
+  additionalDataSource       String?
+  nestingStartDate           DateTime?
+  goLiveDate                 DateTime?
+  workStartTime              String?
+  workEndTime                String?
+  scheduleType               String
+  contractType               String?
+  siteOperation              String?
+  internalNotes              String?
+  skill                      String?
+  wave                       String?
+  operationalStatus          String                      @default("Online")
+  lobId                      String
+  teamId                     String
+  supervisorId               String?
+  managerId                  String?
+  shiftId                    String
+  lob                        Lob                         @relation(fields: [lobId], references: [id])
+  team                       Team                        @relation("TeamEmployees", fields: [teamId], references: [id])
+  supervisor                 EmployeeProfile?            @relation("SupervisorTree", fields: [supervisorId], references: [id])
+  supervisees                EmployeeProfile[]           @relation("SupervisorTree")
+  manager                    EmployeeProfile?            @relation("EmployeeHierarchy", fields: [managerId], references: [id], onDelete: SetNull)
+  directReports              EmployeeProfile[]           @relation("EmployeeHierarchy")
+  supervisedTeams            Team[]                      @relation("TeamSupervisor")
+  shift                      Shift                       @relation(fields: [shiftId], references: [id])
+  schedules                  Schedule[]
+  attendanceRecords          AttendanceRecord[]
+  workHourRecords            WorkHourRecord[]
+  workHourAdjustments        WorkHourAdjustmentRequest[]
+  monthlyAdvanceRecords      MonthlyAdvanceRecord[]
+  billingInvoices            BillingEmployeeInvoice[]
+  billingAdjustments         BillingAdjustment[]
+  invoiceAdjustmentRequests  InvoiceAdjustmentRequest[]
+  scheduleChanges            ScheduleChangeHistory[]
+  requests                   Request[]
+  performanceMetrics         PerformanceMetric[]
+  qualityRecords             QualityRecord[]
+  tnsQualityRecords          TnsQualityRecord[]
+  cecQualityRecords          CecQualityRecord[]
+  productionRecords          ProductionRecord[]
+  workSessionDevices         WorkSessionDevice[]
+  workSessionEvents          WorkSessionEvent[]
+  workSessionDailySummaries  WorkSessionDailySummary[]
+  qualityFeedbacks           QualityFeedback[]           @relation("FeedbackEmployee")
+  formalFeedbacks            FormalFeedback[]            @relation("FormalFeedbackEmployee")
+  equipments                 Equipment[]
+  equipmentTickets           EquipmentTicket[]
+  tokenBalance               TokenBalance?
+  tokenTransactions          TokenTransaction[]
+  rewardRedemptions          RewardRedemption[]
+  moodRecords                EmployeeMoodRecord[]
+  createdAt                  DateTime                    @default(now())
+  updatedAt                  DateTime                    @updatedAt
+  deletedAt                  DateTime?
 
   @@index([lobId])
   @@index([teamId])
@@ -477,7 +493,7 @@ model Schedule {
   employee          EmployeeProfile    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   shift             Shift?             @relation(fields: [shiftId], references: [id])
   attendanceRecords AttendanceRecord[]
-  workHourRecords    WorkHourRecord[]
+  workHourRecords   WorkHourRecord[]
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
   deletedAt         DateTime?
@@ -555,30 +571,30 @@ model RequestType {
 }
 
 model Request {
-  id            String             @id @default(cuid())
-  code          String             @unique
-  title         String
-  description   String
-  requesterId   String
-  employeeId    String?
-  typeId        String
-  assigneeId    String?
-  assignedArea  String
-  priority      Priority           @default(MEDIA)
-  status        RequestStatus      @default(ABERTO)
-  payload       Json?
-  requester     User               @relation("RequestRequester", fields: [requesterId], references: [id])
-  employee      EmployeeProfile?   @relation(fields: [employeeId], references: [id])
-  type          RequestType        @relation(fields: [typeId], references: [id])
-  assignee      User?              @relation("RequestAssignee", fields: [assigneeId], references: [id])
-  comments      RequestComment[]
-  history       RequestHistory[]
-  approvalFlows ApprovalFlow[]
-  redemptions   RewardRedemption[]
+  id                       String                    @id @default(cuid())
+  code                     String                    @unique
+  title                    String
+  description              String
+  requesterId              String
+  employeeId               String?
+  typeId                   String
+  assigneeId               String?
+  assignedArea             String
+  priority                 Priority                  @default(MEDIA)
+  status                   RequestStatus             @default(ABERTO)
+  payload                  Json?
+  requester                User                      @relation("RequestRequester", fields: [requesterId], references: [id])
+  employee                 EmployeeProfile?          @relation(fields: [employeeId], references: [id])
+  type                     RequestType               @relation(fields: [typeId], references: [id])
+  assignee                 User?                     @relation("RequestAssignee", fields: [assigneeId], references: [id])
+  comments                 RequestComment[]
+  history                  RequestHistory[]
+  approvalFlows            ApprovalFlow[]
+  redemptions              RewardRedemption[]
   invoiceAdjustmentRequest InvoiceAdjustmentRequest?
-  createdAt     DateTime           @default(now())
-  updatedAt     DateTime           @updatedAt
-  deletedAt     DateTime?
+  createdAt                DateTime                  @default(now())
+  updatedAt                DateTime                  @updatedAt
+  deletedAt                DateTime?
 
   @@index([requesterId])
   @@index([employeeId])
@@ -621,60 +637,60 @@ model MonthlyAdvanceRecord {
 }
 
 model BillingCycle {
-  id                   String                   @id @default(cuid())
-  referenceMonth       String                   @unique
-  status               String                   @default("ABERTO")
-  grossAmount          Decimal                  @default(0) @db.Decimal(12, 2)
-  adjustmentsAmount    Decimal                  @default(0) @db.Decimal(12, 2)
-  finalAmount          Decimal                  @default(0) @db.Decimal(12, 2)
-  totalApprovedMinutes Int                      @default(0)
-  finalizedAt          DateTime?
-  finalizedById        String?
-  finalizedBy          User?                    @relation("BillingCycleFinalizedBy", fields: [finalizedById], references: [id], onDelete: SetNull)
-  closedAt             DateTime?
-  closedById           String?
-  closedBy             User?                    @relation("BillingCycleClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
-  sentAt               DateTime?
-  paidAt               DateTime?
-  notes                String?
-  invoices             BillingEmployeeInvoice[]
-  adjustments          BillingAdjustment[]
+  id                        String                     @id @default(cuid())
+  referenceMonth            String                     @unique
+  status                    String                     @default("ABERTO")
+  grossAmount               Decimal                    @default(0) @db.Decimal(12, 2)
+  adjustmentsAmount         Decimal                    @default(0) @db.Decimal(12, 2)
+  finalAmount               Decimal                    @default(0) @db.Decimal(12, 2)
+  totalApprovedMinutes      Int                        @default(0)
+  finalizedAt               DateTime?
+  finalizedById             String?
+  finalizedBy               User?                      @relation("BillingCycleFinalizedBy", fields: [finalizedById], references: [id], onDelete: SetNull)
+  closedAt                  DateTime?
+  closedById                String?
+  closedBy                  User?                      @relation("BillingCycleClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
+  sentAt                    DateTime?
+  paidAt                    DateTime?
+  notes                     String?
+  invoices                  BillingEmployeeInvoice[]
+  adjustments               BillingAdjustment[]
   invoiceAdjustmentRequests InvoiceAdjustmentRequest[]
-  createdAt            DateTime                 @default(now())
-  updatedAt            DateTime                 @updatedAt
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
 
   @@index([referenceMonth])
   @@index([status])
 }
 
 model BillingEmployeeInvoice {
-  id                       String                    @id @default(cuid())
+  id                       String                     @id @default(cuid())
   billingCycleId           String
   employeeId               String
   referenceMonth           String
-  status                   String                    @default("EM_PREVISAO")
-  approvedMinutes          Int                       @default(0)
-  projectedMinutes         Int                       @default(0)
-  totalConsideredMinutes   Int                       @default(0)
-  hourlyRate               Decimal                   @default(0) @db.Decimal(10, 2)
+  status                   String                     @default("EM_PREVISAO")
+  approvedMinutes          Int                        @default(0)
+  projectedMinutes         Int                        @default(0)
+  totalConsideredMinutes   Int                        @default(0)
+  hourlyRate               Decimal                    @default(0) @db.Decimal(10, 2)
   billingRule              String
-  grossAmount              Decimal                   @default(0) @db.Decimal(12, 2)
-  advanceAmount            Decimal                   @default(0) @db.Decimal(12, 2)
-  campaignAmount           Decimal                   @default(0) @db.Decimal(12, 2)
-  adjustmentAmount         Decimal                   @default(0) @db.Decimal(12, 2)
-  finalAmount              Decimal                   @default(0) @db.Decimal(12, 2)
+  grossAmount              Decimal                    @default(0) @db.Decimal(12, 2)
+  advanceAmount            Decimal                    @default(0) @db.Decimal(12, 2)
+  campaignAmount           Decimal                    @default(0) @db.Decimal(12, 2)
+  adjustmentAmount         Decimal                    @default(0) @db.Decimal(12, 2)
+  finalAmount              Decimal                    @default(0) @db.Decimal(12, 2)
   approvedByEmployeeAt     DateTime?
   approvedByEmployeeUserId String?
-  approvedByEmployeeUser   User?                     @relation("BillingInvoiceApprovedBy", fields: [approvedByEmployeeUserId], references: [id], onDelete: SetNull)
+  approvedByEmployeeUser   User?                      @relation("BillingInvoiceApprovedBy", fields: [approvedByEmployeeUserId], references: [id], onDelete: SetNull)
   reopenedAt               DateTime?
   reopenedById             String?
-  reopenedBy               User?                     @relation("BillingInvoiceReopenedBy", fields: [reopenedById], references: [id], onDelete: SetNull)
-  billingCycle             BillingCycle              @relation(fields: [billingCycleId], references: [id], onDelete: Cascade)
-  employee                 EmployeeProfile           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  reopenedBy               User?                      @relation("BillingInvoiceReopenedBy", fields: [reopenedById], references: [id], onDelete: SetNull)
+  billingCycle             BillingCycle               @relation(fields: [billingCycleId], references: [id], onDelete: Cascade)
+  employee                 EmployeeProfile            @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   adjustments              BillingAdjustment[]
   adjustmentRequests       InvoiceAdjustmentRequest[]
-  createdAt                DateTime                  @default(now())
-  updatedAt                DateTime                  @updatedAt
+  createdAt                DateTime                   @default(now())
+  updatedAt                DateTime                   @updatedAt
 
   @@unique([billingCycleId, employeeId])
   @@index([employeeId, referenceMonth])
@@ -715,33 +731,33 @@ model BillingAdjustment {
 
 model InvoiceAdjustmentRequest {
   id                    String                 @id @default(cuid())
-  billingCycleId         String
-  employeeInvoiceId      String
-  employeeId             String
-  requestId              String?                @unique
-  type                   String
-  questionedItem         String
-  description            String
-  supervisorChecked      Boolean                @default(false)
-  supervisorObservation  String?
-  supervisorCheckedById  String?
-  supervisorCheckedAt    DateTime?
-  adminDecision          String?
-  adminFinalResponse     String?
-  adminAdjustmentAmount  Decimal?               @db.Decimal(12, 2)
-  adminFinalMinutes      Int?
-  adminDecidedById       String?
-  adminDecidedAt         DateTime?
-  status                 String                 @default("AGUARDANDO_SUPERVISOR")
-  billingCycle           BillingCycle           @relation(fields: [billingCycleId], references: [id], onDelete: Cascade)
-  employeeInvoice        BillingEmployeeInvoice @relation(fields: [employeeInvoiceId], references: [id], onDelete: Cascade)
-  employee               EmployeeProfile        @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  request                Request?               @relation(fields: [requestId], references: [id], onDelete: SetNull)
-  supervisorCheckedBy    User?                  @relation("InvoiceAdjustmentSupervisorCheckedBy", fields: [supervisorCheckedById], references: [id], onDelete: SetNull)
-  adminDecidedBy         User?                  @relation("InvoiceAdjustmentAdminDecidedBy", fields: [adminDecidedById], references: [id], onDelete: SetNull)
-  createdAt              DateTime               @default(now())
-  updatedAt              DateTime               @updatedAt
-  completedAt            DateTime?
+  billingCycleId        String
+  employeeInvoiceId     String
+  employeeId            String
+  requestId             String?                @unique
+  type                  String
+  questionedItem        String
+  description           String
+  supervisorChecked     Boolean                @default(false)
+  supervisorObservation String?
+  supervisorCheckedById String?
+  supervisorCheckedAt   DateTime?
+  adminDecision         String?
+  adminFinalResponse    String?
+  adminAdjustmentAmount Decimal?               @db.Decimal(12, 2)
+  adminFinalMinutes     Int?
+  adminDecidedById      String?
+  adminDecidedAt        DateTime?
+  status                String                 @default("AGUARDANDO_SUPERVISOR")
+  billingCycle          BillingCycle           @relation(fields: [billingCycleId], references: [id], onDelete: Cascade)
+  employeeInvoice       BillingEmployeeInvoice @relation(fields: [employeeInvoiceId], references: [id], onDelete: Cascade)
+  employee              EmployeeProfile        @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  request               Request?               @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  supervisorCheckedBy   User?                  @relation("InvoiceAdjustmentSupervisorCheckedBy", fields: [supervisorCheckedById], references: [id], onDelete: SetNull)
+  adminDecidedBy        User?                  @relation("InvoiceAdjustmentAdminDecidedBy", fields: [adminDecidedById], references: [id], onDelete: SetNull)
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  completedAt           DateTime?
 
   @@index([billingCycleId])
   @@index([employeeInvoiceId])
@@ -895,24 +911,24 @@ model PerformanceMetric {
 }
 
 model PerformanceImportBatch {
-  id           String          @id @default(cuid())
-  type         String
-  fileName     String
-  rowsTotal    Int             @default(0)
-  rowsValid    Int             @default(0)
-  rowsError    Int             @default(0)
-  rowsInserted Int             @default(0)
-  rowsUpdated  Int             @default(0)
-  status       String          @default("SUCCESS")
-  errorSummary String?
-  importedById String?
-  importedBy   User?           @relation("PerformanceImportUploadedBy", fields: [importedById], references: [id], onDelete: SetNull)
-  qualityRecords QualityRecord[]
+  id                String             @id @default(cuid())
+  type              String
+  fileName          String
+  rowsTotal         Int                @default(0)
+  rowsValid         Int                @default(0)
+  rowsError         Int                @default(0)
+  rowsInserted      Int                @default(0)
+  rowsUpdated       Int                @default(0)
+  status            String             @default("SUCCESS")
+  errorSummary      String?
+  importedById      String?
+  importedBy        User?              @relation("PerformanceImportUploadedBy", fields: [importedById], references: [id], onDelete: SetNull)
+  qualityRecords    QualityRecord[]
   tnsQualityRecords TnsQualityRecord[]
   cecQualityRecords CecQualityRecord[]
   productionRecords ProductionRecord[]
-  importedAt   DateTime        @default(now())
-  createdAt    DateTime        @default(now())
+  importedAt        DateTime           @default(now())
+  createdAt         DateTime           @default(now())
 
   @@index([type])
   @@index([importedAt])
@@ -920,23 +936,23 @@ model PerformanceImportBatch {
 }
 
 model QualityRecord {
-  id               String                 @id @default(cuid())
+  id               String                  @id @default(cuid())
   auditTime        DateTime
   auditDate        DateTime
   wbLogin          String
   employeeId       String?
-  employee         EmployeeProfile?       @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  employee         EmployeeProfile?        @relation(fields: [employeeId], references: [id], onDelete: SetNull)
   finalResult      String
   caseOrderId      String
   auditCaseOrderId String
   concatKey        String
   lobId            String?
-  lob              Lob?                   @relation(fields: [lobId], references: [id], onDelete: SetNull)
+  lob              Lob?                    @relation(fields: [lobId], references: [id], onDelete: SetNull)
   rawLob           String?
   importBatchId    String?
   importBatch      PerformanceImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
-  createdAt        DateTime               @default(now())
-  updatedAt        DateTime               @updatedAt
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
 
   @@index([employeeId])
   @@index([wbLogin])
@@ -948,23 +964,23 @@ model QualityRecord {
 }
 
 model TnsQualityRecord {
-  id               String                 @id @default(cuid())
-  auditDate        DateTime
-  wbLogin          String
-  employeeId       String?
-  employee         EmployeeProfile?       @relation(fields: [employeeId], references: [id], onDelete: SetNull)
-  lobId            String?
-  lob              Lob?                   @relation(fields: [lobId], references: [id], onDelete: SetNull)
-  rawLob           String?
-  sampling         Int                    @default(0)
-  mislabeled       Int                    @default(0)
-  leakage          Int                    @default(0)
-  falsePositive    Int                    @default(0)
-  sourceKey        String?
-  importBatchId    String?
-  importBatch      PerformanceImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
-  createdAt        DateTime               @default(now())
-  updatedAt        DateTime               @updatedAt
+  id            String                  @id @default(cuid())
+  auditDate     DateTime
+  wbLogin       String
+  employeeId    String?
+  employee      EmployeeProfile?        @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  lobId         String?
+  lob           Lob?                    @relation(fields: [lobId], references: [id], onDelete: SetNull)
+  rawLob        String?
+  sampling      Int                     @default(0)
+  mislabeled    Int                     @default(0)
+  leakage       Int                     @default(0)
+  falsePositive Int                     @default(0)
+  sourceKey     String?
+  importBatchId String?
+  importBatch   PerformanceImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
 
   @@index([employeeId])
   @@index([wbLogin])
@@ -975,23 +991,23 @@ model TnsQualityRecord {
 }
 
 model CecQualityRecord {
-  id                String                 @id @default(cuid())
+  id                String                  @id @default(cuid())
   wbLogin           String
   employeeId        String?
-  employee          EmployeeProfile?       @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  employee          EmployeeProfile?        @relation(fields: [employeeId], references: [id], onDelete: SetNull)
   weekNumber        Int
   weekStartDate     DateTime
   weekEndDate       DateTime
   qualityDate       DateTime
-  passQuantity      Int                    @default(0)
-  failQuantity      Int                    @default(0)
+  passQuantity      Int                     @default(0)
+  failQuantity      Int                     @default(0)
   lobId             String?
-  lob               Lob?                   @relation(fields: [lobId], references: [id], onDelete: SetNull)
+  lob               Lob?                    @relation(fields: [lobId], references: [id], onDelete: SetNull)
   importBatchId     String?
   importBatch       PerformanceImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
   originalRowNumber Int?
-  createdAt         DateTime               @default(now())
-  updatedAt         DateTime               @updatedAt
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
 
   @@unique([wbLogin, weekNumber, qualityDate])
   @@index([employeeId])
@@ -1006,24 +1022,24 @@ model CecQualityRecord {
 }
 
 model ProductionRecord {
-  id                String                 @id @default(cuid())
+  id                String                  @id @default(cuid())
   bzTime            DateTime
   bzDay             DateTime
   wbLogin           String
   employeeId        String?
-  employee          EmployeeProfile?       @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  employee          EmployeeProfile?        @relation(fields: [employeeId], references: [id], onDelete: SetNull)
   ahtSeconds        Float?
   latencyMinutesSum Float?
   submitNum         Int
   queueId           String
   moderationSeconds Float
   lobId             String?
-  lob               Lob?                   @relation(fields: [lobId], references: [id], onDelete: SetNull)
-  productionKey     String                 @unique
+  lob               Lob?                    @relation(fields: [lobId], references: [id], onDelete: SetNull)
+  productionKey     String                  @unique
   importBatchId     String?
   importBatch       PerformanceImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
-  createdAt         DateTime               @default(now())
-  updatedAt         DateTime               @updatedAt
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
 
   @@index([employeeId])
   @@index([wbLogin])
@@ -1126,12 +1142,12 @@ model QualityMaterial {
 }
 
 model ClimateSurvey {
-  id          String            @id @default(cuid())
+  id          String                  @id @default(cuid())
   title       String
   description String
-  status      String            @default("Ativa")
-  anonymous   Boolean           @default(true)
-  targetType  String            @default("TODOS")
+  status      String                  @default("Ativa")
+  anonymous   Boolean                 @default(true)
+  targetType  String                  @default("TODOS")
   targetValue String?
   createdById String?
   startsAt    DateTime
@@ -1139,8 +1155,8 @@ model ClimateSurvey {
   questions   ClimateQuestion[]
   answers     ClimateAnswer[]
   responses   ClimateSurveyResponse[]
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
 
   @@index([status, startsAt, endsAt])
   @@index([targetType, targetValue])
@@ -1159,17 +1175,17 @@ model ClimateQuestion {
 }
 
 model ClimateAnswer {
-  id           String          @id @default(cuid())
+  id           String                 @id @default(cuid())
   surveyId     String
   questionId   String
   responseId   String?
   respondentId String?
   value        Json
-  survey       ClimateSurvey   @relation(fields: [surveyId], references: [id], onDelete: Cascade)
-  question     ClimateQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  survey       ClimateSurvey          @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+  question     ClimateQuestion        @relation(fields: [questionId], references: [id], onDelete: Cascade)
   response     ClimateSurveyResponse? @relation(fields: [responseId], references: [id], onDelete: Cascade)
-  respondent   User?           @relation(fields: [respondentId], references: [id], onDelete: SetNull)
-  createdAt    DateTime        @default(now())
+  respondent   User?                  @relation(fields: [respondentId], references: [id], onDelete: SetNull)
+  createdAt    DateTime               @default(now())
 
   @@index([surveyId, respondentId])
   @@index([responseId])
@@ -1192,27 +1208,62 @@ model ClimateSurveyResponse {
 }
 
 model AnonymousFeedback {
-  id          String                  @id @default(cuid())
-  category    String
-  message     String
-  evidenceUrl String?
-  status      AnonymousFeedbackStatus @default(RECEBIDO)
-  urgency     String                  @default("MEDIA")
-  allowContact Boolean                @default(false)
+  id            String                  @id @default(cuid())
+  category      String
+  message       String
+  evidenceUrl   String?
+  status        AnonymousFeedbackStatus @default(RECEBIDO)
+  urgency       String                  @default("MEDIA")
+  allowContact  Boolean                 @default(false)
   contactUserId String?
-  lobId       String?
-  jobTitle    String?
-  resolvedAt  DateTime?
-  resolvedById String?
-  theme       String?
-  actionPlan  ActionPlan?
-  createdAt   DateTime                @default(now())
-  updatedAt   DateTime                @updatedAt
+  lobId         String?
+  jobTitle      String?
+  resolvedAt    DateTime?
+  resolvedById  String?
+  theme         String?
+  actionPlan    ActionPlan?
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
 
   @@index([status, createdAt])
   @@index([category])
   @@index([urgency])
   @@index([lobId])
+}
+
+model FormalFeedback {
+  id               String               @id @default(cuid())
+  employeeId       String
+  authorId         String
+  authorRole       String
+  type             FormalFeedbackType
+  category         String
+  title            String
+  description      String
+  status           FormalFeedbackStatus @default(PENDENTE_CIENCIA)
+  sentAt           DateTime             @default(now())
+  viewedAt         DateTime?
+  acknowledgedAt   DateTime?
+  acknowledgedById String?
+  employeeResponse String?
+  updatedById      String?
+  archivedAt       DateTime?
+  deletedAt        DateTime?
+  employee         EmployeeProfile      @relation("FormalFeedbackEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  author           User                 @relation("FormalFeedbackAuthor", fields: [authorId], references: [id])
+  acknowledgedBy   User?                @relation("FormalFeedbackAcknowledgedBy", fields: [acknowledgedById], references: [id], onDelete: SetNull)
+  updatedBy        User?                @relation("FormalFeedbackUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  @@index([employeeId])
+  @@index([authorId])
+  @@index([status])
+  @@index([type])
+  @@index([category])
+  @@index([createdAt])
+  @@index([employeeId, createdAt])
+  @@index([status, createdAt])
 }
 
 model ActionPlan {
@@ -1557,15 +1608,15 @@ model EmployeeSensitiveData {
 }
 
 model ShiftReport {
-  id                       String                @id @default(cuid())
+  id                       String                 @id @default(cuid())
   reportDate               DateTime
-  submittedAt              DateTime              @default(now())
+  submittedAt              DateTime               @default(now())
   shiftId                  String?
   lobId                    String?
   operation                String
   supervisorId             String?
   rtaId                    String?
-  importance               ShiftReportImportance @default(MEDIA)
+  importance               ShiftReportImportance  @default(MEDIA)
   plannedHeadcount         Int
   actualHeadcount          Int
   onlineAgents             Int
@@ -1584,15 +1635,15 @@ model ShiftReport {
   mainRisks                String?
   actionsTaken             String?
   nextShiftAttentionPoints String?
-  requiresFollowUp         Boolean               @default(false)
+  requiresFollowUp         Boolean                @default(false)
   followUpOwnerId          String?
   followUpDueDate          DateTime?
-  followUpStatus           FollowUpStatus        @default(ABERTO)
+  followUpStatus           FollowUpStatus         @default(ABERTO)
   additionalComments       String?
   absences                 ShiftReportAbsence[]
   timeBlocks               ShiftReportTimeBlock[]
-  createdAt                DateTime              @default(now())
-  updatedAt                DateTime              @updatedAt
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
   deletedAt                DateTime?
 
   @@index([reportDate, shiftId, lobId])
@@ -1684,57 +1735,57 @@ model AttendanceHistory {
 }
 
 model WorkHourImportBatch {
-  id          String               @id @default(cuid())
-  fileName    String
+  id           String               @id @default(cuid())
+  fileName     String
   uploadedById String
-  totalRows   Int
-  validRows   Int
-  errorRows   Int
-  warningRows Int                @default(0)
-  createdRows Int                @default(0)
-  updatedRows Int                @default(0)
-  status      WorkHourImportStatus @default(IMPORTED)
-  uploadedBy  User                 @relation("WorkHourImportUploadedBy", fields: [uploadedById], references: [id])
-  records     WorkHourRecord[]
-  createdAt   DateTime             @default(now())
+  totalRows    Int
+  validRows    Int
+  errorRows    Int
+  warningRows  Int                  @default(0)
+  createdRows  Int                  @default(0)
+  updatedRows  Int                  @default(0)
+  status       WorkHourImportStatus @default(IMPORTED)
+  uploadedBy   User                 @relation("WorkHourImportUploadedBy", fields: [uploadedById], references: [id])
+  records      WorkHourRecord[]
+  createdAt    DateTime             @default(now())
 
   @@index([uploadedById, createdAt])
   @@index([status, createdAt])
 }
 
 model WorkHourRecord {
-  id                String                 @id @default(cuid())
-  employeeId        String
-  scheduleId        String?
-  wbLogin           String
-  date              DateTime
-  plannedStart      String?
-  plannedEnd        String?
-  plannedHours      Float?
-  actualStart       String?
-  actualEnd         String?
-  breakMinutes      Int                    @default(0)
-  actualHours       Float
-  adjustedStart     String?
-  adjustedEnd       String?
-  adjustedBreakMinutes Int?
-  adjustedHours     Float?
-  effectiveStart    String?
-  effectiveEnd      String?
-  effectiveBreakMinutes Int                @default(0)
-  effectiveHours    Float
-  differenceMinutes Int?
-  status            WorkHourRecordStatus   @default(IMPORTED)
-  source            String?
-  observation       String?
-  importBatchId     String?
-  employee          EmployeeProfile        @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  schedule          Schedule?              @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
-  importBatch       WorkHourImportBatch?   @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
-  adjustments       WorkHourAdjustmentRequest[]
-  histories         WorkHourHistory[]
-  createdAt         DateTime               @default(now())
-  updatedAt         DateTime               @updatedAt
+  id                    String                      @id @default(cuid())
+  employeeId            String
+  scheduleId            String?
+  wbLogin               String
+  date                  DateTime
+  plannedStart          String?
+  plannedEnd            String?
+  plannedHours          Float?
+  actualStart           String?
+  actualEnd             String?
+  breakMinutes          Int                         @default(0)
+  actualHours           Float
+  adjustedStart         String?
+  adjustedEnd           String?
+  adjustedBreakMinutes  Int?
+  adjustedHours         Float?
+  effectiveStart        String?
+  effectiveEnd          String?
+  effectiveBreakMinutes Int                         @default(0)
+  effectiveHours        Float
+  differenceMinutes     Int?
+  status                WorkHourRecordStatus        @default(IMPORTED)
+  source                String?
+  observation           String?
+  importBatchId         String?
+  employee              EmployeeProfile             @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  schedule              Schedule?                   @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  importBatch           WorkHourImportBatch?        @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
+  adjustments           WorkHourAdjustmentRequest[]
+  histories             WorkHourHistory[]
+  createdAt             DateTime                    @default(now())
+  updatedAt             DateTime                    @updatedAt
 
   @@unique([employeeId, date])
   @@index([employeeId])
@@ -1748,33 +1799,33 @@ model WorkHourRecord {
 }
 
 model WorkHourAdjustmentRequest {
-  id                   String                   @id @default(cuid())
-  workHourRecordId     String
-  employeeId           String
-  requestedById        String
-  approvedById         String?
-  rejectedById         String?
-  status               WorkHourAdjustmentStatus @default(ABERTO)
-  currentActualStart   String?
-  currentActualEnd     String?
-  currentBreakMinutes  Int?
-  currentActualHours   Float
-  requestedActualStart String?
-  requestedActualEnd   String?
+  id                    String                   @id @default(cuid())
+  workHourRecordId      String
+  employeeId            String
+  requestedById         String
+  approvedById          String?
+  rejectedById          String?
+  status                WorkHourAdjustmentStatus @default(ABERTO)
+  currentActualStart    String?
+  currentActualEnd      String?
+  currentBreakMinutes   Int?
+  currentActualHours    Float
+  requestedActualStart  String?
+  requestedActualEnd    String?
   requestedBreakMinutes Int?
-  requestedActualHours Float
-  reason               String
-  justification        String
-  rejectionReason      String?
-  approvedAt           DateTime?
-  rejectedAt           DateTime?
-  record               WorkHourRecord           @relation(fields: [workHourRecordId], references: [id], onDelete: Cascade)
-  employee             EmployeeProfile          @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  requestedBy          User                     @relation("WorkHourAdjustmentRequestedBy", fields: [requestedById], references: [id])
-  approvedBy           User?                    @relation("WorkHourAdjustmentApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
-  rejectedBy           User?                    @relation("WorkHourAdjustmentRejectedBy", fields: [rejectedById], references: [id], onDelete: SetNull)
-  createdAt            DateTime                 @default(now())
-  updatedAt            DateTime                 @updatedAt
+  requestedActualHours  Float
+  reason                String
+  justification         String
+  rejectionReason       String?
+  approvedAt            DateTime?
+  rejectedAt            DateTime?
+  record                WorkHourRecord           @relation(fields: [workHourRecordId], references: [id], onDelete: Cascade)
+  employee              EmployeeProfile          @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  requestedBy           User                     @relation("WorkHourAdjustmentRequestedBy", fields: [requestedById], references: [id])
+  approvedBy            User?                    @relation("WorkHourAdjustmentApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  rejectedBy            User?                    @relation("WorkHourAdjustmentRejectedBy", fields: [rejectedById], references: [id], onDelete: SetNull)
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
 
   @@index([workHourRecordId])
   @@index([employeeId])
@@ -1783,16 +1834,16 @@ model WorkHourAdjustmentRequest {
 }
 
 model WorkHourHistory {
-  id               String          @id @default(cuid())
+  id               String         @id @default(cuid())
   workHourRecordId String
   changedById      String?
   action           String
   previousValue    Json?
   newValue         Json?
   reason           String?
-  record           WorkHourRecord  @relation(fields: [workHourRecordId], references: [id], onDelete: Cascade)
-  changedBy        User?           @relation("WorkHourHistoryChangedBy", fields: [changedById], references: [id], onDelete: SetNull)
-  createdAt        DateTime        @default(now())
+  record           WorkHourRecord @relation(fields: [workHourRecordId], references: [id], onDelete: Cascade)
+  changedBy        User?          @relation("WorkHourHistoryChangedBy", fields: [changedById], references: [id], onDelete: SetNull)
+  createdAt        DateTime       @default(now())
 
   @@index([workHourRecordId, createdAt])
   @@index([changedById, createdAt])
