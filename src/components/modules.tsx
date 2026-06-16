@@ -673,7 +673,7 @@ type AttendanceSummary = {
   riskLevel: string;
   byReason: Record<string, number>;
   byShift?: Record<string, { planned: number; present: number; absent: number; gap: number }>;
-  bySupervisor?: Record<string, { supervisor?: string; lob?: string; shift?: string; planned: number; present: number; absent: number; unjustified: number; justified: number; classifiedUnjustified?: number; absRate: number }>;
+  bySupervisor?: Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; classifiedUnjustified?: number; absRate: number }>;
   byLob?: Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; classifiedUnjustified?: number; absRate: number }>;
   topAbsenceAgents?: Array<{ employeeId: string; name: string; wbLogin: string; supervisor: string; lob: string; planned: number; absent: number; unjustified: number; justified: number; classifiedUnjustified?: number; absRate: number }>;
   activePeopleByLobAndShift?: Array<{ lob: string; shifts: Record<string, number>; total: number }>;
@@ -965,12 +965,6 @@ type AdditionalDataTrackingResponse = {
     pending: number;
     completionRate: number;
   };
-};
-
-type AbsSupervisorContext = {
-  supervisor: string;
-  lob: string;
-  shift: string;
 };
 
 type EmployeeListResponse = {
@@ -2359,7 +2353,7 @@ export function OperationalCommandCenter() {
   const [exportingJustifiedAbsences, setExportingJustifiedAbsences] = useState(false);
   const [exportingUnjustifiedAbsences, setExportingUnjustifiedAbsences] = useState(false);
   const [exportingClassifiedUnjustifiedAbsences, setExportingClassifiedUnjustifiedAbsences] = useState(false);
-  const [selectedAbsSupervisor, setSelectedAbsSupervisor] = useState<AbsSupervisorContext | null>(null);
+  const [selectedAbsSupervisor, setSelectedAbsSupervisor] = useState<string | null>(null);
   const [absSupervisorPeople, setAbsSupervisorPeople] = useState<AttendanceItem[]>([]);
   const [loadingAbsSupervisorPeople, setLoadingAbsSupervisorPeople] = useState(false);
   const [absSupervisorError, setAbsSupervisorError] = useState("");
@@ -2773,8 +2767,8 @@ export function OperationalCommandCenter() {
     }
   }
 
-  async function openAbsSupervisorPeople(context: AbsSupervisorContext) {
-    setSelectedAbsSupervisor(context);
+  async function openAbsSupervisorPeople(supervisor: string) {
+    setSelectedAbsSupervisor(supervisor);
     setAbsSupervisorPeople([]);
     setAbsSupervisorError("");
     setLoadingAbsSupervisorPeople(true);
@@ -2784,11 +2778,11 @@ export function OperationalCommandCenter() {
         endDate: dateRange.endDate,
         includeJustified: "true",
         skipSummary: "true",
-        supervisor: context.supervisor
+        supervisor
       });
-      if (context.lob && context.lob !== "Sem LOB") params.set("lob", context.lob);
+      if (selectedCommandLob !== "Todos") params.set("lob", selectedCommandLob);
       if (selectedCommandRoleTitle !== "Todos") params.set("roleTitle", selectedCommandRoleTitle);
-      if (context.shift && context.shift !== "Sem turno") params.set("shift", context.shift);
+      if (selectedCommandShift !== "Todos") params.set("shift", selectedCommandShift);
       if (selectedCommandSkill !== "Todos") params.set("skill", selectedCommandSkill);
       const payload = await apiJson<{ data: AttendanceItem[] }>(`/api/attendance?${params.toString()}`);
       setAbsSupervisorPeople(payload.data);
@@ -2888,22 +2882,10 @@ export function OperationalCommandCenter() {
   const commandAbsenceReasons = Object.entries(summary.byReason)
     .filter(([, value]) => value > 0)
     .map(([name, value], index) => ({ name, value, fill: ["#071B3A", "#14B8A6", "#F59E0B", "#7C3AED", "#94A3B8"][index % 5] }));
-  const commandSupervisorOptions = [
-    "Todos",
-    ...Array.from(new Set([
-      "Sem supervisor",
-      ...Object.entries(summary.bySupervisor ?? {}).map(([key, value]) => value.supervisor ?? key.split("|||")[0]).filter(Boolean),
-      selectedCommandSupervisor
-    ].filter((value) => value && value !== "Todos") as string[]))
-  ];
+  const commandSupervisorOptions = ["Todos", ...Array.from(new Set(["Sem supervisor", ...Object.keys(summary.bySupervisor ?? {}), selectedCommandSupervisor].filter((value) => value && value !== "Todos")))];
   const commandAbsBySupervisor = Object.entries(summary.bySupervisor ?? {})
-    .map(([key, values]) => ({
-      key,
-      ...values,
-      supervisor: values.supervisor ?? key.split("|||")[0],
-      lob: values.lob ?? key.split("|||")[1] ?? (selectedCommandLob === "Todos" ? "Todas" : selectedCommandLob),
-      shift: values.shift ?? key.split("|||")[2] ?? (selectedCommandShift === "Todos" ? "Todos" : selectedCommandShift)
-    }));
+    .map(([supervisor, values]) => ({ supervisor, ...values }))
+    .sort((a, b) => b.absent - a.absent || b.absRate - a.absRate || a.supervisor.localeCompare(b.supervisor, "pt-BR"));
   const commandAbsByLob = Object.entries(summary.byLob ?? {})
     .map(([lob, values]) => ({ lob, ...values }))
     .sort((a, b) => b.absRate - a.absRate || b.absent - a.absent || a.lob.localeCompare(b.lob, "pt-BR"));
@@ -3098,18 +3080,12 @@ export function OperationalCommandCenter() {
                 <div className="divide-y divide-border/70">
                   {commandAbsBySupervisor.map((item) => (
                     <button
-                      key={item.key}
+                      key={item.supervisor}
                       type="button"
-                      onClick={() => void openAbsSupervisorPeople({ supervisor: item.supervisor, lob: item.lob, shift: item.shift })}
+                      onClick={() => void openAbsSupervisorPeople(item.supervisor)}
                       className="grid w-full grid-cols-1 gap-1.5 px-1.5 py-2 text-left transition hover:bg-blue-50/55 lg:grid-cols-[minmax(140px,1.2fr)_minmax(120px,1fr)_72px_64px_72px_82px] lg:items-center lg:gap-2"
                     >
-                      <span className="min-w-0">
-                        <span className="block truncate text-[12.5px] font-extrabold text-navy-950" title={item.supervisor}>{item.supervisor}</span>
-                        <span className="mt-1 flex flex-wrap gap-1 text-[10px] font-black uppercase tracking-wide">
-                          <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-blue-700">{item.lob}</span>
-                          <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-muted">{item.shift}</span>
-                        </span>
-                      </span>
+                      <span className="min-w-0 truncate text-[12.5px] font-extrabold text-navy-950" title={item.supervisor}>{item.supervisor}</span>
                       <span className="grid min-w-0 grid-cols-[46px_1fr] items-center gap-2">
                         <span className={cn("text-[11.5px] font-black", absTextColor(item.absRate))}>{item.absRate}%</span>
                         <span className="h-2 rounded-full bg-slate-100">
@@ -3679,7 +3655,7 @@ export function OperationalCommandCenter() {
               <div>
                 <h2 className="text-lg font-extrabold text-navy-950">ABS por Supervisor</h2>
                 <p className="text-sm font-semibold text-muted">
-                  {selectedAbsSupervisor.supervisor} • {selectedAbsSupervisor.lob} • {selectedAbsSupervisor.shift} • {dateRange.startDate} até {dateRange.endDate}
+                  {selectedAbsSupervisor} • {dateRange.startDate} até {dateRange.endDate} • {selectedCommandLob === "Todos" ? "Todas as LOBs" : selectedCommandLob}
                 </p>
               </div>
               <button onClick={closeAbsSupervisorPeople} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
