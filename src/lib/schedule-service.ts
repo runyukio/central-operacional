@@ -2985,24 +2985,27 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     acc[key] = (acc[key] ?? 0) + 1;
     return acc;
   }, {});
-  const bySupervisor = schedules.reduce<Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; classifiedUnjustified: number; absRate: number }>>((acc, schedule) => {
+  const bySupervisor = schedules.reduce<Record<string, { supervisor: string; lob: string; shift: string; planned: number; present: number; absent: number; unjustified: number; justified: number; classifiedUnjustified: number; absRate: number }>>((acc, schedule) => {
     const supervisorName = resolveSupervisorName(schedule, supervisorNameById);
+    const lobName = schedule.employee.lob?.name?.trim() || "Sem LOB";
+    const shiftName = shiftCategoryName(schedule.shift?.name ?? schedule.employee.shift?.name) || "Sem turno";
+    const key = `${supervisorName}|||${lobName}|||${shiftName}`;
     const status = statusFor(schedule);
     const record = attendanceRecordByScheduleId.get(schedule.id);
-    acc[supervisorName] ??= { planned: 0, present: 0, absent: 0, unjustified: 0, justified: 0, classifiedUnjustified: 0, absRate: 0 };
-    if (isScheduledStatus(status)) acc[supervisorName].planned += 1;
-    if (isPresentStatus(status)) acc[supervisorName].present += 1;
+    acc[key] ??= { supervisor: supervisorName, lob: lobName, shift: shiftName, planned: 0, present: 0, absent: 0, unjustified: 0, justified: 0, classifiedUnjustified: 0, absRate: 0 };
+    if (isScheduledStatus(status)) acc[key].planned += 1;
+    if (isPresentStatus(status)) acc[key].present += 1;
     if (isAbsenceStatus(status)) {
-      acc[supervisorName].absent += 1;
+      acc[key].absent += 1;
       if (isPendingJustificationForSchedule(schedule.status, record)) {
-        acc[supervisorName].unjustified += 1;
+        acc[key].unjustified += 1;
       } else if (isJustifiedAbsenceForSchedule(schedule.status, record)) {
-        acc[supervisorName].justified += 1;
+        acc[key].justified += 1;
       } else if (isClassifiedUnjustifiedAbsenceForSchedule(schedule.status, record)) {
-        acc[supervisorName].classifiedUnjustified += 1;
+        acc[key].classifiedUnjustified += 1;
       }
     }
-    acc[supervisorName].absRate = calculateAbsenceRate(acc[supervisorName].planned, acc[supervisorName].absent);
+    acc[key].absRate = calculateAbsenceRate(acc[key].planned, acc[key].absent);
     return acc;
   }, {});
   const byLob = schedules.reduce<Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; classifiedUnjustified: number; absRate: number }>>((acc, schedule) => {
