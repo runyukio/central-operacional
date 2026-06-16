@@ -77,6 +77,7 @@ export type EmployeeListQuery = {
   supervisorId?: string;
   teamId?: string;
   shiftId?: string;
+  contractType?: string;
   skill?: string;
   wave?: string;
   status?: string;
@@ -182,6 +183,7 @@ async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeList
           ...buildSupervisorFilterWhere(query.supervisorId),
           ...(query.teamId ? { teamId: query.teamId } : {}),
           ...(query.shiftId ? { shiftId: query.shiftId } : {}),
+          ...buildContractTypeFilterWhere(query.contractType),
           ...buildNullableTextFilterWhere("skill", query.skill),
           ...buildNullableTextFilterWhere("wave", query.wave),
 	          ...(query.role ? { user: { role: { name: query.role } } } : {}),
@@ -227,10 +229,12 @@ async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeList
     }
 
 	    const filterOptions = await getEmployeeFilterOptions(baseEmployeeWhere);
+    const contractSummary = await getEmployeeContractSummary(employeeWhere);
     const batchWb = await resolveEmployeeBatchWb(query.wbLogins);
     return {
       ...paginatedEmployees(employees.map((employee) => mapEmployeeSummary(employee, role)), total, effectivePage, limit),
       filterOptions,
+      contractSummary,
       batchWb
     };
   } catch (error) {
@@ -298,6 +302,7 @@ type LegacyEmployeeRow = {
   terminationReason: string | null;
   workStartTime: string | null;
   workEndTime: string | null;
+  contractType: string | null;
   scheduleType: string;
   operationalStatus: string;
   skill: string | null;
@@ -355,6 +360,7 @@ const employeeSummarySelect = {
   terminationReason: true,
   workStartTime: true,
   workEndTime: true,
+  contractType: true,
   scheduleType: true,
   operationalStatus: true,
   skill: true,
@@ -712,7 +718,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
   }
 }
 
-export async function exportOperationalEmployeesXlsxData(actor: Actor, filters: { query?: string | null; lob?: string | null; status?: string | null; supervisorId?: string | null; shiftId?: string | null; skill?: string | null; wave?: string | null }) {
+export async function exportOperationalEmployeesXlsxData(actor: Actor, filters: { query?: string | null; lob?: string | null; status?: string | null; supervisorId?: string | null; shiftId?: string | null; contractType?: string | null; skill?: string | null; wave?: string | null }) {
   const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
   if (!user) return createPermissionError("Usuário não autenticado.");
   if (!canAccessEmployeeMap({ role: actor.role, status: user.status })) return createPermissionError("Você não tem permissão para exportar o Mapa de Funcionários.");
@@ -725,6 +731,7 @@ export async function exportOperationalEmployeesXlsxData(actor: Actor, filters: 
   const status = clean(filters.status);
   const supervisorId = clean(filters.supervisorId);
   const shiftId = clean(filters.shiftId);
+  const contractType = normalizeContractTypeFilter(filters.contractType);
   const skill = clean(filters.skill);
   const wave = clean(filters.wave);
   const filteredRows = employees.filter((employee) => {
@@ -734,9 +741,10 @@ export async function exportOperationalEmployeesXlsxData(actor: Actor, filters: 
     const matchesStatus = !status || status === "Todos" || matchesEmployeeStatusFilter(employee.status, row.userStatus, status);
     const matchesSupervisor = !supervisorId || supervisorId === "Todos" || (isNoneFilter(supervisorId) ? !row.supervisorId : row.supervisorId === supervisorId);
     const matchesShift = !shiftId || row.shiftId === shiftId;
+    const matchesContract = !contractType || String(row.contractType ?? "").toUpperCase() === contractType;
     const matchesSkill = !skill || skill === "Todos" || (isNoneFilter(skill) ? !row.skill : String(row.skill ?? "").toLowerCase() === skill.toLowerCase());
     const matchesWave = !wave || wave === "Todos" || (isNoneFilter(wave) ? !row.wave : String(row.wave ?? "").toLowerCase() === wave.toLowerCase());
-    return matchesQuery && matchesLob && matchesStatus && matchesSupervisor && matchesShift && matchesSkill && matchesWave;
+    return matchesQuery && matchesLob && matchesStatus && matchesSupervisor && matchesShift && matchesContract && matchesSkill && matchesWave;
   });
 
   const columns = employeeExportColumns(role);
@@ -1083,7 +1091,7 @@ function mapLegacyEmployee(employee: LegacyEmployeeRow, role: string) {
     goLiveDateIso: "",
     workStartTime: "",
     workEndTime: "",
-    contractType: "",
+    contractType: employee.contractType ?? "",
     ethnicity: "",
     sexualOrientation: "",
     isPcd: "",
@@ -1364,6 +1372,29 @@ function buildNullableTextFilterWhere(field: "skill" | "wave", value: unknown): 
   if (!raw || isAllFilter(raw)) return {};
   if (isNoneFilter(raw)) return { OR: [{ [field]: null }, { [field]: "" }] } as Prisma.EmployeeProfileWhereInput;
   return { [field]: { equals: raw, mode: "insensitive" } } as Prisma.EmployeeProfileWhereInput;
+}
+
+function buildContractTypeFilterWhere(value: unknown): Prisma.EmployeeProfileWhereInput {
+  const normalized = normalizeContractTypeFilter(value);
+  if (!normalized) return {};
+  return { contractType: { equals: normalized, mode: "insensitive" } };
+}
+
+function normalizeContractTypeFilter(value: unknown) {
+  const raw = clean(value);
+  if (!raw || isAllFilter(raw)) return "";
+  const upper = raw.toUpperCase();
+  if (upper === "PJ") return "PJ";
+  if (upper === "CLT") return "CLT";
+  return "";
+}
+
+async function getEmployeeContractSummary(where: Prisma.EmployeeProfileWhereInput) {
+  const [clt, pj] = await Promise.all([
+    prisma.employeeProfile.count({ where: { AND: [where, { contractType: { equals: "CLT", mode: "insensitive" } }] } }),
+    prisma.employeeProfile.count({ where: { AND: [where, { contractType: { equals: "PJ", mode: "insensitive" } }] } })
+  ]);
+  return { clt, pj };
 }
 
 function paginatedEmployees<T>(data: T[], total: number, page: number, limit: number) {

@@ -60,6 +60,7 @@ export async function GET(request: Request) {
     lobId: url.searchParams.get("lobId") ?? undefined,
     supervisorId: url.searchParams.get("supervisorId") ?? undefined,
     shiftId: url.searchParams.get("shiftId") ?? undefined,
+    contractType: url.searchParams.get("contractType") ?? undefined,
     skill: url.searchParams.get("skill") ?? undefined,
     wave: url.searchParams.get("wave") ?? undefined,
     status: url.searchParams.get("status_colaborador") ?? url.searchParams.get("employeeStatus") ?? url.searchParams.get("status") ?? undefined,

@@ -969,6 +969,7 @@ type EmployeeListResponse = {
   limit?: number;
   totalPages?: number;
   filterOptions?: { skills: string[]; waves: string[]; statuses?: string[] };
+  contractSummary?: { clt: number; pj: number };
   batchWb?: { applied: string[]; notFound: string[]; duplicatesRemoved: number };
 };
 
@@ -2891,8 +2892,7 @@ export function OperationalCommandCenter() {
       supervisor: values.supervisor ?? key.split("|||")[0],
       lob: values.lob ?? key.split("|||")[1] ?? (selectedCommandLob === "Todos" ? "Todas" : selectedCommandLob),
       shift: values.shift ?? key.split("|||")[2] ?? (selectedCommandShift === "Todos" ? "Todos" : selectedCommandShift)
-    }))
-    .sort((a, b) => b.absent - a.absent || b.absRate - a.absRate || a.supervisor.localeCompare(b.supervisor, "pt-BR") || a.lob.localeCompare(b.lob, "pt-BR") || a.shift.localeCompare(b.shift, "pt-BR"));
+    }));
   const commandAbsByLob = Object.entries(summary.byLob ?? {})
     .map(([lob, values]) => ({ lob, ...values }))
     .sort((a, b) => b.absRate - a.absRate || b.absent - a.absent || a.lob.localeCompare(b.lob, "pt-BR"));
@@ -9268,6 +9268,7 @@ export function EmployeeMapPage() {
   const [skillFilter, setSkillFilter] = useState("Todos");
   const [waveFilter, setWaveFilter] = useState("Todos");
   const [shiftFilter, setShiftFilter] = useState("Todos");
+  const [contractFilter, setContractFilter] = useState("Todos");
   const [employeeBatchWbs, setEmployeeBatchWbs] = useState<string[]>([]);
   const [employeeBatchText, setEmployeeBatchText] = useState("");
   const [employeeBatchOpen, setEmployeeBatchOpen] = useState(false);
@@ -9277,6 +9278,7 @@ export function EmployeeMapPage() {
   const [additionalDataTrackingLoading, setAdditionalDataTrackingLoading] = useState(false);
   const [employeePage, setEmployeePage] = useState(1);
   const [employeePagination, setEmployeePagination] = useState({ total: 0, page: 1, limit: 50, totalPages: 1 });
+  const [employeeContractSummary, setEmployeeContractSummary] = useState({ clt: 0, pj: 0 });
   const [editingEmployee, setEditingEmployee] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
   const [socialNameDraft, setSocialNameDraft] = useState("");
@@ -9326,7 +9328,7 @@ export function EmployeeMapPage() {
   const employeeSupervisorOptions = employeeSettings?.supervisors?.filter((supervisor) => supervisor.status !== "INACTIVE") ?? [];
   const employeeSkillOptions = ["Todos", "SEM_SKILL", ...employeeFilterOptions.skills.filter(Boolean)];
   const employeeWaveOptions = ["Todos", "SEM_WAVE", ...employeeFilterOptions.waves.filter(Boolean)];
-  const hasEmployeeFilters = Boolean(query.trim()) || employeeBatchWbs.length > 0 || lobFilter !== "Todos" || statusFilter !== "Todos" || supervisorFilter !== "Todos" || skillFilter !== "Todos" || waveFilter !== "Todos" || shiftFilter !== "Todos";
+  const hasEmployeeFilters = Boolean(query.trim()) || employeeBatchWbs.length > 0 || lobFilter !== "Todos" || statusFilter !== "Todos" || supervisorFilter !== "Todos" || skillFilter !== "Todos" || waveFilter !== "Todos" || shiftFilter !== "Todos" || contractFilter !== "Todos";
   const isAdmin = session?.user?.role === "ADMIN";
   const isSupervisorUser = session?.user?.role === "SUPERVISOR";
   const normalizedEmployeeMapRole = String(session?.user?.role ?? "").toUpperCase();
@@ -9360,7 +9362,7 @@ export function EmployeeMapPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canViewAdditionalDataTracking, additionalDataStatusFilter]);
 
-  async function loadEmployees(options?: { nextQuery?: string; nextLob?: string; nextStatus?: string; nextSupervisor?: string; nextSkill?: string; nextWave?: string; nextShift?: string; nextBatchWbs?: string[]; nextPage?: number }) {
+  async function loadEmployees(options?: { nextQuery?: string; nextLob?: string; nextStatus?: string; nextSupervisor?: string; nextSkill?: string; nextWave?: string; nextShift?: string; nextContract?: string; nextBatchWbs?: string[]; nextPage?: number }) {
     setEmployeeLoading(true);
     const nextQuery = options?.nextQuery ?? query;
     const nextLob = options?.nextLob ?? lobFilter;
@@ -9369,6 +9371,7 @@ export function EmployeeMapPage() {
     const nextSkill = options?.nextSkill ?? skillFilter;
     const nextWave = options?.nextWave ?? waveFilter;
     const nextShift = options?.nextShift ?? shiftFilter;
+    const nextContract = options?.nextContract ?? contractFilter;
     const nextBatchWbs = options?.nextBatchWbs ?? employeeBatchWbs;
     const nextPage = options?.nextPage ?? employeePage;
     const params = new URLSearchParams({ summary: "true", limit: "50", page: String(nextPage) });
@@ -9379,16 +9382,18 @@ export function EmployeeMapPage() {
     if (nextSkill !== "Todos") params.set("skill", nextSkill);
     if (nextWave !== "Todos") params.set("wave", nextWave);
     if (nextShift !== "Todos") params.set("shiftId", nextShift);
+    if (nextContract !== "Todos") params.set("contractType", nextContract);
     if (nextBatchWbs.length) params.set("wbLogins", serializeWbLogins(nextBatchWbs));
     try {
       const employeePayload = await apiJson<EmployeeListResponse>(`/api/employees?${params.toString()}`);
       if (!employeePayload.data?.length && Number(employeePayload.total ?? 0) > 0 && nextPage > 1) {
         setEmployeePage(1);
-        await loadEmployees({ nextQuery, nextLob, nextStatus, nextSupervisor, nextSkill, nextWave, nextShift, nextBatchWbs, nextPage: 1 });
+        await loadEmployees({ nextQuery, nextLob, nextStatus, nextSupervisor, nextSkill, nextWave, nextShift, nextContract, nextBatchWbs, nextPage: 1 });
         return;
       }
       setEmployeeRows(employeePayload.data);
 	      setEmployeeFilterOptions(employeePayload.filterOptions ?? { skills: [], waves: [], statuses: [] });
+      setEmployeeContractSummary(employeePayload.contractSummary ?? { clt: 0, pj: 0 });
       if (employeePayload.batchWb?.notFound.length) {
         setEmployeeMessage(`${employeePayload.batchWb.applied.length} login(s) aplicados. ${employeePayload.batchWb.notFound.length} não encontrado(s): ${employeePayload.batchWb.notFound.join(", ")}.`);
       } else if (employeeMessage.includes("login(s) aplicados")) {
@@ -9405,6 +9410,7 @@ export function EmployeeMapPage() {
     } catch {
       setEmployeeRows([]);
 	      setEmployeeFilterOptions({ skills: [], waves: [], statuses: [] });
+      setEmployeeContractSummary({ clt: 0, pj: 0 });
       setEmployeePagination({ total: 0, page: 1, limit: 50, totalPages: 1 });
     } finally {
       setEmployeeLoading(false);
@@ -9592,6 +9598,7 @@ export function EmployeeMapPage() {
     if (skillFilter !== "Todos") params.set("skill", skillFilter);
     if (waveFilter !== "Todos") params.set("wave", waveFilter);
     if (shiftFilter !== "Todos") params.set("shiftId", shiftFilter);
+    if (contractFilter !== "Todos") params.set("contractType", contractFilter);
     window.location.href = `/api/employees/export${params.toString() ? `?${params.toString()}` : ""}`;
   }
 
@@ -9653,7 +9660,7 @@ export function EmployeeMapPage() {
       {employeeMessage ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{employeeMessage}</div> : null}
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="space-y-5">
-          <div className="card grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-9">
+          <div className="card grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-10">
             <input value={query} onChange={(event) => setQuery(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm outline-none xl:col-span-2" placeholder="Nome, e-mail, WB/Login, Skill ou Wave" />
             <select value={lobFilter} onChange={(event) => setLobFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
               {employeeMapLobs.map((lob) => <option key={lob} value={lob}>{lob === "Todos" ? "Todas as LOBs" : lob}</option>)}
@@ -9676,7 +9683,12 @@ export function EmployeeMapPage() {
               <option value="Todos">Todos os turnos</option>
               {employeeShiftOptions.map((shift) => <option key={shift.id} value={shift.id}>{cleanShiftName(shift.name)}</option>)}
             </select>
-            <div className="rounded-lg border border-dashed border-blue-200 bg-blue-50/50 p-3 md:col-span-2 xl:col-span-9">
+            <select value={contractFilter} onChange={(event) => setContractFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
+              <option value="Todos">Todos os contratos</option>
+              <option value="PJ">PJ</option>
+              <option value="CLT">CLT</option>
+            </select>
+            <div className="rounded-lg border border-dashed border-blue-200 bg-blue-50/50 p-3 md:col-span-2 xl:col-span-10">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="text-xs font-black uppercase text-blue-700">Filtro em lote por WB/Login</p>
@@ -9708,14 +9720,61 @@ export function EmployeeMapPage() {
                 </div>
               ) : null}
             </div>
-            <div className="flex gap-2 md:col-span-2 xl:col-span-9 xl:justify-end">
+            <div className="flex gap-2 md:col-span-2 xl:col-span-10 xl:justify-end">
               <button onClick={() => { setEmployeePage(1); void loadEmployees({ nextPage: 1 }); void loadAdditionalDataTracking(); }} className="h-10 rounded-lg bg-blue-600 px-5 text-sm font-bold text-white">Buscar</button>
-              <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setEmployeeBatchWbs([]); setAdditionalDataStatusFilter("Todos"); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextBatchWbs: [], nextPage: 1 }); void loadAdditionalDataTracking({ nextQuery: "", nextLob: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextStatus: "Todos" }); }} className="h-10 rounded-lg border border-border px-5 text-sm font-bold">Limpar filtros</button>
+              <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setContractFilter("Todos"); setEmployeeBatchWbs([]); setAdditionalDataStatusFilter("Todos"); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextContract: "Todos", nextBatchWbs: [], nextPage: 1 }); void loadAdditionalDataTracking({ nextQuery: "", nextLob: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextStatus: "Todos" }); }} className="h-10 rounded-lg border border-border px-5 text-sm font-bold">Limpar filtros</button>
             </div>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-6">
             <MetricPill value={employeePagination.total} label="Total encontrado" />
+            <MetricPill value={employeeContractSummary.clt} label="CLT" />
+            <MetricPill value={employeeContractSummary.pj} label="PJ" />
           </div>
+          <Panel title="Funcionários">
+            {employeeLoading ? (
+              <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm font-bold text-blue-700">Carregando resumo dos colaboradores...</div>
+            ) : employeeRows.length ? (
+              <>
+                <SimpleTable
+                  columns={["Nome", "E-mail", "WB/Login", "Cargo/Função", "Role", "LOB", "Skill", "Wave", "Supervisor", "Turno", "Senioridade", "Status do colaborador", "Ação"]}
+                  rows={employeeRows.map((employee) => [
+                    <button key={employee.id} onClick={() => selectEmployee(employee)} className="max-w-[180px] truncate font-bold text-blue-700" title={employee.name}>{employee.name}</button>,
+                    <span key={`${employee.id}-email`} className="block max-w-[190px] truncate" title={employee.email ?? "-"}>{employee.email ?? "-"}</span>,
+                    employee.wb,
+                    <span key={`${employee.id}-role`} className="block max-w-[160px] truncate" title={employee.role}>{employee.role}</span>,
+                    employee.systemRole ?? "-",
+                    employee.lob,
+                    employee.skill || "Sem skill",
+                    employee.wave || "Sem wave",
+                    <span key={`${employee.id}-supervisor`} className="block max-w-[160px] truncate" title={employee.supervisor}>{employee.supervisor}</span>,
+                    cleanShiftName(employee.shift) || "-",
+                    <StatusBadge key={`${employee.id}-seniority`} status={employee.seniority || "Não informado"} />,
+                    <StatusBadge key={`${employee.id}-status`} status={employeeMapStatusLabel(employee.status)} />,
+                    <div key={`${employee.id}-action`} className="flex flex-wrap gap-1.5">
+                      <Link href={`/perfil/${employee.id}`} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">Ver perfil</Link>
+                      <button onClick={() => selectEmployee(employee)} className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-bold text-navy-950">Detalhe</button>
+                    </div>
+                  ])}
+                />
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm text-muted">
+                  <span>Página {employeePagination.page} de {employeePagination.totalPages} • {employeePagination.total} registro(s)</span>
+                  <div className="flex gap-2">
+                    <button disabled={employeePagination.page <= 1 || employeeLoading} onClick={() => loadEmployees({ nextPage: employeePagination.page - 1 })} className="rounded-lg border border-border px-3 py-2 text-xs font-bold text-navy-950 disabled:opacity-45">Anterior</button>
+                    <button disabled={employeePagination.page >= employeePagination.totalPages || employeeLoading} onClick={() => loadEmployees({ nextPage: employeePagination.page + 1 })} className="rounded-lg border border-border px-3 py-2 text-xs font-bold text-navy-950 disabled:opacity-45">Próxima</button>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div>
+                <EmptyState title={hasEmployeeFilters ? "Nenhum colaborador encontrado para os filtros selecionados" : "Nenhum colaborador encontrado"} description={hasEmployeeFilters ? "Limpe os filtros para voltar a listar a base real disponível para seu perfil." : "Aprove cadastros ou importe colaboradores para iniciar a base."} />
+                {hasEmployeeFilters ? (
+                  <div className="mt-3 text-center">
+                    <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setContractFilter("Todos"); setEmployeeBatchWbs([]); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextContract: "Todos", nextBatchWbs: [], nextPage: 1 }); }} className="rounded-lg border border-border px-4 py-2 text-sm font-bold text-navy-950">Limpar filtros</button>
+                  </div>
+                ) : null}
+              </div>
+            )}
+          </Panel>
           {canViewAdditionalDataTracking ? (
             <Panel title="Dados Cadastrais Adicionais" action="Exportar" actionOnClick={exportAdditionalDataTracking}>
               <div className="mb-4 grid gap-3 md:grid-cols-[repeat(4,minmax(0,1fr))_auto]">
@@ -9758,51 +9817,6 @@ export function EmployeeMapPage() {
               )}
             </Panel>
           ) : null}
-          <Panel title="Funcionários">
-            {employeeLoading ? (
-              <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm font-bold text-blue-700">Carregando resumo dos colaboradores...</div>
-            ) : employeeRows.length ? (
-              <>
-                <SimpleTable
-                  columns={["Nome", "E-mail", "WB/Login", "Cargo/Função", "Role", "LOB", "Skill", "Wave", "Supervisor", "Turno", "Senioridade", "Status do colaborador", "Ação"]}
-                  rows={employeeRows.map((employee) => [
-                    <button key={employee.id} onClick={() => selectEmployee(employee)} className="max-w-[180px] truncate font-bold text-blue-700" title={employee.name}>{employee.name}</button>,
-                    <span key={`${employee.id}-email`} className="block max-w-[190px] truncate" title={employee.email ?? "-"}>{employee.email ?? "-"}</span>,
-                    employee.wb,
-                    <span key={`${employee.id}-role`} className="block max-w-[160px] truncate" title={employee.role}>{employee.role}</span>,
-                    employee.systemRole ?? "-",
-                    employee.lob,
-                    employee.skill || "Sem skill",
-                    employee.wave || "Sem wave",
-                    <span key={`${employee.id}-supervisor`} className="block max-w-[160px] truncate" title={employee.supervisor}>{employee.supervisor}</span>,
-                    cleanShiftName(employee.shift) || "-",
-                    <StatusBadge key={`${employee.id}-seniority`} status={employee.seniority || "Não informado"} />,
-                    <StatusBadge key={`${employee.id}-status`} status={employeeMapStatusLabel(employee.status)} />,
-                    <div key={`${employee.id}-action`} className="flex flex-wrap gap-1.5">
-                      <Link href={`/perfil/${employee.id}`} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">Ver perfil</Link>
-                      <button onClick={() => selectEmployee(employee)} className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-bold text-navy-950">Detalhe</button>
-                    </div>
-                  ])}
-                />
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm text-muted">
-                  <span>Página {employeePagination.page} de {employeePagination.totalPages} • {employeePagination.total} registro(s)</span>
-                  <div className="flex gap-2">
-                    <button disabled={employeePagination.page <= 1 || employeeLoading} onClick={() => loadEmployees({ nextPage: employeePagination.page - 1 })} className="rounded-lg border border-border px-3 py-2 text-xs font-bold text-navy-950 disabled:opacity-45">Anterior</button>
-                    <button disabled={employeePagination.page >= employeePagination.totalPages || employeeLoading} onClick={() => loadEmployees({ nextPage: employeePagination.page + 1 })} className="rounded-lg border border-border px-3 py-2 text-xs font-bold text-navy-950 disabled:opacity-45">Próxima</button>
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div>
-                <EmptyState title={hasEmployeeFilters ? "Nenhum colaborador encontrado para os filtros selecionados" : "Nenhum colaborador encontrado"} description={hasEmployeeFilters ? "Limpe os filtros para voltar a listar a base real disponível para seu perfil." : "Aprove cadastros ou importe colaboradores para iniciar a base."} />
-                {hasEmployeeFilters ? (
-                  <div className="mt-3 text-center">
-                    <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setEmployeeBatchWbs([]); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextBatchWbs: [], nextPage: 1 }); }} className="rounded-lg border border-border px-4 py-2 text-sm font-bold text-navy-950">Limpar filtros</button>
-                  </div>
-                ) : null}
-              </div>
-            )}
-          </Panel>
         </div>
         <div className="space-y-5">
           <Panel title="Perfil do Colaborador">
@@ -9815,7 +9829,7 @@ export function EmployeeMapPage() {
                   <p className="text-sm text-muted">{selected.wb} • {selected.role}</p>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-3">
                 <InfoLine label="LOB" value={selected.lob} />
                 <InfoLine label="Supervisor" value={selected.supervisor} />
                 <InfoLine label="Subordinados" value={selected.directReports ?? 0} />
@@ -9834,7 +9848,7 @@ export function EmployeeMapPage() {
                 <InfoLine label="Status do colaborador" value={employeeMapStatusLabel(selected.status)} />
               </div>
               <ProfileSection title="Dados Operacionais">
-                <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-3">
                   <InfoLine label="Cargo/Função" value={selected.role} />
                   <InfoLine label="LOB" value={selected.lob} />
                   <InfoLine label="Skill" value={selected.skill || "Sem skill"} />
@@ -9876,7 +9890,7 @@ export function EmployeeMapPage() {
                           </div>
                         ) : null}
                         <ProfileSection title="Identificação">
-                          <div className="grid gap-3 md:grid-cols-2">
+                          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                             <FormInput label="Nome" value={nameDraft} onChange={setNameDraft} error={employeeFieldErrors.fullName} />
                             <FormInput label="Nome social" value={socialNameDraft} onChange={setSocialNameDraft} error={employeeFieldErrors.socialName} />
                             <FormInput label="E-mail de login" type="email" value={emailDraft} onChange={setEmailDraft} error={employeeFieldErrors.email} />
@@ -9884,7 +9898,7 @@ export function EmployeeMapPage() {
                           </div>
                         </ProfileSection>
                         <ProfileSection title="Operacional">
-                          <div className="grid gap-3 md:grid-cols-2">
+                          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                             {employeeRoleTitleOptions.length ? (
                               <FormSelect label="Cargo/Função" value={roleTitleDraft} options={employeeRoleTitleOptions} onChange={setRoleTitleDraft} error={employeeFieldErrors.roleTitle} />
                             ) : (
@@ -9929,7 +9943,7 @@ export function EmployeeMapPage() {
                           </div>
                         </ProfileSection>
                         <ProfileSection title="Contrato e Datas">
-                          <div className="grid gap-3 md:grid-cols-2">
+                          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                             {selectedCanEditPeopleData ? <FormSelect label="Tipo de contrato" value={contractDraft} options={contractOptions} onChange={setContractDraft} error={employeeFieldErrors.contractType} /> : null}
                             {selectedCanEditPeopleData ? <FormInput label="Data de admissão" type="date" value={admissionDraft} onChange={setAdmissionDraft} error={employeeFieldErrors.admissionDate} /> : null}
                             {selectedCanEditEmployeeOperational ? <FormInput label="Data de início de Nesting" type="date" value={nestingStartDraft} onChange={setNestingStartDraft} error={employeeFieldErrors.nestingStartDate} /> : null}
@@ -9942,7 +9956,7 @@ export function EmployeeMapPage() {
                         </ProfileSection>
 	                        {selectedCanEditPeopleData ? (
 	                          <ProfileSection title="Contato Operacional">
-	                            <div className="grid gap-3 md:grid-cols-2">
+	                            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
 	                              <FormInput label="Contato principal" value={primaryPhoneDraft} onChange={setPrimaryPhoneDraft} error={employeeFieldErrors.primaryPhone} />
 	                              <FormInput label="Cidade" value={cityDraft} onChange={setCityDraft} error={employeeFieldErrors.city} />
 	                              <FormInput label="Estado/UF" value={stateUfDraft} onChange={setStateUfDraft} error={employeeFieldErrors.stateUf} />
@@ -9952,7 +9966,7 @@ export function EmployeeMapPage() {
 	                        ) : null}
 	                        {selectedCanEditPeopleData ? (
 	                          <ProfileSection title="Dados cadastrais adicionais">
-	                            <div className="grid gap-3 md:grid-cols-2">
+	                            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
 	                              <FormSelect label="Etnia" value={ethnicityDraft} options={ethnicityOptions} onChange={setEthnicityDraft} error={employeeFieldErrors.ethnicity} />
 	                              <FormSelect label="Orientação sexual" value={sexualOrientationDraft} options={sexualOrientationOptions} onChange={setSexualOrientationDraft} error={employeeFieldErrors.sexualOrientation} />
                               <FormSelect label="É PCD?" value={isPcdDraft} options={yesNoPreferNotOptions} onChange={(value) => {
@@ -10014,20 +10028,6 @@ export function EmployeeMapPage() {
                   </div>
                 ) : null}
               </ProfileSection>
-              {!isSupervisorUser && (selected.ethnicity || selected.sexualOrientation || selected.isPcd || selected.pcdDisabilityType || selected.pcdDisabilityOther || selected.firstJob || selected.hasTelemarketingExperience || selected.telemarketingWhere) ? (
-	                <ProfileSection title="Dados cadastrais adicionais">
-	                  <div className="grid grid-cols-2 gap-3 text-sm">
-	                    <InfoLine label="Etnia" value={selected.ethnicity || "Não informado"} />
-	                    <InfoLine label="Orientação sexual" value={selected.sexualOrientation || "Não informado"} />
-                    <InfoLine label="PCD" value={selected.isPcd || "Não informado"} />
-                    {selected.isPcd === "Sim" ? <InfoLine label="Tipo de deficiência" value={selected.pcdDisabilityType || "Não informado"} /> : null}
-                    {selected.isPcd === "Sim" && selected.pcdDisabilityType === "Outra" ? <InfoLine label="Especificação da deficiência" value={selected.pcdDisabilityOther || "Não informado"} /> : null}
-                    <InfoLine label="Primeiro emprego" value={selected.firstJob || "Não informado"} />
-                    <InfoLine label="Já trabalhou em telemarketing" value={selected.hasTelemarketingExperience || "Não informado"} />
-                    <InfoLine label="Onde trabalhou em telemarketing" value={selected.telemarketingWhere || "Não informado"} />
-                  </div>
-                </ProfileSection>
-              ) : null}
               {isSupervisorUser ? (
                 <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm font-semibold text-blue-700">
                   Visão operacional do Supervisor: dados pessoais, bancários, familiares, documentos e contatos de emergência ficam ocultos.
@@ -10036,7 +10036,7 @@ export function EmployeeMapPage() {
                 <>
                   <ProfileSection title="Dados Cadastrais">
                     {selected.restrictedSections?.cadastrais ? (
-                      <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div className="grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-4">
                         <InfoLine label="CPF" value={selected.canViewSensitive ? selected.sensitive?.cpf : selected.maskedSensitive?.cpf} />
                         <InfoLine label="RG" value={selected.canViewSensitive ? selected.sensitive?.rg : selected.maskedSensitive?.rg} />
                         <InfoLine label="Nascimento" value={selected.canViewSensitive ? selected.sensitive?.birthDate : "Acesso restrito"} />
@@ -10048,7 +10048,7 @@ export function EmployeeMapPage() {
                   </ProfileSection>
                   <ProfileSection title="Dados de Contato e Emergência">
                     {selected.restrictedSections?.contato || selected.restrictedSections?.emergencia ? (
-                      <div className="grid gap-3 text-sm">
+                      <div className="grid gap-2 text-sm sm:grid-cols-2">
                         <InfoLine label="Endereço" value={selected.canViewSensitive ? selected.sensitive?.address : "Acesso restrito"} />
                         <InfoLine label="Emergência" value={selected.maskedSensitive?.emergencyContactData ?? "Acesso restrito"} />
                       </div>
@@ -10058,7 +10058,7 @@ export function EmployeeMapPage() {
                   </ProfileSection>
                   <ProfileSection title="Dados Bancários">
                     {selected.restrictedSections?.bancarios ? (
-                      <div className="grid gap-3 text-sm">
+                      <div className="grid gap-2 text-sm sm:grid-cols-2">
                         <InfoLine label="Banco/PIX" value={selected.sensitive?.bankData ?? selected.maskedSensitive?.bankData} />
                         <InfoLine label="Tipo da Chave PIX" value={selected.sensitive?.pixKeyType ?? selected.maskedSensitive?.pixKeyType ?? selected.pixKeyType ?? "Não informado"} />
                         <InfoLine label="Chave PIX" value={selected.sensitive?.pixKey ?? selected.maskedSensitive?.pixKey ?? selected.pixKey ?? "Não informada"} />
@@ -10067,6 +10067,20 @@ export function EmployeeMapPage() {
                   </ProfileSection>
                 </>
               )}
+              {!isSupervisorUser && (selected.ethnicity || selected.sexualOrientation || selected.isPcd || selected.pcdDisabilityType || selected.pcdDisabilityOther || selected.firstJob || selected.hasTelemarketingExperience || selected.telemarketingWhere) ? (
+                <ProfileSection title="Dados cadastrais adicionais">
+                  <div className="grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-3">
+                    <InfoLine label="Etnia" value={selected.ethnicity || "Não informado"} />
+                    <InfoLine label="Orientação sexual" value={selected.sexualOrientation || "Não informado"} />
+                    <InfoLine label="PCD" value={selected.isPcd || "Não informado"} />
+                    {selected.isPcd === "Sim" ? <InfoLine label="Tipo de deficiência" value={selected.pcdDisabilityType || "Não informado"} /> : null}
+                    {selected.isPcd === "Sim" && selected.pcdDisabilityType === "Outra" ? <InfoLine label="Especificação da deficiência" value={selected.pcdDisabilityOther || "Não informado"} /> : null}
+                    <InfoLine label="Primeiro emprego" value={selected.firstJob || "Não informado"} />
+                    <InfoLine label="Já trabalhou em telemarketing" value={selected.hasTelemarketingExperience || "Não informado"} />
+                    <InfoLine label="Onde trabalhou em telemarketing" value={selected.telemarketingWhere || "Não informado"} />
+                  </div>
+                </ProfileSection>
+              ) : null}
               <ProfileSection title="Histórico de Ausências">
                 {selected.attendanceHistory?.length ? (
                   <MiniAlertList
