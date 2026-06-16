@@ -521,7 +521,7 @@ function buildTrackingWhere(filters: AdditionalDataTrackingFilters): Prisma.Empl
     ]
   };
   const and: Prisma.EmployeeProfileWhereInput[] = [];
-  if (filters.lob && filters.lob !== "Todos") and.push({ lob: { name: { equals: filters.lob, mode: "insensitive" } } });
+  if (filters.lob && filters.lob !== "Todos") and.push(buildTrackingLobWhere(filters.lob));
   if (filters.supervisorId && filters.supervisorId !== "Todos") {
     and.push(filters.supervisorId === "SEM_SUPERVISOR" ? { supervisorId: null } : { supervisorId: filters.supervisorId });
   }
@@ -540,6 +540,31 @@ function buildTrackingWhere(filters: AdditionalDataTrackingFilters): Prisma.Empl
   }
   if (and.length) where.AND = and;
   return where;
+}
+
+function buildTrackingLobWhere(value: string): Prisma.EmployeeProfileWhereInput {
+  if (isTnsLobGroup(value)) {
+    return {
+      OR: ["TNS", "Video", "Vídeo", "Comments", "Comentários"].map((lob) => ({
+        lob: { name: { equals: lob, mode: "insensitive" } }
+      }))
+    };
+  }
+  return { lob: { name: { equals: value, mode: "insensitive" } } };
+}
+
+function isTnsLobGroup(value: unknown) {
+  return ["TNS", "VIDEO", "VIDEOS", "COMMENTS", "COMENTARIOS"].includes(normalizeLookupToken(value));
+}
+
+function normalizeLookupToken(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[/-]+/g, "_")
+    .replace(/\s+/g, "_")
+    .toUpperCase();
 }
 
 function isActiveUserRecord(user: { status?: string | null; deletedAt?: Date | null }) {

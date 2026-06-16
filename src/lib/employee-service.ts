@@ -178,7 +178,7 @@ async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeList
                 ]
               }
             : {}),
-          ...(query.lob && query.lob !== "Todos" ? { lob: { name: { equals: query.lob, mode: "insensitive" } } } : {}),
+          ...buildEmployeeMapLobFilterWhere(query.lob),
           ...(query.lobId ? { lobId: query.lobId } : {}),
           ...buildSupervisorFilterWhere(query.supervisorId),
           ...(query.teamId ? { teamId: query.teamId } : {}),
@@ -737,7 +737,7 @@ export async function exportOperationalEmployeesXlsxData(actor: Actor, filters: 
   const filteredRows = employees.filter((employee) => {
     const row = employee as Record<string, any>;
     const matchesQuery = !query || [employee.name, employee.wb, employee.email, employee.role, employee.lob, row.supervisor, row.skill, row.wave].join(" ").toLowerCase().includes(query);
-    const matchesLob = !lob || lob === "Todos" || employee.lob === lob;
+    const matchesLob = !lob || lob === "Todos" || matchesEmployeeMapLobFilter(employee.lob, lob);
     const matchesStatus = !status || status === "Todos" || matchesEmployeeStatusFilter(employee.status, row.userStatus, status);
     const matchesSupervisor = !supervisorId || supervisorId === "Todos" || (isNoneFilter(supervisorId) ? !row.supervisorId : row.supervisorId === supervisorId);
     const matchesShift = !shiftId || row.shiftId === shiftId;
@@ -1378,6 +1378,30 @@ function buildContractTypeFilterWhere(value: unknown): Prisma.EmployeeProfileWhe
   const normalized = normalizeContractTypeFilter(value);
   if (!normalized) return {};
   return { contractType: { equals: normalized, mode: "insensitive" } };
+}
+
+function buildEmployeeMapLobFilterWhere(value: unknown): Prisma.EmployeeProfileWhereInput {
+  const raw = clean(value);
+  if (!raw || isAllFilter(raw)) return {};
+  if (isTnsLobGroup(raw)) {
+    return {
+      OR: ["TNS", "Video", "Vídeo", "Comments", "Comentários"].map((lob) => ({
+        lob: { name: { equals: lob, mode: "insensitive" } }
+      }))
+    };
+  }
+  return { lob: { name: { equals: raw, mode: "insensitive" } } };
+}
+
+function matchesEmployeeMapLobFilter(employeeLob: unknown, filter: unknown) {
+  const rawFilter = clean(filter);
+  if (!rawFilter || isAllFilter(rawFilter)) return true;
+  if (isTnsLobGroup(rawFilter)) return isTnsLobGroup(employeeLob);
+  return normalizeStatusToken(employeeLob) === normalizeStatusToken(rawFilter);
+}
+
+function isTnsLobGroup(value: unknown) {
+  return ["TNS", "VIDEO", "VIDEOS", "COMMENTS", "COMENTARIOS"].includes(normalizeStatusToken(value));
 }
 
 function normalizeContractTypeFilter(value: unknown) {

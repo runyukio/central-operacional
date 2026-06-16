@@ -473,6 +473,17 @@ function employeeMapStatusLabel(status: string) {
   return labels[key] ?? status;
 }
 
+function employeeMapLobFilterLabel(lob: string) {
+  const key = String(lob ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return ["TNS", "VIDEO", "VIDEOS", "COMMENTS", "COMENTARIOS"].includes(key) ? "TNS" : lob;
+}
+
 type MonthlyAdvanceImportPreview = {
   totalRows: number;
   validRows: number;
@@ -9323,7 +9334,7 @@ export function EmployeeMapPage() {
   const [showDeleteEmployee, setShowDeleteEmployee] = useState(false);
   const [deleteEmployeeForm, setDeleteEmployeeForm] = useState({ reason: "", confirmation: "" });
   const [deletingEmployee, setDeletingEmployee] = useState(false);
-  const employeeMapLobs = ["Todos", ...Array.from(new Set(employeeSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? employeeRows.map((employee) => employee.lob).filter(Boolean)))];
+  const employeeMapLobs = ["Todos", ...Array.from(new Set((employeeSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => employeeMapLobFilterLabel(lob.name)) ?? employeeRows.map((employee) => employeeMapLobFilterLabel(employee.lob)).filter(Boolean))))];
   const employeeStatusOptions = ["Todos", ...Array.from(new Set((employeeFilterOptions.statuses?.length ? employeeFilterOptions.statuses : employeeOperationalStatusOptions).filter(Boolean)))];
   const employeeSupervisorOptions = employeeSettings?.supervisors?.filter((supervisor) => supervisor.status !== "INACTIVE") ?? [];
   const employeeSkillOptions = ["Todos", "SEM_SKILL", ...employeeFilterOptions.skills.filter(Boolean)];
@@ -9660,7 +9671,7 @@ export function EmployeeMapPage() {
       {employeeMessage ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{employeeMessage}</div> : null}
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="space-y-5">
-          <div className="card grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-10">
+          <div className="card grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-9">
             <input value={query} onChange={(event) => setQuery(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm outline-none xl:col-span-2" placeholder="Nome, e-mail, WB/Login, Skill ou Wave" />
             <select value={lobFilter} onChange={(event) => setLobFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
               {employeeMapLobs.map((lob) => <option key={lob} value={lob}>{lob === "Todos" ? "Todas as LOBs" : lob}</option>)}
@@ -9688,7 +9699,7 @@ export function EmployeeMapPage() {
               <option value="PJ">PJ</option>
               <option value="CLT">CLT</option>
             </select>
-            <div className="rounded-lg border border-dashed border-blue-200 bg-blue-50/50 p-3 md:col-span-2 xl:col-span-10">
+            <div className="rounded-lg border border-dashed border-blue-200 bg-blue-50/50 p-3 md:col-span-2 xl:col-span-9">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="text-xs font-black uppercase text-blue-700">Filtro em lote por WB/Login</p>
@@ -9720,7 +9731,7 @@ export function EmployeeMapPage() {
                 </div>
               ) : null}
             </div>
-            <div className="flex gap-2 md:col-span-2 xl:col-span-10 xl:justify-end">
+            <div className="flex gap-2 md:col-span-2 xl:col-span-9 xl:justify-end">
               <button onClick={() => { setEmployeePage(1); void loadEmployees({ nextPage: 1 }); void loadAdditionalDataTracking(); }} className="h-10 rounded-lg bg-blue-600 px-5 text-sm font-bold text-white">Buscar</button>
               <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setContractFilter("Todos"); setEmployeeBatchWbs([]); setAdditionalDataStatusFilter("Todos"); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextContract: "Todos", nextBatchWbs: [], nextPage: 1 }); void loadAdditionalDataTracking({ nextQuery: "", nextLob: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextStatus: "Todos" }); }} className="h-10 rounded-lg border border-border px-5 text-sm font-bold">Limpar filtros</button>
             </div>
