@@ -32,6 +32,7 @@ const unavailableEmployeeTokens = new Set([
 type ProductiveShiftCategory = (typeof productiveShiftCategories)[number];
 type RequiredLob = (typeof requiredLobs)[number];
 type StaffRole = "SUPERVISOR" | "POC" | "RTA";
+type RequiredStaffCoverageFilter = "Todos" | "Verde" | "Amarelo" | "Vermelho" | "Sem supervisor";
 
 type ActiveUser = NonNullable<Awaited<ReturnType<typeof getUser>>>;
 
@@ -61,6 +62,7 @@ export type RequiredStaffQuery = {
   shift?: string;
   supervisor?: string;
   includeRta?: boolean | string;
+  coverageStatus?: string;
 };
 
 export type RequiredStaffPerson = {
@@ -217,20 +219,50 @@ function buildStaffCoverage(period: { startDate: Date; endDate: Date }, schedule
     }
   }
 
-  const summary = summarizeStaffRows(rows);
-  const critical = buildCriticalRows(rows, includeRta);
+  const filteredRows = filterStaffRowsByCoverage(rows, query.coverageStatus);
+  const summary = summarizeStaffRows(filteredRows);
+  const critical = buildCriticalRows(filteredRows, includeRta);
   const staffOptions = ["Todos", ...Array.from(new Set(people.map((person) => person.name).filter(Boolean))).sort((a, b) => a.localeCompare(b, "pt-BR"))];
 
   return {
     summary,
-    rows,
+    rows: filteredRows,
     critical,
     filters: {
       lobs: ["Todos", ...requiredLobs],
       shifts: ["Todos", ...productiveShiftCategories],
-      staff: staffOptions
+      staff: staffOptions,
+      coverageStatuses: ["Todos", "Verde", "Amarelo", "Vermelho", "Sem supervisor"] satisfies RequiredStaffCoverageFilter[]
     }
   };
+}
+
+function filterStaffRowsByCoverage(rows: RequiredStaffShiftRow[], value?: string | null) {
+  const filter = normalizeCoverageFilter(value);
+  if (filter === "Todos") return rows;
+  return rows
+    .map((row) => ({
+      ...row,
+      lobs: row.lobs.filter((cell) => staffCellMatchesCoverageFilter(cell, filter))
+    }))
+    .filter((row) => row.lobs.length > 0);
+}
+
+function staffCellMatchesCoverageFilter(cell: RequiredStaffLobCell, filter: RequiredStaffCoverageFilter) {
+  if (filter === "Verde") return cell.status === "COMPLETE";
+  if (filter === "Amarelo") return cell.status === "PARTIAL_SUPERVISOR" || cell.status === "PARTIAL_POC";
+  if (filter === "Vermelho") return cell.status === "NONE";
+  if (filter === "Sem supervisor") return cell.supervisors.length === 0;
+  return true;
+}
+
+function normalizeCoverageFilter(value?: string | null): RequiredStaffCoverageFilter {
+  const key = lookupKey(value);
+  if (key === "VERDE" || key === "GREEN" || key === "COM_SUPERVISOR") return "Verde";
+  if (key === "AMARELO" || key === "YELLOW" || key === "PARCIAL" || key === "POC_RTA" || key === "POC_OU_RTA") return "Amarelo";
+  if (key === "VERMELHO" || key === "RED" || key === "SEM_COBERTURA" || key === "SEM_NINGUEM") return "Vermelho";
+  if (key === "SEM_SUPERVISOR" || key === "NO_SUPERVISOR") return "Sem supervisor";
+  return "Todos";
 }
 
 function buildLobCell(lob: RequiredLob, date: string, shift: ProductiveShiftCategory, byKey: Map<string, RequiredStaffPerson[]>, includeRta: boolean): RequiredStaffLobCell {

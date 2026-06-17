@@ -14104,6 +14104,7 @@ export function StaffCoveragePage() {
     lob: "Todos",
     shift: "Todos",
     supervisor: "Todos",
+    staffCoverage: "Todos",
     skill: "Todas",
     roleTitle: "Agente"
   });
@@ -14152,7 +14153,8 @@ export function StaffCoveragePage() {
       lob: filters.lob,
       shift: filters.shift,
       supervisor: filters.supervisor,
-      includeRta: showRtaCoverage ? "true" : "false"
+      includeRta: showRtaCoverage ? "true" : "false",
+      coverageStatus: filters.staffCoverage
     });
     try {
       const data = await apiJson<RequiredStaffCoverageResponse>(`/api/staff-coverage/staff?${params.toString()}`);
@@ -14163,7 +14165,7 @@ export function StaffCoveragePage() {
     } finally {
       setStaffLoading(false);
     }
-  }, [filters.endDate, filters.lob, filters.shift, filters.startDate, filters.supervisor, showRtaCoverage]);
+  }, [filters.endDate, filters.lob, filters.shift, filters.staffCoverage, filters.startDate, filters.supervisor, showRtaCoverage]);
 
   useEffect(() => {
     if (view === "AGENTS") void loadCoverage();
@@ -14257,6 +14259,7 @@ export function StaffCoveragePage() {
   const rows = payload?.data ?? [];
   const lobs = optionList(view === "STAFF" ? staffPayload?.filters.lobs : payload?.filters.lobs, filters.lob);
   const supervisors = optionList(view === "STAFF" ? staffPayload?.filters.staff : payload?.filters.supervisors, filters.supervisor);
+  const staffCoverageStatuses = optionList(staffPayload?.filters.coverageStatuses, filters.staffCoverage);
   const skills = optionList(payload?.filters.skills, filters.skill);
   const shifts = ["Todos", "Manhã", "Tarde", "Noite"];
 
@@ -14285,7 +14288,7 @@ export function StaffCoveragePage() {
       </div>
 
       <div className="rounded-xl border border-border bg-white p-3 shadow-sm">
-        <div className={cn("grid gap-2 md:grid-cols-3", view === "AGENTS" ? "xl:grid-cols-[140px_140px_140px_140px_170px_140px_130px_1fr]" : "xl:grid-cols-[140px_140px_140px_140px_190px_1fr]")}>
+        <div className={cn("grid gap-2 md:grid-cols-3", view === "AGENTS" ? "xl:grid-cols-[140px_140px_140px_140px_170px_140px_130px_1fr]" : "xl:grid-cols-[140px_140px_140px_140px_190px_170px_1fr]")}>
           <FormInput label="Data inicial" type="date" value={filters.startDate} onChange={(value) => updateFilter("startDate", value)} />
           <FormInput label="Data final" type="date" value={filters.endDate} onChange={(value) => updateFilter("endDate", value)} />
           <label className="text-xs font-bold text-muted">
@@ -14306,6 +14309,18 @@ export function StaffCoveragePage() {
               {supervisors.map((supervisor) => <option key={supervisor} value={supervisor}>{supervisor === "Todos" ? (view === "STAFF" ? "Todos os staff" : "Todos os supervisores") : supervisor}</option>)}
             </select>
           </label>
+          {view === "STAFF" ? (
+            <label className="text-xs font-bold text-muted">
+              Cobertura
+              <select value={filters.staffCoverage} onChange={(event) => updateFilter("staffCoverage", event.target.value)} className="premium-control mt-1 h-9 w-full px-3 text-sm font-bold text-navy-950">
+                {staffCoverageStatuses.map((status) => (
+                  <option key={status} value={status}>
+                    {status === "Todos" ? "Todas as cores" : status === "Verde" ? "Verde - com supervisor" : status === "Amarelo" ? "Amarelo - POC/RTA" : status === "Vermelho" ? "Vermelho - sem cobertura" : "Sem supervisor na LOB"}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           {view === "AGENTS" ? (
             <>
               <label className="text-xs font-bold text-muted">
@@ -14688,13 +14703,13 @@ type RequiredStaffCoverageResponse = {
   };
   rows: RequiredStaffShiftRowClient[];
   critical: RequiredStaffCriticalRowClient[];
-  filters: { lobs: string[]; shifts: string[]; staff: string[] };
+  filters: { lobs: string[]; shifts: string[]; staff: string[]; coverageStatuses?: string[] };
 };
 
 function RequiredStaffCoverageView({ payload, loading, showRta }: { payload: RequiredStaffCoverageResponse | null; loading: boolean; showRta: boolean }) {
   const [showCriticalDays, setShowCriticalDays] = useState(true);
   const rows = payload?.rows ?? [];
-  const lobs = rows[0]?.lobs.map((cell) => cell.lob) ?? ["ADS", "CEC", "TNS"];
+  const lobs = rows.length ? Array.from(new Set(rows.flatMap((row) => row.lobs.map((cell) => cell.lob)))) : ["ADS", "CEC", "TNS"];
   const summary = payload?.summary;
 
   if (loading && !payload) {
@@ -14755,7 +14770,14 @@ function RequiredStaffCoverageView({ payload, loading, showRta }: { payload: Req
                         <StaffNameList items={row.companySupervisors} empty="Sem Supervisor" />
                       </div>
                     </td>
-                    {row.lobs.map((cell) => <td key={cell.lob} className="px-2 py-2"><RequiredStaffCoverageCell cell={cell} showRta={showRta} /></td>)}
+                    {lobs.map((lob) => {
+                      const cell = row.lobs.find((item) => item.lob === lob);
+                      return (
+                        <td key={lob} className="px-2 py-2">
+                          {cell ? <RequiredStaffCoverageCell cell={cell} showRta={showRta} /> : <div className="min-h-[132px] rounded-xl border border-dashed border-slate-200 bg-slate-50/60" />}
+                        </td>
+                      );
+                    })}
                     {showRta ? (
                       <td className="px-3 py-2 text-center">
                         <span className={cn("rounded-full px-2 py-1 text-xs font-extrabold", row.rtas.length ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-muted")}>

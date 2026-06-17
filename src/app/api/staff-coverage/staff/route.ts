@@ -13,7 +13,8 @@ export async function GET(request: Request) {
     lob: url.searchParams.get("lob") ?? undefined,
     shift: url.searchParams.get("shift") ?? undefined,
     supervisor: url.searchParams.get("supervisor") ?? undefined,
-    includeRta: url.searchParams.get("includeRta") ?? undefined
+    includeRta: url.searchParams.get("includeRta") ?? undefined,
+    coverageStatus: url.searchParams.get("coverageStatus") ?? undefined
   });
   if ("error" in result) return NextResponse.json(result, { status: errorStatus(result as any) });
   return NextResponse.json(result);
