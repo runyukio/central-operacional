@@ -33,6 +33,8 @@ export type FinanceiroPreviewRow = {
 };
 
 const FINANCEIRO_DEFAULT_SOURCE = "Upload histórico";
+const FINANCEIRO_MANUAL_SOURCE = "Manual";
+const FINANCEIRO_TEMPLATE_HEADERS = ["invoice_cycle_month", "cost_center", "max_hours_capacity", "billable_hours_target", "billable_hours_actual", "adherence_percent", "difference_hours", "penalty_percent", "notes"];
 const FINANCEIRO_ADJUSTMENT_FIELDS = new Map<string, { label: string; type: "hours" | "percent" | "text" }>([
   ["maxHoursCapacityMinutes", { label: "Max Hours (Capacity)", type: "hours" }],
   ["billableHoursTargetMinutes", { label: "Billable Hours (Meta)", type: "hours" }],
@@ -255,6 +257,85 @@ export async function createFinanceiroAdjustment(actor: Actor, input: {
   return { data: mapFinanceiroRecord({ ...updated, createdBy: null, updatedBy: user, adjustments: [] }) };
 }
 
+export async function saveFinanceiroRecord(actor: Actor, input: Record<string, unknown>) {
+  const user = await requireFinanceiroUser(actor);
+  if ("error" in user) return user;
+  const id = text(input.id);
+  const invoiceCycleMonth = normalizeFinanceiroMonth(input.invoiceCycleMonth);
+  const costCenter = text(input.costCenter);
+  if (!invoiceCycleMonth) return { error: "Ciclo da invoice é obrigatório.", status: 400 };
+  if (!costCenter) return { error: "Cost center é obrigatório.", status: 400 };
+
+  const maxHoursCapacityMinutes = parseHours(input.maxHoursCapacity);
+  const billableHoursTargetMinutes = parseHours(input.billableHoursTarget);
+  const billableHoursActualMinutes = parseHours(input.billableHoursActual);
+  const penaltyPercent = parsePercent(input.penaltyPercent);
+  const importedAdherence = parsePercent(input.adherencePercent);
+  const importedDifference = parseHours(input.differenceHours);
+  if (maxHoursCapacityMinutes === null) return { error: "Max Hours (Capacity) inválido.", status: 400 };
+  if (billableHoursTargetMinutes === null) return { error: "Billable Hours (Meta) inválido.", status: 400 };
+  if (billableHoursActualMinutes === null) return { error: "Billable Hours (Real) inválido.", status: 400 };
+  if (penaltyPercent === null) return { error: "Penalty % inválido.", status: 400 };
+
+  const adherencePercent = importedAdherence ?? calculateAdherence(billableHoursActualMinutes, billableHoursTargetMinutes);
+  const differenceMinutes = importedDifference ?? billableHoursActualMinutes - billableHoursTargetMinutes;
+  const notes = text(input.notes);
+  const source = text(input.source) || FINANCEIRO_MANUAL_SOURCE;
+  const data = {
+    invoiceCycleMonth,
+    costCenter,
+    maxHoursCapacityMinutes,
+    billableHoursTargetMinutes,
+    billableHoursActualMinutes,
+    adherencePercent: decimal(adherencePercent),
+    differenceMinutes,
+    penaltyPercent: decimal(penaltyPercent),
+    notes: notes || null,
+    source,
+    updatedById: user.id
+  };
+
+  try {
+    const saved = id
+      ? await prisma.financeInvoiceCycleRecord.update({
+        where: { id },
+        data,
+        include: {
+          createdBy: { select: { name: true, email: true } },
+          updatedBy: { select: { name: true, email: true } },
+          adjustments: { orderBy: { createdAt: "desc" }, include: { createdBy: { select: { name: true, email: true } } } }
+        }
+      })
+      : await prisma.financeInvoiceCycleRecord.create({
+        data: { ...data, createdById: user.id },
+        include: {
+          createdBy: { select: { name: true, email: true } },
+          updatedBy: { select: { name: true, email: true } },
+          adjustments: { orderBy: { createdAt: "desc" }, include: { createdBy: { select: { name: true, email: true } } } }
+        }
+      });
+    await auditFinanceiro(user.id, "FinanceInvoiceCycleRecord", saved.id, id ? "FINANCEIRO_RECORD_UPDATED" : "FINANCEIRO_RECORD_CREATED", {
+      invoiceCycleMonth,
+      costCenter,
+      maxHoursCapacity: minutesToHours(maxHoursCapacityMinutes),
+      billableHoursTarget: minutesToHours(billableHoursTargetMinutes),
+      billableHoursActual: minutesToHours(billableHoursActualMinutes),
+      adherencePercent,
+      differenceHours: minutesToHours(differenceMinutes),
+      penaltyPercent
+    }, AuditAction.EDICAO);
+    return { data: mapFinanceiroRecord(saved) };
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      return { error: "Já existe registro para este ciclo e cost center. Use Editar no registro existente.", status: 409 };
+    }
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+      return { error: "Registro financeiro não encontrado.", status: 404 };
+    }
+    throw error;
+  }
+}
+
 export async function getFinanceiroUploads(actor: Actor) {
   const user = await requireFinanceiroUser(actor);
   if ("error" in user) return user;
@@ -264,6 +345,18 @@ export async function getFinanceiroUploads(actor: Actor) {
     include: { uploadedBy: { select: { name: true, email: true } } }
   });
   return { data: uploads.map(mapFinanceiroUpload) };
+}
+
+export async function exportFinanceiroTemplate(actor: Actor): Promise<XlsxExportPayload | { error: string; status?: number }> {
+  const user = await requireFinanceiroUser(actor);
+  if ("error" in user) return user;
+  await auditFinanceiro(user.id, "Financeiro", "template", "FINANCEIRO_TEMPLATE_DOWNLOADED", { headers: FINANCEIRO_TEMPLATE_HEADERS }, AuditAction.EDICAO);
+  return {
+    fileName: "template_financeiro.xlsx",
+    sheetName: "Template Financeiro",
+    headers: FINANCEIRO_TEMPLATE_HEADERS,
+    rows: []
+  };
 }
 
 export async function exportFinanceiro(actor: Actor, filters: FinanceiroFilters = {}): Promise<XlsxExportPayload | { error: string; status?: number }> {

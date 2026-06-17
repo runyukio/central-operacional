@@ -12,6 +12,7 @@ import {
   History,
   LockKeyhole,
   PencilLine,
+  Plus,
   RefreshCw,
   Save,
   Target,
@@ -133,6 +134,20 @@ type PreviewPayload = {
   rows: PreviewRow[];
 };
 
+type FinanceiroRecordForm = {
+  id?: string;
+  invoiceCycleMonth: string;
+  costCenter: string;
+  maxHoursCapacity: string;
+  billableHoursTarget: string;
+  billableHoursActual: string;
+  adherencePercent: string;
+  differenceHours: string;
+  penaltyPercent: string;
+  notes: string;
+  source: string;
+};
+
 const adjustmentFields = [
   { value: "maxHoursCapacityMinutes", label: "Max Hours (Capacity)" },
   { value: "billableHoursTargetMinutes", label: "Billable Hours (Meta)" },
@@ -156,10 +171,12 @@ export function FinanceiroPage() {
   const [error, setError] = useState("");
   const [selectedRecord, setSelectedRecord] = useState<FinanceiroRecord | null>(null);
   const [adjustRecord, setAdjustRecord] = useState<FinanceiroRecord | null>(null);
+  const [recordForm, setRecordForm] = useState<FinanceiroRecordForm | null>(null);
   const [uploadsOpen, setUploadsOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [preview, setPreview] = useState<PreviewPayload | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [savingRecord, setSavingRecord] = useState(false);
   const [savingAdjustment, setSavingAdjustment] = useState(false);
   const [toast, setToast] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -240,6 +257,56 @@ export function FinanceiroPage() {
   }
 
   const summary = payload?.data.summary;
+  const monthOptions = useMemo(() => buildMonthOptions(invoiceCycleMonth), [invoiceCycleMonth]);
+
+  function openNewRecordForm() {
+    setRecordForm({
+      invoiceCycleMonth,
+      costCenter: costCenter !== "Todos" ? costCenter : "",
+      maxHoursCapacity: "",
+      billableHoursTarget: "",
+      billableHoursActual: "",
+      adherencePercent: "",
+      differenceHours: "",
+      penaltyPercent: "0",
+      notes: "",
+      source: "Manual"
+    });
+  }
+
+  function openEditRecordForm(record: FinanceiroRecord) {
+    setRecordForm({
+      id: record.id,
+      invoiceCycleMonth: record.invoiceCycleMonth,
+      costCenter: record.costCenter,
+      maxHoursCapacity: record.maxHoursCapacity,
+      billableHoursTarget: record.billableHoursTarget,
+      billableHoursActual: record.billableHoursActual,
+      adherencePercent: record.adherenceLabel.replace("%", ""),
+      differenceHours: record.differenceHours,
+      penaltyPercent: record.penaltyLabel.replace("%", ""),
+      notes: record.notes,
+      source: record.source || "Manual"
+    });
+  }
+
+  async function saveRecord(form: FinanceiroRecordForm) {
+    setSavingRecord(true);
+    const response = await fetch("/api/financeiro", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "save-record", ...form })
+    });
+    const json = await response.json().catch(() => ({}));
+    setSavingRecord(false);
+    if (!response.ok) {
+      setToast(json.message || json.error || "Não foi possível salvar o registro financeiro.");
+      return;
+    }
+    setToast(form.id ? "Registro financeiro atualizado com sucesso." : "Registro financeiro criado com sucesso.");
+    setRecordForm(null);
+    await fetchData();
+  }
 
   return (
     <div className="space-y-4">
@@ -257,6 +324,14 @@ export function FinanceiroPage() {
               <History className="mr-2 inline h-4 w-4" />
               Histórico de uploads
             </button>
+            <a href="/api/financeiro/template" className="premium-control inline-flex h-10 items-center justify-center px-3 text-sm font-extrabold text-navy-950">
+              <FileSpreadsheet className="mr-2 h-4 w-4" />
+              Baixar template
+            </a>
+            <button type="button" onClick={openNewRecordForm} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">
+              <Plus className="mr-2 inline h-4 w-4" />
+              Adicionar manualmente
+            </button>
             <button type="button" onClick={() => setUploadOpen(true)} className="premium-button h-10 px-3 text-sm font-extrabold">
               <Upload className="mr-2 inline h-4 w-4" />
               Subir dados
@@ -272,7 +347,9 @@ export function FinanceiroPage() {
         <div className="grid gap-3 xl:grid-cols-[1fr_1fr_1fr_1.4fr_auto_auto] xl:items-end">
           <label className="block">
             <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">Ciclo da Invoice</span>
-            <input type="month" value={invoiceCycleMonth} onChange={(event) => setInvoiceCycleMonth(event.target.value)} className="premium-control h-10 w-full px-3 text-sm font-bold outline-none" />
+            <select value={invoiceCycleMonth} onChange={(event) => setInvoiceCycleMonth(event.target.value)} className="premium-control h-10 w-full px-3 text-sm font-bold outline-none">
+              {monthOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
           </label>
           <label className="block">
             <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">Cost center</span>
@@ -349,9 +426,10 @@ export function FinanceiroPage() {
                         <button type="button" onClick={() => setSelectedRecord(record)} className="premium-control grid h-9 w-9 place-items-center text-navy-950" title="Ver detalhes">
                           <Eye className="h-4 w-4" />
                         </button>
-                        <button type="button" onClick={() => setAdjustRecord(record)} className="premium-control grid h-9 w-9 place-items-center text-navy-950" title="Ajustar">
+                        <button type="button" onClick={() => openEditRecordForm(record)} className="premium-control grid h-9 w-9 place-items-center text-navy-950" title="Editar">
                           <PencilLine className="h-4 w-4" />
                         </button>
+                        <button type="button" onClick={() => setAdjustRecord(record)} className="premium-control h-9 px-2 text-xs font-extrabold text-navy-950" title="Ajustar">Ajustar</button>
                       </div>
                     </td>
                   </tr>
@@ -364,23 +442,8 @@ export function FinanceiroPage() {
         )}
       </Panel>
 
-      <div className="rounded-2xl border border-blue-100 bg-blue-50/55 p-4">
-        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-          <div className="flex gap-3">
-            <span className="grid h-11 w-11 place-items-center rounded-2xl bg-white text-blue-600 shadow-soft"><LockKeyhole className="h-5 w-5" /></span>
-            <div>
-              <p className="text-sm font-black text-navy-950">Sobre a aba Financeiro</p>
-              <p className="mt-1 max-w-3xl text-sm font-medium text-muted">Acompanhe capacidade, horas billáveis, aderência e penalty percentual por ciclo de invoice e cost center. Penalty é sempre percentual, nunca valor em dinheiro.</p>
-            </div>
-          </div>
-          <div className="text-sm font-bold text-blue-700">
-            <p className="mb-1 font-black">Permissões de acesso:</p>
-            {(payload?.data.allowedEmails ?? ["wb_fernanda20@kuaishou.com", "runyukio@gmail.com"]).map((email) => <p key={email}>• {email}</p>)}
-          </div>
-        </div>
-      </div>
-
-      {selectedRecord ? <RecordDetailModal record={selectedRecord} onClose={() => setSelectedRecord(null)} onAdjust={() => { setAdjustRecord(selectedRecord); setSelectedRecord(null); }} /> : null}
+      {selectedRecord ? <RecordDetailModal record={selectedRecord} onClose={() => setSelectedRecord(null)} onEdit={() => { openEditRecordForm(selectedRecord); setSelectedRecord(null); }} onAdjust={() => { setAdjustRecord(selectedRecord); setSelectedRecord(null); }} /> : null}
+      {recordForm ? <RecordFormModal form={recordForm} setForm={setRecordForm} monthOptions={monthOptions} saving={savingRecord} onClose={() => setRecordForm(null)} onSave={() => saveRecord(recordForm)} /> : null}
       {adjustRecord ? <AdjustmentModal record={adjustRecord} onClose={() => setAdjustRecord(null)} onSaved={async (message) => { setToast(message); setAdjustRecord(null); await fetchData(); }} saving={savingAdjustment} setSaving={setSavingAdjustment} /> : null}
       {uploadOpen ? <UploadModal preview={preview} uploading={uploading} inputRef={fileInputRef} onClose={() => setUploadOpen(false)} onPreview={handlePreviewUpload} onCommit={handleCommitUpload} /> : null}
       {uploadsOpen ? <UploadsModal uploads={payload?.data.uploads ?? []} onClose={() => setUploadsOpen(false)} /> : null}
@@ -388,7 +451,7 @@ export function FinanceiroPage() {
   );
 }
 
-function RecordDetailModal({ record, onClose, onAdjust }: { record: FinanceiroRecord; onClose: () => void; onAdjust: () => void }) {
+function RecordDetailModal({ record, onClose, onEdit, onAdjust }: { record: FinanceiroRecord; onClose: () => void; onEdit: () => void; onAdjust: () => void }) {
   return (
     <ModalShell title="Detalhe financeiro" onClose={onClose}>
       <div className="grid gap-3 md:grid-cols-2">
@@ -426,9 +489,78 @@ function RecordDetailModal({ record, onClose, onAdjust }: { record: FinanceiroRe
       </div>
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onClose} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Fechar</button>
+        <button type="button" onClick={onEdit} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Editar</button>
         <button type="button" onClick={onAdjust} className="premium-button h-10 px-4 text-sm font-extrabold">Ajustar</button>
       </div>
     </ModalShell>
+  );
+}
+
+function RecordFormModal({
+  form,
+  setForm,
+  monthOptions,
+  saving,
+  onClose,
+  onSave
+}: {
+  form: FinanceiroRecordForm;
+  setForm: (value: FinanceiroRecordForm) => void;
+  monthOptions: Array<{ value: string; label: string }>;
+  saving: boolean;
+  onClose: () => void;
+  onSave: () => void;
+}) {
+  const isEdit = Boolean(form.id);
+  const setField = (field: keyof FinanceiroRecordForm, value: string) => setForm({ ...form, [field]: value });
+  return (
+    <ModalShell title={isEdit ? "Editar registro financeiro" : "Adicionar registro financeiro"} onClose={onClose}>
+      <div className="grid gap-3 md:grid-cols-2">
+        <label className="block">
+          <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">Ciclo da Invoice</span>
+          <select value={form.invoiceCycleMonth} onChange={(event) => setField("invoiceCycleMonth", event.target.value)} className="premium-control h-10 w-full px-3 text-sm font-bold outline-none">
+            {monthOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">Cost center</span>
+          <input value={form.costCenter} onChange={(event) => setField("costCenter", event.target.value)} placeholder="ADS, CEC, TNS..." className="premium-control h-10 w-full px-3 text-sm font-bold outline-none" />
+        </label>
+        <FormInput label="Max Hours (Capacity)" value={form.maxHoursCapacity} onChange={(value) => setField("maxHoursCapacity", value)} placeholder="12000:00" />
+        <FormInput label="Billable Hours (Meta)" value={form.billableHoursTarget} onChange={(value) => setField("billableHoursTarget", value)} placeholder="10200:00" />
+        <FormInput label="Billable Hours (Real)" value={form.billableHoursActual} onChange={(value) => setField("billableHoursActual", value)} placeholder="8742:30" />
+        <FormInput label="Penalty %" value={form.penaltyPercent} onChange={(value) => setField("penaltyPercent", value)} placeholder="5, -3 ou 0" />
+        <FormInput label="Aderence % (opcional)" value={form.adherencePercent} onChange={(value) => setField("adherencePercent", value)} placeholder="Calcula automático se vazio" />
+        <FormInput label="Difference (opcional)" value={form.differenceHours} onChange={(value) => setField("differenceHours", value)} placeholder="Calcula automático se vazio" />
+        <label className="block md:col-span-2">
+          <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">Fonte</span>
+          <input value={form.source} onChange={(event) => setField("source", event.target.value)} placeholder="Manual" className="premium-control h-10 w-full px-3 text-sm font-bold outline-none" />
+        </label>
+        <label className="block md:col-span-2">
+          <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">Observações</span>
+          <textarea value={form.notes} onChange={(event) => setField("notes", event.target.value)} rows={4} className="premium-control w-full px-3 py-2 text-sm font-bold outline-none" placeholder="Observação do ciclo, se necessário." />
+        </label>
+      </div>
+      <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
+        Horas aceitam formatos como 12000:00, 8742:30 ou decimal. Penalty é percentual e nunca valor em dinheiro.
+      </div>
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={onClose} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Cancelar</button>
+        <button type="button" disabled={saving} onClick={onSave} className="premium-button h-10 px-4 text-sm font-extrabold disabled:opacity-60">
+          <Save className="mr-2 inline h-4 w-4" />
+          {saving ? "Salvando..." : isEdit ? "Salvar edição" : "Adicionar"}
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
+function FormInput({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string }) {
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">{label}</span>
+      <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="premium-control h-10 w-full px-3 text-sm font-bold outline-none" />
+    </label>
   );
 }
 
@@ -641,6 +773,29 @@ function PreviewStat({ label, value, tone = "blue" }: { label: string; value: nu
 function defaultMonth() {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function buildMonthOptions(selectedMonth?: string) {
+  const now = new Date();
+  const startYear = now.getFullYear() - 2;
+  const endYear = now.getFullYear() + 2;
+  const options: Array<{ value: string; label: string }> = [];
+  for (let year = endYear; year >= startYear; year -= 1) {
+    for (let month = 12; month >= 1; month -= 1) {
+      const value = `${year}-${String(month).padStart(2, "0")}`;
+      options.push({ value, label: formatMonthLabel(value) });
+    }
+  }
+  if (selectedMonth && !options.some((option) => option.value === selectedMonth)) {
+    options.unshift({ value: selectedMonth, label: formatMonthLabel(selectedMonth) });
+  }
+  return options;
+}
+
+function formatMonthLabel(value: string) {
+  const [year, month] = value.split("-").map(Number);
+  if (!year || !month) return value;
+  return new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(year, month - 1, 1)));
 }
 
 function formatPercent(value: number) {

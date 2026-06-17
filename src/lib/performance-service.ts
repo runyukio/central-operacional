@@ -94,6 +94,7 @@ type PerformanceMetrics = {
   qualityTotal: number;
   submit: number;
   submitTotal: number;
+  submitDays: number;
   ahtSeconds: number;
   moderationSeconds: number;
   abs: number;
@@ -761,9 +762,8 @@ export async function exportPerformanceXlsxData(actor: Actor, query: Performance
   return {
     fileName: `performance_wfh_${new Date().toISOString().slice(0, 10)}.xlsx`,
     sheetName: "Ranking",
-    headers: ["semana_inicio", "semana_fim", "agente", "wb_login", "status_colaborador", "lob_colaborador", "supervisor", "regra_qualidade_aplicada", "wfh_status", "wfh_monitoramento", "wfh_motivos", "submit_medio_dia", "submit_total", "dias_periodo", "qualidade", "numerador_qualidade", "denominador_qualidade", "aht_segundos", "aht_formatado", "abs", "faltas", "faltas_injustificadas", "dias_escalados_validos"],
+    headers: ["semana_inicio", "semana_fim", "agente", "wb_login", "status_colaborador", "lob_colaborador", "supervisor", "regra_qualidade_aplicada", "wfh_status", "wfh_monitoramento", "wfh_motivos", "submit_medio_dia", "submit_total", "dias_com_submit", "qualidade", "numerador_qualidade", "denominador_qualidade", "aht_segundos", "aht_formatado", "abs", "faltas", "faltas_injustificadas", "dias_escalados_validos"],
     rows: dashboard.ranking.flatMap((agent) => agent.weekly.map((week) => {
-      const submit = calculateDailySubmit(week.submitTotal, parseDate(week.weekStart) ?? new Date(week.weekStart), parseDate(week.weekEnd) ?? new Date(week.weekEnd));
       return [
         week.weekStart,
         week.weekEnd,
@@ -778,7 +778,7 @@ export async function exportPerformanceXlsxData(actor: Actor, query: Performance
         agent.wfhReasons.join("; "),
         week.submit,
         week.submitTotal,
-        submit.daysCount,
+        week.submitDays,
         `${week.quality}%`,
         week.qualityNumerator,
         week.qualityDenominator,
@@ -1079,10 +1079,12 @@ async function buildAgentRows(employees: PerformanceEmployee[], period: Period) 
     })
   ]);
 
+  const periodSubmitDays = countDistinctProductionDays(productionRecords, period);
   const weeks = weeksInPeriod(period);
+  const submitDaysByWeekStart = new Map(weeks.map((week) => [formatDateKey(week.start), countDistinctProductionDays(productionRecords, week)]));
   return employees.map((employee) => {
     const qualityRule = getQualityRuleByEmployee(employee);
-    const weekly = weeks.map((week) => buildWeeklyMetrics(employee.id, week, qualityRule, qualityRecords, tnsQualityRecords, cecQualityRecords, productionRecords, schedules, attendanceRecords));
+    const weekly = weeks.map((week) => buildWeeklyMetrics(employee.id, week, submitDaysByWeekStart.get(formatDateKey(week.start)) ?? 0, qualityRule, qualityRecords, tnsQualityRecords, cecQualityRecords, productionRecords, schedules, attendanceRecords));
     const employeeQualityRecords = qualityRecords.filter((record) => record.employeeId === employee.id);
     const employeeTnsQualityRecords = tnsQualityRecords.filter((record) => record.employeeId === employee.id);
     const employeeCecQualityRecords = cecQualityRecords.filter((record) => record.employeeId === employee.id);
@@ -1114,12 +1116,13 @@ async function buildAgentRows(employees: PerformanceEmployee[], period: Period) 
       weekly,
       ...wfhQualification,
       ...periodMetrics,
+      submitDays: periodSubmitDays,
       submitAveragePerDay: periodMetrics.submit
     };
   });
 }
 
-function buildWeeklyMetrics(employeeId: string, week: WeekRange, qualityRule: QualityRule, qualityRecords: QualityRecordForMetrics[], tnsQualityRecords: TnsQualityRecordForMetrics[], cecQualityRecords: CecQualityRecordForMetrics[], productionRecords: ProductionRecordForMetrics[], schedules: ScheduleRecordForMetrics[], attendanceRecords: AttendanceRecordForMetrics[]): WeeklyMetricRow {
+function buildWeeklyMetrics(employeeId: string, week: WeekRange, uploadedDaysCount: number, qualityRule: QualityRule, qualityRecords: QualityRecordForMetrics[], tnsQualityRecords: TnsQualityRecordForMetrics[], cecQualityRecords: CecQualityRecordForMetrics[], productionRecords: ProductionRecordForMetrics[], schedules: ScheduleRecordForMetrics[], attendanceRecords: AttendanceRecordForMetrics[]): WeeklyMetricRow {
   const weekQualityRecords: QualityRecordForMetrics[] = [];
   const weekTnsQualityRecords: TnsQualityRecordForMetrics[] = [];
   const weekCecQualityRecords: CecQualityRecordForMetrics[] = [];
@@ -1160,8 +1163,9 @@ function buildWeeklyMetrics(employeeId: string, week: WeekRange, qualityRule: Qu
     weekEnd: formatDateKey(week.end),
     weekLabel: `${formatDisplayDate(week.start)} a ${formatDisplayDate(week.end)}`,
     ...calculateQualityByRule(qualityRule, weekQualityRecords, weekTnsQualityRecords, weekCecQualityRecords),
-    submit: calculateDailySubmit(submitTotal, week.start, week.end).submitAveragePerDay,
+    submit: calculateDailySubmit(submitTotal, week.start, week.end, uploadedDaysCount).submitAveragePerDay,
     submitTotal,
+    submitDays: uploadedDaysCount,
     moderationSeconds: round2(moderationSeconds),
     ahtSeconds: submitTotal > 0 ? round2(moderationSeconds / submitTotal) : 0,
     absences,
@@ -1175,12 +1179,13 @@ function summarizeRows(rows: AgentPerformanceRow[], period: Period) {
   const qualityNumerator = rows.reduce((sum, row) => sum + row.qualityNumerator, 0);
   const qualityDenominator = rows.reduce((sum, row) => sum + row.qualityDenominator, 0);
   const submitTotal = rows.reduce((sum, row) => sum + row.submitTotal, 0);
+  const submitDays = rows.reduce((max, row) => Math.max(max, row.submitDays), 0);
   const moderationSeconds = rows.reduce((sum, row) => sum + row.moderationSeconds, 0);
   const absences = rows.reduce((sum, row) => sum + row.absences, 0);
   const unjustifiedAbsences = rows.reduce((sum, row) => sum + row.unjustifiedAbsences, 0);
   const scheduledDays = rows.reduce((sum, row) => sum + row.scheduledDays, 0);
   const qualityRule = summarizeQualityRule(rows.map((row) => row.qualityRule));
-  const submit = calculateDailySubmit(submitTotal, period.start, period.end);
+  const submit = calculateDailySubmit(submitTotal, period.start, period.end, submitDays);
   return {
     qualityRule,
     qualityNumerator,
@@ -1191,6 +1196,7 @@ function summarizeRows(rows: AgentPerformanceRow[], period: Period) {
     quality: percent(qualityNumerator, qualityDenominator),
     submit: submit.submitAveragePerDay,
     submitTotal,
+    submitDays,
     moderationSeconds: round2(moderationSeconds),
     ahtSeconds: submitTotal > 0 ? round2(moderationSeconds / submitTotal) : 0,
     absences,
@@ -1289,13 +1295,16 @@ function summarizeWeeklyRows(rows: WeeklyMetricRow[], period?: Period): Performa
   const qualityNumerator = rows.reduce((sum, row) => sum + row.qualityNumerator, 0);
   const qualityDenominator = rows.reduce((sum, row) => sum + row.qualityDenominator, 0);
   const submitTotal = rows.reduce((sum, row) => sum + row.submitTotal, 0);
+  const submitDays = period
+    ? rows.reduce((sum, row) => sum + row.submitDays, 0)
+    : rows.reduce((max, row) => Math.max(max, row.submitDays), 0);
   const moderationSeconds = rows.reduce((sum, row) => sum + row.moderationSeconds, 0);
   const absences = rows.reduce((sum, row) => sum + row.absences, 0);
   const unjustifiedAbsences = rows.reduce((sum, row) => sum + row.unjustifiedAbsences, 0);
   const scheduledDays = rows.reduce((sum, row) => sum + row.scheduledDays, 0);
   const qualityRule = summarizeQualityRule(rows.map((row) => row.qualityRule));
   const range = period ?? weeklyRowsPeriod(rows);
-  const submit = range ? calculateDailySubmit(submitTotal, range.start, range.end) : { submitAveragePerDay: 0, daysCount: 0 };
+  const submit = range ? calculateDailySubmit(submitTotal, range.start, range.end, submitDays) : { submitAveragePerDay: 0, daysCount: 0 };
   return {
     qualityRule,
     qualityNumerator,
@@ -1306,6 +1315,7 @@ function summarizeWeeklyRows(rows: WeeklyMetricRow[], period?: Period): Performa
     quality: percent(qualityNumerator, qualityDenominator),
     submit: submit.submitAveragePerDay,
     submitTotal,
+    submitDays,
     moderationSeconds: round2(moderationSeconds),
     ahtSeconds: submitTotal > 0 ? round2(moderationSeconds / submitTotal) : 0,
     absences,
@@ -1327,9 +1337,21 @@ function buildWeeklyEvolution(rows: AgentPerformanceRow[], period: Period) {
   });
 }
 
-export function calculateDailySubmit(totalSubmit: number, startDate: Date, endDate: Date) {
+function countDistinctProductionDays(records: ProductionRecordForMetrics[], period: Period) {
+  const dates = new Set<string>();
+  for (const record of records) {
+    if (!isDateInRange(record.bzDay, period.start, period.end)) continue;
+    dates.add(formatDateKey(record.bzDay));
+  }
+  return dates.size;
+}
+
+export function calculateDailySubmit(totalSubmit: number, startDate: Date, endDate: Date, uploadedDaysCount?: number) {
   const safeTotal = Number.isFinite(Number(totalSubmit)) ? Number(totalSubmit) : 0;
-  const daysCount = daysInPeriod({ start: startDate, end: endDate });
+  const normalizedUploadedDays = Number(uploadedDaysCount);
+  const daysCount = Number.isFinite(normalizedUploadedDays) && normalizedUploadedDays > 0
+    ? Math.floor(normalizedUploadedDays)
+    : daysInPeriod({ start: startDate, end: endDate });
   return {
     submitAveragePerDay: daysCount > 0 ? round2(safeTotal / daysCount) : 0,
     daysCount
@@ -1419,7 +1441,7 @@ function emptyAgentRow(employee: PerformanceEmployee, period: Period): AgentPerf
 }
 
 function emptyMetrics(qualityRule: QualityRule = "UNKNOWN"): PerformanceMetrics {
-  return { ...emptyQualityMetrics(qualityRule), submit: 0, submitTotal: 0, ahtSeconds: 0, moderationSeconds: 0, abs: 0, absences: 0, unjustifiedAbsences: 0, scheduledDays: 0 };
+  return { ...emptyQualityMetrics(qualityRule), submit: 0, submitTotal: 0, submitDays: 0, ahtSeconds: 0, moderationSeconds: 0, abs: 0, absences: 0, unjustifiedAbsences: 0, scheduledDays: 0 };
 }
 
 function hasAnyData(row: AgentPerformanceRow) {
