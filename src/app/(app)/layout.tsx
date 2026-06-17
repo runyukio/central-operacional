@@ -5,6 +5,7 @@ import { AppShell } from "@/components/layout/app-shell";
 import { SessionProvider } from "@/components/session-provider";
 import { authOptions } from "@/lib/auth-options";
 import { canAccessBilling } from "@/lib/billing-permissions";
+import { canAccessFinanceiro } from "@/lib/financeiro-permissions";
 
 export default async function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
   const session = await getServerSession(authOptions);
@@ -15,7 +16,7 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
 
   return (
     <SessionProvider session={session}>
-      <AppShell user={session.user} billingAccess={canAccessBilling(session.user)}>{children}</AppShell>
+      <AppShell user={session.user} billingAccess={canAccessBilling(session.user)} financeiroAccess={canAccessFinanceiro(session.user)}>{children}</AppShell>
     </SessionProvider>
   );
 }

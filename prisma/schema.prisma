@@ -334,6 +334,10 @@ model User {
   invoiceAdjustmentSupervisorChecks InvoiceAdjustmentRequest[]  @relation("InvoiceAdjustmentSupervisorCheckedBy")
   invoiceAdjustmentAdminDecisions   InvoiceAdjustmentRequest[]  @relation("InvoiceAdjustmentAdminDecidedBy")
   billingRateUpdates                BillingRateConfig[]         @relation("BillingRateUpdatedBy")
+  financeRecordsCreated             FinanceInvoiceCycleRecord[] @relation("FinanceRecordCreatedBy")
+  financeRecordsUpdated             FinanceInvoiceCycleRecord[] @relation("FinanceRecordUpdatedBy")
+  financeUploads                    FinanceUploadBatch[]        @relation("FinanceUploadUploadedBy")
+  financeAdjustments                FinanceAdjustment[]         @relation("FinanceAdjustmentCreatedBy")
   createdStaffCoverages             StaffCoverage[]             @relation("StaffCoverageCreatedBy")
   updatedStaffCoverages             StaffCoverage[]             @relation("StaffCoverageUpdatedBy")
   moodRecords                       EmployeeMoodRecord[]
@@ -784,6 +788,75 @@ model BillingRateConfig {
   @@index([active])
   @@index([effectiveFrom])
   @@index([updatedById])
+}
+
+model FinanceInvoiceCycleRecord {
+  id                        String              @id @default(cuid())
+  invoiceCycleMonth         String
+  costCenter                String
+  maxHoursCapacityMinutes   Int                 @default(0)
+  billableHoursTargetMinutes Int                @default(0)
+  billableHoursActualMinutes Int                @default(0)
+  adherencePercent          Decimal             @default(0) @db.Decimal(10, 2)
+  differenceMinutes         Int                 @default(0)
+  penaltyPercent            Decimal             @default(0) @db.Decimal(10, 2)
+  notes                     String?
+  source                    String?
+  uploadBatchId             String?
+  createdById               String?
+  updatedById               String?
+  uploadBatch               FinanceUploadBatch? @relation(fields: [uploadBatchId], references: [id], onDelete: SetNull)
+  createdBy                 User?               @relation("FinanceRecordCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy                 User?               @relation("FinanceRecordUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  adjustments               FinanceAdjustment[]
+  createdAt                 DateTime            @default(now())
+  updatedAt                 DateTime            @updatedAt
+
+  @@unique([invoiceCycleMonth, costCenter])
+  @@index([invoiceCycleMonth])
+  @@index([costCenter])
+  @@index([uploadBatchId])
+  @@index([createdById])
+  @@index([updatedById])
+}
+
+model FinanceUploadBatch {
+  id           String                      @id @default(cuid())
+  fileName     String
+  rowsTotal    Int                         @default(0)
+  rowsValid    Int                         @default(0)
+  rowsError    Int                         @default(0)
+  rowsInserted Int                         @default(0)
+  rowsUpdated  Int                         @default(0)
+  uploadedById String?
+  uploadedBy   User?                       @relation("FinanceUploadUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+  uploadedAt   DateTime                    @default(now())
+  status       String                      @default("SUCCESS")
+  errorSummary Json?
+  records      FinanceInvoiceCycleRecord[]
+
+  @@index([uploadedAt])
+  @@index([uploadedById])
+  @@index([status])
+}
+
+model FinanceAdjustment {
+  id             String                    @id @default(cuid())
+  recordId       String
+  fieldName      String
+  oldValue       String?
+  newValue       String?
+  adjustmentType String
+  description    String
+  createdById    String?
+  record         FinanceInvoiceCycleRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  createdBy      User?                     @relation("FinanceAdjustmentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt      DateTime                  @default(now())
+
+  @@index([recordId])
+  @@index([createdById])
+  @@index([fieldName])
+  @@index([createdAt])
 }
 
 model RequestComment {

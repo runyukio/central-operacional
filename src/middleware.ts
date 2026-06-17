@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 import { canAccessBilling } from "@/lib/billing-permissions";
+import { canAccessFinanceiro } from "@/lib/financeiro-permissions";
 import { canAccessPathForRole, getDefaultPathForRole } from "@/lib/navigation";
 
 export async function middleware(request: NextRequest) {
@@ -21,6 +22,13 @@ export async function middleware(request: NextRequest) {
   }
 
   if ((pathname === "/billing" || pathname.startsWith("/billing/")) && !canAccessBilling({ id: token.sub, email: token.email, name: token.name })) {
+    return NextResponse.redirect(new URL(getDefaultPathForRole(role), request.url));
+  }
+
+  if ((pathname === "/financeiro" || pathname.startsWith("/financeiro/") || pathname === "/api/financeiro" || pathname.startsWith("/api/financeiro/")) && !canAccessFinanceiro({ id: token.sub, email: token.email, name: token.name })) {
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json({ success: false, error: "Você não tem permissão para acessar Financeiro.", message: "Você não tem permissão para acessar Financeiro." }, { status: 403 });
+    }
     return NextResponse.redirect(new URL(getDefaultPathForRole(role), request.url));
   }
 

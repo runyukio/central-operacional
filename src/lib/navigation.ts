@@ -11,6 +11,7 @@ export type NavItem = {
 const nonClientRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "COLABORADOR", "WFM", "QUALIDADE", "RH", "TI", "COORDENADOR", "GERENTE"];
 const performanceRoles: AppRole[] = [...nonClientRoles, "CLIENT"];
 const muralRoles: AppRole[] = [...nonClientRoles, "CLIENT"];
+const financeiroRoles: AppRole[] = [...nonClientRoles, "CLIENT"];
 const centralRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI", "COORDENADOR", "GERENTE"];
 const leadership: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH", "COORDENADOR", "GERENTE"];
 const peopleOps: AppRole[] = ["ADMIN", "GESTOR", "RH", "WFM"];
@@ -33,6 +34,7 @@ export const navItems: NavItem[] = [
   { label: "Equipamentos e Logística", href: "/equipamentos", icon: "MonitorCog", roles: ["ADMIN", "GESTOR", "TI"] },
   { label: "Feedback Anônimo", href: "/feedback-anonimo", icon: "MessageCircleQuestion", roles: nonClientRoles },
   { label: "Billing", href: "/billing", icon: "Coins", roles: ["ADMIN"] },
+  { label: "Financeiro", href: "/financeiro", icon: "FileBarChart", roles: financeiroRoles },
   { label: "Configurações", href: "/configuracoes", icon: "Settings", roles: ["ADMIN"] }
 ];
 
@@ -55,6 +57,8 @@ export function canAccessPathForRole(pathname: string, role?: string) {
     if (pathname === "/api/performance" || pathname.startsWith("/api/performance/")) return true;
     if (pathname === "/mural" || pathname.startsWith("/mural/")) return true;
     if (pathname === "/api/mural" || pathname.startsWith("/api/mural/")) return true;
+    if (pathname === "/financeiro" || pathname.startsWith("/financeiro/")) return true;
+    if (pathname === "/api/financeiro" || pathname.startsWith("/api/financeiro/")) return true;
     return false;
   }
   if (pathname === "/meu-perfil" || pathname.startsWith("/perfil/")) return nonClientRoles.includes(normalizedRole);

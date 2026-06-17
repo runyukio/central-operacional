@@ -98,12 +98,25 @@ type GlobalSearchResult = {
   avatarInitials?: string;
 };
 
-export function AppShell({ children, user, billingAccess = false }: { children: React.ReactNode; user: ShellUser; billingAccess?: boolean }) {
+export function AppShell({
+  children,
+  user,
+  billingAccess = false,
+  financeiroAccess = false
+}: {
+  children: React.ReactNode;
+  user: ShellUser;
+  billingAccess?: boolean;
+  financeiroAccess?: boolean;
+}) {
   const pathname = usePathname();
   const router = useRouter();
   const { theme, toggleTheme } = useTheme();
   const role = user.role ?? "COLABORADOR";
-  const navItems = getNavItems(role).filter((item) => item.href !== "/billing" || billingAccess);
+  const navItems = getNavItems(role).filter((item) =>
+    (item.href !== "/billing" || billingAccess) &&
+    (item.href !== "/financeiro" || financeiroAccess)
+  );
   const isCollaborator = role === "COLABORADOR";
   const [notifications, setNotifications] = useState<HeaderNotification[]>([]);
   const [notificationOpen, setNotificationOpen] = useState(false);
