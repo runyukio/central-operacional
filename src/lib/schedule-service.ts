@@ -237,7 +237,7 @@ export type AttendanceQuery = {
   includeJustified?: boolean | string;
   summaryOnly?: boolean | string;
   skipSummary?: boolean | string;
-  detailType?: "scheduled" | "present" | "absences" | "lobAbs" | "agentAbsences" | string;
+  detailType?: "scheduled" | "present" | "absences" | "lobAbs" | "agentAbsences" | "recurringAbsences" | string;
   employeeId?: string;
   wbLogins?: string[] | string;
 };
@@ -294,6 +294,27 @@ type MoodSummary = {
   byLob: MoodGroupSummary[];
   bySupervisor: MoodGroupSummary[];
   byRoleTitle: MoodGroupSummary[];
+};
+
+type RecurringAbsenceItem = {
+  employeeId: string;
+  name: string;
+  wbLogin: string;
+  lob: string;
+  supervisor: string;
+  roleTitle: string;
+  skill: string;
+  consecutiveDays: number;
+  riskLevel: "Atenção" | "Alto risco" | "Crítico";
+  lastDateIso: string;
+  lastDate: string;
+  lastStatus: string;
+  sequence: Array<{
+    date: string;
+    status: string;
+    reason: string;
+    classification: string;
+  }>;
 };
 
 export type AttendanceInput = {
@@ -1821,6 +1842,23 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
         summary: emptyAttendanceSummary()
       };
     }
+    if (detailType === "recurringAbsences") {
+      const data = await calculateRecurringAbsences(period, summaryFilters);
+      logPerformanceMetric("attendance.recurring-absences-detail", startedAt, {
+        role,
+        recordsReturned: data.length,
+        referenceDate: period ? dateKey(period.end) : dateKey(todayInSaoPauloUtcDate()),
+        lob: lobFilter ?? "Todos",
+        supervisor: query.supervisor ?? "Todos",
+        roleTitle: query.roleTitle ?? "Todos",
+        shift: query.shift ?? "Todos",
+        skill: query.skill ?? "Todos"
+      });
+      return {
+        data,
+        summary: emptyAttendanceSummary()
+      };
+    }
     const schedules = await prisma.schedule.findMany({
       where: scheduleWhere,
       include: {
@@ -2212,6 +2250,81 @@ export async function exportAttendanceDetailXlsxData(actor: Actor, query: Attend
     sheetName: detailType === "present" ? "Presentes" : "Faltas",
     fileName: `${label}_${query.startDate ?? "inicio"}_${query.endDate ?? "fim"}.xlsx`
   };
+}
+
+export async function exportRecurringAbsencesXlsxData(actor: Actor, query: AttendanceQuery = {}) {
+  try {
+    const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
+    if (!user) return { error: "Usuário ativo não encontrado para exportar Faltas Recorrentes.", status: 401 };
+    const role = normalizeRole(actor.role);
+    if (!["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(role)) {
+      return { error: "Você não tem permissão para exportar Faltas Recorrentes.", status: 403 };
+    }
+
+    const period = resolveAttendancePeriod(query);
+    const filters: AttendanceSummaryFilters = {
+      lob: query.lob && query.lob !== "Todos" ? query.lob : undefined,
+      supervisor: query.supervisor,
+      shift: query.shift,
+      collaborator: query.collaborator,
+      roleTitle: query.roleTitle,
+      skill: query.skill,
+      wbLogins: query.wbLogins,
+      employeeId: role === "COLABORADOR" && user.employeeProfile ? user.employeeProfile.id : undefined
+    };
+    const referenceDate = recurringAbsenceReferenceDate(period);
+    const items = await calculateRecurringAbsences(period, filters);
+
+    await prisma.auditLog.create({
+      data: {
+        actorId: user.id,
+        action: "UPLOAD",
+        entity: "Schedule",
+        reason: "Exportação XLSX de Faltas Recorrentes",
+        newValue: { action: "EXPORT_RECURRING_ABSENCES", filters: query, exportedRows: items.length, referenceDate: dateKey(referenceDate) }
+      }
+    }).catch(() => undefined);
+
+    return {
+      fileName: `faltas_recorrentes_${dateKey(referenceDate)}.xlsx`,
+      sheetName: "Faltas recorrentes",
+      headers: [
+        "data_referencia",
+        "colaborador",
+        "wb_login",
+        "lob",
+        "supervisor",
+        "cargo_funcao",
+        "skill",
+        "dias_consecutivos",
+        "risco",
+        "ultima_data",
+        "ultimo_status",
+        "datas_da_sequencia",
+        "status_da_sequencia",
+        "motivos_da_sequencia"
+      ],
+      rows: items.map((item) => [
+        dateKey(referenceDate),
+        item.name,
+        item.wbLogin,
+        item.lob,
+        item.supervisor,
+        item.roleTitle,
+        item.skill,
+        item.consecutiveDays,
+        item.riskLevel,
+        item.lastDate,
+        item.lastStatus,
+        item.sequence.map((entry) => entry.date).join(" | "),
+        item.sequence.map((entry) => entry.status).join(" | "),
+        item.sequence.map((entry) => [entry.reason, entry.classification].filter(Boolean).join(" - ")).join(" | ")
+      ])
+    };
+  } catch (error) {
+    recordErrorLog({ userEmail: actor.email, code: "RECURRING_ABSENCES_EXPORT_ERROR", message: error instanceof Error ? error.message : "Falha ao exportar Faltas Recorrentes", action: "ATTENDANCE_EXPORT", severity: "ERROR" });
+    return { error: "Não foi possível exportar Faltas Recorrentes. Tente novamente.", status: 500 };
+  }
 }
 
 export async function exportAttritionXlsxData(actor: Actor, query: AttendanceQuery = {}) {
@@ -3061,6 +3174,7 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     .filter((agent) => agent.absent > 0)
     .sort((a, b) => b.absent - a.absent || b.unjustified - a.unjustified || a.name.localeCompare(b.name, "pt-BR"))
     .slice(0, 6);
+  const recurringAbsences = await calculateRecurringAbsences(period, filters);
   const activePeopleByLobAndShift = await getActivePeopleByLobAndShift(filters);
   const attrition = period ? await getAttritionSummary(period, filters) : emptyAttritionSummary();
   const mood = period ? await getMoodSummary(period, filters) : emptyMoodSummary();
@@ -3085,6 +3199,7 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     bySupervisor,
     byLob,
     topAbsenceAgents,
+    recurringAbsences,
     activePeopleByLobAndShift,
     attrition,
     mood
@@ -3099,6 +3214,199 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     skill: filters.skill ?? "Todos"
   });
   return summary;
+}
+
+function todayInSaoPauloUtcDate() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(new Date());
+  return parseDateOnly(parts) ?? new Date();
+}
+
+function recurringAbsenceReferenceDate(period?: { end: Date } | null) {
+  if (period?.end) {
+    return new Date(Date.UTC(period.end.getUTCFullYear(), period.end.getUTCMonth(), period.end.getUTCDate()));
+  }
+  return todayInSaoPauloUtcDate();
+}
+
+function addUtcDays(date: Date, days: number) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + days));
+}
+
+function maxUtcDate(left: Date, right: Date) {
+  return left.getTime() >= right.getTime() ? left : right;
+}
+
+function recurringAbsenceRiskLevel(days: number): RecurringAbsenceItem["riskLevel"] {
+  if (days >= 4) return "Crítico";
+  if (days >= 3) return "Alto risco";
+  return "Atenção";
+}
+
+function recurringAbsenceDisplayStatus(status: ScheduleStatus | string, record?: LatestAttendanceRecordBySchedule) {
+  if (status === "FALTA_JUSTIFICADA") return "Falta Justificada";
+  if (status === "FALTA_INJUSTIFICADA") return "Falta Injustificada";
+  if (record && isJustifiedAbsenceForSchedule(status, record)) return "Falta Justificada";
+  if (record && isClassifiedUnjustifiedAbsenceForSchedule(status, record)) return "Falta Injustificada";
+  return scheduleToUiStatus[String(status)] ?? String(status);
+}
+
+function recurringAbsenceClassification(status: ScheduleStatus | string, record?: LatestAttendanceRecordBySchedule) {
+  if (isJustifiedAbsenceForSchedule(status, record)) return "Justificada";
+  if (isClassifiedUnjustifiedAbsenceForSchedule(status, record)) return "Injustificada";
+  if (isPendingJustificationForSchedule(status, record)) return "Sem justificativa";
+  return absenceReasonClassificationLabel(record?.reasonClassification) || "-";
+}
+
+async function calculateRecurringAbsences(period?: { start: Date; end: Date } | null, filters: AttendanceSummaryFilters = {}): Promise<RecurringAbsenceItem[]> {
+  const referenceDate = recurringAbsenceReferenceDate(period);
+  const referenceEnd = new Date(Date.UTC(referenceDate.getUTCFullYear(), referenceDate.getUTCMonth(), referenceDate.getUTCDate(), 23, 59, 59, 999));
+  const fifteenDayWindowStart = addUtcDays(referenceDate, -14);
+  const windowStart = period?.start ? maxUtcDate(period.start, fifteenDayWindowStart) : fifteenDayWindowStart;
+  const search = filters.collaborator?.trim();
+  const employeeFilterParts: Prisma.EmployeeProfileWhereInput[] = [
+    { deletedAt: null },
+    { NOT: { operationalStatus: { in: inactiveEmployeeStatusValues } } }
+  ];
+  if (filters.employeeId) employeeFilterParts.push({ id: filters.employeeId });
+  if (filters.teamSupervisorId) employeeFilterParts.push({ supervisorId: filters.teamSupervisorId });
+  if (filters.lob && filters.lob !== "Todos") employeeFilterParts.push({ lob: { name: filters.lob } });
+  const batch = parseWbLoginBatch(filters.wbLogins ?? "");
+  if (batch.normalizedValues.length) {
+    employeeFilterParts.push({
+      OR: batch.normalizedValues.map((wbLogin) => ({ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }))
+    });
+  }
+  if (search) {
+    employeeFilterParts.push({
+      OR: [
+        { fullName: { contains: search, mode: "insensitive" } },
+        { wbLogin: { contains: search, mode: "insensitive" } },
+        { user: { email: { contains: search, mode: "insensitive" } } }
+      ]
+    });
+  }
+  if (filters.roleTitle && filters.roleTitle !== "Todos") employeeFilterParts.push({ roleTitle: filters.roleTitle });
+  const summarySkillFilter = employeeSkillFilter(filters.skill);
+  if (summarySkillFilter) employeeFilterParts.push(summarySkillFilter);
+
+  const supervisorFilter = await scheduleSupervisorFilter(filters.supervisor);
+  const shiftFilter = shiftCategoryName(filters.shift);
+  const scheduleShiftWhere = scheduleShiftCategoryWhere(filters.shift);
+  const statusFilter = filters.status && filters.status !== "Todos" ? uiToScheduleStatus[filters.status] : undefined;
+  const scheduleAndFilters: Prisma.ScheduleWhereInput[] = [];
+  if (supervisorFilter) scheduleAndFilters.push(supervisorFilter);
+  if (shiftFilter === "Folga" && !statusFilter) {
+    scheduleAndFilters.push({ OR: [{ status: "FOLGA" }, ...(scheduleShiftWhere ? [scheduleShiftWhere] : [])] });
+  } else if (scheduleShiftWhere) {
+    scheduleAndFilters.push(scheduleShiftWhere);
+  }
+
+  const schedules = await prisma.schedule.findMany({
+    where: {
+      deletedAt: null,
+      date: { gte: windowStart, lte: referenceEnd },
+      ...(statusFilter ? { status: statusFilter } : {}),
+      ...(scheduleAndFilters.length ? { AND: scheduleAndFilters } : {}),
+      employee: employeeFilterParts.length ? { AND: employeeFilterParts } : undefined
+    },
+    select: {
+      id: true,
+      date: true,
+      status: true,
+      shift: { select: { name: true } },
+      supervisorId: true,
+      employee: {
+        select: {
+          id: true,
+          fullName: true,
+          wbLogin: true,
+          roleTitle: true,
+          skill: true,
+          operationalStatus: true,
+          supervisorId: true,
+          shift: { select: { name: true } },
+          lob: { select: { name: true } },
+          supervisor: { select: { fullName: true } }
+        }
+      }
+    },
+    orderBy: [{ employee: { fullName: "asc" } }, { date: "desc" }]
+  });
+
+  const absenceScheduleIds = schedules.filter((schedule) => isAbsenceStatus(normalizeOperationalStatus(schedule.status))).map((schedule) => schedule.id);
+  const attendanceRecords = await latestAttendanceRecordsForSchedules(absenceScheduleIds);
+  const attendanceRecordByScheduleId = new Map<string, LatestAttendanceRecordBySchedule>();
+  attendanceRecords.forEach((record) => {
+    if (!record.scheduleId || attendanceRecordByScheduleId.has(record.scheduleId)) return;
+    attendanceRecordByScheduleId.set(record.scheduleId, record);
+  });
+  const supervisorNameById = await supervisorNameMap(schedules.flatMap((schedule) => [schedule.supervisorId, schedule.employee.supervisorId]));
+  const schedulesByEmployee = schedules.reduce<Map<string, typeof schedules>>((acc, schedule) => {
+    if (!isActiveEmployeeStatus(schedule.employee.operationalStatus)) return acc;
+    const current = acc.get(schedule.employee.id) ?? [];
+    current.push(schedule);
+    acc.set(schedule.employee.id, current);
+    return acc;
+  }, new Map());
+
+  const items: RecurringAbsenceItem[] = [];
+  for (const employeeSchedules of schedulesByEmployee.values()) {
+    const schedulesByDate = new Map<string, (typeof employeeSchedules)[number]>();
+    for (const schedule of employeeSchedules) {
+      const key = dateKey(schedule.date);
+      const existing = schedulesByDate.get(key);
+      if (!existing || isAbsenceStatus(normalizeOperationalStatus(schedule.status))) {
+        schedulesByDate.set(key, schedule);
+      }
+    }
+
+    const anchorKey = Array.from(schedulesByDate.keys()).sort((a, b) => b.localeCompare(a))[0];
+    if (!anchorKey) continue;
+    const anchorDate = parseDateOnly(anchorKey);
+    if (!anchorDate) continue;
+    const sequence: RecurringAbsenceItem["sequence"] = [];
+    let cursor = anchorDate;
+    while (cursor >= windowStart) {
+      const cursorKey = dateKey(cursor);
+      const schedule = schedulesByDate.get(cursorKey);
+      if (!schedule) break;
+      if (!isAbsenceStatus(normalizeOperationalStatus(schedule.status))) break;
+      const record = attendanceRecordByScheduleId.get(schedule.id);
+      sequence.push({
+        date: formatDate(schedule.date),
+        status: recurringAbsenceDisplayStatus(schedule.status, record),
+        reason: attendanceReasonForSchedule(schedule.status, record),
+        classification: recurringAbsenceClassification(schedule.status, record)
+      });
+      cursor = addUtcDays(cursor, -1);
+    }
+    if (sequence.length < 2) continue;
+
+    const latestSchedule = schedulesByDate.get(anchorKey) ?? employeeSchedules[0];
+    const latestRecord = attendanceRecordByScheduleId.get(latestSchedule.id);
+    items.push({
+      employeeId: latestSchedule.employee.id,
+      name: latestSchedule.employee.fullName,
+      wbLogin: latestSchedule.employee.wbLogin,
+      lob: latestSchedule.employee.lob?.name?.trim() || "Sem LOB",
+      supervisor: resolveSupervisorName(latestSchedule, supervisorNameById),
+      roleTitle: latestSchedule.employee.roleTitle ?? "Sem cargo",
+      skill: latestSchedule.employee.skill ?? "",
+      consecutiveDays: sequence.length,
+      riskLevel: recurringAbsenceRiskLevel(sequence.length),
+      lastDateIso: anchorKey,
+      lastDate: formatDate(latestSchedule.date),
+      lastStatus: recurringAbsenceDisplayStatus(latestSchedule.status, latestRecord),
+      sequence
+    });
+  }
+
+  return items.sort((a, b) => b.consecutiveDays - a.consecutiveDays || b.lastDateIso.localeCompare(a.lastDateIso) || a.name.localeCompare(b.name, "pt-BR"));
 }
 
 async function latestAttendanceRecordsForSchedules(scheduleIds: string[]) {
@@ -3137,6 +3445,7 @@ function emptyAttendanceSummary() {
     bySupervisor: {},
     byLob: {},
     topAbsenceAgents: [],
+    recurringAbsences: [],
     activePeopleByLobAndShift: [],
     attrition: emptyAttritionSummary(),
     mood: emptyMoodSummary()

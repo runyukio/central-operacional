@@ -676,6 +676,7 @@ type AttendanceSummary = {
   bySupervisor?: Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; classifiedUnjustified?: number; absRate: number }>;
   byLob?: Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; classifiedUnjustified?: number; absRate: number }>;
   topAbsenceAgents?: Array<{ employeeId: string; name: string; wbLogin: string; supervisor: string; lob: string; planned: number; absent: number; unjustified: number; justified: number; classifiedUnjustified?: number; absRate: number }>;
+  recurringAbsences?: RecurringAbsenceItem[];
   activePeopleByLobAndShift?: Array<{ lob: string; shifts: Record<string, number>; total: number }>;
   attrition?: {
     total: { lob: string; terminations: number; hcStart: number; hcEnd: number; hcAverage: number; attritionRate: number };
@@ -690,6 +691,22 @@ type AttendanceSummary = {
     bySupervisor: Array<{ label: string; responses: number; average: number; interpretation: string }>;
     byRoleTitle: Array<{ label: string; responses: number; average: number; interpretation: string }>;
   };
+};
+
+type RecurringAbsenceItem = {
+  employeeId: string;
+  name: string;
+  wbLogin: string;
+  lob: string;
+  supervisor: string;
+  roleTitle: string;
+  skill: string;
+  consecutiveDays: number;
+  riskLevel: "Atenção" | "Alto risco" | "Crítico";
+  lastDateIso?: string;
+  lastDate: string;
+  lastStatus: string;
+  sequence: Array<{ date: string; status: string; reason: string; classification: string }>;
 };
 
 type AttendanceItem = {
@@ -2380,6 +2397,9 @@ export function OperationalCommandCenter() {
   const [attritionPeopleError, setAttritionPeopleError] = useState("");
   const [attritionExportError, setAttritionExportError] = useState("");
   const [exportingAttrition, setExportingAttrition] = useState(false);
+  const [showRecurringAbsences, setShowRecurringAbsences] = useState(false);
+  const [recurringAbsenceExportError, setRecurringAbsenceExportError] = useState("");
+  const [exportingRecurringAbsences, setExportingRecurringAbsences] = useState(false);
   const [showMoodDetail, setShowMoodDetail] = useState(false);
 
   useEffect(() => {
@@ -2670,6 +2690,42 @@ export function OperationalCommandCenter() {
     }
   }
 
+  function openRecurringAbsences() {
+    setRecurringAbsenceExportError("");
+    setShowRecurringAbsences(true);
+  }
+
+  function closeRecurringAbsences() {
+    setShowRecurringAbsences(false);
+    setRecurringAbsenceExportError("");
+  }
+
+  async function exportRecurringAbsences() {
+    const items = attendanceSummary?.recurringAbsences ?? [];
+    setRecurringAbsenceExportError("");
+    if (!items.length) {
+      setRecurringAbsenceExportError("Nenhuma falta recorrente encontrada para exportar.");
+      return;
+    }
+    setExportingRecurringAbsences(true);
+    try {
+      const params = new URLSearchParams({
+        startDate: dateRange.startDate,
+        endDate: dateRange.endDate
+      });
+      appendCommandFilters(params);
+      await downloadFile(
+        `/api/attendance/recurring-absences/export?${params.toString()}`,
+        `faltas_recorrentes_${dateRange.endDate}.xlsx`,
+        "Não foi possível exportar Faltas Recorrentes. Tente novamente."
+      );
+    } catch (error) {
+      setRecurringAbsenceExportError(error instanceof Error ? error.message : "Não foi possível exportar Faltas Recorrentes. Tente novamente.");
+    } finally {
+      setExportingRecurringAbsences(false);
+    }
+  }
+
   function closeAbsenceReasonPeople() {
     setSelectedAbsenceReason(null);
     setAbsenceReasonPeople([]);
@@ -2838,6 +2894,7 @@ export function OperationalCommandCenter() {
     bySupervisor: {},
     byLob: {},
     topAbsenceAgents: [],
+    recurringAbsences: [],
     attrition: {
       total: { lob: "Total", terminations: 0, hcStart: 0, hcEnd: 0, hcAverage: 0, attritionRate: 0 },
       byLob: []
@@ -2892,6 +2949,8 @@ export function OperationalCommandCenter() {
   const maxSupervisorAbsRate = Math.max(1, ...commandAbsBySupervisor.map((item) => item.absRate));
   const maxLobAbsRate = Math.max(1, ...commandAbsByLob.map((item) => item.absRate));
   const commandTopAbsenceAgents = summary.topAbsenceAgents ?? [];
+  const commandRecurringAbsences = summary.recurringAbsences ?? [];
+  const commandRecurringAbsencePreview = commandRecurringAbsences.slice(0, 6);
   const commandActivePeopleByLobShift = summary.activePeopleByLobAndShift ?? [];
   const commandAttrition = summary.attrition ?? { total: { lob: "Total", terminations: 0, hcStart: 0, hcEnd: 0, hcAverage: 0, attritionRate: 0 }, byLob: [] };
   const commandAttritionByLob = commandAttrition.byLob ?? [];
@@ -2916,6 +2975,28 @@ export function OperationalCommandCenter() {
   const absTextColor = (value: number) => value >= 8 ? "text-red-600" : value >= 5 ? "text-orange-600" : value >= 3 ? "text-amber-600" : "text-emerald-600";
   const absBarWidth = (value: number) => `${Math.min(100, Math.max(value > 0 ? 4 : 0, value))}%`;
   const rankingBarWidth = (value: number, maxValue: number) => `${Math.min(100, Math.max(value > 0 ? 7 : 0, (value / Math.max(maxValue, 1)) * 100))}%`;
+  const recurringAbsenceRiskClass = (risk: RecurringAbsenceItem["riskLevel"]) => risk === "Crítico"
+    ? "border-red-200 bg-red-50 text-red-700"
+    : risk === "Alto risco"
+      ? "border-orange-200 bg-orange-50 text-orange-700"
+      : "border-amber-200 bg-amber-50 text-amber-700";
+  const recurringAbsenceRows = (records: RecurringAbsenceItem[]) => records.map((record) => [
+    record.name,
+    record.wbLogin || "-",
+    record.lob,
+    record.supervisor,
+    record.consecutiveDays,
+    <span key={`${record.employeeId}-risk`} className={cn("inline-flex rounded-md border px-2 py-1 text-[11px] font-black", recurringAbsenceRiskClass(record.riskLevel))}>{record.riskLevel}</span>,
+    `${record.lastDate} • ${record.lastStatus}`,
+    <div key={`${record.employeeId}-sequence`} className="flex max-w-[360px] flex-col gap-1 text-[11px] font-semibold text-navy-950">
+      {record.sequence.map((day) => (
+        <span key={`${record.employeeId}-${day.date}`} className="rounded-md bg-slate-50 px-2 py-1">
+          {day.date} - {day.status}{day.reason ? ` - ${day.reason}` : ""}{day.classification && day.classification !== "-" ? ` (${day.classification})` : ""}
+        </span>
+      ))}
+    </div>,
+    <a key={`${record.employeeId}-open`} href={`/escalas?startDate=${dateRange.endDate}&collaborator=${encodeURIComponent(record.name)}`} className="text-xs font-extrabold text-blue-600 hover:underline">Abrir no Cronograma</a>
+  ]);
   const commandPeopleRows = (records: AttendanceItem[]) => records.map((record) => [
     record.employeeName,
     record.wbLogin ?? "-",
@@ -3236,6 +3317,45 @@ export function OperationalCommandCenter() {
             ) : <EmptyState title="Sem ABS por LOB" description="A visão será exibida quando houver cronogramas no período selecionado." />}
           </Panel>
 
+          <Panel title="Faltas Recorrentes" action={commandRecurringAbsences.length > 6 ? "Ver todos" : undefined} actionOnClick={openRecurringAbsences}>
+            {commandRecurringAbsencePreview.length ? (
+              <div className="max-h-[300px] divide-y divide-border/70 overflow-y-auto pr-1">
+                {commandRecurringAbsencePreview.map((agent) => (
+                  <button
+                    key={agent.employeeId}
+                    type="button"
+                    onClick={openRecurringAbsences}
+                    className="grid min-h-[58px] w-full grid-cols-[minmax(0,1fr)_78px] items-center gap-2 py-2 text-left transition hover:bg-blue-50/55"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                        <p className="truncate text-[12.5px] font-extrabold leading-tight text-navy-950" title={agent.name}>{agent.name}</p>
+                        <span className={cn("shrink-0 rounded-md border px-1.5 py-0.5 text-[9.5px] font-black leading-none", recurringAbsenceRiskClass(agent.riskLevel))}>{agent.riskLevel}</span>
+                      </div>
+                      <p className="mt-0.5 truncate text-[11px] font-semibold leading-tight text-muted" title={`${agent.wbLogin || "-"} • ${agent.lob} • ${agent.supervisor}`}>
+                        {agent.wbLogin || "-"} • {agent.lob} • {agent.supervisor}
+                      </p>
+                      <p className="mt-1 truncate text-[10.5px] font-bold text-slate-500" title={`${agent.lastDate} • ${agent.lastStatus}`}>
+                        Último status: {agent.lastStatus} em {agent.lastDate}
+                      </p>
+                    </div>
+                    <span className="justify-self-end rounded-md bg-red-50 px-2 py-1 text-center text-[11px] font-black leading-tight text-red-700">
+                      {agent.consecutiveDays}
+                      <span className="block text-[9px] uppercase">dias</span>
+                    </span>
+                  </button>
+                ))}
+                {commandRecurringAbsences.length > commandRecurringAbsencePreview.length ? (
+                  <button type="button" onClick={openRecurringAbsences} className="w-full py-2 text-center text-xs font-extrabold text-blue-600 hover:underline">
+                    Ver {commandRecurringAbsences.length - commandRecurringAbsencePreview.length} registro(s) adicional(is)
+                  </button>
+                ) : null}
+              </div>
+            ) : <EmptyState title="Nenhuma falta recorrente encontrada." description="Não há colaboradores com 2 ou mais dias consecutivos de ausência até a data de referência." />}
+          </Panel>
+        </div>
+
+        <div className="grid gap-3 xl:grid-cols-[1fr_.75fr_1.25fr]">
           <Panel title="Agentes com maior quantidade de faltas">
             {commandTopAbsenceAgents.length ? (
               <div className="max-h-[300px] divide-y divide-border/70 overflow-y-auto pr-1">
@@ -3273,9 +3393,7 @@ export function OperationalCommandCenter() {
               </div>
             ) : <EmptyState title="Nenhuma falta encontrada" description="O ranking aparecerá quando houver faltas de agentes nos filtros selecionados." />}
           </Panel>
-        </div>
 
-        <div className="grid gap-3 xl:grid-cols-[.75fr_1.25fr]">
           <Panel title="Attrition Total">
             <button
               type="button"
@@ -3353,6 +3471,43 @@ export function OperationalCommandCenter() {
           </Panel>
         </div>
       </div>
+
+      {showRecurringAbsences ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="card max-h-[90vh] w-full max-w-7xl overflow-y-auto p-5">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-extrabold text-navy-950">Faltas Recorrentes</h2>
+                <p className="text-sm font-semibold text-muted">
+                  Sequências de 2+ dias até {dateRange.endDate} • {selectedCommandLob === "Todos" ? "Todas as LOBs" : selectedCommandLob}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={exportingRecurringAbsences}
+                  onClick={() => void exportRecurringAbsences()}
+                  className="rounded-lg border border-border bg-white px-3 py-2 text-xs font-extrabold text-navy-950 hover:border-blue-200 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {exportingRecurringAbsences ? "Exportando..." : "Exportar"}
+                </button>
+                <button onClick={closeRecurringAbsences} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+              </div>
+            </div>
+            {recurringAbsenceExportError ? (
+              <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-700">{recurringAbsenceExportError}</div>
+            ) : null}
+            {commandRecurringAbsences.length ? (
+              <SimpleTable
+                columns={["Colaborador", "WB/Login", "LOB", "Supervisor", "Dias", "Risco", "Último status", "Sequência", "Ação"]}
+                rows={recurringAbsenceRows(commandRecurringAbsences)}
+              />
+            ) : (
+              <EmptyState title="Nenhuma falta recorrente encontrada." description="Não há colaboradores com 2 ou mais dias consecutivos de ausência nos filtros aplicados." />
+            )}
+          </div>
+        </div>
+      ) : null}
 
       {selectedCommandDetail ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
