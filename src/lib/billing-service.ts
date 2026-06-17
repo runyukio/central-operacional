@@ -752,7 +752,7 @@ async function buildBillingInvoicesReadModel(
       })
       : Promise.resolve([]),
     prisma.monthlyAdvanceRecord.findMany({
-      where: { employeeId: { in: employeeIds }, referenceMonth },
+      where: { employeeId: { in: employeeIds }, referenceMonth, status: { not: "REMOVED" } },
       select: { employeeId: true, optIn: true, amount: true, finalAmount: true }
     }),
     cycle
@@ -930,7 +930,7 @@ async function calculateEmployeeInvoice(employee: BillingEmployee, referenceMont
       include: { shift: true },
       orderBy: { date: "asc" }
     }),
-    prisma.monthlyAdvanceRecord.findUnique({ where: { employeeId_referenceMonth: { employeeId: employee.id, referenceMonth } } }),
+    prisma.monthlyAdvanceRecord.findFirst({ where: { employeeId: employee.id, referenceMonth, status: { not: "REMOVED" } } }),
     billingCycleId
       ? prisma.billingAdjustment.findMany({ where: { billingCycleId, deletedAt: null, OR: [{ employeeId: employee.id }, { employeeId: null, lobId: employee.lobId }, { employeeInvoice: { employeeId: employee.id } }] } })
       : Promise.resolve([]),

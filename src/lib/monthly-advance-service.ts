@@ -24,6 +24,15 @@ const MONTH_NAMES = [
   "Dezembro"
 ];
 const MONTHLY_ADVANCE_PJ_ONLY_MESSAGE = "Adiantamento mensal disponível apenas para colaboradores PJ.";
+const MONTHLY_ADVANCE_TRAINING_BLOCK_MESSAGE = "Adiantamento mensal indisponível para colaboradores em treinamento.";
+const monthlyAdvanceTrainingStatusValues = [
+  "Em treinamento",
+  "EM_TREINAMENTO",
+  "Treinamento",
+  "TRAINING",
+  "In training",
+  "IN_TRAINING"
+];
 
 const monthNameIndex = new Map(
   MONTH_NAMES.map((name, index) => [
@@ -256,6 +265,7 @@ export async function listMonthlyAdvances(actor: Actor, filters: MonthlyAdvanceF
     const employee = await resolveEmployeeForUser(user);
     if (!employee) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
     if (!isMonthlyAdvanceEligibleContract(employee.contractType)) return { error: MONTHLY_ADVANCE_PJ_ONLY_MESSAGE, status: 403 };
+    if (isMonthlyAdvanceTrainingStatus(employee.operationalStatus)) return { error: MONTHLY_ADVANCE_TRAINING_BLOCK_MESSAGE, status: 403 };
     where.employeeId = employee.id;
   }
 
@@ -345,6 +355,9 @@ export async function getMyMonthlyAdvanceCycles(actor: Actor) {
   if (!isMonthlyAdvanceEligibleContract(employee.contractType)) {
     return { data: [], message: MONTHLY_ADVANCE_PJ_ONLY_MESSAGE };
   }
+  if (isMonthlyAdvanceTrainingStatus(employee.operationalStatus)) {
+    return { data: [], message: MONTHLY_ADVANCE_TRAINING_BLOCK_MESSAGE };
+  }
 
   const today = new Date();
   const months = employeeMonthlyAdvanceCycleMonths(today);
@@ -384,6 +397,7 @@ export async function respondMonthlyAdvance(actor: Actor, input: { referenceMont
   const employee = await resolveEmployeeForUser(user);
   if (!employee) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
   if (!isMonthlyAdvanceEligibleContract(employee.contractType)) return { error: MONTHLY_ADVANCE_PJ_ONLY_MESSAGE, status: 403 };
+  if (isMonthlyAdvanceTrainingStatus(employee.operationalStatus)) return { error: MONTHLY_ADVANCE_TRAINING_BLOCK_MESSAGE, status: 403 };
 
   const referenceMonth = normalizeReferenceMonth(input.referenceMonth);
   if (!referenceMonth) return { error: "Mês de referência inválido.", status: 400 };
@@ -465,6 +479,7 @@ export async function upsertMonthlyAdvance(actor: Actor, input: {
     : await findEmployeeByWbLogin(input.wbLogin);
   if (!employee) return { error: "WB/Login não encontrado.", status: 404 };
   if (!isMonthlyAdvanceEligibleContract(employee.contractType)) return { error: MONTHLY_ADVANCE_PJ_ONLY_MESSAGE, status: 400 };
+  if (isMonthlyAdvanceTrainingStatus(employee.operationalStatus)) return { error: MONTHLY_ADVANCE_TRAINING_BLOCK_MESSAGE, status: 400 };
 
   const referenceMonth = normalizeReferenceMonth(input.referenceMonth);
   if (!referenceMonth) return { error: "Mês de referência inválido.", status: 400 };
@@ -832,10 +847,13 @@ export async function applyApprovedMonthlyAdvanceChange(tx: Prisma.TransactionCl
   if (requestedOptIn === null) throw new Error("Aderência solicitada inválida na solicitação de adiantamento.");
   const employee = await tx.employeeProfile.findUnique({
     where: { id: request.employeeId },
-    select: { contractType: true }
+    select: { contractType: true, operationalStatus: true }
   });
   if (!isMonthlyAdvanceEligibleContract(employee?.contractType)) {
     return { updated: false, message: MONTHLY_ADVANCE_PJ_ONLY_MESSAGE };
+  }
+  if (isMonthlyAdvanceTrainingStatus(employee?.operationalStatus)) {
+    return { updated: false, message: MONTHLY_ADVANCE_TRAINING_BLOCK_MESSAGE };
   }
   const requestedAmount = monthlyAdvanceAmountForOptIn(requestedOptIn);
   const previous = await tx.monthlyAdvanceRecord.findUnique({
@@ -906,6 +924,7 @@ function parseImportRow(
   if (!normalizedLogin) errors.push("WB/Login é obrigatório.");
   else if (!employee) errors.push("WB/Login não encontrado.");
   else if (!isMonthlyAdvanceEligibleContract(employee.contractType)) errors.push(MONTHLY_ADVANCE_PJ_ONLY_MESSAGE);
+  else if (isMonthlyAdvanceTrainingStatus(employee.operationalStatus)) errors.push(MONTHLY_ADVANCE_TRAINING_BLOCK_MESSAGE);
   if (!referenceMonth) errors.push("Mês de referência inválido.");
   if (optIn === null) errors.push("Aderente deve ser Sim ou Não.");
 
@@ -1025,14 +1044,35 @@ function canDeleteMonthlyAdvance(role: string) {
 
 function monthlyAdvanceEligibleEmployeeWhere(): Prisma.EmployeeProfileWhereInput {
   return {
-    OR: [
-      { contractType: { equals: "PJ", mode: "insensitive" } },
-      { contractType: { equals: "Pessoa Jurídica", mode: "insensitive" } },
-      { contractType: { equals: "Pessoa Juridica", mode: "insensitive" } },
-      { contractType: { equals: "Pessoa Jurídico", mode: "insensitive" } },
-      { contractType: { equals: "Pessoa Juridico", mode: "insensitive" } }
+    AND: [
+      {
+        OR: [
+          { contractType: { equals: "PJ", mode: "insensitive" } },
+          { contractType: { equals: "Pessoa Jurídica", mode: "insensitive" } },
+          { contractType: { equals: "Pessoa Juridica", mode: "insensitive" } },
+          { contractType: { equals: "Pessoa Jurídico", mode: "insensitive" } },
+          { contractType: { equals: "Pessoa Juridico", mode: "insensitive" } }
+        ]
+      },
+      {
+        NOT: {
+          OR: monthlyAdvanceTrainingStatusValues.map((status) => ({
+            operationalStatus: { equals: status, mode: "insensitive" as const }
+          }))
+        }
+      }
     ]
   };
+}
+
+function isMonthlyAdvanceTrainingStatus(value?: string | null) {
+  const status = String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  return ["emtreinamento", "treinamento", "training", "intraining"].includes(status);
 }
 
 function isMonthlyAdvanceEligibleContract(value?: string | null) {
