@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 
+import { getApiActor } from "@/lib/api-actor";
+import { canAccessRealTime } from "@/lib/permissions";
 import { importRealtimeSnapshot, validateRealtimeImportToken } from "@/lib/realtime-service";
 
 export const dynamic = "force-dynamic";
@@ -9,9 +11,17 @@ const queueSheetAliases = new Set(["filas", "fila", "queue", "queues"]);
 const agentSheetAliases = new Set(["agentes", "agente", "agent", "agents", "auditor", "auditors", "auditores"]);
 
 export async function POST(request: Request) {
-  const tokenValidation = validateRealtimeImportToken(request.headers.get("authorization"));
-  if ("error" in tokenValidation) {
-    return NextResponse.json({ success: false, error: tokenValidation.error, message: tokenValidation.error }, { status: tokenValidation.status });
+  const authorization = request.headers.get("authorization");
+  if (authorization) {
+    const tokenValidation = validateRealtimeImportToken(authorization);
+    if ("error" in tokenValidation) {
+      return NextResponse.json({ success: false, error: tokenValidation.error, message: tokenValidation.error }, { status: tokenValidation.status });
+    }
+  } else {
+    const actor = await getApiActor();
+    if (!canAccessRealTime({ role: actor.role, email: actor.email, name: actor.name, status: "ACTIVE" })) {
+      return NextResponse.json({ success: false, error: "Você não tem permissão para importar Real Time.", message: "Você não tem permissão para importar Real Time." }, { status: 403 });
+    }
   }
 
   try {

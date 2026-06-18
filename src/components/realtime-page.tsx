@@ -6,20 +6,19 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
-  BarChart3,
   CheckCircle2,
-  Clock3,
   Database,
+  Download,
   Eye,
+  History,
   RefreshCw,
   Search,
-  Table2,
-  UsersRound,
+  UploadCloud,
   Wifi,
   X
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -53,8 +52,7 @@ type AgentMetric = {
   moderationMs: number;
   timeout: number;
   refresh: number;
-  queueName: string;
-  queues: string[];
+  queueCount: number;
   sourceRows: number;
 };
 
@@ -88,9 +86,9 @@ type AgentRealtimeRow = {
     moderationMs: number;
     timeout: number;
     refresh: number;
-    queues: string[];
   }>;
   queueBreakdown: Array<{
+    queueId: string;
     queueName: string;
     submit: number;
     ahtMs: number | null;
@@ -136,7 +134,6 @@ type AgentRealtimeView = {
     shifts: CountItem[];
     skills: CountItem[];
     roleTitles: CountItem[];
-    queues: CountItem[];
   };
   rows: AgentRealtimeRow[];
 };
@@ -174,7 +171,57 @@ type AgentFilters = {
   shift: string;
   skill: string;
   roleTitle: string;
-  queue: string;
+  sortBy: string;
+};
+
+type ImportHistory = {
+  id: string;
+  fileName: string;
+  source: string;
+  status: string;
+  rowsTotal: number;
+  rowsValid: number;
+  rowsError: number;
+  rowsInserted: number;
+  rowsUpdated: number;
+  queueRows: number;
+  agentRows: number;
+  cycleDownload: string;
+  matchedEmployees: number;
+  unmatchedEmployees: number;
+  mappedQueues: number;
+  unmappedQueues: number;
+  importedAtLabel: string;
+  errorMessage: string;
+  warnings: string[];
+};
+
+type UploadSummary = {
+  fileName?: string;
+  cycleDownload?: string;
+  rowsProcessed?: number;
+  rowsValid?: number;
+  rowsError?: number;
+  rowsInserted?: number;
+  rowsUpdated?: number;
+  matchedEmployees?: number;
+  unmatchedEmployees?: number;
+  mappedQueues?: number;
+  unmappedQueues?: number;
+  warnings?: string[];
+};
+
+const defaultAgentFilters: AgentFilters = {
+  search: "",
+  crossingStatus: "Encontrado",
+  personType: "Agente",
+  employeeStatus: "Ativo",
+  lob: "",
+  supervisor: "",
+  shift: "",
+  skill: "",
+  roleTitle: "",
+  sortBy: "submit_desc"
 };
 
 const emptyAgentFilters: AgentFilters = {
@@ -187,21 +234,49 @@ const emptyAgentFilters: AgentFilters = {
   shift: "",
   skill: "",
   roleTitle: "",
-  queue: ""
+  sortBy: "submit_desc"
 };
 
+const sortOptions = [
+  { value: "submit_desc", label: "Submit maior" },
+  { value: "submit_asc", label: "Submit menor" },
+  { value: "aht_desc", label: "AHT maior" },
+  { value: "aht_asc", label: "AHT menor" },
+  { value: "moderation_desc", label: "Moderação maior" },
+  { value: "moderation_asc", label: "Moderação menor" },
+  { value: "timeout_desc", label: "Timeout maior" },
+  { value: "timeout_asc", label: "Timeout menor" },
+  { value: "refresh_desc", label: "Refresh maior" },
+  { value: "refresh_asc", label: "Refresh menor" },
+  { value: "delta_submit_asc", label: "Maior queda de Submit" },
+  { value: "delta_submit_desc", label: "Maior aumento de Submit" },
+  { value: "delta_aht_desc", label: "Maior aumento de AHT" },
+  { value: "delta_aht_asc", label: "Maior queda de AHT" },
+  { value: "delta_timeout_desc", label: "Maior aumento de Timeout" },
+  { value: "delta_timeout_asc", label: "Maior queda de Timeout" },
+  { value: "delta_refresh_desc", label: "Maior aumento de Refresh" },
+  { value: "delta_refresh_asc", label: "Maior queda de Refresh" }
+];
+
 export function RealTimePage() {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [payload, setPayload] = useState<RealTimePayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
   const [activeTab, setActiveTab] = useState<"agents" | "queues">("agents");
   const [selectedCycle, setSelectedCycle] = useState("");
   const [queueSearch, setQueueSearch] = useState("");
   const [queueStatusFilter, setQueueStatusFilter] = useState("");
   const [queueLobFilter, setQueueLobFilter] = useState("");
-  const [agentFilters, setAgentFilters] = useState<AgentFilters>(emptyAgentFilters);
+  const [agentFilters, setAgentFilters] = useState<AgentFilters>(defaultAgentFilters);
   const [selectedAgent, setSelectedAgent] = useState<AgentRealtimeRow | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadSummary, setUploadSummary] = useState<UploadSummary | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [imports, setImports] = useState<ImportHistory[]>([]);
+  const [importsLoading, setImportsLoading] = useState(false);
 
   async function loadSnapshot(cycle = selectedCycle, background = false) {
     if (background) setRefreshing(true);
@@ -222,6 +297,51 @@ export function RealTimePage() {
       setLoading(false);
       setRefreshing(false);
     }
+  }
+
+  async function handleFileUpload(file?: File | null) {
+    if (!file) return;
+    setUploading(true);
+    setError("");
+    setMessage("");
+    setUploadSummary(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("source", "manual-ui");
+      const response = await fetch("/api/realtime/import", { method: "POST", body: formData });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.message || json.error || "Não foi possível importar a base Real Time.");
+      setUploadSummary(json as UploadSummary);
+      setMessage("Base Real Time importada com sucesso.");
+      await loadSnapshot("", true);
+    } catch (currentError) {
+      setError(currentError instanceof Error ? currentError.message : "Não foi possível importar a base Real Time.");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function openHistory() {
+    setHistoryOpen(true);
+    setImportsLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/realtime/imports", { cache: "no-store" });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.message || json.error || "Não foi possível carregar histórico de importações.");
+      setImports(Array.isArray(json.data) ? json.data : []);
+    } catch (currentError) {
+      setError(currentError instanceof Error ? currentError.message : "Não foi possível carregar histórico de importações.");
+    } finally {
+      setImportsLoading(false);
+    }
+  }
+
+  function exportXlsx() {
+    const params = buildAgentQueryParams(selectedCycle || agentView?.selectedCycle || "", agentFilters);
+    window.location.assign(`/api/realtime/export?${params.toString()}`);
   }
 
   useEffect(() => {
@@ -258,13 +378,12 @@ export function RealTimePage() {
     return (agentView?.rows ?? []).filter((row) => {
       if (agentFilters.crossingStatus && row.crossingStatus !== agentFilters.crossingStatus) return false;
       if (agentFilters.personType && row.personType !== agentFilters.personType) return false;
-      if (agentFilters.employeeStatus && row.employeeStatus !== agentFilters.employeeStatus) return false;
+      if (agentFilters.employeeStatus && !matchesEmployeeStatus(row.employeeStatus, agentFilters.employeeStatus)) return false;
       if (agentFilters.lob && row.lob !== agentFilters.lob) return false;
       if (agentFilters.supervisor && row.supervisor !== agentFilters.supervisor) return false;
       if (agentFilters.shift && row.shift !== agentFilters.shift) return false;
       if (agentFilters.skill && row.skill !== agentFilters.skill) return false;
       if (agentFilters.roleTitle && row.roleTitle !== agentFilters.roleTitle) return false;
-      if (agentFilters.queue && !row.current.queues.includes(agentFilters.queue) && row.current.queueName !== agentFilters.queue) return false;
       if (!normalizedSearch) return true;
       return normalizeSearch([
         row.displayName,
@@ -275,14 +394,18 @@ export function RealTimePage() {
         row.supervisor,
         row.shift,
         row.skill,
-        row.roleTitle,
-        row.current.queueName,
-        row.current.queues.join(" ")
+        row.roleTitle
       ].join(" ")).includes(normalizedSearch);
-    });
+    }).sort((a, b) => compareAgentRows(a, b, agentFilters.sortBy));
   }, [agentFilters, agentView?.rows]);
 
   const queueColumns = useMemo(() => buildQueueColumns(queueDataset?.columns ?? []), [queueDataset?.columns]);
+  const cycles = agentView?.cycles ?? [];
+  const selectedCycleValue = selectedCycle || agentView?.selectedCycle || "";
+  const selectedCycleIndex = cycles.findIndex((cycle) => cycle.value === selectedCycleValue);
+  const olderCycle = selectedCycleIndex >= 0 ? cycles[selectedCycleIndex + 1]?.value ?? "" : "";
+  const newerCycle = selectedCycleIndex > 0 ? cycles[selectedCycleIndex - 1]?.value ?? "" : "";
+  const latestCycle = cycles[0]?.value ?? "";
 
   function updateAgentFilter(key: keyof AgentFilters, value: string) {
     setAgentFilters((current) => ({ ...current, [key]: value }));
@@ -302,6 +425,19 @@ export function RealTimePage() {
           <p className="mt-1 text-sm font-bold text-muted">Monitoramento KAP por ciclo_download, com cruzamento cadastral e comparação do ciclo anterior.</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <input ref={fileInputRef} type="file" accept=".xlsx" className="hidden" onChange={(event) => void handleFileUpload(event.target.files?.[0])} />
+          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading} className="premium-button inline-flex h-10 items-center gap-2 px-4 text-sm font-extrabold disabled:cursor-not-allowed disabled:opacity-60">
+            <UploadCloud className="h-4 w-4" />
+            {uploading ? "Importando..." : "Importar base Real Time"}
+          </button>
+          <button type="button" onClick={() => void openHistory()} className="premium-control inline-flex h-10 items-center gap-2 px-3 text-sm font-extrabold text-navy-950">
+            <History className="h-4 w-4" />
+            Histórico
+          </button>
+          <button type="button" onClick={exportXlsx} className="premium-control inline-flex h-10 items-center gap-2 px-3 text-sm font-extrabold text-navy-950">
+            <Download className="h-4 w-4" />
+            Exportar XLSX
+          </button>
           <button type="button" onClick={() => void loadSnapshot(selectedCycle, true)} className="premium-button inline-flex h-10 items-center gap-2 px-4 text-sm font-extrabold">
             <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} />
             Atualizar
@@ -310,13 +446,19 @@ export function RealTimePage() {
       </div>
 
       {error ? <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{error}</div> : null}
+      {message ? <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700">{message}</div> : null}
+      {uploadSummary ? <UploadSummaryCard summary={uploadSummary} /> : null}
 
       <section className="premium-card p-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <StatCard title="Última atualização" value={summary?.importedAtLabel || "-"} helper={summary?.fileName || "Aguardando primeiro upload"} icon={Clock3} tone={summary?.isStale ? "orange" : "blue"} />
-          <StatCard title="Ciclo selecionado" value={agentView?.selectedCycle || "-"} helper={agentView?.previousCycle ? `Anterior: ${agentView.previousCycle}` : "Sem comparação"} icon={BarChart3} tone="purple" />
-          <StatCard title="Filas" value={String(summary?.queueRows ?? 0)} helper="linhas importadas" icon={Table2} tone="purple" />
-          <StatCard title="Agentes" value={String(summary?.agentRows ?? 0)} helper="linhas importadas" icon={UsersRound} tone="green" />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-black uppercase tracking-wide text-muted">Última atualização</p>
+            <p className="text-sm font-extrabold text-navy-950">{summary?.importedAtLabel || "Aguardando primeiro upload"}</p>
+            {summary?.fileName ? <p className="text-xs font-bold text-muted">{summary.fileName}</p> : null}
+          </div>
+          <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700">
+            Ciclo: {agentView?.selectedCycle || "-"}
+          </span>
         </div>
         {summary?.isStale ? (
           <div className="mt-3 flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-800">
@@ -339,8 +481,14 @@ export function RealTimePage() {
               {(agentView?.cycles ?? []).map((cycle) => <option key={cycle.value} value={cycle.value}>{cycle.value} · {cycle.rows} linha(s)</option>)}
             </select>
           </label>
-          <button type="button" onClick={() => setSelectedCycle(agentView?.cycles[0]?.value ?? "")} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950">
-            Último ciclo
+          <button type="button" onClick={() => setSelectedCycle(olderCycle)} disabled={!olderCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
+            Ciclo anterior
+          </button>
+          <button type="button" onClick={() => setSelectedCycle(newerCycle)} disabled={!newerCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
+            Próximo ciclo
+          </button>
+          <button type="button" onClick={() => setSelectedCycle(latestCycle)} disabled={!latestCycle || selectedCycleValue === latestCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
+            Ciclo atual
           </button>
           <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-bold text-muted">
             Comparação: {agentView?.previousCycle || "Sem ciclo anterior"}
@@ -349,7 +497,7 @@ export function RealTimePage() {
       </section>
 
       {activeTab === "agents" ? (
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           {(agentView?.cards ?? []).map((card) => (
             <CompareCard key={card.label} card={card} />
           ))}
@@ -383,8 +531,9 @@ export function RealTimePage() {
               <FilterSelect value={agentFilters.shift} onChange={(value) => updateAgentFilter("shift", value)} label="Turno" empty="Todos" options={agentView?.filters.shifts ?? []} />
               <FilterSelect value={agentFilters.skill} onChange={(value) => updateAgentFilter("skill", value)} label="Skill" empty="Todas" options={agentView?.filters.skills ?? []} />
               <FilterSelect value={agentFilters.roleTitle} onChange={(value) => updateAgentFilter("roleTitle", value)} label="Cargo" empty="Todos" options={agentView?.filters.roleTitles ?? []} />
-              <FilterSelect value={agentFilters.queue} onChange={(value) => updateAgentFilter("queue", value)} label="Fila" empty="Todas" options={agentView?.filters.queues ?? []} />
-              <button type="button" onClick={() => setAgentFilters(emptyAgentFilters)} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Limpar</button>
+              <SimpleSelect value={agentFilters.sortBy} onChange={(value) => updateAgentFilter("sortBy", value)} label="Classificar por" options={sortOptions} />
+              <button type="button" onClick={() => setAgentFilters(defaultAgentFilters)} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Padrão</button>
+              <button type="button" onClick={() => setAgentFilters(emptyAgentFilters)} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Ver todos</button>
             </div>
           ) : (
             <div className="flex flex-1 flex-wrap justify-end gap-2">
@@ -415,6 +564,7 @@ export function RealTimePage() {
       </section>
 
       {selectedAgent ? <AgentDetailDrawer row={selectedAgent} onClose={() => setSelectedAgent(null)} /> : null}
+      {historyOpen ? <ImportHistoryModal imports={imports} loading={importsLoading} onClose={() => setHistoryOpen(false)} /> : null}
     </div>
   );
 }
@@ -426,10 +576,10 @@ function AgentTable({ rows, totalRows, onSelect }: { rows: AgentRealtimeRow[]; t
         <span>{rows.length} de {totalRows} agente(s) exibidos</span>
       </div>
       <div className="overflow-x-auto">
-        <table className="min-w-[1280px] text-left text-sm">
+        <table className="min-w-[1500px] text-left text-sm">
           <thead className="bg-slate-50 text-xs uppercase tracking-wide text-muted">
             <tr>
-              {["Agente", "WB/Login", "Cruzamento", "Tipo", "Status", "LOB", "Supervisor", "Turno", "Skill", "Fila", "Submit", "AHT", "Moderação", "Timeout", "Refresh", "Ações"].map((column) => (
+              {["Agente", "WB/Login", "Cruzamento", "Tipo", "Status", "LOB", "Supervisor", "Turno", "Skill", "Submit", "Submit ant.", "Var. Submit", "AHT", "AHT ant.", "Var. AHT", "Moderação", "Timeout", "Refresh", "Ações"].map((column) => (
                 <th key={column} className="whitespace-nowrap px-4 py-3 font-black">{column}</th>
               ))}
             </tr>
@@ -446,10 +596,13 @@ function AgentTable({ rows, totalRows, onSelect }: { rows: AgentRealtimeRow[]; t
                 <td className="px-4 py-3 font-bold">{row.supervisor}</td>
                 <td className="px-4 py-3 font-bold">{row.shift}</td>
                 <td className="px-4 py-3 font-bold">{row.skill}</td>
-                <td className="max-w-[180px] px-4 py-3 font-bold"><span title={row.current.queues.join(", ")} className="block truncate">{row.current.queueName}</span></td>
-                <td className="px-4 py-3 font-black text-navy-950">{formatInteger(row.current.submit)}<MetricDelta value={row.deltas.submit} metric="submit" /></td>
-                <td className="px-4 py-3 font-black text-navy-950">{formatMinutes(row.current.ahtMs)}<MetricDelta value={row.deltas.ahtMs} metric="aht" /></td>
-                <td className="px-4 py-3 font-black text-navy-950">{formatHours(row.current.moderationMs)}<MetricDelta value={row.deltas.moderationMs} metric="neutral-hours" /></td>
+                <td className="px-4 py-3 font-black text-navy-950">{formatInteger(row.current.submit)}</td>
+                <td className="px-4 py-3 font-bold text-muted">{row.previous ? formatInteger(row.previous.submit) : "-"}</td>
+                <td className="px-4 py-3"><MetricDelta value={row.deltas.submit} metric="submit" /></td>
+                <td className="px-4 py-3 font-black text-navy-950">{formatDurationFromMs(row.current.ahtMs)}</td>
+                <td className="px-4 py-3 font-bold text-muted">{row.previous ? formatDurationFromMs(row.previous.ahtMs) : "-"}</td>
+                <td className="px-4 py-3"><MetricDelta value={row.deltas.ahtMs} metric="aht" /></td>
+                <td className="px-4 py-3 font-black text-navy-950">{formatDurationFromMs(row.current.moderationMs)}<MetricDelta value={row.deltas.moderationMs} metric="neutral-hours" /></td>
                 <td className="px-4 py-3 font-black text-navy-950">{formatInteger(row.current.timeout)}<MetricDelta value={row.deltas.timeout} metric="down-good" /></td>
                 <td className="px-4 py-3 font-black text-navy-950">{formatInteger(row.current.refresh)}<MetricDelta value={row.deltas.refresh} metric="down-good" /></td>
                 <td className="px-4 py-3">
@@ -462,7 +615,9 @@ function AgentTable({ rows, totalRows, onSelect }: { rows: AgentRealtimeRow[]; t
             ))}
             {!rows.length ? (
               <tr>
-                <td colSpan={16} className="px-4 py-12 text-center text-sm font-bold text-muted">Nenhum agente encontrado para os filtros aplicados.</td>
+                <td colSpan={19} className="px-4 py-12 text-center text-sm font-bold text-muted">
+                  Nenhum agente ativo encontrado neste ciclo. Altere os filtros ou selecione outro ciclo para consultar os dados.
+                </td>
               </tr>
             ) : null}
           </tbody>
@@ -529,8 +684,8 @@ function AgentDetailDrawer({ row, onClose }: { row: AgentRealtimeRow; onClose: (
 
         <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           <SmallMetric title="Submit" value={formatInteger(row.current.submit)} previous={row.previous ? formatInteger(row.previous.submit) : "Sem comparação"} />
-          <SmallMetric title="AHT" value={formatMinutes(row.current.ahtMs)} previous={row.previous ? formatMinutes(row.previous.ahtMs) : "Sem comparação"} />
-          <SmallMetric title="Moderação" value={formatHours(row.current.moderationMs)} previous={row.previous ? formatHours(row.previous.moderationMs) : "Sem comparação"} />
+          <SmallMetric title="AHT" value={formatDurationFromMs(row.current.ahtMs)} previous={row.previous ? formatDurationFromMs(row.previous.ahtMs) : "Sem comparação"} />
+          <SmallMetric title="Moderação" value={formatDurationFromMs(row.current.moderationMs)} previous={row.previous ? formatDurationFromMs(row.previous.moderationMs) : "Sem comparação"} />
           <SmallMetric title="Timeout" value={formatInteger(row.current.timeout)} previous={row.previous ? formatInteger(row.previous.timeout) : "Sem comparação"} />
           <SmallMetric title="Refresh" value={formatInteger(row.current.refresh)} previous={row.previous ? formatInteger(row.previous.refresh) : "Sem comparação"} />
         </div>
@@ -553,15 +708,16 @@ function AgentDetailDrawer({ row, onClose }: { row: AgentRealtimeRow; onClose: (
             <div className="overflow-x-auto">
               <table className="min-w-full text-left text-sm">
                 <thead className="bg-slate-50 text-xs uppercase tracking-wide text-muted">
-                  <tr>{["Fila", "Submit", "AHT", "Moderação", "Timeout", "Refresh"].map((column) => <th key={column} className="px-3 py-2 font-black">{column}</th>)}</tr>
+                  <tr>{["Fila ID", "Nome da fila", "Submit", "AHT", "Moderação", "Timeout", "Refresh"].map((column) => <th key={column} className="px-3 py-2 font-black">{column}</th>)}</tr>
                 </thead>
                 <tbody>
                   {row.queueBreakdown.map((queue) => (
-                    <tr key={queue.queueName} className="border-t border-slate-100">
+                    <tr key={`${queue.queueId || "sem-id"}-${queue.queueName}`} className="border-t border-slate-100">
+                      <td className="px-3 py-3 font-extrabold">{queue.queueId || "Sem Fila ID"}</td>
                       <td className="px-3 py-3 font-extrabold">{queue.queueName}</td>
                       <td className="px-3 py-3 font-bold">{formatInteger(queue.submit)}</td>
-                      <td className="px-3 py-3 font-bold">{formatMinutes(queue.ahtMs)}</td>
-                      <td className="px-3 py-3 font-bold">{formatHours(queue.moderationMs)}</td>
+                      <td className="px-3 py-3 font-bold">{formatDurationFromMs(queue.ahtMs)}</td>
+                      <td className="px-3 py-3 font-bold">{formatDurationFromMs(queue.moderationMs)}</td>
                       <td className="px-3 py-3 font-bold">{formatInteger(queue.timeout)}</td>
                       <td className="px-3 py-3 font-bold">{formatInteger(queue.refresh)}</td>
                     </tr>
@@ -580,18 +736,17 @@ function AgentDetailDrawer({ row, onClose }: { row: AgentRealtimeRow; onClose: (
           <div className="overflow-x-auto">
             <table className="min-w-full text-left text-sm">
               <thead className="bg-slate-50 text-xs uppercase tracking-wide text-muted">
-                <tr>{["Ciclo", "Submit", "AHT", "Moderação", "Timeout", "Refresh", "Filas"].map((column) => <th key={column} className="px-3 py-2 font-black">{column}</th>)}</tr>
+                <tr>{["Ciclo", "Submit", "AHT", "Moderação", "Timeout", "Refresh"].map((column) => <th key={column} className="px-3 py-2 font-black">{column}</th>)}</tr>
               </thead>
               <tbody>
                 {row.history.map((item) => (
                   <tr key={item.cycleDownload} className="border-t border-slate-100">
                     <td className="px-3 py-3 font-extrabold">{item.cycleDownload}</td>
                     <td className="px-3 py-3 font-bold">{formatInteger(item.submit)}</td>
-                    <td className="px-3 py-3 font-bold">{formatMinutes(item.ahtMs)}</td>
-                    <td className="px-3 py-3 font-bold">{formatHours(item.moderationMs)}</td>
+                    <td className="px-3 py-3 font-bold">{formatDurationFromMs(item.ahtMs)}</td>
+                    <td className="px-3 py-3 font-bold">{formatDurationFromMs(item.moderationMs)}</td>
                     <td className="px-3 py-3 font-bold">{formatInteger(item.timeout)}</td>
                     <td className="px-3 py-3 font-bold">{formatInteger(item.refresh)}</td>
-                    <td className="max-w-[320px] px-3 py-3 font-bold"><span title={item.queues.join(", ")} className="block truncate">{item.queues.join(", ") || "-"}</span></td>
                   </tr>
                 ))}
               </tbody>
@@ -613,11 +768,115 @@ function SearchBox({ value, onChange, placeholder }: { value: string; onChange: 
 }
 
 function FilterSelect({ value, onChange, label, empty, options }: { value: string; onChange: (value: string) => void; label: string; empty: string; options: CountItem[] }) {
+  const hasCurrentValue = value && !options.some((option) => option.label === value);
   return (
     <select value={value} onChange={(event) => onChange(event.target.value)} aria-label={label} className="premium-control h-10 max-w-[190px] px-3 text-sm font-bold text-navy-950 outline-none">
       <option value="">{empty}</option>
+      {hasCurrentValue ? <option value={value}>{value}</option> : null}
       {options.map((option) => <option key={option.label} value={option.label}>{option.label} ({option.count})</option>)}
     </select>
+  );
+}
+
+function SimpleSelect({ value, onChange, label, options }: { value: string; onChange: (value: string) => void; label: string; options: Array<{ value: string; label: string }> }) {
+  return (
+    <select value={value} onChange={(event) => onChange(event.target.value)} aria-label={label} className="premium-control h-10 max-w-[230px] px-3 text-sm font-bold text-navy-950 outline-none">
+      {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+    </select>
+  );
+}
+
+function UploadSummaryCard({ summary }: { summary: UploadSummary }) {
+  const items = [
+    ["Arquivo", summary.fileName || "-"],
+    ["Ciclo", summary.cycleDownload || "-"],
+    ["Linhas processadas", formatInteger(summary.rowsProcessed ?? 0)],
+    ["Criados", formatInteger(summary.rowsInserted ?? 0)],
+    ["Atualizados", formatInteger(summary.rowsUpdated ?? 0)],
+    ["Erros", formatInteger(summary.rowsError ?? 0)],
+    ["WBs encontrados", formatInteger(summary.matchedEmployees ?? 0)],
+    ["WBs não encontrados", formatInteger(summary.unmatchedEmployees ?? 0)],
+    ["Fila IDs mapeados", formatInteger(summary.mappedQueues ?? 0)],
+    ["Fila IDs não mapeados", formatInteger(summary.unmappedQueues ?? 0)]
+  ];
+  return (
+    <section className="premium-card p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="font-black text-navy-950">Resumo do upload</h2>
+          <p className="text-xs font-bold text-muted">Importação direta concluída sem etapa de preview.</p>
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+        {items.map(([label, value]) => (
+          <div key={label} className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2">
+            <p className="text-[11px] font-black uppercase tracking-wide text-muted">{label}</p>
+            <p className="truncate text-sm font-extrabold text-navy-950" title={String(value)}>{value}</p>
+          </div>
+        ))}
+      </div>
+      {summary.warnings?.length ? (
+        <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
+          {summary.warnings.join(" ")}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function ImportHistoryModal({ imports, loading, onClose }: { imports: ImportHistory[]; loading: boolean; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-navy-950/40">
+      <div className="h-full w-full max-w-6xl overflow-y-auto bg-white p-5 shadow-2xl">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-4">
+          <div>
+            <h2 className="text-xl font-black text-navy-950">Histórico de importações</h2>
+            <p className="mt-1 text-sm font-bold text-muted">Uploads diretos do Real Time, com resumo de WBs e Fila IDs.</p>
+          </div>
+          <button type="button" onClick={onClose} className="premium-control inline-flex h-10 items-center gap-2 px-3 text-sm font-extrabold text-navy-950">
+            <X className="h-4 w-4" />
+            Fechar
+          </button>
+        </div>
+        {loading ? (
+          <div className="grid gap-3 py-5">
+            {Array.from({ length: 5 }).map((_, index) => <div key={index} className="h-14 animate-pulse rounded-2xl bg-slate-100" />)}
+          </div>
+        ) : (
+          <div className="mt-5 overflow-x-auto">
+            <table className="min-w-[1180px] text-left text-sm">
+              <thead className="bg-slate-50 text-xs uppercase tracking-wide text-muted">
+                <tr>{["Arquivo", "Ciclo", "Upload", "Linhas", "Válidas", "Erros", "Criados", "Atualizados", "WBs OK", "WBs não encontrados", "Filas OK", "Filas não mapeadas", "Status"].map((column) => <th key={column} className="px-3 py-2 font-black">{column}</th>)}</tr>
+              </thead>
+              <tbody>
+                {imports.map((item) => (
+                  <tr key={item.id} className="border-t border-slate-100">
+                    <td className="max-w-[220px] px-3 py-3 font-extrabold"><span title={item.fileName} className="block truncate">{item.fileName}</span></td>
+                    <td className="px-3 py-3 font-bold">{item.cycleDownload || "-"}</td>
+                    <td className="px-3 py-3 font-bold">{item.importedAtLabel}</td>
+                    <td className="px-3 py-3 font-bold">{formatInteger(item.rowsTotal)}</td>
+                    <td className="px-3 py-3 font-bold">{formatInteger(item.rowsValid)}</td>
+                    <td className="px-3 py-3 font-bold">{formatInteger(item.rowsError)}</td>
+                    <td className="px-3 py-3 font-bold">{formatInteger(item.rowsInserted)}</td>
+                    <td className="px-3 py-3 font-bold">{formatInteger(item.rowsUpdated)}</td>
+                    <td className="px-3 py-3 font-bold">{formatInteger(item.matchedEmployees)}</td>
+                    <td className="px-3 py-3 font-bold">{formatInteger(item.unmatchedEmployees)}</td>
+                    <td className="px-3 py-3 font-bold">{formatInteger(item.mappedQueues)}</td>
+                    <td className="px-3 py-3 font-bold">{formatInteger(item.unmappedQueues)}</td>
+                    <td className="px-3 py-3"><StatusPill value={item.status} /></td>
+                  </tr>
+                ))}
+                {!imports.length ? (
+                  <tr>
+                    <td colSpan={13} className="px-3 py-12 text-center text-sm font-bold text-muted">Nenhuma importação encontrada.</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -678,7 +937,7 @@ function InfoLine({ label, value }: { label: string; value: string }) {
 function MetricDelta({ value, metric }: { value: number | null; metric: "submit" | "aht" | "down-good" | "neutral-hours" }) {
   if (value === null || value === 0) return null;
   const positive = metric === "submit" ? value > 0 : metric === "aht" || metric === "down-good" ? value < 0 : null;
-  const text = metric === "aht" ? `${value > 0 ? "+" : ""}${formatMinutes(value)}` : metric === "neutral-hours" ? `${value > 0 ? "+" : ""}${formatHours(value)}` : `${value > 0 ? "+" : ""}${formatInteger(value)}`;
+  const text = metric === "aht" || metric === "neutral-hours" ? formatDurationDelta(value) : `${value > 0 ? "+" : ""}${formatInteger(value)}`;
   return <TrendBadge trend={positive === null ? "neutral" : positive ? "positive" : "negative"} direction={value > 0 ? "up" : "down"} value={text} />;
 }
 
@@ -746,14 +1005,75 @@ function formatInteger(value: number) {
   return Math.round(value).toLocaleString("pt-BR");
 }
 
-function formatMinutes(value: number | null) {
-  if (value === null || !Number.isFinite(value)) return "N/A";
-  return `${(value / 60000).toLocaleString("pt-BR", { maximumFractionDigits: 2, minimumFractionDigits: 2 })} min`;
+function formatDurationFromMs(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "N/A";
+  const totalSeconds = Math.max(0, Math.round(value / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}:${String(minutes).padStart(2, "0")}h`;
+  if (minutes > 0) return `${minutes}:${String(seconds).padStart(2, "0")}m`;
+  return `0:${String(seconds).padStart(2, "0")}s`;
 }
 
-function formatHours(value: number | null) {
-  if (value === null || !Number.isFinite(value)) return "N/A";
-  return `${(value / 3600000).toLocaleString("pt-BR", { maximumFractionDigits: 2, minimumFractionDigits: 2 })} h`;
+function formatDurationDelta(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "Sem comparação";
+  if (value === 0) return "0:00s";
+  return `${value > 0 ? "+" : "-"}${formatDurationFromMs(Math.abs(value))}`;
+}
+
+function buildAgentQueryParams(cycleDownload: string, filters: AgentFilters) {
+  const params = new URLSearchParams();
+  if (cycleDownload) params.set("cycleDownload", cycleDownload);
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value) params.set(key, value);
+  });
+  return params;
+}
+
+function matchesEmployeeStatus(value: string, filter: string) {
+  const normalizedValue = normalizeSearch(value);
+  const normalizedFilter = normalizeSearch(filter);
+  if (normalizedFilter === "ativo") return normalizedValue === "ativo" || normalizedValue === "active";
+  return normalizedValue === normalizedFilter;
+}
+
+function compareAgentRows(a: AgentRealtimeRow, b: AgentRealtimeRow, sortBy: string) {
+  const metric = (row: AgentRealtimeRow, key: string) => {
+    if (key === "submit") return row.current.submit;
+    if (key === "aht") return row.current.ahtMs ?? Number.POSITIVE_INFINITY;
+    if (key === "moderation") return row.current.moderationMs;
+    if (key === "timeout") return row.current.timeout;
+    if (key === "refresh") return row.current.refresh;
+    if (key === "delta_submit") return row.deltas.submit ?? Number.NEGATIVE_INFINITY;
+    if (key === "delta_aht") return row.deltas.ahtMs ?? Number.NEGATIVE_INFINITY;
+    if (key === "delta_timeout") return row.deltas.timeout ?? Number.NEGATIVE_INFINITY;
+    if (key === "delta_refresh") return row.deltas.refresh ?? Number.NEGATIVE_INFINITY;
+    return row.current.submit;
+  };
+  const sortMap: Record<string, { key: string; direction: "asc" | "desc" }> = {
+    submit_desc: { key: "submit", direction: "desc" },
+    submit_asc: { key: "submit", direction: "asc" },
+    aht_desc: { key: "aht", direction: "desc" },
+    aht_asc: { key: "aht", direction: "asc" },
+    moderation_desc: { key: "moderation", direction: "desc" },
+    moderation_asc: { key: "moderation", direction: "asc" },
+    timeout_desc: { key: "timeout", direction: "desc" },
+    timeout_asc: { key: "timeout", direction: "asc" },
+    refresh_desc: { key: "refresh", direction: "desc" },
+    refresh_asc: { key: "refresh", direction: "asc" },
+    delta_submit_desc: { key: "delta_submit", direction: "desc" },
+    delta_submit_asc: { key: "delta_submit", direction: "asc" },
+    delta_aht_desc: { key: "delta_aht", direction: "desc" },
+    delta_aht_asc: { key: "delta_aht", direction: "asc" },
+    delta_timeout_desc: { key: "delta_timeout", direction: "desc" },
+    delta_timeout_asc: { key: "delta_timeout", direction: "asc" },
+    delta_refresh_desc: { key: "delta_refresh", direction: "desc" },
+    delta_refresh_asc: { key: "delta_refresh", direction: "asc" }
+  };
+  const config = sortMap[sortBy] ?? sortMap.submit_desc;
+  const diff = config.direction === "asc" ? metric(a, config.key) - metric(b, config.key) : metric(b, config.key) - metric(a, config.key);
+  return diff || a.displayName.localeCompare(b.displayName);
 }
 
 function toneClass(tone: "blue" | "green" | "purple" | "orange") {

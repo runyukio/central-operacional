@@ -6,6 +6,8 @@ import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import type { Actor } from "@/lib/mock-db";
 import { canAccessRealTime } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import { getQueueNameById, normalizeQueueId } from "@/lib/queue-dictionary";
+import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
 type RawRow = Record<string, unknown>;
 
@@ -20,9 +22,23 @@ export type RealtimeSnapshotOptions = {
   cycleDownload?: string;
 };
 
+export type RealtimeExportQuery = RealtimeSnapshotOptions & {
+  search?: string | null;
+  crossingStatus?: string | null;
+  personType?: string | null;
+  employeeStatus?: string | null;
+  lob?: string | null;
+  supervisor?: string | null;
+  shift?: string | null;
+  skill?: string | null;
+  roleTitle?: string | null;
+  sortBy?: string | null;
+};
+
 type EmployeeMatch = {
   id: string;
   wbLogin: string;
+  userEmail: string;
   fullName: string;
   operationalStatus: string;
   roleTitle: string;
@@ -39,8 +55,7 @@ type AgentCycleMetric = {
   moderationMs: number;
   timeout: number;
   refresh: number;
-  queueName: string;
-  queues: string[];
+  queueCount: number;
   sourceRows: number;
 };
 
@@ -74,9 +89,9 @@ type AgentCycleRow = {
     moderationMs: number;
     timeout: number;
     refresh: number;
-    queues: string[];
   }>;
   queueBreakdown: Array<{
+    queueId: string;
     queueName: string;
     submit: number;
     ahtMs: number | null;
@@ -120,6 +135,8 @@ const agentFriendlyFields = [
   ["Operação completa", ["组织架构全称"]],
   ["Turno", ["班次名称"]],
   ["Skill", ["班次技能组"]],
+  ["Fila ID", ["队列id", "queue id", "queue_id"]],
+  ["Nome da fila", ["队列名称", "queue name", "queue_name"]],
   ["Fila atual", ["当前队列"]],
   ["Status atual", ["当前工作状态"]],
   ["Tempo no status", ["当前状态时长（毫秒）"]],
@@ -165,11 +182,14 @@ export async function importRealtimeSnapshot(input: RealTimeImportInput) {
   const fileName = input.fileName.trim() || "realtime.xlsx";
   const source = input.source?.trim() || "kap-local";
   const queueRows = input.queueRows.filter((row) => hasAnyValue(row));
-  const agentRows = input.agentRows.filter((row) => hasAnyValue(row));
+  const rawAgentRows = input.agentRows.filter((row) => hasAnyValue(row));
+  const { validRows: agentRows, rowErrors } = validateRealtimeAgentRows(rawAgentRows);
   const warnings: string[] = [];
 
   if (!queueRows.length) warnings.push("A aba Filas não possui linhas válidas.");
   if (!agentRows.length) warnings.push("A aba Agentes não possui linhas válidas.");
+  rowErrors.slice(0, 10).forEach((error) => warnings.push(error));
+  if (rowErrors.length > 10) warnings.push(`${rowErrors.length - 10} erro(s) adicional(is) foram omitidos do resumo.`);
   if (!queueRows.length && !agentRows.length) {
     return { error: "O arquivo não possui linhas válidas em Filas ou Agentes.", status: 400 };
   }
@@ -205,9 +225,24 @@ export async function importRealtimeSnapshot(input: RealTimeImportInput) {
     return created;
   });
 
+  const importSummary = await summarizeImportedAgentRows(agentRows);
+
   return {
     success: true,
     batchId: batch.id,
+    fileName: batch.fileName,
+    source: batch.source,
+    cycleDownload: importSummary.cycleDownloads[0] ?? "",
+    cycleDownloads: importSummary.cycleDownloads,
+    rowsProcessed: queueRows.length + rawAgentRows.length,
+    rowsValid: records.length,
+    rowsError: rowErrors.length,
+    rowsInserted: records.length,
+    rowsUpdated: 0,
+    matchedEmployees: importSummary.matchedEmployees,
+    unmatchedEmployees: importSummary.unmatchedEmployees,
+    mappedQueues: importSummary.mappedQueues,
+    unmappedQueues: importSummary.unmappedQueues,
     queueRows: batch.queueRows,
     agentRows: batch.agentRows,
     importedAt: batch.importedAt.toISOString(),
@@ -289,24 +324,283 @@ export async function listRealtimeImports(actor: Actor) {
 
   const imports = await prisma.realTimeImportBatch.findMany({
     orderBy: { importedAt: "desc" },
-    take: 30
+    take: 30,
+    include: {
+      records: {
+        where: { recordType: "AGENT" },
+        select: { rawData: true }
+      }
+    }
+  });
+
+  const employeeProfiles = await loadEmployeeMatches();
+
+  return {
+    data: imports.map((item) => {
+      const summary = summarizeRawAgentRows(item.records.map((record) => isPlainObject(record.rawData) ? record.rawData : {}), employeeProfiles);
+      return {
+        id: item.id,
+        fileName: item.fileName,
+        source: item.source,
+        status: item.status,
+        rowsTotal: item.rowsTotal,
+        rowsValid: item.rowsTotal,
+        rowsError: Array.isArray(item.warnings) ? item.warnings.length : 0,
+        rowsInserted: item.rowsTotal,
+        rowsUpdated: 0,
+        queueRows: item.queueRows,
+        agentRows: item.agentRows,
+        cycleDownload: summary.cycleDownloads[0] ?? "",
+        cycleDownloads: summary.cycleDownloads,
+        matchedEmployees: summary.matchedEmployees,
+        unmatchedEmployees: summary.unmatchedEmployees,
+        mappedQueues: summary.mappedQueues,
+        unmappedQueues: summary.unmappedQueues,
+        importedAt: item.importedAt.toISOString(),
+        importedAtLabel: formatDateTime(item.importedAt),
+        errorMessage: item.errorMessage ?? "",
+        warnings: Array.isArray(item.warnings) ? item.warnings : []
+      };
+    })
+  };
+}
+
+export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQuery): Promise<XlsxExportPayload | { error: string; status: number }> {
+  const snapshot = await getRealtimeSnapshot(actor, { cycleDownload: query.cycleDownload });
+  if ("error" in snapshot && snapshot.error) return { error: snapshot.error, status: snapshot.status ?? 400 };
+  const snapshotData = "data" in snapshot ? snapshot.data : null;
+  if (!snapshotData) return { error: "Não foi possível exportar Real Time.", status: 500 };
+
+  const agentView = snapshotData.agents;
+  const rows = sortAgentRows(filterAgentRows(agentView.rows, query), query.sortBy ?? "submit_desc");
+  const unfilteredUnmatched = agentView.rows.filter((row) => row.crossingStatus === "Não encontrado");
+  const importRows = (await listRealtimeImports(actor));
+  const imports = "error" in importRows ? [] : importRows.data;
+
+  return {
+    fileName: `real_time_agentes_${agentView.selectedCycle || "sem_ciclo"}.xlsx`,
+    sheetName: "Resumo",
+    headers: ["ciclo_download", "ciclo_anterior", "submit_total", "aht_medio", "moderacao_total", "timeout", "refresh"],
+    rows: [[
+      agentView.selectedCycle,
+      agentView.previousCycle || "Sem comparação",
+      agentView.summary.current.submit,
+      formatDurationFromMs(agentView.summary.current.ahtMs),
+      formatDurationFromMs(agentView.summary.current.moderationMs),
+      agentView.summary.current.timeout,
+      agentView.summary.current.refresh
+    ]],
+    sheets: [
+      {
+        sheetName: "Agentes Real Time",
+        headers: [
+          "ciclo_download",
+          "agente",
+          "wb_login",
+          "status_cruzamento",
+          "status_colaborador",
+          "lob",
+          "supervisor",
+          "turno",
+          "skill",
+          "cargo_funcao",
+          "submit",
+          "submit_anterior",
+          "variacao_submit",
+          "aht_formatado",
+          "aht_anterior_formatado",
+          "variacao_aht_formatada",
+          "moderation_formatada",
+          "timeout_returns",
+          "refresh_returns"
+        ],
+        rows: rows.map((row) => [
+          agentView.selectedCycle,
+          row.displayName,
+          row.wbLogin || row.rawWbLogin,
+          row.crossingStatus,
+          row.employeeStatus,
+          row.lob,
+          row.supervisor,
+          row.shift,
+          row.skill,
+          row.roleTitle,
+          row.current.submit,
+          row.previous?.submit ?? null,
+          row.deltas.submit ?? null,
+          formatDurationFromMs(row.current.ahtMs),
+          formatDurationFromMs(row.previous?.ahtMs ?? null),
+          formatDurationDelta(row.deltas.ahtMs),
+          formatDurationFromMs(row.current.moderationMs),
+          row.current.timeout,
+          row.current.refresh
+        ])
+      },
+      {
+        sheetName: "Historico por agente",
+        headers: ["agente", "wb_login", "ciclo_download", "submit", "aht", "moderacao", "timeout", "refresh"],
+        rows: rows.flatMap((row) => row.history.map((item) => [
+          row.displayName,
+          row.wbLogin || row.rawWbLogin,
+          item.cycleDownload,
+          item.submit,
+          formatDurationFromMs(item.ahtMs),
+          formatDurationFromMs(item.moderationMs),
+          item.timeout,
+          item.refresh
+        ]))
+      },
+      {
+        sheetName: "Nao encontrados",
+        headers: ["ciclo_download", "wb_login", "submit", "aht", "moderacao", "timeout", "refresh"],
+        rows: unfilteredUnmatched.map((row) => [
+          agentView.selectedCycle,
+          row.rawWbLogin,
+          row.current.submit,
+          formatDurationFromMs(row.current.ahtMs),
+          formatDurationFromMs(row.current.moderationMs),
+          row.current.timeout,
+          row.current.refresh
+        ])
+      },
+      {
+        sheetName: "Filas tecnicas",
+        headers: ["ciclo_download", "wb_login", "queue_id", "queue_name", "submit", "aht_formatado", "moderation_formatada", "timeout_returns", "refresh_returns"],
+        rows: rows.flatMap((row) => row.queueBreakdown.map((queue) => [
+          agentView.selectedCycle,
+          row.wbLogin || row.rawWbLogin,
+          queue.queueId || "Sem Fila ID",
+          queue.queueName,
+          queue.submit,
+          formatDurationFromMs(queue.ahtMs),
+          formatDurationFromMs(queue.moderationMs),
+          queue.timeout,
+          queue.refresh
+        ]))
+      },
+      {
+        sheetName: "Importacoes",
+        headers: ["arquivo", "ciclo_download", "importado_em", "linhas_totais", "linhas_validas", "linhas_erro", "criados", "atualizados", "wbs_encontrados", "wbs_nao_encontrados", "filas_mapeadas", "filas_nao_mapeadas", "status"],
+        rows: imports.map((item) => [
+          item.fileName,
+          item.cycleDownload,
+          item.importedAtLabel,
+          item.rowsTotal,
+          item.rowsValid,
+          item.rowsError,
+          item.rowsInserted,
+          item.rowsUpdated,
+          item.matchedEmployees,
+          item.unmatchedEmployees,
+          item.mappedQueues,
+          item.unmappedQueues,
+          item.status
+        ])
+      }
+    ]
+  };
+}
+
+async function loadEmployeeMatches() {
+  const employeeProfiles = await prisma.employeeProfile.findMany({
+    where: { deletedAt: null },
+    select: {
+      id: true,
+      wbLogin: true,
+      fullName: true,
+      operationalStatus: true,
+      roleTitle: true,
+      skill: true,
+      supervisorId: true,
+      user: { select: { email: true } },
+      lob: { select: { name: true } },
+      supervisor: { select: { fullName: true, wbLogin: true } },
+      shift: { select: { name: true } }
+    }
+  });
+
+  return employeeProfiles.map((employee): EmployeeMatch => ({
+    id: employee.id,
+    wbLogin: employee.wbLogin,
+    userEmail: employee.user?.email ?? "",
+    fullName: employee.fullName,
+    operationalStatus: employee.operationalStatus,
+    roleTitle: employee.roleTitle,
+    skill: employee.skill ?? "",
+    lob: employee.lob?.name ?? "",
+    supervisor: employee.supervisor?.fullName ?? "",
+    supervisorId: employee.supervisorId ?? "",
+    shift: employee.shift?.name ?? ""
+  }));
+}
+
+async function summarizeImportedAgentRows(rows: RawRow[]) {
+  return summarizeRawAgentRows(rows, await loadEmployeeMatches());
+}
+
+function summarizeRawAgentRows(rows: RawRow[], employeeMatches: EmployeeMatch[]) {
+  const employeesByWb = new Map(employeeMatches.map((employee) => [normalizeWbLogin(employee.wbLogin), employee]));
+  const cycleDownloads = new Set<string>();
+  const matchedWbs = new Set<string>();
+  const unmatchedWbs = new Set<string>();
+  const mappedQueues = new Set<string>();
+  const unmappedQueues = new Set<string>();
+
+  rows.forEach((row) => {
+    const cycleDownload = extractCycleDownload(row);
+    if (cycleDownload) cycleDownloads.add(cycleDownload);
+
+    const candidates = extractWbCandidates(row);
+    const employee = candidates.map((candidate) => employeesByWb.get(candidate.normalized)).find(Boolean);
+    const wb = employee ? normalizeWbLogin(employee.wbLogin) : candidates[0]?.normalized ?? "";
+    if (wb) {
+      if (employee) matchedWbs.add(wb);
+      else unmatchedWbs.add(wb);
+    }
+
+    const queueId = normalizeQueueId(rawText(row, ["队列id", "Fila ID", "queue_id", "queue id"]));
+    const queueNameRaw = rawText(row, ["队列名称", "Nome da fila", "queue_name", "queue name"]);
+    if (queueId) {
+      if (getQueueNameById(queueId, queueNameRaw) === "Fila não mapeada") unmappedQueues.add(queueId);
+      else mappedQueues.add(queueId);
+    }
   });
 
   return {
-    data: imports.map((item) => ({
-      id: item.id,
-      fileName: item.fileName,
-      source: item.source,
-      status: item.status,
-      rowsTotal: item.rowsTotal,
-      queueRows: item.queueRows,
-      agentRows: item.agentRows,
-      importedAt: item.importedAt.toISOString(),
-      importedAtLabel: formatDateTime(item.importedAt),
-      errorMessage: item.errorMessage ?? "",
-      warnings: Array.isArray(item.warnings) ? item.warnings : []
-    }))
+    cycleDownloads: Array.from(cycleDownloads).sort().reverse(),
+    matchedEmployees: matchedWbs.size,
+    unmatchedEmployees: unmatchedWbs.size,
+    mappedQueues: mappedQueues.size,
+    unmappedQueues: unmappedQueues.size
   };
+}
+
+function validateRealtimeAgentRows(rows: RawRow[]) {
+  const numericFields = [
+    ["审核量", "Submit"],
+    ["平均AHT（毫秒）", "AHT"],
+    ["超时退库量", "Timeout"],
+    ["刷新退库量", "Refresh"],
+    ["真实审核时长（毫秒）", "Moderação"]
+  ] as const;
+  const validRows: RawRow[] = [];
+  const rowErrors: string[] = [];
+
+  rows.forEach((row, index) => {
+    const errors: string[] = [];
+    for (const [key, label] of numericFields) {
+      const rawValue = rawText(row, [key]);
+      if (!rawValue) continue;
+      if (parseOptionalRealtimeNumber(rawValue) === null) errors.push(`${label} inválido`);
+    }
+    if (errors.length) {
+      rowErrors.push(`Linha ${index + 1}: ${errors.join(", ")}.`);
+    } else {
+      validRows.push(row);
+    }
+  });
+
+  return { validRows, rowErrors };
 }
 
 async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOptions) {
@@ -326,41 +620,13 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
     include: { batch: { select: { id: true, importedAt: true, fileName: true } } }
   });
 
-  const employeeProfiles = await prisma.employeeProfile.findMany({
-    where: { deletedAt: null },
-    select: {
-      id: true,
-      wbLogin: true,
-      fullName: true,
-      operationalStatus: true,
-      roleTitle: true,
-      skill: true,
-      supervisorId: true,
-      user: { select: { email: true } },
-      lob: { select: { name: true } },
-      supervisor: { select: { fullName: true, wbLogin: true } },
-      shift: { select: { name: true } }
-    }
-  });
-
   const employeesByWb = new Map<string, EmployeeMatch>();
-  const employeeMatches = employeeProfiles.map((employee) => ({
-    id: employee.id,
-    wbLogin: employee.wbLogin,
-    fullName: employee.fullName,
-    operationalStatus: employee.operationalStatus,
-    roleTitle: employee.roleTitle,
-    skill: employee.skill ?? "",
-    lob: employee.lob?.name ?? "",
-    supervisor: employee.supervisor?.fullName ?? "",
-    supervisorId: employee.supervisorId ?? "",
-    shift: employee.shift?.name ?? ""
-  }));
+  const employeeMatches = await loadEmployeeMatches();
   employeeMatches.forEach((employee) => employeesByWb.set(normalizeWbLogin(employee.wbLogin), employee));
 
   const actorEmail = actor.email.trim().toLowerCase();
-  const actorEmployee = employeeProfiles.find((employee) => employee.user?.email?.trim().toLowerCase() === actorEmail)
-    ?? employeeProfiles.find((employee) => normalizeWbLogin(employee.wbLogin) === normalizeWbLogin(actor.email.split("@")[0] ?? ""));
+  const actorEmployee = employeeMatches.find((employee) => employee.userEmail.trim().toLowerCase() === actorEmail)
+    ?? employeeMatches.find((employee) => normalizeWbLogin(employee.wbLogin) === normalizeWbLogin(actor.email.split("@")[0] ?? ""));
 
   const latestBatchByCycle = new Map<string, { batchId: string; importedAt: Date }>();
   const prepared = records.map((record) => {
@@ -423,8 +689,7 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
         ahtMs: row.current.ahtMs,
         moderationMs: row.current.moderationMs,
         timeout: row.current.timeout,
-        refresh: row.current.refresh,
-        queues: row.current.queues
+        refresh: row.current.refresh
       });
       historyByKey.set(row.key, history);
     }
@@ -468,8 +733,7 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
       supervisors: countBy(rows.map((row) => row.supervisor).filter(Boolean)),
       shifts: countBy(rows.map((row) => row.shift).filter(Boolean)),
       skills: countBy(rows.map((row) => row.skill).filter(Boolean)),
-      roleTitles: countBy(rows.map((row) => row.roleTitle).filter(Boolean)),
-      queues: countBy(rows.map((row) => row.current.queueName).filter(Boolean))
+      roleTitles: countBy(rows.map((row) => row.roleTitle).filter(Boolean))
     },
     rows
   };
@@ -495,6 +759,8 @@ function aggregateAgentCycleRows(items: Array<{
     refresh: number;
     sourceRows: number;
     queues: Map<string, {
+      queueId: string;
+      queueName: string;
       submit: number;
       weightedAhtMs: number;
       simpleAhtMs: number;
@@ -514,7 +780,10 @@ function aggregateAgentCycleRows(items: Array<{
     const timeout = Math.max(0, parseRealtimeNumberFromRow(item.rawData, ["超时退库量", "timeout", "timeout_returns"]));
     const refresh = Math.max(0, parseRealtimeNumberFromRow(item.rawData, ["刷新退库量", "refresh", "refresh_returns"]));
     const moderationMs = Math.max(0, parseRealtimeNumberFromRow(item.rawData, ["真实审核时长（毫秒）", "moderation_duration_ms"]));
-    const queueName = rawText(item.rawData, ["当前队列", "Fila atual", "queue", "queue_name"]) || "Sem fila";
+    const queueId = normalizeQueueId(rawText(item.rawData, ["队列id", "Fila ID", "queue_id", "queue id"]));
+    const queueNameRaw = rawText(item.rawData, ["队列名称", "Nome da fila", "queue_name", "queue name"]) || rawText(item.rawData, ["当前队列", "Fila atual"]);
+    const queueName = getQueueNameById(queueId, queueNameRaw);
+    const queueKey = queueId || `sem-fila-id:${queueName}`;
     const group = groups.get(key) ?? {
       key,
       employee: item.employee,
@@ -545,7 +814,9 @@ function aggregateAgentCycleRows(items: Array<{
       }
     }
 
-    const queue = group.queues.get(queueName) ?? {
+    const queue = group.queues.get(queueKey) ?? {
+      queueId,
+      queueName,
       submit: 0,
       weightedAhtMs: 0,
       simpleAhtMs: 0,
@@ -565,28 +836,27 @@ function aggregateAgentCycleRows(items: Array<{
         queue.simpleAhtCount += 1;
       }
     }
-    group.queues.set(queueName, queue);
+    group.queues.set(queueKey, queue);
     groups.set(key, group);
   }
 
   return Array.from(groups.values()).map((group): AgentCycleRow => {
-    const queueBreakdown = Array.from(group.queues.entries()).map(([queueName, queue]) => ({
-      queueName,
+    const queueBreakdown = Array.from(group.queues.values()).map((queue) => ({
+      queueId: queue.queueId,
+      queueName: queue.queueName,
       submit: queue.submit,
       ahtMs: resolveAhtMs(queue.submit, queue.weightedAhtMs, queue.simpleAhtMs, queue.simpleAhtCount),
       moderationMs: queue.moderationMs,
       timeout: queue.timeout,
       refresh: queue.refresh
     })).sort((a, b) => b.submit - a.submit || a.queueName.localeCompare(b.queueName));
-    const queues = queueBreakdown.map((queue) => queue.queueName).filter(Boolean);
     const current: AgentCycleMetric = {
       submit: group.submit,
       ahtMs: resolveAhtMs(group.submit, group.weightedAhtMs, group.simpleAhtMs, group.simpleAhtCount),
       moderationMs: group.moderationMs,
       timeout: group.timeout,
       refresh: group.refresh,
-      queueName: queues.length > 1 ? "Múltiplas filas" : queues[0] ?? "Sem fila",
-      queues,
+      queueCount: queueBreakdown.length,
       sourceRows: group.sourceRows
     };
     const employee = group.employee;
@@ -634,18 +904,15 @@ function summarizeAgentRows(rows: AgentCycleRow[]) {
 
 function buildAgentSummaryCards(current: ReturnType<typeof summarizeAgentRows>, previous: ReturnType<typeof summarizeAgentRows> | null) {
   return [
-    buildSummaryCard("Registros importados", current.recordsImported, previous?.recordsImported ?? null, "number", "neutral"),
-    buildSummaryCard("Agentes encontrados", current.matched, previous?.matched ?? null, "number", "up"),
-    buildSummaryCard("Não encontrados", current.unmatched, previous?.unmatched ?? null, "number", "down"),
     buildSummaryCard("Submit total", current.submit, previous?.submit ?? null, "number", "up"),
-    buildSummaryCard("AHT médio", current.ahtMs, previous?.ahtMs ?? null, "minutes", "down"),
-    buildSummaryCard("Moderação total", current.moderationMs, previous?.moderationMs ?? null, "hours", "neutral"),
+    buildSummaryCard("AHT médio", current.ahtMs, previous?.ahtMs ?? null, "duration", "down"),
+    buildSummaryCard("Moderação total", current.moderationMs, previous?.moderationMs ?? null, "duration", "neutral"),
     buildSummaryCard("Timeout", current.timeout, previous?.timeout ?? null, "number", "down"),
     buildSummaryCard("Refresh", current.refresh, previous?.refresh ?? null, "number", "down")
   ];
 }
 
-function buildSummaryCard(label: string, current: number | null, previous: number | null, format: "number" | "minutes" | "hours", positiveDirection: "up" | "down" | "neutral") {
+function buildSummaryCard(label: string, current: number | null, previous: number | null, format: "number" | "duration", positiveDirection: "up" | "down" | "neutral") {
   const delta = current !== null && previous !== null ? current - previous : null;
   return {
     label,
@@ -675,8 +942,7 @@ function emptyAgentRealtimeView() {
       supervisors: [] as ReturnType<typeof countBy>,
       shifts: [] as ReturnType<typeof countBy>,
       skills: [] as ReturnType<typeof countBy>,
-      roleTitles: [] as ReturnType<typeof countBy>,
-      queues: [] as ReturnType<typeof countBy>
+      roleTitles: [] as ReturnType<typeof countBy>
     },
     rows: [] as AgentCycleRow[]
   };
@@ -718,6 +984,10 @@ function parseRealtimeNumberFromRow(row: RawRow, keys: string[]) {
 function parseOptionalRealtimeNumberFromRow(row: RawRow, keys: string[]) {
   const value = rawText(row, keys);
   if (!value) return null;
+  return parseOptionalRealtimeNumber(value);
+}
+
+function parseOptionalRealtimeNumber(value: string) {
   const normalized = value.replace("%", "").replace(/\./g, "").replace(",", ".");
   const number = Number(normalized);
   return Number.isFinite(number) ? number : null;
@@ -744,22 +1014,104 @@ function formatCycleFromDate(date: Date) {
   }).format(date).replace(" ", "_");
 }
 
-function formatMetricValue(value: number | null, format: "number" | "minutes" | "hours", signed = false) {
+function formatMetricValue(value: number | null, format: "number" | "duration", signed = false) {
   if (value === null || !Number.isFinite(value)) return "N/A";
-  const sign = signed && value > 0 ? "+" : "";
-  if (format === "minutes") return `${sign}${msToMinutes(value)} min`;
-  if (format === "hours") return `${sign}${msToHours(value)} h`;
-  return `${sign}${Math.round(value).toLocaleString("pt-BR")}`;
+  const sign = signed ? (value > 0 ? "+" : value < 0 ? "-" : "") : "";
+  if (format === "duration") return `${sign}${formatDurationFromMs(Math.abs(value))}`;
+  return `${sign}${Math.round(Math.abs(value)).toLocaleString("pt-BR")}`;
 }
 
-function msToMinutes(value: number | null) {
-  if (value === null || !Number.isFinite(value)) return "";
-  return Number((value / 60000).toFixed(2));
+function filterAgentRows(rows: AgentCycleRow[], query: RealtimeExportQuery) {
+  const search = normalizeHeader(String(query.search ?? ""));
+  return rows.filter((row) => {
+    if (query.crossingStatus && row.crossingStatus !== query.crossingStatus) return false;
+    if (query.personType && row.personType !== query.personType) return false;
+    if (query.employeeStatus && !matchesEmployeeStatus(row.employeeStatus, query.employeeStatus)) return false;
+    if (query.lob && row.lob !== query.lob) return false;
+    if (query.supervisor && row.supervisor !== query.supervisor) return false;
+    if (query.shift && row.shift !== query.shift) return false;
+    if (query.skill && row.skill !== query.skill) return false;
+    if (query.roleTitle && row.roleTitle !== query.roleTitle) return false;
+    if (!search) return true;
+    return normalizeHeader([
+      row.displayName,
+      row.wbLogin,
+      row.rawWbLogin,
+      row.employeeStatus,
+      row.lob,
+      row.supervisor,
+      row.shift,
+      row.skill,
+      row.roleTitle
+    ].join(" ")).includes(search);
+  });
 }
 
-function msToHours(value: number | null) {
-  if (value === null || !Number.isFinite(value)) return "";
-  return Number((value / 3600000).toFixed(2));
+function sortAgentRows(rows: AgentCycleRow[], sortBy = "submit_desc") {
+  const sorted = [...rows];
+  const metric = (row: AgentCycleRow, key: string) => {
+    if (key === "submit") return row.current.submit;
+    if (key === "aht") return row.current.ahtMs ?? Number.POSITIVE_INFINITY;
+    if (key === "moderation") return row.current.moderationMs;
+    if (key === "timeout") return row.current.timeout;
+    if (key === "refresh") return row.current.refresh;
+    if (key === "delta_submit") return row.deltas.submit ?? Number.NEGATIVE_INFINITY;
+    if (key === "delta_aht") return row.deltas.ahtMs ?? Number.NEGATIVE_INFINITY;
+    if (key === "delta_timeout") return row.deltas.timeout ?? Number.NEGATIVE_INFINITY;
+    if (key === "delta_refresh") return row.deltas.refresh ?? Number.NEGATIVE_INFINITY;
+    return row.current.submit;
+  };
+  const sortMap: Record<string, { key: string; direction: "asc" | "desc" }> = {
+    submit_desc: { key: "submit", direction: "desc" },
+    submit_asc: { key: "submit", direction: "asc" },
+    aht_desc: { key: "aht", direction: "desc" },
+    aht_asc: { key: "aht", direction: "asc" },
+    moderation_desc: { key: "moderation", direction: "desc" },
+    moderation_asc: { key: "moderation", direction: "asc" },
+    timeout_desc: { key: "timeout", direction: "desc" },
+    timeout_asc: { key: "timeout", direction: "asc" },
+    refresh_desc: { key: "refresh", direction: "desc" },
+    refresh_asc: { key: "refresh", direction: "asc" },
+    delta_submit_desc: { key: "delta_submit", direction: "desc" },
+    delta_submit_asc: { key: "delta_submit", direction: "asc" },
+    delta_aht_desc: { key: "delta_aht", direction: "desc" },
+    delta_aht_asc: { key: "delta_aht", direction: "asc" },
+    delta_timeout_desc: { key: "delta_timeout", direction: "desc" },
+    delta_timeout_asc: { key: "delta_timeout", direction: "asc" },
+    delta_refresh_desc: { key: "delta_refresh", direction: "desc" },
+    delta_refresh_asc: { key: "delta_refresh", direction: "asc" }
+  };
+  const config = sortMap[sortBy] ?? sortMap.submit_desc;
+  return sorted.sort((a, b) => {
+    const left = metric(a, config.key);
+    const right = metric(b, config.key);
+    const diff = config.direction === "asc" ? left - right : right - left;
+    return diff || a.displayName.localeCompare(b.displayName);
+  });
+}
+
+function matchesEmployeeStatus(value: string, filter: string) {
+  const normalizedValue = normalizeHeader(value);
+  const normalizedFilter = normalizeHeader(filter);
+  if (normalizedFilter === "ativo") return normalizedValue === "ativo" || normalizedValue === "active";
+  return normalizedValue === normalizedFilter;
+}
+
+export function formatDurationFromMs(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "N/A";
+  const totalSeconds = Math.max(0, Math.round(value / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}:${String(minutes).padStart(2, "0")}h`;
+  if (minutes > 0) return `${minutes}:${String(seconds).padStart(2, "0")}m`;
+  return `0:${String(seconds).padStart(2, "0")}s`;
+}
+
+export function formatDurationDelta(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "Sem comparação";
+  if (value === 0) return "0:00s";
+  return `${value > 0 ? "+" : "-"}${formatDurationFromMs(Math.abs(value))}`;
 }
 
 function buildRecord(row: RawRow, recordType: "QUEUE" | "AGENT", rowNumber: number) {
