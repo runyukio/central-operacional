@@ -171,7 +171,14 @@ type AgentFilters = {
 
 type AgentSortKey = "displayName" | "wbLogin" | "employeeStatus" | "lob" | "supervisor" | "shift" | "skill" | "submit" | "aht" | "moderation" | "timeout" | "refresh";
 type AgentSortState = { key: AgentSortKey; direction: "asc" | "desc" };
-type AgentKpiCard = { label: string; value: string; delta: string; hasComparison: boolean; trend: "positive" | "negative" | "neutral"; direction: "up" | "down" | "none" };
+type AgentKpiCard = {
+  label: string;
+  value: string;
+  delta: string;
+  hasComparison: boolean;
+  trend: "positive" | "negative" | "neutral";
+  direction: "up" | "down" | "none";
+};
 
 type ImportHistory = {
   id: string;
@@ -332,7 +339,8 @@ export function RealTimePage() {
         row.supervisor,
         row.shift,
         row.skill,
-        row.roleTitle
+        row.roleTitle,
+        ...row.queueBreakdown.map((queue) => `${queue.queueId} ${queue.queueName}`)
       ].join(" ")).includes(normalizedSearch);
     }).sort((a, b) => compareAgentRows(a, b, agentSort));
   }, [agentFilters, agentSort, agentView?.rows]);
@@ -498,6 +506,7 @@ function AgentTable({
     { label: "Supervisor", sortKey: "supervisor" },
     { label: "Turno", sortKey: "shift" },
     { label: "Skill", sortKey: "skill" },
+    { label: "Fila ID" },
     { label: "Submit", sortKey: "submit" },
     { label: "AHT", sortKey: "aht" },
     { label: "Moderação", sortKey: "moderation" },
@@ -511,7 +520,7 @@ function AgentTable({
         <span>{rows.length} de {totalRows} agente(s) exibidos</span>
       </div>
       <div className="overflow-x-auto">
-        <table className="min-w-[1220px] text-left text-sm">
+        <table className="min-w-[1320px] text-left text-sm">
           <thead className="bg-slate-50 text-xs uppercase tracking-wide text-muted">
             <tr>
               {columns.map((column) => (
@@ -537,11 +546,12 @@ function AgentTable({
                 <td className="px-4 py-3 font-bold">{row.supervisor}</td>
                 <td className="px-4 py-3 font-bold">{row.shift}</td>
                 <td className="px-4 py-3 font-bold">{row.skill}</td>
-                <td className="px-4 py-3 font-black text-navy-950">{formatInteger(row.current.submit)}</td>
-                <td className="px-4 py-3 font-black text-navy-950">{formatDurationFromMs(row.current.ahtMs)}</td>
-                <td className="px-4 py-3 font-black text-navy-950">{formatDurationFromMs(row.current.moderationMs)}</td>
-                <td className="px-4 py-3 font-black text-navy-950">{formatInteger(row.current.timeout)}</td>
-                <td className="px-4 py-3 font-black text-navy-950">{formatInteger(row.current.refresh)}</td>
+                <td className="px-4 py-3"><QueueIdCell queues={row.queueBreakdown} /></td>
+                <td className="px-4 py-3"><AgentMetricCell current={row.current.submit} previous={row.previous?.submit ?? null} format="number" positiveDirection="up" /></td>
+                <td className="px-4 py-3"><AgentMetricCell current={row.current.ahtMs} previous={row.previous?.ahtMs ?? null} format="duration" positiveDirection="down" /></td>
+                <td className="px-4 py-3"><AgentMetricCell current={row.current.moderationMs} previous={row.previous?.moderationMs ?? null} format="duration" positiveDirection="neutral" /></td>
+                <td className="px-4 py-3"><AgentMetricCell current={row.current.timeout} previous={row.previous?.timeout ?? null} format="number" positiveDirection="down" /></td>
+                <td className="px-4 py-3"><AgentMetricCell current={row.current.refresh} previous={row.previous?.refresh ?? null} format="number" positiveDirection="down" /></td>
                 <td className="px-4 py-3">
                   <button type="button" onClick={() => onSelect(row)} className="premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold text-navy-950">
                     <Eye className="h-4 w-4" />
@@ -567,6 +577,63 @@ function AgentTable({
 function SortIndicator({ active, direction }: { active: boolean; direction: "asc" | "desc" }) {
   if (!active) return <span className="text-slate-300">↕</span>;
   return <span className="text-blue-700">{direction === "asc" ? "↑" : "↓"}</span>;
+}
+
+function QueueIdCell({ queues }: { queues: AgentRealtimeRow["queueBreakdown"] }) {
+  const queueIds = Array.from(new Set(queues.map((queue) => queue.queueId).filter(Boolean)));
+  const title = queueIds.length
+    ? queueIds.map((queueId) => {
+      const queueName = queues.find((queue) => queue.queueId === queueId)?.queueName;
+      return queueName ? `${queueId} - ${queueName}` : queueId;
+    }).join("\n")
+    : "Sem Fila ID";
+
+  if (!queueIds.length) {
+    return <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-black text-slate-700">Sem Fila ID</span>;
+  }
+
+  return (
+    <div title={title} className="flex max-w-[150px] flex-col gap-1">
+      {queueIds.slice(0, 2).map((queueId) => (
+        <span key={queueId} className="w-fit rounded-full bg-blue-50 px-2.5 py-1 text-xs font-black text-blue-700">
+          {queueId}
+        </span>
+      ))}
+      {queueIds.length > 2 ? (
+        <span className="text-[11px] font-black text-muted">+{queueIds.length - 2} fila(s)</span>
+      ) : null}
+    </div>
+  );
+}
+
+function AgentMetricCell({
+  current,
+  previous,
+  format,
+  positiveDirection
+}: {
+  current: number | null;
+  previous: number | null;
+  format: "number" | "duration";
+  positiveDirection: "up" | "down" | "neutral";
+}) {
+  const delta = current !== null && previous !== null ? current - previous : null;
+  const isPositive = delta === null || delta === 0 || positiveDirection === "neutral" ? null : positiveDirection === "up" ? delta > 0 : delta < 0;
+  const value = format === "duration" ? formatDurationFromMs(current) : formatInteger(current ?? 0);
+  const deltaValue = delta === null ? "" : format === "duration" ? formatDurationFromMs(Math.abs(delta)) : formatInteger(Math.abs(delta));
+  const trend = isPositive === null ? "neutral" : isPositive ? "positive" : "negative";
+  const direction = delta === null || delta === 0 ? "none" : delta > 0 ? "up" : "down";
+
+  return (
+    <div className="min-w-[84px]">
+      <p className="font-black text-navy-950">{value}</p>
+      {delta === null ? (
+        <p className="mt-1 text-[11px] font-black text-muted">Sem comparação</p>
+      ) : (
+        <TrendBadge trend={trend} direction={direction} value={deltaValue || "0"} />
+      )}
+    </div>
+  );
 }
 
 function QueueTable({ rows, totalRows, columns, truncated, returnedRows }: { rows: RealTimeRow[]; totalRows: number; columns: Array<{ key: string; label: string }>; truncated: boolean; returnedRows: number }) {

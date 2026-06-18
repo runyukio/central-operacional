@@ -23,10 +23,9 @@
     <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>KAP_OUTPUT_DIR</key>
     <string>/Users/lucaskawakami/KAP</string>
+    <key>KAP_ENFORCE_HALF_HOUR_SLOTS</key>
+    <string>true</string>
   </dict>
-
-  <key>RunAtLoad</key>
-  <true/>
 
   <key>StartCalendarInterval</key>
   <array>
@@ -36,15 +35,7 @@
     </dict>
     <dict>
       <key>Minute</key>
-      <integer>15</integer>
-    </dict>
-    <dict>
-      <key>Minute</key>
       <integer>30</integer>
-    </dict>
-    <dict>
-      <key>Minute</key>
-      <integer>45</integer>
     </dict>
   </array>
 

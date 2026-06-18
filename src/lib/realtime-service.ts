@@ -6,7 +6,7 @@ import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import type { Actor } from "@/lib/mock-db";
 import { canAccessRealTime } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
-import { getQueueNameById, normalizeQueueId } from "@/lib/queue-dictionary";
+import { resolveQueueReference } from "@/lib/queue-dictionary";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
 type RawRow = Record<string, unknown>;
@@ -551,11 +551,13 @@ function summarizeRawAgentRows(rows: RawRow[], employeeMatches: EmployeeMatch[])
       else unmatchedWbs.add(wb);
     }
 
-    const queueId = normalizeQueueId(rawText(row, ["队列id", "Fila ID", "queue_id", "queue id"]));
-    if (queueId) {
-      if (getQueueNameById(queueId) === "Fila não mapeada") unmappedQueues.add(queueId);
-      else mappedQueues.add(queueId);
-    }
+    const queueReference = resolveQueueReference(
+      rawText(row, ["队列id", "Fila ID", "queue_id", "queue id"]),
+      rawText(row, ["当前队列", "队列名称", "Nome da fila", "queue_name", "queue name", "Fila atual"])
+    );
+    if (queueReference.queueId && queueReference.queueName !== "Fila não mapeada") mappedQueues.add(queueReference.queueId);
+    else if (queueReference.queueId) unmappedQueues.add(queueReference.queueId);
+    else if (queueReference.queueName && queueReference.queueName !== "Sem Fila ID") unmappedQueues.add(queueReference.queueName);
   });
 
   return {
@@ -772,8 +774,12 @@ function aggregateAgentCycleRows(items: Array<{
     const timeout = Math.max(0, parseRealtimeNumberFromRow(item.rawData, ["超时退库量", "timeout", "timeout_returns"]));
     const refresh = Math.max(0, parseRealtimeNumberFromRow(item.rawData, ["刷新退库量", "refresh", "refresh_returns"]));
     const moderationMs = Math.max(0, parseRealtimeNumberFromRow(item.rawData, ["真实审核时长（毫秒）", "moderation_duration_ms"]));
-    const queueId = normalizeQueueId(rawText(item.rawData, ["队列id", "Fila ID", "queue_id", "queue id"]));
-    const queueName = getQueueNameById(queueId);
+    const queueReference = resolveQueueReference(
+      rawText(item.rawData, ["队列id", "Fila ID", "queue_id", "queue id"]),
+      rawText(item.rawData, ["当前队列", "队列名称", "Nome da fila", "queue_name", "queue name", "Fila atual"])
+    );
+    const queueId = queueReference.queueId;
+    const queueName = queueReference.queueName;
     const queueKey = queueId || `sem-fila-id:${queueName}`;
     const group = groups.get(key) ?? {
       key,

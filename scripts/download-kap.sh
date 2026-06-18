@@ -14,13 +14,23 @@ TRANSFORM_SCRIPT="${KAP_TRANSFORM_SCRIPT:-$SCRIPT_DIR/kap-transform.js}"
 BUNDLE_SCRIPT="${KAP_BUNDLE_SCRIPT:-$SCRIPT_DIR/kap-realtime-bundle.js}"
 CURL_BIN="${KAP_CURL_BIN:-/usr/bin/curl}"
 NOW="$(date +"%Y-%m-%d_%H-%M-%S")"
+RUN_MINUTE="$(date +"%M")"
 TEMP_FILES=()
 QUEUE_OUTPUT_FILE=""
 AUDITOR_OUTPUT_FILE=""
+LOCK_DIR=""
+
+if [[ "${KAP_ENFORCE_HALF_HOUR_SLOTS:-true}" == "true" && "$RUN_MINUTE" != "00" && "$RUN_MINUTE" != "30" ]]; then
+  echo "Skipping KAP download: current minute $RUN_MINUTE is outside the 00/30 minute slots."
+  exit 0
+fi
 
 cleanup() {
   if (( ${#TEMP_FILES[@]} > 0 )); then
     rm -f "${TEMP_FILES[@]}"
+  fi
+  if [[ -n "$LOCK_DIR" && -d "$LOCK_DIR" ]]; then
+    rmdir "$LOCK_DIR" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
@@ -32,6 +42,11 @@ if [[ ! -f "$COOKIE_FILE" ]]; then
 fi
 
 mkdir -p "$OUTPUT_DIR"
+LOCK_DIR="${KAP_LOCK_DIR:-$OUTPUT_DIR/.kap-download.lock}"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  echo "Another KAP download is already running; skipping this cycle."
+  exit 0
+fi
 
 COOKIE="$(tr -d '\r\n' < "$COOKIE_FILE")"
 
@@ -52,10 +67,14 @@ download_report() {
   local label="$1"
   local url="$2"
   local body_source="$3"
-  local out_file="$OUTPUT_DIR/${label}_kap_$NOW.xlsx"
-  local headers_file="$OUTPUT_DIR/headers_${label}_$NOW.txt"
+  local out_file
+  local headers_file
   local http_code
   local content_type
+
+  out_file="$(mktemp "${TMPDIR:-/tmp}/kap_${label}_xlsx_XXXXXX")"
+  headers_file="$(mktemp "${TMPDIR:-/tmp}/kap_${label}_headers_XXXXXX")"
+  TEMP_FILES+=("$out_file" "$headers_file")
 
   echo "Downloading $label..."
 
@@ -97,11 +116,11 @@ download_report() {
   fi
 
   echo "$label download complete:"
-  echo "$out_file"
+  echo "temporary file ready"
 
-  if [[ -f "$TRANSFORM_SCRIPT" ]]; then
+  if [[ "${KAP_WRITE_LAYOUT_HISTORY:-false}" == "true" && -f "$TRANSFORM_SCRIPT" ]]; then
     node "$TRANSFORM_SCRIPT" "$label" "$out_file" "$NOW"
-  else
+  elif [[ "${KAP_WRITE_LAYOUT_HISTORY:-false}" == "true" ]]; then
     echo "Transform script not found, skipping layout generation: $TRANSFORM_SCRIPT"
   fi
 
@@ -123,7 +142,7 @@ fi
 download_report "queue" "$QUEUE_URL" "$QUEUE_BODY_SOURCE"
 download_report "auditor" "$AUDITOR_URL" "$AUDITOR_BODY_FILE"
 
-REALTIME_XLSX="$OUTPUT_DIR/realtime_kap_$NOW.xlsx"
+REALTIME_XLSX="${KAP_REALTIME_OUTPUT_FILE:-$OUTPUT_DIR/realtime_kap.xlsx}"
 
 if [[ -f "$BUNDLE_SCRIPT" ]]; then
   echo "Building Real Time workbook..."

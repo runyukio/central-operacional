@@ -183,8 +183,54 @@ export function normalizeQueueId(value?: string | null) {
   return normalized || "";
 }
 
+function normalizeQueueName(value?: string | null) {
+  return String(value ?? "").trim().replace(/\s+/g, " ");
+}
+
+const QUEUE_NAME_TO_ID = Object.entries(QUEUE_DICTIONARY).reduce<Record<string, string>>((acc, [queueId, queueName]) => {
+  const normalizedName = normalizeQueueName(queueName);
+  if (normalizedName && !acc[normalizedName]) acc[normalizedName] = queueId;
+  return acc;
+}, {});
+
 export function getQueueNameById(queueId?: string | null) {
   const normalizedQueueId = normalizeQueueId(queueId);
   if (!normalizedQueueId) return "Sem Fila ID";
   return QUEUE_DICTIONARY[normalizedQueueId] ?? "Fila não mapeada";
+}
+
+export function getQueueIdByName(queueName?: string | null) {
+  const normalizedQueueName = normalizeQueueName(queueName);
+  return normalizedQueueName ? QUEUE_NAME_TO_ID[normalizedQueueName] ?? "" : "";
+}
+
+export function resolveQueueReference(queueId?: string | null, queueName?: string | null) {
+  const normalizedQueueId = normalizeQueueId(queueId);
+  if (normalizedQueueId) {
+    return {
+      queueId: normalizedQueueId,
+      queueName: getQueueNameById(normalizedQueueId)
+    };
+  }
+
+  const possibleQueueId = normalizeQueueId(queueName);
+  if (possibleQueueId && QUEUE_DICTIONARY[possibleQueueId]) {
+    return {
+      queueId: possibleQueueId,
+      queueName: getQueueNameById(possibleQueueId)
+    };
+  }
+
+  const queueIdFromName = getQueueIdByName(queueName);
+  if (queueIdFromName) {
+    return {
+      queueId: queueIdFromName,
+      queueName: getQueueNameById(queueIdFromName)
+    };
+  }
+
+  return {
+    queueId: "",
+    queueName: normalizeQueueName(queueName) || "Sem Fila ID"
+  };
 }
