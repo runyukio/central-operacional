@@ -3855,6 +3855,7 @@ export function MySchedulePage() {
   const [myScheduleShiftOptions, setMyScheduleShiftOptions] = useState<string[]>(Array.from(standardShiftNames).filter((shift) => shift !== "Folga"));
   const [monthlyAdvanceCycles, setMonthlyAdvanceCycles] = useState<MonthlyAdvanceCycle[]>([]);
   const [monthlyAdvanceNotice, setMonthlyAdvanceNotice] = useState("");
+  const [monthlyAdvanceBlockedReason, setMonthlyAdvanceBlockedReason] = useState("");
   const [savingMonthlyAdvance, setSavingMonthlyAdvance] = useState("");
   const [myRequests, setMyRequests] = useState<ClientRequest[]>([]);
   const [selectedRequest, setSelectedRequest] = useState<ClientRequest | null>(null);
@@ -3956,12 +3957,14 @@ export function MySchedulePage() {
 
   async function loadMyMonthlyAdvance() {
     try {
-      const payload = await apiJson<{ data: MonthlyAdvanceCycle[]; message?: string }>("/api/monthly-advance?scope=mine");
-      setMonthlyAdvanceCycles(payload.data);
+      const payload = await apiJson<{ data: MonthlyAdvanceCycle[]; message?: string; blockedReason?: string }>("/api/monthly-advance?scope=mine");
+      setMonthlyAdvanceCycles(Array.isArray(payload.data) ? payload.data : []);
       setMonthlyAdvanceNotice(payload.message ?? "");
+      setMonthlyAdvanceBlockedReason(payload.blockedReason ?? "");
     } catch {
       setMonthlyAdvanceCycles([]);
       setMonthlyAdvanceNotice("");
+      setMonthlyAdvanceBlockedReason("");
     }
   }
 
@@ -4338,6 +4341,7 @@ export function MySchedulePage() {
     : dayOffForm.kind === "DAY_OFF_SELL"
       ? "Enviar venda de folga"
       : "Enviar solicitação de dia de folga";
+  const shouldShowMonthlyAdvancePanel = monthlyAdvanceBlockedReason !== "TRAINING_STATUS";
 
   function moveMyScheduleMonth(delta: number) {
     setMySchedulePeriod((current) => {
@@ -4501,80 +4505,82 @@ export function MySchedulePage() {
               </button>
             </div>
           </Panel>
-          <Panel title="Adiantamento Mensal">
-            {monthlyAdvanceCycles.length ? (
-              <div className="grid gap-3">
-                {monthlyAdvanceCycles.map((cycle) => (
-                  <div key={cycle.referenceMonth} className="rounded-lg border border-border bg-white p-3">
-                    <div className="mb-2 flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-extrabold text-navy-950">{cycle.label}</p>
-                        <p className="text-xs font-semibold text-muted">{cycle.monthLabel}</p>
+          {shouldShowMonthlyAdvancePanel ? (
+            <Panel title="Adiantamento Mensal">
+              {monthlyAdvanceCycles.length ? (
+                <div className="grid gap-3">
+                  {monthlyAdvanceCycles.map((cycle) => (
+                    <div key={cycle.referenceMonth} className="rounded-lg border border-border bg-white p-3">
+                      <div className="mb-2 flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-extrabold text-navy-950">{cycle.label}</p>
+                          <p className="text-xs font-semibold text-muted">{cycle.monthLabel}</p>
+                        </div>
+                        <StatusBadge status={cycle.record?.optInLabel ?? (cycle.locked ? "Fechado" : "Pendente")} />
                       </div>
-                      <StatusBadge status={cycle.record?.optInLabel ?? (cycle.locked ? "Fechado" : "Pendente")} />
+                      {cycle.record ? (
+                        <div className="space-y-3">
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <InfoLine label="Aderente" value={cycle.record.optInLabel} />
+                            <InfoLine label="Valor" value={currencyFormatter.format(cycle.record.amount)} />
+                            <InfoLine label="Atualizado por" value={cycle.record.updatedBy ?? "Sistema"} />
+                            <InfoLine label="Atualizado em" value={cycle.record.updatedAt} />
+                          </div>
+                          {cycle.closedMessage ? (
+                            <p className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">{cycle.closedMessage}</p>
+                          ) : null}
+                          {cycle.canRequestChange ? (
+                            <button
+                              type="button"
+                              disabled={savingMonthlyAdvance === cycle.referenceMonth}
+                              onClick={() => requestMonthlyAdvanceChange(cycle)}
+                              className="w-full rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-extrabold text-blue-700 disabled:opacity-50"
+                            >
+                              {savingMonthlyAdvance === cycle.referenceMonth ? "Enviando..." : "Solicitar alteração do adiantamento"}
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : !cycle.canRespond ? (
+                        <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-muted">
+                          <p>{cycle.closedMessage || cycle.deadlineMessage || "Este mês não está aberto para resposta direta."}</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {cycle.deadlineMessage ? (
+                            <p className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-extrabold text-blue-700">{cycle.deadlineMessage}</p>
+                          ) : null}
+                          <p className="text-sm font-semibold text-muted">Deseja aderir ao adiantamento mensal para {cycle.monthLabel}?</p>
+                          <p className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-extrabold text-blue-700">
+                            Valor do adiantamento: {currencyFormatter.format(MONTHLY_ADVANCE_FIXED_AMOUNT)}
+                          </p>
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              disabled={savingMonthlyAdvance === cycle.referenceMonth}
+                              onClick={() => respondMonthlyAdvance(cycle.referenceMonth, true)}
+                              className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-extrabold text-white disabled:opacity-50"
+                            >
+                              Sim
+                            </button>
+                            <button
+                              type="button"
+                              disabled={savingMonthlyAdvance === cycle.referenceMonth}
+                              onClick={() => respondMonthlyAdvance(cycle.referenceMonth, false)}
+                              className="rounded-lg border border-border bg-white px-3 py-2 text-sm font-extrabold text-navy-950 disabled:opacity-50"
+                            >
+                              Não
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    {cycle.record ? (
-                      <div className="space-y-3">
-                        <div className="grid grid-cols-2 gap-2 text-xs">
-                          <InfoLine label="Aderente" value={cycle.record.optInLabel} />
-                          <InfoLine label="Valor" value={currencyFormatter.format(cycle.record.amount)} />
-                          <InfoLine label="Atualizado por" value={cycle.record.updatedBy ?? "Sistema"} />
-                          <InfoLine label="Atualizado em" value={cycle.record.updatedAt} />
-                        </div>
-                        {cycle.closedMessage ? (
-                          <p className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">{cycle.closedMessage}</p>
-                        ) : null}
-                        {cycle.canRequestChange ? (
-                          <button
-                            type="button"
-                            disabled={savingMonthlyAdvance === cycle.referenceMonth}
-                            onClick={() => requestMonthlyAdvanceChange(cycle)}
-                            className="w-full rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-extrabold text-blue-700 disabled:opacity-50"
-                          >
-                            {savingMonthlyAdvance === cycle.referenceMonth ? "Enviando..." : "Solicitar alteração do adiantamento"}
-                          </button>
-                        ) : null}
-                      </div>
-                    ) : !cycle.canRespond ? (
-                      <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-muted">
-                        <p>{cycle.closedMessage || cycle.deadlineMessage || "Este mês não está aberto para resposta direta."}</p>
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        {cycle.deadlineMessage ? (
-                          <p className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-extrabold text-blue-700">{cycle.deadlineMessage}</p>
-                        ) : null}
-                        <p className="text-sm font-semibold text-muted">Deseja aderir ao adiantamento mensal para {cycle.monthLabel}?</p>
-                        <p className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-extrabold text-blue-700">
-                          Valor do adiantamento: {currencyFormatter.format(MONTHLY_ADVANCE_FIXED_AMOUNT)}
-                        </p>
-                        <div className="grid grid-cols-2 gap-2">
-                          <button
-                            type="button"
-                            disabled={savingMonthlyAdvance === cycle.referenceMonth}
-                            onClick={() => respondMonthlyAdvance(cycle.referenceMonth, true)}
-                            className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-extrabold text-white disabled:opacity-50"
-                          >
-                            Sim
-                          </button>
-                          <button
-                            type="button"
-                            disabled={savingMonthlyAdvance === cycle.referenceMonth}
-                            onClick={() => respondMonthlyAdvance(cycle.referenceMonth, false)}
-                            className="rounded-lg border border-border bg-white px-3 py-2 text-sm font-extrabold text-navy-950 disabled:opacity-50"
-                          >
-                            Não
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <EmptyState title="Adiantamento mensal indisponível" description={monthlyAdvanceNotice || "Não foi possível carregar os ciclos de resposta agora."} />
-            )}
-          </Panel>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState title="Adiantamento mensal indisponível" description={monthlyAdvanceNotice || "Não foi possível carregar os ciclos de resposta agora."} />
+              )}
+            </Panel>
+          ) : null}
           <Panel title="Minhas Solicitações" action="Solicitar Folga" actionOnClick={openDayOffRequestModal}>
             <div className="mb-3 flex flex-wrap justify-end gap-2">
               <button

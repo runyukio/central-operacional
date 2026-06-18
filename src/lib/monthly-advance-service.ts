@@ -25,6 +25,7 @@ const MONTH_NAMES = [
 ];
 const MONTHLY_ADVANCE_PJ_ONLY_MESSAGE = "Adiantamento mensal disponível apenas para colaboradores PJ.";
 const MONTHLY_ADVANCE_TRAINING_BLOCK_MESSAGE = "Adiantamento mensal indisponível para colaboradores em treinamento.";
+const MONTHLY_ADVANCE_TRAINING_BLOCK_REASON = "TRAINING_STATUS";
 const monthlyAdvanceTrainingStatusValues = [
   "Em treinamento",
   "EM_TREINAMENTO",
@@ -356,7 +357,7 @@ export async function getMyMonthlyAdvanceCycles(actor: Actor) {
     return { data: [], message: MONTHLY_ADVANCE_PJ_ONLY_MESSAGE };
   }
   if (isMonthlyAdvanceTrainingStatus(employee.operationalStatus)) {
-    return { data: [], message: MONTHLY_ADVANCE_TRAINING_BLOCK_MESSAGE };
+    return { data: [], message: MONTHLY_ADVANCE_TRAINING_BLOCK_MESSAGE, blockedReason: MONTHLY_ADVANCE_TRAINING_BLOCK_REASON };
   }
 
   const today = new Date();
@@ -741,6 +742,7 @@ export async function createMonthlyAdvanceChangeRequest(actor: Actor, input: {
   const employee = await resolveEmployeeForUser(user);
   if (!employee) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
   if (!isMonthlyAdvanceEligibleContract(employee.contractType)) return { error: MONTHLY_ADVANCE_PJ_ONLY_MESSAGE, status: 403 };
+  if (isMonthlyAdvanceTrainingStatus(employee.operationalStatus)) return { error: MONTHLY_ADVANCE_TRAINING_BLOCK_MESSAGE, status: 403 };
 
   const referenceMonth = normalizeReferenceMonth(input.referenceMonth);
   if (!referenceMonth) return { error: "Mês de referência inválido.", status: 400 };

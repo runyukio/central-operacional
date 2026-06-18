@@ -368,7 +368,7 @@ export function RealTimePage() {
         row.status,
         row.lob,
         row.supervisor,
-        ...Object.values(row.rawData).map((value) => String(value ?? ""))
+        ...Object.values(safeRawData(row.rawData)).map((value) => String(value ?? ""))
       ].join(" ")).includes(normalizedSearch);
     });
   }, [queueDataset?.rows, queueLobFilter, queueSearch, queueStatusFilter]);
@@ -991,8 +991,12 @@ function cellValue(row: RealTimeRow, key: string) {
   if (key === "status") return row.status;
   if (key === "lob") return row.lob;
   if (key === "supervisor") return row.supervisor;
-  if (key.startsWith("raw:")) return formatValue(row.rawData[key.slice(4)]);
+  if (key.startsWith("raw:")) return formatValue(safeRawData(row.rawData)[key.slice(4)]);
   return "";
+}
+
+function safeRawData(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 function formatValue(value: unknown) {
