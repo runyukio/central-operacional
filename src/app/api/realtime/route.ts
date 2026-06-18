@@ -5,9 +5,12 @@ import { getRealtimeSnapshot } from "@/lib/realtime-service";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
   const actor = await getApiActor();
-  const result = await getRealtimeSnapshot(actor);
+  const url = new URL(request.url);
+  const result = await getRealtimeSnapshot(actor, {
+    cycleDownload: url.searchParams.get("cycleDownload") ?? undefined
+  });
   if ("error" in result) {
     return NextResponse.json({ error: result.error, message: result.error }, { status: result.status ?? 400 });
   }
