@@ -623,7 +623,7 @@ function FilterSelect({ value, onChange, label, empty, options }: { value: strin
 
 function CompareCard({ card }: { card: AgentRealtimeView["cards"][number] }) {
   const tone = card.trend === "positive" ? "green" : card.trend === "negative" ? "orange" : "blue";
-  const icon = card.trend === "positive" ? CheckCircle2 : card.trend === "negative" ? AlertCircle : Activity;
+  const Icon = card.trend === "positive" ? CheckCircle2 : card.trend === "negative" ? AlertCircle : Activity;
   return (
     <div className="premium-card flex items-start justify-between gap-3 p-4">
       <div>
@@ -635,7 +635,7 @@ function CompareCard({ card }: { card: AgentRealtimeView["cards"][number] }) {
         </div>
       </div>
       <span className={cn("grid h-11 w-11 shrink-0 place-items-center rounded-2xl", toneClass(tone))}>
-        {icon({ className: "h-5 w-5" })}
+        <Icon className="h-5 w-5" />
       </span>
     </div>
   );
