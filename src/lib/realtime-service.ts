@@ -373,6 +373,7 @@ export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQu
 
   const agentView = snapshotData.agents;
   const rows = sortAgentRows(filterAgentRows(agentView.rows, query), query.sortBy ?? "submit_desc");
+  const filteredSummary = summarizeAgentRows(rows);
   const unfilteredUnmatched = agentView.rows.filter((row) => row.crossingStatus === "Não encontrado");
   const importRows = (await listRealtimeImports(actor));
   const imports = "error" in importRows ? [] : importRows.data;
@@ -384,11 +385,11 @@ export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQu
     rows: [[
       agentView.selectedCycle,
       agentView.previousCycle || "Sem comparação",
-      agentView.summary.current.submit,
-      formatDurationFromMs(agentView.summary.current.ahtMs),
-      formatDurationFromMs(agentView.summary.current.moderationMs),
-      agentView.summary.current.timeout,
-      agentView.summary.current.refresh
+      filteredSummary.submit,
+      formatDurationFromMs(filteredSummary.ahtMs),
+      formatDurationFromMs(filteredSummary.moderationMs),
+      filteredSummary.timeout,
+      filteredSummary.refresh
     ]],
     sheets: [
       {
@@ -405,11 +406,7 @@ export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQu
           "skill",
           "cargo_funcao",
           "submit",
-          "submit_anterior",
-          "variacao_submit",
           "aht_formatado",
-          "aht_anterior_formatado",
-          "variacao_aht_formatada",
           "moderation_formatada",
           "timeout_returns",
           "refresh_returns"
@@ -426,11 +423,7 @@ export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQu
           row.skill,
           row.roleTitle,
           row.current.submit,
-          row.previous?.submit ?? null,
-          row.deltas.submit ?? null,
           formatDurationFromMs(row.current.ahtMs),
-          formatDurationFromMs(row.previous?.ahtMs ?? null),
-          formatDurationDelta(row.deltas.ahtMs),
           formatDurationFromMs(row.current.moderationMs),
           row.current.timeout,
           row.current.refresh
@@ -559,9 +552,8 @@ function summarizeRawAgentRows(rows: RawRow[], employeeMatches: EmployeeMatch[])
     }
 
     const queueId = normalizeQueueId(rawText(row, ["队列id", "Fila ID", "queue_id", "queue id"]));
-    const queueNameRaw = rawText(row, ["队列名称", "Nome da fila", "queue_name", "queue name"]);
     if (queueId) {
-      if (getQueueNameById(queueId, queueNameRaw) === "Fila não mapeada") unmappedQueues.add(queueId);
+      if (getQueueNameById(queueId) === "Fila não mapeada") unmappedQueues.add(queueId);
       else mappedQueues.add(queueId);
     }
   });
@@ -781,8 +773,7 @@ function aggregateAgentCycleRows(items: Array<{
     const refresh = Math.max(0, parseRealtimeNumberFromRow(item.rawData, ["刷新退库量", "refresh", "refresh_returns"]));
     const moderationMs = Math.max(0, parseRealtimeNumberFromRow(item.rawData, ["真实审核时长（毫秒）", "moderation_duration_ms"]));
     const queueId = normalizeQueueId(rawText(item.rawData, ["队列id", "Fila ID", "queue_id", "queue id"]));
-    const queueNameRaw = rawText(item.rawData, ["队列名称", "Nome da fila", "queue_name", "queue name"]) || rawText(item.rawData, ["当前队列", "Fila atual"]);
-    const queueName = getQueueNameById(queueId, queueNameRaw);
+    const queueName = getQueueNameById(queueId);
     const queueKey = queueId || `sem-fila-id:${queueName}`;
     const group = groups.get(key) ?? {
       key,
@@ -1049,19 +1040,39 @@ function filterAgentRows(rows: AgentCycleRow[], query: RealtimeExportQuery) {
 
 function sortAgentRows(rows: AgentCycleRow[], sortBy = "submit_desc") {
   const sorted = [...rows];
-  const metric = (row: AgentCycleRow, key: string) => {
+  const textValue = (row: AgentCycleRow, key: string) => {
+    if (key === "displayName") return row.displayName;
+    if (key === "wbLogin") return row.wbLogin || row.rawWbLogin;
+    if (key === "employeeStatus") return row.employeeStatus;
+    if (key === "lob") return row.lob;
+    if (key === "supervisor") return row.supervisor;
+    if (key === "shift") return row.shift;
+    if (key === "skill") return row.skill;
+    return row.displayName;
+  };
+  const metric = (row: AgentCycleRow, key: string): number | null => {
     if (key === "submit") return row.current.submit;
-    if (key === "aht") return row.current.ahtMs ?? Number.POSITIVE_INFINITY;
+    if (key === "aht") return row.current.ahtMs;
     if (key === "moderation") return row.current.moderationMs;
     if (key === "timeout") return row.current.timeout;
     if (key === "refresh") return row.current.refresh;
-    if (key === "delta_submit") return row.deltas.submit ?? Number.NEGATIVE_INFINITY;
-    if (key === "delta_aht") return row.deltas.ahtMs ?? Number.NEGATIVE_INFINITY;
-    if (key === "delta_timeout") return row.deltas.timeout ?? Number.NEGATIVE_INFINITY;
-    if (key === "delta_refresh") return row.deltas.refresh ?? Number.NEGATIVE_INFINITY;
-    return row.current.submit;
+    return null;
   };
   const sortMap: Record<string, { key: string; direction: "asc" | "desc" }> = {
+    displayName_asc: { key: "displayName", direction: "asc" },
+    displayName_desc: { key: "displayName", direction: "desc" },
+    wbLogin_asc: { key: "wbLogin", direction: "asc" },
+    wbLogin_desc: { key: "wbLogin", direction: "desc" },
+    employeeStatus_asc: { key: "employeeStatus", direction: "asc" },
+    employeeStatus_desc: { key: "employeeStatus", direction: "desc" },
+    lob_asc: { key: "lob", direction: "asc" },
+    lob_desc: { key: "lob", direction: "desc" },
+    supervisor_asc: { key: "supervisor", direction: "asc" },
+    supervisor_desc: { key: "supervisor", direction: "desc" },
+    shift_asc: { key: "shift", direction: "asc" },
+    shift_desc: { key: "shift", direction: "desc" },
+    skill_asc: { key: "skill", direction: "asc" },
+    skill_desc: { key: "skill", direction: "desc" },
     submit_desc: { key: "submit", direction: "desc" },
     submit_asc: { key: "submit", direction: "asc" },
     aht_desc: { key: "aht", direction: "desc" },
@@ -1071,20 +1082,20 @@ function sortAgentRows(rows: AgentCycleRow[], sortBy = "submit_desc") {
     timeout_desc: { key: "timeout", direction: "desc" },
     timeout_asc: { key: "timeout", direction: "asc" },
     refresh_desc: { key: "refresh", direction: "desc" },
-    refresh_asc: { key: "refresh", direction: "asc" },
-    delta_submit_desc: { key: "delta_submit", direction: "desc" },
-    delta_submit_asc: { key: "delta_submit", direction: "asc" },
-    delta_aht_desc: { key: "delta_aht", direction: "desc" },
-    delta_aht_asc: { key: "delta_aht", direction: "asc" },
-    delta_timeout_desc: { key: "delta_timeout", direction: "desc" },
-    delta_timeout_asc: { key: "delta_timeout", direction: "asc" },
-    delta_refresh_desc: { key: "delta_refresh", direction: "desc" },
-    delta_refresh_asc: { key: "delta_refresh", direction: "asc" }
+    refresh_asc: { key: "refresh", direction: "asc" }
   };
   const config = sortMap[sortBy] ?? sortMap.submit_desc;
+  const numericKeys = new Set(["submit", "aht", "moderation", "timeout", "refresh"]);
   return sorted.sort((a, b) => {
+    if (!numericKeys.has(config.key)) {
+      const diff = textValue(a, config.key).localeCompare(textValue(b, config.key), "pt-BR", { sensitivity: "base" });
+      return (config.direction === "asc" ? diff : -diff) || a.displayName.localeCompare(b.displayName);
+    }
     const left = metric(a, config.key);
     const right = metric(b, config.key);
+    if (left === null && right === null) return a.displayName.localeCompare(b.displayName);
+    if (left === null) return 1;
+    if (right === null) return -1;
     const diff = config.direction === "asc" ? left - right : right - left;
     return diff || a.displayName.localeCompare(b.displayName);
   });

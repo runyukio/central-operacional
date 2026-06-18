@@ -3,7 +3,6 @@
 import {
   Activity,
   AlertCircle,
-  AlertTriangle,
   ArrowDown,
   ArrowUp,
   CheckCircle2,
@@ -13,12 +12,9 @@ import {
   History,
   RefreshCw,
   Search,
-  UploadCloud,
-  Wifi,
   X
 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -171,8 +167,11 @@ type AgentFilters = {
   shift: string;
   skill: string;
   roleTitle: string;
-  sortBy: string;
 };
+
+type AgentSortKey = "displayName" | "wbLogin" | "employeeStatus" | "lob" | "supervisor" | "shift" | "skill" | "submit" | "aht" | "moderation" | "timeout" | "refresh";
+type AgentSortState = { key: AgentSortKey; direction: "asc" | "desc" };
+type AgentKpiCard = { label: string; value: string; delta: string; hasComparison: boolean; trend: "positive" | "negative" | "neutral"; direction: "up" | "down" | "none" };
 
 type ImportHistory = {
   id: string;
@@ -196,21 +195,6 @@ type ImportHistory = {
   warnings: string[];
 };
 
-type UploadSummary = {
-  fileName?: string;
-  cycleDownload?: string;
-  rowsProcessed?: number;
-  rowsValid?: number;
-  rowsError?: number;
-  rowsInserted?: number;
-  rowsUpdated?: number;
-  matchedEmployees?: number;
-  unmatchedEmployees?: number;
-  mappedQueues?: number;
-  unmappedQueues?: number;
-  warnings?: string[];
-};
-
 const defaultAgentFilters: AgentFilters = {
   search: "",
   crossingStatus: "Encontrado",
@@ -220,8 +204,7 @@ const defaultAgentFilters: AgentFilters = {
   supervisor: "",
   shift: "",
   skill: "",
-  roleTitle: "",
-  sortBy: "submit_desc"
+  roleTitle: ""
 };
 
 const emptyAgentFilters: AgentFilters = {
@@ -233,47 +216,25 @@ const emptyAgentFilters: AgentFilters = {
   supervisor: "",
   shift: "",
   skill: "",
-  roleTitle: "",
-  sortBy: "submit_desc"
+  roleTitle: ""
 };
 
-const sortOptions = [
-  { value: "submit_desc", label: "Submit maior" },
-  { value: "submit_asc", label: "Submit menor" },
-  { value: "aht_desc", label: "AHT maior" },
-  { value: "aht_asc", label: "AHT menor" },
-  { value: "moderation_desc", label: "Moderação maior" },
-  { value: "moderation_asc", label: "Moderação menor" },
-  { value: "timeout_desc", label: "Timeout maior" },
-  { value: "timeout_asc", label: "Timeout menor" },
-  { value: "refresh_desc", label: "Refresh maior" },
-  { value: "refresh_asc", label: "Refresh menor" },
-  { value: "delta_submit_asc", label: "Maior queda de Submit" },
-  { value: "delta_submit_desc", label: "Maior aumento de Submit" },
-  { value: "delta_aht_desc", label: "Maior aumento de AHT" },
-  { value: "delta_aht_asc", label: "Maior queda de AHT" },
-  { value: "delta_timeout_desc", label: "Maior aumento de Timeout" },
-  { value: "delta_timeout_asc", label: "Maior queda de Timeout" },
-  { value: "delta_refresh_desc", label: "Maior aumento de Refresh" },
-  { value: "delta_refresh_asc", label: "Maior queda de Refresh" }
-];
+const defaultAgentSort: AgentSortState = { key: "submit", direction: "desc" };
+const numericAgentSortKeys = new Set<AgentSortKey>(["submit", "aht", "moderation", "timeout", "refresh"]);
 
 export function RealTimePage() {
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [payload, setPayload] = useState<RealTimePayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
   const [activeTab, setActiveTab] = useState<"agents" | "queues">("agents");
   const [selectedCycle, setSelectedCycle] = useState("");
   const [queueSearch, setQueueSearch] = useState("");
   const [queueStatusFilter, setQueueStatusFilter] = useState("");
   const [queueLobFilter, setQueueLobFilter] = useState("");
   const [agentFilters, setAgentFilters] = useState<AgentFilters>(defaultAgentFilters);
+  const [agentSort, setAgentSort] = useState<AgentSortState>(defaultAgentSort);
   const [selectedAgent, setSelectedAgent] = useState<AgentRealtimeRow | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [uploadSummary, setUploadSummary] = useState<UploadSummary | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [imports, setImports] = useState<ImportHistory[]>([]);
   const [importsLoading, setImportsLoading] = useState(false);
@@ -299,30 +260,6 @@ export function RealTimePage() {
     }
   }
 
-  async function handleFileUpload(file?: File | null) {
-    if (!file) return;
-    setUploading(true);
-    setError("");
-    setMessage("");
-    setUploadSummary(null);
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("source", "manual-ui");
-      const response = await fetch("/api/realtime/import", { method: "POST", body: formData });
-      const json = await response.json();
-      if (!response.ok) throw new Error(json.message || json.error || "Não foi possível importar a base Real Time.");
-      setUploadSummary(json as UploadSummary);
-      setMessage("Base Real Time importada com sucesso.");
-      await loadSnapshot("", true);
-    } catch (currentError) {
-      setError(currentError instanceof Error ? currentError.message : "Não foi possível importar a base Real Time.");
-    } finally {
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    }
-  }
-
   async function openHistory() {
     setHistoryOpen(true);
     setImportsLoading(true);
@@ -341,6 +278,7 @@ export function RealTimePage() {
 
   function exportXlsx() {
     const params = buildAgentQueryParams(selectedCycle || agentView?.selectedCycle || "", agentFilters);
+    params.set("sortBy", `${agentSort.key}_${agentSort.direction}`);
     window.location.assign(`/api/realtime/export?${params.toString()}`);
   }
 
@@ -396,8 +334,10 @@ export function RealTimePage() {
         row.skill,
         row.roleTitle
       ].join(" ")).includes(normalizedSearch);
-    }).sort((a, b) => compareAgentRows(a, b, agentFilters.sortBy));
-  }, [agentFilters, agentView?.rows]);
+    }).sort((a, b) => compareAgentRows(a, b, agentSort));
+  }, [agentFilters, agentSort, agentView?.rows]);
+
+  const filteredAgentCards = useMemo(() => buildFilteredAgentCards(agentRows), [agentRows]);
 
   const queueColumns = useMemo(() => buildQueueColumns(queueDataset?.columns ?? []), [queueDataset?.columns]);
   const cycles = agentView?.cycles ?? [];
@@ -411,6 +351,13 @@ export function RealTimePage() {
     setAgentFilters((current) => ({ ...current, [key]: value }));
   }
 
+  function toggleAgentSort(key: AgentSortKey) {
+    setAgentSort((current) => {
+      if (current.key === key) return { key, direction: current.direction === "desc" ? "asc" : "desc" };
+      return { key, direction: numericAgentSortKeys.has(key) ? "desc" : "asc" };
+    });
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -418,18 +365,11 @@ export function RealTimePage() {
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-2xl font-black text-navy-950">Real Time</h1>
             <span className={cn("inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-black", summary?.isStale ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-700")}>
-              <Wifi className="h-3.5 w-3.5" />
               {summary?.hasData ? (summary.isStale ? "Atenção" : "Atualizado") : "Sem dados"}
             </span>
           </div>
-          <p className="mt-1 text-sm font-bold text-muted">Monitoramento KAP por ciclo_download, com cruzamento cadastral e comparação do ciclo anterior.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <input ref={fileInputRef} type="file" accept=".xlsx" className="hidden" onChange={(event) => void handleFileUpload(event.target.files?.[0])} />
-          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading} className="premium-button inline-flex h-10 items-center gap-2 px-4 text-sm font-extrabold disabled:cursor-not-allowed disabled:opacity-60">
-            <UploadCloud className="h-4 w-4" />
-            {uploading ? "Importando..." : "Importar base Real Time"}
-          </button>
           <button type="button" onClick={() => void openHistory()} className="premium-control inline-flex h-10 items-center gap-2 px-3 text-sm font-extrabold text-navy-950">
             <History className="h-4 w-4" />
             Histórico
@@ -446,32 +386,6 @@ export function RealTimePage() {
       </div>
 
       {error ? <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{error}</div> : null}
-      {message ? <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700">{message}</div> : null}
-      {uploadSummary ? <UploadSummaryCard summary={uploadSummary} /> : null}
-
-      <section className="premium-card p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-xs font-black uppercase tracking-wide text-muted">Última atualização</p>
-            <p className="text-sm font-extrabold text-navy-950">{summary?.importedAtLabel || "Aguardando primeiro upload"}</p>
-            {summary?.fileName ? <p className="text-xs font-bold text-muted">{summary.fileName}</p> : null}
-          </div>
-          <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700">
-            Ciclo: {agentView?.selectedCycle || "-"}
-          </span>
-        </div>
-        {summary?.isStale ? (
-          <div className="mt-3 flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-800">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            Os dados estão sem atualização há {summary.minutesSinceImport} minuto(s). O limite esperado é {summary.staleThresholdMinutes} minutos.
-          </div>
-        ) : null}
-        {summary?.warnings?.length ? (
-          <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-bold text-muted">
-            {summary.warnings.join(" ")}
-          </div>
-        ) : null}
-      </section>
 
       <section className="premium-card p-4">
         <div className="flex flex-wrap items-end gap-3">
@@ -498,17 +412,11 @@ export function RealTimePage() {
 
       {activeTab === "agents" ? (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-          {(agentView?.cards ?? []).map((card) => (
+          {filteredAgentCards.map((card) => (
             <CompareCard key={card.label} card={card} />
           ))}
         </div>
-      ) : (
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {(payload?.data.kpis ?? []).map((item) => (
-            <StatCard key={item.label} title={item.label} value={item.value} helper={item.helper} icon={Activity} tone={item.tone} />
-          ))}
-        </div>
-      )}
+      ) : null}
 
       <section className="premium-card overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-4">
@@ -522,7 +430,7 @@ export function RealTimePage() {
           </div>
           {activeTab === "agents" ? (
             <div className="flex flex-1 flex-wrap justify-end gap-2">
-              <SearchBox value={agentFilters.search} onChange={(value) => updateAgentFilter("search", value)} placeholder="Buscar agente, WB, fila..." />
+              <SearchBox value={agentFilters.search} onChange={(value) => updateAgentFilter("search", value)} placeholder="Buscar agente ou WB..." />
               <FilterSelect value={agentFilters.crossingStatus} onChange={(value) => updateAgentFilter("crossingStatus", value)} label="Cruzamento" empty="Todos" options={agentView?.filters.crossingStatuses ?? []} />
               <FilterSelect value={agentFilters.personType} onChange={(value) => updateAgentFilter("personType", value)} label="Tipo" empty="Todos" options={agentView?.filters.personTypes ?? []} />
               <FilterSelect value={agentFilters.employeeStatus} onChange={(value) => updateAgentFilter("employeeStatus", value)} label="Status" empty="Todos" options={agentView?.filters.employeeStatuses ?? []} />
@@ -531,7 +439,6 @@ export function RealTimePage() {
               <FilterSelect value={agentFilters.shift} onChange={(value) => updateAgentFilter("shift", value)} label="Turno" empty="Todos" options={agentView?.filters.shifts ?? []} />
               <FilterSelect value={agentFilters.skill} onChange={(value) => updateAgentFilter("skill", value)} label="Skill" empty="Todas" options={agentView?.filters.skills ?? []} />
               <FilterSelect value={agentFilters.roleTitle} onChange={(value) => updateAgentFilter("roleTitle", value)} label="Cargo" empty="Todos" options={agentView?.filters.roleTitles ?? []} />
-              <SimpleSelect value={agentFilters.sortBy} onChange={(value) => updateAgentFilter("sortBy", value)} label="Classificar por" options={sortOptions} />
               <button type="button" onClick={() => setAgentFilters(defaultAgentFilters)} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Padrão</button>
               <button type="button" onClick={() => setAgentFilters(emptyAgentFilters)} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Ver todos</button>
             </div>
@@ -550,7 +457,7 @@ export function RealTimePage() {
           </div>
         ) : summary?.hasData ? (
           activeTab === "agents" ? (
-            <AgentTable rows={agentRows} totalRows={agentView?.rows.length ?? 0} onSelect={setSelectedAgent} />
+            <AgentTable rows={agentRows} totalRows={agentView?.rows.length ?? 0} sort={agentSort} onSort={toggleAgentSort} onSelect={setSelectedAgent} />
           ) : (
             <QueueTable rows={queueRows} totalRows={queueDataset?.totalRows ?? 0} columns={queueColumns} truncated={Boolean(queueDataset?.truncated)} returnedRows={queueDataset?.returnedRows ?? 0} />
           )
@@ -569,18 +476,53 @@ export function RealTimePage() {
   );
 }
 
-function AgentTable({ rows, totalRows, onSelect }: { rows: AgentRealtimeRow[]; totalRows: number; onSelect: (row: AgentRealtimeRow) => void }) {
+function AgentTable({
+  rows,
+  totalRows,
+  sort,
+  onSort,
+  onSelect
+}: {
+  rows: AgentRealtimeRow[];
+  totalRows: number;
+  sort: AgentSortState;
+  onSort: (key: AgentSortKey) => void;
+  onSelect: (row: AgentRealtimeRow) => void;
+}) {
+  const columns: Array<{ label: string; sortKey?: AgentSortKey }> = [
+    { label: "Agente", sortKey: "displayName" },
+    { label: "WB/Login", sortKey: "wbLogin" },
+    { label: "Cruzamento" },
+    { label: "Status", sortKey: "employeeStatus" },
+    { label: "LOB", sortKey: "lob" },
+    { label: "Supervisor", sortKey: "supervisor" },
+    { label: "Turno", sortKey: "shift" },
+    { label: "Skill", sortKey: "skill" },
+    { label: "Submit", sortKey: "submit" },
+    { label: "AHT", sortKey: "aht" },
+    { label: "Moderação", sortKey: "moderation" },
+    { label: "Timeout", sortKey: "timeout" },
+    { label: "Refresh", sortKey: "refresh" },
+    { label: "Ações" }
+  ];
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs font-black uppercase tracking-wide text-muted">
         <span>{rows.length} de {totalRows} agente(s) exibidos</span>
       </div>
       <div className="overflow-x-auto">
-        <table className="min-w-[1500px] text-left text-sm">
+        <table className="min-w-[1220px] text-left text-sm">
           <thead className="bg-slate-50 text-xs uppercase tracking-wide text-muted">
             <tr>
-              {["Agente", "WB/Login", "Cruzamento", "Tipo", "Status", "LOB", "Supervisor", "Turno", "Skill", "Submit", "Submit ant.", "Var. Submit", "AHT", "AHT ant.", "Var. AHT", "Moderação", "Timeout", "Refresh", "Ações"].map((column) => (
-                <th key={column} className="whitespace-nowrap px-4 py-3 font-black">{column}</th>
+              {columns.map((column) => (
+                <th key={column.label} className="whitespace-nowrap px-4 py-3 font-black">
+                  {column.sortKey ? (
+                    <button type="button" onClick={() => onSort(column.sortKey!)} className="inline-flex items-center gap-1 rounded-lg px-1 py-0.5 text-left font-black transition hover:bg-blue-50 hover:text-blue-700">
+                      {column.label}
+                      <SortIndicator active={sort.key === column.sortKey} direction={sort.direction} />
+                    </button>
+                  ) : column.label}
+                </th>
               ))}
             </tr>
           </thead>
@@ -590,21 +532,16 @@ function AgentTable({ rows, totalRows, onSelect }: { rows: AgentRealtimeRow[]; t
                 <td className="px-4 py-3 font-extrabold text-navy-950">{row.displayName}</td>
                 <td className="px-4 py-3 font-bold text-navy-950">{row.wbLogin || row.rawWbLogin || "-"}</td>
                 <td className="px-4 py-3"><StatusPill value={row.crossingStatus} /></td>
-                <td className="px-4 py-3"><StatusPill value={row.personType} /></td>
                 <td className="px-4 py-3 font-bold text-muted">{row.employeeStatus}</td>
                 <td className="px-4 py-3 font-bold">{row.lob}</td>
                 <td className="px-4 py-3 font-bold">{row.supervisor}</td>
                 <td className="px-4 py-3 font-bold">{row.shift}</td>
                 <td className="px-4 py-3 font-bold">{row.skill}</td>
                 <td className="px-4 py-3 font-black text-navy-950">{formatInteger(row.current.submit)}</td>
-                <td className="px-4 py-3 font-bold text-muted">{row.previous ? formatInteger(row.previous.submit) : "-"}</td>
-                <td className="px-4 py-3"><MetricDelta value={row.deltas.submit} metric="submit" /></td>
                 <td className="px-4 py-3 font-black text-navy-950">{formatDurationFromMs(row.current.ahtMs)}</td>
-                <td className="px-4 py-3 font-bold text-muted">{row.previous ? formatDurationFromMs(row.previous.ahtMs) : "-"}</td>
-                <td className="px-4 py-3"><MetricDelta value={row.deltas.ahtMs} metric="aht" /></td>
-                <td className="px-4 py-3 font-black text-navy-950">{formatDurationFromMs(row.current.moderationMs)}<MetricDelta value={row.deltas.moderationMs} metric="neutral-hours" /></td>
-                <td className="px-4 py-3 font-black text-navy-950">{formatInteger(row.current.timeout)}<MetricDelta value={row.deltas.timeout} metric="down-good" /></td>
-                <td className="px-4 py-3 font-black text-navy-950">{formatInteger(row.current.refresh)}<MetricDelta value={row.deltas.refresh} metric="down-good" /></td>
+                <td className="px-4 py-3 font-black text-navy-950">{formatDurationFromMs(row.current.moderationMs)}</td>
+                <td className="px-4 py-3 font-black text-navy-950">{formatInteger(row.current.timeout)}</td>
+                <td className="px-4 py-3 font-black text-navy-950">{formatInteger(row.current.refresh)}</td>
                 <td className="px-4 py-3">
                   <button type="button" onClick={() => onSelect(row)} className="premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold text-navy-950">
                     <Eye className="h-4 w-4" />
@@ -615,7 +552,7 @@ function AgentTable({ rows, totalRows, onSelect }: { rows: AgentRealtimeRow[]; t
             ))}
             {!rows.length ? (
               <tr>
-                <td colSpan={19} className="px-4 py-12 text-center text-sm font-bold text-muted">
+                <td colSpan={columns.length} className="px-4 py-12 text-center text-sm font-bold text-muted">
                   Nenhum agente ativo encontrado neste ciclo. Altere os filtros ou selecione outro ciclo para consultar os dados.
                 </td>
               </tr>
@@ -625,6 +562,11 @@ function AgentTable({ rows, totalRows, onSelect }: { rows: AgentRealtimeRow[]; t
       </div>
     </>
   );
+}
+
+function SortIndicator({ active, direction }: { active: boolean; direction: "asc" | "desc" }) {
+  if (!active) return <span className="text-slate-300">↕</span>;
+  return <span className="text-blue-700">{direction === "asc" ? "↑" : "↓"}</span>;
 }
 
 function QueueTable({ rows, totalRows, columns, truncated, returnedRows }: { rows: RealTimeRow[]; totalRows: number; columns: Array<{ key: string; label: string }>; truncated: boolean; returnedRows: number }) {
@@ -778,52 +720,6 @@ function FilterSelect({ value, onChange, label, empty, options }: { value: strin
   );
 }
 
-function SimpleSelect({ value, onChange, label, options }: { value: string; onChange: (value: string) => void; label: string; options: Array<{ value: string; label: string }> }) {
-  return (
-    <select value={value} onChange={(event) => onChange(event.target.value)} aria-label={label} className="premium-control h-10 max-w-[230px] px-3 text-sm font-bold text-navy-950 outline-none">
-      {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-    </select>
-  );
-}
-
-function UploadSummaryCard({ summary }: { summary: UploadSummary }) {
-  const items = [
-    ["Arquivo", summary.fileName || "-"],
-    ["Ciclo", summary.cycleDownload || "-"],
-    ["Linhas processadas", formatInteger(summary.rowsProcessed ?? 0)],
-    ["Criados", formatInteger(summary.rowsInserted ?? 0)],
-    ["Atualizados", formatInteger(summary.rowsUpdated ?? 0)],
-    ["Erros", formatInteger(summary.rowsError ?? 0)],
-    ["WBs encontrados", formatInteger(summary.matchedEmployees ?? 0)],
-    ["WBs não encontrados", formatInteger(summary.unmatchedEmployees ?? 0)],
-    ["Fila IDs mapeados", formatInteger(summary.mappedQueues ?? 0)],
-    ["Fila IDs não mapeados", formatInteger(summary.unmappedQueues ?? 0)]
-  ];
-  return (
-    <section className="premium-card p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h2 className="font-black text-navy-950">Resumo do upload</h2>
-          <p className="text-xs font-bold text-muted">Importação direta concluída sem etapa de preview.</p>
-        </div>
-      </div>
-      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
-        {items.map(([label, value]) => (
-          <div key={label} className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2">
-            <p className="text-[11px] font-black uppercase tracking-wide text-muted">{label}</p>
-            <p className="truncate text-sm font-extrabold text-navy-950" title={String(value)}>{value}</p>
-          </div>
-        ))}
-      </div>
-      {summary.warnings?.length ? (
-        <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
-          {summary.warnings.join(" ")}
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
 function ImportHistoryModal({ imports, loading, onClose }: { imports: ImportHistory[]; loading: boolean; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-navy-950/40">
@@ -880,7 +776,7 @@ function ImportHistoryModal({ imports, loading, onClose }: { imports: ImportHist
   );
 }
 
-function CompareCard({ card }: { card: AgentRealtimeView["cards"][number] }) {
+function CompareCard({ card }: { card: AgentKpiCard }) {
   const tone = card.trend === "positive" ? "green" : card.trend === "negative" ? "orange" : "blue";
   const Icon = card.trend === "positive" ? CheckCircle2 : card.trend === "negative" ? AlertCircle : Activity;
   return (
@@ -889,8 +785,7 @@ function CompareCard({ card }: { card: AgentRealtimeView["cards"][number] }) {
         <p className="text-xs font-black uppercase tracking-wide text-muted">{card.label}</p>
         <p className="mt-1 text-2xl font-black text-navy-950">{card.value}</p>
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs font-black">
-          {card.previous ? <span className="text-muted">Anterior: {card.previous}</span> : <span className="text-muted">Sem comparação</span>}
-          {card.delta ? <TrendBadge trend={card.trend} direction={card.direction} value={card.delta} /> : null}
+          {card.hasComparison ? <TrendBadge trend={card.trend} direction={card.direction} value={card.delta || "0"} /> : <span className="text-muted">Sem comparação</span>}
         </div>
       </div>
       <span className={cn("grid h-11 w-11 shrink-0 place-items-center rounded-2xl", toneClass(tone))}>
@@ -900,19 +795,44 @@ function CompareCard({ card }: { card: AgentRealtimeView["cards"][number] }) {
   );
 }
 
-function StatCard({ title, value, helper, icon: Icon, tone }: { title: string; value: string; helper: string; icon: LucideIcon; tone: "blue" | "green" | "purple" | "orange" }) {
-  return (
-    <div className="premium-card flex items-center justify-between gap-3 p-4">
-      <div>
-        <p className="text-xs font-black uppercase tracking-wide text-muted">{title}</p>
-        <p className="mt-1 text-2xl font-black text-navy-950">{value}</p>
-        <p className="mt-1 text-xs font-bold text-muted">{helper}</p>
-      </div>
-      <span className={cn("grid h-11 w-11 shrink-0 place-items-center rounded-2xl", toneClass(tone))}>
-        <Icon className="h-5 w-5" />
-      </span>
-    </div>
-  );
+function buildFilteredAgentCards(rows: AgentRealtimeRow[]): AgentKpiCard[] {
+  const current = summarizeMetrics(rows.map((row) => row.current));
+  const previousMetrics = rows.map((row) => row.previous).filter((metric): metric is AgentMetric => Boolean(metric));
+  const previous = previousMetrics.length ? summarizeMetrics(previousMetrics) : null;
+  return [
+    buildAgentKpiCard("Submit total", current.submit, previous?.submit ?? null, "number", "up"),
+    buildAgentKpiCard("AHT médio", current.ahtMs, previous?.ahtMs ?? null, "duration", "down"),
+    buildAgentKpiCard("Moderação total", current.moderationMs, previous?.moderationMs ?? null, "duration", "neutral"),
+    buildAgentKpiCard("Timeout", current.timeout, previous?.timeout ?? null, "number", "down"),
+    buildAgentKpiCard("Refresh", current.refresh, previous?.refresh ?? null, "number", "down")
+  ];
+}
+
+function summarizeMetrics(metrics: AgentMetric[]) {
+  const submit = metrics.reduce((sum, metric) => sum + metric.submit, 0);
+  const weightedAht = metrics.reduce((sum, metric) => sum + (metric.ahtMs !== null ? metric.ahtMs * metric.submit : 0), 0);
+  const simpleAhtMetrics = metrics.filter((metric) => metric.submit === 0 && metric.ahtMs !== null);
+  const simpleAht = simpleAhtMetrics.reduce((sum, metric) => sum + (metric.ahtMs ?? 0), 0);
+  return {
+    submit,
+    ahtMs: submit > 0 ? weightedAht / submit : simpleAhtMetrics.length ? simpleAht / simpleAhtMetrics.length : null,
+    moderationMs: metrics.reduce((sum, metric) => sum + metric.moderationMs, 0),
+    timeout: metrics.reduce((sum, metric) => sum + metric.timeout, 0),
+    refresh: metrics.reduce((sum, metric) => sum + metric.refresh, 0)
+  };
+}
+
+function buildAgentKpiCard(label: string, current: number | null, previous: number | null, format: "number" | "duration", positiveDirection: "up" | "down" | "neutral"): AgentKpiCard {
+  const delta = current !== null && previous !== null ? current - previous : null;
+  const isPositive = delta === null || delta === 0 || positiveDirection === "neutral" ? null : positiveDirection === "up" ? delta > 0 : delta < 0;
+  return {
+    label,
+    value: format === "duration" ? formatDurationFromMs(current) : formatInteger(current ?? 0),
+    delta: delta === null ? "" : format === "duration" ? formatDurationFromMs(Math.abs(delta)) : formatInteger(Math.abs(delta)),
+    hasComparison: delta !== null,
+    trend: isPositive === null ? "neutral" : isPositive ? "positive" : "negative",
+    direction: delta === null || delta === 0 ? "none" : delta > 0 ? "up" : "down"
+  };
 }
 
 function SmallMetric({ title, value, previous }: { title: string; value: string; previous: string }) {
@@ -932,13 +852,6 @@ function InfoLine({ label, value }: { label: string; value: string }) {
       <p className="text-sm font-extrabold text-navy-950">{value || "-"}</p>
     </div>
   );
-}
-
-function MetricDelta({ value, metric }: { value: number | null; metric: "submit" | "aht" | "down-good" | "neutral-hours" }) {
-  if (value === null || value === 0) return null;
-  const positive = metric === "submit" ? value > 0 : metric === "aht" || metric === "down-good" ? value < 0 : null;
-  const text = metric === "aht" || metric === "neutral-hours" ? formatDurationDelta(value) : `${value > 0 ? "+" : ""}${formatInteger(value)}`;
-  return <TrendBadge trend={positive === null ? "neutral" : positive ? "positive" : "negative"} direction={value > 0 ? "up" : "down"} value={text} />;
 }
 
 function TrendBadge({ trend, direction, value }: { trend: "positive" | "negative" | "neutral"; direction: "up" | "down" | "none"; value: string }) {
@@ -1020,12 +933,6 @@ function formatDurationFromMs(value: number | null | undefined) {
   return `0:${String(seconds).padStart(2, "0")}s`;
 }
 
-function formatDurationDelta(value: number | null | undefined) {
-  if (value === null || value === undefined || !Number.isFinite(value)) return "Sem comparação";
-  if (value === 0) return "0:00s";
-  return `${value > 0 ? "+" : "-"}${formatDurationFromMs(Math.abs(value))}`;
-}
-
 function buildAgentQueryParams(cycleDownload: string, filters: AgentFilters) {
   const params = new URLSearchParams();
   if (cycleDownload) params.set("cycleDownload", cycleDownload);
@@ -1042,42 +949,38 @@ function matchesEmployeeStatus(value: string, filter: string) {
   return normalizedValue === normalizedFilter;
 }
 
-function compareAgentRows(a: AgentRealtimeRow, b: AgentRealtimeRow, sortBy: string) {
-  const metric = (row: AgentRealtimeRow, key: string) => {
-    if (key === "submit") return row.current.submit;
-    if (key === "aht") return row.current.ahtMs ?? Number.POSITIVE_INFINITY;
-    if (key === "moderation") return row.current.moderationMs;
-    if (key === "timeout") return row.current.timeout;
-    if (key === "refresh") return row.current.refresh;
-    if (key === "delta_submit") return row.deltas.submit ?? Number.NEGATIVE_INFINITY;
-    if (key === "delta_aht") return row.deltas.ahtMs ?? Number.NEGATIVE_INFINITY;
-    if (key === "delta_timeout") return row.deltas.timeout ?? Number.NEGATIVE_INFINITY;
-    if (key === "delta_refresh") return row.deltas.refresh ?? Number.NEGATIVE_INFINITY;
-    return row.current.submit;
+function compareAgentRows(a: AgentRealtimeRow, b: AgentRealtimeRow, sort: AgentSortState) {
+  const textValue = (row: AgentRealtimeRow) => {
+    if (sort.key === "displayName") return row.displayName;
+    if (sort.key === "wbLogin") return row.wbLogin || row.rawWbLogin;
+    if (sort.key === "employeeStatus") return row.employeeStatus;
+    if (sort.key === "lob") return row.lob;
+    if (sort.key === "supervisor") return row.supervisor;
+    if (sort.key === "shift") return row.shift;
+    if (sort.key === "skill") return row.skill;
+    return row.displayName;
   };
-  const sortMap: Record<string, { key: string; direction: "asc" | "desc" }> = {
-    submit_desc: { key: "submit", direction: "desc" },
-    submit_asc: { key: "submit", direction: "asc" },
-    aht_desc: { key: "aht", direction: "desc" },
-    aht_asc: { key: "aht", direction: "asc" },
-    moderation_desc: { key: "moderation", direction: "desc" },
-    moderation_asc: { key: "moderation", direction: "asc" },
-    timeout_desc: { key: "timeout", direction: "desc" },
-    timeout_asc: { key: "timeout", direction: "asc" },
-    refresh_desc: { key: "refresh", direction: "desc" },
-    refresh_asc: { key: "refresh", direction: "asc" },
-    delta_submit_desc: { key: "delta_submit", direction: "desc" },
-    delta_submit_asc: { key: "delta_submit", direction: "asc" },
-    delta_aht_desc: { key: "delta_aht", direction: "desc" },
-    delta_aht_asc: { key: "delta_aht", direction: "asc" },
-    delta_timeout_desc: { key: "delta_timeout", direction: "desc" },
-    delta_timeout_asc: { key: "delta_timeout", direction: "asc" },
-    delta_refresh_desc: { key: "delta_refresh", direction: "desc" },
-    delta_refresh_asc: { key: "delta_refresh", direction: "asc" }
+  const numericValue = (row: AgentRealtimeRow) => {
+    if (sort.key === "submit") return row.current.submit;
+    if (sort.key === "aht") return row.current.ahtMs;
+    if (sort.key === "moderation") return row.current.moderationMs;
+    if (sort.key === "timeout") return row.current.timeout;
+    if (sort.key === "refresh") return row.current.refresh;
+    return null;
   };
-  const config = sortMap[sortBy] ?? sortMap.submit_desc;
-  const diff = config.direction === "asc" ? metric(a, config.key) - metric(b, config.key) : metric(b, config.key) - metric(a, config.key);
-  return diff || a.displayName.localeCompare(b.displayName);
+
+  if (numericAgentSortKeys.has(sort.key)) {
+    const left = numericValue(a);
+    const right = numericValue(b);
+    if (left === null && right === null) return a.displayName.localeCompare(b.displayName);
+    if (left === null) return 1;
+    if (right === null) return -1;
+    const diff = sort.direction === "asc" ? left - right : right - left;
+    return diff || a.displayName.localeCompare(b.displayName);
+  }
+
+  const diff = textValue(a).localeCompare(textValue(b), "pt-BR", { sensitivity: "base" });
+  return (sort.direction === "asc" ? diff : -diff) || a.displayName.localeCompare(b.displayName);
 }
 
 function toneClass(tone: "blue" | "green" | "purple" | "orange") {
