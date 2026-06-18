@@ -113,7 +113,7 @@ export function formatReferenceMonth(referenceMonth: string) {
 }
 
 export function isAdvanceCurrentMonthOpen(today = new Date()) {
-  return dayOfMonthInOperationTimeZone(today) <= MONTHLY_ADVANCE_RESPONSE_DEADLINE_DAY;
+  return dayOfMonthInOperationTimeZone(today) < MONTHLY_ADVANCE_RESPONSE_DEADLINE_DAY;
 }
 
 export function isAdvanceMonthOpenForEmployee(referenceMonth: string, today = new Date(), options: { answered?: boolean } = {}) {
@@ -216,7 +216,7 @@ function monthlyAdvanceDeadlineMessage(referenceMonth: string, today = new Date(
   const normalized = normalizeReferenceMonth(referenceMonth);
   if (normalized === getCurrentReferenceMonth(today)) {
     return isAdvanceCurrentMonthOpen(today)
-      ? "Você pode responder o adiantamento deste mês até o dia 18."
+      ? "Você pode responder o adiantamento deste mês antes do dia 18."
       : "O prazo para responder o adiantamento deste mês encerrou no dia 18.";
   }
   if (normalized === getNextReferenceMonth(today)) return "Você já pode responder o adiantamento do próximo mês.";
