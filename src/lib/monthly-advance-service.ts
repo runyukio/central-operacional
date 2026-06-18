@@ -682,11 +682,20 @@ export async function commitMonthlyAdvanceImport(actor: Actor, rows: Array<Recor
 export async function exportMonthlyAdvances(actor: Actor, filters: MonthlyAdvanceFilters = {}) {
   const result = await listMonthlyAdvances(actor, { ...filters, page: 1, limit: 5000 });
   if ("error" in result) return result;
+  const employeeIds = Array.from(new Set(result.data.map((record) => record.employeeId)));
+  const sensitiveRows = employeeIds.length
+    ? await prisma.employeeSensitiveData.findMany({
+        where: { employeeId: { in: employeeIds } },
+        select: { employeeId: true, cnpj: true }
+      })
+    : [];
+  const cnpjByEmployeeId = new Map(sensitiveRows.map((row) => [row.employeeId, row.cnpj ?? ""]));
   const headers = [
     "mes_referencia",
     "nome",
     "wb_login",
     "email",
+    "cnpj",
     "tipo_contrato",
     "lob",
     "supervisor",
@@ -698,20 +707,21 @@ export async function exportMonthlyAdvances(actor: Actor, filters: MonthlyAdvanc
     "atualizado_em"
   ];
   const rows = result.data.map((record) => [
-      record.referenceMonth,
-      record.employeeName,
-      record.wbLogin,
-      record.email ?? "",
-      record.contractType ?? "",
-      record.lob ?? "",
-      record.supervisor,
-      record.employeeStatus ?? "",
-      record.optIn ? "Sim" : "Não",
-      record.amount.toFixed(2),
-      record.observation ?? "",
-      record.updatedBy ?? "",
-      record.updatedAt
-    ]);
+    record.referenceMonth,
+    record.employeeName,
+    record.wbLogin,
+    record.email ?? "",
+    cnpjByEmployeeId.get(record.employeeId) ?? "",
+    record.contractType ?? "",
+    record.lob ?? "",
+    record.supervisor,
+    record.employeeStatus ?? "",
+    record.optIn ? "Sim" : "Não",
+    record.amount.toFixed(2),
+    record.observation ?? "",
+    record.updatedBy ?? "",
+    record.updatedAt
+  ]);
   return {
     headers,
     rows,
