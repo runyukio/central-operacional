@@ -107,6 +107,11 @@ export function canAccessStaffCoverage(user: PermissionUser) {
   return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(role);
 }
 
+export function canAccessRealTime(user: PermissionUser) {
+  const role = normalizeRole(user.role);
+  return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(role);
+}
+
 export function canAccessWorkSessionMonitoring(user: PermissionUser) {
   const role = normalizeRole(user.role);
   if (!isActiveUser(user)) return false;

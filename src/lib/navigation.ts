@@ -13,12 +13,14 @@ const performanceRoles: AppRole[] = [...nonClientRoles, "CLIENT"];
 const muralRoles: AppRole[] = [...nonClientRoles, "CLIENT"];
 const financeiroRoles: AppRole[] = [...nonClientRoles, "CLIENT"];
 const centralRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI", "COORDENADOR", "GERENTE"];
+const realTimeRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"];
 const leadership: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH", "COORDENADOR", "GERENTE"];
 const peopleOps: AppRole[] = ["ADMIN", "GESTOR", "RH", "WFM"];
 const authenticatedOps: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI"];
 
 export const navItems: NavItem[] = [
   { label: "Central Operacional", href: "/central-operacional", icon: "LayoutDashboard", roles: centralRoles },
+  { label: "Real Time", href: "/real-time", icon: "MonitorCog", roles: realTimeRoles },
   { label: "Meu Perfil", href: "/meu-perfil", icon: "UserCircle", roles: nonClientRoles },
   { label: "Meu Cronograma", href: "/minha-escala", icon: "CalendarDays", roles: nonClientRoles },
   { label: "Cadastros", href: "/cadastros", icon: "UserPlus", roles: peopleOps },

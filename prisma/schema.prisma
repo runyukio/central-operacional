@@ -859,6 +859,51 @@ model FinanceAdjustment {
   @@index([createdAt])
 }
 
+model RealTimeImportBatch {
+  id           String           @id @default(cuid())
+  fileName     String
+  source       String           @default("kap-local")
+  status       String           @default("SUCCESS")
+  rowsTotal    Int              @default(0)
+  queueRows    Int              @default(0)
+  agentRows    Int              @default(0)
+  errorMessage String?
+  warnings     Json?
+  importedAt   DateTime         @default(now())
+  createdAt    DateTime         @default(now())
+  records      RealTimeRecord[]
+
+  @@index([importedAt])
+  @@index([status])
+  @@index([source])
+}
+
+model RealTimeRecord {
+  id         String              @id @default(cuid())
+  batchId    String
+  batch      RealTimeImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  recordType String
+  rowNumber  Int
+  queueName  String?
+  agentName  String?
+  wbLogin    String?
+  status     String?
+  lob        String?
+  supervisor String?
+  rawData    Json
+  createdAt  DateTime            @default(now())
+
+  @@index([batchId])
+  @@index([recordType])
+  @@index([queueName])
+  @@index([agentName])
+  @@index([wbLogin])
+  @@index([status])
+  @@index([lob])
+  @@index([supervisor])
+  @@index([batchId, recordType])
+}
+
 model RequestComment {
   id        String   @id @default(cuid())
   requestId String
