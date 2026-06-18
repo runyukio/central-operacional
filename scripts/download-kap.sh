@@ -12,6 +12,7 @@ OUTPUT_DIR="${KAP_OUTPUT_DIR:-$HOME/Downloads/KAP}"
 SCRIPT_DIR="${0:A:h}"
 TRANSFORM_SCRIPT="${KAP_TRANSFORM_SCRIPT:-$SCRIPT_DIR/kap-transform.js}"
 BUNDLE_SCRIPT="${KAP_BUNDLE_SCRIPT:-$SCRIPT_DIR/kap-realtime-bundle.js}"
+CURL_BIN="${KAP_CURL_BIN:-/usr/bin/curl}"
 NOW="$(date +"%Y-%m-%d_%H-%M-%S")"
 TEMP_FILES=()
 QUEUE_OUTPUT_FILE=""
@@ -59,7 +60,7 @@ download_report() {
   echo "Downloading $label..."
 
   http_code="$(
-    curl -sS \
+    "$CURL_BIN" -sS \
       -D "$headers_file" \
       -o "$out_file" \
       -w "%{http_code}" \
@@ -144,11 +145,13 @@ if [[ "${KAP_UPLOAD_ENABLED:-false}" == "true" ]]; then
 
   echo "Uploading Real Time workbook..."
   upload_response="$(
-    curl -sS \
+    "$CURL_BIN" -sS \
+      --http1.1 \
       -X POST "${REALTIME_SITE_URL%/}/api/realtime/import" \
       -H "Authorization: Bearer $REALTIME_IMPORT_TOKEN" \
       -F "source=kap-local" \
-      -F "file=@$REALTIME_XLSX"
+      -F "file=@-;filename=$(basename "$REALTIME_XLSX");type=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" \
+      < "$REALTIME_XLSX"
   )"
   echo "$upload_response"
 fi

@@ -21,6 +21,8 @@
     <string>/Users/lucaskawakami</string>
     <key>PATH</key>
     <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>KAP_OUTPUT_DIR</key>
+    <string>/Users/lucaskawakami/KAP</string>
   </dict>
 
   <key>RunAtLoad</key>
@@ -47,9 +49,9 @@
   </array>
 
   <key>StandardOutPath</key>
-  <string>/Users/lucaskawakami/Downloads/KAP/logs/kap-download.out.log</string>
+  <string>/Users/lucaskawakami/KAP/logs/kap-download.out.log</string>
 
   <key>StandardErrorPath</key>
-  <string>/Users/lucaskawakami/Downloads/KAP/logs/kap-download.err.log</string>
+  <string>/Users/lucaskawakami/KAP/logs/kap-download.err.log</string>
 </dict>
 </plist>
