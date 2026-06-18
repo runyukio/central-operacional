@@ -24,6 +24,55 @@ const wbLoginCandidates = ["wb", "wb login", "wblogin", "login", "user id", "use
 const statusCandidates = ["status", "state", "estado", "situacao", "situação", "agent status", "queue status", "online status"];
 const lobCandidates = ["lob", "operation", "operacao", "operação", "skill group", "skillgroup", "business", "cost center"];
 const supervisorCandidates = ["supervisor", "team leader", "tl", "lider", "líder", "leader"];
+const queueFriendlyFields = [
+  ["Fila", ["队列名称", "queue name", "queue"]],
+  ["ID da fila", ["队列id", "queue id"]],
+  ["Grupo", ["技能组名称", "skill group"]],
+  ["Recebidos", ["进审量"]],
+  ["Recebidos 30min", ["近半小时进审量"]],
+  ["Dentro SLA", ["及时率"]],
+  ["AHT médio", ["平均AHT"]],
+  ["Backlog", ["待审量"]],
+  ["Backlog timeout", ["超时待审量"]],
+  ["Aguardando coleta", ["待领取量"]],
+  ["Agentes revisando", ["审核人数"]],
+  ["Revisados", ["审核量"]],
+  ["Latência média", ["平均延时（毫秒）"]],
+  ["Latência máx.", ["最大延时（毫秒）"]]
+] as const;
+const agentFriendlyFields = [
+  ["Agente", ["姓名", "agent", "agente"]],
+  ["WB/Login", ["邮箱前缀", "wb", "login"]],
+  ["Admin ID", ["AdminId"]],
+  ["Operação", ["组织架构"]],
+  ["Operação completa", ["组织架构全称"]],
+  ["Turno", ["班次名称"]],
+  ["Skill", ["班次技能组"]],
+  ["Fila atual", ["当前队列"]],
+  ["Status atual", ["当前工作状态"]],
+  ["Tempo no status", ["当前状态时长（毫秒）"]],
+  ["Revisados", ["审核量"]],
+  ["AHT médio", ["平均AHT（毫秒）"]],
+  ["Utilização", ["利用率"]],
+  ["Ocupação", ["占用率"]],
+  ["Pausas", ["小休次数"]],
+  ["Offline", ["离线次数"]],
+  ["Tempo revisão", ["审核时长（毫秒）"]],
+  ["Tempo pausa", ["小休时长（毫秒）"]],
+  ["Tempo refeição", ["用餐时长（毫秒）"]],
+  ["Tempo treinamento", ["培训时长（毫秒）"]],
+  ["Tempo online", ["在岗时长（毫秒）"]]
+] as const;
+const queueStatusByChinese = new Map([
+  ["签出", "Deslogado"],
+  ["小休", "Pausa"],
+  ["离线", "Offline"],
+  ["审核中", "Revisando"],
+  ["空闲", "Disponível"],
+  ["就餐", "Refeição"],
+  ["培训", "Treinamento"],
+  ["例会", "Reunião"]
+]);
 
 export function validateRealtimeImportToken(authorizationHeader?: string | null) {
   const configuredToken = process.env.REALTIME_IMPORT_TOKEN?.trim();
@@ -190,14 +239,21 @@ export async function listRealtimeImports(actor: Actor) {
 }
 
 function buildRecord(row: RawRow, recordType: "QUEUE" | "AGENT", rowNumber: number) {
-  const rawData = serializeRow(row);
+  const sourceData = serializeRow(row);
+  const friendlyData = recordType === "QUEUE" ? friendlyRow(sourceData, queueFriendlyFields) : friendlyRow(sourceData, agentFriendlyFields);
+  const rawData = { ...friendlyData, ...sourceData };
+  const queueName = valueFromCandidates(rawData, queueNameCandidates) || stringValue(rawData["Fila"]);
+  const agentName = valueFromCandidates(rawData, agentNameCandidates) || stringValue(rawData["Agente"]);
+  const status = recordType === "AGENT"
+    ? translateAgentStatus(valueFromCandidates(rawData, statusCandidates) || stringValue(rawData["Status atual"]))
+    : queueRiskStatus(rawData);
   return {
     recordType,
     rowNumber,
-    queueName: valueFromCandidates(rawData, queueNameCandidates),
-    agentName: valueFromCandidates(rawData, agentNameCandidates),
-    wbLogin: valueFromCandidates(rawData, wbLoginCandidates),
-    status: valueFromCandidates(rawData, statusCandidates),
+    queueName,
+    agentName,
+    wbLogin: valueFromCandidates(rawData, wbLoginCandidates) || stringValue(rawData["WB/Login"]),
+    status,
     lob: valueFromCandidates(rawData, lobCandidates),
     supervisor: valueFromCandidates(rawData, supervisorCandidates),
     rawData: rawData as Prisma.InputJsonObject
@@ -232,15 +288,16 @@ function buildDataset(records: Array<{ id: string; rowNumber: number; queueName:
 }
 
 function buildKpis(queueRows: Array<{ status: string; lob: string }>, agentRows: Array<{ status: string; lob: string }>) {
-  const queueStatuses = countBy(queueRows.map((row) => row.status).filter(Boolean));
   const agentStatuses = countBy(agentRows.map((row) => row.status).filter(Boolean));
-  const topQueueStatus = queueStatuses[0];
-  const topAgentStatus = agentStatuses[0];
+  const criticalQueues = queueRows.filter((row) => normalizeHeader(row.status).includes("critico")).length;
+  const attentionQueues = queueRows.filter((row) => normalizeHeader(row.status).includes("atencao")).length;
+  const onlineAgents = agentRows.filter((row) => ["revisando", "disponivel", "pausa", "refeicao", "treinamento", "reuniao"].includes(normalizeHeader(row.status))).length;
+  const offlineAgents = agentRows.filter((row) => ["offline", "deslogado"].includes(normalizeHeader(row.status))).length;
   return [
-    { label: "Filas no snapshot", value: String(queueRows.length), helper: topQueueStatus ? `Maior status: ${topQueueStatus.label}` : "Sem status reconhecido", tone: "blue" },
-    { label: "Agentes no snapshot", value: String(agentRows.length), helper: topAgentStatus ? `Maior status: ${topAgentStatus.label}` : "Sem status reconhecido", tone: "green" },
-    { label: "Status de filas", value: String(queueStatuses.length), helper: "categorias reconhecidas", tone: "purple" },
-    { label: "Status de agentes", value: String(agentStatuses.length), helper: "categorias reconhecidas", tone: "orange" }
+    { label: "Filas críticas", value: String(criticalQueues), helper: "backlog com timeout", tone: criticalQueues ? "orange" : "green" },
+    { label: "Filas em atenção", value: String(attentionQueues), helper: "backlog sem timeout", tone: attentionQueues ? "orange" : "blue" },
+    { label: "Agentes online", value: String(onlineAgents), helper: "ativos/pausa/refeição/reunião", tone: "green" },
+    { label: "Agentes offline", value: String(offlineAgents), helper: `${agentStatuses.length} status reconhecidos`, tone: offlineAgents ? "orange" : "blue" }
   ];
 }
 
@@ -284,6 +341,64 @@ function valueFromCandidates(row: RawRow, candidates: string[]) {
   return "";
 }
 
+function friendlyRow(row: RawRow, fields: readonly (readonly [string, readonly string[]])[]) {
+  const output: RawRow = {};
+  for (const [label, candidates] of fields) {
+    const value = valueFromCandidates(row, [...candidates]);
+    if (value !== "") output[label] = formatFriendlyValue(label, value);
+  }
+  return output;
+}
+
+function formatFriendlyValue(label: string, value: string) {
+  if (["AHT médio", "Latência média", "Latência máx.", "Tempo no status", "Tempo revisão", "Tempo pausa", "Tempo refeição", "Tempo treinamento", "Tempo online"].includes(label)) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) return formatDuration(numeric);
+  }
+  if (["Dentro SLA", "Utilização", "Ocupação"].includes(label)) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return `${(numeric * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%`;
+  }
+  return value;
+}
+
+function queueRiskStatus(row: RawRow) {
+  const timeoutBacklog = numberFromRow(row, "Backlog timeout", "超时待审量");
+  const backlog = numberFromRow(row, "Backlog", "待审量");
+  const received = numberFromRow(row, "Recebidos", "进审量");
+  if (timeoutBacklog > 0) return "Crítico";
+  if (backlog > 0) return "Atenção";
+  if (received > 0) return "Fluxo ativo";
+  return "Sem demanda";
+}
+
+function translateAgentStatus(value: string) {
+  return queueStatusByChinese.get(value.trim()) ?? value.trim();
+}
+
+function numberFromRow(row: RawRow, ...keys: string[]) {
+  for (const key of keys) {
+    const value = row[key];
+    const number = typeof value === "number" ? value : Number(String(value ?? "").replace(",", "."));
+    if (Number.isFinite(number)) return number;
+  }
+  return 0;
+}
+
+function stringValue(value: unknown) {
+  return normalizeCell(value);
+}
+
+function formatDuration(milliseconds: number) {
+  const totalSeconds = Math.max(0, Math.round(milliseconds / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${String(minutes).padStart(2, "0")}m`;
+  if (minutes > 0) return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+  return `${seconds}s`;
+}
+
 function serializeRow(row: RawRow) {
   return JSON.parse(JSON.stringify(row, (_key, value) => {
     if (value instanceof Date) return value.toISOString();
@@ -308,7 +423,7 @@ function normalizeHeader(value: string) {
     .toLowerCase()
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
-    .replace(/[^a-z0-9]+/g, "");
+    .replace(/[^\p{Letter}\p{Number}]+/gu, "");
 }
 
 function isPlainObject(value: unknown): value is RawRow {

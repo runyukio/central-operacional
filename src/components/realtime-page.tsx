@@ -332,33 +332,37 @@ function StatCard({ title, value, helper, icon: Icon, tone }: { title: string; v
 
 function StatusPill({ value }: { value: string }) {
   const normalized = normalizeSearch(value);
-  const tone = normalized.includes("success") || normalized.includes("online") || normalized.includes("available") || normalized.includes("ok") || normalized.includes("ativo")
+  const tone = normalized.includes("success") || normalized.includes("online") || normalized.includes("available") || normalized.includes("ok") || normalized.includes("ativo") || normalized.includes("fluxo ativo") || normalized.includes("disponivel") || normalized.includes("revisando")
     ? "bg-emerald-100 text-emerald-700"
     : normalized.includes("error") || normalized.includes("offline") || normalized.includes("fail") || normalized.includes("crit")
       ? "bg-red-100 text-red-700"
-      : normalized.includes("warn") || normalized.includes("busy") || normalized.includes("aten")
+      : normalized.includes("warn") || normalized.includes("busy") || normalized.includes("aten") || normalized.includes("pausa") || normalized.includes("refeicao") || normalized.includes("treinamento") || normalized.includes("reuniao")
         ? "bg-amber-100 text-amber-800"
         : "bg-slate-100 text-slate-700";
   return <span className={cn("inline-flex max-w-[220px] rounded-full px-2.5 py-1 text-xs font-black", tone)} title={value}>{value || "-"}</span>;
 }
 
 function buildColumns(activeTab: "queues" | "agents", rawColumns: string[]) {
+  const rawSet = new Set(rawColumns.map(normalizeSearch));
+  const known = (label: string) => rawSet.has(normalizeSearch(label));
   const base = activeTab === "queues"
     ? [
         { key: "rowNumber", label: "#" },
         { key: "queueName", label: "Fila" },
         { key: "status", label: "Status" },
-        { key: "lob", label: "LOB" },
-        { key: "supervisor", label: "Supervisor" }
-      ]
+        ...["Recebidos", "Recebidos 30min", "Dentro SLA", "AHT médio", "Backlog", "Backlog timeout", "Aguardando coleta", "Agentes revisando", "Revisados", "Latência média", "Latência máx.", "Grupo"]
+          .filter(known)
+          .map((label) => ({ key: `raw:${label}`, label }))
+      ].slice(0, 15)
     : [
         { key: "rowNumber", label: "#" },
         { key: "agentName", label: "Agente" },
         { key: "wbLogin", label: "WB/Login" },
         { key: "status", label: "Status" },
-        { key: "lob", label: "LOB" },
-        { key: "supervisor", label: "Supervisor" }
-      ];
+        ...["Fila atual", "Revisados", "AHT médio", "Utilização", "Ocupação", "Tempo no status", "Pausas", "Offline", "Tempo revisão", "Tempo pausa", "Tempo refeição", "Tempo treinamento", "Tempo online", "Turno", "Skill", "Operação"]
+          .filter(known)
+          .map((label) => ({ key: `raw:${label}`, label }))
+      ].slice(0, 16);
   const existing = new Set(base.map((column) => normalizeSearch(column.label)).concat(base.map((column) => normalizeSearch(column.key))));
   const dynamic = rawColumns
     .filter((column) => !existing.has(normalizeSearch(column)))
