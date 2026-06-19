@@ -1666,20 +1666,11 @@ function summarizeQueueRowsForExport(rows: QueueCycleRow[]) {
         : simpleLatencyRows.length
           ? simpleLatency / simpleLatencyRows.length
           : null,
-    maxLatencyMs: latestQueueMaxLatency(rows.map((row) => row.current))
+    maxLatencyMs: rows.reduce<number | null>((currentMax, row) => {
+      if (row.current.maxLatencyMs === null) return currentMax;
+      return currentMax === null ? row.current.maxLatencyMs : Math.max(currentMax, row.current.maxLatencyMs);
+    }, null)
   };
-}
-
-function latestQueueMaxLatency(metrics: Array<{ maxLatencyMs: number | null; maxLatencyRowNumber?: number }>) {
-  let latest: { value: number; rowNumber: number; index: number } | null = null;
-  for (const [index, metric] of metrics.entries()) {
-    if (metric.maxLatencyMs === null) continue;
-    const rowNumber = metric.maxLatencyRowNumber ?? index;
-    if (!latest || rowNumber > latest.rowNumber || (rowNumber === latest.rowNumber && index > latest.index)) {
-      latest = { value: metric.maxLatencyMs, rowNumber, index };
-    }
-  }
-  return latest ? latest.value : null;
 }
 
 function matchesEmployeeStatus(value: string, filter: string) {

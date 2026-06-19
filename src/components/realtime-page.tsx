@@ -1510,7 +1510,10 @@ function summarizeQueueMetrics(metrics: QueueMetric[]): QueueMetric {
     output,
     backlog,
     sourceRows: metrics.reduce((sum, metric) => sum + metric.sourceRows, 0),
-    maxLatencyMs: latestQueueMaxLatency(metrics),
+    maxLatencyMs: metrics.reduce<number | null>((currentMax, metric) => {
+      if (metric.maxLatencyMs === null) return currentMax;
+      return currentMax === null ? metric.maxLatencyMs : Math.max(currentMax, metric.maxLatencyMs);
+    }, null),
     ahtMs: output > 0 ? ahtWeighted / output : simpleAhtMetrics.length ? simpleAht / simpleAhtMetrics.length : null,
     latencyMs: latencyBacklogWeight > 0
       ? latencyWeightedByBacklog / latencyBacklogWeight
@@ -1520,18 +1523,6 @@ function summarizeQueueMetrics(metrics: QueueMetric[]): QueueMetric {
           ? simpleLatency / simpleLatencyMetrics.length
           : null
   };
-}
-
-function latestQueueMaxLatency(metrics: Array<{ maxLatencyMs: number | null; maxLatencyRowNumber?: number }>) {
-  let latest: { value: number; rowNumber: number; index: number } | null = null;
-  for (const [index, metric] of metrics.entries()) {
-    if (metric.maxLatencyMs === null) continue;
-    const rowNumber = metric.maxLatencyRowNumber ?? index;
-    if (!latest || rowNumber > latest.rowNumber || (rowNumber === latest.rowNumber && index > latest.index)) {
-      latest = { value: metric.maxLatencyMs, rowNumber, index };
-    }
-  }
-  return latest ? latest.value : null;
 }
 
 function summarizeMetrics(metrics: AgentMetric[]) {
