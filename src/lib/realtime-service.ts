@@ -114,6 +114,7 @@ type QueueCycleMetric = {
   output: number;
   ahtMs: number | null;
   latencyMs: number | null;
+  maxLatencyMs: number | null;
   backlog: number;
   sourceRows: number;
 };
@@ -132,6 +133,7 @@ type QueueCycleRow = {
     output: number | null;
     ahtMs: number | null;
     latencyMs: number | null;
+    maxLatencyMs: number | null;
     backlog: number | null;
   };
   history: Array<{
@@ -141,6 +143,7 @@ type QueueCycleRow = {
     output: number;
     ahtMs: number | null;
     latencyMs: number | null;
+    maxLatencyMs: number | null;
     backlog: number;
   }>;
 };
@@ -444,7 +447,7 @@ export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQu
     sheets: [
       {
         sheetName: "Resumo Filas",
-        headers: ["ciclo_download", "ciclo_anterior", "filas", "input", "output", "aht_medio", "latencia_media", "backlog", "ok", "estavel", "risco", "estourado", "na"],
+        headers: ["ciclo_download", "ciclo_anterior", "filas", "input", "output", "aht_medio", "latencia_media", "max_latencia", "backlog", "ok", "estavel", "risco", "estourado", "na"],
         rows: [[
           queueView.selectedCycle,
           queueView.previousCycle || "Sem comparação",
@@ -453,6 +456,7 @@ export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQu
           filteredQueueSummary.output,
           formatDurationFromMs(filteredQueueSummary.ahtMs),
           formatDurationFromMs(filteredQueueSummary.latencyMs),
+          formatDurationFromMs(filteredQueueSummary.maxLatencyMs),
           filteredQueueSummary.backlog,
           queueRows.filter((row) => row.status === "OK").length,
           queueRows.filter((row) => row.status === "Estável").length,
@@ -478,6 +482,8 @@ export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQu
           "aht_delta_formatado",
           "latency_formatada",
           "latency_delta_formatada",
+          "max_latency_formatada",
+          "max_latency_delta_formatada",
           "backlog",
           "backlog_delta"
         ],
@@ -496,13 +502,15 @@ export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQu
           row.deltas.ahtMs === null ? "Sem comparação" : formatMetricValue(row.deltas.ahtMs, "duration", true),
           formatDurationFromMs(row.current.latencyMs),
           row.deltas.latencyMs === null ? "Sem comparação" : formatMetricValue(row.deltas.latencyMs, "duration", true),
+          formatDurationFromMs(row.current.maxLatencyMs),
+          row.deltas.maxLatencyMs === null ? "Sem comparação" : formatMetricValue(row.deltas.maxLatencyMs, "duration", true),
           row.current.backlog,
           row.deltas.backlog ?? "Sem comparação"
         ])
       },
       {
         sheetName: "Detalhe por Fila",
-        headers: ["queue_id", "queue_name", "lob", "sla_target_minutes", "ciclo_download", "status_fila", "input", "output", "aht_formatado", "latency_formatada", "backlog"],
+        headers: ["queue_id", "queue_name", "lob", "sla_target_minutes", "ciclo_download", "status_fila", "input", "output", "aht_formatado", "latency_formatada", "max_latency_formatada", "backlog"],
         rows: queueRows.flatMap((row) => row.history.map((item) => [
           row.queueId || "Sem Fila ID",
           row.queueName,
@@ -514,12 +522,13 @@ export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQu
           item.output,
           formatDurationFromMs(item.ahtMs),
           formatDurationFromMs(item.latencyMs),
+          formatDurationFromMs(item.maxLatencyMs),
           item.backlog
         ]))
       },
       {
         sheetName: "Filas N/A",
-        headers: ["ciclo_download", "queue_id", "queue_name", "input", "output", "aht_formatado", "latency_formatada", "backlog"],
+        headers: ["ciclo_download", "queue_id", "queue_name", "input", "output", "aht_formatado", "latency_formatada", "max_latency_formatada", "backlog"],
         rows: queueRows.filter((row) => row.lob === "N/A").map((row) => [
           queueView.selectedCycle,
           row.queueId || "Sem Fila ID",
@@ -528,6 +537,7 @@ export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQu
           row.current.output,
           formatDurationFromMs(row.current.ahtMs),
           formatDurationFromMs(row.current.latencyMs),
+          formatDurationFromMs(row.current.maxLatencyMs),
           row.current.backlog
         ])
       },
@@ -806,6 +816,7 @@ async function buildQueueRealtimeView(options: RealtimeSnapshotOptions) {
         output: row.current.output,
         ahtMs: row.current.ahtMs,
         latencyMs: row.current.latencyMs,
+        maxLatencyMs: row.current.maxLatencyMs,
         backlog: row.current.backlog
       });
       historyByKey.set(row.key, history);
@@ -823,6 +834,7 @@ async function buildQueueRealtimeView(options: RealtimeSnapshotOptions) {
           output: previous ? row.current.output - previous.output : null,
           ahtMs: previous && row.current.ahtMs !== null && previous.ahtMs !== null ? row.current.ahtMs - previous.ahtMs : null,
           latencyMs: previous && row.current.latencyMs !== null && previous.latencyMs !== null ? row.current.latencyMs - previous.latencyMs : null,
+          maxLatencyMs: previous && row.current.maxLatencyMs !== null && previous.maxLatencyMs !== null ? row.current.maxLatencyMs - previous.maxLatencyMs : null,
           backlog: previous ? row.current.backlog - previous.backlog : null
         },
         history: historyByKey.get(row.key) ?? row.history
@@ -1151,6 +1163,7 @@ function aggregateQueueCycleRows(items: Array<{
     latencyInputWeight: number;
     simpleLatencyMs: number;
     simpleLatencyCount: number;
+    maxLatencyMs: number | null;
     sourceRows: number;
   };
 
@@ -1166,6 +1179,7 @@ function aggregateQueueCycleRows(items: Array<{
     const output = Math.max(0, parseRealtimeNumberFromRow(item.rawData, ["审核量", "output", "Output"]));
     const ahtMs = parseOptionalRealtimeNumberFromRow(item.rawData, ["平均AHT", "平均AHT（毫秒）", "avg_aht_ms", "aht_ms"]);
     const latencyMs = parseOptionalRealtimeNumberFromRow(item.rawData, ["平均延时（毫秒）", "latency_ms", "sla_ms"]);
+    const maxLatencyMs = parseOptionalRealtimeNumberFromRow(item.rawData, ["最大延时（毫秒）", "max_latency_ms", "max latency"]);
     const backlog = Math.max(0, parseRealtimeNumberFromRow(item.rawData, ["待审量", "backlog", "Backlog"]));
     const group = groups.get(key) ?? {
       key,
@@ -1185,6 +1199,7 @@ function aggregateQueueCycleRows(items: Array<{
       latencyInputWeight: 0,
       simpleLatencyMs: 0,
       simpleLatencyCount: 0,
+      maxLatencyMs: null,
       sourceRows: 0
     };
 
@@ -1211,6 +1226,9 @@ function aggregateQueueCycleRows(items: Array<{
         group.simpleLatencyCount += 1;
       }
     }
+    if (maxLatencyMs !== null && maxLatencyMs >= 0) {
+      group.maxLatencyMs = maxLatencyMs;
+    }
     groups.set(key, group);
   }
 
@@ -1230,11 +1248,12 @@ function aggregateQueueCycleRows(items: Array<{
         output: group.output,
         ahtMs,
         latencyMs,
+        maxLatencyMs: group.maxLatencyMs,
         backlog: group.backlog,
         sourceRows: group.sourceRows
       },
       previous: null,
-      deltas: { input: null, output: null, ahtMs: null, latencyMs: null, backlog: null },
+      deltas: { input: null, output: null, ahtMs: null, latencyMs: null, maxLatencyMs: null, backlog: null },
       history: []
     };
   });
@@ -1519,7 +1538,8 @@ function sortAgentRows(rows: AgentCycleRow[], sortBy = "submit_desc") {
 function filterQueueRows(rows: QueueCycleRow[], query: RealtimeExportQuery) {
   const search = normalizeHeader(String(query.queueSearch ?? ""));
   return rows.filter((row) => {
-    if (query.queueLob && row.lob !== query.queueLob) return false;
+    if (query.queueLob === "MAPPED" && row.lob === "N/A") return false;
+    if (query.queueLob && query.queueLob !== "MAPPED" && row.lob !== query.queueLob) return false;
     if (query.queueStatus && row.status !== query.queueStatus) return false;
     if (query.queueSlaTarget) {
       const target = row.slaTargetMinutes === null ? "Sem meta" : String(row.slaTargetMinutes);
@@ -1561,11 +1581,13 @@ function sortQueueRows(rows: QueueCycleRow[], sortBy = "backlog_desc") {
     aht_desc: { key: "aht", direction: "desc" },
     latency_asc: { key: "latency", direction: "asc" },
     latency_desc: { key: "latency", direction: "desc" },
+    maxLatency_asc: { key: "maxLatency", direction: "asc" },
+    maxLatency_desc: { key: "maxLatency", direction: "desc" },
     backlog_asc: { key: "backlog", direction: "asc" },
     backlog_desc: { key: "backlog", direction: "desc" }
   };
   const config = sortMap[sortBy] ?? sortMap.backlog_desc;
-  const numericKeys = new Set(["input", "output", "aht", "latency", "backlog"]);
+  const numericKeys = new Set(["input", "output", "aht", "latency", "maxLatency", "backlog"]);
   return sorted.sort((a, b) => {
     if (config.key === "status") {
       const diff = severity(a.status) - severity(b.status);
@@ -1585,7 +1607,9 @@ function sortQueueRows(rows: QueueCycleRow[], sortBy = "backlog_desc") {
           ? a.current.ahtMs
           : config.key === "latency"
             ? a.current.latencyMs
-            : a.current.backlog;
+            : config.key === "maxLatency"
+              ? a.current.maxLatencyMs
+              : a.current.backlog;
     const right = config.key === "input"
       ? b.current.input
       : config.key === "output"
@@ -1594,7 +1618,9 @@ function sortQueueRows(rows: QueueCycleRow[], sortBy = "backlog_desc") {
           ? b.current.ahtMs
           : config.key === "latency"
             ? b.current.latencyMs
-            : b.current.backlog;
+            : config.key === "maxLatency"
+              ? b.current.maxLatencyMs
+              : b.current.backlog;
     if (left === null && right === null) return a.queueId.localeCompare(b.queueId);
     if (left === null) return 1;
     if (right === null) return -1;
@@ -1627,7 +1653,11 @@ function summarizeQueueRowsForExport(rows: QueueCycleRow[]) {
         ? latencyWeightedByInput / latencyInputWeight
         : simpleLatencyRows.length
           ? simpleLatency / simpleLatencyRows.length
-          : null
+          : null,
+    maxLatencyMs: rows.reduce<number | null>((currentMax, row) => {
+      if (row.current.maxLatencyMs === null) return currentMax;
+      return currentMax === null ? row.current.maxLatencyMs : Math.max(currentMax, row.current.maxLatencyMs);
+    }, null)
   };
 }
 

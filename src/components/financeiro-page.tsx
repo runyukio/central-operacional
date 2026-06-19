@@ -162,7 +162,7 @@ const adjustmentFields = [
 const adjustmentTypes = ["Correção de horas", "Correção de aderence", "Correção de penalty", "Observação", "Outro"];
 
 export function FinanceiroPage() {
-  const [invoiceCycleMonth, setInvoiceCycleMonth] = useState(defaultMonth());
+  const [invoiceCycleMonth, setInvoiceCycleMonth] = useState("");
   const [costCenter, setCostCenter] = useState("Todos");
   const [source, setSource] = useState("Todos");
   const [search, setSearch] = useState("");
@@ -257,11 +257,11 @@ export function FinanceiroPage() {
   }
 
   const summary = payload?.data.summary;
-  const monthOptions = useMemo(() => buildMonthOptions(invoiceCycleMonth), [invoiceCycleMonth]);
+  const monthOptions = useMemo(() => buildMonthOptions(invoiceCycleMonth, payload?.data.records.map((record) => record.invoiceCycleMonth) ?? []), [invoiceCycleMonth, payload?.data.records]);
 
   function openNewRecordForm() {
     setRecordForm({
-      invoiceCycleMonth,
+      invoiceCycleMonth: invoiceCycleMonth || defaultMonth(),
       costCenter: costCenter !== "Todos" ? costCenter : "",
       maxHoursCapacity: "",
       billableHoursTarget: "",
@@ -347,9 +347,7 @@ export function FinanceiroPage() {
         <div className="grid gap-3 xl:grid-cols-[1fr_1fr_1fr_1.4fr_auto_auto] xl:items-end">
           <label className="block">
             <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">Ciclo da Invoice</span>
-            <select value={invoiceCycleMonth} onChange={(event) => setInvoiceCycleMonth(event.target.value)} className="premium-control h-10 w-full px-3 text-sm font-bold outline-none">
-              {monthOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
+            <MonthCyclePicker value={invoiceCycleMonth} onChange={setInvoiceCycleMonth} options={monthOptions} />
           </label>
           <label className="block">
             <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">Cost center</span>
@@ -770,26 +768,103 @@ function PreviewStat({ label, value, tone = "blue" }: { label: string; value: nu
   );
 }
 
+function MonthCyclePicker({ value, onChange, options }: { value: string; onChange: (value: string) => void; options: Array<{ value: string; label: string }> }) {
+  const [open, setOpen] = useState(false);
+  const selectedLabel = value ? formatMonthLabel(value) : "Todos os ciclos";
+  const groupedByYear = options.reduce<Record<string, Array<{ value: string; label: string }>>>((acc, option) => {
+    const year = option.value.split("-")[0] || "";
+    if (!year) return acc;
+    acc[year] = acc[year] ?? [];
+    acc[year].push(option);
+    return acc;
+  }, {});
+  const years = Object.keys(groupedByYear).sort((a, b) => Number(b) - Number(a));
+
+  return (
+    <div className="relative">
+      <button type="button" onClick={() => setOpen((current) => !current)} className="premium-control flex h-10 w-full items-center justify-between gap-2 px-3 text-left text-sm font-bold text-navy-950">
+        <span className="flex min-w-0 items-center gap-2">
+          <CalendarDays className="h-4 w-4 shrink-0 text-blue-600" />
+          <span className="truncate">{selectedLabel}</span>
+        </span>
+        {value ? (
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={(event) => {
+              event.stopPropagation();
+              onChange("");
+              setOpen(false);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                event.stopPropagation();
+                onChange("");
+                setOpen(false);
+              }
+            }}
+            className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-black text-muted"
+          >
+            Limpar
+          </span>
+        ) : null}
+      </button>
+      {open ? (
+        <div className="absolute left-0 top-12 z-40 w-[min(420px,calc(100vw-2rem))] rounded-3xl border border-slate-200 bg-white p-3 shadow-2xl">
+          <button type="button" onClick={() => { onChange(""); setOpen(false); }} className={cn("mb-3 flex w-full items-center gap-2 rounded-2xl px-3 py-2 text-left text-sm font-black", !value ? "bg-blue-50 text-blue-700" : "hover:bg-slate-50")}>
+            <CalendarDays className="h-4 w-4" />
+            Todos os ciclos
+          </button>
+          <div className="max-h-80 space-y-3 overflow-y-auto pr-1">
+            {years.map((year) => (
+              <div key={year}>
+                <p className="px-1 text-xs font-black uppercase tracking-wide text-muted">{year}</p>
+                <div className="mt-2 grid grid-cols-3 gap-2">
+                  {groupedByYear[year].map((option) => (
+                    <button key={option.value} type="button" onClick={() => { onChange(option.value); setOpen(false); }} className={cn("rounded-2xl border px-3 py-2 text-left text-xs font-black capitalize transition", value === option.value ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-100 hover:bg-slate-50")}>
+                      {new Intl.DateTimeFormat("pt-BR", { month: "short", timeZone: "UTC" }).format(monthDate(option.value)).replace(".", "")}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function defaultMonth() {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 }
 
-function buildMonthOptions(selectedMonth?: string) {
+function buildMonthOptions(selectedMonth?: string, availableMonths: string[] = []) {
   const now = new Date();
   const startYear = now.getFullYear() - 2;
   const endYear = now.getFullYear() + 2;
-  const options: Array<{ value: string; label: string }> = [];
+  const values = new Set<string>();
+  availableMonths.forEach((month) => {
+    if (/^\d{4}-\d{2}$/.test(month)) values.add(month);
+  });
   for (let year = endYear; year >= startYear; year -= 1) {
     for (let month = 12; month >= 1; month -= 1) {
-      const value = `${year}-${String(month).padStart(2, "0")}`;
-      options.push({ value, label: formatMonthLabel(value) });
+      values.add(`${year}-${String(month).padStart(2, "0")}`);
     }
   }
-  if (selectedMonth && !options.some((option) => option.value === selectedMonth)) {
-    options.unshift({ value: selectedMonth, label: formatMonthLabel(selectedMonth) });
+  if (selectedMonth && /^\d{4}-\d{2}$/.test(selectedMonth)) {
+    values.add(selectedMonth);
   }
-  return options;
+  return Array.from(values)
+    .sort((a, b) => b.localeCompare(a))
+    .map((value) => ({ value, label: formatMonthLabel(value) }));
+}
+
+function monthDate(value: string) {
+  const [year, month] = value.split("-").map(Number);
+  return new Date(Date.UTC(year || 2000, (month || 1) - 1, 1));
 }
 
 function formatMonthLabel(value: string) {

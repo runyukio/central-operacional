@@ -5,6 +5,7 @@ import {
   AlertCircle,
   ArrowDown,
   ArrowUp,
+  CalendarDays,
   CheckCircle2,
   Database,
   Download,
@@ -49,6 +50,7 @@ type QueueMetric = {
   output: number;
   ahtMs: number | null;
   latencyMs: number | null;
+  maxLatencyMs: number | null;
   backlog: number;
   sourceRows: number;
 };
@@ -67,6 +69,7 @@ type QueueRealtimeRow = {
     output: number | null;
     ahtMs: number | null;
     latencyMs: number | null;
+    maxLatencyMs: number | null;
     backlog: number | null;
   };
   history: Array<{
@@ -76,6 +79,7 @@ type QueueRealtimeRow = {
     output: number;
     ahtMs: number | null;
     latencyMs: number | null;
+    maxLatencyMs: number | null;
     backlog: number;
   }>;
 };
@@ -240,7 +244,7 @@ type QueueFilters = {
   queueId: string;
 };
 
-type QueueSortKey = "status" | "lob" | "queueId" | "input" | "output" | "aht" | "latency" | "backlog";
+type QueueSortKey = "status" | "lob" | "queueId" | "input" | "output" | "aht" | "latency" | "maxLatency" | "backlog";
 type QueueSortState = { key: QueueSortKey; direction: "asc" | "desc" };
 type QueueLobCardData = {
   lob: "ADS" | "VIDEO" | "COMMENTS";
@@ -297,9 +301,9 @@ const emptyAgentFilters: AgentFilters = {
 
 const defaultAgentSort: AgentSortState = { key: "submit", direction: "desc" };
 const numericAgentSortKeys = new Set<AgentSortKey>(["submit", "aht", "moderation", "timeout", "refresh"]);
-const defaultQueueFilters: QueueFilters = { search: "", lob: "", status: "", slaTarget: "", queueId: "" };
+const defaultQueueFilters: QueueFilters = { search: "", lob: "MAPPED", status: "", slaTarget: "", queueId: "" };
 const defaultQueueSort: QueueSortState = { key: "backlog", direction: "desc" };
-const numericQueueSortKeys = new Set<QueueSortKey>(["input", "output", "aht", "latency", "backlog"]);
+const numericQueueSortKeys = new Set<QueueSortKey>(["input", "output", "aht", "latency", "maxLatency", "backlog"]);
 
 export function RealTimePage() {
   const [payload, setPayload] = useState<RealTimePayload | null>(null);
@@ -378,7 +382,8 @@ export function RealTimePage() {
     const sourceRows = queueView?.rows ?? [];
     const normalizedSearch = normalizeSearch(queueFilters.search);
     return sourceRows.filter((row) => {
-      if (queueFilters.lob && row.lob !== queueFilters.lob) return false;
+      if (queueFilters.lob === "MAPPED" && row.lob === "N/A") return false;
+      if (queueFilters.lob && queueFilters.lob !== "MAPPED" && row.lob !== queueFilters.lob) return false;
       if (queueFilters.status && row.status !== queueFilters.status) return false;
       if (queueFilters.slaTarget) {
         const target = row.slaTargetMinutes === null ? "Sem meta" : String(row.slaTargetMinutes);
@@ -489,9 +494,7 @@ export function RealTimePage() {
         <div className="flex flex-wrap items-end gap-3">
           <label className="block min-w-[260px] flex-1 text-xs font-black uppercase tracking-wide text-muted">
             ciclo_download
-            <select value={selectedCycleValue} onChange={(event) => setSelectedCycle(event.target.value)} className="premium-control mt-1 h-11 w-full px-3 text-sm font-extrabold text-navy-950 outline-none">
-              {cycles.map((cycle) => <option key={cycle.value} value={cycle.value}>{cycle.value} · {cycle.rows} linha(s)</option>)}
-            </select>
+            <RealtimeCyclePicker value={selectedCycleValue} cycles={cycles} onChange={setSelectedCycle} />
           </label>
           <button type="button" onClick={() => setSelectedCycle(olderCycle)} disabled={!olderCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
             Ciclo anterior
@@ -549,9 +552,9 @@ export function RealTimePage() {
           ) : (
             <div className="flex flex-1 flex-wrap justify-end gap-2">
               <SearchBox value={queueFilters.search} onChange={(value) => updateQueueFilter("search", value)} placeholder="Buscar ID ou nome da fila..." />
-              <FilterSelect value={queueFilters.lob} onChange={(value) => updateQueueFilter("lob", value)} label="LOB" empty="Todas" options={queueView?.filters.lobs ?? []} />
+              <QueueLobFilterSelect value={queueFilters.lob} onChange={(value) => updateQueueFilter("lob", value)} options={queueView?.filters.lobs ?? []} />
               <FilterSelect value={queueFilters.status} onChange={(value) => updateQueueFilter("status", value)} label="Status" empty="Todos" options={queueView?.filters.statuses ?? []} />
-              <FilterSelect value={queueFilters.slaTarget} onChange={(value) => updateQueueFilter("slaTarget", value)} label="Meta SLA" empty="Todas" options={queueView?.filters.slaTargets ?? []} />
+              <FilterSelect value={queueFilters.slaTarget} onChange={(value) => updateQueueFilter("slaTarget", value)} label="Meta SLA" empty="Todas" options={queueView?.filters.slaTargets ?? []} formatOptionLabel={formatSlaTargetLabel} />
               <FilterSelect value={queueFilters.queueId} onChange={(value) => updateQueueFilter("queueId", value)} label="Fila ID" empty="Todas" options={queueView?.filters.queueIds ?? []} />
               <button type="button" onClick={() => setQueueFilters(defaultQueueFilters)} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Limpar</button>
             </div>
@@ -757,6 +760,7 @@ function StructuredQueueTable({
     { label: "Output", sortKey: "output" },
     { label: "AHT", sortKey: "aht" },
     { label: "Latência", sortKey: "latency" },
+    { label: "Max Latência", sortKey: "maxLatency" },
     { label: "Backlog", sortKey: "backlog" },
     { label: "Ações" }
   ];
@@ -792,6 +796,7 @@ function StructuredQueueTable({
                 <td className="px-4 py-3"><AgentMetricCell current={row.current.output} previous={row.previous?.output ?? null} format="number" positiveDirection="up" /></td>
                 <td className="px-4 py-3"><AgentMetricCell current={row.current.ahtMs} previous={row.previous?.ahtMs ?? null} format="duration" positiveDirection="down" /></td>
                 <td className="px-4 py-3"><AgentMetricCell current={row.current.latencyMs} previous={row.previous?.latencyMs ?? null} format="duration" positiveDirection="down" /></td>
+                <td className="px-4 py-3"><AgentMetricCell current={row.current.maxLatencyMs} previous={row.previous?.maxLatencyMs ?? null} format="duration" positiveDirection="down" /></td>
                 <td className="px-4 py-3"><AgentMetricCell current={row.current.backlog} previous={row.previous?.backlog ?? null} format="number" positiveDirection="down" /></td>
                 <td className="px-4 py-3">
                   <button type="button" onClick={() => onSelect(row)} className="premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold text-navy-950">
@@ -824,6 +829,118 @@ function QueueStatusPill({ status }: { status: QueueStatus }) {
           ? "bg-red-100 text-red-700"
           : "bg-slate-100 text-slate-700";
   return <span className={cn("inline-flex rounded-full px-2.5 py-1 text-xs font-black", tone)}>{status}</span>;
+}
+
+function RealtimeCyclePicker({
+  value,
+  cycles,
+  onChange
+}: {
+  value: string;
+  cycles: Array<{ value: string; importedAt: string; importedAtLabel: string; rows: number }>;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const parsedCycles = useMemo(() => cycles.map((cycle) => ({ ...cycle, ...parseRealtimeCycle(cycle.value, cycle.importedAt) })), [cycles]);
+  const selected = parsedCycles.find((cycle) => cycle.value === value) ?? parsedCycles[0];
+  const selectedDate = selected?.date;
+  const [visibleMonth, setVisibleMonth] = useState(() => startOfMonth(selected?.date ?? new Date()));
+
+  useEffect(() => {
+    if (selectedDate) setVisibleMonth(startOfMonth(selectedDate));
+  }, [selectedDate]);
+
+  const cyclesByDate = useMemo(() => {
+    const map = new Map<string, typeof parsedCycles>();
+    parsedCycles.forEach((cycle) => {
+      const current = map.get(cycle.dateKey) ?? [];
+      current.push(cycle);
+      map.set(cycle.dateKey, current);
+    });
+    map.forEach((items) => items.sort((a, b) => b.timestamp - a.timestamp));
+    return map;
+  }, [parsedCycles]);
+  const selectedDateKey = selected?.dateKey ?? formatDateKey(new Date());
+  const selectedDayCycles = cyclesByDate.get(selectedDateKey) ?? [];
+  const visibleCells = buildCalendarCells(visibleMonth);
+
+  return (
+    <div className="relative mt-1">
+      <button type="button" onClick={() => setOpen((current) => !current)} className="premium-control flex h-11 w-full items-center justify-between gap-2 px-3 text-left text-sm font-extrabold text-navy-950">
+        <span className="flex min-w-0 items-center gap-2">
+          <CalendarDays className="h-4 w-4 shrink-0 text-blue-600" />
+          <span className="truncate">{selected ? `${formatDateShort(selected.date)} - ${selected.timeLabel}` : "Selecione um ciclo"}</span>
+        </span>
+        <span className="text-xs font-black text-muted">{open ? "▲" : "▼"}</span>
+      </button>
+      {open ? (
+        <div className="absolute left-0 top-12 z-40 grid w-[min(720px,calc(100vw-2rem))] gap-0 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl md:grid-cols-[minmax(0,1fr)_220px]">
+          <div className="p-4">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-lg font-black capitalize text-navy-950">{new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(visibleMonth)}</p>
+                <p className="text-xs font-bold text-muted">Escolha o dia do ciclo</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => setVisibleMonth(addMonths(visibleMonth, -1))} className="premium-control grid h-9 w-9 place-items-center text-sm font-black text-navy-950">‹</button>
+                <button type="button" onClick={() => setVisibleMonth(startOfMonth(new Date()))} className="premium-control h-9 px-3 text-xs font-black text-navy-950">Hoje</button>
+                <button type="button" onClick={() => setVisibleMonth(addMonths(visibleMonth, 1))} className="premium-control grid h-9 w-9 place-items-center text-sm font-black text-navy-950">›</button>
+              </div>
+            </div>
+            <div className="grid grid-cols-7 gap-1 text-center text-xs font-black uppercase text-muted">
+              {["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"].map((day) => <span key={day} className="py-1">{day}</span>)}
+            </div>
+            <div className="mt-1 grid grid-cols-7 gap-1">
+              {visibleCells.map((cell) => {
+                const key = formatDateKey(cell.date);
+                const hasCycle = cyclesByDate.has(key);
+                const isSelected = key === selectedDateKey;
+                const isCurrentMonth = cell.date.getMonth() === visibleMonth.getMonth();
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    disabled={!hasCycle}
+                    onClick={() => {
+                      const firstCycle = cyclesByDate.get(key)?.[0];
+                      if (firstCycle) onChange(firstCycle.value);
+                    }}
+                    className={cn(
+                      "aspect-square rounded-2xl text-sm font-black transition",
+                      isSelected ? "bg-navy-950 text-white" : hasCycle ? "hover:bg-blue-50 hover:text-blue-700" : "cursor-not-allowed text-slate-300",
+                      !isCurrentMonth && "opacity-50"
+                    )}
+                  >
+                    {cell.date.getDate()}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="border-t border-slate-100 bg-slate-50 p-3 md:border-l md:border-t-0">
+            <p className="mb-2 text-xs font-black uppercase tracking-wide text-muted">Horários disponíveis</p>
+            <div className="max-h-[340px] space-y-1 overflow-y-auto pr-1">
+              {selectedDayCycles.map((cycle) => (
+                <button
+                  key={cycle.value}
+                  type="button"
+                  onClick={() => {
+                    onChange(cycle.value);
+                    setOpen(false);
+                  }}
+                  className={cn("w-full rounded-2xl px-3 py-2 text-left text-sm font-black transition", value === cycle.value ? "bg-blue-600 text-white" : "bg-white hover:bg-blue-50 hover:text-blue-700")}
+                >
+                  <span className="block">{cycle.timeLabel}</span>
+                  <span className={cn("text-[11px] font-bold", value === cycle.value ? "text-blue-100" : "text-muted")}>{cycle.rows} linha(s)</span>
+                </button>
+              ))}
+              {!selectedDayCycles.length ? <p className="rounded-2xl bg-white px-3 py-6 text-center text-sm font-bold text-muted">Nenhum ciclo neste dia.</p> : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function AgentDetailDrawer({ row, onClose }: { row: AgentRealtimeRow; onClose: () => void }) {
@@ -947,6 +1064,7 @@ function QueueDetailDrawer({ row, onClose }: { row: QueueRealtimeRow; onClose: (
           <SmallMetric title="Output" value={formatInteger(row.current.output)} previous={row.previous ? formatInteger(row.previous.output) : "Sem comparação"} />
           <SmallMetric title="AHT" value={formatDurationFromMs(row.current.ahtMs)} previous={row.previous ? formatDurationFromMs(row.previous.ahtMs) : "Sem comparação"} />
           <SmallMetric title="Latência" value={formatDurationFromMs(row.current.latencyMs)} previous={row.previous ? formatDurationFromMs(row.previous.latencyMs) : "Sem comparação"} />
+          <SmallMetric title="Max Latência" value={formatDurationFromMs(row.current.maxLatencyMs)} previous={row.previous ? formatDurationFromMs(row.previous.maxLatencyMs) : "Sem comparação"} />
           <SmallMetric title="Backlog" value={formatInteger(row.current.backlog)} previous={row.previous ? formatInteger(row.previous.backlog) : "Sem comparação"} />
         </div>
 
@@ -969,6 +1087,7 @@ function QueueDetailDrawer({ row, onClose }: { row: QueueRealtimeRow; onClose: (
               <AgentMetricCell current={row.current.output} previous={row.previous?.output ?? null} format="number" positiveDirection="up" />
               <AgentMetricCell current={row.current.ahtMs} previous={row.previous?.ahtMs ?? null} format="duration" positiveDirection="down" />
               <AgentMetricCell current={row.current.latencyMs} previous={row.previous?.latencyMs ?? null} format="duration" positiveDirection="down" />
+              <AgentMetricCell current={row.current.maxLatencyMs} previous={row.previous?.maxLatencyMs ?? null} format="duration" positiveDirection="down" />
               <AgentMetricCell current={row.current.backlog} previous={row.previous?.backlog ?? null} format="number" positiveDirection="down" />
             </div>
           </div>
@@ -982,7 +1101,7 @@ function QueueDetailDrawer({ row, onClose }: { row: QueueRealtimeRow; onClose: (
           <div className="overflow-x-auto">
             <table className="min-w-full text-left text-sm">
               <thead className="bg-slate-50 text-xs uppercase tracking-wide text-muted">
-                <tr>{["Ciclo", "Status", "Input", "Output", "AHT", "Latência", "Backlog"].map((column) => <th key={column} className="px-3 py-2 font-black">{column}</th>)}</tr>
+                <tr>{["Ciclo", "Status", "Input", "Output", "AHT", "Latência", "Max Latência", "Backlog"].map((column) => <th key={column} className="px-3 py-2 font-black">{column}</th>)}</tr>
               </thead>
               <tbody>
                 {row.history.map((item) => (
@@ -993,12 +1112,13 @@ function QueueDetailDrawer({ row, onClose }: { row: QueueRealtimeRow; onClose: (
                     <td className="px-3 py-3 font-bold">{formatInteger(item.output)}</td>
                     <td className="px-3 py-3 font-bold">{formatDurationFromMs(item.ahtMs)}</td>
                     <td className="px-3 py-3 font-bold">{formatDurationFromMs(item.latencyMs)}</td>
+                    <td className="px-3 py-3 font-bold">{formatDurationFromMs(item.maxLatencyMs)}</td>
                     <td className="px-3 py-3 font-bold">{formatInteger(item.backlog)}</td>
                   </tr>
                 ))}
                 {!row.history.length ? (
                   <tr>
-                    <td colSpan={7} className="px-3 py-10 text-center text-sm font-bold text-muted">Sem histórico disponível para esta fila.</td>
+                    <td colSpan={8} className="px-3 py-10 text-center text-sm font-bold text-muted">Sem histórico disponível para esta fila.</td>
                   </tr>
                 ) : null}
               </tbody>
@@ -1019,13 +1139,47 @@ function SearchBox({ value, onChange, placeholder }: { value: string; onChange: 
   );
 }
 
-function FilterSelect({ value, onChange, label, empty, options }: { value: string; onChange: (value: string) => void; label: string; empty: string; options: CountItem[] }) {
+function FilterSelect({
+  value,
+  onChange,
+  label,
+  empty,
+  options,
+  formatOptionLabel = (optionLabel: string) => optionLabel
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  label: string;
+  empty: string;
+  options: CountItem[];
+  formatOptionLabel?: (optionLabel: string) => string;
+}) {
   const hasCurrentValue = value && !options.some((option) => option.label === value);
   return (
     <select value={value} onChange={(event) => onChange(event.target.value)} aria-label={label} className="premium-control h-10 max-w-[190px] px-3 text-sm font-bold text-navy-950 outline-none">
       <option value="">{empty}</option>
-      {hasCurrentValue ? <option value={value}>{value}</option> : null}
-      {options.map((option) => <option key={option.label} value={option.label}>{option.label} ({option.count})</option>)}
+      {hasCurrentValue ? <option value={value}>{formatOptionLabel(value)}</option> : null}
+      {options.map((option) => <option key={option.label} value={option.label}>{formatOptionLabel(option.label)} ({option.count})</option>)}
+    </select>
+  );
+}
+
+function QueueLobFilterSelect({ value, onChange, options }: { value: string; onChange: (value: string) => void; options: CountItem[] }) {
+  const counts = new Map(options.map((option) => [option.label, option.count]));
+  const mappedCount = (counts.get("ADS") ?? 0) + (counts.get("VIDEO") ?? 0) + (counts.get("COMMENTS") ?? 0);
+  const orderedOptions: CountItem[] = [
+    { label: "MAPPED", count: mappedCount },
+    ...["ADS", "VIDEO", "COMMENTS", "N/A"].map((label) => ({ label, count: counts.get(label) ?? 0 })),
+    ...options.filter((option) => !["ADS", "VIDEO", "COMMENTS", "N/A"].includes(option.label))
+  ];
+  return (
+    <select value={value} onChange={(event) => onChange(event.target.value)} aria-label="LOB" className="premium-control h-10 max-w-[190px] px-3 text-sm font-bold text-navy-950 outline-none">
+      <option value="">Todas</option>
+      {orderedOptions.map((option) => (
+        <option key={option.label} value={option.label}>
+          {option.label === "MAPPED" ? "Todos mapeados" : option.label} ({option.count})
+        </option>
+      ))}
     </select>
   );
 }
@@ -1155,7 +1309,15 @@ function buildFilteredAgentCards(rows: AgentRealtimeRow[]): AgentKpiCard[] {
 
 function buildQueueLobCards(rows: QueueRealtimeRow[]): QueueLobCardData[] {
   return (["ADS", "VIDEO", "COMMENTS"] as const).map((lob) => {
-    const scopedRows = rows.filter((row) => row.lob === lob);
+    const scopedRows = rows.filter((row) => row.lob === lob && (lob !== "VIDEO" || row.slaTargetMinutes === 15));
+    if (!scopedRows.length) {
+      return {
+        lob,
+        backlog: emptyKpiCard("Backlog"),
+        latency: emptyKpiCard("SLA"),
+        aht: emptyKpiCard("AHT")
+      };
+    }
     const current = summarizeQueueMetrics(scopedRows.map((row) => row.current));
     const previousMetrics = scopedRows.map((row) => row.previous).filter((metric): metric is QueueMetric => Boolean(metric));
     const previous = previousMetrics.length ? summarizeQueueMetrics(previousMetrics) : null;
@@ -1166,6 +1328,10 @@ function buildQueueLobCards(rows: QueueRealtimeRow[]): QueueLobCardData[] {
       aht: buildAgentKpiCard("AHT", current.ahtMs, previous?.ahtMs ?? null, "duration", "down")
     };
   });
+}
+
+function emptyKpiCard(label: string): AgentKpiCard {
+  return { label, value: "-", delta: "", hasComparison: false, trend: "neutral", direction: "none" };
 }
 
 function summarizeQueueMetrics(metrics: QueueMetric[]): QueueMetric {
@@ -1186,6 +1352,10 @@ function summarizeQueueMetrics(metrics: QueueMetric[]): QueueMetric {
     output,
     backlog,
     sourceRows: metrics.reduce((sum, metric) => sum + metric.sourceRows, 0),
+    maxLatencyMs: metrics.reduce<number | null>((currentMax, metric) => {
+      if (metric.maxLatencyMs === null) return currentMax;
+      return currentMax === null ? metric.maxLatencyMs : Math.max(currentMax, metric.maxLatencyMs);
+    }, null),
     ahtMs: output > 0 ? ahtWeighted / output : simpleAhtMetrics.length ? simpleAht / simpleAhtMetrics.length : null,
     latencyMs: latencyBacklogWeight > 0
       ? latencyWeightedByBacklog / latencyBacklogWeight
@@ -1322,6 +1492,60 @@ function formatDurationFromMs(value: number | null | undefined) {
   return `0:${String(seconds).padStart(2, "0")}s`;
 }
 
+function parseRealtimeCycle(value: string, importedAt: string) {
+  const fallbackDate = importedAt ? new Date(importedAt) : new Date();
+  const match = value.match(/(\d{4})[-/](\d{2})[-/](\d{2})(?:[T_\s-]+(\d{2})[:-](\d{2})(?::?(\d{2}))?)?/);
+  const year = match ? Number(match[1]) : fallbackDate.getFullYear();
+  const month = match ? Number(match[2]) - 1 : fallbackDate.getMonth();
+  const day = match ? Number(match[3]) : fallbackDate.getDate();
+  const hour = match?.[4] ? Number(match[4]) : fallbackDate.getHours();
+  const minute = match?.[5] ? Number(match[5]) : fallbackDate.getMinutes();
+  const second = match?.[6] ? Number(match[6]) : 0;
+  const date = new Date(year, month, day, hour, minute, second);
+  return {
+    date,
+    dateKey: formatDateKey(date),
+    timestamp: date.getTime(),
+    timeLabel: new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(date)
+  };
+}
+
+function startOfMonth(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function addMonths(date: Date, amount: number) {
+  return new Date(date.getFullYear(), date.getMonth() + amount, 1);
+}
+
+function buildCalendarCells(monthDate: Date) {
+  const first = startOfMonth(monthDate);
+  const start = new Date(first);
+  start.setDate(first.getDate() - first.getDay());
+  return Array.from({ length: 42 }).map((_, index) => {
+    const date = new Date(start);
+    date.setDate(start.getDate() + index);
+    return { date };
+  });
+}
+
+function formatDateKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function formatDateShort(date: Date) {
+  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" }).format(date);
+}
+
+function formatSlaTargetLabel(value: string) {
+  if (value === "Sem meta") return value;
+  const minutes = Number(value);
+  if (!Number.isFinite(minutes)) return value;
+  if (minutes < 60) return `${minutes} min`;
+  if (minutes % 60 === 0) return `${minutes / 60}h`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}min`;
+}
+
 function buildAgentQueryParams(cycleDownload: string, filters: AgentFilters) {
   const params = new URLSearchParams();
   if (cycleDownload) params.set("cycleDownload", cycleDownload);
@@ -1400,6 +1624,7 @@ function compareQueueRows(a: QueueRealtimeRow, b: QueueRealtimeRow, sort: QueueS
     if (sort.key === "output") return row.current.output;
     if (sort.key === "aht") return row.current.ahtMs;
     if (sort.key === "latency") return row.current.latencyMs;
+    if (sort.key === "maxLatency") return row.current.maxLatencyMs;
     if (sort.key === "backlog") return row.current.backlog;
     return null;
   };
