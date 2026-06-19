@@ -6,6 +6,7 @@ import {
   createBillingAdjustment,
   getBillingDashboard,
   saveBillingRates,
+  setEmployeeBillingInvoiceFinalized,
   supervisorReviewInvoiceAdjustment,
   updateBillingCycleStatus
 } from "@/lib/billing-service";
@@ -46,17 +47,23 @@ export async function POST(request: Request) {
         ? await saveBillingRates(actor, body.rates ?? {})
         : action === "create-adjustment"
           ? await createBillingAdjustment(actor, body)
-          : action === "supervisor-review-adjustment"
-            ? await supervisorReviewInvoiceAdjustment(actor, { id: String(body.id ?? ""), observation: String(body.observation ?? "") })
-            : action === "admin-decide-adjustment"
-              ? await adminDecideInvoiceAdjustment(actor, {
-                id: String(body.id ?? ""),
-                decision: body.decision === "RECUSADO" ? "RECUSADO" : "APROVADO",
-                finalResponse: String(body.finalResponse ?? ""),
-                adjustmentAmount: body.adjustmentAmount === "" ? null : Number(body.adjustmentAmount ?? 0),
-                finalMinutes: body.finalMinutes === "" || body.finalMinutes === undefined ? null : Number(body.finalMinutes)
-              })
-              : { error: "Ação de Billing inválida.", status: 400 };
+          : action === "set-employee-invoice-finalized"
+            ? await setEmployeeBillingInvoiceFinalized(actor, {
+              referenceMonth: body.referenceMonth,
+              employeeId: String(body.employeeId ?? ""),
+              finalized: Boolean(body.finalized)
+            })
+            : action === "supervisor-review-adjustment"
+              ? await supervisorReviewInvoiceAdjustment(actor, { id: String(body.id ?? ""), observation: String(body.observation ?? "") })
+              : action === "admin-decide-adjustment"
+                ? await adminDecideInvoiceAdjustment(actor, {
+                  id: String(body.id ?? ""),
+                  decision: body.decision === "RECUSADO" ? "RECUSADO" : "APROVADO",
+                  finalResponse: String(body.finalResponse ?? ""),
+                  adjustmentAmount: body.adjustmentAmount === "" ? null : Number(body.adjustmentAmount ?? 0),
+                  finalMinutes: body.finalMinutes === "" || body.finalMinutes === undefined ? null : Number(body.finalMinutes)
+                })
+                : { error: "Ação de Billing inválida.", status: 400 };
   if ("error" in result) return NextResponse.json({ error: result.error, message: result.error }, { status: result.status ?? 400 });
   return NextResponse.json(result);
 }

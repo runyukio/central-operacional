@@ -227,6 +227,14 @@ export function BillingPage() {
     if (invoice) setSelectedInvoice(invoice);
   }, [data?.invoices, employeeId]);
 
+  useEffect(() => {
+    if (!data?.invoices.length) return;
+    setSelectedInvoice((current) => {
+      if (!current) return current;
+      return data.invoices.find((item) => item.employeeId === current.employeeId) ?? current;
+    });
+  }, [data?.invoices]);
+
   async function postBilling(body: Record<string, unknown>, success: string) {
     setSaving(true);
     setError("");
@@ -279,6 +287,15 @@ export function BillingPage() {
       employeeInvoiceId: invoice.id || null,
       employeeId: invoice.employeeId
     }, "Ajuste individual criado.");
+  }
+
+  async function setEmployeeInvoiceFinalized(invoice: BillingPayload["data"]["invoices"][number], finalized: boolean) {
+    await postBilling({
+      action: "set-employee-invoice-finalized",
+      referenceMonth,
+      employeeId: invoice.employeeId,
+      finalized
+    }, finalized ? "Invoice individual finalizado e congelado." : "Invoice individual reaberto para ajustes e recálculo.");
   }
 
   const exportHref = useMemo(() => {
@@ -350,6 +367,7 @@ export function BillingPage() {
               <option value="APROVADO_COLABORADOR">Aprovado pelo colaborador</option>
               <option value="AGUARDANDO_SUPERVISOR">Aguardando supervisor</option>
               <option value="AGUARDANDO_ADMIN">Aguardando Admin</option>
+              <option value="FECHADO">Fechado</option>
             </select>
           </Label>
           <Label text="Cargo/Função">
@@ -491,9 +509,12 @@ export function BillingPage() {
             <EmployeeBillingDetail
               invoice={selectedInvoice}
               saving={saving}
+              detailsLoaded={activeTab === "hours"}
               exportHref={`/api/billing/export?referenceMonth=${encodeURIComponent(referenceMonth)}&employeeId=${encodeURIComponent(selectedInvoice.employeeId)}`}
               onClose={() => setSelectedInvoice(null)}
+              onLoadHourDetails={() => setActiveTab("hours")}
               onCreateAdjustment={(draft) => createEmployeeAdjustment(selectedInvoice, draft)}
+              onSetFinalized={(finalized) => setEmployeeInvoiceFinalized(selectedInvoice, finalized)}
             />
           ) : null}
         </>
@@ -608,21 +629,32 @@ function AdjustmentForm({ draft, setDraft, invoices, saving, onSubmit }: { draft
 function EmployeeBillingDetail({
   invoice,
   saving,
+  detailsLoaded,
   exportHref,
   onClose,
-  onCreateAdjustment
+  onLoadHourDetails,
+  onCreateAdjustment,
+  onSetFinalized
 }: {
   invoice: BillingPayload["data"]["invoices"][number];
   saving: boolean;
+  detailsLoaded: boolean;
   exportHref: string;
   onClose: () => void;
+  onLoadHourDetails: () => void;
   onCreateAdjustment: (draft: { type: string; description: string; amount: string }) => Promise<void>;
+  onSetFinalized: (finalized: boolean) => Promise<void>;
 }) {
   const [draft, setDraft] = useState({ type: "Correção", amount: "", description: "" });
   const [localError, setLocalError] = useState("");
+  const finalized = invoice.status === "FECHADO";
 
   async function submit() {
     setLocalError("");
+    if (finalized) {
+      setLocalError("Invoice finalizado. Reabra antes de aplicar novos ajustes.");
+      return;
+    }
     if (!draft.description.trim()) {
       setLocalError("Descrição do ajuste é obrigatória.");
       return;
@@ -645,6 +677,17 @@ function EmployeeBillingDetail({
             <p className="text-sm font-semibold text-muted">{invoice.wbLogin} • {invoice.roleTitle} • {invoice.skill || "Sem skill"} • {invoice.lob}</p>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void onSetFinalized(!finalized)}
+              className={cn(
+                "inline-flex h-9 items-center justify-center gap-2 rounded-lg px-3 text-xs font-black leading-none",
+                finalized ? "border border-amber-200 bg-amber-50 text-amber-800" : "premium-button"
+              )}
+            >
+              <LockKeyhole className="h-4 w-4" /> {finalized ? "Reabrir invoice" : "Finalizar invoice"}
+            </button>
             <a href={exportHref} className="premium-control inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none text-blue-700">
               <Download className="h-4 w-4" /> Exportar
             </a>
@@ -655,6 +698,11 @@ function EmployeeBillingDetail({
         </div>
 
         <div className="flex-1 overflow-y-auto p-4">
+          {finalized ? (
+            <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-800">
+              Invoice individual finalizado pelo Admin. Valores, horas e status ficam congelados até reabertura manual.
+            </div>
+          ) : null}
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <DetailMetric label="Horas aprovadas" value={minutesToHours(invoice.approvedMinutes)} />
             <DetailMetric label="Horas projetadas" value={minutesToHours(invoice.projectedMinutes)} />
@@ -685,20 +733,22 @@ function EmployeeBillingDetail({
 
             <Panel title="Ajuste individual">
               <div className="space-y-2">
-                <select value={draft.type} onChange={(event) => setDraft({ ...draft, type: event.target.value })} className="premium-control h-10 w-full px-3 text-sm font-bold">
+                <select disabled={finalized} value={draft.type} onChange={(event) => setDraft({ ...draft, type: event.target.value })} className="premium-control h-10 w-full px-3 text-sm font-bold disabled:opacity-60">
                   <option>Campanha</option>
                   <option>Adiantamento</option>
                   <option>Bônus</option>
                   <option>Desconto</option>
                   <option>Correção</option>
                 </select>
-                <input value={draft.amount} onChange={(event) => setDraft({ ...draft, amount: event.target.value })} placeholder="Valor R$" className="premium-control h-10 w-full px-3 text-sm font-bold" />
-                <textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Descrição obrigatória" className="premium-control min-h-[92px] w-full px-3 py-2 text-sm font-semibold" />
+                <input disabled={finalized} value={draft.amount} onChange={(event) => setDraft({ ...draft, amount: event.target.value })} placeholder="Valor R$" className="premium-control h-10 w-full px-3 text-sm font-bold disabled:opacity-60" />
+                <textarea disabled={finalized} value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Descrição obrigatória" className="premium-control min-h-[92px] w-full px-3 py-2 text-sm font-semibold disabled:opacity-60" />
                 {localError ? <p className="text-xs font-bold text-red-600">{localError}</p> : null}
-                <button disabled={saving} onClick={() => void submit()} className="premium-button inline-flex h-10 w-full items-center justify-center gap-2 px-3 text-sm font-extrabold leading-none">
+                <button disabled={saving || finalized} onClick={() => void submit()} className="premium-button inline-flex h-10 w-full items-center justify-center gap-2 px-3 text-sm font-extrabold leading-none disabled:opacity-60">
                   <Save className="h-4 w-4" /> Aplicar ajuste
                 </button>
-                <p className="text-xs font-semibold text-muted">Desconto e Adiantamento reduzem o valor final mesmo se digitados como valor positivo.</p>
+                <p className="text-xs font-semibold text-muted">
+                  {finalized ? "Reabra o invoice para aplicar novos ajustes." : "Desconto e Adiantamento reduzem o valor final mesmo se digitados como valor positivo."}
+                </p>
               </div>
             </Panel>
           </div>
@@ -711,7 +761,24 @@ function EmployeeBillingDetail({
                   rows={invoice.hourDetails.map((detail) => [detail.date, detail.kind === "PROJECTED" ? "Projetado" : "Aprovado", detail.shift || "-", minutesToHours(detail.minutes), formatCurrency(detail.amount), invoice.billingRuleLabel || invoice.billingRule])}
                 />
               ) : (
-                <EmptyState title="Detalhe sob demanda" description="Abra a aba Detalhamento de horas para carregar a composição diária completa deste ciclo." />
+                <div className="grid min-h-[150px] place-items-center rounded-xl border border-dashed border-border bg-gradient-to-b from-white to-slate-50 p-3 text-center">
+                  <div>
+                    <div className="mx-auto grid h-10 w-10 place-items-center rounded-full bg-blue-50">
+                      <RefreshCw className="h-5 w-5 text-blue-500" />
+                    </div>
+                    <h3 className="mt-2.5 text-sm font-bold text-navy-950">{detailsLoaded ? "Sem composição de horas" : "Detalhe sob demanda"}</h3>
+                    <p className="mt-1 text-xs text-muted">
+                      {detailsLoaded
+                        ? "Não há horas aprovadas ou projetadas para exibir neste colaborador/ciclo."
+                        : "Carregue a composição diária completa deste ciclo sem trazer todos os detalhes no primeiro load."}
+                    </p>
+                    {!detailsLoaded ? (
+                      <button type="button" onClick={onLoadHourDetails} className="premium-button mt-3 inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none">
+                        <RefreshCw className="h-3.5 w-3.5" /> Carregar composição de horas
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
               )}
             </Panel>
           </div>
