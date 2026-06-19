@@ -2,11 +2,9 @@
 
 import {
   Activity,
-  AlertCircle,
   ArrowDown,
   ArrowUp,
   CalendarDays,
-  CheckCircle2,
   Database,
   Download,
   Eye,
@@ -16,6 +14,7 @@ import {
   X
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { Area, AreaChart, ResponsiveContainer, Tooltip as RechartsTooltip } from "recharts";
 
 import { cn } from "@/lib/utils";
 
@@ -227,6 +226,8 @@ type AgentFilters = {
 
 type AgentSortKey = "displayName" | "wbLogin" | "employeeStatus" | "lob" | "supervisor" | "shift" | "skill" | "submit" | "aht" | "moderation" | "timeout" | "refresh";
 type AgentSortState = { key: AgentSortKey; direction: "asc" | "desc" };
+type MetricFormat = "number" | "duration";
+type TrendPoint = { label: string; value: number | null; delta: number | null };
 type AgentKpiCard = {
   label: string;
   value: string;
@@ -234,6 +235,8 @@ type AgentKpiCard = {
   hasComparison: boolean;
   trend: "positive" | "negative" | "neutral";
   direction: "up" | "down" | "none";
+  format: MetricFormat;
+  history: TrendPoint[];
 };
 
 type QueueFilters = {
@@ -248,8 +251,10 @@ type QueueSortKey = "status" | "lob" | "queueId" | "input" | "output" | "aht" | 
 type QueueSortState = { key: QueueSortKey; direction: "asc" | "desc" };
 type QueueLobCardData = {
   lob: "ADS" | "VIDEO" | "COMMENTS";
+  status: "OK" | "Atenção" | "Crítico";
   backlog: AgentKpiCard;
   latency: AgentKpiCard;
+  maxLatency: AgentKpiCard;
   aht: AgentKpiCard;
 };
 
@@ -490,7 +495,7 @@ export function RealTimePage() {
 
       {error ? <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{error}</div> : null}
 
-      <section className="premium-card p-4">
+      <section className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
         <div className="flex flex-wrap items-end gap-3">
           <label className="block min-w-[260px] flex-1 text-xs font-black uppercase tracking-wide text-muted">
             ciclo_download
@@ -512,21 +517,22 @@ export function RealTimePage() {
       </section>
 
       {activeTab === "agents" ? (
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           {filteredAgentCards.map((card) => (
-            <CompareCard key={card.label} card={card} />
+            <KpiCard key={card.label} card={card} />
           ))}
         </div>
       ) : (
-        <div className="grid gap-3 xl:grid-cols-3">
+        <div className="grid gap-4 xl:grid-cols-3">
           {filteredQueueCards.map((card) => (
             <QueueLobCard key={card.lob} card={card} />
           ))}
         </div>
       )}
 
-      <section className="premium-card overflow-hidden">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-4">
+      <section className="overflow-hidden rounded-[24px] border border-slate-200/80 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+        <div className="border-b border-slate-100 px-4 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="inline-flex rounded-2xl bg-slate-100 p-1">
             <button type="button" onClick={() => setActiveTab("agents")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", activeTab === "agents" ? "bg-white text-blue-700 shadow-sm" : "text-muted")}>
               Agentes
@@ -535,8 +541,13 @@ export function RealTimePage() {
               Filas
             </button>
           </div>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={activeTab === "agents" ? () => setAgentFilters(defaultAgentFilters) : () => setQueueFilters(defaultQueueFilters)} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Filtros padrão</button>
+              <button type="button" onClick={activeTab === "agents" ? () => setAgentFilters(emptyAgentFilters) : () => setQueueFilters({ search: "", lob: "", status: "", slaTarget: "", queueId: "" })} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Limpar</button>
+            </div>
+          </div>
           {activeTab === "agents" ? (
-            <div className="flex flex-1 flex-wrap justify-end gap-2">
+            <div className="mt-4 grid gap-2 rounded-3xl border border-slate-100 bg-slate-50/70 p-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-9">
               <SearchBox value={agentFilters.search} onChange={(value) => updateAgentFilter("search", value)} placeholder="Buscar agente ou WB..." />
               <FilterSelect value={agentFilters.crossingStatus} onChange={(value) => updateAgentFilter("crossingStatus", value)} label="Cruzamento" empty="Todos" options={agentView?.filters.crossingStatuses ?? []} />
               <FilterSelect value={agentFilters.personType} onChange={(value) => updateAgentFilter("personType", value)} label="Tipo" empty="Todos" options={agentView?.filters.personTypes ?? []} />
@@ -546,17 +557,14 @@ export function RealTimePage() {
               <FilterSelect value={agentFilters.shift} onChange={(value) => updateAgentFilter("shift", value)} label="Turno" empty="Todos" options={agentView?.filters.shifts ?? []} />
               <FilterSelect value={agentFilters.skill} onChange={(value) => updateAgentFilter("skill", value)} label="Skill" empty="Todas" options={agentView?.filters.skills ?? []} />
               <FilterSelect value={agentFilters.roleTitle} onChange={(value) => updateAgentFilter("roleTitle", value)} label="Cargo" empty="Todos" options={agentView?.filters.roleTitles ?? []} />
-              <button type="button" onClick={() => setAgentFilters(defaultAgentFilters)} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Padrão</button>
-              <button type="button" onClick={() => setAgentFilters(emptyAgentFilters)} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Ver todos</button>
             </div>
           ) : (
-            <div className="flex flex-1 flex-wrap justify-end gap-2">
+            <div className="mt-4 grid gap-2 rounded-3xl border border-slate-100 bg-slate-50/70 p-3 sm:grid-cols-2 lg:grid-cols-5">
               <SearchBox value={queueFilters.search} onChange={(value) => updateQueueFilter("search", value)} placeholder="Buscar ID ou nome da fila..." />
               <QueueLobFilterSelect value={queueFilters.lob} onChange={(value) => updateQueueFilter("lob", value)} options={queueView?.filters.lobs ?? []} />
               <FilterSelect value={queueFilters.status} onChange={(value) => updateQueueFilter("status", value)} label="Status" empty="Todos" options={queueView?.filters.statuses ?? []} />
               <FilterSelect value={queueFilters.slaTarget} onChange={(value) => updateQueueFilter("slaTarget", value)} label="Meta SLA" empty="Todas" options={queueView?.filters.slaTargets ?? []} formatOptionLabel={formatSlaTargetLabel} />
               <FilterSelect value={queueFilters.queueId} onChange={(value) => updateQueueFilter("queueId", value)} label="Fila ID" empty="Todas" options={queueView?.filters.queueIds ?? []} />
-              <button type="button" onClick={() => setQueueFilters(defaultQueueFilters)} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Limpar</button>
             </div>
           )}
         </div>
@@ -622,12 +630,18 @@ function AgentTable({
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs font-black uppercase tracking-wide text-muted">
         <span>{rows.length} de {totalRows} agente(s) exibidos</span>
       </div>
-      <div className="overflow-x-auto">
-        <table className="min-w-[1320px] text-left text-sm">
-          <thead className="bg-slate-50 text-xs uppercase tracking-wide text-muted">
+      <div className="max-h-[680px] overflow-auto">
+        <table className="min-w-[1400px] border-separate border-spacing-0 text-left text-sm">
+          <thead className="sticky top-0 z-10 bg-slate-50/95 text-xs uppercase tracking-wide text-muted backdrop-blur">
+            <tr className="border-b border-slate-100">
+              <th colSpan={4} className="border-b border-slate-100 px-4 py-2 font-black text-blue-700">Identificação</th>
+              <th colSpan={5} className="border-b border-slate-100 px-4 py-2 font-black text-violet-700">Operação</th>
+              <th colSpan={5} className="border-b border-slate-100 px-4 py-2 font-black text-emerald-700">Performance</th>
+              <th className="border-b border-slate-100 px-4 py-2 font-black text-slate-600">Ação</th>
+            </tr>
             <tr>
               {columns.map((column) => (
-                <th key={column.label} className="whitespace-nowrap px-4 py-3 font-black">
+                <th key={column.label} className="whitespace-nowrap border-b border-slate-100 px-4 py-3 font-black">
                   {column.sortKey ? (
                     <button type="button" onClick={() => onSort(column.sortKey!)} className="inline-flex items-center gap-1 rounded-lg px-1 py-0.5 text-left font-black transition hover:bg-blue-50 hover:text-blue-700">
                       {column.label}
@@ -639,8 +653,8 @@ function AgentTable({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
-              <tr key={row.key} className="border-t border-slate-100 hover:bg-slate-50/70">
+            {rows.map((row, index) => (
+              <tr key={row.key} className={cn("border-t border-slate-100 transition hover:bg-blue-50/60", index % 2 ? "bg-slate-50/35" : "bg-white")}>
                 <td className="px-4 py-3 font-extrabold text-navy-950">{row.displayName}</td>
                 <td className="px-4 py-3 font-bold text-navy-950">{row.wbLogin || row.rawWbLogin || "-"}</td>
                 <td className="px-4 py-3"><StatusPill value={row.crossingStatus} /></td>
@@ -770,12 +784,12 @@ function StructuredQueueTable({
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs font-black uppercase tracking-wide text-muted">
         <span>{rows.length} de {totalRows} fila(s) exibidas</span>
       </div>
-      <div className="overflow-x-auto">
-        <table className="min-w-[1040px] text-left text-sm">
-          <thead className="bg-slate-50 text-xs uppercase tracking-wide text-muted">
+      <div className="max-h-[680px] overflow-auto">
+        <table className="min-w-[1180px] border-separate border-spacing-0 text-left text-sm">
+          <thead className="sticky top-0 z-10 bg-slate-50/95 text-xs uppercase tracking-wide text-muted backdrop-blur">
             <tr>
               {columns.map((column) => (
-                <th key={column.label} className="whitespace-nowrap px-4 py-3 font-black">
+                <th key={column.label} className="whitespace-nowrap border-b border-slate-100 px-4 py-3 font-black">
                   {column.sortKey ? (
                     <button type="button" onClick={() => onSort(column.sortKey!)} className="inline-flex items-center gap-1 rounded-lg px-1 py-0.5 text-left font-black transition hover:bg-blue-50 hover:text-blue-700">
                       {column.label}
@@ -787,11 +801,11 @@ function StructuredQueueTable({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
-              <tr key={row.key} className="border-t border-slate-100 hover:bg-slate-50/70">
+            {rows.map((row, index) => (
+              <tr key={row.key} className={cn("border-t border-slate-100 transition hover:bg-blue-50/60", index % 2 ? "bg-slate-50/35" : "bg-white")}>
                 <td className="px-4 py-3"><QueueStatusPill status={row.status} /></td>
                 <td className="px-4 py-3 font-extrabold text-navy-950">{row.lob}</td>
-                <td className="px-4 py-3 font-extrabold text-blue-700">{row.queueId || "Sem Fila ID"}</td>
+                <td className="px-4 py-3"><span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-black text-blue-700">{row.queueId || "Sem Fila ID"}</span></td>
                 <td className="px-4 py-3"><AgentMetricCell current={row.current.input} previous={row.previous?.input ?? null} format="number" positiveDirection="neutral" /></td>
                 <td className="px-4 py-3"><AgentMetricCell current={row.current.output} previous={row.previous?.output ?? null} format="number" positiveDirection="up" /></td>
                 <td className="px-4 py-3"><AgentMetricCell current={row.current.ahtMs} previous={row.previous?.ahtMs ?? null} format="duration" positiveDirection="down" /></td>
@@ -1132,7 +1146,7 @@ function QueueDetailDrawer({ row, onClose }: { row: QueueRealtimeRow; onClose: (
 
 function SearchBox({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder: string }) {
   return (
-    <label className="premium-control flex h-10 min-w-[220px] items-center gap-2 px-3 text-sm">
+    <label className="premium-control flex h-10 min-w-0 items-center gap-2 px-3 text-sm">
       <Search className="h-4 w-4 text-muted" />
       <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="w-full bg-transparent font-bold outline-none placeholder:text-muted/70" />
     </label>
@@ -1156,7 +1170,7 @@ function FilterSelect({
 }) {
   const hasCurrentValue = value && !options.some((option) => option.label === value);
   return (
-    <select value={value} onChange={(event) => onChange(event.target.value)} aria-label={label} className="premium-control h-10 max-w-[190px] px-3 text-sm font-bold text-navy-950 outline-none">
+    <select value={value} onChange={(event) => onChange(event.target.value)} aria-label={label} className="premium-control h-10 w-full min-w-0 px-3 text-sm font-bold text-navy-950 outline-none">
       <option value="">{empty}</option>
       {hasCurrentValue ? <option value={value}>{formatOptionLabel(value)}</option> : null}
       {options.map((option) => <option key={option.label} value={option.label}>{formatOptionLabel(option.label)} ({option.count})</option>)}
@@ -1173,7 +1187,7 @@ function QueueLobFilterSelect({ value, onChange, options }: { value: string; onC
     ...options.filter((option) => !["ADS", "VIDEO", "COMMENTS", "N/A"].includes(option.label))
   ];
   return (
-    <select value={value} onChange={(event) => onChange(event.target.value)} aria-label="LOB" className="premium-control h-10 max-w-[190px] px-3 text-sm font-bold text-navy-950 outline-none">
+    <select value={value} onChange={(event) => onChange(event.target.value)} aria-label="LOB" className="premium-control h-10 w-full min-w-0 px-3 text-sm font-bold text-navy-950 outline-none">
       <option value="">Todas</option>
       {orderedOptions.map((option) => (
         <option key={option.label} value={option.label}>
@@ -1240,56 +1254,106 @@ function ImportHistoryModal({ imports, loading, onClose }: { imports: ImportHist
   );
 }
 
-function CompareCard({ card }: { card: AgentKpiCard }) {
+function KpiCard({ card }: { card: AgentKpiCard }) {
   const tone = card.trend === "positive" ? "green" : card.trend === "negative" ? "orange" : "blue";
-  const Icon = card.trend === "positive" ? CheckCircle2 : card.trend === "negative" ? AlertCircle : Activity;
   return (
-    <div className="premium-card flex items-start justify-between gap-3 p-4">
-      <div>
-        <p className="text-xs font-black uppercase tracking-wide text-muted">{card.label}</p>
-        <p className="mt-1 text-2xl font-black text-navy-950">{card.value}</p>
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs font-black">
-          {card.hasComparison ? <TrendBadge trend={card.trend} direction={card.direction} value={card.delta || "0"} /> : <span className="text-muted">Sem comparação</span>}
+    <div className="rounded-[22px] border border-slate-200/80 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)] transition hover:-translate-y-0.5 hover:shadow-[0_18px_42px_rgba(15,23,42,0.08)]">
+      <div className="flex min-h-[136px] items-stretch justify-between gap-4">
+        <div className="flex min-w-0 flex-col justify-between">
+          <div>
+            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-muted">{card.label}</p>
+            <p className="mt-4 text-3xl font-black leading-none tracking-tight text-navy-950">{card.value}</p>
+          </div>
+          <div>
+            {card.hasComparison ? <TrendBadge trend={card.trend} direction={card.direction} value={card.delta || "0"} /> : <span className="text-xs font-black text-muted">Sem comparação</span>}
+            <p className="mt-2 text-xs font-bold text-muted">comparado ao ciclo anterior</p>
+          </div>
+        </div>
+        <div className="w-[46%] min-w-[112px]">
+          <TrendSparkline data={card.history} format={card.format} trend={card.trend} />
         </div>
       </div>
-      <span className={cn("grid h-11 w-11 shrink-0 place-items-center rounded-2xl", toneClass(tone))}>
-        <Icon className="h-5 w-5" />
-      </span>
+      <div className={cn("mt-4 h-1.5 rounded-full", tone === "green" ? "bg-emerald-100" : tone === "orange" ? "bg-red-100" : "bg-blue-100")} />
     </div>
   );
 }
 
 function QueueLobCard({ card }: { card: QueueLobCardData }) {
+  const statusTone = card.status === "OK" ? "bg-emerald-100 text-emerald-700" : card.status === "Crítico" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-800";
   return (
-    <div className="premium-card p-4">
+    <div className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="text-xs font-black uppercase tracking-wide text-muted">LOB</p>
-          <h3 className="text-xl font-black text-navy-950">{card.lob}</h3>
+          <p className="text-[11px] font-black uppercase tracking-[0.16em] text-muted">LOB</p>
+          <h3 className="mt-1 text-2xl font-black text-navy-950">{card.lob}</h3>
         </div>
-        <span className="rounded-2xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-700">Filas</span>
+        <span className={cn("rounded-full px-3 py-1.5 text-xs font-black", statusTone)}>{card.status}</span>
       </div>
-      <div className="mt-4 grid gap-3">
-        <QueueCardMetric label="Backlog" card={card.backlog} />
-        <QueueCardMetric label="SLA" card={card.latency} />
-        <QueueCardMetric label="AHT" card={card.aht} />
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <MiniMetricChartCard label="Backlog" card={card.backlog} />
+        <MiniMetricChartCard label="SLA / Latência" card={card.latency} />
+        <MiniMetricChartCard label="Max Latência" card={card.maxLatency} />
+        <MiniMetricChartCard label="AHT" card={card.aht} />
       </div>
     </div>
   );
 }
 
-function QueueCardMetric({ label, card }: { label: string; card: AgentKpiCard }) {
+function MiniMetricChartCard({ label, card }: { label: string; card: AgentKpiCard }) {
   return (
-    <div className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-black uppercase tracking-wide text-muted">{label}</p>
-          <p className="mt-0.5 text-lg font-black text-navy-950">{card.value}</p>
-        </div>
-        <div className="pt-4">
-          {card.hasComparison ? <TrendBadge trend={card.trend} direction={card.direction} value={card.delta || "0"} /> : <span className="text-[11px] font-black text-muted">Sem comparação</span>}
+    <div className="rounded-[18px] border border-slate-100 bg-slate-50/80 p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate text-[11px] font-black uppercase tracking-wide text-muted">{label}</p>
+          <p className="mt-1 text-xl font-black leading-none text-navy-950">{card.value}</p>
+          <div className="mt-2">
+            {card.hasComparison ? <TrendBadge trend={card.trend} direction={card.direction} value={card.delta || "0"} /> : <span className="text-[11px] font-black text-muted">Sem comparação</span>}
+          </div>
         </div>
       </div>
+      <div className="mt-2 h-16">
+        <TrendSparkline data={card.history} format={card.format} trend={card.trend} compact />
+      </div>
+    </div>
+  );
+}
+
+function TrendSparkline({ data, format, trend, compact = false }: { data: TrendPoint[]; format: MetricFormat; trend: "positive" | "negative" | "neutral"; compact?: boolean }) {
+  const validData = data.filter((point) => point.value !== null);
+  const color = trend === "positive" ? "#10B981" : trend === "negative" ? "#EF4444" : "#2563EB";
+  if (validData.length < 2) {
+    return (
+      <div className="grid h-full place-items-center rounded-2xl bg-slate-50 text-[11px] font-black text-muted">
+        Sem histórico
+      </div>
+    );
+  }
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <AreaChart data={validData} margin={{ top: compact ? 4 : 12, right: 4, left: 4, bottom: compact ? 4 : 12 }}>
+        <defs>
+          <linearGradient id={`sparkline-${trend}-${compact ? "compact" : "full"}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor={color} stopOpacity={0.28} />
+            <stop offset="95%" stopColor={color} stopOpacity={0.02} />
+          </linearGradient>
+        </defs>
+        <RechartsTooltip content={<SparklineTooltip format={format} />} cursor={{ stroke: "#CBD5E1", strokeDasharray: "4 4" }} />
+        <Area type="monotone" dataKey="value" stroke={color} strokeWidth={compact ? 2 : 2.5} fill={`url(#sparkline-${trend}-${compact ? "compact" : "full"})`} dot={false} activeDot={{ r: compact ? 3 : 4, stroke: color, strokeWidth: 2, fill: "#fff" }} />
+      </AreaChart>
+    </ResponsiveContainer>
+  );
+}
+
+function SparklineTooltip({ active, payload, format }: { active?: boolean; payload?: Array<{ payload?: TrendPoint }>; format: MetricFormat }) {
+  const point = payload?.[0]?.payload;
+  if (!active || !point) return null;
+  const value = format === "duration" ? formatDurationFromMs(point.value) : formatInteger(point.value ?? 0);
+  const delta = point.delta === null ? "Sem comparação" : `${point.delta > 0 ? "+" : point.delta < 0 ? "-" : ""}${format === "duration" ? formatDurationFromMs(Math.abs(point.delta)) : formatInteger(Math.abs(point.delta))}`;
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs shadow-xl">
+      <p className="font-black text-navy-950">{point.label}</p>
+      <p className="mt-1 font-bold text-muted">Valor: <span className="text-navy-950">{value}</span></p>
+      <p className="font-bold text-muted">Variação: <span className="text-navy-950">{delta}</span></p>
     </div>
   );
 }
@@ -1299,11 +1363,11 @@ function buildFilteredAgentCards(rows: AgentRealtimeRow[]): AgentKpiCard[] {
   const previousMetrics = rows.map((row) => row.previous).filter((metric): metric is AgentMetric => Boolean(metric));
   const previous = previousMetrics.length ? summarizeMetrics(previousMetrics) : null;
   return [
-    buildAgentKpiCard("Submit total", current.submit, previous?.submit ?? null, "number", "up"),
-    buildAgentKpiCard("AHT médio", current.ahtMs, previous?.ahtMs ?? null, "duration", "down"),
-    buildAgentKpiCard("Moderação total", current.moderationMs, previous?.moderationMs ?? null, "duration", "neutral"),
-    buildAgentKpiCard("Timeout", current.timeout, previous?.timeout ?? null, "number", "down"),
-    buildAgentKpiCard("Refresh", current.refresh, previous?.refresh ?? null, "number", "down")
+    buildAgentKpiCard("Submit total", current.submit, previous?.submit ?? null, "number", "up", buildAgentTrendSeries(rows, "submit")),
+    buildAgentKpiCard("AHT médio", current.ahtMs, previous?.ahtMs ?? null, "duration", "down", buildAgentTrendSeries(rows, "ahtMs")),
+    buildAgentKpiCard("Moderação total", current.moderationMs, previous?.moderationMs ?? null, "duration", "up", buildAgentTrendSeries(rows, "moderationMs")),
+    buildAgentKpiCard("Timeout", current.timeout, previous?.timeout ?? null, "number", "down", buildAgentTrendSeries(rows, "timeout")),
+    buildAgentKpiCard("Refresh", current.refresh, previous?.refresh ?? null, "number", "down", buildAgentTrendSeries(rows, "refresh"))
   ];
 }
 
@@ -1313,8 +1377,10 @@ function buildQueueLobCards(rows: QueueRealtimeRow[]): QueueLobCardData[] {
     if (!scopedRows.length) {
       return {
         lob,
+        status: "Atenção",
         backlog: emptyKpiCard("Backlog"),
         latency: emptyKpiCard("SLA"),
+        maxLatency: emptyKpiCard("Max Latência"),
         aht: emptyKpiCard("AHT")
       };
     }
@@ -1323,15 +1389,86 @@ function buildQueueLobCards(rows: QueueRealtimeRow[]): QueueLobCardData[] {
     const previous = previousMetrics.length ? summarizeQueueMetrics(previousMetrics) : null;
     return {
       lob,
-      backlog: buildAgentKpiCard("Backlog", current.backlog, previous?.backlog ?? null, "number", "down"),
-      latency: buildAgentKpiCard("SLA", current.latencyMs, previous?.latencyMs ?? null, "duration", "down"),
-      aht: buildAgentKpiCard("AHT", current.ahtMs, previous?.ahtMs ?? null, "duration", "down")
+      status: resolveLobStatus(scopedRows),
+      backlog: buildAgentKpiCard("Backlog", current.backlog, previous?.backlog ?? null, "number", "down", buildQueueTrendSeries(scopedRows, "backlog")),
+      latency: buildAgentKpiCard("SLA", current.latencyMs, previous?.latencyMs ?? null, "duration", "down", buildQueueTrendSeries(scopedRows, "latencyMs")),
+      maxLatency: buildAgentKpiCard("Max Latência", current.maxLatencyMs, previous?.maxLatencyMs ?? null, "duration", "down", buildQueueTrendSeries(scopedRows, "maxLatencyMs")),
+      aht: buildAgentKpiCard("AHT", current.ahtMs, previous?.ahtMs ?? null, "duration", "down", buildQueueTrendSeries(scopedRows, "ahtMs"))
     };
   });
 }
 
 function emptyKpiCard(label: string): AgentKpiCard {
-  return { label, value: "-", delta: "", hasComparison: false, trend: "neutral", direction: "none" };
+  return { label, value: "-", delta: "", hasComparison: false, trend: "neutral", direction: "none", format: "number", history: [] };
+}
+
+function resolveLobStatus(rows: QueueRealtimeRow[]): QueueLobCardData["status"] {
+  if (rows.some((row) => row.status === "Estourado")) return "Crítico";
+  if (rows.some((row) => row.status === "Risco" || row.status === "Estável" || row.status === "N/A")) return "Atenção";
+  return "OK";
+}
+
+function buildAgentTrendSeries(rows: AgentRealtimeRow[], key: "submit" | "ahtMs" | "moderationMs" | "timeout" | "refresh"): TrendPoint[] {
+  const byCycle = new Map<string, AgentMetric[]>();
+  rows.forEach((row) => {
+    row.history.forEach((item) => {
+      const metrics = byCycle.get(item.cycleDownload) ?? [];
+      metrics.push({
+        submit: item.submit,
+        ahtMs: item.ahtMs,
+        moderationMs: item.moderationMs,
+        timeout: item.timeout,
+        refresh: item.refresh,
+        queueCount: 0,
+        sourceRows: 1
+      });
+      byCycle.set(item.cycleDownload, metrics);
+    });
+  });
+  const points = Array.from(byCycle.entries()).map(([cycleDownload, metrics]) => {
+    const summary = summarizeMetrics(metrics);
+    return { cycleDownload, value: summary[key] };
+  });
+  return buildTrendPoints(points);
+}
+
+function buildQueueTrendSeries(rows: QueueRealtimeRow[], key: "backlog" | "latencyMs" | "maxLatencyMs" | "ahtMs" | "input" | "output"): TrendPoint[] {
+  const byCycle = new Map<string, QueueMetric[]>();
+  rows.forEach((row) => {
+    row.history.forEach((item) => {
+      const metrics = byCycle.get(item.cycleDownload) ?? [];
+      metrics.push({
+        input: item.input,
+        output: item.output,
+        ahtMs: item.ahtMs,
+        latencyMs: item.latencyMs,
+        maxLatencyMs: item.maxLatencyMs,
+        backlog: item.backlog,
+        sourceRows: 1
+      });
+      byCycle.set(item.cycleDownload, metrics);
+    });
+  });
+  const points = Array.from(byCycle.entries()).map(([cycleDownload, metrics]) => {
+    const summary = summarizeQueueMetrics(metrics);
+    return { cycleDownload, value: summary[key] };
+  });
+  return buildTrendPoints(points);
+}
+
+function buildTrendPoints(points: Array<{ cycleDownload: string; value: number | null }>): TrendPoint[] {
+  return points
+    .sort((a, b) => parseRealtimeCycle(a.cycleDownload, "").timestamp - parseRealtimeCycle(b.cycleDownload, "").timestamp)
+    .slice(-12)
+    .map((point, index, sorted) => {
+      const previous = index > 0 ? sorted[index - 1].value : null;
+      const delta = point.value !== null && previous !== null ? point.value - previous : null;
+      return {
+        label: formatCycleTooltipLabel(point.cycleDownload),
+        value: point.value,
+        delta
+      };
+    });
 }
 
 function summarizeQueueMetrics(metrics: QueueMetric[]): QueueMetric {
@@ -1381,7 +1518,7 @@ function summarizeMetrics(metrics: AgentMetric[]) {
   };
 }
 
-function buildAgentKpiCard(label: string, current: number | null, previous: number | null, format: "number" | "duration", positiveDirection: "up" | "down" | "neutral"): AgentKpiCard {
+function buildAgentKpiCard(label: string, current: number | null, previous: number | null, format: MetricFormat, positiveDirection: "up" | "down" | "neutral", history: TrendPoint[] = []): AgentKpiCard {
   const delta = current !== null && previous !== null ? current - previous : null;
   const isPositive = delta === null || delta === 0 || positiveDirection === "neutral" ? null : positiveDirection === "up" ? delta > 0 : delta < 0;
   return {
@@ -1390,7 +1527,9 @@ function buildAgentKpiCard(label: string, current: number | null, previous: numb
     delta: delta === null ? "" : format === "duration" ? formatDurationFromMs(Math.abs(delta)) : formatInteger(Math.abs(delta)),
     hasComparison: delta !== null,
     trend: isPositive === null ? "neutral" : isPositive ? "positive" : "negative",
-    direction: delta === null || delta === 0 ? "none" : delta > 0 ? "up" : "down"
+    direction: delta === null || delta === 0 ? "none" : delta > 0 ? "up" : "down",
+    format,
+    history
   };
 }
 
@@ -1537,6 +1676,11 @@ function formatDateShort(date: Date) {
   return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" }).format(date);
 }
 
+function formatCycleTooltipLabel(cycleDownload: string) {
+  const parsed = parseRealtimeCycle(cycleDownload, "");
+  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(parsed.date);
+}
+
 function formatSlaTargetLabel(value: string) {
   if (value === "Sem meta") return value;
   const minutes = Number(value);
@@ -1646,15 +1790,6 @@ function compareQueueRows(a: QueueRealtimeRow, b: QueueRealtimeRow, sort: QueueS
 
   const diff = textValue(a).localeCompare(textValue(b), "pt-BR", { sensitivity: "base" });
   return (sort.direction === "asc" ? diff : -diff) || a.queueId.localeCompare(b.queueId);
-}
-
-function toneClass(tone: "blue" | "green" | "purple" | "orange") {
-  return {
-    blue: "bg-blue-50 text-blue-700",
-    green: "bg-emerald-50 text-emerald-700",
-    purple: "bg-violet-50 text-violet-700",
-    orange: "bg-orange-50 text-orange-700"
-  }[tone];
 }
 
 function normalizeSearch(value: string) {
