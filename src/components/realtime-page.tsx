@@ -17,7 +17,7 @@ import {
   XCircle
 } from "lucide-react";
 import { useEffect, useId, useMemo, useState } from "react";
-import { Area, AreaChart, ResponsiveContainer, Tooltip as RechartsTooltip, YAxis } from "recharts";
+import { Area, AreaChart, ReferenceLine, ResponsiveContainer, Tooltip as RechartsTooltip, YAxis } from "recharts";
 
 import { cn } from "@/lib/utils";
 
@@ -137,6 +137,7 @@ type AgentRealtimeRow = {
   };
   history: Array<{
     cycleDownload: string;
+    queueIds: string[];
     submit: number;
     ahtMs: number | null;
     moderationMs: number;
@@ -552,9 +553,11 @@ export function RealTimePage() {
                   Filas
                 </button>
               </div>
-              {activeTab === "queues" ? (
+              {activeTab === "agents" ? (
+                <AgentLobQuickFilter value={agentFilters.lob} onChange={(value) => updateAgentFilter("lob", value)} options={agentView?.filters.lobs ?? []} />
+              ) : (
                 <QueueLobQuickFilter value={queueFilters.lob} onChange={(value) => updateQueueFilter("lob", value)} options={queueView?.filters.lobs ?? []} />
-              ) : null}
+              )}
             </div>
             <div className="flex flex-wrap gap-2">
               <button type="button" onClick={activeTab === "agents" ? () => setAgentFilters(defaultAgentFilters) : () => setQueueFilters(defaultQueueFilters)} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Filtros padrão</button>
@@ -562,12 +565,11 @@ export function RealTimePage() {
             </div>
           </div>
           {activeTab === "agents" ? (
-            <div className="mt-4 grid gap-2 rounded-3xl border border-slate-100 bg-slate-50/70 p-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-9">
+            <div className="mt-4 grid gap-2 rounded-3xl border border-slate-100 bg-slate-50/70 p-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-8">
               <SearchBox value={agentFilters.search} onChange={(value) => updateAgentFilter("search", value)} placeholder="Buscar agente ou WB..." />
               <FilterSelect value={agentFilters.crossingStatus} onChange={(value) => updateAgentFilter("crossingStatus", value)} label="Cruzamento" empty="Todos" options={agentView?.filters.crossingStatuses ?? []} />
               <FilterSelect value={agentFilters.personType} onChange={(value) => updateAgentFilter("personType", value)} label="Tipo" empty="Todos" options={agentView?.filters.personTypes ?? []} />
               <FilterSelect value={agentFilters.employeeStatus} onChange={(value) => updateAgentFilter("employeeStatus", value)} label="Status" empty="Todos" options={agentView?.filters.employeeStatuses ?? []} />
-              <FilterSelect value={agentFilters.lob} onChange={(value) => updateAgentFilter("lob", value)} label="LOB" empty="Todas" options={agentView?.filters.lobs ?? []} />
               <FilterSelect value={agentFilters.supervisor} onChange={(value) => updateAgentFilter("supervisor", value)} label="Supervisor" empty="Todos" options={agentView?.filters.supervisors ?? []} />
               <FilterSelect value={agentFilters.shift} onChange={(value) => updateAgentFilter("shift", value)} label="Turno" empty="Todos" options={agentView?.filters.shifts ?? []} />
               <FilterSelect value={agentFilters.skill} onChange={(value) => updateAgentFilter("skill", value)} label="Skill" empty="Todas" options={agentView?.filters.skills ?? []} />
@@ -602,7 +604,7 @@ export function RealTimePage() {
         )}
       </section>
 
-      {selectedAgent ? <AgentDetailDrawer row={selectedAgent} onClose={() => setSelectedAgent(null)} /> : null}
+      {selectedAgent ? <AgentDetailDrawer row={selectedAgent} selectedCycle={selectedCycleValue} onClose={() => setSelectedAgent(null)} /> : null}
       {selectedQueue ? <QueueDetailDrawer row={selectedQueue} onClose={() => setSelectedQueue(null)} /> : null}
       {historyOpen ? <ImportHistoryModal imports={imports} loading={importsLoading} onClose={() => setHistoryOpen(false)} /> : null}
     </div>
@@ -643,7 +645,7 @@ function AgentTable({
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs font-black uppercase tracking-wide text-muted">
         <span>{rows.length} de {totalRows} agente(s) exibidos</span>
       </div>
-      <div className="max-h-[680px] overflow-auto">
+      <div className="overflow-x-auto">
         <table className="w-full min-w-[1320px] border-separate border-spacing-0 text-left text-sm">
           <thead className="sticky top-0 z-10 bg-slate-50/95 text-xs uppercase tracking-wide text-muted backdrop-blur">
             <tr className="border-b border-slate-100">
@@ -730,6 +732,26 @@ function QueueIdCell({ queues }: { queues: AgentRealtimeRow["queueBreakdown"] })
       ))}
       {queueIds.length > 2 ? (
         <span className="text-[11px] font-black text-muted">+{queueIds.length - 2} fila(s)</span>
+      ) : null}
+    </div>
+  );
+}
+
+function HistoryQueueIdsCell({ queueIds }: { queueIds: string[] }) {
+  const uniqueIds = Array.from(new Set(queueIds.filter(Boolean)));
+  if (!uniqueIds.length) {
+    return <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-black text-slate-700">Sem Fila ID</span>;
+  }
+
+  return (
+    <div title={uniqueIds.join("\n")} className="flex max-w-[150px] flex-col gap-1">
+      {uniqueIds.slice(0, 2).map((queueId) => (
+        <span key={queueId} className="w-fit rounded-full bg-blue-50 px-2.5 py-1 text-xs font-black text-blue-700">
+          {queueId}
+        </span>
+      ))}
+      {uniqueIds.length > 2 ? (
+        <span className="text-[11px] font-black text-muted">+{uniqueIds.length - 2} fila(s)</span>
       ) : null}
     </div>
   );
@@ -1013,7 +1035,34 @@ function RealtimeCyclePicker({
   );
 }
 
-function AgentDetailDrawer({ row, onClose }: { row: AgentRealtimeRow; onClose: () => void }) {
+function AgentDetailDrawer({ row, selectedCycle, onClose }: { row: AgentRealtimeRow; selectedCycle: string; onClose: () => void }) {
+  const defaultDateKey = parseRealtimeCycle(selectedCycle || row.history[0]?.cycleDownload || "", "").dateKey;
+  const [selectedHistoryDateKey, setSelectedHistoryDateKey] = useState(defaultDateKey);
+  const historyDates = useMemo(() => {
+    const byDate = new Map<string, { dateKey: string; label: string; count: number; timestamp: number }>();
+    row.history.forEach((item) => {
+      const parsed = parseRealtimeCycle(item.cycleDownload, "");
+      const existing = byDate.get(parsed.dateKey);
+      if (existing) {
+        existing.count += 1;
+        existing.timestamp = Math.max(existing.timestamp, parsed.timestamp);
+      } else {
+        byDate.set(parsed.dateKey, {
+          dateKey: parsed.dateKey,
+          label: formatDateShort(parsed.date),
+          count: 1,
+          timestamp: parsed.timestamp
+        });
+      }
+    });
+    return Array.from(byDate.values()).sort((a, b) => b.timestamp - a.timestamp);
+  }, [row.history]);
+  const filteredHistory = useMemo(() => row.history.filter((item) => parseRealtimeCycle(item.cycleDownload, "").dateKey === selectedHistoryDateKey), [row.history, selectedHistoryDateKey]);
+
+  useEffect(() => {
+    setSelectedHistoryDateKey(defaultDateKey);
+  }, [defaultDateKey, row.key]);
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-navy-950/40">
       <div className="h-full w-full max-w-5xl overflow-y-auto bg-white p-5 shadow-2xl">
@@ -1079,19 +1128,32 @@ function AgentDetailDrawer({ row, onClose }: { row: AgentRealtimeRow; onClose: (
         </div>
 
         <div className="premium-card mt-5 overflow-hidden">
-          <div className="border-b border-slate-100 px-4 py-3">
-            <h3 className="font-black text-navy-950">Histórico por ciclo_download</h3>
-            <p className="text-xs font-bold text-muted">Evolução do agente em todos os ciclos importados disponíveis.</p>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+            <div>
+              <h3 className="font-black text-navy-950">Histórico por ciclo_download</h3>
+              <p className="text-xs font-bold text-muted">Evolução do agente no dia selecionado.</p>
+            </div>
+            <select
+              value={selectedHistoryDateKey}
+              onChange={(event) => setSelectedHistoryDateKey(event.target.value)}
+              aria-label="Data do histórico"
+              className="premium-control h-10 min-w-[180px] px-3 text-sm font-bold text-navy-950 outline-none"
+            >
+              {historyDates.map((date) => (
+                <option key={date.dateKey} value={date.dateKey}>{date.label} ({date.count})</option>
+              ))}
+            </select>
           </div>
           <div className="overflow-x-auto">
             <table className="min-w-full text-left text-sm">
               <thead className="bg-slate-50 text-xs uppercase tracking-wide text-muted">
-                <tr>{["Ciclo", "Submit", "AHT", "Moderação", "Timeout", "Refresh"].map((column) => <th key={column} className="px-3 py-2 font-black">{column}</th>)}</tr>
+                <tr>{["Ciclo", "Fila ID", "Submit", "AHT", "Moderação", "Timeout", "Refresh"].map((column) => <th key={column} className="px-3 py-2 font-black">{column}</th>)}</tr>
               </thead>
               <tbody>
-                {row.history.map((item) => (
+                {filteredHistory.map((item) => (
                   <tr key={item.cycleDownload} className="border-t border-slate-100">
                     <td className="px-3 py-3 font-extrabold">{item.cycleDownload}</td>
+                    <td className="px-3 py-3"><HistoryQueueIdsCell queueIds={item.queueIds ?? []} /></td>
                     <td className="px-3 py-3 font-bold">{formatInteger(item.submit)}</td>
                     <td className="px-3 py-3 font-bold">{formatDurationFromMs(item.ahtMs)}</td>
                     <td className="px-3 py-3 font-bold">{formatDurationFromMs(item.moderationMs)}</td>
@@ -1099,6 +1161,11 @@ function AgentDetailDrawer({ row, onClose }: { row: AgentRealtimeRow; onClose: (
                     <td className="px-3 py-3 font-bold">{formatInteger(item.refresh)}</td>
                   </tr>
                 ))}
+                {!filteredHistory.length ? (
+                  <tr>
+                    <td colSpan={7} className="px-3 py-10 text-center text-sm font-bold text-muted">Nenhum ciclo encontrado para esta data.</td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
@@ -1246,6 +1313,42 @@ function FilterSelect({
   );
 }
 
+function AgentLobQuickFilter({ value, onChange, options }: { value: string; onChange: (value: string) => void; options: CountItem[] }) {
+  const counts = new Map(options.map((option) => [option.label, option.count]));
+  const totalCount = options.reduce((sum, option) => sum + option.count, 0);
+  const preferredOrder = ["ADS", "CEC", "TNS", "VIDEO", "COMMENTS"];
+  const orderedLabels = Array.from(new Set([
+    ...preferredOrder.filter((label) => counts.has(label)),
+    ...options.map((option) => option.label).filter((label) => !preferredOrder.includes(label))
+  ]));
+  const orderedOptions: Array<CountItem & { value: string }> = [
+    { label: "Todas", value: "", count: totalCount },
+    ...orderedLabels.map((label) => ({ label, value: label, count: counts.get(label) ?? 0 }))
+  ];
+
+  return (
+    <div className="flex flex-wrap items-center gap-1 rounded-2xl border border-slate-200 bg-white p-1 shadow-[0_4px_12px_rgba(7,27,58,0.035)]">
+      {orderedOptions.map((option) => {
+        const active = value === option.value || (!value && option.value === "");
+        return (
+          <button
+            key={option.value || "all-agent-lobs"}
+            type="button"
+            onClick={() => onChange(option.value)}
+            className={cn(
+              "inline-flex h-8 items-center gap-1 rounded-xl px-3 text-xs font-black transition",
+              active ? "bg-blue-600 text-white shadow-sm" : "text-muted hover:bg-blue-50 hover:text-blue-700"
+            )}
+          >
+            {option.label}
+            <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", active ? "bg-white/20 text-white" : "bg-slate-100 text-muted")}>{option.count}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function QueueLobQuickFilter({ value, onChange, options }: { value: string; onChange: (value: string) => void; options: CountItem[] }) {
   const counts = new Map(options.map((option) => [option.label, option.count]));
   const totalCount = options.reduce((sum, option) => sum + option.count, 0);
@@ -1359,6 +1462,7 @@ function KpiCard({ card }: { card: AgentKpiCard }) {
 }
 
 function QueueLobCard({ card }: { card: QueueLobCardData }) {
+  const latencyReference = getQueueLobLatencyReference(card.lob);
   return (
     <div className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
       <div className="flex items-center justify-between gap-3">
@@ -1374,12 +1478,18 @@ function QueueLobCard({ card }: { card: QueueLobCardData }) {
       </div>
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         <MiniMetricChartCard label="Backlog" card={card.backlog} />
-        <MiniMetricChartCard label="SLA / Latência" card={card.latency} />
-        <MiniMetricChartCard label="Max Latência" card={card.maxLatency} />
+        <MiniMetricChartCard label="SLA / Latência" card={card.latency} reference={latencyReference} />
+        <MiniMetricChartCard label="Max Latência" card={card.maxLatency} reference={latencyReference} />
         <MiniMetricChartCard label="AHT" card={card.aht} />
       </div>
     </div>
   );
+}
+
+function getQueueLobLatencyReference(lob: QueueLobCardData["lob"]): { value: number; label: string } | null {
+  if (lob === "ADS") return { value: 2 * 60 * 60 * 1000, label: "2h" };
+  if (lob === "VIDEO") return { value: 15 * 60 * 1000, label: "15m" };
+  return null;
 }
 
 function LobAdherenceCounter({ label, value, tone }: { label: string; value: number; tone: "ok" | "alerta" | "estourado" }) {
@@ -1396,7 +1506,7 @@ function LobAdherenceCounter({ label, value, tone }: { label: string; value: num
   );
 }
 
-function MiniMetricChartCard({ label, card }: { label: string; card: AgentKpiCard }) {
+function MiniMetricChartCard({ label, card, reference }: { label: string; card: AgentKpiCard; reference?: { value: number; label: string } | null }) {
   return (
     <div className="rounded-[18px] border border-slate-100 bg-slate-50/80 p-3">
       <div className="flex items-start justify-between gap-2">
@@ -1407,15 +1517,32 @@ function MiniMetricChartCard({ label, card }: { label: string; card: AgentKpiCar
             {card.hasComparison ? <TrendBadge trend={card.trend} direction={card.direction} value={card.delta || "0"} /> : <span className="text-[11px] font-black text-muted">Sem comparação</span>}
           </div>
         </div>
+        {reference ? (
+          <span className="shrink-0 rounded-full border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-muted">
+            Meta {reference.label}
+          </span>
+        ) : null}
       </div>
       <div className="mt-2 h-16">
-        <TrendSparkline data={card.history} format={card.format} trend={card.trend} compact />
+        <TrendSparkline data={card.history} format={card.format} trend={card.trend} compact referenceValue={reference?.value ?? null} />
       </div>
     </div>
   );
 }
 
-function TrendSparkline({ data, format, trend, compact = false }: { data: TrendPoint[]; format: MetricFormat; trend: "positive" | "negative" | "neutral"; compact?: boolean }) {
+function TrendSparkline({
+  data,
+  format,
+  trend,
+  compact = false,
+  referenceValue = null
+}: {
+  data: TrendPoint[];
+  format: MetricFormat;
+  trend: "positive" | "negative" | "neutral";
+  compact?: boolean;
+  referenceValue?: number | null;
+}) {
   const gradientId = `sparkline-${useId().replace(/:/g, "")}`;
   const validData = data.filter((point) => point.value !== null);
   const color = trend === "positive" ? "#10B981" : trend === "negative" ? "#EF4444" : "#2563EB";
@@ -1435,8 +1562,11 @@ function TrendSparkline({ data, format, trend, compact = false }: { data: TrendP
             <stop offset="95%" stopColor={color} stopOpacity={0.04} />
           </linearGradient>
         </defs>
-        <YAxis hide domain={[0, "dataMax"]} />
+        <YAxis hide domain={[0, (dataMax: number) => Math.max(dataMax, referenceValue ?? 0)]} />
         <RechartsTooltip content={<SparklineTooltip format={format} />} cursor={{ stroke: "#CBD5E1", strokeDasharray: "4 4" }} />
+        {referenceValue !== null ? (
+          <ReferenceLine y={referenceValue} stroke="#64748B" strokeDasharray="5 5" strokeWidth={1.25} ifOverflow="extendDomain" />
+        ) : null}
         <Area type="monotone" dataKey="value" stroke={color} strokeWidth={compact ? 2 : 2.5} fill={`url(#${gradientId})`} dot={false} isAnimationActive={false} activeDot={{ r: compact ? 3 : 4, stroke: color, strokeWidth: 2, fill: "#fff" }} />
       </AreaChart>
     </ResponsiveContainer>

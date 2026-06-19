@@ -90,6 +90,7 @@ type AgentCycleRow = {
   };
   history: Array<{
     cycleDownload: string;
+    queueIds: string[];
     submit: number;
     ahtMs: number | null;
     moderationMs: number;
@@ -968,6 +969,7 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
       const history = historyByKey.get(row.key) ?? [];
       history.push({
         cycleDownload: cycle.value,
+        queueIds: row.queueBreakdown.map((queue) => queue.queueId).filter(Boolean),
         submit: row.current.submit,
         ahtMs: row.current.ahtMs,
         moderationMs: row.current.moderationMs,
