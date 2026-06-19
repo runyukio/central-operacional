@@ -257,7 +257,11 @@ type QueueSortKey = "status" | "lob" | "queueId" | "input" | "output" | "aht" | 
 type QueueSortState = { key: QueueSortKey; direction: "asc" | "desc" };
 type QueueLobCardData = {
   lob: "ADS" | "VIDEO" | "COMMENTS";
-  status: "OK" | "Atenção" | "Crítico";
+  adherenceCounts: {
+    ok: number;
+    alerta: number;
+    estourado: number;
+  };
   backlog: AgentKpiCard;
   latency: AgentKpiCard;
   maxLatency: AgentKpiCard;
@@ -775,7 +779,6 @@ function StructuredQueueTable({
   onSelect: (row: QueueRealtimeRow) => void;
 }) {
   const columns: Array<{ label: string; sortKey?: QueueSortKey }> = [
-    { label: "Status da fila", sortKey: "status" },
     { label: "LOB", sortKey: "lob" },
     { label: "ID", sortKey: "queueId" },
     { label: "Input", sortKey: "input" },
@@ -795,7 +798,7 @@ function StructuredQueueTable({
         <span>{rows.length} de {totalRows} fila(s) exibidas</span>
       </div>
       <div className="max-h-[680px] overflow-auto">
-        <table className="w-full min-w-[1460px] border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[1320px] border-separate border-spacing-0 text-left text-sm">
           <thead className="sticky top-0 z-10 bg-slate-50/95 text-xs uppercase tracking-wide text-muted backdrop-blur">
             <tr>
               {columns.map((column) => (
@@ -813,7 +816,6 @@ function StructuredQueueTable({
           <tbody>
             {rows.map((row, index) => (
               <tr key={row.key} className={cn("border-t border-slate-100 transition hover:bg-blue-50/60", index % 2 ? "bg-slate-50/35" : "bg-white")}>
-                <td className="px-4 py-3"><QueueStatusPill status={row.status} /></td>
                 <td className="px-4 py-3 font-extrabold text-navy-950">{row.lob}</td>
                 <td className="px-4 py-3"><span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-black text-blue-700">{row.queueId || "Sem Fila ID"}</span></td>
                 <td className="px-4 py-3"><AgentMetricCell current={row.current.input} previous={row.previous?.input ?? null} format="number" positiveDirection="neutral" /></td>
@@ -1357,7 +1359,6 @@ function KpiCard({ card }: { card: AgentKpiCard }) {
 }
 
 function QueueLobCard({ card }: { card: QueueLobCardData }) {
-  const statusTone = card.status === "OK" ? "bg-emerald-100 text-emerald-700" : card.status === "Crítico" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-800";
   return (
     <div className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
       <div className="flex items-center justify-between gap-3">
@@ -1365,7 +1366,11 @@ function QueueLobCard({ card }: { card: QueueLobCardData }) {
           <p className="text-[11px] font-black uppercase tracking-[0.16em] text-muted">LOB</p>
           <h3 className="mt-1 text-2xl font-black text-navy-950">{card.lob}</h3>
         </div>
-        <span className={cn("rounded-full px-3 py-1.5 text-xs font-black", statusTone)}>{card.status}</span>
+        <div className="flex flex-wrap justify-end gap-1.5">
+          <LobAdherenceCounter label="OK" value={card.adherenceCounts.ok} tone="ok" />
+          <LobAdherenceCounter label="Alerta" value={card.adherenceCounts.alerta} tone="alerta" />
+          <LobAdherenceCounter label="Est." value={card.adherenceCounts.estourado} tone="estourado" />
+        </div>
       </div>
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         <MiniMetricChartCard label="Backlog" card={card.backlog} />
@@ -1374,6 +1379,20 @@ function QueueLobCard({ card }: { card: QueueLobCardData }) {
         <MiniMetricChartCard label="AHT" card={card.aht} />
       </div>
     </div>
+  );
+}
+
+function LobAdherenceCounter({ label, value, tone }: { label: string; value: number; tone: "ok" | "alerta" | "estourado" }) {
+  const toneClass = tone === "ok"
+    ? "bg-emerald-50 text-emerald-700 ring-emerald-100"
+    : tone === "alerta"
+      ? "bg-amber-50 text-amber-800 ring-amber-100"
+      : "bg-red-50 text-red-700 ring-red-100";
+  return (
+    <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-black ring-1", toneClass)}>
+      <span>{label}</span>
+      <span className="rounded-full bg-white/80 px-1.5 py-0.5 leading-none">{value}</span>
+    </span>
   );
 }
 
@@ -1457,7 +1476,7 @@ function buildQueueLobCards(rows: QueueRealtimeRow[]): QueueLobCardData[] {
     if (!scopedRows.length) {
       return {
         lob,
-        status: "Atenção",
+        adherenceCounts: { ok: 0, alerta: 0, estourado: 0 },
         backlog: emptyKpiCard("Backlog"),
         latency: emptyKpiCard("SLA"),
         maxLatency: emptyKpiCard("Max Latência"),
@@ -1469,7 +1488,7 @@ function buildQueueLobCards(rows: QueueRealtimeRow[]): QueueLobCardData[] {
     const previous = previousMetrics.length ? summarizeQueueMetrics(previousMetrics) : null;
     return {
       lob,
-      status: resolveLobStatus(scopedRows),
+      adherenceCounts: summarizeLatencyAdherence(scopedRows),
       backlog: buildAgentKpiCard("Backlog", current.backlog, previous?.backlog ?? null, "number", "down", buildQueueTrendSeries(scopedRows, "backlog")),
       latency: buildAgentKpiCard("SLA", current.latencyMs, previous?.latencyMs ?? null, "duration", "down", buildQueueTrendSeries(scopedRows, "latencyMs")),
       maxLatency: buildAgentKpiCard("Max Latência", current.maxLatencyMs, previous?.maxLatencyMs ?? null, "duration", "down", buildQueueTrendSeries(scopedRows, "maxLatencyMs")),
@@ -1482,10 +1501,14 @@ function emptyKpiCard(label: string): AgentKpiCard {
   return { label, value: "-", delta: "", hasComparison: false, trend: "neutral", direction: "none", format: "number", history: [] };
 }
 
-function resolveLobStatus(rows: QueueRealtimeRow[]): QueueLobCardData["status"] {
-  if (rows.some((row) => row.status === "Estourado")) return "Crítico";
-  if (rows.some((row) => row.status === "Risco" || row.status === "Estável" || row.status === "N/A")) return "Atenção";
-  return "OK";
+function summarizeLatencyAdherence(rows: QueueRealtimeRow[]): QueueLobCardData["adherenceCounts"] {
+  return rows.reduce<QueueLobCardData["adherenceCounts"]>((counts, row) => {
+    const status = resolveLatencyAdherence(row.current.maxLatencyMs, row.slaTargetMinutes);
+    if (status === "OK") counts.ok += 1;
+    else if (status === "Alerta") counts.alerta += 1;
+    else if (status === "Estourado") counts.estourado += 1;
+    return counts;
+  }, { ok: 0, alerta: 0, estourado: 0 });
 }
 
 function buildAgentTrendSeries(rows: AgentRealtimeRow[], key: "submit" | "ahtMs" | "moderationMs" | "timeout" | "refresh"): TrendPoint[] {
