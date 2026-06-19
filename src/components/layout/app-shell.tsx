@@ -239,12 +239,12 @@ export function AppShell({
     <div className="min-h-screen bg-surface text-ink lg:flex">
       <aside
         className={cn(
-          "navy-gradient sticky top-0 z-40 hidden h-screen shrink-0 border-r border-white/10 text-white shadow-2xl transition-[width] duration-200 lg:flex lg:flex-col",
+          "app-sidebar sticky top-0 z-40 hidden h-screen shrink-0 border-r transition-[width] duration-200 lg:flex lg:flex-col",
           sidebarCollapsed ? "w-[72px]" : "w-[224px]"
         )}
       >
-        <div className={cn("flex h-16 items-center border-b border-white/10 px-3.5", sidebarCollapsed ? "justify-center" : "gap-2.5")}>
-          <div className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 shadow-lg shadow-blue-950/40 ring-1 ring-white/20">
+        <div className={cn("app-sidebar-divider flex h-16 items-center border-b px-3.5", sidebarCollapsed ? "justify-center" : "gap-2.5")}>
+          <div className="app-sidebar-brand-icon grid h-8 w-8 place-items-center rounded-xl ring-1 ring-white/45">
             <Sparkles className="h-[18px] w-[18px]" />
           </div>
           <div className={cn("min-w-0 transition-opacity duration-150", sidebarCollapsed && "sr-only")}>
@@ -254,11 +254,11 @@ export function AppShell({
         </div>
 
         <div className={cn("flex items-center px-3.5 py-2.5", sidebarCollapsed ? "justify-center" : "justify-between")}>
-          <span className={cn("text-[10.5px] font-extrabold uppercase tracking-[0.2em] text-blue-100/65", sidebarCollapsed && "sr-only")}>Menu</span>
+          <span className={cn("app-sidebar-label text-[10.5px] font-extrabold uppercase tracking-[0.2em]", sidebarCollapsed && "sr-only")}>Menu</span>
           <button
             type="button"
             onClick={toggleSidebar}
-            className="grid h-8 w-8 place-items-center rounded-lg text-blue-100/80 transition hover:bg-white/10 hover:text-white"
+            className="app-sidebar-action grid h-8 w-8 place-items-center rounded-lg transition"
             aria-label={sidebarCollapsed ? "Expandir menu lateral" : "Recolher menu lateral"}
             aria-expanded={!sidebarCollapsed}
             title={sidebarCollapsed ? "Expandir menu lateral" : "Recolher menu lateral"}
@@ -278,15 +278,13 @@ export function AppShell({
                 aria-label={item.label}
                 title={sidebarCollapsed ? item.label : undefined}
                 className={cn(
-                  "group relative flex items-center rounded-lg py-1.5 text-[11.5px] font-bold text-blue-50/86 transition",
+                  "app-sidebar-link group relative flex items-center rounded-lg py-1.5 text-[11.5px] font-bold transition",
                   sidebarCollapsed ? "justify-center px-0" : "gap-2 px-2.5",
-                  active
-                    ? "bg-gradient-to-r from-blue-600 to-blue-500 text-white shadow-lg shadow-blue-950/35 ring-1 ring-white/10"
-                    : "hover:bg-white/9 hover:text-white"
+                  active && "app-sidebar-link-active ring-1 ring-white/20"
                 )}
               >
-                {active ? <span className="absolute -left-2.5 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r-full bg-blue-300" /> : null}
-                <Icon className={cn("h-3.5 w-3.5 shrink-0", active ? "text-white" : "text-blue-100/88")} />
+                {active ? <span className="app-sidebar-active-marker absolute -left-2.5 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r-full" /> : null}
+                <Icon className="app-sidebar-icon h-3.5 w-3.5 shrink-0" />
                 <span className={cn("truncate", sidebarCollapsed && "sr-only")}>{item.label}</span>
                 {sidebarCollapsed ? (
                   <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 z-50 hidden -translate-y-1/2 whitespace-nowrap rounded-md bg-navy-950 px-2 py-1 text-xs font-bold text-white shadow-xl group-hover:block group-focus-visible:block">
@@ -298,10 +296,10 @@ export function AppShell({
           })}
         </nav>
 
-        {isCollaborator ? <div className={cn("border-t border-white/10 p-2.5", sidebarCollapsed && "hidden")}>
-          <div className="rounded-xl border border-white/10 bg-white/8 p-2.5 shadow-lg shadow-navy-950/20">
+        {isCollaborator ? <div className={cn("app-sidebar-divider border-t p-2.5", sidebarCollapsed && "hidden")}>
+          <div className="app-sidebar-help rounded-xl border p-2.5">
             <p className="text-[12.5px] font-semibold">Precisa de ajuda?</p>
-            <p className="mt-1 text-[11.5px] leading-4 text-blue-100/75">
+            <p className="app-sidebar-help-muted mt-1 text-[11.5px] leading-4">
               Fale com o RH ou supervisor.
             </p>
           </div>
@@ -327,13 +325,13 @@ export function AppShell({
           aria-modal="true"
           aria-label="Menu lateral"
           className={cn(
-            "navy-gradient fixed inset-y-0 left-0 z-[80] flex h-[100dvh] w-[284px] max-w-[86vw] flex-col border-r border-white/10 text-white shadow-2xl transition-transform duration-200",
+            "app-sidebar fixed inset-y-0 left-0 z-[80] flex h-[100dvh] w-[284px] max-w-[86vw] flex-col border-r shadow-2xl transition-transform duration-200",
             mobileMenuOpen ? "translate-x-0" : "-translate-x-full"
           )}
         >
-          <div className="flex h-16 items-center justify-between gap-3 border-b border-white/10 px-4">
+          <div className="app-sidebar-divider flex h-16 items-center justify-between gap-3 border-b px-4">
             <div className="flex min-w-0 items-center gap-2.5">
-              <div className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 shadow-lg shadow-blue-950/40 ring-1 ring-white/20">
+              <div className="app-sidebar-brand-icon grid h-8 w-8 place-items-center rounded-xl ring-1 ring-white/45">
                 <Sparkles className="h-[18px] w-[18px]" />
               </div>
               <div className="min-w-0">
@@ -344,7 +342,7 @@ export function AppShell({
             <button
               type="button"
               onClick={closeMobileMenu}
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-blue-100/85 transition hover:bg-white/10 hover:text-white"
+              className="app-sidebar-action grid h-9 w-9 shrink-0 place-items-center rounded-lg transition"
               aria-label="Fechar menu lateral"
             >
               ×
@@ -362,14 +360,12 @@ export function AppShell({
                   onClick={closeMobileMenu}
                   aria-label={item.label}
                   className={cn(
-                    "relative flex min-w-0 items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-bold text-blue-50/88 transition",
-                    active
-                      ? "bg-gradient-to-r from-blue-600 to-blue-500 text-white shadow-lg shadow-blue-950/35 ring-1 ring-white/10"
-                      : "hover:bg-white/9 hover:text-white"
+                    "app-sidebar-link relative flex min-w-0 items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-bold transition",
+                    active && "app-sidebar-link-active ring-1 ring-white/20"
                   )}
                 >
-                  {active ? <span className="absolute -left-2.5 top-1/2 h-7 w-1 -translate-y-1/2 rounded-r-full bg-blue-300" /> : null}
-                  <Icon className={cn("h-4 w-4 shrink-0", active ? "text-white" : "text-blue-100/88")} />
+                  {active ? <span className="app-sidebar-active-marker absolute -left-2.5 top-1/2 h-7 w-1 -translate-y-1/2 rounded-r-full" /> : null}
+                  <Icon className="app-sidebar-icon h-4 w-4 shrink-0" />
                   <span className="min-w-0 truncate">{item.label}</span>
                 </Link>
               );
@@ -377,10 +373,10 @@ export function AppShell({
           </nav>
 
           {isCollaborator ? (
-            <div className="border-t border-white/10 p-3">
-              <div className="rounded-xl border border-white/10 bg-white/8 p-3 shadow-lg shadow-navy-950/20">
+            <div className="app-sidebar-divider border-t p-3">
+              <div className="app-sidebar-help rounded-xl border p-3">
                 <p className="text-[12.5px] font-semibold">Precisa de ajuda?</p>
-                <p className="mt-1 text-[11.5px] leading-4 text-blue-100/75">
+                <p className="app-sidebar-help-muted mt-1 text-[11.5px] leading-4">
                   Fale com o RH ou supervisor.
                 </p>
               </div>
@@ -390,7 +386,7 @@ export function AppShell({
       </div>
 
       <main className="min-h-screen min-w-0 flex-1">
-        <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border/80 bg-white/94 px-4 shadow-[0_8px_24px_rgba(7,27,58,0.035)] backdrop-blur-xl md:px-5">
+        <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border/80 bg-white/94 px-4 text-navy-900 shadow-[0_8px_24px_rgba(7,27,58,0.035)] backdrop-blur-xl dark:bg-slate-950/86 dark:text-slate-100 dark:shadow-none md:px-5">
           <div className="flex min-w-0 flex-1 items-center gap-2.5">
             <button
               type="button"
@@ -417,7 +413,7 @@ export function AppShell({
               />
               </div>
               {globalSearchOpen && globalSearch.trim().length >= 2 ? (
-                <div className="absolute left-0 top-11 z-50 w-full overflow-hidden rounded-2xl border border-border bg-white shadow-2xl shadow-navy-950/15">
+                <div className="absolute left-0 top-11 z-50 w-full overflow-hidden rounded-2xl border border-border bg-white shadow-2xl shadow-navy-950/15 dark:bg-slate-950 dark:shadow-none">
                   {globalSearchLoading ? (
                     <div className="px-4 py-3 text-sm font-bold text-blue-700">Buscando colaboradores...</div>
                   ) : globalSearchResults.length ? (
@@ -427,13 +423,13 @@ export function AppShell({
                           key={`${result.type}-${result.id}`}
                           type="button"
                           onClick={() => openSearchResult(result)}
-                          className="flex w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-blue-50"
+                          className="flex w-full min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-blue-50 dark:hover:bg-blue-500/10"
                         >
                           <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-blue-600 text-xs font-black text-white">
                             {result.avatarInitials || result.name.slice(0, 2).toUpperCase()}
                           </span>
                           <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm font-black text-navy-950">{result.name}</span>
+                            <span className="block truncate text-sm font-black text-navy-950 dark:text-slate-100">{result.name}</span>
                             <span className="block truncate text-xs font-semibold text-muted">
                               {result.wbLogin} • {result.jobTitle || "Sem cargo"} • {result.lob || "Sem LOB"} • {result.status || "Sem status"}
                             </span>
@@ -450,7 +446,7 @@ export function AppShell({
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5 text-navy-900">
+          <div className="flex items-center gap-1.5">
             <div className="relative">
               <button
                 onClick={() => setNotificationOpen((current) => !current)}
@@ -465,13 +461,13 @@ export function AppShell({
                 ) : null}
               </button>
               {notificationOpen ? (
-                <div className="absolute right-0 top-11 z-50 w-[340px] overflow-hidden rounded-2xl border border-border bg-white shadow-2xl shadow-navy-950/15">
+                <div className="absolute right-0 top-11 z-50 w-[340px] overflow-hidden rounded-2xl border border-border bg-white shadow-2xl shadow-navy-950/15 dark:bg-slate-950 dark:shadow-none">
                   <div className="flex items-center justify-between border-b border-border px-4 py-3">
                     <div>
-                      <p className="text-sm font-black text-navy-950">Notificações</p>
+                      <p className="text-sm font-black text-navy-950 dark:text-slate-100">Notificações</p>
                       <p className="text-xs text-muted">{unreadNotifications} não lida(s)</p>
                     </div>
-                    <button onClick={markAllNotificationsRead} className="rounded-lg px-3 py-1.5 text-xs font-extrabold text-blue-700 hover:bg-blue-50">
+                    <button onClick={markAllNotificationsRead} className="rounded-lg px-3 py-1.5 text-xs font-extrabold text-blue-700 hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-500/10">
                       Marcar lidas
                     </button>
                   </div>
@@ -485,12 +481,12 @@ export function AppShell({
                             void markNotificationRead(notification.id);
                             setNotificationOpen(false);
                           }}
-                          className="mb-2 block rounded-xl border border-transparent p-3 text-left transition hover:border-border hover:bg-surface"
+                          className="mb-2 block rounded-xl border border-transparent p-3 text-left transition hover:border-border hover:bg-surface dark:hover:bg-blue-500/10"
                         >
                           <div className="flex items-start gap-3">
                             <span className={cn("mt-1 h-2.5 w-2.5 shrink-0 rounded-full", notification.isRead ? "bg-slate-300" : "bg-blue-600")} />
                             <div className="min-w-0">
-                              <p className="truncate text-sm font-extrabold text-navy-950">{notification.title}</p>
+                              <p className="truncate text-sm font-extrabold text-navy-950 dark:text-slate-100">{notification.title}</p>
                               <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted">{notification.body}</p>
                               <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{notification.type} • {notification.createdAt}</p>
                             </div>
@@ -521,9 +517,9 @@ export function AppShell({
                 <p className="text-sm font-bold">{user.name ?? "Usuário"}</p>
                 <p className="text-xs text-muted">{roleLabel(role)}</p>
               </div>
-              <div className="relative grid h-9 w-9 place-items-center rounded-full border border-border bg-gradient-to-b from-slate-50 to-slate-100 text-navy-900 shadow-soft">
+              <div className="relative grid h-9 w-9 place-items-center rounded-full border border-border bg-gradient-to-b from-slate-50 to-slate-100 text-navy-900 shadow-soft dark:from-slate-900 dark:to-slate-800 dark:text-slate-100 dark:shadow-none">
                 <UserCircle className="h-6 w-6 text-slate-400" />
-                <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-success" />
+                <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-success dark:border-slate-950" />
               </div>
               <button onClick={() => signOut({ callbackUrl: "/login" })} className="grid h-9 w-9 place-items-center rounded-lg border border-transparent hover:border-border hover:bg-surface" title="Sair">
                 <LogOut className="h-4 w-4" />
