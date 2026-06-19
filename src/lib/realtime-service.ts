@@ -115,6 +115,7 @@ type QueueCycleMetric = {
   ahtMs: number | null;
   latencyMs: number | null;
   maxLatencyMs: number | null;
+  maxLatencyRowNumber: number;
   backlog: number;
   sourceRows: number;
 };
@@ -144,6 +145,7 @@ type QueueCycleRow = {
     ahtMs: number | null;
     latencyMs: number | null;
     maxLatencyMs: number | null;
+    maxLatencyRowNumber: number;
     backlog: number;
   }>;
 };
@@ -821,6 +823,7 @@ async function buildQueueRealtimeView(options: RealtimeSnapshotOptions) {
         ahtMs: row.current.ahtMs,
         latencyMs: row.current.latencyMs,
         maxLatencyMs: row.current.maxLatencyMs,
+        maxLatencyRowNumber: row.current.maxLatencyRowNumber,
         backlog: row.current.backlog
       });
       historyByKey.set(row.key, history);
@@ -1257,6 +1260,7 @@ function aggregateQueueCycleRows(items: Array<{
         ahtMs,
         latencyMs,
         maxLatencyMs: group.maxLatencyMs,
+        maxLatencyRowNumber: group.maxLatencyRowNumber,
         backlog: group.backlog,
         sourceRows: group.sourceRows
       },
@@ -1662,11 +1666,20 @@ function summarizeQueueRowsForExport(rows: QueueCycleRow[]) {
         : simpleLatencyRows.length
           ? simpleLatency / simpleLatencyRows.length
           : null,
-    maxLatencyMs: rows.reduce<number | null>((currentMax, row) => {
-      if (row.current.maxLatencyMs === null) return currentMax;
-      return currentMax === null ? row.current.maxLatencyMs : Math.max(currentMax, row.current.maxLatencyMs);
-    }, null)
+    maxLatencyMs: latestQueueMaxLatency(rows.map((row) => row.current))
   };
+}
+
+function latestQueueMaxLatency(metrics: Array<{ maxLatencyMs: number | null; maxLatencyRowNumber?: number }>) {
+  let latest: { value: number; rowNumber: number; index: number } | null = null;
+  for (const [index, metric] of metrics.entries()) {
+    if (metric.maxLatencyMs === null) continue;
+    const rowNumber = metric.maxLatencyRowNumber ?? index;
+    if (!latest || rowNumber > latest.rowNumber || (rowNumber === latest.rowNumber && index > latest.index)) {
+      latest = { value: metric.maxLatencyMs, rowNumber, index };
+    }
+  }
+  return latest ? latest.value : null;
 }
 
 function matchesEmployeeStatus(value: string, filter: string) {
