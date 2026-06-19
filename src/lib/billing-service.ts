@@ -14,6 +14,7 @@ export const BILLING_START_MONTH = "2026-06";
 
 const BILLING_PJ_ONLY_MESSAGE = "Billing disponível apenas para colaboradores PJ.";
 const BILLING_REQUEST_TYPE_NAME = "Ajuste de Invoice";
+const POC_AGENT_HOURLY_RATE_MULTIPLIER = 1.15;
 const OPEN_ADJUSTMENT_STATUSES = ["AGUARDANDO_SUPERVISOR", "AGUARDANDO_ADMIN"] as const;
 const BILLABLE_WORK_HOUR_STATUSES: WorkHourRecordStatus[] = [
   "IMPORTED",
@@ -23,7 +24,7 @@ const BILLABLE_WORK_HOUR_STATUSES: WorkHourRecordStatus[] = [
   "ADJUSTMENT_REJECTED",
   "MANUALLY_CORRECTED"
 ];
-const PROJECTABLE_SCHEDULE_STATUSES = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "VENDA_FOLGA_APROVADA", "TROCA_APROVADA"]);
+const PROJECTABLE_SCHEDULE_STATUSES = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "VENDA_FOLGA_APROVADA"]);
 
 const DEFAULT_RATE_CONFIGS = [
   { key: "BILINGUAL_HOURLY_RATE", label: "Bilingual", value: 62.5, group: "SPECIAL", displayName: "Bilingual" },
@@ -100,6 +101,13 @@ type InvoiceExtra = {
   approvedByEmployeeUserId?: string;
 };
 type InvoiceCalculation = Awaited<ReturnType<typeof calculateEmployeeInvoice>>;
+type BillingRateResolution = {
+  hourlyRate: number;
+  billingRule: string;
+  billingRuleLabel: string;
+  billingRateSource: string;
+  billingWarning?: string;
+};
 
 const PERFORMANCE_DEBUG = process.env.PERFORMANCE_DEBUG === "true";
 
@@ -725,8 +733,6 @@ async function buildBillingInvoicesReadModel(
   if (!employeeIds.length) return [] as InvoiceCalculation[];
 
   const period = monthPeriod(referenceMonth);
-  const today = startOfUtcDay(new Date());
-  const projectionStart = new Date(Math.max(period.start.getTime(), today.getTime() + 24 * 60 * 60 * 1000));
   const lobIds = Array.from(new Set(employees.map((employee) => employee.lobId).filter(Boolean))) as string[];
 
   const [workHours, schedules, advances, persistedInvoices] = await Promise.all([
@@ -739,18 +745,16 @@ async function buildBillingInvoicesReadModel(
       select: { employeeId: true, date: true, effectiveHours: true, status: true },
       orderBy: { date: "asc" }
     }),
-    projectionStart.getTime() <= period.end.getTime()
-      ? prisma.schedule.findMany({
-        where: {
-          employeeId: { in: employeeIds },
-          deletedAt: null,
-          date: { gte: projectionStart, lte: period.end },
-          status: { in: Array.from(PROJECTABLE_SCHEDULE_STATUSES) }
-        },
-        select: { employeeId: true, date: true, status: true, shift: { select: { name: true } } },
-        orderBy: { date: "asc" }
-      })
-      : Promise.resolve([]),
+    prisma.schedule.findMany({
+      where: {
+        employeeId: { in: employeeIds },
+        deletedAt: null,
+        date: { gte: period.start, lte: period.end },
+        status: { in: Array.from(PROJECTABLE_SCHEDULE_STATUSES) }
+      },
+      select: { employeeId: true, date: true, status: true, shift: { select: { name: true } } },
+      orderBy: { date: "asc" }
+    }),
     prisma.monthlyAdvanceRecord.findMany({
       where: { employeeId: { in: employeeIds }, referenceMonth, status: { not: "REMOVED" } },
       select: { employeeId: true, optIn: true, amount: true, finalAmount: true }
@@ -914,7 +918,6 @@ async function buildBillingInvoicesReadModel(
 
 async function calculateEmployeeInvoice(employee: BillingEmployee, referenceMonth: string, rates: BillingRates, billingCycleId: string | null, cycleStatus?: string | null) {
   const period = monthPeriod(referenceMonth);
-  const today = startOfUtcDay(new Date());
   const [workHours, schedules, advance, adjustmentRows, persisted] = await Promise.all([
     prisma.workHourRecord.findMany({
       where: {
@@ -952,7 +955,7 @@ async function calculateEmployeeInvoice(employee: BillingEmployee, referenceMont
   const projectedSchedules = schedules.filter((schedule) => {
     if (!PROJECTABLE_SCHEDULE_STATUSES.has(schedule.status)) return false;
     if (approvedByDate.has(dateKey(schedule.date))) return false;
-    return startOfUtcDay(schedule.date).getTime() > today.getTime();
+    return true;
   });
   const projectedMinutes = projectedSchedules.length * 480;
   const projectedDetails = projectedSchedules.map((schedule) => ({
@@ -1165,7 +1168,7 @@ async function listBillingRateConfigs() {
   });
 }
 
-function resolveHourlyRate(employee: BillingEmployee, rates: BillingRates) {
+function resolveHourlyRate(employee: BillingEmployee, rates: BillingRates): BillingRateResolution {
   const skill = normalizeComparableJobTitle(employee.skill);
   if (skill.includes("bilingual") || skill.includes("bilingue")) {
     return {
@@ -1209,27 +1212,27 @@ function resolveHourlyRate(employee: BillingEmployee, rates: BillingRates) {
 
   if (isAgentJobTitle(employee.roleTitle)) {
     if (shiftBucket === "NOITE") {
-      return {
+      return applyPocAgentRateModifier(employee, {
         hourlyRate: rates.NIGHT_HOURLY_RATE,
         billingRule: "AGENTE_NOITE",
         billingRuleLabel: "Agente + Turno Noite",
         billingRateSource: "Cargo/Função Agente"
-      };
+      });
     }
     if (shiftBucket === "TARDE") {
-      return {
+      return applyPocAgentRateModifier(employee, {
         hourlyRate: rates.AFTERNOON_HOURLY_RATE,
         billingRule: "AGENTE_TARDE",
         billingRuleLabel: "Agente + Turno Tarde",
         billingRateSource: "Cargo/Função Agente"
-      };
+      });
     }
-    return {
+    return applyPocAgentRateModifier(employee, {
       hourlyRate: rates.MORNING_HOURLY_RATE,
       billingRule: "AGENTE_MANHA",
       billingRuleLabel: "Agente + Turno Manhã",
       billingRateSource: "Cargo/Função Agente"
-    };
+    });
   }
 
   return {
@@ -1238,6 +1241,17 @@ function resolveHourlyRate(employee: BillingEmployee, rates: BillingRates) {
     billingRuleLabel: "Valor/hora não configurado",
     billingRateSource: "Sem regra aplicável",
     billingWarning: "Valor/hora não configurado para este cargo/skill."
+  };
+}
+
+function applyPocAgentRateModifier(employee: Pick<BillingEmployee, "roleTitle" | "skill">, rate: BillingRateResolution): BillingRateResolution {
+  if (!isAgentJobTitle(employee.roleTitle) || !isPocSkill(employee.skill) || rate.hourlyRate <= 0) return rate;
+  return {
+    ...rate,
+    hourlyRate: roundMoney(rate.hourlyRate * POC_AGENT_HOURLY_RATE_MULTIPLIER),
+    billingRule: `${rate.billingRule}_POC`,
+    billingRuleLabel: `${rate.billingRuleLabel} + Skill POC (15%)`,
+    billingRateSource: `${rate.billingRateSource} + adicional POC`
   };
 }
 
@@ -1279,6 +1293,11 @@ async function validateBillingAdjustmentTarget(input: { employeeInvoiceId?: stri
 function isSpecialBillingSkill(value?: string | null) {
   const skill = normalizeComparableJobTitle(value);
   return skill.includes("bilingual") || skill.includes("bilingue") || skill === "ra";
+}
+
+function isPocSkill(value?: string | null) {
+  const skill = normalizeComparableJobTitle(value).replace(/[^a-z0-9]/g, "");
+  return skill === "poc";
 }
 
 function resolveStaffRateRule(value?: string | null) {

@@ -150,9 +150,9 @@ type QueueCycleRow = {
   }>;
 };
 
-const realtimeRecordLimit = 1000;
 const staleThresholdMinutes = 20;
-const realtimeAgentHistoryBatchLimit = 160;
+const realtimeRetentionDays = 7;
+const realtimeViewHistoryBatchLimit = 72;
 
 const queueNameCandidates = ["fila", "queue", "queue id", "queue_id", "queue name", "queue_name", "skill group queue", "skillgroupqueue"];
 const agentNameCandidates = ["agente", "agent", "auditor", "auditor name", "nome", "name", "colaborador", "operator", "moderator"];
@@ -227,6 +227,31 @@ export function validateRealtimeImportToken(authorizationHeader?: string | null)
   return { ok: true };
 }
 
+function realtimeRetentionCutoff() {
+  return new Date(Date.now() - realtimeRetentionDays * 24 * 60 * 60 * 1000);
+}
+
+async function pruneRealtimeHistory(currentBatchId?: string) {
+  try {
+    const staleBatches = await prisma.realTimeImportBatch.findMany({
+      where: {
+        importedAt: { lt: realtimeRetentionCutoff() },
+        ...(currentBatchId ? { id: { not: currentBatchId } } : {})
+      },
+      select: { id: true },
+      take: 500
+    });
+    const staleIds = staleBatches.map((batch) => batch.id);
+    if (!staleIds.length) return;
+    await prisma.$transaction([
+      prisma.realTimeRecord.deleteMany({ where: { batchId: { in: staleIds } } }),
+      prisma.realTimeImportBatch.deleteMany({ where: { id: { in: staleIds } } })
+    ]);
+  } catch (error) {
+    console.warn("[realtime] Não foi possível limpar histórico antigo.", error);
+  }
+}
+
 export async function importRealtimeSnapshot(input: RealTimeImportInput) {
   const fileName = input.fileName.trim() || "realtime.xlsx";
   const source = input.source?.trim() || "kap-local";
@@ -275,6 +300,7 @@ export async function importRealtimeSnapshot(input: RealTimeImportInput) {
   });
 
   const importSummary = await summarizeImportedAgentRows(agentRows);
+  await pruneRealtimeHistory(batch.id);
 
   return {
     success: true,
@@ -335,13 +361,11 @@ export async function getRealtimeSnapshot(actor: Actor, options: RealtimeSnapsho
     };
   }
 
-  const [queueRecords, queueRealtime, agentRealtime] = await Promise.all([
-    prisma.realTimeRecord.findMany({ where: { batchId: batch.id, recordType: "QUEUE" }, orderBy: { rowNumber: "asc" }, take: realtimeRecordLimit }),
+  const [queueRealtime, agentRealtime] = await Promise.all([
     buildQueueRealtimeView(options),
     buildAgentRealtimeView(actor, options)
   ]);
 
-  const queues = buildDataset(queueRecords, batch.queueRows);
   const minutesSinceImport = Math.max(0, Math.floor((Date.now() - batch.importedAt.getTime()) / 60000));
 
   return {
@@ -361,10 +385,10 @@ export async function getRealtimeSnapshot(actor: Actor, options: RealtimeSnapsho
         rowsTotal: batch.rowsTotal,
         warnings: Array.isArray(batch.warnings) ? batch.warnings : []
       },
-      queues,
+      queues: emptyDataset(),
       queueView: queueRealtime,
       agents: agentRealtime,
-      kpis: buildKpis(queues.rows, agentRealtime.rows)
+      kpis: []
     }
   };
 }
@@ -375,6 +399,7 @@ export async function listRealtimeImports(actor: Actor) {
   }
 
   const imports = await prisma.realTimeImportBatch.findMany({
+    where: { importedAt: { gte: realtimeRetentionCutoff() } },
     orderBy: { importedAt: "desc" },
     take: 30,
     include: {
@@ -748,9 +773,9 @@ function validateRealtimeAgentRows(rows: RawRow[]) {
 
 async function buildQueueRealtimeView(options: RealtimeSnapshotOptions) {
   const batches = await prisma.realTimeImportBatch.findMany({
-    where: { status: "SUCCESS", queueRows: { gt: 0 } },
+    where: { status: "SUCCESS", queueRows: { gt: 0 }, importedAt: { gte: realtimeRetentionCutoff() } },
     orderBy: { importedAt: "desc" },
-    take: realtimeAgentHistoryBatchLimit,
+    take: realtimeViewHistoryBatchLimit,
     select: { id: true, fileName: true, importedAt: true, queueRows: true }
   });
 
@@ -863,9 +888,9 @@ async function buildQueueRealtimeView(options: RealtimeSnapshotOptions) {
 
 async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOptions) {
   const batches = await prisma.realTimeImportBatch.findMany({
-    where: { status: "SUCCESS", agentRows: { gt: 0 } },
+    where: { status: "SUCCESS", agentRows: { gt: 0 }, importedAt: { gte: realtimeRetentionCutoff() } },
     orderBy: { importedAt: "desc" },
-    take: realtimeAgentHistoryBatchLimit,
+    take: realtimeViewHistoryBatchLimit,
     select: { id: true, fileName: true, importedAt: true, agentRows: true }
   });
 
