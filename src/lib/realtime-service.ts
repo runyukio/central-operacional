@@ -549,7 +549,6 @@ export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQu
           "ciclo_download",
           "agente",
           "wb_login",
-          "status_cruzamento",
           "status_colaborador",
           "lob",
           "supervisor",
@@ -566,7 +565,6 @@ export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQu
           agentView.selectedCycle,
           row.displayName,
           row.wbLogin || row.rawWbLogin,
-          row.crossingStatus,
           row.employeeStatus,
           row.lob,
           row.supervisor,
@@ -884,10 +882,6 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
   const employeeMatches = await loadEmployeeMatches();
   employeeMatches.forEach((employee) => employeesByWb.set(normalizeWbLogin(employee.wbLogin), employee));
 
-  const actorEmail = actor.email.trim().toLowerCase();
-  const actorEmployee = employeeMatches.find((employee) => employee.userEmail.trim().toLowerCase() === actorEmail)
-    ?? employeeMatches.find((employee) => normalizeWbLogin(employee.wbLogin) === normalizeWbLogin(actor.email.split("@")[0] ?? ""));
-
   const latestBatchByCycle = new Map<string, { batchId: string; importedAt: Date }>();
   const prepared = records.map((record) => {
     const rawData = isPlainObject(record.rawData) ? record.rawData : {};
@@ -904,13 +898,9 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
   });
 
   const latestRecords = prepared.filter((item) => latestBatchByCycle.get(item.cycleDownload)?.batchId === item.record.batchId);
-  const role = actor.role;
-  const visibleRecords = role === "SUPERVISOR"
-    ? latestRecords.filter((item) => Boolean(actorEmployee && item.employee && (item.employee.supervisorId === actorEmployee.id || item.employee.id === actorEmployee.id)))
-    : latestRecords;
 
   const cycleMap = new Map<string, { value: string; importedAt: Date; rows: number }>();
-  visibleRecords.forEach((item) => {
+  latestRecords.forEach((item) => {
     const existing = cycleMap.get(item.cycleDownload);
     if (!existing) {
       cycleMap.set(item.cycleDownload, { value: item.cycleDownload, importedAt: item.record.batch.importedAt, rows: 1 });
@@ -932,7 +922,7 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
 
   const groupedByCycle = new Map<string, AgentCycleRow[]>();
   for (const cycle of cycles) {
-    groupedByCycle.set(cycle.value, aggregateAgentCycleRows(visibleRecords.filter((item) => item.cycleDownload === cycle.value)));
+    groupedByCycle.set(cycle.value, aggregateAgentCycleRows(latestRecords.filter((item) => item.cycleDownload === cycle.value)));
   }
 
   const currentRows = groupedByCycle.get(selectedCycle) ?? [];

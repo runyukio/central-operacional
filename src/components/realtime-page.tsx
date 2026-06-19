@@ -617,7 +617,6 @@ function AgentTable({
   const columns: Array<{ label: string; sortKey?: AgentSortKey }> = [
     { label: "Agente", sortKey: "displayName" },
     { label: "WB/Login", sortKey: "wbLogin" },
-    { label: "Cruzamento" },
     { label: "Status", sortKey: "employeeStatus" },
     { label: "LOB", sortKey: "lob" },
     { label: "Supervisor", sortKey: "supervisor" },
@@ -637,10 +636,10 @@ function AgentTable({
         <span>{rows.length} de {totalRows} agente(s) exibidos</span>
       </div>
       <div className="max-h-[680px] overflow-auto">
-        <table className="w-full min-w-[1400px] border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[1320px] border-separate border-spacing-0 text-left text-sm">
           <thead className="sticky top-0 z-10 bg-slate-50/95 text-xs uppercase tracking-wide text-muted backdrop-blur">
             <tr className="border-b border-slate-100">
-              <th colSpan={4} className="border-b border-slate-100 px-4 py-2 font-black text-blue-700">Identificação</th>
+              <th colSpan={3} className="border-b border-slate-100 px-4 py-2 font-black text-blue-700">Identificação</th>
               <th colSpan={5} className="border-b border-slate-100 px-4 py-2 font-black text-violet-700">Operação</th>
               <th colSpan={5} className="border-b border-slate-100 px-4 py-2 font-black text-emerald-700">Performance</th>
               <th className="border-b border-slate-100 px-4 py-2 font-black text-slate-600">Ação</th>
@@ -663,7 +662,6 @@ function AgentTable({
               <tr key={row.key} className={cn("border-t border-slate-100 transition hover:bg-blue-50/60", index % 2 ? "bg-slate-50/35" : "bg-white")}>
                 <td className="px-4 py-3 font-extrabold text-navy-950">{row.displayName}</td>
                 <td className="px-4 py-3 font-bold text-navy-950">{row.wbLogin || row.rawWbLogin || "-"}</td>
-                <td className="px-4 py-3"><StatusPill value={row.crossingStatus} /></td>
                 <td className="px-4 py-3 font-bold text-muted">{row.employeeStatus}</td>
                 <td className="px-4 py-3 font-bold">{row.lob}</td>
                 <td className="px-4 py-3 font-bold">{row.supervisor}</td>
