@@ -511,6 +511,8 @@ export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQu
           "latency_delta_formatada",
           "max_latency_formatada",
           "max_latency_delta_formatada",
+          "meta_latency_formatada",
+          "aderencia_latencia",
           "backlog",
           "backlog_delta"
         ],
@@ -531,20 +533,24 @@ export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQu
           row.deltas.latencyMs === null ? "Sem comparação" : formatMetricValue(row.deltas.latencyMs, "duration", true),
           formatDurationFromMs(row.current.maxLatencyMs),
           row.deltas.maxLatencyMs === null ? "Sem comparação" : formatMetricValue(row.deltas.maxLatencyMs, "duration", true),
+          formatSlaTargetMinutes(row.slaTargetMinutes),
+          calculateLatencyAdherence(row.current.maxLatencyMs, row.slaTargetMinutes),
           row.current.backlog,
           row.deltas.backlog ?? "Sem comparação"
         ])
       },
       {
         sheetName: "Detalhe por Fila",
-        headers: ["queue_id", "queue_name", "lob", "sla_target_minutes", "ciclo_download", "status_fila", "input", "output", "aht_formatado", "latency_formatada", "max_latency_formatada", "backlog"],
+        headers: ["queue_id", "queue_name", "lob", "sla_target_minutes", "meta_latency_formatada", "ciclo_download", "status_fila", "aderencia_latencia", "input", "output", "aht_formatado", "latency_formatada", "max_latency_formatada", "backlog"],
         rows: queueRows.flatMap((row) => row.history.map((item) => [
           row.queueId || "Sem Fila ID",
           row.queueName,
           row.lob,
           row.slaTargetMinutes ?? "Sem meta",
+          formatSlaTargetMinutes(row.slaTargetMinutes),
           item.cycleDownload,
           item.status,
+          calculateLatencyAdherence(item.maxLatencyMs, row.slaTargetMinutes),
           item.input,
           item.output,
           formatDurationFromMs(item.ahtMs),
@@ -555,11 +561,13 @@ export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQu
       },
       {
         sheetName: "Filas N/A",
-        headers: ["ciclo_download", "queue_id", "queue_name", "input", "output", "aht_formatado", "latency_formatada", "max_latency_formatada", "backlog"],
+        headers: ["ciclo_download", "queue_id", "queue_name", "meta_latency_formatada", "aderencia_latencia", "input", "output", "aht_formatado", "latency_formatada", "max_latency_formatada", "backlog"],
         rows: queueRows.filter((row) => row.lob === "N/A").map((row) => [
           queueView.selectedCycle,
           row.queueId || "Sem Fila ID",
           row.queueName,
+          formatSlaTargetMinutes(row.slaTargetMinutes),
+          calculateLatencyAdherence(row.current.maxLatencyMs, row.slaTargetMinutes),
           row.current.input,
           row.current.output,
           formatDurationFromMs(row.current.ahtMs),
@@ -1610,14 +1618,22 @@ function sortQueueRows(rows: QueueCycleRow[], sortBy = "backlog_desc") {
     latency_desc: { key: "latency", direction: "desc" },
     maxLatency_asc: { key: "maxLatency", direction: "asc" },
     maxLatency_desc: { key: "maxLatency", direction: "desc" },
+    slaTarget_asc: { key: "slaTarget", direction: "asc" },
+    slaTarget_desc: { key: "slaTarget", direction: "desc" },
+    latencyAdherence_asc: { key: "latencyAdherence", direction: "asc" },
+    latencyAdherence_desc: { key: "latencyAdherence", direction: "desc" },
     backlog_asc: { key: "backlog", direction: "asc" },
     backlog_desc: { key: "backlog", direction: "desc" }
   };
   const config = sortMap[sortBy] ?? sortMap.backlog_desc;
-  const numericKeys = new Set(["input", "output", "aht", "latency", "maxLatency", "backlog"]);
+  const numericKeys = new Set(["input", "output", "aht", "latency", "maxLatency", "slaTarget", "backlog"]);
   return sorted.sort((a, b) => {
     if (config.key === "status") {
       const diff = severity(a.status) - severity(b.status);
+      return (config.direction === "asc" ? diff : -diff) || a.queueId.localeCompare(b.queueId);
+    }
+    if (config.key === "latencyAdherence") {
+      const diff = latencyAdherenceSeverity(calculateLatencyAdherence(a.current.maxLatencyMs, a.slaTargetMinutes)) - latencyAdherenceSeverity(calculateLatencyAdherence(b.current.maxLatencyMs, b.slaTargetMinutes));
       return (config.direction === "asc" ? diff : -diff) || a.queueId.localeCompare(b.queueId);
     }
     if (!numericKeys.has(config.key)) {
@@ -1636,7 +1652,9 @@ function sortQueueRows(rows: QueueCycleRow[], sortBy = "backlog_desc") {
             ? a.current.latencyMs
             : config.key === "maxLatency"
               ? a.current.maxLatencyMs
-              : a.current.backlog;
+              : config.key === "slaTarget"
+                ? a.slaTargetMinutes
+                : a.current.backlog;
     const right = config.key === "input"
       ? b.current.input
       : config.key === "output"
@@ -1647,7 +1665,9 @@ function sortQueueRows(rows: QueueCycleRow[], sortBy = "backlog_desc") {
             ? b.current.latencyMs
             : config.key === "maxLatency"
               ? b.current.maxLatencyMs
-              : b.current.backlog;
+              : config.key === "slaTarget"
+                ? b.slaTargetMinutes
+                : b.current.backlog;
     if (left === null && right === null) return a.queueId.localeCompare(b.queueId);
     if (left === null) return 1;
     if (right === null) return -1;
@@ -1693,6 +1713,29 @@ function matchesEmployeeStatus(value: string, filter: string) {
   const normalizedFilter = normalizeHeader(filter);
   if (normalizedFilter === "ativo") return normalizedValue === "ativo" || normalizedValue === "active";
   return normalizedValue === normalizedFilter;
+}
+
+function calculateLatencyAdherence(maxLatencyMs: number | null, slaTargetMinutes: number | null) {
+  if (maxLatencyMs === null || !slaTargetMinutes || slaTargetMinutes <= 0) return "N/A";
+  const targetMs = slaTargetMinutes * 60 * 1000;
+  const adherenceRatio = maxLatencyMs / targetMs;
+  if (adherenceRatio < 0.7) return "OK";
+  if (adherenceRatio < 1) return "Alerta";
+  return "Estourado";
+}
+
+function latencyAdherenceSeverity(status: string) {
+  if (status === "Estourado") return 3;
+  if (status === "Alerta") return 2;
+  if (status === "OK") return 1;
+  return 0;
+}
+
+function formatSlaTargetMinutes(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "Sem meta";
+  if (value < 60) return `${value} min`;
+  if (value % 60 === 0) return `${value / 60}h`;
+  return `${Math.floor(value / 60)}h ${value % 60}min`;
 }
 
 export function formatDurationFromMs(value: number | null | undefined) {

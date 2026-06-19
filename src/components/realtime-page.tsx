@@ -2,16 +2,19 @@
 
 import {
   Activity,
+  AlertTriangle,
   ArrowDown,
   ArrowUp,
   CalendarDays,
+  CheckCircle2,
   Database,
   Download,
   Eye,
   History,
   RefreshCw,
   Search,
-  X
+  X,
+  XCircle
 } from "lucide-react";
 import { useEffect, useId, useMemo, useState } from "react";
 import { Area, AreaChart, ResponsiveContainer, Tooltip as RechartsTooltip, YAxis } from "recharts";
@@ -43,6 +46,7 @@ type RealTimeDataset = {
 };
 
 type QueueStatus = "OK" | "Estável" | "Risco" | "Estourado" | "N/A";
+type LatencyAdherenceStatus = "OK" | "Alerta" | "Estourado" | "N/A";
 
 type QueueMetric = {
   input: number;
@@ -249,7 +253,7 @@ type QueueFilters = {
   queueId: string;
 };
 
-type QueueSortKey = "status" | "lob" | "queueId" | "input" | "output" | "aht" | "latency" | "maxLatency" | "backlog";
+type QueueSortKey = "status" | "lob" | "queueId" | "input" | "output" | "aht" | "latency" | "maxLatency" | "slaTarget" | "latencyAdherence" | "backlog";
 type QueueSortState = { key: QueueSortKey; direction: "asc" | "desc" };
 type QueueLobCardData = {
   lob: "ADS" | "VIDEO" | "COMMENTS";
@@ -310,7 +314,7 @@ const defaultAgentSort: AgentSortState = { key: "submit", direction: "desc" };
 const numericAgentSortKeys = new Set<AgentSortKey>(["submit", "aht", "moderation", "timeout", "refresh"]);
 const defaultQueueFilters: QueueFilters = { search: "", lob: "MAPPED", status: "", slaTarget: "", queueId: "" };
 const defaultQueueSort: QueueSortState = { key: "backlog", direction: "desc" };
-const numericQueueSortKeys = new Set<QueueSortKey>(["input", "output", "aht", "latency", "maxLatency", "backlog"]);
+const numericQueueSortKeys = new Set<QueueSortKey>(["input", "output", "aht", "latency", "maxLatency", "slaTarget", "backlog"]);
 
 export function RealTimePage() {
   const [payload, setPayload] = useState<RealTimePayload | null>(null);
@@ -779,6 +783,8 @@ function StructuredQueueTable({
     { label: "AHT", sortKey: "aht" },
     { label: "Latência", sortKey: "latency" },
     { label: "Max Latência", sortKey: "maxLatency" },
+    { label: "Meta Latência", sortKey: "slaTarget" },
+    { label: "Aderência Latência", sortKey: "latencyAdherence" },
     { label: "Backlog", sortKey: "backlog" },
     { label: "Ações" }
   ];
@@ -789,7 +795,7 @@ function StructuredQueueTable({
         <span>{rows.length} de {totalRows} fila(s) exibidas</span>
       </div>
       <div className="max-h-[680px] overflow-auto">
-        <table className="w-full min-w-[1180px] border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[1460px] border-separate border-spacing-0 text-left text-sm">
           <thead className="sticky top-0 z-10 bg-slate-50/95 text-xs uppercase tracking-wide text-muted backdrop-blur">
             <tr>
               {columns.map((column) => (
@@ -815,6 +821,8 @@ function StructuredQueueTable({
                 <td className="px-4 py-3"><AgentMetricCell current={row.current.ahtMs} previous={row.previous?.ahtMs ?? null} format="duration" positiveDirection="down" /></td>
                 <td className="px-4 py-3"><AgentMetricCell current={row.current.latencyMs} previous={row.previous?.latencyMs ?? null} format="duration" positiveDirection="down" /></td>
                 <td className="px-4 py-3"><AgentMetricCell current={row.current.maxLatencyMs} previous={row.previous?.maxLatencyMs ?? null} format="duration" positiveDirection="down" /></td>
+                <td className="px-4 py-3"><LatencyTargetCell minutes={row.slaTargetMinutes} /></td>
+                <td className="px-4 py-3"><LatencyAdherencePill status={resolveLatencyAdherence(row.current.maxLatencyMs, row.slaTargetMinutes)} /></td>
                 <td className="px-4 py-3"><AgentMetricCell current={row.current.backlog} previous={row.previous?.backlog ?? null} format="number" positiveDirection="down" /></td>
                 <td className="px-4 py-3">
                   <button type="button" onClick={() => onSelect(row)} className="premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold text-navy-950">
@@ -847,6 +855,48 @@ function QueueStatusPill({ status }: { status: QueueStatus }) {
           ? "bg-red-100 text-red-700"
           : "bg-slate-100 text-slate-700";
   return <span className={cn("inline-flex rounded-full px-2.5 py-1 text-xs font-black", tone)}>{status}</span>;
+}
+
+function resolveLatencyAdherence(maxLatencyMs: number | null, slaTargetMinutes: number | null): LatencyAdherenceStatus {
+  if (maxLatencyMs === null || !slaTargetMinutes || slaTargetMinutes <= 0) return "N/A";
+  const targetMs = slaTargetMinutes * 60 * 1000;
+  const adherenceRatio = maxLatencyMs / targetMs;
+  if (adherenceRatio < 0.7) return "OK";
+  if (adherenceRatio < 1) return "Alerta";
+  return "Estourado";
+}
+
+function latencyAdherenceSeverity(status: LatencyAdherenceStatus) {
+  if (status === "Estourado") return 3;
+  if (status === "Alerta") return 2;
+  if (status === "OK") return 1;
+  return 0;
+}
+
+function LatencyTargetCell({ minutes }: { minutes: number | null }) {
+  return (
+    <div className="min-w-[92px]">
+      <p className="font-black text-navy-950">{minutes === null ? "Sem meta" : formatSlaTargetLabel(String(minutes))}</p>
+      <p className="mt-1 text-[11px] font-black uppercase tracking-wide text-muted">meta</p>
+    </div>
+  );
+}
+
+function LatencyAdherencePill({ status }: { status: LatencyAdherenceStatus }) {
+  const config = status === "OK"
+    ? { className: "bg-emerald-100 text-emerald-700", icon: CheckCircle2 }
+    : status === "Alerta"
+      ? { className: "bg-amber-100 text-amber-800", icon: AlertTriangle }
+      : status === "Estourado"
+        ? { className: "bg-red-100 text-red-700", icon: XCircle }
+        : { className: "bg-slate-100 text-slate-700", icon: Activity };
+  const Icon = config.icon;
+  return (
+    <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-black", config.className)}>
+      <Icon className="h-3.5 w-3.5" />
+      {status}
+    </span>
+  );
 }
 
 function RealtimeCyclePicker({
@@ -1077,13 +1127,19 @@ function QueueDetailDrawer({ row, onClose }: { row: QueueRealtimeRow; onClose: (
           </button>
         </div>
 
-        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <SmallMetric title="Input" value={formatInteger(row.current.input)} previous={row.previous ? formatInteger(row.previous.input) : "Sem comparação"} />
           <SmallMetric title="Output" value={formatInteger(row.current.output)} previous={row.previous ? formatInteger(row.previous.output) : "Sem comparação"} />
           <SmallMetric title="AHT" value={formatDurationFromMs(row.current.ahtMs)} previous={row.previous ? formatDurationFromMs(row.previous.ahtMs) : "Sem comparação"} />
           <SmallMetric title="Latência" value={formatDurationFromMs(row.current.latencyMs)} previous={row.previous ? formatDurationFromMs(row.previous.latencyMs) : "Sem comparação"} />
           <SmallMetric title="Max Latência" value={formatDurationFromMs(row.current.maxLatencyMs)} previous={row.previous ? formatDurationFromMs(row.previous.maxLatencyMs) : "Sem comparação"} />
+          <SmallMetric title="Meta Latência" value={row.slaTargetMinutes === null ? "Sem meta" : formatSlaTargetLabel(String(row.slaTargetMinutes))} previous="referência da fila" />
           <SmallMetric title="Backlog" value={formatInteger(row.current.backlog)} previous={row.previous ? formatInteger(row.previous.backlog) : "Sem comparação"} />
+          <div className="premium-card p-4">
+            <p className="text-xs font-black uppercase tracking-wide text-muted">Aderência Latência</p>
+            <div className="mt-3"><LatencyAdherencePill status={resolveLatencyAdherence(row.current.maxLatencyMs, row.slaTargetMinutes)} /></div>
+            <p className="mt-2 text-xs font-bold text-muted">Max Latência vs meta</p>
+          </div>
         </div>
 
         <div className="mt-5 grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
@@ -1094,6 +1150,10 @@ function QueueDetailDrawer({ row, onClose }: { row: QueueRealtimeRow; onClose: (
             <InfoLine label="LOB" value={row.lob} />
             <InfoLine label="Meta SLA" value={row.slaTargetMinutes === null ? "Sem meta" : `${row.slaTargetMinutes} min`} />
             <InfoLine label="Status" value={row.status} />
+            <div className="mt-3 flex items-center justify-between gap-3 border-t border-slate-100 pt-3">
+              <span className="text-xs font-black uppercase tracking-wide text-muted">Aderência Latência</span>
+              <LatencyAdherencePill status={resolveLatencyAdherence(row.current.maxLatencyMs, row.slaTargetMinutes)} />
+            </div>
           </div>
           <div className="premium-card overflow-hidden">
             <div className="border-b border-slate-100 px-4 py-3">
@@ -1119,7 +1179,7 @@ function QueueDetailDrawer({ row, onClose }: { row: QueueRealtimeRow; onClose: (
           <div className="overflow-x-auto">
             <table className="min-w-full text-left text-sm">
               <thead className="bg-slate-50 text-xs uppercase tracking-wide text-muted">
-                <tr>{["Ciclo", "Status", "Input", "Output", "AHT", "Latência", "Max Latência", "Backlog"].map((column) => <th key={column} className="px-3 py-2 font-black">{column}</th>)}</tr>
+                <tr>{["Ciclo", "Status", "Input", "Output", "AHT", "Latência", "Max Latência", "Meta Latência", "Aderência", "Backlog"].map((column) => <th key={column} className="px-3 py-2 font-black">{column}</th>)}</tr>
               </thead>
               <tbody>
                 {row.history.map((item) => (
@@ -1131,12 +1191,14 @@ function QueueDetailDrawer({ row, onClose }: { row: QueueRealtimeRow; onClose: (
                     <td className="px-3 py-3 font-bold">{formatDurationFromMs(item.ahtMs)}</td>
                     <td className="px-3 py-3 font-bold">{formatDurationFromMs(item.latencyMs)}</td>
                     <td className="px-3 py-3 font-bold">{formatDurationFromMs(item.maxLatencyMs)}</td>
+                    <td className="px-3 py-3 font-bold">{row.slaTargetMinutes === null ? "Sem meta" : formatSlaTargetLabel(String(row.slaTargetMinutes))}</td>
+                    <td className="px-3 py-3"><LatencyAdherencePill status={resolveLatencyAdherence(item.maxLatencyMs, row.slaTargetMinutes)} /></td>
                     <td className="px-3 py-3 font-bold">{formatInteger(item.backlog)}</td>
                   </tr>
                 ))}
                 {!row.history.length ? (
                   <tr>
-                    <td colSpan={8} className="px-3 py-10 text-center text-sm font-bold text-muted">Sem histórico disponível para esta fila.</td>
+                    <td colSpan={10} className="px-3 py-10 text-center text-sm font-bold text-muted">Sem histórico disponível para esta fila.</td>
                   </tr>
                 ) : null}
               </tbody>
@@ -1778,6 +1840,7 @@ function compareQueueRows(a: QueueRealtimeRow, b: QueueRealtimeRow, sort: QueueS
   };
   const textValue = (row: QueueRealtimeRow) => {
     if (sort.key === "status") return String(severity(row.status));
+    if (sort.key === "latencyAdherence") return String(latencyAdherenceSeverity(resolveLatencyAdherence(row.current.maxLatencyMs, row.slaTargetMinutes)));
     if (sort.key === "lob") return row.lob;
     if (sort.key === "queueId") return row.queueId || row.queueName;
     return row.queueId || row.queueName;
@@ -1788,6 +1851,7 @@ function compareQueueRows(a: QueueRealtimeRow, b: QueueRealtimeRow, sort: QueueS
     if (sort.key === "aht") return row.current.ahtMs;
     if (sort.key === "latency") return row.current.latencyMs;
     if (sort.key === "maxLatency") return row.current.maxLatencyMs;
+    if (sort.key === "slaTarget") return row.slaTargetMinutes;
     if (sort.key === "backlog") return row.current.backlog;
     return null;
   };
@@ -1802,8 +1866,8 @@ function compareQueueRows(a: QueueRealtimeRow, b: QueueRealtimeRow, sort: QueueS
     return diff || a.queueId.localeCompare(b.queueId);
   }
 
-  if (sort.key === "status") {
-    const diff = severity(a.status) - severity(b.status);
+  if (sort.key === "status" || sort.key === "latencyAdherence") {
+    const diff = Number(textValue(a)) - Number(textValue(b));
     return (sort.direction === "asc" ? diff : -diff) || a.queueId.localeCompare(b.queueId);
   }
 
