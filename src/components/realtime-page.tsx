@@ -797,7 +797,7 @@ function StructuredQueueTable({
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs font-black uppercase tracking-wide text-muted">
         <span>{rows.length} de {totalRows} fila(s) exibidas</span>
       </div>
-      <div className="max-h-[680px] overflow-auto">
+      <div className="overflow-x-auto">
         <table className="w-full min-w-[1320px] border-separate border-spacing-0 text-left text-sm">
           <thead className="sticky top-0 z-10 bg-slate-50/95 text-xs uppercase tracking-wide text-muted backdrop-blur">
             <tr>
