@@ -23,6 +23,7 @@ export type RealtimeSnapshotOptions = {
 };
 
 export type RealtimeExportQuery = RealtimeSnapshotOptions & {
+  view?: string | null;
   search?: string | null;
   crossingStatus?: string | null;
   personType?: string | null;
@@ -32,6 +33,11 @@ export type RealtimeExportQuery = RealtimeSnapshotOptions & {
   shift?: string | null;
   skill?: string | null;
   roleTitle?: string | null;
+  queueSearch?: string | null;
+  queueLob?: string | null;
+  queueStatus?: string | null;
+  queueSlaTarget?: string | null;
+  queueId?: string | null;
   sortBy?: string | null;
 };
 
@@ -98,6 +104,44 @@ type AgentCycleRow = {
     moderationMs: number;
     timeout: number;
     refresh: number;
+  }>;
+};
+
+type QueueStatus = "OK" | "Estável" | "Risco" | "Estourado" | "N/A";
+
+type QueueCycleMetric = {
+  input: number;
+  output: number;
+  ahtMs: number | null;
+  latencyMs: number | null;
+  backlog: number;
+  sourceRows: number;
+};
+
+type QueueCycleRow = {
+  key: string;
+  queueId: string;
+  queueName: string;
+  lob: "ADS" | "VIDEO" | "COMMENTS" | "N/A";
+  slaTargetMinutes: number | null;
+  status: QueueStatus;
+  current: QueueCycleMetric;
+  previous: QueueCycleMetric | null;
+  deltas: {
+    input: number | null;
+    output: number | null;
+    ahtMs: number | null;
+    latencyMs: number | null;
+    backlog: number | null;
+  };
+  history: Array<{
+    cycleDownload: string;
+    status: QueueStatus;
+    input: number;
+    output: number;
+    ahtMs: number | null;
+    latencyMs: number | null;
+    backlog: number;
   }>;
 };
 
@@ -279,14 +323,16 @@ export async function getRealtimeSnapshot(actor: Actor, options: RealtimeSnapsho
           warnings: []
         },
         queues: emptyDataset(),
+        queueView: emptyQueueRealtimeView(),
         agents: emptyAgentRealtimeView(),
         kpis: []
       }
     };
   }
 
-  const [queueRecords, agentRealtime] = await Promise.all([
+  const [queueRecords, queueRealtime, agentRealtime] = await Promise.all([
     prisma.realTimeRecord.findMany({ where: { batchId: batch.id, recordType: "QUEUE" }, orderBy: { rowNumber: "asc" }, take: realtimeRecordLimit }),
+    buildQueueRealtimeView(options),
     buildAgentRealtimeView(actor, options)
   ]);
 
@@ -311,6 +357,7 @@ export async function getRealtimeSnapshot(actor: Actor, options: RealtimeSnapsho
         warnings: Array.isArray(batch.warnings) ? batch.warnings : []
       },
       queues,
+      queueView: queueRealtime,
       agents: agentRealtime,
       kpis: buildKpis(queues.rows, agentRealtime.rows)
     }
@@ -372,14 +419,17 @@ export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQu
   if (!snapshotData) return { error: "Não foi possível exportar Real Time.", status: 500 };
 
   const agentView = snapshotData.agents;
+  const queueView = snapshotData.queueView;
   const rows = sortAgentRows(filterAgentRows(agentView.rows, query), query.sortBy ?? "submit_desc");
+  const queueRows = sortQueueRows(filterQueueRows(queueView.rows, query), query.sortBy ?? "backlog_desc");
   const filteredSummary = summarizeAgentRows(rows);
+  const filteredQueueSummary = summarizeQueueRowsForExport(queueRows);
   const unfilteredUnmatched = agentView.rows.filter((row) => row.crossingStatus === "Não encontrado");
   const importRows = (await listRealtimeImports(actor));
   const imports = "error" in importRows ? [] : importRows.data;
 
   return {
-    fileName: `real_time_agentes_${agentView.selectedCycle || "sem_ciclo"}.xlsx`,
+    fileName: `real_time_${query.view === "queues" ? "filas" : "agentes"}_${agentView.selectedCycle || queueView.selectedCycle || "sem_ciclo"}.xlsx`,
     sheetName: "Resumo",
     headers: ["ciclo_download", "ciclo_anterior", "submit_total", "aht_medio", "moderacao_total", "timeout", "refresh"],
     rows: [[
@@ -392,6 +442,95 @@ export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQu
       filteredSummary.refresh
     ]],
     sheets: [
+      {
+        sheetName: "Resumo Filas",
+        headers: ["ciclo_download", "ciclo_anterior", "filas", "input", "output", "aht_medio", "latencia_media", "backlog", "ok", "estavel", "risco", "estourado", "na"],
+        rows: [[
+          queueView.selectedCycle,
+          queueView.previousCycle || "Sem comparação",
+          queueRows.length,
+          filteredQueueSummary.input,
+          filteredQueueSummary.output,
+          formatDurationFromMs(filteredQueueSummary.ahtMs),
+          formatDurationFromMs(filteredQueueSummary.latencyMs),
+          filteredQueueSummary.backlog,
+          queueRows.filter((row) => row.status === "OK").length,
+          queueRows.filter((row) => row.status === "Estável").length,
+          queueRows.filter((row) => row.status === "Risco").length,
+          queueRows.filter((row) => row.status === "Estourado").length,
+          queueRows.filter((row) => row.status === "N/A").length
+        ]]
+      },
+      {
+        sheetName: "Filas",
+        headers: [
+          "ciclo_download",
+          "status_fila",
+          "lob",
+          "queue_id",
+          "queue_name",
+          "sla_target_minutes",
+          "input",
+          "input_delta",
+          "output",
+          "output_delta",
+          "aht_formatado",
+          "aht_delta_formatado",
+          "latency_formatada",
+          "latency_delta_formatada",
+          "backlog",
+          "backlog_delta"
+        ],
+        rows: queueRows.map((row) => [
+          queueView.selectedCycle,
+          row.status,
+          row.lob,
+          row.queueId || "Sem Fila ID",
+          row.queueName,
+          row.slaTargetMinutes ?? "Sem meta",
+          row.current.input,
+          row.deltas.input ?? "Sem comparação",
+          row.current.output,
+          row.deltas.output ?? "Sem comparação",
+          formatDurationFromMs(row.current.ahtMs),
+          row.deltas.ahtMs === null ? "Sem comparação" : formatMetricValue(row.deltas.ahtMs, "duration", true),
+          formatDurationFromMs(row.current.latencyMs),
+          row.deltas.latencyMs === null ? "Sem comparação" : formatMetricValue(row.deltas.latencyMs, "duration", true),
+          row.current.backlog,
+          row.deltas.backlog ?? "Sem comparação"
+        ])
+      },
+      {
+        sheetName: "Detalhe por Fila",
+        headers: ["queue_id", "queue_name", "lob", "sla_target_minutes", "ciclo_download", "status_fila", "input", "output", "aht_formatado", "latency_formatada", "backlog"],
+        rows: queueRows.flatMap((row) => row.history.map((item) => [
+          row.queueId || "Sem Fila ID",
+          row.queueName,
+          row.lob,
+          row.slaTargetMinutes ?? "Sem meta",
+          item.cycleDownload,
+          item.status,
+          item.input,
+          item.output,
+          formatDurationFromMs(item.ahtMs),
+          formatDurationFromMs(item.latencyMs),
+          item.backlog
+        ]))
+      },
+      {
+        sheetName: "Filas N/A",
+        headers: ["ciclo_download", "queue_id", "queue_name", "input", "output", "aht_formatado", "latency_formatada", "backlog"],
+        rows: queueRows.filter((row) => row.lob === "N/A").map((row) => [
+          queueView.selectedCycle,
+          row.queueId || "Sem Fila ID",
+          row.queueName,
+          row.current.input,
+          row.current.output,
+          formatDurationFromMs(row.current.ahtMs),
+          formatDurationFromMs(row.current.latencyMs),
+          row.current.backlog
+        ])
+      },
       {
         sheetName: "Agentes Real Time",
         headers: [
@@ -595,6 +734,114 @@ function validateRealtimeAgentRows(rows: RawRow[]) {
   });
 
   return { validRows, rowErrors };
+}
+
+async function buildQueueRealtimeView(options: RealtimeSnapshotOptions) {
+  const batches = await prisma.realTimeImportBatch.findMany({
+    where: { status: "SUCCESS", queueRows: { gt: 0 } },
+    orderBy: { importedAt: "desc" },
+    take: realtimeAgentHistoryBatchLimit,
+    select: { id: true, fileName: true, importedAt: true, queueRows: true }
+  });
+
+  if (!batches.length) return emptyQueueRealtimeView();
+
+  const batchIds = batches.map((batch) => batch.id);
+  const records = await prisma.realTimeRecord.findMany({
+    where: { recordType: "QUEUE", batchId: { in: batchIds } },
+    orderBy: { rowNumber: "asc" },
+    include: { batch: { select: { id: true, importedAt: true, fileName: true } } }
+  });
+
+  const latestBatchByCycle = new Map<string, { batchId: string; importedAt: Date }>();
+  const prepared = records.map((record) => {
+    const rawData = isPlainObject(record.rawData) ? record.rawData : {};
+    const cycleDownload = extractCycleDownload(rawData) || formatCycleFromDate(record.batch.importedAt);
+    const currentLatest = latestBatchByCycle.get(cycleDownload);
+    if (!currentLatest || record.batch.importedAt > currentLatest.importedAt) {
+      latestBatchByCycle.set(cycleDownload, { batchId: record.batchId, importedAt: record.batch.importedAt });
+    }
+    return { record, rawData, cycleDownload };
+  });
+
+  const latestRecords = prepared.filter((item) => latestBatchByCycle.get(item.cycleDownload)?.batchId === item.record.batchId);
+  const cycleMap = new Map<string, { value: string; importedAt: Date; rows: number }>();
+  latestRecords.forEach((item) => {
+    const existing = cycleMap.get(item.cycleDownload);
+    if (!existing) {
+      cycleMap.set(item.cycleDownload, { value: item.cycleDownload, importedAt: item.record.batch.importedAt, rows: 1 });
+    } else {
+      existing.rows += 1;
+      if (item.record.batch.importedAt > existing.importedAt) existing.importedAt = item.record.batch.importedAt;
+    }
+  });
+
+  const cycles = Array.from(cycleMap.values())
+    .sort((a, b) => b.importedAt.getTime() - a.importedAt.getTime() || b.value.localeCompare(a.value))
+    .map((cycle) => ({ ...cycle, importedAt: cycle.importedAt.toISOString(), importedAtLabel: formatDateTime(cycle.importedAt) }));
+
+  if (!cycles.length) return emptyQueueRealtimeView();
+
+  const selectedCycle = cycles.some((cycle) => cycle.value === options.cycleDownload) ? String(options.cycleDownload) : cycles[0].value;
+  const selectedIndex = cycles.findIndex((cycle) => cycle.value === selectedCycle);
+  const previousCycle = selectedIndex >= 0 ? cycles[selectedIndex + 1]?.value ?? "" : "";
+
+  const groupedByCycle = new Map<string, QueueCycleRow[]>();
+  for (const cycle of cycles) {
+    groupedByCycle.set(cycle.value, aggregateQueueCycleRows(latestRecords.filter((item) => item.cycleDownload === cycle.value)));
+  }
+
+  const currentRows = groupedByCycle.get(selectedCycle) ?? [];
+  const previousRows = groupedByCycle.get(previousCycle) ?? [];
+  const previousByKey = new Map(previousRows.map((row) => [row.key, row.current]));
+  const historyByKey = new Map<string, QueueCycleRow["history"]>();
+
+  for (const cycle of cycles) {
+    for (const row of groupedByCycle.get(cycle.value) ?? []) {
+      const history = historyByKey.get(row.key) ?? [];
+      history.push({
+        cycleDownload: cycle.value,
+        status: row.status,
+        input: row.current.input,
+        output: row.current.output,
+        ahtMs: row.current.ahtMs,
+        latencyMs: row.current.latencyMs,
+        backlog: row.current.backlog
+      });
+      historyByKey.set(row.key, history);
+    }
+  }
+
+  const rows = currentRows
+    .map((row) => {
+      const previous = previousByKey.get(row.key) ?? null;
+      return {
+        ...row,
+        previous,
+        deltas: {
+          input: previous ? row.current.input - previous.input : null,
+          output: previous ? row.current.output - previous.output : null,
+          ahtMs: previous && row.current.ahtMs !== null && previous.ahtMs !== null ? row.current.ahtMs - previous.ahtMs : null,
+          latencyMs: previous && row.current.latencyMs !== null && previous.latencyMs !== null ? row.current.latencyMs - previous.latencyMs : null,
+          backlog: previous ? row.current.backlog - previous.backlog : null
+        },
+        history: historyByKey.get(row.key) ?? row.history
+      };
+    })
+    .sort(compareQueueRowsDefault);
+
+  return {
+    cycles,
+    selectedCycle,
+    previousCycle,
+    filters: {
+      lobs: countBy(rows.map((row) => row.lob)),
+      statuses: countBy(rows.map((row) => row.status)),
+      slaTargets: countBy(rows.map((row) => row.slaTargetMinutes === null ? "Sem meta" : String(row.slaTargetMinutes))),
+      queueIds: countBy(rows.map((row) => row.queueId || "Sem Fila ID"))
+    },
+    rows
+  };
 }
 
 async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOptions) {
@@ -882,6 +1129,153 @@ function aggregateAgentCycleRows(items: Array<{
   });
 }
 
+function aggregateQueueCycleRows(items: Array<{
+  rawData: RawRow;
+  cycleDownload: string;
+}>) {
+  type MutableQueueAgg = {
+    key: string;
+    queueId: string;
+    queueName: string;
+    lob: "ADS" | "VIDEO" | "COMMENTS" | "N/A";
+    slaTargetMinutes: number | null;
+    input: number;
+    output: number;
+    backlog: number;
+    weightedAhtMs: number;
+    simpleAhtMs: number;
+    simpleAhtCount: number;
+    weightedLatencyByBacklogMs: number;
+    latencyBacklogWeight: number;
+    weightedLatencyByInputMs: number;
+    latencyInputWeight: number;
+    simpleLatencyMs: number;
+    simpleLatencyCount: number;
+    sourceRows: number;
+  };
+
+  const groups = new Map<string, MutableQueueAgg>();
+
+  for (const item of items) {
+    const queueReference = resolveQueueReference(
+      rawText(item.rawData, ["队列id", "Fila ID", "queue_id", "queue id"]),
+      rawText(item.rawData, ["队列名称", "当前队列", "Nome da fila", "queue_name", "queue name", "Fila atual"])
+    );
+    const key = queueReference.queueId || queueReference.queueName;
+    const input = Math.max(0, parseRealtimeNumberFromRow(item.rawData, ["进审量", "input", "Input"]));
+    const output = Math.max(0, parseRealtimeNumberFromRow(item.rawData, ["审核量", "output", "Output"]));
+    const ahtMs = parseOptionalRealtimeNumberFromRow(item.rawData, ["平均AHT", "平均AHT（毫秒）", "avg_aht_ms", "aht_ms"]);
+    const latencyMs = parseOptionalRealtimeNumberFromRow(item.rawData, ["平均延时（毫秒）", "latency_ms", "sla_ms"]);
+    const backlog = Math.max(0, parseRealtimeNumberFromRow(item.rawData, ["待审量", "backlog", "Backlog"]));
+    const group = groups.get(key) ?? {
+      key,
+      queueId: queueReference.queueId,
+      queueName: queueReference.queueName,
+      lob: queueReference.lob,
+      slaTargetMinutes: queueReference.slaTargetMinutes,
+      input: 0,
+      output: 0,
+      backlog: 0,
+      weightedAhtMs: 0,
+      simpleAhtMs: 0,
+      simpleAhtCount: 0,
+      weightedLatencyByBacklogMs: 0,
+      latencyBacklogWeight: 0,
+      weightedLatencyByInputMs: 0,
+      latencyInputWeight: 0,
+      simpleLatencyMs: 0,
+      simpleLatencyCount: 0,
+      sourceRows: 0
+    };
+
+    group.input += input;
+    group.output += output;
+    group.backlog += backlog;
+    group.sourceRows += 1;
+    if (ahtMs !== null && ahtMs >= 0) {
+      if (output > 0) group.weightedAhtMs += ahtMs * output;
+      else {
+        group.simpleAhtMs += ahtMs;
+        group.simpleAhtCount += 1;
+      }
+    }
+    if (latencyMs !== null && latencyMs >= 0) {
+      if (backlog > 0) {
+        group.weightedLatencyByBacklogMs += latencyMs * backlog;
+        group.latencyBacklogWeight += backlog;
+      } else if (input > 0) {
+        group.weightedLatencyByInputMs += latencyMs * input;
+        group.latencyInputWeight += input;
+      } else {
+        group.simpleLatencyMs += latencyMs;
+        group.simpleLatencyCount += 1;
+      }
+    }
+    groups.set(key, group);
+  }
+
+  return Array.from(groups.values()).map((group): QueueCycleRow => {
+    const ahtMs = resolveAhtMs(group.output, group.weightedAhtMs, group.simpleAhtMs, group.simpleAhtCount);
+    const latencyMs = resolveQueueLatencyMs(group);
+    const status = calculateQueueStatus(latencyMs, group.slaTargetMinutes);
+    return {
+      key: group.key,
+      queueId: group.queueId,
+      queueName: group.queueName,
+      lob: group.lob,
+      slaTargetMinutes: group.slaTargetMinutes,
+      status,
+      current: {
+        input: group.input,
+        output: group.output,
+        ahtMs,
+        latencyMs,
+        backlog: group.backlog,
+        sourceRows: group.sourceRows
+      },
+      previous: null,
+      deltas: { input: null, output: null, ahtMs: null, latencyMs: null, backlog: null },
+      history: []
+    };
+  });
+}
+
+function resolveQueueLatencyMs(group: {
+  weightedLatencyByBacklogMs: number;
+  latencyBacklogWeight: number;
+  weightedLatencyByInputMs: number;
+  latencyInputWeight: number;
+  simpleLatencyMs: number;
+  simpleLatencyCount: number;
+}) {
+  if (group.latencyBacklogWeight > 0) return group.weightedLatencyByBacklogMs / group.latencyBacklogWeight;
+  if (group.latencyInputWeight > 0) return group.weightedLatencyByInputMs / group.latencyInputWeight;
+  if (group.simpleLatencyCount > 0) return group.simpleLatencyMs / group.simpleLatencyCount;
+  return null;
+}
+
+function calculateQueueStatus(latencyMs: number | null, slaTargetMinutes: number | null): QueueStatus {
+  if (latencyMs === null || !slaTargetMinutes || slaTargetMinutes <= 0) return "N/A";
+  const targetMs = slaTargetMinutes * 60 * 1000;
+  if (latencyMs <= targetMs * 0.8) return "OK";
+  if (latencyMs <= targetMs) return "Estável";
+  if (latencyMs <= targetMs * 1.2) return "Risco";
+  return "Estourado";
+}
+
+function compareQueueRowsDefault(a: QueueCycleRow, b: QueueCycleRow) {
+  const severity = (status: QueueStatus) => {
+    if (status === "Estourado") return 4;
+    if (status === "Risco") return 3;
+    if (status === "Estável") return 2;
+    if (status === "OK") return 1;
+    return 0;
+  };
+  return severity(b.status) - severity(a.status)
+    || b.current.backlog - a.current.backlog
+    || a.queueId.localeCompare(b.queueId);
+}
+
 function summarizeAgentRows(rows: AgentCycleRow[]) {
   const submit = rows.reduce((sum, row) => sum + row.current.submit, 0);
   const weightedAht = rows.reduce((sum, row) => sum + (row.current.ahtMs !== null ? row.current.ahtMs * row.current.submit : 0), 0);
@@ -942,6 +1336,21 @@ function emptyAgentRealtimeView() {
       roleTitles: [] as ReturnType<typeof countBy>
     },
     rows: [] as AgentCycleRow[]
+  };
+}
+
+function emptyQueueRealtimeView() {
+  return {
+    cycles: [] as Array<{ value: string; importedAt: string; importedAtLabel: string; rows: number }>,
+    selectedCycle: "",
+    previousCycle: "",
+    filters: {
+      lobs: [] as ReturnType<typeof countBy>,
+      statuses: [] as ReturnType<typeof countBy>,
+      slaTargets: [] as ReturnType<typeof countBy>,
+      queueIds: [] as ReturnType<typeof countBy>
+    },
+    rows: [] as QueueCycleRow[]
   };
 }
 
@@ -1105,6 +1514,121 @@ function sortAgentRows(rows: AgentCycleRow[], sortBy = "submit_desc") {
     const diff = config.direction === "asc" ? left - right : right - left;
     return diff || a.displayName.localeCompare(b.displayName);
   });
+}
+
+function filterQueueRows(rows: QueueCycleRow[], query: RealtimeExportQuery) {
+  const search = normalizeHeader(String(query.queueSearch ?? ""));
+  return rows.filter((row) => {
+    if (query.queueLob && row.lob !== query.queueLob) return false;
+    if (query.queueStatus && row.status !== query.queueStatus) return false;
+    if (query.queueSlaTarget) {
+      const target = row.slaTargetMinutes === null ? "Sem meta" : String(row.slaTargetMinutes);
+      if (target !== query.queueSlaTarget) return false;
+    }
+    if (query.queueId && (row.queueId || "Sem Fila ID") !== query.queueId) return false;
+    if (!search) return true;
+    return normalizeHeader([
+      row.queueId,
+      row.queueName,
+      row.lob,
+      row.status,
+      row.slaTargetMinutes === null ? "" : String(row.slaTargetMinutes)
+    ].join(" ")).includes(search);
+  });
+}
+
+function sortQueueRows(rows: QueueCycleRow[], sortBy = "backlog_desc") {
+  const sorted = [...rows];
+  const severity = (status: QueueStatus) => {
+    if (status === "Estourado") return 4;
+    if (status === "Risco") return 3;
+    if (status === "Estável") return 2;
+    if (status === "OK") return 1;
+    return 0;
+  };
+  const sortMap: Record<string, { key: string; direction: "asc" | "desc" }> = {
+    status_asc: { key: "status", direction: "asc" },
+    status_desc: { key: "status", direction: "desc" },
+    lob_asc: { key: "lob", direction: "asc" },
+    lob_desc: { key: "lob", direction: "desc" },
+    queueId_asc: { key: "queueId", direction: "asc" },
+    queueId_desc: { key: "queueId", direction: "desc" },
+    input_asc: { key: "input", direction: "asc" },
+    input_desc: { key: "input", direction: "desc" },
+    output_asc: { key: "output", direction: "asc" },
+    output_desc: { key: "output", direction: "desc" },
+    aht_asc: { key: "aht", direction: "asc" },
+    aht_desc: { key: "aht", direction: "desc" },
+    latency_asc: { key: "latency", direction: "asc" },
+    latency_desc: { key: "latency", direction: "desc" },
+    backlog_asc: { key: "backlog", direction: "asc" },
+    backlog_desc: { key: "backlog", direction: "desc" }
+  };
+  const config = sortMap[sortBy] ?? sortMap.backlog_desc;
+  const numericKeys = new Set(["input", "output", "aht", "latency", "backlog"]);
+  return sorted.sort((a, b) => {
+    if (config.key === "status") {
+      const diff = severity(a.status) - severity(b.status);
+      return (config.direction === "asc" ? diff : -diff) || a.queueId.localeCompare(b.queueId);
+    }
+    if (!numericKeys.has(config.key)) {
+      const left = config.key === "lob" ? a.lob : a.queueId || a.queueName;
+      const right = config.key === "lob" ? b.lob : b.queueId || b.queueName;
+      const diff = left.localeCompare(right, "pt-BR", { sensitivity: "base" });
+      return (config.direction === "asc" ? diff : -diff) || a.queueId.localeCompare(b.queueId);
+    }
+    const left = config.key === "input"
+      ? a.current.input
+      : config.key === "output"
+        ? a.current.output
+        : config.key === "aht"
+          ? a.current.ahtMs
+          : config.key === "latency"
+            ? a.current.latencyMs
+            : a.current.backlog;
+    const right = config.key === "input"
+      ? b.current.input
+      : config.key === "output"
+        ? b.current.output
+        : config.key === "aht"
+          ? b.current.ahtMs
+          : config.key === "latency"
+            ? b.current.latencyMs
+            : b.current.backlog;
+    if (left === null && right === null) return a.queueId.localeCompare(b.queueId);
+    if (left === null) return 1;
+    if (right === null) return -1;
+    const diff = config.direction === "asc" ? left - right : right - left;
+    return diff || a.queueId.localeCompare(b.queueId);
+  });
+}
+
+function summarizeQueueRowsForExport(rows: QueueCycleRow[]) {
+  const input = rows.reduce((sum, row) => sum + row.current.input, 0);
+  const output = rows.reduce((sum, row) => sum + row.current.output, 0);
+  const backlog = rows.reduce((sum, row) => sum + row.current.backlog, 0);
+  const weightedAht = rows.reduce((sum, row) => sum + (row.current.ahtMs !== null ? row.current.ahtMs * row.current.output : 0), 0);
+  const simpleAhtRows = rows.filter((row) => row.current.output === 0 && row.current.ahtMs !== null);
+  const simpleAht = simpleAhtRows.reduce((sum, row) => sum + (row.current.ahtMs ?? 0), 0);
+  const latencyWeightedByBacklog = rows.reduce((sum, row) => sum + (row.current.latencyMs !== null ? row.current.latencyMs * row.current.backlog : 0), 0);
+  const latencyBacklogWeight = rows.reduce((sum, row) => sum + (row.current.latencyMs !== null ? row.current.backlog : 0), 0);
+  const latencyWeightedByInput = rows.reduce((sum, row) => sum + (row.current.latencyMs !== null ? row.current.latencyMs * row.current.input : 0), 0);
+  const latencyInputWeight = rows.reduce((sum, row) => sum + (row.current.latencyMs !== null ? row.current.input : 0), 0);
+  const simpleLatencyRows = rows.filter((row) => row.current.backlog === 0 && row.current.input === 0 && row.current.latencyMs !== null);
+  const simpleLatency = simpleLatencyRows.reduce((sum, row) => sum + (row.current.latencyMs ?? 0), 0);
+  return {
+    input,
+    output,
+    backlog,
+    ahtMs: output > 0 ? weightedAht / output : simpleAhtRows.length ? simpleAht / simpleAhtRows.length : null,
+    latencyMs: latencyBacklogWeight > 0
+      ? latencyWeightedByBacklog / latencyBacklogWeight
+      : latencyInputWeight > 0
+        ? latencyWeightedByInput / latencyInputWeight
+        : simpleLatencyRows.length
+          ? simpleLatency / simpleLatencyRows.length
+          : null
+  };
 }
 
 function matchesEmployeeStatus(value: string, filter: string) {

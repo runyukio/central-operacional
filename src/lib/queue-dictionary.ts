@@ -1,3 +1,5 @@
+import { QUEUE_METADATA, type QueueLob, type QueueMetadata } from "@/lib/queue-metadata";
+
 export const QUEUE_DICTIONARY: Record<string, string> = {
   "600002381": "私信图片标注",
   "600002377": "私信文本标注",
@@ -199,6 +201,13 @@ export function getQueueNameById(queueId?: string | null) {
   return QUEUE_DICTIONARY[normalizedQueueId] ?? "Fila não mapeada";
 }
 
+export function getQueueMetadataById(queueId?: string | null): QueueMetadata {
+  const normalizedQueueId = normalizeQueueId(queueId);
+  return normalizedQueueId && QUEUE_METADATA[normalizedQueueId]
+    ? QUEUE_METADATA[normalizedQueueId]
+    : { lob: "N/A", slaTargetMinutes: null };
+}
+
 export function getQueueIdByName(queueName?: string | null) {
   const normalizedQueueName = normalizeQueueName(queueName);
   return normalizedQueueName ? QUEUE_NAME_TO_ID[normalizedQueueName] ?? "" : "";
@@ -207,30 +216,41 @@ export function getQueueIdByName(queueName?: string | null) {
 export function resolveQueueReference(queueId?: string | null, queueName?: string | null) {
   const normalizedQueueId = normalizeQueueId(queueId);
   if (normalizedQueueId) {
+    const metadata = getQueueMetadataById(normalizedQueueId);
     return {
       queueId: normalizedQueueId,
-      queueName: getQueueNameById(normalizedQueueId)
+      queueName: getQueueNameById(normalizedQueueId),
+      lob: metadata.lob,
+      slaTargetMinutes: metadata.slaTargetMinutes
     };
   }
 
   const possibleQueueId = normalizeQueueId(queueName);
   if (possibleQueueId && QUEUE_DICTIONARY[possibleQueueId]) {
+    const metadata = getQueueMetadataById(possibleQueueId);
     return {
       queueId: possibleQueueId,
-      queueName: getQueueNameById(possibleQueueId)
+      queueName: getQueueNameById(possibleQueueId),
+      lob: metadata.lob,
+      slaTargetMinutes: metadata.slaTargetMinutes
     };
   }
 
   const queueIdFromName = getQueueIdByName(queueName);
   if (queueIdFromName) {
+    const metadata = getQueueMetadataById(queueIdFromName);
     return {
       queueId: queueIdFromName,
-      queueName: getQueueNameById(queueIdFromName)
+      queueName: getQueueNameById(queueIdFromName),
+      lob: metadata.lob,
+      slaTargetMinutes: metadata.slaTargetMinutes
     };
   }
 
   return {
     queueId: "",
-    queueName: normalizeQueueName(queueName) || "Sem Fila ID"
+    queueName: normalizeQueueName(queueName) || "Sem Fila ID",
+    lob: "N/A" as QueueLob,
+    slaTargetMinutes: null
   };
 }

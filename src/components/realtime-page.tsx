@@ -42,6 +42,57 @@ type RealTimeDataset = {
   rows: RealTimeRow[];
 };
 
+type QueueStatus = "OK" | "Estável" | "Risco" | "Estourado" | "N/A";
+
+type QueueMetric = {
+  input: number;
+  output: number;
+  ahtMs: number | null;
+  latencyMs: number | null;
+  backlog: number;
+  sourceRows: number;
+};
+
+type QueueRealtimeRow = {
+  key: string;
+  queueId: string;
+  queueName: string;
+  lob: "ADS" | "VIDEO" | "COMMENTS" | "N/A";
+  slaTargetMinutes: number | null;
+  status: QueueStatus;
+  current: QueueMetric;
+  previous: QueueMetric | null;
+  deltas: {
+    input: number | null;
+    output: number | null;
+    ahtMs: number | null;
+    latencyMs: number | null;
+    backlog: number | null;
+  };
+  history: Array<{
+    cycleDownload: string;
+    status: QueueStatus;
+    input: number;
+    output: number;
+    ahtMs: number | null;
+    latencyMs: number | null;
+    backlog: number;
+  }>;
+};
+
+type QueueRealtimeView = {
+  cycles: Array<{ value: string; importedAt: string; importedAtLabel: string; rows: number }>;
+  selectedCycle: string;
+  previousCycle: string;
+  filters: {
+    lobs: CountItem[];
+    statuses: CountItem[];
+    slaTargets: CountItem[];
+    queueIds: CountItem[];
+  };
+  rows: QueueRealtimeRow[];
+};
+
 type AgentMetric = {
   submit: number;
   ahtMs: number | null;
@@ -152,6 +203,7 @@ type RealTimePayload = {
       warnings: string[];
     };
     queues: RealTimeDataset;
+    queueView: QueueRealtimeView;
     agents: AgentRealtimeView;
     kpis: Array<{ label: string; value: string; helper: string; tone: "blue" | "green" | "purple" | "orange" }>;
   };
@@ -178,6 +230,23 @@ type AgentKpiCard = {
   hasComparison: boolean;
   trend: "positive" | "negative" | "neutral";
   direction: "up" | "down" | "none";
+};
+
+type QueueFilters = {
+  search: string;
+  lob: string;
+  status: string;
+  slaTarget: string;
+  queueId: string;
+};
+
+type QueueSortKey = "status" | "lob" | "queueId" | "input" | "output" | "aht" | "latency" | "backlog";
+type QueueSortState = { key: QueueSortKey; direction: "asc" | "desc" };
+type QueueLobCardData = {
+  lob: "ADS" | "VIDEO" | "COMMENTS";
+  backlog: AgentKpiCard;
+  latency: AgentKpiCard;
+  aht: AgentKpiCard;
 };
 
 type ImportHistory = {
@@ -228,6 +297,9 @@ const emptyAgentFilters: AgentFilters = {
 
 const defaultAgentSort: AgentSortState = { key: "submit", direction: "desc" };
 const numericAgentSortKeys = new Set<AgentSortKey>(["submit", "aht", "moderation", "timeout", "refresh"]);
+const defaultQueueFilters: QueueFilters = { search: "", lob: "", status: "", slaTarget: "", queueId: "" };
+const defaultQueueSort: QueueSortState = { key: "backlog", direction: "desc" };
+const numericQueueSortKeys = new Set<QueueSortKey>(["input", "output", "aht", "latency", "backlog"]);
 
 export function RealTimePage() {
   const [payload, setPayload] = useState<RealTimePayload | null>(null);
@@ -236,12 +308,12 @@ export function RealTimePage() {
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<"agents" | "queues">("agents");
   const [selectedCycle, setSelectedCycle] = useState("");
-  const [queueSearch, setQueueSearch] = useState("");
-  const [queueStatusFilter, setQueueStatusFilter] = useState("");
-  const [queueLobFilter, setQueueLobFilter] = useState("");
+  const [queueFilters, setQueueFilters] = useState<QueueFilters>(defaultQueueFilters);
+  const [queueSort, setQueueSort] = useState<QueueSortState>(defaultQueueSort);
   const [agentFilters, setAgentFilters] = useState<AgentFilters>(defaultAgentFilters);
   const [agentSort, setAgentSort] = useState<AgentSortState>(defaultAgentSort);
   const [selectedAgent, setSelectedAgent] = useState<AgentRealtimeRow | null>(null);
+  const [selectedQueue, setSelectedQueue] = useState<QueueRealtimeRow | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [imports, setImports] = useState<ImportHistory[]>([]);
   const [importsLoading, setImportsLoading] = useState(false);
@@ -284,8 +356,11 @@ export function RealTimePage() {
   }
 
   function exportXlsx() {
-    const params = buildAgentQueryParams(selectedCycle || agentView?.selectedCycle || "", agentFilters);
-    params.set("sortBy", `${agentSort.key}_${agentSort.direction}`);
+    const params = activeTab === "queues"
+      ? buildQueueQueryParams(selectedCycle || queueView?.selectedCycle || "", queueFilters)
+      : buildAgentQueryParams(selectedCycle || agentView?.selectedCycle || "", agentFilters);
+    params.set("view", activeTab);
+    params.set("sortBy", activeTab === "queues" ? `${queueSort.key}_${queueSort.direction}` : `${agentSort.key}_${agentSort.direction}`);
     window.location.assign(`/api/realtime/export?${params.toString()}`);
   }
 
@@ -297,26 +372,29 @@ export function RealTimePage() {
   }, [selectedCycle]);
 
   const summary = payload?.data.summary;
-  const queueDataset = payload?.data.queues;
+  const queueView = payload?.data.queueView;
   const agentView = payload?.data.agents;
   const queueRows = useMemo(() => {
-    const sourceRows = queueDataset?.rows ?? [];
-    const normalizedSearch = normalizeSearch(queueSearch);
+    const sourceRows = queueView?.rows ?? [];
+    const normalizedSearch = normalizeSearch(queueFilters.search);
     return sourceRows.filter((row) => {
-      if (queueStatusFilter && row.status !== queueStatusFilter) return false;
-      if (queueLobFilter && row.lob !== queueLobFilter) return false;
+      if (queueFilters.lob && row.lob !== queueFilters.lob) return false;
+      if (queueFilters.status && row.status !== queueFilters.status) return false;
+      if (queueFilters.slaTarget) {
+        const target = row.slaTargetMinutes === null ? "Sem meta" : String(row.slaTargetMinutes);
+        if (target !== queueFilters.slaTarget) return false;
+      }
+      if (queueFilters.queueId && (row.queueId || "Sem Fila ID") !== queueFilters.queueId) return false;
       if (!normalizedSearch) return true;
       return normalizeSearch([
         row.queueName,
-        row.agentName,
-        row.wbLogin,
+        row.queueId,
         row.status,
         row.lob,
-        row.supervisor,
-        ...Object.values(safeRawData(row.rawData)).map((value) => String(value ?? ""))
+        row.slaTargetMinutes === null ? "" : String(row.slaTargetMinutes)
       ].join(" ")).includes(normalizedSearch);
-    });
-  }, [queueDataset?.rows, queueLobFilter, queueSearch, queueStatusFilter]);
+    }).sort((a, b) => compareQueueRows(a, b, queueSort));
+  }, [queueFilters, queueSort, queueView?.rows]);
 
   const agentRows = useMemo(() => {
     const normalizedSearch = normalizeSearch(agentFilters.search);
@@ -346,10 +424,11 @@ export function RealTimePage() {
   }, [agentFilters, agentSort, agentView?.rows]);
 
   const filteredAgentCards = useMemo(() => buildFilteredAgentCards(agentRows), [agentRows]);
+  const filteredQueueCards = useMemo(() => buildQueueLobCards(queueRows), [queueRows]);
 
-  const queueColumns = useMemo(() => buildQueueColumns(queueDataset?.columns ?? []), [queueDataset?.columns]);
-  const cycles = agentView?.cycles ?? [];
-  const selectedCycleValue = selectedCycle || agentView?.selectedCycle || "";
+  const cycles = activeTab === "queues" ? queueView?.cycles ?? [] : agentView?.cycles ?? [];
+  const selectedCycleExists = Boolean(selectedCycle && cycles.some((cycle) => cycle.value === selectedCycle));
+  const selectedCycleValue = selectedCycleExists ? selectedCycle : (activeTab === "queues" ? queueView?.selectedCycle : agentView?.selectedCycle) || "";
   const selectedCycleIndex = cycles.findIndex((cycle) => cycle.value === selectedCycleValue);
   const olderCycle = selectedCycleIndex >= 0 ? cycles[selectedCycleIndex + 1]?.value ?? "" : "";
   const newerCycle = selectedCycleIndex > 0 ? cycles[selectedCycleIndex - 1]?.value ?? "" : "";
@@ -363,6 +442,17 @@ export function RealTimePage() {
     setAgentSort((current) => {
       if (current.key === key) return { key, direction: current.direction === "desc" ? "asc" : "desc" };
       return { key, direction: numericAgentSortKeys.has(key) ? "desc" : "asc" };
+    });
+  }
+
+  function updateQueueFilter(key: keyof QueueFilters, value: string) {
+    setQueueFilters((current) => ({ ...current, [key]: value }));
+  }
+
+  function toggleQueueSort(key: QueueSortKey) {
+    setQueueSort((current) => {
+      if (current.key === key) return { key, direction: current.direction === "desc" ? "asc" : "desc" };
+      return { key, direction: numericQueueSortKeys.has(key) ? "desc" : "asc" };
     });
   }
 
@@ -399,8 +489,8 @@ export function RealTimePage() {
         <div className="flex flex-wrap items-end gap-3">
           <label className="block min-w-[260px] flex-1 text-xs font-black uppercase tracking-wide text-muted">
             ciclo_download
-            <select value={selectedCycle || agentView?.selectedCycle || ""} onChange={(event) => setSelectedCycle(event.target.value)} className="premium-control mt-1 h-11 w-full px-3 text-sm font-extrabold text-navy-950 outline-none">
-              {(agentView?.cycles ?? []).map((cycle) => <option key={cycle.value} value={cycle.value}>{cycle.value} · {cycle.rows} linha(s)</option>)}
+            <select value={selectedCycleValue} onChange={(event) => setSelectedCycle(event.target.value)} className="premium-control mt-1 h-11 w-full px-3 text-sm font-extrabold text-navy-950 outline-none">
+              {cycles.map((cycle) => <option key={cycle.value} value={cycle.value}>{cycle.value} · {cycle.rows} linha(s)</option>)}
             </select>
           </label>
           <button type="button" onClick={() => setSelectedCycle(olderCycle)} disabled={!olderCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
@@ -413,7 +503,7 @@ export function RealTimePage() {
             Ciclo atual
           </button>
           <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-bold text-muted">
-            Comparação: {agentView?.previousCycle || "Sem ciclo anterior"}
+            Comparação: {(activeTab === "queues" ? queueView?.previousCycle : agentView?.previousCycle) || "Sem ciclo anterior"}
           </div>
         </div>
       </section>
@@ -424,7 +514,13 @@ export function RealTimePage() {
             <CompareCard key={card.label} card={card} />
           ))}
         </div>
-      ) : null}
+      ) : (
+        <div className="grid gap-3 xl:grid-cols-3">
+          {filteredQueueCards.map((card) => (
+            <QueueLobCard key={card.lob} card={card} />
+          ))}
+        </div>
+      )}
 
       <section className="premium-card overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-4">
@@ -452,9 +548,12 @@ export function RealTimePage() {
             </div>
           ) : (
             <div className="flex flex-1 flex-wrap justify-end gap-2">
-              <SearchBox value={queueSearch} onChange={setQueueSearch} placeholder="Buscar em filas..." />
-              <FilterSelect value={queueStatusFilter} onChange={setQueueStatusFilter} label="Status" empty="Todos" options={queueDataset?.statuses ?? []} />
-              <FilterSelect value={queueLobFilter} onChange={setQueueLobFilter} label="LOB" empty="Todas" options={queueDataset?.lobs ?? []} />
+              <SearchBox value={queueFilters.search} onChange={(value) => updateQueueFilter("search", value)} placeholder="Buscar ID ou nome da fila..." />
+              <FilterSelect value={queueFilters.lob} onChange={(value) => updateQueueFilter("lob", value)} label="LOB" empty="Todas" options={queueView?.filters.lobs ?? []} />
+              <FilterSelect value={queueFilters.status} onChange={(value) => updateQueueFilter("status", value)} label="Status" empty="Todos" options={queueView?.filters.statuses ?? []} />
+              <FilterSelect value={queueFilters.slaTarget} onChange={(value) => updateQueueFilter("slaTarget", value)} label="Meta SLA" empty="Todas" options={queueView?.filters.slaTargets ?? []} />
+              <FilterSelect value={queueFilters.queueId} onChange={(value) => updateQueueFilter("queueId", value)} label="Fila ID" empty="Todas" options={queueView?.filters.queueIds ?? []} />
+              <button type="button" onClick={() => setQueueFilters(defaultQueueFilters)} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Limpar</button>
             </div>
           )}
         </div>
@@ -467,7 +566,7 @@ export function RealTimePage() {
           activeTab === "agents" ? (
             <AgentTable rows={agentRows} totalRows={agentView?.rows.length ?? 0} sort={agentSort} onSort={toggleAgentSort} onSelect={setSelectedAgent} />
           ) : (
-            <QueueTable rows={queueRows} totalRows={queueDataset?.totalRows ?? 0} columns={queueColumns} truncated={Boolean(queueDataset?.truncated)} returnedRows={queueDataset?.returnedRows ?? 0} />
+            <StructuredQueueTable rows={queueRows} totalRows={queueView?.rows.length ?? 0} sort={queueSort} onSort={toggleQueueSort} onSelect={setSelectedQueue} />
           )
         ) : (
           <div className="px-4 py-16 text-center">
@@ -479,6 +578,7 @@ export function RealTimePage() {
       </section>
 
       {selectedAgent ? <AgentDetailDrawer row={selectedAgent} onClose={() => setSelectedAgent(null)} /> : null}
+      {selectedQueue ? <QueueDetailDrawer row={selectedQueue} onClose={() => setSelectedQueue(null)} /> : null}
       {historyOpen ? <ImportHistoryModal imports={imports} loading={importsLoading} onClose={() => setHistoryOpen(false)} /> : null}
     </div>
   );
@@ -636,33 +736,74 @@ function AgentMetricCell({
   );
 }
 
-function QueueTable({ rows, totalRows, columns, truncated, returnedRows }: { rows: RealTimeRow[]; totalRows: number; columns: Array<{ key: string; label: string }>; truncated: boolean; returnedRows: number }) {
+function StructuredQueueTable({
+  rows,
+  totalRows,
+  sort,
+  onSort,
+  onSelect
+}: {
+  rows: QueueRealtimeRow[];
+  totalRows: number;
+  sort: QueueSortState;
+  onSort: (key: QueueSortKey) => void;
+  onSelect: (row: QueueRealtimeRow) => void;
+}) {
+  const columns: Array<{ label: string; sortKey?: QueueSortKey }> = [
+    { label: "Status da fila", sortKey: "status" },
+    { label: "LOB", sortKey: "lob" },
+    { label: "ID", sortKey: "queueId" },
+    { label: "Input", sortKey: "input" },
+    { label: "Output", sortKey: "output" },
+    { label: "AHT", sortKey: "aht" },
+    { label: "Latência", sortKey: "latency" },
+    { label: "Backlog", sortKey: "backlog" },
+    { label: "Ações" }
+  ];
+
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs font-black uppercase tracking-wide text-muted">
-        <span>{rows.length} de {totalRows} linha(s) exibidas</span>
-        {truncated ? <span className="rounded-full bg-amber-100 px-2 py-1 text-amber-800">Amostra limitada a {returnedRows} linhas</span> : null}
+        <span>{rows.length} de {totalRows} fila(s) exibidas</span>
       </div>
       <div className="overflow-x-auto">
-        <table className="min-w-full text-left text-sm">
+        <table className="min-w-[1040px] text-left text-sm">
           <thead className="bg-slate-50 text-xs uppercase tracking-wide text-muted">
             <tr>
-              {columns.map((column) => <th key={column.key} className="whitespace-nowrap px-4 py-3 font-black">{column.label}</th>)}
+              {columns.map((column) => (
+                <th key={column.label} className="whitespace-nowrap px-4 py-3 font-black">
+                  {column.sortKey ? (
+                    <button type="button" onClick={() => onSort(column.sortKey!)} className="inline-flex items-center gap-1 rounded-lg px-1 py-0.5 text-left font-black transition hover:bg-blue-50 hover:text-blue-700">
+                      {column.label}
+                      <SortIndicator active={sort.key === column.sortKey} direction={sort.direction} />
+                    </button>
+                  ) : column.label}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={row.id} className="border-t border-slate-100 hover:bg-slate-50/70">
-                {columns.map((column) => (
-                  <td key={`${row.id}-${column.key}`} className="max-w-[240px] whitespace-nowrap px-4 py-3 font-bold text-navy-950">
-                    {column.key === "status" ? <StatusPill value={cellValue(row, column.key)} /> : <span title={cellValue(row, column.key)} className="block truncate">{cellValue(row, column.key) || "-"}</span>}
-                  </td>
-                ))}
+              <tr key={row.key} className="border-t border-slate-100 hover:bg-slate-50/70">
+                <td className="px-4 py-3"><QueueStatusPill status={row.status} /></td>
+                <td className="px-4 py-3 font-extrabold text-navy-950">{row.lob}</td>
+                <td className="px-4 py-3 font-extrabold text-blue-700">{row.queueId || "Sem Fila ID"}</td>
+                <td className="px-4 py-3"><AgentMetricCell current={row.current.input} previous={row.previous?.input ?? null} format="number" positiveDirection="neutral" /></td>
+                <td className="px-4 py-3"><AgentMetricCell current={row.current.output} previous={row.previous?.output ?? null} format="number" positiveDirection="up" /></td>
+                <td className="px-4 py-3"><AgentMetricCell current={row.current.ahtMs} previous={row.previous?.ahtMs ?? null} format="duration" positiveDirection="down" /></td>
+                <td className="px-4 py-3"><AgentMetricCell current={row.current.latencyMs} previous={row.previous?.latencyMs ?? null} format="duration" positiveDirection="down" /></td>
+                <td className="px-4 py-3"><AgentMetricCell current={row.current.backlog} previous={row.previous?.backlog ?? null} format="number" positiveDirection="down" /></td>
+                <td className="px-4 py-3">
+                  <button type="button" onClick={() => onSelect(row)} className="premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold text-navy-950">
+                    <Eye className="h-4 w-4" />
+                    Detalhar
+                  </button>
+                </td>
               </tr>
             ))}
             {!rows.length ? (
               <tr>
-                <td colSpan={columns.length} className="px-4 py-12 text-center text-sm font-bold text-muted">Nenhuma linha encontrada para os filtros aplicados.</td>
+                <td colSpan={columns.length} className="px-4 py-12 text-center text-sm font-bold text-muted">Nenhuma fila encontrada para os filtros aplicados.</td>
               </tr>
             ) : null}
           </tbody>
@@ -670,6 +811,19 @@ function QueueTable({ rows, totalRows, columns, truncated, returnedRows }: { row
       </div>
     </>
   );
+}
+
+function QueueStatusPill({ status }: { status: QueueStatus }) {
+  const tone = status === "OK"
+    ? "bg-emerald-100 text-emerald-700"
+    : status === "Estável"
+      ? "bg-blue-100 text-blue-700"
+      : status === "Risco"
+        ? "bg-amber-100 text-amber-800"
+        : status === "Estourado"
+          ? "bg-red-100 text-red-700"
+          : "bg-slate-100 text-slate-700";
+  return <span className={cn("inline-flex rounded-full px-2.5 py-1 text-xs font-black", tone)}>{status}</span>;
 }
 
 function AgentDetailDrawer({ row, onClose }: { row: AgentRealtimeRow; onClose: () => void }) {
@@ -758,6 +912,95 @@ function AgentDetailDrawer({ row, onClose }: { row: AgentRealtimeRow; onClose: (
                     <td className="px-3 py-3 font-bold">{formatInteger(item.refresh)}</td>
                   </tr>
                 ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function QueueDetailDrawer({ row, onClose }: { row: QueueRealtimeRow; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-navy-950/40">
+      <div className="h-full w-full max-w-5xl overflow-y-auto bg-white p-5 shadow-2xl">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-4">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-xl font-black text-navy-950">{row.queueName}</h2>
+              <QueueStatusPill status={row.status} />
+              <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-black text-blue-700">{row.lob}</span>
+            </div>
+            <p className="mt-1 text-sm font-bold text-muted">
+              Fila ID {row.queueId || "Sem Fila ID"} · Meta SLA {row.slaTargetMinutes === null ? "Sem meta" : `${row.slaTargetMinutes} min`}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="premium-control inline-flex h-10 items-center gap-2 px-3 text-sm font-extrabold text-navy-950">
+            <X className="h-4 w-4" />
+            Fechar
+          </button>
+        </div>
+
+        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <SmallMetric title="Input" value={formatInteger(row.current.input)} previous={row.previous ? formatInteger(row.previous.input) : "Sem comparação"} />
+          <SmallMetric title="Output" value={formatInteger(row.current.output)} previous={row.previous ? formatInteger(row.previous.output) : "Sem comparação"} />
+          <SmallMetric title="AHT" value={formatDurationFromMs(row.current.ahtMs)} previous={row.previous ? formatDurationFromMs(row.previous.ahtMs) : "Sem comparação"} />
+          <SmallMetric title="Latência" value={formatDurationFromMs(row.current.latencyMs)} previous={row.previous ? formatDurationFromMs(row.previous.latencyMs) : "Sem comparação"} />
+          <SmallMetric title="Backlog" value={formatInteger(row.current.backlog)} previous={row.previous ? formatInteger(row.previous.backlog) : "Sem comparação"} />
+        </div>
+
+        <div className="mt-5 grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+          <div className="premium-card p-4">
+            <h3 className="text-sm font-black uppercase tracking-wide text-muted">Detalhes da fila</h3>
+            <InfoLine label="ID da fila" value={row.queueId || "Sem Fila ID"} />
+            <InfoLine label="Nome da fila" value={row.queueName} />
+            <InfoLine label="LOB" value={row.lob} />
+            <InfoLine label="Meta SLA" value={row.slaTargetMinutes === null ? "Sem meta" : `${row.slaTargetMinutes} min`} />
+            <InfoLine label="Status" value={row.status} />
+          </div>
+          <div className="premium-card overflow-hidden">
+            <div className="border-b border-slate-100 px-4 py-3">
+              <h3 className="font-black text-navy-950">Comparativo do ciclo</h3>
+              <p className="text-xs font-bold text-muted">Delta compacto contra o ciclo imediatamente anterior.</p>
+            </div>
+            <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-5">
+              <AgentMetricCell current={row.current.input} previous={row.previous?.input ?? null} format="number" positiveDirection="neutral" />
+              <AgentMetricCell current={row.current.output} previous={row.previous?.output ?? null} format="number" positiveDirection="up" />
+              <AgentMetricCell current={row.current.ahtMs} previous={row.previous?.ahtMs ?? null} format="duration" positiveDirection="down" />
+              <AgentMetricCell current={row.current.latencyMs} previous={row.previous?.latencyMs ?? null} format="duration" positiveDirection="down" />
+              <AgentMetricCell current={row.current.backlog} previous={row.previous?.backlog ?? null} format="number" positiveDirection="down" />
+            </div>
+          </div>
+        </div>
+
+        <div className="premium-card mt-5 overflow-hidden">
+          <div className="border-b border-slate-100 px-4 py-3">
+            <h3 className="font-black text-navy-950">Histórico por ciclo_download</h3>
+            <p className="text-xs font-bold text-muted">Evolução de backlog, latência, AHT, input e output por ciclo.</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-left text-sm">
+              <thead className="bg-slate-50 text-xs uppercase tracking-wide text-muted">
+                <tr>{["Ciclo", "Status", "Input", "Output", "AHT", "Latência", "Backlog"].map((column) => <th key={column} className="px-3 py-2 font-black">{column}</th>)}</tr>
+              </thead>
+              <tbody>
+                {row.history.map((item) => (
+                  <tr key={item.cycleDownload} className="border-t border-slate-100">
+                    <td className="px-3 py-3 font-extrabold">{item.cycleDownload}</td>
+                    <td className="px-3 py-3"><QueueStatusPill status={item.status} /></td>
+                    <td className="px-3 py-3 font-bold">{formatInteger(item.input)}</td>
+                    <td className="px-3 py-3 font-bold">{formatInteger(item.output)}</td>
+                    <td className="px-3 py-3 font-bold">{formatDurationFromMs(item.ahtMs)}</td>
+                    <td className="px-3 py-3 font-bold">{formatDurationFromMs(item.latencyMs)}</td>
+                    <td className="px-3 py-3 font-bold">{formatInteger(item.backlog)}</td>
+                  </tr>
+                ))}
+                {!row.history.length ? (
+                  <tr>
+                    <td colSpan={7} className="px-3 py-10 text-center text-sm font-bold text-muted">Sem histórico disponível para esta fila.</td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
@@ -862,6 +1105,41 @@ function CompareCard({ card }: { card: AgentKpiCard }) {
   );
 }
 
+function QueueLobCard({ card }: { card: QueueLobCardData }) {
+  return (
+    <div className="premium-card p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-black uppercase tracking-wide text-muted">LOB</p>
+          <h3 className="text-xl font-black text-navy-950">{card.lob}</h3>
+        </div>
+        <span className="rounded-2xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-700">Filas</span>
+      </div>
+      <div className="mt-4 grid gap-3">
+        <QueueCardMetric label="Backlog" card={card.backlog} />
+        <QueueCardMetric label="SLA" card={card.latency} />
+        <QueueCardMetric label="AHT" card={card.aht} />
+      </div>
+    </div>
+  );
+}
+
+function QueueCardMetric({ label, card }: { label: string; card: AgentKpiCard }) {
+  return (
+    <div className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-black uppercase tracking-wide text-muted">{label}</p>
+          <p className="mt-0.5 text-lg font-black text-navy-950">{card.value}</p>
+        </div>
+        <div className="pt-4">
+          {card.hasComparison ? <TrendBadge trend={card.trend} direction={card.direction} value={card.delta || "0"} /> : <span className="text-[11px] font-black text-muted">Sem comparação</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function buildFilteredAgentCards(rows: AgentRealtimeRow[]): AgentKpiCard[] {
   const current = summarizeMetrics(rows.map((row) => row.current));
   const previousMetrics = rows.map((row) => row.previous).filter((metric): metric is AgentMetric => Boolean(metric));
@@ -873,6 +1151,50 @@ function buildFilteredAgentCards(rows: AgentRealtimeRow[]): AgentKpiCard[] {
     buildAgentKpiCard("Timeout", current.timeout, previous?.timeout ?? null, "number", "down"),
     buildAgentKpiCard("Refresh", current.refresh, previous?.refresh ?? null, "number", "down")
   ];
+}
+
+function buildQueueLobCards(rows: QueueRealtimeRow[]): QueueLobCardData[] {
+  return (["ADS", "VIDEO", "COMMENTS"] as const).map((lob) => {
+    const scopedRows = rows.filter((row) => row.lob === lob);
+    const current = summarizeQueueMetrics(scopedRows.map((row) => row.current));
+    const previousMetrics = scopedRows.map((row) => row.previous).filter((metric): metric is QueueMetric => Boolean(metric));
+    const previous = previousMetrics.length ? summarizeQueueMetrics(previousMetrics) : null;
+    return {
+      lob,
+      backlog: buildAgentKpiCard("Backlog", current.backlog, previous?.backlog ?? null, "number", "down"),
+      latency: buildAgentKpiCard("SLA", current.latencyMs, previous?.latencyMs ?? null, "duration", "down"),
+      aht: buildAgentKpiCard("AHT", current.ahtMs, previous?.ahtMs ?? null, "duration", "down")
+    };
+  });
+}
+
+function summarizeQueueMetrics(metrics: QueueMetric[]): QueueMetric {
+  const input = metrics.reduce((sum, metric) => sum + metric.input, 0);
+  const output = metrics.reduce((sum, metric) => sum + metric.output, 0);
+  const backlog = metrics.reduce((sum, metric) => sum + metric.backlog, 0);
+  const ahtWeighted = metrics.reduce((sum, metric) => sum + (metric.ahtMs !== null ? metric.ahtMs * metric.output : 0), 0);
+  const simpleAhtMetrics = metrics.filter((metric) => metric.output === 0 && metric.ahtMs !== null);
+  const simpleAht = simpleAhtMetrics.reduce((sum, metric) => sum + (metric.ahtMs ?? 0), 0);
+  const latencyWeightedByBacklog = metrics.reduce((sum, metric) => sum + (metric.latencyMs !== null ? metric.latencyMs * metric.backlog : 0), 0);
+  const latencyBacklogWeight = metrics.reduce((sum, metric) => sum + (metric.latencyMs !== null ? metric.backlog : 0), 0);
+  const latencyWeightedByInput = metrics.reduce((sum, metric) => sum + (metric.latencyMs !== null ? metric.latencyMs * metric.input : 0), 0);
+  const latencyInputWeight = metrics.reduce((sum, metric) => sum + (metric.latencyMs !== null ? metric.input : 0), 0);
+  const simpleLatencyMetrics = metrics.filter((metric) => metric.backlog === 0 && metric.input === 0 && metric.latencyMs !== null);
+  const simpleLatency = simpleLatencyMetrics.reduce((sum, metric) => sum + (metric.latencyMs ?? 0), 0);
+  return {
+    input,
+    output,
+    backlog,
+    sourceRows: metrics.reduce((sum, metric) => sum + metric.sourceRows, 0),
+    ahtMs: output > 0 ? ahtWeighted / output : simpleAhtMetrics.length ? simpleAht / simpleAhtMetrics.length : null,
+    latencyMs: latencyBacklogWeight > 0
+      ? latencyWeightedByBacklog / latencyBacklogWeight
+      : latencyInputWeight > 0
+        ? latencyWeightedByInput / latencyInputWeight
+        : simpleLatencyMetrics.length
+          ? simpleLatency / simpleLatencyMetrics.length
+          : null
+  };
 }
 
 function summarizeMetrics(metrics: AgentMetric[]) {
@@ -1009,6 +1331,15 @@ function buildAgentQueryParams(cycleDownload: string, filters: AgentFilters) {
   return params;
 }
 
+function buildQueueQueryParams(cycleDownload: string, filters: QueueFilters) {
+  const params = new URLSearchParams();
+  if (cycleDownload) params.set("cycleDownload", cycleDownload);
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value) params.set(`queue${key[0].toUpperCase()}${key.slice(1)}`, value);
+  });
+  return params;
+}
+
 function matchesEmployeeStatus(value: string, filter: string) {
   const normalizedValue = normalizeSearch(value);
   const normalizedFilter = normalizeSearch(filter);
@@ -1048,6 +1379,48 @@ function compareAgentRows(a: AgentRealtimeRow, b: AgentRealtimeRow, sort: AgentS
 
   const diff = textValue(a).localeCompare(textValue(b), "pt-BR", { sensitivity: "base" });
   return (sort.direction === "asc" ? diff : -diff) || a.displayName.localeCompare(b.displayName);
+}
+
+function compareQueueRows(a: QueueRealtimeRow, b: QueueRealtimeRow, sort: QueueSortState) {
+  const severity = (status: QueueStatus) => {
+    if (status === "Estourado") return 4;
+    if (status === "Risco") return 3;
+    if (status === "Estável") return 2;
+    if (status === "OK") return 1;
+    return 0;
+  };
+  const textValue = (row: QueueRealtimeRow) => {
+    if (sort.key === "status") return String(severity(row.status));
+    if (sort.key === "lob") return row.lob;
+    if (sort.key === "queueId") return row.queueId || row.queueName;
+    return row.queueId || row.queueName;
+  };
+  const numericValue = (row: QueueRealtimeRow) => {
+    if (sort.key === "input") return row.current.input;
+    if (sort.key === "output") return row.current.output;
+    if (sort.key === "aht") return row.current.ahtMs;
+    if (sort.key === "latency") return row.current.latencyMs;
+    if (sort.key === "backlog") return row.current.backlog;
+    return null;
+  };
+
+  if (numericQueueSortKeys.has(sort.key)) {
+    const left = numericValue(a);
+    const right = numericValue(b);
+    if (left === null && right === null) return a.queueId.localeCompare(b.queueId);
+    if (left === null) return 1;
+    if (right === null) return -1;
+    const diff = sort.direction === "asc" ? left - right : right - left;
+    return diff || a.queueId.localeCompare(b.queueId);
+  }
+
+  if (sort.key === "status") {
+    const diff = severity(a.status) - severity(b.status);
+    return (sort.direction === "asc" ? diff : -diff) || a.queueId.localeCompare(b.queueId);
+  }
+
+  const diff = textValue(a).localeCompare(textValue(b), "pt-BR", { sensitivity: "base" });
+  return (sort.direction === "asc" ? diff : -diff) || a.queueId.localeCompare(b.queueId);
 }
 
 function toneClass(tone: "blue" | "green" | "purple" | "orange") {

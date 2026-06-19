@@ -11,6 +11,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const result = await exportRealtimeAgents(actor, {
     cycleDownload: searchParams.get("cycleDownload") ?? undefined,
+    view: searchParams.get("view"),
     search: searchParams.get("search"),
     crossingStatus: searchParams.get("crossingStatus"),
     personType: searchParams.get("personType"),
@@ -20,6 +21,11 @@ export async function GET(request: Request) {
     shift: searchParams.get("shift"),
     skill: searchParams.get("skill"),
     roleTitle: searchParams.get("roleTitle"),
+    queueSearch: searchParams.get("queueSearch"),
+    queueLob: searchParams.get("queueLob"),
+    queueStatus: searchParams.get("queueStatus"),
+    queueSlaTarget: searchParams.get("queueSlaTarget"),
+    queueId: searchParams.get("queueId"),
     sortBy: searchParams.get("sortBy")
   });
 
