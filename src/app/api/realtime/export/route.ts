@@ -9,9 +9,10 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   const actor = await getApiActor();
   const { searchParams } = new URL(request.url);
+  const view = searchParams.get("view");
   const result = await exportRealtimeAgents(actor, {
     cycleDownload: searchParams.get("cycleDownload") ?? undefined,
-    view: searchParams.get("view"),
+    view: view === "agents" || view === "queues" || view === "both" ? view : undefined,
     search: searchParams.get("search"),
     crossingStatus: searchParams.get("crossingStatus"),
     personType: searchParams.get("personType"),

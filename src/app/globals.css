@@ -164,14 +164,13 @@ textarea:focus-visible {
   color: #1d4ed8;
 }
 
-.app-sidebar-link-active {
+.app-sidebar-link-active,
+.app-sidebar-link-active:hover,
+.app-sidebar-link-active:focus-visible {
   background: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
   color: #fff;
   box-shadow: 0 12px 24px rgba(37, 99, 235, 0.22);
-}
-
-.app-sidebar-link-active:hover {
-  color: #fff;
+  outline: none;
 }
 
 .app-sidebar-active-marker {
@@ -186,7 +185,9 @@ textarea:focus-visible {
   color: #2563eb;
 }
 
-.app-sidebar-link-active .app-sidebar-icon {
+.app-sidebar-link-active .app-sidebar-icon,
+.app-sidebar-link-active:hover .app-sidebar-icon,
+.app-sidebar-link-active:focus-visible .app-sidebar-icon {
   color: #fff;
 }
 
@@ -388,10 +389,13 @@ html.dark body {
   color: #eff6ff;
 }
 
-.dark .app-sidebar-link-active {
+.dark .app-sidebar-link-active,
+.dark .app-sidebar-link-active:hover,
+.dark .app-sidebar-link-active:focus-visible {
   background: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
   color: #fff;
   box-shadow: 0 12px 24px rgba(37, 99, 235, 0.16);
+  outline: none;
 }
 
 .dark .app-sidebar-active-marker {

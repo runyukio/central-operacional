@@ -16,7 +16,7 @@ import {
   X,
   XCircle
 } from "lucide-react";
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Area, AreaChart, ReferenceLine, ResponsiveContainer, Tooltip as RechartsTooltip, YAxis } from "recharts";
 
 import { cn } from "@/lib/utils";
@@ -337,25 +337,35 @@ export function RealTimePage() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [imports, setImports] = useState<ImportHistory[]>([]);
   const [importsLoading, setImportsLoading] = useState(false);
+  const snapshotAbortRef = useRef<AbortController | null>(null);
 
-  async function loadSnapshot(cycle = selectedCycle, background = false) {
+  async function loadSnapshot(cycle = selectedCycle, background = false, view: "agents" | "queues" = activeTab) {
+    snapshotAbortRef.current?.abort();
+    const controller = new AbortController();
+    snapshotAbortRef.current = controller;
     if (background) setRefreshing(true);
     else setLoading(true);
     setError("");
     try {
       const params = new URLSearchParams();
       if (cycle) params.set("cycleDownload", cycle);
-      const response = await fetch(`/api/realtime${params.size ? `?${params.toString()}` : ""}`, { cache: "no-store" });
+      params.set("view", view);
+      const response = await fetch(`/api/realtime?${params.toString()}`, { cache: "no-store", signal: controller.signal });
       const json = await response.json();
       if (!response.ok) throw new Error(json.message || json.error || "Não foi possível carregar Real Time.");
       const nextPayload = json as RealTimePayload;
       setPayload(nextPayload);
-      if (!cycle && nextPayload.data.agents.selectedCycle) setSelectedCycle(nextPayload.data.agents.selectedCycle);
+      const nextSelectedCycle = view === "queues" ? nextPayload.data.queueView.selectedCycle : nextPayload.data.agents.selectedCycle;
+      if (nextSelectedCycle && (!cycle || nextSelectedCycle !== cycle)) setSelectedCycle(nextSelectedCycle);
     } catch (currentError) {
+      if (currentError instanceof DOMException && currentError.name === "AbortError") return;
       setError(currentError instanceof Error ? currentError.message : "Não foi possível carregar Real Time.");
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (snapshotAbortRef.current === controller) {
+        snapshotAbortRef.current = null;
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }
 
@@ -385,11 +395,14 @@ export function RealTimePage() {
   }
 
   useEffect(() => {
-    void loadSnapshot(selectedCycle);
-    const interval = window.setInterval(() => void loadSnapshot(selectedCycle, true), 60000);
-    return () => window.clearInterval(interval);
+    void loadSnapshot(selectedCycle, false, activeTab);
+    const interval = window.setInterval(() => void loadSnapshot(selectedCycle, true, activeTab), 60000);
+    return () => {
+      window.clearInterval(interval);
+      snapshotAbortRef.current?.abort();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCycle]);
+  }, [selectedCycle, activeTab]);
 
   const summary = payload?.data.summary;
   const queueView = payload?.data.queueView;

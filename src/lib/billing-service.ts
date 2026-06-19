@@ -867,7 +867,7 @@ async function buildBillingInvoicesReadModel(
   options: { includeHourDetails: boolean }
 ) {
   const startedAt = Date.now();
-  const employees = await listBillingEmployees(filters);
+  const employees = await listBillingEmployees(filters, referenceMonth, cycle?.id ?? null);
   const employeeIds = employees.map((employee) => employee.id);
   if (!employeeIds.length) return [] as InvoiceCalculation[];
 
@@ -987,7 +987,10 @@ async function buildBillingInvoicesReadModel(
         amount: roundMoney(Math.max(0, Number(record.effectiveHours ?? 0)) * rate.hourlyRate)
       }))
       : [];
-    const projectedSchedules = (schedulesByEmployee.get(employee.id) ?? []).filter((schedule) => !approvedByDate.has(dateKey(schedule.date)));
+    const projectedSchedules = (schedulesByEmployee.get(employee.id) ?? []).filter((schedule) => {
+      if (!isScheduleWithinEmployeeBillingWindow(employee, schedule.date)) return false;
+      return !approvedByDate.has(dateKey(schedule.date));
+    });
     const projectedMinutes = projectedSchedules.length * 480;
     const projectedDetails = options.includeHourDetails
       ? projectedSchedules.map((schedule) => ({
@@ -1109,6 +1112,7 @@ async function calculateEmployeeInvoice(employee: BillingEmployee, referenceMont
     amount: roundMoney((Math.max(0, Number(record.effectiveHours ?? 0)) * rate.hourlyRate))
   }));
   const projectedSchedules = schedules.filter((schedule) => {
+    if (!isScheduleWithinEmployeeBillingWindow(employee, schedule.date)) return false;
     if (!PROJECTABLE_SCHEDULE_STATUSES.has(schedule.status)) return false;
     if (approvedByDate.has(dateKey(schedule.date))) return false;
     return true;
@@ -1180,9 +1184,35 @@ async function calculateEmployeeInvoice(employee: BillingEmployee, referenceMont
   return persisted && isFinalizedInvoiceStatus(persisted.status) ? applyPersistedInvoiceSnapshot(invoice, persisted) : invoice;
 }
 
-async function listBillingEmployees(filters: BillingDashboardFilters) {
+async function listBillingEmployees(filters: BillingDashboardFilters, referenceMonth: string, cycleId: string | null) {
+  const period = monthPeriod(referenceMonth);
+  const [approvedHourEmployees, finalizedInvoices] = await Promise.all([
+    prisma.workHourRecord.findMany({
+      where: {
+        date: { gte: period.start, lte: period.end },
+        status: { in: BILLABLE_WORK_HOUR_STATUSES }
+      },
+      distinct: ["employeeId"],
+      select: { employeeId: true }
+    }),
+    cycleId
+      ? prisma.billingEmployeeInvoice.findMany({
+        where: { billingCycleId: cycleId, status: "FECHADO" },
+        distinct: ["employeeId"],
+        select: { employeeId: true }
+      })
+      : Promise.resolve([])
+  ]);
+  const approvedHourEmployeeIds = approvedHourEmployees.map((record) => record.employeeId);
+  const finalizedInvoiceEmployeeIds = finalizedInvoices.map((invoice) => invoice.employeeId);
   const where: Prisma.EmployeeProfileWhereInput = {
-    deletedAt: null
+    deletedAt: null,
+    OR: [
+      { terminationDate: null },
+      { terminationDate: { gte: period.start } },
+      ...(approvedHourEmployeeIds.length ? [{ id: { in: approvedHourEmployeeIds } }] : []),
+      ...(finalizedInvoiceEmployeeIds.length ? [{ id: { in: finalizedInvoiceEmployeeIds } }] : [])
+    ]
   };
   const and: Prisma.EmployeeProfileWhereInput[] = [];
   if (filters.lob && filters.lob !== "Todos") and.push({ lobId: filters.lob });
@@ -1447,6 +1477,11 @@ function isBillableEmployee(employee: Pick<BillingEmployee, "roleTitle" | "skill
   if (isTrainingTerminationStatus(employee.operationalStatus)) return false;
   if (!isBillingEligibleContract(employee.contractType)) return false;
   return isAgentJobTitle(employee.roleTitle) || Boolean(resolveStaffRateRule(employee.skill)) || isSpecialBillingSkill(employee.skill);
+}
+
+function isScheduleWithinEmployeeBillingWindow(employee: Pick<BillingEmployee, "terminationDate">, date: Date) {
+  if (!employee.terminationDate) return true;
+  return startOfUtcDay(date).getTime() <= startOfUtcDay(employee.terminationDate).getTime();
 }
 
 function isTrainingTerminationStatus(value?: string | null) {

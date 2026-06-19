@@ -20,6 +20,7 @@ export type RealTimeImportInput = {
 
 export type RealtimeSnapshotOptions = {
   cycleDownload?: string;
+  view?: "agents" | "queues" | "both";
 };
 
 export type RealtimeExportQuery = RealtimeSnapshotOptions & {
@@ -362,9 +363,10 @@ export async function getRealtimeSnapshot(actor: Actor, options: RealtimeSnapsho
     };
   }
 
+  const requestedView = options.view ?? "both";
   const [queueRealtime, agentRealtime] = await Promise.all([
-    buildQueueRealtimeView(options),
-    buildAgentRealtimeView(actor, options)
+    requestedView === "agents" ? Promise.resolve(emptyQueueRealtimeView()) : buildQueueRealtimeView(options),
+    requestedView === "queues" ? Promise.resolve(emptyAgentRealtimeView()) : buildAgentRealtimeView(actor, options)
   ]);
 
   const minutesSinceImport = Math.max(0, Math.floor((Date.now() - batch.importedAt.getTime()) / 60000));
@@ -444,7 +446,7 @@ export async function listRealtimeImports(actor: Actor) {
 }
 
 export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQuery): Promise<XlsxExportPayload | { error: string; status: number }> {
-  const snapshot = await getRealtimeSnapshot(actor, { cycleDownload: query.cycleDownload });
+  const snapshot = await getRealtimeSnapshot(actor, { cycleDownload: query.cycleDownload, view: "both" });
   if ("error" in snapshot && snapshot.error) return { error: snapshot.error, status: snapshot.status ?? 400 };
   const snapshotData = "data" in snapshot ? snapshot.data : null;
   if (!snapshotData) return { error: "Não foi possível exportar Real Time.", status: 500 };
@@ -794,7 +796,13 @@ async function buildQueueRealtimeView(options: RealtimeSnapshotOptions) {
   const records = await prisma.realTimeRecord.findMany({
     where: { recordType: "QUEUE", batchId: { in: batchIds } },
     orderBy: { rowNumber: "asc" },
-    include: { batch: { select: { id: true, importedAt: true, fileName: true } } }
+    select: {
+      id: true,
+      batchId: true,
+      rowNumber: true,
+      rawData: true,
+      batch: { select: { id: true, importedAt: true, fileName: true } }
+    }
   });
 
   const latestBatchByCycle = new Map<string, { batchId: string; importedAt: Date }>();
@@ -909,7 +917,13 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
   const records = await prisma.realTimeRecord.findMany({
     where: { recordType: "AGENT", batchId: { in: batchIds } },
     orderBy: { rowNumber: "asc" },
-    include: { batch: { select: { id: true, importedAt: true, fileName: true } } }
+    select: {
+      id: true,
+      batchId: true,
+      rowNumber: true,
+      rawData: true,
+      batch: { select: { id: true, importedAt: true, fileName: true } }
+    }
   });
 
   const employeesByWb = new Map<string, EmployeeMatch>();
