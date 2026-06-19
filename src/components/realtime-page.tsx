@@ -13,8 +13,8 @@ import {
   Search,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { Area, AreaChart, ResponsiveContainer, Tooltip as RechartsTooltip } from "recharts";
+import { useEffect, useId, useMemo, useState } from "react";
+import { Area, AreaChart, ResponsiveContainer, Tooltip as RechartsTooltip, YAxis } from "recharts";
 
 import { cn } from "@/lib/utils";
 
@@ -533,14 +533,19 @@ export function RealTimePage() {
       <section className="overflow-hidden rounded-[24px] border border-slate-200/80 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
         <div className="border-b border-slate-100 px-4 py-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="inline-flex rounded-2xl bg-slate-100 p-1">
-            <button type="button" onClick={() => setActiveTab("agents")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", activeTab === "agents" ? "bg-white text-blue-700 shadow-sm" : "text-muted")}>
-              Agentes
-            </button>
-            <button type="button" onClick={() => setActiveTab("queues")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", activeTab === "queues" ? "bg-white text-blue-700 shadow-sm" : "text-muted")}>
-              Filas
-            </button>
-          </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="inline-flex rounded-2xl bg-slate-100 p-1">
+                <button type="button" onClick={() => setActiveTab("agents")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", activeTab === "agents" ? "bg-white text-blue-700 shadow-sm" : "text-muted")}>
+                  Agentes
+                </button>
+                <button type="button" onClick={() => setActiveTab("queues")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", activeTab === "queues" ? "bg-white text-blue-700 shadow-sm" : "text-muted")}>
+                  Filas
+                </button>
+              </div>
+              {activeTab === "queues" ? (
+                <QueueLobQuickFilter value={queueFilters.lob} onChange={(value) => updateQueueFilter("lob", value)} options={queueView?.filters.lobs ?? []} />
+              ) : null}
+            </div>
             <div className="flex flex-wrap gap-2">
               <button type="button" onClick={activeTab === "agents" ? () => setAgentFilters(defaultAgentFilters) : () => setQueueFilters(defaultQueueFilters)} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Filtros padrão</button>
               <button type="button" onClick={activeTab === "agents" ? () => setAgentFilters(emptyAgentFilters) : () => setQueueFilters({ search: "", lob: "", status: "", slaTarget: "", queueId: "" })} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Limpar</button>
@@ -559,9 +564,8 @@ export function RealTimePage() {
               <FilterSelect value={agentFilters.roleTitle} onChange={(value) => updateAgentFilter("roleTitle", value)} label="Cargo" empty="Todos" options={agentView?.filters.roleTitles ?? []} />
             </div>
           ) : (
-            <div className="mt-4 grid gap-2 rounded-3xl border border-slate-100 bg-slate-50/70 p-3 sm:grid-cols-2 lg:grid-cols-5">
+            <div className="mt-4 grid gap-2 rounded-3xl border border-slate-100 bg-slate-50/70 p-3 sm:grid-cols-2 lg:grid-cols-4">
               <SearchBox value={queueFilters.search} onChange={(value) => updateQueueFilter("search", value)} placeholder="Buscar ID ou nome da fila..." />
-              <QueueLobFilterSelect value={queueFilters.lob} onChange={(value) => updateQueueFilter("lob", value)} options={queueView?.filters.lobs ?? []} />
               <FilterSelect value={queueFilters.status} onChange={(value) => updateQueueFilter("status", value)} label="Status" empty="Todos" options={queueView?.filters.statuses ?? []} />
               <FilterSelect value={queueFilters.slaTarget} onChange={(value) => updateQueueFilter("slaTarget", value)} label="Meta SLA" empty="Todas" options={queueView?.filters.slaTargets ?? []} formatOptionLabel={formatSlaTargetLabel} />
               <FilterSelect value={queueFilters.queueId} onChange={(value) => updateQueueFilter("queueId", value)} label="Fila ID" empty="Todas" options={queueView?.filters.queueIds ?? []} />
@@ -631,7 +635,7 @@ function AgentTable({
         <span>{rows.length} de {totalRows} agente(s) exibidos</span>
       </div>
       <div className="max-h-[680px] overflow-auto">
-        <table className="min-w-[1400px] border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[1400px] border-separate border-spacing-0 text-left text-sm">
           <thead className="sticky top-0 z-10 bg-slate-50/95 text-xs uppercase tracking-wide text-muted backdrop-blur">
             <tr className="border-b border-slate-100">
               <th colSpan={4} className="border-b border-slate-100 px-4 py-2 font-black text-blue-700">Identificação</th>
@@ -735,7 +739,7 @@ function AgentMetricCell({
   positiveDirection: "up" | "down" | "neutral";
 }) {
   const delta = current !== null && previous !== null ? current - previous : null;
-  const isPositive = delta === null || delta === 0 || positiveDirection === "neutral" ? null : positiveDirection === "up" ? delta > 0 : delta < 0;
+  const isPositive = delta === null || positiveDirection === "neutral" ? null : delta === 0 ? true : positiveDirection === "up" ? delta > 0 : delta < 0;
   const value = format === "duration" ? formatDurationFromMs(current) : formatInteger(current ?? 0);
   const deltaValue = delta === null ? "" : format === "duration" ? formatDurationFromMs(Math.abs(delta)) : formatInteger(Math.abs(delta));
   const trend = isPositive === null ? "neutral" : isPositive ? "positive" : "negative";
@@ -785,7 +789,7 @@ function StructuredQueueTable({
         <span>{rows.length} de {totalRows} fila(s) exibidas</span>
       </div>
       <div className="max-h-[680px] overflow-auto">
-        <table className="min-w-[1180px] border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[1180px] border-separate border-spacing-0 text-left text-sm">
           <thead className="sticky top-0 z-10 bg-slate-50/95 text-xs uppercase tracking-wide text-muted backdrop-blur">
             <tr>
               {columns.map((column) => (
@@ -1178,23 +1182,35 @@ function FilterSelect({
   );
 }
 
-function QueueLobFilterSelect({ value, onChange, options }: { value: string; onChange: (value: string) => void; options: CountItem[] }) {
+function QueueLobQuickFilter({ value, onChange, options }: { value: string; onChange: (value: string) => void; options: CountItem[] }) {
   const counts = new Map(options.map((option) => [option.label, option.count]));
+  const totalCount = options.reduce((sum, option) => sum + option.count, 0);
   const mappedCount = (counts.get("ADS") ?? 0) + (counts.get("VIDEO") ?? 0) + (counts.get("COMMENTS") ?? 0);
-  const orderedOptions: CountItem[] = [
-    { label: "MAPPED", count: mappedCount },
-    ...["ADS", "VIDEO", "COMMENTS", "N/A"].map((label) => ({ label, count: counts.get(label) ?? 0 })),
-    ...options.filter((option) => !["ADS", "VIDEO", "COMMENTS", "N/A"].includes(option.label))
+  const orderedOptions: Array<CountItem & { value: string }> = [
+    { label: "Todas", value: "", count: totalCount },
+    { label: "Todos mapeados", value: "MAPPED", count: mappedCount },
+    ...["ADS", "VIDEO", "COMMENTS", "N/A"].map((label) => ({ label, value: label, count: counts.get(label) ?? 0 }))
   ];
   return (
-    <select value={value} onChange={(event) => onChange(event.target.value)} aria-label="LOB" className="premium-control h-10 w-full min-w-0 px-3 text-sm font-bold text-navy-950 outline-none">
-      <option value="">Todas</option>
-      {orderedOptions.map((option) => (
-        <option key={option.label} value={option.label}>
-          {option.label === "MAPPED" ? "Todos mapeados" : option.label} ({option.count})
-        </option>
-      ))}
-    </select>
+    <div className="flex flex-wrap items-center gap-1 rounded-2xl border border-slate-200 bg-white p-1 shadow-[0_4px_12px_rgba(7,27,58,0.035)]">
+      {orderedOptions.map((option) => {
+        const active = value === option.value || (!value && option.value === "");
+        return (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => onChange(option.value)}
+            className={cn(
+              "inline-flex h-8 items-center gap-1 rounded-xl px-3 text-xs font-black transition",
+              active ? "bg-blue-600 text-white shadow-sm" : "text-muted hover:bg-blue-50 hover:text-blue-700"
+            )}
+          >
+            {option.label}
+            <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", active ? "bg-white/20 text-white" : "bg-slate-100 text-muted")}>{option.count}</span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -1319,6 +1335,7 @@ function MiniMetricChartCard({ label, card }: { label: string; card: AgentKpiCar
 }
 
 function TrendSparkline({ data, format, trend, compact = false }: { data: TrendPoint[]; format: MetricFormat; trend: "positive" | "negative" | "neutral"; compact?: boolean }) {
+  const gradientId = `sparkline-${useId().replace(/:/g, "")}`;
   const validData = data.filter((point) => point.value !== null);
   const color = trend === "positive" ? "#10B981" : trend === "negative" ? "#EF4444" : "#2563EB";
   if (validData.length < 2) {
@@ -1332,13 +1349,14 @@ function TrendSparkline({ data, format, trend, compact = false }: { data: TrendP
     <ResponsiveContainer width="100%" height="100%">
       <AreaChart data={validData} margin={{ top: compact ? 4 : 12, right: 4, left: 4, bottom: compact ? 4 : 12 }}>
         <defs>
-          <linearGradient id={`sparkline-${trend}-${compact ? "compact" : "full"}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%" stopColor={color} stopOpacity={0.28} />
-            <stop offset="95%" stopColor={color} stopOpacity={0.02} />
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor={color} stopOpacity={0.34} />
+            <stop offset="95%" stopColor={color} stopOpacity={0.04} />
           </linearGradient>
         </defs>
+        <YAxis hide domain={[0, "dataMax"]} />
         <RechartsTooltip content={<SparklineTooltip format={format} />} cursor={{ stroke: "#CBD5E1", strokeDasharray: "4 4" }} />
-        <Area type="monotone" dataKey="value" stroke={color} strokeWidth={compact ? 2 : 2.5} fill={`url(#sparkline-${trend}-${compact ? "compact" : "full"})`} dot={false} activeDot={{ r: compact ? 3 : 4, stroke: color, strokeWidth: 2, fill: "#fff" }} />
+        <Area type="monotone" dataKey="value" stroke={color} strokeWidth={compact ? 2 : 2.5} fill={`url(#${gradientId})`} dot={false} isAnimationActive={false} activeDot={{ r: compact ? 3 : 4, stroke: color, strokeWidth: 2, fill: "#fff" }} />
       </AreaChart>
     </ResponsiveContainer>
   );
@@ -1520,7 +1538,7 @@ function summarizeMetrics(metrics: AgentMetric[]) {
 
 function buildAgentKpiCard(label: string, current: number | null, previous: number | null, format: MetricFormat, positiveDirection: "up" | "down" | "neutral", history: TrendPoint[] = []): AgentKpiCard {
   const delta = current !== null && previous !== null ? current - previous : null;
-  const isPositive = delta === null || delta === 0 || positiveDirection === "neutral" ? null : positiveDirection === "up" ? delta > 0 : delta < 0;
+  const isPositive = delta === null || positiveDirection === "neutral" ? null : delta === 0 ? true : positiveDirection === "up" ? delta > 0 : delta < 0;
   return {
     label,
     value: format === "duration" ? formatDurationFromMs(current) : formatInteger(current ?? 0),

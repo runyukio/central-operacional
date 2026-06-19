@@ -798,7 +798,11 @@ async function buildQueueRealtimeView(options: RealtimeSnapshotOptions) {
 
   const groupedByCycle = new Map<string, QueueCycleRow[]>();
   for (const cycle of cycles) {
-    groupedByCycle.set(cycle.value, aggregateQueueCycleRows(latestRecords.filter((item) => item.cycleDownload === cycle.value)));
+    groupedByCycle.set(cycle.value, aggregateQueueCycleRows(
+      latestRecords
+        .filter((item) => item.cycleDownload === cycle.value)
+        .map((item) => ({ rawData: item.rawData, cycleDownload: item.cycleDownload, rowNumber: item.record.rowNumber }))
+    ));
   }
 
   const currentRows = groupedByCycle.get(selectedCycle) ?? [];
@@ -1144,6 +1148,7 @@ function aggregateAgentCycleRows(items: Array<{
 function aggregateQueueCycleRows(items: Array<{
   rawData: RawRow;
   cycleDownload: string;
+  rowNumber?: number;
 }>) {
   type MutableQueueAgg = {
     key: string;
@@ -1164,6 +1169,7 @@ function aggregateQueueCycleRows(items: Array<{
     simpleLatencyMs: number;
     simpleLatencyCount: number;
     maxLatencyMs: number | null;
+    maxLatencyRowNumber: number;
     sourceRows: number;
   };
 
@@ -1200,6 +1206,7 @@ function aggregateQueueCycleRows(items: Array<{
       simpleLatencyMs: 0,
       simpleLatencyCount: 0,
       maxLatencyMs: null,
+      maxLatencyRowNumber: -1,
       sourceRows: 0
     };
 
@@ -1226,8 +1233,9 @@ function aggregateQueueCycleRows(items: Array<{
         group.simpleLatencyCount += 1;
       }
     }
-    if (maxLatencyMs !== null && maxLatencyMs >= 0) {
+    if (maxLatencyMs !== null && maxLatencyMs >= 0 && (item.rowNumber ?? 0) >= group.maxLatencyRowNumber) {
       group.maxLatencyMs = maxLatencyMs;
+      group.maxLatencyRowNumber = item.rowNumber ?? 0;
     }
     groups.set(key, group);
   }
