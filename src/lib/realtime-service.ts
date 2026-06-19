@@ -174,7 +174,7 @@ const queueFriendlyFields = [
   ["Agentes revisando", ["审核人数"]],
   ["Revisados", ["审核量"]],
   ["Latência média", ["平均延时（毫秒）"]],
-  ["Latência máx.", ["最大延时（毫秒）"]]
+  ["Latência máx.", ["待审最大延时（毫秒）", "最大延时（毫秒）"]]
 ] as const;
 const agentFriendlyFields = [
   ["Agente", ["姓名", "agent", "agente"]],
@@ -1188,7 +1188,7 @@ function aggregateQueueCycleRows(items: Array<{
     const output = Math.max(0, parseRealtimeNumberFromRow(item.rawData, ["审核量", "output", "Output"]));
     const ahtMs = parseOptionalRealtimeNumberFromRow(item.rawData, ["平均AHT", "平均AHT（毫秒）", "avg_aht_ms", "aht_ms"]);
     const latencyMs = parseOptionalRealtimeNumberFromRow(item.rawData, ["平均延时（毫秒）", "latency_ms", "sla_ms"]);
-    const maxLatencyMs = parseOptionalRealtimeNumberFromRow(item.rawData, ["最大延时（毫秒）", "max_latency_ms", "max latency"]);
+    const maxLatencyMs = parseOptionalRealtimeNumberFromRow(item.rawData, ["待审最大延时（毫秒）", "最大延时（毫秒）", "max_latency_ms", "max latency"]);
     const backlog = Math.max(0, parseRealtimeNumberFromRow(item.rawData, ["待审量", "backlog", "Backlog"]));
     const group = groups.get(key) ?? {
       key,
