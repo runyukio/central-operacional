@@ -154,7 +154,7 @@ type QueueCycleRow = {
 
 const staleThresholdMinutes = 20;
 const realtimeRetentionDays = 7;
-const realtimeViewHistoryBatchLimit = 72;
+const realtimeViewHistoryBatchLimit = 180;
 
 const queueNameCandidates = ["fila", "queue", "queue id", "queue_id", "queue name", "queue_name", "skill group queue", "skillgroupqueue"];
 const agentNameCandidates = ["agente", "agent", "auditor", "auditor name", "nome", "name", "colaborador", "operator", "moderator"];
@@ -393,6 +393,70 @@ export async function getRealtimeSnapshot(actor: Actor, options: RealtimeSnapsho
       agents: agentRealtime,
       kpis: []
     }
+  };
+}
+
+export async function getRealtimeLatestStatus(actor: Actor, options: RealtimeSnapshotOptions = {}) {
+  if (!canAccessRealTime({ role: actor.role, email: actor.email, name: actor.name, status: "ACTIVE" })) {
+    return { error: "Você não tem permissão para acessar Real Time.", status: 403 };
+  }
+
+  const requestedView = options.view ?? "both";
+  const [queueLatest, agentLatest] = await Promise.all([
+    requestedView === "agents" ? Promise.resolve(null) : latestRealtimeCycle("QUEUE"),
+    requestedView === "queues" ? Promise.resolve(null) : latestRealtimeCycle("AGENT")
+  ]);
+
+  return {
+    data: {
+      queues: queueLatest,
+      agents: agentLatest
+    }
+  };
+}
+
+async function latestRealtimeCycle(recordType: "QUEUE" | "AGENT") {
+  const batch = await prisma.realTimeImportBatch.findFirst({
+    where: {
+      status: "SUCCESS",
+      ...(recordType === "QUEUE" ? { queueRows: { gt: 0 } } : { agentRows: { gt: 0 } })
+    },
+    orderBy: { importedAt: "desc" },
+    select: {
+      id: true,
+      fileName: true,
+      source: true,
+      status: true,
+      rowsTotal: true,
+      queueRows: true,
+      agentRows: true,
+      importedAt: true
+    }
+  });
+
+  if (!batch) return null;
+
+  const record = await prisma.realTimeRecord.findFirst({
+    where: { batchId: batch.id, recordType },
+    orderBy: { rowNumber: "asc" },
+    select: { rawData: true }
+  });
+  const rawData = isPlainObject(record?.rawData) ? record.rawData : {};
+  const cycleDownload = extractCycleDownload(rawData) || formatCycleFromDate(batch.importedAt);
+  const minutesSinceImport = Math.max(0, Math.floor((Date.now() - batch.importedAt.getTime()) / 60000));
+
+  return {
+    batchId: batch.id,
+    cycleDownload,
+    fileName: batch.fileName,
+    source: batch.source,
+    status: batch.status,
+    rows: recordType === "QUEUE" ? batch.queueRows : batch.agentRows,
+    rowsTotal: batch.rowsTotal,
+    importedAt: batch.importedAt.toISOString(),
+    importedAtLabel: formatDateTime(batch.importedAt),
+    minutesSinceImport,
+    isStale: minutesSinceImport > staleThresholdMinutes
   };
 }
 

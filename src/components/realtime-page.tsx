@@ -396,9 +396,7 @@ export function RealTimePage() {
 
   useEffect(() => {
     void loadSnapshot(selectedCycle, false, activeTab);
-    const interval = window.setInterval(() => void loadSnapshot(selectedCycle, true, activeTab), 60000);
     return () => {
-      window.clearInterval(interval);
       snapshotAbortRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -457,9 +455,6 @@ export function RealTimePage() {
     }).sort((a, b) => compareAgentRows(a, b, agentSort));
   }, [agentFilters, agentSort, agentView?.rows]);
 
-  const filteredAgentCards = useMemo(() => buildFilteredAgentCards(agentRows), [agentRows]);
-  const filteredQueueCards = useMemo(() => buildQueueLobCards(queueRows), [queueRows]);
-
   const cycles = activeTab === "queues" ? queueView?.cycles ?? [] : agentView?.cycles ?? [];
   const selectedCycleExists = Boolean(selectedCycle && cycles.some((cycle) => cycle.value === selectedCycle));
   const selectedCycleValue = selectedCycleExists ? selectedCycle : (activeTab === "queues" ? queueView?.selectedCycle : agentView?.selectedCycle) || "";
@@ -467,6 +462,29 @@ export function RealTimePage() {
   const olderCycle = selectedCycleIndex >= 0 ? cycles[selectedCycleIndex + 1]?.value ?? "" : "";
   const newerCycle = selectedCycleIndex > 0 ? cycles[selectedCycleIndex - 1]?.value ?? "" : "";
   const latestCycle = cycles[0]?.value ?? "";
+  const filteredAgentCards = useMemo(() => buildFilteredAgentCards(agentRows, selectedCycleValue), [agentRows, selectedCycleValue]);
+  const filteredQueueCards = useMemo(() => buildQueueLobCards(queueRows, selectedCycleValue), [queueRows, selectedCycleValue]);
+
+  useEffect(() => {
+    const interval = window.setInterval(async () => {
+      try {
+        const params = new URLSearchParams({ view: activeTab });
+        const response = await fetch(`/api/realtime/latest?${params.toString()}`, { cache: "no-store" });
+        const json = await response.json();
+        if (!response.ok) throw new Error(json.message || json.error || "Não foi possível verificar atualização do Real Time.");
+        const latest = activeTab === "queues" ? json.data?.queues : json.data?.agents;
+        const latestCycleDownload = typeof latest?.cycleDownload === "string" ? latest.cycleDownload : "";
+        if (!latestCycleDownload || latestCycleDownload === latestCycle) return;
+
+        const shouldFollowLatest = !selectedCycleValue || selectedCycleValue === latestCycle;
+        await loadSnapshot(shouldFollowLatest ? latestCycleDownload : selectedCycleValue, true, activeTab);
+      } catch (currentError) {
+        console.warn("[realtime] Auto-refresh leve falhou.", currentError);
+      }
+    }, 60000);
+    return () => window.clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, latestCycle, selectedCycleValue]);
 
   function updateAgentFilter(key: keyof AgentFilters, value: string) {
     setAgentFilters((current) => ({ ...current, [key]: value }));
@@ -1600,20 +1618,20 @@ function SparklineTooltip({ active, payload, format }: { active?: boolean; paylo
   );
 }
 
-function buildFilteredAgentCards(rows: AgentRealtimeRow[]): AgentKpiCard[] {
+function buildFilteredAgentCards(rows: AgentRealtimeRow[], selectedCycle: string): AgentKpiCard[] {
   const current = summarizeMetrics(rows.map((row) => row.current));
   const previousMetrics = rows.map((row) => row.previous).filter((metric): metric is AgentMetric => Boolean(metric));
   const previous = previousMetrics.length ? summarizeMetrics(previousMetrics) : null;
   return [
-    buildAgentKpiCard("Submit total", current.submit, previous?.submit ?? null, "number", "up", buildAgentTrendSeries(rows, "submit")),
-    buildAgentKpiCard("AHT médio", current.ahtMs, previous?.ahtMs ?? null, "duration", "down", buildAgentTrendSeries(rows, "ahtMs")),
-    buildAgentKpiCard("Moderação total", current.moderationMs, previous?.moderationMs ?? null, "duration", "up", buildAgentTrendSeries(rows, "moderationMs")),
-    buildAgentKpiCard("Timeout", current.timeout, previous?.timeout ?? null, "number", "down", buildAgentTrendSeries(rows, "timeout")),
-    buildAgentKpiCard("Refresh", current.refresh, previous?.refresh ?? null, "number", "down", buildAgentTrendSeries(rows, "refresh"))
+    buildAgentKpiCard("Submit total", current.submit, previous?.submit ?? null, "number", "up", buildAgentTrendSeries(rows, "submit", selectedCycle)),
+    buildAgentKpiCard("AHT médio", current.ahtMs, previous?.ahtMs ?? null, "duration", "down", buildAgentTrendSeries(rows, "ahtMs", selectedCycle)),
+    buildAgentKpiCard("Moderação total", current.moderationMs, previous?.moderationMs ?? null, "duration", "up", buildAgentTrendSeries(rows, "moderationMs", selectedCycle)),
+    buildAgentKpiCard("Timeout", current.timeout, previous?.timeout ?? null, "number", "down", buildAgentTrendSeries(rows, "timeout", selectedCycle)),
+    buildAgentKpiCard("Refresh", current.refresh, previous?.refresh ?? null, "number", "down", buildAgentTrendSeries(rows, "refresh", selectedCycle))
   ];
 }
 
-function buildQueueLobCards(rows: QueueRealtimeRow[]): QueueLobCardData[] {
+function buildQueueLobCards(rows: QueueRealtimeRow[], selectedCycle: string): QueueLobCardData[] {
   return (["ADS", "VIDEO", "COMMENTS"] as const).map((lob) => {
     const scopedRows = rows.filter((row) => row.lob === lob && (lob !== "VIDEO" || row.slaTargetMinutes === 15));
     if (!scopedRows.length) {
@@ -1632,10 +1650,10 @@ function buildQueueLobCards(rows: QueueRealtimeRow[]): QueueLobCardData[] {
     return {
       lob,
       adherenceCounts: summarizeLatencyAdherence(scopedRows),
-      backlog: buildAgentKpiCard("Backlog", current.backlog, previous?.backlog ?? null, "number", "down", buildQueueTrendSeries(scopedRows, "backlog")),
-      latency: buildAgentKpiCard("SLA", current.latencyMs, previous?.latencyMs ?? null, "duration", "down", buildQueueTrendSeries(scopedRows, "latencyMs")),
-      maxLatency: buildAgentKpiCard("Max Latência", current.maxLatencyMs, previous?.maxLatencyMs ?? null, "duration", "down", buildQueueTrendSeries(scopedRows, "maxLatencyMs")),
-      aht: buildAgentKpiCard("AHT", current.ahtMs, previous?.ahtMs ?? null, "duration", "down", buildQueueTrendSeries(scopedRows, "ahtMs"))
+      backlog: buildAgentKpiCard("Backlog", current.backlog, previous?.backlog ?? null, "number", "down", buildQueueTrendSeries(scopedRows, "backlog", selectedCycle)),
+      latency: buildAgentKpiCard("SLA", current.latencyMs, previous?.latencyMs ?? null, "duration", "down", buildQueueTrendSeries(scopedRows, "latencyMs", selectedCycle)),
+      maxLatency: buildAgentKpiCard("Max Latência", current.maxLatencyMs, previous?.maxLatencyMs ?? null, "duration", "down", buildQueueTrendSeries(scopedRows, "maxLatencyMs", selectedCycle)),
+      aht: buildAgentKpiCard("AHT", current.ahtMs, previous?.ahtMs ?? null, "duration", "down", buildQueueTrendSeries(scopedRows, "ahtMs", selectedCycle))
     };
   });
 }
@@ -1654,7 +1672,7 @@ function summarizeLatencyAdherence(rows: QueueRealtimeRow[]): QueueLobCardData["
   }, { ok: 0, alerta: 0, estourado: 0 });
 }
 
-function buildAgentTrendSeries(rows: AgentRealtimeRow[], key: "submit" | "ahtMs" | "moderationMs" | "timeout" | "refresh"): TrendPoint[] {
+function buildAgentTrendSeries(rows: AgentRealtimeRow[], key: "submit" | "ahtMs" | "moderationMs" | "timeout" | "refresh", selectedCycle: string): TrendPoint[] {
   const byCycle = new Map<string, AgentMetric[]>();
   rows.forEach((row) => {
     row.history.forEach((item) => {
@@ -1675,10 +1693,10 @@ function buildAgentTrendSeries(rows: AgentRealtimeRow[], key: "submit" | "ahtMs"
     const summary = summarizeMetrics(metrics);
     return { cycleDownload, value: summary[key] };
   });
-  return buildTrendPoints(points);
+  return buildTrendPoints(points, selectedCycle);
 }
 
-function buildQueueTrendSeries(rows: QueueRealtimeRow[], key: "backlog" | "latencyMs" | "maxLatencyMs" | "ahtMs" | "input" | "output"): TrendPoint[] {
+function buildQueueTrendSeries(rows: QueueRealtimeRow[], key: "backlog" | "latencyMs" | "maxLatencyMs" | "ahtMs" | "input" | "output", selectedCycle: string): TrendPoint[] {
   const byCycle = new Map<string, QueueMetric[]>();
   rows.forEach((row) => {
     row.history.forEach((item) => {
@@ -1700,13 +1718,19 @@ function buildQueueTrendSeries(rows: QueueRealtimeRow[], key: "backlog" | "laten
     const summary = summarizeQueueMetrics(metrics);
     return { cycleDownload, value: summary[key] };
   });
-  return buildTrendPoints(points);
+  return buildTrendPoints(points, selectedCycle);
 }
 
-function buildTrendPoints(points: Array<{ cycleDownload: string; value: number | null }>): TrendPoint[] {
-  return points
+function buildTrendPoints(points: Array<{ cycleDownload: string; value: number | null }>, selectedCycle: string): TrendPoint[] {
+  const selected = selectedCycle ? parseRealtimeCycle(selectedCycle, "") : null;
+  const dailyPoints = selected
+    ? points.filter((point) => {
+      const parsed = parseRealtimeCycle(point.cycleDownload, "");
+      return parsed.dateKey === selected.dateKey && parsed.timestamp <= selected.timestamp;
+    })
+    : points;
+  return dailyPoints
     .sort((a, b) => parseRealtimeCycle(a.cycleDownload, "").timestamp - parseRealtimeCycle(b.cycleDownload, "").timestamp)
-    .slice(-12)
     .map((point, index, sorted) => {
       const previous = index > 0 ? sorted[index - 1].value : null;
       const delta = point.value !== null && previous !== null ? point.value - previous : null;
