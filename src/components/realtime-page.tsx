@@ -1598,7 +1598,7 @@ function ReportTable({ rows, reportLob, onDownloadQueues }: { rows: QueueReportR
         <table className="w-full min-w-[980px] border-separate border-spacing-0 text-left text-sm">
           <thead className="sticky top-0 z-10 bg-slate-50/95 text-xs uppercase tracking-wide text-muted backdrop-blur">
             <tr>
-              {["ID", "Queue", "Department", "Backlog", "AHT", "Max Latency", "Average Latency"].map((column) => (
+              {["ID", "Queue", "Department", "Backlog", "AHT", "Max Latency", "Latency Target"].map((column) => (
                 <th key={column} className="whitespace-nowrap border-b border-slate-100 px-4 py-3 font-black">{column}</th>
               ))}
             </tr>
@@ -1621,7 +1621,7 @@ function ReportTable({ rows, reportLob, onDownloadQueues }: { rows: QueueReportR
                     <td className="px-4 py-3 font-black text-navy-950">{formatInteger(row.current.backlog)}</td>
                     <td className="px-4 py-3 font-bold text-navy-950">{formatDurationFromMs(row.current.ahtMs)}</td>
                     <td className="px-4 py-3"><ReportLatencyCell value={row.current.maxLatencyMs} slaTargetMinutes={row.slaTargetMinutes} /></td>
-                    <td className="px-4 py-3"><ReportLatencyCell value={row.current.latencyMs} slaTargetMinutes={row.slaTargetMinutes} /></td>
+                    <td className="px-4 py-3 font-black text-navy-950">{row.slaTargetMinutes === null ? "No target" : formatSlaTargetLabel(String(row.slaTargetMinutes))}</td>
                   </tr>
                 ))}
               </Fragment>
@@ -1771,7 +1771,7 @@ function downloadReportQueuesImage({
     { label: "Backlog", x: tableX + 1010, w: 100 },
     { label: "AHT", x: tableX + 1140, w: 100 },
     { label: "Max Latency", x: tableX + 1265, w: 175 },
-    { label: "Average Latency", x: tableX + 1480, w: 180 }
+    { label: "Latency Target", x: tableX + 1480, w: 180 }
   ];
   drawTableHeader(ctx, columns, tableY, headerHeight);
   let cursorY = tableY + headerHeight;
@@ -1792,8 +1792,7 @@ function downloadReportQueuesImage({
       drawText(ctx, formatDurationFromMs(row.current.ahtMs), columns[4].x, textY, 13, "#0F172A", "800");
       drawText(ctx, formatDurationFromMs(row.current.maxLatencyMs), columns[5].x, y + 17, 13, "#0F172A", "900");
       drawCanvasStatusPill(ctx, resolveLatencyAdherence(row.current.maxLatencyMs, row.slaTargetMinutes), columns[5].x, y + 21, true);
-      drawText(ctx, formatDurationFromMs(row.current.latencyMs), columns[6].x, y + 17, 13, "#0F172A", "900");
-      drawCanvasStatusPill(ctx, resolveLatencyAdherence(row.current.latencyMs, row.slaTargetMinutes), columns[6].x, y + 21, true);
+      drawText(ctx, row.slaTargetMinutes === null ? "No target" : formatSlaTargetLabel(String(row.slaTargetMinutes)), columns[6].x, textY, 13, "#0F172A", "900");
       cursorY += rowHeight;
     });
   });
