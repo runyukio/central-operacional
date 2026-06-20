@@ -1719,9 +1719,10 @@ function downloadReportQueuesImage({
   selectedCycle: string;
   rows: QueueReportRow[];
 }) {
-  const width = 1500;
-  const rowHeight = 30;
-  const height = Math.max(360, 130 + rows.length * rowHeight);
+  const width = 1710;
+  const rowHeight = 44;
+  const headerHeight = 36;
+  const height = Math.max(380, 140 + rows.length * rowHeight);
   const canvas = createReportCanvas(width, height);
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
@@ -1733,24 +1734,27 @@ function downloadReportQueuesImage({
   const tableY = 98;
   const columns = [
     { label: "ID", x: tableX, w: 90 },
-    { label: "Queue", x: tableX + 100, w: 520 },
-    { label: "Department", x: tableX + 635, w: 260 },
-    { label: "Backlog", x: tableX + 910, w: 110 },
-    { label: "AHT", x: tableX + 1030, w: 110 },
-    { label: "Max Latency", x: tableX + 1150, w: 130 },
-    { label: "Avg Latency", x: tableX + 1290, w: 120 }
+    { label: "Queue", x: tableX + 110, w: 560 },
+    { label: "Department", x: tableX + 710, w: 270 },
+    { label: "Backlog", x: tableX + 1010, w: 100 },
+    { label: "AHT", x: tableX + 1140, w: 100 },
+    { label: "Max Latency", x: tableX + 1265, w: 175 },
+    { label: "Average Latency", x: tableX + 1480, w: 180 }
   ];
-  drawTableHeader(ctx, columns, tableY, 30);
+  drawTableHeader(ctx, columns, tableY, headerHeight);
   rows.forEach((row, index) => {
-    const y = tableY + 30 + index * rowHeight;
+    const y = tableY + headerHeight + index * rowHeight;
     if (index % 2) fillRect(ctx, tableX - 10, y, width - 44, rowHeight, "#F3F4F6");
-    drawText(ctx, row.queueId || "N/A", columns[0].x, y + 21, 13, "#0F172A", "800");
-    drawText(ctx, truncateForCanvas(ctx, row.reportQueueName, columns[1].w), columns[1].x, y + 21, 13, "#0F172A", "800");
-    drawText(ctx, truncateForCanvas(ctx, row.reportDepartment, columns[2].w), columns[2].x, y + 21, 12, "#475569", "800");
-    drawText(ctx, formatInteger(row.current.backlog), columns[3].x, y + 21, 13, "#0F172A", "900");
-    drawText(ctx, formatDurationFromMs(row.current.ahtMs), columns[4].x, y + 21, 13, "#0F172A", "800");
-    drawText(ctx, formatDurationFromMs(row.current.maxLatencyMs), columns[5].x, y + 21, 13, "#0F172A", "900");
-    drawText(ctx, formatDurationFromMs(row.current.latencyMs), columns[6].x, y + 21, 13, "#0F172A", "900");
+    const textY = y + 27;
+    drawText(ctx, row.queueId || "N/A", columns[0].x, textY, 13, "#0F172A", "800");
+    drawText(ctx, truncateForCanvas(ctx, row.reportQueueName, columns[1].w), columns[1].x, textY, 13, "#0F172A", "800");
+    drawText(ctx, truncateForCanvas(ctx, row.reportDepartment, columns[2].w), columns[2].x, textY, 12, "#475569", "800");
+    drawText(ctx, formatInteger(row.current.backlog), columns[3].x, textY, 13, "#0F172A", "900");
+    drawText(ctx, formatDurationFromMs(row.current.ahtMs), columns[4].x, textY, 13, "#0F172A", "800");
+    drawText(ctx, formatDurationFromMs(row.current.maxLatencyMs), columns[5].x, y + 17, 13, "#0F172A", "900");
+    drawCanvasStatusPill(ctx, resolveLatencyAdherence(row.current.maxLatencyMs, row.slaTargetMinutes), columns[5].x, y + 21, true);
+    drawText(ctx, formatDurationFromMs(row.current.latencyMs), columns[6].x, y + 17, 13, "#0F172A", "900");
+    drawCanvasStatusPill(ctx, resolveLatencyAdherence(row.current.latencyMs, row.slaTargetMinutes), columns[6].x, y + 21, true);
   });
   downloadCanvas(canvas, `realtime-report-${reportLob.toLowerCase()}-queues.png`);
 }
@@ -1797,16 +1801,24 @@ function drawMiniLine(ctx: CanvasRenderingContext2D, history: TrendPoint[], x: n
   ctx.stroke();
 }
 
-function drawCanvasStatusPill(ctx: CanvasRenderingContext2D, status: LatencyAdherenceStatus, x: number, y: number) {
+function drawCanvasStatusPill(ctx: CanvasRenderingContext2D, status: LatencyAdherenceStatus, x: number, y: number, compact = false) {
   const config = status === "OK"
-    ? { bg: "#D1FAE5", text: "#047857", label: "OK" }
+    ? { bg: "#D1FAE5", text: "#047857", label: "OK", icon: "✓" }
     : status === "Alerta"
-      ? { bg: "#FEF3C7", text: "#B45309", label: "Alert" }
+      ? { bg: "#FEF3C7", text: "#B45309", label: "Alert", icon: "!" }
       : status === "Estourado"
-        ? { bg: "#FEE2E2", text: "#DC2626", label: "Over" }
-        : { bg: "#E2E8F0", text: "#475569", label: "N/A" };
-  roundRect(ctx, x, y, 76, 24, 12, config.bg);
-  drawText(ctx, config.label, x + 14, y + 17, 12, config.text, "900");
+        ? { bg: "#FEE2E2", text: "#DC2626", label: "Over", icon: "×" }
+        : { bg: "#E2E8F0", text: "#475569", label: "N/A", icon: "–" };
+  const width = compact ? 66 : 76;
+  const height = compact ? 19 : 24;
+  const radius = compact ? 9.5 : 12;
+  roundRect(ctx, x, y, width, height, radius, config.bg);
+  ctx.beginPath();
+  ctx.arc(x + (compact ? 11 : 13), y + height / 2, compact ? 6 : 7, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(255,255,255,0.62)";
+  ctx.fill();
+  drawText(ctx, config.icon, x + (compact ? 8 : 10), y + (compact ? 13.5 : 17), compact ? 10 : 11, config.text, "900");
+  drawText(ctx, config.label, x + (compact ? 23 : 28), y + (compact ? 13.5 : 17), compact ? 10 : 12, config.text, "900");
 }
 
 function drawText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, size: number, color: string, weight = "700", family = "Inter, Arial, sans-serif") {
