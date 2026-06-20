@@ -1806,16 +1806,44 @@ function drawMiniLine(ctx: CanvasRenderingContext2D, history: TrendPoint[], x: n
   const min = Math.min(...values);
   const max = Math.max(...values);
   const range = Math.max(1, max - min);
+  const points = values.map((value, index) => ({
+    x: x + (index / Math.max(1, values.length - 1)) * width,
+    y: y + height - ((value - min) / range) * height
+  }));
+
+  const gradient = ctx.createLinearGradient(0, y, 0, y + height);
+  gradient.addColorStop(0, colorToRgba(color, 0.2));
+  gradient.addColorStop(0.65, colorToRgba(color, 0.08));
+  gradient.addColorStop(1, colorToRgba(color, 0));
+
   ctx.beginPath();
-  values.forEach((value, index) => {
-    const px = x + (index / Math.max(1, values.length - 1)) * width;
-    const py = y + height - ((value - min) / range) * height;
-    if (index === 0) ctx.moveTo(px, py);
-    else ctx.lineTo(px, py);
+  points.forEach((point, index) => {
+    if (index === 0) ctx.moveTo(point.x, point.y);
+    else ctx.lineTo(point.x, point.y);
+  });
+  ctx.lineTo(x + width, y + height);
+  ctx.lineTo(x, y + height);
+  ctx.closePath();
+  ctx.fillStyle = gradient;
+  ctx.fill();
+
+  ctx.beginPath();
+  points.forEach((point, index) => {
+    if (index === 0) ctx.moveTo(point.x, point.y);
+    else ctx.lineTo(point.x, point.y);
   });
   ctx.lineWidth = 4;
   ctx.strokeStyle = color;
   ctx.stroke();
+}
+
+function colorToRgba(hex: string, alpha: number) {
+  const normalized = hex.replace("#", "");
+  if (normalized.length !== 6) return `rgba(37,99,235,${alpha})`;
+  const r = Number.parseInt(normalized.slice(0, 2), 16);
+  const g = Number.parseInt(normalized.slice(2, 4), 16);
+  const b = Number.parseInt(normalized.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 function drawCanvasStatusPill(ctx: CanvasRenderingContext2D, status: LatencyAdherenceStatus, x: number, y: number, compact = false) {
