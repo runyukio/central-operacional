@@ -1585,6 +1585,7 @@ function ReportSummarySection({
 
 function ReportTable({ rows, reportLob, onDownloadQueues }: { rows: QueueReportRow[]; reportLob: ReportLob; onDownloadQueues: () => void }) {
   const groups = groupReportRows(rows, reportLob);
+  const columns = getReportTableColumns(reportLob);
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
@@ -1595,11 +1596,16 @@ function ReportTable({ rows, reportLob, onDownloadQueues }: { rows: QueueReportR
         </button>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[980px] border-separate border-spacing-0 text-left text-sm">
+        <table className="w-full min-w-[1180px] table-fixed border-separate border-spacing-0 text-left text-sm">
+          <colgroup>
+            {columns.map((column) => (
+              <col key={column.key} style={{ width: column.width }} />
+            ))}
+          </colgroup>
           <thead className="sticky top-0 z-10 bg-slate-50/95 text-xs uppercase tracking-wide text-muted backdrop-blur">
             <tr>
-              {["ID", "Queue", "Department", "Backlog", "AHT", "Max Latency", "Latency Target"].map((column) => (
-                <th key={column} className="whitespace-nowrap border-b border-slate-100 px-4 py-3 font-black">{column}</th>
+              {columns.map((column) => (
+                <th key={column.key} className={cn("whitespace-nowrap border-b border-slate-100 px-4 py-3 font-black", column.align === "right" && "text-right")}>{column.label}</th>
               ))}
             </tr>
           </thead>
@@ -1616,12 +1622,18 @@ function ReportTable({ rows, reportLob, onDownloadQueues }: { rows: QueueReportR
                 {group.rows.map((row, index) => (
                   <tr key={row.key} className={cn("border-t border-slate-100 transition hover:bg-blue-50/60", index % 2 ? "bg-slate-50/35" : "bg-white")}>
                     <td className="px-4 py-3"><span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-black text-blue-700">{row.queueId || "Sem Fila ID"}</span></td>
-                    <td className="max-w-[360px] px-4 py-3 font-extrabold text-navy-950"><span className="block truncate" title={row.reportQueueName}>{row.reportQueueName}</span></td>
-                    <td className="max-w-[260px] px-4 py-3 font-bold text-muted"><span className="block truncate" title={row.reportDepartment}>{row.reportDepartment}</span></td>
-                    <td className="px-4 py-3 font-black text-navy-950">{formatInteger(row.current.backlog)}</td>
+                    <td className="px-4 py-3 font-extrabold text-navy-950"><span className="block truncate" title={row.reportQueueName}>{row.reportQueueName}</span></td>
+                    <td className="px-4 py-3 font-bold text-muted"><span className="block truncate" title={row.reportDepartment}>{row.reportDepartment}</span></td>
+                    <td className="px-4 py-3 text-right font-black text-navy-950">{formatInteger(row.current.backlog)}</td>
                     <td className="px-4 py-3 font-bold text-navy-950">{formatDurationFromMs(row.current.ahtMs)}</td>
                     <td className="px-4 py-3"><ReportLatencyCell value={row.current.maxLatencyMs} slaTargetMinutes={row.slaTargetMinutes} /></td>
-                    <td className="px-4 py-3 font-black text-navy-950">{row.slaTargetMinutes === null ? "No target" : formatSlaTargetLabel(String(row.slaTargetMinutes))}</td>
+                    <td className="px-4 py-3">
+                      {reportLob === "TNS" ? (
+                        <span className="font-black text-navy-950">{row.slaTargetMinutes === null ? "No target" : formatSlaTargetLabel(String(row.slaTargetMinutes))}</span>
+                      ) : (
+                        <ReportLatencyCell value={row.current.latencyMs} slaTargetMinutes={row.slaTargetMinutes} />
+                      )}
+                    </td>
                   </tr>
                 ))}
               </Fragment>
@@ -1636,6 +1648,18 @@ function ReportTable({ rows, reportLob, onDownloadQueues }: { rows: QueueReportR
       </div>
     </>
   );
+}
+
+function getReportTableColumns(reportLob: ReportLob) {
+  return [
+    { key: "id", label: "ID", width: "8%" },
+    { key: "queue", label: "Queue", width: "32%" },
+    { key: "department", label: "Department", width: "20%" },
+    { key: "backlog", label: "Backlog", width: "8%", align: "right" as const },
+    { key: "aht", label: "AHT", width: "8%" },
+    { key: "maxLatency", label: "Max Latency", width: "12%" },
+    { key: "last", label: reportLob === "TNS" ? "Latency Target" : "Average Latency", width: "12%" }
+  ];
 }
 
 function ReportLatencyCell({ value, slaTargetMinutes }: { value: number | null; slaTargetMinutes: number | null }) {
@@ -1771,7 +1795,7 @@ function downloadReportQueuesImage({
     { label: "Backlog", x: tableX + 1010, w: 100 },
     { label: "AHT", x: tableX + 1140, w: 100 },
     { label: "Max Latency", x: tableX + 1265, w: 175 },
-    { label: "Latency Target", x: tableX + 1480, w: 180 }
+    { label: reportLob === "TNS" ? "Latency Target" : "Average Latency", x: tableX + 1480, w: 180 }
   ];
   drawTableHeader(ctx, columns, tableY, headerHeight);
   let cursorY = tableY + headerHeight;
@@ -1792,7 +1816,12 @@ function downloadReportQueuesImage({
       drawText(ctx, formatDurationFromMs(row.current.ahtMs), columns[4].x, textY, 13, "#0F172A", "800");
       drawText(ctx, formatDurationFromMs(row.current.maxLatencyMs), columns[5].x, y + 17, 13, "#0F172A", "900");
       drawCanvasStatusPill(ctx, resolveLatencyAdherence(row.current.maxLatencyMs, row.slaTargetMinutes), columns[5].x, y + 21, true);
-      drawText(ctx, row.slaTargetMinutes === null ? "No target" : formatSlaTargetLabel(String(row.slaTargetMinutes)), columns[6].x, textY, 13, "#0F172A", "900");
+      if (reportLob === "TNS") {
+        drawText(ctx, row.slaTargetMinutes === null ? "No target" : formatSlaTargetLabel(String(row.slaTargetMinutes)), columns[6].x, textY, 13, "#0F172A", "900");
+      } else {
+        drawText(ctx, formatDurationFromMs(row.current.latencyMs), columns[6].x, y + 17, 13, "#0F172A", "900");
+        drawCanvasStatusPill(ctx, resolveLatencyAdherence(row.current.latencyMs, row.slaTargetMinutes), columns[6].x, y + 21, true);
+      }
       cursorY += rowHeight;
     });
   });
@@ -2192,7 +2221,7 @@ function buildReportRows(rows: QueueRealtimeRow[], reportLob: ReportLob, search:
         row.lob
       ].join(" ")).includes(normalizedSearch);
     })
-    .sort(compareReportRows);
+    .sort((a, b) => compareReportRows(a, b, reportLob));
 }
 
 function matchesReportLob(row: QueueRealtimeRow, reportLob: ReportLob) {
@@ -2200,7 +2229,14 @@ function matchesReportLob(row: QueueRealtimeRow, reportLob: ReportLob) {
   return row.lob === "ADS";
 }
 
-function compareReportRows(a: QueueReportRow, b: QueueReportRow) {
+function compareReportRows(a: QueueReportRow, b: QueueReportRow, reportLob: ReportLob) {
+  if (reportLob === "ADS") {
+    const backlogOrder = b.current.backlog - a.current.backlog;
+    if (backlogOrder !== 0) return backlogOrder;
+    const departmentOrder = a.reportDepartment.localeCompare(b.reportDepartment, "pt-BR", { sensitivity: "base" });
+    if (departmentOrder !== 0) return departmentOrder;
+    return a.reportQueueName.localeCompare(b.reportQueueName, "pt-BR", { sensitivity: "base" });
+  }
   const lobOrder = getReportLobOrder(a.lob) - getReportLobOrder(b.lob);
   if (lobOrder !== 0) return lobOrder;
   const targetOrder = normalizeSlaForSort(a.slaTargetMinutes) - normalizeSlaForSort(b.slaTargetMinutes);
