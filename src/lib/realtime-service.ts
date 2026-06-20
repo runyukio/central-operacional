@@ -405,6 +405,90 @@ export async function importRealtimeSnapshot(input: RealTimeImportInput) {
   };
 }
 
+export type RealtimeSummaryBackfillOptions = {
+  fromCycle: string;
+  toCycle: string;
+  dryRun?: boolean;
+};
+
+export async function backfillRealtimeCycleSummaries(options: RealtimeSummaryBackfillOptions) {
+  const fromCycle = options.fromCycle.trim();
+  const toCycle = options.toCycle.trim();
+  if (!fromCycle || !toCycle || fromCycle >= toCycle) {
+    throw new Error("Informe um intervalo válido: fromCycle deve ser menor que toCycle.");
+  }
+
+  const [agentRecords, queueRecords] = await Promise.all([
+    loadRawRealtimeRecordsForCycleRange("AGENT", fromCycle, toCycle),
+    loadRawRealtimeRecordsForCycleRange("QUEUE", fromCycle, toCycle)
+  ]);
+  const employeeMatches = agentRecords.length ? await loadEmployeeMatches() : [];
+  const agentSummaries = agentSummaryRowsFromRawRecords(agentRecords, employeeMatches);
+  const queueSummaries = queueSummaryRowsFromRawRecords(queueRecords);
+
+  const result = {
+    fromCycle,
+    toCycle,
+    dryRun: Boolean(options.dryRun),
+    agentRawRows: agentRecords.length,
+    queueRawRows: queueRecords.length,
+    agentSummaries: agentSummaries.length,
+    queueSummaries: queueSummaries.length,
+    deletedAgentSummaries: 0,
+    deletedQueueSummaries: 0,
+    insertedAgentSummaries: 0,
+    insertedQueueSummaries: 0
+  };
+
+  if (options.dryRun || (!agentSummaries.length && !queueSummaries.length)) return result;
+
+  const agentBatchIds = Array.from(new Set(agentRecords.map((record) => record.batchId)));
+  const queueBatchIds = Array.from(new Set(queueRecords.map((record) => record.batchId)));
+
+  await prisma.$transaction(async (tx) => {
+    if (agentBatchIds.length) {
+      const deleted = await tx.realTimeAgentCycleSummary.deleteMany({
+        where: {
+          batchId: { in: agentBatchIds },
+          cycleDownload: { gte: fromCycle, lt: toCycle }
+        }
+      });
+      result.deletedAgentSummaries = deleted.count;
+    }
+
+    if (queueBatchIds.length) {
+      const deleted = await tx.realTimeQueueCycleSummary.deleteMany({
+        where: {
+          batchId: { in: queueBatchIds },
+          cycleDownload: { gte: fromCycle, lt: toCycle }
+        }
+      });
+      result.deletedQueueSummaries = deleted.count;
+    }
+
+    for (let index = 0; index < agentSummaries.length; index += 1000) {
+      const chunk = agentSummaries.slice(index, index + 1000);
+      await tx.realTimeAgentCycleSummary.createMany({
+        data: chunk.map(({ batch: _batch, queueBreakdown, ...summary }) => ({
+          ...summary,
+          queueBreakdown: queueBreakdown as Prisma.InputJsonValue
+        }))
+      });
+      result.insertedAgentSummaries += chunk.length;
+    }
+
+    for (let index = 0; index < queueSummaries.length; index += 1000) {
+      const chunk = queueSummaries.slice(index, index + 1000);
+      await tx.realTimeQueueCycleSummary.createMany({
+        data: chunk.map(({ batch: _batch, ...summary }) => summary)
+      });
+      result.insertedQueueSummaries += chunk.length;
+    }
+  });
+
+  return result;
+}
+
 export async function getRealtimeSnapshot(actor: Actor, options: RealtimeSnapshotOptions = {}) {
   if (!canAccessRealTime({ role: actor.role, email: actor.email, name: actor.name, status: "ACTIVE" })) {
     return { error: "Você não tem permissão para acessar Real Time.", status: 403 };
@@ -895,6 +979,40 @@ async function loadEmployeeMatches() {
     supervisor: employee.supervisor?.fullName ?? "",
     supervisorId: employee.supervisorId ?? "",
     shift: employee.shift?.name ?? ""
+  }));
+}
+
+async function loadRawRealtimeRecordsForCycleRange(recordType: "AGENT" | "QUEUE", fromCycle: string, toCycle: string) {
+  const records = await prisma.$queryRaw<Array<{
+    batchId: string;
+    rowNumber: number;
+    rawData: Prisma.JsonValue;
+    importedAt: Date;
+    fileName: string;
+  }>>(Prisma.sql`
+    SELECT
+      r."batchId",
+      r."rowNumber",
+      r."rawData",
+      b."importedAt",
+      b."fileName"
+    FROM "RealTimeRecord" r
+    JOIN "RealTimeImportBatch" b ON b."id" = r."batchId"
+    WHERE r."recordType" = ${recordType}
+      AND r."rawData"->>'ciclo_download' >= ${fromCycle}
+      AND r."rawData"->>'ciclo_download' < ${toCycle}
+    ORDER BY b."importedAt" ASC, r."rowNumber" ASC
+  `);
+
+  return records.map((record) => ({
+    batchId: record.batchId,
+    rowNumber: record.rowNumber,
+    rawData: record.rawData,
+    batch: {
+      id: record.batchId,
+      importedAt: record.importedAt,
+      fileName: record.fileName
+    }
   }));
 }
 

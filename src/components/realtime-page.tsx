@@ -2435,11 +2435,10 @@ function buildQueueTrendSeries(rows: QueueRealtimeRow[], key: "backlog" | "laten
 
 function buildTrendPoints(points: Array<{ cycleDownload: string; value: number | null }>, selectedCycle: string): TrendPoint[] {
   const selected = selectedCycle ? parseRealtimeCycle(selectedCycle, "") : null;
-  const selectedOperationalDayKey = selected ? formatRealtimeOperationalDayKey(selected) : "";
   const dailyPoints = selected
     ? points.filter((point) => {
       const parsed = parseRealtimeCycle(point.cycleDownload, "");
-      return formatRealtimeOperationalDayKey(parsed) === selectedOperationalDayKey && parsed.timestamp <= selected.timestamp;
+      return parsed.dateKey === selected.dateKey && parsed.timestamp <= selected.timestamp;
     })
     : points;
   return dailyPoints
@@ -2631,13 +2630,6 @@ function parseRealtimeCycle(value: string, importedAt: string) {
     timestamp: date.getTime(),
     timeLabel: new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(date)
   };
-}
-
-function formatRealtimeOperationalDayKey(parsed: ReturnType<typeof parseRealtimeCycle>) {
-  if (parsed.date.getHours() >= 13) return parsed.dateKey;
-  const previousDay = new Date(parsed.date);
-  previousDay.setDate(previousDay.getDate() - 1);
-  return formatDateKey(previousDay);
 }
 
 function startOfMonth(date: Date) {
