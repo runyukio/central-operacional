@@ -1686,29 +1686,29 @@ function downloadReportSummaryImage({
   roundRect(ctx, leftX, topY, cardW, cardH, 28, "#FFFFFF", "#E5EAF2");
   roundRect(ctx, rightX, topY, cardW, cardH, 28, "#FFFFFF", "#E5EAF2");
 
-  drawText(ctx, `REPORT ${reportLob}`, leftX + 28, topY + 38, 18, "#64748B", "900", "Inter, Arial, sans-serif");
-  drawText(ctx, "Total Backlog", leftX + 28, topY + 74, 30, "#0F172A", "900", "Inter, Arial, sans-serif");
-  drawText(ctx, selectedCycle || "No cycle selected", leftX + 28, topY + 104, 18, "#64748B", "800", "Inter, Arial, sans-serif");
-  drawText(ctx, card.value, leftX + 28, topY + 188, 72, "#0F172A", "900", "Inter, Arial, sans-serif");
-  if (card.hasComparison) drawCanvasDeltaPill(ctx, card.trend, card.direction, card.delta || "0", leftX + 210, topY + 139);
-  else drawText(ctx, "No comparison", leftX + 210, topY + 168, 16, "#64748B", "900", "Inter, Arial, sans-serif");
-  drawText(ctx, "Daily history by Cycle", leftX + 28, topY + 224, 16, "#64748B", "900", "Inter, Arial, sans-serif");
+  drawText(ctx, `REPORT ${reportLob}`, leftX + 28, topY + 38, 16, "#64748B", "900", "Inter, Arial, sans-serif");
+  drawText(ctx, "Total Backlog", leftX + 28, topY + 70, 24, "#0F172A", "900", "Inter, Arial, sans-serif");
+  drawText(ctx, selectedCycle || "No cycle selected", leftX + 28, topY + 100, 17, "#64748B", "800", "Inter, Arial, sans-serif");
+  if (card.hasComparison) drawCanvasDeltaPill(ctx, card.trend, card.direction, card.delta || "0", leftX + cardW - 132, topY + 22);
+  else drawText(ctx, "No comparison", leftX + cardW - 142, topY + 40, 13, "#64748B", "900", "Inter, Arial, sans-serif");
+  drawText(ctx, card.value, leftX + 28, topY + 172, 60, "#0F172A", "900", "Inter, Arial, sans-serif");
+  drawText(ctx, "Daily history by Cycle", leftX + 28, topY + 210, 15, "#64748B", "900", "Inter, Arial, sans-serif");
 
   const chartX = leftX + 28;
-  const chartY = topY + 252;
+  const chartY = topY + 244;
   const chartW = cardW - 56;
-  const chartH = Math.max(170, cardH - 292);
+  const chartH = Math.max(180, cardH - 286);
   drawMiniLine(ctx, card.history, chartX, chartY, chartW, chartH, card.trend === "negative" ? "#EF4444" : card.trend === "positive" ? "#10B981" : "#2563EB");
 
   const tableX = rightX + 28;
   const tableY = topY + 72;
-  drawText(ctx, "Departments", tableX, topY + 38, 24, "#0F172A", "900", "Inter, Arial, sans-serif");
+  drawText(ctx, "Departments", tableX, topY + 38, 22, "#0F172A", "900", "Inter, Arial, sans-serif");
   drawCanvasCountPill(ctx, `${departments.length} departments`, rightX + cardW - 194, topY + 22);
   const columns = [
-    { label: "Department", x: tableX, w: 390 },
-    { label: "Backlog", x: tableX + 420, w: 120 },
-    { label: "AHT", x: tableX + 560, w: 120 },
-    { label: "Max Latency", x: tableX + 700, w: 260 }
+    { label: "Department", x: tableX, w: 370 },
+    { label: "Backlog", x: tableX + 400, w: 110 },
+    { label: "AHT", x: tableX + 535, w: 110 },
+    { label: "Max Latency", x: tableX + 675, w: 285 }
   ];
   const tableStartX = tableX - 14;
   const tableEndX = Math.max(...columns.map((column) => column.x + column.w)) + 14;
@@ -1717,12 +1717,12 @@ function downloadReportSummaryImage({
     const y = tableY + headerHeight + index * rowHeight;
     if (index % 2) fillRect(ctx, tableStartX, y, tableEndX - tableStartX, rowHeight, "#F8FAFC");
     const textY = y + 35;
-    drawText(ctx, truncateForCanvas(ctx, department.department, columns[0].w), columns[0].x, textY, 16, "#0F172A", "850");
-    drawText(ctx, formatInteger(department.backlog), columns[1].x, textY, 17, "#0F172A", "900");
-    drawText(ctx, formatDurationFromMs(department.ahtMs), columns[2].x, textY, 17, "#0F172A", "800");
-    drawText(ctx, formatDurationFromMs(department.maxLatencyMs), columns[3].x, y + 24, 17, "#0F172A", "900");
-    drawCanvasStatusPill(ctx, resolveLatencyAdherence(department.maxLatencyMs, department.maxLatencySlaTargetMinutes), columns[3].x + 112, y + 8);
-    drawText(ctx, truncateForCanvas(ctx, `${department.maxLatencyQueueId || "-"} · ${department.maxLatencyQueueName || "-"}`, columns[3].w), columns[3].x, y + 48, 12, "#64748B", "800");
+    drawText(ctx, truncateForCanvas(ctx, department.department, columns[0].w), columns[0].x, textY, 15, "#0F172A", "850");
+    drawText(ctx, formatInteger(department.backlog), columns[1].x, textY, 16, "#0F172A", "900");
+    drawText(ctx, formatDurationFromMs(department.ahtMs), columns[2].x, textY, 16, "#0F172A", "800");
+    drawText(ctx, formatDurationFromMs(department.maxLatencyMs), columns[3].x, y + 24, 16, "#0F172A", "900");
+    drawCanvasStatusPill(ctx, resolveLatencyAdherence(department.maxLatencyMs, department.maxLatencySlaTargetMinutes), columns[3].x + 104, y + 8);
+    drawText(ctx, truncateForCanvas(ctx, `${department.maxLatencyQueueId || "-"} · ${department.maxLatencyQueueName || "-"}`, columns[3].w), columns[3].x, y + 48, 11, "#64748B", "800");
   });
   downloadCanvas(canvas, `realtime-report-${reportLob.toLowerCase()}-summary.png`);
 }
