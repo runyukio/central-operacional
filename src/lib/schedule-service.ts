@@ -345,6 +345,8 @@ type LatestAttendanceRecordBySchedule = {
   reasonClassification: string | null;
   impactsAbs: boolean;
   isJustified: boolean;
+  justifiedById: string | null;
+  justifiedAt: Date | null;
   updatedAt: Date;
 };
 
@@ -1752,7 +1754,9 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
         }
       });
     }
-    const supervisorWhere = await scheduleSupervisorFilter(supervisorFilter);
+    const absenceDetailUsesJustifyingSupervisor =
+      Boolean(supervisorFilter) && (includeJustified || ["absences", "lobAbs", "agentAbsences"].includes(detailType ?? ""));
+    const supervisorWhere = absenceDetailUsesJustifyingSupervisor ? null : await scheduleSupervisorFilter(supervisorFilter);
     if (supervisorWhere) extraFilters.push(supervisorWhere);
     if (statusFilter) extraFilters.push({ status: statusFilter });
     if (detailType === "scheduled") extraFilters.push({ status: { in: getScheduledStatuses() as ScheduleStatus[] } });
@@ -1891,6 +1895,11 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
         return true;
       }
       return isPendingJustificationForSchedule(schedule.status, record);
+    }).filter((schedule) => {
+      if (!absenceDetailUsesJustifyingSupervisor || !supervisorFilter) return true;
+      const record = schedule.attendanceRecords[0];
+      const supervisorName = resolveAbsSupervisorName(schedule, record, supervisorNameById);
+      return supervisorNameMatchesFilter(supervisorName, supervisorFilter);
     });
 
     const data = activeSchedules.map((schedule) => {
@@ -1909,7 +1918,7 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
           scheduleId: schedule.id,
           shift: cleanShiftName(schedule.shift?.name ?? schedule.employee.shift.name) || "Sem turno",
           lob: schedule.employee.lob.name,
-          supervisor: resolveSupervisorName(schedule, supervisorNameById),
+          supervisor: isAbsenceStatus(schedule.status) ? resolveAbsSupervisorName(schedule, record, supervisorNameById) : resolveSupervisorName(schedule, supervisorNameById),
           roleTitle: schedule.employee.roleTitle ?? "Sem cargo",
           status,
           absenceReason: attendanceReasonForSchedule(schedule.status, record),
@@ -3075,6 +3084,7 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     attendanceRecordByScheduleId.set(record.scheduleId, record);
   });
   const supervisorNameById = await supervisorNameMap(schedules.flatMap((schedule) => [schedule.supervisorId, schedule.employee.supervisorId]));
+  const justifiedByNameById = await userNameMap(attendanceRecords.map((record) => record.justifiedById));
   const planned = schedules.filter((schedule) => isScheduledStatus(statusFor(schedule))).length;
   const present = schedules.filter((schedule) => isPresentStatus(statusFor(schedule))).length;
   const absent = schedules.filter((schedule) => isAbsenceStatus(statusFor(schedule))).length;
@@ -3099,9 +3109,11 @@ async function getAttendanceSummaryFromDb(period?: ReturnType<typeof resolvePeri
     return acc;
   }, {});
   const bySupervisor = schedules.reduce<Record<string, { planned: number; present: number; absent: number; unjustified: number; justified: number; classifiedUnjustified: number; absRate: number }>>((acc, schedule) => {
-    const supervisorName = resolveSupervisorName(schedule, supervisorNameById);
     const status = statusFor(schedule);
     const record = attendanceRecordByScheduleId.get(schedule.id);
+    const supervisorName = isAbsenceStatus(status)
+      ? resolveAbsSupervisorName(schedule, record, supervisorNameById, justifiedByNameById)
+      : resolveSupervisorName(schedule, supervisorNameById);
     acc[supervisorName] ??= { planned: 0, present: 0, absent: 0, unjustified: 0, justified: 0, classifiedUnjustified: 0, absRate: 0 };
     if (isScheduledStatus(status)) acc[supervisorName].planned += 1;
     if (isPresentStatus(status)) acc[supervisorName].present += 1;
@@ -3419,6 +3431,8 @@ async function latestAttendanceRecordsForSchedules(scheduleIds: string[]) {
       "reasonClassification",
       "impactsAbs",
       "isJustified",
+      "justifiedById",
+      "justifiedAt",
       "updatedAt"
     FROM "AttendanceRecord"
     WHERE "scheduleId" IN (${Prisma.join(scheduleIds)})
@@ -3816,6 +3830,34 @@ function resolveSupervisorName(schedule: { supervisorId?: string | null; employe
   return (supervisorId ? supervisorNameById?.get(supervisorId) : "") || schedule.employee?.supervisor?.fullName?.trim() || "Sem supervisor";
 }
 
+function resolveAbsSupervisorName(
+  schedule: { supervisorId?: string | null; employee?: { supervisorId?: string | null; supervisor?: { fullName: string } | null } | null },
+  record?: { isJustified: boolean; absenceReason: string | null; justifiedById?: string | null; justifiedBy?: { name?: string | null; email?: string | null } | null } | null,
+  supervisorNameById?: Map<string, string>,
+  justifiedByNameById?: Map<string, string>
+) {
+  if (record && hasValidJustification(record)) {
+    const justifiedByName = (record.justifiedById ? justifiedByNameById?.get(record.justifiedById) : "") || record.justifiedBy?.name?.trim() || record.justifiedBy?.email?.trim();
+    if (justifiedByName) return justifiedByName;
+  }
+  return resolveSupervisorName(schedule, supervisorNameById);
+}
+
+function normalizeSupervisorSearch(value: string) {
+  return value
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function supervisorNameMatchesFilter(supervisorName: string, filter: string) {
+  const raw = filter.trim();
+  if (!raw || raw === "Todos") return true;
+  if (isNoSupervisorFilter(raw)) return isNoSupervisorFilter(supervisorName);
+  return normalizeSupervisorSearch(supervisorName).includes(normalizeSupervisorSearch(raw));
+}
+
 function workHourStatusLabel(status: string) {
   const labels: Record<string, string> = {
     IMPORTED: "Importado",
@@ -4020,6 +4062,16 @@ async function supervisorNameMap(supervisorIds: Array<string | null | undefined>
     select: { id: true, fullName: true }
   });
   return new Map(supervisors.map((supervisor) => [supervisor.id, supervisor.fullName]));
+}
+
+async function userNameMap(userIds: Array<string | null | undefined>) {
+  const ids = Array.from(new Set(userIds.filter((id): id is string => Boolean(id))));
+  if (!ids.length) return new Map<string, string>();
+  const users = await prisma.user.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, name: true, email: true, employeeProfile: { select: { fullName: true } } }
+  });
+  return new Map(users.map((user) => [user.id, user.employeeProfile?.fullName?.trim() || user.name?.trim() || user.email]));
 }
 
 async function scheduleSupervisorFilter(value?: string | null): Promise<Prisma.ScheduleWhereInput | null> {
