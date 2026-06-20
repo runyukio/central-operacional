@@ -7,6 +7,7 @@ import type { Actor } from "@/lib/mock-db";
 import { canAccessRealTime } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { resolveQueueReference } from "@/lib/queue-dictionary";
+import { isWorkHoursAllowedForSchedule } from "@/lib/work-hours-rules";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
 type RawRow = Record<string, unknown>;
@@ -29,6 +30,7 @@ export type RealtimeExportQuery = RealtimeSnapshotOptions & {
   crossingStatus?: string | null;
   personType?: string | null;
   employeeStatus?: string | null;
+  presenceStatus?: string | null;
   lob?: string | null;
   supervisor?: string | null;
   shift?: string | null;
@@ -66,6 +68,8 @@ type AgentCycleMetric = {
   sourceRows: number;
 };
 
+type AgentPresenceStatus = "Online" | "Online sem produção" | "Ocioso" | "Offline" | "Fora do turno";
+
 type AgentCycleRow = {
   key: string;
   employeeId: string;
@@ -75,6 +79,7 @@ type AgentCycleRow = {
   crossingStatus: "Encontrado" | "Não encontrado";
   personType: "Agente" | "Staff" | "Não encontrado";
   employeeStatus: string;
+  presenceStatus: AgentPresenceStatus;
   lob: string;
   supervisor: string;
   shift: string;
@@ -763,6 +768,7 @@ export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQu
           "ciclo_download",
           "agente",
           "wb_login",
+          "status_atual",
           "status_colaborador",
           "lob",
           "supervisor",
@@ -779,6 +785,7 @@ export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQu
           agentView.selectedCycle,
           row.displayName,
           row.wbLogin || row.rawWbLogin,
+          row.presenceStatus,
           row.employeeStatus,
           row.lob,
           row.supervisor,
@@ -1115,7 +1122,7 @@ function buildQueueRealtimeViewFromSummaryRows(summaryRows: QueueSummaryReadRow[
     }
   }
 
-  const rows = currentRows
+  const baseRows = currentRows
     .map((row) => {
       const previous = previousByKey.get(row.key) ?? null;
       return {
@@ -1139,12 +1146,12 @@ function buildQueueRealtimeViewFromSummaryRows(summaryRows: QueueSummaryReadRow[
     selectedCycle,
     previousCycle,
     filters: {
-      lobs: countBy(rows.map((row) => row.lob)),
-      statuses: countBy(rows.map((row) => row.status)),
-      slaTargets: countBy(rows.map((row) => row.slaTargetMinutes === null ? "Sem meta" : String(row.slaTargetMinutes))),
-      queueIds: countBy(rows.map((row) => row.queueId || "Sem Fila ID"))
+      lobs: countBy(baseRows.map((row) => row.lob)),
+      statuses: countBy(baseRows.map((row) => row.status)),
+      slaTargets: countBy(baseRows.map((row) => row.slaTargetMinutes === null ? "Sem meta" : String(row.slaTargetMinutes))),
+      queueIds: countBy(baseRows.map((row) => row.queueId || "Sem Fila ID"))
     },
-    rows
+    rows: baseRows
   };
 }
 
@@ -1406,7 +1413,7 @@ async function buildQueueRealtimeView(options: RealtimeSnapshotOptions) {
   };
 }
 
-function buildAgentRealtimeViewFromSummaryRows(summaryRows: AgentSummaryReadRow[], options: RealtimeSnapshotOptions) {
+async function buildAgentRealtimeViewFromSummaryRows(summaryRows: AgentSummaryReadRow[], options: RealtimeSnapshotOptions) {
   const latestBatchByCycle = new Map<string, { batchId: string; importedAt: Date }>();
   summaryRows.forEach((summary) => {
     const currentLatest = latestBatchByCycle.get(summary.cycleDownload);
@@ -1469,7 +1476,7 @@ function buildAgentRealtimeViewFromSummaryRows(summaryRows: AgentSummaryReadRow[
     }
   }
 
-  const rows = currentRows
+  const baseRows = currentRows
     .map((row) => {
       const previous = previousByKey.get(row.key) ?? null;
       return {
@@ -1486,6 +1493,11 @@ function buildAgentRealtimeViewFromSummaryRows(summaryRows: AgentSummaryReadRow[
       };
     })
     .sort((a, b) => b.current.submit - a.current.submit || a.displayName.localeCompare(b.displayName));
+  const presenceContext = await loadAgentPresenceContext(baseRows, selectedCycle, latestBatchByCycle.get(selectedCycle)?.batchId ?? "");
+  const rows = baseRows.map((row) => ({
+    ...row,
+    presenceStatus: resolveAgentPresenceStatus(row, presenceContext)
+  }));
 
   const summaryCurrent = summarizeAgentRows(rows);
   const summaryPrevious = previousCycle ? summarizeAgentRows(previousRows) : null;
@@ -1503,6 +1515,7 @@ function buildAgentRealtimeViewFromSummaryRows(summaryRows: AgentSummaryReadRow[
       crossingStatuses: countBy(rows.map((row) => row.crossingStatus)),
       personTypes: countBy(rows.map((row) => row.personType)),
       employeeStatuses: countBy(rows.map((row) => row.employeeStatus).filter(Boolean)),
+      presenceStatuses: countBy(rows.map((row) => row.presenceStatus)),
       lobs: countBy(rows.map((row) => row.lob).filter(Boolean)),
       supervisors: countBy(rows.map((row) => row.supervisor).filter(Boolean)),
       shifts: countBy(rows.map((row) => row.shift).filter(Boolean)),
@@ -1545,6 +1558,7 @@ function agentSummaryToCycleRow(summary: {
     crossingStatus: summary.crossingStatus === "Encontrado" ? "Encontrado" : "Não encontrado",
     personType: coercePersonType(summary.personType),
     employeeStatus: summary.employeeStatus,
+    presenceStatus: "Offline",
     lob: summary.lob,
     supervisor: summary.supervisor,
     shift: summary.shift,
@@ -1694,10 +1708,10 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
     const employeeMatches = await loadEmployeeMatches();
     const fallbackSummaryRows = agentSummaryRowsFromRawRecords(fallbackRecords, employeeMatches);
     if (summaryRows.length || fallbackSummaryRows.length) {
-      return buildAgentRealtimeViewFromSummaryRows([...summaryRows, ...fallbackSummaryRows], options);
+      return await buildAgentRealtimeViewFromSummaryRows([...summaryRows, ...fallbackSummaryRows], options);
     }
   }
-  if (summaryRows.length) return buildAgentRealtimeViewFromSummaryRows(summaryRows, options);
+  if (summaryRows.length) return await buildAgentRealtimeViewFromSummaryRows(summaryRows, options);
 
   const records = await prisma.realTimeRecord.findMany({
     where: { recordType: "AGENT", batchId: { in: batchIds } },
@@ -1816,6 +1830,7 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
       crossingStatuses: countBy(rows.map((row) => row.crossingStatus)),
       personTypes: countBy(rows.map((row) => row.personType)),
       employeeStatuses: countBy(rows.map((row) => row.employeeStatus).filter(Boolean)),
+      presenceStatuses: countBy(rows.map((row) => row.presenceStatus)),
       lobs: countBy(rows.map((row) => row.lob).filter(Boolean)),
       supervisors: countBy(rows.map((row) => row.supervisor).filter(Boolean)),
       shifts: countBy(rows.map((row) => row.shift).filter(Boolean)),
@@ -1824,6 +1839,162 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
     },
     rows
   };
+}
+
+async function loadAgentPresenceContext(rows: AgentCycleRow[], selectedCycle: string, selectedBatchId: string) {
+  const selectedCycleInfo = parseRealtimeCycleForPresence(selectedCycle);
+  const [scheduleByEmployeeId, kapStatusByAgentKey] = await Promise.all([
+    loadRealtimeSchedulePresence(rows, selectedCycleInfo?.date ?? null),
+    loadRealtimeKapStatusByAgentKey(selectedBatchId, selectedCycle)
+  ]);
+
+  return {
+    selectedCycle,
+    selectedCycleInfo,
+    scheduleByEmployeeId,
+    kapStatusByAgentKey
+  };
+}
+
+async function loadRealtimeSchedulePresence(rows: AgentCycleRow[], date: Date | null) {
+  const employeeIds = Array.from(new Set(rows.map((row) => row.employeeId).filter(Boolean)));
+  const scheduleByEmployeeId = new Map<string, { scheduled: boolean; startsAt: string | null; endsAt: string | null }>();
+  if (!date || !employeeIds.length) return scheduleByEmployeeId;
+
+  const schedules = await prisma.schedule.findMany({
+    where: {
+      employeeId: { in: employeeIds },
+      date,
+      deletedAt: null
+    },
+    select: {
+      employeeId: true,
+      status: true,
+      startsAt: true,
+      endsAt: true,
+      shift: { select: { name: true } }
+    }
+  });
+
+  schedules.forEach((schedule) => {
+    scheduleByEmployeeId.set(schedule.employeeId, {
+      scheduled: isWorkHoursAllowedForSchedule(schedule),
+      startsAt: schedule.startsAt,
+      endsAt: schedule.endsAt
+    });
+  });
+
+  return scheduleByEmployeeId;
+}
+
+async function loadRealtimeKapStatusByAgentKey(batchId: string, selectedCycle: string) {
+  const statusByKey = new Map<string, string>();
+  if (!batchId) return statusByKey;
+
+  const records = await prisma.realTimeRecord.findMany({
+    where: { batchId, recordType: "AGENT" },
+    select: { wbLogin: true, status: true, rawData: true }
+  });
+
+  records.forEach((record) => {
+    const rawData = isPlainObject(record.rawData) ? record.rawData : {};
+    const cycleDownload = extractCycleDownload(rawData);
+    if (cycleDownload && cycleDownload !== selectedCycle) return;
+    const candidates = extractWbCandidates(rawData);
+    const normalizedKeys = new Set(
+      [normalizeWbLogin(record.wbLogin ?? ""), ...candidates.map((candidate) => candidate.normalized)].filter(Boolean)
+    );
+    normalizedKeys.forEach((normalized) => {
+      if (!statusByKey.has(normalized)) statusByKey.set(normalized, record.status ?? "");
+    });
+  });
+
+  return statusByKey;
+}
+
+function resolveAgentPresenceStatus(
+  row: AgentCycleRow,
+  context: Awaited<ReturnType<typeof loadAgentPresenceContext>>
+): AgentPresenceStatus {
+  const schedule = row.employeeId ? context.scheduleByEmployeeId.get(row.employeeId) : null;
+  const isScheduled = Boolean(schedule?.scheduled);
+  const hasProduction = row.current.submit > 0 || row.current.moderationMs > 0;
+  const hasRecentProduction = (row.deltas.submit ?? 0) > 0 || (row.deltas.moderationMs ?? 0) > 0 || (!row.previous && hasProduction);
+
+  if (!isScheduled) return hasProduction ? "Fora do turno" : "Offline";
+  if (hasRecentProduction) return "Online";
+
+  const minutesSinceMovement = minutesSinceLastAgentMovement(row, context.selectedCycle);
+  if (hasProduction && minutesSinceMovement !== null && minutesSinceMovement >= 60) return "Ocioso";
+  if (hasProduction && minutesSinceMovement !== null && minutesSinceMovement < 60) return "Online sem produção";
+
+  const kapStatus = context.kapStatusByAgentKey.get(row.key) ?? "";
+  if (isKapStatusActiveSignal(kapStatus) || isWithinScheduleStartTolerance(schedule ?? null, context.selectedCycleInfo)) return "Online sem produção";
+  return "Offline";
+}
+
+function minutesSinceLastAgentMovement(row: AgentCycleRow, selectedCycle: string) {
+  const selectedInfo = parseRealtimeCycleForPresence(selectedCycle);
+  if (!selectedInfo) return null;
+  const selectedOperationalDay = operationalDayKeyFromCycleInfo(selectedInfo);
+  const history = row.history
+    .map((item) => ({ item, info: parseRealtimeCycleForPresence(item.cycleDownload) }))
+    .filter((entry): entry is { item: AgentCycleRow["history"][number]; info: NonNullable<ReturnType<typeof parseRealtimeCycleForPresence>> } => Boolean(entry.info))
+    .filter((entry) => entry.info.timestamp <= selectedInfo.timestamp && operationalDayKeyFromCycleInfo(entry.info) === selectedOperationalDay)
+    .sort((a, b) => a.info.timestamp - b.info.timestamp);
+
+  let previous: AgentCycleRow["history"][number] | null = null;
+  let lastMovementTimestamp: number | null = null;
+  history.forEach(({ item, info }) => {
+    const moved = previous
+      ? item.submit > previous.submit || item.moderationMs > previous.moderationMs
+      : item.submit > 0 || item.moderationMs > 0;
+    if (moved) lastMovementTimestamp = info.timestamp;
+    previous = item;
+  });
+
+  if (lastMovementTimestamp === null) return null;
+  return Math.max(0, Math.floor((selectedInfo.timestamp - lastMovementTimestamp) / 60000));
+}
+
+function isKapStatusActiveSignal(status: string) {
+  const normalized = normalizeHeader(status);
+  if (!normalized) return false;
+  if (["offline", "deslogado", "signout", "signedout"].includes(normalized)) return false;
+  return ["revisando", "disponivel", "pausa", "refeicao", "treinamento", "reuniao", "auditing", "available"].includes(normalized);
+}
+
+function isWithinScheduleStartTolerance(
+  schedule: { startsAt: string | null; endsAt: string | null } | null,
+  selectedCycleInfo: ReturnType<typeof parseRealtimeCycleForPresence>
+) {
+  if (!schedule?.startsAt || !selectedCycleInfo) return false;
+  const [hour, minute] = schedule.startsAt.split(":").map((part) => Number(part));
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return false;
+  const startTimestamp = Date.parse(`${selectedCycleInfo.dateKey}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00-03:00`);
+  if (!Number.isFinite(startTimestamp)) return false;
+  return selectedCycleInfo.timestamp >= startTimestamp && selectedCycleInfo.timestamp - startTimestamp <= 20 * 60000;
+}
+
+function parseRealtimeCycleForPresence(value: string) {
+  const match = String(value ?? "").match(/(\d{4})-(\d{2})-(\d{2})[ T_](\d{2}):(\d{2})/);
+  if (!match) return null;
+  const [, year, month, day, hour, minute] = match;
+  const dateKey = `${year}-${month}-${day}`;
+  const timestamp = Date.parse(`${dateKey}T${hour}:${minute}:00-03:00`);
+  if (!Number.isFinite(timestamp)) return null;
+  return {
+    date: new Date(Date.UTC(Number(year), Number(month) - 1, Number(day))),
+    dateKey,
+    hour: Number(hour),
+    timestamp
+  };
+}
+
+function operationalDayKeyFromCycleInfo(info: NonNullable<ReturnType<typeof parseRealtimeCycleForPresence>>) {
+  if (info.hour >= 13) return info.dateKey;
+  const previousDay = new Date(info.date.getTime() - 24 * 60 * 60 * 1000);
+  return previousDay.toISOString().slice(0, 10);
 }
 
 function aggregateAgentCycleRows(items: Array<{
@@ -1961,6 +2132,7 @@ function aggregateAgentCycleRows(items: Array<{
       crossingStatus: isMatched ? "Encontrado" : "Não encontrado",
       personType,
       employeeStatus: employee?.operationalStatus ?? "Não encontrado",
+      presenceStatus: "Offline",
       lob: employee?.lob ?? "Não encontrado",
       supervisor: employee?.supervisor ?? "Não encontrado",
       shift: employee?.shift ?? "Não encontrado",
@@ -2218,6 +2390,7 @@ function emptyAgentRealtimeView() {
       crossingStatuses: [] as ReturnType<typeof countBy>,
       personTypes: [] as ReturnType<typeof countBy>,
       employeeStatuses: [] as ReturnType<typeof countBy>,
+      presenceStatuses: [] as ReturnType<typeof countBy>,
       lobs: [] as ReturnType<typeof countBy>,
       supervisors: [] as ReturnType<typeof countBy>,
       shifts: [] as ReturnType<typeof countBy>,
@@ -2322,6 +2495,7 @@ function filterAgentRows(rows: AgentCycleRow[], query: RealtimeExportQuery) {
     if (query.crossingStatus && row.crossingStatus !== query.crossingStatus) return false;
     if (query.personType && row.personType !== query.personType) return false;
     if (query.employeeStatus && !matchesEmployeeStatus(row.employeeStatus, query.employeeStatus)) return false;
+    if (query.presenceStatus && row.presenceStatus !== query.presenceStatus) return false;
     if (query.lob && row.lob !== query.lob) return false;
     if (query.supervisor && row.supervisor !== query.supervisor) return false;
     if (query.shift && row.shift !== query.shift) return false;
@@ -2333,6 +2507,7 @@ function filterAgentRows(rows: AgentCycleRow[], query: RealtimeExportQuery) {
       row.wbLogin,
       row.rawWbLogin,
       row.employeeStatus,
+      row.presenceStatus,
       row.lob,
       row.supervisor,
       row.shift,
@@ -2348,6 +2523,7 @@ function sortAgentRows(rows: AgentCycleRow[], sortBy = "submit_desc") {
     if (key === "displayName") return row.displayName;
     if (key === "wbLogin") return row.wbLogin || row.rawWbLogin;
     if (key === "employeeStatus") return row.employeeStatus;
+    if (key === "presenceStatus") return row.presenceStatus;
     if (key === "lob") return row.lob;
     if (key === "supervisor") return row.supervisor;
     if (key === "shift") return row.shift;
@@ -2369,6 +2545,8 @@ function sortAgentRows(rows: AgentCycleRow[], sortBy = "submit_desc") {
     wbLogin_desc: { key: "wbLogin", direction: "desc" },
     employeeStatus_asc: { key: "employeeStatus", direction: "asc" },
     employeeStatus_desc: { key: "employeeStatus", direction: "desc" },
+    presenceStatus_asc: { key: "presenceStatus", direction: "asc" },
+    presenceStatus_desc: { key: "presenceStatus", direction: "desc" },
     lob_asc: { key: "lob", direction: "asc" },
     lob_desc: { key: "lob", direction: "desc" },
     supervisor_asc: { key: "supervisor", direction: "asc" },

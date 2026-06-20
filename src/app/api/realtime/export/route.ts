@@ -17,6 +17,7 @@ export async function GET(request: Request) {
     crossingStatus: searchParams.get("crossingStatus"),
     personType: searchParams.get("personType"),
     employeeStatus: searchParams.get("employeeStatus"),
+    presenceStatus: searchParams.get("presenceStatus"),
     lob: searchParams.get("lob"),
     supervisor: searchParams.get("supervisor"),
     shift: searchParams.get("shift"),

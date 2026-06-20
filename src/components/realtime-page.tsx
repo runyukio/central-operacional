@@ -122,6 +122,7 @@ type AgentRealtimeRow = {
   crossingStatus: "Encontrado" | "Não encontrado";
   personType: "Agente" | "Staff" | "Não encontrado";
   employeeStatus: string;
+  presenceStatus: AgentPresenceStatus;
   lob: string;
   supervisor: string;
   shift: string;
@@ -187,6 +188,7 @@ type AgentRealtimeView = {
     crossingStatuses: CountItem[];
     personTypes: CountItem[];
     employeeStatuses: CountItem[];
+    presenceStatuses: CountItem[];
     lobs: CountItem[];
     supervisors: CountItem[];
     shifts: CountItem[];
@@ -225,6 +227,7 @@ type AgentFilters = {
   crossingStatus: string;
   personType: string;
   employeeStatus: string;
+  presenceStatus: string;
   lob: string;
   supervisor: string;
   shift: string;
@@ -232,7 +235,8 @@ type AgentFilters = {
   roleTitle: string;
 };
 
-type AgentSortKey = "displayName" | "wbLogin" | "employeeStatus" | "lob" | "supervisor" | "shift" | "skill" | "submit" | "aht" | "moderation" | "timeout" | "refresh";
+type AgentPresenceStatus = "Online" | "Online sem produção" | "Ocioso" | "Offline" | "Fora do turno";
+type AgentSortKey = "displayName" | "wbLogin" | "presenceStatus" | "employeeStatus" | "lob" | "supervisor" | "shift" | "skill" | "submit" | "aht" | "moderation" | "timeout" | "refresh";
 type AgentSortState = { key: AgentSortKey; direction: "asc" | "desc" };
 type MetricFormat = "number" | "duration";
 type TrendPoint = { label: string; value: number | null; delta: number | null };
@@ -311,6 +315,7 @@ const defaultAgentFilters: AgentFilters = {
   crossingStatus: "Encontrado",
   personType: "Agente",
   employeeStatus: "Ativo",
+  presenceStatus: "",
   lob: "",
   supervisor: "",
   shift: "",
@@ -321,8 +326,9 @@ const defaultAgentFilters: AgentFilters = {
 const emptyAgentFilters: AgentFilters = {
   search: "",
   crossingStatus: "",
-  personType: "",
-  employeeStatus: "",
+  personType: "Agente",
+  employeeStatus: "Ativo",
+  presenceStatus: "",
   lob: "",
   supervisor: "",
   shift: "",
@@ -451,6 +457,7 @@ export function RealTimePage() {
       if (agentFilters.crossingStatus && row.crossingStatus !== agentFilters.crossingStatus) return false;
       if (agentFilters.personType && row.personType !== agentFilters.personType) return false;
       if (agentFilters.employeeStatus && !matchesEmployeeStatus(row.employeeStatus, agentFilters.employeeStatus)) return false;
+      if (agentFilters.presenceStatus && row.presenceStatus !== agentFilters.presenceStatus) return false;
       if (agentFilters.lob && row.lob !== agentFilters.lob) return false;
       if (agentFilters.supervisor && row.supervisor !== agentFilters.supervisor) return false;
       if (agentFilters.shift && row.shift !== agentFilters.shift) return false;
@@ -462,6 +469,7 @@ export function RealTimePage() {
         row.wbLogin,
         row.rawWbLogin,
         row.employeeStatus,
+        row.presenceStatus,
         row.lob,
         row.supervisor,
         row.shift,
@@ -649,11 +657,10 @@ export function RealTimePage() {
             ) : null}
           </div>
           {activeTab === "agents" ? (
-            <div className="mt-4 grid gap-2 rounded-3xl border border-slate-100 bg-slate-50/70 p-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-8">
+            <div className="mt-4 grid gap-2 rounded-3xl border border-slate-100 bg-slate-50/70 p-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7">
               <SearchBox value={agentFilters.search} onChange={(value) => updateAgentFilter("search", value)} placeholder="Buscar agente ou WB..." />
               <FilterSelect value={agentFilters.crossingStatus} onChange={(value) => updateAgentFilter("crossingStatus", value)} label="Cruzamento" empty="Todos" options={agentView?.filters.crossingStatuses ?? []} />
-              <FilterSelect value={agentFilters.personType} onChange={(value) => updateAgentFilter("personType", value)} label="Tipo" empty="Todos" options={agentView?.filters.personTypes ?? []} />
-              <FilterSelect value={agentFilters.employeeStatus} onChange={(value) => updateAgentFilter("employeeStatus", value)} label="Status" empty="Todos" options={agentView?.filters.employeeStatuses ?? []} />
+              <FilterSelect value={agentFilters.presenceStatus} onChange={(value) => updateAgentFilter("presenceStatus", value)} label="Status atual" empty="Todos" options={agentView?.filters.presenceStatuses ?? []} />
               <FilterSelect value={agentFilters.supervisor} onChange={(value) => updateAgentFilter("supervisor", value)} label="Supervisor" empty="Todos" options={agentView?.filters.supervisors ?? []} />
               <FilterSelect value={agentFilters.shift} onChange={(value) => updateAgentFilter("shift", value)} label="Turno" empty="Todos" options={agentView?.filters.shifts ?? []} />
               <FilterSelect value={agentFilters.skill} onChange={(value) => updateAgentFilter("skill", value)} label="Skill" empty="Todas" options={agentView?.filters.skills ?? []} />
@@ -717,7 +724,7 @@ function AgentTable({
   const columns: Array<{ label: string; sortKey?: AgentSortKey }> = [
     { label: "Agente", sortKey: "displayName" },
     { label: "WB/Login", sortKey: "wbLogin" },
-    { label: "Status", sortKey: "employeeStatus" },
+    { label: "Status atual", sortKey: "presenceStatus" },
     { label: "LOB", sortKey: "lob" },
     { label: "Supervisor", sortKey: "supervisor" },
     { label: "Turno", sortKey: "shift" },
@@ -762,7 +769,7 @@ function AgentTable({
               <tr key={row.key} className={cn("border-t border-slate-100 transition hover:bg-blue-50/60", index % 2 ? "bg-slate-50/35" : "bg-white")}>
                 <td className="px-4 py-3 font-extrabold text-navy-950">{row.displayName}</td>
                 <td className="px-4 py-3 font-bold text-navy-950">{row.wbLogin || row.rawWbLogin || "-"}</td>
-                <td className="px-4 py-3 font-bold text-muted">{row.employeeStatus}</td>
+                <td className="px-4 py-3"><PresenceStatusPill status={row.presenceStatus} /></td>
                 <td className="px-4 py-3 font-bold">{row.lob}</td>
                 <td className="px-4 py-3 font-bold">{row.supervisor}</td>
                 <td className="px-4 py-3 font-bold">{row.shift}</td>
@@ -971,6 +978,25 @@ function QueueStatusPill({ status }: { status: QueueStatus }) {
   return <span className={cn("inline-flex rounded-full px-2.5 py-1 text-xs font-black", tone)}>{status}</span>;
 }
 
+function PresenceStatusPill({ status }: { status: AgentPresenceStatus }) {
+  const config = status === "Online"
+    ? { className: "bg-emerald-100 text-emerald-700", icon: CheckCircle2 }
+    : status === "Online sem produção"
+      ? { className: "bg-blue-100 text-blue-700", icon: Activity }
+      : status === "Ocioso"
+        ? { className: "bg-amber-100 text-amber-800", icon: AlertTriangle }
+        : status === "Fora do turno"
+          ? { className: "bg-violet-100 text-violet-700", icon: CalendarDays }
+          : { className: "bg-red-100 text-red-700", icon: XCircle };
+  const Icon = config.icon;
+  return (
+    <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-black", config.className)} title={status}>
+      <Icon className="h-3.5 w-3.5" />
+      {status}
+    </span>
+  );
+}
+
 function resolveLatencyAdherence(maxLatencyMs: number | null, slaTargetMinutes: number | null): LatencyAdherenceStatus {
   if (maxLatencyMs === null || !slaTargetMinutes || slaTargetMinutes <= 0) return "N/A";
   const targetMs = slaTargetMinutes * 60 * 1000;
@@ -1160,8 +1186,8 @@ function AgentDetailDrawer({ row, selectedCycle, onClose }: { row: AgentRealtime
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-xl font-black text-navy-950">{row.displayName}</h2>
+              <PresenceStatusPill status={row.presenceStatus} />
               <StatusPill value={row.crossingStatus} />
-              <StatusPill value={row.personType} />
             </div>
             <p className="mt-1 text-sm font-bold text-muted">{row.wbLogin || row.rawWbLogin} · {row.lob} · {row.supervisor}</p>
           </div>
@@ -1182,6 +1208,7 @@ function AgentDetailDrawer({ row, selectedCycle, onClose }: { row: AgentRealtime
         <div className="mt-5 grid gap-4 lg:grid-cols-[340px_minmax(0,1fr)]">
           <div className="premium-card p-4">
             <h3 className="text-sm font-black uppercase tracking-wide text-muted">Cadastro</h3>
+            <InfoLine label="Status atual" value={row.presenceStatus} />
             <InfoLine label="Status" value={row.employeeStatus} />
             <InfoLine label="Cargo/Função" value={row.roleTitle} />
             <InfoLine label="Skill" value={row.skill} />
@@ -2675,6 +2702,7 @@ function compareAgentRows(a: AgentRealtimeRow, b: AgentRealtimeRow, sort: AgentS
   const textValue = (row: AgentRealtimeRow) => {
     if (sort.key === "displayName") return row.displayName;
     if (sort.key === "wbLogin") return row.wbLogin || row.rawWbLogin;
+    if (sort.key === "presenceStatus") return row.presenceStatus;
     if (sort.key === "employeeStatus") return row.employeeStatus;
     if (sort.key === "lob") return row.lob;
     if (sort.key === "supervisor") return row.supervisor;
