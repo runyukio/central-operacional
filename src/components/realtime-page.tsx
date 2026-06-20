@@ -16,7 +16,7 @@ import {
   X,
   XCircle
 } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Area, AreaChart, ReferenceLine, ResponsiveContainer, Tooltip as RechartsTooltip, YAxis } from "recharts";
 
 import { getQueueReportMetadataById } from "@/lib/queue-report-metadata";
@@ -269,7 +269,7 @@ type QueueLobCardData = {
   maxLatency: AgentKpiCard;
   aht: AgentKpiCard;
 };
-type ReportLob = "ADS" | "VIDEO" | "COMMENTS";
+type ReportLob = "ADS" | "TNS";
 type QueueReportRow = QueueRealtimeRow & {
   reportQueueName: string;
   reportDepartment: string;
@@ -404,7 +404,7 @@ export function RealTimePage() {
 
   function exportXlsx() {
     const params = activeTab !== "agents"
-      ? buildQueueQueryParams(selectedCycle || queueView?.selectedCycle || "", activeTab === "report" ? { search: reportSearch, lob: reportLob, status: "", slaTarget: "", queueId: "" } : queueFilters)
+      ? buildQueueQueryParams(selectedCycle || queueView?.selectedCycle || "", activeTab === "report" ? { search: reportSearch, lob: reportLob === "TNS" ? "" : reportLob, status: "", slaTarget: "", queueId: "" } : queueFilters)
       : buildAgentQueryParams(selectedCycle || agentView?.selectedCycle || "", agentFilters);
     params.set("view", activeTab === "agents" ? "agents" : "queues");
     params.set("sortBy", activeTab === "agents" ? `${agentSort.key}_${agentSort.direction}` : `${queueSort.key}_${queueSort.direction}`);
@@ -614,9 +614,9 @@ export function RealTimePage() {
             <QueueLobCard key={card.lob} card={card} />
           ))}
         </div>
-      ) : (
+      ) : reportLob === "ADS" ? (
         <ReportSummarySection card={reportBacklogCard} departments={departmentSummaries} reportLob={reportLob} selectedCycle={selectedCycleValue} onDownloadSummary={downloadReportSummary} />
-      )}
+      ) : null}
 
       <section className="overflow-hidden rounded-[24px] border border-slate-200/80 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
         <div className="border-b border-slate-100 px-4 py-4">
@@ -1472,14 +1472,14 @@ function QueueLobQuickFilter({ value, onChange, options }: { value: string; onCh
 }
 
 function ReportLobQuickFilter({ value, onChange, rows }: { value: ReportLob; onChange: (value: ReportLob) => void; rows: QueueRealtimeRow[] }) {
-  const counts = (["ADS", "VIDEO", "COMMENTS"] as const).reduce<Record<ReportLob, number>>((acc, lob) => {
-    acc[lob] = rows.filter((row) => row.lob === lob).length;
-    return acc;
-  }, { ADS: 0, VIDEO: 0, COMMENTS: 0 });
+  const counts: Record<ReportLob, number> = {
+    ADS: rows.filter((row) => row.lob === "ADS").length,
+    TNS: rows.filter((row) => row.lob === "VIDEO" || row.lob === "COMMENTS").length
+  };
 
   return (
     <div className="flex flex-wrap items-center gap-1 rounded-2xl border border-slate-200 bg-white p-1 shadow-[0_4px_12px_rgba(7,27,58,0.035)]">
-      {(["ADS", "VIDEO", "COMMENTS"] as const).map((lob) => {
+      {(["ADS", "TNS"] as const).map((lob) => {
         const active = value === lob;
         return (
           <button
@@ -1584,6 +1584,7 @@ function ReportSummarySection({
 }
 
 function ReportTable({ rows, reportLob, onDownloadQueues }: { rows: QueueReportRow[]; reportLob: ReportLob; onDownloadQueues: () => void }) {
+  const groups = groupReportRows(rows, reportLob);
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
@@ -1603,16 +1604,27 @@ function ReportTable({ rows, reportLob, onDownloadQueues }: { rows: QueueReportR
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, index) => (
-              <tr key={row.key} className={cn("border-t border-slate-100 transition hover:bg-blue-50/60", index % 2 ? "bg-slate-50/35" : "bg-white")}>
-                <td className="px-4 py-3"><span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-black text-blue-700">{row.queueId || "Sem Fila ID"}</span></td>
-                <td className="max-w-[360px] px-4 py-3 font-extrabold text-navy-950"><span className="block truncate" title={row.reportQueueName}>{row.reportQueueName}</span></td>
-                <td className="max-w-[260px] px-4 py-3 font-bold text-muted"><span className="block truncate" title={row.reportDepartment}>{row.reportDepartment}</span></td>
-                <td className="px-4 py-3 font-black text-navy-950">{formatInteger(row.current.backlog)}</td>
-                <td className="px-4 py-3 font-bold text-navy-950">{formatDurationFromMs(row.current.ahtMs)}</td>
-                <td className="px-4 py-3"><ReportLatencyCell value={row.current.maxLatencyMs} slaTargetMinutes={row.slaTargetMinutes} /></td>
-                <td className="px-4 py-3"><ReportLatencyCell value={row.current.latencyMs} slaTargetMinutes={row.slaTargetMinutes} /></td>
-              </tr>
+            {groups.map((group) => (
+              <Fragment key={group.label || "ADS"}>
+                {group.label ? (
+                  <tr>
+                    <td colSpan={7} className="border-t border-slate-100 bg-slate-100/80 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-slate-600">
+                      {group.label}
+                    </td>
+                  </tr>
+                ) : null}
+                {group.rows.map((row, index) => (
+                  <tr key={row.key} className={cn("border-t border-slate-100 transition hover:bg-blue-50/60", index % 2 ? "bg-slate-50/35" : "bg-white")}>
+                    <td className="px-4 py-3"><span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-black text-blue-700">{row.queueId || "Sem Fila ID"}</span></td>
+                    <td className="max-w-[360px] px-4 py-3 font-extrabold text-navy-950"><span className="block truncate" title={row.reportQueueName}>{row.reportQueueName}</span></td>
+                    <td className="max-w-[260px] px-4 py-3 font-bold text-muted"><span className="block truncate" title={row.reportDepartment}>{row.reportDepartment}</span></td>
+                    <td className="px-4 py-3 font-black text-navy-950">{formatInteger(row.current.backlog)}</td>
+                    <td className="px-4 py-3 font-bold text-navy-950">{formatDurationFromMs(row.current.ahtMs)}</td>
+                    <td className="px-4 py-3"><ReportLatencyCell value={row.current.maxLatencyMs} slaTargetMinutes={row.slaTargetMinutes} /></td>
+                    <td className="px-4 py-3"><ReportLatencyCell value={row.current.latencyMs} slaTargetMinutes={row.slaTargetMinutes} /></td>
+                  </tr>
+                ))}
+              </Fragment>
             ))}
             {!rows.length ? (
               <tr>
@@ -1738,8 +1750,11 @@ function downloadReportQueuesImage({
 }) {
   const width = 1710;
   const rowHeight = 44;
+  const sectionHeight = reportLob === "TNS" ? 32 : 0;
   const headerHeight = 36;
-  const height = Math.max(380, 140 + rows.length * rowHeight);
+  const groups = groupReportRows(rows, reportLob);
+  const sectionRows = groups.filter((group) => group.label).length;
+  const height = Math.max(380, 140 + rows.length * rowHeight + sectionRows * sectionHeight);
   const canvas = createReportCanvas(width, height);
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
@@ -1759,19 +1774,28 @@ function downloadReportQueuesImage({
     { label: "Average Latency", x: tableX + 1480, w: 180 }
   ];
   drawTableHeader(ctx, columns, tableY, headerHeight);
-  rows.forEach((row, index) => {
-    const y = tableY + headerHeight + index * rowHeight;
-    if (index % 2) fillRect(ctx, tableX - 10, y, width - 44, rowHeight, "#F3F4F6");
-    const textY = y + 27;
-    drawText(ctx, row.queueId || "N/A", columns[0].x, textY, 13, "#0F172A", "800");
-    drawText(ctx, truncateForCanvas(ctx, row.reportQueueName, columns[1].w), columns[1].x, textY, 13, "#0F172A", "800");
-    drawText(ctx, truncateForCanvas(ctx, row.reportDepartment, columns[2].w), columns[2].x, textY, 12, "#475569", "800");
-    drawText(ctx, formatInteger(row.current.backlog), columns[3].x, textY, 13, "#0F172A", "900");
-    drawText(ctx, formatDurationFromMs(row.current.ahtMs), columns[4].x, textY, 13, "#0F172A", "800");
-    drawText(ctx, formatDurationFromMs(row.current.maxLatencyMs), columns[5].x, y + 17, 13, "#0F172A", "900");
-    drawCanvasStatusPill(ctx, resolveLatencyAdherence(row.current.maxLatencyMs, row.slaTargetMinutes), columns[5].x, y + 21, true);
-    drawText(ctx, formatDurationFromMs(row.current.latencyMs), columns[6].x, y + 17, 13, "#0F172A", "900");
-    drawCanvasStatusPill(ctx, resolveLatencyAdherence(row.current.latencyMs, row.slaTargetMinutes), columns[6].x, y + 21, true);
+  let cursorY = tableY + headerHeight;
+  groups.forEach((group) => {
+    if (group.label) {
+      fillRect(ctx, tableX - 10, cursorY, width - 44, sectionHeight, "#E2E8F0");
+      drawText(ctx, group.label, tableX, cursorY + 22, 13, "#475569", "900");
+      cursorY += sectionHeight;
+    }
+    group.rows.forEach((row, index) => {
+      const y = cursorY;
+      if (index % 2) fillRect(ctx, tableX - 10, y, width - 44, rowHeight, "#F3F4F6");
+      const textY = y + 27;
+      drawText(ctx, row.queueId || "N/A", columns[0].x, textY, 13, "#0F172A", "800");
+      drawText(ctx, truncateForCanvas(ctx, row.reportQueueName, columns[1].w), columns[1].x, textY, 13, "#0F172A", "800");
+      drawText(ctx, truncateForCanvas(ctx, row.reportDepartment, columns[2].w), columns[2].x, textY, 12, "#475569", "800");
+      drawText(ctx, formatInteger(row.current.backlog), columns[3].x, textY, 13, "#0F172A", "900");
+      drawText(ctx, formatDurationFromMs(row.current.ahtMs), columns[4].x, textY, 13, "#0F172A", "800");
+      drawText(ctx, formatDurationFromMs(row.current.maxLatencyMs), columns[5].x, y + 17, 13, "#0F172A", "900");
+      drawCanvasStatusPill(ctx, resolveLatencyAdherence(row.current.maxLatencyMs, row.slaTargetMinutes), columns[5].x, y + 21, true);
+      drawText(ctx, formatDurationFromMs(row.current.latencyMs), columns[6].x, y + 17, 13, "#0F172A", "900");
+      drawCanvasStatusPill(ctx, resolveLatencyAdherence(row.current.latencyMs, row.slaTargetMinutes), columns[6].x, y + 21, true);
+      cursorY += rowHeight;
+    });
   });
   downloadCanvas(canvas, `realtime-report-${reportLob.toLowerCase()}-queues.png`);
 }
@@ -2150,7 +2174,7 @@ function buildFilteredAgentCards(rows: AgentRealtimeRow[], selectedCycle: string
 function buildReportRows(rows: QueueRealtimeRow[], reportLob: ReportLob, search: string): QueueReportRow[] {
   const normalizedSearch = normalizeSearch(search);
   return rows
-    .filter((row) => row.lob === reportLob)
+    .filter((row) => matchesReportLob(row, reportLob))
     .map((row) => {
       const metadata = getQueueReportMetadataById(row.queueId);
       return {
@@ -2169,7 +2193,41 @@ function buildReportRows(rows: QueueRealtimeRow[], reportLob: ReportLob, search:
         row.lob
       ].join(" ")).includes(normalizedSearch);
     })
-    .sort((a, b) => (b.current.backlog - a.current.backlog) || a.reportDepartment.localeCompare(b.reportDepartment, "pt-BR", { sensitivity: "base" }) || a.reportQueueName.localeCompare(b.reportQueueName, "pt-BR", { sensitivity: "base" }));
+    .sort(compareReportRows);
+}
+
+function matchesReportLob(row: QueueRealtimeRow, reportLob: ReportLob) {
+  if (reportLob === "TNS") return row.lob === "VIDEO" || row.lob === "COMMENTS";
+  return row.lob === "ADS";
+}
+
+function compareReportRows(a: QueueReportRow, b: QueueReportRow) {
+  const lobOrder = getReportLobOrder(a.lob) - getReportLobOrder(b.lob);
+  if (lobOrder !== 0) return lobOrder;
+  const targetOrder = normalizeSlaForSort(a.slaTargetMinutes) - normalizeSlaForSort(b.slaTargetMinutes);
+  if (targetOrder !== 0) return targetOrder;
+  const departmentOrder = a.reportDepartment.localeCompare(b.reportDepartment, "pt-BR", { sensitivity: "base" });
+  if (departmentOrder !== 0) return departmentOrder;
+  return a.reportQueueName.localeCompare(b.reportQueueName, "pt-BR", { sensitivity: "base" });
+}
+
+function getReportLobOrder(lob: QueueRealtimeRow["lob"]) {
+  if (lob === "ADS") return 0;
+  if (lob === "VIDEO") return 1;
+  if (lob === "COMMENTS") return 2;
+  return 3;
+}
+
+function normalizeSlaForSort(value: number | null) {
+  return value === null ? Number.POSITIVE_INFINITY : value;
+}
+
+function groupReportRows(rows: QueueReportRow[], reportLob: ReportLob): Array<{ label: string; rows: QueueReportRow[] }> {
+  if (reportLob !== "TNS") return [{ label: "", rows }];
+  return [
+    { label: "VIDEO", rows: rows.filter((row) => row.lob === "VIDEO") },
+    { label: "COMMENTS", rows: rows.filter((row) => row.lob === "COMMENTS") }
+  ].filter((group) => group.rows.length);
 }
 
 function buildDepartmentReportSummaries(rows: QueueReportRow[]): DepartmentReportSummary[] {
