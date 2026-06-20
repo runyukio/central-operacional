@@ -17,3 +17,7 @@ node_modules
 .env.local.backup
 *.backup
 .vercel
+.kap_cookie
+.kap_body.json
+.kap_auditor_body.json
+kap-downloads/

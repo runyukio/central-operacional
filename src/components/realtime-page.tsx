@@ -279,6 +279,7 @@ type DepartmentReportSummary = {
   backlog: number;
   ahtMs: number | null;
   maxLatencyMs: number | null;
+  maxLatencySlaTargetMinutes: number | null;
   maxLatencyQueueId: string;
   maxLatencyQueueName: string;
 };
@@ -486,6 +487,16 @@ export function RealTimePage() {
   const filteredAgentCards = useMemo(() => buildFilteredAgentCards(agentRows, selectedCycleValue), [agentRows, selectedCycleValue]);
   const filteredQueueCards = useMemo(() => buildQueueLobCards(queueRows, selectedCycleValue), [queueRows, selectedCycleValue]);
 
+  function downloadReportImages() {
+    downloadRealtimeReportImages({
+      reportLob,
+      selectedCycle: selectedCycleValue,
+      card: reportBacklogCard,
+      departments: departmentSummaries,
+      rows: reportRows
+    });
+  }
+
   useEffect(() => {
     const interval = window.setInterval(async () => {
       try {
@@ -541,22 +552,22 @@ export function RealTimePage() {
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-2xl font-black text-navy-950">Real Time</h1>
             <span className={cn("inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-black", summary?.isStale ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-700")}>
-              {summary?.hasData ? (summary.isStale ? "Atenção" : "Atualizado") : "Sem dados"}
+              {summary?.hasData ? (summary.isStale ? (activeTab === "report" ? "Attention" : "Atenção") : (activeTab === "report" ? "Updated" : "Atualizado")) : (activeTab === "report" ? "No data" : "Sem dados")}
             </span>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => void openHistory()} className="premium-control inline-flex h-10 items-center gap-2 px-3 text-sm font-extrabold text-navy-950">
             <History className="h-4 w-4" />
-            Histórico
+            {activeTab === "report" ? "History" : "Histórico"}
           </button>
           <button type="button" onClick={exportXlsx} className="premium-control inline-flex h-10 items-center gap-2 px-3 text-sm font-extrabold text-navy-950">
             <Download className="h-4 w-4" />
-            Exportar XLSX
+            {activeTab === "report" ? "Export XLSX" : "Exportar XLSX"}
           </button>
           <button type="button" onClick={() => void loadSnapshot(selectedCycle, true)} className="premium-button inline-flex h-10 items-center gap-2 px-4 text-sm font-extrabold">
             <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} />
-            Atualizar
+            {activeTab === "report" ? "Refresh" : "Atualizar"}
           </button>
         </div>
       </div>
@@ -566,20 +577,20 @@ export function RealTimePage() {
       <section className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
         <div className="flex flex-wrap items-end gap-3">
           <label className="block min-w-[260px] flex-1 text-xs font-black uppercase tracking-wide text-muted">
-            ciclo_download
+            Ciclo
             <RealtimeCyclePicker value={selectedCycleValue} cycles={cycles} onChange={setSelectedCycle} />
           </label>
           <button type="button" onClick={() => setSelectedCycle(olderCycle)} disabled={!olderCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
-            Ciclo anterior
+            {activeTab === "report" ? "Previous Cycle" : "Ciclo anterior"}
           </button>
           <button type="button" onClick={() => setSelectedCycle(newerCycle)} disabled={!newerCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
-            Próximo ciclo
+            {activeTab === "report" ? "Next Cycle" : "Próximo ciclo"}
           </button>
           <button type="button" onClick={() => setSelectedCycle(latestCycle)} disabled={!latestCycle || selectedCycleValue === latestCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
-            Ciclo atual
+            {activeTab === "report" ? "Current Cycle" : "Ciclo atual"}
           </button>
           <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-bold text-muted">
-            Comparação: {(activeTab === "agents" ? agentView?.previousCycle : queueView?.previousCycle) || "Sem ciclo anterior"}
+            {activeTab === "report" ? "Comparison" : "Comparação"}: {(activeTab === "agents" ? agentView?.previousCycle : queueView?.previousCycle) || (activeTab === "report" ? "No previous cycle" : "Sem ciclo anterior")}
           </div>
         </div>
       </section>
@@ -597,7 +608,7 @@ export function RealTimePage() {
           ))}
         </div>
       ) : (
-        <ReportSummarySection card={reportBacklogCard} departments={departmentSummaries} reportLob={reportLob} selectedCycle={selectedCycleValue} />
+        <ReportSummarySection card={reportBacklogCard} departments={departmentSummaries} reportLob={reportLob} selectedCycle={selectedCycleValue} onDownloadImages={downloadReportImages} />
       )}
 
       <section className="overflow-hidden rounded-[24px] border border-slate-200/80 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
@@ -606,10 +617,10 @@ export function RealTimePage() {
             <div className="flex flex-wrap items-center gap-3">
               <div className="inline-flex rounded-2xl bg-slate-100 p-1">
                 <button type="button" onClick={() => setActiveTab("agents")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", activeTab === "agents" ? "bg-white text-blue-700 shadow-sm" : "text-muted")}>
-                  Agentes
+                  {activeTab === "report" ? "Agents" : "Agentes"}
                 </button>
                 <button type="button" onClick={() => setActiveTab("queues")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", activeTab === "queues" ? "bg-white text-blue-700 shadow-sm" : "text-muted")}>
-                  Filas
+                  {activeTab === "report" ? "Queues" : "Filas"}
                 </button>
                 <button type="button" onClick={() => setActiveTab("report")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", activeTab === "report" ? "bg-white text-blue-700 shadow-sm" : "text-muted")}>
                   Report
@@ -624,8 +635,8 @@ export function RealTimePage() {
               )}
             </div>
             <div className="flex flex-wrap gap-2">
-              <button type="button" onClick={activeTab === "agents" ? () => setAgentFilters(defaultAgentFilters) : activeTab === "queues" ? () => setQueueFilters(defaultQueueFilters) : () => { setReportLob("ADS"); setReportSearch(""); }} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Filtros padrão</button>
-              <button type="button" onClick={activeTab === "agents" ? () => setAgentFilters(emptyAgentFilters) : activeTab === "queues" ? () => setQueueFilters({ search: "", lob: "", status: "", slaTarget: "", queueId: "" }) : () => setReportSearch("")} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Limpar</button>
+              <button type="button" onClick={activeTab === "agents" ? () => setAgentFilters(defaultAgentFilters) : activeTab === "queues" ? () => setQueueFilters(defaultQueueFilters) : () => { setReportLob("ADS"); setReportSearch(""); }} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">{activeTab === "report" ? "Default filters" : "Filtros padrão"}</button>
+              <button type="button" onClick={activeTab === "agents" ? () => setAgentFilters(emptyAgentFilters) : activeTab === "queues" ? () => setQueueFilters({ search: "", lob: "", status: "", slaTarget: "", queueId: "" }) : () => setReportSearch("")} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">{activeTab === "report" ? "Clear" : "Limpar"}</button>
             </div>
           </div>
           {activeTab === "agents" ? (
@@ -648,7 +659,7 @@ export function RealTimePage() {
             </div>
           ) : (
             <div className="mt-4 rounded-3xl border border-slate-100 bg-slate-50/70 p-3">
-              <SearchBox value={reportSearch} onChange={setReportSearch} placeholder="Buscar ID, Queue ou Department..." />
+              <SearchBox value={reportSearch} onChange={setReportSearch} placeholder="Search ID, Queue or Department..." />
             </div>
           )}
         </div>
@@ -909,7 +920,7 @@ function StructuredQueueTable({
             {rows.map((row, index) => (
               <tr key={row.key} className={cn("border-t border-slate-100 transition hover:bg-blue-50/60", index % 2 ? "bg-slate-50/35" : "bg-white")}>
                 <td className="px-4 py-3 font-extrabold text-navy-950">{row.lob}</td>
-                <td className="px-4 py-3"><span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-black text-blue-700">{row.queueId || "Sem Fila ID"}</span></td>
+                <td className="px-4 py-3"><span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-black text-blue-700">{row.queueId || "No Queue ID"}</span></td>
                 <td className="px-4 py-3"><AgentMetricCell current={row.current.input} previous={row.previous?.input ?? null} format="number" positiveDirection="neutral" /></td>
                 <td className="px-4 py-3"><AgentMetricCell current={row.current.output} previous={row.previous?.output ?? null} format="number" positiveDirection="up" /></td>
                 <td className="px-4 py-3"><AgentMetricCell current={row.current.ahtMs} previous={row.previous?.ahtMs ?? null} format="duration" positiveDirection="down" /></td>
@@ -1200,7 +1211,7 @@ function AgentDetailDrawer({ row, selectedCycle, onClose }: { row: AgentRealtime
         <div className="premium-card mt-5 overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
             <div>
-              <h3 className="font-black text-navy-950">Histórico por ciclo_download</h3>
+              <h3 className="font-black text-navy-950">Histórico por Ciclo</h3>
               <p className="text-xs font-bold text-muted">Evolução do agente no dia selecionado.</p>
             </div>
             <select
@@ -1312,7 +1323,7 @@ function QueueDetailDrawer({ row, onClose }: { row: QueueRealtimeRow; onClose: (
 
         <div className="premium-card mt-5 overflow-hidden">
           <div className="border-b border-slate-100 px-4 py-3">
-            <h3 className="font-black text-navy-950">Histórico por ciclo_download</h3>
+            <h3 className="font-black text-navy-950">Histórico por Ciclo</h3>
             <p className="text-xs font-bold text-muted">Evolução de backlog, latência, AHT, input e output por ciclo.</p>
           </div>
           <div className="overflow-x-auto">
@@ -1484,27 +1495,29 @@ function ReportSummarySection({
   card,
   departments,
   reportLob,
-  selectedCycle
+  selectedCycle,
+  onDownloadImages
 }: {
   card: AgentKpiCard;
   departments: DepartmentReportSummary[];
   reportLob: ReportLob;
   selectedCycle: string;
+  onDownloadImages: () => void;
 }) {
   return (
-    <section className="grid gap-4 xl:grid-cols-[minmax(320px,0.9fr)_minmax(0,1.4fr)]">
-      <div className="rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+    <section className="grid items-start gap-4 xl:grid-cols-[minmax(320px,0.9fr)_minmax(0,1.4fr)]">
+      <div className="self-start rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-[11px] font-black uppercase tracking-[0.16em] text-muted">Report {reportLob}</p>
             <h2 className="mt-1 text-xl font-black text-navy-950">Total Backlog</h2>
-            <p className="mt-1 text-xs font-bold text-muted">{selectedCycle || "Sem ciclo selecionado"}</p>
+            <p className="mt-1 text-xs font-bold text-muted">{selectedCycle || "No cycle selected"}</p>
           </div>
-          {card.hasComparison ? <TrendBadge trend={card.trend} direction={card.direction} value={card.delta || "0"} /> : <span className="text-xs font-black text-muted">Sem comparação</span>}
+          {card.hasComparison ? <TrendBadge trend={card.trend} direction={card.direction} value={card.delta || "0"} /> : <span className="text-xs font-black text-muted">No comparison</span>}
         </div>
         <p className="mt-6 text-5xl font-black tracking-tight text-navy-950">{card.value}</p>
-        <p className="mt-2 text-sm font-bold text-muted">Histórico do dia por ciclo_download</p>
-        <div className="mt-4 h-32">
+        <p className="mt-2 text-sm font-bold text-muted">Daily history by Cycle</p>
+        <div className="mt-4 h-28">
           <TrendSparkline data={card.history} format={card.format} trend={card.trend} />
         </div>
       </div>
@@ -1512,10 +1525,15 @@ function ReportSummarySection({
       <div className="overflow-hidden rounded-[24px] border border-slate-200/80 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
           <div>
-            <h2 className="font-black text-navy-950">Departamentos</h2>
-            <p className="text-xs font-bold text-muted">Backlog somado, AHT médio simples e maior Max Latency do departamento.</p>
+            <h2 className="font-black text-navy-950">Departments</h2>
           </div>
-          <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700">{departments.length} departamento(s)</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700">{departments.length} departments</span>
+            <button type="button" onClick={onDownloadImages} className="premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold text-navy-950">
+              <Download className="h-4 w-4" />
+              Download images
+            </button>
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[760px] text-left text-sm">
@@ -1533,7 +1551,10 @@ function ReportSummarySection({
                   <td className="px-4 py-3 font-black text-navy-950">{formatInteger(department.backlog)}</td>
                   <td className="px-4 py-3 font-bold text-navy-950">{formatDurationFromMs(department.ahtMs)}</td>
                   <td className="px-4 py-3">
-                    <p className="font-black text-navy-950">{formatDurationFromMs(department.maxLatencyMs)}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-black text-navy-950">{formatDurationFromMs(department.maxLatencyMs)}</p>
+                      <ReportLatencyStatusPill status={resolveLatencyAdherence(department.maxLatencyMs, department.maxLatencySlaTargetMinutes)} />
+                    </div>
                     <p className="mt-0.5 max-w-[260px] truncate text-[11px] font-bold text-muted" title={`${department.maxLatencyQueueId} - ${department.maxLatencyQueueName}`}>
                       {department.maxLatencyQueueId || "-"} · {department.maxLatencyQueueName || "-"}
                     </p>
@@ -1542,7 +1563,7 @@ function ReportSummarySection({
               ))}
               {!departments.length ? (
                 <tr>
-                  <td colSpan={4} className="px-4 py-12 text-center text-sm font-bold text-muted">Sem departamentos para os filtros aplicados.</td>
+                  <td colSpan={4} className="px-4 py-12 text-center text-sm font-bold text-muted">No departments for the selected filters.</td>
                 </tr>
               ) : null}
             </tbody>
@@ -1556,15 +1577,11 @@ function ReportSummarySection({
 function ReportTable({ rows, reportLob, onSelect }: { rows: QueueReportRow[]; reportLob: ReportLob; onSelect: (row: QueueRealtimeRow) => void }) {
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs font-black uppercase tracking-wide text-muted">
-        <span>{rows.length} fila(s) no report {reportLob}</span>
-        <span>Ordenado por backlog maior para menor</span>
-      </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[1080px] border-separate border-spacing-0 text-left text-sm">
           <thead className="sticky top-0 z-10 bg-slate-50/95 text-xs uppercase tracking-wide text-muted backdrop-blur">
             <tr>
-              {["ID", "Queue", "Department", "Backlog", "AHT", "Max Latency", "Average Latency", "Ações"].map((column) => (
+              {["ID", "Queue", "Department", "Backlog", "AHT", "Max Latency", "Average Latency", "Actions"].map((column) => (
                 <th key={column} className="whitespace-nowrap border-b border-slate-100 px-4 py-3 font-black">{column}</th>
               ))}
             </tr>
@@ -1577,19 +1594,19 @@ function ReportTable({ rows, reportLob, onSelect }: { rows: QueueReportRow[]; re
                 <td className="max-w-[260px] px-4 py-3 font-bold text-muted"><span className="block truncate" title={row.reportDepartment}>{row.reportDepartment}</span></td>
                 <td className="px-4 py-3 font-black text-navy-950">{formatInteger(row.current.backlog)}</td>
                 <td className="px-4 py-3 font-bold text-navy-950">{formatDurationFromMs(row.current.ahtMs)}</td>
-                <td className="px-4 py-3 font-bold text-navy-950">{formatDurationFromMs(row.current.maxLatencyMs)}</td>
-                <td className="px-4 py-3 font-bold text-navy-950">{formatDurationFromMs(row.current.latencyMs)}</td>
+                <td className="px-4 py-3"><ReportLatencyCell value={row.current.maxLatencyMs} slaTargetMinutes={row.slaTargetMinutes} /></td>
+                <td className="px-4 py-3"><ReportLatencyCell value={row.current.latencyMs} slaTargetMinutes={row.slaTargetMinutes} /></td>
                 <td className="px-4 py-3">
                   <button type="button" onClick={() => onSelect(row)} className="premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold text-navy-950">
                     <Eye className="h-4 w-4" />
-                    Detalhar
+                    Details
                   </button>
                 </td>
               </tr>
             ))}
             {!rows.length ? (
               <tr>
-                <td colSpan={8} className="px-4 py-12 text-center text-sm font-bold text-muted">Nenhuma fila encontrada no report {reportLob}.</td>
+                <td colSpan={8} className="px-4 py-12 text-center text-sm font-bold text-muted">No queues found in Report {reportLob}.</td>
               </tr>
             ) : null}
           </tbody>
@@ -1597,6 +1614,266 @@ function ReportTable({ rows, reportLob, onSelect }: { rows: QueueReportRow[]; re
       </div>
     </>
   );
+}
+
+function ReportLatencyCell({ value, slaTargetMinutes }: { value: number | null; slaTargetMinutes: number | null }) {
+  return (
+    <div className="min-w-[120px]">
+      <p className="font-black text-navy-950">{formatDurationFromMs(value)}</p>
+      <div className="mt-1">
+        <ReportLatencyStatusPill status={resolveLatencyAdherence(value, slaTargetMinutes)} />
+      </div>
+    </div>
+  );
+}
+
+function ReportLatencyStatusPill({ status }: { status: LatencyAdherenceStatus }) {
+  const label = status === "Alerta" ? "Alert" : status === "Estourado" ? "Over" : status;
+  const config = status === "OK"
+    ? { className: "bg-emerald-100 text-emerald-700", icon: CheckCircle2 }
+    : status === "Alerta"
+      ? { className: "bg-amber-100 text-amber-800", icon: AlertTriangle }
+      : status === "Estourado"
+        ? { className: "bg-red-100 text-red-700", icon: XCircle }
+        : { className: "bg-slate-100 text-slate-700", icon: Activity };
+  const Icon = config.icon;
+  return (
+    <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-black", config.className)}>
+      <Icon className="h-3.5 w-3.5" />
+      {label}
+    </span>
+  );
+}
+
+function downloadRealtimeReportImages({
+  reportLob,
+  selectedCycle,
+  card,
+  departments,
+  rows
+}: {
+  reportLob: ReportLob;
+  selectedCycle: string;
+  card: AgentKpiCard;
+  departments: DepartmentReportSummary[];
+  rows: QueueReportRow[];
+}) {
+  downloadReportSummaryImage({ reportLob, selectedCycle, card, departments });
+  const pageSize = 28;
+  const pages = Math.max(1, Math.ceil(rows.length / pageSize));
+  for (let page = 0; page < pages; page += 1) {
+    downloadReportQueuesImage({
+      reportLob,
+      selectedCycle,
+      rows: rows.slice(page * pageSize, (page + 1) * pageSize),
+      page: page + 1,
+      pages
+    });
+  }
+}
+
+function downloadReportSummaryImage({
+  reportLob,
+  selectedCycle,
+  card,
+  departments
+}: {
+  reportLob: ReportLob;
+  selectedCycle: string;
+  card: AgentKpiCard;
+  departments: DepartmentReportSummary[];
+}) {
+  const width = 1500;
+  const rowHeight = 52;
+  const height = Math.max(520, 250 + Math.min(departments.length, 16) * rowHeight);
+  const canvas = createReportCanvas(width, height);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  fillReportBackground(ctx, width, height);
+
+  drawText(ctx, `REPORT ${reportLob}`, 48, 56, 18, "#64748B", "800", "Inter, Arial, sans-serif");
+  drawText(ctx, "Total Backlog", 48, 92, 34, "#0F172A", "900", "Inter, Arial, sans-serif");
+  drawText(ctx, selectedCycle || "No cycle selected", 48, 124, 20, "#64748B", "800", "Inter, Arial, sans-serif");
+  drawText(ctx, card.value, 48, 205, 76, "#0F172A", "900", "Inter, Arial, sans-serif");
+  drawText(ctx, card.hasComparison ? `${card.direction === "up" ? "↑" : card.direction === "down" ? "↓" : "↔"} ${card.delta}` : "No comparison", 250, 196, 22, card.trend === "negative" ? "#DC2626" : card.trend === "positive" ? "#059669" : "#64748B", "900", "Inter, Arial, sans-serif");
+
+  const chartX = 420;
+  const chartY = 86;
+  const chartW = 420;
+  const chartH = 140;
+  drawMiniLine(ctx, card.history, chartX, chartY, chartW, chartH, card.trend === "negative" ? "#EF4444" : card.trend === "positive" ? "#10B981" : "#2563EB");
+
+  const tableX = 48;
+  const tableY = 280;
+  drawText(ctx, "Departments", tableX, tableY - 28, 24, "#0F172A", "900", "Inter, Arial, sans-serif");
+  const columns = [
+    { label: "Department", x: tableX, w: 470 },
+    { label: "Backlog", x: tableX + 500, w: 160 },
+    { label: "AHT", x: tableX + 700, w: 180 },
+    { label: "Max Latency", x: tableX + 930, w: 460 }
+  ];
+  drawTableHeader(ctx, columns, tableY, 42);
+  departments.slice(0, 16).forEach((department, index) => {
+    const y = tableY + 42 + index * rowHeight;
+    if (index % 2) fillRect(ctx, tableX - 14, y, width - 84, rowHeight, "#F8FAFC");
+    drawText(ctx, department.department, columns[0].x, y + 33, 17, "#0F172A", "800");
+    drawText(ctx, formatInteger(department.backlog), columns[1].x, y + 33, 18, "#0F172A", "900");
+    drawText(ctx, formatDurationFromMs(department.ahtMs), columns[2].x, y + 33, 18, "#0F172A", "800");
+    drawText(ctx, formatDurationFromMs(department.maxLatencyMs), columns[3].x, y + 33, 18, "#0F172A", "900");
+    drawCanvasStatusPill(ctx, resolveLatencyAdherence(department.maxLatencyMs, department.maxLatencySlaTargetMinutes), columns[3].x + 135, y + 12);
+  });
+  downloadCanvas(canvas, `realtime-report-${reportLob.toLowerCase()}-summary.png`);
+}
+
+function downloadReportQueuesImage({
+  reportLob,
+  selectedCycle,
+  rows,
+  page,
+  pages
+}: {
+  reportLob: ReportLob;
+  selectedCycle: string;
+  rows: QueueReportRow[];
+  page: number;
+  pages: number;
+}) {
+  const width = 1800;
+  const rowHeight = 54;
+  const height = Math.max(360, 180 + rows.length * rowHeight);
+  const canvas = createReportCanvas(width, height);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  fillReportBackground(ctx, width, height);
+  drawText(ctx, `REPORT ${reportLob} - QUEUES`, 48, 56, 26, "#0F172A", "900");
+  drawText(ctx, `${selectedCycle || "No cycle selected"} • Page ${page}/${pages}`, 48, 88, 18, "#64748B", "800");
+
+  const tableX = 48;
+  const tableY = 124;
+  const columns = [
+    { label: "ID", x: tableX, w: 150 },
+    { label: "Queue", x: tableX + 165, w: 450 },
+    { label: "Department", x: tableX + 635, w: 310 },
+    { label: "Backlog", x: tableX + 970, w: 130 },
+    { label: "AHT", x: tableX + 1120, w: 140 },
+    { label: "Max Latency", x: tableX + 1280, w: 220 },
+    { label: "Average Latency", x: tableX + 1520, w: 230 }
+  ];
+  drawTableHeader(ctx, columns, tableY, 42);
+  rows.forEach((row, index) => {
+    const y = tableY + 42 + index * rowHeight;
+    if (index % 2) fillRect(ctx, tableX - 14, y, width - 84, rowHeight, "#F8FAFC");
+    drawText(ctx, row.queueId || "N/A", columns[0].x, y + 34, 17, "#2563EB", "900");
+    drawText(ctx, truncateForCanvas(ctx, row.reportQueueName, columns[1].w), columns[1].x, y + 34, 17, "#0F172A", "800");
+    drawText(ctx, truncateForCanvas(ctx, row.reportDepartment, columns[2].w), columns[2].x, y + 34, 16, "#475569", "800");
+    drawText(ctx, formatInteger(row.current.backlog), columns[3].x, y + 34, 18, "#0F172A", "900");
+    drawText(ctx, formatDurationFromMs(row.current.ahtMs), columns[4].x, y + 34, 17, "#0F172A", "800");
+    drawText(ctx, formatDurationFromMs(row.current.maxLatencyMs), columns[5].x, y + 24, 17, "#0F172A", "900");
+    drawCanvasStatusPill(ctx, resolveLatencyAdherence(row.current.maxLatencyMs, row.slaTargetMinutes), columns[5].x, y + 30);
+    drawText(ctx, formatDurationFromMs(row.current.latencyMs), columns[6].x, y + 24, 17, "#0F172A", "900");
+    drawCanvasStatusPill(ctx, resolveLatencyAdherence(row.current.latencyMs, row.slaTargetMinutes), columns[6].x, y + 30);
+  });
+  downloadCanvas(canvas, `realtime-report-${reportLob.toLowerCase()}-queues-${page}.png`);
+}
+
+function createReportCanvas(width: number, height: number) {
+  const canvas = document.createElement("canvas");
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = width * ratio;
+  canvas.height = height * ratio;
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+  const ctx = canvas.getContext("2d");
+  if (ctx) ctx.scale(ratio, ratio);
+  return canvas;
+}
+
+function fillReportBackground(ctx: CanvasRenderingContext2D, width: number, height: number) {
+  fillRect(ctx, 0, 0, width, height, "#F8FAFC");
+  roundRect(ctx, 24, 24, width - 48, height - 48, 28, "#FFFFFF", "#E5EAF2");
+}
+
+function drawTableHeader(ctx: CanvasRenderingContext2D, columns: Array<{ label: string; x: number; w: number }>, y: number, height: number) {
+  const startX = Math.min(...columns.map((column) => column.x)) - 14;
+  const endX = Math.max(...columns.map((column) => column.x + column.w)) + 14;
+  fillRect(ctx, startX, y, endX - startX, height, "#F1F5F9");
+  columns.forEach((column) => drawText(ctx, column.label, column.x, y + 27, 15, "#64748B", "900"));
+}
+
+function drawMiniLine(ctx: CanvasRenderingContext2D, history: TrendPoint[], x: number, y: number, width: number, height: number, color: string) {
+  const values = history.map((point) => point.value).filter((value): value is number => value !== null && Number.isFinite(value));
+  if (values.length < 2) return;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = Math.max(1, max - min);
+  ctx.beginPath();
+  values.forEach((value, index) => {
+    const px = x + (index / Math.max(1, values.length - 1)) * width;
+    const py = y + height - ((value - min) / range) * height;
+    if (index === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  });
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = color;
+  ctx.stroke();
+}
+
+function drawCanvasStatusPill(ctx: CanvasRenderingContext2D, status: LatencyAdherenceStatus, x: number, y: number) {
+  const config = status === "OK"
+    ? { bg: "#D1FAE5", text: "#047857", label: "OK" }
+    : status === "Alerta"
+      ? { bg: "#FEF3C7", text: "#B45309", label: "Alert" }
+      : status === "Estourado"
+        ? { bg: "#FEE2E2", text: "#DC2626", label: "Over" }
+        : { bg: "#E2E8F0", text: "#475569", label: "N/A" };
+  roundRect(ctx, x, y, 76, 24, 12, config.bg);
+  drawText(ctx, config.label, x + 14, y + 17, 12, config.text, "900");
+}
+
+function drawText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, size: number, color: string, weight = "700", family = "Inter, Arial, sans-serif") {
+  ctx.font = `${weight} ${size}px ${family}`;
+  ctx.fillStyle = color;
+  ctx.fillText(text, x, y);
+}
+
+function fillRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, color: string) {
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, width, height);
+}
+
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number, fill: string, stroke?: string) {
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + width - radius, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+  ctx.lineTo(x + width, y + height - radius);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+  ctx.lineTo(x + radius, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  if (stroke) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+}
+
+function truncateForCanvas(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let next = text;
+  while (next.length > 3 && ctx.measureText(`${next}...`).width > maxWidth) next = next.slice(0, -1);
+  return `${next}...`;
+}
+
+function downloadCanvas(canvas: HTMLCanvasElement, fileName: string) {
+  const link = document.createElement("a");
+  link.download = fileName;
+  link.href = canvas.toDataURL("image/png");
+  link.click();
 }
 
 function ImportHistoryModal({ imports, loading, onClose }: { imports: ImportHistory[]; loading: boolean; onClose: () => void }) {
@@ -1848,6 +2125,7 @@ function buildDepartmentReportSummaries(rows: QueueReportRow[]): DepartmentRepor
     backlog: number;
     ahtValues: number[];
     maxLatencyMs: number | null;
+    maxLatencySlaTargetMinutes: number | null;
     maxLatencyQueueId: string;
     maxLatencyQueueName: string;
   }>();
@@ -1858,6 +2136,7 @@ function buildDepartmentReportSummaries(rows: QueueReportRow[]): DepartmentRepor
       backlog: 0,
       ahtValues: [],
       maxLatencyMs: null,
+      maxLatencySlaTargetMinutes: null,
       maxLatencyQueueId: "",
       maxLatencyQueueName: ""
     };
@@ -1865,6 +2144,7 @@ function buildDepartmentReportSummaries(rows: QueueReportRow[]): DepartmentRepor
     if (row.current.ahtMs !== null && row.current.ahtMs > 0) group.ahtValues.push(row.current.ahtMs);
     if (row.current.maxLatencyMs !== null && (group.maxLatencyMs === null || row.current.maxLatencyMs > group.maxLatencyMs)) {
       group.maxLatencyMs = row.current.maxLatencyMs;
+      group.maxLatencySlaTargetMinutes = row.slaTargetMinutes;
       group.maxLatencyQueueId = row.queueId;
       group.maxLatencyQueueName = row.reportQueueName;
     }
@@ -1877,6 +2157,7 @@ function buildDepartmentReportSummaries(rows: QueueReportRow[]): DepartmentRepor
       backlog: group.backlog,
       ahtMs: group.ahtValues.length ? group.ahtValues.reduce((sum, value) => sum + value, 0) / group.ahtValues.length : null,
       maxLatencyMs: group.maxLatencyMs,
+      maxLatencySlaTargetMinutes: group.maxLatencySlaTargetMinutes,
       maxLatencyQueueId: group.maxLatencyQueueId,
       maxLatencyQueueName: group.maxLatencyQueueName
     }))
