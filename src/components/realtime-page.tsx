@@ -90,7 +90,7 @@ type QueueRealtimeRow = {
 };
 
 type QueueRealtimeView = {
-  cycles: Array<{ value: string; importedAt: string; importedAtLabel: string; rows: number }>;
+  cycles: Array<{ value: string; batchId?: string; importedAt: string; importedAtLabel: string; rows: number }>;
   selectedCycle: string;
   previousCycle: string;
   filters: {
@@ -156,7 +156,7 @@ type AgentRealtimeRow = {
 };
 
 type AgentRealtimeView = {
-  cycles: Array<{ value: string; importedAt: string; importedAtLabel: string; rows: number }>;
+  cycles: Array<{ value: string; batchId?: string; importedAt: string; importedAtLabel: string; rows: number }>;
   selectedCycle: string;
   previousCycle: string;
   summary: {
@@ -462,6 +462,8 @@ export function RealTimePage() {
   const olderCycle = selectedCycleIndex >= 0 ? cycles[selectedCycleIndex + 1]?.value ?? "" : "";
   const newerCycle = selectedCycleIndex > 0 ? cycles[selectedCycleIndex - 1]?.value ?? "" : "";
   const latestCycle = cycles[0]?.value ?? "";
+  const latestBatchId = cycles[0]?.batchId ?? "";
+  const latestImportedAt = cycles[0]?.importedAt ?? "";
   const filteredAgentCards = useMemo(() => buildFilteredAgentCards(agentRows, selectedCycleValue), [agentRows, selectedCycleValue]);
   const filteredQueueCards = useMemo(() => buildQueueLobCards(queueRows, selectedCycleValue), [queueRows, selectedCycleValue]);
 
@@ -474,7 +476,12 @@ export function RealTimePage() {
         if (!response.ok) throw new Error(json.message || json.error || "Não foi possível verificar atualização do Real Time.");
         const latest = activeTab === "queues" ? json.data?.queues : json.data?.agents;
         const latestCycleDownload = typeof latest?.cycleDownload === "string" ? latest.cycleDownload : "";
-        if (!latestCycleDownload || latestCycleDownload === latestCycle) return;
+        const nextBatchId = typeof latest?.batchId === "string" ? latest.batchId : "";
+        const nextImportedAt = typeof latest?.importedAt === "string" ? latest.importedAt : "";
+        const sameKnownBatch = nextBatchId
+          ? nextBatchId === latestBatchId
+          : latestCycleDownload === latestCycle && nextImportedAt === latestImportedAt;
+        if (!latestCycleDownload || sameKnownBatch) return;
 
         const shouldFollowLatest = !selectedCycleValue || selectedCycleValue === latestCycle;
         await loadSnapshot(shouldFollowLatest ? latestCycleDownload : selectedCycleValue, true, activeTab);
@@ -484,7 +491,7 @@ export function RealTimePage() {
     }, 60000);
     return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, latestCycle, selectedCycleValue]);
+  }, [activeTab, latestBatchId, latestCycle, latestImportedAt, selectedCycleValue]);
 
   function updateAgentFilter(key: keyof AgentFilters, value: string) {
     setAgentFilters((current) => ({ ...current, [key]: value }));
@@ -960,7 +967,7 @@ function RealtimeCyclePicker({
   onChange
 }: {
   value: string;
-  cycles: Array<{ value: string; importedAt: string; importedAtLabel: string; rows: number }>;
+  cycles: Array<{ value: string; batchId?: string; importedAt: string; importedAtLabel: string; rows: number }>;
   onChange: (value: string) => void;
 }) {
   const [open, setOpen] = useState(false);

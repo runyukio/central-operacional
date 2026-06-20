@@ -29,9 +29,22 @@ if [[ -f "$ENV_FILE" ]]; then
   set +a
 fi
 
-if [[ "${KAP_ENFORCE_HALF_HOUR_SLOTS:-true}" == "true" && "$RUN_MINUTE" != "00" && "$RUN_MINUTE" != "30" ]]; then
-  echo "Skipping KAP download: current minute $RUN_MINUTE is outside the 00/30 minute slots."
-  exit 0
+KAP_ALLOWED_MINUTES="${KAP_ALLOWED_MINUTES:-00,10,20,30,40,50}"
+if [[ "${KAP_ENFORCE_ALLOWED_MINUTE_SLOTS:-true}" == "true" ]]; then
+  allowed_current_minute=false
+  IFS=',' read -rA allowed_minutes <<< "$KAP_ALLOWED_MINUTES"
+  for allowed_minute in "${allowed_minutes[@]}"; do
+    allowed_minute="${allowed_minute//[[:space:]]/}"
+    if [[ "$RUN_MINUTE" == "$allowed_minute" ]]; then
+      allowed_current_minute=true
+      break
+    fi
+  done
+
+  if [[ "$allowed_current_minute" != "true" ]]; then
+    echo "Skipping KAP download: current minute $RUN_MINUTE is outside allowed minute slots ($KAP_ALLOWED_MINUTES)."
+    exit 0
+  fi
 fi
 
 if ! [[ "$DOWNLOAD_RETRIES" = <-> ]] || (( DOWNLOAD_RETRIES < 1 )); then
@@ -65,6 +78,28 @@ notify_failure() {
     "$message" >/dev/null 2>&1 || true
 }
 
+check_cookie_freshness() {
+  local max_age_hours="${KAP_COOKIE_MAX_AGE_HOURS:-72}"
+  if ! [[ "$max_age_hours" = <-> ]] || (( max_age_hours <= 0 )); then
+    return
+  fi
+
+  local now_epoch
+  local cookie_epoch
+  local age_hours
+  now_epoch="$(date +%s)"
+  cookie_epoch="$(stat -f %m "$COOKIE_FILE" 2>/dev/null || echo 0)"
+  if ! [[ "$cookie_epoch" = <-> ]] || (( cookie_epoch <= 0 )); then
+    return
+  fi
+
+  age_hours=$(( (now_epoch - cookie_epoch) / 3600 ))
+  if (( age_hours >= max_age_hours )); then
+    echo "Cookie KAP has $age_hours hour(s); refresh recommended (limit: $max_age_hours h)."
+    notify_failure "Cookie KAP com ${age_hours}h. Atualize o cookie para evitar parada do Real Time."
+  fi
+}
+
 persist_failure_artifacts() {
   local label="$1"
   local reason="$2"
@@ -93,6 +128,8 @@ if [[ ! -f "$COOKIE_FILE" ]]; then
   echo "Create it with the full value copied after the browser's Cookie: header."
   exit 1
 fi
+
+check_cookie_freshness
 
 mkdir -p "$OUTPUT_DIR"
 LOCK_DIR="${KAP_LOCK_DIR:-$OUTPUT_DIR/.kap-download.lock}"

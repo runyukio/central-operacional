@@ -23,8 +23,12 @@
     <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>KAP_OUTPUT_DIR</key>
     <string>/Users/lucaskawakami/KAP</string>
-    <key>KAP_ENFORCE_HALF_HOUR_SLOTS</key>
+    <key>KAP_ALLOWED_MINUTES</key>
+    <string>00,10,20,30,40,50</string>
+    <key>KAP_ENFORCE_ALLOWED_MINUTE_SLOTS</key>
     <string>true</string>
+    <key>KAP_COOKIE_MAX_AGE_HOURS</key>
+    <string>72</string>
   </dict>
 
   <key>StartCalendarInterval</key>
@@ -35,7 +39,23 @@
     </dict>
     <dict>
       <key>Minute</key>
+      <integer>10</integer>
+    </dict>
+    <dict>
+      <key>Minute</key>
+      <integer>20</integer>
+    </dict>
+    <dict>
+      <key>Minute</key>
       <integer>30</integer>
+    </dict>
+    <dict>
+      <key>Minute</key>
+      <integer>40</integer>
+    </dict>
+    <dict>
+      <key>Minute</key>
+      <integer>50</integer>
     </dict>
   </array>
 

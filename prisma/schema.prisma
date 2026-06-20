@@ -791,26 +791,26 @@ model BillingRateConfig {
 }
 
 model FinanceInvoiceCycleRecord {
-  id                        String              @id @default(cuid())
-  invoiceCycleMonth         String
-  costCenter                String
-  maxHoursCapacityMinutes   Int                 @default(0)
-  billableHoursTargetMinutes Int                @default(0)
-  billableHoursActualMinutes Int                @default(0)
-  adherencePercent          Decimal             @default(0) @db.Decimal(10, 2)
-  differenceMinutes         Int                 @default(0)
-  penaltyPercent            Decimal             @default(0) @db.Decimal(10, 2)
-  notes                     String?
-  source                    String?
-  uploadBatchId             String?
-  createdById               String?
-  updatedById               String?
-  uploadBatch               FinanceUploadBatch? @relation(fields: [uploadBatchId], references: [id], onDelete: SetNull)
-  createdBy                 User?               @relation("FinanceRecordCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedBy                 User?               @relation("FinanceRecordUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
-  adjustments               FinanceAdjustment[]
-  createdAt                 DateTime            @default(now())
-  updatedAt                 DateTime            @updatedAt
+  id                         String              @id @default(cuid())
+  invoiceCycleMonth          String
+  costCenter                 String
+  maxHoursCapacityMinutes    Int                 @default(0)
+  billableHoursTargetMinutes Int                 @default(0)
+  billableHoursActualMinutes Int                 @default(0)
+  adherencePercent           Decimal             @default(0) @db.Decimal(10, 2)
+  differenceMinutes          Int                 @default(0)
+  penaltyPercent             Decimal             @default(0) @db.Decimal(10, 2)
+  notes                      String?
+  source                     String?
+  uploadBatchId              String?
+  createdById                String?
+  updatedById                String?
+  uploadBatch                FinanceUploadBatch? @relation(fields: [uploadBatchId], references: [id], onDelete: SetNull)
+  createdBy                  User?               @relation("FinanceRecordCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy                  User?               @relation("FinanceRecordUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  adjustments                FinanceAdjustment[]
+  createdAt                  DateTime            @default(now())
+  updatedAt                  DateTime            @updatedAt
 
   @@unique([invoiceCycleMonth, costCenter])
   @@index([invoiceCycleMonth])
@@ -860,18 +860,20 @@ model FinanceAdjustment {
 }
 
 model RealTimeImportBatch {
-  id           String           @id @default(cuid())
-  fileName     String
-  source       String           @default("kap-local")
-  status       String           @default("SUCCESS")
-  rowsTotal    Int              @default(0)
-  queueRows    Int              @default(0)
-  agentRows    Int              @default(0)
-  errorMessage String?
-  warnings     Json?
-  importedAt   DateTime         @default(now())
-  createdAt    DateTime         @default(now())
-  records      RealTimeRecord[]
+  id             String                      @id @default(cuid())
+  fileName       String
+  source         String                      @default("kap-local")
+  status         String                      @default("SUCCESS")
+  rowsTotal      Int                         @default(0)
+  queueRows      Int                         @default(0)
+  agentRows      Int                         @default(0)
+  errorMessage   String?
+  warnings       Json?
+  importedAt     DateTime                    @default(now())
+  createdAt      DateTime                    @default(now())
+  records        RealTimeRecord[]
+  agentSummaries RealTimeAgentCycleSummary[]
+  queueSummaries RealTimeQueueCycleSummary[]
 
   @@index([importedAt])
   @@index([status])
@@ -902,6 +904,84 @@ model RealTimeRecord {
   @@index([lob])
   @@index([supervisor])
   @@index([batchId, recordType])
+}
+
+model RealTimeAgentCycleSummary {
+  id                String              @id @default(cuid())
+  batchId           String
+  batch             RealTimeImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  cycleDownload     String
+  wbLoginNormalized String
+  rawWbLogin        String
+  employeeId        String?
+  displayName       String
+  wbLogin           String
+  crossingStatus    String
+  personType        String
+  employeeStatus    String
+  lob               String
+  supervisor        String
+  shift             String
+  skill             String
+  roleTitle         String
+  submit            Int                 @default(0)
+  ahtMs             Float?
+  moderationMs      Float               @default(0)
+  timeout           Int                 @default(0)
+  refresh           Int                 @default(0)
+  queueCount        Int                 @default(0)
+  sourceRows        Int                 @default(0)
+  queueBreakdown    Json?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  @@index([batchId])
+  @@index([cycleDownload])
+  @@index([wbLoginNormalized])
+  @@index([employeeId])
+  @@index([lob])
+  @@index([supervisor])
+  @@index([shift])
+  @@index([skill])
+  @@index([roleTitle])
+  @@index([crossingStatus])
+  @@index([personType])
+  @@index([employeeStatus])
+  @@index([cycleDownload, wbLoginNormalized])
+  @@index([batchId, cycleDownload])
+}
+
+model RealTimeQueueCycleSummary {
+  id                  String              @id @default(cuid())
+  batchId             String
+  batch               RealTimeImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  cycleDownload       String
+  queueKey            String
+  queueId             String
+  queueName           String
+  lob                 String
+  slaTargetMinutes    Float?
+  status              String
+  input               Int                 @default(0)
+  output              Int                 @default(0)
+  ahtMs               Float?
+  latencyMs           Float?
+  maxLatencyMs        Float?
+  maxLatencyRowNumber Int                 @default(0)
+  backlog             Int                 @default(0)
+  sourceRows          Int                 @default(0)
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  @@index([batchId])
+  @@index([cycleDownload])
+  @@index([queueId])
+  @@index([queueKey])
+  @@index([lob])
+  @@index([status])
+  @@index([slaTargetMinutes])
+  @@index([cycleDownload, queueKey])
+  @@index([batchId, cycleDownload])
 }
 
 model RequestComment {
