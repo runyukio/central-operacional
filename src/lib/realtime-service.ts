@@ -152,6 +152,53 @@ type QueueCycleRow = {
   }>;
 };
 
+type AgentSummaryReadRow = {
+  batchId: string;
+  cycleDownload: string;
+  wbLoginNormalized: string;
+  rawWbLogin: string;
+  employeeId: string | null;
+  displayName: string;
+  wbLogin: string;
+  crossingStatus: string;
+  personType: string;
+  employeeStatus: string;
+  lob: string;
+  supervisor: string;
+  shift: string;
+  skill: string;
+  roleTitle: string;
+  submit: number;
+  ahtMs: number | null;
+  moderationMs: number;
+  timeout: number;
+  refresh: number;
+  queueCount: number;
+  sourceRows: number;
+  queueBreakdown: Prisma.JsonValue | null;
+  batch: { id: string; importedAt: Date; fileName: string };
+};
+
+type QueueSummaryReadRow = {
+  batchId: string;
+  cycleDownload: string;
+  queueKey: string;
+  queueId: string;
+  queueName: string;
+  lob: string;
+  slaTargetMinutes: number | null;
+  status: string;
+  input: number;
+  output: number;
+  ahtMs: number | null;
+  latencyMs: number | null;
+  maxLatencyMs: number | null;
+  maxLatencyRowNumber: number;
+  backlog: number;
+  sourceRows: number;
+  batch: { id: string; importedAt: Date; fileName: string };
+};
+
 const staleThresholdMinutes = 20;
 const realtimeRetentionDays = 7;
 const realtimeViewHistoryBatchLimit = 180;
@@ -1003,25 +1050,7 @@ function summarizeImportedSummaries(
   };
 }
 
-function buildQueueRealtimeViewFromSummaryRows(summaryRows: Array<{
-  batchId: string;
-  cycleDownload: string;
-  queueKey: string;
-  queueId: string;
-  queueName: string;
-  lob: string;
-  slaTargetMinutes: number | null;
-  status: string;
-  input: number;
-  output: number;
-  ahtMs: number | null;
-  latencyMs: number | null;
-  maxLatencyMs: number | null;
-  maxLatencyRowNumber: number;
-  backlog: number;
-  sourceRows: number;
-  batch: { id: string; importedAt: Date; fileName: string };
-}>, options: RealtimeSnapshotOptions) {
+function buildQueueRealtimeViewFromSummaryRows(summaryRows: QueueSummaryReadRow[], options: RealtimeSnapshotOptions) {
   const latestBatchByCycle = new Map<string, { batchId: string; importedAt: Date }>();
   summaryRows.forEach((summary) => {
     const currentLatest = latestBatchByCycle.get(summary.cycleDownload);
@@ -1158,6 +1187,56 @@ function queueSummaryToCycleRow(summary: {
   };
 }
 
+function queueSummaryRowsFromRawRecords(records: Array<{
+  batchId: string;
+  rowNumber: number;
+  rawData: Prisma.JsonValue;
+  batch: { id: string; importedAt: Date; fileName: string };
+}>): QueueSummaryReadRow[] {
+  const groups = new Map<string, {
+    batchId: string;
+    cycleDownload: string;
+    batch: { id: string; importedAt: Date; fileName: string };
+    items: Array<{ rawData: RawRow; cycleDownload: string; rowNumber?: number }>;
+  }>();
+
+  records.forEach((record) => {
+    const rawData = isPlainObject(record.rawData) ? record.rawData : {};
+    const cycleDownload = extractCycleDownload(rawData) || formatCycleFromDate(record.batch.importedAt);
+    const key = `${record.batchId}|${cycleDownload}`;
+    const group = groups.get(key) ?? {
+      batchId: record.batchId,
+      cycleDownload,
+      batch: record.batch,
+      items: []
+    };
+    group.items.push({ rawData, cycleDownload, rowNumber: record.rowNumber });
+    groups.set(key, group);
+  });
+
+  return Array.from(groups.values()).flatMap((group) => (
+    aggregateQueueCycleRows(group.items).map((row) => ({
+      batchId: group.batchId,
+      cycleDownload: group.cycleDownload,
+      queueKey: row.key,
+      queueId: row.queueId,
+      queueName: row.queueName,
+      lob: row.lob,
+      slaTargetMinutes: row.slaTargetMinutes,
+      status: row.status,
+      input: row.current.input,
+      output: row.current.output,
+      ahtMs: row.current.ahtMs,
+      latencyMs: row.current.latencyMs,
+      maxLatencyMs: row.current.maxLatencyMs,
+      maxLatencyRowNumber: row.current.maxLatencyRowNumber,
+      backlog: row.current.backlog,
+      sourceRows: row.current.sourceRows,
+      batch: group.batch
+    }))
+  ));
+}
+
 async function buildQueueRealtimeView(options: RealtimeSnapshotOptions) {
   const batches = await prisma.realTimeImportBatch.findMany({
     where: { status: "SUCCESS", queueRows: { gt: 0 }, importedAt: { gte: realtimeRetentionCutoff() } },
@@ -1193,6 +1272,25 @@ async function buildQueueRealtimeView(options: RealtimeSnapshotOptions) {
       batch: { select: { id: true, importedAt: true, fileName: true } }
     }
   });
+  const summarizedBatchIds = new Set(summaryRows.map((row) => row.batchId));
+  const missingSummaryBatchIds = batchIds.filter((batchId) => !summarizedBatchIds.has(batchId));
+  if (missingSummaryBatchIds.length) {
+    const fallbackRecords = await prisma.realTimeRecord.findMany({
+      where: { recordType: "QUEUE", batchId: { in: missingSummaryBatchIds } },
+      orderBy: { rowNumber: "asc" },
+      select: {
+        id: true,
+        batchId: true,
+        rowNumber: true,
+        rawData: true,
+        batch: { select: { id: true, importedAt: true, fileName: true } }
+      }
+    });
+    const fallbackSummaryRows = queueSummaryRowsFromRawRecords(fallbackRecords);
+    if (summaryRows.length || fallbackSummaryRows.length) {
+      return buildQueueRealtimeViewFromSummaryRows([...summaryRows, ...fallbackSummaryRows], options);
+    }
+  }
   if (summaryRows.length) return buildQueueRealtimeViewFromSummaryRows(summaryRows, options);
 
   const records = await prisma.realTimeRecord.findMany({
@@ -1308,32 +1406,7 @@ async function buildQueueRealtimeView(options: RealtimeSnapshotOptions) {
   };
 }
 
-function buildAgentRealtimeViewFromSummaryRows(summaryRows: Array<{
-  batchId: string;
-  cycleDownload: string;
-  wbLoginNormalized: string;
-  rawWbLogin: string;
-  employeeId: string | null;
-  displayName: string;
-  wbLogin: string;
-  crossingStatus: string;
-  personType: string;
-  employeeStatus: string;
-  lob: string;
-  supervisor: string;
-  shift: string;
-  skill: string;
-  roleTitle: string;
-  submit: number;
-  ahtMs: number | null;
-  moderationMs: number;
-  timeout: number;
-  refresh: number;
-  queueCount: number;
-  sourceRows: number;
-  queueBreakdown: Prisma.JsonValue | null;
-  batch: { id: string; importedAt: Date; fileName: string };
-}>, options: RealtimeSnapshotOptions) {
+function buildAgentRealtimeViewFromSummaryRows(summaryRows: AgentSummaryReadRow[], options: RealtimeSnapshotOptions) {
   const latestBatchByCycle = new Map<string, { batchId: string; importedAt: Date }>();
   summaryRows.forEach((summary) => {
     const currentLatest = latestBatchByCycle.get(summary.cycleDownload);
@@ -1493,6 +1566,75 @@ function agentSummaryToCycleRow(summary: {
   };
 }
 
+function agentSummaryRowsFromRawRecords(records: Array<{
+  batchId: string;
+  rowNumber: number;
+  rawData: Prisma.JsonValue;
+  batch: { id: string; importedAt: Date; fileName: string };
+}>, employeeMatches: EmployeeMatch[]): AgentSummaryReadRow[] {
+  const employeesByWb = new Map<string, EmployeeMatch>();
+  employeeMatches.forEach((employee) => employeesByWb.set(normalizeWbLogin(employee.wbLogin), employee));
+  const groups = new Map<string, {
+    batchId: string;
+    cycleDownload: string;
+    batch: { id: string; importedAt: Date; fileName: string };
+    items: Array<{
+      rawData: RawRow;
+      cycleDownload: string;
+      employee: EmployeeMatch | null;
+      rawWbLogin: string;
+      wbKey: string;
+    }>;
+  }>();
+
+  records.forEach((record) => {
+    const rawData = isPlainObject(record.rawData) ? record.rawData : {};
+    const cycleDownload = extractCycleDownload(rawData) || formatCycleFromDate(record.batch.importedAt);
+    const candidates = extractWbCandidates(rawData);
+    const employee = candidates.map((candidate) => employeesByWb.get(candidate.normalized)).find(Boolean) ?? null;
+    const rawWbLogin = employee?.wbLogin ?? candidates[0]?.raw ?? "";
+    const wbKey = employee ? normalizeWbLogin(employee.wbLogin) : (candidates[0]?.normalized || `linha-${record.batchId}-${record.rowNumber}`);
+    const key = `${record.batchId}|${cycleDownload}`;
+    const group = groups.get(key) ?? {
+      batchId: record.batchId,
+      cycleDownload,
+      batch: record.batch,
+      items: []
+    };
+    group.items.push({ rawData, cycleDownload, employee, rawWbLogin, wbKey });
+    groups.set(key, group);
+  });
+
+  return Array.from(groups.values()).flatMap((group) => (
+    aggregateAgentCycleRows(group.items).map((row) => ({
+      batchId: group.batchId,
+      cycleDownload: group.cycleDownload,
+      wbLoginNormalized: row.key,
+      rawWbLogin: row.rawWbLogin,
+      employeeId: row.employeeId || null,
+      displayName: row.displayName,
+      wbLogin: row.wbLogin,
+      crossingStatus: row.crossingStatus,
+      personType: row.personType,
+      employeeStatus: row.employeeStatus,
+      lob: row.lob,
+      supervisor: row.supervisor,
+      shift: row.shift,
+      skill: row.skill,
+      roleTitle: row.roleTitle,
+      submit: row.current.submit,
+      ahtMs: row.current.ahtMs,
+      moderationMs: row.current.moderationMs,
+      timeout: row.current.timeout,
+      refresh: row.current.refresh,
+      queueCount: row.current.queueCount,
+      sourceRows: row.current.sourceRows,
+      queueBreakdown: row.queueBreakdown as unknown as Prisma.JsonValue,
+      batch: group.batch
+    }))
+  ));
+}
+
 async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOptions) {
   const batches = await prisma.realTimeImportBatch.findMany({
     where: { status: "SUCCESS", agentRows: { gt: 0 }, importedAt: { gte: realtimeRetentionCutoff() } },
@@ -1535,6 +1677,26 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
       batch: { select: { id: true, importedAt: true, fileName: true } }
     }
   });
+  const summarizedBatchIds = new Set(summaryRows.map((row) => row.batchId));
+  const missingSummaryBatchIds = batchIds.filter((batchId) => !summarizedBatchIds.has(batchId));
+  if (missingSummaryBatchIds.length) {
+    const fallbackRecords = await prisma.realTimeRecord.findMany({
+      where: { recordType: "AGENT", batchId: { in: missingSummaryBatchIds } },
+      orderBy: { rowNumber: "asc" },
+      select: {
+        id: true,
+        batchId: true,
+        rowNumber: true,
+        rawData: true,
+        batch: { select: { id: true, importedAt: true, fileName: true } }
+      }
+    });
+    const employeeMatches = await loadEmployeeMatches();
+    const fallbackSummaryRows = agentSummaryRowsFromRawRecords(fallbackRecords, employeeMatches);
+    if (summaryRows.length || fallbackSummaryRows.length) {
+      return buildAgentRealtimeViewFromSummaryRows([...summaryRows, ...fallbackSummaryRows], options);
+    }
+  }
   if (summaryRows.length) return buildAgentRealtimeViewFromSummaryRows(summaryRows, options);
 
   const records = await prisma.realTimeRecord.findMany({
