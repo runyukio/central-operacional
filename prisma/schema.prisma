@@ -904,6 +904,7 @@ model RealTimeRecord {
   @@index([lob])
   @@index([supervisor])
   @@index([batchId, recordType])
+  @@index([recordType, batchId, rowNumber])
 }
 
 model RealTimeAgentCycleSummary {

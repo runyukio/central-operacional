@@ -207,6 +207,7 @@ type QueueSummaryReadRow = {
 const staleThresholdMinutes = 20;
 const realtimeRetentionDays = 7;
 const realtimeViewHistoryBatchLimit = 180;
+const realtimeRawFallbackBatchLimit = 12;
 
 const queueNameCandidates = ["fila", "queue", "queue id", "queue_id", "queue name", "queue_name", "skill group queue", "skillgroupqueue"];
 const agentNameCandidates = ["agente", "agent", "auditor", "auditor name", "nome", "name", "colaborador", "operator", "moderator"];
@@ -1280,7 +1281,9 @@ async function buildQueueRealtimeView(options: RealtimeSnapshotOptions) {
     }
   });
   const summarizedBatchIds = new Set(summaryRows.map((row) => row.batchId));
-  const missingSummaryBatchIds = batchIds.filter((batchId) => !summarizedBatchIds.has(batchId));
+  const missingSummaryBatchIds = summaryRows.length
+    ? []
+    : batchIds.filter((batchId) => !summarizedBatchIds.has(batchId)).slice(0, realtimeRawFallbackBatchLimit);
   if (missingSummaryBatchIds.length) {
     const fallbackRecords = await prisma.realTimeRecord.findMany({
       where: { recordType: "QUEUE", batchId: { in: missingSummaryBatchIds } },
@@ -1300,8 +1303,9 @@ async function buildQueueRealtimeView(options: RealtimeSnapshotOptions) {
   }
   if (summaryRows.length) return buildQueueRealtimeViewFromSummaryRows(summaryRows, options);
 
+  const rawFallbackBatchIds = batchIds.slice(0, realtimeRawFallbackBatchLimit);
   const records = await prisma.realTimeRecord.findMany({
-    where: { recordType: "QUEUE", batchId: { in: batchIds } },
+    where: { recordType: "QUEUE", batchId: { in: rawFallbackBatchIds } },
     orderBy: { rowNumber: "asc" },
     select: {
       id: true,
@@ -1692,7 +1696,9 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
     }
   });
   const summarizedBatchIds = new Set(summaryRows.map((row) => row.batchId));
-  const missingSummaryBatchIds = batchIds.filter((batchId) => !summarizedBatchIds.has(batchId));
+  const missingSummaryBatchIds = summaryRows.length
+    ? []
+    : batchIds.filter((batchId) => !summarizedBatchIds.has(batchId)).slice(0, realtimeRawFallbackBatchLimit);
   if (missingSummaryBatchIds.length) {
     const fallbackRecords = await prisma.realTimeRecord.findMany({
       where: { recordType: "AGENT", batchId: { in: missingSummaryBatchIds } },
@@ -1713,8 +1719,9 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
   }
   if (summaryRows.length) return await buildAgentRealtimeViewFromSummaryRows(summaryRows, options);
 
+  const rawFallbackBatchIds = batchIds.slice(0, realtimeRawFallbackBatchLimit);
   const records = await prisma.realTimeRecord.findMany({
-    where: { recordType: "AGENT", batchId: { in: batchIds } },
+    where: { recordType: "AGENT", batchId: { in: rawFallbackBatchIds } },
     orderBy: { rowNumber: "asc" },
     select: {
       id: true,
@@ -1845,7 +1852,7 @@ async function loadAgentPresenceContext(rows: AgentCycleRow[], selectedCycle: st
   const selectedCycleInfo = parseRealtimeCycleForPresence(selectedCycle);
   const [scheduleByEmployeeId, kapStatusByAgentKey] = await Promise.all([
     loadRealtimeSchedulePresence(rows, selectedCycleInfo?.date ?? null),
-    loadRealtimeKapStatusByAgentKey(selectedBatchId, selectedCycle)
+    loadRealtimeKapStatusByAgentKey(selectedBatchId)
   ]);
 
   return {
@@ -1887,26 +1894,18 @@ async function loadRealtimeSchedulePresence(rows: AgentCycleRow[], date: Date | 
   return scheduleByEmployeeId;
 }
 
-async function loadRealtimeKapStatusByAgentKey(batchId: string, selectedCycle: string) {
+async function loadRealtimeKapStatusByAgentKey(batchId: string) {
   const statusByKey = new Map<string, string>();
   if (!batchId) return statusByKey;
 
   const records = await prisma.realTimeRecord.findMany({
     where: { batchId, recordType: "AGENT" },
-    select: { wbLogin: true, status: true, rawData: true }
+    select: { wbLogin: true, status: true }
   });
 
   records.forEach((record) => {
-    const rawData = isPlainObject(record.rawData) ? record.rawData : {};
-    const cycleDownload = extractCycleDownload(rawData);
-    if (cycleDownload && cycleDownload !== selectedCycle) return;
-    const candidates = extractWbCandidates(rawData);
-    const normalizedKeys = new Set(
-      [normalizeWbLogin(record.wbLogin ?? ""), ...candidates.map((candidate) => candidate.normalized)].filter(Boolean)
-    );
-    normalizedKeys.forEach((normalized) => {
-      if (!statusByKey.has(normalized)) statusByKey.set(normalized, record.status ?? "");
-    });
+    const normalized = normalizeWbLogin(record.wbLogin ?? "");
+    if (normalized && !statusByKey.has(normalized)) statusByKey.set(normalized, record.status ?? "");
   });
 
   return statusByKey;
