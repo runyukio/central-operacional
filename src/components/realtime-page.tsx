@@ -19,6 +19,7 @@ import {
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Area, AreaChart, ReferenceLine, ResponsiveContainer, Tooltip as RechartsTooltip, YAxis } from "recharts";
 
+import { getQueueReportMetadataById } from "@/lib/queue-report-metadata";
 import { cn } from "@/lib/utils";
 
 type CountItem = { label: string; count: number };
@@ -268,6 +269,19 @@ type QueueLobCardData = {
   maxLatency: AgentKpiCard;
   aht: AgentKpiCard;
 };
+type ReportLob = "ADS" | "VIDEO" | "COMMENTS";
+type QueueReportRow = QueueRealtimeRow & {
+  reportQueueName: string;
+  reportDepartment: string;
+};
+type DepartmentReportSummary = {
+  department: string;
+  backlog: number;
+  ahtMs: number | null;
+  maxLatencyMs: number | null;
+  maxLatencyQueueId: string;
+  maxLatencyQueueName: string;
+};
 
 type ImportHistory = {
   id: string;
@@ -326,9 +340,11 @@ export function RealTimePage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState<"agents" | "queues">("agents");
+  const [activeTab, setActiveTab] = useState<"agents" | "queues" | "report">("agents");
   const [selectedCycle, setSelectedCycle] = useState("");
   const [queueFilters, setQueueFilters] = useState<QueueFilters>(defaultQueueFilters);
+  const [reportLob, setReportLob] = useState<ReportLob>("ADS");
+  const [reportSearch, setReportSearch] = useState("");
   const [queueSort, setQueueSort] = useState<QueueSortState>(defaultQueueSort);
   const [agentFilters, setAgentFilters] = useState<AgentFilters>(defaultAgentFilters);
   const [agentSort, setAgentSort] = useState<AgentSortState>(defaultAgentSort);
@@ -339,7 +355,7 @@ export function RealTimePage() {
   const [importsLoading, setImportsLoading] = useState(false);
   const snapshotAbortRef = useRef<AbortController | null>(null);
 
-  async function loadSnapshot(cycle = selectedCycle, background = false, view: "agents" | "queues" = activeTab) {
+  async function loadSnapshot(cycle = selectedCycle, background = false, view: "agents" | "queues" = activeTab === "agents" ? "agents" : "queues") {
     snapshotAbortRef.current?.abort();
     const controller = new AbortController();
     snapshotAbortRef.current = controller;
@@ -386,16 +402,16 @@ export function RealTimePage() {
   }
 
   function exportXlsx() {
-    const params = activeTab === "queues"
-      ? buildQueueQueryParams(selectedCycle || queueView?.selectedCycle || "", queueFilters)
+    const params = activeTab !== "agents"
+      ? buildQueueQueryParams(selectedCycle || queueView?.selectedCycle || "", activeTab === "report" ? { search: reportSearch, lob: reportLob, status: "", slaTarget: "", queueId: "" } : queueFilters)
       : buildAgentQueryParams(selectedCycle || agentView?.selectedCycle || "", agentFilters);
-    params.set("view", activeTab);
-    params.set("sortBy", activeTab === "queues" ? `${queueSort.key}_${queueSort.direction}` : `${agentSort.key}_${agentSort.direction}`);
+    params.set("view", activeTab === "agents" ? "agents" : "queues");
+    params.set("sortBy", activeTab === "agents" ? `${agentSort.key}_${agentSort.direction}` : `${queueSort.key}_${queueSort.direction}`);
     window.location.assign(`/api/realtime/export?${params.toString()}`);
   }
 
   useEffect(() => {
-    void loadSnapshot(selectedCycle, false, activeTab);
+    void loadSnapshot(selectedCycle, false, activeTab === "agents" ? "agents" : "queues");
     return () => {
       snapshotAbortRef.current?.abort();
     };
@@ -455,26 +471,29 @@ export function RealTimePage() {
     }).sort((a, b) => compareAgentRows(a, b, agentSort));
   }, [agentFilters, agentSort, agentView?.rows]);
 
-  const cycles = activeTab === "queues" ? queueView?.cycles ?? [] : agentView?.cycles ?? [];
+  const cycles = activeTab === "agents" ? agentView?.cycles ?? [] : queueView?.cycles ?? [];
   const selectedCycleExists = Boolean(selectedCycle && cycles.some((cycle) => cycle.value === selectedCycle));
-  const selectedCycleValue = selectedCycleExists ? selectedCycle : (activeTab === "queues" ? queueView?.selectedCycle : agentView?.selectedCycle) || "";
+  const selectedCycleValue = selectedCycleExists ? selectedCycle : (activeTab === "agents" ? agentView?.selectedCycle : queueView?.selectedCycle) || "";
   const selectedCycleIndex = cycles.findIndex((cycle) => cycle.value === selectedCycleValue);
   const olderCycle = selectedCycleIndex >= 0 ? cycles[selectedCycleIndex + 1]?.value ?? "" : "";
   const newerCycle = selectedCycleIndex > 0 ? cycles[selectedCycleIndex - 1]?.value ?? "" : "";
   const latestCycle = cycles[0]?.value ?? "";
   const latestBatchId = cycles[0]?.batchId ?? "";
   const latestImportedAt = cycles[0]?.importedAt ?? "";
+  const reportRows = useMemo(() => buildReportRows(queueView?.rows ?? [], reportLob, reportSearch), [queueView?.rows, reportLob, reportSearch]);
+  const departmentSummaries = useMemo(() => buildDepartmentReportSummaries(reportRows), [reportRows]);
+  const reportBacklogCard = useMemo(() => buildReportBacklogCard(reportRows, selectedCycleValue), [reportRows, selectedCycleValue]);
   const filteredAgentCards = useMemo(() => buildFilteredAgentCards(agentRows, selectedCycleValue), [agentRows, selectedCycleValue]);
   const filteredQueueCards = useMemo(() => buildQueueLobCards(queueRows, selectedCycleValue), [queueRows, selectedCycleValue]);
 
   useEffect(() => {
     const interval = window.setInterval(async () => {
       try {
-        const params = new URLSearchParams({ view: activeTab });
+        const params = new URLSearchParams({ view: activeTab === "agents" ? "agents" : "queues" });
         const response = await fetch(`/api/realtime/latest?${params.toString()}`, { cache: "no-store" });
         const json = await response.json();
         if (!response.ok) throw new Error(json.message || json.error || "Não foi possível verificar atualização do Real Time.");
-        const latest = activeTab === "queues" ? json.data?.queues : json.data?.agents;
+        const latest = activeTab === "agents" ? json.data?.agents : json.data?.queues;
         const latestCycleDownload = typeof latest?.cycleDownload === "string" ? latest.cycleDownload : "";
         const nextBatchId = typeof latest?.batchId === "string" ? latest.batchId : "";
         const nextImportedAt = typeof latest?.importedAt === "string" ? latest.importedAt : "";
@@ -484,7 +503,7 @@ export function RealTimePage() {
         if (!latestCycleDownload || sameKnownBatch) return;
 
         const shouldFollowLatest = !selectedCycleValue || selectedCycleValue === latestCycle;
-        await loadSnapshot(shouldFollowLatest ? latestCycleDownload : selectedCycleValue, true, activeTab);
+        await loadSnapshot(shouldFollowLatest ? latestCycleDownload : selectedCycleValue, true, activeTab === "agents" ? "agents" : "queues");
       } catch (currentError) {
         console.warn("[realtime] Auto-refresh leve falhou.", currentError);
       }
@@ -560,7 +579,7 @@ export function RealTimePage() {
             Ciclo atual
           </button>
           <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-bold text-muted">
-            Comparação: {(activeTab === "queues" ? queueView?.previousCycle : agentView?.previousCycle) || "Sem ciclo anterior"}
+            Comparação: {(activeTab === "agents" ? agentView?.previousCycle : queueView?.previousCycle) || "Sem ciclo anterior"}
           </div>
         </div>
       </section>
@@ -571,12 +590,14 @@ export function RealTimePage() {
             <KpiCard key={card.label} card={card} />
           ))}
         </div>
-      ) : (
+      ) : activeTab === "queues" ? (
         <div className="grid gap-4 xl:grid-cols-3">
           {filteredQueueCards.map((card) => (
             <QueueLobCard key={card.lob} card={card} />
           ))}
         </div>
+      ) : (
+        <ReportSummarySection card={reportBacklogCard} departments={departmentSummaries} reportLob={reportLob} selectedCycle={selectedCycleValue} />
       )}
 
       <section className="overflow-hidden rounded-[24px] border border-slate-200/80 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
@@ -590,16 +611,21 @@ export function RealTimePage() {
                 <button type="button" onClick={() => setActiveTab("queues")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", activeTab === "queues" ? "bg-white text-blue-700 shadow-sm" : "text-muted")}>
                   Filas
                 </button>
+                <button type="button" onClick={() => setActiveTab("report")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", activeTab === "report" ? "bg-white text-blue-700 shadow-sm" : "text-muted")}>
+                  Report
+                </button>
               </div>
               {activeTab === "agents" ? (
                 <AgentLobQuickFilter value={agentFilters.lob} onChange={(value) => updateAgentFilter("lob", value)} options={agentView?.filters.lobs ?? []} />
-              ) : (
+              ) : activeTab === "queues" ? (
                 <QueueLobQuickFilter value={queueFilters.lob} onChange={(value) => updateQueueFilter("lob", value)} options={queueView?.filters.lobs ?? []} />
+              ) : (
+                <ReportLobQuickFilter value={reportLob} onChange={setReportLob} rows={queueView?.rows ?? []} />
               )}
             </div>
             <div className="flex flex-wrap gap-2">
-              <button type="button" onClick={activeTab === "agents" ? () => setAgentFilters(defaultAgentFilters) : () => setQueueFilters(defaultQueueFilters)} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Filtros padrão</button>
-              <button type="button" onClick={activeTab === "agents" ? () => setAgentFilters(emptyAgentFilters) : () => setQueueFilters({ search: "", lob: "", status: "", slaTarget: "", queueId: "" })} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Limpar</button>
+              <button type="button" onClick={activeTab === "agents" ? () => setAgentFilters(defaultAgentFilters) : activeTab === "queues" ? () => setQueueFilters(defaultQueueFilters) : () => { setReportLob("ADS"); setReportSearch(""); }} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Filtros padrão</button>
+              <button type="button" onClick={activeTab === "agents" ? () => setAgentFilters(emptyAgentFilters) : activeTab === "queues" ? () => setQueueFilters({ search: "", lob: "", status: "", slaTarget: "", queueId: "" }) : () => setReportSearch("")} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Limpar</button>
             </div>
           </div>
           {activeTab === "agents" ? (
@@ -613,12 +639,16 @@ export function RealTimePage() {
               <FilterSelect value={agentFilters.skill} onChange={(value) => updateAgentFilter("skill", value)} label="Skill" empty="Todas" options={agentView?.filters.skills ?? []} />
               <FilterSelect value={agentFilters.roleTitle} onChange={(value) => updateAgentFilter("roleTitle", value)} label="Cargo" empty="Todos" options={agentView?.filters.roleTitles ?? []} />
             </div>
-          ) : (
+          ) : activeTab === "queues" ? (
             <div className="mt-4 grid gap-2 rounded-3xl border border-slate-100 bg-slate-50/70 p-3 sm:grid-cols-2 lg:grid-cols-4">
               <SearchBox value={queueFilters.search} onChange={(value) => updateQueueFilter("search", value)} placeholder="Buscar ID ou nome da fila..." />
               <FilterSelect value={queueFilters.status} onChange={(value) => updateQueueFilter("status", value)} label="Status" empty="Todos" options={queueView?.filters.statuses ?? []} />
               <FilterSelect value={queueFilters.slaTarget} onChange={(value) => updateQueueFilter("slaTarget", value)} label="Meta SLA" empty="Todas" options={queueView?.filters.slaTargets ?? []} formatOptionLabel={formatSlaTargetLabel} />
               <FilterSelect value={queueFilters.queueId} onChange={(value) => updateQueueFilter("queueId", value)} label="Fila ID" empty="Todas" options={queueView?.filters.queueIds ?? []} />
+            </div>
+          ) : (
+            <div className="mt-4 rounded-3xl border border-slate-100 bg-slate-50/70 p-3">
+              <SearchBox value={reportSearch} onChange={setReportSearch} placeholder="Buscar ID, Queue ou Department..." />
             </div>
           )}
         </div>
@@ -630,8 +660,10 @@ export function RealTimePage() {
         ) : summary?.hasData ? (
           activeTab === "agents" ? (
             <AgentTable rows={agentRows} totalRows={agentView?.rows.length ?? 0} sort={agentSort} onSort={toggleAgentSort} onSelect={setSelectedAgent} />
-          ) : (
+          ) : activeTab === "queues" ? (
             <StructuredQueueTable rows={queueRows} totalRows={queueView?.rows.length ?? 0} sort={queueSort} onSort={toggleQueueSort} onSelect={setSelectedQueue} />
+          ) : (
+            <ReportTable rows={reportRows} reportLob={reportLob} onSelect={setSelectedQueue} />
           )
         ) : (
           <div className="px-4 py-16 text-center">
@@ -1419,6 +1451,154 @@ function QueueLobQuickFilter({ value, onChange, options }: { value: string; onCh
   );
 }
 
+function ReportLobQuickFilter({ value, onChange, rows }: { value: ReportLob; onChange: (value: ReportLob) => void; rows: QueueRealtimeRow[] }) {
+  const counts = (["ADS", "VIDEO", "COMMENTS"] as const).reduce<Record<ReportLob, number>>((acc, lob) => {
+    acc[lob] = rows.filter((row) => row.lob === lob).length;
+    return acc;
+  }, { ADS: 0, VIDEO: 0, COMMENTS: 0 });
+
+  return (
+    <div className="flex flex-wrap items-center gap-1 rounded-2xl border border-slate-200 bg-white p-1 shadow-[0_4px_12px_rgba(7,27,58,0.035)]">
+      {(["ADS", "VIDEO", "COMMENTS"] as const).map((lob) => {
+        const active = value === lob;
+        return (
+          <button
+            key={lob}
+            type="button"
+            onClick={() => onChange(lob)}
+            className={cn(
+              "inline-flex h-8 items-center gap-1 rounded-xl px-3 text-xs font-black transition",
+              active ? "bg-blue-600 text-white shadow-sm" : "text-muted hover:bg-blue-50 hover:text-blue-700"
+            )}
+          >
+            {lob}
+            <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", active ? "bg-white/20 text-white" : "bg-slate-100 text-muted")}>{counts[lob]}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ReportSummarySection({
+  card,
+  departments,
+  reportLob,
+  selectedCycle
+}: {
+  card: AgentKpiCard;
+  departments: DepartmentReportSummary[];
+  reportLob: ReportLob;
+  selectedCycle: string;
+}) {
+  return (
+    <section className="grid gap-4 xl:grid-cols-[minmax(320px,0.9fr)_minmax(0,1.4fr)]">
+      <div className="rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-muted">Report {reportLob}</p>
+            <h2 className="mt-1 text-xl font-black text-navy-950">Total Backlog</h2>
+            <p className="mt-1 text-xs font-bold text-muted">{selectedCycle || "Sem ciclo selecionado"}</p>
+          </div>
+          {card.hasComparison ? <TrendBadge trend={card.trend} direction={card.direction} value={card.delta || "0"} /> : <span className="text-xs font-black text-muted">Sem comparação</span>}
+        </div>
+        <p className="mt-6 text-5xl font-black tracking-tight text-navy-950">{card.value}</p>
+        <p className="mt-2 text-sm font-bold text-muted">Histórico do dia por ciclo_download</p>
+        <div className="mt-4 h-32">
+          <TrendSparkline data={card.history} format={card.format} trend={card.trend} />
+        </div>
+      </div>
+
+      <div className="overflow-hidden rounded-[24px] border border-slate-200/80 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+          <div>
+            <h2 className="font-black text-navy-950">Departamentos</h2>
+            <p className="text-xs font-bold text-muted">Backlog somado, AHT médio simples e maior Max Latency do departamento.</p>
+          </div>
+          <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700">{departments.length} departamento(s)</span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[760px] text-left text-sm">
+            <thead className="bg-slate-50 text-xs uppercase tracking-wide text-muted">
+              <tr>
+                {["Department", "Backlog", "AHT", "Max Latency"].map((column) => (
+                  <th key={column} className="px-4 py-3 font-black">{column}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {departments.slice(0, 10).map((department, index) => (
+                <tr key={department.department} className={cn("border-t border-slate-100", index % 2 ? "bg-slate-50/40" : "bg-white")}>
+                  <td className="px-4 py-3 font-extrabold text-navy-950">{department.department}</td>
+                  <td className="px-4 py-3 font-black text-navy-950">{formatInteger(department.backlog)}</td>
+                  <td className="px-4 py-3 font-bold text-navy-950">{formatDurationFromMs(department.ahtMs)}</td>
+                  <td className="px-4 py-3">
+                    <p className="font-black text-navy-950">{formatDurationFromMs(department.maxLatencyMs)}</p>
+                    <p className="mt-0.5 max-w-[260px] truncate text-[11px] font-bold text-muted" title={`${department.maxLatencyQueueId} - ${department.maxLatencyQueueName}`}>
+                      {department.maxLatencyQueueId || "-"} · {department.maxLatencyQueueName || "-"}
+                    </p>
+                  </td>
+                </tr>
+              ))}
+              {!departments.length ? (
+                <tr>
+                  <td colSpan={4} className="px-4 py-12 text-center text-sm font-bold text-muted">Sem departamentos para os filtros aplicados.</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ReportTable({ rows, reportLob, onSelect }: { rows: QueueReportRow[]; reportLob: ReportLob; onSelect: (row: QueueRealtimeRow) => void }) {
+  return (
+    <>
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs font-black uppercase tracking-wide text-muted">
+        <span>{rows.length} fila(s) no report {reportLob}</span>
+        <span>Ordenado por backlog maior para menor</span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[1080px] border-separate border-spacing-0 text-left text-sm">
+          <thead className="sticky top-0 z-10 bg-slate-50/95 text-xs uppercase tracking-wide text-muted backdrop-blur">
+            <tr>
+              {["ID", "Queue", "Department", "Backlog", "AHT", "Max Latency", "Average Latency", "Ações"].map((column) => (
+                <th key={column} className="whitespace-nowrap border-b border-slate-100 px-4 py-3 font-black">{column}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, index) => (
+              <tr key={row.key} className={cn("border-t border-slate-100 transition hover:bg-blue-50/60", index % 2 ? "bg-slate-50/35" : "bg-white")}>
+                <td className="px-4 py-3"><span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-black text-blue-700">{row.queueId || "Sem Fila ID"}</span></td>
+                <td className="max-w-[360px] px-4 py-3 font-extrabold text-navy-950"><span className="block truncate" title={row.reportQueueName}>{row.reportQueueName}</span></td>
+                <td className="max-w-[260px] px-4 py-3 font-bold text-muted"><span className="block truncate" title={row.reportDepartment}>{row.reportDepartment}</span></td>
+                <td className="px-4 py-3 font-black text-navy-950">{formatInteger(row.current.backlog)}</td>
+                <td className="px-4 py-3 font-bold text-navy-950">{formatDurationFromMs(row.current.ahtMs)}</td>
+                <td className="px-4 py-3 font-bold text-navy-950">{formatDurationFromMs(row.current.maxLatencyMs)}</td>
+                <td className="px-4 py-3 font-bold text-navy-950">{formatDurationFromMs(row.current.latencyMs)}</td>
+                <td className="px-4 py-3">
+                  <button type="button" onClick={() => onSelect(row)} className="premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold text-navy-950">
+                    <Eye className="h-4 w-4" />
+                    Detalhar
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {!rows.length ? (
+              <tr>
+                <td colSpan={8} className="px-4 py-12 text-center text-sm font-bold text-muted">Nenhuma fila encontrada no report {reportLob}.</td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
 function ImportHistoryModal({ imports, loading, onClose }: { imports: ImportHistory[]; loading: boolean; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-navy-950/40">
@@ -1636,6 +1816,78 @@ function buildFilteredAgentCards(rows: AgentRealtimeRow[], selectedCycle: string
     buildAgentKpiCard("Timeout", current.timeout, previous?.timeout ?? null, "number", "down", buildAgentTrendSeries(rows, "timeout", selectedCycle)),
     buildAgentKpiCard("Refresh", current.refresh, previous?.refresh ?? null, "number", "down", buildAgentTrendSeries(rows, "refresh", selectedCycle))
   ];
+}
+
+function buildReportRows(rows: QueueRealtimeRow[], reportLob: ReportLob, search: string): QueueReportRow[] {
+  const normalizedSearch = normalizeSearch(search);
+  return rows
+    .filter((row) => row.lob === reportLob)
+    .map((row) => {
+      const metadata = getQueueReportMetadataById(row.queueId);
+      return {
+        ...row,
+        reportQueueName: metadata.queueName || row.queueName,
+        reportDepartment: metadata.department || "Other Queue"
+      };
+    })
+    .filter((row) => {
+      if (!normalizedSearch) return true;
+      return normalizeSearch([
+        row.queueId,
+        row.reportQueueName,
+        row.reportDepartment,
+        row.queueName,
+        row.lob
+      ].join(" ")).includes(normalizedSearch);
+    })
+    .sort((a, b) => (b.current.backlog - a.current.backlog) || a.reportDepartment.localeCompare(b.reportDepartment, "pt-BR", { sensitivity: "base" }) || a.reportQueueName.localeCompare(b.reportQueueName, "pt-BR", { sensitivity: "base" }));
+}
+
+function buildDepartmentReportSummaries(rows: QueueReportRow[]): DepartmentReportSummary[] {
+  const groups = new Map<string, {
+    backlog: number;
+    ahtValues: number[];
+    maxLatencyMs: number | null;
+    maxLatencyQueueId: string;
+    maxLatencyQueueName: string;
+  }>();
+
+  rows.forEach((row) => {
+    const department = row.reportDepartment || "Other Queue";
+    const group = groups.get(department) ?? {
+      backlog: 0,
+      ahtValues: [],
+      maxLatencyMs: null,
+      maxLatencyQueueId: "",
+      maxLatencyQueueName: ""
+    };
+    group.backlog += row.current.backlog;
+    if (row.current.ahtMs !== null && row.current.ahtMs > 0) group.ahtValues.push(row.current.ahtMs);
+    if (row.current.maxLatencyMs !== null && (group.maxLatencyMs === null || row.current.maxLatencyMs > group.maxLatencyMs)) {
+      group.maxLatencyMs = row.current.maxLatencyMs;
+      group.maxLatencyQueueId = row.queueId;
+      group.maxLatencyQueueName = row.reportQueueName;
+    }
+    groups.set(department, group);
+  });
+
+  return Array.from(groups.entries())
+    .map(([department, group]) => ({
+      department,
+      backlog: group.backlog,
+      ahtMs: group.ahtValues.length ? group.ahtValues.reduce((sum, value) => sum + value, 0) / group.ahtValues.length : null,
+      maxLatencyMs: group.maxLatencyMs,
+      maxLatencyQueueId: group.maxLatencyQueueId,
+      maxLatencyQueueName: group.maxLatencyQueueName
+    }))
+    .sort((a, b) => (b.backlog - a.backlog) || a.department.localeCompare(b.department, "pt-BR", { sensitivity: "base" }));
+}
+
+function buildReportBacklogCard(rows: QueueReportRow[], selectedCycle: string): AgentKpiCard {
+  const currentBacklog = rows.reduce((sum, row) => sum + row.current.backlog, 0);
+  const previousRows = rows.map((row) => row.previous).filter((metric): metric is QueueMetric => Boolean(metric));
+  const previousBacklog = previousRows.length ? previousRows.reduce((sum, row) => sum + row.backlog, 0) : null;
+  return buildAgentKpiCard("Total Backlog", currentBacklog, previousBacklog, "number", "down", buildQueueTrendSeries(rows, "backlog", selectedCycle));
 }
 
 function buildQueueLobCards(rows: QueueRealtimeRow[], selectedCycle: string): QueueLobCardData[] {
