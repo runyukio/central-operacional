@@ -11,7 +11,7 @@ import { logPerformanceMetric } from "@/lib/performance-logger";
 import { cleanShiftName, isBlockedShiftName, isSelectableShiftName, shiftCategoryName, shiftLookupKey } from "@/lib/shift-display";
 import { calculateAbsenceRate, calculateCoverageRate, getAbsenceStatuses, getPresentStatuses, getScheduledStatuses, isAbsenceStatus, isPresentStatus, isScheduledStatus, normalizeOperationalStatus } from "@/lib/attendance-calculation";
 import { calculateProductiveDifferenceMinutes, formatWorkHours, isProductiveDifferenceWithinTolerance, plannedProductiveHoursForSchedule } from "@/lib/work-hours-rules";
-import { isAgentJobTitle } from "@/lib/job-title-normalization";
+import { isAgentJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
 import { moodGroupSummary, moodInterpretation, moodLabel, type MoodGroupSummary } from "@/lib/mood-service";
 import { normalizeWbLogin, parseWbLoginBatch } from "@/lib/batch-wb-filter";
 import {
@@ -170,6 +170,7 @@ const trainingEmployeeStatusKeys = new Set([
   "TRAINING",
   "IN_TRAINING"
 ]);
+const absSupervisorJobTitleAliases = new Set(["supervisor", "supervisora", "sup", "team leader", "tl", "supervisao"]);
 
 export type ScheduleEditInput = {
   employeeId: string;
@@ -1881,6 +1882,7 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
       take: includeJustified || reasonFilter ? 5000 : 5000
     });
     const supervisorNameById = await supervisorNameMap(schedules.map((schedule) => schedule.supervisorId));
+    const justifiedByNameById = await userNameMap(schedules.map((schedule) => schedule.attendanceRecords[0]?.justifiedById));
     const activeSchedules = schedules.filter((schedule) => {
       const record = schedule.attendanceRecords[0];
       if (detailType === "scheduled") return isScheduledStatus(schedule.status);
@@ -1898,7 +1900,7 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
     }).filter((schedule) => {
       if (!absenceDetailUsesJustifyingSupervisor || !supervisorFilter) return true;
       const record = schedule.attendanceRecords[0];
-      const supervisorName = resolveAbsSupervisorName(schedule, record, supervisorNameById);
+      const supervisorName = resolveAbsSupervisorName(schedule, record, supervisorNameById, justifiedByNameById);
       return supervisorNameMatchesFilter(supervisorName, supervisorFilter);
     });
 
@@ -1918,7 +1920,7 @@ export async function getOperationalAttendance(actor: Actor, query: AttendanceQu
           scheduleId: schedule.id,
           shift: cleanShiftName(schedule.shift?.name ?? schedule.employee.shift.name) || "Sem turno",
           lob: schedule.employee.lob.name,
-          supervisor: isAbsenceStatus(schedule.status) ? resolveAbsSupervisorName(schedule, record, supervisorNameById) : resolveSupervisorName(schedule, supervisorNameById),
+          supervisor: isAbsenceStatus(schedule.status) ? resolveAbsSupervisorName(schedule, record, supervisorNameById, justifiedByNameById) : resolveSupervisorName(schedule, supervisorNameById),
           roleTitle: schedule.employee.roleTitle ?? "Sem cargo",
           status,
           absenceReason: attendanceReasonForSchedule(schedule.status, record),
@@ -3832,12 +3834,12 @@ function resolveSupervisorName(schedule: { supervisorId?: string | null; employe
 
 function resolveAbsSupervisorName(
   schedule: { supervisorId?: string | null; employee?: { supervisorId?: string | null; supervisor?: { fullName: string } | null } | null },
-  record?: { isJustified: boolean; absenceReason: string | null; justifiedById?: string | null; justifiedBy?: { name?: string | null; email?: string | null } | null } | null,
+  record?: { isJustified: boolean; absenceReason: string | null; justifiedById?: string | null } | null,
   supervisorNameById?: Map<string, string>,
   justifiedByNameById?: Map<string, string>
 ) {
   if (record && hasValidJustification(record)) {
-    const justifiedByName = (record.justifiedById ? justifiedByNameById?.get(record.justifiedById) : "") || record.justifiedBy?.name?.trim() || record.justifiedBy?.email?.trim();
+    const justifiedByName = record.justifiedById ? justifiedByNameById?.get(record.justifiedById) : "";
     if (justifiedByName) return justifiedByName;
   }
   return resolveSupervisorName(schedule, supervisorNameById);
@@ -4054,6 +4056,10 @@ function isNoSkillFilter(value: string) {
   return /^(sem\s*skill|sem_skill|none|no_skill|null)$/i.test(value.trim());
 }
 
+function isAbsSupervisorJobTitle(value: unknown) {
+  return absSupervisorJobTitleAliases.has(normalizeComparableJobTitle(value));
+}
+
 async function supervisorNameMap(supervisorIds: Array<string | null | undefined>) {
   const ids = Array.from(new Set(supervisorIds.filter((id): id is string => Boolean(id))));
   if (!ids.length) return new Map<string, string>();
@@ -4069,9 +4075,13 @@ async function userNameMap(userIds: Array<string | null | undefined>) {
   if (!ids.length) return new Map<string, string>();
   const users = await prisma.user.findMany({
     where: { id: { in: ids } },
-    select: { id: true, name: true, email: true, employeeProfile: { select: { fullName: true } } }
+    select: { id: true, name: true, email: true, employeeProfile: { select: { fullName: true, roleTitle: true } } }
   });
-  return new Map(users.map((user) => [user.id, user.employeeProfile?.fullName?.trim() || user.name?.trim() || user.email]));
+  return new Map(
+    users
+      .filter((user) => isAbsSupervisorJobTitle(user.employeeProfile?.roleTitle))
+      .map((user) => [user.id, user.employeeProfile?.fullName?.trim() || user.name?.trim() || user.email])
+  );
 }
 
 async function scheduleSupervisorFilter(value?: string | null): Promise<Prisma.ScheduleWhereInput | null> {
