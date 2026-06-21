@@ -1744,7 +1744,8 @@ function getCecStatusTone(tone: "amber" | "blue" | "green") {
       valueClass: "text-amber-700",
       chartColor: "#F59E0B",
       canvasBg: "#FFFBEB",
-      canvasText: "#B45309"
+      canvasText: "#B45309",
+      canvasBorder: "#FDE68A"
     };
   }
   if (tone === "green") {
@@ -1753,7 +1754,8 @@ function getCecStatusTone(tone: "amber" | "blue" | "green") {
       valueClass: "text-emerald-700",
       chartColor: "#10B981",
       canvasBg: "#ECFDF5",
-      canvasText: "#047857"
+      canvasText: "#047857",
+      canvasBorder: "#A7F3D0"
     };
   }
   return {
@@ -1761,7 +1763,8 @@ function getCecStatusTone(tone: "amber" | "blue" | "green") {
     valueClass: "text-blue-700",
     chartColor: "#2563EB",
     canvasBg: "#EFF6FF",
-    canvasText: "#2563EB"
+    canvasText: "#2563EB",
+    canvasBorder: "#BFDBFE"
   };
 }
 
@@ -2205,7 +2208,7 @@ function downloadCecSummaryImage(report: CecReportPayload | null) {
   );
 
   const width = 2048;
-  const height = 790;
+  const height = 620;
   const canvas = createReportCanvas(width, height);
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
@@ -2226,28 +2229,28 @@ function downloadCecSummaryImage(report: CecReportPayload | null) {
   drawText(ctx, cycleLabel, leftX + 28, topY + 100, 17, "#64748B", "800");
   if (totalCard.hasComparison) drawCanvasDeltaPill(ctx, totalCard.trend, totalCard.direction, totalCard.delta || "0", leftX + cardW - 132, topY + 22);
   else drawText(ctx, "No comparison", leftX + cardW - 142, topY + 40, 13, "#64748B", "900");
-  drawText(ctx, totalCard.value, leftX + 28, topY + 176, 64, "#0F172A", "900");
-  drawText(ctx, "Daily history by Cycle", leftX + 28, topY + 218, 16, "#64748B", "900");
-  drawMiniLine(ctx, totalCard.history, leftX + 28, topY + 256, cardW - 56, 260, totalCard.trend === "negative" ? "#EF4444" : totalCard.trend === "positive" ? "#10B981" : "#2563EB");
+  drawText(ctx, totalCard.value, leftX + 28, topY + 170, 60, "#0F172A", "900");
+  drawText(ctx, "Daily history by Cycle", leftX + 28, topY + 210, 15, "#64748B", "900");
+  drawMiniLine(ctx, totalCard.history, leftX + 28, topY + 236, cardW - 56, 150, totalCard.trend === "negative" ? "#EF4444" : totalCard.trend === "positive" ? "#10B981" : "#2563EB");
 
-  const miniY = topY + cardH - 134;
+  const miniY = topY + cardH - 114;
   const miniW = (cardW - 56 - 24) / 3;
-  drawCecCanvasMetric(ctx, "Normal", snapshot.normalBacklog, leftX + 28, miniY, miniW, 96, "#EFF6FF", "#2563EB");
-  drawCecCanvasMetric(ctx, "P0", snapshot.p0Backlog, leftX + 28 + miniW + 12, miniY, miniW, 96, "#FEF2F2", "#DC2626");
-  drawCecCanvasMetric(ctx, "P0 with L2", snapshot.p0L2Backlog, leftX + 28 + (miniW + 12) * 2, miniY, miniW, 96, "#FFFBEB", "#B45309");
+  drawCecCanvasMetric(ctx, "Normal", snapshot.normalBacklog, leftX + 28, miniY, miniW, 90, "#EFF6FF", "#2563EB");
+  drawCecCanvasMetric(ctx, "P0", snapshot.p0Backlog, leftX + 28 + miniW + 12, miniY, miniW, 90, "#FEF2F2", "#DC2626");
+  drawCecCanvasMetric(ctx, "P0 with L2", snapshot.p0L2Backlog, leftX + 28 + (miniW + 12) * 2, miniY, miniW, 90, "#FFFBEB", "#B45309");
 
   const rightInnerX = rightX + 28;
   drawText(ctx, "CEC Status", rightInnerX, topY + 42, 24, "#0F172A", "900");
-  drawCanvasTextPill(ctx, snapshot.importedAtLabel, rightX + cardW - 234, topY + 22, 206, "#EFF6FF", "#2563EB");
+  drawCanvasTextPill(ctx, snapshot.importedAtLabel, rightX + cardW - 294, topY + 22, 266, "#EFF6FF", "#2563EB");
   const statusY = topY + 78;
   const statusW = (cardW - 56 - 24) / 3;
-  drawCecCanvasStatusMetric(ctx, "On Hold", snapshot.onHoldCount, buildCecTrendSeries(historyRows, "onHoldCount", cycleLabel), "amber", rightInnerX, statusY, statusW, 132);
-  drawCecCanvasStatusMetric(ctx, "Open", snapshot.openCount, buildCecTrendSeries(historyRows, "openCount", cycleLabel), "blue", rightInnerX + statusW + 12, statusY, statusW, 132);
-  drawCecCanvasStatusMetric(ctx, "New", snapshot.newCount, buildCecTrendSeries(historyRows, "newCount", cycleLabel), "green", rightInnerX + (statusW + 12) * 2, statusY, statusW, 132);
+  drawCecCanvasStatusMetric(ctx, "On Hold", snapshot.onHoldCount, buildCecTrendSeries(historyRows, "onHoldCount", cycleLabel), "amber", rightInnerX, statusY, statusW, 148);
+  drawCecCanvasStatusMetric(ctx, "Open", snapshot.openCount, buildCecTrendSeries(historyRows, "openCount", cycleLabel), "blue", rightInnerX + statusW + 12, statusY, statusW, 148);
+  drawCecCanvasStatusMetric(ctx, "New", snapshot.newCount, buildCecTrendSeries(historyRows, "newCount", cycleLabel), "green", rightInnerX + (statusW + 12) * 2, statusY, statusW, 148);
 
-  const tableY = topY + 250;
+  const tableY = topY + 274;
   const headerHeight = 40;
-  const rowHeight = 58;
+  const rowHeight = 54;
   const columns = [
     { label: "Bucket", x: rightInnerX, w: 240 },
     { label: "Backlog", x: rightInnerX + 270, w: 130 },
@@ -2316,7 +2319,7 @@ function drawCecCanvasMetric(ctx: CanvasRenderingContext2D, title: string, value
 
 function drawCecCanvasStatusMetric(ctx: CanvasRenderingContext2D, title: string, value: number, history: TrendPoint[], tone: "amber" | "blue" | "green", x: number, y: number, width: number, height: number) {
   const config = getCecStatusTone(tone);
-  roundRect(ctx, x, y, width, height, 18, config.canvasBg, "#E5EAF2");
+  roundRect(ctx, x, y, width, height, 18, config.canvasBg, config.canvasBorder);
   drawText(ctx, title, x + 18, y + 30, 13, "#64748B", "900");
   drawText(ctx, formatInteger(value), x + 18, y + 66, 34, config.canvasText, "900");
   drawMiniLine(ctx, history, x + 18, y + 78, width - 36, height - 96, config.chartColor);
@@ -2366,38 +2369,54 @@ function drawTableHeader(ctx: CanvasRenderingContext2D, columns: Array<{ label: 
 function drawMiniLine(ctx: CanvasRenderingContext2D, history: TrendPoint[], x: number, y: number, width: number, height: number, color: string) {
   const values = history.map((point) => point.value).filter((value): value is number => value !== null && Number.isFinite(value));
   if (values.length < 2) return;
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+  const min = 0;
+  const max = Math.max(1, ...values);
   const range = Math.max(1, max - min);
+  const plotTop = y + 8;
+  const plotHeight = Math.max(1, height - 16);
+  const baseline = y + height;
   const points = values.map((value, index) => ({
     x: x + (index / Math.max(1, values.length - 1)) * width,
-    y: y + height - ((value - min) / range) * height
+    y: plotTop + plotHeight - ((value - min) / range) * plotHeight
   }));
 
-  const gradient = ctx.createLinearGradient(0, y, 0, y + height);
-  gradient.addColorStop(0, colorToRgba(color, 0.2));
-  gradient.addColorStop(0.65, colorToRgba(color, 0.08));
+  const gradient = ctx.createLinearGradient(0, plotTop, 0, baseline);
+  gradient.addColorStop(0, colorToRgba(color, 0.22));
+  gradient.addColorStop(0.62, colorToRgba(color, 0.08));
   gradient.addColorStop(1, colorToRgba(color, 0));
 
   ctx.beginPath();
-  points.forEach((point, index) => {
-    if (index === 0) ctx.moveTo(point.x, point.y);
-    else ctx.lineTo(point.x, point.y);
-  });
-  ctx.lineTo(x + width, y + height);
-  ctx.lineTo(x, y + height);
+  drawSmoothPath(ctx, points);
+  ctx.lineTo(x + width, baseline);
+  ctx.lineTo(x, baseline);
   ctx.closePath();
   ctx.fillStyle = gradient;
   ctx.fill();
 
   ctx.beginPath();
-  points.forEach((point, index) => {
-    if (index === 0) ctx.moveTo(point.x, point.y);
-    else ctx.lineTo(point.x, point.y);
-  });
-  ctx.lineWidth = 4;
+  drawSmoothPath(ctx, points);
+  ctx.lineWidth = 3.5;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
   ctx.strokeStyle = color;
   ctx.stroke();
+}
+
+function drawSmoothPath(ctx: CanvasRenderingContext2D, points: Array<{ x: number; y: number }>) {
+  if (!points.length) return;
+  ctx.moveTo(points[0].x, points[0].y);
+  if (points.length === 1) return;
+  if (points.length === 2) {
+    ctx.lineTo(points[1].x, points[1].y);
+    return;
+  }
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const midX = (points[index].x + points[index + 1].x) / 2;
+    const midY = (points[index].y + points[index + 1].y) / 2;
+    ctx.quadraticCurveTo(points[index].x, points[index].y, midX, midY);
+  }
+  const last = points[points.length - 1];
+  ctx.lineTo(last.x, last.y);
 }
 
 function colorToRgba(hex: string, alpha: number) {
