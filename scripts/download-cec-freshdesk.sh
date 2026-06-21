@@ -138,6 +138,7 @@ upload_cec_snapshot() {
     set +e
     http_code="$(
       "$CURL_BIN" -sS \
+        -L \
         -o "$upload_response" \
         -w "%{http_code}" \
         -X POST "$endpoint" \
