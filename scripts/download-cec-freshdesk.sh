@@ -155,7 +155,8 @@ upload_cec_snapshot() {
         -X POST "$endpoint" \
         -H "Authorization: Bearer $token" \
         -H "Content-Type: application/json" \
-        --data @"$JSON_FILE"
+        --data-binary @- \
+        < "$JSON_FILE"
     )"
     curl_status=$?
     set -e
