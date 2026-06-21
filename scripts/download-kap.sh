@@ -13,6 +13,7 @@ ENV_FILE="${KAP_ENV_FILE:-$HOME/.kap_env}"
 SCRIPT_DIR="${0:A:h}"
 TRANSFORM_SCRIPT="${KAP_TRANSFORM_SCRIPT:-$SCRIPT_DIR/kap-transform.js}"
 BUNDLE_SCRIPT="${KAP_BUNDLE_SCRIPT:-$SCRIPT_DIR/kap-realtime-bundle.js}"
+CEC_SCRIPT="${KAP_CEC_SCRIPT:-$SCRIPT_DIR/download-cec-freshdesk.sh}"
 CURL_BIN="${KAP_CURL_BIN:-/usr/bin/curl}"
 NOW="$(date +"%Y-%m-%d_%H-%M-%S")"
 RUN_MINUTE="$(date +"%M")"
@@ -28,6 +29,16 @@ if [[ -f "$ENV_FILE" ]]; then
   source "$ENV_FILE"
   set +a
 fi
+
+kap_cycle_download_for_run() {
+  local rounded_minute="00"
+  if (( 10#$RUN_MINUTE >= 30 )); then
+    rounded_minute="30"
+  fi
+  date +"%Y-%m-%d %H:$rounded_minute"
+}
+
+KAP_CYCLE_DOWNLOAD="${KAP_CYCLE_DOWNLOAD:-$(kap_cycle_download_for_run)}"
 
 KAP_ALLOWED_MINUTES="${KAP_ALLOWED_MINUTES:-00,10,20,30,40,50}"
 if [[ "${KAP_ENFORCE_ALLOWED_MINUTE_SLOTS:-true}" == "true" ]]; then
@@ -121,6 +132,36 @@ persist_failure_artifacts() {
   echo "$label final failure: $reason"
   echo "Saved failure headers: $headers_copy"
   echo "Saved failure response: $response_copy"
+}
+
+run_cec_download() {
+  if [[ "${KAP_RUN_CEC:-true}" != "true" ]]; then
+    echo "CEC Freshdesk download disabled. Set KAP_RUN_CEC=true to enable it."
+    return 0
+  fi
+
+  if [[ ! -x "$CEC_SCRIPT" ]]; then
+    echo "CEC Freshdesk script not found or not executable, skipping: $CEC_SCRIPT"
+    return 0
+  fi
+
+  echo "Running CEC Freshdesk download for cycle $KAP_CYCLE_DOWNLOAD..."
+  set +e
+  KAP_ENV_FILE="$ENV_FILE" \
+  REALTIME_ENV_FILE="$ENV_FILE" \
+  FRESHDESK_CYCLE_DOWNLOAD="${FRESHDESK_CYCLE_DOWNLOAD:-$KAP_CYCLE_DOWNLOAD}" \
+  CEC_UPLOAD_ENABLED="${CEC_UPLOAD_ENABLED:-${KAP_UPLOAD_ENABLED:-false}}" \
+    "$CEC_SCRIPT"
+  local cec_status=$?
+  set -e
+
+  if (( cec_status != 0 )); then
+    echo "CEC Freshdesk download/upload failed with exit code $cec_status."
+    notify_failure "Falha no ciclo CEC Freshdesk. KAP ADS/TNS foi preservado."
+    if [[ "${KAP_FAIL_ON_CEC_ERROR:-false}" == "true" ]]; then
+      exit "$cec_status"
+    fi
+  fi
 }
 
 if [[ ! -f "$COOKIE_FILE" ]]; then
@@ -304,3 +345,5 @@ if [[ "${KAP_UPLOAD_ENABLED:-false}" == "true" ]]; then
     exit 1
   fi
 fi
+
+run_cec_download
