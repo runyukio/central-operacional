@@ -43,5 +43,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!api/auth|api/employee-registrations/public|api/realtime/import|cadastro-colaborador|login|_next/static|_next/image|favicon.ico).*)"]
+  matcher: ["/((?!api/auth|api/employee-registrations/public|api/realtime/import|api/realtime/cec/import|cadastro-colaborador|login|_next/static|_next/image|favicon.ico).*)"]
 };
