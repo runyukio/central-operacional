@@ -35,6 +35,13 @@ export type FinanceiroPreviewRow = {
 const FINANCEIRO_DEFAULT_SOURCE = "Upload histórico";
 const FINANCEIRO_MANUAL_SOURCE = "Manual";
 const FINANCEIRO_TEMPLATE_HEADERS = ["invoice_cycle_month", "cost_center", "max_hours_capacity", "billable_hours_target", "billable_hours_actual", "adherence_percent", "difference_hours", "penalty_percent", "notes"];
+const FINANCEIRO_DEFAULT_KWAI_HOURLY_USD = 9.39;
+const FINANCEIRO_DEFAULT_GLOBAL_HOURLY_USD = 5.965;
+const FINANCEIRO_DEFAULT_TRAINING_HOURLY_USD = 1.45;
+const FINANCEIRO_PROJECTABLE_SCHEDULE_STATUSES = ["ESCALADO", "PRESENTE", "VENDA_FOLGA_APROVADA"] as const;
+const FINANCEIRO_ABSENCE_SCHEDULE_STATUSES = ["FALTA", "FALTA_JUSTIFICADA", "FALTA_INJUSTIFICADA"] as const;
+const FINANCEIRO_TRAINING_SCHEDULE_STATUSES = ["TREINAMENTO"] as const;
+const FINANCEIRO_CLOSED_BILLING_STATUSES = new Set(["FECHADO", "PAGO"]);
 const FINANCEIRO_ADJUSTMENT_FIELDS = new Map<string, { label: string; type: "hours" | "percent" | "text" }>([
   ["maxHoursCapacityMinutes", { label: "Max Hours (Capacity)", type: "hours" }],
   ["billableHoursTargetMinutes", { label: "Billable Hours (Meta)", type: "hours" }],
@@ -50,7 +57,7 @@ export async function getFinanceiroDashboard(actor: Actor, filters: FinanceiroFi
   const user = await requireFinanceiroUser(actor);
   if ("error" in user) return user;
   const where = buildFinanceiroWhere(filters);
-  const [records, costCenters, sources, uploads] = await Promise.all([
+  const [records, costCenters, parameterCostCenters, sources, uploads] = await Promise.all([
     prisma.financeInvoiceCycleRecord.findMany({
       where,
       include: {
@@ -61,6 +68,11 @@ export async function getFinanceiroDashboard(actor: Actor, filters: FinanceiroFi
       orderBy: [{ invoiceCycleMonth: "desc" }, { costCenter: "asc" }]
     }),
     prisma.financeInvoiceCycleRecord.findMany({
+      distinct: ["costCenter"],
+      select: { costCenter: true },
+      orderBy: { costCenter: "asc" }
+    }),
+    prisma.financeCycleParameter.findMany({
       distinct: ["costCenter"],
       select: { costCenter: true },
       orderBy: { costCenter: "asc" }
@@ -77,6 +89,7 @@ export async function getFinanceiroDashboard(actor: Actor, filters: FinanceiroFi
       include: { uploadedBy: { select: { name: true, email: true } } }
     })
   ]);
+  const analytics = await buildFinanceiroAnalytics(records, filters);
 
   return {
     data: {
@@ -87,10 +100,11 @@ export async function getFinanceiroDashboard(actor: Actor, filters: FinanceiroFi
         search: filters.search || ""
       },
       filterOptions: {
-        costCenters: ["Todos", ...costCenters.map((item) => item.costCenter).filter(Boolean)],
+        costCenters: ["Todos", ...unique([...costCenters.map((item) => item.costCenter), ...parameterCostCenters.map((item) => item.costCenter)]).sort()],
         sources: ["Todos", ...sources.map((item) => item.source ?? "").filter(Boolean)]
       },
       summary: buildFinanceiroSummary(records),
+      analytics,
       records: records.map(mapFinanceiroRecord),
       uploads: uploads.map(mapFinanceiroUpload),
       canManage: true,
@@ -336,6 +350,58 @@ export async function saveFinanceiroRecord(actor: Actor, input: Record<string, u
   }
 }
 
+export async function saveFinanceiroParameter(actor: Actor, input: Record<string, unknown>) {
+  const user = await requireFinanceiroUser(actor);
+  if ("error" in user) return user;
+  const invoiceCycleMonth = normalizeFinanceiroMonth(input.invoiceCycleMonth);
+  const costCenter = text(input.costCenter);
+  if (!invoiceCycleMonth) return { error: "Ciclo da invoice é obrigatório para parâmetros.", status: 400 };
+  if (!costCenter || costCenter === "Todos") return { error: "Cost center é obrigatório para parâmetros.", status: 400 };
+
+  const kwaiHourlyUsd = parseMoneyNumber(input.kwaiHourlyUsd, FINANCEIRO_DEFAULT_KWAI_HOURLY_USD);
+  const globalHourlyUsd = parseMoneyNumber(input.globalHourlyUsd, FINANCEIRO_DEFAULT_GLOBAL_HOURLY_USD);
+  const trainingHourlyUsd = parseMoneyNumber(input.trainingHourlyUsd, FINANCEIRO_DEFAULT_TRAINING_HOURLY_USD);
+  const exchangeRateUsdBrl = parseMoneyNumber(input.exchangeRateUsdBrl, 0);
+  if (kwaiHourlyUsd === null) return { error: "Repasse Kwai USD/h inválido.", status: 400 };
+  if (globalHourlyUsd === null) return { error: "Repasse Global USD/h inválido.", status: 400 };
+  if (trainingHourlyUsd === null) return { error: "Repasse treinamento USD/h inválido.", status: 400 };
+  if (exchangeRateUsdBrl === null) return { error: "Câmbio USD/BRL inválido.", status: 400 };
+
+  const notes = text(input.notes);
+  const saved = await prisma.financeCycleParameter.upsert({
+    where: { invoiceCycleMonth_costCenter: { invoiceCycleMonth, costCenter } },
+    update: {
+      kwaiHourlyUsd: decimal4(kwaiHourlyUsd),
+      globalHourlyUsd: decimal4(globalHourlyUsd),
+      trainingHourlyUsd: decimal4(trainingHourlyUsd),
+      exchangeRateUsdBrl: decimal4(exchangeRateUsdBrl),
+      notes: notes || null,
+      updatedById: user.id
+    },
+    create: {
+      invoiceCycleMonth,
+      costCenter,
+      kwaiHourlyUsd: decimal4(kwaiHourlyUsd),
+      globalHourlyUsd: decimal4(globalHourlyUsd),
+      trainingHourlyUsd: decimal4(trainingHourlyUsd),
+      exchangeRateUsdBrl: decimal4(exchangeRateUsdBrl),
+      notes: notes || null,
+      createdById: user.id,
+      updatedById: user.id
+    }
+  });
+  await auditFinanceiro(user.id, "FinanceCycleParameter", saved.id, "FINANCEIRO_PARAMETER_SAVED", {
+    invoiceCycleMonth,
+    costCenter,
+    kwaiHourlyUsd,
+    globalHourlyUsd,
+    trainingHourlyUsd,
+    exchangeRateUsdBrl,
+    notes
+  }, AuditAction.EDICAO);
+  return { data: mapFinanceiroParameter(saved) };
+}
+
 export async function getFinanceiroUploads(actor: Actor) {
   const user = await requireFinanceiroUser(actor);
   if ("error" in user) return user;
@@ -377,6 +443,7 @@ export async function exportFinanceiro(actor: Actor, filters: FinanceiroFilters 
     prisma.financeUploadBatch.findMany({ include: { uploadedBy: true }, orderBy: { uploadedAt: "desc" } })
   ]);
   const summary = buildFinanceiroSummary(records);
+  const analytics = await buildFinanceiroAnalytics(records, filters);
   await auditFinanceiro(user.id, "Financeiro", "export", "FINANCEIRO_EXPORTED", { filters, rows: records.length }, AuditAction.EDICAO);
   return {
     fileName: `financeiro_${new Date().toISOString().slice(0, 10)}.xlsx`,
@@ -398,6 +465,31 @@ export async function exportFinanceiro(actor: Actor, filters: FinanceiroFilters 
         sheetName: "Uploads",
         headers: ["arquivo", "usuario", "linhas_total", "linhas_validas", "linhas_erro", "criados", "atualizados", "status", "uploaded_at"],
         rows: uploads.map((row) => [row.fileName, row.uploadedBy?.email ?? "", row.rowsTotal, row.rowsValid, row.rowsError, row.rowsInserted, row.rowsUpdated, row.status, row.uploadedAt.toISOString()])
+      },
+      {
+        sheetName: "Projecao horas",
+        headers: ["invoice_cycle_month", "cost_center", "mes_fechado", "horas_aprovadas", "horas_projetadas", "presente", "escalado", "venda_folga", "abs_percent", "aderencia_horas_percent"],
+        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.closedMonth ? "Sim" : "Não", row.hours.approved, row.projectionAllowed ? row.hours.projected : "", row.hours.present, row.hours.scheduledOpen, row.hours.dayOffSale, `${row.hours.absPercent}%`, `${row.hours.hourAdherencePercent}%`])
+      },
+      {
+        sheetName: "Valores",
+        headers: ["invoice_cycle_month", "cost_center", "kwai_revenue_usd", "global_revenue_usd", "training_revenue_usd", "total_revenue_usd", "exchange_rate_usd_brl", "total_revenue_brl"],
+        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.values.kwaiRevenueUsd, row.values.globalRevenueUsd, row.values.trainingRevenueUsd, row.values.totalRevenueUsd, row.values.exchangeRateUsdBrl, row.values.totalRevenueBrl])
+      },
+      {
+        sheetName: "Custos",
+        headers: ["invoice_cycle_month", "cost_center", "custo_aprovado_brl", "custo_projetado_brl", "gross_billing_brl", "final_billing_brl"],
+        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.costs.approvedCostBrl, row.projectionAllowed ? row.costs.projectedCostBrl : 0, row.costs.grossAmountBrl, row.costs.finalAmountBrl])
+      },
+      {
+        sheetName: "Resultado",
+        headers: ["invoice_cycle_month", "cost_center", "receita_brl", "custo_brl", "resultado_brl", "margem_percent"],
+        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.values.totalRevenueBrl, row.costs.finalAmountBrl, row.result.resultBrl, `${row.result.marginPercent}%`])
+      },
+      {
+        sheetName: "Parametros",
+        headers: ["invoice_cycle_month", "cost_center", "kwai_hourly_usd", "global_hourly_usd", "training_hourly_usd", "exchange_rate_usd_brl", "origem"],
+        rows: analytics.parameters.map((row) => [row.invoiceCycleMonth, row.costCenter, row.kwaiHourlyUsd, row.globalHourlyUsd, row.trainingHourlyUsd, row.exchangeRateUsdBrl, row.isDefault ? "Padrao" : "Salvo"])
       }
     ]
   };
@@ -517,6 +609,171 @@ function buildFinanceiroSummary(records: Array<{ maxHoursCapacityMinutes: number
   };
 }
 
+async function buildFinanceiroAnalytics(
+  records: Array<{ invoiceCycleMonth: string; costCenter: string; billableHoursTargetMinutes: number; billableHoursActualMinutes: number; maxHoursCapacityMinutes: number; differenceMinutes: number }>,
+  filters: FinanceiroFilters
+) {
+  const selectedMonth = normalizeFinanceiroMonth(filters.invoiceCycleMonth);
+  const selectedCostCenter = filters.costCenter && filters.costCenter !== "Todos" ? filters.costCenter : "";
+  const currentMonth = currentReferenceMonth();
+  const recordMonths = unique(records.map((record) => record.invoiceCycleMonth));
+  const months = unique([...(selectedMonth ? [selectedMonth] : recordMonths), currentMonth]).filter(Boolean);
+  const parameterWhere: Prisma.FinanceCycleParameterWhereInput = {};
+  if (selectedMonth) parameterWhere.invoiceCycleMonth = selectedMonth;
+  else if (months.length) parameterWhere.invoiceCycleMonth = { in: months };
+  if (selectedCostCenter) parameterWhere.costCenter = selectedCostCenter;
+
+  const [parameters, billingCycles, billingInvoices, schedules] = await Promise.all([
+    prisma.financeCycleParameter.findMany({ where: parameterWhere, orderBy: [{ invoiceCycleMonth: "desc" }, { costCenter: "asc" }] }),
+    prisma.billingCycle.findMany({
+      where: { referenceMonth: { in: months } },
+      select: { referenceMonth: true, status: true, closedAt: true }
+    }),
+    prisma.billingEmployeeInvoice.findMany({
+      where: {
+        referenceMonth: { in: months },
+        ...(selectedCostCenter ? { employee: { lob: { name: { equals: selectedCostCenter, mode: "insensitive" } } } } : {})
+      },
+      select: {
+        referenceMonth: true,
+        approvedMinutes: true,
+        projectedMinutes: true,
+        totalConsideredMinutes: true,
+        hourlyRate: true,
+        grossAmount: true,
+        finalAmount: true,
+        employee: { select: { lob: { select: { name: true } } } }
+      }
+    }),
+    listFinanceiroProjectionSchedules(months, selectedCostCenter)
+  ]);
+
+  const cyclesByMonth = new Map(billingCycles.map((cycle) => [cycle.referenceMonth, cycle]));
+  const parametersByKey = new Map(parameters.map((parameter) => [financeRecordKey(parameter.invoiceCycleMonth, parameter.costCenter), parameter]));
+  const billingByKey = groupBillingFinanceRows(billingInvoices, cyclesByMonth);
+  const scheduleByKey = groupFinanceSchedules(schedules, cyclesByMonth);
+  const recordsByKey = new Map(records.map((record) => [financeRecordKey(record.invoiceCycleMonth, record.costCenter), record]));
+  const keys = unique([
+    ...Array.from(recordsByKey.keys()),
+    ...Array.from(parametersByKey.keys()),
+    ...Array.from(billingByKey.keys()),
+    ...Array.from(scheduleByKey.keys())
+  ]);
+
+  const rows = keys.map((key) => {
+    const [invoiceCycleMonth, ...costCenterParts] = key.split(":");
+    const normalizedCostCenter = costCenterParts.join(":");
+    const record = recordsByKey.get(key);
+    const storedParameter = parametersByKey.get(key);
+    const storedBilling = billingByKey.get(key);
+    const storedSchedule = scheduleByKey.get(key);
+    const costCenter = record?.costCenter ?? storedParameter?.costCenter ?? storedBilling?.costCenter ?? storedSchedule?.costCenter ?? normalizedCostCenter;
+    const billing = storedBilling ?? emptyBillingBucket(invoiceCycleMonth, costCenter);
+    const schedule = storedSchedule ?? emptyScheduleBucket(invoiceCycleMonth, costCenter);
+    const parameter = storedParameter ?? defaultFinanceParameter(invoiceCycleMonth, costCenter);
+    const cycle = cyclesByMonth.get(invoiceCycleMonth);
+    const closedMonth = isFinanceMonthClosed(invoiceCycleMonth, cycle);
+    const parameterView = mapFinanceiroParameter(parameter, !parametersByKey.has(key));
+    const projectedMinutes = closedMonth ? 0 : (billing.projectedMinutes || schedule.projectableMinutes);
+    const approvedMinutes = billing.approvedMinutes;
+    const totalCostBrl = billing.finalAmountBrl;
+    const trainingMinutes = closedMonth ? 0 : schedule.trainingMinutes;
+    const actualHours = (record?.billableHoursActualMinutes ?? 0) / 60;
+    const trainingHours = trainingMinutes / 60;
+    const kwaiRevenueUsd = round2(actualHours * parameterView.kwaiHourlyUsd);
+    const globalRevenueUsd = round2(actualHours * parameterView.globalHourlyUsd);
+    const trainingRevenueUsd = round2(trainingHours * parameterView.trainingHourlyUsd);
+    const totalRevenueUsd = round2(globalRevenueUsd + trainingRevenueUsd);
+    const exchangeRate = parameterView.exchangeRateUsdBrl;
+    const totalRevenueBrl = roundMoney(totalRevenueUsd * exchangeRate);
+    const resultBrl = roundMoney(totalRevenueBrl - totalCostBrl);
+    const marginPercent = totalRevenueBrl > 0 ? round2((resultBrl / totalRevenueBrl) * 100) : 0;
+    const scheduleBaseMinutes = schedule.projectableMinutes + schedule.absenceMinutes;
+
+    return {
+      key,
+      invoiceCycleMonth,
+      invoiceCycleLabel: formatReferenceMonth(invoiceCycleMonth),
+      costCenter,
+      closedMonth,
+      projectionAllowed: !closedMonth,
+      projectionReason: closedMonth ? "Mês fechado: projeção desabilitada." : "",
+      parameters: parameterView,
+      hours: {
+        maxHoursCapacity: minutesToHours(record?.maxHoursCapacityMinutes ?? 0),
+        billableTarget: minutesToHours(record?.billableHoursTargetMinutes ?? 0),
+        billableActual: minutesToHours(record?.billableHoursActualMinutes ?? 0),
+        approved: minutesToHours(approvedMinutes),
+        projected: minutesToHours(projectedMinutes),
+        totalConsidered: minutesToHours(approvedMinutes + projectedMinutes),
+        scheduleEligible: minutesToHours(schedule.projectableMinutes),
+        scheduledOpen: minutesToHours(schedule.scheduledOpenMinutes),
+        present: minutesToHours(schedule.presentMinutes),
+        dayOffSale: minutesToHours(schedule.dayOffSaleMinutes),
+        absence: minutesToHours(schedule.absenceMinutes),
+        training: minutesToHours(trainingMinutes),
+        hourAdherencePercent: scheduleBaseMinutes > 0 ? round2((schedule.projectableMinutes / scheduleBaseMinutes) * 100) : 0,
+        absPercent: scheduleBaseMinutes > 0 ? round2((schedule.absenceMinutes / scheduleBaseMinutes) * 100) : 0
+      },
+      values: {
+        kwaiRevenueUsd,
+        globalRevenueUsd,
+        trainingRevenueUsd,
+        totalRevenueUsd,
+        totalRevenueBrl,
+        exchangeRateUsdBrl: exchangeRate
+      },
+      costs: {
+        approvedCostBrl: billing.approvedCostBrl,
+        projectedCostBrl: closedMonth ? 0 : billing.projectedCostBrl,
+        grossAmountBrl: billing.grossAmountBrl,
+        finalAmountBrl: totalCostBrl
+      },
+      result: {
+        resultBrl,
+        marginPercent
+      }
+    };
+  }).filter((row) => {
+    if (selectedCostCenter && row.costCenter.toLowerCase() !== selectedCostCenter.toLowerCase()) return false;
+    if (selectedMonth && row.invoiceCycleMonth !== selectedMonth) return false;
+    return true;
+  }).sort((a, b) => b.invoiceCycleMonth.localeCompare(a.invoiceCycleMonth) || a.costCenter.localeCompare(b.costCenter));
+
+  const summaries = rows.reduce((acc, row) => {
+    acc.hoursApprovedMinutes += parseDisplayMinutes(row.hours.approved);
+    acc.hoursProjectedMinutes += parseDisplayMinutes(row.hours.projected);
+    acc.revenueUsd += row.values.totalRevenueUsd;
+    acc.revenueBrl += row.values.totalRevenueBrl;
+    acc.costBrl += row.costs.finalAmountBrl;
+    acc.resultBrl += row.result.resultBrl;
+    return acc;
+  }, { hoursApprovedMinutes: 0, hoursProjectedMinutes: 0, revenueUsd: 0, revenueBrl: 0, costBrl: 0, resultBrl: 0 });
+
+  return {
+    currentMonth,
+    projectionRule: "Projeção desabilitada para meses fechados. Em ciclo aberto, considera Escalado + Presente + Venda de folga aprovada.",
+    hoursSummary: {
+      approved: minutesToHours(summaries.hoursApprovedMinutes),
+      projected: minutesToHours(summaries.hoursProjectedMinutes),
+      total: minutesToHours(summaries.hoursApprovedMinutes + summaries.hoursProjectedMinutes)
+    },
+    valueSummary: {
+      revenueUsd: round2(summaries.revenueUsd),
+      revenueBrl: roundMoney(summaries.revenueBrl)
+    },
+    costSummary: {
+      costBrl: roundMoney(summaries.costBrl)
+    },
+    resultSummary: {
+      resultBrl: roundMoney(summaries.resultBrl),
+      marginPercent: summaries.revenueBrl > 0 ? round2((summaries.resultBrl / summaries.revenueBrl) * 100) : 0
+    },
+    rows,
+    parameters: rows.map((row) => row.parameters)
+  };
+}
+
 type FinanceiroRecordLike = Prisma.FinanceInvoiceCycleRecordGetPayload<{}> & {
   createdBy?: { name?: string | null; email?: string | null } | null;
   updatedBy?: { name?: string | null; email?: string | null } | null;
@@ -585,6 +842,173 @@ function mapFinanceiroUpload(upload: Prisma.FinanceUploadBatchGetPayload<{ inclu
   };
 }
 
+type FinanceParameterLike = {
+  id?: string;
+  invoiceCycleMonth: string;
+  costCenter: string;
+  kwaiHourlyUsd: Prisma.Decimal | number;
+  globalHourlyUsd: Prisma.Decimal | number;
+  trainingHourlyUsd: Prisma.Decimal | number;
+  exchangeRateUsdBrl: Prisma.Decimal | number;
+  notes?: string | null;
+  updatedAt?: Date;
+};
+
+type FinanceBillingBucket = {
+  invoiceCycleMonth: string;
+  costCenter: string;
+  approvedMinutes: number;
+  projectedMinutes: number;
+  approvedCostBrl: number;
+  projectedCostBrl: number;
+  grossAmountBrl: number;
+  finalAmountBrl: number;
+};
+
+type FinanceScheduleBucket = {
+  invoiceCycleMonth: string;
+  costCenter: string;
+  projectableMinutes: number;
+  scheduledOpenMinutes: number;
+  presentMinutes: number;
+  dayOffSaleMinutes: number;
+  absenceMinutes: number;
+  trainingMinutes: number;
+};
+
+function mapFinanceiroParameter(parameter: FinanceParameterLike, isDefault = false) {
+  return {
+    id: parameter.id ?? "",
+    invoiceCycleMonth: parameter.invoiceCycleMonth,
+    invoiceCycleLabel: formatReferenceMonth(parameter.invoiceCycleMonth),
+    costCenter: parameter.costCenter,
+    kwaiHourlyUsd: round4(Number(parameter.kwaiHourlyUsd)),
+    globalHourlyUsd: round4(Number(parameter.globalHourlyUsd)),
+    trainingHourlyUsd: round4(Number(parameter.trainingHourlyUsd)),
+    exchangeRateUsdBrl: round4(Number(parameter.exchangeRateUsdBrl)),
+    notes: parameter.notes ?? "",
+    updatedAt: parameter.updatedAt ? formatDateTime(parameter.updatedAt) : "",
+    isDefault
+  };
+}
+
+function defaultFinanceParameter(invoiceCycleMonth: string, costCenter: string): FinanceParameterLike {
+  return {
+    invoiceCycleMonth,
+    costCenter,
+    kwaiHourlyUsd: FINANCEIRO_DEFAULT_KWAI_HOURLY_USD,
+    globalHourlyUsd: FINANCEIRO_DEFAULT_GLOBAL_HOURLY_USD,
+    trainingHourlyUsd: FINANCEIRO_DEFAULT_TRAINING_HOURLY_USD,
+    exchangeRateUsdBrl: 0,
+    notes: null
+  };
+}
+
+function groupBillingFinanceRows(
+  invoices: Array<{
+    referenceMonth: string;
+    approvedMinutes: number;
+    projectedMinutes: number;
+    hourlyRate: Prisma.Decimal | number;
+    grossAmount: Prisma.Decimal | number;
+    finalAmount: Prisma.Decimal | number;
+    employee: { lob: { name: string } };
+  }>,
+  cyclesByMonth: Map<string, { referenceMonth: string; status: string; closedAt: Date | null }>
+) {
+  const buckets = new Map<string, FinanceBillingBucket>();
+  for (const invoice of invoices) {
+    const costCenter = invoice.employee.lob.name;
+    const key = financeRecordKey(invoice.referenceMonth, costCenter);
+    const bucket = buckets.get(key) ?? emptyBillingBucket(invoice.referenceMonth, costCenter);
+    const closedMonth = isFinanceMonthClosed(invoice.referenceMonth, cyclesByMonth.get(invoice.referenceMonth));
+    const hourlyRate = Number(invoice.hourlyRate);
+    const approvedMinutes = Math.max(0, invoice.approvedMinutes);
+    const projectedMinutes = closedMonth ? 0 : Math.max(0, invoice.projectedMinutes);
+    bucket.approvedMinutes += approvedMinutes;
+    bucket.projectedMinutes += projectedMinutes;
+    bucket.approvedCostBrl = roundMoney(bucket.approvedCostBrl + (approvedMinutes / 60) * hourlyRate);
+    bucket.projectedCostBrl = roundMoney(bucket.projectedCostBrl + (projectedMinutes / 60) * hourlyRate);
+    bucket.grossAmountBrl = roundMoney(bucket.grossAmountBrl + Number(invoice.grossAmount));
+    bucket.finalAmountBrl = roundMoney(bucket.finalAmountBrl + Number(invoice.finalAmount));
+    buckets.set(key, bucket);
+  }
+  return buckets;
+}
+
+async function listFinanceiroProjectionSchedules(months: string[], selectedCostCenter: string) {
+  const openMonths = months.filter((month) => !isFinanceMonthClosed(month));
+  if (!openMonths.length) return [];
+  const periods = openMonths.map(monthPeriod);
+  const start = new Date(Math.min(...periods.map((period) => period.start.getTime())));
+  const end = new Date(Math.max(...periods.map((period) => period.end.getTime())));
+  return prisma.schedule.findMany({
+    where: {
+      deletedAt: null,
+      date: { gte: start, lte: end },
+      status: { in: [...FINANCEIRO_PROJECTABLE_SCHEDULE_STATUSES, ...FINANCEIRO_ABSENCE_SCHEDULE_STATUSES, ...FINANCEIRO_TRAINING_SCHEDULE_STATUSES] },
+      employee: {
+        deletedAt: null,
+        ...(selectedCostCenter ? { lob: { name: { equals: selectedCostCenter, mode: "insensitive" } } } : {})
+      }
+    },
+    select: {
+      date: true,
+      status: true,
+      employee: { select: { lob: { select: { name: true } } } }
+    }
+  });
+}
+
+function groupFinanceSchedules(
+  schedules: Array<{ date: Date; status: string; employee: { lob: { name: string } } }>,
+  cyclesByMonth: Map<string, { referenceMonth: string; status: string; closedAt: Date | null }>
+) {
+  const buckets = new Map<string, FinanceScheduleBucket>();
+  for (const schedule of schedules) {
+    const invoiceCycleMonth = schedule.date.toISOString().slice(0, 7);
+    if (isFinanceMonthClosed(invoiceCycleMonth, cyclesByMonth.get(invoiceCycleMonth))) continue;
+    const costCenter = schedule.employee.lob.name;
+    const key = financeRecordKey(invoiceCycleMonth, costCenter);
+    const bucket = buckets.get(key) ?? emptyScheduleBucket(invoiceCycleMonth, costCenter);
+    const minutes = 480;
+    if (schedule.status === "ESCALADO") bucket.scheduledOpenMinutes += minutes;
+    if (schedule.status === "PRESENTE") bucket.presentMinutes += minutes;
+    if (schedule.status === "VENDA_FOLGA_APROVADA") bucket.dayOffSaleMinutes += minutes;
+    if ((FINANCEIRO_PROJECTABLE_SCHEDULE_STATUSES as readonly string[]).includes(schedule.status)) bucket.projectableMinutes += minutes;
+    if ((FINANCEIRO_ABSENCE_SCHEDULE_STATUSES as readonly string[]).includes(schedule.status)) bucket.absenceMinutes += minutes;
+    if ((FINANCEIRO_TRAINING_SCHEDULE_STATUSES as readonly string[]).includes(schedule.status)) bucket.trainingMinutes += minutes;
+    buckets.set(key, bucket);
+  }
+  return buckets;
+}
+
+function emptyBillingBucket(invoiceCycleMonth: string, costCenter: string): FinanceBillingBucket {
+  return {
+    invoiceCycleMonth,
+    costCenter,
+    approvedMinutes: 0,
+    projectedMinutes: 0,
+    approvedCostBrl: 0,
+    projectedCostBrl: 0,
+    grossAmountBrl: 0,
+    finalAmountBrl: 0
+  };
+}
+
+function emptyScheduleBucket(invoiceCycleMonth: string, costCenter: string): FinanceScheduleBucket {
+  return {
+    invoiceCycleMonth,
+    costCenter,
+    projectableMinutes: 0,
+    scheduledOpenMinutes: 0,
+    presentMinutes: 0,
+    dayOffSaleMinutes: 0,
+    absenceMinutes: 0,
+    trainingMinutes: 0
+  };
+}
+
 function parseAdjustmentValue(type: string, value: unknown): { valid: true; value: string | number } | { valid: false; error: string } {
   if (type === "hours") {
     const parsed = parseHours(value);
@@ -619,6 +1043,35 @@ async function auditFinanceiro(actorId: string, entity: string, entityId: string
   await prisma.auditLog.create({
     data: { actorId, action, entity, entityId, reason, after: after as Prisma.InputJsonValue }
   }).catch(() => undefined);
+}
+
+function monthPeriod(referenceMonth: string) {
+  const [year, month] = referenceMonth.split("-").map(Number);
+  const start = new Date(Date.UTC(year, month - 1, 1));
+  const end = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+  return { start, end };
+}
+
+function isFinanceMonthClosed(month: string, cycle?: { status?: string | null; closedAt?: Date | null } | null) {
+  if (!month) return true;
+  if (month < currentReferenceMonth()) return true;
+  if (cycle?.closedAt) return true;
+  return cycle?.status ? FINANCEIRO_CLOSED_BILLING_STATUSES.has(cycle.status) : false;
+}
+
+function parseDisplayMinutes(value: string) {
+  const sign = value.startsWith("-") ? -1 : 1;
+  const clean = value.replace(/^[+-]/, "");
+  const [hours, minutes] = clean.split(":").map(Number);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return 0;
+  return sign * (hours * 60 + minutes);
+}
+
+function parseMoneyNumber(value: unknown, fallback?: number): number | null {
+  if (isEmpty(value)) return fallback ?? null;
+  if (typeof value === "number") return Number.isFinite(value) ? round4(value) : null;
+  const parsed = Number(text(value).replace(/\s/g, "").replace("R$", "").replace("$", "").replace(",", "."));
+  return Number.isFinite(parsed) ? round4(parsed) : null;
 }
 
 function normalizeObjectKeys(row: Record<string, unknown>) {
@@ -703,6 +1156,18 @@ function decimal(value: number) {
   return new Prisma.Decimal(round2(value));
 }
 
+function decimal4(value: number) {
+  return new Prisma.Decimal(round4(value).toFixed(4));
+}
+
+function round4(value: number) {
+  return Math.round((Number(value) + Number.EPSILON) * 10000) / 10000;
+}
+
+function roundMoney(value: number) {
+  return Math.round((Number.isFinite(value) ? value : 0) * 100) / 100;
+}
+
 function formatNumber(value: number) {
   return new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value);
 }
@@ -727,4 +1192,8 @@ function chunks<T>(rows: T[], size: number) {
   const result: T[][] = [];
   for (let index = 0; index < rows.length; index += size) result.push(rows.slice(index, index + size));
   return result;
+}
+
+function unique<T>(items: T[]) {
+  return Array.from(new Set(items.filter(Boolean)));
 }

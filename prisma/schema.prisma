@@ -338,6 +338,8 @@ model User {
   financeRecordsUpdated             FinanceInvoiceCycleRecord[] @relation("FinanceRecordUpdatedBy")
   financeUploads                    FinanceUploadBatch[]        @relation("FinanceUploadUploadedBy")
   financeAdjustments                FinanceAdjustment[]         @relation("FinanceAdjustmentCreatedBy")
+  financeParametersCreated          FinanceCycleParameter[]      @relation("FinanceParameterCreatedBy")
+  financeParametersUpdated          FinanceCycleParameter[]      @relation("FinanceParameterUpdatedBy")
   createdStaffCoverages             StaffCoverage[]             @relation("StaffCoverageCreatedBy")
   updatedStaffCoverages             StaffCoverage[]             @relation("StaffCoverageUpdatedBy")
   moodRecords                       EmployeeMoodRecord[]
@@ -857,6 +859,29 @@ model FinanceAdjustment {
   @@index([createdById])
   @@index([fieldName])
   @@index([createdAt])
+}
+
+model FinanceCycleParameter {
+  id                 String   @id @default(cuid())
+  invoiceCycleMonth  String
+  costCenter         String
+  kwaiHourlyUsd      Decimal  @default(9.39) @db.Decimal(12, 4)
+  globalHourlyUsd    Decimal  @default(5.965) @db.Decimal(12, 4)
+  trainingHourlyUsd  Decimal  @default(1.45) @db.Decimal(12, 4)
+  exchangeRateUsdBrl Decimal  @default(0) @db.Decimal(12, 4)
+  notes              String?
+  createdById        String?
+  updatedById        String?
+  createdBy          User?    @relation("FinanceParameterCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy          User?    @relation("FinanceParameterUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([invoiceCycleMonth, costCenter])
+  @@index([invoiceCycleMonth])
+  @@index([costCenter])
+  @@index([createdById])
+  @@index([updatedById])
 }
 
 model RealTimeImportBatch {

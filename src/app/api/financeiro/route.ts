@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getApiActor } from "@/lib/api-actor";
-import { createFinanceiroAdjustment, getFinanceiroDashboard, saveFinanceiroRecord } from "@/lib/financeiro-service";
+import { createFinanceiroAdjustment, getFinanceiroDashboard, saveFinanceiroParameter, saveFinanceiroRecord } from "@/lib/financeiro-service";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +27,8 @@ export async function POST(request: Request) {
       ? await createFinanceiroAdjustment(actor, body)
       : action === "save-record"
         ? await saveFinanceiroRecord(actor, body)
+        : action === "save-parameter"
+          ? await saveFinanceiroParameter(actor, body)
       : { error: "Ação de Financeiro inválida.", status: 400 };
   if ("error" in result) return NextResponse.json({ error: result.error, message: result.error }, { status: result.status ?? 400 });
   return NextResponse.json(result);

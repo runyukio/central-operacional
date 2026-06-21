@@ -6,6 +6,7 @@ import {
   Building2,
   CalendarDays,
   Clock,
+  DollarSign,
   Download,
   Eye,
   FileSpreadsheet,
@@ -92,10 +93,93 @@ type FinanceiroPayload = {
       penaltyPercent: number;
       recordsCount: number;
     };
+    analytics: FinanceiroAnalytics;
     records: FinanceiroRecord[];
     uploads: FinanceiroUpload[];
     allowedEmails: string[];
   };
+};
+
+type FinanceiroParameter = {
+  id: string;
+  invoiceCycleMonth: string;
+  invoiceCycleLabel: string;
+  costCenter: string;
+  kwaiHourlyUsd: number;
+  globalHourlyUsd: number;
+  trainingHourlyUsd: number;
+  exchangeRateUsdBrl: number;
+  notes: string;
+  updatedAt: string;
+  isDefault: boolean;
+};
+
+type FinanceiroAnalyticsRow = {
+  key: string;
+  invoiceCycleMonth: string;
+  invoiceCycleLabel: string;
+  costCenter: string;
+  closedMonth: boolean;
+  projectionAllowed: boolean;
+  projectionReason: string;
+  parameters: FinanceiroParameter;
+  hours: {
+    maxHoursCapacity: string;
+    billableTarget: string;
+    billableActual: string;
+    approved: string;
+    projected: string;
+    totalConsidered: string;
+    scheduleEligible: string;
+    scheduledOpen: string;
+    present: string;
+    dayOffSale: string;
+    absence: string;
+    training: string;
+    hourAdherencePercent: number;
+    absPercent: number;
+  };
+  values: {
+    kwaiRevenueUsd: number;
+    globalRevenueUsd: number;
+    trainingRevenueUsd: number;
+    totalRevenueUsd: number;
+    totalRevenueBrl: number;
+    exchangeRateUsdBrl: number;
+  };
+  costs: {
+    approvedCostBrl: number;
+    projectedCostBrl: number;
+    grossAmountBrl: number;
+    finalAmountBrl: number;
+  };
+  result: {
+    resultBrl: number;
+    marginPercent: number;
+  };
+};
+
+type FinanceiroAnalytics = {
+  currentMonth: string;
+  projectionRule: string;
+  hoursSummary: { approved: string; projected: string; total: string };
+  valueSummary: { revenueUsd: number; revenueBrl: number };
+  costSummary: { costBrl: number };
+  resultSummary: { resultBrl: number; marginPercent: number };
+  rows: FinanceiroAnalyticsRow[];
+  parameters: FinanceiroParameter[];
+};
+
+type FinanceiroTab = "hours" | "values" | "costs" | "result" | "parameters";
+
+type FinanceiroParameterForm = {
+  invoiceCycleMonth: string;
+  costCenter: string;
+  kwaiHourlyUsd: string;
+  globalHourlyUsd: string;
+  trainingHourlyUsd: string;
+  exchangeRateUsdBrl: string;
+  notes: string;
 };
 
 type PreviewRow = {
@@ -162,6 +246,7 @@ const adjustmentFields = [
 const adjustmentTypes = ["Correção de horas", "Correção de aderence", "Correção de penalty", "Observação", "Outro"];
 
 export function FinanceiroPage() {
+  const [activeTab, setActiveTab] = useState<FinanceiroTab>("hours");
   const [invoiceCycleMonth, setInvoiceCycleMonth] = useState("");
   const [costCenter, setCostCenter] = useState("Todos");
   const [source, setSource] = useState("Todos");
@@ -172,6 +257,7 @@ export function FinanceiroPage() {
   const [selectedRecord, setSelectedRecord] = useState<FinanceiroRecord | null>(null);
   const [adjustRecord, setAdjustRecord] = useState<FinanceiroRecord | null>(null);
   const [recordForm, setRecordForm] = useState<FinanceiroRecordForm | null>(null);
+  const [parameterForm, setParameterForm] = useState<FinanceiroParameterForm | null>(null);
   const [uploadsOpen, setUploadsOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [preview, setPreview] = useState<PreviewPayload | null>(null);
@@ -257,6 +343,7 @@ export function FinanceiroPage() {
   }
 
   const summary = payload?.data.summary;
+  const analytics = payload?.data.analytics;
   const monthOptions = useMemo(() => buildMonthOptions(invoiceCycleMonth, payload?.data.records.map((record) => record.invoiceCycleMonth) ?? []), [invoiceCycleMonth, payload?.data.records]);
 
   function openNewRecordForm() {
@@ -305,6 +392,36 @@ export function FinanceiroPage() {
     }
     setToast(form.id ? "Registro financeiro atualizado com sucesso." : "Registro financeiro criado com sucesso.");
     setRecordForm(null);
+    await fetchData();
+  }
+
+  function openParameterForm(parameter?: FinanceiroParameter) {
+    setParameterForm({
+      invoiceCycleMonth: parameter?.invoiceCycleMonth || invoiceCycleMonth || defaultMonth(),
+      costCenter: parameter?.costCenter || (costCenter !== "Todos" ? costCenter : ""),
+      kwaiHourlyUsd: String(parameter?.kwaiHourlyUsd ?? 9.39).replace(".", ","),
+      globalHourlyUsd: String(parameter?.globalHourlyUsd ?? 5.965).replace(".", ","),
+      trainingHourlyUsd: String(parameter?.trainingHourlyUsd ?? 1.45).replace(".", ","),
+      exchangeRateUsdBrl: String(parameter?.exchangeRateUsdBrl ?? 0).replace(".", ","),
+      notes: parameter?.notes ?? ""
+    });
+  }
+
+  async function saveParameter(form: FinanceiroParameterForm) {
+    setSavingRecord(true);
+    const response = await fetch("/api/financeiro", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "save-parameter", ...form })
+    });
+    const json = await response.json().catch(() => ({}));
+    setSavingRecord(false);
+    if (!response.ok) {
+      setToast(json.message || json.error || "Não foi possível salvar os parâmetros.");
+      return;
+    }
+    setToast("Parâmetros financeiros salvos com sucesso.");
+    setParameterForm(null);
     await fetchData();
   }
 
@@ -376,75 +493,293 @@ export function FinanceiroPage() {
         </div>
       </section>
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-        <StatCard title="Max Hours (Capacity)" value={summary?.maxHoursCapacity ?? "-"} helper="horas" icon={Clock} tone="purple" />
-        <StatCard title="Billable Hours (Meta)" value={summary?.billableHoursTarget ?? "-"} helper="horas" icon={Target} tone="green" />
-        <StatCard title="Billable Hours (Real)" value={summary?.billableHoursActual ?? "-"} helper="horas" icon={Clock} tone="blue" />
-        <StatCard title="Aderence %" value={`${formatPercent(summary?.adherencePercent ?? 0)}%`} helper="Meta: 100%" icon={BarChart3} tone="green" />
-        <StatCard title="Difference" value={summary?.differenceHours ?? "-"} helper="horas" icon={(summary?.differenceMinutes ?? 0) < 0 ? TrendingDown : TrendingUp} tone={(summary?.differenceMinutes ?? 0) < 0 ? "red" : "green"} />
-        <StatCard title="Penalty %" value={`${formatPercent(summary?.penaltyPercent ?? 0)}%`} helper="percentual" icon={TrendingDown} tone={(summary?.penaltyPercent ?? 0) > 0 ? "red" : (summary?.penaltyPercent ?? 0) < 0 ? "green" : "orange"} />
-      </div>
+      <FinanceiroTabs activeTab={activeTab} onChange={setActiveTab} />
 
-      <Panel title="Histórico por Ciclo da Invoice">
-        {loading ? (
-          <div className="grid gap-2">
-            {Array.from({ length: 5 }).map((_, index) => <div key={index} className="h-12 animate-pulse rounded-xl bg-slate-100" />)}
+      {activeTab === "hours" ? (
+        <>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+            <StatCard title="Max Hours (Capacity)" value={summary?.maxHoursCapacity ?? "-"} helper="horas" icon={Clock} tone="purple" />
+            <StatCard title="Billable Hours (Meta)" value={summary?.billableHoursTarget ?? "-"} helper="horas" icon={Target} tone="green" />
+            <StatCard title="Billable Hours (Real)" value={summary?.billableHoursActual ?? "-"} helper="horas" icon={Clock} tone="blue" />
+            <StatCard title="Aderence %" value={`${formatPercent(summary?.adherencePercent ?? 0)}%`} helper="Meta: 100%" icon={BarChart3} tone="green" />
+            <StatCard title="Difference" value={summary?.differenceHours ?? "-"} helper="horas" icon={(summary?.differenceMinutes ?? 0) < 0 ? TrendingDown : TrendingUp} tone={(summary?.differenceMinutes ?? 0) < 0 ? "red" : "green"} />
+            <StatCard title="Penalty %" value={`${formatPercent(summary?.penaltyPercent ?? 0)}%`} helper="percentual" icon={TrendingDown} tone={(summary?.penaltyPercent ?? 0) > 0 ? "red" : (summary?.penaltyPercent ?? 0) < 0 ? "green" : "orange"} />
           </div>
-        ) : payload?.data.records.length ? (
-          <div className="overflow-x-auto">
-            <table className="min-w-[1080px] w-full text-left text-sm">
-              <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-muted">
-                <tr>
-                  <th className="px-3 py-2">Ciclo da Invoice</th>
-                  <th className="px-3 py-2">Cost center</th>
-                  <th className="px-3 py-2">Max Hours</th>
-                  <th className="px-3 py-2">Billable Meta</th>
-                  <th className="px-3 py-2">Billable Real</th>
-                  <th className="px-3 py-2">Aderence %</th>
-                  <th className="px-3 py-2">Difference</th>
-                  <th className="px-3 py-2">Penalty %</th>
-                  <th className="px-3 py-2">Fonte</th>
-                  <th className="px-3 py-2 text-right">Ações</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/70">
-                {payload.data.records.map((record) => (
-                  <tr key={record.id} className="hover:bg-blue-50/40">
-                    <td className="px-3 py-3 font-extrabold text-navy-950">{record.invoiceCycleLabel}</td>
-                    <td className="px-3 py-3 font-bold text-muted">{record.costCenter}</td>
-                    <td className="px-3 py-3 font-bold">{record.maxHoursCapacity}</td>
-                    <td className="px-3 py-3 font-bold">{record.billableHoursTarget}</td>
-                    <td className="px-3 py-3 font-bold">{record.billableHoursActual}</td>
-                    <td className={cn("px-3 py-3 font-black", record.adherencePercent >= 100 ? "text-emerald-600" : "text-amber-600")}>{record.adherenceLabel}</td>
-                    <td className={cn("px-3 py-3 font-black", record.differenceMinutes < 0 ? "text-red-600" : "text-emerald-600")}>{record.differenceHours}</td>
-                    <td className={cn("px-3 py-3 font-black", record.penaltyPercent > 0 ? "text-red-600" : record.penaltyPercent < 0 ? "text-emerald-600" : "text-muted")}>{record.penaltyLabel}</td>
-                    <td className="px-3 py-3 text-muted">{record.source || "-"}</td>
-                    <td className="px-3 py-3">
-                      <div className="flex justify-end gap-2">
-                        <button type="button" onClick={() => setSelectedRecord(record)} className="premium-control grid h-9 w-9 place-items-center text-navy-950" title="Ver detalhes">
-                          <Eye className="h-4 w-4" />
-                        </button>
-                        <button type="button" onClick={() => openEditRecordForm(record)} className="premium-control grid h-9 w-9 place-items-center text-navy-950" title="Editar">
-                          <PencilLine className="h-4 w-4" />
-                        </button>
-                        <button type="button" onClick={() => setAdjustRecord(record)} className="premium-control h-9 px-2 text-xs font-extrabold text-navy-950" title="Ajustar">Ajustar</button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <EmptyState title="Nenhum registro financeiro encontrado" description="Suba uma planilha histórica ou ajuste os filtros para visualizar os ciclos." />
-        )}
-      </Panel>
+          <HoursProjectionPanel analytics={analytics} />
+          <FinanceiroHistoryPanel loading={loading} records={payload?.data.records ?? []} onView={setSelectedRecord} onEdit={openEditRecordForm} onAdjust={setAdjustRecord} />
+        </>
+      ) : null}
+
+      {activeTab === "values" ? <ValuesPanel analytics={analytics} /> : null}
+      {activeTab === "costs" ? <CostsPanel analytics={analytics} /> : null}
+      {activeTab === "result" ? <ResultPanel analytics={analytics} /> : null}
+      {activeTab === "parameters" ? <ParametersPanel analytics={analytics} onEdit={openParameterForm} onNew={() => openParameterForm()} /> : null}
 
       {selectedRecord ? <RecordDetailModal record={selectedRecord} onClose={() => setSelectedRecord(null)} onEdit={() => { openEditRecordForm(selectedRecord); setSelectedRecord(null); }} onAdjust={() => { setAdjustRecord(selectedRecord); setSelectedRecord(null); }} /> : null}
       {recordForm ? <RecordFormModal form={recordForm} setForm={setRecordForm} monthOptions={monthOptions} saving={savingRecord} onClose={() => setRecordForm(null)} onSave={() => saveRecord(recordForm)} /> : null}
+      {parameterForm ? <ParameterFormModal form={parameterForm} setForm={setParameterForm} monthOptions={monthOptions} saving={savingRecord} onClose={() => setParameterForm(null)} onSave={() => saveParameter(parameterForm)} /> : null}
       {adjustRecord ? <AdjustmentModal record={adjustRecord} onClose={() => setAdjustRecord(null)} onSaved={async (message) => { setToast(message); setAdjustRecord(null); await fetchData(); }} saving={savingAdjustment} setSaving={setSavingAdjustment} /> : null}
       {uploadOpen ? <UploadModal preview={preview} uploading={uploading} inputRef={fileInputRef} onClose={() => setUploadOpen(false)} onPreview={handlePreviewUpload} onCommit={handleCommitUpload} /> : null}
       {uploadsOpen ? <UploadsModal uploads={payload?.data.uploads ?? []} onClose={() => setUploadsOpen(false)} /> : null}
+    </div>
+  );
+}
+
+function FinanceiroTabs({ activeTab, onChange }: { activeTab: FinanceiroTab; onChange: (tab: FinanceiroTab) => void }) {
+  const tabs: Array<{ value: FinanceiroTab; label: string }> = [
+    { value: "hours", label: "Horas" },
+    { value: "values", label: "Valores" },
+    { value: "costs", label: "Custos" },
+    { value: "result", label: "Resultado" },
+    { value: "parameters", label: "Parâmetros" }
+  ];
+  return (
+    <div className="inline-flex w-full gap-1 overflow-x-auto rounded-2xl border border-border/70 bg-white p-1 shadow-sm md:w-auto">
+      {tabs.map((tab) => (
+        <button
+          key={tab.value}
+          type="button"
+          onClick={() => onChange(tab.value)}
+          className={cn("h-10 rounded-xl px-4 text-sm font-black transition", activeTab === tab.value ? "bg-blue-600 text-white shadow-sm" : "text-muted hover:bg-slate-50 hover:text-navy-950")}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function HoursProjectionPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
+  return (
+    <Panel title="Projeção e aderência de horas">
+      <div className="grid gap-3 md:grid-cols-3">
+        <InfoBox label="Horas aprovadas" value={analytics?.hoursSummary.approved ?? "-"} />
+        <InfoBox label="Projeção aberta" value={analytics?.hoursSummary.projected ?? "-"} tone="green" />
+        <InfoBox label="Total considerado" value={analytics?.hoursSummary.total ?? "-"} />
+      </div>
+      <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
+        {analytics?.projectionRule ?? "Projeções são calculadas apenas para ciclos abertos."}
+      </div>
+      <FinanceAnalyticsTable
+        rows={analytics?.rows ?? []}
+        columns={[
+          ["Ciclo", (row) => row.invoiceCycleLabel],
+          ["Cost center", (row) => row.costCenter],
+          ["Status", (row) => row.closedMonth ? "Fechado" : "Aberto"],
+          ["Aprovadas", (row) => row.hours.approved],
+          ["Projetadas", (row) => row.projectionAllowed ? row.hours.projected : "-"],
+          ["Presente", (row) => row.hours.present],
+          ["Escalado", (row) => row.hours.scheduledOpen],
+          ["Venda folga", (row) => row.hours.dayOffSale],
+          ["ABS", (row) => `${formatPercent(row.hours.absPercent)}%`],
+          ["Aderência", (row) => `${formatPercent(row.hours.hourAdherencePercent)}%`]
+        ]}
+        emptyTitle="Sem dados de projeção"
+      />
+    </Panel>
+  );
+}
+
+function ValuesPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-3">
+        <StatCard title="Receita USD" value={formatUsd(analytics?.valueSummary.revenueUsd ?? 0)} helper="Global + treinamento" icon={DollarSign} tone="green" />
+        <StatCard title="Receita BRL" value={formatCurrency(analytics?.valueSummary.revenueBrl ?? 0)} helper="convertida por câmbio mensal" icon={TrendingUp} tone="green" />
+        <StatCard title="Câmbio" value={analytics?.rows[0]?.values.exchangeRateUsdBrl ? formatNumberValue(analytics.rows[0].values.exchangeRateUsdBrl) : "-"} helper="USD → BRL" icon={RefreshCw} tone="blue" />
+      </div>
+      <Panel title="Receita por ciclo e cost center">
+        <FinanceAnalyticsTable
+          rows={analytics?.rows ?? []}
+          columns={[
+            ["Ciclo", (row) => row.invoiceCycleLabel],
+            ["Cost center", (row) => row.costCenter],
+            ["Kwai USD", (row) => formatUsd(row.values.kwaiRevenueUsd)],
+            ["Global USD", (row) => formatUsd(row.values.globalRevenueUsd)],
+            ["Treinamento USD", (row) => formatUsd(row.values.trainingRevenueUsd)],
+            ["Total USD", (row) => formatUsd(row.values.totalRevenueUsd)],
+            ["Total BRL", (row) => formatCurrency(row.values.totalRevenueBrl)]
+          ]}
+          emptyTitle="Sem dados de receita"
+        />
+      </Panel>
+    </div>
+  );
+}
+
+function CostsPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-3">
+        <StatCard title="Custo Billing" value={formatCurrency(analytics?.costSummary.costBrl ?? 0)} helper="valor final do Billing" icon={DollarSign} tone="orange" />
+        <StatCard title="Horas aprovadas" value={analytics?.hoursSummary.approved ?? "-"} helper="base realizada" icon={Clock} tone="green" />
+        <StatCard title="Horas projetadas" value={analytics?.hoursSummary.projected ?? "-"} helper="somente ciclo aberto" icon={Clock} tone="blue" />
+      </div>
+      <Panel title="Custos por ciclo e cost center">
+        <FinanceAnalyticsTable
+          rows={analytics?.rows ?? []}
+          columns={[
+            ["Ciclo", (row) => row.invoiceCycleLabel],
+            ["Cost center", (row) => row.costCenter],
+            ["Status", (row) => row.closedMonth ? "Fechado" : "Aberto"],
+            ["Custo aprovado", (row) => formatCurrency(row.costs.approvedCostBrl)],
+            ["Custo projetado", (row) => row.projectionAllowed ? formatCurrency(row.costs.projectedCostBrl) : "-"],
+            ["Bruto Billing", (row) => formatCurrency(row.costs.grossAmountBrl)],
+            ["Final Billing", (row) => formatCurrency(row.costs.finalAmountBrl)]
+          ]}
+          emptyTitle="Sem dados de custos"
+        />
+      </Panel>
+    </div>
+  );
+}
+
+function ResultPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-3">
+        <StatCard title="Receita BRL" value={formatCurrency(analytics?.valueSummary.revenueBrl ?? 0)} helper="Global + treinamento" icon={TrendingUp} tone="green" />
+        <StatCard title="Custo BRL" value={formatCurrency(analytics?.costSummary.costBrl ?? 0)} helper="Billing" icon={TrendingDown} tone="orange" />
+        <StatCard title="Resultado" value={formatCurrency(analytics?.resultSummary.resultBrl ?? 0)} helper={`${formatPercent(analytics?.resultSummary.marginPercent ?? 0)}% margem`} icon={(analytics?.resultSummary.resultBrl ?? 0) < 0 ? TrendingDown : TrendingUp} tone={(analytics?.resultSummary.resultBrl ?? 0) < 0 ? "red" : "green"} />
+      </div>
+      <Panel title="Resultado por ciclo e cost center">
+        <FinanceAnalyticsTable
+          rows={analytics?.rows ?? []}
+          columns={[
+            ["Ciclo", (row) => row.invoiceCycleLabel],
+            ["Cost center", (row) => row.costCenter],
+            ["Receita BRL", (row) => formatCurrency(row.values.totalRevenueBrl)],
+            ["Custo BRL", (row) => formatCurrency(row.costs.finalAmountBrl)],
+            ["Resultado", (row) => formatCurrency(row.result.resultBrl)],
+            ["Margem", (row) => `${formatPercent(row.result.marginPercent)}%`]
+          ]}
+          emptyTitle="Sem dados de resultado"
+        />
+      </Panel>
+    </div>
+  );
+}
+
+function ParametersPanel({ analytics, onEdit, onNew }: { analytics?: FinanceiroAnalytics; onEdit: (parameter: FinanceiroParameter) => void; onNew: () => void }) {
+  return (
+    <Panel title="Parâmetros mensais" action="Adicionar parâmetro" actionOnClick={onNew}>
+      <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
+        Parâmetros são por ciclo e cost center. Câmbio zero mantém valores em USD e deixa BRL zerado até você configurar o mês.
+      </div>
+      <div className="overflow-x-auto">
+        <table className="min-w-[980px] w-full text-left text-sm">
+          <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-muted">
+            <tr>
+              <th className="px-3 py-2">Ciclo</th>
+              <th className="px-3 py-2">Cost center</th>
+              <th className="px-3 py-2">Kwai USD/h</th>
+              <th className="px-3 py-2">Global USD/h</th>
+              <th className="px-3 py-2">Treinamento USD/h</th>
+              <th className="px-3 py-2">Câmbio</th>
+              <th className="px-3 py-2">Origem</th>
+              <th className="px-3 py-2 text-right">Ações</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border/70">
+            {(analytics?.parameters ?? []).map((parameter) => (
+              <tr key={`${parameter.invoiceCycleMonth}-${parameter.costCenter}`} className="hover:bg-blue-50/40">
+                <td className="px-3 py-3 font-extrabold text-navy-950">{parameter.invoiceCycleLabel}</td>
+                <td className="px-3 py-3 font-bold text-muted">{parameter.costCenter}</td>
+                <td className="px-3 py-3 font-bold">{formatUsd(parameter.kwaiHourlyUsd)}</td>
+                <td className="px-3 py-3 font-bold">{formatUsd(parameter.globalHourlyUsd)}</td>
+                <td className="px-3 py-3 font-bold">{formatUsd(parameter.trainingHourlyUsd)}</td>
+                <td className="px-3 py-3 font-bold">{parameter.exchangeRateUsdBrl ? formatNumberValue(parameter.exchangeRateUsdBrl) : "-"}</td>
+                <td className="px-3 py-3"><StatusBadge status={parameter.isDefault ? "Padrão" : "Salvo"} /></td>
+                <td className="px-3 py-3 text-right">
+                  <button type="button" onClick={() => onEdit(parameter)} className="premium-control h-9 px-3 text-xs font-extrabold text-navy-950">Editar</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {analytics?.parameters.length ? null : <EmptyState title="Sem parâmetros" description="Adicione o primeiro parâmetro mensal para converter receita e resultado." />}
+    </Panel>
+  );
+}
+
+function FinanceiroHistoryPanel({ loading, records, onView, onEdit, onAdjust }: { loading: boolean; records: FinanceiroRecord[]; onView: (record: FinanceiroRecord) => void; onEdit: (record: FinanceiroRecord) => void; onAdjust: (record: FinanceiroRecord) => void }) {
+  return (
+    <Panel title="Histórico por Ciclo da Invoice">
+      {loading ? (
+        <div className="grid gap-2">
+          {Array.from({ length: 5 }).map((_, index) => <div key={index} className="h-12 animate-pulse rounded-xl bg-slate-100" />)}
+        </div>
+      ) : records.length ? (
+        <div className="overflow-x-auto">
+          <table className="min-w-[1080px] w-full text-left text-sm">
+            <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-muted">
+              <tr>
+                <th className="px-3 py-2">Ciclo da Invoice</th>
+                <th className="px-3 py-2">Cost center</th>
+                <th className="px-3 py-2">Max Hours</th>
+                <th className="px-3 py-2">Billable Meta</th>
+                <th className="px-3 py-2">Billable Real</th>
+                <th className="px-3 py-2">Aderence %</th>
+                <th className="px-3 py-2">Difference</th>
+                <th className="px-3 py-2">Penalty %</th>
+                <th className="px-3 py-2">Fonte</th>
+                <th className="px-3 py-2 text-right">Ações</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/70">
+              {records.map((record) => (
+                <tr key={record.id} className="hover:bg-blue-50/40">
+                  <td className="px-3 py-3 font-extrabold text-navy-950">{record.invoiceCycleLabel}</td>
+                  <td className="px-3 py-3 font-bold text-muted">{record.costCenter}</td>
+                  <td className="px-3 py-3 font-bold">{record.maxHoursCapacity}</td>
+                  <td className="px-3 py-3 font-bold">{record.billableHoursTarget}</td>
+                  <td className="px-3 py-3 font-bold">{record.billableHoursActual}</td>
+                  <td className={cn("px-3 py-3 font-black", record.adherencePercent >= 100 ? "text-emerald-600" : "text-amber-600")}>{record.adherenceLabel}</td>
+                  <td className={cn("px-3 py-3 font-black", record.differenceMinutes < 0 ? "text-red-600" : "text-emerald-600")}>{record.differenceHours}</td>
+                  <td className={cn("px-3 py-3 font-black", record.penaltyPercent > 0 ? "text-red-600" : record.penaltyPercent < 0 ? "text-emerald-600" : "text-muted")}>{record.penaltyLabel}</td>
+                  <td className="px-3 py-3 text-muted">{record.source || "-"}</td>
+                  <td className="px-3 py-3">
+                    <div className="flex justify-end gap-2">
+                      <button type="button" onClick={() => onView(record)} className="premium-control grid h-9 w-9 place-items-center text-navy-950" title="Ver detalhes">
+                        <Eye className="h-4 w-4" />
+                      </button>
+                      <button type="button" onClick={() => onEdit(record)} className="premium-control grid h-9 w-9 place-items-center text-navy-950" title="Editar">
+                        <PencilLine className="h-4 w-4" />
+                      </button>
+                      <button type="button" onClick={() => onAdjust(record)} className="premium-control h-9 px-2 text-xs font-extrabold text-navy-950" title="Ajustar">Ajustar</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <EmptyState title="Nenhum registro financeiro encontrado" description="Suba uma planilha histórica ou ajuste os filtros para visualizar os ciclos." />
+      )}
+    </Panel>
+  );
+}
+
+function FinanceAnalyticsTable({ rows, columns, emptyTitle }: { rows: FinanceiroAnalyticsRow[]; columns: Array<[string, (row: FinanceiroAnalyticsRow) => React.ReactNode]>; emptyTitle: string }) {
+  if (!rows.length) return <EmptyState title={emptyTitle} description="Ajuste filtros, registros ou parâmetros para preencher esta visão." />;
+  return (
+    <div className="overflow-x-auto">
+      <table className="min-w-[900px] w-full text-left text-sm">
+        <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-muted">
+          <tr>
+            {columns.map(([label]) => <th key={label} className="px-3 py-2">{label}</th>)}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border/70">
+          {rows.map((row) => (
+            <tr key={row.key} className="hover:bg-blue-50/40">
+              {columns.map(([label, render]) => <td key={label} className="px-3 py-3 font-bold text-navy-950">{render(row)}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -547,6 +882,55 @@ function RecordFormModal({
         <button type="button" disabled={saving} onClick={onSave} className="premium-button h-10 px-4 text-sm font-extrabold disabled:opacity-60">
           <Save className="mr-2 inline h-4 w-4" />
           {saving ? "Salvando..." : isEdit ? "Salvar edição" : "Adicionar"}
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
+function ParameterFormModal({
+  form,
+  setForm,
+  monthOptions,
+  saving,
+  onClose,
+  onSave
+}: {
+  form: FinanceiroParameterForm;
+  setForm: (value: FinanceiroParameterForm) => void;
+  monthOptions: Array<{ value: string; label: string }>;
+  saving: boolean;
+  onClose: () => void;
+  onSave: () => void;
+}) {
+  const setField = (field: keyof FinanceiroParameterForm, value: string) => setForm({ ...form, [field]: value });
+  return (
+    <ModalShell title="Parâmetros financeiros do ciclo" onClose={onClose}>
+      <div className="grid gap-3 md:grid-cols-2">
+        <label className="block">
+          <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">Ciclo da Invoice</span>
+          <select value={form.invoiceCycleMonth} onChange={(event) => setField("invoiceCycleMonth", event.target.value)} className="premium-control h-10 w-full px-3 text-sm font-bold outline-none">
+            {monthOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </label>
+        <FormInput label="Cost center" value={form.costCenter} onChange={(value) => setField("costCenter", value)} placeholder="ADS, CEC ou TNS" />
+        <FormInput label="Kwai USD/h" value={form.kwaiHourlyUsd} onChange={(value) => setField("kwaiHourlyUsd", value)} placeholder="9,39" />
+        <FormInput label="Global USD/h" value={form.globalHourlyUsd} onChange={(value) => setField("globalHourlyUsd", value)} placeholder="5,965" />
+        <FormInput label="Treinamento USD/h" value={form.trainingHourlyUsd} onChange={(value) => setField("trainingHourlyUsd", value)} placeholder="1,45" />
+        <FormInput label="Câmbio USD/BRL" value={form.exchangeRateUsdBrl} onChange={(value) => setField("exchangeRateUsdBrl", value)} placeholder="5,40" />
+        <label className="block md:col-span-2">
+          <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">Observações</span>
+          <textarea value={form.notes} onChange={(event) => setField("notes", event.target.value)} rows={3} className="premium-control w-full px-3 py-2 text-sm font-bold outline-none" placeholder="Fonte do câmbio, regra do mês ou observação." />
+        </label>
+      </div>
+      <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
+        Projeção de valores não é aplicada para meses fechados. Parâmetros salvos alteram apenas as visões financeiras, sem editar Billing ou horas importadas.
+      </div>
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={onClose} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Cancelar</button>
+        <button type="button" disabled={saving} onClick={onSave} className="premium-button h-10 px-4 text-sm font-extrabold disabled:opacity-60">
+          <Save className="mr-2 inline h-4 w-4" />
+          {saving ? "Salvando..." : "Salvar parâmetros"}
         </button>
       </div>
     </ModalShell>
@@ -875,4 +1259,16 @@ function formatMonthLabel(value: string) {
 
 function formatPercent(value: number) {
   return new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value);
+}
+
+function formatCurrency(value: number) {
+  return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(Number.isFinite(value) ? value : 0);
+}
+
+function formatUsd(value: number) {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(Number.isFinite(value) ? value : 0);
+}
+
+function formatNumberValue(value: number) {
+  return new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 4 }).format(Number.isFinite(value) ? value : 0);
 }
