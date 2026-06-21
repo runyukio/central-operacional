@@ -99,13 +99,24 @@ current_cycle_download() {
   date +"%Y-%m-%d %H:$rounded_minute"
 }
 
+update_latest_file() {
+  local source_file="$1"
+  local latest_file="$2"
+  local label="$3"
+
+  if cp -f "$source_file" "$latest_file" 2>/dev/null; then
+    echo "Latest $label: $latest_file"
+  else
+    echo "Latest $label could not be updated, continuing: $latest_file"
+  fi
+}
+
 process_downloaded_pdf() {
   local cycle_download="${FRESHDESK_CYCLE_DOWNLOAD:-$(current_cycle_download)}"
   echo "Parsing CEC Freshdesk PDF..."
   "$PYTHON_BIN" "$PDF_PARSER" --input "$PDF_FILE" --output "$JSON_FILE" --cycle "$cycle_download"
-  cp "$JSON_FILE" "$LATEST_JSON"
+  update_latest_file "$JSON_FILE" "$LATEST_JSON" "JSON"
   echo "CEC Freshdesk JSON: $JSON_FILE"
-  echo "Latest JSON: $LATEST_JSON"
 
   if [[ "$CEC_UPLOAD_ENABLED" == "true" ]]; then
     upload_cec_snapshot
@@ -285,9 +296,8 @@ download_pdf_url() {
     exit 1
   fi
 
-  cp "$PDF_FILE" "$LATEST_PDF"
+  update_latest_file "$PDF_FILE" "$LATEST_PDF" "PDF"
   echo "CEC Freshdesk PDF: $PDF_FILE"
-  echo "Latest PDF: $LATEST_PDF"
   process_downloaded_pdf
 }
 
@@ -317,9 +327,8 @@ post_download_request
 content_type="$(grep -i '^content-type:' "$HEADERS_FILE" | tail -1 | tr -d '\r' || true)"
 if [[ "$content_type" == *"application/pdf"* ]] || head -c 4 "$RESPONSE_FILE" | grep -q "%PDF"; then
   mv "$RESPONSE_FILE" "$PDF_FILE"
-  cp "$PDF_FILE" "$LATEST_PDF"
+  update_latest_file "$PDF_FILE" "$LATEST_PDF" "PDF"
   echo "CEC Freshdesk PDF: $PDF_FILE"
-  echo "Latest PDF: $LATEST_PDF"
   process_downloaded_pdf
   exit 0
 fi
