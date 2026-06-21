@@ -985,6 +985,29 @@ model RealTimeQueueCycleSummary {
   @@index([batchId, cycleDownload])
 }
 
+model RealTimeCecSnapshot {
+  id            String   @id @default(cuid())
+  cycleDownload String   @unique
+  source        String   @default("freshdesk-pdf")
+  fileName      String
+  generatedDate String?
+  totalBacklog  Int      @default(0)
+  normalBacklog Int      @default(0)
+  p0Backlog     Int      @default(0)
+  p0L2Backlog   Int      @default(0)
+  onHoldCount   Int      @default(0)
+  openCount     Int      @default(0)
+  newCount      Int      @default(0)
+  rawData       Json
+  importedAt    DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([importedAt])
+  @@index([source])
+  @@index([cycleDownload])
+}
+
 model RequestComment {
   id        String   @id @default(cuid())
   requestId String
