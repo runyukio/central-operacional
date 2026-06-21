@@ -729,7 +729,7 @@ export function RealTimePage() {
               ) : activeTab === "queues" ? (
                 <QueueLobQuickFilter value={queueFilters.lob} onChange={(value) => updateQueueFilter("lob", value)} options={queueView?.filters.lobs ?? []} />
               ) : (
-                <ReportLobQuickFilter value={reportLob} onChange={setReportLob} rows={queueView?.rows ?? []} />
+                <ReportLobQuickFilter value={reportLob} onChange={setReportLob} />
               )}
             </div>
             {activeTab !== "report" ? (
@@ -1583,13 +1583,7 @@ function QueueLobQuickFilter({ value, onChange, options }: { value: string; onCh
   );
 }
 
-function ReportLobQuickFilter({ value, onChange, rows }: { value: ReportLob; onChange: (value: ReportLob) => void; rows: QueueRealtimeRow[] }) {
-  const counts: Record<ReportLob, number> = {
-    ADS: rows.filter((row) => row.lob === "ADS").length,
-    TNS: rows.filter((row) => row.lob === "VIDEO" || row.lob === "COMMENTS").length,
-    CEC: 0
-  };
-
+function ReportLobQuickFilter({ value, onChange }: { value: ReportLob; onChange: (value: ReportLob) => void }) {
   return (
     <div className="flex flex-wrap items-center gap-1 rounded-2xl border border-slate-200 bg-white p-1 shadow-[0_4px_12px_rgba(7,27,58,0.035)]">
       {(["ADS", "TNS", "CEC"] as const).map((lob) => {
@@ -1605,7 +1599,6 @@ function ReportLobQuickFilter({ value, onChange, rows }: { value: ReportLob; onC
             )}
           >
             {lob}
-            <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", active ? "bg-white/20 text-white" : "bg-slate-100 text-muted")}>{lob === "CEC" ? "PDF" : counts[lob]}</span>
           </button>
         );
       })}
