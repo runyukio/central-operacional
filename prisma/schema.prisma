@@ -864,6 +864,8 @@ model RealTimeImportBatch {
   fileName       String
   source         String                      @default("kap-local")
   status         String                      @default("SUCCESS")
+  cycleDownload  String?
+  cycleDownloads Json?
   rowsTotal      Int                         @default(0)
   queueRows      Int                         @default(0)
   agentRows      Int                         @default(0)
@@ -878,6 +880,9 @@ model RealTimeImportBatch {
   @@index([importedAt])
   @@index([status])
   @@index([source])
+  @@index([cycleDownload])
+  @@index([status, importedAt])
+  @@index([status, cycleDownload])
 }
 
 model RealTimeRecord {

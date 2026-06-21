@@ -206,8 +206,25 @@ type QueueSummaryReadRow = {
 
 const staleThresholdMinutes = 20;
 const realtimeRetentionDays = 7;
-const realtimeViewHistoryBatchLimit = 180;
+const realtimeViewHistoryBatchLimit = 1200;
 const realtimeRawFallbackBatchLimit = 12;
+
+type RealtimeBatchReadRow = {
+  id: string;
+  fileName: string;
+  importedAt: Date;
+  queueRows: number;
+  agentRows: number;
+  cycleDownload?: string | null;
+  cycleDownloads?: Prisma.JsonValue | null;
+};
+
+type RealtimeCycleOption = {
+  value: string;
+  batchId: string;
+  importedAt: Date;
+  rows: number;
+};
 
 const queueNameCandidates = ["fila", "queue", "queue id", "queue_id", "queue name", "queue_name", "skill group queue", "skillgroupqueue"];
 const agentNameCandidates = ["agente", "agent", "auditor", "auditor name", "nome", "name", "colaborador", "operator", "moderator"];
@@ -331,6 +348,7 @@ export async function importRealtimeSnapshot(input: RealTimeImportInput) {
   const employeeMatches = await loadEmployeeMatches();
   const agentSummaries = buildAgentCycleSummaryRows(agentRows, employeeMatches, importedAt);
   const queueSummaries = buildQueueCycleSummaryRows(queueRows, importedAt);
+  const importSummary = summarizeImportedSummaries(agentSummaries, queueSummaries);
 
   const batch = await prisma.$transaction(async (tx) => {
     const created = await tx.realTimeImportBatch.create({
@@ -338,6 +356,8 @@ export async function importRealtimeSnapshot(input: RealTimeImportInput) {
         fileName,
         source,
         status: "SUCCESS",
+        cycleDownload: importSummary.cycleDownloads[0] ?? null,
+        cycleDownloads: importSummary.cycleDownloads.length ? importSummary.cycleDownloads : Prisma.JsonNull,
         rowsTotal: records.length,
         queueRows: queueRows.length,
         agentRows: agentRows.length,
@@ -379,7 +399,6 @@ export async function importRealtimeSnapshot(input: RealTimeImportInput) {
     return created;
   });
 
-  const importSummary = summarizeImportedSummaries(agentSummaries, queueSummaries);
   await pruneRealtimeHistory(batch.id);
 
   return {
@@ -592,13 +611,16 @@ async function latestRealtimeCycle(recordType: "QUEUE" | "AGENT") {
       rowsTotal: true,
       queueRows: true,
       agentRows: true,
-      importedAt: true
+      importedAt: true,
+      cycleDownload: true,
+      cycleDownloads: true
     }
   });
 
   if (!batch) return null;
 
-  const cycleDownloadFromSummary = recordType === "QUEUE"
+  const cycleDownloadFromBatch = readBatchCycleDownloads(batch)[0] ?? "";
+  const cycleDownloadFromSummary = cycleDownloadFromBatch || (recordType === "QUEUE"
     ? (await prisma.realTimeQueueCycleSummary.findFirst({
       where: { batchId: batch.id },
       orderBy: { cycleDownload: "desc" },
@@ -608,7 +630,7 @@ async function latestRealtimeCycle(recordType: "QUEUE" | "AGENT") {
       where: { batchId: batch.id },
       orderBy: { cycleDownload: "desc" },
       select: { cycleDownload: true }
-    }))?.cycleDownload;
+    }))?.cycleDownload);
 
   let cycleDownload = cycleDownloadFromSummary ?? "";
   if (!cycleDownload) {
@@ -1176,7 +1198,89 @@ function summarizeImportedSummaries(
   };
 }
 
-function buildQueueRealtimeViewFromSummaryRows(summaryRows: QueueSummaryReadRow[], options: RealtimeSnapshotOptions) {
+function readBatchCycleDownloads(batch: RealtimeBatchReadRow) {
+  const values = new Set<string>();
+  if (batch.cycleDownload) values.add(batch.cycleDownload);
+  if (Array.isArray(batch.cycleDownloads)) {
+    batch.cycleDownloads.forEach((value) => {
+      if (typeof value === "string" && value.trim()) values.add(value.trim());
+    });
+  }
+  if (!values.size) values.add(formatCycleFromDate(batch.importedAt));
+  return Array.from(values).sort().reverse();
+}
+
+function buildRealtimeCycleOptionsFromBatches(
+  batches: RealtimeBatchReadRow[],
+  rowCountKey: "agentRows" | "queueRows"
+): RealtimeCycleOption[] {
+  const latestByCycle = new Map<string, RealtimeCycleOption>();
+  batches.forEach((batch) => {
+    if (batch[rowCountKey] <= 0) return;
+    readBatchCycleDownloads(batch).forEach((cycleDownload) => {
+      const current = latestByCycle.get(cycleDownload);
+      if (!current || batch.importedAt > current.importedAt) {
+        latestByCycle.set(cycleDownload, {
+          value: cycleDownload,
+          batchId: batch.id,
+          importedAt: batch.importedAt,
+          rows: batch[rowCountKey]
+        });
+      }
+    });
+  });
+
+  return Array.from(latestByCycle.values()).sort(compareRealtimeCyclesDesc);
+}
+
+function compareRealtimeCyclesDesc(a: RealtimeCycleOption, b: RealtimeCycleOption) {
+  return b.importedAt.getTime() - a.importedAt.getTime() || b.value.localeCompare(a.value);
+}
+
+function formatRealtimeCycleOptions(cycleOptions: RealtimeCycleOption[]) {
+  return cycleOptions
+    .sort(compareRealtimeCyclesDesc)
+    .map((cycle) => ({ ...cycle, importedAt: cycle.importedAt.toISOString(), importedAtLabel: formatDateTime(cycle.importedAt) }));
+}
+
+function resolveSelectedRealtimeCycle(cycleOptions: RealtimeCycleOption[], requestedCycle?: string) {
+  if (!cycleOptions.length) return { selectedCycle: "", previousCycle: "", selectedIndex: -1 };
+  const selectedCycle = requestedCycle && cycleOptions.some((cycle) => cycle.value === requestedCycle)
+    ? requestedCycle
+    : cycleOptions[0].value;
+  const selectedIndex = cycleOptions.findIndex((cycle) => cycle.value === selectedCycle);
+  return {
+    selectedCycle,
+    selectedIndex,
+    previousCycle: selectedIndex >= 0 ? cycleOptions[selectedIndex + 1]?.value ?? "" : ""
+  };
+}
+
+function cycleDateKey(value: string) {
+  return String(value ?? "").match(/^(\d{4}-\d{2}-\d{2})/)?.[1] ?? "";
+}
+
+function selectRealtimeBatchIdsForView(cycleOptions: RealtimeCycleOption[], selectedCycle: string, previousCycle: string) {
+  const selectedDateKey = cycleDateKey(selectedCycle);
+  const selectedValues = new Set<string>();
+  cycleOptions.forEach((cycle) => {
+    if (selectedDateKey && cycleDateKey(cycle.value) === selectedDateKey) selectedValues.add(cycle.value);
+  });
+  if (selectedCycle) selectedValues.add(selectedCycle);
+  if (previousCycle) selectedValues.add(previousCycle);
+
+  return Array.from(new Set(
+    cycleOptions
+      .filter((cycle) => selectedValues.has(cycle.value))
+      .map((cycle) => cycle.batchId)
+  ));
+}
+
+function buildQueueRealtimeViewFromSummaryRows(
+  summaryRows: QueueSummaryReadRow[],
+  options: RealtimeSnapshotOptions,
+  cycleOptions?: RealtimeCycleOption[]
+) {
   const latestBatchByCycle = new Map<string, { batchId: string; importedAt: Date }>();
   summaryRows.forEach((summary) => {
     const currentLatest = latestBatchByCycle.get(summary.cycleDownload);
@@ -1200,9 +1304,10 @@ function buildQueueRealtimeViewFromSummaryRows(summaryRows: QueueSummaryReadRow[
     }
   });
 
-  const cycles = Array.from(cycleMap.values())
-    .sort((a, b) => b.importedAt.getTime() - a.importedAt.getTime() || b.value.localeCompare(a.value))
-    .map((cycle) => ({ ...cycle, importedAt: cycle.importedAt.toISOString(), importedAtLabel: formatDateTime(cycle.importedAt) }));
+  const rawCycles = cycleOptions?.length
+    ? cycleOptions
+    : Array.from(cycleMap.values()).sort(compareRealtimeCyclesDesc);
+  const cycles = formatRealtimeCycleOptions(rawCycles);
 
   if (!cycles.length) return emptyQueueRealtimeView();
 
@@ -1210,12 +1315,16 @@ function buildQueueRealtimeViewFromSummaryRows(summaryRows: QueueSummaryReadRow[
   const selectedIndex = cycles.findIndex((cycle) => cycle.value === selectedCycle);
   const previousCycle = selectedIndex >= 0 ? cycles[selectedIndex + 1]?.value ?? "" : "";
 
+  const latestRowsByCycle = new Map<string, QueueSummaryReadRow[]>();
+  latestRows.forEach((summary) => {
+    const current = latestRowsByCycle.get(summary.cycleDownload) ?? [];
+    current.push(summary);
+    latestRowsByCycle.set(summary.cycleDownload, current);
+  });
+
   const groupedByCycle = new Map<string, QueueCycleRow[]>();
   for (const cycle of cycles) {
-    groupedByCycle.set(cycle.value, latestRows
-      .filter((summary) => summary.cycleDownload === cycle.value)
-      .map(queueSummaryToCycleRow)
-    );
+    groupedByCycle.set(cycle.value, (latestRowsByCycle.get(cycle.value) ?? []).map(queueSummaryToCycleRow));
   }
 
   const currentRows = groupedByCycle.get(selectedCycle) ?? [];
@@ -1368,12 +1477,14 @@ async function buildQueueRealtimeView(options: RealtimeSnapshotOptions) {
     where: { status: "SUCCESS", queueRows: { gt: 0 }, importedAt: { gte: realtimeRetentionCutoff() } },
     orderBy: { importedAt: "desc" },
     take: realtimeViewHistoryBatchLimit,
-    select: { id: true, fileName: true, importedAt: true, queueRows: true }
+    select: { id: true, fileName: true, importedAt: true, queueRows: true, agentRows: true, cycleDownload: true, cycleDownloads: true }
   });
 
   if (!batches.length) return emptyQueueRealtimeView();
 
-  const batchIds = batches.map((batch) => batch.id);
+  const cycleOptions = buildRealtimeCycleOptionsFromBatches(batches, "queueRows");
+  const { selectedCycle: viewSelectedCycle, previousCycle: viewPreviousCycle } = resolveSelectedRealtimeCycle(cycleOptions, options.cycleDownload);
+  const batchIds = selectRealtimeBatchIdsForView(cycleOptions, viewSelectedCycle, viewPreviousCycle);
   const summaryRows = await prisma.realTimeQueueCycleSummary.findMany({
     where: { batchId: { in: batchIds } },
     orderBy: [{ cycleDownload: "desc" }, { queueKey: "asc" }],
@@ -1416,10 +1527,10 @@ async function buildQueueRealtimeView(options: RealtimeSnapshotOptions) {
     });
     const fallbackSummaryRows = queueSummaryRowsFromRawRecords(fallbackRecords);
     if (summaryRows.length || fallbackSummaryRows.length) {
-      return buildQueueRealtimeViewFromSummaryRows([...summaryRows, ...fallbackSummaryRows], options);
+      return buildQueueRealtimeViewFromSummaryRows([...summaryRows, ...fallbackSummaryRows], options, cycleOptions);
     }
   }
-  if (summaryRows.length) return buildQueueRealtimeViewFromSummaryRows(summaryRows, options);
+  if (summaryRows.length) return buildQueueRealtimeViewFromSummaryRows(summaryRows, options, cycleOptions);
 
   const rawFallbackBatchIds = batchIds.slice(0, realtimeRawFallbackBatchLimit);
   const records = await prisma.realTimeRecord.findMany({
@@ -1535,7 +1646,11 @@ async function buildQueueRealtimeView(options: RealtimeSnapshotOptions) {
   };
 }
 
-async function buildAgentRealtimeViewFromSummaryRows(summaryRows: AgentSummaryReadRow[], options: RealtimeSnapshotOptions) {
+async function buildAgentRealtimeViewFromSummaryRows(
+  summaryRows: AgentSummaryReadRow[],
+  options: RealtimeSnapshotOptions,
+  cycleOptions?: RealtimeCycleOption[]
+) {
   const latestBatchByCycle = new Map<string, { batchId: string; importedAt: Date }>();
   summaryRows.forEach((summary) => {
     const currentLatest = latestBatchByCycle.get(summary.cycleDownload);
@@ -1559,9 +1674,10 @@ async function buildAgentRealtimeViewFromSummaryRows(summaryRows: AgentSummaryRe
     }
   });
 
-  const cycles = Array.from(cycleMap.values())
-    .sort((a, b) => b.importedAt.getTime() - a.importedAt.getTime() || b.value.localeCompare(a.value))
-    .map((cycle) => ({ ...cycle, importedAt: cycle.importedAt.toISOString(), importedAtLabel: formatDateTime(cycle.importedAt) }));
+  const rawCycles = cycleOptions?.length
+    ? cycleOptions
+    : Array.from(cycleMap.values()).sort(compareRealtimeCyclesDesc);
+  const cycles = formatRealtimeCycleOptions(rawCycles);
 
   if (!cycles.length) return emptyAgentRealtimeView();
 
@@ -1569,12 +1685,16 @@ async function buildAgentRealtimeViewFromSummaryRows(summaryRows: AgentSummaryRe
   const selectedIndex = cycles.findIndex((cycle) => cycle.value === selectedCycle);
   const previousCycle = selectedIndex >= 0 ? cycles[selectedIndex + 1]?.value ?? "" : "";
 
+  const latestRowsByCycle = new Map<string, AgentSummaryReadRow[]>();
+  latestRows.forEach((summary) => {
+    const current = latestRowsByCycle.get(summary.cycleDownload) ?? [];
+    current.push(summary);
+    latestRowsByCycle.set(summary.cycleDownload, current);
+  });
+
   const groupedByCycle = new Map<string, AgentCycleRow[]>();
   for (const cycle of cycles) {
-    groupedByCycle.set(cycle.value, latestRows
-      .filter((summary) => summary.cycleDownload === cycle.value)
-      .map(agentSummaryToCycleRow)
-    );
+    groupedByCycle.set(cycle.value, (latestRowsByCycle.get(cycle.value) ?? []).map(agentSummaryToCycleRow));
   }
 
   const currentRows = groupedByCycle.get(selectedCycle) ?? [];
@@ -1776,12 +1896,14 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
     where: { status: "SUCCESS", agentRows: { gt: 0 }, importedAt: { gte: realtimeRetentionCutoff() } },
     orderBy: { importedAt: "desc" },
     take: realtimeViewHistoryBatchLimit,
-    select: { id: true, fileName: true, importedAt: true, agentRows: true }
+    select: { id: true, fileName: true, importedAt: true, queueRows: true, agentRows: true, cycleDownload: true, cycleDownloads: true }
   });
 
   if (!batches.length) return emptyAgentRealtimeView();
 
-  const batchIds = batches.map((batch) => batch.id);
+  const cycleOptions = buildRealtimeCycleOptionsFromBatches(batches, "agentRows");
+  const { selectedCycle: viewSelectedCycle, previousCycle: viewPreviousCycle } = resolveSelectedRealtimeCycle(cycleOptions, options.cycleDownload);
+  const batchIds = selectRealtimeBatchIdsForView(cycleOptions, viewSelectedCycle, viewPreviousCycle);
   const summaryRows = await prisma.realTimeAgentCycleSummary.findMany({
     where: { batchId: { in: batchIds } },
     orderBy: [{ cycleDownload: "desc" }, { displayName: "asc" }],
@@ -1832,10 +1954,10 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
     const employeeMatches = await loadEmployeeMatches();
     const fallbackSummaryRows = agentSummaryRowsFromRawRecords(fallbackRecords, employeeMatches);
     if (summaryRows.length || fallbackSummaryRows.length) {
-      return await buildAgentRealtimeViewFromSummaryRows([...summaryRows, ...fallbackSummaryRows], options);
+      return await buildAgentRealtimeViewFromSummaryRows([...summaryRows, ...fallbackSummaryRows], options, cycleOptions);
     }
   }
-  if (summaryRows.length) return await buildAgentRealtimeViewFromSummaryRows(summaryRows, options);
+  if (summaryRows.length) return await buildAgentRealtimeViewFromSummaryRows(summaryRows, options, cycleOptions);
 
   const rawFallbackBatchIds = batchIds.slice(0, realtimeRawFallbackBatchLimit);
   const records = await prisma.realTimeRecord.findMany({
