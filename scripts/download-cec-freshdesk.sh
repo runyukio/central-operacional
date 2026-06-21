@@ -34,6 +34,8 @@ fi
 RTS_ENABLED="${FRESHDESK_RTS_ENABLED:-true}"
 RTS_HELPER="${FRESHDESK_RTS_HELPER:-$SCRIPT_DIR/freshdesk-rts-download-url.js}"
 CEC_UPLOAD_ENABLED="${CEC_UPLOAD_ENABLED:-${KAP_UPLOAD_ENABLED:-false}}"
+RTS_RETRIES="${FRESHDESK_RTS_RETRIES:-$DOWNLOAD_RETRIES}"
+RTS_RETRY_DELAY_SECONDS="${FRESHDESK_RTS_RETRY_DELAY_SECONDS:-$RETRY_DELAY_SECONDS}"
 
 if ! [[ "$DOWNLOAD_RETRIES" = <-> ]] || (( DOWNLOAD_RETRIES < 1 )); then
   DOWNLOAD_RETRIES=3
@@ -41,6 +43,14 @@ fi
 
 if ! [[ "$RETRY_DELAY_SECONDS" = <-> ]] || (( RETRY_DELAY_SECONDS < 1 )); then
   RETRY_DELAY_SECONDS=10
+fi
+
+if ! [[ "$RTS_RETRIES" = <-> ]] || (( RTS_RETRIES < 1 )); then
+  RTS_RETRIES="$DOWNLOAD_RETRIES"
+fi
+
+if ! [[ "$RTS_RETRY_DELAY_SECONDS" = <-> ]] || (( RTS_RETRY_DELAY_SECONDS < 1 )); then
+  RTS_RETRY_DELAY_SECONDS="$RETRY_DELAY_SECONDS"
 fi
 
 if [[ ! -f "$AUTH_TOKEN_FILE" ]]; then
@@ -301,16 +311,42 @@ download_pdf_url() {
   process_downloaded_pdf
 }
 
+request_rts_download_url() {
+  local attempt=1
+  local download_url=""
+  local rts_status=0
+
+  while (( attempt <= RTS_RETRIES )); do
+    echo "Requesting CEC Freshdesk report through RTS listener (attempt $attempt/$RTS_RETRIES)..." >&2
+    set +e
+    download_url="$(
+      FRESHDESK_REPORT_URL="$REPORT_URL" \
+      FRESHDESK_AUTH_TOKEN_FILE="$AUTH_TOKEN_FILE" \
+      FRESHDESK_BODY_FILE="$BODY_FILE" \
+      FRESHDESK_RTS_LOG_DIR="$OUTPUT_DIR/logs" \
+      node "$RTS_HELPER"
+    )"
+    rts_status=$?
+    set -e
+
+    if (( rts_status == 0 )) && [[ -n "$download_url" ]]; then
+      printf '%s' "$download_url"
+      return 0
+    fi
+
+    echo "CEC RTS listener did not return a PDF URL on attempt $attempt/$RTS_RETRIES." >&2
+    if (( attempt < RTS_RETRIES )); then
+      sleep $(( RTS_RETRY_DELAY_SECONDS * attempt ))
+    fi
+    attempt=$(( attempt + 1 ))
+  done
+
+  return 1
+}
+
 if [[ "$RTS_ENABLED" != "false" ]]; then
-  echo "Requesting CEC Freshdesk report through RTS listener..."
   set +e
-  DOWNLOAD_URL="$(
-    FRESHDESK_REPORT_URL="$REPORT_URL" \
-    FRESHDESK_AUTH_TOKEN_FILE="$AUTH_TOKEN_FILE" \
-    FRESHDESK_BODY_FILE="$BODY_FILE" \
-    FRESHDESK_RTS_LOG_DIR="$OUTPUT_DIR/logs" \
-    node "$RTS_HELPER"
-  )"
+  DOWNLOAD_URL="$(request_rts_download_url)"
   rts_status=$?
   set -e
 
