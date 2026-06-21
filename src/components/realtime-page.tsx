@@ -1725,20 +1725,44 @@ function CecMiniCard({ title, value, tone }: { title: string; value: number; ton
 }
 
 function CecStatusCard({ title, value, tone, history }: { title: string; value: number; tone: "amber" | "blue" | "green"; history: TrendPoint[] }) {
-  const toneClass = tone === "amber"
-    ? "text-amber-800"
-    : tone === "green"
-      ? "text-emerald-700"
-      : "text-blue-700";
+  const toneConfig = getCecStatusTone(tone);
   return (
-    <div className="rounded-[18px] border border-slate-100 bg-slate-50/70 p-4">
+    <div className={cn("rounded-[18px] border p-4", toneConfig.cardClass)}>
       <p className="text-[11px] font-black uppercase tracking-wide text-muted">{title}</p>
-      <p className={cn("mt-2 text-3xl font-black", toneClass)}>{formatInteger(value)}</p>
+      <p className={cn("mt-2 text-3xl font-black", toneConfig.valueClass)}>{formatInteger(value)}</p>
       <div className="mt-3 h-14">
-        <TrendSparkline data={history} format="number" trend={tone === "green" ? "positive" : "neutral"} compact />
+        <TrendSparkline data={history} format="number" trend="neutral" compact colorOverride={toneConfig.chartColor} />
       </div>
     </div>
   );
+}
+
+function getCecStatusTone(tone: "amber" | "blue" | "green") {
+  if (tone === "amber") {
+    return {
+      cardClass: "border-amber-100 bg-amber-50/50",
+      valueClass: "text-amber-700",
+      chartColor: "#F59E0B",
+      canvasBg: "#FFFBEB",
+      canvasText: "#B45309"
+    };
+  }
+  if (tone === "green") {
+    return {
+      cardClass: "border-emerald-100 bg-emerald-50/50",
+      valueClass: "text-emerald-700",
+      chartColor: "#10B981",
+      canvasBg: "#ECFDF5",
+      canvasText: "#047857"
+    };
+  }
+  return {
+    cardClass: "border-blue-100 bg-blue-50/45",
+    valueClass: "text-blue-700",
+    chartColor: "#2563EB",
+    canvasBg: "#EFF6FF",
+    canvasText: "#2563EB"
+  };
 }
 
 function CecReportTable({ report, loading, selectedCycle }: { report: CecReportPayload | null; loading: boolean; selectedCycle: string }) {
@@ -2170,17 +2194,18 @@ function downloadCecSummaryImage(report: CecReportPayload | null) {
   if (!snapshot) return;
 
   const cycleLabel = snapshot.cycleDownload || report?.selectedCycle || "No cycle selected";
+  const historyRows = report?.history ?? [];
   const totalCard = buildAgentKpiCard(
     "Total Backlog",
     snapshot.totalBacklog,
     report?.previous?.totalBacklog ?? null,
     "number",
     "down",
-    buildCecTrendSeries(report?.history ?? [], "totalBacklog", cycleLabel)
+    buildCecTrendSeries(historyRows, "totalBacklog", cycleLabel)
   );
 
   const width = 2048;
-  const height = 760;
+  const height = 790;
   const canvas = createReportCanvas(width, height);
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
@@ -2203,7 +2228,7 @@ function downloadCecSummaryImage(report: CecReportPayload | null) {
   else drawText(ctx, "No comparison", leftX + cardW - 142, topY + 40, 13, "#64748B", "900");
   drawText(ctx, totalCard.value, leftX + 28, topY + 176, 64, "#0F172A", "900");
   drawText(ctx, "Daily history by Cycle", leftX + 28, topY + 218, 16, "#64748B", "900");
-  drawMiniLine(ctx, totalCard.history, leftX + 28, topY + 256, cardW - 56, 250, totalCard.trend === "negative" ? "#EF4444" : totalCard.trend === "positive" ? "#10B981" : "#2563EB");
+  drawMiniLine(ctx, totalCard.history, leftX + 28, topY + 256, cardW - 56, 260, totalCard.trend === "negative" ? "#EF4444" : totalCard.trend === "positive" ? "#10B981" : "#2563EB");
 
   const miniY = topY + cardH - 134;
   const miniW = (cardW - 56 - 24) / 3;
@@ -2213,14 +2238,14 @@ function downloadCecSummaryImage(report: CecReportPayload | null) {
 
   const rightInnerX = rightX + 28;
   drawText(ctx, "CEC Status", rightInnerX, topY + 42, 24, "#0F172A", "900");
-  drawCanvasCountPill(ctx, snapshot.importedAtLabel, rightX + cardW - 218, topY + 22);
+  drawCanvasTextPill(ctx, snapshot.importedAtLabel, rightX + cardW - 234, topY + 22, 206, "#EFF6FF", "#2563EB");
   const statusY = topY + 78;
   const statusW = (cardW - 56 - 24) / 3;
-  drawCecCanvasMetric(ctx, "On Hold", snapshot.onHoldCount, rightInnerX, statusY, statusW, 120, "#FFFBEB", "#B45309");
-  drawCecCanvasMetric(ctx, "Open", snapshot.openCount, rightInnerX + statusW + 12, statusY, statusW, 120, "#EFF6FF", "#2563EB");
-  drawCecCanvasMetric(ctx, "New", snapshot.newCount, rightInnerX + (statusW + 12) * 2, statusY, statusW, 120, "#ECFDF5", "#047857");
+  drawCecCanvasStatusMetric(ctx, "On Hold", snapshot.onHoldCount, buildCecTrendSeries(historyRows, "onHoldCount", cycleLabel), "amber", rightInnerX, statusY, statusW, 132);
+  drawCecCanvasStatusMetric(ctx, "Open", snapshot.openCount, buildCecTrendSeries(historyRows, "openCount", cycleLabel), "blue", rightInnerX + statusW + 12, statusY, statusW, 132);
+  drawCecCanvasStatusMetric(ctx, "New", snapshot.newCount, buildCecTrendSeries(historyRows, "newCount", cycleLabel), "green", rightInnerX + (statusW + 12) * 2, statusY, statusW, 132);
 
-  const tableY = topY + 238;
+  const tableY = topY + 250;
   const headerHeight = 40;
   const rowHeight = 58;
   const columns = [
@@ -2246,7 +2271,7 @@ function downloadCecSummaryImage(report: CecReportPayload | null) {
 
 function downloadCecTableImage(snapshot: CecReportSnapshot) {
   const departments = sortCecDepartments(snapshot.departments);
-  const width = 1560;
+  const width = 1640;
   const rowHeight = 50;
   const headerHeight = 38;
   const height = Math.max(420, 140 + headerHeight + departments.length * rowHeight);
@@ -2262,11 +2287,11 @@ function downloadCecTableImage(snapshot: CecReportSnapshot) {
   const tableX = 32;
   const tableY = 108;
   const columns = [
-    { label: "CEC Queue", x: tableX, w: 560 },
-    { label: "Bucket", x: tableX + 595, w: 150 },
-    { label: "Backlog", x: tableX + 780, w: 130 },
-    { label: "Share", x: tableX + 950, w: 130 },
-    { label: "Cycle", x: tableX + 1110, w: 360 }
+    { label: "CEC Queue", x: tableX, w: 620 },
+    { label: "Bucket", x: tableX + 655, w: 150 },
+    { label: "Backlog", x: tableX + 840, w: 130 },
+    { label: "Share", x: tableX + 1010, w: 130 },
+    { label: "Cycle", x: tableX + 1170, w: 380 }
   ];
   drawTableHeader(ctx, columns, tableY, headerHeight);
   departments.forEach((department, index) => {
@@ -2289,6 +2314,14 @@ function drawCecCanvasMetric(ctx: CanvasRenderingContext2D, title: string, value
   drawText(ctx, formatInteger(value), x + 18, y + height - 26, 34, color, "900");
 }
 
+function drawCecCanvasStatusMetric(ctx: CanvasRenderingContext2D, title: string, value: number, history: TrendPoint[], tone: "amber" | "blue" | "green", x: number, y: number, width: number, height: number) {
+  const config = getCecStatusTone(tone);
+  roundRect(ctx, x, y, width, height, 18, config.canvasBg, "#E5EAF2");
+  drawText(ctx, title, x + 18, y + 30, 13, "#64748B", "900");
+  drawText(ctx, formatInteger(value), x + 18, y + 66, 34, config.canvasText, "900");
+  drawMiniLine(ctx, history, x + 18, y + 78, width - 36, height - 96, config.chartColor);
+}
+
 function drawCecCanvasBucketPill(ctx: CanvasRenderingContext2D, value: string, x: number, y: number) {
   const config = value === "normal"
     ? { bg: "#EFF6FF", text: "#2563EB" }
@@ -2299,6 +2332,11 @@ function drawCecCanvasBucketPill(ctx: CanvasRenderingContext2D, value: string, x
         : { bg: "#E2E8F0", text: "#475569" };
   roundRect(ctx, x, y, 92, 24, 12, config.bg);
   drawText(ctx, getCecBucketLabel(value), x + 14, y + 17, 12, config.text, "900");
+}
+
+function drawCanvasTextPill(ctx: CanvasRenderingContext2D, value: string, x: number, y: number, width: number, background: string, color: string) {
+  roundRect(ctx, x, y, width, 30, 15, background);
+  drawText(ctx, truncateForCanvas(ctx, value, width - 30), x + 16, y + 20, 14, color, "900");
 }
 
 function createReportCanvas(width: number, height: number) {
@@ -2607,17 +2645,19 @@ function TrendSparkline({
   format,
   trend,
   compact = false,
-  referenceValue = null
+  referenceValue = null,
+  colorOverride = null
 }: {
   data: TrendPoint[];
   format: MetricFormat;
   trend: "positive" | "negative" | "neutral";
   compact?: boolean;
   referenceValue?: number | null;
+  colorOverride?: string | null;
 }) {
   const gradientId = `sparkline-${useId().replace(/:/g, "")}`;
   const validData = data.filter((point) => point.value !== null);
-  const color = trend === "positive" ? "#10B981" : trend === "negative" ? "#EF4444" : "#2563EB";
+  const color = colorOverride ?? (trend === "positive" ? "#10B981" : trend === "negative" ? "#EF4444" : "#2563EB");
   if (validData.length < 2) {
     return (
       <div className="grid h-full place-items-center rounded-2xl bg-slate-50 text-[11px] font-black text-muted">
