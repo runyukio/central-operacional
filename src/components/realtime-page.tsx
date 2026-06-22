@@ -2138,13 +2138,18 @@ function downloadReportQueuesImage({
   selectedCycle: string;
   rows: QueueReportRow[];
 }) {
-  const width = 1320;
+  const width = 1400;
   const rowHeight = 34;
   const sectionHeight = reportLob === "TNS" ? 26 : 0;
   const headerHeight = 30;
   const groups = groupReportRows(rows, reportLob);
   const sectionRows = groups.filter((group) => group.label).length;
-  const height = Math.max(320, 112 + rows.length * rowHeight + sectionRows * sectionHeight);
+  const tableX = 46;
+  const tableY = 88;
+  const tableFillX = tableX - 14;
+  const tableFillWidth = width - tableFillX * 2;
+  const tableContentHeight = rows.length * rowHeight + sectionRows * sectionHeight;
+  const height = Math.max(340, tableY + headerHeight + tableContentHeight + 44);
   const canvas = createReportCanvas(width, height);
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
@@ -2152,28 +2157,26 @@ function downloadReportQueuesImage({
   drawText(ctx, `REPORT ${reportLob} - QUEUES`, 32, 47, 19, "#0F172A", "900");
   drawText(ctx, selectedCycle || "No cycle selected", 32, 71, 13, "#64748B", "800");
 
-  const tableX = 26;
-  const tableY = 88;
   const columns = [
-    { label: "ID", x: tableX, w: 72 },
-    { label: "Queue", x: tableX + 92, w: 415 },
-    { label: "Department", x: tableX + 530, w: 250 },
-    { label: "Backlog", x: tableX + 800, w: 82 },
-    { label: "AHT", x: tableX + 900, w: 82 },
-    { label: "Max Latency", x: tableX + 995, w: 150 },
-    { label: reportLob === "TNS" ? "Latency Target" : "Average Latency", x: tableX + 1160, w: 125 }
+    { label: "ID", x: tableX, w: 80 },
+    { label: "Queue", x: tableX + 96, w: 410 },
+    { label: "Department", x: tableX + 522, w: 250 },
+    { label: "Backlog", x: tableX + 788, w: 75 },
+    { label: "AHT", x: tableX + 879, w: 75 },
+    { label: "Max Latency", x: tableX + 970, w: 175 },
+    { label: reportLob === "TNS" ? "Latency Target" : "Average Latency", x: tableX + 1161, w: 147 }
   ];
   drawTableHeader(ctx, columns, tableY, headerHeight);
   let cursorY = tableY + headerHeight;
   groups.forEach((group) => {
     if (group.label) {
-      fillRect(ctx, tableX - 8, cursorY, width - 36, sectionHeight, "#E2E8F0");
+      fillRect(ctx, tableFillX, cursorY, tableFillWidth, sectionHeight, "#E2E8F0");
       drawText(ctx, group.label, tableX, cursorY + 18, 11, "#475569", "900");
       cursorY += sectionHeight;
     }
     group.rows.forEach((row, index) => {
       const y = cursorY;
-      if (index % 2) fillRect(ctx, tableX - 8, y, width - 36, rowHeight, "#F3F4F6");
+      if (index % 2) fillRect(ctx, tableFillX, y, tableFillWidth, rowHeight, "#F3F4F6");
       const textY = y + 22;
       drawText(ctx, row.queueId || "N/A", columns[0].x, textY, 11, "#0F172A", "800");
       drawText(ctx, truncateForCanvas(ctx, row.reportQueueName, columns[1].w), columns[1].x, textY, 11, "#0F172A", "800");
