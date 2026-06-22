@@ -2146,7 +2146,7 @@ function resolveAgentPresenceStatus(
   const hasProduction = row.current.submit > 0 || row.current.moderationMs > 0;
   const hasRecentProduction = (row.deltas.submit ?? 0) > 0 || (row.deltas.moderationMs ?? 0) > 0 || (!row.previous && hasProduction);
 
-  if (!isScheduled) return hasProduction ? "Fora do turno" : "Offline";
+  if (!isScheduled) return hasRecentProduction ? "Fora do turno" : "Offline";
   if (hasRecentProduction) return "Online";
 
   const minutesSinceMovement = minutesSinceLastAgentMovement(row, context.selectedCycle);

@@ -1448,6 +1448,7 @@ function scheduleSlotStatusTextClass(value: string) {
 
 const scheduleWorkCountStatuses = new Set(["Escalado", "Presente", "Atraso", "Saída antecipada", "Saida antecipada", "Troca aprovada", "Venda de folga aprovada", "Nesting"]);
 const scheduleDayOffCountStatuses = new Set(["Folga", "Folga aprovada"]);
+const scheduleAbsenceCountStatuses = new Set(["Falta", "Falta Justificada", "Falta Injustificada", "Falta Just.", "Falta Injust.", "Falta s/ just.", "Ausente"]);
 
 function countScheduleStatuses(days: string[], statusSet: Set<string>) {
   return days.reduce((total, value) => total + (statusSet.has(scheduleSlotDisplayLabel(value)) || statusSet.has(value) ? 1 : 0), 0);
@@ -6615,7 +6616,7 @@ export function SchedulesPage() {
             </div>
           </div>
           <div className="overflow-x-auto">
-            {scheduleRows.length ? <table className="w-full min-w-[1080px] border-collapse text-[11.5px]">
+            {scheduleRows.length ? <table className="w-full min-w-[1130px] border-collapse text-[11.5px]">
               <thead>
                 <tr className="border-b border-border bg-slate-50 text-left text-xs font-bold uppercase tracking-wide text-muted">
                   <th className="px-3 py-2">Colaborador</th>
@@ -6623,6 +6624,7 @@ export function SchedulesPage() {
                   <th className="px-3 py-2">LOB</th>
                   <th className="px-2 py-2 text-center">Escala</th>
                   <th className="px-2 py-2 text-center">Folga</th>
+                  <th className="px-2 py-2 text-center">Faltas</th>
                   {visibleScheduleDates.map((dateIso) => (
                     <th key={dateIso} className="px-1.5 py-2 text-center">{formatScheduleDateHeader(dateIso)}</th>
                   ))}
@@ -6633,6 +6635,7 @@ export function SchedulesPage() {
                 {scheduleRows.map((row) => {
                   const workDays = countScheduleStatuses(row.days, scheduleWorkCountStatuses);
                   const dayOffDays = countScheduleStatuses(row.days, scheduleDayOffCountStatuses);
+                  const absenceDays = countScheduleStatuses(row.days, scheduleAbsenceCountStatuses);
                   return (
                   <tr key={row.employee.id} className="hover:bg-blue-50/30">
                     <td className="px-3 py-2">
@@ -6647,6 +6650,7 @@ export function SchedulesPage() {
                     <td className="px-3 py-2">{row.employee.lob}</td>
                     <td className="px-2 py-2 text-center"><span className="inline-flex min-w-10 justify-center rounded-full border border-blue-100 bg-blue-50 px-2 py-1 text-xs font-black text-blue-700">{workDays}</span></td>
                     <td className="px-2 py-2 text-center"><span className="inline-flex min-w-10 justify-center rounded-full border border-emerald-100 bg-emerald-50 px-2 py-1 text-xs font-black text-emerald-700">{dayOffDays}</span></td>
+                    <td className="px-2 py-2 text-center"><span className="inline-flex min-w-10 justify-center rounded-full border border-red-100 bg-red-50 px-2 py-1 text-xs font-black text-red-700">{absenceDays}</span></td>
                     {row.days.map((value, index) => {
                       const hourCell = row.workHours?.[index] ?? null;
                       const slotLabel = scheduleSlotDisplayLabel(value);
