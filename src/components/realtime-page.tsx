@@ -123,6 +123,7 @@ type AgentRealtimeRow = {
   personType: "Agente" | "Staff" | "Não encontrado";
   employeeStatus: string;
   presenceStatus: AgentPresenceStatus;
+  isScheduled: boolean;
   lob: string;
   supervisor: string;
   shift: string;
@@ -249,6 +250,18 @@ type AgentKpiCard = {
   direction: "up" | "down" | "none";
   format: MetricFormat;
   history: TrendPoint[];
+};
+type OnlineHeadcountGaugeData = {
+  label: string;
+  online: number;
+  scheduled: number;
+  percentage: number | null;
+  missing: number;
+  tone: "positive" | "warning" | "negative" | "neutral";
+};
+type TnsReportCards = {
+  backlog: AgentKpiCard[];
+  headcount: OnlineHeadcountGaugeData[];
 };
 
 type QueueFilters = {
@@ -584,7 +597,8 @@ export function RealTimePage() {
     downloadReportQueuesImage({
       reportLob,
       selectedCycle: selectedCycleValue,
-      rows: reportRows
+      rows: reportRows,
+      tnsCards: reportLob === "TNS" ? tnsReportCards : null
     });
   }
 
@@ -1952,13 +1966,89 @@ function ReportSummarySection({
   );
 }
 
-function TnsReportKpiSection({ cards }: { cards: AgentKpiCard[] }) {
+function TnsReportKpiSection({ cards }: { cards: TnsReportCards }) {
   return (
     <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-      {cards.map((card) => (
+      {cards.backlog.map((card) => (
         <KpiCard key={card.label} card={card} />
       ))}
+      {cards.headcount.map((card) => (
+        <OnlineHeadcountGaugeCard key={card.label} card={card} />
+      ))}
     </section>
+  );
+}
+
+function OnlineHeadcountGaugeCard({ card }: { card: OnlineHeadcountGaugeData }) {
+  const progress = card.percentage === null ? 0 : Math.max(0, Math.min(100, card.percentage));
+  const toneColor = card.tone === "positive"
+    ? "#10B981"
+    : card.tone === "warning"
+      ? "#F59E0B"
+      : card.tone === "negative"
+        ? "#EF4444"
+        : "#2563EB";
+  const toneClass = card.tone === "positive"
+    ? "bg-emerald-50 text-emerald-700"
+    : card.tone === "warning"
+      ? "bg-amber-50 text-amber-800"
+      : card.tone === "negative"
+        ? "bg-red-50 text-red-700"
+        : "bg-blue-50 text-blue-700";
+
+  return (
+    <div className="rounded-[22px] border border-slate-200/80 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)] transition hover:-translate-y-0.5 hover:shadow-[0_18px_42px_rgba(15,23,42,0.08)]">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-black uppercase tracking-[0.16em] text-muted">{card.label}</p>
+          <p className="mt-1 text-xs font-bold text-muted">Online vs planned</p>
+        </div>
+        <span className={cn("rounded-full px-2.5 py-1 text-xs font-black", toneClass)}>
+          {card.percentage === null ? "No schedule" : `${Math.round(progress)}%`}
+        </span>
+      </div>
+
+      <div className="relative mt-4 h-[128px]">
+        <svg viewBox="0 0 180 112" className="h-full w-full" role="img" aria-label={`${card.online} online of ${card.scheduled} planned`}>
+          <path
+            d="M 24 88 A 66 66 0 0 1 156 88"
+            fill="none"
+            pathLength={100}
+            stroke="#E2E8F0"
+            strokeLinecap="round"
+            strokeWidth={15}
+          />
+          <path
+            d="M 24 88 A 66 66 0 0 1 156 88"
+            fill="none"
+            pathLength={100}
+            stroke={toneColor}
+            strokeDasharray={`${progress} 100`}
+            strokeLinecap="round"
+            strokeWidth={15}
+          />
+        </svg>
+        <div className="absolute inset-x-0 bottom-1 text-center">
+          <p className="text-3xl font-black leading-none tracking-tight text-navy-950">{card.online}/{card.scheduled}</p>
+          <p className="mt-1 text-xs font-bold text-muted">online / planned</p>
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-3 gap-2 border-t border-slate-100 pt-3 text-center">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-wide text-muted">Online</p>
+          <p className="mt-1 text-sm font-black text-navy-950">{card.online}</p>
+        </div>
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-wide text-muted">Planned</p>
+          <p className="mt-1 text-sm font-black text-navy-950">{card.scheduled}</p>
+        </div>
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-wide text-muted">Gap</p>
+          <p className={cn("mt-1 text-sm font-black", card.missing > 0 ? "text-red-600" : "text-emerald-700")}>{card.missing}</p>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -2145,20 +2235,24 @@ function downloadReportSummaryImage({
 function downloadReportQueuesImage({
   reportLob,
   selectedCycle,
-  rows
+  rows,
+  tnsCards
 }: {
   reportLob: ReportLob;
   selectedCycle: string;
   rows: QueueReportRow[];
+  tnsCards?: TnsReportCards | null;
 }) {
   const width = 1400;
   const rowHeight = 34;
   const sectionHeight = reportLob === "TNS" ? 26 : 0;
   const headerHeight = 30;
+  const hasTnsSummary = reportLob === "TNS" && Boolean(tnsCards);
+  const summaryHeight = hasTnsSummary ? 210 : 0;
   const groups = groupReportRows(rows, reportLob);
   const sectionRows = groups.filter((group) => group.label).length;
   const tableX = 46;
-  const tableY = 88;
+  const tableY = 88 + summaryHeight;
   const tableFillX = tableX - 14;
   const tableFillWidth = width - tableFillX * 2;
   const tableContentHeight = rows.length * rowHeight + sectionRows * sectionHeight;
@@ -2169,6 +2263,9 @@ function downloadReportQueuesImage({
   fillReportBackground(ctx, width, height);
   drawText(ctx, `REPORT ${reportLob} - QUEUES`, 32, 47, 19, "#0F172A", "900");
   drawText(ctx, selectedCycle || "No cycle selected", 32, 71, 13, "#64748B", "800");
+  if (hasTnsSummary && tnsCards) {
+    drawTnsQueuesCanvasSummary(ctx, tnsCards, 32, 96, width - 64);
+  }
 
   const columns = [
     { label: "ID", x: tableX, w: 80 },
@@ -2208,6 +2305,87 @@ function downloadReportQueuesImage({
     });
   });
   downloadCanvas(canvas, `realtime-report-${reportLob.toLowerCase()}-queues.png`);
+}
+
+function drawTnsQueuesCanvasSummary(ctx: CanvasRenderingContext2D, cards: TnsReportCards, x: number, y: number, width: number) {
+  const gap = 12;
+  const cardWidth = (width - gap * 3) / 4;
+  const cardHeight = 162;
+  const items: Array<{ kind: "kpi"; card: AgentKpiCard } | { kind: "gauge"; card: OnlineHeadcountGaugeData }> = [
+    ...cards.backlog.map((card) => ({ kind: "kpi" as const, card })),
+    ...cards.headcount.map((card) => ({ kind: "gauge" as const, card }))
+  ];
+
+  items.forEach((item, index) => {
+    const cardX = x + index * (cardWidth + gap);
+    if (item.kind === "kpi") {
+      drawCanvasCompactKpiCard(ctx, item.card, cardX, y, cardWidth, cardHeight);
+    } else {
+      drawCanvasHeadcountGaugeCard(ctx, item.card, cardX, y, cardWidth, cardHeight);
+    }
+  });
+}
+
+function drawCanvasCompactKpiCard(ctx: CanvasRenderingContext2D, card: AgentKpiCard, x: number, y: number, width: number, height: number) {
+  roundRect(ctx, x, y, width, height, 20, "#FFFFFF", "#E5EAF2");
+  drawText(ctx, card.label, x + 18, y + 30, 12, "#64748B", "900");
+  drawText(ctx, card.value, x + 18, y + 72, 34, "#0F172A", "900");
+  if (card.hasComparison) {
+    drawCanvasDeltaPill(ctx, card.trend, card.direction, card.delta || "0", x + width - 128, y + 22);
+  } else {
+    drawText(ctx, "No comparison", x + width - 126, y + 42, 12, "#64748B", "900");
+  }
+  drawMiniLine(
+    ctx,
+    card.history,
+    x + 18,
+    y + 94,
+    width - 36,
+    height - 112,
+    card.trend === "negative" ? "#EF4444" : card.trend === "positive" ? "#10B981" : "#2563EB"
+  );
+}
+
+function drawCanvasHeadcountGaugeCard(ctx: CanvasRenderingContext2D, card: OnlineHeadcountGaugeData, x: number, y: number, width: number, height: number) {
+  const progress = card.percentage === null ? 0 : Math.max(0, Math.min(100, card.percentage));
+  const tone = card.tone === "positive"
+    ? { color: "#10B981", bg: "#D1FAE5", text: "#047857" }
+    : card.tone === "warning"
+      ? { color: "#F59E0B", bg: "#FEF3C7", text: "#B45309" }
+      : card.tone === "negative"
+        ? { color: "#EF4444", bg: "#FEE2E2", text: "#DC2626" }
+        : { color: "#2563EB", bg: "#EFF6FF", text: "#2563EB" };
+
+  roundRect(ctx, x, y, width, height, 20, "#FFFFFF", "#E5EAF2");
+  drawText(ctx, card.label, x + 18, y + 30, 12, "#64748B", "900");
+  drawText(ctx, "Online vs planned", x + 18, y + 51, 11, "#64748B", "800");
+  drawCanvasTextPill(ctx, card.percentage === null ? "No schedule" : `${Math.round(progress)}%`, x + width - 118, y + 22, 96, tone.bg, tone.text);
+
+  const centerX = x + width / 2;
+  const centerY = y + 122;
+  const radius = Math.min(74, width / 2 - 34);
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.lineWidth = 13;
+  ctx.beginPath();
+  ctx.strokeStyle = "#E2E8F0";
+  ctx.arc(centerX, centerY, radius, Math.PI, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.strokeStyle = tone.color;
+  ctx.arc(centerX, centerY, radius, Math.PI, Math.PI + Math.PI * (progress / 100));
+  ctx.stroke();
+  ctx.restore();
+
+  const value = `${card.online}/${card.scheduled}`;
+  ctx.font = "900 28px Inter, Arial, sans-serif";
+  const valueWidth = ctx.measureText(value).width;
+  drawText(ctx, value, centerX - valueWidth / 2, y + 106, 28, "#0F172A", "900");
+  const label = "online / planned";
+  ctx.font = "800 11px Inter, Arial, sans-serif";
+  const labelWidth = ctx.measureText(label).width;
+  drawText(ctx, label, centerX - labelWidth / 2, y + 128, 11, "#64748B", "800");
+  drawText(ctx, `Gap ${card.missing}`, x + 18, y + height - 18, 12, card.missing > 0 ? "#DC2626" : "#047857", "900");
 }
 
 function downloadCecSummaryImage(report: CecReportPayload | null) {
@@ -2883,47 +3061,39 @@ function buildReportBacklogKpiCard(label: string, rows: QueueReportRow[], select
   return buildAgentKpiCard(label, currentBacklog, previousBacklog, "number", "down", buildQueueTrendSeries(rows, "backlog", selectedCycle));
 }
 
-function buildTnsReportCards(reportRows: QueueReportRow[], agentRows: AgentRealtimeRow[], selectedCycle: string): AgentKpiCard[] {
+function buildTnsReportCards(reportRows: QueueReportRow[], agentRows: AgentRealtimeRow[], selectedCycle: string): TnsReportCards {
   const videoQueueRows = reportRows.filter((row) => row.lob === "VIDEO");
   const commentsQueueRows = reportRows.filter((row) => row.lob === "COMMENTS");
   const videoAgents = agentRows.filter((row) => isTnsReportAgentForLob(row, "VIDEO"));
   const commentsAgents = agentRows.filter((row) => isTnsReportAgentForLob(row, "COMMENTS"));
 
-  return [
-    buildReportBacklogKpiCard("Video Backlog", videoQueueRows, selectedCycle),
-    buildReportBacklogKpiCard("Comments Backlog", commentsQueueRows, selectedCycle),
-    buildOnlineHeadcountKpiCard("Video Online HC", videoAgents, selectedCycle),
-    buildOnlineHeadcountKpiCard("Comments Online HC", commentsAgents, selectedCycle)
-  ];
+  return {
+    backlog: [
+      buildReportBacklogKpiCard("Video Backlog", videoQueueRows, selectedCycle),
+      buildReportBacklogKpiCard("Comments Backlog", commentsQueueRows, selectedCycle)
+    ],
+    headcount: [
+      buildOnlineHeadcountGaugeCard("Video Online HC", videoAgents),
+      buildOnlineHeadcountGaugeCard("Comments Online HC", commentsAgents)
+    ]
+  };
 }
 
-function buildOnlineHeadcountKpiCard(label: string, rows: AgentRealtimeRow[], selectedCycle: string): AgentKpiCard {
-  const current = rows.filter((row) => isOnlineHeadcountStatus(row.presenceStatus)).length;
-  const previousMetrics = rows.map((row) => row.previous).filter((metric): metric is AgentMetric => Boolean(metric));
-  const previous = previousMetrics.length ? previousMetrics.filter(hasAgentProduction).length : null;
-  return buildAgentKpiCard(label, current, previous, "number", "up", buildOnlineHeadcountTrendSeries(rows, selectedCycle, current));
-}
+function buildOnlineHeadcountGaugeCard(label: string, rows: AgentRealtimeRow[]): OnlineHeadcountGaugeData {
+  const scheduled = rows.filter((row) => row.isScheduled).length;
+  const online = rows.filter((row) => row.isScheduled && isOnlineHeadcountStatus(row.presenceStatus)).length;
+  const percentage = scheduled > 0 ? (online / scheduled) * 100 : null;
+  const missing = Math.max(0, scheduled - online);
+  const tone = percentage === null ? "neutral" : percentage >= 90 ? "positive" : percentage >= 75 ? "warning" : "negative";
 
-function buildOnlineHeadcountTrendSeries(rows: AgentRealtimeRow[], selectedCycle: string, selectedValue: number): TrendPoint[] {
-  const byCycle = new Map<string, Set<string>>();
-  rows.forEach((row) => {
-    row.history.forEach((item) => {
-      if (!hasAgentProduction(item)) return;
-      const keys = byCycle.get(item.cycleDownload) ?? new Set<string>();
-      keys.add(row.key);
-      byCycle.set(item.cycleDownload, keys);
-    });
-  });
-
-  if (selectedCycle) {
-    const keys = byCycle.get(selectedCycle) ?? new Set<string>();
-    keys.clear();
-    rows.filter((row) => isOnlineHeadcountStatus(row.presenceStatus)).forEach((row) => keys.add(row.key));
-    byCycle.set(selectedCycle, keys);
-  }
-
-  const points = Array.from(byCycle.entries()).map(([cycleDownload, keys]) => ({ cycleDownload, value: keys.size }));
-  return buildTrendPoints(points, selectedCycle);
+  return {
+    label,
+    online,
+    scheduled,
+    percentage,
+    missing,
+    tone
+  };
 }
 
 function isTnsReportAgentForLob(row: AgentRealtimeRow, lob: "VIDEO" | "COMMENTS") {
@@ -2935,10 +3105,6 @@ function isTnsReportAgentForLob(row: AgentRealtimeRow, lob: "VIDEO" | "COMMENTS"
 
 function isOnlineHeadcountStatus(status: AgentPresenceStatus) {
   return status === "Online" || status === "Ocioso";
-}
-
-function hasAgentProduction(metric: Pick<AgentMetric, "submit" | "moderationMs">) {
-  return metric.submit > 0 || metric.moderationMs > 0;
 }
 
 function buildQueueLobCards(rows: QueueRealtimeRow[], selectedCycle: string): QueueLobCardData[] {

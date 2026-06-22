@@ -7,7 +7,7 @@ import type { Actor } from "@/lib/mock-db";
 import { canAccessRealTime } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { resolveQueueReference } from "@/lib/queue-dictionary";
-import { isWorkHoursAllowedForSchedule } from "@/lib/work-hours-rules";
+import { isWorkHoursAllowedForSchedule, parseWorkHoursToMinutes } from "@/lib/work-hours-rules";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
 type RawRow = Record<string, unknown>;
@@ -80,6 +80,7 @@ type AgentCycleRow = {
   personType: "Agente" | "Staff" | "Não encontrado";
   employeeStatus: string;
   presenceStatus: AgentPresenceStatus;
+  isScheduled: boolean;
   lob: string;
   supervisor: string;
   shift: string;
@@ -1738,7 +1739,8 @@ async function buildAgentRealtimeViewFromSummaryRows(
   const presenceContext = await loadAgentPresenceContext(baseRows, selectedCycle);
   const rows = baseRows.map((row) => ({
     ...row,
-    presenceStatus: resolveAgentPresenceStatus(row, presenceContext)
+    presenceStatus: resolveAgentPresenceStatus(row, presenceContext),
+    isScheduled: isAgentScheduledForPresence(row, presenceContext)
   }));
 
   const summaryCurrent = summarizeAgentRows(rows);
@@ -1801,6 +1803,7 @@ function agentSummaryToCycleRow(summary: {
     personType: coercePersonType(summary.personType),
     employeeStatus: summary.employeeStatus,
     presenceStatus: "Offline",
+    isScheduled: false,
     lob: summary.lob,
     supervisor: summary.supervisor,
     shift: summary.shift,
@@ -2090,7 +2093,7 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
 
 async function loadAgentPresenceContext(rows: AgentCycleRow[], selectedCycle: string) {
   const selectedCycleInfo = parseRealtimeCycleForPresence(selectedCycle);
-  const scheduleByEmployeeId = await loadRealtimeSchedulePresence(rows, selectedCycleInfo?.date ?? null);
+  const scheduleByEmployeeId = await loadRealtimeSchedulePresence(rows, selectedCycleInfo);
 
   return {
     selectedCycle,
@@ -2099,19 +2102,22 @@ async function loadAgentPresenceContext(rows: AgentCycleRow[], selectedCycle: st
   };
 }
 
-async function loadRealtimeSchedulePresence(rows: AgentCycleRow[], date: Date | null) {
+async function loadRealtimeSchedulePresence(rows: AgentCycleRow[], cycleInfo: ReturnType<typeof parseRealtimeCycleForPresence>) {
   const employeeIds = Array.from(new Set(rows.map((row) => row.employeeId).filter(Boolean)));
   const scheduleByEmployeeId = new Map<string, { scheduled: boolean; startsAt: string | null; endsAt: string | null }>();
-  if (!date || !employeeIds.length) return scheduleByEmployeeId;
+  if (!cycleInfo || !employeeIds.length) return scheduleByEmployeeId;
+
+  const previousDate = new Date(cycleInfo.date.getTime() - 24 * 60 * 60 * 1000);
 
   const schedules = await prisma.schedule.findMany({
     where: {
       employeeId: { in: employeeIds },
-      date,
+      date: { in: [cycleInfo.date, previousDate] },
       deletedAt: null
     },
     select: {
       employeeId: true,
+      date: true,
       status: true,
       startsAt: true,
       endsAt: true,
@@ -2120,8 +2126,9 @@ async function loadRealtimeSchedulePresence(rows: AgentCycleRow[], date: Date | 
   });
 
   schedules.forEach((schedule) => {
+    if (!isScheduleActiveAtRealtimeCycle(schedule, cycleInfo)) return;
     scheduleByEmployeeId.set(schedule.employeeId, {
-      scheduled: isWorkHoursAllowedForSchedule(schedule),
+      scheduled: true,
       startsAt: schedule.startsAt,
       endsAt: schedule.endsAt
     });
@@ -2147,6 +2154,44 @@ function resolveAgentPresenceStatus(
   if (hasProduction && minutesSinceMovement !== null && minutesSinceMovement < 60) return "Online sem produção";
 
   return "Offline";
+}
+
+function isScheduleActiveAtRealtimeCycle(
+  schedule: {
+    date: Date;
+    status?: string | null;
+    startsAt?: string | null;
+    endsAt?: string | null;
+    shift?: { name?: string | null } | null;
+  },
+  cycleInfo: NonNullable<ReturnType<typeof parseRealtimeCycleForPresence>>
+) {
+  if (!isWorkHoursAllowedForSchedule(schedule)) return false;
+
+  const startMinute = parseWorkHoursToMinutes(schedule.startsAt);
+  const endMinute = parseWorkHoursToMinutes(schedule.endsAt);
+  if (startMinute === null || endMinute === null || startMinute === endMinute) return true;
+
+  const cycleMinute = cycleInfo.hour * 60 + cycleInfo.minute;
+  const scheduleDateKey = schedule.date.toISOString().slice(0, 10);
+
+  if (endMinute > startMinute) {
+    return scheduleDateKey === cycleInfo.dateKey && cycleMinute >= startMinute && cycleMinute < endMinute;
+  }
+
+  if (scheduleDateKey === cycleInfo.dateKey) {
+    return cycleMinute >= startMinute;
+  }
+
+  const nextScheduleDateKey = new Date(schedule.date.getTime() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  return nextScheduleDateKey === cycleInfo.dateKey && cycleMinute < endMinute;
+}
+
+function isAgentScheduledForPresence(
+  row: AgentCycleRow,
+  context: Awaited<ReturnType<typeof loadAgentPresenceContext>>
+) {
+  return Boolean(row.employeeId && context.scheduleByEmployeeId.get(row.employeeId)?.scheduled);
 }
 
 function minutesSinceLastAgentMovement(row: AgentCycleRow, selectedCycle: string) {
@@ -2184,6 +2229,7 @@ function parseRealtimeCycleForPresence(value: string) {
     date: new Date(Date.UTC(Number(year), Number(month) - 1, Number(day))),
     dateKey,
     hour: Number(hour),
+    minute: Number(minute),
     timestamp
   };
 }
@@ -2330,6 +2376,7 @@ function aggregateAgentCycleRows(items: Array<{
       personType,
       employeeStatus: employee?.operationalStatus ?? "Não encontrado",
       presenceStatus: "Offline",
+      isScheduled: false,
       lob: employee?.lob ?? "Não encontrado",
       supervisor: employee?.supervisor ?? "Não encontrado",
       shift: employee?.shift ?? "Não encontrado",
