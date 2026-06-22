@@ -1983,17 +1983,17 @@ function TnsReportBacklogCard({ card }: { card: AgentKpiCard }) {
   const tone = card.trend === "positive" ? "green" : card.trend === "negative" ? "orange" : "blue";
   const lineColor = card.trend === "positive" ? "#10B981" : card.trend === "negative" ? "#EF4444" : "#2563EB";
   return (
-    <div className="flex h-full min-h-[266px] flex-col justify-between rounded-[22px] border border-slate-200/80 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)] transition hover:-translate-y-0.5 hover:shadow-[0_18px_42px_rgba(15,23,42,0.08)]">
-      <div className="flex min-h-0 items-start justify-between gap-4">
-        <div className="flex min-w-0 flex-1 flex-col">
+    <div className="flex h-full min-h-[266px] flex-col rounded-[22px] border border-slate-200/80 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)] transition hover:-translate-y-0.5 hover:shadow-[0_18px_42px_rgba(15,23,42,0.08)]">
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(150px,0.88fr)] gap-4">
+        <div className="flex min-w-0 flex-col justify-start">
           <p className="text-[11px] font-black uppercase tracking-[0.22em] text-muted">{card.label}</p>
           <p className="mt-4 text-4xl font-black leading-none tracking-tight text-navy-950">{card.value}</p>
-          <div className="mt-6">
+          <div className="mt-5">
             {card.hasComparison ? <TrendBadge trend={card.trend} direction={card.direction} value={card.delta || "0"} /> : <span className="text-xs font-black text-muted">No comparison</span>}
             <p className="mt-3 text-sm font-bold text-muted">comparado ao ciclo anterior</p>
           </div>
         </div>
-        <div className="h-[138px] w-[44%] min-w-[136px] shrink-0 overflow-hidden rounded-2xl bg-slate-50/60">
+        <div className="h-full min-h-[190px] min-w-0 overflow-hidden rounded-2xl bg-slate-50/60">
           <TrendSparkline data={card.history} format={card.format} trend={card.trend} compact colorOverride={lineColor} />
         </div>
       </div>
