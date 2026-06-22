@@ -29,6 +29,7 @@ const PROJECTABLE_SCHEDULE_STATUSES = new Set<ScheduleStatus>(["ESCALADO", "PRES
 const DEFAULT_RATE_CONFIGS = [
   { key: "BILINGUAL_HOURLY_RATE", label: "Bilingual", value: 62.5, group: "SPECIAL", displayName: "Bilingual" },
   { key: "RA_HOURLY_RATE", label: "RA", value: 14.2, group: "SPECIAL", displayName: "RA" },
+  { key: "ASSISTANT_HOURLY_RATE", label: "Assistant", value: 17.04, group: "SPECIAL", displayName: "Assistant" },
   { key: "MORNING_HOURLY_RATE", label: "Agente Manhã", value: 11.36, group: "AGENT", displayName: "Agente", shiftBucket: "MANHA" },
   { key: "AFTERNOON_HOURLY_RATE", label: "Agente Tarde", value: 11.36, group: "AGENT", displayName: "Agente", shiftBucket: "TARDE" },
   { key: "NIGHT_HOURLY_RATE", label: "Agente Noite", value: 13.1, group: "AGENT", displayName: "Agente", shiftBucket: "NOITE" },
@@ -1404,6 +1405,14 @@ function resolveHourlyRate(employee: BillingEmployee, rates: BillingRates): Bill
       billingRateSource: "Skill RA"
     };
   }
+  if (isAssistantSkill(employee.skill)) {
+    return {
+      hourlyRate: rates.ASSISTANT_HOURLY_RATE,
+      billingRule: "ASSISTANT",
+      billingRuleLabel: "Assistant",
+      billingRateSource: "Skill Assistant"
+    };
+  }
 
   const shiftBucket = officialShiftBucket(employee.shift?.name);
   if (!shiftBucket) {
@@ -1536,12 +1545,17 @@ async function validateBillingAdjustmentFinalizedTarget(cycleId: string, input: 
 
 function isSpecialBillingSkill(value?: string | null) {
   const skill = normalizeComparableJobTitle(value);
-  return skill.includes("bilingual") || skill.includes("bilingue") || skill === "ra";
+  return skill.includes("bilingual") || skill.includes("bilingue") || skill === "ra" || isAssistantSkill(value);
 }
 
 function isPocSkill(value?: string | null) {
   const skill = normalizeComparableJobTitle(value).replace(/[^a-z0-9]/g, "");
   return skill === "poc";
+}
+
+function isAssistantSkill(value?: string | null) {
+  const skill = normalizeComparableJobTitle(value);
+  return skill === "assistant" || skill === "assistente";
 }
 
 function resolveStaffRateRule(value?: string | null) {
