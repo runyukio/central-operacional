@@ -135,7 +135,7 @@ persist_failure_artifacts() {
 }
 
 run_cec_download() {
-  if [[ "${KAP_RUN_CEC:-true}" != "true" ]]; then
+  if [[ "${KAP_RUN_CEC:-false}" != "true" ]]; then
     echo "CEC Freshdesk download disabled. Set KAP_RUN_CEC=true to enable it."
     return 0
   fi

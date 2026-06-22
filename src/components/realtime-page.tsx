@@ -274,6 +274,7 @@ type QueueLobCardData = {
   aht: AgentKpiCard;
 };
 type ReportLob = "ADS" | "TNS" | "CEC";
+const CEC_REPORT_ENABLED = false;
 type QueueReportRow = QueueRealtimeRow & {
   reportQueueName: string;
   reportDepartment: string;
@@ -613,7 +614,7 @@ export function RealTimePage() {
   }, [activeTab, latestBatchId, latestCycle, latestImportedAt, selectedCycleValue]);
 
   useEffect(() => {
-    if (activeTab === "report" && reportLob === "CEC") {
+    if (CEC_REPORT_ENABLED && activeTab === "report" && reportLob === "CEC") {
       void loadCecReport(selectedCycleValue);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -703,7 +704,7 @@ export function RealTimePage() {
             <QueueLobCard key={card.lob} card={card} />
           ))}
         </div>
-      ) : reportLob === "CEC" ? (
+      ) : CEC_REPORT_ENABLED && reportLob === "CEC" ? (
         <CecReportSection report={cecReport} loading={cecLoading} error={cecError} selectedCycle={selectedCycleValue} />
       ) : reportLob === "ADS" ? (
         <ReportSummarySection card={reportBacklogCard} departments={departmentSummaries} reportLob={reportLob} selectedCycle={selectedCycleValue} onDownloadSummary={downloadReportSummary} />
@@ -772,7 +773,7 @@ export function RealTimePage() {
             <AgentTable rows={agentRows} totalRows={agentView?.rows.length ?? 0} sort={agentSort} onSort={toggleAgentSort} onSelect={setSelectedAgent} />
           ) : activeTab === "queues" ? (
             <StructuredQueueTable rows={queueRows} totalRows={queueView?.rows.length ?? 0} sort={queueSort} onSort={toggleQueueSort} onSelect={setSelectedQueue} />
-          ) : reportLob === "CEC" ? (
+          ) : CEC_REPORT_ENABLED && reportLob === "CEC" ? (
             <CecReportTable report={cecReport} loading={cecLoading} selectedCycle={selectedCycleValue} />
           ) : (
             <ReportTable rows={reportRows} reportLob={reportLob} onDownloadQueues={downloadReportQueues} />
@@ -1584,9 +1585,10 @@ function QueueLobQuickFilter({ value, onChange, options }: { value: string; onCh
 }
 
 function ReportLobQuickFilter({ value, onChange }: { value: ReportLob; onChange: (value: ReportLob) => void }) {
+  const lobs = CEC_REPORT_ENABLED ? (["ADS", "TNS", "CEC"] as const) : (["ADS", "TNS"] as const);
   return (
     <div className="flex flex-wrap items-center gap-1 rounded-2xl border border-slate-200 bg-white p-1 shadow-[0_4px_12px_rgba(7,27,58,0.035)]">
-      {(["ADS", "TNS", "CEC"] as const).map((lob) => {
+      {lobs.map((lob) => {
         const active = value === lob;
         return (
           <button
