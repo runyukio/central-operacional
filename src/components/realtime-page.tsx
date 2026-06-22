@@ -420,7 +420,7 @@ export function RealTimePage() {
   const [cecError, setCecError] = useState("");
   const snapshotAbortRef = useRef<AbortController | null>(null);
 
-  async function loadSnapshot(cycle = selectedCycle, background = false, view: "agents" | "queues" = activeTab === "agents" ? "agents" : "queues") {
+  async function loadSnapshot(cycle = selectedCycle, background = false, view: "agents" | "queues" | "both" = activeTab === "agents" ? "agents" : activeTab === "report" ? "both" : "queues") {
     snapshotAbortRef.current?.abort();
     const controller = new AbortController();
     snapshotAbortRef.current = controller;
@@ -493,7 +493,7 @@ export function RealTimePage() {
   }
 
   useEffect(() => {
-    void loadSnapshot(selectedCycle, false, activeTab === "agents" ? "agents" : "queues");
+    void loadSnapshot(selectedCycle, false, activeTab === "agents" ? "agents" : activeTab === "report" ? "both" : "queues");
     return () => {
       snapshotAbortRef.current?.abort();
     };
@@ -567,6 +567,7 @@ export function RealTimePage() {
   const reportRows = useMemo(() => buildReportRows(queueView?.rows ?? [], reportLob, reportSearch), [queueView?.rows, reportLob, reportSearch]);
   const departmentSummaries = useMemo(() => buildDepartmentReportSummaries(reportRows), [reportRows]);
   const reportBacklogCard = useMemo(() => buildReportBacklogCard(reportRows, selectedCycleValue), [reportRows, selectedCycleValue]);
+  const tnsReportCards = useMemo(() => buildTnsReportCards(reportRows, agentView?.rows ?? [], selectedCycleValue), [agentView?.rows, reportRows, selectedCycleValue]);
   const filteredAgentCards = useMemo(() => buildFilteredAgentCards(agentRows, selectedCycleValue), [agentRows, selectedCycleValue]);
   const filteredQueueCards = useMemo(() => buildQueueLobCards(queueRows, selectedCycleValue), [queueRows, selectedCycleValue]);
 
@@ -590,7 +591,7 @@ export function RealTimePage() {
   useEffect(() => {
     const interval = window.setInterval(async () => {
       try {
-        const params = new URLSearchParams({ view: activeTab === "agents" ? "agents" : "queues" });
+        const params = new URLSearchParams({ view: activeTab === "agents" ? "agents" : activeTab === "report" ? "both" : "queues" });
         const response = await fetch(`/api/realtime/latest?${params.toString()}`, { cache: "no-store" });
         const json = await response.json();
         if (!response.ok) throw new Error(json.message || json.error || "Não foi possível verificar atualização do Real Time.");
@@ -604,7 +605,7 @@ export function RealTimePage() {
         if (!latestCycleDownload || sameKnownBatch) return;
 
         const shouldFollowLatest = !selectedCycleValue || selectedCycleValue === latestCycle;
-        await loadSnapshot(shouldFollowLatest ? latestCycleDownload : selectedCycleValue, true, activeTab === "agents" ? "agents" : "queues");
+        await loadSnapshot(shouldFollowLatest ? latestCycleDownload : selectedCycleValue, true, activeTab === "agents" ? "agents" : activeTab === "report" ? "both" : "queues");
       } catch (currentError) {
         console.warn("[realtime] Auto-refresh leve falhou.", currentError);
       }
@@ -708,6 +709,8 @@ export function RealTimePage() {
         <CecReportSection report={cecReport} loading={cecLoading} error={cecError} selectedCycle={selectedCycleValue} />
       ) : reportLob === "ADS" ? (
         <ReportSummarySection card={reportBacklogCard} departments={departmentSummaries} reportLob={reportLob} selectedCycle={selectedCycleValue} onDownloadSummary={downloadReportSummary} />
+      ) : reportLob === "TNS" ? (
+        <TnsReportKpiSection cards={tnsReportCards} />
       ) : null}
 
       <section className="overflow-hidden rounded-[24px] border border-slate-200/80 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
@@ -1949,6 +1952,16 @@ function ReportSummarySection({
   );
 }
 
+function TnsReportKpiSection({ cards }: { cards: AgentKpiCard[] }) {
+  return (
+    <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      {cards.map((card) => (
+        <KpiCard key={card.label} card={card} />
+      ))}
+    </section>
+  );
+}
+
 function ReportTable({ rows, reportLob, onDownloadQueues }: { rows: QueueReportRow[]; reportLob: ReportLob; onDownloadQueues: () => void }) {
   const groups = groupReportRows(rows, reportLob);
   const columns = getReportTableColumns(reportLob);
@@ -2860,10 +2873,72 @@ function buildDepartmentReportSummaries(rows: QueueReportRow[]): DepartmentRepor
 }
 
 function buildReportBacklogCard(rows: QueueReportRow[], selectedCycle: string): AgentKpiCard {
+  return buildReportBacklogKpiCard("Total Backlog", rows, selectedCycle);
+}
+
+function buildReportBacklogKpiCard(label: string, rows: QueueReportRow[], selectedCycle: string): AgentKpiCard {
   const currentBacklog = rows.reduce((sum, row) => sum + row.current.backlog, 0);
   const previousRows = rows.map((row) => row.previous).filter((metric): metric is QueueMetric => Boolean(metric));
   const previousBacklog = previousRows.length ? previousRows.reduce((sum, row) => sum + row.backlog, 0) : null;
-  return buildAgentKpiCard("Total Backlog", currentBacklog, previousBacklog, "number", "down", buildQueueTrendSeries(rows, "backlog", selectedCycle));
+  return buildAgentKpiCard(label, currentBacklog, previousBacklog, "number", "down", buildQueueTrendSeries(rows, "backlog", selectedCycle));
+}
+
+function buildTnsReportCards(reportRows: QueueReportRow[], agentRows: AgentRealtimeRow[], selectedCycle: string): AgentKpiCard[] {
+  const videoQueueRows = reportRows.filter((row) => row.lob === "VIDEO");
+  const commentsQueueRows = reportRows.filter((row) => row.lob === "COMMENTS");
+  const videoAgents = agentRows.filter((row) => isTnsReportAgentForLob(row, "VIDEO"));
+  const commentsAgents = agentRows.filter((row) => isTnsReportAgentForLob(row, "COMMENTS"));
+
+  return [
+    buildReportBacklogKpiCard("Video Backlog", videoQueueRows, selectedCycle),
+    buildReportBacklogKpiCard("Comments Backlog", commentsQueueRows, selectedCycle),
+    buildOnlineHeadcountKpiCard("Video Online HC", videoAgents, selectedCycle),
+    buildOnlineHeadcountKpiCard("Comments Online HC", commentsAgents, selectedCycle)
+  ];
+}
+
+function buildOnlineHeadcountKpiCard(label: string, rows: AgentRealtimeRow[], selectedCycle: string): AgentKpiCard {
+  const current = rows.filter((row) => isOnlineHeadcountStatus(row.presenceStatus)).length;
+  const previousMetrics = rows.map((row) => row.previous).filter((metric): metric is AgentMetric => Boolean(metric));
+  const previous = previousMetrics.length ? previousMetrics.filter(hasAgentProduction).length : null;
+  return buildAgentKpiCard(label, current, previous, "number", "up", buildOnlineHeadcountTrendSeries(rows, selectedCycle, current));
+}
+
+function buildOnlineHeadcountTrendSeries(rows: AgentRealtimeRow[], selectedCycle: string, selectedValue: number): TrendPoint[] {
+  const byCycle = new Map<string, Set<string>>();
+  rows.forEach((row) => {
+    row.history.forEach((item) => {
+      if (!hasAgentProduction(item)) return;
+      const keys = byCycle.get(item.cycleDownload) ?? new Set<string>();
+      keys.add(row.key);
+      byCycle.set(item.cycleDownload, keys);
+    });
+  });
+
+  if (selectedCycle) {
+    const keys = byCycle.get(selectedCycle) ?? new Set<string>();
+    keys.clear();
+    rows.filter((row) => isOnlineHeadcountStatus(row.presenceStatus)).forEach((row) => keys.add(row.key));
+    byCycle.set(selectedCycle, keys);
+  }
+
+  const points = Array.from(byCycle.entries()).map(([cycleDownload, keys]) => ({ cycleDownload, value: keys.size }));
+  return buildTrendPoints(points, selectedCycle);
+}
+
+function isTnsReportAgentForLob(row: AgentRealtimeRow, lob: "VIDEO" | "COMMENTS") {
+  return row.lob === lob
+    && row.crossingStatus === "Encontrado"
+    && row.personType === "Agente"
+    && matchesEmployeeStatus(row.employeeStatus, "Ativo");
+}
+
+function isOnlineHeadcountStatus(status: AgentPresenceStatus) {
+  return status === "Online" || status === "Ocioso";
+}
+
+function hasAgentProduction(metric: Pick<AgentMetric, "submit" | "moderationMs">) {
+  return metric.submit > 0 || metric.moderationMs > 0;
 }
 
 function buildQueueLobCards(rows: QueueRealtimeRow[], selectedCycle: string): QueueLobCardData[] {

@@ -1735,7 +1735,7 @@ async function buildAgentRealtimeViewFromSummaryRows(
       };
     })
     .sort((a, b) => b.current.submit - a.current.submit || a.displayName.localeCompare(b.displayName));
-  const presenceContext = await loadAgentPresenceContext(baseRows, selectedCycle, latestBatchByCycle.get(selectedCycle)?.batchId ?? "");
+  const presenceContext = await loadAgentPresenceContext(baseRows, selectedCycle);
   const rows = baseRows.map((row) => ({
     ...row,
     presenceStatus: resolveAgentPresenceStatus(row, presenceContext)
@@ -2088,18 +2088,14 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
   };
 }
 
-async function loadAgentPresenceContext(rows: AgentCycleRow[], selectedCycle: string, selectedBatchId: string) {
+async function loadAgentPresenceContext(rows: AgentCycleRow[], selectedCycle: string) {
   const selectedCycleInfo = parseRealtimeCycleForPresence(selectedCycle);
-  const [scheduleByEmployeeId, kapStatusByAgentKey] = await Promise.all([
-    loadRealtimeSchedulePresence(rows, selectedCycleInfo?.date ?? null),
-    loadRealtimeKapStatusByAgentKey(selectedBatchId)
-  ]);
+  const scheduleByEmployeeId = await loadRealtimeSchedulePresence(rows, selectedCycleInfo?.date ?? null);
 
   return {
     selectedCycle,
     selectedCycleInfo,
-    scheduleByEmployeeId,
-    kapStatusByAgentKey
+    scheduleByEmployeeId
   };
 }
 
@@ -2134,23 +2130,6 @@ async function loadRealtimeSchedulePresence(rows: AgentCycleRow[], date: Date | 
   return scheduleByEmployeeId;
 }
 
-async function loadRealtimeKapStatusByAgentKey(batchId: string) {
-  const statusByKey = new Map<string, string>();
-  if (!batchId) return statusByKey;
-
-  const records = await prisma.realTimeRecord.findMany({
-    where: { batchId, recordType: "AGENT" },
-    select: { wbLogin: true, status: true }
-  });
-
-  records.forEach((record) => {
-    const normalized = normalizeWbLogin(record.wbLogin ?? "");
-    if (normalized && !statusByKey.has(normalized)) statusByKey.set(normalized, record.status ?? "");
-  });
-
-  return statusByKey;
-}
-
 function resolveAgentPresenceStatus(
   row: AgentCycleRow,
   context: Awaited<ReturnType<typeof loadAgentPresenceContext>>
@@ -2167,8 +2146,6 @@ function resolveAgentPresenceStatus(
   if (hasProduction && minutesSinceMovement !== null && minutesSinceMovement >= 60) return "Ocioso";
   if (hasProduction && minutesSinceMovement !== null && minutesSinceMovement < 60) return "Online sem produção";
 
-  const kapStatus = context.kapStatusByAgentKey.get(row.key) ?? "";
-  if (isKapStatusActiveSignal(kapStatus) || isWithinScheduleStartTolerance(schedule ?? null, context.selectedCycleInfo)) return "Online sem produção";
   return "Offline";
 }
 
@@ -2194,25 +2171,6 @@ function minutesSinceLastAgentMovement(row: AgentCycleRow, selectedCycle: string
 
   if (lastMovementTimestamp === null) return null;
   return Math.max(0, Math.floor((selectedInfo.timestamp - lastMovementTimestamp) / 60000));
-}
-
-function isKapStatusActiveSignal(status: string) {
-  const normalized = normalizeHeader(status);
-  if (!normalized) return false;
-  if (["offline", "deslogado", "signout", "signedout"].includes(normalized)) return false;
-  return ["revisando", "disponivel", "pausa", "refeicao", "treinamento", "reuniao", "auditing", "available"].includes(normalized);
-}
-
-function isWithinScheduleStartTolerance(
-  schedule: { startsAt: string | null; endsAt: string | null } | null,
-  selectedCycleInfo: ReturnType<typeof parseRealtimeCycleForPresence>
-) {
-  if (!schedule?.startsAt || !selectedCycleInfo) return false;
-  const [hour, minute] = schedule.startsAt.split(":").map((part) => Number(part));
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return false;
-  const startTimestamp = Date.parse(`${selectedCycleInfo.dateKey}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00-03:00`);
-  if (!Number.isFinite(startTimestamp)) return false;
-  return selectedCycleInfo.timestamp >= startTimestamp && selectedCycleInfo.timestamp - startTimestamp <= 20 * 60000;
 }
 
 function parseRealtimeCycleForPresence(value: string) {
