@@ -161,7 +161,6 @@ type FinanceiroAnalyticsRow = {
 
 type FinanceiroAnalytics = {
   currentMonth: string;
-  projectionRule: string;
   hoursSummary: { approved: string; projected: string; total: string };
   valueSummary: { revenueUsd: number; revenueBrl: number };
   costSummary: { costBrl: number };
@@ -552,24 +551,26 @@ function FinanceiroTabs({ activeTab, onChange }: { activeTab: FinanceiroTab; onC
 function HoursProjectionPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
   return (
     <Panel title="Horas e aderência">
-      <div className="grid gap-3 md:grid-cols-3">
-        <InfoBox label="Horas aprovadas" value={analytics?.hoursSummary.approved ?? "-"} />
-        <InfoBox label="Horas projetadas" value={analytics?.hoursSummary.projected ?? "-"} tone="green" />
-        <InfoBox label="Total" value={analytics?.hoursSummary.total ?? "-"} />
+      <div className="space-y-3">
+        <div className="grid gap-3 md:grid-cols-3">
+          <InfoBox label="Horas aprovadas" value={analytics?.hoursSummary.approved ?? "-"} />
+          <InfoBox label="Horas projetadas" value={analytics?.hoursSummary.projected ?? "-"} tone="green" />
+          <InfoBox label="Total" value={analytics?.hoursSummary.total ?? "-"} />
+        </div>
+        <FinanceAnalyticsTable
+          rows={analytics?.rows ?? []}
+          columns={[
+            ["Ciclo", (row) => row.invoiceCycleLabel],
+            ["LOB", (row) => row.costCenter],
+            ["Horas já aprovadas", (row) => row.hours.approved],
+            ["Horas projetadas", (row) => row.projectionAllowed ? row.hours.projected : "-"],
+            ["Total", (row) => row.hours.totalConsidered],
+            ["Aderência", (row) => `${formatPercent(row.hours.hourAdherencePercent)}%`],
+            ["ABS", (row) => `${formatPercent(row.hours.absPercent)}%`]
+          ]}
+          emptyTitle="Sem dados de horas"
+        />
       </div>
-      <FinanceAnalyticsTable
-        rows={analytics?.rows ?? []}
-        columns={[
-          ["Ciclo", (row) => row.invoiceCycleLabel],
-          ["LOB", (row) => row.costCenter],
-          ["Horas já aprovadas", (row) => row.hours.approved],
-          ["Horas projetadas", (row) => row.projectionAllowed ? row.hours.projected : "-"],
-          ["Total", (row) => row.hours.totalConsidered],
-          ["Aderência", (row) => `${formatPercent(row.hours.hourAdherencePercent)}%`],
-          ["ABS", (row) => `${formatPercent(row.hours.absPercent)}%`]
-        ]}
-        emptyTitle="Sem dados de horas"
-      />
     </Panel>
   );
 }
@@ -916,9 +917,6 @@ function ParameterFormModal({
           <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">Observações</span>
           <textarea value={form.notes} onChange={(event) => setField("notes", event.target.value)} rows={3} className="premium-control w-full px-3 py-2 text-sm font-bold outline-none" placeholder="Fonte do câmbio, regra do mês ou observação." />
         </label>
-      </div>
-      <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
-        Projeção de valores não é aplicada para meses fechados. Parâmetros salvos alteram apenas as visões financeiras, sem editar Billing ou horas importadas.
       </div>
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onClose} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Cancelar</button>

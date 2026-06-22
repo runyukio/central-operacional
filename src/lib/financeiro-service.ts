@@ -693,8 +693,9 @@ async function buildFinanceiroAnalytics(
   const cyclesByMonth = new Map(billingCycles.map((cycle) => [cycle.referenceMonth, cycle]));
   const parametersByKey = new Map(parameters.map((parameter) => [financeRecordKey(parameter.invoiceCycleMonth, parameter.costCenter), parameter]));
   const billingByKey = groupBillingFinanceRows(billingInvoices, cyclesByMonth);
-  const scheduleByKey = groupFinanceSchedules(schedules, cyclesByMonth);
-  const approvedHoursByKey = groupFinanceApprovedWorkHours(approvedWorkHours);
+  const approvedHoursData = groupFinanceApprovedWorkHours(approvedWorkHours);
+  const scheduleByKey = groupFinanceSchedules(schedules, cyclesByMonth, approvedHoursData.workedDayKeys, currentSaoPauloDateKey());
+  const approvedHoursByKey = approvedHoursData.buckets;
   const recordsByKey = new Map(records.map((record) => [financeRecordKey(record.invoiceCycleMonth, record.costCenter), record]));
   const keys = unique([
     ...Array.from(recordsByKey.keys()),
@@ -718,8 +719,13 @@ async function buildFinanceiroAnalytics(
     const cycle = cyclesByMonth.get(invoiceCycleMonth);
     const closedMonth = isFinanceMonthClosed(invoiceCycleMonth, cycle);
     const parameterView = mapFinanceiroParameter(parameter, !parametersByKey.has(key));
-    const projectedMinutes = closedMonth ? 0 : schedule.projectableMinutes;
-    const approvedMinutes = approvedHoursByKey.get(key)?.approvedMinutes ?? billing.approvedMinutes;
+    const approvedBucket = approvedHoursByKey.get(key);
+    const approvedMinutes = approvedBucket?.approvedMinutes ?? billing.approvedMinutes;
+    const hourAdherenceFactor = approvedBucket?.approvedCapacityMinutes ? clamp(approvedMinutes / approvedBucket.approvedCapacityMinutes, 0, 1) : 1;
+    const absApplicableMinutes = schedule.scheduledOpenMinutes + schedule.dayOffSaleMinutes;
+    const absBaseMinutes = absApplicableMinutes + schedule.absenceMinutes;
+    const absFactor = absBaseMinutes > 0 ? clamp(schedule.absenceMinutes / absBaseMinutes, 0, 1) : 0;
+    const projectedMinutes = closedMonth ? 0 : Math.round((schedule.presentMinutes + absApplicableMinutes * (1 - absFactor)) * hourAdherenceFactor);
     const totalCostBrl = billing.finalAmountBrl;
     const trainingMinutes = closedMonth ? 0 : schedule.trainingMinutes;
     const actualHours = (record?.billableHoursActualMinutes ?? 0) / 60;
@@ -732,8 +738,6 @@ async function buildFinanceiroAnalytics(
     const totalRevenueBrl = roundMoney(totalRevenueUsd * exchangeRate);
     const resultBrl = roundMoney(totalRevenueBrl - totalCostBrl);
     const marginPercent = totalRevenueBrl > 0 ? round2((resultBrl / totalRevenueBrl) * 100) : 0;
-    const projectedBaseMinutes = projectedMinutes + schedule.absenceMinutes;
-
     return {
       key,
       invoiceCycleMonth,
@@ -756,8 +760,8 @@ async function buildFinanceiroAnalytics(
         dayOffSale: minutesToHours(schedule.dayOffSaleMinutes),
         absence: minutesToHours(schedule.absenceMinutes),
         training: minutesToHours(trainingMinutes),
-        hourAdherencePercent: projectedBaseMinutes > 0 ? round2((projectedMinutes / projectedBaseMinutes) * 100) : 0,
-        absPercent: projectedBaseMinutes > 0 ? round2((schedule.absenceMinutes / projectedBaseMinutes) * 100) : 0
+        hourAdherencePercent: round2(hourAdherenceFactor * 100),
+        absPercent: round2(absFactor * 100)
       },
       values: {
         kwaiRevenueUsd,
@@ -797,7 +801,6 @@ async function buildFinanceiroAnalytics(
 
   return {
     currentMonth,
-    projectionRule: "",
     hoursSummary: {
       approved: minutesToHours(summaries.hoursApprovedMinutes),
       projected: minutesToHours(summaries.hoursProjectedMinutes),
@@ -925,6 +928,7 @@ type FinanceApprovedHoursBucket = {
   invoiceCycleMonth: string;
   costCenter: string;
   approvedMinutes: number;
+  approvedCapacityMinutes: number;
 };
 
 function mapFinanceiroParameter(parameter: FinanceParameterLike, isDefault = false) {
@@ -1002,6 +1006,7 @@ async function listFinanceiroProjectionSchedules(months: string[], selectedCostC
       employee: financeEmployeeWhere(selectedCostCenter)
     },
     select: {
+      employeeId: true,
       date: true,
       status: true,
       employee: { select: { lob: { select: { name: true } } } }
@@ -1021,6 +1026,7 @@ async function listFinanceiroApprovedWorkHours(months: string[], selectedCostCen
       employee: financeEmployeeWhere(selectedCostCenter)
     },
     select: {
+      employeeId: true,
       date: true,
       effectiveHours: true,
       employee: { select: { lob: { select: { name: true } } } }
@@ -1029,11 +1035,15 @@ async function listFinanceiroApprovedWorkHours(months: string[], selectedCostCen
 }
 
 function groupFinanceSchedules(
-  schedules: Array<{ date: Date; status: string; employee: { lob: { name: string } } }>,
-  cyclesByMonth: Map<string, { referenceMonth: string; status: string; closedAt: Date | null }>
+  schedules: Array<{ employeeId: string; date: Date; status: string; employee: { lob: { name: string } } }>,
+  cyclesByMonth: Map<string, { referenceMonth: string; status: string; closedAt: Date | null }>,
+  workedDayKeys: Set<string>,
+  projectionStartDateKey: string
 ) {
   const buckets = new Map<string, FinanceScheduleBucket>();
   for (const schedule of schedules) {
+    if (formatFinanceDateKey(schedule.date) <= projectionStartDateKey) continue;
+    if (workedDayKeys.has(financeEmployeeDateKey(schedule.employeeId, schedule.date))) continue;
     const invoiceCycleMonth = schedule.date.toISOString().slice(0, 7);
     if (isFinanceMonthClosed(invoiceCycleMonth, cyclesByMonth.get(invoiceCycleMonth))) continue;
     const costCenter = normalizeFinanceCostCenter(schedule.employee.lob.name);
@@ -1052,18 +1062,52 @@ function groupFinanceSchedules(
   return buckets;
 }
 
-function groupFinanceApprovedWorkHours(workHours: Array<{ date: Date; effectiveHours: number; employee: { lob: { name: string } } }>) {
+function groupFinanceApprovedWorkHours(workHours: Array<{ employeeId: string; date: Date; effectiveHours: number; employee: { lob: { name: string } } }>) {
   const buckets = new Map<string, FinanceApprovedHoursBucket>();
+  const workedDayKeys = new Set<string>();
+  const capacityDayKeys = new Set<string>();
   for (const record of workHours) {
     const invoiceCycleMonth = record.date.toISOString().slice(0, 7);
     const costCenter = normalizeFinanceCostCenter(record.employee.lob.name);
     if (!costCenter) continue;
     const key = financeRecordKey(invoiceCycleMonth, costCenter);
-    const bucket = buckets.get(key) ?? { invoiceCycleMonth, costCenter, approvedMinutes: 0 };
+    const dayKey = financeEmployeeDateKey(record.employeeId, record.date);
+    const capacityKey = `${key}:${dayKey}`;
+    const bucket = buckets.get(key) ?? { invoiceCycleMonth, costCenter, approvedMinutes: 0, approvedCapacityMinutes: 0 };
     bucket.approvedMinutes += Math.max(0, Math.round(Number(record.effectiveHours ?? 0) * 60));
+    if (!capacityDayKeys.has(capacityKey)) {
+      bucket.approvedCapacityMinutes += 480;
+      capacityDayKeys.add(capacityKey);
+    }
+    workedDayKeys.add(dayKey);
     buckets.set(key, bucket);
   }
-  return buckets;
+  return { buckets, workedDayKeys };
+}
+
+function financeEmployeeDateKey(employeeId: string, date: Date) {
+  return `${employeeId}:${formatFinanceDateKey(date)}`;
+}
+
+function formatFinanceDateKey(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function currentSaoPauloDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value ?? String(date.getUTCFullYear());
+  const month = parts.find((part) => part.type === "month")?.value ?? String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = parts.find((part) => part.type === "day")?.value ?? String(date.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function emptyBillingBucket(invoiceCycleMonth: string, costCenter: string): FinanceBillingBucket {
