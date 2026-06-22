@@ -11,6 +11,8 @@ export type PasswordUserRecord = {
   passwordHash: string;
   status: string;
   roleName: string;
+  roleTitle: string | null;
+  skill: string | null;
   mustChangePassword: boolean;
   temporaryPassword: boolean;
 };
@@ -25,9 +27,12 @@ export async function findPasswordUserByEmail(email: string, client: QueryClient
       u."name",
       u."passwordHash",
       u."status"::text AS "status",
-      r."name" AS "roleName"
+      r."name" AS "roleName",
+      ep."roleTitle",
+      ep."skill"
     FROM "User" u
     INNER JOIN "Role" r ON r."id" = u."roleId"
+    LEFT JOIN "EmployeeProfile" ep ON ep."userId" = u."id" AND ep."deletedAt" IS NULL
     WHERE lower(u."email") = ${email.toLowerCase()}
       AND u."deletedAt" IS NULL
     LIMIT 1

@@ -1,4 +1,4 @@
-import { AuditAction, Prisma } from "@prisma/client";
+import { AuditAction, Prisma, type WorkHourRecordStatus } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
 import { canAccessFinanceiro } from "@/lib/financeiro-permissions";
@@ -38,9 +38,12 @@ const FINANCEIRO_TEMPLATE_HEADERS = ["invoice_cycle_month", "cost_center", "max_
 const FINANCEIRO_DEFAULT_KWAI_HOURLY_USD = 9.39;
 const FINANCEIRO_DEFAULT_GLOBAL_HOURLY_USD = 5.965;
 const FINANCEIRO_DEFAULT_TRAINING_HOURLY_USD = 1.45;
+const FINANCEIRO_ALLOWED_COST_CENTERS = ["ADS", "CEC", "COMMENTS", "VIDEO", "PROJECT"] as const;
+const FINANCEIRO_ALLOWED_CONTRACT_TYPES = ["CLT", "PJ"] as const;
 const FINANCEIRO_PROJECTABLE_SCHEDULE_STATUSES = ["ESCALADO", "PRESENTE", "VENDA_FOLGA_APROVADA"] as const;
 const FINANCEIRO_ABSENCE_SCHEDULE_STATUSES = ["FALTA", "FALTA_JUSTIFICADA", "FALTA_INJUSTIFICADA"] as const;
 const FINANCEIRO_TRAINING_SCHEDULE_STATUSES = ["TREINAMENTO"] as const;
+const FINANCEIRO_APPROVED_WORK_HOUR_STATUSES: WorkHourRecordStatus[] = ["IMPORTED", "OK", "DIVERGENT", "ADJUSTMENT_APPROVED", "ADJUSTMENT_REJECTED", "MANUALLY_CORRECTED"];
 const FINANCEIRO_CLOSED_BILLING_STATUSES = new Set(["FECHADO", "PAGO"]);
 const FINANCEIRO_ADJUSTMENT_FIELDS = new Map<string, { label: string; type: "hours" | "percent" | "text" }>([
   ["maxHoursCapacityMinutes", { label: "Max Hours (Capacity)", type: "hours" }],
@@ -57,7 +60,7 @@ export async function getFinanceiroDashboard(actor: Actor, filters: FinanceiroFi
   const user = await requireFinanceiroUser(actor);
   if ("error" in user) return user;
   const where = buildFinanceiroWhere(filters);
-  const [records, costCenters, parameterCostCenters, sources, uploads] = await Promise.all([
+  const [records, sources, uploads] = await Promise.all([
     prisma.financeInvoiceCycleRecord.findMany({
       where,
       include: {
@@ -66,16 +69,6 @@ export async function getFinanceiroDashboard(actor: Actor, filters: FinanceiroFi
         adjustments: { orderBy: { createdAt: "desc" }, include: { createdBy: { select: { name: true, email: true } } } }
       },
       orderBy: [{ invoiceCycleMonth: "desc" }, { costCenter: "asc" }]
-    }),
-    prisma.financeInvoiceCycleRecord.findMany({
-      distinct: ["costCenter"],
-      select: { costCenter: true },
-      orderBy: { costCenter: "asc" }
-    }),
-    prisma.financeCycleParameter.findMany({
-      distinct: ["costCenter"],
-      select: { costCenter: true },
-      orderBy: { costCenter: "asc" }
     }),
     prisma.financeInvoiceCycleRecord.findMany({
       distinct: ["source"],
@@ -100,7 +93,7 @@ export async function getFinanceiroDashboard(actor: Actor, filters: FinanceiroFi
         search: filters.search || ""
       },
       filterOptions: {
-        costCenters: ["Todos", ...unique([...costCenters.map((item) => item.costCenter), ...parameterCostCenters.map((item) => item.costCenter)]).sort()],
+        costCenters: ["Todos", ...FINANCEIRO_ALLOWED_COST_CENTERS],
         sources: ["Todos", ...sources.map((item) => item.source ?? "").filter(Boolean)]
       },
       summary: buildFinanceiroSummary(records),
@@ -276,9 +269,11 @@ export async function saveFinanceiroRecord(actor: Actor, input: Record<string, u
   if ("error" in user) return user;
   const id = text(input.id);
   const invoiceCycleMonth = normalizeFinanceiroMonth(input.invoiceCycleMonth);
-  const costCenter = text(input.costCenter);
+  const rawCostCenter = text(input.costCenter);
+  const costCenter = normalizeFinanceCostCenter(rawCostCenter);
   if (!invoiceCycleMonth) return { error: "Ciclo da invoice é obrigatório.", status: 400 };
-  if (!costCenter) return { error: "Cost center é obrigatório.", status: 400 };
+  if (!rawCostCenter) return { error: "LOB é obrigatória.", status: 400 };
+  if (!costCenter) return { error: "LOB permitidas: ADS, CEC, COMMENTS, VIDEO e PROJECT.", status: 400 };
 
   const maxHoursCapacityMinutes = parseHours(input.maxHoursCapacity);
   const billableHoursTargetMinutes = parseHours(input.billableHoursTarget);
@@ -341,7 +336,7 @@ export async function saveFinanceiroRecord(actor: Actor, input: Record<string, u
     return { data: mapFinanceiroRecord(saved) };
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      return { error: "Já existe registro para este ciclo e cost center. Use Editar no registro existente.", status: 409 };
+      return { error: "Já existe registro para este ciclo e LOB. Use Editar no registro existente.", status: 409 };
     }
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
       return { error: "Registro financeiro não encontrado.", status: 404 };
@@ -354,9 +349,11 @@ export async function saveFinanceiroParameter(actor: Actor, input: Record<string
   const user = await requireFinanceiroUser(actor);
   if ("error" in user) return user;
   const invoiceCycleMonth = normalizeFinanceiroMonth(input.invoiceCycleMonth);
-  const costCenter = text(input.costCenter);
+  const rawCostCenter = text(input.costCenter);
+  const costCenter = normalizeFinanceCostCenter(rawCostCenter);
   if (!invoiceCycleMonth) return { error: "Ciclo da invoice é obrigatório para parâmetros.", status: 400 };
-  if (!costCenter || costCenter === "Todos") return { error: "Cost center é obrigatório para parâmetros.", status: 400 };
+  if (!rawCostCenter || rawCostCenter === "Todos") return { error: "LOB é obrigatória para parâmetros.", status: 400 };
+  if (!costCenter) return { error: "LOB permitidas para parâmetros: ADS, CEC, COMMENTS, VIDEO e PROJECT.", status: 400 };
 
   const kwaiHourlyUsd = parseMoneyNumber(input.kwaiHourlyUsd, FINANCEIRO_DEFAULT_KWAI_HOURLY_USD);
   const globalHourlyUsd = parseMoneyNumber(input.globalHourlyUsd, FINANCEIRO_DEFAULT_GLOBAL_HOURLY_USD);
@@ -468,8 +465,8 @@ export async function exportFinanceiro(actor: Actor, filters: FinanceiroFilters 
       },
       {
         sheetName: "Projecao horas",
-        headers: ["invoice_cycle_month", "cost_center", "mes_fechado", "horas_aprovadas", "horas_projetadas", "presente", "escalado", "venda_folga", "abs_percent", "aderencia_horas_percent"],
-        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.closedMonth ? "Sim" : "Não", row.hours.approved, row.projectionAllowed ? row.hours.projected : "", row.hours.present, row.hours.scheduledOpen, row.hours.dayOffSale, `${row.hours.absPercent}%`, `${row.hours.hourAdherencePercent}%`])
+        headers: ["invoice_cycle_month", "lob", "horas_aprovadas", "horas_projetadas", "total", "aderencia_percent", "abs_percent"],
+        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.hours.approved, row.projectionAllowed ? row.hours.projected : "", row.hours.totalConsidered, `${row.hours.hourAdherencePercent}%`, `${row.hours.absPercent}%`])
       },
       {
         sheetName: "Valores",
@@ -497,26 +494,68 @@ export async function exportFinanceiro(actor: Actor, filters: FinanceiroFilters 
 
 function buildFinanceiroWhere(filters: FinanceiroFilters = {}) {
   const where: Prisma.FinanceInvoiceCycleRecordWhereInput = {};
+  const and: Prisma.FinanceInvoiceCycleRecordWhereInput[] = [];
   const month = normalizeFinanceiroMonth(filters.invoiceCycleMonth);
   if (month) where.invoiceCycleMonth = month;
-  if (filters.costCenter && filters.costCenter !== "Todos") where.costCenter = filters.costCenter;
+  const costCenterWhere = financeAllowedRecordCostCenterWhere(filters.costCenter);
+  if (costCenterWhere) and.push(costCenterWhere);
   if (filters.source && filters.source !== "Todos") where.source = filters.source;
   if (filters.search?.trim()) {
     const search = filters.search.trim();
-    where.OR = [
-      { costCenter: { contains: search, mode: "insensitive" } },
-      { notes: { contains: search, mode: "insensitive" } },
-      { source: { contains: search, mode: "insensitive" } }
-    ];
+    and.push({
+      OR: [
+        { costCenter: { contains: search, mode: "insensitive" } },
+        { notes: { contains: search, mode: "insensitive" } },
+        { source: { contains: search, mode: "insensitive" } }
+      ]
+    });
   }
+  if (and.length) where.AND = and;
   return where;
+}
+
+function financeAllowedRecordCostCenterWhere(value?: string | null): Prisma.FinanceInvoiceCycleRecordWhereInput {
+  const hasExplicitFilter = Boolean(value && value !== "Todos");
+  const selected = normalizeFinanceCostCenter(value);
+  if (hasExplicitFilter && !selected) return { id: "__financeiro_no_allowed_cost_center__" };
+  if (selected) return { costCenter: { equals: selected, mode: "insensitive" } };
+  return { OR: FINANCEIRO_ALLOWED_COST_CENTERS.map((costCenter) => ({ costCenter: { equals: costCenter, mode: "insensitive" as const } })) };
+}
+
+function financeAllowedParameterCostCenterWhere(value?: string | null): Prisma.FinanceCycleParameterWhereInput {
+  const hasExplicitFilter = Boolean(value && value !== "Todos");
+  const selected = normalizeFinanceCostCenter(value);
+  if (hasExplicitFilter && !selected) return { id: "__financeiro_no_allowed_cost_center__" };
+  if (selected) return { costCenter: { equals: selected, mode: "insensitive" } };
+  return { OR: FINANCEIRO_ALLOWED_COST_CENTERS.map((costCenter) => ({ costCenter: { equals: costCenter, mode: "insensitive" as const } })) };
+}
+
+function financeEmployeeWhere(selectedCostCenter?: string | null): Prisma.EmployeeProfileWhereInput {
+  const selected = normalizeFinanceCostCenter(selectedCostCenter);
+  const and: Prisma.EmployeeProfileWhereInput[] = [
+    { deletedAt: null },
+    { OR: FINANCEIRO_ALLOWED_COST_CENTERS.map((costCenter) => ({ lob: { name: { equals: costCenter, mode: "insensitive" as const } } })) },
+    { OR: FINANCEIRO_ALLOWED_CONTRACT_TYPES.map((contractType) => ({ contractType: { equals: contractType, mode: "insensitive" as const } })) }
+  ];
+  if (selected) and.push({ lob: { name: { equals: selected, mode: "insensitive" } } });
+  return { AND: and };
+}
+
+function normalizeFinanceCostCenter(value?: string | null) {
+  const normalized = text(value).toUpperCase();
+  return (FINANCEIRO_ALLOWED_COST_CENTERS as readonly string[]).find((item) => item === normalized) ?? "";
+}
+
+function isFinanceCostCenterAllowed(value?: string | null) {
+  return Boolean(normalizeFinanceCostCenter(value));
 }
 
 function parseFinanceiroImportRow(row: Record<string, unknown>, rowNumber: number, seen: Map<string, number>): FinanceiroPreviewRow {
   const errors: string[] = [];
   const warnings: string[] = [];
   const invoiceCycleMonth = normalizeFinanceiroMonth(rowValue(row, ["invoice_cycle_month", "ciclo_da_invoice", "ciclo da invoice", "ciclo", "invoice cycle", "invoice month"]));
-  const costCenter = text(rowValue(row, ["cost_center", "cost center", "cost of center", "centro de custo"]));
+  const rawCostCenter = text(rowValue(row, ["cost_center", "cost center", "cost of center", "centro de custo"]));
+  const costCenter = normalizeFinanceCostCenter(rawCostCenter);
   const maxHours = parseHours(rowValue(row, ["max_hours_capacity", "max hours capacity", "max hours", "capacity"]));
   const targetHours = parseHours(rowValue(row, ["billable_hours_target", "billable hours target", "billable hours meta", "billable hours (meta)", "meta"]));
   const actualHours = parseHours(rowValue(row, ["billable_hours_actual", "billable hours actual", "billable hours real", "billable hours (real)", "real"]));
@@ -527,7 +566,8 @@ function parseFinanceiroImportRow(row: Record<string, unknown>, rowNumber: numbe
   const source = text(rowValue(row, ["source", "fonte"])) || FINANCEIRO_DEFAULT_SOURCE;
 
   if (!invoiceCycleMonth) errors.push("Ciclo da invoice inválido.");
-  if (!costCenter) errors.push("Cost center é obrigatório.");
+  if (!rawCostCenter) errors.push("LOB é obrigatória.");
+  if (rawCostCenter && !costCenter) errors.push("LOB permitidas: ADS, CEC, COMMENTS, VIDEO e PROJECT.");
   if (maxHours === null) errors.push("Max Hours inválido.");
   if (targetHours === null) errors.push("Billable Hours Meta inválido.");
   if (actualHours === null) errors.push("Billable Hours Real inválido.");
@@ -614,16 +654,17 @@ async function buildFinanceiroAnalytics(
   filters: FinanceiroFilters
 ) {
   const selectedMonth = normalizeFinanceiroMonth(filters.invoiceCycleMonth);
-  const selectedCostCenter = filters.costCenter && filters.costCenter !== "Todos" ? filters.costCenter : "";
+  const selectedCostCenter = normalizeFinanceCostCenter(filters.costCenter);
   const currentMonth = currentReferenceMonth();
   const recordMonths = unique(records.map((record) => record.invoiceCycleMonth));
   const months = unique([...(selectedMonth ? [selectedMonth] : recordMonths), currentMonth]).filter(Boolean);
   const parameterWhere: Prisma.FinanceCycleParameterWhereInput = {};
   if (selectedMonth) parameterWhere.invoiceCycleMonth = selectedMonth;
   else if (months.length) parameterWhere.invoiceCycleMonth = { in: months };
-  if (selectedCostCenter) parameterWhere.costCenter = selectedCostCenter;
+  const parameterCostCenterWhere = financeAllowedParameterCostCenterWhere(selectedCostCenter);
+  if (parameterCostCenterWhere) Object.assign(parameterWhere, parameterCostCenterWhere);
 
-  const [parameters, billingCycles, billingInvoices, schedules] = await Promise.all([
+  const [parameters, billingCycles, billingInvoices, schedules, approvedWorkHours] = await Promise.all([
     prisma.financeCycleParameter.findMany({ where: parameterWhere, orderBy: [{ invoiceCycleMonth: "desc" }, { costCenter: "asc" }] }),
     prisma.billingCycle.findMany({
       where: { referenceMonth: { in: months } },
@@ -632,7 +673,7 @@ async function buildFinanceiroAnalytics(
     prisma.billingEmployeeInvoice.findMany({
       where: {
         referenceMonth: { in: months },
-        ...(selectedCostCenter ? { employee: { lob: { name: { equals: selectedCostCenter, mode: "insensitive" } } } } : {})
+        employee: financeEmployeeWhere(selectedCostCenter)
       },
       select: {
         referenceMonth: true,
@@ -645,19 +686,22 @@ async function buildFinanceiroAnalytics(
         employee: { select: { lob: { select: { name: true } } } }
       }
     }),
-    listFinanceiroProjectionSchedules(months, selectedCostCenter)
+    listFinanceiroProjectionSchedules(months, selectedCostCenter),
+    listFinanceiroApprovedWorkHours(months, selectedCostCenter)
   ]);
 
   const cyclesByMonth = new Map(billingCycles.map((cycle) => [cycle.referenceMonth, cycle]));
   const parametersByKey = new Map(parameters.map((parameter) => [financeRecordKey(parameter.invoiceCycleMonth, parameter.costCenter), parameter]));
   const billingByKey = groupBillingFinanceRows(billingInvoices, cyclesByMonth);
   const scheduleByKey = groupFinanceSchedules(schedules, cyclesByMonth);
+  const approvedHoursByKey = groupFinanceApprovedWorkHours(approvedWorkHours);
   const recordsByKey = new Map(records.map((record) => [financeRecordKey(record.invoiceCycleMonth, record.costCenter), record]));
   const keys = unique([
     ...Array.from(recordsByKey.keys()),
     ...Array.from(parametersByKey.keys()),
     ...Array.from(billingByKey.keys()),
-    ...Array.from(scheduleByKey.keys())
+    ...Array.from(scheduleByKey.keys()),
+    ...Array.from(approvedHoursByKey.keys())
   ]);
 
   const rows = keys.map((key) => {
@@ -667,15 +711,15 @@ async function buildFinanceiroAnalytics(
     const storedParameter = parametersByKey.get(key);
     const storedBilling = billingByKey.get(key);
     const storedSchedule = scheduleByKey.get(key);
-    const costCenter = record?.costCenter ?? storedParameter?.costCenter ?? storedBilling?.costCenter ?? storedSchedule?.costCenter ?? normalizedCostCenter;
+    const costCenter = normalizeFinanceCostCenter(record?.costCenter ?? storedParameter?.costCenter ?? storedBilling?.costCenter ?? storedSchedule?.costCenter ?? normalizedCostCenter);
     const billing = storedBilling ?? emptyBillingBucket(invoiceCycleMonth, costCenter);
     const schedule = storedSchedule ?? emptyScheduleBucket(invoiceCycleMonth, costCenter);
     const parameter = storedParameter ?? defaultFinanceParameter(invoiceCycleMonth, costCenter);
     const cycle = cyclesByMonth.get(invoiceCycleMonth);
     const closedMonth = isFinanceMonthClosed(invoiceCycleMonth, cycle);
     const parameterView = mapFinanceiroParameter(parameter, !parametersByKey.has(key));
-    const projectedMinutes = closedMonth ? 0 : (billing.projectedMinutes || schedule.projectableMinutes);
-    const approvedMinutes = billing.approvedMinutes;
+    const projectedMinutes = closedMonth ? 0 : schedule.projectableMinutes;
+    const approvedMinutes = approvedHoursByKey.get(key)?.approvedMinutes ?? billing.approvedMinutes;
     const totalCostBrl = billing.finalAmountBrl;
     const trainingMinutes = closedMonth ? 0 : schedule.trainingMinutes;
     const actualHours = (record?.billableHoursActualMinutes ?? 0) / 60;
@@ -688,7 +732,7 @@ async function buildFinanceiroAnalytics(
     const totalRevenueBrl = roundMoney(totalRevenueUsd * exchangeRate);
     const resultBrl = roundMoney(totalRevenueBrl - totalCostBrl);
     const marginPercent = totalRevenueBrl > 0 ? round2((resultBrl / totalRevenueBrl) * 100) : 0;
-    const scheduleBaseMinutes = schedule.projectableMinutes + schedule.absenceMinutes;
+    const projectedBaseMinutes = projectedMinutes + schedule.absenceMinutes;
 
     return {
       key,
@@ -712,8 +756,8 @@ async function buildFinanceiroAnalytics(
         dayOffSale: minutesToHours(schedule.dayOffSaleMinutes),
         absence: minutesToHours(schedule.absenceMinutes),
         training: minutesToHours(trainingMinutes),
-        hourAdherencePercent: scheduleBaseMinutes > 0 ? round2((schedule.projectableMinutes / scheduleBaseMinutes) * 100) : 0,
-        absPercent: scheduleBaseMinutes > 0 ? round2((schedule.absenceMinutes / scheduleBaseMinutes) * 100) : 0
+        hourAdherencePercent: projectedBaseMinutes > 0 ? round2((projectedMinutes / projectedBaseMinutes) * 100) : 0,
+        absPercent: projectedBaseMinutes > 0 ? round2((schedule.absenceMinutes / projectedBaseMinutes) * 100) : 0
       },
       values: {
         kwaiRevenueUsd,
@@ -735,7 +779,8 @@ async function buildFinanceiroAnalytics(
       }
     };
   }).filter((row) => {
-    if (selectedCostCenter && row.costCenter.toLowerCase() !== selectedCostCenter.toLowerCase()) return false;
+    if (!isFinanceCostCenterAllowed(row.costCenter)) return false;
+    if (selectedCostCenter && normalizeFinanceCostCenter(row.costCenter) !== selectedCostCenter) return false;
     if (selectedMonth && row.invoiceCycleMonth !== selectedMonth) return false;
     return true;
   }).sort((a, b) => b.invoiceCycleMonth.localeCompare(a.invoiceCycleMonth) || a.costCenter.localeCompare(b.costCenter));
@@ -752,7 +797,7 @@ async function buildFinanceiroAnalytics(
 
   return {
     currentMonth,
-    projectionRule: "Projeção desabilitada para meses fechados. Em ciclo aberto, considera Escalado + Presente + Venda de folga aprovada.",
+    projectionRule: "",
     hoursSummary: {
       approved: minutesToHours(summaries.hoursApprovedMinutes),
       projected: minutesToHours(summaries.hoursProjectedMinutes),
@@ -876,6 +921,12 @@ type FinanceScheduleBucket = {
   trainingMinutes: number;
 };
 
+type FinanceApprovedHoursBucket = {
+  invoiceCycleMonth: string;
+  costCenter: string;
+  approvedMinutes: number;
+};
+
 function mapFinanceiroParameter(parameter: FinanceParameterLike, isDefault = false) {
   return {
     id: parameter.id ?? "",
@@ -918,7 +969,8 @@ function groupBillingFinanceRows(
 ) {
   const buckets = new Map<string, FinanceBillingBucket>();
   for (const invoice of invoices) {
-    const costCenter = invoice.employee.lob.name;
+    const costCenter = normalizeFinanceCostCenter(invoice.employee.lob.name);
+    if (!costCenter) continue;
     const key = financeRecordKey(invoice.referenceMonth, costCenter);
     const bucket = buckets.get(key) ?? emptyBillingBucket(invoice.referenceMonth, costCenter);
     const closedMonth = isFinanceMonthClosed(invoice.referenceMonth, cyclesByMonth.get(invoice.referenceMonth));
@@ -947,14 +999,30 @@ async function listFinanceiroProjectionSchedules(months: string[], selectedCostC
       deletedAt: null,
       date: { gte: start, lte: end },
       status: { in: [...FINANCEIRO_PROJECTABLE_SCHEDULE_STATUSES, ...FINANCEIRO_ABSENCE_SCHEDULE_STATUSES, ...FINANCEIRO_TRAINING_SCHEDULE_STATUSES] },
-      employee: {
-        deletedAt: null,
-        ...(selectedCostCenter ? { lob: { name: { equals: selectedCostCenter, mode: "insensitive" } } } : {})
-      }
+      employee: financeEmployeeWhere(selectedCostCenter)
     },
     select: {
       date: true,
       status: true,
+      employee: { select: { lob: { select: { name: true } } } }
+    }
+  });
+}
+
+async function listFinanceiroApprovedWorkHours(months: string[], selectedCostCenter: string) {
+  if (!months.length) return [];
+  const periods = months.map(monthPeriod);
+  const start = new Date(Math.min(...periods.map((period) => period.start.getTime())));
+  const end = new Date(Math.max(...periods.map((period) => period.end.getTime())));
+  return prisma.workHourRecord.findMany({
+    where: {
+      date: { gte: start, lte: end },
+      status: { in: FINANCEIRO_APPROVED_WORK_HOUR_STATUSES },
+      employee: financeEmployeeWhere(selectedCostCenter)
+    },
+    select: {
+      date: true,
+      effectiveHours: true,
       employee: { select: { lob: { select: { name: true } } } }
     }
   });
@@ -968,7 +1036,8 @@ function groupFinanceSchedules(
   for (const schedule of schedules) {
     const invoiceCycleMonth = schedule.date.toISOString().slice(0, 7);
     if (isFinanceMonthClosed(invoiceCycleMonth, cyclesByMonth.get(invoiceCycleMonth))) continue;
-    const costCenter = schedule.employee.lob.name;
+    const costCenter = normalizeFinanceCostCenter(schedule.employee.lob.name);
+    if (!costCenter) continue;
     const key = financeRecordKey(invoiceCycleMonth, costCenter);
     const bucket = buckets.get(key) ?? emptyScheduleBucket(invoiceCycleMonth, costCenter);
     const minutes = 480;
@@ -978,6 +1047,20 @@ function groupFinanceSchedules(
     if ((FINANCEIRO_PROJECTABLE_SCHEDULE_STATUSES as readonly string[]).includes(schedule.status)) bucket.projectableMinutes += minutes;
     if ((FINANCEIRO_ABSENCE_SCHEDULE_STATUSES as readonly string[]).includes(schedule.status)) bucket.absenceMinutes += minutes;
     if ((FINANCEIRO_TRAINING_SCHEDULE_STATUSES as readonly string[]).includes(schedule.status)) bucket.trainingMinutes += minutes;
+    buckets.set(key, bucket);
+  }
+  return buckets;
+}
+
+function groupFinanceApprovedWorkHours(workHours: Array<{ date: Date; effectiveHours: number; employee: { lob: { name: string } } }>) {
+  const buckets = new Map<string, FinanceApprovedHoursBucket>();
+  for (const record of workHours) {
+    const invoiceCycleMonth = record.date.toISOString().slice(0, 7);
+    const costCenter = normalizeFinanceCostCenter(record.employee.lob.name);
+    if (!costCenter) continue;
+    const key = financeRecordKey(invoiceCycleMonth, costCenter);
+    const bucket = buckets.get(key) ?? { invoiceCycleMonth, costCenter, approvedMinutes: 0 };
+    bucket.approvedMinutes += Math.max(0, Math.round(Number(record.effectiveHours ?? 0) * 60));
     buckets.set(key, bucket);
   }
   return buckets;

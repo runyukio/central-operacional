@@ -509,7 +509,7 @@ export async function backfillRealtimeCycleSummaries(options: RealtimeSummaryBac
 }
 
 export async function getRealtimeSnapshot(actor: Actor, options: RealtimeSnapshotOptions = {}) {
-  if (!canAccessRealTime({ role: actor.role, email: actor.email, name: actor.name, status: "ACTIVE" })) {
+  if (!canAccessRealTime({ role: actor.role, email: actor.email, name: actor.name, roleTitle: actor.roleTitle, jobTitle: actor.jobTitle, skill: actor.skill, status: "ACTIVE" })) {
     return { error: "Você não tem permissão para acessar Real Time.", status: 403 };
   }
 
@@ -578,7 +578,7 @@ export async function getRealtimeSnapshot(actor: Actor, options: RealtimeSnapsho
 }
 
 export async function getRealtimeLatestStatus(actor: Actor, options: RealtimeSnapshotOptions = {}) {
-  if (!canAccessRealTime({ role: actor.role, email: actor.email, name: actor.name, status: "ACTIVE" })) {
+  if (!canAccessRealTime({ role: actor.role, email: actor.email, name: actor.name, roleTitle: actor.roleTitle, jobTitle: actor.jobTitle, skill: actor.skill, status: "ACTIVE" })) {
     return { error: "Você não tem permissão para acessar Real Time.", status: 403 };
   }
 
@@ -660,7 +660,7 @@ async function latestRealtimeCycle(recordType: "QUEUE" | "AGENT") {
 }
 
 export async function listRealtimeImports(actor: Actor) {
-  if (!canAccessRealTime({ role: actor.role, email: actor.email, name: actor.name, status: "ACTIVE" })) {
+  if (!canAccessRealTime({ role: actor.role, email: actor.email, name: actor.name, roleTitle: actor.roleTitle, jobTitle: actor.jobTitle, skill: actor.skill, status: "ACTIVE" })) {
     return { error: "Você não tem permissão para acessar Real Time.", status: 403 };
   }
 

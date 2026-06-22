@@ -429,7 +429,7 @@ export function FinanceiroPage() {
     <div className="space-y-4">
       <PageHeader
         title="Financeiro"
-        description="Acompanhamento restrito por ciclo de invoice, cost center, horas billáveis e penalty percentual."
+        description="Acompanhamento restrito por ciclo de invoice, LOB, horas billáveis e penalty percentual."
         icon={LockKeyhole}
         actions={
           <div className="flex flex-wrap items-center gap-2">
@@ -467,7 +467,7 @@ export function FinanceiroPage() {
             <MonthCyclePicker value={invoiceCycleMonth} onChange={setInvoiceCycleMonth} options={monthOptions} />
           </label>
           <label className="block">
-            <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">Cost center</span>
+            <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">LOB</span>
             <select value={costCenter} onChange={(event) => setCostCenter(event.target.value)} className="premium-control h-10 w-full px-3 text-sm font-bold outline-none">
               {(payload?.data.filterOptions.costCenters ?? ["Todos"]).map((option) => <option key={option}>{option}</option>)}
             </select>
@@ -480,7 +480,7 @@ export function FinanceiroPage() {
           </label>
           <label className="block">
             <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">Busca</span>
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Cost center, fonte ou observação" className="premium-control h-10 w-full px-3 text-sm font-bold outline-none" />
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="LOB, fonte ou observação" className="premium-control h-10 w-full px-3 text-sm font-bold outline-none" />
           </label>
           <button type="button" onClick={fetchData} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">
             <RefreshCw className={cn("mr-2 inline h-4 w-4", loading && "animate-spin")} />
@@ -551,30 +551,24 @@ function FinanceiroTabs({ activeTab, onChange }: { activeTab: FinanceiroTab; onC
 
 function HoursProjectionPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
   return (
-    <Panel title="Projeção e aderência de horas">
+    <Panel title="Horas e aderência">
       <div className="grid gap-3 md:grid-cols-3">
         <InfoBox label="Horas aprovadas" value={analytics?.hoursSummary.approved ?? "-"} />
-        <InfoBox label="Projeção aberta" value={analytics?.hoursSummary.projected ?? "-"} tone="green" />
-        <InfoBox label="Total considerado" value={analytics?.hoursSummary.total ?? "-"} />
-      </div>
-      <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
-        {analytics?.projectionRule ?? "Projeções são calculadas apenas para ciclos abertos."}
+        <InfoBox label="Horas projetadas" value={analytics?.hoursSummary.projected ?? "-"} tone="green" />
+        <InfoBox label="Total" value={analytics?.hoursSummary.total ?? "-"} />
       </div>
       <FinanceAnalyticsTable
         rows={analytics?.rows ?? []}
         columns={[
           ["Ciclo", (row) => row.invoiceCycleLabel],
-          ["Cost center", (row) => row.costCenter],
-          ["Status", (row) => row.closedMonth ? "Fechado" : "Aberto"],
-          ["Aprovadas", (row) => row.hours.approved],
-          ["Projetadas", (row) => row.projectionAllowed ? row.hours.projected : "-"],
-          ["Presente", (row) => row.hours.present],
-          ["Escalado", (row) => row.hours.scheduledOpen],
-          ["Venda folga", (row) => row.hours.dayOffSale],
-          ["ABS", (row) => `${formatPercent(row.hours.absPercent)}%`],
-          ["Aderência", (row) => `${formatPercent(row.hours.hourAdherencePercent)}%`]
+          ["LOB", (row) => row.costCenter],
+          ["Horas já aprovadas", (row) => row.hours.approved],
+          ["Horas projetadas", (row) => row.projectionAllowed ? row.hours.projected : "-"],
+          ["Total", (row) => row.hours.totalConsidered],
+          ["Aderência", (row) => `${formatPercent(row.hours.hourAdherencePercent)}%`],
+          ["ABS", (row) => `${formatPercent(row.hours.absPercent)}%`]
         ]}
-        emptyTitle="Sem dados de projeção"
+        emptyTitle="Sem dados de horas"
       />
     </Panel>
   );
@@ -588,12 +582,12 @@ function ValuesPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
         <StatCard title="Receita BRL" value={formatCurrency(analytics?.valueSummary.revenueBrl ?? 0)} helper="convertida por câmbio mensal" icon={TrendingUp} tone="green" />
         <StatCard title="Câmbio" value={analytics?.rows[0]?.values.exchangeRateUsdBrl ? formatNumberValue(analytics.rows[0].values.exchangeRateUsdBrl) : "-"} helper="USD → BRL" icon={RefreshCw} tone="blue" />
       </div>
-      <Panel title="Receita por ciclo e cost center">
+      <Panel title="Receita por ciclo e LOB">
         <FinanceAnalyticsTable
           rows={analytics?.rows ?? []}
           columns={[
             ["Ciclo", (row) => row.invoiceCycleLabel],
-            ["Cost center", (row) => row.costCenter],
+            ["LOB", (row) => row.costCenter],
             ["Kwai USD", (row) => formatUsd(row.values.kwaiRevenueUsd)],
             ["Global USD", (row) => formatUsd(row.values.globalRevenueUsd)],
             ["Treinamento USD", (row) => formatUsd(row.values.trainingRevenueUsd)],
@@ -615,12 +609,12 @@ function CostsPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
         <StatCard title="Horas aprovadas" value={analytics?.hoursSummary.approved ?? "-"} helper="base realizada" icon={Clock} tone="green" />
         <StatCard title="Horas projetadas" value={analytics?.hoursSummary.projected ?? "-"} helper="somente ciclo aberto" icon={Clock} tone="blue" />
       </div>
-      <Panel title="Custos por ciclo e cost center">
+      <Panel title="Custos por ciclo e LOB">
         <FinanceAnalyticsTable
           rows={analytics?.rows ?? []}
           columns={[
             ["Ciclo", (row) => row.invoiceCycleLabel],
-            ["Cost center", (row) => row.costCenter],
+            ["LOB", (row) => row.costCenter],
             ["Status", (row) => row.closedMonth ? "Fechado" : "Aberto"],
             ["Custo aprovado", (row) => formatCurrency(row.costs.approvedCostBrl)],
             ["Custo projetado", (row) => row.projectionAllowed ? formatCurrency(row.costs.projectedCostBrl) : "-"],
@@ -642,12 +636,12 @@ function ResultPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
         <StatCard title="Custo BRL" value={formatCurrency(analytics?.costSummary.costBrl ?? 0)} helper="Billing" icon={TrendingDown} tone="orange" />
         <StatCard title="Resultado" value={formatCurrency(analytics?.resultSummary.resultBrl ?? 0)} helper={`${formatPercent(analytics?.resultSummary.marginPercent ?? 0)}% margem`} icon={(analytics?.resultSummary.resultBrl ?? 0) < 0 ? TrendingDown : TrendingUp} tone={(analytics?.resultSummary.resultBrl ?? 0) < 0 ? "red" : "green"} />
       </div>
-      <Panel title="Resultado por ciclo e cost center">
+      <Panel title="Resultado por ciclo e LOB">
         <FinanceAnalyticsTable
           rows={analytics?.rows ?? []}
           columns={[
             ["Ciclo", (row) => row.invoiceCycleLabel],
-            ["Cost center", (row) => row.costCenter],
+            ["LOB", (row) => row.costCenter],
             ["Receita BRL", (row) => formatCurrency(row.values.totalRevenueBrl)],
             ["Custo BRL", (row) => formatCurrency(row.costs.finalAmountBrl)],
             ["Resultado", (row) => formatCurrency(row.result.resultBrl)],
@@ -664,14 +658,14 @@ function ParametersPanel({ analytics, onEdit, onNew }: { analytics?: FinanceiroA
   return (
     <Panel title="Parâmetros mensais" action="Adicionar parâmetro" actionOnClick={onNew}>
       <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
-        Parâmetros são por ciclo e cost center. Câmbio zero mantém valores em USD e deixa BRL zerado até você configurar o mês.
+        Parâmetros são por ciclo e LOB. Câmbio zero mantém valores em USD e deixa BRL zerado até você configurar o mês.
       </div>
       <div className="overflow-x-auto">
         <table className="min-w-[980px] w-full text-left text-sm">
           <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-muted">
             <tr>
               <th className="px-3 py-2">Ciclo</th>
-              <th className="px-3 py-2">Cost center</th>
+              <th className="px-3 py-2">LOB</th>
               <th className="px-3 py-2">Kwai USD/h</th>
               <th className="px-3 py-2">Global USD/h</th>
               <th className="px-3 py-2">Treinamento USD/h</th>
@@ -716,7 +710,7 @@ function FinanceiroHistoryPanel({ loading, records, onView, onEdit, onAdjust }: 
             <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-muted">
               <tr>
                 <th className="px-3 py-2">Ciclo da Invoice</th>
-                <th className="px-3 py-2">Cost center</th>
+                <th className="px-3 py-2">LOB</th>
                 <th className="px-3 py-2">Max Hours</th>
                 <th className="px-3 py-2">Billable Meta</th>
                 <th className="px-3 py-2">Billable Real</th>
@@ -789,7 +783,7 @@ function RecordDetailModal({ record, onClose, onEdit, onAdjust }: { record: Fina
     <ModalShell title="Detalhe financeiro" onClose={onClose}>
       <div className="grid gap-3 md:grid-cols-2">
         <InfoBox label="Ciclo da Invoice" value={record.invoiceCycleLabel} />
-        <InfoBox label="Cost center" value={record.costCenter} />
+        <InfoBox label="LOB" value={record.costCenter} />
         <InfoBox label="Max Hours (Capacity)" value={record.maxHoursCapacity} />
         <InfoBox label="Billable Hours (Meta)" value={record.billableHoursTarget} />
         <InfoBox label="Billable Hours (Real)" value={record.billableHoursActual} />
@@ -856,8 +850,8 @@ function RecordFormModal({
           </select>
         </label>
         <label className="block">
-          <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">Cost center</span>
-          <input value={form.costCenter} onChange={(event) => setField("costCenter", event.target.value)} placeholder="ADS, CEC, TNS..." className="premium-control h-10 w-full px-3 text-sm font-bold outline-none" />
+          <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">LOB</span>
+          <input value={form.costCenter} onChange={(event) => setField("costCenter", event.target.value)} placeholder="ADS, CEC, COMMENTS, VIDEO ou PROJECT" className="premium-control h-10 w-full px-3 text-sm font-bold outline-none" />
         </label>
         <FormInput label="Max Hours (Capacity)" value={form.maxHoursCapacity} onChange={(value) => setField("maxHoursCapacity", value)} placeholder="12000:00" />
         <FormInput label="Billable Hours (Meta)" value={form.billableHoursTarget} onChange={(value) => setField("billableHoursTarget", value)} placeholder="10200:00" />
@@ -913,7 +907,7 @@ function ParameterFormModal({
             {monthOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </label>
-        <FormInput label="Cost center" value={form.costCenter} onChange={(value) => setField("costCenter", value)} placeholder="ADS, CEC ou TNS" />
+        <FormInput label="LOB" value={form.costCenter} onChange={(value) => setField("costCenter", value)} placeholder="ADS, CEC, COMMENTS, VIDEO ou PROJECT" />
         <FormInput label="Kwai USD/h" value={form.kwaiHourlyUsd} onChange={(value) => setField("kwaiHourlyUsd", value)} placeholder="9,39" />
         <FormInput label="Global USD/h" value={form.globalHourlyUsd} onChange={(value) => setField("globalHourlyUsd", value)} placeholder="5,965" />
         <FormInput label="Treinamento USD/h" value={form.trainingHourlyUsd} onChange={(value) => setField("trainingHourlyUsd", value)} placeholder="1,45" />
@@ -1014,7 +1008,7 @@ function UploadModal({ preview, uploading, inputRef, onClose, onPreview, onCommi
   return (
     <ModalShell title="Upload histórico financeiro" onClose={onClose} wide>
       <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-sm font-semibold text-blue-800">
-        Envie XLSX com ciclo, cost center, horas, aderence e penalty %. Penalty será importado somente como percentual.
+        Envie XLSX com ciclo, LOB, horas, aderence e penalty %. Penalty será importado somente como percentual.
       </div>
       <label className="block">
         <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">Arquivo XLSX</span>
@@ -1036,7 +1030,7 @@ function UploadModal({ preview, uploading, inputRef, onClose, onPreview, onCommi
                 <tr>
                   <th className="px-2 py-2">Linha</th>
                   <th className="px-2 py-2">Ciclo</th>
-                  <th className="px-2 py-2">Cost center</th>
+                  <th className="px-2 py-2">LOB</th>
                   <th className="px-2 py-2">Max</th>
                   <th className="px-2 py-2">Meta</th>
                   <th className="px-2 py-2">Real</th>

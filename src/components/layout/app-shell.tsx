@@ -73,6 +73,9 @@ type ShellUser = {
   name?: string | null;
   email?: string | null;
   role?: string;
+  roleTitle?: string | null;
+  jobTitle?: string | null;
+  skill?: string | null;
 };
 
 type HeaderNotification = {
@@ -113,7 +116,7 @@ export function AppShell({
   const router = useRouter();
   const { theme, toggleTheme } = useTheme();
   const role = user.role ?? "COLABORADOR";
-  const navItems = getNavItems(role).filter((item) =>
+  const navItems = getNavItems(user).filter((item) =>
     (item.href !== "/billing" || billingAccess) &&
     (item.href !== "/financeiro" || financeiroAccess)
   );

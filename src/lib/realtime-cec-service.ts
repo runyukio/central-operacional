@@ -164,7 +164,7 @@ export async function importRealtimeCecSnapshot(input: RealtimeCecImportInput) {
 }
 
 export async function getRealtimeCecReport(actor: Actor, options: { cycleDownload?: string } = {}) {
-  if (!canAccessRealTime({ role: actor.role, email: actor.email, name: actor.name, status: "ACTIVE" })) {
+  if (!canAccessRealTime({ role: actor.role, email: actor.email, name: actor.name, roleTitle: actor.roleTitle, jobTitle: actor.jobTitle, skill: actor.skill, status: "ACTIVE" })) {
     return { error: "Você não tem permissão para acessar Real Time.", status: 403 };
   }
 

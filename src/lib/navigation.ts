@@ -1,5 +1,5 @@
 import type { AppRole } from "@/lib/demo-auth";
-import { normalizeRole } from "@/lib/permissions";
+import { canAccessRealTime, normalizeRole, type PermissionUser } from "@/lib/permissions";
 
 export type NavItem = {
   label: string;
@@ -40,9 +40,10 @@ export const navItems: NavItem[] = [
   { label: "Configurações", href: "/configuracoes", icon: "Settings", roles: ["ADMIN"] }
 ];
 
-export function getNavItems(role?: string) {
-  const normalizedRole = normalizeRole(role);
-  return navItems.filter((item) => item.roles.includes(normalizedRole));
+export function getNavItems(userOrRole?: string | PermissionUser) {
+  const user = typeof userOrRole === "string" ? { role: userOrRole } : userOrRole;
+  const normalizedRole = normalizeRole(user?.role);
+  return navItems.filter((item) => item.roles.includes(normalizedRole) || (item.href === "/real-time" && canAccessRealTime({ ...user, status: user?.status ?? "ACTIVE" })));
 }
 
 export function getDefaultPathForRole(role?: string) {
@@ -51,8 +52,9 @@ export function getDefaultPathForRole(role?: string) {
   return normalizedRole === "COLABORADOR" ? "/meu-perfil" : "/central-operacional";
 }
 
-export function canAccessPathForRole(pathname: string, role?: string) {
-  const normalizedRole = normalizeRole(role);
+export function canAccessPathForRole(pathname: string, userOrRole?: string | PermissionUser) {
+  const user = typeof userOrRole === "string" ? { role: userOrRole } : userOrRole;
+  const normalizedRole = normalizeRole(user?.role);
   if (normalizedRole === "CLIENT") {
     if (pathname === "/" || pathname === "/alterar-senha") return true;
     if (pathname === "/performance" || pathname.startsWith("/performance/")) return true;
@@ -64,6 +66,7 @@ export function canAccessPathForRole(pathname: string, role?: string) {
     return false;
   }
   if (pathname === "/meu-perfil" || pathname.startsWith("/perfil/")) return nonClientRoles.includes(normalizedRole);
+  if (pathname === "/real-time" || pathname.startsWith("/real-time/")) return canAccessRealTime({ ...user, status: user?.status ?? "ACTIVE" });
   const protectedItem = navItems.find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
   return protectedItem ? protectedItem.roles.includes(normalizedRole) : true;
 }

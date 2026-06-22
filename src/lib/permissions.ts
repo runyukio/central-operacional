@@ -8,6 +8,7 @@ export type PermissionUser = {
   status?: string | null;
   roleTitle?: string | null;
   jobTitle?: string | null;
+  skill?: string | null;
 };
 
 export type PermissionEmployee = {
@@ -109,7 +110,13 @@ export function canAccessStaffCoverage(user: PermissionUser) {
 
 export function canAccessRealTime(user: PermissionUser) {
   const role = normalizeRole(user.role);
-  return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(role);
+  if (!isActiveUser(user)) return false;
+  if (["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(role)) return true;
+  return isRtaSkill(user.skill);
+}
+
+export function isRtaSkill(value?: string | null) {
+  return /(^|[^a-z0-9])rta([^a-z0-9]|$)/.test(normalizeComparableJobTitle(value));
 }
 
 export function canAccessWorkSessionMonitoring(user: PermissionUser) {

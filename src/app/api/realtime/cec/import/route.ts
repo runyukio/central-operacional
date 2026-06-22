@@ -16,7 +16,7 @@ export async function POST(request: Request) {
     }
   } else {
     const actor = await getApiActor();
-    if (!canAccessRealTime({ role: actor.role, email: actor.email, name: actor.name, status: "ACTIVE" })) {
+    if (!canAccessRealTime({ role: actor.role, email: actor.email, name: actor.name, roleTitle: actor.roleTitle, jobTitle: actor.jobTitle, skill: actor.skill, status: "ACTIVE" })) {
       return NextResponse.json({ success: false, error: "Você não tem permissão para importar CEC.", message: "Você não tem permissão para importar CEC." }, { status: 403 });
     }
   }

@@ -53,6 +53,9 @@ export const authOptions: NextAuthOptions = {
                 email: user.email,
                 name: user.name,
                 role: user.roleName,
+                roleTitle: user.roleTitle,
+                jobTitle: user.roleTitle,
+                skill: user.skill,
                 mustChangePassword: user.mustChangePassword
               } as never;
             }
@@ -96,6 +99,9 @@ export const authOptions: NextAuthOptions = {
     async jwt({ token, user }) {
       if (user) {
         token.role = (user as { role?: string }).role;
+        token.roleTitle = (user as { roleTitle?: string | null }).roleTitle ?? null;
+        token.jobTitle = (user as { jobTitle?: string | null }).jobTitle ?? null;
+        token.skill = (user as { skill?: string | null }).skill ?? null;
         token.mustChangePassword = Boolean((user as { mustChangePassword?: boolean }).mustChangePassword);
       }
       return token;
@@ -104,6 +110,9 @@ export const authOptions: NextAuthOptions = {
       if (session.user) {
         session.user.id = token.sub ?? "";
         session.user.role = String(token.role ?? "COLABORADOR");
+        session.user.roleTitle = typeof token.roleTitle === "string" ? token.roleTitle : null;
+        session.user.jobTitle = typeof token.jobTitle === "string" ? token.jobTitle : null;
+        session.user.skill = typeof token.skill === "string" ? token.skill : null;
         session.user.mustChangePassword = Boolean(token.mustChangePassword);
       }
       return session;

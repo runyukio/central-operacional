@@ -32,7 +32,17 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL(getDefaultPathForRole(role), request.url));
   }
 
-  if (!canAccessPathForRole(pathname, role)) {
+  const permissionUser = {
+    role,
+    email: typeof token.email === "string" ? token.email : null,
+    name: typeof token.name === "string" ? token.name : null,
+    roleTitle: typeof token.roleTitle === "string" ? token.roleTitle : null,
+    jobTitle: typeof token.jobTitle === "string" ? token.jobTitle : null,
+    skill: typeof token.skill === "string" ? token.skill : null,
+    status: "ACTIVE"
+  };
+
+  if (!canAccessPathForRole(pathname, permissionUser)) {
     if (pathname.startsWith("/api/")) {
       return NextResponse.json({ success: false, error: "Você não tem permissão para acessar esta página.", message: "Você não tem permissão para acessar esta página." }, { status: 403 });
     }
