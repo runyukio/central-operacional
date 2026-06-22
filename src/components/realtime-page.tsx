@@ -2778,6 +2778,10 @@ function compareReportRows(a: QueueReportRow, b: QueueReportRow, reportLob: Repo
   if (lobOrder !== 0) return lobOrder;
   const targetOrder = normalizeSlaForSort(a.slaTargetMinutes) - normalizeSlaForSort(b.slaTargetMinutes);
   if (targetOrder !== 0) return targetOrder;
+  if (reportLob === "TNS") {
+    const maxLatencyOrder = compareNullableNumberDesc(a.current.maxLatencyMs, b.current.maxLatencyMs);
+    if (maxLatencyOrder !== 0) return maxLatencyOrder;
+  }
   const departmentOrder = a.reportDepartment.localeCompare(b.reportDepartment, "pt-BR", { sensitivity: "base" });
   if (departmentOrder !== 0) return departmentOrder;
   return a.reportQueueName.localeCompare(b.reportQueueName, "pt-BR", { sensitivity: "base" });
@@ -2792,6 +2796,12 @@ function getReportLobOrder(lob: QueueRealtimeRow["lob"]) {
 
 function normalizeSlaForSort(value: number | null) {
   return value === null ? Number.POSITIVE_INFINITY : value;
+}
+
+function compareNullableNumberDesc(a: number | null, b: number | null) {
+  const left = a === null || !Number.isFinite(a) ? Number.NEGATIVE_INFINITY : a;
+  const right = b === null || !Number.isFinite(b) ? Number.NEGATIVE_INFINITY : b;
+  return right - left;
 }
 
 function groupReportRows(rows: QueueReportRow[], reportLob: ReportLob): Array<{ label: string; rows: QueueReportRow[] }> {
