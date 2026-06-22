@@ -694,7 +694,9 @@ async function buildFinanceiroAnalytics(
   const parametersByKey = new Map(parameters.map((parameter) => [financeRecordKey(parameter.invoiceCycleMonth, parameter.costCenter), parameter]));
   const billingByKey = groupBillingFinanceRows(billingInvoices, cyclesByMonth);
   const approvedHoursData = groupFinanceApprovedWorkHours(approvedWorkHours);
-  const scheduleByKey = groupFinanceSchedules(schedules, cyclesByMonth, approvedHoursData.workedDayKeys, currentSaoPauloDateKey());
+  const scheduleData = groupFinanceSchedules(schedules, cyclesByMonth, approvedHoursData.workedDayKeys, currentSaoPauloDateKey());
+  const scheduleByKey = scheduleData.futureBuckets;
+  const actualScheduleByKey = scheduleData.actualBuckets;
   const approvedHoursByKey = approvedHoursData.buckets;
   const recordsByKey = new Map(records.map((record) => [financeRecordKey(record.invoiceCycleMonth, record.costCenter), record]));
   const keys = unique([
@@ -702,6 +704,7 @@ async function buildFinanceiroAnalytics(
     ...Array.from(parametersByKey.keys()),
     ...Array.from(billingByKey.keys()),
     ...Array.from(scheduleByKey.keys()),
+    ...Array.from(actualScheduleByKey.keys()),
     ...Array.from(approvedHoursByKey.keys())
   ]);
 
@@ -712,19 +715,21 @@ async function buildFinanceiroAnalytics(
     const storedParameter = parametersByKey.get(key);
     const storedBilling = billingByKey.get(key);
     const storedSchedule = scheduleByKey.get(key);
-    const costCenter = normalizeFinanceCostCenter(record?.costCenter ?? storedParameter?.costCenter ?? storedBilling?.costCenter ?? storedSchedule?.costCenter ?? normalizedCostCenter);
+    const storedActualSchedule = actualScheduleByKey.get(key);
+    const costCenter = normalizeFinanceCostCenter(record?.costCenter ?? storedParameter?.costCenter ?? storedBilling?.costCenter ?? storedSchedule?.costCenter ?? storedActualSchedule?.costCenter ?? normalizedCostCenter);
     const billing = storedBilling ?? emptyBillingBucket(invoiceCycleMonth, costCenter);
     const schedule = storedSchedule ?? emptyScheduleBucket(invoiceCycleMonth, costCenter);
+    const actualSchedule = storedActualSchedule ?? emptyActualScheduleBucket(invoiceCycleMonth, costCenter);
     const parameter = storedParameter ?? defaultFinanceParameter(invoiceCycleMonth, costCenter);
     const cycle = cyclesByMonth.get(invoiceCycleMonth);
     const closedMonth = isFinanceMonthClosed(invoiceCycleMonth, cycle);
     const parameterView = mapFinanceiroParameter(parameter, !parametersByKey.has(key));
     const approvedBucket = approvedHoursByKey.get(key);
     const approvedMinutes = approvedBucket?.approvedMinutes ?? billing.approvedMinutes;
-    const hourAdherenceFactor = approvedBucket?.approvedCapacityMinutes ? clamp(approvedMinutes / approvedBucket.approvedCapacityMinutes, 0, 1) : 1;
+    const hourAdherenceFactor = actualSchedule.elapsedProjectableMinutes > 0 ? clamp(approvedMinutes / actualSchedule.elapsedProjectableMinutes, 0, 1) : 1;
     const absApplicableMinutes = schedule.scheduledOpenMinutes + schedule.dayOffSaleMinutes;
-    const absBaseMinutes = absApplicableMinutes + schedule.absenceMinutes;
-    const absFactor = absBaseMinutes > 0 ? clamp(schedule.absenceMinutes / absBaseMinutes, 0, 1) : 0;
+    const absBaseMinutes = actualSchedule.elapsedProjectableMinutes + actualSchedule.elapsedAbsenceMinutes;
+    const absFactor = absBaseMinutes > 0 ? clamp(actualSchedule.elapsedAbsenceMinutes / absBaseMinutes, 0, 1) : 0;
     const projectedMinutes = closedMonth ? 0 : Math.round((schedule.presentMinutes + absApplicableMinutes * (1 - absFactor)) * hourAdherenceFactor);
     const totalCostBrl = billing.finalAmountBrl;
     const trainingMinutes = closedMonth ? 0 : schedule.trainingMinutes;
@@ -924,11 +929,17 @@ type FinanceScheduleBucket = {
   trainingMinutes: number;
 };
 
+type FinanceActualScheduleBucket = {
+  invoiceCycleMonth: string;
+  costCenter: string;
+  elapsedProjectableMinutes: number;
+  elapsedAbsenceMinutes: number;
+};
+
 type FinanceApprovedHoursBucket = {
   invoiceCycleMonth: string;
   costCenter: string;
   approvedMinutes: number;
-  approvedCapacityMinutes: number;
 };
 
 function mapFinanceiroParameter(parameter: FinanceParameterLike, isDefault = false) {
@@ -1040,45 +1051,47 @@ function groupFinanceSchedules(
   workedDayKeys: Set<string>,
   projectionStartDateKey: string
 ) {
-  const buckets = new Map<string, FinanceScheduleBucket>();
+  const futureBuckets = new Map<string, FinanceScheduleBucket>();
+  const actualBuckets = new Map<string, FinanceActualScheduleBucket>();
   for (const schedule of schedules) {
-    if (formatFinanceDateKey(schedule.date) <= projectionStartDateKey) continue;
-    if (workedDayKeys.has(financeEmployeeDateKey(schedule.employeeId, schedule.date))) continue;
     const invoiceCycleMonth = schedule.date.toISOString().slice(0, 7);
     if (isFinanceMonthClosed(invoiceCycleMonth, cyclesByMonth.get(invoiceCycleMonth))) continue;
     const costCenter = normalizeFinanceCostCenter(schedule.employee.lob.name);
     if (!costCenter) continue;
     const key = financeRecordKey(invoiceCycleMonth, costCenter);
-    const bucket = buckets.get(key) ?? emptyScheduleBucket(invoiceCycleMonth, costCenter);
     const minutes = 480;
+    const scheduleDateKey = formatFinanceDateKey(schedule.date);
+    if (scheduleDateKey <= projectionStartDateKey) {
+      const bucket = actualBuckets.get(key) ?? emptyActualScheduleBucket(invoiceCycleMonth, costCenter);
+      if ((FINANCEIRO_PROJECTABLE_SCHEDULE_STATUSES as readonly string[]).includes(schedule.status)) bucket.elapsedProjectableMinutes += minutes;
+      if ((FINANCEIRO_ABSENCE_SCHEDULE_STATUSES as readonly string[]).includes(schedule.status)) bucket.elapsedAbsenceMinutes += minutes;
+      actualBuckets.set(key, bucket);
+      continue;
+    }
+    if (workedDayKeys.has(financeEmployeeDateKey(schedule.employeeId, schedule.date))) continue;
+    const bucket = futureBuckets.get(key) ?? emptyScheduleBucket(invoiceCycleMonth, costCenter);
     if (schedule.status === "ESCALADO") bucket.scheduledOpenMinutes += minutes;
     if (schedule.status === "PRESENTE") bucket.presentMinutes += minutes;
     if (schedule.status === "VENDA_FOLGA_APROVADA") bucket.dayOffSaleMinutes += minutes;
     if ((FINANCEIRO_PROJECTABLE_SCHEDULE_STATUSES as readonly string[]).includes(schedule.status)) bucket.projectableMinutes += minutes;
     if ((FINANCEIRO_ABSENCE_SCHEDULE_STATUSES as readonly string[]).includes(schedule.status)) bucket.absenceMinutes += minutes;
     if ((FINANCEIRO_TRAINING_SCHEDULE_STATUSES as readonly string[]).includes(schedule.status)) bucket.trainingMinutes += minutes;
-    buckets.set(key, bucket);
+    futureBuckets.set(key, bucket);
   }
-  return buckets;
+  return { futureBuckets, actualBuckets };
 }
 
 function groupFinanceApprovedWorkHours(workHours: Array<{ employeeId: string; date: Date; effectiveHours: number; employee: { lob: { name: string } } }>) {
   const buckets = new Map<string, FinanceApprovedHoursBucket>();
   const workedDayKeys = new Set<string>();
-  const capacityDayKeys = new Set<string>();
   for (const record of workHours) {
     const invoiceCycleMonth = record.date.toISOString().slice(0, 7);
     const costCenter = normalizeFinanceCostCenter(record.employee.lob.name);
     if (!costCenter) continue;
     const key = financeRecordKey(invoiceCycleMonth, costCenter);
     const dayKey = financeEmployeeDateKey(record.employeeId, record.date);
-    const capacityKey = `${key}:${dayKey}`;
-    const bucket = buckets.get(key) ?? { invoiceCycleMonth, costCenter, approvedMinutes: 0, approvedCapacityMinutes: 0 };
+    const bucket = buckets.get(key) ?? { invoiceCycleMonth, costCenter, approvedMinutes: 0 };
     bucket.approvedMinutes += Math.max(0, Math.round(Number(record.effectiveHours ?? 0) * 60));
-    if (!capacityDayKeys.has(capacityKey)) {
-      bucket.approvedCapacityMinutes += 480;
-      capacityDayKeys.add(capacityKey);
-    }
     workedDayKeys.add(dayKey);
     buckets.set(key, bucket);
   }
@@ -1133,6 +1146,15 @@ function emptyScheduleBucket(invoiceCycleMonth: string, costCenter: string): Fin
     dayOffSaleMinutes: 0,
     absenceMinutes: 0,
     trainingMinutes: 0
+  };
+}
+
+function emptyActualScheduleBucket(invoiceCycleMonth: string, costCenter: string): FinanceActualScheduleBucket {
+  return {
+    invoiceCycleMonth,
+    costCenter,
+    elapsedProjectableMinutes: 0,
+    elapsedAbsenceMinutes: 0
   };
 }
 
