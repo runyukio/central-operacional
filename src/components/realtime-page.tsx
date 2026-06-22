@@ -3106,7 +3106,7 @@ function buildTnsReportCards(reportRows: QueueReportRow[], agentRows: AgentRealt
 
 function buildOnlineHeadcountGaugeCard(label: string, rows: AgentRealtimeRow[]): OnlineHeadcountGaugeData {
   const scheduled = rows.filter((row) => row.isScheduled).length;
-  const online = rows.filter((row) => row.isScheduled && isOnlineHeadcountStatus(row.presenceStatus)).length;
+  const online = rows.filter((row) => isOnlineHeadcountStatus(row.presenceStatus)).length;
   const percentage = scheduled > 0 ? (online / scheduled) * 100 : null;
   const missing = Math.max(0, scheduled - online);
   const tone = percentage === null ? "neutral" : percentage >= 90 ? "positive" : percentage >= 75 ? "warning" : "negative";
@@ -3129,7 +3129,7 @@ function isTnsReportAgentForLob(row: AgentRealtimeRow, lob: "VIDEO" | "COMMENTS"
 }
 
 function isOnlineHeadcountStatus(status: AgentPresenceStatus) {
-  return status === "Online" || status === "Ocioso";
+  return status === "Online" || status === "Ocioso" || status === "Fora do turno";
 }
 
 function buildQueueLobCards(rows: QueueRealtimeRow[], selectedCycle: string): QueueLobCardData[] {
