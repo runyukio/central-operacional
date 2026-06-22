@@ -112,11 +112,21 @@ export function canAccessRealTime(user: PermissionUser) {
   const role = normalizeRole(user.role);
   if (!isActiveUser(user)) return false;
   if (["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(role)) return true;
-  return isRtaSkill(user.skill);
+  return isRtaSkill(user.skill) || isRtaSkill(user.roleTitle) || isRtaSkill(user.jobTitle);
 }
 
 export function isRtaSkill(value?: string | null) {
-  return /(^|[^a-z0-9])rta([^a-z0-9]|$)/.test(normalizeComparableJobTitle(value));
+  const normalized = normalizeComparableJobTitle(value);
+  if (!normalized) return false;
+  const compact = normalized.replace(/[^a-z0-9]/g, "");
+  return (
+    /(^|[^a-z0-9])rta([^a-z0-9]|$)/.test(normalized) ||
+    compact === "rta" ||
+    compact === "realtime" ||
+    compact.includes("realtimeanalyst") ||
+    compact.includes("analistarealtime") ||
+    compact.includes("analistarta")
+  );
 }
 
 export function canAccessWorkSessionMonitoring(user: PermissionUser) {

@@ -2138,55 +2138,55 @@ function downloadReportQueuesImage({
   selectedCycle: string;
   rows: QueueReportRow[];
 }) {
-  const width = 1710;
-  const rowHeight = 44;
-  const sectionHeight = reportLob === "TNS" ? 32 : 0;
-  const headerHeight = 36;
+  const width = 1320;
+  const rowHeight = 34;
+  const sectionHeight = reportLob === "TNS" ? 26 : 0;
+  const headerHeight = 30;
   const groups = groupReportRows(rows, reportLob);
   const sectionRows = groups.filter((group) => group.label).length;
-  const height = Math.max(380, 140 + rows.length * rowHeight + sectionRows * sectionHeight);
+  const height = Math.max(320, 112 + rows.length * rowHeight + sectionRows * sectionHeight);
   const canvas = createReportCanvas(width, height);
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   fillReportBackground(ctx, width, height);
-  drawText(ctx, `REPORT ${reportLob} - QUEUES`, 36, 50, 22, "#0F172A", "900");
-  drawText(ctx, selectedCycle || "No cycle selected", 36, 78, 15, "#64748B", "800");
+  drawText(ctx, `REPORT ${reportLob} - QUEUES`, 32, 47, 19, "#0F172A", "900");
+  drawText(ctx, selectedCycle || "No cycle selected", 32, 71, 13, "#64748B", "800");
 
-  const tableX = 32;
-  const tableY = 98;
+  const tableX = 26;
+  const tableY = 88;
   const columns = [
-    { label: "ID", x: tableX, w: 90 },
-    { label: "Queue", x: tableX + 110, w: 560 },
-    { label: "Department", x: tableX + 710, w: 270 },
-    { label: "Backlog", x: tableX + 1010, w: 100 },
-    { label: "AHT", x: tableX + 1140, w: 100 },
-    { label: "Max Latency", x: tableX + 1265, w: 175 },
-    { label: reportLob === "TNS" ? "Latency Target" : "Average Latency", x: tableX + 1480, w: 180 }
+    { label: "ID", x: tableX, w: 72 },
+    { label: "Queue", x: tableX + 92, w: 415 },
+    { label: "Department", x: tableX + 530, w: 250 },
+    { label: "Backlog", x: tableX + 800, w: 82 },
+    { label: "AHT", x: tableX + 900, w: 82 },
+    { label: "Max Latency", x: tableX + 995, w: 150 },
+    { label: reportLob === "TNS" ? "Latency Target" : "Average Latency", x: tableX + 1160, w: 125 }
   ];
   drawTableHeader(ctx, columns, tableY, headerHeight);
   let cursorY = tableY + headerHeight;
   groups.forEach((group) => {
     if (group.label) {
-      fillRect(ctx, tableX - 10, cursorY, width - 44, sectionHeight, "#E2E8F0");
-      drawText(ctx, group.label, tableX, cursorY + 22, 13, "#475569", "900");
+      fillRect(ctx, tableX - 8, cursorY, width - 36, sectionHeight, "#E2E8F0");
+      drawText(ctx, group.label, tableX, cursorY + 18, 11, "#475569", "900");
       cursorY += sectionHeight;
     }
     group.rows.forEach((row, index) => {
       const y = cursorY;
-      if (index % 2) fillRect(ctx, tableX - 10, y, width - 44, rowHeight, "#F3F4F6");
-      const textY = y + 27;
-      drawText(ctx, row.queueId || "N/A", columns[0].x, textY, 13, "#0F172A", "800");
-      drawText(ctx, truncateForCanvas(ctx, row.reportQueueName, columns[1].w), columns[1].x, textY, 13, "#0F172A", "800");
-      drawText(ctx, truncateForCanvas(ctx, row.reportDepartment, columns[2].w), columns[2].x, textY, 12, "#475569", "800");
-      drawText(ctx, formatInteger(row.current.backlog), columns[3].x, textY, 13, "#0F172A", "900");
-      drawText(ctx, formatDurationFromMs(row.current.ahtMs), columns[4].x, textY, 13, "#0F172A", "800");
-      drawText(ctx, formatDurationFromMs(row.current.maxLatencyMs), columns[5].x, y + 17, 13, "#0F172A", "900");
-      drawCanvasStatusPill(ctx, resolveLatencyAdherence(row.current.maxLatencyMs, row.slaTargetMinutes), columns[5].x, y + 21, true);
+      if (index % 2) fillRect(ctx, tableX - 8, y, width - 36, rowHeight, "#F3F4F6");
+      const textY = y + 22;
+      drawText(ctx, row.queueId || "N/A", columns[0].x, textY, 11, "#0F172A", "800");
+      drawText(ctx, truncateForCanvas(ctx, row.reportQueueName, columns[1].w), columns[1].x, textY, 11, "#0F172A", "800");
+      drawText(ctx, truncateForCanvas(ctx, row.reportDepartment, columns[2].w), columns[2].x, textY, 10.5, "#475569", "800");
+      drawText(ctx, formatInteger(row.current.backlog), columns[3].x, textY, 11, "#0F172A", "900");
+      drawText(ctx, formatDurationFromMs(row.current.ahtMs), columns[4].x, textY, 11, "#0F172A", "800");
+      drawText(ctx, formatDurationFromMs(row.current.maxLatencyMs), columns[5].x, textY, 11, "#0F172A", "900");
+      drawCanvasStatusPill(ctx, resolveLatencyAdherence(row.current.maxLatencyMs, row.slaTargetMinutes), columns[5].x + 58, y + 7, true);
       if (reportLob === "TNS") {
-        drawText(ctx, row.slaTargetMinutes === null ? "No target" : formatSlaTargetLabel(String(row.slaTargetMinutes)), columns[6].x, textY, 13, "#0F172A", "900");
+        drawText(ctx, row.slaTargetMinutes === null ? "No target" : formatSlaTargetLabel(String(row.slaTargetMinutes)), columns[6].x, textY, 11, "#0F172A", "900");
       } else {
-        drawText(ctx, formatDurationFromMs(row.current.latencyMs), columns[6].x, y + 17, 13, "#0F172A", "900");
-        drawCanvasStatusPill(ctx, resolveLatencyAdherence(row.current.latencyMs, row.slaTargetMinutes), columns[6].x, y + 21, true);
+        drawText(ctx, formatDurationFromMs(row.current.latencyMs), columns[6].x, textY, 11, "#0F172A", "900");
+        drawCanvasStatusPill(ctx, resolveLatencyAdherence(row.current.latencyMs, row.slaTargetMinutes), columns[6].x + 58, y + 7, true);
       }
       cursorY += rowHeight;
     });
@@ -2365,7 +2365,9 @@ function drawTableHeader(ctx: CanvasRenderingContext2D, columns: Array<{ label: 
   const startX = Math.min(...columns.map((column) => column.x)) - 14;
   const endX = Math.max(...columns.map((column) => column.x + column.w)) + 14;
   fillRect(ctx, startX, y, endX - startX, height, "#F1F5F9");
-  columns.forEach((column) => drawText(ctx, column.label, column.x, y + 27, 15, "#64748B", "900"));
+  const fontSize = height <= 32 ? 11 : 13;
+  const textY = y + Math.round(height / 2) + Math.round(fontSize / 2) - 1;
+  columns.forEach((column) => drawText(ctx, truncateForCanvas(ctx, column.label, column.w), column.x, textY, fontSize, "#64748B", "900"));
 }
 
 function drawMiniLine(ctx: CanvasRenderingContext2D, history: TrendPoint[], x: number, y: number, width: number, height: number, color: string) {

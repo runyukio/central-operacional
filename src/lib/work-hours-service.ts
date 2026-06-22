@@ -452,7 +452,6 @@ export async function requestWorkHourAdjustment(actor: Actor, input: WorkHourAdj
     if (!isWorkHoursAllowedForSchedule(record.schedule)) {
       return createValidationError({ scheduleId: workHoursBlockedReasonForSchedule(record.schedule) }, "Este status não permite ajuste de horas realizadas.");
     }
-    if (record.adjustments.length) return { error: "Já existe ajuste pendente para este registro." };
     const requestedHours = normalizeRequestedHours(input);
     if (requestedHours.error) {
       return createValidationError({ [requestedHours.field ?? "requestedActualHours"]: requestedHours.error });
@@ -460,6 +459,13 @@ export async function requestWorkHourAdjustment(actor: Actor, input: WorkHourAdj
 
     const adjustmentDifferenceMinutes = calculateAdjustmentDifferenceMinutes(record.effectiveHours, requestedHours.hours!);
     const adjustment = await prisma.$transaction(async (tx) => {
+      if (record.adjustments.length) {
+        await tx.workHourAdjustmentRequest.updateMany({
+          where: { workHourRecordId: record.id, status: { in: ["ABERTO", "EM_ANALISE"] } },
+          data: { status: "CANCELADO", rejectionReason: "Substituído por nova solicitação de ajuste." }
+        });
+      }
+
       const created = await tx.workHourAdjustmentRequest.create({
         data: {
           workHourRecordId: record.id,
