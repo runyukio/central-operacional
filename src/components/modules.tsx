@@ -6721,7 +6721,6 @@ export function SchedulesPage() {
                             className={cn(
                               "inline-flex h-[68px] w-[92px] flex-col items-center justify-center gap-1 overflow-hidden rounded-md px-1.5 py-1.5 text-center font-bold transition hover:ring-2 hover:ring-blue-200",
                               shiftTagClass(value),
-                              hourCell?.rawStatus === "DIVERGENT" && "ring-1 ring-orange-300",
                               hourCell?.rawStatus === "ADJUSTMENT_REQUESTED" && "ring-1 ring-amber-400"
                             )}
                           >
