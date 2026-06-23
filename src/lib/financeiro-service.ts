@@ -66,7 +66,7 @@ export async function getFinanceiroDashboard(actor: Actor, filters: FinanceiroFi
   const user = await requireFinanceiroUser(actor);
   if ("error" in user) return user;
   const where = buildFinanceiroWhere(filters);
-  const [records, sources, costCenters, uploads] = await Promise.all([
+  const [records, sources, costCenters, months, uploads] = await Promise.all([
     prisma.financeInvoiceCycleRecord.findMany({
       where,
       include: {
@@ -87,6 +87,11 @@ export async function getFinanceiroDashboard(actor: Actor, filters: FinanceiroFi
       select: { costCenter: true },
       orderBy: { costCenter: "asc" }
     }),
+    prisma.financeInvoiceCycleRecord.findMany({
+      distinct: ["invoiceCycleMonth"],
+      select: { invoiceCycleMonth: true },
+      orderBy: { invoiceCycleMonth: "desc" }
+    }),
     prisma.financeUploadBatch.findMany({
       orderBy: { uploadedAt: "desc" },
       take: 8,
@@ -104,6 +109,7 @@ export async function getFinanceiroDashboard(actor: Actor, filters: FinanceiroFi
         search: filters.search || ""
       },
       filterOptions: {
+        months: months.map((item) => item.invoiceCycleMonth).filter(Boolean),
         costCenters: buildFinanceCostCenterOptions(costCenters.map((item) => item.costCenter)),
         sources: ["Todos", ...sources.map((item) => item.source ?? "").filter(Boolean)]
       },

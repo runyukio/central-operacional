@@ -82,6 +82,7 @@ type FinanceiroPayload = {
       search: string;
     };
     filterOptions: {
+      months: string[];
       costCenters: string[];
       sources: string[];
     };
@@ -342,7 +343,10 @@ export function FinanceiroPage() {
 
   const summary = payload?.data.summary;
   const analytics = payload?.data.analytics;
-  const monthOptions = useMemo(() => buildMonthOptions(invoiceCycleMonth, payload?.data.records.map((record) => record.invoiceCycleMonth) ?? []), [invoiceCycleMonth, payload?.data.records]);
+  const monthOptions = useMemo(
+    () => buildMonthOptions(invoiceCycleMonth, payload?.data.filterOptions.months ?? payload?.data.records.map((record) => record.invoiceCycleMonth) ?? []),
+    [invoiceCycleMonth, payload?.data.filterOptions.months, payload?.data.records]
+  );
 
   function openNewRecordForm() {
     setRecordForm({
