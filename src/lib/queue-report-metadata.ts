@@ -33,7 +33,7 @@ export const QUEUE_REPORT_METADATA: Record<string, QueueReportMetadata> = {
   "7590": {"queueName":"Commercialization Material Report Colombia Initial","department":"Other Queue","lob":"ADS"},
   "7591": {"queueName":"Fila não mapeada","department":"Other Queue","lob":"N/A"},
   "7592": {"queueName":"Commercialization Material Report Universal Initial","department":"Other Queue","lob":"ADS"},
-  "7694": {"queueName":"Fila não mapeada","department":"Other Queue","lob":"N/A"},
+  "7694": {"queueName":"Commercialization Advertisement Group Complaint Brazil Initial","department":"Other Queue","lob":"ADS"},
   "7696": {"queueName":"Commercialization Advertisement Group Complaint Mexico Initial","department":"Other Queue","lob":"ADS"},
   "7697": {"queueName":"Commercialization Advertisement Group Complaint Colombia Initial","department":"Other Queue","lob":"ADS"},
   "7698": {"queueName":"Fila não mapeada","department":"Other Queue","lob":"N/A"},

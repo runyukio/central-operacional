@@ -1400,13 +1400,17 @@ function queueSummaryToCycleRow(summary: {
   backlog: number;
   sourceRows: number;
 }): QueueCycleRow {
+  const queueReference = resolveQueueReference(summary.queueId, summary.queueName);
+  const lob = queueReference.queueId ? queueReference.lob : coerceQueueLob(summary.lob);
+  const slaTargetMinutes = queueReference.queueId ? queueReference.slaTargetMinutes : summary.slaTargetMinutes;
+  const status = calculateQueueStatus(summary.latencyMs, slaTargetMinutes);
   return {
     key: summary.queueKey,
     queueId: summary.queueId,
-    queueName: summary.queueName,
-    lob: coerceQueueLob(summary.lob),
-    slaTargetMinutes: summary.slaTargetMinutes,
-    status: coerceQueueStatus(summary.status),
+    queueName: queueReference.queueId ? queueReference.queueName : summary.queueName,
+    lob,
+    slaTargetMinutes,
+    status,
     current: {
       input: summary.input,
       output: summary.output,
