@@ -473,6 +473,35 @@ function employeeMapStatusLabel(status: string) {
   return labels[key] ?? status;
 }
 
+function employeeStatusKey(value: string) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function scheduleEmployeeStatusBadge(status?: string | null) {
+  const label = employeeMapStatusLabel(String(status ?? "")).trim();
+  const key = employeeStatusKey(label);
+  if (!label || ["ATIVO", "ONLINE", "EM_TREINAMENTO", "NESTING"].includes(key)) return null;
+
+  const className =
+    key.includes("DESLIGADO")
+      ? "border-red-200 bg-red-50 text-red-700"
+      : key.includes("AFASTADO") || key.includes("AFASTADA")
+        ? "border-amber-200 bg-amber-50 text-amber-700"
+        : key.includes("SUSPENSO") || key.includes("SUSPENSA")
+          ? "border-violet-200 bg-violet-50 text-violet-700"
+          : key.includes("INATIVO") || key.includes("DESATIVADO") || key.includes("DESATIVADA")
+            ? "border-slate-200 bg-slate-100 text-slate-700"
+            : "border-blue-200 bg-blue-50 text-blue-700";
+
+  return { label, className };
+}
+
 function employeeMapLobFilterLabel(lob: string) {
   const key = String(lob ?? "")
     .normalize("NFD")
@@ -1251,6 +1280,26 @@ function parseProductiveHoursInput(value: string) {
 function formatWorkHourValue(value: unknown, fallback = "-") {
   const formatted = formatWorkHours(value);
   return formatted || fallback;
+}
+
+function workHourAmountBadgeClass(value: unknown) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return "bg-slate-100 text-slate-500";
+  const minutes = Math.round(numericValue * 60);
+  const targetMinutes = Math.round(DEFAULT_PRODUCTIVE_HOURS * 60);
+  if (minutes === targetMinutes) return "bg-emerald-100 text-emerald-700";
+  if (minutes > targetMinutes) return "bg-blue-100 text-blue-700";
+  return "bg-orange-100 text-orange-700";
+}
+
+function workHourAmountBadgeTitle(value: unknown) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return "Sem horas registradas";
+  const minutes = Math.round(numericValue * 60);
+  const targetMinutes = Math.round(DEFAULT_PRODUCTIVE_HOURS * 60);
+  if (minutes === targetMinutes) return "Horas realizadas iguais ao previsto";
+  if (minutes > targetMinutes) return "Horas realizadas acima do previsto";
+  return "Horas realizadas abaixo do previsto";
 }
 
 function formatWorkHourSummaryDifference(hours?: number | null) {
@@ -6636,13 +6685,21 @@ export function SchedulesPage() {
                   const workDays = countScheduleStatuses(row.days, scheduleWorkCountStatuses);
                   const dayOffDays = countScheduleStatuses(row.days, scheduleDayOffCountStatuses);
                   const absenceDays = countScheduleStatuses(row.days, scheduleAbsenceCountStatuses);
+                  const employeeStatusBadge = scheduleEmployeeStatusBadge(row.employee.status);
                   return (
                   <tr key={row.employee.id} className="hover:bg-blue-50/30">
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-2.5">
                         <span className="grid h-7 w-7 place-items-center rounded-full bg-emerald-500 text-[11px] font-bold text-white">{initials(row.employee.name)}</span>
-                        <div>
-                          <p className="font-bold text-navy-950">{row.employee.name}</p>
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <p className="min-w-0 font-bold text-navy-950">{row.employee.name}</p>
+                            {employeeStatusBadge ? (
+                              <span className={cn("inline-flex shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-extrabold leading-none", employeeStatusBadge.className)}>
+                                {employeeStatusBadge.label}
+                              </span>
+                            ) : null}
+                          </div>
                         </div>
                       </div>
                     </td>
@@ -6675,7 +6732,10 @@ export function SchedulesPage() {
                               {slotLabel}
                             </span>
                             {hourCell ? (
-                              <span className={cn("grid h-[18px] w-[70px] place-items-center rounded px-1.5 text-[10px] leading-none", hourCell.rawStatus === "OK" ? "bg-emerald-100 text-emerald-700" : hourCell.rawStatus === "DIVERGENT" ? "bg-orange-100 text-orange-700" : hourCell.rawStatus === "ADJUSTMENT_REQUESTED" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700")}>
+                              <span
+                                title={workHourAmountBadgeTitle(hourCell.effectiveHours)}
+                                className={cn("grid h-[18px] w-[70px] place-items-center rounded px-1.5 text-[10px] leading-none", workHourAmountBadgeClass(hourCell.effectiveHours))}
+                              >
                                 {formatWorkHourValue(hourCell.effectiveHours)}
                               </span>
                             ) : (
