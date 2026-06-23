@@ -1207,11 +1207,15 @@ function defaultMonth() {
 function buildMonthOptions(selectedMonth?: string, availableMonths: string[] = []) {
   const now = new Date();
   const minMonth = "2026-06";
-  const startYear = Math.max(2026, now.getFullYear() - 2);
+  const historicalYears = availableMonths
+    .filter((month) => /^\d{4}-\d{2}$/.test(month))
+    .map((month) => Number(month.slice(0, 4)))
+    .filter(Number.isFinite);
+  const startYear = Math.min(2026, now.getFullYear() - 2, ...historicalYears);
   const endYear = now.getFullYear() + 2;
   const values = new Set<string>();
   availableMonths.forEach((month) => {
-    if (/^\d{4}-\d{2}$/.test(month) && month >= minMonth) values.add(month);
+    if (/^\d{4}-\d{2}$/.test(month)) values.add(month);
   });
   for (let year = endYear; year >= startYear; year -= 1) {
     for (let month = 12; month >= 1; month -= 1) {
@@ -1219,7 +1223,7 @@ function buildMonthOptions(selectedMonth?: string, availableMonths: string[] = [
       if (value >= minMonth) values.add(value);
     }
   }
-  if (selectedMonth && /^\d{4}-\d{2}$/.test(selectedMonth) && selectedMonth >= minMonth) {
+  if (selectedMonth && /^\d{4}-\d{2}$/.test(selectedMonth)) {
     values.add(selectedMonth);
   }
   return Array.from(values)

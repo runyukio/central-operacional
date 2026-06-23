@@ -66,7 +66,7 @@ export async function getFinanceiroDashboard(actor: Actor, filters: FinanceiroFi
   const user = await requireFinanceiroUser(actor);
   if ("error" in user) return user;
   const where = buildFinanceiroWhere(filters);
-  const [records, sources, uploads] = await Promise.all([
+  const [records, sources, costCenters, uploads] = await Promise.all([
     prisma.financeInvoiceCycleRecord.findMany({
       where,
       include: {
@@ -81,6 +81,11 @@ export async function getFinanceiroDashboard(actor: Actor, filters: FinanceiroFi
       where: { source: { not: null } },
       select: { source: true },
       orderBy: { source: "asc" }
+    }),
+    prisma.financeInvoiceCycleRecord.findMany({
+      distinct: ["costCenter"],
+      select: { costCenter: true },
+      orderBy: { costCenter: "asc" }
     }),
     prisma.financeUploadBatch.findMany({
       orderBy: { uploadedAt: "desc" },
@@ -99,7 +104,7 @@ export async function getFinanceiroDashboard(actor: Actor, filters: FinanceiroFi
         search: filters.search || ""
       },
       filterOptions: {
-        costCenters: ["Todos", ...FINANCEIRO_ALLOWED_COST_CENTERS],
+        costCenters: buildFinanceCostCenterOptions(costCenters.map((item) => item.costCenter)),
         sources: ["Todos", ...sources.map((item) => item.source ?? "").filter(Boolean)]
       },
       summary: buildFinanceiroSummary(records),
@@ -286,11 +291,11 @@ export async function saveFinanceiroRecord(actor: Actor, input: Record<string, u
   const id = text(input.id);
   const invoiceCycleMonth = normalizeFinanceiroMonth(input.invoiceCycleMonth);
   const rawCostCenter = text(input.costCenter);
-  const costCenter = normalizeFinanceCostCenter(rawCostCenter);
+  const costCenter = normalizeFinanceRecordCostCenter(rawCostCenter, invoiceCycleMonth);
   if (!invoiceCycleMonth) return { error: "Ciclo da invoice é obrigatório.", status: 400 };
-  if (invoiceCycleMonth < FINANCEIRO_MIN_REFERENCE_MONTH) return { error: "Financeiro considera ciclos a partir de Junho/2026.", status: 400 };
   if (!rawCostCenter) return { error: "LOB é obrigatória.", status: 400 };
-  if (!costCenter) return { error: "LOB permitidas: ADS, CEC, COMMENTS, VIDEO e PROJECT.", status: 400 };
+  if (!costCenter) return { error: "LOB inválida.", status: 400 };
+  if (isFinanceNewFlowMonth(invoiceCycleMonth) && !normalizeFinanceCostCenter(rawCostCenter)) return { error: "LOB permitidas a partir de Junho/2026: ADS, CEC, COMMENTS, VIDEO e PROJECT.", status: 400 };
 
   const maxHoursCapacityMinutes = parseHours(input.maxHoursCapacity);
   const billableHoursActualMinutes = parseHours(input.billableHoursActual);
@@ -516,12 +521,9 @@ function buildFinanceiroWhere(filters: FinanceiroFilters = {}) {
   const and: Prisma.FinanceInvoiceCycleRecordWhereInput[] = [];
   const month = normalizeFinanceiroMonth(filters.invoiceCycleMonth);
   if (month) {
-    if (month < FINANCEIRO_MIN_REFERENCE_MONTH) return { id: "__financeiro_no_reference_month__" };
     where.invoiceCycleMonth = month;
-  } else {
-    where.invoiceCycleMonth = { gte: FINANCEIRO_MIN_REFERENCE_MONTH };
   }
-  const costCenterWhere = financeAllowedRecordCostCenterWhere(filters.costCenter);
+  const costCenterWhere = financeRecordCostCenterWhere(filters.costCenter);
   if (costCenterWhere) and.push(costCenterWhere);
   if (filters.source && filters.source !== "Todos") where.source = filters.source;
   if (filters.search?.trim()) {
@@ -538,12 +540,11 @@ function buildFinanceiroWhere(filters: FinanceiroFilters = {}) {
   return where;
 }
 
-function financeAllowedRecordCostCenterWhere(value?: string | null): Prisma.FinanceInvoiceCycleRecordWhereInput {
-  const hasExplicitFilter = Boolean(value && value !== "Todos");
-  const selected = normalizeFinanceCostCenter(value);
-  if (hasExplicitFilter && !selected) return { id: "__financeiro_no_allowed_cost_center__" };
-  if (selected) return { costCenter: { equals: selected, mode: "insensitive" } };
-  return { OR: FINANCEIRO_ALLOWED_COST_CENTERS.map((costCenter) => ({ costCenter: { equals: costCenter, mode: "insensitive" as const } })) };
+function financeRecordCostCenterWhere(value?: string | null): Prisma.FinanceInvoiceCycleRecordWhereInput | null {
+  if (!value || value === "Todos") return null;
+  const selected = normalizeFinanceRecordCostCenter(value);
+  if (!selected) return { id: "__financeiro_no_cost_center__" };
+  return { costCenter: { equals: selected, mode: "insensitive" } };
 }
 
 function financeAllowedParameterCostCenterWhere(value?: string | null): Prisma.FinanceCycleParameterWhereInput {
@@ -570,8 +571,30 @@ function normalizeFinanceCostCenter(value?: string | null) {
   return (FINANCEIRO_ALLOWED_COST_CENTERS as readonly string[]).find((item) => item === normalized) ?? "";
 }
 
+function normalizeFinanceRecordCostCenter(value?: string | null, invoiceCycleMonth?: string | null) {
+  const allowed = normalizeFinanceCostCenter(value);
+  if (allowed) return allowed;
+  const normalized = text(value).toUpperCase();
+  if (!normalized) return "";
+  return invoiceCycleMonth && isFinanceNewFlowMonth(invoiceCycleMonth) ? "" : normalized;
+}
+
 function isFinanceCostCenterAllowed(value?: string | null) {
   return Boolean(normalizeFinanceCostCenter(value));
+}
+
+function isFinanceNewFlowMonth(month?: string | null) {
+  return Boolean(month && month >= FINANCEIRO_MIN_REFERENCE_MONTH);
+}
+
+function buildFinanceCostCenterOptions(values: string[]) {
+  const options = unique([...FINANCEIRO_ALLOWED_COST_CENTERS, ...values.map((value) => text(value).toUpperCase()).filter(Boolean)]);
+  const defaultOrder = new Map((FINANCEIRO_ALLOWED_COST_CENTERS as readonly string[]).map((value, index) => [value, index]));
+  return ["Todos", ...options.sort((a, b) => {
+    const orderA = defaultOrder.get(a) ?? 999;
+    const orderB = defaultOrder.get(b) ?? 999;
+    return orderA - orderB || a.localeCompare(b);
+  })];
 }
 
 function parseFinanceiroImportRow(row: Record<string, unknown>, rowNumber: number, seen: Map<string, number>): FinanceiroPreviewRow {
@@ -579,7 +602,7 @@ function parseFinanceiroImportRow(row: Record<string, unknown>, rowNumber: numbe
   const warnings: string[] = [];
   const invoiceCycleMonth = normalizeFinanceiroMonth(rowValue(row, ["invoice_cycle_month", "ciclo_da_invoice", "ciclo da invoice", "ciclo", "invoice cycle", "invoice month"]));
   const rawCostCenter = text(rowValue(row, ["cost_center", "cost center", "cost of center", "centro de custo"]));
-  const costCenter = normalizeFinanceCostCenter(rawCostCenter);
+  const costCenter = normalizeFinanceRecordCostCenter(rawCostCenter, invoiceCycleMonth);
   const rawStatus = rowValue(row, ["status", "status_financeiro", "situacao", "situação"]);
   const status = normalizeFinanceRecordStatus(rawStatus);
   const targetFallback = rowValue(row, ["billable_hours_target", "billable hours target", "billable hours meta", "billable hours (meta)", "meta"]);
@@ -593,9 +616,9 @@ function parseFinanceiroImportRow(row: Record<string, unknown>, rowNumber: numbe
   const source = text(rowValue(row, ["source", "fonte"])) || FINANCEIRO_DEFAULT_SOURCE;
 
   if (!invoiceCycleMonth) errors.push("Ciclo da invoice inválido.");
-  if (invoiceCycleMonth && invoiceCycleMonth < FINANCEIRO_MIN_REFERENCE_MONTH) errors.push("Financeiro considera ciclos a partir de Junho/2026.");
   if (!rawCostCenter) errors.push("LOB é obrigatória.");
-  if (rawCostCenter && !costCenter) errors.push("LOB permitidas: ADS, CEC, COMMENTS, VIDEO e PROJECT.");
+  if (rawCostCenter && !costCenter) errors.push("LOB inválida.");
+  if (invoiceCycleMonth && isFinanceNewFlowMonth(invoiceCycleMonth) && rawCostCenter && !normalizeFinanceCostCenter(rawCostCenter)) errors.push("LOB permitidas a partir de Junho/2026: ADS, CEC, COMMENTS, VIDEO e PROJECT.");
   if (!isEmpty(rawStatus) && !status) errors.push("Status financeiro inválido.");
   if (maxHours === null) errors.push("Max Hours inválido.");
   if (actualHours === null) errors.push("Billable Hours Real inválido.");
@@ -688,6 +711,10 @@ async function buildFinanceiroAnalytics(
   const selectedMonth = normalizeFinanceiroMonth(filters.invoiceCycleMonth);
   const selectedCostCenter = normalizeFinanceCostCenter(filters.costCenter);
   const currentMonth = currentReferenceMonth();
+  const hasHistoricalCostCenterFilter = Boolean(filters.costCenter && filters.costCenter !== "Todos" && !selectedCostCenter);
+  if ((selectedMonth && selectedMonth < FINANCEIRO_MIN_REFERENCE_MONTH) || hasHistoricalCostCenterFilter) {
+    return emptyFinanceiroAnalytics(currentMonth);
+  }
   const recordMonths = unique(records.map((record) => record.invoiceCycleMonth).filter((month) => month >= FINANCEIRO_MIN_REFERENCE_MONTH));
   const months = unique([...(selectedMonth ? [selectedMonth] : recordMonths), currentMonth]).filter(Boolean);
   const parameterWhere: Prisma.FinanceCycleParameterWhereInput = {};
@@ -824,6 +851,30 @@ async function buildFinanceiroAnalytics(
     },
     rows,
     parameters: rows.map((row) => row.parameters)
+  };
+}
+
+function emptyFinanceiroAnalytics(currentMonth: string) {
+  return {
+    currentMonth,
+    hoursSummary: {
+      maxHoursCapacity: "0:00",
+      billableActual: "0:00",
+      training: "0:00"
+    },
+    valueSummary: {
+      revenueUsd: 0,
+      revenueBrl: 0
+    },
+    costSummary: {
+      costBrl: 0
+    },
+    resultSummary: {
+      resultBrl: 0,
+      marginPercent: 0
+    },
+    rows: [],
+    parameters: []
   };
 }
 

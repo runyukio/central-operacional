@@ -523,7 +523,8 @@ export function RealTimePage() {
     downloadReportQueuesImage({
       reportLob,
       selectedCycle: selectedCycleValue,
-      rows: reportRows
+      rows: reportRows,
+      cards: reportLob === "TNS" ? tnsReportCards : null
     });
   }
 
@@ -1963,20 +1964,24 @@ function downloadReportSummaryImage({
 function downloadReportQueuesImage({
   reportLob,
   selectedCycle,
-  rows
+  rows,
+  cards
 }: {
   reportLob: ReportLob;
   selectedCycle: string;
   rows: QueueReportRow[];
+  cards?: TnsReportCards | null;
 }) {
   const width = 1400;
   const rowHeight = 34;
   const sectionHeight = reportLob === "TNS" ? 26 : 0;
   const headerHeight = 30;
+  const topCards = reportLob === "TNS" && cards ? [...cards.backlog, ...cards.headcount] : [];
+  const topCardsHeight = topCards.length ? 186 : 0;
   const groups = groupReportRows(rows, reportLob);
   const sectionRows = groups.filter((group) => group.label).length;
   const tableX = 46;
-  const tableY = 88;
+  const tableY = 88 + topCardsHeight;
   const tableFillX = tableX - 14;
   const tableFillWidth = width - tableFillX * 2;
   const tableContentHeight = rows.length * rowHeight + sectionRows * sectionHeight;
@@ -1987,6 +1992,9 @@ function downloadReportQueuesImage({
   fillReportBackground(ctx, width, height);
   drawText(ctx, `REPORT ${reportLob} - QUEUES`, 32, 47, 19, "#0F172A", "900");
   drawText(ctx, selectedCycle || "No cycle selected", 32, 71, 13, "#64748B", "800");
+  if (topCards.length) {
+    drawCanvasTnsReportTopCards(ctx, topCards, 32, 96, width - 64, topCardsHeight - 24);
+  }
 
   const columns = [
     { label: "ID", x: tableX, w: 80 },
@@ -2026,6 +2034,59 @@ function downloadReportQueuesImage({
     });
   });
   downloadCanvas(canvas, `realtime-report-${reportLob.toLowerCase()}-queues.png`);
+}
+
+function drawCanvasTnsReportTopCards(ctx: CanvasRenderingContext2D, cards: Array<AgentKpiCard | OnlineHeadcountGaugeData>, x: number, y: number, width: number, height: number) {
+  const gap = 14;
+  const cardWidth = (width - gap * 3) / 4;
+  cards.slice(0, 4).forEach((card, index) => {
+    const cardX = x + index * (cardWidth + gap);
+    if ("history" in card) drawCanvasQueueBacklogCard(ctx, card, cardX, y, cardWidth, height);
+    else drawCanvasQueueHeadcountCard(ctx, card, cardX, y, cardWidth, height);
+  });
+}
+
+function drawCanvasQueueBacklogCard(ctx: CanvasRenderingContext2D, card: AgentKpiCard, x: number, y: number, width: number, height: number) {
+  const color = card.trend === "negative" ? "#EF4444" : card.trend === "positive" ? "#10B981" : "#2563EB";
+  roundRect(ctx, x, y, width, height, 18, "#FFFFFF", "#E5EAF2");
+  drawText(ctx, card.label, x + 18, y + 30, 13, "#64748B", "900");
+  drawText(ctx, card.value, x + 18, y + 76, 34, "#0F172A", "900");
+  if (card.hasComparison) drawCanvasDeltaPill(ctx, card.trend, card.direction, card.delta || "0", x + 18, y + 92);
+  else drawText(ctx, "No comparison", x + 18, y + 112, 11, "#64748B", "850");
+  drawMiniLine(ctx, card.history, x + width * 0.48, y + 32, width * 0.44, height - 58, color);
+}
+
+function drawCanvasQueueHeadcountCard(ctx: CanvasRenderingContext2D, card: OnlineHeadcountGaugeData, x: number, y: number, width: number, height: number) {
+  const progress = card.percentage === null ? null : Math.max(0, Math.min(100, card.percentage));
+  const color = card.tone === "positive" ? "#10B981" : card.tone === "warning" ? "#F59E0B" : card.tone === "negative" ? "#EF4444" : "#2563EB";
+  const pillBg = card.tone === "positive" ? "#D1FAE5" : card.tone === "warning" ? "#FEF3C7" : card.tone === "negative" ? "#FEE2E2" : "#DBEAFE";
+  const pillText = card.tone === "positive" ? "#047857" : card.tone === "warning" ? "#B45309" : card.tone === "negative" ? "#DC2626" : "#2563EB";
+  roundRect(ctx, x, y, width, height, 18, "#FFFFFF", "#E5EAF2");
+  drawText(ctx, card.label, x + 18, y + 30, 13, "#64748B", "900");
+  drawText(ctx, "Online vs planned", x + 18, y + 50, 11, "#64748B", "800");
+  drawCanvasTextPill(ctx, progress === null ? "No schedule" : `${Math.round(progress)}%`, x + width - 106, y + 18, 88, pillBg, pillText);
+  const gaugeX = x + 32;
+  const gaugeY = y + 68;
+  const gaugeWidth = width - 64;
+  const gaugeHeight = 58;
+  ctx.beginPath();
+  ctx.moveTo(gaugeX, gaugeY + gaugeHeight);
+  ctx.quadraticCurveTo(gaugeX + gaugeWidth / 2, gaugeY - 18, gaugeX + gaugeWidth, gaugeY + gaugeHeight);
+  ctx.strokeStyle = "#E2E8F0";
+  ctx.lineWidth = 13;
+  ctx.lineCap = "round";
+  ctx.stroke();
+  if (progress !== null) {
+    ctx.beginPath();
+    ctx.moveTo(gaugeX, gaugeY + gaugeHeight);
+    ctx.quadraticCurveTo(gaugeX + gaugeWidth * Math.min(progress / 100, 0.5), gaugeY - 18, gaugeX + gaugeWidth * Math.min(progress / 100, 1), gaugeY + gaugeHeight * (1 - Math.min(progress / 100, 1)));
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 13;
+    ctx.lineCap = "round";
+    ctx.stroke();
+  }
+  drawText(ctx, `${card.online}/${card.scheduled}`, x + 18, y + height - 20, 20, "#0F172A", "900");
+  drawText(ctx, `Gap ${card.missing}`, x + width - 76, y + height - 20, 14, card.missing > 0 ? "#DC2626" : "#047857", "900");
 }
 
 function drawCanvasHeadcountStrip(ctx: CanvasRenderingContext2D, card: OnlineHeadcountGaugeData, x: number, y: number, width: number, height: number) {
