@@ -9484,9 +9484,6 @@ export function EmployeeMapPage() {
   const [employeeBatchText, setEmployeeBatchText] = useState("");
   const [employeeBatchOpen, setEmployeeBatchOpen] = useState(false);
   const [employeeFilterOptions, setEmployeeFilterOptions] = useState<{ skills: string[]; waves: string[]; statuses?: string[] }>({ skills: [], waves: [], statuses: [] });
-  const [additionalDataStatusFilter, setAdditionalDataStatusFilter] = useState("Todos");
-  const [additionalDataTracking, setAdditionalDataTracking] = useState<AdditionalDataTrackingResponse | null>(null);
-  const [additionalDataTrackingLoading, setAdditionalDataTrackingLoading] = useState(false);
   const [employeePage, setEmployeePage] = useState(1);
   const [employeePagination, setEmployeePagination] = useState({ total: 0, page: 1, limit: 50, totalPages: 1 });
   const [employeeContractSummary, setEmployeeContractSummary] = useState({ clt: 0, pj: 0 });
@@ -9543,7 +9540,6 @@ export function EmployeeMapPage() {
   const isAdmin = session?.user?.role === "ADMIN";
   const isSupervisorUser = session?.user?.role === "SUPERVISOR";
   const normalizedEmployeeMapRole = String(session?.user?.role ?? "").toUpperCase();
-  const canViewAdditionalDataTracking = ["ADMIN", "RH", "HR", "WFM"].includes(normalizedEmployeeMapRole);
   const canEditEmployeeOperational = ["ADMIN", "WFM", "RH", "HR", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
   const canEditOperationalBindings = ["ADMIN", "WFM", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
   const canEditPeopleData = ["ADMIN", "RH", "HR", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
@@ -9567,11 +9563,6 @@ export function EmployeeMapPage() {
       .catch(() => setEmployeeSettings(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    if (canViewAdditionalDataTracking) void loadAdditionalDataTracking();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canViewAdditionalDataTracking, additionalDataStatusFilter]);
 
   async function loadEmployees(options?: { nextQuery?: string; nextLob?: string; nextStatus?: string; nextSupervisor?: string; nextSkill?: string; nextWave?: string; nextShift?: string; nextContract?: string; nextBatchWbs?: string[]; nextPage?: number }) {
     setEmployeeLoading(true);
@@ -9654,32 +9645,6 @@ export function EmployeeMapPage() {
     setEmployeeBatchWbs([]);
     setEmployeePage(1);
     void loadEmployees({ nextBatchWbs: [], nextPage: 1 });
-  }
-
-  async function loadAdditionalDataTracking(options?: { nextQuery?: string; nextLob?: string; nextSupervisor?: string; nextSkill?: string; nextWave?: string; nextStatus?: string }) {
-    if (!canViewAdditionalDataTracking) return;
-    setAdditionalDataTrackingLoading(true);
-    const params = new URLSearchParams({ scope: "tracking" });
-    const nextQuery = options?.nextQuery ?? query;
-    const nextLob = options?.nextLob ?? lobFilter;
-    const nextSupervisor = options?.nextSupervisor ?? supervisorFilter;
-    const nextSkill = options?.nextSkill ?? skillFilter;
-    const nextWave = options?.nextWave ?? waveFilter;
-    const nextStatus = options?.nextStatus ?? additionalDataStatusFilter;
-    if (nextStatus !== "Todos") params.set("status", nextStatus);
-    if (nextQuery.trim()) params.set("search", nextQuery.trim());
-    if (nextLob !== "Todos") params.set("lob", nextLob);
-    if (nextSupervisor !== "Todos") params.set("supervisorId", nextSupervisor);
-    if (nextSkill !== "Todos") params.set("skill", nextSkill);
-    if (nextWave !== "Todos") params.set("wave", nextWave);
-    try {
-      const payload = await apiJson<AdditionalDataTrackingResponse>(`/api/employee-additional-data?${params.toString()}`);
-      setAdditionalDataTracking(payload);
-    } catch {
-      setAdditionalDataTracking(null);
-    } finally {
-      setAdditionalDataTrackingLoading(false);
-    }
   }
 
   async function selectEmployee(employee: EmployeeClient) {
@@ -9813,17 +9778,6 @@ export function EmployeeMapPage() {
     window.location.href = `/api/employees/export${params.toString() ? `?${params.toString()}` : ""}`;
   }
 
-  function exportAdditionalDataTracking() {
-    const params = new URLSearchParams();
-    if (additionalDataStatusFilter !== "Todos") params.set("status", additionalDataStatusFilter);
-    if (query.trim()) params.set("search", query.trim());
-    if (lobFilter !== "Todos") params.set("lob", lobFilter);
-    if (supervisorFilter !== "Todos") params.set("supervisorId", supervisorFilter);
-    if (skillFilter !== "Todos") params.set("skill", skillFilter);
-    if (waveFilter !== "Todos") params.set("wave", waveFilter);
-    window.location.href = `/api/employee-additional-data/export${params.toString() ? `?${params.toString()}` : ""}`;
-  }
-
   async function resetSelectedPassword() {
     if (!selected || resettingPassword) return;
     setResettingPassword(true);
@@ -9869,7 +9823,7 @@ export function EmployeeMapPage() {
     <div>
       <PageHeader title="Funcionários" description="Base operacional de colaboradores, vínculos e informações cadastrais." icon={UsersRound} actions={<button onClick={exportEmployeesXlsx} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Exportar XLSX</button>} />
       {employeeMessage ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{employeeMessage}</div> : null}
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
+      <div className="space-y-5">
         <div className="space-y-5">
           <div className="card grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-9">
             <input value={query} onChange={(event) => setQuery(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm outline-none xl:col-span-2" placeholder="Nome, e-mail, WB/Login, Skill ou Wave" />
@@ -9932,8 +9886,8 @@ export function EmployeeMapPage() {
               ) : null}
             </div>
             <div className="flex gap-2 md:col-span-2 xl:col-span-9 xl:justify-end">
-              <button onClick={() => { setEmployeePage(1); void loadEmployees({ nextPage: 1 }); void loadAdditionalDataTracking(); }} className="h-10 rounded-lg bg-blue-600 px-5 text-sm font-bold text-white">Buscar</button>
-              <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setContractFilter("Todos"); setEmployeeBatchWbs([]); setAdditionalDataStatusFilter("Todos"); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextContract: "Todos", nextBatchWbs: [], nextPage: 1 }); void loadAdditionalDataTracking({ nextQuery: "", nextLob: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextStatus: "Todos" }); }} className="h-10 rounded-lg border border-border px-5 text-sm font-bold">Limpar filtros</button>
+              <button onClick={() => { setEmployeePage(1); void loadEmployees({ nextPage: 1 }); }} className="h-10 rounded-lg bg-blue-600 px-5 text-sm font-bold text-white">Buscar</button>
+              <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setContractFilter("Todos"); setEmployeeBatchWbs([]); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextContract: "Todos", nextBatchWbs: [], nextPage: 1 }); }} className="h-10 rounded-lg border border-border px-5 text-sm font-bold">Limpar filtros</button>
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-6">
@@ -9986,60 +9940,26 @@ export function EmployeeMapPage() {
               </div>
             )}
           </Panel>
-          {canViewAdditionalDataTracking ? (
-            <Panel title="Dados Cadastrais Adicionais" action="Exportar" actionOnClick={exportAdditionalDataTracking}>
-              <div className="mb-4 grid gap-3 md:grid-cols-[repeat(4,minmax(0,1fr))_auto]">
-                <MetricPill value={additionalDataTracking?.summary.total ?? 0} label="Ativos com login" />
-                <MetricPill value={additionalDataTracking?.summary.completed ?? 0} label="Responderam" />
-                <MetricPill value={additionalDataTracking?.summary.pending ?? 0} label="Pendentes" />
-                <MetricPill value={`${additionalDataTracking?.summary.completionRate ?? 0}%`} label="% concluído" />
-                <div className="flex gap-2 md:col-span-4 xl:col-span-1">
-                  <select
-                    value={additionalDataStatusFilter}
-                    onChange={(event) => setAdditionalDataStatusFilter(event.target.value)}
-                    className="h-10 min-w-0 flex-1 rounded-lg border border-border px-3 text-sm font-bold"
-                  >
-                    <option>Todos</option>
-                    <option>Concluído</option>
-                    <option>Pendente</option>
-                  </select>
-                  <button type="button" onClick={() => void loadAdditionalDataTracking()} className="h-10 rounded-lg border border-border px-3 text-xs font-extrabold text-navy-950">Atualizar</button>
-                </div>
-              </div>
-              {additionalDataTrackingLoading ? (
-                <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm font-bold text-blue-700">Carregando acompanhamento...</div>
-              ) : additionalDataTracking?.data.length ? (
-                <SimpleTable
-                  columns={["Nome", "WB/Login", "E-mail", "LOB", "Supervisor", "Cargo/Função", "Status colaborador", "Dados adicionais", "Conclusão"]}
-                  rows={additionalDataTracking.data.slice(0, 50).map((row) => [
-                    row.name,
-                    row.wbLogin,
-                    row.email || "-",
-                    row.lob,
-                    row.supervisor,
-                    row.roleTitle,
-                    <StatusBadge key={`${row.id}-employee-status`} status={row.employeeStatus || "Sem status"} />,
-                    <StatusBadge key={`${row.id}-additional-status`} status={row.additionalDataStatus} />,
-                    row.additionalDataCompletedAt || "-"
-                  ])}
-                />
-              ) : (
-                <EmptyState title="Nenhum colaborador encontrado" description="O acompanhamento respeita os filtros aplicados no Mapa de Funcionários." />
-              )}
-            </Panel>
-          ) : null}
         </div>
-        <div className="space-y-5">
-          <Panel title="Perfil do Colaborador">
-            {selected ? <div className="space-y-4">
-              {selectedEmployeeLoading ? <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm font-bold text-blue-700">Carregando detalhes...</div> : null}
-              <div className="flex items-center gap-3">
-                <span className="grid h-14 w-14 place-items-center rounded-full bg-blue-600 font-bold text-white">{initials(selected.name)}</span>
-                <div>
-                  <h2 className="text-lg font-extrabold text-navy-950">{selected.name}</h2>
-                  <p className="text-sm text-muted">{selected.wb} • {selected.role}</p>
+        {selected ? (
+          <div className="fixed inset-0 z-[45] flex items-center justify-center bg-navy-950/45 p-4 backdrop-blur-md">
+            <div className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-[28px] border border-white/70 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.28)]">
+              <div className="flex items-center justify-between gap-4 border-b border-slate-100 bg-white/95 px-5 py-4 backdrop-blur">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-blue-600 font-black text-white shadow-sm">{initials(selected.name)}</span>
+                  <div className="min-w-0">
+                    <p className="text-xs font-black uppercase tracking-[0.22em] text-blue-600">Perfil do colaborador</p>
+                    <h2 className="truncate text-xl font-black text-navy-950">{selected.name}</h2>
+                    <p className="truncate text-sm font-semibold text-muted">{selected.wb} • {selected.role} • {selected.lob}</p>
+                  </div>
                 </div>
+                <button type="button" onClick={() => { setSelected(null); setEditingEmployee(false); }} className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-border bg-white text-xl font-black text-navy-950 shadow-sm transition hover:bg-slate-50" aria-label="Fechar detalhe do colaborador">
+                  ×
+                </button>
               </div>
+              <div className="overflow-y-auto p-5">
+                <div className="space-y-4">
+              {selectedEmployeeLoading ? <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm font-bold text-blue-700">Carregando detalhes...</div> : null}
               <div className="grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-3">
                 <InfoLine label="LOB" value={selected.lob} />
                 <InfoLine label="Supervisor" value={selected.supervisor} />
@@ -10250,6 +10170,7 @@ export function EmployeeMapPage() {
                       <div className="grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-4">
                         <InfoLine label="CPF" value={selected.canViewSensitive ? selected.sensitive?.cpf : selected.maskedSensitive?.cpf} />
                         <InfoLine label="RG" value={selected.canViewSensitive ? selected.sensitive?.rg : selected.maskedSensitive?.rg} />
+                        <InfoLine label="CNPJ" value={selected.canViewSensitive ? selected.sensitive?.cnpj || "Não informado" : "Acesso restrito"} />
                         <InfoLine label="Nascimento" value={selected.canViewSensitive ? selected.sensitive?.birthDate : "Acesso restrito"} />
                         <InfoLine label="Família" value={selected.canViewSensitive ? selected.sensitive?.familyData : "Acesso restrito"} />
                       </div>
@@ -10305,9 +10226,11 @@ export function EmployeeMapPage() {
                   <p className="text-sm text-muted">Sem ausência recente registrada.</p>
                 )}
               </ProfileSection>
-            </div> : <EmptyState title="Nenhum colaborador selecionado" description="Selecione um colaborador quando houver dados reais cadastrados." />}
-          </Panel>
-        </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
       {showResetPassword && selected ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">

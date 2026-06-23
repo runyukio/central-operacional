@@ -576,8 +576,6 @@ export function RealTimePage() {
   const olderCycle = selectedCycleIndex >= 0 ? cycles[selectedCycleIndex + 1]?.value ?? "" : "";
   const newerCycle = selectedCycleIndex > 0 ? cycles[selectedCycleIndex - 1]?.value ?? "" : "";
   const latestCycle = cycles[0]?.value ?? "";
-  const latestBatchId = cycles[0]?.batchId ?? "";
-  const latestImportedAt = cycles[0]?.importedAt ?? "";
   const reportRows = useMemo(() => buildReportRows(queueView?.rows ?? [], reportLob, reportSearch), [queueView?.rows, reportLob, reportSearch]);
   const departmentSummaries = useMemo(() => buildDepartmentReportSummaries(reportRows), [reportRows]);
   const reportBacklogCard = useMemo(() => buildReportBacklogCard(reportRows, selectedCycleValue), [reportRows, selectedCycleValue]);
@@ -607,28 +605,29 @@ export function RealTimePage() {
   useEffect(() => {
     const interval = window.setInterval(async () => {
       try {
-        const params = new URLSearchParams({ view: activeTab === "agents" ? "agents" : activeTab === "report" ? "both" : "queues" });
+        const view = activeTab === "agents" ? "agents" : activeTab === "report" ? "both" : "queues";
+        const params = new URLSearchParams({ view });
         const response = await fetch(`/api/realtime/latest?${params.toString()}`, { cache: "no-store" });
         const json = await response.json();
         if (!response.ok) throw new Error(json.message || json.error || "Não foi possível verificar atualização do Real Time.");
         const latest = activeTab === "agents" ? json.data?.agents : json.data?.queues;
         const latestCycleDownload = typeof latest?.cycleDownload === "string" ? latest.cycleDownload : "";
-        const nextBatchId = typeof latest?.batchId === "string" ? latest.batchId : "";
-        const nextImportedAt = typeof latest?.importedAt === "string" ? latest.importedAt : "";
-        const sameKnownBatch = nextBatchId
-          ? nextBatchId === latestBatchId
-          : latestCycleDownload === latestCycle && nextImportedAt === latestImportedAt;
-        if (!latestCycleDownload || sameKnownBatch) return;
+        const cycleToRefresh = !selectedCycleValue || selectedCycleValue === latestCycle
+          ? latestCycleDownload
+          : selectedCycleValue;
+        if (!cycleToRefresh) return;
 
-        const shouldFollowLatest = !selectedCycleValue || selectedCycleValue === latestCycle;
-        await loadSnapshot(shouldFollowLatest ? latestCycleDownload : selectedCycleValue, true, activeTab === "agents" ? "agents" : activeTab === "report" ? "both" : "queues");
+        await loadSnapshot(cycleToRefresh, true, view);
+        if (CEC_REPORT_ENABLED && activeTab === "report" && reportLob === "CEC") {
+          await loadCecReport(cycleToRefresh);
+        }
       } catch (currentError) {
-        console.warn("[realtime] Auto-refresh leve falhou.", currentError);
+        console.warn("[realtime] Auto-refresh falhou.", currentError);
       }
     }, 60000);
     return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, latestBatchId, latestCycle, latestImportedAt, selectedCycleValue]);
+  }, [activeTab, latestCycle, reportLob, selectedCycleValue]);
 
   useEffect(() => {
     if (CEC_REPORT_ENABLED && activeTab === "report" && reportLob === "CEC") {

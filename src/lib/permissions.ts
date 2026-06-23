@@ -112,7 +112,11 @@ export function canAccessRealTime(user: PermissionUser) {
   const role = normalizeRole(user.role);
   if (!isActiveUser(user)) return false;
   if (["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(role)) return true;
-  return isRtaSkill(user.skill) || isRtaSkill(user.roleTitle) || isRtaSkill(user.jobTitle);
+  return hasRealTimeOperationalSkill(user.skill) || hasRealTimeOperationalSkill(user.roleTitle) || hasRealTimeOperationalSkill(user.jobTitle);
+}
+
+export function hasRealTimeOperationalSkill(value?: string | null) {
+  return isRtaSkill(value) || isPocSkill(value);
 }
 
 export function isRtaSkill(value?: string | null) {
@@ -126,6 +130,17 @@ export function isRtaSkill(value?: string | null) {
     compact.includes("realtimeanalyst") ||
     compact.includes("analistarealtime") ||
     compact.includes("analistarta")
+  );
+}
+
+export function isPocSkill(value?: string | null) {
+  const normalized = normalizeComparableJobTitle(value);
+  if (!normalized) return false;
+  const compact = normalized.replace(/[^a-z0-9]/g, "");
+  return (
+    /(^|[^a-z0-9])poc([^a-z0-9]|$)/.test(normalized) ||
+    compact === "poc" ||
+    compact.includes("pointofcontact")
   );
 }
 
