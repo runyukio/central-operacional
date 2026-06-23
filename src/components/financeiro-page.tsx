@@ -31,9 +31,11 @@ type FinanceiroRecord = {
   invoiceCycleMonth: string;
   invoiceCycleLabel: string;
   costCenter: string;
+  status: string;
+  statusLabel: string;
   maxHoursCapacity: string;
-  billableHoursTarget: string;
   billableHoursActual: string;
+  trainingHours: string;
   adherenceLabel: string;
   adherencePercent: number;
   differenceHours: string;
@@ -85,8 +87,8 @@ type FinanceiroPayload = {
     };
     summary: {
       maxHoursCapacity: string;
-      billableHoursTarget: string;
       billableHoursActual: string;
+      trainingHours: string;
       adherencePercent: number;
       differenceHours: string;
       differenceMinutes: number;
@@ -119,25 +121,13 @@ type FinanceiroAnalyticsRow = {
   invoiceCycleMonth: string;
   invoiceCycleLabel: string;
   costCenter: string;
-  closedMonth: boolean;
-  projectionAllowed: boolean;
-  projectionReason: string;
+  status: string;
+  statusLabel: string;
   parameters: FinanceiroParameter;
   hours: {
     maxHoursCapacity: string;
-    billableTarget: string;
     billableActual: string;
-    approved: string;
-    projected: string;
-    totalConsidered: string;
-    scheduleEligible: string;
-    scheduledOpen: string;
-    present: string;
-    dayOffSale: string;
-    absence: string;
     training: string;
-    hourAdherencePercent: number;
-    absPercent: number;
   };
   values: {
     kwaiRevenueUsd: number;
@@ -161,7 +151,7 @@ type FinanceiroAnalyticsRow = {
 
 type FinanceiroAnalytics = {
   currentMonth: string;
-  hoursSummary: { approved: string; projected: string; total: string };
+  hoursSummary: { maxHoursCapacity: string; billableActual: string; training: string };
   valueSummary: { revenueUsd: number; revenueBrl: number };
   costSummary: { costBrl: number };
   resultSummary: { resultBrl: number; marginPercent: number };
@@ -169,7 +159,7 @@ type FinanceiroAnalytics = {
   parameters: FinanceiroParameter[];
 };
 
-type FinanceiroTab = "hours" | "values" | "costs" | "result" | "parameters";
+type FinanceiroTab = "history" | "values" | "costs" | "result" | "parameters";
 
 type FinanceiroParameterForm = {
   invoiceCycleMonth: string;
@@ -185,9 +175,10 @@ type PreviewRow = {
   rowNumber: number;
   invoiceCycleMonth: string;
   costCenter: string;
+  status: string;
   maxHoursCapacityMinutes: number;
-  billableHoursTargetMinutes: number;
   billableHoursActualMinutes: number;
+  trainingHoursMinutes: number;
   adherencePercent: number;
   differenceMinutes: number;
   penaltyPercent: number;
@@ -199,8 +190,9 @@ type PreviewRow = {
   display: {
     invoiceCycleMonth: string;
     maxHoursCapacity: string;
-    billableHoursTarget: string;
     billableHoursActual: string;
+    trainingHours: string;
+    status: string;
     adherencePercent: string;
     differenceHours: string;
     penaltyPercent: string;
@@ -221,9 +213,10 @@ type FinanceiroRecordForm = {
   id?: string;
   invoiceCycleMonth: string;
   costCenter: string;
+  status: string;
   maxHoursCapacity: string;
-  billableHoursTarget: string;
   billableHoursActual: string;
+  trainingHours: string;
   adherencePercent: string;
   differenceHours: string;
   penaltyPercent: string;
@@ -233,19 +226,25 @@ type FinanceiroRecordForm = {
 
 const adjustmentFields = [
   { value: "maxHoursCapacityMinutes", label: "Max Hours (Capacity)" },
-  { value: "billableHoursTargetMinutes", label: "Billable Hours (Meta)" },
   { value: "billableHoursActualMinutes", label: "Billable Hours (Real)" },
+  { value: "trainingHoursMinutes", label: "Training Hours" },
   { value: "adherencePercent", label: "Aderence %" },
   { value: "differenceMinutes", label: "Difference" },
   { value: "penaltyPercent", label: "Penalty %" },
+  { value: "status", label: "Status" },
   { value: "notes", label: "Notes" },
   { value: "source", label: "Source" }
 ];
 
 const adjustmentTypes = ["Correção de horas", "Correção de aderence", "Correção de penalty", "Observação", "Outro"];
+const financeRecordStatusOptions = [
+  { value: "PROJECAO", label: "Projeção" },
+  { value: "EM_VALIDACAO", label: "Em validação" },
+  { value: "FECHADO", label: "Fechado" }
+];
 
 export function FinanceiroPage() {
-  const [activeTab, setActiveTab] = useState<FinanceiroTab>("hours");
+  const [activeTab, setActiveTab] = useState<FinanceiroTab>("history");
   const [invoiceCycleMonth, setInvoiceCycleMonth] = useState("");
   const [costCenter, setCostCenter] = useState("Todos");
   const [source, setSource] = useState("Todos");
@@ -349,9 +348,10 @@ export function FinanceiroPage() {
     setRecordForm({
       invoiceCycleMonth: invoiceCycleMonth || defaultMonth(),
       costCenter: costCenter !== "Todos" ? costCenter : "",
+      status: "PROJECAO",
       maxHoursCapacity: "",
-      billableHoursTarget: "",
       billableHoursActual: "",
+      trainingHours: "0:00",
       adherencePercent: "",
       differenceHours: "",
       penaltyPercent: "0",
@@ -365,9 +365,10 @@ export function FinanceiroPage() {
       id: record.id,
       invoiceCycleMonth: record.invoiceCycleMonth,
       costCenter: record.costCenter,
+      status: record.status || "PROJECAO",
       maxHoursCapacity: record.maxHoursCapacity,
-      billableHoursTarget: record.billableHoursTarget,
       billableHoursActual: record.billableHoursActual,
+      trainingHours: record.trainingHours,
       adherencePercent: record.adherenceLabel.replace("%", ""),
       differenceHours: record.differenceHours,
       penaltyPercent: record.penaltyLabel.replace("%", ""),
@@ -428,7 +429,7 @@ export function FinanceiroPage() {
     <div className="space-y-4">
       <PageHeader
         title="Financeiro"
-        description="Acompanhamento restrito por ciclo de invoice, LOB, horas billáveis e penalty percentual."
+        description="Acompanhamento restrito por ciclo de invoice, LOB, receita, custos e penalty percentual."
         icon={LockKeyhole}
         actions={
           <div className="flex flex-wrap items-center gap-2">
@@ -494,17 +495,16 @@ export function FinanceiroPage() {
 
       <FinanceiroTabs activeTab={activeTab} onChange={setActiveTab} />
 
-      {activeTab === "hours" ? (
+      {activeTab === "history" ? (
         <>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-            <StatCard title="Max Hours (Capacity)" value={summary?.maxHoursCapacity ?? "-"} helper="horas" icon={Clock} tone="purple" />
-            <StatCard title="Billable Hours (Meta)" value={summary?.billableHoursTarget ?? "-"} helper="horas" icon={Target} tone="green" />
+            <StatCard title="Max Hours (Meta)" value={summary?.maxHoursCapacity ?? "-"} helper="horas" icon={Target} tone="purple" />
             <StatCard title="Billable Hours (Real)" value={summary?.billableHoursActual ?? "-"} helper="horas" icon={Clock} tone="blue" />
+            <StatCard title="Training Hours" value={summary?.trainingHours ?? "-"} helper="horas" icon={Clock} tone="green" />
             <StatCard title="Aderence %" value={`${formatPercent(summary?.adherencePercent ?? 0)}%`} helper="Meta: 100%" icon={BarChart3} tone="green" />
             <StatCard title="Difference" value={summary?.differenceHours ?? "-"} helper="horas" icon={(summary?.differenceMinutes ?? 0) < 0 ? TrendingDown : TrendingUp} tone={(summary?.differenceMinutes ?? 0) < 0 ? "red" : "green"} />
             <StatCard title="Penalty %" value={`${formatPercent(summary?.penaltyPercent ?? 0)}%`} helper="percentual" icon={TrendingDown} tone={(summary?.penaltyPercent ?? 0) > 0 ? "red" : (summary?.penaltyPercent ?? 0) < 0 ? "green" : "orange"} />
           </div>
-          <HoursProjectionPanel analytics={analytics} />
           <FinanceiroHistoryPanel loading={loading} records={payload?.data.records ?? []} onView={setSelectedRecord} onEdit={openEditRecordForm} onAdjust={setAdjustRecord} />
         </>
       ) : null}
@@ -526,7 +526,7 @@ export function FinanceiroPage() {
 
 function FinanceiroTabs({ activeTab, onChange }: { activeTab: FinanceiroTab; onChange: (tab: FinanceiroTab) => void }) {
   const tabs: Array<{ value: FinanceiroTab; label: string }> = [
-    { value: "hours", label: "Horas" },
+    { value: "history", label: "Histórico" },
     { value: "values", label: "Valores" },
     { value: "costs", label: "Custos" },
     { value: "result", label: "Resultado" },
@@ -548,33 +548,6 @@ function FinanceiroTabs({ activeTab, onChange }: { activeTab: FinanceiroTab; onC
   );
 }
 
-function HoursProjectionPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
-  return (
-    <Panel title="Horas e aderência">
-      <div className="space-y-3">
-        <div className="grid gap-3 md:grid-cols-3">
-          <InfoBox label="Horas aprovadas" value={analytics?.hoursSummary.approved ?? "-"} />
-          <InfoBox label="Horas projetadas" value={analytics?.hoursSummary.projected ?? "-"} tone="green" />
-          <InfoBox label="Total" value={analytics?.hoursSummary.total ?? "-"} />
-        </div>
-        <FinanceAnalyticsTable
-          rows={analytics?.rows ?? []}
-          columns={[
-            ["Ciclo", (row) => row.invoiceCycleLabel],
-            ["LOB", (row) => row.costCenter],
-            ["Horas já aprovadas", (row) => row.hours.approved],
-            ["Horas projetadas", (row) => row.projectionAllowed ? row.hours.projected : "-"],
-            ["Total", (row) => row.hours.totalConsidered],
-            ["Aderência", (row) => `${formatPercent(row.hours.hourAdherencePercent)}%`],
-            ["ABS", (row) => `${formatPercent(row.hours.absPercent)}%`]
-          ]}
-          emptyTitle="Sem dados de horas"
-        />
-      </div>
-    </Panel>
-  );
-}
-
 function ValuesPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
   return (
     <div className="space-y-4">
@@ -589,6 +562,9 @@ function ValuesPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
           columns={[
             ["Ciclo", (row) => row.invoiceCycleLabel],
             ["LOB", (row) => row.costCenter],
+            ["Status", (row) => row.statusLabel],
+            ["Billable Hours", (row) => row.hours.billableActual],
+            ["Training Hours", (row) => row.hours.training],
             ["Kwai USD", (row) => formatUsd(row.values.kwaiRevenueUsd)],
             ["Global USD", (row) => formatUsd(row.values.globalRevenueUsd)],
             ["Treinamento USD", (row) => formatUsd(row.values.trainingRevenueUsd)],
@@ -607,8 +583,8 @@ function CostsPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
     <div className="space-y-4">
       <div className="grid gap-3 md:grid-cols-3">
         <StatCard title="Custo Billing" value={formatCurrency(analytics?.costSummary.costBrl ?? 0)} helper="valor final do Billing" icon={DollarSign} tone="orange" />
-        <StatCard title="Horas aprovadas" value={analytics?.hoursSummary.approved ?? "-"} helper="base realizada" icon={Clock} tone="green" />
-        <StatCard title="Horas projetadas" value={analytics?.hoursSummary.projected ?? "-"} helper="somente ciclo aberto" icon={Clock} tone="blue" />
+        <StatCard title="Horas Billing reais" value={analytics?.hoursSummary.billableActual ?? "-"} helper="histórico manual/importado" icon={Clock} tone="blue" />
+        <StatCard title="Training Hours" value={analytics?.hoursSummary.training ?? "-"} helper="receita treinamento" icon={Clock} tone="green" />
       </div>
       <Panel title="Custos por ciclo e LOB">
         <FinanceAnalyticsTable
@@ -616,9 +592,9 @@ function CostsPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
           columns={[
             ["Ciclo", (row) => row.invoiceCycleLabel],
             ["LOB", (row) => row.costCenter],
-            ["Status", (row) => row.closedMonth ? "Fechado" : "Aberto"],
+            ["Status", (row) => row.statusLabel],
             ["Custo aprovado", (row) => formatCurrency(row.costs.approvedCostBrl)],
-            ["Custo projetado", (row) => row.projectionAllowed ? formatCurrency(row.costs.projectedCostBrl) : "-"],
+            ["Custo projetado Billing", (row) => formatCurrency(row.costs.projectedCostBrl)],
             ["Bruto Billing", (row) => formatCurrency(row.costs.grossAmountBrl)],
             ["Final Billing", (row) => formatCurrency(row.costs.finalAmountBrl)]
           ]}
@@ -712,9 +688,10 @@ function FinanceiroHistoryPanel({ loading, records, onView, onEdit, onAdjust }: 
               <tr>
                 <th className="px-3 py-2">Ciclo da Invoice</th>
                 <th className="px-3 py-2">LOB</th>
+                <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2">Max Hours</th>
-                <th className="px-3 py-2">Billable Meta</th>
-                <th className="px-3 py-2">Billable Real</th>
+                <th className="px-3 py-2">Billable Hours</th>
+                <th className="px-3 py-2">Training Hours</th>
                 <th className="px-3 py-2">Aderence %</th>
                 <th className="px-3 py-2">Difference</th>
                 <th className="px-3 py-2">Penalty %</th>
@@ -727,9 +704,10 @@ function FinanceiroHistoryPanel({ loading, records, onView, onEdit, onAdjust }: 
                 <tr key={record.id} className="hover:bg-blue-50/40">
                   <td className="px-3 py-3 font-extrabold text-navy-950">{record.invoiceCycleLabel}</td>
                   <td className="px-3 py-3 font-bold text-muted">{record.costCenter}</td>
+                  <td className="px-3 py-3"><StatusBadge status={record.statusLabel} /></td>
                   <td className="px-3 py-3 font-bold">{record.maxHoursCapacity}</td>
-                  <td className="px-3 py-3 font-bold">{record.billableHoursTarget}</td>
                   <td className="px-3 py-3 font-bold">{record.billableHoursActual}</td>
+                  <td className="px-3 py-3 font-bold">{record.trainingHours}</td>
                   <td className={cn("px-3 py-3 font-black", record.adherencePercent >= 100 ? "text-emerald-600" : "text-amber-600")}>{record.adherenceLabel}</td>
                   <td className={cn("px-3 py-3 font-black", record.differenceMinutes < 0 ? "text-red-600" : "text-emerald-600")}>{record.differenceHours}</td>
                   <td className={cn("px-3 py-3 font-black", record.penaltyPercent > 0 ? "text-red-600" : record.penaltyPercent < 0 ? "text-emerald-600" : "text-muted")}>{record.penaltyLabel}</td>
@@ -785,9 +763,10 @@ function RecordDetailModal({ record, onClose, onEdit, onAdjust }: { record: Fina
       <div className="grid gap-3 md:grid-cols-2">
         <InfoBox label="Ciclo da Invoice" value={record.invoiceCycleLabel} />
         <InfoBox label="LOB" value={record.costCenter} />
+        <InfoBox label="Status" value={record.statusLabel} />
         <InfoBox label="Max Hours (Capacity)" value={record.maxHoursCapacity} />
-        <InfoBox label="Billable Hours (Meta)" value={record.billableHoursTarget} />
         <InfoBox label="Billable Hours (Real)" value={record.billableHoursActual} />
+        <InfoBox label="Training Hours" value={record.trainingHours} />
         <InfoBox label="Aderence %" value={record.adherenceLabel} />
         <InfoBox label="Difference" value={record.differenceHours} tone={record.differenceMinutes < 0 ? "red" : "green"} />
         <InfoBox label="Penalty %" value={record.penaltyLabel} tone={record.penaltyPercent > 0 ? "red" : record.penaltyPercent < 0 ? "green" : "neutral"} />
@@ -854,9 +833,15 @@ function RecordFormModal({
           <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">LOB</span>
           <input value={form.costCenter} onChange={(event) => setField("costCenter", event.target.value)} placeholder="ADS, CEC, COMMENTS, VIDEO ou PROJECT" className="premium-control h-10 w-full px-3 text-sm font-bold outline-none" />
         </label>
-        <FormInput label="Max Hours (Capacity)" value={form.maxHoursCapacity} onChange={(value) => setField("maxHoursCapacity", value)} placeholder="12000:00" />
-        <FormInput label="Billable Hours (Meta)" value={form.billableHoursTarget} onChange={(value) => setField("billableHoursTarget", value)} placeholder="10200:00" />
+        <label className="block">
+          <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">Status</span>
+          <select value={form.status} onChange={(event) => setField("status", event.target.value)} className="premium-control h-10 w-full px-3 text-sm font-bold outline-none">
+            {financeRecordStatusOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </label>
+        <FormInput label="Max Hours (Meta)" value={form.maxHoursCapacity} onChange={(value) => setField("maxHoursCapacity", value)} placeholder="12000:00" />
         <FormInput label="Billable Hours (Real)" value={form.billableHoursActual} onChange={(value) => setField("billableHoursActual", value)} placeholder="8742:30" />
+        <FormInput label="Training Hours" value={form.trainingHours} onChange={(value) => setField("trainingHours", value)} placeholder="0:00" />
         <FormInput label="Penalty %" value={form.penaltyPercent} onChange={(value) => setField("penaltyPercent", value)} placeholder="5, -3 ou 0" />
         <FormInput label="Aderence % (opcional)" value={form.adherencePercent} onChange={(value) => setField("adherencePercent", value)} placeholder="Calcula automático se vazio" />
         <FormInput label="Difference (opcional)" value={form.differenceHours} onChange={(value) => setField("differenceHours", value)} placeholder="Calcula automático se vazio" />
@@ -870,7 +855,7 @@ function RecordFormModal({
         </label>
       </div>
       <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
-        Horas aceitam formatos como 12000:00, 8742:30 ou decimal. Penalty é percentual e nunca valor em dinheiro.
+        Max Hours é a meta do ciclo. Billable Hours e Training Hours aceitam formatos como 12000:00, 8742:30 ou decimal. Penalty é percentual e nunca valor em dinheiro.
       </div>
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onClose} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Cancelar</button>
@@ -1006,7 +991,7 @@ function UploadModal({ preview, uploading, inputRef, onClose, onPreview, onCommi
   return (
     <ModalShell title="Upload histórico financeiro" onClose={onClose} wide>
       <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-sm font-semibold text-blue-800">
-        Envie XLSX com ciclo, LOB, horas, aderence e penalty %. Penalty será importado somente como percentual.
+        Envie XLSX com ciclo, LOB, status, Max Hours, Billable Hours, Training Hours, aderence e penalty %. Penalty será importado somente como percentual.
       </div>
       <label className="block">
         <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">Arquivo XLSX</span>
@@ -1023,15 +1008,16 @@ function UploadModal({ preview, uploading, inputRef, onClose, onPreview, onCommi
             <PreviewStat label="Atualizar" value={preview.updatedRows} />
           </div>
           <div className="max-h-[420px] overflow-auto rounded-xl border border-border/70">
-            <table className="min-w-[980px] w-full text-left text-xs">
+            <table className="min-w-[1080px] w-full text-left text-xs">
               <thead className="sticky top-0 bg-slate-50 text-[10px] uppercase tracking-wide text-muted">
                 <tr>
                   <th className="px-2 py-2">Linha</th>
                   <th className="px-2 py-2">Ciclo</th>
                   <th className="px-2 py-2">LOB</th>
+                  <th className="px-2 py-2">Status</th>
                   <th className="px-2 py-2">Max</th>
-                  <th className="px-2 py-2">Meta</th>
                   <th className="px-2 py-2">Real</th>
+                  <th className="px-2 py-2">Training</th>
                   <th className="px-2 py-2">Aderence</th>
                   <th className="px-2 py-2">Difference</th>
                   <th className="px-2 py-2">Penalty %</th>
@@ -1044,9 +1030,10 @@ function UploadModal({ preview, uploading, inputRef, onClose, onPreview, onCommi
                     <td className="px-2 py-2 font-bold">{row.rowNumber}</td>
                     <td className="px-2 py-2">{row.display.invoiceCycleMonth}</td>
                     <td className="px-2 py-2">{row.costCenter}</td>
+                    <td className="px-2 py-2">{row.display.status}</td>
                     <td className="px-2 py-2">{row.display.maxHoursCapacity}</td>
-                    <td className="px-2 py-2">{row.display.billableHoursTarget}</td>
                     <td className="px-2 py-2">{row.display.billableHoursActual}</td>
+                    <td className="px-2 py-2">{row.display.trainingHours}</td>
                     <td className="px-2 py-2">{row.display.adherencePercent}</td>
                     <td className="px-2 py-2">{row.display.differenceHours}</td>
                     <td className="px-2 py-2 font-black">{row.display.penaltyPercent}</td>
@@ -1219,18 +1206,20 @@ function defaultMonth() {
 
 function buildMonthOptions(selectedMonth?: string, availableMonths: string[] = []) {
   const now = new Date();
-  const startYear = now.getFullYear() - 2;
+  const minMonth = "2026-06";
+  const startYear = Math.max(2026, now.getFullYear() - 2);
   const endYear = now.getFullYear() + 2;
   const values = new Set<string>();
   availableMonths.forEach((month) => {
-    if (/^\d{4}-\d{2}$/.test(month)) values.add(month);
+    if (/^\d{4}-\d{2}$/.test(month) && month >= minMonth) values.add(month);
   });
   for (let year = endYear; year >= startYear; year -= 1) {
     for (let month = 12; month >= 1; month -= 1) {
-      values.add(`${year}-${String(month).padStart(2, "0")}`);
+      const value = `${year}-${String(month).padStart(2, "0")}`;
+      if (value >= minMonth) values.add(value);
     }
   }
-  if (selectedMonth && /^\d{4}-\d{2}$/.test(selectedMonth)) {
+  if (selectedMonth && /^\d{4}-\d{2}$/.test(selectedMonth) && selectedMonth >= minMonth) {
     values.add(selectedMonth);
   }
   return Array.from(values)

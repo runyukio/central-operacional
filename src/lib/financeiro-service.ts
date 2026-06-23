@@ -19,9 +19,11 @@ export type FinanceiroPreviewRow = {
   rowNumber: number;
   invoiceCycleMonth: string;
   costCenter: string;
+  status: string;
   maxHoursCapacityMinutes: number;
   billableHoursTargetMinutes: number;
   billableHoursActualMinutes: number;
+  trainingHoursMinutes: number;
   adherencePercent: number;
   differenceMinutes: number;
   penaltyPercent: number;
@@ -34,11 +36,14 @@ export type FinanceiroPreviewRow = {
 
 const FINANCEIRO_DEFAULT_SOURCE = "Upload histórico";
 const FINANCEIRO_MANUAL_SOURCE = "Manual";
-const FINANCEIRO_TEMPLATE_HEADERS = ["invoice_cycle_month", "cost_center", "max_hours_capacity", "billable_hours_target", "billable_hours_actual", "adherence_percent", "difference_hours", "penalty_percent", "notes"];
+const FINANCEIRO_TEMPLATE_HEADERS = ["invoice_cycle_month", "cost_center", "status", "max_hours_capacity", "billable_hours_actual", "training_hours", "adherence_percent", "difference_hours", "penalty_percent", "notes"];
 const FINANCEIRO_DEFAULT_KWAI_HOURLY_USD = 9.39;
 const FINANCEIRO_DEFAULT_GLOBAL_HOURLY_USD = 5.965;
 const FINANCEIRO_DEFAULT_TRAINING_HOURLY_USD = 1.45;
 const FINANCEIRO_ALLOWED_COST_CENTERS = ["ADS", "CEC", "COMMENTS", "VIDEO", "PROJECT"] as const;
+const FINANCEIRO_MIN_REFERENCE_MONTH = "2026-06";
+const FINANCEIRO_RECORD_STATUS_OPTIONS = ["PROJECAO", "EM_VALIDACAO", "FECHADO"] as const;
+type FinanceiroRecordStatus = typeof FINANCEIRO_RECORD_STATUS_OPTIONS[number];
 const FINANCEIRO_ALLOWED_CONTRACT_TYPES = ["CLT", "PJ"] as const;
 const FINANCEIRO_PROJECTABLE_SCHEDULE_STATUSES = ["ESCALADO", "PRESENTE", "VENDA_FOLGA_APROVADA"] as const;
 const FINANCEIRO_ABSENCE_SCHEDULE_STATUSES = ["FALTA", "FALTA_JUSTIFICADA", "FALTA_INJUSTIFICADA"] as const;
@@ -47,11 +52,12 @@ const FINANCEIRO_APPROVED_WORK_HOUR_STATUSES: WorkHourRecordStatus[] = ["IMPORTE
 const FINANCEIRO_CLOSED_BILLING_STATUSES = new Set(["FECHADO", "PAGO"]);
 const FINANCEIRO_ADJUSTMENT_FIELDS = new Map<string, { label: string; type: "hours" | "percent" | "text" }>([
   ["maxHoursCapacityMinutes", { label: "Max Hours (Capacity)", type: "hours" }],
-  ["billableHoursTargetMinutes", { label: "Billable Hours (Meta)", type: "hours" }],
   ["billableHoursActualMinutes", { label: "Billable Hours (Real)", type: "hours" }],
+  ["trainingHoursMinutes", { label: "Training Hours", type: "hours" }],
   ["adherencePercent", { label: "Aderence %", type: "percent" }],
   ["differenceMinutes", { label: "Difference", type: "hours" }],
   ["penaltyPercent", { label: "Penalty %", type: "percent" }],
+  ["status", { label: "Status", type: "text" }],
   ["notes", { label: "Notes", type: "text" }],
   ["source", { label: "Source", type: "text" }]
 ] as const);
@@ -154,8 +160,10 @@ export async function commitFinanceiroImport(actor: Actor, rows: FinanceiroPrevi
       where: { invoiceCycleMonth_costCenter: { invoiceCycleMonth: row.invoiceCycleMonth, costCenter: row.costCenter } },
       update: {
         maxHoursCapacityMinutes: row.maxHoursCapacityMinutes,
-        billableHoursTargetMinutes: row.billableHoursTargetMinutes,
+        billableHoursTargetMinutes: row.maxHoursCapacityMinutes,
         billableHoursActualMinutes: row.billableHoursActualMinutes,
+        trainingHoursMinutes: row.trainingHoursMinutes,
+        status: row.status,
         adherencePercent: decimal(row.adherencePercent),
         differenceMinutes: row.differenceMinutes,
         penaltyPercent: decimal(row.penaltyPercent),
@@ -168,8 +176,10 @@ export async function commitFinanceiroImport(actor: Actor, rows: FinanceiroPrevi
         invoiceCycleMonth: row.invoiceCycleMonth,
         costCenter: row.costCenter,
         maxHoursCapacityMinutes: row.maxHoursCapacityMinutes,
-        billableHoursTargetMinutes: row.billableHoursTargetMinutes,
+        billableHoursTargetMinutes: row.maxHoursCapacityMinutes,
         billableHoursActualMinutes: row.billableHoursActualMinutes,
+        trainingHoursMinutes: row.trainingHoursMinutes,
+        status: row.status,
         adherencePercent: decimal(row.adherencePercent),
         differenceMinutes: row.differenceMinutes,
         penaltyPercent: decimal(row.penaltyPercent),
@@ -219,17 +229,23 @@ export async function createFinanceiroAdjustment(actor: Actor, input: {
   const data: Prisma.FinanceInvoiceCycleRecordUpdateInput = { updatedBy: { connect: { id: user.id } } };
 
   if (fieldName === "maxHoursCapacityMinutes") data.maxHoursCapacityMinutes = parsed.value as number;
-  if (fieldName === "billableHoursTargetMinutes") data.billableHoursTargetMinutes = parsed.value as number;
   if (fieldName === "billableHoursActualMinutes") data.billableHoursActualMinutes = parsed.value as number;
+  if (fieldName === "trainingHoursMinutes") data.trainingHoursMinutes = parsed.value as number;
   if (fieldName === "adherencePercent") data.adherencePercent = decimal(parsed.value as number);
   if (fieldName === "differenceMinutes") data.differenceMinutes = parsed.value as number;
   if (fieldName === "penaltyPercent") data.penaltyPercent = decimal(parsed.value as number);
+  if (fieldName === "status") {
+    const status = normalizeFinanceRecordStatus(parsed.value);
+    if (!status) return { error: "Status financeiro inválido.", status: 400 };
+    data.status = status;
+  }
   if (fieldName === "notes") data.notes = String(parsed.value ?? "").trim() || null;
   if (fieldName === "source") data.source = String(parsed.value ?? "").trim() || null;
 
-  const nextTarget = fieldName === "billableHoursTargetMinutes" ? parsed.value as number : record.billableHoursTargetMinutes;
+  const nextTarget = fieldName === "maxHoursCapacityMinutes" ? parsed.value as number : record.maxHoursCapacityMinutes;
   const nextActual = fieldName === "billableHoursActualMinutes" ? parsed.value as number : record.billableHoursActualMinutes;
-  if (fieldName === "billableHoursTargetMinutes" || fieldName === "billableHoursActualMinutes") {
+  if (fieldName === "maxHoursCapacityMinutes" || fieldName === "billableHoursActualMinutes") {
+    data.billableHoursTargetMinutes = nextTarget;
     data.adherencePercent = decimal(calculateAdherence(nextActual, nextTarget));
     data.differenceMinutes = nextActual - nextTarget;
   }
@@ -272,20 +288,25 @@ export async function saveFinanceiroRecord(actor: Actor, input: Record<string, u
   const rawCostCenter = text(input.costCenter);
   const costCenter = normalizeFinanceCostCenter(rawCostCenter);
   if (!invoiceCycleMonth) return { error: "Ciclo da invoice é obrigatório.", status: 400 };
+  if (invoiceCycleMonth < FINANCEIRO_MIN_REFERENCE_MONTH) return { error: "Financeiro considera ciclos a partir de Junho/2026.", status: 400 };
   if (!rawCostCenter) return { error: "LOB é obrigatória.", status: 400 };
   if (!costCenter) return { error: "LOB permitidas: ADS, CEC, COMMENTS, VIDEO e PROJECT.", status: 400 };
 
   const maxHoursCapacityMinutes = parseHours(input.maxHoursCapacity);
-  const billableHoursTargetMinutes = parseHours(input.billableHoursTarget);
   const billableHoursActualMinutes = parseHours(input.billableHoursActual);
+  const trainingHoursMinutes = parseOptionalHours(input.trainingHours, "Training Hours");
   const penaltyPercent = parsePercent(input.penaltyPercent);
   const importedAdherence = parsePercent(input.adherencePercent);
   const importedDifference = parseHours(input.differenceHours);
+  const rawStatus = text(input.status);
+  const status = normalizeFinanceRecordStatus(input.status);
   if (maxHoursCapacityMinutes === null) return { error: "Max Hours (Capacity) inválido.", status: 400 };
-  if (billableHoursTargetMinutes === null) return { error: "Billable Hours (Meta) inválido.", status: 400 };
   if (billableHoursActualMinutes === null) return { error: "Billable Hours (Real) inválido.", status: 400 };
+  if (typeof trainingHoursMinutes === "string") return { error: trainingHoursMinutes, status: 400 };
   if (penaltyPercent === null) return { error: "Penalty % inválido.", status: 400 };
+  if (rawStatus && !status) return { error: "Status financeiro inválido.", status: 400 };
 
+  const billableHoursTargetMinutes = maxHoursCapacityMinutes;
   const adherencePercent = importedAdherence ?? calculateAdherence(billableHoursActualMinutes, billableHoursTargetMinutes);
   const differenceMinutes = importedDifference ?? billableHoursActualMinutes - billableHoursTargetMinutes;
   const notes = text(input.notes);
@@ -296,6 +317,8 @@ export async function saveFinanceiroRecord(actor: Actor, input: Record<string, u
     maxHoursCapacityMinutes,
     billableHoursTargetMinutes,
     billableHoursActualMinutes,
+    trainingHoursMinutes,
+    status: status || "PROJECAO",
     adherencePercent: decimal(adherencePercent),
     differenceMinutes,
     penaltyPercent: decimal(penaltyPercent),
@@ -327,8 +350,9 @@ export async function saveFinanceiroRecord(actor: Actor, input: Record<string, u
       invoiceCycleMonth,
       costCenter,
       maxHoursCapacity: minutesToHours(maxHoursCapacityMinutes),
-      billableHoursTarget: minutesToHours(billableHoursTargetMinutes),
       billableHoursActual: minutesToHours(billableHoursActualMinutes),
+      trainingHours: minutesToHours(trainingHoursMinutes),
+      status: status || "PROJECAO",
       adherencePercent,
       differenceHours: minutesToHours(differenceMinutes),
       penaltyPercent
@@ -445,13 +469,13 @@ export async function exportFinanceiro(actor: Actor, filters: FinanceiroFilters 
   return {
     fileName: `financeiro_${new Date().toISOString().slice(0, 10)}.xlsx`,
     sheetName: "Consolidado",
-    headers: ["max_hours_capacity", "billable_hours_target", "billable_hours_actual", "aderence_percent", "difference_hours", "penalty_percent"],
-    rows: [[summary.maxHoursCapacity, summary.billableHoursTarget, summary.billableHoursActual, `${summary.adherencePercent}%`, summary.differenceHours, `${summary.penaltyPercent}%`]],
+    headers: ["max_hours_capacity", "billable_hours_actual", "training_hours", "aderence_percent", "difference_hours", "penalty_percent"],
+    rows: [[summary.maxHoursCapacity, summary.billableHoursActual, summary.trainingHours, `${summary.adherencePercent}%`, summary.differenceHours, `${summary.penaltyPercent}%`]],
     sheets: [
       {
         sheetName: "Historico por ciclo",
-        headers: ["invoice_cycle_month", "cost_center", "max_hours_capacity", "billable_hours_target", "billable_hours_actual", "adherence_percent", "difference_hours", "penalty_percent", "notes", "source", "created_at", "updated_at"],
-        rows: records.map((record) => [record.invoiceCycleMonth, record.costCenter, minutesToHours(record.maxHoursCapacityMinutes), minutesToHours(record.billableHoursTargetMinutes), minutesToHours(record.billableHoursActualMinutes), `${Number(record.adherencePercent)}%`, minutesToHours(record.differenceMinutes), `${Number(record.penaltyPercent)}%`, record.notes ?? "", record.source ?? "", record.createdAt.toISOString(), record.updatedAt.toISOString()])
+        headers: ["invoice_cycle_month", "cost_center", "status", "max_hours_capacity", "billable_hours_actual", "training_hours", "adherence_percent", "difference_hours", "penalty_percent", "notes", "source", "created_at", "updated_at"],
+        rows: records.map((record) => [record.invoiceCycleMonth, record.costCenter, financeRecordStatusLabel(record.status), minutesToHours(record.maxHoursCapacityMinutes), minutesToHours(record.billableHoursActualMinutes), minutesToHours(record.trainingHoursMinutes), `${Number(record.adherencePercent)}%`, minutesToHours(record.differenceMinutes), `${Number(record.penaltyPercent)}%`, record.notes ?? "", record.source ?? "", record.createdAt.toISOString(), record.updatedAt.toISOString()])
       },
       {
         sheetName: "Ajustes",
@@ -464,24 +488,19 @@ export async function exportFinanceiro(actor: Actor, filters: FinanceiroFilters 
         rows: uploads.map((row) => [row.fileName, row.uploadedBy?.email ?? "", row.rowsTotal, row.rowsValid, row.rowsError, row.rowsInserted, row.rowsUpdated, row.status, row.uploadedAt.toISOString()])
       },
       {
-        sheetName: "Projecao horas",
-        headers: ["invoice_cycle_month", "lob", "horas_aprovadas", "horas_projetadas", "total", "aderencia_percent", "abs_percent"],
-        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.hours.approved, row.projectionAllowed ? row.hours.projected : "", row.hours.totalConsidered, `${row.hours.hourAdherencePercent}%`, `${row.hours.absPercent}%`])
-      },
-      {
         sheetName: "Valores",
-        headers: ["invoice_cycle_month", "cost_center", "kwai_revenue_usd", "global_revenue_usd", "training_revenue_usd", "total_revenue_usd", "exchange_rate_usd_brl", "total_revenue_brl"],
-        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.values.kwaiRevenueUsd, row.values.globalRevenueUsd, row.values.trainingRevenueUsd, row.values.totalRevenueUsd, row.values.exchangeRateUsdBrl, row.values.totalRevenueBrl])
+        headers: ["invoice_cycle_month", "cost_center", "status", "kwai_revenue_usd", "global_revenue_usd", "training_revenue_usd", "total_revenue_usd", "exchange_rate_usd_brl", "total_revenue_brl"],
+        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.statusLabel, row.values.kwaiRevenueUsd, row.values.globalRevenueUsd, row.values.trainingRevenueUsd, row.values.totalRevenueUsd, row.values.exchangeRateUsdBrl, row.values.totalRevenueBrl])
       },
       {
         sheetName: "Custos",
-        headers: ["invoice_cycle_month", "cost_center", "custo_aprovado_brl", "custo_projetado_brl", "gross_billing_brl", "final_billing_brl"],
-        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.costs.approvedCostBrl, row.projectionAllowed ? row.costs.projectedCostBrl : 0, row.costs.grossAmountBrl, row.costs.finalAmountBrl])
+        headers: ["invoice_cycle_month", "cost_center", "status", "custo_aprovado_brl", "custo_projetado_brl", "gross_billing_brl", "final_billing_brl"],
+        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.statusLabel, row.costs.approvedCostBrl, row.costs.projectedCostBrl, row.costs.grossAmountBrl, row.costs.finalAmountBrl])
       },
       {
         sheetName: "Resultado",
-        headers: ["invoice_cycle_month", "cost_center", "receita_brl", "custo_brl", "resultado_brl", "margem_percent"],
-        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.values.totalRevenueBrl, row.costs.finalAmountBrl, row.result.resultBrl, `${row.result.marginPercent}%`])
+        headers: ["invoice_cycle_month", "cost_center", "status", "receita_brl", "custo_brl", "resultado_brl", "margem_percent"],
+        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.statusLabel, row.values.totalRevenueBrl, row.costs.finalAmountBrl, row.result.resultBrl, `${row.result.marginPercent}%`])
       },
       {
         sheetName: "Parametros",
@@ -496,7 +515,12 @@ function buildFinanceiroWhere(filters: FinanceiroFilters = {}) {
   const where: Prisma.FinanceInvoiceCycleRecordWhereInput = {};
   const and: Prisma.FinanceInvoiceCycleRecordWhereInput[] = [];
   const month = normalizeFinanceiroMonth(filters.invoiceCycleMonth);
-  if (month) where.invoiceCycleMonth = month;
+  if (month) {
+    if (month < FINANCEIRO_MIN_REFERENCE_MONTH) return { id: "__financeiro_no_reference_month__" };
+    where.invoiceCycleMonth = month;
+  } else {
+    where.invoiceCycleMonth = { gte: FINANCEIRO_MIN_REFERENCE_MONTH };
+  }
   const costCenterWhere = financeAllowedRecordCostCenterWhere(filters.costCenter);
   if (costCenterWhere) and.push(costCenterWhere);
   if (filters.source && filters.source !== "Todos") where.source = filters.source;
@@ -556,9 +580,12 @@ function parseFinanceiroImportRow(row: Record<string, unknown>, rowNumber: numbe
   const invoiceCycleMonth = normalizeFinanceiroMonth(rowValue(row, ["invoice_cycle_month", "ciclo_da_invoice", "ciclo da invoice", "ciclo", "invoice cycle", "invoice month"]));
   const rawCostCenter = text(rowValue(row, ["cost_center", "cost center", "cost of center", "centro de custo"]));
   const costCenter = normalizeFinanceCostCenter(rawCostCenter);
-  const maxHours = parseHours(rowValue(row, ["max_hours_capacity", "max hours capacity", "max hours", "capacity"]));
-  const targetHours = parseHours(rowValue(row, ["billable_hours_target", "billable hours target", "billable hours meta", "billable hours (meta)", "meta"]));
+  const rawStatus = rowValue(row, ["status", "status_financeiro", "situacao", "situação"]);
+  const status = normalizeFinanceRecordStatus(rawStatus);
+  const targetFallback = rowValue(row, ["billable_hours_target", "billable hours target", "billable hours meta", "billable hours (meta)", "meta"]);
+  const maxHours = parseHours(rowValue(row, ["max_hours_capacity", "max hours capacity", "max hours", "capacity"])) ?? parseHours(targetFallback);
   const actualHours = parseHours(rowValue(row, ["billable_hours_actual", "billable hours actual", "billable hours real", "billable hours (real)", "real"]));
+  const trainingHours = parseHours(rowValue(row, ["training_hours", "training hours", "horas_treinamento", "horas de treinamento", "treinamento"]));
   const importedAdherence = parsePercent(rowValue(row, ["adherence_percent", "aderence_percent", "aderence %", "adherence %", "aderence", "adherence"]));
   const importedDifference = parseHours(rowValue(row, ["difference_hours", "difference", "diferença", "diferenca"]));
   const penalty = parsePercent(rowValue(row, ["penalty_percent", "penalty %", "penalty", "penalidade"]));
@@ -566,11 +593,13 @@ function parseFinanceiroImportRow(row: Record<string, unknown>, rowNumber: numbe
   const source = text(rowValue(row, ["source", "fonte"])) || FINANCEIRO_DEFAULT_SOURCE;
 
   if (!invoiceCycleMonth) errors.push("Ciclo da invoice inválido.");
+  if (invoiceCycleMonth && invoiceCycleMonth < FINANCEIRO_MIN_REFERENCE_MONTH) errors.push("Financeiro considera ciclos a partir de Junho/2026.");
   if (!rawCostCenter) errors.push("LOB é obrigatória.");
   if (rawCostCenter && !costCenter) errors.push("LOB permitidas: ADS, CEC, COMMENTS, VIDEO e PROJECT.");
+  if (!isEmpty(rawStatus) && !status) errors.push("Status financeiro inválido.");
   if (maxHours === null) errors.push("Max Hours inválido.");
-  if (targetHours === null) errors.push("Billable Hours Meta inválido.");
   if (actualHours === null) errors.push("Billable Hours Real inválido.");
+  if (trainingHours === null && !isEmpty(rowValue(row, ["training_hours", "training hours", "horas_treinamento", "horas de treinamento", "treinamento"]))) errors.push("Training Hours inválido.");
   if (penalty === null) errors.push("Penalty % inválido.");
 
   const key = financeRecordKey(invoiceCycleMonth, costCenter);
@@ -580,7 +609,7 @@ function parseFinanceiroImportRow(row: Record<string, unknown>, rowNumber: numbe
     else seen.set(key, rowNumber);
   }
 
-  const safeTarget = targetHours ?? 0;
+  const safeTarget = maxHours ?? 0;
   const safeActual = actualHours ?? 0;
   const adherencePercent = importedAdherence ?? calculateAdherence(safeActual, safeTarget);
   const differenceMinutes = importedDifference ?? safeActual - safeTarget;
@@ -591,9 +620,11 @@ function parseFinanceiroImportRow(row: Record<string, unknown>, rowNumber: numbe
     rowNumber,
     invoiceCycleMonth,
     costCenter,
+    status: status || "PROJECAO",
     maxHoursCapacityMinutes: maxHours ?? 0,
     billableHoursTargetMinutes: safeTarget,
     billableHoursActualMinutes: safeActual,
+    trainingHoursMinutes: trainingHours ?? 0,
     adherencePercent,
     differenceMinutes,
     penaltyPercent: penalty ?? 0,
@@ -618,8 +649,9 @@ function buildFinanceiroPreview(rows: FinanceiroPreviewRow[], fileName: string) 
       display: {
         invoiceCycleMonth: formatReferenceMonth(row.invoiceCycleMonth),
         maxHoursCapacity: minutesToHours(row.maxHoursCapacityMinutes),
-        billableHoursTarget: minutesToHours(row.billableHoursTargetMinutes),
         billableHoursActual: minutesToHours(row.billableHoursActualMinutes),
+        trainingHours: minutesToHours(row.trainingHoursMinutes),
+        status: financeRecordStatusLabel(row.status),
         adherencePercent: `${formatNumber(row.adherencePercent)}%`,
         differenceHours: minutesToHours(row.differenceMinutes),
         penaltyPercent: `${formatNumber(row.penaltyPercent)}%`
@@ -628,20 +660,20 @@ function buildFinanceiroPreview(rows: FinanceiroPreviewRow[], fileName: string) 
   };
 }
 
-function buildFinanceiroSummary(records: Array<{ maxHoursCapacityMinutes: number; billableHoursTargetMinutes: number; billableHoursActualMinutes: number; differenceMinutes: number; penaltyPercent: Prisma.Decimal | number }>) {
+function buildFinanceiroSummary(records: Array<{ maxHoursCapacityMinutes: number; billableHoursActualMinutes: number; trainingHoursMinutes: number; differenceMinutes: number; penaltyPercent: Prisma.Decimal | number }>) {
   const maxMinutes = records.reduce((sum, row) => sum + row.maxHoursCapacityMinutes, 0);
-  const targetMinutes = records.reduce((sum, row) => sum + row.billableHoursTargetMinutes, 0);
   const actualMinutes = records.reduce((sum, row) => sum + row.billableHoursActualMinutes, 0);
+  const trainingMinutes = records.reduce((sum, row) => sum + row.trainingHoursMinutes, 0);
   const differenceMinutes = records.reduce((sum, row) => sum + row.differenceMinutes, 0);
   const penaltyPercent = records.length ? round2(records.reduce((sum, row) => sum + Number(row.penaltyPercent), 0) / records.length) : 0;
   return {
     maxHoursCapacity: minutesToHours(maxMinutes),
     maxHoursCapacityMinutes: maxMinutes,
-    billableHoursTarget: minutesToHours(targetMinutes),
-    billableHoursTargetMinutes: targetMinutes,
     billableHoursActual: minutesToHours(actualMinutes),
     billableHoursActualMinutes: actualMinutes,
-    adherencePercent: calculateAdherence(actualMinutes, targetMinutes),
+    trainingHours: minutesToHours(trainingMinutes),
+    trainingHoursMinutes: trainingMinutes,
+    adherencePercent: calculateAdherence(actualMinutes, maxMinutes),
     differenceHours: minutesToHours(differenceMinutes),
     differenceMinutes,
     penaltyPercent,
@@ -650,13 +682,13 @@ function buildFinanceiroSummary(records: Array<{ maxHoursCapacityMinutes: number
 }
 
 async function buildFinanceiroAnalytics(
-  records: Array<{ invoiceCycleMonth: string; costCenter: string; billableHoursTargetMinutes: number; billableHoursActualMinutes: number; maxHoursCapacityMinutes: number; differenceMinutes: number }>,
+  records: Array<{ invoiceCycleMonth: string; costCenter: string; status: string; billableHoursActualMinutes: number; trainingHoursMinutes: number; maxHoursCapacityMinutes: number; differenceMinutes: number }>,
   filters: FinanceiroFilters
 ) {
   const selectedMonth = normalizeFinanceiroMonth(filters.invoiceCycleMonth);
   const selectedCostCenter = normalizeFinanceCostCenter(filters.costCenter);
   const currentMonth = currentReferenceMonth();
-  const recordMonths = unique(records.map((record) => record.invoiceCycleMonth));
+  const recordMonths = unique(records.map((record) => record.invoiceCycleMonth).filter((month) => month >= FINANCEIRO_MIN_REFERENCE_MONTH));
   const months = unique([...(selectedMonth ? [selectedMonth] : recordMonths), currentMonth]).filter(Boolean);
   const parameterWhere: Prisma.FinanceCycleParameterWhereInput = {};
   if (selectedMonth) parameterWhere.invoiceCycleMonth = selectedMonth;
@@ -664,7 +696,7 @@ async function buildFinanceiroAnalytics(
   const parameterCostCenterWhere = financeAllowedParameterCostCenterWhere(selectedCostCenter);
   if (parameterCostCenterWhere) Object.assign(parameterWhere, parameterCostCenterWhere);
 
-  const [parameters, billingCycles, billingInvoices, schedules, approvedWorkHours] = await Promise.all([
+  const [parameters, billingCycles, billingInvoices] = await Promise.all([
     prisma.financeCycleParameter.findMany({ where: parameterWhere, orderBy: [{ invoiceCycleMonth: "desc" }, { costCenter: "asc" }] }),
     prisma.billingCycle.findMany({
       where: { referenceMonth: { in: months } },
@@ -685,27 +717,17 @@ async function buildFinanceiroAnalytics(
         finalAmount: true,
         employee: { select: { lob: { select: { name: true } } } }
       }
-    }),
-    listFinanceiroProjectionSchedules(months, selectedCostCenter),
-    listFinanceiroApprovedWorkHours(months, selectedCostCenter)
+    })
   ]);
 
   const cyclesByMonth = new Map(billingCycles.map((cycle) => [cycle.referenceMonth, cycle]));
   const parametersByKey = new Map(parameters.map((parameter) => [financeRecordKey(parameter.invoiceCycleMonth, parameter.costCenter), parameter]));
   const billingByKey = groupBillingFinanceRows(billingInvoices, cyclesByMonth);
-  const approvedHoursData = groupFinanceApprovedWorkHours(approvedWorkHours);
-  const scheduleData = groupFinanceSchedules(schedules, cyclesByMonth, approvedHoursData.workedDayKeys, currentSaoPauloDateKey());
-  const scheduleByKey = scheduleData.futureBuckets;
-  const actualScheduleByKey = scheduleData.actualBuckets;
-  const approvedHoursByKey = approvedHoursData.buckets;
   const recordsByKey = new Map(records.map((record) => [financeRecordKey(record.invoiceCycleMonth, record.costCenter), record]));
   const keys = unique([
     ...Array.from(recordsByKey.keys()),
     ...Array.from(parametersByKey.keys()),
-    ...Array.from(billingByKey.keys()),
-    ...Array.from(scheduleByKey.keys()),
-    ...Array.from(actualScheduleByKey.keys()),
-    ...Array.from(approvedHoursByKey.keys())
+    ...Array.from(billingByKey.keys())
   ]);
 
   const rows = keys.map((key) => {
@@ -714,27 +736,15 @@ async function buildFinanceiroAnalytics(
     const record = recordsByKey.get(key);
     const storedParameter = parametersByKey.get(key);
     const storedBilling = billingByKey.get(key);
-    const storedSchedule = scheduleByKey.get(key);
-    const storedActualSchedule = actualScheduleByKey.get(key);
-    const costCenter = normalizeFinanceCostCenter(record?.costCenter ?? storedParameter?.costCenter ?? storedBilling?.costCenter ?? storedSchedule?.costCenter ?? storedActualSchedule?.costCenter ?? normalizedCostCenter);
+    const costCenter = normalizeFinanceCostCenter(record?.costCenter ?? storedParameter?.costCenter ?? storedBilling?.costCenter ?? normalizedCostCenter);
     const billing = storedBilling ?? emptyBillingBucket(invoiceCycleMonth, costCenter);
-    const schedule = storedSchedule ?? emptyScheduleBucket(invoiceCycleMonth, costCenter);
-    const actualSchedule = storedActualSchedule ?? emptyActualScheduleBucket(invoiceCycleMonth, costCenter);
     const parameter = storedParameter ?? defaultFinanceParameter(invoiceCycleMonth, costCenter);
-    const cycle = cyclesByMonth.get(invoiceCycleMonth);
-    const closedMonth = isFinanceMonthClosed(invoiceCycleMonth, cycle);
     const parameterView = mapFinanceiroParameter(parameter, !parametersByKey.has(key));
-    const approvedBucket = approvedHoursByKey.get(key);
-    const approvedMinutes = approvedBucket?.approvedMinutes ?? billing.approvedMinutes;
-    const hourAdherenceFactor = actualSchedule.elapsedProjectableMinutes > 0 ? clamp(approvedMinutes / actualSchedule.elapsedProjectableMinutes, 0, 1) : 1;
-    const absApplicableMinutes = schedule.scheduledOpenMinutes + schedule.dayOffSaleMinutes;
-    const absBaseMinutes = actualSchedule.elapsedProjectableMinutes + actualSchedule.elapsedAbsenceMinutes;
-    const absFactor = absBaseMinutes > 0 ? clamp(actualSchedule.elapsedAbsenceMinutes / absBaseMinutes, 0, 1) : 0;
-    const projectedMinutes = closedMonth ? 0 : Math.round((schedule.presentMinutes + absApplicableMinutes * (1 - absFactor)) * hourAdherenceFactor);
+    const status = normalizeFinanceRecordStatus(record?.status) || "PROJECAO";
+    const statusLabel = financeRecordStatusLabel(status);
     const totalCostBrl = billing.finalAmountBrl;
-    const trainingMinutes = closedMonth ? 0 : schedule.trainingMinutes;
     const actualHours = (record?.billableHoursActualMinutes ?? 0) / 60;
-    const trainingHours = trainingMinutes / 60;
+    const trainingHours = (record?.trainingHoursMinutes ?? 0) / 60;
     const kwaiRevenueUsd = round2(actualHours * parameterView.kwaiHourlyUsd);
     const globalRevenueUsd = round2(actualHours * parameterView.globalHourlyUsd);
     const trainingRevenueUsd = round2(trainingHours * parameterView.trainingHourlyUsd);
@@ -748,25 +758,19 @@ async function buildFinanceiroAnalytics(
       invoiceCycleMonth,
       invoiceCycleLabel: formatReferenceMonth(invoiceCycleMonth),
       costCenter,
-      closedMonth,
-      projectionAllowed: !closedMonth,
-      projectionReason: closedMonth ? "Mês fechado: projeção desabilitada." : "",
+      status,
+      statusLabel,
       parameters: parameterView,
       hours: {
         maxHoursCapacity: minutesToHours(record?.maxHoursCapacityMinutes ?? 0),
-        billableTarget: minutesToHours(record?.billableHoursTargetMinutes ?? 0),
         billableActual: minutesToHours(record?.billableHoursActualMinutes ?? 0),
-        approved: minutesToHours(approvedMinutes),
-        projected: minutesToHours(projectedMinutes),
-        totalConsidered: minutesToHours(approvedMinutes + projectedMinutes),
-        scheduleEligible: minutesToHours(schedule.projectableMinutes),
-        scheduledOpen: minutesToHours(schedule.scheduledOpenMinutes),
-        present: minutesToHours(schedule.presentMinutes),
-        dayOffSale: minutesToHours(schedule.dayOffSaleMinutes),
-        absence: minutesToHours(schedule.absenceMinutes),
-        training: minutesToHours(trainingMinutes),
-        hourAdherencePercent: round2(hourAdherenceFactor * 100),
-        absPercent: round2(absFactor * 100)
+        training: minutesToHours(record?.trainingHoursMinutes ?? 0)
+      },
+      costs: {
+        approvedCostBrl: billing.approvedCostBrl,
+        projectedCostBrl: billing.projectedCostBrl,
+        grossAmountBrl: billing.grossAmountBrl,
+        finalAmountBrl: totalCostBrl
       },
       values: {
         kwaiRevenueUsd,
@@ -776,12 +780,6 @@ async function buildFinanceiroAnalytics(
         totalRevenueBrl,
         exchangeRateUsdBrl: exchangeRate
       },
-      costs: {
-        approvedCostBrl: billing.approvedCostBrl,
-        projectedCostBrl: closedMonth ? 0 : billing.projectedCostBrl,
-        grossAmountBrl: billing.grossAmountBrl,
-        finalAmountBrl: totalCostBrl
-      },
       result: {
         resultBrl,
         marginPercent
@@ -789,27 +787,29 @@ async function buildFinanceiroAnalytics(
     };
   }).filter((row) => {
     if (!isFinanceCostCenterAllowed(row.costCenter)) return false;
+    if (row.invoiceCycleMonth < FINANCEIRO_MIN_REFERENCE_MONTH) return false;
     if (selectedCostCenter && normalizeFinanceCostCenter(row.costCenter) !== selectedCostCenter) return false;
     if (selectedMonth && row.invoiceCycleMonth !== selectedMonth) return false;
     return true;
   }).sort((a, b) => b.invoiceCycleMonth.localeCompare(a.invoiceCycleMonth) || a.costCenter.localeCompare(b.costCenter));
 
   const summaries = rows.reduce((acc, row) => {
-    acc.hoursApprovedMinutes += parseDisplayMinutes(row.hours.approved);
-    acc.hoursProjectedMinutes += parseDisplayMinutes(row.hours.projected);
+    acc.maxMinutes += parseDisplayMinutes(row.hours.maxHoursCapacity);
+    acc.actualMinutes += parseDisplayMinutes(row.hours.billableActual);
+    acc.trainingMinutes += parseDisplayMinutes(row.hours.training);
     acc.revenueUsd += row.values.totalRevenueUsd;
     acc.revenueBrl += row.values.totalRevenueBrl;
     acc.costBrl += row.costs.finalAmountBrl;
     acc.resultBrl += row.result.resultBrl;
     return acc;
-  }, { hoursApprovedMinutes: 0, hoursProjectedMinutes: 0, revenueUsd: 0, revenueBrl: 0, costBrl: 0, resultBrl: 0 });
+  }, { maxMinutes: 0, actualMinutes: 0, trainingMinutes: 0, revenueUsd: 0, revenueBrl: 0, costBrl: 0, resultBrl: 0 });
 
   return {
     currentMonth,
     hoursSummary: {
-      approved: minutesToHours(summaries.hoursApprovedMinutes),
-      projected: minutesToHours(summaries.hoursProjectedMinutes),
-      total: minutesToHours(summaries.hoursApprovedMinutes + summaries.hoursProjectedMinutes)
+      maxHoursCapacity: minutesToHours(summaries.maxMinutes),
+      billableActual: minutesToHours(summaries.actualMinutes),
+      training: minutesToHours(summaries.trainingMinutes)
     },
     valueSummary: {
       revenueUsd: round2(summaries.revenueUsd),
@@ -843,17 +843,22 @@ type FinanceiroRecordLike = Prisma.FinanceInvoiceCycleRecordGetPayload<{}> & {
 };
 
 function mapFinanceiroRecord(record: FinanceiroRecordLike) {
+  const status = normalizeFinanceRecordStatus(record.status) || "PROJECAO";
   return {
     id: record.id,
     invoiceCycleMonth: record.invoiceCycleMonth,
     invoiceCycleLabel: formatReferenceMonth(record.invoiceCycleMonth),
     costCenter: record.costCenter,
+    status,
+    statusLabel: financeRecordStatusLabel(status),
     maxHoursCapacityMinutes: record.maxHoursCapacityMinutes,
     maxHoursCapacity: minutesToHours(record.maxHoursCapacityMinutes),
     billableHoursTargetMinutes: record.billableHoursTargetMinutes,
     billableHoursTarget: minutesToHours(record.billableHoursTargetMinutes),
     billableHoursActualMinutes: record.billableHoursActualMinutes,
     billableHoursActual: minutesToHours(record.billableHoursActualMinutes),
+    trainingHoursMinutes: record.trainingHoursMinutes,
+    trainingHours: minutesToHours(record.trainingHoursMinutes),
     adherencePercent: Number(record.adherencePercent),
     adherenceLabel: `${formatNumber(Number(record.adherencePercent))}%`,
     differenceMinutes: record.differenceMinutes,
@@ -1171,6 +1176,7 @@ function parseAdjustmentValue(type: string, value: unknown): { valid: true; valu
 }
 
 function financeFieldDisplay(record: { [key: string]: unknown }, fieldName: string) {
+  if (fieldName === "status") return financeRecordStatusLabel(String(record[fieldName] ?? ""));
   if (fieldName.endsWith("Minutes")) return minutesToHours(Number(record[fieldName] ?? 0));
   if (fieldName.endsWith("Percent")) return `${formatNumber(Number(record[fieldName] ?? 0))}%`;
   return String(record[fieldName] ?? "");
@@ -1278,11 +1284,39 @@ function parseHours(value: unknown): number | null {
   return Math.round(sign * decimalValue * 60);
 }
 
+function parseOptionalHours(value: unknown, label: string): number | string {
+  if (isEmpty(value)) return 0;
+  const parsed = parseHours(value);
+  return parsed === null ? `${label} inválido.` : parsed;
+}
+
 function parsePercent(value: unknown): number | null {
   if (isEmpty(value)) return null;
   if (typeof value === "number" && Number.isFinite(value)) return round2(value);
   const parsed = Number(text(value).replace("%", "").replace(",", ".").trim());
   return Number.isFinite(parsed) ? round2(parsed) : null;
+}
+
+function normalizeFinanceRecordStatus(value?: unknown): FinanceiroRecordStatus | "" {
+  const normalized = text(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (!normalized) return "PROJECAO";
+  if (["projecao", "projection", "projetado", "projetada"].includes(normalized)) return "PROJECAO";
+  if (["em_validacao", "validacao", "em_revisao", "revisao", "validation", "review"].includes(normalized)) return "EM_VALIDACAO";
+  if (["fechado", "closed", "finalizado"].includes(normalized)) return "FECHADO";
+  return "";
+}
+
+function financeRecordStatusLabel(value?: string | null) {
+  const status = normalizeFinanceRecordStatus(value) || "PROJECAO";
+  if (status === "FECHADO") return "Fechado";
+  if (status === "EM_VALIDACAO") return "Em validação";
+  return "Projeção";
 }
 
 function calculateAdherence(actualMinutes: number, targetMinutes: number) {
