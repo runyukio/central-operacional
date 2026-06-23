@@ -3129,7 +3129,7 @@ function isTnsReportAgentForLob(row: AgentRealtimeRow, lob: "VIDEO" | "COMMENTS"
 }
 
 function isOnlineHeadcountStatus(status: AgentPresenceStatus) {
-  return status === "Online" || status === "Ocioso" || status === "Fora do turno";
+  return status === "Online" || status === "Online sem produção" || status === "Ocioso" || status === "Fora do turno";
 }
 
 function buildQueueLobCards(rows: QueueRealtimeRow[], selectedCycle: string): QueueLobCardData[] {
