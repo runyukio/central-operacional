@@ -287,8 +287,7 @@ type QueueLobCardData = {
   maxLatency: AgentKpiCard;
   aht: AgentKpiCard;
 };
-type ReportLob = "ADS" | "TNS" | "CEC";
-const CEC_REPORT_ENABLED = false;
+type ReportLob = "ADS" | "TNS";
 type QueueReportRow = QueueRealtimeRow & {
   reportQueueName: string;
   reportDepartment: string;
@@ -301,60 +300,6 @@ type DepartmentReportSummary = {
   maxLatencySlaTargetMinutes: number | null;
   maxLatencyQueueId: string;
   maxLatencyQueueName: string;
-};
-
-type CecReportGroup = {
-  key: string;
-  label: string;
-  backlog: number;
-  onHold: number;
-  open: number;
-  new: number;
-};
-
-type CecReportDepartment = {
-  name: string;
-  group: string;
-  backlog: number;
-  percent: number | null;
-};
-
-type CecReportSnapshot = {
-  id: string;
-  cycleDownload: string;
-  fileName: string;
-  source: string;
-  generatedDate: string | null;
-  importedAt: string;
-  importedAtLabel: string;
-  totalBacklog: number;
-  normalBacklog: number;
-  p0Backlog: number;
-  p0L2Backlog: number;
-  onHoldCount: number;
-  openCount: number;
-  newCount: number;
-  groups: CecReportGroup[];
-  departments: CecReportDepartment[];
-};
-
-type CecReportPayload = {
-  hasData: boolean;
-  selectedCycle: string;
-  previousCycle: string;
-  cycles: Array<{ value: string; importedAt: string; importedAtLabel: string; rows: number }>;
-  snapshot: CecReportSnapshot | null;
-  previous: CecReportSnapshot | null;
-  history: Array<{
-    cycleDownload: string;
-    totalBacklog: number;
-    normalBacklog: number;
-    p0Backlog: number;
-    p0L2Backlog: number;
-    onHoldCount: number;
-    openCount: number;
-    newCount: number;
-  }>;
 };
 
 type ImportHistory = {
@@ -429,9 +374,6 @@ export function RealTimePage() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [imports, setImports] = useState<ImportHistory[]>([]);
   const [importsLoading, setImportsLoading] = useState(false);
-  const [cecReport, setCecReport] = useState<CecReportPayload | null>(null);
-  const [cecLoading, setCecLoading] = useState(false);
-  const [cecError, setCecError] = useState("");
   const snapshotAbortRef = useRef<AbortController | null>(null);
 
   async function loadSnapshot(cycle = selectedCycle, background = false, view: "agents" | "queues" | "both" = activeTab === "agents" ? "agents" : activeTab === "report" ? "both" : "queues") {
@@ -477,23 +419,6 @@ export function RealTimePage() {
       setError(currentError instanceof Error ? currentError.message : "Não foi possível carregar histórico de importações.");
     } finally {
       setImportsLoading(false);
-    }
-  }
-
-  async function loadCecReport(cycle = selectedCycle) {
-    setCecLoading(true);
-    setCecError("");
-    try {
-      const params = new URLSearchParams();
-      if (cycle) params.set("cycleDownload", cycle);
-      const response = await fetch(`/api/realtime/cec?${params.toString()}`, { cache: "no-store" });
-      const json = await response.json();
-      if (!response.ok) throw new Error(json.message || json.error || "Could not load CEC report.");
-      setCecReport((json as { data: CecReportPayload }).data);
-    } catch (currentError) {
-      setCecError(currentError instanceof Error ? currentError.message : "Could not load CEC report.");
-    } finally {
-      setCecLoading(false);
     }
   }
 
@@ -618,9 +543,6 @@ export function RealTimePage() {
         if (!cycleToRefresh) return;
 
         await loadSnapshot(cycleToRefresh, true, view);
-        if (CEC_REPORT_ENABLED && activeTab === "report" && reportLob === "CEC") {
-          await loadCecReport(cycleToRefresh);
-        }
       } catch (currentError) {
         console.warn("[realtime] Auto-refresh falhou.", currentError);
       }
@@ -628,13 +550,6 @@ export function RealTimePage() {
     return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, latestCycle, reportLob, selectedCycleValue]);
-
-  useEffect(() => {
-    if (CEC_REPORT_ENABLED && activeTab === "report" && reportLob === "CEC") {
-      void loadCecReport(selectedCycleValue);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, reportLob, selectedCycleValue]);
 
   function updateAgentFilter(key: keyof AgentFilters, value: string) {
     setAgentFilters((current) => ({ ...current, [key]: value }));
@@ -720,8 +635,6 @@ export function RealTimePage() {
             <QueueLobCard key={card.lob} card={card} />
           ))}
         </div>
-      ) : CEC_REPORT_ENABLED && reportLob === "CEC" ? (
-        <CecReportSection report={cecReport} loading={cecLoading} error={cecError} selectedCycle={selectedCycleValue} />
       ) : reportLob === "ADS" ? (
         <ReportSummarySection card={reportBacklogCard} departments={departmentSummaries} reportLob={reportLob} selectedCycle={selectedCycleValue} headcount={adsReportCards.headcount[0]} onDownloadSummary={downloadReportSummary} />
       ) : reportLob === "TNS" ? (
@@ -791,8 +704,6 @@ export function RealTimePage() {
             <AgentTable rows={agentRows} totalRows={agentView?.rows.length ?? 0} sort={agentSort} onSort={toggleAgentSort} onSelect={setSelectedAgent} />
           ) : activeTab === "queues" ? (
             <StructuredQueueTable rows={queueRows} totalRows={queueView?.rows.length ?? 0} sort={queueSort} onSort={toggleQueueSort} onSelect={setSelectedQueue} />
-          ) : CEC_REPORT_ENABLED && reportLob === "CEC" ? (
-            <CecReportTable report={cecReport} loading={cecLoading} selectedCycle={selectedCycleValue} />
           ) : (
             <ReportTable rows={reportRows} reportLob={reportLob} onDownloadQueues={downloadReportQueues} />
           )
@@ -1603,7 +1514,7 @@ function QueueLobQuickFilter({ value, onChange, options }: { value: string; onCh
 }
 
 function ReportLobQuickFilter({ value, onChange }: { value: ReportLob; onChange: (value: ReportLob) => void }) {
-  const lobs = CEC_REPORT_ENABLED ? (["ADS", "TNS", "CEC"] as const) : (["ADS", "TNS"] as const);
+  const lobs = ["ADS", "TNS"] as const;
   return (
     <div className="flex flex-wrap items-center gap-1 rounded-2xl border border-slate-200 bg-white p-1 shadow-[0_4px_12px_rgba(7,27,58,0.035)]">
       {lobs.map((lob) => {
@@ -1624,264 +1535,6 @@ function ReportLobQuickFilter({ value, onChange }: { value: ReportLob; onChange:
       })}
     </div>
   );
-}
-
-function CecReportSection({ report, loading, error, selectedCycle }: { report: CecReportPayload | null; loading: boolean; error: string; selectedCycle: string }) {
-  const snapshot = report?.snapshot ?? null;
-  const previous = report?.previous ?? null;
-  const cycleLabel = snapshot?.cycleDownload || selectedCycle || "No cycle selected";
-  const history = buildCecTrendSeries(report?.history ?? [], "totalBacklog", cycleLabel);
-  const totalCard = buildAgentKpiCard("Total Backlog", snapshot?.totalBacklog ?? null, previous?.totalBacklog ?? null, "number", "down", history);
-
-  if (loading && !snapshot) {
-    return (
-      <section className="grid gap-4 xl:grid-cols-2">
-        <div className="h-[300px] animate-pulse rounded-[24px] border border-slate-200 bg-white" />
-        <div className="h-[300px] animate-pulse rounded-[24px] border border-slate-200 bg-white" />
-      </section>
-    );
-  }
-
-  if (error) {
-    return <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{error}</div>;
-  }
-
-  if (!snapshot) {
-    return (
-      <section className="rounded-[24px] border border-slate-200/80 bg-white px-4 py-14 text-center shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
-        <Database className="mx-auto h-10 w-10 text-blue-500" />
-        <h2 className="mt-3 text-lg font-black text-navy-950">No CEC snapshot imported</h2>
-        <p className="mx-auto mt-1 max-w-xl text-sm font-bold text-muted">Download and import the Freshdesk PDF to populate Report CEC.</p>
-      </section>
-    );
-  }
-
-  return (
-    <section className="grid items-stretch gap-4 xl:grid-cols-[0.9fr_1.1fr]">
-      <div className="flex h-full flex-col rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-muted">Report CEC</p>
-            <h2 className="mt-1 text-xl font-black text-navy-950">Freshdesk Backlog</h2>
-            <p className="mt-1 text-xs font-bold text-muted">{cycleLabel}</p>
-          </div>
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            {totalCard.hasComparison ? (
-              <TrendBadge trend={totalCard.trend} direction={totalCard.direction} value={totalCard.delta || "0"} />
-            ) : (
-              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-muted">No comparison</span>
-            )}
-            <button
-              type="button"
-              onClick={() => downloadCecSummaryImage(report)}
-              className="premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-black text-navy-950"
-            >
-              <Download className="h-3.5 w-3.5" />
-              Download summary
-            </button>
-          </div>
-        </div>
-        <p className="mt-6 text-5xl font-black tracking-tight text-navy-950">{formatInteger(snapshot.totalBacklog)}</p>
-        <p className="mt-2 text-sm font-bold text-muted">Daily history by Cycle</p>
-        <div className="mt-4 h-32">
-          <TrendSparkline data={totalCard.history} format="number" trend={totalCard.trend} />
-        </div>
-        <div className="mt-5 grid gap-3 sm:grid-cols-3">
-          <CecMiniCard title="Normal" value={snapshot.normalBacklog} tone="blue" />
-          <CecMiniCard title="P0" value={snapshot.p0Backlog} tone="red" />
-          <CecMiniCard title="P0 with L2" value={snapshot.p0L2Backlog} tone="amber" />
-        </div>
-      </div>
-
-      <div className="flex h-full flex-col overflow-hidden rounded-[24px] border border-slate-200/80 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
-          <h2 className="font-black text-navy-950">CEC Status</h2>
-          <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700">{snapshot.importedAtLabel}</span>
-        </div>
-        <div className="grid flex-1 gap-3 p-4 sm:grid-cols-3">
-          <CecStatusCard title="On Hold" value={snapshot.onHoldCount} tone="amber" history={buildCecTrendSeries(report?.history ?? [], "onHoldCount", cycleLabel)} />
-          <CecStatusCard title="Open" value={snapshot.openCount} tone="blue" history={buildCecTrendSeries(report?.history ?? [], "openCount", cycleLabel)} />
-          <CecStatusCard title="New" value={snapshot.newCount} tone="green" history={buildCecTrendSeries(report?.history ?? [], "newCount", cycleLabel)} />
-        </div>
-        <div className="border-t border-slate-100 px-4 py-3">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[560px] text-left text-sm">
-              <thead className="bg-slate-50 text-xs uppercase tracking-wide text-muted">
-                <tr>
-                  {["Bucket", "Backlog", "On Hold", "Open", "New"].map((column) => <th key={column} className="px-3 py-2 font-black">{column}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {snapshot.groups.map((group, index) => (
-                  <tr key={group.key} className={cn("border-t border-slate-100", index % 2 ? "bg-slate-50/50" : "bg-white")}>
-                    <td className="px-3 py-3 font-extrabold text-navy-950">{group.label}</td>
-                    <td className="px-3 py-3 font-black text-navy-950">{formatInteger(group.backlog)}</td>
-                    <td className="px-3 py-3 font-bold text-muted">{formatInteger(group.onHold)}</td>
-                    <td className="px-3 py-3 font-bold text-muted">{formatInteger(group.open)}</td>
-                    <td className="px-3 py-3 font-bold text-muted">{formatInteger(group.new)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function CecMiniCard({ title, value, tone }: { title: string; value: number; tone: "blue" | "red" | "amber" }) {
-  const toneClass = tone === "red"
-    ? "bg-red-50 text-red-700 ring-red-100"
-    : tone === "amber"
-      ? "bg-amber-50 text-amber-800 ring-amber-100"
-      : "bg-blue-50 text-blue-700 ring-blue-100";
-  return (
-    <div className={cn("rounded-[18px] p-4 ring-1", toneClass)}>
-      <p className="text-[11px] font-black uppercase tracking-wide text-muted">{title}</p>
-      <p className="mt-3 text-3xl font-black">{formatInteger(value)}</p>
-    </div>
-  );
-}
-
-function CecStatusCard({ title, value, tone, history }: { title: string; value: number; tone: "amber" | "blue" | "green"; history: TrendPoint[] }) {
-  const toneConfig = getCecStatusTone(tone);
-  return (
-    <div className={cn("rounded-[18px] border p-4", toneConfig.cardClass)}>
-      <p className="text-[11px] font-black uppercase tracking-wide text-muted">{title}</p>
-      <p className={cn("mt-2 text-3xl font-black", toneConfig.valueClass)}>{formatInteger(value)}</p>
-      <div className="mt-3 h-14">
-        <TrendSparkline data={history} format="number" trend="neutral" compact colorOverride={toneConfig.chartColor} />
-      </div>
-    </div>
-  );
-}
-
-function getCecStatusTone(tone: "amber" | "blue" | "green") {
-  if (tone === "amber") {
-    return {
-      cardClass: "border-amber-100 bg-amber-50/50",
-      valueClass: "text-amber-700",
-      chartColor: "#F59E0B",
-      canvasBg: "#FFFBEB",
-      canvasText: "#B45309",
-      canvasBorder: "#FDE68A"
-    };
-  }
-  if (tone === "green") {
-    return {
-      cardClass: "border-emerald-100 bg-emerald-50/50",
-      valueClass: "text-emerald-700",
-      chartColor: "#10B981",
-      canvasBg: "#ECFDF5",
-      canvasText: "#047857",
-      canvasBorder: "#A7F3D0"
-    };
-  }
-  return {
-    cardClass: "border-blue-100 bg-blue-50/45",
-    valueClass: "text-blue-700",
-    chartColor: "#2563EB",
-    canvasBg: "#EFF6FF",
-    canvasText: "#2563EB",
-    canvasBorder: "#BFDBFE"
-  };
-}
-
-function CecReportTable({ report, loading, selectedCycle }: { report: CecReportPayload | null; loading: boolean; selectedCycle: string }) {
-  const snapshot = report?.snapshot ?? null;
-  if (loading && !snapshot) {
-    return (
-      <div className="grid gap-3 p-4">
-        {Array.from({ length: 5 }).map((_, index) => <div key={index} className="h-14 animate-pulse rounded-2xl bg-slate-100" />)}
-      </div>
-    );
-  }
-  if (!snapshot) {
-    return (
-      <div className="px-4 py-14 text-center">
-        <Database className="mx-auto h-10 w-10 text-blue-500" />
-        <h2 className="mt-3 text-lg font-black text-navy-950">CEC is part of Report</h2>
-        <p className="mx-auto mt-1 max-w-xl text-sm font-bold text-muted">
-          Selected cycle: {selectedCycle || "No cycle selected"}. CEC will use Freshdesk PDF data here after import.
-        </p>
-      </div>
-    );
-  }
-  const departments = sortCecDepartments(snapshot.departments);
-  return (
-    <div>
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
-        <div>
-          <h2 className="font-black text-navy-950">CEC Breakdown</h2>
-          <p className="mt-0.5 text-xs font-bold text-muted">Sorted by backlog, highest to lowest.</p>
-        </div>
-        <button
-          type="button"
-          onClick={() => downloadCecTableImage(snapshot)}
-          className="premium-control inline-flex h-10 items-center gap-2 px-3 text-sm font-black text-navy-950"
-        >
-          <Download className="h-4 w-4" />
-          Download table
-        </button>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[780px] table-fixed text-left text-sm">
-          <colgroup>
-            <col style={{ width: "42%" }} />
-            <col style={{ width: "16%" }} />
-            <col style={{ width: "14%" }} />
-            <col style={{ width: "14%" }} />
-            <col style={{ width: "14%" }} />
-          </colgroup>
-          <thead className="sticky top-0 z-10 bg-slate-50/95 text-xs uppercase tracking-wide text-muted backdrop-blur">
-            <tr>
-              {["CEC Queue", "Bucket", "Backlog", "Share", "Cycle"].map((column) => <th key={column} className="border-b border-slate-100 px-4 py-3 font-black">{column}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {departments.map((department, index) => (
-              <tr key={`${department.group}-${department.name}`} className={cn("border-t border-slate-100 transition hover:bg-blue-50/60", index % 2 ? "bg-slate-50/35" : "bg-white")}>
-                <td className="px-4 py-3 font-extrabold text-navy-950"><span className="block truncate" title={department.name}>{department.name}</span></td>
-                <td className="px-4 py-3"><CecBucketPill value={department.group} /></td>
-                <td className="px-4 py-3 font-black text-navy-950">{formatInteger(department.backlog)}</td>
-                <td className="px-4 py-3 font-bold text-muted">{department.percent === null ? "-" : `${department.percent.toFixed(2)}%`}</td>
-                <td className="px-4 py-3 font-bold text-muted">{snapshot.cycleDownload}</td>
-              </tr>
-            ))}
-            {!departments.length ? (
-              <tr>
-                <td colSpan={5} className="px-4 py-12 text-center text-sm font-bold text-muted">No CEC department breakdown found in the PDF.</td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-function CecBucketPill({ value }: { value: string }) {
-  const label = getCecBucketLabel(value);
-  const toneClass = value === "normal"
-    ? "bg-blue-50 text-blue-700"
-    : value === "p0"
-      ? "bg-red-50 text-red-700"
-      : value === "p0_l2"
-        ? "bg-amber-50 text-amber-800"
-        : "bg-slate-100 text-muted";
-  return <span className={cn("inline-flex rounded-full px-2.5 py-1 text-xs font-black", toneClass)}>{label}</span>;
-}
-
-function getCecBucketLabel(value: string) {
-  return value === "normal" ? "Normal" : value === "p0" ? "P0" : value === "p0_l2" ? "P0 L2" : "Other";
-}
-
-function sortCecDepartments(departments: CecReportDepartment[]) {
-  return [...departments].sort((a, b) => {
-    if (b.backlog !== a.backlog) return b.backlog - a.backlog;
-    return a.name.localeCompare(b.name, "en", { sensitivity: "base" });
-  });
 }
 
 function ReportSummarySection({
@@ -2404,151 +2057,6 @@ function drawCanvasHeadcountStrip(ctx: CanvasRenderingContext2D, card: OnlineHea
   });
 }
 
-function downloadCecSummaryImage(report: CecReportPayload | null) {
-  const snapshot = report?.snapshot ?? null;
-  if (!snapshot) return;
-
-  const cycleLabel = snapshot.cycleDownload || report?.selectedCycle || "No cycle selected";
-  const historyRows = report?.history ?? [];
-  const totalCard = buildAgentKpiCard(
-    "Total Backlog",
-    snapshot.totalBacklog,
-    report?.previous?.totalBacklog ?? null,
-    "number",
-    "down",
-    buildCecTrendSeries(historyRows, "totalBacklog", cycleLabel)
-  );
-
-  const width = 2048;
-  const height = 620;
-  const canvas = createReportCanvas(width, height);
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  fillRect(ctx, 0, 0, width, height, "#F8FAFC");
-
-  const margin = 24;
-  const gap = 24;
-  const cardW = (width - margin * 2 - gap) / 2;
-  const cardH = height - margin * 2;
-  const leftX = margin;
-  const rightX = leftX + cardW + gap;
-  const topY = margin;
-  roundRect(ctx, leftX, topY, cardW, cardH, 28, "#FFFFFF", "#E5EAF2");
-  roundRect(ctx, rightX, topY, cardW, cardH, 28, "#FFFFFF", "#E5EAF2");
-
-  drawText(ctx, "REPORT CEC", leftX + 28, topY + 38, 16, "#64748B", "900");
-  drawText(ctx, "Freshdesk Backlog", leftX + 28, topY + 70, 24, "#0F172A", "900");
-  drawText(ctx, cycleLabel, leftX + 28, topY + 100, 17, "#64748B", "800");
-  if (totalCard.hasComparison) drawCanvasDeltaPill(ctx, totalCard.trend, totalCard.direction, totalCard.delta || "0", leftX + cardW - 132, topY + 22);
-  else drawText(ctx, "No comparison", leftX + cardW - 142, topY + 40, 13, "#64748B", "900");
-  drawText(ctx, totalCard.value, leftX + 28, topY + 170, 60, "#0F172A", "900");
-  drawText(ctx, "Daily history by Cycle", leftX + 28, topY + 210, 15, "#64748B", "900");
-  drawMiniLine(ctx, totalCard.history, leftX + 28, topY + 236, cardW - 56, 150, totalCard.trend === "negative" ? "#EF4444" : totalCard.trend === "positive" ? "#10B981" : "#2563EB");
-
-  const miniY = topY + cardH - 114;
-  const miniW = (cardW - 56 - 24) / 3;
-  drawCecCanvasMetric(ctx, "Normal", snapshot.normalBacklog, leftX + 28, miniY, miniW, 90, "#EFF6FF", "#2563EB");
-  drawCecCanvasMetric(ctx, "P0", snapshot.p0Backlog, leftX + 28 + miniW + 12, miniY, miniW, 90, "#FEF2F2", "#DC2626");
-  drawCecCanvasMetric(ctx, "P0 with L2", snapshot.p0L2Backlog, leftX + 28 + (miniW + 12) * 2, miniY, miniW, 90, "#FFFBEB", "#B45309");
-
-  const rightInnerX = rightX + 28;
-  drawText(ctx, "CEC Status", rightInnerX, topY + 42, 24, "#0F172A", "900");
-  drawCanvasTextPill(ctx, snapshot.importedAtLabel, rightX + cardW - 294, topY + 22, 266, "#EFF6FF", "#2563EB");
-  const statusY = topY + 78;
-  const statusW = (cardW - 56 - 24) / 3;
-  drawCecCanvasStatusMetric(ctx, "On Hold", snapshot.onHoldCount, buildCecTrendSeries(historyRows, "onHoldCount", cycleLabel), "amber", rightInnerX, statusY, statusW, 148);
-  drawCecCanvasStatusMetric(ctx, "Open", snapshot.openCount, buildCecTrendSeries(historyRows, "openCount", cycleLabel), "blue", rightInnerX + statusW + 12, statusY, statusW, 148);
-  drawCecCanvasStatusMetric(ctx, "New", snapshot.newCount, buildCecTrendSeries(historyRows, "newCount", cycleLabel), "green", rightInnerX + (statusW + 12) * 2, statusY, statusW, 148);
-
-  const tableY = topY + 274;
-  const headerHeight = 40;
-  const rowHeight = 54;
-  const columns = [
-    { label: "Bucket", x: rightInnerX, w: 240 },
-    { label: "Backlog", x: rightInnerX + 270, w: 130 },
-    { label: "On Hold", x: rightInnerX + 430, w: 130 },
-    { label: "Open", x: rightInnerX + 590, w: 120 },
-    { label: "New", x: rightInnerX + 735, w: 120 }
-  ];
-  drawTableHeader(ctx, columns, tableY, headerHeight);
-  snapshot.groups.forEach((group, index) => {
-    const y = tableY + headerHeight + index * rowHeight;
-    if (index % 2) fillRect(ctx, rightInnerX - 14, y, cardW - 56, rowHeight, "#F8FAFC");
-    drawText(ctx, truncateForCanvas(ctx, group.label, columns[0].w), columns[0].x, y + 36, 16, "#0F172A", "850");
-    drawText(ctx, formatInteger(group.backlog), columns[1].x, y + 36, 17, "#0F172A", "900");
-    drawText(ctx, formatInteger(group.onHold), columns[2].x, y + 36, 16, "#64748B", "800");
-    drawText(ctx, formatInteger(group.open), columns[3].x, y + 36, 16, "#64748B", "800");
-    drawText(ctx, formatInteger(group.new), columns[4].x, y + 36, 16, "#64748B", "800");
-  });
-
-  downloadCanvas(canvas, "realtime-report-cec-summary.png");
-}
-
-function downloadCecTableImage(snapshot: CecReportSnapshot) {
-  const departments = sortCecDepartments(snapshot.departments);
-  const width = 1640;
-  const rowHeight = 50;
-  const headerHeight = 38;
-  const height = Math.max(420, 140 + headerHeight + departments.length * rowHeight);
-  const canvas = createReportCanvas(width, height);
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  fillReportBackground(ctx, width, height);
-
-  drawText(ctx, "REPORT CEC - BREAKDOWN", 36, 52, 22, "#0F172A", "900");
-  drawText(ctx, snapshot.cycleDownload || "No cycle selected", 36, 82, 15, "#64748B", "800");
-  drawCanvasCountPill(ctx, `${departments.length} queues`, width - 224, 36);
-
-  const tableX = 32;
-  const tableY = 108;
-  const columns = [
-    { label: "CEC Queue", x: tableX, w: 620 },
-    { label: "Bucket", x: tableX + 655, w: 150 },
-    { label: "Backlog", x: tableX + 840, w: 130 },
-    { label: "Share", x: tableX + 1010, w: 130 },
-    { label: "Cycle", x: tableX + 1170, w: 380 }
-  ];
-  drawTableHeader(ctx, columns, tableY, headerHeight);
-  departments.forEach((department, index) => {
-    const y = tableY + headerHeight + index * rowHeight;
-    if (index % 2) fillRect(ctx, tableX - 10, y, width - 44, rowHeight, "#F8FAFC");
-    const textY = y + 31;
-    drawText(ctx, truncateForCanvas(ctx, department.name, columns[0].w), columns[0].x, textY, 14, "#0F172A", "850");
-    drawCecCanvasBucketPill(ctx, department.group, columns[1].x, y + 13);
-    drawText(ctx, formatInteger(department.backlog), columns[2].x, textY, 15, "#0F172A", "900");
-    drawText(ctx, department.percent === null ? "-" : `${department.percent.toFixed(2)}%`, columns[3].x, textY, 14, "#64748B", "800");
-    drawText(ctx, snapshot.cycleDownload, columns[4].x, textY, 14, "#64748B", "800");
-  });
-
-  downloadCanvas(canvas, "realtime-report-cec-breakdown.png");
-}
-
-function drawCecCanvasMetric(ctx: CanvasRenderingContext2D, title: string, value: number, x: number, y: number, width: number, height: number, background: string, color: string) {
-  roundRect(ctx, x, y, width, height, 18, background, "#E5EAF2");
-  drawText(ctx, title, x + 18, y + 30, 13, "#64748B", "900");
-  drawText(ctx, formatInteger(value), x + 18, y + height - 26, 34, color, "900");
-}
-
-function drawCecCanvasStatusMetric(ctx: CanvasRenderingContext2D, title: string, value: number, history: TrendPoint[], tone: "amber" | "blue" | "green", x: number, y: number, width: number, height: number) {
-  const config = getCecStatusTone(tone);
-  roundRect(ctx, x, y, width, height, 18, config.canvasBg, config.canvasBorder);
-  drawText(ctx, title, x + 18, y + 30, 13, "#64748B", "900");
-  drawText(ctx, formatInteger(value), x + 18, y + 66, 34, config.canvasText, "900");
-  drawMiniLine(ctx, history, x + 18, y + 78, width - 36, height - 96, config.chartColor);
-}
-
-function drawCecCanvasBucketPill(ctx: CanvasRenderingContext2D, value: string, x: number, y: number) {
-  const config = value === "normal"
-    ? { bg: "#EFF6FF", text: "#2563EB" }
-    : value === "p0"
-      ? { bg: "#FEF2F2", text: "#DC2626" }
-      : value === "p0_l2"
-        ? { bg: "#FFFBEB", text: "#B45309" }
-        : { bg: "#E2E8F0", text: "#475569" };
-  roundRect(ctx, x, y, 92, 24, 12, config.bg);
-  drawText(ctx, getCecBucketLabel(value), x + 14, y + 17, 12, config.text, "900");
-}
-
 function drawCanvasTextPill(ctx: CanvasRenderingContext2D, value: string, x: number, y: number, width: number, background: string, color: string) {
   roundRect(ctx, x, y, width, 30, 15, background);
   drawText(ctx, truncateForCanvas(ctx, value, width - 30), x + 16, y + 20, 14, color, "900");
@@ -2971,7 +2479,6 @@ function buildReportRows(rows: QueueRealtimeRow[], reportLob: ReportLob, search:
 }
 
 function matchesReportLob(row: QueueRealtimeRow, reportLob: ReportLob) {
-  if (reportLob === "CEC") return false;
   if (reportLob === "TNS") return row.lob === "VIDEO" || row.lob === "COMMENTS";
   return row.lob === "ADS";
 }
@@ -3223,16 +2730,6 @@ function buildQueueTrendSeries(rows: QueueRealtimeRow[], key: "backlog" | "laten
     const summary = summarizeQueueMetrics(metrics);
     return { cycleDownload, value: summary[key] };
   });
-  return buildTrendPoints(points, selectedCycle);
-}
-
-function buildCecTrendSeries(rows: CecReportPayload["history"], key: keyof CecReportPayload["history"][number], selectedCycle: string): TrendPoint[] {
-  const points = rows
-    .map((row) => ({
-      cycleDownload: row.cycleDownload,
-      value: typeof row[key] === "number" ? row[key] : null
-    }))
-    .filter((point): point is { cycleDownload: string; value: number } => point.value !== null);
   return buildTrendPoints(points, selectedCycle);
 }
 
