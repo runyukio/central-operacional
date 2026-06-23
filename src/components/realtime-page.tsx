@@ -1977,7 +1977,7 @@ function downloadReportQueuesImage({
   const sectionHeight = reportLob === "TNS" ? 26 : 0;
   const headerHeight = 30;
   const topCards = reportLob === "TNS" && cards ? [...cards.backlog, ...cards.headcount] : [];
-  const topCardsHeight = topCards.length ? 186 : 0;
+  const topCardsHeight = topCards.length ? 304 : 0;
   const groups = groupReportRows(rows, reportLob);
   const sectionRows = groups.filter((group) => group.label).length;
   const tableX = 46;
@@ -2037,7 +2037,7 @@ function downloadReportQueuesImage({
 }
 
 function drawCanvasTnsReportTopCards(ctx: CanvasRenderingContext2D, cards: Array<AgentKpiCard | OnlineHeadcountGaugeData>, x: number, y: number, width: number, height: number) {
-  const gap = 14;
+  const gap = 18;
   const cardWidth = (width - gap * 3) / 4;
   cards.slice(0, 4).forEach((card, index) => {
     const cardX = x + index * (cardWidth + gap);
@@ -2048,12 +2048,15 @@ function drawCanvasTnsReportTopCards(ctx: CanvasRenderingContext2D, cards: Array
 
 function drawCanvasQueueBacklogCard(ctx: CanvasRenderingContext2D, card: AgentKpiCard, x: number, y: number, width: number, height: number) {
   const color = card.trend === "negative" ? "#EF4444" : card.trend === "positive" ? "#10B981" : "#2563EB";
+  const soft = card.trend === "negative" ? "#FEE2E2" : card.trend === "positive" ? "#D1FAE5" : "#DBEAFE";
   roundRect(ctx, x, y, width, height, 18, "#FFFFFF", "#E5EAF2");
-  drawText(ctx, card.label, x + 18, y + 30, 13, "#64748B", "900");
-  drawText(ctx, card.value, x + 18, y + 76, 34, "#0F172A", "900");
-  if (card.hasComparison) drawCanvasDeltaPill(ctx, card.trend, card.direction, card.delta || "0", x + 18, y + 92);
-  else drawText(ctx, "No comparison", x + 18, y + 112, 11, "#64748B", "850");
-  drawMiniLine(ctx, card.history, x + width * 0.48, y + 32, width * 0.44, height - 58, color);
+  drawText(ctx, card.label.toUpperCase(), x + 18, y + 34, 13, "#64748B", "900");
+  drawText(ctx, card.value, x + 18, y + 88, 40, "#0F172A", "900");
+  if (card.hasComparison) drawCanvasDeltaPill(ctx, card.trend, card.direction, card.delta || "0", x + 18, y + 112);
+  else drawText(ctx, "No comparison", x + 18, y + 132, 11, "#64748B", "850");
+  drawText(ctx, "compared to previous cycle", x + 18, y + 170, 12, "#64748B", "850");
+  drawMiniLine(ctx, card.history, x + width * 0.52, y + 38, width * 0.40, height - 92, color);
+  roundRect(ctx, x + 18, y + height - 28, width - 36, 8, 4, soft);
 }
 
 function drawCanvasQueueHeadcountCard(ctx: CanvasRenderingContext2D, card: OnlineHeadcountGaugeData, x: number, y: number, width: number, height: number) {
@@ -2062,31 +2065,39 @@ function drawCanvasQueueHeadcountCard(ctx: CanvasRenderingContext2D, card: Onlin
   const pillBg = card.tone === "positive" ? "#D1FAE5" : card.tone === "warning" ? "#FEF3C7" : card.tone === "negative" ? "#FEE2E2" : "#DBEAFE";
   const pillText = card.tone === "positive" ? "#047857" : card.tone === "warning" ? "#B45309" : card.tone === "negative" ? "#DC2626" : "#2563EB";
   roundRect(ctx, x, y, width, height, 18, "#FFFFFF", "#E5EAF2");
-  drawText(ctx, card.label, x + 18, y + 30, 13, "#64748B", "900");
-  drawText(ctx, "Online vs planned", x + 18, y + 50, 11, "#64748B", "800");
-  drawCanvasTextPill(ctx, progress === null ? "No schedule" : `${Math.round(progress)}%`, x + width - 106, y + 18, 88, pillBg, pillText);
-  const gaugeX = x + 32;
-  const gaugeY = y + 68;
-  const gaugeWidth = width - 64;
-  const gaugeHeight = 58;
+  drawText(ctx, card.label.toUpperCase(), x + 18, y + 34, 13, "#64748B", "900");
+  drawText(ctx, "Online vs planned", x + 18, y + 56, 12, "#64748B", "800");
+  drawCanvasTextPill(ctx, progress === null ? "No schedule" : `${Math.round(progress)}%`, x + width - 116, y + 20, 96, pillBg, pillText);
+  const centerX = x + width / 2;
+  const centerY = y + 155;
+  const radius = Math.min(width * 0.28, 72);
   ctx.beginPath();
-  ctx.moveTo(gaugeX, gaugeY + gaugeHeight);
-  ctx.quadraticCurveTo(gaugeX + gaugeWidth / 2, gaugeY - 18, gaugeX + gaugeWidth, gaugeY + gaugeHeight);
+  ctx.arc(centerX, centerY, radius, Math.PI, Math.PI * 2);
   ctx.strokeStyle = "#E2E8F0";
   ctx.lineWidth = 13;
   ctx.lineCap = "round";
   ctx.stroke();
   if (progress !== null) {
     ctx.beginPath();
-    ctx.moveTo(gaugeX, gaugeY + gaugeHeight);
-    ctx.quadraticCurveTo(gaugeX + gaugeWidth * Math.min(progress / 100, 0.5), gaugeY - 18, gaugeX + gaugeWidth * Math.min(progress / 100, 1), gaugeY + gaugeHeight * (1 - Math.min(progress / 100, 1)));
+    ctx.arc(centerX, centerY, radius, Math.PI, Math.PI + Math.PI * Math.min(progress / 100, 1));
     ctx.strokeStyle = color;
     ctx.lineWidth = 13;
     ctx.lineCap = "round";
     ctx.stroke();
   }
-  drawText(ctx, `${card.online}/${card.scheduled}`, x + 18, y + height - 20, 20, "#0F172A", "900");
-  drawText(ctx, `Gap ${card.missing}`, x + width - 76, y + height - 20, 14, card.missing > 0 ? "#DC2626" : "#047857", "900");
+  drawCenteredText(ctx, `${card.online}/${card.scheduled}`, centerX, y + 152, 27, "#0F172A", "900");
+  drawCenteredText(ctx, "online / planned", centerX, y + 176, 11, "#64748B", "850");
+  fillRect(ctx, x + 18, y + height - 74, width - 36, 1, "#E5EAF2");
+  const metricWidth = (width - 36) / 3;
+  [
+    { label: "Online", value: card.online, color: "#0F172A" },
+    { label: "Planned", value: card.scheduled, color: "#0F172A" },
+    { label: "Gap", value: card.missing, color: card.missing > 0 ? "#DC2626" : "#047857" }
+  ].forEach((metric, index) => {
+    const metricX = x + 18 + index * metricWidth + metricWidth / 2;
+    drawCenteredText(ctx, metric.label.toUpperCase(), metricX, y + height - 43, 10, "#64748B", "900");
+    drawCenteredText(ctx, String(metric.value), metricX, y + height - 17, 16, metric.color, "900");
+  });
 }
 
 function drawCanvasHeadcountStrip(ctx: CanvasRenderingContext2D, card: OnlineHeadcountGaugeData, x: number, y: number, width: number, height: number) {
@@ -2251,6 +2262,14 @@ function drawText(ctx: CanvasRenderingContext2D, text: string, x: number, y: num
   ctx.font = `${weight} ${size}px ${family}`;
   ctx.fillStyle = color;
   ctx.fillText(text, x, y);
+}
+
+function drawCenteredText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, size: number, color: string, weight = "700", family = "Inter, Arial, sans-serif") {
+  ctx.font = `${weight} ${size}px ${family}`;
+  ctx.fillStyle = color;
+  ctx.textAlign = "center";
+  ctx.fillText(text, x, y);
+  ctx.textAlign = "left";
 }
 
 function fillRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, color: string) {
