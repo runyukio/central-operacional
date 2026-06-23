@@ -600,8 +600,7 @@ export function RealTimePage() {
     downloadReportQueuesImage({
       reportLob,
       selectedCycle: selectedCycleValue,
-      rows: reportRows,
-      reportCards: reportLob === "TNS" ? tnsReportCards : reportLob === "ADS" ? adsReportCards : null
+      rows: reportRows
     });
   }
 
@@ -2312,24 +2311,20 @@ function downloadReportSummaryImage({
 function downloadReportQueuesImage({
   reportLob,
   selectedCycle,
-  rows,
-  reportCards
+  rows
 }: {
   reportLob: ReportLob;
   selectedCycle: string;
   rows: QueueReportRow[];
-  reportCards?: ReportKpiCards | null;
 }) {
   const width = 1400;
   const rowHeight = 34;
   const sectionHeight = reportLob === "TNS" ? 26 : 0;
   const headerHeight = 30;
-  const hasReportSummary = Boolean(reportCards && (reportCards.backlog.length || reportCards.headcount.length));
-  const summaryHeight = hasReportSummary ? 210 : 0;
   const groups = groupReportRows(rows, reportLob);
   const sectionRows = groups.filter((group) => group.label).length;
   const tableX = 46;
-  const tableY = 88 + summaryHeight;
+  const tableY = 88;
   const tableFillX = tableX - 14;
   const tableFillWidth = width - tableFillX * 2;
   const tableContentHeight = rows.length * rowHeight + sectionRows * sectionHeight;
@@ -2340,9 +2335,6 @@ function downloadReportQueuesImage({
   fillReportBackground(ctx, width, height);
   drawText(ctx, `REPORT ${reportLob} - QUEUES`, 32, 47, 19, "#0F172A", "900");
   drawText(ctx, selectedCycle || "No cycle selected", 32, 71, 13, "#64748B", "800");
-  if (hasReportSummary && reportCards) {
-    drawReportQueuesCanvasSummary(ctx, reportCards, 32, 96, width - 64);
-  }
 
   const columns = [
     { label: "ID", x: tableX, w: 80 },
@@ -2384,26 +2376,6 @@ function downloadReportQueuesImage({
   downloadCanvas(canvas, `realtime-report-${reportLob.toLowerCase()}-queues.png`);
 }
 
-function drawReportQueuesCanvasSummary(ctx: CanvasRenderingContext2D, cards: ReportKpiCards, x: number, y: number, width: number) {
-  const gap = 12;
-  const cardHeight = 162;
-  const items: Array<{ kind: "kpi"; card: AgentKpiCard } | { kind: "gauge"; card: OnlineHeadcountGaugeData }> = [
-    ...cards.backlog.map((card) => ({ kind: "kpi" as const, card })),
-    ...cards.headcount.map((card) => ({ kind: "gauge" as const, card }))
-  ];
-  const columns = Math.min(4, Math.max(1, items.length));
-  const cardWidth = (width - gap * (columns - 1)) / columns;
-
-  items.forEach((item, index) => {
-    const cardX = x + (index % columns) * (cardWidth + gap);
-    if (item.kind === "kpi") {
-      drawCanvasCompactKpiCard(ctx, item.card, cardX, y, cardWidth, cardHeight);
-    } else {
-      drawCanvasHeadcountGaugeCard(ctx, item.card, cardX, y, cardWidth, cardHeight);
-    }
-  });
-}
-
 function drawCanvasHeadcountStrip(ctx: CanvasRenderingContext2D, card: OnlineHeadcountGaugeData, x: number, y: number, width: number, height: number) {
   const progress = card.percentage === null ? null : Math.max(0, Math.min(100, card.percentage));
   const tone = card.tone === "positive"
@@ -2431,68 +2403,6 @@ function drawCanvasHeadcountStrip(ctx: CanvasRenderingContext2D, card: OnlineHea
     drawText(ctx, column.label.toUpperCase(), colX, y + height - 36, 10, "#64748B", "900");
     drawText(ctx, column.value, colX, y + height - 14, 16, column.color, "900");
   });
-}
-
-function drawCanvasCompactKpiCard(ctx: CanvasRenderingContext2D, card: AgentKpiCard, x: number, y: number, width: number, height: number) {
-  roundRect(ctx, x, y, width, height, 20, "#FFFFFF", "#E5EAF2");
-  drawText(ctx, card.label, x + 18, y + 30, 12, "#64748B", "900");
-  drawText(ctx, card.value, x + 18, y + 72, 34, "#0F172A", "900");
-  if (card.hasComparison) {
-    drawCanvasDeltaPill(ctx, card.trend, card.direction, card.delta || "0", x + width - 128, y + 22);
-  } else {
-    drawText(ctx, "No comparison", x + width - 126, y + 42, 12, "#64748B", "900");
-  }
-  drawMiniLine(
-    ctx,
-    card.history,
-    x + 18,
-    y + 94,
-    width - 36,
-    height - 112,
-    card.trend === "negative" ? "#EF4444" : card.trend === "positive" ? "#10B981" : "#2563EB"
-  );
-}
-
-function drawCanvasHeadcountGaugeCard(ctx: CanvasRenderingContext2D, card: OnlineHeadcountGaugeData, x: number, y: number, width: number, height: number) {
-  const progress = card.percentage === null ? 0 : Math.max(0, Math.min(100, card.percentage));
-  const tone = card.tone === "positive"
-    ? { color: "#10B981", bg: "#D1FAE5", text: "#047857" }
-    : card.tone === "warning"
-      ? { color: "#F59E0B", bg: "#FEF3C7", text: "#B45309" }
-      : card.tone === "negative"
-        ? { color: "#EF4444", bg: "#FEE2E2", text: "#DC2626" }
-        : { color: "#2563EB", bg: "#EFF6FF", text: "#2563EB" };
-
-  roundRect(ctx, x, y, width, height, 20, "#FFFFFF", "#E5EAF2");
-  drawText(ctx, card.label, x + 18, y + 30, 12, "#64748B", "900");
-  drawText(ctx, "Online vs planned", x + 18, y + 51, 11, "#64748B", "800");
-  drawCanvasTextPill(ctx, card.percentage === null ? "No schedule" : `${Math.round(progress)}%`, x + width - 118, y + 22, 96, tone.bg, tone.text);
-
-  const centerX = x + width / 2;
-  const centerY = y + 122;
-  const radius = Math.min(74, width / 2 - 34);
-  ctx.save();
-  ctx.lineCap = "round";
-  ctx.lineWidth = 13;
-  ctx.beginPath();
-  ctx.strokeStyle = "#E2E8F0";
-  ctx.arc(centerX, centerY, radius, Math.PI, Math.PI * 2);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.strokeStyle = tone.color;
-  ctx.arc(centerX, centerY, radius, Math.PI, Math.PI + Math.PI * (progress / 100));
-  ctx.stroke();
-  ctx.restore();
-
-  const value = `${card.online}/${card.scheduled}`;
-  ctx.font = "900 28px Inter, Arial, sans-serif";
-  const valueWidth = ctx.measureText(value).width;
-  drawText(ctx, value, centerX - valueWidth / 2, y + 106, 28, "#0F172A", "900");
-  const label = "online / planned";
-  ctx.font = "800 11px Inter, Arial, sans-serif";
-  const labelWidth = ctx.measureText(label).width;
-  drawText(ctx, label, centerX - labelWidth / 2, y + 128, 11, "#64748B", "800");
-  drawText(ctx, `Gap ${card.missing}`, x + 18, y + height - 18, 12, card.missing > 0 ? "#DC2626" : "#047857", "900");
 }
 
 function downloadCecSummaryImage(report: CecReportPayload | null) {
