@@ -10,7 +10,7 @@ import { shiftCategoryName, shiftLookupKey } from "@/lib/shift-display";
 
 const productiveShiftCategories = ["Manhã", "Tarde", "Noite"] as const;
 const requiredLobs = ["ADS", "CEC", "TNS"] as const;
-const coverageStatuses = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "VENDA_FOLGA_APROVADA"]);
+const coverageStatuses = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "TROCA_APROVADA", "VENDA_FOLGA_APROVADA"]);
 const unavailableEmployeeTokens = new Set([
   "afastado",
   "afastada",
