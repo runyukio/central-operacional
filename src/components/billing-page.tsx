@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CheckCircle2, CircleDollarSign, Download, Eye, FileSpreadsheet, LockKeyhole, RefreshCw, Save, Search, Send, SlidersHorizontal, X } from "lucide-react";
+import { CheckCircle2, CircleDollarSign, Download, Eye, FileSpreadsheet, LockKeyhole, Pencil, RefreshCw, Save, Search, Send, SlidersHorizontal, Trash2, X } from "lucide-react";
 
 import { EmptyState, PageHeader, Panel, StatCard, StatusBadge } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
@@ -168,6 +168,7 @@ export function BillingPage() {
   const [activeTab, setActiveTab] = useState<TabKey>(billingInitialTab);
   const [rateDraft, setRateDraft] = useState<Record<string, string>>({});
   const [adjustmentDraft, setAdjustmentDraft] = useState({ type: "Correção", description: "", amount: "", employeeInvoiceId: "" });
+  const [editingAdjustment, setEditingAdjustment] = useState<BillingPayload["data"]["adjustments"][number] | null>(null);
   const [selectedInvoice, setSelectedInvoice] = useState<BillingPayload["data"]["invoices"][number] | null>(null);
   const [employeePage, setEmployeePage] = useState(1);
   const employeePageSize = 12;
@@ -287,6 +288,23 @@ export function BillingPage() {
       employeeInvoiceId: invoice.id || null,
       employeeId: invoice.employeeId
     }, "Ajuste individual criado.");
+  }
+
+  async function updateAdjustment(draft: { id: string; type: string; description: string; amount: string }) {
+    await postBilling({
+      action: "update-adjustment",
+      id: draft.id,
+      type: draft.type,
+      description: draft.description,
+      amount: Number(draft.amount.replace(",", "."))
+    }, "Ajuste manual atualizado.");
+    setEditingAdjustment(null);
+  }
+
+  async function deleteAdjustment(adjustment: BillingPayload["data"]["adjustments"][number]) {
+    const confirmed = window.confirm(`Excluir o ajuste "${adjustment.type}" de ${formatCurrency(adjustment.amount)}?`);
+    if (!confirmed) return;
+    await postBilling({ action: "delete-adjustment", id: adjustment.id }, "Ajuste manual excluído.");
   }
 
   async function setEmployeeInvoiceFinalized(invoice: BillingPayload["data"]["invoices"][number], finalized: boolean) {
@@ -471,7 +489,7 @@ export function BillingPage() {
                 {activeTab === "adjustments" ? (
                   <div className="space-y-4">
                     <AdjustmentForm draft={adjustmentDraft} setDraft={setAdjustmentDraft} invoices={data.invoices} saving={saving} onSubmit={createAdjustment} />
-                    <AdjustmentsTable rows={data.adjustments} />
+                    <AdjustmentsTable rows={data.adjustments} saving={saving} onEdit={setEditingAdjustment} onDelete={deleteAdjustment} />
                     <AdjustmentRequestsTable rows={data.adjustmentRequests} />
                   </div>
                 ) : null}
@@ -515,6 +533,14 @@ export function BillingPage() {
               onLoadHourDetails={() => setActiveTab("hours")}
               onCreateAdjustment={(draft) => createEmployeeAdjustment(selectedInvoice, draft)}
               onSetFinalized={(finalized) => setEmployeeInvoiceFinalized(selectedInvoice, finalized)}
+            />
+          ) : null}
+          {editingAdjustment ? (
+            <AdjustmentEditModal
+              adjustment={editingAdjustment}
+              saving={saving}
+              onClose={() => setEditingAdjustment(null)}
+              onSave={updateAdjustment}
             />
           ) : null}
         </>
@@ -798,8 +824,127 @@ function DetailMetric({ label, value, helper, tone }: { label: string; value: st
   );
 }
 
-function AdjustmentsTable({ rows }: { rows: BillingPayload["data"]["adjustments"] }) {
-  return <Table columns={["Tipo", "Descrição", "Colaborador", "LOB", "Valor", "Criado por", "Criado em"]} rows={rows.map((row) => [row.type, row.description, row.employeeName || "-", row.lob || "-", formatCurrency(row.amount), row.createdBy || "-", row.createdAt])} />;
+function AdjustmentsTable({
+  rows,
+  saving,
+  onEdit,
+  onDelete
+}: {
+  rows: BillingPayload["data"]["adjustments"];
+  saving: boolean;
+  onEdit: (row: BillingPayload["data"]["adjustments"][number]) => void;
+  onDelete: (row: BillingPayload["data"]["adjustments"][number]) => void | Promise<void>;
+}) {
+  return (
+    <Table
+      columns={["Tipo", "Descrição", "Colaborador", "LOB", "Valor", "Criado por", "Criado em", "Ações"]}
+      rows={rows.map((row) => [
+        row.type,
+        row.description,
+        row.employeeName || "-",
+        row.lob || "-",
+        formatCurrency(row.amount),
+        row.createdBy || "-",
+        row.createdAt,
+        <div key={`${row.id}-actions`} className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => onEdit(row)}
+            className="premium-control inline-flex h-8 items-center justify-center gap-1.5 px-2 text-xs font-black leading-none text-blue-700 disabled:opacity-50"
+          >
+            <Pencil className="h-3.5 w-3.5" /> Editar
+          </button>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => void onDelete(row)}
+            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-2 text-xs font-black leading-none text-red-700 disabled:opacity-50"
+          >
+            <Trash2 className="h-3.5 w-3.5" /> Excluir
+          </button>
+        </div>
+      ])}
+    />
+  );
+}
+
+function AdjustmentEditModal({
+  adjustment,
+  saving,
+  onClose,
+  onSave
+}: {
+  adjustment: BillingPayload["data"]["adjustments"][number];
+  saving: boolean;
+  onClose: () => void;
+  onSave: (draft: { id: string; type: string; description: string; amount: string }) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState({
+    id: adjustment.id,
+    type: adjustment.type,
+    description: adjustment.description,
+    amount: String(adjustment.amount).replace(".", ",")
+  });
+  const [localError, setLocalError] = useState("");
+
+  async function submit() {
+    setLocalError("");
+    if (!draft.type.trim()) {
+      setLocalError("Tipo de ajuste é obrigatório.");
+      return;
+    }
+    if (!draft.description.trim()) {
+      setLocalError("Descrição do ajuste é obrigatória.");
+      return;
+    }
+    if (!Number.isFinite(Number(draft.amount.replace(",", ".")))) {
+      setLocalError("Valor do ajuste é obrigatório.");
+      return;
+    }
+    await onSave(draft);
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] grid place-items-center bg-navy-950/35 p-3 backdrop-blur-sm">
+      <div className="w-full max-w-xl rounded-2xl border border-border bg-white p-4 shadow-2xl">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-black uppercase tracking-wide text-blue-700">Editar ajuste manual</p>
+            <h2 className="text-lg font-black text-navy-950">{adjustment.employeeName || adjustment.lob || "Ciclo/LOB geral"}</h2>
+          </div>
+          <button type="button" onClick={onClose} className="premium-control inline-flex h-9 w-9 items-center justify-center p-0">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <Label text="Tipo">
+            <select value={draft.type} onChange={(event) => setDraft({ ...draft, type: event.target.value })} className="premium-control h-10 w-full px-3 text-sm font-bold">
+              <option>Campanha</option>
+              <option>Adiantamento</option>
+              <option>Bônus</option>
+              <option>Desconto</option>
+              <option>Correção</option>
+            </select>
+          </Label>
+          <Label text="Valor">
+            <input value={draft.amount} onChange={(event) => setDraft({ ...draft, amount: event.target.value })} className="premium-control h-10 w-full px-3 text-sm font-bold" placeholder="Valor R$" />
+          </Label>
+        </div>
+        <Label text="Descrição">
+          <textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} className="premium-control mt-2 min-h-[96px] w-full px-3 py-2 text-sm font-semibold" />
+        </Label>
+        {localError ? <p className="mt-2 text-xs font-bold text-red-600">{localError}</p> : null}
+        <div className="mt-4 flex flex-wrap justify-end gap-2">
+          <button type="button" onClick={onClose} className="premium-control inline-flex h-10 items-center justify-center px-4 text-sm font-extrabold leading-none">Cancelar</button>
+          <button type="button" disabled={saving} onClick={() => void submit()} className="premium-button inline-flex h-10 items-center justify-center gap-2 px-4 text-sm font-extrabold leading-none disabled:opacity-60">
+            <Save className="h-4 w-4" /> Salvar edição
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function AdjustmentRequestsTable({ rows }: { rows: BillingPayload["data"]["adjustmentRequests"] }) {

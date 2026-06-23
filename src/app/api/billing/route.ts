@@ -4,10 +4,12 @@ import { getApiActor } from "@/lib/api-actor";
 import {
   adminDecideInvoiceAdjustment,
   createBillingAdjustment,
+  deleteBillingAdjustment,
   getBillingDashboard,
   saveBillingRates,
   setEmployeeBillingInvoiceFinalized,
   supervisorReviewInvoiceAdjustment,
+  updateBillingAdjustment,
   updateBillingCycleStatus
 } from "@/lib/billing-service";
 
@@ -40,30 +42,50 @@ export async function POST(request: Request) {
   const actor = await getApiActor();
   const body = await request.json().catch(() => ({}));
   const action = String(body.action ?? "");
-  const result =
-    action === "set-cycle-status"
-      ? await updateBillingCycleStatus(actor, { referenceMonth: body.referenceMonth, status: String(body.status ?? "") })
-      : action === "save-rates"
-        ? await saveBillingRates(actor, body.rates ?? {})
-        : action === "create-adjustment"
-          ? await createBillingAdjustment(actor, body)
-          : action === "set-employee-invoice-finalized"
-            ? await setEmployeeBillingInvoiceFinalized(actor, {
-              referenceMonth: body.referenceMonth,
-              employeeId: String(body.employeeId ?? ""),
-              finalized: Boolean(body.finalized)
-            })
-            : action === "supervisor-review-adjustment"
-              ? await supervisorReviewInvoiceAdjustment(actor, { id: String(body.id ?? ""), observation: String(body.observation ?? "") })
-              : action === "admin-decide-adjustment"
-                ? await adminDecideInvoiceAdjustment(actor, {
-                  id: String(body.id ?? ""),
-                  decision: body.decision === "RECUSADO" ? "RECUSADO" : "APROVADO",
-                  finalResponse: String(body.finalResponse ?? ""),
-                  adjustmentAmount: body.adjustmentAmount === "" ? null : Number(body.adjustmentAmount ?? 0),
-                  finalMinutes: body.finalMinutes === "" || body.finalMinutes === undefined ? null : Number(body.finalMinutes)
-                })
-                : { error: "Ação de Billing inválida.", status: 400 };
+  let result;
+  switch (action) {
+    case "set-cycle-status":
+      result = await updateBillingCycleStatus(actor, { referenceMonth: body.referenceMonth, status: String(body.status ?? "") });
+      break;
+    case "save-rates":
+      result = await saveBillingRates(actor, body.rates ?? {});
+      break;
+    case "create-adjustment":
+      result = await createBillingAdjustment(actor, body);
+      break;
+    case "update-adjustment":
+      result = await updateBillingAdjustment(actor, {
+        id: String(body.id ?? ""),
+        type: String(body.type ?? ""),
+        description: String(body.description ?? ""),
+        amount: Number(body.amount ?? NaN)
+      });
+      break;
+    case "delete-adjustment":
+      result = await deleteBillingAdjustment(actor, { id: String(body.id ?? "") });
+      break;
+    case "set-employee-invoice-finalized":
+      result = await setEmployeeBillingInvoiceFinalized(actor, {
+        referenceMonth: body.referenceMonth,
+        employeeId: String(body.employeeId ?? ""),
+        finalized: Boolean(body.finalized)
+      });
+      break;
+    case "supervisor-review-adjustment":
+      result = await supervisorReviewInvoiceAdjustment(actor, { id: String(body.id ?? ""), observation: String(body.observation ?? "") });
+      break;
+    case "admin-decide-adjustment":
+      result = await adminDecideInvoiceAdjustment(actor, {
+        id: String(body.id ?? ""),
+        decision: body.decision === "RECUSADO" ? "RECUSADO" : "APROVADO",
+        finalResponse: String(body.finalResponse ?? ""),
+        adjustmentAmount: body.adjustmentAmount === "" ? null : Number(body.adjustmentAmount ?? 0),
+        finalMinutes: body.finalMinutes === "" || body.finalMinutes === undefined ? null : Number(body.finalMinutes)
+      });
+      break;
+    default:
+      result = { error: "Ação de Billing inválida.", status: 400 };
+  }
   if ("error" in result) return NextResponse.json({ error: result.error, message: result.error }, { status: result.status ?? 400 });
   return NextResponse.json(result);
 }

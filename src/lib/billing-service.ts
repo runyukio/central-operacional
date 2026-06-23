@@ -806,6 +806,114 @@ export async function createBillingAdjustment(actor: Actor, input: {
   return { data: mapAdjustment(adjustment) };
 }
 
+export async function updateBillingAdjustment(actor: Actor, input: {
+  id: string;
+  type: string;
+  description: string;
+  amount: number;
+}) {
+  const user = await findActiveUser(actor.email);
+  const denied = requireBillingAccess(user);
+  if (denied) return denied;
+  if (!input.id?.trim()) return { error: "Ajuste obrigatório para edição.", status: 400 };
+  if (!input.type?.trim()) return { error: "Tipo de ajuste é obrigatório.", status: 400 };
+  if (!input.description?.trim()) return { error: "Descrição do ajuste é obrigatória.", status: 400 };
+  if (!Number.isFinite(Number(input.amount))) return { error: "Valor do ajuste inválido.", status: 400 };
+  if (normalizeComparableJobTitle(input.type) === "penalty") return { error: "Tipo de ajuste Penalty não é permitido no Billing.", status: 400 };
+
+  const existing = await prisma.billingAdjustment.findFirst({
+    where: { id: input.id, deletedAt: null },
+    include: { employeeInvoice: true }
+  });
+  if (!existing) return { error: "Ajuste de Billing não encontrado.", status: 404 };
+  const finalizedTargetDenied = await validateBillingAdjustmentFinalizedTarget(existing.billingCycleId, {
+    employeeInvoiceId: existing.employeeInvoiceId,
+    employeeId: existing.employeeId
+  });
+  if (finalizedTargetDenied) return finalizedTargetDenied;
+
+  const amount = normalizeBillingAdjustmentAmount(input.type, Number(input.amount));
+  const updated = await prisma.$transaction(async (tx) => {
+    const adjustment = await tx.billingAdjustment.update({
+      where: { id: existing.id },
+      data: {
+        type: input.type.trim(),
+        description: input.description.trim(),
+        amount: decimal(amount)
+      },
+      include: { employee: true, lob: true, createdBy: true }
+    });
+    await tx.auditLog.create({
+      data: {
+        actorId: user!.id,
+        action: AuditAction.EDICAO,
+        entity: "BillingAdjustment",
+        entityId: existing.id,
+        reason: "Ajuste manual de Billing editado",
+        previousValue: {
+          type: existing.type,
+          description: existing.description,
+          amount: Number(existing.amount)
+        },
+        newValue: {
+          type: adjustment.type,
+          description: adjustment.description,
+          amount: Number(adjustment.amount)
+        }
+      }
+    });
+    return adjustment;
+  });
+
+  return { data: mapAdjustment(updated) };
+}
+
+export async function deleteBillingAdjustment(actor: Actor, input: { id: string }) {
+  const user = await findActiveUser(actor.email);
+  const denied = requireBillingAccess(user);
+  if (denied) return denied;
+  if (!input.id?.trim()) return { error: "Ajuste obrigatório para exclusão.", status: 400 };
+
+  const existing = await prisma.billingAdjustment.findFirst({
+    where: { id: input.id, deletedAt: null },
+    include: { employee: true, lob: true }
+  });
+  if (!existing) return { error: "Ajuste de Billing não encontrado.", status: 404 };
+  const finalizedTargetDenied = await validateBillingAdjustmentFinalizedTarget(existing.billingCycleId, {
+    employeeInvoiceId: existing.employeeInvoiceId,
+    employeeId: existing.employeeId
+  });
+  if (finalizedTargetDenied) return finalizedTargetDenied;
+
+  await prisma.$transaction(async (tx) => {
+    await tx.billingAdjustment.update({
+      where: { id: existing.id },
+      data: { deletedAt: new Date() }
+    });
+    await tx.auditLog.create({
+      data: {
+        actorId: user!.id,
+        action: AuditAction.EXCLUSAO,
+        entity: "BillingAdjustment",
+        entityId: existing.id,
+        reason: "Ajuste manual de Billing excluído",
+        previousValue: {
+          referenceMonth: existing.referenceMonth,
+          type: existing.type,
+          description: existing.description,
+          amount: Number(existing.amount),
+          employeeId: existing.employeeId,
+          employeeName: existing.employee?.fullName,
+          lobId: existing.lobId,
+          lob: existing.lob?.name
+        }
+      }
+    });
+  });
+
+  return { data: { id: existing.id, deleted: true } };
+}
+
 export async function exportBilling(actor: Actor, filters: BillingDashboardFilters = {}): Promise<XlsxExportPayload | { error: string; status?: number }> {
   const result = await getBillingDashboard(actor, { ...filters, section: "all" });
   if ("error" in result) return result;
