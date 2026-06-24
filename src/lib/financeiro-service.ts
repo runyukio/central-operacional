@@ -507,13 +507,13 @@ export async function exportFinanceiro(actor: Actor, filters: FinanceiroFilters 
       },
       {
         sheetName: "Custos",
-        headers: ["invoice_cycle_month", "cost_center", "status", "custo_aprovado_brl", "custo_projetado_brl", "custo_projecao_billing_brl", "gross_billing_brl", "final_billing_brl"],
-        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.statusLabel, row.costs.approvedCostBrl, row.costs.projectedCostBrl, row.costs.billingProjectionCostBrl, row.costs.grossAmountBrl, row.costs.finalAmountBrl])
+        headers: ["invoice_cycle_month", "cost_center", "status", "custo_aprovado_brl", "custo_projetado_brl", "bruto_billing_brl", "custo_liquido_billing_brl"],
+        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.statusLabel, row.costs.approvedCostBrl, row.costs.projectedCostBrl, row.costs.grossAmountBrl, row.costs.billingNetCostBrl])
       },
       {
         sheetName: "Resultado",
         headers: ["invoice_cycle_month", "cost_center", "status", "receita_brl", "custo_brl", "resultado_brl", "margem_percent"],
-        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.statusLabel, row.values.totalRevenueBrl, row.costs.billingProjectionCostBrl, row.result.resultBrl, `${row.result.marginPercent}%`])
+        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.statusLabel, row.values.totalRevenueBrl, row.costs.billingNetCostBrl, row.result.resultBrl, `${row.result.marginPercent}%`])
       },
       {
         sheetName: "Parametros",
@@ -843,8 +843,8 @@ async function buildFinanceiroAnalytics(
     const parameterView = mapFinanceiroParameter(parameter, !parametersByKey.has(key));
     const status = normalizeFinanceRecordStatus(record?.status) || "PROJECAO";
     const statusLabel = financeRecordStatusLabel(status);
-    const billingProjectionCostBrl = roundMoney(billing.approvedCostBrl + billing.projectedCostBrl);
-    const totalCostBrl = billingProjectionCostBrl;
+    const billingNetCostBrl = billing.finalAmountBrl;
+    const totalCostBrl = billingNetCostBrl;
     const actualHours = (record?.billableHoursActualMinutes ?? 0) / 60;
     const trainingHours = (record?.trainingHoursMinutes ?? 0) / 60;
     const kwaiRevenueUsd = round2(actualHours * parameterView.kwaiHourlyUsd);
@@ -871,7 +871,7 @@ async function buildFinanceiroAnalytics(
       costs: {
         approvedCostBrl: billing.approvedCostBrl,
         projectedCostBrl: billing.projectedCostBrl,
-        billingProjectionCostBrl,
+        billingNetCostBrl,
         grossAmountBrl: billing.grossAmountBrl,
         finalAmountBrl: billing.finalAmountBrl
       },
@@ -902,7 +902,7 @@ async function buildFinanceiroAnalytics(
     acc.trainingMinutes += parseDisplayMinutes(row.hours.training);
     acc.revenueUsd += row.values.totalRevenueUsd;
     acc.revenueBrl += row.values.totalRevenueBrl;
-    acc.costBrl += row.costs.billingProjectionCostBrl;
+    acc.costBrl += row.costs.billingNetCostBrl;
     acc.resultBrl += row.result.resultBrl;
     return acc;
   }, { maxMinutes: 0, actualMinutes: 0, trainingMinutes: 0, revenueUsd: 0, revenueBrl: 0, costBrl: 0, resultBrl: 0 });
