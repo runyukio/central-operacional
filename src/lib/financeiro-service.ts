@@ -62,7 +62,7 @@ const FINANCEIRO_ADJUSTMENT_FIELDS = new Map<string, { label: string; type: "hou
   ["notes", { label: "Notes", type: "text" }],
   ["source", { label: "Source", type: "text" }]
 ] as const);
-type FinanceiroAnalyticsRecordSource = { invoiceCycleMonth: string; costCenter: string; status: string; billableHoursActualMinutes: number; trainingHoursMinutes: number; maxHoursCapacityMinutes: number; differenceMinutes: number };
+type FinanceiroAnalyticsRecordSource = { invoiceCycleMonth: string; costCenter: string; status: string; billableHoursActualMinutes: number; trainingHoursMinutes: number; maxHoursCapacityMinutes: number; differenceMinutes: number; penaltyPercent: Prisma.Decimal | number };
 
 export async function getFinanceiroDashboard(actor: Actor, filters: FinanceiroFilters = {}) {
   const user = await requireFinanceiroUser(actor);
@@ -502,8 +502,8 @@ export async function exportFinanceiro(actor: Actor, filters: FinanceiroFilters 
       },
       {
         sheetName: "Valores",
-        headers: ["invoice_cycle_month", "cost_center", "status", "kwai_revenue_usd", "global_revenue_usd", "training_revenue_usd", "total_revenue_usd", "exchange_rate_usd_brl", "total_revenue_brl"],
-        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.statusLabel, row.values.kwaiRevenueUsd, row.values.globalRevenueUsd, row.values.trainingRevenueUsd, row.values.totalRevenueUsd, row.values.exchangeRateUsdBrl, row.values.totalRevenueBrl])
+        headers: ["invoice_cycle_month", "cost_center", "status", "kwai_revenue_usd", "global_revenue_usd", "training_revenue_usd", "penalty_percent", "penalty_usd", "penalty_brl", "total_revenue_usd", "exchange_rate_usd_brl", "total_revenue_brl"],
+        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.statusLabel, row.values.kwaiRevenueUsd, row.values.globalRevenueUsd, row.values.trainingRevenueUsd, `${row.values.penaltyPercent}%`, row.values.penaltyUsd, row.values.penaltyBrl, row.values.totalRevenueUsd, row.values.exchangeRateUsdBrl, row.values.totalRevenueBrl])
       },
       {
         sheetName: "Custos",
@@ -513,7 +513,7 @@ export async function exportFinanceiro(actor: Actor, filters: FinanceiroFilters 
       {
         sheetName: "Resultado",
         headers: ["invoice_cycle_month", "cost_center", "status", "receita_brl", "custo_brl", "resultado_brl", "margem_percent"],
-        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.statusLabel, row.values.totalRevenueBrl, row.costs.billingNetCostBrl, row.result.resultBrl, `${row.result.marginPercent}%`])
+        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.statusLabel, row.values.totalRevenueBrl, row.costs.grossAmountBrl, row.result.resultBrl, `${row.result.marginPercent}%`])
       },
       {
         sheetName: "Parametros",
@@ -627,13 +627,20 @@ function groupFinanceRecordsForAnalytics(records: FinanceiroAnalyticsRecordSourc
     }
     const currentStatus = normalizeFinanceRecordStatus(current.status) || "PROJECAO";
     const nextStatus = normalizeFinanceRecordStatus(record.status) || "PROJECAO";
+    const currentMinutes = Math.max(0, current.billableHoursActualMinutes);
+    const nextMinutes = Math.max(0, record.billableHoursActualMinutes);
+    const totalMinutes = currentMinutes + nextMinutes;
+    const penaltyPercent = totalMinutes > 0
+      ? round2(((Number(current.penaltyPercent) * currentMinutes) + (Number(record.penaltyPercent) * nextMinutes)) / totalMinutes)
+      : round2((Number(current.penaltyPercent) + Number(record.penaltyPercent)) / 2);
     buckets.set(key, {
       ...current,
       status: financeRecordStatusRank(nextStatus) < financeRecordStatusRank(currentStatus) ? nextStatus : currentStatus,
       billableHoursActualMinutes: current.billableHoursActualMinutes + record.billableHoursActualMinutes,
       trainingHoursMinutes: current.trainingHoursMinutes + record.trainingHoursMinutes,
       maxHoursCapacityMinutes: current.maxHoursCapacityMinutes + record.maxHoursCapacityMinutes,
-      differenceMinutes: current.differenceMinutes + record.differenceMinutes
+      differenceMinutes: current.differenceMinutes + record.differenceMinutes,
+      penaltyPercent
     });
   }
   return buckets;
@@ -843,15 +850,18 @@ async function buildFinanceiroAnalytics(
     const parameterView = mapFinanceiroParameter(parameter, !parametersByKey.has(key));
     const status = normalizeFinanceRecordStatus(record?.status) || "PROJECAO";
     const statusLabel = financeRecordStatusLabel(status);
+    const totalCostBrl = billing.grossAmountBrl;
     const billingNetCostBrl = billing.finalAmountBrl;
-    const totalCostBrl = billingNetCostBrl;
     const actualHours = (record?.billableHoursActualMinutes ?? 0) / 60;
     const trainingHours = (record?.trainingHoursMinutes ?? 0) / 60;
+    const penaltyPercent = round2(Number(record?.penaltyPercent ?? 0));
     const kwaiRevenueUsd = round2(actualHours * parameterView.kwaiHourlyUsd);
     const globalRevenueUsd = round2(actualHours * parameterView.globalHourlyUsd);
     const trainingRevenueUsd = round2(trainingHours * parameterView.trainingHourlyUsd);
-    const totalRevenueUsd = round2(globalRevenueUsd + trainingRevenueUsd);
+    const penaltyUsd = round2((kwaiRevenueUsd * penaltyPercent) / 100);
+    const totalRevenueUsd = round2(globalRevenueUsd + trainingRevenueUsd - penaltyUsd);
     const exchangeRate = parameterView.exchangeRateUsdBrl;
+    const penaltyBrl = roundMoney(penaltyUsd * exchangeRate);
     const totalRevenueBrl = roundMoney(totalRevenueUsd * exchangeRate);
     const resultBrl = roundMoney(totalRevenueBrl - totalCostBrl);
     const marginPercent = totalRevenueBrl > 0 ? round2((resultBrl / totalRevenueBrl) * 100) : 0;
@@ -879,6 +889,9 @@ async function buildFinanceiroAnalytics(
         kwaiRevenueUsd,
         globalRevenueUsd,
         trainingRevenueUsd,
+        penaltyPercent,
+        penaltyUsd,
+        penaltyBrl,
         totalRevenueUsd,
         totalRevenueBrl,
         exchangeRateUsdBrl: exchangeRate
@@ -902,7 +915,7 @@ async function buildFinanceiroAnalytics(
     acc.trainingMinutes += parseDisplayMinutes(row.hours.training);
     acc.revenueUsd += row.values.totalRevenueUsd;
     acc.revenueBrl += row.values.totalRevenueBrl;
-    acc.costBrl += row.costs.billingNetCostBrl;
+    acc.costBrl += row.costs.grossAmountBrl;
     acc.resultBrl += row.result.resultBrl;
     return acc;
   }, { maxMinutes: 0, actualMinutes: 0, trainingMinutes: 0, revenueUsd: 0, revenueBrl: 0, costBrl: 0, resultBrl: 0 });

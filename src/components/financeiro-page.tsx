@@ -134,6 +134,9 @@ type FinanceiroAnalyticsRow = {
     kwaiRevenueUsd: number;
     globalRevenueUsd: number;
     trainingRevenueUsd: number;
+    penaltyPercent: number;
+    penaltyUsd: number;
+    penaltyBrl: number;
     totalRevenueUsd: number;
     totalRevenueBrl: number;
     exchangeRateUsdBrl: number;
@@ -557,8 +560,8 @@ function ValuesPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
   return (
     <div className="space-y-4">
       <div className="grid gap-3 md:grid-cols-3">
-        <StatCard title="Receita USD" value={formatUsd(analytics?.valueSummary.revenueUsd ?? 0)} helper="Global + treinamento" icon={DollarSign} tone="green" />
-        <StatCard title="Receita BRL" value={formatCurrency(analytics?.valueSummary.revenueBrl ?? 0)} helper="convertida por câmbio mensal" icon={TrendingUp} tone="green" />
+        <StatCard title="Receita USD" value={formatUsd(analytics?.valueSummary.revenueUsd ?? 0)} helper="Global + treinamento - penalty" icon={DollarSign} tone="green" />
+        <StatCard title="Receita BRL" value={formatCurrency(analytics?.valueSummary.revenueBrl ?? 0)} helper="líquida de penalty" icon={TrendingUp} tone="green" />
         <StatCard title="Câmbio" value={analytics?.rows[0]?.values.exchangeRateUsdBrl ? formatNumberValue(analytics.rows[0].values.exchangeRateUsdBrl) : "-"} helper="USD → BRL" icon={RefreshCw} tone="blue" />
       </div>
       <Panel title="Receita por ciclo e LOB">
@@ -573,6 +576,8 @@ function ValuesPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
             ["Kwai USD", (row) => formatUsd(row.values.kwaiRevenueUsd)],
             ["Global USD", (row) => formatUsd(row.values.globalRevenueUsd)],
             ["Treinamento USD", (row) => formatUsd(row.values.trainingRevenueUsd)],
+            ["Penalty %", (row) => `${formatPercent(row.values.penaltyPercent)}%`],
+            ["Penalty BRL", (row) => formatCurrency(row.values.penaltyBrl)],
             ["Total USD", (row) => formatUsd(row.values.totalRevenueUsd)],
             ["Total BRL", (row) => formatCurrency(row.values.totalRevenueBrl)]
           ]}
@@ -587,7 +592,7 @@ function CostsPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
   return (
     <div className="space-y-4">
       <div className="grid gap-3 md:grid-cols-3">
-        <StatCard title="Custo Billing" value={formatCurrency(analytics?.costSummary.costBrl ?? 0)} helper="líquido após adiantamentos e ajustes" icon={DollarSign} tone="orange" />
+        <StatCard title="Custo Billing" value={formatCurrency(analytics?.costSummary.costBrl ?? 0)} helper="bruto aprovado + projetado" icon={DollarSign} tone="orange" />
         <StatCard title="Horas Billing reais" value={analytics?.hoursSummary.billableActual ?? "-"} helper="histórico manual/importado" icon={Clock} tone="blue" />
         <StatCard title="Training Hours" value={analytics?.hoursSummary.training ?? "-"} helper="receita treinamento" icon={Clock} tone="green" />
       </div>
@@ -614,8 +619,8 @@ function ResultPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
   return (
     <div className="space-y-4">
       <div className="grid gap-3 md:grid-cols-3">
-        <StatCard title="Receita BRL" value={formatCurrency(analytics?.valueSummary.revenueBrl ?? 0)} helper="Global + treinamento" icon={TrendingUp} tone="green" />
-        <StatCard title="Custo BRL" value={formatCurrency(analytics?.costSummary.costBrl ?? 0)} helper="líquido do Billing" icon={TrendingDown} tone="orange" />
+        <StatCard title="Receita BRL" value={formatCurrency(analytics?.valueSummary.revenueBrl ?? 0)} helper="líquida de penalty" icon={TrendingUp} tone="green" />
+        <StatCard title="Custo BRL" value={formatCurrency(analytics?.costSummary.costBrl ?? 0)} helper="bruto do Billing" icon={TrendingDown} tone="orange" />
         <StatCard title="Resultado" value={formatCurrency(analytics?.resultSummary.resultBrl ?? 0)} helper={`${formatPercent(analytics?.resultSummary.marginPercent ?? 0)}% margem`} icon={(analytics?.resultSummary.resultBrl ?? 0) < 0 ? TrendingDown : TrendingUp} tone={(analytics?.resultSummary.resultBrl ?? 0) < 0 ? "red" : "green"} />
       </div>
       <Panel title="Resultado por ciclo e LOB">
@@ -625,7 +630,7 @@ function ResultPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
             ["Ciclo", (row) => row.invoiceCycleLabel],
             ["LOB", (row) => row.costCenter],
             ["Receita BRL", (row) => formatCurrency(row.values.totalRevenueBrl)],
-            ["Custo BRL", (row) => formatCurrency(row.costs.billingNetCostBrl)],
+            ["Custo BRL", (row) => formatCurrency(row.costs.grossAmountBrl)],
             ["Resultado", (row) => formatCurrency(row.result.resultBrl)],
             ["Margem", (row) => `${formatPercent(row.result.marginPercent)}%`]
           ]}
