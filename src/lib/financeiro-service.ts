@@ -40,11 +40,12 @@ const FINANCEIRO_TEMPLATE_HEADERS = ["invoice_cycle_month", "cost_center", "stat
 const FINANCEIRO_DEFAULT_KWAI_HOURLY_USD = 9.39;
 const FINANCEIRO_DEFAULT_GLOBAL_HOURLY_USD = 5.965;
 const FINANCEIRO_DEFAULT_TRAINING_HOURLY_USD = 1.45;
-const FINANCEIRO_ALLOWED_COST_CENTERS = ["ADS", "CEC", "COMMENTS", "VIDEO", "PROJECT"] as const;
+const FINANCEIRO_ALLOWED_COST_CENTERS = ["ADS", "CEC", "TNS"] as const;
 const FINANCEIRO_MIN_REFERENCE_MONTH = "2026-06";
 const FINANCEIRO_RECORD_STATUS_OPTIONS = ["PROJECAO", "EM_VALIDACAO", "FECHADO"] as const;
 type FinanceiroRecordStatus = typeof FINANCEIRO_RECORD_STATUS_OPTIONS[number];
 const FINANCEIRO_ALLOWED_CONTRACT_TYPES = ["CLT", "PJ"] as const;
+const FINANCEIRO_TNS_SKILL_ALIASES = ["COMMENTS", "VIDEO"] as const;
 const FINANCEIRO_PROJECTABLE_SCHEDULE_STATUSES = ["ESCALADO", "PRESENTE", "VENDA_FOLGA_APROVADA"] as const;
 const FINANCEIRO_ABSENCE_SCHEDULE_STATUSES = ["FALTA", "FALTA_JUSTIFICADA", "FALTA_INJUSTIFICADA"] as const;
 const FINANCEIRO_TRAINING_SCHEDULE_STATUSES = ["TREINAMENTO"] as const;
@@ -61,6 +62,7 @@ const FINANCEIRO_ADJUSTMENT_FIELDS = new Map<string, { label: string; type: "hou
   ["notes", { label: "Notes", type: "text" }],
   ["source", { label: "Source", type: "text" }]
 ] as const);
+type FinanceiroAnalyticsRecordSource = { invoiceCycleMonth: string; costCenter: string; status: string; billableHoursActualMinutes: number; trainingHoursMinutes: number; maxHoursCapacityMinutes: number; differenceMinutes: number };
 
 export async function getFinanceiroDashboard(actor: Actor, filters: FinanceiroFilters = {}) {
   const user = await requireFinanceiroUser(actor);
@@ -301,7 +303,7 @@ export async function saveFinanceiroRecord(actor: Actor, input: Record<string, u
   if (!invoiceCycleMonth) return { error: "Ciclo da invoice é obrigatório.", status: 400 };
   if (!rawCostCenter) return { error: "LOB é obrigatória.", status: 400 };
   if (!costCenter) return { error: "LOB inválida.", status: 400 };
-  if (isFinanceNewFlowMonth(invoiceCycleMonth) && !normalizeFinanceCostCenter(rawCostCenter)) return { error: "LOB permitidas a partir de Junho/2026: ADS, CEC, COMMENTS, VIDEO e PROJECT.", status: 400 };
+  if (isFinanceNewFlowMonth(invoiceCycleMonth) && !normalizeFinanceCostCenter(rawCostCenter)) return { error: "LOB permitidas a partir de Junho/2026: ADS, CEC e TNS.", status: 400 };
 
   const maxHoursCapacityMinutes = parseHours(input.maxHoursCapacity);
   const billableHoursActualMinutes = parseHours(input.billableHoursActual);
@@ -388,7 +390,7 @@ export async function saveFinanceiroParameter(actor: Actor, input: Record<string
   const costCenter = normalizeFinanceCostCenter(rawCostCenter);
   if (!invoiceCycleMonth) return { error: "Ciclo da invoice é obrigatório para parâmetros.", status: 400 };
   if (!rawCostCenter || rawCostCenter === "Todos") return { error: "LOB é obrigatória para parâmetros.", status: 400 };
-  if (!costCenter) return { error: "LOB permitidas para parâmetros: ADS, CEC, COMMENTS, VIDEO e PROJECT.", status: 400 };
+  if (!costCenter) return { error: "LOB permitidas para parâmetros: ADS, CEC e TNS.", status: 400 };
 
   const kwaiHourlyUsd = parseMoneyNumber(input.kwaiHourlyUsd, FINANCEIRO_DEFAULT_KWAI_HOURLY_USD);
   const globalHourlyUsd = parseMoneyNumber(input.globalHourlyUsd, FINANCEIRO_DEFAULT_GLOBAL_HOURLY_USD);
@@ -550,6 +552,11 @@ function financeRecordCostCenterWhere(value?: string | null): Prisma.FinanceInvo
   if (!value || value === "Todos") return null;
   const selected = normalizeFinanceRecordCostCenter(value);
   if (!selected) return { id: "__financeiro_no_cost_center__" };
+  if (selected === "TNS") {
+    return {
+      OR: ["TNS", ...FINANCEIRO_TNS_SKILL_ALIASES].map((costCenter) => ({ costCenter: { equals: costCenter, mode: "insensitive" as const } }))
+    };
+  }
   return { costCenter: { equals: selected, mode: "insensitive" } };
 }
 
@@ -565,16 +572,77 @@ function financeEmployeeWhere(selectedCostCenter?: string | null): Prisma.Employ
   const selected = normalizeFinanceCostCenter(selectedCostCenter);
   const and: Prisma.EmployeeProfileWhereInput[] = [
     { deletedAt: null },
-    { OR: FINANCEIRO_ALLOWED_COST_CENTERS.map((costCenter) => ({ lob: { name: { equals: costCenter, mode: "insensitive" as const } } })) },
+    { OR: FINANCEIRO_ALLOWED_COST_CENTERS.map(financeEmployeeCostCenterWhere) },
     { OR: FINANCEIRO_ALLOWED_CONTRACT_TYPES.map((contractType) => ({ contractType: { equals: contractType, mode: "insensitive" as const } })) }
   ];
-  if (selected) and.push({ lob: { name: { equals: selected, mode: "insensitive" } } });
+  if (selected) and.push(financeEmployeeCostCenterWhere(selected));
   return { AND: and };
+}
+
+function financeEmployeeCostCenterWhere(costCenter: string): Prisma.EmployeeProfileWhereInput {
+  if (costCenter === "TNS") {
+    return {
+      OR: [
+        { lob: { name: { equals: "TNS", mode: "insensitive" } } },
+        { lob: { name: { equals: "COMMENTS", mode: "insensitive" } } },
+        { lob: { name: { equals: "VIDEO", mode: "insensitive" } } },
+        ...FINANCEIRO_TNS_SKILL_ALIASES.map((skill) => ({ skill: { contains: skill, mode: "insensitive" as const } }))
+      ]
+    };
+  }
+  return { lob: { name: { equals: costCenter, mode: "insensitive" as const } } };
 }
 
 function normalizeFinanceCostCenter(value?: string | null) {
   const normalized = text(value).toUpperCase();
   return (FINANCEIRO_ALLOWED_COST_CENTERS as readonly string[]).find((item) => item === normalized) ?? "";
+}
+
+function financeEmployeeCostCenter(lobName?: string | null, skill?: string | null) {
+  const lob = text(lobName).toUpperCase();
+  if (lob === "ADS" || lob === "CEC" || lob === "TNS") return lob;
+  if ((FINANCEIRO_TNS_SKILL_ALIASES as readonly string[]).includes(lob)) return "TNS";
+  const skillText = text(skill).toUpperCase();
+  if (FINANCEIRO_TNS_SKILL_ALIASES.some((alias) => skillText.includes(alias))) return "TNS";
+  return "";
+}
+
+function financeRecordAnalyticsCostCenter(value?: string | null) {
+  const allowed = normalizeFinanceCostCenter(value);
+  if (allowed) return allowed;
+  const normalized = text(value).toUpperCase();
+  return (FINANCEIRO_TNS_SKILL_ALIASES as readonly string[]).includes(normalized) ? "TNS" : "";
+}
+
+function groupFinanceRecordsForAnalytics(records: FinanceiroAnalyticsRecordSource[]) {
+  const buckets = new Map<string, FinanceiroAnalyticsRecordSource>();
+  for (const record of records) {
+    const costCenter = financeRecordAnalyticsCostCenter(record.costCenter);
+    if (!costCenter) continue;
+    const key = financeRecordKey(record.invoiceCycleMonth, costCenter);
+    const current = buckets.get(key);
+    if (!current) {
+      buckets.set(key, { ...record, costCenter });
+      continue;
+    }
+    const currentStatus = normalizeFinanceRecordStatus(current.status) || "PROJECAO";
+    const nextStatus = normalizeFinanceRecordStatus(record.status) || "PROJECAO";
+    buckets.set(key, {
+      ...current,
+      status: financeRecordStatusRank(nextStatus) < financeRecordStatusRank(currentStatus) ? nextStatus : currentStatus,
+      billableHoursActualMinutes: current.billableHoursActualMinutes + record.billableHoursActualMinutes,
+      trainingHoursMinutes: current.trainingHoursMinutes + record.trainingHoursMinutes,
+      maxHoursCapacityMinutes: current.maxHoursCapacityMinutes + record.maxHoursCapacityMinutes,
+      differenceMinutes: current.differenceMinutes + record.differenceMinutes
+    });
+  }
+  return buckets;
+}
+
+function financeRecordStatusRank(status: FinanceiroRecordStatus) {
+  if (status === "FECHADO") return 2;
+  if (status === "EM_VALIDACAO") return 1;
+  return 0;
 }
 
 function normalizeFinanceRecordCostCenter(value?: string | null, invoiceCycleMonth?: string | null) {
@@ -594,7 +662,7 @@ function isFinanceNewFlowMonth(month?: string | null) {
 }
 
 function buildFinanceCostCenterOptions(values: string[]) {
-  const options = unique([...FINANCEIRO_ALLOWED_COST_CENTERS, ...values.map((value) => text(value).toUpperCase()).filter(Boolean)]);
+  const options = unique([...FINANCEIRO_ALLOWED_COST_CENTERS, ...values.map((value) => normalizeFinanceCostCenter(value)).filter(Boolean)]);
   const defaultOrder = new Map((FINANCEIRO_ALLOWED_COST_CENTERS as readonly string[]).map((value, index) => [value, index]));
   return ["Todos", ...options.sort((a, b) => {
     const orderA = defaultOrder.get(a) ?? 999;
@@ -624,7 +692,7 @@ function parseFinanceiroImportRow(row: Record<string, unknown>, rowNumber: numbe
   if (!invoiceCycleMonth) errors.push("Ciclo da invoice inválido.");
   if (!rawCostCenter) errors.push("LOB é obrigatória.");
   if (rawCostCenter && !costCenter) errors.push("LOB inválida.");
-  if (invoiceCycleMonth && isFinanceNewFlowMonth(invoiceCycleMonth) && rawCostCenter && !normalizeFinanceCostCenter(rawCostCenter)) errors.push("LOB permitidas a partir de Junho/2026: ADS, CEC, COMMENTS, VIDEO e PROJECT.");
+  if (invoiceCycleMonth && isFinanceNewFlowMonth(invoiceCycleMonth) && rawCostCenter && !normalizeFinanceCostCenter(rawCostCenter)) errors.push("LOB permitidas a partir de Junho/2026: ADS, CEC e TNS.");
   if (!isEmpty(rawStatus) && !status) errors.push("Status financeiro inválido.");
   if (maxHours === null) errors.push("Max Hours inválido.");
   if (actualHours === null) errors.push("Billable Hours Real inválido.");
@@ -711,7 +779,7 @@ function buildFinanceiroSummary(records: Array<{ maxHoursCapacityMinutes: number
 }
 
 async function buildFinanceiroAnalytics(
-  records: Array<{ invoiceCycleMonth: string; costCenter: string; status: string; billableHoursActualMinutes: number; trainingHoursMinutes: number; maxHoursCapacityMinutes: number; differenceMinutes: number }>,
+  records: FinanceiroAnalyticsRecordSource[],
   filters: FinanceiroFilters
 ) {
   const selectedMonth = normalizeFinanceiroMonth(filters.invoiceCycleMonth);
@@ -748,7 +816,7 @@ async function buildFinanceiroAnalytics(
         hourlyRate: true,
         grossAmount: true,
         finalAmount: true,
-        employee: { select: { lob: { select: { name: true } } } }
+        employee: { select: { skill: true, lob: { select: { name: true } } } }
       }
     })
   ]);
@@ -756,7 +824,7 @@ async function buildFinanceiroAnalytics(
   const cyclesByMonth = new Map(billingCycles.map((cycle) => [cycle.referenceMonth, cycle]));
   const parametersByKey = new Map(parameters.map((parameter) => [financeRecordKey(parameter.invoiceCycleMonth, parameter.costCenter), parameter]));
   const billingByKey = groupBillingFinanceRows(billingInvoices, cyclesByMonth);
-  const recordsByKey = new Map(records.map((record) => [financeRecordKey(record.invoiceCycleMonth, record.costCenter), record]));
+  const recordsByKey = groupFinanceRecordsForAnalytics(records);
   const keys = unique([
     ...Array.from(recordsByKey.keys()),
     ...Array.from(parametersByKey.keys()),
@@ -1040,13 +1108,13 @@ function groupBillingFinanceRows(
     hourlyRate: Prisma.Decimal | number;
     grossAmount: Prisma.Decimal | number;
     finalAmount: Prisma.Decimal | number;
-    employee: { lob: { name: string } };
+    employee: { skill: string | null; lob: { name: string } };
   }>,
   cyclesByMonth: Map<string, { referenceMonth: string; status: string; closedAt: Date | null }>
 ) {
   const buckets = new Map<string, FinanceBillingBucket>();
   for (const invoice of invoices) {
-    const costCenter = normalizeFinanceCostCenter(invoice.employee.lob.name);
+    const costCenter = financeEmployeeCostCenter(invoice.employee.lob.name, invoice.employee.skill);
     if (!costCenter) continue;
     const key = financeRecordKey(invoice.referenceMonth, costCenter);
     const bucket = buckets.get(key) ?? emptyBillingBucket(invoice.referenceMonth, costCenter);
@@ -1082,7 +1150,7 @@ async function listFinanceiroProjectionSchedules(months: string[], selectedCostC
       employeeId: true,
       date: true,
       status: true,
-      employee: { select: { lob: { select: { name: true } } } }
+      employee: { select: { skill: true, lob: { select: { name: true } } } }
     }
   });
 }
@@ -1102,13 +1170,13 @@ async function listFinanceiroApprovedWorkHours(months: string[], selectedCostCen
       employeeId: true,
       date: true,
       effectiveHours: true,
-      employee: { select: { lob: { select: { name: true } } } }
+      employee: { select: { skill: true, lob: { select: { name: true } } } }
     }
   });
 }
 
 function groupFinanceSchedules(
-  schedules: Array<{ employeeId: string; date: Date; status: string; employee: { lob: { name: string } } }>,
+  schedules: Array<{ employeeId: string; date: Date; status: string; employee: { skill: string | null; lob: { name: string } } }>,
   cyclesByMonth: Map<string, { referenceMonth: string; status: string; closedAt: Date | null }>,
   workedDayKeys: Set<string>,
   projectionStartDateKey: string
@@ -1118,7 +1186,7 @@ function groupFinanceSchedules(
   for (const schedule of schedules) {
     const invoiceCycleMonth = schedule.date.toISOString().slice(0, 7);
     if (isFinanceMonthClosed(invoiceCycleMonth, cyclesByMonth.get(invoiceCycleMonth))) continue;
-    const costCenter = normalizeFinanceCostCenter(schedule.employee.lob.name);
+    const costCenter = financeEmployeeCostCenter(schedule.employee.lob.name, schedule.employee.skill);
     if (!costCenter) continue;
     const key = financeRecordKey(invoiceCycleMonth, costCenter);
     const minutes = 480;
@@ -1143,12 +1211,12 @@ function groupFinanceSchedules(
   return { futureBuckets, actualBuckets };
 }
 
-function groupFinanceApprovedWorkHours(workHours: Array<{ employeeId: string; date: Date; effectiveHours: number; employee: { lob: { name: string } } }>) {
+function groupFinanceApprovedWorkHours(workHours: Array<{ employeeId: string; date: Date; effectiveHours: number; employee: { skill: string | null; lob: { name: string } } }>) {
   const buckets = new Map<string, FinanceApprovedHoursBucket>();
   const workedDayKeys = new Set<string>();
   for (const record of workHours) {
     const invoiceCycleMonth = record.date.toISOString().slice(0, 7);
-    const costCenter = normalizeFinanceCostCenter(record.employee.lob.name);
+    const costCenter = financeEmployeeCostCenter(record.employee.lob.name, record.employee.skill);
     if (!costCenter) continue;
     const key = financeRecordKey(invoiceCycleMonth, costCenter);
     const dayKey = financeEmployeeDateKey(record.employeeId, record.date);

@@ -102,13 +102,13 @@ export function StatusBadge({ status }: { status: string }) {
   const styles =
     normalized.includes("crítico") || normalized.includes("critico") || normalized.includes("recus") || normalized.includes("inoperante")
       ? "bg-red-50 text-red-600"
-      : normalized.includes("aten") || normalized.includes("manutenção") || normalized.includes("manutencao") || normalized.includes("pendente")
+      : normalized.includes("aten") || normalized.includes("manutenção") || normalized.includes("manutencao") || normalized.includes("pendente") || normalized.includes("validação") || normalized.includes("validacao")
         ? "bg-amber-50 text-amber-600"
-        : normalized.includes("aprov") || normalized.includes("funcion") || normalized.includes("online") || normalized.includes("lido") || normalized.includes("sucesso")
+        : normalized.includes("aprov") || normalized.includes("funcion") || normalized.includes("online") || normalized.includes("lido") || normalized.includes("sucesso") || normalized.includes("fechado")
           ? "bg-emerald-50 text-emerald-600"
           : normalized.includes("nesting")
             ? "bg-violet-50 text-violet-700"
-            : normalized.includes("inform") || normalized.includes("análise") || normalized.includes("analise")
+            : normalized.includes("inform") || normalized.includes("análise") || normalized.includes("analise") || normalized.includes("projeção") || normalized.includes("projecao")
             ? "bg-blue-50 text-blue-600"
             : "bg-slate-100 text-slate-600";
 

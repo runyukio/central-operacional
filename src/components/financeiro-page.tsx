@@ -835,7 +835,7 @@ function RecordFormModal({
         </label>
         <label className="block">
           <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">LOB</span>
-          <input value={form.costCenter} onChange={(event) => setField("costCenter", event.target.value)} placeholder="ADS, CEC, COMMENTS, VIDEO ou PROJECT" className="premium-control h-10 w-full px-3 text-sm font-bold outline-none" />
+          <input value={form.costCenter} onChange={(event) => setField("costCenter", event.target.value)} placeholder="ADS, CEC ou TNS" className="premium-control h-10 w-full px-3 text-sm font-bold outline-none" />
         </label>
         <label className="block">
           <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">Status</span>
@@ -897,7 +897,7 @@ function ParameterFormModal({
             {monthOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </label>
-        <FormInput label="LOB" value={form.costCenter} onChange={(value) => setField("costCenter", value)} placeholder="ADS, CEC, COMMENTS, VIDEO ou PROJECT" />
+        <FormInput label="LOB" value={form.costCenter} onChange={(value) => setField("costCenter", value)} placeholder="ADS, CEC ou TNS" />
         <FormInput label="Kwai USD/h" value={form.kwaiHourlyUsd} onChange={(value) => setField("kwaiHourlyUsd", value)} placeholder="9,39" />
         <FormInput label="Global USD/h" value={form.globalHourlyUsd} onChange={(value) => setField("globalHourlyUsd", value)} placeholder="5,965" />
         <FormInput label="Treinamento USD/h" value={form.trainingHourlyUsd} onChange={(value) => setField("trainingHourlyUsd", value)} placeholder="1,45" />
