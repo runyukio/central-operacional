@@ -154,6 +154,16 @@ type FinanceiroAnalyticsRow = {
   };
 };
 
+type FinanceiroCostAnalyticsRow = {
+  key: string;
+  invoiceCycleMonth: string;
+  invoiceCycleLabel: string;
+  costCenter: string;
+  status: string;
+  statusLabel: string;
+  costs: FinanceiroAnalyticsRow["costs"];
+};
+
 type FinanceiroAnalytics = {
   currentMonth: string;
   hoursSummary: { maxHoursCapacity: string; billableActual: string; training: string };
@@ -161,6 +171,7 @@ type FinanceiroAnalytics = {
   costSummary: { costBrl: number };
   resultSummary: { resultBrl: number; marginPercent: number };
   rows: FinanceiroAnalyticsRow[];
+  costRows: FinanceiroCostAnalyticsRow[];
   parameters: FinanceiroParameter[];
 };
 
@@ -592,13 +603,13 @@ function CostsPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
   return (
     <div className="space-y-4">
       <div className="grid gap-3 md:grid-cols-3">
-        <StatCard title="Custo Billing" value={formatCurrency(analytics?.costSummary.costBrl ?? 0)} helper="bruto aprovado + projetado" icon={DollarSign} tone="orange" />
+        <StatCard title="Custo Billing" value={formatCurrency(analytics?.costSummary.costBrl ?? 0)} helper="líquido final do Billing" icon={DollarSign} tone="orange" />
         <StatCard title="Horas Billing reais" value={analytics?.hoursSummary.billableActual ?? "-"} helper="histórico manual/importado" icon={Clock} tone="blue" />
         <StatCard title="Training Hours" value={analytics?.hoursSummary.training ?? "-"} helper="receita treinamento" icon={Clock} tone="green" />
       </div>
       <Panel title="Custos por ciclo e LOB">
         <FinanceAnalyticsTable
-          rows={analytics?.rows ?? []}
+          rows={analytics?.costRows ?? []}
           columns={[
             ["Ciclo", (row) => row.invoiceCycleLabel],
             ["LOB", (row) => row.costCenter],
@@ -620,7 +631,7 @@ function ResultPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
     <div className="space-y-4">
       <div className="grid gap-3 md:grid-cols-3">
         <StatCard title="Receita BRL" value={formatCurrency(analytics?.valueSummary.revenueBrl ?? 0)} helper="líquida de penalty" icon={TrendingUp} tone="green" />
-        <StatCard title="Custo BRL" value={formatCurrency(analytics?.costSummary.costBrl ?? 0)} helper="bruto do Billing" icon={TrendingDown} tone="orange" />
+        <StatCard title="Custo BRL" value={formatCurrency(analytics?.costSummary.costBrl ?? 0)} helper="líquido final do Billing" icon={TrendingDown} tone="orange" />
         <StatCard title="Resultado" value={formatCurrency(analytics?.resultSummary.resultBrl ?? 0)} helper={`${formatPercent(analytics?.resultSummary.marginPercent ?? 0)}% margem`} icon={(analytics?.resultSummary.resultBrl ?? 0) < 0 ? TrendingDown : TrendingUp} tone={(analytics?.resultSummary.resultBrl ?? 0) < 0 ? "red" : "green"} />
       </div>
       <Panel title="Resultado por ciclo e LOB">
@@ -630,7 +641,7 @@ function ResultPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
             ["Ciclo", (row) => row.invoiceCycleLabel],
             ["LOB", (row) => row.costCenter],
             ["Receita BRL", (row) => formatCurrency(row.values.totalRevenueBrl)],
-            ["Custo BRL", (row) => formatCurrency(row.costs.grossAmountBrl)],
+            ["Custo BRL", (row) => formatCurrency(row.costs.billingNetCostBrl)],
             ["Resultado", (row) => formatCurrency(row.result.resultBrl)],
             ["Margem", (row) => `${formatPercent(row.result.marginPercent)}%`]
           ]}
@@ -745,7 +756,7 @@ function FinanceiroHistoryPanel({ loading, records, onView, onEdit, onAdjust }: 
   );
 }
 
-function FinanceAnalyticsTable({ rows, columns, emptyTitle }: { rows: FinanceiroAnalyticsRow[]; columns: Array<[string, (row: FinanceiroAnalyticsRow) => React.ReactNode]>; emptyTitle: string }) {
+function FinanceAnalyticsTable<Row extends { key: string }>({ rows, columns, emptyTitle }: { rows: Row[]; columns: Array<[string, (row: Row) => React.ReactNode]>; emptyTitle: string }) {
   if (!rows.length) return <EmptyState title={emptyTitle} description="Ajuste filtros, registros ou parâmetros para preencher esta visão." />;
   return (
     <div className="overflow-x-auto">

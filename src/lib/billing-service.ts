@@ -151,6 +151,19 @@ type InvoiceCalculation = {
   hasOpenAdjustment: boolean;
   hourDetails: InvoiceHourDetail[];
 };
+export type BillingFinanceCostSnapshotRow = {
+  referenceMonth: string;
+  lob: string;
+  agents: number;
+  approvedMinutes: number;
+  projectedMinutes: number;
+  approvedCostBrl: number;
+  projectedCostBrl: number;
+  grossAmount: number;
+  advanceAmount: number;
+  adjustmentAmount: number;
+  finalAmount: number;
+};
 type PersistedInvoiceSnapshot = {
   id: string;
   employeeId: string;
@@ -228,6 +241,20 @@ export async function getBillingDashboard(actor: Actor, filters: BillingDashboar
       rateConfigs,
       filterOptions: buildBillingFilterOptions(invoices)
     }
+  };
+}
+
+export async function getBillingFinanceCostSnapshot(referenceMonthInput: string) {
+  const referenceMonth = normalizeBillingMonth(referenceMonthInput);
+  if (!isBillingMonthAvailable(referenceMonth)) return { referenceMonth, rows: [] as BillingFinanceCostSnapshotRow[] };
+  const [cycle, rates] = await Promise.all([
+    prisma.billingCycle.findUnique({ where: { referenceMonth } }),
+    getBillingRates()
+  ]);
+  const invoices = await buildBillingInvoicesReadModel(referenceMonth, rates, cycle, {}, { includeHourDetails: false });
+  return {
+    referenceMonth,
+    rows: buildFinanceCostLobSummary(invoices)
   };
 }
 
@@ -1774,6 +1801,24 @@ function buildLobSummary(invoices: Array<{ lob: string; employeeId: string; appr
     lob,
     agents: new Set(rows.map((row) => row.employeeId)).size,
     approvedMinutes: rows.reduce((sum, row) => sum + row.approvedMinutes, 0),
+    grossAmount: roundMoney(rows.reduce((sum, row) => sum + row.grossAmount, 0)),
+    advanceAmount: roundMoney(rows.reduce((sum, row) => sum + row.advanceAmount, 0)),
+    adjustmentAmount: roundMoney(rows.reduce((sum, row) => sum + row.adjustmentAmount + row.campaignAmount, 0)),
+    finalAmount: roundMoney(rows.reduce((sum, row) => sum + row.finalAmount, 0))
+  })).sort((a, b) => a.lob.localeCompare(b.lob, "pt-BR"));
+}
+
+function buildFinanceCostLobSummary(invoices: InvoiceCalculation[]): BillingFinanceCostSnapshotRow[] {
+  const byLob = new Map<string, InvoiceCalculation[]>();
+  for (const invoice of invoices) byLob.set(invoice.lob, [...(byLob.get(invoice.lob) ?? []), invoice]);
+  return Array.from(byLob.entries()).map(([lob, rows]) => ({
+    referenceMonth: rows[0]?.referenceMonth ?? "",
+    lob,
+    agents: new Set(rows.map((row) => row.employeeId)).size,
+    approvedMinutes: rows.reduce((sum, row) => sum + row.approvedMinutes, 0),
+    projectedMinutes: rows.reduce((sum, row) => sum + row.projectedMinutes, 0),
+    approvedCostBrl: roundMoney(rows.reduce((sum, row) => sum + (row.approvedMinutes / 60) * row.hourlyRate, 0)),
+    projectedCostBrl: roundMoney(rows.reduce((sum, row) => sum + (row.projectedMinutes / 60) * row.hourlyRate, 0)),
     grossAmount: roundMoney(rows.reduce((sum, row) => sum + row.grossAmount, 0)),
     advanceAmount: roundMoney(rows.reduce((sum, row) => sum + row.advanceAmount, 0)),
     adjustmentAmount: roundMoney(rows.reduce((sum, row) => sum + row.adjustmentAmount + row.campaignAmount, 0)),

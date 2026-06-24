@@ -1,6 +1,7 @@
 import { AuditAction, Prisma, type WorkHourRecordStatus } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
+import { getBillingFinanceCostSnapshot, type BillingFinanceCostSnapshotRow } from "@/lib/billing-service";
 import { canAccessFinanceiro } from "@/lib/financeiro-permissions";
 import { currentReferenceMonth, formatReferenceMonth, normalizeReferenceMonth } from "@/lib/monthly-advance-service";
 import { prisma } from "@/lib/prisma";
@@ -63,6 +64,21 @@ const FINANCEIRO_ADJUSTMENT_FIELDS = new Map<string, { label: string; type: "hou
   ["source", { label: "Source", type: "text" }]
 ] as const);
 type FinanceiroAnalyticsRecordSource = { invoiceCycleMonth: string; costCenter: string; status: string; billableHoursActualMinutes: number; trainingHoursMinutes: number; maxHoursCapacityMinutes: number; differenceMinutes: number; penaltyPercent: Prisma.Decimal | number };
+type FinanceiroCostAnalyticsRowSource = {
+  key: string;
+  invoiceCycleMonth: string;
+  invoiceCycleLabel: string;
+  costCenter: string;
+  status: string;
+  statusLabel: string;
+  costs: {
+    approvedCostBrl: number;
+    projectedCostBrl: number;
+    billingNetCostBrl: number;
+    grossAmountBrl: number;
+    finalAmountBrl: number;
+  };
+};
 
 export async function getFinanceiroDashboard(actor: Actor, filters: FinanceiroFilters = {}) {
   const user = await requireFinanceiroUser(actor);
@@ -508,12 +524,12 @@ export async function exportFinanceiro(actor: Actor, filters: FinanceiroFilters 
       {
         sheetName: "Custos",
         headers: ["invoice_cycle_month", "cost_center", "status", "custo_aprovado_brl", "custo_projetado_brl", "bruto_billing_brl", "custo_liquido_billing_brl"],
-        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.statusLabel, row.costs.approvedCostBrl, row.costs.projectedCostBrl, row.costs.grossAmountBrl, row.costs.billingNetCostBrl])
+        rows: analytics.costRows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.statusLabel, row.costs.approvedCostBrl, row.costs.projectedCostBrl, row.costs.grossAmountBrl, row.costs.billingNetCostBrl])
       },
       {
         sheetName: "Resultado",
         headers: ["invoice_cycle_month", "cost_center", "status", "receita_brl", "custo_brl", "resultado_brl", "margem_percent"],
-        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.statusLabel, row.values.totalRevenueBrl, row.costs.grossAmountBrl, row.result.resultBrl, `${row.result.marginPercent}%`])
+        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.statusLabel, row.values.totalRevenueBrl, row.costs.billingNetCostBrl, row.result.resultBrl, `${row.result.marginPercent}%`])
       },
       {
         sheetName: "Parametros",
@@ -605,6 +621,10 @@ function financeEmployeeCostCenter(lobName?: string | null, skill?: string | nul
   const skillText = text(skill).toUpperCase();
   if (FINANCEIRO_TNS_SKILL_ALIASES.some((alias) => skillText.includes(alias))) return "TNS";
   return "";
+}
+
+function financeBillingRawCostCenter(lobName?: string | null) {
+  return text(lobName).toUpperCase() || "SEM LOB";
 }
 
 function financeRecordAnalyticsCostCenter(value?: string | null) {
@@ -804,33 +824,15 @@ async function buildFinanceiroAnalytics(
   const parameterCostCenterWhere = financeAllowedParameterCostCenterWhere(selectedCostCenter);
   if (parameterCostCenterWhere) Object.assign(parameterWhere, parameterCostCenterWhere);
 
-  const [parameters, billingCycles, billingInvoices] = await Promise.all([
+  const [parameters, billingSnapshots] = await Promise.all([
     prisma.financeCycleParameter.findMany({ where: parameterWhere, orderBy: [{ invoiceCycleMonth: "desc" }, { costCenter: "asc" }] }),
-    prisma.billingCycle.findMany({
-      where: { referenceMonth: { in: months } },
-      select: { referenceMonth: true, status: true, closedAt: true }
-    }),
-    prisma.billingEmployeeInvoice.findMany({
-      where: {
-        referenceMonth: { in: months },
-        employee: financeEmployeeWhere(selectedCostCenter)
-      },
-      select: {
-        referenceMonth: true,
-        approvedMinutes: true,
-        projectedMinutes: true,
-        totalConsideredMinutes: true,
-        hourlyRate: true,
-        grossAmount: true,
-        finalAmount: true,
-        employee: { select: { skill: true, lob: { select: { name: true } } } }
-      }
-    })
+    Promise.all(months.map((month) => getBillingFinanceCostSnapshot(month)))
   ]);
 
-  const cyclesByMonth = new Map(billingCycles.map((cycle) => [cycle.referenceMonth, cycle]));
   const parametersByKey = new Map(parameters.map((parameter) => [financeRecordKey(parameter.invoiceCycleMonth, parameter.costCenter), parameter]));
-  const billingByKey = groupBillingFinanceRows(billingInvoices, cyclesByMonth);
+  const billingSnapshotRows = billingSnapshots.flatMap((snapshot) => snapshot.rows);
+  const billingByKey = groupBillingFinanceSnapshotRows(billingSnapshotRows);
+  const billingCostByKey = groupBillingRawCostSnapshotRows(billingSnapshotRows);
   const recordsByKey = groupFinanceRecordsForAnalytics(records);
   const keys = unique([
     ...Array.from(recordsByKey.keys()),
@@ -850,8 +852,8 @@ async function buildFinanceiroAnalytics(
     const parameterView = mapFinanceiroParameter(parameter, !parametersByKey.has(key));
     const status = normalizeFinanceRecordStatus(record?.status) || "PROJECAO";
     const statusLabel = financeRecordStatusLabel(status);
-    const totalCostBrl = billing.grossAmountBrl;
     const billingNetCostBrl = billing.finalAmountBrl;
+    const totalCostBrl = billingNetCostBrl;
     const actualHours = (record?.billableHoursActualMinutes ?? 0) / 60;
     const trainingHours = (record?.trainingHoursMinutes ?? 0) / 60;
     const penaltyPercent = round2(Number(record?.penaltyPercent ?? 0));
@@ -909,16 +911,35 @@ async function buildFinanceiroAnalytics(
     return true;
   }).sort((a, b) => b.invoiceCycleMonth.localeCompare(a.invoiceCycleMonth) || a.costCenter.localeCompare(b.costCenter));
 
+  const costRows: FinanceiroCostAnalyticsRowSource[] = Array.from(billingCostByKey.values()).map((billing) => ({
+    key: `cost:${financeRecordKey(billing.invoiceCycleMonth, billing.costCenter)}`,
+    invoiceCycleMonth: billing.invoiceCycleMonth,
+    invoiceCycleLabel: formatReferenceMonth(billing.invoiceCycleMonth),
+    costCenter: billing.costCenter,
+    status: "BILLING",
+    statusLabel: "Billing",
+    costs: {
+      approvedCostBrl: billing.approvedCostBrl,
+      projectedCostBrl: billing.projectedCostBrl,
+      billingNetCostBrl: billing.finalAmountBrl,
+      grossAmountBrl: billing.grossAmountBrl,
+      finalAmountBrl: billing.finalAmountBrl
+    }
+  })).filter((row) => {
+    if (selectedMonth && row.invoiceCycleMonth !== selectedMonth) return false;
+    return true;
+  }).sort((a, b) => b.invoiceCycleMonth.localeCompare(a.invoiceCycleMonth) || a.costCenter.localeCompare(b.costCenter));
+
   const summaries = rows.reduce((acc, row) => {
     acc.maxMinutes += parseDisplayMinutes(row.hours.maxHoursCapacity);
     acc.actualMinutes += parseDisplayMinutes(row.hours.billableActual);
     acc.trainingMinutes += parseDisplayMinutes(row.hours.training);
     acc.revenueUsd += row.values.totalRevenueUsd;
     acc.revenueBrl += row.values.totalRevenueBrl;
-    acc.costBrl += row.costs.grossAmountBrl;
-    acc.resultBrl += row.result.resultBrl;
     return acc;
-  }, { maxMinutes: 0, actualMinutes: 0, trainingMinutes: 0, revenueUsd: 0, revenueBrl: 0, costBrl: 0, resultBrl: 0 });
+  }, { maxMinutes: 0, actualMinutes: 0, trainingMinutes: 0, revenueUsd: 0, revenueBrl: 0 });
+  const costSummaryBrl = roundMoney(costRows.reduce((sum, row) => sum + row.costs.billingNetCostBrl, 0));
+  const resultSummaryBrl = roundMoney(summaries.revenueBrl - costSummaryBrl);
 
   return {
     currentMonth,
@@ -932,13 +953,14 @@ async function buildFinanceiroAnalytics(
       revenueBrl: roundMoney(summaries.revenueBrl)
     },
     costSummary: {
-      costBrl: roundMoney(summaries.costBrl)
+      costBrl: costSummaryBrl
     },
     resultSummary: {
-      resultBrl: roundMoney(summaries.resultBrl),
-      marginPercent: summaries.revenueBrl > 0 ? round2((summaries.resultBrl / summaries.revenueBrl) * 100) : 0
+      resultBrl: resultSummaryBrl,
+      marginPercent: summaries.revenueBrl > 0 ? round2((resultSummaryBrl / summaries.revenueBrl) * 100) : 0
     },
     rows,
+    costRows,
     parameters: rows.map((row) => row.parameters)
   };
 }
@@ -963,6 +985,7 @@ function emptyFinanceiroAnalytics(currentMonth: string) {
       marginPercent: 0
     },
     rows: [],
+    costRows: [],
     parameters: []
   };
 }
@@ -1115,34 +1138,37 @@ function defaultFinanceParameter(invoiceCycleMonth: string, costCenter: string):
   };
 }
 
-function groupBillingFinanceRows(
-  invoices: Array<{
-    referenceMonth: string;
-    approvedMinutes: number;
-    projectedMinutes: number;
-    hourlyRate: Prisma.Decimal | number;
-    grossAmount: Prisma.Decimal | number;
-    finalAmount: Prisma.Decimal | number;
-    employee: { skill: string | null; lob: { name: string } };
-  }>,
-  cyclesByMonth: Map<string, { referenceMonth: string; status: string; closedAt: Date | null }>
-) {
+function groupBillingFinanceSnapshotRows(rows: BillingFinanceCostSnapshotRow[]) {
   const buckets = new Map<string, FinanceBillingBucket>();
-  for (const invoice of invoices) {
-    const costCenter = financeEmployeeCostCenter(invoice.employee.lob.name, invoice.employee.skill);
+  for (const row of rows) {
+    const costCenter = financeEmployeeCostCenter(row.lob, row.lob);
     if (!costCenter) continue;
-    const key = financeRecordKey(invoice.referenceMonth, costCenter);
-    const bucket = buckets.get(key) ?? emptyBillingBucket(invoice.referenceMonth, costCenter);
-    const closedMonth = isFinanceMonthClosed(invoice.referenceMonth, cyclesByMonth.get(invoice.referenceMonth));
-    const hourlyRate = Number(invoice.hourlyRate);
-    const approvedMinutes = Math.max(0, invoice.approvedMinutes);
-    const projectedMinutes = closedMonth ? 0 : Math.max(0, invoice.projectedMinutes);
-    bucket.approvedMinutes += approvedMinutes;
-    bucket.projectedMinutes += projectedMinutes;
-    bucket.approvedCostBrl = roundMoney(bucket.approvedCostBrl + (approvedMinutes / 60) * hourlyRate);
-    bucket.projectedCostBrl = roundMoney(bucket.projectedCostBrl + (projectedMinutes / 60) * hourlyRate);
-    bucket.grossAmountBrl = roundMoney(bucket.grossAmountBrl + Number(invoice.grossAmount));
-    bucket.finalAmountBrl = roundMoney(bucket.finalAmountBrl + Number(invoice.finalAmount));
+    const key = financeRecordKey(row.referenceMonth, costCenter);
+    const bucket = buckets.get(key) ?? emptyBillingBucket(row.referenceMonth, costCenter);
+    bucket.approvedMinutes += Math.max(0, row.approvedMinutes);
+    bucket.projectedMinutes += Math.max(0, row.projectedMinutes);
+    bucket.approvedCostBrl = roundMoney(bucket.approvedCostBrl + row.approvedCostBrl);
+    bucket.projectedCostBrl = roundMoney(bucket.projectedCostBrl + row.projectedCostBrl);
+    bucket.grossAmountBrl = roundMoney(bucket.grossAmountBrl + row.grossAmount);
+    bucket.finalAmountBrl = roundMoney(bucket.finalAmountBrl + row.finalAmount);
+    buckets.set(key, bucket);
+  }
+  return buckets;
+}
+
+function groupBillingRawCostSnapshotRows(rows: BillingFinanceCostSnapshotRow[]) {
+  const buckets = new Map<string, FinanceBillingBucket>();
+  for (const row of rows) {
+    const costCenter = financeBillingRawCostCenter(row.lob);
+    if (!costCenter) continue;
+    const key = financeRecordKey(row.referenceMonth, costCenter);
+    const bucket = buckets.get(key) ?? emptyBillingBucket(row.referenceMonth, costCenter);
+    bucket.approvedMinutes += Math.max(0, row.approvedMinutes);
+    bucket.projectedMinutes += Math.max(0, row.projectedMinutes);
+    bucket.approvedCostBrl = roundMoney(bucket.approvedCostBrl + row.approvedCostBrl);
+    bucket.projectedCostBrl = roundMoney(bucket.projectedCostBrl + row.projectedCostBrl);
+    bucket.grossAmountBrl = roundMoney(bucket.grossAmountBrl + row.grossAmount);
+    bucket.finalAmountBrl = roundMoney(bucket.finalAmountBrl + row.finalAmount);
     buckets.set(key, bucket);
   }
   return buckets;
