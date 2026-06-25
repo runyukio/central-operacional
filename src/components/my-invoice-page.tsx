@@ -204,7 +204,7 @@ export function MyInvoicePage() {
               <textarea value={adjustment.description} onChange={(event) => setAdjustment({ ...adjustment, description: event.target.value })} placeholder="Descreva claramente o que está sendo questionado." className="premium-control mt-3 min-h-[120px] w-full px-3 py-2 text-sm font-semibold" />
               <div className="mt-3 flex flex-wrap justify-end gap-2">
                 <button onClick={() => setAdjustmentOpen(false)} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Cancelar</button>
-                <button disabled={saving} onClick={() => post("request-adjustment", adjustment, "Solicitação de ajuste enviada para o supervisor.")} className="premium-button h-10 px-4 text-sm font-extrabold">
+                <button disabled={saving} onClick={() => post("request-adjustment", adjustment, "Solicitação de ajuste enviada para o supervisor.")} className="premium-button inline-flex h-10 items-center justify-center gap-2 px-4 text-sm font-extrabold leading-none">
                   <Send className="h-4 w-4" /> Enviar solicitação
                 </button>
               </div>
@@ -215,10 +215,10 @@ export function MyInvoicePage() {
         <div className="space-y-4">
           <Panel title="Ações">
             <div className="grid gap-2">
-              <button disabled={!data.invoice.canApprove || saving} onClick={() => post("approve", {}, "Invoice aprovado com sucesso.")} className="premium-button h-10 px-3 text-sm font-extrabold disabled:cursor-not-allowed disabled:opacity-50">
+              <button disabled={!data.invoice.canApprove || saving} onClick={() => post("approve", {}, "Invoice aprovado com sucesso.")} className="premium-button inline-flex h-10 w-full items-center justify-center gap-2 px-3 text-sm font-extrabold leading-none disabled:cursor-not-allowed disabled:opacity-50">
                 <CheckCircle2 className="h-4 w-4" /> Aprovar invoice
               </button>
-              <button disabled={!data.invoice.canRequestAdjustment || saving} onClick={() => setAdjustmentOpen(true)} className="premium-control h-10 px-3 text-sm font-extrabold text-orange-700 disabled:cursor-not-allowed disabled:opacity-50">
+              <button disabled={!data.invoice.canRequestAdjustment || saving} onClick={() => setAdjustmentOpen(true)} className="premium-control inline-flex h-10 w-full items-center justify-center px-3 text-sm font-extrabold leading-none text-orange-700 disabled:cursor-not-allowed disabled:opacity-50">
                 Solicitar ajuste
               </button>
             </div>
