@@ -146,7 +146,7 @@ export function MyInvoicePage() {
           </div>
         </div>
         <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-700">
-          {data.cycle?.status === "FINALIZADO_CONFERENCIA" ? "Invoice disponível para sua conferência." : "Esta é apenas uma previsão. Os valores podem mudar até o fechamento do Billing."}
+          {data.invoice.canApprove || data.invoice.canRequestAdjustment ? "Invoice disponível para sua conferência." : "Esta é apenas uma previsão. Os valores podem mudar até o fechamento do Billing."}
         </p>
       </section>
 

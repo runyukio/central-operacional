@@ -316,6 +316,14 @@ export function BillingPage() {
     }, finalized ? "Invoice individual finalizado e congelado." : "Invoice individual reaberto para ajustes e recálculo.");
   }
 
+  async function releaseEmployeeInvoiceForReview(invoice: BillingPayload["data"]["invoices"][number]) {
+    await postBilling({
+      action: "release-employee-invoice-review",
+      referenceMonth,
+      employeeId: invoice.employeeId
+    }, "Invoice individual liberado para conferência.");
+  }
+
   const exportHref = useMemo(() => {
     const params = new URLSearchParams({ referenceMonth });
     if (employeeId) params.set("employeeId", employeeId);
@@ -532,6 +540,7 @@ export function BillingPage() {
               onClose={() => setSelectedInvoice(null)}
               onLoadHourDetails={() => setActiveTab("hours")}
               onCreateAdjustment={(draft) => createEmployeeAdjustment(selectedInvoice, draft)}
+              onReleaseForReview={() => releaseEmployeeInvoiceForReview(selectedInvoice)}
               onSetFinalized={(finalized) => setEmployeeInvoiceFinalized(selectedInvoice, finalized)}
             />
           ) : null}
@@ -660,6 +669,7 @@ function EmployeeBillingDetail({
   onClose,
   onLoadHourDetails,
   onCreateAdjustment,
+  onReleaseForReview,
   onSetFinalized
 }: {
   invoice: BillingPayload["data"]["invoices"][number];
@@ -669,11 +679,13 @@ function EmployeeBillingDetail({
   onClose: () => void;
   onLoadHourDetails: () => void;
   onCreateAdjustment: (draft: { type: string; description: string; amount: string }) => Promise<void>;
+  onReleaseForReview: () => Promise<void>;
   onSetFinalized: (finalized: boolean) => Promise<void>;
 }) {
   const [draft, setDraft] = useState({ type: "Correção", amount: "", description: "" });
   const [localError, setLocalError] = useState("");
   const finalized = invoice.status === "FECHADO";
+  const alreadyReleasedForReview = ["DISPONIVEL_APROVACAO", "APROVADO_COLABORADOR", "AGUARDANDO_SUPERVISOR", "AGUARDANDO_ADMIN"].includes(invoice.status);
 
   async function submit() {
     setLocalError("");
@@ -703,6 +715,16 @@ function EmployeeBillingDetail({
             <p className="text-sm font-semibold text-muted">{invoice.wbLogin} • {invoice.roleTitle} • {invoice.skill || "Sem skill"} • {invoice.lob}</p>
           </div>
           <div className="flex items-center gap-2">
+            {!finalized ? (
+              <button
+                type="button"
+                disabled={saving || alreadyReleasedForReview}
+                onClick={() => void onReleaseForReview()}
+                className="premium-control inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Send className="h-4 w-4" /> {alreadyReleasedForReview ? "Conferência liberada" : "Liberar conferência"}
+              </button>
+            ) : null}
             <button
               type="button"
               disabled={saving}

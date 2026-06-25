@@ -100,6 +100,7 @@ type InvoiceExtra = {
   status?: string;
   approvedByEmployeeAt?: Date;
   approvedByEmployeeUserId?: string;
+  clearEmployeeApproval?: boolean;
 };
 type InvoiceHourDetail = {
   kind: "APPROVED" | "PROJECTED";
@@ -337,7 +338,7 @@ export async function getEmployeeBillingPreview(employeeId: string) {
     campaignAmount: invoice.campaignAmount,
     adjustmentAmount: invoice.adjustmentAmount,
     finalAmount: invoice.finalAmount,
-    message: cycle?.status === "FINALIZADO_CONFERENCIA"
+    message: isInvoiceAvailableForEmployeeReview(cycle?.status, persisted?.status ?? invoice.status)
       ? "Invoice disponível para conferência."
       : "Este valor ainda é uma previsão e pode mudar até o fechamento do Billing."
   };
@@ -352,11 +353,13 @@ export async function approveMyBillingInvoice(actor: Actor, input: { referenceMo
   const referenceMonth = normalizeBillingMonth(input.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
   const cycle = await prisma.billingCycle.findUnique({ where: { referenceMonth } });
-  if (!cycle || cycle.status !== "FINALIZADO_CONFERENCIA") return { error: "Invoice ainda não está disponível para aprovação.", status: 403 };
+  if (!cycle) return { error: "Invoice ainda não está disponível para aprovação.", status: 403 };
   const persisted = await prisma.billingEmployeeInvoice.findUnique({
     where: { billingCycleId_employeeId: { billingCycleId: cycle.id, employeeId: user.employeeProfile.id } },
     select: { status: true }
   });
+  const effectiveStatus = persisted?.status ?? defaultInvoiceStatusForCycle(cycle.status);
+  if (!isInvoiceAvailableForEmployeeReview(cycle.status, effectiveStatus)) return { error: "Invoice ainda não está disponível para aprovação.", status: 403 };
   if (isFinalizedInvoiceStatus(persisted?.status)) return { error: "Este invoice foi finalizado pelo Admin Central e não pode ser aprovado pelo colaborador.", status: 409 };
 
   const rates = await getBillingRates();
@@ -404,11 +407,13 @@ export async function submitInvoiceAdjustmentRequest(actor: Actor, input: {
   if (!input.description?.trim()) return { error: "Descrição do ajuste é obrigatória.", status: 400 };
 
   const cycle = await prisma.billingCycle.findUnique({ where: { referenceMonth } });
-  if (!cycle || cycle.status !== "FINALIZADO_CONFERENCIA") return { error: "Invoice ainda não está disponível para solicitação de ajuste.", status: 403 };
+  if (!cycle) return { error: "Invoice ainda não está disponível para solicitação de ajuste.", status: 403 };
   const existingInvoice = await prisma.billingEmployeeInvoice.findUnique({
     where: { billingCycleId_employeeId: { billingCycleId: cycle.id, employeeId: user.employeeProfile.id } },
     select: { status: true }
   });
+  const effectiveStatus = existingInvoice?.status ?? defaultInvoiceStatusForCycle(cycle.status);
+  if (!isInvoiceAvailableForEmployeeReview(cycle.status, effectiveStatus)) return { error: "Invoice ainda não está disponível para solicitação de ajuste.", status: 403 };
   if (isFinalizedInvoiceStatus(existingInvoice?.status)) return { error: "Este invoice foi finalizado pelo Admin Central. Solicite reabertura ao Admin para pedir ajuste.", status: 409 };
 
   const rates = await getBillingRates();
@@ -738,6 +743,50 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: { 
       newValue: { status: invoice.status, referenceMonth, employeeId: employee.id }
     }
   });
+  return { data: { id: invoice.id, status: invoice.status, statusLabel: invoiceStatusLabel(invoice.status) } };
+}
+
+export async function releaseEmployeeBillingInvoiceForReview(actor: Actor, input: { referenceMonth?: string | null; employeeId: string }) {
+  const user = await findActiveUser(actor.email);
+  const denied = requireBillingAccess(user);
+  if (denied) return denied;
+  const referenceMonth = normalizeBillingMonth(input.referenceMonth);
+  if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
+  if (!input.employeeId?.trim()) return { error: "Colaborador obrigatório para liberar conferência.", status: 400 };
+
+  const employee = await prisma.employeeProfile.findFirst({
+    where: { id: input.employeeId, deletedAt: null },
+    include: { user: true, lob: true, supervisor: true, shift: true }
+  });
+  if (!employee) return { error: "Colaborador não encontrado.", status: 404 };
+  if (!isBillableEmployee(employee)) return { error: "Colaborador não elegível para Billing.", status: 403 };
+
+  const cycle = await ensureBillingCycle(referenceMonth);
+  const existing = await prisma.billingEmployeeInvoice.findUnique({
+    where: { billingCycleId_employeeId: { billingCycleId: cycle.id, employeeId: employee.id } }
+  });
+  if (isFinalizedInvoiceStatus(existing?.status)) {
+    return { error: "Invoice individual finalizado. Reabra antes de liberar novamente para conferência.", status: 409 };
+  }
+
+  const calculated = await calculateEmployeeInvoice(employee, referenceMonth, await getBillingRates(), cycle.id, cycle.status);
+  const invoice = await upsertEmployeeInvoice(cycle.id, calculated, {
+    status: "DISPONIVEL_APROVACAO",
+    clearEmployeeApproval: true
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      actorId: user!.id,
+      action: AuditAction.EDICAO,
+      entity: "BillingEmployeeInvoice",
+      entityId: invoice.id,
+      reason: "Invoice individual liberado para conferência pelo Admin Central",
+      previousValue: existing ? { status: existing.status, finalAmount: Number(existing.finalAmount), totalMinutes: existing.totalConsideredMinutes } : undefined,
+      newValue: { status: invoice.status, referenceMonth, employeeId: employee.id, finalAmount: Number(invoice.finalAmount), totalMinutes: invoice.totalConsideredMinutes }
+    }
+  });
+
   return { data: { id: invoice.id, status: invoice.status, statusLabel: invoiceStatusLabel(invoice.status) } };
 }
 
@@ -1432,6 +1481,7 @@ function applyPersistedInvoiceSnapshot<T extends InvoiceCalculation>(invoice: T,
 async function upsertEmployeeInvoice(cycleId: string, calculated: InvoiceCalculation, extra: InvoiceExtra = {}) {
   const status = String(extra.status ?? calculated.status ?? defaultInvoiceStatusForCycle(null));
   const approvalRelation = extra.approvedByEmployeeUserId ? { approvedByEmployeeUser: { connect: { id: extra.approvedByEmployeeUserId } } } : {};
+  const clearApproval = extra.clearEmployeeApproval ? { approvedByEmployeeAt: null, approvedByEmployeeUser: { disconnect: true } } : {};
   return prisma.billingEmployeeInvoice.upsert({
     where: { billingCycleId_employeeId: { billingCycleId: cycleId, employeeId: calculated.employeeId } },
     update: {
@@ -1447,6 +1497,7 @@ async function upsertEmployeeInvoice(cycleId: string, calculated: InvoiceCalcula
       adjustmentAmount: decimal(calculated.adjustmentAmount),
       finalAmount: decimal(calculated.finalAmount),
       ...(extra.approvedByEmployeeAt ? { approvedByEmployeeAt: extra.approvedByEmployeeAt } : {}),
+      ...clearApproval,
       ...approvalRelation
     },
     create: {
@@ -1892,14 +1943,18 @@ function buildInvoiceComposition(invoice: InvoiceCalculation) {
 }
 
 function canEmployeeApproveInvoice(cycleStatus?: string | null, invoiceStatus?: string | null) {
-  return cycleStatus === "FINALIZADO_CONFERENCIA" && invoiceStatus !== "APROVADO_COLABORADOR" && !isFinalizedInvoiceStatus(invoiceStatus);
+  return isInvoiceAvailableForEmployeeReview(cycleStatus, invoiceStatus) && invoiceStatus !== "APROVADO_COLABORADOR" && !isFinalizedInvoiceStatus(invoiceStatus);
 }
 
 function canEmployeeRequestAdjustment(cycleStatus: string | null | undefined, invoiceStatus: string | null | undefined, requests: Array<{ status: string }>) {
-  return cycleStatus === "FINALIZADO_CONFERENCIA"
+  return isInvoiceAvailableForEmployeeReview(cycleStatus, invoiceStatus)
     && invoiceStatus !== "APROVADO_COLABORADOR"
     && !isFinalizedInvoiceStatus(invoiceStatus)
     && !requests.some((request) => OPEN_ADJUSTMENT_STATUSES.includes(request.status as (typeof OPEN_ADJUSTMENT_STATUSES)[number]));
+}
+
+function isInvoiceAvailableForEmployeeReview(cycleStatus?: string | null, invoiceStatus?: string | null) {
+  return cycleStatus === "FINALIZADO_CONFERENCIA" || invoiceStatus === "DISPONIVEL_APROVACAO";
 }
 
 function defaultInvoiceStatusForCycle(cycleStatus?: string | null) {
