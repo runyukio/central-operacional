@@ -61,6 +61,11 @@ const inactiveEmployeeStatusLabels = [
 const inactiveEmployeeStatusTokens = new Set(inactiveEmployeeStatusLabels.map((status) => normalizeStatusToken(status)));
 
 type UserWithRole = Prisma.UserGetPayload<{ include: { role: true; employeeProfile: true } }>;
+type WorkHourRecordViewer = {
+  id: string;
+  roleName: string;
+  employeeProfileId?: string | null;
+};
 
 export type WorkHourQuery = {
   startDate?: string;
@@ -212,6 +217,7 @@ export async function listOperationalWorkHours(actor: Actor, query: WorkHourQuer
               status: true,
               currentActualHours: true,
               requestedActualHours: true,
+              requestedById: true,
               reason: true,
               justification: true,
               rejectionReason: true,
@@ -228,7 +234,7 @@ export async function listOperationalWorkHours(actor: Actor, query: WorkHourQuer
     const summary = await getWorkHoursSummary(where);
 
     return {
-      data: records.map(formatWorkHourRecord),
+      data: records.map((record) => formatWorkHourRecord(record, toWorkHourRecordViewer(user))),
       summary,
       pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
       period: { startDate: formatDate(period.startDate), endDate: formatDate(period.endDate) },
@@ -572,7 +578,7 @@ export async function reviewWorkHourAdjustment(actor: Actor, input: WorkHourRevi
           data: { status: "ADJUSTMENT_REJECTED" }
         });
         await writeReviewHistory(tx, user.id, updatedRecord.id, "ADJUSTMENT_REJECTED", adjustment.record, updatedRecord, input.rejectionReason);
-        await notifyReviewResult(tx, adjustment, "Ajuste de horas recusado", input.rejectionReason!.trim());
+        await notifyReviewResult(tx, adjustment, "Ajuste de horas recusado", input.rejectionReason!.trim(), "Seu ajuste de horas foi recusado. Consulte seu supervisor para mais detalhes.");
         return { adjustment: updatedAdjustment, record: updatedRecord };
       }
 
@@ -608,7 +614,7 @@ export async function reviewWorkHourAdjustment(actor: Actor, input: WorkHourRevi
     return {
       success: true,
       message: input.action === "approve" ? "Ajuste aprovado e horas efetivas atualizadas." : "Ajuste recusado.",
-      data: { adjustment: formatAdjustment(result.adjustment), record: formatWorkHourRecord(await getRecordWithRelations(result.record.id)) }
+      data: { adjustment: formatAdjustment(result.adjustment), record: formatWorkHourRecord(await getRecordWithRelations(result.record.id), toWorkHourRecordViewer(user)) }
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Não foi possível processar ajuste.";
@@ -663,7 +669,7 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
       return {
         error: "Já existe um registro de horas para este dia. Confirme se deseja atualizar.",
         type: "CONFIRMATION_REQUIRED",
-        existing: formatWorkHourRecord(await getRecordWithRelations(existing.id))
+        existing: formatWorkHourRecord(await getRecordWithRelations(existing.id), toWorkHourRecordViewer(user))
       };
     }
 
@@ -749,7 +755,7 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
     return {
       success: true,
       message: existing ? "Horas atualizadas manualmente." : "Horas lançadas manualmente.",
-      data: formatWorkHourRecord(await getRecordWithRelations(saved.id))
+      data: formatWorkHourRecord(await getRecordWithRelations(saved.id), toWorkHourRecordViewer(user))
     };
   } catch (error) {
     recordErrorLog({ userEmail: actor.email, code: "WORK_HOUR_MANUAL_UPSERT_ERROR", message: error instanceof Error ? error.message : "Falha ao lançar horas", action: "WORK_HOUR_MANUAL_UPSERT", severity: "ERROR" });
@@ -1218,6 +1224,7 @@ async function getRecordWithRelations(id: string) {
           status: true,
           currentActualHours: true,
           requestedActualHours: true,
+          requestedById: true,
           reason: true,
           justification: true,
           rejectionReason: true,
@@ -1230,7 +1237,7 @@ async function getRecordWithRelations(id: string) {
   });
 }
 
-function formatWorkHourRecord(record: any) {
+function formatWorkHourRecord(record: any, viewer?: WorkHourRecordViewer) {
   const adjustment = record.adjustments?.[0];
   const adjustmentDifferenceMinutes = adjustment
     ? calculateAdjustmentDifferenceMinutes(adjustment.currentActualHours ?? record.effectiveHours, adjustment.requestedActualHours)
@@ -1264,7 +1271,7 @@ function formatWorkHourRecord(record: any) {
     adjustmentDifferenceMinutes,
     adjustmentReason: adjustment?.reason ?? "",
     adjustmentJustification: adjustment?.justification ?? "",
-    adjustmentRejectionReason: adjustment?.rejectionReason ?? "",
+    adjustmentRejectionReason: canSeeWorkHourAdjustmentRejectionReason(viewer, adjustment) ? adjustment?.rejectionReason ?? "" : "",
     adjustmentRequestedBy: adjustment?.requestedBy?.name ?? "",
     adjustmentRequestedAt: adjustment ? formatDateTime(adjustment.createdAt) : "",
     source: record.source ?? "",
@@ -1272,6 +1279,14 @@ function formatWorkHourRecord(record: any) {
     createdAt: formatDateTime(record.createdAt),
     updatedAt: formatDateTime(record.updatedAt)
   };
+}
+
+function canSeeWorkHourAdjustmentRejectionReason(viewer: WorkHourRecordViewer | undefined, adjustment: any) {
+  if (!viewer || !adjustment?.rejectionReason) return false;
+  const role = normalizeRole(viewer.roleName);
+  if (approvalRoles.includes(role)) return true;
+  if (adjustment.requestedById && adjustment.requestedById === viewer.id) return true;
+  return false;
 }
 
 function formatAdjustment(adjustment: {
@@ -1309,11 +1324,15 @@ async function writeReviewHistory(tx: Prisma.TransactionClient, userId: string, 
   });
 }
 
-async function notifyReviewResult(tx: Prisma.TransactionClient, adjustment: any, title: string, body: string) {
-  const users = [adjustment.requestedById, adjustment.employee?.userId].filter(Boolean);
-  for (const userId of Array.from(new Set(users))) {
+async function notifyReviewResult(tx: Prisma.TransactionClient, adjustment: any, title: string, requesterBody: string, employeeBody = requesterBody) {
+  const notifications = [
+    adjustment.requestedById ? { userId: adjustment.requestedById, body: requesterBody } : null,
+    adjustment.employee?.userId ? { userId: adjustment.employee.userId, body: adjustment.employee.userId === adjustment.requestedById ? requesterBody : employeeBody } : null
+  ].filter((item): item is { userId: string; body: string } => Boolean(item?.userId));
+  const uniqueNotifications = Array.from(new Map(notifications.map((item) => [item.userId, item])).values());
+  for (const notification of uniqueNotifications) {
     await tx.notification.create({
-      data: { userId, title, body, category: "Horas Operacionais", type: "INFO", entity: "WorkHourAdjustmentRequest", entityId: adjustment.id, href: "/horas-operacionais" }
+      data: { userId: notification.userId, title, body: notification.body, category: "Horas Operacionais", type: "INFO", entity: "WorkHourAdjustmentRequest", entityId: adjustment.id, href: "/horas-operacionais" }
     });
   }
 }
@@ -1367,6 +1386,14 @@ function resolvePeriod(query: WorkHourQuery) {
 
 async function getUser(actor: Actor) {
   return prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
+}
+
+function toWorkHourRecordViewer(user: UserWithRole): WorkHourRecordViewer {
+  return {
+    id: user.id,
+    roleName: user.role.name,
+    employeeProfileId: user.employeeProfile?.id ?? null
+  };
 }
 
 function uiToRecordStatus(status: string): WorkHourRecordStatus | undefined {
