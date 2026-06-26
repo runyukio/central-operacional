@@ -114,7 +114,11 @@ import {
   workHoursBlockedReasonForSchedule,
   workHoursFromMinutes
 } from "@/lib/work-hours-rules";
-import { MONTHLY_ADVANCE_FIXED_AMOUNT } from "@/lib/monthly-advance-constants";
+import {
+  MONTHLY_ADVANCE_ENDED_MESSAGE,
+  MONTHLY_ADVANCE_FIXED_AMOUNT,
+  isMonthlyAdvanceReferenceMonthAvailable
+} from "@/lib/monthly-advance-constants";
 
 const scheduleImportColumns = ["wb_login", "data", "status", "turno", "entrada", "saida", "lob"] as const;
 const workHourImportColumns = ["wb_login", "data", "horas_realizadas", "sistema_origem", "observacao"] as const;
@@ -9187,6 +9191,9 @@ export function AdvanceManagementPage() {
   const supervisors = settings?.supervisors?.filter((supervisor) => supervisor.status !== "INACTIVE") ?? [];
   const currentMonth = currentOperationalMonthInput();
   const nextMonth = addMonthInput(currentMonth, 1);
+  const isSelectedAdvanceMonthAvailable = isMonthlyAdvanceReferenceMonthAvailable(advanceReferenceMonth);
+  const canExportCurrentAdvanceMonth = isMonthlyAdvanceReferenceMonthAvailable(currentMonth);
+  const canExportNextAdvanceMonth = isMonthlyAdvanceReferenceMonthAvailable(nextMonth);
 
   useEffect(() => {
     void loadMonthlyAdvances();
@@ -9212,6 +9219,8 @@ export function AdvanceManagementPage() {
       const payload = await apiJson<MonthlyAdvanceListResponse>(`/api/monthly-advance?${params.toString()}`);
       setAdvanceRows(payload.data);
       setAdvanceSummary(payload.summary);
+      if (payload.message) setMessage(payload.message);
+      else setMessage((previous) => previous === MONTHLY_ADVANCE_ENDED_MESSAGE ? "" : previous);
     } catch (error) {
       setAdvanceRows([]);
       setAdvanceSummary(null);
@@ -9335,14 +9344,17 @@ export function AdvanceManagementPage() {
         icon={Coins}
         actions={(
           <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => exportMonthlyAdvanceXlsx(currentMonth)} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Exportar mês atual</button>
-            <button type="button" onClick={() => exportMonthlyAdvanceXlsx(nextMonth)} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Exportar próximo mês</button>
+            {canExportCurrentAdvanceMonth ? <button type="button" onClick={() => exportMonthlyAdvanceXlsx(currentMonth)} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Exportar mês atual</button> : null}
+            {canExportNextAdvanceMonth ? <button type="button" onClick={() => exportMonthlyAdvanceXlsx(nextMonth)} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Exportar próximo mês</button> : null}
           </div>
         )}
       />
       {message ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
       <div className="space-y-5">
         <Panel title="Filtros e importação">
+          {!isSelectedAdvanceMonthAvailable ? (
+            <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{MONTHLY_ADVANCE_ENDED_MESSAGE}</div>
+          ) : null}
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
             <FormInput label="Mês de referência" type="month" value={advanceReferenceMonth} onChange={setAdvanceReferenceMonth} />
             <label className="block">
@@ -9370,10 +9382,10 @@ export function AdvanceManagementPage() {
             <FormInput label="Colaborador / WB/Login" value={advanceSearch} onChange={setAdvanceSearch} />
             <div className="flex items-end gap-2">
               <button type="button" onClick={() => loadMonthlyAdvances()} className="h-11 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white">Buscar</button>
-              <button type="button" onClick={() => exportMonthlyAdvanceXlsx()} className="h-11 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950">Exportar filtros</button>
+              <button type="button" disabled={!isSelectedAdvanceMonthAvailable} onClick={() => exportMonthlyAdvanceXlsx()} className="h-11 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">Exportar filtros</button>
             </div>
           </div>
-          {canManageMonthlyAdvance ? (
+          {canManageMonthlyAdvance && isSelectedAdvanceMonthAvailable ? (
             <div className="mt-4 flex flex-wrap gap-2">
               <button type="button" onClick={() => downloadFile("/api/monthly-advance/template", "template_adiantamento_mensal.xlsx")} className="h-10 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950">Baixar template</button>
               <label className="grid h-10 cursor-pointer place-items-center rounded-lg border border-blue-200 bg-blue-50 px-4 text-sm font-bold text-blue-700">

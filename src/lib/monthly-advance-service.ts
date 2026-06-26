@@ -2,7 +2,12 @@ import { Prisma } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
 import { recordErrorLog } from "@/lib/mock-db";
-import { MONTHLY_ADVANCE_FIXED_AMOUNT, monthlyAdvanceAmountForOptIn } from "@/lib/monthly-advance-constants";
+import {
+  MONTHLY_ADVANCE_ENDED_MESSAGE,
+  MONTHLY_ADVANCE_FIXED_AMOUNT,
+  isMonthlyAdvanceReferenceMonthAvailable,
+  monthlyAdvanceAmountForOptIn
+} from "@/lib/monthly-advance-constants";
 import { prisma } from "@/lib/prisma";
 import { normalizeRole } from "@/lib/permissions";
 
@@ -120,6 +125,7 @@ export function isAdvanceCurrentMonthOpen(today = new Date()) {
 export function isAdvanceMonthOpenForEmployee(referenceMonth: string, today = new Date(), options: { answered?: boolean } = {}) {
   const normalized = normalizeReferenceMonth(referenceMonth);
   if (!normalized || options.answered) return false;
+  if (!isMonthlyAdvanceReferenceMonthAvailable(normalized)) return false;
   if (normalized === MONTHLY_ADVANCE_LOCKED_IMPLEMENTATION_MONTH) return false;
 
   const currentMonth = getCurrentReferenceMonth(today);
@@ -132,6 +138,7 @@ export function isAdvanceMonthOpenForEmployee(referenceMonth: string, today = ne
 export function isAdvanceMonthLockedForEmployee(referenceMonth: string, today = new Date(), options: { answered?: boolean } = {}) {
   const normalized = normalizeReferenceMonth(referenceMonth);
   if (!normalized) return true;
+  if (!isMonthlyAdvanceReferenceMonthAvailable(normalized)) return true;
   if (normalized === MONTHLY_ADVANCE_LOCKED_IMPLEMENTATION_MONTH) return true;
   if (options.answered) return true;
 
@@ -145,7 +152,7 @@ export function isAdvanceMonthLockedForEmployee(referenceMonth: string, today = 
 
 export function employeeMonthlyAdvanceCycleMonths(date = new Date()) {
   const currentMonth = getCurrentReferenceMonth(date);
-  return [currentMonth, getNextReferenceMonth(date)];
+  return [currentMonth, getNextReferenceMonth(date)].filter(isMonthlyAdvanceReferenceMonthAvailable);
 }
 
 export function isEmployeeMonthlyAdvanceCycleOpen(referenceMonth: string, date = new Date()) {
@@ -200,6 +207,7 @@ function isImplementationLockedMonth(referenceMonth: string) {
 
 function monthlyAdvanceClosedMessage(referenceMonth: string, today = new Date(), answered = false) {
   const normalized = normalizeReferenceMonth(referenceMonth);
+  if (normalized && !isMonthlyAdvanceReferenceMonthAvailable(normalized)) return MONTHLY_ADVANCE_ENDED_MESSAGE;
   if (isImplementationLockedMonth(normalized)) return "Este ciclo já foi fechado e pago. Alterações para este mês não estão disponíveis.";
   if (answered) return "Para alterar uma resposta já registrada ou solicitar exceção após o prazo, abra uma solicitação.";
   if (normalized === getCurrentReferenceMonth(today) && !isAdvanceCurrentMonthOpen(today)) {
@@ -215,6 +223,7 @@ function monthlyAdvanceClosedMessage(referenceMonth: string, today = new Date(),
 function monthlyAdvanceDeadlineMessage(referenceMonth: string, today = new Date(), answered = false) {
   if (answered || isImplementationLockedMonth(referenceMonth)) return "";
   const normalized = normalizeReferenceMonth(referenceMonth);
+  if (normalized && !isMonthlyAdvanceReferenceMonthAvailable(normalized)) return MONTHLY_ADVANCE_ENDED_MESSAGE;
   if (normalized === getCurrentReferenceMonth(today)) {
     return isAdvanceCurrentMonthOpen(today)
       ? "Você pode responder o adiantamento deste mês antes do dia 18."
@@ -259,6 +268,20 @@ export async function listMonthlyAdvances(actor: Actor, filters: MonthlyAdvanceF
   if (!canViewMonthlyAdvance(role)) return { error: "Você não tem permissão para visualizar adiantamento mensal.", status: 403 };
 
   const referenceMonth = normalizeReferenceMonth(filters.referenceMonth, currentReferenceMonth());
+  if (!isMonthlyAdvanceReferenceMonthAvailable(referenceMonth)) {
+    return {
+      data: [],
+      summary: { total: 0, optIn: 0, optOut: 0, amount: 0 },
+      page: parsePositiveInteger(filters.page, 1),
+      limit: Math.min(parsePositiveInteger(filters.limit, 50), 5000),
+      total: 0,
+      totalPages: 1,
+      referenceMonth,
+      canManage: canManageMonthlyAdvance(role),
+      canExport: canExportMonthlyAdvance(role),
+      message: MONTHLY_ADVANCE_ENDED_MESSAGE
+    };
+  }
   const where: Prisma.MonthlyAdvanceRecordWhereInput = { referenceMonth, status: { not: "REMOVED" } };
   const and: Prisma.MonthlyAdvanceRecordWhereInput[] = [{ employee: monthlyAdvanceEligibleEmployeeWhere() }];
 
@@ -362,6 +385,9 @@ export async function getMyMonthlyAdvanceCycles(actor: Actor) {
 
   const today = new Date();
   const months = employeeMonthlyAdvanceCycleMonths(today);
+  if (!months.length) {
+    return { data: [], message: MONTHLY_ADVANCE_ENDED_MESSAGE };
+  }
   const records = await prisma.monthlyAdvanceRecord.findMany({
     where: { employeeId: employee.id, referenceMonth: { in: months }, status: { not: "REMOVED" } },
     include: monthlyAdvanceInclude
@@ -402,6 +428,7 @@ export async function respondMonthlyAdvance(actor: Actor, input: { referenceMont
 
   const referenceMonth = normalizeReferenceMonth(input.referenceMonth);
   if (!referenceMonth) return { error: "Mês de referência inválido.", status: 400 };
+  if (!isMonthlyAdvanceReferenceMonthAvailable(referenceMonth)) return { error: MONTHLY_ADVANCE_ENDED_MESSAGE, status: 403 };
   const today = new Date();
   if (isImplementationLockedMonth(referenceMonth)) {
     return { error: "Este ciclo já foi fechado e pago. Alterações para este mês não estão disponíveis.", status: 403 };
@@ -484,6 +511,7 @@ export async function upsertMonthlyAdvance(actor: Actor, input: {
 
   const referenceMonth = normalizeReferenceMonth(input.referenceMonth);
   if (!referenceMonth) return { error: "Mês de referência inválido.", status: 400 };
+  if (!isMonthlyAdvanceReferenceMonthAvailable(referenceMonth)) return { error: MONTHLY_ADVANCE_ENDED_MESSAGE, status: 400 };
   const amount = monthlyAdvanceAmountForOptIn(input.optIn);
 
   const previous = await prisma.monthlyAdvanceRecord.findUnique({
@@ -539,6 +567,9 @@ export async function previewMonthlyAdvanceImport(actor: Actor, rawRows: Array<R
   if (!canManageMonthlyAdvance(normalizeRole(actor.role))) return { error: "Você não tem permissão para importar adiantamento mensal.", status: 403 };
 
   const fallback = normalizeReferenceMonth(fallbackReferenceMonth, currentReferenceMonth());
+  if (fallback && !isMonthlyAdvanceReferenceMonthAvailable(fallback)) {
+    return { error: MONTHLY_ADVANCE_ENDED_MESSAGE, status: 400 };
+  }
   const normalizedWbLogins = Array.from(new Set(rawRows.map((row) => normalizeWbLogin(importRowWbLogin(row))).filter(Boolean)));
   const employees = await findEmployeesByNormalizedWbLogins(normalizedWbLogins);
   const employeeByLogin = new Map(employees.map((employee) => [normalizeWbLogin(employee.wbLogin), employee]));
@@ -746,6 +777,7 @@ export async function createMonthlyAdvanceChangeRequest(actor: Actor, input: {
 
   const referenceMonth = normalizeReferenceMonth(input.referenceMonth);
   if (!referenceMonth) return { error: "Mês de referência inválido.", status: 400 };
+  if (!isMonthlyAdvanceReferenceMonthAvailable(referenceMonth)) return { error: MONTHLY_ADVANCE_ENDED_MESSAGE, status: 403 };
   if (isImplementationLockedMonth(referenceMonth)) {
     return { error: "Este ciclo já foi fechado e pago. Alterações para este mês não estão disponíveis.", status: 403 };
   }
@@ -855,6 +887,9 @@ export async function applyApprovedMonthlyAdvanceChange(tx: Prisma.TransactionCl
   if (!request.employeeId) throw new Error("Solicitação sem colaborador vinculado para alterar adiantamento.");
   const referenceMonth = normalizeReferenceMonth(payload.referenceMonth);
   if (!referenceMonth) throw new Error("Mês de referência inválido na solicitação de adiantamento.");
+  if (!isMonthlyAdvanceReferenceMonthAvailable(referenceMonth)) {
+    return { updated: false, message: MONTHLY_ADVANCE_ENDED_MESSAGE };
+  }
   const requestedOptIn = parseAdvanceOptIn(payload.requestedOptIn);
   if (requestedOptIn === null) throw new Error("Aderência solicitada inválida na solicitação de adiantamento.");
   const employee = await tx.employeeProfile.findUnique({
@@ -938,6 +973,7 @@ function parseImportRow(
   else if (!isMonthlyAdvanceEligibleContract(employee.contractType)) errors.push(MONTHLY_ADVANCE_PJ_ONLY_MESSAGE);
   else if (isMonthlyAdvanceTrainingStatus(employee.operationalStatus)) errors.push(MONTHLY_ADVANCE_TRAINING_BLOCK_MESSAGE);
   if (!referenceMonth) errors.push("Mês de referência inválido.");
+  else if (!isMonthlyAdvanceReferenceMonthAvailable(referenceMonth)) errors.push(MONTHLY_ADVANCE_ENDED_MESSAGE);
   if (optIn === null) errors.push("Aderente deve ser Sim ou Não.");
 
   return {

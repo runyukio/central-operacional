@@ -3,7 +3,7 @@ import { AuditAction, Prisma, RequestStatus, ScheduleStatus, WorkHourRecordStatu
 import type { Actor } from "@/lib/mock-db";
 import { canAccessBilling } from "@/lib/billing-permissions";
 import { isAgentJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
-import { MONTHLY_ADVANCE_FIXED_AMOUNT } from "@/lib/monthly-advance-constants";
+import { MONTHLY_ADVANCE_FIXED_AMOUNT, isMonthlyAdvanceReferenceMonthAvailable } from "@/lib/monthly-advance-constants";
 import { currentReferenceMonth, formatReferenceMonth, normalizeReferenceMonth } from "@/lib/monthly-advance-service";
 import { prisma } from "@/lib/prisma";
 import { normalizeRole } from "@/lib/permissions";
@@ -1058,6 +1058,7 @@ async function buildBillingInvoicesReadModel(
 
   const period = monthPeriod(referenceMonth);
   const lobIds = Array.from(new Set(employees.map((employee) => employee.lobId).filter(Boolean))) as string[];
+  const includeMonthlyAdvance = isMonthlyAdvanceReferenceMonthAvailable(referenceMonth);
 
   const [workHours, schedules, advances, persistedInvoices] = await Promise.all([
     prisma.workHourRecord.findMany({
@@ -1079,10 +1080,12 @@ async function buildBillingInvoicesReadModel(
       select: { employeeId: true, date: true, status: true, shift: { select: { name: true } } },
       orderBy: { date: "asc" }
     }),
-    prisma.monthlyAdvanceRecord.findMany({
-      where: { employeeId: { in: employeeIds }, referenceMonth, status: { not: "REMOVED" } },
-      select: { employeeId: true, optIn: true, amount: true, finalAmount: true }
-    }),
+    includeMonthlyAdvance
+      ? prisma.monthlyAdvanceRecord.findMany({
+        where: { employeeId: { in: employeeIds }, referenceMonth, status: { not: "REMOVED" } },
+        select: { employeeId: true, optIn: true, amount: true, finalAmount: true }
+      })
+      : Promise.resolve([]),
     cycle
       ? prisma.billingEmployeeInvoice.findMany({
         where: { billingCycleId: cycle.id, employeeId: { in: employeeIds } },
@@ -1277,7 +1280,9 @@ async function calculateEmployeeInvoice(employee: BillingEmployee, referenceMont
       include: { shift: true },
       orderBy: { date: "asc" }
     }),
-    prisma.monthlyAdvanceRecord.findFirst({ where: { employeeId: employee.id, referenceMonth, status: { not: "REMOVED" } } }),
+    isMonthlyAdvanceReferenceMonthAvailable(referenceMonth)
+      ? prisma.monthlyAdvanceRecord.findFirst({ where: { employeeId: employee.id, referenceMonth, status: { not: "REMOVED" } } })
+      : Promise.resolve(null),
     billingCycleId
       ? prisma.billingAdjustment.findMany({ where: { billingCycleId, deletedAt: null, OR: [{ employeeId: employee.id }, { employeeId: null, lobId: employee.lobId }, { employeeInvoice: { employeeId: employee.id } }] } })
       : Promise.resolve([]),
