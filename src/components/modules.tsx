@@ -59,6 +59,7 @@ import {
   Smile,
   Star,
   Target,
+  Trash2,
   Trophy,
   UserCircle,
   UserPlus,
@@ -11058,6 +11059,7 @@ export function MuralPage() {
   const [muralForm, setMuralForm] = useState<MuralPostFormState>(() => emptyMuralPostForm());
   const [muralLobs, setMuralLobs] = useState<Array<{ id: string; name: string }>>([]);
   const [savingMuralPost, setSavingMuralPost] = useState(false);
+  const [deletingMuralPostId, setDeletingMuralPostId] = useState("");
   const [muralFilters, setMuralFilters] = useState({ q: "", status: "Todos", priority: "Todos", contentType: "Todos", lobId: "Todos" });
   const [muralCoverDraft, setMuralCoverDraft] = useState<MuralCoverDraft | null>(null);
   const [muralCoverCrop, setMuralCoverCrop] = useState({ x: 50, y: 50, zoom: 1 });
@@ -11221,6 +11223,25 @@ export function MuralPage() {
       setMuralMessage("Status do aviso atualizado.");
     } catch (error) {
       setMuralMessage(error instanceof Error ? error.message : "Não foi possível atualizar o aviso.");
+    }
+  }
+
+  async function deleteMuralPostClient(post: MuralPostClient) {
+    if (!canManageMural || deletingMuralPostId) return;
+    if (!window.confirm(`Excluir o aviso "${post.title}"? Esta ação remove o post do Mural e limpa pendências de leitura relacionadas.`)) return;
+    setDeletingMuralPostId(post.id);
+    try {
+      await apiJson(`/api/mural/posts/${encodeURIComponent(post.id)}`, { method: "DELETE" });
+      setSelectedPost((current) => current?.id === post.id ? null : current);
+      setEditingPost((current) => current?.id === post.id ? null : current);
+      setMuralFormOpen((current) => current && editingPost?.id === post.id ? false : current);
+      setAcknowledgePost((current) => current?.id === post.id ? null : current);
+      await loadMural();
+      setMuralMessage("Aviso excluído do Mural.");
+    } catch (error) {
+      setMuralMessage(error instanceof Error ? error.message : "Não foi possível excluir o aviso.");
+    } finally {
+      setDeletingMuralPostId("");
     }
   }
 
@@ -11414,6 +11435,17 @@ export function MuralPage() {
                             <button onClick={() => void openMuralPostDetail(post)} className="inline-flex h-9 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 px-3 text-xs font-bold text-blue-700">Ver detalhes</button>
                             {canManageMural ? <button onClick={() => openEditMuralPost(post)} className="inline-flex h-9 items-center justify-center rounded-lg border border-border bg-white px-3 text-xs font-bold text-navy-950">Editar</button> : null}
                             {canManageMural && post.status !== "ARQUIVADO" ? <button onClick={() => void changeMuralPostStatus(post, "ARQUIVADO")} className="inline-flex h-9 items-center justify-center rounded-lg border border-amber-200 bg-amber-50 px-3 text-xs font-bold text-amber-700">Arquivar</button> : null}
+                            {canManageMural ? (
+                              <button
+                                type="button"
+                                disabled={deletingMuralPostId === post.id}
+                                onClick={() => void deleteMuralPostClient(post)}
+                                className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 text-xs font-bold text-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                {deletingMuralPostId === post.id ? "Excluindo..." : "Excluir"}
+                              </button>
+                            ) : null}
                           </div>
                         </div>
                       </div>
@@ -11575,6 +11607,17 @@ export function MuralPage() {
                 {selectedPost.attachmentUrl ? <a href={selectedPost.attachmentUrl} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-border px-4 py-2 text-sm font-bold text-navy-950">Abrir anexo</a> : null}
                 {selectedPost.requiresAcknowledgement && !selectedPost.acknowledgedByViewer && !canManageMural ? (
                   <button onClick={() => setAcknowledgePost(selectedPost)} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white">Estou ciente</button>
+                ) : null}
+                {canManageMural ? (
+                  <button
+                    type="button"
+                    disabled={deletingMuralPostId === selectedPost.id}
+                    onClick={() => void deleteMuralPostClient(selectedPost)}
+                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-bold text-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    {deletingMuralPostId === selectedPost.id ? "Excluindo..." : "Excluir aviso"}
+                  </button>
                 ) : null}
                 <button onClick={() => setSelectedPost(null)} className="rounded-lg border border-border px-4 py-2 text-sm font-bold text-navy-950">Fechar</button>
               </div>

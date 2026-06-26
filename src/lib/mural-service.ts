@@ -228,8 +228,21 @@ export async function updateMuralPostStatus(actor: Actor, id: string, status: st
 export async function deleteMuralPost(actor: Actor, id: string) {
   const user = await requireMuralUser(actor);
   requireManageMural(user);
-  const post = await prisma.announcement.update({ where: { id }, data: { deletedAt: new Date() } });
-  await auditMural(user.id, id, "MURAL_POST_DELETED", {});
+  const existing = await prisma.announcement.findFirst({ where: { id, deletedAt: null } });
+  if (!existing) throw new MuralError("Aviso não encontrado.", 404);
+  const deletedAt = new Date();
+  const post = await prisma.$transaction(async (tx) => {
+    const deleted = await tx.announcement.update({
+      where: { id },
+      data: { deletedAt }
+    });
+    await tx.notification.updateMany({
+      where: { entity: "MuralPost", entityId: id, isRead: false },
+      data: { isRead: true, readAt: deletedAt }
+    });
+    return deleted;
+  });
+  await auditMural(user.id, id, "MURAL_POST_DELETED", { title: existing.title, deletedAt }, AuditAction.EXCLUSAO);
   return { data: post };
 }
 
