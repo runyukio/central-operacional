@@ -522,16 +522,6 @@ export async function exportFinanceiro(actor: Actor, filters: FinanceiroFilters 
         rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.statusLabel, row.values.kwaiRevenueUsd, row.values.globalRevenueUsd, row.values.trainingRevenueUsd, `${row.values.penaltyPercent}%`, row.values.penaltyUsd, row.values.penaltyBrl, row.values.totalRevenueUsd, row.values.exchangeRateUsdBrl, row.values.totalRevenueBrl])
       },
       {
-        sheetName: "Custos",
-        headers: ["invoice_cycle_month", "cost_center", "status", "custo_aprovado_brl", "custo_projetado_brl", "bruto_billing_brl", "custo_liquido_billing_brl"],
-        rows: analytics.costRows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.statusLabel, row.costs.approvedCostBrl, row.costs.projectedCostBrl, row.costs.grossAmountBrl, row.costs.billingNetCostBrl])
-      },
-      {
-        sheetName: "Resultado",
-        headers: ["invoice_cycle_month", "cost_center", "status", "receita_brl", "custo_brl", "resultado_brl", "margem_percent"],
-        rows: analytics.rows.map((row) => [row.invoiceCycleMonth, row.costCenter, row.statusLabel, row.values.totalRevenueBrl, row.costs.billingNetCostBrl, row.result.resultBrl, `${row.result.marginPercent}%`])
-      },
-      {
         sheetName: "Parametros",
         headers: ["invoice_cycle_month", "cost_center", "kwai_hourly_usd", "global_hourly_usd", "training_hourly_usd", "exchange_rate_usd_brl", "origem"],
         rows: analytics.parameters.map((row) => [row.invoiceCycleMonth, row.costCenter, row.kwaiHourlyUsd, row.globalHourlyUsd, row.trainingHourlyUsd, row.exchangeRateUsdBrl, row.isDefault ? "Padrao" : "Salvo"])

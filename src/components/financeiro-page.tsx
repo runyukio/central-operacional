@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
-  Building2,
   CalendarDays,
   Clock,
   DollarSign,
@@ -175,7 +174,7 @@ type FinanceiroAnalytics = {
   parameters: FinanceiroParameter[];
 };
 
-type FinanceiroTab = "history" | "values" | "costs" | "result" | "parameters";
+type FinanceiroTab = "history" | "values" | "parameters";
 
 type FinanceiroParameterForm = {
   invoiceCycleMonth: string;
@@ -529,8 +528,6 @@ export function FinanceiroPage() {
       ) : null}
 
       {activeTab === "values" ? <ValuesPanel analytics={analytics} /> : null}
-      {activeTab === "costs" ? <CostsPanel analytics={analytics} /> : null}
-      {activeTab === "result" ? <ResultPanel analytics={analytics} /> : null}
       {activeTab === "parameters" ? <ParametersPanel analytics={analytics} onEdit={openParameterForm} onNew={() => openParameterForm()} /> : null}
 
       {selectedRecord ? <RecordDetailModal record={selectedRecord} onClose={() => setSelectedRecord(null)} onEdit={() => { openEditRecordForm(selectedRecord); setSelectedRecord(null); }} onAdjust={() => { setAdjustRecord(selectedRecord); setSelectedRecord(null); }} /> : null}
@@ -547,8 +544,6 @@ function FinanceiroTabs({ activeTab, onChange }: { activeTab: FinanceiroTab; onC
   const tabs: Array<{ value: FinanceiroTab; label: string }> = [
     { value: "history", label: "Histórico" },
     { value: "values", label: "Valores" },
-    { value: "costs", label: "Custos" },
-    { value: "result", label: "Resultado" },
     { value: "parameters", label: "Parâmetros" }
   ];
   return (
@@ -593,59 +588,6 @@ function ValuesPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
             ["Total BRL", (row) => formatCurrency(row.values.totalRevenueBrl)]
           ]}
           emptyTitle="Sem dados de receita"
-        />
-      </Panel>
-    </div>
-  );
-}
-
-function CostsPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
-  return (
-    <div className="space-y-4">
-      <div className="grid gap-3 md:grid-cols-3">
-        <StatCard title="Custo Billing" value={formatCurrency(analytics?.costSummary.costBrl ?? 0)} helper="líquido final do Billing" icon={DollarSign} tone="orange" />
-        <StatCard title="Horas Billing reais" value={analytics?.hoursSummary.billableActual ?? "-"} helper="histórico manual/importado" icon={Clock} tone="blue" />
-        <StatCard title="Training Hours" value={analytics?.hoursSummary.training ?? "-"} helper="receita treinamento" icon={Clock} tone="green" />
-      </div>
-      <Panel title="Custos por ciclo e LOB">
-        <FinanceAnalyticsTable
-          rows={analytics?.costRows ?? []}
-          columns={[
-            ["Ciclo", (row) => row.invoiceCycleLabel],
-            ["LOB", (row) => row.costCenter],
-            ["Status", (row) => row.statusLabel],
-            ["Custo aprovado", (row) => formatCurrency(row.costs.approvedCostBrl)],
-            ["Custo projetado", (row) => formatCurrency(row.costs.projectedCostBrl)],
-            ["Bruto Billing", (row) => formatCurrency(row.costs.grossAmountBrl)],
-            ["Custo líquido Billing", (row) => formatCurrency(row.costs.billingNetCostBrl)]
-          ]}
-          emptyTitle="Sem dados de custos"
-        />
-      </Panel>
-    </div>
-  );
-}
-
-function ResultPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
-  return (
-    <div className="space-y-4">
-      <div className="grid gap-3 md:grid-cols-3">
-        <StatCard title="Receita BRL" value={formatCurrency(analytics?.valueSummary.revenueBrl ?? 0)} helper="líquida de penalty" icon={TrendingUp} tone="green" />
-        <StatCard title="Custo BRL" value={formatCurrency(analytics?.costSummary.costBrl ?? 0)} helper="líquido final do Billing" icon={TrendingDown} tone="orange" />
-        <StatCard title="Resultado" value={formatCurrency(analytics?.resultSummary.resultBrl ?? 0)} helper={`${formatPercent(analytics?.resultSummary.marginPercent ?? 0)}% margem`} icon={(analytics?.resultSummary.resultBrl ?? 0) < 0 ? TrendingDown : TrendingUp} tone={(analytics?.resultSummary.resultBrl ?? 0) < 0 ? "red" : "green"} />
-      </div>
-      <Panel title="Resultado por ciclo e LOB">
-        <FinanceAnalyticsTable
-          rows={analytics?.rows ?? []}
-          columns={[
-            ["Ciclo", (row) => row.invoiceCycleLabel],
-            ["LOB", (row) => row.costCenter],
-            ["Receita BRL", (row) => formatCurrency(row.values.totalRevenueBrl)],
-            ["Custo BRL", (row) => formatCurrency(row.costs.billingNetCostBrl)],
-            ["Resultado", (row) => formatCurrency(row.result.resultBrl)],
-            ["Margem", (row) => `${formatPercent(row.result.marginPercent)}%`]
-          ]}
-          emptyTitle="Sem dados de resultado"
         />
       </Panel>
     </div>
