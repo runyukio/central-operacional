@@ -40,7 +40,7 @@ import {
 } from "lucide-react";
 
 import { useTheme } from "@/components/theme-provider";
-import { getNavItems } from "@/lib/navigation";
+import { getNavItems, getNavSections } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 
 const icons = {
@@ -101,6 +101,9 @@ type GlobalSearchResult = {
   avatarInitials?: string;
 };
 
+type NavigationItem = ReturnType<typeof getNavItems>[number];
+type NavigationSection = ReturnType<typeof getNavSections>[number];
+
 export function AppShell({
   children,
   user,
@@ -116,14 +119,21 @@ export function AppShell({
   const router = useRouter();
   const { theme, toggleTheme } = useTheme();
   const role = user.role ?? "COLABORADOR";
-  const navItems = getNavItems(user).filter((item) =>
-    (item.href !== "/billing" || billingAccess) &&
-    (item.href !== "/financeiro" || financeiroAccess)
-  );
+  const navSections = getNavSections(user)
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) =>
+        (item.href !== "/billing" || billingAccess) &&
+        (item.href !== "/financeiro" || financeiroAccess)
+      )
+    }))
+    .filter((section) => section.items.length > 0);
+  const navItems = navSections.flatMap((section) => section.items);
   const isCollaborator = role === "COLABORADOR";
   const [notifications, setNotifications] = useState<HeaderNotification[]>([]);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [openNavSections, setOpenNavSections] = useState<Record<string, boolean>>({});
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState("");
   const [globalSearchResults, setGlobalSearchResults] = useState<GlobalSearchResult[]>([]);
@@ -136,6 +146,15 @@ export function AppShell({
     const stored = window.localStorage.getItem("sidebarCollapsed");
     if (stored === "true") setSidebarCollapsed(true);
     if (stored === "false") setSidebarCollapsed(false);
+
+    const storedSections = window.localStorage.getItem("sidebarOpenSections");
+    if (storedSections) {
+      try {
+        setOpenNavSections(JSON.parse(storedSections) as Record<string, boolean>);
+      } catch {
+        setOpenNavSections({});
+      }
+    }
   }, []);
 
   function toggleSidebar() {
@@ -233,9 +252,89 @@ export function AppShell({
     router.push(`/perfil/${result.id}`);
   }
 
-  function navItemIsActive(item: ReturnType<typeof getNavItems>[number]) {
+  function navItemIsActive(item: NavigationItem) {
     if (item.href === "/meu-perfil" && pathname.startsWith("/perfil/")) return true;
     return pathname === item.href || (item.href !== "/central-operacional" && pathname.startsWith(item.href));
+  }
+
+  function navSectionIsOpen(section: NavigationSection) {
+    const hasActiveItem = section.items.some(navItemIsActive);
+    if (hasActiveItem) return true;
+    return openNavSections[section.label] ?? section.label === "Operação";
+  }
+
+  function toggleNavSection(label: string) {
+    setOpenNavSections((current) => {
+      const next = { ...current, [label]: !(current[label] ?? label === "Operação") };
+      window.localStorage.setItem("sidebarOpenSections", JSON.stringify(next));
+      return next;
+    });
+  }
+
+  function renderDesktopNavLink(item: NavigationItem) {
+    const Icon = icons[item.icon as keyof typeof icons] ?? LayoutDashboard;
+    const active = navItemIsActive(item);
+    return (
+      <Link
+        key={item.href}
+        href={item.href}
+        aria-label={item.label}
+        className={cn(
+          "app-sidebar-link group relative flex items-center rounded-lg py-1.5 text-[11.5px] font-bold transition",
+          "gap-2 px-2.5",
+          active && "app-sidebar-link-active ring-1 ring-white/20"
+        )}
+      >
+        {active ? <span className="app-sidebar-active-marker absolute -left-2.5 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r-full" /> : null}
+        <Icon className="app-sidebar-icon h-3.5 w-3.5 shrink-0" />
+        <span className="truncate">{item.label}</span>
+      </Link>
+    );
+  }
+
+  function renderCollapsedNavLink(item: NavigationItem) {
+    const Icon = icons[item.icon as keyof typeof icons] ?? LayoutDashboard;
+    const active = navItemIsActive(item);
+    return (
+      <Link
+        key={item.href}
+        href={item.href}
+        aria-label={item.label}
+        title={item.label}
+        className={cn(
+          "app-sidebar-link group relative flex items-center justify-center rounded-lg px-0 py-1.5 text-[11.5px] font-bold transition",
+          active && "app-sidebar-link-active ring-1 ring-white/20"
+        )}
+      >
+        {active ? <span className="app-sidebar-active-marker absolute -left-2.5 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r-full" /> : null}
+        <Icon className="app-sidebar-icon h-3.5 w-3.5 shrink-0" />
+        <span className="sr-only">{item.label}</span>
+        <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 z-50 hidden -translate-y-1/2 whitespace-nowrap rounded-md bg-navy-950 px-2 py-1 text-xs font-bold text-white shadow-xl group-hover:block group-focus-visible:block">
+          {item.label}
+        </span>
+      </Link>
+    );
+  }
+
+  function renderMobileNavLink(item: NavigationItem) {
+    const Icon = icons[item.icon as keyof typeof icons] ?? LayoutDashboard;
+    const active = navItemIsActive(item);
+    return (
+      <Link
+        key={item.href}
+        href={item.href}
+        onClick={closeMobileMenu}
+        aria-label={item.label}
+        className={cn(
+          "app-sidebar-link relative flex min-w-0 items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-bold transition",
+          active && "app-sidebar-link-active ring-1 ring-white/20"
+        )}
+      >
+        {active ? <span className="app-sidebar-active-marker absolute -left-2.5 top-1/2 h-7 w-1 -translate-y-1/2 rounded-r-full" /> : null}
+        <Icon className="app-sidebar-icon h-4 w-4 shrink-0" />
+        <span className="min-w-0 truncate">{item.label}</span>
+      </Link>
+    );
   }
 
   return (
@@ -270,33 +369,32 @@ export function AppShell({
           </button>
         </div>
 
-        <nav className={cn("sidebar-scroll flex-1 space-y-0.5 overflow-y-auto pb-3", sidebarCollapsed ? "px-2.5" : "px-2")}>
-          {navItems.map((item) => {
-            const Icon = icons[item.icon as keyof typeof icons] ?? LayoutDashboard;
-            const active = navItemIsActive(item);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                aria-label={item.label}
-                title={sidebarCollapsed ? item.label : undefined}
-                className={cn(
-                  "app-sidebar-link group relative flex items-center rounded-lg py-1.5 text-[11.5px] font-bold transition",
-                  sidebarCollapsed ? "justify-center px-0" : "gap-2 px-2.5",
-                  active && "app-sidebar-link-active ring-1 ring-white/20"
-                )}
-              >
-                {active ? <span className="app-sidebar-active-marker absolute -left-2.5 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r-full" /> : null}
-                <Icon className="app-sidebar-icon h-3.5 w-3.5 shrink-0" />
-                <span className={cn("truncate", sidebarCollapsed && "sr-only")}>{item.label}</span>
-                {sidebarCollapsed ? (
-                  <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 z-50 hidden -translate-y-1/2 whitespace-nowrap rounded-md bg-navy-950 px-2 py-1 text-xs font-bold text-white shadow-xl group-hover:block group-focus-visible:block">
-                    {item.label}
-                  </span>
-                ) : null}
-              </Link>
-            );
-          })}
+        <nav className={cn("sidebar-scroll flex-1 overflow-y-auto pb-3", sidebarCollapsed ? "space-y-0.5 px-2.5" : "space-y-2 px-2")}>
+          {sidebarCollapsed ? (
+            navItems.map(renderCollapsedNavLink)
+          ) : (
+            navSections.map((section) => {
+              const isOpen = navSectionIsOpen(section);
+              const hasActiveItem = section.items.some(navItemIsActive);
+              return (
+                <div key={section.label} className="space-y-1">
+                  <button
+                    type="button"
+                    onClick={() => toggleNavSection(section.label)}
+                    className={cn(
+                      "app-sidebar-action flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-[10px] font-black uppercase tracking-[0.16em] transition",
+                      hasActiveItem && "text-blue-700 dark:text-blue-200"
+                    )}
+                    aria-expanded={isOpen}
+                  >
+                    <span className="truncate">{section.label}</span>
+                    <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", !isOpen && "-rotate-90")} />
+                  </button>
+                  {isOpen ? <div className="space-y-0.5">{section.items.map(renderDesktopNavLink)}</div> : null}
+                </div>
+              );
+            })
+          )}
         </nav>
 
         {isCollaborator ? <div className={cn("app-sidebar-divider border-t p-2.5", sidebarCollapsed && "hidden")}>
@@ -352,25 +450,26 @@ export function AppShell({
             </button>
           </div>
 
-          <nav className="sidebar-scroll flex-1 space-y-1 overflow-y-auto px-2.5 py-3">
-            {navItems.map((item) => {
-              const Icon = icons[item.icon as keyof typeof icons] ?? LayoutDashboard;
-              const active = navItemIsActive(item);
+          <nav className="sidebar-scroll flex-1 space-y-2 overflow-y-auto px-2.5 py-3">
+            {navSections.map((section) => {
+              const isOpen = navSectionIsOpen(section);
+              const hasActiveItem = section.items.some(navItemIsActive);
               return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  onClick={closeMobileMenu}
-                  aria-label={item.label}
-                  className={cn(
-                    "app-sidebar-link relative flex min-w-0 items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-bold transition",
-                    active && "app-sidebar-link-active ring-1 ring-white/20"
-                  )}
-                >
-                  {active ? <span className="app-sidebar-active-marker absolute -left-2.5 top-1/2 h-7 w-1 -translate-y-1/2 rounded-r-full" /> : null}
-                  <Icon className="app-sidebar-icon h-4 w-4 shrink-0" />
-                  <span className="min-w-0 truncate">{item.label}</span>
-                </Link>
+                <div key={section.label} className="space-y-1">
+                  <button
+                    type="button"
+                    onClick={() => toggleNavSection(section.label)}
+                    className={cn(
+                      "app-sidebar-action flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-[11px] font-black uppercase tracking-[0.16em] transition",
+                      hasActiveItem && "text-blue-700 dark:text-blue-200"
+                    )}
+                    aria-expanded={isOpen}
+                  >
+                    <span className="truncate">{section.label}</span>
+                    <ChevronDown className={cn("h-4 w-4 transition-transform", !isOpen && "-rotate-90")} />
+                  </button>
+                  {isOpen ? <div className="space-y-1">{section.items.map(renderMobileNavLink)}</div> : null}
+                </div>
               );
             })}
           </nav>

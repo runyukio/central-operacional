@@ -8,6 +8,11 @@ export type NavItem = {
   roles: AppRole[];
 };
 
+export type NavSection = {
+  label: string;
+  items: NavItem[];
+};
+
 const nonClientRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "COLABORADOR", "WFM", "QUALIDADE", "RH", "TI", "COORDENADOR", "GERENTE"];
 const performanceRoles: AppRole[] = [...nonClientRoles, "CLIENT"];
 const muralRoles: AppRole[] = [...nonClientRoles, "CLIENT"];
@@ -17,31 +22,69 @@ const realTimeRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"];
 const leadership: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH", "COORDENADOR", "GERENTE"];
 const peopleOps: AppRole[] = ["ADMIN", "GESTOR", "RH", "WFM"];
 
-export const navItems: NavItem[] = [
-  { label: "Central Operacional", href: "/central-operacional", icon: "LayoutDashboard", roles: centralRoles },
-  { label: "Real Time", href: "/real-time", icon: "MonitorCog", roles: realTimeRoles },
-  { label: "Meu Perfil", href: "/meu-perfil", icon: "UserCircle", roles: nonClientRoles },
-  { label: "Meu Cronograma", href: "/minha-escala", icon: "CalendarDays", roles: nonClientRoles },
-  { label: "Cadastros", href: "/cadastros", icon: "UserPlus", roles: peopleOps },
-  { label: "Cronogramas", href: "/escalas", icon: "CalendarRange", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH"] },
-  { label: "Horas Operacionais", href: "/horas-operacionais", icon: "Clock", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"] },
-  { label: "Mural", href: "/mural", icon: "Megaphone", roles: muralRoles },
-  { label: "Esteiras", href: "/esteiras", icon: "KanbanSquare", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH", "TI", "QUALIDADE"] },
-  { label: "Mapa de Funcionários", href: "/mapa-funcionarios", icon: "Map", roles: leadership },
-  { label: "Adiantamento", href: "/adiantamento", icon: "Coins", roles: ["ADMIN", "GESTOR", "WFM"] },
-  { label: "Requerido", href: "/staff-cobertura", icon: "UsersRound", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"] },
-  { label: "Performance", href: "/performance", icon: "Trophy", roles: performanceRoles },
-  { label: "Equipamentos e Logística", href: "/equipamentos", icon: "MonitorCog", roles: ["ADMIN", "GESTOR", "TI"] },
-  { label: "Feedback Anônimo", href: "/feedback-anonimo", icon: "MessageCircleQuestion", roles: nonClientRoles },
-  { label: "Billing", href: "/billing", icon: "Coins", roles: ["ADMIN"] },
-  { label: "Financeiro", href: "/financeiro", icon: "FileBarChart", roles: financeiroRoles },
-  { label: "Configurações", href: "/configuracoes", icon: "Settings", roles: ["ADMIN"] }
+export const navSections: NavSection[] = [
+  {
+    label: "Operação",
+    items: [
+      { label: "Central Operacional", href: "/central-operacional", icon: "LayoutDashboard", roles: centralRoles },
+      { label: "Real Time", href: "/real-time", icon: "MonitorCog", roles: realTimeRoles },
+      { label: "Requerido", href: "/staff-cobertura", icon: "UsersRound", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"] },
+      { label: "Performance", href: "/performance", icon: "Trophy", roles: performanceRoles }
+    ]
+  },
+  {
+    label: "Pessoas",
+    items: [
+      { label: "Meu Perfil", href: "/meu-perfil", icon: "UserCircle", roles: nonClientRoles },
+      { label: "Meu Cronograma", href: "/minha-escala", icon: "CalendarDays", roles: nonClientRoles },
+      { label: "Cadastros", href: "/cadastros", icon: "UserPlus", roles: peopleOps },
+      { label: "Cronogramas", href: "/escalas", icon: "CalendarRange", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH"] },
+      { label: "Mapa de Funcionários", href: "/mapa-funcionarios", icon: "Map", roles: leadership }
+    ]
+  },
+  {
+    label: "Rotina",
+    items: [
+      { label: "Horas Operacionais", href: "/horas-operacionais", icon: "Clock", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"] },
+      { label: "Esteiras", href: "/esteiras", icon: "KanbanSquare", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH", "TI", "QUALIDADE"] },
+      { label: "Mural", href: "/mural", icon: "Megaphone", roles: muralRoles },
+      { label: "Feedback Anônimo", href: "/feedback-anonimo", icon: "MessageCircleQuestion", roles: nonClientRoles }
+    ]
+  },
+  {
+    label: "Financeiro",
+    items: [
+      { label: "Adiantamento", href: "/adiantamento", icon: "Coins", roles: ["ADMIN", "GESTOR", "WFM"] },
+      { label: "Billing", href: "/billing", icon: "Coins", roles: ["ADMIN"] },
+      { label: "Financeiro", href: "/financeiro", icon: "FileBarChart", roles: financeiroRoles }
+    ]
+  },
+  {
+    label: "Suporte",
+    items: [
+      { label: "Equipamentos e Logística", href: "/equipamentos", icon: "MonitorCog", roles: ["ADMIN", "GESTOR", "TI"] },
+      { label: "Configurações", href: "/configuracoes", icon: "Settings", roles: ["ADMIN"] }
+    ]
+  }
 ];
+
+export const navItems: NavItem[] = navSections.flatMap((section) => section.items);
 
 export function getNavItems(userOrRole?: string | PermissionUser) {
   const user = typeof userOrRole === "string" ? { role: userOrRole } : userOrRole;
   const normalizedRole = normalizeRole(user?.role);
   return navItems.filter((item) => item.roles.includes(normalizedRole) || (item.href === "/real-time" && canAccessRealTime({ ...user, status: user?.status ?? "ACTIVE" })));
+}
+
+export function getNavSections(userOrRole?: string | PermissionUser) {
+  const visibleItems = getNavItems(userOrRole);
+  const visibleHrefs = new Set(visibleItems.map((item) => item.href));
+  return navSections
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) => visibleHrefs.has(item.href))
+    }))
+    .filter((section) => section.items.length > 0);
 }
 
 export function getDefaultPathForRole(role?: string) {
