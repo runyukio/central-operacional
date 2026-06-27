@@ -684,7 +684,7 @@ export async function addOperationalRequestComment(actor: Actor, id: string, bod
             type: "REQUEST",
             entity: "Request",
             entityId: existing.id,
-            href: `/solicitacoes?request=${existing.code}`
+            href: `/esteiras?request=${existing.code}`
           }
         });
       }
@@ -2702,7 +2702,7 @@ async function notifyRequestCreationSafely(
         type: "REQUEST",
         entity: "Request",
         entityId: requestId,
-        href: `/solicitacoes?request=${code}`
+        href: `/esteiras?request=${code}`
       }
     });
   } catch (error) {
@@ -2776,7 +2776,7 @@ async function notifyRequestStatusChangeSafely(request: PrismaRequest, actorId: 
         type: requesterNotification.type,
         entity: "Request",
         entityId: request.id,
-        href: `/solicitacoes?request=${request.code}`
+        href: `/esteiras?request=${request.code}`
       }
     });
 

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { type InputHTMLAttributes, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { type Dispatch, type InputHTMLAttributes, type ReactNode, type SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import {
   Bar,
@@ -8388,26 +8388,7 @@ export function RequestsPage() {
     endDate: queryParam("endDate"),
     pendingAction: "false"
   });
-  const [newRequest, setNewRequest] = useState({
-    type: "Troca de Folga",
-    title: "Troca de Folga",
-    priority: "Média",
-    requestedDate: "",
-    dayOffKind: "DAY_OFF_SWAP" as DayOffKind,
-    currentDayOffDate: offsetOperationalDateInput(1),
-    desiredDayOffDate: offsetOperationalDateInput(4),
-    dayOffToSellDate: offsetOperationalDateInput(1),
-    availabilityShift: "Manhã",
-    preferredStartTime: "",
-    preferredEndTime: "",
-    acknowledgement: false,
-    desiredDayOffRequestDate: offsetOperationalDateInput(5),
-    dayOffReason: "Pessoal",
-    urgency: "Média",
-    justification: "",
-    description: "",
-    attachmentUrl: ""
-  });
+  const [newRequest, setNewRequest] = useState(createDefaultRequestDraft);
 
   useEffect(() => {
     void loadRequests();
@@ -8482,69 +8463,18 @@ export function RequestsPage() {
   }
 
   async function submitRequest() {
-    const dayOffKind = isDayOffRequest(newRequest.type) ? newRequest.dayOffKind : null;
-    if (dayOffKind) {
-      if (!newRequest.justification.trim()) {
-        setActionMessage("Informe a justificativa da solicitação de folga.");
-        return;
-      }
-      if (dayOffKind === "DAY_OFF_SWAP") {
-        if (!newRequest.currentDayOffDate || !newRequest.desiredDayOffDate) {
-          setActionMessage("Para troca de folga, informe data atual e nova data desejada.");
-          return;
-        }
-        if (newRequest.currentDayOffDate === newRequest.desiredDayOffDate) {
-          setActionMessage("A nova data não pode ser igual à data atual da folga.");
-          return;
-        }
-      }
-      if (dayOffKind === "DAY_OFF_SELL") {
-        if (!newRequest.dayOffToSellDate) {
-          setActionMessage("Informe a data da folga que deseja vender.");
-          return;
-        }
-        if (!newRequest.availabilityShift && (!newRequest.preferredStartTime || !newRequest.preferredEndTime)) {
-          setActionMessage("Informe o turno desejado ou a disponibilidade de horário.");
-          return;
-        }
-        if (!newRequest.acknowledgement) {
-          setActionMessage("Confirme a ciência de que a venda depende de aprovação.");
-          return;
-        }
-      }
-      if (dayOffKind === "DAY_OFF_REQUEST" && (!newRequest.desiredDayOffRequestDate || !newRequest.dayOffReason)) {
-        setActionMessage("Informe a data desejada e o motivo da folga.");
-        return;
-      }
+    const validationMessage = validateRequestDraft(newRequest);
+    if (validationMessage) {
+      setActionMessage(validationMessage);
+      return;
     }
 
     try {
-      const payload = await apiJson<{ data: ClientRequest }>("/api/requests", {
-        method: "POST",
-        body: JSON.stringify({
-          type: newRequest.type,
-          title: newRequest.title || newRequest.type,
-          priority: dayOffKind === "DAY_OFF_REQUEST" ? newRequest.urgency : newRequest.priority,
-          description: newRequest.description || newRequest.justification || "Solicitação criada pelo portal operacional.",
-          requestedDate: newRequest.requestedDate || undefined,
-          dayOffKind: dayOffKind ?? undefined,
-          currentDayOffDate: dayOffKind === "DAY_OFF_SWAP" ? newRequest.currentDayOffDate : undefined,
-          desiredDayOffDate: dayOffKind === "DAY_OFF_SWAP" ? newRequest.desiredDayOffDate : undefined,
-          dayOffToSellDate: dayOffKind === "DAY_OFF_SELL" ? newRequest.dayOffToSellDate : undefined,
-          availabilityShift: dayOffKind === "DAY_OFF_SELL" ? newRequest.availabilityShift : undefined,
-          preferredStartTime: dayOffKind === "DAY_OFF_SELL" ? newRequest.preferredStartTime : undefined,
-          preferredEndTime: dayOffKind === "DAY_OFF_SELL" ? newRequest.preferredEndTime : undefined,
-          acknowledgement: dayOffKind === "DAY_OFF_SELL" ? newRequest.acknowledgement : undefined,
-          desiredDayOffRequestDate: dayOffKind === "DAY_OFF_REQUEST" ? newRequest.desiredDayOffRequestDate : undefined,
-          dayOffReason: dayOffKind === "DAY_OFF_REQUEST" ? newRequest.dayOffReason : undefined,
-          urgency: dayOffKind === "DAY_OFF_REQUEST" ? newRequest.urgency : undefined,
-          justification: newRequest.justification || undefined,
-          attachmentUrl: newRequest.attachmentUrl || undefined
-        })
-      });
+      const payload = await createRequestFromDraft(newRequest);
       setRequests((items) => [payload.data, ...items]);
       setSelected(payload.data);
       setShowCreate(false);
+      setNewRequest(createDefaultRequestDraft());
       setActionMessage(`Solicitação ${payload.data.id} criada com sucesso e enviada para a esteira.`);
     } catch (error) {
       setActionMessage(error instanceof Error ? error.message : "Não foi possível criar a solicitação.");
@@ -8632,121 +8562,19 @@ export function RequestsPage() {
           <RequestDetailContent selected={selected} actorRole={actorRole} actionReason={actionReason} setActionReason={setActionReason} comment={comment} setComment={setComment} onMove={moveStatus} onComment={submitComment} actionPending={actionPending} />
         </Panel>
       </div>
-      {showCreate ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
-          <div className="card w-full max-w-xl p-5">
-            <div className="mb-5 flex items-center justify-between">
-              <h2 className="text-lg font-extrabold text-navy-950">Nova solicitação</h2>
-              <button onClick={() => setShowCreate(false)} className="text-2xl text-muted">×</button>
-            </div>
-            <div className="space-y-4">
-              <label className="block">
-                <span className="mb-1.5 block text-sm font-semibold text-muted">Tipo</span>
-                <select
-                  value={newRequest.type}
-                  onChange={(event) => {
-                    const type = event.target.value;
-                    const dayOffKind = dayOffKindFromRequest({ type });
-                    setNewRequest({ ...newRequest, type, title: type, dayOffKind: dayOffKind ?? newRequest.dayOffKind });
-                  }}
-                  className="h-11 w-full rounded-lg border border-border px-3 outline-none"
-                >
-                  {requestTypes.map((type) => (
-                    <option key={type}>{type}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="block">
-                <span className="mb-1.5 block text-sm font-semibold text-muted">Título</span>
-                <input value={newRequest.title} onChange={(event) => setNewRequest({ ...newRequest, title: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 outline-none" placeholder="Resumo da solicitação" />
-              </label>
-              <label className="block">
-                <span className="mb-1.5 block text-sm font-semibold text-muted">Prioridade</span>
-                <select value={newRequest.priority} onChange={(event) => setNewRequest({ ...newRequest, priority: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 outline-none">
-                  {requestPriorities.map((priority) => (
-                    <option key={priority}>{priority}</option>
-                  ))}
-                </select>
-              </label>
-              {isDayOffRequest(newRequest.type) ? (
-                <div className="grid gap-3 md:grid-cols-2">
-                  {newRequest.dayOffKind === "DAY_OFF_SWAP" ? (
-                    <>
-                      <label className="block">
-                        <span className="mb-1.5 block text-sm font-semibold text-muted">Data atual da folga</span>
-                        <input type="date" value={newRequest.currentDayOffDate} onChange={(event) => setNewRequest({ ...newRequest, currentDayOffDate: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
-                      </label>
-                      <label className="block">
-                        <span className="mb-1.5 block text-sm font-semibold text-muted">Nova data desejada</span>
-                        <input type="date" value={newRequest.desiredDayOffDate} onChange={(event) => setNewRequest({ ...newRequest, desiredDayOffDate: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
-                      </label>
-                    </>
-                  ) : null}
-                  {newRequest.dayOffKind === "DAY_OFF_SELL" ? (
-                    <>
-                      <label className="block">
-                        <span className="mb-1.5 block text-sm font-semibold text-muted">Data da folga que deseja vender</span>
-                        <input type="date" value={newRequest.dayOffToSellDate} onChange={(event) => setNewRequest({ ...newRequest, dayOffToSellDate: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
-                      </label>
-                      <FormSelect label="Turno desejado" value={newRequest.availabilityShift} options={Array.from(standardShiftNames)} onChange={(value) => setNewRequest({ ...newRequest, availabilityShift: value })} />
-                      <FormInput label="Entrada preferencial" value={newRequest.preferredStartTime} onChange={(value) => setNewRequest({ ...newRequest, preferredStartTime: value })} />
-                      <FormInput label="Saída preferencial" value={newRequest.preferredEndTime} onChange={(value) => setNewRequest({ ...newRequest, preferredEndTime: value })} />
-                      <label className="md:col-span-2 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-700">
-                        <input type="checkbox" checked={newRequest.acknowledgement} onChange={(event) => setNewRequest({ ...newRequest, acknowledgement: event.target.checked })} />
-                        Estou ciente de que a venda de folga depende de aprovação da operação/WFM.
-                      </label>
-                    </>
-                  ) : null}
-                  {newRequest.dayOffKind === "DAY_OFF_REQUEST" ? (
-                    <>
-                      <label className="block">
-                        <span className="mb-1.5 block text-sm font-semibold text-muted">Data desejada para folga</span>
-                        <input type="date" value={newRequest.desiredDayOffRequestDate} onChange={(event) => setNewRequest({ ...newRequest, desiredDayOffRequestDate: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
-                      </label>
-                      <FormSelect label="Motivo" value={newRequest.dayOffReason} options={["Pessoal", "Saúde", "Familiar", "Compromisso externo", "Estudos", "Emergência", "Outro"]} onChange={(value) => setNewRequest({ ...newRequest, dayOffReason: value })} />
-                      <FormSelect label="Urgência" value={newRequest.urgency} options={requestPriorities} onChange={(value) => setNewRequest({ ...newRequest, urgency: value })} />
-                    </>
-                  ) : null}
-                </div>
-              ) : (
-                <label className="block">
-                  <span className="mb-1.5 block text-sm font-semibold text-muted">Data desejada</span>
-                  <input type="date" value={newRequest.requestedDate} onChange={(event) => setNewRequest({ ...newRequest, requestedDate: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
-                </label>
-              )}
-              <label className="block">
-                <span className="mb-1.5 block text-sm font-semibold text-muted">Justificativa</span>
-                <textarea value={newRequest.justification} onChange={(event) => setNewRequest({ ...newRequest, justification: event.target.value })} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none" placeholder="Explique o motivo da solicitação" />
-              </label>
-              <label className="block">
-                <span className="mb-1.5 block text-sm font-semibold text-muted">Descrição</span>
-                <textarea value={newRequest.description} onChange={(event) => setNewRequest({ ...newRequest, description: event.target.value })} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none" placeholder="Detalhes adicionais" />
-              </label>
-              <label className="block">
-                <span className="mb-1.5 block text-sm font-semibold text-muted">Anexo opcional</span>
-                <input value={newRequest.attachmentUrl} onChange={(event) => setNewRequest({ ...newRequest, attachmentUrl: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 outline-none" placeholder="URL ou caminho do anexo" />
-              </label>
-              <button
-                onClick={submitRequest}
-                className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white"
-              >
-                Criar solicitação
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {showCreate ? <RequestCreateModal draft={newRequest} setDraft={setNewRequest} onClose={() => setShowCreate(false)} onSubmit={submitRequest} /> : null}
       <CoverageWarningDialog warning={coverageWarning} onClose={() => setCoverageWarning(null)} />
     </div>
   );
 }
 
 const defaultPipelineFilters = {
+  employeeId: queryParam("employeeId"),
   search: "",
   status: "Todos",
   type: "Todos",
-  startDate: "",
-  endDate: "",
+  startDate: queryParam("startDate"),
+  endDate: queryParam("endDate"),
   lob: "Todos",
   supervisorId: "Todos",
   collaborator: "",
@@ -8776,9 +8604,193 @@ function paginationRange(page: number, limit: number, total: number) {
   return `Exibindo ${start}-${end} de ${total} solicitações`;
 }
 
+function createDefaultRequestDraft() {
+  return {
+    type: "Troca de Folga",
+    title: "Troca de Folga",
+    priority: "Média",
+    requestedDate: "",
+    dayOffKind: "DAY_OFF_SWAP" as DayOffKind,
+    currentDayOffDate: offsetOperationalDateInput(1),
+    desiredDayOffDate: offsetOperationalDateInput(4),
+    dayOffToSellDate: offsetOperationalDateInput(1),
+    availabilityShift: "Manhã",
+    preferredStartTime: "",
+    preferredEndTime: "",
+    acknowledgement: false,
+    desiredDayOffRequestDate: offsetOperationalDateInput(5),
+    dayOffReason: "Pessoal",
+    urgency: "Média",
+    justification: "",
+    description: "",
+    attachmentUrl: ""
+  };
+}
+
+type RequestDraft = ReturnType<typeof createDefaultRequestDraft>;
+
+function validateRequestDraft(draft: RequestDraft) {
+  const dayOffKind = isDayOffRequest(draft.type) ? draft.dayOffKind : null;
+  if (!dayOffKind) return "";
+  if (!draft.justification.trim()) return "Informe a justificativa da solicitação de folga.";
+  if (dayOffKind === "DAY_OFF_SWAP") {
+    if (!draft.currentDayOffDate || !draft.desiredDayOffDate) return "Para troca de folga, informe data atual e nova data desejada.";
+    if (draft.currentDayOffDate === draft.desiredDayOffDate) return "A nova data não pode ser igual à data atual da folga.";
+  }
+  if (dayOffKind === "DAY_OFF_SELL") {
+    if (!draft.dayOffToSellDate) return "Informe a data da folga que deseja vender.";
+    if (!draft.availabilityShift && (!draft.preferredStartTime || !draft.preferredEndTime)) return "Informe o turno desejado ou a disponibilidade de horário.";
+    if (!draft.acknowledgement) return "Confirme a ciência de que a venda depende de aprovação.";
+  }
+  if (dayOffKind === "DAY_OFF_REQUEST" && (!draft.desiredDayOffRequestDate || !draft.dayOffReason)) return "Informe a data desejada e o motivo da folga.";
+  return "";
+}
+
+async function createRequestFromDraft(draft: RequestDraft) {
+  const dayOffKind = isDayOffRequest(draft.type) ? draft.dayOffKind : null;
+  return apiJson<{ data: ClientRequest }>("/api/requests", {
+    method: "POST",
+    body: JSON.stringify({
+      type: draft.type,
+      title: draft.title || draft.type,
+      priority: dayOffKind === "DAY_OFF_REQUEST" ? draft.urgency : draft.priority,
+      description: draft.description || draft.justification || "Solicitação criada pelo portal operacional.",
+      requestedDate: draft.requestedDate || undefined,
+      dayOffKind: dayOffKind ?? undefined,
+      currentDayOffDate: dayOffKind === "DAY_OFF_SWAP" ? draft.currentDayOffDate : undefined,
+      desiredDayOffDate: dayOffKind === "DAY_OFF_SWAP" ? draft.desiredDayOffDate : undefined,
+      dayOffToSellDate: dayOffKind === "DAY_OFF_SELL" ? draft.dayOffToSellDate : undefined,
+      availabilityShift: dayOffKind === "DAY_OFF_SELL" ? draft.availabilityShift : undefined,
+      preferredStartTime: dayOffKind === "DAY_OFF_SELL" ? draft.preferredStartTime : undefined,
+      preferredEndTime: dayOffKind === "DAY_OFF_SELL" ? draft.preferredEndTime : undefined,
+      acknowledgement: dayOffKind === "DAY_OFF_SELL" ? draft.acknowledgement : undefined,
+      desiredDayOffRequestDate: dayOffKind === "DAY_OFF_REQUEST" ? draft.desiredDayOffRequestDate : undefined,
+      dayOffReason: dayOffKind === "DAY_OFF_REQUEST" ? draft.dayOffReason : undefined,
+      urgency: dayOffKind === "DAY_OFF_REQUEST" ? draft.urgency : undefined,
+      justification: draft.justification || undefined,
+      attachmentUrl: draft.attachmentUrl || undefined
+    })
+  });
+}
+
+function RequestCreateModal({
+  draft,
+  setDraft,
+  onClose,
+  onSubmit
+}: {
+  draft: RequestDraft;
+  setDraft: Dispatch<SetStateAction<RequestDraft>>;
+  onClose: () => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+      <div className="card max-h-[88vh] w-full max-w-xl overflow-y-auto p-5">
+        <div className="mb-5 flex items-center justify-between">
+          <h2 className="text-lg font-extrabold text-navy-950">Nova solicitação</h2>
+          <button onClick={onClose} className="text-2xl text-muted">×</button>
+        </div>
+        <div className="space-y-4">
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-semibold text-muted">Tipo</span>
+            <select
+              value={draft.type}
+              onChange={(event) => {
+                const type = event.target.value;
+                const dayOffKind = dayOffKindFromRequest({ type });
+                setDraft((current) => ({ ...current, type, title: type, dayOffKind: dayOffKind ?? current.dayOffKind }));
+              }}
+              className="h-11 w-full rounded-lg border border-border px-3 outline-none"
+            >
+              {requestTypes.map((type) => (
+                <option key={type}>{type}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-semibold text-muted">Título</span>
+            <input value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none" placeholder="Resumo da solicitação" />
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-semibold text-muted">Prioridade</span>
+            <select value={draft.priority} onChange={(event) => setDraft((current) => ({ ...current, priority: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none">
+              {requestPriorities.map((priority) => (
+                <option key={priority}>{priority}</option>
+              ))}
+            </select>
+          </label>
+          {isDayOffRequest(draft.type) ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              {draft.dayOffKind === "DAY_OFF_SWAP" ? (
+                <>
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm font-semibold text-muted">Data atual da folga</span>
+                    <input type="date" value={draft.currentDayOffDate} onChange={(event) => setDraft((current) => ({ ...current, currentDayOffDate: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm font-semibold text-muted">Nova data desejada</span>
+                    <input type="date" value={draft.desiredDayOffDate} onChange={(event) => setDraft((current) => ({ ...current, desiredDayOffDate: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
+                  </label>
+                </>
+              ) : null}
+              {draft.dayOffKind === "DAY_OFF_SELL" ? (
+                <>
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm font-semibold text-muted">Data da folga que deseja vender</span>
+                    <input type="date" value={draft.dayOffToSellDate} onChange={(event) => setDraft((current) => ({ ...current, dayOffToSellDate: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
+                  </label>
+                  <FormSelect label="Turno desejado" value={draft.availabilityShift} options={Array.from(standardShiftNames)} onChange={(value) => setDraft((current) => ({ ...current, availabilityShift: value }))} />
+                  <FormInput label="Entrada preferencial" value={draft.preferredStartTime} onChange={(value) => setDraft((current) => ({ ...current, preferredStartTime: value }))} />
+                  <FormInput label="Saída preferencial" value={draft.preferredEndTime} onChange={(value) => setDraft((current) => ({ ...current, preferredEndTime: value }))} />
+                  <label className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-700 md:col-span-2">
+                    <input type="checkbox" checked={draft.acknowledgement} onChange={(event) => setDraft((current) => ({ ...current, acknowledgement: event.target.checked }))} />
+                    Estou ciente de que a venda de folga depende de aprovação da operação/WFM.
+                  </label>
+                </>
+              ) : null}
+              {draft.dayOffKind === "DAY_OFF_REQUEST" ? (
+                <>
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm font-semibold text-muted">Data desejada para folga</span>
+                    <input type="date" value={draft.desiredDayOffRequestDate} onChange={(event) => setDraft((current) => ({ ...current, desiredDayOffRequestDate: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
+                  </label>
+                  <FormSelect label="Motivo" value={draft.dayOffReason} options={["Pessoal", "Saúde", "Familiar", "Compromisso externo", "Estudos", "Emergência", "Outro"]} onChange={(value) => setDraft((current) => ({ ...current, dayOffReason: value }))} />
+                  <FormSelect label="Urgência" value={draft.urgency} options={requestPriorities} onChange={(value) => setDraft((current) => ({ ...current, urgency: value }))} />
+                </>
+              ) : null}
+            </div>
+          ) : (
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-semibold text-muted">Data desejada</span>
+              <input type="date" value={draft.requestedDate} onChange={(event) => setDraft((current) => ({ ...current, requestedDate: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none" />
+            </label>
+          )}
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-semibold text-muted">Justificativa</span>
+            <textarea value={draft.justification} onChange={(event) => setDraft((current) => ({ ...current, justification: event.target.value }))} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none" placeholder="Explique o motivo da solicitação" />
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-semibold text-muted">Descrição</span>
+            <textarea value={draft.description} onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none" placeholder="Detalhes adicionais" />
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-semibold text-muted">Anexo opcional</span>
+            <input value={draft.attachmentUrl} onChange={(event) => setDraft((current) => ({ ...current, attachmentUrl: event.target.value }))} className="h-11 w-full rounded-lg border border-border px-3 outline-none" placeholder="URL ou caminho do anexo" />
+          </label>
+          <button onClick={onSubmit} className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white">
+            Criar solicitação
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function RequestsKanbanPage() {
   const [requests, setRequests] = useState<ClientRequest[]>([]);
   const [selected, setSelected] = useState<ClientRequest | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
   const [actorRole, setActorRole] = useState("ADMIN");
   const [actionMessage, setActionMessage] = useState("");
   const [actionReason, setActionReason] = useState("");
@@ -8793,6 +8805,7 @@ export function RequestsKanbanPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [viewMode, setViewMode] = useState<"table" | "kanban">("table");
   const [loadError, setLoadError] = useState("");
+  const [newRequest, setNewRequest] = useState(createDefaultRequestDraft);
   const initialDeepLinkHandled = useRef(false);
   const countByStatus = (status: string) => summary?.byStatus?.[status] ?? requests.filter((request) => request.status === status).length;
 
@@ -8898,6 +8911,24 @@ export function RequestsKanbanPage() {
     }
   }
 
+  async function submitRequest() {
+    const validationMessage = validateRequestDraft(newRequest);
+    if (validationMessage) {
+      setActionMessage(validationMessage);
+      return;
+    }
+
+    try {
+      const payload = await createRequestFromDraft(newRequest);
+      setShowCreate(false);
+      setNewRequest(createDefaultRequestDraft());
+      setActionMessage(`Solicitação ${payload.data.id} criada com sucesso e enviada para a esteira.`);
+      void loadKanbanRequests(filters, 1);
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : "Não foi possível criar a solicitação.");
+    }
+  }
+
   async function moveStatus(id: string, status: string, actionInput?: Record<string, string>) {
     if (actionPending) return;
     const reason = actionReason.trim();
@@ -8993,6 +9024,10 @@ export function RequestsKanbanPage() {
         icon={KanbanSquare}
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <button onClick={() => setShowCreate(true)} className="flex h-10 items-center gap-2 rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">
+              <Plus className="h-4 w-4" />
+              Nova solicitação
+            </button>
             <button onClick={() => setViewMode("table")} className={cn("h-10 rounded-lg border px-3 text-sm font-bold", viewMode === "table" ? "border-blue-600 bg-blue-600 text-white" : "border-border bg-white text-navy-950")}>Tabela</button>
             <button onClick={() => setViewMode("kanban")} className={cn("h-10 rounded-lg border px-3 text-sm font-bold", viewMode === "kanban" ? "border-blue-600 bg-blue-600 text-white" : "border-border bg-white text-navy-950")}>Kanban</button>
             <button onClick={() => loadKanbanRequests(filters, pagination.page)} className="flex h-10 items-center gap-2 rounded-lg border border-border bg-white px-3 text-sm font-bold text-navy-950">
@@ -9164,6 +9199,7 @@ export function RequestsKanbanPage() {
           </div>
         </div>
       ) : null}
+      {showCreate ? <RequestCreateModal draft={newRequest} setDraft={setNewRequest} onClose={() => setShowCreate(false)} onSubmit={submitRequest} /> : null}
       <CoverageWarningDialog warning={coverageWarning} onClose={() => setCoverageWarning(null)} />
     </div>
   );

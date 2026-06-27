@@ -694,7 +694,7 @@ export function createRequest(actor: Actor, input: { type: string; title?: strin
   };
 
   db.requests.unshift(record);
-  createInternalNotification({ userEmail: actor.email, title: isMockDayOff(record) ? "Solicitação de folga criada" : "Solicitação criada", body: isMockDayOff(record) ? "Sua solicitação foi enviada para aprovação." : `${record.type} foi registrada com status Aberto.`, type: "SOLICITACAO", href: "/solicitacoes" });
+  createInternalNotification({ userEmail: actor.email, title: isMockDayOff(record) ? "Solicitação de folga criada" : "Solicitação criada", body: isMockDayOff(record) ? "Sua solicitação foi enviada para aprovação." : `${record.type} foi registrada com status Aberto.`, type: "SOLICITACAO", href: "/esteiras" });
   for (const userEmail of firstStepRecipients(record)) {
     createInternalNotification({ userEmail, title: isMockDayOff(record) ? "Nova solicitação de folga" : "Nova solicitação", body: isMockDayOff(record) ? `${record.type} aguardando análise.` : `${record.type} aberta por ${record.requester}.`, type: "SOLICITACAO", href: "/esteiras" });
   }
@@ -744,7 +744,7 @@ export function updateRequestStatus(actor: Actor, id: string, status: RequestSta
     title: transition.requesterTitle,
     body: transition.requesterBody(reason),
     type: "SOLICITACAO",
-    href: "/solicitacoes"
+    href: "/esteiras"
   });
 
   if (transition.notifyWfm) {
@@ -792,7 +792,7 @@ export function addRequestComment(actor: Actor, id: string, body: string) {
         title: "Novo comentário na solicitação",
         body: `${actor.name}: ${body}`,
         type: "REQUEST",
-        href: `/solicitacoes?request=${record.id}`
+        href: `/esteiras?request=${record.id}`
       });
     }
   }

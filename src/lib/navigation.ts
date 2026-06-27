@@ -16,7 +16,6 @@ const centralRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "QUALID
 const realTimeRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"];
 const leadership: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH", "COORDENADOR", "GERENTE"];
 const peopleOps: AppRole[] = ["ADMIN", "GESTOR", "RH", "WFM"];
-const authenticatedOps: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI"];
 
 export const navItems: NavItem[] = [
   { label: "Central Operacional", href: "/central-operacional", icon: "LayoutDashboard", roles: centralRoles },
@@ -26,7 +25,6 @@ export const navItems: NavItem[] = [
   { label: "Cadastros", href: "/cadastros", icon: "UserPlus", roles: peopleOps },
   { label: "Cronogramas", href: "/escalas", icon: "CalendarRange", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH"] },
   { label: "Horas Operacionais", href: "/horas-operacionais", icon: "Clock", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"] },
-  { label: "Solicitações", href: "/solicitacoes", icon: "ClipboardList", roles: authenticatedOps },
   { label: "Mural", href: "/mural", icon: "Megaphone", roles: muralRoles },
   { label: "Esteiras", href: "/esteiras", icon: "KanbanSquare", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH", "TI", "QUALIDADE"] },
   { label: "Mapa de Funcionários", href: "/mapa-funcionarios", icon: "Map", roles: leadership },
