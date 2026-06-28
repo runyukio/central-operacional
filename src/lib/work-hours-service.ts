@@ -42,6 +42,7 @@ const viewRoles = ["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "COLABORADOR"];
 const requestAdjustmentRoles = ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"];
 const toleranceMinutes = WORK_HOUR_TOLERANCE_MINUTES;
 const workHourExportLimit = 10000;
+const pendingWorkHourAdjustmentStatuses: WorkHourAdjustmentStatus[] = ["ABERTO", "EM_ANALISE"];
 const inactiveEmployeeStatusLabels = [
   "Inativo",
   "Inativa",
@@ -1072,14 +1073,27 @@ function buildRecordWhere(user: UserWithRole, query: WorkHourQuery, period: { st
       { employee: { fullName: { contains: search, mode: "insensitive" } } }
     ];
   }
-  if (query.status && query.status !== "Todos") where.status = uiToRecordStatus(query.status);
+  if (query.status && query.status !== "Todos") {
+    if (query.status === "Ajuste solicitado") where.adjustments = pendingWorkHourAdjustmentFilter();
+    else where.status = uiToRecordStatus(query.status);
+  }
   if (query.divergentOnly) where.status = "DIVERGENT";
-  if (query.pendingOnly) where.status = "ADJUSTMENT_REQUESTED";
-  if (query.noScheduleOnly) where.status = "NO_SCHEDULE";
+  if (query.pendingOnly) {
+    delete where.status;
+    where.adjustments = pendingWorkHourAdjustmentFilter();
+  }
+  if (query.noScheduleOnly) {
+    delete where.adjustments;
+    where.status = "NO_SCHEDULE";
+  }
   if (query.source && query.source !== "Todos") where.source = { equals: query.source, mode: "insensitive" };
   const employeeStatusFilter = buildEmployeeStatusFilter(query.employeeStatus);
   if (employeeStatusFilter) where.employee = { AND: [where.employee as Prisma.EmployeeProfileWhereInput, employeeStatusFilter] };
   return where;
+}
+
+function pendingWorkHourAdjustmentFilter() {
+  return { some: { status: { in: pendingWorkHourAdjustmentStatuses } } };
 }
 
 function isNoSupervisorFilter(value: string) {
