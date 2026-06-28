@@ -222,7 +222,7 @@ export function MyInvoicePage() {
                 Solicitar ajuste
               </button>
             </div>
-            <p className="mt-3 text-xs font-semibold text-muted">Após aprovar, um novo ajuste só poderá ser aberto se o Admin Central reabrir o invoice.</p>
+            <p className="mt-3 text-xs font-semibold text-muted">Enquanto o invoice estiver disponível para conferência, você pode enviar novas solicitações de ajuste. Após aprovar, novos ajustes dependem de reabertura pelo Admin Central.</p>
           </Panel>
 
           <Panel title="Solicitações de ajuste">

@@ -280,7 +280,7 @@ export async function getMyBillingInvoice(actor: Actor, referenceMonthInput?: st
     ? await prisma.invoiceAdjustmentRequest.findMany({
       where: { employeeInvoiceId: persisted.id },
       orderBy: { createdAt: "desc" },
-      take: 5
+      take: 20
     })
     : [];
   const history = await buildInvoiceHistory(user.employeeProfile.id);
@@ -296,7 +296,7 @@ export async function getMyBillingInvoice(actor: Actor, referenceMonthInput?: st
         id: persisted?.id ?? "",
         status: persisted?.status ?? invoice.status,
         canApprove: canEmployeeApproveInvoice(cycle?.status, persisted?.status ?? invoice.status),
-        canRequestAdjustment: canEmployeeRequestAdjustment(cycle?.status, persisted?.status ?? invoice.status, adjustmentRequests)
+        canRequestAdjustment: canEmployeeRequestAdjustment(cycle?.status, persisted?.status ?? invoice.status)
       },
       weeklyApprovedHours: buildWeeklyApprovedHours(invoice.hourDetails),
       composition: buildInvoiceComposition(invoice),
@@ -421,11 +421,6 @@ export async function submitInvoiceAdjustmentRequest(actor: Actor, input: {
   const invoice = await upsertEmployeeInvoice(cycle.id, calculated);
   if (invoice.status === "APROVADO_COLABORADOR") return { error: "Este invoice já foi aprovado. Apenas o Admin Central pode reabrir.", status: 409 };
 
-  const duplicate = await prisma.invoiceAdjustmentRequest.findFirst({
-    where: { employeeInvoiceId: invoice.id, status: { in: [...OPEN_ADJUSTMENT_STATUSES] } },
-    select: { id: true }
-  });
-  if (duplicate) return { error: "Já existe uma solicitação de ajuste aberta para este ciclo.", status: 409 };
   const requestType = await prisma.requestType.findUnique({
     where: { name: BILLING_REQUEST_TYPE_NAME },
     select: { id: true }
@@ -482,10 +477,6 @@ export async function submitInvoiceAdjustmentRequest(actor: Actor, input: {
         status: "AGUARDANDO_SUPERVISOR"
       }
     });
-    await tx.billingEmployeeInvoice.update({
-      where: { id: invoice.id },
-      data: { status: "AGUARDANDO_SUPERVISOR" }
-    });
     await tx.auditLog.create({
       data: {
         actorId: user.id,
@@ -525,10 +516,6 @@ export async function supervisorReviewInvoiceAdjustment(actor: Actor, input: { i
         supervisorCheckedAt: new Date(),
         status: "AGUARDANDO_ADMIN"
       }
-    });
-    await tx.billingEmployeeInvoice.update({
-      where: { id: existing.employeeInvoiceId },
-      data: { status: "AGUARDANDO_ADMIN" }
     });
     if (existing.requestId) {
       await tx.request.update({
@@ -613,10 +600,6 @@ export async function adminDecideInvoiceAdjustment(actor: Actor, input: {
         status: newStatus,
         completedAt: new Date()
       }
-    });
-    await tx.billingEmployeeInvoice.update({
-      where: { id: existing.employeeInvoiceId },
-      data: { status: "AJUSTE_CONCLUIDO" }
     });
     if (existing.requestId) {
       const requestStatus = input.decision === "APROVADO" ? RequestStatus.CONCLUIDO : RequestStatus.RECUSADO;
@@ -1941,9 +1924,13 @@ function buildInvoiceComposition(invoice: InvoiceCalculation) {
   return [
     { label: "Horas aprovadas", hours: minutesToHoursLabel(invoice.approvedMinutes), value: roundMoney((invoice.approvedMinutes / 60) * invoice.hourlyRate), tone: "green" },
     { label: "Projeção de dias futuros", hours: minutesToHoursLabel(invoice.projectedMinutes), value: roundMoney((invoice.projectedMinutes / 60) * invoice.hourlyRate), tone: "blue" },
-    { label: "Adiantamento", hours: "-", value: -invoice.advanceAmount, tone: "orange" },
+    { label: "Adiantamento automático", hours: "-", value: -invoice.automaticAdvanceAmount, tone: "orange" },
+    { label: "Adiantamento manual", hours: "-", value: -invoice.manualAdvanceAmount, tone: "orange" },
     { label: "Campanha", hours: "-", value: invoice.campaignAmount, tone: "green" },
-    { label: "Ajustes", hours: "-", value: invoice.adjustmentAmount, tone: invoice.adjustmentAmount < 0 ? "red" : "green" }
+    { label: "Bônus", hours: "-", value: invoice.bonusAmount, tone: "green" },
+    { label: "Correção", hours: "-", value: invoice.correctionAmount, tone: invoice.correctionAmount < 0 ? "red" : "green" },
+    { label: "Desconto", hours: "-", value: -invoice.discountAmount, tone: "red" },
+    { label: "Outros ajustes", hours: "-", value: invoice.otherAdjustmentAmount, tone: invoice.otherAdjustmentAmount < 0 ? "red" : "green" }
   ];
 }
 
@@ -1951,11 +1938,10 @@ function canEmployeeApproveInvoice(cycleStatus?: string | null, invoiceStatus?: 
   return isInvoiceAvailableForEmployeeReview(cycleStatus, invoiceStatus) && invoiceStatus !== "APROVADO_COLABORADOR" && !isFinalizedInvoiceStatus(invoiceStatus);
 }
 
-function canEmployeeRequestAdjustment(cycleStatus: string | null | undefined, invoiceStatus: string | null | undefined, requests: Array<{ status: string }>) {
+function canEmployeeRequestAdjustment(cycleStatus: string | null | undefined, invoiceStatus: string | null | undefined) {
   return isInvoiceAvailableForEmployeeReview(cycleStatus, invoiceStatus)
     && invoiceStatus !== "APROVADO_COLABORADOR"
-    && !isFinalizedInvoiceStatus(invoiceStatus)
-    && !requests.some((request) => OPEN_ADJUSTMENT_STATUSES.includes(request.status as (typeof OPEN_ADJUSTMENT_STATUSES)[number]));
+    && !isFinalizedInvoiceStatus(invoiceStatus);
 }
 
 function isInvoiceAvailableForEmployeeReview(cycleStatus?: string | null, invoiceStatus?: string | null) {
