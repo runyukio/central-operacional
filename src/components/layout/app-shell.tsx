@@ -68,6 +68,8 @@ const icons = {
   UserCircle
 };
 
+const SIDEBAR_OPEN_SECTIONS_STORAGE_KEY = "sidebarOpenSectionsV2";
+
 type ShellUser = {
   id?: string | null;
   name?: string | null;
@@ -147,7 +149,7 @@ export function AppShell({
     if (stored === "true") setSidebarCollapsed(true);
     if (stored === "false") setSidebarCollapsed(false);
 
-    const storedSections = window.localStorage.getItem("sidebarOpenSections");
+    const storedSections = window.localStorage.getItem(SIDEBAR_OPEN_SECTIONS_STORAGE_KEY);
     if (storedSections) {
       try {
         setOpenNavSections(JSON.parse(storedSections) as Record<string, boolean>);
@@ -258,15 +260,13 @@ export function AppShell({
   }
 
   function navSectionIsOpen(section: NavigationSection) {
-    const hasActiveItem = section.items.some(navItemIsActive);
-    if (hasActiveItem) return true;
-    return openNavSections[section.label] ?? section.label === "Operação";
+    return openNavSections[section.label] ?? false;
   }
 
   function toggleNavSection(label: string) {
     setOpenNavSections((current) => {
-      const next = { ...current, [label]: !(current[label] ?? label === "Operação") };
-      window.localStorage.setItem("sidebarOpenSections", JSON.stringify(next));
+      const next = { ...current, [label]: !(current[label] ?? false) };
+      window.localStorage.setItem(SIDEBAR_OPEN_SECTIONS_STORAGE_KEY, JSON.stringify(next));
       return next;
     });
   }
