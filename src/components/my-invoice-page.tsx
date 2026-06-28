@@ -31,6 +31,16 @@ type MyInvoicePayload = {
     };
     weeklyApprovedHours: Array<{ week: string; period: string; minutes: number; hours: string }>;
     composition: Array<{ label: string; hours: string; value: number; tone: string }>;
+    adjustmentDetails: Array<{
+      id: string;
+      type: string;
+      description: string;
+      observation: string;
+      amount: number;
+      target: string;
+      createdBy: string;
+      createdAt: string;
+    }>;
     adjustmentRequests: Array<{
       id: string;
       requestCode: string;
@@ -170,6 +180,30 @@ export function MyInvoicePage() {
               ["Valor bruto", minutesToHours(data.invoice.totalConsideredMinutes), <Amount key="gross" value={data.invoice.grossAmount} />],
               ["Valor final", "-", <Amount key="final" value={data.invoice.finalAmount} highlight />]
             ]} />
+          </Panel>
+
+          <Panel title="Detalhes dos lançamentos">
+            {data.adjustmentDetails.length ? (
+              <div className="grid gap-2">
+                {data.adjustmentDetails.map((item) => (
+                  <div key={item.id} className="rounded-xl border border-border bg-white p-3">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-black uppercase tracking-wide text-blue-700">{item.type}</span>
+                          <span className="text-xs font-bold text-muted">{item.target} • {item.createdAt}</span>
+                        </div>
+                        <p className="mt-2 text-sm font-black text-navy-950">{item.description}</p>
+                        {item.observation ? <p className="mt-1 text-xs font-semibold text-muted">{item.observation}</p> : null}
+                      </div>
+                      <Amount value={item.amount} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm font-semibold text-muted">Sem campanhas, bônus, correções ou descontos lançados neste ciclo.</p>
+            )}
           </Panel>
 
           <Panel title="Horas aprovadas por semana">

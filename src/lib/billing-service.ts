@@ -283,6 +283,9 @@ export async function getMyBillingInvoice(actor: Actor, referenceMonthInput?: st
       take: 20
     })
     : [];
+  const adjustmentDetails = cycle
+    ? await listEmployeeBillingAdjustmentDetails(cycle.id, user.employeeProfile.id, user.employeeProfile.lobId)
+    : [];
   const history = await buildInvoiceHistory(user.employeeProfile.id);
 
   return {
@@ -300,6 +303,7 @@ export async function getMyBillingInvoice(actor: Actor, referenceMonthInput?: st
       },
       weeklyApprovedHours: buildWeeklyApprovedHours(invoice.hourDetails),
       composition: buildInvoiceComposition(invoice),
+      adjustmentDetails,
       adjustmentRequests: adjustmentRequests.map(mapAdjustmentRequest),
       history
     }
@@ -1924,14 +1928,40 @@ function buildInvoiceComposition(invoice: InvoiceCalculation) {
   return [
     { label: "Horas aprovadas", hours: minutesToHoursLabel(invoice.approvedMinutes), value: roundMoney((invoice.approvedMinutes / 60) * invoice.hourlyRate), tone: "green" },
     { label: "Projeção de dias futuros", hours: minutesToHoursLabel(invoice.projectedMinutes), value: roundMoney((invoice.projectedMinutes / 60) * invoice.hourlyRate), tone: "blue" },
-    { label: "Adiantamento automático", hours: "-", value: -invoice.automaticAdvanceAmount, tone: "orange" },
-    { label: "Adiantamento manual", hours: "-", value: -invoice.manualAdvanceAmount, tone: "orange" },
+    { label: "Adiantamento", hours: "-", value: -invoice.advanceAmount, tone: "orange" },
     { label: "Campanha", hours: "-", value: invoice.campaignAmount, tone: "green" },
     { label: "Bônus", hours: "-", value: invoice.bonusAmount, tone: "green" },
     { label: "Correção", hours: "-", value: invoice.correctionAmount, tone: invoice.correctionAmount < 0 ? "red" : "green" },
     { label: "Desconto", hours: "-", value: -invoice.discountAmount, tone: "red" },
     { label: "Outros ajustes", hours: "-", value: invoice.otherAdjustmentAmount, tone: invoice.otherAdjustmentAmount < 0 ? "red" : "green" }
   ];
+}
+
+async function listEmployeeBillingAdjustmentDetails(cycleId: string, employeeId: string, lobId?: string | null) {
+  const rows = await prisma.billingAdjustment.findMany({
+    where: {
+      billingCycleId: cycleId,
+      deletedAt: null,
+      OR: [
+        { employeeId },
+        { employeeInvoice: { employeeId } },
+        ...(lobId ? [{ employeeId: null, employeeInvoiceId: null, lobId }] : [])
+      ]
+    },
+    include: { lob: true, createdBy: true },
+    orderBy: { createdAt: "desc" }
+  });
+
+  return rows.map((row) => ({
+    id: row.id,
+    type: row.type,
+    description: row.description,
+    observation: row.observation ?? "",
+    amount: Number(row.amount),
+    target: row.employeeId || row.employeeInvoiceId ? "Individual" : row.lob?.name ? `LOB ${row.lob.name}` : "Geral",
+    createdBy: row.createdBy?.name ?? "",
+    createdAt: formatDateTime(row.createdAt)
+  }));
 }
 
 function canEmployeeApproveInvoice(cycleStatus?: string | null, invoiceStatus?: string | null) {
