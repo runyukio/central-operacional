@@ -206,10 +206,6 @@ export function MyInvoicePage() {
             )}
           </Panel>
 
-          <Panel title="Horas aprovadas por semana">
-            <Table columns={["Semana", "Período", "Horas"]} rows={data.weeklyApprovedHours.map((row) => [row.week, row.period, row.hours])} />
-          </Panel>
-
           {adjustmentOpen ? (
             <Panel title="Solicitar ajuste de invoice">
               <div className="grid gap-3 md:grid-cols-2">
