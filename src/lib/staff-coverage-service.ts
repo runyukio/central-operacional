@@ -778,7 +778,7 @@ function scheduleCountsAsCoverage(schedule: StaffCoverageSchedule) {
 
 function scheduleEmployeeCountsAsActive(schedule: StaffCoverageSchedule) {
   if (isCoverageEmployeeActive(schedule.employee.operationalStatus)) return true;
-  return isOperationalNesting(schedule.employee.operationalStatus) && schedule.status === "NESTING" && isVideoOrCommentsSchedule(schedule);
+  return isOperationalNesting(schedule.employee.operationalStatus) && isVideoOrCommentsSchedule(schedule) && scheduleCountsAsCoverage(schedule);
 }
 
 function isVideoOrCommentsSchedule(schedule: StaffCoverageSchedule) {

@@ -1930,7 +1930,7 @@ function scheduleCountsAsCoverageForImpact(schedule: { status: ScheduleStatus; s
 
 function scheduleEmployeeCountsAsActiveForImpact(schedule: { status: ScheduleStatus; employee: { skill?: string | null; operationalStatus?: string | null; lob?: { name: string } | null } }) {
   if (isCoverageEmployeeActiveForImpact(schedule.employee.operationalStatus)) return true;
-  return isOperationalNestingForImpact(schedule.employee.operationalStatus) && schedule.status === "NESTING" && isVideoOrCommentsScheduleForImpact(schedule);
+  return isOperationalNestingForImpact(schedule.employee.operationalStatus) && isVideoOrCommentsScheduleForImpact(schedule) && scheduleCountsAsCoverageForImpact(schedule);
 }
 
 function isVideoOrCommentsScheduleForImpact(schedule: { employee?: { skill?: string | null; lob?: { name: string } | null } }) {
