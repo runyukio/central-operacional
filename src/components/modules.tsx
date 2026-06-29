@@ -11956,9 +11956,9 @@ export function MuralPage() {
 export function PerformancePage() {
   const { data: session } = useSession();
   const requestedPerformanceView = queryParam("view");
-  const hasRequestedPerformanceView = requestedPerformanceView === "mine" || requestedPerformanceView === "wfh";
+  const hasRequestedPerformanceView = requestedPerformanceView === "mine" || requestedPerformanceView === "wfh" || requestedPerformanceView === "framework";
   const defaultedTab = useRef(hasRequestedPerformanceView);
-  const [activeTab, setActiveTab] = useState<"mine" | "wfh">(requestedPerformanceView === "wfh" ? "wfh" : "mine");
+  const [activeTab, setActiveTab] = useState<"mine" | "wfh" | "framework">(requestedPerformanceView === "framework" ? "framework" : requestedPerformanceView === "wfh" ? "wfh" : "mine");
   const [filters, setFilters] = useState(() => ({
     ...initialDateRangeFromUrl(),
     lob: "Todos",
@@ -11998,11 +11998,12 @@ export function PerformancePage() {
   const sessionRole = String((session?.user as { role?: string } | undefined)?.role ?? "").toUpperCase();
   const isClientRole = sessionRole === "CLIENT";
   const sessionCanWfh = ["ADMIN", "WFM", "SUPERVISOR", "RH", "GESTOR", "COORDENADOR", "GERENTE", "MANAGEMENT", "CLIENT"].includes(sessionRole);
-  const visibleActiveTab = isClientRole ? "wfh" : activeTab;
+  const sessionCanFramework = ["ADMIN", "WFM", "GESTOR", "CLIENT"].includes(sessionRole);
+  const visibleActiveTab = isClientRole && activeTab !== "framework" ? "wfh" : activeTab;
   const shouldWaitForDefaultPerformanceTab = Boolean(sessionRole && !hasRequestedPerformanceView && !defaultedTab.current);
 
   useEffect(() => {
-    if (isClientRole && activeTab !== "wfh") {
+    if (isClientRole && activeTab !== "wfh" && activeTab !== "framework") {
       setActiveTab("wfh");
       defaultedTab.current = true;
       return;
@@ -12062,8 +12063,10 @@ export function PerformancePage() {
   }, [payload]);
 
   const canShowWfh = payload?.mode === "mine" ? payload.canAccessWfh : payload?.mode === "wfh" ? true : sessionCanWfh;
+  const canShowFramework = payload?.mode === "framework" ? true : sessionCanFramework;
   const wfhPayload = payload?.mode === "wfh" ? payload : null;
   const minePayload = payload?.mode === "mine" ? payload : null;
+  const frameworkPayload = payload?.mode === "framework" ? payload : null;
 
   async function previewPerformanceFile(type: PerformanceImportKind, file?: File | null) {
     if (!file) return;
@@ -12220,6 +12223,7 @@ export function PerformancePage() {
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-white p-2 shadow-sm">
         {!isClientRole ? <button onClick={() => setActiveTab("mine")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", visibleActiveTab === "mine" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>Minha Performance</button> : null}
         {canShowWfh ? <button onClick={() => setActiveTab("wfh")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", visibleActiveTab === "wfh" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>WFH</button> : null}
+        {canShowFramework ? <button onClick={() => setActiveTab("framework")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", visibleActiveTab === "framework" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>Framework</button> : null}
       </div>
 
       <div className="rounded-xl border border-border bg-white p-2.5 shadow-sm">
@@ -12239,6 +12243,10 @@ export function PerformancePage() {
               <PerformanceSelect label="Status do agente" value={filters.employeeStatus} onChange={(value) => updateFilter("employeeStatus", value)} options={["Todos", "Ativo", "Afastado", "Desligado"]} />
               <PerformanceSelect label="WFH" value={filters.wfhStatus} onChange={(value) => updateFilter("wfhStatus", value)} options={["Todos", "Qualificado para Home", "Aguardando Validação", "Não Qualificado para Home", "Dados insuficientes", "Não aplicável"]} />
             </>
+          ) : visibleActiveTab === "framework" ? (
+            <div className="flex items-end rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 sm:col-span-2 lg:col-span-2 2xl:col-span-7">
+              Framework usa a data final como referência para montar os últimos 3 meses e 4 semanas.
+            </div>
           ) : <div className="hidden lg:block lg:col-span-2 2xl:col-span-7" />}
           <div className="flex items-end justify-end gap-2 sm:col-span-2 lg:col-span-4 2xl:col-span-1">
             <button onClick={() => void loadPerformance()} className="inline-flex h-9 items-center gap-2 rounded-lg bg-navy-950 px-3 text-xs font-extrabold text-white">
@@ -12323,6 +12331,28 @@ export function PerformancePage() {
           ) : (
             <EmptyState title="Ainda não há dados de performance para o período selecionado." description="Quando Qualidade, Produção e Cronograma estiverem disponíveis, seus indicadores aparecerão aqui." />
           )}
+        </div>
+      ) : null}
+
+      {frameworkPayload ? (
+        <div className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-3">
+            <PerformanceMetricCard title="KPIs dentro da meta" value={frameworkPayload.summary.ok} helper="status verde no mês atual" icon={CheckCircle2} tone="green" />
+            <PerformanceMetricCard title="KPIs fora da meta" value={frameworkPayload.summary.fail} helper="status vermelho no mês atual" icon={XCircle} tone="red" />
+            <PerformanceMetricCard title="KPIs pendentes" value={frameworkPayload.summary.pending} helper="sem base ou sem target oficial" icon={AlertTriangle} tone="gold" />
+          </div>
+          <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs font-bold text-blue-700">
+            Framework operacional com 3 meses e 4 semanas até {formatDisplayDateFromIso(frameworkPayload.referenceDate)}. CSAT e FRT ficam pendentes até conectarmos a base oficial.
+          </div>
+          {frameworkPayload.sections.map((section) => (
+            <Panel key={section.key} title={`Framework ${section.title}`}>
+              <PerformanceFrameworkTable
+                section={section}
+                monthPeriods={frameworkPayload.monthPeriods}
+                weekPeriods={frameworkPayload.weekPeriods}
+              />
+            </Panel>
+          ))}
         </div>
       ) : null}
 
@@ -12499,6 +12529,57 @@ function performanceToneClass(tone: string) {
     red: "bg-red-50 text-red-600"
   };
   return map[tone] ?? "bg-slate-50 text-slate-600";
+}
+
+function PerformanceFrameworkTable({
+  section,
+  monthPeriods,
+  weekPeriods
+}: {
+  section: PerformanceFrameworkResponse["sections"][number];
+  monthPeriods: PerformanceFrameworkResponse["monthPeriods"];
+  weekPeriods: PerformanceFrameworkResponse["weekPeriods"];
+}) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[1040px] border-separate border-spacing-0 text-sm">
+        <thead>
+          <tr className="bg-slate-100 text-xs font-black uppercase tracking-wide text-muted">
+            <th className="rounded-l-lg px-3 py-3 text-left">KPI</th>
+            {monthPeriods.map((period) => <th key={period.key} className="px-3 py-3 text-right">{period.label}</th>)}
+            <th className="px-3 py-3 text-center">Status</th>
+            <th className="px-3 py-3 text-right">Target</th>
+            {weekPeriods.map((period) => <th key={period.key} className="px-3 py-3 text-right">{period.label}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {section.rows.map((row, index) => (
+            <tr key={row.key} className={cn(index % 2 === 0 ? "bg-white" : "bg-slate-50/70")}>
+              <td className="border-b border-border px-3 py-3 font-extrabold text-navy-950">{row.label}</td>
+              {monthPeriods.map((period) => (
+                <td key={period.key} className="border-b border-border px-3 py-3 text-right font-bold text-navy-900">{formatPerformanceFrameworkValue(row.values[period.key], row.kind)}</td>
+              ))}
+              <td className="border-b border-border px-3 py-3 text-center"><PerformanceFrameworkStatusBadge status={row.status} /></td>
+              <td className="border-b border-border px-3 py-3 text-right font-bold text-muted">{row.targetLabel || "-"}</td>
+              {weekPeriods.map((period) => (
+                <td key={period.key} className="border-b border-border px-3 py-3 text-right font-bold text-navy-900">{formatPerformanceFrameworkValue(row.values[period.key], row.kind)}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function PerformanceFrameworkStatusBadge({ status }: { status: PerformanceFrameworkStatus }) {
+  if (status === "ok") {
+    return <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-emerald-100 text-emerald-700"><CheckCircle2 className="h-4 w-4" /></span>;
+  }
+  if (status === "fail") {
+    return <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-red-100 text-red-700"><XCircle className="h-4 w-4" /></span>;
+  }
+  return <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full bg-slate-100 px-2 text-xs font-black text-muted">-</span>;
 }
 
 function PerformanceWfhBadge({ status, label, title }: { status: WfhEligibilityClientStatus; label: string; title?: string }) {
@@ -12886,7 +12967,33 @@ type PerformanceWfhResponse = {
   }>;
 };
 
-type PerformanceDashboardResponse = PerformanceMineResponse | PerformanceWfhResponse;
+type PerformanceFrameworkMetricKind = "number" | "percent" | "seconds" | "minutes" | "hours";
+type PerformanceFrameworkStatus = "ok" | "fail" | "neutral";
+
+type PerformanceFrameworkResponse = {
+  mode: "framework";
+  period: { startDate: string; endDate: string };
+  referenceDate: string;
+  monthPeriods: Array<{ key: string; label: string }>;
+  weekPeriods: Array<{ key: string; label: string }>;
+  summary: { ok: number; fail: number; pending: number };
+  sections: Array<{
+    key: string;
+    title: string;
+    rows: Array<{
+      key: string;
+      label: string;
+      kind: PerformanceFrameworkMetricKind;
+      target: number | null;
+      targetLabel: string;
+      direction: "gte" | "lte" | null;
+      status: PerformanceFrameworkStatus;
+      values: Record<string, number | null>;
+    }>;
+  }>;
+};
+
+type PerformanceDashboardResponse = PerformanceMineResponse | PerformanceWfhResponse | PerformanceFrameworkResponse;
 
 type PerformanceImportKind = "quality" | "tns-quality" | "cec-quality" | "production";
 type PerformanceSortableMetric = "quality" | "submit" | "aht" | "abs";
@@ -12942,6 +13049,20 @@ function formatPerformanceAht(seconds: number) {
   const minutes = Math.floor(total / 60);
   const rest = total % 60;
   return minutes > 0 ? `${minutes}:${String(rest).padStart(2, "0")}` : `${rest}s`;
+}
+
+function formatPerformanceFrameworkValue(value: number | null | undefined, kind: PerformanceFrameworkMetricKind) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+  if (kind === "percent") return formatPerformancePercent(Number(value));
+  if (kind === "number") return formatPerformanceNumber(Number(value));
+  if (kind === "seconds") return Number(value).toLocaleString("pt-BR", { maximumFractionDigits: 0 });
+  if (kind === "minutes" || kind === "hours") return Number(value).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return String(value);
+}
+
+function formatDisplayDateFromIso(value: string) {
+  const [year, month, day] = value.split("-");
+  return year && month && day ? `${day}/${month}/${year}` : value;
 }
 
 function performanceMetricLabel(key: string) {

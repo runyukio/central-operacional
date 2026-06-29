@@ -3,6 +3,7 @@ import { AuditAction, Prisma, type ScheduleStatus } from "@prisma/client";
 import type { Actor } from "@/lib/mock-db";
 import {
   canAccessPerformance,
+  canAccessPerformanceFramework,
   canAccessPerformanceWfh,
   canExportPerformance,
   canImportPerformance,
@@ -47,7 +48,7 @@ type PerformanceSortBy = "quality" | "submit" | "aht" | "abs";
 type PerformanceSortDirection = "asc" | "desc";
 
 export type PerformanceQuery = {
-  view?: "mine" | "wfh";
+  view?: "mine" | "wfh" | "framework";
   startDate?: string;
   endDate?: string;
   month?: string;
@@ -158,6 +159,7 @@ const cecQualityMetricSelect = {
 const productionMetricSelect = {
   bzDay: true,
   submitNum: true,
+  latencyMinutesSum: true,
   moderationSeconds: true,
   employeeId: true
 } satisfies Prisma.ProductionRecordSelect;
@@ -190,8 +192,17 @@ export async function getPerformanceDashboard(actor: Actor, query: PerformanceQu
   const user = await requireActiveUser(actor);
   if (!canAccessPerformance(permissionUser(user))) throw new PerformanceError("Você não tem permissão para acessar Performance.", 403);
   const role = normalizeRole(user.role.name);
-  const view = role === "CLIENT" ? "wfh" : query.view ?? (role === "COLABORADOR" ? "mine" : "wfh");
+  const view = role === "CLIENT" ? (query.view === "framework" ? "framework" : "wfh") : query.view ?? (role === "COLABORADOR" ? "mine" : "wfh");
   const period = resolvePeriod(query);
+
+  if (view === "framework") {
+    if (!canAccessPerformanceFramework(permissionUser(user))) throw new PerformanceError("Você não tem permissão para acessar Framework.", 403);
+    return {
+      mode: "framework" as const,
+      period: periodPayload(period),
+      ...(await buildPerformanceFramework(period.end))
+    };
+  }
 
   if (view === "mine" || role === "COLABORADOR") {
     const ownEmployee = requireOwnEmployee(user);
@@ -1373,6 +1384,266 @@ function daysInPeriod(period: Period) {
   const end = Date.UTC(period.end.getUTCFullYear(), period.end.getUTCMonth(), period.end.getUTCDate());
   if (end < start) return 0;
   return Math.floor((end - start) / 86_400_000) + 1;
+}
+
+type FrameworkGroupKey = "CEC" | "ADS" | "TNS_VIDEO" | "TNS_COMMENTS" | "TNS";
+type FrameworkMetricKind = "number" | "percent" | "seconds" | "minutes" | "hours";
+type FrameworkTargetDirection = "gte" | "lte";
+type FrameworkStatus = "ok" | "fail" | "neutral";
+
+type FrameworkMetricDefinition = {
+  key: string;
+  label: string;
+  group: FrameworkGroupKey;
+  kind: FrameworkMetricKind;
+  target?: number | null;
+  targetLabel?: string;
+  direction?: FrameworkTargetDirection;
+  source: "hc" | "abs" | "attrition" | "quality" | "moderationRate" | "aht" | "cpd" | "latency" | "empty";
+};
+
+const frameworkSections: Array<{ key: "CEC" | "ADS" | "TNS"; title: string; metrics: FrameworkMetricDefinition[] }> = [
+  {
+    key: "CEC",
+    title: "CEC",
+    metrics: [
+      { key: "cec-hc", label: "CEC HC", group: "CEC", kind: "number", source: "hc", target: 26, direction: "gte" },
+      { key: "cec-abs", label: "CEC ABS", group: "CEC", kind: "percent", source: "abs", target: 8, direction: "lte" },
+      { key: "cec-attrition", label: "CEC Attrition", group: "CEC", kind: "percent", source: "attrition", target: 10, direction: "lte" },
+      { key: "cec-csat", label: "CEC CSAT", group: "CEC", kind: "percent", source: "empty", target: 30, direction: "gte" },
+      { key: "cec-quality", label: "CEC Quality", group: "CEC", kind: "percent", source: "quality", target: 90, direction: "gte" },
+      { key: "cec-frt", label: "CEC FRT", group: "CEC", kind: "percent", source: "empty", target: 97, direction: "gte" },
+      { key: "cec-cpd", label: "CEC CPD", group: "CEC", kind: "number", source: "cpd", target: null }
+    ]
+  },
+  {
+    key: "ADS",
+    title: "ADS",
+    metrics: [
+      { key: "ads-hc", label: "ADS HC", group: "ADS", kind: "number", source: "hc", target: 65, direction: "gte" },
+      { key: "ads-abs", label: "ADS ABS", group: "ADS", kind: "percent", source: "abs", target: 8, direction: "lte" },
+      { key: "ads-attrition", label: "ADS Attrition", group: "ADS", kind: "percent", source: "attrition", target: 10, direction: "lte" },
+      { key: "ads-latency", label: "ADS Latency (hour)", group: "ADS", kind: "hours", source: "latency", target: 2, targetLabel: "2,00", direction: "lte" },
+      { key: "ads-quality", label: "ADS Quality", group: "ADS", kind: "percent", source: "quality", target: 95, direction: "gte" },
+      { key: "ads-moderation", label: "ADS Moderation Time", group: "ADS", kind: "percent", source: "moderationRate", target: 60, direction: "gte" },
+      { key: "ads-aht", label: "ADS AHT", group: "ADS", kind: "seconds", source: "aht", target: 22, direction: "lte" }
+    ]
+  },
+  {
+    key: "TNS",
+    title: "TNS",
+    metrics: [
+      { key: "tns-video-hc", label: "TNS Video HC", group: "TNS_VIDEO", kind: "number", source: "hc", target: 31, direction: "gte" },
+      { key: "tns-comments-hc", label: "TNS Comments HC", group: "TNS_COMMENTS", kind: "number", source: "hc", target: null },
+      { key: "tns-abs", label: "TNS ABS", group: "TNS", kind: "percent", source: "abs", target: 8, direction: "lte" },
+      { key: "tns-attrition", label: "TNS Attrition", group: "TNS", kind: "percent", source: "attrition", target: 10, direction: "lte" },
+      { key: "tns-video-latency", label: "TNS Latency Video (min)", group: "TNS_VIDEO", kind: "minutes", source: "latency", target: 15, direction: "lte" },
+      { key: "tns-comments-latency", label: "TNS Latency Comments (hour)", group: "TNS_COMMENTS", kind: "hours", source: "latency", target: 24, direction: "lte" },
+      { key: "tns-quality", label: "TNS Quality", group: "TNS", kind: "percent", source: "quality", target: 98, direction: "gte" },
+      { key: "tns-moderation", label: "TNS Moderation Time", group: "TNS", kind: "percent", source: "moderationRate", target: 60, direction: "gte" },
+      { key: "tns-aht", label: "TNS AHT", group: "TNS", kind: "seconds", source: "aht", target: 32, direction: "lte" }
+    ]
+  }
+];
+
+async function buildPerformanceFramework(referenceDate: Date) {
+  const monthPeriods = frameworkMonthPeriods(referenceDate);
+  const weekPeriods = frameworkWeekPeriods(referenceDate);
+  const periods = [...monthPeriods, ...weekPeriods];
+  const employees = await listFrameworkEmployees();
+  const snapshots = await Promise.all(periods.map(async (period) => ({
+    key: period.key,
+    period,
+    rows: await buildAgentRows(employees, period),
+    latency: await calculateFrameworkLatency(employees, period)
+  })));
+  const snapshotMap = new Map(snapshots.map((snapshot) => [snapshot.key, snapshot]));
+  const sections = frameworkSections.map((section) => ({
+    key: section.key,
+    title: section.title,
+    rows: section.metrics.map((metric) => {
+      const values = Object.fromEntries(periods.map((period) => {
+        const snapshot = snapshotMap.get(period.key);
+        return [period.key, snapshot ? calculateFrameworkMetric(metric, snapshot.rows, snapshot.latency, employees, period) : null];
+      })) as Record<string, number | null>;
+      const currentValue = values[monthPeriods[monthPeriods.length - 1]?.key ?? ""];
+      return {
+        key: metric.key,
+        label: metric.label,
+        kind: metric.kind,
+        target: metric.target ?? null,
+        targetLabel: metric.targetLabel ?? formatFrameworkValue(metric.target ?? null, metric.kind),
+        direction: metric.direction ?? null,
+        status: frameworkStatus(currentValue, metric.target, metric.direction),
+        values
+      };
+    })
+  }));
+  return {
+    referenceDate: formatDateKey(referenceDate),
+    monthPeriods: monthPeriods.map((period) => ({ key: period.key, label: period.label })),
+    weekPeriods: weekPeriods.map((period) => ({ key: period.key, label: period.label })),
+    sections,
+    summary: {
+      ok: sections.flatMap((section) => section.rows).filter((row) => row.status === "ok").length,
+      fail: sections.flatMap((section) => section.rows).filter((row) => row.status === "fail").length,
+      pending: sections.flatMap((section) => section.rows).filter((row) => row.status === "neutral").length
+    }
+  };
+}
+
+async function listFrameworkEmployees(): Promise<PerformanceEmployee[]> {
+  const where: Prisma.EmployeeProfileWhereInput = {
+    deletedAt: null,
+    OR: agentRoleTitleAliases.map((roleTitle) => ({ roleTitle: { equals: roleTitle, mode: "insensitive" } }))
+  };
+  const employees = await prisma.employeeProfile.findMany({
+    where,
+    include: { user: true, lob: true, supervisor: true },
+    orderBy: { fullName: "asc" },
+    take: 3000
+  });
+  return employees.filter((employee) => isAgentJobTitle(employee.roleTitle));
+}
+
+function frameworkMonthPeriods(referenceDate: Date) {
+  const endMonth = utcDate(referenceDate.getUTCFullYear(), referenceDate.getUTCMonth() + 1, 1);
+  return [2, 1, 0].map((offset) => {
+    const start = utcDate(endMonth.getUTCFullYear(), endMonth.getUTCMonth() + 1 - offset, 1);
+    const end = utcDate(start.getUTCFullYear(), start.getUTCMonth() + 2, 0);
+    return {
+      key: `m-${formatDateKey(start).slice(0, 7)}`,
+      label: start.toLocaleDateString("en-US", { month: "short", timeZone: "UTC" }),
+      start,
+      end
+    };
+  });
+}
+
+function frameworkWeekPeriods(referenceDate: Date) {
+  const currentWeekStart = startOfWeekMonday(referenceDate);
+  return [3, 2, 1, 0].map((offset) => {
+    const start = addDays(currentWeekStart, -offset * 7);
+    const end = addDays(start, 6);
+    return {
+      key: `w-${formatDateKey(start)}`,
+      label: `${isoWeekLabel(start)} ${formatDisplayDate(start).slice(0, 5)} - ${formatDisplayDate(end).slice(0, 5)}`,
+      start,
+      end
+    };
+  });
+}
+
+function isoWeekLabel(date: Date) {
+  const target = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const dayNumber = target.getUTCDay() || 7;
+  target.setUTCDate(target.getUTCDate() + 4 - dayNumber);
+  const yearStart = new Date(Date.UTC(target.getUTCFullYear(), 0, 1));
+  const weekNumber = Math.ceil((((target.getTime() - yearStart.getTime()) / 86_400_000) + 1) / 7);
+  return `W${String(weekNumber).padStart(2, "0")}`;
+}
+
+async function calculateFrameworkLatency(employees: PerformanceEmployee[], period: Period) {
+  const employeeIds = employees.map((employee) => employee.id);
+  if (!employeeIds.length) return new Map<FrameworkGroupKey, number>();
+  const employeeById = new Map(employees.map((employee) => [employee.id, employee]));
+  const records = await prisma.productionRecord.findMany({
+    where: { employeeId: { in: employeeIds }, bzDay: { gte: period.start, lte: period.end } },
+    select: { employeeId: true, latencyMinutesSum: true, submitNum: true }
+  });
+  const grouped = new Map<FrameworkGroupKey, { latencyMinutesSum: number; submitTotal: number }>();
+  for (const record of records) {
+    const employee = record.employeeId ? employeeById.get(record.employeeId) : null;
+    if (!employee) continue;
+    for (const group of frameworkGroupsForEmployee(employee)) {
+      const current = grouped.get(group) ?? { latencyMinutesSum: 0, submitTotal: 0 };
+      current.latencyMinutesSum += Number(record.latencyMinutesSum ?? 0);
+      current.submitTotal += Number(record.submitNum ?? 0);
+      grouped.set(group, current);
+    }
+  }
+  return new Map(Array.from(grouped.entries()).map(([key, value]) => [key, value.submitTotal > 0 ? value.latencyMinutesSum / value.submitTotal : 0]));
+}
+
+function calculateFrameworkMetric(metric: FrameworkMetricDefinition, rows: AgentPerformanceRow[], latency: Map<FrameworkGroupKey, number>, employees: PerformanceEmployee[], period: Period) {
+  if (metric.source === "empty") return null;
+  if (metric.source === "hc") return frameworkHeadcount(employees, metric.group, period.end);
+  if (metric.source === "attrition") return frameworkAttrition(employees, metric.group, period);
+  if (metric.source === "latency") return latency.get(metric.group) ?? 0;
+  const groupRows = rows.filter((row) => frameworkRowMatchesGroup(row, metric.group));
+  const summary = summarizeRows(groupRows, period);
+  if (metric.source === "abs") return summary.abs;
+  if (metric.source === "quality") return summary.qualityTotal > 0 ? summary.quality : null;
+  if (metric.source === "aht") return summary.submitTotal > 0 ? summary.ahtSeconds : null;
+  if (metric.source === "cpd") return summary.submit;
+  if (metric.source === "moderationRate") {
+    const plannedSeconds = summary.scheduledDays * DEFAULT_FRAMEWORK_PRODUCTIVE_SECONDS;
+    return plannedSeconds > 0 ? percent(summary.moderationSeconds, plannedSeconds) : null;
+  }
+  return null;
+}
+
+const DEFAULT_FRAMEWORK_PRODUCTIVE_SECONDS = 8 * 60 * 60;
+
+function frameworkHeadcount(employees: PerformanceEmployee[], group: FrameworkGroupKey, referenceDate: Date) {
+  return employees.filter((employee) => frameworkEmployeeMatchesGroup(employee, group) && isFrameworkActiveAt(employee, referenceDate)).length;
+}
+
+function frameworkAttrition(employees: PerformanceEmployee[], group: FrameworkGroupKey, period: Period) {
+  const headcountAtStart = frameworkHeadcount(employees, group, period.start);
+  const terminations = employees.filter((employee) => {
+    if (!frameworkEmployeeMatchesGroup(employee, group) || !employee.terminationDate) return false;
+    return isDateInRange(employee.terminationDate, period.start, period.end);
+  }).length;
+  return percent(terminations, headcountAtStart);
+}
+
+function isFrameworkActiveAt(employee: PerformanceEmployee, referenceDate: Date) {
+  if (employee.admissionDate && employee.admissionDate.getTime() > referenceDate.getTime()) return false;
+  if (employee.terminationDate && employee.terminationDate.getTime() <= referenceDate.getTime()) return false;
+  if (!employee.terminationDate && isOperationallyTerminated(employee.operationalStatus)) return false;
+  return true;
+}
+
+function frameworkRowMatchesGroup(row: Pick<AgentPerformanceRow, "lob" | "skill">, group: FrameworkGroupKey) {
+  return frameworkGroupKeys(row.lob, row.skill).includes(group);
+}
+
+function frameworkEmployeeMatchesGroup(employee: Pick<PerformanceEmployee, "lob" | "skill">, group: FrameworkGroupKey) {
+  return frameworkGroupsForEmployee(employee).includes(group);
+}
+
+function frameworkGroupsForEmployee(employee: Pick<PerformanceEmployee, "lob" | "skill">) {
+  return frameworkGroupKeys(employee.lob?.name ?? "", employee.skill ?? "");
+}
+
+function frameworkGroupKeys(lobName?: string | null, skill?: string | null): FrameworkGroupKey[] {
+  const lob = normalizeTextToken(lobName ?? "");
+  const normalizedSkill = normalizeTextToken(skill ?? "");
+  if (lob === "ads") return ["ADS"];
+  if (lob === "cec") return ["CEC"];
+  const isVideo = lob === "video" || normalizedSkill.includes("video");
+  const isComments = lob === "comments" || normalizedSkill.includes("comments");
+  if (lob === "tns" || isVideo || isComments) {
+    const groups: FrameworkGroupKey[] = ["TNS"];
+    if (isVideo) groups.push("TNS_VIDEO");
+    if (isComments) groups.push("TNS_COMMENTS");
+    return groups;
+  }
+  return [];
+}
+
+function frameworkStatus(value?: number | null, target?: number | null, direction?: FrameworkTargetDirection | null): FrameworkStatus {
+  if (value === null || value === undefined || target === null || target === undefined || !direction) return "neutral";
+  return direction === "gte" ? (value >= target ? "ok" : "fail") : (value <= target ? "ok" : "fail");
+}
+
+function formatFrameworkValue(value: number | null, kind: FrameworkMetricKind) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "-";
+  if (kind === "percent") return `${Number(value).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+  if (kind === "seconds") return Number(value).toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  if (kind === "minutes" || kind === "hours") return Number(value).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return Number(value).toLocaleString("pt-BR", { maximumFractionDigits: 0 });
 }
 
 function filterRowsByWfhStatus(rows: AgentPerformanceRow[], filter?: string) {

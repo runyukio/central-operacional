@@ -32,7 +32,7 @@ export async function GET(request: Request) {
 }
 
 function readView(value: string | null): PerformanceQuery["view"] {
-  return value === "wfh" || value === "mine" ? value : undefined;
+  return value === "wfh" || value === "mine" || value === "framework" ? value : undefined;
 }
 
 function readSortBy(value: string | null): PerformanceQuery["sortBy"] {

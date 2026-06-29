@@ -168,6 +168,11 @@ export function canAccessPerformanceWfh(user: PermissionUser) {
   return ["coordenador", "coordenadora", "gerente", "manager", "management"].includes(title);
 }
 
+export function canAccessPerformanceFramework(user: PermissionUser) {
+  const role = normalizeRole(user.role);
+  return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM", "CLIENT"].includes(role);
+}
+
 export function canImportPerformance(user: PermissionUser) {
   const role = normalizeRole(user.role);
   return isActiveUser(user) && ["ADMIN", "WFM"].includes(role);
