@@ -306,20 +306,25 @@ function realtimeRetentionCutoff() {
 
 async function pruneRealtimeHistory(currentBatchId?: string) {
   try {
-    const staleBatches = await prisma.realTimeImportBatch.findMany({
-      where: {
-        importedAt: { lt: realtimeRetentionCutoff() },
-        ...(currentBatchId ? { id: { not: currentBatchId } } : {})
-      },
-      select: { id: true },
-      take: 500
-    });
-    const staleIds = staleBatches.map((batch) => batch.id);
-    if (!staleIds.length) return;
-    await prisma.$transaction([
-      prisma.realTimeRecord.deleteMany({ where: { batchId: { in: staleIds } } }),
-      prisma.realTimeImportBatch.deleteMany({ where: { id: { in: staleIds } } })
-    ]);
+    while (true) {
+      const staleBatches = await prisma.realTimeImportBatch.findMany({
+        where: {
+          importedAt: { lt: realtimeRetentionCutoff() },
+          ...(currentBatchId ? { id: { not: currentBatchId } } : {})
+        },
+        select: { id: true },
+        take: 500
+      });
+      const staleIds = staleBatches.map((batch) => batch.id);
+      if (!staleIds.length) return;
+
+      await prisma.$transaction([
+        prisma.realTimeAgentCycleSummary.deleteMany({ where: { batchId: { in: staleIds } } }),
+        prisma.realTimeQueueCycleSummary.deleteMany({ where: { batchId: { in: staleIds } } }),
+        prisma.realTimeRecord.deleteMany({ where: { batchId: { in: staleIds } } }),
+        prisma.realTimeImportBatch.deleteMany({ where: { id: { in: staleIds } } })
+      ]);
+    }
   } catch (error) {
     console.warn("[realtime] Não foi possível limpar histórico antigo.", error);
   }
