@@ -483,7 +483,6 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     }
     const nextStatus = clean(input.operationalStatus);
     const inferredUserStatus = actorIsAdmin && nextStatus ? userStatusFromOperationalStatus(nextStatus) : undefined;
-    const effectiveUserStatus = inferredUserStatus === "INACTIVE" ? "INACTIVE" : nextUserStatus ?? inferredUserStatus;
     const nextRoleName = clean(input.roleName);
     const nextSupervisorId = cleanNullable(input.supervisorId);
     const nextLobId = clean(input.lobId);
@@ -503,6 +502,8 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     if ("error" in nextWorkEndTime) return createValidationError({ workEndTime: nextWorkEndTime.error });
     const nextTerminationDate = parseDateInput(input.terminationDate, "Data de desligamento inválida.");
     if ("error" in nextTerminationDate) return createValidationError({ terminationDate: nextTerminationDate.error });
+    const inferredTerminationUserStatus = actorIsAdmin && isPastOrTodaySaoPaulo(nextTerminationDate.value) ? "INACTIVE" : undefined;
+    const effectiveUserStatus = inferredUserStatus === "INACTIVE" || inferredTerminationUserStatus === "INACTIVE" ? "INACTIVE" : nextUserStatus ?? inferredUserStatus ?? inferredTerminationUserStatus;
     const nextTerminationType = normalizeTerminationType(input.terminationType);
     if (input.terminationType !== undefined && nextTerminationType === undefined && clean(input.terminationType)) {
       return createValidationError({ terminationType: "Tipo de desligamento inválido. Use Voluntário ou Involuntário." });
@@ -1727,6 +1728,18 @@ function userStatusFromOperationalStatus(value: unknown): UserStatus | undefined
   if (inactiveEmployeeStatusTokens.has(token)) return "INACTIVE";
   if (activeEmployeeStatusTokens.has(token)) return "ACTIVE";
   return undefined;
+}
+
+function isPastOrTodaySaoPaulo(date?: Date | null) {
+  if (!date || Number.isNaN(date.getTime())) return false;
+  const dateKey = date.toISOString().slice(0, 10);
+  const todayKey = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(new Date());
+  return dateKey <= todayKey;
 }
 
 function parseDateInput(value: unknown, error: string): { value?: Date | null } | { error: string } {

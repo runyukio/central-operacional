@@ -488,6 +488,50 @@ function employeeStatusKey(value: string) {
     .replace(/^_+|_+$/g, "");
 }
 
+const employeeInactiveAccessStatusKeys = new Set([
+  "INACTIVE",
+  "INATIVO",
+  "INATIVA",
+  "DESATIVADO",
+  "DESATIVADA",
+  "DESLIGADO",
+  "DESLIGADA",
+  "DESLIGADO_EM_TREINAMENTO",
+  "DESLIGADA_EM_TREINAMENTO",
+  "DESLIGADO_TREINAMENTO",
+  "DESLIGADA_TREINAMENTO",
+  "TERMINATED",
+  "DISABLED"
+]);
+
+function isInactiveEmployeeAccessStatus(value?: string | null) {
+  return employeeInactiveAccessStatusKeys.has(employeeStatusKey(value ?? ""));
+}
+
+function employeeAccessStatusFromProfile(status?: string | null, userStatusRaw?: string | null, terminationDateIso?: string | null, userStatusLabel?: string | null) {
+  const accessKey = employeeStatusKey(userStatusRaw ?? userStatusLabel ?? "");
+  if (isInactiveEmployeeAccessStatus(status) || isPastOrTodayDateInput(terminationDateIso)) return "INACTIVE";
+  if (accessKey === "BLOCKED" || accessKey === "BLOQUEADO" || accessKey === "SUSPENSO") return "BLOCKED";
+  if (accessKey === "INACTIVE" || accessKey === "INATIVO" || accessKey === "INATIVA") return "INACTIVE";
+  return "ACTIVE";
+}
+
+function isPastOrTodayDateInput(value?: string | null) {
+  if (!value) return false;
+  const dateKey = String(value).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return false;
+  return dateKey <= todayDateInput();
+}
+
+function todayDateInput() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(new Date());
+}
+
 function scheduleEmployeeStatusBadge(status?: string | null) {
   const label = employeeMapStatusLabel(String(status ?? "")).trim();
   const key = employeeStatusKey(label);
@@ -9717,7 +9761,7 @@ export function EmployeeMapPage() {
     setNameDraft(selected.name ?? "");
     setSocialNameDraft(selected.socialName ?? "");
     setEmailDraft(selected.email ?? "");
-    setUserStatusDraft(selected.userStatusRaw ?? selected.userStatus ?? "ACTIVE");
+    setUserStatusDraft(employeeAccessStatusFromProfile(selected.status, selected.userStatusRaw, selected.terminationDateIso, selected.userStatus));
     setWbDraft(selected.wb ?? "");
     setRoleTitleDraft(selected.role ?? "");
     setStatusDraft(employeeMapStatusLabel(selected.status ?? ""));
@@ -10127,8 +10171,8 @@ export function EmployeeMapPage() {
                               onChange={(value) => {
                                 setStatusDraft(value);
                                 const normalized = employeeStatusKey(value);
-                                if (["INACTIVE", "INATIVO", "INATIVA", "DESATIVADO", "DESATIVADA", "DESLIGADO", "DESLIGADA", "DESLIGADO_EM_TREINAMENTO", "DESLIGADA_EM_TREINAMENTO"].includes(normalized)) setUserStatusDraft("INACTIVE");
-                                if (["ACTIVE", "ATIVO", "ATIVA"].includes(normalized) && userStatusDraft !== "BLOCKED") setUserStatusDraft("ACTIVE");
+                                if (isInactiveEmployeeAccessStatus(normalized)) setUserStatusDraft("INACTIVE");
+                                if (["ACTIVE", "ATIVO", "ATIVA"].includes(normalized) && userStatusDraft !== "BLOCKED" && !isPastOrTodayDateInput(terminationDraft)) setUserStatusDraft("ACTIVE");
                               }}
                               error={employeeFieldErrors.operationalStatus}
                             />
@@ -10140,7 +10184,18 @@ export function EmployeeMapPage() {
                             {selectedCanEditPeopleData ? <FormInput label="Data de admissão" type="date" value={admissionDraft} onChange={setAdmissionDraft} error={employeeFieldErrors.admissionDate} /> : null}
                             {selectedCanEditEmployeeOperational ? <FormInput label="Data de início de Nesting" type="date" value={nestingStartDraft} onChange={setNestingStartDraft} error={employeeFieldErrors.nestingStartDate} /> : null}
                             {selectedCanEditEmployeeOperational ? <FormInput label="Data de Go Live" type="date" value={goLiveDraft} onChange={setGoLiveDraft} error={employeeFieldErrors.goLiveDate} /> : null}
-                            {selectedCanEditPeopleData ? <FormInput label="Data de desligamento" type="date" value={terminationDraft} onChange={setTerminationDraft} error={employeeFieldErrors.terminationDate} /> : null}
+                            {selectedCanEditPeopleData ? (
+                              <FormInput
+                                label="Data de desligamento"
+                                type="date"
+                                value={terminationDraft}
+                                onChange={(value) => {
+                                  setTerminationDraft(value);
+                                  if (isPastOrTodayDateInput(value)) setUserStatusDraft("INACTIVE");
+                                }}
+                                error={employeeFieldErrors.terminationDate}
+                              />
+                            ) : null}
                             {selectedCanEditPeopleData ? <FormSelect label="Tipo de desligamento" value={terminationTypeDraft} options={terminationTypeOptions} onChange={setTerminationTypeDraft} error={employeeFieldErrors.terminationType} /> : null}
                             {selectedCanEditPeopleData ? <FormInput label="Motivo do desligamento" value={terminationReasonDraft} onChange={setTerminationReasonDraft} error={employeeFieldErrors.terminationReason} /> : null}
                             {isAdmin ? <FormSelect label="Usuário ativo/inativo" value={userStatusDraft} options={["ACTIVE", "INACTIVE", "BLOCKED"]} onChange={setUserStatusDraft} error={employeeFieldErrors.userStatus} /> : null}
