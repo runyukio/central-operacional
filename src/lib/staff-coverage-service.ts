@@ -15,7 +15,7 @@ const productiveShiftCategories = ["Manhã", "Tarde", "Noite"] as const;
 type ProductiveShiftCategory = (typeof productiveShiftCategories)[number];
 const coverageExportLimit = 10000;
 
-const coverageStatuses = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "ATRASO", "SAIDA_ANTECIPADA", "VENDA_FOLGA_APROVADA"]);
+const coverageStatuses = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "NESTING", "ATRASO", "SAIDA_ANTECIPADA", "VENDA_FOLGA_APROVADA"]);
 const statusLabels: Record<string, string> = {
   ESCALADO: "Escalado",
   PRESENTE: "Presente",
