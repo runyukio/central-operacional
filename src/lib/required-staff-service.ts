@@ -10,7 +10,7 @@ import { shiftCategoryName, shiftLookupKey } from "@/lib/shift-display";
 
 const productiveShiftCategories = ["Manhã", "Tarde", "Noite"] as const;
 const requiredLobs = ["ADS", "CEC", "TNS"] as const;
-const coverageStatuses = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "NESTING", "TROCA_APROVADA", "VENDA_FOLGA_APROVADA"]);
+const coverageStatuses = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "TROCA_APROVADA", "VENDA_FOLGA_APROVADA"]);
 const unavailableEmployeeTokens = new Set([
   "afastado",
   "afastada",
@@ -172,7 +172,7 @@ function scheduleMatchesStaffCoverage(schedule: StaffSchedule, query: RequiredSt
   const lob = canonicalLob(schedule.coverageLobName);
   if (!role) return false;
   if (role !== "RTA" && !lob) return false;
-  if (!coverageStatuses.has(schedule.status)) return false;
+  if (!scheduleCountsAsStaffCoverage(schedule)) return false;
   if (!isEmployeeAvailable(schedule.employee.operationalStatus)) return false;
   if (schedule.employee.terminationDate && formatDateKey(schedule.date) >= formatDateKey(schedule.employee.terminationDate)) return false;
 
@@ -393,6 +393,20 @@ function formatStaffPerson(schedule: StaffSchedule): RequiredStaffPersonWithDate
     date: formatDateKey(schedule.date),
     scheduleStatus: statusLabel(schedule.status)
   };
+}
+
+function scheduleCountsAsStaffCoverage(schedule: StaffSchedule) {
+  if (coverageStatuses.has(schedule.status)) return true;
+  return schedule.status === "NESTING" && isVideoOrCommentsSchedule(schedule);
+}
+
+function isVideoOrCommentsSchedule(schedule: StaffSchedule) {
+  const key = lookupKey([
+    schedule.employee.skill,
+    schedule.coverageLobName,
+    schedule.employee.lob.name
+  ].filter(Boolean).join(" "));
+  return key.includes("VIDEO") || key.includes("COMMENT");
 }
 
 function classifyStaffBySkill(skill?: string | null): StaffRole | null {

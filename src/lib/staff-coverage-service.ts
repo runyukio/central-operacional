@@ -15,7 +15,7 @@ const productiveShiftCategories = ["Manhã", "Tarde", "Noite"] as const;
 type ProductiveShiftCategory = (typeof productiveShiftCategories)[number];
 const coverageExportLimit = 10000;
 
-const coverageStatuses = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "NESTING", "ATRASO", "SAIDA_ANTECIPADA", "VENDA_FOLGA_APROVADA"]);
+const coverageStatuses = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "ATRASO", "SAIDA_ANTECIPADA", "VENDA_FOLGA_APROVADA"]);
 const statusLabels: Record<string, string> = {
   ESCALADO: "Escalado",
   PRESENTE: "Presente",
@@ -736,7 +736,7 @@ async function listCoverageSchedules(period: { startDate: Date; endDate: Date },
 
 function scheduleMatchesFilters(schedule: StaffCoverageSchedule, query: StaffCoverageQuery) {
   if (!isAgentJobTitle(schedule.employee.roleTitle)) return false;
-  if (!isCoverageEmployeeActive(schedule.employee.operationalStatus)) return false;
+  if (!scheduleEmployeeCountsAsActive(schedule)) return false;
   if (!scheduleCountsAsCoverage(schedule)) return false;
 
   const lob = schedule.coverageLobName;
@@ -772,7 +772,26 @@ function scheduleCountsAsCoverage(schedule: StaffCoverageSchedule) {
   const shift = scheduleShiftCategory(schedule);
   if (!isProductiveShift(shift)) return false;
   if (coverageStatuses.has(schedule.status)) return true;
+  if (schedule.status === "NESTING") return isVideoOrCommentsSchedule(schedule);
   return schedule.status === "TROCA_APROVADA" && isProductiveShift(shift);
+}
+
+function scheduleEmployeeCountsAsActive(schedule: StaffCoverageSchedule) {
+  if (isCoverageEmployeeActive(schedule.employee.operationalStatus)) return true;
+  return isOperationalNesting(schedule.employee.operationalStatus) && schedule.status === "NESTING" && isVideoOrCommentsSchedule(schedule);
+}
+
+function isVideoOrCommentsSchedule(schedule: StaffCoverageSchedule) {
+  const key = lookupKey([
+    schedule.employee.skill,
+    schedule.coverageLobName,
+    schedule.employee.lob.name
+  ].filter(Boolean).join(" "));
+  return key.includes("VIDEO") || key.includes("COMMENT");
+}
+
+function isOperationalNesting(status?: string | null) {
+  return normalizeComparableJobTitle(status) === "nesting";
 }
 
 function scheduleKeyFromSchedule(schedule: StaffCoverageSchedule) {

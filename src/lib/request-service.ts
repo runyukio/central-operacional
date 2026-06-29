@@ -12,7 +12,7 @@ import { applyApprovedMonthlyAdvanceChange, isMonthlyAdvanceRequestPayload } fro
 import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import { prisma } from "@/lib/prisma";
 import { canApproveRequest, normalizeRole } from "@/lib/permissions";
-import { cleanShiftName, shiftCategoryName } from "@/lib/shift-display";
+import { cleanShiftName, shiftCategoryName, shiftLookupKey } from "@/lib/shift-display";
 
 const uiToDbStatus = {
   Aberto: "ABERTO",
@@ -1888,6 +1888,7 @@ async function countAvailableCoverageForImpact(date: Date, lobId: string, shift:
       employee: {
         select: {
           roleTitle: true,
+          skill: true,
           operationalStatus: true,
           lob: { select: { id: true, name: true } },
           shift: { select: { id: true, name: true } }
@@ -1899,7 +1900,7 @@ async function countAvailableCoverageForImpact(date: Date, lobId: string, shift:
     const scheduleLobId = schedule.lobId ?? schedule.employee.lob.id;
     if (scheduleLobId !== lobId) return false;
     if (!isAgentJobTitle(schedule.employee.roleTitle)) return false;
-    if (!isCoverageEmployeeActiveForImpact(schedule.employee.operationalStatus)) return false;
+    if (!scheduleEmployeeCountsAsActiveForImpact(schedule)) return false;
     if (scheduleShiftCategoryForImpact(schedule, schedule.employee.shift?.name) !== shift) return false;
     return scheduleCountsAsCoverageForImpact(schedule, shift);
   }).length;
@@ -1919,11 +1920,31 @@ function normalizeProductiveShiftForImpact(value?: string | null) {
   return (productiveShiftCategories as readonly string[]).includes(shift) ? shift : "";
 }
 
-function scheduleCountsAsCoverageForImpact(schedule: { status: ScheduleStatus; shift?: { name: string } | null; employee?: { shift?: { name: string } | null } }, shiftOverride?: string | null) {
+function scheduleCountsAsCoverageForImpact(schedule: { status: ScheduleStatus; shift?: { name: string } | null; employee?: { skill?: string | null; lob?: { name: string } | null; shift?: { name: string } | null } }, shiftOverride?: string | null) {
   const shift = normalizeProductiveShiftForImpact(shiftOverride ?? schedule.shift?.name ?? schedule.employee?.shift?.name);
   if (!shift) return false;
   if (coverageStatuses.has(schedule.status)) return true;
+  if (schedule.status === "NESTING") return isVideoOrCommentsScheduleForImpact(schedule);
   return schedule.status === "TROCA_APROVADA";
+}
+
+function scheduleEmployeeCountsAsActiveForImpact(schedule: { status: ScheduleStatus; employee: { skill?: string | null; operationalStatus?: string | null; lob?: { name: string } | null } }) {
+  if (isCoverageEmployeeActiveForImpact(schedule.employee.operationalStatus)) return true;
+  return isOperationalNestingForImpact(schedule.employee.operationalStatus) && schedule.status === "NESTING" && isVideoOrCommentsScheduleForImpact(schedule);
+}
+
+function isVideoOrCommentsScheduleForImpact(schedule: { employee?: { skill?: string | null; lob?: { name: string } | null } }) {
+  const key = shiftLookupKey([schedule.employee?.skill, schedule.employee?.lob?.name].filter(Boolean).join(" "));
+  return key.includes("VIDEO") || key.includes("COMMENT");
+}
+
+function isOperationalNestingForImpact(value?: string | null) {
+  const normalized = String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+  return normalized === "nesting";
 }
 
 function isScheduleDayOffStatus(status?: ScheduleStatus | null) {
