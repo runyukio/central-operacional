@@ -787,7 +787,7 @@ function isVideoOrCommentsSchedule(schedule: StaffCoverageSchedule) {
     schedule.coverageLobName,
     schedule.employee.lob.name
   ].filter(Boolean).join(" "));
-  return key.includes("VIDEO") || key.includes("COMMENT");
+  return key.includes("VIDEO") || key.includes("COMMENT") || key.includes("TNS");
 }
 
 function isOperationalNesting(status?: string | null) {

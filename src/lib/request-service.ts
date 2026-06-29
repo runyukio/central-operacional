@@ -1935,7 +1935,7 @@ function scheduleEmployeeCountsAsActiveForImpact(schedule: { status: ScheduleSta
 
 function isVideoOrCommentsScheduleForImpact(schedule: { employee?: { skill?: string | null; lob?: { name: string } | null } }) {
   const key = shiftLookupKey([schedule.employee?.skill, schedule.employee?.lob?.name].filter(Boolean).join(" "));
-  return key.includes("VIDEO") || key.includes("COMMENT");
+  return key.includes("VIDEO") || key.includes("COMMENT") || key.includes("TNS");
 }
 
 function isOperationalNestingForImpact(value?: string | null) {

@@ -406,7 +406,7 @@ function isVideoOrCommentsSchedule(schedule: StaffSchedule) {
     schedule.coverageLobName,
     schedule.employee.lob.name
   ].filter(Boolean).join(" "));
-  return key.includes("VIDEO") || key.includes("COMMENT");
+  return key.includes("VIDEO") || key.includes("COMMENT") || key.includes("TNS");
 }
 
 function classifyStaffBySkill(skill?: string | null): StaffRole | null {
