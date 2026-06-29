@@ -482,6 +482,8 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
       return createPermissionError("RH pode alterar cargo/função apenas dentro do grupo Agente.");
     }
     const nextStatus = clean(input.operationalStatus);
+    const inferredUserStatus = actorIsAdmin && nextStatus ? userStatusFromOperationalStatus(nextStatus) : undefined;
+    const effectiveUserStatus = inferredUserStatus === "INACTIVE" ? "INACTIVE" : nextUserStatus ?? inferredUserStatus;
     const nextRoleName = clean(input.roleName);
     const nextSupervisorId = cleanNullable(input.supervisorId);
     const nextLobId = clean(input.lobId);
@@ -566,6 +568,10 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
       targetRoleId = targetRole.id;
     }
     if (nextUserStatus && !["ACTIVE", "INACTIVE", "BLOCKED"].includes(nextUserStatus)) return createValidationError({ userStatus: "Status de acesso inválido." });
+    if (effectiveUserStatus && employee.userId && employee.userId === user.id && employee.user?.role?.name === "ADMIN" && effectiveUserStatus !== "ACTIVE") {
+      const activeAdmins = await prisma.user.count({ where: { status: "ACTIVE", deletedAt: null, role: { name: "ADMIN" }, id: { not: employee.userId } } });
+      if (activeAdmins <= 0) return createPermissionError("Não é permitido inativar o único Admin ativo.");
+    }
     if (nextWbLogin && nextWbLogin !== employee.wbLogin) {
       const duplicatedWb = await prisma.employeeProfile.findFirst({ where: { wbLogin: nextWbLogin, deletedAt: null, id: { not: employee.id } } });
       if (duplicatedWb) return createDuplicateError("Já existe um colaborador com este WB/Login.", { wbLogin: "Este WB/Login já está em uso." });
@@ -597,14 +603,14 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     }
 
     const updated = await prisma.$transaction(async (tx) => {
-      if (employee.userId && (targetRoleId || nextEmail || nextUserStatus)) {
+      if (employee.userId && (targetRoleId || nextEmail || effectiveUserStatus)) {
         await tx.user.update({
           where: { id: employee.userId },
           data: {
             ...(targetRoleId ? { roleId: targetRoleId } : {}),
             ...(nextEmail ? { email: nextEmail } : {}),
             ...(nextFullName ? { name: nextFullName } : {}),
-            ...(nextUserStatus ? { status: nextUserStatus } : {})
+            ...(effectiveUserStatus ? { status: effectiveUserStatus } : {})
           }
         });
       }
@@ -1564,8 +1570,12 @@ const inactiveEmployeeStatusTokens = new Set([
   "INATIVO",
   "INATIVA",
   "OFFLINE",
+  "DESATIVADO",
+  "DESATIVADA",
+  "DISABLED",
   "DESLIGADO",
   "DESLIGADA",
+  "TERMINATED",
   "DESLIGADO_EM_TREINAMENTO",
   "DESLIGADA_EM_TREINAMENTO",
   "DESLIGADO_TREINAMENTO",
@@ -1687,18 +1697,36 @@ function cleanNullable(value: unknown) {
 }
 
 function normalizeUserStatus(value: unknown): UserStatus | undefined {
-  const next = clean(value);
+  const next = normalizeStatusToken(value);
   if (!next) return undefined;
   const map: Record<string, UserStatus> = {
     ACTIVE: "ACTIVE",
     ATIVO: "ACTIVE",
     INACTIVE: "INACTIVE",
     INATIVO: "INACTIVE",
+    INATIVA: "INACTIVE",
+    DESATIVADO: "INACTIVE",
+    DESATIVADA: "INACTIVE",
+    DESLIGADO: "INACTIVE",
+    DESLIGADA: "INACTIVE",
+    DISABLED: "INACTIVE",
+    TERMINATED: "INACTIVE",
+    CANCELLED: "INACTIVE",
+    CANCELADO: "INACTIVE",
+    CANCELADA: "INACTIVE",
     BLOCKED: "BLOCKED",
     BLOQUEADO: "BLOCKED",
     SUSPENSO: "BLOCKED"
   };
-  return map[next.toUpperCase()];
+  return map[next];
+}
+
+function userStatusFromOperationalStatus(value: unknown): UserStatus | undefined {
+  const token = normalizeStatusToken(value);
+  if (!token) return undefined;
+  if (inactiveEmployeeStatusTokens.has(token)) return "INACTIVE";
+  if (activeEmployeeStatusTokens.has(token)) return "ACTIVE";
+  return undefined;
 }
 
 function parseDateInput(value: unknown, error: string): { value?: Date | null } | { error: string } {

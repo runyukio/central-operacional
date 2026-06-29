@@ -882,6 +882,7 @@ type EmployeeClient = (typeof employees)[number] & {
   email?: string;
   userId?: string;
   userStatus?: string;
+  userStatusRaw?: string;
   systemRole?: string;
   socialName?: string;
   team?: string;
@@ -9716,7 +9717,7 @@ export function EmployeeMapPage() {
     setNameDraft(selected.name ?? "");
     setSocialNameDraft(selected.socialName ?? "");
     setEmailDraft(selected.email ?? "");
-    setUserStatusDraft(selected.userStatus ?? "ACTIVE");
+    setUserStatusDraft(selected.userStatusRaw ?? selected.userStatus ?? "ACTIVE");
     setWbDraft(selected.wb ?? "");
     setRoleTitleDraft(selected.role ?? "");
     setStatusDraft(employeeMapStatusLabel(selected.status ?? ""));
@@ -10119,7 +10120,18 @@ export function EmployeeMapPage() {
                             ) : null}
                             <FormInput label="Horário de entrada" value={workStartTimeDraft} onChange={setWorkStartTimeDraft} error={employeeFieldErrors.workStartTime} />
                             <FormInput label="Horário de saída" value={workEndTimeDraft} onChange={setWorkEndTimeDraft} error={employeeFieldErrors.workEndTime} />
-                            <FormSelect label="Status do colaborador" value={statusDraft} options={operationalStatusOptions} onChange={setStatusDraft} error={employeeFieldErrors.operationalStatus} />
+                            <FormSelect
+                              label="Status do colaborador"
+                              value={statusDraft}
+                              options={operationalStatusOptions}
+                              onChange={(value) => {
+                                setStatusDraft(value);
+                                const normalized = employeeStatusKey(value);
+                                if (["INACTIVE", "INATIVO", "INATIVA", "DESATIVADO", "DESATIVADA", "DESLIGADO", "DESLIGADA", "DESLIGADO_EM_TREINAMENTO", "DESLIGADA_EM_TREINAMENTO"].includes(normalized)) setUserStatusDraft("INACTIVE");
+                                if (["ACTIVE", "ATIVO", "ATIVA"].includes(normalized) && userStatusDraft !== "BLOCKED") setUserStatusDraft("ACTIVE");
+                              }}
+                              error={employeeFieldErrors.operationalStatus}
+                            />
                           </div>
                         </ProfileSection>
                         <ProfileSection title="Contrato e Datas">
