@@ -877,7 +877,7 @@ function permissionUser(user: AuthenticatedUser) {
 export function getQualityRuleByEmployee(employee?: { lob?: { name?: string | null } | null } | null): QualityRule {
   const lobName = employee?.lob?.name?.trim().toLowerCase();
   if (!lobName) return "UNKNOWN";
-  if (lobName === "ads") return "ADS_QUALITY";
+  if (lobName === "ads" || lobName === "project") return "ADS_QUALITY";
   if (["tns", "video", "comments"].includes(lobName)) return "TNS_QUALITY";
   if (lobName === "cec") return "CEC_QUALITY";
   return "UNKNOWN";

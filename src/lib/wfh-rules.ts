@@ -157,6 +157,7 @@ function isValid(value: number) {
 
 function normalizeLob(value: string) {
   const lob = value.trim().toLowerCase();
+  if (lob === "project") return "ads";
   if (lob === "video" || lob === "comments") return "tns";
   return lob;
 }
