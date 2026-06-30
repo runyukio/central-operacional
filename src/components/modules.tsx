@@ -12016,7 +12016,7 @@ export function PerformancePage() {
 
   const loadPerformance = useCallback(async () => {
     if (!sessionRole || shouldWaitForDefaultPerformanceTab) return;
-    const effectiveTab = isClientRole ? "wfh" : activeTab;
+    const effectiveTab = isClientRole && activeTab !== "framework" ? "wfh" : activeTab;
     setLoading(true);
     const params = new URLSearchParams({
       view: effectiveTab,
@@ -12226,36 +12226,33 @@ export function PerformancePage() {
         {canShowFramework ? <button onClick={() => setActiveTab("framework")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", visibleActiveTab === "framework" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>Framework</button> : null}
       </div>
 
-      <div className="rounded-xl border border-border bg-white p-2.5 shadow-sm">
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-[130px_130px_repeat(7,minmax(116px,1fr))_auto]">
-          <FormInput label="Data inicial" type="date" value={filters.startDate} onChange={(value) => updateFilter("startDate", value)} />
-          <FormInput label="Data final" type="date" value={filters.endDate} onChange={(value) => updateFilter("endDate", value)} />
-          {visibleActiveTab === "wfh" ? (
-            <>
-              <PerformanceSelect label="LOB" value={filters.lob} onChange={(value) => updateFilter("lob", value)} options={wfhPayload?.filters.lobs ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todas as LOBs" : value} />
-              <PerformanceSelect label="Supervisor" value={filters.supervisorId} onChange={(value) => updateFilter("supervisorId", value)} options={(wfhPayload?.filters.supervisors ?? [{ id: "Todos", name: "Todos os supervisores" }]).map((item) => item.id)} optionLabel={(value) => wfhPayload?.filters.supervisors.find((item) => item.id === value)?.name ?? value} />
-              <PerformanceSelect label="Agente" value={filters.employeeId} onChange={(value) => updateFilter("employeeId", value)} options={(wfhPayload?.filters.employees ?? [{ id: "Todos", name: "Todos os agentes", wbLogin: "" }]).map((item) => item.id)} optionLabel={(value) => {
-                const item = wfhPayload?.filters.employees.find((employee) => employee.id === value);
-                return item ? (item.wbLogin ? `${item.name} · ${item.wbLogin}` : item.name) : value;
-              }} />
-              <PerformanceSelect label="Cargo/Função" value={filters.role} onChange={(value) => updateFilter("role", value)} options={wfhPayload?.filters.roles ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todos os cargos" : value} />
-              <PerformanceSelect label="Skill" value={filters.skill} onChange={(value) => updateFilter("skill", value)} options={wfhPayload?.filters.skills ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todas as skills" : value === "SEM_SKILL" ? "Sem skill" : value} />
-              <PerformanceSelect label="Status do agente" value={filters.employeeStatus} onChange={(value) => updateFilter("employeeStatus", value)} options={["Todos", "Ativo", "Afastado", "Desligado"]} />
-              <PerformanceSelect label="WFH" value={filters.wfhStatus} onChange={(value) => updateFilter("wfhStatus", value)} options={["Todos", "Qualificado para Home", "Aguardando Validação", "Não Qualificado para Home", "Dados insuficientes", "Não aplicável"]} />
-            </>
-          ) : visibleActiveTab === "framework" ? (
-            <div className="flex items-end rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 sm:col-span-2 lg:col-span-2 2xl:col-span-7">
-              Framework usa a data final como referência para montar os últimos 3 meses e 4 semanas.
+      {visibleActiveTab !== "framework" ? (
+        <div className="rounded-xl border border-border bg-white p-2.5 shadow-sm">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-[130px_130px_repeat(7,minmax(116px,1fr))_auto]">
+            <FormInput label="Data inicial" type="date" value={filters.startDate} onChange={(value) => updateFilter("startDate", value)} />
+            <FormInput label="Data final" type="date" value={filters.endDate} onChange={(value) => updateFilter("endDate", value)} />
+            {visibleActiveTab === "wfh" ? (
+              <>
+                <PerformanceSelect label="LOB" value={filters.lob} onChange={(value) => updateFilter("lob", value)} options={wfhPayload?.filters.lobs ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todas as LOBs" : value} />
+                <PerformanceSelect label="Supervisor" value={filters.supervisorId} onChange={(value) => updateFilter("supervisorId", value)} options={(wfhPayload?.filters.supervisors ?? [{ id: "Todos", name: "Todos os supervisores" }]).map((item) => item.id)} optionLabel={(value) => wfhPayload?.filters.supervisors.find((item) => item.id === value)?.name ?? value} />
+                <PerformanceSelect label="Agente" value={filters.employeeId} onChange={(value) => updateFilter("employeeId", value)} options={(wfhPayload?.filters.employees ?? [{ id: "Todos", name: "Todos os agentes", wbLogin: "" }]).map((item) => item.id)} optionLabel={(value) => {
+                  const item = wfhPayload?.filters.employees.find((employee) => employee.id === value);
+                  return item ? (item.wbLogin ? `${item.name} · ${item.wbLogin}` : item.name) : value;
+                }} />
+                <PerformanceSelect label="Cargo/Função" value={filters.role} onChange={(value) => updateFilter("role", value)} options={wfhPayload?.filters.roles ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todos os cargos" : value} />
+                <PerformanceSelect label="Skill" value={filters.skill} onChange={(value) => updateFilter("skill", value)} options={wfhPayload?.filters.skills ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todas as skills" : value === "SEM_SKILL" ? "Sem skill" : value} />
+                <PerformanceSelect label="Status do agente" value={filters.employeeStatus} onChange={(value) => updateFilter("employeeStatus", value)} options={["Todos", "Ativo", "Afastado", "Desligado"]} />
+                <PerformanceSelect label="WFH" value={filters.wfhStatus} onChange={(value) => updateFilter("wfhStatus", value)} options={["Todos", "Qualificado para Home", "Aguardando Validação", "Não Qualificado para Home", "Dados insuficientes", "Não aplicável"]} />
+              </>
+            ) : <div className="hidden lg:block lg:col-span-2 2xl:col-span-7" />}
+            <div className="flex items-end justify-end gap-2 sm:col-span-2 lg:col-span-4 2xl:col-span-1">
+              <button onClick={() => void loadPerformance()} className="inline-flex h-9 items-center gap-2 rounded-lg bg-navy-950 px-3 text-xs font-extrabold text-white">
+                <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} /> Atualizar
+              </button>
+              {visibleActiveTab === "wfh" && wfhPayload?.canExport ? <button onClick={exportPerformance} className="premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold text-navy-950"><Download className="h-4 w-4" /> Exportar</button> : null}
             </div>
-          ) : <div className="hidden lg:block lg:col-span-2 2xl:col-span-7" />}
-          <div className="flex items-end justify-end gap-2 sm:col-span-2 lg:col-span-4 2xl:col-span-1">
-            <button onClick={() => void loadPerformance()} className="inline-flex h-9 items-center gap-2 rounded-lg bg-navy-950 px-3 text-xs font-extrabold text-white">
-              <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} /> Atualizar
-            </button>
-            {visibleActiveTab === "wfh" && wfhPayload?.canExport ? <button onClick={exportPerformance} className="premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold text-navy-950"><Download className="h-4 w-4" /> Exportar</button> : null}
           </div>
-        </div>
-        {visibleActiveTab === "wfh" ? (
+          {visibleActiveTab === "wfh" ? (
           <div className="mt-2 rounded-lg border border-dashed border-blue-200 bg-blue-50/50 p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
@@ -12288,8 +12285,9 @@ export function PerformancePage() {
               </div>
             ) : null}
           </div>
-        ) : null}
-      </div>
+          ) : null}
+        </div>
+      ) : null}
 
       {message ? <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
       {loading ? <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">Carregando Performance...</div> : null}
@@ -12336,14 +12334,6 @@ export function PerformancePage() {
 
       {frameworkPayload ? (
         <div className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-3">
-            <PerformanceMetricCard title="KPIs dentro da meta" value={frameworkPayload.summary.ok} helper="status verde no mês atual" icon={CheckCircle2} tone="green" />
-            <PerformanceMetricCard title="KPIs fora da meta" value={frameworkPayload.summary.fail} helper="status vermelho no mês atual" icon={XCircle} tone="red" />
-            <PerformanceMetricCard title="KPIs pendentes" value={frameworkPayload.summary.pending} helper="sem base ou sem target oficial" icon={AlertTriangle} tone="gold" />
-          </div>
-          <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs font-bold text-blue-700">
-            Framework operacional com 3 meses e 4 semanas até {formatDisplayDateFromIso(frameworkPayload.referenceDate)}. CSAT e FRT ficam pendentes até conectarmos a base oficial.
-          </div>
           {frameworkPayload.sections.map((section) => (
             <Panel key={section.key} title={`Framework ${section.title}`}>
               <PerformanceFrameworkTable
@@ -12542,27 +12532,34 @@ function PerformanceFrameworkTable({
 }) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[1040px] border-separate border-spacing-0 text-sm">
+      <table className="w-full min-w-[1180px] table-fixed border-separate border-spacing-0 text-center text-sm">
+        <colgroup>
+          <col className="w-[210px]" />
+          {monthPeriods.map((period) => <col key={`month-${period.key}`} className="w-[86px]" />)}
+          <col className="w-[78px]" />
+          <col className="w-[86px]" />
+          {weekPeriods.map((period) => <col key={`week-${period.key}`} className="w-[142px]" />)}
+        </colgroup>
         <thead>
           <tr className="bg-slate-100 text-xs font-black uppercase tracking-wide text-muted">
-            <th className="rounded-l-lg px-3 py-3 text-left">KPI</th>
-            {monthPeriods.map((period) => <th key={period.key} className="px-3 py-3 text-right">{period.label}</th>)}
+            <th className="rounded-l-lg px-3 py-3 text-center">KPI</th>
+            {monthPeriods.map((period) => <th key={period.key} className="px-3 py-3 text-center">{period.label}</th>)}
             <th className="px-3 py-3 text-center">Status</th>
-            <th className="px-3 py-3 text-right">Target</th>
-            {weekPeriods.map((period) => <th key={period.key} className="px-3 py-3 text-right">{period.label}</th>)}
+            <th className="px-3 py-3 text-center">Target</th>
+            {weekPeriods.map((period) => <th key={period.key} className="px-3 py-3 text-center">{period.label}</th>)}
           </tr>
         </thead>
         <tbody>
           {section.rows.map((row, index) => (
             <tr key={row.key} className={cn(index % 2 === 0 ? "bg-white" : "bg-slate-50/70")}>
-              <td className="border-b border-border px-3 py-3 font-extrabold text-navy-950">{row.label}</td>
+              <td className="border-b border-border px-3 py-3 text-center font-extrabold text-navy-950">{row.label}</td>
               {monthPeriods.map((period) => (
-                <td key={period.key} className="border-b border-border px-3 py-3 text-right font-bold text-navy-900">{formatPerformanceFrameworkValue(row.values[period.key], row.kind)}</td>
+                <td key={period.key} className="border-b border-border px-3 py-3 text-center font-bold text-navy-900">{formatPerformanceFrameworkValue(row.values[period.key], row.kind)}</td>
               ))}
               <td className="border-b border-border px-3 py-3 text-center"><PerformanceFrameworkStatusBadge status={row.status} /></td>
-              <td className="border-b border-border px-3 py-3 text-right font-bold text-muted">{row.targetLabel || "-"}</td>
+              <td className="border-b border-border px-3 py-3 text-center font-bold text-muted">{row.targetLabel || "-"}</td>
               {weekPeriods.map((period) => (
-                <td key={period.key} className="border-b border-border px-3 py-3 text-right font-bold text-navy-900">{formatPerformanceFrameworkValue(row.values[period.key], row.kind)}</td>
+                <td key={period.key} className="border-b border-border px-3 py-3 text-center font-bold text-navy-900">{formatPerformanceFrameworkValue(row.values[period.key], row.kind)}</td>
               ))}
             </tr>
           ))}

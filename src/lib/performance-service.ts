@@ -1417,19 +1417,6 @@ type FrameworkAggregate = {
 
 const frameworkSections: Array<{ key: "CEC" | "ADS" | "TNS"; title: string; metrics: FrameworkMetricDefinition[] }> = [
   {
-    key: "CEC",
-    title: "CEC",
-    metrics: [
-      { key: "cec-hc", label: "CEC HC", group: "CEC", kind: "number", source: "hc", target: 26, direction: "gte" },
-      { key: "cec-abs", label: "CEC ABS", group: "CEC", kind: "percent", source: "abs", target: 8, direction: "lte" },
-      { key: "cec-attrition", label: "CEC Attrition", group: "CEC", kind: "percent", source: "attrition", target: 10, direction: "lte" },
-      { key: "cec-csat", label: "CEC CSAT", group: "CEC", kind: "percent", source: "empty", target: 30, direction: "gte" },
-      { key: "cec-quality", label: "CEC Quality", group: "CEC", kind: "percent", source: "quality", target: 90, direction: "gte" },
-      { key: "cec-frt", label: "CEC FRT", group: "CEC", kind: "percent", source: "empty", target: 97, direction: "gte" },
-      { key: "cec-cpd", label: "CEC CPD", group: "CEC", kind: "number", source: "cpd", target: null }
-    ]
-  },
-  {
     key: "ADS",
     title: "ADS",
     metrics: [
@@ -1455,6 +1442,19 @@ const frameworkSections: Array<{ key: "CEC" | "ADS" | "TNS"; title: string; metr
       { key: "tns-quality", label: "TNS Quality", group: "TNS", kind: "percent", source: "quality", target: 98, direction: "gte" },
       { key: "tns-moderation", label: "TNS Moderation Time", group: "TNS", kind: "percent", source: "moderationRate", target: 60, direction: "gte" },
       { key: "tns-aht", label: "TNS AHT", group: "TNS", kind: "seconds", source: "aht", target: 32, direction: "lte" }
+    ]
+  },
+  {
+    key: "CEC",
+    title: "CEC",
+    metrics: [
+      { key: "cec-hc", label: "CEC HC", group: "CEC", kind: "number", source: "hc", target: 26, direction: "gte" },
+      { key: "cec-abs", label: "CEC ABS", group: "CEC", kind: "percent", source: "abs", target: 8, direction: "lte" },
+      { key: "cec-attrition", label: "CEC Attrition", group: "CEC", kind: "percent", source: "attrition", target: 10, direction: "lte" },
+      { key: "cec-csat", label: "CEC CSAT", group: "CEC", kind: "percent", source: "empty", target: 30, direction: "gte" },
+      { key: "cec-quality", label: "CEC Quality", group: "CEC", kind: "percent", source: "quality", target: 90, direction: "gte" },
+      { key: "cec-frt", label: "CEC FRT", group: "CEC", kind: "percent", source: "empty", target: 97, direction: "gte" },
+      { key: "cec-cpd", label: "CEC CPD", group: "CEC", kind: "number", source: "cpd", target: null }
     ]
   }
 ];
