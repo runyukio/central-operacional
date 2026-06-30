@@ -24,6 +24,11 @@ import { cn } from "@/lib/utils";
 
 type CountItem = { label: string; count: number };
 
+type RealtimeLatestCycleStatus = {
+  cycleDownload?: string;
+  importedAt?: string;
+} | null | undefined;
+
 type RealTimeRow = {
   id: string;
   rowNumber: number;
@@ -363,6 +368,7 @@ export function RealTimePage() {
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<"agents" | "queues" | "report">("agents");
   const [selectedCycle, setSelectedCycle] = useState("");
+  const [followLatestCycle, setFollowLatestCycle] = useState(true);
   const [queueFilters, setQueueFilters] = useState<QueueFilters>(defaultQueueFilters);
   const [reportLob, setReportLob] = useState<ReportLob>("ADS");
   const [reportSearch, setReportSearch] = useState("");
@@ -528,29 +534,60 @@ export function RealTimePage() {
     });
   }
 
+  function changeCycle(cycle: string, followLatest = false) {
+    setFollowLatestCycle(followLatest || !cycle || cycle === latestCycle);
+    setSelectedCycle(cycle);
+  }
+
+  async function refreshRealtimeSnapshot(background = true) {
+    try {
+      const view = activeTab === "agents" ? "agents" : activeTab === "report" ? "both" : "queues";
+      const params = new URLSearchParams({ view });
+      const response = await fetch(`/api/realtime/latest?${params.toString()}`, { cache: "no-store" });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.message || json.error || "Não foi possível verificar atualização do Real Time.");
+
+      const latestCycleDownload = pickLatestRealtimeCycle(
+        activeTab === "agents" ? json.data?.agents : activeTab === "queues" ? json.data?.queues : json.data?.queues ?? json.data?.agents,
+        activeTab === "report" ? json.data?.agents : null
+      );
+      const shouldFollowLatest = followLatestCycle || !selectedCycleValue;
+      const cycleToRefresh = shouldFollowLatest ? latestCycleDownload : selectedCycleValue;
+      if (!cycleToRefresh) return;
+
+      if (shouldFollowLatest && cycleToRefresh !== selectedCycleValue) {
+        setSelectedCycle(cycleToRefresh);
+        return;
+      }
+
+      await loadSnapshot(cycleToRefresh, background, view);
+    } catch (currentError) {
+      console.warn("[realtime] Auto-refresh falhou.", currentError);
+    }
+  }
+
   useEffect(() => {
     const interval = window.setInterval(async () => {
-      try {
-        const view = activeTab === "agents" ? "agents" : activeTab === "report" ? "both" : "queues";
-        const params = new URLSearchParams({ view });
-        const response = await fetch(`/api/realtime/latest?${params.toString()}`, { cache: "no-store" });
-        const json = await response.json();
-        if (!response.ok) throw new Error(json.message || json.error || "Não foi possível verificar atualização do Real Time.");
-        const latest = activeTab === "agents" ? json.data?.agents : json.data?.queues;
-        const latestCycleDownload = typeof latest?.cycleDownload === "string" ? latest.cycleDownload : "";
-        const cycleToRefresh = !selectedCycleValue || selectedCycleValue === latestCycle
-          ? latestCycleDownload
-          : selectedCycleValue;
-        if (!cycleToRefresh) return;
-
-        await loadSnapshot(cycleToRefresh, true, view);
-      } catch (currentError) {
-        console.warn("[realtime] Auto-refresh falhou.", currentError);
-      }
+      await refreshRealtimeSnapshot(true);
     }, 60000);
     return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, latestCycle, reportLob, selectedCycleValue]);
+  }, [activeTab, followLatestCycle, selectedCycleValue]);
+
+  useEffect(() => {
+    function refreshWhenVisible() {
+      if (document.hidden) return;
+      void refreshRealtimeSnapshot(true);
+    }
+
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, followLatestCycle, selectedCycleValue]);
 
   function updateAgentFilter(key: keyof AgentFilters, value: string) {
     setAgentFilters((current) => ({ ...current, [key]: value }));
@@ -594,7 +631,7 @@ export function RealTimePage() {
             <Download className="h-4 w-4" />
             {activeTab === "report" ? "Export XLSX" : "Exportar XLSX"}
           </button>
-          <button type="button" onClick={() => void loadSnapshot(selectedCycle, true)} className="premium-button inline-flex h-10 items-center gap-2 px-4 text-sm font-extrabold">
+          <button type="button" onClick={() => void refreshRealtimeSnapshot(true)} className="premium-button inline-flex h-10 items-center gap-2 px-4 text-sm font-extrabold">
             <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} />
             {activeTab === "report" ? "Refresh" : "Atualizar"}
           </button>
@@ -607,15 +644,15 @@ export function RealTimePage() {
         <div className="flex flex-wrap items-end gap-3">
           <label className="block min-w-[260px] flex-1 text-xs font-black uppercase tracking-wide text-muted">
             Ciclo
-            <RealtimeCyclePicker value={selectedCycleValue} cycles={cycles} onChange={setSelectedCycle} />
+            <RealtimeCyclePicker value={selectedCycleValue} cycles={cycles} onChange={(cycle) => changeCycle(cycle)} />
           </label>
-          <button type="button" onClick={() => setSelectedCycle(olderCycle)} disabled={!olderCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
+          <button type="button" onClick={() => changeCycle(olderCycle)} disabled={!olderCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
             {activeTab === "report" ? "Previous Cycle" : "Ciclo anterior"}
           </button>
-          <button type="button" onClick={() => setSelectedCycle(newerCycle)} disabled={!newerCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
+          <button type="button" onClick={() => changeCycle(newerCycle, newerCycle === latestCycle)} disabled={!newerCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
             {activeTab === "report" ? "Next Cycle" : "Próximo ciclo"}
           </button>
-          <button type="button" onClick={() => setSelectedCycle(latestCycle)} disabled={!latestCycle || selectedCycleValue === latestCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
+          <button type="button" onClick={() => changeCycle(latestCycle, true)} disabled={!latestCycle || selectedCycleValue === latestCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
             {activeTab === "report" ? "Current Cycle" : "Ciclo atual"}
           </button>
           <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-bold text-muted">
@@ -2992,6 +3029,17 @@ function formatDurationFromMs(value: number | null | undefined) {
   if (hours > 0) return `${hours}:${String(minutes).padStart(2, "0")}h`;
   if (minutes > 0) return `${minutes}:${String(seconds).padStart(2, "0")}m`;
   return `0:${String(seconds).padStart(2, "0")}s`;
+}
+
+function pickLatestRealtimeCycle(...statuses: RealtimeLatestCycleStatus[]) {
+  return statuses
+    .filter((status): status is NonNullable<RealtimeLatestCycleStatus> => typeof status?.cycleDownload === "string" && Boolean(status.cycleDownload))
+    .sort((a, b) => {
+      const parsedA = parseRealtimeCycle(a.cycleDownload ?? "", a.importedAt ?? "");
+      const parsedB = parseRealtimeCycle(b.cycleDownload ?? "", b.importedAt ?? "");
+      if (parsedA.timestamp !== parsedB.timestamp) return parsedB.timestamp - parsedA.timestamp;
+      return new Date(b.importedAt ?? 0).getTime() - new Date(a.importedAt ?? 0).getTime();
+    })[0]?.cycleDownload ?? "";
 }
 
 function parseRealtimeCycle(value: string, importedAt: string) {
