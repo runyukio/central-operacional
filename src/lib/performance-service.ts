@@ -1402,6 +1402,19 @@ type FrameworkMetricDefinition = {
   source: "hc" | "abs" | "attrition" | "quality" | "moderationRate" | "aht" | "cpd" | "latency" | "empty";
 };
 
+type FrameworkPeriod = Period & { key: string; label: string };
+type FrameworkAggregate = {
+  qualityNumerator: number;
+  qualityDenominator: number;
+  qualityErrors: number;
+  submitTotal: number;
+  submitDays: number;
+  moderationSeconds: number;
+  latencyMinutesSum: number;
+  absences: number;
+  scheduledDays: number;
+};
+
 const frameworkSections: Array<{ key: "CEC" | "ADS" | "TNS"; title: string; metrics: FrameworkMetricDefinition[] }> = [
   {
     key: "CEC",
@@ -1451,20 +1464,14 @@ async function buildPerformanceFramework(referenceDate: Date) {
   const weekPeriods = frameworkWeekPeriods(referenceDate);
   const periods = [...monthPeriods, ...weekPeriods];
   const employees = await listFrameworkEmployees();
-  const snapshots = await Promise.all(periods.map(async (period) => ({
-    key: period.key,
-    period,
-    rows: await buildAgentRows(employees, period),
-    latency: await calculateFrameworkLatency(employees, period)
-  })));
-  const snapshotMap = new Map(snapshots.map((snapshot) => [snapshot.key, snapshot]));
+  const snapshots = await buildFrameworkSnapshots(employees, periods);
   const sections = frameworkSections.map((section) => ({
     key: section.key,
     title: section.title,
     rows: section.metrics.map((metric) => {
       const values = Object.fromEntries(periods.map((period) => {
-        const snapshot = snapshotMap.get(period.key);
-        return [period.key, snapshot ? calculateFrameworkMetric(metric, snapshot.rows, snapshot.latency, employees, period) : null];
+        const snapshot = snapshots.get(period.key);
+        return [period.key, calculateFrameworkMetric(metric, snapshot?.get(metric.group), employees, period)];
       })) as Record<string, number | null>;
       const currentValue = values[monthPeriods[monthPeriods.length - 1]?.key ?? ""];
       return {
@@ -1506,7 +1513,7 @@ async function listFrameworkEmployees(): Promise<PerformanceEmployee[]> {
   return employees.filter((employee) => isAgentJobTitle(employee.roleTitle));
 }
 
-function frameworkMonthPeriods(referenceDate: Date) {
+function frameworkMonthPeriods(referenceDate: Date): FrameworkPeriod[] {
   const endMonth = utcDate(referenceDate.getUTCFullYear(), referenceDate.getUTCMonth() + 1, 1);
   return [2, 1, 0].map((offset) => {
     const start = utcDate(endMonth.getUTCFullYear(), endMonth.getUTCMonth() + 1 - offset, 1);
@@ -1520,7 +1527,7 @@ function frameworkMonthPeriods(referenceDate: Date) {
   });
 }
 
-function frameworkWeekPeriods(referenceDate: Date) {
+function frameworkWeekPeriods(referenceDate: Date): FrameworkPeriod[] {
   const currentWeekStart = startOfWeekMonday(referenceDate);
   return [3, 2, 1, 0].map((offset) => {
     const start = addDays(currentWeekStart, -offset * 7);
@@ -1543,39 +1550,168 @@ function isoWeekLabel(date: Date) {
   return `W${String(weekNumber).padStart(2, "0")}`;
 }
 
-async function calculateFrameworkLatency(employees: PerformanceEmployee[], period: Period) {
+async function buildFrameworkSnapshots(employees: PerformanceEmployee[], periods: FrameworkPeriod[]) {
+  const snapshots = new Map<string, Map<FrameworkGroupKey, FrameworkAggregate>>();
+  if (!employees.length || !periods.length) return snapshots;
   const employeeIds = employees.map((employee) => employee.id);
-  if (!employeeIds.length) return new Map<FrameworkGroupKey, number>();
   const employeeById = new Map(employees.map((employee) => [employee.id, employee]));
-  const records = await prisma.productionRecord.findMany({
-    where: { employeeId: { in: employeeIds }, bzDay: { gte: period.start, lte: period.end } },
-    select: { employeeId: true, latencyMinutesSum: true, submitNum: true }
-  });
-  const grouped = new Map<FrameworkGroupKey, { latencyMinutesSum: number; submitTotal: number }>();
-  for (const record of records) {
+  const firstStart = periods.reduce((earliest, period) => period.start < earliest ? period.start : earliest, periods[0].start);
+  const lastEnd = periods.reduce((latest, period) => period.end > latest ? period.end : latest, periods[0].end);
+  const [qualityRecords, tnsQualityRecords, cecQualityRecords, productionRecords, schedules] = await Promise.all([
+    prisma.qualityRecord.findMany({
+      where: { employeeId: { in: employeeIds }, auditDate: { gte: firstStart, lte: lastEnd } },
+      select: qualityMetricSelect
+    }),
+    prisma.tnsQualityRecord.findMany({
+      where: { employeeId: { in: employeeIds }, auditDate: { gte: firstStart, lte: lastEnd } },
+      select: tnsQualityMetricSelect
+    }),
+    prisma.cecQualityRecord.findMany({
+      where: { employeeId: { in: employeeIds }, qualityDate: { gte: firstStart, lte: lastEnd } },
+      select: cecQualityMetricSelect
+    }),
+    prisma.productionRecord.findMany({
+      where: { employeeId: { in: employeeIds }, bzDay: { gte: firstStart, lte: lastEnd } },
+      select: productionMetricSelect
+    }),
+    prisma.schedule.findMany({
+      where: { employeeId: { in: employeeIds }, date: { gte: firstStart, lte: lastEnd }, deletedAt: null },
+      select: scheduleMetricSelect
+    })
+  ]);
+
+  for (const period of periods) snapshots.set(period.key, new Map());
+  const periodSubmitDays = new Map(periods.map((period) => [period.key, countDistinctProductionDays(productionRecords, period)]));
+  const adsQualityByKey = new Map<string, { total: Set<string>; correct: Set<string> }>();
+  const aggregateFor = (period: FrameworkPeriod, group: FrameworkGroupKey) => {
+    const periodSnapshot = snapshots.get(period.key)!;
+    const existing = periodSnapshot.get(group);
+    if (existing) return existing;
+    const created = emptyFrameworkAggregate(periodSubmitDays.get(period.key) ?? 0);
+    periodSnapshot.set(group, created);
+    return created;
+  };
+
+  for (const record of productionRecords) {
     const employee = record.employeeId ? employeeById.get(record.employeeId) : null;
     if (!employee) continue;
-    for (const group of frameworkGroupsForEmployee(employee)) {
-      const current = grouped.get(group) ?? { latencyMinutesSum: 0, submitTotal: 0 };
-      current.latencyMinutesSum += Number(record.latencyMinutesSum ?? 0);
-      current.submitTotal += Number(record.submitNum ?? 0);
-      grouped.set(group, current);
+    const groups = frameworkGroupsForEmployee(employee);
+    for (const period of periods) {
+      if (!isDateInRange(record.bzDay, period.start, period.end)) continue;
+      for (const group of groups) {
+        const aggregate = aggregateFor(period, group);
+        aggregate.submitTotal += Number(record.submitNum ?? 0);
+        aggregate.moderationSeconds += Number(record.moderationSeconds ?? 0);
+        aggregate.latencyMinutesSum += Number(record.latencyMinutesSum ?? 0);
+      }
     }
   }
-  return new Map(Array.from(grouped.entries()).map(([key, value]) => [key, value.submitTotal > 0 ? value.latencyMinutesSum / value.submitTotal : 0]));
+
+  for (const schedule of schedules) {
+    const employee = schedule.employeeId ? employeeById.get(schedule.employeeId) : null;
+    if (!employee) continue;
+    const isScheduled = scheduledStatuses.has(schedule.status);
+    const isAbsence = absenceStatuses.has(schedule.status);
+    if (!isScheduled && !isAbsence) continue;
+    const groups = frameworkGroupsForEmployee(employee);
+    for (const period of periods) {
+      if (!isDateInRange(schedule.date, period.start, period.end)) continue;
+      for (const group of groups) {
+        const aggregate = aggregateFor(period, group);
+        if (isScheduled) aggregate.scheduledDays += 1;
+        if (isAbsence) aggregate.absences += 1;
+      }
+    }
+  }
+
+  for (const record of qualityRecords) {
+    const employee = record.employeeId ? employeeById.get(record.employeeId) : null;
+    if (!employee) continue;
+    const taskKey = qualityTaskKey(record);
+    if (!taskKey) continue;
+    const groups = frameworkGroupsForEmployee(employee);
+    for (const period of periods) {
+      if (!isDateInRange(record.auditDate, period.start, period.end)) continue;
+      for (const group of groups) {
+        const key = `${period.key}:${group}`;
+        const quality = adsQualityByKey.get(key) ?? { total: new Set<string>(), correct: new Set<string>() };
+        quality.total.add(taskKey);
+        if (isCorrectQualityResult(record.finalResult)) quality.correct.add(taskKey);
+        adsQualityByKey.set(key, quality);
+      }
+    }
+  }
+  for (const [key, quality] of adsQualityByKey) {
+    const [periodKey, group] = key.split(":") as [string, FrameworkGroupKey];
+    const period = periods.find((item) => item.key === periodKey);
+    if (!period) continue;
+    const aggregate = aggregateFor(period, group);
+    aggregate.qualityNumerator += quality.correct.size;
+    aggregate.qualityDenominator += quality.total.size;
+    aggregate.qualityErrors += Math.max(0, quality.total.size - quality.correct.size);
+  }
+
+  for (const record of tnsQualityRecords) {
+    const employee = record.employeeId ? employeeById.get(record.employeeId) : null;
+    if (!employee) continue;
+    const sampling = Number(record.sampling ?? 0);
+    const errors = Number(record.mislabeled ?? 0) + Number(record.leakage ?? 0) + Number(record.falsePositive ?? 0);
+    const groups = frameworkGroupsForEmployee(employee);
+    for (const period of periods) {
+      if (!isDateInRange(record.auditDate, period.start, period.end)) continue;
+      for (const group of groups) {
+        const aggregate = aggregateFor(period, group);
+        aggregate.qualityNumerator += Math.max(0, sampling - errors);
+        aggregate.qualityDenominator += sampling;
+        aggregate.qualityErrors += errors;
+      }
+    }
+  }
+
+  for (const record of cecQualityRecords) {
+    const employee = record.employeeId ? employeeById.get(record.employeeId) : null;
+    if (!employee) continue;
+    const pass = Number(record.passQuantity ?? 0);
+    const fail = Number(record.failQuantity ?? 0);
+    const groups = frameworkGroupsForEmployee(employee);
+    for (const period of periods) {
+      if (!isDateInRange(record.qualityDate, period.start, period.end)) continue;
+      for (const group of groups) {
+        const aggregate = aggregateFor(period, group);
+        aggregate.qualityNumerator += pass;
+        aggregate.qualityDenominator += pass + fail;
+        aggregate.qualityErrors += fail;
+      }
+    }
+  }
+
+  return snapshots;
 }
 
-function calculateFrameworkMetric(metric: FrameworkMetricDefinition, rows: AgentPerformanceRow[], latency: Map<FrameworkGroupKey, number>, employees: PerformanceEmployee[], period: Period) {
+function emptyFrameworkAggregate(submitDays = 0): FrameworkAggregate {
+  return {
+    qualityNumerator: 0,
+    qualityDenominator: 0,
+    qualityErrors: 0,
+    submitTotal: 0,
+    submitDays,
+    moderationSeconds: 0,
+    latencyMinutesSum: 0,
+    absences: 0,
+    scheduledDays: 0
+  };
+}
+
+function calculateFrameworkMetric(metric: FrameworkMetricDefinition, aggregate: FrameworkAggregate | undefined, employees: PerformanceEmployee[], period: Period) {
   if (metric.source === "empty") return null;
   if (metric.source === "hc") return frameworkHeadcount(employees, metric.group, period.end);
   if (metric.source === "attrition") return frameworkAttrition(employees, metric.group, period);
-  if (metric.source === "latency") return latency.get(metric.group) ?? 0;
-  const groupRows = rows.filter((row) => frameworkRowMatchesGroup(row, metric.group));
-  const summary = summarizeRows(groupRows, period);
-  if (metric.source === "abs") return summary.abs;
-  if (metric.source === "quality") return summary.qualityTotal > 0 ? summary.quality : null;
-  if (metric.source === "aht") return summary.submitTotal > 0 ? summary.ahtSeconds : null;
-  if (metric.source === "cpd") return summary.submit;
+  const summary = aggregate ?? emptyFrameworkAggregate();
+  if (metric.source === "latency") return summary.submitTotal > 0 ? summary.latencyMinutesSum / summary.submitTotal : 0;
+  if (metric.source === "abs") return percent(summary.absences, summary.scheduledDays);
+  if (metric.source === "quality") return summary.qualityDenominator > 0 ? percent(summary.qualityNumerator, summary.qualityDenominator) : null;
+  if (metric.source === "aht") return summary.submitTotal > 0 ? round2(summary.moderationSeconds / summary.submitTotal) : null;
+  if (metric.source === "cpd") return calculateDailySubmit(summary.submitTotal, period.start, period.end, summary.submitDays).submitAveragePerDay;
   if (metric.source === "moderationRate") {
     const plannedSeconds = summary.scheduledDays * DEFAULT_FRAMEWORK_PRODUCTIVE_SECONDS;
     return plannedSeconds > 0 ? percent(summary.moderationSeconds, plannedSeconds) : null;
@@ -1603,10 +1739,6 @@ function isFrameworkActiveAt(employee: PerformanceEmployee, referenceDate: Date)
   if (employee.terminationDate && employee.terminationDate.getTime() <= referenceDate.getTime()) return false;
   if (!employee.terminationDate && isOperationallyTerminated(employee.operationalStatus)) return false;
   return true;
-}
-
-function frameworkRowMatchesGroup(row: Pick<AgentPerformanceRow, "lob" | "skill">, group: FrameworkGroupKey) {
-  return frameworkGroupKeys(row.lob, row.skill).includes(group);
 }
 
 function frameworkEmployeeMatchesGroup(employee: Pick<PerformanceEmployee, "lob" | "skill">, group: FrameworkGroupKey) {
