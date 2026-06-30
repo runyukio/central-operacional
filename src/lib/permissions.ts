@@ -105,7 +105,7 @@ export function canAccessAdvanceModule(user: PermissionUser) {
 
 export function canAccessStaffCoverage(user: PermissionUser) {
   const role = normalizeRole(user.role);
-  return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(role);
+  return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "CLIENT"].includes(role);
 }
 
 export function canAccessRealTime(user: PermissionUser) {

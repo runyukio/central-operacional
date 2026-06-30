@@ -28,7 +28,7 @@ export const navSections: NavSection[] = [
     items: [
       { label: "Central Operacional", href: "/central-operacional", icon: "LayoutDashboard", roles: centralRoles },
       { label: "Real Time", href: "/real-time", icon: "MonitorCog", roles: realTimeRoles },
-      { label: "Requerido", href: "/staff-cobertura", icon: "UsersRound", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"] },
+      { label: "Requerido", href: "/staff-cobertura", icon: "UsersRound", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "CLIENT"] },
       { label: "Performance", href: "/performance", icon: "Trophy", roles: performanceRoles }
     ]
   },
@@ -100,6 +100,8 @@ export function canAccessPathForRole(pathname: string, userOrRole?: string | Per
     if (pathname === "/" || pathname === "/alterar-senha") return true;
     if (pathname === "/performance" || pathname.startsWith("/performance/")) return true;
     if (pathname === "/api/performance" || pathname.startsWith("/api/performance/")) return true;
+    if (pathname === "/staff-cobertura" || pathname.startsWith("/staff-cobertura/")) return true;
+    if (pathname === "/api/staff-coverage" || pathname.startsWith("/api/staff-coverage/")) return true;
     if (pathname === "/mural" || pathname.startsWith("/mural/")) return true;
     if (pathname === "/api/mural" || pathname.startsWith("/api/mural/")) return true;
     if (pathname === "/financeiro" || pathname.startsWith("/financeiro/")) return true;
