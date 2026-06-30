@@ -2113,6 +2113,7 @@ function formatPixKeyInputValue(type: string, value: string) {
     const digits = compact.replace(/\D/g, "").slice(0, 13);
     return compact.startsWith("+") ? `+${digits}` : digits;
   }
+  if (type === "Chave aleatória") return value.trim().replace(/\s+/g, "");
   return value;
 }
 

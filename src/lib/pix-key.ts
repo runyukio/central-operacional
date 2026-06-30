@@ -27,7 +27,12 @@ const pixKeyTypeAliases: Record<string, PixKeyType> = {
   PHONE: "Telefone",
   ALEATORIA: "Chave aleatória",
   ALEATORIA_PIX: "Chave aleatória",
+  EVP: "Chave aleatória",
+  RANDOM: "Chave aleatória",
+  RANDOM_KEY: "Chave aleatória",
+  CHAVE_RANDOMICA: "Chave aleatória",
   CHAVE_ALEATORIA: "Chave aleatória",
+  CHAVE_ALEATORIA_PIX: "Chave aleatória",
   CHAVEALEATORIA: "Chave aleatória",
   CHAVE_PIX_ALEATORIA: "Chave aleatória",
   PIX_ALEATORIA: "Chave aleatória"
@@ -84,6 +89,14 @@ export function validatePixKey(pixKeyType?: string | null, pixKey?: string | nul
       return invalid("Telefone deve estar no formato +55DDNUMERO, exemplo: +5511930211909.", "pixKey", normalizedType, normalizedKey);
     }
     return valid(normalizedType, normalizedKey);
+  }
+
+  if (normalizedType === "Chave aleatória") {
+    const randomKey = normalizeRandomPixKey(normalizedKey);
+    if (!isValidRandomPixKey(randomKey)) {
+      return invalid("Chave aleatória PIX inválida. Cole a chave completa gerada pelo banco.", "pixKey", normalizedType, randomKey);
+    }
+    return valid(normalizedType, randomKey);
   }
 
   return valid(normalizedType, normalizedKey);
@@ -210,13 +223,25 @@ function buildLegacyPixCandidate(type: string, value: string) {
     return "";
   }
   if (type === "Chave aleatória") {
-    return value.trim();
+    return normalizeRandomPixKey(value);
   }
   return "";
 }
 
 function cleanPixValue(value?: string | null) {
   return String(value ?? "").trim();
+}
+
+function normalizeRandomPixKey(value: string) {
+  return value.trim().replace(/\s+/g, "");
+}
+
+function isValidRandomPixKey(value: string) {
+  if (!value) return false;
+  const uuidWithHyphen = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const uuidWithoutHyphen = /^[0-9a-f]{32}$/i;
+  if (uuidWithHyphen.test(value) || uuidWithoutHyphen.test(value)) return true;
+  return /^[a-zA-Z0-9._:@+-]{8,140}$/.test(value);
 }
 
 function onlyDigits(value: string) {
