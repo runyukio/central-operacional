@@ -307,6 +307,9 @@ type DepartmentReportSummary = {
   maxLatencyQueueName: string;
 };
 
+const ADS_REPORT_TARGET_LATENCY_MINUTES = 120;
+const ADS_REPORT_TARGET_LATENCY_LABEL = "2:00h";
+
 type ImportHistory = {
   id: string;
   fileName: string;
@@ -1623,10 +1626,10 @@ function ReportSummarySection({
           </div>
         </div>
         <div className="flex-1 overflow-x-auto">
-          <table className="w-full min-w-[760px] text-left text-sm">
+          <table className={cn("w-full text-left text-sm", reportLob === "ADS" ? "min-w-[860px]" : "min-w-[760px]")}>
             <thead className="bg-slate-50 text-xs uppercase tracking-wide text-muted">
               <tr>
-                {["Department", "Backlog", "AHT", "Max Latency"].map((column) => (
+                {(reportLob === "ADS" ? ["Department", "Backlog", "AHT", "Max Latency", "Target Latency"] : ["Department", "Backlog", "AHT", "Max Latency"]).map((column) => (
                   <th key={column} className="px-4 py-3 font-black">{column}</th>
                 ))}
               </tr>
@@ -1639,18 +1642,19 @@ function ReportSummarySection({
                   <td className="px-4 py-3 font-bold text-navy-950">{formatDurationFromMs(department.ahtMs)}</td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap items-center gap-2">
-                      <p className="font-black text-navy-950">{formatDurationFromMs(department.maxLatencyMs)}</p>
-                      <ReportLatencyStatusPill status={resolveLatencyAdherence(department.maxLatencyMs, department.maxLatencySlaTargetMinutes)} />
+                      <p className="font-black text-navy-950">{formatReportMaxLatency(department.maxLatencyMs, reportLob)}</p>
+                      <ReportLatencyStatusPill status={resolveLatencyAdherence(department.maxLatencyMs, getReportLatencyTargetMinutes(reportLob, department.maxLatencySlaTargetMinutes))} />
                     </div>
                     <p className="mt-0.5 max-w-[260px] truncate text-[11px] font-bold text-muted" title={`${department.maxLatencyQueueId} - ${department.maxLatencyQueueName}`}>
                       {department.maxLatencyQueueId || "-"} · {department.maxLatencyQueueName || "-"}
                     </p>
                   </td>
+                  {reportLob === "ADS" ? <td className="px-4 py-3 font-black text-navy-950">{ADS_REPORT_TARGET_LATENCY_LABEL}</td> : null}
                 </tr>
               ))}
               {!departments.length ? (
                 <tr>
-                  <td colSpan={4} className="px-4 py-12 text-center text-sm font-bold text-muted">No departments for the selected filters.</td>
+                  <td colSpan={reportLob === "ADS" ? 5 : 4} className="px-4 py-12 text-center text-sm font-bold text-muted">No departments for the selected filters.</td>
                 </tr>
               ) : null}
             </tbody>
@@ -1843,7 +1847,7 @@ function ReportTable({ rows, reportLob, onDownloadQueues }: { rows: QueueReportR
               <Fragment key={group.label || "ADS"}>
                 {group.label ? (
                   <tr>
-                    <td colSpan={7} className="border-t border-slate-100 bg-slate-100/80 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-slate-600">
+                    <td colSpan={columns.length} className="border-t border-slate-100 bg-slate-100/80 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-slate-600">
                       {group.label}
                     </td>
                   </tr>
@@ -1855,7 +1859,8 @@ function ReportTable({ rows, reportLob, onDownloadQueues }: { rows: QueueReportR
                     <td className="px-4 py-3 font-bold text-muted"><span className="block truncate" title={row.reportDepartment}>{row.reportDepartment}</span></td>
                     <td className="px-4 py-3 text-right font-black text-navy-950">{formatInteger(row.current.backlog)}</td>
                     <td className="px-4 py-3 font-bold text-navy-950">{formatDurationFromMs(row.current.ahtMs)}</td>
-                    <td className="px-4 py-3"><ReportLatencyCell value={row.current.maxLatencyMs} slaTargetMinutes={row.slaTargetMinutes} /></td>
+                    <td className="px-4 py-3"><ReportLatencyCell value={row.current.maxLatencyMs} slaTargetMinutes={getReportLatencyTargetMinutes(reportLob, row.slaTargetMinutes)} forceHours={reportLob === "ADS"} /></td>
+                    {reportLob === "ADS" ? <td className="px-4 py-3 font-black text-navy-950">{ADS_REPORT_TARGET_LATENCY_LABEL}</td> : null}
                     <td className="px-4 py-3">
                       {reportLob === "TNS" ? (
                         <span className="font-black text-navy-950">{row.slaTargetMinutes === null ? "No target" : formatSlaTargetLabel(String(row.slaTargetMinutes))}</span>
@@ -1869,7 +1874,7 @@ function ReportTable({ rows, reportLob, onDownloadQueues }: { rows: QueueReportR
             ))}
             {!rows.length ? (
               <tr>
-                <td colSpan={7} className="px-4 py-12 text-center text-sm font-bold text-muted">No queues found in Report {reportLob}.</td>
+                <td colSpan={columns.length} className="px-4 py-12 text-center text-sm font-bold text-muted">No queues found in Report {reportLob}.</td>
               </tr>
             ) : null}
           </tbody>
@@ -1880,21 +1885,28 @@ function ReportTable({ rows, reportLob, onDownloadQueues }: { rows: QueueReportR
 }
 
 function getReportTableColumns(reportLob: ReportLob) {
-  return [
+  const baseColumns = [
     { key: "id", label: "ID", width: "8%" },
-    { key: "queue", label: "Queue", width: "32%" },
-    { key: "department", label: "Department", width: "20%" },
+    { key: "queue", label: "Queue", width: reportLob === "ADS" ? "28%" : "32%" },
+    { key: "department", label: "Department", width: reportLob === "ADS" ? "17%" : "20%" },
     { key: "backlog", label: "Backlog", width: "8%", align: "right" as const },
     { key: "aht", label: "AHT", width: "8%" },
-    { key: "maxLatency", label: "Max Latency", width: "12%" },
-    { key: "last", label: reportLob === "TNS" ? "Latency Target" : "Average Latency", width: "12%" }
+    { key: "maxLatency", label: "Max Latency", width: reportLob === "ADS" ? "11%" : "12%" }
   ];
+  if (reportLob === "ADS") {
+    return [
+      ...baseColumns,
+      { key: "targetLatency", label: "Target Latency", width: "10%" },
+      { key: "last", label: "Average Latency", width: "10%" }
+    ];
+  }
+  return [...baseColumns, { key: "last", label: "Latency Target", width: "12%" }];
 }
 
-function ReportLatencyCell({ value, slaTargetMinutes }: { value: number | null; slaTargetMinutes: number | null }) {
+function ReportLatencyCell({ value, slaTargetMinutes, forceHours = false }: { value: number | null; slaTargetMinutes: number | null; forceHours?: boolean }) {
   return (
     <div className="min-w-[120px]">
-      <p className="font-black text-navy-950">{formatDurationFromMs(value)}</p>
+      <p className="font-black text-navy-950">{forceHours ? formatLatencyAsHours(value) : formatDurationFromMs(value)}</p>
       <div className="mt-1">
         <ReportLatencyStatusPill status={resolveLatencyAdherence(value, slaTargetMinutes)} />
       </div>
@@ -1975,12 +1987,20 @@ function downloadReportSummaryImage({
   const tableY = topY + 72;
   drawText(ctx, "Departments", tableX, topY + 38, 22, "#0F172A", "900", "Inter, Arial, sans-serif");
   drawCanvasCountPill(ctx, `${departments.length} departments`, rightX + cardW - 194, topY + 22);
-  const columns = [
-    { label: "Department", x: tableX, w: 370 },
-    { label: "Backlog", x: tableX + 400, w: 110 },
-    { label: "AHT", x: tableX + 535, w: 110 },
-    { label: "Max Latency", x: tableX + 675, w: 285 }
-  ];
+  const columns = reportLob === "ADS"
+    ? [
+        { label: "Department", x: tableX, w: 310 },
+        { label: "Backlog", x: tableX + 340, w: 90 },
+        { label: "AHT", x: tableX + 455, w: 95 },
+        { label: "Max Latency", x: tableX + 575, w: 220 },
+        { label: "Target Latency", x: tableX + 820, w: 125 }
+      ]
+    : [
+        { label: "Department", x: tableX, w: 370 },
+        { label: "Backlog", x: tableX + 400, w: 110 },
+        { label: "AHT", x: tableX + 535, w: 110 },
+        { label: "Max Latency", x: tableX + 675, w: 285 }
+      ];
   const tableStartX = tableX - 14;
   const tableEndX = Math.max(...columns.map((column) => column.x + column.w)) + 14;
   drawTableHeader(ctx, columns, tableY, headerHeight);
@@ -1991,9 +2011,10 @@ function downloadReportSummaryImage({
     drawText(ctx, truncateForCanvas(ctx, department.department, columns[0].w), columns[0].x, textY, 15, "#0F172A", "850");
     drawText(ctx, formatInteger(department.backlog), columns[1].x, textY, 16, "#0F172A", "900");
     drawText(ctx, formatDurationFromMs(department.ahtMs), columns[2].x, textY, 16, "#0F172A", "800");
-    drawText(ctx, formatDurationFromMs(department.maxLatencyMs), columns[3].x, y + 24, 16, "#0F172A", "900");
-    drawCanvasStatusPill(ctx, resolveLatencyAdherence(department.maxLatencyMs, department.maxLatencySlaTargetMinutes), columns[3].x + 104, y + 8);
+    drawText(ctx, formatReportMaxLatency(department.maxLatencyMs, reportLob), columns[3].x, y + 24, 16, "#0F172A", "900");
+    drawCanvasStatusPill(ctx, resolveLatencyAdherence(department.maxLatencyMs, getReportLatencyTargetMinutes(reportLob, department.maxLatencySlaTargetMinutes)), columns[3].x + (reportLob === "ADS" ? 82 : 104), y + 8);
     drawText(ctx, truncateForCanvas(ctx, `${department.maxLatencyQueueId || "-"} · ${department.maxLatencyQueueName || "-"}`, columns[3].w), columns[3].x, y + 48, 11, "#64748B", "800");
+    if (reportLob === "ADS") drawText(ctx, ADS_REPORT_TARGET_LATENCY_LABEL, columns[4].x, textY, 16, "#0F172A", "900");
   });
   downloadCanvas(canvas, `realtime-report-${reportLob.toLowerCase()}-summary.png`);
 }
@@ -2033,15 +2054,26 @@ function downloadReportQueuesImage({
     drawCanvasTnsReportTopCards(ctx, topCards, 32, 96, width - 64, topCardsHeight - 24);
   }
 
-  const columns = [
-    { label: "ID", x: tableX, w: 80 },
-    { label: "Queue", x: tableX + 96, w: 410 },
-    { label: "Department", x: tableX + 522, w: 250 },
-    { label: "Backlog", x: tableX + 788, w: 75 },
-    { label: "AHT", x: tableX + 879, w: 75 },
-    { label: "Max Latency", x: tableX + 970, w: 175 },
-    { label: reportLob === "TNS" ? "Latency Target" : "Average Latency", x: tableX + 1161, w: 147 }
-  ];
+  const columns = reportLob === "ADS"
+    ? [
+        { label: "ID", x: tableX, w: 70 },
+        { label: "Queue", x: tableX + 94, w: 320 },
+        { label: "Department", x: tableX + 430, w: 205 },
+        { label: "Backlog", x: tableX + 650, w: 70 },
+        { label: "AHT", x: tableX + 736, w: 70 },
+        { label: "Max Latency", x: tableX + 822, w: 160 },
+        { label: "Target Latency", x: tableX + 998, w: 120 },
+        { label: "Average Latency", x: tableX + 1134, w: 165 }
+      ]
+    : [
+        { label: "ID", x: tableX, w: 80 },
+        { label: "Queue", x: tableX + 96, w: 410 },
+        { label: "Department", x: tableX + 522, w: 250 },
+        { label: "Backlog", x: tableX + 788, w: 75 },
+        { label: "AHT", x: tableX + 879, w: 75 },
+        { label: "Max Latency", x: tableX + 970, w: 175 },
+        { label: "Latency Target", x: tableX + 1161, w: 147 }
+      ];
   drawTableHeader(ctx, columns, tableY, headerHeight);
   let cursorY = tableY + headerHeight;
   groups.forEach((group) => {
@@ -2059,13 +2091,14 @@ function downloadReportQueuesImage({
       drawText(ctx, truncateForCanvas(ctx, row.reportDepartment, columns[2].w), columns[2].x, textY, 10.5, "#475569", "800");
       drawText(ctx, formatInteger(row.current.backlog), columns[3].x, textY, 11, "#0F172A", "900");
       drawText(ctx, formatDurationFromMs(row.current.ahtMs), columns[4].x, textY, 11, "#0F172A", "800");
-      drawText(ctx, formatDurationFromMs(row.current.maxLatencyMs), columns[5].x, textY, 11, "#0F172A", "900");
-      drawCanvasStatusPill(ctx, resolveLatencyAdherence(row.current.maxLatencyMs, row.slaTargetMinutes), columns[5].x + 58, y + 7, true);
+      drawText(ctx, formatReportMaxLatency(row.current.maxLatencyMs, reportLob), columns[5].x, textY, 11, "#0F172A", "900");
+      drawCanvasStatusPill(ctx, resolveLatencyAdherence(row.current.maxLatencyMs, getReportLatencyTargetMinutes(reportLob, row.slaTargetMinutes)), columns[5].x + 58, y + 7, true);
       if (reportLob === "TNS") {
         drawText(ctx, row.slaTargetMinutes === null ? "No target" : formatSlaTargetLabel(String(row.slaTargetMinutes)), columns[6].x, textY, 11, "#0F172A", "900");
       } else {
-        drawText(ctx, formatDurationFromMs(row.current.latencyMs), columns[6].x, textY, 11, "#0F172A", "900");
-        drawCanvasStatusPill(ctx, resolveLatencyAdherence(row.current.latencyMs, row.slaTargetMinutes), columns[6].x + 58, y + 7, true);
+        drawText(ctx, ADS_REPORT_TARGET_LATENCY_LABEL, columns[6].x, textY, 11, "#0F172A", "900");
+        drawText(ctx, formatDurationFromMs(row.current.latencyMs), columns[7].x, textY, 11, "#0F172A", "900");
+        drawCanvasStatusPill(ctx, resolveLatencyAdherence(row.current.latencyMs, row.slaTargetMinutes), columns[7].x + 58, y + 7, true);
       }
       cursorY += rowHeight;
     });
@@ -3029,6 +3062,22 @@ function formatDurationFromMs(value: number | null | undefined) {
   if (hours > 0) return `${hours}:${String(minutes).padStart(2, "0")}h`;
   if (minutes > 0) return `${minutes}:${String(seconds).padStart(2, "0")}m`;
   return `0:${String(seconds).padStart(2, "0")}s`;
+}
+
+function formatLatencyAsHours(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "N/A";
+  const totalMinutes = Math.max(0, Math.round(value / 60000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${hours}:${String(minutes).padStart(2, "0")}h`;
+}
+
+function formatReportMaxLatency(value: number | null | undefined, reportLob: ReportLob) {
+  return reportLob === "ADS" ? formatLatencyAsHours(value) : formatDurationFromMs(value);
+}
+
+function getReportLatencyTargetMinutes(reportLob: ReportLob, fallback: number | null) {
+  return reportLob === "ADS" ? ADS_REPORT_TARGET_LATENCY_MINUTES : fallback;
 }
 
 function pickLatestRealtimeCycle(...statuses: RealtimeLatestCycleStatus[]) {
