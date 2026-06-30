@@ -161,6 +161,7 @@ const productionMetricSelect = {
   submitNum: true,
   latencyMinutesSum: true,
   moderationSeconds: true,
+  queueId: true,
   employeeId: true
 } satisfies Prisma.ProductionRecordSelect;
 const scheduleMetricSelect = {
@@ -1411,9 +1412,12 @@ type FrameworkAggregate = {
   submitDays: number;
   moderationSeconds: number;
   latencyMinutesSum: number;
+  latencySubmitTotal: number;
   absences: number;
   scheduledDays: number;
 };
+
+const frameworkTnsVideoLatencyQueueIds = new Set(["9553", "5860", "11364", "9551", "9550"]);
 
 const frameworkSections: Array<{ key: "CEC" | "ADS" | "TNS"; title: string; metrics: FrameworkMetricDefinition[] }> = [
   {
@@ -1600,9 +1604,13 @@ async function buildFrameworkSnapshots(employees: PerformanceEmployee[], periods
       if (!isDateInRange(record.bzDay, period.start, period.end)) continue;
       for (const group of groups) {
         const aggregate = aggregateFor(period, group);
-        aggregate.submitTotal += Number(record.submitNum ?? 0);
+        const submitTotal = Number(record.submitNum ?? 0);
+        aggregate.submitTotal += submitTotal;
         aggregate.moderationSeconds += Number(record.moderationSeconds ?? 0);
-        aggregate.latencyMinutesSum += Number(record.latencyMinutesSum ?? 0);
+        if (shouldIncludeFrameworkLatencyRecord(group, record)) {
+          aggregate.latencyMinutesSum += Number(record.latencyMinutesSum ?? 0);
+          aggregate.latencySubmitTotal += submitTotal;
+        }
       }
     }
   }
@@ -1697,9 +1705,15 @@ function emptyFrameworkAggregate(submitDays = 0): FrameworkAggregate {
     submitDays,
     moderationSeconds: 0,
     latencyMinutesSum: 0,
+    latencySubmitTotal: 0,
     absences: 0,
     scheduledDays: 0
   };
+}
+
+function shouldIncludeFrameworkLatencyRecord(group: FrameworkGroupKey, record: ProductionRecordForMetrics) {
+  if (group !== "TNS_VIDEO") return true;
+  return frameworkTnsVideoLatencyQueueIds.has(String(record.queueId ?? "").trim());
 }
 
 function calculateFrameworkMetric(metric: FrameworkMetricDefinition, aggregate: FrameworkAggregate | undefined, employees: PerformanceEmployee[], period: Period) {
@@ -1708,7 +1722,7 @@ function calculateFrameworkMetric(metric: FrameworkMetricDefinition, aggregate: 
   if (metric.source === "attrition") return frameworkAttrition(employees, metric.group, period);
   const summary = aggregate ?? emptyFrameworkAggregate();
   if (metric.source === "latency") {
-    const averageLatencyMinutes = summary.submitTotal > 0 ? summary.latencyMinutesSum / summary.submitTotal : 0;
+    const averageLatencyMinutes = summary.latencySubmitTotal > 0 ? summary.latencyMinutesSum / summary.latencySubmitTotal : 0;
     return metric.kind === "hours" ? round2(averageLatencyMinutes / 60) : round2(averageLatencyMinutes);
   }
   if (metric.source === "abs") return percent(summary.absences, summary.scheduledDays);
