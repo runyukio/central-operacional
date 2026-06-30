@@ -13053,8 +13053,17 @@ function formatPerformanceFrameworkValue(value: number | null | undefined, kind:
   if (kind === "percent") return formatPerformancePercent(Number(value));
   if (kind === "number") return formatPerformanceNumber(Number(value));
   if (kind === "seconds") return Number(value).toLocaleString("pt-BR", { maximumFractionDigits: 0 });
-  if (kind === "minutes" || kind === "hours") return Number(value).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (kind === "minutes") return `${formatPerformanceFrameworkUnitNumber(Number(value))} min`;
+  if (kind === "hours") return `${formatPerformanceFrameworkUnitNumber(Number(value))} h`;
   return String(value);
+}
+
+function formatPerformanceFrameworkUnitNumber(value: number) {
+  const hasFraction = Math.abs(value % 1) > 0.005;
+  return value.toLocaleString("pt-BR", {
+    minimumFractionDigits: hasFraction ? 2 : 0,
+    maximumFractionDigits: 2
+  });
 }
 
 function formatDisplayDateFromIso(value: string) {

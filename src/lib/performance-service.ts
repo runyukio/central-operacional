@@ -1423,7 +1423,7 @@ const frameworkSections: Array<{ key: "CEC" | "ADS" | "TNS"; title: string; metr
       { key: "ads-hc", label: "ADS HC", group: "ADS", kind: "number", source: "hc", target: 65, direction: "gte" },
       { key: "ads-abs", label: "ADS ABS", group: "ADS", kind: "percent", source: "abs", target: 8, direction: "lte" },
       { key: "ads-attrition", label: "ADS Attrition", group: "ADS", kind: "percent", source: "attrition", target: 10, direction: "lte" },
-      { key: "ads-latency", label: "ADS Latency (hour)", group: "ADS", kind: "hours", source: "latency", target: 2, targetLabel: "2,00", direction: "lte" },
+      { key: "ads-latency", label: "ADS Latency", group: "ADS", kind: "hours", source: "latency", target: 2, direction: "lte" },
       { key: "ads-quality", label: "ADS Quality", group: "ADS", kind: "percent", source: "quality", target: 95, direction: "gte" },
       { key: "ads-moderation", label: "ADS Moderation Time", group: "ADS", kind: "percent", source: "moderationRate", target: 60, direction: "gte" },
       { key: "ads-aht", label: "ADS AHT", group: "ADS", kind: "seconds", source: "aht", target: 22, direction: "lte" }
@@ -1433,12 +1433,12 @@ const frameworkSections: Array<{ key: "CEC" | "ADS" | "TNS"; title: string; metr
     key: "TNS",
     title: "TNS",
     metrics: [
-      { key: "tns-video-hc", label: "TNS Video HC", group: "TNS_VIDEO", kind: "number", source: "hc", target: 31, direction: "gte" },
-      { key: "tns-comments-hc", label: "TNS Comments HC", group: "TNS_COMMENTS", kind: "number", source: "hc", target: null },
+      { key: "tns-video-hc", label: "Video HC", group: "TNS_VIDEO", kind: "number", source: "hc", target: 31, direction: "gte" },
+      { key: "tns-comments-hc", label: "Comments HC", group: "TNS_COMMENTS", kind: "number", source: "hc", target: null },
       { key: "tns-abs", label: "TNS ABS", group: "TNS", kind: "percent", source: "abs", target: 8, direction: "lte" },
       { key: "tns-attrition", label: "TNS Attrition", group: "TNS", kind: "percent", source: "attrition", target: 10, direction: "lte" },
-      { key: "tns-video-latency", label: "TNS Latency Video (min)", group: "TNS_VIDEO", kind: "minutes", source: "latency", target: 15, direction: "lte" },
-      { key: "tns-comments-latency", label: "TNS Latency Comments (hour)", group: "TNS_COMMENTS", kind: "hours", source: "latency", target: 24, direction: "lte" },
+      { key: "tns-video-latency", label: "TNS Latency Video", group: "TNS_VIDEO", kind: "minutes", source: "latency", target: 15, direction: "lte" },
+      { key: "tns-comments-latency", label: "TNS Latency Comments", group: "TNS_COMMENTS", kind: "hours", source: "latency", target: 24, direction: "lte" },
       { key: "tns-quality", label: "TNS Quality", group: "TNS", kind: "percent", source: "quality", target: 98, direction: "gte" },
       { key: "tns-moderation", label: "TNS Moderation Time", group: "TNS", kind: "percent", source: "moderationRate", target: 60, direction: "gte" },
       { key: "tns-aht", label: "TNS AHT", group: "TNS", kind: "seconds", source: "aht", target: 32, direction: "lte" }
@@ -1707,7 +1707,10 @@ function calculateFrameworkMetric(metric: FrameworkMetricDefinition, aggregate: 
   if (metric.source === "hc") return frameworkHeadcount(employees, metric.group, period.end);
   if (metric.source === "attrition") return frameworkAttrition(employees, metric.group, period);
   const summary = aggregate ?? emptyFrameworkAggregate();
-  if (metric.source === "latency") return summary.submitTotal > 0 ? summary.latencyMinutesSum / summary.submitTotal : 0;
+  if (metric.source === "latency") {
+    const averageLatencyMinutes = summary.submitTotal > 0 ? summary.latencyMinutesSum / summary.submitTotal : 0;
+    return metric.kind === "hours" ? round2(averageLatencyMinutes / 60) : round2(averageLatencyMinutes);
+  }
   if (metric.source === "abs") return percent(summary.absences, summary.scheduledDays);
   if (metric.source === "quality") return summary.qualityDenominator > 0 ? percent(summary.qualityNumerator, summary.qualityDenominator) : null;
   if (metric.source === "aht") return summary.submitTotal > 0 ? round2(summary.moderationSeconds / summary.submitTotal) : null;
@@ -1752,7 +1755,7 @@ function frameworkGroupsForEmployee(employee: Pick<PerformanceEmployee, "lob" | 
 function frameworkGroupKeys(lobName?: string | null, skill?: string | null): FrameworkGroupKey[] {
   const lob = normalizeTextToken(lobName ?? "");
   const normalizedSkill = normalizeTextToken(skill ?? "");
-  if (lob === "ads") return ["ADS"];
+  if (lob === "ads" || lob === "project" || normalizedSkill.includes("project")) return ["ADS"];
   if (lob === "cec") return ["CEC"];
   const isVideo = lob === "video" || normalizedSkill.includes("video");
   const isComments = lob === "comments" || normalizedSkill.includes("comments");
@@ -1774,8 +1777,17 @@ function formatFrameworkValue(value: number | null, kind: FrameworkMetricKind) {
   if (value === null || value === undefined || Number.isNaN(value)) return "-";
   if (kind === "percent") return `${Number(value).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
   if (kind === "seconds") return Number(value).toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-  if (kind === "minutes" || kind === "hours") return Number(value).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (kind === "minutes") return `${formatFrameworkUnitNumber(Number(value))} min`;
+  if (kind === "hours") return `${formatFrameworkUnitNumber(Number(value))} h`;
   return Number(value).toLocaleString("pt-BR", { maximumFractionDigits: 0 });
+}
+
+function formatFrameworkUnitNumber(value: number) {
+  const hasFraction = Math.abs(value % 1) > 0.005;
+  return value.toLocaleString("pt-BR", {
+    minimumFractionDigits: hasFraction ? 2 : 0,
+    maximumFractionDigits: 2
+  });
 }
 
 function filterRowsByWfhStatus(rows: AgentPerformanceRow[], filter?: string) {
