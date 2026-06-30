@@ -1729,12 +1729,12 @@ function frameworkHeadcount(employees: PerformanceEmployee[], group: FrameworkGr
 }
 
 function frameworkAttrition(employees: PerformanceEmployee[], group: FrameworkGroupKey, period: Period) {
-  const headcountAtStart = frameworkHeadcount(employees, group, period.start);
-  const terminations = employees.filter((employee) => {
-    if (!frameworkEmployeeMatchesGroup(employee, group) || !employee.terminationDate) return false;
-    return isDateInRange(employee.terminationDate, period.start, period.end);
-  }).length;
-  return percent(terminations, headcountAtStart);
+  const eligibleEmployees = employees.filter((employee) => frameworkEmployeeMatchesGroup(employee, group) && isFrameworkAttritionEligibleStatus(employee.operationalStatus));
+  const hcStart = eligibleEmployees.filter((employee) => wasFrameworkAttritionActiveAtBoundary(employee, period.start, "start")).length;
+  const hcEnd = eligibleEmployees.filter((employee) => wasFrameworkAttritionActiveAtBoundary(employee, period.end, "end")).length;
+  const hcAverage = Number(((hcStart + hcEnd) / 2).toFixed(1));
+  const terminations = eligibleEmployees.filter((employee) => isFrameworkAttritionTerminationInPeriod(employee, period)).length;
+  return percent(terminations, hcAverage);
 }
 
 function isFrameworkActiveAt(employee: PerformanceEmployee, referenceDate: Date) {
@@ -1742,6 +1742,49 @@ function isFrameworkActiveAt(employee: PerformanceEmployee, referenceDate: Date)
   if (employee.terminationDate && employee.terminationDate.getTime() <= referenceDate.getTime()) return false;
   if (!employee.terminationDate && isOperationallyTerminated(employee.operationalStatus)) return false;
   return true;
+}
+
+function frameworkEmployeeStatusLookupKey(status?: string | null) {
+  return String(status ?? "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function isFrameworkAttritionActiveStatus(status?: string | null) {
+  const key = frameworkEmployeeStatusLookupKey(status);
+  return key === "ATIVO" || key === "ACTIVE";
+}
+
+function isFrameworkAttritionTerminatedStatus(status?: string | null) {
+  const key = frameworkEmployeeStatusLookupKey(status);
+  return key === "DESLIGADO" || key === "TERMINATED";
+}
+
+function isFrameworkAttritionEligibleStatus(status?: string | null) {
+  return isFrameworkAttritionActiveStatus(status) || isFrameworkAttritionTerminatedStatus(status);
+}
+
+function wasFrameworkAttritionActiveAtBoundary(employee: PerformanceEmployee, boundary: Date, boundaryType: "start" | "end") {
+  if (!isFrameworkAttritionEligibleStatus(employee.operationalStatus)) return false;
+  if (isFrameworkAttritionTerminatedStatus(employee.operationalStatus) && !employee.terminationDate) return false;
+  const admittedByBoundary = !employee.admissionDate || employee.admissionDate <= boundary;
+  const notTerminatedByBoundary =
+    boundaryType === "start"
+      ? !employee.terminationDate || employee.terminationDate >= boundary
+      : !employee.terminationDate || employee.terminationDate > boundary;
+  return admittedByBoundary && notTerminatedByBoundary;
+}
+
+function isFrameworkAttritionTerminationInPeriod(employee: PerformanceEmployee, period: Period) {
+  return Boolean(
+    isFrameworkAttritionTerminatedStatus(employee.operationalStatus) &&
+      employee.terminationDate &&
+      isDateInRange(employee.terminationDate, period.start, period.end)
+  );
 }
 
 function frameworkEmployeeMatchesGroup(employee: Pick<PerformanceEmployee, "lob" | "skill">, group: FrameworkGroupKey) {
