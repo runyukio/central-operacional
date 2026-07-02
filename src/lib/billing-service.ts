@@ -346,7 +346,13 @@ export async function getEmployeeBillingPreview(employeeId: string) {
     hourlyRate: invoice.hourlyRate,
     grossAmount: invoice.grossAmount,
     advanceAmount: invoice.advanceAmount,
+    automaticAdvanceAmount: invoice.automaticAdvanceAmount,
+    manualAdvanceAmount: invoice.manualAdvanceAmount,
     campaignAmount: invoice.campaignAmount,
+    bonusAmount: invoice.bonusAmount,
+    discountAmount: invoice.discountAmount,
+    correctionAmount: invoice.correctionAmount,
+    otherAdjustmentAmount: invoice.otherAdjustmentAmount,
     adjustmentAmount: invoice.adjustmentAmount,
     finalAmount: invoice.finalAmount,
     message: isInvoiceAvailableForEmployeeReview(cycle?.status, persisted?.status ?? invoice.status)

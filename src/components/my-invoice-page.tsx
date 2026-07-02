@@ -25,7 +25,13 @@ type MyInvoicePayload = {
       billingRule: string;
       grossAmount: number;
       advanceAmount: number;
+      automaticAdvanceAmount: number;
+      manualAdvanceAmount: number;
       campaignAmount: number;
+      bonusAmount: number;
+      discountAmount: number;
+      correctionAmount: number;
+      otherAdjustmentAmount: number;
       adjustmentAmount: number;
       finalAmount: number;
     };
@@ -171,6 +177,22 @@ export function MyInvoicePage() {
         <StatCard title="Valor/hora" value={formatCurrency(data.invoice.hourlyRate)} helper={billingRuleLabel(data.invoice.billingRule)} icon={CircleDollarSign} tone="orange" />
         <StatCard title="Valor final" value={formatCurrency(data.invoice.finalAmount)} helper="previsão/invoice" icon={WalletCards} tone="green" />
       </div>
+
+      <section className="card overflow-hidden">
+        <div className="border-b border-border px-3 py-2">
+          <h2 className="text-sm font-black text-navy-950">Resumo financeiro</h2>
+        </div>
+        <div className="grid gap-2 p-3 sm:grid-cols-2 lg:grid-cols-4">
+          <FinancialMetric label="Valor bruto" value={data.invoice.grossAmount} />
+          <FinancialMetric label="Adiantamento" value={-data.invoice.advanceAmount} helper={data.invoice.manualAdvanceAmount ? `Manual: ${formatCurrency(data.invoice.manualAdvanceAmount)}` : "Desconto no invoice"} tone="orange" />
+          <FinancialMetric label="Campanha" value={data.invoice.campaignAmount} tone="green" />
+          <FinancialMetric label="Bônus" value={data.invoice.bonusAmount} tone="green" />
+          <FinancialMetric label="Correção" value={data.invoice.correctionAmount} tone={data.invoice.correctionAmount < 0 ? "red" : "green"} />
+          <FinancialMetric label="Desconto" value={-data.invoice.discountAmount} tone="red" />
+          <FinancialMetric label="Outros ajustes" value={data.invoice.otherAdjustmentAmount} tone={data.invoice.otherAdjustmentAmount < 0 ? "red" : "green"} />
+          <FinancialMetric label="Valor final" value={data.invoice.finalAmount} tone="green" highlight />
+        </div>
+      </section>
 
       <section className="grid gap-4 xl:grid-cols-[1fr_360px]">
         <div className="space-y-4">
@@ -322,6 +344,30 @@ function Table({ columns, rows }: { columns: string[]; rows: Array<Array<React.R
 
 function Amount({ value, highlight = false }: { value: number; highlight?: boolean }) {
   return <span className={cn("font-black", value < 0 ? "text-red-600" : highlight ? "text-emerald-700" : "text-navy-950")}>{formatCurrency(value)}</span>;
+}
+
+function FinancialMetric({ label, value, helper, tone, highlight = false }: { label: string; value: number; helper?: string; tone?: "green" | "red" | "orange"; highlight?: boolean }) {
+  const color = value < 0 || tone === "red"
+    ? "text-red-700"
+    : tone === "green" || highlight
+      ? "text-emerald-700"
+      : tone === "orange"
+        ? "text-orange-700"
+        : "text-navy-950";
+  const bg = tone === "red" || value < 0
+    ? "bg-red-50/70"
+    : tone === "green" || highlight
+      ? "bg-emerald-50/70"
+      : tone === "orange"
+        ? "bg-orange-50/70"
+        : "bg-white";
+  return (
+    <div className={cn("rounded-xl border border-border p-3", bg)}>
+      <p className="text-[11px] font-black uppercase tracking-wide text-muted">{label}</p>
+      <p className={cn("mt-1 text-lg font-black", color)}>{formatCurrency(value)}</p>
+      {helper ? <p className="mt-1 text-xs font-semibold text-muted">{helper}</p> : null}
+    </div>
+  );
 }
 
 function minutesToHours(minutes: number) {

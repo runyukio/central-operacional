@@ -122,7 +122,13 @@ type ProfilePayload = {
       hourlyRate: number;
       grossAmount: number;
       advanceAmount: number;
+      automaticAdvanceAmount: number;
+      manualAdvanceAmount: number;
       campaignAmount: number;
+      bonusAmount: number;
+      discountAmount: number;
+      correctionAmount: number;
+      otherAdjustmentAmount: number;
       adjustmentAmount: number;
       finalAmount: number;
       message: string;
@@ -264,6 +270,11 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
               </div>
               <div className="mt-3 rounded-lg border border-border bg-slate-50 p-3 text-sm">
                 <InfoLine label="Adiantamento" value={data.billing.advanceAmount ? `-${formatCurrency(data.billing.advanceAmount)}` : "Sem desconto"} />
+                <InfoLine label="Campanha" value={formatCurrency(data.billing.campaignAmount)} />
+                <InfoLine label="Bônus" value={formatCurrency(data.billing.bonusAmount)} />
+                <InfoLine label="Correção" value={formatCurrency(data.billing.correctionAmount)} />
+                <InfoLine label="Desconto" value={data.billing.discountAmount ? `-${formatCurrency(data.billing.discountAmount)}` : formatCurrency(0)} />
+                <InfoLine label="Outros ajustes" value={formatCurrency(data.billing.otherAdjustmentAmount)} />
                 <InfoLine label="Valor/hora" value={formatCurrency(data.billing.hourlyRate)} />
                 <InfoLine label="Total de horas" value={data.billing.totalHours} />
               </div>
