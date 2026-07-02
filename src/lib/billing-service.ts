@@ -869,6 +869,171 @@ export async function createBillingAdjustment(actor: Actor, input: {
   return { data: mapAdjustment(adjustment) };
 }
 
+export async function bulkCreateBillingAdjustments(actor: Actor, input: {
+  referenceMonth?: string | null;
+  rows: Array<Record<string, unknown>>;
+  fileName?: string | null;
+}) {
+  const user = await findActiveUser(actor.email);
+  const denied = requireBillingAccess(user);
+  if (denied) return denied;
+
+  const referenceMonth = normalizeBillingMonth(input.referenceMonth);
+  if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
+  const rows = input.rows ?? [];
+  if (!rows.length) return { error: "A planilha não possui linhas para importar.", status: 400 };
+
+  const cycle = await ensureBillingCycle(referenceMonth);
+  const rowNumbers = rows.map((_, index) => index + 2);
+  const identifiers = rows
+    .map((row) => readBulkAdjustmentCell(row, ["wb_login", "wb", "login", "wbLogin", "WB/Login", "colaborador", "employee", "email"]))
+    .filter(Boolean)
+    .map((value) => normalizeBulkLookup(value));
+  const uniqueIdentifiers = Array.from(new Set(identifiers));
+  const employees = uniqueIdentifiers.length
+    ? await prisma.employeeProfile.findMany({
+      where: {
+        deletedAt: null,
+        OR: [
+          { wbLogin: { in: uniqueIdentifiers } },
+          { user: { email: { in: uniqueIdentifiers } } }
+        ]
+      },
+      include: { user: true }
+    })
+    : [];
+  const employeesByLookup = new Map<string, typeof employees[number]>();
+  for (const employee of employees) {
+    employeesByLookup.set(normalizeBulkLookup(employee.wbLogin), employee);
+    if (employee.user?.email) employeesByLookup.set(normalizeBulkLookup(employee.user.email), employee);
+  }
+  const finalizedInvoices = await prisma.billingEmployeeInvoice.findMany({
+    where: {
+      billingCycleId: cycle.id,
+      employeeId: { in: employees.map((employee) => employee.id) },
+      status: "FECHADO"
+    },
+    select: { employeeId: true }
+  });
+  const finalizedEmployeeIds = new Set(finalizedInvoices.map((invoice) => invoice.employeeId));
+
+  const errors: Array<{ rowNumber: number; wbLogin: string; error: string }> = [];
+  const validRows: Array<{
+    rowNumber: number;
+    employeeId: string;
+    wbLogin: string;
+    type: string;
+    description: string;
+    amount: number;
+    observation: string;
+  }> = [];
+
+  rows.forEach((row, index) => {
+    const rowNumber = rowNumbers[index];
+    if (isBulkAdjustmentRowEmpty(row)) return;
+    const identifier = readBulkAdjustmentCell(row, ["wb_login", "wb", "login", "wbLogin", "WB/Login", "colaborador", "employee", "email"]);
+    const lookup = normalizeBulkLookup(identifier);
+    if (!lookup) {
+      errors.push({ rowNumber, wbLogin: "", error: "Informe wb_login ou e-mail do colaborador." });
+      return;
+    }
+    const employee = employeesByLookup.get(lookup);
+    if (!employee) {
+      errors.push({ rowNumber, wbLogin: String(identifier ?? ""), error: "Colaborador não encontrado pelo WB/Login ou e-mail." });
+      return;
+    }
+    if (!isBillingEligibleContract(employee.contractType)) {
+      errors.push({ rowNumber, wbLogin: employee.wbLogin, error: BILLING_PJ_ONLY_MESSAGE });
+      return;
+    }
+    if (finalizedEmployeeIds.has(employee.id)) {
+      errors.push({ rowNumber, wbLogin: employee.wbLogin, error: "Invoice individual já finalizado. Reabra antes de aplicar ajustes." });
+      return;
+    }
+
+    const parsed = parseBulkAdjustmentTypeAndAmount(row);
+    if (!parsed) {
+      errors.push({ rowNumber, wbLogin: employee.wbLogin, error: "Informe uma coluna correcao/correção ou bonus/bônus com valor válido." });
+      return;
+    }
+    const motivo = readBulkAdjustmentCell(row, ["motivo", "observacao", "observação", "obs", "reason"]);
+    const description = readBulkAdjustmentCell(row, ["descricao", "descrição", "description"]) || parsed.type;
+    validRows.push({
+      rowNumber,
+      employeeId: employee.id,
+      wbLogin: employee.wbLogin,
+      type: parsed.type,
+      description: String(description).trim(),
+      amount: normalizeBillingAdjustmentAmount(parsed.type, parsed.amount),
+      observation: motivo ? String(motivo).trim() : ""
+    });
+  });
+
+  if (!validRows.length) {
+    return {
+      data: {
+        fileName: input.fileName ?? "",
+        referenceMonth,
+        rowsTotal: rows.length,
+        rowsCreated: 0,
+        rowsError: errors.length,
+        errors
+      }
+    };
+  }
+
+  const created = await prisma.$transaction(async (tx) => {
+    const adjustments = [];
+    for (const row of validRows) {
+      const adjustment = await tx.billingAdjustment.create({
+        data: {
+          billingCycleId: cycle.id,
+          referenceMonth,
+          type: row.type,
+          description: row.description,
+          amount: decimal(row.amount),
+          employeeId: row.employeeId,
+          employeeInvoiceId: null,
+          lobId: null,
+          observation: row.observation || null,
+          createdById: user!.id
+        }
+      });
+      adjustments.push(adjustment);
+      await tx.auditLog.create({
+        data: {
+          actorId: user!.id,
+          action: AuditAction.CRIACAO,
+          entity: "BillingAdjustment",
+          entityId: adjustment.id,
+          reason: "Importação em lote de ajustes de Billing",
+          newValue: {
+            referenceMonth,
+            type: row.type,
+            amount: row.amount,
+            employeeId: row.employeeId,
+            wbLogin: row.wbLogin,
+            observation: row.observation,
+            fileName: input.fileName ?? ""
+          }
+        }
+      });
+    }
+    return adjustments;
+  });
+
+  return {
+    data: {
+      fileName: input.fileName ?? "",
+      referenceMonth,
+      rowsTotal: rows.length,
+      rowsCreated: created.length,
+      rowsError: errors.length,
+      errors
+    }
+  };
+}
+
 export async function updateBillingAdjustment(actor: Actor, input: {
   id: string;
   type: string;
@@ -1783,6 +1948,68 @@ function normalizeBillingAdjustmentAmount(type: string, amount: number) {
   return amount;
 }
 
+function readBulkAdjustmentCell(row: Record<string, unknown>, keys: string[]) {
+  const normalizedKeys = new Map(Object.keys(row).map((key) => [normalizeBulkHeader(key), key]));
+  for (const key of keys) {
+    const originalKey = normalizedKeys.get(normalizeBulkHeader(key));
+    if (!originalKey) continue;
+    const value = row[originalKey];
+    if (value === null || value === undefined) continue;
+    const text = String(value).trim();
+    if (text) return value;
+  }
+  return "";
+}
+
+function normalizeBulkHeader(value: string) {
+  return normalizeComparableJobTitle(value).replace(/[^a-z0-9]/g, "");
+}
+
+function normalizeBulkLookup(value: unknown) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function isBulkAdjustmentRowEmpty(row: Record<string, unknown>) {
+  return Object.values(row).every((value) => String(value ?? "").trim() === "");
+}
+
+function parseBulkAdjustmentTypeAndAmount(row: Record<string, unknown>) {
+  const explicitType = readBulkAdjustmentCell(row, ["tipo", "type"]);
+  const explicitAmount = readBulkAdjustmentCell(row, ["valor", "amount"]);
+  if (explicitType && explicitAmount !== "") {
+    const normalizedType = normalizeComparableJobTitle(explicitType);
+    const type = normalizedType === "bonus" || normalizedType === "bonificacao"
+      ? "Bônus"
+      : normalizedType === "correcao" || normalizedType === "correção"
+        ? "Correção"
+        : "";
+    const amount = parseBulkMoney(explicitAmount);
+    if (type && Number.isFinite(amount)) return { type, amount };
+  }
+
+  const correction = readBulkAdjustmentCell(row, ["correcao", "correção", "correction"]);
+  const correctionAmount = parseBulkMoney(correction);
+  if (Number.isFinite(correctionAmount)) return { type: "Correção", amount: correctionAmount };
+
+  const bonus = readBulkAdjustmentCell(row, ["bonus", "bônus", "bonificacao", "bonificação"]);
+  const bonusAmount = parseBulkMoney(bonus);
+  if (Number.isFinite(bonusAmount)) return { type: "Bônus", amount: bonusAmount };
+
+  return null;
+}
+
+function parseBulkMoney(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return roundMoney(value);
+  const text = String(value ?? "").trim();
+  if (!text) return NaN;
+  const clean = text.replace(/R\$/gi, "").replace(/\s/g, "");
+  const normalized = clean.includes(",")
+    ? clean.replace(/\./g, "").replace(",", ".")
+    : clean.replace(/,/g, "");
+  const number = Number(normalized);
+  return Number.isFinite(number) ? roundMoney(number) : NaN;
+}
+
 function buildDashboardSummary(invoices: Array<{ grossAmount: number; advanceAmount: number; campaignAmount: number; adjustmentAmount: number; finalAmount: number; approvedMinutes: number; totalConsideredMinutes: number; employeeId: string }>, cycleStatus: string) {
   const agentsWithHours = new Set(invoices.filter((row) => row.approvedMinutes > 0 || row.totalConsideredMinutes > 0).map((row) => row.employeeId)).size;
   return {
@@ -2188,6 +2415,7 @@ function mapAdjustment(row: Prisma.BillingAdjustmentGetPayload<{ include: { empl
     referenceMonth: row.referenceMonth,
     type: row.type,
     description: row.description,
+    observation: row.observation ?? "",
     amount: Number(row.amount),
     employeeId: row.employeeId ?? "",
     employeeName: withRelations.employee?.fullName ?? "",

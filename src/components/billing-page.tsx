@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, CircleDollarSign, Download, Eye, FileSpreadsheet, LockKeyhole, Pencil, RefreshCw, Save, Search, Send, SlidersHorizontal, Trash2, X } from "lucide-react";
 
 import { EmptyState, PageHeader, Panel, StatCard, StatusBadge } from "@/components/ui/primitives";
@@ -96,6 +96,7 @@ type BillingPayload = {
       id: string;
       type: string;
       description: string;
+      observation: string;
       amount: number;
       employeeName: string;
       lob: string;
@@ -136,6 +137,15 @@ type BillingPayload = {
 
 type TabKey = "lob" | "employees" | "hours" | "adjustments" | "rates";
 
+type BulkAdjustmentResult = {
+  fileName: string;
+  referenceMonth: string;
+  rowsTotal: number;
+  rowsCreated: number;
+  rowsError: number;
+  errors: Array<{ rowNumber: number; wbLogin: string; error: string }>;
+};
+
 function billingQueryParam(name: string) {
   if (typeof window === "undefined") return "";
   return new URLSearchParams(window.location.search).get(name) ?? "";
@@ -168,9 +178,11 @@ export function BillingPage() {
   const [activeTab, setActiveTab] = useState<TabKey>(billingInitialTab);
   const [rateDraft, setRateDraft] = useState<Record<string, string>>({});
   const [adjustmentDraft, setAdjustmentDraft] = useState({ type: "Correção", description: "", amount: "", employeeInvoiceId: "" });
+  const [bulkAdjustmentResult, setBulkAdjustmentResult] = useState<BulkAdjustmentResult | null>(null);
   const [editingAdjustment, setEditingAdjustment] = useState<BillingPayload["data"]["adjustments"][number] | null>(null);
   const [selectedInvoice, setSelectedInvoice] = useState<BillingPayload["data"]["invoices"][number] | null>(null);
   const [employeePage, setEmployeePage] = useState(1);
+  const bulkAdjustmentInputRef = useRef<HTMLInputElement | null>(null);
   const employeePageSize = 12;
   const data = payload?.data;
   const billingButtonClass = "inline-flex items-center justify-center gap-2 leading-none";
@@ -276,6 +288,33 @@ export function BillingPage() {
       employeeId
     }, "Ajuste manual criado.");
     setAdjustmentDraft({ type: "Correção", description: "", amount: "", employeeInvoiceId: "" });
+  }
+
+  async function uploadBulkAdjustments(file?: File | null) {
+    if (!file) return;
+    setSaving(true);
+    setError("");
+    setMessage("");
+    setBulkAdjustmentResult(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("referenceMonth", referenceMonth);
+      const response = await fetch("/api/billing/adjustments/bulk", {
+        method: "POST",
+        body: formData
+      });
+      const next = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(next.error ?? "Não foi possível importar os ajustes.");
+      setBulkAdjustmentResult(next.data);
+      setMessage(`Importação concluída: ${next.data.rowsCreated ?? 0} ajuste(s) criado(s), ${next.data.rowsError ?? 0} erro(s).`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível importar os ajustes.");
+    } finally {
+      if (bulkAdjustmentInputRef.current) bulkAdjustmentInputRef.current.value = "";
+      setSaving(false);
+    }
   }
 
   async function createEmployeeAdjustment(invoice: BillingPayload["data"]["invoices"][number], draft: { type: string; description: string; amount: string }) {
@@ -497,6 +536,12 @@ export function BillingPage() {
                 {activeTab === "adjustments" ? (
                   <div className="space-y-4">
                     <AdjustmentForm draft={adjustmentDraft} setDraft={setAdjustmentDraft} invoices={data.invoices} saving={saving} onSubmit={createAdjustment} />
+                    <BulkAdjustmentUpload
+                      inputRef={bulkAdjustmentInputRef}
+                      saving={saving}
+                      result={bulkAdjustmentResult}
+                      onUpload={uploadBulkAdjustments}
+                    />
                     <AdjustmentsTable rows={data.adjustments} saving={saving} onEdit={setEditingAdjustment} onDelete={deleteAdjustment} />
                     <AdjustmentRequestsTable rows={data.adjustmentRequests} />
                   </div>
@@ -657,6 +702,70 @@ function AdjustmentForm({ draft, setDraft, invoices, saving, onSubmit }: { draft
         <button disabled={saving} onClick={onSubmit} className="premium-button inline-flex h-10 items-center justify-center gap-2 px-3 text-sm font-extrabold leading-none"><Save className="h-4 w-4" /> Criar ajuste</button>
       </div>
       <textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Descrição do ajuste" className="premium-control mt-2 min-h-[72px] w-full px-3 py-2 text-sm font-semibold" />
+    </div>
+  );
+}
+
+function BulkAdjustmentUpload({
+  inputRef,
+  saving,
+  result,
+  onUpload
+}: {
+  inputRef: { current: HTMLInputElement | null };
+  saving: boolean;
+  result: BulkAdjustmentResult | null;
+  onUpload: (file?: File | null) => void | Promise<void>;
+}) {
+  return (
+    <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-black text-navy-950">Importar bônus e correções em lote</h3>
+          <p className="mt-1 text-xs font-semibold text-muted">
+            Aceita colunas <span className="font-black text-navy-950">wb_login</span>, <span className="font-black text-navy-950">correcao</span> ou <span className="font-black text-navy-950">bonus</span> e <span className="font-black text-navy-950">motivo</span>.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <a href="/api/billing/adjustments/template" className="premium-control inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none text-blue-700">
+            <Download className="h-4 w-4" /> Baixar template
+          </a>
+          <input
+            ref={inputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            className="hidden"
+            onChange={(event) => void onUpload(event.target.files?.[0])}
+          />
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => inputRef.current?.click()}
+            className="premium-button inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none"
+          >
+            <FileSpreadsheet className="h-4 w-4" /> Importar XLSX
+          </button>
+        </div>
+      </div>
+      {result ? (
+        <div className="mt-3 rounded-lg border border-border bg-white p-3">
+          <div className="grid gap-2 text-xs font-black text-navy-950 sm:grid-cols-3">
+            <span>{result.rowsTotal} linha(s) lida(s)</span>
+            <span className="text-emerald-700">{result.rowsCreated} ajuste(s) criado(s)</span>
+            <span className={result.rowsError ? "text-red-700" : "text-muted"}>{result.rowsError} erro(s)</span>
+          </div>
+          {result.errors.length ? (
+            <div className="mt-3 max-h-40 overflow-auto rounded-lg border border-red-100 bg-red-50 p-2">
+              {result.errors.slice(0, 20).map((item) => (
+                <p key={`${item.rowNumber}-${item.wbLogin}-${item.error}`} className="text-xs font-semibold text-red-800">
+                  Linha {item.rowNumber}{item.wbLogin ? ` • ${item.wbLogin}` : ""}: {item.error}
+                </p>
+              ))}
+              {result.errors.length > 20 ? <p className="mt-1 text-xs font-black text-red-800">+ {result.errors.length - 20} erro(s) não exibido(s)</p> : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -859,10 +968,11 @@ function AdjustmentsTable({
 }) {
   return (
     <Table
-      columns={["Tipo", "Descrição", "Colaborador", "LOB", "Valor", "Criado por", "Criado em", "Ações"]}
+      columns={["Tipo", "Descrição", "Observação", "Colaborador", "LOB", "Valor", "Criado por", "Criado em", "Ações"]}
       rows={rows.map((row) => [
         row.type,
         row.description,
+        row.observation || "-",
         row.employeeName || "-",
         row.lob || "-",
         formatCurrency(row.amount),
