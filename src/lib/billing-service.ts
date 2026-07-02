@@ -667,7 +667,14 @@ export async function updateBillingCycleStatus(actor: Actor, input: { referenceM
     data.finalizedAt = new Date();
     data.finalizedBy = { connect: { id: user!.id } };
   }
+  let frozenInvoiceCount = 0;
   if (nextStatus === "FECHADO") {
+    const invoices = await buildBillingInvoicesReadModel(referenceMonth, await getBillingRates(), cycle, {}, { includeHourDetails: false });
+    for (const invoice of invoices) {
+      await upsertEmployeeInvoice(cycle.id, invoice, { status: "FECHADO" });
+    }
+    await updateCycleTotals(cycle.id, invoices);
+    frozenInvoiceCount = invoices.length;
     data.closedAt = new Date();
     data.closedBy = { connect: { id: user!.id } };
   }
@@ -680,7 +687,7 @@ export async function updateBillingCycleStatus(actor: Actor, input: { referenceM
       entityId: cycle.id,
       reason: "Status do ciclo de Billing atualizado",
       previousValue: { status: cycle.status },
-      newValue: { status: updated.status, referenceMonth }
+      newValue: { status: updated.status, referenceMonth, frozenInvoiceCount }
     }
   });
   return { data: mapCycle(updated) };
