@@ -299,23 +299,6 @@ export function MyInvoicePage() {
             )}
           </Panel>
 
-          <Panel title="Histórico">
-            {data.history.length ? (
-              <div className="space-y-2">
-                {data.history.map((row) => (
-                  <div key={row.id} className="flex items-center justify-between gap-3 border-b border-border/70 py-2 last:border-b-0">
-                    <div>
-                      <p className="text-sm font-black text-navy-950">{row.monthLabel}</p>
-                      <p className="text-xs font-semibold text-muted">{row.status}</p>
-                    </div>
-                    <p className="text-sm font-black text-navy-950">{formatCurrency(row.finalAmount)}</p>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm font-semibold text-muted">Sem ciclos anteriores a partir de Junho/2026.</p>
-            )}
-          </Panel>
         </div>
       </section>
     </div>
