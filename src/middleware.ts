@@ -21,7 +21,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL("/alterar-senha", request.url));
   }
 
-  if ((pathname === "/billing" || pathname.startsWith("/billing/")) && !canAccessBilling({ id: token.sub, email: token.email, name: token.name })) {
+  if ((pathname === "/billing" || pathname.startsWith("/billing/")) && !canAccessBilling({ id: token.sub, email: token.email, name: token.name, role })) {
     return NextResponse.redirect(new URL(getDefaultPathForRole(role), request.url));
   }
 

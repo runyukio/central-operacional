@@ -132,6 +132,9 @@ type BillingPayload = {
       updatedBy: string;
       updatedAt: string;
     }>;
+    permissions: {
+      canManageBilling: boolean;
+    };
   };
 };
 
@@ -185,7 +188,18 @@ export function BillingPage() {
   const bulkAdjustmentInputRef = useRef<HTMLInputElement | null>(null);
   const employeePageSize = 12;
   const data = payload?.data;
+  const canManageBilling = Boolean(data?.permissions.canManageBilling);
   const billingButtonClass = "inline-flex items-center justify-center gap-2 leading-none";
+  const tabs = useMemo<Array<[TabKey, string]>>(() => {
+    const base: Array<[TabKey, string]> = [
+      ["lob", "Consolidado por LOB"],
+      ["employees", "Por colaborador"],
+      ["hours", "Detalhamento de horas"]
+    ];
+    return canManageBilling
+      ? [...base, ["adjustments", "Ajustes"], ["rates", "Configurações de valores"]]
+      : base;
+  }, [canManageBilling]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => setSearch(searchInput.trim()), 300);
@@ -224,6 +238,11 @@ export function BillingPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!data || canManageBilling) return;
+    if (activeTab === "adjustments" || activeTab === "rates") setActiveTab("lob");
+  }, [activeTab, canManageBilling, data]);
 
   useEffect(() => {
     if (!data?.rateConfigs.length) return;
@@ -509,13 +528,7 @@ export function BillingPage() {
           <section className="grid gap-3 xl:grid-cols-[1fr_360px]">
             <div className="card overflow-hidden">
               <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
-                {([
-                  ["lob", "Consolidado por LOB"],
-                  ["employees", "Por colaborador"],
-                  ["hours", "Detalhamento de horas"],
-                  ["adjustments", "Ajustes"],
-                  ["rates", "Configurações de valores"]
-                ] as Array<[TabKey, string]>).map(([key, label]) => (
+                {tabs.map(([key, label]) => (
                   <button key={key} type="button" onClick={() => setActiveTab(key)} className={cn("inline-flex items-center justify-center rounded-lg px-3 py-2 text-xs font-black leading-none", activeTab === key ? "bg-blue-600 text-white" : "text-muted hover:bg-blue-50 hover:text-blue-700")}>
                     {label}
                   </button>
@@ -560,13 +573,19 @@ export function BillingPage() {
                   <InfoLine label="Agentes com horas" value={data.summary.agentsWithHours} />
                   <InfoLine label="Valor final" value={formatCurrency(data.summary.finalAmount)} />
                 </div>
-                <div className="mt-3 grid gap-2">
-                  <button disabled={saving} onClick={() => postBilling({ action: "set-cycle-status", referenceMonth, status: "EM_REVISAO" }, "Ciclo marcado como Em revisão.")} className="premium-control inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none text-navy-950">Marcar em revisão</button>
-                  <button disabled={saving} onClick={() => postBilling({ action: "set-cycle-status", referenceMonth, status: "FINALIZADO_CONFERENCIA" }, "Ciclo liberado para conferência dos colaboradores.")} className="premium-button inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none">
-                    <Send className="h-4 w-4" /> Liberar conferência
-                  </button>
-                  <button disabled={saving} onClick={() => postBilling({ action: "set-cycle-status", referenceMonth, status: "FECHADO" }, "Ciclo fechado.")} className="premium-control inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none text-navy-950">Fechar ciclo</button>
-                </div>
+                {canManageBilling ? (
+                  <div className="mt-3 grid gap-2">
+                    <button disabled={saving} onClick={() => postBilling({ action: "set-cycle-status", referenceMonth, status: "EM_REVISAO" }, "Ciclo marcado como Em revisão.")} className="premium-control inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none text-navy-950">Marcar em revisão</button>
+                    <button disabled={saving} onClick={() => postBilling({ action: "set-cycle-status", referenceMonth, status: "FINALIZADO_CONFERENCIA" }, "Ciclo liberado para conferência dos colaboradores.")} className="premium-button inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none">
+                      <Send className="h-4 w-4" /> Liberar conferência
+                    </button>
+                    <button disabled={saving} onClick={() => postBilling({ action: "set-cycle-status", referenceMonth, status: "FECHADO" }, "Ciclo fechado.")} className="premium-control inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none text-navy-950">Fechar ciclo</button>
+                  </div>
+                ) : (
+                  <p className="mt-3 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
+                    Visualização restrita ao time vinculado ao seu perfil de supervisor.
+                  </p>
+                )}
               </Panel>
               <Panel title="Exportar Billing">
                 <p className="text-sm font-semibold text-muted">Gera XLSX com Consolidado, Por LOB, Por Colaborador, Detalhamento de Horas, Ajustes, Aprovações e Configurações.</p>
@@ -582,6 +601,7 @@ export function BillingPage() {
               saving={saving}
               detailsLoaded={activeTab === "hours"}
               exportHref={`/api/billing/export?referenceMonth=${encodeURIComponent(referenceMonth)}&employeeId=${encodeURIComponent(selectedInvoice.employeeId)}`}
+              canManageBilling={canManageBilling}
               onClose={() => setSelectedInvoice(null)}
               onLoadHourDetails={() => setActiveTab("hours")}
               onCreateAdjustment={(draft) => createEmployeeAdjustment(selectedInvoice, draft)}
@@ -775,6 +795,7 @@ function EmployeeBillingDetail({
   saving,
   detailsLoaded,
   exportHref,
+  canManageBilling,
   onClose,
   onLoadHourDetails,
   onCreateAdjustment,
@@ -785,6 +806,7 @@ function EmployeeBillingDetail({
   saving: boolean;
   detailsLoaded: boolean;
   exportHref: string;
+  canManageBilling: boolean;
   onClose: () => void;
   onLoadHourDetails: () => void;
   onCreateAdjustment: (draft: { type: string; description: string; amount: string }) => Promise<void>;
@@ -824,7 +846,7 @@ function EmployeeBillingDetail({
             <p className="text-sm font-semibold text-muted">{invoice.wbLogin} • {invoice.roleTitle} • {invoice.skill || "Sem skill"} • {invoice.lob}</p>
           </div>
           <div className="flex items-center gap-2">
-            {!finalized ? (
+            {canManageBilling && !finalized ? (
               <button
                 type="button"
                 disabled={saving || alreadyReleasedForReview}
@@ -834,17 +856,19 @@ function EmployeeBillingDetail({
                 <Send className="h-4 w-4" /> {alreadyReleasedForReview ? "Conferência liberada" : "Liberar conferência"}
               </button>
             ) : null}
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => void onSetFinalized(!finalized)}
-              className={cn(
-                "inline-flex h-9 items-center justify-center gap-2 rounded-lg px-3 text-xs font-black leading-none",
-                finalized ? "border border-amber-200 bg-amber-50 text-amber-800" : "premium-button"
-              )}
-            >
-              <LockKeyhole className="h-4 w-4" /> {finalized ? "Reabrir invoice" : "Finalizar invoice"}
-            </button>
+            {canManageBilling ? (
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => void onSetFinalized(!finalized)}
+                className={cn(
+                  "inline-flex h-9 items-center justify-center gap-2 rounded-lg px-3 text-xs font-black leading-none",
+                  finalized ? "border border-amber-200 bg-amber-50 text-amber-800" : "premium-button"
+                )}
+              >
+                <LockKeyhole className="h-4 w-4" /> {finalized ? "Reabrir invoice" : "Finalizar invoice"}
+              </button>
+            ) : null}
             <a href={exportHref} className="premium-control inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none text-blue-700">
               <Download className="h-4 w-4" /> Exportar
             </a>
@@ -888,26 +912,28 @@ function EmployeeBillingDetail({
               {invoice.billingWarning ? <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-800">{invoice.billingWarning}</p> : null}
             </Panel>
 
-            <Panel title="Ajuste individual">
-              <div className="space-y-2">
-                <select disabled={finalized} value={draft.type} onChange={(event) => setDraft({ ...draft, type: event.target.value })} className="premium-control h-10 w-full px-3 text-sm font-bold disabled:opacity-60">
-                  <option>Campanha</option>
-                  <option>Adiantamento</option>
-                  <option>Bônus</option>
-                  <option>Desconto</option>
-                  <option>Correção</option>
-                </select>
-                <input disabled={finalized} value={draft.amount} onChange={(event) => setDraft({ ...draft, amount: event.target.value })} placeholder="Valor R$" className="premium-control h-10 w-full px-3 text-sm font-bold disabled:opacity-60" />
-                <textarea disabled={finalized} value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Descrição obrigatória" className="premium-control min-h-[92px] w-full px-3 py-2 text-sm font-semibold disabled:opacity-60" />
-                {localError ? <p className="text-xs font-bold text-red-600">{localError}</p> : null}
-                <button disabled={saving || finalized} onClick={() => void submit()} className="premium-button inline-flex h-10 w-full items-center justify-center gap-2 px-3 text-sm font-extrabold leading-none disabled:opacity-60">
-                  <Save className="h-4 w-4" /> Aplicar ajuste
-                </button>
-                <p className="text-xs font-semibold text-muted">
-                  {finalized ? "Reabra o invoice para aplicar novos ajustes." : "Desconto e Adiantamento reduzem o valor final mesmo se digitados como valor positivo."}
-                </p>
-              </div>
-            </Panel>
+            {canManageBilling ? (
+              <Panel title="Ajuste individual">
+                <div className="space-y-2">
+                  <select disabled={finalized} value={draft.type} onChange={(event) => setDraft({ ...draft, type: event.target.value })} className="premium-control h-10 w-full px-3 text-sm font-bold disabled:opacity-60">
+                    <option>Campanha</option>
+                    <option>Adiantamento</option>
+                    <option>Bônus</option>
+                    <option>Desconto</option>
+                    <option>Correção</option>
+                  </select>
+                  <input disabled={finalized} value={draft.amount} onChange={(event) => setDraft({ ...draft, amount: event.target.value })} placeholder="Valor R$" className="premium-control h-10 w-full px-3 text-sm font-bold disabled:opacity-60" />
+                  <textarea disabled={finalized} value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Descrição obrigatória" className="premium-control min-h-[92px] w-full px-3 py-2 text-sm font-semibold disabled:opacity-60" />
+                  {localError ? <p className="text-xs font-bold text-red-600">{localError}</p> : null}
+                  <button disabled={saving || finalized} onClick={() => void submit()} className="premium-button inline-flex h-10 w-full items-center justify-center gap-2 px-3 text-sm font-extrabold leading-none disabled:opacity-60">
+                    <Save className="h-4 w-4" /> Aplicar ajuste
+                  </button>
+                  <p className="text-xs font-semibold text-muted">
+                    {finalized ? "Reabra o invoice para aplicar novos ajustes." : "Desconto e Adiantamento reduzem o valor final mesmo se digitados como valor positivo."}
+                  </p>
+                </div>
+              </Panel>
+            ) : null}
           </div>
 
           <div className="mt-4">

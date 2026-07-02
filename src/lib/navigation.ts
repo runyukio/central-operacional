@@ -55,7 +55,7 @@ export const navSections: NavSection[] = [
     label: "Financeiro",
     items: [
       { label: "Adiantamento", href: "/adiantamento", icon: "Coins", roles: ["ADMIN", "GESTOR", "WFM"] },
-      { label: "Billing", href: "/billing", icon: "Coins", roles: ["ADMIN"] },
+      { label: "Billing", href: "/billing", icon: "Coins", roles: ["ADMIN", "SUPERVISOR"] },
       { label: "Financeiro", href: "/financeiro", icon: "FileBarChart", roles: financeiroRoles }
     ]
   },

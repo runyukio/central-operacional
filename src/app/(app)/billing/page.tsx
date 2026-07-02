@@ -8,7 +8,7 @@ import { getDefaultPathForRole } from "@/lib/navigation";
 
 export default async function BillingRoute() {
   const session = await getServerSession(authOptions);
-  if (!session?.user || !canAccessBilling(session.user)) {
+  if (!session?.user || !canAccessBilling({ ...session.user, role: session.user.role })) {
     redirect(getDefaultPathForRole(session?.user?.role));
   }
 

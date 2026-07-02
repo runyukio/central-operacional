@@ -16,7 +16,7 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
 
   return (
     <SessionProvider session={session}>
-      <AppShell user={session.user} billingAccess={canAccessBilling(session.user)} financeiroAccess={canAccessFinanceiro(session.user)}>{children}</AppShell>
+      <AppShell user={session.user} billingAccess={canAccessBilling({ ...session.user, role: session.user.role })} financeiroAccess={canAccessFinanceiro(session.user)}>{children}</AppShell>
     </SessionProvider>
   );
 }

@@ -1,7 +1,7 @@
 import { AuditAction, Prisma, RequestStatus, ScheduleStatus, WorkHourRecordStatus } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
-import { canAccessBilling } from "@/lib/billing-permissions";
+import { canAccessBilling, canManageBilling } from "@/lib/billing-permissions";
 import { isAgentJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
 import { MONTHLY_ADVANCE_FIXED_AMOUNT, isMonthlyAdvanceReferenceMonthAvailable } from "@/lib/monthly-advance-constants";
 import { currentReferenceMonth, formatReferenceMonth, normalizeReferenceMonth } from "@/lib/monthly-advance-service";
@@ -196,27 +196,31 @@ export async function getBillingDashboard(actor: Actor, filters: BillingDashboar
   const user = await findActiveUser(actor.email);
   const denied = requireBillingAccess(user);
   if (denied) return denied;
+  const scope = getBillingAccessScope(user);
+  if ("error" in scope) return scope;
+  const scopedFilters = applyBillingScope(filters, scope);
 
-  const referenceMonth = normalizeBillingMonth(filters.referenceMonth);
+  const referenceMonth = normalizeBillingMonth(scopedFilters.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
 
   const startedAt = Date.now();
-  const section = normalizeBillingSection(filters.section);
+  const section = normalizeBillingSection(scopedFilters.section);
   const [cycle, rates] = await Promise.all([
     prisma.billingCycle.findUnique({ where: { referenceMonth } }),
     getBillingRates()
   ]);
-  const invoices = await buildBillingInvoicesReadModel(referenceMonth, rates, cycle, filters, {
+  const invoices = await buildBillingInvoicesReadModel(referenceMonth, rates, cycle, scopedFilters, {
     includeHourDetails: section === "hours" || section === "all"
   });
-  const filteredInvoices = filterInvoices(invoices, filters);
+  const filteredInvoices = filterInvoices(invoices, scopedFilters);
   const cycleStatus = cycle?.status ?? "ABERTO";
   const summary = buildDashboardSummary(filteredInvoices, cycleStatus);
   const byLob = buildLobSummary(filteredInvoices);
+  const visibleEmployeeIds = scope.restricted ? new Set(filteredInvoices.map((invoice) => invoice.employeeId)) : null;
   const [adjustments, adjustmentRequests, rateConfigs] = await Promise.all([
-    cycle && (section === "adjustments" || section === "all") ? listCycleAdjustments(cycle.id) : Promise.resolve([]),
-    cycle && (section === "adjustments" || section === "all") ? listInvoiceAdjustmentRequests(cycle.id) : Promise.resolve([]),
-    section === "rates" || section === "all" ? listBillingRateConfigs() : Promise.resolve([])
+    cycle && (section === "adjustments" || section === "all") ? listCycleAdjustments(cycle.id, visibleEmployeeIds) : Promise.resolve([]),
+    cycle && (section === "adjustments" || section === "all") ? listInvoiceAdjustmentRequests(cycle.id, visibleEmployeeIds) : Promise.resolve([]),
+    !scope.restricted && (section === "rates" || section === "all") ? listBillingRateConfigs() : Promise.resolve([])
   ]);
 
   logPerformance("billing.dashboard", startedAt, {
@@ -230,8 +234,8 @@ export async function getBillingDashboard(actor: Actor, filters: BillingDashboar
     data: {
       referenceMonth,
       monthLabel: formatReferenceMonth(referenceMonth),
-      startDate: filters.startDate || monthPeriod(referenceMonth).startInput,
-      endDate: filters.endDate || monthPeriod(referenceMonth).endInput,
+      startDate: scopedFilters.startDate || monthPeriod(referenceMonth).startInput,
+      endDate: scopedFilters.endDate || monthPeriod(referenceMonth).endInput,
       startMonth: BILLING_START_MONTH,
       cycle: mapCycle(cycle ?? virtualBillingCycle(referenceMonth)),
       summary,
@@ -240,6 +244,9 @@ export async function getBillingDashboard(actor: Actor, filters: BillingDashboar
       adjustments,
       adjustmentRequests,
       rateConfigs,
+      permissions: {
+        canManageBilling: !scope.restricted
+      },
       filterOptions: buildBillingFilterOptions(invoices)
     }
   };
@@ -562,7 +569,7 @@ export async function adminDecideInvoiceAdjustment(actor: Actor, input: {
   finalMinutes?: number | null;
 }) {
   const user = await findActiveUser(actor.email);
-  const denied = requireBillingAccess(user);
+  const denied = requireBillingManagement(user);
   if (denied) return denied;
   if (!input.finalResponse?.trim()) return { error: "Resposta final do Admin é obrigatória.", status: 400 };
 
@@ -641,7 +648,7 @@ export async function adminDecideInvoiceAdjustment(actor: Actor, input: {
 
 export async function updateBillingCycleStatus(actor: Actor, input: { referenceMonth?: string | null; status: string }) {
   const user = await findActiveUser(actor.email);
-  const denied = requireBillingAccess(user);
+  const denied = requireBillingManagement(user);
   if (denied) return denied;
   const referenceMonth = normalizeBillingMonth(input.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
@@ -674,7 +681,7 @@ export async function updateBillingCycleStatus(actor: Actor, input: { referenceM
 
 export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: { referenceMonth?: string | null; employeeId: string; finalized: boolean }) {
   const user = await findActiveUser(actor.email);
-  const denied = requireBillingAccess(user);
+  const denied = requireBillingManagement(user);
   if (denied) return denied;
   const referenceMonth = normalizeBillingMonth(input.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
@@ -735,7 +742,7 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: { 
 
 export async function releaseEmployeeBillingInvoiceForReview(actor: Actor, input: { referenceMonth?: string | null; employeeId: string }) {
   const user = await findActiveUser(actor.email);
-  const denied = requireBillingAccess(user);
+  const denied = requireBillingManagement(user);
   if (denied) return denied;
   const referenceMonth = normalizeBillingMonth(input.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
@@ -779,7 +786,7 @@ export async function releaseEmployeeBillingInvoiceForReview(actor: Actor, input
 
 export async function saveBillingRates(actor: Actor, input: Record<string, number>) {
   const user = await findActiveUser(actor.email);
-  const denied = requireBillingAccess(user);
+  const denied = requireBillingManagement(user);
   if (denied) return denied;
   const validKeys = new Set(DEFAULT_RATE_CONFIGS.map((item) => item.key));
   const updates = Object.entries(input).filter(([key]) => validKeys.has(key as keyof BillingRates));
@@ -828,7 +835,7 @@ export async function createBillingAdjustment(actor: Actor, input: {
   observation?: string | null;
 }) {
   const user = await findActiveUser(actor.email);
-  const denied = requireBillingAccess(user);
+  const denied = requireBillingManagement(user);
   if (denied) return denied;
   const referenceMonth = normalizeBillingMonth(input.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
@@ -875,7 +882,7 @@ export async function bulkCreateBillingAdjustments(actor: Actor, input: {
   fileName?: string | null;
 }) {
   const user = await findActiveUser(actor.email);
-  const denied = requireBillingAccess(user);
+  const denied = requireBillingManagement(user);
   if (denied) return denied;
 
   const referenceMonth = normalizeBillingMonth(input.referenceMonth);
@@ -1041,7 +1048,7 @@ export async function updateBillingAdjustment(actor: Actor, input: {
   amount: number;
 }) {
   const user = await findActiveUser(actor.email);
-  const denied = requireBillingAccess(user);
+  const denied = requireBillingManagement(user);
   if (denied) return denied;
   if (!input.id?.trim()) return { error: "Ajuste obrigatório para edição.", status: 400 };
   if (!input.type?.trim()) return { error: "Tipo de ajuste é obrigatório.", status: 400 };
@@ -1098,7 +1105,7 @@ export async function updateBillingAdjustment(actor: Actor, input: {
 
 export async function deleteBillingAdjustment(actor: Actor, input: { id: string }) {
   const user = await findActiveUser(actor.email);
-  const denied = requireBillingAccess(user);
+  const denied = requireBillingManagement(user);
   if (denied) return denied;
   if (!input.id?.trim()) return { error: "Ajuste obrigatório para exclusão.", status: 400 };
 
@@ -2096,18 +2103,29 @@ function buildFinanceCostLobSummary(invoices: InvoiceCalculation[]): BillingFina
   })).sort((a, b) => a.lob.localeCompare(b.lob, "pt-BR"));
 }
 
-async function listCycleAdjustments(billingCycleId: string) {
+async function listCycleAdjustments(billingCycleId: string, employeeIds?: Set<string> | null) {
+  const employeeWhere = employeeIds
+    ? {
+      OR: [
+        { employeeId: { in: Array.from(employeeIds) } },
+        { employeeInvoice: { employeeId: { in: Array.from(employeeIds) } } }
+      ]
+    }
+    : {};
   const rows = await prisma.billingAdjustment.findMany({
-    where: { billingCycleId, deletedAt: null },
+    where: { billingCycleId, deletedAt: null, ...employeeWhere },
     include: { employee: true, lob: true, createdBy: true },
     orderBy: { createdAt: "desc" }
   });
   return rows.map(mapAdjustment);
 }
 
-async function listInvoiceAdjustmentRequests(billingCycleId: string) {
+async function listInvoiceAdjustmentRequests(billingCycleId: string, employeeIds?: Set<string> | null) {
   const rows = await prisma.invoiceAdjustmentRequest.findMany({
-    where: { billingCycleId },
+    where: {
+      billingCycleId,
+      ...(employeeIds ? { employeeId: { in: Array.from(employeeIds) } } : {})
+    },
     include: { employee: true, employeeInvoice: true, request: true, supervisorCheckedBy: true, adminDecidedBy: true },
     orderBy: { createdAt: "desc" }
   });
@@ -2245,10 +2263,34 @@ function logPerformance(label: string, startedAt: number, details: Record<string
 
 function requireBillingAccess(user: ActiveUser | null) {
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
-  if (!canAccessBilling({ id: user.id, email: user.email, name: user.name })) {
+  if (!canAccessBilling({ id: user.id, email: user.email, name: user.name, role: user.role.name })) {
     return { error: "Você não tem permissão para acessar Billing.", status: 403 };
   }
   return null;
+}
+
+function requireBillingManagement(user: ActiveUser | null) {
+  if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
+  if (!canManageBilling({ id: user.id, email: user.email, name: user.name, role: user.role.name })) {
+    return { error: "Você não tem permissão para administrar Billing.", status: 403 };
+  }
+  return null;
+}
+
+function getBillingAccessScope(user: ActiveUser | null): { restricted: false; supervisorId?: undefined } | { restricted: true; supervisorId: string } | { error: string; status: number } {
+  if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
+  if (canManageBilling({ id: user.id, email: user.email, name: user.name, role: user.role.name })) return { restricted: false };
+  if (normalizeRole(user.role.name) === "SUPERVISOR") {
+    const supervisorId = user.employeeProfile?.id;
+    if (!supervisorId) return { error: "Supervisor sem cadastro vinculado para filtrar o time no Billing.", status: 403 };
+    return { restricted: true, supervisorId };
+  }
+  return { error: "Você não tem permissão para acessar Billing.", status: 403 };
+}
+
+function applyBillingScope(filters: BillingDashboardFilters, scope: { restricted: false; supervisorId?: undefined } | { restricted: true; supervisorId: string }): BillingDashboardFilters {
+  if (!scope.restricted) return filters;
+  return { ...filters, supervisorId: scope.supervisorId };
 }
 
 function findActiveUser(email: string) {
