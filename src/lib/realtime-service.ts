@@ -7,6 +7,7 @@ import type { Actor } from "@/lib/mock-db";
 import { canAccessRealTime } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { resolveQueueReference } from "@/lib/queue-dictionary";
+import { getQueueReportMetadataById } from "@/lib/queue-report-metadata";
 import { isWorkHoursAllowedForSchedule, parseWorkHoursToMinutes } from "@/lib/work-hours-rules";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
@@ -42,6 +43,14 @@ export type RealtimeExportQuery = RealtimeSnapshotOptions & {
   queueSlaTarget?: string | null;
   queueId?: string | null;
   sortBy?: string | null;
+};
+
+export type RealtimeAiSnapshotQuery = RealtimeExportQuery & {
+  reportLob?: string | null;
+  limit?: string | number | null;
+  agentLimit?: string | number | null;
+  queueLimit?: string | number | null;
+  departmentLimit?: string | number | null;
 };
 
 type EmployeeMatch = {
@@ -295,6 +304,26 @@ export function validateRealtimeImportToken(authorizationHeader?: string | null)
   const providedToken = match?.[1]?.trim() ?? "";
   if (!providedToken || !safeEqual(providedToken, configuredToken)) {
     return { error: "Token de integração inválido.", status: 401 };
+  }
+
+  return { ok: true };
+}
+
+export function validateRealtimeReportToken(authorizationHeader?: string | null) {
+  const configuredToken = (
+    process.env.REALTIME_REPORT_API_TOKEN
+    ?? process.env.REALTIME_EXPORT_TOKEN
+    ?? process.env.REALTIME_IMPORT_TOKEN
+    ?? ""
+  ).trim();
+  if (!configuredToken) {
+    return { error: "REALTIME_REPORT_API_TOKEN não configurado no ambiente.", status: 500 };
+  }
+
+  const match = String(authorizationHeader ?? "").match(/^Bearer\s+(.+)$/i);
+  const providedToken = match?.[1]?.trim() ?? "";
+  if (!providedToken || !safeEqual(providedToken, configuredToken)) {
+    return { error: "Token de leitura do Real Time inválido.", status: 401 };
   }
 
   return { ok: true };
@@ -599,6 +628,356 @@ export async function getRealtimeLatestStatus(actor: Actor, options: RealtimeSna
       queues: queueLatest,
       agents: agentLatest
     }
+  };
+}
+
+export async function getRealtimeAiSnapshot(query: RealtimeAiSnapshotQuery = {}) {
+  const snapshot = await getRealtimeSnapshot(realtimeApiActor, { cycleDownload: query.cycleDownload, view: "both" });
+  if ("error" in snapshot && snapshot.error) return { error: snapshot.error, status: snapshot.status ?? 400 };
+  const snapshotData = "data" in snapshot ? snapshot.data : null;
+  if (!snapshotData) return { error: "Não foi possível carregar o snapshot do Real Time.", status: 500 };
+
+  const reportLobs = normalizeAiReportLobs(query.reportLob);
+  const filteredAgentRows = sortAgentRows(filterAgentRows(snapshotData.agents.rows, query), query.sortBy ?? "submit_desc");
+  const filteredQueueRows = filterQueueRows(snapshotData.queueView.rows, query);
+  const reportQueueBaseRows = filterQueueRows(snapshotData.queueView.rows, { ...query, queueSearch: null });
+  const reportQueueRows = reportLobs
+    .flatMap((reportLob) => buildAiReportQueueRows(reportQueueBaseRows, reportLob, query.queueSearch, snapshotData.queueView.selectedCycle))
+    .sort(compareAiReportQueueRows);
+  const reportDepartmentRows = reportLobs
+    .flatMap((reportLob) => buildAiReportDepartmentRows(reportLob, reportQueueRows.filter((row) => row.report === reportLob)))
+    .sort(compareAiReportDepartmentRows);
+
+  const agentLimit = parseAiSnapshotLimit(query.agentLimit ?? query.limit, 500, 5000);
+  const queueLimit = parseAiSnapshotLimit(query.queueLimit ?? query.limit, 500, 5000);
+  const departmentLimit = parseAiSnapshotLimit(query.departmentLimit, 100, 1000);
+  const filteredAgentSummary = summarizeAgentRows(filteredAgentRows);
+  const filteredQueueSummary = summarizeQueueRowsForExport(filteredQueueRows);
+
+  return {
+    success: true,
+    generatedAt: new Date().toISOString(),
+    metadata: {
+      selectedCycle: snapshotData.agents.selectedCycle || snapshotData.queueView.selectedCycle,
+      previousCycle: snapshotData.agents.previousCycle || snapshotData.queueView.previousCycle || null,
+      importedAt: snapshotData.summary.importedAt,
+      importedAtLabel: snapshotData.summary.importedAtLabel,
+      minutesSinceImport: snapshotData.summary.minutesSinceImport,
+      isStale: snapshotData.summary.isStale,
+      availableAgentCycles: snapshotData.agents.cycles.map((cycle) => cycle.value),
+      availableQueueCycles: snapshotData.queueView.cycles.map((cycle) => cycle.value),
+      reportLobs,
+      filters: normalizeAiSnapshotFilters(query),
+      limits: {
+        agents: agentLimit,
+        reportQueues: queueLimit,
+        reportDepartments: departmentLimit
+      }
+    },
+    summary: {
+      agents: {
+        rows: filteredAgentRows.length,
+        recordsImported: filteredAgentSummary.recordsImported,
+        matched: filteredAgentSummary.matched,
+        unmatched: filteredAgentSummary.unmatched,
+        submit: filteredAgentSummary.submit,
+        ahtMs: filteredAgentSummary.ahtMs,
+        aht: formatDurationFromMs(filteredAgentSummary.ahtMs),
+        moderationMs: filteredAgentSummary.moderationMs,
+        moderation: formatDurationFromMs(filteredAgentSummary.moderationMs),
+        timeout: filteredAgentSummary.timeout,
+        refresh: filteredAgentSummary.refresh
+      },
+      queues: {
+        rows: filteredQueueRows.length,
+        input: filteredQueueSummary.input,
+        output: filteredQueueSummary.output,
+        backlog: filteredQueueSummary.backlog,
+        ahtMs: filteredQueueSummary.ahtMs,
+        aht: formatDurationFromMs(filteredQueueSummary.ahtMs),
+        averageLatencyMs: filteredQueueSummary.latencyMs,
+        averageLatency: formatDurationFromMs(filteredQueueSummary.latencyMs),
+        maxLatencyMs: filteredQueueSummary.maxLatencyMs,
+        maxLatency: formatDurationFromMs(filteredQueueSummary.maxLatencyMs)
+      },
+      reports: summarizeAiReportRows(reportQueueRows)
+    },
+    tables: {
+      reportQueues: reportQueueRows.slice(0, queueLimit),
+      reportDepartments: reportDepartmentRows.slice(0, departmentLimit),
+      agentProductivity: buildAiAgentProductivityRows(filteredAgentRows, snapshotData.agents.selectedCycle).slice(0, agentLimit)
+    }
+  };
+}
+
+type AiReportLob = "ADS" | "TNS";
+type AiReportQueueRow = ReturnType<typeof buildAiReportQueueRow>;
+type AiReportDepartmentRow = ReturnType<typeof buildAiReportDepartmentRow>;
+
+const realtimeApiActor: Actor = {
+  email: "realtime-api@central.local",
+  name: "Real Time API",
+  role: "ADMIN"
+};
+const adsAiReportTargetLatencyMinutes = 120;
+const adsAiReportTargetLatencyLabel = "2:00h";
+
+function normalizeAiReportLobs(value?: string | null): AiReportLob[] {
+  const normalized = normalizeHeader(String(value ?? "ALL"));
+  if (normalized === "ads") return ["ADS"];
+  if (normalized === "tns" || normalized === "video" || normalized === "comments") return ["TNS"];
+  return ["ADS", "TNS"];
+}
+
+function buildAiReportQueueRows(rows: QueueCycleRow[], report: AiReportLob, search?: string | null, selectedCycle = "") {
+  const normalizedSearch = normalizeHeader(String(search ?? ""));
+  return rows.flatMap((row) => {
+    const metadata = getQueueReportMetadataById(row.queueId);
+    if (!matchesAiReportLob(metadata.lob, report)) return [];
+    const reportRow = buildAiReportQueueRow(row, report, selectedCycle);
+    if (!normalizedSearch) return [reportRow];
+    const searchable = normalizeHeader([
+      reportRow.report,
+      reportRow.lob,
+      reportRow.department,
+      reportRow.queueId,
+      reportRow.queueName,
+      reportRow.latencyTarget
+    ].join(" "));
+    return searchable.includes(normalizedSearch) ? [reportRow] : [];
+  });
+}
+
+function buildAiReportQueueRow(row: QueueCycleRow, report: AiReportLob, selectedCycle = "") {
+  const metadata = getQueueReportMetadataById(row.queueId);
+  const latencyTargetMinutes = getAiReportLatencyTargetMinutes(report, row.slaTargetMinutes);
+  const latencyTarget = getAiReportLatencyTargetLabel(report, row.slaTargetMinutes);
+  return {
+    report,
+    cycleDownload: selectedCycle,
+    lob: metadata.lob,
+    department: metadata.department,
+    queueId: row.queueId || "Sem Fila ID",
+    queueName: metadata.queueName || row.queueName,
+    input: row.current.input,
+    output: row.current.output,
+    backlog: row.current.backlog,
+    ahtMs: row.current.ahtMs,
+    aht: formatDurationFromMs(row.current.ahtMs),
+    averageLatencyMs: row.current.latencyMs,
+    averageLatency: formatDurationFromMs(row.current.latencyMs),
+    maxLatencyMs: row.current.maxLatencyMs,
+    maxLatency: formatAiReportMaxLatency(row.current.maxLatencyMs, report),
+    latencyTargetMinutes,
+    latencyTarget,
+    latencyAdherence: calculateLatencyAdherence(row.current.maxLatencyMs, latencyTargetMinutes),
+    deltas: {
+      input: row.deltas.input,
+      output: row.deltas.output,
+      backlog: row.deltas.backlog,
+      ahtMs: row.deltas.ahtMs,
+      aht: formatDurationDelta(row.deltas.ahtMs),
+      averageLatencyMs: row.deltas.latencyMs,
+      averageLatency: formatDurationDelta(row.deltas.latencyMs),
+      maxLatencyMs: row.deltas.maxLatencyMs,
+      maxLatency: formatAiReportMaxLatencyDelta(row.deltas.maxLatencyMs, report)
+    }
+  };
+}
+
+function buildAiReportDepartmentRows(report: AiReportLob, rows: AiReportQueueRow[]) {
+  const groups = new Map<string, AiReportQueueRow[]>();
+  for (const row of rows) {
+    const key = `${row.report}::${row.lob}::${row.department}`;
+    groups.set(key, [...(groups.get(key) ?? []), row]);
+  }
+  return Array.from(groups.values()).map((groupRows) => buildAiReportDepartmentRow(report, groupRows));
+}
+
+function buildAiReportDepartmentRow(report: AiReportLob, rows: AiReportQueueRow[]) {
+  const first = rows[0];
+  const positiveAhtRows = rows.filter((row) => row.ahtMs !== null && row.ahtMs > 0);
+  const maxLatencyQueue = rows.reduce<AiReportQueueRow | null>((currentMax, row) => {
+    if (row.maxLatencyMs === null) return currentMax;
+    if (!currentMax || currentMax.maxLatencyMs === null || row.maxLatencyMs > currentMax.maxLatencyMs) return row;
+    return currentMax;
+  }, null);
+  const latencyTargetMinutes = maxLatencyQueue?.latencyTargetMinutes ?? getAiReportLatencyTargetMinutes(report, null);
+  return {
+    report,
+    lob: first?.lob ?? "",
+    department: first?.department ?? "",
+    backlog: rows.reduce((sum, row) => sum + row.backlog, 0),
+    ahtMs: positiveAhtRows.length
+      ? positiveAhtRows.reduce((sum, row) => sum + (row.ahtMs ?? 0), 0) / positiveAhtRows.length
+      : null,
+    aht: formatDurationFromMs(positiveAhtRows.length
+      ? positiveAhtRows.reduce((sum, row) => sum + (row.ahtMs ?? 0), 0) / positiveAhtRows.length
+      : null),
+    maxLatencyMs: maxLatencyQueue?.maxLatencyMs ?? null,
+    maxLatency: formatAiReportMaxLatency(maxLatencyQueue?.maxLatencyMs ?? null, report),
+    maxLatencyQueueId: maxLatencyQueue?.queueId ?? "",
+    maxLatencyQueueName: maxLatencyQueue?.queueName ?? "",
+    latencyTargetMinutes,
+    latencyTarget: getAiReportLatencyTargetLabel(report, latencyTargetMinutes),
+    latencyAdherence: calculateLatencyAdherence(maxLatencyQueue?.maxLatencyMs ?? null, latencyTargetMinutes),
+    queueCount: rows.length
+  };
+}
+
+function compareAiReportQueueRows(a: AiReportQueueRow, b: AiReportQueueRow) {
+  if (a.report !== b.report) return a.report === "ADS" ? -1 : 1;
+  if (a.report === "ADS") {
+    return b.backlog - a.backlog
+      || a.department.localeCompare(b.department, "pt-BR", { sensitivity: "base" })
+      || a.queueName.localeCompare(b.queueName, "pt-BR", { sensitivity: "base" })
+      || a.queueId.localeCompare(b.queueId);
+  }
+  const lobOrder = (lob: string) => lob === "VIDEO" ? 0 : lob === "COMMENTS" ? 1 : 2;
+  return lobOrder(a.lob) - lobOrder(b.lob)
+    || (a.latencyTargetMinutes ?? Number.MAX_SAFE_INTEGER) - (b.latencyTargetMinutes ?? Number.MAX_SAFE_INTEGER)
+    || (b.maxLatencyMs ?? -1) - (a.maxLatencyMs ?? -1)
+    || a.department.localeCompare(b.department, "pt-BR", { sensitivity: "base" })
+    || a.queueName.localeCompare(b.queueName, "pt-BR", { sensitivity: "base" })
+    || a.queueId.localeCompare(b.queueId);
+}
+
+function compareAiReportDepartmentRows(a: AiReportDepartmentRow, b: AiReportDepartmentRow) {
+  if (a.report !== b.report) return a.report === "ADS" ? -1 : 1;
+  return b.backlog - a.backlog
+    || (b.maxLatencyMs ?? -1) - (a.maxLatencyMs ?? -1)
+    || a.department.localeCompare(b.department, "pt-BR", { sensitivity: "base" });
+}
+
+function matchesAiReportLob(lob: string, report: AiReportLob) {
+  if (report === "ADS") return lob === "ADS";
+  return lob === "VIDEO" || lob === "COMMENTS";
+}
+
+function getAiReportLatencyTargetMinutes(report: AiReportLob, fallback: number | null | undefined) {
+  return report === "ADS" ? adsAiReportTargetLatencyMinutes : fallback ?? null;
+}
+
+function getAiReportLatencyTargetLabel(report: AiReportLob, fallback: number | null | undefined) {
+  if (report === "ADS") return adsAiReportTargetLatencyLabel;
+  return formatSlaTargetMinutes(fallback);
+}
+
+function formatAiReportMaxLatency(value: number | null | undefined, report: AiReportLob) {
+  return report === "ADS" ? formatLatencyAsHours(value) : formatDurationFromMs(value);
+}
+
+function formatAiReportMaxLatencyDelta(value: number | null | undefined, report: AiReportLob) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "Sem comparação";
+  if (value === 0) return report === "ADS" ? "0:00h" : "0:00s";
+  const formatted = report === "ADS" ? formatLatencyAsHours(Math.abs(value)) : formatDurationFromMs(Math.abs(value));
+  return `${value > 0 ? "+" : "-"}${formatted}`;
+}
+
+function formatLatencyAsHours(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "N/A";
+  const totalMinutes = Math.max(0, Math.round(value / 60000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${hours}:${String(minutes).padStart(2, "0")}h`;
+}
+
+function summarizeAiReportRows(rows: AiReportQueueRow[]) {
+  const byReport = new Map<AiReportLob, AiReportQueueRow[]>();
+  for (const row of rows) byReport.set(row.report, [...(byReport.get(row.report) ?? []), row]);
+  return Array.from(byReport.entries()).map(([report, reportRows]) => {
+    const maxLatencyRow = reportRows.reduce<AiReportQueueRow | null>((currentMax, row) => {
+      if (row.maxLatencyMs === null) return currentMax;
+      if (!currentMax || currentMax.maxLatencyMs === null || row.maxLatencyMs > currentMax.maxLatencyMs) return row;
+      return currentMax;
+    }, null);
+    return {
+      report,
+      rows: reportRows.length,
+      departments: new Set(reportRows.map((row) => row.department)).size,
+      backlog: reportRows.reduce((sum, row) => sum + row.backlog, 0),
+      input: reportRows.reduce((sum, row) => sum + row.input, 0),
+      output: reportRows.reduce((sum, row) => sum + row.output, 0),
+      maxLatencyMs: maxLatencyRow?.maxLatencyMs ?? null,
+      maxLatency: formatAiReportMaxLatency(maxLatencyRow?.maxLatencyMs ?? null, report),
+      maxLatencyQueueId: maxLatencyRow?.queueId ?? "",
+      maxLatencyQueueName: maxLatencyRow?.queueName ?? ""
+    };
+  });
+}
+
+function buildAiAgentProductivityRows(rows: AgentCycleRow[], selectedCycle: string) {
+  return rows.map((row) => ({
+    cycleDownload: selectedCycle,
+    agent: row.displayName,
+    wbLogin: row.wbLogin || row.rawWbLogin,
+    rawWbLogin: row.rawWbLogin,
+    crossingStatus: row.crossingStatus,
+    personType: row.personType,
+    employeeStatus: row.employeeStatus,
+    currentStatus: row.presenceStatus,
+    isScheduled: row.isScheduled,
+    lob: row.lob,
+    supervisor: row.supervisor,
+    shift: row.shift,
+    skill: row.skill,
+    roleTitle: row.roleTitle,
+    queueIds: row.queueBreakdown.map((queue) => queue.queueId || "Sem Fila ID"),
+    queueNames: row.queueBreakdown.map((queue) => queue.queueName),
+    submit: row.current.submit,
+    ahtMs: row.current.ahtMs,
+    aht: formatDurationFromMs(row.current.ahtMs),
+    moderationMs: row.current.moderationMs,
+    moderation: formatDurationFromMs(row.current.moderationMs),
+    timeout: row.current.timeout,
+    refresh: row.current.refresh,
+    previous: row.previous ? {
+      submit: row.previous.submit,
+      ahtMs: row.previous.ahtMs,
+      aht: formatDurationFromMs(row.previous.ahtMs),
+      moderationMs: row.previous.moderationMs,
+      moderation: formatDurationFromMs(row.previous.moderationMs),
+      timeout: row.previous.timeout,
+      refresh: row.previous.refresh
+    } : null,
+    deltas: {
+      submit: row.deltas.submit,
+      ahtMs: row.deltas.ahtMs,
+      aht: formatDurationDelta(row.deltas.ahtMs),
+      moderationMs: row.deltas.moderationMs,
+      moderation: formatDurationDelta(row.deltas.moderationMs),
+      timeout: row.deltas.timeout,
+      refresh: row.deltas.refresh
+    }
+  }));
+}
+
+function parseAiSnapshotLimit(value: string | number | null | undefined, fallback: number, max: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(Math.floor(parsed), max);
+}
+
+function normalizeAiSnapshotFilters(query: RealtimeAiSnapshotQuery) {
+  return {
+    cycleDownload: query.cycleDownload ?? null,
+    reportLob: query.reportLob ?? "ALL",
+    search: query.search ?? null,
+    crossingStatus: query.crossingStatus ?? null,
+    personType: query.personType ?? null,
+    employeeStatus: query.employeeStatus ?? null,
+    presenceStatus: query.presenceStatus ?? null,
+    lob: query.lob ?? null,
+    supervisor: query.supervisor ?? null,
+    shift: query.shift ?? null,
+    skill: query.skill ?? null,
+    roleTitle: query.roleTitle ?? null,
+    queueSearch: query.queueSearch ?? null,
+    queueLob: query.queueLob ?? null,
+    queueStatus: query.queueStatus ?? null,
+    queueSlaTarget: query.queueSlaTarget ?? null,
+    queueId: query.queueId ?? null,
+    sortBy: query.sortBy ?? "submit_desc"
   };
 }
 
