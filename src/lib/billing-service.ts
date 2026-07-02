@@ -4,13 +4,14 @@ import type { Actor } from "@/lib/mock-db";
 import { canAccessBilling, canManageBilling } from "@/lib/billing-permissions";
 import { isAgentJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
 import { MONTHLY_ADVANCE_FIXED_AMOUNT, isMonthlyAdvanceReferenceMonthAvailable } from "@/lib/monthly-advance-constants";
-import { currentReferenceMonth, formatReferenceMonth, normalizeReferenceMonth } from "@/lib/monthly-advance-service";
+import { formatReferenceMonth, normalizeReferenceMonth } from "@/lib/monthly-advance-service";
 import { prisma } from "@/lib/prisma";
 import { normalizeRole } from "@/lib/permissions";
 import { cleanShiftName } from "@/lib/shift-display";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
 export const BILLING_START_MONTH = "2026-06";
+export const DEFAULT_BILLING_REFERENCE_MONTH = BILLING_START_MONTH;
 
 const BILLING_PJ_ONLY_MESSAGE = "Billing disponível apenas para colaboradores PJ.";
 const BILLING_REQUEST_TYPE_NAME = "Ajuste de Invoice";
@@ -318,7 +319,7 @@ export async function getMyBillingInvoice(actor: Actor, referenceMonthInput?: st
 }
 
 export async function getEmployeeBillingPreview(employeeId: string) {
-  const referenceMonth = normalizeBillingMonth(currentReferenceMonth());
+  const referenceMonth = normalizeBillingMonth(DEFAULT_BILLING_REFERENCE_MONTH);
   if (!isBillingMonthAvailable(referenceMonth)) return null;
   const employee = await prisma.employeeProfile.findFirst({
     where: { id: employeeId, deletedAt: null },
@@ -2326,7 +2327,7 @@ async function nextRequestCode(tx: Prisma.TransactionClient) {
 }
 
 function normalizeBillingMonth(input?: string | null) {
-  return normalizeReferenceMonth(input || currentReferenceMonth(), currentReferenceMonth());
+  return normalizeReferenceMonth(input || DEFAULT_BILLING_REFERENCE_MONTH, DEFAULT_BILLING_REFERENCE_MONTH);
 }
 
 function isBillingMonthAvailable(referenceMonth: string) {
