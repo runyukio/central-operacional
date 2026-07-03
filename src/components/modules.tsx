@@ -7874,7 +7874,7 @@ export function WorkHoursPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-2">
-                        {canRequestAdjustment && row.plannedHours > 0 && !["Ajuste solicitado", "Ajuste aprovado"].includes(row.status) ? (
+                        {canRequestAdjustment && row.plannedHours > 0 && row.status !== "Ajuste solicitado" ? (
                           <button onClick={() => openAdjustment(row)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">Solicitar ajuste</button>
                         ) : null}
                         {canApprove && row.adjustmentId && row.adjustmentStatus === "Em análise" ? (
