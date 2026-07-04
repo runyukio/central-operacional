@@ -16,6 +16,7 @@ import { canAccessRealTime } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { resolveQueueReference } from "@/lib/queue-dictionary";
 import { getQueueReportMetadataById } from "@/lib/queue-report-metadata";
+import { shiftCategoryName } from "@/lib/shift-display";
 import { isWorkHoursAllowedForSchedule, parseWorkHoursToMinutes } from "@/lib/work-hours-rules";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
@@ -55,6 +56,7 @@ export type RealtimeExportQuery = RealtimeSnapshotOptions & {
 
 export type RealtimeAiSnapshotQuery = RealtimeExportQuery & {
   reportLob?: string | null;
+  requiredLob?: string | null;
   limit?: string | number | null;
   agentLimit?: string | number | null;
   queueLimit?: string | number | null;
@@ -665,6 +667,10 @@ export async function getRealtimeAiSnapshot(query: RealtimeAiSnapshotQuery = {})
     snapshotData.agents.selectedCycle || snapshotData.queueView.selectedCycle,
     query
   );
+  const requiredAgentsSummary = await buildAiRequiredAgentsSummary(
+    snapshotData.agents.selectedCycle || snapshotData.queueView.selectedCycle,
+    query
+  );
 
   return {
     success: true,
@@ -713,13 +719,16 @@ export async function getRealtimeAiSnapshot(query: RealtimeAiSnapshotQuery = {})
         maxLatency: formatDurationFromMs(filteredQueueSummary.maxLatencyMs)
       },
       reports: summarizeAiReportRows(reportQueueRows),
-      operational: operationalSummary
+      operational: operationalSummary,
+      requiredAgents: requiredAgentsSummary
     },
     tables: {
       reportQueues: reportQueueRows.slice(0, queueLimit),
       reportDepartments: reportDepartmentRows.slice(0, departmentLimit),
       agentProductivity: buildAiAgentProductivityRows(filteredAgentRows, snapshotData.agents.selectedCycle).slice(0, agentLimit),
-      operationalByLob: operationalSummary.monthToDate.byLob
+      operationalByLob: operationalSummary.monthToDate.byLob,
+      requiredAgentsByShift: requiredAgentsSummary.daily.rows,
+      requiredAgentsMonthToDateByShift: requiredAgentsSummary.monthToDate.rows
     }
   };
 }
@@ -970,6 +979,295 @@ function aiOperationalTerminationInPeriod(employee: AiOperationalEmployee, start
       employee.terminationDate >= start &&
       employee.terminationDate <= end
   );
+}
+
+const aiRequiredProductiveShifts = ["Manhã", "Tarde", "Noite"] as const;
+type AiRequiredProductiveShift = (typeof aiRequiredProductiveShifts)[number];
+
+const aiRequiredCoverageStatuses = new Set(["ESCALADO", "PRESENTE", "ATRASO", "SAIDA_ANTECIPADA", "VENDA_FOLGA_APROVADA", "TROCA_APROVADA"]);
+const aiRequiredInactiveEmployeeStatusTokens = new Set([
+  "inativo",
+  "inativa",
+  "inactive",
+  "desativado",
+  "desativada",
+  "disabled",
+  "desligado",
+  "desligada",
+  "desligado em treinamento",
+  "desligada em treinamento",
+  "desligado treinamento",
+  "desligada treinamento",
+  "terminated",
+  "suspenso",
+  "suspensa",
+  "suspended",
+  "em treinamento",
+  "treinamento",
+  "training",
+  "nesting"
+]);
+
+type AiRequiredAgentsRow = {
+  date: string;
+  dateLabel: string;
+  weekday: string;
+  lob: string;
+  shift: AiRequiredProductiveShift;
+  required: number;
+  available: number;
+  scheduled: number;
+  escaladoStatus: number;
+  present: number;
+  absent: number;
+  gap: number;
+  coverageRate: number;
+  absRate: number;
+  status: string;
+};
+
+async function buildAiRequiredAgentsSummary(selectedCycle: string, query: RealtimeAiSnapshotQuery) {
+  const referenceDate = realtimeReferenceDateKey(selectedCycle);
+  const monthStart = `${referenceDate.slice(0, 8)}01`;
+  const targetLobs = aiRequiredTargetLobs(query);
+  const daily = await buildAiRequiredAgentsPeriodSummary({ startDate: referenceDate, endDate: referenceDate }, targetLobs);
+  const monthToDate = await buildAiRequiredAgentsPeriodSummary({ startDate: monthStart, endDate: referenceDate }, targetLobs);
+  return {
+    referenceDate,
+    lobs: targetLobs ?? ["Todos"],
+    daily,
+    monthToDate
+  };
+}
+
+async function buildAiRequiredAgentsPeriodSummary(period: AiOperationalPeriod, targetLobs: string[] | null) {
+  const start = utcDateFromKey(period.startDate);
+  const end = utcDateFromKey(period.endDate);
+  const [requirements, schedules] = await Promise.all([
+    prisma.staffCoverage.findMany({
+      where: {
+        date: { gte: start, lte: end },
+        ...(targetLobs ? { OR: targetLobs.map((lob) => ({ lob: { name: { equals: lob, mode: "insensitive" as const } } })) } : {})
+      },
+      select: {
+        date: true,
+        requiredStaff: true,
+        lob: { select: { name: true } },
+        shift: { select: { name: true } }
+      },
+      orderBy: [{ date: "asc" }, { lob: { name: "asc" } }, { shift: { name: "asc" } }]
+    }),
+    prisma.schedule.findMany({
+      where: {
+        deletedAt: null,
+        date: { gte: start, lte: end },
+        employee: { deletedAt: null }
+      },
+      select: {
+        date: true,
+        status: true,
+        lobId: true,
+        shift: { select: { name: true } },
+        employee: {
+          select: {
+            roleTitle: true,
+            operationalStatus: true,
+            skill: true,
+            lob: { select: { id: true, name: true } },
+            shift: { select: { name: true } }
+          }
+        }
+      }
+    })
+  ]);
+
+  const lobIds = Array.from(new Set(schedules.map((schedule) => schedule.lobId).filter((value): value is string => Boolean(value))));
+  const lobs = lobIds.length ? await prisma.lob.findMany({ where: { id: { in: lobIds } }, select: { id: true, name: true } }) : [];
+  const lobNameById = new Map(lobs.map((lob) => [lob.id, lob.name]));
+  const rowsByKey = new Map<string, AiRequiredAgentsRow>();
+
+  requirements.forEach((requirement) => {
+    const date = realtimeDateKeyFromDate(requirement.date);
+    const lob = requirement.lob.name;
+    const shift = aiRequiredShiftName(requirement.shift.name);
+    if (!shift || !aiRequiredMatchesTargetLob(lob, targetLobs)) return;
+    const key = aiRequiredRowKey(date, lob, shift);
+    const current = rowsByKey.get(key) ?? emptyAiRequiredAgentsRow(date, lob, shift);
+    current.required += requirement.requiredStaff;
+    rowsByKey.set(key, current);
+  });
+
+  schedules.forEach((schedule) => {
+    const lob = schedule.lobId ? lobNameById.get(schedule.lobId) ?? schedule.employee.lob.name : schedule.employee.lob.name;
+    if (!aiRequiredMatchesTargetLob(lob, targetLobs)) return;
+    if (!isAgentJobTitle(schedule.employee.roleTitle)) return;
+    if (!aiRequiredEmployeeCountsAsActive(schedule.employee.operationalStatus)) return;
+    const shift = aiRequiredShiftName(schedule.shift?.name ?? schedule.employee.shift?.name);
+    if (!shift) return;
+    const date = realtimeDateKeyFromDate(schedule.date);
+    const key = aiRequiredRowKey(date, lob, shift);
+    const current = rowsByKey.get(key) ?? emptyAiRequiredAgentsRow(date, lob, shift);
+    const status = normalizeOperationalStatus(schedule.status);
+    if (status === "ESCALADO") current.escaladoStatus += 1;
+    if (isScheduledStatus(status) || (status === "NESTING" && aiRequiredIsVideoOrCommentsSchedule(lob, schedule.employee.skill))) current.scheduled += 1;
+    if (isPresentStatus(status)) current.present += 1;
+    if (isAbsenceStatus(status)) current.absent += 1;
+    if (aiRequiredCountsAsAvailable(status, lob, schedule.employee.skill)) current.available += 1;
+    rowsByKey.set(key, current);
+  });
+
+  const rows = Array.from(rowsByKey.values())
+    .map((row) => finalizeAiRequiredAgentsRow(row))
+    .sort((a, b) => `${a.date}|${a.lob}|${a.shift}`.localeCompare(`${b.date}|${b.lob}|${b.shift}`, "pt-BR"));
+
+  return {
+    startDate: period.startDate,
+    endDate: period.endDate,
+    total: summarizeAiRequiredAgentsRows("Total", rows),
+    byLob: summarizeAiRequiredAgentsRowsBy(rows, "lob"),
+    byDay: summarizeAiRequiredAgentsRowsBy(rows, "date"),
+    rows
+  };
+}
+
+function aiRequiredTargetLobs(query: RealtimeAiSnapshotQuery) {
+  const explicit = query.requiredLob?.trim();
+  if (explicit) {
+    if (["Todos", "Todas", "ALL"].includes(explicit)) return null;
+    return explicit.split(",").map((lob) => lob.trim()).filter(Boolean);
+  }
+  if (query.lob && query.lob !== "Todos") return [query.lob];
+  const reportLobs = normalizeAiReportLobs(query.reportLob);
+  if (reportLobs.length === 1) return reportLobs[0] === "TNS" ? ["TNS", "VIDEO", "COMMENTS"] : [reportLobs[0]];
+  return ["ADS"];
+}
+
+function emptyAiRequiredAgentsRow(date: string, lob: string, shift: AiRequiredProductiveShift): AiRequiredAgentsRow {
+  return {
+    date,
+    dateLabel: realtimeDateLabelFromKey(date),
+    weekday: realtimeWeekdayFromKey(date),
+    lob,
+    shift,
+    required: 0,
+    available: 0,
+    scheduled: 0,
+    escaladoStatus: 0,
+    present: 0,
+    absent: 0,
+    gap: 0,
+    coverageRate: 0,
+    absRate: 0,
+    status: "Sem requerido"
+  };
+}
+
+function finalizeAiRequiredAgentsRow(row: AiRequiredAgentsRow): AiRequiredAgentsRow {
+  const gap = row.available - row.required;
+  return {
+    ...row,
+    gap,
+    coverageRate: aiRequiredCoverageRate(row.required, row.available),
+    absRate: calculateAbsenceRate(row.scheduled, row.absent),
+    status: aiRequiredCoverageStatus(row.required, row.available)
+  };
+}
+
+function summarizeAiRequiredAgentsRows(label: string, rows: AiRequiredAgentsRow[]) {
+  const total = rows.reduce(
+    (acc, row) => ({
+      required: acc.required + row.required,
+      available: acc.available + row.available,
+      scheduled: acc.scheduled + row.scheduled,
+      escaladoStatus: acc.escaladoStatus + row.escaladoStatus,
+      present: acc.present + row.present,
+      absent: acc.absent + row.absent
+    }),
+    { required: 0, available: 0, scheduled: 0, escaladoStatus: 0, present: 0, absent: 0 }
+  );
+  return {
+    label,
+    ...total,
+    gap: total.available - total.required,
+    coverageRate: aiRequiredCoverageRate(total.required, total.available),
+    absRate: calculateAbsenceRate(total.scheduled, total.absent),
+    status: aiRequiredCoverageStatus(total.required, total.available)
+  };
+}
+
+function aiRequiredCoverageRate(required: number, available: number) {
+  return required > 0 ? Math.round((available / required) * 1000) / 10 : available > 0 ? 100 : 0;
+}
+
+function summarizeAiRequiredAgentsRowsBy(rows: AiRequiredAgentsRow[], field: "lob" | "date") {
+  const grouped = new Map<string, AiRequiredAgentsRow[]>();
+  rows.forEach((row) => {
+    const key = field === "date" ? row.date : row.lob;
+    const values = grouped.get(key) ?? [];
+    values.push(row);
+    grouped.set(key, values);
+  });
+  return Array.from(grouped.entries()).map(([key, values]) => summarizeAiRequiredAgentsRows(key, values));
+}
+
+function aiRequiredCountsAsAvailable(status: ReturnType<typeof normalizeOperationalStatus>, lob: string, skill?: string | null) {
+  if (status && aiRequiredCoverageStatuses.has(status)) return true;
+  return status === "NESTING" && aiRequiredIsVideoOrCommentsSchedule(lob, skill);
+}
+
+function aiRequiredEmployeeCountsAsActive(status?: string | null) {
+  const key = String(status ?? "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  return !aiRequiredInactiveEmployeeStatusTokens.has(key);
+}
+
+function aiRequiredIsVideoOrCommentsSchedule(lob: string, skill?: string | null) {
+  const key = `${lob} ${skill ?? ""}`.toUpperCase();
+  return key.includes("VIDEO") || key.includes("COMMENT") || key.includes("TNS");
+}
+
+function aiRequiredMatchesTargetLob(lob: string, targetLobs: string[] | null) {
+  if (!targetLobs) return true;
+  const key = aiRequiredLookupKey(lob);
+  return targetLobs.some((target) => aiRequiredLookupKey(target) === key);
+}
+
+function aiRequiredShiftName(value?: string | null): AiRequiredProductiveShift | null {
+  const shift = shiftCategoryName(value);
+  return aiRequiredProductiveShifts.includes(shift as AiRequiredProductiveShift) ? shift as AiRequiredProductiveShift : null;
+}
+
+function aiRequiredCoverageStatus(required: number, available: number) {
+  if (required === 0 && available > 0) return "Sem requerido";
+  if (required > 0 && available === 0) return "Sem cobertura";
+  const gap = available - required;
+  if (gap < 0) return "Déficit";
+  if (gap === 0) return "OK";
+  return "Sobra";
+}
+
+function aiRequiredRowKey(date: string, lob: string, shift: AiRequiredProductiveShift) {
+  return `${date}|${aiRequiredLookupKey(lob)}|${shift}`;
+}
+
+function aiRequiredLookupKey(value: string) {
+  return value.trim().toUpperCase();
+}
+
+function realtimeDateKeyFromDate(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function realtimeDateLabelFromKey(value: string) {
+  const [year, month, day] = value.split("-");
+  return `${day}/${month}/${year}`;
+}
+
+function realtimeWeekdayFromKey(value: string) {
+  return new Intl.DateTimeFormat("pt-BR", { weekday: "short", timeZone: "UTC" }).format(utcDateFromKey(value));
 }
 
 type AiReportLob = "ADS" | "TNS";
@@ -1224,6 +1522,7 @@ function normalizeAiSnapshotFilters(query: RealtimeAiSnapshotQuery) {
   return {
     cycleDownload: query.cycleDownload ?? null,
     reportLob: query.reportLob ?? "ALL",
+    requiredLob: query.requiredLob ?? "ADS",
     search: query.search ?? null,
     crossingStatus: query.crossingStatus ?? null,
     personType: query.personType ?? null,

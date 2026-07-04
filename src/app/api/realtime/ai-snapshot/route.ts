@@ -17,6 +17,7 @@ export async function GET(request: Request) {
   const query: RealtimeAiSnapshotQuery = {
     cycleDownload: optionalParam(searchParams, "cycleDownload"),
     reportLob: optionalParam(searchParams, "reportLob"),
+    requiredLob: optionalParam(searchParams, "requiredLob"),
     limit: optionalParam(searchParams, "limit"),
     agentLimit: optionalParam(searchParams, "agentLimit"),
     queueLimit: optionalParam(searchParams, "queueLimit"),
