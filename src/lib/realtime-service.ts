@@ -2,6 +2,14 @@ import crypto from "node:crypto";
 
 import { Prisma } from "@prisma/client";
 
+import {
+  calculateAbsenceRate,
+  calculateCoverageRate,
+  isAbsenceStatus,
+  isPresentStatus,
+  isScheduledStatus,
+  normalizeOperationalStatus
+} from "@/lib/attendance-calculation";
 import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import type { Actor } from "@/lib/mock-db";
 import { canAccessRealTime } from "@/lib/permissions";
@@ -653,6 +661,10 @@ export async function getRealtimeAiSnapshot(query: RealtimeAiSnapshotQuery = {})
   const departmentLimit = parseAiSnapshotLimit(query.departmentLimit, 100, 1000);
   const filteredAgentSummary = summarizeAgentRows(filteredAgentRows);
   const filteredQueueSummary = summarizeQueueRowsForExport(filteredQueueRows);
+  const operationalSummary = await buildAiOperationalSummary(
+    snapshotData.agents.selectedCycle || snapshotData.queueView.selectedCycle,
+    query
+  );
 
   return {
     success: true,
@@ -700,14 +712,264 @@ export async function getRealtimeAiSnapshot(query: RealtimeAiSnapshotQuery = {})
         maxLatencyMs: filteredQueueSummary.maxLatencyMs,
         maxLatency: formatDurationFromMs(filteredQueueSummary.maxLatencyMs)
       },
-      reports: summarizeAiReportRows(reportQueueRows)
+      reports: summarizeAiReportRows(reportQueueRows),
+      operational: operationalSummary
     },
     tables: {
       reportQueues: reportQueueRows.slice(0, queueLimit),
       reportDepartments: reportDepartmentRows.slice(0, departmentLimit),
-      agentProductivity: buildAiAgentProductivityRows(filteredAgentRows, snapshotData.agents.selectedCycle).slice(0, agentLimit)
+      agentProductivity: buildAiAgentProductivityRows(filteredAgentRows, snapshotData.agents.selectedCycle).slice(0, agentLimit),
+      operationalByLob: operationalSummary.monthToDate.byLob
     }
   };
+}
+
+type AiOperationalPeriod = {
+  startDate: string;
+  endDate: string;
+};
+
+type AiOperationalEmployee = {
+  admissionDate: Date | null;
+  terminationDate: Date | null;
+  operationalStatus: string | null;
+  lob: { name: string } | null;
+};
+
+type AiOperationalBucket = {
+  lob: string;
+  planned: number;
+  present: number;
+  absent: number;
+  coverageRate: number;
+  absRate: number;
+  headcount: number;
+  terminations: number;
+  hcStart: number;
+  hcEnd: number;
+  hcAverage: number;
+  attritionRate: number;
+};
+
+async function buildAiOperationalSummary(selectedCycle: string, query: RealtimeAiSnapshotQuery) {
+  const referenceDate = realtimeReferenceDateKey(selectedCycle);
+  const monthStart = `${referenceDate.slice(0, 8)}01`;
+  const daily = await buildAiOperationalPeriodSummary({ startDate: referenceDate, endDate: referenceDate }, query);
+  const monthToDate = await buildAiOperationalPeriodSummary({ startDate: monthStart, endDate: referenceDate }, query);
+  return {
+    referenceDate,
+    daily,
+    monthToDate
+  };
+}
+
+async function buildAiOperationalPeriodSummary(period: AiOperationalPeriod, query: RealtimeAiSnapshotQuery) {
+  const start = utcDateFromKey(period.startDate);
+  const end = utcDateFromKey(period.endDate);
+  const employeeWhere = aiOperationalEmployeeWhere(query);
+  const [schedules, employees] = await Promise.all([
+    prisma.schedule.findMany({
+      where: {
+        deletedAt: null,
+        date: { gte: start, lte: end },
+        employee: employeeWhere
+      },
+      select: {
+        status: true,
+        employee: {
+          select: {
+            lob: { select: { name: true } }
+          }
+        }
+      }
+    }),
+    prisma.employeeProfile.findMany({
+      where: employeeWhere,
+      select: {
+        admissionDate: true,
+        terminationDate: true,
+        operationalStatus: true,
+        lob: { select: { name: true } }
+      }
+    })
+  ]);
+
+  const scheduleByLob = new Map<string, { planned: number; present: number; absent: number }>();
+  schedules.forEach((schedule) => {
+    const lob = schedule.employee.lob?.name?.trim() || "Sem LOB";
+    const status = normalizeOperationalStatus(schedule.status);
+    const bucket = scheduleByLob.get(lob) ?? { planned: 0, present: 0, absent: 0 };
+    if (isScheduledStatus(status)) bucket.planned += 1;
+    if (isPresentStatus(status)) bucket.present += 1;
+    if (isAbsenceStatus(status)) bucket.absent += 1;
+    scheduleByLob.set(lob, bucket);
+  });
+
+  const employeesByLob = new Map<string, AiOperationalEmployee[]>();
+  employees.forEach((employee) => {
+    const lob = employee.lob?.name?.trim() || "Sem LOB";
+    const rows = employeesByLob.get(lob) ?? [];
+    rows.push(employee);
+    employeesByLob.set(lob, rows);
+  });
+
+  const lobs = Array.from(new Set([...scheduleByLob.keys(), ...employeesByLob.keys()])).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  const byLob = lobs.map((lob) => {
+    const schedule = scheduleByLob.get(lob) ?? { planned: 0, present: 0, absent: 0 };
+    return buildAiOperationalBucket(lob, schedule, employeesByLob.get(lob) ?? [], start, end);
+  });
+
+  const totals = byLob.reduce(
+    (acc, row) => ({
+      planned: acc.planned + row.planned,
+      present: acc.present + row.present,
+      absent: acc.absent + row.absent,
+      headcount: acc.headcount + row.headcount,
+      terminations: acc.terminations + row.terminations,
+      hcStart: acc.hcStart + row.hcStart,
+      hcEnd: acc.hcEnd + row.hcEnd
+    }),
+    { planned: 0, present: 0, absent: 0, headcount: 0, terminations: 0, hcStart: 0, hcEnd: 0 }
+  );
+  const hcAverage = Number(((totals.hcStart + totals.hcEnd) / 2).toFixed(1));
+
+  return {
+    startDate: period.startDate,
+    endDate: period.endDate,
+    total: {
+      lob: "Total",
+      planned: totals.planned,
+      present: totals.present,
+      absent: totals.absent,
+      coverageRate: calculateCoverageRate(totals.planned, totals.present),
+      absRate: calculateAbsenceRate(totals.planned, totals.absent),
+      headcount: totals.headcount,
+      terminations: totals.terminations,
+      hcStart: totals.hcStart,
+      hcEnd: totals.hcEnd,
+      hcAverage,
+      attritionRate: aiOperationalAttritionRate(totals.terminations, hcAverage)
+    },
+    byLob
+  };
+}
+
+function buildAiOperationalBucket(
+  lob: string,
+  schedule: { planned: number; present: number; absent: number },
+  employees: AiOperationalEmployee[],
+  start: Date,
+  end: Date
+): AiOperationalBucket {
+  const headcount = employees.filter((employee) => aiOperationalWasActiveAt(employee, end, "end")).length;
+  const hcStart = employees.filter((employee) => aiOperationalWasActiveAt(employee, start, "start")).length;
+  const hcEnd = employees.filter((employee) => aiOperationalWasActiveAt(employee, end, "end")).length;
+  const terminations = employees.filter((employee) => aiOperationalTerminationInPeriod(employee, start, end)).length;
+  const hcAverage = Number(((hcStart + hcEnd) / 2).toFixed(1));
+  return {
+    lob,
+    planned: schedule.planned,
+    present: schedule.present,
+    absent: schedule.absent,
+    coverageRate: calculateCoverageRate(schedule.planned, schedule.present),
+    absRate: calculateAbsenceRate(schedule.planned, schedule.absent),
+    headcount,
+    terminations,
+    hcStart,
+    hcEnd,
+    hcAverage,
+    attritionRate: aiOperationalAttritionRate(terminations, hcAverage)
+  };
+}
+
+function aiOperationalEmployeeWhere(query: RealtimeAiSnapshotQuery): Prisma.EmployeeProfileWhereInput {
+  const filters: Prisma.EmployeeProfileWhereInput[] = [{ deletedAt: null }];
+  const search = query.search?.trim();
+  if (search) {
+    filters.push({
+      OR: [
+        { fullName: { contains: search, mode: "insensitive" } },
+        { wbLogin: { contains: search, mode: "insensitive" } },
+        { user: { email: { contains: search, mode: "insensitive" } } }
+      ]
+    });
+  }
+  if (query.lob && query.lob !== "Todos") filters.push({ lob: { name: query.lob } });
+  if (query.supervisor && query.supervisor !== "Todos") {
+    filters.push({
+      supervisor: {
+        OR: [
+          { fullName: { contains: query.supervisor, mode: "insensitive" } },
+          { wbLogin: { contains: query.supervisor, mode: "insensitive" } }
+        ]
+      }
+    });
+  }
+  if (query.shift && query.shift !== "Todos") filters.push({ shift: { name: { contains: query.shift, mode: "insensitive" } } });
+  if (query.skill && query.skill !== "Todos") filters.push({ skill: { contains: query.skill, mode: "insensitive" } });
+  if (query.roleTitle && query.roleTitle !== "Todos") filters.push({ roleTitle: { contains: query.roleTitle, mode: "insensitive" } });
+  return filters.length === 1 ? filters[0] : { AND: filters };
+}
+
+function realtimeReferenceDateKey(selectedCycle: string) {
+  const parsed = parseRealtimeCycleForPresence(selectedCycle);
+  if (parsed) return parsed.dateKey;
+  return new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(new Date());
+}
+
+function utcDateFromKey(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+function aiOperationalAttritionRate(terminations: number, hcAverage: number) {
+  if (!hcAverage) return 0;
+  return Number(((terminations / hcAverage) * 100).toFixed(2));
+}
+
+function aiOperationalStatusKey(status: unknown) {
+  return String(status ?? "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function aiOperationalIsEligibleStatus(status: unknown) {
+  const key = aiOperationalStatusKey(status);
+  return ["ATIVO", "ACTIVE", "DESLIGADO", "TERMINATED"].includes(key);
+}
+
+function aiOperationalIsTerminatedStatus(status: unknown) {
+  const key = aiOperationalStatusKey(status);
+  return key === "DESLIGADO" || key === "TERMINATED";
+}
+
+function aiOperationalWasActiveAt(employee: AiOperationalEmployee, boundary: Date, boundaryType: "start" | "end") {
+  if (!aiOperationalIsEligibleStatus(employee.operationalStatus)) return false;
+  if (aiOperationalIsTerminatedStatus(employee.operationalStatus) && !employee.terminationDate) return false;
+  const admittedByBoundary = !employee.admissionDate || employee.admissionDate <= boundary;
+  const notTerminatedByBoundary =
+    boundaryType === "start"
+      ? !employee.terminationDate || employee.terminationDate >= boundary
+      : !employee.terminationDate || employee.terminationDate > boundary;
+  return admittedByBoundary && notTerminatedByBoundary;
+}
+
+function aiOperationalTerminationInPeriod(employee: AiOperationalEmployee, start: Date, end: Date) {
+  return Boolean(
+    aiOperationalIsTerminatedStatus(employee.operationalStatus) &&
+      employee.terminationDate &&
+      employee.terminationDate >= start &&
+      employee.terminationDate <= end
+  );
 }
 
 type AiReportLob = "ADS" | "TNS";
