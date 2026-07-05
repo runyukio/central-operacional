@@ -4,7 +4,7 @@ import type { Actor } from "@/lib/mock-db";
 import { canAccessRealTime } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
-const cecRetentionDays = Number(process.env.REALTIME_RETENTION_DAYS || 7);
+const cecRetentionDays = Number.parseInt(process.env.REALTIME_RETENTION_DAYS ?? "3", 10) || 3;
 const saoPauloTimeZone = "America/Sao_Paulo";
 
 export type RealtimeCecGroupInput = {

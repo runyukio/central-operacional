@@ -225,7 +225,7 @@ type QueueSummaryReadRow = {
 };
 
 const staleThresholdMinutes = 20;
-const realtimeRetentionDays = 7;
+const realtimeRetentionDays = Number.parseInt(process.env.REALTIME_RETENTION_DAYS ?? "3", 10) || 3;
 const realtimeViewHistoryBatchLimit = 1200;
 const realtimeRawFallbackBatchLimit = 12;
 
