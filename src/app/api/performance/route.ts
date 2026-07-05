@@ -1,23 +1,12 @@
 import { NextResponse } from "next/server";
 
 import { getApiActor } from "@/lib/api-actor";
-import { getPerformanceDashboard, PerformanceError, type PerformanceQuery } from "@/lib/performance-service";
+import { getPerformanceProductionDashboard, PerformanceError, type PerformanceQuery } from "@/lib/performance-service";
 
 export const dynamic = "force-dynamic";
 
-const performanceRebuildMode = true;
-
 export async function GET(request: Request) {
   try {
-    if (performanceRebuildMode) {
-      return NextResponse.json({
-        success: true,
-        mode: "maintenance",
-        status: "REBUILDING",
-        message: "Performance em reconstrucao temporaria."
-      });
-    }
-
     const actor = await getApiActor();
     const url = new URL(request.url);
     const query: PerformanceQuery = {
@@ -36,7 +25,7 @@ export async function GET(request: Request) {
       sortBy: readSortBy(url.searchParams.get("sortBy")),
       sortDirection: readSortDirection(url.searchParams.get("sortDirection"))
     };
-    return NextResponse.json(await getPerformanceDashboard(actor, query));
+    return NextResponse.json(await getPerformanceProductionDashboard(actor, query));
   } catch (error) {
     return performanceErrorResponse(error);
   }

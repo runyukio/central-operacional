@@ -14,6 +14,7 @@ import { parseWbLoginBatch } from "@/lib/batch-wb-filter";
 import { getDefaultDatePeriod } from "@/lib/default-date-range";
 import { prisma } from "@/lib/prisma";
 import { QUEUE_METADATA } from "@/lib/queue-metadata";
+import { getQueueMetadataById, getQueueNameById } from "@/lib/queue-dictionary";
 import { calculateWfhStatus, type WfhEligibilityStatus, type WfhMonitoringStatus } from "@/lib/wfh-rules";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
@@ -65,9 +66,71 @@ export type PerformanceQuery = {
   sortDirection?: PerformanceSortDirection;
 };
 
+type ProductionRecordForDashboard = Prisma.ProductionRecordGetPayload<{
+  select: {
+    bzTime: true;
+    bzDay: true;
+    wbLogin: true;
+    employeeId: true;
+    submitNum: true;
+    latencyMinutesSum: true;
+    moderationSeconds: true;
+    queueId: true;
+    employee: {
+      select: {
+        fullName: true;
+        wbLogin: true;
+        roleTitle: true;
+        skill: true;
+        operationalStatus: true;
+        lob: { select: { name: true } };
+        supervisor: { select: { fullName: true } };
+      };
+    };
+  };
+}>;
+
+type QueueVolumeRecordForDashboard = Prisma.PerformanceQueueVolumeRecordGetPayload<{
+  select: {
+    bzTime: true;
+    bzDay: true;
+    queueId: true;
+    inputCount: true;
+  };
+}>;
+
+type ProductionDashboardAggregate = {
+  input: number;
+  submit: number;
+  moderationSeconds: number;
+  latencyMinutesSum: number;
+  records: number;
+};
+
+type ProductionDashboardAgentAggregate = ProductionDashboardAggregate & {
+  employeeId: string;
+  employeeName: string;
+  wbLogin: string;
+  cadastroLob: string;
+  queueLobs: Set<string>;
+  supervisor: string;
+  roleTitle: string;
+  skill: string;
+  status: string;
+  queues: Set<string>;
+};
+
+type ProductionDashboardQueueAggregate = ProductionDashboardAggregate & {
+  queueId: string;
+  queueName: string;
+  lob: string;
+  slaTargetMinutes: number | null;
+  agents: Set<string>;
+};
+
 export type PerformancePreviewRow = {
   rowNumber: number;
-  type: "QUALITY" | "TNS_QUALITY" | "CEC_QUALITY" | "PRODUCTION";
+  type: "QUALITY" | "TNS_QUALITY" | "CEC_QUALITY" | "PRODUCTION" | "PRODUCTION_VOLUME";
   wbLogin: string;
   employeeId?: string;
   employeeName?: string;
@@ -177,6 +240,10 @@ const attendanceMetricSelect = {
   reasonClassification: true,
   employeeId: true
 } satisfies Prisma.AttendanceRecordSelect;
+const productionAgentHeaders = ["agentes", "agente", "agentname", "wb_login", "wb login"];
+const productionTimeHeaders = ["bz_time", "bz time", "brasiltime/hour", "brasiltime hour"];
+const productionQueueHeaders = ["id-queue_id", "队列id-queue_id", "queue_id", "queue id", "fila", "queue"];
+const productionInputHeaders = ["enqueue", "input", "input_num", "input num", "进审量", "recebidos"];
 
 export class PerformanceError extends Error {
   status: number;
@@ -274,6 +341,197 @@ export async function getPerformanceDashboard(actor: Actor, query: PerformanceQu
       importedBy: item.importedBy?.name ?? item.importedBy?.email ?? "Sistema",
       importedAt: formatDateTime(item.importedAt)
     }))
+  };
+}
+
+export async function getPerformanceProductionDashboard(actor: Actor, query: PerformanceQuery = {}) {
+  const user = await requireActiveUser(actor);
+  if (!canAccessPerformance(permissionUser(user))) throw new PerformanceError("Você não tem permissão para acessar Performance.", 403);
+
+  const role = normalizeRole(user.role.name);
+  const productionPeriod = await resolveProductionDashboardPeriod(query);
+  const ownEmployeeId = role === "COLABORADOR" ? requireOwnEmployee(user).id : null;
+  const requestedLob = query.lob && query.lob !== "Todos" ? query.lob.toUpperCase() : "";
+
+  const [records, volumeRecords] = await Promise.all([
+    prisma.productionRecord.findMany({
+      where: {
+        bzDay: { gte: productionPeriod.start, lte: productionPeriod.end },
+        ...(ownEmployeeId ? { employeeId: ownEmployeeId } : {})
+      },
+      select: {
+        bzTime: true,
+        bzDay: true,
+        wbLogin: true,
+        employeeId: true,
+        submitNum: true,
+        latencyMinutesSum: true,
+        moderationSeconds: true,
+        queueId: true,
+        employee: {
+          select: {
+            fullName: true,
+            wbLogin: true,
+            roleTitle: true,
+            skill: true,
+            operationalStatus: true,
+            lob: { select: { name: true } },
+            supervisor: { select: { fullName: true } }
+          }
+        }
+      },
+      orderBy: [{ bzDay: "asc" }, { bzTime: "asc" }]
+    }),
+    ownEmployeeId ? Promise.resolve([] as QueueVolumeRecordForDashboard[]) : prisma.performanceQueueVolumeRecord.findMany({
+      where: {
+        bzDay: { gte: productionPeriod.start, lte: productionPeriod.end }
+      },
+      select: {
+        bzTime: true,
+        bzDay: true,
+        queueId: true,
+        inputCount: true
+      },
+      orderBy: [{ bzDay: "asc" }, { bzTime: "asc" }]
+    })
+  ]);
+  const filteredRecords = requestedLob
+    ? records.filter((record) => getQueueMetadataById(record.queueId).lob === requestedLob)
+    : records;
+  const filteredVolumeRecords = requestedLob
+    ? volumeRecords.filter((record) => getQueueMetadataById(record.queueId).lob === requestedLob)
+    : volumeRecords;
+  const availableLobs = new Set<string>();
+  for (const record of records) availableLobs.add(getQueueMetadataById(record.queueId).lob);
+  for (const record of volumeRecords) availableLobs.add(getQueueMetadataById(record.queueId).lob);
+
+  const dailyMap = new Map<string, ProductionDashboardAggregate>();
+  const agentMap = new Map<string, ProductionDashboardAgentAggregate>();
+  const queueMap = new Map<string, ProductionDashboardQueueAggregate>();
+  const lobs = new Set<string>();
+
+  for (const record of filteredRecords) {
+    const queueMetadata = getQueueMetadataById(record.queueId);
+    const queueLob = queueMetadata.lob;
+    lobs.add(queueLob);
+    const dayKey = formatDateKey(record.bzDay);
+    incrementProductionAggregate(ensureProductionAggregate(dailyMap, dayKey), record);
+
+    const agentKey = record.employeeId ?? normalizeWbLogin(record.wbLogin);
+    if (!agentMap.has(agentKey)) {
+      agentMap.set(agentKey, {
+        ...emptyProductionAggregate(),
+        employeeId: record.employeeId ?? "",
+        employeeName: record.employee?.fullName ?? record.wbLogin,
+        wbLogin: record.employee?.wbLogin ?? record.wbLogin,
+        cadastroLob: record.employee?.lob?.name ?? "Sem LOB",
+        queueLobs: new Set(),
+        supervisor: record.employee?.supervisor?.fullName ?? "Sem supervisor",
+        roleTitle: record.employee?.roleTitle ?? "-",
+        skill: record.employee?.skill ?? "-",
+        status: displayPerformanceEmployeeStatus(record.employee?.operationalStatus ?? ""),
+        queues: new Set()
+      });
+    }
+    const agent = agentMap.get(agentKey)!;
+    incrementProductionAggregate(agent, record);
+    agent.queueLobs.add(queueLob);
+    agent.queues.add(record.queueId || "Sem Fila ID");
+
+    const queueId = record.queueId || "Sem Fila ID";
+    if (!queueMap.has(queueId)) {
+      queueMap.set(queueId, {
+        ...emptyProductionAggregate(),
+        queueId,
+        queueName: getQueueNameById(record.queueId),
+        lob: queueLob,
+        slaTargetMinutes: queueMetadata.slaTargetMinutes,
+        agents: new Set()
+      });
+    }
+    const queue = queueMap.get(queueId)!;
+    incrementProductionAggregate(queue, record);
+    queue.agents.add(agentKey);
+  }
+
+  for (const record of filteredVolumeRecords) {
+    const queueMetadata = getQueueMetadataById(record.queueId);
+    const queueLob = queueMetadata.lob;
+    lobs.add(queueLob);
+    const dayKey = formatDateKey(record.bzDay);
+    incrementProductionInput(ensureProductionAggregate(dailyMap, dayKey), record.inputCount);
+
+    const queueId = record.queueId || "Sem Fila ID";
+    if (!queueMap.has(queueId)) {
+      queueMap.set(queueId, {
+        ...emptyProductionAggregate(),
+        queueId,
+        queueName: getQueueNameById(record.queueId),
+        lob: queueLob,
+        slaTargetMinutes: queueMetadata.slaTargetMinutes,
+        agents: new Set()
+      });
+    }
+    incrementProductionInput(queueMap.get(queueId)!, record.inputCount);
+  }
+
+  const summary = summarizeProductionDashboardAggregates(Array.from(dailyMap.values()));
+
+  const latestImport = await prisma.performanceImportBatch.findFirst({
+    where: { type: "PRODUCTION" },
+    orderBy: { importedAt: "desc" },
+    select: { fileName: true, importedAt: true, rowsValid: true, status: true }
+  });
+
+  return {
+    mode: "production" as const,
+    period: periodPayload(productionPeriod),
+    filters: {
+      lobs: ["Todos", ...Array.from(availableLobs.size ? availableLobs : lobs).sort()]
+    },
+    summary: {
+      ...serializeProductionSummary(summary),
+      agents: agentMap.size,
+      queues: queueMap.size,
+      lastImport: latestImport ? {
+        fileName: latestImport.fileName,
+        importedAt: formatDateTime(latestImport.importedAt),
+        rowsValid: latestImport.rowsValid,
+        status: latestImport.status
+      } : null
+    },
+    daily: Array.from(dailyMap.entries()).map(([date, aggregate]) => ({
+      date,
+      label: formatDisplayDate(parseDate(date)!),
+      ...serializeProductionSummary(aggregate)
+    })),
+    agents: Array.from(agentMap.values())
+      .map((aggregate) => ({
+        employeeId: aggregate.employeeId,
+        employeeName: aggregate.employeeName,
+        wbLogin: aggregate.wbLogin,
+        cadastroLob: aggregate.cadastroLob,
+        queueLobs: Array.from(aggregate.queueLobs).sort().join(" + ") || "-",
+        supervisor: aggregate.supervisor,
+        roleTitle: aggregate.roleTitle,
+        skill: aggregate.skill,
+        status: aggregate.status,
+        queueCount: aggregate.queues.size,
+        ...serializeProductionSummary(aggregate)
+      }))
+      .sort((a, b) => b.submit - a.submit)
+      .slice(0, 250),
+    queues: Array.from(queueMap.values())
+      .map((aggregate) => ({
+        queueId: aggregate.queueId,
+        queueName: aggregate.queueName,
+        lob: aggregate.lob,
+        slaTargetMinutes: aggregate.slaTargetMinutes,
+        agents: aggregate.agents.size,
+        ...serializeProductionSummary(aggregate)
+      }))
+      .sort((a, b) => b.submit - a.submit)
+      .slice(0, 250)
   };
 }
 
@@ -518,7 +776,10 @@ async function previewCecQualityRows(rawRows: Record<string, unknown>[], options
 
 async function previewProductionRows(rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
   const normalizedRows = rawRows.map(normalizeObjectKeys);
-  const wbLogins = unique(normalizedRows.map((row) => normalizeWbLogin(text(rowValue(row, ["agentes", "agente", "agentname", "wb_login", "wb login"])))).filter(Boolean));
+  const wbLogins = unique(normalizedRows
+    .filter((row) => !isProductionVolumeRow(row))
+    .map((row) => normalizeWbLogin(text(rowValue(row, productionAgentHeaders))))
+    .filter(Boolean));
   const employees = await findEmployeesByWbLogins(wbLogins);
   const employeeByLogin = new Map(employees.map((employee) => [normalizeWbLogin(employee.wbLogin), employee]));
   const seen = new Map<string, number>();
@@ -527,16 +788,52 @@ async function previewProductionRows(rawRows: Record<string, unknown>[], options
     const rowNumber = (options.rowNumberOffset ?? 0) + index + 2;
     const errors: string[] = [];
     const warnings: string[] = [];
-    const wbLogin = normalizeWbLogin(text(rowValue(row, ["agentes", "agente", "agentname", "wb_login", "wb login"])));
+    if (isProductionVolumeRow(row)) {
+      const bzTime = normalizeExcelDate(rowValue(row, productionTimeHeaders));
+      const bzDay = normalizeExcelDate(rowValue(row, ["bz_day", "bz day"])) ?? bzTime;
+      const queueId = text(rowValue(row, productionQueueHeaders));
+      const inputCount = parseInteger(rowValue(row, productionInputHeaders));
+      const volumeKey = bzTime && queueId ? `${formatDateTimeKey(bzTime)}|${queueId}` : "";
+
+      if (!bzTime) errors.push("brasiltime/hour inválido.");
+      if (!bzDay) errors.push("Data do volume inválida.");
+      if (!queueId) errors.push("queue_id inválido.");
+      if (inputCount === null || inputCount < 0) errors.push("enqueue inválido.");
+      if (volumeKey) {
+        const first = seen.get(`volume:${volumeKey}`);
+        if (first) warnings.push(`Volume duplicado no arquivo. Primeira ocorrência na linha ${first}; será tratado por upsert.`);
+        else seen.set(`volume:${volumeKey}`, rowNumber);
+      }
+
+      return {
+        rowNumber,
+        type: "PRODUCTION_VOLUME",
+        wbLogin: "",
+        date: bzDay ? formatDateKey(bzDay) : "",
+        uniqueKey: volumeKey,
+        action: errors.length ? "ignore" : "create",
+        errors,
+        warnings,
+        payload: {
+          bzTime: bzTime ? bzTime.toISOString() : "",
+          bzDay: bzDay ? formatDateKey(bzDay) : "",
+          queueId,
+          inputCount,
+          volumeKey
+        }
+      };
+    }
+
+    const wbLogin = normalizeWbLogin(text(rowValue(row, productionAgentHeaders)));
     const employee = employeeByLogin.get(wbLogin);
-    const bzTime = normalizeExcelDate(rowValue(row, ["bz_time", "bz time", "brasiltime/hour", "brasiltime hour"]));
+    const bzTime = normalizeExcelDate(rowValue(row, productionTimeHeaders));
     const bzDay = normalizeExcelDate(rowValue(row, ["bz_day", "bz day"])) ?? bzTime;
     const submitNum = parseInteger(rowValue(row, ["submit_num", "submit num", "submit"]));
     const moderationSeconds = parseNumber(rowValue(row, ["moderation", "moderation(s)", "moderation seconds", "moderation duration (s)"]));
     const rawAhtSeconds = parseNumber(rowValue(row, ["aht(s)", "aht", "aht_seconds"]));
     const ahtSeconds = submitNum && submitNum > 0 && moderationSeconds !== null ? round2(moderationSeconds / submitNum) : rawAhtSeconds;
     const latencyMinutesSum = parseNumber(rowValue(row, ["latency(min)_sum", "latency_sum", "latency min sum", "latency (min)", "latency(min)"]));
-    const queueId = text(rowValue(row, ["队列id-queue_id", "queue_id", "queue id", "fila", "queue"]));
+    const queueId = text(rowValue(row, productionQueueHeaders));
     const productionKey = bzTime && queueId && wbLogin ? `${formatDateTimeKey(bzTime)}|${queueId}|${wbLogin}` : "";
 
     if (!wbLogin) errors.push("WB/Login é obrigatório.");
@@ -717,10 +1014,12 @@ export async function commitProductionImport(actor: Actor, rows: PerformancePrev
 
 async function commitProductionRows(user: AuthenticatedUser, rows: PerformancePreviewRow[], fileName = "producao.xlsx", batchId?: string) {
   const validRows = rows.filter((row) => row.type === "PRODUCTION" && !row.errors.length && row.employeeId && row.uniqueKey);
-  if (!validRows.length) throw new PerformanceError("Não há linhas válidas para importar.", 400);
-  const createdRows = validRows.filter((row) => row.action === "create").length;
-  const updatedRows = validRows.filter((row) => row.action === "update").length;
-  const batch = await upsertImportBatch(user, "PRODUCTION", fileName, rows, validRows.length, createdRows, updatedRows, batchId);
+  const validVolumeRows = rows.filter((row) => row.type === "PRODUCTION_VOLUME" && !row.errors.length && row.uniqueKey);
+  const allValidRows = [...validRows, ...validVolumeRows];
+  if (!allValidRows.length) throw new PerformanceError("Não há linhas válidas para importar.", 400);
+  const createdRows = allValidRows.filter((row) => row.action === "create").length;
+  const updatedRows = allValidRows.filter((row) => row.action === "update").length;
+  const batch = await upsertImportBatch(user, "PRODUCTION", fileName, rows, allValidRows.length, createdRows, updatedRows, batchId);
 
   for (const chunk of chunks(validRows, 100)) {
     await prisma.$transaction(chunk.map((row) => prisma.productionRecord.upsert({
@@ -754,8 +1053,44 @@ async function commitProductionRows(user: AuthenticatedUser, rows: PerformancePr
       }
     })));
   }
-  if (!batchId) await auditImport(user.id, "PRODUCTION", batch.id, { fileName, rowsTotal: rows.length, rowsValid: validRows.length, createdRows, updatedRows });
-  return { success: true, importedRows: validRows.length, createdRows, updatedRows, batchId: batch.id };
+  for (const chunk of chunks(validVolumeRows, 200)) {
+    await prisma.$transaction(chunk.map((row) => prisma.performanceQueueVolumeRecord.upsert({
+      where: { volumeKey: String(row.payload.volumeKey) },
+      update: {
+        bzTime: new Date(String(row.payload.bzTime)),
+        bzDay: parseDate(String(row.payload.bzDay))!,
+        queueId: String(row.payload.queueId),
+        inputCount: Number(row.payload.inputCount ?? 0),
+        importBatchId: batch.id
+      },
+      create: {
+        bzTime: new Date(String(row.payload.bzTime)),
+        bzDay: parseDate(String(row.payload.bzDay))!,
+        queueId: String(row.payload.queueId),
+        inputCount: Number(row.payload.inputCount ?? 0),
+        volumeKey: String(row.payload.volumeKey),
+        importBatchId: batch.id
+      }
+    })));
+  }
+  if (!batchId) await auditImport(user.id, "PRODUCTION", batch.id, {
+    fileName,
+    rowsTotal: rows.length,
+    rowsValid: allValidRows.length,
+    productionRows: validRows.length,
+    volumeRows: validVolumeRows.length,
+    createdRows,
+    updatedRows
+  });
+  return {
+    success: true,
+    importedRows: allValidRows.length,
+    productionRows: validRows.length,
+    volumeRows: validVolumeRows.length,
+    createdRows,
+    updatedRows,
+    batchId: batch.id
+  };
 }
 
 export async function exportPerformanceXlsxData(actor: Actor, query: PerformanceQuery = {}): Promise<XlsxExportPayload> {
@@ -835,7 +1170,7 @@ export function performanceTemplate(type: "quality" | "tns-quality" | "cec-quali
   return {
     fileName: "template_performance_producao.xlsx",
     sheetName: "producao",
-    headers: ["BZ_time", "BZ_day", "AHT(s)", "Latency(min)_sum", "submit_num", "队列id-queue_id", "Moderation", "Agentes"],
+    headers: ["BZ_time", "BZ_day", "AHT(s)", "Latency(min)_sum", "submit_num", "id-queue_id", "Moderation", "Agentes"],
     rows: []
   };
 }
@@ -1934,6 +2269,94 @@ async function markExistingQualityRows(previewRows: PerformancePreviewRow[]) {
   return buildPreviewResult(previewRows.map((row) => row.errors.length ? row : { ...row, action: "create" }));
 }
 
+async function resolveProductionDashboardPeriod(query: PerformanceQuery): Promise<Period> {
+  const explicit = query.startDate || query.endDate;
+  if (explicit) {
+    const fallback = await latestProductionPeriod();
+    return {
+      start: parseDate(query.startDate) ?? fallback.start,
+      end: parseDate(query.endDate) ?? fallback.end
+    };
+  }
+  return latestProductionPeriod();
+}
+
+async function latestProductionPeriod(): Promise<Period> {
+  const [productionRange, volumeRange] = await Promise.all([
+    prisma.productionRecord.aggregate({
+      _min: { bzDay: true },
+      _max: { bzDay: true }
+    }),
+    prisma.performanceQueueVolumeRecord.aggregate({
+      _min: { bzDay: true },
+      _max: { bzDay: true }
+    })
+  ]);
+  const fallback = getDefaultDatePeriod();
+  const minDates = [productionRange._min.bzDay, volumeRange._min.bzDay].filter((date): date is Date => Boolean(date));
+  const maxDates = [productionRange._max.bzDay, volumeRange._max.bzDay].filter((date): date is Date => Boolean(date));
+  return {
+    start: minDates.length ? new Date(Math.min(...minDates.map((date) => date.getTime()))) : fallback.start,
+    end: maxDates.length ? new Date(Math.max(...maxDates.map((date) => date.getTime()))) : fallback.end
+  };
+}
+
+function emptyProductionAggregate(): ProductionDashboardAggregate {
+  return { input: 0, submit: 0, moderationSeconds: 0, latencyMinutesSum: 0, records: 0 };
+}
+
+function ensureProductionAggregate(map: Map<string, ProductionDashboardAggregate>, key: string) {
+  if (!map.has(key)) map.set(key, emptyProductionAggregate());
+  return map.get(key)!;
+}
+
+function incrementProductionAggregate<T extends ProductionDashboardAggregate>(aggregate: T, record: Pick<ProductionRecordForDashboard, "submitNum" | "moderationSeconds" | "latencyMinutesSum">) {
+  aggregate.submit += Number(record.submitNum || 0);
+  aggregate.moderationSeconds += Number(record.moderationSeconds || 0);
+  aggregate.latencyMinutesSum += Number(record.latencyMinutesSum || 0);
+  aggregate.records += 1;
+  return aggregate;
+}
+
+function incrementProductionInput<T extends ProductionDashboardAggregate>(aggregate: T, inputCount: number | null | undefined) {
+  aggregate.input += Math.max(0, Number(inputCount || 0));
+  aggregate.records += 1;
+  return aggregate;
+}
+
+function summarizeProductionDashboardRecords(records: ProductionRecordForDashboard[]) {
+  const aggregate = emptyProductionAggregate();
+  for (const record of records) incrementProductionAggregate(aggregate, record);
+  return aggregate;
+}
+
+function summarizeProductionDashboardAggregates(aggregates: ProductionDashboardAggregate[]) {
+  const summary = emptyProductionAggregate();
+  for (const aggregate of aggregates) {
+    summary.input += aggregate.input;
+    summary.submit += aggregate.submit;
+    summary.moderationSeconds += aggregate.moderationSeconds;
+    summary.latencyMinutesSum += aggregate.latencyMinutesSum;
+    summary.records += aggregate.records;
+  }
+  return summary;
+}
+
+function serializeProductionSummary(aggregate: ProductionDashboardAggregate) {
+  const input = Math.round(aggregate.input);
+  const submit = Math.round(aggregate.submit);
+  const moderationHours = round2(aggregate.moderationSeconds / 3600);
+  return {
+    records: aggregate.records,
+    input,
+    submit,
+    moderationSeconds: round2(aggregate.moderationSeconds),
+    moderationHours,
+    ahtSeconds: submit > 0 ? round2(aggregate.moderationSeconds / submit) : 0,
+    latencyMinutes: submit > 0 ? round2(aggregate.latencyMinutesSum / submit) : 0
+  };
+}
+
 async function markExistingTnsQualityRows(previewRows: PerformancePreviewRow[]) {
   return buildPreviewResult(previewRows.map((row) => row.errors.length ? row : { ...row, action: "create" }));
 }
@@ -1964,10 +2387,19 @@ async function markExistingCecQualityRows(previewRows: PerformancePreviewRow[]) 
 }
 
 async function markExistingProductionRows(previewRows: PerformancePreviewRow[]) {
-  const validKeys = unique(previewRows.filter((row) => !row.errors.length && row.uniqueKey).map((row) => row.uniqueKey));
-  const existing = validKeys.length ? await prisma.productionRecord.findMany({ where: { productionKey: { in: validKeys } }, select: { productionKey: true } }) : [];
+  const validProductionKeys = unique(previewRows.filter((row) => row.type === "PRODUCTION" && !row.errors.length && row.uniqueKey).map((row) => row.uniqueKey));
+  const validVolumeKeys = unique(previewRows.filter((row) => row.type === "PRODUCTION_VOLUME" && !row.errors.length && row.uniqueKey).map((row) => row.uniqueKey));
+  const [existing, existingVolume] = await Promise.all([
+    validProductionKeys.length ? prisma.productionRecord.findMany({ where: { productionKey: { in: validProductionKeys } }, select: { productionKey: true } }) : Promise.resolve([]),
+    validVolumeKeys.length ? prisma.performanceQueueVolumeRecord.findMany({ where: { volumeKey: { in: validVolumeKeys } }, select: { volumeKey: true } }) : Promise.resolve([])
+  ]);
   const existingKeys = new Set(existing.map((row) => row.productionKey));
-  return buildPreviewResult(previewRows.map((row) => row.errors.length ? row : { ...row, action: existingKeys.has(row.uniqueKey) ? "update" : "create" }));
+  const existingVolumeKeys = new Set(existingVolume.map((row) => row.volumeKey));
+  return buildPreviewResult(previewRows.map((row) => {
+    if (row.errors.length) return row;
+    const exists = row.type === "PRODUCTION_VOLUME" ? existingVolumeKeys.has(row.uniqueKey) : existingKeys.has(row.uniqueKey);
+    return { ...row, action: exists ? "update" : "create" };
+  }));
 }
 
 async function upsertImportBatch(
@@ -2189,6 +2621,13 @@ function normalizeObjectKeys(row: Record<string, unknown>) {
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(row)) result[normalizeHeader(key)] = value;
   return result;
+}
+
+function isProductionVolumeRow(row: Record<string, unknown>) {
+  const hasAgent = Boolean(text(rowValue(row, productionAgentHeaders)));
+  const hasSubmit = Boolean(text(rowValue(row, ["submit_num", "submit num", "submit"])));
+  const hasInput = Boolean(text(rowValue(row, productionInputHeaders)));
+  return hasInput && !hasAgent && !hasSubmit;
 }
 
 function normalizeHeader(value: string) {

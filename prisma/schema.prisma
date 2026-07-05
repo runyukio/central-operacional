@@ -1207,6 +1207,7 @@ model PerformanceImportBatch {
   tnsQualityRecords TnsQualityRecord[]
   cecQualityRecords CecQualityRecord[]
   productionRecords ProductionRecord[]
+  queueVolumeRecords PerformanceQueueVolumeRecord[]
   importedAt        DateTime           @default(now())
   createdAt         DateTime           @default(now())
 
@@ -1327,6 +1328,25 @@ model ProductionRecord {
   @@index([lobId])
   @@index([queueId])
   @@index([employeeId, bzDay])
+}
+
+model PerformanceQueueVolumeRecord {
+  id            String                  @id @default(cuid())
+  bzTime        DateTime
+  bzDay         DateTime
+  queueId       String
+  inputCount    Int                     @default(0)
+  volumeKey     String                  @unique
+  importBatchId String?
+  importBatch   PerformanceImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+
+  @@index([bzTime])
+  @@index([bzDay])
+  @@index([queueId])
+  @@index([importBatchId])
+  @@index([queueId, bzDay])
 }
 
 model WorkSessionDevice {
