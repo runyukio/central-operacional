@@ -27,7 +27,7 @@ export async function POST(request: Request) {
       let batchId: string | undefined;
       const imports = [];
       for (const rowSet of rowSets) {
-        const result = await commitProductionAutomatedRawImport(rowSet.rows, rowSet.fileName, batchId);
+        const result = await commitProductionAutomatedRawImport(rowSet.rows, rowSet.fileName, batchId, 0, { pruneSnapshot: true });
         batchId = result.batchId;
         imports.push({
           fileName: rowSet.fileName,
@@ -55,7 +55,7 @@ export async function POST(request: Request) {
     const imports = [];
     for (const file of files) {
       const rows = readRowsFromWorkbook(await file.arrayBuffer());
-      const result = await commitProductionAutomatedRawImport(rows, file.name, batchId);
+      const result = await commitProductionAutomatedRawImport(rows, file.name, batchId, 0, { pruneSnapshot: true });
       batchId = result.batchId;
       imports.push({
         fileName: file.name,

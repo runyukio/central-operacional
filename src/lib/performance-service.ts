@@ -607,9 +607,9 @@ export async function commitProductionRawImport(actor: Actor, rawRows: Record<st
   return commitProductionRows(user, preview.rows, fileName, batchId);
 }
 
-export async function commitProductionAutomatedRawImport(rawRows: Record<string, unknown>[], fileName = "producao.xlsx", batchId?: string, rowNumberOffset = 0) {
+export async function commitProductionAutomatedRawImport(rawRows: Record<string, unknown>[], fileName = "producao.xlsx", batchId?: string, rowNumberOffset = 0, options: { pruneSnapshot?: boolean } = {}) {
   const preview = await previewProductionRows(rawRows, { rowNumberOffset });
-  return commitProductionRows(null, preview.rows, fileName, batchId);
+  return commitProductionRows(null, preview.rows, fileName, batchId, options);
 }
 
 export function validatePerformanceImportToken(authorizationHeader?: string | null) {
@@ -1052,7 +1052,7 @@ export async function commitProductionImport(actor: Actor, rows: PerformancePrev
   return commitProductionRows(user, rows, fileName);
 }
 
-async function commitProductionRows(user: AuthenticatedUser | null, rows: PerformancePreviewRow[], fileName = "producao.xlsx", batchId?: string) {
+async function commitProductionRows(user: AuthenticatedUser | null, rows: PerformancePreviewRow[], fileName = "producao.xlsx", batchId?: string, options: { pruneSnapshot?: boolean } = {}) {
   const validRows = rows.filter((row) => row.type === "PRODUCTION" && !row.errors.length && row.employeeId && row.uniqueKey);
   const validVolumeRows = rows.filter((row) => row.type === "PRODUCTION_VOLUME" && !row.errors.length && row.uniqueKey);
   const allValidRows = [...validRows, ...validVolumeRows];
@@ -1113,7 +1113,7 @@ async function commitProductionRows(user: AuthenticatedUser | null, rows: Perfor
       }
     })));
   }
-  const snapshotPrune = user ? null : await pruneAutomatedProductionSnapshot(validRows, validVolumeRows);
+  const snapshotPrune = !user && options.pruneSnapshot ? await pruneAutomatedProductionSnapshot(validRows, validVolumeRows) : null;
   if (user && !batchId) await auditImport(user.id, "PRODUCTION", batch.id, {
     fileName,
     rowsTotal: rows.length,
