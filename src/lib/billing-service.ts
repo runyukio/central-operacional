@@ -116,6 +116,9 @@ type InvoiceCalculation = {
   employeeId: string;
   employeeName: string;
   wbLogin: string;
+  cnpj: string;
+  pixKeyType: string;
+  pixKey: string;
   email: string;
   roleTitle: string;
   employeeStatus: string;
@@ -1190,13 +1193,13 @@ export async function exportBilling(actor: Actor, filters: BillingDashboardFilte
       },
       {
         sheetName: "Por Colaborador",
-        headers: ["nome", "wb_login", "cargo_funcao", "skill", "status_colaborador", "lob", "supervisor", "turno_oficial", "regra_billing", "valor_hora", "horas_aprovadas", "horas_projetadas", "total_horas", "valor_bruto", "adiantamento", "campanha", "bonus", "desconto", "correcao", "ajustes_total", "valor_final", "status_invoice", "aprovado_em"],
-        rows: data.invoices.map((row) => [row.employeeName, row.wbLogin, row.roleTitle, row.skill, row.employeeStatus, row.lob, row.supervisor, row.officialShift, row.billingRuleLabel || row.billingRule, moneyText(row.hourlyRate), minutesToHoursLabel(row.approvedMinutes), minutesToHoursLabel(row.projectedMinutes), minutesToHoursLabel(row.totalConsideredMinutes), moneyText(row.grossAmount), moneyText(row.advanceAmount), moneyText(row.campaignAmount), moneyText(row.bonusAmount), moneyText(row.discountAmount), moneyText(row.correctionAmount), moneyText(row.adjustmentAmount), moneyText(row.finalAmount), row.statusLabel, row.approvedByEmployeeAt || ""])
+        headers: ["nome", "wb_login", "cnpj", "tipo_chave_pix", "chave_pix", "cargo_funcao", "skill", "status_colaborador", "lob", "supervisor", "turno_oficial", "regra_billing", "valor_hora", "horas_aprovadas", "horas_projetadas", "total_horas", "valor_bruto", "adiantamento", "campanha", "bonus", "desconto", "correcao", "ajustes_total", "valor_final", "status_invoice", "aprovado_em"],
+        rows: data.invoices.map((row) => [row.employeeName, row.wbLogin, row.cnpj, row.pixKeyType, row.pixKey, row.roleTitle, row.skill, row.employeeStatus, row.lob, row.supervisor, row.officialShift, row.billingRuleLabel || row.billingRule, moneyText(row.hourlyRate), minutesToHoursLabel(row.approvedMinutes), minutesToHoursLabel(row.projectedMinutes), minutesToHoursLabel(row.totalConsideredMinutes), moneyText(row.grossAmount), moneyText(row.advanceAmount), moneyText(row.campaignAmount), moneyText(row.bonusAmount), moneyText(row.discountAmount), moneyText(row.correctionAmount), moneyText(row.adjustmentAmount), moneyText(row.finalAmount), row.statusLabel, row.approvedByEmployeeAt || ""])
       },
       {
         sheetName: "Detalhamento de Horas",
-        headers: ["data", "nome", "wb_login", "status_colaborador", "lob", "supervisor", "skill", "cargo_funcao", "turno_oficial", "turno_slot", "horas_aprovadas", "valor_hora", "valor_calculado", "regra_billing"],
-        rows: data.invoices.flatMap((row) => row.hourDetails.map((detail) => [detail.date, row.employeeName, row.wbLogin, row.employeeStatus, row.lob, row.supervisor, row.skill, row.roleTitle, row.officialShift, detail.shift, minutesToHoursLabel(detail.minutes), moneyText(row.hourlyRate), moneyText(detail.amount), row.billingRuleLabel || row.billingRule]))
+        headers: ["data", "nome", "wb_login", "cnpj", "tipo_chave_pix", "chave_pix", "status_colaborador", "lob", "supervisor", "skill", "cargo_funcao", "turno_oficial", "turno_slot", "horas_aprovadas", "valor_hora", "valor_calculado", "regra_billing"],
+        rows: data.invoices.flatMap((row) => row.hourDetails.map((detail) => [detail.date, row.employeeName, row.wbLogin, row.cnpj, row.pixKeyType, row.pixKey, row.employeeStatus, row.lob, row.supervisor, row.skill, row.roleTitle, row.officialShift, detail.shift, minutesToHoursLabel(detail.minutes), moneyText(row.hourlyRate), moneyText(detail.amount), row.billingRuleLabel || row.billingRule]))
       },
       {
         sheetName: "Ajustes",
@@ -1205,8 +1208,8 @@ export async function exportBilling(actor: Actor, filters: BillingDashboardFilte
       },
       {
         sheetName: "Aprovações",
-        headers: ["colaborador", "wb_login", "status_invoice", "aprovado_em", "ajuste_aberto", "valor_final"],
-        rows: data.invoices.map((row) => [row.employeeName, row.wbLogin, row.statusLabel, row.approvedByEmployeeAt || "", row.hasOpenAdjustment ? "Sim" : "Não", moneyText(row.finalAmount)])
+        headers: ["colaborador", "wb_login", "cnpj", "tipo_chave_pix", "chave_pix", "status_invoice", "aprovado_em", "ajuste_aberto", "valor_final"],
+        rows: data.invoices.map((row) => [row.employeeName, row.wbLogin, row.cnpj, row.pixKeyType, row.pixKey, row.statusLabel, row.approvedByEmployeeAt || "", row.hasOpenAdjustment ? "Sim" : "Não", moneyText(row.finalAmount)])
       },
       {
         sheetName: "Configurações",
@@ -1233,7 +1236,7 @@ async function buildBillingInvoicesReadModel(
   const lobIds = Array.from(new Set(employees.map((employee) => employee.lobId).filter(Boolean))) as string[];
   const includeMonthlyAdvance = isMonthlyAdvanceReferenceMonthAvailable(referenceMonth);
 
-  const [workHours, schedules, advances, persistedInvoices] = await Promise.all([
+  const [workHours, schedules, advances, persistedInvoices, sensitiveRows] = await Promise.all([
     prisma.workHourRecord.findMany({
       where: {
         employeeId: { in: employeeIds },
@@ -1280,9 +1283,14 @@ async function buildBillingInvoicesReadModel(
           approvedByEmployeeUserId: true
         }
       })
-      : Promise.resolve([])
+      : Promise.resolve([]),
+    prisma.employeeSensitiveData.findMany({
+      where: { employeeId: { in: employeeIds } },
+      select: { employeeId: true, cnpj: true }
+    })
   ]);
 
+  const sensitiveByEmployee = new Map(sensitiveRows.map((row) => [row.employeeId, row]));
   const persistedByEmployee = new Map(persistedInvoices.map((invoice) => [invoice.employeeId, invoice]));
   const invoiceEmployeeById = new Map(persistedInvoices.map((invoice) => [invoice.id, invoice.employeeId]));
   const invoiceIds = persistedInvoices.map((invoice) => invoice.id);
@@ -1335,6 +1343,7 @@ async function buildBillingInvoicesReadModel(
 
   const invoices: InvoiceCalculation[] = [];
   for (const employee of employees) {
+    const sensitive = sensitiveByEmployee.get(employee.id);
     const rate = resolveHourlyRate(employee, rates);
     const employeeWorkHours = workHoursByEmployee.get(employee.id) ?? [];
     const approvedByDate = new Map(employeeWorkHours.map((record) => [dateKey(record.date), Math.max(0, Math.round(Number(record.effectiveHours ?? 0) * 60))]));
@@ -1385,6 +1394,9 @@ async function buildBillingInvoicesReadModel(
       employeeId: employee.id,
       employeeName: employee.fullName,
       wbLogin: employee.wbLogin,
+      cnpj: sensitive?.cnpj ?? "",
+      pixKeyType: employee.pixKeyType ?? "",
+      pixKey: employee.pixKey ?? "",
       email: employee.user?.email ?? "",
       roleTitle: employee.roleTitle,
       employeeStatus: employee.operationalStatus ?? "",
@@ -1507,6 +1519,9 @@ async function calculateEmployeeInvoice(employee: BillingEmployee, referenceMont
     employeeId: employee.id,
     employeeName: employee.fullName,
     wbLogin: employee.wbLogin,
+    cnpj: "",
+    pixKeyType: employee.pixKeyType ?? "",
+    pixKey: employee.pixKey ?? "",
     email: employee.user?.email ?? "",
     roleTitle: employee.roleTitle,
     employeeStatus: employee.operationalStatus ?? "",
@@ -2400,8 +2415,16 @@ export function formatBillingCurrency(value: number) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(Number.isFinite(value) ? value : 0);
 }
 
+const billingCurrencyFormatter = new Intl.NumberFormat("pt-BR", {
+  style: "currency",
+  currency: "BRL",
+  currencySign: "accounting",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2
+});
+
 function moneyText(value: number) {
-  return Number.isFinite(value) ? value.toFixed(2) : "0.00";
+  return billingCurrencyFormatter.format(Number.isFinite(value) ? value : 0);
 }
 
 function numberOrZero(value: unknown) {
