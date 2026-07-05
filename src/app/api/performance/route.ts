@@ -23,7 +23,8 @@ export async function GET(request: Request) {
       wfhStatus: url.searchParams.get("wfhStatus") ?? undefined,
       wbLogins: url.searchParams.get("wbLogins") ?? undefined,
       sortBy: readSortBy(url.searchParams.get("sortBy")),
-      sortDirection: readSortDirection(url.searchParams.get("sortDirection"))
+      sortDirection: readSortDirection(url.searchParams.get("sortDirection")),
+      granularity: readGranularity(url.searchParams.get("granularity"))
     };
     return NextResponse.json(await getPerformanceProductionDashboard(actor, query));
   } catch (error) {
@@ -41,6 +42,10 @@ function readSortBy(value: string | null): PerformanceQuery["sortBy"] {
 
 function readSortDirection(value: string | null): PerformanceQuery["sortDirection"] {
   return value === "asc" || value === "desc" ? value : undefined;
+}
+
+function readGranularity(value: string | null): PerformanceQuery["granularity"] {
+  return value === "weekly" || value === "monthly" ? value : value === "daily" ? "daily" : undefined;
 }
 
 function performanceErrorResponse(error: unknown) {

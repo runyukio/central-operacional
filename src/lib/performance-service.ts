@@ -48,6 +48,7 @@ type AttendanceRecordForMetrics = Prisma.AttendanceRecordGetPayload<{ select: ty
 type QualityRule = "ADS_QUALITY" | "TNS_QUALITY" | "CEC_QUALITY" | "UNKNOWN" | "MIXED";
 type PerformanceSortBy = "quality" | "submit" | "aht" | "abs";
 type PerformanceSortDirection = "asc" | "desc";
+type PerformanceProductionGranularity = "daily" | "weekly" | "monthly";
 
 export type PerformanceQuery = {
   view?: "mine" | "wfh" | "framework";
@@ -64,6 +65,7 @@ export type PerformanceQuery = {
   wbLogins?: string[] | string;
   sortBy?: PerformanceSortBy;
   sortDirection?: PerformanceSortDirection;
+  granularity?: PerformanceProductionGranularity;
 };
 
 type ProductionRecordForDashboard = Prisma.ProductionRecordGetPayload<{
@@ -352,12 +354,18 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
   const productionPeriod = await resolveProductionDashboardPeriod(query);
   const ownEmployeeId = role === "COLABORADOR" ? requireOwnEmployee(user).id : null;
   const requestedLob = query.lob && query.lob !== "Todos" ? query.lob.toUpperCase() : "";
+  const granularity = normalizeProductionGranularity(query.granularity);
+  if (!requestedLob) return emptyProductionDashboardPayload(productionPeriod, granularity);
+  if (!performanceLobOptions().includes(requestedLob)) return emptyProductionDashboardPayload(productionPeriod, granularity);
+
+  const queueWhere = queueWhereByPerformanceLob(requestedLob);
 
   const [records, volumeRecords] = await Promise.all([
     prisma.productionRecord.findMany({
       where: {
         bzDay: { gte: productionPeriod.start, lte: productionPeriod.end },
-        ...(ownEmployeeId ? { employeeId: ownEmployeeId } : {})
+        ...(ownEmployeeId ? { employeeId: ownEmployeeId } : {}),
+        ...queueWhere
       },
       select: {
         bzTime: true,
@@ -384,7 +392,8 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
     }),
     ownEmployeeId ? Promise.resolve([] as QueueVolumeRecordForDashboard[]) : prisma.performanceQueueVolumeRecord.findMany({
       where: {
-        bzDay: { gte: productionPeriod.start, lte: productionPeriod.end }
+        bzDay: { gte: productionPeriod.start, lte: productionPeriod.end },
+        ...queueWhere
       },
       select: {
         bzTime: true,
@@ -401,11 +410,7 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
   const filteredVolumeRecords = requestedLob
     ? volumeRecords.filter((record) => getQueueMetadataById(record.queueId).lob === requestedLob)
     : volumeRecords;
-  const availableLobs = new Set<string>();
-  for (const record of records) availableLobs.add(getQueueMetadataById(record.queueId).lob);
-  for (const record of volumeRecords) availableLobs.add(getQueueMetadataById(record.queueId).lob);
-
-  const dailyMap = new Map<string, ProductionDashboardAggregate>();
+  const trendMap = new Map<string, ProductionDashboardAggregate>();
   const agentMap = new Map<string, ProductionDashboardAgentAggregate>();
   const queueMap = new Map<string, ProductionDashboardQueueAggregate>();
   const lobs = new Set<string>();
@@ -414,8 +419,8 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
     const queueMetadata = getQueueMetadataById(record.queueId);
     const queueLob = queueMetadata.lob;
     lobs.add(queueLob);
-    const dayKey = formatDateKey(record.bzDay);
-    incrementProductionAggregate(ensureProductionAggregate(dailyMap, dayKey), record);
+    const bucket = productionBucket(record.bzDay, granularity);
+    incrementProductionAggregate(ensureProductionAggregate(trendMap, bucket.key), record);
 
     const agentKey = record.employeeId ?? normalizeWbLogin(record.wbLogin);
     if (!agentMap.has(agentKey)) {
@@ -458,8 +463,8 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
     const queueMetadata = getQueueMetadataById(record.queueId);
     const queueLob = queueMetadata.lob;
     lobs.add(queueLob);
-    const dayKey = formatDateKey(record.bzDay);
-    incrementProductionInput(ensureProductionAggregate(dailyMap, dayKey), record.inputCount);
+    const bucket = productionBucket(record.bzDay, granularity);
+    incrementProductionInput(ensureProductionAggregate(trendMap, bucket.key), record.inputCount);
 
     const queueId = record.queueId || "Sem Fila ID";
     if (!queueMap.has(queueId)) {
@@ -475,7 +480,16 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
     incrementProductionInput(queueMap.get(queueId)!, record.inputCount);
   }
 
-  const summary = summarizeProductionDashboardAggregates(Array.from(dailyMap.values()));
+  const trend = Array.from(trendMap.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, aggregate]) => ({
+      key,
+      label: productionBucketLabel(key, granularity),
+      ...serializeProductionSummary(aggregate)
+    }));
+  const summary = summarizeProductionDashboardAggregates(Array.from(trendMap.values()));
+  const previousTrend = trend.length > 1 ? trend[trend.length - 2] : null;
+  const currentTrend = trend.length ? trend[trend.length - 1] : null;
 
   const latestImport = await prisma.performanceImportBatch.findFirst({
     where: { type: "PRODUCTION" },
@@ -485,14 +499,16 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
 
   return {
     mode: "production" as const,
+    granularity,
     period: periodPayload(productionPeriod),
     filters: {
-      lobs: ["Todos", ...Array.from(availableLobs.size ? availableLobs : lobs).sort()]
+      lobs: performanceLobOptions()
     },
     summary: {
       ...serializeProductionSummary(summary),
       agents: agentMap.size,
       queues: queueMap.size,
+      comparison: currentTrend && previousTrend ? buildProductionComparison(currentTrend, previousTrend) : null,
       lastImport: latestImport ? {
         fileName: latestImport.fileName,
         importedAt: formatDateTime(latestImport.importedAt),
@@ -500,11 +516,7 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
         status: latestImport.status
       } : null
     },
-    daily: Array.from(dailyMap.entries()).map(([date, aggregate]) => ({
-      date,
-      label: formatDisplayDate(parseDate(date)!),
-      ...serializeProductionSummary(aggregate)
-    })),
+    trend,
     agents: Array.from(agentMap.values())
       .map((aggregate) => ({
         employeeId: aggregate.employeeId,
@@ -2298,6 +2310,89 @@ async function latestProductionPeriod(): Promise<Period> {
   return {
     start: minDates.length ? new Date(Math.min(...minDates.map((date) => date.getTime()))) : fallback.start,
     end: maxDates.length ? new Date(Math.max(...maxDates.map((date) => date.getTime()))) : fallback.end
+  };
+}
+
+function normalizeProductionGranularity(value?: string | null): PerformanceProductionGranularity {
+  return value === "weekly" || value === "monthly" ? value : "daily";
+}
+
+function performanceLobOptions() {
+  return ["ADS", "VIDEO", "COMMENTS", "N/A"];
+}
+
+function emptyProductionDashboardPayload(period: Period, granularity: PerformanceProductionGranularity) {
+  return {
+    mode: "production" as const,
+    granularity,
+    period: periodPayload(period),
+    filters: { lobs: performanceLobOptions() },
+    summary: {
+      ...serializeProductionSummary(emptyProductionAggregate()),
+      agents: 0,
+      queues: 0,
+      comparison: null,
+      lastImport: null
+    },
+    trend: [],
+    agents: [],
+    queues: []
+  };
+}
+
+function queueIdsByPerformanceLob(lob: string) {
+  return Object.entries(QUEUE_METADATA)
+    .filter(([, metadata]) => metadata.lob === lob)
+    .map(([queueId]) => queueId);
+}
+
+function queueWhereByPerformanceLob(lob: string) {
+  if (lob === "N/A") {
+    const mappedQueueIds = Object.entries(QUEUE_METADATA)
+      .filter(([, metadata]) => metadata.lob !== "N/A")
+      .map(([queueId]) => queueId);
+    return { queueId: { notIn: mappedQueueIds } };
+  }
+  return { queueId: { in: queueIdsByPerformanceLob(lob) } };
+}
+
+function productionBucket(date: Date, granularity: PerformanceProductionGranularity) {
+  if (granularity === "monthly") {
+    return { key: `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}` };
+  }
+  if (granularity === "weekly") {
+    const start = startOfWeekMonday(date);
+    return { key: formatDateKey(start) };
+  }
+  return { key: formatDateKey(date) };
+}
+
+function productionBucketLabel(key: string, granularity: PerformanceProductionGranularity) {
+  if (granularity === "monthly") {
+    const [year, month] = key.split("-").map(Number);
+    return new Intl.DateTimeFormat("pt-BR", { month: "short", year: "numeric", timeZone: "UTC" }).format(utcDate(year, month, 1));
+  }
+  if (granularity === "weekly") {
+    const start = parseDate(key);
+    if (!start) return key;
+    return `${isoWeekLabel(start)} · ${formatDisplayDate(start).slice(0, 5)}-${formatDisplayDate(addDays(start, 6)).slice(0, 5)}`;
+  }
+  const date = parseDate(key);
+  return date ? formatDisplayDate(date) : key;
+}
+
+function buildProductionComparison(
+  current: ReturnType<typeof serializeProductionSummary> & { key: string; label: string },
+  previous: ReturnType<typeof serializeProductionSummary> & { key: string; label: string }
+) {
+  return {
+    currentLabel: current.label,
+    previousLabel: previous.label,
+    inputDelta: current.input - previous.input,
+    submitDelta: current.submit - previous.submit,
+    moderationHoursDelta: round2(current.moderationHours - previous.moderationHours),
+    ahtSecondsDelta: round2(current.ahtSeconds - previous.ahtSeconds),
+    latencyMinutesDelta: round2(current.latencyMinutes - previous.latencyMinutes)
   };
 }
 

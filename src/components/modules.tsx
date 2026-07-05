@@ -11958,7 +11958,7 @@ export function MuralPage() {
 
 function PerformanceProductionPage() {
   const [activeTab, setActiveTab] = useState<"queues" | "agents">("queues");
-  const [filters, setFilters] = useState({ startDate: "", endDate: "", lob: "Todos" });
+  const [filters, setFilters] = useState({ startDate: "", endDate: "", lob: "", granularity: "daily" as PerformanceProductionGranularity });
   const [payload, setPayload] = useState<PerformanceProductionResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -11968,14 +11968,16 @@ function PerformanceProductionPage() {
     const params = new URLSearchParams();
     if (filters.startDate) params.set("startDate", filters.startDate);
     if (filters.endDate) params.set("endDate", filters.endDate);
-    if (filters.lob !== "Todos") params.set("lob", filters.lob);
+    if (filters.lob) params.set("lob", filters.lob);
+    params.set("granularity", filters.granularity);
     try {
       const data = await apiJson<PerformanceProductionResponse>(`/api/performance?${params.toString()}`);
       setPayload(data);
       setFilters((current) => ({
         startDate: current.startDate || data.period.startDate,
         endDate: current.endDate || data.period.endDate,
-        lob: current.lob
+        lob: current.lob,
+        granularity: current.granularity
       }));
       setMessage("");
     } catch (error) {
@@ -11984,7 +11986,7 @@ function PerformanceProductionPage() {
     } finally {
       setLoading(false);
     }
-  }, [filters.endDate, filters.lob, filters.startDate]);
+  }, [filters.endDate, filters.granularity, filters.lob, filters.startDate]);
 
   useEffect(() => {
     void loadPerformance();
@@ -11992,8 +11994,10 @@ function PerformanceProductionPage() {
 
   const queueRows = payload?.queues ?? [];
   const agentRows = payload?.agents ?? [];
-  const dailyRows = payload?.daily ?? [];
-  const lobs = payload?.filters.lobs ?? ["Todos"];
+  const trendRows = payload?.trend ?? [];
+  const lobs = payload?.filters.lobs ?? ["ADS", "VIDEO", "COMMENTS", "N/A"];
+  const hasSelectedLob = Boolean(filters.lob);
+  const granularityLabel = filters.granularity === "monthly" ? "mensal" : filters.granularity === "weekly" ? "semanal" : "diária";
   const topAgents = agentRows.slice(0, 12).map((agent) => ({
     name: agent.employeeName,
     shortName: agent.employeeName.split(" ").slice(0, 2).join(" "),
@@ -12031,30 +12035,68 @@ function PerformanceProductionPage() {
               className="premium-control mt-1 h-11 w-full px-3 text-sm font-bold"
             />
           </label>
-          <label className="min-w-[160px] flex-1">
-            <span className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">LOB</span>
-            <select
-              value={filters.lob}
-              onChange={(event) => setFilters((current) => ({ ...current, lob: event.target.value }))}
-              className="premium-control mt-1 h-11 w-full px-3 text-sm font-bold"
-            >
-              {lobs.map((lob) => <option key={lob} value={lob}>{lob}</option>)}
-            </select>
-          </label>
           <button type="button" onClick={() => void loadPerformance()} className="premium-button h-11 px-4 text-sm font-extrabold">
             <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
             Atualizar
           </button>
         </div>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">LOB</span>
+            {lobs.map((lob) => (
+              <button
+                key={lob}
+                type="button"
+                onClick={() => setFilters((current) => ({ ...current, lob }))}
+                className={cn(
+                  "rounded-full border px-4 py-2 text-sm font-black transition",
+                  filters.lob === lob ? "border-blue-600 bg-blue-600 text-white shadow-soft" : "border-border bg-white text-muted hover:bg-blue-50 hover:text-blue-700"
+                )}
+              >
+                {lob}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">Comparação</span>
+            {[
+              { value: "daily", label: "Diária" },
+              { value: "weekly", label: "Semanal" },
+              { value: "monthly", label: "Mensal" }
+            ].map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setFilters((current) => ({ ...current, granularity: option.value as PerformanceProductionGranularity }))}
+                className={cn(
+                  "rounded-full border px-4 py-2 text-sm font-black transition",
+                  filters.granularity === option.value ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-border bg-white text-muted hover:bg-slate-50"
+                )}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </section>
 
       {message ? <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{message}</p> : null}
 
+      {!hasSelectedLob ? (
+        <section className="rounded-2xl border border-dashed border-blue-200 bg-blue-50/50 p-10 text-center shadow-sm">
+          <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-white text-blue-600 shadow-soft">
+            <Target className="h-6 w-6" />
+          </div>
+          <h2 className="mt-4 text-2xl font-black text-navy-950">Selecione uma LOB para carregar os dados</h2>
+          <p className="mt-2 text-sm font-bold text-muted">A tela não consolida todas as LOBs por padrão para manter a leitura rápida e evitar carga desnecessária.</p>
+        </section>
+      ) : (
+        <>
       <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <PerformanceProductionKpi title="Input" value={formatPerformanceNumber(payload?.summary.input ?? 0)} muted="filas" />
-        <PerformanceProductionKpi title="Output" value={formatPerformanceNumber(payload?.summary.submit ?? 0)} muted="submits" tone="green" />
-        <PerformanceProductionKpi title="AHT" value={formatPerformanceDurationSeconds(payload?.summary.ahtSeconds ?? 0)} muted="moderação / output" tone="blue" />
-        <PerformanceProductionKpi title="Latência" value={formatPerformanceMinutes(payload?.summary.latencyMinutes ?? 0)} muted="latência / output" tone="orange" />
+        <PerformanceProductionKpi title="Input" value={formatPerformanceNumber(payload?.summary.input ?? 0)} muted="enqueue" delta={payload?.summary.comparison?.inputDelta} />
+        <PerformanceProductionKpi title="Output" value={formatPerformanceNumber(payload?.summary.submit ?? 0)} muted="submit" tone="green" delta={payload?.summary.comparison?.submitDelta} />
+        <PerformanceProductionKpi title="AHT" value={formatPerformanceDurationSeconds(payload?.summary.ahtSeconds ?? 0)} muted="moderação / output" tone="blue" delta={payload?.summary.comparison?.ahtSecondsDelta} deltaType="duration" inverseDelta />
+        <PerformanceProductionKpi title="Latência" value={formatPerformanceMinutes(payload?.summary.latencyMinutes ?? 0)} muted="latência / output" tone="orange" delta={payload?.summary.comparison?.latencyMinutesDelta} deltaType="minutes" inverseDelta />
         <PerformanceProductionKpi title="Agentes" value={formatPerformanceNumber(payload?.summary.agents ?? 0)} muted="com produção" tone="purple" />
         <PerformanceProductionKpi title="Filas" value={formatPerformanceNumber(payload?.summary.queues ?? 0)} muted={payload?.summary.lastImport?.importedAt ?? "último upload"} tone="slate" />
       </div>
@@ -12073,28 +12115,28 @@ function PerformanceProductionPage() {
       ) : activeTab === "queues" ? (
         <div className="space-y-4">
           <section className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
-            <PerformanceChartCard title="Input x Output x Latência" subtitle="Evolução diária do período filtrado">
+            <PerformanceChartCard title="Input x Output x Latência" subtitle={`Visão ${granularityLabel} do período filtrado`}>
               <ResponsiveContainer width="100%" height={300}>
-                <ComposedChart data={dailyRows} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
+                <ComposedChart data={trendRows} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
                   <CartesianGrid stroke="#E5EAF2" vertical={false} />
                   <XAxis dataKey="label" tick={{ fill: "#64748B", fontSize: 12, fontWeight: 700 }} tickLine={false} axisLine={false} />
                   <YAxis yAxisId="left" tick={{ fill: "#64748B", fontSize: 12 }} tickLine={false} axisLine={false} />
                   <YAxis yAxisId="right" orientation="right" tick={{ fill: "#64748B", fontSize: 12 }} tickLine={false} axisLine={false} />
                   <Tooltip content={<PerformanceProductionTooltip />} />
-                  <Bar yAxisId="left" dataKey="input" name="Input" fill="#2563EB" radius={[8, 8, 0, 0]} />
-                  <Bar yAxisId="left" dataKey="submit" name="Output" fill="#10B981" radius={[8, 8, 0, 0]} />
+                  <Bar yAxisId="left" dataKey="input" name="Input (enqueue)" fill="#2563EB" radius={[8, 8, 0, 0]} />
+                  <Bar yAxisId="left" dataKey="submit" name="Output (submit)" fill="#10B981" radius={[8, 8, 0, 0]} />
                   <Line yAxisId="right" type="monotone" dataKey="latencyMinutes" name="Latência" stroke="#F97316" strokeWidth={3} dot={false} />
                 </ComposedChart>
               </ResponsiveContainer>
             </PerformanceChartCard>
-            <PerformanceChartCard title="Filas por output" subtitle="Top filas no período">
+            <PerformanceChartCard title="Filas por Output" subtitle="Top filas por submit no período">
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart data={queueRows.slice(0, 12)} layout="vertical" margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
                   <CartesianGrid stroke="#E5EAF2" horizontal={false} />
                   <XAxis type="number" tick={{ fill: "#64748B", fontSize: 12 }} tickLine={false} axisLine={false} />
                   <YAxis type="category" dataKey="queueId" width={92} tick={{ fill: "#64748B", fontSize: 12, fontWeight: 800 }} tickLine={false} axisLine={false} />
                   <Tooltip content={<PerformanceProductionTooltip />} />
-                  <Bar dataKey="submit" name="Output" fill="#2563EB" radius={[0, 8, 8, 0]} />
+                  <Bar dataKey="submit" name="Output (submit)" fill="#2563EB" radius={[0, 8, 8, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </PerformanceChartCard>
@@ -12103,7 +12145,7 @@ function PerformanceProductionPage() {
           <PerformanceProductionTable
             title="Filas"
             empty="Nenhuma fila encontrada no período."
-            columns={["LOB", "Fila ID", "Fila", "Input", "Output", "AHT", "Latência", "Moderação", "Agentes"]}
+            columns={["LOB", "Fila ID", "Fila", "Input (enqueue)", "Output (submit)", "AHT", "Latência", "Moderação", "Agentes"]}
             rows={queueRows.map((row) => [
               row.lob,
               row.queueId,
@@ -12120,26 +12162,26 @@ function PerformanceProductionPage() {
       ) : (
         <div className="space-y-4">
           <section className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
-            <PerformanceChartCard title="Top agentes por output" subtitle="Ranking de produtividade no período">
+            <PerformanceChartCard title="Top agentes por Output" subtitle="Ranking de submit no período">
               <ResponsiveContainer width="100%" height={320}>
                 <BarChart data={topAgents} layout="vertical" margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
                   <CartesianGrid stroke="#E5EAF2" horizontal={false} />
                   <XAxis type="number" tick={{ fill: "#64748B", fontSize: 12 }} tickLine={false} axisLine={false} />
                   <YAxis type="category" dataKey="shortName" width={132} tick={{ fill: "#64748B", fontSize: 12, fontWeight: 800 }} tickLine={false} axisLine={false} />
                   <Tooltip content={<PerformanceProductionTooltip />} />
-                  <Bar dataKey="submit" name="Output" fill="#10B981" radius={[0, 8, 8, 0]} />
+                  <Bar dataKey="submit" name="Output (submit)" fill="#10B981" radius={[0, 8, 8, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </PerformanceChartCard>
-            <PerformanceChartCard title="Output e AHT diário" subtitle="Volume produzido e eficiência operacional">
+            <PerformanceChartCard title="Output e AHT" subtitle={`Visão ${granularityLabel} do período filtrado`}>
               <ResponsiveContainer width="100%" height={320}>
-                <ComposedChart data={dailyRows} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
+                <ComposedChart data={trendRows} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
                   <CartesianGrid stroke="#E5EAF2" vertical={false} />
                   <XAxis dataKey="label" tick={{ fill: "#64748B", fontSize: 12, fontWeight: 700 }} tickLine={false} axisLine={false} />
                   <YAxis yAxisId="left" tick={{ fill: "#64748B", fontSize: 12 }} tickLine={false} axisLine={false} />
                   <YAxis yAxisId="right" orientation="right" tick={{ fill: "#64748B", fontSize: 12 }} tickLine={false} axisLine={false} />
                   <Tooltip content={<PerformanceProductionTooltip />} />
-                  <Bar yAxisId="left" dataKey="submit" name="Output" fill="#2563EB" radius={[8, 8, 0, 0]} />
+                  <Bar yAxisId="left" dataKey="submit" name="Output (submit)" fill="#2563EB" radius={[8, 8, 0, 0]} />
                   <Line yAxisId="right" type="monotone" dataKey="ahtSeconds" name="AHT" stroke="#7C3AED" strokeWidth={3} dot={false} />
                 </ComposedChart>
               </ResponsiveContainer>
@@ -12149,7 +12191,7 @@ function PerformanceProductionPage() {
           <PerformanceProductionTable
             title="Agentes"
             empty="Nenhum agente encontrado no período."
-            columns={["Agente", "WB", "LOB cadastro", "LOB filas", "Supervisor", "Skill", "Output", "AHT", "Latência", "Moderação", "Filas"]}
+            columns={["Agente", "WB", "LOB cadastro", "LOB filas", "Supervisor", "Skill", "Output (submit)", "AHT", "Latência", "Moderação", "Filas"]}
             rows={agentRows.map((row) => [
               row.employeeName,
               row.wbLogin,
@@ -12166,19 +12208,52 @@ function PerformanceProductionPage() {
           />
         </div>
       )}
+        </>
+      )}
     </div>
   );
 }
 
-function PerformanceProductionKpi({ title, value, muted, tone = "blue" }: { title: string; value: string; muted: string; tone?: "blue" | "green" | "orange" | "purple" | "slate" }) {
+function PerformanceProductionKpi({
+  title,
+  value,
+  muted,
+  tone = "blue",
+  delta,
+  deltaType = "number",
+  inverseDelta = false
+}: {
+  title: string;
+  value: string;
+  muted: string;
+  tone?: "blue" | "green" | "orange" | "purple" | "slate";
+  delta?: number | null;
+  deltaType?: "number" | "duration" | "minutes";
+  inverseDelta?: boolean;
+}) {
   const toneClass = tone === "green" ? "bg-emerald-50 text-emerald-600" : tone === "orange" ? "bg-orange-50 text-orange-600" : tone === "purple" ? "bg-violet-50 text-violet-600" : tone === "slate" ? "bg-slate-100 text-slate-600" : "bg-blue-50 text-blue-600";
+  const hasDelta = typeof delta === "number" && Number.isFinite(delta);
+  const deltaGood = hasDelta && (delta === 0 || (inverseDelta ? delta < 0 : delta > 0));
+  const deltaBad = hasDelta && (inverseDelta ? delta > 0 : delta < 0);
+  const deltaLabel = hasDelta ? formatPerformanceDelta(delta, deltaType) : "";
   return (
     <div className="rounded-2xl border border-border bg-white p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-xs font-black uppercase tracking-[0.12em] text-muted">{title}</p>
           <p className="mt-2 text-2xl font-black text-navy-950">{value}</p>
-          <p className="mt-1 text-xs font-bold text-muted">{muted}</p>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <p className="text-xs font-bold text-muted">{muted}</p>
+            {hasDelta ? (
+              <span className={cn(
+                "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-black",
+                deltaBad ? "bg-red-50 text-red-600" : deltaGood ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"
+              )}>
+                {delta > 0 ? <ArrowUp className="h-3 w-3" /> : delta < 0 ? <ArrowDown className="h-3 w-3" /> : <span className="h-3 w-3" />}
+                {deltaLabel}
+              </span>
+            ) : null}
+          </div>
         </div>
         <span className={cn("grid h-9 w-9 place-items-center rounded-xl", toneClass)}>
           <Target className="h-4 w-4" />
@@ -13316,13 +13391,25 @@ type PerformanceProductionSummary = {
   latencyMinutes: number;
 };
 
+type PerformanceProductionGranularity = "daily" | "weekly" | "monthly";
+
 type PerformanceProductionResponse = {
   mode: "production";
+  granularity: PerformanceProductionGranularity;
   period: { startDate: string; endDate: string };
   filters: { lobs: string[] };
   summary: PerformanceProductionSummary & {
     agents: number;
     queues: number;
+    comparison: null | {
+      currentLabel: string;
+      previousLabel: string;
+      inputDelta: number;
+      submitDelta: number;
+      moderationHoursDelta: number;
+      ahtSecondsDelta: number;
+      latencyMinutesDelta: number;
+    };
     lastImport: null | {
       fileName: string;
       importedAt: string;
@@ -13330,7 +13417,7 @@ type PerformanceProductionResponse = {
       status: string;
     };
   };
-  daily: Array<PerformanceProductionSummary & { date: string; label: string }>;
+  trend: Array<PerformanceProductionSummary & { key: string; label: string }>;
   agents: Array<PerformanceProductionSummary & {
     employeeId: string;
     employeeName: string;
@@ -13430,6 +13517,13 @@ function formatPerformanceHours(hours: number) {
   const wholeHours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
   return `${wholeHours}:${String(minutes).padStart(2, "0")}h`;
+}
+
+function formatPerformanceDelta(value: number, type: "number" | "duration" | "minutes") {
+  const absolute = Math.abs(Number(value || 0));
+  if (type === "duration") return formatPerformanceDurationSeconds(absolute);
+  if (type === "minutes") return formatPerformanceMinutes(absolute);
+  return formatPerformanceNumber(absolute);
 }
 
 function formatPerformanceFrameworkValue(value: number | null | undefined, kind: PerformanceFrameworkMetricKind) {
