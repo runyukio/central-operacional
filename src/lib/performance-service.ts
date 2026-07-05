@@ -607,7 +607,7 @@ export async function commitProductionRawImport(actor: Actor, rawRows: Record<st
   return commitProductionRows(user, preview.rows, fileName, batchId);
 }
 
-export async function commitProductionAutomatedRawImport(rawRows: Record<string, unknown>[], fileName = "producao.xlsx", batchId?: string, rowNumberOffset = 0, options: { pruneSnapshot?: boolean } = {}) {
+export async function commitProductionAutomatedRawImport(rawRows: Record<string, unknown>[], fileName = "producao.xlsx", batchId?: string, rowNumberOffset = 0, options: { pruneSnapshot?: boolean } = { pruneSnapshot: true }) {
   const preview = await previewProductionRows(rawRows, { rowNumberOffset });
   return commitProductionRows(null, preview.rows, fileName, batchId, options);
 }
@@ -1055,13 +1055,16 @@ export async function commitProductionImport(actor: Actor, rows: PerformancePrev
 async function commitProductionRows(user: AuthenticatedUser | null, rows: PerformancePreviewRow[], fileName = "producao.xlsx", batchId?: string, options: { pruneSnapshot?: boolean } = {}) {
   const validRows = rows.filter((row) => row.type === "PRODUCTION" && !row.errors.length && row.employeeId && row.uniqueKey);
   const validVolumeRows = rows.filter((row) => row.type === "PRODUCTION_VOLUME" && !row.errors.length && row.uniqueKey);
+  const aggregatedRows = aggregateProductionRows(validRows);
+  const aggregatedVolumeRows = aggregateProductionVolumeRows(validVolumeRows);
   const allValidRows = [...validRows, ...validVolumeRows];
   if (!allValidRows.length) throw new PerformanceError("Não há linhas válidas para importar.", 400);
-  const createdRows = allValidRows.filter((row) => row.action === "create").length;
-  const updatedRows = allValidRows.filter((row) => row.action === "update").length;
+  const allPersistedRows = [...aggregatedRows, ...aggregatedVolumeRows];
+  const createdRows = allPersistedRows.filter((row) => row.action === "create").length;
+  const updatedRows = allPersistedRows.filter((row) => row.action === "update").length;
   const batch = await upsertImportBatch(user, "PRODUCTION", fileName, rows, allValidRows.length, createdRows, updatedRows, batchId);
 
-  for (const chunk of chunks(validRows, 100)) {
+  for (const chunk of chunks(aggregatedRows, 100)) {
     await prisma.$transaction(chunk.map((row) => prisma.productionRecord.upsert({
       where: { productionKey: String(row.payload.productionKey) },
       update: {
@@ -1093,7 +1096,7 @@ async function commitProductionRows(user: AuthenticatedUser | null, rows: Perfor
       }
     })));
   }
-  for (const chunk of chunks(validVolumeRows, 200)) {
+  for (const chunk of chunks(aggregatedVolumeRows, 200)) {
     await prisma.$transaction(chunk.map((row) => prisma.performanceQueueVolumeRecord.upsert({
       where: { volumeKey: String(row.payload.volumeKey) },
       update: {
@@ -1113,7 +1116,7 @@ async function commitProductionRows(user: AuthenticatedUser | null, rows: Perfor
       }
     })));
   }
-  const snapshotPrune = !user && options.pruneSnapshot ? await pruneAutomatedProductionSnapshot(validRows, validVolumeRows) : null;
+  const snapshotPrune = !user && options.pruneSnapshot ? await pruneAutomatedProductionSnapshot(aggregatedRows, aggregatedVolumeRows, batch.id) : null;
   if (user && !batchId) await auditImport(user.id, "PRODUCTION", batch.id, {
     fileName,
     rowsTotal: rows.length,
@@ -1135,7 +1138,67 @@ async function commitProductionRows(user: AuthenticatedUser | null, rows: Perfor
   };
 }
 
-async function pruneAutomatedProductionSnapshot(validRows: PerformancePreviewRow[], validVolumeRows: PerformancePreviewRow[]) {
+function aggregateProductionRows(rows: PerformancePreviewRow[]) {
+  const byKey = new Map<string, PerformancePreviewRow>();
+  for (const row of rows) {
+    const key = String(row.payload.productionKey ?? row.uniqueKey ?? "");
+    if (!key) continue;
+    const current = byKey.get(key);
+    if (!current) {
+      byKey.set(key, {
+        ...row,
+        payload: {
+          ...row.payload,
+          submitNum: Number(row.payload.submitNum ?? 0),
+          moderationSeconds: Number(row.payload.moderationSeconds ?? 0),
+          latencyMinutesSum: nullableNumber(row.payload.latencyMinutesSum) ?? 0
+        }
+      });
+      continue;
+    }
+
+    const submitNum = Number(current.payload.submitNum ?? 0) + Number(row.payload.submitNum ?? 0);
+    const moderationSeconds = Number(current.payload.moderationSeconds ?? 0) + Number(row.payload.moderationSeconds ?? 0);
+    const latencyMinutesSum = (nullableNumber(current.payload.latencyMinutesSum) ?? 0) + (nullableNumber(row.payload.latencyMinutesSum) ?? 0);
+    current.payload = {
+      ...current.payload,
+      submitNum,
+      moderationSeconds,
+      latencyMinutesSum,
+      ahtSeconds: submitNum > 0 ? round2(moderationSeconds / submitNum) : nullableNumber(current.payload.ahtSeconds)
+    };
+    current.warnings = unique([...current.warnings, "Linhas duplicadas da mesma hora/fila/agente foram consolidadas por soma."]);
+  }
+  return Array.from(byKey.values());
+}
+
+function aggregateProductionVolumeRows(rows: PerformancePreviewRow[]) {
+  const byKey = new Map<string, PerformancePreviewRow>();
+  for (const row of rows) {
+    const key = String(row.payload.volumeKey ?? row.uniqueKey ?? "");
+    if (!key) continue;
+    const current = byKey.get(key);
+    if (!current) {
+      byKey.set(key, {
+        ...row,
+        payload: {
+          ...row.payload,
+          inputCount: Number(row.payload.inputCount ?? 0)
+        }
+      });
+      continue;
+    }
+
+    current.payload = {
+      ...current.payload,
+      inputCount: Number(current.payload.inputCount ?? 0) + Number(row.payload.inputCount ?? 0)
+    };
+    current.warnings = unique([...current.warnings, "Linhas duplicadas da mesma hora/fila foram consolidadas por soma."]);
+  }
+  return Array.from(byKey.values());
+}
+
+async function pruneAutomatedProductionSnapshot(validRows: PerformancePreviewRow[], validVolumeRows: PerformancePreviewRow[], batchId: string) {
   const productionRange = payloadDateRange(validRows);
   const volumeRange = payloadDateRange(validVolumeRows);
   const result = {
@@ -1150,7 +1213,13 @@ async function pruneAutomatedProductionSnapshot(validRows: PerformancePreviewRow
       where: {
         OR: [
           { bzDay: { lt: productionRange.start } },
-          { bzDay: { gt: productionRange.end } }
+          { bzDay: { gt: productionRange.end } },
+          {
+            AND: [
+              { bzDay: { gte: productionRange.start, lte: productionRange.end } },
+              { OR: [{ importBatchId: null }, { importBatchId: { not: batchId } }] }
+            ]
+          }
         ]
       }
     });
@@ -1162,7 +1231,13 @@ async function pruneAutomatedProductionSnapshot(validRows: PerformancePreviewRow
       where: {
         OR: [
           { bzDay: { lt: volumeRange.start } },
-          { bzDay: { gt: volumeRange.end } }
+          { bzDay: { gt: volumeRange.end } },
+          {
+            AND: [
+              { bzDay: { gte: volumeRange.start, lte: volumeRange.end } },
+              { OR: [{ importBatchId: null }, { importBatchId: { not: batchId } }] }
+            ]
+          }
         ]
       }
     });
