@@ -1113,6 +1113,7 @@ async function commitProductionRows(user: AuthenticatedUser | null, rows: Perfor
       }
     })));
   }
+  const snapshotPrune = user ? null : await pruneAutomatedProductionSnapshot(validRows, validVolumeRows);
   if (user && !batchId) await auditImport(user.id, "PRODUCTION", batch.id, {
     fileName,
     rowsTotal: rows.length,
@@ -1129,7 +1130,56 @@ async function commitProductionRows(user: AuthenticatedUser | null, rows: Perfor
     volumeRows: validVolumeRows.length,
     createdRows,
     updatedRows,
+    snapshotPrune,
     batchId: batch.id
+  };
+}
+
+async function pruneAutomatedProductionSnapshot(validRows: PerformancePreviewRow[], validVolumeRows: PerformancePreviewRow[]) {
+  const productionRange = payloadDateRange(validRows);
+  const volumeRange = payloadDateRange(validVolumeRows);
+  const result = {
+    productionDeleted: 0,
+    volumeDeleted: 0,
+    productionRange: productionRange ? { start: formatDateKey(productionRange.start), end: formatDateKey(productionRange.end) } : null,
+    volumeRange: volumeRange ? { start: formatDateKey(volumeRange.start), end: formatDateKey(volumeRange.end) } : null
+  };
+
+  if (productionRange) {
+    const deleted = await prisma.productionRecord.deleteMany({
+      where: {
+        OR: [
+          { bzDay: { lt: productionRange.start } },
+          { bzDay: { gt: productionRange.end } }
+        ]
+      }
+    });
+    result.productionDeleted = deleted.count;
+  }
+
+  if (volumeRange) {
+    const deleted = await prisma.performanceQueueVolumeRecord.deleteMany({
+      where: {
+        OR: [
+          { bzDay: { lt: volumeRange.start } },
+          { bzDay: { gt: volumeRange.end } }
+        ]
+      }
+    });
+    result.volumeDeleted = deleted.count;
+  }
+
+  return result;
+}
+
+function payloadDateRange(rows: PerformancePreviewRow[]) {
+  const times = rows
+    .map((row) => parseDate(String(row.payload.bzDay ?? ""))?.getTime())
+    .filter((time): time is number => Number.isFinite(time));
+  if (!times.length) return null;
+  return {
+    start: new Date(Math.min(...times)),
+    end: new Date(Math.max(...times))
   };
 }
 
