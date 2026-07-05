@@ -11956,82 +11956,20 @@ export function MuralPage() {
 }
 
 function PerformanceRebuildView() {
-  const futureViews = [
-    {
-      title: "Minha Performance",
-      description: "Visao individual sera reconstruida com a nova base automatizada.",
-      icon: UserCircle
-    },
-    {
-      title: "Dados dos Agentes",
-      description: "Indicadores operacionais dos agentes serao recalculados pelo fluxo automatico.",
-      icon: UsersRound
-    },
-    {
-      title: "Dados das Filas",
-      description: "Leitura de filas e produtividade ficara separada para analise operacional.",
-      icon: KanbanSquare
-    }
-  ];
-
   return (
     <div className="space-y-5">
       <PageHeader
         title="Performance"
-        description="Modulo em reconstrucao para automatizar download, importacao e retencao dos dados."
         icon={Trophy}
         actions={<TopActions />}
       />
 
-      <div className="overflow-hidden rounded-2xl border border-border bg-white shadow-sm">
-        <div className="grid gap-5 p-6 lg:grid-cols-[1.1fr_0.9fr]">
-          <div className="rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 via-white to-white p-6">
-            <div className="inline-flex items-center gap-2 rounded-full border border-blue-200 bg-white px-3 py-1 text-xs font-extrabold uppercase tracking-[0.18em] text-blue-700">
-              <Wrench className="h-4 w-4" />
-              Reconstruindo
-            </div>
-            <h2 className="mt-5 text-3xl font-black text-navy-950">Performance em manutencao temporaria</h2>
-            <p className="mt-3 max-w-3xl text-sm font-semibold leading-6 text-muted">
-              Estamos removendo a experiencia antiga para preparar a automacao diaria das bases de Performance. Enquanto isso,
-              os uploads manuais, WFH, Minha Performance e Framework ficam inativos para evitar leitura pesada e dados fora do novo padrao.
-            </p>
-            <div className="mt-6 grid gap-3 sm:grid-cols-3">
-              <div className="rounded-xl border border-border bg-white p-4">
-                <p className="text-xs font-black uppercase tracking-[0.14em] text-muted">Retencao</p>
-                <p className="mt-2 text-2xl font-black text-navy-950">3 meses</p>
-                <p className="mt-1 text-xs font-bold text-muted">seguindo o range da base</p>
-              </div>
-              <div className="rounded-xl border border-border bg-white p-4">
-                <p className="text-xs font-black uppercase tracking-[0.14em] text-muted">Automacao</p>
-                <p className="mt-2 text-2xl font-black text-navy-950">1x/dia</p>
-                <p className="mt-1 text-xs font-bold text-muted">com 3 tentativas</p>
-              </div>
-              <div className="rounded-xl border border-border bg-white p-4">
-                <p className="text-xs font-black uppercase tracking-[0.14em] text-muted">Upload</p>
-                <p className="mt-2 text-2xl font-black text-navy-950">Token</p>
-                <p className="mt-1 text-xs font-bold text-muted">mesmo modelo do Real Time</p>
-              </div>
-            </div>
+      <div className="rounded-2xl border border-border bg-white p-10 shadow-sm">
+        <div className="flex min-h-[240px] flex-col items-center justify-center text-center">
+          <div className="grid h-16 w-16 place-items-center rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 to-white text-blue-600 shadow-soft">
+            <Wrench className="h-7 w-7" />
           </div>
-
-          <div className="grid gap-3">
-            {futureViews.map((view) => {
-              const Icon = view.icon;
-              return (
-                <div key={view.title} className="rounded-2xl border border-border bg-white p-5 shadow-sm">
-                  <div className="flex items-start gap-4">
-                    <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-slate-100 text-blue-700">
-                      <Icon className="h-5 w-5" />
-                    </div>
-                    <div>
-                      <h3 className="text-lg font-black text-navy-950">{view.title}</h3>
-                      <p className="mt-1 text-sm font-semibold leading-6 text-muted">{view.description}</p>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <h2 className="mt-5 text-3xl font-black text-navy-950">Reconstruindo</h2>
         </div>
       </div>
     </div>

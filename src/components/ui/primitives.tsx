@@ -23,7 +23,7 @@ export function PageHeader({
   actions
 }: {
   title: string;
-  description: string;
+  description?: string;
   icon?: LucideIcon;
   actions?: React.ReactNode;
 }) {
@@ -37,7 +37,7 @@ export function PageHeader({
         ) : null}
         <div className="min-w-0">
           <h1 className="break-words text-[20px] font-extrabold leading-tight tracking-tight text-navy-950 md:text-[22px]">{title}</h1>
-          <p className="mt-0.5 text-[12.5px] font-medium leading-snug text-muted">{description}</p>
+          {description ? <p className="mt-0.5 text-[12.5px] font-medium leading-snug text-muted">{description}</p> : null}
         </div>
       </div>
       {actions ? <div className="min-w-0">{actions}</div> : null}
