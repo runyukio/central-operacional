@@ -11957,7 +11957,7 @@ export function MuralPage() {
 }
 
 function PerformanceProductionPage() {
-  const [activeTab, setActiveTab] = useState<"queues" | "agents">("queues");
+  const [activeTab, setActiveTab] = useState<"panel" | "queues" | "agents">("panel");
   const [filters, setFilters] = useState({ startDate: "", endDate: "", lob: "", granularity: "daily" as PerformanceProductionGranularity });
   const [payload, setPayload] = useState<PerformanceProductionResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -11995,6 +11995,7 @@ function PerformanceProductionPage() {
   const queueRows = payload?.queues ?? [];
   const agentRows = payload?.agents ?? [];
   const trendRows = payload?.trend ?? [];
+  const panel = payload?.panel;
   const lobs = payload?.filters.lobs ?? ["ADS", "VIDEO", "COMMENTS", "N/A"];
   const hasSelectedLob = Boolean(filters.lob);
   const granularityLabel = filters.granularity === "monthly" ? "mensal" : filters.granularity === "weekly" ? "semanal" : "diária";
@@ -12082,7 +12083,21 @@ function PerformanceProductionPage() {
 
       {message ? <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{message}</p> : null}
 
-      {!hasSelectedLob ? (
+      <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-white p-2 shadow-sm">
+        <button type="button" onClick={() => setActiveTab("panel")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", activeTab === "panel" ? "bg-blue-600 text-white shadow-soft" : "text-muted hover:bg-slate-100")}>
+          Painel
+        </button>
+        <button type="button" onClick={() => setActiveTab("queues")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", activeTab === "queues" ? "bg-blue-600 text-white shadow-soft" : "text-muted hover:bg-slate-100")}>
+          Dados das Filas
+        </button>
+        <button type="button" onClick={() => setActiveTab("agents")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", activeTab === "agents" ? "bg-blue-600 text-white shadow-soft" : "text-muted hover:bg-slate-100")}>
+          Produtividade dos Agentes
+        </button>
+      </div>
+
+      {activeTab === "panel" ? (
+        <PerformanceProductionPanel panel={panel} loading={loading && !payload} />
+      ) : !hasSelectedLob ? (
         <section className="rounded-2xl border border-dashed border-blue-200 bg-blue-50/50 p-10 text-center shadow-sm">
           <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-white text-blue-600 shadow-soft">
             <Target className="h-6 w-6" />
@@ -12099,15 +12114,6 @@ function PerformanceProductionPage() {
         <PerformanceProductionKpi title="Latência" value={formatPerformanceMinutes(payload?.summary.latencyMinutes ?? 0)} muted="latência / output" tone="orange" delta={payload?.summary.comparison?.latencyMinutesDelta} deltaType="minutes" inverseDelta />
         <PerformanceProductionKpi title="Agentes" value={formatPerformanceNumber(payload?.summary.agents ?? 0)} muted="com produção" tone="purple" />
         <PerformanceProductionKpi title="Filas" value={formatPerformanceNumber(payload?.summary.queues ?? 0)} muted={payload?.summary.lastImport?.importedAt ?? "último upload"} tone="slate" />
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-white p-2 shadow-sm">
-        <button type="button" onClick={() => setActiveTab("queues")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", activeTab === "queues" ? "bg-blue-600 text-white shadow-soft" : "text-muted hover:bg-slate-100")}>
-          Dados das Filas
-        </button>
-        <button type="button" onClick={() => setActiveTab("agents")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", activeTab === "agents" ? "bg-blue-600 text-white shadow-soft" : "text-muted hover:bg-slate-100")}>
-          Produtividade dos Agentes
-        </button>
       </div>
 
       {loading && !payload ? (
@@ -12257,6 +12263,133 @@ function PerformanceProductionKpi({
         </div>
         <span className={cn("grid h-9 w-9 place-items-center rounded-xl", toneClass)}>
           <Target className="h-4 w-4" />
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function PerformanceProductionPanel({ panel, loading }: { panel?: PerformanceProductionResponse["panel"]; loading: boolean }) {
+  if (loading) {
+    return <div className="rounded-2xl border border-border bg-white p-10 text-center text-sm font-bold text-muted shadow-sm">Carregando painel da base...</div>;
+  }
+
+  const rangeLabel = panel?.dataRange ? `${formatDisplayDateFromIso(panel.dataRange.startDate)} até ${formatDisplayDateFromIso(panel.dataRange.endDate)}` : "Sem range";
+  const alertTone = panel?.isStale ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700";
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <PerformancePanelCard
+          title="Range atualizado"
+          value={rangeLabel}
+          muted="base disponível"
+          icon={CalendarDays}
+          tone="blue"
+        />
+        <PerformancePanelCard
+          title="Última importação"
+          value={panel?.lastImport?.importedAt ?? "-"}
+          muted={panel?.lastImport ? `${formatPerformanceNumber(panel.lastImport.rowsValid)} linhas válidas` : "sem upload"}
+          icon={Upload}
+          tone={panel?.isStale ? "orange" : "green"}
+        />
+        <PerformancePanelCard
+          title="Último dado"
+          value={panel?.lastDataAt ?? "-"}
+          muted="maior data/hora na base"
+          icon={Clock}
+          tone="slate"
+        />
+        <PerformancePanelCard
+          title="Filas mapeadas"
+          value={`${formatPerformanceNumber(panel?.mappedQueueIds ?? 0)}/${formatPerformanceNumber(panel?.totalQueueIds ?? 0)}`}
+          muted={`${formatPerformanceNumber(panel?.unmappedQueues.length ?? 0)} não encontrada(s)`}
+          icon={Target}
+          tone={(panel?.unmappedQueues.length ?? 0) > 0 ? "orange" : "green"}
+        />
+      </div>
+
+      <section className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+        <div className="rounded-2xl border border-border bg-white p-4 shadow-sm">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-black text-navy-950">Alertas da base</h2>
+              <p className="text-sm font-bold text-muted">Atualização, range e qualidade do mapeamento.</p>
+            </div>
+            <span className={cn("inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-black", alertTone)}>
+              {panel?.isStale ? <AlertTriangle className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />}
+              {panel?.isStale ? "Atenção" : "OK"}
+            </span>
+          </div>
+          <div className="space-y-2">
+            {(panel?.alerts ?? []).map((alert, index) => (
+              <div
+                key={`${alert.title}-${index}`}
+                className={cn(
+                  "rounded-xl border px-3 py-3",
+                  alert.type === "CRITICAL" ? "border-red-200 bg-red-50 text-red-700" : alert.type === "WARNING" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                )}
+              >
+                <p className="text-sm font-black">{alert.title}</p>
+                <p className="mt-1 text-xs font-bold opacity-80">{alert.description}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <section className="overflow-hidden rounded-2xl border border-border bg-white shadow-sm">
+          <div className="flex items-center justify-between border-b border-border bg-gradient-to-b from-white to-slate-50 px-4 py-3">
+            <div>
+              <h2 className="text-lg font-black text-navy-950">IDs de fila não encontrados</h2>
+              <p className="text-sm font-bold text-muted">IDs importados que ainda não existem no dicionário.</p>
+            </div>
+            <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-600">
+              {formatPerformanceNumber(panel?.unmappedQueues.length ?? 0)} IDs
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-left text-sm">
+              <thead className="bg-slate-50 text-xs font-black uppercase tracking-[0.08em] text-muted">
+                <tr>
+                  <th className="px-4 py-3">Fila ID</th>
+                  <th className="px-4 py-3">Produção</th>
+                  <th className="px-4 py-3">Volume</th>
+                  <th className="px-4 py-3">Último dado</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {panel?.unmappedQueues.length ? panel.unmappedQueues.map((queue) => (
+                  <tr key={queue.queueId} className="odd:bg-white even:bg-slate-50/55">
+                    <td className="px-4 py-3 font-black text-blue-600">{queue.queueId}</td>
+                    <td className="px-4 py-3 font-bold text-navy-950">{formatPerformanceNumber(queue.productionRows)}</td>
+                    <td className="px-4 py-3 font-bold text-navy-950">{formatPerformanceNumber(queue.volumeRows)}</td>
+                    <td className="px-4 py-3 font-bold text-muted">{queue.lastSeenAt ?? "-"}</td>
+                  </tr>
+                )) : (
+                  <tr><td colSpan={4} className="px-4 py-10 text-center text-sm font-bold text-muted">Nenhuma fila não mapeada no range.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </div>
+  );
+}
+
+function PerformancePanelCard({ title, value, muted, icon: Icon, tone }: { title: string; value: string; muted: string; icon: LucideIcon; tone: "blue" | "green" | "orange" | "slate" }) {
+  const toneClass = tone === "green" ? "bg-emerald-50 text-emerald-600" : tone === "orange" ? "bg-orange-50 text-orange-600" : tone === "slate" ? "bg-slate-100 text-slate-600" : "bg-blue-50 text-blue-600";
+  return (
+    <div className="rounded-2xl border border-border bg-white p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.12em] text-muted">{title}</p>
+          <p className="mt-2 text-xl font-black text-navy-950">{value}</p>
+          <p className="mt-1 text-xs font-bold text-muted">{muted}</p>
+        </div>
+        <span className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-xl", toneClass)}>
+          <Icon className="h-4 w-4" />
         </span>
       </div>
     </div>
@@ -13397,6 +13530,30 @@ type PerformanceProductionResponse = {
   mode: "production";
   granularity: PerformanceProductionGranularity;
   period: { startDate: string; endDate: string };
+  panel: {
+    dataRange: null | { startDate: string; endDate: string };
+    lastDataAt: string | null;
+    lastImport: null | {
+      fileName: string;
+      importedAt: string;
+      rowsValid: number;
+      rowsError: number;
+      status: string;
+      ageHours: number | null;
+    };
+    staleThresholdHours: number;
+    isStale: boolean;
+    totalRows: number;
+    totalQueueIds: number;
+    mappedQueueIds: number;
+    unmappedQueues: Array<{
+      queueId: string;
+      productionRows: number;
+      volumeRows: number;
+      lastSeenAt: string | null;
+    }>;
+    alerts: Array<{ type: "OK" | "WARNING" | "CRITICAL"; title: string; description: string }>;
+  };
   filters: { lobs: string[] };
   summary: PerformanceProductionSummary & {
     agents: number;

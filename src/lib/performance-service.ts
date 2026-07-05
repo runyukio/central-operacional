@@ -355,8 +355,9 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
   const ownEmployeeId = role === "COLABORADOR" ? requireOwnEmployee(user).id : null;
   const requestedLob = query.lob && query.lob !== "Todos" ? query.lob.toUpperCase() : "";
   const granularity = normalizeProductionGranularity(query.granularity);
-  if (!requestedLob) return emptyProductionDashboardPayload(productionPeriod, granularity);
-  if (!performanceLobOptions().includes(requestedLob)) return emptyProductionDashboardPayload(productionPeriod, granularity);
+  const panel = await buildProductionDashboardPanel(productionPeriod);
+  if (!requestedLob) return emptyProductionDashboardPayload(productionPeriod, granularity, panel);
+  if (!performanceLobOptions().includes(requestedLob)) return emptyProductionDashboardPayload(productionPeriod, granularity, panel);
 
   const queueWhere = queueWhereByPerformanceLob(requestedLob);
 
@@ -501,6 +502,7 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
     mode: "production" as const,
     granularity,
     period: periodPayload(productionPeriod),
+    panel,
     filters: {
       lobs: performanceLobOptions()
     },
@@ -2321,11 +2323,137 @@ function performanceLobOptions() {
   return ["ADS", "VIDEO", "COMMENTS", "N/A"];
 }
 
-function emptyProductionDashboardPayload(period: Period, granularity: PerformanceProductionGranularity) {
+async function buildProductionDashboardPanel(period: Period) {
+  const [
+    productionRange,
+    volumeRange,
+    latestImport,
+    productionQueues,
+    volumeQueues
+  ] = await Promise.all([
+    prisma.productionRecord.aggregate({
+      where: { bzDay: { gte: period.start, lte: period.end } },
+      _min: { bzDay: true },
+      _max: { bzDay: true, bzTime: true },
+      _count: { _all: true }
+    }),
+    prisma.performanceQueueVolumeRecord.aggregate({
+      where: { bzDay: { gte: period.start, lte: period.end } },
+      _min: { bzDay: true },
+      _max: { bzDay: true, bzTime: true },
+      _count: { _all: true }
+    }),
+    prisma.performanceImportBatch.findFirst({
+      where: { type: "PRODUCTION" },
+      orderBy: { importedAt: "desc" },
+      select: { fileName: true, importedAt: true, rowsValid: true, rowsError: true, status: true }
+    }),
+    prisma.productionRecord.groupBy({
+      by: ["queueId"],
+      where: { bzDay: { gte: period.start, lte: period.end } },
+      _count: { _all: true },
+      _max: { bzTime: true }
+    }),
+    prisma.performanceQueueVolumeRecord.groupBy({
+      by: ["queueId"],
+      where: { bzDay: { gte: period.start, lte: period.end } },
+      _count: { _all: true },
+      _max: { bzTime: true }
+    })
+  ]);
+
+  const minDates = [productionRange._min.bzDay, volumeRange._min.bzDay].filter((date): date is Date => Boolean(date));
+  const maxDates = [productionRange._max.bzDay, volumeRange._max.bzDay].filter((date): date is Date => Boolean(date));
+  const maxDataTimes = [productionRange._max.bzTime, volumeRange._max.bzTime].filter((date): date is Date => Boolean(date));
+  const queueMap = new Map<string, { queueId: string; productionRows: number; volumeRows: number; lastSeenAt: Date | null }>();
+
+  for (const item of productionQueues) {
+    const queueId = item.queueId || "Sem Fila ID";
+    queueMap.set(queueId, {
+      queueId,
+      productionRows: item._count._all,
+      volumeRows: 0,
+      lastSeenAt: item._max.bzTime
+    });
+  }
+  for (const item of volumeQueues) {
+    const queueId = item.queueId || "Sem Fila ID";
+    const current = queueMap.get(queueId);
+    if (current) {
+      current.volumeRows = item._count._all;
+      current.lastSeenAt = latestDate([current.lastSeenAt, item._max.bzTime]);
+    } else {
+      queueMap.set(queueId, {
+        queueId,
+        productionRows: 0,
+        volumeRows: item._count._all,
+        lastSeenAt: item._max.bzTime
+      });
+    }
+  }
+
+  const unmappedQueues = Array.from(queueMap.values())
+    .filter((item) => item.queueId === "Sem Fila ID" || !QUEUE_METADATA[item.queueId])
+    .sort((a, b) => (b.productionRows + b.volumeRows) - (a.productionRows + a.volumeRows))
+    .slice(0, 50)
+    .map((item) => ({
+      queueId: item.queueId,
+      productionRows: item.productionRows,
+      volumeRows: item.volumeRows,
+      lastSeenAt: item.lastSeenAt ? formatDateTime(item.lastSeenAt) : null
+    }));
+
+  const totalRows = productionRange._count._all + volumeRange._count._all;
+  const lastImportAgeHours = latestImport ? round2((Date.now() - latestImport.importedAt.getTime()) / 36e5) : null;
+  const staleThresholdHours = 24;
+  const isStale = lastImportAgeHours === null || lastImportAgeHours > staleThresholdHours;
+  const alerts: Array<{ type: "OK" | "WARNING" | "CRITICAL"; title: string; description: string }> = [];
+
+  if (!latestImport) {
+    alerts.push({ type: "CRITICAL", title: "Base não importada", description: "Nenhuma importação de produtividade foi encontrada." });
+  } else if (isStale) {
+    alerts.push({ type: "WARNING", title: "Base pode estar desatualizada", description: `Última importação há ${formatHoursAge(lastImportAgeHours ?? 0)}.` });
+  }
+  if (!totalRows) {
+    alerts.push({ type: "WARNING", title: "Sem dados no range", description: "Não há dados de produção ou volume para o intervalo selecionado." });
+  }
+  if (unmappedQueues.length) {
+    alerts.push({ type: "WARNING", title: "Filas não mapeadas", description: `${unmappedQueues.length} ID(s) de fila não foram encontrados no dicionário.` });
+  }
+  if (!alerts.length) {
+    alerts.push({ type: "OK", title: "Base atualizada", description: "Range, importação e mapeamento estão consistentes." });
+  }
+
+  return {
+    dataRange: minDates.length && maxDates.length ? {
+      startDate: formatDateKey(new Date(Math.min(...minDates.map((date) => date.getTime())))),
+      endDate: formatDateKey(new Date(Math.max(...maxDates.map((date) => date.getTime()))))
+    } : null,
+    lastDataAt: maxDataTimes.length ? formatDateTime(new Date(Math.max(...maxDataTimes.map((date) => date.getTime())))) : null,
+    lastImport: latestImport ? {
+      fileName: latestImport.fileName,
+      importedAt: formatDateTime(latestImport.importedAt),
+      rowsValid: latestImport.rowsValid,
+      rowsError: latestImport.rowsError,
+      status: latestImport.status,
+      ageHours: lastImportAgeHours
+    } : null,
+    staleThresholdHours,
+    isStale,
+    totalRows,
+    totalQueueIds: queueMap.size,
+    mappedQueueIds: queueMap.size - unmappedQueues.length,
+    unmappedQueues,
+    alerts
+  };
+}
+
+function emptyProductionDashboardPayload(period: Period, granularity: PerformanceProductionGranularity, panel: Awaited<ReturnType<typeof buildProductionDashboardPanel>>) {
   return {
     mode: "production" as const,
     granularity,
     period: periodPayload(period),
+    panel,
     filters: { lobs: performanceLobOptions() },
     summary: {
       ...serializeProductionSummary(emptyProductionAggregate()),
@@ -2354,6 +2482,18 @@ function queueWhereByPerformanceLob(lob: string) {
     return { queueId: { notIn: mappedQueueIds } };
   }
   return { queueId: { in: queueIdsByPerformanceLob(lob) } };
+}
+
+function latestDate(dates: Array<Date | null | undefined>) {
+  const validDates = dates.filter((date): date is Date => Boolean(date));
+  return validDates.length ? new Date(Math.max(...validDates.map((date) => date.getTime()))) : null;
+}
+
+function formatHoursAge(hours: number) {
+  if (!Number.isFinite(hours)) return "-";
+  if (hours < 1) return `${Math.max(1, Math.round(hours * 60))} min`;
+  if (hours < 48) return `${Math.round(hours)}h`;
+  return `${Math.round(hours / 24)} dias`;
 }
 
 function productionBucket(date: Date, granularity: PerformanceProductionGranularity) {
