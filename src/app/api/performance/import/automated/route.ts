@@ -15,12 +15,30 @@ export async function POST(request: Request) {
     const contentType = request.headers.get("content-type") ?? "";
     if (contentType.includes("application/json")) {
       const body = await request.json().catch(() => ({}));
-      const rawRows = Array.isArray(body.rawRows) ? body.rawRows : [];
-      if (!rawRows.length) {
-        return NextResponse.json({ success: false, error: "rawRows é obrigatório.", message: "rawRows é obrigatório." }, { status: 400 });
+      const rowSets = collectJsonRowSets(body);
+      if (!rowSets.length) {
+        return NextResponse.json({
+          success: false,
+          error: "rawRows, productionRows ou volumeRows é obrigatório.",
+          message: "rawRows, productionRows ou volumeRows é obrigatório."
+        }, { status: 400 });
       }
-      const fileName = typeof body.fileName === "string" ? body.fileName : "performance_automated.json";
-      return NextResponse.json(await commitProductionAutomatedRawImport(rawRows, fileName));
+
+      let batchId: string | undefined;
+      const imports = [];
+      for (const rowSet of rowSets) {
+        const result = await commitProductionAutomatedRawImport(rowSet.rows, rowSet.fileName, batchId);
+        batchId = result.batchId;
+        imports.push({
+          fileName: rowSet.fileName,
+          importedRows: result.importedRows,
+          productionRows: result.productionRows,
+          volumeRows: result.volumeRows,
+          createdRows: result.createdRows,
+          updatedRows: result.updatedRows
+        });
+      }
+      return NextResponse.json(buildAutomatedImportResponse(batchId, imports));
     }
 
     const formData = await request.formData();
@@ -49,16 +67,7 @@ export async function POST(request: Request) {
       });
     }
 
-    return NextResponse.json({
-      success: true,
-      batchId,
-      files: imports,
-      importedRows: imports.reduce((sum, item) => sum + item.importedRows, 0),
-      productionRows: imports.reduce((sum, item) => sum + item.productionRows, 0),
-      volumeRows: imports.reduce((sum, item) => sum + item.volumeRows, 0),
-      createdRows: imports.reduce((sum, item) => sum + item.createdRows, 0),
-      updatedRows: imports.reduce((sum, item) => sum + item.updatedRows, 0)
-    });
+    return NextResponse.json(buildAutomatedImportResponse(batchId, imports));
   } catch (error) {
     if (error instanceof PerformanceError) {
       return NextResponse.json({ success: false, error: error.message, message: error.message }, { status: error.status });
@@ -73,7 +82,65 @@ export async function POST(request: Request) {
 }
 
 function collectUploadFiles(formData: FormData) {
-  return ["productionFile", "volumeFile", "file", "files"].flatMap((field) => formData.getAll(field)).filter((value): value is File => value instanceof File);
+  const knownFields = ["productionFile", "volumeFile", "file", "files", "files[]", "production", "volume"];
+  const files = new Map<string, File>();
+  for (const field of knownFields) {
+    for (const value of formData.getAll(field)) {
+      addUploadFile(files, value);
+    }
+  }
+  for (const value of formData.values()) {
+    addUploadFile(files, value);
+  }
+  return Array.from(files.values());
+}
+
+function addUploadFile(files: Map<string, File>, value: FormDataEntryValue) {
+  if (!(value instanceof File)) return;
+  const fileName = value.name || "performance_automated.xlsx";
+  if (!fileName.toLowerCase().endsWith(".xlsx")) return;
+  files.set(`${fileName}:${value.size}`, value);
+}
+
+function collectJsonRowSets(body: Record<string, unknown>) {
+  const defaultFileName = typeof body.fileName === "string" ? body.fileName : "performance_automated.json";
+  const rowSets: Array<{ fileName: string; rows: Record<string, unknown>[] }> = [];
+  if (Array.isArray(body.rawRows) && body.rawRows.length) {
+    rowSets.push({ fileName: defaultFileName, rows: body.rawRows.filter(isRecord) });
+  }
+  if (Array.isArray(body.productionRows) && body.productionRows.length) {
+    rowSets.push({
+      fileName: typeof body.productionFileName === "string" ? body.productionFileName : "performance_production_latest.json",
+      rows: body.productionRows.filter(isRecord)
+    });
+  }
+  if (Array.isArray(body.volumeRows) && body.volumeRows.length) {
+    rowSets.push({
+      fileName: typeof body.volumeFileName === "string" ? body.volumeFileName : "performance_volume_latest.json",
+      rows: body.volumeRows.filter(isRecord)
+    });
+  }
+  return rowSets.filter((rowSet) => rowSet.rows.length);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function buildAutomatedImportResponse(
+  batchId: string | undefined,
+  imports: Array<{ fileName: string; importedRows: number; productionRows: number; volumeRows: number; createdRows: number; updatedRows: number }>
+) {
+  return {
+    success: true,
+    batchId,
+    files: imports,
+    importedRows: imports.reduce((sum, item) => sum + item.importedRows, 0),
+    productionRows: imports.reduce((sum, item) => sum + item.productionRows, 0),
+    volumeRows: imports.reduce((sum, item) => sum + item.volumeRows, 0),
+    createdRows: imports.reduce((sum, item) => sum + item.createdRows, 0),
+    updatedRows: imports.reduce((sum, item) => sum + item.updatedRows, 0)
+  };
 }
 
 function readRowsFromWorkbook(buffer: ArrayBuffer) {
