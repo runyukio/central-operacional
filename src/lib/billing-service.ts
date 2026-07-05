@@ -1175,6 +1175,7 @@ export async function exportBilling(actor: Actor, filters: BillingDashboardFilte
     fileName: `billing_${data.referenceMonth}.xlsx`,
     sheetName: "Consolidado",
     headers: ["mes", "valor_bruto", "adiantamento", "ajustes", "valor_final", "horas_aprovadas", "agentes_com_horas", "status_ciclo"],
+    columnFormats: currencyColumnFormats([1, 2, 3, 4]),
     rows: [[
       data.referenceMonth,
       moneyText(data.summary.grossAmount),
@@ -1189,31 +1190,37 @@ export async function exportBilling(actor: Actor, filters: BillingDashboardFilte
       {
         sheetName: "Por LOB",
         headers: ["lob", "agentes", "horas_aprovadas", "valor_bruto", "adiantamento", "ajustes", "valor_final"],
+        columnFormats: currencyColumnFormats([3, 4, 5, 6]),
         rows: data.byLob.map((row) => [row.lob, row.agents, minutesToHoursLabel(row.approvedMinutes), moneyText(row.grossAmount), moneyText(row.advanceAmount), moneyText(row.adjustmentAmount), moneyText(row.finalAmount)])
       },
       {
         sheetName: "Por Colaborador",
         headers: ["nome", "wb_login", "cnpj", "tipo_chave_pix", "chave_pix", "cargo_funcao", "skill", "status_colaborador", "lob", "supervisor", "turno_oficial", "regra_billing", "valor_hora", "horas_aprovadas", "horas_projetadas", "total_horas", "valor_bruto", "adiantamento", "campanha", "bonus", "desconto", "correcao", "ajustes_total", "valor_final", "status_invoice", "aprovado_em"],
+        columnFormats: currencyColumnFormats([12, 16, 17, 18, 19, 20, 21, 22, 23]),
         rows: data.invoices.map((row) => [row.employeeName, row.wbLogin, row.cnpj, row.pixKeyType, row.pixKey, row.roleTitle, row.skill, row.employeeStatus, row.lob, row.supervisor, row.officialShift, row.billingRuleLabel || row.billingRule, moneyText(row.hourlyRate), minutesToHoursLabel(row.approvedMinutes), minutesToHoursLabel(row.projectedMinutes), minutesToHoursLabel(row.totalConsideredMinutes), moneyText(row.grossAmount), moneyText(row.advanceAmount), moneyText(row.campaignAmount), moneyText(row.bonusAmount), moneyText(row.discountAmount), moneyText(row.correctionAmount), moneyText(row.adjustmentAmount), moneyText(row.finalAmount), row.statusLabel, row.approvedByEmployeeAt || ""])
       },
       {
         sheetName: "Detalhamento de Horas",
         headers: ["data", "nome", "wb_login", "cnpj", "tipo_chave_pix", "chave_pix", "status_colaborador", "lob", "supervisor", "skill", "cargo_funcao", "turno_oficial", "turno_slot", "horas_aprovadas", "valor_hora", "valor_calculado", "regra_billing"],
+        columnFormats: currencyColumnFormats([14, 15]),
         rows: data.invoices.flatMap((row) => row.hourDetails.map((detail) => [detail.date, row.employeeName, row.wbLogin, row.cnpj, row.pixKeyType, row.pixKey, row.employeeStatus, row.lob, row.supervisor, row.skill, row.roleTitle, row.officialShift, detail.shift, minutesToHoursLabel(detail.minutes), moneyText(row.hourlyRate), moneyText(detail.amount), row.billingRuleLabel || row.billingRule]))
       },
       {
         sheetName: "Ajustes",
         headers: ["tipo_ajuste", "descricao", "mes", "colaborador", "lob", "valor", "criado_por", "criado_em"],
+        columnFormats: currencyColumnFormats([5]),
         rows: data.adjustments.map((row) => [row.type, row.description, row.referenceMonth, row.employeeName || "", row.lob || "", moneyText(row.amount), row.createdBy, row.createdAt])
       },
       {
         sheetName: "Aprovações",
         headers: ["colaborador", "wb_login", "cnpj", "tipo_chave_pix", "chave_pix", "status_invoice", "aprovado_em", "ajuste_aberto", "valor_final"],
+        columnFormats: currencyColumnFormats([8]),
         rows: data.invoices.map((row) => [row.employeeName, row.wbLogin, row.cnpj, row.pixKeyType, row.pixKey, row.statusLabel, row.approvedByEmployeeAt || "", row.hasOpenAdjustment ? "Sim" : "Não", moneyText(row.finalAmount)])
       },
       {
         sheetName: "Configurações",
         headers: ["skill", "nome_exibido", "turno", "valor", "ativo", "vigente_desde", "atualizado_por", "atualizado_em"],
+        columnFormats: currencyColumnFormats([3]),
         rows: data.rateConfigs.map((row) => [row.skillKey || row.key, row.displayName || row.label, row.shiftBucket || row.group, moneyText(row.value), row.active ? "Sim" : "Não", row.effectiveFrom, row.updatedBy || "", row.updatedAt])
       }
     ]
@@ -2415,16 +2422,16 @@ export function formatBillingCurrency(value: number) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(Number.isFinite(value) ? value : 0);
 }
 
-const billingCurrencyFormatter = new Intl.NumberFormat("pt-BR", {
-  style: "currency",
-  currency: "BRL",
-  currencySign: "accounting",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2
-});
+const BILLING_XLSX_CURRENCY_FORMAT = '[$R$-416] #,##0.00;[Red]-[$R$-416] #,##0.00;[$R$-416] 0.00';
 
 function moneyText(value: number) {
-  return billingCurrencyFormatter.format(Number.isFinite(value) ? value : 0);
+  return roundMoney(Number.isFinite(value) ? value : 0);
+}
+
+function currencyColumnFormats(columns: number[]) {
+  const formats: Record<number, string> = {};
+  for (const column of columns) formats[column] = BILLING_XLSX_CURRENCY_FORMAT;
+  return formats;
 }
 
 function numberOrZero(value: unknown) {
