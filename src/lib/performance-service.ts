@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 import { AuditAction, Prisma, type ScheduleStatus } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
@@ -561,6 +563,10 @@ export async function previewProductionImport(actor: Actor, rawRows: Record<stri
   return previewProductionRows(rawRows, options);
 }
 
+export async function previewProductionAutomatedImport(rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
+  return previewProductionRows(rawRows, options);
+}
+
 export async function previewTnsQualityImport(actor: Actor, rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
   const user = await requireActiveUser(actor);
   requireImportPermission(user);
@@ -599,6 +605,26 @@ export async function commitProductionRawImport(actor: Actor, rawRows: Record<st
   requireImportPermission(user);
   const preview = await previewProductionRows(rawRows, { rowNumberOffset });
   return commitProductionRows(user, preview.rows, fileName, batchId);
+}
+
+export async function commitProductionAutomatedRawImport(rawRows: Record<string, unknown>[], fileName = "producao.xlsx", batchId?: string, rowNumberOffset = 0) {
+  const preview = await previewProductionRows(rawRows, { rowNumberOffset });
+  return commitProductionRows(null, preview.rows, fileName, batchId);
+}
+
+export function validatePerformanceImportToken(authorizationHeader?: string | null) {
+  const configuredToken = process.env.PERFORMANCE_IMPORT_TOKEN?.trim();
+  if (!configuredToken) {
+    return { error: "PERFORMANCE_IMPORT_TOKEN não configurado no ambiente.", status: 500 };
+  }
+
+  const match = String(authorizationHeader ?? "").match(/^Bearer\s+(.+)$/i);
+  const providedToken = match?.[1]?.trim() ?? "";
+  if (!providedToken || !safeEqual(providedToken, configuredToken)) {
+    return { error: "Token de integração inválido.", status: 401 };
+  }
+
+  return { ok: true };
 }
 
 async function previewQualityRows(rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
@@ -805,7 +831,7 @@ async function previewProductionRows(rawRows: Record<string, unknown>[], options
     if (isProductionVolumeRow(row)) {
       const bzTime = normalizeExcelDate(rowValue(row, productionTimeHeaders));
       const bzDay = normalizeExcelDate(rowValue(row, ["bz_day", "bz day"])) ?? bzTime;
-      const queueId = text(rowValue(row, productionQueueHeaders));
+      const queueId = normalizeQueueId(rowValue(row, productionQueueHeaders));
       const inputCount = parseInteger(rowValue(row, productionInputHeaders));
       const volumeKey = bzTime && queueId ? `${formatDateTimeKey(bzTime)}|${queueId}` : "";
 
@@ -847,7 +873,7 @@ async function previewProductionRows(rawRows: Record<string, unknown>[], options
     const rawAhtSeconds = parseNumber(rowValue(row, ["aht(s)", "aht", "aht_seconds"]));
     const ahtSeconds = submitNum && submitNum > 0 && moderationSeconds !== null ? round2(moderationSeconds / submitNum) : rawAhtSeconds;
     const latencyMinutesSum = parseNumber(rowValue(row, ["latency(min)_sum", "latency_sum", "latency min sum", "latency (min)", "latency(min)"]));
-    const queueId = text(rowValue(row, productionQueueHeaders));
+    const queueId = normalizeQueueId(rowValue(row, productionQueueHeaders));
     const productionKey = bzTime && queueId && wbLogin ? `${formatDateTimeKey(bzTime)}|${queueId}|${wbLogin}` : "";
 
     if (!wbLogin) errors.push("WB/Login é obrigatório.");
@@ -1026,7 +1052,7 @@ export async function commitProductionImport(actor: Actor, rows: PerformancePrev
   return commitProductionRows(user, rows, fileName);
 }
 
-async function commitProductionRows(user: AuthenticatedUser, rows: PerformancePreviewRow[], fileName = "producao.xlsx", batchId?: string) {
+async function commitProductionRows(user: AuthenticatedUser | null, rows: PerformancePreviewRow[], fileName = "producao.xlsx", batchId?: string) {
   const validRows = rows.filter((row) => row.type === "PRODUCTION" && !row.errors.length && row.employeeId && row.uniqueKey);
   const validVolumeRows = rows.filter((row) => row.type === "PRODUCTION_VOLUME" && !row.errors.length && row.uniqueKey);
   const allValidRows = [...validRows, ...validVolumeRows];
@@ -1087,7 +1113,7 @@ async function commitProductionRows(user: AuthenticatedUser, rows: PerformancePr
       }
     })));
   }
-  if (!batchId) await auditImport(user.id, "PRODUCTION", batch.id, {
+  if (user && !batchId) await auditImport(user.id, "PRODUCTION", batch.id, {
     fileName,
     rowsTotal: rows.length,
     rowsValid: allValidRows.length,
@@ -2638,7 +2664,7 @@ async function markExistingProductionRows(previewRows: PerformancePreviewRow[]) 
 }
 
 async function upsertImportBatch(
-  user: AuthenticatedUser,
+  user: AuthenticatedUser | null,
   type: "QUALITY" | "TNS_QUALITY" | "CEC_QUALITY" | "PRODUCTION",
   fileName: string,
   rows: PerformancePreviewRow[],
@@ -2680,7 +2706,7 @@ async function upsertImportBatch(
       rowsUpdated,
       status: rowsError ? "PARTIAL" : "SUCCESS",
       errorSummary,
-      importedById: user.id
+      importedById: user?.id ?? null
     }
   });
 }
@@ -2881,6 +2907,12 @@ function text(value: unknown) {
   return String(value ?? "").trim();
 }
 
+function normalizeQueueId(value: unknown) {
+  const raw = text(value);
+  if (!raw) return "";
+  return raw.replace(/\.0$/, "");
+}
+
 function normalizeWbLogin(value: string) {
   return value.trim().toLowerCase();
 }
@@ -2892,6 +2924,13 @@ function parseNumber(value: unknown) {
   if (!raw) return null;
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function safeEqual(a: string, b: string) {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  if (left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
 }
 
 function parseInteger(value: unknown) {
