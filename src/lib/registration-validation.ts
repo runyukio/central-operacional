@@ -29,7 +29,7 @@ export type RegistrationValidationSuccess = {
 };
 
 export const registrationPayloadSchema = z.object({
-  cnpj: z.string().transform(formatCnpj).refine(isValidCnpj, "CNPJ inválido. Use 00.000.000/0000-00."),
+  cnpj: requiredString("CNPJ é obrigatório.").transform(formatCnpj).refine(isValidCnpj, "CNPJ inválido. Use 00.000.000/0000-00."),
   fullName: requiredString("Nome completo é obrigatório.").min(3, "Nome completo deve ter pelo menos 3 caracteres."),
   addressType: requiredString("Tipo de endereço é obrigatório.").refine((value) => ["Rua", "Avenida", "Alameda"].includes(value), "Endereço deve ser Rua, Avenida ou Alameda."),
   addressName: requiredString("Endereço é obrigatório."),

@@ -864,6 +864,10 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
     if (existing.status === "RECUSADO") return { error: "Cadastro já foi recusado." };
     if (input.action === "approve" && !input.operationalData) return { error: "Dados operacionais são obrigatórios para aprovação." };
     if (input.action === "approve" && !existing.passwordHash) return { error: "Este cadastro não possui senha cadastrada. Solicite ajuste ao colaborador." };
+    if (input.action === "approve") {
+      const requiredDataError = validateRequiredApprovalRegistrationData(existing);
+      if (requiredDataError) return requiredDataError;
+    }
 
     const existingUser = input.action === "approve" ? await prisma.user.findUnique({ where: { email: existing.email } }) : null;
     if (input.action === "approve" && existingUser?.status === "ACTIVE" && existingUser.id !== existing.createdUserId) {
@@ -1230,6 +1234,7 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     } else if (row.shift && (!isSelectableShiftName(row.shift) || !validShifts.has(normalizeLookupKey(cleanShiftName(row.shift))))) errors.push(`Turno ${row.shift} não existe em Configurações.`);
     if (row.cpf && !isCpfFormat(row.cpf)) errors.push("CPF inválido.");
     if (!isExistingEmployeeImport && !row.cpf) warnings.push("CPF pendente: o colaborador será importado com cadastro incompleto para complemento posterior.");
+    if (!isExistingEmployeeImport && !hasImportValue(rawRow.cnpj)) errors.push("CNPJ é obrigatório.");
     if (row.createUser && !row.name) errors.push("Nome obrigatório quando criar_usuario = sim.");
     if (row.createUser && !row.email) errors.push("E-mail obrigatório quando criar_usuario = sim.");
     if (row.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) errors.push("E-mail inválido.");
@@ -2346,6 +2351,23 @@ async function auditRegistration(tx: Prisma.TransactionClient, actorId: string, 
       newValue: newStatus ? { status: newStatus } : undefined
     }
   });
+}
+
+function validateRequiredApprovalRegistrationData(registration: Pick<EmployeeRegistrationRequest, "cnpj" | "pixKey" | "pixKeyType">) {
+  const fields: Record<string, string> = {};
+  const cnpjDigits = String(registration.cnpj ?? "").replace(/\D/g, "");
+  if (cnpjDigits.length !== 14) fields.cnpj = "CNPJ é obrigatório para aprovar o cadastro.";
+
+  const pixValidation = validatePixKey(registration.pixKeyType, registration.pixKey);
+  if (!pixValidation.valid) {
+    fields[pixValidation.field ?? "pixKey"] = pixValidation.message ?? "Chave PIX é obrigatória para aprovar o cadastro.";
+  }
+
+  if (!Object.keys(fields).length) return null;
+  return {
+    error: "Preencha CNPJ e Chave PIX antes de aprovar o cadastro.",
+    fields
+  };
 }
 
 function parseDate(value: string) {
