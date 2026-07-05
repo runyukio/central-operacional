@@ -13,6 +13,7 @@ import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import { parseWbLoginBatch } from "@/lib/batch-wb-filter";
 import { getDefaultDatePeriod } from "@/lib/default-date-range";
 import { prisma } from "@/lib/prisma";
+import { QUEUE_METADATA } from "@/lib/queue-metadata";
 import { calculateWfhStatus, type WfhEligibilityStatus, type WfhMonitoringStatus } from "@/lib/wfh-rules";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
@@ -517,7 +518,7 @@ async function previewCecQualityRows(rawRows: Record<string, unknown>[], options
 
 async function previewProductionRows(rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
   const normalizedRows = rawRows.map(normalizeObjectKeys);
-  const wbLogins = unique(normalizedRows.map((row) => normalizeWbLogin(text(rowValue(row, ["agentes", "agente", "wb_login", "wb login"])))).filter(Boolean));
+  const wbLogins = unique(normalizedRows.map((row) => normalizeWbLogin(text(rowValue(row, ["agentes", "agente", "agentname", "wb_login", "wb login"])))).filter(Boolean));
   const employees = await findEmployeesByWbLogins(wbLogins);
   const employeeByLogin = new Map(employees.map((employee) => [normalizeWbLogin(employee.wbLogin), employee]));
   const seen = new Map<string, number>();
@@ -526,15 +527,16 @@ async function previewProductionRows(rawRows: Record<string, unknown>[], options
     const rowNumber = (options.rowNumberOffset ?? 0) + index + 2;
     const errors: string[] = [];
     const warnings: string[] = [];
-    const wbLogin = normalizeWbLogin(text(rowValue(row, ["agentes", "agente", "wb_login", "wb login"])));
+    const wbLogin = normalizeWbLogin(text(rowValue(row, ["agentes", "agente", "agentname", "wb_login", "wb login"])));
     const employee = employeeByLogin.get(wbLogin);
-    const bzTime = normalizeExcelDate(rowValue(row, ["bz_time", "bz time"]));
+    const bzTime = normalizeExcelDate(rowValue(row, ["bz_time", "bz time", "brasiltime/hour", "brasiltime hour"]));
     const bzDay = normalizeExcelDate(rowValue(row, ["bz_day", "bz day"])) ?? bzTime;
-    const submitNum = parseInteger(rowValue(row, ["submit_num", "submit num"]));
-    const moderationSeconds = parseNumber(rowValue(row, ["moderation", "moderation(s)", "moderation seconds"]));
-    const ahtSeconds = parseNumber(rowValue(row, ["aht(s)", "aht", "aht_seconds"]));
-    const latencyMinutesSum = parseNumber(rowValue(row, ["latency(min)_sum", "latency_sum", "latency min sum"]));
-    const queueId = text(rowValue(row, ["队列id-queue_id", "queue_id", "fila", "queue"]));
+    const submitNum = parseInteger(rowValue(row, ["submit_num", "submit num", "submit"]));
+    const moderationSeconds = parseNumber(rowValue(row, ["moderation", "moderation(s)", "moderation seconds", "moderation duration (s)"]));
+    const rawAhtSeconds = parseNumber(rowValue(row, ["aht(s)", "aht", "aht_seconds"]));
+    const ahtSeconds = submitNum && submitNum > 0 && moderationSeconds !== null ? round2(moderationSeconds / submitNum) : rawAhtSeconds;
+    const latencyMinutesSum = parseNumber(rowValue(row, ["latency(min)_sum", "latency_sum", "latency min sum", "latency (min)", "latency(min)"]));
+    const queueId = text(rowValue(row, ["队列id-queue_id", "queue_id", "queue id", "fila", "queue"]));
     const productionKey = bzTime && queueId && wbLogin ? `${formatDateTimeKey(bzTime)}|${queueId}|${wbLogin}` : "";
 
     if (!wbLogin) errors.push("WB/Login é obrigatório.");
@@ -1599,7 +1601,7 @@ async function buildFrameworkSnapshots(employees: PerformanceEmployee[], periods
   for (const record of productionRecords) {
     const employee = record.employeeId ? employeeById.get(record.employeeId) : null;
     if (!employee) continue;
-    const groups = frameworkGroupsForEmployee(employee);
+    const groups = frameworkGroupsForProductionRecord(employee, record);
     for (const period of periods) {
       if (!isDateInRange(record.bzDay, period.start, period.end)) continue;
       for (const group of groups) {
@@ -1807,6 +1809,14 @@ function frameworkEmployeeMatchesGroup(employee: Pick<PerformanceEmployee, "lob"
 
 function frameworkGroupsForEmployee(employee: Pick<PerformanceEmployee, "lob" | "skill">) {
   return frameworkGroupKeys(employee.lob?.name ?? "", employee.skill ?? "");
+}
+
+function frameworkGroupsForProductionRecord(employee: Pick<PerformanceEmployee, "lob" | "skill">, record: Pick<ProductionRecordForMetrics, "queueId">) {
+  const queueLob = QUEUE_METADATA[String(record.queueId ?? "").trim()]?.lob;
+  if (queueLob === "ADS") return ["ADS"] satisfies FrameworkGroupKey[];
+  if (queueLob === "VIDEO") return ["TNS", "TNS_VIDEO"] satisfies FrameworkGroupKey[];
+  if (queueLob === "COMMENTS") return ["TNS", "TNS_COMMENTS"] satisfies FrameworkGroupKey[];
+  return frameworkGroupsForEmployee(employee);
 }
 
 function frameworkGroupKeys(lobName?: string | null, skill?: string | null): FrameworkGroupKey[] {
@@ -2129,7 +2139,7 @@ function normalizeExcelDate(value: unknown): Date | null {
   if (!raw) return null;
   const br = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
   if (br) return new Date(Date.UTC(Number(br[3]), Number(br[2]) - 1, Number(br[1]), Number(br[4] ?? 0), Number(br[5] ?? 0), Number(br[6] ?? 0)));
-  const iso = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  const iso = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s](\d{1,2})(?::(\d{2})(?::(\d{2}))?)?)?/);
   if (iso) return new Date(Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]), Number(iso[4] ?? 0), Number(iso[5] ?? 0), Number(iso[6] ?? 0)));
   const parsed = new Date(raw);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
