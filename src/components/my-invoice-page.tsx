@@ -67,7 +67,7 @@ function invoiceQueryParam(name: string) {
 }
 
 export function MyInvoicePage() {
-  const [referenceMonth, setReferenceMonth] = useState(invoiceQueryParam("referenceMonth") || "2026-06");
+  const [referenceMonth, setReferenceMonth] = useState(invoiceQueryParam("referenceMonth") || "2026-07");
   const [payload, setPayload] = useState<MyInvoicePayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
