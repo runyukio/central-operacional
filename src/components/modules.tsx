@@ -2075,6 +2075,23 @@ function FormInput({ label, value, onChange, type = "text", error, disabled = fa
   );
 }
 
+function formatCpfInputValue(value: string) {
+  const digits = value.replace(/\D/g, "").slice(0, 11);
+  if (digits.length <= 3) return digits;
+  if (digits.length <= 6) return `${digits.slice(0, 3)}.${digits.slice(3)}`;
+  if (digits.length <= 9) return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
+  return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
+}
+
+function formatCnpjInputValue(value: string) {
+  const digits = value.replace(/\D/g, "").slice(0, 14);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 5) return `${digits.slice(0, 2)}.${digits.slice(2)}`;
+  if (digits.length <= 8) return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5)}`;
+  if (digits.length <= 12) return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8)}`;
+  return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
+}
+
 function FormSelect({ label, value, options, onChange, error, disabled = false, emptyLabel = "Não informado" }: { label: string; value: string; options: string[]; onChange: (value: string) => void; error?: string; disabled?: boolean; emptyLabel?: string }) {
   return (
     <label className="block">
@@ -9796,8 +9813,8 @@ export function EmployeeMapPage() {
     setCityDraft(selected.city ?? "");
     setStateUfDraft(selected.stateUf ?? "");
     setPreferredScheduleDraft(selected.preferredSchedule ?? "");
-    setCpfDraft(selected.canViewSensitive ? selected.sensitive?.cpf ?? "" : "");
-    setCnpjDraft(selected.canViewSensitive ? selected.sensitive?.cnpj ?? "" : "");
+    setCpfDraft(selected.canViewSensitive ? formatCpfInputValue(selected.sensitive?.cpf ?? "") : "");
+    setCnpjDraft(selected.canViewSensitive ? formatCnpjInputValue(selected.sensitive?.cnpj ?? "") : "");
     setInternalNotesDraft(selected.internalNotes ?? "");
     setEmployeeFieldErrors({});
   }, [selected]);
@@ -10222,8 +10239,8 @@ export function EmployeeMapPage() {
 	                        {selectedCanEditPeopleData ? (
 	                          <ProfileSection title="Documentos fiscais">
 	                            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-	                              <FormInput label="CPF" value={cpfDraft} onChange={setCpfDraft} error={employeeFieldErrors.cpf} inputMode="numeric" />
-	                              <FormInput label="CNPJ" value={cnpjDraft} onChange={setCnpjDraft} error={employeeFieldErrors.cnpj} inputMode="numeric" />
+	                              <FormInput label="CPF" value={cpfDraft} onChange={(value) => setCpfDraft(formatCpfInputValue(value))} error={employeeFieldErrors.cpf} inputMode="numeric" maxLength={14} placeholder="000.000.000-00" />
+	                              <FormInput label="CNPJ" value={cnpjDraft} onChange={(value) => setCnpjDraft(formatCnpjInputValue(value))} error={employeeFieldErrors.cnpj} inputMode="numeric" maxLength={18} placeholder="00.000.000/0000-00" />
 	                            </div>
 	                          </ProfileSection>
 	                        ) : null}

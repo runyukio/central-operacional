@@ -534,6 +534,8 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     const nextCnpj = cleanNullable(input.cnpj);
     const nextCpfDigits = nextCpf?.replace(/\D/g, "") ?? "";
     const nextCnpjDigits = nextCnpj?.replace(/\D/g, "") ?? "";
+    const nextFormattedCpf = nextCpf ? formatCpfDocument(nextCpfDigits) : null;
+    const nextFormattedCnpj = nextCnpj ? formatCnpjDocument(nextCnpjDigits) : null;
     const hasPixUpdate = input.pixKey !== undefined || input.pixKeyType !== undefined;
     const pixValidation = hasPixUpdate
       ? validatePixKey(
@@ -560,6 +562,8 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     if (input.stateUf !== undefined && nextStateUf && nextStateUf.length !== 2) return createValidationError({ stateUf: "Estado/UF deve ter 2 letras." });
     if (input.cpf !== undefined && nextCpf && nextCpfDigits.length !== 11) return createValidationError({ cpf: "CPF deve conter 11 dígitos." });
     if (input.cnpj !== undefined && nextCnpj && nextCnpjDigits.length !== 14) return createValidationError({ cnpj: "CNPJ deve conter 14 dígitos." });
+    if (input.cpf !== undefined && nextCpf && nextCpf !== nextFormattedCpf) return createValidationError({ cpf: "CPF deve estar no padrão 000.000.000-00." });
+    if (input.cnpj !== undefined && nextCnpj && nextCnpj !== nextFormattedCnpj) return createValidationError({ cnpj: "CNPJ deve estar no padrão 00.000.000/0000-00." });
     if (pixValidation && !pixValidation.valid) return createValidationError({ [pixValidation.field ?? "pixKey"]: pixValidation.message ?? "Chave PIX inválida." });
     if ((input.isPcd !== undefined || input.pcdDisabilityType !== undefined) && effectiveIsPcd === "Sim" && !effectivePcdDisabilityType) return createValidationError({ pcdDisabilityType: "Tipo de deficiência é obrigatório quando PCD for Sim." });
     if ((input.isPcd !== undefined || input.pcdDisabilityType !== undefined || input.pcdDisabilityOther !== undefined) && effectiveIsPcd === "Sim" && effectivePcdDisabilityType === "Outra" && !effectivePcdDisabilityOther) return createValidationError({ pcdDisabilityOther: "Especifique o tipo de deficiência." });
@@ -673,8 +677,8 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
           await tx.employeeSensitiveData.update({
             where: { employeeId: employee.id },
             data: {
-              ...(input.cpf !== undefined ? { cpf: nextCpf } : {}),
-              ...(input.cnpj !== undefined ? { cnpj: nextCnpj } : {}),
+              ...(input.cpf !== undefined ? { cpf: nextFormattedCpf } : {}),
+              ...(input.cnpj !== undefined ? { cnpj: nextFormattedCnpj } : {}),
               ...(pixValidation?.valid
                 ? {
                   bankData: {
@@ -690,8 +694,8 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
           await tx.employeeSensitiveData.create({
             data: {
               employeeId: employee.id,
-              cpf: nextCpf,
-              cnpj: nextCnpj,
+              cpf: nextFormattedCpf,
+              cnpj: nextFormattedCnpj,
               rg: "",
               rgIssuer: "",
               birthDate: new Date("1970-01-01T00:00:00.000Z"),
@@ -1723,6 +1727,14 @@ function cleanNullable(value: unknown) {
   if (value === undefined) return undefined;
   const next = String(value ?? "").trim();
   return next || null;
+}
+
+function formatCpfDocument(digits: string) {
+  return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9, 11)}`;
+}
+
+function formatCnpjDocument(digits: string) {
+  return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12, 14)}`;
 }
 
 function normalizeUserStatus(value: unknown): UserStatus | undefined {

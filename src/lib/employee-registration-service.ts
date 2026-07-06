@@ -1232,9 +1232,10 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
       const blockedKey = shiftLookupKey(cleanShiftName(row.shift));
       errors.push(blockedKey === "PLANTAO" ? "Plantão não é um turno ativo." : "Férias deve ser usada como status de cronograma, não como turno.");
     } else if (row.shift && (!isSelectableShiftName(row.shift) || !validShifts.has(normalizeLookupKey(cleanShiftName(row.shift))))) errors.push(`Turno ${row.shift} não existe em Configurações.`);
-    if (row.cpf && !isCpfFormat(row.cpf)) errors.push("CPF inválido.");
+    if (row.cpf && !isCpfFormat(row.cpf)) errors.push("CPF inválido. Use 000.000.000-00.");
     if (!isExistingEmployeeImport && !row.cpf) warnings.push("CPF pendente: o colaborador será importado com cadastro incompleto para complemento posterior.");
     if (!isExistingEmployeeImport && !hasImportValue(rawRow.cnpj)) errors.push("CNPJ é obrigatório.");
+    if (row.cnpj && !isCnpjFormat(row.cnpj)) errors.push("CNPJ inválido. Use 00.000.000/0000-00.");
     if (row.createUser && !row.name) errors.push("Nome obrigatório quando criar_usuario = sim.");
     if (row.createUser && !row.email) errors.push("E-mail obrigatório quando criar_usuario = sim.");
     if (row.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) errors.push("E-mail inválido.");
@@ -1343,7 +1344,7 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
 }
 
 function normalizeEmployeeImportRow(raw: EmployeeImportRow) {
-  const cpf = text(raw.cpf) || null;
+  const cpf = formatCpfImportDocument(text(raw.cpf)) || null;
   const email = text(raw.email).toLowerCase();
   const wbLogin = text(raw.wb_login);
   const roleName = normalizeImportRole(text(raw.role_permissao));
@@ -1351,7 +1352,7 @@ function normalizeEmployeeImportRow(raw: EmployeeImportRow) {
   const pixKey = text(raw.chave_pix);
   const pixValidation = pixKeyType || pixKey ? validatePixKey(pixKeyType, pixKey) : null;
   return {
-    cnpj: text(raw.cnpj),
+    cnpj: formatCnpjImportDocument(text(raw.cnpj)),
     name: text(raw.nome),
     socialName: text(raw.nome_social),
     email,
@@ -1820,9 +1821,24 @@ function normalizeWorkTime(value: unknown) {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
-function isCpfFormat(value: string) {
+function formatCpfImportDocument(value: string) {
   const digits = value.replace(/\D/g, "");
-  return digits.length === 11;
+  if (!value || digits.length !== 11) return value;
+  return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9, 11)}`;
+}
+
+function formatCnpjImportDocument(value: string) {
+  const digits = value.replace(/\D/g, "");
+  if (!value || digits.length !== 14) return value;
+  return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12, 14)}`;
+}
+
+function isCpfFormat(value: string) {
+  return /^\d{3}\.\d{3}\.\d{3}-\d{2}$/.test(value);
+}
+
+function isCnpjFormat(value: string) {
+  return /^\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}$/.test(value);
 }
 
 function text(value: unknown) {
