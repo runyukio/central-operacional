@@ -2554,7 +2554,9 @@ async function buildProductionDashboardPanel(period: Period) {
       lastSeenAt: item.lastSeenAt ? formatDateTime(item.lastSeenAt) : null
     }));
 
-  const totalRows = productionRange._count._all + volumeRange._count._all;
+  const productionRowsCount = productionRange._count._all;
+  const volumeRowsCount = volumeRange._count._all;
+  const totalRows = productionRowsCount + volumeRowsCount;
   const lastImportAgeHours = latestImport ? round2((Date.now() - latestImport.importedAt.getTime()) / 36e5) : null;
   const staleThresholdHours = 24;
   const isStale = lastImportAgeHours === null || lastImportAgeHours > staleThresholdHours;
@@ -2567,6 +2569,12 @@ async function buildProductionDashboardPanel(period: Period) {
   }
   if (!totalRows) {
     alerts.push({ type: "WARNING", title: "Sem dados no range", description: "Não há dados de produção ou volume para o intervalo selecionado." });
+  }
+  if (productionRowsCount > 0 && volumeRowsCount === 0) {
+    alerts.push({ type: "WARNING", title: "Base de input não importada", description: "Existe output/submit no range, mas não há registros de input/enqueue." });
+  }
+  if (volumeRowsCount > 0 && productionRowsCount === 0) {
+    alerts.push({ type: "WARNING", title: "Base de output não importada", description: "Existe input/enqueue no range, mas não há registros de output/submit." });
   }
   if (unmappedQueues.length) {
     alerts.push({ type: "WARNING", title: "Filas não mapeadas", description: `${unmappedQueues.length} ID(s) de fila não foram encontrados no dicionário.` });

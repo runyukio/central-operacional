@@ -23,6 +23,10 @@ export async function POST(request: Request) {
           message: "rawRows, productionRows ou volumeRows é obrigatório."
         }, { status: 400 });
       }
+      const coverage = summarizePerformanceRowSets(rowSets);
+      if (!coverage.hasProduction || !coverage.hasVolume) {
+        return NextResponse.json(buildIncompleteImportResponse(coverage), { status: 400 });
+      }
 
       let batchId: string | undefined;
       const imports = [];
@@ -51,14 +55,22 @@ export async function POST(request: Request) {
       }, { status: 400 });
     }
 
+    const rowSets: PerformanceRowSet[] = [];
+    for (const file of files) {
+      rowSets.push({ fileName: file.name, rows: readRowsFromWorkbook(await file.arrayBuffer()) });
+    }
+    const coverage = summarizePerformanceRowSets(rowSets);
+    if (!coverage.hasProduction || !coverage.hasVolume) {
+      return NextResponse.json(buildIncompleteImportResponse(coverage), { status: 400 });
+    }
+
     let batchId: string | undefined;
     const imports = [];
-    for (const file of files) {
-      const rows = readRowsFromWorkbook(await file.arrayBuffer());
-      const result = await commitProductionAutomatedRawImport(rows, file.name, batchId, 0, { pruneSnapshot: true });
+    for (const rowSet of rowSets) {
+      const result = await commitProductionAutomatedRawImport(rowSet.rows, rowSet.fileName, batchId, 0, { pruneSnapshot: true });
       batchId = result.batchId;
       imports.push({
-        fileName: file.name,
+        fileName: rowSet.fileName,
         importedRows: result.importedRows,
         productionRows: result.productionRows,
         volumeRows: result.volumeRows,
@@ -121,6 +133,83 @@ function collectJsonRowSets(body: Record<string, unknown>) {
     });
   }
   return rowSets.filter((rowSet) => rowSet.rows.length);
+}
+
+type PerformanceRowSet = { fileName: string; rows: Record<string, unknown>[] };
+
+function summarizePerformanceRowSets(rowSets: PerformanceRowSet[]) {
+  const summary = {
+    hasProduction: false,
+    hasVolume: false,
+    productionRows: 0,
+    volumeRows: 0,
+    files: rowSets.map((rowSet) => rowSet.fileName)
+  };
+
+  for (const rowSet of rowSets) {
+    for (const row of rowSet.rows) {
+      const type = classifyPerformanceRow(row);
+      if (type === "production") {
+        summary.hasProduction = true;
+        summary.productionRows += 1;
+      } else if (type === "volume") {
+        summary.hasVolume = true;
+        summary.volumeRows += 1;
+      }
+    }
+  }
+
+  return summary;
+}
+
+function classifyPerformanceRow(row: Record<string, unknown>) {
+  const normalizedRow = normalizePerformanceRow(row);
+  const hasAgent = Boolean(text(performanceRowValue(normalizedRow, ["agentes", "agente", "agentname", "wb_login", "wb login"])));
+  const hasSubmit = Boolean(text(performanceRowValue(normalizedRow, ["submit_num", "submit num", "submit"])));
+  const hasInput = Boolean(text(performanceRowValue(normalizedRow, ["enqueue", "input", "input_num", "input num", "进审量", "recebidos"])));
+  const hasQueue = Boolean(text(performanceRowValue(normalizedRow, ["id-queue_id", "队列id-queue_id", "queue_id", "queue id", "fila", "queue"])));
+  const hasTime = Boolean(text(performanceRowValue(normalizedRow, ["bz_time", "bz time", "brasiltime/hour", "brasiltime hour"])));
+
+  if (hasInput && hasQueue && hasTime && !hasAgent && !hasSubmit) return "volume";
+  if (hasSubmit && hasAgent && hasQueue && hasTime) return "production";
+  return "unknown";
+}
+
+function normalizePerformanceRow(row: Record<string, unknown>) {
+  const normalizedRow: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(row)) normalizedRow[normalizePerformanceHeader(key)] = value;
+  return normalizedRow;
+}
+
+function performanceRowValue(normalizedRow: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = normalizedRow[normalizePerformanceHeader(key)];
+    if (value !== undefined && value !== null && String(value).trim() !== "") return value;
+  }
+  return "";
+}
+
+function normalizePerformanceHeader(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+}
+
+function text(value: unknown) {
+  return String(value ?? "").trim();
+}
+
+function buildIncompleteImportResponse(coverage: ReturnType<typeof summarizePerformanceRowSets>) {
+  const missing = [];
+  if (!coverage.hasProduction) missing.push("produção/output (submit)");
+  if (!coverage.hasVolume) missing.push("volume/input (enqueue)");
+  const message = `Importação automatizada incompleta. Envie no mesmo upload as bases de ${missing.join(" e ")}.`;
+  return {
+    success: false,
+    error: message,
+    message,
+    productionRowsDetected: coverage.productionRows,
+    volumeRowsDetected: coverage.volumeRows,
+    files: coverage.files
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
