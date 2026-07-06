@@ -166,12 +166,13 @@ function classifyPerformanceRow(row: Record<string, unknown>) {
   const normalizedRow = normalizePerformanceRow(row);
   const hasAgent = Boolean(text(performanceRowValue(normalizedRow, ["agentes", "agente", "agentname", "wb_login", "wb login"])));
   const hasSubmit = Boolean(text(performanceRowValue(normalizedRow, ["submit_num", "submit num", "submit"])));
-  const hasInput = Boolean(text(performanceRowValue(normalizedRow, ["enqueue", "input", "input_num", "input num", "进审量", "recebidos"])));
+  const hasInput = Boolean(text(performanceRowValue(normalizedRow, ["enqueue", "enqueue_num", "enqueue num", "input", "input_num", "input num", "进审量", "recebidos"])));
   const hasQueue = Boolean(text(performanceRowValue(normalizedRow, ["id-queue_id", "队列id-queue_id", "queue_id", "queue id", "fila", "queue"])));
-  const hasTime = Boolean(text(performanceRowValue(normalizedRow, ["bz_time", "bz time", "brasiltime/hour", "brasiltime hour"])));
+  const hasProductionTime = Boolean(text(performanceRowValue(normalizedRow, ["bz_time", "bz time", "brasiltime/hour", "brasiltime hour"])));
+  const hasVolumeTime = Boolean(text(performanceRowValue(normalizedRow, ["bz_enqueue_time", "bz enqueue time", "brasiltime/hour", "brasiltime hour", "bz_time", "bz time"])));
 
-  if (hasInput && hasQueue && hasTime && !hasAgent && !hasSubmit) return "volume";
-  if (hasSubmit && hasAgent && hasQueue && hasTime) return "production";
+  if (hasInput && hasQueue && hasVolumeTime && !hasAgent && !hasSubmit) return "volume";
+  if (hasSubmit && hasAgent && hasQueue && hasProductionTime) return "production";
   return "unknown";
 }
 
@@ -190,7 +191,13 @@ function performanceRowValue(normalizedRow: Record<string, unknown>, keys: strin
 }
 
 function normalizePerformanceHeader(value: string) {
-  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[（）]/g, (char) => (char === "（" ? "(" : ")"))
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 }
 
 function text(value: unknown) {

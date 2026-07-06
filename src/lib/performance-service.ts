@@ -246,8 +246,11 @@ const attendanceMetricSelect = {
 } satisfies Prisma.AttendanceRecordSelect;
 const productionAgentHeaders = ["agentes", "agente", "agentname", "wb_login", "wb login"];
 const productionTimeHeaders = ["bz_time", "bz time", "brasiltime/hour", "brasiltime hour"];
+const productionVolumeTimeHeaders = ["bz_enqueue_time", "bz enqueue time", ...productionTimeHeaders];
+const productionDayHeaders = ["bz_day", "bz day"];
+const productionVolumeDayHeaders = ["bz_enqueue_day", "bz enqueue day", ...productionDayHeaders];
 const productionQueueHeaders = ["id-queue_id", "队列id-queue_id", "queue_id", "queue id", "fila", "queue"];
-const productionInputHeaders = ["enqueue", "input", "input_num", "input num", "进审量", "recebidos"];
+const productionInputHeaders = ["enqueue", "enqueue_num", "enqueue num", "input", "input_num", "input num", "进审量", "recebidos"];
 
 export class PerformanceError extends Error {
   status: number;
@@ -829,8 +832,8 @@ async function previewProductionRows(rawRows: Record<string, unknown>[], options
     const errors: string[] = [];
     const warnings: string[] = [];
     if (isProductionVolumeRow(row)) {
-      const bzTime = normalizeExcelDate(rowValue(row, productionTimeHeaders));
-      const bzDay = normalizeExcelDate(rowValue(row, ["bz_day", "bz day"])) ?? bzTime;
+      const bzTime = normalizeExcelDate(rowValue(row, productionVolumeTimeHeaders));
+      const bzDay = normalizeExcelDate(rowValue(row, productionVolumeDayHeaders)) ?? bzTime;
       const queueId = normalizeQueueId(rowValue(row, productionQueueHeaders));
       const inputCount = parseInteger(rowValue(row, productionInputHeaders));
       const volumeKey = bzTime && queueId ? `${formatDateTimeKey(bzTime)}|${queueId}` : "";
@@ -867,7 +870,7 @@ async function previewProductionRows(rawRows: Record<string, unknown>[], options
     const wbLogin = normalizeWbLogin(text(rowValue(row, productionAgentHeaders)));
     const employee = employeeByLogin.get(wbLogin);
     const bzTime = normalizeExcelDate(rowValue(row, productionTimeHeaders));
-    const bzDay = normalizeExcelDate(rowValue(row, ["bz_day", "bz day"])) ?? bzTime;
+    const bzDay = normalizeExcelDate(rowValue(row, productionDayHeaders)) ?? bzTime;
     const submitNum = parseInteger(rowValue(row, ["submit_num", "submit num", "submit"]));
     const moderationSeconds = parseNumber(rowValue(row, ["moderation", "moderation(s)", "moderation seconds", "moderation duration (s)"]));
     const rawAhtSeconds = parseNumber(rowValue(row, ["aht(s)", "aht", "aht_seconds"]));
@@ -898,7 +901,7 @@ async function previewProductionRows(rawRows: Record<string, unknown>[], options
       employeeName: employee?.fullName,
       lob: employee?.lob?.name ?? "",
       lobId: employee?.lobId ?? undefined,
-      date: bzDay ? formatDateKey(bzDay) : text(rowValue(row, ["bz_day", "bz day"])),
+      date: bzDay ? formatDateKey(bzDay) : text(rowValue(row, productionDayHeaders)),
       uniqueKey: productionKey,
       action: errors.length ? "ignore" : "create",
       errors,
@@ -3021,11 +3024,19 @@ function isProductionVolumeRow(row: Record<string, unknown>) {
   const hasAgent = Boolean(text(rowValue(row, productionAgentHeaders)));
   const hasSubmit = Boolean(text(rowValue(row, ["submit_num", "submit num", "submit"])));
   const hasInput = Boolean(text(rowValue(row, productionInputHeaders)));
-  return hasInput && !hasAgent && !hasSubmit;
+  const hasQueue = Boolean(text(rowValue(row, productionQueueHeaders)));
+  const hasVolumeTime = Boolean(text(rowValue(row, productionVolumeTimeHeaders)));
+  return hasInput && hasQueue && hasVolumeTime && !hasAgent && !hasSubmit;
 }
 
 function normalizeHeader(value: string) {
-  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[（）]/g, (char) => (char === "（" ? "(" : ")"))
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 }
 
 function rowValue(row: Record<string, unknown>, keys: string[]) {
@@ -3043,7 +3054,12 @@ function text(value: unknown) {
 function normalizeQueueId(value: unknown) {
   const raw = text(value);
   if (!raw) return "";
-  return raw.replace(/\.0$/, "");
+  const normalized = raw.replace(/,/g, "").replace(/\.0+$/, "");
+  if (/^-?\d+(?:\.\d+)?e\+?\d+$/i.test(normalized)) {
+    const parsed = Number(normalized);
+    if (Number.isFinite(parsed)) return String(Math.trunc(parsed));
+  }
+  return normalized;
 }
 
 function normalizeWbLogin(value: string) {
