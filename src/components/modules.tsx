@@ -124,7 +124,6 @@ import {
 
 const scheduleImportColumns = ["wb_login", "data", "status", "turno", "entrada", "saida", "lob"] as const;
 const workHourImportColumns = ["wb_login", "data", "horas_realizadas", "sistema_origem", "observacao"] as const;
-const performanceRebuildMode = true;
 const scheduleStatusOptions = ["Escalado", "Presente", "Nesting", "Falta", "Falta Justificada", "Falta Injustificada", "Afastado", "Férias", "Treinamento", "Folga", "Troca aprovada", "Venda de folga aprovada", "Folga aprovada", "Desligado", "Sem cronograma", "Erro de cronograma"] as const;
 const scheduleEditableStatusOptions = ["Escalado", "Presente", "Nesting", "Falta", "Afastado", "Férias", "Treinamento", "Folga", "Desligado", "Sem cronograma", "Erro de cronograma"] as const;
 const workflowManagedScheduleStatuses = ["Troca aprovada", "Venda de folga aprovada", "Folga aprovada"] as const;
@@ -12448,27 +12447,6 @@ function PerformanceProductionTooltip({ active, payload, label }: { active?: boo
         const value = key.toLowerCase().includes("aht") ? formatPerformanceDurationSeconds(rawValue) : key.toLowerCase().includes("latency") ? formatPerformanceMinutes(rawValue) : formatPerformanceNumber(rawValue);
         return <p key={`${key}-${item.name}`}>{item.name ?? key}: {value}</p>;
       })}
-    </div>
-  );
-}
-
-function PerformanceRebuildView() {
-  return (
-    <div className="space-y-5">
-      <PageHeader
-        title="Performance"
-        icon={Trophy}
-        actions={<TopActions />}
-      />
-
-      <div className="rounded-2xl border border-border bg-white p-10 shadow-sm">
-        <div className="flex min-h-[240px] flex-col items-center justify-center text-center">
-          <div className="grid h-16 w-16 place-items-center rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 to-white text-blue-600 shadow-soft">
-            <Wrench className="h-7 w-7" />
-          </div>
-          <h2 className="mt-5 text-3xl font-black text-navy-950">Reconstruindo</h2>
-        </div>
-      </div>
     </div>
   );
 }
