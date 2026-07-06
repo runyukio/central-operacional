@@ -63,6 +63,8 @@ export type EmployeeAdminUpdateInput = {
   city?: string;
   stateUf?: string;
   preferredSchedule?: string;
+  cpf?: string;
+  cnpj?: string;
   pixKey?: string;
   pixKeyType?: string;
 };
@@ -465,7 +467,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     if (!canEditOperational && !canEditPeopleData) return createPermissionError("Você não tem permissão para editar dados do colaborador.");
 
     const adminOnlyFields: Array<keyof EmployeeAdminUpdateInput> = ["wbLogin", "roleName", "userStatus"];
-    const sensitivePeopleFields: Array<keyof EmployeeAdminUpdateInput> = ["fullName", "socialName", "email", "primaryPhone", "city", "stateUf", "preferredSchedule", "contractType", "admissionDate", "trainingStartDate", "terminationDate", "terminationType", "terminationReason", "ethnicity", "sexualOrientation", "isPcd", "pcdDisabilityType", "pcdDisabilityOther", "firstJob", "hasTelemarketingExperience", "telemarketingWhere", "pixKey", "pixKeyType"];
+    const sensitivePeopleFields: Array<keyof EmployeeAdminUpdateInput> = ["fullName", "socialName", "email", "primaryPhone", "city", "stateUf", "preferredSchedule", "contractType", "admissionDate", "trainingStartDate", "terminationDate", "terminationType", "terminationReason", "ethnicity", "sexualOrientation", "isPcd", "pcdDisabilityType", "pcdDisabilityOther", "firstJob", "hasTelemarketingExperience", "telemarketingWhere", "cpf", "cnpj", "pixKey", "pixKeyType"];
     const operationalBindingFields: Array<keyof EmployeeAdminUpdateInput> = ["lobId", "supervisorId", "shiftId", "siteOperation"];
     const profileOperationalFields: Array<keyof EmployeeAdminUpdateInput> = ["roleTitle", "operationalStatus", "internalNotes", "skill", "wave", "nestingStartDate", "goLiveDate", "workStartTime", "workEndTime"];
     if (!actorIsAdmin && adminOnlyFields.some((field) => input[field] !== undefined)) return createPermissionError("Apenas Admin pode alterar WB/Login, role ou status de acesso.");
@@ -528,6 +530,10 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     const nextCity = cleanNullable(input.city);
     const nextStateUf = cleanNullable(input.stateUf)?.toUpperCase() ?? undefined;
     const nextPreferredSchedule = cleanNullable(input.preferredSchedule);
+    const nextCpf = cleanNullable(input.cpf);
+    const nextCnpj = cleanNullable(input.cnpj);
+    const nextCpfDigits = nextCpf?.replace(/\D/g, "") ?? "";
+    const nextCnpjDigits = nextCnpj?.replace(/\D/g, "") ?? "";
     const hasPixUpdate = input.pixKey !== undefined || input.pixKeyType !== undefined;
     const pixValidation = hasPixUpdate
       ? validatePixKey(
@@ -552,6 +558,8 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     if (input.roleTitle !== undefined && !nextRoleTitle) return createValidationError({ roleTitle: "Cargo/Função é obrigatório." });
     if (input.operationalStatus !== undefined && !nextStatus) return createValidationError({ operationalStatus: "Status do colaborador é obrigatório." });
     if (input.stateUf !== undefined && nextStateUf && nextStateUf.length !== 2) return createValidationError({ stateUf: "Estado/UF deve ter 2 letras." });
+    if (input.cpf !== undefined && nextCpf && nextCpfDigits.length !== 11) return createValidationError({ cpf: "CPF deve conter 11 dígitos." });
+    if (input.cnpj !== undefined && nextCnpj && nextCnpjDigits.length !== 14) return createValidationError({ cnpj: "CNPJ deve conter 14 dígitos." });
     if (pixValidation && !pixValidation.valid) return createValidationError({ [pixValidation.field ?? "pixKey"]: pixValidation.message ?? "Chave PIX inválida." });
     if ((input.isPcd !== undefined || input.pcdDisabilityType !== undefined) && effectiveIsPcd === "Sim" && !effectivePcdDisabilityType) return createValidationError({ pcdDisabilityType: "Tipo de deficiência é obrigatório quando PCD for Sim." });
     if ((input.isPcd !== undefined || input.pcdDisabilityType !== undefined || input.pcdDisabilityOther !== undefined) && effectiveIsPcd === "Sim" && effectivePcdDisabilityType === "Outra" && !effectivePcdDisabilityOther) return createValidationError({ pcdDisabilityOther: "Especifique o tipo de deficiência." });
@@ -656,7 +664,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
         },
         include: { ...employeeInclude }
       });
-      if (pixValidation?.valid) {
+      if (input.cpf !== undefined || input.cnpj !== undefined || pixValidation?.valid) {
         const sensitive = await tx.employeeSensitiveData.findUnique({
           where: { employeeId: employee.id },
           select: { bankData: true }
@@ -665,11 +673,31 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
           await tx.employeeSensitiveData.update({
             where: { employeeId: employee.id },
             data: {
-              bankData: {
-                ...jsonObject(sensitive.bankData),
-                pixKey: pixValidation.normalizedValue,
-                pixKeyType: pixValidation.pixKeyType
-              }
+              ...(input.cpf !== undefined ? { cpf: nextCpf } : {}),
+              ...(input.cnpj !== undefined ? { cnpj: nextCnpj } : {}),
+              ...(pixValidation?.valid
+                ? {
+                  bankData: {
+                    ...jsonObject(sensitive.bankData),
+                    pixKey: pixValidation.normalizedValue,
+                    pixKeyType: pixValidation.pixKeyType
+                  }
+                }
+                : {})
+            }
+          });
+        } else if (input.cpf !== undefined || input.cnpj !== undefined) {
+          await tx.employeeSensitiveData.create({
+            data: {
+              employeeId: employee.id,
+              cpf: nextCpf,
+              cnpj: nextCnpj,
+              rg: "",
+              rgIssuer: "",
+              birthDate: new Date("1970-01-01T00:00:00.000Z"),
+              address: {},
+              bankData: pixValidation?.valid ? { pixKey: pixValidation.normalizedValue, pixKeyType: pixValidation.pixKeyType } : {},
+              emergencyContactData: {}
             }
           });
         }

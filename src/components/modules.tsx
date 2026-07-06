@@ -9618,6 +9618,8 @@ export function EmployeeMapPage() {
   const [cityDraft, setCityDraft] = useState("");
   const [stateUfDraft, setStateUfDraft] = useState("");
   const [preferredScheduleDraft, setPreferredScheduleDraft] = useState("");
+  const [cpfDraft, setCpfDraft] = useState("");
+  const [cnpjDraft, setCnpjDraft] = useState("");
   const [internalNotesDraft, setInternalNotesDraft] = useState("");
   const [savingEmployee, setSavingEmployee] = useState(false);
   const [employeeFieldErrors, setEmployeeFieldErrors] = useState<Record<string, string>>({});
@@ -9794,6 +9796,8 @@ export function EmployeeMapPage() {
     setCityDraft(selected.city ?? "");
     setStateUfDraft(selected.stateUf ?? "");
     setPreferredScheduleDraft(selected.preferredSchedule ?? "");
+    setCpfDraft(selected.canViewSensitive ? selected.sensitive?.cpf ?? "" : "");
+    setCnpjDraft(selected.canViewSensitive ? selected.sensitive?.cnpj ?? "" : "");
     setInternalNotesDraft(selected.internalNotes ?? "");
     setEmployeeFieldErrors({});
   }, [selected]);
@@ -9842,7 +9846,9 @@ export function EmployeeMapPage() {
           primaryPhone: selectedCanEditPeopleData ? primaryPhoneDraft : undefined,
           city: selectedCanEditPeopleData ? cityDraft : undefined,
           stateUf: selectedCanEditPeopleData ? stateUfDraft : undefined,
-          preferredSchedule: selectedCanEditPeopleData ? preferredScheduleDraft : undefined
+          preferredSchedule: selectedCanEditPeopleData ? preferredScheduleDraft : undefined,
+          cpf: selectedCanEditPeopleData ? cpfDraft : undefined,
+          cnpj: selectedCanEditPeopleData ? cnpjDraft : undefined
         })
       });
       setEmployeeRows((items) => items.map((employee) => (employee.id === payload.data.id ? payload.data : employee)));
@@ -10210,6 +10216,14 @@ export function EmployeeMapPage() {
 	                              <FormInput label="Cidade" value={cityDraft} onChange={setCityDraft} error={employeeFieldErrors.city} />
 	                              <FormInput label="Estado/UF" value={stateUfDraft} onChange={setStateUfDraft} error={employeeFieldErrors.stateUf} />
 	                              <FormInput label="Preferência de horário" value={preferredScheduleDraft} onChange={setPreferredScheduleDraft} error={employeeFieldErrors.preferredSchedule} />
+	                            </div>
+	                          </ProfileSection>
+	                        ) : null}
+	                        {selectedCanEditPeopleData ? (
+	                          <ProfileSection title="Documentos fiscais">
+	                            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+	                              <FormInput label="CPF" value={cpfDraft} onChange={setCpfDraft} error={employeeFieldErrors.cpf} inputMode="numeric" />
+	                              <FormInput label="CNPJ" value={cnpjDraft} onChange={setCnpjDraft} error={employeeFieldErrors.cnpj} inputMode="numeric" />
 	                            </div>
 	                          </ProfileSection>
 	                        ) : null}

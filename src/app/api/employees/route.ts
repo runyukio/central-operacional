@@ -43,7 +43,9 @@ const updateSchema = z.object({
   primaryPhone: z.string().trim().optional(),
   city: z.string().trim().optional(),
   stateUf: z.string().trim().optional(),
-  preferredSchedule: z.string().trim().optional()
+  preferredSchedule: z.string().trim().optional(),
+  cpf: z.string().trim().optional(),
+  cnpj: z.string().trim().optional()
 });
 
 export async function GET(request: Request) {
