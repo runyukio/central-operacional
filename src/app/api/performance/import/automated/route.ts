@@ -24,7 +24,7 @@ export async function POST(request: Request) {
         }, { status: 400 });
       }
       const coverage = summarizePerformanceRowSets(rowSets);
-      if (!coverage.hasProduction || !coverage.hasVolume) {
+      if (!coverage.hasProduction && !coverage.hasVolume) {
         return NextResponse.json(buildIncompleteImportResponse(coverage), { status: 400 });
       }
 
@@ -42,7 +42,7 @@ export async function POST(request: Request) {
           updatedRows: result.updatedRows
         });
       }
-      return NextResponse.json(buildAutomatedImportResponse(batchId, imports));
+      return NextResponse.json(buildAutomatedImportResponse(batchId, imports, coverage));
     }
 
     const formData = await request.formData();
@@ -60,7 +60,7 @@ export async function POST(request: Request) {
       rowSets.push({ fileName: file.name, rows: readRowsFromWorkbook(await file.arrayBuffer()) });
     }
     const coverage = summarizePerformanceRowSets(rowSets);
-    if (!coverage.hasProduction || !coverage.hasVolume) {
+    if (!coverage.hasProduction && !coverage.hasVolume) {
       return NextResponse.json(buildIncompleteImportResponse(coverage), { status: 400 });
     }
 
@@ -79,7 +79,7 @@ export async function POST(request: Request) {
       });
     }
 
-    return NextResponse.json(buildAutomatedImportResponse(batchId, imports));
+    return NextResponse.json(buildAutomatedImportResponse(batchId, imports, coverage));
   } catch (error) {
     if (error instanceof PerformanceError) {
       return NextResponse.json({ success: false, error: error.message, message: error.message }, { status: error.status });
@@ -208,7 +208,7 @@ function buildIncompleteImportResponse(coverage: ReturnType<typeof summarizePerf
   const missing = [];
   if (!coverage.hasProduction) missing.push("produção/output (submit)");
   if (!coverage.hasVolume) missing.push("volume/input (enqueue)");
-  const message = `Importação automatizada incompleta. Envie no mesmo upload as bases de ${missing.join(" e ")}.`;
+  const message = `Importação automatizada sem dados reconhecidos. Envie uma base válida de ${missing.join(" ou ")}.`;
   return {
     success: false,
     error: message,
@@ -225,11 +225,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function buildAutomatedImportResponse(
   batchId: string | undefined,
-  imports: Array<{ fileName: string; importedRows: number; productionRows: number; volumeRows: number; createdRows: number; updatedRows: number }>
+  imports: Array<{ fileName: string; importedRows: number; productionRows: number; volumeRows: number; createdRows: number; updatedRows: number }>,
+  coverage: ReturnType<typeof summarizePerformanceRowSets>
 ) {
   return {
     success: true,
     batchId,
+    hasProduction: coverage.hasProduction,
+    hasVolume: coverage.hasVolume,
+    warnings: buildCoverageWarnings(coverage),
     files: imports,
     importedRows: imports.reduce((sum, item) => sum + item.importedRows, 0),
     productionRows: imports.reduce((sum, item) => sum + item.productionRows, 0),
@@ -237,6 +241,13 @@ function buildAutomatedImportResponse(
     createdRows: imports.reduce((sum, item) => sum + item.createdRows, 0),
     updatedRows: imports.reduce((sum, item) => sum + item.updatedRows, 0)
   };
+}
+
+function buildCoverageWarnings(coverage: ReturnType<typeof summarizePerformanceRowSets>) {
+  const warnings = [];
+  if (!coverage.hasProduction) warnings.push("Upload sem produção/output: apenas input/enqueue foi importado.");
+  if (!coverage.hasVolume) warnings.push("Upload sem input/enqueue: apenas produção/output foi importada.");
+  return warnings;
 }
 
 function readRowsFromWorkbook(buffer: ArrayBuffer) {
