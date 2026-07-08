@@ -12491,7 +12491,25 @@ function PerformanceProductionTooltip({ active, payload, label }: { active?: boo
 }
 
 export function PerformancePage() {
-  return <PerformanceProductionPage />;
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        icon={Trophy}
+        title="Performance"
+        description="Reconstruindo"
+      />
+      <div className="rounded-2xl border border-border bg-white shadow-soft">
+        <div className="flex min-h-[360px] flex-col items-center justify-center gap-5 text-center">
+          <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-blue-100 bg-blue-50 text-blue-600 shadow-soft">
+            <Wrench className="h-8 w-8" />
+          </div>
+          <div>
+            <p className="text-3xl font-black text-navy-950">Reconstruindo</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function PerformanceLegacyPage() {
