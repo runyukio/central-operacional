@@ -321,8 +321,8 @@ export async function getMyBillingInvoice(actor: Actor, referenceMonthInput?: st
   };
 }
 
-export async function getEmployeeBillingPreview(employeeId: string) {
-  const referenceMonth = normalizeBillingMonth(DEFAULT_BILLING_REFERENCE_MONTH);
+export async function getEmployeeBillingPreview(employeeId: string, referenceMonthInput = DEFAULT_BILLING_REFERENCE_MONTH) {
+  const referenceMonth = normalizeBillingMonth(referenceMonthInput);
   if (!isBillingMonthAvailable(referenceMonth)) return null;
   const employee = await prisma.employeeProfile.findFirst({
     where: { id: employeeId, deletedAt: null },

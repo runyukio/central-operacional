@@ -2,7 +2,7 @@ import { Prisma, type EquipmentStatus, type RequestStatus, type ScheduleStatus, 
 
 import type { Actor } from "@/lib/mock-db";
 import { createNotFoundError, createPermissionError, createServerError, type ApiErrorPayload } from "@/lib/api-errors";
-import { getEmployeeBillingPreview } from "@/lib/billing-service";
+import { DEFAULT_BILLING_REFERENCE_MONTH, getEmployeeBillingPreview } from "@/lib/billing-service";
 import { getDefaultDatePeriod } from "@/lib/default-date-range";
 import { getPerformanceDashboard } from "@/lib/performance-service";
 import { canAccessPerformanceWfh, normalizeRole } from "@/lib/permissions";
@@ -115,7 +115,7 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
       profileSection("equipment", employee.id, buildEquipmentSummary(employee.id)),
       profileSection("mood", employee.id, buildMoodSummary(employee.id, period)),
       profileSection("performance", employee.id, buildPerformanceSummary(actor, viewer, employee, period)),
-      profileSection("billing_preview", employee.id, getEmployeeBillingPreview(employee.id))
+      profileSection("billing_preview", employee.id, getEmployeeBillingPreview(employee.id, DEFAULT_BILLING_REFERENCE_MONTH))
     ]);
 
     const viewerRole = normalizeRole(viewer.role.name);
