@@ -24,7 +24,7 @@ export async function POST(request: Request) {
         }, { status: 400 });
       }
       const coverage = summarizePerformanceRowSets(rowSets);
-      if (!coverage.hasProduction && !coverage.hasVolume) {
+      if (!coverage.hasProduction || !coverage.hasVolume) {
         return NextResponse.json(buildIncompleteImportResponse(coverage), { status: 400 });
       }
 
@@ -60,7 +60,7 @@ export async function POST(request: Request) {
       rowSets.push({ fileName: file.name, rows: readRowsFromWorkbook(await file.arrayBuffer()) });
     }
     const coverage = summarizePerformanceRowSets(rowSets);
-    if (!coverage.hasProduction && !coverage.hasVolume) {
+    if (!coverage.hasProduction || !coverage.hasVolume) {
       return NextResponse.json(buildIncompleteImportResponse(coverage), { status: 400 });
     }
 
@@ -167,9 +167,9 @@ function classifyPerformanceRow(row: Record<string, unknown>) {
   const hasAgent = Boolean(text(performanceRowValue(normalizedRow, ["agentes", "agente", "agentname", "wb_login", "wb login"])));
   const hasSubmit = Boolean(text(performanceRowValue(normalizedRow, ["submit_num", "submit num", "submit"])));
   const hasInput = Boolean(text(performanceRowValue(normalizedRow, ["enqueue", "enqueue_num", "enqueue num", "input", "input_num", "input num", "进审量", "recebidos"])));
-  const hasQueue = Boolean(text(performanceRowValue(normalizedRow, ["id-queue_id", "队列id-queue_id", "queue_id", "queue id", "fila", "queue"])));
-  const hasProductionTime = Boolean(text(performanceRowValue(normalizedRow, ["bz_time", "bz time", "brasiltime/hour", "brasiltime hour"])));
-  const hasVolumeTime = Boolean(text(performanceRowValue(normalizedRow, ["bz_enqueue_time", "bz enqueue time", "brasiltime/hour", "brasiltime hour", "bz_time", "bz time"])));
+  const hasQueue = Boolean(text(performanceRowValue(normalizedRow, ["id-queue_id", "id_queue_id", "id queue id", "队列id-queue_id", "队列id", "queue_id", "queueid", "queue id", "fila", "queue"])));
+  const hasProductionTime = Boolean(text(performanceRowValue(normalizedRow, ["bz_time", "bz time", "brasiltime/hour", "brasiltime hour", "br_time(hour)", "br time(hour)", "br_time", "br time"])));
+  const hasVolumeTime = Boolean(text(performanceRowValue(normalizedRow, ["bz_enqueue_time", "bz enqueue time", "bz_enqueue_time(hour)", "brasiltime/hour", "brasiltime hour", "br_time(hour)", "br time(hour)", "br_time", "br time", "bz_time", "bz time"])));
 
   if (hasInput && hasQueue && hasVolumeTime && !hasAgent && !hasSubmit) return "volume";
   if (hasSubmit && hasAgent && hasQueue && hasProductionTime) return "production";
@@ -208,7 +208,7 @@ function buildIncompleteImportResponse(coverage: ReturnType<typeof summarizePerf
   const missing = [];
   if (!coverage.hasProduction) missing.push("produção/output (submit)");
   if (!coverage.hasVolume) missing.push("volume/input (enqueue)");
-  const message = `Importação automatizada sem dados reconhecidos. Envie uma base válida de ${missing.join(" ou ")}.`;
+  const message = `Importação automatizada incompleta. Envie produção/output (submit) e volume/input (enqueue) no mesmo upload. Faltando: ${missing.join(" e ")}.`;
   return {
     success: false,
     error: message,

@@ -245,11 +245,11 @@ const attendanceMetricSelect = {
   employeeId: true
 } satisfies Prisma.AttendanceRecordSelect;
 const productionAgentHeaders = ["agentes", "agente", "agentname", "wb_login", "wb login"];
-const productionTimeHeaders = ["bz_time", "bz time", "brasiltime/hour", "brasiltime hour"];
-const productionVolumeTimeHeaders = ["bz_enqueue_time", "bz enqueue time", ...productionTimeHeaders];
+const productionTimeHeaders = ["bz_time", "bz time", "brasiltime/hour", "brasiltime hour", "br_time(hour)", "br time(hour)", "br_time", "br time"];
+const productionVolumeTimeHeaders = ["bz_enqueue_time", "bz enqueue time", "bz_enqueue_time(hour)", ...productionTimeHeaders];
 const productionDayHeaders = ["bz_day", "bz day"];
 const productionVolumeDayHeaders = ["bz_enqueue_day", "bz enqueue day", ...productionDayHeaders];
-const productionQueueHeaders = ["id-queue_id", "队列id-queue_id", "queue_id", "queue id", "fila", "queue"];
+const productionQueueHeaders = ["id-queue_id", "id_queue_id", "id queue id", "队列id-queue_id", "队列id", "queue_id", "queueid", "queue id", "fila", "queue"];
 const productionInputHeaders = ["enqueue", "enqueue_num", "enqueue num", "input", "input_num", "input num", "进审量", "recebidos"];
 
 export class PerformanceError extends Error {
