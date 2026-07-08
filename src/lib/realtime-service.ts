@@ -12,7 +12,7 @@ import {
 } from "@/lib/attendance-calculation";
 import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import type { Actor } from "@/lib/mock-db";
-import { canAccessRealTime } from "@/lib/permissions";
+import { canAccessRealTime, canAccessRealTimeAgentsReports, canAccessRealTimeQueues } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { resolveQueueReference } from "@/lib/queue-dictionary";
 import { getQueueReportMetadataById } from "@/lib/queue-report-metadata";
@@ -53,6 +53,24 @@ export type RealtimeExportQuery = RealtimeSnapshotOptions & {
   queueId?: string | null;
   sortBy?: string | null;
 };
+
+function realTimePermissionUser(actor: Actor) {
+  return {
+    role: actor.role,
+    email: actor.email,
+    name: actor.name,
+    roleTitle: actor.roleTitle,
+    jobTitle: actor.jobTitle,
+    skill: actor.skill,
+    status: "ACTIVE"
+  };
+}
+
+function canRequestRealtimeView(actor: Actor, view: "agents" | "queues" | "both") {
+  const user = realTimePermissionUser(actor);
+  if (view === "queues") return canAccessRealTimeQueues(user);
+  return canAccessRealTimeAgentsReports(user);
+}
 
 export type RealtimeAiSnapshotQuery = RealtimeExportQuery & {
   reportLob?: string | null;
@@ -554,7 +572,8 @@ export async function backfillRealtimeCycleSummaries(options: RealtimeSummaryBac
 }
 
 export async function getRealtimeSnapshot(actor: Actor, options: RealtimeSnapshotOptions = {}) {
-  if (!canAccessRealTime({ role: actor.role, email: actor.email, name: actor.name, roleTitle: actor.roleTitle, jobTitle: actor.jobTitle, skill: actor.skill, status: "ACTIVE" })) {
+  const requestedView = options.view ?? "both";
+  if (!canRequestRealtimeView(actor, requestedView)) {
     return { error: "Você não tem permissão para acessar Real Time.", status: 403 };
   }
 
@@ -589,7 +608,6 @@ export async function getRealtimeSnapshot(actor: Actor, options: RealtimeSnapsho
     };
   }
 
-  const requestedView = options.view ?? "both";
   const [queueRealtime, agentRealtime] = await Promise.all([
     requestedView === "agents" ? Promise.resolve(emptyQueueRealtimeView()) : buildQueueRealtimeView(options),
     requestedView === "queues" ? Promise.resolve(emptyAgentRealtimeView()) : buildAgentRealtimeView(actor, options)
@@ -623,11 +641,11 @@ export async function getRealtimeSnapshot(actor: Actor, options: RealtimeSnapsho
 }
 
 export async function getRealtimeLatestStatus(actor: Actor, options: RealtimeSnapshotOptions = {}) {
-  if (!canAccessRealTime({ role: actor.role, email: actor.email, name: actor.name, roleTitle: actor.roleTitle, jobTitle: actor.jobTitle, skill: actor.skill, status: "ACTIVE" })) {
+  const requestedView = options.view ?? "both";
+  if (!canRequestRealtimeView(actor, requestedView)) {
     return { error: "Você não tem permissão para acessar Real Time.", status: 403 };
   }
 
-  const requestedView = options.view ?? "both";
   const [queueLatest, agentLatest] = await Promise.all([
     requestedView === "agents" ? Promise.resolve(null) : latestRealtimeCycle("QUEUE"),
     requestedView === "queues" ? Promise.resolve(null) : latestRealtimeCycle("AGENT")
@@ -1682,7 +1700,8 @@ export async function listRealtimeImports(actor: Actor) {
 }
 
 export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQuery): Promise<XlsxExportPayload | { error: string; status: number }> {
-  const snapshot = await getRealtimeSnapshot(actor, { cycleDownload: query.cycleDownload, view: "both" });
+  const exportView = query.view === "queues" ? "queues" : "both";
+  const snapshot = await getRealtimeSnapshot(actor, { cycleDownload: query.cycleDownload, view: exportView });
   if ("error" in snapshot && snapshot.error) return { error: snapshot.error, status: snapshot.status ?? 400 };
   const snapshotData = "data" in snapshot ? snapshot.data : null;
   if (!snapshotData) return { error: "Não foi possível exportar Real Time.", status: 500 };
@@ -1696,224 +1715,242 @@ export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQu
   const unfilteredUnmatched = agentView.rows.filter((row) => row.crossingStatus === "Não encontrado");
   const importRows = (await listRealtimeImports(actor));
   const imports = "error" in importRows ? [] : importRows.data;
+  const queueSheets = [
+    {
+      sheetName: "Resumo Filas",
+      headers: ["ciclo_download", "ciclo_anterior", "filas", "input", "output", "aht_medio", "latencia_media", "max_latencia", "backlog", "ok", "estavel", "risco", "estourado", "na"],
+      rows: [[
+        queueView.selectedCycle,
+        queueView.previousCycle || "Sem comparação",
+        queueRows.length,
+        filteredQueueSummary.input,
+        filteredQueueSummary.output,
+        formatDurationFromMs(filteredQueueSummary.ahtMs),
+        formatDurationFromMs(filteredQueueSummary.latencyMs),
+        formatDurationFromMs(filteredQueueSummary.maxLatencyMs),
+        filteredQueueSummary.backlog,
+        queueRows.filter((row) => row.status === "OK").length,
+        queueRows.filter((row) => row.status === "Estável").length,
+        queueRows.filter((row) => row.status === "Risco").length,
+        queueRows.filter((row) => row.status === "Estourado").length,
+        queueRows.filter((row) => row.status === "N/A").length
+      ]]
+    },
+    {
+      sheetName: "Filas",
+      headers: [
+        "ciclo_download",
+        "status_fila",
+        "lob",
+        "queue_id",
+        "queue_name",
+        "sla_target_minutes",
+        "input",
+        "input_delta",
+        "output",
+        "output_delta",
+        "aht_formatado",
+        "aht_delta_formatado",
+        "latency_formatada",
+        "latency_delta_formatada",
+        "max_latency_formatada",
+        "max_latency_delta_formatada",
+        "meta_latency_formatada",
+        "aderencia_latencia",
+        "backlog",
+        "backlog_delta"
+      ],
+      rows: queueRows.map((row) => [
+        queueView.selectedCycle,
+        row.status,
+        row.lob,
+        row.queueId || "Sem Fila ID",
+        row.queueName,
+        row.slaTargetMinutes ?? "Sem meta",
+        row.current.input,
+        row.deltas.input ?? "Sem comparação",
+        row.current.output,
+        row.deltas.output ?? "Sem comparação",
+        formatDurationFromMs(row.current.ahtMs),
+        row.deltas.ahtMs === null ? "Sem comparação" : formatMetricValue(row.deltas.ahtMs, "duration", true),
+        formatDurationFromMs(row.current.latencyMs),
+        row.deltas.latencyMs === null ? "Sem comparação" : formatMetricValue(row.deltas.latencyMs, "duration", true),
+        formatDurationFromMs(row.current.maxLatencyMs),
+        row.deltas.maxLatencyMs === null ? "Sem comparação" : formatMetricValue(row.deltas.maxLatencyMs, "duration", true),
+        formatSlaTargetMinutes(row.slaTargetMinutes),
+        calculateLatencyAdherence(row.current.maxLatencyMs, row.slaTargetMinutes),
+        row.current.backlog,
+        row.deltas.backlog ?? "Sem comparação"
+      ])
+    },
+    {
+      sheetName: "Detalhe por Fila",
+      headers: ["queue_id", "queue_name", "lob", "sla_target_minutes", "meta_latency_formatada", "ciclo_download", "status_fila", "aderencia_latencia", "input", "output", "aht_formatado", "latency_formatada", "max_latency_formatada", "backlog"],
+      rows: queueRows.flatMap((row) => row.history.map((item) => [
+        row.queueId || "Sem Fila ID",
+        row.queueName,
+        row.lob,
+        row.slaTargetMinutes ?? "Sem meta",
+        formatSlaTargetMinutes(row.slaTargetMinutes),
+        item.cycleDownload,
+        item.status,
+        calculateLatencyAdherence(item.maxLatencyMs, row.slaTargetMinutes),
+        item.input,
+        item.output,
+        formatDurationFromMs(item.ahtMs),
+        formatDurationFromMs(item.latencyMs),
+        formatDurationFromMs(item.maxLatencyMs),
+        item.backlog
+      ]))
+    },
+    {
+      sheetName: "Filas N/A",
+      headers: ["ciclo_download", "queue_id", "queue_name", "meta_latency_formatada", "aderencia_latencia", "input", "output", "aht_formatado", "latency_formatada", "max_latency_formatada", "backlog"],
+      rows: queueRows.filter((row) => row.lob === "N/A").map((row) => [
+        queueView.selectedCycle,
+        row.queueId || "Sem Fila ID",
+        row.queueName,
+        formatSlaTargetMinutes(row.slaTargetMinutes),
+        calculateLatencyAdherence(row.current.maxLatencyMs, row.slaTargetMinutes),
+        row.current.input,
+        row.current.output,
+        formatDurationFromMs(row.current.ahtMs),
+        formatDurationFromMs(row.current.latencyMs),
+        formatDurationFromMs(row.current.maxLatencyMs),
+        row.current.backlog
+      ])
+    }
+  ];
+
+  const agentSheets = [
+    {
+      sheetName: "Agentes Real Time",
+      headers: [
+        "ciclo_download",
+        "agente",
+        "wb_login",
+        "status_atual",
+        "status_colaborador",
+        "lob",
+        "supervisor",
+        "turno",
+        "skill",
+        "cargo_funcao",
+        "submit",
+        "aht_formatado",
+        "moderation_formatada",
+        "timeout_returns",
+        "refresh_returns"
+      ],
+      rows: rows.map((row) => [
+        agentView.selectedCycle,
+        row.displayName,
+        row.wbLogin || row.rawWbLogin,
+        row.presenceStatus,
+        row.employeeStatus,
+        row.lob,
+        row.supervisor,
+        row.shift,
+        row.skill,
+        row.roleTitle,
+        row.current.submit,
+        formatDurationFromMs(row.current.ahtMs),
+        formatDurationFromMs(row.current.moderationMs),
+        row.current.timeout,
+        row.current.refresh
+      ])
+    },
+    {
+      sheetName: "Historico por agente",
+      headers: ["agente", "wb_login", "ciclo_download", "submit", "aht", "moderacao", "timeout", "refresh"],
+      rows: rows.flatMap((row) => row.history.map((item) => [
+        row.displayName,
+        row.wbLogin || row.rawWbLogin,
+        item.cycleDownload,
+        item.submit,
+        formatDurationFromMs(item.ahtMs),
+        formatDurationFromMs(item.moderationMs),
+        item.timeout,
+        item.refresh
+      ]))
+    },
+    {
+      sheetName: "Nao encontrados",
+      headers: ["ciclo_download", "wb_login", "submit", "aht", "moderacao", "timeout", "refresh"],
+      rows: unfilteredUnmatched.map((row) => [
+        agentView.selectedCycle,
+        row.rawWbLogin,
+        row.current.submit,
+        formatDurationFromMs(row.current.ahtMs),
+        formatDurationFromMs(row.current.moderationMs),
+        row.current.timeout,
+        row.current.refresh
+      ])
+    },
+    {
+      sheetName: "Filas tecnicas",
+      headers: ["ciclo_download", "wb_login", "queue_id", "queue_name", "submit", "aht_formatado", "moderation_formatada", "timeout_returns", "refresh_returns"],
+      rows: rows.flatMap((row) => row.queueBreakdown.map((queue) => [
+        agentView.selectedCycle,
+        row.wbLogin || row.rawWbLogin,
+        queue.queueId || "Sem Fila ID",
+        queue.queueName,
+        queue.submit,
+        formatDurationFromMs(queue.ahtMs),
+        formatDurationFromMs(queue.moderationMs),
+        queue.timeout,
+        queue.refresh
+      ]))
+    },
+    {
+      sheetName: "Importacoes",
+      headers: ["arquivo", "ciclo_download", "importado_em", "linhas_totais", "linhas_validas", "linhas_erro", "criados", "atualizados", "wbs_encontrados", "wbs_nao_encontrados", "filas_mapeadas", "filas_nao_mapeadas", "status"],
+      rows: imports.map((item) => [
+        item.fileName,
+        item.cycleDownload,
+        item.importedAtLabel,
+        item.rowsTotal,
+        item.rowsValid,
+        item.rowsError,
+        item.rowsInserted,
+        item.rowsUpdated,
+        item.matchedEmployees,
+        item.unmatchedEmployees,
+        item.mappedQueues,
+        item.unmappedQueues,
+        item.status
+      ])
+    }
+  ];
 
   return {
     fileName: `real_time_${query.view === "queues" ? "filas" : "agentes"}_${agentView.selectedCycle || queueView.selectedCycle || "sem_ciclo"}.xlsx`,
     sheetName: "Resumo",
-    headers: ["ciclo_download", "ciclo_anterior", "submit_total", "aht_medio", "moderacao_total", "timeout", "refresh"],
-    rows: [[
-      agentView.selectedCycle,
-      agentView.previousCycle || "Sem comparação",
-      filteredSummary.submit,
-      formatDurationFromMs(filteredSummary.ahtMs),
-      formatDurationFromMs(filteredSummary.moderationMs),
-      filteredSummary.timeout,
-      filteredSummary.refresh
-    ]],
-    sheets: [
-      {
-        sheetName: "Resumo Filas",
-        headers: ["ciclo_download", "ciclo_anterior", "filas", "input", "output", "aht_medio", "latencia_media", "max_latencia", "backlog", "ok", "estavel", "risco", "estourado", "na"],
-        rows: [[
-          queueView.selectedCycle,
-          queueView.previousCycle || "Sem comparação",
-          queueRows.length,
-          filteredQueueSummary.input,
-          filteredQueueSummary.output,
-          formatDurationFromMs(filteredQueueSummary.ahtMs),
-          formatDurationFromMs(filteredQueueSummary.latencyMs),
-          formatDurationFromMs(filteredQueueSummary.maxLatencyMs),
-          filteredQueueSummary.backlog,
-          queueRows.filter((row) => row.status === "OK").length,
-          queueRows.filter((row) => row.status === "Estável").length,
-          queueRows.filter((row) => row.status === "Risco").length,
-          queueRows.filter((row) => row.status === "Estourado").length,
-          queueRows.filter((row) => row.status === "N/A").length
-        ]]
-      },
-      {
-        sheetName: "Filas",
-        headers: [
-          "ciclo_download",
-          "status_fila",
-          "lob",
-          "queue_id",
-          "queue_name",
-          "sla_target_minutes",
-          "input",
-          "input_delta",
-          "output",
-          "output_delta",
-          "aht_formatado",
-          "aht_delta_formatado",
-          "latency_formatada",
-          "latency_delta_formatada",
-          "max_latency_formatada",
-          "max_latency_delta_formatada",
-          "meta_latency_formatada",
-          "aderencia_latencia",
-          "backlog",
-          "backlog_delta"
-        ],
-        rows: queueRows.map((row) => [
-          queueView.selectedCycle,
-          row.status,
-          row.lob,
-          row.queueId || "Sem Fila ID",
-          row.queueName,
-          row.slaTargetMinutes ?? "Sem meta",
-          row.current.input,
-          row.deltas.input ?? "Sem comparação",
-          row.current.output,
-          row.deltas.output ?? "Sem comparação",
-          formatDurationFromMs(row.current.ahtMs),
-          row.deltas.ahtMs === null ? "Sem comparação" : formatMetricValue(row.deltas.ahtMs, "duration", true),
-          formatDurationFromMs(row.current.latencyMs),
-          row.deltas.latencyMs === null ? "Sem comparação" : formatMetricValue(row.deltas.latencyMs, "duration", true),
-          formatDurationFromMs(row.current.maxLatencyMs),
-          row.deltas.maxLatencyMs === null ? "Sem comparação" : formatMetricValue(row.deltas.maxLatencyMs, "duration", true),
-          formatSlaTargetMinutes(row.slaTargetMinutes),
-          calculateLatencyAdherence(row.current.maxLatencyMs, row.slaTargetMinutes),
-          row.current.backlog,
-          row.deltas.backlog ?? "Sem comparação"
-        ])
-      },
-      {
-        sheetName: "Detalhe por Fila",
-        headers: ["queue_id", "queue_name", "lob", "sla_target_minutes", "meta_latency_formatada", "ciclo_download", "status_fila", "aderencia_latencia", "input", "output", "aht_formatado", "latency_formatada", "max_latency_formatada", "backlog"],
-        rows: queueRows.flatMap((row) => row.history.map((item) => [
-          row.queueId || "Sem Fila ID",
-          row.queueName,
-          row.lob,
-          row.slaTargetMinutes ?? "Sem meta",
-          formatSlaTargetMinutes(row.slaTargetMinutes),
-          item.cycleDownload,
-          item.status,
-          calculateLatencyAdherence(item.maxLatencyMs, row.slaTargetMinutes),
-          item.input,
-          item.output,
-          formatDurationFromMs(item.ahtMs),
-          formatDurationFromMs(item.latencyMs),
-          formatDurationFromMs(item.maxLatencyMs),
-          item.backlog
-        ]))
-      },
-      {
-        sheetName: "Filas N/A",
-        headers: ["ciclo_download", "queue_id", "queue_name", "meta_latency_formatada", "aderencia_latencia", "input", "output", "aht_formatado", "latency_formatada", "max_latency_formatada", "backlog"],
-        rows: queueRows.filter((row) => row.lob === "N/A").map((row) => [
-          queueView.selectedCycle,
-          row.queueId || "Sem Fila ID",
-          row.queueName,
-          formatSlaTargetMinutes(row.slaTargetMinutes),
-          calculateLatencyAdherence(row.current.maxLatencyMs, row.slaTargetMinutes),
-          row.current.input,
-          row.current.output,
-          formatDurationFromMs(row.current.ahtMs),
-          formatDurationFromMs(row.current.latencyMs),
-          formatDurationFromMs(row.current.maxLatencyMs),
-          row.current.backlog
-        ])
-      },
-      {
-        sheetName: "Agentes Real Time",
-        headers: [
-          "ciclo_download",
-          "agente",
-          "wb_login",
-          "status_atual",
-          "status_colaborador",
-          "lob",
-          "supervisor",
-          "turno",
-          "skill",
-          "cargo_funcao",
-          "submit",
-          "aht_formatado",
-          "moderation_formatada",
-          "timeout_returns",
-          "refresh_returns"
-        ],
-        rows: rows.map((row) => [
-          agentView.selectedCycle,
-          row.displayName,
-          row.wbLogin || row.rawWbLogin,
-          row.presenceStatus,
-          row.employeeStatus,
-          row.lob,
-          row.supervisor,
-          row.shift,
-          row.skill,
-          row.roleTitle,
-          row.current.submit,
-          formatDurationFromMs(row.current.ahtMs),
-          formatDurationFromMs(row.current.moderationMs),
-          row.current.timeout,
-          row.current.refresh
-        ])
-      },
-      {
-        sheetName: "Historico por agente",
-        headers: ["agente", "wb_login", "ciclo_download", "submit", "aht", "moderacao", "timeout", "refresh"],
-        rows: rows.flatMap((row) => row.history.map((item) => [
-          row.displayName,
-          row.wbLogin || row.rawWbLogin,
-          item.cycleDownload,
-          item.submit,
-          formatDurationFromMs(item.ahtMs),
-          formatDurationFromMs(item.moderationMs),
-          item.timeout,
-          item.refresh
-        ]))
-      },
-      {
-        sheetName: "Nao encontrados",
-        headers: ["ciclo_download", "wb_login", "submit", "aht", "moderacao", "timeout", "refresh"],
-        rows: unfilteredUnmatched.map((row) => [
-          agentView.selectedCycle,
-          row.rawWbLogin,
-          row.current.submit,
-          formatDurationFromMs(row.current.ahtMs),
-          formatDurationFromMs(row.current.moderationMs),
-          row.current.timeout,
-          row.current.refresh
-        ])
-      },
-      {
-        sheetName: "Filas tecnicas",
-        headers: ["ciclo_download", "wb_login", "queue_id", "queue_name", "submit", "aht_formatado", "moderation_formatada", "timeout_returns", "refresh_returns"],
-        rows: rows.flatMap((row) => row.queueBreakdown.map((queue) => [
-          agentView.selectedCycle,
-          row.wbLogin || row.rawWbLogin,
-          queue.queueId || "Sem Fila ID",
-          queue.queueName,
-          queue.submit,
-          formatDurationFromMs(queue.ahtMs),
-          formatDurationFromMs(queue.moderationMs),
-          queue.timeout,
-          queue.refresh
-        ]))
-      },
-      {
-        sheetName: "Importacoes",
-        headers: ["arquivo", "ciclo_download", "importado_em", "linhas_totais", "linhas_validas", "linhas_erro", "criados", "atualizados", "wbs_encontrados", "wbs_nao_encontrados", "filas_mapeadas", "filas_nao_mapeadas", "status"],
-        rows: imports.map((item) => [
-          item.fileName,
-          item.cycleDownload,
-          item.importedAtLabel,
-          item.rowsTotal,
-          item.rowsValid,
-          item.rowsError,
-          item.rowsInserted,
-          item.rowsUpdated,
-          item.matchedEmployees,
-          item.unmatchedEmployees,
-          item.mappedQueues,
-          item.unmappedQueues,
-          item.status
-        ])
-      }
-    ]
+    headers: query.view === "queues"
+      ? ["ciclo_download", "ciclo_anterior", "filas", "input", "output", "aht_medio", "latencia_media", "max_latencia", "backlog"]
+      : ["ciclo_download", "ciclo_anterior", "submit_total", "aht_medio", "moderacao_total", "timeout", "refresh"],
+    rows: query.view === "queues"
+      ? [[
+        queueView.selectedCycle,
+        queueView.previousCycle || "Sem comparação",
+        queueRows.length,
+        filteredQueueSummary.input,
+        filteredQueueSummary.output,
+        formatDurationFromMs(filteredQueueSummary.ahtMs),
+        formatDurationFromMs(filteredQueueSummary.latencyMs),
+        formatDurationFromMs(filteredQueueSummary.maxLatencyMs),
+        filteredQueueSummary.backlog
+      ]]
+      : [[
+        agentView.selectedCycle,
+        agentView.previousCycle || "Sem comparação",
+        filteredSummary.submit,
+        formatDurationFromMs(filteredSummary.ahtMs),
+        formatDurationFromMs(filteredSummary.moderationMs),
+        filteredSummary.timeout,
+        filteredSummary.refresh
+      ]],
+    sheets: query.view === "queues" ? queueSheets : [...queueSheets, ...agentSheets]
   };
 }
 

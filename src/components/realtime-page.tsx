@@ -364,12 +364,22 @@ const defaultQueueFilters: QueueFilters = { search: "", lob: "MAPPED", status: "
 const defaultQueueSort: QueueSortState = { key: "backlog", direction: "desc" };
 const numericQueueSortKeys = new Set<QueueSortKey>(["input", "output", "aht", "latency", "maxLatency", "slaTarget", "backlog"]);
 
-export function RealTimePage() {
+type RealTimePageProps = {
+  userRole?: string | null;
+};
+
+function isClientRole(role?: string | null) {
+  const normalized = String(role ?? "").trim().toUpperCase();
+  return normalized === "CLIENT" || normalized === "CLIENTE";
+}
+
+export function RealTimePage({ userRole }: RealTimePageProps) {
+  const clientQueuesOnly = isClientRole(userRole);
   const [payload, setPayload] = useState<RealTimePayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState<"agents" | "queues" | "report">("agents");
+  const [activeTab, setActiveTab] = useState<"agents" | "queues" | "report">(clientQueuesOnly ? "queues" : "agents");
   const [selectedCycle, setSelectedCycle] = useState("");
   const [followLatestCycle, setFollowLatestCycle] = useState(true);
   const [queueFilters, setQueueFilters] = useState<QueueFilters>(defaultQueueFilters);
@@ -385,7 +395,9 @@ export function RealTimePage() {
   const [importsLoading, setImportsLoading] = useState(false);
   const snapshotAbortRef = useRef<AbortController | null>(null);
 
-  async function loadSnapshot(cycle = selectedCycle, background = false, view: "agents" | "queues" | "both" = activeTab === "agents" ? "agents" : activeTab === "report" ? "both" : "queues") {
+  const effectiveTab = clientQueuesOnly ? "queues" : activeTab;
+
+  async function loadSnapshot(cycle = selectedCycle, background = false, view: "agents" | "queues" | "both" = effectiveTab === "agents" ? "agents" : effectiveTab === "report" ? "both" : "queues") {
     snapshotAbortRef.current?.abort();
     const controller = new AbortController();
     snapshotAbortRef.current = controller;
@@ -433,20 +445,24 @@ export function RealTimePage() {
 
   function exportXlsx() {
     const params = activeTab !== "agents"
-      ? buildQueueQueryParams(selectedCycle || queueView?.selectedCycle || "", activeTab === "report" ? { search: reportSearch, lob: reportLob === "TNS" ? "" : reportLob, status: "", slaTarget: "", queueId: "" } : queueFilters)
+      ? buildQueueQueryParams(selectedCycle || queueView?.selectedCycle || "", effectiveTab === "report" ? { search: reportSearch, lob: reportLob === "TNS" ? "" : reportLob, status: "", slaTarget: "", queueId: "" } : queueFilters)
       : buildAgentQueryParams(selectedCycle || agentView?.selectedCycle || "", agentFilters);
-    params.set("view", activeTab === "agents" ? "agents" : "queues");
-    params.set("sortBy", activeTab === "agents" ? `${agentSort.key}_${agentSort.direction}` : `${queueSort.key}_${queueSort.direction}`);
+    params.set("view", effectiveTab === "agents" ? "agents" : "queues");
+    params.set("sortBy", effectiveTab === "agents" ? `${agentSort.key}_${agentSort.direction}` : `${queueSort.key}_${queueSort.direction}`);
     window.location.assign(`/api/realtime/export?${params.toString()}`);
   }
 
   useEffect(() => {
-    void loadSnapshot(selectedCycle, false, activeTab === "agents" ? "agents" : activeTab === "report" ? "both" : "queues");
+    if (clientQueuesOnly && activeTab !== "queues") {
+      setActiveTab("queues");
+      return;
+    }
+    void loadSnapshot(selectedCycle, false, effectiveTab === "agents" ? "agents" : effectiveTab === "report" ? "both" : "queues");
     return () => {
       snapshotAbortRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCycle, activeTab]);
+  }, [selectedCycle, activeTab, clientQueuesOnly]);
 
   const summary = payload?.data.summary;
   const queueView = payload?.data.queueView;
@@ -503,9 +519,9 @@ export function RealTimePage() {
     }).sort((a, b) => compareAgentRows(a, b, agentSort));
   }, [agentFilters, agentSort, agentView?.rows]);
 
-  const cycles = activeTab === "agents" ? agentView?.cycles ?? [] : queueView?.cycles ?? [];
+  const cycles = effectiveTab === "agents" ? agentView?.cycles ?? [] : queueView?.cycles ?? [];
   const selectedCycleExists = Boolean(selectedCycle && cycles.some((cycle) => cycle.value === selectedCycle));
-  const selectedCycleValue = selectedCycleExists ? selectedCycle : (activeTab === "agents" ? agentView?.selectedCycle : queueView?.selectedCycle) || "";
+  const selectedCycleValue = selectedCycleExists ? selectedCycle : (effectiveTab === "agents" ? agentView?.selectedCycle : queueView?.selectedCycle) || "";
   const selectedCycleIndex = cycles.findIndex((cycle) => cycle.value === selectedCycleValue);
   const olderCycle = selectedCycleIndex >= 0 ? cycles[selectedCycleIndex + 1]?.value ?? "" : "";
   const newerCycle = selectedCycleIndex > 0 ? cycles[selectedCycleIndex - 1]?.value ?? "" : "";
@@ -544,15 +560,15 @@ export function RealTimePage() {
 
   async function refreshRealtimeSnapshot(background = true) {
     try {
-      const view = activeTab === "agents" ? "agents" : activeTab === "report" ? "both" : "queues";
+      const view = effectiveTab === "agents" ? "agents" : effectiveTab === "report" ? "both" : "queues";
       const params = new URLSearchParams({ view });
       const response = await fetch(`/api/realtime/latest?${params.toString()}`, { cache: "no-store" });
       const json = await response.json();
       if (!response.ok) throw new Error(json.message || json.error || "Não foi possível verificar atualização do Real Time.");
 
       const latestCycleDownload = pickLatestRealtimeCycle(
-        activeTab === "agents" ? json.data?.agents : activeTab === "queues" ? json.data?.queues : json.data?.queues ?? json.data?.agents,
-        activeTab === "report" ? json.data?.agents : null
+        effectiveTab === "agents" ? json.data?.agents : effectiveTab === "queues" ? json.data?.queues : json.data?.queues ?? json.data?.agents,
+        effectiveTab === "report" ? json.data?.agents : null
       );
       const shouldFollowLatest = followLatestCycle || !selectedCycleValue;
       const cycleToRefresh = shouldFollowLatest ? latestCycleDownload : selectedCycleValue;
@@ -575,7 +591,7 @@ export function RealTimePage() {
     }, 60000);
     return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, followLatestCycle, selectedCycleValue]);
+  }, [activeTab, clientQueuesOnly, followLatestCycle, selectedCycleValue]);
 
   useEffect(() => {
     function refreshWhenVisible() {
@@ -590,7 +606,7 @@ export function RealTimePage() {
       document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, followLatestCycle, selectedCycleValue]);
+  }, [activeTab, clientQueuesOnly, followLatestCycle, selectedCycleValue]);
 
   function updateAgentFilter(key: keyof AgentFilters, value: string) {
     setAgentFilters((current) => ({ ...current, [key]: value }));
@@ -621,22 +637,24 @@ export function RealTimePage() {
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-2xl font-black text-navy-950">Real Time</h1>
             <span className={cn("inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-black", summary?.isStale ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-700")}>
-              {summary?.hasData ? (summary.isStale ? (activeTab === "report" ? "Attention" : "Atenção") : (activeTab === "report" ? "Updated" : "Atualizado")) : (activeTab === "report" ? "No data" : "Sem dados")}
+              {summary?.hasData ? (summary.isStale ? (effectiveTab === "report" ? "Attention" : "Atenção") : (effectiveTab === "report" ? "Updated" : "Atualizado")) : (effectiveTab === "report" ? "No data" : "Sem dados")}
             </span>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={() => void openHistory()} className="premium-control inline-flex h-10 items-center gap-2 px-3 text-sm font-extrabold text-navy-950">
-            <History className="h-4 w-4" />
-            {activeTab === "report" ? "History" : "Histórico"}
-          </button>
+          {!clientQueuesOnly ? (
+            <button type="button" onClick={() => void openHistory()} className="premium-control inline-flex h-10 items-center gap-2 px-3 text-sm font-extrabold text-navy-950">
+              <History className="h-4 w-4" />
+              {effectiveTab === "report" ? "History" : "Histórico"}
+            </button>
+          ) : null}
           <button type="button" onClick={exportXlsx} className="premium-control inline-flex h-10 items-center gap-2 px-3 text-sm font-extrabold text-navy-950">
             <Download className="h-4 w-4" />
-            {activeTab === "report" ? "Export XLSX" : "Exportar XLSX"}
+            {effectiveTab === "report" ? "Export XLSX" : "Exportar XLSX"}
           </button>
           <button type="button" onClick={() => void refreshRealtimeSnapshot(true)} className="premium-button inline-flex h-10 items-center gap-2 px-4 text-sm font-extrabold">
             <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} />
-            {activeTab === "report" ? "Refresh" : "Atualizar"}
+            {effectiveTab === "report" ? "Refresh" : "Atualizar"}
           </button>
         </div>
       </div>
@@ -650,27 +668,27 @@ export function RealTimePage() {
             <RealtimeCyclePicker value={selectedCycleValue} cycles={cycles} onChange={(cycle) => changeCycle(cycle)} />
           </label>
           <button type="button" onClick={() => changeCycle(olderCycle)} disabled={!olderCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
-            {activeTab === "report" ? "Previous Cycle" : "Ciclo anterior"}
+            {effectiveTab === "report" ? "Previous Cycle" : "Ciclo anterior"}
           </button>
           <button type="button" onClick={() => changeCycle(newerCycle, newerCycle === latestCycle)} disabled={!newerCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
-            {activeTab === "report" ? "Next Cycle" : "Próximo ciclo"}
+            {effectiveTab === "report" ? "Next Cycle" : "Próximo ciclo"}
           </button>
           <button type="button" onClick={() => changeCycle(latestCycle, true)} disabled={!latestCycle || selectedCycleValue === latestCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
-            {activeTab === "report" ? "Current Cycle" : "Ciclo atual"}
+            {effectiveTab === "report" ? "Current Cycle" : "Ciclo atual"}
           </button>
           <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-bold text-muted">
-            {activeTab === "report" ? "Comparison" : "Comparação"}: {(activeTab === "agents" ? agentView?.previousCycle : queueView?.previousCycle) || (activeTab === "report" ? "No previous cycle" : "Sem ciclo anterior")}
+            {effectiveTab === "report" ? "Comparison" : "Comparação"}: {(effectiveTab === "agents" ? agentView?.previousCycle : queueView?.previousCycle) || (effectiveTab === "report" ? "No previous cycle" : "Sem ciclo anterior")}
           </div>
         </div>
       </section>
 
-      {activeTab === "agents" ? (
+      {effectiveTab === "agents" ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           {filteredAgentCards.map((card) => (
             <KpiCard key={card.label} card={card} />
           ))}
         </div>
-      ) : activeTab === "queues" ? (
+      ) : effectiveTab === "queues" ? (
         <div className="grid gap-4 xl:grid-cols-3">
           {filteredQueueCards.map((card) => (
             <QueueLobCard key={card.lob} card={card} />
@@ -687,32 +705,36 @@ export function RealTimePage() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-3">
               <div className="inline-flex rounded-2xl bg-slate-100 p-1">
-                <button type="button" onClick={() => setActiveTab("agents")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", activeTab === "agents" ? "bg-white text-blue-700 shadow-sm" : "text-muted")}>
-                  {activeTab === "report" ? "Agents" : "Agentes"}
+                {!clientQueuesOnly ? (
+                  <button type="button" onClick={() => setActiveTab("agents")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", effectiveTab === "agents" ? "bg-white text-blue-700 shadow-sm" : "text-muted")}>
+                    {effectiveTab === "report" ? "Agents" : "Agentes"}
+                  </button>
+                ) : null}
+                <button type="button" onClick={() => setActiveTab("queues")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", effectiveTab === "queues" ? "bg-white text-blue-700 shadow-sm" : "text-muted")}>
+                  {effectiveTab === "report" ? "Queues" : "Filas"}
                 </button>
-                <button type="button" onClick={() => setActiveTab("queues")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", activeTab === "queues" ? "bg-white text-blue-700 shadow-sm" : "text-muted")}>
-                  {activeTab === "report" ? "Queues" : "Filas"}
-                </button>
-                <button type="button" onClick={() => setActiveTab("report")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", activeTab === "report" ? "bg-white text-blue-700 shadow-sm" : "text-muted")}>
-                  Report
-                </button>
+                {!clientQueuesOnly ? (
+                  <button type="button" onClick={() => setActiveTab("report")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", effectiveTab === "report" ? "bg-white text-blue-700 shadow-sm" : "text-muted")}>
+                    Report
+                  </button>
+                ) : null}
               </div>
-              {activeTab === "agents" ? (
+              {effectiveTab === "agents" ? (
                 <AgentLobQuickFilter value={agentFilters.lob} onChange={(value) => updateAgentFilter("lob", value)} options={agentView?.filters.lobs ?? []} />
-              ) : activeTab === "queues" ? (
+              ) : effectiveTab === "queues" ? (
                 <QueueLobQuickFilter value={queueFilters.lob} onChange={(value) => updateQueueFilter("lob", value)} options={queueView?.filters.lobs ?? []} />
               ) : (
                 <ReportLobQuickFilter value={reportLob} onChange={setReportLob} />
               )}
             </div>
-            {activeTab !== "report" ? (
+            {effectiveTab !== "report" ? (
               <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={activeTab === "agents" ? () => setAgentFilters(defaultAgentFilters) : () => setQueueFilters(defaultQueueFilters)} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Filtros padrão</button>
-                <button type="button" onClick={activeTab === "agents" ? () => setAgentFilters(emptyAgentFilters) : () => setQueueFilters({ search: "", lob: "", status: "", slaTarget: "", queueId: "" })} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Limpar</button>
+                <button type="button" onClick={effectiveTab === "agents" ? () => setAgentFilters(defaultAgentFilters) : () => setQueueFilters(defaultQueueFilters)} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Filtros padrão</button>
+                <button type="button" onClick={effectiveTab === "agents" ? () => setAgentFilters(emptyAgentFilters) : () => setQueueFilters({ search: "", lob: "", status: "", slaTarget: "", queueId: "" })} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Limpar</button>
               </div>
             ) : null}
           </div>
-          {activeTab === "agents" ? (
+          {effectiveTab === "agents" ? (
             <div className="mt-4 grid gap-2 rounded-3xl border border-slate-100 bg-slate-50/70 p-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7">
               <SearchBox value={agentFilters.search} onChange={(value) => updateAgentFilter("search", value)} placeholder="Buscar agente ou WB..." />
               <FilterSelect value={agentFilters.crossingStatus} onChange={(value) => updateAgentFilter("crossingStatus", value)} label="Cruzamento" empty="Todos" options={agentView?.filters.crossingStatuses ?? []} />
@@ -722,7 +744,7 @@ export function RealTimePage() {
               <FilterSelect value={agentFilters.skill} onChange={(value) => updateAgentFilter("skill", value)} label="Skill" empty="Todas" options={agentView?.filters.skills ?? []} />
               <FilterSelect value={agentFilters.roleTitle} onChange={(value) => updateAgentFilter("roleTitle", value)} label="Cargo" empty="Todos" options={agentView?.filters.roleTitles ?? []} />
             </div>
-          ) : activeTab === "queues" ? (
+          ) : effectiveTab === "queues" ? (
             <div className="mt-4 grid gap-2 rounded-3xl border border-slate-100 bg-slate-50/70 p-3 sm:grid-cols-2 lg:grid-cols-4">
               <SearchBox value={queueFilters.search} onChange={(value) => updateQueueFilter("search", value)} placeholder="Buscar ID ou nome da fila..." />
               <FilterSelect value={queueFilters.status} onChange={(value) => updateQueueFilter("status", value)} label="Status" empty="Todos" options={queueView?.filters.statuses ?? []} />
@@ -741,9 +763,9 @@ export function RealTimePage() {
             {Array.from({ length: 5 }).map((_, index) => <div key={index} className="h-14 animate-pulse rounded-2xl bg-slate-100" />)}
           </div>
         ) : summary?.hasData ? (
-          activeTab === "agents" ? (
+          effectiveTab === "agents" ? (
             <AgentTable rows={agentRows} totalRows={agentView?.rows.length ?? 0} sort={agentSort} onSort={toggleAgentSort} onSelect={setSelectedAgent} />
-          ) : activeTab === "queues" ? (
+          ) : effectiveTab === "queues" ? (
             <StructuredQueueTable rows={queueRows} totalRows={queueView?.rows.length ?? 0} sort={queueSort} onSort={toggleQueueSort} onSelect={setSelectedQueue} />
           ) : (
             <ReportTable rows={reportRows} reportLob={reportLob} onDownloadQueues={downloadReportQueues} />

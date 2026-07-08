@@ -115,6 +115,15 @@ export function canAccessRealTime(user: PermissionUser) {
   return hasRealTimeOperationalSkill(user.skill) || hasRealTimeOperationalSkill(user.roleTitle) || hasRealTimeOperationalSkill(user.jobTitle);
 }
 
+export function canAccessRealTimeQueues(user: PermissionUser) {
+  const role = normalizeRole(user.role);
+  return canAccessRealTime(user) || (isActiveUser(user) && role === "CLIENT");
+}
+
+export function canAccessRealTimeAgentsReports(user: PermissionUser) {
+  return canAccessRealTime(user);
+}
+
 export function hasRealTimeOperationalSkill(value?: string | null) {
   return isRtaSkill(value) || isPocSkill(value);
 }

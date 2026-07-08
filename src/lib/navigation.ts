@@ -1,5 +1,5 @@
 import type { AppRole } from "@/lib/demo-auth";
-import { canAccessRealTime, normalizeRole, type PermissionUser } from "@/lib/permissions";
+import { canAccessRealTimeQueues, normalizeRole, type PermissionUser } from "@/lib/permissions";
 
 export type NavItem = {
   label: string;
@@ -73,7 +73,7 @@ export const navItems: NavItem[] = navSections.flatMap((section) => section.item
 export function getNavItems(userOrRole?: string | PermissionUser) {
   const user = typeof userOrRole === "string" ? { role: userOrRole } : userOrRole;
   const normalizedRole = normalizeRole(user?.role);
-  return navItems.filter((item) => item.roles.includes(normalizedRole) || (item.href === "/real-time" && canAccessRealTime({ ...user, status: user?.status ?? "ACTIVE" })));
+  return navItems.filter((item) => item.roles.includes(normalizedRole) || (item.href === "/real-time" && canAccessRealTimeQueues({ ...user, status: user?.status ?? "ACTIVE" })));
 }
 
 export function getNavSections(userOrRole?: string | PermissionUser) {
@@ -106,10 +106,12 @@ export function canAccessPathForRole(pathname: string, userOrRole?: string | Per
     if (pathname === "/api/mural" || pathname.startsWith("/api/mural/")) return true;
     if (pathname === "/financeiro" || pathname.startsWith("/financeiro/")) return true;
     if (pathname === "/api/financeiro" || pathname.startsWith("/api/financeiro/")) return true;
+    if (pathname === "/real-time" || pathname.startsWith("/real-time/")) return true;
+    if (pathname === "/api/realtime" || pathname.startsWith("/api/realtime/")) return true;
     return false;
   }
   if (pathname === "/meu-perfil" || pathname.startsWith("/perfil/")) return nonClientRoles.includes(normalizedRole);
-  if (pathname === "/real-time" || pathname.startsWith("/real-time/")) return canAccessRealTime({ ...user, status: user?.status ?? "ACTIVE" });
+  if (pathname === "/real-time" || pathname.startsWith("/real-time/")) return canAccessRealTimeQueues({ ...user, status: user?.status ?? "ACTIVE" });
   const protectedItem = navItems.find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
   return protectedItem ? protectedItem.roles.includes(normalizedRole) : true;
 }
