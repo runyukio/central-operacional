@@ -13,6 +13,7 @@ export async function GET(request: Request) {
     supervisorId: searchParams.get("supervisorId"),
     shiftId: searchParams.get("shiftId"),
     contractType: searchParams.get("contractType"),
+    roleTitle: searchParams.get("roleTitle"),
     skill: searchParams.get("skill"),
     wave: searchParams.get("wave")
   });

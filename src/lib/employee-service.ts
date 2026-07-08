@@ -80,6 +80,7 @@ export type EmployeeListQuery = {
   teamId?: string;
   shiftId?: string;
   contractType?: string;
+  roleTitle?: string;
   skill?: string;
   wave?: string;
   status?: string;
@@ -186,6 +187,7 @@ async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeList
           ...(query.teamId ? { teamId: query.teamId } : {}),
           ...(query.shiftId ? { shiftId: query.shiftId } : {}),
           ...buildContractTypeFilterWhere(query.contractType),
+          ...buildNullableTextFilterWhere("roleTitle", query.roleTitle),
           ...buildNullableTextFilterWhere("skill", query.skill),
           ...buildNullableTextFilterWhere("wave", query.wave),
 	          ...(query.role ? { user: { role: { name: query.role } } } : {}),
@@ -757,7 +759,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
   }
 }
 
-export async function exportOperationalEmployeesXlsxData(actor: Actor, filters: { query?: string | null; lob?: string | null; status?: string | null; supervisorId?: string | null; shiftId?: string | null; contractType?: string | null; skill?: string | null; wave?: string | null }) {
+export async function exportOperationalEmployeesXlsxData(actor: Actor, filters: { query?: string | null; lob?: string | null; status?: string | null; supervisorId?: string | null; shiftId?: string | null; contractType?: string | null; roleTitle?: string | null; skill?: string | null; wave?: string | null }) {
   const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
   if (!user) return createPermissionError("Usuário não autenticado.");
   if (!canAccessEmployeeMap({ role: actor.role, status: user.status })) return createPermissionError("Você não tem permissão para exportar o Mapa de Funcionários.");
@@ -771,6 +773,7 @@ export async function exportOperationalEmployeesXlsxData(actor: Actor, filters: 
   const supervisorId = clean(filters.supervisorId);
   const shiftId = clean(filters.shiftId);
   const contractType = normalizeContractTypeFilter(filters.contractType);
+  const roleTitle = clean(filters.roleTitle);
   const skill = clean(filters.skill);
   const wave = clean(filters.wave);
   const filteredRows = employees.filter((employee) => {
@@ -781,9 +784,10 @@ export async function exportOperationalEmployeesXlsxData(actor: Actor, filters: 
     const matchesSupervisor = !supervisorId || supervisorId === "Todos" || (isNoneFilter(supervisorId) ? !row.supervisorId : row.supervisorId === supervisorId);
     const matchesShift = !shiftId || row.shiftId === shiftId;
     const matchesContract = !contractType || String(row.contractType ?? "").toUpperCase() === contractType;
+    const matchesRoleTitle = !roleTitle || roleTitle === "Todos" || String(employee.role ?? "").toLowerCase() === roleTitle.toLowerCase();
     const matchesSkill = !skill || skill === "Todos" || (isNoneFilter(skill) ? !row.skill : String(row.skill ?? "").toLowerCase() === skill.toLowerCase());
     const matchesWave = !wave || wave === "Todos" || (isNoneFilter(wave) ? !row.wave : String(row.wave ?? "").toLowerCase() === wave.toLowerCase());
-    return matchesQuery && matchesLob && matchesStatus && matchesSupervisor && matchesShift && matchesContract && matchesSkill && matchesWave;
+    return matchesQuery && matchesLob && matchesStatus && matchesSupervisor && matchesShift && matchesContract && matchesRoleTitle && matchesSkill && matchesWave;
   });
 
   const columns = employeeExportColumns(role);
@@ -1366,7 +1370,7 @@ async function resolveEmployeeBatchWb(input?: EmployeeListQuery["wbLogins"]) {
 }
 
 async function getEmployeeFilterOptions(where: Prisma.EmployeeProfileWhereInput) {
-  const [skillRows, waveRows, statusRows] = await Promise.all([
+  const [skillRows, waveRows, roleTitleRows, statusRows] = await Promise.all([
     prisma.employeeProfile.findMany({
       where: { ...where, skill: { not: null } },
       distinct: ["skill"],
@@ -1378,6 +1382,12 @@ async function getEmployeeFilterOptions(where: Prisma.EmployeeProfileWhereInput)
       distinct: ["wave"],
       select: { wave: true },
       orderBy: { wave: "asc" }
+    }),
+    prisma.employeeProfile.findMany({
+      where: { ...where, roleTitle: { not: "" } },
+      distinct: ["roleTitle"],
+      select: { roleTitle: true },
+      orderBy: { roleTitle: "asc" }
     }),
     prisma.employeeProfile.findMany({
       where: { ...where, operationalStatus: { not: "" } },
@@ -1395,6 +1405,7 @@ async function getEmployeeFilterOptions(where: Prisma.EmployeeProfileWhereInput)
   return {
     skills: skillRows.map((row) => row.skill).filter((value): value is string => Boolean(value?.trim())),
     waves: waveRows.map((row) => row.wave).filter((value): value is string => Boolean(value?.trim())),
+    roleTitles: roleTitleRows.map((row) => row.roleTitle).filter((value): value is string => Boolean(value?.trim())),
     statuses
   };
 }
@@ -1406,7 +1417,7 @@ function buildSupervisorFilterWhere(value: unknown): Prisma.EmployeeProfileWhere
   return { supervisorId: raw };
 }
 
-function buildNullableTextFilterWhere(field: "skill" | "wave", value: unknown): Prisma.EmployeeProfileWhereInput {
+function buildNullableTextFilterWhere(field: "skill" | "wave" | "roleTitle", value: unknown): Prisma.EmployeeProfileWhereInput {
   const raw = clean(value);
   if (!raw || isAllFilter(raw)) return {};
   if (isNoneFilter(raw)) return { OR: [{ [field]: null }, { [field]: "" }] } as Prisma.EmployeeProfileWhereInput;

@@ -1070,7 +1070,7 @@ type EmployeeListResponse = {
   page?: number;
   limit?: number;
   totalPages?: number;
-  filterOptions?: { skills: string[]; waves: string[]; statuses?: string[] };
+  filterOptions?: { skills: string[]; waves: string[]; roleTitles?: string[]; statuses?: string[] };
   contractSummary?: { clt: number; pj: number };
   batchWb?: { applied: string[]; notFound: string[]; duplicatesRemoved: number };
 };
@@ -9589,6 +9589,7 @@ export function EmployeeMapPage() {
   const [lobFilter, setLobFilter] = useState("Todos");
   const [statusFilter, setStatusFilter] = useState("Todos");
   const [supervisorFilter, setSupervisorFilter] = useState("Todos");
+  const [roleTitleFilter, setRoleTitleFilter] = useState("Todos");
   const [skillFilter, setSkillFilter] = useState("Todos");
   const [waveFilter, setWaveFilter] = useState("Todos");
   const [shiftFilter, setShiftFilter] = useState("Todos");
@@ -9596,7 +9597,7 @@ export function EmployeeMapPage() {
   const [employeeBatchWbs, setEmployeeBatchWbs] = useState<string[]>([]);
   const [employeeBatchText, setEmployeeBatchText] = useState("");
   const [employeeBatchOpen, setEmployeeBatchOpen] = useState(false);
-  const [employeeFilterOptions, setEmployeeFilterOptions] = useState<{ skills: string[]; waves: string[]; statuses?: string[] }>({ skills: [], waves: [], statuses: [] });
+  const [employeeFilterOptions, setEmployeeFilterOptions] = useState<{ skills: string[]; waves: string[]; roleTitles?: string[]; statuses?: string[] }>({ skills: [], waves: [], roleTitles: [], statuses: [] });
   const [employeePage, setEmployeePage] = useState(1);
   const [employeePagination, setEmployeePagination] = useState({ total: 0, page: 1, limit: 50, totalPages: 1 });
   const [employeeContractSummary, setEmployeeContractSummary] = useState({ clt: 0, pj: 0 });
@@ -9649,9 +9650,10 @@ export function EmployeeMapPage() {
   const employeeMapLobs = ["Todos", ...Array.from(new Set((employeeSettings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => employeeMapLobFilterLabel(lob.name)) ?? employeeRows.map((employee) => employeeMapLobFilterLabel(employee.lob)).filter(Boolean))))];
   const employeeStatusOptions = ["Todos", ...Array.from(new Set((employeeFilterOptions.statuses?.length ? employeeFilterOptions.statuses : employeeOperationalStatusOptions).filter(Boolean)))];
   const employeeSupervisorOptions = employeeSettings?.supervisors?.filter((supervisor) => supervisor.status !== "INACTIVE") ?? [];
+  const employeeRoleTitleFilterOptions = ["Todos", ...Array.from(new Set([...(employeeSettings?.roleTitles.filter((title) => title.status !== "INACTIVE").map((title) => title.name) ?? []), ...(employeeFilterOptions.roleTitles ?? [])].filter(Boolean)))];
   const employeeSkillOptions = ["Todos", "SEM_SKILL", ...employeeFilterOptions.skills.filter(Boolean)];
   const employeeWaveOptions = ["Todos", "SEM_WAVE", ...employeeFilterOptions.waves.filter(Boolean)];
-  const hasEmployeeFilters = Boolean(query.trim()) || employeeBatchWbs.length > 0 || lobFilter !== "Todos" || statusFilter !== "Todos" || supervisorFilter !== "Todos" || skillFilter !== "Todos" || waveFilter !== "Todos" || shiftFilter !== "Todos" || contractFilter !== "Todos";
+  const hasEmployeeFilters = Boolean(query.trim()) || employeeBatchWbs.length > 0 || lobFilter !== "Todos" || statusFilter !== "Todos" || supervisorFilter !== "Todos" || roleTitleFilter !== "Todos" || skillFilter !== "Todos" || waveFilter !== "Todos" || shiftFilter !== "Todos" || contractFilter !== "Todos";
   const isAdmin = session?.user?.role === "ADMIN";
   const isSupervisorUser = session?.user?.role === "SUPERVISOR";
   const normalizedEmployeeMapRole = String(session?.user?.role ?? "").toUpperCase();
@@ -9679,12 +9681,13 @@ export function EmployeeMapPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function loadEmployees(options?: { nextQuery?: string; nextLob?: string; nextStatus?: string; nextSupervisor?: string; nextSkill?: string; nextWave?: string; nextShift?: string; nextContract?: string; nextBatchWbs?: string[]; nextPage?: number }) {
+  async function loadEmployees(options?: { nextQuery?: string; nextLob?: string; nextStatus?: string; nextSupervisor?: string; nextRoleTitle?: string; nextSkill?: string; nextWave?: string; nextShift?: string; nextContract?: string; nextBatchWbs?: string[]; nextPage?: number }) {
     setEmployeeLoading(true);
     const nextQuery = options?.nextQuery ?? query;
     const nextLob = options?.nextLob ?? lobFilter;
     const nextStatus = options?.nextStatus ?? statusFilter;
     const nextSupervisor = options?.nextSupervisor ?? supervisorFilter;
+    const nextRoleTitle = options?.nextRoleTitle ?? roleTitleFilter;
     const nextSkill = options?.nextSkill ?? skillFilter;
     const nextWave = options?.nextWave ?? waveFilter;
     const nextShift = options?.nextShift ?? shiftFilter;
@@ -9694,8 +9697,9 @@ export function EmployeeMapPage() {
     const params = new URLSearchParams({ summary: "true", limit: "50", page: String(nextPage) });
     if (nextQuery.trim()) params.set("search", nextQuery.trim());
     if (nextLob !== "Todos") params.set("lob", nextLob);
-	    if (nextStatus !== "Todos") params.set("status_colaborador", nextStatus);
+    if (nextStatus !== "Todos") params.set("status_colaborador", nextStatus);
     if (nextSupervisor !== "Todos") params.set("supervisorId", nextSupervisor);
+    if (nextRoleTitle !== "Todos") params.set("roleTitle", nextRoleTitle);
     if (nextSkill !== "Todos") params.set("skill", nextSkill);
     if (nextWave !== "Todos") params.set("wave", nextWave);
     if (nextShift !== "Todos") params.set("shiftId", nextShift);
@@ -9705,11 +9709,11 @@ export function EmployeeMapPage() {
       const employeePayload = await apiJson<EmployeeListResponse>(`/api/employees?${params.toString()}`);
       if (!employeePayload.data?.length && Number(employeePayload.total ?? 0) > 0 && nextPage > 1) {
         setEmployeePage(1);
-        await loadEmployees({ nextQuery, nextLob, nextStatus, nextSupervisor, nextSkill, nextWave, nextShift, nextContract, nextBatchWbs, nextPage: 1 });
+        await loadEmployees({ nextQuery, nextLob, nextStatus, nextSupervisor, nextRoleTitle, nextSkill, nextWave, nextShift, nextContract, nextBatchWbs, nextPage: 1 });
         return;
       }
       setEmployeeRows(employeePayload.data);
-	      setEmployeeFilterOptions(employeePayload.filterOptions ?? { skills: [], waves: [], statuses: [] });
+	      setEmployeeFilterOptions(employeePayload.filterOptions ?? { skills: [], waves: [], roleTitles: [], statuses: [] });
       setEmployeeContractSummary(employeePayload.contractSummary ?? { clt: 0, pj: 0 });
       if (employeePayload.batchWb?.notFound.length) {
         setEmployeeMessage(`${employeePayload.batchWb.applied.length} login(s) aplicados. ${employeePayload.batchWb.notFound.length} não encontrado(s): ${employeePayload.batchWb.notFound.join(", ")}.`);
@@ -9726,7 +9730,7 @@ export function EmployeeMapPage() {
       setSelected(null);
     } catch {
       setEmployeeRows([]);
-	      setEmployeeFilterOptions({ skills: [], waves: [], statuses: [] });
+	      setEmployeeFilterOptions({ skills: [], waves: [], roleTitles: [], statuses: [] });
       setEmployeeContractSummary({ clt: 0, pj: 0 });
       setEmployeePagination({ total: 0, page: 1, limit: 50, totalPages: 1 });
     } finally {
@@ -9888,8 +9892,9 @@ export function EmployeeMapPage() {
     const params = new URLSearchParams();
     if (query.trim()) params.set("q", query.trim());
     if (lobFilter !== "Todos") params.set("lob", lobFilter);
-	    if (statusFilter !== "Todos") params.set("status_colaborador", statusFilter);
+    if (statusFilter !== "Todos") params.set("status_colaborador", statusFilter);
     if (supervisorFilter !== "Todos") params.set("supervisorId", supervisorFilter);
+    if (roleTitleFilter !== "Todos") params.set("roleTitle", roleTitleFilter);
     if (skillFilter !== "Todos") params.set("skill", skillFilter);
     if (waveFilter !== "Todos") params.set("wave", waveFilter);
     if (shiftFilter !== "Todos") params.set("shiftId", shiftFilter);
@@ -9944,7 +9949,7 @@ export function EmployeeMapPage() {
       {employeeMessage ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{employeeMessage}</div> : null}
       <div className="space-y-5">
         <div className="space-y-5">
-          <div className="card grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-9">
+          <div className="card grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-10">
             <input value={query} onChange={(event) => setQuery(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm outline-none xl:col-span-2" placeholder="Nome, e-mail, WB/Login, Skill ou Wave" />
             <select value={lobFilter} onChange={(event) => setLobFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
               {employeeMapLobs.map((lob) => <option key={lob} value={lob}>{lob === "Todos" ? "Todas as LOBs" : lob}</option>)}
@@ -9956,6 +9961,9 @@ export function EmployeeMapPage() {
               <option value="Todos">Todos os supervisores</option>
               <option value="SEM_SUPERVISOR">Sem supervisor</option>
               {employeeSupervisorOptions.map((supervisor) => <option key={supervisor.id} value={supervisor.id}>{supervisor.name}</option>)}
+            </select>
+            <select value={roleTitleFilter} onChange={(event) => setRoleTitleFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
+              {employeeRoleTitleFilterOptions.map((roleTitle) => <option key={roleTitle} value={roleTitle}>{roleTitle === "Todos" ? "Todos os cargos" : roleTitle}</option>)}
             </select>
             <select value={skillFilter} onChange={(event) => setSkillFilter(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm font-bold">
               {employeeSkillOptions.map((skill) => <option key={skill} value={skill}>{skill === "Todos" ? "Todas as skills" : skill === "SEM_SKILL" ? "Sem skill" : skill}</option>)}
@@ -9972,7 +9980,7 @@ export function EmployeeMapPage() {
               <option value="PJ">PJ</option>
               <option value="CLT">CLT</option>
             </select>
-            <div className="rounded-lg border border-dashed border-blue-200 bg-blue-50/50 p-3 md:col-span-2 xl:col-span-9">
+            <div className="rounded-lg border border-dashed border-blue-200 bg-blue-50/50 p-3 md:col-span-2 xl:col-span-10">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="text-xs font-black uppercase text-blue-700">Filtro em lote por WB/Login</p>
@@ -10004,9 +10012,9 @@ export function EmployeeMapPage() {
                 </div>
               ) : null}
             </div>
-            <div className="flex gap-2 md:col-span-2 xl:col-span-9 xl:justify-end">
+            <div className="flex gap-2 md:col-span-2 xl:col-span-10 xl:justify-end">
               <button onClick={() => { setEmployeePage(1); void loadEmployees({ nextPage: 1 }); }} className="h-10 rounded-lg bg-blue-600 px-5 text-sm font-bold text-white">Buscar</button>
-              <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setContractFilter("Todos"); setEmployeeBatchWbs([]); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextContract: "Todos", nextBatchWbs: [], nextPage: 1 }); }} className="h-10 rounded-lg border border-border px-5 text-sm font-bold">Limpar filtros</button>
+              <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setRoleTitleFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setContractFilter("Todos"); setEmployeeBatchWbs([]); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextRoleTitle: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextContract: "Todos", nextBatchWbs: [], nextPage: 1 }); }} className="h-10 rounded-lg border border-border px-5 text-sm font-bold">Limpar filtros</button>
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-6">
@@ -10053,7 +10061,7 @@ export function EmployeeMapPage() {
                 <EmptyState title={hasEmployeeFilters ? "Nenhum colaborador encontrado para os filtros selecionados" : "Nenhum colaborador encontrado"} description={hasEmployeeFilters ? "Limpe os filtros para voltar a listar a base real disponível para seu perfil." : "Aprove cadastros ou importe colaboradores para iniciar a base."} />
                 {hasEmployeeFilters ? (
                   <div className="mt-3 text-center">
-                    <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setContractFilter("Todos"); setEmployeeBatchWbs([]); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextContract: "Todos", nextBatchWbs: [], nextPage: 1 }); }} className="rounded-lg border border-border px-4 py-2 text-sm font-bold text-navy-950">Limpar filtros</button>
+                    <button onClick={() => { setQuery(""); setLobFilter("Todos"); setStatusFilter("Todos"); setSupervisorFilter("Todos"); setRoleTitleFilter("Todos"); setSkillFilter("Todos"); setWaveFilter("Todos"); setShiftFilter("Todos"); setContractFilter("Todos"); setEmployeeBatchWbs([]); setEmployeePage(1); void loadEmployees({ nextQuery: "", nextLob: "Todos", nextStatus: "Todos", nextSupervisor: "Todos", nextRoleTitle: "Todos", nextSkill: "Todos", nextWave: "Todos", nextShift: "Todos", nextContract: "Todos", nextBatchWbs: [], nextPage: 1 }); }} className="rounded-lg border border-border px-4 py-2 text-sm font-bold text-navy-950">Limpar filtros</button>
                   </div>
                 ) : null}
               </div>
