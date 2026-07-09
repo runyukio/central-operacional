@@ -361,8 +361,7 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
   const requestedLob = query.lob && query.lob !== "Todos" ? query.lob.toUpperCase() : "";
   const granularity = normalizeProductionGranularity(query.granularity);
   const panel = await buildProductionDashboardPanel(productionPeriod);
-  if (!requestedLob) return emptyProductionDashboardPayload(productionPeriod, granularity, panel);
-  if (!performanceLobOptions().includes(requestedLob)) return emptyProductionDashboardPayload(productionPeriod, granularity, panel);
+  if (requestedLob && !performanceLobOptions().includes(requestedLob)) return emptyProductionDashboardPayload(productionPeriod, granularity, panel);
 
   const queueWhere = queueWhereByPerformanceLob(requestedLob);
 
@@ -2637,6 +2636,7 @@ function queueIdsByPerformanceLob(lob: string) {
 }
 
 function queueWhereByPerformanceLob(lob: string) {
+  if (!lob) return {};
   if (lob === "N/A") {
     const mappedQueueIds = Object.entries(QUEUE_METADATA)
       .filter(([, metadata]) => metadata.lob !== "N/A")

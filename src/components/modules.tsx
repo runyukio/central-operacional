@@ -11999,7 +11999,7 @@ export function MuralPage() {
 function PerformanceProductionPage() {
   const [activeTab, setActiveTab] = useState<"queues" | "forecast">("queues");
   const [filters, setFilters] = useState({ startDate: "", endDate: "", lob: "", granularity: "daily" as PerformanceProductionGranularity });
-  const [forecastFilters, setForecastFilters] = useState({ lob: "ADS", horizonDays: 14 });
+  const [forecastFilters, setForecastFilters] = useState({ lob: "", horizonDays: 14 });
   const [payload, setPayload] = useState<PerformanceProductionResponse | null>(null);
   const [forecastPayload, setForecastPayload] = useState<PerformanceProductionResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -12037,7 +12037,8 @@ function PerformanceProductionPage() {
 
   const loadForecast = useCallback(async () => {
     setForecastLoading(true);
-    const params = new URLSearchParams({ granularity: "hourly", lob: forecastFilters.lob });
+    const params = new URLSearchParams({ granularity: "hourly" });
+    if (forecastFilters.lob) params.set("lob", forecastFilters.lob);
     if (filters.startDate) params.set("startDate", filters.startDate);
     if (filters.endDate) params.set("endDate", filters.endDate);
     try {
@@ -12155,6 +12156,16 @@ function PerformanceProductionPage() {
             </div>
             <div className="mb-5 flex flex-wrap items-center justify-center gap-2">
               <span className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">LOB</span>
+              <button
+                type="button"
+                onClick={() => setForecastFilters((current) => ({ ...current, lob: "" }))}
+                className={cn(
+                  "rounded-lg border px-4 py-2 text-xs font-black",
+                  !forecastFilters.lob ? "border-navy-950 bg-navy-950 text-white shadow-soft" : "border-border bg-white text-navy-950"
+                )}
+              >
+                Todas as LOBs
+              </button>
               {lobs.filter((lob) => lob !== "N/A").map((lob) => (
                 <button
                   key={`forecast-${lob}`}
@@ -12179,7 +12190,7 @@ function PerformanceProductionPage() {
             </div>
           </section>
 
-          <PerformanceChartCard title="Forecast de enqueue" subtitle={`${forecastFilters.lob} · histórico real e projeção por hora`}>
+          <PerformanceChartCard title="Forecast de enqueue" subtitle={`${forecastFilters.lob || "Todas as LOBs"} · histórico real e projeção por hora`}>
             {forecastLoading && !forecastPayload ? (
               <div className="grid h-[420px] place-items-center text-sm font-bold text-muted">Carregando forecast...</div>
             ) : (
@@ -12267,17 +12278,34 @@ function PerformanceQueueDataView({
             ))}
           </div>
 
-          <label className="min-w-[260px] flex-1 md:max-w-sm">
-            <span className="text-xs font-black uppercase tracking-[0.12em] text-muted">LOB</span>
-            <select
-              value={lob || "ALL"}
-              onChange={(event) => onLobChange(event.target.value === "ALL" ? "" : event.target.value)}
-              className="premium-control mt-2 h-12 w-full px-4 text-base font-black text-navy-950"
-            >
-              <option value="ALL">Todas as LOBs</option>
-              {lobs.map((item) => <option key={item} value={item}>{item}</option>)}
-            </select>
-          </label>
+          <div className="min-w-[260px] flex-1">
+            <p className="mb-2 text-xs font-black uppercase tracking-[0.12em] text-muted">LOB</p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => onLobChange("")}
+                className={cn(
+                  "rounded-xl border px-4 py-2 text-sm font-black transition",
+                  !lob ? "border-blue-600 bg-blue-600 text-white shadow-soft" : "border-border bg-white text-navy-950 hover:bg-slate-50"
+                )}
+              >
+                Todas as LOBs
+              </button>
+              {lobs.map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => onLobChange(item)}
+                  className={cn(
+                    "rounded-xl border px-4 py-2 text-sm font-black transition",
+                    lob === item ? "border-blue-600 bg-blue-600 text-white shadow-soft" : "border-border bg-white text-navy-950 hover:bg-slate-50"
+                  )}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
         {loading ? (
@@ -12348,6 +12376,7 @@ function PerformanceQueueTrendTable({ rows, lobLabel }: { rows: PerformanceProdu
               <th className="whitespace-nowrap px-4 py-3">Submit</th>
               <th className="whitespace-nowrap px-4 py-3">Enqueue</th>
               <th className="whitespace-nowrap px-4 py-3">Latency</th>
+              <th className="whitespace-nowrap px-4 py-3">AHT</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
@@ -12358,9 +12387,10 @@ function PerformanceQueueTrendTable({ rows, lobLabel }: { rows: PerformanceProdu
                 <td className="whitespace-nowrap px-4 py-3 text-lg font-black text-navy-950">{formatPerformanceNumber(row.submit)}</td>
                 <td className="whitespace-nowrap px-4 py-3 text-lg font-black text-navy-950">{formatPerformanceNumber(row.input)}</td>
                 <td className="whitespace-nowrap px-4 py-3 text-lg font-black text-navy-950">{formatPerformanceMinutes(row.latencyMinutes)}</td>
+                <td className="whitespace-nowrap px-4 py-3 text-lg font-black text-navy-950">{formatPerformanceDurationSeconds(row.ahtSeconds)}</td>
               </tr>
             )) : (
-              <tr><td colSpan={5} className="px-4 py-10 text-center text-sm font-bold text-muted">Nenhum dado de fila encontrado.</td></tr>
+              <tr><td colSpan={6} className="px-4 py-10 text-center text-sm font-bold text-muted">Nenhum dado de fila encontrado.</td></tr>
             )}
           </tbody>
         </table>
