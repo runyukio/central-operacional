@@ -793,9 +793,8 @@ function buildTimelineSegments(
   start: Date,
   end: Date
 ): TimelineSegment[] {
-  const usesActivityEvents = records.some((record) => record.lastActivityAt);
-  const heartbeatMs = usesActivityEvents ? 60_000 : timelineHeartbeatMinutes * 60_000;
-  const maxGapMs = usesActivityEvents ? 2 * 60_000 : timelineMaxGapMinutes * 60_000;
+  const heartbeatMs = timelineHeartbeatMinutes * 60_000;
+  const maxGapMs = timelineMaxGapMinutes * 60_000;
   const startMs = start.getTime();
   const endMs = end.getTime();
   const pointIndex = new Map<string, {
