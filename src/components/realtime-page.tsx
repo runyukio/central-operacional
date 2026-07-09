@@ -328,6 +328,12 @@ type ExecutiveHeatmapRow = {
   label: string;
   cells: ExecutiveHeatmapCell[];
 };
+type ExecutiveAgentPerformanceRow = {
+  name: string;
+  wbLogin: string;
+  submit: number;
+  ahtMs: number | null;
+};
 type ExecutiveAdsReport = {
   selectedCycle: string;
   dateLabel: string;
@@ -337,13 +343,17 @@ type ExecutiveAdsReport = {
   heatmap: ExecutiveHeatmapRow[];
   inputOutputHistory: Array<{ label: string; input: number | null; output: number | null }>;
   backlogHistory: TrendPoint[];
-  topAgents: Array<{ name: string; wbLogin: string; submit: number; ahtMs: number | null }>;
-  lowAgents: Array<{ name: string; wbLogin: string; submit: number; status: AgentPresenceStatus }>;
+  topAgents: ExecutiveAgentPerformanceRow[];
+  lowAgents: ExecutiveAgentPerformanceRow[];
 };
 
 const ADS_REPORT_TARGET_LATENCY_MINUTES = 120;
 const ADS_REPORT_TARGET_LATENCY_LABEL = "2:00h";
-const EXECUTIVE_REPORT_ALLOWED_EMAILS = new Set(["runyukio@gmail.com", "wb_lucasy@kuaishou.com"]);
+const EXECUTIVE_REPORT_ALLOWED_EMAILS = new Set([
+  "runyukio@gmail.com",
+  "wb_lucasy@kuaishou.com",
+  "leonardo_santos.souza@outlook.com"
+]);
 
 type ImportHistory = {
   id: string;
@@ -409,9 +419,16 @@ function isClientRole(role?: string | null) {
   return normalized === "CLIENT" || normalized === "CLIENTE";
 }
 
+function canAccessExecutiveReportTab(role?: string | null, email?: string | null) {
+  const normalizedRole = String(role ?? "").trim().toUpperCase();
+  const normalizedEmail = String(email ?? "").trim().toLowerCase();
+  if (isClientRole(role)) return false;
+  return normalizedRole === "ADMIN" || EXECUTIVE_REPORT_ALLOWED_EMAILS.has(normalizedEmail);
+}
+
 export function RealTimePage({ userRole, userEmail }: RealTimePageProps) {
   const clientQueuesOnly = isClientRole(userRole);
-  const canAccessExecutiveReport = !clientQueuesOnly && EXECUTIVE_REPORT_ALLOWED_EMAILS.has(String(userEmail ?? "").trim().toLowerCase());
+  const canAccessExecutiveReport = canAccessExecutiveReportTab(userRole, userEmail);
   const [payload, setPayload] = useState<RealTimePayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -855,21 +872,21 @@ function ExecutiveAdsReportDashboard({ report }: { report: ExecutiveAdsReport })
         ))}
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)]">
+      <div className="grid gap-4">
         <section className="overflow-hidden rounded-[22px] border border-slate-200/80 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
           <div className="border-b border-slate-100 px-4 py-3">
             <h3 className="font-black text-navy-950">Semáforo horário</h3>
-            <p className="text-xs font-bold text-muted">ADS por hora, usando o último ciclo disponível dentro de cada hora.</p>
+            <p className="text-xs font-bold text-muted">ADS por hora, usando delta entre snapshots para input e output.</p>
           </div>
           <ExecutiveHeatmap rows={report.heatmap} />
         </section>
 
-        <section className="grid gap-4">
+        <section className="grid gap-4 xl:grid-cols-2">
           <ExecutiveRankingCard
             title="Top performance · última hora"
             rows={report.topAgents.map((agent) => ({
               title: agent.name,
-              subtitle: `${agent.wbLogin} · AHT ${formatDurationFromMs(agent.ahtMs)}`,
+              subtitle: `${agent.wbLogin} · Submit ${formatInteger(agent.submit)} · AHT ${formatDurationFromMs(agent.ahtMs)}`,
               value: formatInteger(agent.submit)
             }))}
           />
@@ -877,7 +894,7 @@ function ExecutiveAdsReportDashboard({ report }: { report: ExecutiveAdsReport })
             title="Low performance · última hora"
             rows={report.lowAgents.map((agent) => ({
               title: agent.name,
-              subtitle: `${agent.wbLogin} · ${agent.status}`,
+              subtitle: `${agent.wbLogin} · Submit ${formatInteger(agent.submit)} · AHT ${formatDurationFromMs(agent.ahtMs)}`,
               value: formatInteger(agent.submit)
             }))}
           />
@@ -3051,6 +3068,7 @@ function buildExecutiveAdsReport(queueRows: QueueRealtimeRow[], agentRows: Agent
   const filledBuckets = buckets.filter((bucket) => bucket.cycleDownload);
   const latest = filledBuckets[filledBuckets.length - 1] ?? null;
   const previous = filledBuckets.length > 1 ? filledBuckets[filledBuckets.length - 2] : null;
+  const agentRankings = buildExecutiveAgentRankings(adsAgents, latest?.cycleDownload ?? selectedCycle, previous?.cycleDownload ?? null);
   const dateLabel = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" }).format(selected.date);
   const cards = [
     buildAgentKpiCard("Submit última hora", latest?.output ?? null, previous?.output ?? null, "number", "up", buildExecutiveTrend(buckets, "output", selected)),
@@ -3068,16 +3086,8 @@ function buildExecutiveAdsReport(queueRows: QueueRealtimeRow[], agentRows: Agent
     heatmap: buildExecutiveHeatmap(buckets),
     inputOutputHistory: buckets.map((bucket) => ({ label: bucket.label, input: bucket.input, output: bucket.output })),
     backlogHistory: buildExecutiveTrend(buckets, "backlog", selected),
-    topAgents: adsAgents
-      .filter((row) => row.current.submit > 0)
-      .sort((a, b) => b.current.submit - a.current.submit || a.displayName.localeCompare(b.displayName, "pt-BR", { sensitivity: "base" }))
-      .slice(0, 5)
-      .map((row) => ({ name: row.displayName, wbLogin: row.wbLogin || row.rawWbLogin, submit: row.current.submit, ahtMs: row.current.ahtMs })),
-    lowAgents: adsAgents
-      .filter((row) => row.isScheduled)
-      .sort((a, b) => a.current.submit - b.current.submit || a.displayName.localeCompare(b.displayName, "pt-BR", { sensitivity: "base" }))
-      .slice(0, 5)
-      .map((row) => ({ name: row.displayName, wbLogin: row.wbLogin || row.rawWbLogin, submit: row.current.submit, status: row.presenceStatus }))
+    topAgents: agentRankings.top,
+    lowAgents: agentRankings.low
   };
 }
 
@@ -3110,44 +3120,149 @@ function buildExecutiveQueueBuckets(rows: QueueReportRow[], selected: ReturnType
       byHour.set(parsed.date.getHours(), { cycleDownload, timestamp: parsed.timestamp, metric: summarizeQueueMetrics(metrics) });
     }
   });
-  return byHour;
+
+  const deltaByHour = new Map<number, { cycleDownload: string; timestamp: number; metric: QueueMetric }>();
+  let previousSnapshot: { metric: QueueMetric } | null = null;
+  Array.from(byHour.entries())
+    .sort(([, a], [, b]) => a.timestamp - b.timestamp)
+    .forEach(([hour, snapshot]) => {
+      deltaByHour.set(hour, {
+        ...snapshot,
+        metric: buildExecutiveQueueDeltaMetric(snapshot.metric, previousSnapshot?.metric ?? null)
+      });
+      previousSnapshot = snapshot;
+    });
+
+  return deltaByHour;
 }
 
 function buildExecutiveAgentBuckets(rows: AgentRealtimeRow[], selected: ReturnType<typeof parseRealtimeCycle>) {
-  const byCycle = new Map<string, { metrics: AgentMetric[]; online: number }>();
+  const byHour = new Map<number, { cycleDownload: string; timestamp: number; metrics: AgentMetric[]; online: number }>();
   rows.forEach((row) => {
+    const snapshotsByHour = new Map<number, AgentRealtimeRow["history"][number] & { timestamp: number }>();
     row.history.forEach((item) => {
       const parsed = parseRealtimeCycle(item.cycleDownload, "");
       if (parsed.dateKey !== selected.dateKey || parsed.timestamp > selected.timestamp) return;
-      const cycle = byCycle.get(item.cycleDownload) ?? { metrics: [], online: 0 };
-      cycle.metrics.push({
-        submit: item.submit,
-        ahtMs: item.ahtMs,
-        moderationMs: item.moderationMs,
-        timeout: item.timeout,
-        refresh: item.refresh,
-        queueCount: item.queueIds.length,
-        sourceRows: 1
-      });
-      if (item.submit > 0) cycle.online += 1;
-      byCycle.set(item.cycleDownload, cycle);
+      const hour = parsed.date.getHours();
+      const existing = snapshotsByHour.get(hour);
+      if (!existing || parsed.timestamp > existing.timestamp) {
+        snapshotsByHour.set(hour, { ...item, timestamp: parsed.timestamp });
+      }
     });
+
+    let previousSnapshot: (AgentRealtimeRow["history"][number] & { timestamp: number }) | null = null;
+    Array.from(snapshotsByHour.entries())
+      .sort(([, a], [, b]) => a.timestamp - b.timestamp)
+      .forEach(([hour, snapshot]) => {
+        const submit = cumulativeDelta(snapshot.submit, previousSnapshot?.submit ?? null);
+        const moderationMs = cumulativeDelta(snapshot.moderationMs, previousSnapshot?.moderationMs ?? null);
+        const metric: AgentMetric = {
+          submit,
+          ahtMs: submit > 0 ? moderationMs / submit : deriveAverageDeltaFromCumulative(snapshot.submit, snapshot.ahtMs, previousSnapshot?.submit ?? null, previousSnapshot?.ahtMs ?? null),
+          moderationMs,
+          timeout: cumulativeDelta(snapshot.timeout, previousSnapshot?.timeout ?? null),
+          refresh: cumulativeDelta(snapshot.refresh, previousSnapshot?.refresh ?? null),
+          queueCount: snapshot.queueIds.length,
+          sourceRows: 1
+        };
+        const existing = byHour.get(hour);
+        const next = existing ?? { cycleDownload: snapshot.cycleDownload, timestamp: snapshot.timestamp, metrics: [], online: 0 };
+        next.metrics.push(metric);
+        if (submit > 0) next.online += 1;
+        if (snapshot.timestamp > next.timestamp) {
+          next.cycleDownload = snapshot.cycleDownload;
+          next.timestamp = snapshot.timestamp;
+        }
+        byHour.set(hour, next);
+        previousSnapshot = snapshot;
+      });
   });
 
-  const byHour = new Map<number, { cycleDownload: string; timestamp: number; metric: ReturnType<typeof summarizeMetrics>; online: number }>();
-  byCycle.forEach((cycle, cycleDownload) => {
-    const parsed = parseRealtimeCycle(cycleDownload, "");
-    const existing = byHour.get(parsed.date.getHours());
-    if (!existing || parsed.timestamp > existing.timestamp) {
-      byHour.set(parsed.date.getHours(), {
-        cycleDownload,
-        timestamp: parsed.timestamp,
-        metric: summarizeMetrics(cycle.metrics),
-        online: cycle.online
-      });
-    }
+  const summarizedByHour = new Map<number, { cycleDownload: string; timestamp: number; metric: ReturnType<typeof summarizeMetrics>; online: number }>();
+  byHour.forEach((bucket, hour) => {
+    summarizedByHour.set(hour, {
+      cycleDownload: bucket.cycleDownload,
+      timestamp: bucket.timestamp,
+      metric: summarizeMetrics(bucket.metrics),
+      online: bucket.online
+    });
   });
-  return byHour;
+  return summarizedByHour;
+}
+
+function buildExecutiveQueueDeltaMetric(current: QueueMetric, previous: QueueMetric | null): QueueMetric {
+  const input = cumulativeDelta(current.input, previous?.input ?? null);
+  const output = cumulativeDelta(current.output, previous?.output ?? null);
+  return {
+    ...current,
+    input,
+    output,
+    ahtMs: deriveAverageDeltaFromCumulative(current.output, current.ahtMs, previous?.output ?? null, previous?.ahtMs ?? null),
+    latencyMs: deriveAverageDeltaFromCumulative(current.input, current.latencyMs, previous?.input ?? null, previous?.latencyMs ?? null) ?? current.latencyMs,
+    backlog: current.backlog,
+    maxLatencyMs: current.maxLatencyMs
+  };
+}
+
+function buildExecutiveAgentRankings(rows: AgentRealtimeRow[], currentCycle: string, previousCycle: string | null): { top: ExecutiveAgentPerformanceRow[]; low: ExecutiveAgentPerformanceRow[] } {
+  const ranked = rows
+    .map((row) => {
+      const current = findAgentHistorySnapshotAtOrBefore(row, currentCycle);
+      if (!current) return null;
+      const previous = previousCycle ? findAgentHistorySnapshotAtOrBefore(row, previousCycle) : findPreviousAgentHistorySnapshot(row, current.cycleDownload);
+      const submit = cumulativeDelta(current.submit, previous?.submit ?? null);
+      const moderationMs = cumulativeDelta(current.moderationMs, previous?.moderationMs ?? null);
+      return {
+        name: row.displayName,
+        wbLogin: row.wbLogin || row.rawWbLogin,
+        submit,
+        ahtMs: submit > 0 ? moderationMs / submit : null
+      };
+    })
+    .filter((row): row is ExecutiveAgentPerformanceRow => row !== null && row.submit > 0);
+
+  return {
+    top: [...ranked]
+      .sort((a, b) => b.submit - a.submit || a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" }))
+      .slice(0, 5),
+    low: [...ranked]
+      .sort((a, b) => a.submit - b.submit || a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" }))
+      .slice(0, 5)
+  };
+}
+
+function findAgentHistorySnapshotAtOrBefore(row: AgentRealtimeRow, cycleDownload: string) {
+  const target = parseRealtimeCycle(cycleDownload, "");
+  return row.history
+    .map((item) => ({ item, parsed: parseRealtimeCycle(item.cycleDownload, "") }))
+    .filter(({ parsed }) => parsed.dateKey === target.dateKey && parsed.timestamp <= target.timestamp)
+    .sort((a, b) => b.parsed.timestamp - a.parsed.timestamp)[0]?.item ?? null;
+}
+
+function findPreviousAgentHistorySnapshot(row: AgentRealtimeRow, cycleDownload: string) {
+  const target = parseRealtimeCycle(cycleDownload, "");
+  return row.history
+    .map((item) => ({ item, parsed: parseRealtimeCycle(item.cycleDownload, "") }))
+    .filter(({ parsed }) => parsed.dateKey === target.dateKey && parsed.timestamp < target.timestamp)
+    .sort((a, b) => b.parsed.timestamp - a.parsed.timestamp)[0]?.item ?? null;
+}
+
+function cumulativeDelta(current: number | null | undefined, previous: number | null | undefined) {
+  const currentValue = Number.isFinite(current) ? Number(current) : 0;
+  if (!Number.isFinite(previous)) return currentValue;
+  const previousValue = Number(previous);
+  return currentValue >= previousValue ? currentValue - previousValue : currentValue;
+}
+
+function deriveAverageDeltaFromCumulative(currentTotal: number, currentAverage: number | null, previousTotal: number | null | undefined, previousAverage: number | null | undefined) {
+  if (currentAverage === null) return null;
+  if (!Number.isFinite(previousTotal) || previousAverage === null || previousAverage === undefined) return currentAverage;
+  const deltaTotal = cumulativeDelta(currentTotal, previousTotal);
+  if (deltaTotal <= 0) return currentAverage;
+  const previousTotalValue = Number(previousTotal);
+  if (currentTotal < previousTotalValue) return currentAverage;
+  const deltaWeighted = currentAverage * currentTotal - previousAverage * previousTotalValue;
+  return deltaWeighted >= 0 ? deltaWeighted / deltaTotal : currentAverage;
 }
 
 function buildExecutiveTrend(buckets: ExecutiveHourBucket[], key: keyof Pick<ExecutiveHourBucket, "input" | "output" | "ahtMs" | "latencyMs" | "maxLatencyMs" | "backlog" | "online">, selected: ReturnType<typeof parseRealtimeCycle>): TrendPoint[] {
