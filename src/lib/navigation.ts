@@ -33,6 +33,7 @@ export const navSections: NavSection[] = [
     items: [
       { label: "Central Operacional", href: "/central-operacional", icon: "LayoutDashboard", roles: centralRoles },
       { label: "Real Time", href: "/real-time", icon: "MonitorCog", roles: realTimeRoles },
+      { label: "Captura de Horas", href: "/captura-horas", icon: "Clock", roles: realTimeRoles },
       { label: "Requerido", href: "/staff-cobertura", icon: "UsersRound", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "CLIENT"] },
       { label: "Performance", href: "/performance", icon: "Trophy", roles: performanceRoles }
     ]
@@ -122,7 +123,9 @@ export function canAccessPathForRole(pathname: string, userOrRole?: string | Per
   }
   if ((pathname === "/performance" || pathname.startsWith("/performance/") || pathname === "/api/performance" || pathname.startsWith("/api/performance/")) && canAccessPerformanceByEmail(user)) return true;
   if (pathname === "/meu-perfil" || pathname.startsWith("/perfil/")) return nonClientRoles.includes(normalizedRole);
-  if (pathname === "/real-time" || pathname.startsWith("/real-time/")) return canAccessRealTimeQueues({ ...user, status: user?.status ?? "ACTIVE" });
+  if (pathname === "/real-time" || pathname.startsWith("/real-time/") || pathname === "/captura-horas" || pathname.startsWith("/captura-horas/")) {
+    return canAccessRealTimeQueues({ ...user, status: user?.status ?? "ACTIVE" });
+  }
   const protectedItem = navItems.find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
   return protectedItem ? protectedItem.roles.includes(normalizedRole) : true;
 }
