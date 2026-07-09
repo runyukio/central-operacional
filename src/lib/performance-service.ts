@@ -50,7 +50,7 @@ type AttendanceRecordForMetrics = Prisma.AttendanceRecordGetPayload<{ select: ty
 type QualityRule = "ADS_QUALITY" | "TNS_QUALITY" | "CEC_QUALITY" | "UNKNOWN" | "MIXED";
 type PerformanceSortBy = "quality" | "submit" | "aht" | "abs";
 type PerformanceSortDirection = "asc" | "desc";
-type PerformanceProductionGranularity = "daily" | "weekly" | "monthly";
+type PerformanceProductionGranularity = "hourly" | "daily" | "weekly" | "monthly";
 
 export type PerformanceQuery = {
   view?: "mine" | "wfh" | "framework";
@@ -425,7 +425,7 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
     const queueMetadata = getQueueMetadataById(record.queueId);
     const queueLob = queueMetadata.lob;
     lobs.add(queueLob);
-    const bucket = productionBucket(record.bzDay, granularity);
+    const bucket = productionBucket(granularity === "hourly" ? record.bzTime : record.bzDay, granularity);
     incrementProductionAggregate(ensureProductionAggregate(trendMap, bucket.key), record);
 
     const agentKey = record.employeeId ?? normalizeWbLogin(record.wbLogin);
@@ -469,7 +469,7 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
     const queueMetadata = getQueueMetadataById(record.queueId);
     const queueLob = queueMetadata.lob;
     lobs.add(queueLob);
-    const bucket = productionBucket(record.bzDay, granularity);
+    const bucket = productionBucket(granularity === "hourly" ? record.bzTime : record.bzDay, granularity);
     incrementProductionInput(ensureProductionAggregate(trendMap, bucket.key), record.inputCount);
 
     const queueId = record.queueId || "Sem Fila ID";
@@ -2470,7 +2470,7 @@ async function latestProductionPeriod(): Promise<Period> {
 }
 
 function normalizeProductionGranularity(value?: string | null): PerformanceProductionGranularity {
-  return value === "weekly" || value === "monthly" ? value : "daily";
+  return value === "hourly" || value === "weekly" || value === "monthly" ? value : "daily";
 }
 
 function performanceLobOptions() {
@@ -2659,6 +2659,9 @@ function formatHoursAge(hours: number) {
 }
 
 function productionBucket(date: Date, granularity: PerformanceProductionGranularity) {
+  if (granularity === "hourly") {
+    return { key: `${formatDateKey(date)} ${String(date.getUTCHours()).padStart(2, "0")}:00` };
+  }
   if (granularity === "monthly") {
     return { key: `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}` };
   }
@@ -2670,6 +2673,11 @@ function productionBucket(date: Date, granularity: PerformanceProductionGranular
 }
 
 function productionBucketLabel(key: string, granularity: PerformanceProductionGranularity) {
+  if (granularity === "hourly") {
+    const [datePart, hourPart] = key.split(" ");
+    const date = parseDate(datePart);
+    return date ? `${formatDisplayDate(date).slice(0, 5)} ${hourPart ?? ""}`.trim() : key;
+  }
   if (granularity === "monthly") {
     const [year, month] = key.split("-").map(Number);
     return new Intl.DateTimeFormat("pt-BR", { month: "short", year: "numeric", timeZone: "UTC" }).format(utcDate(year, month, 1));

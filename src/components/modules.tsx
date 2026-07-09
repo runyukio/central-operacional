@@ -11995,10 +11995,13 @@ export function MuralPage() {
 }
 
 function PerformanceProductionPage() {
-  const [activeTab, setActiveTab] = useState<"panel" | "queues" | "agents">("panel");
+  const [activeTab, setActiveTab] = useState<"forecast" | "panel" | "queues" | "agents">("forecast");
   const [filters, setFilters] = useState({ startDate: "", endDate: "", lob: "", granularity: "daily" as PerformanceProductionGranularity });
+  const [forecastFilters, setForecastFilters] = useState({ lob: "ADS", horizonDays: 14 });
   const [payload, setPayload] = useState<PerformanceProductionResponse | null>(null);
+  const [forecastPayload, setForecastPayload] = useState<PerformanceProductionResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [forecastLoading, setForecastLoading] = useState(false);
   const [message, setMessage] = useState("");
 
   const loadPerformance = useCallback(async () => {
@@ -12030,6 +12033,27 @@ function PerformanceProductionPage() {
     void loadPerformance();
   }, [loadPerformance]);
 
+  const loadForecast = useCallback(async () => {
+    setForecastLoading(true);
+    const params = new URLSearchParams({ granularity: "hourly", lob: forecastFilters.lob });
+    if (filters.startDate) params.set("startDate", filters.startDate);
+    if (filters.endDate) params.set("endDate", filters.endDate);
+    try {
+      const data = await apiJson<PerformanceProductionResponse>(`/api/performance?${params.toString()}`);
+      setForecastPayload(data);
+      setMessage("");
+    } catch (error) {
+      setForecastPayload(null);
+      setMessage(error instanceof Error ? error.message : "Não foi possível carregar Forecast.");
+    } finally {
+      setForecastLoading(false);
+    }
+  }, [filters.endDate, filters.startDate, forecastFilters.lob]);
+
+  useEffect(() => {
+    if (activeTab === "forecast") void loadForecast();
+  }, [activeTab, loadForecast]);
+
   const queueRows = payload?.queues ?? [];
   const agentRows = payload?.agents ?? [];
   const trendRows = payload?.trend ?? [];
@@ -12037,6 +12061,7 @@ function PerformanceProductionPage() {
   const lobs = payload?.filters.lobs ?? ["ADS", "VIDEO", "COMMENTS", "N/A"];
   const hasSelectedLob = Boolean(filters.lob);
   const granularityLabel = filters.granularity === "monthly" ? "mensal" : filters.granularity === "weekly" ? "semanal" : "diária";
+  const forecast = buildPerformanceForecast(forecastPayload?.trend ?? [], forecastFilters.horizonDays);
   const topAgents = agentRows.slice(0, 12).map((agent) => ({
     name: agent.employeeName,
     shortName: agent.employeeName.split(" ").slice(0, 2).join(" "),
@@ -12122,6 +12147,9 @@ function PerformanceProductionPage() {
       {message ? <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{message}</p> : null}
 
       <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-white p-2 shadow-sm">
+        <button type="button" onClick={() => setActiveTab("forecast")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", activeTab === "forecast" ? "bg-blue-600 text-white shadow-soft" : "text-muted hover:bg-slate-100")}>
+          Forecast
+        </button>
         <button type="button" onClick={() => setActiveTab("panel")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", activeTab === "panel" ? "bg-blue-600 text-white shadow-soft" : "text-muted hover:bg-slate-100")}>
           Painel
         </button>
@@ -12133,7 +12161,116 @@ function PerformanceProductionPage() {
         </button>
       </div>
 
-      {activeTab === "panel" ? (
+      {activeTab === "forecast" ? (
+        <div className="space-y-4">
+          <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <PerformancePanelCard
+              title="Último upload"
+              value={forecastPayload?.summary.lastImport?.importedAt ?? payload?.panel.lastImport?.importedAt ?? "-"}
+              muted={forecastPayload?.summary.lastImport ? "produção e enqueue" : "sem upload"}
+              icon={CheckCircle2}
+              tone="green"
+            />
+            <PerformancePanelCard
+              title="Janela da base"
+              value={forecastPayload?.panel.dataRange ? `${forecastPayload.panel.dataRange.startDate.slice(5).replace("-", "/")} - ${forecastPayload.panel.dataRange.endDate.slice(5).replace("-", "/")}` : "-"}
+              muted={forecastPayload?.panel.totalRows ? `${formatPerformanceNumber(forecastPayload.panel.totalRows)} linhas recebidas` : "range do upload"}
+              icon={CalendarDays}
+              tone="purple"
+            />
+            <PerformancePanelCard
+              title="Submit importado"
+              value={formatPerformanceNumber(forecastPayload?.summary.submit ?? 0)}
+              muted={`${formatPerformanceNumber(forecastPayload?.agents.length ?? 0)} agentes`}
+              icon={FileSpreadsheet}
+              tone="blue"
+            />
+            <PerformancePanelCard
+              title="Enqueue importado"
+              value={formatPerformanceNumber(forecastPayload?.summary.input ?? 0)}
+              muted={`${formatPerformanceNumber(forecastPayload?.queues.length ?? 0)} filas`}
+              icon={ClipboardList}
+              tone="slate"
+            />
+          </section>
+
+          <section className="rounded-2xl border border-border bg-white p-4 shadow-sm">
+            <div className="mb-4 flex flex-wrap items-center justify-center gap-3">
+              <div className="grid min-w-[180px] place-items-center rounded-xl border border-border bg-white px-6 py-3 text-center">
+                <p className="text-xs font-black uppercase tracking-[0.12em] text-muted">Último real</p>
+                <p className="mt-1 text-sm font-black text-navy-950">{forecast.lastRealLabel}</p>
+              </div>
+              <div className="grid min-w-[180px] place-items-center rounded-xl border border-border bg-white px-6 py-3 text-center">
+                <p className="text-xs font-black uppercase tracking-[0.12em] text-muted">Projetado até</p>
+                <p className="mt-1 text-sm font-black text-navy-950">{forecast.projectedUntilLabel}</p>
+              </div>
+            </div>
+            <div className="mb-4 flex flex-wrap items-center justify-center gap-2">
+              <span className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">Visão</span>
+              <button type="button" className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-black text-white shadow-soft">Hora</button>
+              <button type="button" className="rounded-lg border border-border bg-white px-4 py-2 text-xs font-black text-muted">Diário</button>
+              <button type="button" className="rounded-lg border border-border bg-white px-4 py-2 text-xs font-black text-muted">Semanal</button>
+            </div>
+            <div className="mb-5 flex flex-wrap items-center justify-center gap-2">
+              <span className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">Horizonte</span>
+              {[7, 14].map((days) => (
+                <button
+                  key={days}
+                  type="button"
+                  onClick={() => setForecastFilters((current) => ({ ...current, horizonDays: days }))}
+                  className={cn(
+                    "rounded-lg border px-4 py-2 text-xs font-black",
+                    forecastFilters.horizonDays === days ? "border-cyan-600 bg-cyan-600 text-white shadow-soft" : "border-border bg-white text-muted"
+                  )}
+                >
+                  {days} dias
+                </button>
+              ))}
+            </div>
+            <div className="mb-5 flex flex-wrap items-center justify-center gap-2">
+              <span className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">LOB</span>
+              {lobs.filter((lob) => lob !== "N/A").map((lob) => (
+                <button
+                  key={`forecast-${lob}`}
+                  type="button"
+                  onClick={() => setForecastFilters((current) => ({ ...current, lob }))}
+                  className={cn(
+                    "rounded-lg border px-4 py-2 text-xs font-black",
+                    forecastFilters.lob === lob ? "border-navy-950 bg-navy-950 text-white shadow-soft" : "border-border bg-white text-navy-950"
+                  )}
+                >
+                  {lob}
+                </button>
+              ))}
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+              <PerformanceProductionKpi title="Próximas 24h" value={formatPerformanceNumber(forecast.next24h)} muted="enqueue previsto" tone="green" />
+              <PerformanceProductionKpi title={`${forecastFilters.horizonDays} dias`} value={formatPerformanceNumber(forecast.totalProjected)} muted={`${forecast.horizonHours} horas base`} tone="blue" />
+              <PerformanceProductionKpi title="Ajuste recente" value={`${forecast.recentAdjustment.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}x`} muted="hora • últimos dias" tone="orange" />
+              <PerformanceProductionKpi title="Assertividade" value={formatPerformancePercent(forecast.accuracy)} muted="últimos 7 dias" tone="green" />
+              <PerformanceProductionKpi title="Pico previsto" value={formatPerformanceNumber(forecast.peak.value)} muted={forecast.peak.label} tone="orange" />
+            </div>
+          </section>
+
+          <PerformanceChartCard title="Forecast de enqueue" subtitle={`${forecastFilters.lob} · histórico real e projeção por hora`}>
+            {forecastLoading && !forecastPayload ? (
+              <div className="grid h-[420px] place-items-center text-sm font-bold text-muted">Carregando forecast...</div>
+            ) : (
+              <ResponsiveContainer width="100%" height={420}>
+                <ComposedChart data={forecast.chart} margin={{ top: 16, right: 24, left: 0, bottom: 8 }}>
+                  <CartesianGrid stroke="#E5EAF2" vertical={false} strokeDasharray="4 4" />
+                  <XAxis dataKey="label" tick={{ fill: "#64748B", fontSize: 11, fontWeight: 700 }} tickLine={false} axisLine={false} minTickGap={18} />
+                  <YAxis tick={{ fill: "#64748B", fontSize: 12 }} tickLine={false} axisLine={false} />
+                  <Tooltip content={<PerformanceProductionTooltip />} />
+                  <Line type="monotone" dataKey="real" name="Real" stroke="#2563EB" strokeWidth={3} dot={false} />
+                  <Line type="monotone" dataKey="forecast" name="Forecast" stroke="#94A3B8" strokeWidth={3} strokeDasharray="5 5" dot={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            )}
+          </PerformanceChartCard>
+        </div>
+      ) : activeTab === "panel" ? (
         <PerformanceProductionPanel panel={panel} loading={loading && !payload} />
       ) : !hasSelectedLob ? (
         <section className="rounded-2xl border border-dashed border-blue-200 bg-blue-50/50 p-10 text-center shadow-sm">
@@ -12416,8 +12553,8 @@ function PerformanceProductionPanel({ panel, loading }: { panel?: PerformancePro
   );
 }
 
-function PerformancePanelCard({ title, value, muted, icon: Icon, tone }: { title: string; value: string; muted: string; icon: LucideIcon; tone: "blue" | "green" | "orange" | "slate" }) {
-  const toneClass = tone === "green" ? "bg-emerald-50 text-emerald-600" : tone === "orange" ? "bg-orange-50 text-orange-600" : tone === "slate" ? "bg-slate-100 text-slate-600" : "bg-blue-50 text-blue-600";
+function PerformancePanelCard({ title, value, muted, icon: Icon, tone }: { title: string; value: string; muted: string; icon: LucideIcon; tone: "blue" | "green" | "orange" | "purple" | "slate" }) {
+  const toneClass = tone === "green" ? "bg-emerald-50 text-emerald-600" : tone === "orange" ? "bg-orange-50 text-orange-600" : tone === "purple" ? "bg-violet-50 text-violet-600" : tone === "slate" ? "bg-slate-100 text-slate-600" : "bg-blue-50 text-blue-600";
   return (
     <div className="rounded-2xl border border-border bg-white p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
@@ -12432,6 +12569,99 @@ function PerformancePanelCard({ title, value, muted, icon: Icon, tone }: { title
       </div>
     </div>
   );
+}
+
+function buildPerformanceForecast(trend: PerformanceProductionResponse["trend"], horizonDays: number) {
+  const hourlyRows = trend
+    .map((row) => {
+      const date = parsePerformanceHourlyKey(row.key);
+      return date ? { ...row, date } : null;
+    })
+    .filter((row): row is PerformanceProductionResponse["trend"][number] & { date: Date } => Boolean(row))
+    .sort((a, b) => a.date.getTime() - b.date.getTime());
+  const horizonHours = Math.max(24, Math.min(24 * Math.round(horizonDays || 14), 24 * 21));
+  const last = hourlyRows[hourlyRows.length - 1] ?? null;
+  const byHour = new Map<number, { sum: number; count: number }>();
+
+  for (const row of hourlyRows) {
+    const hour = row.date.getUTCHours();
+    const current = byHour.get(hour) ?? { sum: 0, count: 0 };
+    current.sum += Math.max(0, row.input || 0);
+    current.count += 1;
+    byHour.set(hour, current);
+  }
+
+  const avgForHour = (hour: number) => {
+    const current = byHour.get(hour);
+    return current?.count ? current.sum / current.count : 0;
+  };
+  const lastTime = last?.date.getTime() ?? Date.now();
+  const last24Rows = hourlyRows.filter((row) => row.date.getTime() > lastTime - 24 * 36e5 && row.date.getTime() <= lastTime);
+  const last24Actual = last24Rows.reduce((sum, row) => sum + Math.max(0, row.input || 0), 0);
+  const last24Baseline = last24Rows.reduce((sum, row) => sum + avgForHour(row.date.getUTCHours()), 0);
+  const recentAdjustment = last24Baseline > 0 ? Math.max(0.2, Math.min(2.5, last24Actual / last24Baseline)) : 1;
+
+  const validationRows = hourlyRows.filter((row) => row.date.getTime() > lastTime - 7 * 24 * 36e5 && row.date.getTime() <= lastTime);
+  const validationError = validationRows.length
+    ? validationRows.reduce((sum, row) => {
+      const expected = avgForHour(row.date.getUTCHours()) * recentAdjustment;
+      const actual = Math.max(0, row.input || 0);
+      const denominator = Math.max(actual, expected, 1);
+      return sum + Math.abs(actual - expected) / denominator;
+    }, 0) / validationRows.length
+    : 0;
+  const accuracy = Math.max(0, Math.min(100, 100 - validationError * 100));
+
+  const forecastPoints = Array.from({ length: horizonHours }, (_, index) => {
+    const date = new Date(lastTime + (index + 1) * 36e5);
+    const value = Math.round(avgForHour(date.getUTCHours()) * recentAdjustment);
+    return {
+      key: `${date.toISOString().slice(0, 13)}:00`,
+      label: formatPerformanceForecastHourLabel(date),
+      real: null as number | null,
+      forecast: value
+    };
+  });
+  const historicalPoints = hourlyRows.slice(-Math.min(hourlyRows.length, 24 * 14)).map((row) => ({
+    key: row.key,
+    label: row.label,
+    real: Math.round(row.input || 0),
+    forecast: null as number | null
+  }));
+  const bridgePoint = last ? {
+    key: `${last.key}-forecast-start`,
+    label: last.label,
+    real: null as number | null,
+    forecast: Math.round(last.input || 0)
+  } : null;
+  const chart = [...historicalPoints, ...(bridgePoint ? [bridgePoint] : []), ...forecastPoints];
+  const next24h = forecastPoints.slice(0, 24).reduce((sum, row) => sum + (row.forecast || 0), 0);
+  const totalProjected = forecastPoints.reduce((sum, row) => sum + (row.forecast || 0), 0);
+  const peak = forecastPoints.reduce((best, row) => (row.forecast || 0) > best.value ? { value: row.forecast || 0, label: row.label } : best, { value: 0, label: "-" });
+  const projectedUntil = forecastPoints[forecastPoints.length - 1];
+
+  return {
+    chart,
+    horizonHours,
+    next24h,
+    totalProjected,
+    recentAdjustment,
+    accuracy,
+    peak,
+    lastRealLabel: last?.label ?? "-",
+    projectedUntilLabel: projectedUntil?.label ?? "-"
+  };
+}
+
+function parsePerformanceHourlyKey(key: string) {
+  const match = key.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}):00$/);
+  if (!match) return null;
+  const date = new Date(`${match[1]}T${match[2]}:00:00.000Z`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatPerformanceForecastHourLabel(date: Date) {
+  return `${String(date.getUTCDate()).padStart(2, "0")}/${String(date.getUTCMonth() + 1).padStart(2, "0")} ${String(date.getUTCHours()).padStart(2, "0")}:00`;
 }
 
 function PerformanceChartCard({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
@@ -13541,7 +13771,7 @@ type PerformanceProductionSummary = {
   latencyMinutes: number;
 };
 
-type PerformanceProductionGranularity = "daily" | "weekly" | "monthly";
+type PerformanceProductionGranularity = "hourly" | "daily" | "weekly" | "monthly";
 
 type PerformanceProductionResponse = {
   mode: "production";

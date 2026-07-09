@@ -45,7 +45,7 @@ function readSortDirection(value: string | null): PerformanceQuery["sortDirectio
 }
 
 function readGranularity(value: string | null): PerformanceQuery["granularity"] {
-  return value === "weekly" || value === "monthly" ? value : value === "daily" ? "daily" : undefined;
+  return value === "hourly" || value === "weekly" || value === "monthly" ? value : value === "daily" ? "daily" : undefined;
 }
 
 function performanceErrorResponse(error: unknown) {
