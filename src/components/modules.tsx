@@ -12030,8 +12030,8 @@ function PerformanceProductionPage() {
   }, [filters.endDate, filters.granularity, filters.lob, filters.startDate]);
 
   useEffect(() => {
-    // Forecast-only mode: avoid loading legacy Performance panels until the new structure is finalized.
-  }, []);
+    void loadPerformance();
+  }, [loadPerformance]);
 
   const loadForecast = useCallback(async () => {
     setForecastLoading(true);
@@ -12058,7 +12058,7 @@ function PerformanceProductionPage() {
   const agentRows = payload?.agents ?? [];
   const trendRows = payload?.trend ?? [];
   const panel = payload?.panel;
-  const lobs = forecastPayload?.filters.lobs ?? ["ADS", "COMMENTS", "VIDEO"];
+  const lobs = payload?.filters.lobs ?? ["ADS", "VIDEO", "COMMENTS", "N/A"];
   const hasSelectedLob = Boolean(filters.lob);
   const granularityLabel = filters.granularity === "monthly" ? "mensal" : filters.granularity === "weekly" ? "semanal" : "diária";
   const forecast = buildPerformanceForecast(forecastPayload?.trend ?? [], forecastFilters.horizonDays);
@@ -12074,12 +12074,12 @@ function PerformanceProductionPage() {
     <div className="space-y-5">
       <PageHeader
         title="Performance"
-        description="Forecast automatizado de volume."
+        description="Produtividade automatizada por filas e agentes."
         icon={Trophy}
         actions={<TopActions />}
       />
 
-      <section className="hidden rounded-2xl border border-border bg-white p-3 shadow-sm">
+      <section className="rounded-2xl border border-border bg-white p-3 shadow-sm">
         <div className="flex flex-wrap items-end gap-3">
           <label className="min-w-[150px] flex-1">
             <span className="text-xs font-extrabold uppercase tracking-[0.12em] text-muted">Data inicial</span>
@@ -12146,7 +12146,7 @@ function PerformanceProductionPage() {
 
       {message ? <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{message}</p> : null}
 
-      <div className="hidden flex-wrap items-center gap-2 rounded-2xl border border-border bg-white p-2 shadow-sm">
+      <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-white p-2 shadow-sm">
         <button type="button" onClick={() => setActiveTab("forecast")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", activeTab === "forecast" ? "bg-blue-600 text-white shadow-soft" : "text-muted hover:bg-slate-100")}>
           Forecast
         </button>
