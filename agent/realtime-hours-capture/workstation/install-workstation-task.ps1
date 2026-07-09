@@ -3,22 +3,17 @@ Installs the Realtime Hours workstation agent.
 
 Run as Administrator on each operation PC:
   powershell -ExecutionPolicy Bypass -File .\install-workstation-task.ps1 `
-    -ServerUrl "http://IP_DO_SERVIDOR:8787" `
-    -LocalToken "TOKEN_DA_REDE_LOCAL"
+    -CloudUrl "https://eastriverbrasil.com" `
+    -CloudToken "TOKEN_REALTIME_HOURS_AGENT_TOKEN"
 #>
 
 [CmdletBinding()]
 param(
-  [string]$ServerUrl = "",
+  [Parameter(Mandatory = $true)]
+  [string]$CloudUrl,
 
-  [string]$LocalToken = "",
-
-  [string]$CloudUrl = "",
-
-  [string]$CloudToken = "",
-
-  [ValidateSet("AUTO", "LOCAL", "CLOUD")]
-  [string]$DeliveryMode = "AUTO",
+  [Parameter(Mandatory = $true)]
+  [string]$CloudToken,
 
   [string]$WbLogin = "",
 
@@ -68,17 +63,10 @@ function Normalize-Login {
 
 Assert-Administrator
 
-$hasLocalDestination = -not [string]::IsNullOrWhiteSpace($ServerUrl) -and -not [string]::IsNullOrWhiteSpace($LocalToken)
 $hasCloudDestination = -not [string]::IsNullOrWhiteSpace($CloudUrl) -and -not [string]::IsNullOrWhiteSpace($CloudToken)
 
-if (-not $hasLocalDestination -and -not $hasCloudDestination) {
-  throw "Informe ServerUrl/LocalToken para rede local ou CloudUrl/CloudToken para envio direto ao site."
-}
-if ($DeliveryMode -eq "LOCAL" -and -not $hasLocalDestination) {
-  throw "DeliveryMode LOCAL exige ServerUrl e LocalToken."
-}
-if ($DeliveryMode -eq "CLOUD" -and -not $hasCloudDestination) {
-  throw "DeliveryMode CLOUD exige CloudUrl e CloudToken."
+if (-not $hasCloudDestination) {
+  throw "Informe CloudUrl e CloudToken para envio direto ao site."
 }
 
 $sourceAgent = Join-Path $PSScriptRoot "RealtimeHoursAgent.ps1"
@@ -95,11 +83,9 @@ Copy-Item -Path $sourceAgent -Destination $targetAgent -Force
 
 $configPath = Join-Path $InstallDir "config.json"
 $config = [ordered]@{
-  serverUrl = $ServerUrl.TrimEnd("/")
-  localToken = $LocalToken
   cloudUrl = $CloudUrl.TrimEnd("/")
   cloudToken = $CloudToken
-  deliveryMode = $DeliveryMode
+  deliveryMode = "CLOUD"
   wbLogin = Normalize-Login -Value $WbLogin
   employeeId = $EmployeeId
   heartbeatSeconds = $HeartbeatSeconds

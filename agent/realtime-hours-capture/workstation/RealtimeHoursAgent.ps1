@@ -1,9 +1,8 @@
 <#
 Central Operacional - Realtime Hours Workstation Agent
 
-Collects a lightweight workstation heartbeat and sends it to the local Windows
-server and/or directly to the site. If no configured destination is available,
-snapshots stay queued on disk.
+Collects a lightweight workstation heartbeat and sends it directly to the site.
+If the site is unavailable, snapshots stay queued on disk.
 #>
 
 [CmdletBinding()]
@@ -16,6 +15,12 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+try {
+  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+} catch {
+  # Older hosts may not allow changing TLS settings; Invoke-RestMethod will use its defaults.
+}
 
 $AgentVersion = "0.1.0"
 $DefaultRoot = Join-Path $env:ProgramData "CentralOperacional\RealtimeHoursAgent"
@@ -257,22 +262,11 @@ function Resolve-CloudEndpoint {
 
 function Get-DeliveryTargets {
   param([hashtable]$Config)
-  $deliveryMode = (Get-ConfigString -Config $Config -Key "deliveryMode" -DefaultValue "AUTO").Trim().ToUpperInvariant()
-  $serverUrl = Get-ConfigString -Config $Config -Key "serverUrl"
-  $localToken = Get-ConfigString -Config $Config -Key "localToken"
   $cloudUrl = Get-ConfigString -Config $Config -Key "cloudUrl"
   $cloudToken = Get-ConfigString -Config $Config -Key "cloudToken"
   $targets = @()
 
-  if (($deliveryMode -eq "AUTO" -or $deliveryMode -eq "LOCAL") -and -not [string]::IsNullOrWhiteSpace($serverUrl) -and -not [string]::IsNullOrWhiteSpace($localToken)) {
-    $targets += @{
-      label = "servidor local"
-      uri = Join-AgentUrl -BaseUrl $serverUrl -Path "/snapshot"
-      token = $localToken
-    }
-  }
-
-  if (($deliveryMode -eq "AUTO" -or $deliveryMode -eq "CLOUD") -and -not [string]::IsNullOrWhiteSpace($cloudUrl) -and -not [string]::IsNullOrWhiteSpace($cloudToken)) {
+  if (-not [string]::IsNullOrWhiteSpace($cloudUrl) -and -not [string]::IsNullOrWhiteSpace($cloudToken)) {
     $targets += @{
       label = "site direto"
       uri = Resolve-CloudEndpoint -CloudUrl $cloudUrl
@@ -294,7 +288,7 @@ function New-SnapshotPayload {
   $config = Get-Config
   $targets = @(Get-DeliveryTargets -Config $config)
   if (-not $targets -or $targets.Count -eq 0) {
-    throw "Nenhum destino configurado. Configure serverUrl/localToken ou cloudUrl/cloudToken."
+    throw "Nenhum destino configurado. Configure cloudUrl/cloudToken."
   }
 
   $idleSeconds = Get-IdleSeconds
@@ -326,7 +320,7 @@ function New-SnapshotPayload {
 
   return @{
     payload = @{
-      source = "windows-workstation-agent"
+      source = "direct-windows-agent"
       capturedAt = (Get-Date).ToUniversalTime().ToString("o")
       record = $record
     }
@@ -347,7 +341,7 @@ function Flush-Queue {
   $config = Get-Config
   $targets = @(Get-DeliveryTargets -Config $config)
   if (-not $targets -or $targets.Count -eq 0) {
-    throw "Nenhum destino configurado. Configure serverUrl/localToken ou cloudUrl/cloudToken."
+    throw "Nenhum destino configurado. Configure cloudUrl/cloudToken."
   }
 
   $files = Get-ChildItem -Path $QueueDir -Filter "*.json" -File | Sort-Object Name
