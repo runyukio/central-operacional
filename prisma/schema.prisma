@@ -1041,6 +1041,57 @@ model RealTimeCecSnapshot {
   @@index([cycleDownload])
 }
 
+model RealTimeHoursImportBatch {
+  id           String                @id @default(cuid())
+  source       String                @default("local-windows-server")
+  capturedAt   DateTime
+  importedAt   DateTime              @default(now())
+  status       String                @default("SUCCESS")
+  rowsTotal    Int                   @default(0)
+  rowsValid    Int                   @default(0)
+  rowsError    Int                   @default(0)
+  errorSummary Json?
+  createdAt    DateTime              @default(now())
+  records      RealTimeHoursRecord[]
+
+  @@index([source])
+  @@index([capturedAt])
+  @@index([importedAt])
+  @@index([status])
+  @@index([status, importedAt])
+}
+
+model RealTimeHoursRecord {
+  id                 String                   @id @default(cuid())
+  batchId            String
+  batch              RealTimeHoursImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  capturedAt         DateTime
+  hostname           String
+  windowsUser        String?
+  wbLogin            String?
+  employeeId         String?
+  ipAddress          String?
+  isSessionActive    Boolean                  @default(false)
+  idleSeconds        Int?
+  lastActivityAt     DateTime?
+  activeProcessName  String?
+  activeWindowTitle  String?
+  identitySource     String?
+  identityConfidence String                   @default("UNKNOWN")
+  rawData            Json
+  createdAt          DateTime                 @default(now())
+
+  @@index([batchId])
+  @@index([capturedAt])
+  @@index([hostname])
+  @@index([wbLogin])
+  @@index([employeeId])
+  @@index([identityConfidence])
+  @@index([capturedAt, employeeId])
+  @@index([capturedAt, wbLogin])
+  @@index([hostname, capturedAt])
+}
+
 model RequestComment {
   id        String   @id @default(cuid())
   requestId String
