@@ -804,7 +804,7 @@ function buildTimelineSegments(
   }>();
 
   for (const record of records) {
-    const isActive = record.isSessionActive && (record.idleSeconds ?? 0) < idleThresholdSeconds;
+    const isActive = record.isSessionActive;
     const activityAt = record.lastActivityAt?.getTime();
     const capturedAt = record.capturedAt.getTime();
     const pointMs =
@@ -904,7 +904,7 @@ function summarizeStatus(records: Array<{
 }>) {
   const hostnames = new Set(records.map((record) => record.hostname));
   const active = records.filter((record) => record.isSessionActive).length;
-  const idle = records.filter((record) => (record.idleSeconds ?? 0) >= idleThresholdSeconds).length;
+  const idle = records.filter((record) => record.isSessionActive && (record.idleSeconds ?? 0) >= idleThresholdSeconds).length;
   const highConfidence = records.filter((record) => record.identityConfidence === "HIGH").length;
   const mediumConfidence = records.filter((record) => record.identityConfidence === "MEDIUM").length;
   const lowConfidence = records.filter((record) => record.identityConfidence === "LOW").length;
