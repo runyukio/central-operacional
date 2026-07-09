@@ -805,12 +805,8 @@ function buildTimelineSegments(
 
   for (const record of records) {
     const isActive = record.isSessionActive;
-    const activityAt = record.lastActivityAt?.getTime();
     const capturedAt = record.capturedAt.getTime();
-    const pointMs =
-      isActive && activityAt && activityAt >= startMs && activityAt <= endMs
-        ? activityAt
-        : capturedAt;
+    const pointMs = capturedAt;
 
     if (pointMs < startMs || pointMs > endMs) continue;
 
