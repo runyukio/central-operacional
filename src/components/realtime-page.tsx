@@ -17,7 +17,7 @@ import {
   XCircle
 } from "lucide-react";
 import { Fragment, type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
-import { Area, AreaChart, ReferenceLine, ResponsiveContainer, Tooltip as RechartsTooltip, YAxis } from "recharts";
+import { Area, AreaChart, ReferenceLine, ResponsiveContainer, Tooltip as RechartsTooltip, XAxis, YAxis } from "recharts";
 
 import { getQueueReportMetadataById } from "@/lib/queue-report-metadata";
 import { cn } from "@/lib/utils";
@@ -341,7 +341,7 @@ type ExecutiveAdsReport = {
   buckets: ExecutiveHourBucket[];
   cards: AgentKpiCard[];
   heatmap: ExecutiveHeatmapRow[];
-  inputOutputHistory: Array<{ label: string; input: number | null; output: number | null }>;
+  inputForecastHistory: Array<{ label: string; input: number | null; forecast: number | null }>;
   backlogHistory: TrendPoint[];
   topAgents: ExecutiveAgentPerformanceRow[];
   lowAgents: ExecutiveAgentPerformanceRow[];
@@ -902,29 +902,37 @@ function ExecutiveAdsReportDashboard({ report }: { report: ExecutiveAdsReport })
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
-        <ExecutiveChartCard title="Input x Output" helper="Evolução horária do volume ADS">
+        <ExecutiveChartCard title="Input x Forecast" helper="Volume real ADS contra forecast horário">
           <ResponsiveContainer width="100%" height={260}>
-            <AreaChart data={report.inputOutputHistory} margin={{ top: 16, right: 20, left: 0, bottom: 8 }}>
+            <AreaChart data={report.inputForecastHistory} margin={{ top: 16, right: 20, left: 0, bottom: 26 }}>
               <defs>
                 <linearGradient id="executive-input" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#2563EB" stopOpacity={0.24} />
                   <stop offset="95%" stopColor="#2563EB" stopOpacity={0.03} />
                 </linearGradient>
-                <linearGradient id="executive-output" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#10B981" stopOpacity={0.24} />
-                  <stop offset="95%" stopColor="#10B981" stopOpacity={0.03} />
+                <linearGradient id="executive-forecast" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#F59E0B" stopOpacity={0.18} />
+                  <stop offset="95%" stopColor="#F59E0B" stopOpacity={0.02} />
                 </linearGradient>
               </defs>
               <YAxis hide domain={[0, "dataMax"]} />
+              <XAxis
+                dataKey="label"
+                interval={1}
+                axisLine={{ stroke: "#E5EAF2" }}
+                tickLine={false}
+                tick={{ fill: "#64748B", fontSize: 11, fontWeight: 800 }}
+                dy={8}
+              />
               <RechartsTooltip content={<ExecutiveMultiTooltip />} cursor={{ stroke: "#CBD5E1", strokeDasharray: "4 4" }} />
-              <Area type="monotone" dataKey="input" name="Input" stroke="#2563EB" strokeWidth={2.4} fill="url(#executive-input)" dot={false} isAnimationActive={false} />
-              <Area type="monotone" dataKey="output" name="Output" stroke="#10B981" strokeWidth={2.4} fill="url(#executive-output)" dot={false} isAnimationActive={false} />
+              <Area type="monotone" dataKey="forecast" name="Forecast" stroke="#F59E0B" strokeWidth={2.2} strokeDasharray="6 5" fill="url(#executive-forecast)" dot={false} isAnimationActive={false} />
+              <Area type="monotone" dataKey="input" name="Input" stroke="#2563EB" strokeWidth={2.6} fill="url(#executive-input)" dot={false} isAnimationActive={false} />
             </AreaChart>
           </ResponsiveContainer>
         </ExecutiveChartCard>
 
         <ExecutiveChartCard title="Backlog estimado" helper="Backlog ADS preenchido ao longo do dia">
-          <TrendSparkline data={report.backlogHistory} format="number" trend={report.cards[3]?.trend ?? "neutral"} />
+          <ExecutiveSingleSeriesChart data={report.backlogHistory} format="number" trend={report.cards[3]?.trend ?? "neutral"} />
         </ExecutiveChartCard>
       </div>
     </div>
@@ -961,6 +969,42 @@ function ExecutiveChartCard({ title, helper, children }: { title: string; helper
       </div>
       <div className="h-[260px]">{children}</div>
     </section>
+  );
+}
+
+function ExecutiveSingleSeriesChart({ data, format, trend }: { data: TrendPoint[]; format: MetricFormat; trend: "positive" | "negative" | "neutral" }) {
+  const gradientId = `executive-single-${useId().replace(/:/g, "")}`;
+  const validData = data.filter((point) => point.value !== null);
+  const color = trend === "positive" ? "#10B981" : trend === "negative" ? "#EF4444" : "#2563EB";
+  if (validData.length < 2) {
+    return (
+      <div className="grid h-full place-items-center rounded-2xl bg-slate-50 text-[11px] font-black text-muted">
+        Sem histórico
+      </div>
+    );
+  }
+  return (
+    <ResponsiveContainer width="100%" height={260}>
+      <AreaChart data={validData} margin={{ top: 16, right: 20, left: 0, bottom: 26 }}>
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor={color} stopOpacity={0.28} />
+            <stop offset="95%" stopColor={color} stopOpacity={0.03} />
+          </linearGradient>
+        </defs>
+        <YAxis hide domain={[0, "dataMax"]} />
+        <XAxis
+          dataKey="label"
+          interval={1}
+          axisLine={{ stroke: "#E5EAF2" }}
+          tickLine={false}
+          tick={{ fill: "#64748B", fontSize: 11, fontWeight: 800 }}
+          dy={8}
+        />
+        <RechartsTooltip content={<SparklineTooltip format={format} />} cursor={{ stroke: "#CBD5E1", strokeDasharray: "4 4" }} />
+        <Area type="monotone" dataKey="value" stroke={color} strokeWidth={2.6} fill={`url(#${gradientId})`} dot={false} isAnimationActive={false} />
+      </AreaChart>
+    </ResponsiveContainer>
   );
 }
 
@@ -3084,11 +3128,33 @@ function buildExecutiveAdsReport(queueRows: QueueRealtimeRow[], agentRows: Agent
     buckets,
     cards,
     heatmap: buildExecutiveHeatmap(buckets),
-    inputOutputHistory: buckets.map((bucket) => ({ label: bucket.label, input: bucket.input, output: bucket.output })),
+    inputForecastHistory: buildExecutiveInputForecastHistory(reportRows, buckets, selected),
     backlogHistory: buildExecutiveTrend(buckets, "backlog", selected),
     topAgents: agentRankings.top,
     lowAgents: agentRankings.low
   };
+}
+
+function buildExecutiveInputForecastHistory(rows: QueueReportRow[], buckets: ExecutiveHourBucket[], selected: ReturnType<typeof parseRealtimeCycle>) {
+  const inputByDateHour = buildExecutiveQueueInputByDateHour(rows, selected);
+  const selectedHour = selected.date.getHours();
+  const fallbackValues = buckets
+    .filter((bucket) => bucket.hour <= selectedHour && typeof bucket.input === "number")
+    .map((bucket) => bucket.input as number);
+  const fallbackForecast = fallbackValues.length ? averageNumber(fallbackValues) : null;
+
+  return buckets.map((bucket) => {
+    const historicalValues = Array.from(inputByDateHour.entries())
+      .filter(([dateKey]) => dateKey !== selected.dateKey)
+      .map(([, byHour]) => byHour.get(bucket.hour))
+      .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+    const forecast = historicalValues.length ? averageNumber(historicalValues) : fallbackForecast;
+    return {
+      label: bucket.label,
+      input: bucket.hour <= selectedHour ? bucket.input : null,
+      forecast: forecast === null ? null : Math.round(forecast)
+    };
+  });
 }
 
 function buildExecutiveQueueBuckets(rows: QueueReportRow[], selected: ReturnType<typeof parseRealtimeCycle>) {
@@ -3134,6 +3200,55 @@ function buildExecutiveQueueBuckets(rows: QueueReportRow[], selected: ReturnType
     });
 
   return deltaByHour;
+}
+
+function buildExecutiveQueueInputByDateHour(rows: QueueReportRow[], selected: ReturnType<typeof parseRealtimeCycle>) {
+  const byDateCycle = new Map<string, Map<string, QueueMetric[]>>();
+  rows.forEach((row) => {
+    row.history.forEach((item) => {
+      const parsed = parseRealtimeCycle(item.cycleDownload, "");
+      if (parsed.timestamp > selected.timestamp) return;
+      const byCycle = byDateCycle.get(parsed.dateKey) ?? new Map<string, QueueMetric[]>();
+      const metrics = byCycle.get(item.cycleDownload) ?? [];
+      metrics.push({
+        input: item.input,
+        output: item.output,
+        ahtMs: item.ahtMs,
+        latencyMs: item.latencyMs,
+        maxLatencyMs: item.maxLatencyMs,
+        maxLatencyRowNumber: item.maxLatencyRowNumber,
+        backlog: item.backlog,
+        sourceRows: 1
+      });
+      byCycle.set(item.cycleDownload, metrics);
+      byDateCycle.set(parsed.dateKey, byCycle);
+    });
+  });
+
+  const inputByDateHour = new Map<string, Map<number, number>>();
+  byDateCycle.forEach((byCycle, dateKey) => {
+    const latestByHour = new Map<number, { timestamp: number; metric: QueueMetric }>();
+    byCycle.forEach((metrics, cycleDownload) => {
+      const parsed = parseRealtimeCycle(cycleDownload, "");
+      const hour = parsed.date.getHours();
+      const existing = latestByHour.get(hour);
+      if (!existing || parsed.timestamp > existing.timestamp) {
+        latestByHour.set(hour, { timestamp: parsed.timestamp, metric: summarizeQueueMetrics(metrics) });
+      }
+    });
+
+    const hourlyInput = new Map<number, number>();
+    let previousSnapshot: { metric: QueueMetric } | null = null;
+    Array.from(latestByHour.entries())
+      .sort(([, a], [, b]) => a.timestamp - b.timestamp)
+      .forEach(([hour, snapshot]) => {
+        hourlyInput.set(hour, buildExecutiveQueueDeltaMetric(snapshot.metric, previousSnapshot?.metric ?? null).input);
+        previousSnapshot = snapshot;
+      });
+    inputByDateHour.set(dateKey, hourlyInput);
+  });
+
+  return inputByDateHour;
 }
 
 function buildExecutiveAgentBuckets(rows: AgentRealtimeRow[], selected: ReturnType<typeof parseRealtimeCycle>) {
@@ -3252,6 +3367,11 @@ function cumulativeDelta(current: number | null | undefined, previous: number | 
   if (!Number.isFinite(previous)) return currentValue;
   const previousValue = Number(previous);
   return currentValue >= previousValue ? currentValue - previousValue : currentValue;
+}
+
+function averageNumber(values: number[]) {
+  if (!values.length) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 function deriveAverageDeltaFromCumulative(currentTotal: number, currentAverage: number | null, previousTotal: number | null | undefined, previousAverage: number | null | undefined) {
