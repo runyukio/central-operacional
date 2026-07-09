@@ -2,7 +2,8 @@
 Central Operacional - Realtime Hours Workstation Agent
 
 Collects a lightweight workstation heartbeat and sends it to the local Windows
-server. If the local server is unavailable, snapshots stay queued on disk.
+server and/or directly to the site. If no configured destination is available,
+snapshots stay queued on disk.
 #>
 
 [CmdletBinding()]
@@ -245,6 +246,43 @@ function Join-AgentUrl {
   return "{0}{1}" -f $BaseUrl.TrimEnd("/"), $Path
 }
 
+function Resolve-CloudEndpoint {
+  param([string]$CloudUrl)
+  $normalized = $CloudUrl.TrimEnd("/")
+  if ($normalized -match "/api/") {
+    return $normalized
+  }
+  return Join-AgentUrl -BaseUrl $normalized -Path "/api/realtime-hours/agent-snapshot"
+}
+
+function Get-DeliveryTargets {
+  param([hashtable]$Config)
+  $deliveryMode = (Get-ConfigString -Config $Config -Key "deliveryMode" -DefaultValue "AUTO").Trim().ToUpperInvariant()
+  $serverUrl = Get-ConfigString -Config $Config -Key "serverUrl"
+  $localToken = Get-ConfigString -Config $Config -Key "localToken"
+  $cloudUrl = Get-ConfigString -Config $Config -Key "cloudUrl"
+  $cloudToken = Get-ConfigString -Config $Config -Key "cloudToken"
+  $targets = @()
+
+  if (($deliveryMode -eq "AUTO" -or $deliveryMode -eq "LOCAL") -and -not [string]::IsNullOrWhiteSpace($serverUrl) -and -not [string]::IsNullOrWhiteSpace($localToken)) {
+    $targets += @{
+      label = "servidor local"
+      uri = Join-AgentUrl -BaseUrl $serverUrl -Path "/snapshot"
+      token = $localToken
+    }
+  }
+
+  if (($deliveryMode -eq "AUTO" -or $deliveryMode -eq "CLOUD") -and -not [string]::IsNullOrWhiteSpace($cloudUrl) -and -not [string]::IsNullOrWhiteSpace($cloudToken)) {
+    $targets += @{
+      label = "site direto"
+      uri = Resolve-CloudEndpoint -CloudUrl $cloudUrl
+      token = $cloudToken
+    }
+  }
+
+  return $targets
+}
+
 function Invoke-AgentPost {
   param([string]$Uri, [hashtable]$Payload, [string]$Token)
   $body = $Payload | ConvertTo-Json -Depth 8 -Compress
@@ -254,13 +292,9 @@ function Invoke-AgentPost {
 
 function New-SnapshotPayload {
   $config = Get-Config
-  $serverUrl = Get-ConfigString -Config $config -Key "serverUrl"
-  $localToken = Get-ConfigString -Config $config -Key "localToken"
-  if ([string]::IsNullOrWhiteSpace($serverUrl)) {
-    throw "serverUrl nao configurado."
-  }
-  if ([string]::IsNullOrWhiteSpace($localToken)) {
-    throw "localToken nao configurado."
+  $targets = @(Get-DeliveryTargets -Config $config)
+  if (-not $targets -or $targets.Count -eq 0) {
+    throw "Nenhum destino configurado. Configure serverUrl/localToken ou cloudUrl/cloudToken."
   }
 
   $idleSeconds = Get-IdleSeconds
@@ -291,8 +325,6 @@ function New-SnapshotPayload {
   }
 
   return @{
-    serverUrl = $serverUrl
-    localToken = $localToken
     payload = @{
       source = "windows-workstation-agent"
       capturedAt = (Get-Date).ToUniversalTime().ToString("o")
@@ -313,26 +345,35 @@ function Save-QueuedSnapshot {
 function Flush-Queue {
   Initialize-AgentFolders
   $config = Get-Config
-  $serverUrl = Get-ConfigString -Config $config -Key "serverUrl"
-  $localToken = Get-ConfigString -Config $config -Key "localToken"
-  if ([string]::IsNullOrWhiteSpace($serverUrl) -or [string]::IsNullOrWhiteSpace($localToken)) {
-    throw "serverUrl/localToken nao configurados."
+  $targets = @(Get-DeliveryTargets -Config $config)
+  if (-not $targets -or $targets.Count -eq 0) {
+    throw "Nenhum destino configurado. Configure serverUrl/localToken ou cloudUrl/cloudToken."
   }
 
-  $uri = Join-AgentUrl -BaseUrl $serverUrl -Path "/snapshot"
   $files = Get-ChildItem -Path $QueueDir -Filter "*.json" -File | Sort-Object Name
   foreach ($file in $files) {
-    try {
-      $payload = Read-JsonHashtable -Path $file.FullName
-      $response = Invoke-AgentPost -Uri $uri -Payload $payload -Token $localToken
-      if ($response.success) {
+    $payload = Read-JsonHashtable -Path $file.FullName
+    $sent = $false
+    foreach ($target in $targets) {
+      $targetLabel = [string]$target["label"]
+      $targetUri = [string]$target["uri"]
+      $targetToken = [string]$target["token"]
+      try {
+        $response = Invoke-AgentPost -Uri $targetUri -Payload $payload -Token $targetToken
+        if (-not $response.success) {
+          throw ("{0} recusou snapshot." -f $targetLabel)
+        }
         Remove-Item -Path $file.FullName -Force
-        Write-AgentLog -Message ("Snapshot enviado: {0}" -f $file.Name)
-      } else {
-        throw "Servidor local recusou snapshot."
+        Write-AgentLog -Message ("Snapshot enviado para {0}: {1}" -f $targetLabel, $file.Name)
+        $sent = $true
+        break
+      } catch {
+        Write-AgentLog -Level "WARN" -Message ("Falha ao enviar para {0}. {1}" -f $targetLabel, $_.Exception.Message)
       }
-    } catch {
-      Write-AgentLog -Level "WARN" -Message ("Servidor local indisponivel. Snapshot mantido em fila. {0}" -f $_.Exception.Message)
+    }
+
+    if (-not $sent) {
+      Write-AgentLog -Level "WARN" -Message ("Snapshot mantido em fila: {0}" -f $file.Name)
       break
     }
   }

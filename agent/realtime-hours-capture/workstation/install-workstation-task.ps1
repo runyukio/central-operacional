@@ -9,11 +9,16 @@ Run as Administrator on each operation PC:
 
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory = $true)]
-  [string]$ServerUrl,
+  [string]$ServerUrl = "",
 
-  [Parameter(Mandatory = $true)]
-  [string]$LocalToken,
+  [string]$LocalToken = "",
+
+  [string]$CloudUrl = "",
+
+  [string]$CloudToken = "",
+
+  [ValidateSet("AUTO", "LOCAL", "CLOUD")]
+  [string]$DeliveryMode = "AUTO",
 
   [string]$WbLogin = "",
 
@@ -63,6 +68,19 @@ function Normalize-Login {
 
 Assert-Administrator
 
+$hasLocalDestination = -not [string]::IsNullOrWhiteSpace($ServerUrl) -and -not [string]::IsNullOrWhiteSpace($LocalToken)
+$hasCloudDestination = -not [string]::IsNullOrWhiteSpace($CloudUrl) -and -not [string]::IsNullOrWhiteSpace($CloudToken)
+
+if (-not $hasLocalDestination -and -not $hasCloudDestination) {
+  throw "Informe ServerUrl/LocalToken para rede local ou CloudUrl/CloudToken para envio direto ao site."
+}
+if ($DeliveryMode -eq "LOCAL" -and -not $hasLocalDestination) {
+  throw "DeliveryMode LOCAL exige ServerUrl e LocalToken."
+}
+if ($DeliveryMode -eq "CLOUD" -and -not $hasCloudDestination) {
+  throw "DeliveryMode CLOUD exige CloudUrl e CloudToken."
+}
+
 $sourceAgent = Join-Path $PSScriptRoot "RealtimeHoursAgent.ps1"
 if (-not (Test-Path $sourceAgent)) {
   throw "RealtimeHoursAgent.ps1 nao encontrado na pasta do instalador."
@@ -79,6 +97,9 @@ $configPath = Join-Path $InstallDir "config.json"
 $config = [ordered]@{
   serverUrl = $ServerUrl.TrimEnd("/")
   localToken = $LocalToken
+  cloudUrl = $CloudUrl.TrimEnd("/")
+  cloudToken = $CloudToken
+  deliveryMode = $DeliveryMode
   wbLogin = Normalize-Login -Value $WbLogin
   employeeId = $EmployeeId
   heartbeatSeconds = $HeartbeatSeconds

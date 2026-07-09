@@ -1,11 +1,12 @@
-# Realtime Hours Capture - Servidor local e computadores
+# Realtime Hours Capture - Servidor local, home office e computadores
 
 Este pacote implementa o MVP da captura de horas em tempo real descrita em `docs/REALTIME_HOURS_CAPTURE_README.md`.
 
 Fluxo:
 
 ```text
-Computadores da operacao -> Servidor Windows local -> API /api/realtime-hours/import -> banco do site
+Presencial: Computadores da operacao -> Servidor Windows local -> API /api/realtime-hours/import -> banco do site
+Home office: Computadores remotos -> API /api/realtime-hours/agent-snapshot -> banco do site
 ```
 
 ## O que cada parte faz
@@ -26,6 +27,12 @@ Responsabilidades:
 
 Rodam um Agent PowerShell leve.
 
+O Agent pode operar em tres modos:
+
+- `LOCAL`: envia somente para o servidor Windows local;
+- `CLOUD`: envia somente direto para o site;
+- `AUTO`: tenta servidor local primeiro e, se nao conseguir, tenta o site direto.
+
 Por padrao, captura apenas:
 
 - hostname;
@@ -43,7 +50,7 @@ Janela/processo ativo ficam desligados por padrao. Use `-CaptureActiveWindow` so
 
 ## Tokens
 
-Use dois tokens diferentes.
+Use tres tokens diferentes quando houver home office.
 
 ### Token do site
 
@@ -56,6 +63,18 @@ REALTIME_HOURS_IMPORT_TOKEN="um-token-forte-do-site"
 ```
 
 Esse token autentica o servidor local contra `/api/realtime-hours/import`.
+
+### Token direto dos agentes
+
+Fica no site e nos computadores que podem enviar direto para a nuvem.
+
+Configure no ambiente do site:
+
+```env
+REALTIME_HOURS_AGENT_TOKEN="um-token-forte-para-agentes"
+```
+
+Esse token autentica os computadores contra `/api/realtime-hours/agent-snapshot`.
 
 ### Token local da LAN
 
@@ -70,6 +89,8 @@ Gere no PowerShell:
 ```
 
 Nunca coloque o `REALTIME_HOURS_IMPORT_TOKEN` do site nos computadores.
+
+Para computadores, use `REALTIME_HOURS_AGENT_TOKEN` quando precisar enviar direto ao site.
 
 ## 1. Instalar no servidor Windows local
 
@@ -130,7 +151,7 @@ Invoke-RestMethod `
   -Headers @{ Authorization = "Bearer TOKEN_LOCAL_DA_LAN" }
 ```
 
-## 2. Instalar em um computador piloto
+## 2. Instalar em um computador piloto presencial
 
 Copie a pasta:
 
@@ -146,6 +167,7 @@ Abra PowerShell como Administrador na pasta `workstation` e rode:
 powershell -ExecutionPolicy Bypass -File .\install-workstation-task.ps1 `
   -ServerUrl "http://IP_DO_SERVIDOR:8787" `
   -LocalToken "TOKEN_LOCAL_DA_LAN" `
+  -DeliveryMode "LOCAL" `
   -WbLogin "wb_login_do_colaborador" `
   -IdentityConfidence "HIGH" `
   -RunNow
@@ -154,6 +176,46 @@ powershell -ExecutionPolicy Bypass -File .\install-workstation-task.ps1 `
 Se o usuario Windows ja for igual ao WB/Login, pode omitir `-WbLogin`.
 
 Para maquina compartilhada ou usuario Windows generico, informe `-WbLogin` na instalacao ou mantenha `IdentityConfidence` como `MEDIUM`.
+
+## 3. Instalar em computador home office direto no site
+
+Use este modo para pessoas fora da rede/VPN.
+
+Antes, configure `REALTIME_HOURS_AGENT_TOKEN` no site.
+
+No computador remoto, abra PowerShell como Administrador na pasta `workstation` e rode:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-workstation-task.ps1 `
+  -CloudUrl "https://eastriverbrasil.com" `
+  -CloudToken "TOKEN_REALTIME_HOURS_AGENT_TOKEN" `
+  -DeliveryMode "CLOUD" `
+  -IdentityConfidence "MEDIUM" `
+  -RunNow
+```
+
+Nesse modo, o computador nao precisa estar na mesma rede do servidor `192.168.x.x`; precisa apenas ter internet.
+
+## 4. Instalar computador hibrido presencial/home office
+
+Use este modo para notebooks que as pessoas usam tanto presencialmente quanto em home office.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-workstation-task.ps1 `
+  -ServerUrl "http://IP_DO_SERVIDOR:8787" `
+  -LocalToken "TOKEN_LOCAL_DA_LAN" `
+  -CloudUrl "https://eastriverbrasil.com" `
+  -CloudToken "TOKEN_REALTIME_HOURS_AGENT_TOKEN" `
+  -DeliveryMode "AUTO" `
+  -IdentityConfidence "MEDIUM" `
+  -RunNow
+```
+
+O `AUTO` tenta:
+
+1. servidor local;
+2. site direto;
+3. se nenhum responder, guarda em `queue\` e tenta novamente depois.
 
 Onde fica instalado:
 
@@ -187,26 +249,62 @@ Invoke-RestMethod `
   -Headers @{ Authorization = "Bearer TOKEN_DO_SITE_REALTIME_HOURS_IMPORT_TOKEN" }
 ```
 
-## 3. Rollout para os demais computadores
+Para computador em modo `CLOUD`, confira direto no site ou no log local:
+
+```powershell
+Get-Content "C:\ProgramData\CentralOperacional\RealtimeHoursAgent\logs\agent.log" -Tail 50
+```
+
+Procure por:
+
+```text
+Snapshot enviado para site direto
+```
+
+## 5. Rollout para os demais computadores
 
 Depois do piloto funcionar:
 
-1. Defina IP fixo ou DNS interno para o servidor local.
-2. Confirme que todos os computadores acessam `http://IP_DO_SERVIDOR:8787/health`.
-3. Instale o Agent em lotes pequenos, por exemplo 5 a 10 maquinas.
-4. Monitore `queue\` e `logs\` no servidor.
-5. So depois instale nas 120 maquinas.
+1. Defina IP fixo ou DNS interno para o servidor local, para maquinas presenciais.
+2. Confirme que computadores presenciais acessam `http://IP_DO_SERVIDOR:8787/health`.
+3. Confirme que computadores home office acessam `https://eastriverbrasil.com`.
+4. Instale o Agent em lotes pequenos, por exemplo 5 a 10 maquinas.
+5. Monitore `queue\` e `logs\` no computador, no servidor e no site.
+6. So depois instale nas 120 maquinas.
 
-Comando base:
+Comando base presencial:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install-workstation-task.ps1 `
   -ServerUrl "http://IP_DO_SERVIDOR:8787" `
   -LocalToken "TOKEN_LOCAL_DA_LAN" `
+  -DeliveryMode "LOCAL" `
   -RunNow
 ```
 
-## 4. Tarefas agendadas
+Comando base hibrido:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-workstation-task.ps1 `
+  -ServerUrl "http://IP_DO_SERVIDOR:8787" `
+  -LocalToken "TOKEN_LOCAL_DA_LAN" `
+  -CloudUrl "https://eastriverbrasil.com" `
+  -CloudToken "TOKEN_REALTIME_HOURS_AGENT_TOKEN" `
+  -DeliveryMode "AUTO" `
+  -RunNow
+```
+
+Comando base home office:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-workstation-task.ps1 `
+  -CloudUrl "https://eastriverbrasil.com" `
+  -CloudToken "TOKEN_REALTIME_HOURS_AGENT_TOKEN" `
+  -DeliveryMode "CLOUD" `
+  -RunNow
+```
+
+## 6. Tarefas agendadas
 
 Servidor:
 
@@ -220,7 +318,7 @@ Computadores:
 Central Operacional - Realtime Hours Agent
 ```
 
-## 5. Desinstalacao
+## 7. Desinstalacao
 
 Servidor:
 
@@ -246,18 +344,20 @@ Computador removendo dados locais:
 powershell -ExecutionPolicy Bypass -File .\uninstall-workstation-task.ps1 -RemoveData
 ```
 
-## 6. Checklist de piloto
+## 8. Checklist de piloto
 
 - API do site responde em `/api/realtime-hours/status`.
 - `REALTIME_HOURS_IMPORT_TOKEN` esta configurado no site.
+- `REALTIME_HOURS_AGENT_TOKEN` esta configurado no site, se houver envio direto/cloud.
 - Servidor local responde em `/health`.
-- Computador piloto consegue enviar `-Mode Once`.
+- Computador piloto presencial consegue enviar `-Mode Once`.
+- Computador piloto home office consegue enviar para `site direto`.
 - `queue\` do computador fica vazia depois do envio.
 - `queue\` do servidor fica vazia depois do upload.
 - `GET /api/realtime-hours/status` mostra o ultimo batch.
 - Janela/processo ativo estao desligados, salvo aprovacao explicita.
 
-## 7. Problemas comuns
+## 9. Problemas comuns
 
 ### Computador nao envia para servidor
 
@@ -266,6 +366,16 @@ Verifique:
 - IP/porta do servidor;
 - firewall do servidor;
 - `LocalToken` igual nos dois lados;
+- log em `C:\ProgramData\CentralOperacional\RealtimeHoursAgent\logs\agent.log`.
+
+### Computador home office nao envia para o site
+
+Verifique:
+
+- internet do computador;
+- `CloudUrl`;
+- `CloudToken` igual ao `REALTIME_HOURS_AGENT_TOKEN` do site;
+- se a rota `/api/realtime-hours/agent-snapshot` ja esta publicada;
 - log em `C:\ProgramData\CentralOperacional\RealtimeHoursAgent\logs\agent.log`.
 
 ### Servidor recebe, mas nao sobe para o site

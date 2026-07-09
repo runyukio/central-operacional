@@ -110,6 +110,21 @@ export function validateRealtimeHoursImportToken(authorizationHeader?: string | 
   return { ok: true };
 }
 
+export function validateRealtimeHoursAgentToken(authorizationHeader?: string | null) {
+  const configuredToken = process.env.REALTIME_HOURS_AGENT_TOKEN?.trim();
+  if (!configuredToken) {
+    return { error: "REALTIME_HOURS_AGENT_TOKEN não configurado no ambiente.", status: 500 };
+  }
+
+  const match = String(authorizationHeader ?? "").match(/^Bearer\s+(.+)$/i);
+  const providedToken = match?.[1]?.trim() ?? "";
+  if (!providedToken || !safeEqualString(providedToken, configuredToken)) {
+    return { error: "Token do agente de horas inválido.", status: 401 };
+  }
+
+  return { ok: true };
+}
+
 export async function authorizeRealtimeHoursRead(request: Request) {
   const authorization = request.headers.get("authorization");
   if (authorization) return validateRealtimeHoursImportToken(authorization);
