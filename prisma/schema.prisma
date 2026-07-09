@@ -461,6 +461,7 @@ model EmployeeProfile {
   workSessionDevices         WorkSessionDevice[]
   workSessionEvents          WorkSessionEvent[]
   workSessionDailySummaries  WorkSessionDailySummary[]
+  realTimeHoursIdentityMaps  RealTimeHoursIdentityMapping[]
   qualityFeedbacks           QualityFeedback[]           @relation("FeedbackEmployee")
   formalFeedbacks            FormalFeedback[]            @relation("FormalFeedbackEmployee")
   muralPostAcknowledgements  MuralPostAcknowledgement[]
@@ -1090,6 +1091,25 @@ model RealTimeHoursRecord {
   @@index([capturedAt, employeeId])
   @@index([capturedAt, wbLogin])
   @@index([hostname, capturedAt])
+}
+
+model RealTimeHoursIdentityMapping {
+  id             String           @id @default(cuid())
+  hostname       String
+  windowsUser    String
+  wbLogin        String
+  employeeId     String?
+  employee       EmployeeProfile? @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  createdByEmail String?
+  updatedByEmail String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@unique([hostname, windowsUser])
+  @@index([hostname])
+  @@index([windowsUser])
+  @@index([wbLogin])
+  @@index([employeeId])
 }
 
 model RequestComment {

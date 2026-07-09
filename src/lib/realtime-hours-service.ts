@@ -4,7 +4,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
 import { getApiActor } from "@/lib/api-actor";
-import { canAccessRealTime } from "@/lib/permissions";
+import { canAccessRealTime, normalizeRole } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
 const defaultSource = "local-windows-server";
@@ -15,6 +15,8 @@ const maxImportsLimit = 100;
 const maxRecordsPerImport = Number.parseInt(process.env.REALTIME_HOURS_MAX_RECORDS_PER_IMPORT ?? "1000", 10) || 1000;
 const staleThresholdMinutes = Number.parseInt(process.env.REALTIME_HOURS_STALE_MINUTES ?? "15", 10) || 15;
 const idleThresholdSeconds = Number.parseInt(process.env.REALTIME_HOURS_IDLE_SECONDS ?? "300", 10) || 300;
+const timelineHeartbeatMinutes = Number.parseInt(process.env.REALTIME_HOURS_TIMELINE_HEARTBEAT_MINUTES ?? "10", 10) || 10;
+const timelineMaxGapMinutes = Number.parseInt(process.env.REALTIME_HOURS_TIMELINE_MAX_GAP_MINUTES ?? "15", 10) || 15;
 const identityConfidences = ["HIGH", "MEDIUM", "LOW", "UNKNOWN"] as const;
 
 type RealtimeHoursRowError = {
@@ -47,6 +49,24 @@ type RealtimeHoursStatusOptions = {
 
 type RealtimeHoursImportsOptions = {
   limit?: string | number | null;
+};
+
+type RealtimeHoursTimelineOptions = {
+  date?: string | null;
+  search?: string | null;
+};
+
+type RealtimeHoursIdentityMappingInput = {
+  hostname?: unknown;
+  windowsUser?: unknown;
+  wbLogin?: unknown;
+};
+
+type TimelineSegment = {
+  type: "ACTIVE" | "NO_ACTIVITY";
+  start: Date;
+  end: Date;
+  durationMs: number;
 };
 
 const realtimeHoursImportSchema = z.object({
@@ -101,6 +121,16 @@ export async function authorizeRealtimeHoursRead(request: Request) {
   return { ok: true };
 }
 
+export async function authorizeRealtimeHoursManage() {
+  const actor = await getApiActor();
+  const role = normalizeRole(actor.role);
+  if (!["ADMIN", "GESTOR", "WFM"].includes(role)) {
+    return { error: "Você não tem permissão para configurar vínculos da captura de horas.", status: 403 };
+  }
+
+  return { ok: true, actor };
+}
+
 export async function importRealtimeHoursSnapshot(input: unknown) {
   const parsed = realtimeHoursImportSchema.safeParse(input);
   if (!parsed.success) {
@@ -147,6 +177,8 @@ export async function importRealtimeHoursSnapshot(input: unknown) {
       errors: rowErrors.slice(0, 50)
     };
   }
+
+  await applyRealtimeHoursIdentityMappings(records);
 
   const source = parsed.data.source || defaultSource;
   const status = rowErrors.length ? "PARTIAL" : "SUCCESS";
@@ -332,6 +364,313 @@ export async function listRealtimeHoursImports(options: RealtimeHoursImportsOpti
   };
 }
 
+export async function listRealtimeHoursIdentityMappings() {
+  const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const [mappings, recentRecords] = await Promise.all([
+    prisma.realTimeHoursIdentityMapping.findMany({
+      orderBy: [{ hostname: "asc" }, { windowsUser: "asc" }],
+      include: {
+        employee: {
+          select: {
+            id: true,
+            wbLogin: true,
+            fullName: true,
+            roleTitle: true,
+            lob: { select: { name: true } },
+            shift: { select: { name: true } }
+          }
+        }
+      }
+    }),
+    prisma.realTimeHoursRecord.findMany({
+      where: { capturedAt: { gte: since } },
+      orderBy: { capturedAt: "desc" },
+      take: 5000,
+      select: {
+        hostname: true,
+        windowsUser: true,
+        wbLogin: true,
+        employeeId: true,
+        capturedAt: true,
+        identityConfidence: true
+      }
+    })
+  ]);
+
+  const discovered = new Map<string, {
+    hostname: string;
+    windowsUser: string;
+    wbLogin: string | null;
+    employeeId: string | null;
+    lastSeenAt: Date | null;
+    recordCount: number;
+    identityConfidence: string;
+  }>();
+
+  for (const record of recentRecords) {
+    const key = identityKey(record.hostname, record.windowsUser);
+    if (!key) continue;
+    const current = discovered.get(key);
+    discovered.set(key, {
+      hostname: record.hostname,
+      windowsUser: record.windowsUser ?? "",
+      wbLogin: current?.wbLogin ?? record.wbLogin,
+      employeeId: current?.employeeId ?? record.employeeId,
+      lastSeenAt: current?.lastSeenAt ?? record.capturedAt,
+      recordCount: (current?.recordCount ?? 0) + 1,
+      identityConfidence: current?.identityConfidence === "HIGH" ? "HIGH" : record.identityConfidence
+    });
+  }
+
+  const employees = await employeeLookupFor(
+    Array.from(discovered.values()).map((item) => ({ employeeId: item.employeeId, wbLogin: item.wbLogin }))
+  );
+
+  for (const mapping of mappings) {
+    const key = identityKey(mapping.hostname, mapping.windowsUser);
+    if (!key) continue;
+    const current = discovered.get(key);
+    discovered.set(key, {
+      hostname: mapping.hostname,
+      windowsUser: mapping.windowsUser,
+      wbLogin: mapping.wbLogin,
+      employeeId: mapping.employeeId,
+      lastSeenAt: current?.lastSeenAt ?? null,
+      recordCount: current?.recordCount ?? 0,
+      identityConfidence: "HIGH"
+    });
+    if (mapping.employee) employees.set(employeeKey(mapping.employee.id, mapping.employee.wbLogin), mapping.employee);
+  }
+
+  const mappingIndex = new Map(mappings.map((mapping) => [identityKey(mapping.hostname, mapping.windowsUser), mapping]));
+
+  return {
+    success: true,
+    data: Array.from(discovered.values())
+      .map((item) => {
+        const key = identityKey(item.hostname, item.windowsUser);
+        const mapping = key ? mappingIndex.get(key) : null;
+        const employee = mapping?.employee ?? employees.get(employeeKey(item.employeeId, item.wbLogin));
+        return {
+          id: mapping?.id ?? null,
+          hostname: item.hostname,
+          windowsUser: item.windowsUser,
+          wbLogin: mapping?.wbLogin ?? employee?.wbLogin ?? item.wbLogin ?? "",
+          employeeId: mapping?.employeeId ?? employee?.id ?? item.employeeId ?? "",
+          employeeName: employee?.fullName ?? "",
+          roleTitle: employee?.roleTitle ?? "",
+          lob: employee?.lob?.name ?? "",
+          shift: employee?.shift?.name ?? "",
+          mapped: Boolean(mapping),
+          lastSeenAt: item.lastSeenAt?.toISOString() ?? null,
+          recordCount: item.recordCount,
+          identityConfidence: mapping ? "HIGH" : item.identityConfidence
+        };
+      })
+      .sort((a, b) => `${a.hostname} ${a.windowsUser}`.localeCompare(`${b.hostname} ${b.windowsUser}`))
+  };
+}
+
+export async function upsertRealtimeHoursIdentityMapping(input: RealtimeHoursIdentityMappingInput, actorEmail?: string | null) {
+  const hostname = String(input.hostname ?? "").trim();
+  const windowsUser = String(input.windowsUser ?? "").trim();
+  const wbLogin = normalizeLogin(String(input.wbLogin ?? ""));
+
+  if (!hostname || !windowsUser) {
+    return { success: false, error: "hostname e windowsUser são obrigatórios.", message: "hostname e windowsUser são obrigatórios.", status: 400 };
+  }
+
+  if (!wbLogin) {
+    await prisma.realTimeHoursIdentityMapping.deleteMany({ where: { hostname, windowsUser } });
+    return { success: true, deleted: true, hostname, windowsUser };
+  }
+
+  const employee = await prisma.employeeProfile.findFirst({
+    where: { wbLogin: { equals: wbLogin, mode: "insensitive" } },
+    select: {
+      id: true,
+      wbLogin: true,
+      fullName: true,
+      roleTitle: true,
+      lob: { select: { name: true } },
+      shift: { select: { name: true } }
+    }
+  });
+
+  if (!employee) {
+    return { success: false, error: "WB/Login não encontrado no Mapa de Funcionários.", message: "WB/Login não encontrado no Mapa de Funcionários.", status: 404 };
+  }
+
+  const mapping = await prisma.$transaction(async (tx) => {
+    const saved = await tx.realTimeHoursIdentityMapping.upsert({
+      where: { hostname_windowsUser: { hostname, windowsUser } },
+      create: {
+        hostname,
+        windowsUser,
+        wbLogin: employee.wbLogin,
+        employeeId: employee.id,
+        createdByEmail: actorEmail ?? null,
+        updatedByEmail: actorEmail ?? null
+      },
+      update: {
+        wbLogin: employee.wbLogin,
+        employeeId: employee.id,
+        updatedByEmail: actorEmail ?? null
+      },
+      include: {
+        employee: {
+          select: {
+            id: true,
+            wbLogin: true,
+            fullName: true,
+            roleTitle: true,
+            lob: { select: { name: true } },
+            shift: { select: { name: true } }
+          }
+        }
+      }
+    });
+
+    await tx.realTimeHoursRecord.updateMany({
+      where: { hostname, windowsUser },
+      data: {
+        wbLogin: employee.wbLogin,
+        employeeId: employee.id,
+        identitySource: "manual_site_mapping",
+        identityConfidence: "HIGH"
+      }
+    });
+
+    return saved;
+  });
+
+  return {
+    success: true,
+    data: {
+      id: mapping.id,
+      hostname: mapping.hostname,
+      windowsUser: mapping.windowsUser,
+      wbLogin: mapping.wbLogin,
+      employeeId: mapping.employeeId ?? "",
+      employeeName: mapping.employee?.fullName ?? "",
+      roleTitle: mapping.employee?.roleTitle ?? "",
+      lob: mapping.employee?.lob?.name ?? "",
+      shift: mapping.employee?.shift?.name ?? "",
+      mapped: true
+    }
+  };
+}
+
+export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOptions = {}) {
+  const period = resolveTimelineDate(options.date);
+  const records = await prisma.realTimeHoursRecord.findMany({
+    where: {
+      capturedAt: {
+        gte: period.start,
+        lte: period.end
+      }
+    },
+    orderBy: [{ hostname: "asc" }, { windowsUser: "asc" }, { capturedAt: "asc" }],
+    select: {
+      id: true,
+      capturedAt: true,
+      hostname: true,
+      windowsUser: true,
+      wbLogin: true,
+      employeeId: true,
+      ipAddress: true,
+      isSessionActive: true,
+      idleSeconds: true,
+      activeProcessName: true,
+      activeWindowTitle: true,
+      lastActivityAt: true,
+      identityConfidence: true
+    }
+  });
+
+  const mappings = await mappingLookupFor(records);
+  const employees = await employeeLookupFor(records.map((record) => {
+    const mapping = mappings.get(identityKey(record.hostname, record.windowsUser));
+    return {
+      employeeId: mapping?.employeeId ?? record.employeeId,
+      wbLogin: mapping?.wbLogin ?? record.wbLogin
+    };
+  }));
+
+  const groups = new Map<string, typeof records>();
+  for (const record of records) {
+    const key = identityKey(record.hostname, record.windowsUser) ?? `${record.hostname}::`;
+    const group = groups.get(key) ?? [];
+    group.push(record);
+    groups.set(key, group);
+  }
+
+  const search = normalizeSearch(options.search);
+  const rows = Array.from(groups.entries()).map(([key, group]) => {
+    const latest = group[group.length - 1];
+    const mapping = mappings.get(key);
+    const employee = employees.get(employeeKey(mapping?.employeeId ?? latest.employeeId, mapping?.wbLogin ?? latest.wbLogin));
+    const segments = buildTimelineSegments(group, period.start, period.end);
+    const activeMs = segments.filter((segment) => segment.type === "ACTIVE").reduce((sum, segment) => sum + segment.durationMs, 0);
+    const noActivityMs = Math.max(0, period.end.getTime() - period.start.getTime() - activeMs);
+    const sessionCount = segments.filter((segment) => segment.type === "ACTIVE").length;
+
+    return {
+      key,
+      hostname: latest.hostname,
+      windowsUser: latest.windowsUser ?? "",
+      wbLogin: mapping?.wbLogin ?? employee?.wbLogin ?? latest.wbLogin ?? "",
+      employeeId: mapping?.employeeId ?? employee?.id ?? latest.employeeId ?? "",
+      employeeName: employee?.fullName ?? "",
+      roleTitle: employee?.roleTitle ?? "",
+      lob: employee?.lob?.name ?? "",
+      shift: employee?.shift?.name ?? "",
+      ipAddress: latest.ipAddress ?? "",
+      lastSeenAt: latest.capturedAt.toISOString(),
+      activeMs,
+      noActivityMs,
+      sessionCount,
+      segments: segments.map((segment) => ({
+        type: segment.type,
+        start: segment.start.toISOString(),
+        end: segment.end.toISOString(),
+        durationMs: segment.durationMs
+      }))
+    };
+  }).filter((row) => {
+    if (!search) return true;
+    return normalizeSearch([
+      row.hostname,
+      row.windowsUser,
+      row.wbLogin,
+      row.employeeName,
+      row.lob,
+      row.shift,
+      row.ipAddress
+    ].join(" ")).includes(search);
+  }).sort((a, b) => {
+    const left = a.employeeName || a.wbLogin || a.windowsUser || a.hostname;
+    const right = b.employeeName || b.wbLogin || b.windowsUser || b.hostname;
+    return left.localeCompare(right);
+  });
+
+  return {
+    success: true,
+    date: period.date,
+    window: {
+      start: period.start.toISOString(),
+      end: period.end.toISOString()
+    },
+    summary: {
+      users: rows.length,
+      activeMs: rows.reduce((sum, row) => sum + row.activeMs, 0),
+      noActivityMs: rows.reduce((sum, row) => sum + row.noActivityMs, 0),
+      sessions: rows.reduce((sum, row) => sum + row.sessionCount, 0)
+    },
+    rows
+  };
+}
+
 function normalizeRecord(rawRecord: unknown, rowNumber: number, capturedAt: Date): NormalizeRecordResult {
   if (!isPlainObject(rawRecord)) {
     return { error: { rowNumber, error: "Registro precisa ser um objeto JSON." } };
@@ -365,6 +704,153 @@ function normalizeRecord(rawRecord: unknown, rowNumber: number, capturedAt: Date
       rawData: toJsonValue(rawRecord)
     }
   };
+}
+
+async function applyRealtimeHoursIdentityMappings(records: NormalizedRealtimeHoursRecord[]) {
+  const mappings = await mappingLookupFor(records);
+  for (const record of records) {
+    const mapping = mappings.get(identityKey(record.hostname, record.windowsUser));
+    if (!mapping) continue;
+    record.wbLogin = mapping.wbLogin;
+    record.employeeId = mapping.employeeId ?? null;
+    record.identitySource = "manual_site_mapping";
+    record.identityConfidence = "HIGH";
+  }
+}
+
+async function mappingLookupFor(records: Array<{ hostname: string; windowsUser: string | null }>) {
+  const keys = new Set(records.map((record) => identityKey(record.hostname, record.windowsUser)).filter(Boolean));
+  if (!keys.size) return new Map<string, { hostname: string; windowsUser: string; wbLogin: string; employeeId: string | null }>();
+
+  const mappings = await prisma.realTimeHoursIdentityMapping.findMany({
+    where: {
+      OR: Array.from(keys).map((key) => {
+        const [hostname, windowsUser] = key.split("::");
+        return {
+          hostname: { equals: hostname, mode: "insensitive" as const },
+          windowsUser: { equals: windowsUser, mode: "insensitive" as const }
+        };
+      })
+    },
+    select: {
+      hostname: true,
+      windowsUser: true,
+      wbLogin: true,
+      employeeId: true
+    }
+  });
+
+  return new Map(mappings.map((mapping) => [identityKey(mapping.hostname, mapping.windowsUser), mapping]));
+}
+
+async function employeeLookupFor(entries: Array<{ employeeId?: string | null; wbLogin?: string | null }>) {
+  const ids = Array.from(new Set(entries.map((entry) => entry.employeeId).filter(Boolean) as string[]));
+  const wbLogins = Array.from(new Set(entries.map((entry) => entry.wbLogin).filter(Boolean).map((value) => normalizeLogin(String(value)))));
+  const employees = ids.length || wbLogins.length
+    ? await prisma.employeeProfile.findMany({
+      where: {
+        OR: [
+          ...(ids.length ? [{ id: { in: ids } }] : []),
+          ...wbLogins.map((wbLogin) => ({ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }))
+        ]
+      },
+      select: {
+        id: true,
+        wbLogin: true,
+        fullName: true,
+        roleTitle: true,
+        lob: { select: { name: true } },
+        shift: { select: { name: true } }
+      }
+    })
+    : [];
+
+  const lookup = new Map<string, typeof employees[number]>();
+  for (const employee of employees) {
+    lookup.set(employeeKey(employee.id, null), employee);
+    lookup.set(employeeKey(null, employee.wbLogin), employee);
+  }
+  return lookup;
+}
+
+function buildTimelineSegments(
+  records: Array<{ capturedAt: Date; isSessionActive: boolean; idleSeconds: number | null }>,
+  start: Date,
+  end: Date
+): TimelineSegment[] {
+  const heartbeatMs = timelineHeartbeatMinutes * 60_000;
+  const maxGapMs = timelineMaxGapMinutes * 60_000;
+  const sorted = [...records].sort((a, b) => a.capturedAt.getTime() - b.capturedAt.getTime());
+  const segments: TimelineSegment[] = [];
+  let cursor = start.getTime();
+  const endMs = end.getTime();
+
+  sorted.forEach((record, index) => {
+    const recordStart = Math.min(Math.max(record.capturedAt.getTime(), start.getTime()), endMs);
+    if (recordStart > cursor) appendTimelineSegment(segments, "NO_ACTIVITY", new Date(cursor), new Date(recordStart));
+
+    const next = sorted[index + 1]?.capturedAt.getTime();
+    const expectedEnd = Math.min(recordStart + heartbeatMs, endMs);
+    const segmentEnd = next && next > recordStart && next - recordStart <= maxGapMs
+      ? Math.min(next, endMs)
+      : expectedEnd;
+
+    const isActive = record.isSessionActive && (record.idleSeconds ?? 0) < idleThresholdSeconds;
+    appendTimelineSegment(segments, isActive ? "ACTIVE" : "NO_ACTIVITY", new Date(recordStart), new Date(segmentEnd));
+    cursor = Math.max(cursor, segmentEnd);
+  });
+
+  if (cursor < endMs) appendTimelineSegment(segments, "NO_ACTIVITY", new Date(cursor), end);
+  return segments;
+}
+
+function appendTimelineSegment(segments: TimelineSegment[], type: TimelineSegment["type"], start: Date, end: Date) {
+  const durationMs = Math.max(0, end.getTime() - start.getTime());
+  if (!durationMs) return;
+  const previous = segments[segments.length - 1];
+  if (previous?.type === type && previous.end.getTime() === start.getTime()) {
+    previous.end = end;
+    previous.durationMs += durationMs;
+    return;
+  }
+  segments.push({ type, start, end, durationMs });
+}
+
+function resolveTimelineDate(value?: string | null) {
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(value ?? "")) ? String(value) : todayInSaoPaulo();
+  return {
+    date,
+    start: new Date(`${date}T00:00:00.000-03:00`),
+    end: new Date(`${date}T23:59:59.999-03:00`)
+  };
+}
+
+function todayInSaoPaulo() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(new Date());
+}
+
+function identityKey(hostname?: string | null, windowsUser?: string | null) {
+  const host = String(hostname ?? "").trim().toLowerCase();
+  const user = String(windowsUser ?? "").trim().toLowerCase();
+  return host && user ? `${host}::${user}` : "";
+}
+
+function employeeKey(employeeId?: string | null, wbLogin?: string | null) {
+  if (employeeId) return `id:${employeeId}`;
+  return wbLogin ? `wb:${normalizeLogin(wbLogin)}` : "";
+}
+
+function normalizeSearch(value?: string | null) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "");
 }
 
 function summarizeStatus(records: Array<{
