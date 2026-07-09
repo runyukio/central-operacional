@@ -2,15 +2,14 @@ import { NextResponse } from "next/server";
 
 import {
   authorizeRealtimeHoursManage,
-  authorizeRealtimeHoursRead,
   listRealtimeHoursIdentityMappings,
   upsertRealtimeHoursIdentityMapping
 } from "@/lib/realtime-hours-service";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(request: Request) {
-  const access = await authorizeRealtimeHoursRead(request);
+export async function GET() {
+  const access = await authorizeRealtimeHoursManage();
   if ("error" in access) {
     return NextResponse.json({ success: false, error: access.error, message: access.error }, { status: access.status });
   }

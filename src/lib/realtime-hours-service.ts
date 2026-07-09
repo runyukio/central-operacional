@@ -4,8 +4,9 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
 import { getApiActor } from "@/lib/api-actor";
-import { canAccessRealTime, normalizeRole } from "@/lib/permissions";
+import { canAccessRealTime } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import { canManageRealtimeHoursMappings } from "@/lib/realtime-hours-permissions";
 
 const defaultSource = "local-windows-server";
 const defaultStatusLimit = 200;
@@ -123,8 +124,7 @@ export async function authorizeRealtimeHoursRead(request: Request) {
 
 export async function authorizeRealtimeHoursManage() {
   const actor = await getApiActor();
-  const role = normalizeRole(actor.role);
-  if (!["ADMIN", "GESTOR", "WFM"].includes(role)) {
+  if (!canManageRealtimeHoursMappings(actor.email)) {
     return { error: "Você não tem permissão para configurar vínculos da captura de horas.", status: 403 };
   }
 

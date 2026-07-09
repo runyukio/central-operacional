@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { RealtimeHoursPage } from "@/components/realtime-hours-page";
 import { authOptions } from "@/lib/auth-options";
 import { canAccessRealTimeQueues } from "@/lib/permissions";
+import { canManageRealtimeHoursMappings } from "@/lib/realtime-hours-permissions";
 
 export default async function CapturaHorasRoute() {
   const session = await getServerSession(authOptions);
@@ -19,5 +20,5 @@ export default async function CapturaHorasRoute() {
     redirect("/central-operacional");
   }
 
-  return <RealtimeHoursPage />;
+  return <RealtimeHoursPage canManageMappings={canManageRealtimeHoursMappings(session?.user?.email)} />;
 }

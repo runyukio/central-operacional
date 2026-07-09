@@ -146,6 +146,10 @@ type RealtimeHoursIdentityMappingsPayload = {
 
 type CaptureTab = "TIMELINE" | "MAPPINGS";
 
+type RealtimeHoursPageProps = {
+  canManageMappings?: boolean;
+};
+
 const idleThresholdSeconds = 300;
 
 const emptySummary: RealtimeHoursSummary = {
@@ -164,7 +168,9 @@ const emptySummary: RealtimeHoursSummary = {
   }
 };
 
-export function RealtimeHoursPage() {
+const emptyMappingsPayload: RealtimeHoursIdentityMappingsPayload = { success: true, data: [] };
+
+export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPageProps) {
   const [activeTab, setActiveTab] = useState<CaptureTab>("TIMELINE");
   const [statusPayload, setStatusPayload] = useState<RealtimeHoursStatusPayload | null>(null);
   const [timelinePayload, setTimelinePayload] = useState<RealtimeHoursTimelinePayload | null>(null);
@@ -185,16 +191,21 @@ export function RealtimeHoursPage() {
     setSuccessMessage("");
 
     try {
+      const mappingsRequest = canManageMappings
+        ? fetch("/api/realtime-hours/identity-mappings", { cache: "no-store" })
+        : Promise.resolve(null);
       const [statusResponse, timelineResponse, mappingsResponse] = await Promise.all([
         fetch("/api/realtime-hours/status?limit=500", { cache: "no-store" }),
         fetch(`/api/realtime-hours/timeline?date=${encodeURIComponent(timelineDate)}`, { cache: "no-store" }),
-        fetch("/api/realtime-hours/identity-mappings", { cache: "no-store" })
+        mappingsRequest
       ]);
 
       const [statusBody, timelineBody, mappingsBody] = await Promise.all([
         statusResponse.json() as Promise<RealtimeHoursStatusPayload>,
         timelineResponse.json() as Promise<RealtimeHoursTimelinePayload>,
-        mappingsResponse.json() as Promise<RealtimeHoursIdentityMappingsPayload>
+        mappingsResponse
+          ? mappingsResponse.json() as Promise<RealtimeHoursIdentityMappingsPayload>
+          : Promise.resolve(emptyMappingsPayload)
       ]);
 
       if (!statusResponse.ok || statusBody.success === false) {
@@ -203,7 +214,7 @@ export function RealtimeHoursPage() {
       if (!timelineResponse.ok || timelineBody.success === false) {
         throw new Error(timelineBody.message || timelineBody.error || "Não foi possível carregar a linha do tempo.");
       }
-      if (!mappingsResponse.ok || mappingsBody.success === false) {
+      if (canManageMappings && mappingsResponse && (!mappingsResponse.ok || mappingsBody.success === false)) {
         throw new Error(mappingsBody.message || mappingsBody.error || "Não foi possível carregar os vínculos de usuários Windows.");
       }
 
@@ -216,7 +227,7 @@ export function RealtimeHoursPage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [timelineDate]);
+  }, [canManageMappings, timelineDate]);
 
   useEffect(() => {
     loadData();
@@ -367,7 +378,9 @@ export function RealtimeHoursPage() {
       <div className="rounded-2xl border border-border bg-white p-2 shadow-soft">
         <div className="flex flex-wrap items-center gap-2">
           <CaptureTabButton active={activeTab === "TIMELINE"} onClick={() => setActiveTab("TIMELINE")} icon={Clock} label="Linha do tempo" />
-          <CaptureTabButton active={activeTab === "MAPPINGS"} onClick={() => setActiveTab("MAPPINGS")} icon={Link2} label="Vínculos" />
+          {canManageMappings ? (
+            <CaptureTabButton active={activeTab === "MAPPINGS"} onClick={() => setActiveTab("MAPPINGS")} icon={Link2} label="Vínculos" />
+          ) : null}
         </div>
       </div>
 
@@ -392,7 +405,7 @@ export function RealtimeHoursPage() {
         />
       ) : null}
 
-      {activeTab === "MAPPINGS" ? (
+      {canManageMappings && activeTab === "MAPPINGS" ? (
         <MappingsPanel
           rows={mappingRows}
           drafts={mappingDrafts}
