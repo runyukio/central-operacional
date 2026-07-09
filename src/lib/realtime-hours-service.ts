@@ -774,29 +774,55 @@ async function employeeLookupFor(entries: Array<{ employeeId?: string | null; wb
 }
 
 function buildTimelineSegments(
-  records: Array<{ capturedAt: Date; isSessionActive: boolean; idleSeconds: number | null }>,
+  records: Array<{ capturedAt: Date; lastActivityAt?: Date | null; isSessionActive: boolean; idleSeconds: number | null }>,
   start: Date,
   end: Date
 ): TimelineSegment[] {
-  const heartbeatMs = timelineHeartbeatMinutes * 60_000;
-  const maxGapMs = timelineMaxGapMinutes * 60_000;
-  const sorted = [...records].sort((a, b) => a.capturedAt.getTime() - b.capturedAt.getTime());
-  const segments: TimelineSegment[] = [];
-  let cursor = start.getTime();
+  const usesActivityEvents = records.some((record) => record.lastActivityAt);
+  const heartbeatMs = usesActivityEvents ? 60_000 : timelineHeartbeatMinutes * 60_000;
+  const maxGapMs = usesActivityEvents ? 2 * 60_000 : timelineMaxGapMinutes * 60_000;
+  const startMs = start.getTime();
   const endMs = end.getTime();
+  const pointIndex = new Map<string, {
+    at: Date;
+    type: TimelineSegment["type"];
+  }>();
 
-  sorted.forEach((record, index) => {
-    const recordStart = Math.min(Math.max(record.capturedAt.getTime(), start.getTime()), endMs);
-    if (recordStart > cursor) appendTimelineSegment(segments, "NO_ACTIVITY", new Date(cursor), new Date(recordStart));
+  for (const record of records) {
+    const isActive = record.isSessionActive && (record.idleSeconds ?? 0) < idleThresholdSeconds;
+    const activityAt = record.lastActivityAt?.getTime();
+    const capturedAt = record.capturedAt.getTime();
+    const pointMs =
+      isActive && activityAt && activityAt >= startMs && activityAt <= endMs
+        ? activityAt
+        : capturedAt;
 
-    const next = sorted[index + 1]?.capturedAt.getTime();
-    const expectedEnd = Math.min(recordStart + heartbeatMs, endMs);
-    const segmentEnd = next && next > recordStart && next - recordStart <= maxGapMs
+    if (pointMs < startMs || pointMs > endMs) continue;
+
+    const roundedMinute = Math.floor(pointMs / 60_000);
+    const key = String(roundedMinute);
+    const type: TimelineSegment["type"] = isActive ? "ACTIVE" : "NO_ACTIVITY";
+    const current = pointIndex.get(key);
+    if (!current || (current.type === "NO_ACTIVITY" && type === "ACTIVE")) {
+      pointIndex.set(key, { at: new Date(roundedMinute * 60_000), type });
+    }
+  }
+
+  const sorted = Array.from(pointIndex.values()).sort((a, b) => a.at.getTime() - b.at.getTime());
+  const segments: TimelineSegment[] = [];
+  let cursor = startMs;
+
+  sorted.forEach((point, index) => {
+    const pointStart = Math.min(Math.max(point.at.getTime(), startMs), endMs);
+    if (pointStart > cursor) appendTimelineSegment(segments, "NO_ACTIVITY", new Date(cursor), new Date(pointStart));
+
+    const next = sorted[index + 1]?.at.getTime();
+    const expectedEnd = Math.min(pointStart + heartbeatMs, endMs);
+    const segmentEnd = next && next > pointStart && next - pointStart <= maxGapMs
       ? Math.min(next, endMs)
       : expectedEnd;
 
-    const isActive = record.isSessionActive && (record.idleSeconds ?? 0) < idleThresholdSeconds;
-    appendTimelineSegment(segments, isActive ? "ACTIVE" : "NO_ACTIVITY", new Date(recordStart), new Date(segmentEnd));
+    appendTimelineSegment(segments, point.type, new Date(pointStart), new Date(segmentEnd));
     cursor = Math.max(cursor, segmentEnd);
   });
 
