@@ -18,5 +18,5 @@ export default async function RealTimeRoute() {
   })) {
     redirect("/central-operacional");
   }
-  return <RealTimePage userRole={session?.user?.role ?? ""} />;
+  return <RealTimePage userRole={session?.user?.role ?? ""} userEmail={session?.user?.email ?? ""} />;
 }

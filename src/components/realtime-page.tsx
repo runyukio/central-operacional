@@ -16,7 +16,7 @@ import {
   X,
   XCircle
 } from "lucide-react";
-import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Area, AreaChart, ReferenceLine, ResponsiveContainer, Tooltip as RechartsTooltip, YAxis } from "recharts";
 
 import { getQueueReportMetadataById } from "@/lib/queue-report-metadata";
@@ -269,6 +269,7 @@ type ReportKpiCards = {
   headcount: OnlineHeadcountGaugeData[];
 };
 type TnsReportCards = ReportKpiCards;
+type RealTimeMainTab = "agents" | "queues" | "report" | "executive";
 
 type QueueFilters = {
   search: string;
@@ -306,9 +307,43 @@ type DepartmentReportSummary = {
   maxLatencyQueueId: string;
   maxLatencyQueueName: string;
 };
+type ExecutiveHourBucket = {
+  hour: number;
+  label: string;
+  cycleDownload: string | null;
+  input: number | null;
+  output: number | null;
+  ahtMs: number | null;
+  latencyMs: number | null;
+  maxLatencyMs: number | null;
+  backlog: number | null;
+  scheduled: number | null;
+  online: number | null;
+};
+type ExecutiveHeatmapCell = {
+  value: string;
+  tone: "empty" | "good" | "neutral" | "watch" | "bad" | "critical";
+};
+type ExecutiveHeatmapRow = {
+  label: string;
+  cells: ExecutiveHeatmapCell[];
+};
+type ExecutiveAdsReport = {
+  selectedCycle: string;
+  dateLabel: string;
+  latestHourLabel: string;
+  buckets: ExecutiveHourBucket[];
+  cards: AgentKpiCard[];
+  heatmap: ExecutiveHeatmapRow[];
+  inputOutputHistory: Array<{ label: string; input: number | null; output: number | null }>;
+  backlogHistory: TrendPoint[];
+  topAgents: Array<{ name: string; wbLogin: string; submit: number; ahtMs: number | null }>;
+  lowAgents: Array<{ name: string; wbLogin: string; submit: number; status: AgentPresenceStatus }>;
+};
 
 const ADS_REPORT_TARGET_LATENCY_MINUTES = 120;
 const ADS_REPORT_TARGET_LATENCY_LABEL = "2:00h";
+const EXECUTIVE_REPORT_ALLOWED_EMAILS = new Set(["runyukio@gmail.com", "wb_lucasy@kuaishou.com"]);
 
 type ImportHistory = {
   id: string;
@@ -366,6 +401,7 @@ const numericQueueSortKeys = new Set<QueueSortKey>(["input", "output", "aht", "l
 
 type RealTimePageProps = {
   userRole?: string | null;
+  userEmail?: string | null;
 };
 
 function isClientRole(role?: string | null) {
@@ -373,13 +409,14 @@ function isClientRole(role?: string | null) {
   return normalized === "CLIENT" || normalized === "CLIENTE";
 }
 
-export function RealTimePage({ userRole }: RealTimePageProps) {
+export function RealTimePage({ userRole, userEmail }: RealTimePageProps) {
   const clientQueuesOnly = isClientRole(userRole);
+  const canAccessExecutiveReport = !clientQueuesOnly && EXECUTIVE_REPORT_ALLOWED_EMAILS.has(String(userEmail ?? "").trim().toLowerCase());
   const [payload, setPayload] = useState<RealTimePayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState<"agents" | "queues" | "report">(clientQueuesOnly ? "queues" : "agents");
+  const [activeTab, setActiveTab] = useState<RealTimeMainTab>(clientQueuesOnly ? "queues" : "agents");
   const [selectedCycle, setSelectedCycle] = useState("");
   const [followLatestCycle, setFollowLatestCycle] = useState(true);
   const [queueFilters, setQueueFilters] = useState<QueueFilters>(defaultQueueFilters);
@@ -397,7 +434,7 @@ export function RealTimePage({ userRole }: RealTimePageProps) {
 
   const effectiveTab = clientQueuesOnly ? "queues" : activeTab;
 
-  async function loadSnapshot(cycle = selectedCycle, background = false, view: "agents" | "queues" | "both" = effectiveTab === "agents" ? "agents" : effectiveTab === "report" ? "both" : "queues") {
+  async function loadSnapshot(cycle = selectedCycle, background = false, view: "agents" | "queues" | "both" = effectiveTab === "agents" ? "agents" : effectiveTab === "report" || effectiveTab === "executive" ? "both" : "queues") {
     snapshotAbortRef.current?.abort();
     const controller = new AbortController();
     snapshotAbortRef.current = controller;
@@ -457,12 +494,16 @@ export function RealTimePage({ userRole }: RealTimePageProps) {
       setActiveTab("queues");
       return;
     }
-    void loadSnapshot(selectedCycle, false, effectiveTab === "agents" ? "agents" : effectiveTab === "report" ? "both" : "queues");
+    if (!canAccessExecutiveReport && activeTab === "executive") {
+      setActiveTab("agents");
+      return;
+    }
+    void loadSnapshot(selectedCycle, false, effectiveTab === "agents" ? "agents" : effectiveTab === "report" || effectiveTab === "executive" ? "both" : "queues");
     return () => {
       snapshotAbortRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCycle, activeTab, clientQueuesOnly]);
+  }, [selectedCycle, activeTab, clientQueuesOnly, canAccessExecutiveReport]);
 
   const summary = payload?.data.summary;
   const queueView = payload?.data.queueView;
@@ -531,6 +572,7 @@ export function RealTimePage({ userRole }: RealTimePageProps) {
   const reportBacklogCard = useMemo(() => buildReportBacklogCard(reportRows, selectedCycleValue), [reportRows, selectedCycleValue]);
   const adsReportCards = useMemo(() => buildAdsReportCards(reportRows, agentView?.rows ?? [], selectedCycleValue), [agentView?.rows, reportRows, selectedCycleValue]);
   const tnsReportCards = useMemo(() => buildTnsReportCards(reportRows, agentView?.rows ?? [], selectedCycleValue), [agentView?.rows, reportRows, selectedCycleValue]);
+  const executiveAdsReport = useMemo(() => buildExecutiveAdsReport(queueView?.rows ?? [], agentView?.rows ?? [], selectedCycleValue), [agentView?.rows, queueView?.rows, selectedCycleValue]);
   const filteredAgentCards = useMemo(() => buildFilteredAgentCards(agentRows, selectedCycleValue), [agentRows, selectedCycleValue]);
   const filteredQueueCards = useMemo(() => buildQueueLobCards(queueRows, selectedCycleValue), [queueRows, selectedCycleValue]);
 
@@ -560,7 +602,7 @@ export function RealTimePage({ userRole }: RealTimePageProps) {
 
   async function refreshRealtimeSnapshot(background = true) {
     try {
-      const view = effectiveTab === "agents" ? "agents" : effectiveTab === "report" ? "both" : "queues";
+      const view = effectiveTab === "agents" ? "agents" : effectiveTab === "report" || effectiveTab === "executive" ? "both" : "queues";
       const params = new URLSearchParams({ view });
       const response = await fetch(`/api/realtime/latest?${params.toString()}`, { cache: "no-store" });
       const json = await response.json();
@@ -568,7 +610,7 @@ export function RealTimePage({ userRole }: RealTimePageProps) {
 
       const latestCycleDownload = pickLatestRealtimeCycle(
         effectiveTab === "agents" ? json.data?.agents : effectiveTab === "queues" ? json.data?.queues : json.data?.queues ?? json.data?.agents,
-        effectiveTab === "report" ? json.data?.agents : null
+        effectiveTab === "report" || effectiveTab === "executive" ? json.data?.agents : null
       );
       const shouldFollowLatest = followLatestCycle || !selectedCycleValue;
       const cycleToRefresh = shouldFollowLatest ? latestCycleDownload : selectedCycleValue;
@@ -694,7 +736,7 @@ export function RealTimePage({ userRole }: RealTimePageProps) {
             <QueueLobCard key={card.lob} card={card} />
           ))}
         </div>
-      ) : reportLob === "ADS" ? (
+      ) : effectiveTab === "executive" ? null : reportLob === "ADS" ? (
         <ReportSummarySection card={reportBacklogCard} departments={departmentSummaries} reportLob={reportLob} selectedCycle={selectedCycleValue} headcount={adsReportCards.headcount[0]} onDownloadSummary={downloadReportSummary} />
       ) : reportLob === "TNS" ? (
         <ReportKpiSection cards={tnsReportCards} />
@@ -718,16 +760,21 @@ export function RealTimePage({ userRole }: RealTimePageProps) {
                     Report
                   </button>
                 ) : null}
+                {canAccessExecutiveReport ? (
+                  <button type="button" onClick={() => setActiveTab("executive")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", effectiveTab === "executive" ? "bg-white text-blue-700 shadow-sm" : "text-muted")}>
+                    Executivo
+                  </button>
+                ) : null}
               </div>
               {effectiveTab === "agents" ? (
                 <AgentLobQuickFilter value={agentFilters.lob} onChange={(value) => updateAgentFilter("lob", value)} options={agentView?.filters.lobs ?? []} />
               ) : effectiveTab === "queues" ? (
                 <QueueLobQuickFilter value={queueFilters.lob} onChange={(value) => updateQueueFilter("lob", value)} options={queueView?.filters.lobs ?? []} />
-              ) : (
+              ) : effectiveTab === "report" ? (
                 <ReportLobQuickFilter value={reportLob} onChange={setReportLob} />
-              )}
+              ) : null}
             </div>
-            {effectiveTab !== "report" ? (
+            {effectiveTab !== "report" && effectiveTab !== "executive" ? (
               <div className="flex flex-wrap gap-2">
                 <button type="button" onClick={effectiveTab === "agents" ? () => setAgentFilters(defaultAgentFilters) : () => setQueueFilters(defaultQueueFilters)} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Filtros padrão</button>
                 <button type="button" onClick={effectiveTab === "agents" ? () => setAgentFilters(emptyAgentFilters) : () => setQueueFilters({ search: "", lob: "", status: "", slaTarget: "", queueId: "" })} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">Limpar</button>
@@ -751,11 +798,11 @@ export function RealTimePage({ userRole }: RealTimePageProps) {
               <FilterSelect value={queueFilters.slaTarget} onChange={(value) => updateQueueFilter("slaTarget", value)} label="Meta SLA" empty="Todas" options={queueView?.filters.slaTargets ?? []} formatOptionLabel={formatSlaTargetLabel} />
               <FilterSelect value={queueFilters.queueId} onChange={(value) => updateQueueFilter("queueId", value)} label="Fila ID" empty="Todas" options={queueView?.filters.queueIds ?? []} />
             </div>
-          ) : (
+          ) : effectiveTab === "report" ? (
             <div className="mt-4 rounded-3xl border border-slate-100 bg-slate-50/70 p-3">
               <SearchBox value={reportSearch} onChange={setReportSearch} placeholder="Search ID, Queue or Department..." />
             </div>
-          )}
+          ) : null}
         </div>
 
         {loading ? (
@@ -767,8 +814,10 @@ export function RealTimePage({ userRole }: RealTimePageProps) {
             <AgentTable rows={agentRows} totalRows={agentView?.rows.length ?? 0} sort={agentSort} onSort={toggleAgentSort} onSelect={setSelectedAgent} />
           ) : effectiveTab === "queues" ? (
             <StructuredQueueTable rows={queueRows} totalRows={queueView?.rows.length ?? 0} sort={queueSort} onSort={toggleQueueSort} onSelect={setSelectedQueue} />
-          ) : (
+          ) : effectiveTab === "report" ? (
             <ReportTable rows={reportRows} reportLob={reportLob} onDownloadQueues={downloadReportQueues} />
+          ) : (
+            <ExecutiveAdsReportDashboard report={executiveAdsReport} />
           )
         ) : (
           <div className="px-4 py-16 text-center">
@@ -782,6 +831,190 @@ export function RealTimePage({ userRole }: RealTimePageProps) {
       {selectedAgent ? <AgentDetailDrawer row={selectedAgent} selectedCycle={selectedCycleValue} onClose={() => setSelectedAgent(null)} /> : null}
       {selectedQueue ? <QueueDetailDrawer row={selectedQueue} onClose={() => setSelectedQueue(null)} /> : null}
       {historyOpen ? <ImportHistoryModal imports={imports} loading={importsLoading} onClose={() => setHistoryOpen(false)} /> : null}
+    </div>
+  );
+}
+
+function ExecutiveAdsReportDashboard({ report }: { report: ExecutiveAdsReport }) {
+  return (
+    <div className="space-y-4 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-black uppercase tracking-[0.22em] text-muted">Report executivo ADS</p>
+          <h2 className="mt-1 text-2xl font-black text-navy-950">Radar operacional</h2>
+          <p className="mt-1 text-sm font-bold text-muted">{report.dateLabel} · último ponto {report.latestHourLabel}</p>
+        </div>
+        <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700">
+          Preenche até 23h
+        </span>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        {report.cards.map((card) => (
+          <ExecutiveMetricCard key={card.label} card={card} />
+        ))}
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)]">
+        <section className="overflow-hidden rounded-[22px] border border-slate-200/80 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+          <div className="border-b border-slate-100 px-4 py-3">
+            <h3 className="font-black text-navy-950">Semáforo horário</h3>
+            <p className="text-xs font-bold text-muted">ADS por hora, usando o último ciclo disponível dentro de cada hora.</p>
+          </div>
+          <ExecutiveHeatmap rows={report.heatmap} />
+        </section>
+
+        <section className="grid gap-4">
+          <ExecutiveRankingCard
+            title="Top performance · última hora"
+            rows={report.topAgents.map((agent) => ({
+              title: agent.name,
+              subtitle: `${agent.wbLogin} · AHT ${formatDurationFromMs(agent.ahtMs)}`,
+              value: formatInteger(agent.submit)
+            }))}
+          />
+          <ExecutiveRankingCard
+            title="Low performance · última hora"
+            rows={report.lowAgents.map((agent) => ({
+              title: agent.name,
+              subtitle: `${agent.wbLogin} · ${agent.status}`,
+              value: formatInteger(agent.submit)
+            }))}
+          />
+        </section>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <ExecutiveChartCard title="Input x Output" helper="Evolução horária do volume ADS">
+          <ResponsiveContainer width="100%" height={260}>
+            <AreaChart data={report.inputOutputHistory} margin={{ top: 16, right: 20, left: 0, bottom: 8 }}>
+              <defs>
+                <linearGradient id="executive-input" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#2563EB" stopOpacity={0.24} />
+                  <stop offset="95%" stopColor="#2563EB" stopOpacity={0.03} />
+                </linearGradient>
+                <linearGradient id="executive-output" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#10B981" stopOpacity={0.24} />
+                  <stop offset="95%" stopColor="#10B981" stopOpacity={0.03} />
+                </linearGradient>
+              </defs>
+              <YAxis hide domain={[0, "dataMax"]} />
+              <RechartsTooltip content={<ExecutiveMultiTooltip />} cursor={{ stroke: "#CBD5E1", strokeDasharray: "4 4" }} />
+              <Area type="monotone" dataKey="input" name="Input" stroke="#2563EB" strokeWidth={2.4} fill="url(#executive-input)" dot={false} isAnimationActive={false} />
+              <Area type="monotone" dataKey="output" name="Output" stroke="#10B981" strokeWidth={2.4} fill="url(#executive-output)" dot={false} isAnimationActive={false} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </ExecutiveChartCard>
+
+        <ExecutiveChartCard title="Backlog estimado" helper="Backlog ADS preenchido ao longo do dia">
+          <TrendSparkline data={report.backlogHistory} format="number" trend={report.cards[3]?.trend ?? "neutral"} />
+        </ExecutiveChartCard>
+      </div>
+    </div>
+  );
+}
+
+function ExecutiveMetricCard({ card }: { card: AgentKpiCard }) {
+  const lineColor = card.trend === "positive" ? "#10B981" : card.trend === "negative" ? "#EF4444" : "#2563EB";
+  return (
+    <div className="rounded-[18px] border border-slate-200/80 bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+      <div className="grid min-h-[142px] grid-cols-[minmax(0,0.9fr)_minmax(96px,1fr)] gap-3">
+        <div className="min-w-0">
+          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-muted">{card.label}</p>
+          <p className="mt-4 text-3xl font-black leading-none tracking-tight text-navy-950">{card.value}</p>
+          <div className="mt-4">
+            {card.hasComparison ? <TrendBadge trend={card.trend} direction={card.direction} value={card.delta || "0"} /> : <span className="text-xs font-black text-muted">Sem comparação</span>}
+          </div>
+          <p className="mt-2 text-xs font-bold text-muted">comparado ao ciclo anterior</p>
+        </div>
+        <div className="min-h-[120px] overflow-hidden rounded-2xl bg-slate-50/70">
+          <TrendSparkline data={card.history} format={card.format} trend={card.trend} compact colorOverride={lineColor} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ExecutiveChartCard({ title, helper, children }: { title: string; helper: string; children: ReactNode }) {
+  return (
+    <section className="rounded-[22px] border border-slate-200/80 bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+      <div className="mb-3">
+        <h3 className="font-black text-navy-950">{title}</h3>
+        <p className="text-xs font-bold text-muted">{helper}</p>
+      </div>
+      <div className="h-[260px]">{children}</div>
+    </section>
+  );
+}
+
+function ExecutiveHeatmap({ rows }: { rows: ExecutiveHeatmapRow[] }) {
+  const hours = Array.from({ length: 24 }).map((_, hour) => `${String(hour).padStart(2, "0")}h`);
+  return (
+    <div className="overflow-x-auto p-4">
+      <div className="min-w-[1160px] rounded-2xl border border-slate-100">
+        <div className="grid border-b border-slate-100 bg-slate-50 text-center text-[10px] font-black uppercase tracking-wide text-muted" style={{ gridTemplateColumns: "180px repeat(24, minmax(38px, 1fr))" }}>
+          <div className="px-3 py-2 text-left">Métrica</div>
+          {hours.map((hour) => <div key={hour} className="px-1 py-2">{hour}</div>)}
+        </div>
+        {rows.map((row, rowIndex) => (
+          <div key={row.label} className={cn("grid items-stretch text-center text-[11px] font-black", rowIndex % 2 ? "bg-slate-50/35" : "bg-white")} style={{ gridTemplateColumns: "180px repeat(24, minmax(38px, 1fr))" }}>
+            <div className="border-b border-slate-100 px-3 py-2 text-left text-xs uppercase tracking-wide text-muted">{row.label}</div>
+            {row.cells.map((cell, index) => (
+              <div key={`${row.label}-${index}`} className="border-b border-l border-slate-100 p-1">
+                <span className={cn(
+                  "grid min-h-8 place-items-center rounded-lg px-1",
+                  cell.tone === "good" && "bg-emerald-100 text-emerald-800",
+                  cell.tone === "neutral" && "bg-blue-50 text-blue-700",
+                  cell.tone === "watch" && "bg-amber-100 text-amber-900",
+                  cell.tone === "bad" && "bg-red-100 text-red-700",
+                  cell.tone === "critical" && "bg-red-600 text-white",
+                  cell.tone === "empty" && "bg-slate-50 text-slate-300"
+                )}>
+                  {cell.value}
+                </span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ExecutiveRankingCard({ title, rows }: { title: string; rows: Array<{ title: string; subtitle: string; value: string }> }) {
+  return (
+    <section className="overflow-hidden rounded-[22px] border border-slate-200/80 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+      <div className="border-b border-slate-100 px-4 py-3">
+        <h3 className="font-black text-navy-950">{title}</h3>
+      </div>
+      <div className="divide-y divide-slate-100">
+        {rows.slice(0, 5).map((row, index) => (
+          <div key={`${row.title}-${index}`} className="flex items-center justify-between gap-3 px-4 py-3">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-black text-navy-950" title={row.title}>{row.title}</p>
+              <p className="truncate text-xs font-bold text-muted" title={row.subtitle}>{row.subtitle}</p>
+            </div>
+            <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-black text-blue-700">{row.value}</span>
+          </div>
+        ))}
+        {!rows.length ? (
+          <p className="px-4 py-8 text-center text-sm font-bold text-muted">Sem dados para a última hora.</p>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function ExecutiveMultiTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ name?: string; value?: number | null }>; label?: string }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs shadow-xl">
+      <p className="font-black text-navy-950">{label}</p>
+      {payload.map((item) => (
+        <p key={item.name} className="mt-1 font-bold text-muted">
+          {item.name}: <span className="text-navy-950">{formatInteger(item.value ?? 0)}</span>
+        </p>
+      ))}
     </div>
   );
 }
@@ -2785,6 +3018,221 @@ function buildTnsReportCards(reportRows: QueueReportRow[], agentRows: AgentRealt
       buildOnlineHeadcountGaugeCard("Comments Online HC", commentsAgents)
     ]
   };
+}
+
+function buildExecutiveAdsReport(queueRows: QueueRealtimeRow[], agentRows: AgentRealtimeRow[], selectedCycle: string): ExecutiveAdsReport {
+  const selected = parseRealtimeCycle(selectedCycle, "");
+  const reportRows = buildReportRows(queueRows, "ADS", "");
+  const adsAgents = agentRows.filter((row) => isReportAgentForLob(row, "ADS"));
+  const queueByHour = buildExecutiveQueueBuckets(reportRows, selected);
+  const agentByHour = buildExecutiveAgentBuckets(adsAgents, selected);
+  const scheduled = adsAgents.filter((row) => row.isScheduled).length;
+  const currentOnline = adsAgents.filter((row) => isOnlineHeadcountStatus(row.presenceStatus)).length;
+
+  const buckets: ExecutiveHourBucket[] = Array.from({ length: 24 }).map((_, hour) => {
+    const queue = queueByHour.get(hour);
+    const agent = agentByHour.get(hour);
+    const isSelectedHour = hour === selected.date.getHours();
+    return {
+      hour,
+      label: `${String(hour).padStart(2, "0")}h`,
+      cycleDownload: queue?.cycleDownload ?? agent?.cycleDownload ?? null,
+      input: queue?.metric.input ?? null,
+      output: queue?.metric.output ?? null,
+      ahtMs: queue?.metric.ahtMs ?? null,
+      latencyMs: queue?.metric.latencyMs ?? null,
+      maxLatencyMs: queue?.metric.maxLatencyMs ?? null,
+      backlog: queue?.metric.backlog ?? null,
+      scheduled: queue || agent ? scheduled : null,
+      online: isSelectedHour ? currentOnline : agent?.online ?? null
+    };
+  });
+
+  const filledBuckets = buckets.filter((bucket) => bucket.cycleDownload);
+  const latest = filledBuckets[filledBuckets.length - 1] ?? null;
+  const previous = filledBuckets.length > 1 ? filledBuckets[filledBuckets.length - 2] : null;
+  const dateLabel = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" }).format(selected.date);
+  const cards = [
+    buildAgentKpiCard("Submit última hora", latest?.output ?? null, previous?.output ?? null, "number", "up", buildExecutiveTrend(buckets, "output", selected)),
+    buildAgentKpiCard("Input última hora", latest?.input ?? null, previous?.input ?? null, "number", "up", buildExecutiveTrend(buckets, "input", selected)),
+    buildAgentKpiCard("Agentes online", latest?.online ?? null, previous?.online ?? null, "number", "up", buildExecutiveTrend(buckets, "online", selected)),
+    buildAgentKpiCard("Backlog atual", latest?.backlog ?? null, previous?.backlog ?? null, "number", "down", buildExecutiveTrend(buckets, "backlog", selected))
+  ];
+
+  return {
+    selectedCycle,
+    dateLabel,
+    latestHourLabel: latest?.cycleDownload ?? (selectedCycle || "-"),
+    buckets,
+    cards,
+    heatmap: buildExecutiveHeatmap(buckets),
+    inputOutputHistory: buckets.map((bucket) => ({ label: bucket.label, input: bucket.input, output: bucket.output })),
+    backlogHistory: buildExecutiveTrend(buckets, "backlog", selected),
+    topAgents: adsAgents
+      .filter((row) => row.current.submit > 0)
+      .sort((a, b) => b.current.submit - a.current.submit || a.displayName.localeCompare(b.displayName, "pt-BR", { sensitivity: "base" }))
+      .slice(0, 5)
+      .map((row) => ({ name: row.displayName, wbLogin: row.wbLogin || row.rawWbLogin, submit: row.current.submit, ahtMs: row.current.ahtMs })),
+    lowAgents: adsAgents
+      .filter((row) => row.isScheduled)
+      .sort((a, b) => a.current.submit - b.current.submit || a.displayName.localeCompare(b.displayName, "pt-BR", { sensitivity: "base" }))
+      .slice(0, 5)
+      .map((row) => ({ name: row.displayName, wbLogin: row.wbLogin || row.rawWbLogin, submit: row.current.submit, status: row.presenceStatus }))
+  };
+}
+
+function buildExecutiveQueueBuckets(rows: QueueReportRow[], selected: ReturnType<typeof parseRealtimeCycle>) {
+  const byCycle = new Map<string, QueueMetric[]>();
+  rows.forEach((row) => {
+    row.history.forEach((item) => {
+      const parsed = parseRealtimeCycle(item.cycleDownload, "");
+      if (parsed.dateKey !== selected.dateKey || parsed.timestamp > selected.timestamp) return;
+      const metrics = byCycle.get(item.cycleDownload) ?? [];
+      metrics.push({
+        input: item.input,
+        output: item.output,
+        ahtMs: item.ahtMs,
+        latencyMs: item.latencyMs,
+        maxLatencyMs: item.maxLatencyMs,
+        maxLatencyRowNumber: item.maxLatencyRowNumber,
+        backlog: item.backlog,
+        sourceRows: 1
+      });
+      byCycle.set(item.cycleDownload, metrics);
+    });
+  });
+
+  const byHour = new Map<number, { cycleDownload: string; timestamp: number; metric: QueueMetric }>();
+  byCycle.forEach((metrics, cycleDownload) => {
+    const parsed = parseRealtimeCycle(cycleDownload, "");
+    const existing = byHour.get(parsed.date.getHours());
+    if (!existing || parsed.timestamp > existing.timestamp) {
+      byHour.set(parsed.date.getHours(), { cycleDownload, timestamp: parsed.timestamp, metric: summarizeQueueMetrics(metrics) });
+    }
+  });
+  return byHour;
+}
+
+function buildExecutiveAgentBuckets(rows: AgentRealtimeRow[], selected: ReturnType<typeof parseRealtimeCycle>) {
+  const byCycle = new Map<string, { metrics: AgentMetric[]; online: number }>();
+  rows.forEach((row) => {
+    row.history.forEach((item) => {
+      const parsed = parseRealtimeCycle(item.cycleDownload, "");
+      if (parsed.dateKey !== selected.dateKey || parsed.timestamp > selected.timestamp) return;
+      const cycle = byCycle.get(item.cycleDownload) ?? { metrics: [], online: 0 };
+      cycle.metrics.push({
+        submit: item.submit,
+        ahtMs: item.ahtMs,
+        moderationMs: item.moderationMs,
+        timeout: item.timeout,
+        refresh: item.refresh,
+        queueCount: item.queueIds.length,
+        sourceRows: 1
+      });
+      if (item.submit > 0) cycle.online += 1;
+      byCycle.set(item.cycleDownload, cycle);
+    });
+  });
+
+  const byHour = new Map<number, { cycleDownload: string; timestamp: number; metric: ReturnType<typeof summarizeMetrics>; online: number }>();
+  byCycle.forEach((cycle, cycleDownload) => {
+    const parsed = parseRealtimeCycle(cycleDownload, "");
+    const existing = byHour.get(parsed.date.getHours());
+    if (!existing || parsed.timestamp > existing.timestamp) {
+      byHour.set(parsed.date.getHours(), {
+        cycleDownload,
+        timestamp: parsed.timestamp,
+        metric: summarizeMetrics(cycle.metrics),
+        online: cycle.online
+      });
+    }
+  });
+  return byHour;
+}
+
+function buildExecutiveTrend(buckets: ExecutiveHourBucket[], key: keyof Pick<ExecutiveHourBucket, "input" | "output" | "ahtMs" | "latencyMs" | "maxLatencyMs" | "backlog" | "online">, selected: ReturnType<typeof parseRealtimeCycle>): TrendPoint[] {
+  return buckets
+    .filter((bucket) => bucket.hour <= selected.date.getHours() && bucket[key] !== null)
+    .map((bucket, index, filtered) => {
+      const value = bucket[key];
+      const previous = index > 0 ? filtered[index - 1][key] : null;
+      return {
+        label: bucket.label,
+        value: typeof value === "number" ? value : null,
+        delta: typeof value === "number" && typeof previous === "number" ? value - previous : null
+      };
+    });
+}
+
+function buildExecutiveHeatmap(buckets: ExecutiveHourBucket[]): ExecutiveHeatmapRow[] {
+  const previousBacklog = (index: number) => {
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      if (buckets[cursor]?.backlog !== null) return buckets[cursor].backlog;
+    }
+    return null;
+  };
+
+  return [
+    buildExecutiveHeatmapRow("Input", buckets, (bucket) => formatNumberCell(bucket.input, bucket.input === null ? "empty" : "neutral")),
+    buildExecutiveHeatmapRow("Output", buckets, (bucket) => {
+      if (bucket.output === null) return emptyExecutiveCell();
+      const input = bucket.input ?? 0;
+      const ratio = input > 0 ? bucket.output / input : 1;
+      return formatNumberCell(bucket.output, ratio >= 1 ? "good" : ratio >= 0.85 ? "neutral" : ratio >= 0.7 ? "watch" : "bad");
+    }),
+    buildExecutiveHeatmapRow("AHT", buckets, (bucket) => {
+      if (bucket.ahtMs === null) return emptyExecutiveCell();
+      const seconds = bucket.ahtMs / 1000;
+      return formatDurationCell(bucket.ahtMs, seconds <= 60 ? "good" : seconds <= 90 ? "neutral" : seconds <= 120 ? "watch" : "bad");
+    }),
+    buildExecutiveHeatmapRow("Delta Input x Output", buckets, (bucket) => {
+      if (bucket.input === null || bucket.output === null) return emptyExecutiveCell();
+      const delta = bucket.output - bucket.input;
+      return formatNumberCell(delta, delta >= 0 ? "good" : delta >= -50 ? "watch" : "bad", true);
+    }),
+    buildExecutiveHeatmapRow("HC Requerido", buckets, (bucket) => formatNumberCell(bucket.scheduled, bucket.scheduled === null ? "empty" : "neutral")),
+    buildExecutiveHeatmapRow("HC Online", buckets, (bucket) => {
+      if (bucket.online === null) return emptyExecutiveCell();
+      const scheduled = bucket.scheduled ?? 0;
+      const ratio = scheduled > 0 ? bucket.online / scheduled : 1;
+      return formatNumberCell(bucket.online, ratio >= 1 ? "good" : ratio >= 0.8 ? "watch" : "bad");
+    }),
+    buildExecutiveHeatmapRow("Delta HC", buckets, (bucket) => {
+      if (bucket.online === null || bucket.scheduled === null) return emptyExecutiveCell();
+      const delta = bucket.online - bucket.scheduled;
+      return formatNumberCell(delta, delta >= 0 ? "good" : delta >= -1 ? "watch" : "bad", true);
+    }),
+    buildExecutiveHeatmapRow("Backlog Est.", buckets, (bucket, index) => {
+      if (bucket.backlog === null) return emptyExecutiveCell();
+      const previous = previousBacklog(index);
+      const tone = previous === null ? "neutral" : bucket.backlog < previous ? "good" : bucket.backlog === previous ? "neutral" : bucket.backlog > previous * 1.2 ? "critical" : "bad";
+      return formatNumberCell(bucket.backlog, tone);
+    }),
+    buildExecutiveHeatmapRow("Max Latency", buckets, (bucket) => {
+      if (bucket.maxLatencyMs === null) return emptyExecutiveCell();
+      const status = resolveLatencyAdherence(bucket.maxLatencyMs, ADS_REPORT_TARGET_LATENCY_MINUTES);
+      return formatDurationCell(bucket.maxLatencyMs, status === "OK" ? "good" : status === "Alerta" ? "watch" : "bad");
+    })
+  ];
+}
+
+function buildExecutiveHeatmapRow(label: string, buckets: ExecutiveHourBucket[], toCell: (bucket: ExecutiveHourBucket, index: number) => ExecutiveHeatmapCell): ExecutiveHeatmapRow {
+  return { label, cells: buckets.map(toCell) };
+}
+
+function emptyExecutiveCell(): ExecutiveHeatmapCell {
+  return { value: "-", tone: "empty" };
+}
+
+function formatNumberCell(value: number | null, tone: ExecutiveHeatmapCell["tone"], signed = false): ExecutiveHeatmapCell {
+  if (value === null) return emptyExecutiveCell();
+  const prefix = signed && value > 0 ? "+" : "";
+  return { value: `${prefix}${formatInteger(value)}`, tone };
+}
+
+function formatDurationCell(value: number | null, tone: ExecutiveHeatmapCell["tone"]): ExecutiveHeatmapCell {
+  if (value === null) return emptyExecutiveCell();
+  return { value: formatDurationFromMs(value), tone };
 }
 
 function buildOnlineHeadcountGaugeCard(label: string, rows: AgentRealtimeRow[]): OnlineHeadcountGaugeData {
