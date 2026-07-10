@@ -1,14 +1,17 @@
 import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 
-import { RealtimeHoursPage } from "@/components/realtime-hours-page";
+import { RealtimeHoursWorkspacePage } from "@/components/realtime-hours-workspace-page";
 import { authOptions } from "@/lib/auth-options";
-import { canAccessRealTimeQueues } from "@/lib/permissions";
-import { canManageRealtimeHoursMappings } from "@/lib/realtime-hours-permissions";
+import {
+  canAccessRealtimeHoursCapture,
+  canManageRealtimeHoursMappings,
+  canRequestRealtimeHoursCaptureAdjustment
+} from "@/lib/realtime-hours-permissions";
 
 export default async function CapturaHorasRoute() {
   const session = await getServerSession(authOptions);
-  if (!canAccessRealTimeQueues({
+  const actor = {
     role: session?.user?.role,
     email: session?.user?.email,
     name: session?.user?.name,
@@ -16,9 +19,16 @@ export default async function CapturaHorasRoute() {
     jobTitle: session?.user?.jobTitle,
     skill: session?.user?.skill,
     status: "ACTIVE"
-  })) {
+  };
+
+  if (!canAccessRealtimeHoursCapture(actor)) {
     redirect("/central-operacional");
   }
 
-  return <RealtimeHoursPage canManageMappings={canManageRealtimeHoursMappings(session?.user?.email)} />;
+  return (
+    <RealtimeHoursWorkspacePage
+      canManageMappings={canManageRealtimeHoursMappings(session?.user?.email)}
+      canRequestAdjustments={canRequestRealtimeHoursCaptureAdjustment(actor)}
+    />
+  );
 }
