@@ -43,6 +43,9 @@ type RealtimeHoursAdjustmentRow = {
   justification: string;
   requestedByName: string;
   requestedByEmail: string;
+  reviewedByName: string;
+  reviewedAt: string;
+  rejectionReason: string;
   status: string;
   createdAt: string;
 };
@@ -56,10 +59,12 @@ type RealtimeHoursAdjustmentsPayload = {
 
 export function RealtimeHoursWorkspacePage({
   canManageMappings,
-  canRequestAdjustments
+  canRequestAdjustments,
+  canApproveAdjustments
 }: {
   canManageMappings: boolean;
   canRequestAdjustments: boolean;
+  canApproveAdjustments: boolean;
 }) {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("MONITORING");
 
@@ -77,7 +82,7 @@ export function RealtimeHoursWorkspacePage({
       {activeTab === "MONITORING" ? (
         <RealtimeHoursPage canManageMappings={canManageMappings} />
       ) : (
-        <RealtimeHoursAdjustmentsPanel />
+        <RealtimeHoursAdjustmentsPanel canApproveAdjustments={canApproveAdjustments} />
       )}
     </div>
   );
@@ -99,13 +104,14 @@ function WorkspaceTabButton({ active, onClick, icon: Icon, label }: { active: bo
   );
 }
 
-function RealtimeHoursAdjustmentsPanel() {
+function RealtimeHoursAdjustmentsPanel({ canApproveAdjustments }: { canApproveAdjustments: boolean }) {
   const [date, setDate] = useState(todayInputDate());
   const [search, setSearch] = useState("");
   const [timelinePayload, setTimelinePayload] = useState<RealtimeHoursTimelinePayload | null>(null);
   const [adjustmentsPayload, setAdjustmentsPayload] = useState<RealtimeHoursAdjustmentsPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [reviewingId, setReviewingId] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [selectedRowKey, setSelectedRowKey] = useState("");
@@ -209,6 +215,30 @@ function RealtimeHoursAdjustmentsPanel() {
       setError(saveError instanceof Error ? saveError.message : "Não foi possível solicitar ajuste.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function reviewAdjustment(id: string, action: "APPROVE" | "REJECT") {
+    const rejectionReason = action === "REJECT" ? window.prompt("Motivo da recusa")?.trim() ?? "" : "";
+    if (action === "REJECT" && !rejectionReason) return;
+
+    setReviewingId(id);
+    setError("");
+    setSuccess("");
+    try {
+      const response = await fetch("/api/realtime-hours/adjustments", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, action, rejectionReason })
+      });
+      const body = await response.json() as { success?: boolean; message?: string; error?: string };
+      if (!response.ok || body.success === false) throw new Error(body.message || body.error || "Não foi possível analisar ajuste.");
+      setSuccess(action === "APPROVE" ? "Ajuste aprovado. O agente já verá a hora considerada em Minhas Horas." : "Ajuste recusado.");
+      await loadRows();
+    } catch (reviewError) {
+      setError(reviewError instanceof Error ? reviewError.message : "Não foi possível analisar ajuste.");
+    } finally {
+      setReviewingId("");
     }
   }
 
@@ -327,14 +357,51 @@ function RealtimeHoursAdjustmentsPanel() {
               </div>
 
               <div className="rounded-xl border border-border bg-white p-3">
-                <p className="text-sm font-black text-navy-950">Pedidos recentes</p>
-                <div className="mt-3 space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-black text-navy-950">Pedidos recentes</p>
+                  <span className="rounded-full bg-amber-50 px-2 py-1 text-[11px] font-black uppercase text-amber-700">
+                    {(adjustmentsPayload?.data ?? []).filter((item) => item.status === "EM_ANALISE").length} pendente(s)
+                  </span>
+                </div>
+                <div className="mt-3 max-h-[420px] space-y-2 overflow-y-auto pr-1">
                   {(adjustmentsPayload?.data ?? []).length ? (
-                    adjustmentsPayload!.data!.slice(0, 5).map((adjustment) => (
+                    adjustmentsPayload!.data!.map((adjustment) => (
                       <div key={adjustment.id} className="rounded-lg border border-border bg-slate-50 p-2.5 text-xs">
-                        <p className="font-black text-navy-950">{adjustment.employeeName || adjustment.wbLogin || adjustment.hostname}</p>
-                        <p className="mt-1 font-bold text-slate-600">{adjustment.currentActiveHours} para {adjustment.requestedActiveHours} · {adjustment.status}</p>
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate font-black text-navy-950">{adjustment.employeeName || adjustment.wbLogin || adjustment.hostname}</p>
+                            <p className="mt-1 font-bold text-slate-600">{adjustment.currentActiveHours} para {adjustment.requestedActiveHours}</p>
+                          </div>
+                          <StatusBadge status={adjustment.status} />
+                        </div>
                         <p className="mt-1 text-muted">{adjustment.reason}</p>
+                        <p className="mt-1 text-muted">Solicitado por {adjustment.requestedByName || adjustment.requestedByEmail || "-"}</p>
+                        {adjustment.status !== "EM_ANALISE" ? (
+                          <p className="mt-1 font-bold text-slate-600">
+                            {adjustment.status === "APROVADO" ? "Aprovado" : "Recusado"} por {adjustment.reviewedByName || "-"}
+                          </p>
+                        ) : null}
+                        {adjustment.rejectionReason ? <p className="mt-1 font-bold text-red-700">{adjustment.rejectionReason}</p> : null}
+                        {canApproveAdjustments && adjustment.status === "EM_ANALISE" ? (
+                          <div className="mt-2 grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              onClick={() => reviewAdjustment(adjustment.id, "APPROVE")}
+                              disabled={reviewingId === adjustment.id}
+                              className="rounded-lg bg-emerald-600 px-2 py-2 text-xs font-black text-white disabled:cursor-wait disabled:opacity-60"
+                            >
+                              Aprovar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => reviewAdjustment(adjustment.id, "REJECT")}
+                              disabled={reviewingId === adjustment.id}
+                              className="rounded-lg bg-red-600 px-2 py-2 text-xs font-black text-white disabled:cursor-wait disabled:opacity-60"
+                            >
+                              Recusar
+                            </button>
+                          </div>
+                        ) : null}
                       </div>
                     ))
                   ) : (
@@ -357,6 +424,25 @@ function AlertMessage({ tone, message }: { tone: "red" | "green"; message: strin
       <Icon className="mt-0.5 h-4 w-4 shrink-0" />
       <span>{message}</span>
     </div>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const normalized = status || "EM_ANALISE";
+  const label = normalized === "APROVADO" ? "Aprovado" : normalized === "RECUSADO" ? "Recusado" : "Em análise";
+  return (
+    <span
+      className={cn(
+        "shrink-0 rounded-full px-2 py-1 text-[10px] font-black uppercase",
+        normalized === "APROVADO"
+          ? "bg-emerald-50 text-emerald-700"
+          : normalized === "RECUSADO"
+            ? "bg-red-50 text-red-700"
+            : "bg-amber-50 text-amber-700"
+      )}
+    >
+      {label}
+    </span>
   );
 }
 
