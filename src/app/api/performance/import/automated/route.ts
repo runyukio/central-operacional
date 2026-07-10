@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 
-import { commitProductionAutomatedRawImport, PerformanceError, validatePerformanceImportToken } from "@/lib/performance-service";
+import { PerformanceError, commitProductionAutomatedRawImport, validatePerformanceImportToken } from "@/lib/performance-service";
+import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,7 @@ export async function POST(request: Request) {
     if (contentType.includes("application/json")) {
       const body = await request.json().catch(() => ({}));
       const rowSets = collectJsonRowSets(body);
+      const resetSnapshot = shouldResetSnapshot(request, body);
       if (!rowSets.length) {
         return NextResponse.json({
           success: false,
@@ -42,11 +44,13 @@ export async function POST(request: Request) {
           updatedRows: result.updatedRows
         });
       }
-      return NextResponse.json(buildAutomatedImportResponse(batchId, imports, coverage));
+      const reset = resetSnapshot && batchId ? await resetAutomatedProductionSnapshot(batchId) : null;
+      return NextResponse.json(buildAutomatedImportResponse(batchId, imports, coverage, reset));
     }
 
     const formData = await request.formData();
     const files = collectUploadFiles(formData);
+    const resetSnapshot = shouldResetSnapshot(request, formData);
     if (!files.length) {
       return NextResponse.json({
         success: false,
@@ -79,7 +83,8 @@ export async function POST(request: Request) {
       });
     }
 
-    return NextResponse.json(buildAutomatedImportResponse(batchId, imports, coverage));
+    const reset = resetSnapshot && batchId ? await resetAutomatedProductionSnapshot(batchId) : null;
+    return NextResponse.json(buildAutomatedImportResponse(batchId, imports, coverage, reset));
   } catch (error) {
     if (error instanceof PerformanceError) {
       return NextResponse.json({ success: false, error: error.message, message: error.message }, { status: error.status });
@@ -91,6 +96,55 @@ export async function POST(request: Request) {
       message: "Não foi possível importar a base automatizada de Performance."
     }, { status: 500 });
   }
+}
+
+function shouldResetSnapshot(request: Request, source: Record<string, unknown> | FormData) {
+  if (truthyFlag(request.headers.get("x-performance-reset"))) return true;
+  if (truthyFlag(request.headers.get("x-reset-performance"))) return true;
+  if (source instanceof FormData) {
+    return truthyFlag(source.get("reset")) || truthyFlag(source.get("resetProduction")) || truthyFlag(source.get("replaceSnapshot"));
+  }
+  return truthyFlag(source.reset) || truthyFlag(source.resetProduction) || truthyFlag(source.replaceSnapshot);
+}
+
+function truthyFlag(value: unknown) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return ["1", "true", "yes", "y", "sim", "s", "reset", "replace"].includes(normalized);
+}
+
+async function resetAutomatedProductionSnapshot(batchIdToKeep: string) {
+  if (!batchIdToKeep) throw new PerformanceError("Lote de importação obrigatório para limpar Performance.", 400);
+  const [productionDeleted, volumeDeleted, batchesDeleted] = await prisma.$transaction([
+    prisma.productionRecord.deleteMany({
+      where: {
+        OR: [
+          { importBatchId: null },
+          { importBatchId: { not: batchIdToKeep } }
+        ]
+      }
+    }),
+    prisma.performanceQueueVolumeRecord.deleteMany({
+      where: {
+        OR: [
+          { importBatchId: null },
+          { importBatchId: { not: batchIdToKeep } }
+        ]
+      }
+    }),
+    prisma.performanceImportBatch.deleteMany({
+      where: {
+        type: "PRODUCTION",
+        id: { not: batchIdToKeep }
+      }
+    })
+  ]);
+
+  return {
+    batchIdKept: batchIdToKeep,
+    productionRowsDeleted: productionDeleted.count,
+    volumeRowsDeleted: volumeDeleted.count,
+    importBatchesDeleted: batchesDeleted.count
+  };
 }
 
 function collectUploadFiles(formData: FormData) {
@@ -226,11 +280,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function buildAutomatedImportResponse(
   batchId: string | undefined,
   imports: Array<{ fileName: string; importedRows: number; productionRows: number; volumeRows: number; createdRows: number; updatedRows: number }>,
-  coverage: ReturnType<typeof summarizePerformanceRowSets>
+  coverage: ReturnType<typeof summarizePerformanceRowSets>,
+  reset: Awaited<ReturnType<typeof resetAutomatedProductionSnapshot>> | null = null
 ) {
   return {
     success: true,
     batchId,
+    reset,
     hasProduction: coverage.hasProduction,
     hasVolume: coverage.hasVolume,
     warnings: buildCoverageWarnings(coverage),
