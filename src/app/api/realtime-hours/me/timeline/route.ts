@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getApiActor } from "@/lib/api-actor";
 import { prisma } from "@/lib/prisma";
+import { applyApprovedRealtimeHoursAdjustments } from "@/lib/realtime-hours-adjustments-service";
 import { canAccessOwnRealtimeHours } from "@/lib/realtime-hours-permissions";
 import { getRealtimeHoursTimeline } from "@/lib/realtime-hours-service";
 
@@ -49,15 +50,23 @@ export async function GET(request: Request) {
     search: url.searchParams.get("search")
   });
   const employeeWbLogin = normalizeLogin(employee.wbLogin);
-  const rows = result.rows.filter((row) => row.employeeId === employee.id || normalizeLogin(row.wbLogin) === employeeWbLogin);
+  const rows = await applyApprovedRealtimeHoursAdjustments(
+    result.date,
+    result.rows.filter((row) => row.employeeId === employee.id || normalizeLogin(row.wbLogin) === employeeWbLogin)
+  );
+  const activeMs = rows.reduce((sum, row) => sum + row.consideredActiveMs, 0);
+  const capturedActiveMs = rows.reduce((sum, row) => sum + row.capturedActiveMs, 0);
+  const noActivityMs = rows.reduce((sum, row) => sum + row.consideredNoActivityMs, 0);
 
   return NextResponse.json({
     ...result,
     summary: {
       users: rows.length,
-      activeMs: rows.reduce((sum, row) => sum + row.activeMs, 0),
-      noActivityMs: rows.reduce((sum, row) => sum + row.noActivityMs, 0),
-      sessions: rows.reduce((sum, row) => sum + row.sessionCount, 0)
+      activeMs,
+      capturedActiveMs,
+      noActivityMs,
+      sessions: rows.reduce((sum, row) => sum + row.sessionCount, 0),
+      approvedAdjustments: rows.filter((row) => row.approvedAdjustment).length
     },
     rows,
     employee: {
