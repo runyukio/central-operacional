@@ -2,6 +2,7 @@ import { isActiveUser, normalizeRole, type PermissionUser } from "@/lib/permissi
 
 const realtimeHoursMappingAllowedEmails = new Set(["runyukio@gmail.com"]);
 const realtimeHoursCaptureRoles = new Set(["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "COORDENADOR", "GERENTE"]);
+const realtimeHoursAdjustmentRoles = new Set(["ADMIN", "GESTOR", "SUPERVISOR", "WFM"]);
 
 export function canManageRealtimeHoursMappings(email?: string | null) {
   return realtimeHoursMappingAllowedEmails.has(String(email ?? "").trim().toLowerCase());
@@ -13,7 +14,8 @@ export function canAccessRealtimeHoursCapture(user?: PermissionUser | null) {
 }
 
 export function canRequestRealtimeHoursCaptureAdjustment(user?: PermissionUser | null) {
-  return canAccessRealtimeHoursCapture(user);
+  const actor = user ?? {};
+  return isActiveUser(actor) && realtimeHoursAdjustmentRoles.has(normalizeRole(actor.role));
 }
 
 export function canAccessOwnRealtimeHours(user?: PermissionUser | null) {
