@@ -24,15 +24,25 @@ type TimelineRow = {
   lastSeenAt: string;
   activeMs: number;
   noActivityMs: number;
+  capturedActiveMs?: number;
+  consideredActiveMs?: number;
+  consideredNoActivityMs?: number;
   sessionCount: number;
   segments: TimelineSegment[];
+  approvedAdjustment?: {
+    requestedActiveHours: string;
+    currentActiveHours: string;
+    reason: string;
+    reviewedByName: string;
+    reviewedAt: string;
+  } | null;
 };
 
 type MyTimelinePayload = {
   success: boolean;
   date: string;
   window: { start: string; end: string };
-  summary: { users: number; activeMs: number; noActivityMs: number; sessions: number };
+  summary: { users: number; activeMs: number; capturedActiveMs?: number; noActivityMs: number; sessions: number; approvedAdjustments?: number };
   rows: TimelineRow[];
   employee?: { fullName: string; wbLogin: string; roleTitle: string; lob: string; shift: string };
   error?: string;
@@ -98,10 +108,11 @@ export function MyRealtimeHoursPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="Tempo ativo" value={formatDurationMs(payload?.summary.activeMs ?? 0)} helper={payload?.employee?.fullName || "capturado no dia"} icon={Wifi} tone="green" />
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <StatCard title="Tempo considerado" value={formatDurationMs(payload?.summary.activeMs ?? 0)} helper={payload?.employee?.fullName || "base do dia"} icon={Wifi} tone="green" />
+        <StatCard title="Tempo capturado" value={formatDurationMs(payload?.summary.capturedActiveMs ?? payload?.summary.activeMs ?? 0)} helper="sinal bruto do computador" icon={MonitorCog} tone="blue" />
         <StatCard title="Sem atividade" value={formatDurationMs(payload?.summary.noActivityMs ?? 0)} helper="intervalos sem sinal ativo" icon={Clock} tone="orange" />
-        <StatCard title="Sessões" value={payload?.summary.sessions ?? 0} helper={`${payload?.summary.users ?? 0} vínculo(s)`} icon={MonitorCog} tone="blue" />
+        <StatCard title="Ajustes aprovados" value={payload?.summary.approvedAdjustments ?? 0} helper="refletidos na hora considerada" icon={ShieldCheck} tone="purple" />
         <StatCard title="Último sinal" value={formatTimeOnly(lastSeenAt)} helper={lastSeenAt ? formatDateTime(lastSeenAt) : "sem captura"} icon={ShieldCheck} tone="purple" />
       </div>
 
@@ -169,7 +180,12 @@ function TimelineRowView({ row, date, windowStart, windowEnd, expanded, onToggle
           </div>
         </td>
         <td className="px-3 py-3"><p className="text-sm font-black text-navy-950">{formatDateLabel(date)}</p><p className="text-xs font-bold text-muted">{row.sessionCount} sessão(ões)</p></td>
-        <td className="px-3 py-3 text-sm font-black text-emerald-600">{formatDurationMs(row.activeMs)}</td>
+        <td className="px-3 py-3">
+          <p className="text-sm font-black text-emerald-600">{formatDurationMs(row.consideredActiveMs ?? row.activeMs)}</p>
+          {row.approvedAdjustment ? (
+            <p className="mt-1 rounded bg-emerald-50 px-1.5 py-1 text-xs font-black text-emerald-700">Ajustado de {formatDurationMs(row.capturedActiveMs ?? row.activeMs)}</p>
+          ) : null}
+        </td>
         <td className="px-3 py-3"><TimelineBar row={row} windowStart={windowStart} windowEnd={windowEnd} /></td>
       </tr>
       {expanded ? (
@@ -183,6 +199,12 @@ function TimelineRowView({ row, date, windowStart, windowEnd, expanded, onToggle
                   <span className="text-right text-navy-950">{formatDurationMs(segment.durationMs)}</span>
                 </div>
               ))}
+              {row.approvedAdjustment ? (
+                <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-700">
+                  Ajuste aprovado: {row.approvedAdjustment.currentActiveHours} para {row.approvedAdjustment.requestedActiveHours}
+                  {row.approvedAdjustment.reviewedByName ? ` por ${row.approvedAdjustment.reviewedByName}` : ""}.
+                </div>
+              ) : null}
             </div>
           </td>
         </tr>
