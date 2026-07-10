@@ -5,6 +5,7 @@ import { RealtimeHoursWorkspacePage } from "@/components/realtime-hours-workspac
 import { authOptions } from "@/lib/auth-options";
 import {
   canAccessRealtimeHoursCapture,
+  canApproveRealtimeHoursCaptureAdjustment,
   canManageRealtimeHoursMappings,
   canRequestRealtimeHoursCaptureAdjustment
 } from "@/lib/realtime-hours-permissions";
@@ -29,6 +30,7 @@ export default async function CapturaHorasRoute() {
     <RealtimeHoursWorkspacePage
       canManageMappings={canManageRealtimeHoursMappings(session?.user?.email)}
       canRequestAdjustments={canRequestRealtimeHoursCaptureAdjustment(actor)}
+      canApproveAdjustments={canApproveRealtimeHoursCaptureAdjustment(actor)}
     />
   );
 }
