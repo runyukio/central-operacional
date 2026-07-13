@@ -42,6 +42,7 @@ type RealtimeHoursSummary = {
   activeSessions: number;
   inactiveSessions: number;
   idleSessions: number;
+  lockedSessions: number;
   identifiedRecords: number;
   unknownIdentityRecords: number;
   identityConfidence: {
@@ -162,7 +163,6 @@ type RealtimeHoursIdentityMappingsPayload = {
 };
 
 type CaptureTab = "TIMELINE" | "MAPPINGS";
-type OverviewFilter = "MACHINES" | "ACTIVE" | "IDLE" | "IDENTIFIED";
 
 type RealtimeHoursPageProps = {
   canManageMappings?: boolean;
@@ -176,6 +176,7 @@ const emptySummary: RealtimeHoursSummary = {
   activeSessions: 0,
   inactiveSessions: 0,
   idleSessions: 0,
+  lockedSessions: 0,
   identifiedRecords: 0,
   unknownIdentityRecords: 0,
   identityConfidence: {
@@ -198,7 +199,7 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
   const [error, setError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
   const [search, setSearch] = useState("");
-  const [overviewFilter, setOverviewFilter] = useState<OverviewFilter>("MACHINES");
+  const [lobFilter, setLobFilter] = useState("ALL");
   const [timelineDate, setTimelineDate] = useState(todayInputDate());
   const [expandedTimelineKey, setExpandedTimelineKey] = useState<string | null>(null);
   const [mappingDrafts, setMappingDrafts] = useState<Record<string, string>>({});
@@ -257,18 +258,13 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
   const summary = statusPayload?.summary ?? emptySummary;
   const batch = statusPayload?.batch ?? null;
   const records = useMemo(() => statusPayload?.records ?? [], [statusPayload?.records]);
-  const currentRecordByKey = useMemo(() => {
-    const lookup = new Map<string, RealtimeHoursRecord>();
-    for (const record of records) {
-      const key = realtimeHoursIdentityKey(record.hostname, record.windowsUser);
-      if (key) lookup.set(key, record);
-    }
-    return lookup;
-  }, [records]);
+  const lobOptions = useMemo(() => buildLobOptions(timelinePayload?.rows ?? []), [timelinePayload?.rows]);
   const timelineRows = useMemo(() => {
     const normalizedSearch = normalizeText(search);
     const rows = timelinePayload?.rows ?? [];
     return rows.filter((row) => {
+      const rowLob = normalizedLob(row.lob);
+      if (lobFilter !== "ALL" && rowLob !== lobFilter) return false;
       const matchesSearch = normalizedSearch
         ? normalizeText([
           row.hostname,
@@ -280,28 +276,15 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
           row.ipAddress
         ].join(" ")).includes(normalizedSearch)
         : true;
-      if (!matchesSearch) return false;
-
-      const currentRecord = currentRecordByKey.get(row.key)
-        ?? currentRecordByKey.get(realtimeHoursIdentityKey(row.hostname, row.windowsUser));
-      if (overviewFilter === "MACHINES") return Boolean(currentRecord);
-      if (overviewFilter === "ACTIVE") return Boolean(currentRecord?.isSessionActive);
-      if (overviewFilter === "IDLE") {
-        return Boolean(currentRecord?.isSessionActive && (currentRecord.idleSeconds ?? 0) >= idleThresholdSeconds);
-      }
-      if (overviewFilter === "IDENTIFIED") {
-        return Boolean(
-          currentRecord
-          && !(
-            currentRecord.identityConfidence === "UNKNOWN"
-            && !currentRecord.wbLogin
-            && !currentRecord.employeeId
-          )
-        );
-      }
-      return false;
+      return matchesSearch;
     });
-  }, [currentRecordByKey, overviewFilter, search, timelinePayload?.rows]);
+  }, [lobFilter, search, timelinePayload?.rows]);
+
+  useEffect(() => {
+    if (lobFilter !== "ALL" && !lobOptions.some((option) => option.value === lobFilter)) {
+      setLobFilter("ALL");
+    }
+  }, [lobFilter, lobOptions]);
   const mappingRows = useMemo(() => {
     const normalizedSearch = normalizeText(search);
     const rows = mappingsPayload?.data ?? [];
@@ -333,7 +316,9 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
     });
   }, [records, search]);
 
-  const activePercent = percent(summary.activeSessions, summary.totalRecords);
+  const onlineSessions = Math.max(0, summary.activeSessions - summary.idleSessions);
+  const onlinePercent = percent(onlineSessions, summary.totalRecords);
+  const lockedPercent = percent(summary.lockedSessions, summary.totalRecords);
   const idlePercent = percent(summary.idleSessions, summary.totalRecords);
   const identifiedPercent = percent(summary.identifiedRecords, summary.totalRecords);
 
@@ -435,41 +420,33 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
       </div>
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <OverviewFilterCard
-          title="Máquinas"
-          value={summary.distinctHosts}
-          helper={`${summary.totalRecords} sinal(is) atual(is)`}
-          icon={Laptop}
-          tone="blue"
-          active={overviewFilter === "MACHINES"}
-          onClick={() => setOverviewFilter("MACHINES")}
-        />
-        <OverviewFilterCard
-          title="Sessões ativas"
-          value={summary.activeSessions}
-          helper={`${activePercent}% do sinal atual`}
+        <OverviewMetricCard
+          title="Online"
+          value={onlineSessions}
+          helper={`${onlinePercent}% com atividade recente`}
           icon={Wifi}
           tone="green"
-          active={overviewFilter === "ACTIVE"}
-          onClick={() => setOverviewFilter((current) => current === "ACTIVE" ? "MACHINES" : "ACTIVE")}
         />
-        <OverviewFilterCard
+        <OverviewMetricCard
+          title="Tela bloqueada"
+          value={summary.lockedSessions}
+          helper={`${lockedPercent}% do sinal atual`}
+          icon={Laptop}
+          tone="blue"
+        />
+        <OverviewMetricCard
           title="Ociosas"
           value={summary.idleSessions}
-          helper={`${idlePercent}% ativas acima de 5 min`}
+          helper={`${idlePercent}% sem interação há 5 min`}
           icon={Clock}
           tone="orange"
-          active={overviewFilter === "IDLE"}
-          onClick={() => setOverviewFilter((current) => current === "IDLE" ? "MACHINES" : "IDLE")}
         />
-        <OverviewFilterCard
-          title="Identificadas"
+        <OverviewMetricCard
+          title="WB identificado"
           value={summary.identifiedRecords}
-          helper={`${identifiedPercent}% com identidade`}
+          helper={`${identifiedPercent}% com vínculo encontrado`}
           icon={ShieldCheck}
           tone="purple"
-          active={overviewFilter === "IDENTIFIED"}
-          onClick={() => setOverviewFilter((current) => current === "IDENTIFIED" ? "MACHINES" : "IDENTIFIED")}
         />
       </div>
 
@@ -482,6 +459,9 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
           onSearchChange={setSearch}
           payload={timelinePayload}
           rows={timelineRows}
+          lobFilter={lobFilter}
+          lobOptions={lobOptions}
+          onLobFilterChange={setLobFilter}
           expandedKey={expandedTimelineKey}
           onToggleExpanded={(key) => setExpandedTimelineKey((current) => current === key ? null : key)}
         />
@@ -519,42 +499,29 @@ function CaptureTabButton({ active, onClick, icon: Icon, label }: { active: bool
   );
 }
 
-function OverviewFilterCard({
+function OverviewMetricCard({
   title,
   value,
   helper,
   icon: Icon,
-  tone,
-  active,
-  onClick
+  tone
 }: {
   title: string;
   value: number;
   helper: string;
   icon: LucideIcon;
   tone: "blue" | "green" | "orange" | "purple";
-  active: boolean;
-  onClick: () => void;
 }) {
   const toneStyles = {
-    blue: { icon: "bg-blue-50 text-blue-600", selected: "border-blue-300 bg-blue-50/40 ring-blue-100" },
-    green: { icon: "bg-emerald-50 text-emerald-600", selected: "border-emerald-300 bg-emerald-50/40 ring-emerald-100" },
-    orange: { icon: "bg-amber-50 text-amber-600", selected: "border-amber-300 bg-amber-50/40 ring-amber-100" },
-    purple: { icon: "bg-violet-50 text-violet-600", selected: "border-violet-300 bg-violet-50/40 ring-violet-100" }
+    blue: "bg-blue-50 text-blue-600",
+    green: "bg-emerald-50 text-emerald-600",
+    orange: "bg-amber-50 text-amber-600",
+    purple: "bg-violet-50 text-violet-600"
   }[tone];
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={cn(
-        "group relative flex min-h-[106px] w-full items-center gap-3 rounded-xl border border-border bg-white px-4 py-3 text-left shadow-soft transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-200",
-        active && `ring-2 ${toneStyles.selected}`
-      )}
-      title={`${active ? "Filtro ativo" : "Filtrar por"} ${title.toLowerCase()}`}
-    >
-      <span className={cn("grid h-11 w-11 shrink-0 place-items-center rounded-xl", toneStyles.icon)}>
+    <article className="flex min-h-[106px] w-full items-center gap-3 rounded-xl border border-border bg-white px-4 py-3 shadow-soft">
+      <span className={cn("grid h-11 w-11 shrink-0 place-items-center rounded-xl", toneStyles)}>
         <Icon className="h-5 w-5" />
       </span>
       <span className="min-w-0 flex-1">
@@ -562,8 +529,7 @@ function OverviewFilterCard({
         <span className="mt-0.5 block text-2xl font-black leading-none text-navy-950">{value}</span>
         <span className="mt-1.5 block truncate text-xs font-bold text-muted">{helper}</span>
       </span>
-      {active ? <CheckCircle2 className="absolute right-3 top-3 h-4 w-4 text-blue-600" /> : null}
-    </button>
+    </article>
   );
 }
 
@@ -575,6 +541,9 @@ function TimelinePanel({
   onSearchChange,
   payload,
   rows,
+  lobFilter,
+  lobOptions,
+  onLobFilterChange,
   expandedKey,
   onToggleExpanded
 }: {
@@ -585,6 +554,9 @@ function TimelinePanel({
   onSearchChange: (value: string) => void;
   payload: RealtimeHoursTimelinePayload | null;
   rows: RealtimeHoursTimelineRow[];
+  lobFilter: string;
+  lobOptions: Array<{ value: string; label: string; count: number }>;
+  onLobFilterChange: (value: string) => void;
   expandedKey: string | null;
   onToggleExpanded: (key: string) => void;
 }) {
@@ -620,6 +592,25 @@ function TimelinePanel({
         </label>
       </div>
 
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <span className="mr-1 text-xs font-black uppercase tracking-wide text-muted">LOB</span>
+        <LobSlicerButton
+          active={lobFilter === "ALL"}
+          label="Todas"
+          count={lobOptions.reduce((sum, option) => sum + option.count, 0)}
+          onClick={() => onLobFilterChange("ALL")}
+        />
+        {lobOptions.map((option) => (
+          <LobSlicerButton
+            key={option.value}
+            active={lobFilter === option.value}
+            label={option.label}
+            count={option.count}
+            onClick={() => onLobFilterChange(option.value)}
+          />
+        ))}
+      </div>
+
       {loading ? (
         <div className="grid min-h-[260px] place-items-center text-sm font-bold text-muted">
           <span className="inline-flex items-center gap-2">
@@ -630,7 +621,7 @@ function TimelinePanel({
       ) : !payload?.rows?.length ? (
         <EmptyState title="Sem captura para esta data" description="Escolha outra data ou aguarde os agentes Windows enviarem novos sinais." />
       ) : !rows.length ? (
-        <EmptyState title="Nenhum registro neste filtro" description="Selecione outro indicador do topo ou ajuste a busca." />
+        <EmptyState title="Nenhuma máquina neste filtro" description="Selecione outra LOB ou ajuste a busca." />
       ) : (
         <div className="space-y-4">
           <div className="grid gap-2.5 md:grid-cols-3">
@@ -680,6 +671,36 @@ function TimelinePanel({
         </div>
       )}
     </Panel>
+  );
+}
+
+function LobSlicerButton({
+  active,
+  label,
+  count,
+  onClick
+}: {
+  active: boolean;
+  label: string;
+  count: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-xs font-black transition",
+        active
+          ? "border-blue-600 bg-blue-600 text-white shadow-soft"
+          : "border-border bg-white text-slate-600 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+      )}
+    >
+      <span>{label}</span>
+      <span className={cn("rounded-md px-1.5 py-0.5 text-[10px]", active ? "bg-white/20 text-white" : "bg-slate-100 text-slate-500")}>
+        {count}
+      </span>
+    </button>
   );
 }
 
@@ -1206,11 +1227,35 @@ function mappingRowKey(row: Pick<RealtimeHoursIdentityMapping, "hostname" | "win
   return `${row.hostname.trim().toLowerCase()}::${row.windowsUser.trim().toLowerCase()}`;
 }
 
-function realtimeHoursIdentityKey(hostname?: string | null, windowsUser?: string | null) {
-  const host = String(hostname ?? "").trim().toLowerCase();
-  const user = String(windowsUser ?? "").trim().toLowerCase();
-  if (!host) return "";
-  return `${host}::${user}`;
+function normalizedLob(value?: string | null) {
+  const normalized = String(value ?? "").trim().toUpperCase();
+  return normalized || "SEM_LOB";
+}
+
+function buildLobOptions(rows: RealtimeHoursTimelineRow[]) {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const lob = normalizedLob(row.lob);
+    counts.set(lob, (counts.get(lob) ?? 0) + 1);
+  }
+
+  const preferredOrder = ["ADS", "CEC", "COMMENTS", "VIDEO", "TNS", "PROJECT", "SEM_LOB"];
+  return Array.from(counts.entries())
+    .map(([value, count]) => ({
+      value,
+      count,
+      label: value === "SEM_LOB" ? "Sem LOB" : value
+    }))
+    .sort((left, right) => {
+      const leftIndex = preferredOrder.indexOf(left.value);
+      const rightIndex = preferredOrder.indexOf(right.value);
+      if (leftIndex !== -1 || rightIndex !== -1) {
+        if (leftIndex === -1) return 1;
+        if (rightIndex === -1) return -1;
+        return leftIndex - rightIndex;
+      }
+      return left.label.localeCompare(right.label, "pt-BR");
+    });
 }
 
 function scheduleStatusLabel(status: string) {

@@ -1140,6 +1140,7 @@ function summarizeStatus(records: Array<{
   hostname: string;
   wbLogin: string | null;
   employeeId: string | null;
+  sessionState: string | null;
   isSessionActive: boolean;
   idleSeconds: number | null;
   identityConfidence: string;
@@ -1147,6 +1148,10 @@ function summarizeStatus(records: Array<{
   const hostnames = new Set(records.map((record) => record.hostname));
   const active = records.filter((record) => record.isSessionActive).length;
   const idle = records.filter((record) => record.isSessionActive && (record.idleSeconds ?? 0) >= idleThresholdSeconds).length;
+  const locked = records.filter((record) => (
+    !record.isSessionActive
+    && String(record.sessionState ?? "").trim().toUpperCase() === "LOCKED"
+  )).length;
   const highConfidence = records.filter((record) => record.identityConfidence === "HIGH").length;
   const mediumConfidence = records.filter((record) => record.identityConfidence === "MEDIUM").length;
   const lowConfidence = records.filter((record) => record.identityConfidence === "LOW").length;
@@ -1158,6 +1163,7 @@ function summarizeStatus(records: Array<{
     activeSessions: active,
     inactiveSessions: records.length - active,
     idleSessions: idle,
+    lockedSessions: locked,
     identifiedRecords: records.length - unknownIdentity,
     unknownIdentityRecords: unknownIdentity,
     identityConfidence: {
@@ -1176,6 +1182,7 @@ function emptyStatusSummary() {
     activeSessions: 0,
     inactiveSessions: 0,
     idleSessions: 0,
+    lockedSessions: 0,
     identifiedRecords: 0,
     unknownIdentityRecords: 0,
     identityConfidence: {
