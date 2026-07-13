@@ -1066,6 +1066,10 @@ model RealTimeHoursRecord {
   id                 String                   @id @default(cuid())
   batchId            String
   batch              RealTimeHoursImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  eventId            String?                  @unique
+  eventType          String?
+  sessionId          Int?
+  sessionState       String?
   capturedAt         DateTime
   hostname           String
   windowsUser        String?
@@ -1073,16 +1077,19 @@ model RealTimeHoursRecord {
   employeeId         String?
   ipAddress          String?
   isSessionActive    Boolean                  @default(false)
+  isInputActive      Boolean?
   idleSeconds        Int?
   lastActivityAt     DateTime?
   activeProcessName  String?
   activeWindowTitle  String?
   identitySource     String?
   identityConfidence String                   @default("UNKNOWN")
+  agentVersion       String?
   rawData            Json
   createdAt          DateTime                 @default(now())
 
   @@index([batchId])
+  @@index([eventType])
   @@index([capturedAt])
   @@index([hostname])
   @@index([wbLogin])
@@ -1091,6 +1098,7 @@ model RealTimeHoursRecord {
   @@index([capturedAt, employeeId])
   @@index([capturedAt, wbLogin])
   @@index([hostname, capturedAt])
+  @@index([hostname, windowsUser, capturedAt])
 }
 
 model RealTimeHoursIdentityMapping {
