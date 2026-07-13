@@ -4,6 +4,18 @@ import { importRealtimeHoursSnapshot, validateRealtimeHoursAgentToken } from "@/
 
 export const dynamic = "force-dynamic";
 
+export async function GET(request: Request) {
+  const tokenValidation = validateRealtimeHoursAgentToken(request.headers.get("authorization"));
+  if ("error" in tokenValidation) {
+    return NextResponse.json({ success: false, error: tokenValidation.error, message: tokenValidation.error }, { status: tokenValidation.status });
+  }
+
+  return NextResponse.json({
+    success: true,
+    service: "realtime-hours-agent"
+  });
+}
+
 export async function POST(request: Request) {
   const tokenValidation = validateRealtimeHoursAgentToken(request.headers.get("authorization"));
   if ("error" in tokenValidation) {
