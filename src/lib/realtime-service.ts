@@ -1003,6 +1003,7 @@ function aiOperationalTerminationInPeriod(employee: AiOperationalEmployee, start
 
 const aiRequiredProductiveShifts = ["Manhã", "Tarde", "Noite"] as const;
 type AiRequiredProductiveShift = (typeof aiRequiredProductiveShifts)[number];
+const aiRequiredDefaultLobs = ["ADS", "CEC"];
 
 const aiRequiredCoverageStatuses = new Set(["ESCALADO", "PRESENTE", "ATRASO", "SAIDA_ANTECIPADA", "VENDA_FOLGA_APROVADA", "TROCA_APROVADA"]);
 const aiRequiredInactiveEmployeeStatusTokens = new Set([
@@ -1158,8 +1159,10 @@ function aiRequiredTargetLobs(query: RealtimeAiSnapshotQuery) {
   }
   if (query.lob && query.lob !== "Todos") return [query.lob];
   const reportLobs = normalizeAiReportLobs(query.reportLob);
-  if (reportLobs.length === 1) return reportLobs[0] === "TNS" ? ["TNS", "VIDEO", "COMMENTS"] : [reportLobs[0]];
-  return ["ADS"];
+  if (reportLobs.length === 1) {
+    return reportLobs[0] === "TNS" ? ["TNS", "VIDEO", "COMMENTS"] : [...aiRequiredDefaultLobs];
+  }
+  return [...aiRequiredDefaultLobs];
 }
 
 function emptyAiRequiredAgentsRow(date: string, lob: string, shift: AiRequiredProductiveShift): AiRequiredAgentsRow {
@@ -1542,7 +1545,7 @@ function normalizeAiSnapshotFilters(query: RealtimeAiSnapshotQuery) {
   return {
     cycleDownload: query.cycleDownload ?? null,
     reportLob: query.reportLob ?? "ALL",
-    requiredLob: query.requiredLob ?? "ADS",
+    requiredLob: query.requiredLob ?? aiRequiredDefaultLobs.join(","),
     search: query.search ?? null,
     crossingStatus: query.crossingStatus ?? null,
     personType: query.personType ?? null,
