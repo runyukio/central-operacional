@@ -3189,12 +3189,30 @@ function resolveAgentPresenceStatus(
 
   if (!isScheduled) return hasRecentProduction ? "Fora do turno" : "Offline";
   if (hasRecentProduction) return "Online";
+  if (isWithinRealtimeResetPresenceGrace(row, context.selectedCycle)) return "Online sem produção";
 
   const minutesSinceMovement = minutesSinceLastAgentMovement(row, context.selectedCycle);
   if (hasProduction && minutesSinceMovement !== null && minutesSinceMovement >= 60) return "Ocioso";
   if (hasProduction && minutesSinceMovement !== null && minutesSinceMovement < 60) return "Online sem produção";
 
   return "Offline";
+}
+
+function isWithinRealtimeResetPresenceGrace(row: AgentCycleRow, selectedCycle: string) {
+  const selectedInfo = parseRealtimeCycleForPresence(selectedCycle);
+  if (!selectedInfo || selectedInfo.hour !== 13) return false;
+
+  const latestBeforeReset = row.history
+    .map((item) => ({ item, info: parseRealtimeCycleForPresence(item.cycleDownload) }))
+    .filter((entry): entry is { item: AgentCycleRow["history"][number]; info: NonNullable<ReturnType<typeof parseRealtimeCycleForPresence>> } => Boolean(entry.info))
+    .filter((entry) => entry.info.dateKey === selectedInfo.dateKey && entry.info.hour < 13 && entry.info.timestamp < selectedInfo.timestamp)
+    .sort((a, b) => b.info.timestamp - a.info.timestamp)[0]?.item;
+
+  if (!latestBeforeReset) return false;
+
+  const hadProductionBeforeReset = latestBeforeReset.submit > 0 || latestBeforeReset.moderationMs > 0;
+  const countersWereReset = row.current.submit < latestBeforeReset.submit || row.current.moderationMs < latestBeforeReset.moderationMs;
+  return hadProductionBeforeReset && countersWereReset;
 }
 
 function isScheduleActiveAtRealtimeCycle(
