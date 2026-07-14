@@ -21,7 +21,8 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL("/alterar-senha", request.url));
   }
 
-  if ((pathname === "/billing" || pathname.startsWith("/billing/")) && !canAccessBilling({ id: token.sub, email: token.email, name: token.name, role })) {
+  const isBillingPath = pathname === "/billing" || pathname.startsWith("/billing/");
+  if (isBillingPath && !canAccessBilling({ id: token.sub, email: token.email, name: token.name, role })) {
     return NextResponse.redirect(new URL(getDefaultPathForRole(role), request.url));
   }
 
@@ -42,7 +43,7 @@ export async function middleware(request: NextRequest) {
     status: "ACTIVE"
   };
 
-  if (!canAccessPathForRole(pathname, permissionUser)) {
+  if (!isBillingPath && !canAccessPathForRole(pathname, permissionUser)) {
     if (pathname.startsWith("/api/")) {
       return NextResponse.json({ success: false, error: "Você não tem permissão para acessar esta página.", message: "Você não tem permissão para acessar esta página." }, { status: 403 });
     }

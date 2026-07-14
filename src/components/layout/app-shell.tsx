@@ -40,7 +40,7 @@ import {
 } from "lucide-react";
 
 import { useTheme } from "@/components/theme-provider";
-import { getNavItems, getNavSections } from "@/lib/navigation";
+import { getNavItems, getNavSections, navSections as allNavSections } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 
 const icons = {
@@ -121,13 +121,14 @@ export function AppShell({
   const router = useRouter();
   const { theme, toggleTheme } = useTheme();
   const role = user.role ?? "COLABORADOR";
-  const navSections = getNavSections(user)
+  const visibleNavHrefs = new Set(getNavSections(user).flatMap((section) => section.items.map((item) => item.href)));
+  if (billingAccess) visibleNavHrefs.add("/billing");
+  else visibleNavHrefs.delete("/billing");
+  if (!financeiroAccess) visibleNavHrefs.delete("/financeiro");
+  const navSections = allNavSections
     .map((section) => ({
       ...section,
-      items: section.items.filter((item) =>
-        (item.href !== "/billing" || billingAccess) &&
-        (item.href !== "/financeiro" || financeiroAccess)
-      )
+      items: section.items.filter((item) => visibleNavHrefs.has(item.href))
     }))
     .filter((section) => section.items.length > 0);
   const navItems = navSections.flatMap((section) => section.items);

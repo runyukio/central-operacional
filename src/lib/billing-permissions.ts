@@ -5,7 +5,7 @@ type BillingIdentity = {
   role?: string | null;
 };
 
-const DEFAULT_ALLOWED_EMAILS = ["runyukio@gmail.com", "admin@central.com"];
+const DEFAULT_ALLOWED_EMAILS = ["runyukio@gmail.com", "wb_fernanda20@kuaishou.com", "admin@central.com"];
 
 export function canAccessBilling(user?: BillingIdentity | null) {
   if (isSupervisor(user?.role)) return true;
@@ -22,7 +22,7 @@ export function canManageBilling(user?: BillingIdentity | null) {
 }
 
 function parseAllowlist(raw?: string, fallback: string[] = []) {
-  const values = raw && raw.trim() ? raw.split(",") : fallback;
+  const values = [...fallback, ...(raw && raw.trim() ? raw.split(",") : [])];
   return new Set(values.map(normalize).filter(Boolean));
 }
 
