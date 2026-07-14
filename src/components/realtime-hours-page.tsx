@@ -108,7 +108,16 @@ type RealtimeHoursPlannedShift = {
 type RealtimeHoursTimelineRow = {
   key: string;
   hostname: string;
+  hostnames: string[];
   windowsUser: string;
+  windowsUsers: string[];
+  deviceCount: number;
+  devices: Array<{
+    hostname: string;
+    windowsUser: string;
+    ipAddress: string;
+    lastSeenAt: string;
+  }>;
   wbLogin: string;
   employeeId: string;
   employeeName: string;
@@ -742,8 +751,8 @@ function TimelineTableRow({
             </span>
             <div className="min-w-0">
               <p className="truncate text-sm font-black text-navy-950">{row.employeeName || row.wbLogin || row.windowsUser || row.hostname}</p>
-              <p className="truncate text-xs font-bold text-muted">
-                {row.wbLogin || "Sem WB"} · {row.windowsUser || "Sem usuário Windows"} · {row.hostname}
+              <p className="truncate text-xs font-bold text-muted" title={row.hostnames.join(", ")}>
+                {row.wbLogin || "Sem WB"} · {row.deviceCount > 1 ? `${row.deviceCount} máquinas` : row.hostname}
               </p>
             </div>
           </div>
@@ -1021,6 +1030,20 @@ function ActivityBreakdown({ row, date }: { row: RealtimeHoursTimelineRow; date:
   return (
     <div className="space-y-3">
       <p className="text-sm font-black text-navy-950">Detalhe de atividade - {formatDateLabel(date)}</p>
+      {row.devices.length ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[11px] font-black uppercase tracking-wide text-muted">Máquinas utilizadas</span>
+          {row.devices.map((device) => (
+            <span
+              key={`${device.hostname}:${device.windowsUser}`}
+              className="rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-bold text-blue-700"
+              title={`Último sinal: ${formatDateTime(device.lastSeenAt)}${device.ipAddress ? ` · IP ${device.ipAddress}` : ""}`}
+            >
+              {device.hostname}{device.windowsUser ? ` · ${device.windowsUser}` : ""}
+            </span>
+          ))}
+        </div>
+      ) : null}
       <div className="grid gap-2.5 md:grid-cols-3">
         <TimelineSummaryCard title="Tempo ativo" value={formatDurationMs(row.activeMs)} tone="green" />
         <TimelineSummaryCard title="Sem atividade" value={formatDurationMs(row.noActivityMs)} tone="slate" />

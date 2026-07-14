@@ -86,6 +86,19 @@ type TimelineSegment = {
   durationMs: number;
 };
 
+type TimelineRecord = {
+  capturedAt: Date;
+  eventType?: string | null;
+  lastActivityAt?: Date | null;
+  isSessionActive: boolean;
+  idleSeconds: number | null;
+};
+
+type TimelineDeviceRecord = TimelineRecord & {
+  hostname: string;
+  windowsUser?: string | null;
+};
+
 type TimelineSchedule = {
   employeeId: string;
   date: Date;
@@ -791,26 +804,54 @@ export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOpt
     schedulesByEmployeeId.set(schedule.employeeId, employeeSchedules);
   }
 
-  const groups = new Map<string, typeof records>();
+  const groups = new Map<string, Array<{
+    record: typeof records[number];
+    employeeId: string;
+    wbLogin: string;
+  }>>();
   for (const record of records) {
-    const key = identityKey(record.hostname, record.windowsUser) || `${record.hostname.trim().toLowerCase()}::`;
+    const deviceKey = identityKey(record.hostname, record.windowsUser) || `${record.hostname.trim().toLowerCase()}::`;
+    const mapping = mappings.get(deviceKey);
+    const employee = employees.get(employeeKey(mapping?.employeeId ?? record.employeeId, mapping?.wbLogin ?? record.wbLogin));
+    const employeeId = mapping?.employeeId ?? employee?.id ?? record.employeeId ?? "";
+    const wbLogin = mapping?.wbLogin ?? employee?.wbLogin ?? record.wbLogin ?? "";
+    const key = realtimeHoursTimelinePersonKey({ employeeId, wbLogin, hostname: record.hostname, windowsUser: record.windowsUser });
     const group = groups.get(key) ?? [];
-    group.push(record);
+    group.push({ record, employeeId, wbLogin });
     groups.set(key, group);
   }
 
   const search = normalizeSearch(options.search);
   const rows = Array.from(groups.entries()).map(([key, group]) => {
-    const latest = group[group.length - 1];
-    const mapping = mappings.get(key);
-    const employee = employees.get(employeeKey(mapping?.employeeId ?? latest.employeeId, mapping?.wbLogin ?? latest.wbLogin));
-    const segments = buildTimelineSegments(group, period.start, period.calculationEnd);
+    const latestItem = group.reduce((latest, item) => item.record.capturedAt > latest.record.capturedAt ? item : latest);
+    const latest = latestItem.record;
+    const employeeId = latestItem.employeeId || group.find((item) => item.employeeId)?.employeeId || "";
+    const wbLogin = latestItem.wbLogin || group.find((item) => item.wbLogin)?.wbLogin || "";
+    const employee = employees.get(employeeKey(employeeId, wbLogin));
+    const segments = buildMergedTimelineSegments(group.map((item) => item.record), period.start, period.calculationEnd);
     const activeMs = segments.filter((segment) => segment.type === "ACTIVE").reduce((sum, segment) => sum + segment.durationMs, 0);
     const noActivityMs = Math.max(0, period.calculationEnd.getTime() - period.start.getTime() - activeMs);
     const sessionCount = segments.filter((segment) => segment.type === "ACTIVE").length;
+    const devicesByKey = new Map<string, typeof records[number]>();
+    for (const item of group) {
+      const record = item.record;
+      const deviceKey = identityKey(record.hostname, record.windowsUser) || `${record.hostname.trim().toLowerCase()}::`;
+      const current = devicesByKey.get(deviceKey);
+      if (!current || record.capturedAt > current.capturedAt) devicesByKey.set(deviceKey, record);
+    }
+    const devices = Array.from(devicesByKey.values())
+      .map((latestDeviceRecord) => {
+        return {
+          hostname: latestDeviceRecord.hostname,
+          windowsUser: latestDeviceRecord.windowsUser ?? "",
+          ipAddress: latestDeviceRecord.ipAddress ?? "",
+          lastSeenAt: latestDeviceRecord.capturedAt.toISOString()
+        };
+      })
+      .sort((left, right) => left.hostname.localeCompare(right.hostname));
     const plannedShifts = employee
       ? buildPlannedShiftWindows(
-        schedulesByEmployeeId.get(employee.id) ?? [],
+        schedulesByEmployeeId.get(employeeId || employee.id) ?? [],
         employee.shift,
         period.start,
         period.end
@@ -821,8 +862,12 @@ export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOpt
       key,
       hostname: latest.hostname,
       windowsUser: latest.windowsUser ?? "",
-      wbLogin: mapping?.wbLogin ?? employee?.wbLogin ?? latest.wbLogin ?? "",
-      employeeId: mapping?.employeeId ?? employee?.id ?? latest.employeeId ?? "",
+      hostnames: devices.map((device) => device.hostname),
+      windowsUsers: Array.from(new Set(devices.map((device) => device.windowsUser).filter(Boolean))),
+      deviceCount: devices.length,
+      devices,
+      wbLogin,
+      employeeId,
       employeeName: employee?.fullName ?? "",
       roleTitle: employee?.roleTitle ?? "",
       lob: employee?.lob?.name ?? "",
@@ -844,6 +889,8 @@ export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOpt
     if (!search) return true;
     return normalizeSearch([
       row.hostname,
+      ...row.hostnames,
+      ...row.windowsUsers,
       row.windowsUser,
       row.wbLogin,
       row.employeeName,
@@ -1026,7 +1073,7 @@ function formatClockMinutes(minutes: number) {
 }
 
 export function buildTimelineSegments(
-  records: Array<{ capturedAt: Date; eventType?: string | null; lastActivityAt?: Date | null; isSessionActive: boolean; idleSeconds: number | null }>,
+  records: TimelineRecord[],
   start: Date,
   end: Date
 ): TimelineSegment[] {
@@ -1076,6 +1123,63 @@ export function buildTimelineSegments(
 
   if (cursor < endMs) appendTimelineSegment(segments, "NO_ACTIVITY", new Date(cursor), end);
   return segments;
+}
+
+export function buildMergedTimelineSegments(records: TimelineDeviceRecord[], start: Date, end: Date): TimelineSegment[] {
+  const recordsByDevice = new Map<string, TimelineDeviceRecord[]>();
+  for (const record of records) {
+    const key = identityKey(record.hostname, record.windowsUser) || `${record.hostname.trim().toLowerCase()}::`;
+    const deviceRecords = recordsByDevice.get(key) ?? [];
+    deviceRecords.push(record);
+    recordsByDevice.set(key, deviceRecords);
+  }
+
+  const activeSegments = Array.from(recordsByDevice.values())
+    .flatMap((deviceRecords) => buildTimelineSegments(
+      deviceRecords.sort((left, right) => left.capturedAt.getTime() - right.capturedAt.getTime()),
+      start,
+      end
+    ))
+    .filter((segment) => segment.type === "ACTIVE")
+    .sort((left, right) => left.start.getTime() - right.start.getTime());
+
+  const mergedActive: TimelineSegment[] = [];
+  for (const segment of activeSegments) {
+    const previous = mergedActive[mergedActive.length - 1];
+    if (previous && segment.start.getTime() <= previous.end.getTime()) {
+      const nextEnd = Math.max(previous.end.getTime(), segment.end.getTime());
+      previous.end = new Date(nextEnd);
+      previous.durationMs = nextEnd - previous.start.getTime();
+      continue;
+    }
+    mergedActive.push({ ...segment });
+  }
+
+  const timeline: TimelineSegment[] = [];
+  let cursor = start.getTime();
+  for (const segment of mergedActive) {
+    if (segment.start.getTime() > cursor) {
+      appendTimelineSegment(timeline, "NO_ACTIVITY", new Date(cursor), segment.start);
+    }
+    appendTimelineSegment(timeline, "ACTIVE", segment.start, segment.end);
+    cursor = Math.max(cursor, segment.end.getTime());
+  }
+  if (cursor < end.getTime()) appendTimelineSegment(timeline, "NO_ACTIVITY", new Date(cursor), end);
+  return timeline;
+}
+
+export function realtimeHoursTimelinePersonKey(input: {
+  employeeId?: string | null;
+  wbLogin?: string | null;
+  hostname: string;
+  windowsUser?: string | null;
+}) {
+  const employeeId = String(input.employeeId ?? "").trim();
+  if (employeeId) return `employee:${employeeId}`;
+  const wbLogin = normalizeLogin(String(input.wbLogin ?? ""));
+  if (wbLogin) return `wb:${wbLogin}`;
+  const deviceKey = identityKey(input.hostname, input.windowsUser) || `${input.hostname.trim().toLowerCase()}::`;
+  return `device:${deviceKey}`;
 }
 
 function appendTimelineSegment(segments: TimelineSegment[], type: TimelineSegment["type"], start: Date, end: Date) {
