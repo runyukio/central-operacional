@@ -759,7 +759,7 @@ function ForecastViewPanel({
             <thead className="bg-slate-50 text-xs font-black uppercase tracking-wide text-muted">
               <tr>
                 <th className="px-3 py-3">Periodo</th>
-                <th className="px-3 py-3 text-right">Real</th>
+                <th className="px-3 py-3 text-right">Enqueue real</th>
                 <th className="px-3 py-3 text-right">Forecast</th>
                 <th className="px-3 py-3 text-right">Min</th>
                 <th className="px-3 py-3 text-right">Max</th>
@@ -797,7 +797,7 @@ function ForecastChart({ rows }: { rows: ForecastChartRow[] }) {
         <XAxis dataKey="label" tick={{ fill: "#64748B", fontSize: 11, fontWeight: 700 }} tickLine={false} axisLine={false} minTickGap={18} />
         <YAxis tick={{ fill: "#64748B", fontSize: 12 }} tickLine={false} axisLine={false} />
         <RechartsTooltip content={<ForecastTooltip />} cursor={{ stroke: "#0f172a", strokeDasharray: "4 4" }} />
-        <Line type="monotone" dataKey="real" name="Real" stroke="#2563EB" strokeWidth={3} dot={false} connectNulls={false} />
+        <Line type="monotone" dataKey="real" name="Enqueue real" stroke="#2563EB" strokeWidth={3} dot={false} connectNulls={false} />
         <Line type="monotone" dataKey="forecast" name="Forecast" stroke="#0284C7" strokeWidth={3} strokeDasharray="5 5" dot={false} connectNulls={false} />
         <Line type="monotone" dataKey="upper" name="Max" stroke="#93C5FD" strokeWidth={1.5} strokeDasharray="4 4" dot={false} connectNulls={false} />
         <Line type="monotone" dataKey="lower" name="Min" stroke="#93C5FD" strokeWidth={1.5} strokeDasharray="4 4" dot={false} connectNulls={false} />
@@ -813,7 +813,7 @@ function ForecastTooltip({ active, payload }: { active?: boolean; payload?: Arra
     <div className="rounded-xl border border-border bg-white p-3 text-xs font-bold shadow-xl">
       <p className="mb-2 font-black text-navy-950">{row.label}</p>
       <div className="space-y-1 text-muted">
-        <div className="flex justify-between gap-4"><span>Real</span><span>{formatOptionalNumber(row.real)}</span></div>
+        <div className="flex justify-between gap-4"><span>Enqueue real</span><span>{formatOptionalNumber(row.real)}</span></div>
         <div className="flex justify-between gap-4"><span>Forecast</span><span>{formatOptionalNumber(row.forecast)}</span></div>
         <div className="flex justify-between gap-4"><span>Faixa</span><span>{formatOptionalNumber(row.lower)} - {formatOptionalNumber(row.upper)}</span></div>
       </div>
@@ -959,8 +959,10 @@ function buildForecastModel(rows: PerformanceTrendRow[], horizonDays: number, vi
   }, { value: 0, at: null });
   const adjustment = weightedAverageValue(projectedRows.map((row) => ({ value: row.adjustment ?? 1, weight: row.forecast ?? 1 })));
   const accuracy = calculateBacktestAccuracy(positiveActuals, lastReal.at, modelWeights);
-  const chartRows = aggregateForecastRows([...actualsToHours(actuals.slice(-168)), ...future], view);
-  const tableRows = aggregateForecastRows(future, view).slice(0, view === "hour" ? 168 : 60);
+  const historical = buildHistoricalForecastHours(actuals, modelWeights, 168);
+  const combinedRows = aggregateForecastRows([...historical, ...future], view);
+  const chartRows = combinedRows;
+  const tableRows = selectForecastTableRows(combinedRows, lastReal.at, view, horizonDays);
 
   return {
     hasForecast: projectedRows.length > 0,
@@ -975,6 +977,60 @@ function buildForecastModel(rows: PerformanceTrendRow[], horizonDays: number, vi
     chartRows,
     tableRows
   };
+}
+
+function buildHistoricalForecastHours(actuals: ForecastActual[], modelWeights: ForecastModelWeights, limit: number): ForecastHour[] {
+  const firstIndex = Math.max(0, actuals.length - limit);
+  return actuals.slice(firstIndex).map((row, index) => {
+    const absoluteIndex = firstIndex + index;
+    const history = actuals.slice(0, absoluteIndex).filter((item) => item.input > 0);
+    if (history.length < 24) {
+      return {
+        at: row.at,
+        timestamp: row.timestamp,
+        label: formatHourLabel(row.at),
+        real: row.input,
+        forecast: null,
+        lower: null,
+        upper: null,
+        adjustment: null,
+        confidence: null,
+        samples: history.length
+      };
+    }
+
+    const referenceAt = new Date(row.timestamp - hourMs);
+    const prediction = predictHour(history, row.at, referenceAt, modelWeights);
+    return {
+      at: row.at,
+      timestamp: row.timestamp,
+      label: formatHourLabel(row.at),
+      real: row.input,
+      forecast: round(prediction.forecast),
+      lower: round(prediction.lower),
+      upper: round(prediction.upper),
+      adjustment: roundRatio(prediction.adjustment),
+      confidence: roundRatio(prediction.confidence),
+      samples: prediction.samples
+    };
+  });
+}
+
+function selectForecastTableRows(rows: ForecastChartRow[], lastRealAt: Date, view: ForecastView, horizonDays: number) {
+  const lastRealTime = lastRealAt.getTime();
+  const pivotIndex = rows.reduce((latestIndex, row, index) => {
+    const timestamp = new Date(row.key).getTime();
+    return Number.isFinite(timestamp) && timestamp <= lastRealTime ? index : latestIndex;
+  }, -1);
+  if (pivotIndex < 0) return rows.slice(0, view === "hour" ? 168 : 60);
+
+  const historicalCount = view === "hour" ? 24 : view === "day" ? 7 : 4;
+  const futureCount = view === "hour"
+    ? Math.min(horizonDays * 24, 168)
+    : view === "day"
+      ? horizonDays
+      : Math.max(1, Math.ceil(horizonDays / 7));
+  return rows.slice(Math.max(0, pivotIndex - historicalCount + 1), pivotIndex + futureCount + 1);
 }
 
 function predictHour(actuals: ForecastActual[], targetAt: Date, referenceAt: Date, modelWeights: ForecastModelWeights = defaultForecastModelWeights) {
