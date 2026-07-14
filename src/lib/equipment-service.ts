@@ -83,6 +83,7 @@ export type EquipmentQuery = {
   deliveryDateTo?: string;
   page?: number;
   limit?: number;
+  includeAllPages?: boolean;
 };
 
 export type EquipmentPreviewRow = {
@@ -271,14 +272,14 @@ export async function listEquipment(actor: Actor, query: EquipmentQuery = {}) {
 
   const page = Math.max(1, Number(query.page) || 1);
   const limit = Math.min(100, Math.max(25, Number(query.limit) || 50));
+  const includeAllPages = query.includeAllPages === true;
   const where: Prisma.EquipmentWhereInput = { deletedAt: null, ...(filters.length ? { AND: filters } : {}) };
   const [rows, total, statusGroups, pending] = await Promise.all([
     prisma.equipment.findMany({
       where,
       include: equipmentListInclude,
       orderBy: { updatedAt: "desc" },
-      skip: (page - 1) * limit,
-      take: limit
+      ...(includeAllPages ? {} : { skip: (page - 1) * limit, take: limit })
     }),
     prisma.equipment.count({ where }),
     prisma.equipment.groupBy({ by: ["status"], where, _count: { _all: true } }),
@@ -300,10 +301,10 @@ export async function listEquipment(actor: Actor, query: EquipmentQuery = {}) {
     },
     canManage: canManageEquipmentRole(user.role.name),
     pagination: {
-      page,
-      limit,
+      page: includeAllPages ? 1 : page,
+      limit: includeAllPages ? total : limit,
       total,
-      totalPages: Math.max(1, Math.ceil(total / limit))
+      totalPages: includeAllPages ? 1 : Math.max(1, Math.ceil(total / limit))
     }
   };
 }
@@ -556,7 +557,7 @@ export async function commitEquipmentImport(actor: Actor, rows: EquipmentPreview
 }
 
 export async function exportEquipmentXlsxData(actor: Actor, query: EquipmentQuery = {}) {
-  const payload = await listEquipment(actor, query);
+  const payload = await listEquipment(actor, { ...query, includeAllPages: true });
   const headers = ["numero_serie", "tipo_equipamento", "modelo", "responsavel", "responsavel_wb_login", "data_entrega", "status", "observacao"];
   const rows = payload.data.map((item) => [item.serial, item.type, item.model, item.employee, item.employeeWbLogin, item.delivered, item.status, item.observation]);
   return {
