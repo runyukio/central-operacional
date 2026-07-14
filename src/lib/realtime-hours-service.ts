@@ -556,7 +556,8 @@ export async function listRealtimeHoursIdentityMappings() {
             fullName: true,
             roleTitle: true,
             lob: { select: { name: true } },
-            shift: { select: { name: true, startsAt: true, endsAt: true } }
+            shift: { select: { name: true, startsAt: true, endsAt: true } },
+            supervisor: { select: { fullName: true } }
           }
         }
       }
@@ -672,7 +673,8 @@ export async function upsertRealtimeHoursIdentityMapping(input: RealtimeHoursIde
       fullName: true,
       roleTitle: true,
       lob: { select: { name: true } },
-      shift: { select: { name: true } }
+      shift: { select: { name: true } },
+      supervisor: { select: { fullName: true } }
     }
   });
 
@@ -704,7 +706,8 @@ export async function upsertRealtimeHoursIdentityMapping(input: RealtimeHoursIde
             fullName: true,
             roleTitle: true,
             lob: { select: { name: true } },
-            shift: { select: { name: true } }
+            shift: { select: { name: true } },
+            supervisor: { select: { fullName: true } }
           }
         }
       }
@@ -760,6 +763,7 @@ export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOpt
       employeeId: true,
       ipAddress: true,
       isSessionActive: true,
+      sessionState: true,
       idleSeconds: true,
       activeProcessName: true,
       activeWindowTitle: true,
@@ -872,8 +876,10 @@ export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOpt
       roleTitle: employee?.roleTitle ?? "",
       lob: employee?.lob?.name ?? "",
       shift: employee?.shift?.name ?? "",
+      supervisor: employee?.supervisor?.fullName ?? "Sem supervisor",
       ipAddress: latest.ipAddress ?? "",
       lastSeenAt: latest.capturedAt.toISOString(),
+      currentStatus: realtimeHoursPresenceStatus(latest, period.calculationEnd),
       activeMs,
       noActivityMs,
       sessionCount,
@@ -1017,7 +1023,8 @@ async function employeeLookupFor(entries: Array<{ employeeId?: string | null; wb
         fullName: true,
         roleTitle: true,
         lob: { select: { name: true } },
-        shift: { select: { name: true, startsAt: true, endsAt: true } }
+        shift: { select: { name: true, startsAt: true, endsAt: true } },
+        supervisor: { select: { fullName: true } }
       }
     })
     : [];
@@ -1028,6 +1035,19 @@ async function employeeLookupFor(entries: Array<{ employeeId?: string | null; wb
     lookup.set(employeeKey(null, employee.wbLogin), employee);
   }
   return lookup;
+}
+
+function realtimeHoursPresenceStatus(
+  record: { capturedAt: Date; isSessionActive: boolean; sessionState: string | null; idleSeconds: number | null },
+  referenceTime: Date
+) {
+  const isFresh = referenceTime.getTime() - record.capturedAt.getTime() <= staleThresholdMinutes * 60_000;
+  const sessionState = String(record.sessionState ?? "").trim().toUpperCase();
+  if (!isFresh) return "OFFLINE";
+  if (sessionState === "LOCKED") return "LOCKED";
+  if (!record.isSessionActive || sessionState === "DISCONNECTED") return "OFFLINE";
+  if ((record.idleSeconds ?? 0) >= idleThresholdSeconds) return "IDLE";
+  return "ONLINE";
 }
 
 function buildPlannedShiftWindows(

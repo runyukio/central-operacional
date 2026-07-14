@@ -10,6 +10,7 @@ import {
   Laptop,
   Link2,
   MonitorCog,
+  WifiOff,
   RefreshCw,
   Search,
   Save,
@@ -124,8 +125,10 @@ type RealtimeHoursTimelineRow = {
   roleTitle: string;
   lob: string;
   shift: string;
+  supervisor: string;
   ipAddress: string;
   lastSeenAt: string;
+  currentStatus: RealtimeHoursPresenceStatus;
   activeMs: number;
   noActivityMs: number;
   sessionCount: number;
@@ -172,6 +175,8 @@ type RealtimeHoursIdentityMappingsPayload = {
 };
 
 type CaptureTab = "TIMELINE" | "MAPPINGS";
+type RealtimeHoursPresenceStatus = "ONLINE" | "LOCKED" | "OFFLINE" | "IDLE";
+type MappingMatchFilter = "ALL" | "FOUND" | "NOT_FOUND";
 
 type RealtimeHoursPageProps = {
   canManageMappings?: boolean;
@@ -209,6 +214,9 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
   const [successMessage, setSuccessMessage] = useState("");
   const [search, setSearch] = useState("");
   const [lobFilter, setLobFilter] = useState("ALL");
+  const [presenceFilter, setPresenceFilter] = useState<"ALL" | RealtimeHoursPresenceStatus>("ALL");
+  const [supervisorFilter, setSupervisorFilter] = useState("ALL");
+  const [mappingMatchFilter, setMappingMatchFilter] = useState<MappingMatchFilter>("ALL");
   const [timelineDate, setTimelineDate] = useState(todayInputDate());
   const [expandedTimelineKey, setExpandedTimelineKey] = useState<string | null>(null);
   const [mappingDrafts, setMappingDrafts] = useState<Record<string, string>>({});
@@ -268,12 +276,15 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
   const batch = statusPayload?.batch ?? null;
   const records = useMemo(() => statusPayload?.records ?? [], [statusPayload?.records]);
   const lobOptions = useMemo(() => buildLobOptions(timelinePayload?.rows ?? []), [timelinePayload?.rows]);
+  const supervisorOptions = useMemo(() => buildSupervisorOptions(timelinePayload?.rows ?? []), [timelinePayload?.rows]);
   const timelineRows = useMemo(() => {
     const normalizedSearch = normalizeText(search);
     const rows = timelinePayload?.rows ?? [];
     return rows.filter((row) => {
       const rowLob = normalizedLob(row.lob);
       if (lobFilter !== "ALL" && rowLob !== lobFilter) return false;
+      if (presenceFilter !== "ALL" && row.currentStatus !== presenceFilter) return false;
+      if (supervisorFilter !== "ALL" && row.supervisor !== supervisorFilter) return false;
       const matchesSearch = normalizedSearch
         ? normalizeText([
           row.hostname,
@@ -282,31 +293,43 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
           row.employeeName,
           row.lob,
           row.shift,
+          row.supervisor,
           row.ipAddress
         ].join(" ")).includes(normalizedSearch)
         : true;
       return matchesSearch;
     });
-  }, [lobFilter, search, timelinePayload?.rows]);
+  }, [lobFilter, presenceFilter, search, supervisorFilter, timelinePayload?.rows]);
 
   useEffect(() => {
     if (lobFilter !== "ALL" && !lobOptions.some((option) => option.value === lobFilter)) {
       setLobFilter("ALL");
     }
   }, [lobFilter, lobOptions]);
+  useEffect(() => {
+    if (supervisorFilter !== "ALL" && !supervisorOptions.includes(supervisorFilter)) {
+      setSupervisorFilter("ALL");
+    }
+  }, [supervisorFilter, supervisorOptions]);
   const mappingRows = useMemo(() => {
     const normalizedSearch = normalizeText(search);
     const rows = mappingsPayload?.data ?? [];
-    if (!normalizedSearch) return rows;
-    return rows.filter((row) => normalizeText([
-      row.hostname,
-      row.windowsUser,
-      row.wbLogin,
-      row.employeeName,
-      row.lob,
-      row.shift
-    ].join(" ")).includes(normalizedSearch));
-  }, [mappingsPayload?.data, search]);
+    return rows.filter((row) => {
+      const wbFound = Boolean(row.employeeId && row.employeeName);
+      if (mappingMatchFilter === "FOUND" && !wbFound) return false;
+      if (mappingMatchFilter === "NOT_FOUND" && wbFound) return false;
+      return normalizedSearch
+        ? normalizeText([
+          row.hostname,
+          row.windowsUser,
+          row.wbLogin,
+          row.employeeName,
+          row.lob,
+          row.shift
+        ].join(" ")).includes(normalizedSearch)
+        : true;
+    });
+  }, [mappingMatchFilter, mappingsPayload?.data, search]);
 
   const filteredRecords = useMemo(() => {
     const normalizedSearch = normalizeText(search);
@@ -471,6 +494,11 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
           lobFilter={lobFilter}
           lobOptions={lobOptions}
           onLobFilterChange={setLobFilter}
+          presenceFilter={presenceFilter}
+          onPresenceFilterChange={setPresenceFilter}
+          supervisorFilter={supervisorFilter}
+          supervisorOptions={supervisorOptions}
+          onSupervisorFilterChange={setSupervisorFilter}
           expandedKey={expandedTimelineKey}
           onToggleExpanded={(key) => setExpandedTimelineKey((current) => current === key ? null : key)}
         />
@@ -485,6 +513,8 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
           onSave={saveMapping}
           search={search}
           onSearchChange={setSearch}
+          matchFilter={mappingMatchFilter}
+          onMatchFilterChange={setMappingMatchFilter}
         />
       ) : null}
 
@@ -553,6 +583,11 @@ function TimelinePanel({
   lobFilter,
   lobOptions,
   onLobFilterChange,
+  presenceFilter,
+  onPresenceFilterChange,
+  supervisorFilter,
+  supervisorOptions,
+  onSupervisorFilterChange,
   expandedKey,
   onToggleExpanded
 }: {
@@ -566,6 +601,11 @@ function TimelinePanel({
   lobFilter: string;
   lobOptions: Array<{ value: string; label: string; count: number }>;
   onLobFilterChange: (value: string) => void;
+  presenceFilter: "ALL" | RealtimeHoursPresenceStatus;
+  onPresenceFilterChange: (value: "ALL" | RealtimeHoursPresenceStatus) => void;
+  supervisorFilter: string;
+  supervisorOptions: string[];
+  onSupervisorFilterChange: (value: string) => void;
   expandedKey: string | null;
   onToggleExpanded: (key: string) => void;
 }) {
@@ -577,7 +617,7 @@ function TimelinePanel({
 
   return (
     <Panel title="Linha do tempo diária">
-      <div className="mb-4 grid gap-2.5 lg:grid-cols-[220px_minmax(0,1fr)]">
+      <div className="mb-4 grid gap-2.5 lg:grid-cols-[200px_minmax(280px,1fr)_210px_230px]">
         <label className="relative block">
           <span className="sr-only">Data</span>
           <CalendarDays className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-blue-600" />
@@ -598,6 +638,33 @@ function TimelinePanel({
             className="premium-control h-10 w-full pl-9 pr-3 text-sm font-bold outline-none"
             placeholder="Buscar por colaborador, WB, usuário Windows, máquina ou IP"
           />
+        </label>
+
+        <label className="block">
+          <span className="sr-only">Status atual</span>
+          <select
+            value={presenceFilter}
+            onChange={(event) => onPresenceFilterChange(event.target.value as "ALL" | RealtimeHoursPresenceStatus)}
+            className="premium-control h-10 w-full px-3 text-sm font-black text-navy-950 outline-none"
+          >
+            <option value="ALL">Todos os status</option>
+            <option value="ONLINE">Online</option>
+            <option value="LOCKED">Tela bloqueada</option>
+            <option value="IDLE">Ocioso</option>
+            <option value="OFFLINE">Offline</option>
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="sr-only">Supervisor</span>
+          <select
+            value={supervisorFilter}
+            onChange={(event) => onSupervisorFilterChange(event.target.value)}
+            className="premium-control h-10 w-full px-3 text-sm font-black text-navy-950 outline-none"
+          >
+            <option value="ALL">Todos os supervisores</option>
+            {supervisorOptions.map((supervisor) => <option key={supervisor} value={supervisor}>{supervisor}</option>)}
+          </select>
         </label>
       </div>
 
@@ -751,6 +818,7 @@ function TimelineTableRow({
             </span>
             <div className="min-w-0">
               <p className="truncate text-sm font-black text-navy-950">{row.employeeName || row.wbLogin || row.windowsUser || row.hostname}</p>
+              <PresenceStatusBadge status={row.currentStatus} />
               <p className="truncate text-xs font-bold text-muted" title={row.hostnames.join(", ")}>
                 {row.wbLogin || "Sem WB"} · {row.deviceCount > 1 ? `${row.deviceCount} máquinas` : row.hostname}
               </p>
@@ -1092,7 +1160,9 @@ function MappingsPanel({
   onDraftChange,
   onSave,
   search,
-  onSearchChange
+  onSearchChange,
+  matchFilter,
+  onMatchFilterChange
 }: {
   rows: RealtimeHoursIdentityMapping[];
   drafts: Record<string, string>;
@@ -1101,10 +1171,12 @@ function MappingsPanel({
   onSave: (row: RealtimeHoursIdentityMapping) => void;
   search: string;
   onSearchChange: (value: string) => void;
+  matchFilter: MappingMatchFilter;
+  onMatchFilterChange: (value: MappingMatchFilter) => void;
 }) {
   return (
     <Panel title={`Vínculos Windows -> WB/Login (${rows.length})`}>
-      <div className="mb-3 grid gap-2.5 lg:grid-cols-[minmax(0,1fr)_auto]">
+      <div className="mb-3 grid gap-2.5 lg:grid-cols-[minmax(0,1fr)_220px_auto]">
         <label className="relative block">
           <span className="sr-only">Buscar vínculo</span>
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
@@ -1114,6 +1186,18 @@ function MappingsPanel({
             className="premium-control h-10 w-full pl-9 pr-3 text-sm font-bold outline-none"
             placeholder="Buscar máquina, usuário Windows, WB ou colaborador"
           />
+        </label>
+        <label className="block">
+          <span className="sr-only">Status do WB</span>
+          <select
+            value={matchFilter}
+            onChange={(event) => onMatchFilterChange(event.target.value as MappingMatchFilter)}
+            className="premium-control h-10 w-full px-3 text-sm font-black text-navy-950 outline-none"
+          >
+            <option value="ALL">Todos os WBs</option>
+            <option value="FOUND">WB encontrado</option>
+            <option value="NOT_FOUND">WB não encontrado</option>
+          </select>
         </label>
         <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
           Salve vazio para remover vínculo.
@@ -1175,6 +1259,22 @@ function MappingsPanel({
         </div>
       )}
     </Panel>
+  );
+}
+
+function PresenceStatusBadge({ status }: { status: RealtimeHoursPresenceStatus }) {
+  const config = {
+    ONLINE: { label: "Online", icon: Wifi, className: "border-emerald-100 bg-emerald-50 text-emerald-700" },
+    LOCKED: { label: "Tela bloqueada", icon: Laptop, className: "border-blue-100 bg-blue-50 text-blue-700" },
+    IDLE: { label: "Ocioso", icon: Clock, className: "border-amber-100 bg-amber-50 text-amber-700" },
+    OFFLINE: { label: "Offline", icon: WifiOff, className: "border-slate-200 bg-slate-100 text-slate-600" }
+  }[status];
+  const Icon = config.icon;
+  return (
+    <span className={cn("mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-black", config.className)}>
+      <Icon className="h-3 w-3" />
+      {config.label}
+    </span>
   );
 }
 
@@ -1278,6 +1378,15 @@ function buildLobOptions(rows: RealtimeHoursTimelineRow[]) {
         return leftIndex - rightIndex;
       }
       return left.label.localeCompare(right.label, "pt-BR");
+    });
+}
+
+function buildSupervisorOptions(rows: RealtimeHoursTimelineRow[]) {
+  return Array.from(new Set(rows.map((row) => row.supervisor.trim() || "Sem supervisor")))
+    .sort((left, right) => {
+      if (left === "Sem supervisor") return 1;
+      if (right === "Sem supervisor") return -1;
+      return left.localeCompare(right, "pt-BR");
     });
 }
 
