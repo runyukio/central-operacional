@@ -57,6 +57,20 @@ export function isAgentEmployee(employee?: PermissionEmployee | null) {
   return isAgentJobTitle(employee?.roleTitle ?? employee?.role);
 }
 
+export function isAgentOrClientUser(user: PermissionUser) {
+  const role = normalizeRole(user.role);
+  if (role === "CLIENT") return true;
+  return [user.roleTitle, user.jobTitle, user.skill, user.role].some((value) => isAgentJobTitle(value));
+}
+
+export function canAccessNonAgentClientModules(user: PermissionUser) {
+  return isActiveUser(user) && !isAgentOrClientUser(user);
+}
+
+export function canAccessExecutiveAdsReport(user: PermissionUser) {
+  return canAccessNonAgentClientModules(user);
+}
+
 export function canViewEmployeeDetails(user: PermissionUser, employee?: PermissionEmployee | null) {
   const role = normalizeRole(user.role);
   if (!isActiveUser(user)) return false;
@@ -166,12 +180,13 @@ export function canExportWorkSessionMonitoring(user: PermissionUser) {
 }
 
 export function canAccessPerformance(user: PermissionUser) {
-  return isActiveUser(user);
+  return canAccessNonAgentClientModules(user);
 }
 
 export function canAccessPerformanceWfh(user: PermissionUser) {
   const role = normalizeRole(user.role);
   if (!isActiveUser(user)) return false;
+  if (isAgentOrClientUser(user)) return false;
   if (["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "RH", "COORDENADOR", "GERENTE", "MANAGEMENT", "CLIENT"].includes(role)) return true;
   const title = normalizeComparableJobTitle(user.roleTitle ?? user.jobTitle);
   return ["coordenador", "coordenadora", "gerente", "manager", "management"].includes(title);
@@ -179,7 +194,7 @@ export function canAccessPerformanceWfh(user: PermissionUser) {
 
 export function canAccessPerformanceFramework(user: PermissionUser) {
   const role = normalizeRole(user.role);
-  return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM", "CLIENT"].includes(role);
+  return canAccessNonAgentClientModules(user) && ["ADMIN", "GESTOR", "WFM"].includes(role);
 }
 
 export function canImportPerformance(user: PermissionUser) {

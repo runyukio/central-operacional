@@ -17,8 +17,9 @@ import {
   XCircle
 } from "lucide-react";
 import { Fragment, type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
-import { Area, AreaChart, ReferenceLine, ResponsiveContainer, Tooltip as RechartsTooltip, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, CartesianGrid, LabelList, ReferenceLine, ResponsiveContainer, Tooltip as RechartsTooltip, XAxis, YAxis } from "recharts";
 
+import { canAccessExecutiveAdsReport, canAccessRealTimeAgentsReports } from "@/lib/permissions";
 import { getQueueReportMetadataById } from "@/lib/queue-report-metadata";
 import { cn } from "@/lib/utils";
 
@@ -245,7 +246,7 @@ type AgentPresenceStatus = "Online" | "Online sem produção" | "Ocioso" | "Offl
 type AgentSortKey = "displayName" | "wbLogin" | "presenceStatus" | "employeeStatus" | "lob" | "supervisor" | "shift" | "skill" | "submit" | "aht" | "moderation" | "timeout" | "refresh";
 type AgentSortState = { key: AgentSortKey; direction: "asc" | "desc" };
 type MetricFormat = "number" | "duration";
-type TrendPoint = { label: string; value: number | null; delta: number | null };
+type TrendPoint = { label: string; value: number | null; delta: number | null; dataLabel?: string };
 type AgentKpiCard = {
   label: string;
   value: string;
@@ -317,7 +318,7 @@ type ExecutiveHourBucket = {
   latencyMs: number | null;
   maxLatencyMs: number | null;
   backlog: number | null;
-  scheduled: number | null;
+  required: number | null;
   online: number | null;
 };
 type ExecutiveHeatmapCell = {
@@ -341,20 +342,32 @@ type ExecutiveAdsReport = {
   buckets: ExecutiveHourBucket[];
   cards: AgentKpiCard[];
   heatmap: ExecutiveHeatmapRow[];
-  inputForecastHistory: Array<{ label: string; input: number | null; forecast: number | null }>;
+  inputForecastHistory: Array<{ label: string; input: number | null; forecast: number | null; inputDataLabel?: string; forecastDataLabel?: string }>;
   backlogHistory: TrendPoint[];
   topAgents: ExecutiveAgentPerformanceRow[];
   lowAgents: ExecutiveAgentPerformanceRow[];
 };
+type PerformanceForecastTrendRow = {
+  key: string;
+  label?: string;
+  input?: number | null;
+};
+type StaffCoverageExecutiveRow = {
+  date: string;
+  lob: string;
+  shift: string;
+  required: number;
+};
 
 const ADS_REPORT_TARGET_LATENCY_MINUTES = 120;
 const ADS_REPORT_TARGET_LATENCY_LABEL = "2:00h";
-const EXECUTIVE_REPORT_ALLOWED_EMAILS = new Set([
-  "runyukio@gmail.com",
-  "wb_lucasy@kuaishou.com",
-  "leonardo_santos.souza@outlook.com"
-]);
-
+const EXECUTIVE_FORECAST_MIN_HORIZON_HOURS = 72;
+const EXECUTIVE_HOUR_MS = 60 * 60 * 1000;
+const EXECUTIVE_DAY_MS = 24 * EXECUTIVE_HOUR_MS;
+const EXECUTIVE_INPUT_COLOR = "#65B80F";
+const EXECUTIVE_FORECAST_COLOR = "#E94471";
+const EXECUTIVE_BACKLOG_COLOR = "#2563EB";
+const EXECUTIVE_AXIS_COLOR = "#CBD5E1";
 type ImportHistory = {
   id: string;
   fileName: string;
@@ -412,6 +425,9 @@ const numericQueueSortKeys = new Set<QueueSortKey>(["input", "output", "aht", "l
 type RealTimePageProps = {
   userRole?: string | null;
   userEmail?: string | null;
+  userRoleTitle?: string | null;
+  userJobTitle?: string | null;
+  userSkill?: string | null;
 };
 
 function isClientRole(role?: string | null) {
@@ -419,21 +435,24 @@ function isClientRole(role?: string | null) {
   return normalized === "CLIENT" || normalized === "CLIENTE";
 }
 
-function canAccessExecutiveReportTab(role?: string | null, email?: string | null) {
-  const normalizedRole = String(role ?? "").trim().toUpperCase();
-  const normalizedEmail = String(email ?? "").trim().toLowerCase();
-  if (isClientRole(role)) return false;
-  return normalizedRole === "ADMIN" || EXECUTIVE_REPORT_ALLOWED_EMAILS.has(normalizedEmail);
-}
-
-export function RealTimePage({ userRole, userEmail }: RealTimePageProps) {
+export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle, userSkill }: RealTimePageProps) {
+  const permissionUser = {
+    role: userRole,
+    email: userEmail,
+    roleTitle: userRoleTitle,
+    jobTitle: userJobTitle,
+    skill: userSkill,
+    status: "ACTIVE"
+  };
   const clientQueuesOnly = isClientRole(userRole);
-  const canAccessExecutiveReport = canAccessExecutiveReportTab(userRole, userEmail);
+  const canAccessStandardRealTime = canAccessRealTimeAgentsReports(permissionUser);
+  const canAccessExecutiveReport = canAccessExecutiveAdsReport(permissionUser);
+  const executiveOnly = !clientQueuesOnly && canAccessExecutiveReport && !canAccessStandardRealTime;
   const [payload, setPayload] = useState<RealTimePayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState<RealTimeMainTab>(clientQueuesOnly ? "queues" : "agents");
+  const [activeTab, setActiveTab] = useState<RealTimeMainTab>(clientQueuesOnly ? "queues" : executiveOnly ? "executive" : "agents");
   const [selectedCycle, setSelectedCycle] = useState("");
   const [followLatestCycle, setFollowLatestCycle] = useState(true);
   const [queueFilters, setQueueFilters] = useState<QueueFilters>(defaultQueueFilters);
@@ -447,9 +466,11 @@ export function RealTimePage({ userRole, userEmail }: RealTimePageProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [imports, setImports] = useState<ImportHistory[]>([]);
   const [importsLoading, setImportsLoading] = useState(false);
+  const [executivePerformanceTrend, setExecutivePerformanceTrend] = useState<PerformanceForecastTrendRow[]>([]);
+  const [executiveRequiredRows, setExecutiveRequiredRows] = useState<StaffCoverageExecutiveRow[]>([]);
   const snapshotAbortRef = useRef<AbortController | null>(null);
 
-  const effectiveTab = clientQueuesOnly ? "queues" : activeTab;
+  const effectiveTab = clientQueuesOnly ? "queues" : executiveOnly ? "executive" : activeTab;
 
   async function loadSnapshot(cycle = selectedCycle, background = false, view: "agents" | "queues" | "both" = effectiveTab === "agents" ? "agents" : effectiveTab === "report" || effectiveTab === "executive" ? "both" : "queues") {
     snapshotAbortRef.current?.abort();
@@ -515,12 +536,16 @@ export function RealTimePage({ userRole, userEmail }: RealTimePageProps) {
       setActiveTab("agents");
       return;
     }
+    if (executiveOnly && activeTab !== "executive") {
+      setActiveTab("executive");
+      return;
+    }
     void loadSnapshot(selectedCycle, false, effectiveTab === "agents" ? "agents" : effectiveTab === "report" || effectiveTab === "executive" ? "both" : "queues");
     return () => {
       snapshotAbortRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCycle, activeTab, clientQueuesOnly, canAccessExecutiveReport]);
+  }, [selectedCycle, activeTab, clientQueuesOnly, canAccessExecutiveReport, executiveOnly]);
 
   const summary = payload?.data.summary;
   const queueView = payload?.data.queueView;
@@ -589,9 +614,58 @@ export function RealTimePage({ userRole, userEmail }: RealTimePageProps) {
   const reportBacklogCard = useMemo(() => buildReportBacklogCard(reportRows, selectedCycleValue), [reportRows, selectedCycleValue]);
   const adsReportCards = useMemo(() => buildAdsReportCards(reportRows, agentView?.rows ?? [], selectedCycleValue), [agentView?.rows, reportRows, selectedCycleValue]);
   const tnsReportCards = useMemo(() => buildTnsReportCards(reportRows, agentView?.rows ?? [], selectedCycleValue), [agentView?.rows, reportRows, selectedCycleValue]);
-  const executiveAdsReport = useMemo(() => buildExecutiveAdsReport(queueView?.rows ?? [], agentView?.rows ?? [], selectedCycleValue), [agentView?.rows, queueView?.rows, selectedCycleValue]);
+  const executiveAdsReport = useMemo(
+    () => buildExecutiveAdsReport(queueView?.rows ?? [], agentView?.rows ?? [], selectedCycleValue, executivePerformanceTrend, executiveRequiredRows),
+    [agentView?.rows, executivePerformanceTrend, executiveRequiredRows, queueView?.rows, selectedCycleValue]
+  );
   const filteredAgentCards = useMemo(() => buildFilteredAgentCards(agentRows, selectedCycleValue), [agentRows, selectedCycleValue]);
   const filteredQueueCards = useMemo(() => buildQueueLobCards(queueRows, selectedCycleValue), [queueRows, selectedCycleValue]);
+
+  useEffect(() => {
+    if (!canAccessExecutiveReport || effectiveTab !== "executive" || !selectedCycleValue) return;
+    const controller = new AbortController();
+    const selected = parseRealtimeCycle(selectedCycleValue, "");
+
+    async function loadExecutiveSources() {
+      const performanceParams = new URLSearchParams({ lob: "ADS", granularity: "hourly" });
+      const requiredParams = new URLSearchParams({
+        startDate: selected.dateKey,
+        endDate: selected.dateKey,
+        lob: "ADS",
+        limit: "200"
+      });
+
+      const [performanceResult, requiredResult] = await Promise.allSettled([
+        fetch(`/api/performance?${performanceParams.toString()}`, { cache: "no-store", signal: controller.signal })
+          .then(async (response) => {
+            const json = await response.json();
+            if (!response.ok || json?.mode !== "production") throw new Error(json?.message || json?.error || "Performance indisponível.");
+            return Array.isArray(json.trend) ? json.trend as PerformanceForecastTrendRow[] : [];
+          }),
+        fetch(`/api/staff-coverage?${requiredParams.toString()}`, { cache: "no-store", signal: controller.signal })
+          .then(async (response) => {
+            const json = await response.json();
+            if (!response.ok) throw new Error(json?.message || json?.error || "Requerido indisponível.");
+            return Array.isArray(json.data) ? json.data as StaffCoverageExecutiveRow[] : [];
+          })
+      ]);
+
+      if (controller.signal.aborted) return;
+      if (performanceResult.status === "fulfilled") setExecutivePerformanceTrend(performanceResult.value);
+      else {
+        console.warn("[realtime] Forecast de Performance indisponível.", performanceResult.reason);
+        setExecutivePerformanceTrend([]);
+      }
+      if (requiredResult.status === "fulfilled") setExecutiveRequiredRows(requiredResult.value);
+      else {
+        console.warn("[realtime] Requerido ADS indisponível.", requiredResult.reason);
+        setExecutiveRequiredRows([]);
+      }
+    }
+
+    void loadExecutiveSources();
+    return () => controller.abort();
+  }, [canAccessExecutiveReport, effectiveTab, selectedCycleValue]);
 
   function downloadReportSummary() {
     downloadReportSummaryImage({
@@ -689,6 +763,8 @@ export function RealTimePage({ userRole, userEmail }: RealTimePageProps) {
     });
   }
 
+  const useEnglishChrome = effectiveTab === "report" || effectiveTab === "executive";
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -696,24 +772,26 @@ export function RealTimePage({ userRole, userEmail }: RealTimePageProps) {
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-2xl font-black text-navy-950">Real Time</h1>
             <span className={cn("inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-black", summary?.isStale ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-700")}>
-              {summary?.hasData ? (summary.isStale ? (effectiveTab === "report" ? "Attention" : "Atenção") : (effectiveTab === "report" ? "Updated" : "Atualizado")) : (effectiveTab === "report" ? "No data" : "Sem dados")}
+              {summary?.hasData ? (summary.isStale ? (useEnglishChrome ? "Attention" : "Atenção") : (useEnglishChrome ? "Updated" : "Atualizado")) : (useEnglishChrome ? "No data" : "Sem dados")}
             </span>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          {!clientQueuesOnly ? (
+          {!clientQueuesOnly && !executiveOnly ? (
             <button type="button" onClick={() => void openHistory()} className="premium-control inline-flex h-10 items-center gap-2 px-3 text-sm font-extrabold text-navy-950">
               <History className="h-4 w-4" />
-              {effectiveTab === "report" ? "History" : "Histórico"}
+              {useEnglishChrome ? "History" : "Histórico"}
             </button>
           ) : null}
-          <button type="button" onClick={exportXlsx} className="premium-control inline-flex h-10 items-center gap-2 px-3 text-sm font-extrabold text-navy-950">
-            <Download className="h-4 w-4" />
-            {effectiveTab === "report" ? "Export XLSX" : "Exportar XLSX"}
-          </button>
+          {!executiveOnly ? (
+            <button type="button" onClick={exportXlsx} className="premium-control inline-flex h-10 items-center gap-2 px-3 text-sm font-extrabold text-navy-950">
+              <Download className="h-4 w-4" />
+              {useEnglishChrome ? "Export XLSX" : "Exportar XLSX"}
+            </button>
+          ) : null}
           <button type="button" onClick={() => void refreshRealtimeSnapshot(true)} className="premium-button inline-flex h-10 items-center gap-2 px-4 text-sm font-extrabold">
             <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} />
-            {effectiveTab === "report" ? "Refresh" : "Atualizar"}
+            {useEnglishChrome ? "Refresh" : "Atualizar"}
           </button>
         </div>
       </div>
@@ -723,20 +801,20 @@ export function RealTimePage({ userRole, userEmail }: RealTimePageProps) {
       <section className="rounded-[24px] border border-slate-200/80 bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
         <div className="flex flex-wrap items-end gap-3">
           <label className="block min-w-[260px] flex-1 text-xs font-black uppercase tracking-wide text-muted">
-            Ciclo
+            {useEnglishChrome ? "Cycle" : "Ciclo"}
             <RealtimeCyclePicker value={selectedCycleValue} cycles={cycles} onChange={(cycle) => changeCycle(cycle)} />
           </label>
           <button type="button" onClick={() => changeCycle(olderCycle)} disabled={!olderCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
-            {effectiveTab === "report" ? "Previous Cycle" : "Ciclo anterior"}
+            {useEnglishChrome ? "Previous Cycle" : "Ciclo anterior"}
           </button>
           <button type="button" onClick={() => changeCycle(newerCycle, newerCycle === latestCycle)} disabled={!newerCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
-            {effectiveTab === "report" ? "Next Cycle" : "Próximo ciclo"}
+            {useEnglishChrome ? "Next Cycle" : "Próximo ciclo"}
           </button>
           <button type="button" onClick={() => changeCycle(latestCycle, true)} disabled={!latestCycle || selectedCycleValue === latestCycle} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">
-            {effectiveTab === "report" ? "Current Cycle" : "Ciclo atual"}
+            {useEnglishChrome ? "Current Cycle" : "Ciclo atual"}
           </button>
           <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-bold text-muted">
-            {effectiveTab === "report" ? "Comparison" : "Comparação"}: {(effectiveTab === "agents" ? agentView?.previousCycle : queueView?.previousCycle) || (effectiveTab === "report" ? "No previous cycle" : "Sem ciclo anterior")}
+            {useEnglishChrome ? "Comparison" : "Comparação"}: {(effectiveTab === "agents" ? agentView?.previousCycle : queueView?.previousCycle) || (useEnglishChrome ? "No previous cycle" : "Sem ciclo anterior")}
           </div>
         </div>
       </section>
@@ -764,22 +842,24 @@ export function RealTimePage({ userRole, userEmail }: RealTimePageProps) {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-3">
               <div className="inline-flex rounded-2xl bg-slate-100 p-1">
-                {!clientQueuesOnly ? (
+                {!clientQueuesOnly && !executiveOnly ? (
                   <button type="button" onClick={() => setActiveTab("agents")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", effectiveTab === "agents" ? "bg-white text-blue-700 shadow-sm" : "text-muted")}>
-                    {effectiveTab === "report" ? "Agents" : "Agentes"}
+                    {useEnglishChrome ? "Agents" : "Agentes"}
                   </button>
                 ) : null}
-                <button type="button" onClick={() => setActiveTab("queues")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", effectiveTab === "queues" ? "bg-white text-blue-700 shadow-sm" : "text-muted")}>
-                  {effectiveTab === "report" ? "Queues" : "Filas"}
-                </button>
-                {!clientQueuesOnly ? (
+                {!executiveOnly ? (
+                  <button type="button" onClick={() => setActiveTab("queues")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", effectiveTab === "queues" ? "bg-white text-blue-700 shadow-sm" : "text-muted")}>
+                    {useEnglishChrome ? "Queues" : "Filas"}
+                  </button>
+                ) : null}
+                {!clientQueuesOnly && !executiveOnly ? (
                   <button type="button" onClick={() => setActiveTab("report")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", effectiveTab === "report" ? "bg-white text-blue-700 shadow-sm" : "text-muted")}>
                     Report
                   </button>
                 ) : null}
                 {canAccessExecutiveReport ? (
                   <button type="button" onClick={() => setActiveTab("executive")} className={cn("rounded-xl px-4 py-2 text-sm font-black transition", effectiveTab === "executive" ? "bg-white text-blue-700 shadow-sm" : "text-muted")}>
-                    Executivo
+                    Executive
                   </button>
                 ) : null}
               </div>
@@ -857,13 +937,23 @@ function ExecutiveAdsReportDashboard({ report }: { report: ExecutiveAdsReport })
     <div className="space-y-4 p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-[11px] font-black uppercase tracking-[0.22em] text-muted">Report executivo ADS</p>
-          <h2 className="mt-1 text-2xl font-black text-navy-950">Radar operacional</h2>
-          <p className="mt-1 text-sm font-bold text-muted">{report.dateLabel} · último ponto {report.latestHourLabel}</p>
+          <p className="text-[11px] font-black uppercase tracking-[0.22em] text-muted">ADS executive report</p>
+          <h2 className="mt-1 text-2xl font-black text-navy-950">Operational radar</h2>
+          <p className="mt-1 text-sm font-bold text-muted">{report.dateLabel} · latest point {report.latestHourLabel}</p>
         </div>
-        <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700">
-          Preenche até 23h
-        </span>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700">
+            Fills through 23h
+          </span>
+          <button
+            type="button"
+            onClick={() => downloadExecutiveAdsReportImage(report)}
+            className="premium-control inline-flex h-10 items-center gap-2 px-3 text-sm font-extrabold text-navy-950"
+          >
+            <Download className="h-4 w-4" />
+            Export image
+          </button>
+        </div>
       </div>
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -875,15 +965,15 @@ function ExecutiveAdsReportDashboard({ report }: { report: ExecutiveAdsReport })
       <div className="grid gap-4">
         <section className="overflow-hidden rounded-[22px] border border-slate-200/80 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
           <div className="border-b border-slate-100 px-4 py-3">
-            <h3 className="font-black text-navy-950">Semáforo horário</h3>
-            <p className="text-xs font-bold text-muted">ADS por hora, usando delta entre snapshots para input e output.</p>
+            <h3 className="font-black text-navy-950">Hourly health map</h3>
+            <p className="text-xs font-bold text-muted">ADS by hour, using snapshot deltas for input and output.</p>
           </div>
           <ExecutiveHeatmap rows={report.heatmap} />
         </section>
 
         <section className="grid gap-4 xl:grid-cols-2">
           <ExecutiveRankingCard
-            title="Top performance · última hora"
+            title="Top performance · last hour"
             rows={report.topAgents.map((agent) => ({
               title: agent.name,
               subtitle: `${agent.wbLogin} · Submit ${formatInteger(agent.submit)} · AHT ${formatDurationFromMs(agent.ahtMs)}`,
@@ -891,7 +981,7 @@ function ExecutiveAdsReportDashboard({ report }: { report: ExecutiveAdsReport })
             }))}
           />
           <ExecutiveRankingCard
-            title="Low performance · última hora"
+            title="Low performance · last hour"
             rows={report.lowAgents.map((agent) => ({
               title: agent.name,
               subtitle: `${agent.wbLogin} · Submit ${formatInteger(agent.submit)} · AHT ${formatDurationFromMs(agent.ahtMs)}`,
@@ -902,36 +992,49 @@ function ExecutiveAdsReportDashboard({ report }: { report: ExecutiveAdsReport })
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
-        <ExecutiveChartCard title="Input x Forecast" helper="Volume real ADS contra forecast horário">
+        <ExecutiveChartCard title="Input x Forecast" helper="Real ADS volume against hourly forecast">
           <ResponsiveContainer width="100%" height={260}>
-            <AreaChart data={report.inputForecastHistory} margin={{ top: 16, right: 20, left: 0, bottom: 26 }}>
+            <AreaChart data={report.inputForecastHistory} margin={{ top: 38, right: 24, left: 2, bottom: 26 }}>
               <defs>
                 <linearGradient id="executive-input" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#2563EB" stopOpacity={0.24} />
-                  <stop offset="95%" stopColor="#2563EB" stopOpacity={0.03} />
+                  <stop offset="5%" stopColor={EXECUTIVE_INPUT_COLOR} stopOpacity={0.24} />
+                  <stop offset="95%" stopColor={EXECUTIVE_INPUT_COLOR} stopOpacity={0.03} />
                 </linearGradient>
                 <linearGradient id="executive-forecast" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#F59E0B" stopOpacity={0.18} />
-                  <stop offset="95%" stopColor="#F59E0B" stopOpacity={0.02} />
+                  <stop offset="5%" stopColor={EXECUTIVE_FORECAST_COLOR} stopOpacity={0.12} />
+                  <stop offset="95%" stopColor={EXECUTIVE_FORECAST_COLOR} stopOpacity={0.01} />
                 </linearGradient>
               </defs>
-              <YAxis hide domain={[0, "dataMax"]} />
+              <CartesianGrid vertical={false} stroke="#E5EAF2" strokeDasharray="6 8" />
+              <YAxis
+                width={48}
+                domain={[0, "dataMax"]}
+                axisLine={{ stroke: EXECUTIVE_AXIS_COLOR }}
+                tickLine={false}
+                tick={{ fill: "#64748B", fontSize: 11, fontWeight: 800 }}
+                tickFormatter={formatExecutiveAxisTick}
+                allowDecimals={false}
+              />
               <XAxis
                 dataKey="label"
                 interval={1}
-                axisLine={{ stroke: "#E5EAF2" }}
+                axisLine={{ stroke: EXECUTIVE_AXIS_COLOR }}
                 tickLine={false}
                 tick={{ fill: "#64748B", fontSize: 11, fontWeight: 800 }}
                 dy={8}
               />
               <RechartsTooltip content={<ExecutiveMultiTooltip />} cursor={{ stroke: "#CBD5E1", strokeDasharray: "4 4" }} />
-              <Area type="monotone" dataKey="forecast" name="Forecast" stroke="#F59E0B" strokeWidth={2.2} strokeDasharray="6 5" fill="url(#executive-forecast)" dot={false} isAnimationActive={false} />
-              <Area type="monotone" dataKey="input" name="Input" stroke="#2563EB" strokeWidth={2.6} fill="url(#executive-input)" dot={false} isAnimationActive={false} />
+              <Area type="monotone" dataKey="forecast" name="Forecast" stroke={EXECUTIVE_FORECAST_COLOR} strokeWidth={2.4} strokeDasharray="6 5" fill="url(#executive-forecast)" dot={false} isAnimationActive={false}>
+                <LabelList content={(props) => <ExecutiveChartDataLabel {...props} labelKey="forecastDataLabel" color={EXECUTIVE_FORECAST_COLOR} />} />
+              </Area>
+              <Area type="monotone" dataKey="input" name="Input" stroke={EXECUTIVE_INPUT_COLOR} strokeWidth={2.8} fill="url(#executive-input)" dot={false} isAnimationActive={false}>
+                <LabelList content={(props) => <ExecutiveChartDataLabel {...props} labelKey="inputDataLabel" color={EXECUTIVE_INPUT_COLOR} />} />
+              </Area>
             </AreaChart>
           </ResponsiveContainer>
         </ExecutiveChartCard>
 
-        <ExecutiveChartCard title="Backlog estimado" helper="Backlog ADS preenchido ao longo do dia">
+        <ExecutiveChartCard title="Backlog" helper="ADS backlog through the day">
           <ExecutiveSingleSeriesChart data={report.backlogHistory} format="number" trend={report.cards[3]?.trend ?? "neutral"} />
         </ExecutiveChartCard>
       </div>
@@ -948,9 +1051,9 @@ function ExecutiveMetricCard({ card }: { card: AgentKpiCard }) {
           <p className="text-[10px] font-black uppercase tracking-[0.2em] text-muted">{card.label}</p>
           <p className="mt-4 text-3xl font-black leading-none tracking-tight text-navy-950">{card.value}</p>
           <div className="mt-4">
-            {card.hasComparison ? <TrendBadge trend={card.trend} direction={card.direction} value={card.delta || "0"} /> : <span className="text-xs font-black text-muted">Sem comparação</span>}
+            {card.hasComparison ? <TrendBadge trend={card.trend} direction={card.direction} value={card.delta || "0"} /> : <span className="text-xs font-black text-muted">No comparison</span>}
           </div>
-          <p className="mt-2 text-xs font-bold text-muted">comparado ao ciclo anterior</p>
+          <p className="mt-2 text-xs font-bold text-muted">vs previous cycle</p>
         </div>
         <div className="min-h-[120px] overflow-hidden rounded-2xl bg-slate-50/70">
           <TrendSparkline data={card.history} format={card.format} trend={card.trend} compact colorOverride={lineColor} />
@@ -972,39 +1075,96 @@ function ExecutiveChartCard({ title, helper, children }: { title: string; helper
   );
 }
 
-function ExecutiveSingleSeriesChart({ data, format, trend }: { data: TrendPoint[]; format: MetricFormat; trend: "positive" | "negative" | "neutral" }) {
+function ExecutiveChartDataLabel(props: {
+  x?: number | string;
+  y?: number | string;
+  value?: number | string | null;
+  payload?: Record<string, unknown>;
+  viewBox?: unknown;
+  labelKey: string;
+  color: string;
+}) {
+  const label = typeof props.payload?.[props.labelKey] === "string" ? String(props.payload[props.labelKey]) : "";
+  const x = Number(props.x);
+  const y = Number(props.y);
+  if (!label || !Number.isFinite(x) || !Number.isFinite(y) || props.value === null || props.value === undefined) return null;
+  const viewBox = props.viewBox && typeof props.viewBox === "object" ? props.viewBox as { y?: number; height?: number } : null;
+  const width = Math.max(96, label.length * 7.2 + 28);
+  const height = 28;
+  const baseline = Number.isFinite(Number(viewBox?.height))
+    ? Number(viewBox?.y ?? 0) + Number(viewBox?.height)
+    : 228;
+  const top = y < 48 ? y + 18 : y - 42;
+  return (
+    <g pointerEvents="none">
+      <line x1={x} y1={y + 9} x2={x} y2={baseline} stroke="#94A3B8" strokeDasharray="3 7" strokeWidth={1.4} />
+      <circle cx={x} cy={y} r={7} fill="#FFFFFF" stroke={props.color} strokeWidth={4} />
+      <rect x={x - width / 2} y={top} width={width} height={height} rx={14} fill="#0F172A" />
+      <text x={x} y={top + 18.5} textAnchor="middle" fill="#FFFFFF" fontSize={12} fontWeight={900}>
+        {label}
+      </text>
+    </g>
+  );
+}
+
+function ExecutiveSingleSeriesChart({ data, format }: { data: TrendPoint[]; format: MetricFormat; trend: "positive" | "negative" | "neutral" }) {
   const gradientId = `executive-single-${useId().replace(/:/g, "")}`;
-  const validData = data.filter((point) => point.value !== null);
-  const color = trend === "positive" ? "#10B981" : trend === "negative" ? "#EF4444" : "#2563EB";
+  const validData = markExecutiveSingleSeriesLabels(data.filter((point) => point.value !== null), format);
+  const color = EXECUTIVE_BACKLOG_COLOR;
   if (validData.length < 2) {
     return (
       <div className="grid h-full place-items-center rounded-2xl bg-slate-50 text-[11px] font-black text-muted">
-        Sem histórico
+        No history
       </div>
     );
   }
   return (
     <ResponsiveContainer width="100%" height={260}>
-      <AreaChart data={validData} margin={{ top: 16, right: 20, left: 0, bottom: 26 }}>
+      <AreaChart data={validData} margin={{ top: 38, right: 24, left: 2, bottom: 26 }}>
         <defs>
           <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
             <stop offset="5%" stopColor={color} stopOpacity={0.28} />
             <stop offset="95%" stopColor={color} stopOpacity={0.03} />
           </linearGradient>
         </defs>
-        <YAxis hide domain={[0, "dataMax"]} />
+        <CartesianGrid vertical={false} stroke="#E5EAF2" strokeDasharray="6 8" />
+        <YAxis
+          width={48}
+          domain={[0, "dataMax"]}
+          axisLine={{ stroke: EXECUTIVE_AXIS_COLOR }}
+          tickLine={false}
+          tick={{ fill: "#64748B", fontSize: 11, fontWeight: 800 }}
+          tickFormatter={formatExecutiveAxisTick}
+          allowDecimals={false}
+        />
         <XAxis
           dataKey="label"
           interval={1}
-          axisLine={{ stroke: "#E5EAF2" }}
+          axisLine={{ stroke: EXECUTIVE_AXIS_COLOR }}
           tickLine={false}
           tick={{ fill: "#64748B", fontSize: 11, fontWeight: 800 }}
           dy={8}
         />
-        <RechartsTooltip content={<SparklineTooltip format={format} />} cursor={{ stroke: "#CBD5E1", strokeDasharray: "4 4" }} />
-        <Area type="monotone" dataKey="value" stroke={color} strokeWidth={2.6} fill={`url(#${gradientId})`} dot={false} isAnimationActive={false} />
+        <RechartsTooltip content={<ExecutiveSingleSeriesTooltip format={format} />} cursor={{ stroke: "#CBD5E1", strokeDasharray: "4 4" }} />
+        <Area type="monotone" dataKey="value" stroke={color} strokeWidth={2.6} fill={`url(#${gradientId})`} dot={false} isAnimationActive={false}>
+          <LabelList content={(props) => <ExecutiveChartDataLabel {...props} labelKey="dataLabel" color={color} />} />
+        </Area>
       </AreaChart>
     </ResponsiveContainer>
+  );
+}
+
+function ExecutiveSingleSeriesTooltip({ active, payload, format }: { active?: boolean; payload?: Array<{ payload?: TrendPoint }>; format: MetricFormat }) {
+  const point = payload?.[0]?.payload;
+  if (!active || !point) return null;
+  const value = format === "duration" ? formatDurationFromMs(point.value) : formatInteger(point.value ?? 0);
+  const delta = point.delta === null ? "No comparison" : `${point.delta > 0 ? "+" : point.delta < 0 ? "-" : ""}${format === "duration" ? formatDurationFromMs(Math.abs(point.delta)) : formatInteger(Math.abs(point.delta))}`;
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs shadow-xl">
+      <p className="font-black text-navy-950">{point.label}</p>
+      <p className="mt-1 font-bold text-muted">Value: <span className="text-navy-950">{value}</span></p>
+      <p className="font-bold text-muted">Change: <span className="text-navy-950">{delta}</span></p>
+    </div>
   );
 }
 
@@ -1014,7 +1174,7 @@ function ExecutiveHeatmap({ rows }: { rows: ExecutiveHeatmapRow[] }) {
     <div className="overflow-x-auto p-4">
       <div className="min-w-[1160px] rounded-2xl border border-slate-100">
         <div className="grid border-b border-slate-100 bg-slate-50 text-center text-[10px] font-black uppercase tracking-wide text-muted" style={{ gridTemplateColumns: "180px repeat(24, minmax(38px, 1fr))" }}>
-          <div className="px-3 py-2 text-left">Métrica</div>
+          <div className="px-3 py-2 text-left">Metric</div>
           {hours.map((hour) => <div key={hour} className="px-1 py-2">{hour}</div>)}
         </div>
         {rows.map((row, rowIndex) => (
@@ -1059,7 +1219,7 @@ function ExecutiveRankingCard({ title, rows }: { title: string; rows: Array<{ ti
           </div>
         ))}
         {!rows.length ? (
-          <p className="px-4 py-8 text-center text-sm font-bold text-muted">Sem dados para a última hora.</p>
+          <p className="px-4 py-8 text-center text-sm font-bold text-muted">No data for the last hour.</p>
         ) : null}
       </div>
     </section>
@@ -2422,6 +2582,406 @@ function downloadReportQueuesImage({
   downloadCanvas(canvas, `realtime-report-${reportLob.toLowerCase()}-queues.png`);
 }
 
+type ExecutiveCanvasDatum = { label: string } & Record<string, number | string | null | undefined>;
+type ExecutiveCanvasLine = { key: string; label: string; color: string; fill?: boolean; dashed?: boolean };
+type ExecutiveCanvasCallout = { index: number; key: string; label: string; color: string };
+
+function downloadExecutiveAdsReportImage(report: ExecutiveAdsReport) {
+  const width = 2400;
+  const height = 2420;
+  const margin = 56;
+  const contentWidth = width - margin * 2;
+  const panelGap = 40;
+  const chartPanelWidth = 1530;
+  const rankingPanelWidth = contentWidth - chartPanelWidth - panelGap;
+  const rankingX = margin + chartPanelWidth + panelGap;
+  const canvas = createReportCanvas(width, height);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  fillRect(ctx, 0, 0, width, height, "#EEF3F8");
+  drawText(ctx, "ADS Operational Radar", margin, 88, 54, "#0F172A", "900");
+  drawText(ctx, `Real Time executive view · latest point ${report.latestHourLabel}`, margin, 128, 22, "#64748B", "800");
+  roundRect(ctx, width - 394, 62, 330, 52, 26, "#EFF6FF");
+  drawCenteredText(ctx, report.dateLabel, width - 229, 96, 21, "#1D4ED8", "900");
+
+  drawExecutiveExportCards(ctx, report.cards, margin, 188, contentWidth, 230);
+  drawExecutiveExportHeatmap(ctx, report.heatmap, margin, 468, contentWidth, 574);
+
+  drawExecutiveExportChartPanel(ctx, "Input x Forecast", "Real ADS volume against forecast by hour", margin, 1092, chartPanelWidth, 560, () => {
+    drawExecutiveExportInputForecastChart(ctx, report, margin + 42, 1178, chartPanelWidth - 84, 420);
+  });
+  drawExecutiveExportRanking(ctx, "Top performance · last hour", report.topAgents, rankingX, 1092, rankingPanelWidth, 560);
+
+  drawExecutiveExportChartPanel(ctx, "Backlog", "ADS backlog through the day", margin, 1702, chartPanelWidth, 560, () => {
+    drawExecutiveExportBacklogChart(ctx, report, margin + 42, 1788, chartPanelWidth - 84, 420);
+  });
+  drawExecutiveExportRanking(ctx, "Low performance · last hour", report.lowAgents, rankingX, 1702, rankingPanelWidth, 560);
+
+  drawText(ctx, "Generated from Central Operacional", margin, height - 46, 17, "#94A3B8", "850");
+  downloadCanvas(canvas, `executive-ads-radar-${safeCanvasFileName(report.selectedCycle || report.latestHourLabel)}.png`);
+}
+
+function drawExecutiveExportCards(ctx: CanvasRenderingContext2D, cards: AgentKpiCard[], x: number, y: number, width: number, height: number) {
+  const gap = 34;
+  const cardWidth = (width - gap * 3) / 4;
+  cards.slice(0, 4).forEach((card, index) => {
+    const cardX = x + index * (cardWidth + gap);
+    const tone = card.trend === "positive"
+      ? { bg: "#D1FAE5", text: "#047857" }
+        : card.trend === "negative"
+          ? { bg: "#FEE2E2", text: "#DC2626" }
+          : { bg: "#E2E8F0", text: "#475569" };
+    roundRect(ctx, cardX, y, cardWidth, height, 18, "#FFFFFF", "#D7E0EA");
+    drawText(ctx, card.label.toUpperCase(), cardX + 36, y + 58, 21, "#64748B", "900");
+    drawText(ctx, card.value, cardX + 36, y + 132, 60, "#0F172A", "900");
+    if (card.hasComparison) {
+      const pillWidth = Math.max(136, card.delta.length * 13 + 70);
+      drawExecutiveDeltaPill(ctx, card.direction, card.delta || "0", cardX + cardWidth - pillWidth - 32, y + 34, pillWidth, 40, tone.bg, tone.text);
+    }
+    drawText(ctx, "vs previous cycle", cardX + 36, y + 174, 18, "#64748B", "800");
+  });
+}
+
+function drawExecutiveDeltaPill(ctx: CanvasRenderingContext2D, direction: AgentKpiCard["direction"], value: string, x: number, y: number, width: number, height: number, background: string, color: string) {
+  roundRect(ctx, x, y, width, height, height / 2, background);
+  const iconX = x + 28;
+  const centerY = y + height / 2;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 3.2;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  if (direction === "up") {
+    ctx.moveTo(iconX, centerY + 8);
+    ctx.lineTo(iconX, centerY - 8);
+    ctx.moveTo(iconX, centerY - 8);
+    ctx.lineTo(iconX - 6, centerY - 2);
+    ctx.moveTo(iconX, centerY - 8);
+    ctx.lineTo(iconX + 6, centerY - 2);
+  } else if (direction === "down") {
+    ctx.moveTo(iconX, centerY - 8);
+    ctx.lineTo(iconX, centerY + 8);
+    ctx.moveTo(iconX, centerY + 8);
+    ctx.lineTo(iconX - 6, centerY + 2);
+    ctx.moveTo(iconX, centerY + 8);
+    ctx.lineTo(iconX + 6, centerY + 2);
+  } else {
+    ctx.moveTo(iconX - 8, centerY);
+    ctx.lineTo(iconX + 8, centerY);
+  }
+  ctx.stroke();
+  ctx.restore();
+  drawText(ctx, value, x + 50, y + 26, 18, color, "900");
+}
+
+function drawExecutiveExportHeatmap(ctx: CanvasRenderingContext2D, rows: ExecutiveHeatmapRow[], x: number, y: number, width: number, height: number) {
+  roundRect(ctx, x, y, width, height, 18, "#FFFFFF", "#D7E0EA");
+  drawText(ctx, "Hourly health map", x + 32, y + 54, 30, "#0F172A", "900");
+  drawText(ctx, "Operational status by hour", x + 32, y + 86, 18, "#64748B", "850");
+
+  const tableX = x + 34;
+  const tableY = y + 112;
+  const firstColumn = 310;
+  const rowHeight = 40;
+  const headerHeight = 40;
+  const colGap = 7;
+  const colWidth = (width - 68 - firstColumn - colGap * 24) / 24;
+
+  roundRect(ctx, tableX, tableY, width - 68, headerHeight, 10, "#F1F5F9");
+  drawText(ctx, "Metric / Hour", tableX + 16, tableY + 27, 16, "#475569", "900");
+  Array.from({ length: 24 }).forEach((_, hour) => {
+    const colX = tableX + firstColumn + hour * (colWidth + colGap);
+    drawCenteredText(ctx, `${String(hour).padStart(2, "0")}h`, colX + colWidth / 2, tableY + 27, 15, "#475569", "900");
+  });
+
+  rows.slice(0, 9).forEach((row, rowIndex) => {
+    const rowY = tableY + headerHeight + 8 + rowIndex * (rowHeight + 5);
+    roundRect(ctx, tableX, rowY, firstColumn - 10, rowHeight, 8, "#F1F5F9");
+    drawText(ctx, row.label, tableX + 16, rowY + 27, 16, "#0F172A", "900");
+    row.cells.slice(0, 24).forEach((cell, hour) => {
+      const tone = executiveCanvasHeatmapTone(cell.tone);
+      const colX = tableX + firstColumn + hour * (colWidth + colGap);
+      roundRect(ctx, colX, rowY, colWidth, rowHeight, 8, tone.bg);
+      drawCenteredText(ctx, truncateForCanvas(ctx, cell.value, colWidth - 8), colX + colWidth / 2, rowY + 27, 15, tone.text, "900");
+    });
+  });
+}
+
+function drawExecutiveExportChartPanel(ctx: CanvasRenderingContext2D, title: string, helper: string, x: number, y: number, width: number, height: number, drawChart: () => void) {
+  roundRect(ctx, x, y, width, height, 18, "#FFFFFF", "#D7E0EA");
+  drawText(ctx, title, x + 34, y + 50, 28, "#0F172A", "900");
+  drawText(ctx, helper, x + 34, y + 78, 16, "#64748B", "850");
+  drawChart();
+}
+
+function drawExecutiveExportInputForecastChart(ctx: CanvasRenderingContext2D, report: ExecutiveAdsReport, x: number, y: number, width: number, height: number) {
+  const selectedHour = parseRealtimeCycle(report.selectedCycle, "").date.getHours();
+  const peakIndex = findExecutiveInputForecastPeakIndex(report.inputForecastHistory);
+  const callouts: ExecutiveCanvasCallout[] = [];
+  const current = report.inputForecastHistory[selectedHour];
+  if (current) {
+    callouts.push({
+      index: selectedHour,
+      key: current.input !== null ? "input" : "forecast",
+      label: formatExecutiveInputForecastCallout(current),
+      color: current.input !== null ? EXECUTIVE_INPUT_COLOR : EXECUTIVE_FORECAST_COLOR
+    });
+  }
+  if (peakIndex >= 0) {
+    const peak = report.inputForecastHistory[peakIndex];
+    const key = peak.input !== null ? "input" : "forecast";
+    if (!callouts.some((callout) => callout.index === peakIndex && callout.key === key)) {
+      callouts.push({
+        index: peakIndex,
+        key,
+        label: formatExecutiveInputForecastCallout(peak),
+        color: key === "input" ? EXECUTIVE_INPUT_COLOR : EXECUTIVE_FORECAST_COLOR
+      });
+    }
+  }
+
+  drawExecutiveExportLineChart(ctx, report.inputForecastHistory, [
+    { key: "forecast", label: "Forecast", color: EXECUTIVE_FORECAST_COLOR, dashed: true },
+    { key: "input", label: "Input", color: EXECUTIVE_INPUT_COLOR, fill: true }
+  ], x, y, width, height, callouts);
+}
+
+function drawExecutiveExportBacklogChart(ctx: CanvasRenderingContext2D, report: ExecutiveAdsReport, x: number, y: number, width: number, height: number) {
+  const validData = report.backlogHistory.filter((point) => point.value !== null);
+  const callouts: ExecutiveCanvasCallout[] = [];
+  const currentIndex = validData.length - 1;
+  if (currentIndex >= 0) {
+    const current = validData[currentIndex];
+    callouts.push({
+      index: currentIndex,
+      key: "value",
+      label: `${current.label} · ${formatInteger(current.value ?? 0)}`,
+      color: EXECUTIVE_BACKLOG_COLOR
+    });
+  }
+  const peakIndex = validData.reduce((bestIndex, row, index) => {
+    const best = bestIndex >= 0 ? validData[bestIndex].value : null;
+    return row.value !== null && (best === null || row.value > best) ? index : bestIndex;
+  }, -1);
+  if (peakIndex >= 0 && peakIndex !== currentIndex) {
+    const peak = validData[peakIndex];
+    callouts.push({
+      index: peakIndex,
+      key: "value",
+      label: `Peak · ${formatInteger(peak.value ?? 0)}`,
+      color: EXECUTIVE_BACKLOG_COLOR
+    });
+  }
+
+  drawExecutiveExportLineChart(ctx, validData, [
+    { key: "value", label: "Backlog", color: EXECUTIVE_BACKLOG_COLOR, fill: true }
+  ], x, y, width, height, callouts);
+}
+
+function drawExecutiveExportLineChart(ctx: CanvasRenderingContext2D, data: ExecutiveCanvasDatum[], lines: ExecutiveCanvasLine[], x: number, y: number, width: number, height: number, callouts: ExecutiveCanvasCallout[]) {
+  const values = lines.flatMap((line) => data.map((row) => row[line.key])).filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  if (values.length < 2) {
+    drawCenteredText(ctx, "No history", x + width / 2, y + height / 2, 22, "#94A3B8", "900");
+    return;
+  }
+
+  const max = executiveNiceMax(Math.max(1, ...values));
+  const plotX = x + 102;
+  const plotY = y + 28;
+  const plotWidth = width - 138;
+  const plotHeight = height - 96;
+  const baseline = plotY + plotHeight;
+  const ticks = [0, max / 3, (max / 3) * 2, max];
+
+  ctx.save();
+  ctx.setLineDash([9, 12]);
+  ctx.strokeStyle = "#DDE5EF";
+  ctx.lineWidth = 1.4;
+  ticks.forEach((tick) => {
+    const tickY = baseline - (tick / max) * plotHeight;
+    ctx.beginPath();
+    ctx.moveTo(plotX, tickY);
+    ctx.lineTo(plotX + plotWidth, tickY);
+    ctx.stroke();
+    drawText(ctx, formatExecutiveAxisTick(tick), x + 8, tickY + 6, 15, "#64748B", "800");
+  });
+  ctx.restore();
+
+  ctx.strokeStyle = "#CBD5E1";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(plotX, plotY);
+  ctx.lineTo(plotX, baseline);
+  ctx.lineTo(plotX + plotWidth, baseline);
+  ctx.stroke();
+
+  lines.forEach((line) => {
+    const points = data
+      .map((row, index) => {
+        const value = row[line.key];
+        if (typeof value !== "number" || !Number.isFinite(value)) return null;
+        return {
+          x: plotX + (index / Math.max(1, data.length - 1)) * plotWidth,
+          y: baseline - (value / max) * plotHeight
+        };
+      })
+      .filter((point): point is { x: number; y: number } => Boolean(point));
+    if (points.length < 2) return;
+    if (line.fill) {
+      const gradient = ctx.createLinearGradient(0, plotY, 0, baseline);
+      gradient.addColorStop(0, colorToRgba(line.color, 0.22));
+      gradient.addColorStop(0.72, colorToRgba(line.color, 0.08));
+      gradient.addColorStop(1, colorToRgba(line.color, 0));
+      ctx.beginPath();
+      drawSmoothPath(ctx, points);
+      ctx.lineTo(points[points.length - 1].x, baseline);
+      ctx.lineTo(points[0].x, baseline);
+      ctx.closePath();
+      ctx.fillStyle = gradient;
+      ctx.fill();
+    }
+
+    ctx.beginPath();
+    drawSmoothPath(ctx, points);
+    ctx.strokeStyle = line.color;
+    ctx.lineWidth = 5.5;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.setLineDash(line.dashed ? [13, 10] : []);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  });
+
+  callouts.forEach((callout) => {
+    const row = data[callout.index];
+    const value = typeof row?.[callout.key] === "number" ? row[callout.key] as number : null;
+    if (value === null || !Number.isFinite(value)) return;
+    const pointX = plotX + (callout.index / Math.max(1, data.length - 1)) * plotWidth;
+    const pointY = baseline - (value / max) * plotHeight;
+    drawExecutiveExportCallout(ctx, pointX, pointY, baseline, callout.label, callout.color, plotX, plotX + plotWidth);
+  });
+
+  const labelStep = Math.max(1, Math.ceil(data.length / 12));
+  data.forEach((row, index) => {
+    if (index % labelStep !== 0 && index !== data.length - 1) return;
+    const tickX = plotX + (index / Math.max(1, data.length - 1)) * plotWidth;
+    drawCenteredText(ctx, row.label, tickX, baseline + 38, 14, "#64748B", "800");
+  });
+
+  drawExecutiveExportLegend(ctx, lines, plotX + plotWidth / 2, y + height - 10);
+}
+
+function drawExecutiveExportCallout(ctx: CanvasRenderingContext2D, x: number, y: number, baseline: number, label: string, color: string, minX: number, maxX: number) {
+  ctx.save();
+  ctx.setLineDash([4, 10]);
+  ctx.strokeStyle = "#94A3B8";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x, y + 12);
+  ctx.lineTo(x, baseline);
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.beginPath();
+  ctx.arc(x, y, 12, 0, Math.PI * 2);
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fill();
+  ctx.lineWidth = 7;
+  ctx.strokeStyle = color;
+  ctx.stroke();
+
+  ctx.font = "900 18px Inter, Arial, sans-serif";
+  const pillWidth = Math.max(174, ctx.measureText(label).width + 42);
+  const pillHeight = 44;
+  const pillX = Math.min(Math.max(x - pillWidth / 2, minX), maxX - pillWidth);
+  const pillY = y < 66 ? y + 24 : y - 66;
+  roundRect(ctx, pillX, pillY, pillWidth, pillHeight, 25, "#0F172A");
+  drawCenteredText(ctx, label, pillX + pillWidth / 2, pillY + 29, 18, "#FFFFFF", "900");
+}
+
+function drawExecutiveExportLegend(ctx: CanvasRenderingContext2D, lines: ExecutiveCanvasLine[], centerX: number, y: number) {
+  const itemWidth = 156;
+  const startX = centerX - (lines.length * itemWidth) / 2;
+  lines.forEach((line, index) => {
+    const x = startX + index * itemWidth;
+    ctx.save();
+    ctx.strokeStyle = line.color;
+    ctx.lineWidth = 5;
+    ctx.setLineDash(line.dashed ? [12, 8] : []);
+    ctx.beginPath();
+    ctx.moveTo(x, y - 6);
+    ctx.lineTo(x + 42, y - 6);
+    ctx.stroke();
+    ctx.restore();
+    drawText(ctx, line.label, x + 54, y, 15, "#475569", "900");
+  });
+}
+
+function drawExecutiveExportRanking(ctx: CanvasRenderingContext2D, title: string, rows: ExecutiveAgentPerformanceRow[], x: number, y: number, width: number, height: number) {
+  roundRect(ctx, x, y, width, height, 18, "#FFFFFF", "#D7E0EA");
+  drawText(ctx, title, x + 34, y + 52, 27, "#0F172A", "900");
+  const tableX = x + 34;
+  const tableY = y + 104;
+  const columns = [
+    { label: "RANK", x: tableX, w: 82 },
+    { label: "AGENT", x: tableX + 112, w: Math.max(260, width - 408) },
+    { label: "SUBMIT", x: x + width - 244, w: 92 },
+    { label: "AHT", x: x + width - 126, w: 92 }
+  ];
+  columns.forEach((column) => drawText(ctx, column.label, column.x, tableY, 15, "#64748B", "900"));
+  fillRect(ctx, tableX, tableY + 22, width - 68, 2, "#E2E8F0");
+  rows.slice(0, 5).forEach((row, index) => {
+    const rowY = tableY + 66 + index * 70;
+    fillRect(ctx, tableX, rowY + 24, width - 68, 2, "#E2E8F0");
+    drawText(ctx, `${index + 1}°`, columns[0].x, rowY, 25, "#0F172A", "900");
+    drawText(ctx, truncateForCanvas(ctx, row.name, columns[1].w), columns[1].x, rowY, 22, "#0F172A", "800");
+    drawText(ctx, truncateForCanvas(ctx, row.wbLogin, columns[1].w), columns[1].x, rowY + 25, 13, "#64748B", "800");
+    drawText(ctx, formatInteger(row.submit), columns[2].x, rowY, 22, "#0F172A", "850");
+    drawText(ctx, formatDurationFromMs(row.ahtMs), columns[3].x, rowY, 22, "#0F172A", "850");
+  });
+  if (!rows.length) drawCenteredText(ctx, "No data for the last hour", x + width / 2, y + height / 2, 22, "#94A3B8", "900");
+}
+
+function executiveCanvasHeatmapTone(tone: ExecutiveHeatmapCell["tone"]) {
+  if (tone === "good") return { bg: "#D1FAE5", text: "#047857" };
+  if (tone === "watch") return { bg: "#FEF3C7", text: "#92400E" };
+  if (tone === "bad") return { bg: "#FEE2E2", text: "#B91C1C" };
+  if (tone === "critical") return { bg: "#DC2626", text: "#FFFFFF" };
+  if (tone === "empty") return { bg: "#F8FAFC", text: "#CBD5E1" };
+  return { bg: "#EAF2FF", text: "#1D4ED8" };
+}
+
+function findExecutiveInputForecastPeakIndex(rows: Array<{ input: number | null; forecast: number | null }>) {
+  return rows.reduce((bestIndex, row, index) => {
+    const rowDeviation = executiveInputForecastDeviation(row);
+    const bestDeviation = bestIndex >= 0 ? executiveInputForecastDeviation(rows[bestIndex]) : null;
+    if (rowDeviation !== null && (bestDeviation === null || Math.abs(rowDeviation) > Math.abs(bestDeviation))) return index;
+    if (rowDeviation === null && bestDeviation === null) {
+      const best = bestIndex >= 0 ? rows[bestIndex].forecast : null;
+      return row.forecast !== null && (best === null || row.forecast > best) ? index : bestIndex;
+    }
+    return bestIndex;
+  }, -1);
+}
+
+function executiveNiceMax(value: number) {
+  const raw = Math.max(1, value);
+  const power = Math.pow(10, Math.floor(Math.log10(raw)));
+  const normalized = raw / power;
+  const rounded = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+  return rounded * power;
+}
+
+function safeCanvasFileName(value: string) {
+  return String(value || "latest")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "latest";
+}
+
 function drawCanvasTnsReportTopCards(ctx: CanvasRenderingContext2D, cards: Array<AgentKpiCard | OnlineHeadcountGaugeData>, x: number, y: number, width: number, height: number) {
   const gap = 18;
   const cardWidth = (width - gap * 3) / 4;
@@ -3081,13 +3641,19 @@ function buildTnsReportCards(reportRows: QueueReportRow[], agentRows: AgentRealt
   };
 }
 
-function buildExecutiveAdsReport(queueRows: QueueRealtimeRow[], agentRows: AgentRealtimeRow[], selectedCycle: string): ExecutiveAdsReport {
+function buildExecutiveAdsReport(
+  queueRows: QueueRealtimeRow[],
+  agentRows: AgentRealtimeRow[],
+  selectedCycle: string,
+  performanceTrend: PerformanceForecastTrendRow[] = [],
+  requiredRows: StaffCoverageExecutiveRow[] = []
+): ExecutiveAdsReport {
   const selected = parseRealtimeCycle(selectedCycle, "");
   const reportRows = buildReportRows(queueRows, "ADS", "");
   const adsAgents = agentRows.filter((row) => isReportAgentForLob(row, "ADS"));
   const queueByHour = buildExecutiveQueueBuckets(reportRows, selected);
   const agentByHour = buildExecutiveAgentBuckets(adsAgents, selected);
-  const scheduled = adsAgents.filter((row) => row.isScheduled).length;
+  const requiredByHour = buildExecutiveRequiredByHour(requiredRows, selected.dateKey);
   const currentOnline = adsAgents.filter((row) => isOnlineHeadcountStatus(row.presenceStatus)).length;
 
   const buckets: ExecutiveHourBucket[] = Array.from({ length: 24 }).map((_, hour) => {
@@ -3104,21 +3670,21 @@ function buildExecutiveAdsReport(queueRows: QueueRealtimeRow[], agentRows: Agent
       latencyMs: queue?.metric.latencyMs ?? null,
       maxLatencyMs: queue?.metric.maxLatencyMs ?? null,
       backlog: queue?.metric.backlog ?? null,
-      scheduled: queue || agent ? scheduled : null,
+      required: requiredByHour.get(hour) ?? null,
       online: isSelectedHour ? currentOnline : agent?.online ?? null
     };
   });
 
   const filledBuckets = buckets.filter((bucket) => bucket.cycleDownload);
   const latest = filledBuckets[filledBuckets.length - 1] ?? null;
-  const previous = filledBuckets.length > 1 ? filledBuckets[filledBuckets.length - 2] : null;
+  const previous = latest ? resolveExecutivePreviousHourBucket(filledBuckets, reportRows, adsAgents, requiredRows, selected, latest.hour) : null;
   const agentRankings = buildExecutiveAgentRankings(adsAgents, latest?.cycleDownload ?? selectedCycle, previous?.cycleDownload ?? null);
-  const dateLabel = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" }).format(selected.date);
+  const dateLabel = new Intl.DateTimeFormat("en-US", { month: "short", day: "2-digit", year: "numeric" }).format(selected.date);
   const cards = [
-    buildAgentKpiCard("Submit última hora", latest?.output ?? null, previous?.output ?? null, "number", "up", buildExecutiveTrend(buckets, "output", selected)),
-    buildAgentKpiCard("Input última hora", latest?.input ?? null, previous?.input ?? null, "number", "up", buildExecutiveTrend(buckets, "input", selected)),
-    buildAgentKpiCard("Agentes online", latest?.online ?? null, previous?.online ?? null, "number", "up", buildExecutiveTrend(buckets, "online", selected)),
-    buildAgentKpiCard("Backlog atual", latest?.backlog ?? null, previous?.backlog ?? null, "number", "down", buildExecutiveTrend(buckets, "backlog", selected))
+    buildAgentKpiCard("Last-hour Submit", latest?.output ?? null, previous?.output ?? null, "number", "up", buildExecutiveTrend(buckets, "output", selected)),
+    buildAgentKpiCard("Last-hour Input", latest?.input ?? null, previous?.input ?? null, "number", "up", buildExecutiveTrend(buckets, "input", selected)),
+    buildAgentKpiCard("Online agents", latest?.online ?? null, previous?.online ?? null, "number", "up", buildExecutiveTrend(buckets, "online", selected)),
+    buildAgentKpiCard("Current Backlog", latest?.backlog ?? null, previous?.backlog ?? null, "number", "down", buildExecutiveTrend(buckets, "backlog", selected))
   ];
 
   return {
@@ -3128,22 +3694,73 @@ function buildExecutiveAdsReport(queueRows: QueueRealtimeRow[], agentRows: Agent
     buckets,
     cards,
     heatmap: buildExecutiveHeatmap(buckets),
-    inputForecastHistory: buildExecutiveInputForecastHistory(reportRows, buckets, selected),
+    inputForecastHistory: buildExecutiveInputForecastHistory(reportRows, buckets, selected, performanceTrend),
     backlogHistory: buildExecutiveTrend(buckets, "backlog", selected),
     topAgents: agentRankings.top,
     lowAgents: agentRankings.low
   };
 }
 
-function buildExecutiveInputForecastHistory(rows: QueueReportRow[], buckets: ExecutiveHourBucket[], selected: ReturnType<typeof parseRealtimeCycle>) {
-  const inputByDateHour = buildExecutiveQueueInputByDateHour(rows, selected);
+function resolveExecutivePreviousHourBucket(
+  filledBuckets: ExecutiveHourBucket[],
+  reportRows: QueueReportRow[],
+  adsAgents: AgentRealtimeRow[],
+  requiredRows: StaffCoverageExecutiveRow[],
+  selected: ReturnType<typeof parseRealtimeCycle>,
+  currentHour: number
+) {
+  const sameDayPrevious = [...filledBuckets].filter((bucket) => bucket.hour < currentHour).pop() ?? null;
+  if (sameDayPrevious) return sameDayPrevious;
+
+  const previousHourDate = new Date(selected.date);
+  previousHourDate.setHours(currentHour - 1, 59, 59, 999);
+  const previousSelected = buildExecutiveSelectedFromDate(previousHourDate);
+  if (previousSelected.dateKey === selected.dateKey) return null;
+
+  const previousQueueByHour = buildExecutiveQueueBuckets(reportRows, previousSelected);
+  const previousAgentByHour = buildExecutiveAgentBuckets(adsAgents, previousSelected);
+  const previousRequiredByHour = buildExecutiveRequiredByHour(requiredRows, previousSelected.dateKey);
+  const previousHour = previousHourDate.getHours();
+  const queue = previousQueueByHour.get(previousHour);
+  const agent = previousAgentByHour.get(previousHour);
+  if (!queue && !agent) return null;
+
+  return {
+    hour: previousHour,
+    label: `${String(previousHour).padStart(2, "0")}h`,
+    cycleDownload: queue?.cycleDownload ?? agent?.cycleDownload ?? null,
+    input: queue?.metric.input ?? null,
+    output: queue?.metric.output ?? null,
+    ahtMs: queue?.metric.ahtMs ?? null,
+    latencyMs: queue?.metric.latencyMs ?? null,
+    maxLatencyMs: queue?.metric.maxLatencyMs ?? null,
+    backlog: queue?.metric.backlog ?? null,
+    required: previousRequiredByHour.get(previousHour) ?? null,
+    online: agent?.online ?? null
+  } satisfies ExecutiveHourBucket;
+}
+
+function buildExecutiveSelectedFromDate(date: Date) {
+  return {
+    date,
+    dateKey: formatDateKey(date),
+    timestamp: date.getTime(),
+    timeLabel: new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(date)
+  };
+}
+
+function buildExecutiveInputForecastHistory(rows: QueueReportRow[], buckets: ExecutiveHourBucket[], selected: ReturnType<typeof parseRealtimeCycle>, performanceTrend: PerformanceForecastTrendRow[] = []) {
   const selectedHour = selected.date.getHours();
+  const performanceForecast = markExecutiveInputForecastLabels(buildExecutivePerformanceForecastHistory(performanceTrend, buckets, selected), selectedHour);
+  if (performanceForecast.some((row) => row.forecast !== null)) return performanceForecast;
+
+  const inputByDateHour = buildExecutiveQueueInputByDateHour(rows, selected);
   const fallbackValues = buckets
     .filter((bucket) => bucket.hour <= selectedHour && typeof bucket.input === "number")
     .map((bucket) => bucket.input as number);
   const fallbackForecast = fallbackValues.length ? averageNumber(fallbackValues) : null;
 
-  return buckets.map((bucket) => {
+  return markExecutiveInputForecastLabels(buckets.map((bucket) => {
     const historicalValues = Array.from(inputByDateHour.entries())
       .filter(([dateKey]) => dateKey !== selected.dateKey)
       .map(([, byHour]) => byHour.get(bucket.hour))
@@ -3154,61 +3771,298 @@ function buildExecutiveInputForecastHistory(rows: QueueReportRow[], buckets: Exe
       input: bucket.hour <= selectedHour ? bucket.input : null,
       forecast: forecast === null ? null : Math.round(forecast)
     };
+  }), selectedHour);
+}
+
+function markExecutiveInputForecastLabels(rows: Array<{ label: string; input: number | null; forecast: number | null; inputDataLabel?: string; forecastDataLabel?: string }>, currentHour: number) {
+  const nextRows = rows.map((row) => ({ ...row }));
+  const current = nextRows[currentHour];
+  if (current) {
+    const label = formatExecutiveInputForecastCallout(current);
+    if (current.input !== null) current.inputDataLabel = appendExecutiveDataLabel(current.inputDataLabel, label);
+    else if (current.forecast !== null) current.forecastDataLabel = appendExecutiveDataLabel(current.forecastDataLabel, label);
+  }
+  const peakIndex = nextRows.reduce((bestIndex, row, index) => {
+    const rowDeviation = executiveInputForecastDeviation(row);
+    const bestDeviation = bestIndex >= 0 ? executiveInputForecastDeviation(nextRows[bestIndex]) : null;
+    if (rowDeviation !== null && (bestDeviation === null || Math.abs(rowDeviation) > Math.abs(bestDeviation))) return index;
+    if (rowDeviation === null && bestDeviation === null) {
+      const best = bestIndex >= 0 ? nextRows[bestIndex].forecast : null;
+      return row.forecast !== null && (best === null || row.forecast > best) ? index : bestIndex;
+    }
+    return bestIndex;
+  }, -1);
+  if (peakIndex >= 0) {
+    const row = nextRows[peakIndex];
+    const label = formatExecutiveInputForecastCallout(row);
+    if (row.input !== null) row.inputDataLabel = appendExecutiveDataLabel(row.inputDataLabel, label);
+    else row.forecastDataLabel = appendExecutiveDataLabel(row.forecastDataLabel, label);
+  }
+  return nextRows;
+}
+
+function markExecutiveSingleSeriesLabels(rows: TrendPoint[], format: MetricFormat) {
+  const nextRows = rows.map((row) => ({ ...row }));
+  const current = nextRows.at(-1);
+  if (current?.value !== null && current?.value !== undefined) {
+    current.dataLabel = appendExecutiveDataLabel(current.dataLabel, `${current.label} · ${formatExecutiveLabelValue(current.value, format)}`);
+  }
+  const peakIndex = nextRows.reduce((bestIndex, row, index) => {
+    const best = bestIndex >= 0 ? nextRows[bestIndex].value : null;
+    return row.value !== null && (best === null || row.value > best) ? index : bestIndex;
+  }, -1);
+  if (peakIndex >= 0) {
+    const row = nextRows[peakIndex];
+    row.dataLabel = appendExecutiveDataLabel(row.dataLabel, `Peak · ${formatExecutiveLabelValue(row.value ?? 0, format)}`);
+  }
+  return nextRows;
+}
+
+function appendExecutiveDataLabel(current: string | undefined, next: string) {
+  if (!current) return next;
+  return current === next ? current : `${current} · ${next}`;
+}
+
+function formatExecutiveLabelValue(value: number, format: MetricFormat) {
+  return format === "duration" ? formatDurationFromMs(value) : formatInteger(value);
+}
+
+function executiveInputForecastDeviation(row: { input: number | null; forecast: number | null }) {
+  if (row.input === null || row.forecast === null) return null;
+  return row.input - row.forecast;
+}
+
+function formatExecutiveInputForecastCallout(row: { label: string; input: number | null; forecast: number | null }) {
+  const deviation = executiveInputForecastDeviation(row);
+  if (deviation !== null) {
+    return `${row.label} · ${formatSignedInteger(deviation)} (${formatSignedPercent(deviation, row.forecast)})`;
+  }
+  const value = row.input ?? row.forecast ?? 0;
+  return `${row.label} · ${formatInteger(value)}`;
+}
+
+function formatSignedInteger(value: number) {
+  if (value === 0) return "0";
+  return `${value > 0 ? "+" : "-"}${formatInteger(Math.abs(value))}`;
+}
+
+function formatSignedPercent(delta: number, base: number | null) {
+  if (!base || !Number.isFinite(base)) return delta >= 0 ? "+0%" : "-0%";
+  const percent = Math.round((delta / base) * 100);
+  return `${percent > 0 ? "+" : ""}${percent}%`;
+}
+
+function buildExecutivePerformanceForecastHistory(performanceTrend: PerformanceForecastTrendRow[], buckets: ExecutiveHourBucket[], selected: ReturnType<typeof parseRealtimeCycle>) {
+  const actuals = performanceTrend
+    .map((row) => {
+      const at = parsePerformanceTrendHour(row.key);
+      const input = Math.max(0, Number(row.input ?? 0));
+      return at ? { at, timestamp: at.getTime(), input } : null;
+    })
+    .filter((row): row is { at: Date; timestamp: number; input: number } => Boolean(row))
+    .sort((a, b) => a.timestamp - b.timestamp);
+  const positiveActuals = actuals.filter((row) => row.input > 0);
+  const lastReal = positiveActuals.at(-1) ?? actuals.at(-1) ?? null;
+  if (!lastReal || !positiveActuals.length) {
+    return buckets.map((bucket) => ({
+      label: bucket.label,
+      input: bucket.hour <= selected.date.getHours() ? bucket.input : null,
+      forecast: null
+    }));
+  }
+
+  const actualByKey = new Map(actuals.map((row) => [performanceHourKey(row.at), row.input]));
+  const selectedDayEnd = new Date(Date.UTC(selected.date.getFullYear(), selected.date.getMonth(), selected.date.getDate(), 23, 0, 0, 0));
+  const horizonHours = Math.max(EXECUTIVE_FORECAST_MIN_HORIZON_HOURS, Math.ceil((selectedDayEnd.getTime() - lastReal.timestamp) / EXECUTIVE_HOUR_MS) + 1);
+  const forecastByKey = new Map<string, number>();
+  for (let index = 1; index <= horizonHours; index += 1) {
+    const at = new Date(lastReal.timestamp + index * EXECUTIVE_HOUR_MS);
+    forecastByKey.set(performanceHourKey(at), executivePerformanceForecastValue(positiveActuals, at, lastReal.at));
+  }
+
+  return buckets.map((bucket) => {
+    const at = new Date(Date.UTC(selected.date.getFullYear(), selected.date.getMonth(), selected.date.getDate(), bucket.hour, 0, 0, 0));
+    const key = performanceHourKey(at);
+    const forecast = actualByKey.get(key) ?? forecastByKey.get(key) ?? executivePerformanceForecastValue(positiveActuals, at, lastReal.at);
+    return {
+      label: bucket.label,
+      input: bucket.hour <= selected.date.getHours() ? bucket.input : null,
+      forecast: Number.isFinite(forecast) && forecast > 0 ? Math.round(forecast) : null
+    };
   });
 }
 
-function buildExecutiveQueueBuckets(rows: QueueReportRow[], selected: ReturnType<typeof parseRealtimeCycle>) {
-  const byCycle = new Map<string, QueueMetric[]>();
-  rows.forEach((row) => {
-    row.history.forEach((item) => {
-      const parsed = parseRealtimeCycle(item.cycleDownload, "");
-      if (parsed.dateKey !== selected.dateKey || parsed.timestamp > selected.timestamp) return;
-      const metrics = byCycle.get(item.cycleDownload) ?? [];
-      metrics.push({
-        input: item.input,
-        output: item.output,
-        ahtMs: item.ahtMs,
-        latencyMs: item.latencyMs,
-        maxLatencyMs: item.maxLatencyMs,
-        maxLatencyRowNumber: item.maxLatencyRowNumber,
-        backlog: item.backlog,
-        sourceRows: 1
-      });
-      byCycle.set(item.cycleDownload, metrics);
+function executivePerformanceForecastValue(actuals: Array<{ at: Date; timestamp: number; input: number }>, targetAt: Date, referenceAt: Date) {
+  const referenceTime = referenceAt.getTime();
+  const targetHour = targetAt.getUTCHours();
+  const targetDay = targetAt.getUTCDay();
+  const training = actuals.filter((row) => row.timestamp <= referenceTime && row.input > 0);
+  if (!training.length) return 0;
+
+  const candidates: Array<{ value: number; weight: number }> = [];
+  const seasonalSlot = training.filter((row) => row.at.getUTCDay() === targetDay && row.at.getUTCHours() === targetHour);
+  const sameHourRecent = training.filter((row) => row.at.getUTCHours() === targetHour && row.timestamp >= referenceTime - 35 * EXECUTIVE_DAY_MS);
+  const profile = executiveRecentHourlyProfileForecast(training, targetAt, referenceAt);
+  const momentum = executiveShortMomentumForecast(training, targetAt, referenceAt);
+
+  if (seasonalSlot.length) candidates.push({ value: executiveWeightedAverage(seasonalSlot, referenceAt), weight: executiveClamp(seasonalSlot.length / 8, 0.22, 1.1) * 0.36 });
+  if (sameHourRecent.length) candidates.push({ value: executiveWeightedAverage(sameHourRecent, referenceAt, 10), weight: executiveClamp(sameHourRecent.length / 10, 0.24, 1.15) * 0.3 });
+  if (profile.value > 0) candidates.push({ value: profile.value, weight: executiveClamp(profile.samples / 24, 0.22, 1.1) * 0.22 });
+  if (momentum.value > 0) candidates.push({ value: momentum.value, weight: executiveClamp(momentum.samples / 12, 0.18, 1) * 0.12 });
+
+  const fallbackRows = training.filter((row) => row.timestamp >= referenceTime - 14 * EXECUTIVE_DAY_MS);
+  const fallback = executiveWeightedAverage(fallbackRows.length ? fallbackRows : training, referenceAt);
+  const weight = candidates.reduce((total, candidate) => total + candidate.weight, 0);
+  const blended = weight > 0 ? candidates.reduce((total, candidate) => total + candidate.value * candidate.weight, 0) / weight : fallback;
+  return Math.max(0, blended * executiveRecentForecastAdjustment(training, targetAt, referenceAt));
+}
+
+function executiveRecentHourlyProfileForecast(actuals: Array<{ at: Date; timestamp: number; input: number }>, targetAt: Date, referenceAt: Date) {
+  const referenceTime = referenceAt.getTime();
+  const targetHour = targetAt.getUTCHours();
+  const recent = actuals.filter((row) => row.timestamp >= referenceTime - 7 * EXECUTIVE_DAY_MS);
+  const broader = actuals.filter((row) => row.timestamp >= referenceTime - 28 * EXECUTIVE_DAY_MS);
+  const recentTotal = executiveSum(recent.map((row) => row.input));
+  const broaderTotal = executiveSum(broader.map((row) => row.input));
+  const recentDays = new Set(recent.map((row) => performanceDateKey(row.at))).size;
+  const broaderDays = new Set(broader.map((row) => performanceDateKey(row.at))).size;
+  const recentHourShare = recentTotal > 0 ? executiveSum(recent.filter((row) => row.at.getUTCHours() === targetHour).map((row) => row.input)) / recentTotal : 0;
+  const broaderHourShare = broaderTotal > 0 ? executiveSum(broader.filter((row) => row.at.getUTCHours() === targetHour).map((row) => row.input)) / broaderTotal : 0;
+  const share = recentHourShare && broaderHourShare ? recentHourShare * 0.72 + broaderHourShare * 0.28 : recentHourShare || broaderHourShare;
+  const recentDailyAverage = recentDays > 0 ? recentTotal / recentDays : 0;
+  const broaderDailyAverage = broaderDays > 0 ? broaderTotal / broaderDays : 0;
+  const dailyAverage = recentDailyAverage && broaderDailyAverage ? recentDailyAverage * 0.72 + broaderDailyAverage * 0.28 : recentDailyAverage || broaderDailyAverage;
+  return { value: dailyAverage * share, samples: recent.length || broader.length };
+}
+
+function executiveShortMomentumForecast(actuals: Array<{ at: Date; timestamp: number; input: number }>, targetAt: Date, referenceAt: Date) {
+  const referenceTime = referenceAt.getTime();
+  const targetHour = targetAt.getUTCHours();
+  const recentSameHour = actuals.filter((row) => row.at.getUTCHours() === targetHour && row.timestamp >= referenceTime - 10 * EXECUTIVE_DAY_MS);
+  const last72h = actuals.filter((row) => row.timestamp >= referenceTime - 72 * EXECUTIVE_HOUR_MS);
+  const last24h = actuals.filter((row) => row.timestamp >= referenceTime - 24 * EXECUTIVE_HOUR_MS);
+  const sameHourValue = recentSameHour.length ? executiveWeightedAverage(recentSameHour, referenceAt, 5) : 0;
+  const hourlyMomentum = last72h.length ? executiveSum(last72h.map((row) => row.input)) / Math.max(1, Math.min(72, Math.ceil((referenceTime - last72h[0].timestamp) / EXECUTIVE_HOUR_MS))) : 0;
+  const hotNow = last24h.length ? executiveSum(last24h.map((row) => row.input)) / Math.max(1, Math.min(24, Math.ceil((referenceTime - last24h[0].timestamp) / EXECUTIVE_HOUR_MS))) : 0;
+  return { value: sameHourValue > 0 ? sameHourValue * 0.62 + (hotNow || hourlyMomentum) * 0.38 : hotNow || hourlyMomentum, samples: recentSameHour.length + last24h.length };
+}
+
+function executiveRecentForecastAdjustment(actuals: Array<{ at: Date; timestamp: number; input: number }>, targetAt: Date, referenceAt: Date) {
+  const referenceTime = referenceAt.getTime();
+  const targetHour = targetAt.getUTCHours();
+  const ratios: Array<{ ratio: number; weight: number }> = [];
+  addExecutiveWindowRatio(ratios, actuals, referenceTime, 24 * EXECUTIVE_HOUR_MS, 0.36, 3.4);
+  addExecutiveWindowRatio(ratios, actuals, referenceTime, 72 * EXECUTIVE_HOUR_MS, 0.3, 3);
+  addExecutiveWindowRatio(ratios, actuals, referenceTime, 7 * EXECUTIVE_DAY_MS, 0.18, 2.6);
+  const sameHour = actuals.filter((row) => row.at.getUTCHours() === targetHour);
+  const recentSameHour = executiveSum(sameHour.filter((row) => row.timestamp > referenceTime - 10 * EXECUTIVE_DAY_MS).map((row) => row.input));
+  const previousSameHour = executiveSum(sameHour.filter((row) => row.timestamp <= referenceTime - 10 * EXECUTIVE_DAY_MS && row.timestamp > referenceTime - 50 * EXECUTIVE_DAY_MS).map((row) => row.input)) / 4;
+  if (previousSameHour > 0) ratios.push({ ratio: executiveClamp(recentSameHour / previousSameHour, 0.35, 3.4), weight: 0.24 });
+  if (!ratios.length) return 1;
+  const raw = ratios.reduce((total, item) => total + item.ratio * item.weight, 0) / ratios.reduce((total, item) => total + item.weight, 0);
+  return executiveClamp(1 + (raw - 1) * 0.94, 0.45, 3.1);
+}
+
+function addExecutiveWindowRatio(ratios: Array<{ ratio: number; weight: number }>, actuals: Array<{ timestamp: number; input: number }>, referenceTime: number, windowMs: number, weight: number, maxRatio: number) {
+  const recent = executiveSum(actuals.filter((row) => row.timestamp > referenceTime - windowMs).map((row) => row.input));
+  const previous = executiveSum(actuals.filter((row) => row.timestamp <= referenceTime - windowMs && row.timestamp > referenceTime - windowMs * 2).map((row) => row.input));
+  if (previous > 0) ratios.push({ ratio: executiveClamp(recent / previous, 0.35, maxRatio), weight });
+}
+
+function executiveWeightedAverage(rows: Array<{ timestamp: number; input: number }>, referenceAt: Date, halfLifeDays = 21) {
+  const reference = referenceAt.getTime();
+  let total = 0;
+  let weight = 0;
+  for (const row of rows) {
+    const ageDays = Math.max(0, (reference - row.timestamp) / EXECUTIVE_DAY_MS);
+    const rowWeight = Math.pow(0.5, ageDays / halfLifeDays);
+    total += row.input * rowWeight;
+    weight += rowWeight;
+  }
+  return weight > 0 ? total / weight : 0;
+}
+
+function parsePerformanceTrendHour(value: string) {
+  const match = String(value ?? "").match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):/);
+  if (!match) return null;
+  const [, year, month, day, hour] = match;
+  return new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), 0, 0, 0));
+}
+
+function performanceHourKey(date: Date) {
+  return `${performanceDateKey(date)} ${String(date.getUTCHours()).padStart(2, "0")}:00`;
+}
+
+function performanceDateKey(date: Date) {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+
+function executiveClamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function executiveSum(values: number[]) {
+  return values.reduce((total, value) => total + value, 0);
+}
+
+function buildExecutiveRequiredByHour(rows: StaffCoverageExecutiveRow[], dateKey: string) {
+  const requiredByShift = new Map<string, number>();
+  rows
+    .filter((row) => row.date === dateKey && normalizeSearch(row.lob) === "ads")
+    .forEach((row) => {
+      const shift = normalizeExecutiveShift(row.shift);
+      const required = Math.max(0, Number(row.required || 0));
+      if (!shift || !Number.isFinite(required)) return;
+      requiredByShift.set(shift, (requiredByShift.get(shift) ?? 0) + required);
     });
-  });
 
-  const byHour = new Map<number, { cycleDownload: string; timestamp: number; metric: QueueMetric }>();
-  byCycle.forEach((metrics, cycleDownload) => {
-    const parsed = parseRealtimeCycle(cycleDownload, "");
-    const existing = byHour.get(parsed.date.getHours());
-    if (!existing || parsed.timestamp > existing.timestamp) {
-      byHour.set(parsed.date.getHours(), { cycleDownload, timestamp: parsed.timestamp, metric: summarizeQueueMetrics(metrics) });
-    }
-  });
+  const requiredByHour = new Map<number, number>();
+  for (let hour = 0; hour < 24; hour += 1) {
+    const required = requiredByShift.get(executiveShiftForHour(hour));
+    if (required !== undefined) requiredByHour.set(hour, required);
+  }
+  return requiredByHour;
+}
 
+function normalizeExecutiveShift(value: string) {
+  const key = normalizeSearch(value);
+  if (key.includes("manha")) return "manha";
+  if (key.includes("tarde")) return "tarde";
+  if (key.includes("noite")) return "noite";
+  return "";
+}
+
+function executiveShiftForHour(hour: number) {
+  if (hour >= 6 && hour < 14) return "manha";
+  if (hour >= 14 && hour < 22) return "tarde";
+  return "noite";
+}
+
+function buildExecutiveQueueBuckets(rows: QueueReportRow[], selected: ReturnType<typeof parseRealtimeCycle>) {
+  const hourlySnapshots = buildExecutiveQueueHourlySnapshots(rows, selected);
   const deltaByHour = new Map<number, { cycleDownload: string; timestamp: number; metric: QueueMetric }>();
-  let previousSnapshot: { metric: QueueMetric } | null = null;
-  Array.from(byHour.entries())
-    .sort(([, a], [, b]) => a.timestamp - b.timestamp)
-    .forEach(([hour, snapshot]) => {
-      deltaByHour.set(hour, {
-        ...snapshot,
+  let previousSnapshot: (typeof hourlySnapshots)[number] | null = null;
+
+  hourlySnapshots.forEach((snapshot) => {
+    if (snapshot.dateKey === selected.dateKey) {
+      deltaByHour.set(snapshot.hour, {
+        cycleDownload: snapshot.cycleDownload,
+        timestamp: snapshot.timestamp,
         metric: buildExecutiveQueueDeltaMetric(snapshot.metric, previousSnapshot?.metric ?? null)
       });
-      previousSnapshot = snapshot;
-    });
+    }
+    previousSnapshot = snapshot;
+  });
 
   return deltaByHour;
 }
 
-function buildExecutiveQueueInputByDateHour(rows: QueueReportRow[], selected: ReturnType<typeof parseRealtimeCycle>) {
-  const byDateCycle = new Map<string, Map<string, QueueMetric[]>>();
+function buildExecutiveQueueHourlySnapshots(rows: QueueReportRow[], selected: ReturnType<typeof parseRealtimeCycle>) {
+  const byCycle = new Map<string, QueueMetric[]>();
   rows.forEach((row) => {
     row.history.forEach((item) => {
       const parsed = parseRealtimeCycle(item.cycleDownload, "");
       if (parsed.timestamp > selected.timestamp) return;
-      const byCycle = byDateCycle.get(parsed.dateKey) ?? new Map<string, QueueMetric[]>();
       const metrics = byCycle.get(item.cycleDownload) ?? [];
       metrics.push({
         input: item.input,
@@ -3221,31 +4075,48 @@ function buildExecutiveQueueInputByDateHour(rows: QueueReportRow[], selected: Re
         sourceRows: 1
       });
       byCycle.set(item.cycleDownload, metrics);
-      byDateCycle.set(parsed.dateKey, byCycle);
     });
   });
 
-  const inputByDateHour = new Map<string, Map<number, number>>();
-  byDateCycle.forEach((byCycle, dateKey) => {
-    const latestByHour = new Map<number, { timestamp: number; metric: QueueMetric }>();
-    byCycle.forEach((metrics, cycleDownload) => {
-      const parsed = parseRealtimeCycle(cycleDownload, "");
-      const hour = parsed.date.getHours();
-      const existing = latestByHour.get(hour);
-      if (!existing || parsed.timestamp > existing.timestamp) {
-        latestByHour.set(hour, { timestamp: parsed.timestamp, metric: summarizeQueueMetrics(metrics) });
-      }
-    });
-
-    const hourlyInput = new Map<number, number>();
-    let previousSnapshot: { metric: QueueMetric } | null = null;
-    Array.from(latestByHour.entries())
-      .sort(([, a], [, b]) => a.timestamp - b.timestamp)
-      .forEach(([hour, snapshot]) => {
-        hourlyInput.set(hour, buildExecutiveQueueDeltaMetric(snapshot.metric, previousSnapshot?.metric ?? null).input);
-        previousSnapshot = snapshot;
+  const latestByDateHour = new Map<string, {
+    cycleDownload: string;
+    timestamp: number;
+    dateKey: string;
+    hour: number;
+    metric: QueueMetric;
+  }>();
+  byCycle.forEach((metrics, cycleDownload) => {
+    const parsed = parseRealtimeCycle(cycleDownload, "");
+    const hour = parsed.date.getHours();
+    const dateHourKey = `${parsed.dateKey}-${hour}`;
+    const existing = latestByDateHour.get(dateHourKey);
+    if (!existing || parsed.timestamp > existing.timestamp) {
+      latestByDateHour.set(dateHourKey, {
+        cycleDownload,
+        timestamp: parsed.timestamp,
+        dateKey: parsed.dateKey,
+        hour,
+        metric: summarizeQueueMetrics(metrics)
       });
-    inputByDateHour.set(dateKey, hourlyInput);
+    }
+  });
+
+  return Array.from(latestByDateHour.values()).sort((a, b) => a.timestamp - b.timestamp);
+}
+
+function buildExecutiveQueueInputByDateHour(rows: QueueReportRow[], selected: ReturnType<typeof parseRealtimeCycle>) {
+  const hourlySnapshots = buildExecutiveQueueHourlySnapshots(rows, selected);
+  const inputByDateHour = new Map<string, Map<number, number>>();
+  let previousSnapshot: (typeof hourlySnapshots)[number] | null = null;
+
+  hourlySnapshots.forEach((snapshot) => {
+    const hourlyInput = inputByDateHour.get(snapshot.dateKey) ?? new Map<number, number>();
+    hourlyInput.set(
+      snapshot.hour,
+      buildExecutiveQueueDeltaMetric(snapshot.metric, previousSnapshot?.metric ?? null).input
+    );
+    inputByDateHour.set(snapshot.dateKey, hourlyInput);
+    previousSnapshot = snapshot;
   });
 
   return inputByDateHour;
@@ -3254,43 +4125,56 @@ function buildExecutiveQueueInputByDateHour(rows: QueueReportRow[], selected: Re
 function buildExecutiveAgentBuckets(rows: AgentRealtimeRow[], selected: ReturnType<typeof parseRealtimeCycle>) {
   const byHour = new Map<number, { cycleDownload: string; timestamp: number; metrics: AgentMetric[]; online: number }>();
   rows.forEach((row) => {
-    const snapshotsByHour = new Map<number, AgentRealtimeRow["history"][number] & { timestamp: number }>();
+    const snapshotsByDateHour = new Map<string, AgentRealtimeRow["history"][number] & {
+      timestamp: number;
+      dateKey: string;
+      hour: number;
+    }>();
     row.history.forEach((item) => {
       const parsed = parseRealtimeCycle(item.cycleDownload, "");
-      if (parsed.dateKey !== selected.dateKey || parsed.timestamp > selected.timestamp) return;
+      if (parsed.timestamp > selected.timestamp) return;
       const hour = parsed.date.getHours();
-      const existing = snapshotsByHour.get(hour);
+      const dateHourKey = `${parsed.dateKey}-${hour}`;
+      const existing = snapshotsByDateHour.get(dateHourKey);
       if (!existing || parsed.timestamp > existing.timestamp) {
-        snapshotsByHour.set(hour, { ...item, timestamp: parsed.timestamp });
+        snapshotsByDateHour.set(dateHourKey, {
+          ...item,
+          timestamp: parsed.timestamp,
+          dateKey: parsed.dateKey,
+          hour
+        });
       }
     });
 
-    let previousSnapshot: (AgentRealtimeRow["history"][number] & { timestamp: number }) | null = null;
-    Array.from(snapshotsByHour.entries())
-      .sort(([, a], [, b]) => a.timestamp - b.timestamp)
-      .forEach(([hour, snapshot]) => {
-        const submit = cumulativeDelta(snapshot.submit, previousSnapshot?.submit ?? null);
-        const moderationMs = cumulativeDelta(snapshot.moderationMs, previousSnapshot?.moderationMs ?? null);
-        const metric: AgentMetric = {
-          submit,
-          ahtMs: submit > 0 ? moderationMs / submit : deriveAverageDeltaFromCumulative(snapshot.submit, snapshot.ahtMs, previousSnapshot?.submit ?? null, previousSnapshot?.ahtMs ?? null),
-          moderationMs,
-          timeout: cumulativeDelta(snapshot.timeout, previousSnapshot?.timeout ?? null),
-          refresh: cumulativeDelta(snapshot.refresh, previousSnapshot?.refresh ?? null),
-          queueCount: snapshot.queueIds.length,
-          sourceRows: 1
-        };
-        const existing = byHour.get(hour);
-        const next = existing ?? { cycleDownload: snapshot.cycleDownload, timestamp: snapshot.timestamp, metrics: [], online: 0 };
-        next.metrics.push(metric);
-        if (submit > 0) next.online += 1;
-        if (snapshot.timestamp > next.timestamp) {
-          next.cycleDownload = snapshot.cycleDownload;
-          next.timestamp = snapshot.timestamp;
-        }
-        byHour.set(hour, next);
+    const orderedSnapshots = Array.from(snapshotsByDateHour.values()).sort((a, b) => a.timestamp - b.timestamp);
+    let previousSnapshot: (typeof orderedSnapshots)[number] | null = null;
+    orderedSnapshots.forEach((snapshot) => {
+      if (snapshot.dateKey !== selected.dateKey) {
         previousSnapshot = snapshot;
-      });
+        return;
+      }
+      const submit = cumulativeDelta(snapshot.submit, previousSnapshot?.submit ?? null);
+      const moderationMs = cumulativeDelta(snapshot.moderationMs, previousSnapshot?.moderationMs ?? null);
+      const metric: AgentMetric = {
+        submit,
+        ahtMs: submit > 0 ? moderationMs / submit : deriveAverageDeltaFromCumulative(snapshot.submit, snapshot.ahtMs, previousSnapshot?.submit ?? null, previousSnapshot?.ahtMs ?? null),
+        moderationMs,
+        timeout: cumulativeDelta(snapshot.timeout, previousSnapshot?.timeout ?? null),
+        refresh: cumulativeDelta(snapshot.refresh, previousSnapshot?.refresh ?? null),
+        queueCount: snapshot.queueIds.length,
+        sourceRows: 1
+      };
+      const existing = byHour.get(snapshot.hour);
+      const next = existing ?? { cycleDownload: snapshot.cycleDownload, timestamp: snapshot.timestamp, metrics: [], online: 0 };
+      next.metrics.push(metric);
+      if (submit > 0) next.online += 1;
+      if (snapshot.timestamp > next.timestamp) {
+        next.cycleDownload = snapshot.cycleDownload;
+        next.timestamp = snapshot.timestamp;
+      }
+      byHour.set(snapshot.hour, next);
+      previousSnapshot = snapshot;
+    });
   });
 
   const summarizedByHour = new Map<number, { cycleDownload: string; timestamp: number; metric: ReturnType<typeof summarizeMetrics>; online: number }>();
@@ -3358,7 +4242,7 @@ function findPreviousAgentHistorySnapshot(row: AgentRealtimeRow, cycleDownload: 
   const target = parseRealtimeCycle(cycleDownload, "");
   return row.history
     .map((item) => ({ item, parsed: parseRealtimeCycle(item.cycleDownload, "") }))
-    .filter(({ parsed }) => parsed.dateKey === target.dateKey && parsed.timestamp < target.timestamp)
+    .filter(({ parsed }) => parsed.timestamp < target.timestamp)
     .sort((a, b) => b.parsed.timestamp - a.parsed.timestamp)[0]?.item ?? null;
 }
 
@@ -3420,24 +4304,24 @@ function buildExecutiveHeatmap(buckets: ExecutiveHourBucket[]): ExecutiveHeatmap
       const seconds = bucket.ahtMs / 1000;
       return formatDurationCell(bucket.ahtMs, seconds <= 60 ? "good" : seconds <= 90 ? "neutral" : seconds <= 120 ? "watch" : "bad");
     }),
-    buildExecutiveHeatmapRow("Delta Input x Output", buckets, (bucket) => {
+    buildExecutiveHeatmapRow("Input x Output", buckets, (bucket) => {
       if (bucket.input === null || bucket.output === null) return emptyExecutiveCell();
       const delta = bucket.output - bucket.input;
       return formatNumberCell(delta, delta >= 0 ? "good" : delta >= -50 ? "watch" : "bad", true);
     }),
-    buildExecutiveHeatmapRow("HC Requerido", buckets, (bucket) => formatNumberCell(bucket.scheduled, bucket.scheduled === null ? "empty" : "neutral")),
-    buildExecutiveHeatmapRow("HC Online", buckets, (bucket) => {
+    buildExecutiveHeatmapRow("Required HC", buckets, (bucket) => formatNumberCell(bucket.required, bucket.required === null ? "empty" : "neutral")),
+    buildExecutiveHeatmapRow("Online HC", buckets, (bucket) => {
       if (bucket.online === null) return emptyExecutiveCell();
-      const scheduled = bucket.scheduled ?? 0;
-      const ratio = scheduled > 0 ? bucket.online / scheduled : 1;
+      const required = bucket.required ?? 0;
+      const ratio = required > 0 ? bucket.online / required : 1;
       return formatNumberCell(bucket.online, ratio >= 1 ? "good" : ratio >= 0.8 ? "watch" : "bad");
     }),
-    buildExecutiveHeatmapRow("Delta HC", buckets, (bucket) => {
-      if (bucket.online === null || bucket.scheduled === null) return emptyExecutiveCell();
-      const delta = bucket.online - bucket.scheduled;
+    buildExecutiveHeatmapRow("HC Gap", buckets, (bucket) => {
+      if (bucket.online === null || bucket.required === null) return emptyExecutiveCell();
+      const delta = bucket.online - bucket.required;
       return formatNumberCell(delta, delta >= 0 ? "good" : delta >= -1 ? "watch" : "bad", true);
     }),
-    buildExecutiveHeatmapRow("Backlog Est.", buckets, (bucket, index) => {
+    buildExecutiveHeatmapRow("Backlog", buckets, (bucket, index) => {
       if (bucket.backlog === null) return emptyExecutiveCell();
       const previous = previousBacklog(index);
       const tone = previous === null ? "neutral" : bucket.backlog < previous ? "good" : bucket.backlog === previous ? "neutral" : bucket.backlog > previous * 1.2 ? "critical" : "bad";
@@ -3756,6 +4640,15 @@ function formatValue(value: unknown) {
 
 function formatInteger(value: number) {
   return Math.round(value).toLocaleString("pt-BR");
+}
+
+function formatExecutiveAxisTick(value: number) {
+  if (!Number.isFinite(value)) return "";
+  if (Math.abs(value) >= 1000) {
+    const compact = value / 1000;
+    return `${compact % 1 === 0 ? compact.toFixed(0) : compact.toFixed(1).replace(".", ",")} mil`;
+  }
+  return formatInteger(value);
 }
 
 function formatDurationFromMs(value: number | null | undefined) {

@@ -12,7 +12,7 @@ import {
 } from "@/lib/attendance-calculation";
 import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import type { Actor } from "@/lib/mock-db";
-import { canAccessRealTime, canAccessRealTimeAgentsReports, canAccessRealTimeQueues } from "@/lib/permissions";
+import { canAccessExecutiveAdsReport, canAccessRealTime, canAccessRealTimeAgentsReports, canAccessRealTimeQueues } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { resolveQueueReference } from "@/lib/queue-dictionary";
 import { getQueueReportMetadataById } from "@/lib/queue-report-metadata";
@@ -69,6 +69,7 @@ function realTimePermissionUser(actor: Actor) {
 function canRequestRealtimeView(actor: Actor, view: "agents" | "queues" | "both") {
   const user = realTimePermissionUser(actor);
   if (view === "queues") return canAccessRealTimeQueues(user);
+  if (view === "both" && canAccessExecutiveAdsReport(user)) return true;
   return canAccessRealTimeAgentsReports(user);
 }
 
@@ -2235,7 +2236,7 @@ function resolveSelectedRealtimeCycle(cycleOptions: RealtimeCycleOption[], reque
   return {
     selectedCycle,
     selectedIndex,
-    previousCycle: selectedIndex >= 0 ? cycleOptions[selectedIndex + 1]?.value ?? "" : ""
+    previousCycle: resolvePreviousRealtimeCycle(cycleOptions, selectedCycle)
   };
 }
 
@@ -2243,14 +2244,72 @@ function cycleDateKey(value: string) {
   return String(value ?? "").match(/^(\d{4}-\d{2}-\d{2})/)?.[1] ?? "";
 }
 
+function parseRealtimeCycleParts(value: string) {
+  const match = String(value ?? "").match(/^(\d{4})-(\d{2})-(\d{2})[ T_](\d{2}):(\d{2})/);
+  if (!match) return null;
+  const [, year, month, day, hour, minute] = match;
+  const normalized = `${year}-${month}-${day} ${hour}:${minute}`;
+  return {
+    normalized,
+    dateKey: `${year}-${month}-${day}`,
+    hour: Number(hour),
+    minute: Number(minute),
+    timestamp: Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute))
+  };
+}
+
+function dateKeyOffset(dateKey: string, days: number) {
+  const match = dateKey.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return "";
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + days));
+  return date.toISOString().slice(0, 10);
+}
+
+function resolvePreviousRealtimeCycle<T extends { value: string; importedAt: Date | string }>(cycleOptions: T[], selectedCycle: string) {
+  const selected = parseRealtimeCycleParts(selectedCycle);
+  if (!selected) return "";
+
+  const candidates = cycleOptions
+    .map((cycle) => ({ cycle, parsed: parseRealtimeCycleParts(cycle.value) }))
+    .filter((item): item is { cycle: T; parsed: NonNullable<ReturnType<typeof parseRealtimeCycleParts>> } => Boolean(item.parsed))
+    .filter((item) => item.parsed.timestamp < selected.timestamp);
+
+  if (selected.hour === 0) {
+    const previousDateKey = dateKeyOffset(selected.dateKey, -1);
+    const previousDayLateHour = candidates
+      .filter((item) => item.parsed.dateKey === previousDateKey && item.parsed.hour === 23)
+      .sort((a, b) => b.parsed.timestamp - a.parsed.timestamp || cycleImportedAtTime(b.cycle) - cycleImportedAtTime(a.cycle))[0]?.cycle.value ?? "";
+    if (previousDayLateHour) return previousDayLateHour;
+  }
+
+  return candidates
+    .sort((a, b) => b.parsed.timestamp - a.parsed.timestamp || cycleImportedAtTime(b.cycle) - cycleImportedAtTime(a.cycle))[0]?.cycle.value ?? "";
+}
+
+function cycleImportedAtTime(cycle: { importedAt: Date | string }) {
+  const value = cycle.importedAt instanceof Date ? cycle.importedAt.getTime() : new Date(cycle.importedAt).getTime();
+  return Number.isFinite(value) ? value : 0;
+}
+
 function selectRealtimeBatchIdsForView(cycleOptions: RealtimeCycleOption[], selectedCycle: string, previousCycle: string) {
   const selectedDateKey = cycleDateKey(selectedCycle);
+  const selectedParts = parseRealtimeCycleParts(selectedCycle);
   const selectedValues = new Set<string>();
   cycleOptions.forEach((cycle) => {
     if (selectedDateKey && cycleDateKey(cycle.value) === selectedDateKey) selectedValues.add(cycle.value);
   });
+  const previousDateKey = selectedDateKey ? dateKeyOffset(selectedDateKey, -1) : "";
+  const previousDayCycles = previousDateKey
+    ? cycleOptions.filter((cycle) => cycleDateKey(cycle.value) === previousDateKey)
+    : [];
+  const previousDayCycle = previousDayCycles
+    .sort((a, b) => b.value.localeCompare(a.value) || b.importedAt.getTime() - a.importedAt.getTime())[0]?.value ?? "";
   if (selectedCycle) selectedValues.add(selectedCycle);
   if (previousCycle) selectedValues.add(previousCycle);
+  if (previousDayCycle) selectedValues.add(previousDayCycle);
+  if (selectedParts?.hour === 0) {
+    previousDayCycles.forEach((cycle) => selectedValues.add(cycle.value));
+  }
 
   return Array.from(new Set(
     cycleOptions
@@ -2295,8 +2354,7 @@ function buildQueueRealtimeViewFromSummaryRows(
   if (!cycles.length) return emptyQueueRealtimeView();
 
   const selectedCycle = cycles.some((cycle) => cycle.value === options.cycleDownload) ? String(options.cycleDownload) : cycles[0].value;
-  const selectedIndex = cycles.findIndex((cycle) => cycle.value === selectedCycle);
-  const previousCycle = selectedIndex >= 0 ? cycles[selectedIndex + 1]?.value ?? "" : "";
+  const previousCycle = resolvePreviousRealtimeCycle(cycles, selectedCycle);
 
   const latestRowsByCycle = new Map<string, QueueSummaryReadRow[]>();
   latestRows.forEach((summary) => {
@@ -2565,8 +2623,7 @@ async function buildQueueRealtimeView(options: RealtimeSnapshotOptions) {
   if (!cycles.length) return emptyQueueRealtimeView();
 
   const selectedCycle = cycles.some((cycle) => cycle.value === options.cycleDownload) ? String(options.cycleDownload) : cycles[0].value;
-  const selectedIndex = cycles.findIndex((cycle) => cycle.value === selectedCycle);
-  const previousCycle = selectedIndex >= 0 ? cycles[selectedIndex + 1]?.value ?? "" : "";
+  const previousCycle = resolvePreviousRealtimeCycle(cycles, selectedCycle);
 
   const groupedByCycle = new Map<string, QueueCycleRow[]>();
   for (const cycle of cycles) {
@@ -2669,8 +2726,7 @@ async function buildAgentRealtimeViewFromSummaryRows(
   if (!cycles.length) return emptyAgentRealtimeView();
 
   const selectedCycle = cycles.some((cycle) => cycle.value === options.cycleDownload) ? String(options.cycleDownload) : cycles[0].value;
-  const selectedIndex = cycles.findIndex((cycle) => cycle.value === selectedCycle);
-  const previousCycle = selectedIndex >= 0 ? cycles[selectedIndex + 1]?.value ?? "" : "";
+  const previousCycle = resolvePreviousRealtimeCycle(cycles, selectedCycle);
 
   const latestRowsByCycle = new Map<string, AgentSummaryReadRow[]>();
   latestRows.forEach((summary) => {
@@ -3003,8 +3059,7 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
   if (!cycles.length) return emptyAgentRealtimeView();
 
   const selectedCycle = cycles.some((cycle) => cycle.value === options.cycleDownload) ? String(options.cycleDownload) : cycles[0].value;
-  const selectedIndex = cycles.findIndex((cycle) => cycle.value === selectedCycle);
-  const previousCycle = selectedIndex >= 0 ? cycles[selectedIndex + 1]?.value ?? "" : "";
+  const previousCycle = resolvePreviousRealtimeCycle(cycles, selectedCycle);
 
   const groupedByCycle = new Map<string, AgentCycleRow[]>();
   for (const cycle of cycles) {
