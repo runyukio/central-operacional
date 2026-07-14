@@ -714,6 +714,7 @@ function TimelinePanel({
               <TimelineLegend color="bg-blue-500" label="Jornada prevista" />
               <TimelineLegend color="bg-amber-400" label="Atraso" />
               <TimelineLegend color="bg-red-400" label="Saída antecipada" />
+              <TimelineLegend color="bg-violet-500" label="Hora extra" />
             </div>
           </div>
 
@@ -893,6 +894,7 @@ function TimelineBar({
   const endMs = new Date(windowEnd).getTime();
   const totalMs = Math.max(1, endMs - startMs);
   const comparison = comparePlannedShift(row, date, calculationEnd);
+  const overtimeRanges = buildOvertimeRanges(row);
 
   return (
     <div className="relative pt-5">
@@ -956,10 +958,58 @@ function TimelineBar({
               title={`Saída antecipada: ${formatDurationMs(comparison.earlyDepartureMs)}`}
             />
           ) : null}
+
+          {overtimeRanges.map((range, index) => (
+            <TimelineRange
+              key={`overtime-${range.start}-${index}`}
+              start={range.start}
+              end={range.end}
+              windowStart={startMs}
+              windowEnd={endMs}
+              className="bottom-[2px] h-2 rounded-full bg-violet-500"
+              title={`Hora extra | Entrada: ${formatTimeOnly(new Date(range.start).toISOString())} | Saída: ${formatTimeOnly(new Date(range.end).toISOString())} | Duração: ${formatDurationMs(range.end - range.start)}`}
+            />
+          ))}
         </div>
       </div>
     </div>
   );
+}
+
+function buildOvertimeRanges(row: RealtimeHoursTimelineRow) {
+  const toleranceMs = 5 * 60_000;
+  const plannedRanges = row.plannedShifts
+    .map((shift) => ({
+      start: new Date(shift.start).getTime(),
+      end: new Date(shift.end).getTime()
+    }))
+    .filter((range) => Number.isFinite(range.start) && Number.isFinite(range.end) && range.end > range.start)
+    .sort((left, right) => left.start - right.start);
+
+  if (!plannedRanges.length) return [];
+
+  return row.segments
+    .filter((segment) => segment.type === "ACTIVE")
+    .flatMap((segment) => {
+      const segmentStart = new Date(segment.start).getTime();
+      const segmentEnd = new Date(segment.end).getTime();
+      if (!Number.isFinite(segmentStart) || !Number.isFinite(segmentEnd) || segmentEnd <= segmentStart) return [];
+
+      const outsideRanges: Array<{ start: number; end: number }> = [];
+      let cursor = segmentStart;
+
+      for (const planned of plannedRanges) {
+        if (planned.end <= cursor) continue;
+        if (planned.start >= segmentEnd) break;
+        if (planned.start > cursor) outsideRanges.push({ start: cursor, end: Math.min(planned.start, segmentEnd) });
+        cursor = Math.max(cursor, Math.min(segmentEnd, planned.end));
+        if (cursor >= segmentEnd) break;
+      }
+
+      if (cursor < segmentEnd) outsideRanges.push({ start: cursor, end: segmentEnd });
+      return outsideRanges;
+    })
+    .filter((range) => range.end - range.start > toleranceMs);
 }
 
 function TimelineRange({
