@@ -1,12 +1,22 @@
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 
-import { PerformanceError, commitProductionAutomatedRawImport, validatePerformanceImportToken } from "@/lib/performance-service";
+import {
+  PerformanceError,
+  commitProductionAutomatedPreviewImport,
+  previewProductionAutomatedImport,
+  validatePerformanceImportToken,
+  type PerformancePreviewRow
+} from "@/lib/performance-service";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
+  if (process.env.PERFORMANCE_AUTOMATED_IMPORT_ENABLED !== "true") {
+    const message = "A importação automatizada de Performance está desativada. Use o upload manual na tela Performance.";
+    return NextResponse.json({ success: false, error: message, message }, { status: 410 });
+  }
   const tokenValidation = validatePerformanceImportToken(request.headers.get("authorization"));
   if ("error" in tokenValidation) {
     return NextResponse.json({ success: false, error: tokenValidation.error, message: tokenValidation.error }, { status: tokenValidation.status });
@@ -16,8 +26,7 @@ export async function POST(request: Request) {
     const contentType = request.headers.get("content-type") ?? "";
     if (contentType.includes("application/json")) {
       const body = await request.json().catch(() => ({}));
-      const rowSets = collectJsonRowSets(body);
-      const resetSnapshot = shouldResetSnapshot(request, body);
+      const rowSets = await collectJsonRowSets(body);
       if (!rowSets.length) {
         return NextResponse.json({
           success: false,
@@ -29,11 +38,16 @@ export async function POST(request: Request) {
       if (!coverage.hasProduction || !coverage.hasVolume) {
         return NextResponse.json(buildIncompleteImportResponse(coverage), { status: 400 });
       }
+      const previewedRowSets = await previewAutomatedRowSets(rowSets);
+      const validCoverage = summarizePerformancePreviewRowSets(previewedRowSets);
+      if (!validCoverage.hasProduction || !validCoverage.hasVolume) {
+        return NextResponse.json(buildIncompleteImportResponse(validCoverage), { status: 400 });
+      }
 
       let batchId: string | undefined;
       const imports = [];
-      for (const rowSet of rowSets) {
-        const result = await commitProductionAutomatedRawImport(rowSet.rows, rowSet.fileName, batchId, 0, { pruneSnapshot: true });
+      for (const rowSet of previewedRowSets) {
+        const result = await commitProductionAutomatedPreviewImport(rowSet.rows, rowSet.fileName, batchId, { pruneSnapshot: false });
         batchId = result.batchId;
         imports.push({
           fileName: rowSet.fileName,
@@ -44,13 +58,12 @@ export async function POST(request: Request) {
           updatedRows: result.updatedRows
         });
       }
-      const reset = resetSnapshot && batchId ? await resetAutomatedProductionSnapshot(batchId) : null;
-      return NextResponse.json(buildAutomatedImportResponse(batchId, imports, coverage, reset));
+      const reset = batchId ? await resetAutomatedProductionSnapshot(batchId) : null;
+      return NextResponse.json(buildAutomatedImportResponse(batchId, imports, validCoverage, reset));
     }
 
     const formData = await request.formData();
     const files = collectUploadFiles(formData);
-    const resetSnapshot = shouldResetSnapshot(request, formData);
     if (!files.length) {
       return NextResponse.json({
         success: false,
@@ -67,11 +80,16 @@ export async function POST(request: Request) {
     if (!coverage.hasProduction || !coverage.hasVolume) {
       return NextResponse.json(buildIncompleteImportResponse(coverage), { status: 400 });
     }
+    const previewedRowSets = await previewAutomatedRowSets(rowSets);
+    const validCoverage = summarizePerformancePreviewRowSets(previewedRowSets);
+    if (!validCoverage.hasProduction || !validCoverage.hasVolume) {
+      return NextResponse.json(buildIncompleteImportResponse(validCoverage), { status: 400 });
+    }
 
     let batchId: string | undefined;
     const imports = [];
-    for (const rowSet of rowSets) {
-      const result = await commitProductionAutomatedRawImport(rowSet.rows, rowSet.fileName, batchId, 0, { pruneSnapshot: true });
+    for (const rowSet of previewedRowSets) {
+      const result = await commitProductionAutomatedPreviewImport(rowSet.rows, rowSet.fileName, batchId, { pruneSnapshot: false });
       batchId = result.batchId;
       imports.push({
         fileName: rowSet.fileName,
@@ -83,8 +101,8 @@ export async function POST(request: Request) {
       });
     }
 
-    const reset = resetSnapshot && batchId ? await resetAutomatedProductionSnapshot(batchId) : null;
-    return NextResponse.json(buildAutomatedImportResponse(batchId, imports, coverage, reset));
+    const reset = batchId ? await resetAutomatedProductionSnapshot(batchId) : null;
+    return NextResponse.json(buildAutomatedImportResponse(batchId, imports, validCoverage, reset));
   } catch (error) {
     if (error instanceof PerformanceError) {
       return NextResponse.json({ success: false, error: error.message, message: error.message }, { status: error.status });
@@ -96,20 +114,6 @@ export async function POST(request: Request) {
       message: "Não foi possível importar a base automatizada de Performance."
     }, { status: 500 });
   }
-}
-
-function shouldResetSnapshot(request: Request, source: Record<string, unknown> | FormData) {
-  if (truthyFlag(request.headers.get("x-performance-reset"))) return true;
-  if (truthyFlag(request.headers.get("x-reset-performance"))) return true;
-  if (source instanceof FormData) {
-    return truthyFlag(source.get("reset")) || truthyFlag(source.get("resetProduction")) || truthyFlag(source.get("replaceSnapshot"));
-  }
-  return truthyFlag(source.reset) || truthyFlag(source.resetProduction) || truthyFlag(source.replaceSnapshot);
-}
-
-function truthyFlag(value: unknown) {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  return ["1", "true", "yes", "y", "sim", "s", "reset", "replace"].includes(normalized);
 }
 
 async function resetAutomatedProductionSnapshot(batchIdToKeep: string) {
@@ -168,9 +172,11 @@ function addUploadFile(files: Map<string, File>, value: FormDataEntryValue) {
   files.set(`${fileName}:${value.size}`, value);
 }
 
-function collectJsonRowSets(body: Record<string, unknown>) {
+async function collectJsonRowSets(body: Record<string, unknown>) {
   const defaultFileName = typeof body.fileName === "string" ? body.fileName : "performance_automated.json";
   const rowSets: Array<{ fileName: string; rows: Record<string, unknown>[] }> = [];
+  const downloadedRowSets = await collectDownloadedRowSets(body);
+  rowSets.push(...downloadedRowSets);
   if (Array.isArray(body.rawRows) && body.rawRows.length) {
     rowSets.push({ fileName: defaultFileName, rows: body.rawRows.filter(isRecord) });
   }
@@ -190,6 +196,89 @@ function collectJsonRowSets(body: Record<string, unknown>) {
 }
 
 type PerformanceRowSet = { fileName: string; rows: Record<string, unknown>[] };
+type PreviewedPerformanceRowSet = { fileName: string; rows: PerformancePreviewRow[] };
+type KwaiDownloadInput = {
+  label: "production" | "queue";
+  url: string;
+  body: unknown;
+  fileName: string;
+};
+
+async function collectDownloadedRowSets(body: Record<string, unknown>): Promise<PerformanceRowSet[]> {
+  const cookie = text(body.cookie ?? body.kwaiCookie ?? body.performanceCookie);
+  const downloads: KwaiDownloadInput[] = [];
+  const productionDownload = normalizeDownloadInput("production", body.productionDownload, body.productionUrl, body.productionBody, body.productionFileName);
+  const queueDownload = normalizeDownloadInput("queue", body.queueDownload, body.queueUrl, body.queueBody, body.queueFileName);
+  if (productionDownload) downloads.push(productionDownload);
+  if (queueDownload) downloads.push(queueDownload);
+  if (!downloads.length) return [];
+  if (!cookie) throw new PerformanceError("Cookie do KwaiBI obrigatório para download server-side.", 400);
+
+  const rowSets: PerformanceRowSet[] = [];
+  for (const download of downloads) {
+    const workbookBuffer = await downloadKwaiWorkbook(download, cookie);
+    rowSets.push({ fileName: download.fileName, rows: readRowsFromWorkbook(workbookBuffer) });
+  }
+  return rowSets;
+}
+
+function normalizeDownloadInput(
+  label: "production" | "queue",
+  input: unknown,
+  fallbackUrl: unknown,
+  fallbackBody: unknown,
+  fallbackFileName: unknown
+): KwaiDownloadInput | null {
+  const record = isRecord(input) ? input : {};
+  const url = text(record.url ?? fallbackUrl);
+  if (!url) return null;
+  return {
+    label,
+    url,
+    body: record.body ?? fallbackBody ?? {},
+    fileName: text(record.fileName ?? fallbackFileName) || `performance_${label}_download.xlsx`
+  };
+}
+
+async function downloadKwaiWorkbook(download: KwaiDownloadInput, cookie: string) {
+  const requestBody = typeof download.body === "string" ? download.body : JSON.stringify(download.body ?? {});
+  const response = await fetch(download.url, {
+    method: "POST",
+    headers: {
+      "accept": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/octet-stream, */*",
+      "content-type": "application/json",
+      "cookie": cookie
+    },
+    body: requestBody,
+    cache: "no-store"
+  });
+
+  const buffer = await response.arrayBuffer();
+  if (!response.ok) {
+    const preview = decodePreview(buffer);
+    throw new PerformanceError(`Falha ao baixar ${download.label} no KwaiBI (${response.status}). ${preview}`, 502);
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  const preview = decodePreview(buffer);
+  if (contentType.includes("text/html") || /^<!doctype html/i.test(preview) || /<title>login<\/title>/i.test(preview)) {
+    throw new PerformanceError(`KwaiBI retornou tela de login para ${download.label}. Atualize o cookie.`, 401);
+  }
+  return buffer;
+}
+
+function decodePreview(buffer: ArrayBuffer) {
+  return new TextDecoder().decode(buffer.slice(0, Math.min(buffer.byteLength, 300))).replace(/\s+/g, " ").trim();
+}
+
+async function previewAutomatedRowSets(rowSets: PerformanceRowSet[]): Promise<PreviewedPerformanceRowSet[]> {
+  const previewedRowSets: PreviewedPerformanceRowSet[] = [];
+  for (const rowSet of rowSets) {
+    const preview = await previewProductionAutomatedImport(rowSet.rows, { skipExistingCheck: true });
+    previewedRowSets.push({ fileName: rowSet.fileName, rows: preview.rows });
+  }
+  return previewedRowSets;
+}
 
 function summarizePerformanceRowSets(rowSets: PerformanceRowSet[]) {
   const summary = {
@@ -207,6 +296,31 @@ function summarizePerformanceRowSets(rowSets: PerformanceRowSet[]) {
         summary.hasProduction = true;
         summary.productionRows += 1;
       } else if (type === "volume") {
+        summary.hasVolume = true;
+        summary.volumeRows += 1;
+      }
+    }
+  }
+
+  return summary;
+}
+
+function summarizePerformancePreviewRowSets(rowSets: PreviewedPerformanceRowSet[]) {
+  const summary = {
+    hasProduction: false,
+    hasVolume: false,
+    productionRows: 0,
+    volumeRows: 0,
+    files: rowSets.map((rowSet) => rowSet.fileName)
+  };
+
+  for (const rowSet of rowSets) {
+    for (const row of rowSet.rows) {
+      if (row.errors.length) continue;
+      if (row.type === "PRODUCTION") {
+        summary.hasProduction = true;
+        summary.productionRows += 1;
+      } else if (row.type === "PRODUCTION_VOLUME") {
         summary.hasVolume = true;
         summary.volumeRows += 1;
       }

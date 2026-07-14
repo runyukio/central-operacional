@@ -15,7 +15,8 @@ import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import { parseWbLoginBatch } from "@/lib/batch-wb-filter";
 import { getDefaultDatePeriod } from "@/lib/default-date-range";
 import { prisma } from "@/lib/prisma";
-import { QUEUE_METADATA } from "@/lib/queue-metadata";
+import { QUEUE_METADATA, type QueueLob, type QueueMetadata } from "@/lib/queue-metadata";
+import { QUEUE_REPORT_METADATA, getQueueReportMetadataById } from "@/lib/queue-report-metadata";
 import { getQueueMetadataById, getQueueNameById } from "@/lib/queue-dictionary";
 import { calculateWfhStatus, type WfhEligibilityStatus, type WfhMonitoringStatus } from "@/lib/wfh-rules";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
@@ -68,6 +69,7 @@ export type PerformanceQuery = {
   sortBy?: PerformanceSortBy;
   sortDirection?: PerformanceSortDirection;
   granularity?: PerformanceProductionGranularity;
+  metadataOnly?: boolean;
 };
 
 type ProductionRecordForDashboard = Prisma.ProductionRecordGetPayload<{
@@ -151,6 +153,7 @@ export type PerformancePreviewRow = {
 type PerformancePreviewOptions = {
   rowNumberOffset?: number;
   yearReference?: number;
+  skipExistingCheck?: boolean;
 };
 
 type PerformanceMetrics = {
@@ -361,128 +364,124 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
   const requestedLob = query.lob && query.lob !== "Todos" ? query.lob.toUpperCase() : "";
   const granularity = normalizeProductionGranularity(query.granularity);
   const panel = await buildProductionDashboardPanel(productionPeriod);
-  if (requestedLob && !performanceLobOptions().includes(requestedLob)) return emptyProductionDashboardPayload(productionPeriod, granularity, panel);
-
-  const queueWhere = queueWhereByPerformanceLob(requestedLob);
-
-  const [records, volumeRecords] = await Promise.all([
-    prisma.productionRecord.findMany({
-      where: {
-        bzDay: { gte: productionPeriod.start, lte: productionPeriod.end },
-        ...(ownEmployeeId ? { employeeId: ownEmployeeId } : {}),
-        ...queueWhere
-      },
-      select: {
-        bzTime: true,
-        bzDay: true,
-        wbLogin: true,
-        employeeId: true,
-        submitNum: true,
-        latencyMinutesSum: true,
-        moderationSeconds: true,
-        queueId: true,
-        employee: {
-          select: {
-            fullName: true,
-            wbLogin: true,
-            roleTitle: true,
-            skill: true,
-            operationalStatus: true,
-            lob: { select: { name: true } },
-            supervisor: { select: { fullName: true } }
-          }
-        }
-      },
-      orderBy: [{ bzDay: "asc" }, { bzTime: "asc" }]
-    }),
-    ownEmployeeId ? Promise.resolve([] as QueueVolumeRecordForDashboard[]) : prisma.performanceQueueVolumeRecord.findMany({
-      where: {
-        bzDay: { gte: productionPeriod.start, lte: productionPeriod.end },
-        ...queueWhere
-      },
-      select: {
-        bzTime: true,
-        bzDay: true,
-        queueId: true,
-        inputCount: true
-      },
-      orderBy: [{ bzDay: "asc" }, { bzTime: "asc" }]
-    })
-  ]);
-  const filteredRecords = requestedLob
-    ? records.filter((record) => getQueueMetadataById(record.queueId).lob === requestedLob)
-    : records;
-  const filteredVolumeRecords = requestedLob
-    ? volumeRecords.filter((record) => getQueueMetadataById(record.queueId).lob === requestedLob)
-    : volumeRecords;
-  const trendMap = new Map<string, ProductionDashboardAggregate>();
-  const agentMap = new Map<string, ProductionDashboardAgentAggregate>();
-  const queueMap = new Map<string, ProductionDashboardQueueAggregate>();
-  const lobs = new Set<string>();
-
-  for (const record of filteredRecords) {
-    const queueMetadata = getQueueMetadataById(record.queueId);
-    const queueLob = queueMetadata.lob;
-    lobs.add(queueLob);
-    const bucket = productionBucket(granularity === "hourly" ? record.bzTime : record.bzDay, granularity);
-    incrementProductionAggregate(ensureProductionAggregate(trendMap, bucket.key), record);
-
-    const agentKey = record.employeeId ?? normalizeWbLogin(record.wbLogin);
-    if (!agentMap.has(agentKey)) {
-      agentMap.set(agentKey, {
-        ...emptyProductionAggregate(),
-        employeeId: record.employeeId ?? "",
-        employeeName: record.employee?.fullName ?? record.wbLogin,
-        wbLogin: record.employee?.wbLogin ?? record.wbLogin,
-        cadastroLob: record.employee?.lob?.name ?? "Sem LOB",
-        queueLobs: new Set(),
-        supervisor: record.employee?.supervisor?.fullName ?? "Sem supervisor",
-        roleTitle: record.employee?.roleTitle ?? "-",
-        skill: record.employee?.skill ?? "-",
-        status: displayPerformanceEmployeeStatus(record.employee?.operationalStatus ?? ""),
-        queues: new Set()
-      });
-    }
-    const agent = agentMap.get(agentKey)!;
-    incrementProductionAggregate(agent, record);
-    agent.queueLobs.add(queueLob);
-    agent.queues.add(record.queueId || "Sem Fila ID");
-
-    const queueId = record.queueId || "Sem Fila ID";
-    if (!queueMap.has(queueId)) {
-      queueMap.set(queueId, {
-        ...emptyProductionAggregate(),
-        queueId,
-        queueName: getQueueNameById(record.queueId),
-        lob: queueLob,
-        slaTargetMinutes: queueMetadata.slaTargetMinutes,
-        agents: new Set()
-      });
-    }
-    const queue = queueMap.get(queueId)!;
-    incrementProductionAggregate(queue, record);
-    queue.agents.add(agentKey);
+  const canImport = canImportPerformance(permissionUser(user));
+  if (query.metadataOnly || (requestedLob && !performanceLobOptions().includes(requestedLob))) {
+    return emptyProductionDashboardPayload(productionPeriod, granularity, panel, canImport);
   }
 
-  for (const record of filteredVolumeRecords) {
-    const queueMetadata = getQueueMetadataById(record.queueId);
-    const queueLob = queueMetadata.lob;
-    lobs.add(queueLob);
-    const bucket = productionBucket(granularity === "hourly" ? record.bzTime : record.bzDay, granularity);
-    incrementProductionInput(ensureProductionAggregate(trendMap, bucket.key), record.inputCount);
+  const bucketSql = productionBucketSql(granularity);
+  const queueSql = performanceQueueFilterSql(requestedLob);
+  const employeeSql = ownEmployeeId ? Prisma.sql`AND "employeeId" = ${ownEmployeeId}` : Prisma.empty;
+  const [productionTrendRows, volumeTrendRows, productionQueueRows, volumeQueueRows] = await Promise.all([
+    prisma.$queryRaw<Array<{ bucket: Date; submit: number; moderationSeconds: number; latencyMinutesSum: number; records: number }>>(Prisma.sql`
+      SELECT
+        ${bucketSql} AS "bucket",
+        COALESCE(SUM("submitNum"), 0)::double precision AS "submit",
+        COALESCE(SUM("moderationSeconds"), 0)::double precision AS "moderationSeconds",
+        COALESCE(SUM("latencyMinutesSum"), 0)::double precision AS "latencyMinutesSum",
+        COUNT(*)::integer AS "records"
+      FROM "ProductionRecord"
+      WHERE "bzDay" >= ${productionPeriod.start}
+        AND "bzDay" <= ${productionPeriod.end}
+        ${employeeSql}
+        ${queueSql}
+      GROUP BY ${bucketSql}
+      ORDER BY ${bucketSql} ASC
+    `),
+    ownEmployeeId ? Promise.resolve([]) : prisma.$queryRaw<Array<{ bucket: Date; input: number; records: number }>>(Prisma.sql`
+      SELECT
+        ${bucketSql} AS "bucket",
+        COALESCE(SUM("inputCount"), 0)::double precision AS "input",
+        COUNT(*)::integer AS "records"
+      FROM "PerformanceQueueVolumeRecord"
+      WHERE "bzDay" >= ${productionPeriod.start}
+        AND "bzDay" <= ${productionPeriod.end}
+        ${queueSql}
+      GROUP BY ${bucketSql}
+      ORDER BY ${bucketSql} ASC
+    `),
+    prisma.$queryRaw<Array<{ queueId: string; submit: number; moderationSeconds: number; latencyMinutesSum: number; records: number; agents: number }>>(Prisma.sql`
+      SELECT
+        "queueId",
+        COALESCE(SUM("submitNum"), 0)::double precision AS "submit",
+        COALESCE(SUM("moderationSeconds"), 0)::double precision AS "moderationSeconds",
+        COALESCE(SUM("latencyMinutesSum"), 0)::double precision AS "latencyMinutesSum",
+        COUNT(*)::integer AS "records",
+        COUNT(DISTINCT COALESCE("employeeId", "wbLogin"))::integer AS "agents"
+      FROM "ProductionRecord"
+      WHERE "bzDay" >= ${productionPeriod.start}
+        AND "bzDay" <= ${productionPeriod.end}
+        ${employeeSql}
+        ${queueSql}
+      GROUP BY "queueId"
+    `),
+    ownEmployeeId ? Promise.resolve([]) : prisma.$queryRaw<Array<{ queueId: string; input: number; records: number }>>(Prisma.sql`
+      SELECT
+        "queueId",
+        COALESCE(SUM("inputCount"), 0)::double precision AS "input",
+        COUNT(*)::integer AS "records"
+      FROM "PerformanceQueueVolumeRecord"
+      WHERE "bzDay" >= ${productionPeriod.start}
+        AND "bzDay" <= ${productionPeriod.end}
+        ${queueSql}
+      GROUP BY "queueId"
+    `)
+  ]);
+  const trendMap = new Map<string, ProductionDashboardAggregate>();
+  const queueMap = new Map<string, ProductionDashboardQueueAggregate & { agentCount: number }>();
 
-    const queueId = record.queueId || "Sem Fila ID";
-    if (!queueMap.has(queueId)) {
-      queueMap.set(queueId, {
-        ...emptyProductionAggregate(),
-        queueId,
-        queueName: getQueueNameById(record.queueId),
-        lob: queueLob,
-        slaTargetMinutes: queueMetadata.slaTargetMinutes,
-        agents: new Set()
-      });
+  for (const row of productionTrendRows) {
+    const bucket = productionBucket(row.bucket, granularity);
+    const aggregate = ensureProductionAggregate(trendMap, bucket.key);
+    aggregate.submit += Number(row.submit ?? 0);
+    aggregate.moderationSeconds += Number(row.moderationSeconds ?? 0);
+    aggregate.latencyMinutesSum += Number(row.latencyMinutesSum ?? 0);
+    aggregate.records += Number(row.records ?? 0);
+  }
+  for (const row of volumeTrendRows) {
+    const bucket = productionBucket(row.bucket, granularity);
+    const aggregate = ensureProductionAggregate(trendMap, bucket.key);
+    aggregate.input += Number(row.input ?? 0);
+    aggregate.records += Number(row.records ?? 0);
+  }
+  for (const row of productionQueueRows) {
+    const queueId = row.queueId || "Sem Fila ID";
+    const metadata = getPerformanceQueueMetadataById(queueId);
+    queueMap.set(queueId, {
+      ...emptyProductionAggregate(),
+      input: 0,
+      submit: Number(row.submit ?? 0),
+      moderationSeconds: Number(row.moderationSeconds ?? 0),
+      latencyMinutesSum: Number(row.latencyMinutesSum ?? 0),
+      records: Number(row.records ?? 0),
+      queueId,
+      queueName: getQueueNameById(queueId),
+      lob: metadata.lob,
+      slaTargetMinutes: metadata.slaTargetMinutes,
+      agents: new Set(),
+      agentCount: Number(row.agents ?? 0)
+    });
+  }
+  for (const row of volumeQueueRows) {
+    const queueId = row.queueId || "Sem Fila ID";
+    const current = queueMap.get(queueId);
+    if (current) {
+      current.input += Number(row.input ?? 0);
+      current.records += Number(row.records ?? 0);
+      continue;
     }
-    incrementProductionInput(queueMap.get(queueId)!, record.inputCount);
+    const metadata = getPerformanceQueueMetadataById(queueId);
+    queueMap.set(queueId, {
+      ...emptyProductionAggregate(),
+      input: Number(row.input ?? 0),
+      records: Number(row.records ?? 0),
+      queueId,
+      queueName: getQueueNameById(queueId),
+      lob: metadata.lob,
+      slaTargetMinutes: metadata.slaTargetMinutes,
+      agents: new Set(),
+      agentCount: 0
+    });
   }
 
   const trend = Array.from(trendMap.entries())
@@ -504,6 +503,7 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
 
   return {
     mode: "production" as const,
+    canImport,
     granularity,
     period: periodPayload(productionPeriod),
     panel,
@@ -512,7 +512,7 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
     },
     summary: {
       ...serializeProductionSummary(summary),
-      agents: agentMap.size,
+      agents: 0,
       queues: queueMap.size,
       comparison: currentTrend && previousTrend ? buildProductionComparison(currentTrend, previousTrend) : null,
       lastImport: latestImport ? {
@@ -523,29 +523,14 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
       } : null
     },
     trend,
-    agents: Array.from(agentMap.values())
-      .map((aggregate) => ({
-        employeeId: aggregate.employeeId,
-        employeeName: aggregate.employeeName,
-        wbLogin: aggregate.wbLogin,
-        cadastroLob: aggregate.cadastroLob,
-        queueLobs: Array.from(aggregate.queueLobs).sort().join(" + ") || "-",
-        supervisor: aggregate.supervisor,
-        roleTitle: aggregate.roleTitle,
-        skill: aggregate.skill,
-        status: aggregate.status,
-        queueCount: aggregate.queues.size,
-        ...serializeProductionSummary(aggregate)
-      }))
-      .sort((a, b) => b.submit - a.submit)
-      .slice(0, 250),
+    agents: [],
     queues: Array.from(queueMap.values())
       .map((aggregate) => ({
         queueId: aggregate.queueId,
         queueName: aggregate.queueName,
         lob: aggregate.lob,
         slaTargetMinutes: aggregate.slaTargetMinutes,
-        agents: aggregate.agents.size,
+        agents: aggregate.agentCount,
         ...serializeProductionSummary(aggregate)
       }))
       .sort((a, b) => b.submit - a.submit)
@@ -610,8 +595,43 @@ export async function commitProductionRawImport(actor: Actor, rawRows: Record<st
 }
 
 export async function commitProductionAutomatedRawImport(rawRows: Record<string, unknown>[], fileName = "producao.xlsx", batchId?: string, rowNumberOffset = 0, options: { pruneSnapshot?: boolean } = { pruneSnapshot: true }) {
-  const preview = await previewProductionRows(rawRows, { rowNumberOffset });
+  const preview = await previewProductionRows(rawRows, { rowNumberOffset, skipExistingCheck: true });
   return commitProductionRows(null, preview.rows, fileName, batchId, options);
+}
+
+export async function commitProductionAutomatedPreviewImport(rows: PerformancePreviewRow[], fileName = "producao.xlsx", batchId?: string, options: { pruneSnapshot?: boolean } = { pruneSnapshot: true }) {
+  return commitProductionRows(null, rows, fileName, batchId, options);
+}
+
+export async function commitProductionManualPreviewImport(actor: Actor, rows: PerformancePreviewRow[], fileName = "performance.xlsx", batchId?: string) {
+  const user = await requireActiveUser(actor);
+  requireImportPermission(user);
+  return commitProductionRows(user, rows, fileName, batchId, { pruneSnapshot: false });
+}
+
+export async function replacePerformanceSnapshot(actor: Actor, batchIdToKeep: string) {
+  const user = await requireActiveUser(actor);
+  requireImportPermission(user);
+  if (!batchIdToKeep) throw new PerformanceError("Lote de importação obrigatório para substituir Performance.", 400);
+
+  const [productionDeleted, volumeDeleted, batchesDeleted] = await prisma.$transaction([
+    prisma.productionRecord.deleteMany({
+      where: { OR: [{ importBatchId: null }, { importBatchId: { not: batchIdToKeep } }] }
+    }),
+    prisma.performanceQueueVolumeRecord.deleteMany({
+      where: { OR: [{ importBatchId: null }, { importBatchId: { not: batchIdToKeep } }] }
+    }),
+    prisma.performanceImportBatch.deleteMany({
+      where: { type: "PRODUCTION", id: { not: batchIdToKeep } }
+    })
+  ]);
+
+  return {
+    batchIdKept: batchIdToKeep,
+    productionRowsDeleted: productionDeleted.count,
+    volumeRowsDeleted: volumeDeleted.count,
+    importBatchesDeleted: batchesDeleted.count
+  };
 }
 
 export function validatePerformanceImportToken(authorizationHeader?: string | null) {
@@ -650,7 +670,7 @@ async function previewQualityRows(rawRows: Record<string, unknown>[], options: P
     const qualityRule = getQualityRuleByEmployee(employee);
 
     if (!wbLogin) errors.push("WB/Login é obrigatório.");
-    else if (!employee) errors.push("WB/Login não encontrado no cadastro.");
+    else if (!employee) warnings.push("WB/Login não encontrado no cadastro; a produção será mantida sem vínculo individual.");
     else if (qualityRule === "TNS_QUALITY") warnings.push("Este agente pertence à operação TNS. A qualidade dele deve ser calculada pela base TNS.");
     else if (qualityRule === "CEC_QUALITY") warnings.push("Este agente pertence à operação CEC. A qualidade dele deve ser calculada pela base CEC.");
     else if (qualityRule === "UNKNOWN") warnings.push("Colaborador sem LOB cadastrada ou com LOB sem regra de qualidade.");
@@ -713,7 +733,7 @@ async function previewTnsQualityRows(rawRows: Record<string, unknown>[], options
     const qualityRule = getQualityRuleByEmployee(employee);
 
     if (!wbLogin) errors.push("WB/Login é obrigatório.");
-    else if (!employee) errors.push("WB/Login não encontrado no cadastro.");
+    else if (!employee) warnings.push("WB/Login não encontrado no cadastro; a produção será mantida sem vínculo individual.");
     else if (qualityRule === "ADS_QUALITY") warnings.push("Este agente pertence à ADS. A qualidade dele deve ser calculada pela base ADS.");
     else if (qualityRule === "CEC_QUALITY") warnings.push("Este agente pertence à CEC. A qualidade dele deve ser calculada pela base CEC.");
     else if (qualityRule === "UNKNOWN") warnings.push("Colaborador sem LOB cadastrada ou com LOB sem regra de qualidade.");
@@ -918,7 +938,7 @@ async function previewProductionRows(rawRows: Record<string, unknown>[], options
     };
   });
 
-  return markExistingProductionRows(previewRows);
+  return options.skipExistingCheck ? buildPreviewResult(previewRows) : markExistingProductionRows(previewRows);
 }
 
 export async function commitQualityImport(actor: Actor, rows: PerformancePreviewRow[], fileName = "qualidade.xlsx") {
@@ -1055,7 +1075,7 @@ export async function commitProductionImport(actor: Actor, rows: PerformancePrev
 }
 
 async function commitProductionRows(user: AuthenticatedUser | null, rows: PerformancePreviewRow[], fileName = "producao.xlsx", batchId?: string, options: { pruneSnapshot?: boolean } = {}) {
-  const validRows = rows.filter((row) => row.type === "PRODUCTION" && !row.errors.length && row.employeeId && row.uniqueKey);
+  const validRows = rows.filter((row) => row.type === "PRODUCTION" && !row.errors.length && row.uniqueKey);
   const validVolumeRows = rows.filter((row) => row.type === "PRODUCTION_VOLUME" && !row.errors.length && row.uniqueKey);
   const aggregatedRows = aggregateProductionRows(validRows);
   const aggregatedVolumeRows = aggregateProductionVolumeRows(validVolumeRows);
@@ -1066,58 +1086,8 @@ async function commitProductionRows(user: AuthenticatedUser | null, rows: Perfor
   const updatedRows = allPersistedRows.filter((row) => row.action === "update").length;
   const batch = await upsertImportBatch(user, "PRODUCTION", fileName, rows, allValidRows.length, createdRows, updatedRows, batchId);
 
-  for (const chunk of chunks(aggregatedRows, 100)) {
-    await prisma.$transaction(chunk.map((row) => prisma.productionRecord.upsert({
-      where: { productionKey: String(row.payload.productionKey) },
-      update: {
-        bzTime: new Date(String(row.payload.bzTime)),
-        bzDay: parseDate(String(row.payload.bzDay))!,
-        wbLogin: row.wbLogin,
-        employeeId: row.employeeId,
-        ahtSeconds: nullableNumber(row.payload.ahtSeconds),
-        latencyMinutesSum: nullableNumber(row.payload.latencyMinutesSum),
-        submitNum: Number(row.payload.submitNum ?? 0),
-        queueId: String(row.payload.queueId),
-        moderationSeconds: Number(row.payload.moderationSeconds ?? 0),
-        lobId: row.lobId ?? null,
-        importBatchId: batch.id
-      },
-      create: {
-        bzTime: new Date(String(row.payload.bzTime)),
-        bzDay: parseDate(String(row.payload.bzDay))!,
-        wbLogin: row.wbLogin,
-        employeeId: row.employeeId,
-        ahtSeconds: nullableNumber(row.payload.ahtSeconds),
-        latencyMinutesSum: nullableNumber(row.payload.latencyMinutesSum),
-        submitNum: Number(row.payload.submitNum ?? 0),
-        queueId: String(row.payload.queueId),
-        moderationSeconds: Number(row.payload.moderationSeconds ?? 0),
-        lobId: row.lobId ?? null,
-        productionKey: String(row.payload.productionKey),
-        importBatchId: batch.id
-      }
-    })));
-  }
-  for (const chunk of chunks(aggregatedVolumeRows, 200)) {
-    await prisma.$transaction(chunk.map((row) => prisma.performanceQueueVolumeRecord.upsert({
-      where: { volumeKey: String(row.payload.volumeKey) },
-      update: {
-        bzTime: new Date(String(row.payload.bzTime)),
-        bzDay: parseDate(String(row.payload.bzDay))!,
-        queueId: String(row.payload.queueId),
-        inputCount: Number(row.payload.inputCount ?? 0),
-        importBatchId: batch.id
-      },
-      create: {
-        bzTime: new Date(String(row.payload.bzTime)),
-        bzDay: parseDate(String(row.payload.bzDay))!,
-        queueId: String(row.payload.queueId),
-        inputCount: Number(row.payload.inputCount ?? 0),
-        volumeKey: String(row.payload.volumeKey),
-        importBatchId: batch.id
-      }
-    })));
-  }
+  await bulkUpsertProductionRecords(aggregatedRows, batch.id);
+  await bulkUpsertPerformanceQueueVolumeRecords(aggregatedVolumeRows, batch.id);
   const snapshotPrune = !user && options.pruneSnapshot ? await pruneAutomatedProductionSnapshot(aggregatedRows, aggregatedVolumeRows, batch.id) : null;
   if (user && !batchId) await auditImport(user.id, "PRODUCTION", batch.id, {
     fileName,
@@ -1138,6 +1108,152 @@ async function commitProductionRows(user: AuthenticatedUser | null, rows: Perfor
     snapshotPrune,
     batchId: batch.id
   };
+}
+
+async function bulkUpsertProductionRecords(rows: PerformancePreviewRow[], batchId: string) {
+  for (const chunk of chunks(rows, 2500)) {
+    const payload = JSON.stringify(chunk.map((row) => ({
+      id: crypto.randomUUID(),
+      bzTime: new Date(String(row.payload.bzTime)).toISOString(),
+      bzDay: parseDate(String(row.payload.bzDay))!.toISOString(),
+      wbLogin: row.wbLogin,
+      employeeId: row.employeeId ?? null,
+      ahtSeconds: nullableNumber(row.payload.ahtSeconds),
+      latencyMinutesSum: nullableNumber(row.payload.latencyMinutesSum),
+      submitNum: Number(row.payload.submitNum ?? 0),
+      queueId: String(row.payload.queueId),
+      moderationSeconds: Number(row.payload.moderationSeconds ?? 0),
+      lobId: row.lobId ?? null,
+      productionKey: String(row.payload.productionKey),
+      importBatchId: batchId
+    })));
+
+    await prisma.$executeRaw(Prisma.sql`
+      WITH incoming AS (
+        SELECT *
+        FROM jsonb_to_recordset(${payload}::jsonb) AS x(
+          "id" text,
+          "bzTime" timestamp,
+          "bzDay" timestamp,
+          "wbLogin" text,
+          "employeeId" text,
+          "ahtSeconds" double precision,
+          "latencyMinutesSum" double precision,
+          "submitNum" integer,
+          "queueId" text,
+          "moderationSeconds" double precision,
+          "lobId" text,
+          "productionKey" text,
+          "importBatchId" text
+        )
+      )
+      INSERT INTO "ProductionRecord" (
+        "id",
+        "bzTime",
+        "bzDay",
+        "wbLogin",
+        "employeeId",
+        "ahtSeconds",
+        "latencyMinutesSum",
+        "submitNum",
+        "queueId",
+        "moderationSeconds",
+        "lobId",
+        "productionKey",
+        "importBatchId",
+        "createdAt",
+        "updatedAt"
+      )
+      SELECT
+        "id",
+        "bzTime",
+        "bzDay",
+        "wbLogin",
+        "employeeId",
+        "ahtSeconds",
+        "latencyMinutesSum",
+        "submitNum",
+        "queueId",
+        "moderationSeconds",
+        "lobId",
+        "productionKey",
+        "importBatchId",
+        CURRENT_TIMESTAMP,
+        CURRENT_TIMESTAMP
+      FROM incoming
+      ON CONFLICT ("productionKey") DO UPDATE SET
+        "bzTime" = EXCLUDED."bzTime",
+        "bzDay" = EXCLUDED."bzDay",
+        "wbLogin" = EXCLUDED."wbLogin",
+        "employeeId" = EXCLUDED."employeeId",
+        "ahtSeconds" = EXCLUDED."ahtSeconds",
+        "latencyMinutesSum" = EXCLUDED."latencyMinutesSum",
+        "submitNum" = EXCLUDED."submitNum",
+        "queueId" = EXCLUDED."queueId",
+        "moderationSeconds" = EXCLUDED."moderationSeconds",
+        "lobId" = EXCLUDED."lobId",
+        "importBatchId" = EXCLUDED."importBatchId",
+        "updatedAt" = EXCLUDED."updatedAt"
+    `);
+  }
+}
+
+async function bulkUpsertPerformanceQueueVolumeRecords(rows: PerformancePreviewRow[], batchId: string) {
+  for (const chunk of chunks(rows, 2500)) {
+    const payload = JSON.stringify(chunk.map((row) => ({
+      id: crypto.randomUUID(),
+      bzTime: new Date(String(row.payload.bzTime)).toISOString(),
+      bzDay: parseDate(String(row.payload.bzDay))!.toISOString(),
+      queueId: String(row.payload.queueId),
+      inputCount: Number(row.payload.inputCount ?? 0),
+      volumeKey: String(row.payload.volumeKey),
+      importBatchId: batchId
+    })));
+
+    await prisma.$executeRaw(Prisma.sql`
+      WITH incoming AS (
+        SELECT *
+        FROM jsonb_to_recordset(${payload}::jsonb) AS x(
+          "id" text,
+          "bzTime" timestamp,
+          "bzDay" timestamp,
+          "queueId" text,
+          "inputCount" integer,
+          "volumeKey" text,
+          "importBatchId" text
+        )
+      )
+      INSERT INTO "PerformanceQueueVolumeRecord" (
+        "id",
+        "bzTime",
+        "bzDay",
+        "queueId",
+        "inputCount",
+        "volumeKey",
+        "importBatchId",
+        "createdAt",
+        "updatedAt"
+      )
+      SELECT
+        "id",
+        "bzTime",
+        "bzDay",
+        "queueId",
+        "inputCount",
+        "volumeKey",
+        "importBatchId",
+        CURRENT_TIMESTAMP,
+        CURRENT_TIMESTAMP
+      FROM incoming
+      ON CONFLICT ("volumeKey") DO UPDATE SET
+        "bzTime" = EXCLUDED."bzTime",
+        "bzDay" = EXCLUDED."bzDay",
+        "queueId" = EXCLUDED."queueId",
+        "inputCount" = EXCLUDED."inputCount",
+        "importBatchId" = EXCLUDED."importBatchId",
+        "updatedAt" = EXCLUDED."updatedAt"
+    `);
+  }
 }
 
 function aggregateProductionRows(rows: PerformancePreviewRow[]) {
@@ -2476,6 +2592,16 @@ function performanceLobOptions() {
   return ["ADS", "VIDEO", "COMMENTS", "N/A"];
 }
 
+function getPerformanceQueueMetadataById(queueId?: string | null): QueueMetadata {
+  const normalizedQueueId = String(queueId ?? "").trim();
+  const metadata = getQueueMetadataById(normalizedQueueId);
+  if (!normalizedQueueId || QUEUE_METADATA[normalizedQueueId]) return metadata;
+  const reportMetadata = getQueueReportMetadataById(normalizedQueueId);
+  return reportMetadata.lob === "N/A"
+    ? metadata
+    : { lob: reportMetadata.lob as QueueLob, slaTargetMinutes: metadata.slaTargetMinutes };
+}
+
 async function buildProductionDashboardPanel(period: Period) {
   const [
     productionRange,
@@ -2488,12 +2614,14 @@ async function buildProductionDashboardPanel(period: Period) {
       where: { bzDay: { gte: period.start, lte: period.end } },
       _min: { bzDay: true },
       _max: { bzDay: true, bzTime: true },
+      _sum: { submitNum: true },
       _count: { _all: true }
     }),
     prisma.performanceQueueVolumeRecord.aggregate({
       where: { bzDay: { gte: period.start, lte: period.end } },
       _min: { bzDay: true },
       _max: { bzDay: true, bzTime: true },
+      _sum: { inputCount: true },
       _count: { _all: true }
     }),
     prisma.performanceImportBatch.findFirst({
@@ -2602,6 +2730,8 @@ async function buildProductionDashboardPanel(period: Period) {
     staleThresholdHours,
     isStale,
     totalRows,
+    totalSubmit: Number(productionRange._sum.submitNum ?? 0),
+    totalInput: Number(volumeRange._sum.inputCount ?? 0),
     totalQueueIds: queueMap.size,
     mappedQueueIds: queueMap.size - unmappedQueues.length,
     unmappedQueues,
@@ -2609,9 +2739,15 @@ async function buildProductionDashboardPanel(period: Period) {
   };
 }
 
-function emptyProductionDashboardPayload(period: Period, granularity: PerformanceProductionGranularity, panel: Awaited<ReturnType<typeof buildProductionDashboardPanel>>) {
+function emptyProductionDashboardPayload(
+  period: Period,
+  granularity: PerformanceProductionGranularity,
+  panel: Awaited<ReturnType<typeof buildProductionDashboardPanel>>,
+  canImport = false
+) {
   return {
     mode: "production" as const,
+    canImport,
     granularity,
     period: periodPayload(period),
     panel,
@@ -2630,20 +2766,37 @@ function emptyProductionDashboardPayload(period: Period, granularity: Performanc
 }
 
 function queueIdsByPerformanceLob(lob: string) {
-  return Object.entries(QUEUE_METADATA)
-    .filter(([, metadata]) => metadata.lob === lob)
-    .map(([queueId]) => queueId);
+  return allPerformanceQueueIds().filter((queueId) => getPerformanceQueueMetadataById(queueId).lob === lob);
 }
 
 function queueWhereByPerformanceLob(lob: string) {
   if (!lob) return {};
   if (lob === "N/A") {
-    const mappedQueueIds = Object.entries(QUEUE_METADATA)
-      .filter(([, metadata]) => metadata.lob !== "N/A")
-      .map(([queueId]) => queueId);
+    const mappedQueueIds = allPerformanceQueueIds().filter((queueId) => getPerformanceQueueMetadataById(queueId).lob !== "N/A");
     return { queueId: { notIn: mappedQueueIds } };
   }
   return { queueId: { in: queueIdsByPerformanceLob(lob) } };
+}
+
+function allPerformanceQueueIds() {
+  return unique([...Object.keys(QUEUE_METADATA), ...Object.keys(QUEUE_REPORT_METADATA)]);
+}
+
+function productionBucketSql(granularity: PerformanceProductionGranularity) {
+  if (granularity === "hourly") return Prisma.sql`date_trunc('hour', "bzTime")`;
+  if (granularity === "weekly") return Prisma.sql`date_trunc('week', "bzDay")`;
+  if (granularity === "monthly") return Prisma.sql`date_trunc('month', "bzDay")`;
+  return Prisma.sql`date_trunc('day', "bzDay")`;
+}
+
+function performanceQueueFilterSql(lob: string) {
+  if (!lob) return Prisma.empty;
+  if (lob === "N/A") {
+    const mappedQueueIds = allPerformanceQueueIds().filter((queueId) => getPerformanceQueueMetadataById(queueId).lob !== "N/A");
+    return mappedQueueIds.length ? Prisma.sql`AND "queueId" NOT IN (${Prisma.join(mappedQueueIds)})` : Prisma.empty;
+  }
+  const queueIds = queueIdsByPerformanceLob(lob);
+  return queueIds.length ? Prisma.sql`AND "queueId" IN (${Prisma.join(queueIds)})` : Prisma.sql`AND 1 = 0`;
 }
 
 function latestDate(dates: Array<Date | null | undefined>) {
@@ -2864,7 +3017,10 @@ function previewErrorSummary(rows: PerformancePreviewRow[]) {
 }
 
 function buildPreviewResult(rows: PerformancePreviewRow[]) {
-  const missingWbLogins = unique(rows.filter((row) => row.errors.some((error) => /WB\/Login não encontrado/i.test(error))).map((row) => row.wbLogin).filter(Boolean));
+  const missingWbLogins = unique(rows
+    .filter((row) => [...row.errors, ...row.warnings].some((message) => /WB\/Login não encontrado/i.test(message)))
+    .map((row) => row.wbLogin)
+    .filter(Boolean));
   return {
     success: rows.every((row) => !row.errors.length),
     rows,

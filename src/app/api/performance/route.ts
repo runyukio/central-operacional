@@ -24,7 +24,8 @@ export async function GET(request: Request) {
       wbLogins: url.searchParams.get("wbLogins") ?? undefined,
       sortBy: readSortBy(url.searchParams.get("sortBy")),
       sortDirection: readSortDirection(url.searchParams.get("sortDirection")),
-      granularity: readGranularity(url.searchParams.get("granularity"))
+      granularity: readGranularity(url.searchParams.get("granularity")),
+      metadataOnly: url.searchParams.get("metadataOnly") === "true"
     };
     return NextResponse.json(await getPerformanceProductionDashboard(actor, query));
   } catch (error) {
