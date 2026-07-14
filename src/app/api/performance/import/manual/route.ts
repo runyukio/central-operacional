@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
+import crypto from "node:crypto";
 import * as XLSX from "xlsx";
 
 import { getApiActor } from "@/lib/api-actor";
+import { prisma } from "@/lib/prisma";
 import {
+  authorizePerformanceImport,
   commitProductionManualPreviewImport,
   PerformanceError,
   previewProductionImport,
@@ -13,65 +16,51 @@ import {
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
+const MAX_CHUNK_BYTES = 2.5 * 1024 * 1024;
+const MAX_FILE_BYTES = 30 * 1024 * 1024;
+const UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
+
 type PreviewedFile = {
   fileName: string;
   rows: PerformancePreviewRow[];
 };
 
 export async function POST(request: Request) {
+  const url = new URL(request.url);
+  const action = url.searchParams.get("action")?.trim().toLowerCase();
   try {
     const actor = await getApiActor();
+    const importUser = await authorizePerformanceImport(actor);
+
+    if (action === "start") {
+      await prisma.performanceManualUploadChunk.deleteMany({
+        where: { createdAt: { lt: new Date(Date.now() - UPLOAD_TTL_MS) } }
+      });
+      return NextResponse.json({ success: true, uploadId: crypto.randomUUID() });
+    }
+
+    if (action === "chunk") {
+      return receiveUploadChunk(request, url, importUser.email);
+    }
+
+    if (action === "finalize") {
+      const uploadId = requiredUploadId(url);
+      const uploadedFiles = await rebuildUploadedFiles(uploadId, importUser.email);
+      const result = await processPerformanceFiles(actor, uploadedFiles.production, uploadedFiles.volume);
+      await prisma.performanceManualUploadChunk.deleteMany({ where: { uploadId, uploadedByEmail: importUser.email } });
+      return NextResponse.json(result);
+    }
+
     const formData = await request.formData();
     const productionFile = readXlsxFile(formData.get("productionFile"), "Produção / Output");
     const volumeFile = readXlsxFile(formData.get("volumeFile"), "Filas / Input");
-    const files = [productionFile, volumeFile];
-    const previews: PreviewedFile[] = [];
-
-    for (const file of files) {
-      const rawRows = readWorkbookRows(await file.arrayBuffer());
-      const preview = await previewProductionImport(actor, rawRows, { skipExistingCheck: true });
-      previews.push({ fileName: file.name, rows: preview.rows });
-    }
-
-    const coverage = summarizeCoverage(previews);
-    if (!coverage.productionRows || !coverage.volumeRows) {
-      throw new PerformanceError(
-        "As duas bases são obrigatórias: Produção / Output precisa conter submit e Filas / Input precisa conter enqueue.",
-        400
-      );
-    }
-
-    let batchId: string | undefined;
-    const imports = [];
-    const batchFileName = `${productionFile.name} + ${volumeFile.name}`;
-    for (const [index, preview] of previews.entries()) {
-      const result = await commitProductionManualPreviewImport(
-        actor,
-        preview.rows,
-        index === 0 ? batchFileName : preview.fileName,
-        batchId
-      );
-      batchId = result.batchId;
-      imports.push({
-        fileName: preview.fileName,
-        importedRows: result.importedRows,
-        productionRows: result.productionRows,
-        volumeRows: result.volumeRows
-      });
-    }
-
-    if (!batchId) throw new PerformanceError("Não foi possível criar o lote manual de Performance.", 500);
-    const reset = await replacePerformanceSnapshot(actor, batchId);
-
-    return NextResponse.json({
-      success: true,
-      batchId,
-      productionRows: coverage.productionRows,
-      volumeRows: coverage.volumeRows,
-      rowsError: coverage.rowsError,
-      files: imports,
-      reset
-    });
+    return NextResponse.json(await processPerformanceFiles(actor, {
+      fileName: productionFile.name,
+      buffer: await productionFile.arrayBuffer()
+    }, {
+      fileName: volumeFile.name,
+      buffer: await volumeFile.arrayBuffer()
+    }));
   } catch (error) {
     if (error instanceof PerformanceError) {
       return NextResponse.json({ success: false, error: error.message, message: error.message }, { status: error.status });
@@ -83,6 +72,129 @@ export async function POST(request: Request) {
       message: "Não foi possível substituir a base manual de Performance."
     }, { status: 500 });
   }
+}
+
+async function receiveUploadChunk(request: Request, url: URL, uploadedByEmail: string) {
+  const uploadId = requiredUploadId(url);
+  const fileType = url.searchParams.get("fileType");
+  if (fileType !== "production" && fileType !== "volume") throw new PerformanceError("Tipo de arquivo inválido.", 400);
+  const chunkIndex = integerParam(url, "chunkIndex", 0);
+  const totalChunks = integerParam(url, "totalChunks", 1);
+  if (chunkIndex >= totalChunks) throw new PerformanceError("Índice da parte do arquivo inválido.", 400);
+  const fileName = (url.searchParams.get("fileName") ?? "").trim();
+  if (!fileName.toLowerCase().endsWith(".xlsx")) throw new PerformanceError("O arquivo enviado deve ser XLSX.", 400);
+  const buffer = await request.arrayBuffer();
+  if (!buffer.byteLength) throw new PerformanceError("A parte enviada está vazia.", 400);
+  if (buffer.byteLength > MAX_CHUNK_BYTES) throw new PerformanceError("Parte do arquivo acima do limite de 2,5 MB.", 413);
+
+  await prisma.performanceManualUploadChunk.upsert({
+    where: { uploadId_fileType_chunkIndex: { uploadId, fileType, chunkIndex } },
+    create: {
+      uploadId,
+      uploadedByEmail,
+      fileType,
+      fileName,
+      chunkIndex,
+      totalChunks,
+      data: Buffer.from(buffer)
+    },
+    update: {
+      uploadedByEmail,
+      fileName,
+      totalChunks,
+      data: Buffer.from(buffer),
+      createdAt: new Date()
+    }
+  });
+  return NextResponse.json({ success: true, uploadId, fileType, chunkIndex, totalChunks });
+}
+
+async function rebuildUploadedFiles(uploadId: string, uploadedByEmail: string) {
+  const chunks = await prisma.performanceManualUploadChunk.findMany({
+    where: { uploadId, uploadedByEmail },
+    orderBy: [{ fileType: "asc" }, { chunkIndex: "asc" }]
+  });
+  if (!chunks.length) throw new PerformanceError("Nenhuma parte do upload foi encontrada.", 400);
+
+  const rebuild = (fileType: "production" | "volume") => {
+    const fileChunks = chunks.filter((chunk) => chunk.fileType === fileType);
+    if (!fileChunks.length) throw new PerformanceError(`Arquivo de ${fileType === "production" ? "Produção / Output" : "Filas / Input"} não recebido.`, 400);
+    const expected = fileChunks[0].totalChunks;
+    if (fileChunks.length !== expected || fileChunks.some((chunk, index) => chunk.chunkIndex !== index || chunk.totalChunks !== expected)) {
+      throw new PerformanceError(`O arquivo ${fileChunks[0].fileName} está incompleto. Envie novamente.`, 400);
+    }
+    const data = Buffer.concat(fileChunks.map((chunk) => Buffer.from(chunk.data)));
+    if (data.byteLength > MAX_FILE_BYTES) throw new PerformanceError(`${fileChunks[0].fileName} excede o limite de 30 MB.`, 413);
+    return { fileName: fileChunks[0].fileName, buffer: Uint8Array.from(data).buffer };
+  };
+
+  return { production: rebuild("production"), volume: rebuild("volume") };
+}
+
+async function processPerformanceFiles(
+  actor: Awaited<ReturnType<typeof getApiActor>>,
+  productionFile: { fileName: string; buffer: ArrayBuffer },
+  volumeFile: { fileName: string; buffer: ArrayBuffer }
+) {
+  const files = [productionFile, volumeFile];
+  const previews: PreviewedFile[] = [];
+
+  for (const file of files) {
+    const rawRows = readWorkbookRows(file.buffer);
+    const preview = await previewProductionImport(actor, rawRows, { skipExistingCheck: true });
+    previews.push({ fileName: file.fileName, rows: preview.rows });
+  }
+
+  const coverage = summarizeCoverage(previews);
+  if (!coverage.productionRows || !coverage.volumeRows) {
+    throw new PerformanceError(
+      "As duas bases são obrigatórias: Produção / Output precisa conter submit e Filas / Input precisa conter enqueue.",
+      400
+    );
+  }
+
+  let batchId: string | undefined;
+  const imports = [];
+  const batchFileName = `${productionFile.fileName} + ${volumeFile.fileName}`;
+  for (const [index, preview] of previews.entries()) {
+    const result = await commitProductionManualPreviewImport(
+      actor,
+      preview.rows,
+      index === 0 ? batchFileName : preview.fileName,
+      batchId
+    );
+    batchId = result.batchId;
+    imports.push({
+      fileName: preview.fileName,
+      importedRows: result.importedRows,
+      productionRows: result.productionRows,
+      volumeRows: result.volumeRows
+    });
+  }
+
+  if (!batchId) throw new PerformanceError("Não foi possível criar o lote manual de Performance.", 500);
+  const reset = await replacePerformanceSnapshot(actor, batchId);
+  return {
+    success: true,
+    batchId,
+    productionRows: coverage.productionRows,
+    volumeRows: coverage.volumeRows,
+    rowsError: coverage.rowsError,
+    files: imports,
+    reset
+  };
+}
+
+function requiredUploadId(url: URL) {
+  const uploadId = url.searchParams.get("uploadId")?.trim() ?? "";
+  if (!/^[0-9a-f-]{36}$/i.test(uploadId)) throw new PerformanceError("Identificador do upload inválido.", 400);
+  return uploadId;
+}
+
+function integerParam(url: URL, name: string, minimum: number) {
+  const value = Number(url.searchParams.get(name));
+  if (!Number.isInteger(value) || value < minimum) throw new PerformanceError(`Parâmetro ${name} inválido.`, 400);
+  return value;
 }
 
 function readXlsxFile(value: FormDataEntryValue | null, label: string) {

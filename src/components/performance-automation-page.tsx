@@ -576,6 +576,7 @@ function ManualImportModal({ onClose, onImported }: { onClose: () => void; onImp
   const [productionFile, setProductionFile] = useState<File | null>(null);
   const [volumeFile, setVolumeFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState("");
   const [result, setResult] = useState<ManualImportResult | null>(null);
 
@@ -585,22 +586,48 @@ function ManualImportModal({ onClose, onImported }: { onClose: () => void; onImp
       return;
     }
     setUploading(true);
+    setUploadProgress(0);
     setError("");
     setResult(null);
     try {
-      const formData = new FormData();
-      formData.set("productionFile", productionFile);
-      formData.set("volumeFile", volumeFile);
-      const response = await fetch("/api/performance/import/manual", { method: "POST", body: formData });
-      const bodyText = await response.text();
-      const body = bodyText ? JSON.parse(bodyText) as (ManualImportResult & { error?: string; message?: string }) : null;
-      if (!response.ok || !body) throw new Error(body?.error ?? body?.message ?? `O upload falhou (HTTP ${response.status}).`);
+      const start = await performanceUploadRequest<{ uploadId: string }>("/api/performance/import/manual?action=start", { method: "POST" });
+      const uploadFiles = [
+        { file: productionFile, fileType: "production" },
+        { file: volumeFile, fileType: "volume" }
+      ] as const;
+      const chunkSize = 2 * 1024 * 1024;
+      const totalChunks = uploadFiles.reduce((total, item) => total + Math.ceil(item.file.size / chunkSize), 0);
+      let uploadedChunks = 0;
+
+      for (const item of uploadFiles) {
+        const fileChunks = Math.ceil(item.file.size / chunkSize);
+        for (let chunkIndex = 0; chunkIndex < fileChunks; chunkIndex++) {
+          const params = new URLSearchParams({
+            action: "chunk",
+            uploadId: start.uploadId,
+            fileType: item.fileType,
+            fileName: item.file.name,
+            chunkIndex: String(chunkIndex),
+            totalChunks: String(fileChunks)
+          });
+          await performanceUploadRequest(`/api/performance/import/manual?${params.toString()}`, {
+            method: "POST",
+            headers: { "content-type": "application/octet-stream" },
+            body: item.file.slice(chunkIndex * chunkSize, Math.min(item.file.size, (chunkIndex + 1) * chunkSize))
+          });
+          uploadedChunks += 1;
+          setUploadProgress(Math.round((uploadedChunks / Math.max(1, totalChunks)) * 85));
+        }
+      }
+
+      setUploadProgress(90);
+      const finalizeParams = new URLSearchParams({ action: "finalize", uploadId: start.uploadId });
+      const body = await performanceUploadRequest<ManualImportResult>(`/api/performance/import/manual?${finalizeParams.toString()}`, { method: "POST" });
+      setUploadProgress(100);
       setResult({ productionRows: body.productionRows, volumeRows: body.volumeRows, rowsError: body.rowsError });
       await onImported();
     } catch (uploadError) {
-      const message = uploadError instanceof SyntaxError
-        ? "O servidor não conseguiu processar os arquivos. Confirme o tamanho das bases e tente novamente."
-        : uploadError instanceof Error ? uploadError.message : "Não foi possível substituir a base de Performance.";
+      const message = uploadError instanceof Error ? uploadError.message : "Não foi possível substituir a base de Performance.";
       setError(message);
     } finally {
       setUploading(false);
@@ -658,13 +685,35 @@ function ManualImportModal({ onClose, onImported }: { onClose: () => void; onImp
           {!result ? (
             <button type="button" onClick={() => void submit()} disabled={uploading || !productionFile || !volumeFile} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 text-sm font-black text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-45">
               {uploading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
-              {uploading ? "Validando e substituindo..." : "Substituir base"}
+              {uploading ? `Enviando e validando... ${uploadProgress}%` : "Substituir base"}
             </button>
           ) : null}
         </div>
       </div>
     </div>
   );
+}
+
+async function performanceUploadRequest<T = Record<string, unknown>>(url: string, init: RequestInit): Promise<T> {
+  const response = await fetch(url, init);
+  const bodyText = await response.text();
+  let body: (T & { error?: string; message?: string }) | null = null;
+  if (bodyText) {
+    try {
+      body = JSON.parse(bodyText) as T & { error?: string; message?: string };
+    } catch {
+      body = null;
+    }
+  }
+  if (!response.ok || !body) {
+    const platformMessage = response.status === 413
+      ? "Uma parte do arquivo excedeu o limite do servidor. Tente novamente."
+      : response.status === 504
+        ? "O processamento demorou além do limite. Tente novamente; as partes já enviadas não alteraram a base vigente."
+        : `O upload falhou (HTTP ${response.status}).`;
+    throw new Error(body?.error ?? body?.message ?? platformMessage);
+  }
+  return body;
 }
 
 function PerformanceFileField({ label, helper, file, onChange }: { label: string; helper: string; file: File | null; onChange: (file: File | null) => void }) {

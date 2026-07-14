@@ -1428,6 +1428,22 @@ model PerformanceQueueVolumeRecord {
   @@index([queueId, bzDay])
 }
 
+model PerformanceManualUploadChunk {
+  id              String   @id @default(cuid())
+  uploadId        String
+  uploadedByEmail String
+  fileType        String
+  fileName        String
+  chunkIndex      Int
+  totalChunks     Int
+  data            Bytes
+  createdAt       DateTime @default(now())
+
+  @@unique([uploadId, fileType, chunkIndex])
+  @@index([uploadId, uploadedByEmail])
+  @@index([createdAt])
+}
+
 model WorkSessionDevice {
   id                String             @id @default(cuid())
   employeeId        String

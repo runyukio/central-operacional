@@ -550,6 +550,12 @@ export async function previewProductionImport(actor: Actor, rawRows: Record<stri
   return previewProductionRows(rawRows, options);
 }
 
+export async function authorizePerformanceImport(actor: Actor) {
+  const user = await requireActiveUser(actor);
+  requireImportPermission(user);
+  return { id: user.id, email: user.email };
+}
+
 export async function previewProductionAutomatedImport(rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
   return previewProductionRows(rawRows, options);
 }
