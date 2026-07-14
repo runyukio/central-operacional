@@ -107,6 +107,7 @@ type AgentCycleMetric = {
 };
 
 type AgentPresenceStatus = "Online" | "Online sem produção" | "Ocioso" | "Offline" | "Fora do turno";
+const realtimeResetPresenceGraceMinutes = 120;
 
 type AgentCycleRow = {
   key: string;
@@ -3200,7 +3201,10 @@ function resolveAgentPresenceStatus(
 
 function isWithinRealtimeResetPresenceGrace(row: AgentCycleRow, selectedCycle: string) {
   const selectedInfo = parseRealtimeCycleForPresence(selectedCycle);
-  if (!selectedInfo || selectedInfo.hour !== 13) return false;
+  if (!selectedInfo) return false;
+
+  const minutesSinceReset = selectedInfo.hour * 60 + selectedInfo.minute - 13 * 60;
+  if (minutesSinceReset < 0 || minutesSinceReset >= realtimeResetPresenceGraceMinutes) return false;
 
   const latestBeforeReset = row.history
     .map((item) => ({ item, info: parseRealtimeCycleForPresence(item.cycleDownload) }))
