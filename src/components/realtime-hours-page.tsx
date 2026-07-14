@@ -202,6 +202,7 @@ const emptySummary: RealtimeHoursSummary = {
 };
 
 const emptyMappingsPayload: RealtimeHoursIdentityMappingsPayload = { success: true, data: [] };
+const ALL_LOBS_FILTER = "__ALL_LOBS__";
 
 export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPageProps) {
   const [activeTab, setActiveTab] = useState<CaptureTab>("TIMELINE");
@@ -213,7 +214,7 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
   const [error, setError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
   const [search, setSearch] = useState("");
-  const [lobFilter, setLobFilter] = useState("ALL");
+  const [lobFilter, setLobFilter] = useState(ALL_LOBS_FILTER);
   const [presenceFilter, setPresenceFilter] = useState<"ALL" | RealtimeHoursPresenceStatus>("ALL");
   const [supervisorFilter, setSupervisorFilter] = useState("ALL");
   const [mappingMatchFilter, setMappingMatchFilter] = useState<MappingMatchFilter>("ALL");
@@ -282,7 +283,7 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
     const rows = timelinePayload?.rows ?? [];
     return rows.filter((row) => {
       const rowLob = normalizedLob(row.lob);
-      if (lobFilter !== "ALL" && rowLob !== lobFilter) return false;
+      if (lobFilter !== ALL_LOBS_FILTER && rowLob !== lobFilter) return false;
       if (presenceFilter !== "ALL" && row.currentStatus !== presenceFilter) return false;
       if (supervisorFilter !== "ALL" && row.supervisor !== supervisorFilter) return false;
       const matchesSearch = normalizedSearch
@@ -302,8 +303,8 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
   }, [lobFilter, presenceFilter, search, supervisorFilter, timelinePayload?.rows]);
 
   useEffect(() => {
-    if (lobFilter !== "ALL" && !lobOptions.some((option) => option.value === lobFilter)) {
-      setLobFilter("ALL");
+    if (lobFilter !== ALL_LOBS_FILTER && !lobOptions.some((option) => option.value === lobFilter)) {
+      setLobFilter(ALL_LOBS_FILTER);
     }
   }, [lobFilter, lobOptions]);
   useEffect(() => {
@@ -671,10 +672,10 @@ function TimelinePanel({
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <span className="mr-1 text-xs font-black uppercase tracking-wide text-muted">LOB</span>
         <LobSlicerButton
-          active={lobFilter === "ALL"}
+          active={lobFilter === ALL_LOBS_FILTER}
           label="Todas"
           count={lobOptions.reduce((sum, option) => sum + option.count, 0)}
-          onClick={() => onLobFilterChange("ALL")}
+          onClick={() => onLobFilterChange(ALL_LOBS_FILTER)}
         />
         {lobOptions.map((option) => (
           <LobSlicerButton
