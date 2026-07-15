@@ -105,7 +105,7 @@ export const QUEUE_METADATA: Record<string, QueueMetadata> = {
   "9849": { lob: "N/A", slaTargetMinutes: null },
   "10215": { lob: "ADS", slaTargetMinutes: 120 },
   "10801": { lob: "ADS", slaTargetMinutes: 120 },
-  "10802": { lob: "N/A", slaTargetMinutes: null },
+  "10802": { lob: "ADS", slaTargetMinutes: 120 },
   "10803": { lob: "N/A", slaTargetMinutes: null },
   "10804": { lob: "ADS", slaTargetMinutes: 120 },
   "10805": { lob: "N/A", slaTargetMinutes: null },

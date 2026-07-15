@@ -106,7 +106,7 @@ export const QUEUE_REPORT_METADATA: Record<string, QueueReportMetadata> = {
   "9849": {"queueName":"Fila não mapeada","department":"Other Queue","lob":"N/A"},
   "10215": {"queueName":"Commercialization Recall Brazil Market Label","department":"Other Queue","lob":"ADS"},
   "10801": {"queueName":"Commercialization Advertiser Verification Brazil No Industry","department":"Account Verification","lob":"ADS"},
-  "10802": {"queueName":"Fila não mapeada","department":"Other Queue","lob":"N/A"},
+  "10802": {"queueName":"Commercialization Advertiser Verification Singapore No Industry","department":"Account Verification","lob":"ADS"},
   "10803": {"queueName":"Fila não mapeada","department":"Other Queue","lob":"N/A"},
   "10804": {"queueName":"Commercialization Advertiser Verification Hong Kong No Industry","department":"Account Verification","lob":"ADS"},
   "10805": {"queueName":"Fila não mapeada","department":"Other Queue","lob":"N/A"},
