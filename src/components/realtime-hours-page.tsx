@@ -316,9 +316,9 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
     const normalizedSearch = normalizeText(search);
     const rows = mappingsPayload?.data ?? [];
     return rows.filter((row) => {
-      const wbFound = Boolean(row.employeeId && row.employeeName);
-      if (mappingMatchFilter === "FOUND" && !wbFound) return false;
-      if (mappingMatchFilter === "NOT_FOUND" && wbFound) return false;
+      const hasSavedMapping = row.mapped;
+      if (mappingMatchFilter === "FOUND" && !hasSavedMapping) return false;
+      if (mappingMatchFilter === "NOT_FOUND" && hasSavedMapping) return false;
       return normalizedSearch
         ? normalizeText([
           row.hostname,
