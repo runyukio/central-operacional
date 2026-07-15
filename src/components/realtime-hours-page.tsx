@@ -316,9 +316,9 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
     const normalizedSearch = normalizeText(search);
     const rows = mappingsPayload?.data ?? [];
     return rows.filter((row) => {
-      const hasSavedMapping = row.mapped;
-      if (mappingMatchFilter === "FOUND" && !hasSavedMapping) return false;
-      if (mappingMatchFilter === "NOT_FOUND" && hasSavedMapping) return false;
+      const hasLob = normalizedLob(row.lob) !== "SEM_LOB";
+      if (mappingMatchFilter === "FOUND" && !hasLob) return false;
+      if (mappingMatchFilter === "NOT_FOUND" && hasLob) return false;
       return normalizedSearch
         ? normalizeText([
           row.hostname,
@@ -1246,8 +1246,8 @@ function MappingsPanel({
             className="premium-control h-10 w-full px-3 text-sm font-black text-navy-950 outline-none"
           >
             <option value="ALL">Todos os WBs</option>
-            <option value="FOUND">WB encontrado</option>
-            <option value="NOT_FOUND">WB não encontrado</option>
+            <option value="FOUND">WB encontrado (com LOB)</option>
+            <option value="NOT_FOUND">WB não encontrado (sem LOB)</option>
           </select>
         </label>
         <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
