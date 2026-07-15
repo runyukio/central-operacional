@@ -408,40 +408,7 @@ export async function getRealtimeHoursStatus(options: RealtimeHoursStatusOptions
     };
   }
 
-  const statusSince = new Date(Date.now() - staleThresholdMinutes * 60_000);
-  const candidates = await prisma.realTimeHoursRecord.findMany({
-    where: { capturedAt: { gte: statusSince } },
-    orderBy: [{ capturedAt: "desc" }, { createdAt: "desc" }],
-    take: Math.min(20_000, Math.max(5_000, limit * 20)),
-    select: {
-      id: true,
-      eventType: true,
-      sessionId: true,
-      sessionState: true,
-      agentVersion: true,
-      capturedAt: true,
-      hostname: true,
-      windowsUser: true,
-      wbLogin: true,
-      employeeId: true,
-      ipAddress: true,
-      isSessionActive: true,
-      isInputActive: true,
-      idleSeconds: true,
-      activeProcessName: true,
-      activeWindowTitle: true,
-      lastActivityAt: true,
-      identitySource: true,
-      identityConfidence: true,
-      createdAt: true
-    }
-  });
-  const latestByIdentity = new Map<string, typeof candidates[number]>();
-  for (const record of candidates) {
-    const key = identityKey(record.hostname, record.windowsUser) || record.hostname.trim().toLowerCase();
-    if (!latestByIdentity.has(key)) latestByIdentity.set(key, record);
-  }
-  const summaryRecords = Array.from(latestByIdentity.values());
+  const summaryRecords = await loadRecentRealtimeHoursStatusRecords(limit);
   const records = summaryRecords
     .slice(0, limit)
     .sort((left, right) => `${left.hostname} ${left.windowsUser ?? ""}`.localeCompare(`${right.hostname} ${right.windowsUser ?? ""}`));
@@ -487,6 +454,68 @@ export async function getRealtimeHoursStatus(options: RealtimeHoursStatusOptions
     })),
     recordsReturned: records.length,
     limit
+  };
+}
+
+export async function getRealtimeHoursOperationalPresence() {
+  const referenceTime = new Date();
+  const records = await loadRecentRealtimeHoursStatusRecords(maxStatusLimit);
+  const mappings = await mappingLookupFor(records);
+  const employees = await employeeLookupFor(records.map((record) => {
+    const mapping = mappings.get(identityKey(record.hostname, record.windowsUser));
+    return {
+      employeeId: mapping?.employeeId ?? record.employeeId,
+      wbLogin: mapping?.wbLogin ?? record.wbLogin
+    };
+  }));
+
+  const resolved = records.map((record) => {
+    const deviceKey = identityKey(record.hostname, record.windowsUser);
+    const mapping = mappings.get(deviceKey);
+    const employee = employees.get(employeeKey(mapping?.employeeId ?? record.employeeId, mapping?.wbLogin ?? record.wbLogin));
+    const employeeId = mapping?.employeeId ?? employee?.id ?? record.employeeId ?? "";
+    const wbLogin = mapping?.wbLogin ?? employee?.wbLogin ?? record.wbLogin ?? "";
+    const personKey = employeeKey(employeeId, wbLogin) || `device:${deviceKey || record.hostname.trim().toLowerCase()}`;
+    return { record, employee, employeeId, wbLogin, personKey };
+  });
+
+  const latestByPerson = new Map<string, typeof resolved[number]>();
+  for (const item of resolved) {
+    const current = latestByPerson.get(item.personKey);
+    if (!current || item.record.capturedAt > current.record.capturedAt) latestByPerson.set(item.personKey, item);
+  }
+
+  const rows = Array.from(latestByPerson.values())
+    .map(({ record, employee, employeeId, wbLogin }) => ({
+      employeeId,
+      employeeName: employee?.fullName ?? "",
+      wbLogin,
+      roleTitle: employee?.roleTitle ?? "",
+      skill: employee?.skill ?? "",
+      lob: employee?.lob?.name ?? "",
+      shift: employee?.shift?.name ?? "",
+      supervisor: employee?.supervisor?.fullName ?? "Sem supervisor",
+      employeeStatus: employee?.operationalStatus ?? "",
+      hostname: record.hostname,
+      windowsUser: record.windowsUser ?? "",
+      lastSeenAt: record.capturedAt.toISOString(),
+      status: realtimeHoursPresenceStatus(record, referenceTime)
+    }))
+    .sort((left, right) => (left.employeeName || left.wbLogin || left.hostname).localeCompare(right.employeeName || right.wbLogin || right.hostname));
+
+  const statusCount = (status: "ONLINE" | "IDLE" | "LOCKED" | "OFFLINE") => rows.filter((row) => row.status === status).length;
+  const latestCapturedAt = rows.reduce<string | null>((latest, row) => !latest || row.lastSeenAt > latest ? row.lastSeenAt : latest, null);
+
+  return {
+    success: true,
+    capturedAt: latestCapturedAt,
+    summary: {
+      online: statusCount("ONLINE"),
+      idle: statusCount("IDLE"),
+      locked: statusCount("LOCKED"),
+      offline: statusCount("OFFLINE")
+    },
+    rows
   };
 }
 
@@ -555,6 +584,8 @@ export async function listRealtimeHoursIdentityMappings() {
             wbLogin: true,
             fullName: true,
             roleTitle: true,
+            skill: true,
+            operationalStatus: true,
             lob: { select: { name: true } },
             shift: { select: { name: true, startsAt: true, endsAt: true } },
             supervisor: { select: { fullName: true } }
@@ -981,6 +1012,43 @@ async function applyRealtimeHoursIdentityMappings(records: NormalizedRealtimeHou
   }
 }
 
+async function loadRecentRealtimeHoursStatusRecords(limit: number) {
+  const statusSince = new Date(Date.now() - staleThresholdMinutes * 60_000);
+  const candidates = await prisma.realTimeHoursRecord.findMany({
+    where: { capturedAt: { gte: statusSince } },
+    orderBy: [{ capturedAt: "desc" }, { createdAt: "desc" }],
+    take: Math.min(20_000, Math.max(5_000, limit * 20)),
+    select: {
+      id: true,
+      eventType: true,
+      sessionId: true,
+      sessionState: true,
+      agentVersion: true,
+      capturedAt: true,
+      hostname: true,
+      windowsUser: true,
+      wbLogin: true,
+      employeeId: true,
+      ipAddress: true,
+      isSessionActive: true,
+      isInputActive: true,
+      idleSeconds: true,
+      activeProcessName: true,
+      activeWindowTitle: true,
+      lastActivityAt: true,
+      identitySource: true,
+      identityConfidence: true,
+      createdAt: true
+    }
+  });
+  const latestByIdentity = new Map<string, typeof candidates[number]>();
+  for (const record of candidates) {
+    const key = identityKey(record.hostname, record.windowsUser) || record.hostname.trim().toLowerCase();
+    if (!latestByIdentity.has(key)) latestByIdentity.set(key, record);
+  }
+  return Array.from(latestByIdentity.values());
+}
+
 async function mappingLookupFor(records: Array<{ hostname: string; windowsUser: string | null }>) {
   const keys = new Set(records.map((record) => identityKey(record.hostname, record.windowsUser)).filter(Boolean));
   if (!keys.size) return new Map<string, { hostname: string; windowsUser: string; wbLogin: string; employeeId: string | null }>();
@@ -1022,6 +1090,8 @@ async function employeeLookupFor(entries: Array<{ employeeId?: string | null; wb
         wbLogin: true,
         fullName: true,
         roleTitle: true,
+        skill: true,
+        operationalStatus: true,
         lob: { select: { name: true } },
         shift: { select: { name: true, startsAt: true, endsAt: true } },
         supervisor: { select: { fullName: true } }

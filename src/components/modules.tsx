@@ -70,6 +70,7 @@ import {
   UserCheck,
   Users,
   UsersRound,
+  Wifi,
   Wrench,
   XCircle
 } from "lucide-react";
@@ -830,6 +831,33 @@ type ActivePeopleItem = {
   shift?: string;
   skill?: string;
   employeeStatus?: string;
+};
+
+type OperationalPresenceStatus = "ONLINE" | "IDLE" | "LOCKED" | "OFFLINE";
+
+type OperationalPresencePerson = {
+  employeeId: string;
+  employeeName: string;
+  wbLogin: string;
+  roleTitle: string;
+  skill: string;
+  lob: string;
+  shift: string;
+  supervisor: string;
+  employeeStatus: string;
+  hostname: string;
+  windowsUser: string;
+  lastSeenAt: string;
+  status: OperationalPresenceStatus;
+};
+
+type OperationalPresencePayload = {
+  success: boolean;
+  capturedAt: string | null;
+  summary: { online: number; idle: number; locked: number; offline: number };
+  rows: OperationalPresencePerson[];
+  error?: string;
+  message?: string;
 };
 
 type AttritionEmployeeItem = {
@@ -2470,6 +2498,33 @@ function CommandStatCard({ title, value, change, helper, icon: Icon, tone = "blu
   );
 }
 
+const operationalPresenceStatusOrder: Array<Exclude<OperationalPresenceStatus, "OFFLINE">> = ["ONLINE", "IDLE", "LOCKED"];
+const operationalPresenceStatusMeta: Record<Exclude<OperationalPresenceStatus, "OFFLINE">, {
+  label: string;
+  icon: LucideIcon;
+  className: string;
+  dotClassName: string;
+}> = {
+  ONLINE: {
+    label: "Online",
+    icon: Wifi,
+    className: "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
+    dotClassName: "bg-emerald-500"
+  },
+  IDLE: {
+    label: "Ocioso",
+    icon: Clock,
+    className: "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100",
+    dotClassName: "bg-amber-500"
+  },
+  LOCKED: {
+    label: "Tela bloqueada",
+    icon: Laptop,
+    className: "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100",
+    dotClassName: "bg-blue-500"
+  }
+};
+
 export function OperationalCommandCenter() {
   const [attendanceSummary, setAttendanceSummary] = useState<AttendanceSummary | null>(null);
   const [dateRange, setDateRange] = useState(() => currentOperationalMonthRange());
@@ -2522,11 +2577,34 @@ export function OperationalCommandCenter() {
   const [recurringAbsenceExportError, setRecurringAbsenceExportError] = useState("");
   const [exportingRecurringAbsences, setExportingRecurringAbsences] = useState(false);
   const [showMoodDetail, setShowMoodDetail] = useState(false);
+  const [operationalPresence, setOperationalPresence] = useState<OperationalPresencePayload | null>(null);
+  const [loadingOperationalPresence, setLoadingOperationalPresence] = useState(false);
+  const [operationalPresenceError, setOperationalPresenceError] = useState("");
+  const [selectedPresenceGroup, setSelectedPresenceGroup] = useState<{ lob: string; shift: string; status: OperationalPresenceStatus } | null>(null);
+
+  const loadOperationalPresence = useCallback(async (showLoading = false) => {
+    if (showLoading) setLoadingOperationalPresence(true);
+    setOperationalPresenceError("");
+    try {
+      const payload = await apiJson<OperationalPresencePayload>("/api/realtime-hours/operational-presence");
+      setOperationalPresence(payload);
+    } catch (error) {
+      setOperationalPresenceError(error instanceof Error ? error.message : "Não foi possível carregar a presença atual.");
+    } finally {
+      if (showLoading) setLoadingOperationalPresence(false);
+    }
+  }, []);
 
   useEffect(() => {
     void loadCommandCenterSummary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dateRange.startDate, dateRange.endDate, selectedCommandLob, selectedCommandSupervisor, selectedCommandRoleTitle, selectedCommandShift, selectedCommandSkill]);
+
+  useEffect(() => {
+    void loadOperationalPresence(true);
+    const interval = window.setInterval(() => void loadOperationalPresence(), 60_000);
+    return () => window.clearInterval(interval);
+  }, [loadOperationalPresence]);
 
   useEffect(() => {
     apiJson<{ data: SystemSettings }>("/api/settings")
@@ -3057,6 +3135,75 @@ export function OperationalCommandCenter() {
       action: () => setShowMoodDetail(true)
     }
   ];
+  const operationalPresenceRows = (operationalPresence?.rows ?? []).filter((row) => {
+    if (row.status === "OFFLINE") return false;
+    if (selectedCommandLob !== "Todos" && employeeStatusKey(row.lob) !== employeeStatusKey(selectedCommandLob)) return false;
+    if (selectedCommandSupervisor !== "Todos" && employeeStatusKey(row.supervisor) !== employeeStatusKey(selectedCommandSupervisor)) return false;
+    if (selectedCommandRoleTitle !== "Todos" && employeeStatusKey(row.roleTitle) !== employeeStatusKey(selectedCommandRoleTitle)) return false;
+    if (selectedCommandShift !== "Todos" && employeeStatusKey(shiftCategoryName(row.shift) || "Sem turno") !== employeeStatusKey(selectedCommandShift)) return false;
+    if (selectedCommandSkill === "SEM_SKILL" && row.skill.trim()) return false;
+    if (selectedCommandSkill !== "Todos" && selectedCommandSkill !== "SEM_SKILL" && employeeStatusKey(row.skill) !== employeeStatusKey(selectedCommandSkill)) return false;
+    return true;
+  });
+  const operationalPresenceTotals = operationalPresenceRows.reduce((totals, row) => {
+    if (row.status !== "OFFLINE") totals[row.status] += 1;
+    return totals;
+  }, { ONLINE: 0, IDLE: 0, LOCKED: 0 });
+  const operationalPresenceByLob = new Map<string, OperationalPresencePerson[]>();
+  for (const row of operationalPresenceRows) {
+    const lob = row.lob.trim() || "Sem LOB";
+    const lobRows = operationalPresenceByLob.get(lob) ?? [];
+    lobRows.push(row);
+    operationalPresenceByLob.set(lob, lobRows);
+  }
+  const lobOrder = ["ADS", "CEC", "COMMENTS", "VIDEO", "TNS", "PROJECT", "ALL"];
+  const shiftOrder = ["Manhã", "Tarde", "Noite", "Sem turno"];
+  const commandOperationalPresenceGroups = Array.from(operationalPresenceByLob.entries())
+    .map(([lob, rows]) => {
+      const shifts = new Map<string, OperationalPresencePerson[]>();
+      for (const row of rows) {
+        const shift = shiftCategoryName(row.shift) || "Sem turno";
+        const shiftRows = shifts.get(shift) ?? [];
+        shiftRows.push(row);
+        shifts.set(shift, shiftRows);
+      }
+      return {
+        lob,
+        total: rows.length,
+        shifts: Array.from(shifts.entries())
+          .map(([shift, shiftRows]) => ({
+            shift,
+            total: shiftRows.length,
+            counts: shiftRows.reduce((counts, row) => {
+              if (row.status !== "OFFLINE") counts[row.status] += 1;
+              return counts;
+            }, { ONLINE: 0, IDLE: 0, LOCKED: 0 })
+          }))
+          .sort((left, right) => {
+            const leftIndex = shiftOrder.indexOf(left.shift);
+            const rightIndex = shiftOrder.indexOf(right.shift);
+            return (leftIndex < 0 ? 99 : leftIndex) - (rightIndex < 0 ? 99 : rightIndex) || left.shift.localeCompare(right.shift, "pt-BR");
+          })
+      };
+    })
+    .sort((left, right) => {
+      const leftIndex = lobOrder.indexOf(left.lob.toUpperCase());
+      const rightIndex = lobOrder.indexOf(right.lob.toUpperCase());
+      return (leftIndex < 0 ? 99 : leftIndex) - (rightIndex < 0 ? 99 : rightIndex) || left.lob.localeCompare(right.lob, "pt-BR");
+    });
+  const selectedPresencePeople = selectedPresenceGroup
+    ? operationalPresenceRows.filter((row) => (
+      (row.lob.trim() || "Sem LOB") === selectedPresenceGroup.lob
+      && (shiftCategoryName(row.shift) || "Sem turno") === selectedPresenceGroup.shift
+      && row.status === selectedPresenceGroup.status
+    ))
+    : [];
+  const selectedPresenceMeta = selectedPresenceGroup?.status && selectedPresenceGroup.status !== "OFFLINE"
+    ? operationalPresenceStatusMeta[selectedPresenceGroup.status]
+    : null;
+  const operationalPresenceUpdatedAt = operationalPresence?.capturedAt
+    ? new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(new Date(operationalPresence.capturedAt))
+    : "--:--";
   const commandAbsenceReasons = Object.entries(summary.byReason)
     .filter(([, value]) => value > 0)
     .map(([name, value], index) => ({ name, value, fill: ["#071B3A", "#14B8A6", "#F59E0B", "#7C3AED", "#94A3B8"][index % 5] }));
@@ -3245,11 +3392,11 @@ export function OperationalCommandCenter() {
             <button onClick={() => setCommandRange("month")} className="premium-control h-9 px-2.5 text-[11.5px] font-extrabold text-navy-950">Mês</button>
             <button onClick={() => setCommandRange("previousMonth")} className="premium-control h-9 px-2.5 text-[11.5px] font-extrabold text-navy-950">Mês anterior</button>
             <button
-              onClick={() => void loadCommandCenterSummary()}
-              disabled={loadingSummary}
+              onClick={() => void Promise.all([loadCommandCenterSummary(), loadOperationalPresence(true)])}
+              disabled={loadingSummary || loadingOperationalPresence}
               className="flex h-9 items-center gap-1.5 rounded-lg bg-navy-950 px-3 text-[12px] font-extrabold text-white shadow-soft disabled:opacity-60"
             >
-              <RefreshCw className={cn("h-3.5 w-3.5", loadingSummary && "animate-spin")} />
+              <RefreshCw className={cn("h-3.5 w-3.5", (loadingSummary || loadingOperationalPresence) && "animate-spin")} />
               Atualizar
             </button>
           </div>
@@ -3267,6 +3414,76 @@ export function OperationalCommandCenter() {
         ))}
       </div>
       <div className="space-y-3">
+        <Panel title="Presença atual por LOB e turno">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-border/70 pb-3">
+            <div className="flex flex-wrap items-center gap-2">
+              {operationalPresenceStatusOrder.map((status) => {
+                const meta = operationalPresenceStatusMeta[status];
+                const Icon = meta.icon;
+                return (
+                  <span key={status} className={cn("inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-black", meta.className.replace(/hover:[^ ]+/g, ""))}>
+                    <Icon className="h-3.5 w-3.5" />
+                    {meta.label}
+                    <strong className="text-[13px]">{operationalPresenceTotals[status]}</strong>
+                  </span>
+                );
+              })}
+            </div>
+            <p className="text-[10.5px] font-bold text-muted">
+              Sinal mais recente às {operationalPresenceUpdatedAt} · atualização automática a cada 60s
+            </p>
+          </div>
+
+          {loadingOperationalPresence && !operationalPresence ? (
+            <div className="py-7 text-center text-sm font-bold text-muted">Carregando presença atual...</div>
+          ) : operationalPresenceError && !operationalPresence ? (
+            <EmptyState title="Não foi possível carregar a presença atual" description={operationalPresenceError} />
+          ) : commandOperationalPresenceGroups.length ? (
+            <div className="grid gap-x-5 gap-y-4 md:grid-cols-2 2xl:grid-cols-3">
+              {commandOperationalPresenceGroups.map((group) => (
+                <section key={group.lob} className="min-w-0 border-l-2 border-slate-100 pl-3">
+                  <div className="mb-1.5 flex items-center justify-between gap-2">
+                    <h3 className="truncate text-[13px] font-black text-navy-950" title={group.lob}>{group.lob}</h3>
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-black text-slate-600">{group.total} conectados</span>
+                  </div>
+                  <div className="divide-y divide-border/65">
+                    {group.shifts.map((shift) => (
+                      <div key={`${group.lob}-${shift.shift}`} className="grid grid-cols-[minmax(64px,.8fr)_repeat(3,minmax(46px,1fr))] items-center gap-1.5 py-1.5">
+                        <span className="truncate text-[11px] font-extrabold text-slate-600" title={shift.shift}>{shift.shift}</span>
+                        {operationalPresenceStatusOrder.map((status) => {
+                          const meta = operationalPresenceStatusMeta[status];
+                          const Icon = meta.icon;
+                          const count = shift.counts[status];
+                          return (
+                            <button
+                              key={status}
+                              type="button"
+                              disabled={!count}
+                              onClick={() => setSelectedPresenceGroup({ lob: group.lob, shift: shift.shift, status })}
+                              title={`${meta.label}: ${count}. Clique para ver as pessoas.`}
+                              className={cn(
+                                "inline-flex h-7 min-w-0 items-center justify-center gap-1 rounded-md border px-1.5 text-[11px] font-black transition disabled:cursor-default disabled:border-slate-100 disabled:bg-slate-50 disabled:text-slate-300",
+                                count && meta.className
+                              )}
+                            >
+                              <Icon className="h-3 w-3 shrink-0" />
+                              {count}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="Nenhuma pessoa conectada nos filtros atuais"
+              description="O painel considera somente Online, Ocioso e Tela bloqueada no sinal mais recente da Captura de Horas."
+            />
+          )}
+        </Panel>
         <div className="grid gap-3 xl:grid-cols-[1.25fr_.95fr]">
           <Panel title="ABS por Supervisor">
             {commandAbsBySupervisor.length ? (
@@ -3625,6 +3842,44 @@ export function OperationalCommandCenter() {
               />
             ) : (
               <EmptyState title="Nenhuma falta recorrente encontrada." description="Não há colaboradores com 2 ou mais dias consecutivos de ausência nos filtros aplicados." />
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {selectedPresenceGroup && selectedPresenceMeta ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
+          <div className="card max-h-[88vh] w-full max-w-5xl overflow-y-auto p-5">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-lg font-extrabold text-navy-950">{selectedPresenceMeta.label}</h2>
+                  <span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-black", selectedPresenceMeta.className.replace(/hover:[^ ]+/g, ""))}>
+                    <span className={cn("h-1.5 w-1.5 rounded-full", selectedPresenceMeta.dotClassName)} />
+                    {selectedPresencePeople.length}
+                  </span>
+                </div>
+                <p className="text-sm font-semibold text-muted">
+                  {selectedPresenceGroup.lob} · {selectedPresenceGroup.shift} · sinal atual às {operationalPresenceUpdatedAt}
+                </p>
+              </div>
+              <button type="button" onClick={() => setSelectedPresenceGroup(null)} className="grid h-9 w-9 place-items-center rounded-lg text-xl hover:bg-slate-100" aria-label="Fechar">×</button>
+            </div>
+            {selectedPresencePeople.length ? (
+              <SimpleTable
+                columns={["Colaborador", "WB/Login", "Supervisor", "Cargo/Função", "Skill", "Máquina", "Último sinal"]}
+                rows={selectedPresencePeople.map((person) => [
+                  person.employeeName || "Não identificado",
+                  person.wbLogin || "Sem WB",
+                  person.supervisor,
+                  person.roleTitle || "-",
+                  person.skill || "-",
+                  person.hostname || "-",
+                  new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(person.lastSeenAt))
+                ])}
+              />
+            ) : (
+              <EmptyState title="Nenhuma pessoa neste grupo" description="O sinal pode ter sido atualizado desde a abertura do detalhe." />
             )}
           </div>
         </div>
