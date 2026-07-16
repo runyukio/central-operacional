@@ -185,6 +185,18 @@ export const QUEUE_REPORT_METADATA: Record<string, QueueReportMetadata> = {
   "600001812": {"queueName":"Push Copy Review Brazilian Barrel Emergency Hot Spot","department":"Brazil Push","lob":"VIDEO"},
   "600002377": {"queueName":"Private Letter Picture Annotation","department":"Text Annotation Of Private Messages","lob":"COMMENTS"},
   "600002381": {"queueName":"Private Letter Picture Annotation","department":"Pm Tagging","lob":"COMMENTS"},
+  "600003263": {"queueName":"","department":"Other Queue","lob":"ADS"},
+  "600003264": {"queueName":"","department":"Other Queue","lob":"ADS"},
+  "600003265": {"queueName":"","department":"Other Queue","lob":"ADS"},
+  "600003266": {"queueName":"","department":"Other Queue","lob":"ADS"},
+  "600003267": {"queueName":"","department":"Other Queue","lob":"ADS"},
+  "600003268": {"queueName":"","department":"Other Queue","lob":"ADS"},
+  "600003269": {"queueName":"","department":"Other Queue","lob":"ADS"},
+  "600003270": {"queueName":"","department":"Other Queue","lob":"ADS"},
+  "600003271": {"queueName":"","department":"Other Queue","lob":"ADS"},
+  "600003277": {"queueName":"","department":"Other Queue","lob":"ADS"},
+  "600003312": {"queueName":"","department":"Other Queue","lob":"ADS"},
+  "600003313": {"queueName":"","department":"Other Queue","lob":"ADS"},
 };
 
 export function getQueueReportMetadataById(queueId?: string | null): QueueReportMetadata {
