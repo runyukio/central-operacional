@@ -1697,7 +1697,7 @@ function normalizedRowImpactStatus(row: CoverageImpactClient["impacts"][number])
 
 function impactStatusLabel(status?: string | null) {
   if (status === "IMPACTA") return "Impacta";
-  if (status === "SEM_REQUERIDO") return "Sem requerido";
+  if (status === "SEM_REQUERIDO") return "Sem necessidade";
   return "Não impacta";
 }
 
@@ -1739,7 +1739,7 @@ function CoverageImpactBlock({ impact }: { impact?: CoverageImpactClient | null 
         <div>
           <p className="text-sm font-extrabold text-navy-950">Impacto</p>
           <p className="text-xs font-semibold text-muted">
-            {status === "IMPACTA" ? "Após a alteração, a cobertura prevista ficará abaixo do requerido." : status === "SEM_REQUERIDO" ? "Não há requerido cadastrado para ao menos um cenário." : "Cobertura prevista permanece dentro do requerido."}
+            {status === "IMPACTA" ? "Após a alteração, a cobertura prevista ficará abaixo da necessidade." : status === "SEM_REQUERIDO" ? "Não há necessidade cadastrada para ao menos um cenário." : "Cobertura prevista permanece dentro da necessidade."}
           </p>
         </div>
         <CoverageImpactBadge impact={impact} />
@@ -1757,14 +1757,14 @@ function CoverageImpactBlock({ impact }: { impact?: CoverageImpactClient | null 
               <InfoLine label="Data" value={row.date} />
               <InfoLine label="LOB" value={row.lob} />
               <InfoLine label="Turno" value={row.shift} />
-              <InfoLine label="Requerido" value={row.required ?? "Sem requerido"} />
-              <InfoLine label="Disponível atual" value={row.currentAvailable} />
+              <InfoLine label="Necessidade" value={row.required ?? "Sem necessidade"} />
+              <InfoLine label="Programado atual" value={row.currentAvailable} />
               <InfoLine label="Gap atual" value={coverageValue(row.currentGap)} />
               <InfoLine label="Impacto" value={coverageValue(row.impactDelta)} />
               <InfoLine label="Gap previsto" value={coverageValue(row.projectedGap)} />
             </div>
             {row.impactDirection ? <p className="mt-2 text-xs font-semibold text-muted">{impactDirectionLabel(row.impactDirection)}.</p> : null}
-            {row.message ? <p className="mt-2 text-xs font-semibold text-muted">{row.message}</p> : null}
+            {row.message ? <p className="mt-2 text-xs font-semibold text-muted">{coverageTerminology(row.message)}</p> : null}
           </div>
         ))}
       </div>
@@ -1797,22 +1797,22 @@ function CoverageWarningDialog({ warning, onClose }: { warning: CoverageWarningD
       <div className="card w-full max-w-lg p-5">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
-            <p className="text-xs font-bold uppercase tracking-wide text-muted">Impacto no Requerido</p>
+            <p className="text-xs font-bold uppercase tracking-wide text-muted">Impacto na Necessidade</p>
             <h2 className="mt-1 text-lg font-extrabold text-navy-950">Aprovação com impacto operacional</h2>
           </div>
           <CoverageImpactBadge impact={warning.impact} />
         </div>
         <p className="mb-4 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
-          Após esta alteração, a cobertura prevista ficará abaixo do requerido.
+          Após esta alteração, a cobertura prevista ficará abaixo da necessidade.
         </p>
         {critical ? (
           <div className="grid gap-2 rounded-lg border border-border bg-slate-50 p-3 text-sm md:grid-cols-2">
             <InfoLine label="Data" value={critical.date} />
             <InfoLine label="LOB" value={critical.lob} />
             <InfoLine label="Turno" value={critical.shift} />
-            <InfoLine label="Requerido" value={critical.required ?? "Sem requerido"} />
-            <InfoLine label="Disponível atual" value={critical.currentAvailable} />
-            <InfoLine label="Disponível previsto" value={critical.projectedAvailable} />
+            <InfoLine label="Necessidade" value={critical.required ?? "Sem necessidade"} />
+            <InfoLine label="Programado atual" value={critical.currentAvailable} />
+            <InfoLine label="Programado previsto" value={critical.projectedAvailable} />
             <InfoLine label="Gap atual" value={coverageValue(critical.currentGap)} />
             <InfoLine label="Gap previsto" value={coverageValue(critical.projectedGap)} />
           </div>
@@ -15670,7 +15670,7 @@ export function StaffCoveragePage() {
       setPayload(data);
       setMessage("");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Não foi possível carregar Requerido.");
+      setMessage(error instanceof Error ? coverageTerminology(error.message) : "Não foi possível carregar Necessidade.");
     } finally {
       setLoading(false);
     }
@@ -15729,9 +15729,9 @@ export function StaffCoveragePage() {
     try {
       const result = await apiJson<StaffCoveragePreviewResponse>("/api/staff-coverage/import/preview", { method: "POST", body: formData });
       setPreview(result);
-      setMessage(result.summary.errorRows ? "Revise os erros do preview antes de confirmar." : "Preview gerado. Confirme para importar o requerido.");
+      setMessage(result.summary.errorRows ? "Revise os erros do preview antes de confirmar." : "Preview gerado. Confirme para importar a necessidade.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Não foi possível validar o arquivo de requerido.");
+      setMessage(error instanceof Error ? coverageTerminology(error.message) : "Não foi possível validar o arquivo de necessidade.");
     } finally {
       setImporting(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -15746,11 +15746,11 @@ export function StaffCoveragePage() {
         method: "POST",
         body: JSON.stringify({ rows: preview.rows, fileName: previewFileName })
       });
-      setMessage(`Requerido importado: ${result.createdRows} criado(s), ${result.updatedRows} atualizado(s).`);
+      setMessage(`Necessidade importada: ${result.createdRows} criada(s), ${result.updatedRows} atualizada(s).`);
       setPreview(null);
       await loadCoverage();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Não foi possível importar o requerido.");
+      setMessage(error instanceof Error ? coverageTerminology(error.message) : "Não foi possível importar a necessidade.");
     } finally {
       setImporting(false);
     }
@@ -15759,9 +15759,9 @@ export function StaffCoveragePage() {
   const exportCoverage = async () => {
     const params = new URLSearchParams(filters);
     try {
-      await downloadFile(`/api/staff-coverage/export?${params.toString()}`, "requerido.xlsx", "Não foi possível exportar Requerido.");
+      await downloadFile(`/api/staff-coverage/export?${params.toString()}`, "necessidade.xlsx", "Não foi possível exportar Necessidade.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Não foi possível exportar Requerido.");
+      setMessage(error instanceof Error ? coverageTerminology(error.message) : "Não foi possível exportar Necessidade.");
     }
   };
 
@@ -15780,7 +15780,7 @@ export function StaffCoveragePage() {
       const result = await apiJson<StaffCoverageDetailsResponse>(`/api/staff-coverage/details?${params.toString()}`);
       setDetails(result);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Não foi possível abrir o detalhe do Requerido.");
+      setMessage(error instanceof Error ? coverageTerminology(error.message) : "Não foi possível abrir o detalhe da Necessidade.");
     } finally {
       setDetailsLoading(false);
     }
@@ -15797,8 +15797,8 @@ export function StaffCoveragePage() {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Requerido"
-        description="Requerido operacional e cobertura de staff por escala."
+        title="Necessidade"
+        description="Necessidade operacional e cobertura de staff por escala."
         icon={UsersRound}
         actions={<TopActions />}
       />
@@ -15872,7 +15872,7 @@ export function StaffCoveragePage() {
             {view === "AGENTS" && payload?.permissions.canImport ? (
               <>
                 <input ref={fileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={(event) => void previewRequirementFile(event.target.files?.[0])} />
-                <button onClick={() => void downloadFile("/api/staff-coverage/template", "template_requerido.xlsx").catch((error) => setMessage(error instanceof Error ? error.message : "Não foi possível baixar o template."))} className="premium-control h-9 px-3 text-xs font-extrabold text-navy-950">
+                <button onClick={() => void downloadFile("/api/staff-coverage/template", "template_necessidade.xlsx").catch((error) => setMessage(error instanceof Error ? coverageTerminology(error.message) : "Não foi possível baixar o template."))} className="premium-control h-9 px-3 text-xs font-extrabold text-navy-950">
                   Template
                 </button>
                 <button onClick={() => fileInputRef.current?.click()} disabled={importing} className="inline-flex h-9 items-center gap-2 rounded-lg bg-blue-600 px-3 text-xs font-extrabold text-white disabled:opacity-60">
@@ -15902,21 +15902,21 @@ export function StaffCoveragePage() {
       ) : (
       <>
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-        <StatCard title="Total requerido" value={summary?.totalRequired ?? 0} helper="arquivo semanal" icon={ClipboardList} tone="blue" />
-        <StatCard title="Total disponível" value={summary?.totalAvailable ?? 0} helper="agentes no cronograma" icon={UserCheck} tone="green" />
-        <StatCard title="Gap total" value={formatGap(summary?.totalGap ?? 0)} helper="disponível - requerido" icon={Target} tone={(summary?.totalGap ?? 0) < 0 ? "red" : "green"} />
-        <StatCard title="Dias com déficit" value={summary?.deficitDays ?? 0} helper="datas abaixo do requerido" icon={CalendarDays} tone="orange" />
+        <StatCard title="Necessidade total" value={summary?.totalRequired ?? 0} helper="arquivo semanal" icon={ClipboardList} tone="blue" />
+        <StatCard title="Total programado" value={summary?.totalAvailable ?? 0} helper="agentes no cronograma" icon={UserCheck} tone="green" />
+        <StatCard title="Gap total" value={formatGap(summary?.totalGap ?? 0)} helper="programado - necessidade" icon={Target} tone={(summary?.totalGap ?? 0) < 0 ? "red" : "green"} />
+        <StatCard title="Dias com déficit" value={summary?.deficitDays ?? 0} helper="datas abaixo da necessidade" icon={CalendarDays} tone="orange" />
         <StatCard title="Turnos com déficit" value={summary?.deficitShifts ?? 0} helper="LOB + turno" icon={AlertTriangle} tone="red" />
         <StatCard title="Maior déficit" value={formatGap(summary?.biggestDeficit ?? 0)} helper="pior linha do período" icon={ShieldCheck} tone={(summary?.biggestDeficit ?? 0) < 0 ? "red" : "green"} />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.4fr_.8fr]">
-        <Panel title="Requerido por data, LOB e turno">
+        <Panel title="Necessidade por data, LOB e turno">
           <div className="overflow-x-auto">
             <table className="w-full min-w-[980px] border-collapse text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-xs font-extrabold uppercase text-muted">
-                  {["Data", "LOB", "Turno", "Requerido", "Disponível", "Gap", "Status", "Observação"].map((column) => (
+                  {["Data", "LOB", "Turno", "Necessidade", "Programado", "Gap", "Status", "Observação"].map((column) => (
                     <th key={column} className="px-3 py-2">{column}</th>
                   ))}
                 </tr>
@@ -15935,11 +15935,11 @@ export function StaffCoveragePage() {
                     <td className="px-3 py-2 text-center font-extrabold">{row.required}</td>
                     <td className="px-3 py-2 text-center font-extrabold">{row.available}</td>
                     <td className={cn("px-3 py-2 text-center font-extrabold", row.gap < 0 ? "text-red-600" : row.gap > 0 ? "text-emerald-600" : "text-navy-950")}>{formatGap(row.gap)}</td>
-                    <td className="px-3 py-2"><span className={cn("rounded-full px-2 py-1 text-xs font-extrabold", staffCoverageStatusTone(row.status))}>{row.status}</span></td>
+                    <td className="px-3 py-2"><span className={cn("rounded-full px-2 py-1 text-xs font-extrabold", staffCoverageStatusTone(row.status))}>{staffCoverageStatusLabel(row.status)}</span></td>
                     <td className="max-w-[220px] truncate px-3 py-2 text-muted" title={row.observation}>{row.observation || "-"}</td>
                   </tr>
                 )) : (
-                  <tr><td colSpan={8} className="px-3 py-8"><EmptyState title="Nenhum requerido encontrado" description="Importe o requerido semanal ou ajuste os filtros do período." /></td></tr>
+                  <tr><td colSpan={8} className="px-3 py-8"><EmptyState title="Nenhuma necessidade encontrada" description="Importe a necessidade semanal ou ajuste os filtros do período." /></td></tr>
                 )}
               </tbody>
             </table>
@@ -16001,7 +16001,7 @@ export function StaffCoveragePage() {
           <div className="flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
             <div className="flex items-start justify-between border-b border-border px-5 py-4">
               <div>
-                <h2 className="text-lg font-extrabold text-navy-950">Preview do requerido semanal</h2>
+                <h2 className="text-lg font-extrabold text-navy-950">Preview da necessidade semanal</h2>
                 <p className="text-sm font-semibold text-muted">{previewFileName || "Arquivo importado"} · {preview.summary.totalRows} linha(s)</p>
               </div>
               <button onClick={() => setPreview(null)} className="rounded-lg border border-border px-3 py-2 text-sm font-bold text-navy-950">Fechar</button>
@@ -16019,7 +16019,7 @@ export function StaffCoveragePage() {
                 <table className="w-full min-w-[920px] text-sm">
                   <thead className="sticky top-0 bg-white text-left text-xs font-extrabold uppercase text-muted">
                     <tr>
-                      {["Linha", "Data", "LOB", "Turno", "Requerido", "Ação", "Erro/alerta"].map((column) => <th key={column} className="px-3 py-2">{column}</th>)}
+                      {["Linha", "Data", "LOB", "Turno", "Necessidade", "Ação", "Erro/alerta"].map((column) => <th key={column} className="px-3 py-2">{column}</th>)}
                     </tr>
                   </thead>
                   <tbody>
@@ -16054,7 +16054,7 @@ export function StaffCoveragePage() {
           <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
             <div className="flex items-start justify-between border-b border-border px-5 py-4">
               <div>
-                <h2 className="text-lg font-extrabold text-navy-950">Agentes disponíveis</h2>
+                <h2 className="text-lg font-extrabold text-navy-950">Agentes programados</h2>
                 <p className="text-sm font-semibold text-muted">{details ? `${details.summary.dateLabel} · ${details.summary.lob} · ${details.summary.shift}` : "Carregando..."}</p>
               </div>
               <button onClick={() => setDetails(null)} className="rounded-lg border border-border px-3 py-2 text-sm font-bold text-navy-950">Fechar</button>
@@ -16063,8 +16063,8 @@ export function StaffCoveragePage() {
               {detailsLoading ? <p className="text-sm font-bold text-muted">Carregando agentes...</p> : details ? (
                 <>
                   <div className="mb-4 grid gap-3 md:grid-cols-4">
-                    <MetricPill value={details.summary.required} label="Requerido" />
-                    <MetricPill value={details.summary.available} label="Disponível" />
+                    <MetricPill value={details.summary.required} label="Necessidade" />
+                    <MetricPill value={details.summary.available} label="Programado" />
                     <MetricPill value={formatGap(details.summary.gap)} label="Gap" />
                     <MetricPill value={details.summary.gap < 0 ? `Faltam ${Math.abs(details.summary.gap)}` : details.summary.gap > 0 ? `Sobram ${details.summary.gap}` : "Exato"} label="Interpretação" />
                   </div>
@@ -16084,7 +16084,7 @@ export function StaffCoveragePage() {
                             <td className="px-3 py-2">{agent.shift}</td>
                           </tr>
                         ))}
-                        {!details.data.length ? <tr><td colSpan={6} className="px-3 py-8"><EmptyState title="Nenhum agente encontrado" description="Não há agentes disponíveis para essa combinação." /></td></tr> : null}
+                        {!details.data.length ? <tr><td colSpan={6} className="px-3 py-8"><EmptyState title="Nenhum agente encontrado" description="Não há agentes programados para essa combinação." /></td></tr> : null}
                       </tbody>
                     </table>
                   </div>
@@ -16404,7 +16404,7 @@ function severityTone(severity: RequiredStaffCriticalRowClient["severity"]) {
 }
 
 function StaffCoverageSummaryList({ rows }: { rows: StaffCoverageSummaryRow[] }) {
-  if (!rows.length) return <EmptyState title="Sem dados" description="Importe requerido ou ajuste os filtros." />;
+  if (!rows.length) return <EmptyState title="Sem dados" description="Importe a necessidade ou ajuste os filtros." />;
   return (
     <div className="space-y-2">
       {rows.map((row) => (
@@ -16414,8 +16414,8 @@ function StaffCoverageSummaryList({ rows }: { rows: StaffCoverageSummaryRow[] })
             <span className={cn("rounded-full px-2 py-1 text-xs font-extrabold", row.gap < 0 ? "bg-red-50 text-red-700" : row.gap > 0 ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-navy-950")}>{formatGap(row.gap)}</span>
           </div>
           <div className="mt-2 grid grid-cols-2 gap-2 text-xs font-bold text-muted">
-            <span>Requerido: <b className="text-navy-950">{row.required}</b></span>
-            <span>Disponível: <b className="text-navy-950">{row.available}</b></span>
+            <span>Necessidade: <b className="text-navy-950">{row.required}</b></span>
+            <span>Programado: <b className="text-navy-950">{row.available}</b></span>
           </div>
         </div>
       ))}
@@ -16458,6 +16458,18 @@ function staffCoverageStatusTone(status: string) {
   if (status === "Sobra") return "bg-emerald-50 text-emerald-700";
   if (status === "Sem requerido") return "bg-amber-50 text-amber-700";
   return "bg-blue-50 text-blue-700";
+}
+
+function staffCoverageStatusLabel(status: string) {
+  return status === "Sem requerido" ? "Sem necessidade" : status;
+}
+
+function coverageTerminology(value: string) {
+  return value
+    .replace(/Requerido/g, "Necessidade")
+    .replace(/requerido/g, "necessidade")
+    .replace(/Disponível/g, "Programado")
+    .replace(/disponível/g, "programado");
 }
 
 type FormalFeedbackEmployeeOption = {
