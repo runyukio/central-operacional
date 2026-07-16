@@ -1003,7 +1003,7 @@ function aiOperationalTerminationInPeriod(employee: AiOperationalEmployee, start
 
 const aiRequiredProductiveShifts = ["Manhã", "Tarde", "Noite"] as const;
 type AiRequiredProductiveShift = (typeof aiRequiredProductiveShifts)[number];
-const aiRequiredDefaultLobs = ["ADS", "CEC"];
+const aiRequiredDefaultLobs = ["ADS", "VIDEO", "COMMENTS", "CEC"];
 
 const aiRequiredCoverageStatuses = new Set(["ESCALADO", "PRESENTE", "ATRASO", "SAIDA_ANTECIPADA", "VENDA_FOLGA_APROVADA", "TROCA_APROVADA"]);
 const aiRequiredInactiveEmployeeStatusTokens = new Set([
@@ -1037,6 +1037,8 @@ type AiRequiredAgentsRow = {
   shift: AiRequiredProductiveShift;
   required: number;
   available: number;
+  necessidade: number;
+  programado: number;
   scheduled: number;
   escaladoStatus: number;
   present: number;
@@ -1154,13 +1156,16 @@ async function buildAiRequiredAgentsPeriodSummary(period: AiOperationalPeriod, t
 function aiRequiredTargetLobs(query: RealtimeAiSnapshotQuery) {
   const explicit = query.requiredLob?.trim();
   if (explicit) {
-    if (["Todos", "Todas", "ALL"].includes(explicit)) return null;
-    return explicit.split(",").map((lob) => lob.trim()).filter(Boolean);
-  }
-  if (query.lob && query.lob !== "Todos") return [query.lob];
-  const reportLobs = normalizeAiReportLobs(query.reportLob);
-  if (reportLobs.length === 1) {
-    return reportLobs[0] === "TNS" ? ["TNS", "VIDEO", "COMMENTS"] : [...aiRequiredDefaultLobs];
+    const requestedLobs = explicit
+      .split(",")
+      .map((lob) => aiRequiredLookupKey(lob))
+      .filter(Boolean);
+    if (requestedLobs.some((lob) => ["TODOS", "TODAS", "ALL"].includes(lob))) {
+      return [...aiRequiredDefaultLobs];
+    }
+    return Array.from(
+      new Set(requestedLobs.flatMap((lob) => (lob === "TNS" ? ["VIDEO", "COMMENTS"] : [lob])))
+    );
   }
   return [...aiRequiredDefaultLobs];
 }
@@ -1174,6 +1179,8 @@ function emptyAiRequiredAgentsRow(date: string, lob: string, shift: AiRequiredPr
     shift,
     required: 0,
     available: 0,
+    necessidade: 0,
+    programado: 0,
     scheduled: 0,
     escaladoStatus: 0,
     present: 0,
@@ -1189,6 +1196,8 @@ function finalizeAiRequiredAgentsRow(row: AiRequiredAgentsRow): AiRequiredAgents
   const gap = row.available - row.required;
   return {
     ...row,
+    necessidade: row.required,
+    programado: row.available,
     gap,
     coverageRate: aiRequiredCoverageRate(row.required, row.available),
     absRate: calculateAbsenceRate(row.scheduled, row.absent),
@@ -1211,6 +1220,8 @@ function summarizeAiRequiredAgentsRows(label: string, rows: AiRequiredAgentsRow[
   return {
     label,
     ...total,
+    necessidade: total.required,
+    programado: total.available,
     gap: total.available - total.required,
     coverageRate: aiRequiredCoverageRate(total.required, total.available),
     absRate: calculateAbsenceRate(total.scheduled, total.absent),
