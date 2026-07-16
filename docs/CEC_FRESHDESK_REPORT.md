@@ -1,58 +1,50 @@
-# Report CEC pela API Freshdesk
+# Report CEC pela API oficial do Freshdesk
 
-O backend consulta diretamente a API do Freshdesk, grava um snapshot por bloco de 30 minutos e mantem o ultimo snapshot valido caso a fonte falhe. O cookie nunca e enviado ao navegador.
+O backend consulta a API v2 oficial do Freshdesk com uma API Key permanente, grava um snapshot por bloco de 30 minutos e mantém o último snapshot válido caso a fonte falhe. Nenhuma credencial é enviada ao navegador.
 
-## Variaveis da Vercel
+## Variáveis da Vercel
 
-Configure em Production:
+Configure em `Production`:
 
 ```env
-CEC_FRESHDESK_REPORT_URL=https://kuaishousupport.freshdesk.com/reports/schedule/download_file.json?uuid=333f3cd9-ec65-4aae-9817-b6fcee4efa4d
-CEC_FRESHDESK_COOKIE=COOKIE_COMPLETO_DA_REQUISICAO_AUTENTICADA
+CEC_FRESHDESK_DOMAIN=kuaishousupport.freshdesk.com
+CEC_FRESHDESK_API_KEY=API_KEY_DO_FRESHDESK
 CRON_SECRET=SEGREDO_DA_ROTINA_VERCEL
 ```
 
-O cron `/api/cron/realtime-cec` consulta a API nos minutos `00` e `30`. A propria tela tambem tenta preencher o bloco atual ao ser aberta, sem repetir a consulta quando o ciclo ja existe.
+A API Key fica em `Freshdesk > Profile settings`, abaixo da seção de alteração de senha. Não use o JWT `x-auth-token` do Freshreports: ele pertence à sessão do navegador e expira.
 
-## Automacao Windows opcional
+O cron `/api/cron/realtime-cec` consulta a API nos minutos `00` e `30`. A própria tela também tenta preencher o bloco atual ao ser aberta, sem repetir a consulta quando o ciclo já existe.
 
-O script Windows continua disponivel como contingencia caso a consulta precise ser executada fora da Vercel.
+## Recorte do Backlog Normal
 
-### Arquivos locais
-
-Crie `C:\Users\SEU_USUARIO\.freshdesk_cookie` com o valor completo do header `Cookie` copiado da requisicao autenticada do Freshdesk.
-
-Crie `C:\Users\SEU_USUARIO\.cec_env`:
+Por padrão, o sistema consulta grupos cujo nome contém `normal` e exclui grupos P0. Para travar o recorte pelos IDs oficiais, configure:
 
 ```env
-REALTIME_SITE_URL=https://eastriverbrasil.com
-REALTIME_IMPORT_TOKEN=SEU_TOKEN_TECNICO
-CEC_UPLOAD_ENABLED=true
-CEC_NORMAL_REPORT_URL=https://kuaishousupport.freshdesk.com/reports/schedule/download_file.json?uuid=333f3cd9-ec65-4aae-9817-b6fcee4efa4d
+CEC_FRESHDESK_GROUP_IDS=123456,789012
 ```
 
-### Teste manual
+Os IDs são validados antes da coleta. Se um ID estiver incorreto, o upload é recusado e o último snapshot válido permanece no painel.
 
-No PowerShell, dentro do projeto:
+Outras configurações opcionais:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\download-cec-scheduled-report.ps1
+```env
+# Um ou mais trechos de nome separados por vírgula, usados quando GROUP_IDS está vazio.
+CEC_FRESHDESK_GROUP_NAME_PATTERN=normal
+
+# Use "agent" para agrupar a rosca por agente ou "group" para agrupar pelo grupo Freshdesk.
+CEC_FRESHDESK_BREAKDOWN_BY=agent
+
+# Sobrescreve os status quando a conta usa códigos customizados.
+CEC_FRESHDESK_STATUS_MAP={"2":"Open","3":"On Hold","6":"New"}
 ```
 
-O resultado local fica em `C:\Users\SEU_USUARIO\CEC`. O script reconhece arquivos JSON, CSV ou XLSX com os headers `ticket`, `agent name` e `status`.
+Sem `CEC_FRESHDESK_STATUS_MAP`, a rotina lê `/api/v2/ticket_fields` e identifica automaticamente Open, Pending/On Hold e New.
 
-### Agendamento
+## Proteções de consistência
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install-cec-scheduled-report-task.ps1
-```
-
-Isso cria tarefas nos minutos `00` e `30` de cada hora. Os logs ficam em `C:\Users\SEU_USUARIO\CEC\logs`.
-
-Para remover:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\uninstall-cec-scheduled-report-task.ps1
-```
-
-Quando o Freshdesk encerrar a sessao, atualize somente o arquivo `.freshdesk_cookie`.
+- Tickets são consultados por grupo e status para reduzir risco de truncamento.
+- Todas as páginas são carregadas e os tickets são deduplicados pelo ID.
+- Se a busca exceder o limite de 300 registros por grupo/status, o snapshot é recusado em vez de publicar uma contagem parcial.
+- Erros de autenticação, permissão, rate limit ou formato não apagam o último snapshot válido.
+- Cookie, `x-auth-token` e link assinado do Freshreports não fazem parte deste fluxo.
