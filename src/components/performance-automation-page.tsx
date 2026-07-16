@@ -769,19 +769,22 @@ function ForecastViewPanel({
       </div>
 
       <div className="space-y-4 p-4">
-        <div className="mx-auto flex w-full max-w-6xl flex-col items-center gap-3 text-center">
-          <div className="grid w-full max-w-2xl gap-3 sm:grid-cols-2">
-            <InfoTile title="Ultimo real" value={formatForecastDate(model.lastRealAt)} />
-            <InfoTile title="Projetado ate" value={formatForecastDate(model.projectedUntil)} />
+        <div className="grid w-full gap-4 md:grid-cols-2 xl:grid-cols-[minmax(320px,0.9fr)_auto_auto_minmax(390px,1.1fr)] xl:items-end">
+          <div className="min-w-0">
+            <p className="mb-2 text-[11px] font-black uppercase tracking-wide text-muted">Periodo</p>
+            <div className="grid grid-cols-2 gap-2">
+              <InfoTile title="Ultimo real" value={formatForecastDate(model.lastRealAt)} />
+              <InfoTile title="Projetado ate" value={formatForecastDate(model.projectedUntil)} />
+            </div>
           </div>
 
-          <SlicerGroup label="Visao" centered>
+          <SlicerGroup label="Visao">
             {forecastViewOptions.map((option) => <SlicerButton key={option.value} active={selectedView === option.value} label={option.label} onClick={() => onViewChange(option.value)} />)}
           </SlicerGroup>
-          <SlicerGroup label="Horizonte" centered>
+          <SlicerGroup label="Horizonte">
             {forecastHorizons.map((days) => <SlicerButton key={days} active={horizon === days} label={`${days} dias`} onClick={() => onHorizonChange(days)} tone="cyan" />)}
           </SlicerGroup>
-          <SlicerGroup label="LOB" centered>
+          <SlicerGroup label="LOB">
             <SlicerButton active={!selectedLob} label="Todas as LOBs" onClick={() => onLobChange("")} tone="dark" />
             {lobs.filter((lob) => lob !== "N/A").map((lob) => <SlicerButton key={lob} active={selectedLob === lob} label={lob} onClick={() => onLobChange(lob)} tone="dark" />)}
           </SlicerGroup>
