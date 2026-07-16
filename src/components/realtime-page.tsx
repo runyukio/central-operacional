@@ -22,6 +22,7 @@ import { Area, AreaChart, CartesianGrid, LabelList, ReferenceLine, ResponsiveCon
 import { canAccessExecutiveAdsReport, canAccessRealTimeAgentsReports } from "@/lib/permissions";
 import { getQueueReportMetadataById } from "@/lib/queue-report-metadata";
 import { cn } from "@/lib/utils";
+import { CecReportDetails, CecReportOverview, type CecReportPayload } from "@/components/realtime-cec-report";
 
 type CountItem = { label: string; count: number };
 
@@ -294,7 +295,7 @@ type QueueLobCardData = {
   maxLatency: AgentKpiCard;
   aht: AgentKpiCard;
 };
-type ReportLob = "ADS" | "TNS";
+type ReportLob = "ADS" | "TNS" | "CEC";
 type QueueReportRow = QueueRealtimeRow & {
   reportQueueName: string;
   reportDepartment: string;
@@ -466,6 +467,9 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
   const [historyOpen, setHistoryOpen] = useState(false);
   const [imports, setImports] = useState<ImportHistory[]>([]);
   const [importsLoading, setImportsLoading] = useState(false);
+  const [cecReport, setCecReport] = useState<CecReportPayload | null>(null);
+  const [cecLoading, setCecLoading] = useState(false);
+  const [cecError, setCecError] = useState("");
   const [executivePerformanceTrend, setExecutivePerformanceTrend] = useState<PerformanceForecastTrendRow[]>([]);
   const [executiveRequiredRows, setExecutiveRequiredRows] = useState<StaffCoverageExecutiveRow[]>([]);
   const snapshotAbortRef = useRef<AbortController | null>(null);
@@ -515,6 +519,23 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
       setError(currentError instanceof Error ? currentError.message : "Não foi possível carregar histórico de importações.");
     } finally {
       setImportsLoading(false);
+    }
+  }
+
+  async function loadCecReport(cycle = selectedCycle) {
+    setCecLoading(true);
+    setCecError("");
+    try {
+      const params = new URLSearchParams();
+      if (cycle) params.set("cycleDownload", cycle);
+      const response = await fetch(`/api/realtime/cec?${params.toString()}`, { cache: "no-store" });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.message || json.error || "Could not load CEC report.");
+      setCecReport((json as { data: CecReportPayload }).data);
+    } catch (currentError) {
+      setCecError(currentError instanceof Error ? currentError.message : "Could not load CEC report.");
+    } finally {
+      setCecLoading(false);
     }
   }
 
@@ -727,6 +748,14 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
   }, [activeTab, clientQueuesOnly, followLatestCycle, selectedCycleValue]);
 
   useEffect(() => {
+    if (effectiveTab !== "report" || reportLob !== "CEC") return;
+    void loadCecReport(selectedCycleValue);
+    const interval = window.setInterval(() => void loadCecReport(selectedCycleValue), 60000);
+    return () => window.clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveTab, reportLob, selectedCycleValue]);
+
+  useEffect(() => {
     function refreshWhenVisible() {
       if (document.hidden) return;
       void refreshRealtimeSnapshot(true);
@@ -783,13 +812,20 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
               {useEnglishChrome ? "History" : "Histórico"}
             </button>
           ) : null}
-          {!executiveOnly ? (
+          {!executiveOnly && !(effectiveTab === "report" && reportLob === "CEC") ? (
             <button type="button" onClick={exportXlsx} className="premium-control inline-flex h-10 items-center gap-2 px-3 text-sm font-extrabold text-navy-950">
               <Download className="h-4 w-4" />
               {useEnglishChrome ? "Export XLSX" : "Exportar XLSX"}
             </button>
           ) : null}
-          <button type="button" onClick={() => void refreshRealtimeSnapshot(true)} className="premium-button inline-flex h-10 items-center gap-2 px-4 text-sm font-extrabold">
+          <button
+            type="button"
+            onClick={() => {
+              void refreshRealtimeSnapshot(true);
+              if (effectiveTab === "report" && reportLob === "CEC") void loadCecReport(selectedCycleValue);
+            }}
+            className="premium-button inline-flex h-10 items-center gap-2 px-4 text-sm font-extrabold"
+          >
             <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} />
             {useEnglishChrome ? "Refresh" : "Atualizar"}
           </button>
@@ -831,7 +867,9 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
             <QueueLobCard key={card.lob} card={card} />
           ))}
         </div>
-      ) : effectiveTab === "executive" ? null : reportLob === "ADS" ? (
+      ) : effectiveTab === "executive" ? null : reportLob === "CEC" ? (
+        <CecReportOverview report={cecReport} loading={cecLoading} error={cecError} />
+      ) : reportLob === "ADS" ? (
         <ReportSummarySection card={reportBacklogCard} departments={departmentSummaries} reportLob={reportLob} selectedCycle={selectedCycleValue} headcount={adsReportCards.headcount[0]} onDownloadSummary={downloadReportSummary} />
       ) : reportLob === "TNS" ? (
         <ReportKpiSection cards={tnsReportCards} />
@@ -895,14 +933,16 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
               <FilterSelect value={queueFilters.slaTarget} onChange={(value) => updateQueueFilter("slaTarget", value)} label="Meta SLA" empty="Todas" options={queueView?.filters.slaTargets ?? []} formatOptionLabel={formatSlaTargetLabel} />
               <FilterSelect value={queueFilters.queueId} onChange={(value) => updateQueueFilter("queueId", value)} label="Fila ID" empty="Todas" options={queueView?.filters.queueIds ?? []} />
             </div>
-          ) : effectiveTab === "report" ? (
+          ) : effectiveTab === "report" && reportLob !== "CEC" ? (
             <div className="mt-4 rounded-3xl border border-slate-100 bg-slate-50/70 p-3">
               <SearchBox value={reportSearch} onChange={setReportSearch} placeholder="Search ID, Queue or Department..." />
             </div>
           ) : null}
         </div>
 
-        {loading ? (
+        {effectiveTab === "report" && reportLob === "CEC" ? (
+          <CecReportDetails report={cecReport} loading={cecLoading} />
+        ) : loading ? (
           <div className="grid gap-3 p-4">
             {Array.from({ length: 5 }).map((_, index) => <div key={index} className="h-14 animate-pulse rounded-2xl bg-slate-100" />)}
           </div>
@@ -2031,7 +2071,7 @@ function QueueLobQuickFilter({ value, onChange, options }: { value: string; onCh
 }
 
 function ReportLobQuickFilter({ value, onChange }: { value: ReportLob; onChange: (value: ReportLob) => void }) {
-  const lobs = ["ADS", "TNS"] as const;
+  const lobs = ["ADS", "TNS", "CEC"] as const;
   return (
     <div className="flex flex-wrap items-center gap-1 rounded-2xl border border-slate-200 bg-white p-1 shadow-[0_4px_12px_rgba(7,27,58,0.035)]">
       {lobs.map((lob) => {

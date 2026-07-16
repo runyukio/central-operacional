@@ -25,11 +25,12 @@ export async function POST(request: Request) {
     const body = await request.json();
     const result = await importRealtimeCecSnapshot({
       cycleDownload: String(body?.cycleDownload ?? ""),
-      fileName: String(body?.fileName ?? "cec_freshdesk_report.pdf"),
-      source: typeof body?.source === "string" ? body.source : "freshdesk-pdf",
+      fileName: String(body?.fileName ?? "cec_backlog_normal.csv"),
+      source: typeof body?.source === "string" ? body.source : "freshdesk-scheduled-report",
       generatedDate: typeof body?.generatedDate === "string" ? body.generatedDate : null,
       groups: Array.isArray(body?.groups) ? body.groups : [],
       departments: Array.isArray(body?.departments) ? body.departments : [],
+      tickets: Array.isArray(body?.tickets) ? body.tickets : [],
       rawText: typeof body?.rawText === "string" ? body.rawText : ""
     });
     if ("error" in result) {

@@ -23,6 +23,12 @@ export type RealtimeCecDepartmentInput = {
   percent: number | null;
 };
 
+export type RealtimeCecTicketInput = {
+  ticket: string;
+  agentName: string;
+  status: string;
+};
+
 export type RealtimeCecImportInput = {
   cycleDownload: string;
   fileName: string;
@@ -30,6 +36,7 @@ export type RealtimeCecImportInput = {
   generatedDate?: string | null;
   groups: RealtimeCecGroupInput[];
   departments?: RealtimeCecDepartmentInput[];
+  tickets?: RealtimeCecTicketInput[];
   rawText?: string;
 };
 
@@ -70,14 +77,28 @@ function normalizeDepartment(input: RealtimeCecDepartmentInput): RealtimeCecDepa
   };
 }
 
-function buildRawData(input: RealtimeCecImportInput, groups: RealtimeCecGroupInput[], departments: RealtimeCecDepartmentInput[]) {
+function normalizeTicket(input: RealtimeCecTicketInput): RealtimeCecTicketInput {
   return {
-    source: input.source || "freshdesk-pdf",
+    ticket: String(input.ticket || "").trim(),
+    agentName: String(input.agentName || "Sem agente").trim() || "Sem agente",
+    status: String(input.status || "Sem status").trim() || "Sem status"
+  };
+}
+
+function buildRawData(
+  input: RealtimeCecImportInput,
+  groups: RealtimeCecGroupInput[],
+  departments: RealtimeCecDepartmentInput[],
+  tickets: RealtimeCecTicketInput[]
+) {
+  return {
+    source: input.source || "freshdesk-scheduled-report",
     fileName: input.fileName,
     cycleDownload: input.cycleDownload,
     generatedDate: input.generatedDate || null,
     groups,
     departments,
+    tickets,
     rawText: input.rawText || ""
   };
 }
@@ -114,16 +135,17 @@ async function pruneRealtimeCecHistory(currentId?: string) {
 
 export async function importRealtimeCecSnapshot(input: RealtimeCecImportInput) {
   const cycleDownload = input.cycleDownload.trim();
-  const fileName = input.fileName.trim() || "cec_freshdesk_report.pdf";
-  const source = input.source?.trim() || "freshdesk-pdf";
+  const fileName = input.fileName.trim() || "cec_backlog_normal.csv";
+  const source = input.source?.trim() || "freshdesk-scheduled-report";
   const groups = (input.groups || []).map(normalizeGroup).filter((group) => group.backlog || group.onHold || group.open || group.new);
   const departments = (input.departments || []).map(normalizeDepartment).filter((department) => department.name);
+  const tickets = (input.tickets || []).map(normalizeTicket).filter((ticket) => ticket.ticket || ticket.agentName !== "Sem agente");
 
   if (!cycleDownload) return { error: "cycleDownload é obrigatório para importar CEC.", status: 400 };
   if (!groups.length) return { error: "O snapshot CEC não possui grupos válidos.", status: 400 };
 
   const summary = summarizeGroups(groups);
-  const rawData = buildRawData(input, groups, departments);
+  const rawData = buildRawData(input, groups, departments, tickets);
 
   const snapshot = await prisma.realTimeCecSnapshot.upsert({
     where: { cycleDownload },
@@ -231,7 +253,8 @@ function serializeSnapshot(snapshot: NonNullable<RealtimeCecSnapshotRecord>) {
     openCount: snapshot.openCount,
     newCount: snapshot.newCount,
     groups: extractGroups(snapshot),
-    departments: extractDepartments(snapshot)
+    departments: extractDepartments(snapshot),
+    tickets: extractTickets(snapshot)
   };
 }
 
@@ -243,6 +266,11 @@ function extractGroups(snapshot: NonNullable<RealtimeCecSnapshotRecord>): Realti
 function extractDepartments(snapshot: NonNullable<RealtimeCecSnapshotRecord>): RealtimeCecDepartmentInput[] {
   const rawData = snapshot.rawData as { departments?: RealtimeCecDepartmentInput[] } | null;
   return Array.isArray(rawData?.departments) ? rawData.departments.map(normalizeDepartment) : [];
+}
+
+function extractTickets(snapshot: NonNullable<RealtimeCecSnapshotRecord>): RealtimeCecTicketInput[] {
+  const rawData = snapshot.rawData as { tickets?: RealtimeCecTicketInput[] } | null;
+  return Array.isArray(rawData?.tickets) ? rawData.tickets.map(normalizeTicket) : [];
 }
 
 function formatDateTime(value: Date) {
