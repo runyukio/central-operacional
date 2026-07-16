@@ -98,8 +98,10 @@ type StaffCoverageSchedule = Prisma.ScheduleGetPayload<{
         roleTitle: true;
         skill: true;
         operationalStatus: true;
+        workStartTime: true;
+        workEndTime: true;
         lob: { select: { id: true; name: true } };
-        shift: { select: { id: true; name: true } };
+        shift: { select: { id: true; name: true; startsAt: true; endsAt: true } };
         supervisor: { select: { id: true; fullName: true; wbLogin: true } };
       };
     };
@@ -170,6 +172,40 @@ export type StaffCoverageDetailQuery = StaffCoverageQuery & {
   date?: string;
   type?: "row" | "deficit";
 };
+
+export type AdsHourlyCoverageSlot = {
+  date: string;
+  hour: number;
+};
+
+export async function countAdsScheduledByHour(
+  period: { startDate: Date; endDate: Date },
+  slots: AdsHourlyCoverageSlot[]
+) {
+  if (!slots.length) return new Map<string, number>();
+
+  const queryStart = new Date(period.startDate);
+  queryStart.setUTCDate(queryStart.getUTCDate() - 1);
+  const schedules = await listCoverageSchedules({ startDate: queryStart, endDate: period.endDate }, { lob: "ADS", roleTitle: "Agente" });
+  const employeesBySlot = new Map<string, Set<string>>();
+  const slotTimes = slots.map((slot) => ({
+    key: `${slot.date}|${slot.hour}`,
+    timestamp: hourlySlotTimestamp(slot.date, slot.hour)
+  }));
+
+  for (const schedule of schedules) {
+    const window = scheduleCoverageWindow(schedule);
+    if (!window) continue;
+    for (const slot of slotTimes) {
+      if (slot.timestamp < window.start || slot.timestamp >= window.end) continue;
+      const employees = employeesBySlot.get(slot.key) ?? new Set<string>();
+      employees.add(schedule.employee.id);
+      employeesBySlot.set(slot.key, employees);
+    }
+  }
+
+  return new Map(Array.from(employeesBySlot.entries(), ([key, employees]) => [key, employees.size]));
+}
 
 export async function listStaffCoverage(actor: Actor, query: StaffCoverageQuery = {}) {
   try {
@@ -715,8 +751,10 @@ async function listCoverageSchedules(period: { startDate: Date; endDate: Date },
           roleTitle: true,
           skill: true,
           operationalStatus: true,
+          workStartTime: true,
+          workEndTime: true,
           lob: { select: { id: true, name: true } },
-          shift: { select: { id: true, name: true } },
+          shift: { select: { id: true, name: true, startsAt: true, endsAt: true } },
           supervisor: { select: { id: true, fullName: true, wbLogin: true } }
         }
       }
@@ -821,6 +859,36 @@ function formatAgent(schedule: StaffCoverageSchedule) {
     shift: scheduleShiftCategory(schedule),
     scheduleStatus: statusLabels[schedule.status] ?? schedule.status
   };
+}
+
+function scheduleCoverageWindow(schedule: StaffCoverageSchedule) {
+  const startTime = schedule.startsAt ?? schedule.shift?.startsAt ?? schedule.employee.workStartTime ?? schedule.employee.shift?.startsAt;
+  const endTime = schedule.endsAt ?? schedule.shift?.endsAt ?? schedule.employee.workEndTime ?? schedule.employee.shift?.endsAt;
+  const startMinutes = minutesFromClock(startTime);
+  const endMinutes = minutesFromClock(endTime);
+  if (startMinutes === null || endMinutes === null) return null;
+
+  const dateKey = formatDateKey(schedule.date);
+  const dayStart = hourlySlotTimestamp(dateKey, 0);
+  const start = dayStart + startMinutes * 60_000;
+  let end = dayStart + endMinutes * 60_000;
+  if (end <= start) end += 24 * 60 * 60_000;
+  return { start, end };
+}
+
+function hourlySlotTimestamp(dateKey: string, hour: number) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey);
+  if (!match) return Number.NaN;
+  return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), hour, 0, 0, 0);
+}
+
+function minutesFromClock(value?: string | null) {
+  const match = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(String(value ?? "").trim());
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23 || minute > 59) return null;
+  return hour * 60 + minute;
 }
 
 function coverageMetrics(available: number, required: number) {

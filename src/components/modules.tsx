@@ -15626,9 +15626,10 @@ export function ShiftReportPage() {
 export function StaffCoveragePage() {
   const initialRange = currentStaffCoverageWeekRange();
   const staffInitialRange = currentMonthRemainingRange();
-  const [view, setView] = useState<"AGENTS" | "STAFF">("AGENTS");
+  const [view, setView] = useState<"AGENTS" | "STAFF" | "ADS">("AGENTS");
   const [payload, setPayload] = useState<StaffCoverageResponse | null>(null);
   const [staffPayload, setStaffPayload] = useState<RequiredStaffCoverageResponse | null>(null);
+  const [adsPayload, setAdsPayload] = useState<AdsHourlyCoverageResponse | null>(null);
   const [filters, setFilters] = useState({
     startDate: initialRange.startDate,
     endDate: initialRange.endDate,
@@ -15642,6 +15643,7 @@ export function StaffCoveragePage() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [staffLoading, setStaffLoading] = useState(false);
+  const [adsLoading, setAdsLoading] = useState(false);
   const [showRtaCoverage, setShowRtaCoverage] = useState(true);
   const [dateFilterTouched, setDateFilterTouched] = useState(false);
   const [message, setMessage] = useState("");
@@ -15651,6 +15653,7 @@ export function StaffCoveragePage() {
   const [details, setDetails] = useState<StaffCoverageDetailsResponse | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const adsFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const loadCoverage = useCallback(async () => {
     setLoading(true);
@@ -15698,6 +15701,23 @@ export function StaffCoveragePage() {
     }
   }, [filters.endDate, filters.lob, filters.shift, filters.staffCoverage, filters.startDate, filters.supervisor, showRtaCoverage]);
 
+  const loadAdsCoverage = useCallback(async (period?: { startDate: string; endDate: string }) => {
+    setAdsLoading(true);
+    const params = new URLSearchParams({
+      startDate: period?.startDate ?? filters.startDate,
+      endDate: period?.endDate ?? filters.endDate
+    });
+    try {
+      const data = await apiJson<AdsHourlyCoverageResponse>(`/api/staff-coverage/ads?${params.toString()}`);
+      setAdsPayload(data);
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível carregar a necessidade ADS por hora.");
+    } finally {
+      setAdsLoading(false);
+    }
+  }, [filters.endDate, filters.startDate]);
+
   useEffect(() => {
     if (view === "AGENTS") void loadCoverage();
   }, [loadCoverage, view]);
@@ -15706,17 +15726,43 @@ export function StaffCoveragePage() {
     if (view === "STAFF") void loadStaffCoverage();
   }, [loadStaffCoverage, view]);
 
+  useEffect(() => {
+    if (view === "ADS") void loadAdsCoverage();
+  }, [loadAdsCoverage, view]);
+
   const updateFilter = (key: keyof typeof filters, value: string) => {
     if (key === "startDate" || key === "endDate") setDateFilterTouched(true);
     setFilters((current) => ({ ...current, [key]: value }));
     setPage(1);
   };
 
-  const changeRequiredView = (nextView: "AGENTS" | "STAFF") => {
+  const changeRequiredView = (nextView: "AGENTS" | "STAFF" | "ADS") => {
     setView(nextView);
     if (nextView === "STAFF" && !dateFilterTouched) {
       setFilters((current) => ({ ...current, startDate: staffInitialRange.startDate, endDate: staffInitialRange.endDate }));
       setPage(1);
+    }
+  };
+
+  const importAdsRequirementFile = async (file?: File | null) => {
+    if (!file) return;
+    setImporting(true);
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const result = await apiJson<{ success: boolean; importedRows: number; period: { startDate: string; endDate: string } }>("/api/staff-coverage/ads", {
+        method: "POST",
+        body: formData
+      });
+      setMessage(`Necessidade ADS importada: ${result.importedRows} horário(s).`);
+      setDateFilterTouched(true);
+      setFilters((current) => ({ ...current, startDate: result.period.startDate, endDate: result.period.endDate }));
+      await loadAdsCoverage(result.period);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível importar a necessidade ADS por hora.");
+    } finally {
+      setImporting(false);
+      if (adsFileInputRef.current) adsFileInputRef.current.value = "";
     }
   };
 
@@ -15804,7 +15850,7 @@ export function StaffCoveragePage() {
       />
 
       <div className="inline-flex rounded-xl border border-border bg-white p-1 shadow-sm">
-        {(["AGENTS", "STAFF"] as const).map((item) => (
+        {(["AGENTS", "STAFF", "ADS"] as const).map((item) => (
           <button
             key={item}
             onClick={() => changeRequiredView(item)}
@@ -15819,6 +15865,25 @@ export function StaffCoveragePage() {
       </div>
 
       <div className="rounded-xl border border-border bg-white p-3 shadow-sm">
+        {view === "ADS" ? (
+          <div className="grid gap-2 md:grid-cols-[180px_180px_1fr]">
+            <FormInput label="Data inicial" type="date" value={filters.startDate} onChange={(value) => updateFilter("startDate", value)} />
+            <FormInput label="Data final" type="date" value={filters.endDate} onChange={(value) => updateFilter("endDate", value)} />
+            <div className="flex flex-wrap items-end justify-end gap-2">
+              {(adsPayload?.permissions.canImport ?? payload?.permissions.canImport) ? (
+                <>
+                  <input ref={adsFileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={(event) => void importAdsRequirementFile(event.target.files?.[0])} />
+                  <button onClick={() => adsFileInputRef.current?.click()} disabled={importing} className="inline-flex h-9 items-center gap-2 rounded-lg bg-blue-600 px-3 text-xs font-extrabold text-white disabled:opacity-60">
+                    <Upload className="h-4 w-4" /> Importar necessidade ADS
+                  </button>
+                </>
+              ) : null}
+              <button onClick={() => void loadAdsCoverage()} className="inline-flex h-9 items-center gap-2 rounded-lg bg-navy-950 px-3 text-xs font-extrabold text-white">
+                <RefreshCw className={cn("h-4 w-4", adsLoading && "animate-spin")} /> Atualizar
+              </button>
+            </div>
+          </div>
+        ) : (
         <div className={cn("grid gap-2 md:grid-cols-3", view === "AGENTS" ? "xl:grid-cols-[140px_140px_140px_140px_170px_140px_130px_1fr]" : "xl:grid-cols-[140px_140px_140px_140px_190px_170px_1fr]")}>
           <FormInput label="Data inicial" type="date" value={filters.startDate} onChange={(value) => updateFilter("startDate", value)} />
           <FormInput label="Data final" type="date" value={filters.endDate} onChange={(value) => updateFilter("endDate", value)} />
@@ -15893,12 +15958,15 @@ export function StaffCoveragePage() {
             </button>
           </div>
         </div>
+        )}
       </div>
 
       {message ? <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
 
       {view === "STAFF" ? (
         <RequiredStaffCoverageView payload={staffPayload} loading={staffLoading} showRta={showRtaCoverage} />
+      ) : view === "ADS" ? (
+        <AdsHourlyCoverageView payload={adsPayload} loading={adsLoading} />
       ) : (
       <>
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
@@ -16176,6 +16244,22 @@ type StaffCoverageDetailsResponse = {
   pagination: { page: number; limit: number; total: number; totalPages: number };
 };
 
+type AdsHourlyCoverageResponse = {
+  data: Array<{
+    id: string;
+    date: string;
+    dateLabel: string;
+    weekday: string;
+    hour: number;
+    hourLabel: string;
+    required: number;
+    scheduled: number;
+  }>;
+  period: { startDate: string; endDate: string };
+  summary: { slots: number; days: number };
+  permissions: { canImport: boolean };
+};
+
 type RequiredStaffPersonClient = {
   id: string;
   name: string;
@@ -16236,6 +16320,51 @@ type RequiredStaffCoverageResponse = {
   critical: RequiredStaffCriticalRowClient[];
   filters: { lobs: string[]; shifts: string[]; staff: string[]; coverageStatuses?: string[] };
 };
+
+function AdsHourlyCoverageView({ payload, loading }: { payload: AdsHourlyCoverageResponse | null; loading: boolean }) {
+  const rows = payload?.data ?? [];
+
+  return (
+    <Panel title="Necessidade ADS por hora">
+      <div className="overflow-hidden rounded-xl border border-border">
+        <table className="w-full table-fixed border-collapse text-sm">
+          <thead className="bg-slate-50">
+            <tr className="border-b border-border text-xs font-extrabold uppercase text-muted">
+              <th className="w-1/2 px-4 py-3 text-left">Data + hora</th>
+              <th className="w-1/4 px-4 py-3 text-center">Necessidade</th>
+              <th className="w-1/4 px-4 py-3 text-center">Escalado</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && !payload ? (
+              <tr><td colSpan={3} className="px-4 py-10 text-center font-bold text-muted">Carregando necessidade ADS...</td></tr>
+            ) : rows.length ? rows.map((row) => (
+              <tr key={row.id} className="border-b border-slate-100 text-navy-950 last:border-b-0 hover:bg-blue-50/50">
+                <td className="px-4 py-3 font-extrabold">
+                  {row.dateLabel} às {row.hourLabel}
+                  <span className="ml-2 text-xs font-semibold capitalize text-muted">{row.weekday}</span>
+                </td>
+                <td className="px-4 py-3 text-center text-base font-extrabold">{row.required}</td>
+                <td className="px-4 py-3 text-center text-base font-extrabold">{row.scheduled}</td>
+              </tr>
+            )) : (
+              <tr>
+                <td colSpan={3} className="px-4 py-8">
+                  <EmptyState title="Nenhuma necessidade ADS encontrada" description="Importe a planilha com Data, Hora e Required ou altere o período consultado." />
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {payload ? (
+        <p className="mt-3 text-xs font-bold text-muted">
+          {payload.summary.slots} horário(s) em {payload.summary.days} dia(s). O escalado segue a mesma regra operacional da aba Agents e considera somente ADS.
+        </p>
+      ) : null}
+    </Panel>
+  );
+}
 
 function RequiredStaffCoverageView({ payload, loading, showRta }: { payload: RequiredStaffCoverageResponse | null; loading: boolean; showRta: boolean }) {
   const [showCriticalDays, setShowCriticalDays] = useState(true);

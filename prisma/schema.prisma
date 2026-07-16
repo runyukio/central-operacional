@@ -1759,6 +1759,20 @@ model StaffCoverage {
   @@index([updatedById])
 }
 
+model AdsHourlyRequirement {
+  id             String   @id @default(cuid())
+  date           DateTime
+  hour           Int
+  requiredStaff  Int
+  sourceFileName String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([date, hour])
+  @@index([date])
+  @@index([date, hour])
+}
+
 model TokenBalance {
   id         String          @id @default(cuid())
   employeeId String          @unique
