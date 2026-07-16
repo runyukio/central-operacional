@@ -8,14 +8,18 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const result = await exportOperationalEmployeesXlsxData(actor, {
     query: searchParams.get("q"),
-    lob: searchParams.get("lob"),
-	    status: searchParams.get("status_colaborador") ?? searchParams.get("employeeStatus") ?? searchParams.get("status"),
-    supervisorId: searchParams.get("supervisorId"),
-    shiftId: searchParams.get("shiftId"),
-    contractType: searchParams.get("contractType"),
-    roleTitle: searchParams.get("roleTitle"),
-    skill: searchParams.get("skill"),
-    wave: searchParams.get("wave")
+    lob: searchParams.getAll("lob"),
+    status: searchParams.getAll("status_colaborador").length
+      ? searchParams.getAll("status_colaborador")
+      : searchParams.getAll("employeeStatus").length
+        ? searchParams.getAll("employeeStatus")
+        : searchParams.getAll("status"),
+    supervisorId: searchParams.getAll("supervisorId"),
+    shiftId: searchParams.getAll("shiftId"),
+    contractType: searchParams.getAll("contractType"),
+    roleTitle: searchParams.getAll("roleTitle"),
+    skill: searchParams.getAll("skill"),
+    wave: searchParams.getAll("wave")
   });
 
   if ("error" in result) return errorResponse(result, errorStatus(result));

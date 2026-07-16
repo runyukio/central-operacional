@@ -74,16 +74,16 @@ export type EmployeeListQuery = {
   page?: number;
   limit?: number;
   search?: string;
-  lob?: string;
+  lob?: string[] | string;
   lobId?: string;
-  supervisorId?: string;
+  supervisorId?: string[] | string;
   teamId?: string;
-  shiftId?: string;
-  contractType?: string;
-  roleTitle?: string;
-  skill?: string;
-  wave?: string;
-  status?: string;
+  shiftId?: string[] | string;
+  contractType?: string[] | string;
+  roleTitle?: string[] | string;
+  skill?: string[] | string;
+  wave?: string[] | string;
+  status?: string[] | string;
   role?: string;
   wbLogins?: string[] | string;
 };
@@ -162,36 +162,40 @@ async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeList
     const statusWhere = buildEmployeeStatusWhere(query.status);
     const batch = parseWbLoginBatch(query.wbLogins ?? "");
 
+    const primaryFilter: Prisma.EmployeeProfileWhereInput = {
+      deletedAt: null,
+      ...(search
+        ? {
+            OR: [
+              { fullName: { contains: search, mode: "insensitive" as const } },
+              { wbLogin: { contains: search, mode: "insensitive" as const } },
+              { user: { email: { contains: search, mode: "insensitive" as const } } },
+              { roleTitle: { contains: search, mode: "insensitive" as const } },
+              { skill: { contains: search, mode: "insensitive" as const } },
+              { wave: { contains: search, mode: "insensitive" as const } },
+              { lob: { name: { contains: search, mode: "insensitive" as const } } },
+              { supervisor: { fullName: { contains: search, mode: "insensitive" as const } } }
+            ]
+          }
+        : {})
+    };
+    const filterParts: Prisma.EmployeeProfileWhereInput[] = [
+      primaryFilter,
+      buildEmployeeMapLobFilterWhere(query.lob),
+      query.lobId ? { lobId: query.lobId } : {},
+      buildSupervisorFilterWhere(query.supervisorId),
+      query.teamId ? { teamId: query.teamId } : {},
+      buildIdFilterWhere("shiftId", query.shiftId),
+      buildContractTypeFilterWhere(query.contractType),
+      buildNullableTextFilterWhere("roleTitle", query.roleTitle),
+      buildNullableTextFilterWhere("skill", query.skill),
+      buildNullableTextFilterWhere("wave", query.wave),
+      query.role ? { user: { role: { name: query.role } } } : {}
+    ].filter(hasWhereInput);
     let baseEmployeeWhere: Prisma.EmployeeProfileWhereInput =
       role === "COLABORADOR" && user.employeeProfile
         ? { id: user.employeeProfile.id, deletedAt: null }
-        : {
-          deletedAt: null,
-          ...(search
-            ? {
-                OR: [
-                  { fullName: { contains: search, mode: "insensitive" } },
-                  { wbLogin: { contains: search, mode: "insensitive" } },
-                  { user: { email: { contains: search, mode: "insensitive" } } },
-                  { roleTitle: { contains: search, mode: "insensitive" } },
-                  { skill: { contains: search, mode: "insensitive" } },
-                  { wave: { contains: search, mode: "insensitive" } },
-                  { lob: { name: { contains: search, mode: "insensitive" } } },
-                  { supervisor: { fullName: { contains: search, mode: "insensitive" } } }
-                ]
-              }
-            : {}),
-          ...buildEmployeeMapLobFilterWhere(query.lob),
-          ...(query.lobId ? { lobId: query.lobId } : {}),
-          ...buildSupervisorFilterWhere(query.supervisorId),
-          ...(query.teamId ? { teamId: query.teamId } : {}),
-          ...(query.shiftId ? { shiftId: query.shiftId } : {}),
-          ...buildContractTypeFilterWhere(query.contractType),
-          ...buildNullableTextFilterWhere("roleTitle", query.roleTitle),
-          ...buildNullableTextFilterWhere("skill", query.skill),
-          ...buildNullableTextFilterWhere("wave", query.wave),
-	          ...(query.role ? { user: { role: { name: query.role } } } : {}),
-	        };
+        : { AND: filterParts };
     if (!(role === "COLABORADOR" && user.employeeProfile) && batch.normalizedValues.length) {
       baseEmployeeWhere = {
         AND: [
@@ -759,7 +763,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
   }
 }
 
-export async function exportOperationalEmployeesXlsxData(actor: Actor, filters: { query?: string | null; lob?: string | null; status?: string | null; supervisorId?: string | null; shiftId?: string | null; contractType?: string | null; roleTitle?: string | null; skill?: string | null; wave?: string | null }) {
+export async function exportOperationalEmployeesXlsxData(actor: Actor, filters: { query?: string | null; lob?: string[] | string | null; status?: string[] | string | null; supervisorId?: string[] | string | null; shiftId?: string[] | string | null; contractType?: string[] | string | null; roleTitle?: string[] | string | null; skill?: string[] | string | null; wave?: string[] | string | null }) {
   const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
   if (!user) return createPermissionError("Usuário não autenticado.");
   if (!canAccessEmployeeMap({ role: actor.role, status: user.status })) return createPermissionError("Você não tem permissão para exportar o Mapa de Funcionários.");
@@ -768,25 +772,25 @@ export async function exportOperationalEmployeesXlsxData(actor: Actor, filters: 
   const rowsResult = await listOperationalEmployees(actor, { summary: false, limit: 10000 });
   const employees = Array.isArray(rowsResult) ? rowsResult : rowsResult.data;
   const query = clean(filters.query)?.toLowerCase() ?? "";
-  const lob = clean(filters.lob);
-  const status = clean(filters.status);
-  const supervisorId = clean(filters.supervisorId);
-  const shiftId = clean(filters.shiftId);
-  const contractType = normalizeContractTypeFilter(filters.contractType);
-  const roleTitle = clean(filters.roleTitle);
-  const skill = clean(filters.skill);
-  const wave = clean(filters.wave);
+  const lobs = cleanFilterValues(filters.lob);
+  const statuses = cleanFilterValues(filters.status);
+  const supervisorIds = cleanFilterValues(filters.supervisorId);
+  const shiftIds = cleanFilterValues(filters.shiftId);
+  const contractTypes = normalizeContractTypeFilters(filters.contractType);
+  const roleTitles = cleanFilterValues(filters.roleTitle);
+  const skills = cleanFilterValues(filters.skill);
+  const waves = cleanFilterValues(filters.wave);
   const filteredRows = employees.filter((employee) => {
     const row = employee as Record<string, any>;
     const matchesQuery = !query || [employee.name, employee.wb, employee.email, employee.role, employee.lob, row.supervisor, row.skill, row.wave].join(" ").toLowerCase().includes(query);
-    const matchesLob = !lob || lob === "Todos" || matchesEmployeeMapLobFilter(employee.lob, lob);
-    const matchesStatus = !status || status === "Todos" || matchesEmployeeStatusFilter(employee.status, row.userStatus, status);
-    const matchesSupervisor = !supervisorId || supervisorId === "Todos" || (isNoneFilter(supervisorId) ? !row.supervisorId : row.supervisorId === supervisorId);
-    const matchesShift = !shiftId || row.shiftId === shiftId;
-    const matchesContract = !contractType || String(row.contractType ?? "").toUpperCase() === contractType;
-    const matchesRoleTitle = !roleTitle || roleTitle === "Todos" || String(employee.role ?? "").toLowerCase() === roleTitle.toLowerCase();
-    const matchesSkill = !skill || skill === "Todos" || (isNoneFilter(skill) ? !row.skill : String(row.skill ?? "").toLowerCase() === skill.toLowerCase());
-    const matchesWave = !wave || wave === "Todos" || (isNoneFilter(wave) ? !row.wave : String(row.wave ?? "").toLowerCase() === wave.toLowerCase());
+    const matchesLob = !lobs.length || lobs.some((lob) => matchesEmployeeMapLobFilter(employee.lob, lob));
+    const matchesStatus = !statuses.length || statuses.some((status) => matchesEmployeeStatusFilter(employee.status, row.userStatus, status));
+    const matchesSupervisor = !supervisorIds.length || supervisorIds.some((supervisorId) => isNoneFilter(supervisorId) ? !row.supervisorId : row.supervisorId === supervisorId);
+    const matchesShift = !shiftIds.length || shiftIds.includes(String(row.shiftId ?? ""));
+    const matchesContract = !contractTypes.length || contractTypes.some((contractType) => String(row.contractType ?? "").toUpperCase() === contractType);
+    const matchesRoleTitle = !roleTitles.length || roleTitles.some((roleTitle) => String(employee.role ?? "").toLowerCase() === roleTitle.toLowerCase());
+    const matchesSkill = !skills.length || skills.some((skill) => isNoneFilter(skill) ? !row.skill : String(row.skill ?? "").toLowerCase() === skill.toLowerCase());
+    const matchesWave = !waves.length || waves.some((wave) => isNoneFilter(wave) ? !row.wave : String(row.wave ?? "").toLowerCase() === wave.toLowerCase());
     return matchesQuery && matchesLob && matchesStatus && matchesSupervisor && matchesShift && matchesContract && matchesRoleTitle && matchesSkill && matchesWave;
   });
 
@@ -1411,36 +1415,46 @@ async function getEmployeeFilterOptions(where: Prisma.EmployeeProfileWhereInput)
 }
 
 function buildSupervisorFilterWhere(value: unknown): Prisma.EmployeeProfileWhereInput {
-  const raw = clean(value);
-  if (!raw || isAllFilter(raw)) return {};
-  if (isNoneFilter(raw)) return { supervisorId: null };
-  return { supervisorId: raw };
+  const values = cleanFilterValues(value);
+  if (!values.length) return {};
+  return {
+    OR: values.map((item) => isNoneFilter(item) ? { supervisorId: null } : { supervisorId: item })
+  };
+}
+
+function buildIdFilterWhere(field: "shiftId", value: unknown): Prisma.EmployeeProfileWhereInput {
+  const values = cleanFilterValues(value);
+  if (!values.length) return {};
+  return { [field]: { in: values } } as Prisma.EmployeeProfileWhereInput;
 }
 
 function buildNullableTextFilterWhere(field: "skill" | "wave" | "roleTitle", value: unknown): Prisma.EmployeeProfileWhereInput {
-  const raw = clean(value);
-  if (!raw || isAllFilter(raw)) return {};
-  if (isNoneFilter(raw)) return { OR: [{ [field]: null }, { [field]: "" }] } as Prisma.EmployeeProfileWhereInput;
-  return { [field]: { equals: raw, mode: "insensitive" } } as Prisma.EmployeeProfileWhereInput;
+  const values = cleanFilterValues(value);
+  if (!values.length) return {};
+  const clauses: Prisma.EmployeeProfileWhereInput[] = [];
+  values.forEach((item) => {
+    if (isNoneFilter(item)) {
+      clauses.push({ [field]: null } as Prisma.EmployeeProfileWhereInput, { [field]: "" } as Prisma.EmployeeProfileWhereInput);
+    } else {
+      clauses.push({ [field]: { equals: item, mode: "insensitive" } } as Prisma.EmployeeProfileWhereInput);
+    }
+  });
+  return { OR: clauses };
 }
 
 function buildContractTypeFilterWhere(value: unknown): Prisma.EmployeeProfileWhereInput {
-  const normalized = normalizeContractTypeFilter(value);
-  if (!normalized) return {};
-  return { contractType: { equals: normalized, mode: "insensitive" } };
+  const values = normalizeContractTypeFilters(value);
+  if (!values.length) return {};
+  return { OR: values.map((item) => ({ contractType: { equals: item, mode: "insensitive" } })) };
 }
 
 function buildEmployeeMapLobFilterWhere(value: unknown): Prisma.EmployeeProfileWhereInput {
-  const raw = clean(value);
-  if (!raw || isAllFilter(raw)) return {};
-  if (isTnsLobGroup(raw)) {
-    return {
-      OR: ["TNS", "Video", "Vídeo", "Comments", "Comentários"].map((lob) => ({
-        lob: { name: { equals: lob, mode: "insensitive" } }
-      }))
-    };
-  }
-  return { lob: { name: { equals: raw, mode: "insensitive" } } };
+  const values = cleanFilterValues(value);
+  if (!values.length) return {};
+  const lobNames = Array.from(new Set(values.flatMap((item) => isTnsLobGroup(item) ? ["TNS", "Video", "Vídeo", "Comments", "Comentários"] : [item])));
+  return {
+    OR: lobNames.map((lob) => ({ lob: { name: { equals: lob, mode: "insensitive" } } }))
+  };
 }
 
 function matchesEmployeeMapLobFilter(employeeLob: unknown, filter: unknown) {
@@ -1454,13 +1468,10 @@ function isTnsLobGroup(value: unknown) {
   return ["TNS", "VIDEO", "VIDEOS", "COMMENTS", "COMENTARIOS"].includes(normalizeStatusToken(value));
 }
 
-function normalizeContractTypeFilter(value: unknown) {
-  const raw = clean(value);
-  if (!raw || isAllFilter(raw)) return "";
-  const upper = raw.toUpperCase();
-  if (upper === "PJ") return "PJ";
-  if (upper === "CLT") return "CLT";
-  return "";
+function normalizeContractTypeFilters(value: unknown) {
+  return cleanFilterValues(value)
+    .map((item) => item.toUpperCase())
+    .filter((item) => item === "PJ" || item === "CLT");
 }
 
 async function getEmployeeContractSummary(where: Prisma.EmployeeProfileWhereInput) {
@@ -1632,10 +1643,12 @@ const inactiveEmployeeStatusTokens = new Set([
 ]);
 
 function buildEmployeeStatusWhere(status: unknown): Prisma.EmployeeProfileWhereInput {
-  const raw = clean(status);
-  if (!raw || isAllFilter(raw)) return {};
-  const canonical = canonicalEmployeeStatusLabel(raw);
-  const values = canonical ? employeeStatusFilterAliases[canonical] : [raw];
+  const selectedStatuses = cleanFilterValues(status);
+  if (!selectedStatuses.length) return {};
+  const values = Array.from(new Set(selectedStatuses.flatMap((item) => {
+    const canonical = canonicalEmployeeStatusLabel(item);
+    return canonical ? employeeStatusFilterAliases[canonical] : [item];
+  })));
   return { OR: values.map((value) => ({ operationalStatus: { equals: value, mode: "insensitive" } })) };
 }
 
@@ -1732,6 +1745,13 @@ function toDateInput(date: Date) {
 function clean(value: unknown) {
   if (value === undefined) return undefined;
   return String(value ?? "").trim();
+}
+
+function cleanFilterValues(value: unknown) {
+  const source = Array.isArray(value) ? value : value === undefined || value === null ? [] : [value];
+  return Array.from(new Set(source
+    .map((item) => clean(item))
+    .filter((item): item is string => typeof item === "string" && item.length > 0 && !isAllFilter(item))));
 }
 
 function cleanNullable(value: unknown) {

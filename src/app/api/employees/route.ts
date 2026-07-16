@@ -58,15 +58,19 @@ export async function GET(request: Request) {
     page,
     limit,
     search: url.searchParams.get("search") ?? undefined,
-    lob: url.searchParams.get("lob") ?? undefined,
+    lob: url.searchParams.getAll("lob"),
     lobId: url.searchParams.get("lobId") ?? undefined,
-    supervisorId: url.searchParams.get("supervisorId") ?? undefined,
-    shiftId: url.searchParams.get("shiftId") ?? undefined,
-    contractType: url.searchParams.get("contractType") ?? undefined,
-    roleTitle: url.searchParams.get("roleTitle") ?? undefined,
-    skill: url.searchParams.get("skill") ?? undefined,
-    wave: url.searchParams.get("wave") ?? undefined,
-    status: url.searchParams.get("status_colaborador") ?? url.searchParams.get("employeeStatus") ?? url.searchParams.get("status") ?? undefined,
+    supervisorId: url.searchParams.getAll("supervisorId"),
+    shiftId: url.searchParams.getAll("shiftId"),
+    contractType: url.searchParams.getAll("contractType"),
+    roleTitle: url.searchParams.getAll("roleTitle"),
+    skill: url.searchParams.getAll("skill"),
+    wave: url.searchParams.getAll("wave"),
+    status: url.searchParams.getAll("status_colaborador").length
+      ? url.searchParams.getAll("status_colaborador")
+      : url.searchParams.getAll("employeeStatus").length
+        ? url.searchParams.getAll("employeeStatus")
+        : url.searchParams.getAll("status"),
     role: url.searchParams.get("role") ?? undefined,
     wbLogins: url.searchParams.get("wbLogins") ?? undefined
   });
