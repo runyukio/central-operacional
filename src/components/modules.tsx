@@ -16254,10 +16254,27 @@ type AdsHourlyCoverageResponse = {
     hourLabel: string;
     required: number;
     scheduled: number;
+    gap: number;
+    status: string;
   }>;
   period: { startDate: string; endDate: string };
   summary: { slots: number; days: number };
   permissions: { canImport: boolean };
+};
+
+type AdsHourlyCoverageDetailsResponse = {
+  summary: {
+    date: string;
+    dateLabel: string;
+    hour: number;
+    hourLabel: string;
+    lob: "ADS";
+    required: number;
+    scheduled: number;
+    gap: number;
+    status: string;
+  };
+  data: StaffCoverageAgentClient[];
 };
 
 type RequiredStaffPersonClient = {
@@ -16323,21 +16340,46 @@ type RequiredStaffCoverageResponse = {
 
 function AdsHourlyCoverageView({ payload, loading }: { payload: AdsHourlyCoverageResponse | null; loading: boolean }) {
   const rows = payload?.data ?? [];
+  const [details, setDetails] = useState<AdsHourlyCoverageDetailsResponse | null>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [detailsError, setDetailsError] = useState("");
+
+  const openDetails = async (row: AdsHourlyCoverageResponse["data"][number]) => {
+    setDetails(null);
+    setDetailsError("");
+    setDetailsLoading(true);
+    try {
+      const params = new URLSearchParams({ date: row.date, hour: String(row.hour) });
+      setDetails(await apiJson<AdsHourlyCoverageDetailsResponse>(`/api/staff-coverage/ads/details?${params.toString()}`));
+    } catch (error) {
+      setDetailsError(error instanceof Error ? error.message : "Não foi possível carregar os agentes ADS deste horário.");
+    } finally {
+      setDetailsLoading(false);
+    }
+  };
+
+  const closeDetails = () => {
+    setDetails(null);
+    setDetailsError("");
+  };
 
   return (
-    <Panel title="Necessidade ADS por hora">
+    <>
+      <Panel title="Necessidade ADS por hora">
       <div className="overflow-hidden rounded-xl border border-border">
         <table className="w-full table-fixed border-collapse text-sm">
           <thead className="bg-slate-50">
             <tr className="border-b border-border text-xs font-extrabold uppercase text-muted">
-              <th className="w-1/2 px-4 py-3 text-left">Data + hora</th>
-              <th className="w-1/4 px-4 py-3 text-center">Necessidade</th>
-              <th className="w-1/4 px-4 py-3 text-center">Escalado</th>
+              <th className="w-[32%] px-4 py-3 text-left">Data + hora</th>
+              <th className="w-[17%] px-4 py-3 text-center">Necessidade</th>
+              <th className="w-[17%] px-4 py-3 text-center">Agentes</th>
+              <th className="w-[17%] px-4 py-3 text-center">Gap</th>
+              <th className="w-[17%] px-4 py-3 text-center">Status</th>
             </tr>
           </thead>
           <tbody>
             {loading && !payload ? (
-              <tr><td colSpan={3} className="px-4 py-10 text-center font-bold text-muted">Carregando necessidade ADS...</td></tr>
+              <tr><td colSpan={5} className="px-4 py-10 text-center font-bold text-muted">Carregando necessidade ADS...</td></tr>
             ) : rows.length ? rows.map((row) => (
               <tr key={row.id} className="border-b border-slate-100 text-navy-950 last:border-b-0 hover:bg-blue-50/50">
                 <td className="px-4 py-3 font-extrabold">
@@ -16345,11 +16387,19 @@ function AdsHourlyCoverageView({ payload, loading }: { payload: AdsHourlyCoverag
                   <span className="ml-2 text-xs font-semibold capitalize text-muted">{row.weekday}</span>
                 </td>
                 <td className="px-4 py-3 text-center text-base font-extrabold">{row.required}</td>
-                <td className="px-4 py-3 text-center text-base font-extrabold">{row.scheduled}</td>
+                <td className="px-4 py-3 text-center">
+                  <button type="button" onClick={() => void openDetails(row)} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-base font-extrabold text-blue-700 transition hover:bg-blue-100" title="Ver agentes ADS programados">
+                    <Users className="h-4 w-4" /> {row.scheduled}
+                  </button>
+                </td>
+                <td className={cn("px-4 py-3 text-center text-base font-extrabold", row.gap < 0 ? "text-red-600" : row.gap > 0 ? "text-emerald-600" : "text-navy-950")}>{formatGap(row.gap)}</td>
+                <td className="px-4 py-3 text-center">
+                  <span className={cn("inline-flex rounded-full px-2.5 py-1 text-xs font-extrabold", staffCoverageStatusTone(row.status))}>{row.status}</span>
+                </td>
               </tr>
             )) : (
               <tr>
-                <td colSpan={3} className="px-4 py-8">
+                <td colSpan={5} className="px-4 py-8">
                   <EmptyState title="Nenhuma necessidade ADS encontrada" description="Importe a planilha com Data, Hora e Required ou altere o período consultado." />
                 </td>
               </tr>
@@ -16362,7 +16412,54 @@ function AdsHourlyCoverageView({ payload, loading }: { payload: AdsHourlyCoverag
           {payload.summary.slots} horário(s) em {payload.summary.days} dia(s). O escalado segue a mesma regra operacional da aba Agents e considera somente ADS.
         </p>
       ) : null}
-    </Panel>
+      </Panel>
+
+      {details || detailsLoading || detailsError ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy-950/45 p-4">
+          <div className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-start justify-between border-b border-border px-5 py-4">
+              <div>
+                <h2 className="text-lg font-extrabold text-navy-950">Agentes ADS programados</h2>
+                <p className="text-sm font-semibold text-muted">{details ? `${details.summary.dateLabel} às ${details.summary.hourLabel} · ADS` : "Carregando..."}</p>
+              </div>
+              <button type="button" onClick={closeDetails} className="rounded-lg border border-border px-3 py-2 text-sm font-bold text-navy-950">Fechar</button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-5">
+              {detailsLoading ? <p className="text-sm font-bold text-muted">Carregando agentes...</p> : details ? (
+                <>
+                  <div className="mb-4 grid gap-3 sm:grid-cols-4">
+                    <MetricPill value={details.summary.required} label="Necessidade" />
+                    <MetricPill value={details.summary.scheduled} label="Agentes" />
+                    <MetricPill value={formatGap(details.summary.gap)} label="Gap" />
+                    <MetricPill value={details.summary.status} label="Status" />
+                  </div>
+                  <div className="overflow-x-auto rounded-xl border border-border">
+                    <table className="w-full min-w-[720px] text-sm">
+                      <thead className="bg-slate-50 text-left text-xs font-extrabold uppercase text-muted">
+                        <tr>{["Agente", "WB/Login", "Supervisor", "Turno", "Skill", "Status do slot"].map((column) => <th key={column} className="px-3 py-2">{column}</th>)}</tr>
+                      </thead>
+                      <tbody>
+                        {details.data.map((agent) => (
+                          <tr key={agent.id} className="border-t border-slate-100">
+                            <td className="px-3 py-2 font-bold text-navy-950">{agent.name}</td>
+                            <td className="px-3 py-2">{agent.wbLogin}</td>
+                            <td className="px-3 py-2">{agent.supervisor}</td>
+                            <td className="px-3 py-2">{agent.shift}</td>
+                            <td className="px-3 py-2">{agent.skill || "-"}</td>
+                            <td className="px-3 py-2"><StatusBadge status={agent.scheduleStatus} /></td>
+                          </tr>
+                        ))}
+                        {!details.data.length ? <tr><td colSpan={6} className="px-3 py-8"><EmptyState title="Nenhum agente ADS programado" description="Não há agentes com slot válido neste horário." /></td></tr> : null}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              ) : <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-700">{detailsError}</div>}
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 

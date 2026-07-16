@@ -6,7 +6,7 @@ import type { Actor } from "@/lib/mock-db";
 import { recordErrorLog } from "@/lib/mock-db";
 import { canAccessStaffCoverage, canManageStaffCoverageRequirements } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
-import { countAdsScheduledByHour } from "@/lib/staff-coverage-service";
+import { countAdsScheduledByHour, listAdsScheduledAgentsAtHour } from "@/lib/staff-coverage-service";
 
 export type AdsHourlyCoverageQuery = {
   startDate?: string;
@@ -36,6 +36,7 @@ export async function listAdsHourlyCoverage(actor: Actor, query: AdsHourlyCovera
     const data = requirements.map((row) => {
       const date = formatDateKey(row.date);
       const scheduled = scheduledBySlot.get(`${date}|${row.hour}`) ?? 0;
+      const gap = scheduled - row.requiredStaff;
       return {
         id: row.id,
         date,
@@ -44,7 +45,9 @@ export async function listAdsHourlyCoverage(actor: Actor, query: AdsHourlyCovera
         hour: row.hour,
         hourLabel: `${String(row.hour).padStart(2, "0")}:00`,
         required: row.requiredStaff,
-        scheduled
+        scheduled,
+        gap,
+        status: coverageStatus(row.requiredStaff, scheduled)
       };
     });
 
@@ -66,6 +69,54 @@ export async function listAdsHourlyCoverage(actor: Actor, query: AdsHourlyCovera
       severity: "ERROR"
     });
     return { error: "Não foi possível carregar a necessidade ADS por hora.", message: "Não foi possível carregar a necessidade ADS por hora.", status: 500 };
+  }
+}
+
+export async function getAdsHourlyCoverageDetails(actor: Actor, query: { date?: string; hour?: string }) {
+  try {
+    const user = await getUser(actor);
+    if (!user) return createPermissionError("Usuário não encontrado ou inativo.");
+    if (!canAccessStaffCoverage(permissionUser(user))) return createPermissionError("Você não tem permissão para visualizar Necessidade.");
+
+    const date = normalizeExcelDate(query.date);
+    const hour = Number(query.hour);
+    if (!date || !Number.isInteger(hour) || hour < 0 || hour > 23) {
+      return { error: "Informe uma data e hora válidas.", message: "Informe uma data e hora válidas.", status: 400 };
+    }
+
+    const requirement = await prisma.adsHourlyRequirement.findUnique({
+      where: { date_hour: { date, hour } }
+    });
+    if (!requirement) {
+      return { error: "Necessidade ADS não encontrada para este horário.", message: "Necessidade ADS não encontrada para este horário.", status: 404 };
+    }
+
+    const agents = await listAdsScheduledAgentsAtHour(date, hour);
+    const scheduled = agents.length;
+    const gap = scheduled - requirement.requiredStaff;
+    return {
+      summary: {
+        date: formatDateKey(date),
+        dateLabel: formatDatePtBr(date),
+        hour,
+        hourLabel: `${String(hour).padStart(2, "0")}:00`,
+        lob: "ADS",
+        required: requirement.requiredStaff,
+        scheduled,
+        gap,
+        status: coverageStatus(requirement.requiredStaff, scheduled)
+      },
+      data: agents
+    };
+  } catch (error) {
+    recordErrorLog({
+      userEmail: actor.email,
+      code: "ADS_HOURLY_COVERAGE_DETAILS_ERROR",
+      message: errorMessage(error),
+      action: "ADS_HOURLY_COVERAGE_DETAILS",
+      severity: "ERROR"
+    });
+    return { error: "Não foi possível carregar os agentes ADS deste horário.", message: "Não foi possível carregar os agentes ADS deste horário.", status: 500 };
   }
 }
 
@@ -189,6 +240,15 @@ function parseRequired(value: unknown) {
   const raw = typeof value === "number" ? value : Number(String(value ?? "").trim().replace(",", "."));
   if (!Number.isFinite(raw) || raw < 0) return null;
   return Math.round(raw);
+}
+
+function coverageStatus(required: number, scheduled: number) {
+  if (required === 0 && scheduled > 0) return "Sem necessidade";
+  if (required > 0 && scheduled === 0) return "Sem cobertura";
+  const gap = scheduled - required;
+  if (gap < 0) return "Déficit";
+  if (gap === 0) return "OK";
+  return "Sobra";
 }
 
 function resolvePeriod(query: AdsHourlyCoverageQuery) {

@@ -182,12 +182,31 @@ export async function countAdsScheduledByHour(
   period: { startDate: Date; endDate: Date },
   slots: AdsHourlyCoverageSlot[]
 ) {
-  if (!slots.length) return new Map<string, number>();
+  const employeesBySlot = await collectAdsScheduledByHour(period, slots);
+  return new Map(Array.from(employeesBySlot.entries(), ([key, employees]) => [key, employees.size]));
+}
+
+export async function listAdsScheduledAgentsAtHour(date: Date, hour: number) {
+  const dateKey = formatDateKey(date);
+  const employeesBySlot = await collectAdsScheduledByHour(
+    { startDate: date, endDate: date },
+    [{ date: dateKey, hour }]
+  );
+  return Array.from(employeesBySlot.get(`${dateKey}|${hour}`)?.values() ?? [])
+    .map(formatAgent)
+    .sort((left, right) => left.name.localeCompare(right.name, "pt-BR"));
+}
+
+async function collectAdsScheduledByHour(
+  period: { startDate: Date; endDate: Date },
+  slots: AdsHourlyCoverageSlot[]
+) {
+  if (!slots.length) return new Map<string, Map<string, StaffCoverageSchedule>>();
 
   const queryStart = new Date(period.startDate);
   queryStart.setUTCDate(queryStart.getUTCDate() - 1);
   const schedules = await listCoverageSchedules({ startDate: queryStart, endDate: period.endDate }, { lob: "ADS", roleTitle: "Agente" });
-  const employeesBySlot = new Map<string, Set<string>>();
+  const employeesBySlot = new Map<string, Map<string, StaffCoverageSchedule>>();
   const slotTimes = slots.map((slot) => ({
     key: `${slot.date}|${slot.hour}`,
     timestamp: hourlySlotTimestamp(slot.date, slot.hour)
@@ -198,13 +217,13 @@ export async function countAdsScheduledByHour(
     if (!window) continue;
     for (const slot of slotTimes) {
       if (slot.timestamp < window.start || slot.timestamp >= window.end) continue;
-      const employees = employeesBySlot.get(slot.key) ?? new Set<string>();
-      employees.add(schedule.employee.id);
+      const employees = employeesBySlot.get(slot.key) ?? new Map<string, StaffCoverageSchedule>();
+      employees.set(schedule.employee.id, schedule);
       employeesBySlot.set(slot.key, employees);
     }
   }
 
-  return new Map(Array.from(employeesBySlot.entries(), ([key, employees]) => [key, employees.size]));
+  return employeesBySlot;
 }
 
 export async function listStaffCoverage(actor: Actor, query: StaffCoverageQuery = {}) {
