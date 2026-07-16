@@ -43,6 +43,7 @@ export type CecReportSnapshot = {
 
 export type CecReportPayload = {
   hasData: boolean;
+  refreshWarning?: string;
   selectedCycle: string;
   previousCycle: string;
   snapshot: CecReportSnapshot | null;
@@ -78,7 +79,7 @@ function CecEmptyState({ loading, error }: { loading: boolean; error: string }) 
       <Database className={cn("mx-auto h-9 w-9 text-blue-500", loading && "animate-pulse")} />
       <h2 className="mt-3 text-lg font-black text-navy-950">{loading ? "Loading CEC report" : "CEC data unavailable"}</h2>
       <p className="mx-auto mt-1 max-w-xl text-sm font-bold text-muted">
-        {error || "The Freshdesk automation has not sent the Backlog Normal snapshot yet."}
+        {error || "The Freshdesk API has not returned the Backlog Normal data yet."}
       </p>
     </section>
   );
@@ -86,7 +87,7 @@ function CecEmptyState({ loading, error }: { loading: boolean; error: string }) 
 
 export function CecReportOverview({ report, loading, error }: { report: CecReportPayload | null; loading: boolean; error: string }) {
   const snapshot = report?.snapshot ?? null;
-  if (!snapshot) return <CecEmptyState loading={loading} error={error} />;
+  if (!snapshot) return <CecEmptyState loading={loading} error={error || report?.refreshWarning || ""} />;
 
   const previous = report?.previous?.totalBacklog ?? null;
   const delta = previous === null ? null : snapshot.totalBacklog - previous;

@@ -1,8 +1,24 @@
-# Automacao do Report CEC
+# Report CEC pela API Freshdesk
 
-O Report CEC e atualizado no computador Windows da automacao. O cookie do Freshdesk nunca e enviado ao navegador nem armazenado no site.
+O backend consulta diretamente a API do Freshdesk, grava um snapshot por bloco de 30 minutos e mantem o ultimo snapshot valido caso a fonte falhe. O cookie nunca e enviado ao navegador.
 
-## Arquivos locais
+## Variaveis da Vercel
+
+Configure em Production:
+
+```env
+CEC_FRESHDESK_REPORT_URL=https://kuaishousupport.freshdesk.com/reports/schedule/download_file.json?uuid=333f3cd9-ec65-4aae-9817-b6fcee4efa4d
+CEC_FRESHDESK_COOKIE=COOKIE_COMPLETO_DA_REQUISICAO_AUTENTICADA
+CRON_SECRET=SEGREDO_DA_ROTINA_VERCEL
+```
+
+O cron `/api/cron/realtime-cec` consulta a API nos minutos `00` e `30`. A propria tela tambem tenta preencher o bloco atual ao ser aberta, sem repetir a consulta quando o ciclo ja existe.
+
+## Automacao Windows opcional
+
+O script Windows continua disponivel como contingencia caso a consulta precise ser executada fora da Vercel.
+
+### Arquivos locais
 
 Crie `C:\Users\SEU_USUARIO\.freshdesk_cookie` com o valor completo do header `Cookie` copiado da requisicao autenticada do Freshdesk.
 
@@ -15,7 +31,7 @@ CEC_UPLOAD_ENABLED=true
 CEC_NORMAL_REPORT_URL=https://kuaishousupport.freshdesk.com/reports/schedule/download_file.json?uuid=333f3cd9-ec65-4aae-9817-b6fcee4efa4d
 ```
 
-## Teste manual
+### Teste manual
 
 No PowerShell, dentro do projeto:
 
@@ -25,7 +41,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\download-cec-scheduled-report
 
 O resultado local fica em `C:\Users\SEU_USUARIO\CEC`. O script reconhece arquivos JSON, CSV ou XLSX com os headers `ticket`, `agent name` e `status`.
 
-## Agendamento
+### Agendamento
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install-cec-scheduled-report-task.ps1

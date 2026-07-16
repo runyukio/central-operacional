@@ -4,6 +4,7 @@ import { getApiActor } from "@/lib/api-actor";
 import { getRealtimeCecReport } from "@/lib/realtime-cec-service";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 export async function GET(request: Request) {
   const actor = await getApiActor();

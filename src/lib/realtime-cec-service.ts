@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import type { Actor } from "@/lib/mock-db";
 import { canAccessRealTime } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import { fetchRealtimeCecFromFreshdesk, getCurrentCecCycle } from "@/lib/realtime-cec-freshdesk";
 
 const cecRetentionDays = Number.parseInt(process.env.REALTIME_RETENTION_DAYS ?? "3", 10) || 3;
 const saoPauloTimeZone = "America/Sao_Paulo";
@@ -185,9 +186,41 @@ export async function importRealtimeCecSnapshot(input: RealtimeCecImportInput) {
   };
 }
 
+export async function refreshRealtimeCecFromFreshdesk(options: { force?: boolean } = {}) {
+  const currentCycle = getCurrentCecCycle();
+  if (!options.force) {
+    const existing = await prisma.realTimeCecSnapshot.findUnique({
+      where: { cycleDownload: currentCycle },
+      select: { id: true, cycleDownload: true, importedAt: true }
+    });
+    if (existing) {
+      return {
+        success: true,
+        refreshed: false,
+        snapshotId: existing.id,
+        cycleDownload: existing.cycleDownload,
+        importedAt: existing.importedAt.toISOString()
+      };
+    }
+  }
+
+  const input = await fetchRealtimeCecFromFreshdesk();
+  const imported = await importRealtimeCecSnapshot(input);
+  if ("error" in imported) throw new Error(imported.error);
+  return { ...imported, refreshed: true };
+}
+
 export async function getRealtimeCecReport(actor: Actor, options: { cycleDownload?: string } = {}) {
   if (!canAccessRealTime({ role: actor.role, email: actor.email, name: actor.name, roleTitle: actor.roleTitle, jobTitle: actor.jobTitle, skill: actor.skill, status: "ACTIVE" })) {
     return { error: "Você não tem permissão para acessar Real Time.", status: 403 };
+  }
+
+  let refreshWarning = "";
+  try {
+    await refreshRealtimeCecFromFreshdesk();
+  } catch (error) {
+    refreshWarning = error instanceof Error ? error.message : "Não foi possível consultar a API Freshdesk.";
+    console.warn("[realtime/cec] A atualização pela API falhou; usando o último snapshot válido.", error);
   }
 
   const snapshots = await prisma.realTimeCecSnapshot.findMany({
@@ -201,6 +234,7 @@ export async function getRealtimeCecReport(actor: Actor, options: { cycleDownloa
   return {
     data: {
       hasData: Boolean(selected),
+      refreshWarning,
       selectedCycle: selected?.cycleDownload ?? "",
       previousCycle: previous?.cycleDownload ?? "",
       cycles: snapshots.map((snapshot) => ({

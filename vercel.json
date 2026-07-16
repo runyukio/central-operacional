@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/realtime-hours-retention",
+      "schedule": "15 3 * * *"
+    },
+    {
+      "path": "/api/cron/realtime-cec",
+      "schedule": "0,30 * * * *"
+    }
+  ]
+}
