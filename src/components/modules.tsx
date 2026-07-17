@@ -2600,6 +2600,9 @@ const operationalPresenceStatusMeta: Record<Exclude<OperationalPresenceStatus, "
 };
 
 export function OperationalCommandCenter() {
+  const [centralView, setCentralView] = useState<"operational" | "executive">("operational");
+  const [operationalView, setOperationalView] = useState<"overview" | "cohorts" | "agents">("overview");
+  const [agentAttentionQuery, setAgentAttentionQuery] = useState("");
   const [attendanceSummary, setAttendanceSummary] = useState<AttendanceSummary | null>(null);
   const [dateRange, setDateRange] = useState(() => currentOperationalMonthRange());
   const [commandLobs, setCommandLobs] = useState<string[]>(["Todos"]);
@@ -3386,6 +3389,18 @@ export function OperationalCommandCenter() {
     record.responses,
     `${record.average} / 5`
   ]);
+  const normalizedAgentAttentionQuery = employeeStatusKey(agentAttentionQuery);
+  const attentionAgents = commandTopAbsenceAgents.filter((agent) => {
+    if (!normalizedAgentAttentionQuery) return true;
+    return [agent.name, agent.wbLogin, agent.lob, agent.supervisor]
+      .some((value) => employeeStatusKey(value).includes(normalizedAgentAttentionQuery));
+  });
+  const cohortStatusClass = (absRate: number) => absRate >= 8
+    ? "border-red-200 bg-red-50 text-red-700"
+    : absRate >= 5
+      ? "border-amber-200 bg-amber-50 text-amber-700"
+      : "border-emerald-200 bg-emerald-50 text-emerald-700";
+  const cohortStatusLabel = (absRate: number) => absRate >= 8 ? "Crítico" : absRate >= 5 ? "Atenção" : "Estável";
 
   return (
     <div>
@@ -3393,7 +3408,7 @@ export function OperationalCommandCenter() {
         title="Central Operacional"
         description="Visão geral da operação em tempo real"
         icon={Trophy}
-        actions={
+        actions={centralView === "operational" ? (
           <div className="flex flex-wrap items-center justify-end gap-1.5">
             <select
               value={selectedCommandLob}
@@ -3474,8 +3489,56 @@ export function OperationalCommandCenter() {
               Atualizar
             </button>
           </div>
-        }
+        ) : undefined}
       />
+      <div className="mb-3 flex flex-col gap-2 rounded-xl border border-border bg-white p-2 shadow-soft sm:flex-row sm:items-center sm:justify-between">
+        <div className="inline-flex w-full rounded-lg bg-slate-100 p-1 sm:w-auto">
+          {([
+            { id: "operational" as const, label: "Operacional", icon: ClipboardList },
+            { id: "executive" as const, label: "Executivo", icon: LineChartIcon }
+          ]).map((item) => {
+            const Icon = item.icon;
+            const active = centralView === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setCentralView(item.id)}
+                className={cn(
+                  "inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-md px-4 text-sm font-extrabold transition sm:flex-none",
+                  active ? "bg-white text-blue-700 shadow-sm ring-1 ring-slate-200" : "text-slate-500 hover:text-navy-950"
+                )}
+              >
+                <Icon className="h-4 w-4" />
+                {item.label}
+              </button>
+            );
+          })}
+        </div>
+        {centralView === "operational" ? (
+          <div className="grid w-full grid-cols-3 gap-1 rounded-lg border border-border bg-slate-50 p-1 sm:w-auto">
+            {([
+              { id: "overview" as const, label: "Visão geral" },
+              { id: "cohorts" as const, label: "Coortes" },
+              { id: "agents" as const, label: "Agentes" }
+            ]).map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setOperationalView(item.id)}
+                className={cn(
+                  "min-h-9 rounded-md px-3 text-xs font-extrabold transition",
+                  operationalView === item.id ? "bg-blue-600 text-white shadow-sm" : "text-slate-600 hover:bg-white hover:text-navy-950"
+                )}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      {centralView === "operational" && operationalView === "overview" ? (
+        <>
       <div className="mb-3 grid gap-2.5 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
         {stats.map((stat) => (
           stat.action ? (
@@ -3883,6 +3946,169 @@ export function OperationalCommandCenter() {
           </Panel>
         </div>
       </div>
+        </>
+      ) : null}
+
+      {centralView === "operational" && operationalView === "cohorts" ? (
+        <div className="space-y-3">
+          <section className="rounded-xl border border-border bg-white p-4 shadow-soft">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-blue-600">Análise comparativa</p>
+                <h2 className="mt-1 text-lg font-black text-navy-950">Coortes operacionais</h2>
+                <p className="mt-1 text-sm font-semibold text-muted">Leitura do ABS por LOB, turno e liderança no período filtrado.</p>
+              </div>
+              <div className="grid grid-cols-3 gap-2 sm:min-w-[430px]">
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-center">
+                  <p className="text-[9px] font-black uppercase tracking-wide text-muted">ABS consolidado</p>
+                  <p className={cn("mt-1 text-xl font-black", absTextColor(summary.absRate))}>{summary.absRate}%</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-center">
+                  <p className="text-[9px] font-black uppercase tracking-wide text-muted">Cobertura</p>
+                  <p className="mt-1 text-xl font-black text-emerald-600">{summary.coverageRate}%</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-center">
+                  <p className="text-[9px] font-black uppercase tracking-wide text-muted">Faltas</p>
+                  <p className="mt-1 text-xl font-black text-navy-950">{summary.absent}</p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <div className="grid gap-3 2xl:grid-cols-2">
+            <Panel title="Coorte por LOB">
+              {commandAbsByLob.length ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[620px] text-left text-xs">
+                    <thead className="border-b border-border bg-slate-50 text-[10px] font-black uppercase tracking-wide text-muted">
+                      <tr><th className="px-3 py-2">LOB</th><th className="px-3 py-2 text-center">Escaladas</th><th className="px-3 py-2 text-center">Presentes</th><th className="px-3 py-2 text-center">Faltas</th><th className="px-3 py-2 text-center">ABS</th><th className="px-3 py-2 text-center">Status</th></tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/70">
+                      {commandAbsByLob.map((item) => (
+                        <tr key={item.lob} className="hover:bg-blue-50/40">
+                          <td className="px-3 py-2.5 font-black text-navy-950">{item.lob}</td>
+                          <td className="px-3 py-2.5 text-center font-bold">{item.planned}</td>
+                          <td className="px-3 py-2.5 text-center font-bold">{item.present}</td>
+                          <td className="px-3 py-2.5 text-center font-bold">{item.absent}</td>
+                          <td className={cn("px-3 py-2.5 text-center font-black", absTextColor(item.absRate))}>{item.absRate}%</td>
+                          <td className="px-3 py-2.5 text-center"><span className={cn("inline-flex rounded-full border px-2 py-1 text-[10px] font-black", cohortStatusClass(item.absRate))}>{cohortStatusLabel(item.absRate)}</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : <EmptyState title="Sem coortes de LOB" description="A comparação será exibida quando houver cronogramas nos filtros atuais." />}
+            </Panel>
+
+            <Panel title="Coorte por Turno">
+              {Object.keys(summary.byShift ?? {}).length ? (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {Object.entries(summary.byShift ?? {}).map(([shift, item]) => {
+                    const rate = item.planned ? Number(((item.absent / item.planned) * 100).toFixed(2)) : 0;
+                    return (
+                      <div key={shift} className="rounded-lg border border-border bg-slate-50/70 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="font-black text-navy-950">{shiftCategoryName(shift) || shift}</p>
+                          <span className={cn("rounded-full border px-2 py-1 text-[10px] font-black", cohortStatusClass(rate))}>{cohortStatusLabel(rate)}</span>
+                        </div>
+                        <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                          <MetricPill value={item.planned} label="Escaladas" />
+                          <MetricPill value={item.present} label="Presentes" />
+                          <MetricPill value={`${rate}%`} label="ABS" />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : <EmptyState title="Sem coortes de turno" description="A comparação será exibida quando houver cronogramas nos filtros atuais." />}
+            </Panel>
+          </div>
+
+          <Panel title="Coorte por Supervisor">
+            {commandAbsBySupervisor.length ? (
+              <div className="grid gap-2 md:grid-cols-2 2xl:grid-cols-3">
+                {commandAbsBySupervisor.map((item) => (
+                  <button key={item.supervisor} type="button" onClick={() => void openAbsSupervisorPeople(item.supervisor)} className="rounded-lg border border-border bg-white p-3 text-left transition hover:border-blue-200 hover:bg-blue-50/45">
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="min-w-0 truncate text-sm font-black text-navy-950" title={item.supervisor}>{item.supervisor}</p>
+                      <span className={cn("shrink-0 rounded-full border px-2 py-1 text-[10px] font-black", cohortStatusClass(item.absRate))}>{item.absRate}%</span>
+                    </div>
+                    <div className="mt-3 h-2 rounded-full bg-slate-100"><div className={cn("h-2 rounded-full", absBarColor(item.absRate))} style={{ width: rankingBarWidth(item.absRate, maxSupervisorAbsRate) }} /></div>
+                    <div className="mt-3 grid grid-cols-3 text-center text-[11px] font-bold text-muted"><span>{item.planned}<strong className="block text-[9px] uppercase">Escaladas</strong></span><span>{item.absent}<strong className="block text-[9px] uppercase">Faltas</strong></span><span>{item.justified}<strong className="block text-[9px] uppercase">Justificadas</strong></span></div>
+                  </button>
+                ))}
+              </div>
+            ) : <EmptyState title="Sem coortes de supervisor" description="A comparação será exibida quando houver cronogramas nos filtros atuais." />}
+          </Panel>
+        </div>
+      ) : null}
+
+      {centralView === "operational" && operationalView === "agents" ? (
+        <div className="space-y-3">
+          <section className="rounded-xl border border-border bg-white p-4 shadow-soft">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-blue-600">Leitura individual</p>
+                <h2 className="mt-1 text-lg font-black text-navy-950">Agentes em atenção</h2>
+                <p className="mt-1 text-sm font-semibold text-muted">Ranking, recorrência e acesso ao histórico de faltas no período selecionado.</p>
+              </div>
+              <label className="premium-control flex h-10 w-full items-center gap-2 px-3 lg:w-[360px]">
+                <Search className="h-4 w-4 text-slate-400" />
+                <input value={agentAttentionQuery} onChange={(event) => setAgentAttentionQuery(event.target.value)} className="min-w-0 flex-1 bg-transparent text-sm font-semibold outline-none" placeholder="Buscar agente, WB, LOB ou supervisor" />
+              </label>
+            </div>
+          </section>
+
+          <div className="grid gap-3 sm:grid-cols-3">
+            <StatCard title="Agentes com faltas" value={commandTopAbsenceAgents.length} helper="ranking do período" icon={UsersRound} tone="blue" />
+            <StatCard title="Faltas recorrentes" value={commandRecurringAbsences.length} helper="2 ou mais dias consecutivos" icon={AlertTriangle} tone={commandRecurringAbsences.length ? "orange" : "green"} />
+            <StatCard title="Maior sequência" value={Math.max(0, ...commandRecurringAbsences.map((item) => item.consecutiveDays))} helper="dias consecutivos" icon={CalendarDays} tone="red" />
+          </div>
+
+          <div className="grid gap-3 xl:grid-cols-[1.35fr_.85fr]">
+            <Panel title="Ranking individual de ABS">
+              {attentionAgents.length ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[760px] text-left text-xs">
+                    <thead className="border-b border-border bg-slate-50 text-[10px] font-black uppercase tracking-wide text-muted"><tr><th className="px-3 py-2">Agente</th><th className="px-3 py-2">WB/Login</th><th className="px-3 py-2">LOB</th><th className="px-3 py-2">Supervisor</th><th className="px-3 py-2 text-center">Faltas</th><th className="px-3 py-2 text-center">ABS</th><th className="px-3 py-2 text-right">Ação</th></tr></thead>
+                    <tbody className="divide-y divide-border/70">
+                      {attentionAgents.map((agent) => (
+                        <tr key={agent.employeeId} className="hover:bg-blue-50/40">
+                          <td className="px-3 py-2.5 font-black text-navy-950">{agent.name}</td><td className="px-3 py-2.5 font-bold text-slate-600">{agent.wbLogin || "-"}</td><td className="px-3 py-2.5 font-bold">{agent.lob}</td><td className="px-3 py-2.5 font-bold">{agent.supervisor}</td><td className="px-3 py-2.5 text-center font-black text-red-600">{agent.absent}</td><td className={cn("px-3 py-2.5 text-center font-black", absTextColor(agent.absRate))}>{agent.absRate}%</td><td className="px-3 py-2.5 text-right"><button type="button" onClick={() => void openAgentAbsencePeople({ employeeId: agent.employeeId, name: agent.name })} className="rounded-md bg-blue-50 px-2.5 py-1.5 text-[11px] font-black text-blue-700 hover:bg-blue-100">Ver histórico</button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : <EmptyState title="Nenhum agente encontrado" description="A busca respeita o ranking e os filtros aplicados na Central." />}
+            </Panel>
+
+            <Panel title="Sequências atuais">
+              {commandRecurringAbsences.length ? (
+                <div className="max-h-[440px] divide-y divide-border/70 overflow-y-auto">
+                  {commandRecurringAbsences.map((agent) => (
+                    <button key={agent.employeeId} type="button" onClick={openRecurringAbsences} className="flex w-full items-center justify-between gap-3 px-1 py-3 text-left transition hover:bg-blue-50/45">
+                      <div className="min-w-0"><p className="truncate text-sm font-black text-navy-950">{agent.name}</p><p className="truncate text-[11px] font-semibold text-muted">{agent.lob} • {agent.supervisor}</p><p className="mt-1 text-[10px] font-bold text-slate-500">{agent.lastStatus} em {agent.lastDate}</p></div>
+                      <span className={cn("shrink-0 rounded-lg border px-2.5 py-1.5 text-center text-xs font-black", recurringAbsenceRiskClass(agent.riskLevel))}>{agent.consecutiveDays}<span className="block text-[9px] uppercase">dias</span></span>
+                    </button>
+                  ))}
+                </div>
+              ) : <EmptyState title="Nenhuma sequência atual" description="Não há colaboradores com 2 ou mais dias consecutivos de ausência." />}
+            </Panel>
+          </div>
+        </div>
+      ) : null}
+
+      {centralView === "executive" ? (
+        <section className="relative overflow-hidden rounded-xl border border-border bg-white px-6 py-12 shadow-soft sm:px-10 sm:py-16">
+          <div className="mx-auto flex max-w-2xl flex-col items-center text-center">
+            <span className="grid h-14 w-14 place-items-center rounded-xl bg-blue-50 text-blue-600 ring-1 ring-blue-100"><LineChartIcon className="h-7 w-7" /></span>
+            <p className="mt-5 text-[10px] font-black uppercase tracking-[0.2em] text-blue-600">Próxima etapa</p>
+            <h2 className="mt-2 text-2xl font-black text-navy-950">Visão executiva</h2>
+            <p className="mt-2 max-w-xl text-sm font-semibold leading-6 text-muted">A estrutura está preparada para receber a leitura executiva. Indicadores, comparativos e nível de consolidação serão definidos com você antes da implementação.</p>
+          </div>
+        </section>
+      ) : null}
 
       {showRecurringAbsences ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
