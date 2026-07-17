@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { ArrowRight, LockKeyhole, Mail, Moon, Sparkles, Sun, X } from "lucide-react";
 
 import { ChangePasswordCard } from "@/components/change-password-card";
+import { LanguageSwitcher } from "@/components/language-provider";
 import { useTheme } from "@/components/theme-provider";
 
 export default function LoginPage() {
@@ -41,15 +42,18 @@ export default function LoginPage() {
 
   return (
     <main className="grid min-h-screen bg-[radial-gradient(circle_at_78%_8%,rgba(37,99,235,.12),transparent_28rem),#F6F8FC] lg:grid-cols-[minmax(0,1fr)_560px]">
-      <button
-        type="button"
-        onClick={toggleTheme}
-        className="premium-control fixed right-4 top-4 z-20 flex h-10 items-center gap-2 px-3 text-sm font-extrabold text-navy-950"
-        aria-label={theme === "dark" ? "Ativar modo claro" : "Ativar modo escuro"}
-      >
-        {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-        <span className="hidden sm:inline">{theme === "dark" ? "Claro" : "Escuro"}</span>
-      </button>
+      <div className="fixed right-4 top-4 z-20 flex items-center gap-2">
+        <LanguageSwitcher buttonClassName="premium-control h-10 w-10 text-navy-950 dark:text-slate-100" />
+        <button
+          type="button"
+          onClick={toggleTheme}
+          className="premium-control flex h-10 items-center gap-2 px-3 text-sm font-extrabold text-navy-950 dark:text-slate-100"
+          aria-label={theme === "dark" ? "Ativar modo claro" : "Ativar modo escuro"}
+        >
+          {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          <span className="hidden sm:inline">{theme === "dark" ? "Claro" : "Escuro"}</span>
+        </button>
+      </div>
       <section className="relative hidden overflow-hidden bg-[radial-gradient(circle_at_18%_18%,rgba(37,99,235,.14),transparent_20rem),linear-gradient(135deg,#FFFFFF_0%,#F6F8FC_48%,#EAF1FF_100%)] text-navy-950 lg:block">
         <div className="absolute inset-0 bg-[linear-gradient(120deg,rgba(255,255,255,.9),rgba(255,255,255,.35)),radial-gradient(circle_at_84%_82%,rgba(37,99,235,.18),transparent_26rem)]" />
         <div className="relative flex h-full flex-col justify-between p-12">
