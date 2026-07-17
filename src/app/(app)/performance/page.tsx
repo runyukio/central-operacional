@@ -1,21 +1,12 @@
 import { getServerSession } from "next-auth";
+import { redirect } from "next/navigation";
 
-import { PerformanceAutomationPage, PerformanceRestrictedPage } from "@/components/performance-automation-page";
 import { authOptions } from "@/lib/auth-options";
-import { canAccessPerformance } from "@/lib/permissions";
+import { getDefaultPathForRole } from "@/lib/navigation";
 
 export const dynamic = "force-dynamic";
 
 export default async function PerformanceRoute() {
   const session = await getServerSession(authOptions);
-  if (!canAccessPerformance({
-    role: session?.user?.role,
-    email: session?.user?.email,
-    name: session?.user?.name,
-    roleTitle: session?.user?.roleTitle,
-    jobTitle: session?.user?.jobTitle,
-    skill: session?.user?.skill,
-    status: "ACTIVE"
-  })) return <PerformanceRestrictedPage />;
-  return <PerformanceAutomationPage />;
+  redirect(getDefaultPathForRole(session?.user?.role));
 }
