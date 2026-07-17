@@ -225,6 +225,19 @@ export async function reviewRealtimeHoursAdjustment(actor: Actor, input: Realtim
 
 export async function applyApprovedRealtimeHoursAdjustments<T extends RealtimeHoursTimelineAdjustmentRow>(date: string, rows: T[]) {
   const adjustments = await getApprovedRealtimeHoursAdjustments(date);
+  return applyApprovedAdjustmentsToRows(rows, adjustments);
+}
+
+export async function applyApprovedRealtimeHoursAdjustmentsForRange<T extends RealtimeHoursTimelineAdjustmentRow>(days: Array<{ date: string; rows: T[] }>) {
+  const selectedDates = new Set(days.map((day) => day.date));
+  const adjustments = (await getApprovedRealtimeHoursAdjustments()).filter((adjustment) => selectedDates.has(adjustment.date));
+  return days.map((day) => ({
+    ...day,
+    rows: applyApprovedAdjustmentsToRows(day.rows, adjustments.filter((adjustment) => adjustment.date === day.date))
+  }));
+}
+
+function applyApprovedAdjustmentsToRows<T extends RealtimeHoursTimelineAdjustmentRow>(rows: T[], adjustments: NonNullable<ReturnType<typeof formatAdjustmentLog>>[]) {
   return rows.map((row) => {
     const adjustment = findAdjustmentForRow(adjustments, row);
     if (!adjustment) {
@@ -315,7 +328,7 @@ async function notifyRealtimeHoursAdjustmentResult(input: { payload: Record<stri
   });
 }
 
-async function getApprovedRealtimeHoursAdjustments(date: string) {
+async function getApprovedRealtimeHoursAdjustments(date?: string) {
   const logs = await prisma.auditLog.findMany({
     where: { entity: adjustmentEntity },
     orderBy: { createdAt: "desc" },
@@ -325,7 +338,7 @@ async function getApprovedRealtimeHoursAdjustments(date: string) {
   return logs
     .map((log) => formatAdjustmentLog(log))
     .filter((row): row is NonNullable<ReturnType<typeof formatAdjustmentLog>> => Boolean(row))
-    .filter((row) => row.date === date && row.status === "APROVADO");
+    .filter((row) => (!date || row.date === date) && row.status === "APROVADO");
 }
 
 function findTimelineRow(rows: Awaited<ReturnType<typeof getRealtimeHoursTimeline>>["rows"], input: RealtimeHoursAdjustmentInput) {

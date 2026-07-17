@@ -71,6 +71,8 @@ type RealtimeHoursImportsOptions = {
 type RealtimeHoursTimelineOptions = {
   date?: string | null;
   search?: string | null;
+  employeeId?: string | null;
+  wbLogin?: string | null;
 };
 
 type RealtimeHoursIdentityMappingInput = {
@@ -776,12 +778,20 @@ export async function upsertRealtimeHoursIdentityMapping(input: RealtimeHoursIde
 
 export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOptions = {}) {
   const period = resolveTimelineDate(options.date);
+  const employeeId = String(options.employeeId ?? "").trim();
+  const wbLogin = normalizeLogin(String(options.wbLogin ?? ""));
   const records = await prisma.realTimeHoursRecord.findMany({
     where: {
       capturedAt: {
         gte: period.start,
         lte: period.end
-      }
+      },
+      ...(employeeId || wbLogin ? {
+        OR: [
+          ...(employeeId ? [{ employeeId }] : []),
+          ...(wbLogin ? [{ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }] : [])
+        ]
+      } : {})
     },
     orderBy: [{ hostname: "asc" }, { windowsUser: "asc" }, { capturedAt: "asc" }],
     select: {

@@ -33,7 +33,6 @@ import {
   ShieldCheck,
   Sparkles,
   Sun,
-  Trophy,
   UserPlus,
   UserCircle,
   UsersRound
@@ -53,7 +52,6 @@ const icons = {
   ClipboardList,
   ClipboardCheck,
   KanbanSquare,
-  Trophy,
   Megaphone,
   ShieldCheck,
   Map,
