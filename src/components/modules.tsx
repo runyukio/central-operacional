@@ -17575,6 +17575,7 @@ export function AnonymousFeedbackPage() {
   const [selectedFeedback, setSelectedFeedback] = useState<AnonymousFeedbackClient | null>(null);
   const [responseDraft, setResponseDraft] = useState("");
   const [responseSaving, setResponseSaving] = useState(false);
+  const [deletingFeedbackId, setDeletingFeedbackId] = useState<string | null>(null);
   const [feedbackFilters, setFeedbackFilters] = useState({ status: "Todos", urgency: "Todos", category: "Todos", startDate: "", endDate: "", lob: "", jobTitle: "", search: "" });
 
   const loadAnonymousFeedback = useCallback(async () => {
@@ -17634,6 +17635,35 @@ export function AnonymousFeedbackPage() {
       await loadAnonymousFeedback();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Não foi possível atualizar o status.");
+    }
+  }
+
+  async function deleteFeedback(feedback: AnonymousFeedbackClient) {
+    const confirmed = window.confirm("Excluir este feedback permanentemente? Essa ação não pode ser desfeita.");
+    if (!confirmed) return;
+
+    setMessage("");
+    setDeletingFeedbackId(feedback.id);
+    try {
+      const payload = await apiJson<{ data: { id: string }; message: string }>("/api/anonymous-feedback", {
+        method: "DELETE",
+        body: JSON.stringify({ id: feedback.id })
+      });
+      setSelectedFeedback((current) => current?.id === feedback.id ? null : current);
+      setFeedbackPayload((current) => current ? {
+        ...current,
+        data: current.data.filter((item) => item.id !== feedback.id),
+        pagination: {
+          ...current.pagination,
+          total: Math.max(0, current.pagination.total - 1)
+        }
+      } : current);
+      setMessage(payload.message);
+      await loadAnonymousFeedback();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível excluir o feedback.");
+    } finally {
+      setDeletingFeedbackId(null);
     }
   }
 
@@ -17754,13 +17784,16 @@ export function AnonymousFeedbackPage() {
                   <p className="line-clamp-3 text-sm">{feedback.comment}</p>
                 </div>,
                 <StatusBadge key={`${feedback.id}-status`} status={feedback.statusLabel} />,
-                feedback.allowContact ? <StatusBadge key={`${feedback.id}-contact`} status="Identificado" /> : <span key={`${feedback.id}-anonymous`} className="text-xs font-bold text-muted">Anônimo</span>,
-                feedback.response ? <StatusBadge key={`${feedback.id}-response`} status="Respondido" /> : <span key={`${feedback.id}-pending-response`} className="text-xs font-bold text-amber-700">Aguardando</span>,
+                feedback.allowContact ? <StatusBadge key={`${feedback.id}-contact`} status="Identificado" /> : <StatusBadge key={`${feedback.id}-anonymous`} status="Anônimo" />,
+                feedback.response ? <StatusBadge key={`${feedback.id}-response`} status="Respondido" /> : <StatusBadge key={`${feedback.id}-pending-response`} status="Aguardando" />,
                 <div key={`${feedback.id}-actions`} className="flex flex-wrap gap-2">
                   <button type="button" onClick={() => openFeedbackDetails(feedback)} className="rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-bold text-blue-700">{feedback.response ? "Ver resposta" : "Responder"}</button>
-                  <button type="button" onClick={() => updateFeedbackStatus(feedback.id, "Em análise")} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Em análise</button>
-                  <button type="button" onClick={() => updateFeedbackStatus(feedback.id, "Resolvido")} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Resolver</button>
-                  <button type="button" onClick={() => updateFeedbackStatus(feedback.id, "Arquivado")} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Arquivar</button>
+                  <button type="button" onClick={() => updateFeedbackStatus(feedback.id, "Em análise")} className="rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-bold text-blue-700">Em análise</button>
+                  <button type="button" onClick={() => updateFeedbackStatus(feedback.id, "Resolvido")} className="rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-700">Resolver</button>
+                  <button type="button" onClick={() => void deleteFeedback(feedback)} disabled={deletingFeedbackId === feedback.id} className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-bold text-red-700 disabled:cursor-not-allowed disabled:opacity-60">
+                    <Trash2 className="h-3.5 w-3.5" />
+                    {deletingFeedbackId === feedback.id ? "Excluindo..." : "Excluir"}
+                  </button>
                 </div>
               ])}
             />

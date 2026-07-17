@@ -301,6 +301,52 @@ export async function updateAnonymousFeedback(actor: Actor, input: AnonymousFeed
   return { data: serializeAnonymousFeedback(updated, new Map(), new Map()) };
 }
 
+export async function deleteAnonymousFeedback(actor: Actor, id: string) {
+  const user = await requireUser(actor);
+  requireAnonymousFeedbackManager(user);
+
+  const current = await prisma.anonymousFeedback.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      category: true,
+      status: true,
+      urgency: true,
+      allowContact: true,
+      adminResponse: true
+    }
+  });
+  if (!current) throw new EngagementError("Feedback não encontrado.", 404);
+
+  await prisma.$transaction([
+    prisma.notification.deleteMany({
+      where: { entity: "AnonymousFeedback", entityId: current.id }
+    }),
+    prisma.anonymousFeedback.delete({ where: { id: current.id } }),
+    prisma.auditLog.create({
+      data: {
+        actorId: user.id,
+        action: "EXCLUSAO",
+        entity: "AnonymousFeedback",
+        entityId: current.id,
+        before: {
+          category: current.category,
+          status: current.status,
+          urgency: current.urgency,
+          allowContact: current.allowContact,
+          responded: Boolean(current.adminResponse)
+        },
+        reason: "ANONYMOUS_FEEDBACK_DELETED"
+      }
+    })
+  ]);
+
+  return {
+    data: { id: current.id },
+    message: "Feedback excluído com sucesso."
+  };
+}
+
 export async function exportAnonymousFeedbackXlsxData(actor: Actor, filters: AnonymousFeedbackFilters = {}) {
   const user = await requireUser(actor);
   if (!canExportAnonymousFeedback(permissionUserFromAuthenticatedUser(user))) {

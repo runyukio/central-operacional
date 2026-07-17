@@ -4,6 +4,7 @@ import { z } from "zod";
 import { getApiActor } from "@/lib/api-actor";
 import {
   createAnonymousFeedback,
+  deleteAnonymousFeedback,
   EngagementError,
   listAnonymousFeedback,
   updateAnonymousFeedback
@@ -23,6 +24,10 @@ const patchSchema = z.object({
   response: z.string().min(3).max(4000).optional()
 }).refine((data) => data.status !== undefined || data.response !== undefined, {
   message: "Informe o status ou a resposta."
+});
+
+const deleteSchema = z.object({
+  id: z.string().min(1)
 });
 
 export async function GET(request: Request) {
@@ -68,6 +73,19 @@ export async function PATCH(request: Request) {
   const actor = await getApiActor();
   try {
     return NextResponse.json(await updateAnonymousFeedback(actor, parsed.data));
+  } catch (error) {
+    return engagementErrorResponse(error);
+  }
+}
+
+export async function DELETE(request: Request) {
+  const parsed = deleteSchema.safeParse(await request.json());
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Dados inválidos", issues: parsed.error.flatten() }, { status: 400 });
+  }
+  const actor = await getApiActor();
+  try {
+    return NextResponse.json(await deleteAnonymousFeedback(actor, parsed.data.id));
   } catch (error) {
     return engagementErrorResponse(error);
   }
