@@ -106,7 +106,8 @@ function applyDocumentLanguage(language: AppLanguage) {
   document.documentElement.lang = language;
   document.documentElement.dataset.language = language;
   const expectedTitle = language === "en-US" ? "Operations Center" : "Central Operacional";
-  if (document.title === "Central Operacional" || document.title === "Operations Center") document.title = expectedTitle;
+  const isKnownTitle = document.title === "Central Operacional" || document.title === "Operations Center";
+  if (isKnownTitle && document.title !== expectedTitle) document.title = expectedTitle;
 }
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
@@ -133,6 +134,10 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
     applyDocumentLanguage(language);
     translateSubtree(document.body, language);
 
+    // Portuguese is the source language, so it does not need to observe every
+    // dynamic update in large operational screens.
+    if (language === "pt-BR") return undefined;
+
     const titleObserver = new MutationObserver(() => applyDocumentLanguage(language));
     titleObserver.observe(document.head, {
       subtree: true,
@@ -140,31 +145,42 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
       characterData: true
     });
 
-    const pendingRoots = new Set<Node>();
-    let animationFrame = 0;
-    const flush = () => {
-      animationFrame = 0;
-      pendingRoots.forEach((root) => translateSubtree(root, language));
-      pendingRoots.clear();
-    };
-    const queue = (root: Node) => {
-      pendingRoots.add(root);
-      if (!animationFrame) animationFrame = window.requestAnimationFrame(flush);
-    };
-
-    const observer = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        if (mutation.type === "childList") mutation.addedNodes.forEach(queue);
-        else queue(mutation.target);
-      }
-    });
-    observer.observe(document.body, {
+    const observerOptions: MutationObserverInit = {
       subtree: true,
       childList: true,
       characterData: true,
       attributes: true,
       attributeFilter: [...translatableAttributes]
+    };
+    const pendingRoots = new Set<Node>();
+    let animationFrame = 0;
+    let observer: MutationObserver;
+    const flush = () => {
+      animationFrame = 0;
+      observer.disconnect();
+      try {
+        pendingRoots.forEach((root) => translateSubtree(root, language));
+        pendingRoots.clear();
+      } finally {
+        observer.observe(document.body, observerOptions);
+      }
+    };
+    const queue = (root: Node) => {
+      for (const pendingRoot of pendingRoots) {
+        if (pendingRoot.contains(root)) return;
+        if (root.contains(pendingRoot)) pendingRoots.delete(pendingRoot);
+      }
+      pendingRoots.add(root);
+      if (!animationFrame) animationFrame = window.requestAnimationFrame(flush);
+    };
+
+    observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.type === "childList") mutation.addedNodes.forEach(queue);
+        else queue(mutation.target);
+      }
     });
+    observer.observe(document.body, observerOptions);
 
     return () => {
       observer.disconnect();
