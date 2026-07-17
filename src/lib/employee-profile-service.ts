@@ -108,19 +108,21 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
     if (!canViewProfile(viewer, employee)) return createPermissionError("Você não tem permissão para visualizar este perfil.");
 
     const period = currentMonthPeriod();
-    const [schedule, workHours, requests, equipments, mood, performance, billing] = await Promise.all([
+    const viewerRole = normalizeRole(viewer.role.name);
+    const isOwnProfile = viewer.employeeProfile?.id === employee.id;
+    const canViewDiversityData = isOwnProfile || diversityRoles.has(viewerRole);
+    const [schedule, workHours, requests, equipments, mood, performance, billing, anonymousFeedbacks] = await Promise.all([
       profileSection("schedule", employee.id, buildScheduleSummary(employee.id, period)),
       profileSection("work_hours", employee.id, buildWorkHoursSummary(employee.id, period)),
       profileSection("requests", employee.id, buildRequestsSummary(employee)),
       profileSection("equipment", employee.id, buildEquipmentSummary(employee.id)),
       profileSection("mood", employee.id, buildMoodSummary(employee.id, period)),
       profileSection("performance", employee.id, buildPerformanceSummary(actor, viewer, employee, period)),
-      profileSection("billing_preview", employee.id, getEmployeeBillingPreview(employee.id, DEFAULT_BILLING_REFERENCE_MONTH))
+      profileSection("billing_preview", employee.id, getEmployeeBillingPreview(employee.id, DEFAULT_BILLING_REFERENCE_MONTH)),
+      isOwnProfile
+        ? profileSection("anonymous_feedback", employee.id, buildOwnAnonymousFeedbackSummary(viewer.id))
+        : Promise.resolve(null)
     ]);
-
-    const viewerRole = normalizeRole(viewer.role.name);
-    const isOwnProfile = viewer.employeeProfile?.id === employee.id;
-    const canViewDiversityData = isOwnProfile || diversityRoles.has(viewerRole);
 
     const response = {
       data: {
@@ -138,6 +140,7 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
         equipments,
         mood,
         billing,
+        anonymousFeedbacks,
         updatedAt: formatDateTime(new Date())
       }
     };
@@ -145,7 +148,7 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
       viewerRole,
       isOwnProfile,
       employeeId: employee.id,
-      sections: 7
+      sections: isOwnProfile ? 8 : 7
     });
     return response;
   } catch (error) {
@@ -373,6 +376,53 @@ async function buildMoodSummary(employeeId: string, period: Period) {
   };
 }
 
+async function buildOwnAnonymousFeedbackSummary(userId: string) {
+  const where: Prisma.AnonymousFeedbackWhereInput = {
+    OR: [
+      { submitterUserId: userId },
+      { submitterUserId: null, allowContact: true, contactUserId: userId }
+    ]
+  };
+  const [total, answered, items] = await Promise.all([
+    prisma.anonymousFeedback.count({ where }),
+    prisma.anonymousFeedback.count({ where: { ...where, adminResponse: { not: null } } }),
+    prisma.anonymousFeedback.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: 20,
+      select: {
+        id: true,
+        category: true,
+        urgency: true,
+        message: true,
+        status: true,
+        allowContact: true,
+        adminResponse: true,
+        respondedAt: true,
+        createdAt: true
+      }
+    })
+  ]);
+
+  return {
+    total,
+    answered,
+    waiting: Math.max(0, total - answered),
+    items: items.map((item) => ({
+      id: item.id,
+      category: item.category,
+      urgency: displayAnonymousFeedbackUrgency(item.urgency),
+      comment: item.message,
+      status: displayAnonymousFeedbackStatus(item.status),
+      identified: item.allowContact,
+      response: item.adminResponse ?? "",
+      respondedAt: item.respondedAt ? formatDateTime(item.respondedAt) : "",
+      respondedBy: item.adminResponse ? "East River" : "",
+      createdAt: formatDateTime(item.createdAt)
+    }))
+  };
+}
+
 async function buildPerformanceSummary(actor: Actor, viewer: ProfileUser, employee: ProfileEmployee, period: Period) {
   try {
     const isOwnProfile = viewer.employeeProfile?.id === employee.id;
@@ -532,6 +582,27 @@ function displayEquipmentStatus(value: EquipmentStatus) {
     PERDIDO: "Perdido",
     BLOQUEADO: "Bloqueado",
     SUBSTITUIDO: "Substituído"
+  };
+  return labels[value] ?? value;
+}
+
+function displayAnonymousFeedbackStatus(value: string) {
+  const labels: Record<string, string> = {
+    RECEBIDO: "Novo",
+    EM_ANALISE: "Em análise",
+    PLANO_DE_ACAO: "Em análise",
+    CONCLUIDO: "Resolvido",
+    ARQUIVADO: "Arquivado"
+  };
+  return labels[value] ?? value;
+}
+
+function displayAnonymousFeedbackUrgency(value: string) {
+  const labels: Record<string, string> = {
+    BAIXA: "Baixa",
+    MEDIA: "Média",
+    ALTA: "Alta",
+    CRITICA: "Crítica"
   };
   return labels[value] ?? value;
 }

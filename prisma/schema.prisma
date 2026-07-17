@@ -1603,27 +1603,32 @@ model ClimateSurveyResponse {
 }
 
 model AnonymousFeedback {
-  id            String                  @id @default(cuid())
-  category      String
-  message       String
-  evidenceUrl   String?
-  status        AnonymousFeedbackStatus @default(RECEBIDO)
-  urgency       String                  @default("MEDIA")
-  allowContact  Boolean                 @default(false)
-  contactUserId String?
-  lobId         String?
-  jobTitle      String?
-  resolvedAt    DateTime?
-  resolvedById  String?
-  theme         String?
-  actionPlan    ActionPlan?
-  createdAt     DateTime                @default(now())
-  updatedAt     DateTime                @updatedAt
+  id              String                  @id @default(cuid())
+  category        String
+  message         String
+  evidenceUrl     String?
+  status          AnonymousFeedbackStatus @default(RECEBIDO)
+  urgency         String                  @default("MEDIA")
+  allowContact    Boolean                 @default(false)
+  contactUserId   String?
+  submitterUserId String?
+  lobId           String?
+  jobTitle        String?
+  adminResponse   String?
+  respondedAt     DateTime?
+  respondedById   String?
+  resolvedAt      DateTime?
+  resolvedById    String?
+  theme           String?
+  actionPlan      ActionPlan?
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
 
   @@index([status, createdAt])
   @@index([category])
   @@index([urgency])
   @@index([lobId])
+  @@index([submitterUserId, createdAt])
 }
 
 model FormalFeedback {
