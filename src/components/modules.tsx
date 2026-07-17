@@ -17797,7 +17797,7 @@ export function AnonymousFeedbackPage() {
   const [anonymousForm, setAnonymousForm] = useState({ category: "Liderança", urgency: "Média", comment: "", allowContact: false });
   const [feedbackPayload, setFeedbackPayload] = useState<AnonymousFeedbackListResponse | null>(null);
   const [feedbackLoading, setFeedbackLoading] = useState(false);
-  const [feedbackView, setFeedbackView] = useState<"loading" | "admin" | "submit">("loading");
+  const [feedbackView, setFeedbackView] = useState<"loading" | "admin" | "submit" | "error">("loading");
   const [selectedFeedback, setSelectedFeedback] = useState<AnonymousFeedbackClient | null>(null);
   const [responseDraft, setResponseDraft] = useState("");
   const [responseSaving, setResponseSaving] = useState(false);
@@ -17822,6 +17822,7 @@ export function AnonymousFeedbackPage() {
       if (error instanceof ApiRequestError && error.status === 403) {
         setFeedbackView("submit");
       } else {
+        setFeedbackView("error");
         setMessage(error instanceof Error ? error.message : "Não foi possível carregar feedbacks.");
       }
     } finally {
@@ -17898,6 +17899,23 @@ export function AnonymousFeedbackPage() {
         <PageHeader title="Feedback Anônimo" description="Canal seguro para registrar percepções, sugestões e problemas operacionais." icon={MessageCircle} actions={<TopActions />} />
         <Panel title="Carregando">
           <EmptyState title="Carregando Feedback Anônimo" description="Verificando sua permissão de acesso." />
+        </Panel>
+      </div>
+    );
+  }
+
+  if (feedbackView === "error") {
+    return (
+      <div>
+        <PageHeader title="Feedback Anônimo" description="Canal seguro para registrar percepções, sugestões e problemas operacionais." icon={MessageCircle} actions={<TopActions />} />
+        <Panel title="Não foi possível carregar">
+          <div className="rounded-lg border border-red-100 bg-red-50 p-5 text-center">
+            <AlertTriangle className="mx-auto h-9 w-9 text-red-500" />
+            <p className="mt-3 text-sm font-extrabold text-red-800">{message || "Não foi possível carregar Feedback Anônimo."}</p>
+            <button type="button" onClick={loadAnonymousFeedback} disabled={feedbackLoading} className="mt-4 h-10 rounded-lg border border-red-200 bg-white px-4 text-sm font-extrabold text-red-700 disabled:opacity-60">
+              {feedbackLoading ? "Tentando novamente..." : "Tentar novamente"}
+            </button>
+          </div>
         </Panel>
       </div>
     );
