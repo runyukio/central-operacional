@@ -10,7 +10,8 @@ export async function GET(request: Request) {
   const actor = await getApiActor();
   const url = new URL(request.url);
   const result = await getRealtimeCecReport(actor, {
-    cycleDownload: url.searchParams.get("cycleDownload") ?? undefined
+    cycleDownload: url.searchParams.get("cycleDownload") ?? undefined,
+    forceRefresh: url.searchParams.get("force") === "true"
   });
   if ("error" in result) {
     return NextResponse.json({ error: result.error, message: result.error }, { status: result.status ?? 400 });
