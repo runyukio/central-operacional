@@ -112,10 +112,6 @@ export function CecReportOverview({ report, loading, error }: { report: CecRepor
 
   return (
     <section className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-xs font-bold text-blue-900">
-        <span>Snapshot do arquivo agendado do Freshdesk. A quantidade reflete todas as linhas exportadas no ciclo, sem acumular ciclos anteriores.</span>
-        <span className="text-blue-700">Arquivo: {snapshot.fileName}</span>
-      </div>
       {report?.refreshWarning ? (
         <div className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-800">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
