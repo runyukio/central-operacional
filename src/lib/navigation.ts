@@ -15,7 +15,6 @@ export type NavSection = {
 };
 
 const nonClientRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "COLABORADOR", "WFM", "QUALIDADE", "RH", "TI", "COORDENADOR", "GERENTE"];
-const performanceRoles: AppRole[] = [...nonClientRoles, "CLIENT"];
 const muralRoles: AppRole[] = [...nonClientRoles, "CLIENT"];
 const financeiroRoles: AppRole[] = [...nonClientRoles, "CLIENT"];
 const centralRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI", "COORDENADOR", "GERENTE"];
@@ -37,7 +36,6 @@ export const navSections: NavSection[] = [
       { label: "Real Time", href: "/real-time", icon: "MonitorCog", roles: realTimeRoles },
       { label: "Captura de Horas", href: "/captura-horas", icon: "Clock", roles: realtimeHoursCaptureRoles },
       { label: "Necessidade", href: "/staff-cobertura", icon: "UsersRound", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "CLIENT"] },
-      { label: "Performance", href: "/performance", icon: "Trophy", roles: performanceRoles }
     ]
   },
   {
@@ -105,7 +103,7 @@ export function getNavSections(userOrRole?: string | PermissionUser) {
 
 export function getDefaultPathForRole(role?: string) {
   const normalizedRole = normalizeRole(role);
-  if (normalizedRole === "CLIENT") return "/performance";
+  if (normalizedRole === "CLIENT") return "/staff-cobertura";
   return normalizedRole === "COLABORADOR" ? "/meu-perfil" : "/central-operacional";
 }
 
@@ -114,7 +112,6 @@ export function canAccessPathForRole(pathname: string, userOrRole?: string | Per
   const normalizedRole = normalizeRole(user?.role);
   if (normalizedRole === "CLIENT") {
     if (pathname === "/" || pathname === "/alterar-senha") return true;
-    if (pathname === "/performance" || pathname.startsWith("/performance/")) return true;
     if (pathname === "/api/performance" || pathname.startsWith("/api/performance/")) return true;
     if (pathname === "/staff-cobertura" || pathname.startsWith("/staff-cobertura/")) return true;
     if (pathname === "/api/staff-coverage" || pathname.startsWith("/api/staff-coverage/")) return true;
@@ -126,7 +123,8 @@ export function canAccessPathForRole(pathname: string, userOrRole?: string | Per
     if (pathname === "/api/realtime" || pathname.startsWith("/api/realtime/")) return true;
     return false;
   }
-  if ((pathname === "/performance" || pathname.startsWith("/performance/") || pathname === "/api/performance" || pathname.startsWith("/api/performance/")) && canAccessPerformanceByEmail(user)) return true;
+  if (pathname === "/performance" || pathname.startsWith("/performance/")) return false;
+  if ((pathname === "/api/performance" || pathname.startsWith("/api/performance/")) && canAccessPerformanceByEmail(user)) return true;
   if (pathname === "/meu-perfil" || pathname.startsWith("/perfil/")) return nonClientRoles.includes(normalizedRole);
   if (pathname === "/minhas-horas" || pathname.startsWith("/minhas-horas/") || pathname === "/api/realtime-hours/me" || pathname.startsWith("/api/realtime-hours/me/")) {
     return canAccessOwnRealtimeHours({ ...user, status: user?.status ?? "ACTIVE" });
