@@ -1,5 +1,5 @@
-import { isActiveUser, normalizeRole, type PermissionUser } from "@/lib/permissions";
-import { normalizeComparableJobTitle } from "@/lib/job-title-normalization";
+import { isAgentJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
+import { isActiveUser, isRtaSkill, normalizeRole, type PermissionUser } from "@/lib/permissions";
 
 const realtimeHoursMappingAllowedEmails = new Set(["runyukio@gmail.com"]);
 const realtimeHoursCaptureRoles = new Set(["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "COORDENADOR", "GERENTE", "TI"]);
@@ -15,8 +15,12 @@ export function canAccessRealtimeHoursCapture(user?: PermissionUser | null) {
   const actor = user ?? {};
   if (!isActiveUser(actor)) return false;
   if (realtimeHoursCaptureRoles.has(normalizeRole(actor.role))) return true;
-  return [actor.roleTitle, actor.jobTitle]
+  const isIt = [actor.roleTitle, actor.jobTitle]
     .some((title) => realtimeHoursItJobTitles.has(normalizeComparableJobTitle(title)));
+  if (isIt) return true;
+
+  const isRtaAgent = [actor.roleTitle, actor.jobTitle].some((title) => isAgentJobTitle(title)) && isRtaSkill(actor.skill);
+  return isRtaAgent;
 }
 
 export function canRequestRealtimeHoursCaptureAdjustment(user?: PermissionUser | null) {
