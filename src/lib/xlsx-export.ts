@@ -10,22 +10,25 @@ export type XlsxExportPayload = {
   headers: string[];
   rows: XlsxCell[][];
   columnFormats?: XlsxColumnFormats;
+  autoFilter?: boolean;
   sheets?: Array<{
     sheetName: string;
     headers: string[];
     rows: XlsxCell[][];
     columnFormats?: XlsxColumnFormats;
+    autoFilter?: boolean;
   }>;
 };
 
 export const xlsxContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+export const xlsxDurationFormat = "[h]:mm:ss;-[h]:mm:ss;00:00:00";
 
 export function dateStamp(date = new Date()) {
   return date.toISOString().slice(0, 10);
 }
 
-export function buildXlsxBuffer(payload: Pick<XlsxExportPayload, "sheetName" | "headers" | "rows" | "columnFormats">) {
-  const worksheet = buildWorksheet(payload.headers, payload.rows, payload.columnFormats);
+export function buildXlsxBuffer(payload: Pick<XlsxExportPayload, "sheetName" | "headers" | "rows" | "columnFormats" | "autoFilter">) {
+  const worksheet = buildWorksheet(payload.headers, payload.rows, payload.columnFormats, payload.autoFilter);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, safeSheetName(payload.sheetName));
   return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
@@ -45,14 +48,14 @@ export function buildXlsxResponse(payload: XlsxExportPayload) {
 
 function buildMultiSheetXlsxBuffer(payload: XlsxExportPayload) {
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, buildWorksheet(payload.headers, payload.rows, payload.columnFormats), safeSheetName(payload.sheetName));
+  XLSX.utils.book_append_sheet(workbook, buildWorksheet(payload.headers, payload.rows, payload.columnFormats, payload.autoFilter), safeSheetName(payload.sheetName));
   for (const sheet of payload.sheets ?? []) {
-    XLSX.utils.book_append_sheet(workbook, buildWorksheet(sheet.headers, sheet.rows, sheet.columnFormats), safeSheetName(sheet.sheetName));
+    XLSX.utils.book_append_sheet(workbook, buildWorksheet(sheet.headers, sheet.rows, sheet.columnFormats, sheet.autoFilter), safeSheetName(sheet.sheetName));
   }
   return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
 }
 
-function buildWorksheet(headers: string[], rows: XlsxCell[][], columnFormats: XlsxColumnFormats = {}) {
+function buildWorksheet(headers: string[], rows: XlsxCell[][], columnFormats: XlsxColumnFormats = {}, autoFilter = false) {
   const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
   for (const [columnIndex, format] of Object.entries(columnFormats)) {
     const column = Number(columnIndex);
@@ -60,12 +63,15 @@ function buildWorksheet(headers: string[], rows: XlsxCell[][], columnFormats: Xl
     for (let rowIndex = 1; rowIndex <= rows.length; rowIndex += 1) {
       const address = XLSX.utils.encode_cell({ r: rowIndex, c: column });
       const cell = worksheet[address];
-      if (cell && typeof cell.v === "number") cell.z = format;
+      if (cell && (typeof cell.v === "number" || cell.v instanceof Date)) cell.z = format;
     }
   }
   worksheet["!cols"] = headers.map((header, index) => ({
     wch: Math.min(48, Math.max(String(header).length + 2, ...rows.map((row) => String(row[index] ?? "").length + 2)))
   }));
+  if (autoFilter && headers.length) {
+    worksheet["!autofilter"] = { ref: XLSX.utils.encode_range({ r: 0, c: 0 }, { r: Math.max(0, rows.length), c: headers.length - 1 }) };
+  }
   return worksheet;
 }
 

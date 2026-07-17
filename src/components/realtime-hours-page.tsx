@@ -22,6 +22,15 @@ import {
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 
 import { EmptyState, PageHeader, Panel } from "@/components/ui/primitives";
+import {
+  compareRealtimeHoursPlannedShift as comparePlannedShift,
+  filterRealtimeHoursTimelineRows,
+  realtimeHoursPlannedShiftLabel as plannedShiftLabel,
+  realtimeHoursScheduleStatusLabel as scheduleStatusLabel,
+  type RealtimeHoursPresenceStatus,
+  type RealtimeHoursScheduleFilter,
+  type RealtimeHoursShiftFilter
+} from "@/lib/realtime-hours-timeline";
 import { cn } from "@/lib/utils";
 
 type RealtimeHoursBatch = {
@@ -175,14 +184,11 @@ type RealtimeHoursIdentityMappingsPayload = {
 };
 
 type CaptureTab = "TIMELINE" | "MAPPINGS";
-type RealtimeHoursPresenceStatus = "ONLINE" | "LOCKED" | "OFFLINE" | "IDLE";
 type MappingMatchFilter = "ALL" | "FOUND" | "NOT_FOUND";
 
 type RealtimeHoursPageProps = {
   canManageMappings?: boolean;
 };
-
-const idleThresholdSeconds = 300;
 
 const emptySummary: RealtimeHoursSummary = {
   totalRecords: 0,
@@ -217,11 +223,14 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
   const [lobFilter, setLobFilter] = useState(ALL_LOBS_FILTER);
   const [presenceFilter, setPresenceFilter] = useState<"ALL" | RealtimeHoursPresenceStatus>("ALL");
   const [supervisorFilter, setSupervisorFilter] = useState("ALL");
+  const [shiftFilter, setShiftFilter] = useState<RealtimeHoursShiftFilter>("ALL");
+  const [scheduleFilter, setScheduleFilter] = useState<RealtimeHoursScheduleFilter>("ALL");
   const [mappingMatchFilter, setMappingMatchFilter] = useState<MappingMatchFilter>("ALL");
   const [timelineDate, setTimelineDate] = useState(todayInputDate());
   const [expandedTimelineKey, setExpandedTimelineKey] = useState<string | null>(null);
   const [mappingDrafts, setMappingDrafts] = useState<Record<string, string>>({});
   const [savingMappingKey, setSavingMappingKey] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   const loadData = useCallback(async (showRefreshing = false) => {
     if (showRefreshing) setRefreshing(true);
     if (!showRefreshing) setLoading(true);
@@ -275,32 +284,19 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
 
   const summary = statusPayload?.summary ?? emptySummary;
   const batch = statusPayload?.batch ?? null;
-  const records = useMemo(() => statusPayload?.records ?? [], [statusPayload?.records]);
   const lobOptions = useMemo(() => buildLobOptions(timelinePayload?.rows ?? []), [timelinePayload?.rows]);
   const supervisorOptions = useMemo(() => buildSupervisorOptions(timelinePayload?.rows ?? []), [timelinePayload?.rows]);
   const timelineRows = useMemo(() => {
-    const normalizedSearch = normalizeText(search);
-    const rows = timelinePayload?.rows ?? [];
-    return rows.filter((row) => {
-      const rowLob = normalizedLob(row.lob);
-      if (lobFilter !== ALL_LOBS_FILTER && rowLob !== lobFilter) return false;
-      if (presenceFilter !== "ALL" && row.currentStatus !== presenceFilter) return false;
-      if (supervisorFilter !== "ALL" && row.supervisor !== supervisorFilter) return false;
-      const matchesSearch = normalizedSearch
-        ? normalizeText([
-          row.hostname,
-          row.windowsUser,
-          row.wbLogin,
-          row.employeeName,
-          row.lob,
-          row.shift,
-          row.supervisor,
-          row.ipAddress
-        ].join(" ")).includes(normalizedSearch)
-        : true;
-      return matchesSearch;
+    return filterRealtimeHoursTimelineRows(timelinePayload?.rows ?? [], {
+      date: timelineDate,
+      search,
+      lob: lobFilter,
+      presence: presenceFilter,
+      supervisor: supervisorFilter,
+      shift: shiftFilter,
+      schedule: scheduleFilter
     });
-  }, [lobFilter, presenceFilter, search, supervisorFilter, timelinePayload?.rows]);
+  }, [lobFilter, presenceFilter, scheduleFilter, search, shiftFilter, supervisorFilter, timelineDate, timelinePayload?.rows]);
 
   useEffect(() => {
     if (lobFilter !== ALL_LOBS_FILTER && !lobOptions.some((option) => option.value === lobFilter)) {
@@ -331,23 +327,6 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
         : true;
     });
   }, [mappingMatchFilter, mappingsPayload?.data, search]);
-
-  const filteredRecords = useMemo(() => {
-    const normalizedSearch = normalizeText(search);
-    return records.filter((record) => {
-      const matchesSearch = normalizedSearch
-        ? normalizeText([
-          record.hostname,
-          record.windowsUser,
-          record.wbLogin,
-          record.employeeId,
-          record.ipAddress,
-          record.activeProcessName
-        ].join(" ")).includes(normalizedSearch)
-        : true;
-      return matchesSearch;
-    });
-  }, [records, search]);
 
   const onlineSessions = Math.max(0, summary.activeSessions - summary.idleSessions);
   const onlinePercent = percent(onlineSessions, summary.totalRecords);
@@ -390,6 +369,33 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
     }
   }
 
+  async function exportTimeline() {
+    setExporting(true);
+    setError("");
+    setSuccessMessage("");
+    try {
+      const params = new URLSearchParams({
+        date: timelineDate,
+        search,
+        lob: lobFilter,
+        presence: presenceFilter,
+        supervisor: supervisorFilter,
+        shift: shiftFilter,
+        schedule: scheduleFilter
+      });
+      await downloadFile(
+        `/api/realtime-hours/export?${params.toString()}`,
+        `captura_de_horas_${todayInputDate()}.xlsx`,
+        "Não foi possível exportar a Captura de Horas."
+      );
+      setSuccessMessage("Arquivo Excel gerado com os filtros selecionados.");
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : "Não foi possível exportar a Captura de Horas.");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <PageHeader
@@ -400,13 +406,13 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => exportCsv(filteredRecords)}
-              disabled={!filteredRecords.length}
-              className="premium-control inline-flex h-9 items-center gap-2 px-3 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={exportTimeline}
+              disabled={exporting || loading || !timelineRows.length}
+              className="premium-control inline-flex h-9 items-center gap-2 px-3 text-sm font-extrabold text-navy-950 disabled:cursor-wait disabled:opacity-50"
               title="Exportar registros filtrados"
             >
-              <Download className="h-4 w-4" />
-              Exportar
+              {exporting ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              {exporting ? "Exportando..." : "Exportar"}
             </button>
             <button
               type="button"
@@ -500,6 +506,10 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
           supervisorFilter={supervisorFilter}
           supervisorOptions={supervisorOptions}
           onSupervisorFilterChange={setSupervisorFilter}
+          shiftFilter={shiftFilter}
+          onShiftFilterChange={setShiftFilter}
+          scheduleFilter={scheduleFilter}
+          onScheduleFilterChange={setScheduleFilter}
           expandedKey={expandedTimelineKey}
           onToggleExpanded={(key) => setExpandedTimelineKey((current) => current === key ? null : key)}
         />
@@ -589,6 +599,10 @@ function TimelinePanel({
   supervisorFilter,
   supervisorOptions,
   onSupervisorFilterChange,
+  shiftFilter,
+  onShiftFilterChange,
+  scheduleFilter,
+  onScheduleFilterChange,
   expandedKey,
   onToggleExpanded
 }: {
@@ -607,6 +621,10 @@ function TimelinePanel({
   supervisorFilter: string;
   supervisorOptions: string[];
   onSupervisorFilterChange: (value: string) => void;
+  shiftFilter: RealtimeHoursShiftFilter;
+  onShiftFilterChange: (value: RealtimeHoursShiftFilter) => void;
+  scheduleFilter: RealtimeHoursScheduleFilter;
+  onScheduleFilterChange: (value: RealtimeHoursScheduleFilter) => void;
   expandedKey: string | null;
   onToggleExpanded: (key: string) => void;
 }) {
@@ -618,7 +636,7 @@ function TimelinePanel({
 
   return (
     <Panel title="Linha do tempo diária">
-      <div className="mb-4 grid gap-2.5 lg:grid-cols-[200px_minmax(280px,1fr)_210px_230px]">
+      <div className="mb-4 grid gap-2.5 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-[190px_minmax(250px,1fr)_180px_220px_160px_150px]">
         <label className="relative block">
           <span className="sr-only">Data</span>
           <CalendarDays className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-blue-600" />
@@ -630,7 +648,7 @@ function TimelinePanel({
           />
         </label>
 
-        <label className="relative block">
+        <label className="relative block xl:col-span-2 2xl:col-span-1">
           <span className="sr-only">Buscar</span>
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
           <input
@@ -667,6 +685,32 @@ function TimelinePanel({
             {supervisorOptions.map((supervisor) => <option key={supervisor} value={supervisor}>{supervisor}</option>)}
           </select>
         </label>
+
+        <label className="block">
+          <span className="sr-only">Turno</span>
+          <select
+            value={shiftFilter}
+            onChange={(event) => onShiftFilterChange(event.target.value as RealtimeHoursShiftFilter)}
+            className="premium-control h-10 w-full px-3 text-sm font-black text-navy-950 outline-none"
+          >
+            <option value="ALL">Todos</option>
+            <option value="MANHA">Manhã</option>
+            <option value="TARDE">Tarde</option>
+            <option value="NOITE">Noite</option>
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="sr-only">Escala</span>
+          <select
+            value={scheduleFilter}
+            onChange={(event) => onScheduleFilterChange(event.target.value as RealtimeHoursScheduleFilter)}
+            className="premium-control h-10 w-full px-3 text-sm font-black text-navy-950 outline-none"
+          >
+            <option value="ALL">Total</option>
+            <option value="SCHEDULED">Escalado</option>
+          </select>
+        </label>
       </div>
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -698,7 +742,7 @@ function TimelinePanel({
       ) : !payload?.rows?.length ? (
         <EmptyState title="Sem captura para esta data" description="Escolha outra data ou aguarde os agentes Windows enviarem novos sinais." />
       ) : !rows.length ? (
-        <EmptyState title="Nenhuma máquina neste filtro" description="Selecione outra LOB ou ajuste a busca." />
+        <EmptyState title="Nenhum agente neste filtro" description="Ajuste a busca ou selecione outros filtros." />
       ) : (
         <div className="space-y-4">
           <div className="grid gap-2.5 md:grid-cols-3">
@@ -866,17 +910,6 @@ function TimelineLegend({ color, label }: { color: string; label: string }) {
   );
 }
 
-type ShiftComparison = {
-  label: string;
-  tone: "green" | "blue" | "amber" | "red" | "slate";
-  plannedShift: RealtimeHoursPlannedShift | null;
-  firstActiveAt: number | null;
-  lastActiveAt: number | null;
-  arrivalDelayMs: number;
-  earlyDepartureMs: number;
-  observedUntil: number;
-};
-
 function TimelineBar({
   row,
   date,
@@ -1043,94 +1076,7 @@ function TimelineRange({
   );
 }
 
-function comparePlannedShift(row: RealtimeHoursTimelineRow, date: string, calculationEnd: string): ShiftComparison {
-  const plannedShift = primaryPlannedShift(row, date);
-  const observedUntil = new Date(calculationEnd).getTime();
-  if (!plannedShift) {
-    return {
-      label: "Sem escala",
-      tone: "slate",
-      plannedShift: null,
-      firstActiveAt: null,
-      lastActiveAt: null,
-      arrivalDelayMs: 0,
-      earlyDepartureMs: 0,
-      observedUntil
-    };
-  }
-
-  const plannedStart = new Date(plannedShift.start).getTime();
-  const plannedEnd = new Date(plannedShift.end).getTime();
-  const activeSegments = row.segments
-    .filter((segment) => segment.type === "ACTIVE")
-    .map((segment) => ({ start: new Date(segment.start).getTime(), end: new Date(segment.end).getTime() }))
-    .filter((segment) => segment.end > plannedStart && segment.start < plannedEnd);
-  const firstActiveAt = activeSegments.length ? Math.max(plannedStart, activeSegments[0].start) : null;
-  const lastActiveAt = activeSegments.length ? Math.min(plannedEnd, activeSegments[activeSegments.length - 1].end) : null;
-  const arrivalDelayMs = firstActiveAt !== null
-    ? Math.max(0, firstActiveAt - plannedStart)
-    : observedUntil > plannedStart
-      ? Math.max(0, Math.min(observedUntil, plannedEnd) - plannedStart)
-      : 0;
-  const shiftFinished = observedUntil >= plannedEnd;
-  const earlyDepartureMs = shiftFinished && lastActiveAt !== null ? Math.max(0, plannedEnd - lastActiveAt) : 0;
-  const toleranceMs = 5 * 60_000;
-
-  if (observedUntil < plannedStart) {
-    return { label: `Inicia às ${plannedShift.startsAt}`, tone: "blue", plannedShift, firstActiveAt, lastActiveAt, arrivalDelayMs, earlyDepartureMs, observedUntil };
-  }
-  if (!firstActiveAt) {
-    return {
-      label: shiftFinished ? "Sem atividade no turno" : "Aguardando entrada",
-      tone: shiftFinished ? "red" : "amber",
-      plannedShift,
-      firstActiveAt,
-      lastActiveAt,
-      arrivalDelayMs,
-      earlyDepartureMs,
-      observedUntil
-    };
-  }
-  if (arrivalDelayMs > toleranceMs && earlyDepartureMs > toleranceMs) {
-    return {
-      label: `${formatCompactMinutes(arrivalDelayMs)} atraso · ${formatCompactMinutes(earlyDepartureMs)} saída`,
-      tone: "red",
-      plannedShift,
-      firstActiveAt,
-      lastActiveAt,
-      arrivalDelayMs,
-      earlyDepartureMs,
-      observedUntil
-    };
-  }
-  if (arrivalDelayMs > toleranceMs) {
-    return { label: `${formatCompactMinutes(arrivalDelayMs)} de atraso`, tone: "amber", plannedShift, firstActiveAt, lastActiveAt, arrivalDelayMs, earlyDepartureMs, observedUntil };
-  }
-  if (earlyDepartureMs > toleranceMs) {
-    return { label: `${formatCompactMinutes(earlyDepartureMs)} antes`, tone: "red", plannedShift, firstActiveAt, lastActiveAt, arrivalDelayMs, earlyDepartureMs, observedUntil };
-  }
-  return {
-    label: shiftFinished ? "No horário" : "Em jornada",
-    tone: shiftFinished ? "green" : "blue",
-    plannedShift,
-    firstActiveAt,
-    lastActiveAt,
-    arrivalDelayMs,
-    earlyDepartureMs,
-    observedUntil
-  };
-}
-
-function primaryPlannedShift(row: RealtimeHoursTimelineRow, date: string) {
-  return row.plannedShifts.find((shift) => shift.sourceDate === date) ?? row.plannedShifts[0] ?? null;
-}
-
-function plannedShiftLabel(row: RealtimeHoursTimelineRow, date: string) {
-  const shift = primaryPlannedShift(row, date);
-  return shift ? `${shift.startsAt} - ${shift.endsAt}` : "Sem escala";
-}
-
-function ShiftComparisonBadge({ comparison }: { comparison: ShiftComparison }) {
+function ShiftComparisonBadge({ comparison }: { comparison: ReturnType<typeof comparePlannedShift> }) {
   const styles = {
     green: "bg-emerald-50 text-emerald-700",
     blue: "bg-blue-50 text-blue-700",
@@ -1329,14 +1275,6 @@ function PresenceStatusBadge({ status }: { status: RealtimeHoursPresenceStatus }
   );
 }
 
-function getSessionStatus(record: RealtimeHoursRecord) {
-  if (!record.isSessionActive && record.sessionState === "LOCKED") return "Bloqueada (não contabiliza)";
-  if (!record.isSessionActive && record.sessionState === "DISCONNECTED") return "Desconectada";
-  if (!record.isSessionActive) return "Inativa";
-  if ((record.idleSeconds ?? 0) >= idleThresholdSeconds) return "Ativa (ociosa)";
-  return "Ativa";
-}
-
 function formatDateTime(value?: string | null) {
   if (!value) return "-";
   const date = new Date(value);
@@ -1377,15 +1315,6 @@ function formatDurationMs(value: number) {
   const minutes = totalMinutes % 60;
   if (hours > 0) return `${hours}h ${String(minutes).padStart(2, "0")}m`;
   return `${minutes}m`;
-}
-
-function formatCompactMinutes(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return "0m";
-  const totalMinutes = Math.max(1, Math.round(value / 60_000));
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (!hours) return `${minutes}m`;
-  return minutes ? `${hours}h ${String(minutes).padStart(2, "0")}m` : `${hours}h`;
 }
 
 function todayInputDate() {
@@ -1441,23 +1370,6 @@ function buildSupervisorOptions(rows: RealtimeHoursTimelineRow[]) {
     });
 }
 
-function scheduleStatusLabel(status: string) {
-  const labels: Record<string, string> = {
-    ATRASO: "Atraso",
-    ESCALADO: "Escalado",
-    FALTA: "Falta",
-    FALTA_INJUSTIFICADA: "Falta injustificada",
-    FALTA_JUSTIFICADA: "Falta justificada",
-    NESTING: "Nesting",
-    PRESENTE: "Presente",
-    SAIDA_ANTECIPADA: "Saída antecipada",
-    TREINAMENTO: "Treinamento",
-    TROCA_APROVADA: "Troca aprovada",
-    VENDA_FOLGA_APROVADA: "Venda de folga aprovada"
-  };
-  return labels[status] ?? status.replaceAll("_", " ").toLowerCase();
-}
-
 function percent(value: number, total: number) {
   if (!total) return 0;
   return Math.round((value / total) * 100);
@@ -1471,51 +1383,30 @@ function normalizeText(value: string) {
     .replace(/\p{Diacritic}/gu, "");
 }
 
-function exportCsv(records: RealtimeHoursRecord[]) {
-  const headers = [
-    "hostname",
-    "windowsUser",
-    "wbLogin",
-    "employeeId",
-    "ipAddress",
-    "eventType",
-    "sessionState",
-    "agentVersion",
-    "sessionStatus",
-    "idleSeconds",
-    "lastActivityAt",
-    "identityConfidence",
-    "identitySource",
-    "activeProcessName",
-    "activeWindowTitle"
-  ];
-  const rows = records.map((record) => [
-    record.hostname,
-    record.windowsUser,
-    record.wbLogin,
-    record.employeeId,
-    record.ipAddress,
-    record.eventType,
-    record.sessionState,
-    record.agentVersion,
-    getSessionStatus(record),
-    record.idleSeconds ?? "",
-    record.lastActivityAt ?? "",
-    record.identityConfidence,
-    record.identitySource,
-    record.activeProcessName,
-    record.activeWindowTitle
-  ]);
-  const csv = [headers, ...rows]
-    .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
-    .join("\n");
-  const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
+async function downloadFile(url: string, fallbackFileName: string, fallbackErrorMessage: string) {
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { error?: string; message?: string } | null;
+    throw new Error(payload?.message ?? payload?.error ?? fallbackErrorMessage);
+  }
+  const blob = await response.blob();
+  if (!blob.size) throw new Error(fallbackErrorMessage);
+  const fileName = fileNameFromDisposition(response.headers.get("Content-Disposition"), fallbackFileName);
+  const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement("a");
-  link.href = url;
-  link.download = `captura-horas-${new Date().toISOString().slice(0, 10)}.csv`;
+  link.href = objectUrl;
+  link.download = fileName;
+  link.rel = "noopener";
   document.body.appendChild(link);
   link.click();
   link.remove();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+}
+
+function fileNameFromDisposition(disposition: string | null, fallback: string) {
+  if (!disposition) return fallback;
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) return decodeURIComponent(utf8Match[1].replace(/"/g, ""));
+  const plainMatch = disposition.match(/filename="?([^";]+)"?/i);
+  return plainMatch?.[1] ?? fallback;
 }
