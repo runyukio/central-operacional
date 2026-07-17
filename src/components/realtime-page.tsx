@@ -522,16 +522,21 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
     }
   }
 
-  async function loadCecReport(cycle = selectedCycle) {
+  async function loadCecReport(cycle = selectedCycle, force = false) {
     setCecLoading(true);
     setCecError("");
     try {
       const params = new URLSearchParams();
       if (cycle) params.set("cycleDownload", cycle);
+      if (force) params.set("force", "true");
       const response = await fetch(`/api/realtime/cec?${params.toString()}`, { cache: "no-store" });
       const json = await response.json();
       if (!response.ok) throw new Error(json.message || json.error || "Could not load CEC report.");
-      setCecReport((json as { data: CecReportPayload }).data);
+      const nextReport = (json as { data: CecReportPayload }).data;
+      setCecReport(nextReport);
+      if ((followLatestCycle || !cycle) && nextReport.selectedCycle && nextReport.selectedCycle !== selectedCycle) {
+        setSelectedCycle(nextReport.selectedCycle);
+      }
     } catch (currentError) {
       setCecError(currentError instanceof Error ? currentError.message : "Could not load CEC report.");
     } finally {
@@ -561,12 +566,16 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
       setActiveTab("executive");
       return;
     }
+    if (effectiveTab === "report" && reportLob === "CEC") {
+      setLoading(false);
+      return;
+    }
     void loadSnapshot(selectedCycle, false, effectiveTab === "agents" ? "agents" : effectiveTab === "report" || effectiveTab === "executive" ? "both" : "queues");
     return () => {
       snapshotAbortRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCycle, activeTab, clientQueuesOnly, canAccessExecutiveReport, executiveOnly]);
+  }, [selectedCycle, activeTab, reportLob, clientQueuesOnly, canAccessExecutiveReport, executiveOnly]);
 
   const summary = payload?.data.summary;
   const queueView = payload?.data.queueView;
@@ -623,9 +632,12 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
     }).sort((a, b) => compareAgentRows(a, b, agentSort));
   }, [agentFilters, agentSort, agentView?.rows]);
 
-  const cycles = effectiveTab === "agents" ? agentView?.cycles ?? [] : queueView?.cycles ?? [];
+  const isCecReport = effectiveTab === "report" && reportLob === "CEC";
+  const cycles = isCecReport ? cecReport?.cycles ?? [] : effectiveTab === "agents" ? agentView?.cycles ?? [] : queueView?.cycles ?? [];
   const selectedCycleExists = Boolean(selectedCycle && cycles.some((cycle) => cycle.value === selectedCycle));
-  const selectedCycleValue = selectedCycleExists ? selectedCycle : (effectiveTab === "agents" ? agentView?.selectedCycle : queueView?.selectedCycle) || "";
+  const selectedCycleValue = selectedCycleExists
+    ? selectedCycle
+    : (isCecReport ? cecReport?.selectedCycle : effectiveTab === "agents" ? agentView?.selectedCycle : queueView?.selectedCycle) || "";
   const selectedCycleIndex = cycles.findIndex((cycle) => cycle.value === selectedCycleValue);
   const olderCycle = selectedCycleIndex >= 0 ? cycles[selectedCycleIndex + 1]?.value ?? "" : "";
   const newerCycle = selectedCycleIndex > 0 ? cycles[selectedCycleIndex - 1]?.value ?? "" : "";
@@ -740,25 +752,28 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
   }
 
   useEffect(() => {
+    if (isCecReport) return;
     const interval = window.setInterval(async () => {
       await refreshRealtimeSnapshot(true);
     }, 60000);
     return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, clientQueuesOnly, followLatestCycle, selectedCycleValue]);
+  }, [activeTab, reportLob, clientQueuesOnly, followLatestCycle, selectedCycleValue, isCecReport]);
 
   useEffect(() => {
     if (effectiveTab !== "report" || reportLob !== "CEC") return;
-    void loadCecReport(selectedCycleValue);
-    const interval = window.setInterval(() => void loadCecReport(selectedCycleValue), 60000);
+    const cycleToLoad = followLatestCycle ? "" : selectedCycleValue;
+    void loadCecReport(cycleToLoad);
+    const interval = window.setInterval(() => void loadCecReport(cycleToLoad), 60000);
     return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveTab, reportLob, selectedCycleValue]);
+  }, [effectiveTab, reportLob, selectedCycleValue, followLatestCycle]);
 
   useEffect(() => {
     function refreshWhenVisible() {
       if (document.hidden) return;
-      void refreshRealtimeSnapshot(true);
+      if (isCecReport) void loadCecReport(followLatestCycle ? "" : selectedCycleValue);
+      else void refreshRealtimeSnapshot(true);
     }
 
     window.addEventListener("focus", refreshWhenVisible);
@@ -768,7 +783,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
       document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, clientQueuesOnly, followLatestCycle, selectedCycleValue]);
+  }, [activeTab, reportLob, clientQueuesOnly, followLatestCycle, selectedCycleValue, isCecReport]);
 
   function updateAgentFilter(key: keyof AgentFilters, value: string) {
     setAgentFilters((current) => ({ ...current, [key]: value }));
@@ -806,7 +821,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          {!clientQueuesOnly && !executiveOnly ? (
+          {!clientQueuesOnly && !executiveOnly && !isCecReport ? (
             <button type="button" onClick={() => void openHistory()} className="premium-control inline-flex h-10 items-center gap-2 px-3 text-sm font-extrabold text-navy-950">
               <History className="h-4 w-4" />
               {useEnglishChrome ? "History" : "Histórico"}
@@ -821,12 +836,12 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
           <button
             type="button"
             onClick={() => {
-              void refreshRealtimeSnapshot(true);
-              if (effectiveTab === "report" && reportLob === "CEC") void loadCecReport(selectedCycleValue);
+              if (isCecReport) void loadCecReport(followLatestCycle ? "" : selectedCycleValue, true);
+              else void refreshRealtimeSnapshot(true);
             }}
             className="premium-button inline-flex h-10 items-center gap-2 px-4 text-sm font-extrabold"
           >
-            <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} />
+            <RefreshCw className={cn("h-4 w-4", (refreshing || (isCecReport && cecLoading)) && "animate-spin")} />
             {useEnglishChrome ? "Refresh" : "Atualizar"}
           </button>
         </div>
@@ -850,7 +865,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
             {useEnglishChrome ? "Current Cycle" : "Ciclo atual"}
           </button>
           <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-bold text-muted">
-            {useEnglishChrome ? "Comparison" : "Comparação"}: {(effectiveTab === "agents" ? agentView?.previousCycle : queueView?.previousCycle) || (useEnglishChrome ? "No previous cycle" : "Sem ciclo anterior")}
+            {useEnglishChrome ? "Comparison" : "Comparação"}: {(isCecReport ? cecReport?.previousCycle : effectiveTab === "agents" ? agentView?.previousCycle : queueView?.previousCycle) || (useEnglishChrome ? "No previous cycle" : "Sem ciclo anterior")}
           </div>
         </div>
       </section>

@@ -210,14 +210,14 @@ export async function refreshRealtimeCecFromFreshdesk(options: { force?: boolean
   return { ...imported, refreshed: true };
 }
 
-export async function getRealtimeCecReport(actor: Actor, options: { cycleDownload?: string } = {}) {
+export async function getRealtimeCecReport(actor: Actor, options: { cycleDownload?: string; forceRefresh?: boolean } = {}) {
   if (!canAccessRealTime({ role: actor.role, email: actor.email, name: actor.name, roleTitle: actor.roleTitle, jobTitle: actor.jobTitle, skill: actor.skill, status: "ACTIVE" })) {
     return { error: "Você não tem permissão para acessar Real Time.", status: 403 };
   }
 
   let refreshWarning = "";
   try {
-    await refreshRealtimeCecFromFreshdesk();
+    await refreshRealtimeCecFromFreshdesk({ force: options.forceRefresh });
   } catch (error) {
     refreshWarning = error instanceof Error ? error.message : "Não foi possível consultar a API Freshdesk.";
     console.warn("[realtime/cec] A atualização pela API falhou; usando o último snapshot válido.", error);
