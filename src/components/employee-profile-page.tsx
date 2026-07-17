@@ -10,6 +10,7 @@ import {
   Laptop,
   Mail,
   MapPin,
+  MessageCircle,
   ShieldCheck,
   UserCircle
 } from "lucide-react";
@@ -133,6 +134,23 @@ type ProfilePayload = {
       finalAmount: number;
       message: string;
     };
+    anonymousFeedbacks: null | {
+      total: number;
+      answered: number;
+      waiting: number;
+      items: Array<{
+        id: string;
+        category: string;
+        urgency: string;
+        comment: string;
+        status: string;
+        identified: boolean;
+        response: string;
+        respondedAt: string;
+        respondedBy: string;
+        createdAt: string;
+      }>;
+    };
     updatedAt: string;
   };
 };
@@ -237,6 +255,77 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
         <StatCard title="ABS" value={data.performance ? formatPercent(data.performance.abs) : "-"} helper={`${data.schedule.absenceDays}/${data.schedule.scheduledDays} dias`} icon={AlertTriangle} tone={(data.performance?.abs ?? 0) > 0 ? "red" : "green"} />
         <StatCard title="Feedback / Humor" value={data.mood.responses ? data.mood.label : "Sem registros"} helper={`${data.mood.responses} resposta(s) no mês`} icon={HeartPulse} tone="orange" />
       </div>
+
+      {data.anonymousFeedbacks ? (
+        <section id="meus-feedbacks" className="scroll-mt-24">
+          <Panel title="Meus feedbacks enviados">
+            <div className="mb-4 flex flex-col gap-3 rounded-lg border border-blue-100 bg-blue-50/70 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-start gap-3">
+                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white text-blue-700 shadow-sm">
+                  <MessageCircle className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-sm font-black text-navy-950">Acompanhe seus relatos e os retornos da empresa</p>
+                  <p className="mt-1 text-xs font-semibold leading-5 text-blue-800">Feedbacks anônimos continuam ocultando sua identidade da equipe responsável. Este histórico só aparece no seu próprio perfil.</p>
+                </div>
+              </div>
+              <div className="grid shrink-0 grid-cols-3 gap-2 text-center">
+                <FeedbackCount label="Enviados" value={data.anonymousFeedbacks.total} />
+                <FeedbackCount label="Respondidos" value={data.anonymousFeedbacks.answered} tone="green" />
+                <FeedbackCount label="Aguardando" value={data.anonymousFeedbacks.waiting} tone="orange" />
+              </div>
+            </div>
+
+            {data.anonymousFeedbacks.items.length ? (
+              <div className="space-y-2">
+                {data.anonymousFeedbacks.items.map((feedback) => (
+                  <details key={feedback.id} className="group rounded-lg border border-border bg-white open:border-blue-200 open:shadow-sm">
+                    <summary className="flex cursor-pointer list-none flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between [&::-webkit-details-marker]:hidden">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="font-black text-navy-950">{feedback.category}</p>
+                          <StatusBadge status={feedback.status} />
+                          <span className={cn("inline-flex rounded-md px-2 py-1 text-[11px] font-black", feedback.identified ? "bg-violet-50 text-violet-700" : "bg-slate-100 text-slate-600")}>
+                            {feedback.identified ? "Identificado" : "Anônimo"}
+                          </span>
+                          {feedback.response ? <span className="inline-flex rounded-md bg-emerald-50 px-2 py-1 text-[11px] font-black text-emerald-700">Respondido</span> : null}
+                        </div>
+                        <p className="mt-1 truncate text-sm font-semibold text-muted">{feedback.comment}</p>
+                      </div>
+                      <div className="flex shrink-0 items-center justify-between gap-3 text-xs font-bold text-muted sm:justify-end">
+                        <span>{feedback.createdAt}</span>
+                        <span className="text-blue-700 group-open:hidden">Ver detalhes</span>
+                        <span className="hidden text-blue-700 group-open:inline">Ocultar</span>
+                      </div>
+                    </summary>
+                    <div className="border-t border-border px-3 pb-3 pt-3">
+                      <div className="rounded-lg bg-slate-50 p-3">
+                        <p className="text-[11px] font-black uppercase tracking-wide text-muted">Seu feedback · Urgência {feedback.urgency.toLowerCase()}</p>
+                        <p className="mt-2 whitespace-pre-wrap text-sm font-semibold leading-6 text-navy-950">{feedback.comment}</p>
+                      </div>
+                      {feedback.response ? (
+                        <div className="mt-3 rounded-lg border border-emerald-100 bg-emerald-50/70 p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-sm font-black text-emerald-800">Resposta de {feedback.respondedBy}</p>
+                            <p className="text-xs font-bold text-emerald-700">{feedback.respondedAt}</p>
+                          </div>
+                          <p className="mt-2 whitespace-pre-wrap text-sm font-semibold leading-6 text-navy-950">{feedback.response}</p>
+                        </div>
+                      ) : (
+                        <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 p-3 text-sm font-bold text-amber-800">
+                          Aguardando retorno da East River.
+                        </div>
+                      )}
+                    </div>
+                  </details>
+                ))}
+              </div>
+            ) : (
+              <EmptyState title="Nenhum feedback enviado" description="Quando você enviar um feedback, o acompanhamento e a resposta aparecerão aqui." />
+            )}
+          </Panel>
+        </section>
+      ) : null}
 
       <div className="grid w-full gap-4 xl:grid-cols-12 xl:items-start">
         <div className="grid min-w-0 gap-4 md:grid-cols-2 xl:col-span-4 xl:block xl:space-y-4">
@@ -483,6 +572,16 @@ function InfoLine({ label, value }: { label: string; value: React.ReactNode }) {
     <div className="min-w-0">
       <p className="text-[11px] font-black uppercase tracking-wide text-muted">{label}</p>
       <div className="mt-1 min-w-0 break-words font-bold text-navy-950">{value || "-"}</div>
+    </div>
+  );
+}
+
+function FeedbackCount({ label, value, tone = "blue" }: { label: string; value: number; tone?: "blue" | "green" | "orange" }) {
+  const toneClass = tone === "green" ? "text-emerald-700" : tone === "orange" ? "text-amber-700" : "text-blue-700";
+  return (
+    <div className="min-w-[72px] rounded-lg border border-white/80 bg-white px-2 py-2 shadow-sm">
+      <p className={cn("text-lg font-black leading-none", toneClass)}>{value}</p>
+      <p className="mt-1 text-[9px] font-black uppercase tracking-wide text-muted">{label}</p>
     </div>
   );
 }

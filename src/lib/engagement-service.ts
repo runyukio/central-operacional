@@ -61,6 +61,12 @@ export type AnonymousFeedbackInput = {
   evidenceUrl?: string;
 };
 
+export type AnonymousFeedbackUpdateInput = {
+  id: string;
+  status?: string;
+  response?: string;
+};
+
 export type AnonymousFeedbackFilters = {
   startDate?: string;
   endDate?: string;
@@ -196,6 +202,7 @@ export async function createAnonymousFeedback(actor: Actor, input: AnonymousFeed
       urgency: normalizeUrgency(input.urgency),
       allowContact: Boolean(input.allowContact),
       contactUserId: input.allowContact ? user.id : null,
+      submitterUserId: user.id,
       evidenceUrl: input.evidenceUrl?.trim() || null,
       lobId: user.employeeProfile?.lobId ?? null,
       jobTitle: user.employeeProfile?.roleTitle ?? null
@@ -228,20 +235,39 @@ export async function createAnonymousFeedback(actor: Actor, input: AnonymousFeed
   };
 }
 
-export async function updateAnonymousFeedbackStatus(actor: Actor, input: { id: string; status: string }) {
+export async function updateAnonymousFeedback(actor: Actor, input: AnonymousFeedbackUpdateInput) {
   const user = await requireUser(actor);
   requireAnonymousFeedbackManager(user);
-  const status = normalizeFeedbackStatus(input.status);
   const current = await prisma.anonymousFeedback.findUnique({ where: { id: input.id } });
   if (!current) throw new EngagementError("Feedback não encontrado.", 404);
 
+  if (input.status === undefined && input.response === undefined) {
+    throw new EngagementError("Informe o status ou a resposta que deseja atualizar.");
+  }
+
+  const data: Prisma.AnonymousFeedbackUpdateInput = {};
+  let nextStatus = current.status;
+  if (input.status !== undefined) {
+    nextStatus = normalizeFeedbackStatus(input.status);
+    data.status = nextStatus;
+    data.resolvedAt = nextStatus === "CONCLUIDO" ? new Date() : null;
+    data.resolvedById = nextStatus === "CONCLUIDO" ? user.id : null;
+  }
+
+  let responseChanged = false;
+  if (input.response !== undefined) {
+    const response = input.response.trim();
+    if (response.length < 3) throw new EngagementError("A resposta deve ter pelo menos 3 caracteres.");
+    if (response.length > 4000) throw new EngagementError("A resposta deve ter no máximo 4.000 caracteres.");
+    data.adminResponse = response;
+    data.respondedAt = new Date();
+    data.respondedById = user.id;
+    responseChanged = response !== current.adminResponse;
+  }
+
   const updated = await prisma.anonymousFeedback.update({
     where: { id: input.id },
-    data: {
-      status,
-      resolvedAt: status === "CONCLUIDO" ? new Date() : null,
-      resolvedById: status === "CONCLUIDO" ? user.id : null
-    }
+    data
   });
 
   await prisma.auditLog.create({
@@ -250,11 +276,27 @@ export async function updateAnonymousFeedbackStatus(actor: Actor, input: { id: s
       action: "EDICAO",
       entity: "AnonymousFeedback",
       entityId: updated.id,
-      before: { status: current.status },
-      after: { status: updated.status },
-      reason: "ANONYMOUS_FEEDBACK_STATUS_UPDATED"
+      before: { status: current.status, responded: Boolean(current.adminResponse) },
+      after: { status: updated.status, responded: Boolean(updated.adminResponse) },
+      reason: input.response !== undefined ? "ANONYMOUS_FEEDBACK_RESPONDED" : "ANONYMOUS_FEEDBACK_STATUS_UPDATED"
     }
   }).catch(() => undefined);
+
+  const recipientUserId = current.submitterUserId ?? (current.allowContact ? current.contactUserId : null);
+  if (responseChanged && recipientUserId) {
+    await prisma.notification.create({
+      data: {
+        userId: recipientUserId,
+        title: "Seu feedback recebeu uma resposta",
+        body: "A East River respondeu ao seu feedback. Consulte o retorno em Meu Perfil.",
+        category: "FEEDBACK_ANONIMO",
+        type: "INFO",
+        entity: "AnonymousFeedback",
+        entityId: updated.id,
+        href: "/meu-perfil#meus-feedbacks"
+      }
+    }).catch(() => undefined);
+  }
 
   return { data: serializeAnonymousFeedback(updated, new Map(), new Map()) };
 }
@@ -274,10 +316,13 @@ export async function exportAnonymousFeedbackXlsxData(actor: Actor, filters: Ano
     item.lob ?? "",
     item.jobTitle ?? "",
     item.allowContact ? "Sim" : "Não",
-    item.resolvedAt ?? ""
+    item.resolvedAt ?? "",
+    item.response ?? "",
+    item.respondedAt ?? "",
+    item.respondedBy ?? ""
   ]);
   return {
-    headers: ["data", "categoria", "urgencia", "status", "comentario", "lob", "cargo_funcao", "contato_permitido", "resolvido_em"],
+    headers: ["data", "categoria", "urgencia", "status", "comentario", "lob", "cargo_funcao", "contato_permitido", "resolvido_em", "resposta", "respondido_em", "respondido_por"],
     rows,
     sheetName: "Feedback",
     fileName: `feedback_anonimo_${new Date().toISOString().slice(0, 10)}.xlsx`
@@ -597,7 +642,10 @@ function serializeAnonymousFeedback(
     jobTitle: item.jobTitle,
     createdAt: item.createdAt.toISOString(),
     updatedAt: item.updatedAt.toISOString(),
-    resolvedAt: item.resolvedAt?.toISOString() ?? null
+    resolvedAt: item.resolvedAt?.toISOString() ?? null,
+    response: item.adminResponse,
+    respondedAt: item.respondedAt?.toISOString() ?? null,
+    respondedBy: item.adminResponse ? "East River" : null
   };
 }
 

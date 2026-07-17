@@ -6,7 +6,7 @@ import {
   createAnonymousFeedback,
   EngagementError,
   listAnonymousFeedback,
-  updateAnonymousFeedbackStatus
+  updateAnonymousFeedback
 } from "@/lib/engagement-service";
 
 const schema = z.object({
@@ -19,7 +19,10 @@ const schema = z.object({
 
 const patchSchema = z.object({
   id: z.string().min(1),
-  status: z.string().min(1)
+  status: z.string().min(1).optional(),
+  response: z.string().min(3).max(4000).optional()
+}).refine((data) => data.status !== undefined || data.response !== undefined, {
+  message: "Informe o status ou a resposta."
 });
 
 export async function GET(request: Request) {
@@ -64,7 +67,7 @@ export async function PATCH(request: Request) {
   }
   const actor = await getApiActor();
   try {
-    return NextResponse.json(await updateAnonymousFeedbackStatus(actor, parsed.data));
+    return NextResponse.json(await updateAnonymousFeedback(actor, parsed.data));
   } catch (error) {
     return engagementErrorResponse(error);
   }

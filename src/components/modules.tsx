@@ -17002,6 +17002,9 @@ type AnonymousFeedbackClient = {
   jobTitle?: string | null;
   createdAt: string;
   resolvedAt?: string | null;
+  response?: string | null;
+  respondedAt?: string | null;
+  respondedBy?: string | null;
 };
 
 type AnonymousFeedbackListResponse = {
@@ -17796,6 +17799,8 @@ export function AnonymousFeedbackPage() {
   const [feedbackLoading, setFeedbackLoading] = useState(false);
   const [feedbackView, setFeedbackView] = useState<"loading" | "admin" | "submit">("loading");
   const [selectedFeedback, setSelectedFeedback] = useState<AnonymousFeedbackClient | null>(null);
+  const [responseDraft, setResponseDraft] = useState("");
+  const [responseSaving, setResponseSaving] = useState(false);
   const [feedbackFilters, setFeedbackFilters] = useState({ status: "Todos", urgency: "Todos", category: "Todos", startDate: "", endDate: "", lob: "", jobTitle: "", search: "" });
 
   const loadAnonymousFeedback = useCallback(async () => {
@@ -17845,14 +17850,45 @@ export function AnonymousFeedbackPage() {
   async function updateFeedbackStatus(id: string, status: string) {
     setMessage("");
     try {
-      await apiJson<{ data: AnonymousFeedbackClient }>("/api/anonymous-feedback", {
+      const payload = await apiJson<{ data: AnonymousFeedbackClient }>("/api/anonymous-feedback", {
         method: "PATCH",
         body: JSON.stringify({ id, status })
       });
+      setSelectedFeedback((current) => current?.id === id ? { ...current, status: payload.data.status, statusLabel: payload.data.statusLabel, resolvedAt: payload.data.resolvedAt } : current);
       setMessage("Status atualizado.");
       await loadAnonymousFeedback();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Não foi possível atualizar o status.");
+    }
+  }
+
+  function openFeedbackDetails(feedback: AnonymousFeedbackClient) {
+    setSelectedFeedback(feedback);
+    setResponseDraft(feedback.response ?? "");
+  }
+
+  async function saveFeedbackResponse() {
+    if (!selectedFeedback || responseDraft.trim().length < 3) return;
+    setMessage("");
+    setResponseSaving(true);
+    try {
+      const payload = await apiJson<{ data: AnonymousFeedbackClient }>("/api/anonymous-feedback", {
+        method: "PATCH",
+        body: JSON.stringify({ id: selectedFeedback.id, response: responseDraft.trim() })
+      });
+      setSelectedFeedback((current) => current ? {
+        ...current,
+        response: payload.data.response,
+        respondedAt: payload.data.respondedAt,
+        respondedBy: "East River"
+      } : current);
+      setResponseDraft(payload.data.response ?? responseDraft.trim());
+      setMessage("Resposta enviada ao colaborador como East River.");
+      await loadAnonymousFeedback();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível enviar a resposta.");
+    } finally {
+      setResponseSaving(false);
     }
   }
 
@@ -17880,7 +17916,7 @@ export function AnonymousFeedbackPage() {
     if (feedbackFilters.search.trim()) exportParams.set("search", feedbackFilters.search.trim());
     return (
       <div>
-        <PageHeader title="Feedback Anônimo" description="Acompanhe manifestações anônimas sem expor a identidade do colaborador." icon={MessageCircle} actions={<TopActions />} />
+        <PageHeader title="Feedback Anônimo" description="Acompanhe manifestações, responda aos colaboradores e preserve a escolha de identificação." icon={MessageCircle} actions={<TopActions />} />
         {message ? <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
         <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           <StatCard title="Total" value={summary?.total ?? 0} helper="feedbacks recebidos" icon={MessageCircle} tone="blue" />
@@ -17915,7 +17951,7 @@ export function AnonymousFeedbackPage() {
             <EmptyState title="Carregando feedbacks" description="Buscando dados reais no banco." />
           ) : feedbackPayload?.data.length ? (
             <SimpleTable
-              columns={["Data", "Categoria", "Urgência", "LOB", "Cargo/Função", "Comentário", "Status", "Contato", "Ações"]}
+              columns={["Data", "Categoria", "Urgência", "LOB", "Cargo/Função", "Comentário", "Status", "Identificação", "Retorno", "Ações"]}
               rows={feedbackPayload.data.map((feedback) => [
                 ptDate(feedback.createdAt),
                 feedback.category,
@@ -17926,9 +17962,10 @@ export function AnonymousFeedbackPage() {
                   <p className="line-clamp-3 text-sm">{feedback.comment}</p>
                 </div>,
                 <StatusBadge key={`${feedback.id}-status`} status={feedback.statusLabel} />,
-                feedback.allowContact ? <StatusBadge key={`${feedback.id}-contact`} status="Contato permitido" /> : "Não permitido",
+                feedback.allowContact ? <StatusBadge key={`${feedback.id}-contact`} status="Identificado" /> : <span key={`${feedback.id}-anonymous`} className="text-xs font-bold text-muted">Anônimo</span>,
+                feedback.response ? <StatusBadge key={`${feedback.id}-response`} status="Respondido" /> : <span key={`${feedback.id}-pending-response`} className="text-xs font-bold text-amber-700">Aguardando</span>,
                 <div key={`${feedback.id}-actions`} className="flex flex-wrap gap-2">
-                  <button type="button" onClick={() => setSelectedFeedback(feedback)} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Ver</button>
+                  <button type="button" onClick={() => openFeedbackDetails(feedback)} className="rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-bold text-blue-700">{feedback.response ? "Ver resposta" : "Responder"}</button>
                   <button type="button" onClick={() => updateFeedbackStatus(feedback.id, "Em análise")} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Em análise</button>
                   <button type="button" onClick={() => updateFeedbackStatus(feedback.id, "Resolvido")} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Resolver</button>
                   <button type="button" onClick={() => updateFeedbackStatus(feedback.id, "Arquivado")} className="rounded-lg border border-border px-2 py-1 text-xs font-bold">Arquivar</button>
@@ -17947,13 +17984,13 @@ export function AnonymousFeedbackPage() {
                   <h2 className="text-lg font-extrabold text-navy-950">Detalhe do feedback</h2>
                   <p className="text-sm text-muted">{ptDate(selectedFeedback.createdAt)} · {selectedFeedback.category}</p>
                 </div>
-                <button type="button" onClick={() => setSelectedFeedback(null)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
+                <button type="button" onClick={() => setSelectedFeedback(null)} aria-label="Fechar detalhe do feedback" className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
               </div>
               <div className="space-y-3">
                 <div className="flex flex-wrap gap-2">
                   <PriorityBadge priority={selectedFeedback.urgencyLabel} />
                   <StatusBadge status={selectedFeedback.statusLabel} />
-                  {selectedFeedback.allowContact ? <StatusBadge status="Contato permitido" /> : null}
+                  {selectedFeedback.allowContact ? <StatusBadge status="Identificado" /> : <span className="inline-flex rounded-md bg-slate-100 px-2 py-1 text-xs font-extrabold text-slate-600">Anônimo</span>}
                 </div>
                 <div className="grid gap-3 md:grid-cols-2">
                   <div className="rounded-lg border border-border p-3">
@@ -17974,7 +18011,37 @@ export function AnonymousFeedbackPage() {
                     <p className="font-extrabold">Contato permitido pelo colaborador</p>
                     <p className="mt-1">{selectedFeedback.contact.name} · {selectedFeedback.contact.email} · {selectedFeedback.contact.wbLogin}</p>
                   </div>
-                ) : null}
+                ) : (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                    <p className="font-extrabold">Identidade protegida</p>
+                    <p className="mt-1">O colaborador optou por permanecer anônimo. Nenhum dado de identificação é exibido nesta área.</p>
+                  </div>
+                )}
+                <div className="rounded-lg border border-emerald-100 bg-emerald-50/60 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-extrabold text-navy-950">Resposta para o colaborador</p>
+                      <p className="mt-1 text-xs font-semibold text-emerald-800">No perfil do colaborador, o remetente será exibido somente como East River.</p>
+                    </div>
+                    {selectedFeedback.respondedAt ? <p className="text-xs font-bold text-emerald-700">Último envio: {ptDate(selectedFeedback.respondedAt)}</p> : null}
+                  </div>
+                  <label className="mt-3 block">
+                    <span className="sr-only">Resposta da East River para o colaborador</span>
+                    <textarea
+                      value={responseDraft}
+                      onChange={(event) => setResponseDraft(event.target.value)}
+                      maxLength={4000}
+                      className="min-h-32 w-full rounded-lg border border-emerald-200 bg-white p-3 text-sm leading-6 outline-none focus:border-emerald-400"
+                      placeholder="Escreva o posicionamento ou retorno da East River"
+                    />
+                  </label>
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-semibold text-muted">{responseDraft.length}/4000 caracteres</p>
+                    <button type="button" onClick={saveFeedbackResponse} disabled={responseSaving || responseDraft.trim().length < 3} className="premium-button h-10 px-4 text-sm font-extrabold disabled:opacity-60">
+                      {responseSaving ? "Enviando..." : selectedFeedback.response ? "Atualizar resposta" : "Enviar resposta"}
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -17985,11 +18052,16 @@ export function AnonymousFeedbackPage() {
 
   return (
     <div>
-      <PageHeader title="Feedback Anônimo" description="Canal seguro para registrar percepções, sugestões e problemas operacionais." icon={MessageCircle} actions={<TopActions />} />
+      <PageHeader title="Feedback Anônimo" description="Canal seguro para registrar percepções, acompanhar o tratamento e receber o retorno da East River." icon={MessageCircle} actions={<TopActions />} />
       {message ? <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
       <Panel title="Enviar feedback anônimo">
         {submitted ? (
-          <EmptyState title="Feedback enviado com sucesso." description="Obrigado por compartilhar sua percepção." />
+          <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-5 text-center">
+            <CheckCircle2 className="mx-auto h-10 w-10 text-emerald-600" />
+            <h2 className="mt-3 text-lg font-extrabold text-navy-950">Feedback enviado com sucesso.</h2>
+            <p className="mt-1 text-sm font-semibold text-muted">Você poderá acompanhar o status e a resposta da East River em Meu Perfil.</p>
+            <Link href="/meu-perfil#meus-feedbacks" className="mt-4 inline-flex h-10 items-center rounded-lg bg-emerald-600 px-4 text-sm font-extrabold text-white hover:bg-emerald-700">Acompanhar em Meu Perfil</Link>
+          </div>
         ) : (
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
             <div className="space-y-4">
@@ -18009,14 +18081,17 @@ export function AnonymousFeedbackPage() {
                 <span className="mb-1.5 block text-sm font-bold text-muted">Comentário</span>
                 <textarea value={anonymousForm.comment} onChange={(event) => setAnonymousForm({ ...anonymousForm, comment: event.target.value })} className="min-h-40 w-full rounded-lg border border-border p-3 outline-none" placeholder="Descreva a situação, oportunidade ou sugestão" />
               </label>
-              <label className="flex items-center gap-2 text-sm font-bold text-navy-950">
-                <input type="checkbox" checked={anonymousForm.allowContact} onChange={(event) => setAnonymousForm({ ...anonymousForm, allowContact: event.target.checked })} />
-                Desejo permitir contato sobre este feedback
+              <label className="flex items-start gap-3 rounded-lg border border-border bg-slate-50 p-3 text-sm font-bold text-navy-950">
+                <input type="checkbox" checked={anonymousForm.allowContact} onChange={(event) => setAnonymousForm({ ...anonymousForm, allowContact: event.target.checked })} className="mt-0.5 h-4 w-4" />
+                <span>
+                  Quero me identificar para a equipe responsável
+                  <span className="mt-1 block text-xs font-semibold leading-5 text-muted">Ao marcar, seu nome, e-mail e WB/Login poderão ser vistos pelos perfis autorizados. Desmarcado, o envio permanece anônimo.</span>
+                </span>
               </label>
               <button type="button" onClick={submitAnonymousFeedback} disabled={!anonymousForm.comment.trim()} className="premium-button h-11 px-5 text-sm font-extrabold disabled:opacity-60">Enviar feedback</button>
             </div>
             <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm font-semibold leading-6 text-blue-800">
-              O feedback é salvo sem nome, e-mail ou WB/Login. Somente dados agregados como LOB e cargo podem ser usados para análise consolidada. Se você permitir contato, perfis autorizados verão essa autorização de forma explícita.
+              Sua escolha de privacidade é respeitada. Sem identificação, administradores não recebem seu nome, e-mail ou WB/Login. O sistema mantém apenas um vínculo privado para mostrar o protocolo e a resposta exclusivamente no seu próprio perfil.
             </div>
           </div>
         )}
