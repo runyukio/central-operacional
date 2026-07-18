@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, CircleDollarSign, Clock, FileText, Send, WalletCards } from "lucide-react";
+import { CheckCircle2, CircleDollarSign, Clock, Download, FileText, LockKeyhole, Send, Upload, WalletCards } from "lucide-react";
 
 import { EmptyState, PageHeader, Panel, StatCard, StatusBadge } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
@@ -34,6 +34,17 @@ type MyInvoicePayload = {
       otherAdjustmentAmount: number;
       adjustmentAmount: number;
       finalAmount: number;
+      fiscalInvoice: null | {
+        id: string;
+        invoiceNumber: string;
+        grossAmount: number;
+        serviceDescription: string;
+        fileName: string;
+        mimeType: string;
+        sizeBytes: number;
+        submittedAt: string;
+        downloadUrl: string;
+      };
     };
     weeklyApprovedHours: Array<{ week: string; period: string; minutes: number; hours: string }>;
     composition: Array<{ label: string; hours: string; value: number; tone: string }>;
@@ -75,6 +86,11 @@ export function MyInvoicePage() {
   const [error, setError] = useState("");
   const [adjustmentOpen, setAdjustmentOpen] = useState(false);
   const [adjustment, setAdjustment] = useState({ type: "Horas não consideradas", questionedItem: "Horas aprovadas", description: "" });
+  const [fiscalDraft, setFiscalDraft] = useState<{ invoiceNumber: string; serviceDescription: string; file: File | null }>({
+    invoiceNumber: "",
+    serviceDescription: "",
+    file: null
+  });
   const data = payload?.data;
 
   const load = useCallback(async () => {
@@ -85,6 +101,12 @@ export function MyInvoicePage() {
       const next = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(next.error ?? "Não foi possível carregar seu invoice.");
       setPayload(next);
+      const fiscalInvoice = (next as MyInvoicePayload).data.invoice.fiscalInvoice;
+      setFiscalDraft({
+        invoiceNumber: fiscalInvoice?.invoiceNumber ?? "",
+        serviceDescription: fiscalInvoice?.serviceDescription ?? "",
+        file: null
+      });
     } catch (err) {
       setPayload(null);
       setError(err instanceof Error ? err.message : "Não foi possível carregar seu invoice.");
@@ -114,6 +136,44 @@ export function MyInvoicePage() {
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível salvar.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function approveInvoice() {
+    const invoiceNumber = fiscalDraft.invoiceNumber.trim();
+    const serviceDescription = fiscalDraft.serviceDescription.trim();
+    if (!/^\d{1,20}$/.test(invoiceNumber)) {
+      setError("Informe o número da nota fiscal usando somente números, com até 20 dígitos.");
+      return;
+    }
+    if (serviceDescription.length < 3 || serviceDescription.length > 1000) {
+      setError("A descrição do serviço deve ter entre 3 e 1.000 caracteres.");
+      return;
+    }
+    if (!fiscalDraft.file && !data?.invoice.fiscalInvoice) {
+      setError("Anexe a nota fiscal em PDF, XML, PNG ou JPG.");
+      return;
+    }
+
+    setSaving(true);
+    setMessage("");
+    setError("");
+    try {
+      const form = new FormData();
+      form.set("action", "approve");
+      form.set("referenceMonth", referenceMonth);
+      form.set("invoiceNumber", invoiceNumber);
+      form.set("serviceDescription", serviceDescription);
+      if (fiscalDraft.file) form.set("file", fiscalDraft.file);
+      const response = await fetch("/api/billing/my-invoice", { method: "POST", body: form });
+      const next = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(next.error ?? "Não foi possível aprovar o invoice.");
+      setMessage("Invoice e nota fiscal enviados com sucesso.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível aprovar o invoice.");
     } finally {
       setSaving(false);
     }
@@ -266,15 +326,63 @@ export function MyInvoicePage() {
 
         <div className="space-y-4">
           <Panel title="Ações">
-            <div className="grid gap-2">
-              <button disabled={!data.invoice.canApprove || saving} onClick={() => post("approve", {}, "Invoice aprovado com sucesso.")} className="premium-button inline-flex h-10 w-full items-center justify-center gap-2 px-3 text-sm font-extrabold leading-none disabled:cursor-not-allowed disabled:opacity-50">
-                <CheckCircle2 className="h-4 w-4" /> Aprovar invoice
+            <div className="grid gap-3">
+              <label>
+                <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">Número da nota fiscal</span>
+                <input
+                  inputMode="numeric"
+                  maxLength={20}
+                  disabled={!data.invoice.canApprove || saving}
+                  value={fiscalDraft.invoiceNumber}
+                  onChange={(event) => setFiscalDraft({ ...fiscalDraft, invoiceNumber: event.target.value.replace(/\D/g, "") })}
+                  placeholder="Somente números"
+                  className="premium-control h-10 w-full px-3 text-sm font-bold disabled:bg-slate-50 disabled:opacity-80"
+                />
+              </label>
+              <label>
+                <span className="mb-1.5 flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wide text-muted">
+                  Valor da nota fiscal <LockKeyhole className="h-3.5 w-3.5" />
+                </span>
+                <input readOnly value={formatCurrency(data.invoice.grossAmount)} className="premium-control h-10 w-full bg-slate-50 px-3 text-sm font-black text-navy-950" />
+                <span className="mt-1 block text-[11px] font-semibold text-muted">Valor bruto antes de adiantamentos, descontos e ajustes.</span>
+              </label>
+              <label>
+                <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">Descrição do serviço</span>
+                <textarea
+                  maxLength={1000}
+                  disabled={!data.invoice.canApprove || saving}
+                  value={fiscalDraft.serviceDescription}
+                  onChange={(event) => setFiscalDraft({ ...fiscalDraft, serviceDescription: event.target.value })}
+                  placeholder="Informe o serviço descrito na nota fiscal."
+                  className="premium-control min-h-[92px] w-full px-3 py-2 text-sm font-semibold disabled:bg-slate-50 disabled:opacity-80"
+                />
+              </label>
+              <label className={cn("rounded-xl border border-dashed border-blue-200 bg-blue-50/60 p-3", !data.invoice.canApprove ? "opacity-70" : "cursor-pointer") }>
+                <span className="flex items-center gap-2 text-sm font-black text-blue-700"><Upload className="h-4 w-4" /> Anexar nota fiscal</span>
+                <span className="mt-1 block break-all text-xs font-semibold text-muted">
+                  {fiscalDraft.file?.name ?? data.invoice.fiscalInvoice?.fileName ?? "PDF, XML, PNG ou JPG, até 10 MB"}
+                </span>
+                <input
+                  type="file"
+                  accept=".pdf,.xml,.png,.jpg,.jpeg,application/pdf,application/xml,text/xml,image/png,image/jpeg"
+                  disabled={!data.invoice.canApprove || saving}
+                  onChange={(event) => setFiscalDraft({ ...fiscalDraft, file: event.target.files?.[0] ?? null })}
+                  className="sr-only"
+                />
+              </label>
+              {data.invoice.fiscalInvoice ? (
+                <a href={data.invoice.fiscalInvoice.downloadUrl} className="premium-control inline-flex min-h-10 items-center justify-center gap-2 px-3 text-center text-sm font-extrabold leading-none text-blue-700">
+                  <Download className="h-4 w-4" /> Baixar nota enviada
+                </a>
+              ) : null}
+              <button disabled={!data.invoice.canApprove || saving} onClick={() => void approveInvoice()} className="premium-button inline-flex h-10 w-full items-center justify-center gap-2 px-3 text-sm font-extrabold leading-none disabled:cursor-not-allowed disabled:opacity-50">
+                <CheckCircle2 className="h-4 w-4" /> {saving ? "Enviando..." : "Aprovar invoice e enviar nota"}
               </button>
               <button disabled={!data.invoice.canRequestAdjustment || saving} onClick={() => setAdjustmentOpen(true)} className="premium-control inline-flex h-10 w-full items-center justify-center px-3 text-sm font-extrabold leading-none text-orange-700 disabled:cursor-not-allowed disabled:opacity-50">
                 Solicitar ajuste
               </button>
             </div>
-            <p className="mt-3 text-xs font-semibold text-muted">Enquanto o invoice estiver disponível para conferência, você pode enviar novas solicitações de ajuste. Após aprovar, novos ajustes dependem de reabertura pelo Admin Central.</p>
+            <p className="mt-3 text-xs font-semibold text-muted">A aprovação exige os dados da nota fiscal. Se o invoice for reaberto, você poderá revisar os dados e substituir o anexo.</p>
           </Panel>
 
           <Panel title="Solicitações de ajuste">

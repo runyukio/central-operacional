@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 import type { Actor } from "@/lib/mock-db";
@@ -12,6 +12,7 @@ export const storageBuckets = {
   "employee-documents": { maxBytes: 5 * 1024 * 1024, extensions: [".pdf", ".png", ".jpg", ".jpeg", ".docx"], roles: ["ADMIN", "GESTOR", "RH"] },
   "absence-evidence": { maxBytes: 5 * 1024 * 1024, extensions: [".pdf", ".png", ".jpg", ".jpeg"], roles: ["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "RH"] },
   "shift-report-attachments": { maxBytes: 10 * 1024 * 1024, extensions: [".pdf", ".png", ".jpg", ".jpeg", ".docx", ".xlsx", ".csv"], roles: ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"] },
+  "billing-invoices": { maxBytes: 10 * 1024 * 1024, extensions: [".pdf", ".xml", ".png", ".jpg", ".jpeg"], roles: ["ADMIN", "GESTOR", "SUPERVISOR", "COLABORADOR", "AGENTE", "WFM"] },
   "mural-media": { maxBytes: 5 * 1024 * 1024, extensions: [".png", ".jpg", ".jpeg", ".webp"], roles: ["ADMIN"] }
 } as const;
 
@@ -80,6 +81,55 @@ export async function uploadPrivateObject(bucket: StorageBucket, path: string, f
   return { storagePath: path, skipped: false };
 }
 
+export async function downloadPrivateObject(bucket: StorageBucket, path: string) {
+  if (!isStorageConfigured()) {
+    const relativePath = normalizeLocalPrivatePath(bucket, path);
+    const absolutePath = resolve(process.cwd(), "storage", "local", relativePath);
+    return { data: await readFile(absolutePath), contentType: "application/octet-stream" };
+  }
+
+  const encodedPath = encodeStoragePath(path);
+  const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/authenticated/${bucket}/${encodedPath}`, {
+    headers: {
+      apikey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
+      Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
+    },
+    cache: "no-store"
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(text || "Não foi possível baixar o arquivo privado.");
+  }
+
+  return {
+    data: Buffer.from(await response.arrayBuffer()),
+    contentType: response.headers.get("content-type") ?? "application/octet-stream"
+  };
+}
+
+export async function deletePrivateObject(bucket: StorageBucket, path: string) {
+  if (!isStorageConfigured()) {
+    const relativePath = normalizeLocalPrivatePath(bucket, path);
+    const absolutePath = resolve(process.cwd(), "storage", "local", relativePath);
+    await unlink(absolutePath).catch(() => undefined);
+    return;
+  }
+
+  const encodedPath = encodeStoragePath(path);
+  const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/${bucket}/${encodedPath}`, {
+    method: "DELETE",
+    headers: {
+      apikey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
+      Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`
+    }
+  });
+  if (!response.ok && response.status !== 404) {
+    const text = await response.text().catch(() => "");
+    throw new Error(text || "Não foi possível excluir o arquivo privado anterior.");
+  }
+}
+
 export async function uploadPublicObject(bucket: StorageBucket, path: string, file: File) {
   if (!isStorageConfigured()) {
     if (process.env.NODE_ENV === "production" || process.env.VERCEL === "1") {
@@ -145,6 +195,15 @@ async function uploadLocalPublicObject(bucket: StorageBucket, path: string, file
 function getExtension(fileName: string) {
   const index = fileName.lastIndexOf(".");
   return index >= 0 ? fileName.slice(index).toLowerCase() : "";
+}
+
+function encodeStoragePath(path: string) {
+  return path.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/");
+}
+
+function normalizeLocalPrivatePath(bucket: StorageBucket, path: string) {
+  const safePath = path.replace(/^\/+/, "").replace(/\.\./g, "");
+  return safePath.startsWith(`${bucket}/`) ? safePath : `${bucket}/${safePath}`;
 }
 
 function formatBytes(bytes: number) {

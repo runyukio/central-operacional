@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { AuditAction, Prisma, RequestStatus, ScheduleStatus, WorkHourRecordStatus } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
@@ -8,6 +10,7 @@ import { formatReferenceMonth, normalizeReferenceMonth } from "@/lib/monthly-adv
 import { prisma } from "@/lib/prisma";
 import { normalizeRole } from "@/lib/permissions";
 import { cleanShiftName } from "@/lib/shift-display";
+import { deletePrivateObject, downloadPrivateObject, isStorageConfigured, uploadPrivateObject, validateStorageUpload } from "@/lib/supabase-storage";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
 export const BILLING_START_MONTH = "2026-06";
@@ -15,6 +18,8 @@ export const DEFAULT_BILLING_REFERENCE_MONTH = "2026-07";
 
 const BILLING_PJ_ONLY_MESSAGE = "Billing disponível apenas para colaboradores PJ.";
 const BILLING_REQUEST_TYPE_NAME = "Ajuste de Invoice";
+const BILLING_INVOICE_BUCKET = "billing-invoices" as const;
+const BILLING_INVOICE_NUMBER_PATTERN = /^\d{1,20}$/;
 const POC_AGENT_HOURLY_RATE_MULTIPLIER = 1.15;
 const OPEN_ADJUSTMENT_STATUSES = ["AGUARDANDO_SUPERVISOR", "AGUARDANDO_ADMIN"] as const;
 const BILLABLE_WORK_HOUR_STATUSES: WorkHourRecordStatus[] = [
@@ -110,6 +115,30 @@ type InvoiceHourDetail = {
   minutes: number;
   amount: number;
 };
+type BillingFiscalInvoiceRecord = {
+  id: string;
+  invoiceNumber: string;
+  grossAmount: Prisma.Decimal;
+  serviceDescription: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  storageBucket: string;
+  storagePath: string;
+  submittedAt: Date;
+  updatedAt: Date;
+};
+type BillingFiscalInvoiceView = {
+  id: string;
+  invoiceNumber: string;
+  grossAmount: number;
+  serviceDescription: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  submittedAt: string;
+  downloadUrl: string;
+};
 type InvoiceCalculation = {
   id: string;
   referenceMonth: string;
@@ -154,6 +183,7 @@ type InvoiceCalculation = {
   finalAmount: number;
   adjustmentTypes: string[];
   hasOpenAdjustment: boolean;
+  fiscalInvoice: BillingFiscalInvoiceView | null;
   hourDetails: InvoiceHourDetail[];
 };
 export type BillingFinanceCostSnapshotRow = {
@@ -185,6 +215,7 @@ type PersistedInvoiceSnapshot = {
   finalAmount: Prisma.Decimal;
   approvedByEmployeeAt: Date | null;
   approvedByEmployeeUserId: string | null;
+  fiscalInvoice: BillingFiscalInvoiceRecord | null;
 };
 type BillingRateResolution = {
   hourlyRate: number;
@@ -284,7 +315,8 @@ export async function getMyBillingInvoice(actor: Actor, referenceMonthInput?: st
   const invoice = await calculateEmployeeInvoice(user.employeeProfile as BillingEmployee, referenceMonth, rates, cycle?.id ?? null, cycle?.status);
   const persisted = cycle
     ? await prisma.billingEmployeeInvoice.findUnique({
-      where: { billingCycleId_employeeId: { billingCycleId: cycle.id, employeeId: user.employeeProfile.id } }
+      where: { billingCycleId_employeeId: { billingCycleId: cycle.id, employeeId: user.employeeProfile.id } },
+      include: { fiscalInvoice: true }
     })
     : null;
   const adjustmentRequests = persisted
@@ -309,6 +341,7 @@ export async function getMyBillingInvoice(actor: Actor, referenceMonthInput?: st
         ...invoice,
         id: persisted?.id ?? "",
         status: persisted?.status ?? invoice.status,
+        fiscalInvoice: mapBillingFiscalInvoice(persisted?.fiscalInvoice ?? null, persisted?.id ?? ""),
         canApprove: canEmployeeApproveInvoice(cycle?.status, persisted?.status ?? invoice.status),
         canRequestAdjustment: canEmployeeRequestAdjustment(cycle?.status, persisted?.status ?? invoice.status)
       },
@@ -365,7 +398,12 @@ export async function getEmployeeBillingPreview(employeeId: string, referenceMon
   };
 }
 
-export async function approveMyBillingInvoice(actor: Actor, input: { referenceMonth?: string | null }) {
+export async function approveMyBillingInvoice(actor: Actor, input: {
+  referenceMonth?: string | null;
+  invoiceNumber?: string | null;
+  serviceDescription?: string | null;
+  file?: File | null;
+}) {
   const user = await findActiveUser(actor.email);
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
   if (!user.employeeProfile) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
@@ -377,37 +415,161 @@ export async function approveMyBillingInvoice(actor: Actor, input: { referenceMo
   if (!cycle) return { error: "Invoice ainda não está disponível para aprovação.", status: 403 };
   const persisted = await prisma.billingEmployeeInvoice.findUnique({
     where: { billingCycleId_employeeId: { billingCycleId: cycle.id, employeeId: user.employeeProfile.id } },
-    select: { status: true }
+    select: { status: true, fiscalInvoice: true }
   });
   const effectiveStatus = persisted?.status ?? defaultInvoiceStatusForCycle(cycle.status);
   if (!isInvoiceAvailableForEmployeeReview(cycle.status, effectiveStatus)) return { error: "Invoice ainda não está disponível para aprovação.", status: 403 };
   if (isFinalizedInvoiceStatus(persisted?.status)) return { error: "Este invoice foi finalizado pelo Admin Central e não pode ser aprovado pelo colaborador.", status: 409 };
 
+  const invoiceNumber = String(input.invoiceNumber ?? "").trim();
+  const serviceDescription = String(input.serviceDescription ?? "").trim();
+  if (!BILLING_INVOICE_NUMBER_PATTERN.test(invoiceNumber)) {
+    return { error: "Número da nota fiscal inválido. Informe somente números, com até 20 dígitos.", status: 400 };
+  }
+  if (serviceDescription.length < 3 || serviceDescription.length > 1000) {
+    return { error: "A descrição do serviço deve ter entre 3 e 1.000 caracteres.", status: 400 };
+  }
+  if (!input.file && !persisted?.fiscalInvoice) {
+    return { error: "Anexe a nota fiscal em PDF, XML, PNG ou JPG.", status: 400 };
+  }
+  if (input.file) {
+    const validation = validateStorageUpload(actor, BILLING_INVOICE_BUCKET, input.file);
+    if ("error" in validation) return { error: validation.error, status: 400 };
+    if (!isStorageConfigured() && (process.env.NODE_ENV === "production" || process.env.VERCEL === "1")) {
+      return { error: "O armazenamento de notas fiscais não está configurado no ambiente de produção.", status: 503 };
+    }
+  }
+
   const rates = await getBillingRates();
   const calculated = await calculateEmployeeInvoice(user.employeeProfile as BillingEmployee, referenceMonth, rates, cycle.id, cycle.status);
-  const invoice = await upsertEmployeeInvoice(cycle.id, calculated, {
-    status: "APROVADO_COLABORADOR",
-    approvedByEmployeeAt: new Date(),
-    approvedByEmployeeUserId: user.id
-  });
+  const file = input.file ?? null;
+  const storagePath = file ? buildBillingInvoiceStoragePath(referenceMonth, user.employeeProfile.id, file.name) : null;
+  let uploadedPath: string | null = null;
 
-  await prisma.auditLog.create({
-    data: {
-      actorId: user.id,
-      action: AuditAction.APROVACAO,
-      entity: "BillingEmployeeInvoice",
-      entityId: invoice.id,
-      reason: "Invoice aprovado pelo colaborador",
-      newValue: {
-        referenceMonth,
-        employeeId: user.employeeProfile.id,
-        finalAmount: calculated.finalAmount,
-        totalMinutes: calculated.totalConsideredMinutes
-      }
+  try {
+    if (file && storagePath) {
+      const uploaded = await uploadPrivateObject(BILLING_INVOICE_BUCKET, storagePath, file);
+      uploadedPath = uploaded.storagePath;
+    }
+
+    const approvedAt = new Date();
+    const invoice = await prisma.$transaction(async (tx) => {
+      const savedInvoice = await upsertEmployeeInvoice(cycle.id, calculated, {
+        status: "APROVADO_COLABORADOR",
+        approvedByEmployeeAt: approvedAt,
+        approvedByEmployeeUserId: user.id
+      }, tx);
+
+      const existingFile = persisted?.fiscalInvoice;
+      const fileData = file && uploadedPath
+        ? {
+          fileName: file.name,
+          mimeType: file.type || "application/octet-stream",
+          sizeBytes: file.size,
+          storageBucket: BILLING_INVOICE_BUCKET,
+          storagePath: uploadedPath
+        }
+        : existingFile
+          ? {
+            fileName: existingFile.fileName,
+            mimeType: existingFile.mimeType,
+            sizeBytes: existingFile.sizeBytes,
+            storageBucket: existingFile.storageBucket,
+            storagePath: existingFile.storagePath
+          }
+          : null;
+      if (!fileData) throw new Error("Anexo da nota fiscal não encontrado.");
+
+      await tx.billingFiscalInvoice.upsert({
+        where: { employeeInvoiceId: savedInvoice.id },
+        update: {
+          invoiceNumber,
+          grossAmount: decimal(calculated.grossAmount),
+          serviceDescription,
+          ...fileData,
+          submittedById: user.id,
+          submittedAt: approvedAt
+        },
+        create: {
+          employeeInvoiceId: savedInvoice.id,
+          invoiceNumber,
+          grossAmount: decimal(calculated.grossAmount),
+          serviceDescription,
+          ...fileData,
+          submittedById: user.id,
+          submittedAt: approvedAt
+        }
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          action: AuditAction.APROVACAO,
+          entity: "BillingEmployeeInvoice",
+          entityId: savedInvoice.id,
+          reason: "Invoice aprovado pelo colaborador com nota fiscal",
+          newValue: {
+            referenceMonth,
+            employeeId: calculated.employeeId,
+            invoiceNumber,
+            invoiceGrossAmount: calculated.grossAmount,
+            invoiceFileName: fileData.fileName,
+            finalAmount: calculated.finalAmount,
+            totalMinutes: calculated.totalConsideredMinutes
+          }
+        }
+      });
+
+      return savedInvoice;
+    });
+
+    if (uploadedPath && persisted?.fiscalInvoice?.storagePath && persisted.fiscalInvoice.storagePath !== uploadedPath) {
+      void deletePrivateObject(BILLING_INVOICE_BUCKET, persisted.fiscalInvoice.storagePath).catch(() => undefined);
+    }
+    return { data: { id: invoice.id, status: "Aprovado pelo colaborador" } };
+  } catch (error) {
+    if (uploadedPath) await deletePrivateObject(BILLING_INVOICE_BUCKET, uploadedPath).catch(() => undefined);
+    return { error: error instanceof Error ? error.message : "Não foi possível salvar a nota fiscal.", status: 500 };
+  }
+}
+
+export async function getBillingFiscalInvoiceDownload(actor: Actor, employeeInvoiceId: string) {
+  const user = await findActiveUser(actor.email);
+  if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
+  const invoice = await prisma.billingEmployeeInvoice.findUnique({
+    where: { id: employeeInvoiceId },
+    select: {
+      employeeId: true,
+      employee: { select: { supervisorId: true } },
+      fiscalInvoice: true
     }
   });
+  if (!invoice?.fiscalInvoice) return { error: "Nota fiscal não encontrada.", status: 404 };
 
-  return { data: { id: invoice.id, status: "Aprovado pelo colaborador" } };
+  const isOwner = user.employeeProfile?.id === invoice.employeeId;
+  if (!isOwner) {
+    const scope = getBillingAccessScope(user);
+    if ("error" in scope) return scope;
+    if (scope.restricted && invoice.employee.supervisorId !== scope.supervisorId) {
+      return { error: "Você não tem permissão para baixar esta nota fiscal.", status: 403 };
+    }
+  }
+  if (invoice.fiscalInvoice.storageBucket !== BILLING_INVOICE_BUCKET) {
+    return { error: "Origem do arquivo da nota fiscal inválida.", status: 409 };
+  }
+
+  try {
+    const file = await downloadPrivateObject(BILLING_INVOICE_BUCKET, invoice.fiscalInvoice.storagePath);
+    return {
+      data: {
+        body: file.data,
+        fileName: invoice.fiscalInvoice.fileName,
+        contentType: invoice.fiscalInvoice.mimeType || file.contentType
+      }
+    };
+  } catch {
+    return { error: "Não foi possível baixar a nota fiscal.", status: 500 };
+  }
 }
 
 export async function submitInvoiceAdjustmentRequest(actor: Actor, input: {
@@ -1287,7 +1449,8 @@ async function buildBillingInvoicesReadModel(
           adjustmentAmount: true,
           finalAmount: true,
           approvedByEmployeeAt: true,
-          approvedByEmployeeUserId: true
+          approvedByEmployeeUserId: true,
+          fiscalInvoice: true
         }
       })
       : Promise.resolve([]),
@@ -1439,6 +1602,7 @@ async function buildBillingInvoicesReadModel(
       finalAmount,
       adjustmentTypes: adjustmentBreakdown.types,
       hasOpenAdjustment: persisted ? openAdjustmentInvoiceIds.has(persisted.id) : false,
+      fiscalInvoice: mapBillingFiscalInvoice(persisted?.fiscalInvoice ?? null, persisted?.id ?? ""),
       hourDetails: [...approvedDetails, ...projectedDetails]
     };
     invoices.push(persisted && isFinalizedInvoiceStatus(persisted.status) ? applyPersistedInvoiceSnapshot(invoice, persisted) : invoice);
@@ -1479,7 +1643,10 @@ async function calculateEmployeeInvoice(employee: BillingEmployee, referenceMont
       ? prisma.billingAdjustment.findMany({ where: { billingCycleId, deletedAt: null, OR: [{ employeeId: employee.id }, { employeeId: null, lobId: employee.lobId }, { employeeInvoice: { employeeId: employee.id } }] } })
       : Promise.resolve([]),
     billingCycleId
-      ? prisma.billingEmployeeInvoice.findUnique({ where: { billingCycleId_employeeId: { billingCycleId, employeeId: employee.id } } })
+      ? prisma.billingEmployeeInvoice.findUnique({
+        where: { billingCycleId_employeeId: { billingCycleId, employeeId: employee.id } },
+        include: { fiscalInvoice: true }
+      })
       : Promise.resolve(null)
   ]);
 
@@ -1564,6 +1731,7 @@ async function calculateEmployeeInvoice(employee: BillingEmployee, referenceMont
     finalAmount,
     adjustmentTypes: adjustmentBreakdown.types,
     hasOpenAdjustment: false,
+    fiscalInvoice: mapBillingFiscalInvoice(persisted?.fiscalInvoice ?? null, persisted?.id ?? ""),
     hourDetails: [...approvedDetails, ...projectedDetails]
   };
   return persisted && isFinalizedInvoiceStatus(persisted.status) ? applyPersistedInvoiceSnapshot(invoice, persisted) : invoice;
@@ -1674,15 +1842,21 @@ function applyPersistedInvoiceSnapshot<T extends InvoiceCalculation>(invoice: T,
     campaignAmount,
     adjustmentAmount,
     finalAmount: Number(persisted.finalAmount),
-    hasOpenAdjustment: false
+    hasOpenAdjustment: false,
+    fiscalInvoice: mapBillingFiscalInvoice(persisted.fiscalInvoice, persisted.id)
   };
 }
 
-async function upsertEmployeeInvoice(cycleId: string, calculated: InvoiceCalculation, extra: InvoiceExtra = {}) {
+async function upsertEmployeeInvoice(
+  cycleId: string,
+  calculated: InvoiceCalculation,
+  extra: InvoiceExtra = {},
+  client: Prisma.TransactionClient | typeof prisma = prisma
+) {
   const status = String(extra.status ?? calculated.status ?? defaultInvoiceStatusForCycle(null));
   const approvalRelation = extra.approvedByEmployeeUserId ? { approvedByEmployeeUser: { connect: { id: extra.approvedByEmployeeUserId } } } : {};
   const clearApproval = extra.clearEmployeeApproval ? { approvedByEmployeeAt: null, approvedByEmployeeUser: { disconnect: true } } : {};
-  return prisma.billingEmployeeInvoice.upsert({
+  return client.billingEmployeeInvoice.upsert({
     where: { billingCycleId_employeeId: { billingCycleId: cycleId, employeeId: calculated.employeeId } },
     update: {
       status,
@@ -2411,6 +2585,31 @@ function formatDateTime(date: Date) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(date);
+}
+
+function mapBillingFiscalInvoice(row: BillingFiscalInvoiceRecord | null | undefined, employeeInvoiceId: string): BillingFiscalInvoiceView | null {
+  if (!row || !employeeInvoiceId) return null;
+  return {
+    id: row.id,
+    invoiceNumber: row.invoiceNumber,
+    grossAmount: Number(row.grossAmount),
+    serviceDescription: row.serviceDescription,
+    fileName: row.fileName,
+    mimeType: row.mimeType,
+    sizeBytes: row.sizeBytes,
+    submittedAt: formatDateTime(row.submittedAt),
+    downloadUrl: `/api/billing/invoices/${encodeURIComponent(employeeInvoiceId)}/fiscal-document`
+  };
+}
+
+function buildBillingInvoiceStoragePath(referenceMonth: string, employeeId: string, fileName: string) {
+  const safeName = fileName
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(-100) || "nota-fiscal";
+  return `${referenceMonth}/${employeeId}/${randomUUID()}-${safeName}`;
 }
 
 export function minutesToHoursLabel(minutes: number) {

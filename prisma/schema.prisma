@@ -330,6 +330,7 @@ model User {
   billingCyclesClosed               BillingCycle[]              @relation("BillingCycleClosedBy")
   billingInvoiceApprovals           BillingEmployeeInvoice[]    @relation("BillingInvoiceApprovedBy")
   billingInvoiceReopens             BillingEmployeeInvoice[]    @relation("BillingInvoiceReopenedBy")
+  billingFiscalInvoicesSubmitted    BillingFiscalInvoice[]      @relation("BillingFiscalInvoiceSubmittedBy")
   billingAdjustmentsCreated         BillingAdjustment[]         @relation("BillingAdjustmentCreatedBy")
   invoiceAdjustmentSupervisorChecks InvoiceAdjustmentRequest[]  @relation("InvoiceAdjustmentSupervisorCheckedBy")
   invoiceAdjustmentAdminDecisions   InvoiceAdjustmentRequest[]  @relation("InvoiceAdjustmentAdminDecidedBy")
@@ -698,6 +699,7 @@ model BillingEmployeeInvoice {
   employee                 EmployeeProfile            @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   adjustments              BillingAdjustment[]
   adjustmentRequests       InvoiceAdjustmentRequest[]
+  fiscalInvoice            BillingFiscalInvoice?
   createdAt                DateTime                   @default(now())
   updatedAt                DateTime                   @updatedAt
 
@@ -706,6 +708,27 @@ model BillingEmployeeInvoice {
   @@index([referenceMonth])
   @@index([status])
   @@index([billingRule])
+}
+
+model BillingFiscalInvoice {
+  id                 String                 @id @default(cuid())
+  employeeInvoiceId  String                 @unique
+  invoiceNumber      String
+  grossAmount        Decimal                @db.Decimal(12, 2)
+  serviceDescription String
+  fileName           String
+  mimeType           String
+  sizeBytes          Int
+  storageBucket      String                 @default("billing-invoices")
+  storagePath        String
+  submittedById      String?
+  submittedAt        DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+  employeeInvoice    BillingEmployeeInvoice @relation(fields: [employeeInvoiceId], references: [id], onDelete: Cascade)
+  submittedBy        User?                  @relation("BillingFiscalInvoiceSubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull)
+
+  @@index([submittedById])
+  @@index([submittedAt])
 }
 
 model BillingAdjustment {

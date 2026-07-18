@@ -84,6 +84,17 @@ type BillingPayload = {
       approvedByEmployeeAt: string;
       hasOpenAdjustment: boolean;
       adjustmentTypes: string[];
+      fiscalInvoice: null | {
+        id: string;
+        invoiceNumber: string;
+        grossAmount: number;
+        serviceDescription: string;
+        fileName: string;
+        mimeType: string;
+        sizeBytes: number;
+        submittedAt: string;
+        downloadUrl: string;
+      };
       hourDetails?: Array<{
         kind: "APPROVED" | "PROJECTED";
         date: string;
@@ -899,6 +910,29 @@ function EmployeeBillingDetail({
             <DetailMetric label="Status invoice" value={invoice.statusLabel} />
           </div>
 
+          <div className="mt-4">
+            <Panel title="Nota fiscal">
+              {invoice.fiscalInvoice ? (
+                <div className="grid gap-3 lg:grid-cols-[160px_180px_1fr_auto] lg:items-center">
+                  <InfoLine label="Número" value={invoice.fiscalInvoice.invoiceNumber} />
+                  <InfoLine label="Valor bruto" value={formatCurrency(invoice.fiscalInvoice.grossAmount)} />
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-black uppercase tracking-wide text-muted">Descrição do serviço</p>
+                    <p className="mt-1 break-words text-sm font-bold text-navy-950">{invoice.fiscalInvoice.serviceDescription}</p>
+                    <p className="mt-1 break-all text-xs font-semibold text-muted">
+                      {invoice.fiscalInvoice.fileName} • {formatFileSize(invoice.fiscalInvoice.sizeBytes)} • enviado em {invoice.fiscalInvoice.submittedAt}
+                    </p>
+                  </div>
+                  <a href={invoice.fiscalInvoice.downloadUrl} className="premium-control inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none text-blue-700">
+                    <Download className="h-4 w-4" /> Baixar nota
+                  </a>
+                </div>
+              ) : (
+                <p className="text-sm font-semibold text-muted">Nota fiscal ainda não enviada pelo colaborador.</p>
+              )}
+            </Panel>
+          </div>
+
           <div className="mt-4 grid gap-3 xl:grid-cols-[1fr_360px]">
             <Panel title="Regra aplicada">
               <div className="grid gap-2 text-sm font-semibold text-navy-950 md:grid-cols-2">
@@ -979,6 +1013,12 @@ function DetailMetric({ label, value, helper, tone }: { label: string; value: st
       {helper ? <p className="mt-1 text-xs font-semibold text-muted">{helper}</p> : null}
     </div>
   );
+}
+
+function formatFileSize(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 KB";
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1).replace(".", ",")} MB`;
 }
 
 function AdjustmentsTable({
