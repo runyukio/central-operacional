@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getApiActor } from "@/lib/api-actor";
-import { approveMyBillingInvoice, getMyBillingInvoice, submitInvoiceAdjustmentRequest } from "@/lib/billing-service";
+import { approveMyBillingInvoice, getMyBillingInvoice, retryMyBillingInvoiceOmie, submitInvoiceAdjustmentRequest } from "@/lib/billing-service";
 
 export async function GET(request: Request) {
   const actor = await getApiActor();
@@ -33,12 +33,14 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}));
   const action = String(body.action ?? "");
   const result = action === "request-adjustment"
-      ? await submitInvoiceAdjustmentRequest(actor, {
+    ? await submitInvoiceAdjustmentRequest(actor, {
         referenceMonth: body.referenceMonth,
         type: String(body.type ?? ""),
         questionedItem: String(body.questionedItem ?? ""),
         description: String(body.description ?? "")
       })
+    : action === "retry-omie"
+      ? await retryMyBillingInvoiceOmie(actor, body.referenceMonth)
       : { error: "Ação de invoice inválida.", status: 400 };
   if ("error" in result) return NextResponse.json({ error: result.error, message: result.error }, { status: result.status ?? 400 });
   return NextResponse.json(result);

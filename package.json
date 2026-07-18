@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
+    "test:omie": "tsx --test src/lib/omie-service.test.ts",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:check": "tsx scripts/check-db.ts",

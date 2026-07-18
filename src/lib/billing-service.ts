@@ -7,6 +7,7 @@ import { canAccessBilling, canManageBilling } from "@/lib/billing-permissions";
 import { isAgentJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
 import { MONTHLY_ADVANCE_FIXED_AMOUNT, isMonthlyAdvanceReferenceMonthAvailable } from "@/lib/monthly-advance-constants";
 import { formatReferenceMonth, normalizeReferenceMonth } from "@/lib/monthly-advance-service";
+import { buildOmieIntegrationCode, OmieIntegrationError, upsertBillingAccountPayable } from "@/lib/omie-service";
 import { prisma } from "@/lib/prisma";
 import { normalizeRole } from "@/lib/permissions";
 import { cleanShiftName } from "@/lib/shift-display";
@@ -126,6 +127,14 @@ type BillingFiscalInvoiceRecord = {
   storageBucket: string;
   storagePath: string;
   submittedAt: Date;
+  omieStatus: string;
+  omieIntegrationCode: string | null;
+  omieLaunchCode: string | null;
+  omieSupplierCode: string | null;
+  omieSyncedAt: Date | null;
+  omieLastAttemptAt: Date | null;
+  omieLastError: string | null;
+  omieAttempts: number;
   updatedAt: Date;
 };
 type BillingFiscalInvoiceView = {
@@ -138,6 +147,21 @@ type BillingFiscalInvoiceView = {
   sizeBytes: number;
   submittedAt: string;
   downloadUrl: string;
+  omie: {
+    status: "PENDING" | "SYNCED" | "ERROR";
+    launchCode: string;
+    syncedAt: string;
+    lastAttemptAt: string;
+    lastError: string;
+    attempts: number;
+    canRetry: boolean;
+  };
+};
+
+type BillingOmieSyncResult = {
+  status: "SYNCED" | "ERROR";
+  message: string;
+  launchCode: string;
 };
 type InvoiceCalculation = {
   id: string;
@@ -440,6 +464,14 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
     }
   }
 
+  const sensitiveData = await prisma.employeeSensitiveData.findUnique({
+    where: { employeeId: user.employeeProfile.id },
+    select: { cnpj: true }
+  });
+  if (String(sensitiveData?.cnpj ?? "").replace(/\D/g, "").length !== 14) {
+    return { error: "Cadastre um CNPJ válido antes de aprovar o invoice e enviar o lançamento ao Omie.", status: 400 };
+  }
+
   const rates = await getBillingRates();
   const calculated = await calculateEmployeeInvoice(user.employeeProfile as BillingEmployee, referenceMonth, rates, cycle.id, cycle.status);
   const file = input.file ?? null;
@@ -488,7 +520,11 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
           serviceDescription,
           ...fileData,
           submittedById: user.id,
-          submittedAt: approvedAt
+          submittedAt: approvedAt,
+          omieStatus: "PENDING",
+          omieIntegrationCode: buildOmieIntegrationCode(referenceMonth, savedInvoice.id),
+          omieSyncedAt: null,
+          omieLastError: null
         },
         create: {
           employeeInvoiceId: savedInvoice.id,
@@ -497,7 +533,9 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
           serviceDescription,
           ...fileData,
           submittedById: user.id,
-          submittedAt: approvedAt
+          submittedAt: approvedAt,
+          omieStatus: "PENDING",
+          omieIntegrationCode: buildOmieIntegrationCode(referenceMonth, savedInvoice.id)
         }
       });
 
@@ -526,11 +564,122 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
     if (uploadedPath && persisted?.fiscalInvoice?.storagePath && persisted.fiscalInvoice.storagePath !== uploadedPath) {
       void deletePrivateObject(BILLING_INVOICE_BUCKET, persisted.fiscalInvoice.storagePath).catch(() => undefined);
     }
-    return { data: { id: invoice.id, status: "Aprovado pelo colaborador" } };
+    const omie = await syncBillingFiscalInvoiceToOmie(invoice.id, user.id).catch(() => ({
+      status: "ERROR" as const,
+      message: "Invoice salvo, mas não foi possível iniciar o envio ao Omie. Tente novamente pelo botão de reenvio.",
+      launchCode: ""
+    }));
+    return { data: { id: invoice.id, status: "Aprovado pelo colaborador", omie } };
   } catch (error) {
     if (uploadedPath) await deletePrivateObject(BILLING_INVOICE_BUCKET, uploadedPath).catch(() => undefined);
     return { error: error instanceof Error ? error.message : "Não foi possível salvar a nota fiscal.", status: 500 };
   }
+}
+
+export async function retryMyBillingInvoiceOmie(actor: Actor, referenceMonthInput?: string | null) {
+  const user = await findActiveUser(actor.email);
+  if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
+  if (!user.employeeProfile) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
+  const referenceMonth = normalizeBillingMonth(referenceMonthInput);
+  const cycle = await prisma.billingCycle.findUnique({ where: { referenceMonth }, select: { id: true } });
+  if (!cycle) return { error: "Ciclo de Billing não encontrado.", status: 404 };
+  const invoice = await prisma.billingEmployeeInvoice.findUnique({
+    where: { billingCycleId_employeeId: { billingCycleId: cycle.id, employeeId: user.employeeProfile.id } },
+    select: { id: true, fiscalInvoice: { select: { id: true } } }
+  });
+  if (!invoice?.fiscalInvoice) return { error: "Nota fiscal não encontrada para reenviar ao Omie.", status: 404 };
+  const omie = await syncBillingFiscalInvoiceToOmie(invoice.id, user.id);
+  return { data: { id: invoice.id, omie } };
+}
+
+async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId: string | null): Promise<BillingOmieSyncResult> {
+  const fiscalInvoice = await prisma.billingFiscalInvoice.findUnique({
+    where: { employeeInvoiceId },
+    include: {
+      employeeInvoice: {
+        select: {
+          id: true,
+          referenceMonth: true,
+          employeeId: true,
+          approvedByEmployeeAt: true
+        }
+      }
+    }
+  });
+  if (!fiscalInvoice) return { status: "ERROR", message: "Nota fiscal não encontrada para integração com o Omie.", launchCode: "" };
+
+  const integrationCode = fiscalInvoice.omieIntegrationCode
+    || buildOmieIntegrationCode(fiscalInvoice.employeeInvoice.referenceMonth, employeeInvoiceId);
+  const attemptedAt = new Date();
+  await prisma.billingFiscalInvoice.update({
+    where: { id: fiscalInvoice.id },
+    data: {
+      omieStatus: "PENDING",
+      omieIntegrationCode: integrationCode,
+      omieLastAttemptAt: attemptedAt,
+      omieLastError: null,
+      omieAttempts: { increment: 1 }
+    }
+  });
+
+  try {
+    const sensitiveData = await prisma.employeeSensitiveData.findUnique({
+      where: { employeeId: fiscalInvoice.employeeInvoice.employeeId },
+      select: { cnpj: true }
+    });
+    const result = await upsertBillingAccountPayable({
+      employeeInvoiceId,
+      referenceMonth: fiscalInvoice.employeeInvoice.referenceMonth,
+      cnpj: sensitiveData?.cnpj ?? "",
+      invoiceNumber: fiscalInvoice.invoiceNumber,
+      serviceDescription: fiscalInvoice.serviceDescription,
+      grossAmount: Number(fiscalInvoice.grossAmount),
+      approvedAt: fiscalInvoice.employeeInvoice.approvedByEmployeeAt ?? fiscalInvoice.submittedAt,
+      integrationCode
+    });
+    const syncedAt = new Date();
+    await prisma.billingFiscalInvoice.update({
+      where: { id: fiscalInvoice.id },
+      data: {
+        omieStatus: "SYNCED",
+        omieIntegrationCode: result.integrationCode,
+        omieLaunchCode: result.launchCode,
+        omieSupplierCode: result.supplierCode,
+        omieSyncedAt: syncedAt,
+        omieLastError: null
+      }
+    });
+    await createOmieAuditLog(actorId, fiscalInvoice.id, AuditAction.CRIACAO, "Conta a Pagar sincronizada com o Omie", {
+      employeeInvoiceId,
+      referenceMonth: fiscalInvoice.employeeInvoice.referenceMonth,
+      integrationCode: result.integrationCode,
+      launchCode: result.launchCode,
+      supplierCode: result.supplierCode,
+      grossAmount: Number(fiscalInvoice.grossAmount)
+    });
+    return { status: "SYNCED", message: result.statusDescription || "Lançamento enviado ao Omie.", launchCode: result.launchCode };
+  } catch (error) {
+    const message = error instanceof OmieIntegrationError
+      ? error.message
+      : "Não foi possível enviar o lançamento ao Omie.";
+    await prisma.billingFiscalInvoice.update({
+      where: { id: fiscalInvoice.id },
+      data: { omieStatus: "ERROR", omieLastError: message.slice(0, 500) }
+    });
+    await createOmieAuditLog(actorId, fiscalInvoice.id, AuditAction.EDICAO, "Falha ao sincronizar Conta a Pagar com o Omie", {
+      employeeInvoiceId,
+      referenceMonth: fiscalInvoice.employeeInvoice.referenceMonth,
+      integrationCode,
+      error: message.slice(0, 500)
+    });
+    return { status: "ERROR", message, launchCode: "" };
+  }
+}
+
+async function createOmieAuditLog(actorId: string | null, entityId: string, action: AuditAction, reason: string, newValue: Prisma.InputJsonValue) {
+  await prisma.auditLog.create({
+    data: { actorId, action, entity: "BillingFiscalInvoiceOmie", entityId, reason, newValue }
+  }).catch(() => undefined);
 }
 
 export async function getBillingFiscalInvoiceDownload(actor: Actor, employeeInvoiceId: string) {
@@ -2598,8 +2747,22 @@ function mapBillingFiscalInvoice(row: BillingFiscalInvoiceRecord | null | undefi
     mimeType: row.mimeType,
     sizeBytes: row.sizeBytes,
     submittedAt: formatDateTime(row.submittedAt),
-    downloadUrl: `/api/billing/invoices/${encodeURIComponent(employeeInvoiceId)}/fiscal-document`
+    downloadUrl: `/api/billing/invoices/${encodeURIComponent(employeeInvoiceId)}/fiscal-document`,
+    omie: {
+      status: normalizeOmieStatus(row.omieStatus),
+      launchCode: row.omieLaunchCode ?? "",
+      syncedAt: row.omieSyncedAt ? formatDateTime(row.omieSyncedAt) : "",
+      lastAttemptAt: row.omieLastAttemptAt ? formatDateTime(row.omieLastAttemptAt) : "",
+      lastError: row.omieLastError ?? "",
+      attempts: row.omieAttempts,
+      canRetry: row.omieStatus !== "SYNCED"
+    }
   };
+}
+
+function normalizeOmieStatus(value: string): "PENDING" | "SYNCED" | "ERROR" {
+  if (value === "SYNCED" || value === "ERROR") return value;
+  return "PENDING";
 }
 
 function buildBillingInvoiceStoragePath(referenceMonth: string, employeeId: string, fileName: string) {

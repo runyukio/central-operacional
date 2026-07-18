@@ -711,24 +711,34 @@ model BillingEmployeeInvoice {
 }
 
 model BillingFiscalInvoice {
-  id                 String                 @id @default(cuid())
-  employeeInvoiceId  String                 @unique
-  invoiceNumber      String
-  grossAmount        Decimal                @db.Decimal(12, 2)
-  serviceDescription String
-  fileName           String
-  mimeType           String
-  sizeBytes          Int
-  storageBucket      String                 @default("billing-invoices")
-  storagePath        String
-  submittedById      String?
-  submittedAt        DateTime               @default(now())
-  updatedAt          DateTime               @updatedAt
-  employeeInvoice    BillingEmployeeInvoice @relation(fields: [employeeInvoiceId], references: [id], onDelete: Cascade)
-  submittedBy        User?                  @relation("BillingFiscalInvoiceSubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull)
+  id                  String                 @id @default(cuid())
+  employeeInvoiceId   String                 @unique
+  invoiceNumber       String
+  grossAmount         Decimal                @db.Decimal(12, 2)
+  serviceDescription  String
+  fileName            String
+  mimeType            String
+  sizeBytes           Int
+  storageBucket       String                 @default("billing-invoices")
+  storagePath         String
+  submittedById       String?
+  submittedAt         DateTime               @default(now())
+  omieStatus           String                 @default("PENDING")
+  omieIntegrationCode String?                @unique
+  omieLaunchCode      String?
+  omieSupplierCode    String?
+  omieSyncedAt         DateTime?
+  omieLastAttemptAt    DateTime?
+  omieLastError        String?
+  omieAttempts         Int                    @default(0)
+  updatedAt           DateTime               @updatedAt
+  employeeInvoice     BillingEmployeeInvoice @relation(fields: [employeeInvoiceId], references: [id], onDelete: Cascade)
+  submittedBy         User?                  @relation("BillingFiscalInvoiceSubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull)
 
   @@index([submittedById])
   @@index([submittedAt])
+  @@index([omieStatus])
+  @@index([omieSyncedAt])
 }
 
 model BillingAdjustment {

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, CircleDollarSign, Clock, Download, FileText, LockKeyhole, Send, Upload, WalletCards } from "lucide-react";
+import { CheckCircle2, CircleDollarSign, Clock, Download, FileText, LockKeyhole, RefreshCw, Send, Upload, WalletCards } from "lucide-react";
 
 import { EmptyState, PageHeader, Panel, StatCard, StatusBadge } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
@@ -44,6 +44,15 @@ type MyInvoicePayload = {
         sizeBytes: number;
         submittedAt: string;
         downloadUrl: string;
+        omie: {
+          status: "PENDING" | "SYNCED" | "ERROR";
+          launchCode: string;
+          syncedAt: string;
+          lastAttemptAt: string;
+          lastError: string;
+          attempts: number;
+          canRetry: boolean;
+        };
       };
     };
     weeklyApprovedHours: Array<{ week: string; period: string; minutes: number; hours: string }>;
@@ -170,10 +179,37 @@ export function MyInvoicePage() {
       const response = await fetch("/api/billing/my-invoice", { method: "POST", body: form });
       const next = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(next.error ?? "Não foi possível aprovar o invoice.");
-      setMessage("Invoice e nota fiscal enviados com sucesso.");
+      const omie = next.data?.omie as { status?: string; message?: string } | undefined;
+      setMessage(omie?.status === "SYNCED"
+        ? "Invoice, nota fiscal e lançamento no Omie enviados com sucesso."
+        : `Invoice e nota fiscal salvos. O envio ao Omie ficou pendente${omie?.message ? `: ${omie.message}` : "."}`);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível aprovar o invoice.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function retryOmie() {
+    setSaving(true);
+    setMessage("");
+    setError("");
+    try {
+      const response = await fetch("/api/billing/my-invoice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "retry-omie", referenceMonth })
+      });
+      const next = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(next.error ?? "Não foi possível reenviar o lançamento ao Omie.");
+      const omie = next.data?.omie as { status?: string; message?: string } | undefined;
+      setMessage(omie?.status === "SYNCED"
+        ? "Lançamento enviado ao Omie com sucesso."
+        : `O envio ao Omie continua pendente${omie?.message ? `: ${omie.message}` : "."}`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível reenviar o lançamento ao Omie.");
     } finally {
       setSaving(false);
     }
@@ -374,6 +410,27 @@ export function MyInvoicePage() {
                 <a href={data.invoice.fiscalInvoice.downloadUrl} className="premium-control inline-flex min-h-10 items-center justify-center gap-2 px-3 text-center text-sm font-extrabold leading-none text-blue-700">
                   <Download className="h-4 w-4" /> Baixar nota enviada
                 </a>
+              ) : null}
+              {data.invoice.fiscalInvoice ? (
+                <div className={cn(
+                  "rounded-xl border px-3 py-2 text-xs font-bold",
+                  data.invoice.fiscalInvoice.omie.status === "SYNCED"
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    : data.invoice.fiscalInvoice.omie.status === "ERROR"
+                      ? "border-red-200 bg-red-50 text-red-700"
+                      : "border-amber-200 bg-amber-50 text-amber-800"
+                )}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span>{data.invoice.fiscalInvoice.omie.status === "SYNCED" ? "Enviado ao Omie" : data.invoice.fiscalInvoice.omie.status === "ERROR" ? "Falha no envio ao Omie" : "Envio ao Omie pendente"}</span>
+                    {data.invoice.fiscalInvoice.omie.launchCode ? <span className="font-semibold">#{data.invoice.fiscalInvoice.omie.launchCode}</span> : null}
+                  </div>
+                  {data.invoice.fiscalInvoice.omie.lastError ? <p className="mt-1 font-semibold">{data.invoice.fiscalInvoice.omie.lastError}</p> : null}
+                </div>
+              ) : null}
+              {data.invoice.fiscalInvoice?.omie.canRetry ? (
+                <button disabled={saving} onClick={() => void retryOmie()} className="premium-control inline-flex h-10 w-full items-center justify-center gap-2 px-3 text-sm font-extrabold leading-none text-blue-700 disabled:cursor-not-allowed disabled:opacity-50">
+                  <RefreshCw className={cn("h-4 w-4", saving && "animate-spin")} /> Tentar envio ao Omie novamente
+                </button>
               ) : null}
               <button disabled={!data.invoice.canApprove || saving} onClick={() => void approveInvoice()} className="premium-button inline-flex h-10 w-full items-center justify-center gap-2 px-3 text-sm font-extrabold leading-none disabled:cursor-not-allowed disabled:opacity-50">
                 <CheckCircle2 className="h-4 w-4" /> {saving ? "Enviando..." : "Aprovar invoice e enviar nota"}
