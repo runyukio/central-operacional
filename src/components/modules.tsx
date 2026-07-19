@@ -112,16 +112,14 @@ import { cn, formatCurrency, initials } from "@/lib/utils";
 const Bar = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartBar), { ssr: false });
 const BarChart = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartBarChart), { ssr: false });
 const CartesianGrid = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartCartesianGrid), { ssr: false });
-const Cell = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartCell), { ssr: false });
 const ComposedChart = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartComposedChart), { ssr: false });
 const Line = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartLine), { ssr: false });
 const LineChart = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartLineChart), { ssr: false });
-const Pie = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartPie), { ssr: false });
-const PieChart = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartPieChart), { ssr: false });
 const ResponsiveContainer = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartResponsiveContainer), { ssr: false });
 const Tooltip = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartTooltip), { ssr: false });
 const XAxis = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartXAxis), { ssr: false });
 const YAxis = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartYAxis), { ssr: false });
+const AbsenceReasonsDonut = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.AbsenceReasonsDonut), { ssr: false });
 import { getPixKeyFormatHint, PIX_KEY_TYPES, validatePixKey } from "@/lib/pix-key";
 import { cleanShiftName, cleanShiftOptions, isBlockedShiftName, isSelectableShiftName, shiftCategoryName, standardShiftNames } from "@/lib/shift-display";
 import {
@@ -3682,18 +3680,9 @@ export function OperationalCommandCenter() {
 
         <div className="grid gap-3 xl:grid-cols-3">
           <Panel title="Ausências por Motivo">
-          {commandAbsenceReasons.length ? <div className="grid gap-2.5 md:grid-cols-[140px_1fr]">
-            <div className="h-[160px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={commandAbsenceReasons} dataKey="value" innerRadius={38} outerRadius={62} paddingAngle={2}>
-                    {commandAbsenceReasons.map((entry) => (
-                      <Cell key={entry.name} fill={entry.fill} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
+          {commandAbsenceReasons.length ? <div className="grid items-center gap-2.5 md:grid-cols-[160px_minmax(0,1fr)]">
+            <div className="h-[160px] w-[160px] max-w-full justify-self-center">
+              <AbsenceReasonsDonut data={commandAbsenceReasons} />
             </div>
             <div className="flex max-h-[220px] flex-col justify-center space-y-1.5 overflow-y-auto pr-1">
               {commandAbsenceReasons.map((reason) => (

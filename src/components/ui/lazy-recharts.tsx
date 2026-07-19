@@ -18,6 +18,27 @@ import {
 } from "recharts";
 import type { BarProps, PieProps } from "recharts";
 
+type AbsenceReasonDatum = {
+  name: string;
+  value: number;
+  fill: string;
+};
+
+export function AbsenceReasonsDonut({ data }: { data: AbsenceReasonDatum[] }) {
+  return (
+    <RechartsResponsiveContainer width="100%" height="100%">
+      <RechartsPieChart>
+        <RechartsPie data={data} dataKey="value" nameKey="name" innerRadius={38} outerRadius={62} paddingAngle={2}>
+          {data.map((entry) => (
+            <RechartsCell key={entry.name} fill={entry.fill} />
+          ))}
+        </RechartsPie>
+        <RechartsTooltip />
+      </RechartsPieChart>
+    </RechartsResponsiveContainer>
+  );
+}
+
 export function ChartBar(props: Omit<BarProps, "ref">) {
   return <RechartsBar {...props} />;
 }
