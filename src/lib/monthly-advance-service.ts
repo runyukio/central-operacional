@@ -716,19 +716,32 @@ export async function exportMonthlyAdvances(actor: Actor, filters: MonthlyAdvanc
   const result = await listMonthlyAdvances(actor, { ...filters, page: 1, limit: 5000 });
   if ("error" in result) return result;
   const employeeIds = Array.from(new Set(result.data.map((record) => record.employeeId)));
-  const sensitiveRows = employeeIds.length
-    ? await prisma.employeeSensitiveData.findMany({
-        where: { employeeId: { in: employeeIds } },
-        select: { employeeId: true, cnpj: true }
-      })
-    : [];
+  const [employeeRows, sensitiveRows] = employeeIds.length
+    ? await Promise.all([
+        prisma.employeeProfile.findMany({
+          where: { id: { in: employeeIds } },
+          select: { id: true, pixKey: true }
+        }),
+        prisma.employeeSensitiveData.findMany({
+          where: { employeeId: { in: employeeIds } },
+          select: { employeeId: true, cnpj: true, bankData: true }
+        })
+      ])
+    : [[], []];
   const cnpjByEmployeeId = new Map(sensitiveRows.map((row) => [row.employeeId, row.cnpj ?? ""]));
+  const legacyPixByEmployeeId = new Map(
+    sensitiveRows.map((row) => [row.employeeId, pixKeyFromBankData(row.bankData)])
+  );
+  const pixByEmployeeId = new Map(
+    employeeRows.map((row) => [row.id, row.pixKey?.trim() || legacyPixByEmployeeId.get(row.id) || ""])
+  );
   const headers = [
     "mes_referencia",
     "nome",
     "wb_login",
     "email",
     "cnpj",
+    "chave_pix",
     "tipo_contrato",
     "lob",
     "supervisor",
@@ -745,6 +758,7 @@ export async function exportMonthlyAdvances(actor: Actor, filters: MonthlyAdvanc
     record.wbLogin,
     record.email ?? "",
     cnpjByEmployeeId.get(record.employeeId) ?? "",
+    pixByEmployeeId.get(record.employeeId) ?? "",
     record.contractType ?? "",
     record.lob ?? "",
     record.supervisor,
@@ -761,6 +775,12 @@ export async function exportMonthlyAdvances(actor: Actor, filters: MonthlyAdvanc
     sheetName: "Adiantamento",
     fileName: `adiantamento_${result.referenceMonth}.xlsx`
   };
+}
+
+function pixKeyFromBankData(value: Prisma.JsonValue | null) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  const pixKey = (value as Record<string, unknown>).pixKey;
+  return typeof pixKey === "string" ? pixKey.trim() : "";
 }
 
 export async function createMonthlyAdvanceChangeRequest(actor: Actor, input: {
