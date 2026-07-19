@@ -96,17 +96,30 @@ test("nao contabiliza o intervalo em que a tela ficou bloqueada", () => {
   assert.equal(activeDuration(segments), 7 * minute);
 });
 
-test("ociosidade de teclado continua contabilizada enquanto a tela esta desbloqueada", () => {
+test("ociosidade de ate quinze minutos continua contabilizada como atividade", () => {
   const segments = buildTimelineSegments(
     [
-      point("2026-07-11T13:00:00.000Z", true, "HEARTBEAT", 3_600),
-      point("2026-07-11T13:01:00.000Z", false, "SESSION_END", 3_660)
+      point("2026-07-11T13:00:00.000Z", true, "HEARTBEAT", 900),
+      point("2026-07-11T13:01:00.000Z", false, "SESSION_END", 960)
     ],
     new Date("2026-07-11T13:00:00.000Z"),
     new Date("2026-07-11T13:05:00.000Z")
   );
 
   assert.equal(activeDuration(segments), minute);
+});
+
+test("ociosidade acima de quinze minutos nao contabiliza atividade", () => {
+  const segments = buildTimelineSegments(
+    [
+      point("2026-07-11T13:00:00.000Z", true, "HEARTBEAT", 901),
+      point("2026-07-11T13:01:00.000Z", false, "SESSION_END", 961)
+    ],
+    new Date("2026-07-11T13:00:00.000Z"),
+    new Date("2026-07-11T13:05:00.000Z")
+  );
+
+  assert.equal(activeDuration(segments), 0);
 });
 
 test("une atividade do mesmo colaborador em notebooks diferentes sem duplicar sobreposicao", () => {

@@ -19,6 +19,10 @@ const configuredIdleThresholdSeconds = Number.parseInt(process.env.REALTIME_HOUR
 const idleThresholdSeconds = Number.isFinite(configuredIdleThresholdSeconds)
   ? Math.max(600, configuredIdleThresholdSeconds)
   : 600;
+const configuredActivityIdleThresholdSeconds = Number.parseInt(process.env.REALTIME_HOURS_ACTIVITY_IDLE_SECONDS ?? "900", 10);
+const activityIdleThresholdSeconds = Number.isFinite(configuredActivityIdleThresholdSeconds)
+  ? Math.max(900, configuredActivityIdleThresholdSeconds)
+  : 900;
 const legacyTimelineHeartbeatMinutes = Number.parseInt(process.env.REALTIME_HOURS_TIMELINE_HEARTBEAT_MINUTES ?? "", 10);
 const legacyTimelineMaxGapMinutes = Number.parseInt(process.env.REALTIME_HOURS_TIMELINE_MAX_GAP_MINUTES ?? "", 10);
 const timelineHeartbeatSeconds = Number.parseInt(process.env.REALTIME_HOURS_TIMELINE_HEARTBEAT_SECONDS ?? "", 10)
@@ -1239,7 +1243,7 @@ export function buildTimelineSegments(
   }>();
 
   for (const record of records) {
-    const isActive = record.isSessionActive;
+    const isActive = record.isSessionActive && (record.idleSeconds ?? 0) <= activityIdleThresholdSeconds;
     const capturedAt = record.capturedAt.getTime();
     const pointMs = capturedAt;
 
