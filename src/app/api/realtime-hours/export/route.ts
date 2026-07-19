@@ -8,7 +8,8 @@ import {
   filterRealtimeHoursTimelineRows,
   primaryRealtimeHoursPlannedShift,
   realtimeHoursPlannedShiftLabel,
-  realtimeHoursScheduleStatusLabel
+  realtimeHoursScheduleStatusLabel,
+  realtimeHoursShiftDateActivity
 } from "@/lib/realtime-hours-timeline";
 import { buildXlsxResponse, xlsxDurationFormat } from "@/lib/xlsx-export";
 
@@ -45,7 +46,7 @@ export async function GET(request: Request) {
       shift: url.searchParams.get("shift"),
       schedule: url.searchParams.get("schedule")
     };
-    const timeline = await getRealtimeHoursTimeline({ date });
+    const timeline = await getRealtimeHoursTimeline({ date, includeOvernightShiftTail: true });
     const filteredRows = filterRealtimeHoursTimelineRows(timeline.rows, filters);
 
     const headers = [
@@ -76,9 +77,7 @@ export async function GET(request: Request) {
     const rows = filteredRows.map((row) => {
       const comparison = compareRealtimeHoursPlannedShift(row, date, timeline.window.calculationEnd);
       const plannedShift = primaryRealtimeHoursPlannedShift(row, date);
-      const activeSegments = row.segments.filter((segment) => segment.type === "ACTIVE");
-      const firstActiveSegment = activeSegments[0];
-      const lastActiveSegment = activeSegments[activeSegments.length - 1];
+      const shiftActivity = realtimeHoursShiftDateActivity(row, date, timeline.window.calculationEnd);
 
       return [
         new Date(`${date}T12:00:00.000-03:00`),
@@ -93,12 +92,12 @@ export async function GET(request: Request) {
         realtimeHoursPlannedShiftLabel(row, date),
         plannedShift ? new Date(plannedShift.start) : null,
         plannedShift ? new Date(plannedShift.end) : null,
-        firstActiveSegment ? new Date(firstActiveSegment.start) : null,
-        lastActiveSegment ? new Date(lastActiveSegment.end) : null,
-        durationForExcel(row.activeMs),
-        durationForExcel(row.noActivityMs),
+        shiftActivity.firstActiveAt !== null ? new Date(shiftActivity.firstActiveAt) : null,
+        shiftActivity.lastActiveAt !== null ? new Date(shiftActivity.lastActiveAt) : null,
+        durationForExcel(shiftActivity.activeMs),
+        durationForExcel(shiftActivity.noActivityMs),
         durationForExcel(comparison.arrivalDelayMs),
-        row.sessionCount,
+        shiftActivity.sessionCount,
         row.hostnames.join(", ") || row.hostname,
         row.windowsUsers.join(", ") || row.windowsUser,
         row.ipAddress,

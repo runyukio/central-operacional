@@ -546,7 +546,7 @@ export async function refreshAdsStaffCoverageFromForecast(actor: Actor, startDat
         gap: metrics.gap,
         coveragePercent: metrics.coveragePercent,
         risk: metrics.risk,
-        observation: `Forecast automático ADS · pico ${formatDateTimeHour(requirement.peakHour)} · volume suavizado ${formatDecimal(requirement.peakRollingVolume)} · AHT ${formatDecimal(plan.ahtSeconds)}s`
+        observation: `Forecast automático ADS · média das 3 maiores janelas de 2h ${formatDecimal(requirement.planningVolume)} · AHT ${formatDecimal(plan.ahtSeconds)}s`
       };
     });
 
@@ -567,14 +567,14 @@ export async function refreshAdsStaffCoverageFromForecast(actor: Actor, startDat
             ahtPeriod: plan.ahtPeriod,
             latestVolumeAt: plan.latestVolumeAt,
             latestProductionAt: plan.latestProductionAt,
-            formula: "ceil((media_movel_2h * aht_segundos / 3600) * 1.0625 + 3)",
+            formula: "ceil((media_top_3_janelas_moveis_2h * aht_segundos / 3600) * 1.0625 + 3)",
             requirements: rows.map((row, index) => ({
               date: row.dateKey,
               shift: row.shift,
               required: row.required,
               available: row.available,
-              peakHour: plan.requirements[index].peakHour,
-              peakRollingVolume: plan.requirements[index].peakRollingVolume
+              referenceHours: plan.requirements[index].referenceHours,
+              planningVolume: plan.requirements[index].planningVolume
             }))
           })
         }
@@ -1143,12 +1143,6 @@ function formatDateKey(date: Date) {
 function formatDatePtBr(date: Date) {
   const [year, month, day] = formatDateKey(date).split("-");
   return `${day}/${month}/${year}`;
-}
-
-function formatDateTimeHour(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return `${formatDatePtBr(date)} ${String(date.getUTCHours()).padStart(2, "0")}:00`;
 }
 
 function formatDecimal(value: number) {

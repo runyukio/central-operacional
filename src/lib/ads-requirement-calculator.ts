@@ -1,6 +1,7 @@
 export const ADS_REQUIREMENT_FORECAST_DAYS = 14;
 export const ADS_REQUIREMENT_SHRINKAGE_FACTOR = 1.0625;
 export const ADS_REQUIREMENT_BUFFER = 3;
+export const ADS_REQUIREMENT_TOP_WINDOWS = 3;
 
 export type AdsRequirementShift = "Manhã" | "Tarde" | "Noite";
 
@@ -13,8 +14,8 @@ export type AdsShiftRequirement = {
   date: string;
   shift: AdsRequirementShift;
   required: number;
-  peakHour: string;
-  peakRollingVolume: number;
+  referenceHours: string[];
+  planningVolume: number;
 };
 
 const hourMs = 60 * 60 * 1000;
@@ -44,37 +45,37 @@ export function buildAdsShiftRequirements(input: {
   for (let dayIndex = 0; dayIndex < days; dayIndex += 1) {
     const date = new Date(startDate.getTime() + dayIndex * dayMs);
     requirements.push(
-      peakRequirement(date, "Manhã", hoursForShift(date, "Manhã"), volumeByHour, input.ahtSeconds),
-      peakRequirement(date, "Tarde", hoursForShift(date, "Tarde"), volumeByHour, input.ahtSeconds),
-      peakRequirement(date, "Noite", hoursForShift(date, "Noite"), volumeByHour, input.ahtSeconds)
+      shiftRequirement(date, "Manhã", hoursForShift(date, "Manhã"), volumeByHour, input.ahtSeconds),
+      shiftRequirement(date, "Tarde", hoursForShift(date, "Tarde"), volumeByHour, input.ahtSeconds),
+      shiftRequirement(date, "Noite", hoursForShift(date, "Noite"), volumeByHour, input.ahtSeconds)
     );
   }
   return requirements;
 }
 
-function peakRequirement(
+function shiftRequirement(
   date: Date,
   shift: AdsRequirementShift,
   hours: Date[],
   volumeByHour: Map<number, number>,
   ahtSeconds: number
 ): AdsShiftRequirement {
-  let peak = { required: 0, hour: hours[0], rollingVolume: 0 };
-  for (const hour of hours) {
+  const windows = hours.map((hour) => {
     const current = requiredVolume(volumeByHour, hour);
     const next = requiredVolume(volumeByHour, new Date(hour.getTime() + hourMs));
-    const rollingVolume = (current + next) / 2;
-    const required = calculateAdsHourlyRequirement(rollingVolume, ahtSeconds);
-    if (required > peak.required || (required === peak.required && rollingVolume > peak.rollingVolume)) {
-      peak = { required, hour, rollingVolume };
-    }
-  }
+    return { hour, rollingVolume: (current + next) / 2 };
+  });
+  const topWindows = [...windows]
+    .sort((left, right) => right.rollingVolume - left.rollingVolume || left.hour.getTime() - right.hour.getTime())
+    .slice(0, ADS_REQUIREMENT_TOP_WINDOWS);
+  const planningVolume = topWindows.reduce((total, window) => total + window.rollingVolume, 0) / topWindows.length;
+
   return {
     date: date.toISOString().slice(0, 10),
     shift,
-    required: peak.required,
-    peakHour: peak.hour.toISOString(),
-    peakRollingVolume: Math.round(peak.rollingVolume * 100) / 100
+    required: calculateAdsHourlyRequirement(planningVolume, ahtSeconds),
+    referenceHours: topWindows.map((window) => window.hour.toISOString()),
+    planningVolume: Math.round(planningVolume * 100) / 100
   };
 }
 

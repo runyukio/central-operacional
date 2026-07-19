@@ -72,6 +72,7 @@ type RealtimeHoursTimelineOptions = {
   search?: string | null;
   employeeId?: string | null;
   wbLogin?: string | null;
+  includeOvernightShiftTail?: boolean;
 };
 
 type RealtimeHoursIdentityMappingInput = {
@@ -776,14 +777,14 @@ export async function upsertRealtimeHoursIdentityMapping(input: RealtimeHoursIde
 }
 
 export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOptions = {}) {
-  const period = resolveTimelineDate(options.date);
+  const period = resolveTimelineDate(options.date, options.includeOvernightShiftTail);
   const employeeId = String(options.employeeId ?? "").trim();
   const wbLogin = normalizeLogin(String(options.wbLogin ?? ""));
   const records = await prisma.realTimeHoursRecord.findMany({
     where: {
       capturedAt: {
         gte: period.start,
-        lte: period.end
+        lte: period.queryEnd
       },
       ...(employeeId || wbLogin ? {
         OR: [
@@ -866,9 +867,20 @@ export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOpt
   }
 
   const search = normalizeSearch(options.search);
-  const rows = Array.from(groups.entries()).map(([key, group]) => {
+  const groupedRows = Array.from(groups.entries()).filter(([, group]) => (
+    !options.includeOvernightShiftTail
+    || group.some((item) => item.record.capturedAt <= period.end)
+  ));
+  const rows = groupedRows.map(([key, group]) => {
     const latestItem = group.reduce((latest, item) => item.record.capturedAt > latest.record.capturedAt ? item : latest);
     const latest = latestItem.record;
+    const statusItems = options.includeOvernightShiftTail
+      ? group.filter((item) => item.record.capturedAt <= period.end)
+      : group;
+    const statusLatest = statusItems.reduce((current, item) => (
+      item.record.capturedAt > current.record.capturedAt ? item : current
+    )).record;
+    const statusReferenceTime = new Date(Math.min(period.calculationEnd.getTime(), period.end.getTime()));
     const employeeId = latestItem.employeeId || group.find((item) => item.employeeId)?.employeeId || "";
     const wbLogin = latestItem.wbLogin || group.find((item) => item.wbLogin)?.wbLogin || "";
     const employee = employees.get(employeeKey(employeeId, wbLogin));
@@ -898,7 +910,7 @@ export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOpt
         schedulesByEmployeeId.get(employeeId || employee.id) ?? [],
         employee.shift,
         period.start,
-        period.end
+        period.queryEnd
       )
       : [];
 
@@ -919,7 +931,7 @@ export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOpt
       supervisor: employee?.supervisor?.fullName ?? "Sem supervisor",
       ipAddress: latest.ipAddress ?? "",
       lastSeenAt: latest.capturedAt.toISOString(),
-      currentStatus: realtimeHoursPresenceStatus(latest, period.calculationEnd),
+      currentStatus: realtimeHoursPresenceStatus(statusLatest, statusReferenceTime),
       activeMs,
       noActivityMs,
       sessionCount,
@@ -1293,20 +1305,24 @@ function appendTimelineSegment(segments: TimelineSegment[], type: TimelineSegmen
   segments.push({ type, start, end, durationMs });
 }
 
-function resolveTimelineDate(value?: string | null) {
+function resolveTimelineDate(value?: string | null, includeOvernightShiftTail = false) {
   const date = /^\d{4}-\d{2}-\d{2}$/.test(String(value ?? "")) ? String(value) : todayInSaoPaulo();
   const start = new Date(`${date}T00:00:00.000-03:00`);
   const end = new Date(`${date}T23:59:59.999-03:00`);
+  const queryEnd = includeOvernightShiftTail
+    ? new Date(end.getTime() + 24 * 60 * 60 * 1000)
+    : end;
   const now = new Date();
   const calculationEnd = date === todayInSaoPaulo()
-    ? new Date(Math.min(now.getTime(), end.getTime()))
+    ? new Date(Math.min(now.getTime(), queryEnd.getTime()))
     : start.getTime() > now.getTime()
       ? start
-      : end;
+      : new Date(Math.min(now.getTime(), queryEnd.getTime()));
   return {
     date,
     start,
     end,
+    queryEnd,
     calculationEnd
   };
 }

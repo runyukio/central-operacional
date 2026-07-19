@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   compareRealtimeHoursPlannedShift,
   filterRealtimeHoursTimelineRows,
+  realtimeHoursShiftDateActivity,
   type RealtimeHoursTimelineFilterRow
 } from "./realtime-hours-timeline";
 
@@ -95,4 +96,48 @@ test("mantem o calculo de atraso usado na timeline", () => {
 
   assert.equal(comparison.arrivalDelayMs, 15 * 60_000);
   assert.equal(comparison.label, "15m de atraso");
+});
+
+test("recorta entrada, saida e duracao pelo shift date em jornada noturna", () => {
+  const shiftDate = "2026-07-19";
+  const overnight = row({
+    plannedShifts: [{
+      start: "2026-07-20T02:00:00.000Z",
+      end: "2026-07-20T11:00:00.000Z",
+      startsAt: "23:00",
+      endsAt: "08:00",
+      status: "ESCALADO",
+      shift: "Noite",
+      sourceDate: shiftDate,
+      overnight: true
+    }],
+    segments: [
+      {
+        type: "ACTIVE",
+        start: "2026-07-20T01:00:00.000Z",
+        end: "2026-07-20T01:30:00.000Z",
+        durationMs: 30 * 60_000
+      },
+      {
+        type: "ACTIVE",
+        start: "2026-07-20T02:15:00.000Z",
+        end: "2026-07-20T03:00:00.000Z",
+        durationMs: 45 * 60_000
+      },
+      {
+        type: "ACTIVE",
+        start: "2026-07-20T10:30:00.000Z",
+        end: "2026-07-20T11:30:00.000Z",
+        durationMs: 60 * 60_000
+      }
+    ]
+  });
+
+  const activity = realtimeHoursShiftDateActivity(overnight, shiftDate, "2026-07-20T12:00:00.000Z");
+
+  assert.equal(activity.firstActiveAt, new Date("2026-07-20T02:15:00.000Z").getTime());
+  assert.equal(activity.lastActiveAt, new Date("2026-07-20T11:00:00.000Z").getTime());
+  assert.equal(activity.activeMs, 75 * 60_000);
+  assert.equal(activity.noActivityMs, 7.75 * 60 * 60_000);
+  assert.equal(activity.sessionCount, 2);
 });

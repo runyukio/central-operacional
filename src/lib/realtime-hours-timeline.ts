@@ -65,6 +65,18 @@ export type RealtimeHoursShiftComparison = {
   observedUntil: number;
 };
 
+export type RealtimeHoursShiftDateActivity = {
+  plannedShift: RealtimeHoursPlannedShift | null;
+  rangeStart: number;
+  rangeEnd: number;
+  observedUntil: number;
+  firstActiveAt: number | null;
+  lastActiveAt: number | null;
+  activeMs: number;
+  noActivityMs: number;
+  sessionCount: number;
+};
+
 const scheduledStatusKeys = new Set([
   "ESCALADO",
   "TROCA_APROVADA",
@@ -133,6 +145,44 @@ export function realtimeHoursPlannedShiftLabel(
   return shift ? `${shift.startsAt} - ${shift.endsAt}` : "Sem escala";
 }
 
+export function realtimeHoursShiftDateActivity(
+  row: Pick<RealtimeHoursTimelineFilterRow, "plannedShifts" | "segments">,
+  date: string,
+  calculationEnd: string
+): RealtimeHoursShiftDateActivity {
+  const plannedShift = primaryRealtimeHoursPlannedShift(row, date);
+  const fallbackStart = new Date(`${date}T00:00:00.000-03:00`).getTime();
+  const fallbackEnd = new Date(`${date}T23:59:59.999-03:00`).getTime();
+  const rangeStart = plannedShift ? new Date(plannedShift.start).getTime() : fallbackStart;
+  const rangeEnd = plannedShift ? new Date(plannedShift.end).getTime() : fallbackEnd;
+  const calculationEndMs = new Date(calculationEnd).getTime();
+  const observedUntil = Math.min(
+    rangeEnd,
+    Math.max(rangeStart, Number.isFinite(calculationEndMs) ? calculationEndMs : rangeEnd)
+  );
+  const activeSegments = row.segments
+    .filter((segment) => segment.type === "ACTIVE")
+    .map((segment) => ({
+      start: Math.max(rangeStart, new Date(segment.start).getTime()),
+      end: Math.min(observedUntil, new Date(segment.end).getTime())
+    }))
+    .filter((segment) => segment.end > segment.start)
+    .sort((left, right) => left.start - right.start);
+  const activeMs = activeSegments.reduce((sum, segment) => sum + segment.end - segment.start, 0);
+
+  return {
+    plannedShift,
+    rangeStart,
+    rangeEnd,
+    observedUntil,
+    firstActiveAt: activeSegments[0]?.start ?? null,
+    lastActiveAt: activeSegments[activeSegments.length - 1]?.end ?? null,
+    activeMs,
+    noActivityMs: Math.max(0, observedUntil - rangeStart - activeMs),
+    sessionCount: activeSegments.length
+  };
+}
+
 export function realtimeHoursScheduleStatusLabel(status: string) {
   const key = normalizeScheduleStatus(status);
   const labels: Record<string, string> = {
@@ -174,12 +224,9 @@ export function compareRealtimeHoursPlannedShift(
 
   const plannedStart = new Date(plannedShift.start).getTime();
   const plannedEnd = new Date(plannedShift.end).getTime();
-  const activeSegments = row.segments
-    .filter((segment) => segment.type === "ACTIVE")
-    .map((segment) => ({ start: new Date(segment.start).getTime(), end: new Date(segment.end).getTime() }))
-    .filter((segment) => segment.end > plannedStart && segment.start < plannedEnd);
-  const firstActiveAt = activeSegments.length ? Math.max(plannedStart, activeSegments[0].start) : null;
-  const lastActiveAt = activeSegments.length ? Math.min(plannedEnd, activeSegments[activeSegments.length - 1].end) : null;
+  const activity = realtimeHoursShiftDateActivity(row, date, calculationEnd);
+  const firstActiveAt = activity.firstActiveAt;
+  const lastActiveAt = activity.lastActiveAt;
   const arrivalDelayMs = firstActiveAt !== null
     ? Math.max(0, firstActiveAt - plannedStart)
     : observedUntil > plannedStart

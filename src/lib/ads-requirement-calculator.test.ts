@@ -12,7 +12,7 @@ test("aplica AHT, shrinkage de 6,25%, buffer de 3 e arredondamento para cima", (
   assert.equal(calculateAdsHourlyRequirement(40, 3600), 46);
 });
 
-test("usa média móvel de duas horas, sobreposição de turnos e noite atravessando o dia", () => {
+test("usa a média das três maiores janelas de duas horas por turno", () => {
   const startDate = new Date("2026-07-20T00:00:00.000Z");
   const hourlyVolumes: AdsHourlyVolume[] = [];
   for (let hour = 0; hour <= 32; hour += 1) {
@@ -26,13 +26,30 @@ test("usa média móvel de duas horas, sobreposição de turnos e noite atravess
   const rows = buildAdsShiftRequirements({ startDate, hourlyVolumes, ahtSeconds: 3600, days: 1 });
 
   assert.deepEqual(rows.map((row) => ({ shift: row.shift, required: row.required })), [
-    { shift: "Manhã", required: 46 },
-    { shift: "Tarde", required: 46 },
-    { shift: "Noite", required: 67 }
+    { shift: "Manhã", required: 32 },
+    { shift: "Tarde", required: 35 },
+    { shift: "Noite", required: 35 }
   ]);
-  assert.equal(rows[0].peakHour, "2026-07-20T14:00:00.000Z");
-  assert.equal(rows[1].peakHour, "2026-07-20T14:00:00.000Z");
-  assert.equal(rows[2].peakHour, "2026-07-20T23:00:00.000Z");
+  assert.deepEqual(rows[2].referenceHours.slice(0, 2), [
+    "2026-07-20T23:00:00.000Z",
+    "2026-07-21T00:00:00.000Z"
+  ]);
+  assert.equal(rows[2].planningVolume, 30);
+});
+
+test("dilui um pico noturno isolado em vez de aplicá-lo ao turno inteiro", () => {
+  const startDate = new Date("2026-07-20T00:00:00.000Z");
+  const hourlyVolumes: AdsHourlyVolume[] = [];
+  for (let hour = 0; hour <= 32; hour += 1) {
+    hourlyVolumes.push({ at: new Date(startDate.getTime() + hour * 60 * 60 * 1000), volume: 10 });
+  }
+  setVolume(hourlyVolumes, "2026-07-21T02:00:00.000Z", 100);
+
+  const night = buildAdsShiftRequirements({ startDate, hourlyVolumes, ahtSeconds: 3600, days: 1 })
+    .find((row) => row.shift === "Noite");
+
+  assert.equal(night?.planningVolume, 40);
+  assert.equal(night?.required, 46);
 });
 
 function setVolume(rows: AdsHourlyVolume[], at: string, volume: number) {
