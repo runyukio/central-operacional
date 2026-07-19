@@ -15,7 +15,10 @@ const defaultImportsLimit = 30;
 const maxImportsLimit = 100;
 const maxRecordsPerImport = Number.parseInt(process.env.REALTIME_HOURS_MAX_RECORDS_PER_IMPORT ?? "1000", 10) || 1000;
 const staleThresholdMinutes = Number.parseInt(process.env.REALTIME_HOURS_STALE_MINUTES ?? "15", 10) || 15;
-const idleThresholdSeconds = Number.parseInt(process.env.REALTIME_HOURS_IDLE_SECONDS ?? "300", 10) || 300;
+const configuredIdleThresholdSeconds = Number.parseInt(process.env.REALTIME_HOURS_IDLE_SECONDS ?? "600", 10);
+const idleThresholdSeconds = Number.isFinite(configuredIdleThresholdSeconds)
+  ? Math.max(600, configuredIdleThresholdSeconds)
+  : 600;
 const legacyTimelineHeartbeatMinutes = Number.parseInt(process.env.REALTIME_HOURS_TIMELINE_HEARTBEAT_MINUTES ?? "", 10);
 const legacyTimelineMaxGapMinutes = Number.parseInt(process.env.REALTIME_HOURS_TIMELINE_MAX_GAP_MINUTES ?? "", 10);
 const timelineHeartbeatSeconds = Number.parseInt(process.env.REALTIME_HOURS_TIMELINE_HEARTBEAT_SECONDS ?? "", 10)
@@ -28,6 +31,8 @@ const retentionDays = Number.isFinite(configuredRetentionDays)
   : 90;
 const identityConfidences = ["HIGH", "MEDIUM", "LOW", "UNKNOWN"] as const;
 const realtimeHoursEventTypes = ["SESSION_START", "SESSION_RESUME", "HEARTBEAT", "SESSION_END"] as const;
+
+export type RealtimeHoursPresenceStatus = "ONLINE" | "IDLE" | "LOCKED" | "OFFLINE";
 
 type RealtimeHoursRowError = {
   rowNumber: number;
@@ -501,7 +506,7 @@ export async function getRealtimeHoursOperationalPresence() {
       hostname: record.hostname,
       windowsUser: record.windowsUser ?? "",
       lastSeenAt: record.capturedAt.toISOString(),
-      status: realtimeHoursPresenceStatus(record, referenceTime)
+      status: resolveRealtimeHoursPresenceStatus(record, referenceTime)
     }))
     .sort((left, right) => (left.employeeName || left.wbLogin || left.hostname).localeCompare(right.employeeName || right.wbLogin || right.hostname));
 
@@ -931,7 +936,7 @@ export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOpt
       supervisor: employee?.supervisor?.fullName ?? "Sem supervisor",
       ipAddress: latest.ipAddress ?? "",
       lastSeenAt: latest.capturedAt.toISOString(),
-      currentStatus: realtimeHoursPresenceStatus(statusLatest, statusReferenceTime),
+      currentStatus: resolveRealtimeHoursPresenceStatus(statusLatest, statusReferenceTime),
       activeMs,
       noActivityMs,
       sessionCount,
@@ -1128,16 +1133,17 @@ async function employeeLookupFor(entries: Array<{ employeeId?: string | null; wb
   return lookup;
 }
 
-function realtimeHoursPresenceStatus(
+export function resolveRealtimeHoursPresenceStatus(
   record: { capturedAt: Date; isSessionActive: boolean; sessionState: string | null; idleSeconds: number | null },
-  referenceTime: Date
-) {
+  referenceTime: Date,
+  thresholdSeconds = idleThresholdSeconds
+): RealtimeHoursPresenceStatus {
   const isFresh = referenceTime.getTime() - record.capturedAt.getTime() <= staleThresholdMinutes * 60_000;
   const sessionState = String(record.sessionState ?? "").trim().toUpperCase();
   if (!isFresh) return "OFFLINE";
   if (sessionState === "LOCKED") return "LOCKED";
   if (!record.isSessionActive || sessionState === "DISCONNECTED") return "OFFLINE";
-  if ((record.idleSeconds ?? 0) >= idleThresholdSeconds) return "IDLE";
+  if ((record.idleSeconds ?? 0) > Math.max(600, thresholdSeconds)) return "IDLE";
   return "ONLINE";
 }
 
@@ -1356,6 +1362,7 @@ function normalizeSearch(value?: string | null) {
 }
 
 function summarizeStatus(records: Array<{
+  capturedAt: Date;
   hostname: string;
   wbLogin: string | null;
   employeeId: string | null;
@@ -1365,12 +1372,12 @@ function summarizeStatus(records: Array<{
   identityConfidence: string;
 }>) {
   const hostnames = new Set(records.map((record) => record.hostname));
-  const active = records.filter((record) => record.isSessionActive).length;
-  const idle = records.filter((record) => record.isSessionActive && (record.idleSeconds ?? 0) >= idleThresholdSeconds).length;
-  const locked = records.filter((record) => (
-    !record.isSessionActive
-    && String(record.sessionState ?? "").trim().toUpperCase() === "LOCKED"
-  )).length;
+  const referenceTime = new Date();
+  const statuses = records.map((record) => resolveRealtimeHoursPresenceStatus(record, referenceTime));
+  const online = statuses.filter((status) => status === "ONLINE").length;
+  const idle = statuses.filter((status) => status === "IDLE").length;
+  const locked = statuses.filter((status) => status === "LOCKED").length;
+  const offline = statuses.filter((status) => status === "OFFLINE").length;
   const highConfidence = records.filter((record) => record.identityConfidence === "HIGH").length;
   const mediumConfidence = records.filter((record) => record.identityConfidence === "MEDIUM").length;
   const lowConfidence = records.filter((record) => record.identityConfidence === "LOW").length;
@@ -1379,8 +1386,8 @@ function summarizeStatus(records: Array<{
   return {
     totalRecords: records.length,
     distinctHosts: hostnames.size,
-    activeSessions: active,
-    inactiveSessions: records.length - active,
+    activeSessions: online + idle,
+    inactiveSessions: locked + offline,
     idleSessions: idle,
     lockedSessions: locked,
     identifiedRecords: records.length - unknownIdentity,

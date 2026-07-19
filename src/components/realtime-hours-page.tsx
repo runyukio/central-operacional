@@ -476,7 +476,7 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
         <OverviewMetricCard
           title="Ociosas"
           value={summary.idleSessions}
-          helper={`${idlePercent}% sem interação há 5 min`}
+          helper={`${idlePercent}% sem interação há mais de 10 min`}
           icon={Clock}
           tone="orange"
         />

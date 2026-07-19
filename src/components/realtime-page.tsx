@@ -11,6 +11,7 @@ import {
   Download,
   Eye,
   History,
+  LockKeyhole,
   RefreshCw,
   Search,
   X,
@@ -243,7 +244,7 @@ type AgentFilters = {
   roleTitle: string;
 };
 
-type AgentPresenceStatus = "Online" | "Online sem produção" | "Ocioso" | "Offline" | "Fora do turno";
+type AgentPresenceStatus = "Online" | "Tela bloqueada" | "Ocioso" | "Offline";
 type AgentSortKey = "displayName" | "wbLogin" | "presenceStatus" | "employeeStatus" | "lob" | "supervisor" | "shift" | "skill" | "submit" | "aht" | "moderation" | "timeout" | "refresh";
 type AgentSortState = { key: AgentSortKey; direction: "asc" | "desc" };
 type MetricFormat = "number" | "duration";
@@ -1568,13 +1569,11 @@ function QueueStatusPill({ status }: { status: QueueStatus }) {
 function PresenceStatusPill({ status }: { status: AgentPresenceStatus }) {
   const config = status === "Online"
     ? { className: "bg-emerald-100 text-emerald-700", icon: CheckCircle2 }
-    : status === "Online sem produção"
-      ? { className: "bg-blue-100 text-blue-700", icon: Activity }
+    : status === "Tela bloqueada"
+      ? { className: "bg-blue-100 text-blue-700", icon: LockKeyhole }
       : status === "Ocioso"
         ? { className: "bg-amber-100 text-amber-800", icon: AlertTriangle }
-        : status === "Fora do turno"
-          ? { className: "bg-violet-100 text-violet-700", icon: CalendarDays }
-          : { className: "bg-red-100 text-red-700", icon: XCircle };
+        : { className: "bg-red-100 text-red-700", icon: XCircle };
   const Icon = config.icon;
   return (
     <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-black", config.className)} title={status}>
@@ -4434,7 +4433,7 @@ function isReportAgentForLob(row: AgentRealtimeRow, lob: "ADS" | "VIDEO" | "COMM
 }
 
 function isOnlineHeadcountStatus(status: AgentPresenceStatus) {
-  return status === "Online" || status === "Online sem produção" || status === "Ocioso" || status === "Fora do turno";
+  return status === "Online" || status === "Tela bloqueada" || status === "Ocioso";
 }
 
 function buildQueueLobCards(rows: QueueRealtimeRow[], selectedCycle: string): QueueLobCardData[] {

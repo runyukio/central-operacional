@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildMergedTimelineSegments, buildTimelineSegments, realtimeHoursTimelinePersonKey } from "./realtime-hours-service";
+import {
+  buildMergedTimelineSegments,
+  buildTimelineSegments,
+  realtimeHoursTimelinePersonKey,
+  resolveRealtimeHoursPresenceStatus
+} from "./realtime-hours-service";
 
 const minute = 60_000;
 
@@ -140,4 +145,24 @@ test("usa o mesmo agrupamento quando o WB troca de notebook", () => {
 
   assert.equal(first, second);
   assert.equal(first, "wb:wb_rita06");
+});
+
+test("considera ocioso somente acima de dez minutos sem movimento", () => {
+  const capturedAt = new Date("2026-07-19T12:00:00.000Z");
+  const base = { capturedAt, isSessionActive: true, sessionState: "ACTIVE", idleSeconds: 600 };
+
+  assert.equal(resolveRealtimeHoursPresenceStatus(base, capturedAt, 600), "ONLINE");
+  assert.equal(resolveRealtimeHoursPresenceStatus({ ...base, idleSeconds: 601 }, capturedAt, 600), "IDLE");
+});
+
+test("prioriza tela bloqueada sobre o tempo sem movimento", () => {
+  const capturedAt = new Date("2026-07-19T12:00:00.000Z");
+  const status = resolveRealtimeHoursPresenceStatus({
+    capturedAt,
+    isSessionActive: false,
+    sessionState: "LOCKED",
+    idleSeconds: 3_600
+  }, capturedAt, 600);
+
+  assert.equal(status, "LOCKED");
 });

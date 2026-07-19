@@ -16,6 +16,7 @@ import { canAccessExecutiveAdsReport, canAccessRealTime, canAccessRealTimeAgents
 import { prisma } from "@/lib/prisma";
 import { resolveQueueReference } from "@/lib/queue-dictionary";
 import { getQueueReportMetadataById } from "@/lib/queue-report-metadata";
+import { getRealtimeHoursOperationalPresence, type RealtimeHoursPresenceStatus } from "@/lib/realtime-hours-service";
 import { shiftCategoryName } from "@/lib/shift-display";
 import { isWorkHoursAllowedForSchedule, parseWorkHoursToMinutes } from "@/lib/work-hours-rules";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
@@ -106,8 +107,7 @@ type AgentCycleMetric = {
   sourceRows: number;
 };
 
-type AgentPresenceStatus = "Online" | "Online sem produção" | "Ocioso" | "Offline" | "Fora do turno";
-const realtimeResetPresenceGraceMinutes = 120;
+type AgentPresenceStatus = "Online" | "Tela bloqueada" | "Ocioso" | "Offline";
 
 type AgentCycleRow = {
   key: string;
@@ -3102,7 +3102,7 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
     }
   }
 
-  const rows = currentRows
+  const baseRows = currentRows
     .map((row) => {
       const previous = previousByKey.get(row.key) ?? null;
       return {
@@ -3119,6 +3119,13 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
       };
     })
     .sort((a, b) => b.current.submit - a.current.submit || a.displayName.localeCompare(b.displayName));
+
+  const presenceContext = await loadAgentPresenceContext(baseRows, selectedCycle);
+  const rows = baseRows.map((row) => ({
+    ...row,
+    presenceStatus: resolveAgentPresenceStatus(row, presenceContext),
+    isScheduled: isAgentScheduledForPresence(row, presenceContext)
+  }));
 
   const summaryCurrent = summarizeAgentRows(rows);
   const summaryPrevious = previousCycle ? summarizeAgentRows(previousRows) : null;
@@ -3149,12 +3156,24 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
 
 async function loadAgentPresenceContext(rows: AgentCycleRow[], selectedCycle: string) {
   const selectedCycleInfo = parseRealtimeCycleForPresence(selectedCycle);
-  const scheduleByEmployeeId = await loadRealtimeSchedulePresence(rows, selectedCycleInfo);
+  const [scheduleByEmployeeId, capturePresence] = await Promise.all([
+    loadRealtimeSchedulePresence(rows, selectedCycleInfo),
+    getRealtimeHoursOperationalPresence()
+  ]);
+  const presenceByEmployeeId = new Map<string, AgentPresenceStatus>();
+  const presenceByWbLogin = new Map<string, AgentPresenceStatus>();
+
+  capturePresence.rows.forEach((presence) => {
+    const status = mapRealtimeHoursPresenceStatus(presence.status);
+    if (presence.employeeId) presenceByEmployeeId.set(presence.employeeId, status);
+    const wbLogin = normalizeWbLogin(presence.wbLogin);
+    if (wbLogin) presenceByWbLogin.set(wbLogin, status);
+  });
 
   return {
-    selectedCycle,
-    selectedCycleInfo,
-    scheduleByEmployeeId
+    scheduleByEmployeeId,
+    presenceByEmployeeId,
+    presenceByWbLogin
   };
 }
 
@@ -3197,40 +3216,25 @@ function resolveAgentPresenceStatus(
   row: AgentCycleRow,
   context: Awaited<ReturnType<typeof loadAgentPresenceContext>>
 ): AgentPresenceStatus {
-  const schedule = row.employeeId ? context.scheduleByEmployeeId.get(row.employeeId) : null;
-  const isScheduled = Boolean(schedule?.scheduled);
-  const hasProduction = row.current.submit > 0 || row.current.moderationMs > 0;
-  const hasRecentProduction = (row.deltas.submit ?? 0) > 0 || (row.deltas.moderationMs ?? 0) > 0 || (!row.previous && hasProduction);
+  if (row.employeeId) {
+    const byEmployee = context.presenceByEmployeeId.get(row.employeeId);
+    if (byEmployee) return byEmployee;
+  }
 
-  if (!isScheduled) return hasRecentProduction ? "Fora do turno" : "Offline";
-  if (hasRecentProduction) return "Online";
-  if (isWithinRealtimeResetPresenceGrace(row, context.selectedCycle)) return "Online sem produção";
-
-  const minutesSinceMovement = minutesSinceLastAgentMovement(row, context.selectedCycle);
-  if (hasProduction && minutesSinceMovement !== null && minutesSinceMovement >= 60) return "Ocioso";
-  if (hasProduction && minutesSinceMovement !== null && minutesSinceMovement < 60) return "Online sem produção";
+  const wbLogins = [row.wbLogin, row.rawWbLogin].map(normalizeWbLogin).filter(Boolean);
+  for (const wbLogin of wbLogins) {
+    const byWbLogin = context.presenceByWbLogin.get(wbLogin);
+    if (byWbLogin) return byWbLogin;
+  }
 
   return "Offline";
 }
 
-function isWithinRealtimeResetPresenceGrace(row: AgentCycleRow, selectedCycle: string) {
-  const selectedInfo = parseRealtimeCycleForPresence(selectedCycle);
-  if (!selectedInfo) return false;
-
-  const minutesSinceReset = selectedInfo.hour * 60 + selectedInfo.minute - 13 * 60;
-  if (minutesSinceReset < 0 || minutesSinceReset >= realtimeResetPresenceGraceMinutes) return false;
-
-  const latestBeforeReset = row.history
-    .map((item) => ({ item, info: parseRealtimeCycleForPresence(item.cycleDownload) }))
-    .filter((entry): entry is { item: AgentCycleRow["history"][number]; info: NonNullable<ReturnType<typeof parseRealtimeCycleForPresence>> } => Boolean(entry.info))
-    .filter((entry) => entry.info.dateKey === selectedInfo.dateKey && entry.info.hour < 13 && entry.info.timestamp < selectedInfo.timestamp)
-    .sort((a, b) => b.info.timestamp - a.info.timestamp)[0]?.item;
-
-  if (!latestBeforeReset) return false;
-
-  const hadProductionBeforeReset = latestBeforeReset.submit > 0 || latestBeforeReset.moderationMs > 0;
-  const countersWereReset = row.current.submit < latestBeforeReset.submit || row.current.moderationMs < latestBeforeReset.moderationMs;
-  return hadProductionBeforeReset && countersWereReset;
+function mapRealtimeHoursPresenceStatus(status: RealtimeHoursPresenceStatus): AgentPresenceStatus {
+  if (status === "ONLINE") return "Online";
+  if (status === "LOCKED") return "Tela bloqueada";
+  if (status === "IDLE") return "Ocioso";
+  return "Offline";
 }
 
 function isScheduleActiveAtRealtimeCycle(
@@ -3271,30 +3275,6 @@ function isAgentScheduledForPresence(
   return Boolean(row.employeeId && context.scheduleByEmployeeId.get(row.employeeId)?.scheduled);
 }
 
-function minutesSinceLastAgentMovement(row: AgentCycleRow, selectedCycle: string) {
-  const selectedInfo = parseRealtimeCycleForPresence(selectedCycle);
-  if (!selectedInfo) return null;
-  const selectedOperationalDay = operationalDayKeyFromCycleInfo(selectedInfo);
-  const history = row.history
-    .map((item) => ({ item, info: parseRealtimeCycleForPresence(item.cycleDownload) }))
-    .filter((entry): entry is { item: AgentCycleRow["history"][number]; info: NonNullable<ReturnType<typeof parseRealtimeCycleForPresence>> } => Boolean(entry.info))
-    .filter((entry) => entry.info.timestamp <= selectedInfo.timestamp && operationalDayKeyFromCycleInfo(entry.info) === selectedOperationalDay)
-    .sort((a, b) => a.info.timestamp - b.info.timestamp);
-
-  let previous: AgentCycleRow["history"][number] | null = null;
-  let lastMovementTimestamp: number | null = null;
-  history.forEach(({ item, info }) => {
-    const moved = previous
-      ? item.submit > previous.submit || item.moderationMs > previous.moderationMs
-      : item.submit > 0 || item.moderationMs > 0;
-    if (moved) lastMovementTimestamp = info.timestamp;
-    previous = item;
-  });
-
-  if (lastMovementTimestamp === null) return null;
-  return Math.max(0, Math.floor((selectedInfo.timestamp - lastMovementTimestamp) / 60000));
-}
-
 function parseRealtimeCycleForPresence(value: string) {
   const match = String(value ?? "").match(/(\d{4})-(\d{2})-(\d{2})[ T_](\d{2}):(\d{2})/);
   if (!match) return null;
@@ -3309,12 +3289,6 @@ function parseRealtimeCycleForPresence(value: string) {
     minute: Number(minute),
     timestamp
   };
-}
-
-function operationalDayKeyFromCycleInfo(info: NonNullable<ReturnType<typeof parseRealtimeCycleForPresence>>) {
-  if (info.hour >= 13) return info.dateKey;
-  const previousDay = new Date(info.date.getTime() - 24 * 60 * 60 * 1000);
-  return previousDay.toISOString().slice(0, 10);
 }
 
 function aggregateAgentCycleRows(items: Array<{
