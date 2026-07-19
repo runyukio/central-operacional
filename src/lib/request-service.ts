@@ -9,6 +9,7 @@ import {
   updateRequestStatus as updateMockRequestStatus
 } from "@/lib/mock-db";
 import { applyApprovedMonthlyAdvanceChange, isMonthlyAdvanceRequestPayload } from "@/lib/monthly-advance-service";
+import { roleHasCapability } from "@/lib/access-control";
 import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import { prisma } from "@/lib/prisma";
 import { canApproveRequest, normalizeRole } from "@/lib/permissions";
@@ -53,7 +54,7 @@ type DayOffKind = (typeof dayOffKinds)[number];
 
 const immutableStatuses = ["CONCLUIDO", "RECUSADO", "CANCELADO"] as const;
 const pendingStatuses = ["ABERTO", "EM_ANALISE", "AGUARDANDO_APROVACAO", "AJUSTE_SOLICITADO"] as const;
-const wfmFinalRoles = ["ADMIN", "GESTOR", "WFM"];
+const wfmFinalRoles = ["ADMIN", "WFM"];
 const supervisorStepRoles = ["ADMIN", "GESTOR", "SUPERVISOR"];
 const terminalFlowStatuses = ["APROVADO", "CONCLUIDO", "RECUSADO", "CANCELADO"] as const;
 const allowDemoDataFallback = process.env.ALLOW_DEMO_LOGIN === "true" || process.env.ALLOW_DEMO_DATA === "true";
@@ -928,16 +929,8 @@ function buildRequestWhere(actor: Actor, user: ActiveUser, filters: RequestFilte
   const where: Prisma.RequestWhereInput = { deletedAt: null };
   const andFilters: Prisma.RequestWhereInput[] = [];
 
-  if (filters.scope === "mine") {
+  if (filters.scope === "mine" || !roleHasCapability(actor.role, "PIPELINES")) {
     where.requesterId = user.id;
-  } else if (role === "COLABORADOR") {
-    where.requesterId = user.id;
-  } else if (role === "RH") {
-    where.assignedArea = "RH";
-  } else if (role === "TI") {
-    where.assignedArea = "TI";
-  } else if (role === "QUALIDADE") {
-    where.assignedArea = "Qualidade";
   }
 
   if (isPendingActionFilter(filters.pendingAction)) {
@@ -945,7 +938,7 @@ function buildRequestWhere(actor: Actor, user: ActiveUser, filters: RequestFilte
       andFilters.push({ status: "ABERTO", ...supervisorStepRequestTypeWhere() });
     } else if (role === "WFM") {
       andFilters.push({ status: { in: ["EM_ANALISE", "AGUARDANDO_APROVACAO", "AJUSTE_SOLICITADO"] } });
-    } else if (["ADMIN", "GESTOR"].includes(role)) {
+    } else if (roleHasCapability(actor.role, "PIPELINES")) {
       andFilters.push({ status: { in: [...pendingStatuses] } });
     }
   }
@@ -1278,11 +1271,7 @@ async function sendSupervisorRequestToWfmAnalysis(
 }
 
 function canViewRequest(actor: Actor, user: ActiveUser, request: PrismaRequest) {
-  const role = normalizeRole(actor.role);
-  if (["ADMIN", "GESTOR", "WFM"].includes(role)) return true;
-  if (role === "COLABORADOR") return request.requesterId === user.id;
-  if (role === "SUPERVISOR") return true;
-  return canApproveRequest(actor, { area: request.assignedArea, type: request.type.name });
+  return request.requesterId === user.id || roleHasCapability(actor.role, "PIPELINES");
 }
 
 function canMutateRequest(actor: Actor, userId: string, request: PrismaRequest, status: UiRequestStatus) {
@@ -1290,7 +1279,7 @@ function canMutateRequest(actor: Actor, userId: string, request: PrismaRequest, 
   if (status === "Cancelado") {
     return ["ADMIN", "GESTOR"].includes(role) || (request.requesterId === userId && ["ABERTO", "AGUARDANDO_APROVACAO"].includes(request.status));
   }
-  if (role === "COLABORADOR") return false;
+  if (!roleHasCapability(actor.role, "PIPELINES")) return false;
   if (["ADMIN", "GESTOR", "WFM"].includes(role)) return true;
   if (role === "SUPERVISOR") return isDayOffRequest(request.type.name) || isShiftChangeRequest(request.type.name);
   return canApproveRequest(actor, { area: request.assignedArea, type: request.type.name });
@@ -1464,7 +1453,7 @@ function mapPrismaRequest(request: PrismaRequestForDisplay, user?: ActiveUser, a
   const role = normalizeRole(actor?.role);
   const isAdminLike = ["ADMIN", "GESTOR"].includes(role);
   const canSupervisorStep = isAdminLike || (role === "SUPERVISOR" && (isDayOffRequest(request) || isShiftChangeRequest(request)));
-  const canWfmFinal = isAdminLike || role === "WFM";
+  const canWfmFinal = wfmFinalRoles.includes(role);
   const history = "history" in request ? request.history : [];
   const comments = "comments" in request ? request.comments : [];
   return {
@@ -2747,7 +2736,13 @@ async function notifyApprovers(
   area: string,
   supervisorId?: string | null
 ) {
-  const roleNames = isDayOffRequest(type) ? ["ADMIN", "GESTOR"] : area === "WFM" ? ["ADMIN", "GESTOR", "WFM"] : area === "RH" ? ["ADMIN", "GESTOR", "RH"] : area === "TI" ? ["ADMIN", "GESTOR", "TI"] : ["ADMIN", "GESTOR", "WFM"];
+  const roleNames = isDayOffRequest(type)
+    ? ["ADMIN", "GESTOR"]
+    : area === "WFM"
+      ? ["ADMIN", "WFM"]
+      : area === "RH"
+        ? ["ADMIN", "RH", "FINANCEIRO"]
+        : ["ADMIN", "GESTOR", "WFM"];
   const users = await tx.user.findMany({ where: { status: "ACTIVE", role: { name: { in: roleNames } } } });
   const supervisor = supervisorId ? await tx.employeeProfile.findUnique({ where: { id: supervisorId }, include: { user: true } }) : null;
   const recipients = new Map(users.map((user) => [user.id, user]));
@@ -2828,7 +2823,7 @@ async function notifyRequestStatusChangeSafely(request: PrismaRequest, actorId: 
 
 async function notifyWfmApprovers(tx: RequestNotificationClient, requestId: string, code: string, type: string, requesterName: string) {
   const users = await tx.user.findMany({
-    where: { status: "ACTIVE", role: { name: { in: ["ADMIN", "GESTOR", "WFM"] } } }
+    where: { status: "ACTIVE", role: { name: { in: wfmFinalRoles } } }
   });
 
   for (const user of users) {

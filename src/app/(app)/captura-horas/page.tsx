@@ -28,7 +28,7 @@ export default async function CapturaHorasRoute() {
 
   return (
     <RealtimeHoursWorkspacePage
-      canManageMappings={canManageRealtimeHoursMappings(session?.user?.email)}
+      canManageMappings={canManageRealtimeHoursMappings(actor)}
       canRequestAdjustments={canRequestRealtimeHoursCaptureAdjustment(actor)}
       canApproveAdjustments={canApproveRealtimeHoursCaptureAdjustment(actor)}
     />

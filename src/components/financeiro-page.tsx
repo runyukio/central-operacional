@@ -98,7 +98,7 @@ type FinanceiroPayload = {
     analytics: FinanceiroAnalytics;
     records: FinanceiroRecord[];
     uploads: FinanceiroUpload[];
-    allowedEmails: string[];
+    canManage: boolean;
   };
 };
 
@@ -357,6 +357,7 @@ export function FinanceiroPage() {
 
   const summary = payload?.data.summary;
   const analytics = payload?.data.analytics;
+  const canManage = payload?.data.canManage ?? false;
   const monthOptions = useMemo(
     () => buildMonthOptions(invoiceCycleMonth, payload?.data.filterOptions.months ?? payload?.data.records.map((record) => record.invoiceCycleMonth) ?? []),
     [invoiceCycleMonth, payload?.data.filterOptions.months, payload?.data.records]
@@ -459,18 +460,22 @@ export function FinanceiroPage() {
               <History className="mr-2 inline h-4 w-4" />
               Histórico de uploads
             </button>
-            <a href="/api/financeiro/template" className="premium-control inline-flex h-10 items-center justify-center px-3 text-sm font-extrabold text-navy-950">
-              <FileSpreadsheet className="mr-2 h-4 w-4" />
-              Baixar template
-            </a>
-            <button type="button" onClick={openNewRecordForm} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">
-              <Plus className="mr-2 inline h-4 w-4" />
-              Adicionar manualmente
-            </button>
-            <button type="button" onClick={() => setUploadOpen(true)} className="premium-button h-10 px-3 text-sm font-extrabold">
-              <Upload className="mr-2 inline h-4 w-4" />
-              Subir dados
-            </button>
+            {canManage ? (
+              <>
+                <a href="/api/financeiro/template" className="premium-control inline-flex h-10 items-center justify-center px-3 text-sm font-extrabold text-navy-950">
+                  <FileSpreadsheet className="mr-2 h-4 w-4" />
+                  Baixar template
+                </a>
+                <button type="button" onClick={openNewRecordForm} className="premium-control h-10 px-3 text-sm font-extrabold text-navy-950">
+                  <Plus className="mr-2 inline h-4 w-4" />
+                  Adicionar manualmente
+                </button>
+                <button type="button" onClick={() => setUploadOpen(true)} className="premium-button h-10 px-3 text-sm font-extrabold">
+                  <Upload className="mr-2 inline h-4 w-4" />
+                  Subir dados
+                </button>
+              </>
+            ) : null}
           </div>
         }
       />
@@ -523,18 +528,18 @@ export function FinanceiroPage() {
             <StatCard title="Difference" value={summary?.differenceHours ?? "-"} helper="horas" icon={(summary?.differenceMinutes ?? 0) < 0 ? TrendingDown : TrendingUp} tone={(summary?.differenceMinutes ?? 0) < 0 ? "red" : "green"} />
             <StatCard title="Penalty %" value={`${formatPercent(summary?.penaltyPercent ?? 0)}%`} helper="percentual" icon={TrendingDown} tone={(summary?.penaltyPercent ?? 0) > 0 ? "red" : (summary?.penaltyPercent ?? 0) < 0 ? "green" : "orange"} />
           </div>
-          <FinanceiroHistoryPanel loading={loading} records={payload?.data.records ?? []} onView={setSelectedRecord} onEdit={openEditRecordForm} onAdjust={setAdjustRecord} />
+          <FinanceiroHistoryPanel loading={loading} records={payload?.data.records ?? []} canManage={canManage} onView={setSelectedRecord} onEdit={openEditRecordForm} onAdjust={setAdjustRecord} />
         </>
       ) : null}
 
       {activeTab === "values" ? <ValuesPanel analytics={analytics} /> : null}
-      {activeTab === "parameters" ? <ParametersPanel analytics={analytics} onEdit={openParameterForm} onNew={() => openParameterForm()} /> : null}
+      {activeTab === "parameters" ? <ParametersPanel analytics={analytics} canManage={canManage} onEdit={openParameterForm} onNew={() => openParameterForm()} /> : null}
 
-      {selectedRecord ? <RecordDetailModal record={selectedRecord} onClose={() => setSelectedRecord(null)} onEdit={() => { openEditRecordForm(selectedRecord); setSelectedRecord(null); }} onAdjust={() => { setAdjustRecord(selectedRecord); setSelectedRecord(null); }} /> : null}
-      {recordForm ? <RecordFormModal form={recordForm} setForm={setRecordForm} monthOptions={monthOptions} saving={savingRecord} onClose={() => setRecordForm(null)} onSave={() => saveRecord(recordForm)} /> : null}
-      {parameterForm ? <ParameterFormModal form={parameterForm} setForm={setParameterForm} monthOptions={monthOptions} saving={savingRecord} onClose={() => setParameterForm(null)} onSave={() => saveParameter(parameterForm)} /> : null}
-      {adjustRecord ? <AdjustmentModal record={adjustRecord} onClose={() => setAdjustRecord(null)} onSaved={async (message) => { setToast(message); setAdjustRecord(null); await fetchData(); }} saving={savingAdjustment} setSaving={setSavingAdjustment} /> : null}
-      {uploadOpen ? <UploadModal preview={preview} uploading={uploading} inputRef={fileInputRef} onClose={() => setUploadOpen(false)} onPreview={handlePreviewUpload} onCommit={handleCommitUpload} /> : null}
+      {selectedRecord ? <RecordDetailModal record={selectedRecord} canManage={canManage} onClose={() => setSelectedRecord(null)} onEdit={() => { openEditRecordForm(selectedRecord); setSelectedRecord(null); }} onAdjust={() => { setAdjustRecord(selectedRecord); setSelectedRecord(null); }} /> : null}
+      {canManage && recordForm ? <RecordFormModal form={recordForm} setForm={setRecordForm} monthOptions={monthOptions} saving={savingRecord} onClose={() => setRecordForm(null)} onSave={() => saveRecord(recordForm)} /> : null}
+      {canManage && parameterForm ? <ParameterFormModal form={parameterForm} setForm={setParameterForm} monthOptions={monthOptions} saving={savingRecord} onClose={() => setParameterForm(null)} onSave={() => saveParameter(parameterForm)} /> : null}
+      {canManage && adjustRecord ? <AdjustmentModal record={adjustRecord} onClose={() => setAdjustRecord(null)} onSaved={async (message) => { setToast(message); setAdjustRecord(null); await fetchData(); }} saving={savingAdjustment} setSaving={setSavingAdjustment} /> : null}
+      {canManage && uploadOpen ? <UploadModal preview={preview} uploading={uploading} inputRef={fileInputRef} onClose={() => setUploadOpen(false)} onPreview={handlePreviewUpload} onCommit={handleCommitUpload} /> : null}
       {uploadsOpen ? <UploadsModal uploads={payload?.data.uploads ?? []} onClose={() => setUploadsOpen(false)} /> : null}
     </div>
   );
@@ -594,9 +599,9 @@ function ValuesPanel({ analytics }: { analytics?: FinanceiroAnalytics }) {
   );
 }
 
-function ParametersPanel({ analytics, onEdit, onNew }: { analytics?: FinanceiroAnalytics; onEdit: (parameter: FinanceiroParameter) => void; onNew: () => void }) {
+function ParametersPanel({ analytics, canManage, onEdit, onNew }: { analytics?: FinanceiroAnalytics; canManage: boolean; onEdit: (parameter: FinanceiroParameter) => void; onNew: () => void }) {
   return (
-    <Panel title="Parâmetros mensais" action="Adicionar parâmetro" actionOnClick={onNew}>
+    <Panel title="Parâmetros mensais" action={canManage ? "Adicionar parâmetro" : undefined} actionOnClick={canManage ? onNew : undefined}>
       <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
         Parâmetros são por ciclo e LOB. Câmbio zero mantém valores em USD e deixa BRL zerado até você configurar o mês.
       </div>
@@ -611,7 +616,7 @@ function ParametersPanel({ analytics, onEdit, onNew }: { analytics?: FinanceiroA
               <th className="px-3 py-2">Treinamento USD/h</th>
               <th className="px-3 py-2">Câmbio</th>
               <th className="px-3 py-2">Origem</th>
-              <th className="px-3 py-2 text-right">Ações</th>
+              {canManage ? <th className="px-3 py-2 text-right">Ações</th> : null}
             </tr>
           </thead>
           <tbody className="divide-y divide-border/70">
@@ -624,9 +629,11 @@ function ParametersPanel({ analytics, onEdit, onNew }: { analytics?: FinanceiroA
                 <td className="px-3 py-3 font-bold">{formatUsd(parameter.trainingHourlyUsd)}</td>
                 <td className="px-3 py-3 font-bold">{parameter.exchangeRateUsdBrl ? formatNumberValue(parameter.exchangeRateUsdBrl) : "-"}</td>
                 <td className="px-3 py-3"><StatusBadge status={parameter.isDefault ? "Padrão" : "Salvo"} /></td>
-                <td className="px-3 py-3 text-right">
-                  <button type="button" onClick={() => onEdit(parameter)} className="premium-control h-9 px-3 text-xs font-extrabold text-navy-950">Editar</button>
-                </td>
+                {canManage ? (
+                  <td className="px-3 py-3 text-right">
+                    <button type="button" onClick={() => onEdit(parameter)} className="premium-control h-9 px-3 text-xs font-extrabold text-navy-950">Editar</button>
+                  </td>
+                ) : null}
               </tr>
             ))}
           </tbody>
@@ -637,7 +644,7 @@ function ParametersPanel({ analytics, onEdit, onNew }: { analytics?: FinanceiroA
   );
 }
 
-function FinanceiroHistoryPanel({ loading, records, onView, onEdit, onAdjust }: { loading: boolean; records: FinanceiroRecord[]; onView: (record: FinanceiroRecord) => void; onEdit: (record: FinanceiroRecord) => void; onAdjust: (record: FinanceiroRecord) => void }) {
+function FinanceiroHistoryPanel({ loading, records, canManage, onView, onEdit, onAdjust }: { loading: boolean; records: FinanceiroRecord[]; canManage: boolean; onView: (record: FinanceiroRecord) => void; onEdit: (record: FinanceiroRecord) => void; onAdjust: (record: FinanceiroRecord) => void }) {
   return (
     <Panel title="Histórico por Ciclo da Invoice">
       {loading ? (
@@ -680,10 +687,14 @@ function FinanceiroHistoryPanel({ loading, records, onView, onEdit, onAdjust }: 
                       <button type="button" onClick={() => onView(record)} className="premium-control grid h-9 w-9 place-items-center text-navy-950" title="Ver detalhes">
                         <Eye className="h-4 w-4" />
                       </button>
-                      <button type="button" onClick={() => onEdit(record)} className="premium-control grid h-9 w-9 place-items-center text-navy-950" title="Editar">
-                        <PencilLine className="h-4 w-4" />
-                      </button>
-                      <button type="button" onClick={() => onAdjust(record)} className="premium-control h-9 px-2 text-xs font-extrabold text-navy-950" title="Ajustar">Ajustar</button>
+                      {canManage ? (
+                        <>
+                          <button type="button" onClick={() => onEdit(record)} className="premium-control grid h-9 w-9 place-items-center text-navy-950" title="Editar">
+                            <PencilLine className="h-4 w-4" />
+                          </button>
+                          <button type="button" onClick={() => onAdjust(record)} className="premium-control h-9 px-2 text-xs font-extrabold text-navy-950" title="Ajustar">Ajustar</button>
+                        </>
+                      ) : null}
                     </div>
                   </td>
                 </tr>
@@ -720,7 +731,7 @@ function FinanceAnalyticsTable<Row extends { key: string }>({ rows, columns, emp
   );
 }
 
-function RecordDetailModal({ record, onClose, onEdit, onAdjust }: { record: FinanceiroRecord; onClose: () => void; onEdit: () => void; onAdjust: () => void }) {
+function RecordDetailModal({ record, canManage, onClose, onEdit, onAdjust }: { record: FinanceiroRecord; canManage: boolean; onClose: () => void; onEdit: () => void; onAdjust: () => void }) {
   return (
     <ModalShell title="Detalhe financeiro" onClose={onClose}>
       <div className="grid gap-3 md:grid-cols-2">
@@ -759,8 +770,8 @@ function RecordDetailModal({ record, onClose, onEdit, onAdjust }: { record: Fina
       </div>
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onClose} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Fechar</button>
-        <button type="button" onClick={onEdit} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Editar</button>
-        <button type="button" onClick={onAdjust} className="premium-button h-10 px-4 text-sm font-extrabold">Ajustar</button>
+        {canManage ? <button type="button" onClick={onEdit} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Editar</button> : null}
+        {canManage ? <button type="button" onClick={onAdjust} className="premium-button h-10 px-4 text-sm font-extrabold">Ajustar</button> : null}
       </div>
     </ModalShell>
   );

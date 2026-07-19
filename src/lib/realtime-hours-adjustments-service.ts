@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { AuditAction, Prisma } from "@prisma/client";
 
 import { createPermissionError, createValidationError, mapPrismaError } from "@/lib/api-errors";
+import { rolesWithCapability } from "@/lib/access-control";
 import type { Actor } from "@/lib/mock-db";
 import { prisma } from "@/lib/prisma";
 import { canApproveRealtimeHoursCaptureAdjustment, canRequestRealtimeHoursCaptureAdjustment } from "@/lib/realtime-hours-permissions";
@@ -9,7 +10,7 @@ import { getRealtimeHoursTimeline } from "@/lib/realtime-hours-service";
 import { formatMinutesToHHMM, parseWorkHoursToMinutes } from "@/lib/work-hours-rules";
 
 const adjustmentEntity = "RealTimeHoursAdjustmentRequest";
-const adjustmentApproverRoles = ["ADMIN", "GESTOR", "WFM"];
+const adjustmentApproverRoles = rolesWithCapability("WORK_HOURS_EDIT");
 const adjustmentListLimit = 80;
 
 export type RealtimeHoursAdjustmentInput = {

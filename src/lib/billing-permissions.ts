@@ -1,3 +1,5 @@
+import { roleHasCapability } from "@/lib/access-control";
+
 type BillingIdentity = {
   id?: string | null;
   email?: string | null;
@@ -5,32 +7,10 @@ type BillingIdentity = {
   role?: string | null;
 };
 
-const DEFAULT_ALLOWED_EMAILS = ["runyukio@gmail.com", "wb_fernanda20@kuaishou.com", "admin@central.com"];
-
 export function canAccessBilling(user?: BillingIdentity | null) {
-  if (isSupervisor(user?.role)) return true;
-  return canManageBilling(user);
+  return Boolean(user && roleHasCapability(user.role, "BILLING_VIEW"));
 }
 
 export function canManageBilling(user?: BillingIdentity | null) {
-  if (!user) return false;
-  const allowedEmails = parseAllowlist(process.env.BILLING_ALLOWED_EMAILS, DEFAULT_ALLOWED_EMAILS);
-  const allowedUserIds = parseAllowlist(process.env.BILLING_ALLOWED_USER_IDS);
-  const email = normalize(user.email);
-  const id = normalize(user.id);
-  return Boolean((email && allowedEmails.has(email)) || (id && allowedUserIds.has(id)));
-}
-
-function parseAllowlist(raw?: string, fallback: string[] = []) {
-  const values = [...fallback, ...(raw && raw.trim() ? raw.split(",") : [])];
-  return new Set(values.map(normalize).filter(Boolean));
-}
-
-function normalize(value?: string | null) {
-  return String(value ?? "").trim().toLowerCase();
-}
-
-function isSupervisor(value?: string | null) {
-  const role = normalize(value);
-  return role === "supervisor";
+  return Boolean(user && roleHasCapability(user.role, "BILLING_MANAGE"));
 }

@@ -15,6 +15,7 @@ import {
   tokenHistory as seedTokenHistory
 } from "@/lib/demo-data";
 import { demoUsers, getDemoUser, type AppRole } from "@/lib/demo-auth";
+import { roleHasCapability } from "@/lib/access-control";
 
 export type Actor = {
   email: string;
@@ -441,7 +442,7 @@ export function recordErrorLog(input: Omit<ErrorLogRecord, "id" | "createdAt" | 
 }
 
 export function listErrorLogs(actor: Actor) {
-  if (!["ADMIN", "GESTOR"].includes(actor.role)) return [];
+  if (!roleHasCapability(actor.role, "AUDIT_LOGS")) return [];
   return getMockDb().errorLogs;
 }
 
@@ -466,7 +467,7 @@ export function registerStoredFile(actor: Actor, input: Omit<StoredFileRecord, "
 }
 
 export function getPlatformUsage(actor: Actor) {
-  if (!["ADMIN", "GESTOR"].includes(actor.role)) {
+  if (!roleHasCapability(actor.role, "AUDIT_LOGS")) {
     return { error: "Sem permissão para visualizar uso da plataforma." };
   }
 
@@ -507,15 +508,15 @@ export function listRequests(actor: Actor) {
 
 export function listEmployeesForActor(actor: Actor) {
   const db = getMockDb();
-  const canViewSensitive = ["ADMIN", "GESTOR", "RH"].includes(actor.role);
-  const canViewBank = ["ADMIN", "GESTOR"].includes(actor.role);
-  const canViewContact = ["ADMIN", "GESTOR", "RH", "TI"].includes(actor.role);
-  const visibleEmployees =
-    actor.role === "COLABORADOR"
+  const canViewEmployeeMap = roleHasCapability(actor.role, "EMPLOYEE_MAP");
+  const canViewSensitive = roleHasCapability(actor.role, "EMPLOYEE_SENSITIVE");
+  const canViewBank = canViewSensitive;
+  const canViewContact = canViewSensitive;
+  const visibleEmployees = canViewEmployeeMap
+    ? db.employees
+    : roleHasCapability(actor.role, "PERSONAL")
       ? db.employees.filter((employee) => employeeEmail(employee) === actor.email)
-      : actor.role === "SUPERVISOR"
-        ? db.employees.filter((employee) => employee.supervisor === actor.name)
-        : db.employees;
+      : [];
 
   return visibleEmployees.map((employee) => {
     const sensitive = db.sensitiveDataByEmployeeId[employee.id];
@@ -581,7 +582,7 @@ export function submitEmployeeRegistration(input: Omit<EmployeeRegistrationRecor
 }
 
 export function listEmployeeRegistrations(actor: Actor) {
-  if (!["ADMIN", "GESTOR", "RH", "WFM"].includes(actor.role)) return [];
+  if (!roleHasCapability(actor.role, "REGISTRATION_APPROVE")) return [];
   return getMockDb().registrationRequests;
 }
 
@@ -590,7 +591,7 @@ export function reviewEmployeeRegistration(
   input: { id: string; action: "approve" | "reject" | "request_adjustment"; reviewNotes: string; operationalData?: RegistrationOperationalData }
 ) {
   const db = getMockDb();
-  if (!["ADMIN", "GESTOR", "RH", "WFM"].includes(actor.role)) return { error: "Sem permissão para revisar cadastros." };
+  if (!roleHasCapability(actor.role, "REGISTRATION_APPROVE")) return { error: "Sem permissão para revisar cadastros." };
 
   const record = db.registrationRequests.find((item) => item.id === input.id);
   if (!record) return { error: "Cadastro não encontrado." };
@@ -837,6 +838,9 @@ export function previewScheduleRows(rows: Array<Record<string, unknown>>) {
 
 export function commitScheduleImport(actor: Actor, input: { fileName: string; allowPartial: boolean; rows: Array<Record<string, unknown>> }) {
   const db = getMockDb();
+  if (!roleHasCapability(actor.role, "SCHEDULE_EDIT")) {
+    return { error: "Sem permissão para importar cronogramas." };
+  }
   const preview = previewScheduleRows(input.rows);
 
   if (preview.errorRows > 0 && !input.allowPartial) {
@@ -882,18 +886,13 @@ export function commitScheduleImport(actor: Actor, input: { fileName: string; al
 
 export function getSchedulesForActor(actor: Actor) {
   const db = getMockDb();
-  if (actor.role === "COLABORADOR") {
+  if (!roleHasCapability(actor.role, "SCHEDULE_VIEW")) {
+    if (!roleHasCapability(actor.role, "PERSONAL")) {
+      return { scheduleDays: [], scheduleGridRows: [], imports: [] };
+    }
     return {
       scheduleDays: db.scheduleDaysByEmail[actor.email] ?? cloneScheduleDays(),
       scheduleGridRows: [],
-      imports: db.scheduleImports.slice(0, 5)
-    };
-  }
-
-  if (actor.role === "SUPERVISOR") {
-    return {
-      scheduleDays: db.scheduleDaysByEmail[actor.email] ?? cloneScheduleDays(),
-      scheduleGridRows: db.scheduleGridRows.filter((row) => row.employee.supervisor === actor.name),
       imports: db.scheduleImports.slice(0, 5)
     };
   }
@@ -908,13 +907,10 @@ export function getSchedulesForActor(actor: Actor) {
 
 export function listAttendanceRecords(actor: Actor) {
   const db = getMockDb();
-  if (actor.role === "COLABORADOR") {
+  if (!roleHasCapability(actor.role, "SCHEDULE_VIEW")) {
+    if (!roleHasCapability(actor.role, "PERSONAL")) return [];
     const employee = db.employees.find((item) => employeeEmail(item) === actor.email);
     return employee ? db.attendanceRecords.filter((record) => record.employeeId === employee.id) : [];
-  }
-  if (actor.role === "SUPERVISOR") {
-    const teamIds = new Set(db.employees.filter((employee) => employee.supervisor === actor.name).map((employee) => employee.id));
-    return db.attendanceRecords.filter((record) => teamIds.has(record.employeeId));
   }
   return db.attendanceRecords;
 }
@@ -923,8 +919,9 @@ export function updateAttendance(actor: Actor, input: { employeeId: string; date
   const db = getMockDb();
   const employee = db.employees.find((item) => item.id === input.employeeId);
   if (!employee) return { error: "Colaborador não encontrado." };
-  if (actor.role === "COLABORADOR") return { error: "Colaborador não pode alterar presença." };
-  if (!["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(actor.role)) return { error: "Sem permissão para alterar presença." };
+  const canManageAttendance = roleHasCapability(actor.role, "ATTENDANCE_MANAGE");
+  const canJustifyAttendance = roleHasCapability(actor.role, "ATTENDANCE_JUSTIFY");
+  if (!canManageAttendance && !canJustifyAttendance) return { error: "Sem permissão para alterar presença." };
 
   const impactsAbs = shouldImpactAbs(input.status, input.absenceReason);
   const impactsCoverage = shouldImpactCoverage(input.status);
@@ -961,7 +958,7 @@ export function updateAttendance(actor: Actor, input: { employeeId: string; date
   record.impactsCoverage = impactsCoverage;
   record.registeredBy = actor.name;
   record.registeredAt = timestamp();
-  if (actor.role === "SUPERVISOR") {
+  if (canJustifyAttendance && !canManageAttendance) {
     record.justifiedBy = actor.name;
     record.justifiedAt = timestamp();
   }
@@ -1030,7 +1027,7 @@ export function getAttendanceSummary(_actor?: Actor) {
 }
 
 export function createShiftReport(actor: Actor, input: Omit<ShiftReportRecord, "id" | "submittedAt" | "supervisor"> & { supervisor?: string }) {
-  if (!["ADMIN", "GESTOR", "SUPERVISOR", "WFM"].includes(actor.role)) return { error: "Sem permissão para enviar report de turno." };
+  if (!roleHasCapability(actor.role, "PIPELINES")) return { error: "Sem permissão para enviar report de turno." };
   const db = getMockDb();
   const report: ShiftReportRecord = {
     ...input,
@@ -1062,9 +1059,7 @@ export function createShiftReport(actor: Actor, input: Omit<ShiftReportRecord, "
 
 export function listShiftReports(actor: Actor) {
   const db = getMockDb();
-  if (["ADMIN", "GESTOR", "WFM"].includes(actor.role)) return db.shiftReports;
-  if (actor.role === "SUPERVISOR") return db.shiftReports.filter((report) => report.supervisor === actor.name);
-  return [];
+  return roleHasCapability(actor.role, "PIPELINES") ? db.shiftReports : [];
 }
 
 export function getShiftReportDashboard(actor: Actor) {
@@ -1198,17 +1193,14 @@ export function createQualityFeedback(actor: Actor, input: { employeeId: string;
 
 export function listEquipment(actor: Actor) {
   const db = getMockDb();
-  if (["ADMIN", "GESTOR", "TI"].includes(actor.role)) return db.equipment;
-  if (actor.role === "COLABORADOR") return db.equipment.filter((item) => item.employeeEmail === actor.email);
-  if (actor.role === "SUPERVISOR") {
-    const teamEmails = new Set<string>(db.employees.filter((employee) => employee.supervisor === actor.name).map((employee) => findEmployeeEmailByName(employee.name)).filter(Boolean) as string[]);
-    return db.equipment.filter((item) => item.employeeEmail && teamEmails.has(item.employeeEmail));
-  }
-  return db.equipment;
+  if (roleHasCapability(actor.role, "EQUIPMENT_VIEW")) return db.equipment;
+  if (roleHasCapability(actor.role, "PERSONAL")) return db.equipment.filter((item) => item.employeeEmail === actor.email);
+  return [];
 }
 
 export function createEquipment(actor: Actor, input: { code: string; type: string; employeeId?: string; status: string; impact: string }) {
   const db = getMockDb();
+  if (!roleHasCapability(actor.role, "EQUIPMENT_MANAGE")) return { error: "Sem permissão para alterar equipamentos." };
   if (db.equipment.some((item) => item.code === input.code && !["Devolvido", "Perdido", "Bloqueado"].includes(item.status))) {
     return { error: "Código já está vinculado a um equipamento ativo." };
   }
@@ -1346,7 +1338,7 @@ export function saveAnonymousFeedback(actor: Actor, input: { category: string; m
 }
 
 export function listAudit(actor: Actor) {
-  if (!["ADMIN", "GESTOR"].includes(actor.role)) return [];
+  if (!roleHasCapability(actor.role, "AUDIT_LOGS")) return [];
   return getMockDb().audit;
 }
 
@@ -1883,7 +1875,7 @@ function canSeeRequest(actor: Actor, request: RequestRecord) {
   if (actor.role === "WFM") return request.area === "WFM" || /(escala|folga|ponto|presença)/i.test(request.type);
   if (actor.role === "TI") return request.area === "TI" || /(equipamento|notebook|computador|acesso|suporte)/i.test(request.type);
   if (actor.role === "QUALIDADE") return request.area === "Qualidade" || /qualidade/i.test(request.type);
-  if (actor.role === "RH") return request.area === "RH" || /(rh|clima|anonimo|anônimo|cadastral)/i.test(request.type);
+  if (["RH", "FINANCEIRO"].includes(actor.role)) return request.area === "RH" || /(rh|clima|anonimo|anônimo|cadastral)/i.test(request.type);
   return false;
 }
 

@@ -9,8 +9,9 @@ import {
   submitEmployeeRegistration as submitMockRegistration
 } from "@/lib/mock-db";
 import { mapPrismaError } from "@/lib/api-errors";
+import { rolesWithCapability } from "@/lib/access-control";
 import { normalizeJobTitle } from "@/lib/job-title-normalization";
-import { canApproveRegistration, normalizeRole } from "@/lib/permissions";
+import { canApproveRegistration, canManageRoles, normalizeRole } from "@/lib/permissions";
 import { auditPermissionDenied } from "@/lib/permission-audit";
 import { normalizePixKeyType, validatePixKey } from "@/lib/pix-key";
 import { prisma } from "@/lib/prisma";
@@ -22,8 +23,6 @@ const internalDefaultTeamName = "Time Inicial";
 const internalDefaultScheduleType = "Não informado";
 const pcdDisabilityTypeOptions = ["Física", "Auditiva", "Visual", "Intelectual", "Psicossocial", "Múltipla", "Neurodivergente", "Outra", "Prefiro não informar"] as const;
 const validPcdDisabilityTypes = new Set<string>(pcdDisabilityTypeOptions);
-const registrationDeleteAdminEmails = new Set(["pedro.stigliani88@gmail.com"]);
-
 export type RegistrationReviewInput = {
   id: string;
   action: "approve" | "reject" | "request_adjustment";
@@ -289,7 +288,7 @@ export async function submitOperationalRegistration(input: RegistrationInput) {
         });
 
       const reviewers = await tx.user.findMany({
-        where: { status: "ACTIVE", role: { name: { in: ["ADMIN", "GESTOR", "RH", "WFM"] } } }
+        where: { status: "ACTIVE", role: { name: { in: rolesWithCapability("REGISTRATION_APPROVE") } } }
       });
       for (const reviewer of reviewers) {
         await tx.notification.create({
@@ -812,7 +811,7 @@ export async function listOperationalRegistrations(actor: Actor, query: Registra
       const mock = allowDemoDataFallback ? listMockRegistrations(actor) : [];
       return { data: mock, total: mock.length, page: 1, limit, totalPages: 1, summary: summarizeRegistrations(mock) };
     }
-    if (!["ADMIN", "GESTOR", "RH", "WFM"].includes(normalizeRole(actor.role))) {
+    if (!canApproveRegistration({ role: actor.role, status: user.status })) {
       return { data: [], total: 0, page: 1, limit, totalPages: 1, summary: summarizeRegistrations([]) };
     }
 
@@ -1088,17 +1087,14 @@ export async function deleteOperationalRegistration(actor: Actor, id: string) {
   try {
     const reviewer = await prisma.user.findUnique({
       where: { email: actor.email },
-      include: { role: true, permissions: { include: { permission: true } } }
+      include: { role: true }
     });
     if (!reviewer) return { error: "Usuário não autenticado." };
 
     const role = normalizeRole(actor.role);
-    const isRegistrationDeleteAdmin = role === "ADMIN" || registrationDeleteAdminEmails.has(String(actor.email ?? "").trim().toLowerCase());
-    const hasDeletePermission = reviewer.permissions.some((item) =>
-      item.granted && ["CADASTRO_EXCLUIR", "cadastros.excluir", "employee_registration.delete"].includes(item.permission.key)
-    );
-    if (!isRegistrationDeleteAdmin && !hasDeletePermission) {
-      const reason = role === "SUPERVISOR" ? "Supervisor não possui permissão para aprovar ou editar cadastros." : "Apenas Admin ou usuários com permissão específica podem excluir cadastros.";
+    const isRegistrationDeleteAdmin = canManageRoles({ role: actor.role, status: reviewer.status });
+    if (!isRegistrationDeleteAdmin) {
+      const reason = role === "SUPERVISOR" ? "Supervisor não possui permissão para aprovar ou editar cadastros." : "Apenas Admin pode excluir cadastros.";
       await auditPermissionDenied(actor, { action: "REGISTRATION_DELETE", entity: "EmployeeRegistrationRequest", reason, entityId: id });
       return { error: reason };
     }
@@ -1107,8 +1103,6 @@ export async function deleteOperationalRegistration(actor: Actor, id: string) {
     if (!existing) return { error: "Cadastro não encontrado." };
 
     const isLinked = Boolean(existing.createdUserId || existing.createdEmployeeProfileId || ["APROVADO", "ATIVO"].includes(existing.status));
-    if (isLinked && !isRegistrationDeleteAdmin) return { error: "Cadastros aprovados só podem ser inativados por Admin." };
-
     const now = new Date();
     const updated = await prisma.$transaction(async (tx) => {
       if (existing.createdUserId) {
@@ -1156,7 +1150,7 @@ async function canImportEmployees(actor: Actor) {
   const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
   if (!user) return { error: "Usuário não autenticado." };
   const actorRole = normalizeRole(actor.role);
-  if (!canApproveRegistration({ role: actor.role, status: user.status })) {
+  if (!canManageRoles({ role: actor.role, status: user.status })) {
     const reason = actorRole === "SUPERVISOR" ? "Supervisor não possui permissão para aprovar ou editar cadastros." : "Sem permissão para importar colaboradores.";
     await auditPermissionDenied(actor, { action: "EMPLOYEE_IMPORT", entity: "EmployeeRegistrationRequest", reason });
     return { error: reason };

@@ -2,18 +2,18 @@ import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 import type { Actor } from "@/lib/mock-db";
-import { canManageEquipment, canViewEmployeeSensitiveData, canViewShiftReport, normalizeRole } from "@/lib/permissions";
+import { roleHasCapability } from "@/lib/access-control";
 
 export const storageBuckets = {
-  "schedule-imports": { maxBytes: 10 * 1024 * 1024, extensions: [".xlsx", ".csv"], roles: ["ADMIN", "GESTOR", "WFM"] },
-  "request-attachments": { maxBytes: 10 * 1024 * 1024, extensions: [".pdf", ".png", ".jpg", ".jpeg", ".docx", ".xlsx", ".csv"], roles: ["ADMIN", "GESTOR", "SUPERVISOR", "COLABORADOR", "WFM", "RH", "TI", "QUALIDADE"] },
-  "quality-materials": { maxBytes: 30 * 1024 * 1024, extensions: [".pdf", ".png", ".jpg", ".jpeg", ".docx"], roles: ["ADMIN", "GESTOR", "QUALIDADE"] },
-  "equipment-evidence": { maxBytes: 10 * 1024 * 1024, extensions: [".pdf", ".png", ".jpg", ".jpeg"], roles: ["ADMIN", "GESTOR", "TI"] },
-  "employee-documents": { maxBytes: 5 * 1024 * 1024, extensions: [".pdf", ".png", ".jpg", ".jpeg", ".docx"], roles: ["ADMIN", "GESTOR", "RH"] },
-  "absence-evidence": { maxBytes: 5 * 1024 * 1024, extensions: [".pdf", ".png", ".jpg", ".jpeg"], roles: ["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "RH"] },
-  "shift-report-attachments": { maxBytes: 10 * 1024 * 1024, extensions: [".pdf", ".png", ".jpg", ".jpeg", ".docx", ".xlsx", ".csv"], roles: ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"] },
-  "billing-invoices": { maxBytes: 10 * 1024 * 1024, extensions: [".pdf", ".xml", ".png", ".jpg", ".jpeg"], roles: ["ADMIN", "GESTOR", "SUPERVISOR", "COLABORADOR", "AGENTE", "WFM"] },
-  "mural-media": { maxBytes: 5 * 1024 * 1024, extensions: [".png", ".jpg", ".jpeg", ".webp"], roles: ["ADMIN"] }
+  "schedule-imports": { maxBytes: 10 * 1024 * 1024, extensions: [".xlsx", ".csv"] },
+  "request-attachments": { maxBytes: 10 * 1024 * 1024, extensions: [".pdf", ".png", ".jpg", ".jpeg", ".docx", ".xlsx", ".csv"] },
+  "quality-materials": { maxBytes: 30 * 1024 * 1024, extensions: [".pdf", ".png", ".jpg", ".jpeg", ".docx"] },
+  "equipment-evidence": { maxBytes: 10 * 1024 * 1024, extensions: [".pdf", ".png", ".jpg", ".jpeg"] },
+  "employee-documents": { maxBytes: 5 * 1024 * 1024, extensions: [".pdf", ".png", ".jpg", ".jpeg", ".docx"] },
+  "absence-evidence": { maxBytes: 5 * 1024 * 1024, extensions: [".pdf", ".png", ".jpg", ".jpeg"] },
+  "shift-report-attachments": { maxBytes: 10 * 1024 * 1024, extensions: [".pdf", ".png", ".jpg", ".jpeg", ".docx", ".xlsx", ".csv"] },
+  "billing-invoices": { maxBytes: 10 * 1024 * 1024, extensions: [".pdf", ".xml", ".png", ".jpg", ".jpeg"] },
+  "mural-media": { maxBytes: 5 * 1024 * 1024, extensions: [".png", ".jpg", ".jpeg", ".webp"] }
 } as const;
 
 export type StorageBucket = keyof typeof storageBuckets;
@@ -30,8 +30,7 @@ export function validateStorageUpload(actor: Actor, bucket: string, file: File) 
   const config = storageBuckets[bucket as StorageBucket];
   if (!config) return { error: "Bucket não configurado para a Central Operacional." };
 
-  const role = normalizeRole(actor.role);
-  if (!(config.roles as readonly string[]).includes(role)) return { error: "Você não tem permissão para enviar arquivos nesta categoria." };
+  if (!canUploadToBucket(actor, bucket as StorageBucket)) return { error: "Você não tem permissão para enviar arquivos nesta categoria." };
 
   const extension = getExtension(file.name);
   if (!config.extensions.includes(extension as never)) {
@@ -42,19 +41,30 @@ export function validateStorageUpload(actor: Actor, bucket: string, file: File) 
     return { error: `Arquivo acima do limite de ${formatBytes(config.maxBytes)} para esta categoria.` };
   }
 
-  if (bucket === "employee-documents" && !canViewEmployeeSensitiveData(actor)) {
-    return { error: "Documentos cadastrais são restritos a RH, Gestão e Admin." };
-  }
-
-  if (bucket === "equipment-evidence" && !canManageEquipment(actor)) {
-    return { error: "Evidências de equipamento são restritas a Logística/TI e gestão." };
-  }
-
-  if (bucket === "shift-report-attachments" && !canViewShiftReport(actor)) {
-    return { error: "Anexos de report de turno são restritos aos perfis operacionais permitidos." };
-  }
-
   return { ok: true as const };
+}
+
+function canUploadToBucket(actor: Actor, bucket: StorageBucket) {
+  switch (bucket) {
+    case "schedule-imports":
+      return roleHasCapability(actor.role, "SCHEDULE_EDIT");
+    case "request-attachments":
+      return roleHasCapability(actor.role, "PERSONAL") || roleHasCapability(actor.role, "PIPELINES");
+    case "quality-materials":
+      return roleHasCapability(actor.role, "QUALITY_MATERIALS_MANAGE");
+    case "equipment-evidence":
+      return roleHasCapability(actor.role, "EQUIPMENT_MANAGE");
+    case "employee-documents":
+      return roleHasCapability(actor.role, "EMPLOYEE_SENSITIVE") && roleHasCapability(actor.role, "EMPLOYEE_EDIT");
+    case "absence-evidence":
+      return roleHasCapability(actor.role, "ATTENDANCE_MANAGE") || roleHasCapability(actor.role, "ATTENDANCE_JUSTIFY");
+    case "shift-report-attachments":
+      return roleHasCapability(actor.role, "PIPELINES");
+    case "billing-invoices":
+      return roleHasCapability(actor.role, "PERSONAL") || roleHasCapability(actor.role, "BILLING_VIEW");
+    case "mural-media":
+      return roleHasCapability(actor.role, "SETTINGS");
+  }
 }
 
 export async function uploadPrivateObject(bucket: StorageBucket, path: string, file: File) {

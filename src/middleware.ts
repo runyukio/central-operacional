@@ -26,7 +26,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL(getDefaultPathForRole(role), request.url));
   }
 
-  if ((pathname === "/financeiro" || pathname.startsWith("/financeiro/") || pathname === "/api/financeiro" || pathname.startsWith("/api/financeiro/")) && !canAccessFinanceiro({ id: token.sub, email: token.email, name: token.name })) {
+  if ((pathname === "/financeiro" || pathname.startsWith("/financeiro/") || pathname === "/api/financeiro" || pathname.startsWith("/api/financeiro/")) && !canAccessFinanceiro({ id: token.sub, email: token.email, name: token.name, role })) {
     if (pathname.startsWith("/api/")) {
       return NextResponse.json({ success: false, error: "Você não tem permissão para acessar Financeiro.", message: "Você não tem permissão para acessar Financeiro." }, { status: 403 });
     }
@@ -37,9 +37,6 @@ export async function middleware(request: NextRequest) {
     role,
     email: typeof token.email === "string" ? token.email : null,
     name: typeof token.name === "string" ? token.name : null,
-    roleTitle: typeof token.roleTitle === "string" ? token.roleTitle : null,
-    jobTitle: typeof token.jobTitle === "string" ? token.jobTitle : null,
-    skill: typeof token.skill === "string" ? token.skill : null,
     status: "ACTIVE"
   };
 

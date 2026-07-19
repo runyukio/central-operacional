@@ -3,7 +3,7 @@ import { AuditAction, Prisma, UserStatus } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
 import { createPermissionError } from "@/lib/api-errors";
-import { canAccessWorkSessionMonitoring, canExportWorkSessionMonitoring, normalizeRole } from "@/lib/permissions";
+import { canAccessWorkSessionMonitoring, canExportWorkSessionMonitoring } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
@@ -321,10 +321,7 @@ export async function getWorkSessionEvents(actor: Actor, query: WorkSessionQuery
   if (!query.employeeId) return { success: false, error: "Informe o colaborador.", message: "Informe o colaborador.", status: 400 };
 
   const date = parseDate(query.date) ?? todayUtc();
-  const employee = await prisma.employeeProfile.findFirst({
-    where: { id: query.employeeId, ...visibleEmployeeGuard(user) },
-    include: { lob: true, supervisor: true }
-  });
+  const [employee] = await listVisibleEmployees(user, { employeeId: query.employeeId });
   if (!employee) return { success: false, error: "Colaborador não encontrado ou fora da sua visão.", message: "Colaborador não encontrado ou fora da sua visão.", status: 404 };
   const events = await prisma.workSessionEvent.findMany({
     where: { employeeId: employee.id, eventTimestamp: { gte: date, lt: addDays(date, 1) } },
@@ -486,8 +483,7 @@ async function listVisibleEmployees(user: AuthenticatedUser, query: WorkSessionQ
   const where: Prisma.EmployeeProfileWhereInput = {
     deletedAt: null,
     userId: { not: null },
-    user: { status: UserStatus.ACTIVE, deletedAt: null },
-    ...visibleEmployeeGuard(user)
+    user: { status: UserStatus.ACTIVE, deletedAt: null }
   };
   if (query.lob && query.lob !== "Todos") where.lob = { name: { equals: query.lob, mode: "insensitive" } };
   if (query.supervisor && query.supervisor !== "Todos") where.supervisorId = query.supervisor === "SEM_SUPERVISOR" ? null : query.supervisor;
@@ -510,20 +506,12 @@ async function listVisibleEmployees(user: AuthenticatedUser, query: WorkSessionQ
   });
 }
 
-function visibleEmployeeGuard(user: AuthenticatedUser): Prisma.EmployeeProfileWhereInput {
-  if (normalizeRole(user.role.name) === "SUPERVISOR") {
-    return user.employeeProfile?.id ? { supervisorId: user.employeeProfile.id } : { id: "__none__" };
-  }
-  return {};
-}
-
-async function workSessionFilterOptions(user: AuthenticatedUser) {
+async function workSessionFilterOptions(_user: AuthenticatedUser) {
   const employees = await prisma.employeeProfile.findMany({
     where: {
       deletedAt: null,
       userId: { not: null },
-      user: { status: UserStatus.ACTIVE, deletedAt: null },
-      ...visibleEmployeeGuard(user)
+      user: { status: UserStatus.ACTIVE, deletedAt: null }
     },
     include: { lob: true, supervisor: true },
     orderBy: { fullName: "asc" }

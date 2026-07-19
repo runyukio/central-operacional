@@ -5,7 +5,7 @@ import { createNotFoundError, createPermissionError, createServerError, type Api
 import { DEFAULT_BILLING_REFERENCE_MONTH, getEmployeeBillingPreview } from "@/lib/billing-service";
 import { getDefaultDatePeriod } from "@/lib/default-date-range";
 import { getPerformanceDashboard } from "@/lib/performance-service";
-import { canAccessPerformanceWfh, normalizeRole } from "@/lib/permissions";
+import { canAccessEmployeeMap, canAccessPerformanceWfh, canViewEmployeeSensitiveData, normalizeRole } from "@/lib/permissions";
 import { logPerformanceMetric } from "@/lib/performance-logger";
 import { prisma } from "@/lib/prisma";
 import { cleanShiftName } from "@/lib/shift-display";
@@ -21,8 +21,6 @@ const profileEmployeeInclude = {
 type ProfileUser = Prisma.UserGetPayload<{ include: { role: true; employeeProfile: true } }>;
 type ProfileEmployee = Prisma.EmployeeProfileGetPayload<{ include: typeof profileEmployeeInclude }>;
 
-const thirdPartyProfileRoles = new Set(["ADMIN", "GESTOR", "WFM", "RH", "COORDENADOR", "GERENTE"]);
-const diversityRoles = new Set(["ADMIN", "GESTOR", "RH", "WFM"]);
 const scheduledStatuses = new Set<ScheduleStatus>(["ESCALADO", "PRESENTE", "FALTA", "FALTA_JUSTIFICADA", "FALTA_INJUSTIFICADA", "ATRASO", "SAIDA_ANTECIPADA", "TROCA_APROVADA", "VENDA_FOLGA_APROVADA", "FOLGA_APROVADA"]);
 const presentStatuses = new Set<ScheduleStatus>(["PRESENTE", "ATRASO", "SAIDA_ANTECIPADA"]);
 const absenceStatuses = new Set<ScheduleStatus>(["FALTA", "FALTA_JUSTIFICADA", "FALTA_INJUSTIFICADA"]);
@@ -33,7 +31,6 @@ export async function searchEmployeeProfiles(actor: Actor, query: string, limit 
   const q = query.trim();
   if (q.length < 2) return { data: [] };
 
-  const role = normalizeRole(user.role.name);
   const canSearchAll = canViewThirdPartyProfiles(user);
   if (!canSearchAll && !user.employeeProfile) return { data: [] };
 
@@ -110,7 +107,7 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
     const period = currentMonthPeriod();
     const viewerRole = normalizeRole(viewer.role.name);
     const isOwnProfile = viewer.employeeProfile?.id === employee.id;
-    const canViewDiversityData = isOwnProfile || diversityRoles.has(viewerRole);
+    const canViewDiversityData = isOwnProfile || canViewEmployeeSensitiveData({ role: viewer.role.name, status: viewer.status });
     const [schedule, workHours, requests, equipments, mood, performance, billing, anonymousFeedbacks] = await Promise.all([
       profileSection("schedule", employee.id, buildScheduleSummary(employee.id, period)),
       profileSection("work_hours", employee.id, buildWorkHoursSummary(employee.id, period)),
@@ -130,7 +127,7 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
           role: viewerRole,
           isOwnProfile,
           canViewDiversityData,
-          canViewSensitiveData: canViewDiversityData && viewerRole !== "SUPERVISOR"
+          canViewSensitiveData: canViewDiversityData
         },
         employee: mapProfileEmployee(employee, canViewDiversityData),
         schedule,
@@ -179,7 +176,7 @@ function canViewProfile(viewer: ProfileUser, employee: ProfileEmployee) {
 }
 
 function canViewThirdPartyProfiles(viewer: ProfileUser) {
-  return viewer.status === "ACTIVE" && thirdPartyProfileRoles.has(normalizeRole(viewer.role.name));
+  return canAccessEmployeeMap({ role: viewer.role.name, status: viewer.status });
 }
 
 function mapProfileEmployee(employee: ProfileEmployee, canViewDiversityData: boolean) {

@@ -7,6 +7,7 @@ import {
   type WorkHourRecordStatus
 } from "@prisma/client";
 
+import { rolesWithCapability } from "@/lib/access-control";
 import { createPermissionError, createValidationError, mapPrismaError } from "@/lib/api-errors";
 import { hasExcelValue, normalizeExcelDate } from "@/lib/excel-normalization";
 import type { Actor } from "@/lib/mock-db";
@@ -16,6 +17,7 @@ import {
   canEditWorkHours,
   canImportWorkHours,
   canRequestWorkHourAdjustment,
+  canViewWorkHours,
   normalizeRole
 } from "@/lib/permissions";
 import { auditPermissionDenied } from "@/lib/permission-audit";
@@ -35,11 +37,7 @@ import {
   workHoursBlockedReasonForSchedule
 } from "@/lib/work-hours-rules";
 
-const uploadRoles = ["ADMIN", "GESTOR", "WFM"];
-const approvalRoles = ["ADMIN", "GESTOR", "WFM"];
-const manualEditRoles = ["ADMIN", "GESTOR", "WFM"];
-const viewRoles = ["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "COLABORADOR"];
-const requestAdjustmentRoles = ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"];
+const approvalRoles = rolesWithCapability("WORK_HOURS_EDIT");
 const toleranceMinutes = WORK_HOUR_TOLERANCE_MINUTES;
 const workHourExportLimit = 10000;
 const pendingWorkHourAdjustmentStatuses: WorkHourAdjustmentStatus[] = ["ABERTO", "EM_ANALISE"];
@@ -180,7 +178,7 @@ export async function listOperationalWorkHours(actor: Actor, query: WorkHourQuer
     const user = await getUser(actor);
     if (!user) return { error: "Usuário não encontrado ou inativo." };
     const role = normalizeRole(user.role.name);
-    if (!viewRoles.includes(role) && query.scope !== "mine") {
+    if (!canViewWorkHours({ role: user.role.name, status: user.status }) && query.scope !== "mine") {
       return createPermissionError("Você não tem permissão para visualizar horas operacionais.");
     }
 
@@ -811,7 +809,7 @@ export async function deleteWorkHourRecord(actor: Actor, input: DeleteWorkHourIn
 
 export async function exportOperationalWorkHoursXlsxData(actor: Actor, query: WorkHourQuery = {}) {
   const user = await getUser(actor);
-  if (!user || !["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(normalizeRole(user.role.name))) return createPermissionError("Você não tem permissão para exportar horas.");
+  if (!user || !canViewWorkHours({ role: user.role.name, status: user.status })) return createPermissionError("Você não tem permissão para exportar horas.");
 
   const period = resolvePeriod(query);
   const result = await listOperationalWorkHours(actor, { ...query, page: 1, limit: workHourExportLimit });
@@ -1297,8 +1295,7 @@ function formatWorkHourRecord(record: any, viewer?: WorkHourRecordViewer) {
 
 function canSeeWorkHourAdjustmentRejectionReason(viewer: WorkHourRecordViewer | undefined, adjustment: any) {
   if (!viewer || !adjustment?.rejectionReason) return false;
-  const role = normalizeRole(viewer.roleName);
-  if (approvalRoles.includes(role)) return true;
+  if (canApproveWorkHourAdjustment({ role: viewer.roleName, status: "ACTIVE" })) return true;
   if (adjustment.requestedById && adjustment.requestedById === viewer.id) return true;
   return false;
 }

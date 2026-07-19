@@ -1,7 +1,7 @@
 import { EquipmentStatus, Prisma } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
-import { normalizeRole } from "@/lib/permissions";
+import { canAccessEquipment, canManageEquipment } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
 const equipmentStatusLabels: Record<EquipmentStatus, string> = {
@@ -112,11 +112,11 @@ async function getActorUser(actor: Actor) {
 }
 
 function canViewEquipmentRole(role: string) {
-  return ["ADMIN", "GESTOR", "WFM", "TI", "SUPERVISOR"].includes(normalizeRole(role));
+  return canAccessEquipment({ role, status: "ACTIVE" });
 }
 
 function canManageEquipmentRole(role: string) {
-  return ["ADMIN", "TI"].includes(normalizeRole(role));
+  return canManageEquipment({ role, status: "ACTIVE" });
 }
 
 function normalizeStatus(value?: string | null) {
@@ -268,8 +268,6 @@ export async function listEquipment(actor: Actor, query: EquipmentQuery = {}) {
     });
   }
   if (deliveredFrom || deliveredTo) filters.push({ deliveredAt: { ...(deliveredFrom ? { gte: deliveredFrom } : {}), ...(deliveredTo ? { lte: deliveredTo } : {}) } });
-  if (normalizeRole(user.role.name) === "SUPERVISOR" && user.employeeProfile) filters.push({ employee: { supervisorId: user.employeeProfile.id } });
-
   const page = Math.max(1, Number(query.page) || 1);
   const limit = Math.min(100, Math.max(25, Number(query.limit) || 50));
   const includeAllPages = query.includeAllPages === true;

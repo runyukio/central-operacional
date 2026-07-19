@@ -64,7 +64,20 @@ const settingsTeamInclude = {
 
 type SettingsEmployee = Prisma.EmployeeProfileGetPayload<{ select: typeof settingsEmployeeSelect }>;
 
-const essentialRoles = ["ADMIN", "GESTOR", "SUPERVISOR", "COLABORADOR", "WFM", "QUALIDADE", "RH", "TI"];
+const essentialRoles = [
+  "ADMIN",
+  "GESTOR",
+  "SUPERVISOR",
+  "COLABORADOR",
+  "WFM",
+  "QUALIDADE",
+  "RH",
+  "FINANCEIRO",
+  "TI",
+  "RTA",
+  "POC",
+  "CLIENT"
+];
 const essentialDayOffTypes = ["Troca de Folga", "Venda de Folga", "Solicitação de Dia de Folga", "Troca de Turno"];
 const permissionSeeds = [
   ["can_manage_users", "Gerenciar usuários"],
@@ -330,7 +343,7 @@ export async function updateSystemSettings(actor: Actor, action: SettingsAction)
         case "role":
           return saveRole(tx, admin.id, action);
         case "permission":
-          return savePermission(tx, admin.id, action);
+          return { error: "A matriz de permissões é definida centralmente por role." };
         case "lob":
           return saveLob(tx, admin.id, action);
         case "team":

@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
-import { normalizeRole } from "@/lib/permissions";
+import { canViewEmployeeSensitiveData } from "@/lib/permissions";
 import { maskPixKey, normalizePixKeyType, validatePixKey } from "@/lib/pix-key";
 import { prisma } from "@/lib/prisma";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
@@ -404,8 +404,7 @@ function requireLinkedEmployee(user: AuthenticatedUser) {
 }
 
 function requireTrackingPermission(user: AuthenticatedUser) {
-  const role = normalizeRole(user.role.name);
-  if (!["ADMIN", "RH", "WFM"].includes(role)) {
+  if (!canViewEmployeeSensitiveData({ role: user.role.name, status: user.status })) {
     throw new AdditionalRegistrationDataError("Você não tem permissão para acompanhar Dados Cadastrais Adicionais.", 403);
   }
 }

@@ -651,7 +651,12 @@ function roleLabel(role: string) {
     WFM: "WFM",
     QUALIDADE: "Qualidade",
     RH: "RH",
+    FINANCEIRO: "Financeiro",
     TI: "Logística / TI",
+    RTA: "Real Time Analyst",
+    POC: "POC",
+    COORDENADOR: "Gestão",
+    GERENTE: "Gestão",
     CLIENT: "Cliente"
   };
   return labels[role] ?? role;

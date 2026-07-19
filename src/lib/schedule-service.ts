@@ -1,11 +1,12 @@
 import { randomUUID } from "crypto";
 import { AttendanceStatus, Prisma, ScheduleStatus, type WorkHourRecordStatus } from "@prisma/client";
 
+import { rolesWithCapability } from "@/lib/access-control";
 import type { Actor } from "@/lib/mock-db";
 import { commitScheduleImport as commitMockScheduleImport, getAttendanceSummary as getMockAttendanceSummary, getSchedulesForActor as getMockSchedulesForActor, listAttendanceRecords as listMockAttendanceRecords, previewScheduleRows as previewMockScheduleRows, recordErrorLog, updateAttendance as updateMockAttendance } from "@/lib/mock-db";
 import { hasExcelValue, normalizeExcelDate, normalizeExcelTime } from "@/lib/excel-normalization";
 import { prisma } from "@/lib/prisma";
-import { canEditSchedule, canImportCronogramas, normalizeRole } from "@/lib/permissions";
+import { canEditSchedule, canImportCronogramas, canViewSchedules, normalizeRole } from "@/lib/permissions";
 import { auditPermissionDenied } from "@/lib/permission-audit";
 import { logPerformanceMetric } from "@/lib/performance-logger";
 import { cleanShiftName, isBlockedShiftName, isSelectableShiftName, shiftCategoryName, shiftLookupKey } from "@/lib/shift-display";
@@ -1293,7 +1294,7 @@ async function notifySupervisorJustificationReviewers(input: { actorUserId: stri
       status: "ACTIVE",
       deletedAt: null,
       id: { not: input.actorUserId },
-      role: { name: { in: ["ADMIN", "WFM", "GESTOR"] } }
+      role: { name: { in: rolesWithCapability("SCHEDULE_EDIT") } }
     },
     select: { id: true }
   });
@@ -1585,7 +1586,7 @@ export async function exportOperationalSchedulesXlsxData(actor: Actor, query: Sc
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
     if (!user) return { error: "Usuário ativo não encontrado para exportar cronograma." };
     const role = normalizeRole(actor.role);
-    if (!["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "RH"].includes(role)) return { error: "Sem permissão para baixar Cronogramas Consolidados." };
+    if (!canViewSchedules({ role, status: user.status })) return { error: "Sem permissão para baixar Cronogramas Consolidados." };
 
     const period = resolvePeriod(query);
     const search = query.collaborator?.trim();
@@ -1964,7 +1965,7 @@ export async function exportJustifiedAbsencesXlsxData(actor: Actor, query: Atten
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
     if (!user) return { error: "Usuário ativo não encontrado para exportar faltas justificadas.", status: 401 };
     const role = normalizeRole(actor.role);
-    if (!["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "RH", "QUALIDADE", "TI"].includes(role)) {
+    if (!canViewSchedules({ role, status: user.status })) {
       return { error: "Você não tem permissão para exportar faltas justificadas.", status: 403 };
     }
 
@@ -2048,7 +2049,7 @@ export async function exportUnjustifiedAbsencesXlsxData(actor: Actor, query: Att
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
     if (!user) return { error: "Usuário ativo não encontrado para exportar faltas sem justificativa.", status: 401 };
     const role = normalizeRole(actor.role);
-    if (!["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "RH", "QUALIDADE", "TI"].includes(role)) {
+    if (!canViewSchedules({ role, status: user.status })) {
       return { error: "Você não tem permissão para exportar faltas sem justificativa.", status: 403 };
     }
 
@@ -2132,7 +2133,7 @@ export async function exportClassifiedUnjustifiedAbsencesXlsxData(actor: Actor, 
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
     if (!user) return { error: "Usuário ativo não encontrado para exportar faltas injustificadas.", status: 401 };
     const role = normalizeRole(actor.role);
-    if (!["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "RH", "QUALIDADE", "TI"].includes(role)) {
+    if (!canViewSchedules({ role, status: user.status })) {
       return { error: "Você não tem permissão para exportar faltas injustificadas.", status: 403 };
     }
 
@@ -2268,7 +2269,7 @@ export async function exportRecurringAbsencesXlsxData(actor: Actor, query: Atten
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
     if (!user) return { error: "Usuário ativo não encontrado para exportar Faltas Recorrentes.", status: 401 };
     const role = normalizeRole(actor.role);
-    if (!["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(role)) {
+    if (!canViewSchedules({ role, status: user.status })) {
       return { error: "Você não tem permissão para exportar Faltas Recorrentes.", status: 403 };
     }
 
@@ -2343,7 +2344,7 @@ export async function exportAttritionXlsxData(actor: Actor, query: AttendanceQue
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
     if (!user) return { error: "Usuário ativo não encontrado para exportar Attrition.", status: 401 };
     const role = normalizeRole(actor.role);
-    if (!["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(role)) {
+    if (!canViewSchedules({ role, status: user.status })) {
       return { error: "Você não tem permissão para exportar Attrition.", status: 403 };
     }
 

@@ -2,11 +2,11 @@ import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 
 import { getApiActor } from "@/lib/api-actor";
-import { normalizeRole } from "@/lib/permissions";
+import { canManageEquipment } from "@/lib/permissions";
 
 export async function GET() {
   const actor = await getApiActor();
-  if (!["ADMIN", "GESTOR", "TI"].includes(normalizeRole(actor.role))) {
+  if (!canManageEquipment(actor)) {
     return NextResponse.json({ error: "Você não tem permissão para baixar template de equipamentos." }, { status: 403 });
   }
 

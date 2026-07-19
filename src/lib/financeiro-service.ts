@@ -2,7 +2,7 @@ import { AuditAction, Prisma, type WorkHourRecordStatus } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
 import { getBillingFinanceCostSnapshot, type BillingFinanceCostSnapshotRow } from "@/lib/billing-service";
-import { canAccessFinanceiro } from "@/lib/financeiro-permissions";
+import { canAccessFinanceiro, canManageFinanceiro } from "@/lib/financeiro-permissions";
 import { currentReferenceMonth, formatReferenceMonth, normalizeReferenceMonth } from "@/lib/monthly-advance-service";
 import { prisma } from "@/lib/prisma";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
@@ -135,15 +135,14 @@ export async function getFinanceiroDashboard(actor: Actor, filters: FinanceiroFi
       analytics,
       records: records.map(mapFinanceiroRecord),
       uploads: uploads.map(mapFinanceiroUpload),
-      canManage: true,
-      canExport: true,
-      allowedEmails: ["wb_fernanda20@kuaishou.com", "runyukio@gmail.com"]
+      canManage: canManageFinanceiro(financeiroIdentity(user)),
+      canExport: true
     }
   };
 }
 
 export async function previewFinanceiroImport(actor: Actor, rawRows: Array<Record<string, unknown>>, fileName = "financeiro.xlsx") {
-  const user = await requireFinanceiroUser(actor);
+  const user = await requireFinanceiroManager(actor);
   if ("error" in user) return user;
   const normalizedRows = rawRows.map(normalizeObjectKeys);
   const seen = new Map<string, number>();
@@ -164,7 +163,7 @@ export async function previewFinanceiroImport(actor: Actor, rawRows: Array<Recor
 }
 
 export async function commitFinanceiroImport(actor: Actor, rows: FinanceiroPreviewRow[], fileName = "financeiro.xlsx") {
-  const user = await requireFinanceiroUser(actor);
+  const user = await requireFinanceiroManager(actor);
   if ("error" in user) return user;
   const validRows = rows.filter((row) => !row.errors.length && row.action !== "ignore");
   if (!validRows.length) return { error: "Nenhuma linha válida para importar Financeiro.", status: 400 };
@@ -239,7 +238,7 @@ export async function createFinanceiroAdjustment(actor: Actor, input: {
   adjustmentType?: string | null;
   description?: string | null;
 }) {
-  const user = await requireFinanceiroUser(actor);
+  const user = await requireFinanceiroManager(actor);
   if ("error" in user) return user;
   const recordId = input.recordId?.trim();
   if (!recordId) return { error: "Registro financeiro é obrigatório.", status: 400 };
@@ -310,7 +309,7 @@ export async function createFinanceiroAdjustment(actor: Actor, input: {
 }
 
 export async function saveFinanceiroRecord(actor: Actor, input: Record<string, unknown>) {
-  const user = await requireFinanceiroUser(actor);
+  const user = await requireFinanceiroManager(actor);
   if ("error" in user) return user;
   const id = text(input.id);
   const invoiceCycleMonth = normalizeFinanceiroMonth(input.invoiceCycleMonth);
@@ -399,7 +398,7 @@ export async function saveFinanceiroRecord(actor: Actor, input: Record<string, u
 }
 
 export async function saveFinanceiroParameter(actor: Actor, input: Record<string, unknown>) {
-  const user = await requireFinanceiroUser(actor);
+  const user = await requireFinanceiroManager(actor);
   if ("error" in user) return user;
   const invoiceCycleMonth = normalizeFinanceiroMonth(input.invoiceCycleMonth);
   const rawCostCenter = text(input.costCenter);
@@ -1340,14 +1339,30 @@ function financeFieldDisplay(record: { [key: string]: unknown }, fieldName: stri
 
 async function findFinanceiroUser(actor: Actor) {
   if (!actor.email) return null;
-  return prisma.user.findUnique({ where: { email: actor.email } });
+  return prisma.user.findUnique({
+    where: { email: actor.email },
+    include: { role: { select: { name: true } } }
+  });
 }
 
 async function requireFinanceiroUser(actor: Actor): Promise<FinanceiroUser | { error: string; status: number }> {
   const user = await findFinanceiroUser(actor);
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
-  if (!canAccessFinanceiro(user)) return { error: "Você não tem permissão para acessar Financeiro.", status: 403 };
+  if (!canAccessFinanceiro(financeiroIdentity(user))) return { error: "Você não tem permissão para acessar Financeiro.", status: 403 };
   return user;
+}
+
+async function requireFinanceiroManager(actor: Actor): Promise<FinanceiroUser | { error: string; status: number }> {
+  const user = await requireFinanceiroUser(actor);
+  if ("error" in user) return user;
+  if (!canManageFinanceiro(financeiroIdentity(user))) {
+    return { error: "Você possui acesso somente para visualização do Financeiro.", status: 403 };
+  }
+  return user;
+}
+
+function financeiroIdentity(user: FinanceiroUser) {
+  return { id: user.id, email: user.email, name: user.name, role: user.role.name };
 }
 
 async function auditFinanceiro(actorId: string, entity: string, entityId: string, reason: string, after: unknown, action: AuditAction) {

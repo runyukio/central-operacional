@@ -92,6 +92,21 @@ import {
 } from "@/lib/demo-data";
 import { parseWbLoginBatch, serializeWbLogins } from "@/lib/batch-wb-filter";
 import { getDefaultDateRange } from "@/lib/default-date-range";
+import {
+  canAccessPerformance,
+  canApproveWorkHourAdjustment,
+  canEditAdvanceRecords,
+  canEditEmployeeData,
+  canEditEmployeeSensitiveData,
+  canEditSchedule,
+  canEditWorkHours,
+  canImportWorkHours,
+  canManageRoles,
+  canRequestWorkHourAdjustment,
+  canViewWorkHours,
+  canViewSchedules,
+  normalizeRole
+} from "@/lib/permissions";
 import { cn, formatCurrency, initials } from "@/lib/utils";
 
 const Bar = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartBar), { ssr: false });
@@ -6756,10 +6771,9 @@ export function SchedulesPage() {
     ]).entries()
   ).map(([value, label]) => ({ value, label }));
   const uniqueShifts = ["Todos", "Sem turno", ...cleanShiftOptions(configuredShiftCategories, true)];
-  const normalizedScheduleActorRole = scheduleActorRole === "MANAGEMENT" ? "GESTOR" : scheduleActorRole === "HR" ? "RH" : scheduleActorRole;
-  const canManageSchedules = ["ADMIN", "GESTOR", "WFM"].includes(normalizedScheduleActorRole);
-  const canExportSchedules = ["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "RH"].includes(normalizedScheduleActorRole);
-  const isScheduleSupervisor = normalizedScheduleActorRole === "SUPERVISOR";
+  const canManageSchedules = canEditSchedule({ role: scheduleActorRole });
+  const canExportSchedules = canViewSchedules({ role: scheduleActorRole });
+  const isScheduleSupervisor = normalizeRole(scheduleActorRole) === "SUPERVISOR";
   const selectedScheduleEmployee = employeeOptions.find((employee) => employee.id === scheduleEditForm.employeeId);
   const selectedCellHasSchedule = Boolean(scheduleEditForm.scheduleId);
   const selectedScheduleWorkHoursGate = {
@@ -6773,7 +6787,7 @@ export function SchedulesPage() {
     ? workHoursBlockedReasonForSchedule(selectedScheduleWorkHoursGate)
     : "Não é possível lançar horas sem cronograma vinculado.";
   const plannedHoursForManualPreview = selectedScheduleAllowsWorkHours ? DEFAULT_PRODUCTIVE_HOURS : workHourForm.plannedHours;
-  const canEditOfficialWorkHours = canManageSchedules;
+  const canEditOfficialWorkHours = canEditWorkHours({ role: scheduleActorRole });
   const canEditSelectedWorkHours = canEditOfficialWorkHours && selectedScheduleAllowsWorkHours;
   const canEditSlotJustification = scheduleEditRequiresReason && (canManageSchedules || isScheduleSupervisor);
   const parsedManualActualHours = parseProductiveHoursInput(workHourForm.actualHours);
@@ -7885,11 +7899,12 @@ export function WorkHoursPage() {
   });
 
   const actorRole = session?.user?.role ?? "COLABORADOR";
-  const normalizedRole = actorRole === "MANAGEMENT" ? "GESTOR" : actorRole;
-  const canUpload = ["ADMIN", "GESTOR", "WFM"].includes(normalizedRole);
-  const canApprove = ["ADMIN", "GESTOR", "WFM"].includes(normalizedRole);
-  const canDeleteWorkHours = ["ADMIN", "GESTOR", "WFM"].includes(normalizedRole);
-  const canRequestAdjustment = ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(normalizedRole);
+  const normalizedRole = normalizeRole(actorRole);
+  const permissionUser = { role: actorRole };
+  const canUpload = canImportWorkHours(permissionUser);
+  const canApprove = canApproveWorkHourAdjustment(permissionUser);
+  const canDeleteWorkHours = canEditWorkHours(permissionUser);
+  const canRequestAdjustment = canRequestWorkHourAdjustment(permissionUser);
   const employeeWorkHourStatusOptions = ["Todos", "Ativos", "Desligados/Inativos"];
   const statusOptions = ["Todos", "OK", "Divergente", "Sem cronograma", "Ajuste solicitado", "Ajuste aprovado", "Ajuste recusado", "Importado", "Corrigido manualmente"];
   const sourceOptions = ["Todos", "MANUAL", "upload-horas"];
@@ -8122,7 +8137,7 @@ export function WorkHoursPage() {
                 {downloadingWorkHourTemplate ? "Baixando..." : "Baixar template"}
               </button>
             ) : null}
-            {["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(normalizedRole) ? (
+            {canViewWorkHours(permissionUser) ? (
               <a href={exportUrl()} className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft">
                 <FileText className="h-4 w-4" />
                 Exportar XLSX
@@ -9612,8 +9627,7 @@ export function AdvanceManagementPage() {
   const [advancePreview, setAdvancePreview] = useState<MonthlyAdvanceImportPreview | null>(null);
   const [advanceImporting, setAdvanceImporting] = useState(false);
   const [advanceEditingId, setAdvanceEditingId] = useState("");
-  const normalizedRole = String(session?.user?.role ?? "").toUpperCase();
-  const canManageMonthlyAdvance = ["ADMIN", "WFM", "GESTOR", "MANAGEMENT"].includes(normalizedRole);
+  const canManageMonthlyAdvance = canEditAdvanceRecords({ role: session?.user?.role });
   const canDeleteMonthlyAdvance = canManageMonthlyAdvance;
   const lobs = ["Todos", ...(settings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? [])];
   const supervisors = settings?.supervisors?.filter((supervisor) => supervisor.status !== "INACTIVE") ?? [];
@@ -9982,18 +9996,18 @@ export function EmployeeMapPage() {
   const employeeSkillOptions = ["SEM_SKILL", ...employeeFilterOptions.skills.filter(Boolean)];
   const employeeWaveOptions = ["SEM_WAVE", ...employeeFilterOptions.waves.filter(Boolean)];
   const hasEmployeeFilters = Boolean(query.trim()) || employeeBatchWbs.length > 0 || [lobFilter, statusFilter, supervisorFilter, roleTitleFilter, skillFilter, waveFilter, shiftFilter, contractFilter].some((values) => values.length > 0);
-  const isAdmin = session?.user?.role === "ADMIN";
+  const employeePermissionUser = { role: session?.user?.role };
+  const isAdmin = canManageRoles(employeePermissionUser);
   const isSupervisorUser = session?.user?.role === "SUPERVISOR";
-  const normalizedEmployeeMapRole = String(session?.user?.role ?? "").toUpperCase();
-  const canEditEmployeeOperational = ["ADMIN", "WFM", "RH", "HR", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
-  const canEditOperationalBindings = ["ADMIN", "WFM", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
-  const canEditPeopleData = ["ADMIN", "RH", "HR", "GESTOR", "MANAGEMENT"].includes(normalizedEmployeeMapRole);
+  const canEditEmployeeOperational = canEditEmployeeData(employeePermissionUser);
+  const canEditOperationalBindings = canEditEmployeeOperational;
+  const canEditPeopleData = canEditEmployeeSensitiveData(employeePermissionUser);
   const selectedCanEditEmployeeOperational = canEditEmployeeOperational && (selected?.canEditOperationalData ?? true);
   const selectedCanEditPeopleData = canEditPeopleData && (selected?.canEditPeopleData ?? true);
   const employeeLobOptions = employeeSettings?.lobs.filter((lob) => lob.status !== "INACTIVE") ?? [];
   const employeeShiftOptions = employeeSettings?.shifts.filter((shift) => shift.status !== "INACTIVE" && isSelectableShiftName(shift.name)) ?? [];
   const employeeRoleTitleOptions = employeeSettings?.roleTitles.filter((title) => title.status !== "INACTIVE").map((title) => title.name) ?? [];
-  const employeeRoleOptions = employeeSettings?.roles.filter((roleItem) => roleItem.status !== "INACTIVE").map((roleItem) => roleItem.name) ?? ["COLABORADOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI", "GESTOR", "ADMIN"];
+  const employeeRoleOptions = employeeSettings?.roles.filter((roleItem) => roleItem.status !== "INACTIVE").map((roleItem) => roleItem.name) ?? ["COLABORADOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "FINANCEIRO", "TI", "RTA", "POC", "GESTOR", "CLIENT", "ADMIN"];
   const contractOptions = ["CLT", "PJ", "Temporário", "Estágio", "Terceiro", "Outro"];
   const terminationTypeOptions = ["", "Voluntário", "Involuntário"];
   const ethnicityOptions = ["", "Branca", "Preta", "Parda", "Amarela", "Indígena", "Prefiro não informar"];
@@ -10164,8 +10178,8 @@ export function EmployeeMapPage() {
           fullName: selectedCanEditPeopleData ? nameDraft : undefined,
           socialName: selectedCanEditPeopleData ? socialNameDraft : undefined,
           email: selectedCanEditPeopleData ? emailDraft : undefined,
-          userStatus: isAdmin ? userStatusDraft : undefined,
-          wbLogin: isAdmin ? wbDraft : undefined,
+          userStatus: selectedCanEditPeopleData ? userStatusDraft : undefined,
+          wbLogin: selectedCanEditPeopleData ? wbDraft : undefined,
           roleTitle: roleTitleDraft,
           operationalStatus: statusDraft,
           roleName: isAdmin ? roleDraft : undefined,
@@ -10471,10 +10485,10 @@ export function EmployeeMapPage() {
                         ) : null}
                         <ProfileSection title="Identificação">
                           <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                            <FormInput label="Nome" value={nameDraft} onChange={setNameDraft} error={employeeFieldErrors.fullName} />
-                            <FormInput label="Nome social" value={socialNameDraft} onChange={setSocialNameDraft} error={employeeFieldErrors.socialName} />
-                            <FormInput label="E-mail de login" type="email" value={emailDraft} onChange={setEmailDraft} error={employeeFieldErrors.email} />
-                            <FormInput label="WB/Login" value={wbDraft} onChange={setWbDraft} error={employeeFieldErrors.wbLogin} />
+                            <FormInput disabled={!selectedCanEditPeopleData} label="Nome" value={nameDraft} onChange={setNameDraft} error={employeeFieldErrors.fullName} />
+                            <FormInput disabled={!selectedCanEditPeopleData} label="Nome social" value={socialNameDraft} onChange={setSocialNameDraft} error={employeeFieldErrors.socialName} />
+                            <FormInput disabled={!selectedCanEditPeopleData} label="E-mail de login" type="email" value={emailDraft} onChange={setEmailDraft} error={employeeFieldErrors.email} />
+                            <FormInput disabled={!selectedCanEditPeopleData} label="WB/Login" value={wbDraft} onChange={setWbDraft} error={employeeFieldErrors.wbLogin} />
                           </div>
                         </ProfileSection>
                         <ProfileSection title="Operacional">
@@ -10553,7 +10567,7 @@ export function EmployeeMapPage() {
                             ) : null}
                             {selectedCanEditPeopleData ? <FormSelect label="Tipo de desligamento" value={terminationTypeDraft} options={terminationTypeOptions} onChange={setTerminationTypeDraft} error={employeeFieldErrors.terminationType} /> : null}
                             {selectedCanEditPeopleData ? <FormInput label="Motivo do desligamento" value={terminationReasonDraft} onChange={setTerminationReasonDraft} error={employeeFieldErrors.terminationReason} /> : null}
-                            {isAdmin ? <FormSelect label="Usuário ativo/inativo" value={userStatusDraft} options={["ACTIVE", "INACTIVE", "BLOCKED"]} onChange={setUserStatusDraft} error={employeeFieldErrors.userStatus} /> : null}
+                            {selectedCanEditPeopleData ? <FormSelect label="Usuário ativo/inativo" value={userStatusDraft} options={["ACTIVE", "INACTIVE", "BLOCKED"]} onChange={setUserStatusDraft} error={employeeFieldErrors.userStatus} /> : null}
                           </div>
                         </ProfileSection>
 	                        {selectedCanEditPeopleData ? (
@@ -13096,8 +13110,8 @@ function PerformanceLegacyPage() {
   const productionRawRowsRef = useRef<Array<Record<string, unknown>>>([]);
   const sessionRole = String((session?.user as { role?: string } | undefined)?.role ?? "").toUpperCase();
   const isClientRole = sessionRole === "CLIENT";
-  const sessionCanWfh = ["ADMIN", "WFM", "SUPERVISOR", "RH", "GESTOR", "COORDENADOR", "GERENTE", "MANAGEMENT", "CLIENT"].includes(sessionRole);
-  const sessionCanFramework = ["ADMIN", "WFM", "GESTOR", "CLIENT"].includes(sessionRole);
+  const sessionCanWfh = canAccessPerformance({ role: sessionRole });
+  const sessionCanFramework = canAccessPerformance({ role: sessionRole });
   const visibleActiveTab = isClientRole && activeTab !== "framework" ? "wfh" : activeTab;
   const shouldWaitForDefaultPerformanceTab = Boolean(sessionRole && !hasRequestedPerformanceView && !defaultedTab.current);
 
@@ -18218,11 +18232,10 @@ export function SettingsPage() {
   const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [settingsMessage, setSettingsMessage] = useState("");
   const [settingsError, setSettingsError] = useState(false);
-  const adminSections = ["Usuários", "Perfis", "Permissões", "LOBs", "Times", "Supervisores", "Turnos", "Cargos/Funções", "Tipos de solicitação", "SLAs", "Regras de aprovação", "Regras de cobertura", "Regras de tokens", "Configurações gerais"];
+  const adminSections = ["Usuários", "Perfis", "LOBs", "Times", "Supervisores", "Turnos", "Cargos/Funções", "Tipos de solicitação", "SLAs", "Regras de aprovação", "Regras de cobertura", "Regras de tokens", "Configurações gerais"];
   const [activeSection, setActiveSection] = useState(adminSections[0]);
   const [userDraft, setUserDraft] = useState({ id: "", name: "", email: "", roleName: "COLABORADOR", status: "ACTIVE", employeeId: "", password: "" });
   const [roleDraft, setRoleDraft] = useState({ id: "", name: "", label: "", description: "", status: "ACTIVE" as "ACTIVE" | "INACTIVE" });
-  const [permissionDraft, setPermissionDraft] = useState({ id: "", key: "", label: "", description: "", status: "ACTIVE" as "ACTIVE" | "INACTIVE", roleName: "", granted: true });
   const [lobDraft, setLobDraft] = useState({ id: "", name: "", description: "" });
   const [teamDraft, setTeamDraft] = useState({ id: "", name: "", lobId: "", supervisorId: "", status: "ACTIVE" as "ACTIVE" | "INACTIVE" });
   const [supervisorDraft, setSupervisorDraft] = useState({ supervisorId: "", teamId: "", employeeId: "" });
@@ -18263,7 +18276,6 @@ export function SettingsPage() {
       setShiftDraft({ id: "", name: "", startsAt: "08:00", endsAt: "16:00", color: "#2563EB" });
       setRoleTitleDraft({ previousName: "", name: "", status: "ACTIVE" });
       setRequestTypeDraft({ id: "", name: "", area: "Operação", slaHours: "24", requiresApproval: true, status: "ACTIVE" });
-      setPermissionDraft({ id: "", key: "", label: "", description: "", status: "ACTIVE", roleName: "", granted: true });
       setUserDraft({ id: "", name: "", email: "", roleName: "COLABORADOR", status: "ACTIVE", employeeId: "", password: "" });
       setRuleDraft({ id: "", name: "", requestType: "", priority: "Média", hours: "24", role: "WFM", lob: "ALL", shift: "", staffRequired: "1", points: "1", status: "ACTIVE" });
       await loadSettings();
@@ -18279,7 +18291,20 @@ export function SettingsPage() {
   const activeShifts = settings?.shifts.filter((shift) => shift.status !== "INACTIVE" && isSelectableShiftName(shift.name)).length ?? 0;
   const activeTitles = settings?.roleTitles.filter((title) => title.status !== "INACTIVE").length ?? 0;
   const activeTeams = settings?.teams?.filter((team) => team.status !== "INACTIVE").length ?? 0;
-  const roleOptions = settings?.roles.filter((role) => role.status !== "INACTIVE").map((role) => role.name) ?? ["COLABORADOR", "SUPERVISOR", "WFM", "ADMIN"];
+  const roleOptions = settings?.roles.filter((role) => role.status !== "INACTIVE").map((role) => role.name) ?? [
+    "ADMIN",
+    "GESTOR",
+    "SUPERVISOR",
+    "COLABORADOR",
+    "WFM",
+    "QUALIDADE",
+    "RH",
+    "FINANCEIRO",
+    "TI",
+    "RTA",
+    "POC",
+    "CLIENT"
+  ];
   const lobOptions = settings?.lobs.filter((lob) => lob.status !== "INACTIVE") ?? [];
   const supervisorOptions = settings?.supervisors ?? [];
   const employeeOptionsForSettings = settings?.employees ?? [];
@@ -18351,7 +18376,7 @@ export function SettingsPage() {
 
   return (
     <div>
-      <PageHeader title="Configurações" description="Administre usuários, perfis, permissões, regras e parâmetros do sistema." icon={Wrench} actions={<TopActions />} />
+      <PageHeader title="Configurações" description="Administre usuários, roles, regras e parâmetros do sistema." icon={Wrench} actions={<TopActions />} />
       {settingsMessage ? (
         <div className={cn("mb-5 rounded-lg border px-4 py-3 text-sm font-bold", settingsError ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-700")}>
           {settingsMessage}
@@ -18416,25 +18441,6 @@ export function SettingsPage() {
                 role.essential ? "Sim" : "Não",
                 <StatusBadge key={`${role.id}-status`} status={role.status === "INACTIVE" ? "Inativo" : "Ativo"} />,
                 <button key={`${role.id}-edit`} onClick={() => setRoleDraft({ id: role.id, name: role.name, label: role.label, description: role.description ?? "", status: role.status ?? "ACTIVE" })} className="rounded-lg border border-border px-3 py-1 text-xs font-bold">Editar</button>
-              ])} />
-            </Panel>
-          ) : null}
-
-          {activeSection === "Permissões" ? (
-            <Panel title="Permissões">
-              <div className="mb-4 grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-                <input value={permissionDraft.key} onChange={(event) => setPermissionDraft({ ...permissionDraft, key: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Chave" />
-                <input value={permissionDraft.label} onChange={(event) => setPermissionDraft({ ...permissionDraft, label: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Label" />
-                <select value={permissionDraft.roleName} onChange={(event) => setPermissionDraft({ ...permissionDraft, roleName: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"><option value="">Sem role</option>{roleOptions.map((role) => <option key={role}>{role}</option>)}</select>
-                <select value={permissionDraft.granted ? "true" : "false"} onChange={(event) => setPermissionDraft({ ...permissionDraft, granted: event.target.value === "true" })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"><option value="true">Conceder</option><option value="false">Remover</option></select>
-                <select value={permissionDraft.status} onChange={(event) => setPermissionDraft({ ...permissionDraft, status: event.target.value as "ACTIVE" | "INACTIVE" })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"><option value="ACTIVE">Ativa</option><option value="INACTIVE">Inativa</option></select>
-                <button disabled={savingSettings} onClick={() => void saveSetting({ type: "permission", ...permissionDraft }, "Permissão salva.")} className="rounded-lg bg-blue-600 px-4 text-sm font-bold text-white disabled:opacity-60">Salvar</button>
-              </div>
-              <SimpleTable columns={["Chave", "Label", "Status", "Ações"]} rows={(settings?.permissions ?? []).map((permission) => [
-                permission.key,
-                permission.label,
-                <StatusBadge key={`${permission.id}-status`} status={permission.status === "INACTIVE" ? "Inativa" : "Ativa"} />,
-                <button key={`${permission.id}-edit`} onClick={() => setPermissionDraft({ id: permission.id, key: permission.key, label: permission.label, description: permission.description ?? "", status: permission.status, roleName: "", granted: true })} className="rounded-lg border border-border px-3 py-1 text-xs font-bold">Editar</button>
               ])} />
             </Panel>
           ) : null}

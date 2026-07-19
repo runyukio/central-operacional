@@ -1,5 +1,12 @@
 import type { AppRole } from "@/lib/demo-auth";
-import { canAccessRealTimeQueues, normalizeRole, type PermissionUser } from "@/lib/permissions";
+import { rolesWithCapability } from "@/lib/access-control";
+import {
+  canAccessPerformance,
+  canAccessRealTimeQueues,
+  canAccessStaffCoverage,
+  normalizeRole,
+  type PermissionUser
+} from "@/lib/permissions";
 import { canAccessOwnRealtimeHours, canAccessRealtimeHoursCapture } from "@/lib/realtime-hours-permissions";
 
 export type NavItem = {
@@ -14,63 +21,52 @@ export type NavSection = {
   items: NavItem[];
 };
 
-const nonClientRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "COLABORADOR", "WFM", "QUALIDADE", "RH", "TI", "COORDENADOR", "GERENTE"];
-const muralRoles: AppRole[] = [...nonClientRoles, "CLIENT"];
-const financeiroRoles: AppRole[] = [...nonClientRoles, "CLIENT"];
-const centralRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "TI", "COORDENADOR", "GERENTE"];
-const realTimeRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"];
-const realtimeHoursCaptureRoles: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "COORDENADOR", "GERENTE"];
-const leadership: AppRole[] = ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH", "COORDENADOR", "GERENTE"];
-const peopleOps: AppRole[] = ["ADMIN", "GESTOR", "RH", "WFM"];
-const performanceAllowedEmails = new Set(["leonardo_santos.souza@outlook.com"]);
-
-function canAccessPerformanceByEmail(user?: PermissionUser) {
-  return performanceAllowedEmails.has(String(user?.email ?? "").trim().toLowerCase());
-}
+const personalRoles = rolesWithCapability("PERSONAL");
 
 export const navSections: NavSection[] = [
   {
     label: "Operação",
     items: [
-      { label: "Central Operacional", href: "/central-operacional", icon: "LayoutDashboard", roles: centralRoles },
-      { label: "Real Time", href: "/real-time", icon: "MonitorCog", roles: realTimeRoles },
-      { label: "Captura de Horas", href: "/captura-horas", icon: "Clock", roles: realtimeHoursCaptureRoles },
-      { label: "Necessidade", href: "/staff-cobertura", icon: "UsersRound", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "CLIENT"] },
+      { label: "Central Operacional", href: "/central-operacional", icon: "LayoutDashboard", roles: rolesWithCapability("CENTRAL") },
+      { label: "Real Time", href: "/real-time", icon: "MonitorCog", roles: rolesWithCapability("REALTIME_QUEUES") },
+      { label: "Captura de Horas", href: "/captura-horas", icon: "Clock", roles: rolesWithCapability("CAPTURE") },
+      { label: "Necessidade", href: "/staff-cobertura", icon: "UsersRound", roles: rolesWithCapability("STAFF_COVERAGE") },
+      { label: "Performance", href: "/performance", icon: "Trophy", roles: rolesWithCapability("PERFORMANCE") }
     ]
   },
   {
     label: "Pessoas",
     items: [
-      { label: "Meu Perfil", href: "/meu-perfil", icon: "UserCircle", roles: nonClientRoles },
-      { label: "Meu Cronograma", href: "/minha-escala", icon: "CalendarDays", roles: nonClientRoles },
-      { label: "Cadastros", href: "/cadastros", icon: "UserPlus", roles: peopleOps },
-      { label: "Cronogramas", href: "/escalas", icon: "CalendarRange", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH"] },
-      { label: "Mapa de Funcionários", href: "/mapa-funcionarios", icon: "Map", roles: leadership }
+      { label: "Meu Perfil", href: "/meu-perfil", icon: "UserCircle", roles: personalRoles },
+      { label: "Meu Cronograma", href: "/minha-escala", icon: "CalendarDays", roles: personalRoles },
+      { label: "Cadastros", href: "/cadastros", icon: "UserPlus", roles: rolesWithCapability("EMPLOYEE_EDIT") },
+      { label: "Cronogramas", href: "/escalas", icon: "CalendarRange", roles: rolesWithCapability("SCHEDULE_VIEW") },
+      { label: "Mapa de Funcionários", href: "/mapa-funcionarios", icon: "Map", roles: rolesWithCapability("EMPLOYEE_MAP") }
     ]
   },
   {
     label: "Rotina",
     items: [
-      { label: "Minhas Horas", href: "/minhas-horas", icon: "Clock", roles: nonClientRoles },
-      { label: "Horas Operacionais", href: "/horas-operacionais", icon: "Clock", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM"] },
-      { label: "Esteiras", href: "/esteiras", icon: "KanbanSquare", roles: ["ADMIN", "GESTOR", "SUPERVISOR", "WFM", "RH", "TI", "QUALIDADE"] },
-      { label: "Mural", href: "/mural", icon: "Megaphone", roles: muralRoles },
-      { label: "Feedback Anônimo", href: "/feedback-anonimo", icon: "MessageCircleQuestion", roles: nonClientRoles }
+      { label: "Minhas Horas", href: "/minhas-horas", icon: "Clock", roles: personalRoles },
+      { label: "Horas Operacionais", href: "/horas-operacionais", icon: "Clock", roles: rolesWithCapability("WORK_HOURS_VIEW") },
+      { label: "Esteiras", href: "/esteiras", icon: "KanbanSquare", roles: rolesWithCapability("PIPELINES") },
+      { label: "Mural", href: "/mural", icon: "Megaphone", roles: personalRoles },
+      { label: "Feedback Anônimo", href: "/feedback-anonimo", icon: "MessageCircleQuestion", roles: rolesWithCapability("FEEDBACK_SUBMIT") }
     ]
   },
   {
     label: "Financeiro",
     items: [
-      { label: "Adiantamento", href: "/adiantamento", icon: "Coins", roles: ["ADMIN", "GESTOR", "WFM"] },
-      { label: "Billing", href: "/billing", icon: "Coins", roles: ["ADMIN", "SUPERVISOR"] },
-      { label: "Financeiro", href: "/financeiro", icon: "FileBarChart", roles: financeiroRoles }
+      { label: "Adiantamento", href: "/adiantamento", icon: "Coins", roles: rolesWithCapability("ADVANCE_VIEW") },
+      { label: "Billing", href: "/billing", icon: "Coins", roles: rolesWithCapability("BILLING_VIEW") },
+      { label: "Financeiro", href: "/financeiro", icon: "FileBarChart", roles: rolesWithCapability("FINANCE_VIEW") }
     ]
   },
   {
     label: "Suporte",
     items: [
-      { label: "Equipamentos e Logística", href: "/equipamentos", icon: "MonitorCog", roles: ["ADMIN", "GESTOR", "TI"] },
-      { label: "Configurações", href: "/configuracoes", icon: "Settings", roles: ["ADMIN"] }
+      { label: "Equipamentos e Logística", href: "/equipamentos", icon: "MonitorCog", roles: rolesWithCapability("EQUIPMENT_VIEW") },
+      { label: "Configurações", href: "/configuracoes", icon: "Settings", roles: rolesWithCapability("SETTINGS") }
     ]
   }
 ];
@@ -80,61 +76,50 @@ export const navItems: NavItem[] = navSections.flatMap((section) => section.item
 export function getNavItems(userOrRole?: string | PermissionUser) {
   const user = typeof userOrRole === "string" ? { role: userOrRole } : userOrRole;
   const normalizedRole = normalizeRole(user?.role);
-  return navItems.filter(
-    (item) =>
-      item.roles.includes(normalizedRole) ||
-      (item.href === "/performance" && canAccessPerformanceByEmail(user)) ||
-      (item.href === "/real-time" && canAccessRealTimeQueues({ ...user, status: user?.status ?? "ACTIVE" })) ||
-      (item.href === "/captura-horas" && canAccessRealtimeHoursCapture({ ...user, status: user?.status ?? "ACTIVE" })) ||
-      (item.href === "/minhas-horas" && canAccessOwnRealtimeHours({ ...user, status: user?.status ?? "ACTIVE" }))
-  );
+  const permissionUser = { ...user, status: user?.status ?? "ACTIVE" };
+  return navItems.filter((item) => {
+    if (item.href === "/captura-horas") return canAccessRealtimeHoursCapture(permissionUser);
+    if (item.href === "/real-time") return canAccessRealTimeQueues(permissionUser);
+    if (item.href === "/staff-cobertura") return canAccessStaffCoverage(permissionUser);
+    if (item.href === "/performance") return canAccessPerformance(permissionUser);
+    if (item.href === "/minhas-horas") return canAccessOwnRealtimeHours(permissionUser);
+    return item.roles.includes(normalizedRole);
+  });
 }
 
 export function getNavSections(userOrRole?: string | PermissionUser) {
   const visibleItems = getNavItems(userOrRole);
   const visibleHrefs = new Set(visibleItems.map((item) => item.href));
   return navSections
-    .map((section) => ({
-      ...section,
-      items: section.items.filter((item) => visibleHrefs.has(item.href))
-    }))
+    .map((section) => ({ ...section, items: section.items.filter((item) => visibleHrefs.has(item.href)) }))
     .filter((section) => section.items.length > 0);
 }
 
 export function getDefaultPathForRole(role?: string) {
-  const normalizedRole = normalizeRole(role);
-  if (normalizedRole === "CLIENT") return "/staff-cobertura";
-  return normalizedRole === "COLABORADOR" ? "/meu-perfil" : "/central-operacional";
+  return getNavItems({ role, status: "ACTIVE" })[0]?.href ?? "/meu-perfil";
 }
 
 export function canAccessPathForRole(pathname: string, userOrRole?: string | PermissionUser) {
   const user = typeof userOrRole === "string" ? { role: userOrRole } : userOrRole;
   const normalizedRole = normalizeRole(user?.role);
+  const permissionUser = { ...user, status: user?.status ?? "ACTIVE" };
+
+  if (pathname === "/" || pathname === "/alterar-senha") return true;
+
   if (normalizedRole === "CLIENT") {
-    if (pathname === "/" || pathname === "/alterar-senha") return true;
-    if (pathname === "/api/performance" || pathname.startsWith("/api/performance/")) return true;
-    if (pathname === "/staff-cobertura" || pathname.startsWith("/staff-cobertura/")) return true;
-    if (pathname === "/api/staff-coverage" || pathname.startsWith("/api/staff-coverage/")) return true;
-    if (pathname === "/mural" || pathname.startsWith("/mural/")) return true;
-    if (pathname === "/api/mural" || pathname.startsWith("/api/mural/")) return true;
-    if (pathname === "/financeiro" || pathname.startsWith("/financeiro/")) return true;
-    if (pathname === "/api/financeiro" || pathname.startsWith("/api/financeiro/")) return true;
-    if (pathname === "/real-time" || pathname.startsWith("/real-time/")) return true;
-    if (pathname === "/api/realtime" || pathname.startsWith("/api/realtime/")) return true;
+    if (pathname === "/staff-cobertura" || pathname.startsWith("/staff-cobertura/") || pathname === "/api/staff-coverage" || pathname.startsWith("/api/staff-coverage/")) return canAccessStaffCoverage(permissionUser);
+    if (pathname === "/real-time" || pathname.startsWith("/real-time/") || pathname === "/api/realtime" || pathname.startsWith("/api/realtime/")) return canAccessRealTimeQueues(permissionUser);
+    if (pathname === "/performance" || pathname.startsWith("/performance/") || pathname === "/api/performance" || pathname.startsWith("/api/performance/")) return canAccessPerformance(permissionUser);
     return false;
   }
-  if (pathname === "/performance" || pathname.startsWith("/performance/")) return false;
-  if ((pathname === "/api/performance" || pathname.startsWith("/api/performance/")) && canAccessPerformanceByEmail(user)) return true;
-  if (pathname === "/meu-perfil" || pathname.startsWith("/perfil/")) return nonClientRoles.includes(normalizedRole);
-  if (pathname === "/minhas-horas" || pathname.startsWith("/minhas-horas/") || pathname === "/api/realtime-hours/me" || pathname.startsWith("/api/realtime-hours/me/")) {
-    return canAccessOwnRealtimeHours({ ...user, status: user?.status ?? "ACTIVE" });
-  }
-  if (pathname === "/real-time" || pathname.startsWith("/real-time/")) {
-    return canAccessRealTimeQueues({ ...user, status: user?.status ?? "ACTIVE" });
-  }
-  if (pathname === "/captura-horas" || pathname.startsWith("/captura-horas/")) {
-    return canAccessRealtimeHoursCapture({ ...user, status: user?.status ?? "ACTIVE" });
-  }
+
+  if (pathname === "/performance" || pathname.startsWith("/performance/") || pathname === "/api/performance" || pathname.startsWith("/api/performance/")) return canAccessPerformance(permissionUser);
+  if (pathname === "/staff-cobertura" || pathname.startsWith("/staff-cobertura/") || pathname === "/api/staff-coverage" || pathname.startsWith("/api/staff-coverage/")) return canAccessStaffCoverage(permissionUser);
+  if (pathname === "/meu-perfil" || pathname.startsWith("/perfil/")) return personalRoles.includes(normalizedRole);
+  if (pathname === "/minhas-horas" || pathname.startsWith("/minhas-horas/") || pathname === "/api/realtime-hours/me" || pathname.startsWith("/api/realtime-hours/me/")) return canAccessOwnRealtimeHours(permissionUser);
+  if (pathname === "/real-time" || pathname.startsWith("/real-time/") || pathname === "/api/realtime" || pathname.startsWith("/api/realtime/")) return canAccessRealTimeQueues(permissionUser);
+  if (pathname === "/captura-horas" || pathname.startsWith("/captura-horas/")) return canAccessRealtimeHoursCapture(permissionUser);
+
   const protectedItem = navItems.find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
   return protectedItem ? protectedItem.roles.includes(normalizedRole) : true;
 }

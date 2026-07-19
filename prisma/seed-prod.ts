@@ -15,7 +15,10 @@ async function main() {
     ["WFM", "WFM / Planejamento"],
     ["QUALIDADE", "Qualidade"],
     ["RH", "RH"],
+    ["FINANCEIRO", "Financeiro"],
     ["TI", "Logística / TI"],
+    ["RTA", "Real Time Analyst"],
+    ["POC", "Point of Contact"],
     ["CLIENT", "Cliente"]
   ] as const;
 

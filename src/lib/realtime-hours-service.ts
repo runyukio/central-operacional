@@ -4,9 +4,8 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
 import { getApiActor } from "@/lib/api-actor";
-import { canAccessRealTime } from "@/lib/permissions";
+import { canAccessRealtimeHoursCapture, canManageRealtimeHoursMappings } from "@/lib/realtime-hours-permissions";
 import { prisma } from "@/lib/prisma";
-import { canManageRealtimeHoursMappings } from "@/lib/realtime-hours-permissions";
 import { parseWorkHoursToMinutes } from "@/lib/work-hours-rules";
 
 const defaultSource = "local-windows-server";
@@ -209,7 +208,7 @@ export async function authorizeRealtimeHoursRead(request: Request) {
   if (authorization) return validateRealtimeHoursImportToken(authorization);
 
   const actor = await getApiActor();
-  if (!canAccessRealTime({ role: actor.role, email: actor.email, name: actor.name, roleTitle: actor.roleTitle, jobTitle: actor.jobTitle, skill: actor.skill, status: "ACTIVE" })) {
+  if (!canAccessRealtimeHoursCapture({ role: actor.role, status: "ACTIVE" })) {
     return { error: "Você não tem permissão para acessar a captura de horas em tempo real.", status: 403 };
   }
 
@@ -218,7 +217,7 @@ export async function authorizeRealtimeHoursRead(request: Request) {
 
 export async function authorizeRealtimeHoursManage() {
   const actor = await getApiActor();
-  if (!canManageRealtimeHoursMappings(actor.email)) {
+  if (!canManageRealtimeHoursMappings({ role: actor.role, status: "ACTIVE" })) {
     return { error: "Você não tem permissão para configurar vínculos da captura de horas.", status: 403 };
   }
 

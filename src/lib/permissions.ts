@@ -1,4 +1,5 @@
 import type { AppRole } from "@/lib/demo-auth";
+import { normalizeAccessRole, roleHasCapability } from "@/lib/access-control";
 import { isAgentJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
 
 export type PermissionUser = {
@@ -21,32 +22,8 @@ export type PermissionEmployee = {
   id?: string | null;
 };
 
-const roleAliases: Record<string, AppRole> = {
-  COLLABORATOR: "COLABORADOR",
-  COLABORADOR: "COLABORADOR",
-  SUPERVISOR: "SUPERVISOR",
-  WFM: "WFM",
-  QUALITY: "QUALIDADE",
-  QUALIDADE: "QUALIDADE",
-  HR: "RH",
-  RH: "RH",
-  LOGISTICS_IT: "TI",
-  TI: "TI",
-  MANAGEMENT: "GESTOR",
-  GESTOR: "GESTOR",
-  COORDENADOR: "COORDENADOR",
-  COORDINATOR: "COORDENADOR",
-  GERENTE: "GERENTE",
-  MANAGER: "GERENTE",
-  CLIENT: "CLIENT",
-  ADMIN: "ADMIN",
-  ADMINISTRADOR: "ADMIN",
-  ADMINISTRADORA: "ADMIN",
-  "ADMIN CENTRAL": "ADMIN"
-};
-
 export function normalizeRole(role?: string | null): AppRole {
-  return roleAliases[String(role ?? "COLABORADOR").toUpperCase()] ?? "COLABORADOR";
+  return normalizeAccessRole(role);
 }
 
 export function isActiveUser(user: PermissionUser) {
@@ -59,8 +36,7 @@ export function isAgentEmployee(employee?: PermissionEmployee | null) {
 
 export function isAgentOrClientUser(user: PermissionUser) {
   const role = normalizeRole(user.role);
-  if (role === "CLIENT") return true;
-  return [user.roleTitle, user.jobTitle, user.skill, user.role].some((value) => isAgentJobTitle(value));
+  return role === "CLIENT" || role === "COLABORADOR";
 }
 
 export function canAccessNonAgentClientModules(user: PermissionUser) {
@@ -68,32 +44,23 @@ export function canAccessNonAgentClientModules(user: PermissionUser) {
 }
 
 export function canAccessExecutiveAdsReport(user: PermissionUser) {
-  return canAccessNonAgentClientModules(user);
+  return isActiveUser(user) && roleHasCapability(user.role, "REALTIME_FULL");
 }
 
 export function canViewEmployeeDetails(user: PermissionUser, employee?: PermissionEmployee | null) {
-  const role = normalizeRole(user.role);
   if (!isActiveUser(user)) return false;
-  if (["ADMIN", "GESTOR", "RH", "WFM", "SUPERVISOR"].includes(role)) return true;
-  if (role === "COLABORADOR") return Boolean(user.email && employee?.email === user.email);
-  return false;
+  if (roleHasCapability(user.role, "EMPLOYEE_MAP")) return true;
+  return Boolean(roleHasCapability(user.role, "PERSONAL") && user.email && employee?.email === user.email);
 }
 
 export function canViewEmployeeSensitiveData(user: PermissionUser, employee?: PermissionEmployee | null) {
-  const role = normalizeRole(user.role);
-  if (!isActiveUser(user)) return false;
-  if (["ADMIN", "GESTOR"].includes(role)) return true;
-  if (role === "RH") return employee ? isAgentEmployee(employee) : true;
-  return false;
+  void employee;
+  return isActiveUser(user) && roleHasCapability(user.role, "EMPLOYEE_SENSITIVE");
 }
 
 export function canEditEmployeeData(user: PermissionUser, employee?: PermissionEmployee | null) {
-  const role = normalizeRole(user.role);
-  if (!isActiveUser(user)) return false;
-  if (["ADMIN", "GESTOR"].includes(role)) return true;
-  if (role === "RH") return employee ? isAgentEmployee(employee) : true;
-  if (role === "WFM") return true;
-  return false;
+  void employee;
+  return isActiveUser(user) && roleHasCapability(user.role, "EMPLOYEE_EDIT");
 }
 
 export function canExportEmployeeData(user: PermissionUser) {
@@ -108,36 +75,34 @@ export function sanitizeEmployeeForRole<T extends Record<string, unknown>>(emplo
 }
 
 export function canAccessEmployeeMap(user: PermissionUser) {
-  const role = normalizeRole(user.role);
-  return isActiveUser(user) && ["ADMIN", "GESTOR", "RH", "WFM", "SUPERVISOR"].includes(role);
+  return isActiveUser(user) && roleHasCapability(user.role, "EMPLOYEE_MAP");
 }
 
 export function canAccessAdvanceModule(user: PermissionUser) {
-  const role = normalizeRole(user.role);
-  return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM"].includes(role);
+  return isActiveUser(user) && roleHasCapability(user.role, "ADVANCE_VIEW");
 }
 
 export function canAccessStaffCoverage(user: PermissionUser) {
-  const role = normalizeRole(user.role);
-  return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "CLIENT"].includes(role);
+  return isActiveUser(user) && roleHasCapability(user.role, "STAFF_COVERAGE");
+}
+
+export function canAccessAdsStaffCoverage(user: PermissionUser) {
+  return isActiveUser(user) && roleHasCapability(user.role, "STAFF_COVERAGE_ADS");
 }
 
 export function canAccessRealTime(user: PermissionUser) {
-  const role = normalizeRole(user.role);
-  if (!isActiveUser(user)) return false;
-  if (["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(role)) return true;
-  return hasRealTimeOperationalSkill(user.skill) || hasRealTimeOperationalSkill(user.roleTitle) || hasRealTimeOperationalSkill(user.jobTitle);
+  return isActiveUser(user) && roleHasCapability(user.role, "REALTIME_FULL");
 }
 
 export function canAccessRealTimeQueues(user: PermissionUser) {
-  const role = normalizeRole(user.role);
-  return canAccessRealTime(user) || (isActiveUser(user) && role === "CLIENT");
+  return isActiveUser(user) && roleHasCapability(user.role, "REALTIME_QUEUES");
 }
 
 export function canAccessRealTimeAgentsReports(user: PermissionUser) {
   return canAccessRealTime(user);
 }
 
+// Operational classification remains available for business rules, never for authorization.
 export function hasRealTimeOperationalSkill(value?: string | null) {
   return isRtaSkill(value) || isPocSkill(value);
 }
@@ -168,11 +133,7 @@ export function isPocSkill(value?: string | null) {
 }
 
 export function canAccessWorkSessionMonitoring(user: PermissionUser) {
-  const role = normalizeRole(user.role);
-  if (!isActiveUser(user)) return false;
-  if (["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "COORDENADOR", "GERENTE"].includes(role)) return true;
-  const title = normalizeComparableJobTitle(user.roleTitle ?? user.jobTitle);
-  return ["gestor", "gestora", "coordenador", "coordenadora", "gerente", "manager", "management"].includes(title);
+  return isActiveUser(user) && roleHasCapability(user.role, "CAPTURE");
 }
 
 export function canExportWorkSessionMonitoring(user: PermissionUser) {
@@ -180,35 +141,27 @@ export function canExportWorkSessionMonitoring(user: PermissionUser) {
 }
 
 export function canAccessPerformance(user: PermissionUser) {
-  return canAccessNonAgentClientModules(user);
+  return isActiveUser(user) && roleHasCapability(user.role, "PERFORMANCE");
 }
 
 export function canAccessPerformanceWfh(user: PermissionUser) {
-  const role = normalizeRole(user.role);
-  if (!isActiveUser(user)) return false;
-  if (isAgentOrClientUser(user)) return false;
-  if (["ADMIN", "GESTOR", "WFM", "SUPERVISOR", "RH", "COORDENADOR", "GERENTE", "MANAGEMENT", "CLIENT"].includes(role)) return true;
-  const title = normalizeComparableJobTitle(user.roleTitle ?? user.jobTitle);
-  return ["coordenador", "coordenadora", "gerente", "manager", "management"].includes(title);
+  return canAccessPerformance(user);
 }
 
 export function canAccessPerformanceFramework(user: PermissionUser) {
-  const role = normalizeRole(user.role);
-  return canAccessNonAgentClientModules(user) && ["ADMIN", "GESTOR", "WFM"].includes(role);
+  return canAccessPerformance(user);
 }
 
 export function canImportPerformance(user: PermissionUser) {
-  const role = normalizeRole(user.role);
-  return isActiveUser(user) && ["ADMIN", "WFM"].includes(role);
+  return isActiveUser(user) && normalizeRole(user.role) === "ADMIN";
 }
 
 export function canExportPerformance(user: PermissionUser) {
-  return normalizeRole(user.role) !== "CLIENT" && canAccessPerformanceWfh(user);
+  return canAccessPerformance(user);
 }
 
 export function canManageStaffCoverageRequirements(user: PermissionUser) {
-  const role = normalizeRole(user.role);
-  return isActiveUser(user) && ["ADMIN", "WFM"].includes(role);
+  return isActiveUser(user) && roleHasCapability(user.role, "STAFF_COVERAGE_MANAGE");
 }
 
 export function canExportStaffCoverage(user: PermissionUser) {
@@ -220,14 +173,11 @@ export function canAccessAnonymousFeedback(user: PermissionUser) {
 }
 
 export function canSubmitAnonymousFeedback(user: PermissionUser) {
-  return isActiveUser(user) && Boolean(user.email) && !canViewAnonymousFeedbackAdmin(user);
+  return isActiveUser(user) && Boolean(user.email) && roleHasCapability(user.role, "FEEDBACK_SUBMIT");
 }
 
 export function canViewAnonymousFeedbackAdmin(user: PermissionUser) {
-  const role = normalizeRole(user.role);
-  if (!isActiveUser(user)) return false;
-  if (["ADMIN", "GESTOR", "RH"].includes(role)) return true;
-  return isAnonymousFeedbackLeadershipTitle(user.roleTitle ?? user.jobTitle);
+  return isActiveUser(user) && roleHasCapability(user.role, "FEEDBACK_MANAGE");
 }
 
 export function canManageAnonymousFeedback(user: PermissionUser) {
@@ -238,23 +188,16 @@ export function canExportAnonymousFeedback(user: PermissionUser) {
   return canViewAnonymousFeedbackAdmin(user);
 }
 
-function isAnonymousFeedbackLeadershipTitle(value?: string | null) {
-  const title = normalizeComparableJobTitle(value);
-  return ["coordenador", "coordenadora", "gestor", "gestora", "gerente", "manager", "management"].includes(title);
-}
-
 export function canAccessHierarchy(user: PermissionUser) {
-  const role = normalizeRole(user.role);
-  return isActiveUser(user) && ["ADMIN", "GESTOR", "RH", "WFM", "SUPERVISOR"].includes(role);
+  return isActiveUser(user) && roleHasCapability(user.role, "HIERARCHY_VIEW");
 }
 
 export function canManageHierarchy(user: PermissionUser) {
-  const role = normalizeRole(user.role);
-  return isActiveUser(user) && ["ADMIN", "RH", "WFM"].includes(role);
+  return isActiveUser(user) && roleHasCapability(user.role, "HIERARCHY_MANAGE");
 }
 
 export function canEditAdvanceRecords(user: PermissionUser) {
-  return canAccessAdvanceModule(user) && ["ADMIN", "GESTOR", "WFM"].includes(normalizeRole(user.role));
+  return isActiveUser(user) && roleHasCapability(user.role, "ADVANCE_MANAGE");
 }
 
 export function canImportAdvanceRecords(user: PermissionUser) {
@@ -270,8 +213,11 @@ export function canDeleteAdvanceRecords(user: PermissionUser) {
 }
 
 export function canEditSchedule(user: PermissionUser) {
-  const role = normalizeRole(user.role);
-  return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM"].includes(role);
+  return isActiveUser(user) && roleHasCapability(user.role, "SCHEDULE_EDIT");
+}
+
+export function canViewSchedules(user: PermissionUser) {
+  return isActiveUser(user) && roleHasCapability(user.role, "SCHEDULE_VIEW");
 }
 
 export function canImportWorkHours(user: PermissionUser) {
@@ -279,8 +225,11 @@ export function canImportWorkHours(user: PermissionUser) {
 }
 
 export function canEditWorkHours(user: PermissionUser) {
-  const role = normalizeRole(user.role);
-  return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM"].includes(role);
+  return isActiveUser(user) && roleHasCapability(user.role, "WORK_HOURS_EDIT");
+}
+
+export function canViewWorkHours(user: PermissionUser) {
+  return isActiveUser(user) && roleHasCapability(user.role, "WORK_HOURS_VIEW");
 }
 
 export function canApproveWorkHourAdjustment(user: PermissionUser) {
@@ -288,8 +237,7 @@ export function canApproveWorkHourAdjustment(user: PermissionUser) {
 }
 
 export function canRequestWorkHourAdjustment(user: PermissionUser) {
-  const role = normalizeRole(user.role);
-  return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(role);
+  return isActiveUser(user) && roleHasCapability(user.role, "WORK_HOURS_REQUEST");
 }
 
 export function canImportCronogramas(user: PermissionUser) {
@@ -305,8 +253,7 @@ export function canUpdateScheduleSlot(user: PermissionUser) {
 }
 
 export function canApproveRegistration(user: PermissionUser) {
-  const role = normalizeRole(user.role);
-  return isActiveUser(user) && ["ADMIN", "GESTOR", "RH", "WFM"].includes(role);
+  return isActiveUser(user) && roleHasCapability(user.role, "REGISTRATION_APPROVE");
 }
 
 export function canEditEmployeeSensitiveData(user: PermissionUser, employee?: PermissionEmployee | null) {
@@ -314,15 +261,15 @@ export function canEditEmployeeSensitiveData(user: PermissionUser, employee?: Pe
 }
 
 export function canAccessSettings(user: PermissionUser) {
-  return isActiveUser(user) && normalizeRole(user.role) === "ADMIN";
+  return isActiveUser(user) && roleHasCapability(user.role, "SETTINGS");
 }
 
 export function canManageUsers(user: PermissionUser) {
-  return canAccessSettings(user);
+  return isActiveUser(user) && roleHasCapability(user.role, "USERS_MANAGE");
 }
 
 export function canManageRoles(user: PermissionUser) {
-  return canAccessSettings(user);
+  return isActiveUser(user) && roleHasCapability(user.role, "EMPLOYEE_ROLE_EDIT");
 }
 
 export function canManagePermissions(user: PermissionUser) {
@@ -348,9 +295,12 @@ export function canMarkPresent(user: PermissionUser) {
 export function canApproveRequest(user: PermissionUser, request?: { area?: string | null; type?: string | null }) {
   const role = normalizeRole(user.role);
   if (!isActiveUser(user)) return false;
+  if (!roleHasCapability(user.role, "PIPELINES")) return false;
   if (["ADMIN", "GESTOR"].includes(role)) return true;
   if (role === "WFM") return request ? /(wfm|escala|folga|ponto|presença|presenca)/i.test(`${request.area} ${request.type}`) : true;
-  if (role === "RH") return request ? /(rh|clima|cadastral|pessoas)/i.test(`${request.area} ${request.type}`) : true;
+  if (["RH", "FINANCEIRO"].includes(role)) {
+    return request ? /(rh|clima|cadastral|pessoas)/i.test(`${request.area} ${request.type}`) : true;
+  }
   if (role === "TI") return request ? /(ti|equipamento|notebook|acesso|suporte)/i.test(`${request.area} ${request.type}`) : true;
   if (role === "QUALIDADE") return request ? /(qualidade|feedback)/i.test(`${request.area} ${request.type}`) : true;
   if (role === "SUPERVISOR") {
@@ -361,62 +311,49 @@ export function canApproveRequest(user: PermissionUser, request?: { area?: strin
 }
 
 export function canViewTeam(user: PermissionUser, employee?: PermissionEmployee) {
-  const role = normalizeRole(user.role);
   if (!isActiveUser(user)) return false;
-  if (["ADMIN", "GESTOR", "RH", "WFM"].includes(role)) return true;
-  if (role === "COLABORADOR") return user.email && employee?.email === user.email;
-  if (role === "SUPERVISOR") {
-    return Boolean(
-      (user.email && employee?.supervisorEmail === user.email) ||
-        (user.name && employee?.supervisor === user.name)
-    );
-  }
-  return false;
+  if (normalizeRole(user.role) === "COLABORADOR") return Boolean(user.email && employee?.email === user.email);
+  return roleHasCapability(user.role, "CENTRAL") ||
+    roleHasCapability(user.role, "REALTIME_FULL") ||
+    roleHasCapability(user.role, "SCHEDULE_VIEW") ||
+    roleHasCapability(user.role, "EMPLOYEE_MAP");
 }
 
 export function canViewShiftReport(user: PermissionUser, report?: { supervisor?: string | null; supervisorEmail?: string | null }) {
-  const role = normalizeRole(user.role);
-  if (!isActiveUser(user)) return false;
-  if (["ADMIN", "GESTOR", "WFM"].includes(role)) return true;
-  if (role === "SUPERVISOR") {
-    return !report || report.supervisor === user.name || report.supervisorEmail === user.email;
-  }
-  return false;
+  void report;
+  return isActiveUser(user) && roleHasCapability(user.role, "SCHEDULE_VIEW");
 }
 
 export function canManageEquipment(user: PermissionUser) {
-  const role = normalizeRole(user.role);
-  return isActiveUser(user) && ["ADMIN", "GESTOR", "TI"].includes(role);
+  return isActiveUser(user) && roleHasCapability(user.role, "EQUIPMENT_MANAGE");
+}
+
+export function canAccessEquipment(user: PermissionUser) {
+  return isActiveUser(user) && roleHasCapability(user.role, "EQUIPMENT_VIEW");
 }
 
 export function canAccessAuditLogs(user: PermissionUser) {
-  const role = normalizeRole(user.role);
-  return isActiveUser(user) && ["ADMIN", "GESTOR"].includes(role);
+  return isActiveUser(user) && roleHasCapability(user.role, "AUDIT_LOGS");
 }
 
 export function canViewSensitiveFile(user: PermissionUser, file: { category?: string; ownerUserEmail?: string | null; employeeSupervisor?: string | null }) {
-  const role = normalizeRole(user.role);
   if (!isActiveUser(user)) return false;
-  if (["ADMIN", "GESTOR"].includes(role)) return true;
   if (file.ownerUserEmail && file.ownerUserEmail === user.email) return true;
-  if (role === "SUPERVISOR" && file.employeeSupervisor === user.name) return true;
-  if (role === "RH") return ["employee-documents", "absence-evidence", "request-attachments"].includes(file.category ?? "");
-  if (role === "WFM") return ["schedule-imports", "absence-evidence", "shift-report-attachments"].includes(file.category ?? "");
+  if (roleHasCapability(user.role, "EMPLOYEE_SENSITIVE")) return true;
+  const role = normalizeRole(user.role);
+  if (role === "SUPERVISOR") return ["absence-evidence", "request-attachments", "shift-report-attachments"].includes(file.category ?? "");
   if (role === "QUALIDADE") return file.category === "quality-materials";
   if (role === "TI") return ["equipment-evidence", "request-attachments"].includes(file.category ?? "");
   return false;
 }
 
 export function canManageAttendance(user: PermissionUser) {
-  const role = normalizeRole(user.role);
-  return isActiveUser(user) && ["ADMIN", "GESTOR", "WFM"].includes(role);
+  return isActiveUser(user) && roleHasCapability(user.role, "ATTENDANCE_MANAGE");
 }
 
 export function canJustifyAbsence(user: PermissionUser, employee?: PermissionEmployee) {
-  const role = normalizeRole(user.role);
-  if (!isActiveUser(user)) return false;
-  if (["ADMIN", "GESTOR", "WFM"].includes(role)) return true;
-  return role === "SUPERVISOR" && canViewTeam(user, employee);
+  void employee;
+  return isActiveUser(user) && roleHasCapability(user.role, "ATTENDANCE_JUSTIFY");
 }
 
 export function maskCpf(value?: string | null) {

@@ -81,7 +81,11 @@ async function main() {
         ["WFM", "WFM / Planejamento"],
         ["QUALIDADE", "Qualidade"],
         ["RH", "Recursos Humanos"],
-        ["TI", "Logística / TI"]
+        ["FINANCEIRO", "Financeiro"],
+        ["TI", "Logística / TI"],
+        ["RTA", "Real Time Analyst"],
+        ["POC", "Point of Contact"],
+        ["CLIENT", "Cliente"]
       ].map(([name, label]) =>
         prisma.role.create({
           data: {

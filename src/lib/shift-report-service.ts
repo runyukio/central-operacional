@@ -1,7 +1,8 @@
 import { FollowUpStatus, GeneralMood, Prisma, ShiftReportImportance } from "@prisma/client";
 
+import { roleHasCapability } from "@/lib/access-control";
 import type { Actor } from "@/lib/mock-db";
-import { normalizeRole } from "@/lib/permissions";
+import { canViewSchedules, normalizeRole } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { cleanShiftName } from "@/lib/shift-display";
 
@@ -83,7 +84,7 @@ async function getActorUser(actor: Actor) {
 }
 
 function canViewShiftReportRole(role: string) {
-  return ["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(normalizeRole(role));
+  return canViewSchedules({ role, status: "ACTIVE" });
 }
 
 function normalizeKey(value?: string | null) {
@@ -266,8 +267,6 @@ export async function listShiftReports(actor: Actor, query: ShiftReportQuery = {
       ]
     });
   }
-  if (normalizeRole(user.role.name) === "SUPERVISOR" && user.employeeProfile) filters.push({ supervisorId: user.employeeProfile.id });
-
   const reports = await prisma.shiftReport.findMany({
     where: { deletedAt: null, ...(filters.length ? { AND: filters } : {}) },
     include: { absences: true, timeBlocks: { orderBy: { startTime: "asc" } } },
@@ -281,7 +280,7 @@ export async function listShiftReports(actor: Actor, query: ShiftReportQuery = {
 
 export async function createShiftReport(actor: Actor, input: ShiftReportInput) {
   const user = await getActorUser(actor);
-  if (!user || !["ADMIN", "GESTOR", "WFM", "SUPERVISOR"].includes(normalizeRole(user.role.name))) return { error: "Você não tem permissão para criar report de turno." };
+  if (!user || !roleHasCapability(user.role.name, "PIPELINES")) return { error: "Você não tem permissão para criar report de turno." };
   const reportDate = parseDate(input.reportDate);
   if (!reportDate) return { error: "Data do report inválida." };
   const importance = importanceMap[normalizeKey(input.importance)];

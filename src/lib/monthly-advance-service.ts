@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 
+import { roleHasCapability, rolesWithCapability } from "@/lib/access-control";
 import type { Actor } from "@/lib/mock-db";
 import { recordErrorLog } from "@/lib/mock-db";
 import {
@@ -1075,19 +1076,19 @@ async function findEmployeeByWbLogin(wbLogin: string | undefined) {
 }
 
 function canViewMonthlyAdvance(role: string) {
-  return ["ADMIN", "GESTOR", "WFM", "COLABORADOR"].includes(role);
+  return roleHasCapability(role, "ADVANCE_VIEW");
 }
 
 function canManageMonthlyAdvance(role: string) {
-  return ["ADMIN", "GESTOR", "WFM"].includes(role);
+  return roleHasCapability(role, "ADVANCE_MANAGE");
 }
 
 function canExportMonthlyAdvance(role: string) {
-  return ["ADMIN", "GESTOR", "WFM"].includes(role);
+  return roleHasCapability(role, "ADVANCE_VIEW");
 }
 
 function canDeleteMonthlyAdvance(role: string) {
-  return ["ADMIN", "GESTOR", "WFM"].includes(role);
+  return roleHasCapability(role, "ADVANCE_MANAGE");
 }
 
 function monthlyAdvanceEligibleEmployeeWhere(): Prisma.EmployeeProfileWhereInput {
@@ -1201,7 +1202,7 @@ async function nextRequestCode(tx: Prisma.TransactionClient) {
 async function notifyWfmSafely(requestId: string, code: string, requesterName: string, actorEmail: string) {
   try {
     const wfms = await prisma.user.findMany({
-      where: { status: "ACTIVE", role: { name: { in: ["WFM", "ADMIN", "GESTOR"] } } },
+      where: { status: "ACTIVE", role: { name: { in: rolesWithCapability("ADVANCE_MANAGE") } } },
       select: { id: true }
     });
     if (!wfms.length) return;

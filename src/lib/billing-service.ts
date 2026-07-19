@@ -304,7 +304,7 @@ export async function getBillingDashboard(actor: Actor, filters: BillingDashboar
       adjustmentRequests,
       rateConfigs,
       permissions: {
-        canManageBilling: !scope.restricted
+        canManageBilling: canManageBilling({ id: user!.id, email: user!.email, name: user!.name, role: user!.role.name })
       },
       filterOptions: buildBillingFilterOptions(invoices)
     }
@@ -829,14 +829,24 @@ export async function supervisorReviewInvoiceAdjustment(actor: Actor, input: { i
   const user = await findActiveUser(actor.email);
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
   const role = normalizeRole(user.role.name);
-  if (!["SUPERVISOR", "GESTOR", "COORDENADOR", "GERENTE", "ADMIN", "WFM", "RH"].includes(role)) {
-    return { error: "Apenas perfis de aprovação podem validar ajuste de invoice.", status: 403 };
+  if (!["SUPERVISOR", "ADMIN"].includes(role)) {
+    return { error: "Apenas o Supervisor responsável ou o Admin podem validar ajuste de invoice.", status: 403 };
   }
   if (!input.observation?.trim()) return { error: "Observação do supervisor é obrigatória.", status: 400 };
 
-  const existing = await prisma.invoiceAdjustmentRequest.findUnique({ where: { id: input.id }, include: { request: true, employeeInvoice: true } });
+  const existing = await prisma.invoiceAdjustmentRequest.findUnique({
+    where: { id: input.id },
+    include: {
+      request: true,
+      employeeInvoice: true,
+      employee: { select: { supervisorId: true } }
+    }
+  });
   if (!existing) return { error: "Solicitação de ajuste não encontrada.", status: 404 };
   if (existing.status !== "AGUARDANDO_SUPERVISOR") return { error: "Esta solicitação não está aguardando validação do supervisor.", status: 409 };
+  if (role === "SUPERVISOR" && (!user.employeeProfile?.id || existing.employee.supervisorId !== user.employeeProfile.id)) {
+    return { error: "Você só pode validar ajustes de invoice do próprio time.", status: 403 };
+  }
 
   const updated = await prisma.$transaction(async (tx) => {
     const item = await tx.invoiceAdjustmentRequest.update({
@@ -2768,6 +2778,7 @@ function getBillingAccessScope(user: ActiveUser | null): { restricted: false; su
     if (!supervisorId) return { error: "Supervisor sem cadastro vinculado para filtrar o time no Billing.", status: 403 };
     return { restricted: true, supervisorId };
   }
+  if (canAccessBilling({ id: user.id, email: user.email, name: user.name, role: user.role.name })) return { restricted: false };
   return { error: "Você não tem permissão para acessar Billing.", status: 403 };
 }
 
