@@ -394,6 +394,14 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
       return { error: `Nenhuma linha válida para importar colaboradores. ${summarizeEmployeeImportErrors(validations)}`, preview: { rows: validations } };
     }
     const normalizedValidRows = validRows.map((row) => normalizeEmployeeImportRow(row));
+    const [importRoles, importLobs, importShifts] = await Promise.all([
+      prisma.role.findMany({ select: { id: true, name: true } }),
+      prisma.lob.findMany({ select: { id: true, name: true } }),
+      prisma.shift.findMany({ select: { id: true, name: true } })
+    ]);
+    const importRoleByName = new Map(importRoles.map((role) => [role.name, role]));
+    const importLobByName = new Map(importLobs.map((lob) => [lob.name, lob]));
+    const importShiftByName = new Map(importShifts.map((shift) => [shift.name, shift]));
     const passwordHashByWbLogin = new Map<string, string>();
     await Promise.all(
       normalizedValidRows
@@ -445,15 +453,18 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
       const rawRow = validRows[rowIndex] ?? {};
       const existingByWb = existingProfilesByWb.get(normalizeWbLoginForEmployeeImport(row.wbLogin)) ?? null;
       const isExistingEmployeeImport = Boolean(existingByWb);
-      const role = row.roleName ? await prisma.role.findUniqueOrThrow({ where: { name: row.roleName } }) : null;
+      const role = row.roleName ? importRoleByName.get(row.roleName) ?? null : null;
       if (!role && (row.createUser || !isExistingEmployeeImport)) throw new Error(`Linha ${rowIndex + 1}: Role/Permissão obrigatória.`);
-      const lob = row.lob ? await prisma.lob.findUniqueOrThrow({ where: { name: row.lob } }) : null;
+      const lob = row.lob ? importLobByName.get(row.lob) ?? null : null;
       if (!lob && !isExistingEmployeeImport) throw new Error(`Linha ${rowIndex + 1}: LOB obrigatória.`);
       const shift = row.shift
-        ? await prisma.shift.findFirstOrThrow({ where: { OR: [{ name: row.shift }, { name: { startsWith: `${row.shift} (` } }] } })
+        ? importShiftByName.get(row.shift)
+          ?? importShifts.find((item) => item.name.startsWith(`${row.shift} (`))
+          ?? null
         : isExistingEmployeeImport
           ? null
           : fallbackShift!;
+      if (row.shift && !shift) throw new Error(`Linha ${rowIndex + 1}: Turno ${row.shift} não encontrado.`);
       const supervisor = resolveImportSupervisor(row, existingProfilesByWb, supervisorByEmail, supervisorsByNameKey).employee;
       if (supervisor && existingByWb && await wouldCreateImportSupervisorCycle(existingByWb.id, supervisor.id)) {
         throw new Error(`Linha ${rowIndex + 1}: essa alteração criaria um ciclo de supervisor.`);

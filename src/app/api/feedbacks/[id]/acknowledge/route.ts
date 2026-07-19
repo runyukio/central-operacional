@@ -10,14 +10,15 @@ const schema = z.object({
   response: z.string().optional()
 });
 
-export async function POST(request: Request, { params }: { params: { id: string } }) {
+export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   const parsed = schema.safeParse(await request.json().catch(() => ({})));
   if (!parsed.success) {
     return NextResponse.json({ error: "Dados inválidos", issues: parsed.error.flatten() }, { status: 400 });
   }
   const actor = await getApiActor();
   try {
-    return NextResponse.json(await acknowledgeFormalFeedback(actor, params.id, parsed.data));
+    return NextResponse.json(await acknowledgeFormalFeedback(actor, id, parsed.data));
   } catch (error) {
     if (error instanceof FormalFeedbackError) {
       return NextResponse.json({ error: error.message, message: error.message }, { status: error.status });

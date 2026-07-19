@@ -5,11 +5,12 @@ import { MuralError, updateMuralPostStatus } from "@/lib/mural-service";
 
 export const dynamic = "force-dynamic";
 
-export async function PATCH(request: Request, context: { params: { id: string } }) {
+export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await context.params;
     const actor = await getApiActor();
     const body = await request.json();
-    return NextResponse.json(await updateMuralPostStatus(actor, context.params.id, String(body.status ?? "")));
+    return NextResponse.json(await updateMuralPostStatus(actor, id, String(body.status ?? "")));
   } catch (error) {
     if (error instanceof MuralError) {
       return NextResponse.json({ success: false, error: error.message, message: error.message, fields: error.fields }, { status: error.status });

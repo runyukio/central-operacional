@@ -10,19 +10,21 @@ const deleteSchema = z.object({
   confirmation: z.string().trim()
 });
 
-export async function GET(_request: Request, { params }: { params: { id: string } }) {
+export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   const actor = await getApiActor();
-  const result = await getOperationalEmployeeDetail(actor, params.id);
+  const result = await getOperationalEmployeeDetail(actor, id);
   if ("error" in result) return errorResponse(result, errorStatus(result));
   return NextResponse.json(result);
 }
 
-export async function DELETE(request: Request, { params }: { params: { id: string } }) {
+export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   const parsed = deleteSchema.safeParse(await request.json().catch(() => ({})));
   if (!parsed.success) return errorResponse(mapZodError(parsed.error));
 
   const actor = await getApiActor();
-  const result = await deleteOperationalEmployee(actor, { id: params.id, ...parsed.data });
+  const result = await deleteOperationalEmployee(actor, { id, ...parsed.data });
   if ("error" in result) return errorResponse(result, errorStatus(result));
   return NextResponse.json(result);
 }

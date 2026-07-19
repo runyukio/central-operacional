@@ -5,10 +5,11 @@ import { FormalFeedbackError, getFormalFeedbackDetail } from "@/lib/formal-feedb
 
 export const dynamic = "force-dynamic";
 
-export async function GET(_request: Request, { params }: { params: { id: string } }) {
+export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   const actor = await getApiActor();
   try {
-    return NextResponse.json(await getFormalFeedbackDetail(actor, params.id));
+    return NextResponse.json(await getFormalFeedbackDetail(actor, id));
   } catch (error) {
     if (error instanceof FormalFeedbackError) {
       return NextResponse.json({ error: error.message, message: error.message }, { status: error.status });

@@ -7,7 +7,7 @@
     "dev": "next dev",
     "build": "prisma generate && next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint . --ext .js,.mjs,.ts,.tsx",
     "typecheck": "tsc --noEmit",
     "test:omie": "tsx --test src/lib/omie-service.test.ts",
     "db:up": "docker compose up -d",
@@ -65,13 +65,13 @@
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "lucide-react": "^0.468.0",
-    "next": "14.2.16",
+    "next": "15.5.20",
     "next-auth": "^4.24.10",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "recharts": "^2.13.3",
     "tailwind-merge": "^2.5.5",
-    "xlsx": "^0.18.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^3.24.1",
     "zustand": "^5.0.2"
   },
@@ -82,12 +82,17 @@
     "@types/react-dom": "^18.3.1",
     "autoprefixer": "^10.4.20",
     "eslint": "^8.57.1",
-    "eslint-config-next": "14.2.16",
-    "postcss": "^8.4.49",
+    "eslint-config-next": "15.5.20",
+    "postcss": "^8.5.14",
     "prisma": "^5.22.0",
     "tailwindcss": "^3.4.17",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
+  },
+  "overrides": {
+    "esbuild": "0.27.2",
+    "postcss": "^8.5.14",
+    "uuid": "^11.1.1"
   },
   "prisma": {
     "seed": "tsx prisma/seed-prod.ts"

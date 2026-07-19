@@ -6,11 +6,12 @@ import { buildXlsxResponse } from "@/lib/xlsx-export";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(request: Request, context: { params: { id: string } }) {
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await context.params;
     const actor = await getApiActor();
     const url = new URL(request.url);
-    const payload = await exportMuralPostAcknowledgements(actor, context.params.id, {
+    const payload = await exportMuralPostAcknowledgements(actor, id, {
       status: url.searchParams.get("status"),
       lobId: url.searchParams.get("lobId"),
       role: url.searchParams.get("role"),

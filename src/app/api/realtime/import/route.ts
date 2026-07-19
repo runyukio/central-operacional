@@ -7,6 +7,8 @@ import { importRealtimeSnapshot, validateRealtimeImportToken } from "@/lib/realt
 
 export const dynamic = "force-dynamic";
 
+const MAX_FILE_BYTES = 30 * 1024 * 1024;
+const MAX_TOTAL_ROWS = 250_000;
 const queueSheetAliases = new Set(["filas", "fila", "queue", "queues"]);
 const agentSheetAliases = new Set(["agentes", "agente", "agent", "agents", "auditor", "auditors", "auditores"]);
 
@@ -31,6 +33,15 @@ export async function POST(request: Request) {
     if (!(file instanceof File)) {
       return NextResponse.json({ success: false, error: "Arquivo XLSX é obrigatório.", message: "Arquivo XLSX é obrigatório." }, { status: 400 });
     }
+    if (!file.name.toLowerCase().endsWith(".xlsx")) {
+      return NextResponse.json({ success: false, error: "O arquivo enviado deve ser XLSX.", message: "O arquivo enviado deve ser XLSX." }, { status: 400 });
+    }
+    if (!file.size) {
+      return NextResponse.json({ success: false, error: "O arquivo enviado está vazio.", message: "O arquivo enviado está vazio." }, { status: 400 });
+    }
+    if (file.size > MAX_FILE_BYTES) {
+      return NextResponse.json({ success: false, error: "O arquivo excede o limite de 30 MB.", message: "O arquivo excede o limite de 30 MB." }, { status: 413 });
+    }
 
     const workbook = XLSX.read(await file.arrayBuffer(), { cellDates: true });
     const queueSheetName = findSheetName(workbook.SheetNames, queueSheetAliases);
@@ -47,6 +58,13 @@ export async function POST(request: Request) {
 
     const queueRows = readRows(workbook, queueSheetName);
     const agentRows = readRows(workbook, agentSheetName);
+    if (queueRows.length + agentRows.length > MAX_TOTAL_ROWS) {
+      return NextResponse.json({
+        success: false,
+        error: "O arquivo excede o limite de 250.000 linhas.",
+        message: "O arquivo excede o limite de 250.000 linhas."
+      }, { status: 413 });
+    }
     const result = await importRealtimeSnapshot({ fileName: file.name, source, queueRows, agentRows });
     if ("error" in result) {
       return NextResponse.json({ success: false, error: result.error, message: result.error }, { status: result.status ?? 400 });

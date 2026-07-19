@@ -2570,9 +2570,9 @@ async function buildQueueRealtimeView(options: RealtimeSnapshotOptions) {
     }
   });
   const summarizedBatchIds = new Set(summaryRows.map((row) => row.batchId));
-  const missingSummaryBatchIds = summaryRows.length
-    ? []
-    : batchIds.filter((batchId) => !summarizedBatchIds.has(batchId)).slice(0, realtimeRawFallbackBatchLimit);
+  const missingSummaryBatchIds = batchIds
+    .filter((batchId) => !summarizedBatchIds.has(batchId))
+    .slice(0, realtimeRawFallbackBatchLimit);
   if (missingSummaryBatchIds.length) {
     const fallbackRecords = await prisma.realTimeRecord.findMany({
       where: { recordType: "QUEUE", batchId: { in: missingSummaryBatchIds } },
@@ -2996,9 +2996,9 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
     }
   });
   const summarizedBatchIds = new Set(summaryRows.map((row) => row.batchId));
-  const missingSummaryBatchIds = summaryRows.length
-    ? []
-    : batchIds.filter((batchId) => !summarizedBatchIds.has(batchId)).slice(0, realtimeRawFallbackBatchLimit);
+  const missingSummaryBatchIds = batchIds
+    .filter((batchId) => !summarizedBatchIds.has(batchId))
+    .slice(0, realtimeRawFallbackBatchLimit);
   if (missingSummaryBatchIds.length) {
     const fallbackRecords = await prisma.realTimeRecord.findMany({
       where: { recordType: "AGENT", batchId: { in: missingSummaryBatchIds } },

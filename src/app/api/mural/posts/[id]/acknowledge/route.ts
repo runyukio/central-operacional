@@ -5,10 +5,11 @@ import { acknowledgeMuralPost, MuralError } from "@/lib/mural-service";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(_request: Request, context: { params: { id: string } }) {
+export async function POST(_request: Request, context: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await context.params;
     const actor = await getApiActor();
-    return NextResponse.json(await acknowledgeMuralPost(actor, context.params.id));
+    return NextResponse.json(await acknowledgeMuralPost(actor, id));
   } catch (error) {
     if (error instanceof MuralError) {
       return NextResponse.json({ success: false, error: error.message, message: error.message, fields: error.fields }, { status: error.status });

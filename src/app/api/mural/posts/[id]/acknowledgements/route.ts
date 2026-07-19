@@ -5,11 +5,12 @@ import { listMuralPostAcknowledgements, MuralError } from "@/lib/mural-service";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(request: Request, context: { params: { id: string } }) {
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await context.params;
     const actor = await getApiActor();
     const url = new URL(request.url);
-    return NextResponse.json(await listMuralPostAcknowledgements(actor, context.params.id, {
+    return NextResponse.json(await listMuralPostAcknowledgements(actor, id, {
       status: url.searchParams.get("status"),
       lobId: url.searchParams.get("lobId"),
       role: url.searchParams.get("role"),

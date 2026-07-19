@@ -5,10 +5,11 @@ import { archiveFormalFeedback, FormalFeedbackError } from "@/lib/formal-feedbac
 
 export const dynamic = "force-dynamic";
 
-export async function PATCH(_request: Request, { params }: { params: { id: string } }) {
+export async function PATCH(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   const actor = await getApiActor();
   try {
-    return NextResponse.json(await archiveFormalFeedback(actor, params.id));
+    return NextResponse.json(await archiveFormalFeedback(actor, id));
   } catch (error) {
     if (error instanceof FormalFeedbackError) {
       return NextResponse.json({ error: error.message, message: error.message }, { status: error.status });

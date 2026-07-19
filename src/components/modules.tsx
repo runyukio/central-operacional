@@ -1,24 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { type Dispatch, type InputHTMLAttributes, type ReactNode, type SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  ComposedChart,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis
-} from "recharts";
-import * as XLSX from "xlsx";
 import {
   type LucideIcon,
   AlertTriangle,
@@ -108,6 +93,20 @@ import {
 import { parseWbLoginBatch, serializeWbLogins } from "@/lib/batch-wb-filter";
 import { getDefaultDateRange } from "@/lib/default-date-range";
 import { cn, formatCurrency, initials } from "@/lib/utils";
+
+const Bar = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartBar), { ssr: false });
+const BarChart = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartBarChart), { ssr: false });
+const CartesianGrid = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartCartesianGrid), { ssr: false });
+const Cell = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartCell), { ssr: false });
+const ComposedChart = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartComposedChart), { ssr: false });
+const Line = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartLine), { ssr: false });
+const LineChart = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartLineChart), { ssr: false });
+const Pie = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartPie), { ssr: false });
+const PieChart = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartPieChart), { ssr: false });
+const ResponsiveContainer = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartResponsiveContainer), { ssr: false });
+const Tooltip = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartTooltip), { ssr: false });
+const XAxis = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartXAxis), { ssr: false });
+const YAxis = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartYAxis), { ssr: false });
 import { getPixKeyFormatHint, PIX_KEY_TYPES, validatePixKey } from "@/lib/pix-key";
 import { cleanShiftName, cleanShiftOptions, isBlockedShiftName, isSelectableShiftName, shiftCategoryName, standardShiftNames } from "@/lib/shift-display";
 import {
@@ -5366,6 +5365,7 @@ export function RegistrationApprovalsPage() {
     setEmployeeImportFileName(file.name);
     setShowEmployeeImport(true);
     try {
+      const XLSX = await import("xlsx");
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer);
       const sheetName = workbook.SheetNames.find((name) => normalizeExcelKey(name) === "colaboradores") ?? workbook.SheetNames[0];
@@ -6185,16 +6185,12 @@ export function SchedulesPage() {
 
   async function handleFile(file?: File) {
     if (!file) return;
-    const buffer = await file.arrayBuffer();
-    const workbook = XLSX.read(buffer);
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
     const formData = new FormData();
     formData.append("file", file);
     const preview = await apiJson<ImportPreview>("/api/schedules/import/preview", { method: "POST", body: formData });
     setPreviewFileName(file.name);
     setPreviewResult(preview);
-    setPreviewRows(preview.rows.length ? preview.rows : rows.slice(0, 8));
+    setPreviewRows(preview.rows);
     setShowPreview(true);
   }
 
@@ -9667,6 +9663,7 @@ export function AdvanceManagementPage() {
     setAdvanceImporting(true);
     setMessage("");
     try {
+      const XLSX = await import("xlsx");
       const workbook = XLSX.read(await file.arrayBuffer());
       const sheetName = workbook.SheetNames.find((name) => /adiantamento/i.test(name)) ?? workbook.SheetNames[0];
       const rows = sheetName ? XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[sheetName], { defval: "" }) : [];
@@ -11376,6 +11373,8 @@ function MuralPostVisual({ post, large = false }: { post: Pick<MuralPostClient, 
     >
       {hasImage ? (
         <>
+          {/* Uploaded covers may use signed or temporary URLs that cannot pass Next Image allowlists. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={post.imageUrl} alt="" onError={() => setImageFailed(true)} className="absolute inset-0 h-full w-full object-cover" />
           <div className="absolute inset-0 bg-gradient-to-br from-navy-950/35 to-blue-700/25" />
         </>
@@ -12273,6 +12272,8 @@ export function MuralPage() {
             <div className="space-y-4 p-5">
               <div className="overflow-hidden rounded-xl border border-border bg-slate-100">
                 <div className="relative aspect-video overflow-hidden">
+                  {/* Native image dimensions are required by the client-side crop canvas. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     ref={muralCoverImageRef}
                     src={muralCoverDraft.sourceUrl}
@@ -13848,6 +13849,7 @@ function PerformancePreviewModal({ title, fileName, preview, importing, onClose,
 }
 
 async function readPerformanceWorkbookRows(file: File, type: PerformanceImportKind) {
+  const XLSX = await import("xlsx");
   const workbook = XLSX.read(await file.arrayBuffer(), { cellDates: true });
   const preferredSheets = type === "quality"
     ? ["qualidade", "quality"]

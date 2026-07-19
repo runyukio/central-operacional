@@ -18,6 +18,7 @@ export const maxDuration = 300;
 
 const MAX_CHUNK_BYTES = 2.5 * 1024 * 1024;
 const MAX_FILE_BYTES = 30 * 1024 * 1024;
+const MAX_FILE_ROWS = 250_000;
 const UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
 
 type PreviewedFile = {
@@ -200,6 +201,7 @@ function integerParam(url: URL, name: string, minimum: number) {
 function readXlsxFile(value: FormDataEntryValue | null, label: string) {
   if (!(value instanceof File) || !value.size) throw new PerformanceError(`Selecione o arquivo de ${label}.`, 400);
   if (!value.name.toLowerCase().endsWith(".xlsx")) throw new PerformanceError(`${label} deve ser um arquivo XLSX.`, 400);
+  if (value.size > MAX_FILE_BYTES) throw new PerformanceError(`${label} excede o limite de 30 MB.`, 413);
   return value;
 }
 
@@ -210,6 +212,7 @@ function readWorkbookRows(buffer: ArrayBuffer) {
   if (!sheet) throw new PerformanceError("Planilha de Performance não encontrada no arquivo.", 400);
   const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "", raw: true });
   if (!rows.length) throw new PerformanceError("A planilha enviada está vazia.", 400);
+  if (rows.length > MAX_FILE_ROWS) throw new PerformanceError("A planilha excede o limite de 250.000 linhas.", 413);
   return rows;
 }
 

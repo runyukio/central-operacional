@@ -5,28 +5,31 @@ import { deleteMuralPost, getMuralPost, MuralError, updateMuralPost } from "@/li
 
 export const dynamic = "force-dynamic";
 
-export async function GET(_request: Request, context: { params: { id: string } }) {
+export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await context.params;
     const actor = await getApiActor();
-    return NextResponse.json(await getMuralPost(actor, context.params.id));
+    return NextResponse.json(await getMuralPost(actor, id));
   } catch (error) {
     return muralErrorResponse(error);
   }
 }
 
-export async function PUT(request: Request, context: { params: { id: string } }) {
+export async function PUT(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await context.params;
     const actor = await getApiActor();
-    return NextResponse.json(await updateMuralPost(actor, context.params.id, await request.json()));
+    return NextResponse.json(await updateMuralPost(actor, id, await request.json()));
   } catch (error) {
     return muralErrorResponse(error);
   }
 }
 
-export async function DELETE(_request: Request, context: { params: { id: string } }) {
+export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await context.params;
     const actor = await getApiActor();
-    return NextResponse.json(await deleteMuralPost(actor, context.params.id));
+    return NextResponse.json(await deleteMuralPost(actor, id));
   } catch (error) {
     return muralErrorResponse(error);
   }
