@@ -720,7 +720,7 @@ export async function exportMonthlyAdvances(actor: Actor, filters: MonthlyAdvanc
     ? await Promise.all([
         prisma.employeeProfile.findMany({
           where: { id: { in: employeeIds } },
-          select: { id: true, pixKey: true }
+          select: { id: true, pixKey: true, pixKeyType: true }
         }),
         prisma.employeeSensitiveData.findMany({
           where: { employeeId: { in: employeeIds } },
@@ -729,11 +729,20 @@ export async function exportMonthlyAdvances(actor: Actor, filters: MonthlyAdvanc
       ])
     : [[], []];
   const cnpjByEmployeeId = new Map(sensitiveRows.map((row) => [row.employeeId, row.cnpj ?? ""]));
-  const legacyPixByEmployeeId = new Map(
-    sensitiveRows.map((row) => [row.employeeId, pixKeyFromBankData(row.bankData)])
+  const legacyPixDataByEmployeeId = new Map(
+    sensitiveRows.map((row) => [row.employeeId, pixDataFromBankData(row.bankData)])
   );
-  const pixByEmployeeId = new Map(
-    employeeRows.map((row) => [row.id, row.pixKey?.trim() || legacyPixByEmployeeId.get(row.id) || ""])
+  const pixDataByEmployeeId = new Map(
+    employeeRows.map((row) => {
+      const legacyPixData = legacyPixDataByEmployeeId.get(row.id);
+      return [
+        row.id,
+        {
+          pixKey: row.pixKey?.trim() || legacyPixData?.pixKey || "",
+          pixKeyType: row.pixKeyType?.trim() || legacyPixData?.pixKeyType || ""
+        }
+      ] as const;
+    })
   );
   const headers = [
     "mes_referencia",
@@ -741,6 +750,7 @@ export async function exportMonthlyAdvances(actor: Actor, filters: MonthlyAdvanc
     "wb_login",
     "email",
     "cnpj",
+    "tipo_chave_pix",
     "chave_pix",
     "tipo_contrato",
     "lob",
@@ -758,7 +768,8 @@ export async function exportMonthlyAdvances(actor: Actor, filters: MonthlyAdvanc
     record.wbLogin,
     record.email ?? "",
     cnpjByEmployeeId.get(record.employeeId) ?? "",
-    pixByEmployeeId.get(record.employeeId) ?? "",
+    pixDataByEmployeeId.get(record.employeeId)?.pixKeyType ?? "",
+    pixDataByEmployeeId.get(record.employeeId)?.pixKey ?? "",
     record.contractType ?? "",
     record.lob ?? "",
     record.supervisor,
@@ -777,10 +788,15 @@ export async function exportMonthlyAdvances(actor: Actor, filters: MonthlyAdvanc
   };
 }
 
-function pixKeyFromBankData(value: Prisma.JsonValue | null) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
-  const pixKey = (value as Record<string, unknown>).pixKey;
-  return typeof pixKey === "string" ? pixKey.trim() : "";
+function pixDataFromBankData(value: Prisma.JsonValue | null) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { pixKey: "", pixKeyType: "" };
+  }
+  const data = value as Record<string, unknown>;
+  return {
+    pixKey: typeof data.pixKey === "string" ? data.pixKey.trim() : "",
+    pixKeyType: typeof data.pixKeyType === "string" ? data.pixKeyType.trim() : ""
+  };
 }
 
 export async function createMonthlyAdvanceChangeRequest(actor: Actor, input: {
