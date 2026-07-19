@@ -4,7 +4,7 @@ import { createPermissionError } from "@/lib/api-errors";
 import { normalizeExcelDate, normalizeExcelTime } from "@/lib/excel-normalization";
 import type { Actor } from "@/lib/mock-db";
 import { recordErrorLog } from "@/lib/mock-db";
-import { canAccessStaffCoverage, canManageStaffCoverageRequirements } from "@/lib/permissions";
+import { canAccessStaffCoverage, canAutoUpdateAdsRequirement, canManageStaffCoverageRequirements } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { countAdsScheduledByHour, listAdsScheduledAgentsAtHour } from "@/lib/staff-coverage-service";
 
@@ -58,7 +58,10 @@ export async function listAdsHourlyCoverage(actor: Actor, query: AdsHourlyCovera
         slots: data.length,
         days: new Set(data.map((row) => row.date)).size
       },
-      permissions: { canImport: canManageStaffCoverageRequirements(permissionUser(user)) }
+      permissions: {
+        canImport: canManageStaffCoverageRequirements(permissionUser(user)),
+        canAutoUpdate: canAutoUpdateAdsRequirement(permissionUser(user))
+      }
     };
   } catch (error) {
     recordErrorLog({

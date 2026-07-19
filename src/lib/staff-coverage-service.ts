@@ -1,12 +1,13 @@
 import { randomUUID } from "crypto";
 import { AuditAction, CoverageRisk, Prisma, type ScheduleStatus } from "@prisma/client";
 
+import { buildAdsRequirementPlan } from "@/lib/ads-requirement-planning-service";
 import { createPermissionError } from "@/lib/api-errors";
 import { hasExcelValue, normalizeExcelDate } from "@/lib/excel-normalization";
 import { isAgentJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
 import type { Actor } from "@/lib/mock-db";
 import { recordErrorLog } from "@/lib/mock-db";
-import { canAccessStaffCoverage, canExportStaffCoverage, canManageStaffCoverageRequirements } from "@/lib/permissions";
+import { canAccessStaffCoverage, canAutoUpdateAdsRequirement, canExportStaffCoverage, canManageStaffCoverageRequirements } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { shiftCategoryName, shiftLookupKey } from "@/lib/shift-display";
 import { dateStamp, type XlsxExportPayload } from "@/lib/xlsx-export";
@@ -500,10 +501,119 @@ export async function exportStaffCoverageXlsxData(actor: Actor, query: StaffCove
   };
 }
 
-async function upsertStaffCoverageRows(rows: StaffCoverageImportWriteRow[], userId: string, hasExtendedColumns: boolean) {
+export async function refreshAdsStaffCoverageFromForecast(actor: Actor, startDateRaw?: string) {
+  try {
+    const user = await getUser(actor);
+    if (!user) return { error: "Usuário não encontrado ou inativo.", message: "Usuário não encontrado ou inativo.", status: 403 };
+    if (!canAutoUpdateAdsRequirement(permissionUser(user))) {
+      return { error: "Apenas ADMIN pode atualizar automaticamente a necessidade ADS.", message: "Apenas ADMIN pode atualizar automaticamente a necessidade ADS.", status: 403 };
+    }
+
+    const startDate = parseDate(startDateRaw ?? "");
+    if (!startDate) return { error: "Informe uma data inicial válida.", message: "Informe uma data inicial válida.", status: 400 };
+
+    const plan = await buildAdsRequirementPlan(startDate);
+    const endDate = new Date(startDate.getTime() + 13 * 24 * 60 * 60 * 1000);
+    const [adsLob, shifts, schedules, hasExtendedColumns] = await Promise.all([
+      prisma.lob.findFirst({ where: { name: { equals: "ADS", mode: "insensitive" } }, select: { id: true, name: true } }),
+      prisma.shift.findMany({ select: { id: true, name: true, startsAt: true } }),
+      listCoverageSchedules({ startDate, endDate }, { lob: "ADS" }),
+      hasStaffCoverageExtendedColumns()
+    ]);
+    if (!adsLob) throw new Error("LOB ADS não encontrada no cadastro.");
+
+    const shiftsByCategory = canonicalShiftByCategory(shifts);
+    const missingShifts = productiveShiftCategories.filter((shift) => !shiftsByCategory.has(shift));
+    if (missingShifts.length) throw new Error(`Turno(s) não encontrado(s): ${missingShifts.join(", ")}.`);
+
+    const availability = availabilityMap(schedules);
+    const rows = plan.requirements.map<StaffCoverageImportWriteRow>((requirement) => {
+      const shift = shiftsByCategory.get(requirement.shift)!;
+      const date = parseDate(requirement.date)!;
+      const available = availability.get(`${requirement.date}|${adsLob.id}|${requirement.shift}`)?.count ?? 0;
+      const metrics = coverageMetrics(available, requirement.required);
+      return {
+        id: randomUUID(),
+        date,
+        dateKey: requirement.date,
+        lobId: adsLob.id,
+        lob: adsLob.name,
+        shiftId: shift.id,
+        shift: requirement.shift,
+        required: requirement.required,
+        available,
+        gap: metrics.gap,
+        coveragePercent: metrics.coveragePercent,
+        risk: metrics.risk,
+        observation: `Forecast automático ADS · pico ${formatDateTimeHour(requirement.peakHour)} · volume suavizado ${formatDecimal(requirement.peakRollingVolume)} · AHT ${formatDecimal(plan.ahtSeconds)}s`
+      };
+    });
+
+    await prisma.$transaction(async (tx) => {
+      await upsertStaffCoverageRows(rows, user.id, hasExtendedColumns, tx);
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          action: AuditAction.EDICAO,
+          entity: "StaffCoverageRequirement",
+          entityId: `ads-auto-${formatDateKey(startDate)}-${formatDateKey(endDate)}`,
+          reason: "Atualização automática da necessidade ADS por forecast",
+          newValue: serialize({
+            startDate: formatDateKey(startDate),
+            endDate: formatDateKey(endDate),
+            updatedRows: rows.length,
+            ahtSeconds: plan.ahtSeconds,
+            ahtPeriod: plan.ahtPeriod,
+            latestVolumeAt: plan.latestVolumeAt,
+            latestProductionAt: plan.latestProductionAt,
+            formula: "ceil((media_movel_2h * aht_segundos / 3600) * 1.0625 + 3)",
+            requirements: rows.map((row, index) => ({
+              date: row.dateKey,
+              shift: row.shift,
+              required: row.required,
+              available: row.available,
+              peakHour: plan.requirements[index].peakHour,
+              peakRollingVolume: plan.requirements[index].peakRollingVolume
+            }))
+          })
+        }
+      });
+    });
+
+    return {
+      success: true,
+      updatedRows: rows.length,
+      period: { startDate: formatDateKey(startDate), endDate: formatDateKey(endDate) },
+      ahtSeconds: Math.round(plan.ahtSeconds * 100) / 100,
+      ahtPeriod: plan.ahtPeriod,
+      latestVolumeAt: plan.latestVolumeAt.toISOString(),
+      latestProductionAt: plan.latestProductionAt.toISOString()
+    };
+  } catch (error) {
+    recordErrorLog({
+      userEmail: actor.email,
+      code: "ADS_REQUIREMENT_AUTO_UPDATE_ERROR",
+      message: errorMessage(error),
+      action: "ADS_REQUIREMENT_AUTO_UPDATE",
+      severity: "ERROR"
+    });
+    const detail = errorMessage(error);
+    const message = /não há|não possui|ausente|não encontrada|não encontrado/i.test(detail)
+      ? detail
+      : "Não foi possível atualizar automaticamente a necessidade ADS.";
+    return { error: message, message, status: 500 };
+  }
+}
+
+async function upsertStaffCoverageRows(
+  rows: StaffCoverageImportWriteRow[],
+  userId: string,
+  hasExtendedColumns: boolean,
+  database: Prisma.TransactionClient | typeof prisma = prisma
+) {
   for (const chunk of chunkArray(rows, 100)) {
     if (hasExtendedColumns) {
-      await prisma.$executeRaw(Prisma.sql`
+      await database.$executeRaw(Prisma.sql`
         INSERT INTO "StaffCoverage" (
           "id", "date", "lobId", "shiftId", "plannedStaff", "requiredStaff", "coveragePercent", "gap", "risk",
           "observation", "createdById", "updatedById", "createdAt", "updatedAt"
@@ -539,7 +649,7 @@ async function upsertStaffCoverageRows(rows: StaffCoverageImportWriteRow[], user
       continue;
     }
 
-    await prisma.$executeRaw(Prisma.sql`
+    await database.$executeRaw(Prisma.sql`
       INSERT INTO "StaffCoverage" (
         "id", "date", "lobId", "shiftId", "plannedStaff", "requiredStaff", "coveragePercent", "gap", "risk"
       )
@@ -1032,6 +1142,16 @@ function formatDateKey(date: Date) {
 function formatDatePtBr(date: Date) {
   const [year, month, day] = formatDateKey(date).split("-");
   return `${day}/${month}/${year}`;
+}
+
+function formatDateTimeHour(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return `${formatDatePtBr(date)} ${String(date.getUTCHours()).padStart(2, "0")}:00`;
+}
+
+function formatDecimal(value: number) {
+  return new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 }).format(value);
 }
 
 function weekdayLabel(date: Date) {

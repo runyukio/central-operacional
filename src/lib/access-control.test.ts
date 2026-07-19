@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { normalizeAccessRole, roleHasCapability } from "@/lib/access-control";
 import { canAccessFinanceiro } from "@/lib/financeiro-permissions";
-import { canAccessRealTime, canAccessWorkSessionMonitoring, canEditSchedule } from "@/lib/permissions";
+import { canAccessRealTime, canAccessWorkSessionMonitoring, canAutoUpdateAdsRequirement, canEditSchedule } from "@/lib/permissions";
 
 test("somente ADMIN e WFM alteram cronogramas", () => {
   const allowed = ["ADMIN", "WFM"];
@@ -55,6 +55,13 @@ test("somente ADMIN altera Billing, Financeiro, Adiantamento e roles", () => {
   for (const capability of restrictedCapabilities) {
     assert.equal(roleHasCapability("ADMIN", capability), true, capability);
     for (const role of nonAdminRoles) assert.equal(roleHasCapability(role, capability), false, `${role}:${capability}`);
+  }
+});
+
+test("somente ADMIN atualiza automaticamente a necessidade ADS", () => {
+  assert.equal(canAutoUpdateAdsRequirement({ role: "ADMIN", status: "ACTIVE" }), true);
+  for (const role of ["GESTOR", "WFM", "RTA", "POC", "CLIENT", "COLABORADOR"]) {
+    assert.equal(canAutoUpdateAdsRequirement({ role, status: "ACTIVE" }), false, role);
   }
 });
 

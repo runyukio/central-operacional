@@ -15663,7 +15663,9 @@ export function StaffCoveragePage() {
   const [showRtaCoverage, setShowRtaCoverage] = useState(true);
   const [dateFilterTouched, setDateFilterTouched] = useState(false);
   const [message, setMessage] = useState("");
+  const [adsUpdateSummary, setAdsUpdateSummary] = useState("");
   const [importing, setImporting] = useState(false);
+  const [updatingAdsRequirement, setUpdatingAdsRequirement] = useState(false);
   const [preview, setPreview] = useState<StaffCoveragePreviewResponse | null>(null);
   const [previewFileName, setPreviewFileName] = useState("");
   const [details, setDetails] = useState<StaffCoverageDetailsResponse | null>(null);
@@ -15827,6 +15829,50 @@ export function StaffCoveragePage() {
     }
   };
 
+  const refreshAdsRequirement = async () => {
+    if (updatingAdsRequirement) return;
+    const confirmed = window.confirm(
+      `Atualizar automaticamente a necessidade ADS de ${filters.startDate} pelos próximos 14 dias?\n\nOs valores atuais de ADS para Manhã, Tarde e Noite nesse período serão substituídos.`
+    );
+    if (!confirmed) return;
+
+    setUpdatingAdsRequirement(true);
+    setAdsUpdateSummary("");
+    try {
+      const result = await apiJson<{
+        success: boolean;
+        updatedRows: number;
+        period: { startDate: string; endDate: string };
+        ahtSeconds: number;
+        ahtPeriod: { startDate: string; endDate: string };
+      }>("/api/staff-coverage/ads/refresh", {
+        method: "POST",
+        body: JSON.stringify({ startDate: filters.startDate })
+      });
+      setDateFilterTouched(true);
+      setFilters((current) => ({
+        ...current,
+        startDate: result.period.startDate,
+        endDate: result.period.endDate,
+        lob: "ADS",
+        shift: "Todos",
+        supervisor: "Todos",
+        skill: "Todas",
+        roleTitle: "Agente"
+      }));
+      setPage(1);
+      setView("AGENTS");
+      setAdsUpdateSummary(
+        `Necessidade ADS atualizada: ${result.updatedRows} turno(s), AHT ${result.ahtSeconds.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}s ` +
+        `(${result.ahtPeriod.startDate} a ${result.ahtPeriod.endDate}).`
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível atualizar automaticamente a necessidade ADS.");
+    } finally {
+      setUpdatingAdsRequirement(false);
+    }
+  };
+
   const openDetails = async (row: StaffCoverageRowClient) => {
     setDetailsLoading(true);
     const params = new URLSearchParams({
@@ -15893,6 +15939,17 @@ export function StaffCoveragePage() {
                     <Upload className="h-4 w-4" /> Importar necessidade ADS
                   </button>
                 </>
+              ) : null}
+              {adsPayload?.permissions.canAutoUpdate ? (
+                <button
+                  type="button"
+                  onClick={() => void refreshAdsRequirement()}
+                  disabled={updatingAdsRequirement}
+                  className="inline-flex h-9 items-center gap-2 rounded-lg bg-emerald-600 px-3 text-xs font-extrabold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <RefreshCw className={cn("h-4 w-4", updatingAdsRequirement && "animate-spin")} />
+                  {updatingAdsRequirement ? "Calculando..." : "Atualizar necessidade ADS"}
+                </button>
               ) : null}
               <button onClick={() => void loadAdsCoverage()} className="inline-flex h-9 items-center gap-2 rounded-lg bg-navy-950 px-3 text-xs font-extrabold text-white">
                 <RefreshCw className={cn("h-4 w-4", adsLoading && "animate-spin")} /> Atualizar
@@ -15977,6 +16034,7 @@ export function StaffCoveragePage() {
         )}
       </div>
 
+      {adsUpdateSummary ? <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700">{adsUpdateSummary}</div> : null}
       {message ? <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
 
       {view === "STAFF" ? (
@@ -16275,7 +16333,7 @@ type AdsHourlyCoverageResponse = {
   }>;
   period: { startDate: string; endDate: string };
   summary: { slots: number; days: number };
-  permissions: { canImport: boolean };
+  permissions: { canImport: boolean; canAutoUpdate: boolean };
 };
 
 type AdsHourlyCoverageDetailsResponse = {
