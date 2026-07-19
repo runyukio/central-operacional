@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, CircleDollarSign, Download, Eye, FileSpreadsheet, LockKeyhole, Pencil, RefreshCw, Save, Search, Send, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { CheckCircle2, CircleDollarSign, Download, Eye, FileSpreadsheet, LockKeyhole, Pencil, RefreshCw, Save, Search, Send, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 
 import { EmptyState, PageHeader, Panel, StatCard, StatusBadge } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
@@ -150,6 +150,12 @@ type BillingPayload = {
 };
 
 type TabKey = "lob" | "employees" | "hours" | "adjustments" | "rates";
+
+type BillingFiscalDraft = {
+  invoiceNumber: string;
+  serviceDescription: string;
+  file: File | null;
+};
 
 type BulkAdjustmentResult = {
   fileName: string;
@@ -376,13 +382,51 @@ export function BillingPage() {
     await postBilling({ action: "delete-adjustment", id: adjustment.id }, "Ajuste manual excluído.");
   }
 
-  async function setEmployeeInvoiceFinalized(invoice: BillingPayload["data"]["invoices"][number], finalized: boolean) {
-    await postBilling({
-      action: "set-employee-invoice-finalized",
-      referenceMonth,
-      employeeId: invoice.employeeId,
-      finalized
-    }, finalized ? "Invoice individual finalizado e congelado." : "Invoice individual reaberto para ajustes e recálculo.");
+  async function setEmployeeInvoiceFinalized(
+    invoice: BillingPayload["data"]["invoices"][number],
+    finalized: boolean,
+    fiscalDraft?: BillingFiscalDraft
+  ) {
+    setSaving(true);
+    setError("");
+    setMessage("");
+    try {
+      const request = finalized
+        ? (() => {
+          const form = new FormData();
+          form.append("action", "set-employee-invoice-finalized");
+          form.append("referenceMonth", referenceMonth);
+          form.append("employeeId", invoice.employeeId);
+          form.append("finalized", "true");
+          form.append("invoiceNumber", fiscalDraft?.invoiceNumber ?? "");
+          form.append("serviceDescription", fiscalDraft?.serviceDescription ?? "");
+          if (fiscalDraft?.file) form.append("file", fiscalDraft.file);
+          return { method: "POST", body: form };
+        })()
+        : {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "set-employee-invoice-finalized",
+            referenceMonth,
+            employeeId: invoice.employeeId,
+            finalized: false
+          })
+        };
+      const response = await fetch("/api/billing", request);
+      const next = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(next.error ?? "Não foi possível atualizar o invoice.");
+      setMessage(finalized
+        ? "Invoice individual finalizado com a nota fiscal e congelado."
+        : "Invoice individual reaberto para ajustes e recálculo.");
+      await load();
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível atualizar o invoice.");
+      return false;
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function releaseEmployeeInvoiceForReview(invoice: BillingPayload["data"]["invoices"][number]) {
@@ -617,7 +661,7 @@ export function BillingPage() {
               onLoadHourDetails={() => setActiveTab("hours")}
               onCreateAdjustment={(draft) => createEmployeeAdjustment(selectedInvoice, draft)}
               onReleaseForReview={() => releaseEmployeeInvoiceForReview(selectedInvoice)}
-              onSetFinalized={(finalized) => setEmployeeInvoiceFinalized(selectedInvoice, finalized)}
+              onSetFinalized={(finalized, fiscalDraft) => setEmployeeInvoiceFinalized(selectedInvoice, finalized, fiscalDraft)}
             />
           ) : null}
           {editingAdjustment ? (
@@ -822,12 +866,52 @@ function EmployeeBillingDetail({
   onLoadHourDetails: () => void;
   onCreateAdjustment: (draft: { type: string; description: string; amount: string }) => Promise<void>;
   onReleaseForReview: () => Promise<void>;
-  onSetFinalized: (finalized: boolean) => Promise<void>;
+  onSetFinalized: (finalized: boolean, fiscalDraft?: BillingFiscalDraft) => Promise<boolean>;
 }) {
   const [draft, setDraft] = useState({ type: "Correção", amount: "", description: "" });
   const [localError, setLocalError] = useState("");
+  const [finalizationOpen, setFinalizationOpen] = useState(false);
+  const [fiscalError, setFiscalError] = useState("");
+  const [fiscalDraft, setFiscalDraft] = useState<BillingFiscalDraft>({
+    invoiceNumber: invoice.fiscalInvoice?.invoiceNumber ?? "",
+    serviceDescription: invoice.fiscalInvoice?.serviceDescription ?? "",
+    file: null
+  });
   const finalized = invoice.status === "FECHADO";
   const alreadyReleasedForReview = ["DISPONIVEL_APROVACAO", "APROVADO_COLABORADOR", "AGUARDANDO_SUPERVISOR", "AGUARDANDO_ADMIN"].includes(invoice.status);
+
+  function openFinalizationForm() {
+    setFiscalDraft({
+      invoiceNumber: invoice.fiscalInvoice?.invoiceNumber ?? "",
+      serviceDescription: invoice.fiscalInvoice?.serviceDescription ?? "",
+      file: null
+    });
+    setFiscalError("");
+    setFinalizationOpen(true);
+  }
+
+  async function finalizeInvoice() {
+    setFiscalError("");
+    if (!/^\d{1,20}$/.test(fiscalDraft.invoiceNumber.trim())) {
+      setFiscalError("Informe somente números no número da nota fiscal, com até 20 dígitos.");
+      return;
+    }
+    const description = fiscalDraft.serviceDescription.trim();
+    if (description.length < 3 || description.length > 1000) {
+      setFiscalError("A descrição do serviço deve ter entre 3 e 1.000 caracteres.");
+      return;
+    }
+    if (!fiscalDraft.file && !invoice.fiscalInvoice) {
+      setFiscalError("Anexe a nota fiscal em PDF, XML, PNG ou JPG.");
+      return;
+    }
+    const completed = await onSetFinalized(true, {
+      ...fiscalDraft,
+      invoiceNumber: fiscalDraft.invoiceNumber.trim(),
+      serviceDescription: description
+    });
+    if (completed) setFinalizationOpen(false);
+  }
 
   async function submit() {
     setLocalError("");
@@ -871,7 +955,7 @@ function EmployeeBillingDetail({
               <button
                 type="button"
                 disabled={saving}
-                onClick={() => void onSetFinalized(!finalized)}
+                onClick={() => finalized ? void onSetFinalized(false) : openFinalizationForm()}
                 className={cn(
                   "inline-flex h-9 items-center justify-center gap-2 rounded-lg px-3 text-xs font-black leading-none",
                   finalized ? "border border-amber-200 bg-amber-50 text-amber-800" : "premium-button"
@@ -1001,6 +1085,91 @@ function EmployeeBillingDetail({
           </div>
         </div>
       </aside>
+      {finalizationOpen ? (
+        <div className="absolute inset-0 z-10 grid place-items-center bg-navy-950/50 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="billing-finalization-title">
+          <div className="w-full max-w-2xl overflow-hidden rounded-2xl border border-border bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
+              <div>
+                <p className="text-xs font-black uppercase tracking-wide text-blue-700">Fechamento manual</p>
+                <h3 id="billing-finalization-title" className="mt-1 text-xl font-black text-navy-950">Finalizar invoice</h3>
+                <p className="mt-1 text-sm font-semibold text-muted">{invoice.employeeName} • {invoice.wbLogin}</p>
+              </div>
+              <button type="button" disabled={saving} onClick={() => setFinalizationOpen(false)} className="premium-control inline-flex h-9 w-9 shrink-0 items-center justify-center p-0" aria-label="Fechar formulário">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4 p-5">
+              <div className="grid gap-4 md:grid-cols-2">
+                <Label text="Número da nota fiscal">
+                  <input
+                    value={fiscalDraft.invoiceNumber}
+                    onChange={(event) => setFiscalDraft({ ...fiscalDraft, invoiceNumber: event.target.value.replace(/\D/g, "").slice(0, 20) })}
+                    inputMode="numeric"
+                    maxLength={20}
+                    placeholder="Somente números"
+                    className="premium-control h-11 w-full px-3 text-sm font-bold"
+                  />
+                </Label>
+                <Label text="Valor bruto da nota">
+                  <div className="premium-control flex h-11 w-full items-center justify-between gap-3 bg-slate-50 px-3 text-sm font-black text-navy-950">
+                    <span>{formatCurrency(invoice.grossAmount)}</span>
+                    <LockKeyhole className="h-4 w-4 shrink-0 text-muted" />
+                  </div>
+                </Label>
+              </div>
+
+              <Label text="Descrição do serviço">
+                <textarea
+                  value={fiscalDraft.serviceDescription}
+                  onChange={(event) => setFiscalDraft({ ...fiscalDraft, serviceDescription: event.target.value.slice(0, 1000) })}
+                  maxLength={1000}
+                  placeholder="Descreva o serviço informado na nota fiscal"
+                  className="premium-control min-h-[110px] w-full px-3 py-2 text-sm font-semibold"
+                />
+              </Label>
+
+              <Label text="Anexo da nota fiscal">
+                <label className="flex min-h-20 cursor-pointer items-center gap-3 rounded-xl border border-dashed border-blue-200 bg-blue-50/50 px-4 py-3 transition hover:border-blue-400 hover:bg-blue-50">
+                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white text-blue-700 shadow-sm">
+                    <Upload className="h-5 w-5" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-black text-navy-950">{fiscalDraft.file?.name ?? invoice.fiscalInvoice?.fileName ?? "Selecionar arquivo"}</span>
+                    <span className="mt-0.5 block text-xs font-semibold text-muted">PDF, XML, PNG ou JPG • máximo de 10 MB</span>
+                  </span>
+                  <input
+                    type="file"
+                    accept=".pdf,.xml,.png,.jpg,.jpeg"
+                    className="sr-only"
+                    onChange={(event) => setFiscalDraft({ ...fiscalDraft, file: event.target.files?.[0] ?? null })}
+                  />
+                </label>
+              </Label>
+
+              {invoice.fiscalInvoice && !fiscalDraft.file ? (
+                <p className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-800">
+                  O anexo já enviado será mantido. Selecione outro arquivo somente para substituí-lo.
+                </p>
+              ) : null}
+              {fiscalError ? <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-700">{fiscalError}</p> : null}
+              <p className="text-xs font-semibold text-muted">
+                Ao confirmar, o valor bruto fica congelado, a nota é armazenada de forma privada e o lançamento é enviado ao Omie.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap justify-end gap-2 border-t border-border bg-slate-50 px-5 py-4">
+              <button type="button" disabled={saving} onClick={() => setFinalizationOpen(false)} className="premium-control inline-flex h-10 items-center justify-center px-4 text-sm font-black text-navy-950 disabled:opacity-60">
+                Cancelar
+              </button>
+              <button type="button" disabled={saving} onClick={() => void finalizeInvoice()} className="premium-button inline-flex h-10 items-center justify-center gap-2 px-4 text-sm font-black disabled:opacity-60">
+                {saving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <LockKeyhole className="h-4 w-4" />}
+                {saving ? "Finalizando..." : "Confirmar e finalizar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

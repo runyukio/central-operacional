@@ -1007,7 +1007,14 @@ export async function updateBillingCycleStatus(actor: Actor, input: { referenceM
   return { data: mapCycle(updated) };
 }
 
-export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: { referenceMonth?: string | null; employeeId: string; finalized: boolean }) {
+export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
+  referenceMonth?: string | null;
+  employeeId: string;
+  finalized: boolean;
+  invoiceNumber?: string | null;
+  serviceDescription?: string | null;
+  file?: File | null;
+}) {
   const user = await findActiveUser(actor.email);
   const denied = requireBillingManagement(user);
   if (denied) return denied;
@@ -1024,24 +1031,141 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: { 
 
   const cycle = await ensureBillingCycle(referenceMonth);
   const existing = await prisma.billingEmployeeInvoice.findUnique({
-    where: { billingCycleId_employeeId: { billingCycleId: cycle.id, employeeId: employee.id } }
+    where: { billingCycleId_employeeId: { billingCycleId: cycle.id, employeeId: employee.id } },
+    include: { fiscalInvoice: true }
   });
 
   if (input.finalized) {
-    const calculated = await calculateEmployeeInvoice(employee, referenceMonth, await getBillingRates(), cycle.id, cycle.status);
-    const invoice = await upsertEmployeeInvoice(cycle.id, calculated, { status: "FECHADO" });
-    await prisma.auditLog.create({
-      data: {
-        actorId: user!.id,
-        action: AuditAction.EDICAO,
-        entity: "BillingEmployeeInvoice",
-        entityId: invoice.id,
-        reason: "Invoice individual finalizado pelo Admin Central",
-        previousValue: existing ? { status: existing.status, finalAmount: Number(existing.finalAmount), totalMinutes: existing.totalConsideredMinutes } : undefined,
-        newValue: { status: invoice.status, referenceMonth, employeeId: employee.id, finalAmount: Number(invoice.finalAmount), totalMinutes: invoice.totalConsideredMinutes }
+    const invoiceNumber = String(input.invoiceNumber ?? "").trim();
+    const serviceDescription = String(input.serviceDescription ?? "").trim();
+    if (!BILLING_INVOICE_NUMBER_PATTERN.test(invoiceNumber)) {
+      return { error: "Número da nota fiscal inválido. Informe somente números, com até 20 dígitos.", status: 400 };
+    }
+    if (serviceDescription.length < 3 || serviceDescription.length > 1000) {
+      return { error: "A descrição do serviço deve ter entre 3 e 1.000 caracteres.", status: 400 };
+    }
+    if (!input.file && !existing?.fiscalInvoice) {
+      return { error: "Anexe a nota fiscal em PDF, XML, PNG ou JPG.", status: 400 };
+    }
+    if (input.file) {
+      const validation = validateStorageUpload(actor, BILLING_INVOICE_BUCKET, input.file);
+      if ("error" in validation) return { error: validation.error, status: 400 };
+      if (!isStorageConfigured() && (process.env.NODE_ENV === "production" || process.env.VERCEL === "1")) {
+        return { error: "O armazenamento de notas fiscais não está configurado no ambiente de produção.", status: 503 };
       }
+    }
+
+    const sensitiveData = await prisma.employeeSensitiveData.findUnique({
+      where: { employeeId: employee.id },
+      select: { cnpj: true }
     });
-    return { data: { id: invoice.id, status: invoice.status, statusLabel: invoiceStatusLabel(invoice.status) } };
+    if (String(sensitiveData?.cnpj ?? "").replace(/\D/g, "").length !== 14) {
+      return { error: "Cadastre um CNPJ válido antes de finalizar o invoice e enviar o lançamento ao Omie.", status: 400 };
+    }
+
+    const calculated = await calculateEmployeeInvoice(employee, referenceMonth, await getBillingRates(), cycle.id, cycle.status);
+    const file = input.file ?? null;
+    const storagePath = file ? buildBillingInvoiceStoragePath(referenceMonth, employee.id, file.name) : null;
+    let uploadedPath: string | null = null;
+
+    try {
+      if (file && storagePath) {
+        const uploaded = await uploadPrivateObject(BILLING_INVOICE_BUCKET, storagePath, file);
+        uploadedPath = uploaded.storagePath;
+      }
+
+      const submittedAt = new Date();
+      const invoice = await prisma.$transaction(async (tx) => {
+        const savedInvoice = await upsertEmployeeInvoice(cycle.id, calculated, { status: "FECHADO" }, tx);
+        const existingFile = existing?.fiscalInvoice;
+        const fileData = file && uploadedPath
+          ? {
+            fileName: file.name,
+            mimeType: file.type || "application/octet-stream",
+            sizeBytes: file.size,
+            storageBucket: BILLING_INVOICE_BUCKET,
+            storagePath: uploadedPath
+          }
+          : existingFile
+            ? {
+              fileName: existingFile.fileName,
+              mimeType: existingFile.mimeType,
+              sizeBytes: existingFile.sizeBytes,
+              storageBucket: existingFile.storageBucket,
+              storagePath: existingFile.storagePath
+            }
+            : null;
+        if (!fileData) throw new Error("Anexo da nota fiscal não encontrado.");
+
+        await tx.billingFiscalInvoice.upsert({
+          where: { employeeInvoiceId: savedInvoice.id },
+          update: {
+            invoiceNumber,
+            grossAmount: decimal(calculated.grossAmount),
+            serviceDescription,
+            ...fileData,
+            submittedById: user!.id,
+            submittedAt,
+            omieStatus: "PENDING",
+            omieIntegrationCode: buildOmieIntegrationCode(referenceMonth, savedInvoice.id),
+            omieSyncedAt: null,
+            omieLastError: null
+          },
+          create: {
+            employeeInvoiceId: savedInvoice.id,
+            invoiceNumber,
+            grossAmount: decimal(calculated.grossAmount),
+            serviceDescription,
+            ...fileData,
+            submittedById: user!.id,
+            submittedAt,
+            omieStatus: "PENDING",
+            omieIntegrationCode: buildOmieIntegrationCode(referenceMonth, savedInvoice.id)
+          }
+        });
+
+        await tx.auditLog.create({
+          data: {
+            actorId: user!.id,
+            action: AuditAction.EDICAO,
+            entity: "BillingEmployeeInvoice",
+            entityId: savedInvoice.id,
+            reason: "Invoice individual finalizado pelo Admin Central com nota fiscal",
+            previousValue: existing ? {
+              status: existing.status,
+              finalAmount: Number(existing.finalAmount),
+              totalMinutes: existing.totalConsideredMinutes,
+              invoiceNumber: existing.fiscalInvoice?.invoiceNumber ?? null
+            } : undefined,
+            newValue: {
+              status: savedInvoice.status,
+              referenceMonth,
+              employeeId: employee.id,
+              invoiceNumber,
+              invoiceGrossAmount: calculated.grossAmount,
+              invoiceFileName: fileData.fileName,
+              finalAmount: Number(savedInvoice.finalAmount),
+              totalMinutes: savedInvoice.totalConsideredMinutes
+            }
+          }
+        });
+
+        return savedInvoice;
+      });
+
+      if (uploadedPath && existing?.fiscalInvoice?.storagePath && existing.fiscalInvoice.storagePath !== uploadedPath) {
+        void deletePrivateObject(BILLING_INVOICE_BUCKET, existing.fiscalInvoice.storagePath).catch(() => undefined);
+      }
+      const omie = await syncBillingFiscalInvoiceToOmie(invoice.id, user!.id).catch(() => ({
+        status: "ERROR" as const,
+        message: "Invoice finalizado, mas não foi possível iniciar o envio ao Omie. Tente novamente pelo botão de reenvio.",
+        launchCode: ""
+      }));
+      return { data: { id: invoice.id, status: invoice.status, statusLabel: invoiceStatusLabel(invoice.status), omie } };
+    } catch (error) {
+      if (uploadedPath) await deletePrivateObject(BILLING_INVOICE_BUCKET, uploadedPath).catch(() => undefined);
+      return { error: error instanceof Error ? error.message : "Não foi possível finalizar o invoice com a nota fiscal.", status: 500 };
+    }
   }
 
   if (!existing) return { error: "Invoice individual ainda não existe para este colaborador/ciclo.", status: 404 };
