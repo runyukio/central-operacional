@@ -250,7 +250,8 @@ export async function listStaffCoverage(actor: Actor, query: StaffCoverageQuery 
       },
       permissions: {
         canImport: canManageStaffCoverageRequirements(permissionUser(user)),
-        canExport: canExportStaffCoverage(permissionUser(user))
+        canExport: canExportStaffCoverage(permissionUser(user)),
+        canAutoUpdate: canAutoUpdateAdsRequirement(permissionUser(user))
       }
     };
   } catch (error) {

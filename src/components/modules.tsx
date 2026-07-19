@@ -15642,10 +15642,9 @@ export function ShiftReportPage() {
 export function StaffCoveragePage() {
   const initialRange = currentStaffCoverageWeekRange();
   const staffInitialRange = currentMonthRemainingRange();
-  const [view, setView] = useState<"AGENTS" | "STAFF" | "ADS">("AGENTS");
+  const [view, setView] = useState<"AGENTS" | "STAFF">("AGENTS");
   const [payload, setPayload] = useState<StaffCoverageResponse | null>(null);
   const [staffPayload, setStaffPayload] = useState<RequiredStaffCoverageResponse | null>(null);
-  const [adsPayload, setAdsPayload] = useState<AdsHourlyCoverageResponse | null>(null);
   const [filters, setFilters] = useState({
     startDate: initialRange.startDate,
     endDate: initialRange.endDate,
@@ -15659,7 +15658,6 @@ export function StaffCoveragePage() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [staffLoading, setStaffLoading] = useState(false);
-  const [adsLoading, setAdsLoading] = useState(false);
   const [showRtaCoverage, setShowRtaCoverage] = useState(true);
   const [dateFilterTouched, setDateFilterTouched] = useState(false);
   const [message, setMessage] = useState("");
@@ -15671,7 +15669,6 @@ export function StaffCoveragePage() {
   const [details, setDetails] = useState<StaffCoverageDetailsResponse | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const adsFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const loadCoverage = useCallback(async () => {
     setLoading(true);
@@ -15719,23 +15716,6 @@ export function StaffCoveragePage() {
     }
   }, [filters.endDate, filters.lob, filters.shift, filters.staffCoverage, filters.startDate, filters.supervisor, showRtaCoverage]);
 
-  const loadAdsCoverage = useCallback(async (period?: { startDate: string; endDate: string }) => {
-    setAdsLoading(true);
-    const params = new URLSearchParams({
-      startDate: period?.startDate ?? filters.startDate,
-      endDate: period?.endDate ?? filters.endDate
-    });
-    try {
-      const data = await apiJson<AdsHourlyCoverageResponse>(`/api/staff-coverage/ads?${params.toString()}`);
-      setAdsPayload(data);
-      setMessage("");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Não foi possível carregar a necessidade ADS por hora.");
-    } finally {
-      setAdsLoading(false);
-    }
-  }, [filters.endDate, filters.startDate]);
-
   useEffect(() => {
     if (view === "AGENTS") void loadCoverage();
   }, [loadCoverage, view]);
@@ -15744,43 +15724,17 @@ export function StaffCoveragePage() {
     if (view === "STAFF") void loadStaffCoverage();
   }, [loadStaffCoverage, view]);
 
-  useEffect(() => {
-    if (view === "ADS") void loadAdsCoverage();
-  }, [loadAdsCoverage, view]);
-
   const updateFilter = (key: keyof typeof filters, value: string) => {
     if (key === "startDate" || key === "endDate") setDateFilterTouched(true);
     setFilters((current) => ({ ...current, [key]: value }));
     setPage(1);
   };
 
-  const changeRequiredView = (nextView: "AGENTS" | "STAFF" | "ADS") => {
+  const changeRequiredView = (nextView: "AGENTS" | "STAFF") => {
     setView(nextView);
     if (nextView === "STAFF" && !dateFilterTouched) {
       setFilters((current) => ({ ...current, startDate: staffInitialRange.startDate, endDate: staffInitialRange.endDate }));
       setPage(1);
-    }
-  };
-
-  const importAdsRequirementFile = async (file?: File | null) => {
-    if (!file) return;
-    setImporting(true);
-    const formData = new FormData();
-    formData.append("file", file);
-    try {
-      const result = await apiJson<{ success: boolean; importedRows: number; period: { startDate: string; endDate: string } }>("/api/staff-coverage/ads", {
-        method: "POST",
-        body: formData
-      });
-      setMessage(`Necessidade ADS importada: ${result.importedRows} horário(s).`);
-      setDateFilterTouched(true);
-      setFilters((current) => ({ ...current, startDate: result.period.startDate, endDate: result.period.endDate }));
-      await loadAdsCoverage(result.period);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Não foi possível importar a necessidade ADS por hora.");
-    } finally {
-      setImporting(false);
-      if (adsFileInputRef.current) adsFileInputRef.current.value = "";
     }
   };
 
@@ -15912,7 +15866,7 @@ export function StaffCoveragePage() {
       />
 
       <div className="inline-flex rounded-xl border border-border bg-white p-1 shadow-sm">
-        {(["AGENTS", "STAFF", "ADS"] as const).map((item) => (
+        {(["AGENTS", "STAFF"] as const).map((item) => (
           <button
             key={item}
             onClick={() => changeRequiredView(item)}
@@ -15927,36 +15881,6 @@ export function StaffCoveragePage() {
       </div>
 
       <div className="rounded-xl border border-border bg-white p-3 shadow-sm">
-        {view === "ADS" ? (
-          <div className="grid gap-2 md:grid-cols-[180px_180px_1fr]">
-            <FormInput label="Data inicial" type="date" value={filters.startDate} onChange={(value) => updateFilter("startDate", value)} />
-            <FormInput label="Data final" type="date" value={filters.endDate} onChange={(value) => updateFilter("endDate", value)} />
-            <div className="flex flex-wrap items-end justify-end gap-2">
-              {(adsPayload?.permissions.canImport ?? payload?.permissions.canImport) ? (
-                <>
-                  <input ref={adsFileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={(event) => void importAdsRequirementFile(event.target.files?.[0])} />
-                  <button onClick={() => adsFileInputRef.current?.click()} disabled={importing} className="inline-flex h-9 items-center gap-2 rounded-lg bg-blue-600 px-3 text-xs font-extrabold text-white disabled:opacity-60">
-                    <Upload className="h-4 w-4" /> Importar necessidade ADS
-                  </button>
-                </>
-              ) : null}
-              {adsPayload?.permissions.canAutoUpdate ? (
-                <button
-                  type="button"
-                  onClick={() => void refreshAdsRequirement()}
-                  disabled={updatingAdsRequirement}
-                  className="inline-flex h-9 items-center gap-2 rounded-lg bg-emerald-600 px-3 text-xs font-extrabold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <RefreshCw className={cn("h-4 w-4", updatingAdsRequirement && "animate-spin")} />
-                  {updatingAdsRequirement ? "Calculando..." : "Atualizar necessidade ADS"}
-                </button>
-              ) : null}
-              <button onClick={() => void loadAdsCoverage()} className="inline-flex h-9 items-center gap-2 rounded-lg bg-navy-950 px-3 text-xs font-extrabold text-white">
-                <RefreshCw className={cn("h-4 w-4", adsLoading && "animate-spin")} /> Atualizar
-              </button>
-            </div>
-          </div>
-        ) : (
         <div className={cn("grid gap-2 md:grid-cols-3", view === "AGENTS" ? "xl:grid-cols-[140px_140px_140px_140px_170px_140px_130px_1fr]" : "xl:grid-cols-[140px_140px_140px_140px_190px_170px_1fr]")}>
           <FormInput label="Data inicial" type="date" value={filters.startDate} onChange={(value) => updateFilter("startDate", value)} />
           <FormInput label="Data final" type="date" value={filters.endDate} onChange={(value) => updateFilter("endDate", value)} />
@@ -16018,6 +15942,17 @@ export function StaffCoveragePage() {
                 </button>
               </>
             ) : null}
+            {view === "AGENTS" && payload?.permissions.canAutoUpdate ? (
+              <button
+                type="button"
+                onClick={() => void refreshAdsRequirement()}
+                disabled={updatingAdsRequirement}
+                className="inline-flex h-9 items-center gap-2 rounded-lg bg-emerald-600 px-3 text-xs font-extrabold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <RefreshCw className={cn("h-4 w-4", updatingAdsRequirement && "animate-spin")} />
+                {updatingAdsRequirement ? "Calculando..." : "Atualizar necessidade ADS"}
+              </button>
+            ) : null}
             {view === "AGENTS" ? <button onClick={() => void exportCoverage()} className="premium-control inline-flex h-9 items-center gap-2 px-3 text-xs font-extrabold text-navy-950">
               <Download className="h-4 w-4" /> Exportar
             </button> : null}
@@ -16031,7 +15966,6 @@ export function StaffCoveragePage() {
             </button>
           </div>
         </div>
-        )}
       </div>
 
       {adsUpdateSummary ? <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700">{adsUpdateSummary}</div> : null}
@@ -16039,8 +15973,6 @@ export function StaffCoveragePage() {
 
       {view === "STAFF" ? (
         <RequiredStaffCoverageView payload={staffPayload} loading={staffLoading} showRta={showRtaCoverage} />
-      ) : view === "ADS" ? (
-        <AdsHourlyCoverageView payload={adsPayload} loading={adsLoading} />
       ) : (
       <>
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
@@ -16291,7 +16223,7 @@ type StaffCoverageResponse = {
   matrix: Array<{ date: string; label: string; Manhã: number; Tarde: number; Noite: number; total: number }>;
   pagination: { page: number; limit: number; total: number; totalPages: number };
   filters: { lobs: string[]; shifts: string[]; supervisors: string[]; skills: string[] };
-  permissions: { canImport: boolean; canExport: boolean };
+  permissions: { canImport: boolean; canExport: boolean; canAutoUpdate: boolean };
 };
 
 type StaffCoveragePreviewResponse = {
