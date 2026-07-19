@@ -5,7 +5,8 @@ import {
   buildMergedTimelineSegments,
   buildTimelineSegments,
   realtimeHoursTimelinePersonKey,
-  resolveRealtimeHoursPresenceStatus
+  resolveRealtimeHoursPresenceStatus,
+  selectRealtimeHoursPresenceRecord
 } from "./realtime-hours-service";
 
 const minute = 60_000;
@@ -165,4 +166,38 @@ test("prioriza tela bloqueada sobre o tempo sem movimento", () => {
   }, capturedAt, 600);
 
   assert.equal(status, "LOCKED");
+});
+
+test("consolida multiplas maquinas priorizando uma sessao realmente online", () => {
+  const referenceTime = new Date("2026-07-19T12:10:00.000Z");
+  const locked = {
+    capturedAt: new Date("2026-07-19T12:10:00.000Z"),
+    isSessionActive: false,
+    sessionState: "LOCKED",
+    idleSeconds: 0,
+    hostname: "NOTEBOOK-ANTIGO"
+  };
+  const online = {
+    capturedAt: new Date("2026-07-19T12:09:00.000Z"),
+    isSessionActive: true,
+    sessionState: "ACTIVE",
+    idleSeconds: 20,
+    hostname: "NOTEBOOK-ATUAL"
+  };
+
+  assert.equal(selectRealtimeHoursPresenceRecord([locked, online], referenceTime, 600)?.hostname, "NOTEBOOK-ATUAL");
+});
+
+test("usa o registro mais recente quando as maquinas possuem o mesmo status", () => {
+  const referenceTime = new Date("2026-07-19T12:10:00.000Z");
+  const older = {
+    capturedAt: new Date("2026-07-19T12:08:00.000Z"),
+    isSessionActive: true,
+    sessionState: "ACTIVE",
+    idleSeconds: 0,
+    hostname: "NOTEBOOK-A"
+  };
+  const newer = { ...older, capturedAt: new Date("2026-07-19T12:10:00.000Z"), hostname: "NOTEBOOK-B" };
+
+  assert.equal(selectRealtimeHoursPresenceRecord([older, newer], referenceTime, 600)?.hostname, "NOTEBOOK-B");
 });

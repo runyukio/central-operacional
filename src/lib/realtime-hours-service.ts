@@ -34,6 +34,13 @@ const realtimeHoursEventTypes = ["SESSION_START", "SESSION_RESUME", "HEARTBEAT",
 
 export type RealtimeHoursPresenceStatus = "ONLINE" | "IDLE" | "LOCKED" | "OFFLINE";
 
+type RealtimeHoursPresenceRecord = {
+  capturedAt: Date;
+  isSessionActive: boolean;
+  sessionState: string | null;
+  idleSeconds: number | null;
+};
+
 type RealtimeHoursRowError = {
   rowNumber: number;
   error: string;
@@ -486,13 +493,18 @@ export async function getRealtimeHoursOperationalPresence() {
     return { record, employee, employeeId, wbLogin, personKey };
   });
 
-  const latestByPerson = new Map<string, typeof resolved[number]>();
+  const recordsByPerson = new Map<string, Array<typeof resolved[number]>>();
   for (const item of resolved) {
-    const current = latestByPerson.get(item.personKey);
-    if (!current || item.record.capturedAt > current.record.capturedAt) latestByPerson.set(item.personKey, item);
+    const current = recordsByPerson.get(item.personKey) ?? [];
+    current.push(item);
+    recordsByPerson.set(item.personKey, current);
   }
 
-  const rows = Array.from(latestByPerson.values())
+  const rows = Array.from(recordsByPerson.values())
+    .map((items) => {
+      const selectedRecord = selectRealtimeHoursPresenceRecord(items.map((item) => item.record), referenceTime);
+      return items.find((item) => item.record === selectedRecord) ?? items[0];
+    })
     .map(({ record, employee, employeeId, wbLogin }) => ({
       employeeId,
       employeeName: employee?.fullName ?? "",
@@ -1134,7 +1146,7 @@ async function employeeLookupFor(entries: Array<{ employeeId?: string | null; wb
 }
 
 export function resolveRealtimeHoursPresenceStatus(
-  record: { capturedAt: Date; isSessionActive: boolean; sessionState: string | null; idleSeconds: number | null },
+  record: RealtimeHoursPresenceRecord,
   referenceTime: Date,
   thresholdSeconds = idleThresholdSeconds
 ): RealtimeHoursPresenceStatus {
@@ -1145,6 +1157,28 @@ export function resolveRealtimeHoursPresenceStatus(
   if (!record.isSessionActive || sessionState === "DISCONNECTED") return "OFFLINE";
   if ((record.idleSeconds ?? 0) > Math.max(600, thresholdSeconds)) return "IDLE";
   return "ONLINE";
+}
+
+export function selectRealtimeHoursPresenceRecord<T extends RealtimeHoursPresenceRecord>(
+  records: T[],
+  referenceTime: Date,
+  thresholdSeconds = idleThresholdSeconds
+) {
+  const priority: Record<RealtimeHoursPresenceStatus, number> = {
+    ONLINE: 4,
+    IDLE: 3,
+    LOCKED: 2,
+    OFFLINE: 1
+  };
+
+  return records.reduce<T | null>((selected, candidate) => {
+    if (!selected) return candidate;
+    const candidateStatus = resolveRealtimeHoursPresenceStatus(candidate, referenceTime, thresholdSeconds);
+    const selectedStatus = resolveRealtimeHoursPresenceStatus(selected, referenceTime, thresholdSeconds);
+    const statusDifference = priority[candidateStatus] - priority[selectedStatus];
+    if (statusDifference !== 0) return statusDifference > 0 ? candidate : selected;
+    return candidate.capturedAt > selected.capturedAt ? candidate : selected;
+  }, null);
 }
 
 function buildPlannedShiftWindows(
