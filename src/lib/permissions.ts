@@ -211,6 +211,10 @@ export function canManageStaffCoverageRequirements(user: PermissionUser) {
   return isActiveUser(user) && ["ADMIN", "WFM"].includes(role);
 }
 
+export function canAutoUpdateAdsRequirement(user: PermissionUser) {
+  return isActiveUser(user) && normalizeRole(user.role) === "ADMIN";
+}
+
 export function canExportStaffCoverage(user: PermissionUser) {
   return canAccessStaffCoverage(user);
 }
