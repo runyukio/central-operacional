@@ -546,7 +546,7 @@ export async function refreshAdsStaffCoverageFromForecast(actor: Actor, startDat
         gap: metrics.gap,
         coveragePercent: metrics.coveragePercent,
         risk: metrics.risk,
-        observation: `Forecast automático ADS · média das 3 maiores janelas de 2h ${formatDecimal(requirement.planningVolume)} · AHT ${formatDecimal(plan.ahtSeconds)}s`
+        observation: `Forecast automático ADS · média das janelas móveis de 2h do turno ${formatDecimal(requirement.planningVolume)} · AHT ${formatDecimal(plan.ahtSeconds)}s`
       };
     });
 
@@ -567,7 +567,7 @@ export async function refreshAdsStaffCoverageFromForecast(actor: Actor, startDat
             ahtPeriod: plan.ahtPeriod,
             latestVolumeAt: plan.latestVolumeAt,
             latestProductionAt: plan.latestProductionAt,
-            formula: "ceil((media_top_3_janelas_moveis_2h * aht_segundos / 3600) * 1.0625 + 3)",
+            formula: "ceil((media_janelas_moveis_2h_turno * aht_segundos / 3600) * 1.0625 + 3)",
             requirements: rows.map((row, index) => ({
               date: row.dateKey,
               shift: row.shift,

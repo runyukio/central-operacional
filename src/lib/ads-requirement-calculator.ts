@@ -1,7 +1,6 @@
 export const ADS_REQUIREMENT_FORECAST_DAYS = 14;
 export const ADS_REQUIREMENT_SHRINKAGE_FACTOR = 1.0625;
 export const ADS_REQUIREMENT_BUFFER = 3;
-export const ADS_REQUIREMENT_TOP_WINDOWS = 3;
 
 export type AdsRequirementShift = "Manhã" | "Tarde" | "Noite";
 
@@ -65,16 +64,13 @@ function shiftRequirement(
     const next = requiredVolume(volumeByHour, new Date(hour.getTime() + hourMs));
     return { hour, rollingVolume: (current + next) / 2 };
   });
-  const topWindows = [...windows]
-    .sort((left, right) => right.rollingVolume - left.rollingVolume || left.hour.getTime() - right.hour.getTime())
-    .slice(0, ADS_REQUIREMENT_TOP_WINDOWS);
-  const planningVolume = topWindows.reduce((total, window) => total + window.rollingVolume, 0) / topWindows.length;
+  const planningVolume = windows.reduce((total, window) => total + window.rollingVolume, 0) / windows.length;
 
   return {
     date: date.toISOString().slice(0, 10),
     shift,
     required: calculateAdsHourlyRequirement(planningVolume, ahtSeconds),
-    referenceHours: topWindows.map((window) => window.hour.toISOString()),
+    referenceHours: windows.map((window) => window.hour.toISOString()),
     planningVolume: Math.round(planningVolume * 100) / 100
   };
 }

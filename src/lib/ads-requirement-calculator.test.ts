@@ -12,7 +12,7 @@ test("aplica AHT, shrinkage de 6,25%, buffer de 3 e arredondamento para cima", (
   assert.equal(calculateAdsHourlyRequirement(40, 3600), 46);
 });
 
-test("usa a média das três maiores janelas de duas horas por turno", () => {
+test("usa a média das janelas móveis de duas horas do turno", () => {
   const startDate = new Date("2026-07-20T00:00:00.000Z");
   const hourlyVolumes: AdsHourlyVolume[] = [];
   for (let hour = 0; hour <= 32; hour += 1) {
@@ -26,15 +26,15 @@ test("usa a média das três maiores janelas de duas horas por turno", () => {
   const rows = buildAdsShiftRequirements({ startDate, hourlyVolumes, ahtSeconds: 3600, days: 1 });
 
   assert.deepEqual(rows.map((row) => ({ shift: row.shift, required: row.required })), [
-    { shift: "Manhã", required: 32 },
-    { shift: "Tarde", required: 35 },
-    { shift: "Noite", required: 35 }
+    { shift: "Manhã", required: 13 },
+    { shift: "Tarde", required: 14 },
+    { shift: "Noite", required: 14 }
   ]);
   assert.deepEqual(rows[2].referenceHours.slice(0, 2), [
     "2026-07-20T23:00:00.000Z",
     "2026-07-21T00:00:00.000Z"
   ]);
-  assert.equal(rows[2].planningVolume, 30);
+  assert.equal(rows[2].planningVolume, 10);
 });
 
 test("dilui um pico noturno isolado em vez de aplicá-lo ao turno inteiro", () => {
@@ -48,8 +48,8 @@ test("dilui um pico noturno isolado em vez de aplicá-lo ao turno inteiro", () =
   const night = buildAdsShiftRequirements({ startDate, hourlyVolumes, ahtSeconds: 3600, days: 1 })
     .find((row) => row.shift === "Noite");
 
-  assert.equal(night?.planningVolume, 40);
-  assert.equal(night?.required, 46);
+  assert.equal(night?.planningVolume, 20);
+  assert.equal(night?.required, 25);
 });
 
 function setVolume(rows: AdsHourlyVolume[], at: string, volume: number) {
