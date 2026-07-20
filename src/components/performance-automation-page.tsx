@@ -9,6 +9,8 @@ import {
   BarChart3,
   CalendarClock,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   Download,
   FileSpreadsheet,
@@ -23,6 +25,7 @@ import {
   TrendingUp,
   Trophy,
   UploadCloud,
+  Users,
   X
 } from "lucide-react";
 import {
@@ -139,6 +142,39 @@ type QualityImportResult = {
   qualityRowsIgnored: number;
 };
 
+type AgentSortKey = "employeeName" | "wbLogin" | "lob" | "supervisor" | "shift" | "submit" | "aht";
+type AgentSortDirection = "asc" | "desc";
+
+type PerformanceAgentRow = {
+  employeeId: string | null;
+  employeeName: string;
+  wbLogin: string;
+  lob: string;
+  supervisorId: string | null;
+  supervisor: string;
+  shiftId: string | null;
+  shift: string;
+  submit: number;
+  moderationSeconds: number;
+  ahtSeconds: number;
+};
+
+type PerformanceAgentsResponse = {
+  mode: "agents";
+  period: { startDate: string; endDate: string };
+  dataRange: { startDate: string; endDate: string } | null;
+  selectedLob: string;
+  filters: {
+    lobs: string[];
+    supervisors: Array<{ id: string; fullName: string }>;
+    shifts: Array<{ id: string; name: string }>;
+  };
+  summary: { agents: number; submit: number; moderationSeconds: number; ahtSeconds: number };
+  pagination: { page: number; pageSize: number; totalRows: number; totalPages: number };
+  sort: { sortBy: AgentSortKey; sortDirection: AgentSortDirection };
+  agents: PerformanceAgentRow[];
+};
+
 type QueueSortKey = "queue" | "input" | "submit" | "latency" | "aht" | "agents";
 type QueueSortDirection = "asc" | "desc";
 
@@ -210,7 +246,7 @@ const defaultForecastModelWeights: ForecastModelWeights = {
 };
 
 export function PerformanceAutomationPage() {
-  const [activeTab, setActiveTab] = useState<"queue" | "forecast" | "quality">("queue");
+  const [activeTab, setActiveTab] = useState<"queue" | "agents" | "forecast" | "quality">("queue");
   const [queueGranularity, setQueueGranularity] = useState<PerformanceGranularity>("daily");
   const [queueLob, setQueueLob] = useState("");
   const [queueStartDate, setQueueStartDate] = useState("");
@@ -225,9 +261,20 @@ export function PerformanceAutomationPage() {
   const [qualitySortDirection, setQualitySortDirection] = useState<QualitySortDirection>("desc");
   const [qualityStartDate, setQualityStartDate] = useState("");
   const [qualityEndDate, setQualityEndDate] = useState("");
+  const [agentsPayload, setAgentsPayload] = useState<PerformanceAgentsResponse | null>(null);
+  const [agentLob, setAgentLob] = useState("");
+  const [agentShiftId, setAgentShiftId] = useState("");
+  const [agentSupervisorId, setAgentSupervisorId] = useState("");
+  const [agentSearch, setAgentSearch] = useState("");
+  const [debouncedAgentSearch, setDebouncedAgentSearch] = useState("");
+  const [agentStartDate, setAgentStartDate] = useState("");
+  const [agentEndDate, setAgentEndDate] = useState("");
+  const [agentSort, setAgentSort] = useState<{ key: AgentSortKey; direction: AgentSortDirection }>({ key: "submit", direction: "desc" });
+  const [agentPage, setAgentPage] = useState(1);
   const [loadingQueue, setLoadingQueue] = useState(true);
   const [loadingForecast, setLoadingForecast] = useState(false);
   const [loadingQuality, setLoadingQuality] = useState(false);
+  const [loadingAgents, setLoadingAgents] = useState(false);
   const [message, setMessage] = useState("");
   const [uploadOpen, setUploadOpen] = useState(false);
   const [qualityUploadOpen, setQualityUploadOpen] = useState(false);
@@ -295,6 +342,32 @@ export function PerformanceAutomationPage() {
     }
   }, [qualityEndDate, qualityGranularity, qualitySortDirection, qualityStartDate]);
 
+  const loadAgents = useCallback(async () => {
+    setLoadingAgents(true);
+    const params = new URLSearchParams({
+      page: String(agentPage),
+      pageSize: "50",
+      sortBy: agentSort.key,
+      sortDirection: agentSort.direction
+    });
+    if (agentLob) params.set("lob", agentLob);
+    else params.set("metadataOnly", "true");
+    if (agentStartDate) params.set("startDate", agentStartDate);
+    if (agentEndDate) params.set("endDate", agentEndDate);
+    if (agentShiftId) params.set("shiftId", agentShiftId);
+    if (agentSupervisorId) params.set("supervisorId", agentSupervisorId);
+    if (debouncedAgentSearch) params.set("search", debouncedAgentSearch);
+    try {
+      const data = await fetchPerformanceAgents(params);
+      setAgentsPayload(data);
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível carregar os dados dos agentes.");
+    } finally {
+      setLoadingAgents(false);
+    }
+  }, [agentEndDate, agentLob, agentPage, agentShiftId, agentSort, agentStartDate, agentSupervisorId, debouncedAgentSearch]);
+
   useEffect(() => {
     void loadQueue();
   }, [loadQueue]);
@@ -306,6 +379,15 @@ export function PerformanceAutomationPage() {
   useEffect(() => {
     if (activeTab === "quality") void loadQuality();
   }, [activeTab, loadQuality]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedAgentSearch(agentSearch.trim()), 350);
+    return () => window.clearTimeout(timer);
+  }, [agentSearch]);
+
+  useEffect(() => {
+    if (activeTab === "agents") void loadAgents();
+  }, [activeTab, loadAgents]);
 
   const basePayload = queuePayload ?? forecastPayload;
   const lobs = useMemo(() => normalizeLobs(basePayload?.filters.lobs ?? []), [basePayload]);
@@ -352,6 +434,7 @@ export function PerformanceAutomationPage() {
 
       <div className="flex flex-wrap gap-2">
         <TabButton active={activeTab === "queue"} icon={Rows3} label="Dados de fila" onClick={() => setActiveTab("queue")} />
+        <TabButton active={activeTab === "agents"} icon={Users} label="Agentes" onClick={() => setActiveTab("agents")} />
         <TabButton active={activeTab === "forecast"} icon={LineChartIcon} label="Forecast" onClick={() => setActiveTab("forecast")} />
         <TabButton active={activeTab === "quality"} icon={ShieldCheck} label="Qualidade" onClick={() => setActiveTab("quality")} />
       </div>
@@ -374,6 +457,28 @@ export function PerformanceAutomationPage() {
           onGranularityChange={setQueueGranularity}
           onExport={exportQueue}
           onRefresh={() => void loadQueue()}
+        />
+      ) : activeTab === "agents" ? (
+        <AgentsView
+          loading={loadingAgents}
+          payload={agentsPayload}
+          selectedLob={agentLob}
+          selectedShiftId={agentShiftId}
+          selectedSupervisorId={agentSupervisorId}
+          search={agentSearch}
+          startDate={agentStartDate}
+          endDate={agentEndDate}
+          sort={agentSort}
+          page={agentPage}
+          onLobChange={(value) => { setAgentLob(value); setAgentPage(1); }}
+          onShiftChange={(value) => { setAgentShiftId(value); setAgentPage(1); }}
+          onSupervisorChange={(value) => { setAgentSupervisorId(value); setAgentPage(1); }}
+          onSearchChange={(value) => { setAgentSearch(value); setAgentPage(1); }}
+          onStartDateChange={(value) => { setAgentStartDate(value); setAgentPage(1); }}
+          onEndDateChange={(value) => { setAgentEndDate(value); setAgentPage(1); }}
+          onSortChange={(value) => { setAgentSort(value); setAgentPage(1); }}
+          onPageChange={setAgentPage}
+          onRefresh={() => void loadAgents()}
         />
       ) : activeTab === "forecast" ? (
         <ForecastViewPanel
@@ -673,6 +778,221 @@ function QualityScore({ value }: { value: number }) {
       ? "bg-amber-50 text-amber-700"
       : "bg-red-50 text-red-700";
   return <span className={cn("inline-flex min-w-[72px] justify-center rounded-lg px-2 py-1 text-xs font-black", tone)}>{formatQualityPercent(value)}</span>;
+}
+
+function AgentsView({
+  loading,
+  payload,
+  selectedLob,
+  selectedShiftId,
+  selectedSupervisorId,
+  search,
+  startDate,
+  endDate,
+  sort,
+  page,
+  onLobChange,
+  onShiftChange,
+  onSupervisorChange,
+  onSearchChange,
+  onStartDateChange,
+  onEndDateChange,
+  onSortChange,
+  onPageChange,
+  onRefresh
+}: {
+  loading: boolean;
+  payload: PerformanceAgentsResponse | null;
+  selectedLob: string;
+  selectedShiftId: string;
+  selectedSupervisorId: string;
+  search: string;
+  startDate: string;
+  endDate: string;
+  sort: { key: AgentSortKey; direction: AgentSortDirection };
+  page: number;
+  onLobChange: (value: string) => void;
+  onShiftChange: (value: string) => void;
+  onSupervisorChange: (value: string) => void;
+  onSearchChange: (value: string) => void;
+  onStartDateChange: (value: string) => void;
+  onEndDateChange: (value: string) => void;
+  onSortChange: (value: { key: AgentSortKey; direction: AgentSortDirection }) => void;
+  onPageChange: (value: number) => void;
+  onRefresh: () => void;
+}) {
+  const lobs = normalizeLobs(payload?.filters.lobs ?? []);
+  const handleSort = (key: AgentSortKey) => {
+    const textColumn = key === "employeeName" || key === "wbLogin" || key === "lob" || key === "supervisor" || key === "shift";
+    onSortChange({
+      key,
+      direction: sort.key === key ? (sort.direction === "desc" ? "asc" : "desc") : textColumn ? "asc" : "desc"
+    });
+  };
+
+  return (
+    <section className="overflow-hidden rounded-2xl border border-border bg-white shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <div>
+          <h2 className="text-base font-black text-navy-950">Produtividade dos agentes</h2>
+          <p className="mt-1 text-xs font-bold text-muted">Output e AHT calculados a partir da base de produção vigente.</p>
+        </div>
+        <button type="button" onClick={onRefresh} className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-white px-3 text-xs font-black text-navy-950 hover:bg-slate-50">
+          <RefreshCw className="h-4 w-4" /> Atualizar
+        </button>
+      </div>
+
+      <div className="space-y-4 p-4">
+        <div className="flex flex-col gap-4 2xl:flex-row 2xl:items-end 2xl:justify-between">
+          <div className="flex flex-col gap-4 xl:flex-row xl:flex-wrap xl:items-end">
+            <DateRangeFilter
+              startDate={startDate}
+              endDate={endDate}
+              minDate={payload?.dataRange?.startDate ?? ""}
+              maxDate={payload?.dataRange?.endDate ?? ""}
+              onStartDateChange={onStartDateChange}
+              onEndDateChange={onEndDateChange}
+            />
+            <SlicerGroup label="LOB">
+              {lobs.map((lob) => <SlicerButton key={lob} active={selectedLob === lob} label={lob} onClick={() => onLobChange(lob)} tone="dark" />)}
+            </SlicerGroup>
+            <SlicerGroup label="Turno">
+              <SlicerButton active={!selectedShiftId} label="Todos" onClick={() => onShiftChange("")} />
+              {(payload?.filters.shifts ?? []).map((shift) => (
+                <SlicerButton key={shift.id} active={selectedShiftId === shift.id} label={shift.name} onClick={() => onShiftChange(shift.id)} />
+              ))}
+            </SlicerGroup>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 2xl:w-[620px]">
+            <label className="block">
+              <span className="mb-2 block text-[11px] font-black uppercase tracking-wide text-muted">Supervisor</span>
+              <select
+                value={selectedSupervisorId}
+                onChange={(event) => onSupervisorChange(event.target.value)}
+                className="h-10 w-full rounded-xl border border-border bg-white px-3 text-sm font-bold text-navy-950 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              >
+                <option value="">Todos os supervisores</option>
+                {(payload?.filters.supervisors ?? []).map((supervisor) => <option key={supervisor.id} value={supervisor.id}>{supervisor.fullName}</option>)}
+              </select>
+            </label>
+            <label className="relative block self-end">
+              <span className="mb-2 block text-[11px] font-black uppercase tracking-wide text-muted">Agente</span>
+              <Search className="pointer-events-none absolute bottom-3 left-3 h-4 w-4 text-muted" />
+              <input
+                value={search}
+                onChange={(event) => onSearchChange(event.target.value)}
+                placeholder="Buscar nome ou WB/Login"
+                className="h-10 w-full rounded-xl border border-border bg-white pl-9 pr-3 text-sm font-semibold text-navy-950 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              />
+            </label>
+          </div>
+        </div>
+
+        {!selectedLob ? (
+          <div className="grid min-h-[300px] place-items-center rounded-2xl border border-dashed border-blue-200 bg-blue-50/40 px-6 text-center">
+            <div className="max-w-md">
+              <span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-white text-blue-600 shadow-sm"><Users className="h-5 w-5" /></span>
+              <h3 className="mt-4 text-lg font-black text-navy-950">Selecione uma LOB</h3>
+              <p className="mt-2 text-sm font-semibold text-muted">Os agentes serão consultados somente para a operação escolhida.</p>
+            </div>
+          </div>
+        ) : loading && !payload?.agents.length ? <EmptyBox label="Carregando produtividade dos agentes..." /> : (
+          <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-3">
+              <StatCard title="Agentes" value={formatNumber(payload?.summary.agents ?? 0)} helper="com produção no período" icon={Users} tone="purple" />
+              <StatCard title="Output" value={formatNumber(payload?.summary.submit ?? 0)} helper="soma de submit" icon={FileSpreadsheet} tone="blue" />
+              <StatCard title="AHT médio" value={formatSeconds(payload?.summary.ahtSeconds)} helper="moderação / output" icon={Clock} tone="orange" />
+            </div>
+
+            <div className="overflow-hidden rounded-xl border border-border bg-white">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+                <div>
+                  <h3 className="text-sm font-black text-navy-950">Agentes da operação</h3>
+                  <p className="mt-1 text-xs font-bold text-muted">{formatNumber(payload?.pagination.totalRows ?? 0)} resultado(s) · clique no cabeçalho para ordenar</p>
+                </div>
+                {loading ? <span className="inline-flex items-center gap-2 text-xs font-black text-blue-600"><RefreshCw className="h-3.5 w-3.5 animate-spin" /> Atualizando</span> : null}
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[1040px] text-left text-sm">
+                  <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-black uppercase tracking-wide text-muted">
+                    <tr>
+                      <AgentSortHeader label="Agente" sortKey="employeeName" current={sort} onSort={handleSort} />
+                      <AgentSortHeader label="WB/Login" sortKey="wbLogin" current={sort} onSort={handleSort} />
+                      <AgentSortHeader label="LOB" sortKey="lob" current={sort} onSort={handleSort} />
+                      <AgentSortHeader label="Supervisor" sortKey="supervisor" current={sort} onSort={handleSort} />
+                      <AgentSortHeader label="Turno" sortKey="shift" current={sort} onSort={handleSort} />
+                      <AgentSortHeader label="Output" sortKey="submit" current={sort} onSort={handleSort} align="right" />
+                      <AgentSortHeader label="AHT" sortKey="aht" current={sort} onSort={handleSort} align="right" />
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/70">
+                    {(payload?.agents ?? []).map((agent) => (
+                      <tr key={`${agent.employeeId ?? agent.wbLogin}:${agent.lob}`} className="odd:bg-white even:bg-slate-50/45 hover:bg-blue-50/50">
+                        <td className="px-3 py-3 font-black text-navy-950">{agent.employeeName}</td>
+                        <td className="px-3 py-3 font-bold text-muted">{agent.wbLogin}</td>
+                        <td className="px-3 py-3"><span className="rounded-lg bg-blue-50 px-2 py-1 text-xs font-black text-blue-700">{agent.lob}</span></td>
+                        <td className="px-3 py-3 font-bold text-navy-950">{agent.supervisor}</td>
+                        <td className="px-3 py-3 font-bold text-muted">{agent.shift}</td>
+                        <td className="px-3 py-3 text-right font-black text-navy-950">{formatNumber(agent.submit)}</td>
+                        <td className="px-3 py-3 text-right font-black text-navy-950">{formatSeconds(agent.ahtSeconds)}</td>
+                      </tr>
+                    ))}
+                    {!payload?.agents.length ? <tr><td colSpan={7} className="px-3 py-10 text-center text-sm font-bold text-muted">Nenhum agente encontrado para os filtros selecionados.</td></tr> : null}
+                  </tbody>
+                </table>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3">
+                <p className="text-xs font-bold text-muted">Página {payload?.pagination.page ?? page} de {payload?.pagination.totalPages ?? 1}</p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onPageChange(Math.max(1, page - 1))}
+                    disabled={page <= 1 || loading}
+                    className="inline-flex h-9 items-center gap-1 rounded-lg border border-border bg-white px-3 text-xs font-black text-navy-950 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <ChevronLeft className="h-4 w-4" /> Anterior
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onPageChange(page + 1)}
+                    disabled={page >= (payload?.pagination.totalPages ?? 1) || loading}
+                    className="inline-flex h-9 items-center gap-1 rounded-lg border border-border bg-white px-3 text-xs font-black text-navy-950 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Próxima <ChevronRight className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function AgentSortHeader({
+  label,
+  sortKey,
+  current,
+  onSort,
+  align = "left"
+}: {
+  label: string;
+  sortKey: AgentSortKey;
+  current: { key: AgentSortKey; direction: AgentSortDirection };
+  onSort: (key: AgentSortKey) => void;
+  align?: "left" | "right";
+}) {
+  const active = current.key === sortKey;
+  const Icon = !active ? ArrowUpDown : current.direction === "asc" ? ArrowUp : ArrowDown;
+  return (
+    <th className={cn("px-3 py-3", align === "right" && "text-right")}>
+      <button type="button" onClick={() => onSort(sortKey)} className={cn("inline-flex items-center gap-1.5 hover:text-blue-600", align === "right" && "ml-auto")}>
+        {label}<Icon className="h-3.5 w-3.5" />
+      </button>
+    </th>
+  );
 }
 
 function QueueView({
@@ -1411,6 +1731,14 @@ async function fetchPerformance(params: URLSearchParams): Promise<PerformancePro
   const data = await response.json() as PerformanceProductionResponse;
   if (data.mode !== "production") throw new Error("Resposta de Performance inesperada.");
   return data;
+}
+
+async function fetchPerformanceAgents(params: URLSearchParams): Promise<PerformanceAgentsResponse> {
+  const response = await fetch(`/api/performance/agents?${params.toString()}`, { cache: "no-store" });
+  const body = await response.json().catch(() => null) as (PerformanceAgentsResponse & { error?: string; message?: string }) | null;
+  if (!response.ok || !body) throw new Error(body?.error || body?.message || "Não foi possível carregar os dados dos agentes.");
+  if (body.mode !== "agents") throw new Error("Resposta de agentes inesperada.");
+  return body;
 }
 
 function buildForecastModel(rows: PerformanceTrendRow[], horizonDays: number, view: ForecastView): ForecastModel {

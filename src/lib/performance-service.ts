@@ -80,6 +80,20 @@ export type PerformanceQualityQuery = {
   sortDirection?: "asc" | "desc";
 };
 
+export type PerformanceAgentsQuery = {
+  startDate?: string;
+  endDate?: string;
+  lob?: string;
+  supervisorId?: string;
+  shiftId?: string;
+  search?: string;
+  sortBy?: "employeeName" | "wbLogin" | "lob" | "supervisor" | "shift" | "submit" | "aht";
+  sortDirection?: "asc" | "desc";
+  page?: number;
+  pageSize?: number;
+  metadataOnly?: boolean;
+};
+
 type ProductionRecordForDashboard = Prisma.ProductionRecordGetPayload<{
   select: {
     bzTime: true;
@@ -663,6 +677,218 @@ export async function getPerformanceAdsQualityDashboard(actor: Actor, query: Per
       importedAt: latestImport.importedAt.toISOString()
     } : null
   };
+}
+
+export async function getPerformanceAgentsDashboard(actor: Actor, query: PerformanceAgentsQuery = {}) {
+  const user = await requireActiveUser(actor);
+  if (!canAccessPerformance(permissionUser(user))) throw new PerformanceError("Você não tem permissão para acessar Performance.", 403);
+
+  const role = normalizeRole(user.role.name);
+  const ownEmployeeId = role === "COLABORADOR" ? requireOwnEmployee(user).id : null;
+  const requestedLob = query.lob && query.lob !== "Todos" ? query.lob.trim().toUpperCase() : "";
+  const validLobs = performanceLobOptions();
+  const [range, employeeOptions] = await Promise.all([
+    prisma.productionRecord.aggregate({ _min: { bzDay: true }, _max: { bzDay: true } }),
+    prisma.employeeProfile.findMany({
+      where: { deletedAt: null, ...(ownEmployeeId ? { id: ownEmployeeId } : {}) },
+      select: {
+        id: true,
+        shift: { select: { id: true, name: true } },
+        supervisor: { select: { id: true, fullName: true } }
+      }
+    })
+  ]);
+  const fallback = getDefaultDatePeriod();
+  const start = parseDate(query.startDate) ?? range._min.bzDay ?? fallback.start;
+  const end = parseDate(query.endDate) ?? range._max.bzDay ?? fallback.end;
+  if (start > end) throw new PerformanceError("A data inicial não pode ser posterior à data final.", 400);
+
+  const supervisors = uniqueBy(
+    employeeOptions.flatMap((employee) => employee.supervisor ? [employee.supervisor] : []),
+    (item) => item.id
+  ).sort((a, b) => a.fullName.localeCompare(b.fullName, "pt-BR"));
+  const shifts = uniqueBy(
+    employeeOptions.map((employee) => employee.shift),
+    (item) => item.id
+  ).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  const filters = { lobs: validLobs, supervisors, shifts };
+  const dataRange = range._min.bzDay && range._max.bzDay
+    ? { startDate: formatDateKey(range._min.bzDay), endDate: formatDateKey(range._max.bzDay) }
+    : null;
+
+  if (query.metadataOnly || !requestedLob || !validLobs.includes(requestedLob)) {
+    return emptyPerformanceAgentsPayload(start, end, dataRange, filters);
+  }
+
+  const queueSql = performanceQueueFilterSql(requestedLob);
+  const ownEmployeeSql = ownEmployeeId ? Prisma.sql`AND p."employeeId" = ${ownEmployeeId}` : Prisma.empty;
+  const rawRows = await prisma.$queryRaw<Array<{
+    employeeId: string | null;
+    employeeName: string;
+    wbLogin: string;
+    supervisorId: string | null;
+    supervisor: string;
+    shiftId: string | null;
+    shift: string;
+    queueId: string;
+    submit: number;
+    moderationSeconds: number;
+  }>>(Prisma.sql`
+    SELECT
+      p."employeeId" AS "employeeId",
+      COALESCE(e."fullName", p."wbLogin") AS "employeeName",
+      COALESCE(e."wbLogin", p."wbLogin") AS "wbLogin",
+      e."supervisorId" AS "supervisorId",
+      COALESCE(s."fullName", 'Sem supervisor') AS "supervisor",
+      e."shiftId" AS "shiftId",
+      COALESCE(sh."name", 'Sem turno') AS "shift",
+      p."queueId" AS "queueId",
+      COALESCE(SUM(p."submitNum"), 0)::double precision AS "submit",
+      COALESCE(SUM(p."moderationSeconds"), 0)::double precision AS "moderationSeconds"
+    FROM "ProductionRecord" p
+    LEFT JOIN "EmployeeProfile" e ON e."id" = p."employeeId"
+    LEFT JOIN "EmployeeProfile" s ON s."id" = e."supervisorId"
+    LEFT JOIN "Shift" sh ON sh."id" = e."shiftId"
+    WHERE p."bzDay" >= ${start}
+      AND p."bzDay" <= ${end}
+      ${ownEmployeeSql}
+      ${queueSql}
+    GROUP BY
+      p."employeeId",
+      e."fullName",
+      e."wbLogin",
+      p."wbLogin",
+      e."supervisorId",
+      s."fullName",
+      e."shiftId",
+      sh."name",
+      p."queueId"
+  `);
+
+  const aggregateMap = new Map<string, {
+    employeeId: string | null;
+    employeeName: string;
+    wbLogin: string;
+    lob: string;
+    supervisorId: string | null;
+    supervisor: string;
+    shiftId: string | null;
+    shift: string;
+    submit: number;
+    moderationSeconds: number;
+  }>();
+  for (const row of rawRows) {
+    const lob = getPerformanceQueueMetadataById(row.queueId).lob;
+    const identity = row.employeeId || `wb:${row.wbLogin.trim().toLocaleLowerCase("pt-BR")}`;
+    const key = `${identity}:${lob}`;
+    const current = aggregateMap.get(key) ?? {
+      employeeId: row.employeeId,
+      employeeName: row.employeeName,
+      wbLogin: row.wbLogin,
+      lob,
+      supervisorId: row.supervisorId,
+      supervisor: row.supervisor,
+      shiftId: row.shiftId,
+      shift: row.shift,
+      submit: 0,
+      moderationSeconds: 0
+    };
+    current.submit += Number(row.submit ?? 0);
+    current.moderationSeconds += Number(row.moderationSeconds ?? 0);
+    aggregateMap.set(key, current);
+  }
+
+  const search = query.search?.trim().toLocaleLowerCase("pt-BR") ?? "";
+  const filteredRows = Array.from(aggregateMap.values()).filter((row) => {
+    if (query.supervisorId && row.supervisorId !== query.supervisorId) return false;
+    if (query.shiftId && row.shiftId !== query.shiftId) return false;
+    if (!search) return true;
+    return row.employeeName.toLocaleLowerCase("pt-BR").includes(search)
+      || row.wbLogin.toLocaleLowerCase("pt-BR").includes(search);
+  });
+  const sortBy = query.sortBy ?? "submit";
+  const sortDirection = query.sortDirection === "asc" ? "asc" : "desc";
+  filteredRows.sort((a, b) => comparePerformanceAgentRows(a, b, sortBy, sortDirection));
+
+  const pageSize = Math.min(100, Math.max(10, Math.trunc(query.pageSize ?? 50)));
+  const totalRows = filteredRows.length;
+  const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+  const page = Math.min(totalPages, Math.max(1, Math.trunc(query.page ?? 1)));
+  const pageRows = filteredRows.slice((page - 1) * pageSize, page * pageSize);
+  const submit = filteredRows.reduce((total, row) => total + row.submit, 0);
+  const moderationSeconds = filteredRows.reduce((total, row) => total + row.moderationSeconds, 0);
+  const agents = new Set(filteredRows.map((row) => row.employeeId || `wb:${row.wbLogin.toLocaleLowerCase("pt-BR")}`)).size;
+
+  return {
+    mode: "agents" as const,
+    period: periodPayload({ start, end }),
+    dataRange,
+    selectedLob: requestedLob,
+    filters,
+    summary: {
+      agents,
+      submit,
+      moderationSeconds,
+      ahtSeconds: submit > 0 ? round2(moderationSeconds / submit) : 0
+    },
+    pagination: { page, pageSize, totalRows, totalPages },
+    sort: { sortBy, sortDirection },
+    agents: pageRows.map((row) => ({
+      ...row,
+      submit: Math.round(row.submit),
+      moderationSeconds: round2(row.moderationSeconds),
+      ahtSeconds: row.submit > 0 ? round2(row.moderationSeconds / row.submit) : 0
+    }))
+  };
+}
+
+function emptyPerformanceAgentsPayload(
+  start: Date,
+  end: Date,
+  dataRange: { startDate: string; endDate: string } | null,
+  filters: {
+    lobs: string[];
+    supervisors: Array<{ id: string; fullName: string }>;
+    shifts: Array<{ id: string; name: string }>;
+  }
+) {
+  return {
+    mode: "agents" as const,
+    period: periodPayload({ start, end }),
+    dataRange,
+    selectedLob: "",
+    filters,
+    summary: { agents: 0, submit: 0, moderationSeconds: 0, ahtSeconds: 0 },
+    pagination: { page: 1, pageSize: 50, totalRows: 0, totalPages: 1 },
+    sort: { sortBy: "submit" as const, sortDirection: "desc" as const },
+    agents: []
+  };
+}
+
+function uniqueBy<T>(items: T[], key: (item: T) => string) {
+  return Array.from(new Map(items.map((item) => [key(item), item])).values());
+}
+
+function comparePerformanceAgentRows(
+  a: { employeeName: string; wbLogin: string; lob: string; supervisor: string; shift: string; submit: number; moderationSeconds: number },
+  b: { employeeName: string; wbLogin: string; lob: string; supervisor: string; shift: string; submit: number; moderationSeconds: number },
+  sortBy: NonNullable<PerformanceAgentsQuery["sortBy"]>,
+  direction: "asc" | "desc"
+) {
+  const aValue = sortBy === "aht"
+    ? (a.submit > 0 ? a.moderationSeconds / a.submit : -1)
+    : sortBy === "submit"
+      ? a.submit
+      : a[sortBy];
+  const bValue = sortBy === "aht"
+    ? (b.submit > 0 ? b.moderationSeconds / b.submit : -1)
+    : sortBy === "submit"
+      ? b.submit
+      : b[sortBy];
+  const result = typeof aValue === "number" && typeof bValue === "number"
+    ? aValue - bValue
+    : String(aValue).localeCompare(String(bValue), "pt-BR", { sensitivity: "base" });
+  return direction === "asc" ? result : -result;
 }
 
 function serializeQualityAggregate(correct: number, total: number) {
