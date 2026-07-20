@@ -132,6 +132,7 @@ type AgentRealtimeRow = {
   employeeStatus: string;
   presenceStatus: AgentPresenceStatus;
   isScheduled: boolean;
+  isSchedulePresent: boolean;
   lob: string;
   supervisor: string;
   shift: string;
@@ -4410,7 +4411,7 @@ function formatDurationCell(value: number | null, tone: ExecutiveHeatmapCell["to
 
 function buildOnlineHeadcountGaugeCard(label: string, rows: AgentRealtimeRow[]): OnlineHeadcountGaugeData {
   const scheduled = rows.filter((row) => row.isScheduled).length;
-  const online = rows.filter((row) => isOnlineHeadcountStatus(row.presenceStatus)).length;
+  const online = rows.filter((row) => row.isSchedulePresent).length;
   const percentage = scheduled > 0 ? (online / scheduled) * 100 : null;
   const missing = Math.max(0, scheduled - online);
   const tone = percentage === null ? "neutral" : percentage >= 90 ? "positive" : percentage >= 75 ? "warning" : "negative";

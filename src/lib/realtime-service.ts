@@ -120,6 +120,7 @@ type AgentCycleRow = {
   employeeStatus: string;
   presenceStatus: AgentPresenceStatus;
   isScheduled: boolean;
+  isSchedulePresent: boolean;
   lob: string;
   supervisor: string;
   shift: string;
@@ -2797,7 +2798,8 @@ async function buildAgentRealtimeViewFromSummaryRows(
   const rows = baseRows.map((row) => ({
     ...row,
     presenceStatus: resolveAgentPresenceStatus(row, presenceContext),
-    isScheduled: isAgentScheduledForPresence(row, presenceContext)
+    isScheduled: isAgentScheduledForPresence(row, presenceContext),
+    isSchedulePresent: isAgentPresentInSchedule(row, presenceContext)
   }));
 
   const summaryCurrent = summarizeAgentRows(rows);
@@ -2861,6 +2863,7 @@ function agentSummaryToCycleRow(summary: {
     employeeStatus: summary.employeeStatus,
     presenceStatus: "Offline",
     isScheduled: false,
+    isSchedulePresent: false,
     lob: summary.lob,
     supervisor: summary.supervisor,
     shift: summary.shift,
@@ -3124,7 +3127,8 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
   const rows = baseRows.map((row) => ({
     ...row,
     presenceStatus: resolveAgentPresenceStatus(row, presenceContext),
-    isScheduled: isAgentScheduledForPresence(row, presenceContext)
+    isScheduled: isAgentScheduledForPresence(row, presenceContext),
+    isSchedulePresent: isAgentPresentInSchedule(row, presenceContext)
   }));
 
   const summaryCurrent = summarizeAgentRows(rows);
@@ -3179,7 +3183,7 @@ async function loadAgentPresenceContext(rows: AgentCycleRow[], selectedCycle: st
 
 async function loadRealtimeSchedulePresence(rows: AgentCycleRow[], cycleInfo: ReturnType<typeof parseRealtimeCycleForPresence>) {
   const employeeIds = Array.from(new Set(rows.map((row) => row.employeeId).filter(Boolean)));
-  const scheduleByEmployeeId = new Map<string, { scheduled: boolean; startsAt: string | null; endsAt: string | null }>();
+  const scheduleByEmployeeId = new Map<string, { scheduled: boolean; present: boolean; startsAt: string | null; endsAt: string | null }>();
   if (!cycleInfo || !employeeIds.length) return scheduleByEmployeeId;
 
   const previousDate = new Date(cycleInfo.date.getTime() - 24 * 60 * 60 * 1000);
@@ -3202,8 +3206,10 @@ async function loadRealtimeSchedulePresence(rows: AgentCycleRow[], cycleInfo: Re
 
   schedules.forEach((schedule) => {
     if (!isScheduleActiveAtRealtimeCycle(schedule, cycleInfo)) return;
+    const current = scheduleByEmployeeId.get(schedule.employeeId);
     scheduleByEmployeeId.set(schedule.employeeId, {
       scheduled: true,
+      present: Boolean(current?.present || isPresentStatus(schedule.status)),
       startsAt: schedule.startsAt,
       endsAt: schedule.endsAt
     });
@@ -3273,6 +3279,13 @@ function isAgentScheduledForPresence(
   context: Awaited<ReturnType<typeof loadAgentPresenceContext>>
 ) {
   return Boolean(row.employeeId && context.scheduleByEmployeeId.get(row.employeeId)?.scheduled);
+}
+
+function isAgentPresentInSchedule(
+  row: AgentCycleRow,
+  context: Awaited<ReturnType<typeof loadAgentPresenceContext>>
+) {
+  return Boolean(row.employeeId && context.scheduleByEmployeeId.get(row.employeeId)?.present);
 }
 
 function parseRealtimeCycleForPresence(value: string) {
@@ -3428,6 +3441,7 @@ function aggregateAgentCycleRows(items: Array<{
       employeeStatus: employee?.operationalStatus ?? "Não encontrado",
       presenceStatus: "Offline",
       isScheduled: false,
+      isSchedulePresent: false,
       lob: employee?.lob ?? "Não encontrado",
       supervisor: employee?.supervisor ?? "Não encontrado",
       shift: employee?.shift ?? "Não encontrado",
