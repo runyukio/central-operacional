@@ -76,7 +76,8 @@ export type PerformanceQuery = {
 export type PerformanceQualityQuery = {
   startDate?: string;
   endDate?: string;
-  lob?: "ADS" | "PROJECT";
+  view?: "monthly" | "weekly" | "daily";
+  sortDirection?: "asc" | "desc";
 };
 
 type ProductionRecordForDashboard = Prisma.ProductionRecordGetPayload<{
@@ -549,10 +550,10 @@ export async function getPerformanceAdsQualityDashboard(actor: Actor, query: Per
   const user = await requireActiveUser(actor);
   if (!canAccessPerformance(permissionUser(user))) throw new PerformanceError("Você não tem permissão para acessar Performance.", 403);
 
-  const requestedLob = query.lob === "ADS" || query.lob === "PROJECT" ? query.lob : "";
-  const lobSql = requestedLob
-    ? Prisma.sql`AND UPPER(COALESCE(l."name", '')) = ${requestedLob}`
-    : Prisma.sql`AND UPPER(COALESCE(l."name", '')) IN ('ADS', 'PROJECT')`;
+  const view = query.view === "monthly" || query.view === "weekly" ? query.view : "daily";
+  const sortDirection = query.sortDirection === "asc" ? "asc" : "desc";
+  const sortDirectionSql = sortDirection === "asc" ? Prisma.sql`ASC` : Prisma.sql`DESC`;
+  const bucketSql = qualityBucketSql(view);
   const baseLobSql = Prisma.sql`AND UPPER(COALESCE(l."name", '')) IN ('ADS', 'PROJECT')`;
   const [range] = await prisma.$queryRaw<Array<{ startDate: Date | null; endDate: Date | null }>>(Prisma.sql`
     SELECT MIN(q."auditDate") AS "startDate", MAX(q."auditDate") AS "endDate"
@@ -573,7 +574,7 @@ export async function getPerformanceAdsQualityDashboard(actor: Actor, query: Per
     LEFT JOIN "EmployeeProfile" s ON s."id" = e."supervisorId"
     WHERE q."auditDate" >= ${start}
       AND q."auditDate" <= ${end}
-      ${lobSql}
+      ${baseLobSql}
   `;
 
   const [summaryRows, trendRows, agentRows, latestImport] = await Promise.all([
@@ -583,14 +584,14 @@ export async function getPerformanceAdsQualityDashboard(actor: Actor, query: Per
         COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::integer AS "correct"
       ${scopedSql}
     `),
-    prisma.$queryRaw<Array<{ day: Date; total: number; correct: number }>>(Prisma.sql`
+    prisma.$queryRaw<Array<{ periodStart: Date; total: number; correct: number }>>(Prisma.sql`
       SELECT
-        q."auditDate" AS "day",
+        ${bucketSql} AS "periodStart",
         COUNT(DISTINCT q."concatKey")::integer AS "total",
         COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::integer AS "correct"
       ${scopedSql}
-      GROUP BY q."auditDate"
-      ORDER BY q."auditDate" ASC
+      GROUP BY ${bucketSql}
+      ORDER BY ${bucketSql} ASC
     `),
     prisma.$queryRaw<Array<{
       employeeId: string;
@@ -606,17 +607,17 @@ export async function getPerformanceAdsQualityDashboard(actor: Actor, query: Per
         q."employeeId" AS "employeeId",
         COALESCE(e."fullName", q."wbLogin") AS "employeeName",
         q."wbLogin" AS "wbLogin",
-        UPPER(COALESCE(l."name", 'N/A')) AS "lob",
+        'ADS' AS "lob",
         COALESCE(s."fullName", 'Sem supervisor') AS "supervisor",
         COUNT(DISTINCT q."concatKey")::integer AS "total",
         COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::integer AS "correct",
         MAX(q."auditTime") AS "lastAuditAt"
       ${scopedSql}
       AND q."employeeId" IS NOT NULL
-      GROUP BY q."employeeId", e."fullName", q."wbLogin", l."name", s."fullName"
+      GROUP BY q."employeeId", e."fullName", q."wbLogin", s."fullName"
       ORDER BY
         (COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::double precision
-          / NULLIF(COUNT(DISTINCT q."concatKey"), 0)) ASC,
+          / NULLIF(COUNT(DISTINCT q."concatKey"), 0)) ${sortDirectionSql},
         COUNT(DISTINCT q."concatKey") DESC
       LIMIT 500
     `),
@@ -639,19 +640,20 @@ export async function getPerformanceAdsQualityDashboard(actor: Actor, query: Per
       startDate: formatDateKey(range.startDate),
       endDate: formatDateKey(range.endDate)
     } : null,
-    selectedLob: requestedLob || "ADS + PROJECT",
-    filters: { lobs: ["ADS + PROJECT", "ADS", "PROJECT"] },
+    granularity: view,
+    selectedLob: "ADS",
+    filters: { lobs: ["ADS"] },
     summary: serializeQualityAggregate(summary.correct, summary.total),
     trend: trendRows.map((row) => ({
-      key: formatDateKey(row.day),
-      label: row.day.toLocaleDateString("pt-BR", { timeZone: "UTC", day: "2-digit", month: "2-digit" }),
+      key: formatDateKey(row.periodStart),
+      label: qualityBucketLabel(row.periodStart, view),
       ...serializeQualityAggregate(row.correct, row.total)
     })),
     agents: agentRows.map((row) => ({
       employeeId: row.employeeId,
       employeeName: row.employeeName,
       wbLogin: row.wbLogin,
-      lob: row.lob,
+      lob: "ADS",
       supervisor: row.supervisor,
       lastAuditAt: row.lastAuditAt.toISOString(),
       ...serializeQualityAggregate(row.correct, row.total)
@@ -2957,6 +2959,22 @@ function productionBucketSql(granularity: PerformanceProductionGranularity) {
   if (granularity === "weekly") return Prisma.sql`date_trunc('week', "bzDay")`;
   if (granularity === "monthly") return Prisma.sql`date_trunc('month', "bzDay")`;
   return Prisma.sql`date_trunc('day', "bzDay")`;
+}
+
+function qualityBucketSql(granularity: "monthly" | "weekly" | "daily") {
+  if (granularity === "monthly") return Prisma.sql`date_trunc('month', q."auditDate")`;
+  if (granularity === "weekly") return Prisma.sql`date_trunc('week', q."auditDate")`;
+  return Prisma.sql`date_trunc('day', q."auditDate")`;
+}
+
+function qualityBucketLabel(periodStart: Date, granularity: "monthly" | "weekly" | "daily") {
+  if (granularity === "monthly") {
+    return new Intl.DateTimeFormat("pt-BR", { month: "short", year: "numeric", timeZone: "UTC" }).format(periodStart);
+  }
+  if (granularity === "weekly") {
+    return `${formatDisplayDate(periodStart).slice(0, 5)}-${formatDisplayDate(addDays(periodStart, 6)).slice(0, 5)}`;
+  }
+  return formatDisplayDate(periodStart).slice(0, 5);
 }
 
 function performanceQueueFilterSql(lob: string, slaTargetMinutes?: number) {

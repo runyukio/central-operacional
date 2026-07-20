@@ -43,6 +43,8 @@ import { cn, formatNumber } from "@/lib/utils";
 
 type PerformanceGranularity = "monthly" | "weekly" | "daily" | "hourly";
 type ForecastView = "hour" | "day" | "week";
+type QualityGranularity = "monthly" | "weekly" | "daily";
+type QualitySortDirection = "asc" | "desc";
 
 type PerformanceSummary = {
   records: number;
@@ -120,6 +122,7 @@ type QualityAgentRow = QualitySummary & {
 type PerformanceQualityResponse = {
   mode: "quality";
   canImport: boolean;
+  granularity: QualityGranularity;
   period: { startDate: string; endDate: string };
   dataRange: { startDate: string; endDate: string } | null;
   selectedLob: string;
@@ -218,7 +221,8 @@ export function PerformanceAutomationPage() {
   const [queuePayload, setQueuePayload] = useState<PerformanceProductionResponse | null>(null);
   const [forecastPayload, setForecastPayload] = useState<PerformanceProductionResponse | null>(null);
   const [qualityPayload, setQualityPayload] = useState<PerformanceQualityResponse | null>(null);
-  const [qualityLob, setQualityLob] = useState("");
+  const [qualityGranularity, setQualityGranularity] = useState<QualityGranularity>("daily");
+  const [qualitySortDirection, setQualitySortDirection] = useState<QualitySortDirection>("desc");
   const [qualityStartDate, setQualityStartDate] = useState("");
   const [qualityEndDate, setQualityEndDate] = useState("");
   const [loadingQueue, setLoadingQueue] = useState(true);
@@ -272,8 +276,10 @@ export function PerformanceAutomationPage() {
 
   const loadQuality = useCallback(async () => {
     setLoadingQuality(true);
-    const params = new URLSearchParams();
-    if (qualityLob) params.set("lob", qualityLob);
+    const params = new URLSearchParams({
+      view: qualityGranularity,
+      sortDirection: qualitySortDirection
+    });
     if (qualityStartDate) params.set("startDate", qualityStartDate);
     if (qualityEndDate) params.set("endDate", qualityEndDate);
     try {
@@ -287,7 +293,7 @@ export function PerformanceAutomationPage() {
     } finally {
       setLoadingQuality(false);
     }
-  }, [qualityEndDate, qualityLob, qualityStartDate]);
+  }, [qualityEndDate, qualityGranularity, qualitySortDirection, qualityStartDate]);
 
   useEffect(() => {
     void loadQueue();
@@ -331,7 +337,7 @@ export function PerformanceAutomationPage() {
       {activeTab === "quality" ? (
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <StatCard title="Último upload" value={formatQualityImportDate(qualityPayload?.lastImport?.importedAt)} helper="snapshot de qualidade vigente" icon={CheckCircle2} tone="green" />
-          <StatCard title="Janela da base" value={formatQualityRange(qualityPayload?.dataRange)} helper="ADS e PROJECT" icon={CalendarClock} tone="purple" />
+          <StatCard title="Janela da base" value={formatQualityRange(qualityPayload?.dataRange)} helper="ADS consolidado" icon={CalendarClock} tone="purple" />
           <StatCard title="Casos auditados" value={formatNumber(qualityPayload?.summary.total ?? 0)} helper="chaves distintas" icon={FileSpreadsheet} tone="blue" />
           <StatCard title="Qualidade" value={formatQualityPercent(qualityPayload?.summary.quality)} helper="corretos / auditados" icon={ShieldCheck} tone="green" />
         </section>
@@ -347,7 +353,7 @@ export function PerformanceAutomationPage() {
       <div className="flex flex-wrap gap-2">
         <TabButton active={activeTab === "queue"} icon={Rows3} label="Dados de fila" onClick={() => setActiveTab("queue")} />
         <TabButton active={activeTab === "forecast"} icon={LineChartIcon} label="Forecast" onClick={() => setActiveTab("forecast")} />
-        <TabButton active={activeTab === "quality"} icon={ShieldCheck} label="Qualidade ADS/PROJECT" onClick={() => setActiveTab("quality")} />
+        <TabButton active={activeTab === "quality"} icon={ShieldCheck} label="Qualidade" onClick={() => setActiveTab("quality")} />
       </div>
 
       {message ? <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{message}</p> : null}
@@ -386,10 +392,12 @@ export function PerformanceAutomationPage() {
         <QualityView
           loading={loadingQuality}
           payload={qualityPayload}
-          selectedLob={qualityLob}
+          granularity={qualityGranularity}
+          sortDirection={qualitySortDirection}
           startDate={qualityStartDate}
           endDate={qualityEndDate}
-          onLobChange={setQualityLob}
+          onGranularityChange={setQualityGranularity}
+          onSortDirectionChange={setQualitySortDirection}
           onStartDateChange={setQualityStartDate}
           onEndDateChange={setQualityEndDate}
           onRefresh={() => void loadQuality()}
@@ -440,10 +448,12 @@ export function PerformanceRestrictedPage() {
 function QualityView({
   loading,
   payload,
-  selectedLob,
+  granularity,
+  sortDirection,
   startDate,
   endDate,
-  onLobChange,
+  onGranularityChange,
+  onSortDirectionChange,
   onStartDateChange,
   onEndDateChange,
   onRefresh,
@@ -451,10 +461,12 @@ function QualityView({
 }: {
   loading: boolean;
   payload: PerformanceQualityResponse | null;
-  selectedLob: string;
+  granularity: QualityGranularity;
+  sortDirection: QualitySortDirection;
   startDate: string;
   endDate: string;
-  onLobChange: (value: string) => void;
+  onGranularityChange: (value: QualityGranularity) => void;
+  onSortDirectionChange: (value: QualitySortDirection) => void;
   onStartDateChange: (value: string) => void;
   onEndDateChange: (value: string) => void;
   onRefresh: () => void;
@@ -463,19 +475,26 @@ function QualityView({
   const [search, setSearch] = useState("");
   const agents = useMemo(() => {
     const normalizedSearch = search.trim().toLocaleLowerCase("pt-BR");
-    if (!normalizedSearch) return payload?.agents ?? [];
-    return (payload?.agents ?? []).filter((agent) => (
-      agent.employeeName.toLocaleLowerCase("pt-BR").includes(normalizedSearch)
-      || agent.wbLogin.toLocaleLowerCase("pt-BR").includes(normalizedSearch)
-      || agent.supervisor.toLocaleLowerCase("pt-BR").includes(normalizedSearch)
+    const filtered = normalizedSearch
+      ? (payload?.agents ?? []).filter((agent) => (
+        agent.employeeName.toLocaleLowerCase("pt-BR").includes(normalizedSearch)
+        || agent.wbLogin.toLocaleLowerCase("pt-BR").includes(normalizedSearch)
+        || agent.supervisor.toLocaleLowerCase("pt-BR").includes(normalizedSearch)
+      ))
+      : (payload?.agents ?? []);
+    const direction = sortDirection === "desc" ? -1 : 1;
+    return [...filtered].sort((left, right) => (
+      (left.quality - right.quality) * direction
+      || right.total - left.total
+      || left.employeeName.localeCompare(right.employeeName, "pt-BR")
     ));
-  }, [payload?.agents, search]);
+  }, [payload?.agents, search, sortDirection]);
 
   return (
     <section className="overflow-hidden rounded-2xl border border-border bg-white shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div>
-          <h2 className="text-base font-black text-navy-950">Qualidade ADS e PROJECT</h2>
+          <h2 className="text-base font-black text-navy-950">Qualidade</h2>
           <p className="mt-1 text-xs font-bold text-muted">Casos corretos distintos divididos pelos casos auditados distintos.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -502,9 +521,12 @@ function QualityView({
               onEndDateChange={onEndDateChange}
             />
             <SlicerGroup label="LOB">
-              <SlicerButton active={!selectedLob} label="ADS + PROJECT" onClick={() => onLobChange("")} tone="dark" />
-              <SlicerButton active={selectedLob === "ADS"} label="ADS" onClick={() => onLobChange("ADS")} tone="dark" />
-              <SlicerButton active={selectedLob === "PROJECT"} label="PROJECT" onClick={() => onLobChange("PROJECT")} tone="dark" />
+              <SlicerButton active disabled label="ADS" onClick={() => undefined} tone="dark" />
+            </SlicerGroup>
+            <SlicerGroup label="Visão">
+              <SlicerButton active={granularity === "monthly"} label="Mensal" onClick={() => onGranularityChange("monthly")} tone="dark" />
+              <SlicerButton active={granularity === "weekly"} label="Semanal" onClick={() => onGranularityChange("weekly")} tone="dark" />
+              <SlicerButton active={granularity === "daily"} label="Diário" onClick={() => onGranularityChange("daily")} tone="dark" />
             </SlicerGroup>
           </div>
           <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-2 text-xs font-bold text-blue-900">
@@ -517,7 +539,7 @@ function QualityView({
             <div className="max-w-md">
               <span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-white text-blue-600 shadow-sm"><ShieldCheck className="h-5 w-5" /></span>
               <h3 className="mt-4 text-lg font-black text-navy-950">Sem dados de qualidade</h3>
-              <p className="mt-2 text-sm font-semibold text-muted">Envie a base de QA para carregar os indicadores de ADS e PROJECT.</p>
+              <p className="mt-2 text-sm font-semibold text-muted">Envie a base de QA para carregar os indicadores consolidados de ADS.</p>
             </div>
           </div>
         ) : (
@@ -532,10 +554,10 @@ function QualityView({
             <div className="rounded-xl border border-border bg-white p-4">
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h3 className="text-sm font-black text-navy-950">Evolução diária da qualidade</h3>
-                  <p className="mt-1 text-xs font-bold text-muted">Percentual oficial e volume de casos auditados por dia.</p>
+                  <h3 className="text-sm font-black text-navy-950">Evolução {qualityGranularityLabel(granularity).toLocaleLowerCase("pt-BR")} da qualidade</h3>
+                  <p className="mt-1 text-xs font-bold text-muted">Percentual oficial e volume de casos auditados por período.</p>
                 </div>
-                <span className="rounded-lg bg-slate-50 px-3 py-1 text-xs font-black text-muted">{formatNumber(payload.trend.length)} dias</span>
+                <span className="rounded-lg bg-slate-50 px-3 py-1 text-xs font-black text-muted">{formatNumber(payload.trend.length)} {qualityGranularityUnit(granularity)}</span>
               </div>
               <QualityDashboardChart rows={payload.trend} />
             </div>
@@ -544,7 +566,7 @@ function QualityView({
               <div className="flex flex-col gap-3 border-b border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h3 className="text-sm font-black text-navy-950">Qualidade por agente</h3>
-                  <p className="mt-1 text-xs font-bold text-muted">Ordenado da menor qualidade para a maior, priorizando oportunidades.</p>
+                  <p className="mt-1 text-xs font-bold text-muted">{sortDirection === "desc" ? "Maior qualidade primeiro." : "Menor qualidade primeiro."}</p>
                 </div>
                 <label className="relative block w-full sm:max-w-xs">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
@@ -563,7 +585,16 @@ function QualityView({
                       <th className="px-3 py-3">Agente</th>
                       <th className="px-3 py-3">LOB</th>
                       <th className="px-3 py-3">Supervisor</th>
-                      <th className="px-3 py-3 text-right">Qualidade</th>
+                      <th className="px-3 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => onSortDirectionChange(sortDirection === "desc" ? "asc" : "desc")}
+                          className="ml-auto inline-flex items-center gap-1.5 hover:text-blue-600"
+                          aria-label={`Ordenar qualidade do ${sortDirection === "desc" ? "menor para o maior" : "maior para o menor"}`}
+                        >
+                          Qualidade {sortDirection === "desc" ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
+                        </button>
+                      </th>
                       <th className="px-3 py-3 text-right">Corretos</th>
                       <th className="px-3 py-3 text-right">Auditados</th>
                       <th className="px-3 py-3 text-right">Divergências</th>
@@ -1065,7 +1096,7 @@ function QualityImportModal({ onClose, onImported }: { onClose: () => void; onIm
           <div>
             <p className="text-[11px] font-black uppercase tracking-[0.16em] text-blue-600">Performance</p>
             <h2 id="quality-upload-title" className="mt-1 text-xl font-black text-navy-950">Substituir base de Qualidade</h2>
-            <p className="mt-1 text-sm font-semibold text-muted">Envie o XLSX de QA. Apenas os colaboradores de ADS e PROJECT serão importados.</p>
+            <p className="mt-1 text-sm font-semibold text-muted">Envie o XLSX de QA. ADS e PROJECT serão consolidados no indicador ADS.</p>
           </div>
           <button type="button" onClick={onClose} disabled={uploading} className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-border text-muted hover:bg-slate-50 hover:text-navy-950 disabled:opacity-40" aria-label="Fechar">
             <X className="h-5 w-5" />
@@ -1074,7 +1105,7 @@ function QualityImportModal({ onClose, onImported }: { onClose: () => void; onIm
 
         <div className="space-y-4 p-5">
           <PerformanceFileField
-            label="Qualidade ADS / PROJECT"
+            label="Qualidade ADS"
             helper="Base com audit_name, final_result e os IDs distintos dos casos auditados."
             file={qualityFile}
             onChange={setQualityFile}
@@ -1348,9 +1379,9 @@ function DateRangeFilter({
   );
 }
 
-function SlicerButton({ active, label, onClick, tone = "blue" }: { active: boolean; label: string; onClick: () => void; tone?: "blue" | "cyan" | "dark" }) {
+function SlicerButton({ active, label, onClick, tone = "blue", disabled = false }: { active: boolean; label: string; onClick: () => void; tone?: "blue" | "cyan" | "dark"; disabled?: boolean }) {
   const activeClass = tone === "cyan" ? "border-cyan-600 bg-cyan-600 text-white" : tone === "dark" ? "border-navy-950 bg-navy-950 text-white" : "border-blue-600 bg-blue-600 text-white";
-  return <button type="button" aria-pressed={active} onClick={onClick} className={cn("h-9 rounded-lg border px-3 text-xs font-black transition", active ? activeClass : "border-border bg-white text-navy-950 hover:bg-slate-50")}>{label}</button>;
+  return <button type="button" aria-pressed={active} disabled={disabled} onClick={onClick} className={cn("h-9 rounded-lg border px-3 text-xs font-black transition disabled:cursor-default", active ? activeClass : "border-border bg-white text-navy-950 hover:bg-slate-50")}>{label}</button>;
 }
 
 function InfoTile({ title, value }: { title: string; value: string }) {
@@ -1832,6 +1863,18 @@ function formatQualityPercent(value?: number | null) {
   return typeof value === "number" && Number.isFinite(value)
     ? `${value.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`
     : "-";
+}
+
+function qualityGranularityLabel(granularity: QualityGranularity) {
+  if (granularity === "monthly") return "Mensal";
+  if (granularity === "weekly") return "Semanal";
+  return "Diária";
+}
+
+function qualityGranularityUnit(granularity: QualityGranularity) {
+  if (granularity === "monthly") return "meses";
+  if (granularity === "weekly") return "semanas";
+  return "dias";
 }
 
 function formatQualityRange(range?: { startDate: string; endDate: string } | null) {
