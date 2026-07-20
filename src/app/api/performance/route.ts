@@ -25,6 +25,7 @@ export async function GET(request: Request) {
       sortBy: readSortBy(url.searchParams.get("sortBy")),
       sortDirection: readSortDirection(url.searchParams.get("sortDirection")),
       granularity: readGranularity(url.searchParams.get("granularity")),
+      slaTargetMinutes: readPositiveNumber(url.searchParams.get("slaTargetMinutes")),
       metadataOnly: url.searchParams.get("metadataOnly") === "true"
     };
     return NextResponse.json(await getPerformanceProductionDashboard(actor, query));
@@ -47,6 +48,12 @@ function readSortDirection(value: string | null): PerformanceQuery["sortDirectio
 
 function readGranularity(value: string | null): PerformanceQuery["granularity"] {
   return value === "hourly" || value === "weekly" || value === "monthly" ? value : value === "daily" ? "daily" : undefined;
+}
+
+function readPositiveNumber(value: string | null) {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function performanceErrorResponse(error: unknown) {

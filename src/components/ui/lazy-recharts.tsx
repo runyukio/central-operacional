@@ -11,6 +11,7 @@ import {
   LineChart as RechartsLineChart,
   Pie as RechartsPie,
   PieChart as RechartsPieChart,
+  ReferenceLine as RechartsReferenceLine,
   ResponsiveContainer as RechartsResponsiveContainer,
   Tooltip as RechartsTooltip,
   XAxis as RechartsXAxis,
@@ -73,6 +74,10 @@ export function ChartPie(props: Omit<PieProps, "ref">) {
 
 export function ChartPieChart(props: ComponentPropsWithoutRef<typeof RechartsPieChart>) {
   return <RechartsPieChart {...props} />;
+}
+
+export function ChartReferenceLine(props: ComponentPropsWithoutRef<typeof RechartsReferenceLine>) {
+  return <RechartsReferenceLine {...props} />;
 }
 
 export function ChartResponsiveContainer(props: ComponentPropsWithoutRef<typeof RechartsResponsiveContainer>) {

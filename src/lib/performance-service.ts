@@ -69,6 +69,7 @@ export type PerformanceQuery = {
   sortBy?: PerformanceSortBy;
   sortDirection?: PerformanceSortDirection;
   granularity?: PerformanceProductionGranularity;
+  slaTargetMinutes?: number;
   metadataOnly?: boolean;
 };
 
@@ -376,7 +377,7 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
   }
 
   const bucketSql = productionBucketSql(granularity);
-  const queueSql = performanceQueueFilterSql(requestedLob);
+  const queueSql = performanceQueueFilterSql(requestedLob, query.slaTargetMinutes);
   const employeeSql = ownEmployeeId ? Prisma.sql`AND "employeeId" = ${ownEmployeeId}` : Prisma.empty;
   const [productionTrendRows, volumeTrendRows, productionQueueRows, volumeQueueRows] = await Promise.all([
     prisma.$queryRaw<Array<{ bucket: Date; submit: number; moderationSeconds: number; latencyMinutesSum: number; records: number }>>(Prisma.sql`
@@ -2958,13 +2959,17 @@ function productionBucketSql(granularity: PerformanceProductionGranularity) {
   return Prisma.sql`date_trunc('day', "bzDay")`;
 }
 
-function performanceQueueFilterSql(lob: string) {
-  if (!lob) return Prisma.empty;
+function performanceQueueFilterSql(lob: string, slaTargetMinutes?: number) {
+  const normalizedTarget = Number.isFinite(slaTargetMinutes) && Number(slaTargetMinutes) > 0
+    ? Number(slaTargetMinutes)
+    : null;
+  if (!lob && normalizedTarget === null) return Prisma.empty;
   if (lob === "N/A") {
     const mappedQueueIds = allPerformanceQueueIds().filter((queueId) => getPerformanceQueueMetadataById(queueId).lob !== "N/A");
     return mappedQueueIds.length ? Prisma.sql`AND "queueId" NOT IN (${Prisma.join(mappedQueueIds)})` : Prisma.empty;
   }
-  const queueIds = queueIdsByPerformanceLob(lob);
+  const queueIds = (lob ? queueIdsByPerformanceLob(lob) : allPerformanceQueueIds())
+    .filter((queueId) => normalizedTarget === null || getPerformanceQueueMetadataById(queueId).slaTargetMinutes === normalizedTarget);
   return queueIds.length ? Prisma.sql`AND "queueId" IN (${Prisma.join(queueIds)})` : Prisma.sql`AND 1 = 0`;
 }
 

@@ -63,6 +63,7 @@ import {
 } from "lucide-react";
 
 import { TopActions } from "@/components/layout/app-shell";
+import { CentralExecutiveDashboard } from "@/components/central-executive-dashboard";
 import {
   DonutLegend,
   EmptyState,
@@ -2612,6 +2613,7 @@ const operationalPresenceStatusMeta: Record<Exclude<OperationalPresenceStatus, "
 };
 
 export function OperationalCommandCenter() {
+  const [commandView, setCommandView] = useState<"general" | "executive">("general");
   const [attendanceSummary, setAttendanceSummary] = useState<AttendanceSummary | null>(null);
   const [dateRange, setDateRange] = useState(() => currentOperationalMonthRange());
   const [commandLobs, setCommandLobs] = useState<string[]>(["Todos"]);
@@ -2679,6 +2681,12 @@ export function OperationalCommandCenter() {
     } finally {
       if (showLoading) setLoadingOperationalPresence(false);
     }
+  }, []);
+
+  const handleExecutiveDateRangeChange = useCallback((range: { startDate: string; endDate: string }) => {
+    setDateRange((current) => (
+      current.startDate === range.startDate && current.endDate === range.endDate ? current : range
+    ));
   }, []);
 
   useEffect(() => {
@@ -3406,88 +3414,69 @@ export function OperationalCommandCenter() {
         description="Visão geral da operação em tempo real"
         icon={Trophy}
         actions={
-          <div className="flex flex-wrap items-center justify-end gap-1.5">
-            <select
-              value={selectedCommandLob}
-              onChange={(event) => setSelectedCommandLob(event.target.value)}
-              className="premium-control h-9 px-2.5 text-[12.5px] font-extrabold text-navy-950 outline-none"
-            >
-              {commandLobs.map((lob) => (
-                <option key={lob} value={lob}>{lob === "Todos" ? "Todas as LOBs" : lob}</option>
-              ))}
-            </select>
-            <select
-              value={selectedCommandSupervisor}
-              onChange={(event) => setSelectedCommandSupervisor(event.target.value)}
-              className="premium-control h-9 px-2.5 text-[12.5px] font-extrabold text-navy-950 outline-none"
-            >
-              {commandSupervisorOptions.map((supervisor) => (
-                <option key={supervisor} value={supervisor}>{supervisor === "Todos" ? "Todos os supervisores" : supervisor}</option>
-              ))}
-            </select>
-            <select
-              value={selectedCommandRoleTitle}
-              onChange={(event) => setSelectedCommandRoleTitle(event.target.value)}
-              className="premium-control h-9 px-2.5 text-[12.5px] font-extrabold text-navy-950 outline-none"
-              title="Cargo/Função"
-            >
-              {commandRoleTitles.map((roleTitle) => (
-                <option key={roleTitle} value={roleTitle}>{roleTitle === "Todos" ? "Todos os cargos" : roleTitle}</option>
-              ))}
-            </select>
-            <select
-              value={selectedCommandShift}
-              onChange={(event) => setSelectedCommandShift(event.target.value)}
-              className="premium-control h-9 px-2.5 text-[12.5px] font-extrabold text-navy-950 outline-none"
-              title="Turno"
-            >
-              {commandShiftOptions.map((shift) => (
-                <option key={shift} value={shift}>{shift === "Todos" ? "Todos os turnos" : shift}</option>
-              ))}
-            </select>
-            <select
-              value={selectedCommandSkill}
-              onChange={(event) => setSelectedCommandSkill(event.target.value)}
-              className="premium-control h-9 px-2.5 text-[12.5px] font-extrabold text-navy-950 outline-none"
-              title="Skill"
-            >
-              {commandSkillOptions.map((skill) => (
-                <option key={skill} value={skill}>{skill === "Todos" ? "Todas as skills" : skill === "SEM_SKILL" ? "Sem skill" : skill}</option>
-              ))}
-            </select>
-            <label className="premium-control flex h-9 items-center gap-1.5 px-2.5 text-[12.5px] font-bold text-navy-900">
-              <CalendarDays className="h-3.5 w-3.5 text-blue-600" />
-              <input
-                type="date"
-                value={dateRange.startDate}
-                onChange={(event) => setDateRange((current) => ({ ...current, startDate: event.target.value }))}
-                className="border-0 bg-transparent text-[12.5px] font-bold outline-none"
-              />
-            </label>
-            <label className="premium-control flex h-9 items-center gap-1.5 px-2.5 text-[12.5px] font-bold text-navy-900">
-              <span className="text-[11px] text-muted">até</span>
-              <input
-                type="date"
-                value={dateRange.endDate}
-                onChange={(event) => setDateRange((current) => ({ ...current, endDate: event.target.value }))}
-                className="border-0 bg-transparent text-[12.5px] font-bold outline-none"
-              />
-            </label>
-            <button onClick={() => setCommandRange("today")} className="premium-control h-9 px-2.5 text-[11.5px] font-extrabold text-navy-950">Hoje</button>
-            <button onClick={() => setCommandRange("week")} className="premium-control h-9 px-2.5 text-[11.5px] font-extrabold text-navy-950">Semana</button>
-            <button onClick={() => setCommandRange("month")} className="premium-control h-9 px-2.5 text-[11.5px] font-extrabold text-navy-950">Mês</button>
-            <button onClick={() => setCommandRange("previousMonth")} className="premium-control h-9 px-2.5 text-[11.5px] font-extrabold text-navy-950">Mês anterior</button>
-            <button
-              onClick={() => void Promise.all([loadCommandCenterSummary(), loadOperationalPresence(true)])}
-              disabled={loadingSummary || loadingOperationalPresence}
-              className="flex h-9 items-center gap-1.5 rounded-lg bg-navy-950 px-3 text-[12px] font-extrabold text-white shadow-soft disabled:opacity-60"
-            >
-              <RefreshCw className={cn("h-3.5 w-3.5", (loadingSummary || loadingOperationalPresence) && "animate-spin")} />
-              Atualizar
-            </button>
+          <div className="inline-flex items-center rounded-md border border-slate-200 bg-slate-100 p-1">
+            {(["general", "executive"] as const).map((view) => (
+              <button
+                key={view}
+                type="button"
+                onClick={() => {
+                  if (view === "executive") {
+                    setSelectedCommandSupervisor("Todos");
+                    setSelectedCommandRoleTitle("Agente");
+                    setSelectedCommandShift("Todos");
+                    setSelectedCommandSkill("Todos");
+                  }
+                  setCommandView(view);
+                }}
+                className={cn(
+                  "h-8 rounded px-3 text-xs font-extrabold transition",
+                  commandView === view ? "bg-blue-600 text-white shadow-sm" : "text-slate-600 hover:bg-white hover:text-navy-950"
+                )}
+              >
+                {view === "general" ? "Geral" : "Executiva"}
+              </button>
+            ))}
           </div>
         }
       />
+      {commandView === "general" ? (
+        <>
+          <section className="mb-3 rounded-lg border border-slate-200 bg-white p-3 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+            <div className="flex flex-wrap items-center gap-2">
+              <select value={selectedCommandLob} onChange={(event) => setSelectedCommandLob(event.target.value)} className="premium-control h-9 px-2.5 text-[12px] font-extrabold text-navy-950 outline-none">
+                {commandLobs.map((lob) => <option key={lob} value={lob}>{lob === "Todos" ? "Todas as LOBs" : lob}</option>)}
+              </select>
+              <select value={selectedCommandSupervisor} onChange={(event) => setSelectedCommandSupervisor(event.target.value)} className="premium-control h-9 px-2.5 text-[12px] font-extrabold text-navy-950 outline-none">
+                {commandSupervisorOptions.map((supervisor) => <option key={supervisor} value={supervisor}>{supervisor === "Todos" ? "Todos os supervisores" : supervisor}</option>)}
+              </select>
+              <select value={selectedCommandRoleTitle} onChange={(event) => setSelectedCommandRoleTitle(event.target.value)} className="premium-control h-9 px-2.5 text-[12px] font-extrabold text-navy-950 outline-none" title="Cargo/Função">
+                {commandRoleTitles.map((roleTitle) => <option key={roleTitle} value={roleTitle}>{roleTitle === "Todos" ? "Todos os cargos" : roleTitle}</option>)}
+              </select>
+              <select value={selectedCommandShift} onChange={(event) => setSelectedCommandShift(event.target.value)} className="premium-control h-9 px-2.5 text-[12px] font-extrabold text-navy-950 outline-none" title="Turno">
+                {commandShiftOptions.map((shift) => <option key={shift} value={shift}>{shift === "Todos" ? "Todos os turnos" : shift}</option>)}
+              </select>
+              <select value={selectedCommandSkill} onChange={(event) => setSelectedCommandSkill(event.target.value)} className="premium-control h-9 px-2.5 text-[12px] font-extrabold text-navy-950 outline-none" title="Skill">
+                {commandSkillOptions.map((skill) => <option key={skill} value={skill}>{skill === "Todos" ? "Todas as skills" : skill === "SEM_SKILL" ? "Sem skill" : skill}</option>)}
+              </select>
+              <label className="premium-control flex h-9 items-center gap-1.5 px-2.5 text-[12px] font-bold text-navy-900">
+                <CalendarDays className="h-3.5 w-3.5 text-blue-600" />
+                <input type="date" value={dateRange.startDate} onChange={(event) => setDateRange((current) => ({ ...current, startDate: event.target.value }))} className="border-0 bg-transparent text-[12px] font-bold outline-none" />
+              </label>
+              <label className="premium-control flex h-9 items-center gap-1.5 px-2.5 text-[12px] font-bold text-navy-900">
+                <span className="text-[11px] text-muted">até</span>
+                <input type="date" value={dateRange.endDate} onChange={(event) => setDateRange((current) => ({ ...current, endDate: event.target.value }))} className="border-0 bg-transparent text-[12px] font-bold outline-none" />
+              </label>
+              <div className="ml-auto flex flex-wrap items-center gap-1.5">
+                <button onClick={() => setCommandRange("today")} className="premium-control h-9 px-2.5 text-[11px] font-extrabold text-navy-950">Hoje</button>
+                <button onClick={() => setCommandRange("week")} className="premium-control h-9 px-2.5 text-[11px] font-extrabold text-navy-950">Semana</button>
+                <button onClick={() => setCommandRange("month")} className="premium-control h-9 px-2.5 text-[11px] font-extrabold text-navy-950">Mês</button>
+                <button onClick={() => setCommandRange("previousMonth")} className="premium-control h-9 px-2.5 text-[11px] font-extrabold text-navy-950">Mês anterior</button>
+                <button onClick={() => void Promise.all([loadCommandCenterSummary(), loadOperationalPresence(true)])} disabled={loadingSummary || loadingOperationalPresence} className="flex h-9 items-center gap-1.5 rounded-lg bg-navy-950 px-3 text-[12px] font-extrabold text-white shadow-soft disabled:opacity-60">
+                  <RefreshCw className={cn("h-3.5 w-3.5", (loadingSummary || loadingOperationalPresence) && "animate-spin")} /> Atualizar
+                </button>
+              </div>
+            </div>
+          </section>
       <div className="mb-3 grid gap-2.5 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
         {stats.map((stat) => (
           stat.action ? (
@@ -3886,6 +3875,22 @@ export function OperationalCommandCenter() {
           </Panel>
         </div>
       </div>
+        </>
+      ) : (
+        <CentralExecutiveDashboard
+          lobs={commandLobs}
+          selectedLob={selectedCommandLob}
+          onLobChange={setSelectedCommandLob}
+          presenceRows={operationalPresenceRows}
+          attendanceByLob={summary.byLob ?? {}}
+          attritionByLob={commandAttritionByLob}
+          presenceUpdatedAt={operationalPresenceUpdatedAt}
+          loadingSummary={loadingSummary}
+          loadingPresence={loadingOperationalPresence}
+          onDateRangeChange={handleExecutiveDateRangeChange}
+          onRefresh={() => void Promise.all([loadCommandCenterSummary(), loadOperationalPresence(true)])}
+        />
+      )}
 
       {showRecurringAbsences ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
