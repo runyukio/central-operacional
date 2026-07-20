@@ -6,9 +6,12 @@ import { getApiActor } from "@/lib/api-actor";
 import { prisma } from "@/lib/prisma";
 import {
   authorizePerformanceImport,
+  commitQualityImport,
   commitProductionManualPreviewImport,
   PerformanceError,
+  previewQualityImport,
   previewProductionImport,
+  replaceQualitySnapshot,
   replacePerformanceSnapshot,
   type PerformancePreviewRow
 } from "@/lib/performance-service";
@@ -47,9 +50,19 @@ export async function POST(request: Request) {
     if (action === "finalize") {
       const uploadId = requiredUploadId(url);
       const uploadedFiles = await rebuildUploadedFiles(uploadId, importUser.email);
-      const result = await processPerformanceFiles(actor, uploadedFiles.production, uploadedFiles.volume);
+      const hasOperationalFiles = Boolean(uploadedFiles.production || uploadedFiles.volume);
+      if (hasOperationalFiles && (!uploadedFiles.production || !uploadedFiles.volume)) {
+        throw new PerformanceError("As bases Produção / Output e Filas / Input devem ser enviadas juntas.", 400);
+      }
+      const operationalResult = uploadedFiles.production && uploadedFiles.volume
+        ? await processPerformanceFiles(actor, uploadedFiles.production, uploadedFiles.volume)
+        : null;
+      const qualityResult = uploadedFiles.quality
+        ? await processQualityFile(actor, uploadedFiles.quality)
+        : null;
+      if (!operationalResult && !qualityResult) throw new PerformanceError("Nenhum arquivo válido foi recebido.", 400);
       await prisma.performanceManualUploadChunk.deleteMany({ where: { uploadId, uploadedByEmail: importUser.email } });
-      return NextResponse.json(result);
+      return NextResponse.json({ success: true, ...(operationalResult ?? {}), ...(qualityResult ?? {}) });
     }
 
     const formData = await request.formData();
@@ -78,7 +91,7 @@ export async function POST(request: Request) {
 async function receiveUploadChunk(request: Request, url: URL, uploadedByEmail: string) {
   const uploadId = requiredUploadId(url);
   const fileType = url.searchParams.get("fileType");
-  if (fileType !== "production" && fileType !== "volume") throw new PerformanceError("Tipo de arquivo inválido.", 400);
+  if (fileType !== "production" && fileType !== "volume" && fileType !== "quality") throw new PerformanceError("Tipo de arquivo inválido.", 400);
   const chunkIndex = integerParam(url, "chunkIndex", 0);
   const totalChunks = integerParam(url, "totalChunks", 1);
   if (chunkIndex >= totalChunks) throw new PerformanceError("Índice da parte do arquivo inválido.", 400);
@@ -117,9 +130,9 @@ async function rebuildUploadedFiles(uploadId: string, uploadedByEmail: string) {
   });
   if (!chunks.length) throw new PerformanceError("Nenhuma parte do upload foi encontrada.", 400);
 
-  const rebuild = (fileType: "production" | "volume") => {
+  const rebuild = (fileType: "production" | "volume" | "quality") => {
     const fileChunks = chunks.filter((chunk) => chunk.fileType === fileType);
-    if (!fileChunks.length) throw new PerformanceError(`Arquivo de ${fileType === "production" ? "Produção / Output" : "Filas / Input"} não recebido.`, 400);
+    if (!fileChunks.length) return null;
     const expected = fileChunks[0].totalChunks;
     if (fileChunks.length !== expected || fileChunks.some((chunk, index) => chunk.chunkIndex !== index || chunk.totalChunks !== expected)) {
       throw new PerformanceError(`O arquivo ${fileChunks[0].fileName} está incompleto. Envie novamente.`, 400);
@@ -129,7 +142,24 @@ async function rebuildUploadedFiles(uploadId: string, uploadedByEmail: string) {
     return { fileName: fileChunks[0].fileName, buffer: Uint8Array.from(data).buffer };
   };
 
-  return { production: rebuild("production"), volume: rebuild("volume") };
+  return { production: rebuild("production"), volume: rebuild("volume"), quality: rebuild("quality") };
+}
+
+async function processQualityFile(
+  actor: Awaited<ReturnType<typeof getApiActor>>,
+  qualityFile: { fileName: string; buffer: ArrayBuffer }
+) {
+  const rawRows = readWorkbookRows(qualityFile.buffer);
+  const preview = await previewQualityImport(actor, rawRows, { skipExistingCheck: true });
+  const imported = await commitQualityImport(actor, preview.rows, qualityFile.fileName);
+  const reset = await replaceQualitySnapshot(actor, imported.batchId);
+  return {
+    qualityRows: imported.importedRows,
+    qualityRowsError: preview.summary.errorRows,
+    qualityRowsIgnored: Math.max(0, preview.summary.totalRows - imported.importedRows - preview.summary.errorRows),
+    qualityBatchId: imported.batchId,
+    qualityReset: reset
+  };
 }
 
 async function processPerformanceFiles(

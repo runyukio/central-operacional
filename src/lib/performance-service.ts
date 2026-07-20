@@ -72,6 +72,12 @@ export type PerformanceQuery = {
   metadataOnly?: boolean;
 };
 
+export type PerformanceQualityQuery = {
+  startDate?: string;
+  endDate?: string;
+  lob?: "ADS" | "PROJECT";
+};
+
 type ProductionRecordForDashboard = Prisma.ProductionRecordGetPayload<{
   select: {
     bzTime: true;
@@ -538,6 +544,135 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
   };
 }
 
+export async function getPerformanceAdsQualityDashboard(actor: Actor, query: PerformanceQualityQuery = {}) {
+  const user = await requireActiveUser(actor);
+  if (!canAccessPerformance(permissionUser(user))) throw new PerformanceError("Você não tem permissão para acessar Performance.", 403);
+
+  const requestedLob = query.lob === "ADS" || query.lob === "PROJECT" ? query.lob : "";
+  const lobSql = requestedLob
+    ? Prisma.sql`AND UPPER(COALESCE(l."name", '')) = ${requestedLob}`
+    : Prisma.sql`AND UPPER(COALESCE(l."name", '')) IN ('ADS', 'PROJECT')`;
+  const baseLobSql = Prisma.sql`AND UPPER(COALESCE(l."name", '')) IN ('ADS', 'PROJECT')`;
+  const [range] = await prisma.$queryRaw<Array<{ startDate: Date | null; endDate: Date | null }>>(Prisma.sql`
+    SELECT MIN(q."auditDate") AS "startDate", MAX(q."auditDate") AS "endDate"
+    FROM "QualityRecord" q
+    LEFT JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
+    LEFT JOIN "Lob" l ON l."id" = COALESCE(q."lobId", e."lobId")
+    WHERE 1 = 1 ${baseLobSql}
+  `);
+  const fallback = getDefaultDatePeriod();
+  const start = parseDate(query.startDate) ?? range?.startDate ?? fallback.start;
+  const end = parseDate(query.endDate) ?? range?.endDate ?? fallback.end;
+  if (start > end) throw new PerformanceError("A data inicial não pode ser posterior à data final.", 400);
+
+  const scopedSql = Prisma.sql`
+    FROM "QualityRecord" q
+    LEFT JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
+    LEFT JOIN "Lob" l ON l."id" = COALESCE(q."lobId", e."lobId")
+    LEFT JOIN "EmployeeProfile" s ON s."id" = e."supervisorId"
+    WHERE q."auditDate" >= ${start}
+      AND q."auditDate" <= ${end}
+      ${lobSql}
+  `;
+
+  const [summaryRows, trendRows, agentRows, latestImport] = await Promise.all([
+    prisma.$queryRaw<Array<{ total: number; correct: number }>>(Prisma.sql`
+      SELECT
+        COUNT(DISTINCT q."concatKey")::integer AS "total",
+        COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::integer AS "correct"
+      ${scopedSql}
+    `),
+    prisma.$queryRaw<Array<{ day: Date; total: number; correct: number }>>(Prisma.sql`
+      SELECT
+        q."auditDate" AS "day",
+        COUNT(DISTINCT q."concatKey")::integer AS "total",
+        COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::integer AS "correct"
+      ${scopedSql}
+      GROUP BY q."auditDate"
+      ORDER BY q."auditDate" ASC
+    `),
+    prisma.$queryRaw<Array<{
+      employeeId: string;
+      employeeName: string;
+      wbLogin: string;
+      lob: string;
+      supervisor: string;
+      total: number;
+      correct: number;
+      lastAuditAt: Date;
+    }>>(Prisma.sql`
+      SELECT
+        q."employeeId" AS "employeeId",
+        COALESCE(e."fullName", q."wbLogin") AS "employeeName",
+        q."wbLogin" AS "wbLogin",
+        UPPER(COALESCE(l."name", 'N/A')) AS "lob",
+        COALESCE(s."fullName", 'Sem supervisor') AS "supervisor",
+        COUNT(DISTINCT q."concatKey")::integer AS "total",
+        COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::integer AS "correct",
+        MAX(q."auditTime") AS "lastAuditAt"
+      ${scopedSql}
+      AND q."employeeId" IS NOT NULL
+      GROUP BY q."employeeId", e."fullName", q."wbLogin", l."name", s."fullName"
+      ORDER BY
+        (COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::double precision
+          / NULLIF(COUNT(DISTINCT q."concatKey"), 0)) ASC,
+        COUNT(DISTINCT q."concatKey") DESC
+      LIMIT 500
+    `),
+    prisma.performanceImportBatch.findFirst({
+      where: { type: "QUALITY" },
+      orderBy: { importedAt: "desc" },
+      select: { fileName: true, importedAt: true, rowsValid: true, rowsError: true, status: true }
+    })
+  ]);
+
+  const summary = summaryRows[0] ?? { total: 0, correct: 0 };
+  return {
+    mode: "quality" as const,
+    canImport: canImportPerformance(permissionUser(user)),
+    period: {
+      startDate: formatDateKey(start),
+      endDate: formatDateKey(end)
+    },
+    dataRange: range?.startDate && range.endDate ? {
+      startDate: formatDateKey(range.startDate),
+      endDate: formatDateKey(range.endDate)
+    } : null,
+    selectedLob: requestedLob || "ADS + PROJECT",
+    filters: { lobs: ["ADS + PROJECT", "ADS", "PROJECT"] },
+    summary: serializeQualityAggregate(summary.correct, summary.total),
+    trend: trendRows.map((row) => ({
+      key: formatDateKey(row.day),
+      label: row.day.toLocaleDateString("pt-BR", { timeZone: "UTC", day: "2-digit", month: "2-digit" }),
+      ...serializeQualityAggregate(row.correct, row.total)
+    })),
+    agents: agentRows.map((row) => ({
+      employeeId: row.employeeId,
+      employeeName: row.employeeName,
+      wbLogin: row.wbLogin,
+      lob: row.lob,
+      supervisor: row.supervisor,
+      lastAuditAt: row.lastAuditAt.toISOString(),
+      ...serializeQualityAggregate(row.correct, row.total)
+    })),
+    lastImport: latestImport ? {
+      ...latestImport,
+      importedAt: latestImport.importedAt.toISOString()
+    } : null
+  };
+}
+
+function serializeQualityAggregate(correct: number, total: number) {
+  const safeCorrect = Number(correct ?? 0);
+  const safeTotal = Number(total ?? 0);
+  return {
+    correct: safeCorrect,
+    total: safeTotal,
+    errors: Math.max(0, safeTotal - safeCorrect),
+    quality: safeTotal > 0 ? round2((safeCorrect / safeTotal) * 100) : 0
+  };
+}
+
 export async function previewQualityImport(actor: Actor, rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
   const user = await requireActiveUser(actor);
   requireImportPermission(user);
@@ -640,6 +775,27 @@ export async function replacePerformanceSnapshot(actor: Actor, batchIdToKeep: st
   };
 }
 
+export async function replaceQualitySnapshot(actor: Actor, batchIdToKeep: string) {
+  const user = await requireActiveUser(actor);
+  requireImportPermission(user);
+  if (!batchIdToKeep) throw new PerformanceError("Lote de Qualidade obrigatório para substituir a base.", 400);
+
+  const [recordsDeleted, batchesDeleted] = await prisma.$transaction([
+    prisma.qualityRecord.deleteMany({
+      where: { OR: [{ importBatchId: null }, { importBatchId: { not: batchIdToKeep } }] }
+    }),
+    prisma.performanceImportBatch.deleteMany({
+      where: { type: "QUALITY", id: { not: batchIdToKeep } }
+    })
+  ]);
+
+  return {
+    batchIdKept: batchIdToKeep,
+    qualityRowsDeleted: recordsDeleted.count,
+    importBatchesDeleted: batchesDeleted.count
+  };
+}
+
 export function validatePerformanceImportToken(authorizationHeader?: string | null) {
   const configuredToken = process.env.PERFORMANCE_IMPORT_TOKEN?.trim();
   if (!configuredToken) {
@@ -706,12 +862,13 @@ async function previewQualityRows(rawRows: Record<string, unknown>[], options: P
         caseOrderId,
         auditCaseOrderId,
         concatKey,
-        rawLob
+        rawLob,
+        qualityRule
       }
     };
   });
 
-  return markExistingQualityRows(previewRows);
+  return options.skipExistingCheck ? buildPreviewResult(previewRows) : markExistingQualityRows(previewRows);
 }
 
 async function previewTnsQualityRows(rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
@@ -966,13 +1123,19 @@ export async function commitCecQualityImport(actor: Actor, rows: PerformancePrev
 }
 
 async function commitQualityRows(user: AuthenticatedUser, rows: PerformancePreviewRow[], fileName = "qualidade.xlsx", batchId?: string) {
-  const validRows = rows.filter((row) => row.type === "QUALITY" && !row.errors.length && row.employeeId && row.uniqueKey);
+  const validRows = rows.filter((row) => (
+    row.type === "QUALITY"
+    && !row.errors.length
+    && row.employeeId
+    && row.uniqueKey
+    && row.payload.qualityRule === "ADS_QUALITY"
+  ));
   if (!validRows.length) throw new PerformanceError("Não há linhas válidas para importar.", 400);
   const createdRows = validRows.length;
   const updatedRows = 0;
   const batch = await upsertImportBatch(user, "QUALITY", fileName, rows, validRows.length, createdRows, updatedRows, batchId);
 
-  for (const chunk of chunks(validRows, 100)) {
+  for (const chunk of chunks(validRows, 500)) {
     await prisma.qualityRecord.createMany({
       data: chunk.map((row) => ({
         auditTime: new Date(String(row.payload.auditTime)),

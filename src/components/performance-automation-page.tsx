@@ -18,6 +18,7 @@ import {
   RefreshCw,
   Rows3,
   Search,
+  ShieldCheck,
   Target,
   TrendingUp,
   Trophy,
@@ -95,6 +96,46 @@ type ManualImportResult = {
   rowsError: number;
 };
 
+type QualitySummary = {
+  correct: number;
+  total: number;
+  errors: number;
+  quality: number;
+};
+
+type QualityTrendRow = QualitySummary & {
+  key: string;
+  label: string;
+};
+
+type QualityAgentRow = QualitySummary & {
+  employeeId: string;
+  employeeName: string;
+  wbLogin: string;
+  lob: string;
+  supervisor: string;
+  lastAuditAt: string;
+};
+
+type PerformanceQualityResponse = {
+  mode: "quality";
+  canImport: boolean;
+  period: { startDate: string; endDate: string };
+  dataRange: { startDate: string; endDate: string } | null;
+  selectedLob: string;
+  filters: { lobs: string[] };
+  summary: QualitySummary;
+  trend: QualityTrendRow[];
+  agents: QualityAgentRow[];
+  lastImport: { fileName: string; importedAt: string; rowsValid: number; rowsError: number; status: string } | null;
+};
+
+type QualityImportResult = {
+  qualityRows: number;
+  qualityRowsError: number;
+  qualityRowsIgnored: number;
+};
+
 type QueueSortKey = "queue" | "input" | "submit" | "latency" | "aht" | "agents";
 type QueueSortDirection = "asc" | "desc";
 
@@ -166,7 +207,7 @@ const defaultForecastModelWeights: ForecastModelWeights = {
 };
 
 export function PerformanceAutomationPage() {
-  const [activeTab, setActiveTab] = useState<"queue" | "forecast">("queue");
+  const [activeTab, setActiveTab] = useState<"queue" | "forecast" | "quality">("queue");
   const [queueGranularity, setQueueGranularity] = useState<PerformanceGranularity>("daily");
   const [queueLob, setQueueLob] = useState("");
   const [queueStartDate, setQueueStartDate] = useState("");
@@ -176,10 +217,16 @@ export function PerformanceAutomationPage() {
   const [forecastHorizon, setForecastHorizon] = useState(14);
   const [queuePayload, setQueuePayload] = useState<PerformanceProductionResponse | null>(null);
   const [forecastPayload, setForecastPayload] = useState<PerformanceProductionResponse | null>(null);
+  const [qualityPayload, setQualityPayload] = useState<PerformanceQualityResponse | null>(null);
+  const [qualityLob, setQualityLob] = useState("");
+  const [qualityStartDate, setQualityStartDate] = useState("");
+  const [qualityEndDate, setQualityEndDate] = useState("");
   const [loadingQueue, setLoadingQueue] = useState(true);
   const [loadingForecast, setLoadingForecast] = useState(false);
+  const [loadingQuality, setLoadingQuality] = useState(false);
   const [message, setMessage] = useState("");
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [qualityUploadOpen, setQualityUploadOpen] = useState(false);
 
   const loadQueue = useCallback(async (lobOverride?: string) => {
     setLoadingQueue(true);
@@ -223,6 +270,25 @@ export function PerformanceAutomationPage() {
     }
   }, [forecastLob]);
 
+  const loadQuality = useCallback(async () => {
+    setLoadingQuality(true);
+    const params = new URLSearchParams();
+    if (qualityLob) params.set("lob", qualityLob);
+    if (qualityStartDate) params.set("startDate", qualityStartDate);
+    if (qualityEndDate) params.set("endDate", qualityEndDate);
+    try {
+      const response = await fetch(`/api/performance/quality?${params.toString()}`, { cache: "no-store" });
+      const body = await response.json().catch(() => null) as (PerformanceQualityResponse & { error?: string; message?: string }) | null;
+      if (!response.ok || !body) throw new Error(body?.error || body?.message || "Não foi possível carregar Qualidade.");
+      setQualityPayload(body);
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível carregar Qualidade.");
+    } finally {
+      setLoadingQuality(false);
+    }
+  }, [qualityEndDate, qualityLob, qualityStartDate]);
+
   useEffect(() => {
     void loadQueue();
   }, [loadQueue]);
@@ -230,6 +296,10 @@ export function PerformanceAutomationPage() {
   useEffect(() => {
     if (activeTab === "forecast") void loadForecast();
   }, [activeTab, loadForecast]);
+
+  useEffect(() => {
+    if (activeTab === "quality") void loadQuality();
+  }, [activeTab, loadQuality]);
 
   const basePayload = queuePayload ?? forecastPayload;
   const lobs = useMemo(() => normalizeLobs(basePayload?.filters.lobs ?? []), [basePayload]);
@@ -248,7 +318,7 @@ export function PerformanceAutomationPage() {
         icon={Trophy}
         actions={(
           <div className="flex flex-wrap items-center gap-2">
-            {basePayload?.canImport ? (
+            {basePayload?.canImport && activeTab !== "quality" ? (
               <button type="button" onClick={() => setUploadOpen(true)} className="inline-flex h-10 items-center gap-2 rounded-xl bg-blue-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-blue-700">
                 <UploadCloud className="h-4 w-4" /> Subir bases
               </button>
@@ -258,16 +328,26 @@ export function PerformanceAutomationPage() {
         )}
       />
 
-      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="Último upload" value={formatUpload(basePayload?.panel.lastImport?.importedAt)} helper="base manual vigente" icon={CheckCircle2} tone="green" />
-        <StatCard title="Janela da base" value={formatBaseRange(basePayload?.panel)} helper={formatRangeHelper(basePayload?.panel)} icon={CalendarClock} tone="purple" />
-        <StatCard title="Output importado" value={formatNumber(basePayload?.panel.totalSubmit ?? basePayload?.summary.submit ?? 0)} helper="submit da base atual" icon={FileSpreadsheet} tone="blue" />
-        <StatCard title="Input importado" value={formatNumber(basePayload?.panel.totalInput ?? basePayload?.summary.input ?? baseQueueSummary.input)} helper="enqueue da base atual" icon={Rows3} tone="cyan" />
-      </section>
+      {activeTab === "quality" ? (
+        <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <StatCard title="Último upload" value={formatQualityImportDate(qualityPayload?.lastImport?.importedAt)} helper="snapshot de qualidade vigente" icon={CheckCircle2} tone="green" />
+          <StatCard title="Janela da base" value={formatQualityRange(qualityPayload?.dataRange)} helper="ADS e PROJECT" icon={CalendarClock} tone="purple" />
+          <StatCard title="Casos auditados" value={formatNumber(qualityPayload?.summary.total ?? 0)} helper="chaves distintas" icon={FileSpreadsheet} tone="blue" />
+          <StatCard title="Qualidade" value={formatQualityPercent(qualityPayload?.summary.quality)} helper="corretos / auditados" icon={ShieldCheck} tone="green" />
+        </section>
+      ) : (
+        <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <StatCard title="Último upload" value={formatUpload(basePayload?.panel.lastImport?.importedAt)} helper="base manual vigente" icon={CheckCircle2} tone="green" />
+          <StatCard title="Janela da base" value={formatBaseRange(basePayload?.panel)} helper={formatRangeHelper(basePayload?.panel)} icon={CalendarClock} tone="purple" />
+          <StatCard title="Output importado" value={formatNumber(basePayload?.panel.totalSubmit ?? basePayload?.summary.submit ?? 0)} helper="submit da base atual" icon={FileSpreadsheet} tone="blue" />
+          <StatCard title="Input importado" value={formatNumber(basePayload?.panel.totalInput ?? basePayload?.summary.input ?? baseQueueSummary.input)} helper="enqueue da base atual" icon={Rows3} tone="cyan" />
+        </section>
+      )}
 
       <div className="flex flex-wrap gap-2">
         <TabButton active={activeTab === "queue"} icon={Rows3} label="Dados de fila" onClick={() => setActiveTab("queue")} />
         <TabButton active={activeTab === "forecast"} icon={LineChartIcon} label="Forecast" onClick={() => setActiveTab("forecast")} />
+        <TabButton active={activeTab === "quality"} icon={ShieldCheck} label="Qualidade ADS/PROJECT" onClick={() => setActiveTab("quality")} />
       </div>
 
       {message ? <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{message}</p> : null}
@@ -289,7 +369,7 @@ export function PerformanceAutomationPage() {
           onExport={exportQueue}
           onRefresh={() => void loadQueue()}
         />
-      ) : (
+      ) : activeTab === "forecast" ? (
         <ForecastViewPanel
           loading={loadingForecast && !forecastPayload}
           model={forecast}
@@ -302,6 +382,19 @@ export function PerformanceAutomationPage() {
           onHorizonChange={setForecastHorizon}
           onRefresh={() => void loadForecast()}
         />
+      ) : (
+        <QualityView
+          loading={loadingQuality}
+          payload={qualityPayload}
+          selectedLob={qualityLob}
+          startDate={qualityStartDate}
+          endDate={qualityEndDate}
+          onLobChange={setQualityLob}
+          onStartDateChange={setQualityStartDate}
+          onEndDateChange={setQualityEndDate}
+          onRefresh={() => void loadQuality()}
+          onUpload={(qualityPayload?.canImport ?? basePayload?.canImport) ? () => setQualityUploadOpen(true) : undefined}
+        />
       )}
 
       {uploadOpen ? (
@@ -311,6 +404,15 @@ export function PerformanceAutomationPage() {
             setQueueLob("");
             setQueuePayload(null);
             await loadQueue("");
+          }}
+        />
+      ) : null}
+      {qualityUploadOpen ? (
+        <QualityImportModal
+          onClose={() => setQualityUploadOpen(false)}
+          onImported={async () => {
+            setQualityPayload(null);
+            await loadQuality();
           }}
         />
       ) : null}
@@ -333,6 +435,213 @@ export function PerformanceRestrictedPage() {
       </section>
     </div>
   );
+}
+
+function QualityView({
+  loading,
+  payload,
+  selectedLob,
+  startDate,
+  endDate,
+  onLobChange,
+  onStartDateChange,
+  onEndDateChange,
+  onRefresh,
+  onUpload
+}: {
+  loading: boolean;
+  payload: PerformanceQualityResponse | null;
+  selectedLob: string;
+  startDate: string;
+  endDate: string;
+  onLobChange: (value: string) => void;
+  onStartDateChange: (value: string) => void;
+  onEndDateChange: (value: string) => void;
+  onRefresh: () => void;
+  onUpload?: () => void;
+}) {
+  const [search, setSearch] = useState("");
+  const agents = useMemo(() => {
+    const normalizedSearch = search.trim().toLocaleLowerCase("pt-BR");
+    if (!normalizedSearch) return payload?.agents ?? [];
+    return (payload?.agents ?? []).filter((agent) => (
+      agent.employeeName.toLocaleLowerCase("pt-BR").includes(normalizedSearch)
+      || agent.wbLogin.toLocaleLowerCase("pt-BR").includes(normalizedSearch)
+      || agent.supervisor.toLocaleLowerCase("pt-BR").includes(normalizedSearch)
+    ));
+  }, [payload?.agents, search]);
+
+  return (
+    <section className="overflow-hidden rounded-2xl border border-border bg-white shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <div>
+          <h2 className="text-base font-black text-navy-950">Qualidade ADS e PROJECT</h2>
+          <p className="mt-1 text-xs font-bold text-muted">Casos corretos distintos divididos pelos casos auditados distintos.</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {onUpload ? (
+            <button type="button" onClick={onUpload} className="inline-flex h-9 items-center gap-2 rounded-lg bg-blue-600 px-3 text-xs font-black text-white hover:bg-blue-700">
+              <UploadCloud className="h-4 w-4" /> Subir qualidade
+            </button>
+          ) : null}
+          <button type="button" onClick={onRefresh} className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-white px-3 text-xs font-black text-navy-950 hover:bg-slate-50">
+            <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} /> Atualizar
+          </button>
+        </div>
+      </div>
+
+      <div className="space-y-4 p-4">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-end">
+            <DateRangeFilter
+              startDate={startDate}
+              endDate={endDate}
+              minDate={payload?.dataRange?.startDate ?? ""}
+              maxDate={payload?.dataRange?.endDate ?? ""}
+              onStartDateChange={onStartDateChange}
+              onEndDateChange={onEndDateChange}
+            />
+            <SlicerGroup label="LOB">
+              <SlicerButton active={!selectedLob} label="ADS + PROJECT" onClick={() => onLobChange("")} tone="dark" />
+              <SlicerButton active={selectedLob === "ADS"} label="ADS" onClick={() => onLobChange("ADS")} tone="dark" />
+              <SlicerButton active={selectedLob === "PROJECT"} label="PROJECT" onClick={() => onLobChange("PROJECT")} tone="dark" />
+            </SlicerGroup>
+          </div>
+          <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-2 text-xs font-bold text-blue-900">
+            Fórmula oficial: Correct distintos / total de casos distintos
+          </div>
+        </div>
+
+        {loading && !payload ? <EmptyBox label="Carregando dados de qualidade..." /> : !payload?.summary.total ? (
+          <div className="grid min-h-[260px] place-items-center rounded-2xl border border-dashed border-blue-200 bg-blue-50/40 px-6 text-center">
+            <div className="max-w-md">
+              <span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-white text-blue-600 shadow-sm"><ShieldCheck className="h-5 w-5" /></span>
+              <h3 className="mt-4 text-lg font-black text-navy-950">Sem dados de qualidade</h3>
+              <p className="mt-2 text-sm font-semibold text-muted">Envie a base de QA para carregar os indicadores de ADS e PROJECT.</p>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <StatCard title="Qualidade" value={formatQualityPercent(payload.summary.quality)} helper={payload.selectedLob} icon={ShieldCheck} tone="green" />
+              <StatCard title="Casos corretos" value={formatNumber(payload.summary.correct)} helper="distinct Correct" icon={CheckCircle2} tone="green" />
+              <StatCard title="Casos auditados" value={formatNumber(payload.summary.total)} helper="distinct concat" icon={FileSpreadsheet} tone="blue" />
+              <StatCard title="Divergências" value={formatNumber(payload.summary.errors)} helper="auditados - corretos" icon={Target} tone="orange" />
+            </div>
+
+            <div className="rounded-xl border border-border bg-white p-4">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-black text-navy-950">Evolução diária da qualidade</h3>
+                  <p className="mt-1 text-xs font-bold text-muted">Percentual oficial e volume de casos auditados por dia.</p>
+                </div>
+                <span className="rounded-lg bg-slate-50 px-3 py-1 text-xs font-black text-muted">{formatNumber(payload.trend.length)} dias</span>
+              </div>
+              <QualityDashboardChart rows={payload.trend} />
+            </div>
+
+            <div className="overflow-hidden rounded-xl border border-border bg-white">
+              <div className="flex flex-col gap-3 border-b border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 className="text-sm font-black text-navy-950">Qualidade por agente</h3>
+                  <p className="mt-1 text-xs font-bold text-muted">Ordenado da menor qualidade para a maior, priorizando oportunidades.</p>
+                </div>
+                <label className="relative block w-full sm:max-w-xs">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
+                  <input
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    placeholder="Buscar agente, WB ou supervisor"
+                    className="h-10 w-full rounded-xl border border-border bg-white pl-9 pr-3 text-sm font-semibold text-navy-950 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                  />
+                </label>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[980px] text-left text-sm">
+                  <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-black uppercase tracking-wide text-muted">
+                    <tr>
+                      <th className="px-3 py-3">Agente</th>
+                      <th className="px-3 py-3">LOB</th>
+                      <th className="px-3 py-3">Supervisor</th>
+                      <th className="px-3 py-3 text-right">Qualidade</th>
+                      <th className="px-3 py-3 text-right">Corretos</th>
+                      <th className="px-3 py-3 text-right">Auditados</th>
+                      <th className="px-3 py-3 text-right">Divergências</th>
+                      <th className="px-3 py-3 text-right">Última auditoria</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/70">
+                    {agents.map((agent) => (
+                      <tr key={agent.employeeId} className="hover:bg-blue-50/40">
+                        <td className="px-3 py-2">
+                          <p className="font-black text-navy-950">{agent.employeeName}</p>
+                          <p className="text-xs font-bold text-muted">{agent.wbLogin}</p>
+                        </td>
+                        <td className="px-3 py-2"><span className="rounded-lg bg-blue-50 px-2 py-1 text-xs font-black text-blue-700">{agent.lob}</span></td>
+                        <td className="px-3 py-2 font-bold text-muted">{agent.supervisor}</td>
+                        <td className="px-3 py-2 text-right"><QualityScore value={agent.quality} /></td>
+                        <td className="px-3 py-2 text-right font-bold text-navy-950">{formatNumber(agent.correct)}</td>
+                        <td className="px-3 py-2 text-right font-bold text-navy-950">{formatNumber(agent.total)}</td>
+                        <td className="px-3 py-2 text-right font-bold text-navy-950">{formatNumber(agent.errors)}</td>
+                        <td className="px-3 py-2 text-right text-xs font-bold text-muted">{formatQualityAuditDate(agent.lastAuditAt)}</td>
+                      </tr>
+                    ))}
+                    {!agents.length ? <tr><td colSpan={8} className="px-3 py-8 text-center text-sm font-bold text-muted">Nenhum agente encontrado.</td></tr> : null}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function QualityDashboardChart({ rows }: { rows: QualityTrendRow[] }) {
+  if (!rows.length) return <EmptyBox label="Sem histórico diário para exibir." />;
+  return (
+    <div className="h-[360px] w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <ComposedChart data={rows} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
+          <XAxis dataKey="label" tick={{ fontSize: 11, fontWeight: 700, fill: "#475569" }} tickLine={false} axisLine={false} minTickGap={18} />
+          <YAxis yAxisId="cases" tick={{ fontSize: 11, fontWeight: 700, fill: "#475569" }} tickLine={false} axisLine={false} tickFormatter={(value) => formatCompactAxis(Number(value))} />
+          <YAxis yAxisId="quality" orientation="right" domain={[0, 100]} tick={{ fontSize: 11, fontWeight: 700, fill: "#059669" }} tickLine={false} axisLine={false} tickFormatter={(value) => `${value}%`} />
+          <RechartsTooltip content={<QualityDashboardTooltip />} cursor={{ fill: "#EFF6FF" }} />
+          <Legend wrapperStyle={{ fontSize: 12, fontWeight: 800 }} />
+          <Bar yAxisId="cases" dataKey="total" name="Casos auditados" fill="#93C5FD" radius={[5, 5, 0, 0]} maxBarSize={34} />
+          <Line yAxisId="quality" type="monotone" dataKey="quality" name="Qualidade" stroke="#10B981" strokeWidth={3} dot={false} activeDot={{ r: 5 }} />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function QualityDashboardTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: QualityTrendRow }> }) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0]?.payload;
+  if (!row) return null;
+  return (
+    <div className="rounded-xl border border-border bg-white p-3 text-xs font-bold text-navy-950 shadow-lg">
+      <p className="mb-2 text-sm font-black">{row.label}</p>
+      <div className="space-y-1">
+        <div className="flex justify-between gap-5"><span>Qualidade</span><span>{formatQualityPercent(row.quality)}</span></div>
+        <div className="flex justify-between gap-5"><span>Corretos</span><span>{formatNumber(row.correct)}</span></div>
+        <div className="flex justify-between gap-5"><span>Auditados</span><span>{formatNumber(row.total)}</span></div>
+        <div className="flex justify-between gap-5"><span>Divergências</span><span>{formatNumber(row.errors)}</span></div>
+      </div>
+    </div>
+  );
+}
+
+function QualityScore({ value }: { value: number }) {
+  const tone = value >= 95
+    ? "bg-emerald-50 text-emerald-700"
+    : value >= 90
+      ? "bg-amber-50 text-amber-700"
+      : "bg-red-50 text-red-700";
+  return <span className={cn("inline-flex min-w-[72px] justify-center rounded-lg px-2 py-1 text-xs font-black", tone)}>{formatQualityPercent(value)}</span>;
 }
 
 function QueueView({
@@ -686,6 +995,111 @@ function ManualImportModal({ onClose, onImported }: { onClose: () => void; onImp
             <button type="button" onClick={() => void submit()} disabled={uploading || !productionFile || !volumeFile} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 text-sm font-black text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-45">
               {uploading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
               {uploading ? `Enviando e validando... ${uploadProgress}%` : "Substituir base"}
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function QualityImportModal({ onClose, onImported }: { onClose: () => void; onImported: () => Promise<void> | void }) {
+  const [qualityFile, setQualityFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState<QualityImportResult | null>(null);
+
+  const submit = async () => {
+    if (!qualityFile) {
+      setError("Selecione a base de Qualidade.");
+      return;
+    }
+    setUploading(true);
+    setUploadProgress(0);
+    setError("");
+    setResult(null);
+    try {
+      const start = await performanceUploadRequest<{ uploadId: string }>("/api/performance/import/manual?action=start", { method: "POST" });
+      const chunkSize = 2 * 1024 * 1024;
+      const totalChunks = Math.max(1, Math.ceil(qualityFile.size / chunkSize));
+
+      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+        const params = new URLSearchParams({
+          action: "chunk",
+          uploadId: start.uploadId,
+          fileType: "quality",
+          fileName: qualityFile.name,
+          chunkIndex: String(chunkIndex),
+          totalChunks: String(totalChunks)
+        });
+        await performanceUploadRequest(`/api/performance/import/manual?${params.toString()}`, {
+          method: "POST",
+          headers: { "content-type": "application/octet-stream" },
+          body: qualityFile.slice(chunkIndex * chunkSize, Math.min(qualityFile.size, (chunkIndex + 1) * chunkSize))
+        });
+        setUploadProgress(Math.round(((chunkIndex + 1) / totalChunks) * 85));
+      }
+
+      setUploadProgress(90);
+      const finalizeParams = new URLSearchParams({ action: "finalize", uploadId: start.uploadId });
+      const body = await performanceUploadRequest<QualityImportResult>(`/api/performance/import/manual?${finalizeParams.toString()}`, { method: "POST" });
+      setUploadProgress(100);
+      setResult({
+        qualityRows: body.qualityRows,
+        qualityRowsError: body.qualityRowsError,
+        qualityRowsIgnored: body.qualityRowsIgnored
+      });
+      await onImported();
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "Não foi possível substituir a base de Qualidade.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] grid place-items-center bg-slate-950/35 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="quality-upload-title">
+      <div className="w-full max-w-xl overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+          <div>
+            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-blue-600">Performance</p>
+            <h2 id="quality-upload-title" className="mt-1 text-xl font-black text-navy-950">Substituir base de Qualidade</h2>
+            <p className="mt-1 text-sm font-semibold text-muted">Envie o XLSX de QA. Apenas os colaboradores de ADS e PROJECT serão importados.</p>
+          </div>
+          <button type="button" onClick={onClose} disabled={uploading} className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-border text-muted hover:bg-slate-50 hover:text-navy-950 disabled:opacity-40" aria-label="Fechar">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="space-y-4 p-5">
+          <PerformanceFileField
+            label="Qualidade ADS / PROJECT"
+            helper="Base com audit_name, final_result e os IDs distintos dos casos auditados."
+            file={qualityFile}
+            onChange={setQualityFile}
+          />
+          <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-900">
+            Após a validação, este envio substitui integralmente o snapshot anterior de Qualidade. Linhas de outras LOBs permanecem fora do indicador.
+          </div>
+          {error ? <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{error}</p> : null}
+          {result ? (
+            <div className="grid gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 sm:grid-cols-3">
+              <ImportResultMetric label="Importadas" value={result.qualityRows} />
+              <ImportResultMetric label="Ignoradas" value={result.qualityRowsIgnored} />
+              <ImportResultMetric label="Com erro" value={result.qualityRowsError} />
+            </div>
+          ) : null}
+        </div>
+
+        <div className="flex flex-col-reverse gap-2 border-t border-border bg-slate-50/70 px-5 py-4 sm:flex-row sm:justify-end">
+          <button type="button" onClick={onClose} disabled={uploading} className="h-10 rounded-xl border border-border bg-white px-4 text-sm font-black text-navy-950 hover:bg-slate-50 disabled:opacity-40">
+            {result ? "Concluir" : "Cancelar"}
+          </button>
+          {!result ? (
+            <button type="button" onClick={() => void submit()} disabled={uploading || !qualityFile} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 text-sm font-black text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-45">
+              {uploading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
+              {uploading ? `Enviando e validando... ${uploadProgress}%` : "Substituir qualidade"}
             </button>
           ) : null}
         </div>
@@ -1412,6 +1826,38 @@ function startOfUtcWeek(date: Date) {
 
 function formatUpload(value?: string | null) {
   return value || "-";
+}
+
+function formatQualityPercent(value?: number | null) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `${value.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`
+    : "-";
+}
+
+function formatQualityRange(range?: { startDate: string; endDate: string } | null) {
+  if (!range) return "-";
+  return `${formatDateOnlyPtBr(range.startDate)} - ${formatDateOnlyPtBr(range.endDate)}`;
+}
+
+function formatQualityImportDate(value?: string | null) {
+  if (!value) return "-";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function formatQualityAuditDate(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function formatDateOnlyPtBr(value: string) {
+  const date = parseDateOnly(value);
+  if (!date) return value;
+  return date.toLocaleDateString("pt-BR", { timeZone: "UTC", day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
 function formatBaseRange(panel?: PerformancePanel | null) {
