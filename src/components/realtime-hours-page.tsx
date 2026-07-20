@@ -238,7 +238,8 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
     setSuccessMessage("");
 
     try {
-      const mappingsRequest = canManageMappings
+      const shouldLoadMappings = canManageMappings && activeTab === "MAPPINGS";
+      const mappingsRequest = shouldLoadMappings
         ? fetch("/api/realtime-hours/identity-mappings", { cache: "no-store" })
         : Promise.resolve(null);
       const [statusResponse, timelineResponse, mappingsResponse] = await Promise.all([
@@ -261,7 +262,7 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
       if (!timelineResponse.ok || timelineBody.success === false) {
         throw new Error(timelineBody.message || timelineBody.error || "Não foi possível carregar a linha do tempo.");
       }
-      if (canManageMappings && mappingsResponse && (!mappingsResponse.ok || mappingsBody.success === false)) {
+      if (shouldLoadMappings && mappingsResponse && (!mappingsResponse.ok || mappingsBody.success === false)) {
         throw new Error(mappingsBody.message || mappingsBody.error || "Não foi possível carregar os vínculos de usuários Windows.");
       }
 
@@ -274,7 +275,7 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
       setLoading(false);
       setRefreshing(false);
     }
-  }, [canManageMappings, timelineDate]);
+  }, [activeTab, canManageMappings, timelineDate]);
 
   useEffect(() => {
     loadData();

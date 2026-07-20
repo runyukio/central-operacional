@@ -97,6 +97,16 @@ type RealtimeHoursIdentityMappingInput = {
   wbLogin?: unknown;
 };
 
+type RealtimeHoursIdentityDiscoveryRecord = {
+  hostname: string;
+  windowsUser: string;
+  wbLogin: string | null;
+  employeeId: string | null;
+  capturedAt: Date;
+  identityConfidence: string;
+  recordCount: number;
+};
+
 type TimelineSegment = {
   type: "ACTIVE" | "NO_ACTIVITY";
   start: Date;
@@ -596,7 +606,6 @@ export async function cleanupRealtimeHoursRetention() {
 }
 
 export async function listRealtimeHoursIdentityMappings() {
-  const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const [mappings, recentRecords] = await Promise.all([
     prisma.realTimeHoursIdentityMapping.findMany({
       orderBy: [{ hostname: "asc" }, { windowsUser: "asc" }],
@@ -616,19 +625,7 @@ export async function listRealtimeHoursIdentityMappings() {
         }
       }
     }),
-    prisma.realTimeHoursRecord.findMany({
-      where: { capturedAt: { gte: since } },
-      orderBy: { capturedAt: "desc" },
-      take: 5000,
-      select: {
-        hostname: true,
-        windowsUser: true,
-        wbLogin: true,
-        employeeId: true,
-        capturedAt: true,
-        identityConfidence: true
-      }
-    })
+    loadRealtimeHoursIdentityDiscoveryRecords()
   ]);
 
   const discovered = new Map<string, {
@@ -651,7 +648,7 @@ export async function listRealtimeHoursIdentityMappings() {
       wbLogin: current?.wbLogin ?? record.wbLogin,
       employeeId: current?.employeeId ?? record.employeeId,
       lastSeenAt: current?.lastSeenAt ?? record.capturedAt,
-      recordCount: (current?.recordCount ?? 0) + 1,
+      recordCount: (current?.recordCount ?? 0) + record.recordCount,
       identityConfidence: current?.identityConfidence === "HIGH" ? "HIGH" : record.identityConfidence
     });
   }
@@ -703,6 +700,42 @@ export async function listRealtimeHoursIdentityMappings() {
       })
       .sort((a, b) => `${a.hostname} ${a.windowsUser}`.localeCompare(`${b.hostname} ${b.windowsUser}`))
   };
+}
+
+async function loadRealtimeHoursIdentityDiscoveryRecords() {
+  const since = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+
+  return prisma.$queryRaw<RealtimeHoursIdentityDiscoveryRecord[]>(Prisma.sql`
+    SELECT
+      latest."hostname",
+      latest."windowsUser",
+      latest."wbLogin",
+      latest."employeeId",
+      latest."capturedAt",
+      latest."identityConfidence",
+      latest."recordCount"
+    FROM (
+      SELECT DISTINCT ON (record."hostname", record."windowsUser")
+        record."hostname",
+        record."windowsUser",
+        record."wbLogin",
+        record."employeeId",
+        record."capturedAt",
+        record."identityConfidence",
+        COUNT(*) OVER (
+          PARTITION BY record."hostname", record."windowsUser"
+        )::integer AS "recordCount"
+      FROM "RealTimeHoursRecord" AS record
+      WHERE record."capturedAt" >= ${since}
+        AND COALESCE(BTRIM(record."windowsUser"), '') <> ''
+      ORDER BY
+        record."hostname" ASC,
+        record."windowsUser" ASC,
+        record."capturedAt" DESC,
+        record."createdAt" DESC
+    ) AS latest
+    ORDER BY latest."capturedAt" DESC
+  `);
 }
 
 export async function upsertRealtimeHoursIdentityMapping(input: RealtimeHoursIdentityMappingInput, actorEmail?: string | null) {
