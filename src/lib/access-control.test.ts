@@ -65,6 +65,10 @@ test("somente ADMIN atualiza automaticamente a necessidade ADS", () => {
   }
 });
 
+test("WFM acessa Performance", () => {
+  assert.equal(roleHasCapability("WFM", "PERFORMANCE"), true);
+});
+
 test("CLIENT permanece limitado a Filas, Necessidade e Performance", () => {
   for (const capability of ["REALTIME_QUEUES", "STAFF_COVERAGE", "PERFORMANCE"] as const) {
     assert.equal(roleHasCapability("CLIENT", capability), true, capability);
