@@ -25,6 +25,8 @@ export type CecReportTicket = {
   ticket: string;
   agentName: string;
   status: string;
+  groupId?: string | null;
+  groupName?: string | null;
 };
 
 export type CecReportSnapshot = {
@@ -88,7 +90,7 @@ function CecEmptyState({ loading, error }: { loading: boolean; error: string }) 
       <Database className={cn("mx-auto h-9 w-9 text-blue-500", loading && "animate-pulse")} />
       <h2 className="mt-3 text-lg font-black text-navy-950">{loading ? "Loading CEC report" : "CEC data unavailable"}</h2>
       <p className="mx-auto mt-1 max-w-xl text-sm font-bold text-muted">
-        {error || "The Freshdesk API has not returned the Backlog Normal data yet."}
+        {error || "The Freshdesk API has not returned the selected CEC groups yet."}
       </p>
     </section>
   );
@@ -123,7 +125,7 @@ export function CecReportOverview({ report, loading, error }: { report: CecRepor
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-[11px] font-black uppercase tracking-[0.16em] text-blue-600">Report CEC</p>
-            <h2 className="mt-1 text-xl font-black text-navy-950">Backlog Normal</h2>
+            <h2 className="mt-1 text-xl font-black text-navy-950">Freshdesk Backlog</h2>
             <p className="mt-1 text-xs font-bold text-muted">Cycle {snapshot.cycleDownload}</p>
           </div>
           <span className={cn(
@@ -202,50 +204,55 @@ export function CecReportOverview({ report, loading, error }: { report: CecRepor
 export function CecReportDetails({ report, loading }: { report: CecReportPayload | null; loading: boolean }) {
   const snapshot = report?.snapshot ?? null;
   if (!snapshot) {
-    return <div className="px-4 py-12 text-center text-sm font-bold text-muted">{loading ? "Loading agent distribution..." : "No CEC rows available."}</div>;
+    return <div className="px-4 py-12 text-center text-sm font-bold text-muted">{loading ? "Loading Freshdesk groups..." : "No CEC rows available."}</div>;
   }
 
-  const statusByAgent = new Map<string, Record<string, number>>();
+  const statusByGroup = new Map<string, Record<string, number>>();
   snapshot.tickets.forEach((ticket) => {
-    const counts = statusByAgent.get(ticket.agentName) ?? {};
+    const groupName = ticket.groupName || ticket.agentName;
+    const counts = statusByGroup.get(groupName) ?? {};
     counts[ticket.status] = (counts[ticket.status] || 0) + 1;
-    statusByAgent.set(ticket.agentName, counts);
+    statusByGroup.set(groupName, counts);
   });
 
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
         <div>
-          <h2 className="font-black text-navy-950">Backlog by agent</h2>
-          <p className="mt-0.5 text-xs font-bold text-muted">Normal tickets grouped by the Freshdesk agent name.</p>
+          <h2 className="font-black text-navy-950">Backlog by Freshdesk group</h2>
+          <p className="mt-0.5 text-xs font-bold text-muted">Unresolved tickets from the groups enabled for the CEC report.</p>
         </div>
         <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-700">
-          <UserRound className="h-3.5 w-3.5" /> {snapshot.departments.length} agents
+          <UserRound className="h-3.5 w-3.5" /> {snapshot.departments.length} groups
         </span>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[760px] table-fixed text-left text-sm">
           <thead className="sticky top-0 z-10 bg-slate-50 text-xs uppercase tracking-wide text-muted">
             <tr>
-              <th className="w-[38%] px-4 py-3 font-black">Agent name</th>
-              <th className="w-[14%] px-4 py-3 text-center font-black">Tickets</th>
-              <th className="w-[14%] px-4 py-3 text-center font-black">Open</th>
-              <th className="w-[14%] px-4 py-3 text-center font-black">On Hold</th>
+              <th className="w-[34%] px-4 py-3 font-black">Freshdesk group</th>
+              <th className="w-[12%] px-4 py-3 text-center font-black">Tickets</th>
+              <th className="w-[12%] px-4 py-3 text-center font-black">Open</th>
+              <th className="w-[12%] px-4 py-3 text-center font-black">On Hold</th>
               <th className="w-[10%] px-4 py-3 text-center font-black">New</th>
+              <th className="w-[10%] px-4 py-3 text-center font-black">Other</th>
               <th className="w-[10%] px-4 py-3 text-right font-black">Share</th>
             </tr>
           </thead>
           <tbody>
-            {snapshot.departments.map((agent, index) => {
-              const statuses = statusByAgent.get(agent.name) ?? {};
+            {snapshot.departments.map((group, index) => {
+              const statuses = statusByGroup.get(group.name) ?? {};
+              const knownStatuses = (statuses.Open || 0) + (statuses["On Hold"] || 0) + (statuses.New || 0);
+              const otherStatuses = Math.max(0, group.backlog - knownStatuses);
               return (
-                <tr key={`${agent.name}-${index}`} className={cn("border-t border-slate-100", index % 2 ? "bg-slate-50/45" : "bg-white")}>
-                  <td className="px-4 py-3 font-extrabold text-navy-950">{agent.name}</td>
-                  <td className="px-4 py-3 text-center font-black text-navy-950">{formatInteger(agent.backlog)}</td>
+                <tr key={`${group.name}-${index}`} className={cn("border-t border-slate-100", index % 2 ? "bg-slate-50/45" : "bg-white")}>
+                  <td className="px-4 py-3 font-extrabold text-navy-950">{group.name}</td>
+                  <td className="px-4 py-3 text-center font-black text-navy-950">{formatInteger(group.backlog)}</td>
                   <td className="px-4 py-3 text-center font-bold text-blue-700">{formatInteger(statuses.Open || 0)}</td>
                   <td className="px-4 py-3 text-center font-bold text-amber-700">{formatInteger(statuses["On Hold"] || 0)}</td>
                   <td className="px-4 py-3 text-center font-bold text-emerald-700">{formatInteger(statuses.New || 0)}</td>
-                  <td className="px-4 py-3 text-right font-black text-muted">{(agent.percent ?? 0).toFixed(1)}%</td>
+                  <td className="px-4 py-3 text-center font-bold text-slate-600">{formatInteger(otherStatuses)}</td>
+                  <td className="px-4 py-3 text-right font-black text-muted">{(group.percent ?? 0).toFixed(1)}%</td>
                 </tr>
               );
             })}

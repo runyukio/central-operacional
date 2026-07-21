@@ -28,6 +28,8 @@ export type RealtimeCecTicketInput = {
   ticket: string;
   agentName: string;
   status: string;
+  groupId?: string | null;
+  groupName?: string | null;
 };
 
 export type RealtimeCecImportInput = {
@@ -82,7 +84,9 @@ function normalizeTicket(input: RealtimeCecTicketInput): RealtimeCecTicketInput 
   return {
     ticket: String(input.ticket || "").trim(),
     agentName: String(input.agentName || "Sem agente").trim() || "Sem agente",
-    status: String(input.status || "Sem status").trim() || "Sem status"
+    status: String(input.status || "Sem status").trim() || "Sem status",
+    groupId: input.groupId ? String(input.groupId).trim() : null,
+    groupName: input.groupName ? String(input.groupName).trim() : null
   };
 }
 
@@ -93,7 +97,7 @@ function buildRawData(
   tickets: RealtimeCecTicketInput[]
 ) {
   return {
-    source: input.source || "freshdesk-scheduled-report",
+    source: input.source || "freshdesk-core-api-v2",
     fileName: input.fileName,
     cycleDownload: input.cycleDownload,
     generatedDate: input.generatedDate || null,
@@ -137,8 +141,8 @@ async function pruneRealtimeCecHistory(currentId?: string) {
 export async function importRealtimeCecSnapshot(input: RealtimeCecImportInput) {
   const cycleDownload = input.cycleDownload.trim();
   const fileName = input.fileName.trim() || "cec_backlog_normal.csv";
-  const source = input.source?.trim() || "freshdesk-scheduled-report";
-  const groups = (input.groups || []).map(normalizeGroup).filter((group) => group.backlog || group.onHold || group.open || group.new);
+  const source = input.source?.trim() || "freshdesk-core-api-v2";
+  const groups = (input.groups || []).map(normalizeGroup).filter((group) => group.key && group.label);
   const departments = (input.departments || []).map(normalizeDepartment).filter((department) => department.name);
   const tickets = (input.tickets || []).map(normalizeTicket).filter((ticket) => ticket.ticket || ticket.agentName !== "Sem agente");
 
