@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, CircleDollarSign, Download, Eye, FileSpreadsheet, LockKeyhole, Pencil, RefreshCw, Save, Search, Send, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
+import { CheckCircle2, CircleDollarSign, Download, Eye, FileSpreadsheet, FileText, LockKeyhole, Pencil, RefreshCw, Save, Search, Send, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 
 import { EmptyState, PageHeader, Panel, StatCard, StatusBadge } from "@/components/ui/primitives";
 import {
@@ -207,6 +207,7 @@ export function BillingPage() {
   const [bulkAdjustmentResult, setBulkAdjustmentResult] = useState<BulkAdjustmentResult | null>(null);
   const [editingAdjustment, setEditingAdjustment] = useState<BillingPayload["data"]["adjustments"][number] | null>(null);
   const [selectedInvoice, setSelectedInvoice] = useState<BillingPayload["data"]["invoices"][number] | null>(null);
+  const [selectedFiscalInvoice, setSelectedFiscalInvoice] = useState<BillingPayload["data"]["invoices"][number] | null>(null);
   const [employeePage, setEmployeePage] = useState(1);
   const bulkAdjustmentInputRef = useRef<HTMLInputElement | null>(null);
   const employeePageSize = 12;
@@ -604,6 +605,7 @@ export function BillingPage() {
                     pageSize={employeePageSize}
                     onPageChange={setEmployeePage}
                     onSelect={setSelectedInvoice}
+                    onOpenFiscalInvoice={setSelectedFiscalInvoice}
                   />
                 ) : null}
                 {activeTab === "hours" ? <HourDetailsTable rows={data.invoices} /> : null}
@@ -670,6 +672,9 @@ export function BillingPage() {
               onSetFinalized={(finalized, fiscalDraft) => setEmployeeInvoiceFinalized(selectedInvoice, finalized, fiscalDraft)}
             />
           ) : null}
+          {selectedFiscalInvoice ? (
+            <FiscalInvoiceModal invoice={selectedFiscalInvoice} onClose={() => setSelectedFiscalInvoice(null)} />
+          ) : null}
           {editingAdjustment ? (
             <AdjustmentEditModal
               adjustment={editingAdjustment}
@@ -711,13 +716,15 @@ function EmployeeTable({
   page,
   pageSize,
   onPageChange,
-  onSelect
+  onSelect,
+  onOpenFiscalInvoice
 }: {
   rows: BillingPayload["data"]["invoices"];
   page: number;
   pageSize: number;
   onPageChange: (page: number) => void;
   onSelect: (row: BillingPayload["data"]["invoices"][number]) => void;
+  onOpenFiscalInvoice: (row: BillingPayload["data"]["invoices"][number]) => void;
 }) {
   const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -741,9 +748,22 @@ function EmployeeTable({
           minutesToHours(row.totalConsideredMinutes),
           formatCurrency(row.finalAmount),
           <StatusBadge key={`${row.employeeId}-status`} status={row.statusLabel} />,
-          <button key={`${row.employeeId}-view`} type="button" onClick={() => onSelect(row)} className="premium-button inline-flex h-8 items-center justify-center gap-2 px-3 text-xs font-black leading-none">
-            <Eye className="h-3.5 w-3.5" /> Detalhe
-          </button>
+          <div key={`${row.employeeId}-actions`} className="flex items-center gap-2">
+            {row.fiscalInvoice ? (
+              <button
+                type="button"
+                onClick={() => onOpenFiscalInvoice(row)}
+                className="premium-control inline-flex h-8 w-8 shrink-0 items-center justify-center p-0 text-blue-700"
+                title="Ver nota fiscal"
+                aria-label={`Ver nota fiscal de ${row.employeeName}`}
+              >
+                <FileText className="h-4 w-4" />
+              </button>
+            ) : null}
+            <button type="button" onClick={() => onSelect(row)} className="premium-button inline-flex h-8 items-center justify-center gap-2 px-3 text-xs font-black leading-none">
+              <Eye className="h-3.5 w-3.5" /> Detalhe
+            </button>
+          </div>
         ])}
       />
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-muted">
@@ -754,6 +774,94 @@ function EmployeeTable({
           <button type="button" disabled={safePage >= totalPages} onClick={() => onPageChange(safePage + 1)} className="premium-control h-8 px-3 disabled:opacity-50">Próxima</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function FiscalInvoiceModal({
+  invoice,
+  onClose
+}: {
+  invoice: BillingPayload["data"]["invoices"][number];
+  onClose: () => void;
+}) {
+  const fiscalInvoice = invoice.fiscalInvoice;
+  if (!fiscalInvoice) return null;
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+      <button
+        type="button"
+        aria-label="Fechar nota fiscal"
+        onClick={onClose}
+        className="absolute inset-0 cursor-default bg-navy-950/40 backdrop-blur-sm"
+      />
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="fiscal-invoice-title"
+        className="relative w-full max-w-2xl overflow-hidden rounded-2xl border border-border bg-white shadow-2xl"
+      >
+        <header className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
+              <FileText className="h-5 w-5" />
+            </span>
+            <div className="min-w-0">
+              <h2 id="fiscal-invoice-title" className="text-lg font-black text-navy-950">Nota fiscal</h2>
+              <p className="truncate text-sm font-semibold text-muted">{invoice.employeeName} • {invoice.wbLogin}</p>
+            </div>
+          </div>
+          <button type="button" onClick={onClose} className="premium-control inline-flex h-9 w-9 shrink-0 items-center justify-center p-0" aria-label="Fechar">
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+
+        <div className="space-y-4 p-5">
+          <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_180px]">
+            <FiscalInvoiceField label="Número / chave de acesso">
+              <p className="break-all font-mono text-sm font-black leading-6 text-navy-950">{fiscalInvoice.invoiceNumber}</p>
+            </FiscalInvoiceField>
+            <FiscalInvoiceField label="Valor bruto">
+              <p className="text-lg font-black text-navy-950">{formatCurrency(fiscalInvoice.grossAmount)}</p>
+            </FiscalInvoiceField>
+          </div>
+
+          <FiscalInvoiceField label="Descrição do serviço">
+            <p className="whitespace-pre-wrap break-words text-sm font-bold leading-6 text-navy-950">{fiscalInvoice.serviceDescription}</p>
+          </FiscalInvoiceField>
+
+          <div className="flex flex-col gap-3 rounded-xl border border-border bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white text-blue-700 shadow-sm">
+                <FileText className="h-4 w-4" />
+              </span>
+              <div className="min-w-0">
+                <p className="break-all text-sm font-black text-navy-950">{fiscalInvoice.fileName}</p>
+                <p className="mt-0.5 text-xs font-semibold text-muted">
+                  {formatFileSize(fiscalInvoice.sizeBytes)} • enviado em {fiscalInvoice.submittedAt}
+                </p>
+              </div>
+            </div>
+            <a
+              href={fiscalInvoice.downloadUrl}
+              download
+              className="premium-button inline-flex h-10 shrink-0 items-center justify-center gap-2 px-4 text-sm font-black leading-none"
+            >
+              <Download className="h-4 w-4" /> Baixar nota
+            </a>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function FiscalInvoiceField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="min-w-0 rounded-xl border border-border bg-white p-3">
+      <p className="text-[11px] font-black uppercase tracking-wide text-muted">{label}</p>
+      <div className="mt-1.5">{children}</div>
     </div>
   );
 }
@@ -998,29 +1106,6 @@ function EmployeeBillingDetail({
             <DetailMetric label="Ajustes" value={formatCurrency(invoice.adjustmentAmount)} />
             <DetailMetric label="Valor final" value={formatCurrency(invoice.finalAmount)} tone="green" />
             <DetailMetric label="Status invoice" value={invoice.statusLabel} />
-          </div>
-
-          <div className="mt-4">
-            <Panel title="Nota fiscal">
-              {invoice.fiscalInvoice ? (
-                <div className="grid gap-3 lg:grid-cols-[160px_180px_1fr_auto] lg:items-center">
-                  <InfoLine label="Número" value={invoice.fiscalInvoice.invoiceNumber} />
-                  <InfoLine label="Valor bruto" value={formatCurrency(invoice.fiscalInvoice.grossAmount)} />
-                  <div className="min-w-0">
-                    <p className="text-[11px] font-black uppercase tracking-wide text-muted">Descrição do serviço</p>
-                    <p className="mt-1 break-words text-sm font-bold text-navy-950">{invoice.fiscalInvoice.serviceDescription}</p>
-                    <p className="mt-1 break-all text-xs font-semibold text-muted">
-                      {invoice.fiscalInvoice.fileName} • {formatFileSize(invoice.fiscalInvoice.sizeBytes)} • enviado em {invoice.fiscalInvoice.submittedAt}
-                    </p>
-                  </div>
-                  <a href={invoice.fiscalInvoice.downloadUrl} className="premium-control inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none text-blue-700">
-                    <Download className="h-4 w-4" /> Baixar nota
-                  </a>
-                </div>
-              ) : (
-                <p className="text-sm font-semibold text-muted">Nota fiscal ainda não enviada pelo colaborador.</p>
-              )}
-            </Panel>
           </div>
 
           <div className="mt-4 grid gap-3 xl:grid-cols-[1fr_360px]">
