@@ -12,7 +12,8 @@ export type AppRole =
   | "POC"
   | "COORDENADOR"
   | "GERENTE"
-  | "CLIENT";
+  | "CLIENT"
+  | "GLOBAL";
 
 export const demoUsers = [
   { email: "admin@central.com", name: "Admin Central", role: "ADMIN", label: "Administrador" },
@@ -26,7 +27,8 @@ export const demoUsers = [
   { email: "ti@central.com", name: "Thiago TI", role: "TI", label: "Logística / TI" },
   { email: "rta@central.com", name: "RTA Operações", role: "RTA", label: "Real Time Analyst" },
   { email: "poc@central.com", name: "POC Operações", role: "POC", label: "Point of Contact" },
-  { email: "client@central.com", name: "Cliente Performance", role: "CLIENT", label: "Cliente" }
+  { email: "client@central.com", name: "Cliente Performance", role: "CLIENT", label: "Cliente" },
+  { email: "global@central.com", name: "Global Viewer", role: "GLOBAL", label: "Global Read Only" }
 ] as const satisfies ReadonlyArray<{ email: string; name: string; role: AppRole; label: string }>;
 
 export function getDemoUser(email?: string | null) {

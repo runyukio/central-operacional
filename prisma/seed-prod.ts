@@ -19,7 +19,8 @@ async function main() {
     ["TI", "Logística / TI"],
     ["RTA", "Real Time Analyst"],
     ["POC", "Point of Contact"],
-    ["CLIENT", "Cliente"]
+    ["CLIENT", "Cliente"],
+    ["GLOBAL", "Global Read Only"]
   ] as const;
 
   for (const [name, label] of roles) {

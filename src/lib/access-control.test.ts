@@ -14,7 +14,7 @@ import {
 
 test("somente ADMIN e WFM alteram cronogramas", () => {
   const allowed = ["ADMIN", "WFM"];
-  const denied = ["GESTOR", "SUPERVISOR", "QUALIDADE", "RH", "FINANCEIRO", "TI", "RTA", "POC", "COLABORADOR", "CLIENT"];
+  const denied = ["GESTOR", "SUPERVISOR", "QUALIDADE", "RH", "FINANCEIRO", "TI", "RTA", "POC", "COLABORADOR", "CLIENT", "GLOBAL"];
 
   for (const role of allowed) assert.equal(roleHasCapability(role, "SCHEDULE_EDIT"), true, role);
   for (const role of denied) assert.equal(roleHasCapability(role, "SCHEDULE_EDIT"), false, role);
@@ -57,7 +57,7 @@ test("Colaborador acessa o próprio invoice pelo pacote pessoal, sem abrir o Bil
 
 test("somente ADMIN altera Billing, Financeiro, Adiantamento e roles", () => {
   const restrictedCapabilities = ["BILLING_MANAGE", "FINANCE_MANAGE", "ADVANCE_MANAGE", "EMPLOYEE_ROLE_EDIT"] as const;
-  const nonAdminRoles = ["GESTOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "FINANCEIRO", "TI", "RTA", "POC", "COLABORADOR", "CLIENT"];
+  const nonAdminRoles = ["GESTOR", "SUPERVISOR", "WFM", "QUALIDADE", "RH", "FINANCEIRO", "TI", "RTA", "POC", "COLABORADOR", "CLIENT", "GLOBAL"];
 
   for (const capability of restrictedCapabilities) {
     assert.equal(roleHasCapability("ADMIN", capability), true, capability);
@@ -95,6 +95,15 @@ test("CLIENT permanece limitado a Filas, Necessidade e Performance", () => {
   }
   for (const capability of ["REALTIME_FULL", "CENTRAL", "PIPELINES", "FEEDBACK_SUBMIT", "SCHEDULE_VIEW"] as const) {
     assert.equal(roleHasCapability("CLIENT", capability), false, capability);
+  }
+});
+
+test("GLOBAL visualiza a operação sem alterar dados", () => {
+  for (const capability of ["CENTRAL", "REALTIME_FULL", "CAPTURE", "STAFF_COVERAGE", "PERFORMANCE", "EMPLOYEE_MAP", "EMPLOYEE_SENSITIVE", "SCHEDULE_VIEW", "WORK_HOURS_VIEW", "BILLING_VIEW", "FINANCE_VIEW", "ADVANCE_VIEW", "EQUIPMENT_VIEW"] as const) {
+    assert.equal(roleHasCapability("GLOBAL", capability), true, capability);
+  }
+  for (const capability of ["STAFF_COVERAGE_MANAGE", "EMPLOYEE_EDIT", "EMPLOYEE_ROLE_EDIT", "SCHEDULE_EDIT", "WORK_HOURS_EDIT", "BILLING_MANAGE", "FINANCE_MANAGE", "ADVANCE_MANAGE", "EQUIPMENT_MANAGE", "SETTINGS", "USERS_MANAGE"] as const) {
+    assert.equal(roleHasCapability("GLOBAL", capability), false, capability);
   }
 });
 

@@ -85,7 +85,8 @@ async function main() {
         ["TI", "Logística / TI"],
         ["RTA", "Real Time Analyst"],
         ["POC", "Point of Contact"],
-        ["CLIENT", "Cliente"]
+        ["CLIENT", "Cliente"],
+        ["GLOBAL", "Global Read Only"]
       ].map(([name, label]) =>
         prisma.role.create({
           data: {

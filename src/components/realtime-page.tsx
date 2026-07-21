@@ -268,6 +268,7 @@ type OnlineHeadcountGaugeData = {
   percentage: number | null;
   missing: number;
   tone: "positive" | "warning" | "negative" | "neutral";
+  freshChatBacklog?: FreshChatBacklogSnapshot | null;
 };
 type ReportKpiCards = {
   backlog: AgentKpiCard[];
@@ -361,6 +362,12 @@ type StaffCoverageExecutiveRow = {
   lob: string;
   shift: string;
   required: number;
+};
+type FreshChatBacklogSnapshot = {
+  assignedCount: number;
+  newCount: number;
+  totalBacklog: number;
+  importedAt?: string;
 };
 
 const ADS_REPORT_TARGET_LATENCY_MINUTES = 120;
@@ -475,6 +482,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
   const [cecError, setCecError] = useState("");
   const [executivePerformanceTrend, setExecutivePerformanceTrend] = useState<PerformanceForecastTrendRow[]>([]);
   const [executiveRequiredRows, setExecutiveRequiredRows] = useState<StaffCoverageExecutiveRow[]>([]);
+  const [freshChatBacklog, setFreshChatBacklog] = useState<FreshChatBacklogSnapshot | null>(null);
   const snapshotAbortRef = useRef<AbortController | null>(null);
 
   const effectiveTab = clientQueuesOnly ? "queues" : executiveOnly ? "executive" : activeTab;
@@ -648,7 +656,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
   const reportRows = useMemo(() => buildReportRows(queueView?.rows ?? [], reportLob, reportSearch), [queueView?.rows, reportLob, reportSearch]);
   const departmentSummaries = useMemo(() => buildDepartmentReportSummaries(reportRows), [reportRows]);
   const reportBacklogCard = useMemo(() => buildReportBacklogCard(reportRows, selectedCycleValue), [reportRows, selectedCycleValue]);
-  const adsReportCards = useMemo(() => buildAdsReportCards(reportRows, agentView?.rows ?? [], selectedCycleValue), [agentView?.rows, reportRows, selectedCycleValue]);
+  const adsReportCards = useMemo(() => buildAdsReportCards(reportRows, agentView?.rows ?? [], selectedCycleValue, freshChatBacklog), [agentView?.rows, freshChatBacklog, reportRows, selectedCycleValue]);
   const tnsReportCards = useMemo(() => buildTnsReportCards(reportRows, agentView?.rows ?? [], selectedCycleValue), [agentView?.rows, reportRows, selectedCycleValue]);
   const executiveAdsReport = useMemo(
     () => buildExecutiveAdsReport(queueView?.rows ?? [], agentView?.rows ?? [], selectedCycleValue, executivePerformanceTrend, executiveRequiredRows),
@@ -702,6 +710,26 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
     void loadExecutiveSources();
     return () => controller.abort();
   }, [canAccessExecutiveReport, effectiveTab, selectedCycleValue]);
+
+  useEffect(() => {
+    if (effectiveTab !== "report" || reportLob !== "ADS" || !selectedCycleValue) return;
+    const controller = new AbortController();
+    async function loadFreshChatBacklog() {
+      try {
+        const params = new URLSearchParams({ cycleDownload: selectedCycleValue });
+        const response = await fetch(`/api/realtime/fresh-chat?${params.toString()}`, { cache: "no-store", signal: controller.signal });
+        const json = await response.json();
+        if (!response.ok) throw new Error(json?.message || json?.error || "Fresh Chat indisponível.");
+        setFreshChatBacklog(json?.data ?? null);
+      } catch (currentError) {
+        if (currentError instanceof DOMException && currentError.name === "AbortError") return;
+        console.warn("[realtime] Fresh Chat indisponível.", currentError);
+        setFreshChatBacklog(null);
+      }
+    }
+    void loadFreshChatBacklog();
+    return () => controller.abort();
+  }, [effectiveTab, reportLob, selectedCycleValue]);
 
   function downloadReportSummary() {
     downloadReportSummaryImage({
@@ -2199,6 +2227,7 @@ function ReportSummarySection({
 
 function ReportHeadcountCompactCard({ card }: { card: OnlineHeadcountGaugeData }) {
   const progress = card.percentage === null ? null : Math.max(0, Math.min(100, card.percentage));
+  const hasFreshChat = typeof card.freshChatBacklog?.totalBacklog === "number";
   const toneClass = card.tone === "positive"
     ? "bg-emerald-50 text-emerald-700"
     : card.tone === "warning"
@@ -2218,7 +2247,7 @@ function ReportHeadcountCompactCard({ card }: { card: OnlineHeadcountGaugeData }
           {progress === null ? "No schedule" : `${Math.round(progress)}%`}
         </span>
       </div>
-      <div className="mt-3 grid grid-cols-3 gap-2 border-t border-slate-200/70 pt-3 text-center">
+      <div className={cn("mt-3 grid gap-2 border-t border-slate-200/70 pt-3 text-center", hasFreshChat ? "grid-cols-4" : "grid-cols-3")}>
         <div>
           <p className="text-[10px] font-black uppercase tracking-wide text-muted">Online</p>
           <p className="mt-1 text-lg font-black text-navy-950">{card.online}</p>
@@ -2231,6 +2260,15 @@ function ReportHeadcountCompactCard({ card }: { card: OnlineHeadcountGaugeData }
           <p className="text-[10px] font-black uppercase tracking-wide text-muted">Gap</p>
           <p className={cn("mt-1 text-lg font-black", card.missing > 0 ? "text-red-600" : "text-emerald-700")}>{card.missing}</p>
         </div>
+        {hasFreshChat ? (
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-wide text-muted">Fresh Chat</p>
+            <p className="mt-1 text-lg font-black text-blue-700">{card.freshChatBacklog?.totalBacklog ?? 0}</p>
+            <p className="mt-0.5 text-[10px] font-bold text-muted">
+              A {card.freshChatBacklog?.assignedCount ?? 0} · N {card.freshChatBacklog?.newCount ?? 0}
+            </p>
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -3123,7 +3161,10 @@ function drawCanvasHeadcountStrip(ctx: CanvasRenderingContext2D, card: OnlineHea
     { label: "Planned", value: String(card.scheduled), color: "#0F172A" },
     { label: "Gap", value: String(card.missing), color: card.missing > 0 ? "#DC2626" : "#047857" }
   ];
-  const colWidth = (width - 36) / 3;
+  if (typeof card.freshChatBacklog?.totalBacklog === "number") {
+    columns.push({ label: "Fresh Chat", value: String(card.freshChatBacklog.totalBacklog), color: "#1D4ED8" });
+  }
+  const colWidth = (width - 36) / columns.length;
   columns.forEach((column, index) => {
     const colX = x + 18 + index * colWidth;
     drawText(ctx, column.label.toUpperCase(), colX, y + height - 36, 10, "#64748B", "900");
@@ -3666,15 +3707,17 @@ function buildReportBacklogKpiCard(label: string, rows: QueueReportRow[], select
   return buildAgentKpiCard(label, currentBacklog, previousBacklog, "number", "down", buildQueueTrendSeries(rows, "backlog", selectedCycle));
 }
 
-function buildAdsReportCards(reportRows: QueueReportRow[], agentRows: AgentRealtimeRow[], selectedCycle: string): ReportKpiCards {
+function buildAdsReportCards(reportRows: QueueReportRow[], agentRows: AgentRealtimeRow[], selectedCycle: string, freshChatBacklog?: FreshChatBacklogSnapshot | null): ReportKpiCards {
   const adsAgents = agentRows.filter((row) => isReportAgentForLob(row, "ADS"));
+  const headcount = buildOnlineHeadcountGaugeCard("ADS Online HC", adsAgents);
+  headcount.freshChatBacklog = freshChatBacklog ?? null;
 
   return {
     backlog: [
       buildReportBacklogKpiCard("ADS Backlog", reportRows, selectedCycle)
     ],
     headcount: [
-      buildOnlineHeadcountGaugeCard("ADS Online HC", adsAgents)
+      headcount
     ]
   };
 }
