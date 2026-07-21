@@ -1353,6 +1353,7 @@ model QualityRecord {
   @@index([auditDate])
   @@index([lobId])
   @@index([finalResult])
+  @@index([importBatchId])
   @@index([employeeId, auditDate])
 }
 

@@ -1594,6 +1594,10 @@ function QualityImportModal({
       setError("Selecione a base de Qualidade.");
       return;
     }
+    if (qualityFile.size > 250 * 1024 * 1024) {
+      setError("A base de Qualidade deve ter no máximo 250 MB.");
+      return;
+    }
     setUploading(true);
     setUploadProgress(0);
     setError("");
@@ -1659,7 +1663,7 @@ function QualityImportModal({
           </SlicerGroup>
           <PerformanceFileField
             label={qualityScope === "ADS" ? "Qualidade ADS / PROJECT" : "Qualidade VIDEO / COMMENTS"}
-            helper="Base com audit_name, final_result e os IDs distintos dos casos auditados."
+            helper="Base com audit_name, final_result e IDs dos casos. Suporta até 1.000.000 de linhas e 250 MB, processados em lotes."
             file={qualityFile}
             onChange={setQualityFile}
           />
@@ -1683,7 +1687,7 @@ function QualityImportModal({
           {!result ? (
             <button type="button" onClick={() => void submit()} disabled={uploading || !qualityFile} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 text-sm font-black text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-45">
               {uploading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
-              {uploading ? `Enviando e validando... ${uploadProgress}%` : "Substituir qualidade"}
+              {uploading ? `${uploadProgress < 90 ? "Enviando" : "Processando em lotes"}... ${uploadProgress}%` : "Substituir qualidade"}
             </button>
           ) : null}
         </div>

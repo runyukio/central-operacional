@@ -54,6 +54,25 @@ type PerformanceSortBy = "quality" | "submit" | "aht" | "abs";
 type PerformanceSortDirection = "asc" | "desc";
 type PerformanceProductionGranularity = "hourly" | "daily" | "weekly" | "monthly";
 
+const visibleQualityRecordWhere = {
+  OR: [
+    { importBatchId: null },
+    { importBatch: { is: { status: { not: "PROCESSING" } } } }
+  ]
+} satisfies Prisma.QualityRecordWhereInput;
+
+const visibleQualityRecordSql = Prisma.sql`
+  AND (
+    q."importBatchId" IS NULL
+    OR EXISTS (
+      SELECT 1
+      FROM "PerformanceImportBatch" visible_batch
+      WHERE visible_batch."id" = q."importBatchId"
+        AND visible_batch."status" <> 'PROCESSING'
+    )
+  )
+`;
+
 export type PerformanceQuery = {
   view?: "mine" | "wfh" | "framework";
   startDate?: string;
@@ -588,7 +607,7 @@ export async function getPerformanceQualityDashboard(actor: Actor, query: Perfor
     FROM "QualityRecord" q
     LEFT JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
     LEFT JOIN "Lob" l ON l."id" = COALESCE(q."lobId", e."lobId")
-    WHERE 1 = 1 ${baseLobSql}
+    WHERE 1 = 1 ${baseLobSql} ${visibleQualityRecordSql}
   `);
   const fallback = getDefaultDatePeriod();
   const start = parseDate(query.startDate) ?? range?.startDate ?? fallback.start;
@@ -603,6 +622,7 @@ export async function getPerformanceQualityDashboard(actor: Actor, query: Perfor
     WHERE q."auditDate" >= ${start}
       AND q."auditDate" <= ${end}
       ${baseLobSql}
+      ${visibleQualityRecordSql}
   `;
 
   const [summaryRows, trendRows, agentRows, latestImport] = await Promise.all([
@@ -650,7 +670,7 @@ export async function getPerformanceQualityDashboard(actor: Actor, query: Perfor
       LIMIT 500
     `),
     prisma.performanceImportBatch.findFirst({
-      where: { type: importBatchType },
+      where: { type: importBatchType, status: { not: "PROCESSING" } },
       orderBy: { importedAt: "desc" },
       select: { fileName: true, importedAt: true, rowsValid: true, rowsError: true, status: true }
     })
@@ -960,6 +980,7 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
         AND q."auditDate" >= ${period.start}
         AND q."auditDate" <= ${period.end}
         AND e."supervisorId" IS NOT NULL
+        ${visibleQualityRecordSql}
       GROUP BY e."supervisorId"
     `),
     prisma.$queryRaw<Array<{ supervisorId: string; correct: number; total: number }>>(Prisma.sql`
@@ -1268,6 +1289,110 @@ export async function authorizePerformanceImport(actor: Actor) {
   const user = await requireActiveUser(actor);
   requireImportPermission(user);
   return { id: user.id, email: user.email };
+}
+
+export async function startQualitySnapshotImport(
+  actor: Actor,
+  fileName: string,
+  qualityScope: PerformanceQualityScope = "ADS"
+) {
+  const user = await requireActiveUser(actor);
+  requireImportPermission(user);
+  return prisma.performanceImportBatch.create({
+    data: {
+      type: qualityBatchType(qualityScope),
+      fileName,
+      status: "PROCESSING",
+      importedById: user.id
+    },
+    select: { id: true }
+  });
+}
+
+export async function importQualitySnapshotChunk(
+  actor: Actor,
+  rawRows: Record<string, unknown>[],
+  fileName: string,
+  batchId: string,
+  rowNumberOffset: number,
+  qualityScope: PerformanceQualityScope = "ADS"
+) {
+  const user = await requireActiveUser(actor);
+  requireImportPermission(user);
+  const preview = await previewQualityRows(rawRows, {
+    rowNumberOffset,
+    qualityScope,
+    skipExistingCheck: true
+  });
+  const imported = await commitQualityRows(user, preview.rows, fileName, batchId, qualityScope);
+  return { imported, preview: preview.summary };
+}
+
+export async function finalizeQualitySnapshotImport(
+  actor: Actor,
+  batchIdToKeep: string,
+  qualityScope: PerformanceQualityScope = "ADS"
+) {
+  const user = await requireActiveUser(actor);
+  requireImportPermission(user);
+  const batchType = qualityBatchType(qualityScope);
+  const batch = await prisma.performanceImportBatch.findUnique({
+    where: { id: batchIdToKeep },
+    select: { id: true, type: true, status: true, rowsValid: true, rowsError: true, fileName: true }
+  });
+  if (!batch || batch.type !== batchType || batch.status !== "PROCESSING") {
+    throw new PerformanceError("Lote de Qualidade em processamento não encontrado.", 400);
+  }
+  if (!batch.rowsValid) throw new PerformanceError("Não há linhas válidas para substituir a base de Qualidade.", 400);
+
+  const lobIds = await qualityScopeLobIds(qualityScope);
+  const result = await prisma.$transaction(async (transaction) => {
+    const recordsDeleted = await transaction.qualityRecord.deleteMany({
+      where: {
+        lobId: { in: lobIds },
+        OR: [{ importBatchId: null }, { importBatchId: { not: batchIdToKeep } }]
+      }
+    });
+    const batchesDeleted = await transaction.performanceImportBatch.deleteMany({
+      where: { type: batchType, id: { not: batchIdToKeep } }
+    });
+    await transaction.performanceImportBatch.update({
+      where: { id: batchIdToKeep },
+      data: { status: batch.rowsError ? "PARTIAL" : "SUCCESS", importedAt: new Date() }
+    });
+    return { recordsDeleted: recordsDeleted.count, batchesDeleted: batchesDeleted.count };
+  }, { maxWait: 10_000, timeout: 120_000 });
+
+  await auditImport(user.id, batchType, batchIdToKeep, {
+    fileName: batch.fileName,
+    qualityScope,
+    rowsValid: batch.rowsValid,
+    rowsError: batch.rowsError
+  });
+  return {
+    batchIdKept: batchIdToKeep,
+    qualityScope,
+    qualityRowsDeleted: result.recordsDeleted,
+    importBatchesDeleted: result.batchesDeleted
+  };
+}
+
+export async function discardQualitySnapshotImport(
+  actor: Actor,
+  batchId: string,
+  qualityScope: PerformanceQualityScope = "ADS"
+) {
+  const user = await requireActiveUser(actor);
+  requireImportPermission(user);
+  const batch = await prisma.performanceImportBatch.findUnique({
+    where: { id: batchId },
+    select: { id: true, type: true, status: true }
+  });
+  if (!batch || batch.type !== qualityBatchType(qualityScope) || batch.status !== "PROCESSING") return;
+  await prisma.$transaction([
+    prisma.qualityRecord.deleteMany({ where: { importBatchId: batchId } }),
+    prisma.performanceImportBatch.delete({ where: { id: batchId } })
+  ]);
 }
 
 export async function previewProductionAutomatedImport(rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
@@ -1718,7 +1843,7 @@ export async function commitCecQualityImport(actor: Actor, rows: PerformancePrev
 async function commitQualityRows(user: AuthenticatedUser, rows: PerformancePreviewRow[], fileName = "qualidade.xlsx", batchId?: string, qualityScope: PerformanceQualityScope = "ADS") {
   const expectedRule: QualityRule = qualityScope === "TNS" ? "TNS_QUALITY" : "ADS_QUALITY";
   const lobNames = qualityScopeLobNames(qualityScope);
-  const batchType = qualityScope === "TNS" ? "QUALITY_TNS_KAP" : "QUALITY";
+  const batchType = qualityBatchType(qualityScope);
   const validRows = rows.filter((row) => (
     row.type === "QUALITY"
     && !row.errors.length
@@ -1727,12 +1852,12 @@ async function commitQualityRows(user: AuthenticatedUser, rows: PerformancePrevi
     && row.payload.qualityRule === expectedRule
     && lobNames.includes((row.lob ?? "").trim().toUpperCase())
   ));
-  if (!validRows.length) throw new PerformanceError("Não há linhas válidas para importar.", 400);
+  if (!validRows.length && !batchId) throw new PerformanceError("Não há linhas válidas para importar.", 400);
   const createdRows = validRows.length;
   const updatedRows = 0;
   const batch = await upsertImportBatch(user, batchType, fileName, rows, validRows.length, createdRows, updatedRows, batchId);
 
-  for (const chunk of chunks(validRows, 500)) {
+  for (const chunk of chunks(validRows, 2_000)) {
     await prisma.qualityRecord.createMany({
       data: chunk.map((row) => ({
         auditTime: new Date(String(row.payload.auditTime)),
@@ -2274,6 +2399,21 @@ function qualityScopeLobNames(scope: PerformanceQualityScope) {
   return scope === "TNS" ? ["VIDEO", "COMMENTS"] : ["ADS", "PROJECT"];
 }
 
+function qualityBatchType(scope: PerformanceQualityScope): "QUALITY" | "QUALITY_TNS_KAP" {
+  return scope === "TNS" ? "QUALITY_TNS_KAP" : "QUALITY";
+}
+
+async function qualityScopeLobIds(scope: PerformanceQualityScope) {
+  const names = qualityScopeLobNames(scope);
+  const lobs = await prisma.lob.findMany({
+    where: { OR: names.map((name) => ({ name: { equals: name, mode: "insensitive" } })) },
+    select: { id: true }
+  });
+  const ids = lobs.map((lob) => lob.id);
+  if (!ids.length) throw new PerformanceError("Nenhuma LOB cadastrada para o escopo de Qualidade selecionado.", 400);
+  return ids;
+}
+
 function summarizeQualityRule(rules: QualityRule[]): QualityRule {
   const meaningful = unique(rules.filter((rule) => rule !== "UNKNOWN"));
   if (!meaningful.length) return "UNKNOWN";
@@ -2456,7 +2596,12 @@ async function buildAgentRows(employees: PerformanceEmployee[], period: Period) 
   const employeeIds = employees.map((employee) => employee.id);
   const [qualityRecords, tnsQualityRecords, cecQualityRecords, productionRecords, schedules, attendanceRecords] = await Promise.all([
     prisma.qualityRecord.findMany({
-      where: { employeeId: { in: employeeIds }, auditDate: { gte: period.start, lte: period.end } },
+      where: {
+        AND: [
+          visibleQualityRecordWhere,
+          { employeeId: { in: employeeIds }, auditDate: { gte: period.start, lte: period.end } }
+        ]
+      },
       select: qualityMetricSelect
     }),
     prisma.tnsQualityRecord.findMany({
@@ -2953,7 +3098,12 @@ async function buildFrameworkSnapshots(employees: PerformanceEmployee[], periods
   const lastEnd = periods.reduce((latest, period) => period.end > latest ? period.end : latest, periods[0].end);
   const [qualityRecords, tnsQualityRecords, cecQualityRecords, productionRecords, schedules] = await Promise.all([
     prisma.qualityRecord.findMany({
-      where: { employeeId: { in: employeeIds }, auditDate: { gte: firstStart, lte: lastEnd } },
+      where: {
+        AND: [
+          visibleQualityRecordWhere,
+          { employeeId: { in: employeeIds }, auditDate: { gte: firstStart, lte: lastEnd } }
+        ]
+      },
       select: qualityMetricSelect
     }),
     prisma.tnsQualityRecord.findMany({
@@ -3777,7 +3927,11 @@ async function upsertImportBatch(
         rowsError: { increment: rowsError },
         rowsInserted: { increment: rowsInserted },
         rowsUpdated: { increment: rowsUpdated },
-        status: existing.status === "PARTIAL" || rowsError ? "PARTIAL" : "SUCCESS",
+        status: existing.status === "PROCESSING"
+          ? "PROCESSING"
+          : existing.status === "PARTIAL" || rowsError
+            ? "PARTIAL"
+            : "SUCCESS",
         errorSummary: nextErrorSummary
       }
     });
