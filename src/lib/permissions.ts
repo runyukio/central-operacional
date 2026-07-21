@@ -153,7 +153,8 @@ export function canAccessPerformanceFramework(user: PermissionUser) {
 }
 
 export function canImportPerformance(user: PermissionUser) {
-  return isActiveUser(user) && normalizeRole(user.role) === "ADMIN";
+  const role = normalizeRole(user.role);
+  return isActiveUser(user) && (role === "ADMIN" || role === "WFM");
 }
 
 export function canExportPerformance(user: PermissionUser) {

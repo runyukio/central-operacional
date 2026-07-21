@@ -3,7 +3,14 @@ import test from "node:test";
 
 import { normalizeAccessRole, roleHasCapability } from "@/lib/access-control";
 import { canAccessFinanceiro } from "@/lib/financeiro-permissions";
-import { canAccessRealTime, canAccessWorkSessionMonitoring, canAutoUpdateAdsRequirement, canEditSchedule } from "@/lib/permissions";
+import {
+  canAccessPerformance,
+  canAccessRealTime,
+  canAccessWorkSessionMonitoring,
+  canAutoUpdateAdsRequirement,
+  canEditSchedule,
+  canImportPerformance
+} from "@/lib/permissions";
 
 test("somente ADMIN e WFM alteram cronogramas", () => {
   const allowed = ["ADMIN", "WFM"];
@@ -65,8 +72,21 @@ test("somente ADMIN atualiza automaticamente a necessidade ADS", () => {
   }
 });
 
-test("WFM acessa Performance", () => {
-  assert.equal(roleHasCapability("WFM", "PERFORMANCE"), true);
+test("Qualidade, Supervisor e WFM acessam Performance", () => {
+  for (const role of ["QUALIDADE", "SUPERVISOR", "WFM"]) {
+    assert.equal(roleHasCapability(role, "PERFORMANCE"), true, role);
+    assert.equal(canAccessPerformance({ role, status: "ACTIVE" }), true, role);
+  }
+});
+
+test("somente ADMIN e WFM importam bases de Performance", () => {
+  for (const role of ["ADMIN", "WFM"]) {
+    assert.equal(canImportPerformance({ role, status: "ACTIVE" }), true, role);
+  }
+
+  for (const role of ["GESTOR", "SUPERVISOR", "QUALIDADE", "RH", "FINANCEIRO", "CLIENT", "COLABORADOR"]) {
+    assert.equal(canImportPerformance({ role, status: "ACTIVE" }), false, role);
+  }
 });
 
 test("CLIENT permanece limitado a Filas, Necessidade e Performance", () => {
