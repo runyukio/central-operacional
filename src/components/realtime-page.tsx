@@ -22,6 +22,7 @@ import { Area, AreaChart, CartesianGrid, LabelList, ReferenceLine, ResponsiveCon
 
 import { canAccessExecutiveAdsReport, canAccessRealTimeAgentsReports } from "@/lib/permissions";
 import { getQueueReportMetadataById } from "@/lib/queue-report-metadata";
+import { isReportOnlineHeadcountRow } from "@/lib/realtime-report-headcount";
 import { cn } from "@/lib/utils";
 import { CecReportDetails, CecReportOverview, type CecReportPayload } from "@/components/realtime-cec-report";
 
@@ -4411,7 +4412,7 @@ function formatDurationCell(value: number | null, tone: ExecutiveHeatmapCell["to
 
 function buildOnlineHeadcountGaugeCard(label: string, rows: AgentRealtimeRow[]): OnlineHeadcountGaugeData {
   const scheduled = rows.filter((row) => row.isScheduled).length;
-  const online = rows.filter((row) => row.isSchedulePresent).length;
+  const online = rows.filter(isReportOnlineHeadcountRow).length;
   const percentage = scheduled > 0 ? (online / scheduled) * 100 : null;
   const missing = Math.max(0, scheduled - online);
   const tone = percentage === null ? "neutral" : percentage >= 90 ? "positive" : percentage >= 75 ? "warning" : "negative";
