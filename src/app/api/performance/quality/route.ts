@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getApiActor } from "@/lib/api-actor";
 import {
-  getPerformanceAdsQualityDashboard,
+  getPerformanceQualityDashboard,
   PerformanceError,
   type PerformanceQualityQuery
 } from "@/lib/performance-service";
@@ -17,6 +17,9 @@ export async function GET(request: Request) {
     const query: PerformanceQualityQuery = {
       startDate: url.searchParams.get("startDate") ?? undefined,
       endDate: url.searchParams.get("endDate") ?? undefined,
+      lob: url.searchParams.get("lob") === "VIDEO" || url.searchParams.get("lob") === "COMMENTS"
+        ? url.searchParams.get("lob") as "VIDEO" | "COMMENTS"
+        : "ADS",
       view: requestedView === "monthly" || requestedView === "weekly" || requestedView === "daily"
         ? requestedView
         : undefined,
@@ -24,7 +27,7 @@ export async function GET(request: Request) {
         ? requestedSortDirection
         : undefined
     };
-    return NextResponse.json(await getPerformanceAdsQualityDashboard(await getApiActor(), query));
+    return NextResponse.json(await getPerformanceQualityDashboard(await getApiActor(), query));
   } catch (error) {
     if (error instanceof PerformanceError) {
       return NextResponse.json({ success: false, error: error.message, message: error.message }, { status: error.status });
@@ -32,8 +35,8 @@ export async function GET(request: Request) {
     console.error("[performance/quality] erro inesperado", error);
     return NextResponse.json({
       success: false,
-      error: "Não foi possível carregar a qualidade de ADS.",
-      message: "Não foi possível carregar a qualidade de ADS."
+      error: "Não foi possível carregar os dados de qualidade.",
+      message: "Não foi possível carregar os dados de qualidade."
     }, { status: 500 });
   }
 }

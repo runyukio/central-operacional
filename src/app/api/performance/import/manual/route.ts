@@ -13,6 +13,7 @@ import {
   previewProductionImport,
   replaceQualitySnapshot,
   replacePerformanceSnapshot,
+  type PerformanceQualityScope,
   type PerformancePreviewRow
 } from "@/lib/performance-service";
 
@@ -49,6 +50,7 @@ export async function POST(request: Request) {
 
     if (action === "finalize") {
       const uploadId = requiredUploadId(url);
+      const qualityScope = readQualityScope(url);
       const uploadedFiles = await rebuildUploadedFiles(uploadId, importUser.email);
       const hasOperationalFiles = Boolean(uploadedFiles.production || uploadedFiles.volume);
       if (hasOperationalFiles && (!uploadedFiles.production || !uploadedFiles.volume)) {
@@ -58,7 +60,7 @@ export async function POST(request: Request) {
         ? await processPerformanceFiles(actor, uploadedFiles.production, uploadedFiles.volume)
         : null;
       const qualityResult = uploadedFiles.quality
-        ? await processQualityFile(actor, uploadedFiles.quality)
+        ? await processQualityFile(actor, uploadedFiles.quality, qualityScope)
         : null;
       if (!operationalResult && !qualityResult) throw new PerformanceError("Nenhum arquivo válido foi recebido.", 400);
       await prisma.performanceManualUploadChunk.deleteMany({ where: { uploadId, uploadedByEmail: importUser.email } });
@@ -147,19 +149,25 @@ async function rebuildUploadedFiles(uploadId: string, uploadedByEmail: string) {
 
 async function processQualityFile(
   actor: Awaited<ReturnType<typeof getApiActor>>,
-  qualityFile: { fileName: string; buffer: ArrayBuffer }
+  qualityFile: { fileName: string; buffer: ArrayBuffer },
+  qualityScope: PerformanceQualityScope
 ) {
   const rawRows = readWorkbookRows(qualityFile.buffer);
-  const preview = await previewQualityImport(actor, rawRows, { skipExistingCheck: true });
-  const imported = await commitQualityImport(actor, preview.rows, qualityFile.fileName);
-  const reset = await replaceQualitySnapshot(actor, imported.batchId);
+  const preview = await previewQualityImport(actor, rawRows, { skipExistingCheck: true, qualityScope });
+  const imported = await commitQualityImport(actor, preview.rows, qualityFile.fileName, qualityScope);
+  const reset = await replaceQualitySnapshot(actor, imported.batchId, qualityScope);
   return {
+    qualityScope,
     qualityRows: imported.importedRows,
     qualityRowsError: preview.summary.errorRows,
     qualityRowsIgnored: Math.max(0, preview.summary.totalRows - imported.importedRows - preview.summary.errorRows),
     qualityBatchId: imported.batchId,
     qualityReset: reset
   };
+}
+
+function readQualityScope(url: URL): PerformanceQualityScope {
+  return url.searchParams.get("qualityScope")?.trim().toUpperCase() === "TNS" ? "TNS" : "ADS";
 }
 
 async function processPerformanceFiles(

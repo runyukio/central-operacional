@@ -48,6 +48,8 @@ type PerformanceGranularity = "monthly" | "weekly" | "daily" | "hourly";
 type ForecastView = "hour" | "day" | "week";
 type QualityGranularity = "monthly" | "weekly" | "daily";
 type QualitySortDirection = "asc" | "desc";
+type QualityLob = "ADS" | "VIDEO" | "COMMENTS";
+type QualityImportScope = "ADS" | "TNS";
 type SupervisorView = QualityGranularity;
 
 type PerformanceSummary = {
@@ -138,6 +140,7 @@ type PerformanceQualityResponse = {
 };
 
 type QualityImportResult = {
+  qualityScope: QualityImportScope;
   qualityRows: number;
   qualityRowsError: number;
   qualityRowsIgnored: number;
@@ -297,6 +300,7 @@ export function PerformanceAutomationPage() {
   const [queuePayload, setQueuePayload] = useState<PerformanceProductionResponse | null>(null);
   const [forecastPayload, setForecastPayload] = useState<PerformanceProductionResponse | null>(null);
   const [qualityPayload, setQualityPayload] = useState<PerformanceQualityResponse | null>(null);
+  const [qualityLob, setQualityLob] = useState<QualityLob>("ADS");
   const [qualityGranularity, setQualityGranularity] = useState<QualityGranularity>("daily");
   const [qualitySortDirection, setQualitySortDirection] = useState<QualitySortDirection>("desc");
   const [qualityStartDate, setQualityStartDate] = useState("");
@@ -365,11 +369,13 @@ export function PerformanceAutomationPage() {
     }
   }, [forecastLob]);
 
-  const loadQuality = useCallback(async () => {
+  const loadQuality = useCallback(async (lobOverride?: QualityLob) => {
     setLoadingQuality(true);
+    const effectiveLob = lobOverride ?? qualityLob;
     const params = new URLSearchParams({
       view: qualityGranularity,
-      sortDirection: qualitySortDirection
+      sortDirection: qualitySortDirection,
+      lob: effectiveLob
     });
     if (qualityStartDate) params.set("startDate", qualityStartDate);
     if (qualityEndDate) params.set("endDate", qualityEndDate);
@@ -384,7 +390,7 @@ export function PerformanceAutomationPage() {
     } finally {
       setLoadingQuality(false);
     }
-  }, [qualityEndDate, qualityGranularity, qualitySortDirection, qualityStartDate]);
+  }, [qualityEndDate, qualityGranularity, qualityLob, qualitySortDirection, qualityStartDate]);
 
   const loadAgents = useCallback(async () => {
     setLoadingAgents(true);
@@ -482,7 +488,7 @@ export function PerformanceAutomationPage() {
       {activeTab === "supervisors" ? null : activeTab === "quality" ? (
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <StatCard title="Último upload" value={formatQualityImportDate(qualityPayload?.lastImport?.importedAt)} helper="snapshot de qualidade vigente" icon={CheckCircle2} tone="green" />
-          <StatCard title="Janela da base" value={formatQualityRange(qualityPayload?.dataRange)} helper="ADS consolidado" icon={CalendarClock} tone="purple" />
+          <StatCard title="Janela da base" value={formatQualityRange(qualityPayload?.dataRange)} helper={qualityLob === "ADS" ? "ADS + PROJECT" : qualityLob} icon={CalendarClock} tone="purple" />
           <StatCard title="Casos auditados" value={formatNumber(qualityPayload?.summary.total ?? 0)} helper="chaves distintas" icon={FileSpreadsheet} tone="blue" />
           <StatCard title="Qualidade" value={formatQualityPercent(qualityPayload?.summary.quality)} helper="corretos / auditados" icon={ShieldCheck} tone="green" />
         </section>
@@ -576,6 +582,7 @@ export function PerformanceAutomationPage() {
         <QualityView
           loading={loadingQuality}
           payload={qualityPayload}
+          selectedLob={qualityLob}
           granularity={qualityGranularity}
           sortDirection={qualitySortDirection}
           startDate={qualityStartDate}
@@ -584,6 +591,11 @@ export function PerformanceAutomationPage() {
           onSortDirectionChange={setQualitySortDirection}
           onStartDateChange={setQualityStartDate}
           onEndDateChange={setQualityEndDate}
+          onLobChange={(value) => {
+            setQualityLob(value);
+            setQualityStartDate("");
+            setQualityEndDate("");
+          }}
           onRefresh={() => void loadQuality()}
           onUpload={(qualityPayload?.canImport ?? basePayload?.canImport) ? () => setQualityUploadOpen(true) : undefined}
         />
@@ -601,10 +613,13 @@ export function PerformanceAutomationPage() {
       ) : null}
       {qualityUploadOpen ? (
         <QualityImportModal
+          initialScope={qualityLob === "ADS" ? "ADS" : "TNS"}
           onClose={() => setQualityUploadOpen(false)}
-          onImported={async () => {
+          onImported={async (scope) => {
+            const nextLob: QualityLob = scope === "ADS" ? "ADS" : "VIDEO";
+            setQualityLob(nextLob);
             setQualityPayload(null);
-            await loadQuality();
+            await loadQuality(nextLob);
           }}
         />
       ) : null}
@@ -632,6 +647,7 @@ export function PerformanceRestrictedPage() {
 function QualityView({
   loading,
   payload,
+  selectedLob,
   granularity,
   sortDirection,
   startDate,
@@ -640,11 +656,13 @@ function QualityView({
   onSortDirectionChange,
   onStartDateChange,
   onEndDateChange,
+  onLobChange,
   onRefresh,
   onUpload
 }: {
   loading: boolean;
   payload: PerformanceQualityResponse | null;
+  selectedLob: QualityLob;
   granularity: QualityGranularity;
   sortDirection: QualitySortDirection;
   startDate: string;
@@ -653,6 +671,7 @@ function QualityView({
   onSortDirectionChange: (value: QualitySortDirection) => void;
   onStartDateChange: (value: string) => void;
   onEndDateChange: (value: string) => void;
+  onLobChange: (value: QualityLob) => void;
   onRefresh: () => void;
   onUpload?: () => void;
 }) {
@@ -705,7 +724,9 @@ function QualityView({
               onEndDateChange={onEndDateChange}
             />
             <SlicerGroup label="LOB">
-              <SlicerButton active disabled label="ADS" onClick={() => undefined} tone="dark" />
+              {(["ADS", "VIDEO", "COMMENTS"] as QualityLob[]).map((lob) => (
+                <SlicerButton key={lob} active={selectedLob === lob} label={lob} onClick={() => onLobChange(lob)} tone="dark" />
+              ))}
             </SlicerGroup>
             <SlicerGroup label="Visão">
               <SlicerButton active={granularity === "monthly"} label="Mensal" onClick={() => onGranularityChange("monthly")} tone="dark" />
@@ -723,7 +744,7 @@ function QualityView({
             <div className="max-w-md">
               <span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-white text-blue-600 shadow-sm"><ShieldCheck className="h-5 w-5" /></span>
               <h3 className="mt-4 text-lg font-black text-navy-950">Sem dados de qualidade</h3>
-              <p className="mt-2 text-sm font-semibold text-muted">Envie a base de QA para carregar os indicadores consolidados de ADS.</p>
+              <p className="mt-2 text-sm font-semibold text-muted">Envie a base de QA de {selectedLob === "ADS" ? "ADS/PROJECT" : "VIDEO/COMMENTS"} para carregar este indicador.</p>
             </div>
           </div>
         ) : (
@@ -1552,7 +1573,16 @@ function ManualImportModal({ onClose, onImported }: { onClose: () => void; onImp
   );
 }
 
-function QualityImportModal({ onClose, onImported }: { onClose: () => void; onImported: () => Promise<void> | void }) {
+function QualityImportModal({
+  initialScope,
+  onClose,
+  onImported
+}: {
+  initialScope: QualityImportScope;
+  onClose: () => void;
+  onImported: (scope: QualityImportScope) => Promise<void> | void;
+}) {
+  const [qualityScope, setQualityScope] = useState<QualityImportScope>(initialScope);
   const [qualityFile, setQualityFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -1591,15 +1621,16 @@ function QualityImportModal({ onClose, onImported }: { onClose: () => void; onIm
       }
 
       setUploadProgress(90);
-      const finalizeParams = new URLSearchParams({ action: "finalize", uploadId: start.uploadId });
+      const finalizeParams = new URLSearchParams({ action: "finalize", uploadId: start.uploadId, qualityScope });
       const body = await performanceUploadRequest<QualityImportResult>(`/api/performance/import/manual?${finalizeParams.toString()}`, { method: "POST" });
       setUploadProgress(100);
       setResult({
+        qualityScope: body.qualityScope,
         qualityRows: body.qualityRows,
         qualityRowsError: body.qualityRowsError,
         qualityRowsIgnored: body.qualityRowsIgnored
       });
-      await onImported();
+      await onImported(qualityScope);
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "Não foi possível substituir a base de Qualidade.");
     } finally {
@@ -1614,7 +1645,7 @@ function QualityImportModal({ onClose, onImported }: { onClose: () => void; onIm
           <div>
             <p className="text-[11px] font-black uppercase tracking-[0.16em] text-blue-600">Performance</p>
             <h2 id="quality-upload-title" className="mt-1 text-xl font-black text-navy-950">Substituir base de Qualidade</h2>
-            <p className="mt-1 text-sm font-semibold text-muted">Envie o XLSX de QA. ADS e PROJECT serão consolidados no indicador ADS.</p>
+            <p className="mt-1 text-sm font-semibold text-muted">Envie o XLSX de QA e escolha qual snapshot operacional será atualizado.</p>
           </div>
           <button type="button" onClick={onClose} disabled={uploading} className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-border text-muted hover:bg-slate-50 hover:text-navy-950 disabled:opacity-40" aria-label="Fechar">
             <X className="h-5 w-5" />
@@ -1622,14 +1653,18 @@ function QualityImportModal({ onClose, onImported }: { onClose: () => void; onIm
         </div>
 
         <div className="space-y-4 p-5">
+          <SlicerGroup label="Base de qualidade">
+            <SlicerButton active={qualityScope === "ADS"} label="ADS / PROJECT" onClick={() => { setQualityScope("ADS"); setQualityFile(null); setResult(null); }} tone="dark" />
+            <SlicerButton active={qualityScope === "TNS"} label="VIDEO / COMMENTS" onClick={() => { setQualityScope("TNS"); setQualityFile(null); setResult(null); }} tone="dark" />
+          </SlicerGroup>
           <PerformanceFileField
-            label="Qualidade ADS"
+            label={qualityScope === "ADS" ? "Qualidade ADS / PROJECT" : "Qualidade VIDEO / COMMENTS"}
             helper="Base com audit_name, final_result e os IDs distintos dos casos auditados."
             file={qualityFile}
             onChange={setQualityFile}
           />
           <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-900">
-            Após a validação, este envio substitui integralmente o snapshot anterior de Qualidade. Linhas de outras LOBs permanecem fora do indicador.
+            Após a validação, o envio substitui apenas o snapshot de {qualityScope === "ADS" ? "ADS/PROJECT" : "VIDEO/COMMENTS"}. A outra base de qualidade será preservada.
           </div>
           {error ? <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{error}</p> : null}
           {result ? (

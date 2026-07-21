@@ -77,9 +77,12 @@ export type PerformanceQuery = {
 export type PerformanceQualityQuery = {
   startDate?: string;
   endDate?: string;
+  lob?: "ADS" | "VIDEO" | "COMMENTS";
   view?: "monthly" | "weekly" | "daily";
   sortDirection?: "asc" | "desc";
 };
+
+export type PerformanceQualityScope = "ADS" | "TNS";
 
 export type PerformanceAgentsQuery = {
   view?: "monthly" | "weekly" | "daily";
@@ -182,6 +185,7 @@ type PerformancePreviewOptions = {
   rowNumberOffset?: number;
   yearReference?: number;
   skipExistingCheck?: boolean;
+  qualityScope?: PerformanceQualityScope;
 };
 
 type PerformanceMetrics = {
@@ -566,7 +570,7 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
   };
 }
 
-export async function getPerformanceAdsQualityDashboard(actor: Actor, query: PerformanceQualityQuery = {}) {
+export async function getPerformanceQualityDashboard(actor: Actor, query: PerformanceQualityQuery = {}) {
   const user = await requireActiveUser(actor);
   if (!canAccessPerformance(permissionUser(user))) throw new PerformanceError("Você não tem permissão para acessar Performance.", 403);
 
@@ -574,7 +578,11 @@ export async function getPerformanceAdsQualityDashboard(actor: Actor, query: Per
   const sortDirection = query.sortDirection === "asc" ? "asc" : "desc";
   const sortDirectionSql = sortDirection === "asc" ? Prisma.sql`ASC` : Prisma.sql`DESC`;
   const bucketSql = qualityBucketSql(view);
-  const baseLobSql = Prisma.sql`AND UPPER(COALESCE(l."name", '')) IN ('ADS', 'PROJECT')`;
+  const selectedLob = query.lob === "VIDEO" || query.lob === "COMMENTS" ? query.lob : "ADS";
+  const baseLobSql = selectedLob === "ADS"
+    ? Prisma.sql`AND UPPER(COALESCE(l."name", '')) IN ('ADS', 'PROJECT')`
+    : Prisma.sql`AND UPPER(COALESCE(l."name", '')) = ${selectedLob}`;
+  const importBatchType = selectedLob === "ADS" ? "QUALITY" : "QUALITY_TNS_KAP";
   const [range] = await prisma.$queryRaw<Array<{ startDate: Date | null; endDate: Date | null }>>(Prisma.sql`
     SELECT MIN(q."auditDate") AS "startDate", MAX(q."auditDate") AS "endDate"
     FROM "QualityRecord" q
@@ -627,7 +635,7 @@ export async function getPerformanceAdsQualityDashboard(actor: Actor, query: Per
         q."employeeId" AS "employeeId",
         COALESCE(e."fullName", q."wbLogin") AS "employeeName",
         q."wbLogin" AS "wbLogin",
-        'ADS' AS "lob",
+        ${selectedLob} AS "lob",
         COALESCE(s."fullName", 'Sem supervisor') AS "supervisor",
         COUNT(DISTINCT q."concatKey")::integer AS "total",
         COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::integer AS "correct",
@@ -642,7 +650,7 @@ export async function getPerformanceAdsQualityDashboard(actor: Actor, query: Per
       LIMIT 500
     `),
     prisma.performanceImportBatch.findFirst({
-      where: { type: "QUALITY" },
+      where: { type: importBatchType },
       orderBy: { importedAt: "desc" },
       select: { fileName: true, importedAt: true, rowsValid: true, rowsError: true, status: true }
     })
@@ -661,8 +669,8 @@ export async function getPerformanceAdsQualityDashboard(actor: Actor, query: Per
       endDate: formatDateKey(range.endDate)
     } : null,
     granularity: view,
-    selectedLob: "ADS",
-    filters: { lobs: ["ADS"] },
+    selectedLob,
+    filters: { lobs: ["ADS", "VIDEO", "COMMENTS"] },
     summary: serializeQualityAggregate(summary.correct, summary.total),
     trend: trendRows.map((row) => ({
       key: formatDateKey(row.periodStart),
@@ -673,7 +681,7 @@ export async function getPerformanceAdsQualityDashboard(actor: Actor, query: Per
       employeeId: row.employeeId,
       employeeName: row.employeeName,
       wbLogin: row.wbLogin,
-      lob: "ADS",
+      lob: selectedLob,
       supervisor: row.supervisor,
       lastAuditAt: row.lastAuditAt.toISOString(),
       ...serializeQualityAggregate(row.correct, row.total)
@@ -684,6 +692,8 @@ export async function getPerformanceAdsQualityDashboard(actor: Actor, query: Per
     } : null
   };
 }
+
+export const getPerformanceAdsQualityDashboard = getPerformanceQualityDashboard;
 
 export async function getPerformanceAgentsDashboard(actor: Actor, query: PerformanceAgentsQuery = {}) {
   const user = await requireActiveUser(actor);
@@ -916,7 +926,7 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
     const metadata = getPerformanceQueueMetadataById(queueId);
     return metadata.lob === "ADS" || (metadata.lob === "VIDEO" && metadata.slaTargetMinutes === 15);
   });
-  const [schedules, moods, ahtRows, adsQualityRows, tnsQualityRows, cecQualityRows] = await Promise.all([
+  const [schedules, moods, ahtRows, kapQualityRows, cecQualityRows] = await Promise.all([
     prisma.schedule.findMany({
       where: { employeeId: { in: employeeIds }, date: { gte: period.start, lte: period.end }, deletedAt: null },
       select: { employeeId: true, status: true }
@@ -945,19 +955,6 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
         COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::integer AS "correct",
         COUNT(DISTINCT q."concatKey")::integer AS "total"
       FROM "QualityRecord" q
-      INNER JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
-      WHERE q."employeeId" IN (${Prisma.join(employeeIds)})
-        AND q."auditDate" >= ${period.start}
-        AND q."auditDate" <= ${period.end}
-        AND e."supervisorId" IS NOT NULL
-      GROUP BY e."supervisorId"
-    `),
-    prisma.$queryRaw<Array<{ supervisorId: string; correct: number; total: number }>>(Prisma.sql`
-      SELECT
-        e."supervisorId" AS "supervisorId",
-        COALESCE(SUM(GREATEST(q."sampling" - q."mislabeled" - q."leakage" - q."falsePositive", 0)), 0)::integer AS "correct",
-        COALESCE(SUM(q."sampling"), 0)::integer AS "total"
-      FROM "TnsQualityRecord" q
       INNER JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
       WHERE q."employeeId" IN (${Prisma.join(employeeIds)})
         AND q."auditDate" >= ${period.start}
@@ -1025,7 +1022,7 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
     aggregate.submit += Number(row.submit ?? 0);
     aggregate.moderationSeconds += Number(row.moderationSeconds ?? 0);
   }
-  for (const rows of [adsQualityRows, tnsQualityRows, cecQualityRows]) {
+  for (const rows of [kapQualityRows, cecQualityRows]) {
     for (const row of rows) {
       const aggregate = ensureAggregate(row.supervisorId);
       aggregate.qualityCorrect += Number(row.correct ?? 0);
@@ -1289,11 +1286,11 @@ export async function previewCecQualityImport(actor: Actor, rawRows: Record<stri
   return previewCecQualityRows(rawRows, options);
 }
 
-export async function commitQualityRawImport(actor: Actor, rawRows: Record<string, unknown>[], fileName = "qualidade.xlsx", batchId?: string, rowNumberOffset = 0) {
+export async function commitQualityRawImport(actor: Actor, rawRows: Record<string, unknown>[], fileName = "qualidade.xlsx", batchId?: string, rowNumberOffset = 0, qualityScope: PerformanceQualityScope = "ADS") {
   const user = await requireActiveUser(actor);
   requireImportPermission(user);
-  const preview = await previewQualityRows(rawRows, { rowNumberOffset });
-  return commitQualityRows(user, preview.rows, fileName, batchId);
+  const preview = await previewQualityRows(rawRows, { rowNumberOffset, qualityScope });
+  return commitQualityRows(user, preview.rows, fileName, batchId, qualityScope);
 }
 
 export async function commitTnsQualityRawImport(actor: Actor, rawRows: Record<string, unknown>[], fileName = "qualidade_tns.xlsx", batchId?: string, rowNumberOffset = 0) {
@@ -1357,22 +1354,34 @@ export async function replacePerformanceSnapshot(actor: Actor, batchIdToKeep: st
   };
 }
 
-export async function replaceQualitySnapshot(actor: Actor, batchIdToKeep: string) {
+export async function replaceQualitySnapshot(actor: Actor, batchIdToKeep: string, qualityScope: PerformanceQualityScope = "ADS") {
   const user = await requireActiveUser(actor);
   requireImportPermission(user);
   if (!batchIdToKeep) throw new PerformanceError("Lote de Qualidade obrigatório para substituir a base.", 400);
 
+  const lobNames = qualityScopeLobNames(qualityScope);
+  const batchType = qualityScope === "TNS" ? "QUALITY_TNS_KAP" : "QUALITY";
+  const lobs = await prisma.lob.findMany({
+    where: { OR: lobNames.map((name) => ({ name: { equals: name, mode: "insensitive" } })) },
+    select: { id: true }
+  });
+  const lobIds = lobs.map((lob) => lob.id);
+
   const [recordsDeleted, batchesDeleted] = await prisma.$transaction([
     prisma.qualityRecord.deleteMany({
-      where: { OR: [{ importBatchId: null }, { importBatchId: { not: batchIdToKeep } }] }
+      where: {
+        lobId: { in: lobIds },
+        OR: [{ importBatchId: null }, { importBatchId: { not: batchIdToKeep } }]
+      }
     }),
     prisma.performanceImportBatch.deleteMany({
-      where: { type: "QUALITY", id: { not: batchIdToKeep } }
+      where: { type: batchType, id: { not: batchIdToKeep } }
     })
   ]);
 
   return {
     batchIdKept: batchIdToKeep,
+    qualityScope,
     qualityRowsDeleted: recordsDeleted.count,
     importBatchesDeleted: batchesDeleted.count
   };
@@ -1412,12 +1421,14 @@ async function previewQualityRows(rawRows: Record<string, unknown>[], options: P
     const rawLob = text(rowValue(row, ["lob"]));
     const concatKey = buildQualityTaskKey(caseOrderId, auditCaseOrderId);
     const qualityRule = getQualityRuleByEmployee(employee);
+    const expectedRule: QualityRule = options.qualityScope === "TNS" ? "TNS_QUALITY" : "ADS_QUALITY";
+    const qualityScope = options.qualityScope ?? "ADS";
+    const employeeLob = employee?.lob?.name?.trim().toUpperCase() ?? "";
+    const isInQualityScope = qualityScopeLobNames(qualityScope).includes(employeeLob);
 
     if (!wbLogin) errors.push("WB/Login é obrigatório.");
     else if (!employee) warnings.push("WB/Login não encontrado no cadastro; a produção será mantida sem vínculo individual.");
-    else if (qualityRule === "TNS_QUALITY") warnings.push("Este agente pertence à operação TNS. A qualidade dele deve ser calculada pela base TNS.");
-    else if (qualityRule === "CEC_QUALITY") warnings.push("Este agente pertence à operação CEC. A qualidade dele deve ser calculada pela base CEC.");
-    else if (qualityRule === "UNKNOWN") warnings.push("Colaborador sem LOB cadastrada ou com LOB sem regra de qualidade.");
+    else if (qualityRule !== expectedRule || !isInQualityScope) warnings.push(`Linha fora do escopo ${qualityScope === "TNS" ? "VIDEO/COMMENTS" : "ADS/PROJECT"}; será ignorada.`);
     if (!auditTime) errors.push("Data da auditoria inválida.");
     if (!finalResult) warnings.push("final_result vazio; linha importada com valor em branco.");
     if (!caseOrderId) errors.push("Case Order ID é obrigatório.");
@@ -1686,10 +1697,10 @@ async function previewProductionRows(rawRows: Record<string, unknown>[], options
   return options.skipExistingCheck ? buildPreviewResult(previewRows) : markExistingProductionRows(previewRows);
 }
 
-export async function commitQualityImport(actor: Actor, rows: PerformancePreviewRow[], fileName = "qualidade.xlsx") {
+export async function commitQualityImport(actor: Actor, rows: PerformancePreviewRow[], fileName = "qualidade.xlsx", qualityScope: PerformanceQualityScope = "ADS") {
   const user = await requireActiveUser(actor);
   requireImportPermission(user);
-  return commitQualityRows(user, rows, fileName);
+  return commitQualityRows(user, rows, fileName, undefined, qualityScope);
 }
 
 export async function commitTnsQualityImport(actor: Actor, rows: PerformancePreviewRow[], fileName = "qualidade_tns.xlsx") {
@@ -1704,18 +1715,22 @@ export async function commitCecQualityImport(actor: Actor, rows: PerformancePrev
   return commitCecQualityRows(user, rows, fileName);
 }
 
-async function commitQualityRows(user: AuthenticatedUser, rows: PerformancePreviewRow[], fileName = "qualidade.xlsx", batchId?: string) {
+async function commitQualityRows(user: AuthenticatedUser, rows: PerformancePreviewRow[], fileName = "qualidade.xlsx", batchId?: string, qualityScope: PerformanceQualityScope = "ADS") {
+  const expectedRule: QualityRule = qualityScope === "TNS" ? "TNS_QUALITY" : "ADS_QUALITY";
+  const lobNames = qualityScopeLobNames(qualityScope);
+  const batchType = qualityScope === "TNS" ? "QUALITY_TNS_KAP" : "QUALITY";
   const validRows = rows.filter((row) => (
     row.type === "QUALITY"
     && !row.errors.length
     && row.employeeId
     && row.uniqueKey
-    && row.payload.qualityRule === "ADS_QUALITY"
+    && row.payload.qualityRule === expectedRule
+    && lobNames.includes((row.lob ?? "").trim().toUpperCase())
   ));
   if (!validRows.length) throw new PerformanceError("Não há linhas válidas para importar.", 400);
   const createdRows = validRows.length;
   const updatedRows = 0;
-  const batch = await upsertImportBatch(user, "QUALITY", fileName, rows, validRows.length, createdRows, updatedRows, batchId);
+  const batch = await upsertImportBatch(user, batchType, fileName, rows, validRows.length, createdRows, updatedRows, batchId);
 
   for (const chunk of chunks(validRows, 500)) {
     await prisma.qualityRecord.createMany({
@@ -1734,7 +1749,7 @@ async function commitQualityRows(user: AuthenticatedUser, rows: PerformancePrevi
       }))
     });
   }
-  if (!batchId) await auditImport(user.id, "QUALITY", batch.id, { fileName, rowsTotal: rows.length, rowsValid: validRows.length, createdRows, updatedRows });
+  if (!batchId) await auditImport(user.id, batchType, batch.id, { fileName, qualityScope, rowsTotal: rows.length, rowsValid: validRows.length, createdRows, updatedRows });
   return { success: true, importedRows: validRows.length, createdRows, updatedRows, batchId: batch.id };
 }
 
@@ -2253,6 +2268,10 @@ export function getQualityRuleByEmployee(employee?: { lob?: { name?: string | nu
   if (["tns", "video", "comments"].includes(lobName)) return "TNS_QUALITY";
   if (lobName === "cec") return "CEC_QUALITY";
   return "UNKNOWN";
+}
+
+function qualityScopeLobNames(scope: PerformanceQualityScope) {
+  return scope === "TNS" ? ["VIDEO", "COMMENTS"] : ["ADS", "PROJECT"];
 }
 
 function summarizeQualityRule(rules: QualityRule[]): QualityRule {
@@ -3733,7 +3752,7 @@ async function markExistingProductionRows(previewRows: PerformancePreviewRow[]) 
 
 async function upsertImportBatch(
   user: AuthenticatedUser | null,
-  type: "QUALITY" | "TNS_QUALITY" | "CEC_QUALITY" | "PRODUCTION",
+  type: "QUALITY" | "QUALITY_TNS_KAP" | "TNS_QUALITY" | "CEC_QUALITY" | "PRODUCTION",
   fileName: string,
   rows: PerformancePreviewRow[],
   rowsValid: number,
