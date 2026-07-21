@@ -10,7 +10,7 @@
     },
     {
       "path": "/api/cron/ads-executive-report",
-      "schedule": "15 * * * *"
+      "schedule": "55 * * * *"
     }
   ]
 }

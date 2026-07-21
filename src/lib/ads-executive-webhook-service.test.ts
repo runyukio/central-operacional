@@ -17,11 +17,14 @@ test("buildKwaiTalkMarkdownPayload builds the Kim markdown contract", () => {
   assert.match(payload.markdown.content, /!\[ADS Executive Report\]\(https:\/\/storage\.example\/report\.png/);
 });
 
-test("assertKwaiTalkAccepted accepts only code 200", () => {
+test("assertKwaiTalkAccepted accepts successful Kim response variants", () => {
   assert.doesNotThrow(() => assertKwaiTalkAccepted('{"code":200,"message":"success"}'));
+  assert.doesNotThrow(() => assertKwaiTalkAccepted('{"code":0,"message":"success"}'));
+  assert.doesNotThrow(() => assertKwaiTalkAccepted('{"result":"ok"}'));
+  assert.doesNotThrow(() => assertKwaiTalkAccepted("ok"));
   assert.throws(
     () => assertKwaiTalkAccepted('{"code":400,"message":"invalid markdown"}'),
     /KwaiTalk rejeitou a mensagem: invalid markdown/
   );
-  assert.throws(() => assertKwaiTalkAccepted("ok"), /JSON valido/);
+  assert.throws(() => assertKwaiTalkAccepted('{"success":false,"message":"invalid markdown"}'), /invalid markdown/);
 });

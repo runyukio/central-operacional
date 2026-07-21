@@ -31,6 +31,8 @@ type KwaiTalkWebhookResponse = {
   code?: number | string;
   message?: string;
   msg?: string;
+  success?: boolean;
+  ok?: boolean;
 };
 
 export type AdsExecutiveWebhookResult = {
@@ -331,13 +333,17 @@ export function buildKwaiTalkMarkdownPayload(input: { imageUrl: string; selected
 }
 
 export function assertKwaiTalkAccepted(responseText: string) {
+  if (!responseText.trim()) return;
   let payload: KwaiTalkWebhookResponse;
   try {
     payload = JSON.parse(responseText) as KwaiTalkWebhookResponse;
   } catch {
-    throw new Error("KwaiTalk respondeu sem um JSON valido.");
+    return;
   }
-  if (Number(payload.code) !== 200) {
+  const code = payload.code === undefined ? null : Number(payload.code);
+  const rejectedByCode = code !== null && ![0, 200].includes(code);
+  const rejectedExplicitly = payload.success === false || payload.ok === false;
+  if (rejectedByCode || rejectedExplicitly) {
     const detail = sanitizeResponseBody(String(payload.message ?? payload.msg ?? "resposta rejeitada"));
     throw new Error(`KwaiTalk rejeitou a mensagem${detail ? `: ${detail}` : ""}`);
   }

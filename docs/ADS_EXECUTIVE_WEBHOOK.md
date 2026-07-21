@@ -1,6 +1,6 @@
 # Report Executivo ADS por webhook
 
-O report Executivo de ADS e gerado no servidor como PNG e enviado automaticamente pelo cron da Vercel no minuto 15 de cada hora.
+O report Executivo de ADS e gerado no servidor como PNG e enviado automaticamente pelo cron da Vercel no minuto 55 de cada hora.
 
 ## Configuracao
 
@@ -47,7 +47,7 @@ Para o robot do KwaiTalk, configure:
 ADS_EXECUTIVE_WEBHOOK_PAYLOAD_MODE=kwaitalk
 ```
 
-Nesse modo, a imagem e sobrescrita em um unico objeto publico no bucket `mural-media`, evitando acumulo de arquivos. O webhook recebe um `POST` JSON no contrato Kim (`msgtype=markdown`) com o ciclo, o horario de geracao e a imagem incorporada por URL. O envio so e considerado concluido quando o robot responde com `code: 200`.
+Nesse modo, a imagem e sobrescrita em um unico objeto publico no bucket `mural-media`, evitando acumulo de arquivos. O webhook recebe um `POST` JSON no contrato Kim (`msgtype=markdown`) com o ciclo, o horario de geracao e a imagem incorporada por URL. Respostas HTTP de sucesso do robot sao aceitas, incluindo as variantes de retorno Kim com `code: 0` ou `code: 200`.
 
 O bucket publico `mural-media` e as variaveis `NEXT_PUBLIC_SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` devem estar configurados em producao.
 
