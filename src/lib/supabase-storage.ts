@@ -140,7 +140,7 @@ export async function deletePrivateObject(bucket: StorageBucket, path: string) {
   }
 }
 
-export async function uploadPublicObject(bucket: StorageBucket, path: string, file: File) {
+export async function uploadPublicObject(bucket: StorageBucket, path: string, file: File, options: { upsert?: boolean } = {}) {
   if (!isStorageConfigured()) {
     if (process.env.NODE_ENV === "production" || process.env.VERCEL === "1") {
       throw new Error("Supabase Storage não configurado. Verifique NEXT_PUBLIC_SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY no ambiente de produção.");
@@ -154,7 +154,7 @@ export async function uploadPublicObject(bucket: StorageBucket, path: string, fi
       apikey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
       Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
       "Content-Type": file.type || "application/octet-stream",
-      "x-upsert": "false"
+      "x-upsert": options.upsert ? "true" : "false"
     },
     body: await file.arrayBuffer()
   });

@@ -39,6 +39,18 @@ Os headers incluem:
 
 Use `ADS_EXECUTIVE_WEBHOOK_PAYLOAD_MODE=json` quando o destino exigir JSON. Nesse modo, a imagem e enviada no campo `imageBase64`, junto com `fileName`, `mimeType` e os metadados do report.
 
+## KwaiTalk / Kim Robot
+
+Para o robot do KwaiTalk, configure:
+
+```env
+ADS_EXECUTIVE_WEBHOOK_PAYLOAD_MODE=kwaitalk
+```
+
+Nesse modo, a imagem e sobrescrita em um unico objeto publico no bucket `mural-media`, evitando acumulo de arquivos. O webhook recebe um `POST` JSON no contrato Kim (`msgtype=markdown`) com o ciclo, o horario de geracao e a imagem incorporada por URL. O envio so e considerado concluido quando o robot responde com `code: 200`.
+
+O bucket publico `mural-media` e as variaveis `NEXT_PUBLIC_SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` devem estar configurados em producao.
+
 ## Execucao manual
 
 O mesmo endpoint pode ser acionado manualmente para validar a integracao:

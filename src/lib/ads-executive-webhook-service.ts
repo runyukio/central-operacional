@@ -13,6 +13,7 @@ import { prisma } from "@/lib/prisma";
 import { QUEUE_METADATA } from "@/lib/queue-metadata";
 import { QUEUE_REPORT_METADATA } from "@/lib/queue-report-metadata";
 import { getRealtimeSnapshot } from "@/lib/realtime-service";
+import { uploadPublicObject } from "@/lib/supabase-storage";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FORECAST_HISTORY_DAYS = 120;
@@ -24,7 +25,13 @@ const automationActor = {
   role: "ADMIN" as const
 };
 
-type WebhookPayloadMode = "multipart" | "json";
+type WebhookPayloadMode = "multipart" | "json" | "kwaitalk";
+
+type KwaiTalkWebhookResponse = {
+  code?: number | string;
+  message?: string;
+  msg?: string;
+};
 
 export type AdsExecutiveWebhookResult = {
   sent: boolean;
@@ -77,13 +84,18 @@ export async function sendLatestAdsExecutiveReport(): Promise<AdsExecutiveWebhoo
   const image = await renderAdsExecutiveReportPng(report);
   const fileName = `ads_executive_${safeFilePart(selectedCycle)}.png`;
   const idempotencyKey = `ads-executive:${selectedCycle}`;
+  const mode = resolvePayloadMode();
+  const imageUrl = mode === "kwaitalk"
+    ? await publishKwaiTalkImage(image, fileName, selectedCycle)
+    : null;
   const response = await postWebhook({
     url: webhookUrl,
     image,
     fileName,
     idempotencyKey,
-    mode: resolvePayloadMode(),
+    mode,
     token: resolveWebhookToken(),
+    imageUrl,
     metadata: {
       reportType: "ADS_EXECUTIVE",
       selectedCycle,
@@ -201,6 +213,7 @@ async function postWebhook(input: {
   idempotencyKey: string;
   mode: WebhookPayloadMode;
   token: string | null;
+  imageUrl: string | null;
   metadata: Record<string, string>;
 }) {
   const controller = new AbortController();
@@ -213,7 +226,15 @@ async function postWebhook(input: {
   if (input.token) headers.set("Authorization", `Bearer ${input.token}`);
 
   let body: BodyInit;
-  if (input.mode === "json") {
+  if (input.mode === "kwaitalk") {
+    if (!input.imageUrl) throw new Error("A imagem publica do report nao foi gerada para o KwaiTalk.");
+    headers.set("Content-Type", "application/json");
+    body = JSON.stringify(buildKwaiTalkMarkdownPayload({
+      imageUrl: input.imageUrl,
+      selectedCycle: input.metadata.selectedCycle,
+      generatedAt: input.metadata.generatedAt
+    }));
+  } else if (input.mode === "json") {
     headers.set("Content-Type", "application/json");
     body = JSON.stringify({
       ...input.metadata,
@@ -240,10 +261,12 @@ async function postWebhook(input: {
       cache: "no-store",
       redirect: "follow"
     });
+    const responseText = await response.text();
     if (!response.ok) {
-      const detail = sanitizeResponseBody(await response.text());
+      const detail = sanitizeResponseBody(responseText);
       throw new Error(`Webhook respondeu HTTP ${response.status}${detail ? `: ${detail}` : ""}`);
     }
+    if (input.mode === "kwaitalk") assertKwaiTalkAccepted(responseText);
     return response;
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
@@ -276,7 +299,62 @@ function resolveWebhookToken() {
 }
 
 function resolvePayloadMode(): WebhookPayloadMode {
-  return String(process.env.ADS_EXECUTIVE_WEBHOOK_PAYLOAD_MODE ?? "multipart").trim().toLowerCase() === "json" ? "json" : "multipart";
+  const mode = String(process.env.ADS_EXECUTIVE_WEBHOOK_PAYLOAD_MODE ?? "multipart").trim().toLowerCase();
+  if (mode === "json" || mode === "kwaitalk") return mode;
+  return "multipart";
+}
+
+async function publishKwaiTalkImage(image: Buffer, fileName: string, selectedCycle: string) {
+  const uploaded = await uploadPublicObject(
+    "mural-media",
+    "automation/ads-executive/latest.png",
+    new File([new Uint8Array(image)], fileName, { type: "image/png" }),
+    { upsert: true }
+  );
+  const version = encodeURIComponent(selectedCycle);
+  return `${uploaded.publicUrl}${uploaded.publicUrl.includes("?") ? "&" : "?"}v=${version}`;
+}
+
+export function buildKwaiTalkMarkdownPayload(input: { imageUrl: string; selectedCycle: string; generatedAt: string }) {
+  const generatedAt = formatKwaiTalkGeneratedAt(input.generatedAt);
+  return {
+    msgtype: "markdown",
+    markdown: {
+      content: [
+        "### ADS Executive Report",
+        `**Cycle:** ${input.selectedCycle}`,
+        `**Generated:** ${generatedAt}`,
+        `![ADS Executive Report](${input.imageUrl})`
+      ].join("\n\n")
+    }
+  };
+}
+
+export function assertKwaiTalkAccepted(responseText: string) {
+  let payload: KwaiTalkWebhookResponse;
+  try {
+    payload = JSON.parse(responseText) as KwaiTalkWebhookResponse;
+  } catch {
+    throw new Error("KwaiTalk respondeu sem um JSON valido.");
+  }
+  if (Number(payload.code) !== 200) {
+    const detail = sanitizeResponseBody(String(payload.message ?? payload.msg ?? "resposta rejeitada"));
+    throw new Error(`KwaiTalk rejeitou a mensagem${detail ? `: ${detail}` : ""}`);
+  }
+}
+
+function formatKwaiTalkGeneratedAt(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(date);
 }
 
 function resolveTimeoutMs() {
