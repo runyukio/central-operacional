@@ -4,6 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, CircleDollarSign, Download, Eye, FileSpreadsheet, LockKeyhole, Pencil, RefreshCw, Save, Search, Send, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 
 import { EmptyState, PageHeader, Panel, StatCard, StatusBadge } from "@/components/ui/primitives";
+import {
+  BILLING_FISCAL_INVOICE_NUMBER_ERROR,
+  BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH,
+  isValidBillingFiscalInvoiceNumber,
+  normalizeBillingFiscalInvoiceNumber
+} from "@/lib/billing-fiscal-invoice";
 import { cn } from "@/lib/utils";
 
 type BillingPayload = {
@@ -892,8 +898,8 @@ function EmployeeBillingDetail({
 
   async function finalizeInvoice() {
     setFiscalError("");
-    if (!/^\d{1,20}$/.test(fiscalDraft.invoiceNumber.trim())) {
-      setFiscalError("Informe somente números no número da nota fiscal, com até 20 dígitos.");
+    if (!isValidBillingFiscalInvoiceNumber(fiscalDraft.invoiceNumber)) {
+      setFiscalError(BILLING_FISCAL_INVOICE_NUMBER_ERROR);
       return;
     }
     const description = fiscalDraft.serviceDescription.trim();
@@ -1104,9 +1110,9 @@ function EmployeeBillingDetail({
                 <Label text="Número da nota fiscal">
                   <input
                     value={fiscalDraft.invoiceNumber}
-                    onChange={(event) => setFiscalDraft({ ...fiscalDraft, invoiceNumber: event.target.value.replace(/\D/g, "").slice(0, 20) })}
+                    onChange={(event) => setFiscalDraft({ ...fiscalDraft, invoiceNumber: normalizeBillingFiscalInvoiceNumber(event.target.value) })}
                     inputMode="numeric"
-                    maxLength={20}
+                    maxLength={BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH}
                     placeholder="Somente números"
                     className="premium-control h-11 w-full px-3 text-sm font-bold"
                   />

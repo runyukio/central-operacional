@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { AuditAction, Prisma, RequestStatus, ScheduleStatus, WorkHourRecordStatus } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
+import { BILLING_FISCAL_INVOICE_NUMBER_ERROR, isValidBillingFiscalInvoiceNumber } from "@/lib/billing-fiscal-invoice";
 import { canAccessBilling, canManageBilling } from "@/lib/billing-permissions";
 import { isAgentJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
 import { MONTHLY_ADVANCE_FIXED_AMOUNT, isMonthlyAdvanceReferenceMonthAvailable } from "@/lib/monthly-advance-constants";
@@ -20,7 +21,6 @@ export const DEFAULT_BILLING_REFERENCE_MONTH = "2026-07";
 const BILLING_PJ_ONLY_MESSAGE = "Billing disponível apenas para colaboradores PJ.";
 const BILLING_REQUEST_TYPE_NAME = "Ajuste de Invoice";
 const BILLING_INVOICE_BUCKET = "billing-invoices" as const;
-const BILLING_INVOICE_NUMBER_PATTERN = /^\d{1,20}$/;
 const POC_AGENT_HOURLY_RATE_MULTIPLIER = 1.15;
 const OPEN_ADJUSTMENT_STATUSES = ["AGUARDANDO_SUPERVISOR", "AGUARDANDO_ADMIN"] as const;
 const BILLABLE_WORK_HOUR_STATUSES: WorkHourRecordStatus[] = [
@@ -447,8 +447,8 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
 
   const invoiceNumber = String(input.invoiceNumber ?? "").trim();
   const serviceDescription = String(input.serviceDescription ?? "").trim();
-  if (!BILLING_INVOICE_NUMBER_PATTERN.test(invoiceNumber)) {
-    return { error: "Número da nota fiscal inválido. Informe somente números, com até 20 dígitos.", status: 400 };
+  if (!isValidBillingFiscalInvoiceNumber(invoiceNumber)) {
+    return { error: BILLING_FISCAL_INVOICE_NUMBER_ERROR, status: 400 };
   }
   if (serviceDescription.length < 3 || serviceDescription.length > 1000) {
     return { error: "A descrição do serviço deve ter entre 3 e 1.000 caracteres.", status: 400 };
@@ -1048,8 +1048,8 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
   if (input.finalized) {
     const invoiceNumber = String(input.invoiceNumber ?? "").trim();
     const serviceDescription = String(input.serviceDescription ?? "").trim();
-    if (!BILLING_INVOICE_NUMBER_PATTERN.test(invoiceNumber)) {
-      return { error: "Número da nota fiscal inválido. Informe somente números, com até 20 dígitos.", status: 400 };
+    if (!isValidBillingFiscalInvoiceNumber(invoiceNumber)) {
+      return { error: BILLING_FISCAL_INVOICE_NUMBER_ERROR, status: 400 };
     }
     if (serviceDescription.length < 3 || serviceDescription.length > 1000) {
       return { error: "A descrição do serviço deve ter entre 3 e 1.000 caracteres.", status: 400 };

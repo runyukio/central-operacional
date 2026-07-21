@@ -5,6 +5,12 @@ import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2, CircleDollarSign, Clock, Download, FileText, LockKeyhole, RefreshCw, Send, Upload, WalletCards } from "lucide-react";
 
 import { EmptyState, PageHeader, Panel, StatCard, StatusBadge } from "@/components/ui/primitives";
+import {
+  BILLING_FISCAL_INVOICE_NUMBER_ERROR,
+  BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH,
+  isValidBillingFiscalInvoiceNumber,
+  normalizeBillingFiscalInvoiceNumber
+} from "@/lib/billing-fiscal-invoice";
 import { cn } from "@/lib/utils";
 
 type MyInvoicePayload = {
@@ -153,8 +159,8 @@ export function MyInvoicePage() {
   async function approveInvoice() {
     const invoiceNumber = fiscalDraft.invoiceNumber.trim();
     const serviceDescription = fiscalDraft.serviceDescription.trim();
-    if (!/^\d{1,20}$/.test(invoiceNumber)) {
-      setError("Informe o número da nota fiscal usando somente números, com até 20 dígitos.");
+    if (!isValidBillingFiscalInvoiceNumber(invoiceNumber)) {
+      setError(BILLING_FISCAL_INVOICE_NUMBER_ERROR);
       return;
     }
     if (serviceDescription.length < 3 || serviceDescription.length > 1000) {
@@ -367,10 +373,10 @@ export function MyInvoicePage() {
                 <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">Número da nota fiscal</span>
                 <input
                   inputMode="numeric"
-                  maxLength={20}
+                  maxLength={BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH}
                   disabled={!data.invoice.canApprove || saving}
                   value={fiscalDraft.invoiceNumber}
-                  onChange={(event) => setFiscalDraft({ ...fiscalDraft, invoiceNumber: event.target.value.replace(/\D/g, "") })}
+                  onChange={(event) => setFiscalDraft({ ...fiscalDraft, invoiceNumber: normalizeBillingFiscalInvoiceNumber(event.target.value) })}
                   placeholder="Somente números"
                   className="premium-control h-10 w-full px-3 text-sm font-bold disabled:bg-slate-50 disabled:opacity-80"
                 />
