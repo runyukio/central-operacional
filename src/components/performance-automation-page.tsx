@@ -48,6 +48,7 @@ type PerformanceGranularity = "monthly" | "weekly" | "daily" | "hourly";
 type ForecastView = "hour" | "day" | "week";
 type QualityGranularity = "monthly" | "weekly" | "daily";
 type QualitySortDirection = "asc" | "desc";
+type SupervisorView = QualityGranularity;
 
 type PerformanceSummary = {
   records: number;
@@ -155,12 +156,15 @@ type PerformanceAgentRow = {
   shiftId: string | null;
   shift: string;
   submit: number;
+  outputAveragePerDay: number;
+  daysWithData: number;
   moderationSeconds: number;
   ahtSeconds: number;
 };
 
 type PerformanceAgentsResponse = {
   mode: "agents";
+  view: QualityGranularity;
   period: { startDate: string; endDate: string };
   dataRange: { startDate: string; endDate: string } | null;
   selectedLob: string;
@@ -169,10 +173,46 @@ type PerformanceAgentsResponse = {
     supervisors: Array<{ id: string; fullName: string }>;
     shifts: Array<{ id: string; name: string }>;
   };
-  summary: { agents: number; submit: number; moderationSeconds: number; ahtSeconds: number };
+  summary: {
+    agents: number;
+    submit: number;
+    outputAveragePerDay: number;
+    daysWithData: number;
+    moderationSeconds: number;
+    ahtSeconds: number;
+  };
   pagination: { page: number; pageSize: number; totalRows: number; totalPages: number };
   sort: { sortBy: AgentSortKey; sortDirection: AgentSortDirection };
   agents: PerformanceAgentRow[];
+};
+
+type PerformanceSupervisorRow = {
+  supervisorId: string;
+  supervisor: string;
+  teamSize: number;
+  planned: number;
+  absences: number;
+  absRate: number;
+  terminations: number;
+  hcAverage: number;
+  attritionRate: number;
+  moodAverage: number;
+  moodResponses: number;
+  submit: number;
+  moderationSeconds: number;
+  ahtSeconds: number;
+  qualityCorrect: number;
+  qualityTotal: number;
+  quality: number;
+};
+
+type PerformanceSupervisorsResponse = {
+  mode: "supervisors";
+  view: SupervisorView;
+  period: { startDate: string; endDate: string };
+  dataRange: { startDate: string; endDate: string } | null;
+  summary: Omit<PerformanceSupervisorRow, "supervisorId" | "supervisor"> & { supervisors: number };
+  supervisors: PerformanceSupervisorRow[];
 };
 
 type QueueSortKey = "queue" | "input" | "submit" | "latency" | "aht" | "agents";
@@ -246,7 +286,7 @@ const defaultForecastModelWeights: ForecastModelWeights = {
 };
 
 export function PerformanceAutomationPage() {
-  const [activeTab, setActiveTab] = useState<"queue" | "agents" | "forecast" | "quality">("queue");
+  const [activeTab, setActiveTab] = useState<"queue" | "agents" | "supervisors" | "forecast" | "quality">("queue");
   const [queueGranularity, setQueueGranularity] = useState<PerformanceGranularity>("daily");
   const [queueLob, setQueueLob] = useState("");
   const [queueStartDate, setQueueStartDate] = useState("");
@@ -262,6 +302,9 @@ export function PerformanceAutomationPage() {
   const [qualityStartDate, setQualityStartDate] = useState("");
   const [qualityEndDate, setQualityEndDate] = useState("");
   const [agentsPayload, setAgentsPayload] = useState<PerformanceAgentsResponse | null>(null);
+  const [supervisorsPayload, setSupervisorsPayload] = useState<PerformanceSupervisorsResponse | null>(null);
+  const [agentView, setAgentView] = useState<QualityGranularity>("daily");
+  const [supervisorView, setSupervisorView] = useState<SupervisorView>("daily");
   const [agentLob, setAgentLob] = useState("");
   const [agentShiftId, setAgentShiftId] = useState("");
   const [agentSupervisorId, setAgentSupervisorId] = useState("");
@@ -275,6 +318,7 @@ export function PerformanceAutomationPage() {
   const [loadingForecast, setLoadingForecast] = useState(false);
   const [loadingQuality, setLoadingQuality] = useState(false);
   const [loadingAgents, setLoadingAgents] = useState(false);
+  const [loadingSupervisors, setLoadingSupervisors] = useState(false);
   const [message, setMessage] = useState("");
   const [uploadOpen, setUploadOpen] = useState(false);
   const [qualityUploadOpen, setQualityUploadOpen] = useState(false);
@@ -345,6 +389,7 @@ export function PerformanceAutomationPage() {
   const loadAgents = useCallback(async () => {
     setLoadingAgents(true);
     const params = new URLSearchParams({
+      view: agentView,
       page: String(agentPage),
       pageSize: "50",
       sortBy: agentSort.key,
@@ -366,7 +411,21 @@ export function PerformanceAutomationPage() {
     } finally {
       setLoadingAgents(false);
     }
-  }, [agentEndDate, agentLob, agentPage, agentShiftId, agentSort, agentStartDate, agentSupervisorId, debouncedAgentSearch]);
+  }, [agentEndDate, agentLob, agentPage, agentShiftId, agentSort, agentStartDate, agentSupervisorId, agentView, debouncedAgentSearch]);
+
+  const loadSupervisors = useCallback(async () => {
+    setLoadingSupervisors(true);
+    const params = new URLSearchParams({ view: supervisorView });
+    try {
+      const data = await fetchPerformanceSupervisors(params);
+      setSupervisorsPayload(data);
+      setMessage("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível carregar os dados dos supervisores.");
+    } finally {
+      setLoadingSupervisors(false);
+    }
+  }, [supervisorView]);
 
   useEffect(() => {
     void loadQueue();
@@ -389,6 +448,10 @@ export function PerformanceAutomationPage() {
     if (activeTab === "agents") void loadAgents();
   }, [activeTab, loadAgents]);
 
+  useEffect(() => {
+    if (activeTab === "supervisors") void loadSupervisors();
+  }, [activeTab, loadSupervisors]);
+
   const basePayload = queuePayload ?? forecastPayload;
   const lobs = useMemo(() => normalizeLobs(basePayload?.filters.lobs ?? []), [basePayload]);
   const queueRows = queuePayload?.trend ?? [];
@@ -406,7 +469,7 @@ export function PerformanceAutomationPage() {
         icon={Trophy}
         actions={(
           <div className="flex flex-wrap items-center gap-2">
-            {basePayload?.canImport && activeTab !== "quality" ? (
+            {basePayload?.canImport && activeTab !== "quality" && activeTab !== "supervisors" ? (
               <button type="button" onClick={() => setUploadOpen(true)} className="inline-flex h-10 items-center gap-2 rounded-xl bg-blue-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-blue-700">
                 <UploadCloud className="h-4 w-4" /> Subir bases
               </button>
@@ -416,7 +479,7 @@ export function PerformanceAutomationPage() {
         )}
       />
 
-      {activeTab === "quality" ? (
+      {activeTab === "supervisors" ? null : activeTab === "quality" ? (
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <StatCard title="Último upload" value={formatQualityImportDate(qualityPayload?.lastImport?.importedAt)} helper="snapshot de qualidade vigente" icon={CheckCircle2} tone="green" />
           <StatCard title="Janela da base" value={formatQualityRange(qualityPayload?.dataRange)} helper="ADS consolidado" icon={CalendarClock} tone="purple" />
@@ -435,6 +498,7 @@ export function PerformanceAutomationPage() {
       <div className="flex flex-wrap gap-2">
         <TabButton active={activeTab === "queue"} icon={Rows3} label="Dados de fila" onClick={() => setActiveTab("queue")} />
         <TabButton active={activeTab === "agents"} icon={Users} label="Agentes" onClick={() => setActiveTab("agents")} />
+        <TabButton active={activeTab === "supervisors"} icon={ShieldCheck} label="Supervisores" onClick={() => setActiveTab("supervisors")} />
         <TabButton active={activeTab === "forecast"} icon={LineChartIcon} label="Forecast" onClick={() => setActiveTab("forecast")} />
         <TabButton active={activeTab === "quality"} icon={ShieldCheck} label="Qualidade" onClick={() => setActiveTab("quality")} />
       </div>
@@ -470,6 +534,7 @@ export function PerformanceAutomationPage() {
           endDate={agentEndDate}
           sort={agentSort}
           page={agentPage}
+          view={agentView}
           onLobChange={(value) => { setAgentLob(value); setAgentPage(1); }}
           onShiftChange={(value) => { setAgentShiftId(value); setAgentPage(1); }}
           onSupervisorChange={(value) => { setAgentSupervisorId(value); setAgentPage(1); }}
@@ -478,7 +543,21 @@ export function PerformanceAutomationPage() {
           onEndDateChange={(value) => { setAgentEndDate(value); setAgentPage(1); }}
           onSortChange={(value) => { setAgentSort(value); setAgentPage(1); }}
           onPageChange={setAgentPage}
+          onViewChange={(value) => {
+            setAgentView(value);
+            setAgentStartDate("");
+            setAgentEndDate("");
+            setAgentPage(1);
+          }}
           onRefresh={() => void loadAgents()}
+        />
+      ) : activeTab === "supervisors" ? (
+        <SupervisorsView
+          loading={loadingSupervisors}
+          payload={supervisorsPayload}
+          view={supervisorView}
+          onViewChange={setSupervisorView}
+          onRefresh={() => void loadSupervisors()}
         />
       ) : activeTab === "forecast" ? (
         <ForecastViewPanel
@@ -791,6 +870,7 @@ function AgentsView({
   endDate,
   sort,
   page,
+  view,
   onLobChange,
   onShiftChange,
   onSupervisorChange,
@@ -799,6 +879,7 @@ function AgentsView({
   onEndDateChange,
   onSortChange,
   onPageChange,
+  onViewChange,
   onRefresh
 }: {
   loading: boolean;
@@ -811,6 +892,7 @@ function AgentsView({
   endDate: string;
   sort: { key: AgentSortKey; direction: AgentSortDirection };
   page: number;
+  view: QualityGranularity;
   onLobChange: (value: string) => void;
   onShiftChange: (value: string) => void;
   onSupervisorChange: (value: string) => void;
@@ -819,6 +901,7 @@ function AgentsView({
   onEndDateChange: (value: string) => void;
   onSortChange: (value: { key: AgentSortKey; direction: AgentSortDirection }) => void;
   onPageChange: (value: number) => void;
+  onViewChange: (value: QualityGranularity) => void;
   onRefresh: () => void;
 }) {
   const lobs = normalizeLobs(payload?.filters.lobs ?? []);
@@ -845,6 +928,11 @@ function AgentsView({
       <div className="space-y-4 p-4">
         <div className="flex flex-col gap-4 2xl:flex-row 2xl:items-end 2xl:justify-between">
           <div className="flex flex-col gap-4 xl:flex-row xl:flex-wrap xl:items-end">
+            <SlicerGroup label="Visão">
+              <SlicerButton active={view === "monthly"} label="Mensal" onClick={() => onViewChange("monthly")} />
+              <SlicerButton active={view === "weekly"} label="Semanal" onClick={() => onViewChange("weekly")} />
+              <SlicerButton active={view === "daily"} label="Diário" onClick={() => onViewChange("daily")} />
+            </SlicerGroup>
             <DateRangeFilter
               startDate={startDate}
               endDate={endDate}
@@ -901,7 +989,13 @@ function AgentsView({
           <div className="space-y-4">
             <div className="grid gap-3 md:grid-cols-3">
               <StatCard title="Agentes" value={formatNumber(payload?.summary.agents ?? 0)} helper="com produção no período" icon={Users} tone="purple" />
-              <StatCard title="Output" value={formatNumber(payload?.summary.submit ?? 0)} helper="soma de submit" icon={FileSpreadsheet} tone="blue" />
+              <StatCard
+                title="Output médio/dia"
+                value={formatNumber(payload?.summary.outputAveragePerDay ?? 0)}
+                helper={`${formatNumber(payload?.summary.daysWithData ?? 0)} dia(s) com produção`}
+                icon={FileSpreadsheet}
+                tone="blue"
+              />
               <StatCard title="AHT médio" value={formatSeconds(payload?.summary.ahtSeconds)} helper="moderação / output" icon={Clock} tone="orange" />
             </div>
 
@@ -922,7 +1016,7 @@ function AgentsView({
                       <AgentSortHeader label="LOB" sortKey="lob" current={sort} onSort={handleSort} />
                       <AgentSortHeader label="Supervisor" sortKey="supervisor" current={sort} onSort={handleSort} />
                       <AgentSortHeader label="Turno" sortKey="shift" current={sort} onSort={handleSort} />
-                      <AgentSortHeader label="Output" sortKey="submit" current={sort} onSort={handleSort} align="right" />
+                      <AgentSortHeader label="Output médio/dia" sortKey="submit" current={sort} onSort={handleSort} align="right" />
                       <AgentSortHeader label="AHT" sortKey="aht" current={sort} onSort={handleSort} align="right" />
                     </tr>
                   </thead>
@@ -934,7 +1028,10 @@ function AgentsView({
                         <td className="px-3 py-3"><span className="rounded-lg bg-blue-50 px-2 py-1 text-xs font-black text-blue-700">{agent.lob}</span></td>
                         <td className="px-3 py-3 font-bold text-navy-950">{agent.supervisor}</td>
                         <td className="px-3 py-3 font-bold text-muted">{agent.shift}</td>
-                        <td className="px-3 py-3 text-right font-black text-navy-950">{formatNumber(agent.submit)}</td>
+                        <td className="px-3 py-3 text-right font-black text-navy-950">
+                          {formatNumber(agent.outputAveragePerDay)}
+                          <span className="mt-0.5 block text-[10px] font-bold text-muted">{formatNumber(agent.daysWithData)} dia(s)</span>
+                        </td>
                         <td className="px-3 py-3 text-right font-black text-navy-950">{formatSeconds(agent.ahtSeconds)}</td>
                       </tr>
                     ))}
@@ -968,6 +1065,107 @@ function AgentsView({
         )}
       </div>
     </section>
+  );
+}
+
+function SupervisorsView({
+  loading,
+  payload,
+  view,
+  onViewChange,
+  onRefresh
+}: {
+  loading: boolean;
+  payload: PerformanceSupervisorsResponse | null;
+  view: SupervisorView;
+  onViewChange: (value: SupervisorView) => void;
+  onRefresh: () => void;
+}) {
+  const summary = payload?.summary;
+  return (
+    <section className="overflow-hidden rounded-2xl border border-border bg-white shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <div>
+          <h2 className="text-base font-black text-navy-950">Consolidado por supervisor</h2>
+          <p className="mt-1 text-xs font-bold text-muted">ABS, attrition, humor, AHT e qualidade consolidados por time.</p>
+        </div>
+        <div className="flex flex-wrap items-end gap-3">
+          <SlicerGroup label="Visão">
+            <SlicerButton active={view === "monthly"} label="Mensal" onClick={() => onViewChange("monthly")} />
+            <SlicerButton active={view === "weekly"} label="Semanal" onClick={() => onViewChange("weekly")} />
+            <SlicerButton active={view === "daily"} label="Diário" onClick={() => onViewChange("daily")} />
+          </SlicerGroup>
+          <button type="button" onClick={onRefresh} className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-white px-3 text-xs font-black text-navy-950 hover:bg-slate-50">
+            <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} /> Atualizar
+          </button>
+        </div>
+      </div>
+
+      <div className="space-y-4 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-blue-100 bg-blue-50/50 px-4 py-3">
+          <p className="text-xs font-black uppercase tracking-wide text-blue-700">Período analisado</p>
+          <p className="text-sm font-black text-navy-950">{formatDashboardPeriod(payload?.period)}</p>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <StatCard title="ABS do time" value={formatQualityPercent(summary?.absRate)} helper={`${formatNumber(summary?.absences ?? 0)} ausência(s)`} icon={Target} tone="orange" />
+          <StatCard title="Attrition do time" value={formatQualityPercent(summary?.attritionRate)} helper={`${formatNumber(summary?.terminations ?? 0)} desligamento(s)`} icon={TrendingUp} tone="purple" />
+          <StatCard title="Humor do time" value={formatMoodScore(summary?.moodAverage)} helper={`${formatNumber(summary?.moodResponses ?? 0)} resposta(s)`} icon={Gauge} tone="green" />
+          <StatCard title="AHT do time" value={formatSeconds(summary?.ahtSeconds)} helper="ADS + TNS Video (meta 15 min)" icon={Clock} tone="blue" />
+          <StatCard title="Qualidade do time" value={formatQualityPercent(summary?.quality)} helper={`${formatNumber(summary?.qualityTotal ?? 0)} caso(s)`} icon={ShieldCheck} tone="green" />
+        </div>
+
+        {loading && !payload ? <EmptyBox label="Carregando consolidado dos supervisores..." /> : (
+          <div className="overflow-hidden rounded-xl border border-border bg-white">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+              <div>
+                <h3 className="text-sm font-black text-navy-950">Supervisores</h3>
+                <p className="mt-1 text-xs font-bold text-muted">{formatNumber(summary?.supervisors ?? 0)} supervisor(es) no período</p>
+              </div>
+              {loading ? <span className="inline-flex items-center gap-2 text-xs font-black text-blue-600"><RefreshCw className="h-3.5 w-3.5 animate-spin" /> Atualizando</span> : null}
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[980px] text-left text-sm">
+                <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-black uppercase tracking-wide text-muted">
+                  <tr>
+                    <th className="px-4 py-3">Supervisor</th>
+                    <th className="px-3 py-3 text-right">Time</th>
+                    <th className="px-3 py-3 text-right">ABS</th>
+                    <th className="px-3 py-3 text-right">Attrition</th>
+                    <th className="px-3 py-3 text-right">Humor</th>
+                    <th className="px-3 py-3 text-right">AHT</th>
+                    <th className="px-4 py-3 text-right">Qualidade</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/70">
+                  {(payload?.supervisors ?? []).map((row) => (
+                    <tr key={row.supervisorId} className="odd:bg-white even:bg-slate-50/45 hover:bg-blue-50/50">
+                      <td className="px-4 py-3 font-black text-navy-950">{row.supervisor}</td>
+                      <td className="px-3 py-3 text-right font-black text-navy-950">{formatNumber(row.teamSize)}</td>
+                      <td className="px-3 py-3 text-right"><SupervisorMetric value={formatQualityPercent(row.absRate)} detail={`${formatNumber(row.absences)} / ${formatNumber(row.planned)}`} /></td>
+                      <td className="px-3 py-3 text-right"><SupervisorMetric value={formatQualityPercent(row.attritionRate)} detail={`${formatNumber(row.terminations)} deslig.`} /></td>
+                      <td className="px-3 py-3 text-right"><SupervisorMetric value={formatMoodScore(row.moodAverage)} detail={`${formatNumber(row.moodResponses)} resp.`} /></td>
+                      <td className="px-3 py-3 text-right"><SupervisorMetric value={formatSeconds(row.ahtSeconds)} detail={`${formatNumber(row.submit)} output`} /></td>
+                      <td className="px-4 py-3 text-right"><SupervisorMetric value={formatQualityPercent(row.quality)} detail={`${formatNumber(row.qualityTotal)} casos`} /></td>
+                    </tr>
+                  ))}
+                  {!payload?.supervisors.length ? <tr><td colSpan={7} className="px-4 py-10 text-center text-sm font-bold text-muted">Nenhum supervisor encontrado para o período.</td></tr> : null}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function SupervisorMetric({ value, detail }: { value: string; detail: string }) {
+  return (
+    <span className="inline-flex flex-col items-end">
+      <strong className="font-black text-navy-950">{value}</strong>
+      <span className="mt-0.5 text-[10px] font-bold text-muted">{detail}</span>
+    </span>
   );
 }
 
@@ -1741,6 +1939,14 @@ async function fetchPerformanceAgents(params: URLSearchParams): Promise<Performa
   return body;
 }
 
+async function fetchPerformanceSupervisors(params: URLSearchParams): Promise<PerformanceSupervisorsResponse> {
+  const response = await fetch(`/api/performance/supervisors?${params.toString()}`, { cache: "no-store" });
+  const body = await response.json().catch(() => null) as (PerformanceSupervisorsResponse & { error?: string; message?: string }) | null;
+  if (!response.ok || !body) throw new Error(body?.error || body?.message || "Não foi possível carregar os dados dos supervisores.");
+  if (body.mode !== "supervisors") throw new Error("Resposta de supervisores inesperada.");
+  return body;
+}
+
 function buildForecastModel(rows: PerformanceTrendRow[], horizonDays: number, view: ForecastView): ForecastModel {
   const actuals = rows
     .map((row) => ({ at: parseTrendHour(row.key), input: Math.max(0, Number(row.input || 0)) }))
@@ -2208,6 +2414,19 @@ function qualityGranularityUnit(granularity: QualityGranularity) {
 function formatQualityRange(range?: { startDate: string; endDate: string } | null) {
   if (!range) return "-";
   return `${formatDateOnlyPtBr(range.startDate)} - ${formatDateOnlyPtBr(range.endDate)}`;
+}
+
+function formatDashboardPeriod(period?: { startDate: string; endDate: string } | null) {
+  if (!period) return "-";
+  const start = formatDateOnlyPtBr(period.startDate);
+  const end = formatDateOnlyPtBr(period.endDate);
+  return start === end ? start : `${start} a ${end}`;
+}
+
+function formatMoodScore(value?: number | null) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? `${value.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}/5`
+    : "-";
 }
 
 function formatQualityImportDate(value?: string | null) {

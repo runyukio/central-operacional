@@ -20,6 +20,7 @@ import { QUEUE_REPORT_METADATA, getQueueReportMetadataById } from "@/lib/queue-r
 import { getQueueMetadataById, getQueueNameById } from "@/lib/queue-dictionary";
 import { calculateWfhStatus, type WfhEligibilityStatus, type WfhMonitoringStatus } from "@/lib/wfh-rules";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
+import { calculateAbsenceRate, isAbsenceStatus, isScheduledStatus } from "@/lib/attendance-calculation";
 
 type AuthenticatedUser = Prisma.UserGetPayload<{
   include: {
@@ -81,6 +82,7 @@ export type PerformanceQualityQuery = {
 };
 
 export type PerformanceAgentsQuery = {
+  view?: "monthly" | "weekly" | "daily";
   startDate?: string;
   endDate?: string;
   lob?: string;
@@ -92,6 +94,10 @@ export type PerformanceAgentsQuery = {
   page?: number;
   pageSize?: number;
   metadataOnly?: boolean;
+};
+
+export type PerformanceSupervisorsQuery = {
+  view?: "monthly" | "weekly" | "daily";
 };
 
 type ProductionRecordForDashboard = Prisma.ProductionRecordGetPayload<{
@@ -698,9 +704,12 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
       }
     })
   ]);
+  const view = normalizeDashboardView(query.view);
   const fallback = getDefaultDatePeriod();
-  const start = parseDate(query.startDate) ?? range._min.bzDay ?? fallback.start;
-  const end = parseDate(query.endDate) ?? range._max.bzDay ?? fallback.end;
+  const referenceDate = range._max.bzDay ?? fallback.end;
+  const defaultPeriod = dashboardViewPeriod(referenceDate, view);
+  const start = parseDate(query.startDate) ?? defaultPeriod.start;
+  const end = parseDate(query.endDate) ?? defaultPeriod.end;
   if (start > end) throw new PerformanceError("A data inicial não pode ser posterior à data final.", 400);
 
   const supervisors = uniqueBy(
@@ -717,7 +726,7 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     : null;
 
   if (query.metadataOnly || !requestedLob || !validLobs.includes(requestedLob)) {
-    return emptyPerformanceAgentsPayload(start, end, dataRange, filters);
+    return emptyPerformanceAgentsPayload(start, end, dataRange, filters, view);
   }
 
   const queueSql = performanceQueueFilterSql(requestedLob);
@@ -733,6 +742,7 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     queueId: string;
     submit: number;
     moderationSeconds: number;
+    activeDates: Date[];
   }>>(Prisma.sql`
     SELECT
       p."employeeId" AS "employeeId",
@@ -744,7 +754,8 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
       COALESCE(sh."name", 'Sem turno') AS "shift",
       p."queueId" AS "queueId",
       COALESCE(SUM(p."submitNum"), 0)::double precision AS "submit",
-      COALESCE(SUM(p."moderationSeconds"), 0)::double precision AS "moderationSeconds"
+      COALESCE(SUM(p."moderationSeconds"), 0)::double precision AS "moderationSeconds",
+      ARRAY_AGG(DISTINCT p."bzDay") AS "activeDates"
     FROM "ProductionRecord" p
     LEFT JOIN "EmployeeProfile" e ON e."id" = p."employeeId"
     LEFT JOIN "EmployeeProfile" s ON s."id" = e."supervisorId"
@@ -776,6 +787,8 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     shift: string;
     submit: number;
     moderationSeconds: number;
+    activeDates: Set<string>;
+    outputAveragePerDay: number;
   }>();
   for (const row of rawRows) {
     const lob = getPerformanceQueueMetadataById(row.queueId).lob;
@@ -791,10 +804,14 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
       shiftId: row.shiftId,
       shift: row.shift,
       submit: 0,
-      moderationSeconds: 0
+      moderationSeconds: 0,
+      activeDates: new Set<string>(),
+      outputAveragePerDay: 0
     };
     current.submit += Number(row.submit ?? 0);
     current.moderationSeconds += Number(row.moderationSeconds ?? 0);
+    for (const date of row.activeDates ?? []) current.activeDates.add(formatDateKey(date));
+    current.outputAveragePerDay = current.activeDates.size > 0 ? current.submit / current.activeDates.size : 0;
     aggregateMap.set(key, current);
   }
 
@@ -817,10 +834,13 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
   const pageRows = filteredRows.slice((page - 1) * pageSize, page * pageSize);
   const submit = filteredRows.reduce((total, row) => total + row.submit, 0);
   const moderationSeconds = filteredRows.reduce((total, row) => total + row.moderationSeconds, 0);
+  const activeDates = new Set(filteredRows.flatMap((row) => Array.from(row.activeDates)));
+  const outputAveragePerDay = activeDates.size > 0 ? submit / activeDates.size : 0;
   const agents = new Set(filteredRows.map((row) => row.employeeId || `wb:${row.wbLogin.toLocaleLowerCase("pt-BR")}`)).size;
 
   return {
     mode: "agents" as const,
+    view,
     period: periodPayload({ start, end }),
     dataRange,
     selectedLob: requestedLob,
@@ -828,18 +848,349 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     summary: {
       agents,
       submit,
+      outputAveragePerDay: round2(outputAveragePerDay),
+      daysWithData: activeDates.size,
       moderationSeconds,
       ahtSeconds: submit > 0 ? round2(moderationSeconds / submit) : 0
     },
     pagination: { page, pageSize, totalRows, totalPages },
     sort: { sortBy, sortDirection },
     agents: pageRows.map((row) => ({
-      ...row,
+      employeeId: row.employeeId,
+      employeeName: row.employeeName,
+      wbLogin: row.wbLogin,
+      lob: row.lob,
+      supervisorId: row.supervisorId,
+      supervisor: row.supervisor,
+      shiftId: row.shiftId,
+      shift: row.shift,
       submit: Math.round(row.submit),
+      outputAveragePerDay: round2(row.outputAveragePerDay),
+      daysWithData: row.activeDates.size,
       moderationSeconds: round2(row.moderationSeconds),
       ahtSeconds: row.submit > 0 ? round2(row.moderationSeconds / row.submit) : 0
     }))
   };
+}
+
+export async function getPerformanceSupervisorsDashboard(actor: Actor, query: PerformanceSupervisorsQuery = {}) {
+  const user = await requireActiveUser(actor);
+  if (!canAccessPerformance(permissionUser(user))) throw new PerformanceError("Você não tem permissão para acessar Performance.", 403);
+
+  const view = normalizeDashboardView(query.view);
+  const range = await prisma.productionRecord.aggregate({ _min: { bzDay: true }, _max: { bzDay: true } });
+  const fallback = getDefaultDatePeriod();
+  const referenceDate = range._max.bzDay ?? fallback.end;
+  const period = dashboardViewPeriod(referenceDate, view);
+  const employees = (await prisma.employeeProfile.findMany({
+    where: { deletedAt: null, supervisorId: { not: null } },
+    select: {
+      id: true,
+      roleTitle: true,
+      operationalStatus: true,
+      admissionDate: true,
+      terminationDate: true,
+      terminationType: true,
+      terminationReason: true,
+      supervisorId: true,
+      supervisor: { select: { fullName: true } }
+    }
+  })).filter((employee) => isAgentJobTitle(employee.roleTitle));
+
+  const employeeIds = employees.map((employee) => employee.id);
+  const supervisorNames = new Map<string, string>();
+  const employeesBySupervisor = new Map<string, typeof employees>();
+  for (const employee of employees) {
+    if (!employee.supervisorId) continue;
+    supervisorNames.set(employee.supervisorId, employee.supervisor?.fullName?.trim() || "Sem supervisor");
+    const team = employeesBySupervisor.get(employee.supervisorId) ?? [];
+    team.push(employee);
+    employeesBySupervisor.set(employee.supervisorId, team);
+  }
+
+  if (!employeeIds.length) {
+    return emptyPerformanceSupervisorsPayload(view, period, range);
+  }
+
+  const ahtQueueIds = allPerformanceQueueIds().filter((queueId) => {
+    const metadata = getPerformanceQueueMetadataById(queueId);
+    return metadata.lob === "ADS" || (metadata.lob === "VIDEO" && metadata.slaTargetMinutes === 15);
+  });
+  const [schedules, moods, ahtRows, adsQualityRows, tnsQualityRows, cecQualityRows] = await Promise.all([
+    prisma.schedule.findMany({
+      where: { employeeId: { in: employeeIds }, date: { gte: period.start, lte: period.end }, deletedAt: null },
+      select: { employeeId: true, status: true }
+    }),
+    prisma.employeeMoodRecord.findMany({
+      where: { employeeId: { in: employeeIds }, date: { gte: period.start, lte: period.end } },
+      select: { employeeId: true, moodScore: true }
+    }),
+    ahtQueueIds.length ? prisma.$queryRaw<Array<{ supervisorId: string; submit: number; moderationSeconds: number }>>(Prisma.sql`
+      SELECT
+        e."supervisorId" AS "supervisorId",
+        COALESCE(SUM(p."submitNum"), 0)::double precision AS "submit",
+        COALESCE(SUM(p."moderationSeconds"), 0)::double precision AS "moderationSeconds"
+      FROM "ProductionRecord" p
+      INNER JOIN "EmployeeProfile" e ON e."id" = p."employeeId"
+      WHERE p."employeeId" IN (${Prisma.join(employeeIds)})
+        AND p."bzDay" >= ${period.start}
+        AND p."bzDay" <= ${period.end}
+        AND p."queueId" IN (${Prisma.join(ahtQueueIds)})
+        AND e."supervisorId" IS NOT NULL
+      GROUP BY e."supervisorId"
+    `) : Promise.resolve([]),
+    prisma.$queryRaw<Array<{ supervisorId: string; correct: number; total: number }>>(Prisma.sql`
+      SELECT
+        e."supervisorId" AS "supervisorId",
+        COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::integer AS "correct",
+        COUNT(DISTINCT q."concatKey")::integer AS "total"
+      FROM "QualityRecord" q
+      INNER JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
+      WHERE q."employeeId" IN (${Prisma.join(employeeIds)})
+        AND q."auditDate" >= ${period.start}
+        AND q."auditDate" <= ${period.end}
+        AND e."supervisorId" IS NOT NULL
+      GROUP BY e."supervisorId"
+    `),
+    prisma.$queryRaw<Array<{ supervisorId: string; correct: number; total: number }>>(Prisma.sql`
+      SELECT
+        e."supervisorId" AS "supervisorId",
+        COALESCE(SUM(GREATEST(q."sampling" - q."mislabeled" - q."leakage" - q."falsePositive", 0)), 0)::integer AS "correct",
+        COALESCE(SUM(q."sampling"), 0)::integer AS "total"
+      FROM "TnsQualityRecord" q
+      INNER JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
+      WHERE q."employeeId" IN (${Prisma.join(employeeIds)})
+        AND q."auditDate" >= ${period.start}
+        AND q."auditDate" <= ${period.end}
+        AND e."supervisorId" IS NOT NULL
+      GROUP BY e."supervisorId"
+    `),
+    prisma.$queryRaw<Array<{ supervisorId: string; correct: number; total: number }>>(Prisma.sql`
+      SELECT
+        e."supervisorId" AS "supervisorId",
+        COALESCE(SUM(q."passQuantity"), 0)::integer AS "correct",
+        COALESCE(SUM(q."passQuantity" + q."failQuantity"), 0)::integer AS "total"
+      FROM "CecQualityRecord" q
+      INNER JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
+      WHERE q."employeeId" IN (${Prisma.join(employeeIds)})
+        AND q."qualityDate" >= ${period.start}
+        AND q."qualityDate" <= ${period.end}
+        AND e."supervisorId" IS NOT NULL
+      GROUP BY e."supervisorId"
+    `)
+  ]);
+
+  const supervisorByEmployee = new Map(employees.map((employee) => [employee.id, employee.supervisorId!]));
+  const aggregates = new Map<string, {
+    planned: number;
+    absences: number;
+    moodTotal: number;
+    moodResponses: number;
+    submit: number;
+    moderationSeconds: number;
+    qualityCorrect: number;
+    qualityTotal: number;
+  }>();
+  const ensureAggregate = (supervisorId: string) => {
+    const aggregate = aggregates.get(supervisorId) ?? {
+      planned: 0,
+      absences: 0,
+      moodTotal: 0,
+      moodResponses: 0,
+      submit: 0,
+      moderationSeconds: 0,
+      qualityCorrect: 0,
+      qualityTotal: 0
+    };
+    aggregates.set(supervisorId, aggregate);
+    return aggregate;
+  };
+
+  for (const schedule of schedules) {
+    const supervisorId = supervisorByEmployee.get(schedule.employeeId);
+    if (!supervisorId) continue;
+    const aggregate = ensureAggregate(supervisorId);
+    if (isScheduledStatus(schedule.status)) aggregate.planned += 1;
+    if (isAbsenceStatus(schedule.status)) aggregate.absences += 1;
+  }
+  for (const mood of moods) {
+    const supervisorId = supervisorByEmployee.get(mood.employeeId);
+    if (!supervisorId) continue;
+    const aggregate = ensureAggregate(supervisorId);
+    aggregate.moodTotal += mood.moodScore;
+    aggregate.moodResponses += 1;
+  }
+  for (const row of ahtRows) {
+    const aggregate = ensureAggregate(row.supervisorId);
+    aggregate.submit += Number(row.submit ?? 0);
+    aggregate.moderationSeconds += Number(row.moderationSeconds ?? 0);
+  }
+  for (const rows of [adsQualityRows, tnsQualityRows, cecQualityRows]) {
+    for (const row of rows) {
+      const aggregate = ensureAggregate(row.supervisorId);
+      aggregate.qualityCorrect += Number(row.correct ?? 0);
+      aggregate.qualityTotal += Number(row.total ?? 0);
+    }
+  }
+
+  const supervisors = Array.from(employeesBySupervisor.entries()).map(([supervisorId, team]) => {
+    const aggregate = ensureAggregate(supervisorId);
+    const attrition = supervisorAttrition(team, period);
+    return {
+      supervisorId,
+      supervisor: supervisorNames.get(supervisorId) ?? "Sem supervisor",
+      teamSize: team.filter((employee) => supervisorEmployeeActiveAt(employee, period.end, "end")).length,
+      planned: aggregate.planned,
+      absences: aggregate.absences,
+      absRate: calculateAbsenceRate(aggregate.planned, aggregate.absences),
+      terminations: attrition.terminations,
+      hcAverage: attrition.hcAverage,
+      attritionRate: attrition.rate,
+      moodAverage: aggregate.moodResponses > 0 ? round2(aggregate.moodTotal / aggregate.moodResponses) : 0,
+      moodResponses: aggregate.moodResponses,
+      submit: Math.round(aggregate.submit),
+      moderationSeconds: round2(aggregate.moderationSeconds),
+      ahtSeconds: aggregate.submit > 0 ? round2(aggregate.moderationSeconds / aggregate.submit) : 0,
+      qualityCorrect: aggregate.qualityCorrect,
+      qualityTotal: aggregate.qualityTotal,
+      quality: aggregate.qualityTotal > 0 ? round2((aggregate.qualityCorrect / aggregate.qualityTotal) * 100) : 0
+    };
+  }).sort((a, b) => a.supervisor.localeCompare(b.supervisor, "pt-BR"));
+
+  const summary = supervisors.reduce((total, row) => ({
+    supervisors: total.supervisors + 1,
+    teamSize: total.teamSize + row.teamSize,
+    planned: total.planned + row.planned,
+    absences: total.absences + row.absences,
+    terminations: total.terminations + row.terminations,
+    hcAverage: total.hcAverage + row.hcAverage,
+    moodWeighted: total.moodWeighted + row.moodAverage * row.moodResponses,
+    moodResponses: total.moodResponses + row.moodResponses,
+    submit: total.submit + row.submit,
+    moderationSeconds: total.moderationSeconds + row.moderationSeconds,
+    qualityCorrect: total.qualityCorrect + row.qualityCorrect,
+    qualityTotal: total.qualityTotal + row.qualityTotal
+  }), {
+    supervisors: 0,
+    teamSize: 0,
+    planned: 0,
+    absences: 0,
+    terminations: 0,
+    hcAverage: 0,
+    moodWeighted: 0,
+    moodResponses: 0,
+    submit: 0,
+    moderationSeconds: 0,
+    qualityCorrect: 0,
+    qualityTotal: 0
+  });
+
+  return {
+    mode: "supervisors" as const,
+    view,
+    period: periodPayload(period),
+    dataRange: range._min.bzDay && range._max.bzDay
+      ? { startDate: formatDateKey(range._min.bzDay), endDate: formatDateKey(range._max.bzDay) }
+      : null,
+    summary: {
+      supervisors: summary.supervisors,
+      teamSize: summary.teamSize,
+      planned: summary.planned,
+      absences: summary.absences,
+      absRate: calculateAbsenceRate(summary.planned, summary.absences),
+      terminations: summary.terminations,
+      hcAverage: round2(summary.hcAverage),
+      attritionRate: summary.hcAverage > 0 ? round2((summary.terminations / summary.hcAverage) * 100) : 0,
+      moodAverage: summary.moodResponses > 0 ? round2(summary.moodWeighted / summary.moodResponses) : 0,
+      moodResponses: summary.moodResponses,
+      submit: summary.submit,
+      moderationSeconds: round2(summary.moderationSeconds),
+      ahtSeconds: summary.submit > 0 ? round2(summary.moderationSeconds / summary.submit) : 0,
+      qualityCorrect: summary.qualityCorrect,
+      qualityTotal: summary.qualityTotal,
+      quality: summary.qualityTotal > 0 ? round2((summary.qualityCorrect / summary.qualityTotal) * 100) : 0
+    },
+    supervisors
+  };
+}
+
+function emptyPerformanceSupervisorsPayload(
+  view: "monthly" | "weekly" | "daily",
+  period: Period,
+  range: { _min: { bzDay: Date | null }; _max: { bzDay: Date | null } }
+) {
+  return {
+    mode: "supervisors" as const,
+    view,
+    period: periodPayload(period),
+    dataRange: range._min.bzDay && range._max.bzDay
+      ? { startDate: formatDateKey(range._min.bzDay), endDate: formatDateKey(range._max.bzDay) }
+      : null,
+    summary: {
+      supervisors: 0,
+      teamSize: 0,
+      planned: 0,
+      absences: 0,
+      absRate: 0,
+      terminations: 0,
+      hcAverage: 0,
+      attritionRate: 0,
+      moodAverage: 0,
+      moodResponses: 0,
+      submit: 0,
+      moderationSeconds: 0,
+      ahtSeconds: 0,
+      qualityCorrect: 0,
+      qualityTotal: 0,
+      quality: 0
+    },
+    supervisors: []
+  };
+}
+
+function supervisorAttrition(
+  employees: Array<{
+    operationalStatus: string;
+    admissionDate: Date;
+    terminationDate: Date | null;
+    terminationType: string | null;
+    terminationReason: string | null;
+  }>,
+  period: Period
+) {
+  const eligible = employees.filter((employee) => supervisorAttritionEligible(employee.operationalStatus));
+  const hcStart = eligible.filter((employee) => supervisorEmployeeActiveAt(employee, period.start, "start")).length;
+  const hcEnd = eligible.filter((employee) => supervisorEmployeeActiveAt(employee, period.end, "end")).length;
+  const terminations = eligible.filter((employee) => {
+    if (!employee.terminationDate || !isOperationallyTerminated(employee.operationalStatus)) return false;
+    if (isTrainingTermination(employee)) return false;
+    return employee.terminationDate >= period.start && employee.terminationDate <= period.end;
+  }).length;
+  const hcAverage = round2((hcStart + hcEnd) / 2);
+  return { terminations, hcAverage, rate: hcAverage > 0 ? round2((terminations / hcAverage) * 100) : 0 };
+}
+
+function supervisorAttritionEligible(status: string) {
+  const token = normalizeTextToken(status);
+  return ["active", "ativo", "ativa", "desligado", "desligada", "terminated"].includes(token);
+}
+
+function supervisorEmployeeActiveAt(
+  employee: { operationalStatus: string; admissionDate: Date; terminationDate: Date | null },
+  boundary: Date,
+  boundaryType: "start" | "end"
+) {
+  if (!supervisorAttritionEligible(employee.operationalStatus)) return false;
+  if (isOperationallyTerminated(employee.operationalStatus) && !employee.terminationDate) return false;
+  if (employee.admissionDate > boundary) return false;
+  return boundaryType === "start"
+    ? !employee.terminationDate || employee.terminationDate >= boundary
+    : !employee.terminationDate || employee.terminationDate > boundary;
+}
+
+function isTrainingTermination(employee: { terminationType: string | null; terminationReason: string | null }) {
+  const token = `${normalizeTextToken(employee.terminationType ?? "")} ${normalizeTextToken(employee.terminationReason ?? "")}`;
+  return token.includes("treinamento") || token.includes("training");
 }
 
 function emptyPerformanceAgentsPayload(
@@ -850,15 +1201,17 @@ function emptyPerformanceAgentsPayload(
     lobs: string[];
     supervisors: Array<{ id: string; fullName: string }>;
     shifts: Array<{ id: string; name: string }>;
-  }
+  },
+  view: "monthly" | "weekly" | "daily"
 ) {
   return {
     mode: "agents" as const,
+    view,
     period: periodPayload({ start, end }),
     dataRange,
     selectedLob: "",
     filters,
-    summary: { agents: 0, submit: 0, moderationSeconds: 0, ahtSeconds: 0 },
+    summary: { agents: 0, submit: 0, outputAveragePerDay: 0, daysWithData: 0, moderationSeconds: 0, ahtSeconds: 0 },
     pagination: { page: 1, pageSize: 50, totalRows: 0, totalPages: 1 },
     sort: { sortBy: "submit" as const, sortDirection: "desc" as const },
     agents: []
@@ -870,20 +1223,20 @@ function uniqueBy<T>(items: T[], key: (item: T) => string) {
 }
 
 function comparePerformanceAgentRows(
-  a: { employeeName: string; wbLogin: string; lob: string; supervisor: string; shift: string; submit: number; moderationSeconds: number },
-  b: { employeeName: string; wbLogin: string; lob: string; supervisor: string; shift: string; submit: number; moderationSeconds: number },
+  a: { employeeName: string; wbLogin: string; lob: string; supervisor: string; shift: string; submit: number; outputAveragePerDay: number; moderationSeconds: number },
+  b: { employeeName: string; wbLogin: string; lob: string; supervisor: string; shift: string; submit: number; outputAveragePerDay: number; moderationSeconds: number },
   sortBy: NonNullable<PerformanceAgentsQuery["sortBy"]>,
   direction: "asc" | "desc"
 ) {
   const aValue = sortBy === "aht"
     ? (a.submit > 0 ? a.moderationSeconds / a.submit : -1)
     : sortBy === "submit"
-      ? a.submit
+      ? a.outputAveragePerDay
       : a[sortBy];
   const bValue = sortBy === "aht"
     ? (b.submit > 0 ? b.moderationSeconds / b.submit : -1)
     : sortBy === "submit"
-      ? b.submit
+      ? b.outputAveragePerDay
       : b[sortBy];
   const result = typeof aValue === "number" && typeof bValue === "number"
     ? aValue - bValue
@@ -3513,6 +3866,17 @@ function datesInRange(start: Date, end: Date) {
   const dates: Date[] = [];
   for (let cursor = start; cursor <= end; cursor = addDays(cursor, 1)) dates.push(cursor);
   return dates;
+}
+
+function normalizeDashboardView(value?: string | null): "monthly" | "weekly" | "daily" {
+  return value === "monthly" || value === "weekly" ? value : "daily";
+}
+
+function dashboardViewPeriod(referenceDate: Date, view: "monthly" | "weekly" | "daily"): Period {
+  const end = utcDate(referenceDate.getUTCFullYear(), referenceDate.getUTCMonth() + 1, referenceDate.getUTCDate());
+  if (view === "monthly") return { start: utcDate(end.getUTCFullYear(), end.getUTCMonth() + 1, 1), end };
+  if (view === "weekly") return { start: startOfWeekMonday(end), end };
+  return { start: end, end };
 }
 
 function startOfWeekMonday(date: Date) {

@@ -13,6 +13,7 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const query: PerformanceAgentsQuery = {
+      view: readView(url.searchParams.get("view")),
       startDate: url.searchParams.get("startDate") ?? undefined,
       endDate: url.searchParams.get("endDate") ?? undefined,
       lob: url.searchParams.get("lob") ?? undefined,
@@ -37,6 +38,10 @@ export async function GET(request: Request) {
       message: "Não foi possível carregar os dados dos agentes."
     }, { status: 500 });
   }
+}
+
+function readView(value: string | null): PerformanceAgentsQuery["view"] {
+  return value === "monthly" || value === "weekly" || value === "daily" ? value : undefined;
 }
 
 function readSortBy(value: string | null): PerformanceAgentsQuery["sortBy"] {
