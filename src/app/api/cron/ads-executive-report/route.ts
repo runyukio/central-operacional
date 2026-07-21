@@ -29,6 +29,7 @@ async function handleRequest(request: Request) {
     return Response.json({ success: true, ...result });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Falha ao enviar o report Executivo ADS.";
+    console.error("[ads-executive-report]", sanitizeLogMessage(message));
     return Response.json({ success: false, error: message }, { status: 502 });
   }
 }
@@ -37,4 +38,11 @@ function safeEqual(left: string, right: string) {
   const leftBuffer = Buffer.from(left);
   const rightBuffer = Buffer.from(right);
   return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function sanitizeLogMessage(value: string) {
+  return value
+    .replace(/https?:\/\/\S+/gi, "[url]")
+    .replace(/([?&](?:key|token|secret)=)[^&\s]+/gi, "$1[redacted]")
+    .slice(0, 500);
 }
