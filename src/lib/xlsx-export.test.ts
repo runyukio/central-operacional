@@ -3,7 +3,7 @@ import test from "node:test";
 
 import * as XLSX from "xlsx";
 
-import { buildXlsxBuffer, xlsxDurationFormat } from "./xlsx-export";
+import { buildXlsxBuffer, xlsxDateTimeInTimeZone, xlsxDurationFormat } from "./xlsx-export";
 
 test("exporta datas e duracoes como celulas tipadas do Excel", () => {
   const buffer = buildXlsxBuffer({
@@ -36,4 +36,33 @@ test("exporta datas e duracoes como celulas tipadas do Excel", () => {
   assert.equal(worksheet.C3.v, 0);
   assert.equal(XLSX.SSF.format(worksheet.C3.z!, worksheet.C3.v), "00:00:00");
   assert.deepEqual(worksheet["!autofilter"], { ref: "A1:C3" });
+});
+
+test("exporta entrada e saida com o relogio de Sao Paulo sem alterar duracoes", () => {
+  const dateTimeFormat = "dd/mm/yyyy hh:mm:ss";
+  const entry = xlsxDateTimeInTimeZone("2026-07-20T11:15:30.999Z", "America/Sao_Paulo");
+  const exit = xlsxDateTimeInTimeZone("2026-07-20T20:42:05.000Z", "America/Sao_Paulo");
+  assert.notEqual(entry, null);
+  assert.notEqual(exit, null);
+
+  const buffer = buildXlsxBuffer({
+    sheetName: "Captura de Horas",
+    headers: ["Entrada registrada", "Saida registrada", "Duracao", "Tempo de atraso"],
+    rows: [[entry, exit, 7.5 / 24, 15 / (24 * 60)]],
+    columnFormats: {
+      0: dateTimeFormat,
+      1: dateTimeFormat,
+      2: xlsxDurationFormat,
+      3: xlsxDurationFormat
+    }
+  });
+  const workbook = XLSX.read(buffer, { type: "buffer", cellDates: false, cellNF: true });
+  const worksheet = workbook.Sheets["Captura de Horas"];
+
+  assert.equal(XLSX.SSF.format(worksheet.A2.z!, worksheet.A2.v), "20/07/2026 08:15:30");
+  assert.equal(XLSX.SSF.format(worksheet.B2.z!, worksheet.B2.v), "20/07/2026 17:42:05");
+  assert.equal(worksheet.C2.v, 7.5 / 24);
+  assert.equal(worksheet.C2.z, xlsxDurationFormat);
+  assert.equal(worksheet.D2.v, 15 / (24 * 60));
+  assert.equal(worksheet.D2.z, xlsxDurationFormat);
 });

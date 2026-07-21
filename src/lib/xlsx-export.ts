@@ -23,6 +23,36 @@ export type XlsxExportPayload = {
 export const xlsxContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 export const xlsxDurationFormat = "[h]:mm:ss;-[h]:mm:ss;00:00:00";
 
+const millisecondsPerDay = 24 * 60 * 60 * 1000;
+const excelEpochOffsetDays = 25_569;
+
+export function xlsxDateTimeInTimeZone(value: Date | string | number, timeZone: string) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date);
+  const local = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const wallClockMilliseconds = Date.UTC(
+    Number(local.year),
+    Number(local.month) - 1,
+    Number(local.day),
+    Number(local.hour),
+    Number(local.minute),
+    Number(local.second)
+  );
+
+  return wallClockMilliseconds / millisecondsPerDay + excelEpochOffsetDays;
+}
+
 export function dateStamp(date = new Date()) {
   return date.toISOString().slice(0, 10);
 }

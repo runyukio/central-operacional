@@ -11,11 +11,12 @@ import {
   realtimeHoursScheduleStatusLabel,
   realtimeHoursShiftDateActivity
 } from "@/lib/realtime-hours-timeline";
-import { buildXlsxResponse, xlsxDurationFormat } from "@/lib/xlsx-export";
+import { buildXlsxResponse, xlsxDateTimeInTimeZone, xlsxDurationFormat } from "@/lib/xlsx-export";
 
 export const dynamic = "force-dynamic";
 
 const millisecondsPerDay = 24 * 60 * 60 * 1000;
+const saoPauloTimeZone = "America/Sao_Paulo";
 
 export async function GET(request: Request) {
   const actor = await getApiActor();
@@ -92,8 +93,8 @@ export async function GET(request: Request) {
         realtimeHoursPlannedShiftLabel(row, date),
         plannedShift ? new Date(plannedShift.start) : null,
         plannedShift ? new Date(plannedShift.end) : null,
-        shiftActivity.firstActiveAt !== null ? new Date(shiftActivity.firstActiveAt) : null,
-        shiftActivity.lastActiveAt !== null ? new Date(shiftActivity.lastActiveAt) : null,
+        shiftActivity.firstActiveAt !== null ? xlsxDateTimeInTimeZone(shiftActivity.firstActiveAt, saoPauloTimeZone) : null,
+        shiftActivity.lastActiveAt !== null ? xlsxDateTimeInTimeZone(shiftActivity.lastActiveAt, saoPauloTimeZone) : null,
         durationForExcel(shiftActivity.activeMs),
         durationForExcel(shiftActivity.noActivityMs),
         durationForExcel(comparison.arrivalDelayMs),
@@ -153,7 +154,7 @@ function validDate(value: string | null) {
 
 function todayInSaoPaulo() {
   return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Sao_Paulo",
+    timeZone: saoPauloTimeZone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit"
