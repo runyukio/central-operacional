@@ -507,7 +507,7 @@ export async function refreshAdsStaffCoverageFromForecast(actor: Actor, startDat
     const user = await getUser(actor);
     if (!user) return { error: "Usuário não encontrado ou inativo.", message: "Usuário não encontrado ou inativo.", status: 403 };
     if (!canAutoUpdateAdsRequirement(permissionUser(user))) {
-      return { error: "Apenas ADMIN pode atualizar automaticamente a necessidade ADS.", message: "Apenas ADMIN pode atualizar automaticamente a necessidade ADS.", status: 403 };
+      return { error: "Apenas ADMIN ou WFM podem atualizar automaticamente a necessidade ADS.", message: "Apenas ADMIN ou WFM podem atualizar automaticamente a necessidade ADS.", status: 403 };
     }
 
     const startDate = parseDate(startDateRaw ?? "");

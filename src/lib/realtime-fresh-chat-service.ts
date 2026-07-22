@@ -40,20 +40,59 @@ function isNewStatus(status: string) {
   return ["new", "novo", "nova"].includes(status);
 }
 
-function getRowStatus(row: FreshChatRowInput) {
-  if (typeof row === "string" || typeof row === "number" || typeof row === "boolean") return row;
-  if (!row) return "";
+function isFreshChatBacklogStatus(value: unknown) {
+  const status = normalizeFreshChatStatus(value);
+  return isAssignedStatus(status) || isNewStatus(status);
+}
+
+function tokenizeFreshChatText(value: unknown) {
+  return String(value ?? "")
+    .split(/\r?\n|[,;\t|]/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function extractStatusCandidatesFromText(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return [];
+
+  const tokens = tokenizeFreshChatText(raw);
+  const exactMatches = tokens.filter(isFreshChatBacklogStatus);
+  if (exactMatches.length) return exactMatches;
+
+  const normalized = normalizeFreshChatStatus(raw);
+  if (isFreshChatBacklogStatus(normalized)) return [raw];
+  return [];
+}
+
+function getRowStatuses(row: FreshChatRowInput): unknown[] {
+  if (typeof row === "string" || typeof row === "number" || typeof row === "boolean") {
+    return extractStatusCandidatesFromText(row);
+  }
+  if (!row) return [];
 
   if (Array.isArray(row)) {
-    const values = row.filter((value) => value !== undefined && value !== null && String(value).trim());
-    return values.length === 1 ? values[0] : "";
+    return row.flatMap((value) => extractStatusCandidatesFromText(value));
   }
 
-  const explicitStatus = row.status ?? row.Status ?? row.STATUS;
-  if (explicitStatus !== undefined && explicitStatus !== null && String(explicitStatus).trim()) return explicitStatus;
+  const explicitStatusKeys = [
+    "status",
+    "Status",
+    "STATUS",
+    "ticket_status",
+    "ticketStatus",
+    "Ticket Status",
+    "Ticket status",
+    "STATUS - NEW & OPEN&On-Hold"
+  ];
+  const explicitStatuses = explicitStatusKeys.flatMap((key) => extractStatusCandidatesFromText(row[key]));
+  if (explicitStatuses.length) return explicitStatuses;
 
-  const values = Object.values(row).filter((value) => value !== undefined && value !== null && String(value).trim());
-  return values.length === 1 ? values[0] : "";
+  return Object.values(row).flatMap((value) => {
+    if (Array.isArray(value)) return value.flatMap((item) => extractStatusCandidatesFromText(item));
+    if (value && typeof value === "object") return Object.values(value as Record<string, unknown>).flatMap((item) => extractStatusCandidatesFromText(item));
+    return extractStatusCandidatesFromText(value);
+  });
 }
 
 function extractRawTextStatuses(rawText?: string) {
@@ -61,10 +100,7 @@ function extractRawTextStatuses(rawText?: string) {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .map((line) => {
-      const cells = line.split(/[,;\t]/).map((cell) => cell.trim()).filter(Boolean);
-      return cells.length === 1 ? cells[0] : line;
-    })
+    .flatMap((line) => extractStatusCandidatesFromText(line))
     .filter((status) => {
       const normalized = normalizeFreshChatStatus(status);
       return normalized !== "status" && normalized !== "ticket status";
@@ -83,8 +119,8 @@ function summarizeStatuses(statuses: unknown[]) {
   );
 }
 
-function countFreshChatBacklog(rows: FreshChatRowInput[], rawText?: string) {
-  const rowSummary = summarizeStatuses(rows.map(getRowStatus));
+export function countFreshChatBacklog(rows: FreshChatRowInput[], rawText?: string) {
+  const rowSummary = summarizeStatuses(rows.flatMap(getRowStatuses));
   if (rowSummary.assignedCount + rowSummary.newCount > 0 || !String(rawText ?? "").trim()) return rowSummary;
   return summarizeStatuses(extractRawTextStatuses(rawText));
 }
@@ -176,34 +212,33 @@ export async function importRealtimeFreshChatSnapshot(input: RealtimeFreshChatIm
 
 export async function getRealtimeFreshChatSnapshot(cycleDownload?: string) {
   const requestedCycle = String(cycleDownload ?? "").trim();
-  const snapshot = requestedCycle
-    ? await prisma.realTimeFreshChatSnapshot.findFirst({
-        where: { cycleDownload: requestedCycle },
-        orderBy: { importedAt: "desc" }
-      })
-    : await prisma.realTimeFreshChatSnapshot.findFirst({
-        where: { importedAt: { gte: freshChatRetentionCutoff() } },
-        orderBy: { importedAt: "desc" }
-      });
+  const latestSnapshot = await prisma.realTimeFreshChatSnapshot.findFirst({
+    where: { importedAt: { gte: freshChatRetentionCutoff() } },
+    orderBy: { importedAt: "desc" }
+  });
 
-  const fallback = snapshot ?? (requestedCycle
-    ? await prisma.realTimeFreshChatSnapshot.findFirst({
-        where: { importedAt: { gte: freshChatRetentionCutoff() } },
-        orderBy: { importedAt: "desc" }
-      })
-    : null);
+  const requestedSnapshot = requestedCycle
+      ? await prisma.realTimeFreshChatSnapshot.findFirst({
+          where: { cycleDownload: requestedCycle },
+          orderBy: { importedAt: "desc" }
+        })
+    : null;
 
-  if (!fallback) return null;
+  const snapshot = [requestedSnapshot, latestSnapshot]
+    .filter((item): item is NonNullable<typeof latestSnapshot> => Boolean(item))
+    .sort((a, b) => b.importedAt.getTime() - a.importedAt.getTime())[0];
+
+  if (!snapshot) return null;
 
   return {
-    cycleDownload: fallback.cycleDownload,
-    source: fallback.source,
-    fileName: fallback.fileName,
-    generatedDate: fallback.generatedDate,
-    assignedCount: fallback.assignedCount,
-    newCount: fallback.newCount,
-    totalBacklog: fallback.totalBacklog,
-    rowsTotal: fallback.rowsTotal,
-    importedAt: fallback.importedAt.toISOString()
+    cycleDownload: snapshot.cycleDownload,
+    source: snapshot.source,
+    fileName: snapshot.fileName,
+    generatedDate: snapshot.generatedDate,
+    assignedCount: snapshot.assignedCount,
+    newCount: snapshot.newCount,
+    totalBacklog: snapshot.totalBacklog,
+    rowsTotal: snapshot.rowsTotal,
+    importedAt: snapshot.importedAt.toISOString()
   };
 }

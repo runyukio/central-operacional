@@ -65,9 +65,10 @@ test("somente ADMIN altera Billing, Financeiro, Adiantamento e roles", () => {
   }
 });
 
-test("somente ADMIN atualiza automaticamente a necessidade ADS", () => {
+test("ADMIN e WFM atualizam automaticamente a necessidade ADS", () => {
   assert.equal(canAutoUpdateAdsRequirement({ role: "ADMIN", status: "ACTIVE" }), true);
-  for (const role of ["GESTOR", "WFM", "RTA", "POC", "CLIENT", "COLABORADOR"]) {
+  assert.equal(canAutoUpdateAdsRequirement({ role: "WFM", status: "ACTIVE" }), true);
+  for (const role of ["GESTOR", "RTA", "POC", "CLIENT", "COLABORADOR"]) {
     assert.equal(canAutoUpdateAdsRequirement({ role, status: "ACTIVE" }), false, role);
   }
 });
