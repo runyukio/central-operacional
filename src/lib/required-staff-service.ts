@@ -3,7 +3,7 @@ import { type ScheduleStatus, Prisma } from "@prisma/client";
 import { createPermissionError } from "@/lib/api-errors";
 import type { Actor } from "@/lib/mock-db";
 import { recordErrorLog } from "@/lib/mock-db";
-import { normalizeComparableJobTitle } from "@/lib/job-title-normalization";
+import { isQualityJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
 import { canAccessStaffCoverage } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { shiftCategoryName, shiftLookupKey } from "@/lib/shift-display";
@@ -168,6 +168,7 @@ async function listStaffSchedules(period: { startDate: Date; endDate: Date }, qu
 }
 
 function scheduleMatchesStaffCoverage(schedule: StaffSchedule, query: RequiredStaffQuery) {
+  if (isQualityJobTitle(schedule.employee.roleTitle)) return false;
   const role = classifyStaffBySkill(schedule.employee.skill);
   const lob = canonicalLob(schedule.coverageLobName);
   if (!role) return false;

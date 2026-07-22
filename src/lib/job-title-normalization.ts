@@ -13,6 +13,13 @@ const supervisorJobTitleAliases = new Set([
   "administrador",
   "administradora"
 ]);
+const qualityJobTitleAliases = new Set([
+  "qualidade",
+  "quality",
+  "quality analyst",
+  "analista de qualidade",
+  "qa"
+]);
 
 export function normalizeJobTitle(value: unknown) {
   const raw = String(value ?? "").trim().replace(/\s+/g, " ");
@@ -27,6 +34,10 @@ export function isAgentJobTitle(value: unknown) {
 
 export function canBeSupervisorJobTitle(value: unknown) {
   return supervisorJobTitleAliases.has(normalizeComparableJobTitle(value));
+}
+
+export function isQualityJobTitle(value: unknown) {
+  return qualityJobTitleAliases.has(normalizeComparableJobTitle(value));
 }
 
 export function normalizeComparableJobTitle(value: unknown) {
