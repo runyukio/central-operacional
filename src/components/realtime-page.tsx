@@ -2247,7 +2247,7 @@ function ReportHeadcountCompactCard({ card }: { card: OnlineHeadcountGaugeData }
           {progress === null ? "No schedule" : `${Math.round(progress)}%`}
         </span>
       </div>
-      <div className={cn("mt-3 grid gap-2 border-t border-slate-200/70 pt-3 text-center", hasFreshChat ? "grid-cols-4" : "grid-cols-3")}>
+      <div className="mt-3 grid grid-cols-3 gap-2 border-t border-slate-200/70 pt-3 text-center">
         <div>
           <p className="text-[10px] font-black uppercase tracking-wide text-muted">Online</p>
           <p className="mt-1 text-lg font-black text-navy-950">{card.online}</p>
@@ -2256,19 +2256,21 @@ function ReportHeadcountCompactCard({ card }: { card: OnlineHeadcountGaugeData }
           <p className="text-[10px] font-black uppercase tracking-wide text-muted">Planned</p>
           <p className="mt-1 text-lg font-black text-navy-950">{card.scheduled}</p>
         </div>
-        <div>
-          <p className="text-[10px] font-black uppercase tracking-wide text-muted">Gap</p>
-          <p className={cn("mt-1 text-lg font-black", card.missing > 0 ? "text-red-600" : "text-emerald-700")}>{card.missing}</p>
-        </div>
-        {hasFreshChat ? (
+        <div className={cn(hasFreshChat ? "flex items-start justify-center gap-2" : "")}>
           <div>
-            <p className="text-[10px] font-black uppercase tracking-wide text-muted">Fresh Chat</p>
-            <p className="mt-1 text-lg font-black text-blue-700">{card.freshChatBacklog?.totalBacklog ?? 0}</p>
-            <p className="mt-0.5 text-[10px] font-bold text-muted">
-              A {card.freshChatBacklog?.assignedCount ?? 0} · N {card.freshChatBacklog?.newCount ?? 0}
-            </p>
+            <p className="text-[10px] font-black uppercase tracking-wide text-muted">Gap</p>
+            <p className={cn("mt-1 text-lg font-black", card.missing > 0 ? "text-red-600" : "text-emerald-700")}>{card.missing}</p>
           </div>
-        ) : null}
+          {hasFreshChat ? (
+            <div className="min-w-[86px] rounded-xl border border-blue-100 bg-white px-2 py-1.5 shadow-[0_8px_18px_rgba(37,99,235,0.06)]">
+              <p className="text-[9px] font-black uppercase tracking-wide text-muted">Fresh Chat</p>
+              <p className="mt-0.5 text-lg font-black leading-none text-blue-700">{card.freshChatBacklog?.totalBacklog ?? 0}</p>
+              <p className="mt-1 text-[9px] font-bold leading-none text-muted">
+                A {card.freshChatBacklog?.assignedCount ?? 0} · N {card.freshChatBacklog?.newCount ?? 0}
+              </p>
+            </div>
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -3161,15 +3163,21 @@ function drawCanvasHeadcountStrip(ctx: CanvasRenderingContext2D, card: OnlineHea
     { label: "Planned", value: String(card.scheduled), color: "#0F172A" },
     { label: "Gap", value: String(card.missing), color: card.missing > 0 ? "#DC2626" : "#047857" }
   ];
-  if (typeof card.freshChatBacklog?.totalBacklog === "number") {
-    columns.push({ label: "Fresh Chat", value: String(card.freshChatBacklog.totalBacklog), color: "#1D4ED8" });
-  }
   const colWidth = (width - 36) / columns.length;
   columns.forEach((column, index) => {
     const colX = x + 18 + index * colWidth;
     drawText(ctx, column.label.toUpperCase(), colX, y + height - 36, 10, "#64748B", "900");
     drawText(ctx, column.value, colX, y + height - 14, 16, column.color, "900");
   });
+  if (typeof card.freshChatBacklog?.totalBacklog === "number") {
+    const boxW = 92;
+    const boxH = 40;
+    const boxX = x + width - boxW - 18;
+    const boxY = y + height - boxH - 10;
+    roundRect(ctx, boxX, boxY, boxW, boxH, 12, "#FFFFFF", "#DBEAFE");
+    drawText(ctx, "FRESH CHAT", boxX + 10, boxY + 15, 8, "#64748B", "900");
+    drawText(ctx, String(card.freshChatBacklog.totalBacklog), boxX + 10, boxY + 33, 15, "#1D4ED8", "900");
+  }
 }
 
 function drawCanvasTextPill(ctx: CanvasRenderingContext2D, value: string, x: number, y: number, width: number, background: string, color: string) {
