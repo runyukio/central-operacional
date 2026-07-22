@@ -728,7 +728,11 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
       }
     }
     void loadFreshChatBacklog();
-    return () => controller.abort();
+    const interval = window.setInterval(() => void loadFreshChatBacklog(), 5 * 60 * 1000);
+    return () => {
+      controller.abort();
+      window.clearInterval(interval);
+    };
   }, [effectiveTab, reportLob, selectedCycleValue]);
 
   function downloadReportSummary() {
