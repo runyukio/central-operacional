@@ -4,12 +4,7 @@ import { prisma } from "@/lib/prisma";
 
 const freshChatRetentionDays = Number.parseInt(process.env.REALTIME_RETENTION_DAYS ?? "3", 10) || 3;
 
-type FreshChatRowInput = {
-  status?: unknown;
-  Status?: unknown;
-  STATUS?: unknown;
-  [key: string]: unknown;
-};
+type FreshChatRowInput = Record<string, unknown> | string | number | boolean | null | unknown[];
 
 export type RealtimeFreshChatImportInput = {
   cycleDownload: string;
@@ -27,6 +22,9 @@ function freshChatRetentionCutoff() {
 
 function normalizeFreshChatStatus(value: unknown) {
   return String(value ?? "")
+    .replace(/^\uFEFF/, "")
+    .trim()
+    .replace(/^["']+|["']+$/g, "")
     .trim()
     .toLowerCase()
     .normalize("NFD")
@@ -43,7 +41,15 @@ function isNewStatus(status: string) {
 }
 
 function getRowStatus(row: FreshChatRowInput) {
-  const explicitStatus = row.status ?? row.Status ?? row.STATUS ?? row["Status"] ?? row["status"];
+  if (typeof row === "string" || typeof row === "number" || typeof row === "boolean") return row;
+  if (!row) return "";
+
+  if (Array.isArray(row)) {
+    const values = row.filter((value) => value !== undefined && value !== null && String(value).trim());
+    return values.length === 1 ? values[0] : "";
+  }
+
+  const explicitStatus = row.status ?? row.Status ?? row.STATUS;
   if (explicitStatus !== undefined && explicitStatus !== null && String(explicitStatus).trim()) return explicitStatus;
 
   const values = Object.values(row).filter((value) => value !== undefined && value !== null && String(value).trim());
@@ -65,23 +71,22 @@ function extractRawTextStatuses(rawText?: string) {
     });
 }
 
-function countFreshChatBacklog(rows: FreshChatRowInput[], rawText?: string) {
-  const rowSummary = rows.reduce<{ assignedCount: number; newCount: number }>(
-    (summary, row) => {
-      const status = normalizeFreshChatStatus(getRowStatus(row));
+function summarizeStatuses(statuses: unknown[]) {
+  return statuses.reduce<{ assignedCount: number; newCount: number }>(
+    (summary, rawStatus) => {
+      const status = normalizeFreshChatStatus(rawStatus);
       if (isAssignedStatus(status)) summary.assignedCount += 1;
       if (isNewStatus(status)) summary.newCount += 1;
       return summary;
     },
     { assignedCount: 0, newCount: 0 }
   );
+}
 
-  return extractRawTextStatuses(rawText).reduce((summary, rawStatus) => {
-    const status = normalizeFreshChatStatus(rawStatus);
-    if (isAssignedStatus(status)) summary.assignedCount += 1;
-    if (isNewStatus(status)) summary.newCount += 1;
-    return summary;
-  }, rowSummary);
+function countFreshChatBacklog(rows: FreshChatRowInput[], rawText?: string) {
+  const rowSummary = summarizeStatuses(rows.map(getRowStatus));
+  if (rowSummary.assignedCount + rowSummary.newCount > 0 || !String(rawText ?? "").trim()) return rowSummary;
+  return summarizeStatuses(extractRawTextStatuses(rawText));
 }
 
 async function pruneFreshChatHistory(currentId?: string) {
@@ -106,6 +111,15 @@ export async function importRealtimeFreshChatSnapshot(input: RealtimeFreshChatIm
   const source = String(input.source ?? "fresh-chat").trim() || "fresh-chat";
   const { assignedCount, newCount } = countFreshChatBacklog(rows, input.rawText);
   const totalBacklog = assignedCount + newCount;
+  console.info("[realtime/fresh-chat] snapshot processado", {
+    cycleDownload,
+    rowsTotal: rows.length,
+    firstRowType: Array.isArray(rows[0]) ? "array" : typeof rows[0],
+    rawTextLength: String(input.rawText ?? "").length,
+    assignedCount,
+    newCount,
+    totalBacklog
+  });
   const rawData = {
     source,
     fileName,
