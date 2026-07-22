@@ -205,6 +205,10 @@ type PerformanceSupervisorRow = {
   submit: number;
   moderationSeconds: number;
   ahtSeconds: number;
+  ahtMetric?: "AHT" | "CPD";
+  cpdAverage?: number;
+  cpdTickets?: number;
+  cpdDays?: number;
   qualityCorrect: number;
   qualityTotal: number;
   quality: number;
@@ -1212,7 +1216,14 @@ function SupervisorsView({
                       <td className="px-3 py-3 text-right"><SupervisorMetric value={formatQualityPercent(row.absRate)} detail={`${formatNumber(row.absences)} / ${formatNumber(row.planned)}`} /></td>
                       <td className="px-3 py-3 text-right"><SupervisorMetric value={formatQualityPercent(row.attritionRate)} detail={`${formatNumber(row.terminations)} deslig.`} /></td>
                       <td className="px-3 py-3 text-right"><SupervisorMetric value={formatMoodScore(row.moodAverage)} detail={`${formatNumber(row.moodResponses)} resp.`} /></td>
-                      <td className="px-3 py-3 text-right"><SupervisorMetric value={formatSeconds(row.ahtSeconds)} detail={`${formatNumber(row.submit)} output`} /></td>
+                      <td className="px-3 py-3 text-right">
+                        <SupervisorMetric
+                          value={row.ahtMetric === "CPD" ? formatNumber(row.cpdAverage ?? 0) : formatSeconds(row.ahtSeconds)}
+                          detail={row.ahtMetric === "CPD"
+                            ? `${formatNumber(row.cpdTickets ?? 0)} tickets / ${formatNumber(row.cpdDays ?? 0)} dia(s)`
+                            : `${formatNumber(row.submit)} output`}
+                        />
+                      </td>
                       <td className="px-4 py-3 text-right"><SupervisorMetric value={formatQualityPercent(row.quality)} detail={`${formatNumber(row.qualityTotal)} casos`} /></td>
                     </tr>
                   ))}
@@ -2407,7 +2418,7 @@ function parseTrendHour(value: string) {
 }
 
 function normalizeLobs(lobs: string[]) {
-  const preferred = ["ADS", "VIDEO", "COMMENTS", "N/A"];
+  const preferred = ["ADS", "VIDEO", "COMMENTS", "CEC", "N/A"];
   const set = new Set(lobs.map((lob) => String(lob).trim().toUpperCase()).filter(Boolean));
   return preferred.filter((lob) => set.has(lob));
 }

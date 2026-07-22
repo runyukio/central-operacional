@@ -980,6 +980,7 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
       terminationType: true,
       terminationReason: true,
       supervisorId: true,
+      lob: { select: { name: true } },
       supervisor: { select: { fullName: true } }
     }
   })).filter((employee) => isAgentJobTitle(employee.roleTitle));
@@ -1003,7 +1004,7 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
     const metadata = getPerformanceQueueMetadataById(queueId);
     return metadata.lob === "ADS" || (metadata.lob === "VIDEO" && metadata.slaTargetMinutes === 15);
   });
-  const [schedules, moods, ahtRows, kapQualityRows, cecQualityRows] = await Promise.all([
+  const [schedules, moods, ahtRows, cecCpdRows, kapQualityRows, cecQualityRows] = await Promise.all([
     prisma.schedule.findMany({
       where: { employeeId: { in: employeeIds }, date: { gte: period.start, lte: period.end }, deletedAt: null },
       select: { employeeId: true, status: true }
@@ -1026,6 +1027,19 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
         AND e."supervisorId" IS NOT NULL
       GROUP BY e."supervisorId"
     `) : Promise.resolve([]),
+    prisma.$queryRaw<Array<{ supervisorId: string; tickets: number; days: number }>>(Prisma.sql`
+      SELECT
+        e."supervisorId" AS "supervisorId",
+        COALESCE(SUM(c."ticketCount"), 0)::double precision AS "tickets",
+        (COUNT(DISTINCT c."performanceDay") FILTER (WHERE c."ticketCount" > 0))::integer AS "days"
+      FROM "PerformanceCecCpdRecord" c
+      INNER JOIN "EmployeeProfile" e ON e."id" = c."employeeId"
+      WHERE c."employeeId" IN (${Prisma.join(employeeIds)})
+        AND c."performanceDay" >= ${period.start}
+        AND c."performanceDay" <= ${period.end}
+        AND e."supervisorId" IS NOT NULL
+      GROUP BY e."supervisorId"
+    `),
     prisma.$queryRaw<Array<{ supervisorId: string; correct: number; total: number }>>(Prisma.sql`
       SELECT
         e."supervisorId" AS "supervisorId",
@@ -1063,6 +1077,8 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
     moodResponses: number;
     submit: number;
     moderationSeconds: number;
+    cpdTickets: number;
+    cpdDays: number;
     qualityCorrect: number;
     qualityTotal: number;
   }>();
@@ -1074,6 +1090,8 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
       moodResponses: 0,
       submit: 0,
       moderationSeconds: 0,
+      cpdTickets: 0,
+      cpdDays: 0,
       qualityCorrect: 0,
       qualityTotal: 0
     };
@@ -1100,6 +1118,11 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
     aggregate.submit += Number(row.submit ?? 0);
     aggregate.moderationSeconds += Number(row.moderationSeconds ?? 0);
   }
+  for (const row of cecCpdRows) {
+    const aggregate = ensureAggregate(row.supervisorId);
+    aggregate.cpdTickets += Number(row.tickets ?? 0);
+    aggregate.cpdDays += Number(row.days ?? 0);
+  }
   for (const rows of [kapQualityRows, cecQualityRows]) {
     for (const row of rows) {
       const aggregate = ensureAggregate(row.supervisorId);
@@ -1111,6 +1134,7 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
   const supervisors = Array.from(employeesBySupervisor.entries()).map(([supervisorId, team]) => {
     const aggregate = ensureAggregate(supervisorId);
     const attrition = supervisorAttrition(team, period);
+    const isCecSupervisor = team.some((employee) => employee.lob?.name?.trim().toUpperCase() === "CEC");
     return {
       supervisorId,
       supervisor: supervisorNames.get(supervisorId) ?? "Sem supervisor",
@@ -1126,6 +1150,10 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
       submit: Math.round(aggregate.submit),
       moderationSeconds: round2(aggregate.moderationSeconds),
       ahtSeconds: aggregate.submit > 0 ? round2(aggregate.moderationSeconds / aggregate.submit) : 0,
+      ahtMetric: isCecSupervisor ? "CPD" as const : "AHT" as const,
+      cpdAverage: aggregate.cpdDays > 0 ? round2(aggregate.cpdTickets / aggregate.cpdDays) : 0,
+      cpdTickets: Math.round(aggregate.cpdTickets),
+      cpdDays: aggregate.cpdDays,
       qualityCorrect: aggregate.qualityCorrect,
       qualityTotal: aggregate.qualityTotal,
       quality: aggregate.qualityTotal > 0 ? round2((aggregate.qualityCorrect / aggregate.qualityTotal) * 100) : 0
