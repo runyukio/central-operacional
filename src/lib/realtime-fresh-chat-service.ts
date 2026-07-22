@@ -34,20 +34,54 @@ function normalizeFreshChatStatus(value: unknown) {
     .replace(/[\s_-]+/g, " ");
 }
 
-function getRowStatus(row: FreshChatRowInput) {
-  return row.status ?? row.Status ?? row.STATUS ?? row["Status"] ?? row["status"] ?? "";
+function isAssignedStatus(status: string) {
+  return ["assigned", "atribuido", "atribuida"].includes(status);
 }
 
-function countFreshChatBacklog(rows: FreshChatRowInput[]) {
-  return rows.reduce<{ assignedCount: number; newCount: number }>(
+function isNewStatus(status: string) {
+  return ["new", "novo", "nova"].includes(status);
+}
+
+function getRowStatus(row: FreshChatRowInput) {
+  const explicitStatus = row.status ?? row.Status ?? row.STATUS ?? row["Status"] ?? row["status"];
+  if (explicitStatus !== undefined && explicitStatus !== null && String(explicitStatus).trim()) return explicitStatus;
+
+  const values = Object.values(row).filter((value) => value !== undefined && value !== null && String(value).trim());
+  return values.length === 1 ? values[0] : "";
+}
+
+function extractRawTextStatuses(rawText?: string) {
+  return String(rawText ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const cells = line.split(/[,;\t]/).map((cell) => cell.trim()).filter(Boolean);
+      return cells.length === 1 ? cells[0] : line;
+    })
+    .filter((status) => {
+      const normalized = normalizeFreshChatStatus(status);
+      return normalized !== "status" && normalized !== "ticket status";
+    });
+}
+
+function countFreshChatBacklog(rows: FreshChatRowInput[], rawText?: string) {
+  const rowSummary = rows.reduce<{ assignedCount: number; newCount: number }>(
     (summary, row) => {
       const status = normalizeFreshChatStatus(getRowStatus(row));
-      if (status === "assigned" || status === "atribuido" || status === "atribuida") summary.assignedCount += 1;
-      if (status === "new" || status === "novo" || status === "nova") summary.newCount += 1;
+      if (isAssignedStatus(status)) summary.assignedCount += 1;
+      if (isNewStatus(status)) summary.newCount += 1;
       return summary;
     },
     { assignedCount: 0, newCount: 0 }
   );
+
+  return extractRawTextStatuses(rawText).reduce((summary, rawStatus) => {
+    const status = normalizeFreshChatStatus(rawStatus);
+    if (isAssignedStatus(status)) summary.assignedCount += 1;
+    if (isNewStatus(status)) summary.newCount += 1;
+    return summary;
+  }, rowSummary);
 }
 
 async function pruneFreshChatHistory(currentId?: string) {
@@ -70,7 +104,7 @@ export async function importRealtimeFreshChatSnapshot(input: RealtimeFreshChatIm
   const rows = Array.isArray(input.rows) ? input.rows : Array.isArray(input.tickets) ? input.tickets : [];
   const fileName = String(input.fileName ?? "fresh_chat_backlog.json").trim() || "fresh_chat_backlog.json";
   const source = String(input.source ?? "fresh-chat").trim() || "fresh-chat";
-  const { assignedCount, newCount } = countFreshChatBacklog(rows);
+  const { assignedCount, newCount } = countFreshChatBacklog(rows, input.rawText);
   const totalBacklog = assignedCount + newCount;
   const rawData = {
     source,
