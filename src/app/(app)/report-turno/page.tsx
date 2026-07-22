@@ -1,5 +1,5 @@
-import { InactiveModulePage } from "@/components/inactive-module-page";
+import { ShiftReportWorkspace } from "@/components/shift-report-workspace";
 
 export default function ReportTurnoRoute() {
-  return <InactiveModulePage title="Report de Turno" />;
+  return <ShiftReportWorkspace />;
 }

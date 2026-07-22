@@ -22,6 +22,10 @@ export type NavSection = {
 };
 
 const personalRoles = rolesWithCapability("PERSONAL");
+const shiftReportRoles = Array.from(new Set([
+  ...rolesWithCapability("SHIFT_REPORT_SUBMIT"),
+  ...rolesWithCapability("SHIFT_REPORT_VIEW")
+]));
 
 export const navSections: NavSection[] = [
   {
@@ -49,6 +53,7 @@ export const navSections: NavSection[] = [
     items: [
       { label: "Minhas Horas", href: "/minhas-horas", icon: "Clock", roles: personalRoles },
       { label: "Horas Operacionais", href: "/horas-operacionais", icon: "Clock", roles: rolesWithCapability("WORK_HOURS_VIEW") },
+      { label: "Report de Turno", href: "/report-turno", icon: "ClipboardCheck", roles: shiftReportRoles },
       { label: "Esteiras", href: "/esteiras", icon: "KanbanSquare", roles: rolesWithCapability("PIPELINES") },
       { label: "Mural", href: "/mural", icon: "Megaphone", roles: personalRoles },
       { label: "Feedback Anônimo", href: "/feedback-anonimo", icon: "MessageCircleQuestion", roles: rolesWithCapability("FEEDBACK_SUBMIT") }
