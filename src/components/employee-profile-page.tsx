@@ -89,7 +89,10 @@ type ProfilePayload = {
     performance: null | {
       quality: number;
       submit: number;
+      outputTotal: number | null;
+      outputLabel: string;
       ahtSeconds: number;
+      ahtAvailable: boolean;
       abs: number;
       wfhStatus: string;
       wfhStatusLabel: string;
@@ -250,8 +253,20 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <StatCard title="Qualidade" value={data.performance ? formatPercent(data.performance.quality) : "-"} helper={qualityRuleLabel(data.performance?.qualityRule)} icon={ShieldCheck} tone="green" />
-        <StatCard title="Submit/dia" value={data.performance ? formatNumber(data.performance.submit) : "-"} helper="média diária" icon={ClipboardList} tone="purple" />
-        <StatCard title="AHT" value={data.performance ? formatAht(data.performance.ahtSeconds) : "-"} helper="médio" icon={Clock} tone="orange" />
+        <StatCard
+          title={data.performance?.outputLabel ?? "Submit/dia"}
+          value={data.performance ? formatNumber(data.performance.submit) : "-"}
+          helper={data.performance?.outputTotal != null ? `${formatNumber(data.performance.outputTotal)} tickets no período` : "média diária"}
+          icon={ClipboardList}
+          tone="purple"
+        />
+        <StatCard
+          title="AHT"
+          value={data.performance?.ahtAvailable ? formatAht(data.performance.ahtSeconds) : "-"}
+          helper={data.performance && !data.performance.ahtAvailable ? "não disponível na base CPD" : "médio"}
+          icon={Clock}
+          tone="orange"
+        />
         <StatCard title="ABS" value={data.performance ? formatPercent(data.performance.abs) : "-"} helper={`${data.schedule.absenceDays}/${data.schedule.scheduledDays} dias`} icon={AlertTriangle} tone={(data.performance?.abs ?? 0) > 0 ? "red" : "green"} />
         <StatCard title="Feedback / Humor" value={data.mood.responses ? data.mood.label : "Sem registros"} helper={`${data.mood.responses} resposta(s) no mês`} icon={HeartPulse} tone="orange" />
       </div>
@@ -433,8 +448,9 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
             {data.performance ? (
               <div className="grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
                 <InfoLine label="Qualidade" value={formatPercent(data.performance.quality)} />
-                <InfoLine label="Submit/dia" value={formatNumber(data.performance.submit)} />
-                <InfoLine label="AHT" value={formatAht(data.performance.ahtSeconds)} />
+                <InfoLine label={data.performance.outputLabel} value={formatNumber(data.performance.submit)} />
+                {data.performance.outputTotal != null ? <InfoLine label="Output total" value={formatNumber(data.performance.outputTotal)} /> : null}
+                <InfoLine label="AHT" value={data.performance.ahtAvailable ? formatAht(data.performance.ahtSeconds) : "Não disponível"} />
                 <InfoLine label="ABS" value={formatPercent(data.performance.abs)} />
                 <InfoLine label="WFH" value={<WfhBadge status={data.performance.wfhStatus} label={data.performance.wfhStatusLabel} />} />
                 <InfoLine label="Regra" value={qualityRuleLabel(data.performance.qualityRule)} />

@@ -147,7 +147,7 @@ type QualityImportResult = {
   qualityRowsIgnored: number;
 };
 
-type AgentSortKey = "employeeName" | "wbLogin" | "lob" | "supervisor" | "shift" | "submit" | "aht";
+type AgentSortKey = "employeeName" | "wbLogin" | "lob" | "supervisor" | "shift" | "outputTotal" | "submit" | "aht";
 type AgentSortDirection = "asc" | "desc";
 
 type PerformanceAgentRow = {
@@ -1021,8 +1021,17 @@ function AgentsView({
           </div>
         ) : loading && !payload?.agents.length ? <EmptyBox label="Carregando produtividade dos agentes..." /> : (
           <div className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className={cn("grid gap-3", selectedLob === "CEC" ? "md:grid-cols-4" : "md:grid-cols-3")}>
               <StatCard title="Agentes" value={formatNumber(payload?.summary.agents ?? 0)} helper="com produção no período" icon={Users} tone="purple" />
+              {selectedLob === "CEC" ? (
+                <StatCard
+                  title="Output total"
+                  value={formatNumber(payload?.summary.submit ?? 0)}
+                  helper="tickets no período"
+                  icon={FileSpreadsheet}
+                  tone="green"
+                />
+              ) : null}
               <StatCard
                 title={selectedLob === "CEC" ? "CPD médio" : "Output médio/dia"}
                 value={formatNumber(payload?.summary.outputAveragePerDay ?? 0)}
@@ -1056,7 +1065,8 @@ function AgentsView({
                       <AgentSortHeader label="LOB" sortKey="lob" current={sort} onSort={handleSort} />
                       <AgentSortHeader label="Supervisor" sortKey="supervisor" current={sort} onSort={handleSort} />
                       <AgentSortHeader label="Turno" sortKey="shift" current={sort} onSort={handleSort} />
-                      <AgentSortHeader label={selectedLob === "CEC" ? "CPD" : "Output médio/dia"} sortKey="submit" current={sort} onSort={handleSort} align="right" />
+                      {selectedLob === "CEC" ? <AgentSortHeader label="Output" sortKey="outputTotal" current={sort} onSort={handleSort} align="right" /> : null}
+                      <AgentSortHeader label={selectedLob === "CEC" ? "CPD médio" : "Output médio/dia"} sortKey="submit" current={sort} onSort={handleSort} align="right" />
                       <AgentSortHeader label="AHT" sortKey="aht" current={sort} onSort={handleSort} align="right" />
                     </tr>
                   </thead>
@@ -1068,6 +1078,7 @@ function AgentsView({
                         <td className="px-3 py-3"><span className="rounded-lg bg-blue-50 px-2 py-1 text-xs font-black text-blue-700">{agent.lob}</span></td>
                         <td className="px-3 py-3 font-bold text-navy-950">{agent.supervisor}</td>
                         <td className="px-3 py-3 font-bold text-muted">{agent.shift}</td>
+                        {selectedLob === "CEC" ? <td className="px-3 py-3 text-right font-black text-navy-950">{formatNumber(agent.submit)}</td> : null}
                         <td className="px-3 py-3 text-right font-black text-navy-950">
                           {formatNumber(agent.outputAveragePerDay)}
                           <span className="mt-0.5 block text-[10px] font-bold text-muted">{formatNumber(agent.daysWithData)} dia(s)</span>
@@ -1075,7 +1086,7 @@ function AgentsView({
                         <td className="px-3 py-3 text-right font-black text-navy-950">{selectedLob === "CEC" ? "-" : formatSeconds(agent.ahtSeconds)}</td>
                       </tr>
                     ))}
-                    {!payload?.agents.length ? <tr><td colSpan={7} className="px-3 py-10 text-center text-sm font-bold text-muted">Nenhum agente encontrado para os filtros selecionados.</td></tr> : null}
+                    {!payload?.agents.length ? <tr><td colSpan={selectedLob === "CEC" ? 8 : 7} className="px-3 py-10 text-center text-sm font-bold text-muted">Nenhum agente encontrado para os filtros selecionados.</td></tr> : null}
                   </tbody>
                 </table>
               </div>

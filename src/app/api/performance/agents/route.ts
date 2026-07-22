@@ -50,6 +50,7 @@ function readSortBy(value: string | null): PerformanceAgentsQuery["sortBy"] {
     || value === "lob"
     || value === "supervisor"
     || value === "shift"
+    || value === "outputTotal"
     || value === "submit"
     || value === "aht"
     ? value

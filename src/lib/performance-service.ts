@@ -111,7 +111,7 @@ export type PerformanceAgentsQuery = {
   supervisorId?: string;
   shiftId?: string;
   search?: string;
-  sortBy?: "employeeName" | "wbLogin" | "lob" | "supervisor" | "shift" | "submit" | "aht";
+  sortBy?: "employeeName" | "wbLogin" | "lob" | "supervisor" | "shift" | "outputTotal" | "submit" | "aht";
   sortDirection?: "asc" | "desc";
   page?: number;
   pageSize?: number;
@@ -1305,11 +1305,15 @@ function comparePerformanceAgentRows(
 ) {
   const aValue = sortBy === "aht"
     ? (a.submit > 0 ? a.moderationSeconds / a.submit : -1)
+    : sortBy === "outputTotal"
+      ? a.submit
     : sortBy === "submit"
       ? a.outputAveragePerDay
       : a[sortBy];
   const bValue = sortBy === "aht"
     ? (b.submit > 0 ? b.moderationSeconds / b.submit : -1)
+    : sortBy === "outputTotal"
+      ? b.submit
     : sortBy === "submit"
       ? b.outputAveragePerDay
       : b[sortBy];

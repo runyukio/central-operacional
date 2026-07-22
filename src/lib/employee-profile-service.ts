@@ -422,17 +422,51 @@ async function buildOwnAnonymousFeedbackSummary(userId: string) {
 
 async function buildPerformanceSummary(actor: Actor, viewer: ProfileUser, employee: ProfileEmployee, period: Period) {
   try {
+    let summary: ReturnType<typeof mapPerformanceRow> | null = null;
     const isOwnProfile = viewer.employeeProfile?.id === employee.id;
     if (isOwnProfile) {
       const mineDashboard = await getPerformanceDashboard(actor, { view: "mine", startDate: formatDateInput(period.start), endDate: formatDateInput(period.end) });
-      if (mineDashboard.mode === "mine") return mapPerformanceRow(mineDashboard.summary.mine);
+      if (mineDashboard.mode === "mine") summary = mapPerformanceRow(mineDashboard.summary.mine);
     }
 
-    if (!canAccessPerformanceWfh({ role: viewer.role.name, status: viewer.status, roleTitle: viewer.employeeProfile?.roleTitle })) return null;
-    const dashboard = await getPerformanceDashboard(actor, { view: "wfh", employeeId: employee.id, startDate: formatDateInput(period.start), endDate: formatDateInput(period.end) });
-    if (dashboard.mode !== "wfh") return null;
-    const row = dashboard.ranking.find((item) => item.employeeId === employee.id);
-    return row ? mapPerformanceRow(row) : null;
+    if (!summary && canAccessPerformanceWfh({ role: viewer.role.name, status: viewer.status, roleTitle: viewer.employeeProfile?.roleTitle })) {
+      const dashboard = await getPerformanceDashboard(actor, { view: "wfh", employeeId: employee.id, startDate: formatDateInput(period.start), endDate: formatDateInput(period.end) });
+      if (dashboard.mode === "wfh") {
+        const row = dashboard.ranking.find((item) => item.employeeId === employee.id);
+        summary = row ? mapPerformanceRow(row) : null;
+      }
+    }
+
+    if (employee.lob.name.trim().toUpperCase() !== "CEC") return summary;
+
+    const cpdWhere: Prisma.PerformanceCecCpdRecordWhereInput = {
+      performanceDay: { gte: period.start, lte: period.end },
+      OR: [
+        { employeeId: employee.id },
+        { wbLogin: { equals: employee.wbLogin, mode: "insensitive" } }
+      ]
+    };
+    const [cpdTotal, activeDays] = await Promise.all([
+      prisma.performanceCecCpdRecord.aggregate({
+        where: cpdWhere,
+        _sum: { ticketCount: true }
+      }),
+      prisma.performanceCecCpdRecord.groupBy({
+        by: ["performanceDay"],
+        where: { ...cpdWhere, ticketCount: { gt: 0 } },
+        _sum: { ticketCount: true }
+      })
+    ]);
+    const outputTotal = cpdTotal._sum.ticketCount ?? 0;
+    if (outputTotal <= 0 && !summary) return null;
+
+    return {
+      ...(summary ?? emptyPerformanceRow()),
+      submit: activeDays.length > 0 ? outputTotal / activeDays.length : 0,
+      outputTotal,
+      outputLabel: "CPD médio",
+      ahtAvailable: false
+    };
   } catch {
     return null;
   }
@@ -450,12 +484,19 @@ function mapPerformanceRow(row: {
   return {
     quality: row.quality,
     submit: row.submit,
+    outputTotal: null as number | null,
+    outputLabel: "Submit/dia",
     ahtSeconds: row.ahtSeconds,
+    ahtAvailable: true,
     abs: row.abs,
     wfhStatus: row.wfhStatus ?? "",
     wfhStatusLabel: row.wfhStatusLabel ?? "",
     qualityRule: row.qualityRule ?? ""
   };
+}
+
+function emptyPerformanceRow(): ReturnType<typeof mapPerformanceRow> {
+  return mapPerformanceRow({ quality: 0, submit: 0, ahtSeconds: 0, abs: 0 });
 }
 
 type Period = {
