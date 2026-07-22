@@ -6,11 +6,13 @@ import { getApiActor } from "@/lib/api-actor";
 import { prisma } from "@/lib/prisma";
 import {
   authorizePerformanceImport,
+  commitCecCpdManualPreviewImport,
   commitProductionManualPreviewImport,
   discardQualitySnapshotImport,
   finalizeQualitySnapshotImport,
   importQualitySnapshotChunk,
   PerformanceError,
+  previewCecCpdImport,
   previewProductionImport,
   replacePerformanceSnapshot,
   startQualitySnapshotImport,
@@ -58,12 +60,12 @@ export async function POST(request: Request) {
       const qualityScope = readQualityScope(url);
       try {
         const uploadedFiles = await rebuildUploadedFiles(uploadId, importUser.email);
-        const hasOperationalFiles = Boolean(uploadedFiles.production || uploadedFiles.volume);
-        if (hasOperationalFiles && (!uploadedFiles.production || !uploadedFiles.volume)) {
-          throw new PerformanceError("As bases Produção / Output e Filas / Input devem ser enviadas juntas.", 400);
+        const hasOperationalFiles = Boolean(uploadedFiles.production || uploadedFiles.volume || uploadedFiles.cecCpd);
+        if (hasOperationalFiles && (!uploadedFiles.production || !uploadedFiles.volume || !uploadedFiles.cecCpd)) {
+          throw new PerformanceError("As bases Produção / Output, Filas / Input e CEC CPD / Output devem ser enviadas juntas.", 400);
         }
-        const operationalResult = uploadedFiles.production && uploadedFiles.volume
-          ? await processPerformanceFiles(actor, uploadedFiles.production, uploadedFiles.volume)
+        const operationalResult = uploadedFiles.production && uploadedFiles.volume && uploadedFiles.cecCpd
+          ? await processPerformanceFiles(actor, uploadedFiles.production, uploadedFiles.volume, uploadedFiles.cecCpd)
           : null;
         const qualityResult = uploadedFiles.quality
           ? await processQualityFile(actor, uploadedFiles.quality, qualityScope)
@@ -78,12 +80,16 @@ export async function POST(request: Request) {
     const formData = await request.formData();
     const productionFile = readXlsxFile(formData.get("productionFile"), "Produção / Output");
     const volumeFile = readXlsxFile(formData.get("volumeFile"), "Filas / Input");
+    const cecCpdFile = readXlsxFile(formData.get("cecCpdFile"), "CEC CPD / Output");
     return NextResponse.json(await processPerformanceFiles(actor, {
       fileName: productionFile.name,
       buffer: await productionFile.arrayBuffer()
     }, {
       fileName: volumeFile.name,
       buffer: await volumeFile.arrayBuffer()
+    }, {
+      fileName: cecCpdFile.name,
+      buffer: await cecCpdFile.arrayBuffer()
     }));
   } catch (error) {
     if (error instanceof PerformanceError) {
@@ -101,7 +107,7 @@ export async function POST(request: Request) {
 async function receiveUploadChunk(request: Request, url: URL, uploadedByEmail: string) {
   const uploadId = requiredUploadId(url);
   const fileType = url.searchParams.get("fileType");
-  if (fileType !== "production" && fileType !== "volume" && fileType !== "quality") throw new PerformanceError("Tipo de arquivo inválido.", 400);
+  if (fileType !== "production" && fileType !== "volume" && fileType !== "cecCpd" && fileType !== "quality") throw new PerformanceError("Tipo de arquivo inválido.", 400);
   const chunkIndex = integerParam(url, "chunkIndex", 0);
   const totalChunks = integerParam(url, "totalChunks", 1);
   if (chunkIndex >= totalChunks) throw new PerformanceError("Índice da parte do arquivo inválido.", 400);
@@ -140,7 +146,7 @@ async function rebuildUploadedFiles(uploadId: string, uploadedByEmail: string) {
   });
   if (!chunks.length) throw new PerformanceError("Nenhuma parte do upload foi encontrada.", 400);
 
-  const rebuild = (fileType: "production" | "volume" | "quality") => {
+  const rebuild = (fileType: "production" | "volume" | "cecCpd" | "quality") => {
     const fileChunks = chunks.filter((chunk) => chunk.fileType === fileType);
     if (!fileChunks.length) return null;
     const expected = fileChunks[0].totalChunks;
@@ -158,7 +164,7 @@ async function rebuildUploadedFiles(uploadId: string, uploadedByEmail: string) {
     return { fileName: fileChunks[0].fileName, buffer: data };
   };
 
-  return { production: rebuild("production"), volume: rebuild("volume"), quality: rebuild("quality") };
+  return { production: rebuild("production"), volume: rebuild("volume"), cecCpd: rebuild("cecCpd"), quality: rebuild("quality") };
 }
 
 async function processQualityFile(
@@ -218,29 +224,31 @@ function readQualityScope(url: URL): PerformanceQualityScope {
 async function processPerformanceFiles(
   actor: Awaited<ReturnType<typeof getApiActor>>,
   productionFile: { fileName: string; buffer: Buffer | ArrayBuffer },
-  volumeFile: { fileName: string; buffer: Buffer | ArrayBuffer }
+  volumeFile: { fileName: string; buffer: Buffer | ArrayBuffer },
+  cecCpdFile: { fileName: string; buffer: Buffer | ArrayBuffer }
 ) {
-  const files = [productionFile, volumeFile];
   const previews: PreviewedFile[] = [];
 
-  for (const file of files) {
+  for (const file of [productionFile, volumeFile]) {
     const rawRows = readWorkbookRows(file.buffer);
     const preview = await previewProductionImport(actor, rawRows, { skipExistingCheck: true });
     previews.push({ fileName: file.fileName, rows: preview.rows });
   }
+  const cecCpdPreview = await previewCecCpdImport(actor, readWorkbookRows(cecCpdFile.buffer), { skipExistingCheck: true });
+  previews.push({ fileName: cecCpdFile.fileName, rows: cecCpdPreview.rows });
 
   const coverage = summarizeCoverage(previews);
-  if (!coverage.productionRows || !coverage.volumeRows) {
+  if (!coverage.productionRows || !coverage.volumeRows || !coverage.cecCpdRows) {
     throw new PerformanceError(
-      "As duas bases são obrigatórias: Produção / Output precisa conter submit e Filas / Input precisa conter enqueue.",
+      "As três bases são obrigatórias: Produção / Output precisa conter submit, Filas / Input precisa conter enqueue e CEC CPD / Output precisa conter tickets.",
       400
     );
   }
 
   let batchId: string | undefined;
   const imports = [];
-  const batchFileName = `${productionFile.fileName} + ${volumeFile.fileName}`;
-  for (const [index, preview] of previews.entries()) {
+  const batchFileName = `${productionFile.fileName} + ${volumeFile.fileName} + ${cecCpdFile.fileName}`;
+  for (const [index, preview] of previews.slice(0, 2).entries()) {
     const result = await commitProductionManualPreviewImport(
       actor,
       preview.rows,
@@ -255,6 +263,20 @@ async function processPerformanceFiles(
       volumeRows: result.volumeRows
     });
   }
+  const cecCpdResult = await commitCecCpdManualPreviewImport(
+    actor,
+    cecCpdPreview.rows,
+    cecCpdFile.fileName,
+    batchId
+  );
+  batchId = cecCpdResult.batchId;
+  imports.push({
+    fileName: cecCpdFile.fileName,
+    importedRows: cecCpdResult.importedRows,
+    productionRows: 0,
+    volumeRows: 0,
+    cecCpdRows: cecCpdResult.cecCpdRows
+  });
 
   if (!batchId) throw new PerformanceError("Não foi possível criar o lote manual de Performance.", 500);
   const reset = await replacePerformanceSnapshot(actor, batchId);
@@ -263,6 +285,7 @@ async function processPerformanceFiles(
     batchId,
     productionRows: coverage.productionRows,
     volumeRows: coverage.volumeRows,
+    cecCpdRows: coverage.cecCpdRows,
     rowsError: coverage.rowsError,
     files: imports,
     reset
@@ -302,6 +325,7 @@ function readWorkbookRows(buffer: Buffer | ArrayBuffer) {
 function summarizeCoverage(files: PreviewedFile[]) {
   let productionRows = 0;
   let volumeRows = 0;
+  let cecCpdRows = 0;
   let rowsError = 0;
   for (const file of files) {
     for (const row of file.rows) {
@@ -311,7 +335,8 @@ function summarizeCoverage(files: PreviewedFile[]) {
       }
       if (row.type === "PRODUCTION") productionRows += 1;
       if (row.type === "PRODUCTION_VOLUME") volumeRows += 1;
+      if (row.type === "CEC_CPD") cecCpdRows += 1;
     }
   }
-  return { productionRows, volumeRows, rowsError };
+  return { productionRows, volumeRows, cecCpdRows, rowsError };
 }

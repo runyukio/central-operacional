@@ -101,6 +101,7 @@ type PerformanceProductionResponse = {
 type ManualImportResult = {
   productionRows: number;
   volumeRows: number;
+  cecCpdRows: number;
   rowsError: number;
 };
 
@@ -939,7 +940,11 @@ function AgentsView({
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div>
           <h2 className="text-base font-black text-navy-950">Produtividade dos agentes</h2>
-          <p className="mt-1 text-xs font-bold text-muted">Output e AHT calculados a partir da base de produção vigente.</p>
+          <p className="mt-1 text-xs font-bold text-muted">
+            {selectedLob === "CEC"
+              ? "CPD calculado a partir da base CEC vigente."
+              : "Output e AHT calculados a partir da base de produção vigente."}
+          </p>
         </div>
         <button type="button" onClick={onRefresh} className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-white px-3 text-xs font-black text-navy-950 hover:bg-slate-50">
           <RefreshCw className="h-4 w-4" /> Atualizar
@@ -1011,13 +1016,19 @@ function AgentsView({
             <div className="grid gap-3 md:grid-cols-3">
               <StatCard title="Agentes" value={formatNumber(payload?.summary.agents ?? 0)} helper="com produção no período" icon={Users} tone="purple" />
               <StatCard
-                title="Output médio/dia"
+                title={selectedLob === "CEC" ? "CPD médio" : "Output médio/dia"}
                 value={formatNumber(payload?.summary.outputAveragePerDay ?? 0)}
-                helper={`${formatNumber(payload?.summary.daysWithData ?? 0)} dia(s) com produção`}
+                helper={`${formatNumber(payload?.summary.daysWithData ?? 0)} dia(s) trabalhado(s)`}
                 icon={FileSpreadsheet}
                 tone="blue"
               />
-              <StatCard title="AHT médio" value={formatSeconds(payload?.summary.ahtSeconds)} helper="moderação / output" icon={Clock} tone="orange" />
+              <StatCard
+                title="AHT médio"
+                value={selectedLob === "CEC" ? "-" : formatSeconds(payload?.summary.ahtSeconds)}
+                helper={selectedLob === "CEC" ? "não disponível na base CPD" : "moderação / output"}
+                icon={Clock}
+                tone="orange"
+              />
             </div>
 
             <div className="overflow-hidden rounded-xl border border-border bg-white">
@@ -1037,7 +1048,7 @@ function AgentsView({
                       <AgentSortHeader label="LOB" sortKey="lob" current={sort} onSort={handleSort} />
                       <AgentSortHeader label="Supervisor" sortKey="supervisor" current={sort} onSort={handleSort} />
                       <AgentSortHeader label="Turno" sortKey="shift" current={sort} onSort={handleSort} />
-                      <AgentSortHeader label="Output médio/dia" sortKey="submit" current={sort} onSort={handleSort} align="right" />
+                      <AgentSortHeader label={selectedLob === "CEC" ? "CPD" : "Output médio/dia"} sortKey="submit" current={sort} onSort={handleSort} align="right" />
                       <AgentSortHeader label="AHT" sortKey="aht" current={sort} onSort={handleSort} align="right" />
                     </tr>
                   </thead>
@@ -1053,7 +1064,7 @@ function AgentsView({
                           {formatNumber(agent.outputAveragePerDay)}
                           <span className="mt-0.5 block text-[10px] font-bold text-muted">{formatNumber(agent.daysWithData)} dia(s)</span>
                         </td>
-                        <td className="px-3 py-3 text-right font-black text-navy-950">{formatSeconds(agent.ahtSeconds)}</td>
+                        <td className="px-3 py-3 text-right font-black text-navy-950">{selectedLob === "CEC" ? "-" : formatSeconds(agent.ahtSeconds)}</td>
                       </tr>
                     ))}
                     {!payload?.agents.length ? <tr><td colSpan={7} className="px-3 py-10 text-center text-sm font-bold text-muted">Nenhum agente encontrado para os filtros selecionados.</td></tr> : null}
@@ -1454,14 +1465,15 @@ function QueueSortHeader({
 function ManualImportModal({ onClose, onImported }: { onClose: () => void; onImported: () => Promise<void> | void }) {
   const [productionFile, setProductionFile] = useState<File | null>(null);
   const [volumeFile, setVolumeFile] = useState<File | null>(null);
+  const [cecCpdFile, setCecCpdFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState("");
   const [result, setResult] = useState<ManualImportResult | null>(null);
 
   const submit = async () => {
-    if (!productionFile || !volumeFile) {
-      setError("Selecione as bases de Produção / Output e Filas / Input.");
+    if (!productionFile || !volumeFile || !cecCpdFile) {
+      setError("Selecione as bases de Produção / Output, Filas / Input e CEC CPD / Output.");
       return;
     }
     setUploading(true);
@@ -1472,7 +1484,8 @@ function ManualImportModal({ onClose, onImported }: { onClose: () => void; onImp
       const start = await performanceUploadRequest<{ uploadId: string }>("/api/performance/import/manual?action=start", { method: "POST" });
       const uploadFiles = [
         { file: productionFile, fileType: "production" },
-        { file: volumeFile, fileType: "volume" }
+        { file: volumeFile, fileType: "volume" },
+        { file: cecCpdFile, fileType: "cecCpd" }
       ] as const;
       const chunkSize = 2 * 1024 * 1024;
       const totalChunks = uploadFiles.reduce((total, item) => total + Math.ceil(item.file.size / chunkSize), 0);
@@ -1503,7 +1516,7 @@ function ManualImportModal({ onClose, onImported }: { onClose: () => void; onImp
       const finalizeParams = new URLSearchParams({ action: "finalize", uploadId: start.uploadId });
       const body = await performanceUploadRequest<ManualImportResult>(`/api/performance/import/manual?${finalizeParams.toString()}`, { method: "POST" });
       setUploadProgress(100);
-      setResult({ productionRows: body.productionRows, volumeRows: body.volumeRows, rowsError: body.rowsError });
+      setResult({ productionRows: body.productionRows, volumeRows: body.volumeRows, cecCpdRows: body.cecCpdRows, rowsError: body.rowsError });
       await onImported();
     } catch (uploadError) {
       const message = uploadError instanceof Error ? uploadError.message : "Não foi possível substituir a base de Performance.";
@@ -1515,12 +1528,12 @@ function ManualImportModal({ onClose, onImported }: { onClose: () => void; onImp
 
   return (
     <div className="fixed inset-0 z-[100] grid place-items-center bg-slate-950/35 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="performance-upload-title">
-      <div className="w-full max-w-2xl overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl">
+      <div className="w-full max-w-4xl overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl">
         <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
           <div>
             <p className="text-[11px] font-black uppercase tracking-[0.16em] text-blue-600">Performance</p>
             <h2 id="performance-upload-title" className="mt-1 text-xl font-black text-navy-950">Substituir base atual</h2>
-            <p className="mt-1 text-sm font-semibold text-muted">Envie as duas planilhas. A base vigente só será substituída depois que ambas forem validadas.</p>
+            <p className="mt-1 text-sm font-semibold text-muted">Envie as três planilhas. A base vigente só será substituída depois que todas forem validadas.</p>
           </div>
           <button type="button" onClick={onClose} disabled={uploading} className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-border text-muted hover:bg-slate-50 hover:text-navy-950 disabled:opacity-40" aria-label="Fechar">
             <X className="h-5 w-5" />
@@ -1528,7 +1541,7 @@ function ManualImportModal({ onClose, onImported }: { onClose: () => void; onImp
         </div>
 
         <div className="space-y-4 p-5">
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-3">
             <PerformanceFileField
               label="Produção / Output"
               helper="Base com agentname, submit e moderation duration."
@@ -1541,6 +1554,12 @@ function ManualImportModal({ onClose, onImported }: { onClose: () => void; onImp
               file={volumeFile}
               onChange={setVolumeFile}
             />
+            <PerformanceFileField
+              label="CEC CPD / Output"
+              helper="Base com perform_time(hour), agent_name e ticket_id(去重计数)."
+              file={cecCpdFile}
+              onChange={setCecCpdFile}
+            />
           </div>
 
           <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-900">
@@ -1549,9 +1568,10 @@ function ManualImportModal({ onClose, onImported }: { onClose: () => void; onImp
 
           {error ? <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{error}</p> : null}
           {result ? (
-            <div className="grid gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 sm:grid-cols-3">
+            <div className="grid gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 sm:grid-cols-4">
               <ImportResultMetric label="Output" value={result.productionRows} />
               <ImportResultMetric label="Input" value={result.volumeRows} />
+              <ImportResultMetric label="CPD CEC" value={result.cecCpdRows} />
               <ImportResultMetric label="Linhas ignoradas" value={result.rowsError} />
             </div>
           ) : null}
@@ -1562,7 +1582,7 @@ function ManualImportModal({ onClose, onImported }: { onClose: () => void; onImp
             {result ? "Concluir" : "Cancelar"}
           </button>
           {!result ? (
-            <button type="button" onClick={() => void submit()} disabled={uploading || !productionFile || !volumeFile} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 text-sm font-black text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-45">
+            <button type="button" onClick={() => void submit()} disabled={uploading || !productionFile || !volumeFile || !cecCpdFile} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 text-sm font-black text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-45">
               {uploading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
               {uploading ? `Enviando e validando... ${uploadProgress}%` : "Substituir base"}
             </button>

@@ -186,7 +186,7 @@ type ProductionDashboardQueueAggregate = ProductionDashboardAggregate & {
 
 export type PerformancePreviewRow = {
   rowNumber: number;
-  type: "QUALITY" | "TNS_QUALITY" | "CEC_QUALITY" | "PRODUCTION" | "PRODUCTION_VOLUME";
+  type: "QUALITY" | "TNS_QUALITY" | "CEC_QUALITY" | "PRODUCTION" | "PRODUCTION_VOLUME" | "CEC_CPD";
   wbLogin: string;
   employeeId?: string;
   employeeName?: string;
@@ -305,6 +305,9 @@ const productionDayHeaders = ["bz_day", "bz day"];
 const productionVolumeDayHeaders = ["bz_enqueue_day", "bz enqueue day", ...productionDayHeaders];
 const productionQueueHeaders = ["id-queue_id", "id_queue_id", "id queue id", "队列id-queue_id", "队列id", "queue_id", "queueid", "queue id", "fila", "queue"];
 const productionInputHeaders = ["enqueue", "enqueue_num", "enqueue num", "input", "input_num", "input num", "进审量", "recebidos"];
+const cecCpdTimeHeaders = ["perform_time(hour)", "perform time(hour)", "perform_time", "perform time", "performance_time", "performance time", ...productionTimeHeaders];
+const cecCpdAgentHeaders = ["agent_name", "agent name", "agentname", "wb_login", "wb login", "agente"];
+const cecCpdTicketHeaders = ["ticket_id(去重计数)", "ticket id(去重计数)", "ticket_count", "ticket count", "tickets", "output", "cpd"];
 
 export class PerformanceError extends Error {
   status: number;
@@ -723,8 +726,9 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
   const ownEmployeeId = role === "COLABORADOR" ? requireOwnEmployee(user).id : null;
   const requestedLob = query.lob && query.lob !== "Todos" ? query.lob.trim().toUpperCase() : "";
   const validLobs = performanceLobOptions();
-  const [range, employeeOptions] = await Promise.all([
+  const [productionRange, cecCpdRange, employeeOptions] = await Promise.all([
     prisma.productionRecord.aggregate({ _min: { bzDay: true }, _max: { bzDay: true } }),
+    prisma.performanceCecCpdRecord.aggregate({ _min: { performanceDay: true }, _max: { performanceDay: true } }),
     prisma.employeeProfile.findMany({
       where: { deletedAt: null, ...(ownEmployeeId ? { id: ownEmployeeId } : {}) },
       select: {
@@ -736,7 +740,12 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
   ]);
   const view = normalizeDashboardView(query.view);
   const fallback = getDefaultDatePeriod();
-  const referenceDate = range._max.bzDay ?? fallback.end;
+  const selectedRange = requestedLob === "CEC"
+    ? { min: cecCpdRange._min.performanceDay, max: cecCpdRange._max.performanceDay }
+    : { min: productionRange._min.bzDay, max: productionRange._max.bzDay };
+  const allRangeDates = [productionRange._min.bzDay, productionRange._max.bzDay, cecCpdRange._min.performanceDay, cecCpdRange._max.performanceDay]
+    .filter((value): value is Date => Boolean(value));
+  const referenceDate = selectedRange.max ?? (allRangeDates.length ? new Date(Math.max(...allRangeDates.map((date) => date.getTime()))) : fallback.end);
   const defaultPeriod = dashboardViewPeriod(referenceDate, view);
   const start = parseDate(query.startDate) ?? defaultPeriod.start;
   const end = parseDate(query.endDate) ?? defaultPeriod.end;
@@ -751,8 +760,13 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     (item) => item.id
   ).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   const filters = { lobs: validLobs, supervisors, shifts };
-  const dataRange = range._min.bzDay && range._max.bzDay
-    ? { startDate: formatDateKey(range._min.bzDay), endDate: formatDateKey(range._max.bzDay) }
+  const dataRange = selectedRange.min && selectedRange.max
+    ? { startDate: formatDateKey(selectedRange.min), endDate: formatDateKey(selectedRange.max) }
+    : !requestedLob && allRangeDates.length
+      ? {
+          startDate: formatDateKey(new Date(Math.min(...allRangeDates.map((date) => date.getTime())))),
+          endDate: formatDateKey(new Date(Math.max(...allRangeDates.map((date) => date.getTime()))))
+        }
     : null;
 
   if (query.metadataOnly || !requestedLob || !validLobs.includes(requestedLob)) {
@@ -760,8 +774,9 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
   }
 
   const queueSql = performanceQueueFilterSql(requestedLob);
-  const ownEmployeeSql = ownEmployeeId ? Prisma.sql`AND p."employeeId" = ${ownEmployeeId}` : Prisma.empty;
-  const rawRows = await prisma.$queryRaw<Array<{
+  const ownProductionEmployeeSql = ownEmployeeId ? Prisma.sql`AND p."employeeId" = ${ownEmployeeId}` : Prisma.empty;
+  const ownCpdEmployeeSql = ownEmployeeId ? Prisma.sql`AND c."employeeId" = ${ownEmployeeId}` : Prisma.empty;
+  type AgentDashboardRawRow = {
     employeeId: string | null;
     employeeName: string;
     wbLogin: string;
@@ -773,7 +788,42 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     submit: number;
     moderationSeconds: number;
     activeDates: Date[];
-  }>>(Prisma.sql`
+  };
+  const rawRows: AgentDashboardRawRow[] = requestedLob === "CEC"
+    ? await prisma.$queryRaw<AgentDashboardRawRow[]>(Prisma.sql`
+      SELECT
+        c."employeeId" AS "employeeId",
+        COALESCE(e."fullName", c."wbLogin") AS "employeeName",
+        COALESCE(e."wbLogin", c."wbLogin") AS "wbLogin",
+        e."supervisorId" AS "supervisorId",
+        COALESCE(s."fullName", 'Sem supervisor') AS "supervisor",
+        e."shiftId" AS "shiftId",
+        COALESCE(sh."name", 'Sem turno') AS "shift",
+        ''::text AS "queueId",
+        COALESCE(SUM(c."ticketCount"), 0)::double precision AS "submit",
+        0::double precision AS "moderationSeconds",
+        COALESCE(
+          ARRAY_AGG(DISTINCT c."performanceDay") FILTER (WHERE c."ticketCount" > 0),
+          ARRAY[]::timestamp[]
+        ) AS "activeDates"
+      FROM "PerformanceCecCpdRecord" c
+      LEFT JOIN "EmployeeProfile" e ON e."id" = c."employeeId"
+      LEFT JOIN "EmployeeProfile" s ON s."id" = e."supervisorId"
+      LEFT JOIN "Shift" sh ON sh."id" = e."shiftId"
+      WHERE c."performanceDay" >= ${start}
+        AND c."performanceDay" <= ${end}
+        ${ownCpdEmployeeSql}
+      GROUP BY
+        c."employeeId",
+        e."fullName",
+        e."wbLogin",
+        c."wbLogin",
+        e."supervisorId",
+        s."fullName",
+        e."shiftId",
+        sh."name"
+    `)
+    : await prisma.$queryRaw<AgentDashboardRawRow[]>(Prisma.sql`
     SELECT
       p."employeeId" AS "employeeId",
       COALESCE(e."fullName", p."wbLogin") AS "employeeName",
@@ -792,7 +842,7 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     LEFT JOIN "Shift" sh ON sh."id" = e."shiftId"
     WHERE p."bzDay" >= ${start}
       AND p."bzDay" <= ${end}
-      ${ownEmployeeSql}
+      ${ownProductionEmployeeSql}
       ${queueSql}
     GROUP BY
       p."employeeId",
@@ -821,7 +871,7 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     outputAveragePerDay: number;
   }>();
   for (const row of rawRows) {
-    const lob = getPerformanceQueueMetadataById(row.queueId).lob;
+    const lob = requestedLob === "CEC" ? "CEC" : getPerformanceQueueMetadataById(row.queueId).lob;
     const identity = row.employeeId || `wb:${row.wbLogin.trim().toLocaleLowerCase("pt-BR")}`;
     const key = `${identity}:${lob}`;
     const current = aggregateMap.get(key) ?? {
@@ -1285,6 +1335,12 @@ export async function previewProductionImport(actor: Actor, rawRows: Record<stri
   return previewProductionRows(rawRows, options);
 }
 
+export async function previewCecCpdImport(actor: Actor, rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
+  const user = await requireActiveUser(actor);
+  requireImportPermission(user);
+  return previewCecCpdRows(rawRows, options);
+}
+
 export async function authorizePerformanceImport(actor: Actor) {
   const user = await requireActiveUser(actor);
   requireImportPermission(user);
@@ -1454,16 +1510,25 @@ export async function commitProductionManualPreviewImport(actor: Actor, rows: Pe
   return commitProductionRows(user, rows, fileName, batchId, { pruneSnapshot: false });
 }
 
+export async function commitCecCpdManualPreviewImport(actor: Actor, rows: PerformancePreviewRow[], fileName = "cec_cpd.xlsx", batchId?: string) {
+  const user = await requireActiveUser(actor);
+  requireImportPermission(user);
+  return commitCecCpdRows(user, rows, fileName, batchId);
+}
+
 export async function replacePerformanceSnapshot(actor: Actor, batchIdToKeep: string) {
   const user = await requireActiveUser(actor);
   requireImportPermission(user);
   if (!batchIdToKeep) throw new PerformanceError("Lote de importação obrigatório para substituir Performance.", 400);
 
-  const [productionDeleted, volumeDeleted, batchesDeleted] = await prisma.$transaction([
+  const [productionDeleted, volumeDeleted, cecCpdDeleted, batchesDeleted] = await prisma.$transaction([
     prisma.productionRecord.deleteMany({
       where: { OR: [{ importBatchId: null }, { importBatchId: { not: batchIdToKeep } }] }
     }),
     prisma.performanceQueueVolumeRecord.deleteMany({
+      where: { OR: [{ importBatchId: null }, { importBatchId: { not: batchIdToKeep } }] }
+    }),
+    prisma.performanceCecCpdRecord.deleteMany({
       where: { OR: [{ importBatchId: null }, { importBatchId: { not: batchIdToKeep } }] }
     }),
     prisma.performanceImportBatch.deleteMany({
@@ -1475,6 +1540,7 @@ export async function replacePerformanceSnapshot(actor: Actor, batchIdToKeep: st
     batchIdKept: batchIdToKeep,
     productionRowsDeleted: productionDeleted.count,
     volumeRowsDeleted: volumeDeleted.count,
+    cecCpdRowsDeleted: cecCpdDeleted.count,
     importBatchesDeleted: batchesDeleted.count
   };
 }
@@ -1822,6 +1888,61 @@ async function previewProductionRows(rawRows: Record<string, unknown>[], options
   return options.skipExistingCheck ? buildPreviewResult(previewRows) : markExistingProductionRows(previewRows);
 }
 
+async function previewCecCpdRows(rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
+  const normalizedRows = rawRows.map(normalizeObjectKeys);
+  const wbLogins = unique(normalizedRows
+    .map((row) => normalizeWbLogin(text(rowValue(row, cecCpdAgentHeaders))))
+    .filter(Boolean));
+  const employees = await findEmployeesByWbLogins(wbLogins);
+  const employeeByLogin = new Map(employees.map((employee) => [normalizeWbLogin(employee.wbLogin), employee]));
+  const seen = new Map<string, number>();
+
+  const previewRows: PerformancePreviewRow[] = normalizedRows.map((row, index) => {
+    const rowNumber = (options.rowNumberOffset ?? 0) + index + 2;
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    const performanceTime = normalizeExcelDate(rowValue(row, cecCpdTimeHeaders));
+    const wbLogin = normalizeWbLogin(text(rowValue(row, cecCpdAgentHeaders)));
+    const employee = employeeByLogin.get(wbLogin);
+    const ticketCount = parseInteger(rowValue(row, cecCpdTicketHeaders));
+    const cpdKey = performanceTime && wbLogin ? `${formatDateTimeKey(performanceTime)}|${wbLogin}` : "";
+
+    if (!performanceTime) errors.push("perform_time(hour) inválido.");
+    if (!wbLogin) errors.push("agent_name é obrigatório.");
+    else if (!employee) warnings.push("WB/Login não encontrado no cadastro; o CPD será mantido pelo login informado.");
+    if (ticketCount === null || ticketCount < 0) errors.push("ticket_id(去重计数) inválido.");
+    if (!cpdKey) errors.push("Chave única do CPD ausente.");
+    if (cpdKey) {
+      const first = seen.get(cpdKey);
+      if (first) warnings.push(`CPD duplicado no arquivo. Primeira ocorrência na linha ${first}; será consolidado por soma.`);
+      else seen.set(cpdKey, rowNumber);
+    }
+
+    return {
+      rowNumber,
+      type: "CEC_CPD",
+      wbLogin,
+      employeeId: employee?.id,
+      employeeName: employee?.fullName,
+      lob: "CEC",
+      lobId: employee?.lobId ?? undefined,
+      date: performanceTime ? formatDateKey(performanceTime) : "",
+      uniqueKey: cpdKey,
+      action: errors.length ? "ignore" : "create",
+      errors,
+      warnings,
+      payload: {
+        performanceTime: performanceTime ? performanceTime.toISOString() : "",
+        performanceDay: performanceTime ? formatDateKey(performanceTime) : "",
+        ticketCount,
+        cpdKey
+      }
+    };
+  });
+
+  return buildPreviewResult(previewRows);
+}
+
 export async function commitQualityImport(actor: Actor, rows: PerformancePreviewRow[], fileName = "qualidade.xlsx", qualityScope: PerformanceQualityScope = "ADS") {
   const user = await requireActiveUser(actor);
   requireImportPermission(user);
@@ -2001,6 +2122,25 @@ async function commitProductionRows(user: AuthenticatedUser | null, rows: Perfor
   };
 }
 
+async function commitCecCpdRows(user: AuthenticatedUser, rows: PerformancePreviewRow[], fileName = "cec_cpd.xlsx", batchId?: string) {
+  const validRows = rows.filter((row) => row.type === "CEC_CPD" && !row.errors.length && row.uniqueKey);
+  const aggregatedRows = aggregateCecCpdRows(validRows);
+  if (!aggregatedRows.length) throw new PerformanceError("Não há linhas válidas de CPD CEC para importar.", 400);
+  const createdRows = aggregatedRows.filter((row) => row.action === "create").length;
+  const updatedRows = aggregatedRows.filter((row) => row.action === "update").length;
+  const batch = await upsertImportBatch(user, "PRODUCTION", fileName, rows, validRows.length, createdRows, updatedRows, batchId);
+
+  await bulkUpsertPerformanceCecCpdRecords(aggregatedRows, batch.id);
+  return {
+    success: true,
+    importedRows: validRows.length,
+    cecCpdRows: validRows.length,
+    createdRows,
+    updatedRows,
+    batchId: batch.id
+  };
+}
+
 async function bulkUpsertProductionRecords(rows: PerformancePreviewRow[], batchId: string) {
   for (const chunk of chunks(rows, 2500)) {
     const payload = JSON.stringify(chunk.map((row) => ({
@@ -2083,6 +2223,69 @@ async function bulkUpsertProductionRecords(rows: PerformancePreviewRow[], batchI
         "queueId" = EXCLUDED."queueId",
         "moderationSeconds" = EXCLUDED."moderationSeconds",
         "lobId" = EXCLUDED."lobId",
+        "importBatchId" = EXCLUDED."importBatchId",
+        "updatedAt" = EXCLUDED."updatedAt"
+    `);
+  }
+}
+
+async function bulkUpsertPerformanceCecCpdRecords(rows: PerformancePreviewRow[], batchId: string) {
+  for (const chunk of chunks(rows, 2500)) {
+    const payload = JSON.stringify(chunk.map((row) => ({
+      id: crypto.randomUUID(),
+      performanceTime: new Date(String(row.payload.performanceTime)).toISOString(),
+      performanceDay: parseDate(String(row.payload.performanceDay))!.toISOString(),
+      wbLogin: row.wbLogin,
+      employeeId: row.employeeId ?? null,
+      ticketCount: Number(row.payload.ticketCount ?? 0),
+      cpdKey: String(row.payload.cpdKey),
+      importBatchId: batchId
+    })));
+
+    await prisma.$executeRaw(Prisma.sql`
+      WITH incoming AS (
+        SELECT *
+        FROM jsonb_to_recordset(${payload}::jsonb) AS x(
+          "id" text,
+          "performanceTime" timestamp,
+          "performanceDay" timestamp,
+          "wbLogin" text,
+          "employeeId" text,
+          "ticketCount" integer,
+          "cpdKey" text,
+          "importBatchId" text
+        )
+      )
+      INSERT INTO "PerformanceCecCpdRecord" (
+        "id",
+        "performanceTime",
+        "performanceDay",
+        "wbLogin",
+        "employeeId",
+        "ticketCount",
+        "cpdKey",
+        "importBatchId",
+        "createdAt",
+        "updatedAt"
+      )
+      SELECT
+        "id",
+        "performanceTime",
+        "performanceDay",
+        "wbLogin",
+        "employeeId",
+        "ticketCount",
+        "cpdKey",
+        "importBatchId",
+        CURRENT_TIMESTAMP,
+        CURRENT_TIMESTAMP
+      FROM incoming
+      ON CONFLICT ("cpdKey") DO UPDATE SET
+        "performanceTime" = EXCLUDED."performanceTime",
+        "performanceDay" = EXCLUDED."performanceDay",
+        "wbLogin" = EXCLUDED."wbLogin",
+        "employeeId" = EXCLUDED."employeeId",
+        "ticketCount" = EXCLUDED."ticketCount",
         "importBatchId" = EXCLUDED."importBatchId",
         "updatedAt" = EXCLUDED."updatedAt"
     `);
@@ -2203,6 +2406,28 @@ function aggregateProductionVolumeRows(rows: PerformancePreviewRow[]) {
       inputCount: Number(current.payload.inputCount ?? 0) + Number(row.payload.inputCount ?? 0)
     };
     current.warnings = unique([...current.warnings, "Linhas duplicadas da mesma hora/fila foram consolidadas por soma."]);
+  }
+  return Array.from(byKey.values());
+}
+
+function aggregateCecCpdRows(rows: PerformancePreviewRow[]) {
+  const byKey = new Map<string, PerformancePreviewRow>();
+  for (const row of rows) {
+    const key = String(row.payload.cpdKey ?? row.uniqueKey ?? "");
+    if (!key) continue;
+    const current = byKey.get(key);
+    if (!current) {
+      byKey.set(key, {
+        ...row,
+        payload: { ...row.payload, ticketCount: Number(row.payload.ticketCount ?? 0) }
+      });
+      continue;
+    }
+    current.payload = {
+      ...current.payload,
+      ticketCount: Number(current.payload.ticketCount ?? 0) + Number(row.payload.ticketCount ?? 0)
+    };
+    current.warnings = unique([...current.warnings, "Linhas duplicadas da mesma hora/agente foram consolidadas por soma."]);
   }
   return Array.from(byKey.values());
 }
@@ -3509,7 +3734,7 @@ function normalizeProductionGranularity(value?: string | null): PerformanceProdu
 }
 
 function performanceLobOptions() {
-  return ["ADS", "VIDEO", "COMMENTS", "N/A"];
+  return ["ADS", "VIDEO", "COMMENTS", "CEC", "N/A"];
 }
 
 function getPerformanceQueueMetadataById(queueId?: string | null): QueueMetadata {
