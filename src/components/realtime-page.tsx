@@ -2227,7 +2227,7 @@ function ReportSummarySection({
 
 function ReportHeadcountCompactCard({ card }: { card: OnlineHeadcountGaugeData }) {
   const progress = card.percentage === null ? null : Math.max(0, Math.min(100, card.percentage));
-  const hasFreshChat = typeof card.freshChatBacklog?.totalBacklog === "number";
+  const shouldShowFreshChat = card.label.toLowerCase().includes("ads online hc");
   const toneClass = card.tone === "positive"
     ? "bg-emerald-50 text-emerald-700"
     : card.tone === "warning"
@@ -2256,12 +2256,12 @@ function ReportHeadcountCompactCard({ card }: { card: OnlineHeadcountGaugeData }
           <p className="text-[10px] font-black uppercase tracking-wide text-muted">Planned</p>
           <p className="mt-1 text-lg font-black text-navy-950">{card.scheduled}</p>
         </div>
-        <div className={cn(hasFreshChat ? "flex items-start justify-center gap-2" : "")}>
+        <div className={cn(shouldShowFreshChat ? "flex items-start justify-center gap-2" : "")}>
           <div>
             <p className="text-[10px] font-black uppercase tracking-wide text-muted">Gap</p>
             <p className={cn("mt-1 text-lg font-black", card.missing > 0 ? "text-red-600" : "text-emerald-700")}>{card.missing}</p>
           </div>
-          {hasFreshChat ? (
+          {shouldShowFreshChat ? (
             <div className="min-w-[86px] rounded-xl border border-blue-100 bg-white px-2 py-1.5 shadow-[0_8px_18px_rgba(37,99,235,0.06)]">
               <p className="text-[9px] font-black uppercase tracking-wide text-muted">Fresh Chat</p>
               <p className="mt-0.5 text-lg font-black leading-none text-blue-700">{card.freshChatBacklog?.totalBacklog ?? 0}</p>
@@ -3169,14 +3169,14 @@ function drawCanvasHeadcountStrip(ctx: CanvasRenderingContext2D, card: OnlineHea
     drawText(ctx, column.label.toUpperCase(), colX, y + height - 36, 10, "#64748B", "900");
     drawText(ctx, column.value, colX, y + height - 14, 16, column.color, "900");
   });
-  if (typeof card.freshChatBacklog?.totalBacklog === "number") {
+  if (card.label.toLowerCase().includes("ads online hc")) {
     const boxW = 92;
     const boxH = 40;
     const boxX = x + width - boxW - 18;
     const boxY = y + height - boxH - 10;
     roundRect(ctx, boxX, boxY, boxW, boxH, 12, "#FFFFFF", "#DBEAFE");
     drawText(ctx, "FRESH CHAT", boxX + 10, boxY + 15, 8, "#64748B", "900");
-    drawText(ctx, String(card.freshChatBacklog.totalBacklog), boxX + 10, boxY + 33, 15, "#1D4ED8", "900");
+    drawText(ctx, String(card.freshChatBacklog?.totalBacklog ?? 0), boxX + 10, boxY + 33, 15, "#1D4ED8", "900");
   }
 }
 
