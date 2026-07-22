@@ -23,14 +23,28 @@ export async function POST(request: Request) {
 
   try {
     const body = await request.json();
+    const rows = Array.isArray(body)
+      ? body
+      : Array.isArray(body?.rows)
+        ? body.rows
+        : Array.isArray(body?.tickets)
+          ? body.tickets
+          : Array.isArray(body?.statuses)
+            ? body.statuses
+            : Array.isArray(body?.data)
+              ? body.data
+              : Array.isArray(body?.records)
+                ? body.records
+                : body?.status !== undefined
+                  ? [body.status]
+                  : [];
     const result = await importRealtimeFreshChatSnapshot({
       cycleDownload: String(body?.cycleDownload ?? ""),
       fileName: typeof body?.fileName === "string" ? body.fileName : "fresh_chat_backlog.json",
       source: typeof body?.source === "string" ? body.source : "fresh-chat",
       generatedDate: typeof body?.generatedDate === "string" ? body.generatedDate : null,
-      rows: Array.isArray(body?.rows) ? body.rows : [],
-      tickets: Array.isArray(body?.tickets) ? body.tickets : [],
-      rawText: typeof body?.rawText === "string" ? body.rawText : ""
+      rows,
+      rawText: typeof body === "string" ? body : typeof body?.rawText === "string" ? body.rawText : ""
     });
     if ("error" in result) {
       return NextResponse.json({ success: false, error: result.error, message: result.error }, { status: result.status ?? 400 });
