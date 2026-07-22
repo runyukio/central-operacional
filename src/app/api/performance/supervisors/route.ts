@@ -13,7 +13,9 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const query: PerformanceSupervisorsQuery = {
-      view: readView(url.searchParams.get("view"))
+      view: readView(url.searchParams.get("view")),
+      startDate: url.searchParams.get("startDate") ?? undefined,
+      endDate: url.searchParams.get("endDate") ?? undefined
     };
     return NextResponse.json(await getPerformanceSupervisorsDashboard(await getApiActor(), query));
   } catch (error) {

@@ -309,7 +309,9 @@ export function PerformanceAutomationPage() {
   const [agentsPayload, setAgentsPayload] = useState<PerformanceAgentsResponse | null>(null);
   const [supervisorsPayload, setSupervisorsPayload] = useState<PerformanceSupervisorsResponse | null>(null);
   const [agentView, setAgentView] = useState<QualityGranularity>("daily");
-  const [supervisorView, setSupervisorView] = useState<SupervisorView>("daily");
+  const [supervisorView, setSupervisorView] = useState<SupervisorView>("monthly");
+  const [supervisorStartDate, setSupervisorStartDate] = useState("");
+  const [supervisorEndDate, setSupervisorEndDate] = useState("");
   const [agentLob, setAgentLob] = useState("");
   const [agentShiftId, setAgentShiftId] = useState("");
   const [agentSupervisorId, setAgentSupervisorId] = useState("");
@@ -423,6 +425,8 @@ export function PerformanceAutomationPage() {
   const loadSupervisors = useCallback(async () => {
     setLoadingSupervisors(true);
     const params = new URLSearchParams({ view: supervisorView });
+    if (supervisorStartDate) params.set("startDate", supervisorStartDate);
+    if (supervisorEndDate) params.set("endDate", supervisorEndDate);
     try {
       const data = await fetchPerformanceSupervisors(params);
       setSupervisorsPayload(data);
@@ -432,7 +436,7 @@ export function PerformanceAutomationPage() {
     } finally {
       setLoadingSupervisors(false);
     }
-  }, [supervisorView]);
+  }, [supervisorEndDate, supervisorStartDate, supervisorView]);
 
   useEffect(() => {
     void loadQueue();
@@ -563,7 +567,11 @@ export function PerformanceAutomationPage() {
           loading={loadingSupervisors}
           payload={supervisorsPayload}
           view={supervisorView}
+          startDate={supervisorStartDate}
+          endDate={supervisorEndDate}
           onViewChange={setSupervisorView}
+          onStartDateChange={setSupervisorStartDate}
+          onEndDateChange={setSupervisorEndDate}
           onRefresh={() => void loadSupervisors()}
         />
       ) : activeTab === "forecast" ? (
@@ -1104,13 +1112,21 @@ function SupervisorsView({
   loading,
   payload,
   view,
+  startDate,
+  endDate,
   onViewChange,
+  onStartDateChange,
+  onEndDateChange,
   onRefresh
 }: {
   loading: boolean;
   payload: PerformanceSupervisorsResponse | null;
   view: SupervisorView;
+  startDate: string;
+  endDate: string;
   onViewChange: (value: SupervisorView) => void;
+  onStartDateChange: (value: string) => void;
+  onEndDateChange: (value: string) => void;
   onRefresh: () => void;
 }) {
   const summary = payload?.summary;
@@ -1127,6 +1143,14 @@ function SupervisorsView({
             <SlicerButton active={view === "weekly"} label="Semanal" onClick={() => onViewChange("weekly")} />
             <SlicerButton active={view === "daily"} label="Diário" onClick={() => onViewChange("daily")} />
           </SlicerGroup>
+          <DateRangeFilter
+            startDate={startDate}
+            endDate={endDate}
+            minDate={payload?.dataRange?.startDate ?? ""}
+            maxDate={payload?.dataRange?.endDate ?? ""}
+            onStartDateChange={onStartDateChange}
+            onEndDateChange={onEndDateChange}
+          />
           <button type="button" onClick={onRefresh} className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-white px-3 text-xs font-black text-navy-950 hover:bg-slate-50">
             <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} /> Atualizar
           </button>

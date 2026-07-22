@@ -120,6 +120,8 @@ export type PerformanceAgentsQuery = {
 
 export type PerformanceSupervisorsQuery = {
   view?: "monthly" | "weekly" | "daily";
+  startDate?: string;
+  endDate?: string;
 };
 
 type ProductionRecordForDashboard = Prisma.ProductionRecordGetPayload<{
@@ -961,7 +963,12 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
   const range = await prisma.productionRecord.aggregate({ _min: { bzDay: true }, _max: { bzDay: true } });
   const fallback = getDefaultDatePeriod();
   const referenceDate = range._max.bzDay ?? fallback.end;
-  const period = dashboardViewPeriod(referenceDate, view);
+  const defaultPeriod = dashboardViewPeriod(referenceDate, view);
+  const period = {
+    start: parseDate(query.startDate) ?? defaultPeriod.start,
+    end: parseDate(query.endDate) ?? defaultPeriod.end
+  };
+  if (period.start > period.end) throw new PerformanceError("A data inicial não pode ser posterior à data final.", 400);
   const employees = (await prisma.employeeProfile.findMany({
     where: { deletedAt: null, supervisorId: { not: null } },
     select: {
