@@ -935,19 +935,23 @@ function TimelineBar({
 
   return (
     <div
-      className="w-full overflow-x-auto pb-2"
+      className="w-full pb-2"
       role="region"
       aria-label={`Linha do tempo de 48 horas de ${formatShortDate(row.data)} a ${formatShortDate(nextDate)}`}
       tabIndex={0}
     >
-      <div className="relative w-[200%] min-w-[880px] pt-5">
-        <div className="absolute inset-x-0 top-0 grid grid-cols-12 text-center text-[11px] font-bold text-slate-400">
-          {["02", "06", "10", "14", "18", "22", "02", "06", "10", "14", "18", "22"].map((hour, index) => (
-            <span key={`${hour}-${index}`}>{hour}</span>
+      <div className="relative w-full pt-11">
+        <div className="absolute inset-x-0 top-0 grid grid-cols-2 overflow-hidden rounded-t-md border border-b-0 border-slate-300 text-center text-[10px] font-black uppercase tracking-wide text-slate-500">
+          <span className="bg-slate-50 py-1">{formatShortDate(row.data)}</span>
+          <span className="border-l-2 border-blue-300 bg-blue-50/60 py-1">{formatShortDate(nextDate)}</span>
+        </div>
+        <div className="absolute inset-x-0 top-6 grid grid-cols-12 text-center text-[10px] font-bold text-slate-400">
+          {["00", "04", "08", "12", "16", "20", "00", "04", "08", "12", "16", "20"].map((hour, index) => (
+            <span key={`${hour}-${index}`}>{hour}:00</span>
           ))}
         </div>
         <div className="relative h-11 overflow-hidden rounded-md border-2 border-slate-700 bg-slate-100 shadow-inner">
-          <span className="pointer-events-none absolute bottom-0 left-1/2 top-0 z-20 w-px bg-slate-300/80" aria-hidden="true" />
+          <span className="pointer-events-none absolute bottom-0 left-1/2 top-0 z-20 w-0.5 bg-blue-300" aria-hidden="true" />
           <div className="absolute inset-x-0 top-0 h-7 border-b border-slate-200/80 bg-white/70">
             {row.segments.filter((segment) => segment.type === "ACTIVE").map((segment, index) => (
               <TimelineRange
