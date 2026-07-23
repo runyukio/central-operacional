@@ -4,19 +4,21 @@ import { getApiActor } from "@/lib/api-actor";
 import { canAccessRealtimeHoursCapture } from "@/lib/realtime-hours-permissions";
 import { getRealtimeHoursTimeline } from "@/lib/realtime-hours-service";
 import {
-  compareRealtimeHoursPlannedShift,
   filterRealtimeHoursTimelineRows,
   primaryRealtimeHoursPlannedShift,
   realtimeHoursPlannedShiftLabel,
-  realtimeHoursScheduleStatusLabel,
-  realtimeHoursShiftDateActivity
+  realtimeHoursScheduleStatusLabel
 } from "@/lib/realtime-hours-timeline";
-import { buildXlsxResponse, xlsxDateTimeInTimeZone, xlsxDurationFormat } from "@/lib/xlsx-export";
+import {
+  buildXlsxResponse,
+  excelDateSerial,
+  excelDateTimeSerial,
+  xlsxDurationFormat
+} from "@/lib/xlsx-export";
 
 export const dynamic = "force-dynamic";
 
 const millisecondsPerDay = 24 * 60 * 60 * 1000;
-const saoPauloTimeZone = "America/Sao_Paulo";
 
 export async function GET(request: Request) {
   const actor = await getApiActor();
@@ -47,7 +49,7 @@ export async function GET(request: Request) {
       shift: url.searchParams.get("shift"),
       schedule: url.searchParams.get("schedule")
     };
-    const timeline = await getRealtimeHoursTimeline({ date, includeOvernightShiftTail: true });
+    const timeline = await getRealtimeHoursTimeline({ date });
     const filteredRows = filterRealtimeHoursTimelineRows(timeline.rows, filters);
 
     const headers = [
@@ -76,12 +78,10 @@ export async function GET(request: Request) {
     ];
 
     const rows = filteredRows.map((row) => {
-      const comparison = compareRealtimeHoursPlannedShift(row, date, timeline.window.calculationEnd);
-      const plannedShift = primaryRealtimeHoursPlannedShift(row, date);
-      const shiftActivity = realtimeHoursShiftDateActivity(row, date, timeline.window.calculationEnd);
+      const plannedShift = primaryRealtimeHoursPlannedShift(row, row.data);
 
       return [
-        new Date(`${date}T12:00:00.000-03:00`),
+        excelDateSerial(row.data),
         row.employeeName || row.wbLogin || row.windowsUser || row.hostname,
         row.wbLogin,
         row.employeeId,
@@ -90,19 +90,19 @@ export async function GET(request: Request) {
         row.supervisor || "Sem supervisor",
         row.shift || "Sem turno",
         plannedShift ? realtimeHoursScheduleStatusLabel(plannedShift.status) : "Sem escala",
-        realtimeHoursPlannedShiftLabel(row, date),
-        plannedShift ? new Date(plannedShift.start) : null,
-        plannedShift ? new Date(plannedShift.end) : null,
-        shiftActivity.firstActiveAt !== null ? xlsxDateTimeInTimeZone(shiftActivity.firstActiveAt, saoPauloTimeZone) : null,
-        shiftActivity.lastActiveAt !== null ? xlsxDateTimeInTimeZone(shiftActivity.lastActiveAt, saoPauloTimeZone) : null,
-        durationForExcel(shiftActivity.activeMs),
-        durationForExcel(shiftActivity.noActivityMs),
-        durationForExcel(comparison.arrivalDelayMs),
-        shiftActivity.sessionCount,
+        realtimeHoursPlannedShiftLabel(row, row.data),
+        excelDateTimeSerial(plannedShift?.start),
+        excelDateTimeSerial(plannedShift?.end),
+        excelDateTimeSerial(row.entryAt),
+        excelDateTimeSerial(row.exitAt),
+        durationForExcel(row.activeMs),
+        durationForExcel(row.noActivityMs),
+        durationForExcel(row.arrivalDelayMs),
+        row.sessionCount,
         row.hostnames.join(", ") || row.hostname,
         row.windowsUsers.join(", ") || row.windowsUser,
         row.ipAddress,
-        row.lastSeenAt ? new Date(row.lastSeenAt) : null
+        excelDateTimeSerial(row.lastSeenAt)
       ];
     });
 
@@ -154,7 +154,7 @@ function validDate(value: string | null) {
 
 function todayInSaoPaulo() {
   return new Intl.DateTimeFormat("en-CA", {
-    timeZone: saoPauloTimeZone,
+    timeZone: "America/Sao_Paulo",
     year: "numeric",
     month: "2-digit",
     day: "2-digit"
