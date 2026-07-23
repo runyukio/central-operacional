@@ -1031,7 +1031,7 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
       SELECT
         e."supervisorId" AS "supervisorId",
         COALESCE(SUM(c."ticketCount"), 0)::double precision AS "tickets",
-        (COUNT(DISTINCT c."performanceDay") FILTER (WHERE c."ticketCount" > 0))::integer AS "days"
+        (COUNT(DISTINCT (c."employeeId", c."performanceDay")) FILTER (WHERE c."ticketCount" > 0))::integer AS "days"
       FROM "PerformanceCecCpdRecord" c
       INNER JOIN "EmployeeProfile" e ON e."id" = c."employeeId"
       WHERE c."employeeId" IN (${Prisma.join(employeeIds)})

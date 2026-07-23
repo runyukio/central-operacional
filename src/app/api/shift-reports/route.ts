@@ -10,7 +10,7 @@ import {
 
 const absenceSchema = z.object({
   wbLogin: z.string().trim().min(1, "Informe o WB/Login."),
-  reason: z.string().trim().min(1, "Informe o motivo da falta.").max(500)
+  reason: z.string().trim().min(1, "Informe o motivo da falta.")
 });
 
 const schema = z.object({
@@ -23,8 +23,8 @@ const schema = z.object({
   absences: z.array(absenceSchema).max(100).default([]),
   queueStatusStart: z.enum(["ON_TARGET", "OVER_TARGET"]),
   queueStatusEnd: z.enum(["ON_TARGET", "OVER_TARGET"]),
-  occurrence: z.string().trim().max(5000).optional().default(""),
-  pendingTasks: z.string().trim().max(5000).optional().default(""),
+  occurrence: z.string().trim().optional().default(""),
+  pendingTasks: z.string().trim().optional().default(""),
   generalMood: z.enum(["HAPPY", "NEUTRAL", "SAD"]),
   leaderIds: z.array(z.string()).max(100).default([])
 });

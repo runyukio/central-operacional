@@ -1220,7 +1220,7 @@ function SupervisorsView({
                         <SupervisorMetric
                           value={row.ahtMetric === "CPD" ? formatNumber(row.cpdAverage ?? 0) : formatSeconds(row.ahtSeconds)}
                           detail={row.ahtMetric === "CPD"
-                            ? `${formatNumber(row.cpdTickets ?? 0)} tickets / ${formatNumber(row.cpdDays ?? 0)} dia(s)`
+                            ? `${formatNumber(row.cpdTickets ?? 0)} tickets / ${formatNumber(row.cpdDays ?? 0)} dias trabalhados`
                             : `${formatNumber(row.submit)} output`}
                         />
                       </td>
