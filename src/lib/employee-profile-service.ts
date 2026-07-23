@@ -4,8 +4,8 @@ import type { Actor } from "@/lib/mock-db";
 import { createNotFoundError, createPermissionError, createServerError, type ApiErrorPayload } from "@/lib/api-errors";
 import { DEFAULT_BILLING_REFERENCE_MONTH, getEmployeeBillingPreview } from "@/lib/billing-service";
 import { getDefaultDatePeriod } from "@/lib/default-date-range";
-import { getPerformanceDashboard } from "@/lib/performance-service";
-import { canAccessEmployeeMap, canAccessPerformanceWfh, canViewEmployeeSensitiveData, normalizeRole } from "@/lib/permissions";
+import { getEmployeePerformanceSummary } from "@/lib/performance-service";
+import { canAccessEmployeeMap, canAccessPerformance, canAccessPerformanceWfh, canViewEmployeeSensitiveData, normalizeRole } from "@/lib/permissions";
 import { logPerformanceMetric } from "@/lib/performance-logger";
 import { prisma } from "@/lib/prisma";
 import { cleanShiftName } from "@/lib/shift-display";
@@ -114,7 +114,7 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
       profileSection("requests", employee.id, buildRequestsSummary(employee)),
       profileSection("equipment", employee.id, buildEquipmentSummary(employee.id)),
       profileSection("mood", employee.id, buildMoodSummary(employee.id, period)),
-      profileSection("performance", employee.id, buildPerformanceSummary(actor, viewer, employee, period)),
+      profileSection("performance", employee.id, buildPerformanceSummary(viewer, employee, period)),
       profileSection("billing_preview", employee.id, getEmployeeBillingPreview(employee.id, DEFAULT_BILLING_REFERENCE_MONTH)),
       isOwnProfile
         ? profileSection("anonymous_feedback", employee.id, buildOwnAnonymousFeedbackSummary(viewer.id))
@@ -420,22 +420,21 @@ async function buildOwnAnonymousFeedbackSummary(userId: string) {
   };
 }
 
-async function buildPerformanceSummary(actor: Actor, viewer: ProfileUser, employee: ProfileEmployee, period: Period) {
+async function buildPerformanceSummary(viewer: ProfileUser, employee: ProfileEmployee, period: Period) {
   try {
-    let summary: ReturnType<typeof mapPerformanceRow> | null = null;
     const isOwnProfile = viewer.employeeProfile?.id === employee.id;
-    if (isOwnProfile) {
-      const mineDashboard = await getPerformanceDashboard(actor, { view: "mine", startDate: formatDateInput(period.start), endDate: formatDateInput(period.end) });
-      if (mineDashboard.mode === "mine") summary = mapPerformanceRow(mineDashboard.summary.mine);
-    }
+    const permissionUser = {
+      role: viewer.role.name,
+      status: viewer.status,
+      roleTitle: viewer.employeeProfile?.roleTitle
+    };
+    const canViewPerformance = isOwnProfile
+      ? canAccessPerformance(permissionUser)
+      : canAccessPerformanceWfh(permissionUser);
+    if (!canViewPerformance) return null;
 
-    if (!summary && canAccessPerformanceWfh({ role: viewer.role.name, status: viewer.status, roleTitle: viewer.employeeProfile?.roleTitle })) {
-      const dashboard = await getPerformanceDashboard(actor, { view: "wfh", employeeId: employee.id, startDate: formatDateInput(period.start), endDate: formatDateInput(period.end) });
-      if (dashboard.mode === "wfh") {
-        const row = dashboard.ranking.find((item) => item.employeeId === employee.id);
-        summary = row ? mapPerformanceRow(row) : null;
-      }
-    }
+    const employeeSummary = await getEmployeePerformanceSummary(employee.id, period);
+    let summary = employeeSummary ? mapPerformanceRow(employeeSummary) : null;
 
     if (employee.lob.name.trim().toUpperCase() !== "CEC") return summary;
 

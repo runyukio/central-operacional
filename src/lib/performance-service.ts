@@ -410,6 +410,24 @@ export async function getPerformanceDashboard(actor: Actor, query: PerformanceQu
   };
 }
 
+export async function getEmployeePerformanceSummary(
+  employeeId: string,
+  period: { start: Date; end: Date }
+) {
+  const employee = await prisma.employeeProfile.findFirst({
+    where: { id: employeeId, deletedAt: null },
+    include: {
+      user: true,
+      lob: true,
+      supervisor: true
+    }
+  });
+  if (!employee) return null;
+
+  const rows = await buildAgentRows([employee], period);
+  return rows[0] ?? emptyAgentRow(employee, period);
+}
+
 export async function getPerformanceProductionDashboard(actor: Actor, query: PerformanceQuery = {}) {
   const user = await requireActiveUser(actor);
   if (!canAccessPerformance(permissionUser(user))) throw new PerformanceError("Você não tem permissão para acessar Performance.", 403);
