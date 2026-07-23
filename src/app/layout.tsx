@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 
-import { LanguageProvider } from "@/components/language-provider";
 import { ThemeProvider } from "@/components/theme-provider";
 
 import "./globals.css";
@@ -22,28 +21,14 @@ const themeScript = `
 })();
 `;
 
-const languageScript = `
-(() => {
-  try {
-    const stored = window.localStorage.getItem("central-operacional-language");
-    const language = stored === "en-US" ? "en-US" : "pt-BR";
-    document.documentElement.lang = language;
-    document.documentElement.dataset.language = language;
-  } catch {}
-})();
-`;
-
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="pt-BR" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-        <script dangerouslySetInnerHTML={{ __html: languageScript }} />
       </head>
       <body>
-        <ThemeProvider>
-          <LanguageProvider>{children}</LanguageProvider>
-        </ThemeProvider>
+        <ThemeProvider>{children}</ThemeProvider>
       </body>
     </html>
   );
