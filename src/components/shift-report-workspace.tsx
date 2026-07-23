@@ -220,6 +220,7 @@ export function ShiftReportWorkspace() {
         responsibleId: current.responsibleId
       }));
       await loadReports(appliedFilters);
+      setActiveView("monitor");
     } catch (error) {
       setMessage({ tone: "error", text: error instanceof Error ? error.message : "Não foi possível enviar o report." });
     } finally {
@@ -280,10 +281,10 @@ export function ShiftReportWorkspace() {
         <div className={cn("mb-3 rounded-lg border px-3 py-2 text-sm font-bold", message.tone === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700")}>{message.text}</div>
       ) : null}
 
-      {options?.permissions.canSubmit && options.permissions.canViewPanel ? (
+      {options?.permissions.canSubmit ? (
         <div className="mb-4 inline-flex rounded-lg border border-border bg-slate-100 p-1">
           <button type="button" onClick={() => setActiveView("submit")} className={cn("h-9 rounded-md px-4 text-sm font-extrabold", activeView === "submit" ? "bg-white text-blue-700 shadow-soft" : "text-muted")}>Enviar report</button>
-          <button type="button" onClick={() => setActiveView("monitor")} className={cn("h-9 rounded-md px-4 text-sm font-extrabold", activeView === "monitor" ? "bg-white text-blue-700 shadow-soft" : "text-muted")}>Acompanhar</button>
+          <button type="button" onClick={() => setActiveView("monitor")} className={cn("h-9 rounded-md px-4 text-sm font-extrabold", activeView === "monitor" ? "bg-white text-blue-700 shadow-soft" : "text-muted")}>{options.permissions.canViewPanel ? "Acompanhar" : "Meus reports"}</button>
         </div>
       ) : null}
 
@@ -471,7 +472,8 @@ function MonitorWorkspace({
         <StatCard title="Críticos" value={summary.critical} icon={AlertTriangle} tone="red" />
       </div>
 
-      <Panel title="Filtros de acompanhamento">
+      <Panel title={options?.permissions.canViewPanel ? "Filtros de acompanhamento" : "Meus reports"}>
+        {!options?.permissions.canViewPanel ? <p className="mb-3 text-sm font-semibold text-muted">Acompanhe os reports que você registrou e consulte todos os detalhes de cada envio.</p> : null}
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
           <Field label="Data inicial"><input type="date" value={filters.startDate} onChange={(event) => field("startDate", event.target.value)} className="premium-control h-10 w-full px-2 text-sm font-bold" /></Field>
           <Field label="Data final"><input type="date" value={filters.endDate} onChange={(event) => field("endDate", event.target.value)} className="premium-control h-10 w-full px-2 text-sm font-bold" /></Field>
@@ -490,7 +492,7 @@ function MonitorWorkspace({
       </Panel>
 
       <section className="card overflow-hidden">
-        <div className="border-b border-border px-3 py-2.5"><h2 className="text-sm font-black text-navy-950">Reports de turno</h2></div>
+        <div className="border-b border-border px-3 py-2.5"><h2 className="text-sm font-black text-navy-950">{options?.permissions.canViewPanel ? "Reports de turno" : "Meus reports enviados"}</h2></div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[1120px] border-collapse text-left text-[12.5px]">
             <thead><tr className="border-b border-border bg-slate-50 text-[10.5px] font-black uppercase tracking-wide text-muted">
@@ -525,11 +527,15 @@ function ReportDetail({ report, onClose }: { report: ReportItem; onClose: () => 
         <div className="space-y-4 p-4">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <DetailMetric label="Importância" value={report.importance} /><DetailMetric label="Agentes online" value={String(report.onlineAgents)} /><DetailMetric label="ABS" value={String(report.absCount)} /><DetailMetric label="Humor" value={report.generalMood} />
-            <DetailMetric label="Filas no início" value={report.queueStatusStart} /><DetailMetric label="Filas no final" value={report.queueStatusEnd} /><DetailMetric label="Ocorrência" value={report.occurrence || "Sem ocorrência"} /><DetailMetric label="Tarefas pendentes" value={report.pendingTasks || "Sem pendências"} />
+            <DetailMetric label="Filas no início" value={report.queueStatusStart} /><DetailMetric label="Filas no final" value={report.queueStatusEnd} />
           </div>
           <div className="grid gap-4 lg:grid-cols-2">
             <Panel title="ABS e observações">{report.absences.length ? <div className="space-y-2">{report.absences.map((absence) => <div key={absence.id} className="rounded-lg border border-border bg-slate-50 p-2.5"><p className="text-sm font-black text-navy-950">{absence.employee} <span className="text-blue-600">· {absence.wbLogin}</span></p><p className="mt-1 text-xs font-semibold text-muted">{absence.reason}</p></div>)}</div> : <p className="text-sm font-semibold text-muted">Nenhuma ausência registrada.</p>}</Panel>
             <Panel title="Líderes presentes">{report.leaders.length ? <div className="space-y-2">{report.leaders.map((leader) => <div key={leader.id} className="flex items-center justify-between rounded-lg border border-border px-3 py-2"><span className="text-sm font-bold text-navy-950">{leader.name}</span><StatusBadge status={leader.role || "Liderança"} /></div>)}</div> : <p className="text-sm font-semibold text-muted">Nenhum líder informado.</p>}</Panel>
+          </div>
+          <div className="space-y-4">
+            <ReportNarrative label="Ocorrência" value={report.occurrence} emptyValue="Sem ocorrência registrada." />
+            <ReportNarrative label="Tarefas pendentes" value={report.pendingTasks} emptyValue="Sem pendências registradas." />
           </div>
         </div>
       </div>
@@ -556,4 +562,13 @@ function MoodSelector({ value, onChange }: { value: FormState["generalMood"]; on
 
 function DetailMetric({ label, value }: { label: string; value: string }) {
   return <div className="min-w-0 rounded-lg border border-border bg-slate-50/70 p-3"><p className="text-[10px] font-black uppercase tracking-wide text-muted">{label}</p><p className="mt-1 break-words text-sm font-extrabold text-navy-950">{value}</p></div>;
+}
+
+function ReportNarrative({ label, value, emptyValue }: { label: string; value: string; emptyValue: string }) {
+  return (
+    <section className="rounded-xl border border-border bg-slate-50/70 p-4">
+      <h3 className="text-[10px] font-black uppercase tracking-[.12em] text-muted">{label}</h3>
+      <p className={cn("mt-2 whitespace-pre-wrap break-words text-sm font-semibold leading-6", value ? "text-navy-950" : "text-muted")}>{value || emptyValue}</p>
+    </section>
+  );
 }
