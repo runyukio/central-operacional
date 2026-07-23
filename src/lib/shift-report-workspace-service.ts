@@ -4,6 +4,7 @@ import { normalizeAccessRole, roleHasCapability } from "@/lib/access-control";
 import type { Actor } from "@/lib/mock-db";
 import { prisma } from "@/lib/prisma";
 import { cleanShiftName } from "@/lib/shift-display";
+import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
 export type ShiftReportAbsenceInput = {
   wbLogin: string;
@@ -391,9 +392,12 @@ export async function deleteShiftReportWorkspace(actor: Actor, id: string) {
   return { success: true, message: "Report de turno excluído." };
 }
 
-export async function exportShiftReportWorkspace(actor: Actor, query: ShiftReportWorkspaceQuery = {}) {
+export async function exportShiftReportWorkspace(
+  actor: Actor,
+  query: ShiftReportWorkspaceQuery = {}
+): Promise<XlsxExportPayload | { error: string }> {
   const payload = await listShiftReportWorkspace(actor, query);
-  if ("error" in payload) return payload;
+  if ("error" in payload && typeof payload.error === "string") return { error: payload.error };
   const headers = ["data_turno", "turno", "lob", "importancia", "responsavel", "enviado_por", "agentes_online", "abs_total", "abs_detalhes", "filas_inicio", "filas_final", "humor", "lideres_presentes", "ocorrencia", "tarefas_pendentes", "enviado_em"];
   const rows = payload.data.map((report) => [
     report.reportDateIso,
