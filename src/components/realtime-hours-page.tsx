@@ -216,7 +216,6 @@ const emptySummary: RealtimeHoursSummary = {
   }
 };
 
-const emptyMappingsPayload: RealtimeHoursIdentityMappingsPayload = { success: true, data: [] };
 const ALL_LOBS_FILTER = "__ALL_LOBS__";
 
 export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPageProps) {
@@ -240,6 +239,16 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
   const [mappingDrafts, setMappingDrafts] = useState<Record<string, string>>({});
   const [savingMappingKey, setSavingMappingKey] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+
+  const loadMappings = useCallback(async () => {
+    const response = await fetch("/api/realtime-hours/identity-mappings", { cache: "no-store" });
+    const body = await response.json() as RealtimeHoursIdentityMappingsPayload;
+    if (!response.ok || body.success === false) {
+      throw new Error(body.message || body.error || "Não foi possível carregar os vínculos de usuários Windows.");
+    }
+    setMappingsPayload(body);
+  }, []);
+
   const loadData = useCallback(async (showRefreshing = false) => {
     if (showRefreshing) setRefreshing(true);
     if (!showRefreshing) setLoading(true);
@@ -247,50 +256,56 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
     setSuccessMessage("");
 
     try {
-      const shouldLoadMappings = canManageMappings && activeTab === "MAPPINGS";
-      const mappingsRequest = shouldLoadMappings
-        ? fetch("/api/realtime-hours/identity-mappings", { cache: "no-store" })
-        : Promise.resolve(null);
-      const [statusResponse, timelineResponse, mappingsResponse] = await Promise.all([
-        fetch("/api/realtime-hours/status?limit=500", { cache: "no-store" }),
-        fetch(`/api/realtime-hours/timeline?date=${encodeURIComponent(timelineDate)}`, { cache: "no-store" }),
-        mappingsRequest
-      ]);
+      const statusRequest = fetch("/api/realtime-hours/status?limit=500", { cache: "no-store" })
+        .then(async (response) => {
+          const body = await response.json() as RealtimeHoursStatusPayload;
+          if (!response.ok || body.success === false) {
+            throw new Error(body.message || body.error || "Não foi possível carregar a captura de horas.");
+          }
+          setStatusPayload(body);
+        });
+      const timelineRequest = fetch(`/api/realtime-hours/timeline?date=${encodeURIComponent(timelineDate)}`, { cache: "no-store" })
+        .then(async (response) => {
+          const body = await response.json() as RealtimeHoursTimelinePayload;
+          if (!response.ok || body.success === false) {
+            throw new Error(body.message || body.error || "Não foi possível carregar a linha do tempo.");
+          }
+          setTimelinePayload(body);
+        });
 
-      const [statusBody, timelineBody, mappingsBody] = await Promise.all([
-        statusResponse.json() as Promise<RealtimeHoursStatusPayload>,
-        timelineResponse.json() as Promise<RealtimeHoursTimelinePayload>,
-        mappingsResponse
-          ? mappingsResponse.json() as Promise<RealtimeHoursIdentityMappingsPayload>
-          : Promise.resolve(emptyMappingsPayload)
-      ]);
-
-      if (!statusResponse.ok || statusBody.success === false) {
-        throw new Error(statusBody.message || statusBody.error || "Não foi possível carregar a captura de horas.");
-      }
-      if (!timelineResponse.ok || timelineBody.success === false) {
-        throw new Error(timelineBody.message || timelineBody.error || "Não foi possível carregar a linha do tempo.");
-      }
-      if (shouldLoadMappings && mappingsResponse && (!mappingsResponse.ok || mappingsBody.success === false)) {
-        throw new Error(mappingsBody.message || mappingsBody.error || "Não foi possível carregar os vínculos de usuários Windows.");
-      }
-
-      setStatusPayload(statusBody);
-      setTimelinePayload(timelineBody);
-      setMappingsPayload(mappingsBody);
+      const results = await Promise.allSettled([statusRequest, timelineRequest]);
+      const rejected = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (rejected) throw rejected.reason;
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Não foi possível carregar a captura de horas.");
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [activeTab, canManageMappings, timelineDate]);
+  }, [timelineDate]);
 
   useEffect(() => {
     loadData();
     const interval = window.setInterval(() => loadData(true), 60_000);
     return () => window.clearInterval(interval);
   }, [loadData]);
+
+  useEffect(() => {
+    if (!canManageMappings || activeTab !== "MAPPINGS" || mappingsPayload) return;
+    loadMappings().catch((loadError) => {
+      setError(loadError instanceof Error ? loadError.message : "Não foi possível carregar os vínculos de usuários Windows.");
+    });
+  }, [activeTab, canManageMappings, loadMappings, mappingsPayload]);
+
+  const refreshVisibleData = useCallback(async () => {
+    const requests: Promise<unknown>[] = [loadData(true)];
+    if (canManageMappings && activeTab === "MAPPINGS") requests.push(loadMappings());
+    const results = await Promise.allSettled(requests);
+    const rejected = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (rejected) {
+      setError(rejected.reason instanceof Error ? rejected.reason.message : "Não foi possível atualizar os dados.");
+    }
+  }, [activeTab, canManageMappings, loadData, loadMappings]);
 
   const summary = statusPayload?.summary ?? emptySummary;
   const batch = statusPayload?.batch ?? null;
@@ -371,7 +386,7 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
         delete next[key];
         return next;
       });
-      await loadData(true);
+      await Promise.all([loadData(true), loadMappings()]);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Não foi possível salvar o vínculo.");
     } finally {
@@ -426,7 +441,7 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
             </button>
             <button
               type="button"
-              onClick={() => loadData(true)}
+              onClick={refreshVisibleData}
               disabled={refreshing}
               className="premium-button inline-flex h-9 items-center gap-2 px-3 text-sm font-extrabold disabled:cursor-wait disabled:opacity-70"
               title="Atualizar dados"

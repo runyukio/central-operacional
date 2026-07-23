@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
 import { getApiActor } from "@/lib/api-actor";
+import { logPerformanceMetric } from "@/lib/performance-logger";
 import { canAccessRealtimeHoursCapture, canManageRealtimeHoursMappings } from "@/lib/realtime-hours-permissions";
 import { prisma } from "@/lib/prisma";
 import {
@@ -138,15 +139,10 @@ type TimelineDeviceRecord = TimelineRecord & {
 };
 
 type TimelineRecordWithIdentity = TimelineDeviceRecord & {
-  id: string;
-  sessionId: number | null;
   sessionState: string | null;
   wbLogin: string | null;
   employeeId: string | null;
   ipAddress: string | null;
-  activeProcessName: string | null;
-  activeWindowTitle: string | null;
-  identityConfidence: string;
 };
 
 type TimelineEmployee = {
@@ -839,6 +835,7 @@ export async function upsertRealtimeHoursIdentityMapping(input: RealtimeHoursIde
 }
 
 export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOptions = {}) {
+  const startedAt = Date.now();
   const period = resolveTimelineDate(options.date);
   const employeeId = String(options.employeeId ?? "").trim();
   const wbLogin = normalizeLogin(String(options.wbLogin ?? ""));
@@ -857,9 +854,7 @@ export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOpt
     },
     orderBy: [{ hostname: "asc" }, { windowsUser: "asc" }, { capturedAt: "asc" }],
     select: {
-      id: true,
       eventType: true,
-      sessionId: true,
       capturedAt: true,
       hostname: true,
       windowsUser: true,
@@ -869,10 +864,7 @@ export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOpt
       isSessionActive: true,
       sessionState: true,
       idleSeconds: true,
-      activeProcessName: true,
-      activeWindowTitle: true,
-      lastActivityAt: true,
-      identityConfidence: true
+      lastActivityAt: true
     }
   });
 
@@ -1011,7 +1003,7 @@ export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOpt
     return left.localeCompare(right) || a.data.localeCompare(b.data) || a.key.localeCompare(b.key);
   });
 
-  return {
+  const result = {
     success: true,
     date: period.date,
     window: {
@@ -1027,6 +1019,12 @@ export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOpt
     },
     rows
   };
+  logPerformanceMetric("realtime-hours.timeline", startedAt, {
+    date: period.date,
+    records: records.length,
+    rows: rows.length
+  });
+  return result;
 }
 
 type RealtimeHoursTimelinePeriod = ReturnType<typeof resolveTimelineDate>;
