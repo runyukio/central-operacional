@@ -22,8 +22,8 @@ export type XlsxExportPayload = {
 
 export const xlsxContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 export const xlsxDurationFormat = "[h]:mm:ss;-[h]:mm:ss;00:00:00";
-
 const millisecondsPerDay = 24 * 60 * 60 * 1000;
+const excelEpochUtc = Date.UTC(1899, 11, 30);
 const excelEpochOffsetDays = 25_569;
 
 export function xlsxDateTimeInTimeZone(value: Date | string | number, timeZone: string) {
@@ -55,6 +55,37 @@ export function xlsxDateTimeInTimeZone(value: Date | string | number, timeZone: 
 
 export function dateStamp(date = new Date()) {
   return date.toISOString().slice(0, 10);
+}
+
+export function excelDateSerial(dateKey: string) {
+  const match = dateKey.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  return excelSerialFromParts(Number(match[1]), Number(match[2]), Number(match[3]), 0, 0, 0);
+}
+
+export function excelDateTimeSerial(
+  value: string | Date | null | undefined,
+  timeZone = "America/Sao_Paulo"
+) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+  const parts = Object.fromEntries(
+    formatter.formatToParts(date)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, Number(part.value)])
+  ) as Record<string, number>;
+  return excelSerialFromParts(parts.year, parts.month, parts.day, parts.hour, parts.minute, parts.second);
 }
 
 export function buildXlsxBuffer(payload: Pick<XlsxExportPayload, "sheetName" | "headers" | "rows" | "columnFormats" | "autoFilter">) {
@@ -108,4 +139,9 @@ function buildWorksheet(headers: string[], rows: XlsxCell[][], columnFormats: Xl
 function safeSheetName(value: string) {
   const clean = value.replace(/[:\\/?*[\]]/g, " ").trim() || "Exportacao";
   return clean.slice(0, 31);
+}
+
+function excelSerialFromParts(year: number, month: number, day: number, hour: number, minute: number, second: number) {
+  if (![year, month, day, hour, minute, second].every(Number.isFinite)) return null;
+  return (Date.UTC(year, month - 1, day, hour, minute, second) - excelEpochUtc) / millisecondsPerDay;
 }

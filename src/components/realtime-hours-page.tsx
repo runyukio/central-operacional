@@ -105,6 +105,7 @@ type RealtimeHoursTimelineSegment = {
 };
 
 type RealtimeHoursPlannedShift = {
+  id: string;
   start: string;
   end: string;
   startsAt: string;
@@ -117,6 +118,8 @@ type RealtimeHoursPlannedShift = {
 
 type RealtimeHoursTimelineRow = {
   key: string;
+  data: string;
+  slotId: string | null;
   hostname: string;
   hostnames: string[];
   windowsUser: string;
@@ -140,6 +143,10 @@ type RealtimeHoursTimelineRow = {
   currentStatus: RealtimeHoursPresenceStatus;
   activeMs: number;
   noActivityMs: number;
+  entryAt: string | null;
+  exitAt: string | null;
+  arrivalDelayMs: number;
+  earlyDepartureMs: number;
   sessionCount: number;
   plannedShifts: RealtimeHoursPlannedShift[];
   segments: RealtimeHoursTimelineSegment[];
@@ -753,7 +760,7 @@ function TimelinePanel({
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-500">
-            <span>{rows.length} colaborador(es) exibido(s)</span>
+            <span>{rows.length} registro(s) de slot exibido(s)</span>
             <div className="flex flex-wrap items-center gap-3">
               <TimelineLegend color="bg-emerald-500" label="Atividade real" />
               <TimelineLegend color="bg-blue-500" label="Jornada prevista" />
@@ -764,7 +771,7 @@ function TimelinePanel({
           </div>
 
           <div className="overflow-x-auto rounded-xl border border-border bg-white">
-            <table className="w-full min-w-[1180px] border-collapse text-left">
+            <table className="w-full min-w-[1360px] border-collapse text-left">
               <thead>
                 <tr className="border-b border-border bg-slate-50 text-[11px] font-black uppercase tracking-wide text-muted">
                   <th className="w-14 px-3 py-3">Ação</th>
@@ -772,7 +779,7 @@ function TimelinePanel({
                   <th className="w-32 px-3 py-3">Data</th>
                   <th className="w-28 px-3 py-3">Duração</th>
                   <th className="w-44 px-3 py-3">Escala prevista</th>
-                  <th className="px-3 py-3">Timeline 24h</th>
+                  <th className="w-[580px] px-3 py-3">Timeline 48h</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/70">
@@ -780,7 +787,6 @@ function TimelinePanel({
                   <TimelineTableRow
                     key={row.key}
                     row={row}
-                    date={date}
                     windowStart={payload.window.start}
                     windowEnd={payload.window.end}
                     calculationEnd={payload.window.calculationEnd ?? payload.window.end}
@@ -829,7 +835,6 @@ function LobSlicerButton({
 
 function TimelineTableRow({
   row,
-  date,
   windowStart,
   windowEnd,
   calculationEnd,
@@ -837,14 +842,13 @@ function TimelineTableRow({
   onToggle
 }: {
   row: RealtimeHoursTimelineRow;
-  date: string;
   windowStart: string;
   windowEnd: string;
   calculationEnd: string;
   expanded: boolean;
   onToggle: () => void;
 }) {
-  const shiftComparison = comparePlannedShift(row, date, calculationEnd);
+  const shiftComparison = comparePlannedShift(row, row.data, calculationEnd);
   return (
     <>
       <tr className="align-middle transition-colors hover:bg-blue-50/30">
@@ -873,18 +877,17 @@ function TimelineTableRow({
           </div>
         </td>
         <td className="px-3 py-3">
-          <p className="text-sm font-black text-navy-950">{formatDateLabel(date)}</p>
+          <p className="text-sm font-black text-navy-950">{formatDateLabel(row.data)}</p>
           <p className="text-xs font-bold text-muted">{row.sessionCount} sessão(ões)</p>
         </td>
         <td className="px-3 py-3 text-sm font-black text-emerald-600">{formatDurationMs(row.activeMs)}</td>
         <td className="px-3 py-3">
-          <p className="text-sm font-black text-navy-950">{plannedShiftLabel(row, date)}</p>
+          <p className="text-sm font-black text-navy-950">{plannedShiftLabel(row, row.data)}</p>
           <ShiftComparisonBadge comparison={shiftComparison} />
         </td>
         <td className="px-3 py-3">
           <TimelineBar
             row={row}
-            date={date}
             windowStart={windowStart}
             windowEnd={windowEnd}
             calculationEnd={calculationEnd}
@@ -894,7 +897,7 @@ function TimelineTableRow({
       {expanded ? (
         <tr>
           <td colSpan={6} className="bg-slate-50/70 px-3 py-4">
-            <ActivityBreakdown row={row} date={date} />
+            <ActivityBreakdown row={row} />
           </td>
         </tr>
       ) : null}
@@ -913,97 +916,104 @@ function TimelineLegend({ color, label }: { color: string; label: string }) {
 
 function TimelineBar({
   row,
-  date,
   windowStart,
   windowEnd,
   calculationEnd
 }: {
   row: RealtimeHoursTimelineRow;
-  date: string;
   windowStart: string;
   windowEnd: string;
   calculationEnd: string;
 }) {
   const startMs = new Date(windowStart).getTime();
   const endMs = new Date(windowEnd).getTime();
-  const totalMs = Math.max(1, endMs - startMs);
-  const comparison = comparePlannedShift(row, date, calculationEnd);
+  const comparison = comparePlannedShift(row, row.data, calculationEnd);
   const overtimeRanges = buildOvertimeRanges(row);
+  const nextDate = addDaysToDateKey(row.data, 1);
 
   return (
-    <div className="relative pt-5">
-      <div className="absolute inset-x-0 top-0 grid grid-cols-6 text-center text-[11px] font-bold text-slate-400">
-        <span>02:00</span>
-        <span>06:00</span>
-        <span>10:00</span>
-        <span>14:00</span>
-        <span>18:00</span>
-        <span>22:00</span>
-      </div>
-      <div className="relative h-11 overflow-hidden rounded-md border-2 border-slate-700 bg-slate-100 shadow-inner">
-        <div className="absolute inset-x-0 top-0 h-7 border-b border-slate-200/80 bg-white/70">
-          {row.segments.filter((segment) => segment.type === "ACTIVE").map((segment, index) => (
-            <TimelineRange
-              key={`${segment.start}-${index}`}
-              start={new Date(segment.start).getTime()}
-              end={new Date(segment.end).getTime()}
-              windowStart={startMs}
-              windowEnd={endMs}
-              className="bottom-1 top-1 rounded bg-emerald-500"
-              title={`Atividade real | Entrada: ${formatTimeOnly(segment.start)} | Saída: ${formatTimeOnly(segment.end)} | Duração: ${formatDurationMs(segment.durationMs)}`}
-            />
+    <div
+      className="max-w-[560px] overflow-x-scroll pb-2"
+      role="region"
+      aria-label={`Linha do tempo de 48 horas de ${formatShortDate(row.data)} a ${formatShortDate(nextDate)}`}
+      tabIndex={0}
+    >
+      <div className="relative w-[960px] min-w-[960px] pt-11">
+        <div className="absolute inset-x-0 top-0 grid grid-cols-2 overflow-hidden rounded-t-md border border-b-0 border-slate-300 text-center text-[10px] font-black uppercase tracking-wide text-slate-500">
+          <span className="bg-slate-50 py-1">{formatShortDate(row.data)}</span>
+          <span className="border-l-2 border-blue-300 bg-blue-50/60 py-1">{formatShortDate(nextDate)}</span>
+        </div>
+        <div className="absolute inset-x-0 top-6 grid grid-cols-12 text-center text-[10px] font-bold text-slate-400">
+          {["00", "04", "08", "12", "16", "20", "00", "04", "08", "12", "16", "20"].map((hour, index) => (
+            <span key={`${hour}-${index}`}>{hour}:00</span>
           ))}
         </div>
+        <div className="relative h-11 overflow-hidden rounded-md border-2 border-slate-700 bg-slate-100 shadow-inner">
+          <span className="pointer-events-none absolute bottom-0 left-1/2 top-0 z-20 w-0.5 bg-blue-300" aria-hidden="true" />
+          <div className="absolute inset-x-0 top-0 h-7 border-b border-slate-200/80 bg-white/70">
+            {row.segments.filter((segment) => segment.type === "ACTIVE").map((segment, index) => (
+              <TimelineRange
+                key={`${segment.start}-${index}`}
+                start={new Date(segment.start).getTime()}
+                end={new Date(segment.end).getTime()}
+                windowStart={startMs}
+                windowEnd={endMs}
+                className="bottom-1 top-1 rounded bg-emerald-500"
+                title={`Atividade real | Entrada: ${formatDateTime(segment.start)} | Saída: ${formatDateTime(segment.end)} | Duração: ${formatDurationMs(segment.durationMs)}`}
+              />
+            ))}
+          </div>
 
-        <div className="absolute inset-x-0 bottom-0 h-3 bg-slate-100">
-          {row.plannedShifts.map((shift) => (
-            <TimelineRange
-              key={`${shift.start}-${shift.end}`}
-              start={new Date(shift.start).getTime()}
-              end={new Date(shift.end).getTime()}
-              windowStart={startMs}
-              windowEnd={endMs}
-              className="bottom-[3px] h-1.5 rounded-full bg-blue-500"
-              title={`Jornada prevista: ${shift.startsAt} - ${shift.endsAt} | ${scheduleStatusLabel(shift.status)}`}
-            />
-          ))}
+          <div className="absolute inset-x-0 bottom-0 h-3 bg-slate-100">
+            {row.plannedShifts.map((shift) => (
+              <TimelineRange
+                key={shift.id}
+                start={new Date(shift.start).getTime()}
+                end={new Date(shift.end).getTime()}
+                windowStart={startMs}
+                windowEnd={endMs}
+                className="bottom-[3px] h-1.5 rounded-full bg-blue-500"
+                title={`Jornada prevista: ${formatDateTime(shift.start)} até ${formatDateTime(shift.end)} | ${scheduleStatusLabel(shift.status)}`}
+              />
+            ))}
 
-          {comparison.plannedShift && comparison.arrivalDelayMs > 5 * 60_000 ? (
-            <TimelineRange
-              start={new Date(comparison.plannedShift.start).getTime()}
-              end={comparison.firstActiveAt ?? Math.min(comparison.observedUntil, new Date(comparison.plannedShift.end).getTime())}
-              windowStart={startMs}
-              windowEnd={endMs}
-              className={cn(
-                "bottom-[2px] h-2 rounded-full",
-                comparison.tone === "red" ? "bg-red-400" : "bg-amber-400"
-              )}
-              title={`Atraso: ${formatDurationMs(comparison.arrivalDelayMs)}`}
-            />
-          ) : null}
+            {comparison.plannedShift && comparison.arrivalDelayMs > 5 * 60_000 ? (
+              <TimelineRange
+                start={new Date(comparison.plannedShift.start).getTime()}
+                end={comparison.firstActiveAt ?? Math.min(comparison.observedUntil, new Date(comparison.plannedShift.end).getTime())}
+                windowStart={startMs}
+                windowEnd={endMs}
+                className={cn(
+                  "bottom-[2px] h-2 rounded-full",
+                  comparison.tone === "red" ? "bg-red-400" : "bg-amber-400"
+                )}
+                title={`Atraso: ${formatDurationMs(comparison.arrivalDelayMs)} | Previsto: ${formatDateTime(comparison.plannedShift.start)} | Entrada: ${row.entryAt ? formatDateTime(row.entryAt) : "não registrada"}`}
+              />
+            ) : null}
 
-          {comparison.plannedShift && comparison.earlyDepartureMs > 5 * 60_000 && comparison.lastActiveAt ? (
-            <TimelineRange
-              start={comparison.lastActiveAt}
-              end={new Date(comparison.plannedShift.end).getTime()}
-              windowStart={startMs}
-              windowEnd={endMs}
-              className="bottom-[2px] h-2 rounded-full bg-red-400"
-              title={`Saída antecipada: ${formatDurationMs(comparison.earlyDepartureMs)}`}
-            />
-          ) : null}
+            {comparison.plannedShift && comparison.earlyDepartureMs > 5 * 60_000 && comparison.lastActiveAt ? (
+              <TimelineRange
+                start={comparison.lastActiveAt}
+                end={new Date(comparison.plannedShift.end).getTime()}
+                windowStart={startMs}
+                windowEnd={endMs}
+                className="bottom-[2px] h-2 rounded-full bg-red-400"
+                title={`Saída antecipada: ${formatDurationMs(comparison.earlyDepartureMs)} | Saída: ${row.exitAt ? formatDateTime(row.exitAt) : "não registrada"} | Previsto: ${formatDateTime(comparison.plannedShift.end)}`}
+              />
+            ) : null}
 
-          {overtimeRanges.map((range, index) => (
-            <TimelineRange
-              key={`overtime-${range.start}-${index}`}
-              start={range.start}
-              end={range.end}
-              windowStart={startMs}
-              windowEnd={endMs}
-              className="bottom-[2px] h-2 rounded-full bg-violet-500"
-              title={`Hora extra | Entrada: ${formatTimeOnly(new Date(range.start).toISOString())} | Saída: ${formatTimeOnly(new Date(range.end).toISOString())} | Duração: ${formatDurationMs(range.end - range.start)}`}
-            />
-          ))}
+            {overtimeRanges.map((range, index) => (
+              <TimelineRange
+                key={`overtime-${range.start}-${index}`}
+                start={range.start}
+                end={range.end}
+                windowStart={startMs}
+                windowEnd={endMs}
+                className="bottom-[2px] h-2 rounded-full bg-violet-500"
+                title={`Hora extra | Entrada: ${formatDateTime(new Date(range.start).toISOString())} | Saída: ${formatDateTime(new Date(range.end).toISOString())} | Duração: ${formatDurationMs(range.end - range.start)}`}
+              />
+            ))}
+          </div>
         </div>
       </div>
     </div>
@@ -1092,10 +1102,10 @@ function ShiftComparisonBadge({ comparison }: { comparison: ReturnType<typeof co
   );
 }
 
-function ActivityBreakdown({ row, date }: { row: RealtimeHoursTimelineRow; date: string }) {
+function ActivityBreakdown({ row }: { row: RealtimeHoursTimelineRow }) {
   return (
     <div className="space-y-3">
-      <p className="text-sm font-black text-navy-950">Detalhe de atividade - {formatDateLabel(date)}</p>
+      <p className="text-sm font-black text-navy-950">Detalhe de atividade - {formatDateLabel(row.data)}</p>
       {row.devices.length ? (
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[11px] font-black uppercase tracking-wide text-muted">Máquinas utilizadas</span>
@@ -1128,7 +1138,9 @@ function ActivityBreakdown({ row, date }: { row: RealtimeHoursTimelineRow; date:
               <span className={cn("h-2 w-2 rounded-full", segment.type === "ACTIVE" ? "bg-emerald-500" : "bg-slate-400")} />
               {segment.type === "ACTIVE" ? "Ativo" : "Sem atividade"}
             </span>
-            <span className="text-center text-slate-600">{formatTimeOnly(segment.start)} - {formatTimeOnly(segment.end)}</span>
+            <span className="text-center text-slate-600" title={`${formatDateTime(segment.start)} até ${formatDateTime(segment.end)}`}>
+              {formatDateTimeCompact(segment.start)} - {formatDateTimeCompact(segment.end)}
+            </span>
             <span className="text-right text-navy-950">{formatDurationMs(segment.durationMs)}</span>
           </div>
         ))}
@@ -1281,6 +1293,7 @@ function formatDateTime(value?: string | null) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "-";
   return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
     dateStyle: "short",
     timeStyle: "short"
   }).format(date);
@@ -1297,8 +1310,33 @@ function formatTimeOnly(value?: string | null) {
   }).format(date);
 }
 
+function formatDateTimeCompact(value?: string | null) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
+}
+
+function formatShortDate(value: string) {
+  const date = new Date(`${value}T12:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    weekday: "short",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric"
+  }).format(date);
+}
+
 function formatDateLabel(value: string) {
-  const date = new Date(`${value}T12:00:00-03:00`);
+  const date = new Date(`${value}T12:00:00.000Z`);
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat("pt-BR", {
     timeZone: "America/Sao_Paulo",
@@ -1310,12 +1348,12 @@ function formatDateLabel(value: string) {
 }
 
 function formatDurationMs(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return "0m";
-  const totalMinutes = Math.floor(value / 60_000);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (hours > 0) return `${hours}h ${String(minutes).padStart(2, "0")}m`;
-  return `${minutes}m`;
+  if (!Number.isFinite(value) || value <= 0) return "0:00:00";
+  const totalSeconds = Math.floor(value / 1_000);
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
 function todayInputDate() {
@@ -1325,6 +1363,12 @@ function todayInputDate() {
     month: "2-digit",
     day: "2-digit"
   }).format(new Date());
+}
+
+function addDaysToDateKey(value: string, days: number) {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + days));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 }
 
 function mappingRowKey(row: Pick<RealtimeHoursIdentityMapping, "hostname" | "windowsUser">) {
