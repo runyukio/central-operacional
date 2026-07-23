@@ -41,6 +41,14 @@ npm run dev
 
 Acesse `http://localhost:3000/login`.
 
+## Codex Cloud
+
+Para trabalhar neste projeto em Codex Cloud, use as instruções de
+[AGENTS.md](./AGENTS.md) e o handoff em
+[docs/CODEX_CLOUD.md](./docs/CODEX_CLOUD.md). Esses arquivos documentam setup,
+validação, variáveis de ambiente e quais automações locais não devem ser
+executadas no ambiente cloud.
+
 ## Rodando E Testando 100% Localmente
 
 Este é o fluxo recomendado agora, sem Supabase, Vercel, domínio, e-mail, storage externo ou dados demo.
