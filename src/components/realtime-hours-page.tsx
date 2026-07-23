@@ -22,9 +22,11 @@ import {
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 
 import { EmptyState, PageHeader, Panel } from "@/components/ui/primitives";
+import { buildRealtimeHoursExportRows } from "@/lib/realtime-hours-export";
 import {
   compareRealtimeHoursPlannedShift as comparePlannedShift,
   filterRealtimeHoursTimelineRows,
+  realtimeHoursOvertimeRanges,
   realtimeHoursPlannedShiftLabel as plannedShiftLabel,
   realtimeHoursScheduleStatusLabel as scheduleStatusLabel,
   type RealtimeHoursPresenceStatus,
@@ -382,19 +384,19 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
     setError("");
     setSuccessMessage("");
     try {
-      const params = new URLSearchParams({
-        date: timelineDate,
-        search,
-        lob: lobFilter,
-        presence: presenceFilter,
-        supervisor: supervisorFilter,
-        shift: shiftFilter,
-        schedule: scheduleFilter
-      });
+      const calculationEnd = timelinePayload?.window.calculationEnd ?? timelinePayload?.window.end;
+      if (!calculationEnd) throw new Error("A linha do tempo ainda não está pronta para exportação.");
+      const exportRows = buildRealtimeHoursExportRows(timelineRows, calculationEnd);
+
       await downloadFile(
-        `/api/realtime-hours/export?${params.toString()}`,
+        "/api/realtime-hours/export",
         `captura_de_horas_${todayInputDate()}.xlsx`,
-        "Não foi possível exportar a Captura de Horas."
+        "Não foi possível exportar a Captura de Horas.",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rows: exportRows })
+        }
       );
       setSuccessMessage("Arquivo Excel gerado com os filtros selecionados.");
     } catch (exportError) {
@@ -771,7 +773,7 @@ function TimelinePanel({
           </div>
 
           <div className="overflow-x-auto rounded-xl border border-border bg-white">
-            <table className="w-full min-w-[1360px] border-collapse text-left">
+            <table className="w-full min-w-[1180px] table-fixed border-collapse text-left">
               <thead>
                 <tr className="border-b border-border bg-slate-50 text-[11px] font-black uppercase tracking-wide text-muted">
                   <th className="w-14 px-3 py-3">Ação</th>
@@ -779,7 +781,7 @@ function TimelinePanel({
                   <th className="w-32 px-3 py-3">Data</th>
                   <th className="w-28 px-3 py-3">Duração</th>
                   <th className="w-44 px-3 py-3">Escala prevista</th>
-                  <th className="w-[580px] px-3 py-3">Timeline 48h</th>
+                  <th className="px-3 py-3">Timeline 48h</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/70">
@@ -928,28 +930,24 @@ function TimelineBar({
   const startMs = new Date(windowStart).getTime();
   const endMs = new Date(windowEnd).getTime();
   const comparison = comparePlannedShift(row, row.data, calculationEnd);
-  const overtimeRanges = buildOvertimeRanges(row);
+  const overtimeRanges = realtimeHoursOvertimeRanges(row);
   const nextDate = addDaysToDateKey(row.data, 1);
 
   return (
     <div
-      className="max-w-[560px] overflow-x-scroll pb-2"
+      className="w-full overflow-x-auto pb-2"
       role="region"
       aria-label={`Linha do tempo de 48 horas de ${formatShortDate(row.data)} a ${formatShortDate(nextDate)}`}
       tabIndex={0}
     >
-      <div className="relative w-[960px] min-w-[960px] pt-11">
-        <div className="absolute inset-x-0 top-0 grid grid-cols-2 overflow-hidden rounded-t-md border border-b-0 border-slate-300 text-center text-[10px] font-black uppercase tracking-wide text-slate-500">
-          <span className="bg-slate-50 py-1">{formatShortDate(row.data)}</span>
-          <span className="border-l-2 border-blue-300 bg-blue-50/60 py-1">{formatShortDate(nextDate)}</span>
-        </div>
-        <div className="absolute inset-x-0 top-6 grid grid-cols-12 text-center text-[10px] font-bold text-slate-400">
-          {["00", "04", "08", "12", "16", "20", "00", "04", "08", "12", "16", "20"].map((hour, index) => (
-            <span key={`${hour}-${index}`}>{hour}:00</span>
+      <div className="relative w-[200%] min-w-[880px] pt-5">
+        <div className="absolute inset-x-0 top-0 grid grid-cols-12 text-center text-[11px] font-bold text-slate-400">
+          {["02", "06", "10", "14", "18", "22", "02", "06", "10", "14", "18", "22"].map((hour, index) => (
+            <span key={`${hour}-${index}`}>{hour}</span>
           ))}
         </div>
         <div className="relative h-11 overflow-hidden rounded-md border-2 border-slate-700 bg-slate-100 shadow-inner">
-          <span className="pointer-events-none absolute bottom-0 left-1/2 top-0 z-20 w-0.5 bg-blue-300" aria-hidden="true" />
+          <span className="pointer-events-none absolute bottom-0 left-1/2 top-0 z-20 w-px bg-slate-300/80" aria-hidden="true" />
           <div className="absolute inset-x-0 top-0 h-7 border-b border-slate-200/80 bg-white/70">
             {row.segments.filter((segment) => segment.type === "ACTIVE").map((segment, index) => (
               <TimelineRange
@@ -1018,42 +1016,6 @@ function TimelineBar({
       </div>
     </div>
   );
-}
-
-function buildOvertimeRanges(row: RealtimeHoursTimelineRow) {
-  const toleranceMs = 5 * 60_000;
-  const plannedRanges = row.plannedShifts
-    .map((shift) => ({
-      start: new Date(shift.start).getTime(),
-      end: new Date(shift.end).getTime()
-    }))
-    .filter((range) => Number.isFinite(range.start) && Number.isFinite(range.end) && range.end > range.start)
-    .sort((left, right) => left.start - right.start);
-
-  if (!plannedRanges.length) return [];
-
-  return row.segments
-    .filter((segment) => segment.type === "ACTIVE")
-    .flatMap((segment) => {
-      const segmentStart = new Date(segment.start).getTime();
-      const segmentEnd = new Date(segment.end).getTime();
-      if (!Number.isFinite(segmentStart) || !Number.isFinite(segmentEnd) || segmentEnd <= segmentStart) return [];
-
-      const outsideRanges: Array<{ start: number; end: number }> = [];
-      let cursor = segmentStart;
-
-      for (const planned of plannedRanges) {
-        if (planned.end <= cursor) continue;
-        if (planned.start >= segmentEnd) break;
-        if (planned.start > cursor) outsideRanges.push({ start: cursor, end: Math.min(planned.start, segmentEnd) });
-        cursor = Math.max(cursor, Math.min(segmentEnd, planned.end));
-        if (cursor >= segmentEnd) break;
-      }
-
-      if (cursor < segmentEnd) outsideRanges.push({ start: cursor, end: segmentEnd });
-      return outsideRanges;
-    })
-    .filter((range) => range.end - range.start > toleranceMs);
 }
 
 function TimelineRange({
@@ -1428,8 +1390,13 @@ function normalizeText(value: string) {
     .replace(/\p{Diacritic}/gu, "");
 }
 
-async function downloadFile(url: string, fallbackFileName: string, fallbackErrorMessage: string) {
-  const response = await fetch(url, { cache: "no-store" });
+async function downloadFile(
+  url: string,
+  fallbackFileName: string,
+  fallbackErrorMessage: string,
+  requestInit?: RequestInit
+) {
+  const response = await fetch(url, { cache: "no-store", ...requestInit });
   if (!response.ok) {
     const payload = await response.json().catch(() => null) as { error?: string; message?: string } | null;
     throw new Error(payload?.message ?? payload?.error ?? fallbackErrorMessage);

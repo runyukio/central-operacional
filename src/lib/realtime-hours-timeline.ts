@@ -318,6 +318,44 @@ export function compareRealtimeHoursPlannedShift(
   };
 }
 
+export function realtimeHoursOvertimeRanges(
+  row: Pick<RealtimeHoursTimelineFilterRow, "plannedShifts" | "segments">
+) {
+  const toleranceMs = 5 * 60_000;
+  const plannedRanges = row.plannedShifts
+    .map((shift) => ({
+      start: new Date(shift.start).getTime(),
+      end: new Date(shift.end).getTime()
+    }))
+    .filter((range) => Number.isFinite(range.start) && Number.isFinite(range.end) && range.end > range.start)
+    .sort((left, right) => left.start - right.start);
+
+  if (!plannedRanges.length) return [];
+
+  return row.segments
+    .filter((segment) => segment.type === "ACTIVE")
+    .flatMap((segment) => {
+      const segmentStart = new Date(segment.start).getTime();
+      const segmentEnd = new Date(segment.end).getTime();
+      if (!Number.isFinite(segmentStart) || !Number.isFinite(segmentEnd) || segmentEnd <= segmentStart) return [];
+
+      const outsideRanges: Array<{ start: number; end: number }> = [];
+      let cursor = segmentStart;
+
+      for (const planned of plannedRanges) {
+        if (planned.end <= cursor) continue;
+        if (planned.start >= segmentEnd) break;
+        if (planned.start > cursor) outsideRanges.push({ start: cursor, end: Math.min(planned.start, segmentEnd) });
+        cursor = Math.max(cursor, Math.min(segmentEnd, planned.end));
+        if (cursor >= segmentEnd) break;
+      }
+
+      if (cursor < segmentEnd) outsideRanges.push({ start: cursor, end: segmentEnd });
+      return outsideRanges;
+    })
+    .filter((range) => range.end - range.start > toleranceMs);
+}
+
 export type RealtimeHoursScheduleSlot = {
   id: string;
   employeeId: string;
