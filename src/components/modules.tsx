@@ -63,7 +63,6 @@ import {
 } from "lucide-react";
 
 import { TopActions } from "@/components/layout/app-shell";
-import { CentralExecutiveDashboard } from "@/components/central-executive-dashboard";
 import {
   DonutLegend,
   EmptyState,
@@ -2613,7 +2612,6 @@ const operationalPresenceStatusMeta: Record<Exclude<OperationalPresenceStatus, "
 };
 
 export function OperationalCommandCenter() {
-  const [commandView, setCommandView] = useState<"general" | "executive">("general");
   const [attendanceSummary, setAttendanceSummary] = useState<AttendanceSummary | null>(null);
   const [dateRange, setDateRange] = useState(() => currentOperationalMonthRange());
   const [commandLobs, setCommandLobs] = useState<string[]>(["Todos"]);
@@ -2681,12 +2679,6 @@ export function OperationalCommandCenter() {
     } finally {
       if (showLoading) setLoadingOperationalPresence(false);
     }
-  }, []);
-
-  const handleExecutiveDateRangeChange = useCallback((range: { startDate: string; endDate: string }) => {
-    setDateRange((current) => (
-      current.startDate === range.startDate && current.endDate === range.endDate ? current : range
-    ));
   }, []);
 
   useEffect(() => {
@@ -3413,34 +3405,8 @@ export function OperationalCommandCenter() {
         title="Central Operacional"
         description="Visão geral da operação em tempo real"
         icon={Trophy}
-        actions={
-          <div className="inline-flex items-center rounded-md border border-slate-200 bg-slate-100 p-1">
-            {(["general", "executive"] as const).map((view) => (
-              <button
-                key={view}
-                type="button"
-                onClick={() => {
-                  if (view === "executive") {
-                    setSelectedCommandSupervisor("Todos");
-                    setSelectedCommandRoleTitle("Agente");
-                    setSelectedCommandShift("Todos");
-                    setSelectedCommandSkill("Todos");
-                  }
-                  setCommandView(view);
-                }}
-                className={cn(
-                  "h-8 rounded px-3 text-xs font-extrabold transition",
-                  commandView === view ? "bg-blue-600 text-white shadow-sm" : "text-slate-600 hover:bg-white hover:text-navy-950"
-                )}
-              >
-                {view === "general" ? "Geral" : "Executiva"}
-              </button>
-            ))}
-          </div>
-        }
       />
-      {commandView === "general" ? (
-        <>
+      <>
           <section className="mb-3 rounded-lg border border-slate-200 bg-white p-3 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
             <div className="flex flex-wrap items-center gap-2">
               <select value={selectedCommandLob} onChange={(event) => setSelectedCommandLob(event.target.value)} className="premium-control h-9 px-2.5 text-[12px] font-extrabold text-navy-950 outline-none">
@@ -3875,22 +3841,7 @@ export function OperationalCommandCenter() {
           </Panel>
         </div>
       </div>
-        </>
-      ) : (
-        <CentralExecutiveDashboard
-          lobs={commandLobs}
-          selectedLob={selectedCommandLob}
-          onLobChange={setSelectedCommandLob}
-          presenceRows={operationalPresenceRows}
-          attendanceByLob={summary.byLob ?? {}}
-          attritionByLob={commandAttritionByLob}
-          presenceUpdatedAt={operationalPresenceUpdatedAt}
-          loadingSummary={loadingSummary}
-          loadingPresence={loadingOperationalPresence}
-          onDateRangeChange={handleExecutiveDateRangeChange}
-          onRefresh={() => void Promise.all([loadCommandCenterSummary(), loadOperationalPresence(true)])}
-        />
-      )}
+      </>
 
       {showRecurringAbsences ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
