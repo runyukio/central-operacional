@@ -80,6 +80,11 @@ test("Qualidade, Supervisor e WFM acessam Performance", () => {
   }
 });
 
+test("WFM acompanha o Report de Turno sem permissão para enviar", () => {
+  assert.equal(roleHasCapability("WFM", "SHIFT_REPORT_VIEW"), true);
+  assert.equal(roleHasCapability("WFM", "SHIFT_REPORT_SUBMIT"), false);
+});
+
 test("somente ADMIN e WFM importam bases de Performance", () => {
   for (const role of ["ADMIN", "WFM"]) {
     assert.equal(canImportPerformance({ role, status: "ACTIVE" }), true, role);
