@@ -11,16 +11,6 @@ export function canAccessRealtimeHoursCapture(user?: PermissionUser | null) {
   return isActiveUser(actor) && roleHasCapability(actor.role, "CAPTURE");
 }
 
-export function canRequestRealtimeHoursCaptureAdjustment(user?: PermissionUser | null) {
-  const actor = user ?? {};
-  return isActiveUser(actor) && roleHasCapability(actor.role, "WORK_HOURS_REQUEST");
-}
-
-export function canApproveRealtimeHoursCaptureAdjustment(user?: PermissionUser | null) {
-  const actor = user ?? {};
-  return isActiveUser(actor) && roleHasCapability(actor.role, "WORK_HOURS_EDIT");
-}
-
 export function canAccessOwnRealtimeHours(user?: PermissionUser | null) {
   const actor = user ?? {};
   return isActiveUser(actor) && roleHasCapability(actor.role, "PERSONAL");
