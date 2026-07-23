@@ -38,7 +38,6 @@ import {
   UsersRound
 } from "lucide-react";
 
-import { LanguageSwitcher } from "@/components/language-provider";
 import { useTheme } from "@/components/theme-provider";
 import { getNavItems, getNavSections, navSections as allNavSections } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
@@ -602,7 +601,6 @@ export function AppShell({
                 </div>
               ) : null}
             </div>
-            <LanguageSwitcher />
             <button className="hidden h-9 w-9 place-items-center rounded-lg border border-transparent hover:border-border hover:bg-surface md:grid">
               <HelpCircle className="h-[18px] w-[18px]" />
             </button>

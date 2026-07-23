@@ -7,7 +7,6 @@ import { useRouter } from "next/navigation";
 import { ArrowRight, LockKeyhole, Mail, Moon, Sparkles, Sun, X } from "lucide-react";
 
 import { ChangePasswordCard } from "@/components/change-password-card";
-import { LanguageSwitcher } from "@/components/language-provider";
 import { useTheme } from "@/components/theme-provider";
 
 export default function LoginPage() {
@@ -43,7 +42,6 @@ export default function LoginPage() {
   return (
     <main className="grid min-h-screen bg-[radial-gradient(circle_at_78%_8%,rgba(37,99,235,.12),transparent_28rem),#F6F8FC] lg:grid-cols-[minmax(0,1fr)_560px]">
       <div className="fixed right-4 top-4 z-20 flex items-center gap-2">
-        <LanguageSwitcher buttonClassName="premium-control h-10 w-10 text-navy-950 dark:text-slate-100" />
         <button
           type="button"
           onClick={toggleTheme}
