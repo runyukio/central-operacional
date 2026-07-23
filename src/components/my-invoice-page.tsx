@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2, CircleDollarSign, Clock, Download, FileText, LockKeyhole, RefreshCw, Send, Upload, WalletCards } from "lucide-react";
 
+import { BillingFiscalInvoiceNumberHelp } from "@/components/billing-fiscal-invoice-number-help";
 import { EmptyState, PageHeader, Panel, StatCard, StatusBadge } from "@/components/ui/primitives";
 import {
   BILLING_FISCAL_INVOICE_NUMBER_ERROR,
@@ -370,14 +371,16 @@ export function MyInvoicePage() {
           <Panel title="Ações">
             <div className="grid gap-3">
               <label>
-                <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">Número da nota fiscal</span>
+                <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">
+                  <BillingFiscalInvoiceNumberHelp align="right" />
+                </span>
                 <input
                   inputMode="numeric"
                   maxLength={BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH}
                   disabled={!data.invoice.canApprove || saving}
                   value={fiscalDraft.invoiceNumber}
                   onChange={(event) => setFiscalDraft({ ...fiscalDraft, invoiceNumber: normalizeBillingFiscalInvoiceNumber(event.target.value) })}
-                  placeholder="Somente números"
+                  placeholder="Até 4 dígitos"
                   className="premium-control h-10 w-full px-3 text-sm font-bold disabled:bg-slate-50 disabled:opacity-80"
                 />
               </label>

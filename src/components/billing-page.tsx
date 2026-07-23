@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, CircleDollarSign, Download, Eye, FileSpreadsheet, FileText, LockKeyhole, Pencil, RefreshCw, Save, Search, Send, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 
+import { BillingFiscalInvoiceNumberHelp } from "@/components/billing-fiscal-invoice-number-help";
 import { EmptyState, PageHeader, Panel, StatCard, StatusBadge } from "@/components/ui/primitives";
 import {
   BILLING_FISCAL_INVOICE_NUMBER_ERROR,
@@ -689,7 +690,7 @@ export function BillingPage() {
   );
 }
 
-function Label({ text, children }: { text: string; children: React.ReactNode }) {
+function Label({ text, children }: { text: React.ReactNode; children: React.ReactNode }) {
   return (
     <label className="block">
       <span className="mb-1.5 block text-[11px] font-extrabold uppercase tracking-wide text-muted">{text}</span>
@@ -1192,13 +1193,13 @@ function EmployeeBillingDetail({
 
             <div className="space-y-4 p-5">
               <div className="grid gap-4 md:grid-cols-2">
-                <Label text="Número da nota fiscal">
+                <Label text={<BillingFiscalInvoiceNumberHelp />}>
                   <input
                     value={fiscalDraft.invoiceNumber}
                     onChange={(event) => setFiscalDraft({ ...fiscalDraft, invoiceNumber: normalizeBillingFiscalInvoiceNumber(event.target.value) })}
                     inputMode="numeric"
                     maxLength={BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH}
-                    placeholder="Somente números"
+                    placeholder="Até 4 dígitos"
                     className="premium-control h-11 w-full px-3 text-sm font-bold"
                   />
                 </Label>
