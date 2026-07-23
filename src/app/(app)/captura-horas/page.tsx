@@ -1,13 +1,11 @@
 import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 
-import { RealtimeHoursWorkspacePage } from "@/components/realtime-hours-workspace-page";
+import { RealtimeHoursPage } from "@/components/realtime-hours-page";
 import { authOptions } from "@/lib/auth-options";
 import {
   canAccessRealtimeHoursCapture,
-  canApproveRealtimeHoursCaptureAdjustment,
-  canManageRealtimeHoursMappings,
-  canRequestRealtimeHoursCaptureAdjustment
+  canManageRealtimeHoursMappings
 } from "@/lib/realtime-hours-permissions";
 
 export default async function CapturaHorasRoute() {
@@ -26,11 +24,5 @@ export default async function CapturaHorasRoute() {
     redirect("/central-operacional");
   }
 
-  return (
-    <RealtimeHoursWorkspacePage
-      canManageMappings={canManageRealtimeHoursMappings(actor)}
-      canRequestAdjustments={canRequestRealtimeHoursCaptureAdjustment(actor)}
-      canApproveAdjustments={canApproveRealtimeHoursCaptureAdjustment(actor)}
-    />
-  );
+  return <RealtimeHoursPage canManageMappings={canManageRealtimeHoursMappings(actor)} />;
 }
