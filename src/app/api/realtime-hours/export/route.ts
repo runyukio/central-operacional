@@ -4,13 +4,17 @@ import { getApiActor } from "@/lib/api-actor";
 import { canAccessRealtimeHoursCapture } from "@/lib/realtime-hours-permissions";
 import { getRealtimeHoursTimeline } from "@/lib/realtime-hours-service";
 import {
-  compareRealtimeHoursPlannedShift,
   filterRealtimeHoursTimelineRows,
   primaryRealtimeHoursPlannedShift,
   realtimeHoursPlannedShiftLabel,
   realtimeHoursScheduleStatusLabel
 } from "@/lib/realtime-hours-timeline";
-import { buildXlsxResponse, xlsxDurationFormat } from "@/lib/xlsx-export";
+import {
+  buildXlsxResponse,
+  excelDateSerial,
+  excelDateTimeSerial,
+  xlsxDurationFormat
+} from "@/lib/xlsx-export";
 
 export const dynamic = "force-dynamic";
 
@@ -74,14 +78,10 @@ export async function GET(request: Request) {
     ];
 
     const rows = filteredRows.map((row) => {
-      const comparison = compareRealtimeHoursPlannedShift(row, date, timeline.window.calculationEnd);
-      const plannedShift = primaryRealtimeHoursPlannedShift(row, date);
-      const activeSegments = row.segments.filter((segment) => segment.type === "ACTIVE");
-      const firstActiveSegment = activeSegments[0];
-      const lastActiveSegment = activeSegments[activeSegments.length - 1];
+      const plannedShift = primaryRealtimeHoursPlannedShift(row, row.data);
 
       return [
-        new Date(`${date}T12:00:00.000-03:00`),
+        excelDateSerial(row.data),
         row.employeeName || row.wbLogin || row.windowsUser || row.hostname,
         row.wbLogin,
         row.employeeId,
@@ -90,19 +90,19 @@ export async function GET(request: Request) {
         row.supervisor || "Sem supervisor",
         row.shift || "Sem turno",
         plannedShift ? realtimeHoursScheduleStatusLabel(plannedShift.status) : "Sem escala",
-        realtimeHoursPlannedShiftLabel(row, date),
-        plannedShift ? new Date(plannedShift.start) : null,
-        plannedShift ? new Date(plannedShift.end) : null,
-        firstActiveSegment ? new Date(firstActiveSegment.start) : null,
-        lastActiveSegment ? new Date(lastActiveSegment.end) : null,
+        realtimeHoursPlannedShiftLabel(row, row.data),
+        excelDateTimeSerial(plannedShift?.start),
+        excelDateTimeSerial(plannedShift?.end),
+        excelDateTimeSerial(row.entryAt),
+        excelDateTimeSerial(row.exitAt),
         durationForExcel(row.activeMs),
         durationForExcel(row.noActivityMs),
-        durationForExcel(comparison.arrivalDelayMs),
+        durationForExcel(row.arrivalDelayMs),
         row.sessionCount,
         row.hostnames.join(", ") || row.hostname,
         row.windowsUsers.join(", ") || row.windowsUser,
         row.ipAddress,
-        row.lastSeenAt ? new Date(row.lastSeenAt) : null
+        excelDateTimeSerial(row.lastSeenAt)
       ];
     });
 

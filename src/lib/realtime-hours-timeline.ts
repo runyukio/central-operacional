@@ -1,8 +1,34 @@
 import { shiftCategoryName } from "@/lib/shift-display";
+import { parseWorkHoursToMinutes } from "@/lib/work-hours-rules";
 
 export type RealtimeHoursPresenceStatus = "ONLINE" | "LOCKED" | "OFFLINE" | "IDLE";
 export type RealtimeHoursShiftFilter = "ALL" | "MANHA" | "TARDE" | "NOITE";
 export type RealtimeHoursScheduleFilter = "ALL" | "SCHEDULED";
+export const realtimeHoursTimeZone = "America/Sao_Paulo";
+
+const millisecondsPerMinute = 60_000;
+const millisecondsPerHour = 60 * millisecondsPerMinute;
+const maximumSlotExtensionMs = 8 * millisecondsPerHour;
+const scheduleStatusesWithoutPlannedWork = new Set([
+  "AFASTADO",
+  "DESLIGADO",
+  "ERRO_ESCALA",
+  "FERIADO",
+  "FERIAS",
+  "FOLGA",
+  "FOLGA_APROVADA",
+  "SEM_ESCALA"
+]);
+const saoPauloPartsFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: realtimeHoursTimeZone,
+  hourCycle: "h23",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit"
+});
 
 type TimelineSegment = {
   type: "ACTIVE" | "NO_ACTIVITY";
@@ -12,6 +38,7 @@ type TimelineSegment = {
 };
 
 export type RealtimeHoursPlannedShift = {
+  id: string;
   start: string;
   end: string;
   startsAt: string;
@@ -23,6 +50,8 @@ export type RealtimeHoursPlannedShift = {
 };
 
 export type RealtimeHoursTimelineFilterRow = {
+  data: string;
+  slotId: string | null;
   hostname: string;
   hostnames: string[];
   windowsUser: string;
@@ -39,6 +68,10 @@ export type RealtimeHoursTimelineFilterRow = {
   lastSeenAt: string;
   activeMs: number;
   noActivityMs: number;
+  entryAt: string | null;
+  exitAt: string | null;
+  arrivalDelayMs: number;
+  earlyDepartureMs: number;
   sessionCount: number;
   plannedShifts: RealtimeHoursPlannedShift[];
   segments: TimelineSegment[];
@@ -84,6 +117,7 @@ export function filterRealtimeHoursTimelineRows<T extends RealtimeHoursTimelineF
   const schedule = normalizeFilterKey(filters.schedule);
 
   return rows.filter((row) => {
+    if (row.data !== filters.date) return false;
     if (lob && lob !== "ALL" && lob !== "ALL_LOBS" && normalizeLob(row.lob) !== lob) return false;
     if (presence && presence !== "ALL" && normalizeFilterKey(row.currentStatus) !== presence) return false;
     if (supervisor && supervisor !== "all" && normalizeFilterText(row.supervisor || "Sem supervisor") !== supervisor) return false;
@@ -153,7 +187,10 @@ export function realtimeHoursScheduleStatusLabel(status: string) {
 }
 
 export function compareRealtimeHoursPlannedShift(
-  row: Pick<RealtimeHoursTimelineFilterRow, "plannedShifts" | "segments">,
+  row: Pick<
+    RealtimeHoursTimelineFilterRow,
+    "plannedShifts" | "entryAt" | "exitAt" | "arrivalDelayMs" | "earlyDepartureMs"
+  >,
   date: string,
   calculationEnd: string
 ): RealtimeHoursShiftComparison {
@@ -174,19 +211,11 @@ export function compareRealtimeHoursPlannedShift(
 
   const plannedStart = new Date(plannedShift.start).getTime();
   const plannedEnd = new Date(plannedShift.end).getTime();
-  const activeSegments = row.segments
-    .filter((segment) => segment.type === "ACTIVE")
-    .map((segment) => ({ start: new Date(segment.start).getTime(), end: new Date(segment.end).getTime() }))
-    .filter((segment) => segment.end > plannedStart && segment.start < plannedEnd);
-  const firstActiveAt = activeSegments.length ? Math.max(plannedStart, activeSegments[0].start) : null;
-  const lastActiveAt = activeSegments.length ? Math.min(plannedEnd, activeSegments[activeSegments.length - 1].end) : null;
-  const arrivalDelayMs = firstActiveAt !== null
-    ? Math.max(0, firstActiveAt - plannedStart)
-    : observedUntil > plannedStart
-      ? Math.max(0, Math.min(observedUntil, plannedEnd) - plannedStart)
-      : 0;
+  const firstActiveAt = row.entryAt ? new Date(row.entryAt).getTime() : null;
+  const lastActiveAt = row.exitAt ? new Date(row.exitAt).getTime() : null;
+  const arrivalDelayMs = Math.max(0, row.arrivalDelayMs);
   const shiftFinished = observedUntil >= plannedEnd;
-  const earlyDepartureMs = shiftFinished && lastActiveAt !== null ? Math.max(0, plannedEnd - lastActiveAt) : 0;
+  const earlyDepartureMs = shiftFinished ? Math.max(0, row.earlyDepartureMs) : 0;
   const toleranceMs = 5 * 60_000;
 
   if (observedUntil < plannedStart) {
@@ -234,6 +263,132 @@ export function compareRealtimeHoursPlannedShift(
   };
 }
 
+export type RealtimeHoursScheduleSlot = {
+  id: string;
+  employeeId: string;
+  date: Date;
+  startsAt: string | null;
+  endsAt: string | null;
+  status: string;
+  shift: {
+    name: string;
+    startsAt: string;
+    endsAt: string;
+  } | null;
+};
+
+export type RealtimeHoursSlotAssignmentWindow = {
+  shift: RealtimeHoursPlannedShift;
+  assignmentStart: number;
+  assignmentEnd: number;
+};
+
+export function buildRealtimeHoursPlannedShifts(schedules: RealtimeHoursScheduleSlot[]) {
+  const shifts = schedules.flatMap((schedule) => {
+    if (scheduleStatusesWithoutPlannedWork.has(normalizeScheduleStatus(schedule.status))) return [];
+
+    const startMinutes = parseWorkHoursToMinutes(schedule.startsAt ?? schedule.shift?.startsAt);
+    const endMinutes = parseWorkHoursToMinutes(schedule.endsAt ?? schedule.shift?.endsAt);
+    if (startMinutes === null || endMinutes === null || startMinutes === endMinutes) return [];
+
+    const sourceDate = schedule.date.toISOString().slice(0, 10);
+    const overnight = endMinutes <= startMinutes;
+    const endDate = overnight ? addDateKeyDays(sourceDate, 1) : sourceDate;
+    const start = saoPauloDateTime(sourceDate, startMinutes);
+    const end = saoPauloDateTime(endDate, endMinutes);
+
+    return [{
+      id: schedule.id || `${schedule.employeeId}:${sourceDate}:${formatClockMinutes(startMinutes)}:${formatClockMinutes(endMinutes)}`,
+      start: start.toISOString(),
+      end: end.toISOString(),
+      startsAt: formatClockMinutes(startMinutes),
+      endsAt: formatClockMinutes(endMinutes),
+      status: schedule.status,
+      shift: schedule.shift?.name ?? "",
+      sourceDate,
+      overnight
+    } satisfies RealtimeHoursPlannedShift];
+  });
+
+  return Array.from(new Map(shifts.map((shift) => [shift.id, shift])).values())
+    .sort((left, right) => left.start.localeCompare(right.start));
+}
+
+export function buildRealtimeHoursSlotAssignmentWindows(shifts: RealtimeHoursPlannedShift[]) {
+  const sorted = [...shifts].sort((left, right) => left.start.localeCompare(right.start));
+  return sorted.map((shift, index) => {
+    const slotStart = new Date(shift.start).getTime();
+    const slotEnd = new Date(shift.end).getTime();
+    const previousEnd = index > 0 ? new Date(sorted[index - 1].end).getTime() : null;
+    const nextStart = index < sorted.length - 1 ? new Date(sorted[index + 1].start).getTime() : null;
+    const previousBoundary = previousEnd === null
+      ? slotStart - maximumSlotExtensionMs
+      : previousEnd <= slotStart
+        ? previousEnd + (slotStart - previousEnd) / 2
+        : slotStart;
+    const nextBoundary = nextStart === null
+      ? slotEnd + maximumSlotExtensionMs
+      : nextStart >= slotEnd
+        ? slotEnd + (nextStart - slotEnd) / 2
+        : slotEnd;
+
+    return {
+      shift,
+      assignmentStart: Math.max(slotStart - maximumSlotExtensionMs, previousBoundary),
+      assignmentEnd: Math.min(slotEnd + maximumSlotExtensionMs, nextBoundary)
+    };
+  });
+}
+
+export function matchRealtimeHoursPlannedShift(
+  capturedAt: Date,
+  windows: RealtimeHoursSlotAssignmentWindow[]
+) {
+  const instant = capturedAt.getTime();
+  const candidates = windows.filter((window) => instant >= window.assignmentStart && instant < window.assignmentEnd);
+  if (!candidates.length) return null;
+  return candidates.reduce((best, candidate) => (
+    distanceFromShift(instant, candidate.shift) < distanceFromShift(instant, best.shift) ? candidate : best
+  )).shift;
+}
+
+export function addDateKeyDays(dateKey: string, days: number) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const value = new Date(Date.UTC(year, month - 1, day + days));
+  return [
+    value.getUTCFullYear(),
+    String(value.getUTCMonth() + 1).padStart(2, "0"),
+    String(value.getUTCDate()).padStart(2, "0")
+  ].join("-");
+}
+
+export function saoPauloDateKey(value: Date) {
+  const parts = saoPauloDateTimeParts(value);
+  return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+export function startOfSaoPauloDate(dateKey: string) {
+  return saoPauloDateTime(dateKey, 0);
+}
+
+export function saoPauloDateTime(dateKey: string, minutesAfterMidnight: number) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const hours = Math.floor(minutesAfterMidnight / 60);
+  const minutes = minutesAfterMidnight % 60;
+  const targetAsUtc = Date.UTC(year, month - 1, day, hours, minutes, 0, 0);
+  let candidate = targetAsUtc;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const parts = saoPauloDateTimeParts(new Date(candidate));
+    const representedAsUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+    const difference = representedAsUtc - targetAsUtc;
+    if (!difference) break;
+    candidate -= difference;
+  }
+
+  return new Date(candidate);
+}
+
 export function normalizeScheduleStatus(value: unknown) {
   return String(value ?? "")
     .trim()
@@ -267,4 +422,32 @@ function formatCompactMinutes(value: number) {
   const minutes = totalMinutes % 60;
   if (!hours) return `${minutes}m`;
   return minutes ? `${hours}h ${String(minutes).padStart(2, "0")}m` : `${hours}h`;
+}
+
+function saoPauloDateTimeParts(value: Date) {
+  const entries = saoPauloPartsFormatter.formatToParts(value)
+    .filter((part) => part.type !== "literal")
+    .map((part) => [part.type, Number(part.value)] as const);
+  const parts = Object.fromEntries(entries) as Record<string, number>;
+  return {
+    year: parts.year,
+    month: parts.month,
+    day: parts.day,
+    hour: parts.hour,
+    minute: parts.minute,
+    second: parts.second
+  };
+}
+
+function formatClockMinutes(minutes: number) {
+  const normalized = ((minutes % (24 * 60)) + 24 * 60) % (24 * 60);
+  return `${String(Math.floor(normalized / 60)).padStart(2, "0")}:${String(normalized % 60).padStart(2, "0")}`;
+}
+
+function distanceFromShift(instant: number, shift: RealtimeHoursPlannedShift) {
+  const start = new Date(shift.start).getTime();
+  const end = new Date(shift.end).getTime();
+  if (instant < start) return start - instant;
+  if (instant > end) return instant - end;
+  return 0;
 }
