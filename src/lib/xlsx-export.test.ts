@@ -75,3 +75,31 @@ test("exporta entrada e saida com o relogio de Sao Paulo sem alterar duracoes", 
   assert.equal(worksheet.D2.v, 15 / (24 * 60));
   assert.equal(worksheet.D2.z, xlsxDurationFormat);
 });
+
+test("mantem zero, segundos e duracoes acima de 24 horas em celulas numericas validas", () => {
+  const buffer = buildXlsxBuffer({
+    sheetName: "Captura de Horas",
+    headers: ["Duração", "Tempo sem atividade", "Tempo de atraso", "Atraso", "Hora extra"],
+    rows: [
+      [0, 1 / (24 * 60 * 60), 26.5 / 24, 15 / (24 * 60), 10 / (24 * 60)]
+    ],
+    columnFormats: {
+      0: xlsxDurationFormat,
+      1: xlsxDurationFormat,
+      2: xlsxDurationFormat,
+      3: xlsxDurationFormat,
+      4: xlsxDurationFormat
+    }
+  });
+
+  const workbook = XLSX.read(buffer, { type: "buffer", cellDates: false, cellNF: true });
+  const worksheet = workbook.Sheets["Captura de Horas"];
+
+  assert.equal(worksheet.A2.t, "n");
+  assert.equal(XLSX.SSF.format(worksheet.A2.z!, worksheet.A2.v), "00:00:00");
+  assert.equal(XLSX.SSF.format(worksheet.B2.z!, worksheet.B2.v), "0:00:01");
+  assert.equal(XLSX.SSF.format(worksheet.C2.z!, worksheet.C2.v), "26:30:00");
+  for (const address of ["A2", "B2", "C2", "D2", "E2"]) {
+    assert.equal(worksheet[address].z, xlsxDurationFormat);
+  }
+});

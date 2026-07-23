@@ -21,7 +21,9 @@ export type XlsxExportPayload = {
 };
 
 export const xlsxContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-export const xlsxDurationFormat = "[h]:mm:ss;-[h]:mm:ss;00:00:00";
+// Excel rejects the third section when the fixed zero value is not serialized as a literal.
+// Quoting it preserves the requested display while keeping /xl/styles.xml valid.
+export const xlsxDurationFormat = '[h]:mm:ss;-[h]:mm:ss;"00:00:00"';
 const millisecondsPerDay = 24 * 60 * 60 * 1000;
 const excelEpochUtc = Date.UTC(1899, 11, 30);
 const excelEpochOffsetDays = 25_569;
@@ -128,7 +130,13 @@ function buildWorksheet(headers: string[], rows: XlsxCell[][], columnFormats: Xl
     }
   }
   worksheet["!cols"] = headers.map((header, index) => ({
-    wch: Math.min(48, Math.max(String(header).length + 2, ...rows.map((row) => String(row[index] ?? "").length + 2)))
+    wch: Math.min(48, Math.max(
+      String(header).length + 2,
+      ...rows.map((_, rowIndex) => {
+        const cell = worksheet[XLSX.utils.encode_cell({ r: rowIndex + 1, c: index })];
+        return String(cell ? XLSX.utils.format_cell(cell) : "").length + 2;
+      })
+    ))
   }));
   if (autoFilter && headers.length) {
     worksheet["!autofilter"] = { ref: XLSX.utils.encode_range({ r: 0, c: 0 }, { r: Math.max(0, rows.length), c: headers.length - 1 }) };

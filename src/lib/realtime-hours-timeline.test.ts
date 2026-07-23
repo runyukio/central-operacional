@@ -7,6 +7,7 @@ import {
   compareRealtimeHoursPlannedShift,
   filterRealtimeHoursTimelineRows,
   matchRealtimeHoursPlannedShift,
+  realtimeHoursOvertimeRanges,
   realtimeHoursShiftDateActivity,
   saoPauloDateKey,
   type RealtimeHoursTimelineFilterRow
@@ -232,6 +233,36 @@ test("filtro de Data nao inclui outro slot apenas por estar dentro da janela vis
   ], { date: "2026-07-20" });
 
   assert.deepEqual(filtered.map((item) => item.slotId), ["slot-20"]);
+});
+
+test("calcula hora extra com os mesmos blocos exibidos na timeline", () => {
+  const overtime = realtimeHoursOvertimeRanges(row({
+    segments: [
+      {
+        type: "ACTIVE",
+        start: "2026-07-17T10:30:00.000Z",
+        end: "2026-07-17T12:00:00.000Z",
+        durationMs: 90 * 60_000
+      },
+      {
+        type: "ACTIVE",
+        start: "2026-07-17T17:00:00.000Z",
+        end: "2026-07-17T17:10:00.000Z",
+        durationMs: 10 * 60_000
+      }
+    ]
+  }));
+
+  assert.deepEqual(overtime, [
+    {
+      start: new Date("2026-07-17T10:30:00.000Z").getTime(),
+      end: new Date("2026-07-17T11:00:00.000Z").getTime()
+    },
+    {
+      start: new Date("2026-07-17T17:00:00.000Z").getTime(),
+      end: new Date("2026-07-17T17:10:00.000Z").getTime()
+    }
+  ]);
 });
 
 function schedule(id: string, dateKey: string, startsAt: string, endsAt: string) {
