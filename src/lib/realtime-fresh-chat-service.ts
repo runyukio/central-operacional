@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 const freshChatRetentionDays = Number.parseInt(process.env.REALTIME_RETENTION_DAYS ?? "3", 10) || 3;
+const freshChatStaleMinutes = Number.parseInt(process.env.FRESHCHAT_STALE_MINUTES ?? "15", 10) || 15;
 
 type FreshChatRowInput = Record<string, unknown> | string | number | boolean | null | unknown[];
 
@@ -18,6 +19,26 @@ export type RealtimeFreshChatImportInput = {
 
 function freshChatRetentionCutoff() {
   return new Date(Date.now() - freshChatRetentionDays * 24 * 60 * 60 * 1000);
+}
+
+export function getFreshChatSnapshotFreshness(
+  snapshot: { generatedDate?: string | null; importedAt: Date | string },
+  now = Date.now(),
+  staleAfterMinutes = freshChatStaleMinutes
+) {
+  const importedAt = new Date(snapshot.importedAt);
+  const generatedAt = snapshot.generatedDate ? new Date(snapshot.generatedDate) : null;
+  const observedAt = generatedAt && Number.isFinite(generatedAt.getTime()) ? generatedAt : importedAt;
+  const ageMinutes = Number.isFinite(observedAt.getTime())
+    ? Math.max(0, Math.floor((now - observedAt.getTime()) / 60_000))
+    : Number.POSITIVE_INFINITY;
+
+  return {
+    observedAt: Number.isFinite(observedAt.getTime()) ? observedAt.toISOString() : null,
+    ageMinutes: Number.isFinite(ageMinutes) ? ageMinutes : null,
+    staleAfterMinutes,
+    isStale: ageMinutes > staleAfterMinutes
+  };
 }
 
 function normalizeFreshChatStatus(value: unknown) {
@@ -229,6 +250,7 @@ export async function getRealtimeFreshChatSnapshot(cycleDownload?: string) {
     .sort((a, b) => b.importedAt.getTime() - a.importedAt.getTime())[0];
 
   if (!snapshot) return null;
+  const freshness = getFreshChatSnapshotFreshness(snapshot);
 
   return {
     cycleDownload: snapshot.cycleDownload,
@@ -239,6 +261,7 @@ export async function getRealtimeFreshChatSnapshot(cycleDownload?: string) {
     newCount: snapshot.newCount,
     totalBacklog: snapshot.totalBacklog,
     rowsTotal: snapshot.rowsTotal,
-    importedAt: snapshot.importedAt.toISOString()
+    importedAt: snapshot.importedAt.toISOString(),
+    ...freshness
   };
 }
