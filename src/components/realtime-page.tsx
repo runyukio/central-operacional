@@ -2236,6 +2236,7 @@ function ReportSummarySection({
 function ReportHeadcountCompactCard({ card }: { card: OnlineHeadcountGaugeData }) {
   const progress = card.percentage === null ? null : Math.max(0, Math.min(100, card.percentage));
   const shouldShowFreshChat = card.label.toLowerCase().includes("ads online hc");
+  const freshChatHasSnapshot = Boolean(card.freshChatBacklog);
   const freshChatIsCurrent = Boolean(card.freshChatBacklog && card.freshChatBacklog.isStale !== true);
   const toneClass = card.tone === "positive"
     ? "bg-emerald-50 text-emerald-700"
@@ -2276,9 +2277,9 @@ function ReportHeadcountCompactCard({ card }: { card: OnlineHeadcountGaugeData }
               className={cn("mt-1 text-lg font-black", freshChatIsCurrent ? "text-blue-700" : "text-amber-700")}
               title={card.freshChatBacklog?.observedAt ? `Dados observados em ${new Date(card.freshChatBacklog.observedAt).toLocaleString("pt-BR")}` : "Aguardando um snapshot recente"}
             >
-              {freshChatIsCurrent ? card.freshChatBacklog?.totalBacklog : "—"}
+              {freshChatHasSnapshot ? card.freshChatBacklog?.totalBacklog : "—"}
             </p>
-            {!freshChatIsCurrent ? <p className="mt-0.5 text-[9px] font-black uppercase tracking-wide text-amber-700">Desatualizado</p> : null}
+            {freshChatHasSnapshot && !freshChatIsCurrent ? <p className="mt-0.5 text-[9px] font-black uppercase tracking-wide text-amber-700">Desatualizado</p> : null}
           </div>
         ) : null}
       </div>
@@ -3174,10 +3175,11 @@ function drawCanvasHeadcountStrip(ctx: CanvasRenderingContext2D, card: OnlineHea
     { label: "Gap", value: String(card.missing), color: card.missing > 0 ? "#DC2626" : "#047857" }
   ];
   if (card.label.toLowerCase().includes("ads online hc")) {
+    const freshChatHasSnapshot = Boolean(card.freshChatBacklog);
     const freshChatIsCurrent = Boolean(card.freshChatBacklog && card.freshChatBacklog.isStale !== true);
     columns.push({
       label: "Fresh Chat",
-      value: freshChatIsCurrent ? String(card.freshChatBacklog?.totalBacklog) : "—",
+      value: freshChatHasSnapshot ? String(card.freshChatBacklog?.totalBacklog) : "—",
       color: freshChatIsCurrent ? "#1D4ED8" : "#B45309"
     });
   }
