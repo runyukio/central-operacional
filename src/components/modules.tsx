@@ -7834,6 +7834,7 @@ export function WorkHoursPage() {
     status: "Todos",
     overtimeOnly: false,
     hoursPendingOnly: false,
+    pendingOnly: false,
     noScheduleOnly: false
   }));
   const [settings, setSettings] = useState<SystemSettings | null>(null);
@@ -7898,6 +7899,7 @@ export function WorkHoursPage() {
       if (filters.status !== "Todos") params.set("status", filters.status);
       if (filters.overtimeOnly) params.set("overtimeOnly", "true");
       if (filters.hoursPendingOnly) params.set("hoursPendingOnly", "true");
+      if (filters.pendingOnly) params.set("pendingOnly", "true");
       if (filters.noScheduleOnly) params.set("noScheduleOnly", "true");
       const payload = await apiJson<{ data: WorkHourRow[]; summary: WorkHourSummary; pagination: typeof pagination }>(`/api/work-hours?${params.toString()}`);
       setRows(payload.data);
@@ -8067,6 +8069,7 @@ export function WorkHoursPage() {
     if (filters.status !== "Todos") params.set("status", filters.status);
     if (filters.overtimeOnly) params.set("overtimeOnly", "true");
     if (filters.hoursPendingOnly) params.set("hoursPendingOnly", "true");
+    if (filters.pendingOnly) params.set("pendingOnly", "true");
     if (filters.noScheduleOnly) params.set("noScheduleOnly", "true");
     return `/api/work-hours/export?${params.toString()}`;
   }
@@ -8126,16 +8129,17 @@ export function WorkHoursPage() {
           <FormSelect label="Turno" value={filters.shift} options={shiftOptions} onChange={(value) => setFilters({ ...filters, shift: value })} />
           <FormInput label="Colaborador/WB" value={filters.collaborator} onChange={(value) => setFilters({ ...filters, collaborator: value })} />
           <FormSelect label="Status colaborador" value={filters.employeeStatus} options={employeeWorkHourStatusOptions} onChange={(value) => setFilters({ ...filters, employeeStatus: value })} />
-          <FormSelect label="Status" value={filters.status} options={statusOptions} onChange={(value) => setFilters({ ...filters, status: value, overtimeOnly: false, hoursPendingOnly: false, noScheduleOnly: false })} />
+          <FormSelect label="Status" value={filters.status} options={statusOptions} onChange={(value) => setFilters({ ...filters, status: value, overtimeOnly: false, hoursPendingOnly: false, pendingOnly: false, noScheduleOnly: false })} />
           <div className="flex items-end gap-2">
             <button onClick={() => loadWorkHours(1)} className="h-11 flex-1 rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
-            <button onClick={() => { setFilters({ ...currentOperationalMonthRange(), employeeId: "", lob: "Todos", supervisor: "", shift: "Todos", collaborator: "", employeeStatus: "Todos", status: "Todos", overtimeOnly: false, hoursPendingOnly: false, noScheduleOnly: false }); setTimeout(() => void loadWorkHours(1), 0); }} className="h-11 rounded-lg border border-border bg-white px-3 text-sm font-bold">Limpar</button>
+            <button onClick={() => { setFilters({ ...currentOperationalMonthRange(), employeeId: "", lob: "Todos", supervisor: "", shift: "Todos", collaborator: "", employeeStatus: "Todos", status: "Todos", overtimeOnly: false, hoursPendingOnly: false, pendingOnly: false, noScheduleOnly: false }); setTimeout(() => void loadWorkHours(1), 0); }} className="h-11 rounded-lg border border-border bg-white px-3 text-sm font-bold">Limpar</button>
           </div>
         </div>
         <div className="mt-3 flex flex-wrap gap-3 text-sm font-semibold text-navy-950">
-          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.overtimeOnly} onChange={(event) => setFilters({ ...filters, status: "Todos", overtimeOnly: event.target.checked, hoursPendingOnly: false, noScheduleOnly: false })} /> Horas extras</label>
-          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.hoursPendingOnly} onChange={(event) => setFilters({ ...filters, status: "Todos", hoursPendingOnly: event.target.checked, overtimeOnly: false, noScheduleOnly: false })} /> Horas pendentes</label>
-          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.noScheduleOnly} onChange={(event) => setFilters({ ...filters, status: "Todos", noScheduleOnly: event.target.checked, overtimeOnly: false, hoursPendingOnly: false })} /> Sem cronograma</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.overtimeOnly} onChange={(event) => setFilters({ ...filters, status: "Todos", overtimeOnly: event.target.checked, hoursPendingOnly: false, pendingOnly: false, noScheduleOnly: false })} /> Horas extras</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.hoursPendingOnly} onChange={(event) => setFilters({ ...filters, status: "Todos", hoursPendingOnly: event.target.checked, overtimeOnly: false, pendingOnly: false, noScheduleOnly: false })} /> Horas pendentes</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.pendingOnly} onChange={(event) => setFilters({ ...filters, status: "Todos", pendingOnly: event.target.checked, overtimeOnly: false, hoursPendingOnly: false, noScheduleOnly: false })} /> Ajuste pendente</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.noScheduleOnly} onChange={(event) => setFilters({ ...filters, status: "Todos", noScheduleOnly: event.target.checked, overtimeOnly: false, hoursPendingOnly: false, pendingOnly: false })} /> Sem cronograma</label>
         </div>
       </section>
 
