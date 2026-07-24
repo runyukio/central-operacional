@@ -1080,26 +1080,6 @@ model RealTimeCecSnapshot {
   @@index([cycleDownload])
 }
 
-model RealTimeFreshChatSnapshot {
-  id            String   @id @default(cuid())
-  cycleDownload String   @unique
-  source        String   @default("fresh-chat")
-  fileName      String
-  generatedDate String?
-  assignedCount Int      @default(0)
-  newCount      Int      @default(0)
-  totalBacklog  Int      @default(0)
-  rowsTotal     Int      @default(0)
-  rawData       Json
-  importedAt    DateTime @default(now())
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  @@index([importedAt])
-  @@index([source])
-  @@index([cycleDownload])
-}
-
 model RealTimeHoursImportBatch {
   id           String                @id @default(cuid())
   source       String                @default("local-windows-server")
