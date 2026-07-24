@@ -130,6 +130,8 @@ import {
   formatWorkHours,
   normalizeProductivePlannedHours,
   parseWorkHoursToMinutes,
+  type WorkHourBalanceStatus,
+  workHourBalanceStatus,
   workHoursBlockedReasonForSchedule,
   workHoursFromMinutes
 } from "@/lib/work-hours-rules";
@@ -1446,6 +1448,29 @@ function parseProductiveHoursInput(value: string) {
 function formatWorkHourValue(value: unknown, fallback = "-") {
   const formatted = formatWorkHours(value);
   return formatted || fallback;
+}
+
+function WorkHourBalanceBadge({
+  plannedHours,
+  differenceMinutes
+}: {
+  plannedHours: number;
+  differenceMinutes: number;
+}) {
+  const status = workHourBalanceStatus(plannedHours, differenceMinutes);
+  const styles: Record<WorkHourBalanceStatus, string> = {
+    "Hora extra": "border-violet-200 bg-violet-50 text-violet-700",
+    OK: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    "Horas pendentes": "border-amber-200 bg-amber-50 text-amber-700",
+    "Sem cronograma": "border-slate-200 bg-slate-100 text-slate-600"
+  };
+
+  return (
+    <span className={cn("inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-extrabold leading-tight", styles[status])}>
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-75" />
+      {status}
+    </span>
+  );
 }
 
 function workHourAmountBadgeClass(value: unknown) {
@@ -7837,7 +7862,7 @@ export function WorkHoursPage() {
   const canDeleteWorkHours = canEditWorkHours(permissionUser);
   const canRequestAdjustment = canRequestWorkHourAdjustment(permissionUser);
   const employeeWorkHourStatusOptions = ["Todos", "Ativos", "Desligados/Inativos"];
-  const statusOptions = ["Todos", "OK", "Divergente", "Sem cronograma", "Ajuste solicitado", "Ajuste aprovado", "Ajuste recusado", "Importado", "Corrigido manualmente"];
+  const statusOptions = ["Todos", "Hora extra", "OK", "Horas pendentes", "Sem cronograma"];
   const lobOptions = ["Todos", ...(settings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? Array.from(new Set(rows.map((row) => row.lob).filter(Boolean))))];
   const workHourShiftCategories = settings?.shifts.filter((shift) => shift.status !== "INACTIVE").map((shift) => shiftCategoryName(shift.name)) ?? rows.map((row) => shiftCategoryName(row.shift));
   const shiftOptions = ["Todos", "Sem turno", ...cleanShiftOptions(workHourShiftCategories, true)];
@@ -8138,11 +8163,11 @@ export function WorkHoursPage() {
                     <td className="px-4 py-3">{row.lob}</td>
                     <td className="px-4 py-3">{row.supervisor || "-"}</td>
                     <td className="px-4 py-3">{cleanShiftName(row.shift) || "-"}</td>
-                    <td className="px-4 py-3">{formatWorkHourValue(row.plannedHours || 0, "0:00")} produtivas</td>
+                    <td className="px-4 py-3">{formatWorkHourValue(row.plannedHours || 0, "0:00")}</td>
                     <td className="px-4 py-3">{formatWorkHourValue(row.effectiveHours, "0:00")}</td>
                     <td className="px-4 py-3">{formatWorkHourValue(row.capturedHours, "0:00")}</td>
                     <td className={cn("px-4 py-3 font-bold", row.differenceMinutes < 0 ? "text-red-600" : row.differenceMinutes > 0 ? "text-emerald-600" : "text-muted")}>{formatHourDifference(row.differenceMinutes)}</td>
-                    <td className="px-4 py-3"><StatusBadge status={row.status} /></td>
+                    <td className="px-4 py-3"><WorkHourBalanceBadge plannedHours={row.plannedHours} differenceMinutes={row.differenceMinutes} /></td>
                     <td className="px-4 py-3">
                       {row.adjustmentId ? (
                         <div className="min-w-[180px] space-y-1">

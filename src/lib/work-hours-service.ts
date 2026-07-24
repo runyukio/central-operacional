@@ -34,6 +34,7 @@ import {
   isWorkHoursAllowedForSchedule,
   parseWorkHoursToMinutes,
   plannedProductiveHoursForSchedule,
+  workHourBalanceStatus,
   workHoursFromMinutes,
   workHoursBlockedReasonForSchedule
 } from "@/lib/work-hours-rules";
@@ -846,7 +847,7 @@ export async function exportOperationalWorkHoursXlsxData(actor: Actor, query: Wo
     formatWorkHours(row.effectiveHours),
     formatWorkHours(row.capturedHours),
     formatHourDifferenceForExport(row.differenceMinutes),
-    row.status,
+    workHourBalanceStatus(row.plannedHours, row.differenceMinutes),
     row.adjustmentRequestedHours === null || row.adjustmentRequestedHours === undefined ? "" : formatWorkHours(row.adjustmentRequestedHours),
     formatHourDifferenceForExport(row.adjustmentDifferenceMinutes),
     row.adjustmentStatus === "Sem ajuste" ? "" : row.adjustmentStatus,
@@ -1067,8 +1068,22 @@ function buildRecordWhere(user: UserWithRole, query: WorkHourQuery, period: { st
     ];
   }
   if (query.status && query.status !== "Todos") {
-    if (query.status === "Ajuste solicitado") where.adjustments = pendingWorkHourAdjustmentFilter();
-    else where.status = uiToRecordStatus(query.status);
+    if (query.status === "Hora extra") {
+      where.status = { not: "NO_SCHEDULE" };
+      where.differenceMinutes = { gt: 0 };
+    } else if (query.status === "OK") {
+      where.status = { not: "NO_SCHEDULE" };
+      where.differenceMinutes = 0;
+    } else if (query.status === "Horas pendentes") {
+      where.status = { not: "NO_SCHEDULE" };
+      where.differenceMinutes = { lt: 0 };
+    } else if (query.status === "Sem cronograma") {
+      where.status = "NO_SCHEDULE";
+    } else if (query.status === "Ajuste solicitado") {
+      where.adjustments = pendingWorkHourAdjustmentFilter();
+    } else {
+      where.status = uiToRecordStatus(query.status);
+    }
   }
   if (query.divergentOnly) where.status = "DIVERGENT";
   if (query.pendingOnly) {
