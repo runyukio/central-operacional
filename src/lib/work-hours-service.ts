@@ -79,6 +79,8 @@ export type WorkHourQuery = {
   wbLogin?: string;
   employeeStatus?: string;
   status?: string;
+  overtimeOnly?: boolean;
+  hoursPendingOnly?: boolean;
   divergentOnly?: boolean;
   pendingOnly?: boolean;
   noScheduleOnly?: boolean;
@@ -1090,8 +1092,19 @@ function buildRecordWhere(user: UserWithRole, query: WorkHourQuery, period: { st
     delete where.status;
     where.adjustments = pendingWorkHourAdjustmentFilter();
   }
+  if (query.overtimeOnly) {
+    delete where.adjustments;
+    where.status = { not: "NO_SCHEDULE" };
+    where.differenceMinutes = { gt: 0 };
+  }
+  if (query.hoursPendingOnly) {
+    delete where.adjustments;
+    where.status = { not: "NO_SCHEDULE" };
+    where.differenceMinutes = { lt: 0 };
+  }
   if (query.noScheduleOnly) {
     delete where.adjustments;
+    delete where.differenceMinutes;
     where.status = "NO_SCHEDULE";
   }
   const employeeStatusFilter = buildEmployeeStatusFilter(query.employeeStatus);
@@ -1176,7 +1189,7 @@ async function getWorkHoursSummary(where: Prisma.WorkHourRecordWhereInput) {
   const divergentWhere: Prisma.WorkHourRecordWhereInput = {
     AND: [productiveWhere, { OR: [{ differenceMinutes: { lt: -toleranceMinutes } }, { differenceMinutes: { gt: toleranceMinutes } }] }]
   };
-  const [totals, okRecords, divergentRecords, noScheduleRecords, adjustments] = await Promise.all([
+  const [totals, okRecords, divergentRecords, overtime, pending, noScheduleRecords, adjustments] = await Promise.all([
     prisma.workHourRecord.aggregate({
       where: productiveWhere,
       _count: { _all: true },
@@ -1184,6 +1197,14 @@ async function getWorkHoursSummary(where: Prisma.WorkHourRecordWhereInput) {
     }),
     prisma.workHourRecord.count({ where: okWhere }),
     prisma.workHourRecord.count({ where: divergentWhere }),
+    prisma.workHourRecord.aggregate({
+      where: { AND: [productiveWhere, { differenceMinutes: { gt: 0 } }] },
+      _sum: { differenceMinutes: true }
+    }),
+    prisma.workHourRecord.aggregate({
+      where: { AND: [productiveWhere, { differenceMinutes: { lt: 0 } }] },
+      _sum: { differenceMinutes: true }
+    }),
     prisma.workHourRecord.count({ where: { AND: [where, { status: "NO_SCHEDULE" }] } }),
     prisma.workHourAdjustmentRequest.groupBy({ by: ["status"], where: { record: { is: where } }, _count: { _all: true } }).catch(() => [])
   ]);
@@ -1196,6 +1217,8 @@ async function getWorkHoursSummary(where: Prisma.WorkHourRecordWhereInput) {
     differenceHours: roundHours(effectiveHours - plannedHours),
     okRecords,
     divergentRecords,
+    overtimeHours: roundHours(Number(overtime._sum.differenceMinutes ?? 0) / 60),
+    pendingHours: roundHours(Math.abs(Number(pending._sum.differenceMinutes ?? 0)) / 60),
     noScheduleRecords,
     pendingAdjustments: adjustmentCount("ABERTO") + adjustmentCount("EM_ANALISE"),
     approvedAdjustments: adjustmentCount("APROVADO"),

@@ -724,6 +724,8 @@ type WorkHourSummary = {
   differenceHours: number;
   okRecords: number;
   divergentRecords: number;
+  overtimeHours: number;
+  pendingHours: number;
   noScheduleRecords: number;
   pendingAdjustments: number;
   approvedAdjustments: number;
@@ -7830,8 +7832,8 @@ export function WorkHoursPage() {
     collaborator: "",
     employeeStatus: "Todos",
     status: "Todos",
-    divergentOnly: false,
-    pendingOnly: false,
+    overtimeOnly: false,
+    hoursPendingOnly: false,
     noScheduleOnly: false
   }));
   const [settings, setSettings] = useState<SystemSettings | null>(null);
@@ -7894,8 +7896,8 @@ export function WorkHoursPage() {
       if (filters.collaborator) params.set("collaborator", filters.collaborator);
       if (filters.employeeStatus !== "Todos") params.set("employeeStatus", filters.employeeStatus);
       if (filters.status !== "Todos") params.set("status", filters.status);
-      if (filters.divergentOnly) params.set("divergentOnly", "true");
-      if (filters.pendingOnly) params.set("pendingOnly", "true");
+      if (filters.overtimeOnly) params.set("overtimeOnly", "true");
+      if (filters.hoursPendingOnly) params.set("hoursPendingOnly", "true");
       if (filters.noScheduleOnly) params.set("noScheduleOnly", "true");
       const payload = await apiJson<{ data: WorkHourRow[]; summary: WorkHourSummary; pagination: typeof pagination }>(`/api/work-hours?${params.toString()}`);
       setRows(payload.data);
@@ -8063,8 +8065,8 @@ export function WorkHoursPage() {
     if (filters.collaborator) params.set("collaborator", filters.collaborator);
     if (filters.employeeStatus !== "Todos") params.set("employeeStatus", filters.employeeStatus);
     if (filters.status !== "Todos") params.set("status", filters.status);
-    if (filters.divergentOnly) params.set("divergentOnly", "true");
-    if (filters.pendingOnly) params.set("pendingOnly", "true");
+    if (filters.overtimeOnly) params.set("overtimeOnly", "true");
+    if (filters.hoursPendingOnly) params.set("hoursPendingOnly", "true");
     if (filters.noScheduleOnly) params.set("noScheduleOnly", "true");
     return `/api/work-hours/export?${params.toString()}`;
   }
@@ -8109,10 +8111,10 @@ export function WorkHoursPage() {
         <StatCard title="Ajustes pendentes" value={summary?.pendingAdjustments ?? 0} helper="aguardando WFM/Admin" icon={ClipboardList} tone={(summary?.pendingAdjustments ?? 0) ? "orange" : "green"} />
       </div>
       <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricPill value={summary?.okRecords ?? 0} label="Registros OK" />
-        <MetricPill value={summary?.divergentRecords ?? 0} label="Divergentes" />
-        <MetricPill value={summary?.noScheduleRecords ?? 0} label="Sem cronograma vinculado" />
+        <MetricPill value={formatWorkHourValue(summary?.overtimeHours ?? 0, "0:00")} label="Horas extras" />
+        <MetricPill value={formatWorkHourValue(summary?.pendingHours ?? 0, "0:00")} label="Horas pendentes" />
         <MetricPill value={formatWorkHourValue(summary?.adjustedHours ?? 0, "0:00")} label="Horas ajustadas" />
+        <MetricPill value={summary?.noScheduleRecords ?? 0} label="Sem cronograma vinculado" />
       </div>
 
       <section className="card mb-5 p-4">
@@ -8124,16 +8126,16 @@ export function WorkHoursPage() {
           <FormSelect label="Turno" value={filters.shift} options={shiftOptions} onChange={(value) => setFilters({ ...filters, shift: value })} />
           <FormInput label="Colaborador/WB" value={filters.collaborator} onChange={(value) => setFilters({ ...filters, collaborator: value })} />
           <FormSelect label="Status colaborador" value={filters.employeeStatus} options={employeeWorkHourStatusOptions} onChange={(value) => setFilters({ ...filters, employeeStatus: value })} />
-          <FormSelect label="Status" value={filters.status} options={statusOptions} onChange={(value) => setFilters({ ...filters, status: value })} />
+          <FormSelect label="Status" value={filters.status} options={statusOptions} onChange={(value) => setFilters({ ...filters, status: value, overtimeOnly: false, hoursPendingOnly: false, noScheduleOnly: false })} />
           <div className="flex items-end gap-2">
             <button onClick={() => loadWorkHours(1)} className="h-11 flex-1 rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
-            <button onClick={() => { setFilters({ ...currentOperationalMonthRange(), employeeId: "", lob: "Todos", supervisor: "", shift: "Todos", collaborator: "", employeeStatus: "Todos", status: "Todos", divergentOnly: false, pendingOnly: false, noScheduleOnly: false }); setTimeout(() => void loadWorkHours(1), 0); }} className="h-11 rounded-lg border border-border bg-white px-3 text-sm font-bold">Limpar</button>
+            <button onClick={() => { setFilters({ ...currentOperationalMonthRange(), employeeId: "", lob: "Todos", supervisor: "", shift: "Todos", collaborator: "", employeeStatus: "Todos", status: "Todos", overtimeOnly: false, hoursPendingOnly: false, noScheduleOnly: false }); setTimeout(() => void loadWorkHours(1), 0); }} className="h-11 rounded-lg border border-border bg-white px-3 text-sm font-bold">Limpar</button>
           </div>
         </div>
         <div className="mt-3 flex flex-wrap gap-3 text-sm font-semibold text-navy-950">
-          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.divergentOnly} onChange={(event) => setFilters({ ...filters, divergentOnly: event.target.checked, pendingOnly: false, noScheduleOnly: false })} /> Apenas divergentes</label>
-          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.pendingOnly} onChange={(event) => setFilters({ ...filters, pendingOnly: event.target.checked, divergentOnly: false, noScheduleOnly: false })} /> Ajuste pendente</label>
-          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.noScheduleOnly} onChange={(event) => setFilters({ ...filters, noScheduleOnly: event.target.checked, divergentOnly: false, pendingOnly: false })} /> Sem cronograma</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.overtimeOnly} onChange={(event) => setFilters({ ...filters, status: "Todos", overtimeOnly: event.target.checked, hoursPendingOnly: false, noScheduleOnly: false })} /> Horas extras</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.hoursPendingOnly} onChange={(event) => setFilters({ ...filters, status: "Todos", hoursPendingOnly: event.target.checked, overtimeOnly: false, noScheduleOnly: false })} /> Horas pendentes</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.noScheduleOnly} onChange={(event) => setFilters({ ...filters, status: "Todos", noScheduleOnly: event.target.checked, overtimeOnly: false, hoursPendingOnly: false })} /> Sem cronograma</label>
         </div>
       </section>
 
