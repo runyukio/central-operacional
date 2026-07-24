@@ -9,8 +9,6 @@ const manualWorkHourSchema = z.object({
   employeeId: z.string().min(1),
   date: z.string().min(1),
   actualHours: z.union([z.string(), z.number()]).optional(),
-  observation: z.string().optional(),
-  source: z.string().optional(),
   confirmOverwrite: z.boolean().optional()
 });
 

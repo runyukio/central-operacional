@@ -19,7 +19,6 @@ export async function GET(request: Request) {
     wbLogin: url.searchParams.get("wbLogin") ?? undefined,
     employeeStatus: url.searchParams.get("employeeStatus") ?? undefined,
     status: url.searchParams.get("status") ?? undefined,
-    source: url.searchParams.get("source") ?? undefined,
     divergentOnly: url.searchParams.get("divergentOnly") === "true",
     pendingOnly: url.searchParams.get("pendingOnly") === "true",
     noScheduleOnly: url.searchParams.get("noScheduleOnly") === "true"

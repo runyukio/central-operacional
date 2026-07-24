@@ -7,9 +7,7 @@ import { canImportWorkHours } from "@/lib/permissions";
 const columns = [
   "wb_login",
   "data",
-  "horas_realizadas",
-  "sistema_origem",
-  "observacao"
+  "horas_realizadas"
 ];
 
 export async function GET() {
@@ -21,7 +19,7 @@ export async function GET() {
   const workbook = XLSX.utils.book_new();
   const worksheet = XLSX.utils.aoa_to_sheet([
     columns,
-    ["WB1001", "2026-06-15", "8:00", "Sistema Ponto", "Exemplo de horas realizadas"]
+    ["WB1001", "2026-06-15", "8:00"]
   ]);
   XLSX.utils.book_append_sheet(workbook, worksheet, "Horas");
   const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
