@@ -1,7 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, extname, join } from "node:path";
+import { extname, join } from "node:path";
 
 import { BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH, isValidBillingFiscalInvoiceNumber } from "@/lib/billing-fiscal-invoice";
 
@@ -219,9 +218,13 @@ async function normalizeImageForOcr(buffer: Buffer) {
 
 async function recognizeBillingFiscalText(image: Buffer) {
   const { createWorker, OEM, PSM } = await import("tesseract.js");
-  const require = createRequire(import.meta.url);
-  const languagePackage = require.resolve("@tesseract.js-data/por");
-  const langPath = join(dirname(languagePackage), "4.0.0_best_int");
+  const langPath = join(
+    process.cwd(),
+    "node_modules",
+    "@tesseract.js-data",
+    "por",
+    "4.0.0_best_int"
+  );
   const worker = await createWorker("por", OEM.LSTM_ONLY, {
     cachePath: join(tmpdir(), "billing-tesseract-cache"),
     langPath
