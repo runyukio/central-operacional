@@ -21,7 +21,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: result.error, message: result.error }, { status: result.status ?? 400 });
     }
     return NextResponse.json(result);
-  } catch {
+  } catch (error) {
+    console.error("[billing-fiscal-preview] request failure", {
+      name: error instanceof Error ? error.name : "UnknownError",
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined
+    });
     return NextResponse.json(
       { error: "Não foi possível processar a nota fiscal enviada." },
       { status: 500 }

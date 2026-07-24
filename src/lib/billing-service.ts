@@ -80,6 +80,11 @@ const STAFF_RATE_RULES = [
 ] as const;
 
 type ActiveUser = NonNullable<Awaited<ReturnType<typeof findActiveUser>>>;
+type BillingFiscalPreviewStage =
+  | "CALCULATE_BILLING"
+  | "EXTRACT_DOCUMENT"
+  | "CHECK_DUPLICATE"
+  | "CREATE_VALIDATION";
 type BillingEmployee = Prisma.EmployeeProfileGetPayload<{
   include: {
     user: true;
@@ -482,6 +487,7 @@ export async function previewBillingFiscalInvoice(actor: Actor, input: {
   const uploadValidation = validateStorageUpload(actor, BILLING_INVOICE_BUCKET, input.file);
   if ("error" in uploadValidation) return { error: uploadValidation.error, status: 400 };
 
+  let stage: BillingFiscalPreviewStage = "CALCULATE_BILLING";
   try {
     const calculated = await calculateEmployeeInvoice(
       employee,
@@ -490,10 +496,13 @@ export async function previewBillingFiscalInvoice(actor: Actor, input: {
       cycle?.id ?? null,
       cycle?.status
     );
+    stage = "EXTRACT_DOCUMENT";
     const extraction = await extractBillingFiscalInvoice(input.file);
+    stage = "CHECK_DUPLICATE";
     await ensureBillingFiscalDocumentAvailable(extraction, referenceMonth, employee.id);
 
     const matchesBilling = currencyEquals(extraction.serviceAmount, calculated.grossAmount);
+    stage = "CREATE_VALIDATION";
     const validationToken = matchesBilling
       ? createBillingFiscalValidationToken({
         ...extraction,
@@ -521,6 +530,13 @@ export async function previewBillingFiscalInvoice(actor: Actor, input: {
   } catch (error) {
     if (error instanceof BillingFiscalExtractionError) {
       return { error: error.message, status: error.status };
+    }
+    logBillingFiscalPreviewFailure(error, stage);
+    if (isBillingFiscalMigrationMissingError(error)) {
+      return {
+        error: "A atualização do banco necessária para ler a nota fiscal ainda não está disponível neste ambiente.",
+        status: 503
+      };
     }
     return { error: "Não foi possível ler a nota fiscal automaticamente.", status: 500 };
   }
@@ -3147,6 +3163,30 @@ function isBillingFiscalDuplicateError(error: unknown) {
     && error.code === "P2002"
     && Array.isArray(error.meta?.target)
     && error.meta.target.some((field) => field === "accessKey" || field === "documentHash");
+}
+
+function isBillingFiscalMigrationMissingError(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError
+    && (error.code === "P2021" || error.code === "P2022");
+}
+
+function logBillingFiscalPreviewFailure(error: unknown, stage: BillingFiscalPreviewStage) {
+  const normalized = error instanceof Error
+    ? {
+      name: error.name,
+      message: error.message,
+      stack: error.stack
+    }
+    : {
+      name: "UnknownError",
+      message: String(error)
+    };
+  const prismaCode = error instanceof Prisma.PrismaClientKnownRequestError ? error.code : undefined;
+  console.error("[billing-fiscal-preview] unexpected failure", {
+    stage,
+    prismaCode,
+    ...normalized
+  });
 }
 
 function normalizeOmieStatus(value: string): "PENDING" | "SYNCED" | "ERROR" {
