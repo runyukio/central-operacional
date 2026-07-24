@@ -2279,7 +2279,6 @@ function ReportHeadcountCompactCard({ card }: { card: OnlineHeadcountGaugeData }
             >
               {freshChatHasSnapshot ? card.freshChatBacklog?.totalBacklog : "—"}
             </p>
-            {freshChatHasSnapshot && !freshChatIsCurrent ? <p className="mt-0.5 text-[9px] font-black uppercase tracking-wide text-amber-700">Desatualizado</p> : null}
           </div>
         ) : null}
       </div>

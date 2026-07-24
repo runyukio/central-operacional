@@ -9,6 +9,10 @@
       "schedule": "0,30 * * * *"
     },
     {
+      "path": "/api/cron/realtime-fresh-chat",
+      "schedule": "*/10 * * * *"
+    },
+    {
       "path": "/api/cron/ads-executive-report",
       "schedule": "55 * * * *"
     }
