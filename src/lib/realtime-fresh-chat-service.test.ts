@@ -4,10 +4,10 @@ import test from "node:test";
 import { countFreshChatBacklog, getFreshChatSnapshotFreshness } from "./realtime-fresh-chat-service";
 
 test("conta backlog FreshChat quando os status chegam como linhas de texto", () => {
-  const summary = countFreshChatBacklog([], "status\nassigned\nnew\non hold\nAssigned\nNEW");
+  const summary = countFreshChatBacklog([], "status\nassigned\nnew\nreopened\non hold\nAssigned\nNEW");
 
   assert.equal(summary.assignedCount, 2);
-  assert.equal(summary.newCount, 2);
+  assert.equal(summary.newCount, 3);
 });
 
 test("conta backlog FreshChat quando o status vem em objetos ou arrays", () => {

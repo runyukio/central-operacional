@@ -58,7 +58,7 @@ function isAssignedStatus(status: string) {
 }
 
 function isNewStatus(status: string) {
-  return ["new", "novo", "nova"].includes(status);
+  return ["new", "novo", "nova", "reopened", "reaberto", "reaberta"].includes(status);
 }
 
 function isFreshChatBacklogStatus(value: unknown) {
