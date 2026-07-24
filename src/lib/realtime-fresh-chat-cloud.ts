@@ -9,6 +9,7 @@ type FetchImplementation = (input: string | URL | Request, init?: RequestInit) =
 
 type FetchFreshChatExportOptions = {
   reportUrl?: string;
+  apiToken?: string;
   fetchImplementation?: FetchImplementation;
   timeoutMs?: number;
 };
@@ -18,15 +19,19 @@ function positiveInteger(value: unknown, fallback: number) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function assertFreshreportsUrl(value: string) {
+function assertReportApiUrl(value: string) {
   let url: URL;
   try {
     url = new URL(value);
   } catch {
     throw new Error("FRESHCHAT_REPORT_API_URL inválida.");
   }
-  if (url.protocol !== "https:" || !url.hostname.endsWith(".freshreports.com")) {
-    throw new Error("FRESHCHAT_REPORT_API_URL precisa ser uma URL HTTPS do Freshreports.");
+  const isLegacyFreshreports = url.hostname.endsWith(".freshreports.com");
+  const isFreshchatAnalyticsExport = url.hostname.endsWith(".freshchat.com")
+    && url.pathname === "/v2/analytics/export"
+    && Boolean(url.searchParams.get("id"));
+  if (url.protocol !== "https:" || (!isLegacyFreshreports && !isFreshchatAnalyticsExport)) {
+    throw new Error("FRESHCHAT_REPORT_API_URL precisa ser uma URL HTTPS oficial do Freshchat/Freshreports.");
   }
   return url;
 }
@@ -145,18 +150,26 @@ async function responseBody(response: Response) {
 async function resolveFreshChatCsv(
   initialUrl: URL,
   fetchImplementation: FetchImplementation,
-  timeoutMs: number
+  timeoutMs: number,
+  apiToken: string
 ) {
   let currentUrl = initialUrl;
   for (let hop = 0; hop < 3; hop += 1) {
+    const shouldAuthorize = Boolean(apiToken) && currentUrl.origin === initialUrl.origin;
     const response = await fetchImplementation(currentUrl, {
       method: "GET",
-      headers: { accept: "application/json, text/csv, application/octet-stream, */*" },
+      headers: {
+        accept: "application/json, text/csv, application/octet-stream, */*",
+        ...(shouldAuthorize ? { authorization: `Bearer ${apiToken}` } : {})
+      },
       redirect: "follow",
       signal: AbortSignal.timeout(timeoutMs),
       cache: "no-store"
     });
     if (!response.ok) {
+      if (response.status === 401 && !apiToken && initialUrl.hostname.endsWith(".freshchat.com")) {
+        throw new Error("Freshchat respondeu HTTP 401; configure FRESHCHAT_REPORT_API_TOKEN.");
+      }
       throw new Error(`Freshreports respondeu HTTP ${response.status}.`);
     }
 
@@ -191,10 +204,11 @@ export async function fetchFreshChatExportFromFreshreports(
 ): Promise<RealtimeFreshChatImportInput> {
   const reportUrl = String(options.reportUrl ?? process.env.FRESHCHAT_REPORT_API_URL ?? "").trim();
   if (!reportUrl) throw new Error("FRESHCHAT_REPORT_API_URL não configurada.");
-  const initialUrl = assertFreshreportsUrl(reportUrl);
+  const initialUrl = assertReportApiUrl(reportUrl);
+  const apiToken = String(options.apiToken ?? process.env.FRESHCHAT_REPORT_API_TOKEN ?? "").trim();
   const timeoutMs = positiveInteger(options.timeoutMs ?? process.env.FRESHCHAT_REPORT_TIMEOUT_MS, 30_000);
   const fetchImplementation = options.fetchImplementation ?? fetch;
-  const { rawText, fileName } = await resolveFreshChatCsv(initialUrl, fetchImplementation, timeoutMs);
+  const { rawText, fileName } = await resolveFreshChatCsv(initialUrl, fetchImplementation, timeoutMs, apiToken);
   const generatedAtMs = getGeneratedTimestamp(fileName);
 
   return {
