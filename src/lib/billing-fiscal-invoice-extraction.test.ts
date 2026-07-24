@@ -79,6 +79,6 @@ test("assina a leitura e rejeita arquivo diferente", async () => {
       employeeId: "employee-1",
       billingGrossAmount: 457.25
     }),
-    /valor bruto do billing mudou/i
+    /valor esperado da nota fiscal mudou/i
   );
 });

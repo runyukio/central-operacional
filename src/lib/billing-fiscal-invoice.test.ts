@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH,
+  calculateBillingFiscalGrossAmount,
   isValidBillingFiscalInvoiceNumber,
   normalizeBillingFiscalInvoiceNumber
 } from "./billing-fiscal-invoice";
@@ -21,4 +22,10 @@ test("preserva zeros à esquerda e rejeita identificadores acima do limite", () 
 test("normaliza caracteres não numéricos sem converter o identificador para number", () => {
   assert.equal(normalizeBillingFiscalInvoiceNumber(" 00.12 "), "0012");
   assert.equal(normalizeBillingFiscalInvoiceNumber("12345"), "1234");
+});
+
+test("soma a correção ao valor bruto esperado na nota fiscal", () => {
+  assert.equal(calculateBillingFiscalGrossAmount(9_409.76, 100), 9_509.76);
+  assert.equal(calculateBillingFiscalGrossAmount(9_409.76, -100), 9_309.76);
+  assert.equal(calculateBillingFiscalGrossAmount(0.1, 0.2), 0.3);
 });

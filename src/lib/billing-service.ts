@@ -11,6 +11,7 @@ import {
   type BillingFiscalDocumentExtraction,
   verifyBillingFiscalValidationToken
 } from "@/lib/billing-fiscal-invoice-extraction";
+import { calculateBillingFiscalGrossAmount } from "@/lib/billing-fiscal-invoice";
 import { canAccessBilling, canManageBilling } from "@/lib/billing-permissions";
 import { isAgentJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
 import { MONTHLY_ADVANCE_FIXED_AMOUNT, isMonthlyAdvanceReferenceMonthAvailable } from "@/lib/monthly-advance-constants";
@@ -496,12 +497,16 @@ export async function previewBillingFiscalInvoice(actor: Actor, input: {
       cycle?.id ?? null,
       cycle?.status
     );
+    const expectedFiscalGrossAmount = calculateBillingFiscalGrossAmount(
+      calculated.grossAmount,
+      calculated.correctionAmount
+    );
     stage = "EXTRACT_DOCUMENT";
     const extraction = await extractBillingFiscalInvoice(input.file);
     stage = "CHECK_DUPLICATE";
     await ensureBillingFiscalDocumentAvailable(extraction, referenceMonth, employee.id);
 
-    const matchesBilling = currencyEquals(extraction.serviceAmount, calculated.grossAmount);
+    const matchesBilling = currencyEquals(extraction.serviceAmount, expectedFiscalGrossAmount);
     stage = "CREATE_VALIDATION";
     const validationToken = matchesBilling
       ? createBillingFiscalValidationToken({
@@ -510,7 +515,7 @@ export async function previewBillingFiscalInvoice(actor: Actor, input: {
         actorEmail: user.email,
         referenceMonth,
         employeeId: employee.id,
-        billingGrossAmount: calculated.grossAmount
+        billingGrossAmount: expectedFiscalGrossAmount
       })
       : "";
 
@@ -521,8 +526,8 @@ export async function previewBillingFiscalInvoice(actor: Actor, input: {
         serviceAmount: extraction.serviceAmount,
         serviceDescription: buildAutomaticBillingServiceDescription(extraction, referenceMonth),
         extractionMethod: extraction.extractionMethod,
-        billingGrossAmount: calculated.grossAmount,
-        difference: roundMoney(extraction.serviceAmount - calculated.grossAmount),
+        billingGrossAmount: expectedFiscalGrossAmount,
+        difference: roundMoney(extraction.serviceAmount - expectedFiscalGrossAmount),
         matchesBilling,
         validationToken
       }
@@ -585,6 +590,10 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
 
   const rates = await getBillingRates();
   const calculated = await calculateEmployeeInvoice(user.employeeProfile as BillingEmployee, referenceMonth, rates, cycle.id, cycle.status);
+  const expectedFiscalGrossAmount = calculateBillingFiscalGrossAmount(
+    calculated.grossAmount,
+    calculated.correctionAmount
+  );
   const file = input.file ?? null;
   let extraction: BillingFiscalDocumentExtraction;
   try {
@@ -592,7 +601,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
       actorEmail: user.email,
       referenceMonth,
       employeeId: user.employeeProfile.id,
-      billingGrossAmount: calculated.grossAmount,
+      billingGrossAmount: expectedFiscalGrossAmount,
       file,
       validationToken: String(input.validationToken ?? ""),
       existing: persisted?.fiscalInvoice ?? null
@@ -689,7 +698,9 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
             accessKey: extraction.accessKey,
             invoiceNumber,
             invoiceGrossAmount: extraction.serviceAmount,
-            billingGrossAmount: calculated.grossAmount,
+            billingGrossAmount: expectedFiscalGrossAmount,
+            billingHoursGrossAmount: calculated.grossAmount,
+            billingCorrectionAmount: calculated.correctionAmount,
             extractionMethod: extraction.extractionMethod,
             invoiceFileName: fileData.fileName,
             finalAmount: calculated.finalAmount,
@@ -1209,6 +1220,10 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
     }
 
     const calculated = await calculateEmployeeInvoice(employee, referenceMonth, await getBillingRates(), cycle.id, cycle.status);
+    const expectedFiscalGrossAmount = calculateBillingFiscalGrossAmount(
+      calculated.grossAmount,
+      calculated.correctionAmount
+    );
     const file = input.file ?? null;
     let extraction: BillingFiscalDocumentExtraction;
     try {
@@ -1216,7 +1231,7 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
         actorEmail: user!.email,
         referenceMonth,
         employeeId: employee.id,
-        billingGrossAmount: calculated.grossAmount,
+        billingGrossAmount: expectedFiscalGrossAmount,
         file,
         validationToken: String(input.validationToken ?? ""),
         existing: existing?.fiscalInvoice ?? null
@@ -1315,7 +1330,9 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
               accessKey: extraction.accessKey,
               invoiceNumber,
               invoiceGrossAmount: extraction.serviceAmount,
-              billingGrossAmount: calculated.grossAmount,
+              billingGrossAmount: expectedFiscalGrossAmount,
+              billingHoursGrossAmount: calculated.grossAmount,
+              billingCorrectionAmount: calculated.correctionAmount,
               extractionMethod: extraction.extractionMethod,
               invoiceFileName: fileData.fileName,
               finalAmount: Number(savedInvoice.finalAmount),
@@ -3099,7 +3116,7 @@ async function resolveBillingFiscalSubmission(input: {
 
   if (!currencyEquals(extraction.serviceAmount, input.billingGrossAmount)) {
     throw new BillingFiscalExtractionError(
-      `O valor do serviço na nota (${formatBillingCurrency(extraction.serviceAmount)}) é diferente do valor bruto do Billing (${formatBillingCurrency(input.billingGrossAmount)}).`,
+      `O valor do serviço na nota (${formatBillingCurrency(extraction.serviceAmount)}) é diferente do bruto das horas somado à correção (${formatBillingCurrency(input.billingGrossAmount)}).`,
       409
     );
   }

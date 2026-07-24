@@ -10,6 +10,7 @@ import {
   type BillingFiscalInvoiceUploadValue
 } from "@/components/billing-fiscal-invoice-upload";
 import { EmptyState, PageHeader, Panel, StatCard, StatusBadge } from "@/components/ui/primitives";
+import { calculateBillingFiscalGrossAmount } from "@/lib/billing-fiscal-invoice";
 import { cn } from "@/lib/utils";
 
 type BillingPayload = {
@@ -991,6 +992,10 @@ function EmployeeBillingDetail({
   const [fiscalDraft, setFiscalDraft] = useState<BillingFiscalDraft>(EMPTY_BILLING_FISCAL_UPLOAD);
   const finalized = invoice.status === "FECHADO";
   const alreadyReleasedForReview = ["DISPONIVEL_APROVACAO", "APROVADO_COLABORADOR", "AGUARDANDO_SUPERVISOR", "AGUARDANDO_ADMIN"].includes(invoice.status);
+  const expectedFiscalGrossAmount = calculateBillingFiscalGrossAmount(
+    invoice.grossAmount,
+    invoice.correctionAmount
+  );
 
   function openFinalizationForm() {
     setFiscalDraft(EMPTY_BILLING_FISCAL_UPLOAD);
@@ -1000,7 +1005,7 @@ function EmployeeBillingDetail({
 
   async function finalizeInvoice() {
     setFiscalError("");
-    if (!billingFiscalUploadIsReady(fiscalDraft, invoice.fiscalInvoice, invoice.grossAmount)) {
+    if (!billingFiscalUploadIsReady(fiscalDraft, invoice.fiscalInvoice, expectedFiscalGrossAmount)) {
       setFiscalError("Selecione a nota fiscal e aguarde a validação automática dos dados.");
       return;
     }
@@ -1175,7 +1180,7 @@ function EmployeeBillingDetail({
               <BillingFiscalInvoiceUpload
                 referenceMonth={referenceMonth}
                 employeeId={invoice.employeeId}
-                expectedGrossAmount={invoice.grossAmount}
+                expectedGrossAmount={expectedFiscalGrossAmount}
                 existing={invoice.fiscalInvoice}
                 disabled={saving}
                 value={fiscalDraft}
@@ -1183,7 +1188,7 @@ function EmployeeBillingDetail({
               />
               {fiscalError ? <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-700">{fiscalError}</p> : null}
               <p className="text-xs font-semibold text-muted">
-                Basta anexar a nota. A chave, o número e o valor são lidos automaticamente; o fechamento só é liberado quando o valor do serviço confere com o valor bruto do Billing.
+                Basta anexar a nota. A chave, o número e o valor são lidos automaticamente; o fechamento só é liberado quando o valor do serviço confere com o bruto das horas somado à correção.
               </p>
             </div>
 
@@ -1193,7 +1198,7 @@ function EmployeeBillingDetail({
               </button>
               <button
                 type="button"
-                disabled={saving || !billingFiscalUploadIsReady(fiscalDraft, invoice.fiscalInvoice, invoice.grossAmount)}
+                disabled={saving || !billingFiscalUploadIsReady(fiscalDraft, invoice.fiscalInvoice, expectedFiscalGrossAmount)}
                 onClick={() => void finalizeInvoice()}
                 className="premium-button inline-flex h-10 items-center justify-center gap-2 px-4 text-sm font-black disabled:cursor-not-allowed disabled:opacity-60"
               >

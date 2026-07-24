@@ -11,6 +11,7 @@ import {
   type BillingFiscalInvoiceUploadValue
 } from "@/components/billing-fiscal-invoice-upload";
 import { EmptyState, PageHeader, Panel, StatCard, StatusBadge } from "@/components/ui/primitives";
+import { calculateBillingFiscalGrossAmount } from "@/lib/billing-fiscal-invoice";
 import { cn } from "@/lib/utils";
 
 type MyInvoicePayload = {
@@ -104,6 +105,9 @@ export function MyInvoicePage() {
   const [adjustment, setAdjustment] = useState({ type: "Horas não consideradas", questionedItem: "Horas aprovadas", description: "" });
   const [fiscalUpload, setFiscalUpload] = useState<BillingFiscalInvoiceUploadValue>(EMPTY_BILLING_FISCAL_UPLOAD);
   const data = payload?.data;
+  const expectedFiscalGrossAmount = data
+    ? calculateBillingFiscalGrossAmount(data.invoice.grossAmount, data.invoice.correctionAmount)
+    : 0;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -149,7 +153,7 @@ export function MyInvoicePage() {
   }
 
   async function approveInvoice() {
-    if (!data || !billingFiscalUploadIsReady(fiscalUpload, data.invoice.fiscalInvoice, data.invoice.grossAmount)) {
+    if (!data || !billingFiscalUploadIsReady(fiscalUpload, data.invoice.fiscalInvoice, expectedFiscalGrossAmount)) {
       setError("Selecione a nota fiscal e aguarde a validação automática dos dados.");
       return;
     }
@@ -352,7 +356,7 @@ export function MyInvoicePage() {
             <div className="grid gap-3">
               <BillingFiscalInvoiceUpload
                 referenceMonth={referenceMonth}
-                expectedGrossAmount={data.invoice.grossAmount}
+                expectedGrossAmount={expectedFiscalGrossAmount}
                 existing={data.invoice.fiscalInvoice}
                 disabled={!data.invoice.canApprove || saving}
                 value={fiscalUpload}
@@ -388,7 +392,7 @@ export function MyInvoicePage() {
                 disabled={
                   !data.invoice.canApprove
                   || saving
-                  || !billingFiscalUploadIsReady(fiscalUpload, data.invoice.fiscalInvoice, data.invoice.grossAmount)
+                  || !billingFiscalUploadIsReady(fiscalUpload, data.invoice.fiscalInvoice, expectedFiscalGrossAmount)
                 }
                 onClick={() => void approveInvoice()}
                 className="premium-button inline-flex h-10 w-full items-center justify-center gap-2 px-3 text-sm font-extrabold leading-none disabled:cursor-not-allowed disabled:opacity-50"
@@ -399,7 +403,7 @@ export function MyInvoicePage() {
                 Solicitar ajuste
               </button>
             </div>
-            <p className="mt-3 text-xs font-semibold text-muted">Você só precisa anexar a nota. A chave, o número e o valor são lidos automaticamente e a aprovação é bloqueada se o valor não conferir.</p>
+            <p className="mt-3 text-xs font-semibold text-muted">Você só precisa anexar a nota. A chave, o número e o valor são lidos automaticamente; a aprovação é bloqueada se o valor não conferir com o bruto das horas somado à correção.</p>
           </Panel>
 
           <Panel title="Solicitações de ajuste">

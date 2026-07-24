@@ -119,7 +119,7 @@ export async function verifyBillingFiscalValidationToken(
     throw new BillingFiscalExtractionError("A nota fiscal foi validada para outro invoice ou usuário.");
   }
   if (!currencyEquals(payload.billingGrossAmount, expected.billingGrossAmount)) {
-    throw new BillingFiscalExtractionError("O valor bruto do Billing mudou. Leia a nota fiscal novamente antes de aprovar.");
+    throw new BillingFiscalExtractionError("O valor esperado da nota fiscal mudou. Leia o arquivo novamente antes de aprovar.");
   }
 
   const currentHash = hashBillingFiscalFile(Buffer.from(await file.arrayBuffer()));

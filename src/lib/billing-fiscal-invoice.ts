@@ -12,3 +12,7 @@ export function isValidBillingFiscalInvoiceNumber(value: string) {
 export function normalizeBillingFiscalInvoiceNumber(value: string) {
   return value.replace(/\D/g, "").slice(0, BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH);
 }
+
+export function calculateBillingFiscalGrossAmount(grossAmount: number, correctionAmount: number) {
+  return Math.round((Number(grossAmount) + Number(correctionAmount) + Number.EPSILON) * 100) / 100;
+}
