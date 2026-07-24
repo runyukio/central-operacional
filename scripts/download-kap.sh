@@ -14,6 +14,7 @@ SCRIPT_DIR="${0:A:h}"
 TRANSFORM_SCRIPT="${KAP_TRANSFORM_SCRIPT:-$SCRIPT_DIR/kap-transform.js}"
 BUNDLE_SCRIPT="${KAP_BUNDLE_SCRIPT:-$SCRIPT_DIR/kap-realtime-bundle.js}"
 CEC_SCRIPT="${KAP_CEC_SCRIPT:-$SCRIPT_DIR/download-cec-freshdesk.sh}"
+FRESHCHAT_SCRIPT="${KAP_FRESHCHAT_SCRIPT:-$SCRIPT_DIR/upload-freshchat-backlog.js}"
 CURL_BIN="${KAP_CURL_BIN:-/usr/bin/curl}"
 NOW="$(date +"%Y-%m-%d_%H-%M-%S")"
 RUN_MINUTE="$(date +"%M")"
@@ -160,6 +161,39 @@ run_cec_download() {
     notify_failure "Falha no ciclo CEC Freshdesk. KAP ADS/TNS foi preservado."
     if [[ "${KAP_FAIL_ON_CEC_ERROR:-false}" == "true" ]]; then
       exit "$cec_status"
+    fi
+  fi
+}
+
+run_freshchat_upload() {
+  if [[ "${KAP_RUN_FRESHCHAT_UPLOAD:-true}" != "true" ]]; then
+    echo "Freshchat upload disabled. Set KAP_RUN_FRESHCHAT_UPLOAD=true to enable it."
+    return 0
+  fi
+
+  if [[ "${KAP_UPLOAD_ENABLED:-false}" != "true" ]]; then
+    echo "Freshchat upload skipped because KAP_UPLOAD_ENABLED is disabled."
+    return 0
+  fi
+
+  if [[ ! -f "$FRESHCHAT_SCRIPT" ]]; then
+    echo "Freshchat upload script not found, skipping: $FRESHCHAT_SCRIPT"
+    return 0
+  fi
+
+  echo "Checking for a newer Freshchat export..."
+  set +e
+  FRESHCHAT_EXPORT_DIR="${FRESHCHAT_EXPORT_DIR:-$HOME/Downloads}" \
+  FRESHCHAT_UPLOAD_STATE_FILE="${FRESHCHAT_UPLOAD_STATE_FILE:-$OUTPUT_DIR/.freshchat-last-uploaded}" \
+    node "$FRESHCHAT_SCRIPT"
+  local freshchat_status=$?
+  set -e
+
+  if (( freshchat_status != 0 )); then
+    echo "Freshchat upload failed with exit code $freshchat_status."
+    notify_failure "Falha no upload Freshchat. O último snapshot válido foi preservado."
+    if [[ "${KAP_FAIL_ON_FRESHCHAT_ERROR:-false}" == "true" ]]; then
+      exit "$freshchat_status"
     fi
   fi
 }
@@ -347,3 +381,4 @@ if [[ "${KAP_UPLOAD_ENABLED:-false}" == "true" ]]; then
 fi
 
 run_cec_download
+run_freshchat_upload
