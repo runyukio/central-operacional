@@ -714,6 +714,10 @@ model BillingEmployeeInvoice {
 model BillingFiscalInvoice {
   id                  String                 @id @default(cuid())
   employeeInvoiceId   String                 @unique
+  accessKey            String?                @unique
+  documentHash         String?                @unique
+  extractionMethod     String?
+  extractedAt          DateTime?
   invoiceNumber       String
   grossAmount         Decimal                @db.Decimal(12, 2)
   serviceDescription  String

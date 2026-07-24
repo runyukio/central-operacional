@@ -16,6 +16,7 @@ export type OmieAccountPayableInput = {
   employeeInvoiceId: string;
   referenceMonth: string;
   cnpj: string;
+  accessKey: string;
   invoiceNumber: string;
   serviceDescription: string;
   grossAmount: number;
@@ -125,6 +126,7 @@ export async function upsertBillingAccountPayable(
     numero_documento: input.invoiceNumber,
     data_emissao: issueDate,
     observacao: buildObservation(input),
+    ...(normalizeAccessKey(input.accessKey).length === 44 ? { chave_nfe: normalizeAccessKey(input.accessKey) } : {}),
     ...(config.checkingAccountId ? { id_conta_corrente: config.checkingAccountId } : {})
   };
 
@@ -196,8 +198,13 @@ function buildObservation(input: OmieAccountPayableInput) {
   return [
     `Billing ${input.referenceMonth}`,
     `NF ${input.invoiceNumber}`,
+    input.accessKey ? `Chave NFS-e ${normalizeAccessKey(input.accessKey)}` : "",
     input.serviceDescription.trim()
   ].filter(Boolean).join(" | ").slice(0, 500);
+}
+
+function normalizeAccessKey(value: string) {
+  return String(value ?? "").replace(/\D/g, "");
 }
 
 function formatOmieDate(date: Date) {

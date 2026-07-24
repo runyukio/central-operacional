@@ -21,6 +21,7 @@ const input = {
   employeeInvoiceId: "cm_invoice_123",
   referenceMonth: "2026-07",
   cnpj: "12.345.678/0001-90",
+  accessKey: "35095022262629545000119000000000000526075882824813",
   invoiceNumber: "12345",
   serviceDescription: "Serviços de moderação de conteúdo",
   grossAmount: 2225.47,
@@ -55,9 +56,31 @@ test("localiza o fornecedor por CNPJ e envia o valor bruto ao Contas a Pagar", a
   assert.equal(payable.valor_documento, 2225.47);
   assert.equal(payable.codigo_cliente_fornecedor, 4214850);
   assert.equal(payable.numero_documento_fiscal, "12345");
+  assert.match(String(payable.observacao), /35095022262629545000119000000000000526075882824813/);
+  assert.equal(payable.chave_nfe, undefined);
   assert.equal(payable.codigo_categoria, "2.04.01");
   assert.equal(payable.id_conta_corrente, 4243124);
   assert.equal(result.launchCode, "987654");
+});
+
+test("envia chave_nfe somente quando a chave possui os 44 dígitos aceitos pelo Omie", async () => {
+  const requests: Array<Record<string, unknown>> = [];
+  const fetchImpl = async (_url: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    requests.push(body);
+    return body.call === "ListarClientes"
+      ? Response.json({ clientes_cadastro: [{ codigo_cliente_omie: 123, cnpj_cpf: input.cnpj }] })
+      : Response.json({ codigo_lancamento_omie: 456, codigo_lancamento_integracao: "billing-nfe-key" });
+  };
+
+  const accessKey = "35260758151940000161550010000000011000000011";
+  await upsertBillingAccountPayable(
+    { ...input, accessKey },
+    { config, fetchImpl: fetchImpl as typeof fetch }
+  );
+
+  const payable = (requests[1]?.param as Array<Record<string, unknown>>)[0];
+  assert.equal(payable.chave_nfe, accessKey);
 });
 
 test("mantém a chave de integração informada para tornar o reenvio idempotente", async () => {
