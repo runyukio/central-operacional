@@ -48,8 +48,8 @@ type PerformanceGranularity = "monthly" | "weekly" | "daily" | "hourly";
 type ForecastView = "hour" | "day" | "week";
 type QualityGranularity = "monthly" | "weekly" | "daily";
 type QualitySortDirection = "asc" | "desc";
-type QualityLob = "ADS" | "VIDEO" | "COMMENTS";
-type QualityImportScope = "ADS" | "TNS";
+type QualityLob = "ADS" | "VIDEO" | "COMMENTS" | "CEC";
+type QualityImportScope = "ADS" | "TNS" | "CEC";
 type SupervisorView = QualityGranularity;
 
 type PerformanceSummary = {
@@ -498,8 +498,8 @@ export function PerformanceAutomationPage() {
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <StatCard title="Último upload" value={formatQualityImportDate(qualityPayload?.lastImport?.importedAt)} helper="snapshot de qualidade vigente" icon={CheckCircle2} tone="green" />
           <StatCard title="Janela da base" value={formatQualityRange(qualityPayload?.dataRange)} helper={qualityLob === "ADS" ? "ADS + PROJECT" : qualityLob} icon={CalendarClock} tone="purple" />
-          <StatCard title="Casos auditados" value={formatNumber(qualityPayload?.summary.total ?? 0)} helper="chaves distintas" icon={FileSpreadsheet} tone="blue" />
-          <StatCard title="Qualidade" value={formatQualityPercent(qualityPayload?.summary.quality)} helper="corretos / auditados" icon={ShieldCheck} tone="green" />
+          <StatCard title={qualityLob === "CEC" ? "Pass Quantity" : "Casos auditados"} value={formatNumber(qualityPayload?.summary.total ?? 0)} helper={qualityLob === "CEC" ? "denominador CEC" : "chaves distintas"} icon={FileSpreadsheet} tone="blue" />
+          <StatCard title="Qualidade" value={formatQualityPercent(qualityPayload?.summary.quality)} helper={qualityLob === "CEC" ? "1 - Fail / Pass" : "corretos / auditados"} icon={ShieldCheck} tone="green" />
         </section>
       ) : (
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -626,10 +626,10 @@ export function PerformanceAutomationPage() {
       ) : null}
       {qualityUploadOpen ? (
         <QualityImportModal
-          initialScope={qualityLob === "ADS" ? "ADS" : "TNS"}
+          initialScope={qualityLob === "ADS" ? "ADS" : qualityLob === "CEC" ? "CEC" : "TNS"}
           onClose={() => setQualityUploadOpen(false)}
           onImported={async (scope) => {
-            const nextLob: QualityLob = scope === "ADS" ? "ADS" : "VIDEO";
+            const nextLob: QualityLob = scope === "ADS" ? "ADS" : scope === "CEC" ? "CEC" : "VIDEO";
             setQualityLob(nextLob);
             setQualityPayload(null);
             await loadQuality(nextLob);
@@ -711,7 +711,11 @@ function QualityView({
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div>
           <h2 className="text-base font-black text-navy-950">Qualidade</h2>
-          <p className="mt-1 text-xs font-bold text-muted">Casos corretos distintos divididos pelos casos auditados distintos.</p>
+          <p className="mt-1 text-xs font-bold text-muted">
+            {selectedLob === "CEC"
+              ? "Qualidade CEC calculada sobre os totais de Pass Quantity e Fail Quantity."
+              : "Casos corretos distintos divididos pelos casos auditados distintos."}
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {onUpload ? (
@@ -737,7 +741,7 @@ function QualityView({
               onEndDateChange={onEndDateChange}
             />
             <SlicerGroup label="LOB">
-              {(["ADS", "VIDEO", "COMMENTS"] as QualityLob[]).map((lob) => (
+              {(["ADS", "VIDEO", "COMMENTS", "CEC"] as QualityLob[]).map((lob) => (
                 <SlicerButton key={lob} active={selectedLob === lob} label={lob} onClick={() => onLobChange(lob)} tone="dark" />
               ))}
             </SlicerGroup>
@@ -748,7 +752,7 @@ function QualityView({
             </SlicerGroup>
           </div>
           <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-2 text-xs font-bold text-blue-900">
-            Fórmula oficial: Correct distintos / total de casos distintos
+            Fórmula oficial: {selectedLob === "CEC" ? "1 - (Σ Fail Quantity / Σ Pass Quantity)" : "Correct distintos / total de casos distintos"}
           </div>
         </div>
 
@@ -757,27 +761,27 @@ function QualityView({
             <div className="max-w-md">
               <span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-white text-blue-600 shadow-sm"><ShieldCheck className="h-5 w-5" /></span>
               <h3 className="mt-4 text-lg font-black text-navy-950">Sem dados de qualidade</h3>
-              <p className="mt-2 text-sm font-semibold text-muted">Envie a base de QA de {selectedLob === "ADS" ? "ADS/PROJECT" : "VIDEO/COMMENTS"} para carregar este indicador.</p>
+              <p className="mt-2 text-sm font-semibold text-muted">Envie a base de QA de {selectedLob === "ADS" ? "ADS/PROJECT" : selectedLob === "CEC" ? "CEC" : "VIDEO/COMMENTS"} para carregar este indicador.</p>
             </div>
           </div>
         ) : (
           <div className="space-y-4">
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <StatCard title="Qualidade" value={formatQualityPercent(payload.summary.quality)} helper={payload.selectedLob} icon={ShieldCheck} tone="green" />
-              <StatCard title="Casos corretos" value={formatNumber(payload.summary.correct)} helper="distinct Correct" icon={CheckCircle2} tone="green" />
-              <StatCard title="Casos auditados" value={formatNumber(payload.summary.total)} helper="distinct concat" icon={FileSpreadsheet} tone="blue" />
-              <StatCard title="Divergências" value={formatNumber(payload.summary.errors)} helper="auditados - corretos" icon={Target} tone="orange" />
+              <StatCard title={selectedLob === "CEC" ? "Resultado líquido" : "Casos corretos"} value={formatNumber(payload.summary.correct)} helper={selectedLob === "CEC" ? "Pass - Fail" : "distinct Correct"} icon={CheckCircle2} tone="green" />
+              <StatCard title={selectedLob === "CEC" ? "Pass Quantity" : "Casos auditados"} value={formatNumber(payload.summary.total)} helper={selectedLob === "CEC" ? "denominador" : "distinct concat"} icon={FileSpreadsheet} tone="blue" />
+              <StatCard title={selectedLob === "CEC" ? "Fail Quantity" : "Divergências"} value={formatNumber(payload.summary.errors)} helper={selectedLob === "CEC" ? "falhas" : "auditados - corretos"} icon={Target} tone="orange" />
             </div>
 
             <div className="rounded-xl border border-border bg-white p-4">
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-black text-navy-950">Evolução {qualityGranularityLabel(granularity).toLocaleLowerCase("pt-BR")} da qualidade</h3>
-                  <p className="mt-1 text-xs font-bold text-muted">Percentual oficial e volume de casos auditados por período.</p>
+                  <p className="mt-1 text-xs font-bold text-muted">Percentual oficial e volume de {selectedLob === "CEC" ? "Pass Quantity" : "casos auditados"} por período.</p>
                 </div>
                 <span className="rounded-lg bg-slate-50 px-3 py-1 text-xs font-black text-muted">{formatNumber(payload.trend.length)} {qualityGranularityUnit(granularity)}</span>
               </div>
-              <QualityDashboardChart rows={payload.trend} />
+              <QualityDashboardChart rows={payload.trend} cec={selectedLob === "CEC"} />
             </div>
 
             <div className="overflow-hidden rounded-xl border border-border bg-white">
@@ -813,9 +817,9 @@ function QualityView({
                           Qualidade {sortDirection === "desc" ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
                         </button>
                       </th>
-                      <th className="px-3 py-3 text-right">Corretos</th>
-                      <th className="px-3 py-3 text-right">Auditados</th>
-                      <th className="px-3 py-3 text-right">Divergências</th>
+                      <th className="px-3 py-3 text-right">{selectedLob === "CEC" ? "Pass - Fail" : "Corretos"}</th>
+                      <th className="px-3 py-3 text-right">{selectedLob === "CEC" ? "Pass Quantity" : "Auditados"}</th>
+                      <th className="px-3 py-3 text-right">{selectedLob === "CEC" ? "Fail Quantity" : "Divergências"}</th>
                       <th className="px-3 py-3 text-right">Última auditoria</th>
                     </tr>
                   </thead>
@@ -847,7 +851,7 @@ function QualityView({
   );
 }
 
-function QualityDashboardChart({ rows }: { rows: QualityTrendRow[] }) {
+function QualityDashboardChart({ rows, cec = false }: { rows: QualityTrendRow[]; cec?: boolean }) {
   if (!rows.length) return <EmptyBox label="Sem histórico diário para exibir." />;
   return (
     <div className="h-[360px] w-full">
@@ -856,10 +860,10 @@ function QualityDashboardChart({ rows }: { rows: QualityTrendRow[] }) {
           <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
           <XAxis dataKey="label" tick={{ fontSize: 11, fontWeight: 700, fill: "#475569" }} tickLine={false} axisLine={false} minTickGap={18} />
           <YAxis yAxisId="cases" tick={{ fontSize: 11, fontWeight: 700, fill: "#475569" }} tickLine={false} axisLine={false} tickFormatter={(value) => formatCompactAxis(Number(value))} />
-          <YAxis yAxisId="quality" orientation="right" domain={[0, 100]} tick={{ fontSize: 11, fontWeight: 700, fill: "#059669" }} tickLine={false} axisLine={false} tickFormatter={(value) => `${value}%`} />
-          <RechartsTooltip content={<QualityDashboardTooltip />} cursor={{ fill: "#EFF6FF" }} />
+          <YAxis yAxisId="quality" orientation="right" domain={cec ? ["auto", "auto"] : [0, 100]} tick={{ fontSize: 11, fontWeight: 700, fill: "#059669" }} tickLine={false} axisLine={false} tickFormatter={(value) => `${value}%`} />
+          <RechartsTooltip content={<QualityDashboardTooltip cec={cec} />} cursor={{ fill: "#EFF6FF" }} />
           <Legend wrapperStyle={{ fontSize: 12, fontWeight: 800 }} />
-          <Bar yAxisId="cases" dataKey="total" name="Casos auditados" fill="#93C5FD" radius={[5, 5, 0, 0]} maxBarSize={34} />
+          <Bar yAxisId="cases" dataKey="total" name={cec ? "Pass Quantity" : "Casos auditados"} fill="#93C5FD" radius={[5, 5, 0, 0]} maxBarSize={34} />
           <Line yAxisId="quality" type="monotone" dataKey="quality" name="Qualidade" stroke="#10B981" strokeWidth={3} dot={false} activeDot={{ r: 5 }} />
         </ComposedChart>
       </ResponsiveContainer>
@@ -867,7 +871,7 @@ function QualityDashboardChart({ rows }: { rows: QualityTrendRow[] }) {
   );
 }
 
-function QualityDashboardTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: QualityTrendRow }> }) {
+function QualityDashboardTooltip({ active, payload, cec = false }: { active?: boolean; payload?: Array<{ payload: QualityTrendRow }>; cec?: boolean }) {
   if (!active || !payload?.length) return null;
   const row = payload[0]?.payload;
   if (!row) return null;
@@ -876,9 +880,9 @@ function QualityDashboardTooltip({ active, payload }: { active?: boolean; payloa
       <p className="mb-2 text-sm font-black">{row.label}</p>
       <div className="space-y-1">
         <div className="flex justify-between gap-5"><span>Qualidade</span><span>{formatQualityPercent(row.quality)}</span></div>
-        <div className="flex justify-between gap-5"><span>Corretos</span><span>{formatNumber(row.correct)}</span></div>
-        <div className="flex justify-between gap-5"><span>Auditados</span><span>{formatNumber(row.total)}</span></div>
-        <div className="flex justify-between gap-5"><span>Divergências</span><span>{formatNumber(row.errors)}</span></div>
+        <div className="flex justify-between gap-5"><span>{cec ? "Pass - Fail" : "Corretos"}</span><span>{formatNumber(row.correct)}</span></div>
+        <div className="flex justify-between gap-5"><span>{cec ? "Pass Quantity" : "Auditados"}</span><span>{formatNumber(row.total)}</span></div>
+        <div className="flex justify-between gap-5"><span>{cec ? "Fail Quantity" : "Divergências"}</span><span>{formatNumber(row.errors)}</span></div>
       </div>
     </div>
   );
@@ -1726,15 +1730,18 @@ function QualityImportModal({
           <SlicerGroup label="Base de qualidade">
             <SlicerButton active={qualityScope === "ADS"} label="ADS / PROJECT" onClick={() => { setQualityScope("ADS"); setQualityFile(null); setResult(null); }} tone="dark" />
             <SlicerButton active={qualityScope === "TNS"} label="VIDEO / COMMENTS" onClick={() => { setQualityScope("TNS"); setQualityFile(null); setResult(null); }} tone="dark" />
+            <SlicerButton active={qualityScope === "CEC"} label="CEC" onClick={() => { setQualityScope("CEC"); setQualityFile(null); setResult(null); }} tone="dark" />
           </SlicerGroup>
           <PerformanceFileField
-            label={qualityScope === "ADS" ? "Qualidade ADS / PROJECT" : "Qualidade VIDEO / COMMENTS"}
-            helper="Base com audit_name, final_result e IDs dos casos. Suporta até 1.000.000 de linhas e 250 MB, processados em lotes."
+            label={qualityScope === "ADS" ? "Qualidade ADS / PROJECT" : qualityScope === "CEC" ? "Qualidade CEC" : "Qualidade VIDEO / COMMENTS"}
+            helper={qualityScope === "CEC"
+              ? "Base com Monitor day, Employee Name, Pass Quantity e Fail Quantity. Linhas repetidas do mesmo agente e dia são somadas."
+              : "Base com audit_name, final_result e IDs dos casos. Suporta até 1.000.000 de linhas e 250 MB, processados em lotes."}
             file={qualityFile}
             onChange={setQualityFile}
           />
           <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-900">
-            Após a validação, o envio substitui apenas o snapshot de {qualityScope === "ADS" ? "ADS/PROJECT" : "VIDEO/COMMENTS"}. A outra base de qualidade será preservada.
+            Após a validação, o envio substitui apenas o snapshot de {qualityScope === "ADS" ? "ADS/PROJECT" : qualityScope === "CEC" ? "CEC" : "VIDEO/COMMENTS"}. As demais bases de qualidade serão preservadas.
           </div>
           {error ? <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{error}</p> : null}
           {result ? (

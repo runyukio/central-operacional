@@ -17,8 +17,8 @@ export async function GET(request: Request) {
     const query: PerformanceQualityQuery = {
       startDate: url.searchParams.get("startDate") ?? undefined,
       endDate: url.searchParams.get("endDate") ?? undefined,
-      lob: url.searchParams.get("lob") === "VIDEO" || url.searchParams.get("lob") === "COMMENTS"
-        ? url.searchParams.get("lob") as "VIDEO" | "COMMENTS"
+      lob: url.searchParams.get("lob") === "VIDEO" || url.searchParams.get("lob") === "COMMENTS" || url.searchParams.get("lob") === "CEC"
+        ? url.searchParams.get("lob") as "VIDEO" | "COMMENTS" | "CEC"
         : "ADS",
       view: requestedView === "monthly" || requestedView === "weekly" || requestedView === "daily"
         ? requestedView

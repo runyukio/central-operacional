@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { AuditAction, Prisma, type ScheduleStatus } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
+import { calculateCecQualityAggregate } from "@/lib/cec-quality";
 import {
   canAccessPerformance,
   canAccessPerformanceFramework,
@@ -96,12 +97,12 @@ export type PerformanceQuery = {
 export type PerformanceQualityQuery = {
   startDate?: string;
   endDate?: string;
-  lob?: "ADS" | "VIDEO" | "COMMENTS";
+  lob?: "ADS" | "VIDEO" | "COMMENTS" | "CEC";
   view?: "monthly" | "weekly" | "daily";
   sortDirection?: "asc" | "desc";
 };
 
-export type PerformanceQualityScope = "ADS" | "TNS";
+export type PerformanceQualityScope = "ADS" | "TNS" | "CEC";
 
 export type PerformanceAgentsQuery = {
   view?: "monthly" | "weekly" | "daily";
@@ -615,6 +616,7 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
 export async function getPerformanceQualityDashboard(actor: Actor, query: PerformanceQualityQuery = {}) {
   const user = await requireActiveUser(actor);
   if (!canAccessPerformance(permissionUser(user))) throw new PerformanceError("Você não tem permissão para acessar Performance.", 403);
+  if (query.lob === "CEC") return getPerformanceCecQualityDashboard(user, query);
 
   const view = query.view === "monthly" || query.view === "weekly" ? query.view : "daily";
   const sortDirection = query.sortDirection === "asc" ? "asc" : "desc";
@@ -713,7 +715,7 @@ export async function getPerformanceQualityDashboard(actor: Actor, query: Perfor
     } : null,
     granularity: view,
     selectedLob,
-    filters: { lobs: ["ADS", "VIDEO", "COMMENTS"] },
+    filters: { lobs: ["ADS", "VIDEO", "COMMENTS", "CEC"] },
     summary: serializeQualityAggregate(summary.correct, summary.total),
     trend: trendRows.map((row) => ({
       key: formatDateKey(row.periodStart),
@@ -728,6 +730,116 @@ export async function getPerformanceQualityDashboard(actor: Actor, query: Perfor
       supervisor: row.supervisor,
       lastAuditAt: row.lastAuditAt.toISOString(),
       ...serializeQualityAggregate(row.correct, row.total)
+    })),
+    lastImport: latestImport ? {
+      ...latestImport,
+      importedAt: latestImport.importedAt.toISOString()
+    } : null
+  };
+}
+
+async function getPerformanceCecQualityDashboard(user: AuthenticatedUser, query: PerformanceQualityQuery) {
+  const view = query.view === "monthly" || query.view === "weekly" ? query.view : "daily";
+  const sortDirection = query.sortDirection === "asc" ? "asc" : "desc";
+  const sortDirectionSql = sortDirection === "asc" ? Prisma.sql`ASC` : Prisma.sql`DESC`;
+  const bucketSql = cecQualityBucketSql(view);
+  const [range] = await prisma.$queryRaw<Array<{ startDate: Date | null; endDate: Date | null }>>(Prisma.sql`
+    SELECT MIN(q."qualityDate") AS "startDate", MAX(q."qualityDate") AS "endDate"
+    FROM "CecQualityRecord" q
+    WHERE 1 = 1 ${visibleQualityRecordSql}
+  `);
+  const fallback = getDefaultDatePeriod();
+  const start = parseDate(query.startDate) ?? range?.startDate ?? fallback.start;
+  const end = parseDate(query.endDate) ?? range?.endDate ?? fallback.end;
+  if (start > end) throw new PerformanceError("A data inicial não pode ser posterior à data final.", 400);
+
+  const scopedSql = Prisma.sql`
+    FROM "CecQualityRecord" q
+    LEFT JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
+    LEFT JOIN "EmployeeProfile" s ON s."id" = e."supervisorId"
+    WHERE q."qualityDate" >= ${start}
+      AND q."qualityDate" <= ${end}
+      ${visibleQualityRecordSql}
+  `;
+
+  const [summaryRows, trendRows, agentRows, latestImport] = await Promise.all([
+    prisma.$queryRaw<Array<{ pass: number; fail: number }>>(Prisma.sql`
+      SELECT
+        COALESCE(SUM(q."passQuantity"), 0)::integer AS "pass",
+        COALESCE(SUM(q."failQuantity"), 0)::integer AS "fail"
+      ${scopedSql}
+    `),
+    prisma.$queryRaw<Array<{ periodStart: Date; pass: number; fail: number }>>(Prisma.sql`
+      SELECT
+        ${bucketSql} AS "periodStart",
+        COALESCE(SUM(q."passQuantity"), 0)::integer AS "pass",
+        COALESCE(SUM(q."failQuantity"), 0)::integer AS "fail"
+      ${scopedSql}
+      GROUP BY ${bucketSql}
+      ORDER BY ${bucketSql} ASC
+    `),
+    prisma.$queryRaw<Array<{
+      employeeId: string;
+      employeeName: string;
+      wbLogin: string;
+      supervisor: string;
+      pass: number;
+      fail: number;
+      lastAuditAt: Date;
+    }>>(Prisma.sql`
+      SELECT
+        q."employeeId" AS "employeeId",
+        COALESCE(e."fullName", q."wbLogin") AS "employeeName",
+        q."wbLogin" AS "wbLogin",
+        COALESCE(s."fullName", 'Sem supervisor') AS "supervisor",
+        COALESCE(SUM(q."passQuantity"), 0)::integer AS "pass",
+        COALESCE(SUM(q."failQuantity"), 0)::integer AS "fail",
+        MAX(q."qualityDate") AS "lastAuditAt"
+      ${scopedSql}
+      AND q."employeeId" IS NOT NULL
+      GROUP BY q."employeeId", e."fullName", q."wbLogin", s."fullName"
+      ORDER BY
+        ((SUM(q."passQuantity") - SUM(q."failQuantity"))::double precision
+          / NULLIF(SUM(q."passQuantity"), 0)) ${sortDirectionSql},
+        SUM(q."passQuantity") DESC
+      LIMIT 500
+    `),
+    prisma.performanceImportBatch.findFirst({
+      where: { type: "CEC_QUALITY", status: { not: "PROCESSING" } },
+      orderBy: { importedAt: "desc" },
+      select: { fileName: true, importedAt: true, rowsValid: true, rowsError: true, status: true }
+    })
+  ]);
+
+  const summary = summaryRows[0] ?? { pass: 0, fail: 0 };
+  return {
+    mode: "quality" as const,
+    canImport: canImportPerformance(permissionUser(user)),
+    period: {
+      startDate: formatDateKey(start),
+      endDate: formatDateKey(end)
+    },
+    dataRange: range?.startDate && range.endDate ? {
+      startDate: formatDateKey(range.startDate),
+      endDate: formatDateKey(range.endDate)
+    } : null,
+    granularity: view,
+    selectedLob: "CEC",
+    filters: { lobs: ["ADS", "VIDEO", "COMMENTS", "CEC"] },
+    summary: serializeCecQualityAggregate(summary.pass, summary.fail),
+    trend: trendRows.map((row) => ({
+      key: formatDateKey(row.periodStart),
+      label: qualityBucketLabel(row.periodStart, view),
+      ...serializeCecQualityAggregate(row.pass, row.fail)
+    })),
+    agents: agentRows.map((row) => ({
+      employeeId: row.employeeId,
+      employeeName: row.employeeName,
+      wbLogin: row.wbLogin,
+      lob: "CEC",
+      supervisor: row.supervisor,
+      lastAuditAt: row.lastAuditAt.toISOString(),
+      ...serializeCecQualityAggregate(row.pass, row.fail)
     })),
     lastImport: latestImport ? {
       ...latestImport,
@@ -1380,6 +1492,10 @@ function serializeQualityAggregate(correct: number, total: number) {
   };
 }
 
+function serializeCecQualityAggregate(pass: number, fail: number) {
+  return calculateCecQualityAggregate(Number(pass ?? 0), Number(fail ?? 0));
+}
+
 export async function previewQualityImport(actor: Actor, rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
   const user = await requireActiveUser(actor);
   requireImportPermission(user);
@@ -1432,6 +1548,14 @@ export async function importQualitySnapshotChunk(
 ) {
   const user = await requireActiveUser(actor);
   requireImportPermission(user);
+  if (qualityScope === "CEC") {
+    const preview = await previewCecQualityRows(rawRows, {
+      rowNumberOffset,
+      skipExistingCheck: true
+    });
+    const imported = await commitCecQualityRows(user, preview.rows, fileName, batchId);
+    return { imported, preview: preview.summary };
+  }
   const preview = await previewQualityRows(rawRows, {
     rowNumberOffset,
     qualityScope,
@@ -1457,6 +1581,44 @@ export async function finalizeQualitySnapshotImport(
     throw new PerformanceError("Lote de Qualidade em processamento não encontrado.", 400);
   }
   if (!batch.rowsValid) throw new PerformanceError("Não há linhas válidas para substituir a base de Qualidade.", 400);
+
+  if (qualityScope === "CEC") {
+    const result = await prisma.$transaction(async (transaction) => {
+      const recordsDeleted = await transaction.cecQualityRecord.deleteMany({
+        where: {
+          OR: [{ importBatchId: null }, { importBatchId: { not: batchIdToKeep } }]
+        }
+      });
+      const stagingPrefix = cecQualityStagingPrefix(batchIdToKeep);
+      await transaction.$executeRaw(Prisma.sql`
+        UPDATE "CecQualityRecord"
+        SET "wbLogin" = SUBSTRING("wbLogin" FROM ${stagingPrefix.length + 1})
+        WHERE "importBatchId" = ${batchIdToKeep}
+          AND "wbLogin" LIKE ${`${stagingPrefix}%`}
+      `);
+      const batchesDeleted = await transaction.performanceImportBatch.deleteMany({
+        where: { type: batchType, id: { not: batchIdToKeep } }
+      });
+      await transaction.performanceImportBatch.update({
+        where: { id: batchIdToKeep },
+        data: { status: batch.rowsError ? "PARTIAL" : "SUCCESS", importedAt: new Date() }
+      });
+      return { recordsDeleted: recordsDeleted.count, batchesDeleted: batchesDeleted.count };
+    }, { maxWait: 10_000, timeout: 120_000 });
+
+    await auditImport(user.id, batchType, batchIdToKeep, {
+      fileName: batch.fileName,
+      qualityScope,
+      rowsValid: batch.rowsValid,
+      rowsError: batch.rowsError
+    });
+    return {
+      batchIdKept: batchIdToKeep,
+      qualityScope,
+      qualityRowsDeleted: result.recordsDeleted,
+      importBatchesDeleted: result.batchesDeleted
+    };
+  }
 
   const lobIds = await qualityScopeLobIds(qualityScope);
   const result = await prisma.$transaction(async (transaction) => {
@@ -1502,6 +1664,13 @@ export async function discardQualitySnapshotImport(
     select: { id: true, type: true, status: true }
   });
   if (!batch || batch.type !== qualityBatchType(qualityScope) || batch.status !== "PROCESSING") return;
+  if (qualityScope === "CEC") {
+    await prisma.$transaction([
+      prisma.cecQualityRecord.deleteMany({ where: { importBatchId: batchId } }),
+      prisma.performanceImportBatch.delete({ where: { id: batchId } })
+    ]);
+    return;
+  }
   await prisma.$transaction([
     prisma.qualityRecord.deleteMany({ where: { importBatchId: batchId } }),
     prisma.performanceImportBatch.delete({ where: { id: batchId } })
@@ -1525,6 +1694,9 @@ export async function previewCecQualityImport(actor: Actor, rawRows: Record<stri
 }
 
 export async function commitQualityRawImport(actor: Actor, rawRows: Record<string, unknown>[], fileName = "qualidade.xlsx", batchId?: string, rowNumberOffset = 0, qualityScope: PerformanceQualityScope = "ADS") {
+  if (qualityScope === "CEC") {
+    return commitCecQualityRawImport(actor, rawRows, fileName, batchId, rowNumberOffset);
+  }
   const user = await requireActiveUser(actor);
   requireImportPermission(user);
   const preview = await previewQualityRows(rawRows, { rowNumberOffset, qualityScope });
@@ -1606,6 +1778,32 @@ export async function replaceQualitySnapshot(actor: Actor, batchIdToKeep: string
   const user = await requireActiveUser(actor);
   requireImportPermission(user);
   if (!batchIdToKeep) throw new PerformanceError("Lote de Qualidade obrigatório para substituir a base.", 400);
+  if (qualityScope === "CEC") {
+    const result = await prisma.$transaction(async (transaction) => {
+      const recordsDeleted = await transaction.cecQualityRecord.deleteMany({
+        where: {
+          OR: [{ importBatchId: null }, { importBatchId: { not: batchIdToKeep } }]
+        }
+      });
+      const stagingPrefix = cecQualityStagingPrefix(batchIdToKeep);
+      await transaction.$executeRaw(Prisma.sql`
+        UPDATE "CecQualityRecord"
+        SET "wbLogin" = SUBSTRING("wbLogin" FROM ${stagingPrefix.length + 1})
+        WHERE "importBatchId" = ${batchIdToKeep}
+          AND "wbLogin" LIKE ${`${stagingPrefix}%`}
+      `);
+      const batchesDeleted = await transaction.performanceImportBatch.deleteMany({
+        where: { type: "CEC_QUALITY", id: { not: batchIdToKeep } }
+      });
+      return { recordsDeleted: recordsDeleted.count, batchesDeleted: batchesDeleted.count };
+    });
+    return {
+      batchIdKept: batchIdToKeep,
+      qualityScope,
+      qualityRowsDeleted: result.recordsDeleted,
+      importBatchesDeleted: result.batchesDeleted
+    };
+  }
 
   const lobNames = qualityScopeLobNames(qualityScope);
   const batchType = qualityScope === "TNS" ? "QUALITY_TNS_KAP" : "QUALITY";
@@ -1778,40 +1976,55 @@ async function previewTnsQualityRows(rawRows: Record<string, unknown>[], options
 async function previewCecQualityRows(rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
   const normalizedRows = rawRows.map(normalizeObjectKeys);
   const yearReference = normalizeYearReference(options.yearReference);
-  const wbLogins = unique(normalizedRows.map((row) => normalizeWbLogin(text(rowValue(row, ["wb", "wb_login", "wb login", "agente", "agent"])))).filter(Boolean));
+  const wbHeaders = ["employee name", "employee_name", "wb", "wb_login", "wb login", "agente", "agent"];
+  const dateHeaders = ["monitor day", "monitor_day", "quality date", "quality_date", "data", "date"];
+  const wbLogins = unique(normalizedRows.map((row) => normalizeWbLogin(text(rowValue(row, wbHeaders)))).filter(Boolean));
   const employees = await findEmployeesByWbLogins(wbLogins);
   const employeeByLogin = new Map(employees.map((employee) => [normalizeWbLogin(employee.wbLogin), employee]));
-  const seen = new Map<string, number>();
+  const groupedRows = new Map<string, PerformancePreviewRow & { duplicateCount: number }>();
+  const invalidRows: PerformancePreviewRow[] = [];
 
-  const previewRows: PerformancePreviewRow[] = normalizedRows.map((row, index) => {
+  normalizedRows.forEach((row, index) => {
     const rowNumber = (options.rowNumberOffset ?? 0) + index + 2;
     const errors: string[] = [];
     const warnings: string[] = [];
-    const wbLogin = normalizeWbLogin(text(rowValue(row, ["wb", "wb_login", "wb login", "agente", "agent"])));
+    const wbLogin = normalizeWbLogin(text(rowValue(row, wbHeaders)));
     const employee = employeeByLogin.get(wbLogin);
-    const weekNumber = parseWeekNumber(rowValue(row, ["week", "semana"]));
+    const rawMonitorDay = rowValue(row, dateHeaders);
+    const qualityDate = normalizeExcelDate(rawMonitorDay);
+    const isDailyFormat = text(rawMonitorDay) !== "";
+    const parsedWeekNumber = parseWeekNumber(rowValue(row, ["week", "semana"]));
+    const weekNumber = qualityDate ? getIsoWeekNumber(qualityDate) : parsedWeekNumber;
     const passQuantity = parseInteger(rowValue(row, ["pass quantity", "pass_quantity", "passquantity", "pass"]));
     const failQuantity = parseInteger(rowValue(row, ["fail quantity", "fail_quantity", "failquantity", "fail"]));
     const qualityRule = getQualityRuleByEmployee(employee);
-    const weekRange = yearReference && weekNumber ? getIsoWeekDateRange(yearReference, weekNumber) : null;
-    const expandedDates = weekRange ? datesInRange(weekRange.start, weekRange.end).map(formatDateKey) : [];
-    const uniqueKey = yearReference && weekNumber && wbLogin ? `${wbLogin}|${yearReference}-W${String(weekNumber).padStart(2, "0")}` : "";
+    const weekRange = qualityDate
+      ? { start: startOfWeekMonday(qualityDate), end: addDays(startOfWeekMonday(qualityDate), 6) }
+      : yearReference && weekNumber
+        ? getIsoWeekDateRange(yearReference, weekNumber)
+        : null;
+    const expandedDates = qualityDate
+      ? [formatDateKey(qualityDate)]
+      : weekRange
+        ? datesInRange(weekRange.start, weekRange.end).map(formatDateKey)
+        : [];
+    const uniqueKey = wbLogin && weekNumber && expandedDates.length
+      ? qualityDate
+        ? `${wbLogin}|${formatDateKey(qualityDate)}`
+        : `${wbLogin}|${yearReference}-W${String(weekNumber).padStart(2, "0")}`
+      : "";
 
-    if (!yearReference) errors.push("Ano de referência não informado.");
+    if (!isDailyFormat && !yearReference) errors.push("Ano de referência não informado para a base semanal.");
     if (!wbLogin) errors.push("WB/Login é obrigatório.");
     else if (!employee) errors.push("WB/Login não encontrado no cadastro.");
     else if (qualityRule !== "CEC_QUALITY") warnings.push("Agente não está cadastrado como CEC. Verifique se este arquivo pertence à operação correta.");
-    if (!weekNumber) errors.push("Week inválida.");
+    if (isDailyFormat && !qualityDate) errors.push("Monitor day inválido.");
+    if (!isDailyFormat && !weekNumber) errors.push("Week inválida.");
     if (passQuantity === null || passQuantity < 0) errors.push("Pass Quantity inválido.");
     if (failQuantity === null || failQuantity < 0) errors.push("Fail Quantity inválido.");
-    if ((passQuantity ?? 0) + (failQuantity ?? 0) === 0) warnings.push("Pass + Fail = 0; qualidade ficará sem base no cálculo.");
-    if (uniqueKey) {
-      const first = seen.get(uniqueKey);
-      if (first) warnings.push(`Duplicidade da mesma semana/agente no arquivo. Primeira ocorrência na linha ${first}; será tratada por upsert.`);
-      else seen.set(uniqueKey, rowNumber);
-    }
+    if ((passQuantity ?? 0) === 0) warnings.push("Pass Quantity = 0; esta linha não terá denominador próprio, mas o Fail será mantido no total agregado.");
 
-    return {
+    const previewRow: PerformancePreviewRow = {
       rowNumber,
       type: "CEC_QUALITY",
       wbLogin,
@@ -1819,7 +2032,11 @@ async function previewCecQualityRows(rawRows: Record<string, unknown>[], options
       employeeName: employee?.fullName,
       lob: employee?.lob?.name ?? "",
       lobId: employee?.lobId ?? undefined,
-      date: weekRange ? `${formatDateKey(weekRange.start)} a ${formatDateKey(weekRange.end)}` : "",
+      date: qualityDate
+        ? formatDateKey(qualityDate)
+        : weekRange
+          ? `${formatDateKey(weekRange.start)} a ${formatDateKey(weekRange.end)}`
+          : text(rawMonitorDay),
       uniqueKey,
       action: errors.length ? "ignore" : "create",
       errors,
@@ -1835,9 +2052,30 @@ async function previewCecQualityRows(rawRows: Record<string, unknown>[], options
         failQuantity
       }
     };
+
+    if (errors.length || !uniqueKey) {
+      invalidRows.push(previewRow);
+      return;
+    }
+
+    const existing = groupedRows.get(uniqueKey);
+    if (!existing) {
+      groupedRows.set(uniqueKey, { ...previewRow, duplicateCount: 1 });
+      return;
+    }
+    existing.duplicateCount += 1;
+    existing.payload.passQuantity = Number(existing.payload.passQuantity ?? 0) + Number(passQuantity ?? 0);
+    existing.payload.failQuantity = Number(existing.payload.failQuantity ?? 0) + Number(failQuantity ?? 0);
   });
 
-  return markExistingCecQualityRows(previewRows);
+  const groupedPreviewRows = Array.from(groupedRows.values()).map(({ duplicateCount, ...row }) => ({
+    ...row,
+    warnings: duplicateCount > 1
+      ? [...row.warnings, `${duplicateCount} linhas do mesmo agente e período foram somadas antes da importação.`]
+      : row.warnings
+  }));
+
+  return markExistingCecQualityRows([...groupedPreviewRows, ...invalidRows].sort((left, right) => left.rowNumber - right.rowNumber));
 }
 
 async function previewProductionRows(rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
@@ -2001,6 +2239,7 @@ async function previewCecCpdRows(rawRows: Record<string, unknown>[], options: Pe
 }
 
 export async function commitQualityImport(actor: Actor, rows: PerformancePreviewRow[], fileName = "qualidade.xlsx", qualityScope: PerformanceQualityScope = "ADS") {
+  if (qualityScope === "CEC") return commitCecQualityImport(actor, rows, fileName);
   const user = await requireActiveUser(actor);
   requireImportPermission(user);
   return commitQualityRows(user, rows, fileName, undefined, qualityScope);
@@ -2086,13 +2325,37 @@ async function commitTnsQualityRows(user: AuthenticatedUser, rows: PerformancePr
 
 async function commitCecQualityRows(user: AuthenticatedUser, rows: PerformancePreviewRow[], fileName = "qualidade_cec.xlsx", batchId?: string) {
   const validRows = rows.filter((row) => row.type === "CEC_QUALITY" && !row.errors.length && row.employeeId && row.uniqueKey && Array.isArray(row.payload.expandedDates));
-  if (!validRows.length) throw new PerformanceError("Não há linhas válidas para importar.", 400);
+  if (!validRows.length) {
+    if (!batchId) throw new PerformanceError("Não há linhas válidas para importar.", 400);
+    const batch = await upsertImportBatch(user, "CEC_QUALITY", fileName, rows, 0, 0, 0, batchId);
+    return { success: true, importedRows: 0, createdRows: 0, updatedRows: 0, batchId: batch.id };
+  }
   const expandedRows = validRows.reduce((sum, row) => sum + (Array.isArray(row.payload.expandedDates) ? row.payload.expandedDates.length : 0), 0);
   const createdRows = validRows.filter((row) => row.action === "create").reduce((sum, row) => sum + (Array.isArray(row.payload.expandedDates) ? row.payload.expandedDates.length : 0), 0);
   const updatedRows = Math.max(0, expandedRows - createdRows);
   const batch = await upsertImportBatch(user, "CEC_QUALITY", fileName, rows, validRows.length, createdRows, updatedRows, batchId);
+  const stagingPrefix = batch.status === "PROCESSING" ? cecQualityStagingPrefix(batch.id) : "";
+  const persistedWbLogin = (wbLogin: string) => stagingPrefix ? `${stagingPrefix}${wbLogin}` : wbLogin;
 
   for (const chunk of chunks(validRows, 50)) {
+    const existingRecords = await prisma.cecQualityRecord.findMany({
+      where: {
+        OR: chunk.flatMap((row) => {
+          const weekNumber = Number(row.payload.weekNumber);
+          const expandedDates = Array.isArray(row.payload.expandedDates) ? row.payload.expandedDates.map((date) => String(date)) : [];
+          return expandedDates.map((date) => ({
+            wbLogin: persistedWbLogin(row.wbLogin),
+            weekNumber,
+            qualityDate: parseDate(date)!
+          }));
+        })
+      },
+      select: { wbLogin: true, weekNumber: true, qualityDate: true, importBatchId: true }
+    });
+    const existingBatchByKey = new Map(existingRecords.map((record) => [
+      cecQualityExistingKey(record.wbLogin, record.weekNumber, record.qualityDate),
+      record.importBatchId
+    ]));
     const operations = chunk.flatMap((row) => {
       const weekNumber = Number(row.payload.weekNumber);
       const weekStartDate = parseDate(String(row.payload.weekStartDate))!;
@@ -2103,20 +2366,22 @@ async function commitCecQualityRows(user: AuthenticatedUser, rows: PerformancePr
 
       return expandedDates.map((date) => {
         const qualityDate = parseDate(date)!;
+        const storedWbLogin = persistedWbLogin(row.wbLogin);
+        const alreadyImportedInBatch = existingBatchByKey.get(cecQualityExistingKey(storedWbLogin, weekNumber, qualityDate)) === batch.id;
         return prisma.cecQualityRecord.upsert({
-          where: { wbLogin_weekNumber_qualityDate: { wbLogin: row.wbLogin, weekNumber, qualityDate } },
+          where: { wbLogin_weekNumber_qualityDate: { wbLogin: storedWbLogin, weekNumber, qualityDate } },
           update: {
             employeeId: row.employeeId,
             weekStartDate,
             weekEndDate,
-            passQuantity,
-            failQuantity,
+            passQuantity: alreadyImportedInBatch ? { increment: passQuantity } : passQuantity,
+            failQuantity: alreadyImportedInBatch ? { increment: failQuantity } : failQuantity,
             lobId: row.lobId ?? null,
             importBatchId: batch.id,
             originalRowNumber: row.rowNumber
           },
           create: {
-            wbLogin: row.wbLogin,
+            wbLogin: storedWbLogin,
             employeeId: row.employeeId,
             weekNumber,
             weekStartDate,
@@ -2619,7 +2884,7 @@ export function performanceTemplate(type: "quality" | "tns-quality" | "cec-quali
     return {
       fileName: "template_performance_qualidade_cec.xlsx",
       sheetName: "Planilha1",
-      headers: ["WB", "Week", "Pass Quantity", "Fail Quantity"],
+      headers: ["Monitor day", "Employee Name", "Pass Quantity", "Fail Quantity"],
       rows: []
     };
   }
@@ -2678,10 +2943,12 @@ export function getQualityRuleByEmployee(employee?: { lob?: { name?: string | nu
 }
 
 function qualityScopeLobNames(scope: PerformanceQualityScope) {
+  if (scope === "CEC") return ["CEC"];
   return scope === "TNS" ? ["VIDEO", "COMMENTS"] : ["ADS", "PROJECT"];
 }
 
-function qualityBatchType(scope: PerformanceQualityScope): "QUALITY" | "QUALITY_TNS_KAP" {
+function qualityBatchType(scope: PerformanceQualityScope): "QUALITY" | "QUALITY_TNS_KAP" | "CEC_QUALITY" {
+  if (scope === "CEC") return "CEC_QUALITY";
   return scope === "TNS" ? "QUALITY_TNS_KAP" : "QUALITY";
 }
 
@@ -3082,15 +3349,15 @@ function calculateTnsQuality(records: TnsQualityRecordForMetrics[]) {
 function calculateCecQuality(records: CecQualityRecordForMetrics[]) {
   const pass = records.reduce((sum, record) => sum + record.passQuantity, 0);
   const fail = records.reduce((sum, record) => sum + record.failQuantity, 0);
-  const total = pass + fail;
+  const aggregate = calculateCecQualityAggregate(pass, fail);
   return {
     qualityRule: "CEC_QUALITY" as const,
-    qualityNumerator: pass,
-    qualityDenominator: total,
-    qualityErrors: fail,
-    qualityCorrect: pass,
-    qualityTotal: total,
-    quality: percent(pass, total)
+    qualityNumerator: aggregate.correct,
+    qualityDenominator: aggregate.total,
+    qualityErrors: aggregate.errors,
+    qualityCorrect: aggregate.correct,
+    qualityTotal: aggregate.total,
+    quality: aggregate.quality
   };
 }
 
@@ -3997,6 +4264,12 @@ function qualityBucketSql(granularity: "monthly" | "weekly" | "daily") {
   return Prisma.sql`date_trunc('day', q."auditDate")`;
 }
 
+function cecQualityBucketSql(granularity: "monthly" | "weekly" | "daily") {
+  if (granularity === "monthly") return Prisma.sql`date_trunc('month', q."qualityDate")`;
+  if (granularity === "weekly") return Prisma.sql`date_trunc('week', q."qualityDate")`;
+  return Prisma.sql`date_trunc('day', q."qualityDate")`;
+}
+
 function qualityBucketLabel(periodStart: Date, granularity: "monthly" | "weekly" | "daily") {
   if (granularity === "monthly") {
     return new Intl.DateTimeFormat("pt-BR", { month: "short", year: "numeric", timeZone: "UTC" }).format(periodStart);
@@ -4317,6 +4590,14 @@ function getIsoWeekDateRange(year: number, weekNumber: number): WeekRange {
   return { start, end: addDays(start, 6) };
 }
 
+function getIsoWeekNumber(date: Date) {
+  const target = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const dayNumber = target.getUTCDay() || 7;
+  target.setUTCDate(target.getUTCDate() + 4 - dayNumber);
+  const yearStart = new Date(Date.UTC(target.getUTCFullYear(), 0, 1));
+  return Math.ceil((((target.getTime() - yearStart.getTime()) / 86_400_000) + 1) / 7);
+}
+
 function datesInRange(start: Date, end: Date) {
   const dates: Date[] = [];
   for (let cursor = start; cursor <= end; cursor = addDays(cursor, 1)) dates.push(cursor);
@@ -4354,7 +4635,7 @@ function utcDate(year: number, month: number, day: number) {
   return new Date(Date.UTC(year, month - 1, day));
 }
 
-function normalizeExcelDate(value: unknown): Date | null {
+export function normalizeExcelDate(value: unknown): Date | null {
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
     return new Date(Date.UTC(value.getFullYear(), value.getMonth(), value.getDate(), value.getHours(), value.getMinutes(), value.getSeconds()));
   }
@@ -4369,6 +4650,10 @@ function normalizeExcelDate(value: unknown): Date | null {
   if (!raw) return null;
   const br = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
   if (br) return new Date(Date.UTC(Number(br[3]), Number(br[2]) - 1, Number(br[1]), Number(br[4] ?? 0), Number(br[5] ?? 0), Number(br[6] ?? 0)));
+  const dottedIso = raw.match(/^(\d{4})\.(\d{1,2})\.(\d{1,2})$/);
+  if (dottedIso) return new Date(Date.UTC(Number(dottedIso[1]), Number(dottedIso[2]) - 1, Number(dottedIso[3])));
+  const dottedBr = raw.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (dottedBr) return new Date(Date.UTC(Number(dottedBr[3]), Number(dottedBr[2]) - 1, Number(dottedBr[1])));
   const iso = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s](\d{1,2})(?::(\d{2})(?::(\d{2}))?)?)?/);
   if (iso) return new Date(Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]), Number(iso[4] ?? 0), Number(iso[5] ?? 0), Number(iso[6] ?? 0)));
   const parsed = new Date(raw);
@@ -4508,6 +4793,10 @@ function nullableNumber(value: unknown) {
 
 function cecQualityExistingKey(wbLogin: string, weekNumber: number, qualityDate: Date) {
   return `${normalizeWbLogin(wbLogin)}|${weekNumber}|${formatDateKey(qualityDate)}`;
+}
+
+function cecQualityStagingPrefix(batchId: string) {
+  return `__cec_stage__${batchId}::`;
 }
 
 function unique<T>(values: T[]) {
