@@ -4637,27 +4637,35 @@ function utcDate(year: number, month: number, day: number) {
 
 export function normalizeExcelDate(value: unknown): Date | null {
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return new Date(Date.UTC(value.getFullYear(), value.getMonth(), value.getDate(), value.getHours(), value.getMinutes(), value.getSeconds()));
+    return plausiblePerformanceDate(new Date(Date.UTC(value.getFullYear(), value.getMonth(), value.getDate(), value.getHours(), value.getMinutes(), value.getSeconds())));
   }
   if (typeof value === "number" && Number.isFinite(value)) {
     const date = new Date(Date.UTC(1899, 11, 30));
     date.setUTCDate(date.getUTCDate() + Math.floor(value));
     const fraction = value - Math.floor(value);
     if (fraction > 0) date.setUTCSeconds(Math.round(fraction * 24 * 60 * 60));
-    return date;
+    return plausiblePerformanceDate(date);
   }
   const raw = text(value);
   if (!raw) return null;
   const br = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
-  if (br) return new Date(Date.UTC(Number(br[3]), Number(br[2]) - 1, Number(br[1]), Number(br[4] ?? 0), Number(br[5] ?? 0), Number(br[6] ?? 0)));
+  if (br) return plausiblePerformanceDate(new Date(Date.UTC(Number(br[3]), Number(br[2]) - 1, Number(br[1]), Number(br[4] ?? 0), Number(br[5] ?? 0), Number(br[6] ?? 0))));
+  const prefixedYear = raw.match(/^1(20\d{2})[./-](\d{1,2})[./-](\d{1,2})$/);
+  if (prefixedYear) return plausiblePerformanceDate(new Date(Date.UTC(Number(prefixedYear[1]), Number(prefixedYear[2]) - 1, Number(prefixedYear[3]))));
   const dottedIso = raw.match(/^(\d{4})\.(\d{1,2})\.(\d{1,2})$/);
-  if (dottedIso) return new Date(Date.UTC(Number(dottedIso[1]), Number(dottedIso[2]) - 1, Number(dottedIso[3])));
+  if (dottedIso) return plausiblePerformanceDate(new Date(Date.UTC(Number(dottedIso[1]), Number(dottedIso[2]) - 1, Number(dottedIso[3]))));
   const dottedBr = raw.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
-  if (dottedBr) return new Date(Date.UTC(Number(dottedBr[3]), Number(dottedBr[2]) - 1, Number(dottedBr[1])));
+  if (dottedBr) return plausiblePerformanceDate(new Date(Date.UTC(Number(dottedBr[3]), Number(dottedBr[2]) - 1, Number(dottedBr[1]))));
   const iso = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s](\d{1,2})(?::(\d{2})(?::(\d{2}))?)?)?/);
-  if (iso) return new Date(Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]), Number(iso[4] ?? 0), Number(iso[5] ?? 0), Number(iso[6] ?? 0)));
+  if (iso) return plausiblePerformanceDate(new Date(Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]), Number(iso[4] ?? 0), Number(iso[5] ?? 0), Number(iso[6] ?? 0))));
   const parsed = new Date(raw);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
+  return plausiblePerformanceDate(parsed);
+}
+
+function plausiblePerformanceDate(date: Date) {
+  if (Number.isNaN(date.getTime())) return null;
+  const year = date.getUTCFullYear();
+  return year >= 2000 && year <= 2100 ? date : null;
 }
 
 function parseDate(value?: string | null) {

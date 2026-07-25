@@ -36,3 +36,12 @@ test("normaliza os três formatos de data encontrados na base CEC", () => {
   assert.equal(normalizeExcelDate("20.05.2026")?.toISOString().slice(0, 10), "2026-05-20");
   assert.equal(normalizeExcelDate(46205)?.toISOString().slice(0, 10), "2026-07-02");
 });
+
+test("corrige o ano 12026 exportado na base CEC", () => {
+  assert.equal(normalizeExcelDate("12026/4/17")?.toISOString().slice(0, 10), "2026-04-17");
+  assert.equal(normalizeExcelDate("12026/4/20")?.toISOString().slice(0, 10), "2026-04-20");
+});
+
+test("rejeita anos fora da janela operacional", () => {
+  assert.equal(normalizeExcelDate("22026/4/17"), null);
+});
