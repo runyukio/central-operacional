@@ -14,7 +14,7 @@
     },
     {
       "path": "/api/cron/video-executive-report",
-      "schedule": "56 * * * *"
+      "schedule": "55 * * * *"
     }
   ]
 }
