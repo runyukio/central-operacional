@@ -339,7 +339,10 @@ type ExecutiveAgentPerformanceRow = {
   submit: number;
   ahtMs: number | null;
 };
-type ExecutiveAdsReport = {
+type ExecutiveReportLob = "ADS" | "VIDEO";
+type ExecutiveReport = {
+  lob: ExecutiveReportLob;
+  latencyTargetMinutes: number;
   selectedCycle: string;
   dateLabel: string;
   latestHourLabel: string;
@@ -362,8 +365,14 @@ type StaffCoverageExecutiveRow = {
   shift: string;
   required: number;
 };
+type ExecutiveSourceData = {
+  lob: ExecutiveReportLob;
+  performanceTrend: PerformanceForecastTrendRow[];
+  requiredRows: StaffCoverageExecutiveRow[];
+};
 const ADS_REPORT_TARGET_LATENCY_MINUTES = 120;
 const ADS_REPORT_TARGET_LATENCY_LABEL = "2:00h";
+const VIDEO_EXECUTIVE_TARGET_LATENCY_MINUTES = 15;
 const EXECUTIVE_FORECAST_MIN_HORIZON_HOURS = 72;
 const EXECUTIVE_HOUR_MS = 60 * 60 * 1000;
 const EXECUTIVE_DAY_MS = 24 * EXECUTIVE_HOUR_MS;
@@ -460,6 +469,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
   const [followLatestCycle, setFollowLatestCycle] = useState(true);
   const [queueFilters, setQueueFilters] = useState<QueueFilters>(defaultQueueFilters);
   const [reportLob, setReportLob] = useState<ReportLob>("ADS");
+  const [executiveLob, setExecutiveLob] = useState<ExecutiveReportLob>("ADS");
   const [reportSearch, setReportSearch] = useState("");
   const [queueSort, setQueueSort] = useState<QueueSortState>(defaultQueueSort);
   const [agentFilters, setAgentFilters] = useState<AgentFilters>(defaultAgentFilters);
@@ -472,8 +482,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
   const [cecReport, setCecReport] = useState<CecReportPayload | null>(null);
   const [cecLoading, setCecLoading] = useState(false);
   const [cecError, setCecError] = useState("");
-  const [executivePerformanceTrend, setExecutivePerformanceTrend] = useState<PerformanceForecastTrendRow[]>([]);
-  const [executiveRequiredRows, setExecutiveRequiredRows] = useState<StaffCoverageExecutiveRow[]>([]);
+  const [executiveSourceData, setExecutiveSourceData] = useState<ExecutiveSourceData | null>(null);
   const snapshotAbortRef = useRef<AbortController | null>(null);
 
   const effectiveTab = clientQueuesOnly ? "queues" : executiveOnly ? "executive" : activeTab;
@@ -649,9 +658,17 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
   const reportBacklogCard = useMemo(() => buildReportBacklogCard(reportRows, selectedCycleValue), [reportRows, selectedCycleValue]);
   const adsReportCards = useMemo(() => buildAdsReportCards(reportRows, agentView?.rows ?? [], selectedCycleValue), [agentView?.rows, reportRows, selectedCycleValue]);
   const tnsReportCards = useMemo(() => buildTnsReportCards(reportRows, agentView?.rows ?? [], selectedCycleValue), [agentView?.rows, reportRows, selectedCycleValue]);
-  const executiveAdsReport = useMemo(
-    () => buildExecutiveAdsReport(queueView?.rows ?? [], agentView?.rows ?? [], selectedCycleValue, executivePerformanceTrend, executiveRequiredRows),
-    [agentView?.rows, executivePerformanceTrend, executiveRequiredRows, queueView?.rows, selectedCycleValue]
+  const currentExecutiveSourceData = executiveSourceData?.lob === executiveLob ? executiveSourceData : null;
+  const executiveReport = useMemo(
+    () => buildExecutiveReport(
+      queueView?.rows ?? [],
+      agentView?.rows ?? [],
+      selectedCycleValue,
+      executiveLob,
+      currentExecutiveSourceData?.performanceTrend ?? [],
+      currentExecutiveSourceData?.requiredRows ?? []
+    ),
+    [agentView?.rows, currentExecutiveSourceData, executiveLob, queueView?.rows, selectedCycleValue]
   );
   const filteredAgentCards = useMemo(() => buildFilteredAgentCards(agentRows, selectedCycleValue), [agentRows, selectedCycleValue]);
   const filteredQueueCards = useMemo(() => buildQueueLobCards(queueRows, selectedCycleValue), [queueRows, selectedCycleValue]);
@@ -662,11 +679,12 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
     const selected = parseRealtimeCycle(selectedCycleValue, "");
 
     async function loadExecutiveSources() {
-      const performanceParams = new URLSearchParams({ lob: "ADS", granularity: "hourly" });
+      setExecutiveSourceData(null);
+      const performanceParams = new URLSearchParams({ lob: executiveLob, granularity: "hourly" });
       const requiredParams = new URLSearchParams({
         startDate: selected.dateKey,
         endDate: selected.dateKey,
-        lob: "ADS",
+        lob: executiveLob,
         limit: "200"
       });
 
@@ -686,21 +704,22 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
       ]);
 
       if (controller.signal.aborted) return;
-      if (performanceResult.status === "fulfilled") setExecutivePerformanceTrend(performanceResult.value);
-      else {
+      if (performanceResult.status === "rejected") {
         console.warn("[realtime] Forecast de Performance indisponível.", performanceResult.reason);
-        setExecutivePerformanceTrend([]);
       }
-      if (requiredResult.status === "fulfilled") setExecutiveRequiredRows(requiredResult.value);
-      else {
-        console.warn("[realtime] Requerido ADS indisponível.", requiredResult.reason);
-        setExecutiveRequiredRows([]);
+      if (requiredResult.status === "rejected") {
+        console.warn(`[realtime] Requerido ${executiveLob} indisponível.`, requiredResult.reason);
       }
+      setExecutiveSourceData({
+        lob: executiveLob,
+        performanceTrend: performanceResult.status === "fulfilled" ? performanceResult.value : [],
+        requiredRows: requiredResult.status === "fulfilled" ? requiredResult.value : []
+      });
     }
 
     void loadExecutiveSources();
     return () => controller.abort();
-  }, [canAccessExecutiveReport, effectiveTab, selectedCycleValue]);
+  }, [canAccessExecutiveReport, effectiveTab, executiveLob, selectedCycleValue]);
 
   function downloadReportSummary() {
     downloadReportSummaryImage({
@@ -924,6 +943,8 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
                 <QueueLobQuickFilter value={queueFilters.lob} onChange={(value) => updateQueueFilter("lob", value)} options={queueView?.filters.lobs ?? []} />
               ) : effectiveTab === "report" ? (
                 <ReportLobQuickFilter value={reportLob} onChange={setReportLob} />
+              ) : effectiveTab === "executive" ? (
+                <ExecutiveLobQuickFilter value={executiveLob} onChange={setExecutiveLob} />
               ) : null}
             </div>
             {effectiveTab !== "report" && effectiveTab !== "executive" ? (
@@ -971,7 +992,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
           ) : effectiveTab === "report" ? (
             <ReportTable rows={reportRows} reportLob={reportLob} onDownloadQueues={downloadReportQueues} />
           ) : (
-            <ExecutiveAdsReportDashboard report={executiveAdsReport} />
+            <ExecutiveReportDashboard report={executiveReport} />
           )
         ) : (
           <div className="px-4 py-16 text-center">
@@ -989,12 +1010,12 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
   );
 }
 
-function ExecutiveAdsReportDashboard({ report }: { report: ExecutiveAdsReport }) {
+function ExecutiveReportDashboard({ report }: { report: ExecutiveReport }) {
   return (
     <div className="space-y-4 p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-[11px] font-black uppercase tracking-[0.22em] text-muted">ADS executive report</p>
+          <p className="text-[11px] font-black uppercase tracking-[0.22em] text-muted">{report.lob} executive report</p>
           <h2 className="mt-1 text-2xl font-black text-navy-950">Operational radar</h2>
           <p className="mt-1 text-sm font-bold text-muted">{report.dateLabel} · latest point {report.latestHourLabel}</p>
         </div>
@@ -1004,7 +1025,7 @@ function ExecutiveAdsReportDashboard({ report }: { report: ExecutiveAdsReport })
           </span>
           <button
             type="button"
-            onClick={() => downloadExecutiveAdsReportImage(report)}
+            onClick={() => downloadExecutiveReportImage(report)}
             className="premium-control inline-flex h-10 items-center gap-2 px-3 text-sm font-extrabold text-navy-950"
           >
             <Download className="h-4 w-4" />
@@ -1023,7 +1044,7 @@ function ExecutiveAdsReportDashboard({ report }: { report: ExecutiveAdsReport })
         <section className="overflow-hidden rounded-[22px] border border-slate-200/80 bg-white shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
           <div className="border-b border-slate-100 px-4 py-3">
             <h3 className="font-black text-navy-950">Hourly health map</h3>
-            <p className="text-xs font-bold text-muted">ADS by hour, using snapshot deltas for input and output.</p>
+            <p className="text-xs font-bold text-muted">{report.lob} by hour, using snapshot deltas for input and output.</p>
           </div>
           <ExecutiveHeatmap rows={report.heatmap} />
         </section>
@@ -1049,7 +1070,7 @@ function ExecutiveAdsReportDashboard({ report }: { report: ExecutiveAdsReport })
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
-        <ExecutiveChartCard title="Input x Forecast" helper="Real ADS volume against hourly forecast">
+        <ExecutiveChartCard title="Input x Forecast" helper={`Real ${report.lob} volume against hourly forecast`}>
           <ResponsiveContainer width="100%" height={260}>
             <AreaChart data={report.inputForecastHistory} margin={{ top: 38, right: 24, left: 2, bottom: 26 }}>
               <defs>
@@ -1091,7 +1112,7 @@ function ExecutiveAdsReportDashboard({ report }: { report: ExecutiveAdsReport })
           </ResponsiveContainer>
         </ExecutiveChartCard>
 
-        <ExecutiveChartCard title="Backlog" helper="ADS backlog through the day">
+        <ExecutiveChartCard title="Backlog" helper={`${report.lob} backlog through the day`}>
           <ExecutiveSingleSeriesChart data={report.backlogHistory} format="number" trend={report.cards[3]?.trend ?? "neutral"} />
         </ExecutiveChartCard>
       </div>
@@ -2109,6 +2130,27 @@ function ReportLobQuickFilter({ value, onChange }: { value: ReportLob; onChange:
   );
 }
 
+function ExecutiveLobQuickFilter({ value, onChange }: { value: ExecutiveReportLob; onChange: (value: ExecutiveReportLob) => void }) {
+  const lobs = ["ADS", "VIDEO"] as const;
+  return (
+    <div className="flex flex-wrap items-center gap-1 rounded-2xl border border-slate-200 bg-white p-1 shadow-[0_4px_12px_rgba(7,27,58,0.035)]">
+      {lobs.map((lob) => (
+        <button
+          key={lob}
+          type="button"
+          onClick={() => onChange(lob)}
+          className={cn(
+            "inline-flex h-8 items-center gap-1 rounded-xl px-3 text-xs font-black transition",
+            value === lob ? "bg-blue-600 text-white shadow-sm" : "text-muted hover:bg-blue-50 hover:text-blue-700"
+          )}
+        >
+          {lob}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function ReportSummarySection({
   card,
   departments,
@@ -2641,7 +2683,7 @@ type ExecutiveCanvasDatum = { label: string } & Record<string, number | string |
 type ExecutiveCanvasLine = { key: string; label: string; color: string; fill?: boolean; dashed?: boolean };
 type ExecutiveCanvasCallout = { index: number; key: string; label: string; color: string };
 
-function downloadExecutiveAdsReportImage(report: ExecutiveAdsReport) {
+function downloadExecutiveReportImage(report: ExecutiveReport) {
   const width = 2400;
   const height = 2420;
   const margin = 56;
@@ -2655,7 +2697,7 @@ function downloadExecutiveAdsReportImage(report: ExecutiveAdsReport) {
   if (!ctx) return;
 
   fillRect(ctx, 0, 0, width, height, "#EEF3F8");
-  drawText(ctx, "ADS Operational Radar", margin, 88, 54, "#0F172A", "900");
+  drawText(ctx, `${report.lob} Operational Radar`, margin, 88, 54, "#0F172A", "900");
   drawText(ctx, `Real Time executive view · latest point ${report.latestHourLabel}`, margin, 128, 22, "#64748B", "800");
   roundRect(ctx, width - 394, 62, 330, 52, 26, "#EFF6FF");
   drawCenteredText(ctx, report.dateLabel, width - 229, 96, 21, "#1D4ED8", "900");
@@ -2663,18 +2705,18 @@ function downloadExecutiveAdsReportImage(report: ExecutiveAdsReport) {
   drawExecutiveExportCards(ctx, report.cards, margin, 188, contentWidth, 230);
   drawExecutiveExportHeatmap(ctx, report.heatmap, margin, 468, contentWidth, 574);
 
-  drawExecutiveExportChartPanel(ctx, "Input x Forecast", "Real ADS volume against forecast by hour", margin, 1092, chartPanelWidth, 560, () => {
+  drawExecutiveExportChartPanel(ctx, "Input x Forecast", `Real ${report.lob} volume against forecast by hour`, margin, 1092, chartPanelWidth, 560, () => {
     drawExecutiveExportInputForecastChart(ctx, report, margin + 42, 1178, chartPanelWidth - 84, 420);
   });
   drawExecutiveExportRanking(ctx, "Top performance · last hour", report.topAgents, rankingX, 1092, rankingPanelWidth, 560);
 
-  drawExecutiveExportChartPanel(ctx, "Backlog", "ADS backlog through the day", margin, 1702, chartPanelWidth, 560, () => {
+  drawExecutiveExportChartPanel(ctx, "Backlog", `${report.lob} backlog through the day`, margin, 1702, chartPanelWidth, 560, () => {
     drawExecutiveExportBacklogChart(ctx, report, margin + 42, 1788, chartPanelWidth - 84, 420);
   });
   drawExecutiveExportRanking(ctx, "Low performance · last hour", report.lowAgents, rankingX, 1702, rankingPanelWidth, 560);
 
   drawText(ctx, "Generated from Central Operacional", margin, height - 46, 17, "#94A3B8", "850");
-  downloadCanvas(canvas, `executive-ads-radar-${safeCanvasFileName(report.selectedCycle || report.latestHourLabel)}.png`);
+  downloadCanvas(canvas, `executive-${report.lob.toLowerCase()}-radar-${safeCanvasFileName(report.selectedCycle || report.latestHourLabel)}.png`);
 }
 
 function drawExecutiveExportCards(ctx: CanvasRenderingContext2D, cards: AgentKpiCard[], x: number, y: number, width: number, height: number) {
@@ -2771,7 +2813,7 @@ function drawExecutiveExportChartPanel(ctx: CanvasRenderingContext2D, title: str
   drawChart();
 }
 
-function drawExecutiveExportInputForecastChart(ctx: CanvasRenderingContext2D, report: ExecutiveAdsReport, x: number, y: number, width: number, height: number) {
+function drawExecutiveExportInputForecastChart(ctx: CanvasRenderingContext2D, report: ExecutiveReport, x: number, y: number, width: number, height: number) {
   const selectedHour = parseRealtimeCycle(report.selectedCycle, "").date.getHours();
   const peakIndex = findExecutiveInputForecastPeakIndex(report.inputForecastHistory);
   const callouts: ExecutiveCanvasCallout[] = [];
@@ -2803,7 +2845,7 @@ function drawExecutiveExportInputForecastChart(ctx: CanvasRenderingContext2D, re
   ], x, y, width, height, callouts);
 }
 
-function drawExecutiveExportBacklogChart(ctx: CanvasRenderingContext2D, report: ExecutiveAdsReport, x: number, y: number, width: number, height: number) {
+function drawExecutiveExportBacklogChart(ctx: CanvasRenderingContext2D, report: ExecutiveReport, x: number, y: number, width: number, height: number) {
   const validData = report.backlogHistory.filter((point) => point.value !== null);
   const callouts: ExecutiveCanvasCallout[] = [];
   const currentIndex = validData.length - 1;
@@ -3697,20 +3739,30 @@ function buildTnsReportCards(reportRows: QueueReportRow[], agentRows: AgentRealt
   };
 }
 
-function buildExecutiveAdsReport(
+function buildExecutiveReportRows(rows: QueueRealtimeRow[], lob: ExecutiveReportLob) {
+  const reportLob: ReportLob = lob === "ADS" ? "ADS" : "TNS";
+  return buildReportRows(rows, reportLob, "").filter((row) => row.lob === lob);
+}
+
+function executiveLatencyTargetMinutes(lob: ExecutiveReportLob) {
+  return lob === "VIDEO" ? VIDEO_EXECUTIVE_TARGET_LATENCY_MINUTES : ADS_REPORT_TARGET_LATENCY_MINUTES;
+}
+
+function buildExecutiveReport(
   queueRows: QueueRealtimeRow[],
   agentRows: AgentRealtimeRow[],
   selectedCycle: string,
+  lob: ExecutiveReportLob,
   performanceTrend: PerformanceForecastTrendRow[] = [],
   requiredRows: StaffCoverageExecutiveRow[] = []
-): ExecutiveAdsReport {
+): ExecutiveReport {
   const selected = parseRealtimeCycle(selectedCycle, "");
-  const reportRows = buildReportRows(queueRows, "ADS", "");
-  const adsAgents = agentRows.filter((row) => isReportAgentForLob(row, "ADS"));
+  const reportRows = buildExecutiveReportRows(queueRows, lob);
+  const reportAgents = agentRows.filter((row) => isReportAgentForLob(row, lob));
   const queueByHour = buildExecutiveQueueBuckets(reportRows, selected);
-  const agentByHour = buildExecutiveAgentBuckets(adsAgents, selected);
-  const requiredByHour = buildExecutiveRequiredByHour(requiredRows, selected.dateKey);
-  const currentOnline = adsAgents.filter((row) => isOnlineHeadcountStatus(row.presenceStatus)).length;
+  const agentByHour = buildExecutiveAgentBuckets(reportAgents, selected);
+  const requiredByHour = buildExecutiveRequiredByHour(requiredRows, selected.dateKey, lob);
+  const currentOnline = reportAgents.filter((row) => isOnlineHeadcountStatus(row.presenceStatus)).length;
 
   const buckets: ExecutiveHourBucket[] = Array.from({ length: 24 }).map((_, hour) => {
     const queue = queueByHour.get(hour);
@@ -3733,9 +3785,10 @@ function buildExecutiveAdsReport(
 
   const filledBuckets = buckets.filter((bucket) => bucket.cycleDownload);
   const latest = filledBuckets[filledBuckets.length - 1] ?? null;
-  const previous = latest ? resolveExecutivePreviousHourBucket(filledBuckets, reportRows, adsAgents, requiredRows, selected, latest.hour) : null;
-  const agentRankings = buildExecutiveAgentRankings(adsAgents, latest?.cycleDownload ?? selectedCycle, previous?.cycleDownload ?? null);
+  const previous = latest ? resolveExecutivePreviousHourBucket(filledBuckets, reportRows, reportAgents, requiredRows, selected, latest.hour, lob) : null;
+  const agentRankings = buildExecutiveAgentRankings(reportAgents, latest?.cycleDownload ?? selectedCycle, previous?.cycleDownload ?? null);
   const dateLabel = new Intl.DateTimeFormat("en-US", { month: "short", day: "2-digit", year: "numeric" }).format(selected.date);
+  const latencyTargetMinutes = executiveLatencyTargetMinutes(lob);
   const cards = [
     buildAgentKpiCard("Last-hour Submit", latest?.output ?? null, previous?.output ?? null, "number", "up", buildExecutiveTrend(buckets, "output", selected)),
     buildAgentKpiCard("Last-hour Input", latest?.input ?? null, previous?.input ?? null, "number", "up", buildExecutiveTrend(buckets, "input", selected)),
@@ -3744,12 +3797,14 @@ function buildExecutiveAdsReport(
   ];
 
   return {
+    lob,
+    latencyTargetMinutes,
     selectedCycle,
     dateLabel,
     latestHourLabel: latest?.cycleDownload ?? (selectedCycle || "-"),
     buckets,
     cards,
-    heatmap: buildExecutiveHeatmap(buckets),
+    heatmap: buildExecutiveHeatmap(buckets, latencyTargetMinutes),
     inputForecastHistory: buildExecutiveInputForecastHistory(reportRows, buckets, selected, performanceTrend),
     backlogHistory: buildExecutiveTrend(buckets, "backlog", selected),
     topAgents: agentRankings.top,
@@ -3760,10 +3815,11 @@ function buildExecutiveAdsReport(
 function resolveExecutivePreviousHourBucket(
   filledBuckets: ExecutiveHourBucket[],
   reportRows: QueueReportRow[],
-  adsAgents: AgentRealtimeRow[],
+  reportAgents: AgentRealtimeRow[],
   requiredRows: StaffCoverageExecutiveRow[],
   selected: ReturnType<typeof parseRealtimeCycle>,
-  currentHour: number
+  currentHour: number,
+  lob: ExecutiveReportLob
 ) {
   const sameDayPrevious = [...filledBuckets].filter((bucket) => bucket.hour < currentHour).pop() ?? null;
   if (sameDayPrevious) return sameDayPrevious;
@@ -3774,8 +3830,8 @@ function resolveExecutivePreviousHourBucket(
   if (previousSelected.dateKey === selected.dateKey) return null;
 
   const previousQueueByHour = buildExecutiveQueueBuckets(reportRows, previousSelected);
-  const previousAgentByHour = buildExecutiveAgentBuckets(adsAgents, previousSelected);
-  const previousRequiredByHour = buildExecutiveRequiredByHour(requiredRows, previousSelected.dateKey);
+  const previousAgentByHour = buildExecutiveAgentBuckets(reportAgents, previousSelected);
+  const previousRequiredByHour = buildExecutiveRequiredByHour(requiredRows, previousSelected.dateKey, lob);
   const previousHour = previousHourDate.getHours();
   const queue = previousQueueByHour.get(previousHour);
   const agent = previousAgentByHour.get(previousHour);
@@ -4061,10 +4117,10 @@ function executiveSum(values: number[]) {
   return values.reduce((total, value) => total + value, 0);
 }
 
-function buildExecutiveRequiredByHour(rows: StaffCoverageExecutiveRow[], dateKey: string) {
+function buildExecutiveRequiredByHour(rows: StaffCoverageExecutiveRow[], dateKey: string, lob: ExecutiveReportLob) {
   const requiredByShift = new Map<string, number>();
   rows
-    .filter((row) => row.date === dateKey && normalizeSearch(row.lob) === "ads")
+    .filter((row) => row.date === dateKey && normalizeSearch(row.lob) === normalizeSearch(lob))
     .forEach((row) => {
       const shift = normalizeExecutiveShift(row.shift);
       const required = Math.max(0, Number(row.required || 0));
@@ -4339,7 +4395,7 @@ function buildExecutiveTrend(buckets: ExecutiveHourBucket[], key: keyof Pick<Exe
     });
 }
 
-function buildExecutiveHeatmap(buckets: ExecutiveHourBucket[]): ExecutiveHeatmapRow[] {
+function buildExecutiveHeatmap(buckets: ExecutiveHourBucket[], latencyTargetMinutes: number): ExecutiveHeatmapRow[] {
   const previousBacklog = (index: number) => {
     for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
       if (buckets[cursor]?.backlog !== null) return buckets[cursor].backlog;
@@ -4385,7 +4441,7 @@ function buildExecutiveHeatmap(buckets: ExecutiveHourBucket[]): ExecutiveHeatmap
     }),
     buildExecutiveHeatmapRow("Max Latency", buckets, (bucket) => {
       if (bucket.maxLatencyMs === null) return emptyExecutiveCell();
-      const status = resolveLatencyAdherence(bucket.maxLatencyMs, ADS_REPORT_TARGET_LATENCY_MINUTES);
+      const status = resolveLatencyAdherence(bucket.maxLatencyMs, latencyTargetMinutes);
       return formatDurationCell(bucket.maxLatencyMs, status === "OK" ? "good" : status === "Alerta" ? "watch" : "bad");
     })
   ];
