@@ -112,7 +112,7 @@ export type PerformanceAgentsQuery = {
   supervisorId?: string;
   shiftId?: string;
   search?: string;
-  sortBy?: "employeeName" | "wbLogin" | "lob" | "supervisor" | "shift" | "outputTotal" | "submit" | "aht";
+  sortBy?: "employeeName" | "wbLogin" | "lob" | "supervisor" | "shift" | "outputTotal" | "submit" | "aht" | "quality";
   sortDirection?: "asc" | "desc";
   page?: number;
   pageSize?: number;
@@ -921,8 +921,9 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     moderationSeconds: number;
     activeDates: Date[];
   };
-  const rawRows: AgentDashboardRawRow[] = requestedLob === "CEC"
-    ? await prisma.$queryRaw<AgentDashboardRawRow[]>(Prisma.sql`
+  const [rawRows, qualityByIdentity] = await Promise.all([
+    requestedLob === "CEC"
+    ? prisma.$queryRaw<AgentDashboardRawRow[]>(Prisma.sql`
       SELECT
         c."employeeId" AS "employeeId",
         COALESCE(e."fullName", c."wbLogin") AS "employeeName",
@@ -955,7 +956,7 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
         e."shiftId",
         sh."name"
     `)
-    : await prisma.$queryRaw<AgentDashboardRawRow[]>(Prisma.sql`
+    : prisma.$queryRaw<AgentDashboardRawRow[]>(Prisma.sql`
     SELECT
       p."employeeId" AS "employeeId",
       COALESCE(e."fullName", p."wbLogin") AS "employeeName",
@@ -986,7 +987,9 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
       e."shiftId",
       sh."name",
       p."queueId"
-  `);
+    `),
+    getPerformanceAgentQualityByIdentity(requestedLob, start, end, ownEmployeeId)
+  ]);
 
   const aggregateMap = new Map<string, {
     employeeId: string | null;
@@ -1027,8 +1030,18 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     aggregateMap.set(key, current);
   }
 
+  const rowsWithQuality = Array.from(aggregateMap.values()).map((row) => {
+    const quality = qualityByIdentity.get(row.employeeId ? `employee:${row.employeeId}` : `wb:${normalizePerformanceWbLogin(row.wbLogin)}`);
+    return {
+      ...row,
+      qualityCorrect: quality?.correct ?? 0,
+      qualityTotal: quality?.total ?? 0,
+      qualityErrors: quality?.errors ?? 0,
+      quality: quality?.quality ?? 0
+    };
+  });
   const search = query.search?.trim().toLocaleLowerCase("pt-BR") ?? "";
-  const filteredRows = Array.from(aggregateMap.values()).filter((row) => {
+  const filteredRows = rowsWithQuality.filter((row) => {
     if (query.supervisorId && row.supervisorId !== query.supervisorId) return false;
     if (query.shiftId && row.shiftId !== query.shiftId) return false;
     if (!search) return true;
@@ -1049,6 +1062,8 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
   const activeDates = new Set(filteredRows.flatMap((row) => Array.from(row.activeDates)));
   const outputAveragePerDay = activeDates.size > 0 ? submit / activeDates.size : 0;
   const agents = new Set(filteredRows.map((row) => row.employeeId || `wb:${row.wbLogin.toLocaleLowerCase("pt-BR")}`)).size;
+  const qualityCorrect = filteredRows.reduce((total, row) => total + row.qualityCorrect, 0);
+  const qualityTotal = filteredRows.reduce((total, row) => total + row.qualityTotal, 0);
 
   return {
     mode: "agents" as const,
@@ -1063,7 +1078,11 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
       outputAveragePerDay: round2(outputAveragePerDay),
       daysWithData: activeDates.size,
       moderationSeconds,
-      ahtSeconds: submit > 0 ? round2(moderationSeconds / submit) : 0
+      ahtSeconds: submit > 0 ? round2(moderationSeconds / submit) : 0,
+      qualityCorrect,
+      qualityTotal,
+      qualityErrors: Math.max(0, qualityTotal - qualityCorrect),
+      quality: qualityTotal > 0 ? round2((qualityCorrect / qualityTotal) * 100) : 0
     },
     pagination: { page, pageSize, totalRows, totalPages },
     sort: { sortBy, sortDirection },
@@ -1080,7 +1099,11 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
       outputAveragePerDay: round2(row.outputAveragePerDay),
       daysWithData: row.activeDates.size,
       moderationSeconds: round2(row.moderationSeconds),
-      ahtSeconds: row.submit > 0 ? round2(row.moderationSeconds / row.submit) : 0
+      ahtSeconds: row.submit > 0 ? round2(row.moderationSeconds / row.submit) : 0,
+      qualityCorrect: row.qualityCorrect,
+      qualityTotal: row.qualityTotal,
+      qualityErrors: row.qualityErrors,
+      quality: row.quality
     }))
   };
 }
@@ -1470,7 +1493,18 @@ function emptyPerformanceAgentsPayload(
     dataRange,
     selectedLob: "",
     filters,
-    summary: { agents: 0, submit: 0, outputAveragePerDay: 0, daysWithData: 0, moderationSeconds: 0, ahtSeconds: 0 },
+    summary: {
+      agents: 0,
+      submit: 0,
+      outputAveragePerDay: 0,
+      daysWithData: 0,
+      moderationSeconds: 0,
+      ahtSeconds: 0,
+      qualityCorrect: 0,
+      qualityTotal: 0,
+      qualityErrors: 0,
+      quality: 0
+    },
     pagination: { page: 1, pageSize: 50, totalRows: 0, totalPages: 1 },
     sort: { sortBy: "submit" as const, sortDirection: "desc" as const },
     agents: []
@@ -1482,11 +1516,15 @@ function uniqueBy<T>(items: T[], key: (item: T) => string) {
 }
 
 function comparePerformanceAgentRows(
-  a: { employeeName: string; wbLogin: string; lob: string; supervisor: string; shift: string; submit: number; outputAveragePerDay: number; moderationSeconds: number },
-  b: { employeeName: string; wbLogin: string; lob: string; supervisor: string; shift: string; submit: number; outputAveragePerDay: number; moderationSeconds: number },
+  a: { employeeName: string; wbLogin: string; lob: string; supervisor: string; shift: string; submit: number; outputAveragePerDay: number; moderationSeconds: number; quality: number; qualityTotal: number },
+  b: { employeeName: string; wbLogin: string; lob: string; supervisor: string; shift: string; submit: number; outputAveragePerDay: number; moderationSeconds: number; quality: number; qualityTotal: number },
   sortBy: NonNullable<PerformanceAgentsQuery["sortBy"]>,
   direction: "asc" | "desc"
 ) {
+  if (sortBy === "quality" && (a.qualityTotal <= 0 || b.qualityTotal <= 0)) {
+    if (a.qualityTotal <= 0 && b.qualityTotal <= 0) return 0;
+    return a.qualityTotal <= 0 ? 1 : -1;
+  }
   const aValue = sortBy === "aht"
     ? (a.submit > 0 ? a.moderationSeconds / a.submit : -1)
     : sortBy === "outputTotal"
@@ -1505,6 +1543,78 @@ function comparePerformanceAgentRows(
     ? aValue - bValue
     : String(aValue).localeCompare(String(bValue), "pt-BR", { sensitivity: "base" });
   return direction === "asc" ? result : -result;
+}
+
+type PerformanceAgentQualityAggregate = {
+  correct: number;
+  total: number;
+  errors: number;
+  quality: number;
+};
+
+async function getPerformanceAgentQualityByIdentity(
+  requestedLob: string,
+  start: Date,
+  end: Date,
+  ownEmployeeId: string | null
+) {
+  type QualityByAgentRawRow = {
+    employeeId: string | null;
+    wbLogin: string;
+    correct: number;
+    total: number;
+  };
+  const ownQualityEmployeeSql = ownEmployeeId ? Prisma.sql`AND q."employeeId" = ${ownEmployeeId}` : Prisma.empty;
+  const rows = requestedLob === "CEC"
+    ? await prisma.$queryRaw<QualityByAgentRawRow[]>(Prisma.sql`
+      SELECT
+        q."employeeId" AS "employeeId",
+        MAX(COALESCE(e."wbLogin", q."wbLogin")) AS "wbLogin",
+        COALESCE(SUM(q."passQuantity"), 0)::double precision AS "correct",
+        COALESCE(SUM(q."passQuantity" + q."failQuantity"), 0)::double precision AS "total"
+      FROM "CecQualityRecord" q
+      LEFT JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
+      WHERE q."qualityDate" >= ${start}
+        AND q."qualityDate" <= ${end}
+        ${ownQualityEmployeeSql}
+        ${visibleQualityRecordSql}
+      GROUP BY
+        q."employeeId",
+        CASE WHEN q."employeeId" IS NULL THEN LOWER(TRIM(q."wbLogin")) ELSE '' END
+    `)
+    : await prisma.$queryRaw<QualityByAgentRawRow[]>(Prisma.sql`
+      SELECT
+        q."employeeId" AS "employeeId",
+        MAX(COALESCE(e."wbLogin", q."wbLogin")) AS "wbLogin",
+        COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::double precision AS "correct",
+        COUNT(DISTINCT q."concatKey")::double precision AS "total"
+      FROM "QualityRecord" q
+      LEFT JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
+      LEFT JOIN "Lob" l ON l."id" = COALESCE(q."lobId", e."lobId")
+      WHERE q."auditDate" >= ${start}
+        AND q."auditDate" <= ${end}
+        ${requestedLob === "ADS" || requestedLob === "PROJECT"
+          ? Prisma.sql`AND UPPER(COALESCE(l."name", '')) IN ('ADS', 'PROJECT')`
+          : Prisma.sql`AND UPPER(COALESCE(l."name", '')) = ${requestedLob}`}
+        ${ownQualityEmployeeSql}
+        ${visibleQualityRecordSql}
+      GROUP BY
+        q."employeeId",
+        CASE WHEN q."employeeId" IS NULL THEN LOWER(TRIM(q."wbLogin")) ELSE '' END
+    `);
+
+  const qualityByIdentity = new Map<string, PerformanceAgentQualityAggregate>();
+  for (const row of rows) {
+    const aggregate = serializeQualityAggregate(row.correct, row.total);
+    if (row.employeeId) qualityByIdentity.set(`employee:${row.employeeId}`, aggregate);
+    const wbLogin = normalizePerformanceWbLogin(row.wbLogin);
+    if (wbLogin) qualityByIdentity.set(`wb:${wbLogin}`, aggregate);
+  }
+  return qualityByIdentity;
+}
+
+function normalizePerformanceWbLogin(value: string) {
+  return String(value ?? "").trim().toLocaleLowerCase("pt-BR");
 }
 
 function serializeQualityAggregate(correct: number, total: number) {

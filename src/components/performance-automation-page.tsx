@@ -147,7 +147,7 @@ type QualityImportResult = {
   qualityRowsIgnored: number;
 };
 
-type AgentSortKey = "employeeName" | "wbLogin" | "lob" | "supervisor" | "shift" | "outputTotal" | "submit" | "aht";
+type AgentSortKey = "employeeName" | "wbLogin" | "lob" | "supervisor" | "shift" | "outputTotal" | "submit" | "aht" | "quality";
 type AgentSortDirection = "asc" | "desc";
 
 type PerformanceAgentRow = {
@@ -164,6 +164,10 @@ type PerformanceAgentRow = {
   daysWithData: number;
   moderationSeconds: number;
   ahtSeconds: number;
+  qualityCorrect: number;
+  qualityTotal: number;
+  qualityErrors: number;
+  quality: number;
 };
 
 type PerformanceAgentsResponse = {
@@ -184,6 +188,10 @@ type PerformanceAgentsResponse = {
     daysWithData: number;
     moderationSeconds: number;
     ahtSeconds: number;
+    qualityCorrect: number;
+    qualityTotal: number;
+    qualityErrors: number;
+    quality: number;
   };
   pagination: { page: number; pageSize: number; totalRows: number; totalPages: number };
   sort: { sortBy: AgentSortKey; sortDirection: AgentSortDirection };
@@ -958,8 +966,8 @@ function AgentsView({
           <h2 className="text-base font-black text-navy-950">Produtividade dos agentes</h2>
           <p className="mt-1 text-xs font-bold text-muted">
             {selectedLob === "CEC"
-              ? "CPD calculado a partir da base CEC vigente."
-              : "Output e AHT calculados a partir da base de produção vigente."}
+              ? "CPD e qualidade calculados a partir das bases CEC vigentes."
+              : "Output, AHT e qualidade consolidados a partir das bases vigentes."}
           </p>
         </div>
         <button type="button" onClick={onRefresh} className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-white px-3 text-xs font-black text-navy-950 hover:bg-slate-50">
@@ -1029,8 +1037,17 @@ function AgentsView({
           </div>
         ) : loading && !payload?.agents.length ? <EmptyBox label="Carregando produtividade dos agentes..." /> : (
           <div className="space-y-4">
-            <div className={cn("grid gap-3", selectedLob === "CEC" ? "md:grid-cols-4" : "md:grid-cols-3")}>
+            <div className={cn("grid gap-3 md:grid-cols-2", selectedLob === "CEC" ? "xl:grid-cols-5" : "xl:grid-cols-4")}>
               <StatCard title="Agentes" value={formatNumber(payload?.summary.agents ?? 0)} helper="com produção no período" icon={Users} tone="purple" />
+              <StatCard
+                title="Qualidade média"
+                value={(payload?.summary.qualityTotal ?? 0) > 0 ? formatQualityPercent(payload?.summary.quality) : "-"}
+                helper={(payload?.summary.qualityTotal ?? 0) > 0
+                  ? `${formatNumber(payload?.summary.qualityCorrect ?? 0)}/${formatNumber(payload?.summary.qualityTotal ?? 0)} casos`
+                  : "sem base de qualidade no período"}
+                icon={ShieldCheck}
+                tone="green"
+              />
               {selectedLob === "CEC" ? (
                 <StatCard
                   title="Output total"
@@ -1065,7 +1082,7 @@ function AgentsView({
                 {loading ? <span className="inline-flex items-center gap-2 text-xs font-black text-blue-600"><RefreshCw className="h-3.5 w-3.5 animate-spin" /> Atualizando</span> : null}
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[1040px] text-left text-sm">
+                <table className="w-full min-w-[1140px] text-left text-sm">
                   <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-black uppercase tracking-wide text-muted">
                     <tr>
                       <AgentSortHeader label="Agente" sortKey="employeeName" current={sort} onSort={handleSort} />
@@ -1073,6 +1090,7 @@ function AgentsView({
                       <AgentSortHeader label="LOB" sortKey="lob" current={sort} onSort={handleSort} />
                       <AgentSortHeader label="Supervisor" sortKey="supervisor" current={sort} onSort={handleSort} />
                       <AgentSortHeader label="Turno" sortKey="shift" current={sort} onSort={handleSort} />
+                      <AgentSortHeader label="Qualidade" sortKey="quality" current={sort} onSort={handleSort} align="right" />
                       {selectedLob === "CEC" ? <AgentSortHeader label="Output" sortKey="outputTotal" current={sort} onSort={handleSort} align="right" /> : null}
                       <AgentSortHeader label={selectedLob === "CEC" ? "CPD médio" : "Output médio/dia"} sortKey="submit" current={sort} onSort={handleSort} align="right" />
                       <AgentSortHeader label="AHT" sortKey="aht" current={sort} onSort={handleSort} align="right" />
@@ -1086,6 +1104,16 @@ function AgentsView({
                         <td className="px-3 py-3"><span className="rounded-lg bg-blue-50 px-2 py-1 text-xs font-black text-blue-700">{agent.lob}</span></td>
                         <td className="px-3 py-3 font-bold text-navy-950">{agent.supervisor}</td>
                         <td className="px-3 py-3 font-bold text-muted">{agent.shift}</td>
+                        <td className="px-3 py-3 text-right">
+                          {agent.qualityTotal > 0 ? (
+                            <>
+                              <QualityScore value={agent.quality} />
+                              <span className="mt-0.5 block text-[10px] font-bold text-muted">
+                                {formatNumber(agent.qualityCorrect)}/{formatNumber(agent.qualityTotal)} casos
+                              </span>
+                            </>
+                          ) : <span className="text-xs font-black text-slate-400">Sem base</span>}
+                        </td>
                         {selectedLob === "CEC" ? <td className="px-3 py-3 text-right font-black text-navy-950">{formatNumber(agent.submit)}</td> : null}
                         <td className="px-3 py-3 text-right font-black text-navy-950">
                           {formatNumber(agent.outputAveragePerDay)}
@@ -1094,7 +1122,7 @@ function AgentsView({
                         <td className="px-3 py-3 text-right font-black text-navy-950">{selectedLob === "CEC" ? "-" : formatSeconds(agent.ahtSeconds)}</td>
                       </tr>
                     ))}
-                    {!payload?.agents.length ? <tr><td colSpan={selectedLob === "CEC" ? 8 : 7} className="px-3 py-10 text-center text-sm font-bold text-muted">Nenhum agente encontrado para os filtros selecionados.</td></tr> : null}
+                    {!payload?.agents.length ? <tr><td colSpan={selectedLob === "CEC" ? 9 : 8} className="px-3 py-10 text-center text-sm font-bold text-muted">Nenhum agente encontrado para os filtros selecionados.</td></tr> : null}
                   </tbody>
                 </table>
               </div>
