@@ -13023,11 +13023,15 @@ export function PerformancePage() {
   return <PerformanceProductionPage />;
 }
 
-function PerformanceLegacyPage() {
+export function PerformanceWfhPanel() {
+  return <PerformanceLegacyPage embeddedWfh />;
+}
+
+function PerformanceLegacyPage({ embeddedWfh = false }: { embeddedWfh?: boolean }) {
   const { data: session } = useSession();
-  const requestedPerformanceView = queryParam("view");
+  const requestedPerformanceView = embeddedWfh ? "wfh" : queryParam("view");
   const hasRequestedPerformanceView = requestedPerformanceView === "mine" || requestedPerformanceView === "wfh" || requestedPerformanceView === "framework";
-  const defaultedTab = useRef(hasRequestedPerformanceView);
+  const defaultedTab = useRef(embeddedWfh || hasRequestedPerformanceView);
   const [activeTab, setActiveTab] = useState<"mine" | "wfh" | "framework">(requestedPerformanceView === "framework" ? "framework" : requestedPerformanceView === "wfh" ? "wfh" : "mine");
   const [filters, setFilters] = useState(() => ({
     ...initialDateRangeFromUrl(),
@@ -13069,10 +13073,11 @@ function PerformanceLegacyPage() {
   const isClientRole = sessionRole === "CLIENT";
   const sessionCanWfh = canAccessPerformance({ role: sessionRole });
   const sessionCanFramework = canAccessPerformance({ role: sessionRole });
-  const visibleActiveTab = isClientRole && activeTab !== "framework" ? "wfh" : activeTab;
-  const shouldWaitForDefaultPerformanceTab = Boolean(sessionRole && !hasRequestedPerformanceView && !defaultedTab.current);
+  const visibleActiveTab = embeddedWfh ? "wfh" : isClientRole && activeTab !== "framework" ? "wfh" : activeTab;
+  const shouldWaitForDefaultPerformanceTab = Boolean(!embeddedWfh && sessionRole && !hasRequestedPerformanceView && !defaultedTab.current);
 
   useEffect(() => {
+    if (embeddedWfh) return;
     if (isClientRole && activeTab !== "wfh" && activeTab !== "framework") {
       setActiveTab("wfh");
       defaultedTab.current = true;
@@ -13082,7 +13087,7 @@ function PerformanceLegacyPage() {
       setActiveTab(sessionCanWfh ? "wfh" : "mine");
       defaultedTab.current = true;
     }
-  }, [activeTab, isClientRole, sessionCanWfh, sessionRole]);
+  }, [activeTab, embeddedWfh, isClientRole, sessionCanWfh, sessionRole]);
 
   const loadPerformance = useCallback(async () => {
     if (!sessionRole || shouldWaitForDefaultPerformanceTab) return;
@@ -13283,18 +13288,22 @@ function PerformanceLegacyPage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader
-        title="Performance"
-        description="Indicadores oficiais de Qualidade, Submit, AHT e ABS conectados ao cadastro e ao Cronograma."
-        icon={Trophy}
-        actions={<TopActions />}
-      />
+      {!embeddedWfh ? (
+        <PageHeader
+          title="Performance"
+          description="Indicadores oficiais de Qualidade, Submit, AHT e ABS conectados ao cadastro e ao Cronograma."
+          icon={Trophy}
+          actions={<TopActions />}
+        />
+      ) : null}
 
-      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-white p-2 shadow-sm">
-        {!isClientRole ? <button onClick={() => setActiveTab("mine")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", visibleActiveTab === "mine" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>Minha Performance</button> : null}
-        {canShowWfh ? <button onClick={() => setActiveTab("wfh")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", visibleActiveTab === "wfh" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>WFH</button> : null}
-        {canShowFramework ? <button onClick={() => setActiveTab("framework")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", visibleActiveTab === "framework" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>Framework</button> : null}
-      </div>
+      {!embeddedWfh ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-white p-2 shadow-sm">
+          {!isClientRole ? <button onClick={() => setActiveTab("mine")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", visibleActiveTab === "mine" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>Minha Performance</button> : null}
+          {canShowWfh ? <button onClick={() => setActiveTab("wfh")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", visibleActiveTab === "wfh" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>WFH</button> : null}
+          {canShowFramework ? <button onClick={() => setActiveTab("framework")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", visibleActiveTab === "framework" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>Framework</button> : null}
+        </div>
+      ) : null}
 
       {visibleActiveTab !== "framework" ? (
         <div className="rounded-xl border border-border bg-white p-2.5 shadow-sm">

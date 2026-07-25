@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 
 import { getApiActor } from "@/lib/api-actor";
-import { getPerformanceProductionDashboard, PerformanceError, type PerformanceQuery } from "@/lib/performance-service";
+import {
+  getPerformanceDashboard,
+  getPerformanceProductionDashboard,
+  PerformanceError,
+  type PerformanceQuery
+} from "@/lib/performance-service";
 
 export const dynamic = "force-dynamic";
 
@@ -28,7 +33,10 @@ export async function GET(request: Request) {
       slaTargetMinutes: readPositiveNumber(url.searchParams.get("slaTargetMinutes")),
       metadataOnly: url.searchParams.get("metadataOnly") === "true"
     };
-    return NextResponse.json(await getPerformanceProductionDashboard(actor, query));
+    const payload = query.view
+      ? await getPerformanceDashboard(actor, query)
+      : await getPerformanceProductionDashboard(actor, query);
+    return NextResponse.json(payload);
   } catch (error) {
     return performanceErrorResponse(error);
   }
