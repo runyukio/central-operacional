@@ -26,6 +26,14 @@ async function handleRequest(request: Request) {
 
   try {
     const result = await sendLatestVideoExecutiveReport();
+    console.info("[video-executive-report]", {
+      sent: result.sent,
+      skipped: result.skipped,
+      selectedCycle: result.selectedCycle,
+      fileName: result.fileName,
+      bytes: result.bytes,
+      message: result.message,
+    });
     return Response.json({ success: true, ...result });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Falha ao enviar o report Executivo VIDEO.";
