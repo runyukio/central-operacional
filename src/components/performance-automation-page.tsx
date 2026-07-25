@@ -498,8 +498,8 @@ export function PerformanceAutomationPage() {
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <StatCard title="Último upload" value={formatQualityImportDate(qualityPayload?.lastImport?.importedAt)} helper="snapshot de qualidade vigente" icon={CheckCircle2} tone="green" />
           <StatCard title="Janela da base" value={formatQualityRange(qualityPayload?.dataRange)} helper={qualityLob === "ADS" ? "ADS + PROJECT" : qualityLob} icon={CalendarClock} tone="purple" />
-          <StatCard title={qualityLob === "CEC" ? "Pass Quantity" : "Casos auditados"} value={formatNumber(qualityPayload?.summary.total ?? 0)} helper={qualityLob === "CEC" ? "denominador CEC" : "chaves distintas"} icon={FileSpreadsheet} tone="blue" />
-          <StatCard title="Qualidade" value={formatQualityPercent(qualityPayload?.summary.quality)} helper={qualityLob === "CEC" ? "1 - Fail / Pass" : "corretos / auditados"} icon={ShieldCheck} tone="green" />
+          <StatCard title={qualityLob === "CEC" ? "Total auditado" : "Casos auditados"} value={formatNumber(qualityPayload?.summary.total ?? 0)} helper={qualityLob === "CEC" ? "Pass + Fail" : "chaves distintas"} icon={FileSpreadsheet} tone="blue" />
+          <StatCard title="Qualidade" value={formatQualityPercent(qualityPayload?.summary.quality)} helper={qualityLob === "CEC" ? "1 - Fail / Total" : "corretos / auditados"} icon={ShieldCheck} tone="green" />
         </section>
       ) : (
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -752,7 +752,7 @@ function QualityView({
             </SlicerGroup>
           </div>
           <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-2 text-xs font-bold text-blue-900">
-            Fórmula oficial: {selectedLob === "CEC" ? "1 - (Σ Fail Quantity / Σ Pass Quantity)" : "Correct distintos / total de casos distintos"}
+            Fórmula oficial: {selectedLob === "CEC" ? "Total = Σ Pass + Σ Fail; Qualidade = 1 - (Σ Fail / Total)" : "Correct distintos / total de casos distintos"}
           </div>
         </div>
 
@@ -768,8 +768,8 @@ function QualityView({
           <div className="space-y-4">
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <StatCard title="Qualidade" value={formatQualityPercent(payload.summary.quality)} helper={payload.selectedLob} icon={ShieldCheck} tone="green" />
-              <StatCard title={selectedLob === "CEC" ? "Resultado líquido" : "Casos corretos"} value={formatNumber(payload.summary.correct)} helper={selectedLob === "CEC" ? "Pass - Fail" : "distinct Correct"} icon={CheckCircle2} tone="green" />
-              <StatCard title={selectedLob === "CEC" ? "Pass Quantity" : "Casos auditados"} value={formatNumber(payload.summary.total)} helper={selectedLob === "CEC" ? "denominador" : "distinct concat"} icon={FileSpreadsheet} tone="blue" />
+              <StatCard title={selectedLob === "CEC" ? "Pass Quantity" : "Casos corretos"} value={formatNumber(payload.summary.correct)} helper={selectedLob === "CEC" ? "aprovações" : "distinct Correct"} icon={CheckCircle2} tone="green" />
+              <StatCard title={selectedLob === "CEC" ? "Total auditado" : "Casos auditados"} value={formatNumber(payload.summary.total)} helper={selectedLob === "CEC" ? "Pass + Fail" : "distinct concat"} icon={FileSpreadsheet} tone="blue" />
               <StatCard title={selectedLob === "CEC" ? "Fail Quantity" : "Divergências"} value={formatNumber(payload.summary.errors)} helper={selectedLob === "CEC" ? "falhas" : "auditados - corretos"} icon={Target} tone="orange" />
             </div>
 
@@ -777,7 +777,7 @@ function QualityView({
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-black text-navy-950">Evolução {qualityGranularityLabel(granularity).toLocaleLowerCase("pt-BR")} da qualidade</h3>
-                  <p className="mt-1 text-xs font-bold text-muted">Percentual oficial e volume de {selectedLob === "CEC" ? "Pass Quantity" : "casos auditados"} por período.</p>
+                  <p className="mt-1 text-xs font-bold text-muted">Percentual oficial e volume de {selectedLob === "CEC" ? "Pass + Fail" : "casos auditados"} por período.</p>
                 </div>
                 <span className="rounded-lg bg-slate-50 px-3 py-1 text-xs font-black text-muted">{formatNumber(payload.trend.length)} {qualityGranularityUnit(granularity)}</span>
               </div>
@@ -817,8 +817,8 @@ function QualityView({
                           Qualidade {sortDirection === "desc" ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
                         </button>
                       </th>
-                      <th className="px-3 py-3 text-right">{selectedLob === "CEC" ? "Pass - Fail" : "Corretos"}</th>
-                      <th className="px-3 py-3 text-right">{selectedLob === "CEC" ? "Pass Quantity" : "Auditados"}</th>
+                      <th className="px-3 py-3 text-right">{selectedLob === "CEC" ? "Pass Quantity" : "Corretos"}</th>
+                      <th className="px-3 py-3 text-right">{selectedLob === "CEC" ? "Total auditado" : "Auditados"}</th>
                       <th className="px-3 py-3 text-right">{selectedLob === "CEC" ? "Fail Quantity" : "Divergências"}</th>
                       <th className="px-3 py-3 text-right">Última auditoria</th>
                     </tr>
@@ -860,10 +860,10 @@ function QualityDashboardChart({ rows, cec = false }: { rows: QualityTrendRow[];
           <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
           <XAxis dataKey="label" tick={{ fontSize: 11, fontWeight: 700, fill: "#475569" }} tickLine={false} axisLine={false} minTickGap={18} />
           <YAxis yAxisId="cases" tick={{ fontSize: 11, fontWeight: 700, fill: "#475569" }} tickLine={false} axisLine={false} tickFormatter={(value) => formatCompactAxis(Number(value))} />
-          <YAxis yAxisId="quality" orientation="right" domain={cec ? ["auto", "auto"] : [0, 100]} tick={{ fontSize: 11, fontWeight: 700, fill: "#059669" }} tickLine={false} axisLine={false} tickFormatter={(value) => `${value}%`} />
+          <YAxis yAxisId="quality" orientation="right" domain={[0, 100]} tick={{ fontSize: 11, fontWeight: 700, fill: "#059669" }} tickLine={false} axisLine={false} tickFormatter={(value) => `${value}%`} />
           <RechartsTooltip content={<QualityDashboardTooltip cec={cec} />} cursor={{ fill: "#EFF6FF" }} />
           <Legend wrapperStyle={{ fontSize: 12, fontWeight: 800 }} />
-          <Bar yAxisId="cases" dataKey="total" name={cec ? "Pass Quantity" : "Casos auditados"} fill="#93C5FD" radius={[5, 5, 0, 0]} maxBarSize={34} />
+          <Bar yAxisId="cases" dataKey="total" name={cec ? "Total auditado" : "Casos auditados"} fill="#93C5FD" radius={[5, 5, 0, 0]} maxBarSize={34} />
           <Line yAxisId="quality" type="monotone" dataKey="quality" name="Qualidade" stroke="#10B981" strokeWidth={3} dot={false} activeDot={{ r: 5 }} />
         </ComposedChart>
       </ResponsiveContainer>
@@ -880,8 +880,8 @@ function QualityDashboardTooltip({ active, payload, cec = false }: { active?: bo
       <p className="mb-2 text-sm font-black">{row.label}</p>
       <div className="space-y-1">
         <div className="flex justify-between gap-5"><span>Qualidade</span><span>{formatQualityPercent(row.quality)}</span></div>
-        <div className="flex justify-between gap-5"><span>{cec ? "Pass - Fail" : "Corretos"}</span><span>{formatNumber(row.correct)}</span></div>
-        <div className="flex justify-between gap-5"><span>{cec ? "Pass Quantity" : "Auditados"}</span><span>{formatNumber(row.total)}</span></div>
+        <div className="flex justify-between gap-5"><span>{cec ? "Pass Quantity" : "Corretos"}</span><span>{formatNumber(row.correct)}</span></div>
+        <div className="flex justify-between gap-5"><span>{cec ? "Total auditado" : "Auditados"}</span><span>{formatNumber(row.total)}</span></div>
         <div className="flex justify-between gap-5"><span>{cec ? "Fail Quantity" : "Divergências"}</span><span>{formatNumber(row.errors)}</span></div>
       </div>
     </div>

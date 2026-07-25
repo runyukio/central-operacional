@@ -4,29 +4,38 @@ import test from "node:test";
 import { calculateCecQualityAggregate } from "./cec-quality";
 import { buildCecQualitySnapshotPromotionSql, normalizeExcelDate } from "./performance-service";
 
-test("calcula a qualidade CEC como 1 - Fail Quantity / Pass Quantity", () => {
-  assert.deepEqual(calculateCecQualityAggregate(100, 7), {
-    correct: 93,
-    total: 100,
-    errors: 7,
-    quality: 93
+test("calcula o total CEC como Pass + Fail e a qualidade como 1 - Fail / Total", () => {
+  assert.deepEqual(calculateCecQualityAggregate(13, 1), {
+    correct: 13,
+    total: 14,
+    errors: 1,
+    quality: 92.86
   });
 });
 
-test("preserva resultado negativo quando Fail Quantity supera Pass Quantity", () => {
+test("mantém a qualidade entre zero e cem quando Fail supera Pass", () => {
   assert.deepEqual(calculateCecQualityAggregate(5, 10), {
-    correct: -5,
-    total: 5,
+    correct: 5,
+    total: 15,
     errors: 10,
-    quality: -100
+    quality: 33.33
   });
 });
 
-test("não divide por zero quando não há Pass Quantity", () => {
+test("usa Fail no total quando não há Pass Quantity", () => {
   assert.deepEqual(calculateCecQualityAggregate(0, 4), {
-    correct: -4,
-    total: 0,
+    correct: 0,
+    total: 4,
     errors: 4,
+    quality: 0
+  });
+});
+
+test("não divide por zero quando não há avaliações", () => {
+  assert.deepEqual(calculateCecQualityAggregate(0, 0), {
+    correct: 0,
+    total: 0,
+    errors: 0,
     quality: 0
   });
 });

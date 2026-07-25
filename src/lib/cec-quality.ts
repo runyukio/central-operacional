@@ -8,13 +8,13 @@ export type CecQualityAggregate = {
 export function calculateCecQualityAggregate(passQuantity: number, failQuantity: number): CecQualityAggregate {
   const pass = finiteNumber(passQuantity);
   const fail = finiteNumber(failQuantity);
-  const correct = pass - fail;
+  const total = pass + fail;
 
   return {
-    correct,
-    total: pass,
+    correct: pass,
+    total,
     errors: fail,
-    quality: pass > 0 ? round2((1 - fail / pass) * 100) : 0
+    quality: total > 0 ? round2((1 - fail / total) * 100) : 0
   };
 }
 

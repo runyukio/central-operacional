@@ -799,8 +799,8 @@ async function getPerformanceCecQualityDashboard(user: AuthenticatedUser, query:
       AND q."employeeId" IS NOT NULL
       GROUP BY q."employeeId", e."fullName", q."wbLogin", s."fullName"
       ORDER BY
-        ((SUM(q."passQuantity") - SUM(q."failQuantity"))::double precision
-          / NULLIF(SUM(q."passQuantity"), 0)) ${sortDirectionSql},
+        (SUM(q."passQuantity")::double precision
+          / NULLIF(SUM(q."passQuantity" + q."failQuantity"), 0)) ${sortDirectionSql},
         SUM(q."passQuantity") DESC
       LIMIT 500
     `),
@@ -2010,7 +2010,7 @@ async function previewCecQualityRows(rawRows: Record<string, unknown>[], options
     if (!isDailyFormat && !weekNumber) errors.push("Week inválida.");
     if (passQuantity === null || passQuantity < 0) errors.push("Pass Quantity inválido.");
     if (failQuantity === null || failQuantity < 0) errors.push("Fail Quantity inválido.");
-    if ((passQuantity ?? 0) === 0) warnings.push("Pass Quantity = 0; esta linha não terá denominador próprio, mas o Fail será mantido no total agregado.");
+    if ((passQuantity ?? 0) + (failQuantity ?? 0) === 0) warnings.push("Pass Quantity + Fail Quantity = 0; esta linha não terá denominador no total agregado.");
 
     const previewRow: PerformancePreviewRow = {
       rowNumber,
