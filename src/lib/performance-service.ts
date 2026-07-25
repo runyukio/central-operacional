@@ -1589,13 +1589,7 @@ export async function finalizeQualitySnapshotImport(
           OR: [{ importBatchId: null }, { importBatchId: { not: batchIdToKeep } }]
         }
       });
-      const stagingPrefix = cecQualityStagingPrefix(batchIdToKeep);
-      await transaction.$executeRaw(Prisma.sql`
-        UPDATE "CecQualityRecord"
-        SET "wbLogin" = SUBSTRING("wbLogin" FROM ${stagingPrefix.length + 1})
-        WHERE "importBatchId" = ${batchIdToKeep}
-          AND "wbLogin" LIKE ${`${stagingPrefix}%`}
-      `);
+      await transaction.$executeRaw(buildCecQualitySnapshotPromotionSql(batchIdToKeep));
       const batchesDeleted = await transaction.performanceImportBatch.deleteMany({
         where: { type: batchType, id: { not: batchIdToKeep } }
       });
@@ -1785,13 +1779,7 @@ export async function replaceQualitySnapshot(actor: Actor, batchIdToKeep: string
           OR: [{ importBatchId: null }, { importBatchId: { not: batchIdToKeep } }]
         }
       });
-      const stagingPrefix = cecQualityStagingPrefix(batchIdToKeep);
-      await transaction.$executeRaw(Prisma.sql`
-        UPDATE "CecQualityRecord"
-        SET "wbLogin" = SUBSTRING("wbLogin" FROM ${stagingPrefix.length + 1})
-        WHERE "importBatchId" = ${batchIdToKeep}
-          AND "wbLogin" LIKE ${`${stagingPrefix}%`}
-      `);
+      await transaction.$executeRaw(buildCecQualitySnapshotPromotionSql(batchIdToKeep));
       const batchesDeleted = await transaction.performanceImportBatch.deleteMany({
         where: { type: "CEC_QUALITY", id: { not: batchIdToKeep } }
       });
@@ -4805,6 +4793,16 @@ function cecQualityExistingKey(wbLogin: string, weekNumber: number, qualityDate:
 
 function cecQualityStagingPrefix(batchId: string) {
   return `__cec_stage__${batchId}::`;
+}
+
+export function buildCecQualitySnapshotPromotionSql(batchId: string) {
+  const stagingPrefix = cecQualityStagingPrefix(batchId);
+  return Prisma.sql`
+    UPDATE "CecQualityRecord"
+    SET "wbLogin" = SUBSTRING("wbLogin" FROM CAST(${stagingPrefix.length + 1} AS integer))
+    WHERE "importBatchId" = ${batchId}
+      AND "wbLogin" LIKE ${`${stagingPrefix}%`}
+  `;
 }
 
 function unique<T>(values: T[]) {

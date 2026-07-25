@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { calculateCecQualityAggregate } from "./cec-quality";
-import { normalizeExcelDate } from "./performance-service";
+import { buildCecQualitySnapshotPromotionSql, normalizeExcelDate } from "./performance-service";
 
 test("calcula a qualidade CEC como 1 - Fail Quantity / Pass Quantity", () => {
   assert.deepEqual(calculateCecQualityAggregate(100, 7), {
@@ -44,4 +44,10 @@ test("corrige o ano 12026 exportado na base CEC", () => {
 
 test("rejeita anos fora da janela operacional", () => {
   assert.equal(normalizeExcelDate("22026/4/17"), null);
+});
+
+test("promove o snapshot CEC usando deslocamento compatível com PostgreSQL", () => {
+  const query = buildCecQualitySnapshotPromotionSql("batch-123");
+  assert.match(query.sql, /SUBSTRING\("wbLogin" FROM CAST\(\? AS integer\)\)/);
+  assert.deepEqual(query.values, [25, "batch-123", "__cec_stage__batch-123::%"]);
 });
