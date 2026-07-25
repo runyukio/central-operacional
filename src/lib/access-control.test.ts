@@ -7,6 +7,7 @@ import {
   canAccessPerformance,
   canAccessRealTime,
   canAccessWorkSessionMonitoring,
+  canAdminOverrideWorkflowScheduleStatus,
   canAutoUpdateAdsRequirement,
   canEditSchedule,
   canImportPerformance
@@ -18,6 +19,23 @@ test("somente ADMIN e WFM alteram cronogramas", () => {
 
   for (const role of allowed) assert.equal(roleHasCapability(role, "SCHEDULE_EDIT"), true, role);
   for (const role of denied) assert.equal(roleHasCapability(role, "SCHEDULE_EDIT"), false, role);
+});
+
+test("somente ADMIN pode corrigir slots com status aprovado pela Esteira", () => {
+  for (const status of [
+    "Troca aprovada",
+    "Venda de folga aprovada",
+    "Folga aprovada",
+    "TROCA_APROVADA",
+    "VENDA_FOLGA_APROVADA",
+    "FOLGA_APROVADA"
+  ]) {
+    assert.equal(canAdminOverrideWorkflowScheduleStatus({ role: "ADMIN", status: "ACTIVE" }, status), true, status);
+    assert.equal(canAdminOverrideWorkflowScheduleStatus({ role: "WFM", status: "ACTIVE" }, status), false, status);
+  }
+  assert.equal(canAdminOverrideWorkflowScheduleStatus({ role: "ADMIN", status: "INACTIVE" }, "Troca aprovada"), false);
+  assert.equal(canAdminOverrideWorkflowScheduleStatus({ role: "ADMIN", status: "ACTIVE" }, "Escalado"), false);
+  assert.equal(canAdminOverrideWorkflowScheduleStatus({ role: "ADMIN", status: "ACTIVE" }, "Falta Justificada"), false);
 });
 
 test("Supervisor e Qualidade visualizam todos os cronogramas sem poder editar", () => {

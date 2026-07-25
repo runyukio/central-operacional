@@ -22,6 +22,13 @@ export type PermissionEmployee = {
   id?: string | null;
 };
 
+const workflowManagedScheduleStatusKeys = new Set([
+  "troca aprovada",
+  "venda de folga aprovada",
+  "venda folga aprovada",
+  "folga aprovada"
+]);
+
 export function normalizeRole(role?: string | null): AppRole {
   return normalizeAccessRole(role);
 }
@@ -256,6 +263,17 @@ export function canCreateCronogramaManually(user: PermissionUser) {
 
 export function canUpdateScheduleSlot(user: PermissionUser) {
   return canEditSchedule(user);
+}
+
+export function canAdminOverrideWorkflowScheduleStatus(user: PermissionUser, status?: string | null) {
+  if (!isActiveUser(user) || normalizeRole(user.role) !== "ADMIN") return false;
+  const normalizedStatus = String(status ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .trim()
+    .toLowerCase();
+  return workflowManagedScheduleStatusKeys.has(normalizedStatus);
 }
 
 export function canApproveRegistration(user: PermissionUser) {

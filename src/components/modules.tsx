@@ -95,6 +95,7 @@ import { getDefaultDateRange } from "@/lib/default-date-range";
 import {
   canAccessPerformance,
   canApproveWorkHourAdjustment,
+  canAdminOverrideWorkflowScheduleStatus,
   canEditAdvanceRecords,
   canEditEmployeeData,
   canEditEmployeeSensitiveData,
@@ -146,7 +147,7 @@ const scheduleStatusOptions = ["Escalado", "Presente", "Nesting", "Falta", "Falt
 const scheduleEditableStatusOptions = ["Escalado", "Presente", "Nesting", "Falta", "Afastado", "Férias", "Treinamento", "Folga", "Desligado", "Sem cronograma", "Erro de cronograma"] as const;
 const workflowManagedScheduleStatuses = ["Troca aprovada", "Venda de folga aprovada", "Folga aprovada"] as const;
 const attendanceReasonStatuses = ["Falta", "Erro de cronograma"];
-const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Nesting"];
+const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Nesting", "Troca aprovada", "Venda de folga aprovada"];
 const employeeOperationalStatusOptions = ["Ativo", "Em treinamento", "Nesting", "Afastado", "Desligado", "Desligado em Treinamento", "Inativo", "Desativado"];
 const pcdDisabilityTypeOptions = ["", "Física", "Auditiva", "Visual", "Intelectual", "Psicossocial", "Múltipla", "Neurodivergente", "Outra", "Prefiro não informar"];
 const absenceReasonOptions = ["Problema de saúde", "Erro de programação de escala", "Problema técnico corporativo", "Emergência familiar", "Não informado", "Problema técnico pessoal", "Problema de transporte", "Problema pessoal", "Erro de visualização de escala", "Outros"];
@@ -6332,7 +6333,7 @@ export function SchedulesPage() {
       return;
     }
     if (statusNeedsTime(scheduleEditForm.status) && (!scheduleEditForm.shift || !scheduleEditForm.startsAt || !scheduleEditForm.endsAt)) {
-      setAttendanceMessage("Turno, entrada e saída são obrigatórios para Escalado, Presente ou Nesting.");
+      setAttendanceMessage("Turno, entrada e saída são obrigatórios para status produtivos.");
       return;
     }
     if (statusNeedsReason(scheduleEditForm.status) && !scheduleEditForm.pendingJustification && !justificationDraft.absenceReason.trim()) {
@@ -6770,6 +6771,9 @@ export function SchedulesPage() {
     : workHourForm.recordId ? workHourForm.status : selectedCellHasSchedule ? "Sem horas" : "Sem cronograma";
   const supervisorOccurrenceStatuses = ["Falta", "Erro de cronograma"];
   const selectedScheduleStatusIsWorkflowManaged = (workflowManagedScheduleStatuses as readonly string[]).includes(scheduleEditForm.status);
+  const selectedScheduleStatusIsWorkflowLocked =
+    selectedScheduleStatusIsWorkflowManaged
+    && !canAdminOverrideWorkflowScheduleStatus({ role: scheduleActorRole }, scheduleEditForm.status);
   const scheduleEditStatusOptions = selectedScheduleStatusIsWorkflowManaged
     ? withCurrentScheduleStatus([...scheduleEditableStatusOptions], scheduleEditForm.status)
     : [...scheduleEditableStatusOptions];
@@ -7438,7 +7442,7 @@ export function SchedulesPage() {
                     }}
                   />
                   <FormSelect
-                    disabled={!canManageSchedules || selectedScheduleStatusIsWorkflowManaged}
+                    disabled={!canManageSchedules || selectedScheduleStatusIsWorkflowLocked}
                     label="Status do cronograma"
                     value={scheduleEditForm.status}
                     options={scheduleEditStatusOptions}
@@ -7484,8 +7488,10 @@ export function SchedulesPage() {
                   ) : null}
                 </div>
                 <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
-                  {selectedScheduleStatusIsWorkflowManaged
-                    ? "Este status veio de Solicitações/Esteira e não pode ser aplicado manualmente pelo slot."
+                  {selectedScheduleStatusIsWorkflowLocked
+                    ? "Este status veio de Solicitações/Esteira e somente ADMIN pode corrigir este slot manualmente."
+                    : selectedScheduleStatusIsWorkflowManaged
+                      ? "ADMIN pode corrigir este slot mantendo o histórico e a auditoria da alteração."
                     : canManageSchedules ? scheduleEditForm.pendingJustification ? "A célula ficará destacada como pendente de justificativa até o Supervisor justificar." : scheduleEditRequiresTime ? "Este status exige turno, entrada e saída." : "Este status permite entrada/saída vazias." : "Supervisor visualiza o cronograma e solicita ajustes; WFM/Admin altera o planejado."}
                 </div>
                 <div className="mt-4 rounded-xl border border-border bg-slate-50 p-4">
@@ -7587,8 +7593,8 @@ export function SchedulesPage() {
                 </div>
                 {canManageSchedules ? (
                   <>
-                    <button disabled={savingSchedule || selectedScheduleStatusIsWorkflowManaged} onClick={saveScheduleEdit} className="mt-4 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
-                      {selectedScheduleStatusIsWorkflowManaged ? "Status controlado pela Esteira" : savingSchedule ? "Salvando..." : "Salvar edição do cronograma"}
+                    <button disabled={savingSchedule || selectedScheduleStatusIsWorkflowLocked} onClick={saveScheduleEdit} className="mt-4 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
+                      {selectedScheduleStatusIsWorkflowLocked ? "Status controlado pela Esteira" : savingSchedule ? "Salvando..." : "Salvar edição do cronograma"}
                     </button>
                     <button disabled={savingSchedule} onClick={() => removeSelectedEmployeeSchedule("month")} className="mt-3 w-full rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700 disabled:opacity-60">
                       Remover cronograma do colaborador neste mês
