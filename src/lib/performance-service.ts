@@ -104,6 +104,51 @@ export type PerformanceQualityQuery = {
 
 export type PerformanceQualityScope = "ADS" | "TNS" | "CEC";
 
+export type SupervisorQualityDailyRow = {
+  supervisorId: string;
+  employeeId: string;
+  qualityDay: Date | string;
+  correct: number;
+  total: number;
+};
+
+export function mergeSupervisorQualityDailyRows(
+  preferredRows: SupervisorQualityDailyRow[],
+  fallbackRows: SupervisorQualityDailyRow[]
+) {
+  const selectedRows = new Map<string, SupervisorQualityDailyRow>();
+  const rowKey = (row: SupervisorQualityDailyRow) => {
+    const qualityDay = row.qualityDay instanceof Date ? row.qualityDay : new Date(row.qualityDay);
+    const normalizedDay = Number.isNaN(qualityDay.getTime())
+      ? String(row.qualityDay)
+      : qualityDay.toISOString().slice(0, 10);
+    return `${row.employeeId}:${normalizedDay}`;
+  };
+
+  for (const row of fallbackRows) {
+    if (Number(row.total ?? 0) > 0) selectedRows.set(rowKey(row), row);
+  }
+  for (const row of preferredRows) {
+    if (Number(row.total ?? 0) > 0) selectedRows.set(rowKey(row), row);
+  }
+
+  const totalsBySupervisor = new Map<string, { supervisorId: string; correct: number; total: number }>();
+  for (const row of selectedRows.values()) {
+    const aggregate = totalsBySupervisor.get(row.supervisorId) ?? {
+      supervisorId: row.supervisorId,
+      correct: 0,
+      total: 0
+    };
+    aggregate.correct += Number(row.correct ?? 0);
+    aggregate.total += Number(row.total ?? 0);
+    totalsBySupervisor.set(row.supervisorId, aggregate);
+  }
+
+  return Array.from(totalsBySupervisor.values()).sort((left, right) =>
+    left.supervisorId.localeCompare(right.supervisorId)
+  );
+}
+
 export type PerformanceAgentsQuery = {
   view?: "monthly" | "weekly" | "daily";
   startDate?: string;
@@ -1166,7 +1211,16 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
     const metadata = getPerformanceQueueMetadataById(queueId);
     return metadata.lob === "ADS" || (metadata.lob === "VIDEO" && metadata.slaTargetMinutes === 15);
   });
-  const [schedules, moods, ahtRows, cecCpdRows, adsQualityRows, tnsQualityRows, cecQualityRows] = await Promise.all([
+  const [
+    schedules,
+    moods,
+    ahtRows,
+    cecCpdRows,
+    adsQualityRows,
+    tnsKapQualityDailyRows,
+    tnsLegacyQualityDailyRows,
+    cecQualityRows
+  ] = await Promise.all([
     prisma.schedule.findMany({
       where: { employeeId: { in: employeeIds }, date: { gte: period.start, lte: period.end }, deletedAt: null },
       select: { employeeId: true, status: true }
@@ -1216,9 +1270,27 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
         ${visibleQualityRecordSql}
       GROUP BY e."supervisorId"
     `) : Promise.resolve([]),
-    tnsQualityEmployeeIds.length ? prisma.$queryRaw<Array<{ supervisorId: string; correct: number; total: number }>>(Prisma.sql`
+    tnsQualityEmployeeIds.length ? prisma.$queryRaw<SupervisorQualityDailyRow[]>(Prisma.sql`
       SELECT
         e."supervisorId" AS "supervisorId",
+        q."employeeId" AS "employeeId",
+        DATE_TRUNC('day', q."auditDate") AS "qualityDay",
+        COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::integer AS "correct",
+        COUNT(DISTINCT q."concatKey")::integer AS "total"
+      FROM "QualityRecord" q
+      INNER JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
+      WHERE q."employeeId" IN (${Prisma.join(tnsQualityEmployeeIds)})
+        AND q."auditDate" >= ${period.start}
+        AND q."auditDate" <= ${period.end}
+        AND e."supervisorId" IS NOT NULL
+        ${visibleQualityRecordSql}
+      GROUP BY e."supervisorId", q."employeeId", DATE_TRUNC('day', q."auditDate")
+    `) : Promise.resolve([]),
+    tnsQualityEmployeeIds.length ? prisma.$queryRaw<SupervisorQualityDailyRow[]>(Prisma.sql`
+      SELECT
+        e."supervisorId" AS "supervisorId",
+        q."employeeId" AS "employeeId",
+        DATE_TRUNC('day', q."auditDate") AS "qualityDay",
         GREATEST(
           COALESCE(SUM(q."sampling"), 0)
             - COALESCE(SUM(q."mislabeled" + q."leakage" + q."falsePositive"), 0),
@@ -1231,7 +1303,7 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
         AND q."auditDate" >= ${period.start}
         AND q."auditDate" <= ${period.end}
         AND e."supervisorId" IS NOT NULL
-      GROUP BY e."supervisorId"
+      GROUP BY e."supervisorId", q."employeeId", DATE_TRUNC('day', q."auditDate")
     `) : Promise.resolve([]),
     cecQualityEmployeeIds.length ? prisma.$queryRaw<Array<{ supervisorId: string; correct: number; total: number }>>(Prisma.sql`
       SELECT
@@ -1247,6 +1319,10 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
       GROUP BY e."supervisorId"
     `) : Promise.resolve([])
   ]);
+  const tnsQualityRows = mergeSupervisorQualityDailyRows(
+    tnsKapQualityDailyRows,
+    tnsLegacyQualityDailyRows
+  );
 
   const supervisorByEmployee = new Map(employees.map((employee) => [employee.id, employee.supervisorId!]));
   const aggregates = new Map<string, {
