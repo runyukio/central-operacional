@@ -5,7 +5,8 @@ import {
   parseAdsExecutiveCycle,
   type AdsExecutiveAgentRow,
   type AdsExecutiveForecastPoint,
-  type AdsExecutiveQueueRow
+  type AdsExecutiveQueueRow,
+  type ExecutiveReportLob
 } from "@/lib/ads-executive-report-core";
 import { renderAdsExecutiveReportPng } from "@/lib/ads-executive-report-image";
 import { calculateForecastModelWeights, predictForecastHour, type ForecastActual } from "@/lib/performance-forecast-core";
@@ -26,6 +27,26 @@ const automationActor = {
 };
 
 type WebhookPayloadMode = "multipart" | "json" | "kwaitalk";
+type ExecutiveWebhookConfig = {
+  lob: ExecutiveReportLob;
+  envPrefix: "ADS_EXECUTIVE_WEBHOOK" | "VIDEO_EXECUTIVE_WEBHOOK";
+  reportType: "ADS_EXECUTIVE" | "VIDEO_EXECUTIVE";
+  storagePath: string;
+};
+
+const ADS_WEBHOOK_CONFIG: ExecutiveWebhookConfig = {
+  lob: "ADS",
+  envPrefix: "ADS_EXECUTIVE_WEBHOOK",
+  reportType: "ADS_EXECUTIVE",
+  storagePath: "automation/ads-executive/latest.png"
+};
+
+const VIDEO_WEBHOOK_CONFIG: ExecutiveWebhookConfig = {
+  lob: "VIDEO",
+  envPrefix: "VIDEO_EXECUTIVE_WEBHOOK",
+  reportType: "VIDEO_EXECUTIVE",
+  storagePath: "automation/video-executive/latest.png"
+};
 
 type KwaiTalkWebhookResponse = {
   code?: number | string;
@@ -46,7 +67,15 @@ export type AdsExecutiveWebhookResult = {
 };
 
 export async function sendLatestAdsExecutiveReport(): Promise<AdsExecutiveWebhookResult> {
-  if (!isWebhookEnabled()) {
+  return sendLatestExecutiveReport(ADS_WEBHOOK_CONFIG);
+}
+
+export async function sendLatestVideoExecutiveReport(): Promise<AdsExecutiveWebhookResult> {
+  return sendLatestExecutiveReport(VIDEO_WEBHOOK_CONFIG);
+}
+
+async function sendLatestExecutiveReport(config: ExecutiveWebhookConfig): Promise<AdsExecutiveWebhookResult> {
+  if (!isWebhookEnabled(config)) {
     return {
       sent: false,
       skipped: true,
@@ -54,13 +83,13 @@ export async function sendLatestAdsExecutiveReport(): Promise<AdsExecutiveWebhoo
       fileName: null,
       bytes: 0,
       status: null,
-      message: "Envio do report Executivo ADS desabilitado."
+      message: `Envio do report Executivo ${config.lob} desabilitado.`
     };
   }
 
-  const webhookUrl = resolveWebhookUrl();
+  const webhookUrl = resolveWebhookUrl(config);
   if (!webhookUrl) {
-    throw new Error("ADS_EXECUTIVE_WEBHOOK_URL não configurada.");
+    throw new Error(`${config.envPrefix}_URL não configurada.`);
   }
 
   const realtime = await getRealtimeSnapshot(automationActor, { view: "both" });
@@ -68,15 +97,16 @@ export async function sendLatestAdsExecutiveReport(): Promise<AdsExecutiveWebhoo
   const data = "data" in realtime ? realtime.data : null;
   const selectedCycle = data?.queueView.selectedCycle || data?.agents.selectedCycle;
   if (!data?.summary.hasData || !selectedCycle) {
-    throw new Error("Não há snapshot válido do Real Time para gerar o report Executivo ADS.");
+    throw new Error(`Não há snapshot válido do Real Time para gerar o report Executivo ${config.lob}.`);
   }
 
   const parsedCycle = parseAdsExecutiveCycle(selectedCycle);
   const [forecast, requirements] = await Promise.all([
-    loadAdsForecast(parsedCycle.dateKey),
-    loadAdsRequirements(parsedCycle.dateKey)
+    loadExecutiveForecast(config.lob, parsedCycle.dateKey),
+    loadExecutiveRequirements(config.lob, parsedCycle.dateKey)
   ]);
   const report = buildAdsExecutiveReportSnapshot({
+    lob: config.lob,
     selectedCycle,
     queueRows: mapQueueRows(data.queueView.rows),
     agentRows: mapAgentRows(data.agents.rows),
@@ -84,11 +114,12 @@ export async function sendLatestAdsExecutiveReport(): Promise<AdsExecutiveWebhoo
     requirements
   });
   const image = await renderAdsExecutiveReportPng(report);
-  const fileName = `ads_executive_${safeFilePart(selectedCycle)}.png`;
-  const idempotencyKey = `ads-executive:${selectedCycle}`;
-  const mode = resolvePayloadMode();
+  const lobKey = config.lob.toLowerCase();
+  const fileName = `${lobKey}_executive_${safeFilePart(selectedCycle)}.png`;
+  const idempotencyKey = `${lobKey}-executive:${selectedCycle}`;
+  const mode = resolvePayloadMode(config);
   const imageUrl = mode === "kwaitalk"
-    ? await publishKwaiTalkImage(image, fileName, selectedCycle)
+    ? await publishKwaiTalkImage(image, fileName, selectedCycle, config.storagePath)
     : null;
   const response = await postWebhook({
     url: webhookUrl,
@@ -96,10 +127,13 @@ export async function sendLatestAdsExecutiveReport(): Promise<AdsExecutiveWebhoo
     fileName,
     idempotencyKey,
     mode,
-    token: resolveWebhookToken(),
+    token: resolveWebhookToken(config),
     imageUrl,
+    lob: config.lob,
+    reportType: config.reportType,
+    timeoutMs: resolveTimeoutMs(config),
     metadata: {
-      reportType: "ADS_EXECUTIVE",
+      reportType: config.reportType,
       selectedCycle,
       date: report.dateKey,
       generatedAt: new Date().toISOString(),
@@ -114,13 +148,14 @@ export async function sendLatestAdsExecutiveReport(): Promise<AdsExecutiveWebhoo
     fileName,
     bytes: image.byteLength,
     status: response.status,
-    message: "Report Executivo ADS enviado ao webhook."
+    message: `Report Executivo ${config.lob} enviado ao webhook.`
   };
 }
 
 function mapQueueRows(rows: Array<Record<string, unknown>>): AdsExecutiveQueueRow[] {
   return rows.map((row) => ({
     lob: String(row.lob ?? ""),
+    slaTargetMinutes: nullableFinite(row.slaTargetMinutes),
     history: Array.isArray(row.history)
       ? row.history.map((item) => {
         const history = objectValue(item);
@@ -162,8 +197,8 @@ function mapAgentRows(rows: Array<Record<string, unknown>>): AdsExecutiveAgentRo
   }));
 }
 
-async function loadAdsForecast(dateKey: string): Promise<AdsExecutiveForecastPoint[]> {
-  const queueIds = adsQueueIds();
+async function loadExecutiveForecast(lob: ExecutiveReportLob, dateKey: string): Promise<AdsExecutiveForecastPoint[]> {
+  const queueIds = queueIdsForLob(lob);
   if (!queueIds.length) return [];
   const dayStart = utcDate(dateKey);
   const historyStart = new Date(dayStart.getTime() - FORECAST_HISTORY_DAYS * DAY_MS);
@@ -208,6 +243,27 @@ async function loadAdsRequirements(dateKey: string) {
   return rows.map((row) => ({ hour: row.hour, required: row.requiredStaff }));
 }
 
+async function loadExecutiveRequirements(lob: ExecutiveReportLob, dateKey: string) {
+  if (lob === "ADS") return loadAdsRequirements(dateKey);
+  const rows = await prisma.staffCoverage.findMany({
+    where: {
+      date: utcDate(dateKey),
+      lob: { name: { equals: lob, mode: "insensitive" } }
+    },
+    select: {
+      requiredStaff: true,
+      shift: { select: { name: true } }
+    }
+  });
+  const requiredByHour = new Map<number, number>();
+  for (const row of rows) {
+    for (const hour of executiveShiftHours(row.shift.name)) {
+      requiredByHour.set(hour, (requiredByHour.get(hour) ?? 0) + Math.max(0, row.requiredStaff));
+    }
+  }
+  return Array.from(requiredByHour, ([hour, required]) => ({ hour, required })).sort((a, b) => a.hour - b.hour);
+}
+
 async function postWebhook(input: {
   url: string;
   image: Buffer;
@@ -216,14 +272,17 @@ async function postWebhook(input: {
   mode: WebhookPayloadMode;
   token: string | null;
   imageUrl: string | null;
+  lob: ExecutiveReportLob;
+  reportType: "ADS_EXECUTIVE" | "VIDEO_EXECUTIVE";
+  timeoutMs: number;
   metadata: Record<string, string>;
 }) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), resolveTimeoutMs());
+  const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
   const headers = new Headers({
     Accept: "application/json, text/plain, */*",
     "Idempotency-Key": input.idempotencyKey,
-    "X-Report-Type": "ADS_EXECUTIVE"
+    "X-Report-Type": input.reportType
   });
   if (input.token) headers.set("Authorization", `Bearer ${input.token}`);
 
@@ -232,6 +291,7 @@ async function postWebhook(input: {
     if (!input.imageUrl) throw new Error("A imagem publica do report nao foi gerada para o KwaiTalk.");
     headers.set("Content-Type", "application/json");
     body = JSON.stringify(buildKwaiTalkMarkdownPayload({
+      lob: input.lob,
       imageUrl: input.imageUrl,
       selectedCycle: input.metadata.selectedCycle,
       generatedAt: input.metadata.generatedAt
@@ -246,7 +306,7 @@ async function postWebhook(input: {
     });
   } else {
     const form = new FormData();
-    form.set("reportType", "ADS_EXECUTIVE");
+    form.set("reportType", input.reportType);
     form.set("cycle", input.metadata.selectedCycle);
     form.set("date", input.metadata.date);
     form.set("metadata", JSON.stringify(input.metadata));
@@ -272,7 +332,7 @@ async function postWebhook(input: {
     return response;
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(`Webhook excedeu o limite de ${resolveTimeoutMs()} ms.`);
+      throw new Error(`Webhook excedeu o limite de ${input.timeoutMs} ms.`);
     }
     throw error;
   } finally {
@@ -280,36 +340,38 @@ async function postWebhook(input: {
   }
 }
 
-function adsQueueIds() {
+function queueIdsForLob(lob: ExecutiveReportLob) {
   return Array.from(new Set([
-    ...Object.entries(QUEUE_METADATA).filter(([, metadata]) => metadata.lob === "ADS").map(([queueId]) => queueId),
-    ...Object.entries(QUEUE_REPORT_METADATA).filter(([, metadata]) => metadata.lob === "ADS").map(([queueId]) => queueId)
+    ...Object.entries(QUEUE_METADATA).filter(([, metadata]) => metadata.lob === lob).map(([queueId]) => queueId),
+    ...Object.entries(QUEUE_REPORT_METADATA).filter(([, metadata]) => metadata.lob === lob).map(([queueId]) => queueId)
   ]));
 }
 
-function isWebhookEnabled() {
-  return ["1", "true", "yes", "on"].includes(String(process.env.ADS_EXECUTIVE_WEBHOOK_ENABLED ?? "").trim().toLowerCase());
+function isWebhookEnabled(config: ExecutiveWebhookConfig) {
+  return ["1", "true", "yes", "on"].includes(String(process.env[`${config.envPrefix}_ENABLED`] ?? "").trim().toLowerCase());
 }
 
-function resolveWebhookUrl() {
-  return String(process.env.ADS_EXECUTIVE_WEBHOOK_URL ?? process.env.PROJECT_WEBHOOK_URL ?? "").trim();
+function resolveWebhookUrl(config: ExecutiveWebhookConfig) {
+  const fallback = config.lob === "ADS" ? process.env.PROJECT_WEBHOOK_URL : "";
+  return String(process.env[`${config.envPrefix}_URL`] ?? fallback ?? "").trim();
 }
 
-function resolveWebhookToken() {
-  const token = String(process.env.ADS_EXECUTIVE_WEBHOOK_TOKEN ?? process.env.PROJECT_WEBHOOK_TOKEN ?? "").trim();
+function resolveWebhookToken(config: ExecutiveWebhookConfig) {
+  const fallback = config.lob === "ADS" ? process.env.PROJECT_WEBHOOK_TOKEN : "";
+  const token = String(process.env[`${config.envPrefix}_TOKEN`] ?? fallback ?? "").trim();
   return token || null;
 }
 
-function resolvePayloadMode(): WebhookPayloadMode {
-  const mode = String(process.env.ADS_EXECUTIVE_WEBHOOK_PAYLOAD_MODE ?? "multipart").trim().toLowerCase();
+function resolvePayloadMode(config: ExecutiveWebhookConfig): WebhookPayloadMode {
+  const mode = String(process.env[`${config.envPrefix}_PAYLOAD_MODE`] ?? "multipart").trim().toLowerCase();
   if (mode === "json" || mode === "kwaitalk") return mode;
   return "multipart";
 }
 
-async function publishKwaiTalkImage(image: Buffer, fileName: string, selectedCycle: string) {
+async function publishKwaiTalkImage(image: Buffer, fileName: string, selectedCycle: string, storagePath: string) {
   const uploaded = await uploadPublicObject(
     "mural-media",
-    "automation/ads-executive/latest.png",
+    storagePath,
     new File([new Uint8Array(image)], fileName, { type: "image/png" }),
     { upsert: true }
   );
@@ -317,16 +379,22 @@ async function publishKwaiTalkImage(image: Buffer, fileName: string, selectedCyc
   return `${uploaded.publicUrl}${uploaded.publicUrl.includes("?") ? "&" : "?"}v=${version}`;
 }
 
-export function buildKwaiTalkMarkdownPayload(input: { imageUrl: string; selectedCycle: string; generatedAt: string }) {
+export function buildKwaiTalkMarkdownPayload(input: {
+  lob?: ExecutiveReportLob;
+  imageUrl: string;
+  selectedCycle: string;
+  generatedAt: string;
+}) {
+  const lob = input.lob ?? "ADS";
   const generatedAt = formatKwaiTalkGeneratedAt(input.generatedAt);
   return {
     msgtype: "markdown",
     markdown: {
       content: [
-        "### ADS Executive Report",
+        `### ${lob} Executive Report`,
         `**Cycle:** ${input.selectedCycle}`,
         `**Generated:** ${generatedAt}`,
-        `![ADS Executive Report](${input.imageUrl})`
+        `![${lob} Executive Report](${input.imageUrl})`
       ].join("\n\n")
     }
   };
@@ -363,9 +431,21 @@ function formatKwaiTalkGeneratedAt(value: string) {
   }).format(date);
 }
 
-function resolveTimeoutMs() {
-  const parsed = Number(process.env.ADS_EXECUTIVE_WEBHOOK_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS);
+function resolveTimeoutMs(config: ExecutiveWebhookConfig) {
+  const parsed = Number(process.env[`${config.envPrefix}_TIMEOUT_MS`] ?? DEFAULT_TIMEOUT_MS);
   return Number.isFinite(parsed) && parsed >= 1_000 && parsed <= 120_000 ? Math.round(parsed) : DEFAULT_TIMEOUT_MS;
+}
+
+function executiveShiftHours(value: string) {
+  const shift = normalizeShift(value);
+  if (shift.includes("manha")) return Array.from({ length: 8 }, (_, index) => index + 6);
+  if (shift.includes("tarde")) return Array.from({ length: 8 }, (_, index) => index + 14);
+  if (shift.includes("noite")) return [22, 23, 0, 1, 2, 3, 4, 5];
+  return [];
+}
+
+function normalizeShift(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
 }
 
 function utcDate(dateKey: string) {

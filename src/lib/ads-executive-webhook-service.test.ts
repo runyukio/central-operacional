@@ -28,3 +28,15 @@ test("assertKwaiTalkAccepted accepts successful Kim response variants", () => {
   );
   assert.throws(() => assertKwaiTalkAccepted('{"success":false,"message":"invalid markdown"}'), /invalid markdown/);
 });
+
+test("buildKwaiTalkMarkdownPayload identifica o report VIDEO", () => {
+  const payload = buildKwaiTalkMarkdownPayload({
+    lob: "VIDEO",
+    imageUrl: "https://storage.example/video.png",
+    selectedCycle: "2026-07-24 23:30",
+    generatedAt: "2026-07-25T02:35:00.000Z"
+  });
+
+  assert.match(payload.markdown.content, /VIDEO Executive Report/);
+  assert.match(payload.markdown.content, /!\[VIDEO Executive Report\]/);
+});

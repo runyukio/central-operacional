@@ -9,8 +9,11 @@ export type AdsExecutiveQueueMetric = {
 
 export type AdsExecutiveQueueRow = {
   lob: string;
+  slaTargetMinutes?: number | null;
   history: Array<AdsExecutiveQueueMetric & { cycleDownload: string }>;
 };
+
+export type ExecutiveReportLob = "ADS" | "VIDEO";
 
 export type AdsExecutiveAgentRow = {
   displayName: string;
@@ -71,6 +74,8 @@ export type AdsExecutiveKpi = {
 };
 
 export type AdsExecutiveReportSnapshot = {
+  lob: ExecutiveReportLob;
+  latencyTargetMinutes: number;
   selectedCycle: string;
   dateKey: string;
   dateLabel: string;
@@ -96,25 +101,33 @@ export function buildAdsExecutiveReportSnapshot(input: {
   queueRows: AdsExecutiveQueueRow[];
   agentRows: AdsExecutiveAgentRow[];
   selectedCycle: string;
+  lob?: ExecutiveReportLob;
   forecast?: AdsExecutiveForecastPoint[];
   requirements?: AdsExecutiveRequirement[];
 }): AdsExecutiveReportSnapshot {
   const selected = parseAdsExecutiveCycle(input.selectedCycle);
-  const adsQueues = input.queueRows.filter((row) => normalize(row.lob) === "ads");
-  const adsAgents = input.agentRows.filter(isAdsAgent);
-  const queueSnapshots = buildQueueSnapshots(adsQueues, selected.timestamp);
+  const lob = input.lob ?? "ADS";
+  const queues = input.queueRows.filter((row) => normalize(row.lob) === normalize(lob));
+  const backlogLatencyQueues = lob === "VIDEO"
+    ? queues.filter((row) => row.slaTargetMinutes === 15)
+    : queues;
+  const agents = input.agentRows.filter((row) => isExecutiveAgent(row, lob));
+  const queueSnapshots = buildQueueSnapshots(queues, selected.timestamp);
+  const backlogLatencySnapshots = buildQueueSnapshots(backlogLatencyQueues, selected.timestamp);
   const queueByHour = buildQueueHourDeltas(queueSnapshots, selected.dateKey);
-  const agentByHour = buildAgentHourDeltas(adsAgents, selected);
+  const backlogLatencyByHour = buildQueueHourDeltas(backlogLatencySnapshots, selected.dateKey);
+  const agentByHour = buildAgentHourDeltas(agents, selected);
   const forecastByHour = new Map(
     (input.forecast ?? [])
       .filter((row) => row.dateKey === selected.dateKey)
       .map((row) => [row.hour, Math.max(0, Math.round(row.input))])
   );
   const requiredByHour = new Map((input.requirements ?? []).map((row) => [row.hour, row.required]));
-  const currentOnline = adsAgents.filter((row) => isOnlinePresence(row.presenceStatus)).length;
+  const currentOnline = agents.filter((row) => isOnlinePresence(row.presenceStatus)).length;
 
   const buckets = Array.from({ length: 24 }, (_, hour): AdsExecutiveHourBucket => {
     const queue = queueByHour.get(hour);
+    const backlogLatency = backlogLatencyByHour.get(hour);
     const agent = agentByHour.get(hour);
     const isCurrentHour = hour === selected.hour;
     return {
@@ -126,8 +139,8 @@ export function buildAdsExecutiveReportSnapshot(input: {
       forecast: forecastByHour.get(hour) ?? null,
       ahtMs: queue?.metric.ahtMs ?? null,
       latencyMs: queue?.metric.latencyMs ?? null,
-      maxLatencyMs: queue?.metric.maxLatencyMs ?? null,
-      backlog: queue?.metric.backlog ?? null,
+      maxLatencyMs: backlogLatency?.metric.maxLatencyMs ?? null,
+      backlog: backlogLatency?.metric.backlog ?? null,
       required: requiredByHour.get(hour) ?? null,
       online: isCurrentHour ? currentOnline : agent?.online ?? null
     };
@@ -136,9 +149,11 @@ export function buildAdsExecutiveReportSnapshot(input: {
   const filled = buckets.filter((bucket) => bucket.cycleDownload && bucket.hour <= selected.hour);
   const latest = filled.at(-1) ?? null;
   const previous = filled.length > 1 ? filled.at(-2) ?? null : null;
-  const rankings = buildAgentRankings(adsAgents, latest?.cycleDownload ?? input.selectedCycle, previous?.cycleDownload ?? null);
+  const rankings = buildAgentRankings(agents, latest?.cycleDownload ?? input.selectedCycle, previous?.cycleDownload ?? null);
 
   return {
+    lob,
+    latencyTargetMinutes: lob === "VIDEO" ? 15 : 120,
     selectedCycle: input.selectedCycle,
     dateKey: selected.dateKey,
     dateLabel: formatDateLabel(selected.dateKey),
@@ -333,8 +348,8 @@ function kpi(label: string, value: number | null, previous: number | null, bette
   return { label, value, previous, delta: value !== null && previous !== null ? value - previous : null, betterWhen };
 }
 
-function isAdsAgent(row: AdsExecutiveAgentRow) {
-  return normalize(row.lob) === "ads"
+function isExecutiveAgent(row: AdsExecutiveAgentRow, lob: ExecutiveReportLob) {
+  return normalize(row.lob) === normalize(lob)
     && normalize(row.crossingStatus) === "encontrado"
     && normalize(row.personType) === "agente"
     && ["ativo", "active"].includes(normalize(row.employeeStatus));

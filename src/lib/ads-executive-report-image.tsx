@@ -27,12 +27,12 @@ export async function renderAdsExecutiveReportPng(report: AdsExecutiveReportSnap
 }
 
 function AdsExecutiveReportImage({ report }: { report: AdsExecutiveReportSnapshot }) {
-  const heatmapRows = buildHeatmapRows(report.buckets);
+  const heatmapRows = buildHeatmapRows(report.buckets, report.latencyTargetMinutes);
   return (
     <div style={rootStyle}>
       <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
         <div style={{ display: "flex", flexDirection: "column" }}>
-          <div style={{ fontSize: 17, fontWeight: 800, color: BLUE, letterSpacing: 4 }}>ADS EXECUTIVE REPORT</div>
+          <div style={{ fontSize: 17, fontWeight: 800, color: BLUE, letterSpacing: 4 }}>{`${report.lob} EXECUTIVE REPORT`}</div>
           <div style={{ marginTop: 8, fontSize: 48, fontWeight: 900, color: NAVY }}>Operational radar</div>
           <div style={{ display: "flex", marginTop: 8, fontSize: 20, fontWeight: 700, color: MUTED }}>Latest valid cycle: {report.latestHourLabel}</div>
         </div>
@@ -48,7 +48,7 @@ function AdsExecutiveReportImage({ report }: { report: AdsExecutiveReportSnapsho
       <section style={{ ...panelStyle, display: "flex", flexDirection: "column", marginTop: 24, height: 670 }}>
         <div style={{ display: "flex", flexDirection: "column", padding: "24px 28px 18px", borderBottom: "1px solid #E2E8F0" }}>
           <div style={{ fontSize: 28, fontWeight: 900, color: NAVY }}>Hourly health map</div>
-          <div style={{ marginTop: 5, fontSize: 17, fontWeight: 700, color: MUTED }}>ADS operational status by hour, using hourly deltas.</div>
+          <div style={{ marginTop: 5, fontSize: 17, fontWeight: 700, color: MUTED }}>{`${report.lob} operational status by hour, using hourly deltas.`}</div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", padding: "18px 24px 22px", flex: 1 }}>
           <Heatmap rows={heatmapRows} />
@@ -56,7 +56,7 @@ function AdsExecutiveReportImage({ report }: { report: AdsExecutiveReportSnapsho
       </section>
 
       <section style={{ display: "flex", width: "100%", gap: 22, marginTop: 24, height: 390 }}>
-        <ChartPanel title="Input x Forecast" subtitle="Real ADS volume against hourly forecast" style={{ flex: 1.42 }}>
+        <ChartPanel title="Input x Forecast" subtitle={`Real ${report.lob} volume against hourly forecast`} style={{ flex: 1.42 }}>
           <LineChart
             buckets={report.buckets}
             series={[
@@ -65,7 +65,7 @@ function AdsExecutiveReportImage({ report }: { report: AdsExecutiveReportSnapsho
             ]}
           />
         </ChartPanel>
-        <ChartPanel title="Backlog" subtitle="ADS backlog through the day" style={{ flex: 1 }}>
+        <ChartPanel title="Backlog" subtitle={`${report.lob} backlog through the day`} style={{ flex: 1 }}>
           <LineChart buckets={report.buckets} series={[{ key: "backlog", color: BLUE, fill: true }]} />
         </ChartPanel>
       </section>
@@ -206,7 +206,7 @@ function Ranking({ title, rows }: { title: string; rows: AdsExecutiveRankingRow[
   );
 }
 
-function buildHeatmapRows(buckets: AdsExecutiveHourBucket[]): HeatmapRow[] {
+function buildHeatmapRows(buckets: AdsExecutiveHourBucket[], latencyTargetMinutes: number): HeatmapRow[] {
   return [
     metricRow("Input", buckets, (bucket) => integerCell(bucket.input)),
     metricRow("Output", buckets, (bucket) => integerCell(bucket.output)),
@@ -216,7 +216,10 @@ function buildHeatmapRows(buckets: AdsExecutiveHourBucket[]): HeatmapRow[] {
     metricRow("Online HC", buckets, (bucket) => integerCell(bucket.online)),
     metricRow("HC Gap", buckets, (bucket) => gapCell(bucket.online, bucket.required)),
     metricRow("Backlog", buckets, (bucket) => integerCell(bucket.backlog, bucket.backlog === null ? "empty" : bucket.backlog > 0 ? "watch" : "good")),
-    metricRow("Max Latency", buckets, (bucket) => durationCell(bucket.maxLatencyMs, bucket.maxLatencyMs === null ? "empty" : bucket.maxLatencyMs <= 7_200_000 ? "good" : "bad"))
+    metricRow("Max Latency", buckets, (bucket) => durationCell(
+      bucket.maxLatencyMs,
+      bucket.maxLatencyMs === null ? "empty" : bucket.maxLatencyMs <= latencyTargetMinutes * 60_000 ? "good" : "bad"
+    ))
   ];
 }
 
