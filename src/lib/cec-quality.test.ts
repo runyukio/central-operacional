@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { calculateCecQualityAggregate } from "./cec-quality";
-import { buildCecQualitySnapshotPromotionSql, normalizeExcelDate } from "./performance-service";
+import { buildCecQualitySnapshotPromotionSql, getQualityRuleByEmployee, normalizeExcelDate } from "./performance-service";
 
 test("calcula o total CEC como Pass + Fail e a qualidade como 1 - Fail / Total", () => {
   assert.deepEqual(calculateCecQualityAggregate(13, 1), {
@@ -38,6 +38,14 @@ test("não divide por zero quando não há avaliações", () => {
     errors: 0,
     quality: 0
   });
+});
+
+test("separa a fonte de qualidade pela LOB atual do colaborador", () => {
+  assert.equal(getQualityRuleByEmployee({ lob: { name: "ADS" } }), "ADS_QUALITY");
+  assert.equal(getQualityRuleByEmployee({ lob: { name: "PROJECT" } }), "ADS_QUALITY");
+  assert.equal(getQualityRuleByEmployee({ lob: { name: "VIDEO" } }), "TNS_QUALITY");
+  assert.equal(getQualityRuleByEmployee({ lob: { name: "COMMENTS" } }), "TNS_QUALITY");
+  assert.equal(getQualityRuleByEmployee({ lob: { name: "CEC" } }), "CEC_QUALITY");
 });
 
 test("normaliza os três formatos de data encontrados na base CEC", () => {

@@ -1116,6 +1116,15 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
   })).filter((employee) => isAgentJobTitle(employee.roleTitle));
 
   const employeeIds = employees.map((employee) => employee.id);
+  const adsQualityEmployeeIds = employees
+    .filter((employee) => getQualityRuleByEmployee(employee) === "ADS_QUALITY")
+    .map((employee) => employee.id);
+  const tnsQualityEmployeeIds = employees
+    .filter((employee) => getQualityRuleByEmployee(employee) === "TNS_QUALITY")
+    .map((employee) => employee.id);
+  const cecQualityEmployeeIds = employees
+    .filter((employee) => getQualityRuleByEmployee(employee) === "CEC_QUALITY")
+    .map((employee) => employee.id);
   const supervisorNames = new Map<string, string>();
   const employeesBySupervisor = new Map<string, typeof employees>();
   for (const employee of employees) {
@@ -1134,7 +1143,7 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
     const metadata = getPerformanceQueueMetadataById(queueId);
     return metadata.lob === "ADS" || (metadata.lob === "VIDEO" && metadata.slaTargetMinutes === 15);
   });
-  const [schedules, moods, ahtRows, cecCpdRows, kapQualityRows, cecQualityRows] = await Promise.all([
+  const [schedules, moods, ahtRows, cecCpdRows, adsQualityRows, tnsQualityRows, cecQualityRows] = await Promise.all([
     prisma.schedule.findMany({
       where: { employeeId: { in: employeeIds }, date: { gte: period.start, lte: period.end }, deletedAt: null },
       select: { employeeId: true, status: true }
@@ -1170,33 +1179,50 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
         AND e."supervisorId" IS NOT NULL
       GROUP BY e."supervisorId"
     `),
-    prisma.$queryRaw<Array<{ supervisorId: string; correct: number; total: number }>>(Prisma.sql`
+    adsQualityEmployeeIds.length ? prisma.$queryRaw<Array<{ supervisorId: string; correct: number; total: number }>>(Prisma.sql`
       SELECT
         e."supervisorId" AS "supervisorId",
         COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::integer AS "correct",
         COUNT(DISTINCT q."concatKey")::integer AS "total"
       FROM "QualityRecord" q
       INNER JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
-      WHERE q."employeeId" IN (${Prisma.join(employeeIds)})
+      WHERE q."employeeId" IN (${Prisma.join(adsQualityEmployeeIds)})
         AND q."auditDate" >= ${period.start}
         AND q."auditDate" <= ${period.end}
         AND e."supervisorId" IS NOT NULL
         ${visibleQualityRecordSql}
       GROUP BY e."supervisorId"
-    `),
-    prisma.$queryRaw<Array<{ supervisorId: string; correct: number; total: number }>>(Prisma.sql`
+    `) : Promise.resolve([]),
+    tnsQualityEmployeeIds.length ? prisma.$queryRaw<Array<{ supervisorId: string; correct: number; total: number }>>(Prisma.sql`
+      SELECT
+        e."supervisorId" AS "supervisorId",
+        GREATEST(
+          COALESCE(SUM(q."sampling"), 0)
+            - COALESCE(SUM(q."mislabeled" + q."leakage" + q."falsePositive"), 0),
+          0
+        )::integer AS "correct",
+        COALESCE(SUM(q."sampling"), 0)::integer AS "total"
+      FROM "TnsQualityRecord" q
+      INNER JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
+      WHERE q."employeeId" IN (${Prisma.join(tnsQualityEmployeeIds)})
+        AND q."auditDate" >= ${period.start}
+        AND q."auditDate" <= ${period.end}
+        AND e."supervisorId" IS NOT NULL
+      GROUP BY e."supervisorId"
+    `) : Promise.resolve([]),
+    cecQualityEmployeeIds.length ? prisma.$queryRaw<Array<{ supervisorId: string; correct: number; total: number }>>(Prisma.sql`
       SELECT
         e."supervisorId" AS "supervisorId",
         COALESCE(SUM(q."passQuantity"), 0)::integer AS "correct",
         COALESCE(SUM(q."passQuantity" + q."failQuantity"), 0)::integer AS "total"
       FROM "CecQualityRecord" q
       INNER JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
-      WHERE q."employeeId" IN (${Prisma.join(employeeIds)})
+      WHERE q."employeeId" IN (${Prisma.join(cecQualityEmployeeIds)})
         AND q."qualityDate" >= ${period.start}
         AND q."qualityDate" <= ${period.end}
         AND e."supervisorId" IS NOT NULL
       GROUP BY e."supervisorId"
-    `)
+    `) : Promise.resolve([])
   ]);
 
   const supervisorByEmployee = new Map(employees.map((employee) => [employee.id, employee.supervisorId!]));
@@ -1253,7 +1279,7 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
     aggregate.cpdTickets += Number(row.tickets ?? 0);
     aggregate.cpdDays += Number(row.days ?? 0);
   }
-  for (const rows of [kapQualityRows, cecQualityRows]) {
+  for (const rows of [adsQualityRows, tnsQualityRows, cecQualityRows]) {
     for (const row of rows) {
       const aggregate = ensureAggregate(row.supervisorId);
       aggregate.qualityCorrect += Number(row.correct ?? 0);
