@@ -3750,6 +3750,12 @@ function executiveLatencyTargetMinutes(lob: ExecutiveReportLob) {
   return lob === "VIDEO" ? VIDEO_EXECUTIVE_TARGET_LATENCY_MINUTES : ADS_REPORT_TARGET_LATENCY_MINUTES;
 }
 
+function executiveBacklogLatencyRows(rows: QueueReportRow[], lob: ExecutiveReportLob) {
+  return lob === "VIDEO"
+    ? rows.filter((row) => row.slaTargetMinutes === VIDEO_EXECUTIVE_TARGET_LATENCY_MINUTES)
+    : rows;
+}
+
 function buildExecutiveReport(
   queueRows: QueueRealtimeRow[],
   agentRows: AgentRealtimeRow[],
@@ -3760,14 +3766,17 @@ function buildExecutiveReport(
 ): ExecutiveReport {
   const selected = parseRealtimeCycle(selectedCycle, "");
   const reportRows = buildExecutiveReportRows(queueRows, lob);
+  const backlogLatencyRows = executiveBacklogLatencyRows(reportRows, lob);
   const reportAgents = agentRows.filter((row) => isReportAgentForLob(row, lob));
   const queueByHour = buildExecutiveQueueBuckets(reportRows, selected);
+  const backlogLatencyByHour = buildExecutiveQueueBuckets(backlogLatencyRows, selected);
   const agentByHour = buildExecutiveAgentBuckets(reportAgents, selected);
   const requiredByHour = buildExecutiveRequiredByHour(requiredRows, selected.dateKey, lob);
   const currentOnline = reportAgents.filter((row) => isOnlineHeadcountStatus(row.presenceStatus)).length;
 
   const buckets: ExecutiveHourBucket[] = Array.from({ length: 24 }).map((_, hour) => {
     const queue = queueByHour.get(hour);
+    const backlogLatency = backlogLatencyByHour.get(hour);
     const agent = agentByHour.get(hour);
     const isSelectedHour = hour === selected.date.getHours();
     return {
@@ -3778,8 +3787,8 @@ function buildExecutiveReport(
       output: queue?.metric.output ?? null,
       ahtMs: queue?.metric.ahtMs ?? null,
       latencyMs: queue?.metric.latencyMs ?? null,
-      maxLatencyMs: queue?.metric.maxLatencyMs ?? null,
-      backlog: queue?.metric.backlog ?? null,
+      maxLatencyMs: backlogLatency?.metric.maxLatencyMs ?? null,
+      backlog: backlogLatency?.metric.backlog ?? null,
       required: requiredByHour.get(hour) ?? null,
       online: isSelectedHour ? currentOnline : agent?.online ?? null
     };
@@ -3832,10 +3841,12 @@ function resolveExecutivePreviousHourBucket(
   if (previousSelected.dateKey === selected.dateKey) return null;
 
   const previousQueueByHour = buildExecutiveQueueBuckets(reportRows, previousSelected);
+  const previousBacklogLatencyByHour = buildExecutiveQueueBuckets(executiveBacklogLatencyRows(reportRows, lob), previousSelected);
   const previousAgentByHour = buildExecutiveAgentBuckets(reportAgents, previousSelected);
   const previousRequiredByHour = buildExecutiveRequiredByHour(requiredRows, previousSelected.dateKey, lob);
   const previousHour = previousHourDate.getHours();
   const queue = previousQueueByHour.get(previousHour);
+  const backlogLatency = previousBacklogLatencyByHour.get(previousHour);
   const agent = previousAgentByHour.get(previousHour);
   if (!queue && !agent) return null;
 
@@ -3847,8 +3858,8 @@ function resolveExecutivePreviousHourBucket(
     output: queue?.metric.output ?? null,
     ahtMs: queue?.metric.ahtMs ?? null,
     latencyMs: queue?.metric.latencyMs ?? null,
-    maxLatencyMs: queue?.metric.maxLatencyMs ?? null,
-    backlog: queue?.metric.backlog ?? null,
+    maxLatencyMs: backlogLatency?.metric.maxLatencyMs ?? null,
+    backlog: backlogLatency?.metric.backlog ?? null,
     required: previousRequiredByHour.get(previousHour) ?? null,
     online: agent?.online ?? null
   } satisfies ExecutiveHourBucket;
