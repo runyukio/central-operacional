@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 
 type ExecutivePeriod = "daily" | "weekly" | "monthly";
 type LatencyLob = "ADS" | "VIDEO" | "COMMENTS";
+type QualityLob = "ADS" | "VIDEO";
 
 type PresenceRow = {
   lob: string;
@@ -63,6 +64,13 @@ type QualityTrendRow = {
   quality: number;
 };
 
+type ExecutiveQualityTrendRow = {
+  key: string;
+  label: string;
+  ADS?: number;
+  VIDEO?: number;
+};
+
 type Props = {
   lobs: string[];
   selectedLob: string;
@@ -98,6 +106,10 @@ const latencyLineColors: Record<LatencyLob, string> = {
   VIDEO: "#10B981",
   COMMENTS: "#7C3AED"
 };
+const qualityLineColors: Record<QualityLob, string> = {
+  ADS: "#2563EB",
+  VIDEO: "#10B981"
+};
 
 export function CentralExecutiveDashboard({
   lobs,
@@ -114,7 +126,7 @@ export function CentralExecutiveDashboard({
 }: Props) {
   const [period, setPeriod] = useState<ExecutivePeriod>("daily");
   const [latencyTrend, setLatencyTrend] = useState<LatencyTrendRow[]>([]);
-  const [qualityTrend, setQualityTrend] = useState<QualityTrendRow[]>([]);
+  const [qualityTrend, setQualityTrend] = useState<ExecutiveQualityTrendRow[]>([]);
   const [loadingCharts, setLoadingCharts] = useState(false);
   const [latencyError, setLatencyError] = useState("");
   const [qualityError, setQualityError] = useState("");
@@ -145,13 +157,8 @@ export function CentralExecutiveDashboard({
       setLatencyError("");
       setQualityError("");
       try {
-        const qualitySupported = selectedLob === "Todos" || selectedLob === "ADS" || selectedLob === "PROJECT";
-        const qualityParams = new URLSearchParams({
-          startDate: periodRange.startDate,
-          endDate: periodRange.endDate,
-          view: period
-        });
         const latencyLobs = latencyLobsForSelection(selectedLob);
+        const qualityLobs = qualityLobsForSelection(selectedLob);
         const [latencyResult, qualityResult] = await Promise.allSettled([
           Promise.all(latencyLobs.map(async (lob) => {
             const params = new URLSearchParams({
@@ -170,13 +177,20 @@ export function CentralExecutiveDashboard({
             );
             return { lob, trend: sanitizePerformanceTrend(payload.trend) };
           })),
-          qualitySupported
-            ? fetchExecutiveJson<{ trend?: QualityTrendRow[] }>(
-                `/api/performance/quality?${qualityParams.toString()}`,
-                controller.signal,
-                "Não foi possível carregar a qualidade."
-              )
-            : Promise.resolve({ trend: [] })
+          Promise.all(qualityLobs.map(async (lob) => {
+            const params = new URLSearchParams({
+              startDate: periodRange.startDate,
+              endDate: periodRange.endDate,
+              view: period,
+              lob
+            });
+            const payload = await fetchExecutiveJson<{ trend?: QualityTrendRow[] }>(
+              `/api/performance/quality?${params.toString()}`,
+              controller.signal,
+              `Não foi possível carregar a qualidade de ${lob}.`
+            );
+            return { lob, trend: sanitizeQualityTrend(payload.trend) };
+          }))
         ]);
 
         if (latencyResult.status === "fulfilled") {
@@ -187,7 +201,7 @@ export function CentralExecutiveDashboard({
         }
 
         if (qualityResult.status === "fulfilled") {
-          setQualityTrend(sanitizeQualityTrend(qualityResult.value.trend));
+          setQualityTrend(mergeQualityTrends(qualityResult.value));
         } else {
           setQualityTrend([]);
           setQualityError(errorMessage(qualityResult.reason, "Não foi possível carregar a qualidade."));
@@ -225,6 +239,8 @@ export function CentralExecutiveDashboard({
   const latencyLobs = latencyLobsForSelection(selectedLob);
   const isCombinedLatency = latencyLobs.length > 1;
   const latencyTargetMinutes = latencyLobs.length === 1 ? latencyTargetForLob(latencyLobs[0]) : null;
+  const qualityLobs = qualityLobsForSelection(selectedLob);
+  const isCombinedQuality = qualityLobs.length > 1;
 
   return (
     <div className="space-y-4">
@@ -382,7 +398,7 @@ export function CentralExecutiveDashboard({
 
         <ExecutiveChartCard
           title="Qualidade"
-          subtitle={selectedLob === "Todos" || selectedLob === "ADS" || selectedLob === "PROJECT" ? "ADS + PROJECT" : "Sem base para a LOB selecionada"}
+          subtitle={qualitySubtitle(selectedLob, qualityLobs)}
           icon={ShieldCheck}
           loading={loadingCharts}
           error={qualityError}
@@ -394,13 +410,34 @@ export function CentralExecutiveDashboard({
                 <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#64748B" }} tickLine={false} axisLine={false} minTickGap={20} />
                 <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: "#64748B" }} tickLine={false} axisLine={false} width={38} unit="%" />
                 <Tooltip
-                  formatter={(value) => [`${Number(value).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%`, "Qualidade"]}
+                  formatter={(value, name) => [`${Number(value).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%`, String(name)]}
                   contentStyle={{ borderRadius: 8, borderColor: "#E2E8F0", boxShadow: "0 8px 24px rgba(15,23,42,0.08)" }}
                 />
-                <Line type="monotone" dataKey="quality" stroke="#10B981" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
+                {isCombinedQuality ? (
+                  <Legend
+                    verticalAlign="top"
+                    align="left"
+                    iconType="circle"
+                    iconSize={8}
+                    wrapperStyle={{ fontSize: 10, fontWeight: 700, color: "#475569", paddingBottom: 8 }}
+                  />
+                ) : null}
+                {qualityLobs.map((lob) => (
+                  <Line
+                    key={lob}
+                    type="monotone"
+                    dataKey={lob}
+                    name={lob === "ADS" ? "ADS + PROJECT" : lob}
+                    stroke={qualityLineColors[lob]}
+                    strokeWidth={2.5}
+                    dot={false}
+                    activeDot={{ r: 4 }}
+                    connectNulls
+                  />
+                ))}
               </LineChart>
             </ResponsiveContainer>
-          ) : <ChartEmpty label="Qualidade disponível para ADS e PROJECT" />}
+          ) : <ChartEmpty label={qualityEmptyLabel(selectedLob)} />}
         </ExecutiveChartCard>
 
         <ExecutiveChartCard title="ABS por LOB" subtitle={periodCaption(periodRange)} icon={AlertCircle} loading={loadingSummary}>
@@ -550,6 +587,26 @@ function latencyLobsForSelection(lob: string): LatencyLob[] {
   return [];
 }
 
+function qualityLobsForSelection(lob: string): QualityLob[] {
+  if (lob === "Todos") return ["ADS", "VIDEO"];
+  if (lob === "ADS" || lob === "PROJECT") return ["ADS"];
+  if (lob === "VIDEO") return ["VIDEO"];
+  return [];
+}
+
+function qualitySubtitle(lob: string, qualityLobs: QualityLob[]) {
+  if (qualityLobs.length > 1) return "ADS + PROJECT e VIDEO";
+  if (qualityLobs[0] === "ADS") return "ADS + PROJECT";
+  if (qualityLobs[0] === "VIDEO") return "VIDEO";
+  return `Sem base de qualidade para ${lob}`;
+}
+
+function qualityEmptyLabel(lob: string) {
+  if (lob === "VIDEO") return "Sem qualidade de VIDEO no período selecionado.";
+  if (lob === "ADS" || lob === "PROJECT" || lob === "Todos") return "Sem qualidade no período selecionado.";
+  return `A base de qualidade não está disponível para ${lob}.`;
+}
+
 function latencyTargetForLob(lob: string): number | null {
   if (lob === "ADS") return 120;
   if (lob === "VIDEO") return 15;
@@ -665,6 +722,18 @@ function mergeLatencyTrends(
       current[item.lob] = normalizeAgainstTarget && target
         ? Math.round((point.latencyMinutes / target) * 1000) / 10
         : point.latencyMinutes;
+      rows.set(point.key, current);
+    }
+  }
+  return Array.from(rows.values()).sort((left, right) => left.key.localeCompare(right.key));
+}
+
+function mergeQualityTrends(series: Array<{ lob: QualityLob; trend: QualityTrendRow[] }>) {
+  const rows = new Map<string, ExecutiveQualityTrendRow>();
+  for (const item of series) {
+    for (const point of item.trend) {
+      const current = rows.get(point.key) ?? { key: point.key, label: point.label };
+      current[item.lob] = point.quality;
       rows.set(point.key, current);
     }
   }
