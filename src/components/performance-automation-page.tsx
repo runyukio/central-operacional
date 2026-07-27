@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   type LucideIcon,
@@ -15,6 +16,7 @@ import {
   Download,
   FileSpreadsheet,
   Gauge,
+  Laptop,
   LineChart as LineChartIcon,
   LockKeyhole,
   RefreshCw,
@@ -51,7 +53,15 @@ type QualitySortDirection = "asc" | "desc";
 type QualityLob = "ADS" | "VIDEO" | "COMMENTS" | "CEC";
 type QualityImportScope = "ADS" | "TNS" | "CEC";
 type SupervisorView = QualityGranularity;
-type PerformanceTab = "queue" | "agents" | "supervisors" | "forecast" | "quality";
+type PerformanceTab = "queue" | "agents" | "supervisors" | "forecast" | "quality" | "wfh";
+
+const PerformanceWfhPanel = dynamic(
+  () => import("@/components/modules").then((module) => module.PerformanceWfhPanel),
+  {
+    ssr: false,
+    loading: () => <EmptyBox label="Carregando WFH..." />
+  }
+);
 
 type PerformanceSummary = {
   records: number;
@@ -185,6 +195,7 @@ type PerformanceAgentsResponse = {
     lobs: string[];
     supervisors: Array<{ id: string; fullName: string }>;
     shifts: Array<{ id: string; name: string }>;
+    slaTargets: number[];
   };
   summary: {
     agents: number;
@@ -310,9 +321,9 @@ const defaultForecastModelWeights: ForecastModelWeights = {
   shortMomentum: 0.16
 };
 
-export function PerformanceAutomationPage() {
-  const [activeTab, setActiveTab] = useState<PerformanceTab>("queue");
-  const [queueGranularity, setQueueGranularity] = useState<PerformanceGranularity>("daily");
+export function PerformanceAutomationPage({ initialTab = "queue" }: { initialTab?: PerformanceTab }) {
+  const [activeTab, setActiveTab] = useState<PerformanceTab>(initialTab);
+  const [queueGranularity, setQueueGranularity] = useState<PerformanceGranularity>("monthly");
   const [queueLob, setQueueLob] = useState("");
   const [queueStartDate, setQueueStartDate] = useState("");
   const [queueEndDate, setQueueEndDate] = useState("");
@@ -323,17 +334,18 @@ export function PerformanceAutomationPage() {
   const [forecastPayload, setForecastPayload] = useState<PerformanceProductionResponse | null>(null);
   const [qualityPayload, setQualityPayload] = useState<PerformanceQualityResponse | null>(null);
   const [qualityLob, setQualityLob] = useState<QualityLob>("ADS");
-  const [qualityGranularity, setQualityGranularity] = useState<QualityGranularity>("daily");
+  const [qualityGranularity, setQualityGranularity] = useState<QualityGranularity>("monthly");
   const [qualitySortDirection, setQualitySortDirection] = useState<QualitySortDirection>("desc");
   const [qualityStartDate, setQualityStartDate] = useState("");
   const [qualityEndDate, setQualityEndDate] = useState("");
   const [agentsPayload, setAgentsPayload] = useState<PerformanceAgentsResponse | null>(null);
   const [supervisorsPayload, setSupervisorsPayload] = useState<PerformanceSupervisorsResponse | null>(null);
-  const [agentView, setAgentView] = useState<QualityGranularity>("daily");
+  const [agentView, setAgentView] = useState<QualityGranularity>("monthly");
   const [supervisorView, setSupervisorView] = useState<SupervisorView>("monthly");
   const [supervisorStartDate, setSupervisorStartDate] = useState("");
   const [supervisorEndDate, setSupervisorEndDate] = useState("");
   const [agentLob, setAgentLob] = useState("");
+  const [agentSlaTarget, setAgentSlaTarget] = useState("");
   const [agentShiftId, setAgentShiftId] = useState("");
   const [agentSupervisorId, setAgentSupervisorId] = useState("");
   const [agentSearch, setAgentSearch] = useState("");
@@ -427,6 +439,7 @@ export function PerformanceAutomationPage() {
     });
     if (agentLob) params.set("lob", agentLob);
     else params.set("metadataOnly", "true");
+    if (agentSlaTarget) params.set("slaTargetMinutes", agentSlaTarget);
     if (agentStartDate) params.set("startDate", agentStartDate);
     if (agentEndDate) params.set("endDate", agentEndDate);
     if (agentShiftId) params.set("shiftId", agentShiftId);
@@ -441,7 +454,7 @@ export function PerformanceAutomationPage() {
     } finally {
       setLoadingAgents(false);
     }
-  }, [agentEndDate, agentLob, agentPage, agentShiftId, agentSort, agentStartDate, agentSupervisorId, agentView, debouncedAgentSearch]);
+  }, [agentEndDate, agentLob, agentPage, agentShiftId, agentSlaTarget, agentSort, agentStartDate, agentSupervisorId, agentView, debouncedAgentSearch]);
 
   const loadSupervisors = useCallback(async () => {
     setLoadingSupervisors(true);
@@ -501,7 +514,7 @@ export function PerformanceAutomationPage() {
         icon={Trophy}
         actions={(
           <div className="flex flex-wrap items-center gap-2">
-            {basePayload?.canImport && activeTab !== "quality" && activeTab !== "supervisors" ? (
+            {basePayload?.canImport && activeTab !== "quality" && activeTab !== "supervisors" && activeTab !== "wfh" ? (
               <button type="button" onClick={() => setUploadOpen(true)} className="inline-flex h-10 items-center gap-2 rounded-xl bg-blue-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-blue-700">
                 <UploadCloud className="h-4 w-4" /> Subir bases
               </button>
@@ -511,7 +524,7 @@ export function PerformanceAutomationPage() {
         )}
       />
 
-      {activeTab === "supervisors" ? null : activeTab === "quality" ? (
+      {activeTab === "supervisors" || activeTab === "wfh" ? null : activeTab === "quality" ? (
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <StatCard title="Último upload" value={formatQualityImportDate(qualityPayload?.lastImport?.importedAt)} helper="snapshot de qualidade vigente" icon={CheckCircle2} tone="green" />
           <StatCard title="Janela da base" value={formatQualityRange(qualityPayload?.dataRange)} helper={qualityLob === "ADS" ? "ADS + PROJECT" : qualityLob} icon={CalendarClock} tone="purple" />
@@ -533,6 +546,7 @@ export function PerformanceAutomationPage() {
         <TabButton active={activeTab === "supervisors"} icon={ShieldCheck} label="Supervisores" onClick={() => setActiveTab("supervisors")} />
         <TabButton active={activeTab === "forecast"} icon={LineChartIcon} label="Forecast" onClick={() => setActiveTab("forecast")} />
         <TabButton active={activeTab === "quality"} icon={ShieldCheck} label="Qualidade" onClick={() => setActiveTab("quality")} />
+        <TabButton active={activeTab === "wfh"} icon={Laptop} label="WFH" onClick={() => setActiveTab("wfh")} />
       </div>
 
       {message ? <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{message}</p> : null}
@@ -559,6 +573,7 @@ export function PerformanceAutomationPage() {
           loading={loadingAgents}
           payload={agentsPayload}
           selectedLob={agentLob}
+          selectedSlaTarget={agentSlaTarget}
           selectedShiftId={agentShiftId}
           selectedSupervisorId={agentSupervisorId}
           search={agentSearch}
@@ -567,7 +582,8 @@ export function PerformanceAutomationPage() {
           sort={agentSort}
           page={agentPage}
           view={agentView}
-          onLobChange={(value) => { setAgentLob(value); setAgentPage(1); }}
+          onLobChange={(value) => { setAgentLob(value); setAgentSlaTarget(""); setAgentPage(1); }}
+          onSlaTargetChange={(value) => { setAgentSlaTarget(value); setAgentPage(1); }}
           onShiftChange={(value) => { setAgentShiftId(value); setAgentPage(1); }}
           onSupervisorChange={(value) => { setAgentSupervisorId(value); setAgentPage(1); }}
           onSearchChange={(value) => { setAgentSearch(value); setAgentPage(1); }}
@@ -608,6 +624,8 @@ export function PerformanceAutomationPage() {
           onHorizonChange={setForecastHorizon}
           onRefresh={() => void loadForecast()}
         />
+      ) : activeTab === "wfh" ? (
+        <PerformanceWfhPanel />
       ) : (
         <QualityView
           loading={loadingQuality}
@@ -918,6 +936,7 @@ function AgentsView({
   loading,
   payload,
   selectedLob,
+  selectedSlaTarget,
   selectedShiftId,
   selectedSupervisorId,
   search,
@@ -927,6 +946,7 @@ function AgentsView({
   page,
   view,
   onLobChange,
+  onSlaTargetChange,
   onShiftChange,
   onSupervisorChange,
   onSearchChange,
@@ -940,6 +960,7 @@ function AgentsView({
   loading: boolean;
   payload: PerformanceAgentsResponse | null;
   selectedLob: string;
+  selectedSlaTarget: string;
   selectedShiftId: string;
   selectedSupervisorId: string;
   search: string;
@@ -949,6 +970,7 @@ function AgentsView({
   page: number;
   view: QualityGranularity;
   onLobChange: (value: string) => void;
+  onSlaTargetChange: (value: string) => void;
   onShiftChange: (value: string) => void;
   onSupervisorChange: (value: string) => void;
   onSearchChange: (value: string) => void;
@@ -1003,6 +1025,19 @@ function AgentsView({
             <SlicerGroup label="LOB">
               {lobs.map((lob) => <SlicerButton key={lob} active={selectedLob === lob} label={lob} onClick={() => onLobChange(lob)} tone="dark" />)}
             </SlicerGroup>
+            {selectedLob && selectedLob !== "CEC" ? (
+              <SlicerGroup label="Meta de latência">
+                <SlicerButton active={!selectedSlaTarget} label="Todas" onClick={() => onSlaTargetChange("")} />
+                {(payload?.filters.slaTargets ?? []).map((target) => (
+                  <SlicerButton
+                    key={target}
+                    active={selectedSlaTarget === String(target)}
+                    label={formatLatencyTargetLabel(target)}
+                    onClick={() => onSlaTargetChange(String(target))}
+                  />
+                ))}
+              </SlicerGroup>
+            ) : null}
             <SlicerGroup label="Turno">
               <SlicerButton active={!selectedShiftId} label="Todos" onClick={() => onShiftChange("")} />
               {(payload?.filters.shifts ?? []).map((shift) => (
@@ -1234,7 +1269,7 @@ function SupervisorsView({
           <StatCard title="ABS do time" value={formatQualityPercent(summary?.absRate)} helper={`${formatNumber(summary?.absences ?? 0)} ausência(s)`} icon={Target} tone="orange" />
           <StatCard title="Attrition do time" value={formatQualityPercent(summary?.attritionRate)} helper={`${formatNumber(summary?.terminations ?? 0)} desligamento(s)`} icon={TrendingUp} tone="purple" />
           <StatCard title="Humor do time" value={formatMoodScore(summary?.moodAverage)} helper={`${formatNumber(summary?.moodResponses ?? 0)} resposta(s)`} icon={Gauge} tone="green" />
-          <StatCard title="AHT do time" value={formatSeconds(summary?.ahtSeconds)} helper="ADS + TNS Video (meta 15 min)" icon={Clock} tone="blue" />
+          <StatCard title="AHT do time" value={formatSeconds(summary?.ahtSeconds)} helper="ADS + TNS (filas com meta 15 min)" icon={Clock} tone="blue" />
           <StatCard title="CPD CEC" value={formatNumber(summary?.cpdAverage ?? 0)} helper={`${formatNumber(summary?.cpdTickets ?? 0)} tickets / ${formatNumber(summary?.cpdDays ?? 0)} dias de agente`} icon={Clock} tone="orange" />
           <StatCard title="Qualidade do time" value={formatQualityPercent(summary?.quality)} helper={`${formatNumber(summary?.qualityTotal ?? 0)} caso(s)`} icon={ShieldCheck} tone="green" />
         </div>
@@ -2677,6 +2712,18 @@ function formatOptionalPercent(value?: number | null) {
 
 function formatMinutes(value?: number | null) {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? `${value.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} min` : "-";
+}
+
+function formatLatencyTargetLabel(minutes: number) {
+  if (minutes >= 1_440 && minutes % 1_440 === 0) {
+    const days = minutes / 1_440;
+    return `${days} ${days === 1 ? "dia" : "dias"}`;
+  }
+  if (minutes >= 60 && minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return `${hours}h`;
+  }
+  return `${minutes} min`;
 }
 
 function formatSeconds(value?: number | null) {

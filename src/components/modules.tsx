@@ -13029,11 +13029,15 @@ export function PerformancePage() {
   return <PerformanceProductionPage />;
 }
 
-function PerformanceLegacyPage() {
+export function PerformanceWfhPanel() {
+  return <PerformanceLegacyPage embeddedWfh />;
+}
+
+function PerformanceLegacyPage({ embeddedWfh = false }: { embeddedWfh?: boolean }) {
   const { data: session } = useSession();
-  const requestedPerformanceView = queryParam("view");
+  const requestedPerformanceView = embeddedWfh ? "wfh" : queryParam("view");
   const hasRequestedPerformanceView = requestedPerformanceView === "mine" || requestedPerformanceView === "wfh" || requestedPerformanceView === "framework";
-  const defaultedTab = useRef(hasRequestedPerformanceView);
+  const defaultedTab = useRef(embeddedWfh || hasRequestedPerformanceView);
   const [activeTab, setActiveTab] = useState<"mine" | "wfh" | "framework">(requestedPerformanceView === "framework" ? "framework" : requestedPerformanceView === "wfh" ? "wfh" : "mine");
   const [filters, setFilters] = useState(() => ({
     ...initialDateRangeFromUrl(),
@@ -13075,10 +13079,11 @@ function PerformanceLegacyPage() {
   const isClientRole = sessionRole === "CLIENT";
   const sessionCanWfh = canAccessPerformance({ role: sessionRole });
   const sessionCanFramework = canAccessPerformance({ role: sessionRole });
-  const visibleActiveTab = isClientRole && activeTab !== "framework" ? "wfh" : activeTab;
-  const shouldWaitForDefaultPerformanceTab = Boolean(sessionRole && !hasRequestedPerformanceView && !defaultedTab.current);
+  const visibleActiveTab = embeddedWfh ? "wfh" : isClientRole && activeTab !== "framework" ? "wfh" : activeTab;
+  const shouldWaitForDefaultPerformanceTab = Boolean(!embeddedWfh && sessionRole && !hasRequestedPerformanceView && !defaultedTab.current);
 
   useEffect(() => {
+    if (embeddedWfh) return;
     if (isClientRole && activeTab !== "wfh" && activeTab !== "framework") {
       setActiveTab("wfh");
       defaultedTab.current = true;
@@ -13088,7 +13093,7 @@ function PerformanceLegacyPage() {
       setActiveTab(sessionCanWfh ? "wfh" : "mine");
       defaultedTab.current = true;
     }
-  }, [activeTab, isClientRole, sessionCanWfh, sessionRole]);
+  }, [activeTab, embeddedWfh, isClientRole, sessionCanWfh, sessionRole]);
 
   const loadPerformance = useCallback(async () => {
     if (!sessionRole || shouldWaitForDefaultPerformanceTab) return;
@@ -13289,18 +13294,22 @@ function PerformanceLegacyPage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader
-        title="Performance"
-        description="Indicadores oficiais de Qualidade, Submit, AHT e ABS conectados ao cadastro e ao Cronograma."
-        icon={Trophy}
-        actions={<TopActions />}
-      />
+      {!embeddedWfh ? (
+        <PageHeader
+          title="Performance"
+          description="Indicadores oficiais de Qualidade, Submit, AHT e ABS conectados ao cadastro e ao Cronograma."
+          icon={Trophy}
+          actions={<TopActions />}
+        />
+      ) : null}
 
-      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-white p-2 shadow-sm">
-        {!isClientRole ? <button onClick={() => setActiveTab("mine")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", visibleActiveTab === "mine" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>Minha Performance</button> : null}
-        {canShowWfh ? <button onClick={() => setActiveTab("wfh")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", visibleActiveTab === "wfh" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>WFH</button> : null}
-        {canShowFramework ? <button onClick={() => setActiveTab("framework")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", visibleActiveTab === "framework" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>Framework</button> : null}
-      </div>
+      {!embeddedWfh ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-white p-2 shadow-sm">
+          {!isClientRole ? <button onClick={() => setActiveTab("mine")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", visibleActiveTab === "mine" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>Minha Performance</button> : null}
+          {canShowWfh ? <button onClick={() => setActiveTab("wfh")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", visibleActiveTab === "wfh" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>WFH</button> : null}
+          {canShowFramework ? <button onClick={() => setActiveTab("framework")} className={cn("rounded-lg px-4 py-2 text-sm font-extrabold", visibleActiveTab === "framework" ? "bg-blue-600 text-white" : "text-navy-950 hover:bg-blue-50")}>Framework</button> : null}
+        </div>
+      ) : null}
 
       {visibleActiveTab !== "framework" ? (
         <div className="rounded-xl border border-border bg-white p-2.5 shadow-sm">
@@ -13442,8 +13451,10 @@ function PerformanceLegacyPage() {
             )}
           </Panel>
 
-          {wfhPayload.canImport ? (
-            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+          {!embeddedWfh ? (
+            <>
+              {wfhPayload.canImport ? (
+                <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
               <PerformanceImportPanel
                 title="Upload de Qualidade ADS"
                 description="final_result, case_order_id e audit_case_order_id."
@@ -13484,11 +13495,11 @@ function PerformanceLegacyPage() {
                 onTemplate={() => void downloadFile("/api/performance/template?type=production", "template_performance_producao.xlsx").catch((error) => setMessage(error instanceof Error ? error.message : "Não foi possível baixar o template."))}
                 onFile={(file) => void previewPerformanceFile("production", file)}
               />
-            </div>
-          ) : null}
+                </div>
+              ) : null}
 
-          <div className={cn("grid gap-3", isClientRole ? "xl:grid-cols-1" : "xl:grid-cols-[minmax(0,1fr)_420px]")}>
-            <Panel title="Detalhamento Individual">
+              <div className={cn("grid gap-3", isClientRole ? "xl:grid-cols-1" : "xl:grid-cols-[minmax(0,1fr)_420px]")}>
+                <Panel title="Detalhamento Individual">
               {selectedAgent ? (
                 <div className="space-y-3">
                   <div className="rounded-lg border border-blue-100 bg-blue-50 p-3">
@@ -13521,8 +13532,8 @@ function PerformanceLegacyPage() {
               ) : (
                 <EmptyState title="Selecione um agente" description="Clique em um nome do ranking para abrir o histórico semanal individual." />
               )}
-            </Panel>
-            {!isClientRole ? <Panel title="Histórico de Importações">
+                </Panel>
+                {!isClientRole ? <Panel title="Histórico de Importações">
               {wfhPayload.imports.length ? (
                 <div className="space-y-2">
                   {wfhPayload.imports.map((item) => (
@@ -13545,8 +13556,10 @@ function PerformanceLegacyPage() {
               ) : (
                 <EmptyState title="Sem importações" description="O histórico aparecerá após o primeiro commit de Qualidade ou Produção." />
               )}
-            </Panel> : null}
-          </div>
+                </Panel> : null}
+              </div>
+            </>
+          ) : null}
         </div>
       ) : null}
 

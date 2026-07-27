@@ -81,6 +81,7 @@ export type PerformanceQuery = {
   month?: string;
   employeeId?: string;
   lob?: string;
+  slaTargetMinutes?: number;
   supervisorId?: string;
   role?: string;
   skill?: string;
@@ -90,7 +91,6 @@ export type PerformanceQuery = {
   sortBy?: PerformanceSortBy;
   sortDirection?: PerformanceSortDirection;
   granularity?: PerformanceProductionGranularity;
-  slaTargetMinutes?: number;
   metadataOnly?: boolean;
 };
 
@@ -149,11 +149,17 @@ export function mergeSupervisorQualityDailyRows(
   );
 }
 
+export function isSupervisorAhtQueue(metadata: { lob: string; slaTargetMinutes: number | null }) {
+  const isTnsQueue = metadata.lob === "VIDEO" || metadata.lob === "COMMENTS";
+  return metadata.lob === "ADS" || (isTnsQueue && metadata.slaTargetMinutes === 15);
+}
+
 export type PerformanceAgentsQuery = {
   view?: "monthly" | "weekly" | "daily";
   startDate?: string;
   endDate?: string;
   lob?: string;
+  slaTargetMinutes?: number;
   supervisorId?: string;
   shiftId?: string;
   search?: string;
@@ -936,7 +942,12 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     employeeOptions.map((employee) => employee.shift),
     (item) => item.id
   ).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
-  const filters = { lobs: validLobs, supervisors, shifts };
+  const filters = {
+    lobs: validLobs,
+    supervisors,
+    shifts,
+    slaTargets: performanceSlaTargetOptions(requestedLob)
+  };
   const dataRange = selectedRange.min && selectedRange.max
     ? { startDate: formatDateKey(selectedRange.min), endDate: formatDateKey(selectedRange.max) }
     : !requestedLob && allRangeDates.length
@@ -950,7 +961,7 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     return emptyPerformanceAgentsPayload(start, end, dataRange, filters, view);
   }
 
-  const queueSql = performanceQueueFilterSql(requestedLob);
+  const queueSql = performanceQueueFilterSql(requestedLob, query.slaTargetMinutes);
   const ownProductionEmployeeSql = ownEmployeeId ? Prisma.sql`AND p."employeeId" = ${ownEmployeeId}` : Prisma.empty;
   const ownCpdEmployeeSql = ownEmployeeId ? Prisma.sql`AND c."employeeId" = ${ownEmployeeId}` : Prisma.empty;
   type AgentDashboardRawRow = {
@@ -1219,7 +1230,7 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
 
   const ahtQueueIds = allPerformanceQueueIds().filter((queueId) => {
     const metadata = getPerformanceQueueMetadataById(queueId);
-    return metadata.lob === "ADS" || (metadata.lob === "VIDEO" && metadata.slaTargetMinutes === 15);
+    return isSupervisorAhtQueue(metadata);
   });
   const [
     schedules,
@@ -1581,6 +1592,7 @@ function emptyPerformanceAgentsPayload(
     lobs: string[];
     supervisors: Array<{ id: string; fullName: string }>;
     shifts: Array<{ id: string; name: string }>;
+    slaTargets: number[];
   },
   view: "monthly" | "weekly" | "daily"
 ) {
@@ -4280,7 +4292,7 @@ async function latestProductionPeriod(): Promise<Period> {
 }
 
 function normalizeProductionGranularity(value?: string | null): PerformanceProductionGranularity {
-  return value === "hourly" || value === "weekly" || value === "monthly" ? value : "daily";
+  return value === "hourly" || value === "weekly" || value === "daily" ? value : "monthly";
 }
 
 function performanceLobOptions() {
@@ -4475,6 +4487,15 @@ function queueWhereByPerformanceLob(lob: string) {
 
 function allPerformanceQueueIds() {
   return unique([...Object.keys(QUEUE_METADATA), ...Object.keys(QUEUE_REPORT_METADATA)]);
+}
+
+function performanceSlaTargetOptions(lob: string) {
+  if (!lob || lob === "CEC" || lob === "N/A") return [];
+  return unique(
+    queueIdsByPerformanceLob(lob)
+      .map((queueId) => getPerformanceQueueMetadataById(queueId).slaTargetMinutes)
+      .filter((target): target is number => typeof target === "number" && target > 0)
+  ).sort((left, right) => left - right);
 }
 
 function productionBucketSql(granularity: PerformanceProductionGranularity) {
@@ -4831,7 +4852,7 @@ function datesInRange(start: Date, end: Date) {
 }
 
 function normalizeDashboardView(value?: string | null): "monthly" | "weekly" | "daily" {
-  return value === "monthly" || value === "weekly" ? value : "daily";
+  return value === "weekly" || value === "daily" ? value : "monthly";
 }
 
 function dashboardViewPeriod(referenceDate: Date, view: "monthly" | "weekly" | "daily"): Period {

@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { mergeSupervisorQualityDailyRows } from "./performance-service";
+import { isSupervisorAhtQueue, mergeSupervisorQualityDailyRows } from "./performance-service";
+
+test("usa no AHT de supervisores TNS somente filas com meta de 15 minutos", () => {
+  assert.equal(isSupervisorAhtQueue({ lob: "VIDEO", slaTargetMinutes: 15 }), true);
+  assert.equal(isSupervisorAhtQueue({ lob: "COMMENTS", slaTargetMinutes: 15 }), true);
+  assert.equal(isSupervisorAhtQueue({ lob: "VIDEO", slaTargetMinutes: 1_440 }), false);
+  assert.equal(isSupervisorAhtQueue({ lob: "COMMENTS", slaTargetMinutes: 10_080 }), false);
+  assert.equal(isSupervisorAhtQueue({ lob: "ADS", slaTargetMinutes: 1_440 }), true);
+});
 
 test("prioriza a qualidade KAP sobre a base TNS legada para o mesmo colaborador e dia", () => {
   const rows = mergeSupervisorQualityDailyRows(
