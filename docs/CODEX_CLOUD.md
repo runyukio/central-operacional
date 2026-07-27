@@ -33,7 +33,7 @@ Use `.env.example` as the checklist. Important groups:
 - Real Time uploads: `REALTIME_IMPORT_TOKEN`, `REALTIME_RETENTION_DAYS`.
 - Work-hour capture: `REALTIME_HOURS_AGENT_TOKEN`,
   `REALTIME_HOURS_IMPORT_TOKEN`.
-- Freshdesk/Freshchat integrations: `CEC_FRESHDESK_API_KEY`,
+- Freshdesk integrations: `CEC_FRESHDESK_API_KEY`,
   `CEC_FRESHDESK_REPORT_URL`.
 - Cron/webhook protection: `CRON_SECRET`.
 
@@ -87,4 +87,3 @@ npm run db:deploy
   services, or APIs.
 - Local capture agents and scheduled downloads are deployed to separate
   Windows/Mac machines; Codex Cloud should maintain their source files only.
-

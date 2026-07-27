@@ -51,8 +51,7 @@ export async function POST(request: Request) {
         referenceMonth: String(form.get("referenceMonth") ?? ""),
         employeeId: String(form.get("employeeId") ?? ""),
         finalized: String(form.get("finalized") ?? "") === "true",
-        invoiceNumber: String(form.get("invoiceNumber") ?? ""),
-        serviceDescription: String(form.get("serviceDescription") ?? ""),
+        validationToken: String(form.get("validationToken") ?? ""),
         file: fileValue instanceof File && fileValue.size > 0 ? fileValue : null
       })
       : { error: "Ação de Billing inválida.", status: 400 };

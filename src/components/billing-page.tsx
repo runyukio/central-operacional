@@ -3,14 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, CircleDollarSign, Download, Eye, FileSpreadsheet, FileText, LockKeyhole, Pencil, RefreshCw, Save, Search, Send, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 
-import { BillingFiscalInvoiceNumberHelp } from "@/components/billing-fiscal-invoice-number-help";
-import { EmptyState, PageHeader, Panel, StatCard, StatusBadge } from "@/components/ui/primitives";
 import {
-  BILLING_FISCAL_INVOICE_NUMBER_ERROR,
-  BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH,
-  isValidBillingFiscalInvoiceNumber,
-  normalizeBillingFiscalInvoiceNumber
-} from "@/lib/billing-fiscal-invoice";
+  BillingFiscalInvoiceUpload,
+  billingFiscalUploadIsReady,
+  EMPTY_BILLING_FISCAL_UPLOAD,
+  type BillingFiscalInvoiceUploadValue
+} from "@/components/billing-fiscal-invoice-upload";
+import { EmptyState, PageHeader, Panel, StatCard, StatusBadge } from "@/components/ui/primitives";
+import { calculateBillingFiscalExpectedAmount } from "@/lib/billing-fiscal-invoice";
 import { cn } from "@/lib/utils";
 
 type BillingPayload = {
@@ -93,6 +93,7 @@ type BillingPayload = {
       adjustmentTypes: string[];
       fiscalInvoice: null | {
         id: string;
+        accessKey: string;
         invoiceNumber: string;
         grossAmount: number;
         serviceDescription: string;
@@ -158,11 +159,7 @@ type BillingPayload = {
 
 type TabKey = "lob" | "employees" | "hours" | "adjustments" | "rates";
 
-type BillingFiscalDraft = {
-  invoiceNumber: string;
-  serviceDescription: string;
-  file: File | null;
-};
+type BillingFiscalDraft = BillingFiscalInvoiceUploadValue;
 
 type BulkAdjustmentResult = {
   fileName: string;
@@ -406,8 +403,7 @@ export function BillingPage() {
           form.append("referenceMonth", referenceMonth);
           form.append("employeeId", invoice.employeeId);
           form.append("finalized", "true");
-          form.append("invoiceNumber", fiscalDraft?.invoiceNumber ?? "");
-          form.append("serviceDescription", fiscalDraft?.serviceDescription ?? "");
+          form.append("validationToken", fiscalDraft?.validationToken ?? "");
           if (fiscalDraft?.file) form.append("file", fiscalDraft.file);
           return { method: "POST", body: form };
         })()
@@ -662,6 +658,7 @@ export function BillingPage() {
           {selectedInvoice ? (
             <EmployeeBillingDetail
               invoice={selectedInvoice}
+              referenceMonth={referenceMonth}
               saving={saving}
               detailsLoaded={activeTab === "hours"}
               exportHref={`/api/billing/export?referenceMonth=${encodeURIComponent(referenceMonth)}&employeeId=${encodeURIComponent(selectedInvoice.employeeId)}`}
@@ -819,11 +816,14 @@ function FiscalInvoiceModal({
         </header>
 
         <div className="space-y-4 p-5">
-          <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_180px]">
-            <FiscalInvoiceField label="Número / chave de acesso">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <FiscalInvoiceField label="Chave de acesso da NFS-e">
+              <p className="break-all font-mono text-sm font-black leading-6 text-navy-950">{fiscalInvoice.accessKey || "-"}</p>
+            </FiscalInvoiceField>
+            <FiscalInvoiceField label="Número da NFS-e">
               <p className="break-all font-mono text-sm font-black leading-6 text-navy-950">{fiscalInvoice.invoiceNumber}</p>
             </FiscalInvoiceField>
-            <FiscalInvoiceField label="Valor bruto">
+            <FiscalInvoiceField label="Valor do serviço na nota">
               <p className="text-lg font-black text-navy-950">{formatCurrency(fiscalInvoice.grossAmount)}</p>
             </FiscalInvoiceField>
           </div>
@@ -962,6 +962,7 @@ function BulkAdjustmentUpload({
 
 function EmployeeBillingDetail({
   invoice,
+  referenceMonth,
   saving,
   detailsLoaded,
   exportHref,
@@ -973,6 +974,7 @@ function EmployeeBillingDetail({
   onSetFinalized
 }: {
   invoice: BillingPayload["data"]["invoices"][number];
+  referenceMonth: string;
   saving: boolean;
   detailsLoaded: boolean;
   exportHref: string;
@@ -987,44 +989,30 @@ function EmployeeBillingDetail({
   const [localError, setLocalError] = useState("");
   const [finalizationOpen, setFinalizationOpen] = useState(false);
   const [fiscalError, setFiscalError] = useState("");
-  const [fiscalDraft, setFiscalDraft] = useState<BillingFiscalDraft>({
-    invoiceNumber: invoice.fiscalInvoice?.invoiceNumber ?? "",
-    serviceDescription: invoice.fiscalInvoice?.serviceDescription ?? "",
-    file: null
-  });
+  const [fiscalDraft, setFiscalDraft] = useState<BillingFiscalDraft>(EMPTY_BILLING_FISCAL_UPLOAD);
   const finalized = invoice.status === "FECHADO";
   const alreadyReleasedForReview = ["DISPONIVEL_APROVACAO", "APROVADO_COLABORADOR", "AGUARDANDO_SUPERVISOR", "AGUARDANDO_ADMIN"].includes(invoice.status);
+  const expectedFiscalAmount = calculateBillingFiscalExpectedAmount({
+    referenceMonth,
+    wbLogin: invoice.wbLogin,
+    grossAmount: invoice.grossAmount,
+    correctionAmount: invoice.correctionAmount,
+    finalAmount: invoice.finalAmount
+  });
 
   function openFinalizationForm() {
-    setFiscalDraft({
-      invoiceNumber: invoice.fiscalInvoice?.invoiceNumber ?? "",
-      serviceDescription: invoice.fiscalInvoice?.serviceDescription ?? "",
-      file: null
-    });
+    setFiscalDraft(EMPTY_BILLING_FISCAL_UPLOAD);
     setFiscalError("");
     setFinalizationOpen(true);
   }
 
   async function finalizeInvoice() {
     setFiscalError("");
-    if (!isValidBillingFiscalInvoiceNumber(fiscalDraft.invoiceNumber)) {
-      setFiscalError(BILLING_FISCAL_INVOICE_NUMBER_ERROR);
+    if (!billingFiscalUploadIsReady(fiscalDraft, invoice.fiscalInvoice, expectedFiscalAmount)) {
+      setFiscalError("Selecione a nota fiscal e aguarde a validação automática dos dados.");
       return;
     }
-    const description = fiscalDraft.serviceDescription.trim();
-    if (description.length < 3 || description.length > 1000) {
-      setFiscalError("A descrição do serviço deve ter entre 3 e 1.000 caracteres.");
-      return;
-    }
-    if (!fiscalDraft.file && !invoice.fiscalInvoice) {
-      setFiscalError("Anexe a nota fiscal em PDF, XML, PNG ou JPG.");
-      return;
-    }
-    const completed = await onSetFinalized(true, {
-      ...fiscalDraft,
-      invoiceNumber: fiscalDraft.invoiceNumber.trim(),
-      serviceDescription: description
-    });
+    const completed = await onSetFinalized(true, fiscalDraft);
     if (completed) setFinalizationOpen(false);
   }
 
@@ -1192,61 +1180,18 @@ function EmployeeBillingDetail({
             </div>
 
             <div className="space-y-4 p-5">
-              <div className="grid gap-4 md:grid-cols-2">
-                <Label text={<BillingFiscalInvoiceNumberHelp />}>
-                  <input
-                    value={fiscalDraft.invoiceNumber}
-                    onChange={(event) => setFiscalDraft({ ...fiscalDraft, invoiceNumber: normalizeBillingFiscalInvoiceNumber(event.target.value) })}
-                    inputMode="numeric"
-                    maxLength={BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH}
-                    placeholder="Até 4 dígitos"
-                    className="premium-control h-11 w-full px-3 text-sm font-bold"
-                  />
-                </Label>
-                <Label text="Valor bruto da nota">
-                  <div className="premium-control flex h-11 w-full items-center justify-between gap-3 bg-slate-50 px-3 text-sm font-black text-navy-950">
-                    <span>{formatCurrency(invoice.grossAmount)}</span>
-                    <LockKeyhole className="h-4 w-4 shrink-0 text-muted" />
-                  </div>
-                </Label>
-              </div>
-
-              <Label text="Descrição do serviço">
-                <textarea
-                  value={fiscalDraft.serviceDescription}
-                  onChange={(event) => setFiscalDraft({ ...fiscalDraft, serviceDescription: event.target.value.slice(0, 1000) })}
-                  maxLength={1000}
-                  placeholder="Descreva o serviço informado na nota fiscal"
-                  className="premium-control min-h-[110px] w-full px-3 py-2 text-sm font-semibold"
-                />
-              </Label>
-
-              <Label text="Anexo da nota fiscal">
-                <label className="flex min-h-20 cursor-pointer items-center gap-3 rounded-xl border border-dashed border-blue-200 bg-blue-50/50 px-4 py-3 transition hover:border-blue-400 hover:bg-blue-50">
-                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white text-blue-700 shadow-sm">
-                    <Upload className="h-5 w-5" />
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block truncate text-sm font-black text-navy-950">{fiscalDraft.file?.name ?? invoice.fiscalInvoice?.fileName ?? "Selecionar arquivo"}</span>
-                    <span className="mt-0.5 block text-xs font-semibold text-muted">PDF, XML, PNG ou JPG • máximo de 10 MB</span>
-                  </span>
-                  <input
-                    type="file"
-                    accept=".pdf,.xml,.png,.jpg,.jpeg"
-                    className="sr-only"
-                    onChange={(event) => setFiscalDraft({ ...fiscalDraft, file: event.target.files?.[0] ?? null })}
-                  />
-                </label>
-              </Label>
-
-              {invoice.fiscalInvoice && !fiscalDraft.file ? (
-                <p className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-800">
-                  O anexo já enviado será mantido. Selecione outro arquivo somente para substituí-lo.
-                </p>
-              ) : null}
+              <BillingFiscalInvoiceUpload
+                referenceMonth={referenceMonth}
+                employeeId={invoice.employeeId}
+                expectedGrossAmount={expectedFiscalAmount}
+                existing={invoice.fiscalInvoice}
+                disabled={saving}
+                value={fiscalDraft}
+                onChange={setFiscalDraft}
+              />
               {fiscalError ? <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-700">{fiscalError}</p> : null}
               <p className="text-xs font-semibold text-muted">
-                Ao confirmar, o valor bruto fica congelado, a nota é armazenada de forma privada e o lançamento é enviado ao Omie.
+                Basta anexar a nota. A chave, o número e o valor são lidos automaticamente; o fechamento só é liberado quando o valor do serviço confere com o bruto das horas somado à correção.
               </p>
             </div>
 
@@ -1254,7 +1199,12 @@ function EmployeeBillingDetail({
               <button type="button" disabled={saving} onClick={() => setFinalizationOpen(false)} className="premium-control inline-flex h-10 items-center justify-center px-4 text-sm font-black text-navy-950 disabled:opacity-60">
                 Cancelar
               </button>
-              <button type="button" disabled={saving} onClick={() => void finalizeInvoice()} className="premium-button inline-flex h-10 items-center justify-center gap-2 px-4 text-sm font-black disabled:opacity-60">
+              <button
+                type="button"
+                disabled={saving || !billingFiscalUploadIsReady(fiscalDraft, invoice.fiscalInvoice, expectedFiscalAmount)}
+                onClick={() => void finalizeInvoice()}
+                className="premium-button inline-flex h-10 items-center justify-center gap-2 px-4 text-sm font-black disabled:cursor-not-allowed disabled:opacity-60"
+              >
                 {saving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <LockKeyhole className="h-4 w-4" />}
                 {saving ? "Finalizando..." : "Confirmar e finalizar"}
               </button>

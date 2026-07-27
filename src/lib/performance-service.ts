@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { AuditAction, Prisma, type ScheduleStatus } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
+import { calculateCecQualityAggregate } from "@/lib/cec-quality";
 import {
   canAccessPerformance,
   canAccessPerformanceFramework,
@@ -80,6 +81,7 @@ export type PerformanceQuery = {
   month?: string;
   employeeId?: string;
   lob?: string;
+  slaTargetMinutes?: number;
   supervisorId?: string;
   role?: string;
   skill?: string;
@@ -89,29 +91,79 @@ export type PerformanceQuery = {
   sortBy?: PerformanceSortBy;
   sortDirection?: PerformanceSortDirection;
   granularity?: PerformanceProductionGranularity;
-  slaTargetMinutes?: number;
   metadataOnly?: boolean;
 };
 
 export type PerformanceQualityQuery = {
   startDate?: string;
   endDate?: string;
-  lob?: "ADS" | "VIDEO" | "COMMENTS";
+  lob?: "ADS" | "VIDEO" | "COMMENTS" | "CEC";
   view?: "monthly" | "weekly" | "daily";
   sortDirection?: "asc" | "desc";
 };
 
-export type PerformanceQualityScope = "ADS" | "TNS";
+export type PerformanceQualityScope = "ADS" | "TNS" | "CEC";
+
+export type SupervisorQualityDailyRow = {
+  supervisorId: string;
+  employeeId: string;
+  qualityDay: Date | string;
+  correct: number;
+  total: number;
+};
+
+export function mergeSupervisorQualityDailyRows(
+  preferredRows: SupervisorQualityDailyRow[],
+  fallbackRows: SupervisorQualityDailyRow[]
+) {
+  const selectedRows = new Map<string, SupervisorQualityDailyRow>();
+  const rowKey = (row: SupervisorQualityDailyRow) => {
+    const qualityDay = row.qualityDay instanceof Date ? row.qualityDay : new Date(row.qualityDay);
+    const normalizedDay = Number.isNaN(qualityDay.getTime())
+      ? String(row.qualityDay)
+      : qualityDay.toISOString().slice(0, 10);
+    return `${row.employeeId}:${normalizedDay}`;
+  };
+
+  for (const row of fallbackRows) {
+    if (Number(row.total ?? 0) > 0) selectedRows.set(rowKey(row), row);
+  }
+  for (const row of preferredRows) {
+    if (Number(row.total ?? 0) > 0) selectedRows.set(rowKey(row), row);
+  }
+
+  const totalsBySupervisor = new Map<string, { supervisorId: string; correct: number; total: number }>();
+  for (const row of selectedRows.values()) {
+    const aggregate = totalsBySupervisor.get(row.supervisorId) ?? {
+      supervisorId: row.supervisorId,
+      correct: 0,
+      total: 0
+    };
+    aggregate.correct += Number(row.correct ?? 0);
+    aggregate.total += Number(row.total ?? 0);
+    totalsBySupervisor.set(row.supervisorId, aggregate);
+  }
+
+  return Array.from(totalsBySupervisor.values()).sort((left, right) =>
+    left.supervisorId.localeCompare(right.supervisorId)
+  );
+}
+
+export function isSupervisorAhtQueue(metadata: { lob: string; slaTargetMinutes: number | null }) {
+  const isTnsQueue = metadata.lob === "VIDEO" || metadata.lob === "COMMENTS";
+  return metadata.lob === "ADS" || (isTnsQueue && metadata.slaTargetMinutes === 15);
+}
 
 export type PerformanceAgentsQuery = {
   view?: "monthly" | "weekly" | "daily";
   startDate?: string;
   endDate?: string;
   lob?: string;
+  slaTargetMinutes?: number;
   supervisorId?: string;
   shiftId?: string;
   search?: string;
-  sortBy?: "employeeName" | "wbLogin" | "lob" | "supervisor" | "shift" | "outputTotal" | "submit" | "aht";
+  sortBy?: "employeeName" | "wbLogin" | "lob" | "supervisor" | "shift" | "outputTotal" | "submit" | "aht" | "quality";
   sortDirection?: "asc" | "desc";
   page?: number;
   pageSize?: number;
@@ -615,6 +667,7 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
 export async function getPerformanceQualityDashboard(actor: Actor, query: PerformanceQualityQuery = {}) {
   const user = await requireActiveUser(actor);
   if (!canAccessPerformance(permissionUser(user))) throw new PerformanceError("Você não tem permissão para acessar Performance.", 403);
+  if (query.lob === "CEC") return getPerformanceCecQualityDashboard(user, query);
 
   const view = query.view === "monthly" || query.view === "weekly" ? query.view : "daily";
   const sortDirection = query.sortDirection === "asc" ? "asc" : "desc";
@@ -713,7 +766,7 @@ export async function getPerformanceQualityDashboard(actor: Actor, query: Perfor
     } : null,
     granularity: view,
     selectedLob,
-    filters: { lobs: ["ADS", "VIDEO", "COMMENTS"] },
+    filters: { lobs: ["ADS", "VIDEO", "COMMENTS", "CEC"] },
     summary: serializeQualityAggregate(summary.correct, summary.total),
     trend: trendRows.map((row) => ({
       key: formatDateKey(row.periodStart),
@@ -728,6 +781,116 @@ export async function getPerformanceQualityDashboard(actor: Actor, query: Perfor
       supervisor: row.supervisor,
       lastAuditAt: row.lastAuditAt.toISOString(),
       ...serializeQualityAggregate(row.correct, row.total)
+    })),
+    lastImport: latestImport ? {
+      ...latestImport,
+      importedAt: latestImport.importedAt.toISOString()
+    } : null
+  };
+}
+
+async function getPerformanceCecQualityDashboard(user: AuthenticatedUser, query: PerformanceQualityQuery) {
+  const view = query.view === "monthly" || query.view === "weekly" ? query.view : "daily";
+  const sortDirection = query.sortDirection === "asc" ? "asc" : "desc";
+  const sortDirectionSql = sortDirection === "asc" ? Prisma.sql`ASC` : Prisma.sql`DESC`;
+  const bucketSql = cecQualityBucketSql(view);
+  const [range] = await prisma.$queryRaw<Array<{ startDate: Date | null; endDate: Date | null }>>(Prisma.sql`
+    SELECT MIN(q."qualityDate") AS "startDate", MAX(q."qualityDate") AS "endDate"
+    FROM "CecQualityRecord" q
+    WHERE 1 = 1 ${visibleQualityRecordSql}
+  `);
+  const fallback = getDefaultDatePeriod();
+  const start = parseDate(query.startDate) ?? range?.startDate ?? fallback.start;
+  const end = parseDate(query.endDate) ?? range?.endDate ?? fallback.end;
+  if (start > end) throw new PerformanceError("A data inicial não pode ser posterior à data final.", 400);
+
+  const scopedSql = Prisma.sql`
+    FROM "CecQualityRecord" q
+    LEFT JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
+    LEFT JOIN "EmployeeProfile" s ON s."id" = e."supervisorId"
+    WHERE q."qualityDate" >= ${start}
+      AND q."qualityDate" <= ${end}
+      ${visibleQualityRecordSql}
+  `;
+
+  const [summaryRows, trendRows, agentRows, latestImport] = await Promise.all([
+    prisma.$queryRaw<Array<{ pass: number; fail: number }>>(Prisma.sql`
+      SELECT
+        COALESCE(SUM(q."passQuantity"), 0)::integer AS "pass",
+        COALESCE(SUM(q."failQuantity"), 0)::integer AS "fail"
+      ${scopedSql}
+    `),
+    prisma.$queryRaw<Array<{ periodStart: Date; pass: number; fail: number }>>(Prisma.sql`
+      SELECT
+        ${bucketSql} AS "periodStart",
+        COALESCE(SUM(q."passQuantity"), 0)::integer AS "pass",
+        COALESCE(SUM(q."failQuantity"), 0)::integer AS "fail"
+      ${scopedSql}
+      GROUP BY ${bucketSql}
+      ORDER BY ${bucketSql} ASC
+    `),
+    prisma.$queryRaw<Array<{
+      employeeId: string;
+      employeeName: string;
+      wbLogin: string;
+      supervisor: string;
+      pass: number;
+      fail: number;
+      lastAuditAt: Date;
+    }>>(Prisma.sql`
+      SELECT
+        q."employeeId" AS "employeeId",
+        COALESCE(e."fullName", q."wbLogin") AS "employeeName",
+        q."wbLogin" AS "wbLogin",
+        COALESCE(s."fullName", 'Sem supervisor') AS "supervisor",
+        COALESCE(SUM(q."passQuantity"), 0)::integer AS "pass",
+        COALESCE(SUM(q."failQuantity"), 0)::integer AS "fail",
+        MAX(q."qualityDate") AS "lastAuditAt"
+      ${scopedSql}
+      AND q."employeeId" IS NOT NULL
+      GROUP BY q."employeeId", e."fullName", q."wbLogin", s."fullName"
+      ORDER BY
+        (SUM(q."passQuantity")::double precision
+          / NULLIF(SUM(q."passQuantity" + q."failQuantity"), 0)) ${sortDirectionSql},
+        SUM(q."passQuantity") DESC
+      LIMIT 500
+    `),
+    prisma.performanceImportBatch.findFirst({
+      where: { type: "CEC_QUALITY", status: { not: "PROCESSING" } },
+      orderBy: { importedAt: "desc" },
+      select: { fileName: true, importedAt: true, rowsValid: true, rowsError: true, status: true }
+    })
+  ]);
+
+  const summary = summaryRows[0] ?? { pass: 0, fail: 0 };
+  return {
+    mode: "quality" as const,
+    canImport: canImportPerformance(permissionUser(user)),
+    period: {
+      startDate: formatDateKey(start),
+      endDate: formatDateKey(end)
+    },
+    dataRange: range?.startDate && range.endDate ? {
+      startDate: formatDateKey(range.startDate),
+      endDate: formatDateKey(range.endDate)
+    } : null,
+    granularity: view,
+    selectedLob: "CEC",
+    filters: { lobs: ["ADS", "VIDEO", "COMMENTS", "CEC"] },
+    summary: serializeCecQualityAggregate(summary.pass, summary.fail),
+    trend: trendRows.map((row) => ({
+      key: formatDateKey(row.periodStart),
+      label: qualityBucketLabel(row.periodStart, view),
+      ...serializeCecQualityAggregate(row.pass, row.fail)
+    })),
+    agents: agentRows.map((row) => ({
+      employeeId: row.employeeId,
+      employeeName: row.employeeName,
+      wbLogin: row.wbLogin,
+      lob: "CEC",
+      supervisor: row.supervisor,
+      lastAuditAt: row.lastAuditAt.toISOString(),
+      ...serializeCecQualityAggregate(row.pass, row.fail)
     })),
     lastImport: latestImport ? {
       ...latestImport,
@@ -779,7 +942,12 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     employeeOptions.map((employee) => employee.shift),
     (item) => item.id
   ).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
-  const filters = { lobs: validLobs, supervisors, shifts };
+  const filters = {
+    lobs: validLobs,
+    supervisors,
+    shifts,
+    slaTargets: performanceSlaTargetOptions(requestedLob)
+  };
   const dataRange = selectedRange.min && selectedRange.max
     ? { startDate: formatDateKey(selectedRange.min), endDate: formatDateKey(selectedRange.max) }
     : !requestedLob && allRangeDates.length
@@ -793,7 +961,7 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     return emptyPerformanceAgentsPayload(start, end, dataRange, filters, view);
   }
 
-  const queueSql = performanceQueueFilterSql(requestedLob);
+  const queueSql = performanceQueueFilterSql(requestedLob, query.slaTargetMinutes);
   const ownProductionEmployeeSql = ownEmployeeId ? Prisma.sql`AND p."employeeId" = ${ownEmployeeId}` : Prisma.empty;
   const ownCpdEmployeeSql = ownEmployeeId ? Prisma.sql`AND c."employeeId" = ${ownEmployeeId}` : Prisma.empty;
   type AgentDashboardRawRow = {
@@ -809,8 +977,9 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     moderationSeconds: number;
     activeDates: Date[];
   };
-  const rawRows: AgentDashboardRawRow[] = requestedLob === "CEC"
-    ? await prisma.$queryRaw<AgentDashboardRawRow[]>(Prisma.sql`
+  const [rawRows, qualityByIdentity] = await Promise.all([
+    requestedLob === "CEC"
+    ? prisma.$queryRaw<AgentDashboardRawRow[]>(Prisma.sql`
       SELECT
         c."employeeId" AS "employeeId",
         COALESCE(e."fullName", c."wbLogin") AS "employeeName",
@@ -843,7 +1012,7 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
         e."shiftId",
         sh."name"
     `)
-    : await prisma.$queryRaw<AgentDashboardRawRow[]>(Prisma.sql`
+    : prisma.$queryRaw<AgentDashboardRawRow[]>(Prisma.sql`
     SELECT
       p."employeeId" AS "employeeId",
       COALESCE(e."fullName", p."wbLogin") AS "employeeName",
@@ -874,7 +1043,9 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
       e."shiftId",
       sh."name",
       p."queueId"
-  `);
+    `),
+    getPerformanceAgentQualityByIdentity(requestedLob, start, end, ownEmployeeId)
+  ]);
 
   const aggregateMap = new Map<string, {
     employeeId: string | null;
@@ -915,8 +1086,18 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
     aggregateMap.set(key, current);
   }
 
+  const rowsWithQuality = Array.from(aggregateMap.values()).map((row) => {
+    const quality = qualityByIdentity.get(row.employeeId ? `employee:${row.employeeId}` : `wb:${normalizePerformanceWbLogin(row.wbLogin)}`);
+    return {
+      ...row,
+      qualityCorrect: quality?.correct ?? 0,
+      qualityTotal: quality?.total ?? 0,
+      qualityErrors: quality?.errors ?? 0,
+      quality: quality?.quality ?? 0
+    };
+  });
   const search = query.search?.trim().toLocaleLowerCase("pt-BR") ?? "";
-  const filteredRows = Array.from(aggregateMap.values()).filter((row) => {
+  const filteredRows = rowsWithQuality.filter((row) => {
     if (query.supervisorId && row.supervisorId !== query.supervisorId) return false;
     if (query.shiftId && row.shiftId !== query.shiftId) return false;
     if (!search) return true;
@@ -935,8 +1116,12 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
   const submit = filteredRows.reduce((total, row) => total + row.submit, 0);
   const moderationSeconds = filteredRows.reduce((total, row) => total + row.moderationSeconds, 0);
   const activeDates = new Set(filteredRows.flatMap((row) => Array.from(row.activeDates)));
+  const cpdDays = filteredRows.reduce((total, row) => total + row.activeDates.size, 0);
   const outputAveragePerDay = activeDates.size > 0 ? submit / activeDates.size : 0;
+  const cpdAverage = cpdDays > 0 ? submit / cpdDays : 0;
   const agents = new Set(filteredRows.map((row) => row.employeeId || `wb:${row.wbLogin.toLocaleLowerCase("pt-BR")}`)).size;
+  const qualityCorrect = filteredRows.reduce((total, row) => total + row.qualityCorrect, 0);
+  const qualityTotal = filteredRows.reduce((total, row) => total + row.qualityTotal, 0);
 
   return {
     mode: "agents" as const,
@@ -951,7 +1136,15 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
       outputAveragePerDay: round2(outputAveragePerDay),
       daysWithData: activeDates.size,
       moderationSeconds,
-      ahtSeconds: submit > 0 ? round2(moderationSeconds / submit) : 0
+      ahtSeconds: submit > 0 ? round2(moderationSeconds / submit) : 0,
+      ahtMetric: requestedLob === "CEC" ? "CPD" as const : "AHT" as const,
+      cpdAverage: requestedLob === "CEC" ? round2(cpdAverage) : 0,
+      cpdTickets: requestedLob === "CEC" ? Math.round(submit) : 0,
+      cpdDays: requestedLob === "CEC" ? cpdDays : 0,
+      qualityCorrect,
+      qualityTotal,
+      qualityErrors: Math.max(0, qualityTotal - qualityCorrect),
+      quality: qualityTotal > 0 ? round2((qualityCorrect / qualityTotal) * 100) : 0
     },
     pagination: { page, pageSize, totalRows, totalPages },
     sort: { sortBy, sortDirection },
@@ -968,7 +1161,15 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
       outputAveragePerDay: round2(row.outputAveragePerDay),
       daysWithData: row.activeDates.size,
       moderationSeconds: round2(row.moderationSeconds),
-      ahtSeconds: row.submit > 0 ? round2(row.moderationSeconds / row.submit) : 0
+      ahtSeconds: row.submit > 0 ? round2(row.moderationSeconds / row.submit) : 0,
+      ahtMetric: requestedLob === "CEC" ? "CPD" as const : "AHT" as const,
+      cpdAverage: requestedLob === "CEC" ? round2(row.outputAveragePerDay) : 0,
+      cpdTickets: requestedLob === "CEC" ? Math.round(row.submit) : 0,
+      cpdDays: requestedLob === "CEC" ? row.activeDates.size : 0,
+      qualityCorrect: row.qualityCorrect,
+      qualityTotal: row.qualityTotal,
+      qualityErrors: row.qualityErrors,
+      quality: row.quality
     }))
   };
 }
@@ -1004,6 +1205,15 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
   })).filter((employee) => isAgentJobTitle(employee.roleTitle));
 
   const employeeIds = employees.map((employee) => employee.id);
+  const adsQualityEmployeeIds = employees
+    .filter((employee) => getQualityRuleByEmployee(employee) === "ADS_QUALITY")
+    .map((employee) => employee.id);
+  const tnsQualityEmployeeIds = employees
+    .filter((employee) => getQualityRuleByEmployee(employee) === "TNS_QUALITY")
+    .map((employee) => employee.id);
+  const cecQualityEmployeeIds = employees
+    .filter((employee) => getQualityRuleByEmployee(employee) === "CEC_QUALITY")
+    .map((employee) => employee.id);
   const supervisorNames = new Map<string, string>();
   const employeesBySupervisor = new Map<string, typeof employees>();
   for (const employee of employees) {
@@ -1020,9 +1230,18 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
 
   const ahtQueueIds = allPerformanceQueueIds().filter((queueId) => {
     const metadata = getPerformanceQueueMetadataById(queueId);
-    return metadata.lob === "ADS" || (metadata.lob === "VIDEO" && metadata.slaTargetMinutes === 15);
+    return isSupervisorAhtQueue(metadata);
   });
-  const [schedules, moods, ahtRows, cecCpdRows, kapQualityRows, cecQualityRows] = await Promise.all([
+  const [
+    schedules,
+    moods,
+    ahtRows,
+    cecCpdRows,
+    adsQualityRows,
+    tnsKapQualityDailyRows,
+    tnsLegacyQualityDailyRows,
+    cecQualityRows
+  ] = await Promise.all([
     prisma.schedule.findMany({
       where: { employeeId: { in: employeeIds }, date: { gte: period.start, lte: period.end }, deletedAt: null },
       select: { employeeId: true, status: true }
@@ -1058,34 +1277,73 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
         AND e."supervisorId" IS NOT NULL
       GROUP BY e."supervisorId"
     `),
-    prisma.$queryRaw<Array<{ supervisorId: string; correct: number; total: number }>>(Prisma.sql`
+    adsQualityEmployeeIds.length ? prisma.$queryRaw<Array<{ supervisorId: string; correct: number; total: number }>>(Prisma.sql`
       SELECT
         e."supervisorId" AS "supervisorId",
         COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::integer AS "correct",
         COUNT(DISTINCT q."concatKey")::integer AS "total"
       FROM "QualityRecord" q
       INNER JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
-      WHERE q."employeeId" IN (${Prisma.join(employeeIds)})
+      WHERE q."employeeId" IN (${Prisma.join(adsQualityEmployeeIds)})
         AND q."auditDate" >= ${period.start}
         AND q."auditDate" <= ${period.end}
         AND e."supervisorId" IS NOT NULL
         ${visibleQualityRecordSql}
       GROUP BY e."supervisorId"
-    `),
-    prisma.$queryRaw<Array<{ supervisorId: string; correct: number; total: number }>>(Prisma.sql`
+    `) : Promise.resolve([]),
+    tnsQualityEmployeeIds.length ? prisma.$queryRaw<SupervisorQualityDailyRow[]>(Prisma.sql`
+      SELECT
+        e."supervisorId" AS "supervisorId",
+        q."employeeId" AS "employeeId",
+        DATE_TRUNC('day', q."auditDate") AS "qualityDay",
+        COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::integer AS "correct",
+        COUNT(DISTINCT q."concatKey")::integer AS "total"
+      FROM "QualityRecord" q
+      INNER JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
+      WHERE q."employeeId" IN (${Prisma.join(tnsQualityEmployeeIds)})
+        AND q."auditDate" >= ${period.start}
+        AND q."auditDate" <= ${period.end}
+        AND e."supervisorId" IS NOT NULL
+        ${visibleQualityRecordSql}
+      GROUP BY e."supervisorId", q."employeeId", DATE_TRUNC('day', q."auditDate")
+    `) : Promise.resolve([]),
+    tnsQualityEmployeeIds.length ? prisma.$queryRaw<SupervisorQualityDailyRow[]>(Prisma.sql`
+      SELECT
+        e."supervisorId" AS "supervisorId",
+        q."employeeId" AS "employeeId",
+        DATE_TRUNC('day', q."auditDate") AS "qualityDay",
+        GREATEST(
+          COALESCE(SUM(q."sampling"), 0)
+            - COALESCE(SUM(q."mislabeled" + q."leakage" + q."falsePositive"), 0),
+          0
+        )::integer AS "correct",
+        COALESCE(SUM(q."sampling"), 0)::integer AS "total"
+      FROM "TnsQualityRecord" q
+      INNER JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
+      WHERE q."employeeId" IN (${Prisma.join(tnsQualityEmployeeIds)})
+        AND q."auditDate" >= ${period.start}
+        AND q."auditDate" <= ${period.end}
+        AND e."supervisorId" IS NOT NULL
+      GROUP BY e."supervisorId", q."employeeId", DATE_TRUNC('day', q."auditDate")
+    `) : Promise.resolve([]),
+    cecQualityEmployeeIds.length ? prisma.$queryRaw<Array<{ supervisorId: string; correct: number; total: number }>>(Prisma.sql`
       SELECT
         e."supervisorId" AS "supervisorId",
         COALESCE(SUM(q."passQuantity"), 0)::integer AS "correct",
         COALESCE(SUM(q."passQuantity" + q."failQuantity"), 0)::integer AS "total"
       FROM "CecQualityRecord" q
       INNER JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
-      WHERE q."employeeId" IN (${Prisma.join(employeeIds)})
+      WHERE q."employeeId" IN (${Prisma.join(cecQualityEmployeeIds)})
         AND q."qualityDate" >= ${period.start}
         AND q."qualityDate" <= ${period.end}
         AND e."supervisorId" IS NOT NULL
       GROUP BY e."supervisorId"
-    `)
+    `) : Promise.resolve([])
   ]);
+  const tnsQualityRows = mergeSupervisorQualityDailyRows(
+    tnsKapQualityDailyRows,
+    tnsLegacyQualityDailyRows
+  );
 
   const supervisorByEmployee = new Map(employees.map((employee) => [employee.id, employee.supervisorId!]));
   const aggregates = new Map<string, {
@@ -1141,7 +1399,7 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
     aggregate.cpdTickets += Number(row.tickets ?? 0);
     aggregate.cpdDays += Number(row.days ?? 0);
   }
-  for (const rows of [kapQualityRows, cecQualityRows]) {
+  for (const rows of [adsQualityRows, tnsQualityRows, cecQualityRows]) {
     for (const row of rows) {
       const aggregate = ensureAggregate(row.supervisorId);
       aggregate.qualityCorrect += Number(row.correct ?? 0);
@@ -1189,6 +1447,8 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
     moodResponses: total.moodResponses + row.moodResponses,
     submit: total.submit + row.submit,
     moderationSeconds: total.moderationSeconds + row.moderationSeconds,
+    cpdTickets: total.cpdTickets + row.cpdTickets,
+    cpdDays: total.cpdDays + row.cpdDays,
     qualityCorrect: total.qualityCorrect + row.qualityCorrect,
     qualityTotal: total.qualityTotal + row.qualityTotal
   }), {
@@ -1202,6 +1462,8 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
     moodResponses: 0,
     submit: 0,
     moderationSeconds: 0,
+    cpdTickets: 0,
+    cpdDays: 0,
     qualityCorrect: 0,
     qualityTotal: 0
   });
@@ -1227,6 +1489,10 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
       submit: summary.submit,
       moderationSeconds: round2(summary.moderationSeconds),
       ahtSeconds: summary.submit > 0 ? round2(summary.moderationSeconds / summary.submit) : 0,
+      ahtMetric: "AHT" as const,
+      cpdAverage: summary.cpdDays > 0 ? round2(summary.cpdTickets / summary.cpdDays) : 0,
+      cpdTickets: Math.round(summary.cpdTickets),
+      cpdDays: summary.cpdDays,
       qualityCorrect: summary.qualityCorrect,
       qualityTotal: summary.qualityTotal,
       quality: summary.qualityTotal > 0 ? round2((summary.qualityCorrect / summary.qualityTotal) * 100) : 0
@@ -1261,6 +1527,10 @@ function emptyPerformanceSupervisorsPayload(
       submit: 0,
       moderationSeconds: 0,
       ahtSeconds: 0,
+      ahtMetric: "AHT" as const,
+      cpdAverage: 0,
+      cpdTickets: 0,
+      cpdDays: 0,
       qualityCorrect: 0,
       qualityTotal: 0,
       quality: 0
@@ -1322,6 +1592,7 @@ function emptyPerformanceAgentsPayload(
     lobs: string[];
     supervisors: Array<{ id: string; fullName: string }>;
     shifts: Array<{ id: string; name: string }>;
+    slaTargets: number[];
   },
   view: "monthly" | "weekly" | "daily"
 ) {
@@ -1332,7 +1603,22 @@ function emptyPerformanceAgentsPayload(
     dataRange,
     selectedLob: "",
     filters,
-    summary: { agents: 0, submit: 0, outputAveragePerDay: 0, daysWithData: 0, moderationSeconds: 0, ahtSeconds: 0 },
+    summary: {
+      agents: 0,
+      submit: 0,
+      outputAveragePerDay: 0,
+      daysWithData: 0,
+      moderationSeconds: 0,
+      ahtSeconds: 0,
+      ahtMetric: "AHT" as const,
+      cpdAverage: 0,
+      cpdTickets: 0,
+      cpdDays: 0,
+      qualityCorrect: 0,
+      qualityTotal: 0,
+      qualityErrors: 0,
+      quality: 0
+    },
     pagination: { page: 1, pageSize: 50, totalRows: 0, totalPages: 1 },
     sort: { sortBy: "submit" as const, sortDirection: "desc" as const },
     agents: []
@@ -1344,20 +1630,24 @@ function uniqueBy<T>(items: T[], key: (item: T) => string) {
 }
 
 function comparePerformanceAgentRows(
-  a: { employeeName: string; wbLogin: string; lob: string; supervisor: string; shift: string; submit: number; outputAveragePerDay: number; moderationSeconds: number },
-  b: { employeeName: string; wbLogin: string; lob: string; supervisor: string; shift: string; submit: number; outputAveragePerDay: number; moderationSeconds: number },
+  a: { employeeName: string; wbLogin: string; lob: string; supervisor: string; shift: string; submit: number; outputAveragePerDay: number; moderationSeconds: number; quality: number; qualityTotal: number },
+  b: { employeeName: string; wbLogin: string; lob: string; supervisor: string; shift: string; submit: number; outputAveragePerDay: number; moderationSeconds: number; quality: number; qualityTotal: number },
   sortBy: NonNullable<PerformanceAgentsQuery["sortBy"]>,
   direction: "asc" | "desc"
 ) {
+  if (sortBy === "quality" && (a.qualityTotal <= 0 || b.qualityTotal <= 0)) {
+    if (a.qualityTotal <= 0 && b.qualityTotal <= 0) return 0;
+    return a.qualityTotal <= 0 ? 1 : -1;
+  }
   const aValue = sortBy === "aht"
-    ? (a.submit > 0 ? a.moderationSeconds / a.submit : -1)
+    ? (a.lob === "CEC" ? a.outputAveragePerDay : a.submit > 0 ? a.moderationSeconds / a.submit : -1)
     : sortBy === "outputTotal"
       ? a.submit
     : sortBy === "submit"
       ? a.outputAveragePerDay
       : a[sortBy];
   const bValue = sortBy === "aht"
-    ? (b.submit > 0 ? b.moderationSeconds / b.submit : -1)
+    ? (b.lob === "CEC" ? b.outputAveragePerDay : b.submit > 0 ? b.moderationSeconds / b.submit : -1)
     : sortBy === "outputTotal"
       ? b.submit
     : sortBy === "submit"
@@ -1369,6 +1659,78 @@ function comparePerformanceAgentRows(
   return direction === "asc" ? result : -result;
 }
 
+type PerformanceAgentQualityAggregate = {
+  correct: number;
+  total: number;
+  errors: number;
+  quality: number;
+};
+
+async function getPerformanceAgentQualityByIdentity(
+  requestedLob: string,
+  start: Date,
+  end: Date,
+  ownEmployeeId: string | null
+) {
+  type QualityByAgentRawRow = {
+    employeeId: string | null;
+    wbLogin: string;
+    correct: number;
+    total: number;
+  };
+  const ownQualityEmployeeSql = ownEmployeeId ? Prisma.sql`AND q."employeeId" = ${ownEmployeeId}` : Prisma.empty;
+  const rows = requestedLob === "CEC"
+    ? await prisma.$queryRaw<QualityByAgentRawRow[]>(Prisma.sql`
+      SELECT
+        q."employeeId" AS "employeeId",
+        MAX(COALESCE(e."wbLogin", q."wbLogin")) AS "wbLogin",
+        COALESCE(SUM(q."passQuantity"), 0)::double precision AS "correct",
+        COALESCE(SUM(q."passQuantity" + q."failQuantity"), 0)::double precision AS "total"
+      FROM "CecQualityRecord" q
+      LEFT JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
+      WHERE q."qualityDate" >= ${start}
+        AND q."qualityDate" <= ${end}
+        ${ownQualityEmployeeSql}
+        ${visibleQualityRecordSql}
+      GROUP BY
+        q."employeeId",
+        CASE WHEN q."employeeId" IS NULL THEN LOWER(TRIM(q."wbLogin")) ELSE '' END
+    `)
+    : await prisma.$queryRaw<QualityByAgentRawRow[]>(Prisma.sql`
+      SELECT
+        q."employeeId" AS "employeeId",
+        MAX(COALESCE(e."wbLogin", q."wbLogin")) AS "wbLogin",
+        COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::double precision AS "correct",
+        COUNT(DISTINCT q."concatKey")::double precision AS "total"
+      FROM "QualityRecord" q
+      LEFT JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
+      LEFT JOIN "Lob" l ON l."id" = COALESCE(q."lobId", e."lobId")
+      WHERE q."auditDate" >= ${start}
+        AND q."auditDate" <= ${end}
+        ${requestedLob === "ADS" || requestedLob === "PROJECT"
+          ? Prisma.sql`AND UPPER(COALESCE(l."name", '')) IN ('ADS', 'PROJECT')`
+          : Prisma.sql`AND UPPER(COALESCE(l."name", '')) = ${requestedLob}`}
+        ${ownQualityEmployeeSql}
+        ${visibleQualityRecordSql}
+      GROUP BY
+        q."employeeId",
+        CASE WHEN q."employeeId" IS NULL THEN LOWER(TRIM(q."wbLogin")) ELSE '' END
+    `);
+
+  const qualityByIdentity = new Map<string, PerformanceAgentQualityAggregate>();
+  for (const row of rows) {
+    const aggregate = serializeQualityAggregate(row.correct, row.total);
+    if (row.employeeId) qualityByIdentity.set(`employee:${row.employeeId}`, aggregate);
+    const wbLogin = normalizePerformanceWbLogin(row.wbLogin);
+    if (wbLogin) qualityByIdentity.set(`wb:${wbLogin}`, aggregate);
+  }
+  return qualityByIdentity;
+}
+
+function normalizePerformanceWbLogin(value: string) {
+  return String(value ?? "").trim().toLocaleLowerCase("pt-BR");
+}
+
 function serializeQualityAggregate(correct: number, total: number) {
   const safeCorrect = Number(correct ?? 0);
   const safeTotal = Number(total ?? 0);
@@ -1378,6 +1740,10 @@ function serializeQualityAggregate(correct: number, total: number) {
     errors: Math.max(0, safeTotal - safeCorrect),
     quality: safeTotal > 0 ? round2((safeCorrect / safeTotal) * 100) : 0
   };
+}
+
+function serializeCecQualityAggregate(pass: number, fail: number) {
+  return calculateCecQualityAggregate(Number(pass ?? 0), Number(fail ?? 0));
 }
 
 export async function previewQualityImport(actor: Actor, rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
@@ -1432,6 +1798,14 @@ export async function importQualitySnapshotChunk(
 ) {
   const user = await requireActiveUser(actor);
   requireImportPermission(user);
+  if (qualityScope === "CEC") {
+    const preview = await previewCecQualityRows(rawRows, {
+      rowNumberOffset,
+      skipExistingCheck: true
+    });
+    const imported = await commitCecQualityRows(user, preview.rows, fileName, batchId);
+    return { imported, preview: preview.summary };
+  }
   const preview = await previewQualityRows(rawRows, {
     rowNumberOffset,
     qualityScope,
@@ -1457,6 +1831,38 @@ export async function finalizeQualitySnapshotImport(
     throw new PerformanceError("Lote de Qualidade em processamento não encontrado.", 400);
   }
   if (!batch.rowsValid) throw new PerformanceError("Não há linhas válidas para substituir a base de Qualidade.", 400);
+
+  if (qualityScope === "CEC") {
+    const result = await prisma.$transaction(async (transaction) => {
+      const recordsDeleted = await transaction.cecQualityRecord.deleteMany({
+        where: {
+          OR: [{ importBatchId: null }, { importBatchId: { not: batchIdToKeep } }]
+        }
+      });
+      await transaction.$executeRaw(buildCecQualitySnapshotPromotionSql(batchIdToKeep));
+      const batchesDeleted = await transaction.performanceImportBatch.deleteMany({
+        where: { type: batchType, id: { not: batchIdToKeep } }
+      });
+      await transaction.performanceImportBatch.update({
+        where: { id: batchIdToKeep },
+        data: { status: batch.rowsError ? "PARTIAL" : "SUCCESS", importedAt: new Date() }
+      });
+      return { recordsDeleted: recordsDeleted.count, batchesDeleted: batchesDeleted.count };
+    }, { maxWait: 10_000, timeout: 120_000 });
+
+    await auditImport(user.id, batchType, batchIdToKeep, {
+      fileName: batch.fileName,
+      qualityScope,
+      rowsValid: batch.rowsValid,
+      rowsError: batch.rowsError
+    });
+    return {
+      batchIdKept: batchIdToKeep,
+      qualityScope,
+      qualityRowsDeleted: result.recordsDeleted,
+      importBatchesDeleted: result.batchesDeleted
+    };
+  }
 
   const lobIds = await qualityScopeLobIds(qualityScope);
   const result = await prisma.$transaction(async (transaction) => {
@@ -1502,6 +1908,13 @@ export async function discardQualitySnapshotImport(
     select: { id: true, type: true, status: true }
   });
   if (!batch || batch.type !== qualityBatchType(qualityScope) || batch.status !== "PROCESSING") return;
+  if (qualityScope === "CEC") {
+    await prisma.$transaction([
+      prisma.cecQualityRecord.deleteMany({ where: { importBatchId: batchId } }),
+      prisma.performanceImportBatch.delete({ where: { id: batchId } })
+    ]);
+    return;
+  }
   await prisma.$transaction([
     prisma.qualityRecord.deleteMany({ where: { importBatchId: batchId } }),
     prisma.performanceImportBatch.delete({ where: { id: batchId } })
@@ -1525,6 +1938,9 @@ export async function previewCecQualityImport(actor: Actor, rawRows: Record<stri
 }
 
 export async function commitQualityRawImport(actor: Actor, rawRows: Record<string, unknown>[], fileName = "qualidade.xlsx", batchId?: string, rowNumberOffset = 0, qualityScope: PerformanceQualityScope = "ADS") {
+  if (qualityScope === "CEC") {
+    return commitCecQualityRawImport(actor, rawRows, fileName, batchId, rowNumberOffset);
+  }
   const user = await requireActiveUser(actor);
   requireImportPermission(user);
   const preview = await previewQualityRows(rawRows, { rowNumberOffset, qualityScope });
@@ -1606,6 +2022,26 @@ export async function replaceQualitySnapshot(actor: Actor, batchIdToKeep: string
   const user = await requireActiveUser(actor);
   requireImportPermission(user);
   if (!batchIdToKeep) throw new PerformanceError("Lote de Qualidade obrigatório para substituir a base.", 400);
+  if (qualityScope === "CEC") {
+    const result = await prisma.$transaction(async (transaction) => {
+      const recordsDeleted = await transaction.cecQualityRecord.deleteMany({
+        where: {
+          OR: [{ importBatchId: null }, { importBatchId: { not: batchIdToKeep } }]
+        }
+      });
+      await transaction.$executeRaw(buildCecQualitySnapshotPromotionSql(batchIdToKeep));
+      const batchesDeleted = await transaction.performanceImportBatch.deleteMany({
+        where: { type: "CEC_QUALITY", id: { not: batchIdToKeep } }
+      });
+      return { recordsDeleted: recordsDeleted.count, batchesDeleted: batchesDeleted.count };
+    });
+    return {
+      batchIdKept: batchIdToKeep,
+      qualityScope,
+      qualityRowsDeleted: result.recordsDeleted,
+      importBatchesDeleted: result.batchesDeleted
+    };
+  }
 
   const lobNames = qualityScopeLobNames(qualityScope);
   const batchType = qualityScope === "TNS" ? "QUALITY_TNS_KAP" : "QUALITY";
@@ -1778,40 +2214,55 @@ async function previewTnsQualityRows(rawRows: Record<string, unknown>[], options
 async function previewCecQualityRows(rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
   const normalizedRows = rawRows.map(normalizeObjectKeys);
   const yearReference = normalizeYearReference(options.yearReference);
-  const wbLogins = unique(normalizedRows.map((row) => normalizeWbLogin(text(rowValue(row, ["wb", "wb_login", "wb login", "agente", "agent"])))).filter(Boolean));
+  const wbHeaders = ["employee name", "employee_name", "wb", "wb_login", "wb login", "agente", "agent"];
+  const dateHeaders = ["monitor day", "monitor_day", "quality date", "quality_date", "data", "date"];
+  const wbLogins = unique(normalizedRows.map((row) => normalizeWbLogin(text(rowValue(row, wbHeaders)))).filter(Boolean));
   const employees = await findEmployeesByWbLogins(wbLogins);
   const employeeByLogin = new Map(employees.map((employee) => [normalizeWbLogin(employee.wbLogin), employee]));
-  const seen = new Map<string, number>();
+  const groupedRows = new Map<string, PerformancePreviewRow & { duplicateCount: number }>();
+  const invalidRows: PerformancePreviewRow[] = [];
 
-  const previewRows: PerformancePreviewRow[] = normalizedRows.map((row, index) => {
+  normalizedRows.forEach((row, index) => {
     const rowNumber = (options.rowNumberOffset ?? 0) + index + 2;
     const errors: string[] = [];
     const warnings: string[] = [];
-    const wbLogin = normalizeWbLogin(text(rowValue(row, ["wb", "wb_login", "wb login", "agente", "agent"])));
+    const wbLogin = normalizeWbLogin(text(rowValue(row, wbHeaders)));
     const employee = employeeByLogin.get(wbLogin);
-    const weekNumber = parseWeekNumber(rowValue(row, ["week", "semana"]));
+    const rawMonitorDay = rowValue(row, dateHeaders);
+    const qualityDate = normalizeExcelDate(rawMonitorDay);
+    const isDailyFormat = text(rawMonitorDay) !== "";
+    const parsedWeekNumber = parseWeekNumber(rowValue(row, ["week", "semana"]));
+    const weekNumber = qualityDate ? getIsoWeekNumber(qualityDate) : parsedWeekNumber;
     const passQuantity = parseInteger(rowValue(row, ["pass quantity", "pass_quantity", "passquantity", "pass"]));
     const failQuantity = parseInteger(rowValue(row, ["fail quantity", "fail_quantity", "failquantity", "fail"]));
     const qualityRule = getQualityRuleByEmployee(employee);
-    const weekRange = yearReference && weekNumber ? getIsoWeekDateRange(yearReference, weekNumber) : null;
-    const expandedDates = weekRange ? datesInRange(weekRange.start, weekRange.end).map(formatDateKey) : [];
-    const uniqueKey = yearReference && weekNumber && wbLogin ? `${wbLogin}|${yearReference}-W${String(weekNumber).padStart(2, "0")}` : "";
+    const weekRange = qualityDate
+      ? { start: startOfWeekMonday(qualityDate), end: addDays(startOfWeekMonday(qualityDate), 6) }
+      : yearReference && weekNumber
+        ? getIsoWeekDateRange(yearReference, weekNumber)
+        : null;
+    const expandedDates = qualityDate
+      ? [formatDateKey(qualityDate)]
+      : weekRange
+        ? datesInRange(weekRange.start, weekRange.end).map(formatDateKey)
+        : [];
+    const uniqueKey = wbLogin && weekNumber && expandedDates.length
+      ? qualityDate
+        ? `${wbLogin}|${formatDateKey(qualityDate)}`
+        : `${wbLogin}|${yearReference}-W${String(weekNumber).padStart(2, "0")}`
+      : "";
 
-    if (!yearReference) errors.push("Ano de referência não informado.");
+    if (!isDailyFormat && !yearReference) errors.push("Ano de referência não informado para a base semanal.");
     if (!wbLogin) errors.push("WB/Login é obrigatório.");
     else if (!employee) errors.push("WB/Login não encontrado no cadastro.");
     else if (qualityRule !== "CEC_QUALITY") warnings.push("Agente não está cadastrado como CEC. Verifique se este arquivo pertence à operação correta.");
-    if (!weekNumber) errors.push("Week inválida.");
+    if (isDailyFormat && !qualityDate) errors.push("Monitor day inválido.");
+    if (!isDailyFormat && !weekNumber) errors.push("Week inválida.");
     if (passQuantity === null || passQuantity < 0) errors.push("Pass Quantity inválido.");
     if (failQuantity === null || failQuantity < 0) errors.push("Fail Quantity inválido.");
-    if ((passQuantity ?? 0) + (failQuantity ?? 0) === 0) warnings.push("Pass + Fail = 0; qualidade ficará sem base no cálculo.");
-    if (uniqueKey) {
-      const first = seen.get(uniqueKey);
-      if (first) warnings.push(`Duplicidade da mesma semana/agente no arquivo. Primeira ocorrência na linha ${first}; será tratada por upsert.`);
-      else seen.set(uniqueKey, rowNumber);
-    }
+    if ((passQuantity ?? 0) + (failQuantity ?? 0) === 0) warnings.push("Pass Quantity + Fail Quantity = 0; esta linha não terá denominador no total agregado.");
 
-    return {
+    const previewRow: PerformancePreviewRow = {
       rowNumber,
       type: "CEC_QUALITY",
       wbLogin,
@@ -1819,7 +2270,11 @@ async function previewCecQualityRows(rawRows: Record<string, unknown>[], options
       employeeName: employee?.fullName,
       lob: employee?.lob?.name ?? "",
       lobId: employee?.lobId ?? undefined,
-      date: weekRange ? `${formatDateKey(weekRange.start)} a ${formatDateKey(weekRange.end)}` : "",
+      date: qualityDate
+        ? formatDateKey(qualityDate)
+        : weekRange
+          ? `${formatDateKey(weekRange.start)} a ${formatDateKey(weekRange.end)}`
+          : text(rawMonitorDay),
       uniqueKey,
       action: errors.length ? "ignore" : "create",
       errors,
@@ -1835,9 +2290,30 @@ async function previewCecQualityRows(rawRows: Record<string, unknown>[], options
         failQuantity
       }
     };
+
+    if (errors.length || !uniqueKey) {
+      invalidRows.push(previewRow);
+      return;
+    }
+
+    const existing = groupedRows.get(uniqueKey);
+    if (!existing) {
+      groupedRows.set(uniqueKey, { ...previewRow, duplicateCount: 1 });
+      return;
+    }
+    existing.duplicateCount += 1;
+    existing.payload.passQuantity = Number(existing.payload.passQuantity ?? 0) + Number(passQuantity ?? 0);
+    existing.payload.failQuantity = Number(existing.payload.failQuantity ?? 0) + Number(failQuantity ?? 0);
   });
 
-  return markExistingCecQualityRows(previewRows);
+  const groupedPreviewRows = Array.from(groupedRows.values()).map(({ duplicateCount, ...row }) => ({
+    ...row,
+    warnings: duplicateCount > 1
+      ? [...row.warnings, `${duplicateCount} linhas do mesmo agente e período foram somadas antes da importação.`]
+      : row.warnings
+  }));
+
+  return markExistingCecQualityRows([...groupedPreviewRows, ...invalidRows].sort((left, right) => left.rowNumber - right.rowNumber));
 }
 
 async function previewProductionRows(rawRows: Record<string, unknown>[], options: PerformancePreviewOptions = {}) {
@@ -2001,6 +2477,7 @@ async function previewCecCpdRows(rawRows: Record<string, unknown>[], options: Pe
 }
 
 export async function commitQualityImport(actor: Actor, rows: PerformancePreviewRow[], fileName = "qualidade.xlsx", qualityScope: PerformanceQualityScope = "ADS") {
+  if (qualityScope === "CEC") return commitCecQualityImport(actor, rows, fileName);
   const user = await requireActiveUser(actor);
   requireImportPermission(user);
   return commitQualityRows(user, rows, fileName, undefined, qualityScope);
@@ -2086,13 +2563,37 @@ async function commitTnsQualityRows(user: AuthenticatedUser, rows: PerformancePr
 
 async function commitCecQualityRows(user: AuthenticatedUser, rows: PerformancePreviewRow[], fileName = "qualidade_cec.xlsx", batchId?: string) {
   const validRows = rows.filter((row) => row.type === "CEC_QUALITY" && !row.errors.length && row.employeeId && row.uniqueKey && Array.isArray(row.payload.expandedDates));
-  if (!validRows.length) throw new PerformanceError("Não há linhas válidas para importar.", 400);
+  if (!validRows.length) {
+    if (!batchId) throw new PerformanceError("Não há linhas válidas para importar.", 400);
+    const batch = await upsertImportBatch(user, "CEC_QUALITY", fileName, rows, 0, 0, 0, batchId);
+    return { success: true, importedRows: 0, createdRows: 0, updatedRows: 0, batchId: batch.id };
+  }
   const expandedRows = validRows.reduce((sum, row) => sum + (Array.isArray(row.payload.expandedDates) ? row.payload.expandedDates.length : 0), 0);
   const createdRows = validRows.filter((row) => row.action === "create").reduce((sum, row) => sum + (Array.isArray(row.payload.expandedDates) ? row.payload.expandedDates.length : 0), 0);
   const updatedRows = Math.max(0, expandedRows - createdRows);
   const batch = await upsertImportBatch(user, "CEC_QUALITY", fileName, rows, validRows.length, createdRows, updatedRows, batchId);
+  const stagingPrefix = batch.status === "PROCESSING" ? cecQualityStagingPrefix(batch.id) : "";
+  const persistedWbLogin = (wbLogin: string) => stagingPrefix ? `${stagingPrefix}${wbLogin}` : wbLogin;
 
   for (const chunk of chunks(validRows, 50)) {
+    const existingRecords = await prisma.cecQualityRecord.findMany({
+      where: {
+        OR: chunk.flatMap((row) => {
+          const weekNumber = Number(row.payload.weekNumber);
+          const expandedDates = Array.isArray(row.payload.expandedDates) ? row.payload.expandedDates.map((date) => String(date)) : [];
+          return expandedDates.map((date) => ({
+            wbLogin: persistedWbLogin(row.wbLogin),
+            weekNumber,
+            qualityDate: parseDate(date)!
+          }));
+        })
+      },
+      select: { wbLogin: true, weekNumber: true, qualityDate: true, importBatchId: true }
+    });
+    const existingBatchByKey = new Map(existingRecords.map((record) => [
+      cecQualityExistingKey(record.wbLogin, record.weekNumber, record.qualityDate),
+      record.importBatchId
+    ]));
     const operations = chunk.flatMap((row) => {
       const weekNumber = Number(row.payload.weekNumber);
       const weekStartDate = parseDate(String(row.payload.weekStartDate))!;
@@ -2103,20 +2604,22 @@ async function commitCecQualityRows(user: AuthenticatedUser, rows: PerformancePr
 
       return expandedDates.map((date) => {
         const qualityDate = parseDate(date)!;
+        const storedWbLogin = persistedWbLogin(row.wbLogin);
+        const alreadyImportedInBatch = existingBatchByKey.get(cecQualityExistingKey(storedWbLogin, weekNumber, qualityDate)) === batch.id;
         return prisma.cecQualityRecord.upsert({
-          where: { wbLogin_weekNumber_qualityDate: { wbLogin: row.wbLogin, weekNumber, qualityDate } },
+          where: { wbLogin_weekNumber_qualityDate: { wbLogin: storedWbLogin, weekNumber, qualityDate } },
           update: {
             employeeId: row.employeeId,
             weekStartDate,
             weekEndDate,
-            passQuantity,
-            failQuantity,
+            passQuantity: alreadyImportedInBatch ? { increment: passQuantity } : passQuantity,
+            failQuantity: alreadyImportedInBatch ? { increment: failQuantity } : failQuantity,
             lobId: row.lobId ?? null,
             importBatchId: batch.id,
             originalRowNumber: row.rowNumber
           },
           create: {
-            wbLogin: row.wbLogin,
+            wbLogin: storedWbLogin,
             employeeId: row.employeeId,
             weekNumber,
             weekStartDate,
@@ -2619,7 +3122,7 @@ export function performanceTemplate(type: "quality" | "tns-quality" | "cec-quali
     return {
       fileName: "template_performance_qualidade_cec.xlsx",
       sheetName: "Planilha1",
-      headers: ["WB", "Week", "Pass Quantity", "Fail Quantity"],
+      headers: ["Monitor day", "Employee Name", "Pass Quantity", "Fail Quantity"],
       rows: []
     };
   }
@@ -2678,10 +3181,12 @@ export function getQualityRuleByEmployee(employee?: { lob?: { name?: string | nu
 }
 
 function qualityScopeLobNames(scope: PerformanceQualityScope) {
+  if (scope === "CEC") return ["CEC"];
   return scope === "TNS" ? ["VIDEO", "COMMENTS"] : ["ADS", "PROJECT"];
 }
 
-function qualityBatchType(scope: PerformanceQualityScope): "QUALITY" | "QUALITY_TNS_KAP" {
+function qualityBatchType(scope: PerformanceQualityScope): "QUALITY" | "QUALITY_TNS_KAP" | "CEC_QUALITY" {
+  if (scope === "CEC") return "CEC_QUALITY";
   return scope === "TNS" ? "QUALITY_TNS_KAP" : "QUALITY";
 }
 
@@ -3082,15 +3587,15 @@ function calculateTnsQuality(records: TnsQualityRecordForMetrics[]) {
 function calculateCecQuality(records: CecQualityRecordForMetrics[]) {
   const pass = records.reduce((sum, record) => sum + record.passQuantity, 0);
   const fail = records.reduce((sum, record) => sum + record.failQuantity, 0);
-  const total = pass + fail;
+  const aggregate = calculateCecQualityAggregate(pass, fail);
   return {
     qualityRule: "CEC_QUALITY" as const,
-    qualityNumerator: pass,
-    qualityDenominator: total,
-    qualityErrors: fail,
-    qualityCorrect: pass,
-    qualityTotal: total,
-    quality: percent(pass, total)
+    qualityNumerator: aggregate.correct,
+    qualityDenominator: aggregate.total,
+    qualityErrors: aggregate.errors,
+    qualityCorrect: aggregate.correct,
+    qualityTotal: aggregate.total,
+    quality: aggregate.quality
   };
 }
 
@@ -3787,7 +4292,7 @@ async function latestProductionPeriod(): Promise<Period> {
 }
 
 function normalizeProductionGranularity(value?: string | null): PerformanceProductionGranularity {
-  return value === "hourly" || value === "weekly" || value === "monthly" ? value : "daily";
+  return value === "hourly" || value === "weekly" || value === "daily" ? value : "monthly";
 }
 
 function performanceLobOptions() {
@@ -3984,6 +4489,15 @@ function allPerformanceQueueIds() {
   return unique([...Object.keys(QUEUE_METADATA), ...Object.keys(QUEUE_REPORT_METADATA)]);
 }
 
+function performanceSlaTargetOptions(lob: string) {
+  if (!lob || lob === "CEC" || lob === "N/A") return [];
+  return unique(
+    queueIdsByPerformanceLob(lob)
+      .map((queueId) => getPerformanceQueueMetadataById(queueId).slaTargetMinutes)
+      .filter((target): target is number => typeof target === "number" && target > 0)
+  ).sort((left, right) => left - right);
+}
+
 function productionBucketSql(granularity: PerformanceProductionGranularity) {
   if (granularity === "hourly") return Prisma.sql`date_trunc('hour', "bzTime")`;
   if (granularity === "weekly") return Prisma.sql`date_trunc('week', "bzDay")`;
@@ -3995,6 +4509,12 @@ function qualityBucketSql(granularity: "monthly" | "weekly" | "daily") {
   if (granularity === "monthly") return Prisma.sql`date_trunc('month', q."auditDate")`;
   if (granularity === "weekly") return Prisma.sql`date_trunc('week', q."auditDate")`;
   return Prisma.sql`date_trunc('day', q."auditDate")`;
+}
+
+function cecQualityBucketSql(granularity: "monthly" | "weekly" | "daily") {
+  if (granularity === "monthly") return Prisma.sql`date_trunc('month', q."qualityDate")`;
+  if (granularity === "weekly") return Prisma.sql`date_trunc('week', q."qualityDate")`;
+  return Prisma.sql`date_trunc('day', q."qualityDate")`;
 }
 
 function qualityBucketLabel(periodStart: Date, granularity: "monthly" | "weekly" | "daily") {
@@ -4317,6 +4837,14 @@ function getIsoWeekDateRange(year: number, weekNumber: number): WeekRange {
   return { start, end: addDays(start, 6) };
 }
 
+function getIsoWeekNumber(date: Date) {
+  const target = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const dayNumber = target.getUTCDay() || 7;
+  target.setUTCDate(target.getUTCDate() + 4 - dayNumber);
+  const yearStart = new Date(Date.UTC(target.getUTCFullYear(), 0, 1));
+  return Math.ceil((((target.getTime() - yearStart.getTime()) / 86_400_000) + 1) / 7);
+}
+
 function datesInRange(start: Date, end: Date) {
   const dates: Date[] = [];
   for (let cursor = start; cursor <= end; cursor = addDays(cursor, 1)) dates.push(cursor);
@@ -4324,7 +4852,7 @@ function datesInRange(start: Date, end: Date) {
 }
 
 function normalizeDashboardView(value?: string | null): "monthly" | "weekly" | "daily" {
-  return value === "monthly" || value === "weekly" ? value : "daily";
+  return value === "weekly" || value === "daily" ? value : "monthly";
 }
 
 function dashboardViewPeriod(referenceDate: Date, view: "monthly" | "weekly" | "daily"): Period {
@@ -4354,25 +4882,37 @@ function utcDate(year: number, month: number, day: number) {
   return new Date(Date.UTC(year, month - 1, day));
 }
 
-function normalizeExcelDate(value: unknown): Date | null {
+export function normalizeExcelDate(value: unknown): Date | null {
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return new Date(Date.UTC(value.getFullYear(), value.getMonth(), value.getDate(), value.getHours(), value.getMinutes(), value.getSeconds()));
+    return plausiblePerformanceDate(new Date(Date.UTC(value.getFullYear(), value.getMonth(), value.getDate(), value.getHours(), value.getMinutes(), value.getSeconds())));
   }
   if (typeof value === "number" && Number.isFinite(value)) {
     const date = new Date(Date.UTC(1899, 11, 30));
     date.setUTCDate(date.getUTCDate() + Math.floor(value));
     const fraction = value - Math.floor(value);
     if (fraction > 0) date.setUTCSeconds(Math.round(fraction * 24 * 60 * 60));
-    return date;
+    return plausiblePerformanceDate(date);
   }
   const raw = text(value);
   if (!raw) return null;
   const br = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
-  if (br) return new Date(Date.UTC(Number(br[3]), Number(br[2]) - 1, Number(br[1]), Number(br[4] ?? 0), Number(br[5] ?? 0), Number(br[6] ?? 0)));
+  if (br) return plausiblePerformanceDate(new Date(Date.UTC(Number(br[3]), Number(br[2]) - 1, Number(br[1]), Number(br[4] ?? 0), Number(br[5] ?? 0), Number(br[6] ?? 0))));
+  const prefixedYear = raw.match(/^1(20\d{2})[./-](\d{1,2})[./-](\d{1,2})$/);
+  if (prefixedYear) return plausiblePerformanceDate(new Date(Date.UTC(Number(prefixedYear[1]), Number(prefixedYear[2]) - 1, Number(prefixedYear[3]))));
+  const dottedIso = raw.match(/^(\d{4})\.(\d{1,2})\.(\d{1,2})$/);
+  if (dottedIso) return plausiblePerformanceDate(new Date(Date.UTC(Number(dottedIso[1]), Number(dottedIso[2]) - 1, Number(dottedIso[3]))));
+  const dottedBr = raw.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (dottedBr) return plausiblePerformanceDate(new Date(Date.UTC(Number(dottedBr[3]), Number(dottedBr[2]) - 1, Number(dottedBr[1]))));
   const iso = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s](\d{1,2})(?::(\d{2})(?::(\d{2}))?)?)?/);
-  if (iso) return new Date(Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]), Number(iso[4] ?? 0), Number(iso[5] ?? 0), Number(iso[6] ?? 0)));
+  if (iso) return plausiblePerformanceDate(new Date(Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]), Number(iso[4] ?? 0), Number(iso[5] ?? 0), Number(iso[6] ?? 0))));
   const parsed = new Date(raw);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
+  return plausiblePerformanceDate(parsed);
+}
+
+function plausiblePerformanceDate(date: Date) {
+  if (Number.isNaN(date.getTime())) return null;
+  const year = date.getUTCFullYear();
+  return year >= 2000 && year <= 2100 ? date : null;
 }
 
 function parseDate(value?: string | null) {
@@ -4508,6 +5048,20 @@ function nullableNumber(value: unknown) {
 
 function cecQualityExistingKey(wbLogin: string, weekNumber: number, qualityDate: Date) {
   return `${normalizeWbLogin(wbLogin)}|${weekNumber}|${formatDateKey(qualityDate)}`;
+}
+
+function cecQualityStagingPrefix(batchId: string) {
+  return `__cec_stage__${batchId}::`;
+}
+
+export function buildCecQualitySnapshotPromotionSql(batchId: string) {
+  const stagingPrefix = cecQualityStagingPrefix(batchId);
+  return Prisma.sql`
+    UPDATE "CecQualityRecord"
+    SET "wbLogin" = SUBSTRING("wbLogin" FROM CAST(${stagingPrefix.length + 1} AS integer))
+    WHERE "importBatchId" = ${batchId}
+      AND "wbLogin" LIKE ${`${stagingPrefix}%`}
+  `;
 }
 
 function unique<T>(values: T[]) {

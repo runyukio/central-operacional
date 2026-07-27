@@ -714,6 +714,10 @@ model BillingEmployeeInvoice {
 model BillingFiscalInvoice {
   id                  String                 @id @default(cuid())
   employeeInvoiceId   String                 @unique
+  accessKey            String?                @unique
+  documentHash         String?                @unique
+  extractionMethod     String?
+  extractedAt          DateTime?
   invoiceNumber       String
   grossAmount         Decimal                @db.Decimal(12, 2)
   serviceDescription  String
@@ -1066,26 +1070,6 @@ model RealTimeCecSnapshot {
   onHoldCount   Int      @default(0)
   openCount     Int      @default(0)
   newCount      Int      @default(0)
-  rawData       Json
-  importedAt    DateTime @default(now())
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  @@index([importedAt])
-  @@index([source])
-  @@index([cycleDownload])
-}
-
-model RealTimeFreshChatSnapshot {
-  id            String   @id @default(cuid())
-  cycleDownload String   @unique
-  source        String   @default("fresh-chat")
-  fileName      String
-  generatedDate String?
-  assignedCount Int      @default(0)
-  newCount      Int      @default(0)
-  totalBacklog  Int      @default(0)
-  rowsTotal     Int      @default(0)
   rawData       Json
   importedAt    DateTime @default(now())
   createdAt     DateTime @default(now())

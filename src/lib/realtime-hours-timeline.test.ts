@@ -94,6 +94,25 @@ test("combina turno, escala, status online, LOB, supervisor e busca", () => {
   assert.equal(filtered[0].employeeId, "employee-1");
 });
 
+test("diferencia a LOB ALL do filtro que representa todas as LOBs", () => {
+  const rows = [
+    row({ employeeId: "ads", lob: "ADS" }),
+    row({ employeeId: "all", lob: "ALL" })
+  ];
+
+  const allLobRows = filterRealtimeHoursTimelineRows(rows, {
+    date,
+    lob: "ALL"
+  });
+  const everyLobRows = filterRealtimeHoursTimelineRows(rows, {
+    date,
+    lob: "__ALL_LOBS__"
+  });
+
+  assert.deepEqual(allLobRows.map((item) => item.employeeId), ["all"]);
+  assert.deepEqual(everyLobRows.map((item) => item.employeeId), ["ads", "all"]);
+});
+
 test("mantem o calculo de atraso usado na timeline", () => {
   const delayed = row({
     entryAt: "2026-07-17T11:15:00.000Z",

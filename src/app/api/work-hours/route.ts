@@ -31,10 +31,11 @@ export async function GET(request: Request) {
     wbLogin: url.searchParams.get("wbLogin") ?? undefined,
     employeeStatus: url.searchParams.get("employeeStatus") ?? undefined,
     status: url.searchParams.get("status") ?? undefined,
+    overtimeOnly: url.searchParams.get("overtimeOnly") === "true",
+    hoursPendingOnly: url.searchParams.get("hoursPendingOnly") === "true",
     divergentOnly: url.searchParams.get("divergentOnly") === "true",
     pendingOnly: url.searchParams.get("pendingOnly") === "true",
     noScheduleOnly: url.searchParams.get("noScheduleOnly") === "true",
-    source: url.searchParams.get("source") ?? undefined,
     scope: url.searchParams.get("scope") === "mine" ? "mine" : "all",
     page: Number(url.searchParams.get("page") ?? 1),
     limit: Number(url.searchParams.get("limit") ?? 50)

@@ -22,6 +22,7 @@ import {
 } from "@/lib/permissions";
 import { auditPermissionDenied } from "@/lib/permission-audit";
 import { prisma } from "@/lib/prisma";
+import { getRealtimeHoursShiftActivityHours } from "@/lib/realtime-hours-service";
 import { cleanShiftName, shiftCategoryName } from "@/lib/shift-display";
 import {
   DEFAULT_PRODUCTIVE_HOURS,
@@ -33,6 +34,7 @@ import {
   isWorkHoursAllowedForSchedule,
   parseWorkHoursToMinutes,
   plannedProductiveHoursForSchedule,
+  workHourBalanceStatus,
   workHoursFromMinutes,
   workHoursBlockedReasonForSchedule
 } from "@/lib/work-hours-rules";
@@ -77,10 +79,11 @@ export type WorkHourQuery = {
   wbLogin?: string;
   employeeStatus?: string;
   status?: string;
+  overtimeOnly?: boolean;
+  hoursPendingOnly?: boolean;
   divergentOnly?: boolean;
   pendingOnly?: boolean;
   noScheduleOnly?: boolean;
-  source?: string;
   scope?: "mine" | "all";
   page?: number;
   limit?: number;
@@ -109,8 +112,6 @@ export type ManualWorkHourInput = {
   employeeId: string;
   date: string;
   actualHours?: unknown;
-  observation?: string;
-  source?: string;
   confirmOverwrite?: boolean;
 };
 
@@ -139,8 +140,6 @@ type ValidationRow = {
   actualHours?: number;
   plannedHours?: number | null;
   differenceMinutes?: number | null;
-  source?: string;
-  observation?: string;
 };
 
 const workHourColumnAliases: Record<string, string> = {
@@ -156,14 +155,6 @@ const workHourColumnAliases: Record<string, string> = {
   horas: "horas_realizadas",
   horas_liquidas: "horas_realizadas",
   horas_realizadas_liquidas: "horas_realizadas",
-  sistema_origem: "sistema_origem",
-  sistemaorigem: "sistema_origem",
-  origem: "sistema_origem",
-  source: "sistema_origem",
-  observacao: "observacao",
-  observacoes: "observacao",
-  obs: "observacao",
-  observation: "observacao",
   lob: "lob",
   supervisor_wb_login: "supervisor_wb_login",
   supervisorwblogin: "supervisor_wb_login",
@@ -230,10 +221,22 @@ export async function listOperationalWorkHours(actor: Actor, query: WorkHourQuer
       prisma.workHourRecord.count({ where })
     ]);
 
-    const summary = await getWorkHoursSummary(where);
+    const [summary, capturedHoursByRecordId] = await Promise.all([
+      getWorkHoursSummary(where),
+      getRealtimeHoursShiftActivityHours(records.map((record) => ({
+        key: record.id,
+        employeeId: record.employeeId,
+        wbLogin: record.wbLogin,
+        shiftDate: record.date
+      })))
+    ]);
 
     return {
-      data: records.map((record) => formatWorkHourRecord(record, toWorkHourRecordViewer(user))),
+      data: records.map((record) => formatWorkHourRecord(
+        record,
+        toWorkHourRecordViewer(user),
+        capturedHoursByRecordId.get(record.id) ?? 0
+      )),
       summary,
       pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
       period: { startDate: formatDate(period.startDate), endDate: formatDate(period.endDate) },
@@ -350,8 +353,8 @@ export async function commitOperationalWorkHoursImport(actor: Actor, input: Work
           ${rowValidation.actualHours!},
           ${differenceMinutes},
           ${status}::"WorkHourRecordStatus",
-          ${rowValidation.source || "upload-horas"},
-          ${rowValidation.observation || null},
+          ${"upload-horas"},
+          ${null},
           ${batch.id},
           NOW(),
           NOW()
@@ -700,7 +703,7 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
           differenceMinutes,
           status,
           source: "MANUAL",
-          observation: input.observation?.trim() || null,
+          observation: null,
           importBatchId: null
         },
         create: {
@@ -722,7 +725,7 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
           differenceMinutes,
           status,
           source: "MANUAL",
-          observation: input.observation?.trim() || null
+          observation: null
         }
       });
 
@@ -733,7 +736,7 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
           action: existing ? "MANUAL_UPDATE" : "MANUAL_CREATE",
           previousValue: serialize(existing),
           newValue: serialize(record),
-          reason: input.observation?.trim() || "Lançamento manual pelo cronograma"
+          reason: "Lançamento manual pelo cronograma"
         }
       });
       await tx.auditLog.create({
@@ -742,7 +745,7 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
           action: AuditAction.EDICAO,
           entity: "WorkHourRecord",
           entityId: record.id,
-          reason: input.observation?.trim() || "Lançamento manual de horas",
+          reason: "Lançamento manual de horas",
           previousValue: serialize(existing),
           newValue: serialize(record)
         }
@@ -824,10 +827,9 @@ export async function exportOperationalWorkHoursXlsxData(actor: Actor, query: Wo
     "turno",
     "horas_planejadas_produtivas",
     "horas_realizadas",
+    "horas_captura",
     "divergencia",
     "status",
-    "sistema_origem",
-    "observacao",
     "ajuste_solicitado",
     "diferenca_ajuste",
     "status_ajuste",
@@ -845,10 +847,9 @@ export async function exportOperationalWorkHoursXlsxData(actor: Actor, query: Wo
     row.shift,
     formatWorkHours(row.plannedHours),
     formatWorkHours(row.effectiveHours),
+    formatWorkHours(row.capturedHours),
     formatHourDifferenceForExport(row.differenceMinutes),
-    row.status,
-    row.source,
-    row.observation,
+    workHourBalanceStatus(row.plannedHours, row.differenceMinutes),
     row.adjustmentRequestedHours === null || row.adjustmentRequestedHours === undefined ? "" : formatWorkHours(row.adjustmentRequestedHours),
     formatHourDifferenceForExport(row.adjustmentDifferenceMinutes),
     row.adjustmentStatus === "Sem ajuste" ? "" : row.adjustmentStatus,
@@ -973,9 +974,7 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
       existingRecordId,
       actualHours: actualHours ?? undefined,
       plannedHours,
-      differenceMinutes,
-      source: text(row.sistema_origem) || "upload-horas",
-      observation: text(row.observacao)
+      differenceMinutes
     };
   });
 }
@@ -1004,7 +1003,6 @@ function toImportPreview(rows: Array<Record<string, unknown>>, validation: Valid
     rows: rows.map((row, index) => {
       const result = validation[index];
       return {
-        ...row,
         wb_login: result?.originalWbLogin ?? row.wb_login,
         data: result?.dateIso ?? row.data,
         horas_realizadas: result?.actualHours === undefined ? row.horas_realizadas : formatWorkHours(result.actualHours)
@@ -1072,19 +1070,43 @@ function buildRecordWhere(user: UserWithRole, query: WorkHourQuery, period: { st
     ];
   }
   if (query.status && query.status !== "Todos") {
-    if (query.status === "Ajuste solicitado") where.adjustments = pendingWorkHourAdjustmentFilter();
-    else where.status = uiToRecordStatus(query.status);
+    if (query.status === "Hora extra") {
+      where.status = { not: "NO_SCHEDULE" };
+      where.differenceMinutes = { gt: 0 };
+    } else if (query.status === "OK") {
+      where.status = { not: "NO_SCHEDULE" };
+      where.differenceMinutes = 0;
+    } else if (query.status === "Horas pendentes") {
+      where.status = { not: "NO_SCHEDULE" };
+      where.differenceMinutes = { lt: 0 };
+    } else if (query.status === "Sem cronograma") {
+      where.status = "NO_SCHEDULE";
+    } else if (query.status === "Ajuste solicitado") {
+      where.adjustments = pendingWorkHourAdjustmentFilter();
+    } else {
+      where.status = uiToRecordStatus(query.status);
+    }
   }
   if (query.divergentOnly) where.status = "DIVERGENT";
   if (query.pendingOnly) {
     delete where.status;
     where.adjustments = pendingWorkHourAdjustmentFilter();
   }
+  if (query.overtimeOnly) {
+    delete where.adjustments;
+    where.status = { not: "NO_SCHEDULE" };
+    where.differenceMinutes = { gt: 0 };
+  }
+  if (query.hoursPendingOnly) {
+    delete where.adjustments;
+    where.status = { not: "NO_SCHEDULE" };
+    where.differenceMinutes = { lt: 0 };
+  }
   if (query.noScheduleOnly) {
     delete where.adjustments;
+    delete where.differenceMinutes;
     where.status = "NO_SCHEDULE";
   }
-  if (query.source && query.source !== "Todos") where.source = { equals: query.source, mode: "insensitive" };
   const employeeStatusFilter = buildEmployeeStatusFilter(query.employeeStatus);
   if (employeeStatusFilter) where.employee = { AND: [where.employee as Prisma.EmployeeProfileWhereInput, employeeStatusFilter] };
   return where;
@@ -1167,7 +1189,7 @@ async function getWorkHoursSummary(where: Prisma.WorkHourRecordWhereInput) {
   const divergentWhere: Prisma.WorkHourRecordWhereInput = {
     AND: [productiveWhere, { OR: [{ differenceMinutes: { lt: -toleranceMinutes } }, { differenceMinutes: { gt: toleranceMinutes } }] }]
   };
-  const [totals, okRecords, divergentRecords, noScheduleRecords, adjustments] = await Promise.all([
+  const [totals, okRecords, divergentRecords, overtime, pending, noScheduleRecords, adjustments] = await Promise.all([
     prisma.workHourRecord.aggregate({
       where: productiveWhere,
       _count: { _all: true },
@@ -1175,6 +1197,14 @@ async function getWorkHoursSummary(where: Prisma.WorkHourRecordWhereInput) {
     }),
     prisma.workHourRecord.count({ where: okWhere }),
     prisma.workHourRecord.count({ where: divergentWhere }),
+    prisma.workHourRecord.aggregate({
+      where: { AND: [productiveWhere, { differenceMinutes: { gt: 0 } }] },
+      _sum: { differenceMinutes: true }
+    }),
+    prisma.workHourRecord.aggregate({
+      where: { AND: [productiveWhere, { differenceMinutes: { lt: 0 } }] },
+      _sum: { differenceMinutes: true }
+    }),
     prisma.workHourRecord.count({ where: { AND: [where, { status: "NO_SCHEDULE" }] } }),
     prisma.workHourAdjustmentRequest.groupBy({ by: ["status"], where: { record: { is: where } }, _count: { _all: true } }).catch(() => [])
   ]);
@@ -1187,6 +1217,8 @@ async function getWorkHoursSummary(where: Prisma.WorkHourRecordWhereInput) {
     differenceHours: roundHours(effectiveHours - plannedHours),
     okRecords,
     divergentRecords,
+    overtimeHours: roundHours(Number(overtime._sum.differenceMinutes ?? 0) / 60),
+    pendingHours: roundHours(Math.abs(Number(pending._sum.differenceMinutes ?? 0)) / 60),
     noScheduleRecords,
     pendingAdjustments: adjustmentCount("ABERTO") + adjustmentCount("EM_ANALISE"),
     approvedAdjustments: adjustmentCount("APROVADO"),
@@ -1249,7 +1281,7 @@ async function getRecordWithRelations(id: string) {
   });
 }
 
-function formatWorkHourRecord(record: any, viewer?: WorkHourRecordViewer) {
+function formatWorkHourRecord(record: any, viewer?: WorkHourRecordViewer, capturedHours = 0) {
   const adjustment = record.adjustments?.[0];
   const adjustmentDifferenceMinutes = adjustment
     ? calculateAdjustmentDifferenceMinutes(adjustment.currentActualHours ?? record.effectiveHours, adjustment.requestedActualHours)
@@ -1273,6 +1305,7 @@ function formatWorkHourRecord(record: any, viewer?: WorkHourRecordViewer) {
     actualHours: record.actualHours,
     adjustedHours: record.adjustedHours ?? 0,
     effectiveHours: record.effectiveHours,
+    capturedHours,
     differenceMinutes,
     status: recordStatusLabel(status),
     rawStatus: status,
@@ -1287,7 +1320,6 @@ function formatWorkHourRecord(record: any, viewer?: WorkHourRecordViewer) {
     adjustmentRequestedBy: adjustment?.requestedBy?.name ?? "",
     adjustmentRequestedAt: adjustment ? formatDateTime(adjustment.createdAt) : "",
     source: record.source ?? "",
-    observation: record.observation ?? "",
     createdAt: formatDateTime(record.createdAt),
     updatedAt: formatDateTime(record.updatedAt)
   };

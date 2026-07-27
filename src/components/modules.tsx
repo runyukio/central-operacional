@@ -95,6 +95,7 @@ import { getDefaultDateRange } from "@/lib/default-date-range";
 import {
   canAccessPerformance,
   canApproveWorkHourAdjustment,
+  canAdminOverrideWorkflowScheduleStatus,
   canEditAdvanceRecords,
   canEditEmployeeData,
   canEditEmployeeSensitiveData,
@@ -130,6 +131,8 @@ import {
   formatWorkHours,
   normalizeProductivePlannedHours,
   parseWorkHoursToMinutes,
+  type WorkHourBalanceStatus,
+  workHourBalanceStatus,
   workHoursBlockedReasonForSchedule,
   workHoursFromMinutes
 } from "@/lib/work-hours-rules";
@@ -140,12 +143,11 @@ import {
 } from "@/lib/monthly-advance-constants";
 
 const scheduleImportColumns = ["wb_login", "data", "status", "turno", "entrada", "saida", "lob"] as const;
-const workHourImportColumns = ["wb_login", "data", "horas_realizadas", "sistema_origem", "observacao"] as const;
 const scheduleStatusOptions = ["Escalado", "Presente", "Nesting", "Falta", "Falta Justificada", "Falta Injustificada", "Afastado", "Férias", "Treinamento", "Folga", "Troca aprovada", "Venda de folga aprovada", "Folga aprovada", "Desligado", "Sem cronograma", "Erro de cronograma"] as const;
 const scheduleEditableStatusOptions = ["Escalado", "Presente", "Nesting", "Falta", "Afastado", "Férias", "Treinamento", "Folga", "Desligado", "Sem cronograma", "Erro de cronograma"] as const;
 const workflowManagedScheduleStatuses = ["Troca aprovada", "Venda de folga aprovada", "Folga aprovada"] as const;
 const attendanceReasonStatuses = ["Falta", "Erro de cronograma"];
-const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Nesting"];
+const scheduleTimeRequiredStatuses = ["Escalado", "Presente", "Nesting", "Troca aprovada", "Venda de folga aprovada"];
 const employeeOperationalStatusOptions = ["Ativo", "Em treinamento", "Nesting", "Afastado", "Desligado", "Desligado em Treinamento", "Inativo", "Desativado"];
 const pcdDisabilityTypeOptions = ["", "Física", "Auditiva", "Visual", "Intelectual", "Psicossocial", "Múltipla", "Neurodivergente", "Outra", "Prefiro não informar"];
 const absenceReasonOptions = ["Problema de saúde", "Erro de programação de escala", "Problema técnico corporativo", "Emergência familiar", "Não informado", "Problema técnico pessoal", "Problema de transporte", "Problema pessoal", "Erro de visualização de escala", "Outros"];
@@ -387,6 +389,7 @@ type WorkHourRow = {
   actualHours: number;
   adjustedHours: number;
   effectiveHours: number;
+  capturedHours: number;
   differenceMinutes: number;
   status: string;
   rawStatus?: string;
@@ -401,7 +404,6 @@ type WorkHourRow = {
   adjustmentRequestedBy?: string;
   adjustmentRequestedAt?: string;
   source: string;
-  observation: string;
 };
 
 type MonthlyAdvanceRecordClient = {
@@ -676,7 +678,7 @@ type MonthlyAdvanceImportPreview = {
   }>;
 };
 
-type ScheduleWorkHourCell = Pick<WorkHourRow, "id" | "plannedStart" | "plannedEnd" | "plannedHours" | "actualHours" | "effectiveHours" | "differenceMinutes" | "status" | "rawStatus" | "source" | "observation" | "adjustmentId" | "adjustmentStatus"> & {
+type ScheduleWorkHourCell = Pick<WorkHourRow, "id" | "plannedStart" | "plannedEnd" | "plannedHours" | "actualHours" | "effectiveHours" | "differenceMinutes" | "status" | "rawStatus" | "source" | "adjustmentId" | "adjustmentStatus"> & {
   updatedAt?: string;
 };
 
@@ -723,6 +725,8 @@ type WorkHourSummary = {
   differenceHours: number;
   okRecords: number;
   divergentRecords: number;
+  overtimeHours: number;
+  pendingHours: number;
   noScheduleRecords: number;
   pendingAdjustments: number;
   approvedAdjustments: number;
@@ -1447,6 +1451,29 @@ function parseProductiveHoursInput(value: string) {
 function formatWorkHourValue(value: unknown, fallback = "-") {
   const formatted = formatWorkHours(value);
   return formatted || fallback;
+}
+
+function WorkHourBalanceBadge({
+  plannedHours,
+  differenceMinutes
+}: {
+  plannedHours: number;
+  differenceMinutes: number;
+}) {
+  const status = workHourBalanceStatus(plannedHours, differenceMinutes);
+  const styles: Record<WorkHourBalanceStatus, string> = {
+    "Hora extra": "border-violet-200 bg-violet-50 text-violet-700",
+    OK: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    "Horas pendentes": "border-amber-200 bg-amber-50 text-amber-700",
+    "Sem cronograma": "border-slate-200 bg-slate-100 text-slate-600"
+  };
+
+  return (
+    <span className={cn("inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-extrabold leading-tight", styles[status])}>
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-75" />
+      {status}
+    </span>
+  );
 }
 
 function workHourAmountBadgeClass(value: unknown) {
@@ -5882,7 +5909,6 @@ export function SchedulesPage() {
     status: "Sem horas",
     rawStatus: "",
     source: "",
-    observation: "",
     adjustmentId: "",
     adjustmentStatus: "Sem ajuste"
   });
@@ -6216,7 +6242,6 @@ export function SchedulesPage() {
       status: hourCell?.status ?? (plannedCell ? "Sem horas" : "Sem cronograma"),
       rawStatus: hourCell?.rawStatus ?? "",
       source: hourCell?.source ?? "",
-      observation: hourCell?.observation ?? "",
       adjustmentId: hourCell?.adjustmentId ?? "",
       adjustmentStatus: hourCell?.adjustmentStatus ?? "Sem ajuste"
     });
@@ -6308,7 +6333,7 @@ export function SchedulesPage() {
       return;
     }
     if (statusNeedsTime(scheduleEditForm.status) && (!scheduleEditForm.shift || !scheduleEditForm.startsAt || !scheduleEditForm.endsAt)) {
-      setAttendanceMessage("Turno, entrada e saída são obrigatórios para Escalado, Presente ou Nesting.");
+      setAttendanceMessage("Turno, entrada e saída são obrigatórios para status produtivos.");
       return;
     }
     if (statusNeedsReason(scheduleEditForm.status) && !scheduleEditForm.pendingJustification && !justificationDraft.absenceReason.trim()) {
@@ -6376,8 +6401,6 @@ export function SchedulesPage() {
           employeeId: scheduleEditForm.employeeId,
           date: scheduleEditForm.date,
           actualHours: parsedActualHours,
-          observation: workHourForm.observation,
-          source: "MANUAL",
           confirmOverwrite
         })
       });
@@ -6392,7 +6415,6 @@ export function SchedulesPage() {
         status: payload.data.status,
         rawStatus: payload.data.rawStatus ?? "",
         source: payload.data.source,
-        observation: payload.data.observation,
         adjustmentId: payload.data.adjustmentId ?? "",
         adjustmentStatus: payload.data.adjustmentStatus
       });
@@ -6434,7 +6456,6 @@ export function SchedulesPage() {
         status: "Sem horas",
         rawStatus: "",
         source: "",
-        observation: "",
         adjustmentId: "",
         adjustmentStatus: "Sem ajuste"
       });
@@ -6750,6 +6771,9 @@ export function SchedulesPage() {
     : workHourForm.recordId ? workHourForm.status : selectedCellHasSchedule ? "Sem horas" : "Sem cronograma";
   const supervisorOccurrenceStatuses = ["Falta", "Erro de cronograma"];
   const selectedScheduleStatusIsWorkflowManaged = (workflowManagedScheduleStatuses as readonly string[]).includes(scheduleEditForm.status);
+  const selectedScheduleStatusIsWorkflowLocked =
+    selectedScheduleStatusIsWorkflowManaged
+    && !canAdminOverrideWorkflowScheduleStatus({ role: scheduleActorRole }, scheduleEditForm.status);
   const scheduleEditStatusOptions = selectedScheduleStatusIsWorkflowManaged
     ? withCurrentScheduleStatus([...scheduleEditableStatusOptions], scheduleEditForm.status)
     : [...scheduleEditableStatusOptions];
@@ -6793,7 +6817,6 @@ export function SchedulesPage() {
       status: "Sem horas",
       rawStatus: "",
       source: "",
-      observation: "",
       adjustmentId: "",
       adjustmentStatus: "Sem ajuste"
     }));
@@ -7419,7 +7442,7 @@ export function SchedulesPage() {
                     }}
                   />
                   <FormSelect
-                    disabled={!canManageSchedules || selectedScheduleStatusIsWorkflowManaged}
+                    disabled={!canManageSchedules || selectedScheduleStatusIsWorkflowLocked}
                     label="Status do cronograma"
                     value={scheduleEditForm.status}
                     options={scheduleEditStatusOptions}
@@ -7465,8 +7488,10 @@ export function SchedulesPage() {
                   ) : null}
                 </div>
                 <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
-                  {selectedScheduleStatusIsWorkflowManaged
-                    ? "Este status veio de Solicitações/Esteira e não pode ser aplicado manualmente pelo slot."
+                  {selectedScheduleStatusIsWorkflowLocked
+                    ? "Este status veio de Solicitações/Esteira e somente ADMIN pode corrigir este slot manualmente."
+                    : selectedScheduleStatusIsWorkflowManaged
+                      ? "ADMIN pode corrigir este slot mantendo o histórico e a auditoria da alteração."
                     : canManageSchedules ? scheduleEditForm.pendingJustification ? "A célula ficará destacada como pendente de justificativa até o Supervisor justificar." : scheduleEditRequiresTime ? "Este status exige turno, entrada e saída." : "Este status permite entrada/saída vazias." : "Supervisor visualiza o cronograma e solicita ajustes; WFM/Admin altera o planejado."}
                 </div>
                 <div className="mt-4 rounded-xl border border-border bg-slate-50 p-4">
@@ -7568,8 +7593,8 @@ export function SchedulesPage() {
                 </div>
                 {canManageSchedules ? (
                   <>
-                    <button disabled={savingSchedule || selectedScheduleStatusIsWorkflowManaged} onClick={saveScheduleEdit} className="mt-4 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
-                      {selectedScheduleStatusIsWorkflowManaged ? "Status controlado pela Esteira" : savingSchedule ? "Salvando..." : "Salvar edição do cronograma"}
+                    <button disabled={savingSchedule || selectedScheduleStatusIsWorkflowLocked} onClick={saveScheduleEdit} className="mt-4 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
+                      {selectedScheduleStatusIsWorkflowLocked ? "Status controlado pela Esteira" : savingSchedule ? "Salvando..." : "Salvar edição do cronograma"}
                     </button>
                     <button disabled={savingSchedule} onClick={() => removeSelectedEmployeeSchedule("month")} className="mt-3 w-full rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700 disabled:opacity-60">
                       Remover cronograma do colaborador neste mês
@@ -7601,11 +7626,6 @@ export function SchedulesPage() {
                       Este status de cronograma não permite lançamento de horas realizadas.
                     </div>
                   )}
-                  <FormInput disabled label="Origem" value={workHourForm.source || "Sem origem"} onChange={() => undefined} />
-                  <label className="md:col-span-2">
-                    <span className="mb-1.5 block text-sm font-bold text-muted">Observação das horas</span>
-                    <textarea disabled={!canEditSelectedWorkHours} value={workHourForm.observation} onChange={(event) => setWorkHourForm({ ...workHourForm, observation: event.target.value })} className="min-h-24 w-full rounded-lg border border-border p-3 outline-none disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500" placeholder="Motivo da correção, sistema de origem ou comentário operacional" />
-                  </label>
                 </div>
                 <div className={cn("mt-4 rounded-lg border px-4 py-3 text-sm font-semibold", manualStatusPreview === "OK" ? "border-emerald-100 bg-emerald-50 text-emerald-700" : manualStatusPreview === "Divergente" ? "border-orange-100 bg-orange-50 text-orange-700" : "border-blue-100 bg-blue-50 text-blue-700")}>
                   {!selectedScheduleAllowsWorkHours
@@ -7818,8 +7838,8 @@ export function WorkHoursPage() {
     collaborator: "",
     employeeStatus: "Todos",
     status: "Todos",
-    source: "Todos",
-    divergentOnly: false,
+    overtimeOnly: false,
+    hoursPendingOnly: false,
     pendingOnly: false,
     noScheduleOnly: false
   }));
@@ -7851,8 +7871,7 @@ export function WorkHoursPage() {
   const canDeleteWorkHours = canEditWorkHours(permissionUser);
   const canRequestAdjustment = canRequestWorkHourAdjustment(permissionUser);
   const employeeWorkHourStatusOptions = ["Todos", "Ativos", "Desligados/Inativos"];
-  const statusOptions = ["Todos", "OK", "Divergente", "Sem cronograma", "Ajuste solicitado", "Ajuste aprovado", "Ajuste recusado", "Importado", "Corrigido manualmente"];
-  const sourceOptions = ["Todos", "MANUAL", "upload-horas"];
+  const statusOptions = ["Todos", "Hora extra", "OK", "Horas pendentes", "Sem cronograma"];
   const lobOptions = ["Todos", ...(settings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? Array.from(new Set(rows.map((row) => row.lob).filter(Boolean))))];
   const workHourShiftCategories = settings?.shifts.filter((shift) => shift.status !== "INACTIVE").map((shift) => shiftCategoryName(shift.name)) ?? rows.map((row) => shiftCategoryName(row.shift));
   const shiftOptions = ["Todos", "Sem turno", ...cleanShiftOptions(workHourShiftCategories, true)];
@@ -7884,8 +7903,8 @@ export function WorkHoursPage() {
       if (filters.collaborator) params.set("collaborator", filters.collaborator);
       if (filters.employeeStatus !== "Todos") params.set("employeeStatus", filters.employeeStatus);
       if (filters.status !== "Todos") params.set("status", filters.status);
-      if (filters.source !== "Todos") params.set("source", filters.source);
-      if (filters.divergentOnly) params.set("divergentOnly", "true");
+      if (filters.overtimeOnly) params.set("overtimeOnly", "true");
+      if (filters.hoursPendingOnly) params.set("hoursPendingOnly", "true");
       if (filters.pendingOnly) params.set("pendingOnly", "true");
       if (filters.noScheduleOnly) params.set("noScheduleOnly", "true");
       const payload = await apiJson<{ data: WorkHourRow[]; summary: WorkHourSummary; pagination: typeof pagination }>(`/api/work-hours?${params.toString()}`);
@@ -8054,8 +8073,8 @@ export function WorkHoursPage() {
     if (filters.collaborator) params.set("collaborator", filters.collaborator);
     if (filters.employeeStatus !== "Todos") params.set("employeeStatus", filters.employeeStatus);
     if (filters.status !== "Todos") params.set("status", filters.status);
-    if (filters.source !== "Todos") params.set("source", filters.source);
-    if (filters.divergentOnly) params.set("divergentOnly", "true");
+    if (filters.overtimeOnly) params.set("overtimeOnly", "true");
+    if (filters.hoursPendingOnly) params.set("hoursPendingOnly", "true");
     if (filters.pendingOnly) params.set("pendingOnly", "true");
     if (filters.noScheduleOnly) params.set("noScheduleOnly", "true");
     return `/api/work-hours/export?${params.toString()}`;
@@ -8101,14 +8120,14 @@ export function WorkHoursPage() {
         <StatCard title="Ajustes pendentes" value={summary?.pendingAdjustments ?? 0} helper="aguardando WFM/Admin" icon={ClipboardList} tone={(summary?.pendingAdjustments ?? 0) ? "orange" : "green"} />
       </div>
       <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricPill value={summary?.okRecords ?? 0} label="Registros OK" />
-        <MetricPill value={summary?.divergentRecords ?? 0} label="Divergentes" />
-        <MetricPill value={summary?.noScheduleRecords ?? 0} label="Sem cronograma vinculado" />
+        <MetricPill value={formatWorkHourValue(summary?.overtimeHours ?? 0, "0:00")} label="Horas extras" />
+        <MetricPill value={formatWorkHourValue(summary?.pendingHours ?? 0, "0:00")} label="Horas pendentes" />
         <MetricPill value={formatWorkHourValue(summary?.adjustedHours ?? 0, "0:00")} label="Horas ajustadas" />
+        <MetricPill value={summary?.noScheduleRecords ?? 0} label="Sem cronograma vinculado" />
       </div>
 
       <section className="card mb-5 p-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-10">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-9">
           <FormInput label="Data inicial" type="date" value={filters.startDate} onChange={(value) => setFilters({ ...filters, startDate: value })} />
           <FormInput label="Data final" type="date" value={filters.endDate} onChange={(value) => setFilters({ ...filters, endDate: value })} />
           <FormSelect label="LOB" value={filters.lob} options={lobOptions} onChange={(value) => setFilters({ ...filters, lob: value })} />
@@ -8116,17 +8135,17 @@ export function WorkHoursPage() {
           <FormSelect label="Turno" value={filters.shift} options={shiftOptions} onChange={(value) => setFilters({ ...filters, shift: value })} />
           <FormInput label="Colaborador/WB" value={filters.collaborator} onChange={(value) => setFilters({ ...filters, collaborator: value })} />
           <FormSelect label="Status colaborador" value={filters.employeeStatus} options={employeeWorkHourStatusOptions} onChange={(value) => setFilters({ ...filters, employeeStatus: value })} />
-          <FormSelect label="Status" value={filters.status} options={statusOptions} onChange={(value) => setFilters({ ...filters, status: value })} />
-          <FormSelect label="Origem" value={filters.source} options={sourceOptions} onChange={(value) => setFilters({ ...filters, source: value })} />
+          <FormSelect label="Status" value={filters.status} options={statusOptions} onChange={(value) => setFilters({ ...filters, status: value, overtimeOnly: false, hoursPendingOnly: false, pendingOnly: false, noScheduleOnly: false })} />
           <div className="flex items-end gap-2">
             <button onClick={() => loadWorkHours(1)} className="h-11 flex-1 rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
-            <button onClick={() => { setFilters({ ...currentOperationalMonthRange(), employeeId: "", lob: "Todos", supervisor: "", shift: "Todos", collaborator: "", employeeStatus: "Todos", status: "Todos", source: "Todos", divergentOnly: false, pendingOnly: false, noScheduleOnly: false }); setTimeout(() => void loadWorkHours(1), 0); }} className="h-11 rounded-lg border border-border bg-white px-3 text-sm font-bold">Limpar</button>
+            <button onClick={() => { setFilters({ ...currentOperationalMonthRange(), employeeId: "", lob: "Todos", supervisor: "", shift: "Todos", collaborator: "", employeeStatus: "Todos", status: "Todos", overtimeOnly: false, hoursPendingOnly: false, pendingOnly: false, noScheduleOnly: false }); setTimeout(() => void loadWorkHours(1), 0); }} className="h-11 rounded-lg border border-border bg-white px-3 text-sm font-bold">Limpar</button>
           </div>
         </div>
         <div className="mt-3 flex flex-wrap gap-3 text-sm font-semibold text-navy-950">
-          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.divergentOnly} onChange={(event) => setFilters({ ...filters, divergentOnly: event.target.checked, pendingOnly: false, noScheduleOnly: false })} /> Apenas divergentes</label>
-          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.pendingOnly} onChange={(event) => setFilters({ ...filters, pendingOnly: event.target.checked, divergentOnly: false, noScheduleOnly: false })} /> Ajuste pendente</label>
-          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.noScheduleOnly} onChange={(event) => setFilters({ ...filters, noScheduleOnly: event.target.checked, divergentOnly: false, pendingOnly: false })} /> Sem cronograma</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.overtimeOnly} onChange={(event) => setFilters({ ...filters, status: "Todos", overtimeOnly: event.target.checked, hoursPendingOnly: false, pendingOnly: false, noScheduleOnly: false })} /> Horas extras</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.hoursPendingOnly} onChange={(event) => setFilters({ ...filters, status: "Todos", hoursPendingOnly: event.target.checked, overtimeOnly: false, pendingOnly: false, noScheduleOnly: false })} /> Horas pendentes</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.pendingOnly} onChange={(event) => setFilters({ ...filters, status: "Todos", pendingOnly: event.target.checked, overtimeOnly: false, hoursPendingOnly: false, noScheduleOnly: false })} /> Ajuste pendente</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={filters.noScheduleOnly} onChange={(event) => setFilters({ ...filters, status: "Todos", noScheduleOnly: event.target.checked, overtimeOnly: false, hoursPendingOnly: false, pendingOnly: false })} /> Sem cronograma</label>
         </div>
       </section>
 
@@ -8140,10 +8159,10 @@ export function WorkHoursPage() {
         </div>
         <div className="overflow-x-auto">
           {rows.length ? (
-            <table className="w-full min-w-[1480px] text-left text-sm">
+            <table className="w-full min-w-[1420px] text-left text-sm">
               <thead className="border-b border-border bg-slate-50 text-xs font-bold uppercase tracking-wide text-muted">
                 <tr>
-                  {["Data", "Colaborador", "WB/Login", "Status colaborador", "LOB", "Supervisor", "Turno", "Horas planejadas", "Horas realizadas", "Dif.", "Status", "Origem", "Observação", "Ajuste", "Ações"].map((column) => <th key={column} className="px-4 py-3">{column}</th>)}
+                  {["Data", "Colaborador", "WB/Login", "Status colaborador", "LOB", "Supervisor", "Turno", "Horas planejadas", "Horas realizadas", "Horas de captura", "Dif.", "Status", "Ajuste", "Ações"].map((column) => <th key={column} className="px-4 py-3">{column}</th>)}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border bg-white">
@@ -8156,12 +8175,11 @@ export function WorkHoursPage() {
                     <td className="px-4 py-3">{row.lob}</td>
                     <td className="px-4 py-3">{row.supervisor || "-"}</td>
                     <td className="px-4 py-3">{cleanShiftName(row.shift) || "-"}</td>
-                    <td className="px-4 py-3">{formatWorkHourValue(row.plannedHours || 0, "0:00")} produtivas</td>
+                    <td className="px-4 py-3">{formatWorkHourValue(row.plannedHours || 0, "0:00")}</td>
                     <td className="px-4 py-3">{formatWorkHourValue(row.effectiveHours, "0:00")}</td>
+                    <td className="px-4 py-3">{formatWorkHourValue(row.capturedHours, "0:00")}</td>
                     <td className={cn("px-4 py-3 font-bold", row.differenceMinutes < 0 ? "text-red-600" : row.differenceMinutes > 0 ? "text-emerald-600" : "text-muted")}>{formatHourDifference(row.differenceMinutes)}</td>
-                    <td className="px-4 py-3"><StatusBadge status={row.status} /></td>
-                    <td className="px-4 py-3">{row.source || "-"}</td>
-                    <td className="px-4 py-3">{row.observation || "-"}</td>
+                    <td className="px-4 py-3"><WorkHourBalanceBadge plannedHours={row.plannedHours} differenceMinutes={row.differenceMinutes} /></td>
                     <td className="px-4 py-3">
                       {row.adjustmentId ? (
                         <div className="min-w-[180px] space-y-1">
@@ -13437,8 +13455,10 @@ function PerformanceLegacyPage({ embeddedWfh = false }: { embeddedWfh?: boolean 
             )}
           </Panel>
 
-          {!embeddedWfh && wfhPayload.canImport ? (
-            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+          {!embeddedWfh ? (
+            <>
+              {wfhPayload.canImport ? (
+                <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
               <PerformanceImportPanel
                 title="Upload de Qualidade ADS"
                 description="final_result, case_order_id e audit_case_order_id."
@@ -13479,11 +13499,11 @@ function PerformanceLegacyPage({ embeddedWfh = false }: { embeddedWfh?: boolean 
                 onTemplate={() => void downloadFile("/api/performance/template?type=production", "template_performance_producao.xlsx").catch((error) => setMessage(error instanceof Error ? error.message : "Não foi possível baixar o template."))}
                 onFile={(file) => void previewPerformanceFile("production", file)}
               />
-            </div>
-          ) : null}
+                </div>
+              ) : null}
 
-          {!embeddedWfh ? <div className={cn("grid gap-3", isClientRole ? "xl:grid-cols-1" : "xl:grid-cols-[minmax(0,1fr)_420px]")}>
-            <Panel title="Detalhamento Individual">
+              <div className={cn("grid gap-3", isClientRole ? "xl:grid-cols-1" : "xl:grid-cols-[minmax(0,1fr)_420px]")}>
+                <Panel title="Detalhamento Individual">
               {selectedAgent ? (
                 <div className="space-y-3">
                   <div className="rounded-lg border border-blue-100 bg-blue-50 p-3">
@@ -13516,8 +13536,8 @@ function PerformanceLegacyPage({ embeddedWfh = false }: { embeddedWfh?: boolean 
               ) : (
                 <EmptyState title="Selecione um agente" description="Clique em um nome do ranking para abrir o histórico semanal individual." />
               )}
-            </Panel>
-            {!isClientRole ? <Panel title="Histórico de Importações">
+                </Panel>
+                {!isClientRole ? <Panel title="Histórico de Importações">
               {wfhPayload.imports.length ? (
                 <div className="space-y-2">
                   {wfhPayload.imports.map((item) => (
@@ -13540,8 +13560,10 @@ function PerformanceLegacyPage({ embeddedWfh = false }: { embeddedWfh?: boolean 
               ) : (
                 <EmptyState title="Sem importações" description="O histórico aparecerá após o primeiro commit de Qualidade ou Produção." />
               )}
-            </Panel> : null}
-          </div> : null}
+                </Panel> : null}
+              </div>
+            </>
+          ) : null}
         </div>
       ) : null}
 

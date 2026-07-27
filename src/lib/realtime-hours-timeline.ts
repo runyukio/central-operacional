@@ -130,7 +130,7 @@ export function filterRealtimeHoursTimelineRows<T extends RealtimeHoursTimelineF
 
   return rows.filter((row) => {
     if (row.data !== filters.date) return false;
-    if (lob && lob !== "ALL" && lob !== "ALL_LOBS" && normalizeLob(row.lob) !== lob) return false;
+    if (lob && lob !== "ALL_LOBS" && normalizeLob(row.lob) !== lob) return false;
     if (presence && presence !== "ALL" && normalizeFilterKey(row.currentStatus) !== presence) return false;
     if (supervisor && supervisor !== "all" && normalizeFilterText(row.supervisor || "Sem supervisor") !== supervisor) return false;
     if (shift && shift !== "ALL" && normalizeFilterKey(shiftCategoryName(row.shift)) !== shift) return false;

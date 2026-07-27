@@ -50,8 +50,8 @@ type PerformanceGranularity = "monthly" | "weekly" | "daily" | "hourly";
 type ForecastView = "hour" | "day" | "week";
 type QualityGranularity = "monthly" | "weekly" | "daily";
 type QualitySortDirection = "asc" | "desc";
-type QualityLob = "ADS" | "VIDEO" | "COMMENTS";
-type QualityImportScope = "ADS" | "TNS";
+type QualityLob = "ADS" | "VIDEO" | "COMMENTS" | "CEC";
+type QualityImportScope = "ADS" | "TNS" | "CEC";
 type SupervisorView = QualityGranularity;
 type PerformanceTab = "queue" | "agents" | "supervisors" | "forecast" | "quality" | "wfh";
 
@@ -158,7 +158,7 @@ type QualityImportResult = {
   qualityRowsIgnored: number;
 };
 
-type AgentSortKey = "employeeName" | "wbLogin" | "lob" | "supervisor" | "shift" | "outputTotal" | "submit" | "aht";
+type AgentSortKey = "employeeName" | "wbLogin" | "lob" | "supervisor" | "shift" | "outputTotal" | "submit" | "aht" | "quality";
 type AgentSortDirection = "asc" | "desc";
 
 type PerformanceAgentRow = {
@@ -175,6 +175,14 @@ type PerformanceAgentRow = {
   daysWithData: number;
   moderationSeconds: number;
   ahtSeconds: number;
+  ahtMetric?: "AHT" | "CPD";
+  cpdAverage?: number;
+  cpdTickets?: number;
+  cpdDays?: number;
+  qualityCorrect: number;
+  qualityTotal: number;
+  qualityErrors: number;
+  quality: number;
 };
 
 type PerformanceAgentsResponse = {
@@ -187,6 +195,7 @@ type PerformanceAgentsResponse = {
     lobs: string[];
     supervisors: Array<{ id: string; fullName: string }>;
     shifts: Array<{ id: string; name: string }>;
+    slaTargets: number[];
   };
   summary: {
     agents: number;
@@ -195,6 +204,14 @@ type PerformanceAgentsResponse = {
     daysWithData: number;
     moderationSeconds: number;
     ahtSeconds: number;
+    ahtMetric?: "AHT" | "CPD";
+    cpdAverage?: number;
+    cpdTickets?: number;
+    cpdDays?: number;
+    qualityCorrect: number;
+    qualityTotal: number;
+    qualityErrors: number;
+    quality: number;
   };
   pagination: { page: number; pageSize: number; totalRows: number; totalPages: number };
   sort: { sortBy: AgentSortKey; sortDirection: AgentSortDirection };
@@ -306,7 +323,7 @@ const defaultForecastModelWeights: ForecastModelWeights = {
 
 export function PerformanceAutomationPage({ initialTab = "queue" }: { initialTab?: PerformanceTab }) {
   const [activeTab, setActiveTab] = useState<PerformanceTab>(initialTab);
-  const [queueGranularity, setQueueGranularity] = useState<PerformanceGranularity>("daily");
+  const [queueGranularity, setQueueGranularity] = useState<PerformanceGranularity>("monthly");
   const [queueLob, setQueueLob] = useState("");
   const [queueStartDate, setQueueStartDate] = useState("");
   const [queueEndDate, setQueueEndDate] = useState("");
@@ -317,17 +334,18 @@ export function PerformanceAutomationPage({ initialTab = "queue" }: { initialTab
   const [forecastPayload, setForecastPayload] = useState<PerformanceProductionResponse | null>(null);
   const [qualityPayload, setQualityPayload] = useState<PerformanceQualityResponse | null>(null);
   const [qualityLob, setQualityLob] = useState<QualityLob>("ADS");
-  const [qualityGranularity, setQualityGranularity] = useState<QualityGranularity>("daily");
+  const [qualityGranularity, setQualityGranularity] = useState<QualityGranularity>("monthly");
   const [qualitySortDirection, setQualitySortDirection] = useState<QualitySortDirection>("desc");
   const [qualityStartDate, setQualityStartDate] = useState("");
   const [qualityEndDate, setQualityEndDate] = useState("");
   const [agentsPayload, setAgentsPayload] = useState<PerformanceAgentsResponse | null>(null);
   const [supervisorsPayload, setSupervisorsPayload] = useState<PerformanceSupervisorsResponse | null>(null);
-  const [agentView, setAgentView] = useState<QualityGranularity>("daily");
+  const [agentView, setAgentView] = useState<QualityGranularity>("monthly");
   const [supervisorView, setSupervisorView] = useState<SupervisorView>("monthly");
   const [supervisorStartDate, setSupervisorStartDate] = useState("");
   const [supervisorEndDate, setSupervisorEndDate] = useState("");
   const [agentLob, setAgentLob] = useState("");
+  const [agentSlaTarget, setAgentSlaTarget] = useState("");
   const [agentShiftId, setAgentShiftId] = useState("");
   const [agentSupervisorId, setAgentSupervisorId] = useState("");
   const [agentSearch, setAgentSearch] = useState("");
@@ -421,6 +439,7 @@ export function PerformanceAutomationPage({ initialTab = "queue" }: { initialTab
     });
     if (agentLob) params.set("lob", agentLob);
     else params.set("metadataOnly", "true");
+    if (agentSlaTarget) params.set("slaTargetMinutes", agentSlaTarget);
     if (agentStartDate) params.set("startDate", agentStartDate);
     if (agentEndDate) params.set("endDate", agentEndDate);
     if (agentShiftId) params.set("shiftId", agentShiftId);
@@ -435,7 +454,7 @@ export function PerformanceAutomationPage({ initialTab = "queue" }: { initialTab
     } finally {
       setLoadingAgents(false);
     }
-  }, [agentEndDate, agentLob, agentPage, agentShiftId, agentSort, agentStartDate, agentSupervisorId, agentView, debouncedAgentSearch]);
+  }, [agentEndDate, agentLob, agentPage, agentShiftId, agentSlaTarget, agentSort, agentStartDate, agentSupervisorId, agentView, debouncedAgentSearch]);
 
   const loadSupervisors = useCallback(async () => {
     setLoadingSupervisors(true);
@@ -509,8 +528,8 @@ export function PerformanceAutomationPage({ initialTab = "queue" }: { initialTab
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <StatCard title="Último upload" value={formatQualityImportDate(qualityPayload?.lastImport?.importedAt)} helper="snapshot de qualidade vigente" icon={CheckCircle2} tone="green" />
           <StatCard title="Janela da base" value={formatQualityRange(qualityPayload?.dataRange)} helper={qualityLob === "ADS" ? "ADS + PROJECT" : qualityLob} icon={CalendarClock} tone="purple" />
-          <StatCard title="Casos auditados" value={formatNumber(qualityPayload?.summary.total ?? 0)} helper="chaves distintas" icon={FileSpreadsheet} tone="blue" />
-          <StatCard title="Qualidade" value={formatQualityPercent(qualityPayload?.summary.quality)} helper="corretos / auditados" icon={ShieldCheck} tone="green" />
+          <StatCard title={qualityLob === "CEC" ? "Total auditado" : "Casos auditados"} value={formatNumber(qualityPayload?.summary.total ?? 0)} helper={qualityLob === "CEC" ? "Pass + Fail" : "chaves distintas"} icon={FileSpreadsheet} tone="blue" />
+          <StatCard title="Qualidade" value={formatQualityPercent(qualityPayload?.summary.quality)} helper={qualityLob === "CEC" ? "1 - Fail / Total" : "corretos / auditados"} icon={ShieldCheck} tone="green" />
         </section>
       ) : (
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -554,6 +573,7 @@ export function PerformanceAutomationPage({ initialTab = "queue" }: { initialTab
           loading={loadingAgents}
           payload={agentsPayload}
           selectedLob={agentLob}
+          selectedSlaTarget={agentSlaTarget}
           selectedShiftId={agentShiftId}
           selectedSupervisorId={agentSupervisorId}
           search={agentSearch}
@@ -562,7 +582,8 @@ export function PerformanceAutomationPage({ initialTab = "queue" }: { initialTab
           sort={agentSort}
           page={agentPage}
           view={agentView}
-          onLobChange={(value) => { setAgentLob(value); setAgentPage(1); }}
+          onLobChange={(value) => { setAgentLob(value); setAgentSlaTarget(""); setAgentPage(1); }}
+          onSlaTargetChange={(value) => { setAgentSlaTarget(value); setAgentPage(1); }}
           onShiftChange={(value) => { setAgentShiftId(value); setAgentPage(1); }}
           onSupervisorChange={(value) => { setAgentSupervisorId(value); setAgentPage(1); }}
           onSearchChange={(value) => { setAgentSearch(value); setAgentPage(1); }}
@@ -640,10 +661,10 @@ export function PerformanceAutomationPage({ initialTab = "queue" }: { initialTab
       ) : null}
       {qualityUploadOpen ? (
         <QualityImportModal
-          initialScope={qualityLob === "ADS" ? "ADS" : "TNS"}
+          initialScope={qualityLob === "ADS" ? "ADS" : qualityLob === "CEC" ? "CEC" : "TNS"}
           onClose={() => setQualityUploadOpen(false)}
           onImported={async (scope) => {
-            const nextLob: QualityLob = scope === "ADS" ? "ADS" : "VIDEO";
+            const nextLob: QualityLob = scope === "ADS" ? "ADS" : scope === "CEC" ? "CEC" : "VIDEO";
             setQualityLob(nextLob);
             setQualityPayload(null);
             await loadQuality(nextLob);
@@ -725,7 +746,11 @@ function QualityView({
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div>
           <h2 className="text-base font-black text-navy-950">Qualidade</h2>
-          <p className="mt-1 text-xs font-bold text-muted">Casos corretos distintos divididos pelos casos auditados distintos.</p>
+          <p className="mt-1 text-xs font-bold text-muted">
+            {selectedLob === "CEC"
+              ? "Qualidade CEC calculada sobre os totais de Pass Quantity e Fail Quantity."
+              : "Casos corretos distintos divididos pelos casos auditados distintos."}
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {onUpload ? (
@@ -751,7 +776,7 @@ function QualityView({
               onEndDateChange={onEndDateChange}
             />
             <SlicerGroup label="LOB">
-              {(["ADS", "VIDEO", "COMMENTS"] as QualityLob[]).map((lob) => (
+              {(["ADS", "VIDEO", "COMMENTS", "CEC"] as QualityLob[]).map((lob) => (
                 <SlicerButton key={lob} active={selectedLob === lob} label={lob} onClick={() => onLobChange(lob)} tone="dark" />
               ))}
             </SlicerGroup>
@@ -762,7 +787,7 @@ function QualityView({
             </SlicerGroup>
           </div>
           <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-2 text-xs font-bold text-blue-900">
-            Fórmula oficial: Correct distintos / total de casos distintos
+            Fórmula oficial: {selectedLob === "CEC" ? "Total = Σ Pass + Σ Fail; Qualidade = 1 - (Σ Fail / Total)" : "Correct distintos / total de casos distintos"}
           </div>
         </div>
 
@@ -771,27 +796,27 @@ function QualityView({
             <div className="max-w-md">
               <span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-white text-blue-600 shadow-sm"><ShieldCheck className="h-5 w-5" /></span>
               <h3 className="mt-4 text-lg font-black text-navy-950">Sem dados de qualidade</h3>
-              <p className="mt-2 text-sm font-semibold text-muted">Envie a base de QA de {selectedLob === "ADS" ? "ADS/PROJECT" : "VIDEO/COMMENTS"} para carregar este indicador.</p>
+              <p className="mt-2 text-sm font-semibold text-muted">Envie a base de QA de {selectedLob === "ADS" ? "ADS/PROJECT" : selectedLob === "CEC" ? "CEC" : "VIDEO/COMMENTS"} para carregar este indicador.</p>
             </div>
           </div>
         ) : (
           <div className="space-y-4">
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <StatCard title="Qualidade" value={formatQualityPercent(payload.summary.quality)} helper={payload.selectedLob} icon={ShieldCheck} tone="green" />
-              <StatCard title="Casos corretos" value={formatNumber(payload.summary.correct)} helper="distinct Correct" icon={CheckCircle2} tone="green" />
-              <StatCard title="Casos auditados" value={formatNumber(payload.summary.total)} helper="distinct concat" icon={FileSpreadsheet} tone="blue" />
-              <StatCard title="Divergências" value={formatNumber(payload.summary.errors)} helper="auditados - corretos" icon={Target} tone="orange" />
+              <StatCard title={selectedLob === "CEC" ? "Pass Quantity" : "Casos corretos"} value={formatNumber(payload.summary.correct)} helper={selectedLob === "CEC" ? "aprovações" : "distinct Correct"} icon={CheckCircle2} tone="green" />
+              <StatCard title={selectedLob === "CEC" ? "Total auditado" : "Casos auditados"} value={formatNumber(payload.summary.total)} helper={selectedLob === "CEC" ? "Pass + Fail" : "distinct concat"} icon={FileSpreadsheet} tone="blue" />
+              <StatCard title={selectedLob === "CEC" ? "Fail Quantity" : "Divergências"} value={formatNumber(payload.summary.errors)} helper={selectedLob === "CEC" ? "falhas" : "auditados - corretos"} icon={Target} tone="orange" />
             </div>
 
             <div className="rounded-xl border border-border bg-white p-4">
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-black text-navy-950">Evolução {qualityGranularityLabel(granularity).toLocaleLowerCase("pt-BR")} da qualidade</h3>
-                  <p className="mt-1 text-xs font-bold text-muted">Percentual oficial e volume de casos auditados por período.</p>
+                  <p className="mt-1 text-xs font-bold text-muted">Percentual oficial e volume de {selectedLob === "CEC" ? "Pass + Fail" : "casos auditados"} por período.</p>
                 </div>
                 <span className="rounded-lg bg-slate-50 px-3 py-1 text-xs font-black text-muted">{formatNumber(payload.trend.length)} {qualityGranularityUnit(granularity)}</span>
               </div>
-              <QualityDashboardChart rows={payload.trend} />
+              <QualityDashboardChart rows={payload.trend} cec={selectedLob === "CEC"} />
             </div>
 
             <div className="overflow-hidden rounded-xl border border-border bg-white">
@@ -827,9 +852,9 @@ function QualityView({
                           Qualidade {sortDirection === "desc" ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
                         </button>
                       </th>
-                      <th className="px-3 py-3 text-right">Corretos</th>
-                      <th className="px-3 py-3 text-right">Auditados</th>
-                      <th className="px-3 py-3 text-right">Divergências</th>
+                      <th className="px-3 py-3 text-right">{selectedLob === "CEC" ? "Pass Quantity" : "Corretos"}</th>
+                      <th className="px-3 py-3 text-right">{selectedLob === "CEC" ? "Total auditado" : "Auditados"}</th>
+                      <th className="px-3 py-3 text-right">{selectedLob === "CEC" ? "Fail Quantity" : "Divergências"}</th>
                       <th className="px-3 py-3 text-right">Última auditoria</th>
                     </tr>
                   </thead>
@@ -861,7 +886,7 @@ function QualityView({
   );
 }
 
-function QualityDashboardChart({ rows }: { rows: QualityTrendRow[] }) {
+function QualityDashboardChart({ rows, cec = false }: { rows: QualityTrendRow[]; cec?: boolean }) {
   if (!rows.length) return <EmptyBox label="Sem histórico diário para exibir." />;
   return (
     <div className="h-[360px] w-full">
@@ -871,9 +896,9 @@ function QualityDashboardChart({ rows }: { rows: QualityTrendRow[] }) {
           <XAxis dataKey="label" tick={{ fontSize: 11, fontWeight: 700, fill: "#475569" }} tickLine={false} axisLine={false} minTickGap={18} />
           <YAxis yAxisId="cases" tick={{ fontSize: 11, fontWeight: 700, fill: "#475569" }} tickLine={false} axisLine={false} tickFormatter={(value) => formatCompactAxis(Number(value))} />
           <YAxis yAxisId="quality" orientation="right" domain={[0, 100]} tick={{ fontSize: 11, fontWeight: 700, fill: "#059669" }} tickLine={false} axisLine={false} tickFormatter={(value) => `${value}%`} />
-          <RechartsTooltip content={<QualityDashboardTooltip />} cursor={{ fill: "#EFF6FF" }} />
+          <RechartsTooltip content={<QualityDashboardTooltip cec={cec} />} cursor={{ fill: "#EFF6FF" }} />
           <Legend wrapperStyle={{ fontSize: 12, fontWeight: 800 }} />
-          <Bar yAxisId="cases" dataKey="total" name="Casos auditados" fill="#93C5FD" radius={[5, 5, 0, 0]} maxBarSize={34} />
+          <Bar yAxisId="cases" dataKey="total" name={cec ? "Total auditado" : "Casos auditados"} fill="#93C5FD" radius={[5, 5, 0, 0]} maxBarSize={34} />
           <Line yAxisId="quality" type="monotone" dataKey="quality" name="Qualidade" stroke="#10B981" strokeWidth={3} dot={false} activeDot={{ r: 5 }} />
         </ComposedChart>
       </ResponsiveContainer>
@@ -881,7 +906,7 @@ function QualityDashboardChart({ rows }: { rows: QualityTrendRow[] }) {
   );
 }
 
-function QualityDashboardTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: QualityTrendRow }> }) {
+function QualityDashboardTooltip({ active, payload, cec = false }: { active?: boolean; payload?: Array<{ payload: QualityTrendRow }>; cec?: boolean }) {
   if (!active || !payload?.length) return null;
   const row = payload[0]?.payload;
   if (!row) return null;
@@ -890,9 +915,9 @@ function QualityDashboardTooltip({ active, payload }: { active?: boolean; payloa
       <p className="mb-2 text-sm font-black">{row.label}</p>
       <div className="space-y-1">
         <div className="flex justify-between gap-5"><span>Qualidade</span><span>{formatQualityPercent(row.quality)}</span></div>
-        <div className="flex justify-between gap-5"><span>Corretos</span><span>{formatNumber(row.correct)}</span></div>
-        <div className="flex justify-between gap-5"><span>Auditados</span><span>{formatNumber(row.total)}</span></div>
-        <div className="flex justify-between gap-5"><span>Divergências</span><span>{formatNumber(row.errors)}</span></div>
+        <div className="flex justify-between gap-5"><span>{cec ? "Pass Quantity" : "Corretos"}</span><span>{formatNumber(row.correct)}</span></div>
+        <div className="flex justify-between gap-5"><span>{cec ? "Total auditado" : "Auditados"}</span><span>{formatNumber(row.total)}</span></div>
+        <div className="flex justify-between gap-5"><span>{cec ? "Fail Quantity" : "Divergências"}</span><span>{formatNumber(row.errors)}</span></div>
       </div>
     </div>
   );
@@ -911,6 +936,7 @@ function AgentsView({
   loading,
   payload,
   selectedLob,
+  selectedSlaTarget,
   selectedShiftId,
   selectedSupervisorId,
   search,
@@ -920,6 +946,7 @@ function AgentsView({
   page,
   view,
   onLobChange,
+  onSlaTargetChange,
   onShiftChange,
   onSupervisorChange,
   onSearchChange,
@@ -933,6 +960,7 @@ function AgentsView({
   loading: boolean;
   payload: PerformanceAgentsResponse | null;
   selectedLob: string;
+  selectedSlaTarget: string;
   selectedShiftId: string;
   selectedSupervisorId: string;
   search: string;
@@ -942,6 +970,7 @@ function AgentsView({
   page: number;
   view: QualityGranularity;
   onLobChange: (value: string) => void;
+  onSlaTargetChange: (value: string) => void;
   onShiftChange: (value: string) => void;
   onSupervisorChange: (value: string) => void;
   onSearchChange: (value: string) => void;
@@ -968,8 +997,8 @@ function AgentsView({
           <h2 className="text-base font-black text-navy-950">Produtividade dos agentes</h2>
           <p className="mt-1 text-xs font-bold text-muted">
             {selectedLob === "CEC"
-              ? "CPD calculado a partir da base CEC vigente."
-              : "Output e AHT calculados a partir da base de produção vigente."}
+              ? "CPD e qualidade calculados a partir das bases CEC vigentes."
+              : "Output, AHT e qualidade consolidados a partir das bases vigentes."}
           </p>
         </div>
         <button type="button" onClick={onRefresh} className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-white px-3 text-xs font-black text-navy-950 hover:bg-slate-50">
@@ -996,6 +1025,19 @@ function AgentsView({
             <SlicerGroup label="LOB">
               {lobs.map((lob) => <SlicerButton key={lob} active={selectedLob === lob} label={lob} onClick={() => onLobChange(lob)} tone="dark" />)}
             </SlicerGroup>
+            {selectedLob && selectedLob !== "CEC" ? (
+              <SlicerGroup label="Meta de latência">
+                <SlicerButton active={!selectedSlaTarget} label="Todas" onClick={() => onSlaTargetChange("")} />
+                {(payload?.filters.slaTargets ?? []).map((target) => (
+                  <SlicerButton
+                    key={target}
+                    active={selectedSlaTarget === String(target)}
+                    label={formatLatencyTargetLabel(target)}
+                    onClick={() => onSlaTargetChange(String(target))}
+                  />
+                ))}
+              </SlicerGroup>
+            ) : null}
             <SlicerGroup label="Turno">
               <SlicerButton active={!selectedShiftId} label="Todos" onClick={() => onShiftChange("")} />
               {(payload?.filters.shifts ?? []).map((shift) => (
@@ -1039,8 +1081,17 @@ function AgentsView({
           </div>
         ) : loading && !payload?.agents.length ? <EmptyBox label="Carregando produtividade dos agentes..." /> : (
           <div className="space-y-4">
-            <div className={cn("grid gap-3", selectedLob === "CEC" ? "md:grid-cols-4" : "md:grid-cols-3")}>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <StatCard title="Agentes" value={formatNumber(payload?.summary.agents ?? 0)} helper="com produção no período" icon={Users} tone="purple" />
+              <StatCard
+                title="Qualidade média"
+                value={(payload?.summary.qualityTotal ?? 0) > 0 ? formatQualityPercent(payload?.summary.quality) : "-"}
+                helper={(payload?.summary.qualityTotal ?? 0) > 0
+                  ? `${formatNumber(payload?.summary.qualityCorrect ?? 0)}/${formatNumber(payload?.summary.qualityTotal ?? 0)} casos`
+                  : "sem base de qualidade no período"}
+                icon={ShieldCheck}
+                tone="green"
+              />
               {selectedLob === "CEC" ? (
                 <StatCard
                   title="Output total"
@@ -1050,17 +1101,23 @@ function AgentsView({
                   tone="green"
                 />
               ) : null}
+              {selectedLob !== "CEC" ? (
+                <StatCard
+                  title="Output médio/dia"
+                  value={formatNumber(payload?.summary.outputAveragePerDay ?? 0)}
+                  helper={`${formatNumber(payload?.summary.daysWithData ?? 0)} dia(s) trabalhado(s)`}
+                  icon={FileSpreadsheet}
+                  tone="blue"
+                />
+              ) : null}
               <StatCard
-                title={selectedLob === "CEC" ? "CPD médio" : "Output médio/dia"}
-                value={formatNumber(payload?.summary.outputAveragePerDay ?? 0)}
-                helper={`${formatNumber(payload?.summary.daysWithData ?? 0)} dia(s) trabalhado(s)`}
-                icon={FileSpreadsheet}
-                tone="blue"
-              />
-              <StatCard
-                title="AHT médio"
-                value={selectedLob === "CEC" ? "-" : formatSeconds(payload?.summary.ahtSeconds)}
-                helper={selectedLob === "CEC" ? "não disponível na base CPD" : "moderação / output"}
+                title={selectedLob === "CEC" ? "CPD médio" : "AHT médio"}
+                value={selectedLob === "CEC"
+                  ? formatNumber(payload?.summary.cpdAverage ?? 0)
+                  : formatSeconds(payload?.summary.ahtSeconds)}
+                helper={selectedLob === "CEC"
+                  ? `${formatNumber(payload?.summary.cpdTickets ?? 0)} tickets / ${formatNumber(payload?.summary.cpdDays ?? 0)} dias de agente`
+                  : "moderação / output"}
                 icon={Clock}
                 tone="orange"
               />
@@ -1075,7 +1132,7 @@ function AgentsView({
                 {loading ? <span className="inline-flex items-center gap-2 text-xs font-black text-blue-600"><RefreshCw className="h-3.5 w-3.5 animate-spin" /> Atualizando</span> : null}
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[1040px] text-left text-sm">
+                <table className="w-full min-w-[1140px] text-left text-sm">
                   <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-black uppercase tracking-wide text-muted">
                     <tr>
                       <AgentSortHeader label="Agente" sortKey="employeeName" current={sort} onSort={handleSort} />
@@ -1083,9 +1140,10 @@ function AgentsView({
                       <AgentSortHeader label="LOB" sortKey="lob" current={sort} onSort={handleSort} />
                       <AgentSortHeader label="Supervisor" sortKey="supervisor" current={sort} onSort={handleSort} />
                       <AgentSortHeader label="Turno" sortKey="shift" current={sort} onSort={handleSort} />
+                      <AgentSortHeader label="Qualidade" sortKey="quality" current={sort} onSort={handleSort} align="right" />
                       {selectedLob === "CEC" ? <AgentSortHeader label="Output" sortKey="outputTotal" current={sort} onSort={handleSort} align="right" /> : null}
-                      <AgentSortHeader label={selectedLob === "CEC" ? "CPD médio" : "Output médio/dia"} sortKey="submit" current={sort} onSort={handleSort} align="right" />
-                      <AgentSortHeader label="AHT" sortKey="aht" current={sort} onSort={handleSort} align="right" />
+                      {selectedLob !== "CEC" ? <AgentSortHeader label="Output médio/dia" sortKey="submit" current={sort} onSort={handleSort} align="right" /> : null}
+                      <AgentSortHeader label={selectedLob === "CEC" ? "CPD" : "AHT"} sortKey="aht" current={sort} onSort={handleSort} align="right" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/70">
@@ -1096,15 +1154,30 @@ function AgentsView({
                         <td className="px-3 py-3"><span className="rounded-lg bg-blue-50 px-2 py-1 text-xs font-black text-blue-700">{agent.lob}</span></td>
                         <td className="px-3 py-3 font-bold text-navy-950">{agent.supervisor}</td>
                         <td className="px-3 py-3 font-bold text-muted">{agent.shift}</td>
-                        {selectedLob === "CEC" ? <td className="px-3 py-3 text-right font-black text-navy-950">{formatNumber(agent.submit)}</td> : null}
-                        <td className="px-3 py-3 text-right font-black text-navy-950">
-                          {formatNumber(agent.outputAveragePerDay)}
-                          <span className="mt-0.5 block text-[10px] font-bold text-muted">{formatNumber(agent.daysWithData)} dia(s)</span>
+                        <td className="px-3 py-3 text-right">
+                          {agent.qualityTotal > 0 ? (
+                            <>
+                              <QualityScore value={agent.quality} />
+                              <span className="mt-0.5 block text-[10px] font-bold text-muted">
+                                {formatNumber(agent.qualityCorrect)}/{formatNumber(agent.qualityTotal)} casos
+                              </span>
+                            </>
+                          ) : <span className="text-xs font-black text-slate-400">Sem base</span>}
                         </td>
-                        <td className="px-3 py-3 text-right font-black text-navy-950">{selectedLob === "CEC" ? "-" : formatSeconds(agent.ahtSeconds)}</td>
+                        {selectedLob === "CEC" ? <td className="px-3 py-3 text-right font-black text-navy-950">{formatNumber(agent.submit)}</td> : null}
+                        {selectedLob !== "CEC" ? (
+                          <td className="px-3 py-3 text-right font-black text-navy-950">
+                            {formatNumber(agent.outputAveragePerDay)}
+                            <span className="mt-0.5 block text-[10px] font-bold text-muted">{formatNumber(agent.daysWithData)} dia(s)</span>
+                          </td>
+                        ) : null}
+                        <td className="px-3 py-3 text-right font-black text-navy-950">
+                          {selectedLob === "CEC" ? formatNumber(agent.cpdAverage ?? 0) : formatSeconds(agent.ahtSeconds)}
+                          {selectedLob === "CEC" ? <span className="mt-0.5 block text-[10px] font-bold text-muted">{formatNumber(agent.cpdDays ?? 0)} dia(s)</span> : null}
+                        </td>
                       </tr>
                     ))}
-                    {!payload?.agents.length ? <tr><td colSpan={selectedLob === "CEC" ? 8 : 7} className="px-3 py-10 text-center text-sm font-bold text-muted">Nenhum agente encontrado para os filtros selecionados.</td></tr> : null}
+                    {!payload?.agents.length ? <tr><td colSpan={8} className="px-3 py-10 text-center text-sm font-bold text-muted">Nenhum agente encontrado para os filtros selecionados.</td></tr> : null}
                   </tbody>
                 </table>
               </div>
@@ -1164,7 +1237,7 @@ function SupervisorsView({
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div>
           <h2 className="text-base font-black text-navy-950">Consolidado por supervisor</h2>
-          <p className="mt-1 text-xs font-bold text-muted">ABS, attrition, humor, AHT e qualidade consolidados por time.</p>
+          <p className="mt-1 text-xs font-bold text-muted">ABS, attrition, humor, AHT/CPD e qualidade consolidados por time.</p>
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <SlicerGroup label="Visão">
@@ -1192,11 +1265,12 @@ function SupervisorsView({
           <p className="text-sm font-black text-navy-950">{formatDashboardPeriod(payload?.period)}</p>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
           <StatCard title="ABS do time" value={formatQualityPercent(summary?.absRate)} helper={`${formatNumber(summary?.absences ?? 0)} ausência(s)`} icon={Target} tone="orange" />
           <StatCard title="Attrition do time" value={formatQualityPercent(summary?.attritionRate)} helper={`${formatNumber(summary?.terminations ?? 0)} desligamento(s)`} icon={TrendingUp} tone="purple" />
           <StatCard title="Humor do time" value={formatMoodScore(summary?.moodAverage)} helper={`${formatNumber(summary?.moodResponses ?? 0)} resposta(s)`} icon={Gauge} tone="green" />
-          <StatCard title="AHT do time" value={formatSeconds(summary?.ahtSeconds)} helper="ADS + TNS Video (meta 15 min)" icon={Clock} tone="blue" />
+          <StatCard title="AHT do time" value={formatSeconds(summary?.ahtSeconds)} helper="ADS + TNS (filas com meta 15 min)" icon={Clock} tone="blue" />
+          <StatCard title="CPD CEC" value={formatNumber(summary?.cpdAverage ?? 0)} helper={`${formatNumber(summary?.cpdTickets ?? 0)} tickets / ${formatNumber(summary?.cpdDays ?? 0)} dias de agente`} icon={Clock} tone="orange" />
           <StatCard title="Qualidade do time" value={formatQualityPercent(summary?.quality)} helper={`${formatNumber(summary?.qualityTotal ?? 0)} caso(s)`} icon={ShieldCheck} tone="green" />
         </div>
 
@@ -1218,7 +1292,7 @@ function SupervisorsView({
                     <th className="px-3 py-3 text-right">ABS</th>
                     <th className="px-3 py-3 text-right">Attrition</th>
                     <th className="px-3 py-3 text-right">Humor</th>
-                    <th className="px-3 py-3 text-right">AHT</th>
+                    <th className="px-3 py-3 text-right">AHT / CPD</th>
                     <th className="px-4 py-3 text-right">Qualidade</th>
                   </tr>
                 </thead>
@@ -1740,15 +1814,18 @@ function QualityImportModal({
           <SlicerGroup label="Base de qualidade">
             <SlicerButton active={qualityScope === "ADS"} label="ADS / PROJECT" onClick={() => { setQualityScope("ADS"); setQualityFile(null); setResult(null); }} tone="dark" />
             <SlicerButton active={qualityScope === "TNS"} label="VIDEO / COMMENTS" onClick={() => { setQualityScope("TNS"); setQualityFile(null); setResult(null); }} tone="dark" />
+            <SlicerButton active={qualityScope === "CEC"} label="CEC" onClick={() => { setQualityScope("CEC"); setQualityFile(null); setResult(null); }} tone="dark" />
           </SlicerGroup>
           <PerformanceFileField
-            label={qualityScope === "ADS" ? "Qualidade ADS / PROJECT" : "Qualidade VIDEO / COMMENTS"}
-            helper="Base com audit_name, final_result e IDs dos casos. Suporta até 1.000.000 de linhas e 250 MB, processados em lotes."
+            label={qualityScope === "ADS" ? "Qualidade ADS / PROJECT" : qualityScope === "CEC" ? "Qualidade CEC" : "Qualidade VIDEO / COMMENTS"}
+            helper={qualityScope === "CEC"
+              ? "Base com Monitor day, Employee Name, Pass Quantity e Fail Quantity. Linhas repetidas do mesmo agente e dia são somadas."
+              : "Base com audit_name, final_result e IDs dos casos. Suporta até 1.000.000 de linhas e 250 MB, processados em lotes."}
             file={qualityFile}
             onChange={setQualityFile}
           />
           <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-900">
-            Após a validação, o envio substitui apenas o snapshot de {qualityScope === "ADS" ? "ADS/PROJECT" : "VIDEO/COMMENTS"}. A outra base de qualidade será preservada.
+            Após a validação, o envio substitui apenas o snapshot de {qualityScope === "ADS" ? "ADS/PROJECT" : qualityScope === "CEC" ? "CEC" : "VIDEO/COMMENTS"}. As demais bases de qualidade serão preservadas.
           </div>
           {error ? <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{error}</p> : null}
           {result ? (
@@ -2635,6 +2712,18 @@ function formatOptionalPercent(value?: number | null) {
 
 function formatMinutes(value?: number | null) {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? `${value.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} min` : "-";
+}
+
+function formatLatencyTargetLabel(minutes: number) {
+  if (minutes >= 1_440 && minutes % 1_440 === 0) {
+    const days = minutes / 1_440;
+    return `${days} ${days === 1 ? "dia" : "dias"}`;
+  }
+  if (minutes >= 60 && minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return `${hours}h`;
+  }
+  return `${minutes} min`;
 }
 
 function formatSeconds(value?: number | null) {

@@ -6,7 +6,13 @@ import type { Actor } from "@/lib/mock-db";
 import { commitScheduleImport as commitMockScheduleImport, getAttendanceSummary as getMockAttendanceSummary, getSchedulesForActor as getMockSchedulesForActor, listAttendanceRecords as listMockAttendanceRecords, previewScheduleRows as previewMockScheduleRows, recordErrorLog, updateAttendance as updateMockAttendance } from "@/lib/mock-db";
 import { hasExcelValue, normalizeExcelDate, normalizeExcelTime } from "@/lib/excel-normalization";
 import { prisma } from "@/lib/prisma";
-import { canEditSchedule, canImportCronogramas, canViewSchedules, normalizeRole } from "@/lib/permissions";
+import {
+  canAdminOverrideWorkflowScheduleStatus,
+  canEditSchedule,
+  canImportCronogramas,
+  canViewSchedules,
+  normalizeRole
+} from "@/lib/permissions";
 import { auditPermissionDenied } from "@/lib/permission-audit";
 import { logPerformanceMetric } from "@/lib/performance-logger";
 import { cleanShiftName, isBlockedShiftName, isSelectableShiftName, shiftCategoryName, shiftLookupKey } from "@/lib/shift-display";
@@ -872,12 +878,6 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
       await auditPermissionDenied(actor, { action: "SCHEDULE_UPDATE", entity: "Schedule", reason, entityId: input.employeeId });
       return { error: reason };
     }
-    if (manuallyBlockedScheduleStatusLabels.has(input.status)) {
-      return {
-        error: "Este status é controlado pelo fluxo de justificativas ou Solicitações/Esteira e não pode ser aplicado manualmente pelo slot."
-      };
-    }
-
     const date = parseDateOnly(input.date);
     if (!date) return { error: "Data inválida." };
 
@@ -898,6 +898,16 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
     const requestedStatus = uiToScheduleStatus[input.status] ?? "ESCALADO";
     const status = classifiedScheduleStatusForInput(input, requestedStatus);
     const before = await prisma.schedule.findUnique({ where: { employeeId_date: { employeeId: employee.id, date } }, include: { shift: true } });
+    const adminRetainsExistingWorkflowStatus = Boolean(
+      before
+      && before.status === requestedStatus
+      && canAdminOverrideWorkflowScheduleStatus({ role: actor.role, status: user.status }, before.status)
+    );
+    if (manuallyBlockedScheduleStatusLabels.has(input.status) && !adminRetainsExistingWorkflowStatus) {
+      return {
+        error: "Este status é controlado pelo fluxo de justificativas ou Solicitações/Esteira e não pode ser aplicado manualmente pelo slot."
+      };
+    }
 
     const saved = await prisma.$transaction(async (tx) => {
       const schedule = await tx.schedule.upsert({
@@ -2435,7 +2445,7 @@ function validateScheduleEdit(input: ScheduleEditInput) {
   if (!input.employeeId) return "Colaborador obrigatório.";
   if (!input.date) return "Data obrigatória.";
   if (!input.status) return "Status obrigatório.";
-  if (needsTime(input.status) && (!input.shift || !input.startsAt || !input.endsAt)) return "Turno, entrada e saída são obrigatórios para Escalado, Presente ou Nesting.";
+  if (needsTime(input.status) && (!input.shift || !input.startsAt || !input.endsAt)) return "Turno, entrada e saída são obrigatórios para status produtivos.";
   if (requiresReason(input.status) && !input.pendingJustification) {
     if (!input.absenceReason?.trim()) return "Motivo da ocorrência é obrigatório.";
     if (!normalizeAttendanceReason(input.absenceReason)) return "Motivo inválido.";
@@ -2770,11 +2780,11 @@ function classifiedScheduleStatusForInput(input: Pick<ScheduleEditInput, "status
 }
 
 function needsTime(status: string) {
-  return ["Escalado", "Presente", "Nesting", "Venda de folga aprovada"].includes(status);
+  return ["Escalado", "Presente", "Nesting", "Troca aprovada", "Venda de folga aprovada"].includes(status);
 }
 
 function needsTimeDb(status: ScheduleStatus) {
-  return ["ESCALADO", "PRESENTE", "NESTING", "VENDA_FOLGA_APROVADA"].includes(status);
+  return ["ESCALADO", "PRESENTE", "NESTING", "TROCA_APROVADA", "VENDA_FOLGA_APROVADA"].includes(status);
 }
 
 function scheduleStatusFromImport(value: unknown) {

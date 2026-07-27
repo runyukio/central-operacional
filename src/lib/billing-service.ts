@@ -3,12 +3,26 @@ import { randomUUID } from "node:crypto";
 import { AuditAction, Prisma, RequestStatus, ScheduleStatus, WorkHourRecordStatus } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
-import { BILLING_FISCAL_INVOICE_NUMBER_ERROR, isValidBillingFiscalInvoiceNumber } from "@/lib/billing-fiscal-invoice";
+import {
+  BillingFiscalExtractionError,
+  createBillingFiscalValidationToken,
+  currencyEquals,
+  extractBillingFiscalInvoice,
+  type BillingFiscalDocumentExtraction,
+  verifyBillingFiscalValidationToken
+} from "@/lib/billing-fiscal-invoice-extraction";
+import { calculateBillingFiscalExpectedAmount } from "@/lib/billing-fiscal-invoice";
+import { buildBillingOmiePilot } from "@/lib/billing-omie-pilot";
 import { canAccessBilling, canManageBilling } from "@/lib/billing-permissions";
 import { isAgentJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
 import { MONTHLY_ADVANCE_FIXED_AMOUNT, isMonthlyAdvanceReferenceMonthAvailable } from "@/lib/monthly-advance-constants";
 import { formatReferenceMonth, normalizeReferenceMonth } from "@/lib/monthly-advance-service";
-import { buildOmieIntegrationCode, OmieIntegrationError, upsertBillingAccountPayable } from "@/lib/omie-service";
+import {
+  attachBillingInvoiceDocument,
+  buildOmieIntegrationCode,
+  OmieIntegrationError,
+  upsertBillingAccountPayable
+} from "@/lib/omie-service";
 import { prisma } from "@/lib/prisma";
 import { normalizeRole } from "@/lib/permissions";
 import { cleanShiftName } from "@/lib/shift-display";
@@ -73,6 +87,11 @@ const STAFF_RATE_RULES = [
 ] as const;
 
 type ActiveUser = NonNullable<Awaited<ReturnType<typeof findActiveUser>>>;
+type BillingFiscalPreviewStage =
+  | "CALCULATE_BILLING"
+  | "EXTRACT_DOCUMENT"
+  | "CHECK_DUPLICATE"
+  | "CREATE_VALIDATION";
 type BillingEmployee = Prisma.EmployeeProfileGetPayload<{
   include: {
     user: true;
@@ -118,6 +137,10 @@ type InvoiceHourDetail = {
 };
 type BillingFiscalInvoiceRecord = {
   id: string;
+  accessKey: string | null;
+  documentHash: string | null;
+  extractionMethod: string | null;
+  extractedAt: Date | null;
   invoiceNumber: string;
   grossAmount: Prisma.Decimal;
   serviceDescription: string;
@@ -139,6 +162,7 @@ type BillingFiscalInvoiceRecord = {
 };
 type BillingFiscalInvoiceView = {
   id: string;
+  accessKey: string;
   invoiceNumber: string;
   grossAmount: number;
   serviceDescription: string;
@@ -422,10 +446,113 @@ export async function getEmployeeBillingPreview(employeeId: string, referenceMon
   };
 }
 
+export async function previewBillingFiscalInvoice(actor: Actor, input: {
+  referenceMonth?: string | null;
+  employeeId?: string | null;
+  file?: File | null;
+}) {
+  const user = await findActiveUser(actor.email);
+  if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
+  if (!input.file) return { error: "Selecione a nota fiscal para leitura automática.", status: 400 };
+
+  const referenceMonth = normalizeBillingMonth(input.referenceMonth);
+  if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
+
+  let employee: BillingEmployee | null = null;
+  const requestedEmployeeId = String(input.employeeId ?? "").trim();
+  if (requestedEmployeeId) {
+    const denied = requireBillingManagement(user);
+    if (denied) return denied;
+    employee = await prisma.employeeProfile.findFirst({
+      where: { id: requestedEmployeeId, deletedAt: null },
+      include: { user: true, lob: true, supervisor: true, shift: true }
+    });
+  } else {
+    employee = user.employeeProfile as BillingEmployee | null;
+  }
+
+  if (!employee) return { error: "Colaborador não encontrado para validar a nota fiscal.", status: 404 };
+  if (!isBillableEmployee(employee)) return { error: "Colaborador não elegível para Billing.", status: 403 };
+
+  const cycle = await prisma.billingCycle.findUnique({ where: { referenceMonth } });
+  const isOwnInvoice = !requestedEmployeeId;
+  if (isOwnInvoice) {
+    if (!cycle) return { error: "Invoice ainda não está disponível para aprovação.", status: 403 };
+    const persisted = await prisma.billingEmployeeInvoice.findUnique({
+      where: { billingCycleId_employeeId: { billingCycleId: cycle.id, employeeId: employee.id } },
+      select: { status: true }
+    });
+    const effectiveStatus = persisted?.status ?? defaultInvoiceStatusForCycle(cycle.status);
+    if (!isInvoiceAvailableForEmployeeReview(cycle.status, effectiveStatus)) {
+      return { error: "Invoice ainda não está disponível para aprovação.", status: 403 };
+    }
+    if (isFinalizedInvoiceStatus(persisted?.status)) {
+      return { error: "Este invoice já foi finalizado pelo Admin Central.", status: 409 };
+    }
+  }
+
+  const uploadValidation = validateStorageUpload(actor, BILLING_INVOICE_BUCKET, input.file);
+  if ("error" in uploadValidation) return { error: uploadValidation.error, status: 400 };
+
+  let stage: BillingFiscalPreviewStage = "CALCULATE_BILLING";
+  try {
+    const calculated = await calculateEmployeeInvoice(
+      employee,
+      referenceMonth,
+      await getBillingRates(),
+      cycle?.id ?? null,
+      cycle?.status
+    );
+    const expectedFiscalAmount = calculateBillingFiscalExpectedAmount(calculated);
+    stage = "EXTRACT_DOCUMENT";
+    const extraction = await extractBillingFiscalInvoice(input.file);
+    stage = "CHECK_DUPLICATE";
+    await ensureBillingFiscalDocumentAvailable(extraction, referenceMonth, employee.id);
+
+    const matchesBilling = currencyEquals(extraction.serviceAmount, expectedFiscalAmount);
+    stage = "CREATE_VALIDATION";
+    const validationToken = matchesBilling
+      ? createBillingFiscalValidationToken({
+        ...extraction,
+        serviceDescription: buildAutomaticBillingServiceDescription(extraction, referenceMonth),
+        actorEmail: user.email,
+        referenceMonth,
+        employeeId: employee.id,
+        billingGrossAmount: expectedFiscalAmount
+      })
+      : "";
+
+    return {
+      data: {
+        accessKey: extraction.accessKey,
+        invoiceNumber: extraction.invoiceNumber,
+        serviceAmount: extraction.serviceAmount,
+        serviceDescription: buildAutomaticBillingServiceDescription(extraction, referenceMonth),
+        extractionMethod: extraction.extractionMethod,
+        billingGrossAmount: expectedFiscalAmount,
+        difference: roundMoney(extraction.serviceAmount - expectedFiscalAmount),
+        matchesBilling,
+        validationToken
+      }
+    };
+  } catch (error) {
+    if (error instanceof BillingFiscalExtractionError) {
+      return { error: error.message, status: error.status };
+    }
+    logBillingFiscalPreviewFailure(error, stage);
+    if (isBillingFiscalMigrationMissingError(error)) {
+      return {
+        error: "A atualização do banco necessária para ler a nota fiscal ainda não está disponível neste ambiente.",
+        status: 503
+      };
+    }
+    return { error: "Não foi possível ler a nota fiscal automaticamente.", status: 500 };
+  }
+}
+
 export async function approveMyBillingInvoice(actor: Actor, input: {
   referenceMonth?: string | null;
-  invoiceNumber?: string | null;
-  serviceDescription?: string | null;
+  validationToken?: string | null;
   file?: File | null;
 }) {
   const user = await findActiveUser(actor.email);
@@ -445,16 +572,8 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
   if (!isInvoiceAvailableForEmployeeReview(cycle.status, effectiveStatus)) return { error: "Invoice ainda não está disponível para aprovação.", status: 403 };
   if (isFinalizedInvoiceStatus(persisted?.status)) return { error: "Este invoice foi finalizado pelo Admin Central e não pode ser aprovado pelo colaborador.", status: 409 };
 
-  const invoiceNumber = String(input.invoiceNumber ?? "").trim();
-  const serviceDescription = String(input.serviceDescription ?? "").trim();
-  if (!isValidBillingFiscalInvoiceNumber(invoiceNumber)) {
-    return { error: BILLING_FISCAL_INVOICE_NUMBER_ERROR, status: 400 };
-  }
-  if (serviceDescription.length < 3 || serviceDescription.length > 1000) {
-    return { error: "A descrição do serviço deve ter entre 3 e 1.000 caracteres.", status: 400 };
-  }
-  if (!input.file && !persisted?.fiscalInvoice) {
-    return { error: "Anexe a nota fiscal em PDF, XML, PNG ou JPG.", status: 400 };
+  if (!input.file && !hasReusableBillingFiscalExtraction(persisted?.fiscalInvoice)) {
+    return { error: "Anexe a nota fiscal para que os dados sejam lidos automaticamente.", status: 400 };
   }
   if (input.file) {
     const validation = validateStorageUpload(actor, BILLING_INVOICE_BUCKET, input.file);
@@ -474,8 +593,28 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
 
   const rates = await getBillingRates();
   const calculated = await calculateEmployeeInvoice(user.employeeProfile as BillingEmployee, referenceMonth, rates, cycle.id, cycle.status);
+  const expectedFiscalAmount = calculateBillingFiscalExpectedAmount(calculated);
   const file = input.file ?? null;
+  let extraction: BillingFiscalDocumentExtraction;
+  try {
+    extraction = await resolveBillingFiscalSubmission({
+      actorEmail: user.email,
+      referenceMonth,
+      employeeId: user.employeeProfile.id,
+      billingGrossAmount: expectedFiscalAmount,
+      file,
+      validationToken: String(input.validationToken ?? ""),
+      existing: persisted?.fiscalInvoice ?? null
+    });
+  } catch (error) {
+    if (error instanceof BillingFiscalExtractionError) return { error: error.message, status: error.status };
+    return { error: "Não foi possível validar os dados extraídos da nota fiscal.", status: 400 };
+  }
+
+  const invoiceNumber = extraction.invoiceNumber;
+  const serviceDescription = buildAutomaticBillingServiceDescription(extraction, referenceMonth);
   const storagePath = file ? buildBillingInvoiceStoragePath(referenceMonth, user.employeeProfile.id, file.name) : null;
+  const wbLogin = user.employeeProfile.wbLogin;
   let uploadedPath: string | null = null;
 
   try {
@@ -515,27 +654,36 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
       await tx.billingFiscalInvoice.upsert({
         where: { employeeInvoiceId: savedInvoice.id },
         update: {
+          accessKey: extraction.accessKey,
+          documentHash: extraction.documentHash,
+          extractionMethod: extraction.extractionMethod,
+          extractedAt: approvedAt,
           invoiceNumber,
-          grossAmount: decimal(calculated.grossAmount),
+          grossAmount: decimal(extraction.serviceAmount),
           serviceDescription,
           ...fileData,
           submittedById: user.id,
           submittedAt: approvedAt,
           omieStatus: "PENDING",
-          omieIntegrationCode: buildOmieIntegrationCode(referenceMonth, savedInvoice.id),
+          omieIntegrationCode: persisted?.fiscalInvoice?.omieIntegrationCode
+            || buildOmieIntegrationCode(referenceMonth, wbLogin),
           omieSyncedAt: null,
           omieLastError: null
         },
         create: {
           employeeInvoiceId: savedInvoice.id,
+          accessKey: extraction.accessKey,
+          documentHash: extraction.documentHash,
+          extractionMethod: extraction.extractionMethod,
+          extractedAt: approvedAt,
           invoiceNumber,
-          grossAmount: decimal(calculated.grossAmount),
+          grossAmount: decimal(extraction.serviceAmount),
           serviceDescription,
           ...fileData,
           submittedById: user.id,
           submittedAt: approvedAt,
           omieStatus: "PENDING",
-          omieIntegrationCode: buildOmieIntegrationCode(referenceMonth, savedInvoice.id)
+          omieIntegrationCode: buildOmieIntegrationCode(referenceMonth, wbLogin)
         }
       });
 
@@ -549,8 +697,13 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
           newValue: {
             referenceMonth,
             employeeId: calculated.employeeId,
+            accessKey: extraction.accessKey,
             invoiceNumber,
-            invoiceGrossAmount: calculated.grossAmount,
+            invoiceGrossAmount: extraction.serviceAmount,
+            billingGrossAmount: expectedFiscalAmount,
+            billingHoursGrossAmount: calculated.grossAmount,
+            billingCorrectionAmount: calculated.correctionAmount,
+            extractionMethod: extraction.extractionMethod,
             invoiceFileName: fileData.fileName,
             finalAmount: calculated.finalAmount,
             totalMinutes: calculated.totalConsideredMinutes
@@ -572,7 +725,10 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
     return { data: { id: invoice.id, status: "Aprovado pelo colaborador", omie } };
   } catch (error) {
     if (uploadedPath) await deletePrivateObject(BILLING_INVOICE_BUCKET, uploadedPath).catch(() => undefined);
-    return { error: error instanceof Error ? error.message : "Não foi possível salvar a nota fiscal.", status: 500 };
+    if (isBillingFiscalDuplicateError(error)) {
+      return { error: "Esta NFS-e já foi utilizada em outro invoice.", status: 409 };
+    }
+    return { error: "Não foi possível salvar a nota fiscal.", status: 500 };
   }
 }
 
@@ -600,8 +756,20 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
         select: {
           id: true,
           referenceMonth: true,
+          billingCycleId: true,
           employeeId: true,
-          approvedByEmployeeAt: true
+          approvedByEmployeeAt: true,
+          grossAmount: true,
+          advanceAmount: true,
+          campaignAmount: true,
+          adjustmentAmount: true,
+          finalAmount: true,
+          employee: {
+            select: {
+              wbLogin: true,
+              lobId: true
+            }
+          }
         }
       }
     }
@@ -609,7 +777,10 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
   if (!fiscalInvoice) return { status: "ERROR", message: "Nota fiscal não encontrada para integração com o Omie.", launchCode: "" };
 
   const integrationCode = fiscalInvoice.omieIntegrationCode
-    || buildOmieIntegrationCode(fiscalInvoice.employeeInvoice.referenceMonth, employeeInvoiceId);
+    || buildOmieIntegrationCode(
+      fiscalInvoice.employeeInvoice.referenceMonth,
+      fiscalInvoice.employeeInvoice.employee.wbLogin
+    );
   const attemptedAt = new Date();
   await prisma.billingFiscalInvoice.update({
     where: { id: fiscalInvoice.id },
@@ -627,15 +798,71 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
       where: { employeeId: fiscalInvoice.employeeInvoice.employeeId },
       select: { cnpj: true }
     });
+    if (fiscalInvoice.storageBucket !== BILLING_INVOICE_BUCKET) {
+      throw new OmieIntegrationError("A nota fiscal está armazenada em uma origem inválida para envio ao Omie.");
+    }
+    const adjustmentRows = await prisma.billingAdjustment.findMany({
+      where: {
+        billingCycleId: fiscalInvoice.employeeInvoice.billingCycleId,
+        deletedAt: null,
+        OR: [
+          { employeeId: fiscalInvoice.employeeInvoice.employeeId },
+          {
+            employeeId: null,
+            lobId: fiscalInvoice.employeeInvoice.employee.lobId
+          },
+          { employeeInvoiceId }
+        ]
+      },
+      select: { type: true, amount: true }
+    });
+    const adjustmentBreakdown = buildAdjustmentBreakdown(adjustmentRows);
+    const billingGrossAmount = Number(fiscalInvoice.employeeInvoice.grossAmount);
+    const fiscalGrossAmount = Number(fiscalInvoice.grossAmount);
+    const campaignAmount = Number(fiscalInvoice.employeeInvoice.campaignAmount);
+    const advanceAmount = Number(fiscalInvoice.employeeInvoice.advanceAmount);
+    const finalAmount = Number(fiscalInvoice.employeeInvoice.finalAmount);
+    const pilot = buildBillingOmiePilot({
+      referenceMonth: fiscalInvoice.employeeInvoice.referenceMonth,
+      wbLogin: fiscalInvoice.employeeInvoice.employee.wbLogin,
+      finalAmount,
+      bonusAmount: adjustmentBreakdown.bonusAmount,
+      campaignAmount,
+      advanceAmount,
+      discountAmount: adjustmentBreakdown.discountAmount,
+      otherAdjustmentAmount: adjustmentBreakdown.otherAdjustmentAmount
+    });
+    const storedInvoice = await downloadPrivateObject(BILLING_INVOICE_BUCKET, fiscalInvoice.storagePath)
+      .catch(() => {
+        throw new OmieIntegrationError("Não foi possível recuperar a nota fiscal para anexar ao lançamento no Omie.");
+      });
     const result = await upsertBillingAccountPayable({
       employeeInvoiceId,
       referenceMonth: fiscalInvoice.employeeInvoice.referenceMonth,
+      wbLogin: fiscalInvoice.employeeInvoice.employee.wbLogin,
       cnpj: sensitiveData?.cnpj ?? "",
+      accessKey: fiscalInvoice.accessKey ?? "",
       invoiceNumber: fiscalInvoice.invoiceNumber,
       serviceDescription: fiscalInvoice.serviceDescription,
-      grossAmount: Number(fiscalInvoice.grossAmount),
+      grossAmount: fiscalGrossAmount,
+      documentAmount: pilot.documentAmount,
+      categories: pilot.categories,
+      billingGrossAmount,
+      correctionAmount: adjustmentBreakdown.correctionAmount,
+      bonusAmount: adjustmentBreakdown.bonusAmount,
+      campaignAmount,
+      advanceAmount,
+      discountAmount: adjustmentBreakdown.discountAmount,
+      otherAdjustmentAmount: adjustmentBreakdown.otherAdjustmentAmount,
       approvedAt: fiscalInvoice.employeeInvoice.approvedByEmployeeAt ?? fiscalInvoice.submittedAt,
       integrationCode
+    });
+    const attachment = await attachBillingInvoiceDocument({
+      employeeInvoiceId,
+      documentHash: fiscalInvoice.documentHash,
+      launchCode: result.launchCode,
+      fileName: fiscalInvoice.fileName,
+      file: storedInvoice.data
     });
     const syncedAt = new Date();
     await prisma.billingFiscalInvoice.update({
@@ -655,9 +882,29 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
       integrationCode: result.integrationCode,
       launchCode: result.launchCode,
       supplierCode: result.supplierCode,
-      grossAmount: Number(fiscalInvoice.grossAmount)
+      invoiceNumber: fiscalInvoice.invoiceNumber,
+      wbLogin: fiscalInvoice.employeeInvoice.employee.wbLogin,
+      grossAmount: fiscalGrossAmount,
+      documentAmount: pilot.documentAmount,
+      categories: pilot.categories,
+      billingGrossAmount,
+      correctionAmount: adjustmentBreakdown.correctionAmount,
+      bonusAmount: adjustmentBreakdown.bonusAmount,
+      campaignAmount,
+      advanceAmount,
+      discountAmount: adjustmentBreakdown.discountAmount,
+      otherAdjustmentAmount: adjustmentBreakdown.otherAdjustmentAmount,
+      finalAmount,
+      attachmentIntegrationCode: attachment.integrationCode,
+      attachmentId: attachment.attachmentId,
+      attachmentFileName: attachment.fileName,
+      attachmentAlreadyExisted: attachment.alreadyAttached
     });
-    return { status: "SYNCED", message: result.statusDescription || "Lançamento enviado ao Omie.", launchCode: result.launchCode };
+    return {
+      status: "SYNCED",
+      message: "Lançamento e nota fiscal enviados ao Omie.",
+      launchCode: result.launchCode
+    };
   } catch (error) {
     const message = error instanceof OmieIntegrationError
       ? error.message
@@ -1021,8 +1268,7 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
   referenceMonth?: string | null;
   employeeId: string;
   finalized: boolean;
-  invoiceNumber?: string | null;
-  serviceDescription?: string | null;
+  validationToken?: string | null;
   file?: File | null;
 }) {
   const user = await findActiveUser(actor.email);
@@ -1046,16 +1292,8 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
   });
 
   if (input.finalized) {
-    const invoiceNumber = String(input.invoiceNumber ?? "").trim();
-    const serviceDescription = String(input.serviceDescription ?? "").trim();
-    if (!isValidBillingFiscalInvoiceNumber(invoiceNumber)) {
-      return { error: BILLING_FISCAL_INVOICE_NUMBER_ERROR, status: 400 };
-    }
-    if (serviceDescription.length < 3 || serviceDescription.length > 1000) {
-      return { error: "A descrição do serviço deve ter entre 3 e 1.000 caracteres.", status: 400 };
-    }
-    if (!input.file && !existing?.fiscalInvoice) {
-      return { error: "Anexe a nota fiscal em PDF, XML, PNG ou JPG.", status: 400 };
+    if (!input.file && !hasReusableBillingFiscalExtraction(existing?.fiscalInvoice)) {
+      return { error: "Anexe a nota fiscal para que os dados sejam lidos automaticamente.", status: 400 };
     }
     if (input.file) {
       const validation = validateStorageUpload(actor, BILLING_INVOICE_BUCKET, input.file);
@@ -1074,7 +1312,26 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
     }
 
     const calculated = await calculateEmployeeInvoice(employee, referenceMonth, await getBillingRates(), cycle.id, cycle.status);
+    const expectedFiscalAmount = calculateBillingFiscalExpectedAmount(calculated);
     const file = input.file ?? null;
+    let extraction: BillingFiscalDocumentExtraction;
+    try {
+      extraction = await resolveBillingFiscalSubmission({
+        actorEmail: user!.email,
+        referenceMonth,
+        employeeId: employee.id,
+        billingGrossAmount: expectedFiscalAmount,
+        file,
+        validationToken: String(input.validationToken ?? ""),
+        existing: existing?.fiscalInvoice ?? null
+      });
+    } catch (error) {
+      if (error instanceof BillingFiscalExtractionError) return { error: error.message, status: error.status };
+      return { error: "Não foi possível validar os dados extraídos da nota fiscal.", status: 400 };
+    }
+
+    const invoiceNumber = extraction.invoiceNumber;
+    const serviceDescription = buildAutomaticBillingServiceDescription(extraction, referenceMonth);
     const storagePath = file ? buildBillingInvoiceStoragePath(referenceMonth, employee.id, file.name) : null;
     let uploadedPath: string | null = null;
 
@@ -1110,27 +1367,36 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
         await tx.billingFiscalInvoice.upsert({
           where: { employeeInvoiceId: savedInvoice.id },
           update: {
+            accessKey: extraction.accessKey,
+            documentHash: extraction.documentHash,
+            extractionMethod: extraction.extractionMethod,
+            extractedAt: submittedAt,
             invoiceNumber,
-            grossAmount: decimal(calculated.grossAmount),
+            grossAmount: decimal(extraction.serviceAmount),
             serviceDescription,
             ...fileData,
             submittedById: user!.id,
             submittedAt,
             omieStatus: "PENDING",
-            omieIntegrationCode: buildOmieIntegrationCode(referenceMonth, savedInvoice.id),
+            omieIntegrationCode: existing?.fiscalInvoice?.omieIntegrationCode
+              || buildOmieIntegrationCode(referenceMonth, employee.wbLogin),
             omieSyncedAt: null,
             omieLastError: null
           },
           create: {
             employeeInvoiceId: savedInvoice.id,
+            accessKey: extraction.accessKey,
+            documentHash: extraction.documentHash,
+            extractionMethod: extraction.extractionMethod,
+            extractedAt: submittedAt,
             invoiceNumber,
-            grossAmount: decimal(calculated.grossAmount),
+            grossAmount: decimal(extraction.serviceAmount),
             serviceDescription,
             ...fileData,
             submittedById: user!.id,
             submittedAt,
             omieStatus: "PENDING",
-            omieIntegrationCode: buildOmieIntegrationCode(referenceMonth, savedInvoice.id)
+            omieIntegrationCode: buildOmieIntegrationCode(referenceMonth, employee.wbLogin)
           }
         });
 
@@ -1151,8 +1417,13 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
               status: savedInvoice.status,
               referenceMonth,
               employeeId: employee.id,
+              accessKey: extraction.accessKey,
               invoiceNumber,
-              invoiceGrossAmount: calculated.grossAmount,
+              invoiceGrossAmount: extraction.serviceAmount,
+              billingGrossAmount: expectedFiscalAmount,
+              billingHoursGrossAmount: calculated.grossAmount,
+              billingCorrectionAmount: calculated.correctionAmount,
+              extractionMethod: extraction.extractionMethod,
               invoiceFileName: fileData.fileName,
               finalAmount: Number(savedInvoice.finalAmount),
               totalMinutes: savedInvoice.totalConsideredMinutes
@@ -1174,7 +1445,10 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
       return { data: { id: invoice.id, status: invoice.status, statusLabel: invoiceStatusLabel(invoice.status), omie } };
     } catch (error) {
       if (uploadedPath) await deletePrivateObject(BILLING_INVOICE_BUCKET, uploadedPath).catch(() => undefined);
-      return { error: error instanceof Error ? error.message : "Não foi possível finalizar o invoice com a nota fiscal.", status: 500 };
+      if (isBillingFiscalDuplicateError(error)) {
+        return { error: "Esta NFS-e já foi utilizada em outro invoice.", status: 409 };
+      }
+      return { error: "Não foi possível finalizar o invoice com a nota fiscal.", status: 500 };
     }
   }
 
@@ -2875,6 +3149,7 @@ function mapBillingFiscalInvoice(row: BillingFiscalInvoiceRecord | null | undefi
   if (!row || !employeeInvoiceId) return null;
   return {
     id: row.id,
+    accessKey: row.accessKey ?? "",
     invoiceNumber: row.invoiceNumber,
     grossAmount: Number(row.grossAmount),
     serviceDescription: row.serviceDescription,
@@ -2893,6 +3168,132 @@ function mapBillingFiscalInvoice(row: BillingFiscalInvoiceRecord | null | undefi
       canRetry: row.omieStatus !== "SYNCED"
     }
   };
+}
+
+async function resolveBillingFiscalSubmission(input: {
+  actorEmail: string;
+  referenceMonth: string;
+  employeeId: string;
+  billingGrossAmount: number;
+  file: File | null;
+  validationToken: string;
+  existing: BillingFiscalInvoiceRecord | null;
+}): Promise<BillingFiscalDocumentExtraction> {
+  let extraction: BillingFiscalDocumentExtraction;
+
+  if (input.file) {
+    if (!input.validationToken) {
+      throw new BillingFiscalExtractionError("Aguarde a leitura automática da nota fiscal antes de aprovar.");
+    }
+    extraction = await verifyBillingFiscalValidationToken(input.validationToken, input.file, {
+      actorEmail: input.actorEmail,
+      referenceMonth: input.referenceMonth,
+      employeeId: input.employeeId,
+      billingGrossAmount: input.billingGrossAmount
+    });
+  } else if (hasReusableBillingFiscalExtraction(input.existing)) {
+    extraction = {
+      accessKey: input.existing.accessKey,
+      invoiceNumber: input.existing.invoiceNumber,
+      serviceAmount: Number(input.existing.grossAmount),
+      serviceDescription: input.existing.serviceDescription,
+      documentHash: input.existing.documentHash,
+      extractionMethod: normalizeBillingFiscalExtractionMethod(input.existing.extractionMethod)
+    };
+  } else {
+    throw new BillingFiscalExtractionError("Anexe a nota fiscal para que os dados sejam lidos automaticamente.");
+  }
+
+  if (!currencyEquals(extraction.serviceAmount, input.billingGrossAmount)) {
+    throw new BillingFiscalExtractionError(
+      `O valor do serviço na nota (${formatBillingCurrency(extraction.serviceAmount)}) é diferente do bruto das horas somado à correção (${formatBillingCurrency(input.billingGrossAmount)}).`,
+      409
+    );
+  }
+  await ensureBillingFiscalDocumentAvailable(extraction, input.referenceMonth, input.employeeId);
+  return extraction;
+}
+
+function hasReusableBillingFiscalExtraction(
+  row: BillingFiscalInvoiceRecord | null | undefined
+): row is BillingFiscalInvoiceRecord & { accessKey: string; documentHash: string; extractionMethod: string } {
+  return Boolean(
+    row?.accessKey
+    && row.documentHash
+    && row.extractionMethod
+    && row.invoiceNumber
+    && Number(row.grossAmount) > 0
+  );
+}
+
+async function ensureBillingFiscalDocumentAvailable(
+  extraction: Pick<BillingFiscalDocumentExtraction, "accessKey" | "documentHash">,
+  referenceMonth: string,
+  employeeId: string
+) {
+  const duplicate = await prisma.billingFiscalInvoice.findFirst({
+    where: {
+      OR: [
+        { accessKey: extraction.accessKey },
+        { documentHash: extraction.documentHash }
+      ]
+    },
+    select: {
+      employeeInvoice: {
+        select: { referenceMonth: true, employeeId: true }
+      }
+    }
+  });
+  if (
+    duplicate
+    && (
+      duplicate.employeeInvoice.referenceMonth !== referenceMonth
+      || duplicate.employeeInvoice.employeeId !== employeeId
+    )
+  ) {
+    throw new BillingFiscalExtractionError("Esta NFS-e já foi utilizada em outro invoice.", 409);
+  }
+}
+
+function buildAutomaticBillingServiceDescription(extraction: BillingFiscalDocumentExtraction, referenceMonth: string) {
+  return extraction.serviceDescription.trim()
+    || `Prestação de serviços - Billing ${formatReferenceMonth(referenceMonth)}`;
+}
+
+function normalizeBillingFiscalExtractionMethod(value: string | null | undefined): BillingFiscalDocumentExtraction["extractionMethod"] {
+  if (value === "PDF_TEXT" || value === "XML") return value;
+  return "OCR";
+}
+
+function isBillingFiscalDuplicateError(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError
+    && error.code === "P2002"
+    && Array.isArray(error.meta?.target)
+    && error.meta.target.some((field) => field === "accessKey" || field === "documentHash");
+}
+
+function isBillingFiscalMigrationMissingError(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError
+    && (error.code === "P2021" || error.code === "P2022");
+}
+
+function logBillingFiscalPreviewFailure(error: unknown, stage: BillingFiscalPreviewStage) {
+  const normalized = error instanceof Error
+    ? {
+      name: error.name,
+      message: error.message,
+      stack: error.stack
+    }
+    : {
+      name: "UnknownError",
+      message: String(error)
+    };
+  const prismaCode = error instanceof Prisma.PrismaClientKnownRequestError ? error.code : undefined;
+  console.error("[billing-fiscal-preview] unexpected failure", {
+    stage,
+    prismaCode,
+    ...normalized
+  });
 }
 
 function normalizeOmieStatus(value: string): "PENDING" | "SYNCED" | "ERROR" {

@@ -1,6 +1,7 @@
 export const DEFAULT_PRODUCTIVE_HOURS = 8;
 export const PRODUCTIVE_DAY_MINUTES = DEFAULT_PRODUCTIVE_HOURS * 60;
 export const WORK_HOUR_TOLERANCE_MINUTES = 5;
+export type WorkHourBalanceStatus = "Hora extra" | "OK" | "Horas pendentes" | "Sem cronograma";
 
 const productiveStatusKeys = new Set([
   "ESCALADO",
@@ -92,6 +93,16 @@ export function normalizeProductivePlannedHours(plannedHours?: number | null) {
 
 export function calculateProductiveDifferenceMinutes(actualHours: number, plannedHours = DEFAULT_PRODUCTIVE_HOURS) {
   return Math.round((actualHours - plannedHours) * 60);
+}
+
+export function workHourBalanceStatus(
+  plannedHours: number | null | undefined,
+  differenceMinutes: number | null | undefined
+): WorkHourBalanceStatus {
+  if (!plannedHours || differenceMinutes === null || differenceMinutes === undefined) return "Sem cronograma";
+  if (differenceMinutes > 0) return "Hora extra";
+  if (differenceMinutes < 0) return "Horas pendentes";
+  return "OK";
 }
 
 export function isProductiveDifferenceWithinTolerance(differenceMinutes: number, toleranceMinutes = WORK_HOUR_TOLERANCE_MINUTES) {

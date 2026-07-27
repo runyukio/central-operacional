@@ -72,6 +72,32 @@ test("ignora filas e agentes fora de ADS", () => {
   assert.deepEqual(report.topAgents, []);
 });
 
+test("no VIDEO restringe somente backlog e max latency às filas de 15 minutos", () => {
+  const report = buildAdsExecutiveReportSnapshot({
+    lob: "VIDEO",
+    selectedCycle: "2026-07-21 10:30",
+    queueRows: [
+      {
+        lob: "VIDEO",
+        slaTargetMinutes: 15,
+        history: [metric("2026-07-21 10:30", 100, 80, 12, 600_000)]
+      },
+      {
+        lob: "VIDEO",
+        slaTargetMinutes: 1440,
+        history: [metric("2026-07-21 10:30", 300, 240, 999, 50_000_000)]
+      }
+    ],
+    agentRows: []
+  });
+
+  assert.equal(report.lob, "VIDEO");
+  assert.equal(report.latencyTargetMinutes, 15);
+  assert.equal(report.buckets[10].input, 400);
+  assert.equal(report.buckets[10].output, 320);
+  assert.equal(report.buckets[10].backlog, 12);
+  assert.equal(report.buckets[10].maxLatencyMs, 600_000);
+});
 test("no Executive conta quem esteve presente ou online na hora", () => {
   const report = buildAdsExecutiveReportSnapshot({
     selectedCycle: "2026-07-21 10:30",
@@ -88,14 +114,14 @@ test("no Executive conta quem esteve presente ou online na hora", () => {
   assert.equal(report.buckets[10].online, 3);
 });
 
-function metric(cycleDownload: string, input: number, output: number, backlog: number) {
+function metric(cycleDownload: string, input: number, output: number, backlog: number, maxLatencyMs = 120_000) {
   return {
     cycleDownload,
     input,
     output,
     ahtMs: 30_000,
     latencyMs: 60_000,
-    maxLatencyMs: 120_000,
+    maxLatencyMs,
     backlog
   };
 }

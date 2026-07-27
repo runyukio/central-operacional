@@ -21,8 +21,7 @@ export async function POST(request: Request) {
     const result = action === "approve"
       ? await approveMyBillingInvoice(actor, {
         referenceMonth: String(form.get("referenceMonth") ?? ""),
-        invoiceNumber: String(form.get("invoiceNumber") ?? ""),
-        serviceDescription: String(form.get("serviceDescription") ?? ""),
+        validationToken: String(form.get("validationToken") ?? ""),
         file: fileValue instanceof File && fileValue.size > 0 ? fileValue : null
       })
       : { error: "Ação de invoice inválida.", status: 400 };

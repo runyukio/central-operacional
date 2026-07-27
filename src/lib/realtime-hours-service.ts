@@ -102,6 +102,13 @@ type RealtimeHoursTimelineOptions = {
   includeOvernightShiftTail?: boolean;
 };
 
+export type RealtimeHoursShiftActivityRequest = {
+  key: string;
+  employeeId: string;
+  wbLogin: string;
+  shiftDate: Date;
+};
+
 type RealtimeHoursIdentityMappingInput = {
   hostname?: unknown;
   windowsUser?: unknown;
@@ -1027,29 +1034,135 @@ export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOpt
   return result;
 }
 
+export async function getRealtimeHoursShiftActivityHours(
+  requests: RealtimeHoursShiftActivityRequest[]
+) {
+  const uniqueRequests = Array.from(new Map(requests.map((request) => [request.key, request])).values());
+  const result = new Map(uniqueRequests.map((request) => [request.key, 0]));
+  if (!uniqueRequests.length) return result;
+
+  const employeeIds = Array.from(new Set(uniqueRequests.map((request) => request.employeeId).filter(Boolean)));
+  const wbLogins = Array.from(new Set(uniqueRequests.map((request) => request.wbLogin).filter(Boolean)));
+  const employeeIdByWbLogin = new Map(
+    uniqueRequests
+      .filter((request) => request.employeeId && request.wbLogin)
+      .map((request) => [normalizeLogin(request.wbLogin), request.employeeId])
+  );
+  const requestsByEmployeeId = new Map<string, RealtimeHoursShiftActivityRequest[]>();
+  for (const request of uniqueRequests) {
+    const employeeRequests = requestsByEmployeeId.get(request.employeeId) ?? [];
+    employeeRequests.push(request);
+    requestsByEmployeeId.set(request.employeeId, employeeRequests);
+  }
+
+  const requestedDateKeys = Array.from(new Set(uniqueRequests.map((request) => request.shiftDate.toISOString().slice(0, 10))));
+  const scheduleDateKeys = Array.from(new Set(requestedDateKeys.flatMap((date) => [
+    addDateKeyDays(date, -1),
+    date,
+    addDateKeyDays(date, 1)
+  ])));
+  const periods = new Map(requestedDateKeys.map((date) => [date, resolveTimelineDate(date)]));
+  const queryStart = new Date(Math.min(...Array.from(periods.values()).map((period) => period.queryStart.getTime())));
+  const queryEnd = new Date(Math.max(...Array.from(periods.values()).map((period) => period.end.getTime())));
+
+  const [records, schedules] = await Promise.all([
+    prisma.realTimeHoursRecord.findMany({
+      where: {
+        capturedAt: { gte: queryStart, lt: queryEnd },
+        OR: [
+          { employeeId: { in: employeeIds } },
+          ...(wbLogins.length ? [{ wbLogin: { in: wbLogins } }] : [])
+        ]
+      },
+      orderBy: [{ capturedAt: "asc" }],
+      select: {
+        capturedAt: true,
+        eventType: true,
+        lastActivityAt: true,
+        isSessionActive: true,
+        idleSeconds: true,
+        hostname: true,
+        windowsUser: true,
+        wbLogin: true,
+        employeeId: true
+      }
+    }),
+    prisma.schedule.findMany({
+      where: {
+        employeeId: { in: employeeIds },
+        date: { in: scheduleDateKeys.map((date) => new Date(`${date}T00:00:00.000Z`)) },
+        deletedAt: null
+      },
+      select: {
+        id: true,
+        employeeId: true,
+        date: true,
+        startsAt: true,
+        endsAt: true,
+        status: true,
+        shift: { select: { name: true, startsAt: true, endsAt: true } }
+      }
+    })
+  ]);
+
+  const recordsByEmployeeId = new Map<string, TimelineDeviceRecord[]>();
+  for (const record of records) {
+    const employeeId = record.employeeId && requestsByEmployeeId.has(record.employeeId)
+      ? record.employeeId
+      : employeeIdByWbLogin.get(normalizeLogin(record.wbLogin ?? "")) ?? "";
+    if (!employeeId) continue;
+    const employeeRecords = recordsByEmployeeId.get(employeeId) ?? [];
+    employeeRecords.push(record);
+    recordsByEmployeeId.set(employeeId, employeeRecords);
+  }
+
+  const schedulesByEmployeeId = new Map<string, RealtimeHoursScheduleSlot[]>();
+  for (const schedule of schedules) {
+    const employeeSchedules = schedulesByEmployeeId.get(schedule.employeeId) ?? [];
+    employeeSchedules.push({ ...schedule, status: schedule.status });
+    schedulesByEmployeeId.set(schedule.employeeId, employeeSchedules);
+  }
+
+  for (const [employeeId, employeeRequests] of requestsByEmployeeId) {
+    const plannedShifts = buildRealtimeHoursPlannedShifts(schedulesByEmployeeId.get(employeeId) ?? []);
+    const assignmentWindows = buildRealtimeHoursSlotAssignmentWindows(plannedShifts);
+    const recordsByShiftId = new Map<string, TimelineDeviceRecord[]>();
+
+    for (const record of recordsByEmployeeId.get(employeeId) ?? []) {
+      const plannedShift = matchRealtimeHoursPlannedShift(record.capturedAt, assignmentWindows);
+      if (!plannedShift) continue;
+      const shiftRecords = recordsByShiftId.get(plannedShift.id) ?? [];
+      shiftRecords.push(record);
+      recordsByShiftId.set(plannedShift.id, shiftRecords);
+    }
+
+    for (const request of employeeRequests) {
+      const dateKey = request.shiftDate.toISOString().slice(0, 10);
+      const plannedShift = plannedShifts.find((shift) => shift.sourceDate === dateKey);
+      const period = periods.get(dateKey);
+      if (!plannedShift || !period) continue;
+      const slotRecords = recordsByShiftId.get(plannedShift.id) ?? [];
+      const assignmentWindow = assignmentWindows.find((window) => window.shift.id === plannedShift.id) ?? null;
+      const segments = buildRealtimeHoursCapturedSegments(slotRecords, plannedShift, assignmentWindow, period);
+      const activeMs = wholeSecondsMs(segments
+        .filter((segment) => segment.type === "ACTIVE")
+        .reduce((sum, segment) => sum + segment.durationMs, 0));
+      result.set(request.key, activeMs / (60 * 60 * 1_000));
+    }
+  }
+
+  return result;
+}
+
 type RealtimeHoursTimelinePeriod = ReturnType<typeof resolveTimelineDate>;
 
-function buildRealtimeHoursTimelineRow({
-  personKey,
-  slotRecords,
-  employee,
-  employeeId,
-  wbLogin,
-  plannedShift,
-  assignmentWindow,
-  period,
-  fallbackIndex = 0
-}: {
-  personKey: string;
-  slotRecords: TimelineRecordWithIdentity[];
-  employee: TimelineEmployee | undefined;
-  employeeId: string;
-  wbLogin: string;
-  plannedShift: RealtimeHoursPlannedShift | null;
-  assignmentWindow: RealtimeHoursSlotAssignmentWindow | null;
-  period: RealtimeHoursTimelinePeriod;
-  fallbackIndex?: number;
-}) {
+function buildRealtimeHoursCapturedSegments(
+  slotRecords: TimelineDeviceRecord[],
+  plannedShift: RealtimeHoursPlannedShift | null,
+  assignmentWindow: RealtimeHoursSlotAssignmentWindow | null,
+  period: RealtimeHoursTimelinePeriod
+) {
+  if (!slotRecords.length) return [];
   const sortedRecords = [...slotRecords].sort((left, right) => left.capturedAt.getTime() - right.capturedAt.getTime());
   const firstRecord = sortedRecords[0];
   const latest = sortedRecords[sortedRecords.length - 1];
@@ -1082,9 +1195,37 @@ function buildRealtimeHoursTimelineRow({
   );
   const metricEnd = new Date(Math.min(metricEndMs, period.calculationEnd.getTime(), period.end.getTime()));
   const metricStart = new Date(Math.min(metricStartMs, metricEnd.getTime()));
-  const segments = metricEnd > metricStart
+  return metricEnd > metricStart
     ? buildMergedTimelineSegments(sortedRecords, metricStart, metricEnd)
     : [];
+}
+
+function buildRealtimeHoursTimelineRow({
+  personKey,
+  slotRecords,
+  employee,
+  employeeId,
+  wbLogin,
+  plannedShift,
+  assignmentWindow,
+  period,
+  fallbackIndex = 0
+}: {
+  personKey: string;
+  slotRecords: TimelineRecordWithIdentity[];
+  employee: TimelineEmployee | undefined;
+  employeeId: string;
+  wbLogin: string;
+  plannedShift: RealtimeHoursPlannedShift | null;
+  assignmentWindow: RealtimeHoursSlotAssignmentWindow | null;
+  period: RealtimeHoursTimelinePeriod;
+  fallbackIndex?: number;
+}) {
+  const sortedRecords = [...slotRecords].sort((left, right) => left.capturedAt.getTime() - right.capturedAt.getTime());
+  const latest = sortedRecords[sortedRecords.length - 1];
+  const segments = buildRealtimeHoursCapturedSegments(sortedRecords, plannedShift, assignmentWindow, period);
+  const plannedStart = plannedShift ? new Date(plannedShift.start).getTime() : null;
+  const plannedEnd = plannedShift ? new Date(plannedShift.end).getTime() : null;
   const activeSegments = segments.filter((segment) => segment.type === "ACTIVE");
   const entryAt = activeSegments[0]?.start ?? null;
   const exitAt = activeSegments[activeSegments.length - 1]?.end ?? null;

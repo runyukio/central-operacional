@@ -218,7 +218,9 @@ async function processQualityFile(
 }
 
 function readQualityScope(url: URL): PerformanceQualityScope {
-  return url.searchParams.get("qualityScope")?.trim().toUpperCase() === "TNS" ? "TNS" : "ADS";
+  const scope = url.searchParams.get("qualityScope")?.trim().toUpperCase();
+  if (scope === "CEC") return "CEC";
+  return scope === "TNS" ? "TNS" : "ADS";
 }
 
 async function processPerformanceFiles(

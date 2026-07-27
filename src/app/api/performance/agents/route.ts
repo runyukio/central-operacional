@@ -17,6 +17,7 @@ export async function GET(request: Request) {
       startDate: url.searchParams.get("startDate") ?? undefined,
       endDate: url.searchParams.get("endDate") ?? undefined,
       lob: url.searchParams.get("lob") ?? undefined,
+      slaTargetMinutes: readPositiveNumber(url.searchParams.get("slaTargetMinutes")),
       supervisorId: url.searchParams.get("supervisorId") ?? undefined,
       shiftId: url.searchParams.get("shiftId") ?? undefined,
       search: url.searchParams.get("search") ?? undefined,
@@ -53,6 +54,7 @@ function readSortBy(value: string | null): PerformanceAgentsQuery["sortBy"] {
     || value === "outputTotal"
     || value === "submit"
     || value === "aht"
+    || value === "quality"
     ? value
     : undefined;
 }
@@ -65,4 +67,10 @@ function readPositiveInteger(value: string | null) {
   if (!value) return undefined;
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function readPositiveNumber(value: string | null) {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
