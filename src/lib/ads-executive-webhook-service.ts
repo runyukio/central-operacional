@@ -183,6 +183,7 @@ function mapAgentRows(rows: Array<Record<string, unknown>>): AdsExecutiveAgentRo
     personType: String(row.personType ?? ""),
     employeeStatus: String(row.employeeStatus ?? ""),
     presenceStatus: String(row.presenceStatus ?? ""),
+    isSchedulePresent: Boolean(row.isSchedulePresent),
     history: Array.isArray(row.history)
       ? row.history.map((item) => {
         const history = objectValue(item);
