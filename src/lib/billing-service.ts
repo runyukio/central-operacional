@@ -11,7 +11,8 @@ import {
   type BillingFiscalDocumentExtraction,
   verifyBillingFiscalValidationToken
 } from "@/lib/billing-fiscal-invoice-extraction";
-import { calculateBillingFiscalGrossAmount } from "@/lib/billing-fiscal-invoice";
+import { calculateBillingFiscalExpectedAmount } from "@/lib/billing-fiscal-invoice";
+import { buildBillingOmiePilot } from "@/lib/billing-omie-pilot";
 import { canAccessBilling, canManageBilling } from "@/lib/billing-permissions";
 import { isAgentJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
 import { MONTHLY_ADVANCE_FIXED_AMOUNT, isMonthlyAdvanceReferenceMonthAvailable } from "@/lib/monthly-advance-constants";
@@ -502,16 +503,13 @@ export async function previewBillingFiscalInvoice(actor: Actor, input: {
       cycle?.id ?? null,
       cycle?.status
     );
-    const expectedFiscalGrossAmount = calculateBillingFiscalGrossAmount(
-      calculated.grossAmount,
-      calculated.correctionAmount
-    );
+    const expectedFiscalAmount = calculateBillingFiscalExpectedAmount(calculated);
     stage = "EXTRACT_DOCUMENT";
     const extraction = await extractBillingFiscalInvoice(input.file);
     stage = "CHECK_DUPLICATE";
     await ensureBillingFiscalDocumentAvailable(extraction, referenceMonth, employee.id);
 
-    const matchesBilling = currencyEquals(extraction.serviceAmount, expectedFiscalGrossAmount);
+    const matchesBilling = currencyEquals(extraction.serviceAmount, expectedFiscalAmount);
     stage = "CREATE_VALIDATION";
     const validationToken = matchesBilling
       ? createBillingFiscalValidationToken({
@@ -520,7 +518,7 @@ export async function previewBillingFiscalInvoice(actor: Actor, input: {
         actorEmail: user.email,
         referenceMonth,
         employeeId: employee.id,
-        billingGrossAmount: expectedFiscalGrossAmount
+        billingGrossAmount: expectedFiscalAmount
       })
       : "";
 
@@ -531,8 +529,8 @@ export async function previewBillingFiscalInvoice(actor: Actor, input: {
         serviceAmount: extraction.serviceAmount,
         serviceDescription: buildAutomaticBillingServiceDescription(extraction, referenceMonth),
         extractionMethod: extraction.extractionMethod,
-        billingGrossAmount: expectedFiscalGrossAmount,
-        difference: roundMoney(extraction.serviceAmount - expectedFiscalGrossAmount),
+        billingGrossAmount: expectedFiscalAmount,
+        difference: roundMoney(extraction.serviceAmount - expectedFiscalAmount),
         matchesBilling,
         validationToken
       }
@@ -595,10 +593,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
 
   const rates = await getBillingRates();
   const calculated = await calculateEmployeeInvoice(user.employeeProfile as BillingEmployee, referenceMonth, rates, cycle.id, cycle.status);
-  const expectedFiscalGrossAmount = calculateBillingFiscalGrossAmount(
-    calculated.grossAmount,
-    calculated.correctionAmount
-  );
+  const expectedFiscalAmount = calculateBillingFiscalExpectedAmount(calculated);
   const file = input.file ?? null;
   let extraction: BillingFiscalDocumentExtraction;
   try {
@@ -606,7 +601,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
       actorEmail: user.email,
       referenceMonth,
       employeeId: user.employeeProfile.id,
-      billingGrossAmount: expectedFiscalGrossAmount,
+      billingGrossAmount: expectedFiscalAmount,
       file,
       validationToken: String(input.validationToken ?? ""),
       existing: persisted?.fiscalInvoice ?? null
@@ -705,7 +700,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
             accessKey: extraction.accessKey,
             invoiceNumber,
             invoiceGrossAmount: extraction.serviceAmount,
-            billingGrossAmount: expectedFiscalGrossAmount,
+            billingGrossAmount: expectedFiscalAmount,
             billingHoursGrossAmount: calculated.grossAmount,
             billingCorrectionAmount: calculated.correctionAmount,
             extractionMethod: extraction.extractionMethod,
@@ -782,7 +777,10 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
   if (!fiscalInvoice) return { status: "ERROR", message: "Nota fiscal não encontrada para integração com o Omie.", launchCode: "" };
 
   const integrationCode = fiscalInvoice.omieIntegrationCode
-    || buildOmieIntegrationCode(fiscalInvoice.employeeInvoice.referenceMonth, employeeInvoiceId);
+    || buildOmieIntegrationCode(
+      fiscalInvoice.employeeInvoice.referenceMonth,
+      fiscalInvoice.employeeInvoice.employee.wbLogin
+    );
   const attemptedAt = new Date();
   await prisma.billingFiscalInvoice.update({
     where: { id: fiscalInvoice.id },
@@ -803,10 +801,6 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
     if (fiscalInvoice.storageBucket !== BILLING_INVOICE_BUCKET) {
       throw new OmieIntegrationError("A nota fiscal está armazenada em uma origem inválida para envio ao Omie.");
     }
-    const storedInvoice = await downloadPrivateObject(BILLING_INVOICE_BUCKET, fiscalInvoice.storagePath)
-      .catch(() => {
-        throw new OmieIntegrationError("Não foi possível recuperar a nota fiscal para anexar ao lançamento no Omie.");
-      });
     const adjustmentRows = await prisma.billingAdjustment.findMany({
       where: {
         billingCycleId: fiscalInvoice.employeeInvoice.billingCycleId,
@@ -825,6 +819,23 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
     const adjustmentBreakdown = buildAdjustmentBreakdown(adjustmentRows);
     const billingGrossAmount = Number(fiscalInvoice.employeeInvoice.grossAmount);
     const fiscalGrossAmount = Number(fiscalInvoice.grossAmount);
+    const campaignAmount = Number(fiscalInvoice.employeeInvoice.campaignAmount);
+    const advanceAmount = Number(fiscalInvoice.employeeInvoice.advanceAmount);
+    const finalAmount = Number(fiscalInvoice.employeeInvoice.finalAmount);
+    const pilot = buildBillingOmiePilot({
+      referenceMonth: fiscalInvoice.employeeInvoice.referenceMonth,
+      wbLogin: fiscalInvoice.employeeInvoice.employee.wbLogin,
+      finalAmount,
+      bonusAmount: adjustmentBreakdown.bonusAmount,
+      campaignAmount,
+      advanceAmount,
+      discountAmount: adjustmentBreakdown.discountAmount,
+      otherAdjustmentAmount: adjustmentBreakdown.otherAdjustmentAmount
+    });
+    const storedInvoice = await downloadPrivateObject(BILLING_INVOICE_BUCKET, fiscalInvoice.storagePath)
+      .catch(() => {
+        throw new OmieIntegrationError("Não foi possível recuperar a nota fiscal para anexar ao lançamento no Omie.");
+      });
     const result = await upsertBillingAccountPayable({
       employeeInvoiceId,
       referenceMonth: fiscalInvoice.employeeInvoice.referenceMonth,
@@ -834,14 +845,15 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
       invoiceNumber: fiscalInvoice.invoiceNumber,
       serviceDescription: fiscalInvoice.serviceDescription,
       grossAmount: fiscalGrossAmount,
+      documentAmount: pilot.documentAmount,
+      categories: pilot.categories,
       billingGrossAmount,
-      correctionAmount: roundMoney(fiscalGrossAmount - billingGrossAmount),
+      correctionAmount: adjustmentBreakdown.correctionAmount,
       bonusAmount: adjustmentBreakdown.bonusAmount,
-      campaignAmount: Number(fiscalInvoice.employeeInvoice.campaignAmount),
-      advanceAmount: Number(fiscalInvoice.employeeInvoice.advanceAmount),
+      campaignAmount,
+      advanceAmount,
       discountAmount: adjustmentBreakdown.discountAmount,
       otherAdjustmentAmount: adjustmentBreakdown.otherAdjustmentAmount,
-      finalAmount: Number(fiscalInvoice.employeeInvoice.finalAmount),
       approvedAt: fiscalInvoice.employeeInvoice.approvedByEmployeeAt ?? fiscalInvoice.submittedAt,
       integrationCode
     });
@@ -873,14 +885,16 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
       invoiceNumber: fiscalInvoice.invoiceNumber,
       wbLogin: fiscalInvoice.employeeInvoice.employee.wbLogin,
       grossAmount: fiscalGrossAmount,
+      documentAmount: pilot.documentAmount,
+      categories: pilot.categories,
       billingGrossAmount,
-      correctionAmount: roundMoney(fiscalGrossAmount - billingGrossAmount),
+      correctionAmount: adjustmentBreakdown.correctionAmount,
       bonusAmount: adjustmentBreakdown.bonusAmount,
-      campaignAmount: Number(fiscalInvoice.employeeInvoice.campaignAmount),
-      advanceAmount: Number(fiscalInvoice.employeeInvoice.advanceAmount),
+      campaignAmount,
+      advanceAmount,
       discountAmount: adjustmentBreakdown.discountAmount,
       otherAdjustmentAmount: adjustmentBreakdown.otherAdjustmentAmount,
-      finalAmount: Number(fiscalInvoice.employeeInvoice.finalAmount),
+      finalAmount,
       attachmentIntegrationCode: attachment.integrationCode,
       attachmentId: attachment.attachmentId,
       attachmentFileName: attachment.fileName,
@@ -1298,10 +1312,7 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
     }
 
     const calculated = await calculateEmployeeInvoice(employee, referenceMonth, await getBillingRates(), cycle.id, cycle.status);
-    const expectedFiscalGrossAmount = calculateBillingFiscalGrossAmount(
-      calculated.grossAmount,
-      calculated.correctionAmount
-    );
+    const expectedFiscalAmount = calculateBillingFiscalExpectedAmount(calculated);
     const file = input.file ?? null;
     let extraction: BillingFiscalDocumentExtraction;
     try {
@@ -1309,7 +1320,7 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
         actorEmail: user!.email,
         referenceMonth,
         employeeId: employee.id,
-        billingGrossAmount: expectedFiscalGrossAmount,
+        billingGrossAmount: expectedFiscalAmount,
         file,
         validationToken: String(input.validationToken ?? ""),
         existing: existing?.fiscalInvoice ?? null
@@ -1409,7 +1420,7 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
               accessKey: extraction.accessKey,
               invoiceNumber,
               invoiceGrossAmount: extraction.serviceAmount,
-              billingGrossAmount: expectedFiscalGrossAmount,
+              billingGrossAmount: expectedFiscalAmount,
               billingHoursGrossAmount: calculated.grossAmount,
               billingCorrectionAmount: calculated.correctionAmount,
               extractionMethod: extraction.extractionMethod,

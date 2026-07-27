@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH,
+  calculateBillingFiscalExpectedAmount,
   calculateBillingFiscalGrossAmount,
   isValidBillingFiscalInvoiceNumber,
   normalizeBillingFiscalInvoiceNumber
@@ -28,4 +29,14 @@ test("soma a correção ao valor bruto esperado na nota fiscal", () => {
   assert.equal(calculateBillingFiscalGrossAmount(9_409.76, 100), 9_509.76);
   assert.equal(calculateBillingFiscalGrossAmount(9_409.76, -100), 9_309.76);
   assert.equal(calculateBillingFiscalGrossAmount(0.1, 0.2), 0.3);
+});
+
+test("no piloto do Pedro valida a nota pelo valor final com bônus", () => {
+  assert.equal(calculateBillingFiscalExpectedAmount({
+    referenceMonth: "2026-07",
+    wbLogin: "wb_pedros",
+    grossAmount: 5227.44,
+    correctionAmount: 0,
+    finalAmount: 5427.44
+  }), 5427.44);
 });

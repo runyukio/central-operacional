@@ -9,6 +9,7 @@ import {
   buildOmieAttachmentIntegrationCode,
   buildOmieDocumentNumber,
   buildOmieIntegrationCode,
+  calculateOmieDueDate,
   type OmieConfig,
   OmieIntegrationError,
   upsertBillingAccountPayable
@@ -17,9 +18,7 @@ import {
 const config: OmieConfig = {
   appKey: "app-key-test",
   appSecret: "app-secret-test",
-  categoryCode: "2.04.01",
   checkingAccountId: 4243124,
-  dueDays: 0,
   timeoutMs: 5_000
 };
 
@@ -32,6 +31,11 @@ const input = {
   invoiceNumber: "12345",
   serviceDescription: "Serviços de moderação de conteúdo",
   grossAmount: 2225.47,
+  documentAmount: 1840,
+  categories: [
+    { code: "2.10.96", value: 1740 },
+    { code: "2.02.04", value: 100 }
+  ],
   billingGrossAmount: 2200,
   correctionAmount: 25.47,
   bonusAmount: 100,
@@ -39,7 +43,6 @@ const input = {
   advanceAmount: 500,
   discountAmount: 20,
   otherAdjustmentAmount: 10,
-  finalAmount: 1840,
   approvedAt: new Date("2026-07-18T15:00:00.000Z")
 };
 
@@ -72,18 +75,21 @@ test("localiza o fornecedor por CNPJ e envia o valor bruto ao Contas a Pagar", a
   assert.deepEqual((requests[0]?.param as Array<Record<string, unknown>>)[0]?.clientesFiltro, { cnpj_cpf: input.cnpj });
   assert.equal(requests[1]?.call, "UpsertContaPagar");
   const payable = (requests[1]?.param as Array<Record<string, unknown>>)[0];
-  assert.equal(payable.valor_documento, 2225.47);
+  assert.equal(payable.valor_documento, 1840);
   assert.equal(payable.codigo_cliente_fornecedor, 4214850);
   assert.equal(payable.numero_documento_fiscal, "12345");
   assert.equal(payable.numero_documento, "B202607-wblucasy");
   assert.equal(payable.numero_parcela, "001/001");
   assert.equal(payable.data_emissao, "18/07/2026");
   assert.equal(payable.data_entrada, "18/07/2026");
-  assert.equal(payable.data_vencimento, "27/07/2026");
-  assert.equal(payable.data_previsao, "27/07/2026");
+  assert.equal(payable.data_vencimento, "07/08/2026");
+  assert.equal(payable.data_previsao, "07/08/2026");
   assert.match(String(payable.observacao), /35095022262629545000119000000000000526075882824813/);
   assert.equal(payable.chave_nfe, undefined);
-  assert.equal(payable.codigo_categoria, "2.04.01");
+  assert.deepEqual(payable.categorias, [
+    { codigo_categoria: "2.10.96", valor: 1740, percentual: 94.57 },
+    { codigo_categoria: "2.02.04", valor: 100, percentual: 5.43 }
+  ]);
   assert.equal(payable.id_conta_corrente, 4243124);
   assert.match(String(payable.observacao), /WB: wb_lucasy/);
   assert.match(String(payable.observacao), /Bruto: R\$ 2\.200,00/);
@@ -98,6 +104,13 @@ test("localiza o fornecedor por CNPJ e envia o valor bruto ao Contas a Pagar", a
 test("monta identificadores legíveis e estáveis por mês e WB", () => {
   assert.equal(buildOmieIntegrationCode("2026-07", "wb_lucasy"), "billing-2026-07-wb_lucasy");
   assert.equal(buildOmieDocumentNumber("2026-07", "wb_lucasy"), "B202607-wblucasy");
+});
+
+test("calcula o quinto dia útil do mês seguinte sem contar fins de semana", () => {
+  assert.equal(
+    calculateOmieDueDate("2026-07", new Date("2026-07-27T15:00:00.000Z")).toISOString(),
+    "2026-08-07T12:00:00.000Z"
+  );
 });
 
 test("envia chave_nfe somente quando a chave possui os 44 dígitos aceitos pelo Omie", async () => {

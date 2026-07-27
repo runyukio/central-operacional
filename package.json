@@ -10,7 +10,7 @@
     "lint": "eslint . --ext .js,.mjs,.ts,.tsx",
     "typecheck": "tsc --noEmit",
     "test:billing-fiscal": "tsx --test src/lib/billing-fiscal-invoice.test.ts src/lib/billing-fiscal-invoice-extraction.test.ts",
-    "test:omie": "tsx --test src/lib/omie-service.test.ts",
+    "test:omie": "tsx --test src/lib/omie-service.test.ts src/lib/billing-omie-pilot.test.ts",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:check": "tsx scripts/check-db.ts",

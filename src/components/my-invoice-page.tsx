@@ -11,7 +11,7 @@ import {
   type BillingFiscalInvoiceUploadValue
 } from "@/components/billing-fiscal-invoice-upload";
 import { EmptyState, PageHeader, Panel, StatCard, StatusBadge } from "@/components/ui/primitives";
-import { calculateBillingFiscalGrossAmount } from "@/lib/billing-fiscal-invoice";
+import { calculateBillingFiscalExpectedAmount } from "@/lib/billing-fiscal-invoice";
 import { cn } from "@/lib/utils";
 
 type MyInvoicePayload = {
@@ -30,6 +30,7 @@ type MyInvoicePayload = {
       totalConsideredMinutes: number;
       hourlyRate: number;
       billingRule: string;
+      wbLogin: string;
       grossAmount: number;
       advanceAmount: number;
       automaticAdvanceAmount: number;
@@ -105,8 +106,14 @@ export function MyInvoicePage() {
   const [adjustment, setAdjustment] = useState({ type: "Horas não consideradas", questionedItem: "Horas aprovadas", description: "" });
   const [fiscalUpload, setFiscalUpload] = useState<BillingFiscalInvoiceUploadValue>(EMPTY_BILLING_FISCAL_UPLOAD);
   const data = payload?.data;
-  const expectedFiscalGrossAmount = data
-    ? calculateBillingFiscalGrossAmount(data.invoice.grossAmount, data.invoice.correctionAmount)
+  const expectedFiscalAmount = data
+    ? calculateBillingFiscalExpectedAmount({
+      referenceMonth: data.referenceMonth,
+      wbLogin: data.invoice.wbLogin,
+      grossAmount: data.invoice.grossAmount,
+      correctionAmount: data.invoice.correctionAmount,
+      finalAmount: data.invoice.finalAmount
+    })
     : 0;
 
   const load = useCallback(async () => {
@@ -153,7 +160,7 @@ export function MyInvoicePage() {
   }
 
   async function approveInvoice() {
-    if (!data || !billingFiscalUploadIsReady(fiscalUpload, data.invoice.fiscalInvoice, expectedFiscalGrossAmount)) {
+    if (!data || !billingFiscalUploadIsReady(fiscalUpload, data.invoice.fiscalInvoice, expectedFiscalAmount)) {
       setError("Selecione a nota fiscal e aguarde a validação automática dos dados.");
       return;
     }
@@ -356,7 +363,7 @@ export function MyInvoicePage() {
             <div className="grid gap-3">
               <BillingFiscalInvoiceUpload
                 referenceMonth={referenceMonth}
-                expectedGrossAmount={expectedFiscalGrossAmount}
+                expectedGrossAmount={expectedFiscalAmount}
                 existing={data.invoice.fiscalInvoice}
                 disabled={!data.invoice.canApprove || saving}
                 value={fiscalUpload}
@@ -392,7 +399,7 @@ export function MyInvoicePage() {
                 disabled={
                   !data.invoice.canApprove
                   || saving
-                  || !billingFiscalUploadIsReady(fiscalUpload, data.invoice.fiscalInvoice, expectedFiscalGrossAmount)
+                  || !billingFiscalUploadIsReady(fiscalUpload, data.invoice.fiscalInvoice, expectedFiscalAmount)
                 }
                 onClick={() => void approveInvoice()}
                 className="premium-button inline-flex h-10 w-full items-center justify-center gap-2 px-3 text-sm font-extrabold leading-none disabled:cursor-not-allowed disabled:opacity-50"

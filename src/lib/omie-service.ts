@@ -8,15 +8,17 @@ const OMIE_ACCOUNTS_PAYABLE_ENDPOINT = "https://app.omie.com.br/api/v1/financas/
 const OMIE_ATTACHMENTS_ENDPOINT = "https://app.omie.com.br/api/v1/geral/anexo/";
 const OMIE_ACCOUNTS_PAYABLE_ATTACHMENT_TABLE = "conta-pagar";
 const DEFAULT_TIMEOUT_MS = 15_000;
-const DEFAULT_DUE_DAYS = 0;
 
 export type OmieConfig = {
   appKey: string;
   appSecret: string;
-  categoryCode: string;
-  checkingAccountId: number | null;
-  dueDays: number;
+  checkingAccountId: number;
   timeoutMs: number;
+};
+
+export type OmieCategoryAllocation = {
+  code: string;
+  value: number;
 };
 
 export type OmieAccountPayableInput = {
@@ -28,6 +30,8 @@ export type OmieAccountPayableInput = {
   invoiceNumber: string;
   serviceDescription: string;
   grossAmount: number;
+  documentAmount: number;
+  categories: OmieCategoryAllocation[];
   billingGrossAmount: number;
   correctionAmount: number;
   bonusAmount: number;
@@ -35,7 +39,6 @@ export type OmieAccountPayableInput = {
   advanceAmount: number;
   discountAmount: number;
   otherAdjustmentAmount: number;
-  finalAmount: number;
   approvedAt: Date;
   integrationCode?: string | null;
 };
@@ -108,23 +111,20 @@ export class OmieIntegrationError extends Error {
 export function loadOmieConfig(env: NodeJS.ProcessEnv = process.env): OmieConfig {
   const appKey = String(env.OMIE_APP_KEY ?? "").trim();
   const appSecret = String(env.OMIE_APP_SECRET ?? "").trim();
-  const categoryCode = String(env.OMIE_ACCOUNT_PAYABLE_CATEGORY_CODE ?? "").trim();
-  if (!appKey || !appSecret || !categoryCode) {
-    throw new OmieIntegrationError("Integração Omie não configurada. Informe App Key, App Secret e categoria de Contas a Pagar.");
+  if (!appKey || !appSecret) {
+    throw new OmieIntegrationError("Integração Omie não configurada. Informe App Key e App Secret.");
   }
 
   const checkingAccountRaw = String(env.OMIE_CHECKING_ACCOUNT_ID ?? "").trim();
-  const checkingAccountId = checkingAccountRaw ? Number(checkingAccountRaw) : null;
-  if (checkingAccountRaw && (checkingAccountId === null || !Number.isSafeInteger(checkingAccountId) || checkingAccountId <= 0)) {
-    throw new OmieIntegrationError("OMIE_CHECKING_ACCOUNT_ID inválido.");
+  const checkingAccountId = Number(checkingAccountRaw);
+  if (!checkingAccountRaw || !Number.isSafeInteger(checkingAccountId) || checkingAccountId <= 0) {
+    throw new OmieIntegrationError("Integração Omie não configurada. Informe uma Conta Corrente válida.");
   }
 
   return {
     appKey,
     appSecret,
-    categoryCode,
     checkingAccountId,
-    dueDays: parseBoundedInteger(env.OMIE_PAYMENT_DUE_DAYS, DEFAULT_DUE_DAYS, 0, 365),
     timeoutMs: parseBoundedInteger(env.OMIE_API_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1_000, 60_000)
   };
 }
@@ -151,6 +151,28 @@ export function buildOmieDocumentNumber(referenceMonth: string, wbLogin: string)
   return `B${normalizedMonth}-${normalizedLogin}`.slice(0, 20);
 }
 
+export function calculateOmieDueDate(referenceMonth: string, now = new Date()) {
+  const [year, month] = String(referenceMonth).split("-").map(Number);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+    throw new OmieIntegrationError("Mês de referência inválido para calcular o vencimento no Omie.");
+  }
+
+  const targetMonth = month === 12 ? 1 : month + 1;
+  const targetYear = month === 12 ? year + 1 : year;
+  const holidays = brazilianNationalHolidays(targetYear);
+  let businessDays = 0;
+  let dueDate = new Date(Date.UTC(targetYear, targetMonth - 1, 1, 12));
+  while (businessDays < 5) {
+    const day = dueDate.getUTCDay();
+    const key = isoDateUtc(dueDate);
+    if (day !== 0 && day !== 6 && !holidays.has(key)) businessDays += 1;
+    if (businessDays < 5) dueDate = addUtcDays(dueDate, 1);
+  }
+
+  const today = startOfSaoPauloDay(now);
+  return dueDate < today ? today : dueDate;
+}
+
 export function buildOmieAttachmentIntegrationCode(employeeInvoiceId: string, documentHash?: string | null) {
   const digest = createHash("sha256")
     .update(`${employeeInvoiceId}:${String(documentHash ?? "")}`)
@@ -172,17 +194,19 @@ export async function upsertBillingAccountPayable(
 
   const integrationCode = input.integrationCode || buildOmieIntegrationCode(input.referenceMonth, input.wbLogin || input.employeeInvoiceId);
   const issueDate = formatOmieDate(input.approvedAt);
-  const configuredDueDate = addDays(input.approvedAt, config.dueDays);
-  const dueDate = formatOmieDate(configuredDueDate < now ? now : configuredDueDate);
-  const grossAmount = roundCurrency(input.grossAmount);
-  if (!Number.isFinite(grossAmount) || grossAmount <= 0) throw new OmieIntegrationError("O valor bruto do invoice precisa ser maior que zero.");
+  const dueDate = formatOmieDate(calculateOmieDueDate(input.referenceMonth, now));
+  const documentAmount = roundCurrency(input.documentAmount);
+  if (!Number.isFinite(documentAmount) || documentAmount <= 0) {
+    throw new OmieIntegrationError("O valor final do invoice precisa ser maior que zero.");
+  }
+  const categoryPayload = buildCategoryPayload(input.categories, documentAmount);
 
   const payable = {
     codigo_lancamento_integracao: integrationCode,
     codigo_cliente_fornecedor: Number(supplierCode),
     data_vencimento: dueDate,
-    valor_documento: grossAmount,
-    codigo_categoria: config.categoryCode,
+    valor_documento: documentAmount,
+    ...categoryPayload,
     data_previsao: dueDate,
     numero_documento_fiscal: input.invoiceNumber,
     numero_documento: buildOmieDocumentNumber(input.referenceMonth, input.wbLogin),
@@ -191,7 +215,7 @@ export async function upsertBillingAccountPayable(
     numero_parcela: "001/001",
     observacao: buildObservation(input),
     ...(normalizeAccessKey(input.accessKey).length === 44 ? { chave_nfe: normalizeAccessKey(input.accessKey) } : {}),
-    ...(config.checkingAccountId ? { id_conta_corrente: config.checkingAccountId } : {})
+    id_conta_corrente: config.checkingAccountId
   };
 
   const response = await callOmie<OmiePayableResponse>(
@@ -354,11 +378,36 @@ function buildObservation(input: OmieAccountPayableInput) {
     `Adiantamento: ${formatCurrency(input.advanceAmount)}`,
     `Desconto: ${formatCurrency(input.discountAmount)}`,
     `Outros ajustes: ${formatCurrency(input.otherAdjustmentAmount)}`,
-    `Final: ${formatCurrency(input.finalAmount)}`,
+    `Final: ${formatCurrency(input.documentAmount)}`,
     `NF: ${input.invoiceNumber}`,
     input.accessKey ? `Chave NFS-e: ${normalizeAccessKey(input.accessKey)}` : "",
     input.serviceDescription.trim() ? `Serviço: ${input.serviceDescription.trim()}` : ""
   ].filter(Boolean).join(" | ").slice(0, 500);
+}
+
+function buildCategoryPayload(categories: OmieCategoryAllocation[], documentAmount: number) {
+  const normalized = categories.map((category) => ({
+    codigo_categoria: String(category.code ?? "").trim(),
+    valor: roundCurrency(category.value)
+  }));
+  if (!normalized.length || normalized.some((category) => !category.codigo_categoria || category.valor < 0)) {
+    throw new OmieIntegrationError("O rateio de categorias do lançamento no Omie está incompleto.");
+  }
+  const allocatedAmount = roundCurrency(normalized.reduce((sum, category) => sum + category.valor, 0));
+  if (allocatedAmount !== documentAmount) {
+    throw new OmieIntegrationError("O rateio de categorias precisa somar exatamente o valor final do invoice.");
+  }
+  if (normalized.length === 1) return { codigo_categoria: normalized[0].codigo_categoria };
+
+  let allocatedPercentage = 0;
+  const categorias = normalized.map((category, index) => {
+    const percentual = index === normalized.length - 1
+      ? roundCurrency(100 - allocatedPercentage)
+      : roundCurrency((category.valor / documentAmount) * 100);
+    allocatedPercentage = roundCurrency(allocatedPercentage + percentual);
+    return { ...category, percentual };
+  });
+  return { categorias };
 }
 
 function formatCurrency(value: number) {
@@ -401,8 +450,43 @@ function formatOmieDate(date: Date) {
   }).format(date);
 }
 
-function addDays(date: Date, days: number) {
-  return new Date(date.getTime() + days * 86_400_000);
+function addUtcDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function isoDateUtc(date: Date) {
+  return [
+    date.getUTCFullYear(),
+    String(date.getUTCMonth() + 1).padStart(2, "0"),
+    String(date.getUTCDate()).padStart(2, "0")
+  ].join("-");
+}
+
+function startOfSaoPauloDay(date: Date) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+  const read = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((part) => part.type === type)?.value ?? 0);
+  return new Date(Date.UTC(read("year"), read("month") - 1, read("day"), 12));
+}
+
+function brazilianNationalHolidays(year: number) {
+  return new Set([
+    `${year}-01-01`,
+    `${year}-04-21`,
+    `${year}-05-01`,
+    `${year}-09-07`,
+    `${year}-10-12`,
+    `${year}-11-02`,
+    `${year}-11-15`,
+    `${year}-11-20`,
+    `${year}-12-25`
+  ]);
 }
 
 function roundCurrency(value: number) {

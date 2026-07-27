@@ -171,7 +171,7 @@ export function BillingFiscalInvoiceUpload({
             <ReadField label="Chave de acesso da NFS-e" value={displayed.accessKey} mono wide />
             <ReadField label="Número da NFS-e" value={displayed.invoiceNumber} mono />
             <ReadField label="Valor do serviço na nota" value={formatCurrency(displayed.serviceAmount)} />
-            <ReadField label="Valor esperado na NFS-e (bruto + correção)" value={formatCurrency(expectedGrossAmount)} />
+            <ReadField label="Valor esperado na NFS-e" value={formatCurrency(expectedGrossAmount)} />
           </div>
           <div className={cn(
             "flex items-start gap-2 rounded-xl border px-3 py-2.5 text-sm font-bold",
@@ -184,8 +184,8 @@ export function BillingFiscalInvoiceUpload({
               : <XCircle className="mt-0.5 h-4 w-4 shrink-0" />}
             <span>
               {displayed.matchesBilling
-                ? "Nota validada: o valor do serviço é igual ao bruto das horas somado à correção."
-                : `Aprovação bloqueada: a nota está em ${formatCurrency(displayed.serviceAmount)} e o valor esperado do Billing (bruto + correção) em ${formatCurrency(expectedGrossAmount)}.`}
+                ? "Nota validada: o valor do serviço é igual ao valor esperado do Billing."
+                : `Aprovação bloqueada: a nota está em ${formatCurrency(displayed.serviceAmount)} e o valor esperado do Billing em ${formatCurrency(expectedGrossAmount)}.`}
             </span>
           </div>
         </>

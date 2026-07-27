@@ -1,3 +1,5 @@
+import { isBillingOmiePilotTarget } from "@/lib/billing-omie-pilot-constants";
+
 export const BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH = 4;
 
 const BILLING_FISCAL_INVOICE_NUMBER_PATTERN = /^\d{1,4}$/;
@@ -15,4 +17,21 @@ export function normalizeBillingFiscalInvoiceNumber(value: string) {
 
 export function calculateBillingFiscalGrossAmount(grossAmount: number, correctionAmount: number) {
   return Math.round((Number(grossAmount) + Number(correctionAmount) + Number.EPSILON) * 100) / 100;
+}
+
+export function calculateBillingFiscalExpectedAmount(input: {
+  referenceMonth: string;
+  wbLogin: string;
+  grossAmount: number;
+  correctionAmount: number;
+  finalAmount: number;
+}) {
+  if (isBillingOmiePilotTarget(input.referenceMonth, input.wbLogin)) {
+    return roundCurrency(input.finalAmount);
+  }
+  return calculateBillingFiscalGrossAmount(input.grossAmount, input.correctionAmount);
+}
+
+function roundCurrency(value: number) {
+  return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 }
