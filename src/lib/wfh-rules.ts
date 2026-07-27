@@ -43,30 +43,31 @@ export function calculateWfhStatus(context: WfhEmployeeContext, metrics: WfhMetr
   if (lob !== "ads" && lob !== "tns" && lob !== "cec") {
     return result("NOT_APPLICABLE", "NOT_MONITORED", "NOT_APPLICABLE", ["LOB não aplicável para WFH"]);
   }
-  return lob === "cec" ? calculateCecWfh(context, metrics, weekly) : calculateAdsTnsWfh(metrics, weekly);
+  if (lob === "cec") return calculateCecWfh(context, metrics, weekly);
+  return calculateAdsTnsWfh(metrics, weekly, lob === "tns" ? 98 : 95, lob === "tns" ? "TNS" : "ADS");
 }
 
-function calculateAdsTnsWfh(metrics: WfhMetrics, weekly: WfhWeeklyMetrics[]): WfhResult {
+function calculateAdsTnsWfh(metrics: WfhMetrics, weekly: WfhWeeklyMetrics[], qualityTarget: number, lobLabel: "ADS" | "TNS"): WfhResult {
   const reasons: string[] = [];
   const insufficient: string[] = [];
   if (!isValid(metrics.quality) || metrics.qualityDenominator <= 0) insufficient.push("Dados insuficientes de qualidade");
-  else if (metrics.quality < 95) reasons.push("Qualidade abaixo do target (95%)");
+  else if (metrics.quality < qualityTarget) reasons.push(`Qualidade abaixo do target ${lobLabel} (${qualityTarget}%)`);
   if (!isValid(metrics.submit)) insufficient.push("Dados insuficientes de produtividade");
   else if (metrics.submit < 350) reasons.push("Produtividade abaixo do target (350/dia)");
   if (!isValid(metrics.ahtSeconds)) insufficient.push("Dados insuficientes de AHT");
   else if (metrics.ahtSeconds > 60) reasons.push("AHT acima do target (60s)");
   addAbsenceReasons(metrics, reasons, insufficient);
-  const monitoring = adsMonitoringStatus({ lob: "", hasCurrentWfhStatusData: false }, weekly);
-  return result(adsTnsStatus(metrics, reasons, insufficient), monitoring.status, "ADS_TNS_WFH", [...reasons, ...insufficient]);
+  const monitoring = adsMonitoringStatus({ lob: "", hasCurrentWfhStatusData: false }, weekly, qualityTarget, lobLabel);
+  return result(adsTnsStatus(metrics, reasons, insufficient, qualityTarget), monitoring.status, "ADS_TNS_WFH", [...reasons, ...insufficient]);
 }
 
 function calculateCecWfh(context: WfhEmployeeContext, metrics: WfhMetrics, weekly: WfhWeeklyMetrics[]): WfhResult {
   const reasons: string[] = [];
   const insufficient: string[] = [];
   if (!isValid(metrics.quality) || metrics.qualityDenominator <= 0) insufficient.push("Dados insuficientes de qualidade CEC");
-  else if (metrics.quality < 90) reasons.push("Qualidade abaixo do target CEC (90%)");
+  else if (metrics.quality < 95) reasons.push("Qualidade abaixo do target CEC (95%)");
   if (!isValid(metrics.submit)) insufficient.push("Dados insuficientes de produtividade CEC");
-  else if (metrics.submit < 70) reasons.push("Produtividade abaixo do target CEC (70 CPD)");
+  else if (metrics.submit < 60) reasons.push("Produtividade abaixo do target CEC (60 CPD)");
   addAbsenceReasons(metrics, reasons, insufficient);
   const monitoring = cecMonitoringStatus(context, weekly);
   return result(statusForReasons(reasons, insufficient), monitoring.status, "CEC_WFH", [...reasons, ...insufficient]);
@@ -77,13 +78,13 @@ function addAbsenceReasons(metrics: WfhMetrics, reasons: string[], insufficient:
   else if (metrics.abs > 5) reasons.push("ABS acima do target (5%)");
 }
 
-function adsMonitoringStatus(context: WfhEmployeeContext, weekly: WfhWeeklyMetrics[]) {
+function adsMonitoringStatus(context: WfhEmployeeContext, weekly: WfhWeeklyMetrics[], qualityTarget: number, lobLabel: "ADS" | "TNS") {
   const reasons: string[] = [];
   if (!context.hasCurrentWfhStatusData || !context.isCurrentlyWfh) return { status: "NOT_MONITORED" as const, reasons: ["Status atual de WFH não conectado"] };
   const lastWeek = lastWeeksWithData(weekly, 1)[0];
-  if (lastWeek?.submit != null && lastWeek.submit < 350) reasons.push("Retorno necessário: produtividade ADS abaixo de 350/dia por 1 semana");
-  if (lastWeek?.ahtSeconds != null && lastWeek.ahtSeconds > 50) reasons.push("Retorno necessário: AHT ADS acima de 50s por 1 semana");
-  if (weekly.some((week) => week.qualityDenominator > 0 && week.quality < 95)) reasons.push("Retorno imediato: qualidade ADS abaixo de 95%");
+  if (lastWeek?.submit != null && lastWeek.submit < 350) reasons.push(`Retorno necessário: produtividade ${lobLabel} abaixo de 350/dia por 1 semana`);
+  if (lastWeek?.ahtSeconds != null && lastWeek.ahtSeconds > 50) reasons.push(`Retorno necessário: AHT ${lobLabel} acima de 50s por 1 semana`);
+  if (weekly.some((week) => week.qualityDenominator > 0 && week.quality < qualityTarget)) reasons.push(`Retorno imediato: qualidade ${lobLabel} abaixo de ${qualityTarget}%`);
   if (weekly.some((week) => week.unjustifiedAbsences > 0)) reasons.push("Retorno imediato: ausência injustificada em WFH");
   return { status: reasons.length ? "RETURN_REQUIRED" as const : "NOT_MONITORED" as const, reasons };
 }
@@ -92,7 +93,7 @@ function cecMonitoringStatus(context: WfhEmployeeContext, weekly: WfhWeeklyMetri
   const reasons: string[] = [];
   if (!context.hasCurrentWfhStatusData || !context.isCurrentlyWfh) return { status: "NOT_MONITORED" as const, reasons: ["Status atual de WFH não conectado"] };
   const lastWeek = lastWeeksWithData(weekly, 1)[0];
-  if (lastWeek?.submit != null && lastWeek.submit < 90) reasons.push("Retorno necessário: produtividade CEC abaixo de 90/dia por 1 semana");
+  if (lastWeek?.submit != null && lastWeek.submit < 60) reasons.push("Retorno necessário: produtividade CEC abaixo de 60/dia por 1 semana");
   if (weekly.some((week) => week.qualityDenominator > 0 && week.quality < 95)) reasons.push("Retorno imediato: qualidade CEC abaixo de 95%");
   if (weekly.some((week) => week.unjustifiedAbsences > 0)) reasons.push("Retorno imediato: ausência injustificada em WFH");
   if (!context.hasSlaData) reasons.push("Monitoramento de SLA CEC em 4h não conectado");
@@ -104,9 +105,9 @@ function statusForReasons(reasons: string[], insufficient: string[]): WfhEligibi
   return reasons.length ? "NOT_QUALIFIED" : "QUALIFIED";
 }
 
-function adsTnsStatus(metrics: WfhMetrics, reasons: string[], insufficient: string[]): WfhEligibilityStatus {
+function adsTnsStatus(metrics: WfhMetrics, reasons: string[], insufficient: string[], qualityTarget: number): WfhEligibilityStatus {
   if (insufficient.length) return "INSUFFICIENT_DATA";
-  const qualityOk = metrics.quality >= 95;
+  const qualityOk = metrics.quality >= qualityTarget;
   const ahtOk = metrics.ahtSeconds <= 60;
   const absOk = metrics.abs <= 5;
   const submitOk = metrics.submit >= 350;

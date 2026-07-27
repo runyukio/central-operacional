@@ -98,7 +98,6 @@ test("no VIDEO restringe somente backlog e max latency às filas de 15 minutos",
   assert.equal(report.buckets[10].backlog, 12);
   assert.equal(report.buckets[10].maxLatencyMs, 600_000);
 });
-
 test("no Executive conta quem esteve presente ou online na hora", () => {
   const report = buildAdsExecutiveReportSnapshot({
     selectedCycle: "2026-07-21 10:30",
