@@ -195,6 +195,7 @@ export const QUEUE_REPORT_METADATA: Record<string, QueueReportMetadata> = {
   "600003270": {"queueName":"","department":"Other Queue","lob":"ADS"},
   "600003271": {"queueName":"","department":"Other Queue","lob":"ADS"},
   "600003277": {"queueName":"","department":"Other Queue","lob":"ADS"},
+  "600003278": {"queueName":"Drama Revisão de segurança Barris brasileiros Inicial","department":"Brazil Safety","lob":"VIDEO"},
   "600003312": {"queueName":"","department":"Other Queue","lob":"ADS"},
   "600003313": {"queueName":"","department":"Other Queue","lob":"ADS"},
 };
