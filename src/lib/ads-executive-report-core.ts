@@ -1,3 +1,5 @@
+import { isExecutivePresentHeadcountRow } from "@/lib/realtime-report-headcount";
+
 export type AdsExecutiveQueueMetric = {
   input: number;
   output: number;
@@ -21,6 +23,7 @@ export type AdsExecutiveAgentRow = {
   personType: string;
   employeeStatus: string;
   presenceStatus: string;
+  isSchedulePresent?: boolean;
   history: Array<{
     cycleDownload: string;
     submit: number;
@@ -111,7 +114,10 @@ export function buildAdsExecutiveReportSnapshot(input: {
       .map((row) => [row.hour, Math.max(0, Math.round(row.input))])
   );
   const requiredByHour = new Map((input.requirements ?? []).map((row) => [row.hour, row.required]));
-  const currentOnline = adsAgents.filter((row) => isOnlinePresence(row.presenceStatus)).length;
+  const currentOnline = adsAgents.filter((row) => (
+    isExecutivePresentHeadcountRow(row)
+    || hadExecutiveActivityInSelectedHour(row, selected)
+  )).length;
 
   const buckets = Array.from({ length: 24 }, (_, hour): AdsExecutiveHourBucket => {
     const queue = queueByHour.get(hour);
@@ -284,6 +290,19 @@ function previousHistory(row: AdsExecutiveAgentRow, timestamp: number) {
     .sort((a, b) => (b.parsed?.timestamp ?? 0) - (a.parsed?.timestamp ?? 0))[0] ?? null;
 }
 
+function hadExecutiveActivityInSelectedHour(row: AdsExecutiveAgentRow, selected: ParsedCycle) {
+  const snapshots = row.history
+    .map((item) => ({ ...item, parsed: safeParseCycle(item.cycleDownload) }))
+    .filter((item) => item.parsed && item.parsed.timestamp <= selected.timestamp)
+    .sort((left, right) => (left.parsed?.timestamp ?? 0) - (right.parsed?.timestamp ?? 0));
+  const current = snapshots
+    .filter((item) => item.parsed?.dateKey === selected.dateKey && item.parsed.hour === selected.hour)
+    .at(-1);
+  if (!current?.parsed) return false;
+  const previous = snapshots.filter((item) => (item.parsed?.timestamp ?? 0) < current.parsed!.timestamp).at(-1);
+  return cumulativeDelta(current.submit, previous?.submit ?? null) > 0;
+}
+
 function summarizeQueueMetrics(metrics: AdsExecutiveQueueMetric[]): AdsExecutiveQueueMetric {
   const input = metrics.reduce((sum, item) => sum + finite(item.input), 0);
   const output = metrics.reduce((sum, item) => sum + finite(item.output), 0);
@@ -338,10 +357,6 @@ function isAdsAgent(row: AdsExecutiveAgentRow) {
     && normalize(row.crossingStatus) === "encontrado"
     && normalize(row.personType) === "agente"
     && ["ativo", "active"].includes(normalize(row.employeeStatus));
-}
-
-function isOnlinePresence(value: string) {
-  return ["online", "tela bloqueada", "ocioso"].includes(normalize(value));
 }
 
 function safeParseCycle(value: string) {

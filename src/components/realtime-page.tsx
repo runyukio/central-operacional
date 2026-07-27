@@ -22,7 +22,10 @@ import { Area, AreaChart, CartesianGrid, LabelList, ReferenceLine, ResponsiveCon
 
 import { canAccessExecutiveAdsReport, canAccessRealTimeAgentsReports } from "@/lib/permissions";
 import { getQueueReportMetadataById } from "@/lib/queue-report-metadata";
-import { isReportOnlineHeadcountRow } from "@/lib/realtime-report-headcount";
+import {
+  isExecutivePresentHeadcountRow,
+  isReportOnlineHeadcountRow
+} from "@/lib/realtime-report-headcount";
 import { cn } from "@/lib/utils";
 import { CecReportDetails, CecReportOverview, type CecReportPayload } from "@/components/realtime-cec-report";
 
@@ -3754,7 +3757,10 @@ function buildExecutiveAdsReport(
   const queueByHour = buildExecutiveQueueBuckets(reportRows, selected);
   const agentByHour = buildExecutiveAgentBuckets(adsAgents, selected);
   const requiredByHour = buildExecutiveRequiredByHour(requiredRows, selected.dateKey);
-  const currentOnline = adsAgents.filter((row) => isOnlineHeadcountStatus(row.presenceStatus)).length;
+  const currentOnline = adsAgents.filter((row) => (
+    isExecutivePresentHeadcountRow(row)
+    || hadExecutiveActivityInSelectedHour(row, selected)
+  )).length;
 
   const buckets: ExecutiveHourBucket[] = Array.from({ length: 24 }).map((_, hour) => {
     const queue = queueByHour.get(hour);
@@ -4289,6 +4295,22 @@ function buildExecutiveAgentBuckets(rows: AgentRealtimeRow[], selected: ReturnTy
   return summarizedByHour;
 }
 
+function hadExecutiveActivityInSelectedHour(
+  row: AgentRealtimeRow,
+  selected: ReturnType<typeof parseRealtimeCycle>
+) {
+  const snapshots = row.history
+    .map((item) => ({ ...item, parsed: parseRealtimeCycle(item.cycleDownload, "") }))
+    .filter((item) => item.parsed.timestamp <= selected.timestamp)
+    .sort((left, right) => left.parsed.timestamp - right.parsed.timestamp);
+  const current = snapshots
+    .filter((item) => item.parsed.dateKey === selected.dateKey && item.parsed.date.getHours() === selected.date.getHours())
+    .at(-1);
+  if (!current) return false;
+  const previous = snapshots.filter((item) => item.parsed.timestamp < current.parsed.timestamp).at(-1);
+  return cumulativeDelta(current.submit, previous?.submit ?? null) > 0;
+}
+
 function buildExecutiveQueueDeltaMetric(current: QueueMetric, previous: QueueMetric | null): QueueMetric {
   const input = cumulativeDelta(current.input, previous?.input ?? null);
   const output = cumulativeDelta(current.output, previous?.output ?? null);
@@ -4476,10 +4498,6 @@ function isReportAgentForLob(row: AgentRealtimeRow, lob: "ADS" | "VIDEO" | "COMM
     && row.crossingStatus === "Encontrado"
     && row.personType === "Agente"
     && matchesEmployeeStatus(row.employeeStatus, "Ativo");
-}
-
-function isOnlineHeadcountStatus(status: AgentPresenceStatus) {
-  return status === "Online" || status === "Tela bloqueada" || status === "Ocioso";
 }
 
 function buildQueueLobCards(rows: QueueRealtimeRow[], selectedCycle: string): QueueLobCardData[] {
