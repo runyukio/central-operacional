@@ -145,10 +145,11 @@ export function buildOmieAttachmentIntegrationCode(employeeInvoiceId: string, do
 
 export async function upsertBillingAccountPayable(
   input: OmieAccountPayableInput,
-  options: { config?: OmieConfig; fetchImpl?: FetchLike } = {}
+  options: { config?: OmieConfig; fetchImpl?: FetchLike; now?: Date } = {}
 ): Promise<OmieAccountPayableResult> {
   const config = options.config ?? loadOmieConfig();
   const fetchImpl = options.fetchImpl ?? fetch;
+  const now = options.now ?? new Date();
   const cnpj = formatBrazilianCnpj(input.cnpj);
   const supplier = await findSupplierByCnpj(cnpj, config, fetchImpl);
   const supplierCode = String(supplier.codigo_cliente_omie ?? "").trim();
@@ -156,7 +157,8 @@ export async function upsertBillingAccountPayable(
 
   const integrationCode = input.integrationCode || buildOmieIntegrationCode(input.referenceMonth, input.employeeInvoiceId);
   const issueDate = formatOmieDate(input.approvedAt);
-  const dueDate = formatOmieDate(addDays(input.approvedAt, config.dueDays));
+  const configuredDueDate = addDays(input.approvedAt, config.dueDays);
+  const dueDate = formatOmieDate(configuredDueDate < now ? now : configuredDueDate);
   const grossAmount = roundCurrency(input.grossAmount);
   if (!Number.isFinite(grossAmount) || grossAmount <= 0) throw new OmieIntegrationError("O valor bruto do invoice precisa ser maior que zero.");
 
@@ -226,6 +228,7 @@ export async function attachBillingInvoiceDocument(
     compression: "DEFLATE",
     compressionOptions: { level: 6 }
   });
+  const encodedFile = zippedFile.toString("base64");
   const response = await callOmie<OmieAttachmentResponse>(
     OMIE_ATTACHMENTS_ENDPOINT,
     "IncluirAnexo",
@@ -235,8 +238,8 @@ export async function attachBillingInvoiceDocument(
       nId: launchId,
       cNomeArquivo: fileName,
       cTipoArquivo: attachmentFileType(fileName),
-      cArquivo: zippedFile.toString("base64"),
-      cMd5: createHash("md5").update(zippedFile).digest("hex")
+      cArquivo: encodedFile,
+      cMd5: createHash("md5").update(encodedFile).digest("hex")
     }],
     config,
     fetchImpl

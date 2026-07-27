@@ -51,7 +51,11 @@ test("localiza o fornecedor por CNPJ e envia o valor bruto ao Contas a Pagar", a
     });
   };
 
-  const result = await upsertBillingAccountPayable(input, { config, fetchImpl: fetchImpl as typeof fetch });
+  const result = await upsertBillingAccountPayable(input, {
+    config,
+    fetchImpl: fetchImpl as typeof fetch,
+    now: new Date("2026-07-27T15:00:00.000Z")
+  });
 
   assert.equal(requests.length, 2);
   assert.equal(requests[0]?.call, "ListarClientes");
@@ -61,6 +65,9 @@ test("localiza o fornecedor por CNPJ e envia o valor bruto ao Contas a Pagar", a
   assert.equal(payable.valor_documento, 2225.47);
   assert.equal(payable.codigo_cliente_fornecedor, 4214850);
   assert.equal(payable.numero_documento_fiscal, "12345");
+  assert.equal(payable.data_emissao, "18/07/2026");
+  assert.equal(payable.data_vencimento, "27/07/2026");
+  assert.equal(payable.data_previsao, "27/07/2026");
   assert.match(String(payable.observacao), /35095022262629545000119000000000000526075882824813/);
   assert.equal(payable.chave_nfe, undefined);
   assert.equal(payable.codigo_categoria, "2.04.01");
@@ -149,7 +156,7 @@ test("compacta a nota fiscal e a anexa ao lançamento de Contas a Pagar", async 
   assert.equal(String(attachment.cCodIntAnexo).length, 20);
 
   const zippedFile = Buffer.from(String(attachment.cArquivo), "base64");
-  assert.equal(attachment.cMd5, createHash("md5").update(zippedFile).digest("hex"));
+  assert.equal(attachment.cMd5, createHash("md5").update(String(attachment.cArquivo)).digest("hex"));
   const zip = await JSZip.loadAsync(zippedFile);
   assert.deepEqual(await zip.file("NF-05-distrato-EVA.pdf")?.async("nodebuffer"), invoiceFile);
   assert.equal(result.attachmentId, "7654321");
