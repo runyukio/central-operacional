@@ -13125,6 +13125,10 @@ function PerformanceLegacyPage() {
   const wfhPayload = payload?.mode === "wfh" ? payload : null;
   const minePayload = payload?.mode === "mine" ? payload : null;
   const frameworkPayload = payload?.mode === "framework" ? payload : null;
+  const mineUsesCpd = isCecPerformanceRule(minePayload?.summary.mine.qualityRule);
+  const wfhUsesCpd = wfhPayload?.ranking.length
+    ? wfhPayload.ranking.every((agent) => isCecPerformanceRule(agent.qualityRule))
+    : filters.lob.trim().toLowerCase() === "cec";
 
   async function previewPerformanceFile(type: PerformanceImportKind, file?: File | null) {
     if (!file) return;
@@ -13355,8 +13359,8 @@ function PerformanceLegacyPage() {
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <StatCard title="Minha Qualidade" value={formatPerformancePercent(minePayload.summary.mine.quality)} helper={`${minePayload.summary.mine.qualityCorrect}/${minePayload.summary.mine.qualityTotal} tasks distintas`} icon={ShieldCheck} tone="green" />
             <StatCard title="Qualidade média LOB" value={formatPerformancePercent(minePayload.summary.lobAverage.quality)} helper="consolidado sem nomes" icon={UsersRound} tone="blue" />
-            <StatCard title="Meu Submit/dia" value={formatPerformanceNumber(minePayload.summary.mine.submit)} helper="média diária" icon={FileSpreadsheet} tone="purple" />
-            <StatCard title="Submit/dia LOB" value={formatPerformanceNumber(minePayload.summary.lobAverage.submit)} helper="média diária da LOB" icon={ClipboardList} tone="cyan" />
+            <StatCard title={mineUsesCpd ? "Meu CPD" : "Meu Submit/dia"} value={formatPerformanceNumber(minePayload.summary.mine.submit)} helper="média diária" icon={FileSpreadsheet} tone="purple" />
+            <StatCard title={mineUsesCpd ? "CPD da LOB" : "Submit/dia LOB"} value={formatPerformanceNumber(minePayload.summary.lobAverage.submit)} helper="média diária da LOB" icon={ClipboardList} tone="cyan" />
             <StatCard title="Meu AHT" value={formatPerformanceAht(minePayload.summary.mine.ahtSeconds)} helper="moderação / submits" icon={Clock} tone="orange" />
             <StatCard title="AHT médio LOB" value={formatPerformanceAht(minePayload.summary.lobAverage.ahtSeconds)} helper="consolidado da LOB" icon={Target} tone="gold" />
             <StatCard title="Meu ABS" value={formatPerformancePercent(minePayload.summary.mine.abs)} helper={`${minePayload.summary.mine.absences}/${minePayload.summary.mine.scheduledDays} dias`} icon={AlertTriangle} tone={minePayload.summary.mine.abs > 0 ? "red" : "green"} />
@@ -13381,7 +13385,7 @@ function PerformanceLegacyPage() {
                 </div>
               </Panel>
               <Panel title="Tabela semanal">
-                <SimpleTable columns={["Semana", "Qualidade", "Submit/dia", "AHT", "ABS"]} rows={minePayload.summary.mine.weekly.map((week) => [week.weekLabel, formatPerformancePercent(week.quality), formatPerformanceNumber(week.submit), formatPerformanceAht(week.ahtSeconds), formatPerformancePercent(week.abs)])} />
+                <SimpleTable columns={["Semana", "Qualidade", mineUsesCpd ? "CPD" : "Submit/dia", "AHT", "ABS"]} rows={minePayload.summary.mine.weekly.map((week) => [week.weekLabel, formatPerformancePercent(week.quality), formatPerformanceNumber(week.submit), formatPerformanceAht(week.ahtSeconds), formatPerformancePercent(week.abs)])} />
               </Panel>
             </div>
           ) : (
@@ -13409,7 +13413,7 @@ function PerformanceLegacyPage() {
           <div className={cn("grid gap-2 sm:grid-cols-2 lg:grid-cols-4", isClientRole ? "2xl:grid-cols-5" : "2xl:grid-cols-7")}>
             <PerformanceMetricCard title="Qualidade média" value={formatPerformancePercent(wfhPayload.summary.quality)} helper={`${wfhPayload.summary.qualityCorrect}/${wfhPayload.summary.qualityTotal} tasks`} icon={ShieldCheck} tone="green" />
             <PerformanceMetricCard title="AHT médio" value={formatPerformanceAht(wfhPayload.summary.ahtSeconds)} helper="moderação / submit" icon={Clock} tone="orange" />
-            <PerformanceMetricCard title="Submit diário" value={formatPerformanceNumber(wfhPayload.summary.submit)} helper="média diária" icon={FileSpreadsheet} tone="purple" />
+            <PerformanceMetricCard title={wfhUsesCpd ? "CPD médio" : "Submit diário"} value={formatPerformanceNumber(wfhPayload.summary.submit)} helper="média diária" icon={FileSpreadsheet} tone="purple" />
             <PerformanceMetricCard title="ABS médio" value={formatPerformancePercent(wfhPayload.summary.abs)} helper={`${wfhPayload.summary.absences}/${wfhPayload.summary.scheduledDays} dias`} icon={AlertTriangle} tone={wfhPayload.summary.abs > 0 ? "red" : "green"} />
             <PerformanceMetricCard title="Agentes com dados" value={wfhPayload.summary.agentsWithData} helper="base filtrada" icon={UsersRound} tone="blue" />
             {!isClientRole ? <PerformanceMetricCard title="Linhas importadas" value={formatPerformanceNumber(wfhPayload.summary.importedRows)} helper="últimos lotes" icon={Upload} tone="cyan" /> : null}
@@ -13481,7 +13485,7 @@ function PerformanceLegacyPage() {
                       </div>
                       <PerformanceWfhBadge status={selectedAgent.wfhStatus} label={selectedAgent.wfhStatusLabel} title={selectedAgent.wfhReasons.join(" | ")} />
                     </div>
-                    <p className="mt-2 text-xs font-bold text-muted">Status: {selectedAgent.employeeStatus || "-"} · Submit médio/dia: {formatPerformanceNumber(selectedAgent.submitAveragePerDay)} · Monitoramento: {selectedAgent.wfhMonitoringLabel}</p>
+                    <p className="mt-2 text-xs font-bold text-muted">Status: {selectedAgent.employeeStatus || "-"} · {isCecPerformanceRule(selectedAgent.qualityRule) ? "CPD" : "Submit médio/dia"}: {formatPerformanceNumber(selectedAgent.submitAveragePerDay)} · Monitoramento: {selectedAgent.wfhMonitoringLabel}</p>
                     {selectedAgent.wfhReasons.length ? (
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {selectedAgent.wfhReasons.map((reason) => <span key={reason} className="rounded-full border border-blue-100 bg-white px-2 py-1 text-[11px] font-bold text-navy-700">{reason}</span>)}
@@ -13489,7 +13493,7 @@ function PerformanceLegacyPage() {
                     ) : null}
                   </div>
                   <SimpleTable
-                    columns={["Semana", "Regra", "Qualidade", "Submit/dia", "AHT", "ABS"]}
+                    columns={["Semana", "Regra", "Qualidade", isCecPerformanceRule(selectedAgent.qualityRule) ? "CPD" : "Submit/dia", "AHT", "ABS"]}
                     rows={selectedAgent.weekly.map((week) => [
                       week.weekLabel,
                       performanceQualityRuleLabel(week.qualityRule),
@@ -13677,7 +13681,7 @@ function PerformanceRankingTable({ rows, sort, onSort, onSelect }: { rows: Agent
     { key: "rule", label: "Regra" },
     { key: "supervisor", label: "Supervisor" },
     { key: "quality", label: "Qualidade", sortBy: "quality", align: "right" },
-    { key: "submit", label: "Submit/dia", sortBy: "submit", align: "right" },
+    { key: "submit", label: "Produtividade", sortBy: "submit", align: "right" },
     { key: "aht", label: "AHT", sortBy: "aht", align: "right" },
     { key: "abs", label: "ABS", sortBy: "abs", align: "right" }
   ];
@@ -13846,6 +13850,10 @@ function performanceQualityRuleLabel(rule?: string) {
   return "Sem regra";
 }
 
+function isCecPerformanceRule(rule?: string) {
+  return rule === "CEC_QUALITY";
+}
+
 function assessPerformanceMetric(metric: PerformanceMetricKind, metrics: PerformanceMetricSummary): PerformanceMetricAssessment {
   const targets = performanceTargetsForRule(metrics.qualityRule);
   if (!targets) return { status: "NEUTRAL", title: "Regra de meta não configurada para esta operação." };
@@ -13856,9 +13864,10 @@ function assessPerformanceMetric(metric: PerformanceMetricKind, metrics: Perform
       : { status: "FAIL", title: `Fora da meta: qualidade precisa ser >= ${targets.quality}%.` };
   }
   if (metric === "submit") {
+    const productivityUnit = isCecPerformanceRule(metrics.qualityRule) ? "CPD" : "por dia";
     return metrics.submit >= targets.submit
-      ? { status: "PASS", title: `Dentro da meta: produtividade >= ${targets.submit}/dia.` }
-      : { status: "FAIL", title: `Fora da meta: produtividade precisa ser >= ${targets.submit}/dia.` };
+      ? { status: "PASS", title: `Dentro da meta: produtividade >= ${targets.submit} ${productivityUnit}.` }
+      : { status: "FAIL", title: `Fora da meta: produtividade precisa ser >= ${targets.submit} ${productivityUnit}.` };
   }
   if (metric === "aht") {
     if (targets.ahtSeconds == null) return { status: "NEUTRAL", title: "AHT não é critério de classificação para esta operação." };
@@ -13872,14 +13881,15 @@ function assessPerformanceMetric(metric: PerformanceMetricKind, metrics: Perform
 }
 
 function performanceTargetsForRule(rule?: string): null | { quality: number; submit: number; ahtSeconds?: number; abs: number } {
-  if (rule === "CEC_QUALITY") return { quality: 90, submit: 70, abs: 5 };
-  if (rule === "ADS_QUALITY" || rule === "TNS_QUALITY") return { quality: 95, submit: 350, ahtSeconds: 60, abs: 5 };
+  if (rule === "CEC_QUALITY") return { quality: 95, submit: 60, abs: 5 };
+  if (rule === "TNS_QUALITY") return { quality: 98, submit: 350, ahtSeconds: 60, abs: 5 };
+  if (rule === "ADS_QUALITY") return { quality: 95, submit: 350, ahtSeconds: 60, abs: 5 };
   return null;
 }
 
 function formatPerformanceMetricForBadge(metric: PerformanceMetricKind, metrics: PerformanceMetricSummary) {
   if (metric === "quality") return formatPerformancePercent(metrics.quality);
-  if (metric === "submit") return formatPerformanceNumber(metrics.submit);
+  if (metric === "submit") return isCecPerformanceRule(metrics.qualityRule) ? `${formatPerformanceNumber(metrics.submit)} CPD` : `${formatPerformanceNumber(metrics.submit)}/dia`;
   if (metric === "aht") return formatPerformanceAht(metrics.ahtSeconds);
   return formatPerformancePercent(metrics.abs);
 }
