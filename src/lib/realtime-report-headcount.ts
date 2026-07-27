@@ -1,13 +1,12 @@
-export type ReportPresenceStatus = "Online" | "Tela bloqueada" | "Ocioso" | "Offline";
-
 type ReportHeadcountRow = {
-  presenceStatus: ReportPresenceStatus;
-  isSchedulePresent: boolean;
+  presenceStatus: string;
+  isSchedulePresent?: boolean;
 };
 
 export function isReportOnlineHeadcountRow(row: ReportHeadcountRow) {
-  return row.isSchedulePresent
-    || row.presenceStatus === "Online"
-    || row.presenceStatus === "Tela bloqueada"
-    || row.presenceStatus === "Ocioso";
+  return row.presenceStatus === "Online";
+}
+
+export function isExecutivePresentHeadcountRow(row: ReportHeadcountRow) {
+  return Boolean(row.isSchedulePresent) || row.presenceStatus === "Online";
 }

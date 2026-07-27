@@ -72,6 +72,22 @@ test("ignora filas e agentes fora de ADS", () => {
   assert.deepEqual(report.topAgents, []);
 });
 
+test("no Executive conta quem esteve presente ou online na hora", () => {
+  const report = buildAdsExecutiveReportSnapshot({
+    selectedCycle: "2026-07-21 10:30",
+    queueRows: [{ lob: "ADS", history: [metric("2026-07-21 10:30", 10, 10, 0)] }],
+    agentRows: [
+      agent("online", "Online", false, 0),
+      agent("presente", "Offline", true, 0),
+      agent("atividade", "Tela bloqueada", false, 10),
+      agent("bloqueado", "Tela bloqueada", false, 0),
+      agent("ocioso", "Ocioso", false, 0)
+    ]
+  });
+
+  assert.equal(report.buckets[10].online, 3);
+});
+
 function metric(cycleDownload: string, input: number, output: number, backlog: number) {
   return {
     cycleDownload,
@@ -81,5 +97,20 @@ function metric(cycleDownload: string, input: number, output: number, backlog: n
     latencyMs: 60_000,
     maxLatencyMs: 120_000,
     backlog
+  };
+}
+
+function agent(wbLogin: string, presenceStatus: string, isSchedulePresent: boolean, submit: number) {
+  return {
+    displayName: wbLogin,
+    wbLogin,
+    rawWbLogin: wbLogin,
+    lob: "ADS",
+    crossingStatus: "Encontrado",
+    personType: "Agente",
+    employeeStatus: "Ativo",
+    presenceStatus,
+    isSchedulePresent,
+    history: [{ cycleDownload: "2026-07-21 10:30", submit, ahtMs: null, moderationMs: 0 }]
   };
 }
