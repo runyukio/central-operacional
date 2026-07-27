@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   type LucideIcon,
@@ -15,6 +16,7 @@ import {
   Download,
   FileSpreadsheet,
   Gauge,
+  Laptop,
   LineChart as LineChartIcon,
   LockKeyhole,
   RefreshCw,
@@ -51,6 +53,15 @@ type QualitySortDirection = "asc" | "desc";
 type QualityLob = "ADS" | "VIDEO" | "COMMENTS";
 type QualityImportScope = "ADS" | "TNS";
 type SupervisorView = QualityGranularity;
+type PerformanceTab = "queue" | "agents" | "supervisors" | "forecast" | "quality" | "wfh";
+
+const PerformanceWfhPanel = dynamic(
+  () => import("@/components/modules").then((module) => module.PerformanceWfhPanel),
+  {
+    ssr: false,
+    loading: () => <EmptyBox label="Carregando WFH..." />
+  }
+);
 
 type PerformanceSummary = {
   records: number;
@@ -293,8 +304,8 @@ const defaultForecastModelWeights: ForecastModelWeights = {
   shortMomentum: 0.16
 };
 
-export function PerformanceAutomationPage() {
-  const [activeTab, setActiveTab] = useState<"queue" | "agents" | "supervisors" | "forecast" | "quality">("queue");
+export function PerformanceAutomationPage({ initialTab = "queue" }: { initialTab?: PerformanceTab }) {
+  const [activeTab, setActiveTab] = useState<PerformanceTab>(initialTab);
   const [queueGranularity, setQueueGranularity] = useState<PerformanceGranularity>("daily");
   const [queueLob, setQueueLob] = useState("");
   const [queueStartDate, setQueueStartDate] = useState("");
@@ -484,7 +495,7 @@ export function PerformanceAutomationPage() {
         icon={Trophy}
         actions={(
           <div className="flex flex-wrap items-center gap-2">
-            {basePayload?.canImport && activeTab !== "quality" && activeTab !== "supervisors" ? (
+            {basePayload?.canImport && activeTab !== "quality" && activeTab !== "supervisors" && activeTab !== "wfh" ? (
               <button type="button" onClick={() => setUploadOpen(true)} className="inline-flex h-10 items-center gap-2 rounded-xl bg-blue-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-blue-700">
                 <UploadCloud className="h-4 w-4" /> Subir bases
               </button>
@@ -494,7 +505,7 @@ export function PerformanceAutomationPage() {
         )}
       />
 
-      {activeTab === "supervisors" ? null : activeTab === "quality" ? (
+      {activeTab === "supervisors" || activeTab === "wfh" ? null : activeTab === "quality" ? (
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <StatCard title="Último upload" value={formatQualityImportDate(qualityPayload?.lastImport?.importedAt)} helper="snapshot de qualidade vigente" icon={CheckCircle2} tone="green" />
           <StatCard title="Janela da base" value={formatQualityRange(qualityPayload?.dataRange)} helper={qualityLob === "ADS" ? "ADS + PROJECT" : qualityLob} icon={CalendarClock} tone="purple" />
@@ -516,6 +527,7 @@ export function PerformanceAutomationPage() {
         <TabButton active={activeTab === "supervisors"} icon={ShieldCheck} label="Supervisores" onClick={() => setActiveTab("supervisors")} />
         <TabButton active={activeTab === "forecast"} icon={LineChartIcon} label="Forecast" onClick={() => setActiveTab("forecast")} />
         <TabButton active={activeTab === "quality"} icon={ShieldCheck} label="Qualidade" onClick={() => setActiveTab("quality")} />
+        <TabButton active={activeTab === "wfh"} icon={Laptop} label="WFH" onClick={() => setActiveTab("wfh")} />
       </div>
 
       {message ? <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{message}</p> : null}
@@ -591,6 +603,8 @@ export function PerformanceAutomationPage() {
           onHorizonChange={setForecastHorizon}
           onRefresh={() => void loadForecast()}
         />
+      ) : activeTab === "wfh" ? (
+        <PerformanceWfhPanel />
       ) : (
         <QualityView
           loading={loadingQuality}
