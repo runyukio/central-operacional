@@ -619,6 +619,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
   const invoiceNumber = extraction.invoiceNumber;
   const serviceDescription = buildAutomaticBillingServiceDescription(extraction, referenceMonth);
   const storagePath = file ? buildBillingInvoiceStoragePath(referenceMonth, user.employeeProfile.id, file.name) : null;
+  const wbLogin = user.employeeProfile.wbLogin;
   let uploadedPath: string | null = null;
 
   try {
@@ -669,7 +670,8 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
           submittedById: user.id,
           submittedAt: approvedAt,
           omieStatus: "PENDING",
-          omieIntegrationCode: buildOmieIntegrationCode(referenceMonth, savedInvoice.id),
+          omieIntegrationCode: persisted?.fiscalInvoice?.omieIntegrationCode
+            || buildOmieIntegrationCode(referenceMonth, wbLogin),
           omieSyncedAt: null,
           omieLastError: null
         },
@@ -686,7 +688,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
           submittedById: user.id,
           submittedAt: approvedAt,
           omieStatus: "PENDING",
-          omieIntegrationCode: buildOmieIntegrationCode(referenceMonth, savedInvoice.id)
+          omieIntegrationCode: buildOmieIntegrationCode(referenceMonth, wbLogin)
         }
       });
 
@@ -759,8 +761,20 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
         select: {
           id: true,
           referenceMonth: true,
+          billingCycleId: true,
           employeeId: true,
-          approvedByEmployeeAt: true
+          approvedByEmployeeAt: true,
+          grossAmount: true,
+          advanceAmount: true,
+          campaignAmount: true,
+          adjustmentAmount: true,
+          finalAmount: true,
+          employee: {
+            select: {
+              wbLogin: true,
+              lobId: true
+            }
+          }
         }
       }
     }
@@ -793,14 +807,41 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
       .catch(() => {
         throw new OmieIntegrationError("Não foi possível recuperar a nota fiscal para anexar ao lançamento no Omie.");
       });
+    const adjustmentRows = await prisma.billingAdjustment.findMany({
+      where: {
+        billingCycleId: fiscalInvoice.employeeInvoice.billingCycleId,
+        deletedAt: null,
+        OR: [
+          { employeeId: fiscalInvoice.employeeInvoice.employeeId },
+          {
+            employeeId: null,
+            lobId: fiscalInvoice.employeeInvoice.employee.lobId
+          },
+          { employeeInvoiceId }
+        ]
+      },
+      select: { type: true, amount: true }
+    });
+    const adjustmentBreakdown = buildAdjustmentBreakdown(adjustmentRows);
+    const billingGrossAmount = Number(fiscalInvoice.employeeInvoice.grossAmount);
+    const fiscalGrossAmount = Number(fiscalInvoice.grossAmount);
     const result = await upsertBillingAccountPayable({
       employeeInvoiceId,
       referenceMonth: fiscalInvoice.employeeInvoice.referenceMonth,
+      wbLogin: fiscalInvoice.employeeInvoice.employee.wbLogin,
       cnpj: sensitiveData?.cnpj ?? "",
       accessKey: fiscalInvoice.accessKey ?? "",
       invoiceNumber: fiscalInvoice.invoiceNumber,
       serviceDescription: fiscalInvoice.serviceDescription,
-      grossAmount: Number(fiscalInvoice.grossAmount),
+      grossAmount: fiscalGrossAmount,
+      billingGrossAmount,
+      correctionAmount: roundMoney(fiscalGrossAmount - billingGrossAmount),
+      bonusAmount: adjustmentBreakdown.bonusAmount,
+      campaignAmount: Number(fiscalInvoice.employeeInvoice.campaignAmount),
+      advanceAmount: Number(fiscalInvoice.employeeInvoice.advanceAmount),
+      discountAmount: adjustmentBreakdown.discountAmount,
+      otherAdjustmentAmount: adjustmentBreakdown.otherAdjustmentAmount,
+      finalAmount: Number(fiscalInvoice.employeeInvoice.finalAmount),
       approvedAt: fiscalInvoice.employeeInvoice.approvedByEmployeeAt ?? fiscalInvoice.submittedAt,
       integrationCode
     });
@@ -829,7 +870,17 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
       integrationCode: result.integrationCode,
       launchCode: result.launchCode,
       supplierCode: result.supplierCode,
-      grossAmount: Number(fiscalInvoice.grossAmount),
+      invoiceNumber: fiscalInvoice.invoiceNumber,
+      wbLogin: fiscalInvoice.employeeInvoice.employee.wbLogin,
+      grossAmount: fiscalGrossAmount,
+      billingGrossAmount,
+      correctionAmount: roundMoney(fiscalGrossAmount - billingGrossAmount),
+      bonusAmount: adjustmentBreakdown.bonusAmount,
+      campaignAmount: Number(fiscalInvoice.employeeInvoice.campaignAmount),
+      advanceAmount: Number(fiscalInvoice.employeeInvoice.advanceAmount),
+      discountAmount: adjustmentBreakdown.discountAmount,
+      otherAdjustmentAmount: adjustmentBreakdown.otherAdjustmentAmount,
+      finalAmount: Number(fiscalInvoice.employeeInvoice.finalAmount),
       attachmentIntegrationCode: attachment.integrationCode,
       attachmentId: attachment.attachmentId,
       attachmentFileName: attachment.fileName,
@@ -1316,7 +1367,8 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
             submittedById: user!.id,
             submittedAt,
             omieStatus: "PENDING",
-            omieIntegrationCode: buildOmieIntegrationCode(referenceMonth, savedInvoice.id),
+            omieIntegrationCode: existing?.fiscalInvoice?.omieIntegrationCode
+              || buildOmieIntegrationCode(referenceMonth, employee.wbLogin),
             omieSyncedAt: null,
             omieLastError: null
           },
@@ -1333,7 +1385,7 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
             submittedById: user!.id,
             submittedAt,
             omieStatus: "PENDING",
-            omieIntegrationCode: buildOmieIntegrationCode(referenceMonth, savedInvoice.id)
+            omieIntegrationCode: buildOmieIntegrationCode(referenceMonth, employee.wbLogin)
           }
         });
 

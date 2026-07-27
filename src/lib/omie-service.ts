@@ -22,11 +22,20 @@ export type OmieConfig = {
 export type OmieAccountPayableInput = {
   employeeInvoiceId: string;
   referenceMonth: string;
+  wbLogin: string;
   cnpj: string;
   accessKey: string;
   invoiceNumber: string;
   serviceDescription: string;
   grossAmount: number;
+  billingGrossAmount: number;
+  correctionAmount: number;
+  bonusAmount: number;
+  campaignAmount: number;
+  advanceAmount: number;
+  discountAmount: number;
+  otherAdjustmentAmount: number;
+  finalAmount: number;
   approvedAt: Date;
   integrationCode?: string | null;
 };
@@ -130,10 +139,16 @@ export function formatBrazilianCnpj(value: string) {
   return digits.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, "$1.$2.$3/$4-$5");
 }
 
-export function buildOmieIntegrationCode(referenceMonth: string, employeeInvoiceId: string) {
+export function buildOmieIntegrationCode(referenceMonth: string, employeeKey: string) {
   const normalizedMonth = String(referenceMonth).replace(/[^0-9-]/g, "").slice(0, 7);
-  const normalizedId = String(employeeInvoiceId).replace(/[^a-zA-Z0-9_-]/g, "");
-  return `billing-${normalizedMonth}-${normalizedId}`.slice(0, 60);
+  const normalizedEmployeeKey = String(employeeKey).trim().replace(/[^a-zA-Z0-9_-]/g, "");
+  return `billing-${normalizedMonth}-${normalizedEmployeeKey}`.slice(0, 60);
+}
+
+export function buildOmieDocumentNumber(referenceMonth: string, wbLogin: string) {
+  const normalizedMonth = String(referenceMonth).replace(/\D/g, "").slice(0, 6);
+  const normalizedLogin = String(wbLogin).trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+  return `B${normalizedMonth}-${normalizedLogin}`.slice(0, 20);
 }
 
 export function buildOmieAttachmentIntegrationCode(employeeInvoiceId: string, documentHash?: string | null) {
@@ -155,7 +170,7 @@ export async function upsertBillingAccountPayable(
   const supplierCode = String(supplier.codigo_cliente_omie ?? "").trim();
   if (!supplierCode) throw new OmieIntegrationError(`Fornecedor do CNPJ ${maskCnpj(cnpj)} não possui código válido no Omie.`);
 
-  const integrationCode = input.integrationCode || buildOmieIntegrationCode(input.referenceMonth, input.employeeInvoiceId);
+  const integrationCode = input.integrationCode || buildOmieIntegrationCode(input.referenceMonth, input.wbLogin || input.employeeInvoiceId);
   const issueDate = formatOmieDate(input.approvedAt);
   const configuredDueDate = addDays(input.approvedAt, config.dueDays);
   const dueDate = formatOmieDate(configuredDueDate < now ? now : configuredDueDate);
@@ -170,8 +185,10 @@ export async function upsertBillingAccountPayable(
     codigo_categoria: config.categoryCode,
     data_previsao: dueDate,
     numero_documento_fiscal: input.invoiceNumber,
-    numero_documento: input.invoiceNumber,
+    numero_documento: buildOmieDocumentNumber(input.referenceMonth, input.wbLogin),
     data_emissao: issueDate,
+    data_entrada: issueDate,
+    numero_parcela: "001/001",
     observacao: buildObservation(input),
     ...(normalizeAccessKey(input.accessKey).length === 44 ? { chave_nfe: normalizeAccessKey(input.accessKey) } : {}),
     ...(config.checkingAccountId ? { id_conta_corrente: config.checkingAccountId } : {})
@@ -328,10 +345,29 @@ async function callOmie<T>(endpoint: string, call: string, param: unknown[], con
 function buildObservation(input: OmieAccountPayableInput) {
   return [
     `Billing ${input.referenceMonth}`,
-    `NF ${input.invoiceNumber}`,
-    input.accessKey ? `Chave NFS-e ${normalizeAccessKey(input.accessKey)}` : "",
-    input.serviceDescription.trim()
+    `WB: ${input.wbLogin}`,
+    `Bruto: ${formatCurrency(input.billingGrossAmount)}`,
+    `Correção: ${formatCurrency(input.correctionAmount)}`,
+    `Valor NF: ${formatCurrency(input.grossAmount)}`,
+    `Bônus: ${formatCurrency(input.bonusAmount)}`,
+    `Campanha: ${formatCurrency(input.campaignAmount)}`,
+    `Adiantamento: ${formatCurrency(input.advanceAmount)}`,
+    `Desconto: ${formatCurrency(input.discountAmount)}`,
+    `Outros ajustes: ${formatCurrency(input.otherAdjustmentAmount)}`,
+    `Final: ${formatCurrency(input.finalAmount)}`,
+    `NF: ${input.invoiceNumber}`,
+    input.accessKey ? `Chave NFS-e: ${normalizeAccessKey(input.accessKey)}` : "",
+    input.serviceDescription.trim() ? `Serviço: ${input.serviceDescription.trim()}` : ""
   ].filter(Boolean).join(" | ").slice(0, 500);
+}
+
+function formatCurrency(value: number) {
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(roundCurrency(value)).replace(/\u00a0/g, " ");
 }
 
 function normalizeAccessKey(value: string) {
