@@ -16,7 +16,12 @@ import { canAccessBilling, canManageBilling } from "@/lib/billing-permissions";
 import { isAgentJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
 import { MONTHLY_ADVANCE_FIXED_AMOUNT, isMonthlyAdvanceReferenceMonthAvailable } from "@/lib/monthly-advance-constants";
 import { formatReferenceMonth, normalizeReferenceMonth } from "@/lib/monthly-advance-service";
-import { buildOmieIntegrationCode, OmieIntegrationError, upsertBillingAccountPayable } from "@/lib/omie-service";
+import {
+  attachBillingInvoiceDocument,
+  buildOmieIntegrationCode,
+  OmieIntegrationError,
+  upsertBillingAccountPayable
+} from "@/lib/omie-service";
 import { prisma } from "@/lib/prisma";
 import { normalizeRole } from "@/lib/permissions";
 import { cleanShiftName } from "@/lib/shift-display";
@@ -781,6 +786,13 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
       where: { employeeId: fiscalInvoice.employeeInvoice.employeeId },
       select: { cnpj: true }
     });
+    if (fiscalInvoice.storageBucket !== BILLING_INVOICE_BUCKET) {
+      throw new OmieIntegrationError("A nota fiscal está armazenada em uma origem inválida para envio ao Omie.");
+    }
+    const storedInvoice = await downloadPrivateObject(BILLING_INVOICE_BUCKET, fiscalInvoice.storagePath)
+      .catch(() => {
+        throw new OmieIntegrationError("Não foi possível recuperar a nota fiscal para anexar ao lançamento no Omie.");
+      });
     const result = await upsertBillingAccountPayable({
       employeeInvoiceId,
       referenceMonth: fiscalInvoice.employeeInvoice.referenceMonth,
@@ -791,6 +803,13 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
       grossAmount: Number(fiscalInvoice.grossAmount),
       approvedAt: fiscalInvoice.employeeInvoice.approvedByEmployeeAt ?? fiscalInvoice.submittedAt,
       integrationCode
+    });
+    const attachment = await attachBillingInvoiceDocument({
+      employeeInvoiceId,
+      documentHash: fiscalInvoice.documentHash,
+      launchCode: result.launchCode,
+      fileName: fiscalInvoice.fileName,
+      file: storedInvoice.data
     });
     const syncedAt = new Date();
     await prisma.billingFiscalInvoice.update({
@@ -810,9 +829,17 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
       integrationCode: result.integrationCode,
       launchCode: result.launchCode,
       supplierCode: result.supplierCode,
-      grossAmount: Number(fiscalInvoice.grossAmount)
+      grossAmount: Number(fiscalInvoice.grossAmount),
+      attachmentIntegrationCode: attachment.integrationCode,
+      attachmentId: attachment.attachmentId,
+      attachmentFileName: attachment.fileName,
+      attachmentAlreadyExisted: attachment.alreadyAttached
     });
-    return { status: "SYNCED", message: result.statusDescription || "Lançamento enviado ao Omie.", launchCode: result.launchCode };
+    return {
+      status: "SYNCED",
+      message: "Lançamento e nota fiscal enviados ao Omie.",
+      launchCode: result.launchCode
+    };
   } catch (error) {
     const message = error instanceof OmieIntegrationError
       ? error.message

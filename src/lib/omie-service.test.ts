@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
+import JSZip from "jszip";
+
 import {
+  attachBillingInvoiceDocument,
+  buildOmieAttachmentIntegrationCode,
   buildOmieIntegrationCode,
   type OmieConfig,
   OmieIntegrationError,
@@ -100,6 +105,84 @@ test("mantém a chave de integração informada para tornar o reenvio idempotent
 
   const payable = (requests[1]?.param as Array<Record<string, unknown>>)[0];
   assert.equal(payable.codigo_lancamento_integracao, "billing-stable-key");
+});
+
+test("compacta a nota fiscal e a anexa ao lançamento de Contas a Pagar", async () => {
+  const requests: Array<Record<string, unknown>> = [];
+  const invoiceFile = Buffer.from("%PDF-1.7 nota fiscal de teste");
+  const fetchImpl = async (_url: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    requests.push(body);
+    return body.call === "ListarAnexo"
+      ? Response.json({ listaAnexos: [] })
+      : Response.json({
+        cCodIntAnexo: buildOmieAttachmentIntegrationCode(input.employeeInvoiceId, "document-hash"),
+        nIdAnexo: 7654321,
+        cNomeArquivo: "NF-05-distrato-EVA.pdf",
+        cCodStatus: "0",
+        cDesStatus: "Anexo incluído"
+      });
+  };
+
+  const result = await attachBillingInvoiceDocument({
+    employeeInvoiceId: input.employeeInvoiceId,
+    documentHash: "document-hash",
+    launchCode: "987654",
+    fileName: "NF.05 distrato ÉVA.pdf",
+    file: invoiceFile
+  }, { config, fetchImpl: fetchImpl as typeof fetch });
+
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0]?.call, "ListarAnexo");
+  assert.deepEqual((requests[0]?.param as Array<Record<string, unknown>>)[0], {
+    nPagina: 1,
+    nRegPorPagina: 100,
+    nId: 987654,
+    cTabela: "conta-pagar"
+  });
+  assert.equal(requests[1]?.call, "IncluirAnexo");
+  const attachment = (requests[1]?.param as Array<Record<string, unknown>>)[0];
+  assert.equal(attachment.cTabela, "conta-pagar");
+  assert.equal(attachment.nId, 987654);
+  assert.equal(attachment.cNomeArquivo, "NF-05-distrato-EVA.pdf");
+  assert.equal(attachment.cTipoArquivo, "PDF");
+  assert.equal(String(attachment.cCodIntAnexo).length, 20);
+
+  const zippedFile = Buffer.from(String(attachment.cArquivo), "base64");
+  assert.equal(attachment.cMd5, createHash("md5").update(zippedFile).digest("hex"));
+  const zip = await JSZip.loadAsync(zippedFile);
+  assert.deepEqual(await zip.file("NF-05-distrato-EVA.pdf")?.async("nodebuffer"), invoiceFile);
+  assert.equal(result.attachmentId, "7654321");
+  assert.equal(result.alreadyAttached, false);
+});
+
+test("não duplica a nota fiscal quando o anexo já existe no lançamento", async () => {
+  const requests: Array<Record<string, unknown>> = [];
+  const integrationCode = buildOmieAttachmentIntegrationCode(input.employeeInvoiceId, "document-hash");
+  const fetchImpl = async (_url: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    requests.push(body);
+    return Response.json({
+      listaAnexos: [{
+        cCodIntAnexo: integrationCode,
+        nIdAnexo: 7654321,
+        cNomeArquivo: "nota-fiscal.pdf"
+      }]
+    });
+  };
+
+  const result = await attachBillingInvoiceDocument({
+    employeeInvoiceId: input.employeeInvoiceId,
+    documentHash: "document-hash",
+    launchCode: "987654",
+    fileName: "nota-fiscal.pdf",
+    file: Buffer.from("arquivo")
+  }, { config, fetchImpl: fetchImpl as typeof fetch });
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0]?.call, "ListarAnexo");
+  assert.equal(result.attachmentId, "7654321");
+  assert.equal(result.alreadyAttached, true);
 });
 
 test("não expõe o segredo quando o Omie devolve uma falha", async () => {

@@ -1,5 +1,12 @@
+import { createHash } from "node:crypto";
+import { basename, extname } from "node:path";
+
+import JSZip from "jszip";
+
 const OMIE_CLIENTS_ENDPOINT = "https://app.omie.com.br/api/v1/geral/clientes/";
 const OMIE_ACCOUNTS_PAYABLE_ENDPOINT = "https://app.omie.com.br/api/v1/financas/contapagar/";
+const OMIE_ATTACHMENTS_ENDPOINT = "https://app.omie.com.br/api/v1/geral/anexo/";
+const OMIE_ACCOUNTS_PAYABLE_ATTACHMENT_TABLE = "conta-pagar";
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_DUE_DAYS = 0;
 
@@ -32,6 +39,22 @@ export type OmieAccountPayableResult = {
   statusDescription: string;
 };
 
+export type OmieDocumentAttachmentInput = {
+  employeeInvoiceId: string;
+  documentHash?: string | null;
+  launchCode: string;
+  fileName: string;
+  file: Uint8Array;
+};
+
+export type OmieDocumentAttachmentResult = {
+  integrationCode: string;
+  attachmentId: string;
+  fileName: string;
+  alreadyAttached: boolean;
+  statusDescription: string;
+};
+
 type FetchLike = typeof fetch;
 
 type OmieSupplier = {
@@ -49,6 +72,21 @@ type OmiePayableResponse = {
   codigo_lancamento_integracao?: string;
   codigo_status?: string;
   descricao_status?: string;
+};
+
+type OmieAttachment = {
+  cCodIntAnexo?: string;
+  nIdAnexo?: number | string;
+  cNomeArquivo?: string;
+};
+
+type OmieAttachmentListResponse = {
+  listaAnexos?: OmieAttachment[];
+};
+
+type OmieAttachmentResponse = OmieAttachment & {
+  cCodStatus?: string;
+  cDesStatus?: string;
 };
 
 export class OmieIntegrationError extends Error {
@@ -96,6 +134,13 @@ export function buildOmieIntegrationCode(referenceMonth: string, employeeInvoice
   const normalizedMonth = String(referenceMonth).replace(/[^0-9-]/g, "").slice(0, 7);
   const normalizedId = String(employeeInvoiceId).replace(/[^a-zA-Z0-9_-]/g, "");
   return `billing-${normalizedMonth}-${normalizedId}`.slice(0, 60);
+}
+
+export function buildOmieAttachmentIntegrationCode(employeeInvoiceId: string, documentHash?: string | null) {
+  const digest = createHash("sha256")
+    .update(`${employeeInvoiceId}:${String(documentHash ?? "")}`)
+    .digest("hex");
+  return `bnf-${digest.slice(0, 16)}`;
 }
 
 export async function upsertBillingAccountPayable(
@@ -149,6 +194,68 @@ export async function upsertBillingAccountPayable(
   };
 }
 
+export async function attachBillingInvoiceDocument(
+  input: OmieDocumentAttachmentInput,
+  options: { config?: OmieConfig; fetchImpl?: FetchLike } = {}
+): Promise<OmieDocumentAttachmentResult> {
+  const config = options.config ?? loadOmieConfig();
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const launchId = Number(input.launchCode);
+  if (!Number.isSafeInteger(launchId) || launchId <= 0) {
+    throw new OmieIntegrationError("O código do lançamento retornado pelo Omie é inválido para anexar a nota fiscal.");
+  }
+  if (!input.file.byteLength) throw new OmieIntegrationError("A nota fiscal armazenada está vazia e não pode ser anexada ao Omie.");
+
+  const integrationCode = buildOmieAttachmentIntegrationCode(input.employeeInvoiceId, input.documentHash);
+  const fileName = normalizeAttachmentFileName(input.fileName);
+  const existing = await findExistingAttachment(launchId, integrationCode, config, fetchImpl);
+  if (existing) {
+    return {
+      integrationCode,
+      attachmentId: String(existing.nIdAnexo ?? ""),
+      fileName: String(existing.cNomeArquivo ?? fileName),
+      alreadyAttached: true,
+      statusDescription: "Nota fiscal já anexada ao lançamento no Omie."
+    };
+  }
+
+  const zip = new JSZip();
+  zip.file(fileName, input.file);
+  const zippedFile = await zip.generateAsync({
+    type: "nodebuffer",
+    compression: "DEFLATE",
+    compressionOptions: { level: 6 }
+  });
+  const response = await callOmie<OmieAttachmentResponse>(
+    OMIE_ATTACHMENTS_ENDPOINT,
+    "IncluirAnexo",
+    [{
+      cCodIntAnexo: integrationCode,
+      cTabela: OMIE_ACCOUNTS_PAYABLE_ATTACHMENT_TABLE,
+      nId: launchId,
+      cNomeArquivo: fileName,
+      cTipoArquivo: attachmentFileType(fileName),
+      cArquivo: zippedFile.toString("base64"),
+      cMd5: createHash("md5").update(zippedFile).digest("hex")
+    }],
+    config,
+    fetchImpl
+  );
+  const statusCode = String(response.cCodStatus ?? "0");
+  const statusDescription = sanitizeOmieMessage(response.cDesStatus ?? "");
+  if (statusCode !== "0") {
+    throw new OmieIntegrationError(statusDescription || "O Omie recusou o anexo da nota fiscal.");
+  }
+
+  return {
+    integrationCode,
+    attachmentId: String(response.nIdAnexo ?? ""),
+    fileName: String(response.cNomeArquivo ?? fileName),
+    alreadyAttached: false,
+    statusDescription: statusDescription || "Nota fiscal anexada ao lançamento no Omie."
+  };
+}
+
 async function findSupplierByCnpj(cnpj: string, config: OmieConfig, fetchImpl: FetchLike) {
   const response = await callOmie<OmieSupplierListResponse>(
     OMIE_CLIENTS_ENDPOINT,
@@ -166,6 +273,27 @@ async function findSupplierByCnpj(cnpj: string, config: OmieConfig, fetchImpl: F
   const supplier = (response.clientes_cadastro ?? []).find((item) => normalizeBrazilianTaxId(item.cnpj_cpf ?? "") === expected);
   if (!supplier) throw new OmieIntegrationError(`Fornecedor com CNPJ ${maskCnpj(cnpj)} não encontrado no Omie.`);
   return supplier;
+}
+
+async function findExistingAttachment(
+  launchId: number,
+  integrationCode: string,
+  config: OmieConfig,
+  fetchImpl: FetchLike
+) {
+  const response = await callOmie<OmieAttachmentListResponse>(
+    OMIE_ATTACHMENTS_ENDPOINT,
+    "ListarAnexo",
+    [{
+      nPagina: 1,
+      nRegPorPagina: 100,
+      nId: launchId,
+      cTabela: OMIE_ACCOUNTS_PAYABLE_ATTACHMENT_TABLE
+    }],
+    config,
+    fetchImpl
+  );
+  return (response.listaAnexos ?? []).find((attachment) => attachment.cCodIntAnexo === integrationCode) ?? null;
 }
 
 async function callOmie<T>(endpoint: string, call: string, param: unknown[], config: OmieConfig, fetchImpl: FetchLike): Promise<T> {
@@ -205,6 +333,24 @@ function buildObservation(input: OmieAccountPayableInput) {
 
 function normalizeAccessKey(value: string) {
   return String(value ?? "").replace(/\D/g, "");
+}
+
+function normalizeAttachmentFileName(value: string) {
+  const original = basename(String(value ?? "").trim()) || "nota-fiscal.pdf";
+  const extension = extname(original).toLowerCase().replace(/[^.a-z0-9]/g, "").slice(0, 11);
+  const rawStem = extension ? original.slice(0, -extname(original).length) : original;
+  const stem = rawStem
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\./g, "-")
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "") || "nota-fiscal";
+  return `${stem.slice(0, Math.max(1, 100 - extension.length))}${extension}`;
+}
+
+function attachmentFileType(fileName: string) {
+  return extname(fileName).replace(/^\./, "").toUpperCase().slice(0, 10) || "BIN";
 }
 
 function formatOmieDate(date: Date) {
