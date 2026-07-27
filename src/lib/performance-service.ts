@@ -1105,7 +1105,9 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
   const submit = filteredRows.reduce((total, row) => total + row.submit, 0);
   const moderationSeconds = filteredRows.reduce((total, row) => total + row.moderationSeconds, 0);
   const activeDates = new Set(filteredRows.flatMap((row) => Array.from(row.activeDates)));
+  const cpdDays = filteredRows.reduce((total, row) => total + row.activeDates.size, 0);
   const outputAveragePerDay = activeDates.size > 0 ? submit / activeDates.size : 0;
+  const cpdAverage = cpdDays > 0 ? submit / cpdDays : 0;
   const agents = new Set(filteredRows.map((row) => row.employeeId || `wb:${row.wbLogin.toLocaleLowerCase("pt-BR")}`)).size;
   const qualityCorrect = filteredRows.reduce((total, row) => total + row.qualityCorrect, 0);
   const qualityTotal = filteredRows.reduce((total, row) => total + row.qualityTotal, 0);
@@ -1124,6 +1126,10 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
       daysWithData: activeDates.size,
       moderationSeconds,
       ahtSeconds: submit > 0 ? round2(moderationSeconds / submit) : 0,
+      ahtMetric: requestedLob === "CEC" ? "CPD" as const : "AHT" as const,
+      cpdAverage: requestedLob === "CEC" ? round2(cpdAverage) : 0,
+      cpdTickets: requestedLob === "CEC" ? Math.round(submit) : 0,
+      cpdDays: requestedLob === "CEC" ? cpdDays : 0,
       qualityCorrect,
       qualityTotal,
       qualityErrors: Math.max(0, qualityTotal - qualityCorrect),
@@ -1145,6 +1151,10 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
       daysWithData: row.activeDates.size,
       moderationSeconds: round2(row.moderationSeconds),
       ahtSeconds: row.submit > 0 ? round2(row.moderationSeconds / row.submit) : 0,
+      ahtMetric: requestedLob === "CEC" ? "CPD" as const : "AHT" as const,
+      cpdAverage: requestedLob === "CEC" ? round2(row.outputAveragePerDay) : 0,
+      cpdTickets: requestedLob === "CEC" ? Math.round(row.submit) : 0,
+      cpdDays: requestedLob === "CEC" ? row.activeDates.size : 0,
       qualityCorrect: row.qualityCorrect,
       qualityTotal: row.qualityTotal,
       qualityErrors: row.qualityErrors,
@@ -1426,6 +1436,8 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
     moodResponses: total.moodResponses + row.moodResponses,
     submit: total.submit + row.submit,
     moderationSeconds: total.moderationSeconds + row.moderationSeconds,
+    cpdTickets: total.cpdTickets + row.cpdTickets,
+    cpdDays: total.cpdDays + row.cpdDays,
     qualityCorrect: total.qualityCorrect + row.qualityCorrect,
     qualityTotal: total.qualityTotal + row.qualityTotal
   }), {
@@ -1439,6 +1451,8 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
     moodResponses: 0,
     submit: 0,
     moderationSeconds: 0,
+    cpdTickets: 0,
+    cpdDays: 0,
     qualityCorrect: 0,
     qualityTotal: 0
   });
@@ -1464,6 +1478,10 @@ export async function getPerformanceSupervisorsDashboard(actor: Actor, query: Pe
       submit: summary.submit,
       moderationSeconds: round2(summary.moderationSeconds),
       ahtSeconds: summary.submit > 0 ? round2(summary.moderationSeconds / summary.submit) : 0,
+      ahtMetric: "AHT" as const,
+      cpdAverage: summary.cpdDays > 0 ? round2(summary.cpdTickets / summary.cpdDays) : 0,
+      cpdTickets: Math.round(summary.cpdTickets),
+      cpdDays: summary.cpdDays,
       qualityCorrect: summary.qualityCorrect,
       qualityTotal: summary.qualityTotal,
       quality: summary.qualityTotal > 0 ? round2((summary.qualityCorrect / summary.qualityTotal) * 100) : 0
@@ -1498,6 +1516,10 @@ function emptyPerformanceSupervisorsPayload(
       submit: 0,
       moderationSeconds: 0,
       ahtSeconds: 0,
+      ahtMetric: "AHT" as const,
+      cpdAverage: 0,
+      cpdTickets: 0,
+      cpdDays: 0,
       qualityCorrect: 0,
       qualityTotal: 0,
       quality: 0
@@ -1576,6 +1598,10 @@ function emptyPerformanceAgentsPayload(
       daysWithData: 0,
       moderationSeconds: 0,
       ahtSeconds: 0,
+      ahtMetric: "AHT" as const,
+      cpdAverage: 0,
+      cpdTickets: 0,
+      cpdDays: 0,
       qualityCorrect: 0,
       qualityTotal: 0,
       qualityErrors: 0,
@@ -1602,14 +1628,14 @@ function comparePerformanceAgentRows(
     return a.qualityTotal <= 0 ? 1 : -1;
   }
   const aValue = sortBy === "aht"
-    ? (a.submit > 0 ? a.moderationSeconds / a.submit : -1)
+    ? (a.lob === "CEC" ? a.outputAveragePerDay : a.submit > 0 ? a.moderationSeconds / a.submit : -1)
     : sortBy === "outputTotal"
       ? a.submit
     : sortBy === "submit"
       ? a.outputAveragePerDay
       : a[sortBy];
   const bValue = sortBy === "aht"
-    ? (b.submit > 0 ? b.moderationSeconds / b.submit : -1)
+    ? (b.lob === "CEC" ? b.outputAveragePerDay : b.submit > 0 ? b.moderationSeconds / b.submit : -1)
     : sortBy === "outputTotal"
       ? b.submit
     : sortBy === "submit"

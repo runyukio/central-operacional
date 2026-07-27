@@ -1,6 +1,5 @@
 "use client";
 
-import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   type LucideIcon,
@@ -16,7 +15,6 @@ import {
   Download,
   FileSpreadsheet,
   Gauge,
-  Laptop,
   LineChart as LineChartIcon,
   LockKeyhole,
   RefreshCw,
@@ -53,15 +51,7 @@ type QualitySortDirection = "asc" | "desc";
 type QualityLob = "ADS" | "VIDEO" | "COMMENTS" | "CEC";
 type QualityImportScope = "ADS" | "TNS" | "CEC";
 type SupervisorView = QualityGranularity;
-type PerformanceTab = "queue" | "agents" | "supervisors" | "forecast" | "quality" | "wfh";
-
-const PerformanceWfhPanel = dynamic(
-  () => import("@/components/modules").then((module) => module.PerformanceWfhPanel),
-  {
-    ssr: false,
-    loading: () => <EmptyBox label="Carregando WFH..." />
-  }
-);
+type PerformanceTab = "queue" | "agents" | "supervisors" | "forecast" | "quality";
 
 type PerformanceSummary = {
   records: number;
@@ -175,6 +165,10 @@ type PerformanceAgentRow = {
   daysWithData: number;
   moderationSeconds: number;
   ahtSeconds: number;
+  ahtMetric?: "AHT" | "CPD";
+  cpdAverage?: number;
+  cpdTickets?: number;
+  cpdDays?: number;
   qualityCorrect: number;
   qualityTotal: number;
   qualityErrors: number;
@@ -199,6 +193,10 @@ type PerformanceAgentsResponse = {
     daysWithData: number;
     moderationSeconds: number;
     ahtSeconds: number;
+    ahtMetric?: "AHT" | "CPD";
+    cpdAverage?: number;
+    cpdTickets?: number;
+    cpdDays?: number;
     qualityCorrect: number;
     qualityTotal: number;
     qualityErrors: number;
@@ -312,8 +310,8 @@ const defaultForecastModelWeights: ForecastModelWeights = {
   shortMomentum: 0.16
 };
 
-export function PerformanceAutomationPage({ initialTab = "queue" }: { initialTab?: PerformanceTab }) {
-  const [activeTab, setActiveTab] = useState<PerformanceTab>(initialTab);
+export function PerformanceAutomationPage() {
+  const [activeTab, setActiveTab] = useState<PerformanceTab>("queue");
   const [queueGranularity, setQueueGranularity] = useState<PerformanceGranularity>("daily");
   const [queueLob, setQueueLob] = useState("");
   const [queueStartDate, setQueueStartDate] = useState("");
@@ -503,7 +501,7 @@ export function PerformanceAutomationPage({ initialTab = "queue" }: { initialTab
         icon={Trophy}
         actions={(
           <div className="flex flex-wrap items-center gap-2">
-            {basePayload?.canImport && activeTab !== "quality" && activeTab !== "supervisors" && activeTab !== "wfh" ? (
+            {basePayload?.canImport && activeTab !== "quality" && activeTab !== "supervisors" ? (
               <button type="button" onClick={() => setUploadOpen(true)} className="inline-flex h-10 items-center gap-2 rounded-xl bg-blue-600 px-4 text-sm font-black text-white shadow-sm transition hover:bg-blue-700">
                 <UploadCloud className="h-4 w-4" /> Subir bases
               </button>
@@ -513,7 +511,7 @@ export function PerformanceAutomationPage({ initialTab = "queue" }: { initialTab
         )}
       />
 
-      {activeTab === "supervisors" || activeTab === "wfh" ? null : activeTab === "quality" ? (
+      {activeTab === "supervisors" ? null : activeTab === "quality" ? (
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <StatCard title="Último upload" value={formatQualityImportDate(qualityPayload?.lastImport?.importedAt)} helper="snapshot de qualidade vigente" icon={CheckCircle2} tone="green" />
           <StatCard title="Janela da base" value={formatQualityRange(qualityPayload?.dataRange)} helper={qualityLob === "ADS" ? "ADS + PROJECT" : qualityLob} icon={CalendarClock} tone="purple" />
@@ -535,7 +533,6 @@ export function PerformanceAutomationPage({ initialTab = "queue" }: { initialTab
         <TabButton active={activeTab === "supervisors"} icon={ShieldCheck} label="Supervisores" onClick={() => setActiveTab("supervisors")} />
         <TabButton active={activeTab === "forecast"} icon={LineChartIcon} label="Forecast" onClick={() => setActiveTab("forecast")} />
         <TabButton active={activeTab === "quality"} icon={ShieldCheck} label="Qualidade" onClick={() => setActiveTab("quality")} />
-        <TabButton active={activeTab === "wfh"} icon={Laptop} label="WFH" onClick={() => setActiveTab("wfh")} />
       </div>
 
       {message ? <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{message}</p> : null}
@@ -611,8 +608,6 @@ export function PerformanceAutomationPage({ initialTab = "queue" }: { initialTab
           onHorizonChange={setForecastHorizon}
           onRefresh={() => void loadForecast()}
         />
-      ) : activeTab === "wfh" ? (
-        <PerformanceWfhPanel />
       ) : (
         <QualityView
           loading={loadingQuality}
@@ -1051,7 +1046,7 @@ function AgentsView({
           </div>
         ) : loading && !payload?.agents.length ? <EmptyBox label="Carregando produtividade dos agentes..." /> : (
           <div className="space-y-4">
-            <div className={cn("grid gap-3 md:grid-cols-2", selectedLob === "CEC" ? "xl:grid-cols-5" : "xl:grid-cols-4")}>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <StatCard title="Agentes" value={formatNumber(payload?.summary.agents ?? 0)} helper="com produção no período" icon={Users} tone="purple" />
               <StatCard
                 title="Qualidade média"
@@ -1071,17 +1066,23 @@ function AgentsView({
                   tone="green"
                 />
               ) : null}
+              {selectedLob !== "CEC" ? (
+                <StatCard
+                  title="Output médio/dia"
+                  value={formatNumber(payload?.summary.outputAveragePerDay ?? 0)}
+                  helper={`${formatNumber(payload?.summary.daysWithData ?? 0)} dia(s) trabalhado(s)`}
+                  icon={FileSpreadsheet}
+                  tone="blue"
+                />
+              ) : null}
               <StatCard
-                title={selectedLob === "CEC" ? "CPD médio" : "Output médio/dia"}
-                value={formatNumber(payload?.summary.outputAveragePerDay ?? 0)}
-                helper={`${formatNumber(payload?.summary.daysWithData ?? 0)} dia(s) trabalhado(s)`}
-                icon={FileSpreadsheet}
-                tone="blue"
-              />
-              <StatCard
-                title="AHT médio"
-                value={selectedLob === "CEC" ? "-" : formatSeconds(payload?.summary.ahtSeconds)}
-                helper={selectedLob === "CEC" ? "não disponível na base CPD" : "moderação / output"}
+                title={selectedLob === "CEC" ? "CPD médio" : "AHT médio"}
+                value={selectedLob === "CEC"
+                  ? formatNumber(payload?.summary.cpdAverage ?? 0)
+                  : formatSeconds(payload?.summary.ahtSeconds)}
+                helper={selectedLob === "CEC"
+                  ? `${formatNumber(payload?.summary.cpdTickets ?? 0)} tickets / ${formatNumber(payload?.summary.cpdDays ?? 0)} dias de agente`
+                  : "moderação / output"}
                 icon={Clock}
                 tone="orange"
               />
@@ -1106,8 +1107,8 @@ function AgentsView({
                       <AgentSortHeader label="Turno" sortKey="shift" current={sort} onSort={handleSort} />
                       <AgentSortHeader label="Qualidade" sortKey="quality" current={sort} onSort={handleSort} align="right" />
                       {selectedLob === "CEC" ? <AgentSortHeader label="Output" sortKey="outputTotal" current={sort} onSort={handleSort} align="right" /> : null}
-                      <AgentSortHeader label={selectedLob === "CEC" ? "CPD médio" : "Output médio/dia"} sortKey="submit" current={sort} onSort={handleSort} align="right" />
-                      <AgentSortHeader label="AHT" sortKey="aht" current={sort} onSort={handleSort} align="right" />
+                      {selectedLob !== "CEC" ? <AgentSortHeader label="Output médio/dia" sortKey="submit" current={sort} onSort={handleSort} align="right" /> : null}
+                      <AgentSortHeader label={selectedLob === "CEC" ? "CPD" : "AHT"} sortKey="aht" current={sort} onSort={handleSort} align="right" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/70">
@@ -1129,14 +1130,19 @@ function AgentsView({
                           ) : <span className="text-xs font-black text-slate-400">Sem base</span>}
                         </td>
                         {selectedLob === "CEC" ? <td className="px-3 py-3 text-right font-black text-navy-950">{formatNumber(agent.submit)}</td> : null}
+                        {selectedLob !== "CEC" ? (
+                          <td className="px-3 py-3 text-right font-black text-navy-950">
+                            {formatNumber(agent.outputAveragePerDay)}
+                            <span className="mt-0.5 block text-[10px] font-bold text-muted">{formatNumber(agent.daysWithData)} dia(s)</span>
+                          </td>
+                        ) : null}
                         <td className="px-3 py-3 text-right font-black text-navy-950">
-                          {formatNumber(agent.outputAveragePerDay)}
-                          <span className="mt-0.5 block text-[10px] font-bold text-muted">{formatNumber(agent.daysWithData)} dia(s)</span>
+                          {selectedLob === "CEC" ? formatNumber(agent.cpdAverage ?? 0) : formatSeconds(agent.ahtSeconds)}
+                          {selectedLob === "CEC" ? <span className="mt-0.5 block text-[10px] font-bold text-muted">{formatNumber(agent.cpdDays ?? 0)} dia(s)</span> : null}
                         </td>
-                        <td className="px-3 py-3 text-right font-black text-navy-950">{selectedLob === "CEC" ? "-" : formatSeconds(agent.ahtSeconds)}</td>
                       </tr>
                     ))}
-                    {!payload?.agents.length ? <tr><td colSpan={selectedLob === "CEC" ? 9 : 8} className="px-3 py-10 text-center text-sm font-bold text-muted">Nenhum agente encontrado para os filtros selecionados.</td></tr> : null}
+                    {!payload?.agents.length ? <tr><td colSpan={8} className="px-3 py-10 text-center text-sm font-bold text-muted">Nenhum agente encontrado para os filtros selecionados.</td></tr> : null}
                   </tbody>
                 </table>
               </div>
@@ -1196,7 +1202,7 @@ function SupervisorsView({
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div>
           <h2 className="text-base font-black text-navy-950">Consolidado por supervisor</h2>
-          <p className="mt-1 text-xs font-bold text-muted">ABS, attrition, humor, AHT e qualidade consolidados por time.</p>
+          <p className="mt-1 text-xs font-bold text-muted">ABS, attrition, humor, AHT/CPD e qualidade consolidados por time.</p>
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <SlicerGroup label="Visão">
@@ -1224,11 +1230,12 @@ function SupervisorsView({
           <p className="text-sm font-black text-navy-950">{formatDashboardPeriod(payload?.period)}</p>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
           <StatCard title="ABS do time" value={formatQualityPercent(summary?.absRate)} helper={`${formatNumber(summary?.absences ?? 0)} ausência(s)`} icon={Target} tone="orange" />
           <StatCard title="Attrition do time" value={formatQualityPercent(summary?.attritionRate)} helper={`${formatNumber(summary?.terminations ?? 0)} desligamento(s)`} icon={TrendingUp} tone="purple" />
           <StatCard title="Humor do time" value={formatMoodScore(summary?.moodAverage)} helper={`${formatNumber(summary?.moodResponses ?? 0)} resposta(s)`} icon={Gauge} tone="green" />
           <StatCard title="AHT do time" value={formatSeconds(summary?.ahtSeconds)} helper="ADS + TNS Video (meta 15 min)" icon={Clock} tone="blue" />
+          <StatCard title="CPD CEC" value={formatNumber(summary?.cpdAverage ?? 0)} helper={`${formatNumber(summary?.cpdTickets ?? 0)} tickets / ${formatNumber(summary?.cpdDays ?? 0)} dias de agente`} icon={Clock} tone="orange" />
           <StatCard title="Qualidade do time" value={formatQualityPercent(summary?.quality)} helper={`${formatNumber(summary?.qualityTotal ?? 0)} caso(s)`} icon={ShieldCheck} tone="green" />
         </div>
 
@@ -1250,7 +1257,7 @@ function SupervisorsView({
                     <th className="px-3 py-3 text-right">ABS</th>
                     <th className="px-3 py-3 text-right">Attrition</th>
                     <th className="px-3 py-3 text-right">Humor</th>
-                    <th className="px-3 py-3 text-right">AHT</th>
+                    <th className="px-3 py-3 text-right">AHT / CPD</th>
                     <th className="px-4 py-3 text-right">Qualidade</th>
                   </tr>
                 </thead>
