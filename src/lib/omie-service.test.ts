@@ -9,6 +9,7 @@ import {
   buildOmieAttachmentIntegrationCode,
   buildOmieDocumentNumber,
   buildOmieIntegrationCode,
+  buildOmiePixTransferData,
   calculateOmieDueDate,
   type OmieConfig,
   OmieIntegrationError,
@@ -26,12 +27,18 @@ const input = {
   employeeInvoiceId: "cm_invoice_123",
   referenceMonth: "2026-07",
   wbLogin: "wb_lucasy",
+  employeeName: "Lucas Yukio",
+  roleTitle: "Coordenador",
   cnpj: "12.345.678/0001-90",
+  pixKey: "lucas@example.com",
+  pixKeyType: "E-mail",
   accessKey: "35095022262629545000119000000000000526075882824813",
   invoiceNumber: "12345",
   serviceDescription: "Serviços de moderação de conteúdo",
   grossAmount: 2225.47,
   documentAmount: 1840,
+  projectCode: 10011279879,
+  documentTypeCode: "ADI",
   categories: [
     { code: "2.10.96", value: 1740 },
     { code: "2.02.04", value: 100 }
@@ -46,7 +53,7 @@ const input = {
   approvedAt: new Date("2026-07-18T15:00:00.000Z")
 };
 
-test("localiza o fornecedor por CNPJ e envia o valor bruto ao Contas a Pagar", async () => {
+test("localiza o fornecedor e envia projeto, rateio e transferência por chave PIX", async () => {
   const requests: Array<Record<string, unknown>> = [];
   const fetchImpl = async (_url: string | URL | Request, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -79,6 +86,15 @@ test("localiza o fornecedor por CNPJ e envia o valor bruto ao Contas a Pagar", a
   assert.equal(payable.codigo_cliente_fornecedor, 4214850);
   assert.equal(payable.numero_documento_fiscal, "12345");
   assert.equal(payable.numero_documento, "B202607-wblucasy");
+  assert.equal(payable.codigo_projeto, 10011279879);
+  assert.equal(payable.codigo_tipo_documento, "ADI");
+  assert.deepEqual(payable.cnab_integracao_bancaria, {
+    codigo_forma_pagamento: "TRA",
+    finalidade_transferencia: "01.3",
+    cpf_cnpj_transferencia: "12345678000190",
+    nome_transferencia: "Lucas Yukio",
+    pix_qrcode: "lucas@example.com"
+  });
   assert.equal(payable.numero_parcela, "001/001");
   assert.equal(payable.data_emissao, "18/07/2026");
   assert.equal(payable.data_entrada, "18/07/2026");
@@ -92,6 +108,7 @@ test("localiza o fornecedor por CNPJ e envia o valor bruto ao Contas a Pagar", a
   ]);
   assert.equal(payable.id_conta_corrente, 4243124);
   assert.match(String(payable.observacao), /WB: wb_lucasy/);
+  assert.match(String(payable.observacao), /Cargo: Coordenador/);
   assert.match(String(payable.observacao), /Bruto: R\$ 2\.200,00/);
   assert.match(String(payable.observacao), /Correção: R\$ 25,47/);
   assert.match(String(payable.observacao), /Valor NF: R\$ 2\.225,47/);
@@ -111,6 +128,38 @@ test("calcula o quinto dia útil do mês seguinte sem contar fins de semana", ()
     calculateOmieDueDate("2026-07", new Date("2026-07-27T15:00:00.000Z")).toISOString(),
     "2026-08-07T12:00:00.000Z"
   );
+});
+
+test("considera Sexta-feira Santa e Corpus Christi no calendário de São Paulo", () => {
+  assert.equal(
+    calculateOmieDueDate("2026-03", new Date("2026-03-01T15:00:00.000Z")).toISOString(),
+    "2026-04-08T12:00:00.000Z"
+  );
+  assert.equal(
+    calculateOmieDueDate("2026-05", new Date("2026-05-01T15:00:00.000Z")).toISOString(),
+    "2026-06-08T12:00:00.000Z"
+  );
+});
+
+test("normaliza chaves PIX de CPF, telefone e e-mail para transferência bancária", () => {
+  assert.equal(buildOmiePixTransferData({
+    employeeName: "Pedro",
+    cnpj: "65.747.341/0001-70",
+    pixKey: "506.392.658-47",
+    pixKeyType: "CPF"
+  }).pix_qrcode, "50639265847");
+  assert.equal(buildOmiePixTransferData({
+    employeeName: "Pessoa",
+    cnpj: "12.345.678/0001-90",
+    pixKey: "(11) 99999-9999",
+    pixKeyType: "Telefone"
+  }).pix_qrcode, "+5511999999999");
+  assert.equal(buildOmiePixTransferData({
+    employeeName: "Pessoa",
+    cnpj: "12.345.678/0001-90",
+    pixKey: "PESSOA@EXAMPLE.COM",
+    pixKeyType: "E-mail"
+  }).pix_qrcode, "pessoa@example.com");
 });
 
 test("envia chave_nfe somente quando a chave possui os 44 dígitos aceitos pelo Omie", async () => {
