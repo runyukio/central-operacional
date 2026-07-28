@@ -51,9 +51,9 @@ test("valida a nota pelo valor final com o adiantamento reincorporado", () => {
   assert.equal(calculateBillingFiscalExpectedAmount({
     referenceMonth: "2026-07",
     wbLogin: "wb_hernane",
-    grossAmount: 554.94,
+    grossAmount: 572.03,
     correctionAmount: 0,
-    advanceAmount: 282.91,
+    advanceAmount: 300,
     finalAmount: 272.03
-  }), 554.94);
+  }), 572.03);
 });
