@@ -237,7 +237,7 @@ export async function fetchRealtimeCecFromFreshdesk(): Promise<RealtimeCecImport
   return {
     cycleDownload: currentHourlyCycle(),
     fileName: downloaded.fileName,
-    source: "freshdesk-scheduled-report-api",
+    source: "freshdesk-cec-cpd-hourly",
     generatedDate: new Date().toISOString(),
     tickets: parseCecScheduledReport(downloaded.buffer)
   };

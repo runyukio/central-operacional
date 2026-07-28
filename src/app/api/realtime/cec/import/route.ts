@@ -26,7 +26,7 @@ export async function POST(request: Request) {
     const result = await importRealtimeCecSnapshot({
       cycleDownload: String(body?.cycleDownload ?? ""),
       fileName: String(body?.fileName ?? "cec_cpd_hourly.csv"),
-      source: typeof body?.source === "string" ? body.source : "freshdesk-scheduled-report",
+      source: typeof body?.source === "string" ? body.source : "freshdesk-cec-cpd-hourly",
       generatedDate: typeof body?.generatedDate === "string" ? body.generatedDate : null,
       tickets: Array.isArray(body?.tickets) ? body.tickets : [],
       rawText: typeof body?.rawText === "string" ? body.rawText : ""

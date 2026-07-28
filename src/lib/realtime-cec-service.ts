@@ -8,7 +8,7 @@ import { fetchRealtimeCecFromFreshdesk, getCurrentCecCycle } from "@/lib/realtim
 
 const cecRetentionDays = Number.parseInt(process.env.REALTIME_RETENTION_DAYS ?? "3", 10) || 3;
 const saoPauloTimeZone = "America/Sao_Paulo";
-const cecCpdSources = ["freshdesk-scheduled-report-api", "freshdesk-scheduled-report"];
+const cecCpdSource = "freshdesk-cec-cpd-hourly";
 
 export type RealtimeCecGroupInput = {
   key: string;
@@ -73,7 +73,7 @@ function normalizedTickets(input: RealtimeCecTicketInput[] | undefined) {
 
 function buildRawData(input: RealtimeCecImportInput, agents: CecAgentCpd[], tickets: RealtimeCecTicketInput[]) {
   return {
-    source: input.source || "freshdesk-scheduled-report-api",
+    source: input.source || cecCpdSource,
     fileName: input.fileName,
     cycleDownload: input.cycleDownload,
     generatedDate: input.generatedDate || null,
@@ -99,7 +99,7 @@ async function pruneRealtimeCecHistory(currentId?: string) {
 export async function importRealtimeCecSnapshot(input: RealtimeCecImportInput) {
   const cycleDownload = input.cycleDownload.trim();
   const fileName = input.fileName.trim() || "cec_cpd_hourly.csv";
-  const source = input.source?.trim() || "freshdesk-scheduled-report-api";
+  const source = input.source?.trim() || cecCpdSource;
   const tickets = normalizedTickets(input.tickets);
   const cpd = buildCecHourlyCpd(tickets);
 
@@ -158,7 +158,7 @@ export async function refreshRealtimeCecFromFreshdesk(options: { force?: boolean
       where: { cycleDownload: currentCycle },
       select: { id: true, cycleDownload: true, importedAt: true, source: true }
     });
-    if (existing && cecCpdSources.includes(existing.source)) {
+    if (existing && existing.source === cecCpdSource) {
       return {
         success: true,
         refreshed: false,
@@ -191,7 +191,7 @@ export async function getRealtimeCecReport(actor: Actor, options: { cycleDownloa
   const snapshots = await prisma.realTimeCecSnapshot.findMany({
     where: {
       importedAt: { gte: realtimeCecRetentionCutoff() },
-      source: { in: cecCpdSources }
+      source: cecCpdSource
     },
     orderBy: [{ cycleDownload: "desc" }, { importedAt: "desc" }],
     take: 200
