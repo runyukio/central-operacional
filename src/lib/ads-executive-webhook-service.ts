@@ -370,14 +370,22 @@ function resolvePayloadMode(config: ExecutiveWebhookConfig): WebhookPayloadMode 
 }
 
 async function publishKwaiTalkImage(image: Buffer, fileName: string, selectedCycle: string, storagePath: string) {
-  const uploaded = await uploadPublicObject(
-    "mural-media",
-    storagePath,
-    new File([new Uint8Array(image)], fileName, { type: "image/png" }),
-    { upsert: true }
-  );
+  const file = new File([new Uint8Array(image)], fileName, { type: "image/png" });
+  const immutablePath = buildExecutiveReportStoragePath(storagePath, fileName);
+  const [uploaded] = await Promise.all([
+    uploadPublicObject("mural-media", immutablePath, file, { upsert: true }),
+    uploadPublicObject("mural-media", storagePath, file, { upsert: true })
+  ]);
   const version = encodeURIComponent(selectedCycle);
   return `${uploaded.publicUrl}${uploaded.publicUrl.includes("?") ? "&" : "?"}v=${version}`;
+}
+
+export function buildExecutiveReportStoragePath(latestPath: string, fileName: string) {
+  const normalizedPath = latestPath.replace(/^\/+|\/+$/g, "");
+  const directoryEnd = normalizedPath.lastIndexOf("/");
+  const directory = directoryEnd >= 0 ? normalizedPath.slice(0, directoryEnd) : "";
+  const safeFileName = fileName.replace(/^\/+/, "").replace(/\.\./g, "");
+  return directory ? `${directory}/${safeFileName}` : safeFileName;
 }
 
 export function buildKwaiTalkMarkdownPayload(input: {
