@@ -25,12 +25,18 @@ export type OmieAccountPayableInput = {
   employeeInvoiceId: string;
   referenceMonth: string;
   wbLogin: string;
+  employeeName: string;
+  roleTitle: string;
   cnpj: string;
+  pixKey: string;
+  pixKeyType: string;
   accessKey: string;
   invoiceNumber: string;
   serviceDescription: string;
   grossAmount: number;
   documentAmount: number;
+  projectCode: number;
+  documentTypeCode?: string | null;
   categories: OmieCategoryAllocation[];
   billingGrossAmount: number;
   correctionAmount: number;
@@ -159,7 +165,7 @@ export function calculateOmieDueDate(referenceMonth: string, now = new Date()) {
 
   const targetMonth = month === 12 ? 1 : month + 1;
   const targetYear = month === 12 ? year + 1 : year;
-  const holidays = brazilianNationalHolidays(targetYear);
+  const holidays = brazilianAndSaoPauloHolidays(targetYear);
   let businessDays = 0;
   let dueDate = new Date(Date.UTC(targetYear, targetMonth - 1, 1, 12));
   while (businessDays < 5) {
@@ -178,6 +184,31 @@ export function buildOmieAttachmentIntegrationCode(employeeInvoiceId: string, do
     .update(`${employeeInvoiceId}:${String(documentHash ?? "")}`)
     .digest("hex");
   return `bnf-${digest.slice(0, 16)}`;
+}
+
+export function buildOmiePixTransferData(input: {
+  employeeName: string;
+  cnpj: string;
+  pixKey: string;
+  pixKeyType: string;
+}) {
+  const pixKey = normalizePixTransferKey(input.pixKey, input.pixKeyType);
+  const beneficiaryTaxId = normalizeBrazilianTaxId(input.cnpj);
+  if (beneficiaryTaxId.length !== 14) {
+    throw new OmieIntegrationError("O CNPJ do favorecido é inválido para a transferência por chave PIX.");
+  }
+  const beneficiaryName = String(input.employeeName ?? "").trim().slice(0, 60);
+  if (!beneficiaryName) {
+    throw new OmieIntegrationError("O nome do favorecido é obrigatório para a transferência por chave PIX.");
+  }
+
+  return {
+    codigo_forma_pagamento: "TRA",
+    finalidade_transferencia: "01.3",
+    cpf_cnpj_transferencia: beneficiaryTaxId,
+    nome_transferencia: beneficiaryName,
+    pix_qrcode: pixKey
+  };
 }
 
 export async function upsertBillingAccountPayable(
@@ -200,6 +231,11 @@ export async function upsertBillingAccountPayable(
     throw new OmieIntegrationError("O valor final do invoice precisa ser maior que zero.");
   }
   const categoryPayload = buildCategoryPayload(input.categories, documentAmount);
+  if (!Number.isSafeInteger(input.projectCode) || input.projectCode <= 0) {
+    throw new OmieIntegrationError("O projeto PJ não possui um código válido no Omie.");
+  }
+  const documentTypeCode = String(input.documentTypeCode ?? "").trim().toUpperCase();
+  const pixTransfer = buildOmiePixTransferData(input);
 
   const payable = {
     codigo_lancamento_integracao: integrationCode,
@@ -210,9 +246,12 @@ export async function upsertBillingAccountPayable(
     data_previsao: dueDate,
     numero_documento_fiscal: input.invoiceNumber,
     numero_documento: buildOmieDocumentNumber(input.referenceMonth, input.wbLogin),
+    codigo_projeto: input.projectCode,
     data_emissao: issueDate,
     data_entrada: issueDate,
     numero_parcela: "001/001",
+    ...(documentTypeCode ? { codigo_tipo_documento: documentTypeCode } : {}),
+    cnab_integracao_bancaria: pixTransfer,
     observacao: buildObservation(input),
     ...(normalizeAccessKey(input.accessKey).length === 44 ? { chave_nfe: normalizeAccessKey(input.accessKey) } : {}),
     id_conta_corrente: config.checkingAccountId
@@ -370,6 +409,7 @@ function buildObservation(input: OmieAccountPayableInput) {
   return [
     `Billing ${input.referenceMonth}`,
     `WB: ${input.wbLogin}`,
+    `Cargo: ${input.roleTitle}`,
     `Bruto: ${formatCurrency(input.billingGrossAmount)}`,
     `Correção: ${formatCurrency(input.correctionAmount)}`,
     `Valor NF: ${formatCurrency(input.grossAmount)}`,
@@ -475,11 +515,18 @@ function startOfSaoPauloDay(date: Date) {
   return new Date(Date.UTC(read("year"), read("month") - 1, read("day"), 12));
 }
 
-function brazilianNationalHolidays(year: number) {
+function brazilianAndSaoPauloHolidays(year: number) {
+  const easter = easterSundayUtc(year);
+  const goodFriday = isoDateUtc(addUtcDays(easter, -2));
+  const corpusChristi = isoDateUtc(addUtcDays(easter, 60));
   return new Set([
     `${year}-01-01`,
+    `${year}-01-25`,
+    goodFriday,
     `${year}-04-21`,
     `${year}-05-01`,
+    corpusChristi,
+    `${year}-07-09`,
     `${year}-09-07`,
     `${year}-10-12`,
     `${year}-11-02`,
@@ -487,6 +534,63 @@ function brazilianNationalHolidays(year: number) {
     `${year}-11-20`,
     `${year}-12-25`
   ]);
+}
+
+function easterSundayUtc(year: number) {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(Date.UTC(year, month - 1, day, 12));
+}
+
+function normalizePixTransferKey(value: string, type: string) {
+  const pixKey = String(value ?? "").trim();
+  const normalizedType = String(type ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+  if (!pixKey) throw new OmieIntegrationError("O colaborador não possui chave PIX cadastrada.");
+
+  if (normalizedType === "cpf") {
+    const digits = pixKey.replace(/\D/g, "");
+    if (digits.length !== 11) throw new OmieIntegrationError("A chave PIX do tipo CPF precisa ter 11 dígitos.");
+    return digits;
+  }
+  if (normalizedType === "cnpj") {
+    const digits = pixKey.replace(/\D/g, "");
+    if (digits.length !== 14) throw new OmieIntegrationError("A chave PIX do tipo CNPJ precisa ter 14 dígitos.");
+    return digits;
+  }
+  if (normalizedType === "telefone" || normalizedType === "celular" || normalizedType === "phone") {
+    const digits = pixKey.replace(/\D/g, "");
+    const brazilianNumber = digits.startsWith("55") ? digits : `55${digits}`;
+    if (brazilianNumber.length < 12 || brazilianNumber.length > 13) {
+      throw new OmieIntegrationError("A chave PIX do tipo telefone precisa conter DDD e número válidos.");
+    }
+    return `+${brazilianNumber}`;
+  }
+  if (normalizedType === "email" || normalizedType === "emailpix") {
+    const email = pixKey.toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new OmieIntegrationError("A chave PIX do tipo e-mail é inválida.");
+    }
+    return email;
+  }
+  if (pixKey.length > 300) throw new OmieIntegrationError("A chave PIX excede o limite aceito pelo Omie.");
+  return pixKey;
 }
 
 function roundCurrency(value: number) {

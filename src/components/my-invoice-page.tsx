@@ -54,7 +54,7 @@ type MyInvoicePayload = {
         submittedAt: string;
         downloadUrl: string;
         omie: {
-          status: "PENDING" | "SYNCED" | "ERROR";
+          status: "NOT_SENT" | "PENDING" | "SYNCED" | "ERROR";
           launchCode: string;
           syncedAt: string;
           lastAttemptAt: string;
@@ -381,10 +381,20 @@ export function MyInvoicePage() {
                     ? "border-emerald-200 bg-emerald-50 text-emerald-700"
                     : data.invoice.fiscalInvoice.omie.status === "ERROR"
                       ? "border-red-200 bg-red-50 text-red-700"
+                      : data.invoice.fiscalInvoice.omie.status === "NOT_SENT"
+                        ? "border-slate-200 bg-slate-50 text-slate-700"
                       : "border-amber-200 bg-amber-50 text-amber-800"
                 )}>
                   <div className="flex items-center justify-between gap-2">
-                    <span>{data.invoice.fiscalInvoice.omie.status === "SYNCED" ? "Enviado ao Omie" : data.invoice.fiscalInvoice.omie.status === "ERROR" ? "Falha no envio ao Omie" : "Envio ao Omie pendente"}</span>
+                    <span>
+                      {data.invoice.fiscalInvoice.omie.status === "SYNCED"
+                        ? "Enviado ao Omie"
+                        : data.invoice.fiscalInvoice.omie.status === "ERROR"
+                          ? "Falha no envio ao Omie"
+                          : data.invoice.fiscalInvoice.omie.status === "NOT_SENT"
+                            ? "Fechamento manual — não enviado ao Omie"
+                            : "Envio ao Omie pendente"}
+                    </span>
                     {data.invoice.fiscalInvoice.omie.launchCode ? <span className="font-semibold">#{data.invoice.fiscalInvoice.omie.launchCode}</span> : null}
                   </div>
                   {data.invoice.fiscalInvoice.omie.lastError ? <p className="mt-1 font-semibold">{data.invoice.fiscalInvoice.omie.lastError}</p> : null}

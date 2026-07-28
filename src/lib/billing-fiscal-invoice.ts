@@ -1,5 +1,3 @@
-import { isBillingOmiePilotTarget } from "@/lib/billing-omie-pilot-constants";
-
 export const BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH = 4;
 
 const BILLING_FISCAL_INVOICE_NUMBER_PATTERN = /^\d{1,4}$/;
@@ -26,10 +24,7 @@ export function calculateBillingFiscalExpectedAmount(input: {
   correctionAmount: number;
   finalAmount: number;
 }) {
-  if (isBillingOmiePilotTarget(input.referenceMonth, input.wbLogin)) {
-    return roundCurrency(input.finalAmount);
-  }
-  return calculateBillingFiscalGrossAmount(input.grossAmount, input.correctionAmount);
+  return roundCurrency(input.finalAmount);
 }
 
 function roundCurrency(value: number) {

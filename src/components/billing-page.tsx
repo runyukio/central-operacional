@@ -421,8 +421,8 @@ export function BillingPage() {
       const next = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(next.error ?? "Não foi possível atualizar o invoice.");
       setMessage(finalized
-        ? "Invoice individual finalizado com a nota fiscal e congelado."
-        : "Invoice individual reaberto para ajustes e recálculo.");
+        ? "Invoice individual finalizado manualmente, sem envio ao Omie."
+        : "Invoice reaberto: a nota fiscal anterior foi removida e o colaborador já pode enviar uma nova.");
       await load();
       return true;
     } catch (err) {
