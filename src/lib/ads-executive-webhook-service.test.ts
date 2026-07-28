@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { assertKwaiTalkAccepted, buildKwaiTalkMarkdownPayload } from "./ads-executive-webhook-service";
+import {
+  assertKwaiTalkAccepted,
+  buildExecutiveReportStoragePath,
+  buildKwaiTalkMarkdownPayload
+} from "./ads-executive-webhook-service";
 
 test("buildKwaiTalkMarkdownPayload builds the Kim markdown contract", () => {
   const payload = buildKwaiTalkMarkdownPayload({
@@ -39,4 +43,14 @@ test("buildKwaiTalkMarkdownPayload identifica o report VIDEO", () => {
 
   assert.match(payload.markdown.content, /VIDEO Executive Report/);
   assert.match(payload.markdown.content, /!\[VIDEO Executive Report\]/);
+});
+
+test("gera uma URL de imagem imutável por ciclo sem substituir o latest", () => {
+  assert.equal(
+    buildExecutiveReportStoragePath(
+      "automation/video-executive/latest.png",
+      "video_executive_2026-07-28-09-30.png"
+    ),
+    "automation/video-executive/video_executive_2026-07-28-09-30.png"
+  );
 });
