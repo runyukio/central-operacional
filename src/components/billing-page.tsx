@@ -997,6 +997,7 @@ function EmployeeBillingDetail({
     wbLogin: invoice.wbLogin,
     grossAmount: invoice.grossAmount,
     correctionAmount: invoice.correctionAmount,
+    advanceAmount: invoice.advanceAmount,
     finalAmount: invoice.finalAmount
   });
 
@@ -1191,7 +1192,7 @@ function EmployeeBillingDetail({
               />
               {fiscalError ? <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-bold text-red-700">{fiscalError}</p> : null}
               <p className="text-xs font-semibold text-muted">
-                Basta anexar a nota. A chave, o número e o valor são lidos automaticamente; o fechamento só é liberado quando o valor do serviço confere com o bruto das horas somado à correção.
+                Basta anexar a nota. A chave, o número e o valor são lidos automaticamente; o fechamento só é liberado quando o valor do serviço confere com o valor esperado do Billing, reincorporando o adiantamento.
               </p>
             </div>
 

@@ -3329,7 +3329,7 @@ async function resolveBillingFiscalSubmission(input: {
 
   if (!currencyEquals(extraction.serviceAmount, input.billingGrossAmount)) {
     throw new BillingFiscalExtractionError(
-      `O valor do serviço na nota (${formatBillingCurrency(extraction.serviceAmount)}) é diferente do bruto das horas somado à correção (${formatBillingCurrency(input.billingGrossAmount)}).`,
+      `O valor do serviço na nota (${formatBillingCurrency(extraction.serviceAmount)}) é diferente do valor esperado do Billing com o adiantamento reincorporado (${formatBillingCurrency(input.billingGrossAmount)}).`,
       409
     );
   }

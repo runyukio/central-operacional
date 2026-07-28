@@ -112,6 +112,7 @@ export function MyInvoicePage() {
       wbLogin: data.invoice.wbLogin,
       grossAmount: data.invoice.grossAmount,
       correctionAmount: data.invoice.correctionAmount,
+      advanceAmount: data.invoice.advanceAmount,
       finalAmount: data.invoice.finalAmount
     })
     : 0;
@@ -420,7 +421,7 @@ export function MyInvoicePage() {
                 Solicitar ajuste
               </button>
             </div>
-            <p className="mt-3 text-xs font-semibold text-muted">Você só precisa anexar a nota. A chave, o número e o valor são lidos automaticamente; a aprovação é bloqueada se o valor não conferir com o bruto das horas somado à correção.</p>
+            <p className="mt-3 text-xs font-semibold text-muted">Você só precisa anexar a nota. A chave, o número e o valor são lidos automaticamente; a aprovação é bloqueada se o valor não conferir com o valor esperado do Billing, reincorporando o adiantamento.</p>
           </Panel>
 
           <Panel title="Solicitações de ajuste">

@@ -22,9 +22,10 @@ export function calculateBillingFiscalExpectedAmount(input: {
   wbLogin: string;
   grossAmount: number;
   correctionAmount: number;
+  advanceAmount: number;
   finalAmount: number;
 }) {
-  return roundCurrency(input.finalAmount);
+  return roundCurrency(input.finalAmount + input.advanceAmount);
 }
 
 function roundCurrency(value: number) {

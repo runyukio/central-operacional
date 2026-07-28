@@ -31,12 +31,13 @@ test("soma a correção ao valor bruto esperado na nota fiscal", () => {
   assert.equal(calculateBillingFiscalGrossAmount(0.1, 0.2), 0.3);
 });
 
-test("valida a nota de todos os colaboradores pelo valor final líquido", () => {
+test("valida a nota pelo valor final com o adiantamento reincorporado", () => {
   assert.equal(calculateBillingFiscalExpectedAmount({
     referenceMonth: "2026-07",
     wbLogin: "wb_pedros",
     grossAmount: 5227.44,
     correctionAmount: 0,
+    advanceAmount: 0,
     finalAmount: 5427.44
   }), 5427.44);
   assert.equal(calculateBillingFiscalExpectedAmount({
@@ -44,6 +45,15 @@ test("valida a nota de todos os colaboradores pelo valor final líquido", () => 
     wbLogin: "wb_adryan",
     grossAmount: 2540.96,
     correctionAmount: 0,
+    advanceAmount: 300,
     finalAmount: 2240.96
-  }), 2240.96);
+  }), 2540.96);
+  assert.equal(calculateBillingFiscalExpectedAmount({
+    referenceMonth: "2026-07",
+    wbLogin: "wb_hernane",
+    grossAmount: 554.94,
+    correctionAmount: 0,
+    advanceAmount: 282.91,
+    finalAmount: 272.03
+  }), 554.94);
 });
