@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 
+import { buildCecHourlyCpd, normalizeCecTicket, type CecAgentCpd } from "@/lib/realtime-cec-cpd";
 import type { Actor } from "@/lib/mock-db";
 import { canAccessRealTime } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
@@ -7,6 +8,7 @@ import { fetchRealtimeCecFromFreshdesk, getCurrentCecCycle } from "@/lib/realtim
 
 const cecRetentionDays = Number.parseInt(process.env.REALTIME_RETENTION_DAYS ?? "3", 10) || 3;
 const saoPauloTimeZone = "America/Sao_Paulo";
+const cecCpdSources = ["freshdesk-scheduled-report-api", "freshdesk-scheduled-report"];
 
 export type RealtimeCecGroupInput = {
   key: string;
@@ -37,7 +39,7 @@ export type RealtimeCecImportInput = {
   fileName: string;
   source?: string;
   generatedDate?: string | null;
-  groups: RealtimeCecGroupInput[];
+  groups?: RealtimeCecGroupInput[];
   departments?: RealtimeCecDepartmentInput[];
   tickets?: RealtimeCecTicketInput[];
   rawText?: string;
@@ -45,83 +47,39 @@ export type RealtimeCecImportInput = {
 
 type RealtimeCecSnapshotRecord = Awaited<ReturnType<typeof prisma.realTimeCecSnapshot.findFirst>>;
 
+type RealtimeCecRawData = {
+  source?: string;
+  fileName?: string;
+  cycleDownload?: string;
+  generatedDate?: string | null;
+  agents?: CecAgentCpd[];
+  tickets?: RealtimeCecTicketInput[];
+  rawText?: string;
+};
+
 function realtimeCecRetentionCutoff() {
   return new Date(Date.now() - cecRetentionDays * 24 * 60 * 60 * 1000);
 }
 
-function clampCount(value: unknown) {
-  const numberValue = Number(value);
-  if (!Number.isFinite(numberValue)) return 0;
-  return Math.max(0, Math.round(numberValue));
+function normalizedTickets(input: RealtimeCecTicketInput[] | undefined) {
+  return (input || [])
+    .map((ticket) => normalizeCecTicket({
+      ...ticket,
+      groupId: ticket.groupId ? String(ticket.groupId).trim() : null,
+      groupName: ticket.groupName ? String(ticket.groupName).trim() : null
+    }))
+    .filter((ticket) => Boolean(ticket.ticket));
 }
 
-function normalizePercent(value: unknown) {
-  const numberValue = Number(value);
-  return Number.isFinite(numberValue) ? numberValue : null;
-}
-
-function normalizeGroup(input: RealtimeCecGroupInput): RealtimeCecGroupInput {
+function buildRawData(input: RealtimeCecImportInput, agents: CecAgentCpd[], tickets: RealtimeCecTicketInput[]) {
   return {
-    key: String(input.key || "unknown").trim() || "unknown",
-    label: String(input.label || input.key || "Unknown").trim() || "Unknown",
-    backlog: clampCount(input.backlog),
-    onHold: clampCount(input.onHold),
-    open: clampCount(input.open),
-    new: clampCount(input.new)
-  };
-}
-
-function normalizeDepartment(input: RealtimeCecDepartmentInput): RealtimeCecDepartmentInput {
-  return {
-    name: String(input.name || "Unknown").trim() || "Unknown",
-    group: String(input.group || "unknown").trim() || "unknown",
-    backlog: clampCount(input.backlog),
-    percent: normalizePercent(input.percent)
-  };
-}
-
-function normalizeTicket(input: RealtimeCecTicketInput): RealtimeCecTicketInput {
-  return {
-    ticket: String(input.ticket || "").trim(),
-    agentName: String(input.agentName || "Sem agente").trim() || "Sem agente",
-    status: String(input.status || "Sem status").trim() || "Sem status",
-    groupId: input.groupId ? String(input.groupId).trim() : null,
-    groupName: input.groupName ? String(input.groupName).trim() : null
-  };
-}
-
-function buildRawData(
-  input: RealtimeCecImportInput,
-  groups: RealtimeCecGroupInput[],
-  departments: RealtimeCecDepartmentInput[],
-  tickets: RealtimeCecTicketInput[]
-) {
-  return {
-    source: input.source || "freshdesk-core-api-v2",
+    source: input.source || "freshdesk-scheduled-report-api",
     fileName: input.fileName,
     cycleDownload: input.cycleDownload,
     generatedDate: input.generatedDate || null,
-    groups,
-    departments,
+    agents,
     tickets,
     rawText: input.rawText || ""
-  };
-}
-
-function summarizeGroups(groups: RealtimeCecGroupInput[]) {
-  const normal = groups.find((group) => group.key === "normal");
-  const p0 = groups.find((group) => group.key === "p0");
-  const p0L2 = groups.find((group) => group.key === "p0_l2");
-  const countedGroups = groups.filter((group) => group.key !== "p0_l2");
-
-  return {
-    totalBacklog: countedGroups.reduce((sum, group) => sum + group.backlog, 0),
-    normalBacklog: normal?.backlog ?? 0,
-    p0Backlog: p0?.backlog ?? 0,
-    p0L2Backlog: p0L2?.backlog ?? 0,
-    onHoldCount: countedGroups.reduce((sum, group) => sum + group.onHold, 0),
-    openCount: countedGroups.reduce((sum, group) => sum + group.open, 0),
-    newCount: countedGroups.reduce((sum, group) => sum + group.new, 0)
   };
 }
 
@@ -140,17 +98,24 @@ async function pruneRealtimeCecHistory(currentId?: string) {
 
 export async function importRealtimeCecSnapshot(input: RealtimeCecImportInput) {
   const cycleDownload = input.cycleDownload.trim();
-  const fileName = input.fileName.trim() || "cec_backlog_normal.csv";
-  const source = input.source?.trim() || "freshdesk-core-api-v2";
-  const groups = (input.groups || []).map(normalizeGroup).filter((group) => group.key && group.label);
-  const departments = (input.departments || []).map(normalizeDepartment).filter((department) => department.name);
-  const tickets = (input.tickets || []).map(normalizeTicket).filter((ticket) => ticket.ticket || ticket.agentName !== "Sem agente");
+  const fileName = input.fileName.trim() || "cec_cpd_hourly.csv";
+  const source = input.source?.trim() || "freshdesk-scheduled-report-api";
+  const tickets = normalizedTickets(input.tickets);
+  const cpd = buildCecHourlyCpd(tickets);
 
   if (!cycleDownload) return { error: "cycleDownload é obrigatório para importar CEC.", status: 400 };
-  if (!groups.length) return { error: "O snapshot CEC não possui grupos válidos.", status: 400 };
+  if (!tickets.length) return { error: "O snapshot CEC não possui Ticket IDs válidos.", status: 400 };
 
-  const summary = summarizeGroups(groups);
-  const rawData = buildRawData(input, groups, departments, tickets);
+  const rawData = buildRawData(input, cpd.agents, cpd.tickets as RealtimeCecTicketInput[]);
+  const legacySummary = {
+    totalBacklog: cpd.totalCpd,
+    normalBacklog: cpd.totalCpd,
+    p0Backlog: 0,
+    p0L2Backlog: 0,
+    onHoldCount: 0,
+    openCount: 0,
+    newCount: 0
+  };
 
   const snapshot = await prisma.realTimeCecSnapshot.upsert({
     where: { cycleDownload },
@@ -159,14 +124,14 @@ export async function importRealtimeCecSnapshot(input: RealtimeCecImportInput) {
       fileName,
       source,
       generatedDate: input.generatedDate || null,
-      ...summary,
+      ...legacySummary,
       rawData: rawData as Prisma.InputJsonValue
     },
     update: {
       fileName,
       source,
       generatedDate: input.generatedDate || null,
-      ...summary,
+      ...legacySummary,
       rawData: rawData as Prisma.InputJsonValue,
       importedAt: new Date()
     }
@@ -179,13 +144,9 @@ export async function importRealtimeCecSnapshot(input: RealtimeCecImportInput) {
     snapshotId: snapshot.id,
     cycleDownload: snapshot.cycleDownload,
     fileName: snapshot.fileName,
-    totalBacklog: snapshot.totalBacklog,
-    normalBacklog: snapshot.normalBacklog,
-    p0Backlog: snapshot.p0Backlog,
-    p0L2Backlog: snapshot.p0L2Backlog,
-    onHoldCount: snapshot.onHoldCount,
-    openCount: snapshot.openCount,
-    newCount: snapshot.newCount,
+    totalCpd: cpd.totalCpd,
+    activeAgents: cpd.activeAgents,
+    averageCpd: cpd.averageCpd,
     importedAt: snapshot.importedAt.toISOString()
   };
 }
@@ -195,9 +156,9 @@ export async function refreshRealtimeCecFromFreshdesk(options: { force?: boolean
   if (!options.force) {
     const existing = await prisma.realTimeCecSnapshot.findUnique({
       where: { cycleDownload: currentCycle },
-      select: { id: true, cycleDownload: true, importedAt: true }
+      select: { id: true, cycleDownload: true, importedAt: true, source: true }
     });
-    if (existing) {
+    if (existing && cecCpdSources.includes(existing.source)) {
       return {
         success: true,
         refreshed: false,
@@ -223,12 +184,15 @@ export async function getRealtimeCecReport(actor: Actor, options: { cycleDownloa
   try {
     await refreshRealtimeCecFromFreshdesk({ force: options.forceRefresh });
   } catch (error) {
-    refreshWarning = error instanceof Error ? error.message : "Não foi possível consultar a API Freshdesk.";
-    console.warn("[realtime/cec] A atualização pela API falhou; usando o último snapshot válido.", error);
+    refreshWarning = error instanceof Error ? error.message : "Não foi possível consultar o Data Export CEC.";
+    console.warn("[realtime/cec] A atualização do CPD falhou; usando o último snapshot CPD válido.", error);
   }
 
   const snapshots = await prisma.realTimeCecSnapshot.findMany({
-    where: { importedAt: { gte: realtimeCecRetentionCutoff() } },
+    where: {
+      importedAt: { gte: realtimeCecRetentionCutoff() },
+      source: { in: cecCpdSources }
+    },
     orderBy: [{ cycleDownload: "desc" }, { importedAt: "desc" }],
     take: 200
   });
@@ -245,23 +209,22 @@ export async function getRealtimeCecReport(actor: Actor, options: { cycleDownloa
         value: snapshot.cycleDownload,
         importedAt: snapshot.importedAt.toISOString(),
         importedAtLabel: formatDateTime(snapshot.importedAt),
-        rows: extractGroups(snapshot).length
+        rows: extractCpd(snapshot).agents.length
       })),
       snapshot: selected ? serializeSnapshot(selected) : null,
       previous: previous ? serializeSnapshot(previous) : null,
       history: snapshots
         .slice()
-        .sort((a, b) => a.cycleDownload.localeCompare(b.cycleDownload))
-        .map((snapshot) => ({
-          cycleDownload: snapshot.cycleDownload,
-          totalBacklog: snapshot.totalBacklog,
-          normalBacklog: snapshot.normalBacklog,
-          p0Backlog: snapshot.p0Backlog,
-          p0L2Backlog: snapshot.p0L2Backlog,
-          onHoldCount: snapshot.onHoldCount,
-          openCount: snapshot.openCount,
-          newCount: snapshot.newCount
-        }))
+        .sort((left, right) => left.cycleDownload.localeCompare(right.cycleDownload))
+        .map((snapshot) => {
+          const cpd = extractCpd(snapshot);
+          return {
+            cycleDownload: snapshot.cycleDownload,
+            totalCpd: cpd.totalCpd,
+            activeAgents: cpd.activeAgents,
+            averageCpd: cpd.averageCpd
+          };
+        })
     }
   };
 }
@@ -269,12 +232,25 @@ export async function getRealtimeCecReport(actor: Actor, options: { cycleDownloa
 function resolveSelectedSnapshot(snapshots: NonNullable<RealtimeCecSnapshotRecord>[], cycleDownload?: string) {
   const requested = cycleDownload?.trim();
   if (requested) {
-    return snapshots.find((snapshot) => snapshot.cycleDownload === requested) ?? snapshots.find((snapshot) => snapshot.cycleDownload <= requested) ?? snapshots[0] ?? null;
+    return snapshots.find((snapshot) => snapshot.cycleDownload === requested)
+      ?? snapshots.find((snapshot) => snapshot.cycleDownload <= requested)
+      ?? snapshots[0]
+      ?? null;
   }
   return snapshots[0] ?? null;
 }
 
+function extractTickets(snapshot: NonNullable<RealtimeCecSnapshotRecord>) {
+  const rawData = snapshot.rawData as RealtimeCecRawData | null;
+  return normalizedTickets(Array.isArray(rawData?.tickets) ? rawData.tickets : []);
+}
+
+function extractCpd(snapshot: NonNullable<RealtimeCecSnapshotRecord>) {
+  return buildCecHourlyCpd(extractTickets(snapshot));
+}
+
 function serializeSnapshot(snapshot: NonNullable<RealtimeCecSnapshotRecord>) {
+  const cpd = extractCpd(snapshot);
   return {
     id: snapshot.id,
     cycleDownload: snapshot.cycleDownload,
@@ -283,32 +259,12 @@ function serializeSnapshot(snapshot: NonNullable<RealtimeCecSnapshotRecord>) {
     generatedDate: snapshot.generatedDate,
     importedAt: snapshot.importedAt.toISOString(),
     importedAtLabel: formatDateTime(snapshot.importedAt),
-    totalBacklog: snapshot.totalBacklog,
-    normalBacklog: snapshot.normalBacklog,
-    p0Backlog: snapshot.p0Backlog,
-    p0L2Backlog: snapshot.p0L2Backlog,
-    onHoldCount: snapshot.onHoldCount,
-    openCount: snapshot.openCount,
-    newCount: snapshot.newCount,
-    groups: extractGroups(snapshot),
-    departments: extractDepartments(snapshot),
-    tickets: extractTickets(snapshot)
+    totalCpd: cpd.totalCpd,
+    activeAgents: cpd.activeAgents,
+    averageCpd: cpd.averageCpd,
+    agents: cpd.agents,
+    tickets: cpd.tickets
   };
-}
-
-function extractGroups(snapshot: NonNullable<RealtimeCecSnapshotRecord>): RealtimeCecGroupInput[] {
-  const rawData = snapshot.rawData as { groups?: RealtimeCecGroupInput[] } | null;
-  return Array.isArray(rawData?.groups) ? rawData.groups.map(normalizeGroup) : [];
-}
-
-function extractDepartments(snapshot: NonNullable<RealtimeCecSnapshotRecord>): RealtimeCecDepartmentInput[] {
-  const rawData = snapshot.rawData as { departments?: RealtimeCecDepartmentInput[] } | null;
-  return Array.isArray(rawData?.departments) ? rawData.departments.map(normalizeDepartment) : [];
-}
-
-function extractTickets(snapshot: NonNullable<RealtimeCecSnapshotRecord>): RealtimeCecTicketInput[] {
-  const rawData = snapshot.rawData as { tickets?: RealtimeCecTicketInput[] } | null;
-  return Array.isArray(rawData?.tickets) ? rawData.tickets.map(normalizeTicket) : [];
 }
 
 function formatDateTime(value: Date) {

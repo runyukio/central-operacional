@@ -1,49 +1,36 @@
-# Report CEC pelo Data Export do Freshdesk
+# Report CEC: CPD por hora
 
-O backend baixa o CSV/XLSX mais recente de um Data Export agendado do Freshdesk, importa todas as linhas válidas e grava um snapshot por ciclo. O painel não acumula os tickets de ciclos anteriores: cada ciclo representa o backlog existente no arquivo naquele momento.
+O relatório `Real Time > Report > CEC` usa o Data Export agendado do Freshdesk:
 
-## Por que o painel pode divergir do widget TOTAL Tickets
+```text
+https://kuaishousupport.freshdesk.com/reports/schedule/download_file.json?uuid=333f3cd9-ec65-4aae-9817-b6fcee4efa4d
+```
 
-Os filtros do Data Export e do widget precisam ser idênticos. Se o Data Export tiver `Backlog_normals greater than 24`, por exemplo, o painel receberá apenas os tickets que atendem a essa condição, mesmo que o widget TOTAL Tickets mostre todo o backlog.
+## Regra do indicador
 
-Nas capturas de referência, o Data Export também diverge do widget em dois grupos:
+- Grão: snapshot horário + agente.
+- CPD do agente: contagem distinta de `Ticket ID` dentro de `Agent name`.
+- CPD total: soma do CPD dos agentes.
+- Média por agente: CPD total dividido pela quantidade de agentes com CPD.
+- Linhas repetidas do mesmo `Ticket ID` para o mesmo agente contam uma vez.
+- Se um ticket aparecer associado a agentes diferentes no mesmo arquivo, ele conta uma vez para cada agente.
 
-- usa `[cancelado]KP-Normal-AfterSales-Br` em vez de `KP-Normal-AfterSales-Br`;
-- não contém `KP-Normal-Creatorcommerce-Br`.
+O arquivo atual contém apenas `Ticket ID`, `Agent name` e `Status`; ele não informa o horário do ticket. Por isso, “por hora” representa o horário em que o snapshot foi coletado, e não a hora de criação ou resolução do ticket.
 
-Para reproduzir o widget TOTAL Tickets, crie um novo Data Export em `Analytics > Settings > Data Exports` com os mesmos filtros do widget:
+## Rotina cloud
 
-1. `Status includes New, Open, On-hold`;
-2. `Tag name does not include zd_migrated_tickets, migrated_tickets`;
-3. `Ticket ID greater than 23200921`, somente se esse corte ainda fizer parte do widget;
-4. `Group name includes` exatamente os mesmos grupos ativos do widget;
-5. `Requester email is anything` é neutro e pode ser mantido;
-6. remova `Backlog_normals greater than 24` para trazer todo o backlog normal.
+O cron `/api/cron/realtime-cec` roda uma vez por hora e grava o arquivo mais recente como snapshot daquele horário. Nenhuma automação local é necessária.
 
-Inclua pelo menos as colunas `Ticket ID`, `Agent name` e `Status`. O importador lê todas as linhas, elimina Ticket IDs duplicados e agrupa os tickets por agente e status.
-
-O Freshdesk informa que um Data Export agendado não pode ser editado. Quando os filtros mudarem, exclua o agendamento antigo, crie outro e copie a nova URL de API. Confira também filtros de data no nível do widget, da página e do relatório, pois divergências entre esses níveis alteram o resultado exportado.
-
-## Variáveis da Vercel
-
-Configure em `Production`:
+Variáveis de produção:
 
 ```env
-CEC_FRESHDESK_API_KEY=API_KEY_DO_FRESHDESK
-CEC_FRESHDESK_REPORT_URL=https://kuaishousupport.freshdesk.com/reports/schedule/download_file.json?uuid=UUID_DO_NOVO_EXPORT
+CEC_FRESHDESK_API_KEY=API_KEY_DO_CRIADOR_DO_DATA_EXPORT
+CEC_FRESHDESK_REPORT_URL=https://kuaishousupport.freshdesk.com/reports/schedule/download_file.json?uuid=333f3cd9-ec65-4aae-9817-b6fcee4efa4d
 CRON_SECRET=SEGREDO_DA_ROTINA_VERCEL
 ```
 
-A API Key fica em `Freshdesk > Profile settings`. A URL do relatório é o endpoint de API fornecido pelo Data Export e retorna o link do arquivo mais recente. Não use cookie ou `x-auth-token` da sessão do navegador.
+O endpoint do Freshdesk vincula o agendamento ao usuário que o criou. Uma API Key de outro usuário pode responder `require_login`, mesmo sendo válida para a API Core v2. Não use cookies do navegador, chaves em código ou automações do computador.
 
-O cron `/api/cron/realtime-cec` executa nos minutos `00` e `30`. O botão `Refresh` da tela força uma nova leitura do arquivo dentro do ciclo atual. Se o próprio Data Export for gerado apenas uma vez por hora, os dois ciclos podem ter a mesma quantidade; para obter dados diferentes a cada 30 minutos, a origem também precisa gerar um arquivo nessa frequência.
+## Validação
 
-## Validação depois da troca
-
-1. aguarde o Freshdesk gerar o primeiro arquivo do novo agendamento;
-2. abra o endpoint configurado e confirme que ele retorna um objeto `export.url`;
-3. no painel CEC, clique em `Refresh`;
-4. compare o total, os status e os grupos com o widget no mesmo horário;
-5. use o seletor de ciclos do CEC para conferir os snapshots anteriores.
-
-Erros de autenticação, permissão, limite de chamadas ou arquivo inválido não apagam o último snapshot válido.
+O importador exige as colunas `Ticket ID`, `Agent name` e `Status`, aceita CSV/XLSX, rejeita arquivos vazios ou maiores que 10 MB e mantém o último snapshot válido quando a origem falha.

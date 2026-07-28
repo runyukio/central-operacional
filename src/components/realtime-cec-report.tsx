@@ -1,32 +1,20 @@
 "use client";
 
-import { AlertTriangle, CheckCircle2, Clock3, Database, UserRound } from "lucide-react";
-import { Area, AreaChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis } from "recharts";
+import { AlertTriangle, ArrowDownRight, ArrowRight, ArrowUpRight, Database, Gauge, UserRound, UsersRound } from "lucide-react";
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { cn } from "@/lib/utils";
 
-export type CecReportGroup = {
-  key: string;
-  label: string;
-  backlog: number;
-  onHold: number;
-  open: number;
-  new: number;
-};
-
 export type CecReportAgent = {
-  name: string;
-  group: string;
-  backlog: number;
-  percent: number | null;
+  agentName: string;
+  cpd: number;
+  share: number;
 };
 
 export type CecReportTicket = {
   ticket: string;
   agentName: string;
   status: string;
-  groupId?: string | null;
-  groupName?: string | null;
 };
 
 export type CecReportSnapshot = {
@@ -36,13 +24,10 @@ export type CecReportSnapshot = {
   source: string;
   generatedDate: string | null;
   importedAtLabel: string;
-  totalBacklog: number;
-  normalBacklog: number;
-  onHoldCount: number;
-  openCount: number;
-  newCount: number;
-  groups: CecReportGroup[];
-  departments: CecReportAgent[];
+  totalCpd: number;
+  activeAgents: number;
+  averageCpd: number;
+  agents: CecReportAgent[];
   tickets: CecReportTicket[];
 };
 
@@ -61,22 +46,18 @@ export type CecReportPayload = {
   previous: CecReportSnapshot | null;
   history: Array<{
     cycleDownload: string;
-    totalBacklog: number;
-    normalBacklog: number;
-    onHoldCount: number;
-    openCount: number;
-    newCount: number;
+    totalCpd: number;
+    activeAgents: number;
+    averageCpd: number;
   }>;
 };
 
-const statusConfig = [
-  { key: "Open", label: "Open", color: "#2563EB", icon: Clock3 },
-  { key: "On Hold", label: "On Hold", color: "#F59E0B", icon: AlertTriangle },
-  { key: "New", label: "New", color: "#10B981", icon: CheckCircle2 }
-] as const;
-
 function formatInteger(value: number) {
   return new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 0 }).format(value || 0);
+}
+
+function formatDecimal(value: number) {
+  return new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 2 }).format(value || 0);
 }
 
 function shortCycleLabel(value: string) {
@@ -88,11 +69,27 @@ function CecEmptyState({ loading, error }: { loading: boolean; error: string }) 
   return (
     <section className="rounded-[24px] border border-slate-200/80 bg-white px-5 py-14 text-center shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
       <Database className={cn("mx-auto h-9 w-9 text-blue-500", loading && "animate-pulse")} />
-      <h2 className="mt-3 text-lg font-black text-navy-950">{loading ? "Loading CEC report" : "CEC data unavailable"}</h2>
-      <p className="mx-auto mt-1 max-w-xl text-sm font-bold text-muted">
-        {error || "The Freshdesk API has not returned the selected CEC groups yet."}
+      <h2 className="mt-3 text-lg font-black text-navy-950">{loading ? "Carregando CPD de CEC" : "CPD de CEC indisponível"}</h2>
+      <p className="mx-auto mt-1 max-w-2xl text-sm font-bold text-muted">
+        {error || "O Data Export do Freshdesk ainda não retornou um snapshot horário válido."}
       </p>
     </section>
+  );
+}
+
+function DeltaBadge({ value }: { value: number | null }) {
+  if (value === null) {
+    return <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-600">Sem comparação</span>;
+  }
+  const Icon = value > 0 ? ArrowUpRight : value < 0 ? ArrowDownRight : ArrowRight;
+  return (
+    <span className={cn(
+      "inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-black",
+      value > 0 ? "bg-emerald-100 text-emerald-700" : value < 0 ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-600"
+    )}>
+      <Icon className="h-3.5 w-3.5" />
+      {value > 0 ? "+" : ""}{formatInteger(value)}
+    </span>
   );
 }
 
@@ -100,103 +97,80 @@ export function CecReportOverview({ report, loading, error }: { report: CecRepor
   const snapshot = report?.snapshot ?? null;
   if (!snapshot) return <CecEmptyState loading={loading} error={error || report?.refreshWarning || ""} />;
 
-  const previous = report?.previous?.totalBacklog ?? null;
-  const delta = previous === null ? null : snapshot.totalBacklog - previous;
-  const trend = (report?.history ?? []).map((item) => ({ label: shortCycleLabel(item.cycleDownload), value: item.totalBacklog }));
-  const statusTotal = snapshot.openCount + snapshot.onHoldCount + snapshot.newCount;
-  const otherCount = Math.max(0, snapshot.totalBacklog - statusTotal);
-  const statusData = [
-    { name: "Open", value: snapshot.openCount, color: "#2563EB" },
-    { name: "On Hold", value: snapshot.onHoldCount, color: "#F59E0B" },
-    { name: "New", value: snapshot.newCount, color: "#10B981" },
-    ...(otherCount ? [{ name: "Other", value: otherCount, color: "#94A3B8" }] : [])
-  ].filter((item) => item.value > 0);
+  const previousTotal = report?.previous?.totalCpd ?? null;
+  const delta = previousTotal === null ? null : snapshot.totalCpd - previousTotal;
+  const trend = (report?.history ?? []).map((item) => ({
+    label: shortCycleLabel(item.cycleDownload),
+    cpd: item.totalCpd
+  }));
 
   return (
-    <section className="space-y-3">
+    <section className="space-y-4">
       {report?.refreshWarning ? (
         <div className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-800">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>{report.refreshWarning} O último snapshot válido foi mantido.</span>
+          <span>{report.refreshWarning} O último snapshot CPD válido foi mantido.</span>
         </div>
       ) : null}
-      <div className="grid items-stretch gap-4 xl:grid-cols-[0.92fr_1.08fr]">
-      <article className="flex min-h-[310px] flex-col rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
-        <div className="flex items-start justify-between gap-4">
+
+      <article className="rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+        <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="text-[11px] font-black uppercase tracking-[0.16em] text-blue-600">Report CEC</p>
-            <h2 className="mt-1 text-xl font-black text-navy-950">Freshdesk Backlog</h2>
-            <p className="mt-1 text-xs font-bold text-muted">Cycle {snapshot.cycleDownload}</p>
+            <h2 className="mt-1 text-xl font-black text-navy-950">CPD por hora</h2>
+            <p className="mt-1 text-xs font-bold text-muted">
+              Contagem distinta de Ticket ID dentro de cada Agent name · snapshot {snapshot.cycleDownload}
+            </p>
           </div>
-          <span className={cn(
-            "inline-flex rounded-full px-3 py-1 text-xs font-black",
-            delta === null ? "bg-slate-100 text-slate-600" : delta <= 0 ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"
-          )}>
-            {delta === null ? "No comparison" : `${delta > 0 ? "+" : ""}${formatInteger(delta)}`}
-          </span>
+          <DeltaBadge value={delta} />
         </div>
-        <p className="mt-5 text-5xl font-black tracking-tight text-navy-950">{formatInteger(snapshot.totalBacklog)}</p>
-        <p className="mt-1 text-sm font-bold text-muted">tickets in the current snapshot</p>
-        <div className="mt-auto h-28 pt-4">
+
+        <div className="mt-5 grid gap-3 md:grid-cols-3">
+          <div className="rounded-2xl bg-blue-50/80 p-4">
+            <div className="flex items-center gap-2 text-blue-700">
+              <Gauge className="h-4 w-4" />
+              <span className="text-xs font-black uppercase tracking-wide">CPD total</span>
+            </div>
+            <p className="mt-2 text-4xl font-black tracking-tight text-navy-950">{formatInteger(snapshot.totalCpd)}</p>
+            <p className="mt-1 text-xs font-bold text-muted">tickets distintos somados por agente</p>
+          </div>
+          <div className="rounded-2xl bg-emerald-50/80 p-4">
+            <div className="flex items-center gap-2 text-emerald-700">
+              <UsersRound className="h-4 w-4" />
+              <span className="text-xs font-black uppercase tracking-wide">Agentes com CPD</span>
+            </div>
+            <p className="mt-2 text-4xl font-black tracking-tight text-navy-950">{formatInteger(snapshot.activeAgents)}</p>
+            <p className="mt-1 text-xs font-bold text-muted">agentes com ao menos um ticket</p>
+          </div>
+          <div className="rounded-2xl bg-violet-50/80 p-4">
+            <div className="flex items-center gap-2 text-violet-700">
+              <UserRound className="h-4 w-4" />
+              <span className="text-xs font-black uppercase tracking-wide">Média por agente</span>
+            </div>
+            <p className="mt-2 text-4xl font-black tracking-tight text-navy-950">{formatDecimal(snapshot.averageCpd)}</p>
+            <p className="mt-1 text-xs font-bold text-muted">CPD total ÷ agentes com CPD</p>
+          </div>
+        </div>
+
+        <div className="mt-5 h-56">
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={trend} margin={{ top: 4, right: 4, bottom: 0, left: 4 }}>
+            <AreaChart data={trend} margin={{ top: 8, right: 12, bottom: 0, left: -8 }}>
               <defs>
-                <linearGradient id="cecBacklogFill" x1="0" x2="0" y1="0" y2="1">
-                  <stop offset="0%" stopColor="#2563EB" stopOpacity={0.2} />
-                  <stop offset="100%" stopColor="#2563EB" stopOpacity={0.01} />
+                <linearGradient id="cecCpdFill" x1="0" x2="0" y1="0" y2="1">
+                  <stop offset="0%" stopColor="#2563EB" stopOpacity={0.24} />
+                  <stop offset="100%" stopColor="#2563EB" stopOpacity={0.02} />
                 </linearGradient>
               </defs>
-              <XAxis dataKey="label" hide />
-              <Tooltip formatter={(value) => [formatInteger(Number(value)), "Backlog"]} labelStyle={{ fontWeight: 800 }} />
-              <Area type="monotone" dataKey="value" stroke="#2563EB" strokeWidth={2.5} fill="url(#cecBacklogFill)" isAnimationActive={false} />
+              <CartesianGrid vertical={false} stroke="#E2E8F0" strokeDasharray="4 4" />
+              <XAxis dataKey="label" tick={{ fill: "#64748B", fontSize: 11, fontWeight: 700 }} tickLine={false} axisLine={false} minTickGap={28} />
+              <YAxis allowDecimals={false} tick={{ fill: "#64748B", fontSize: 11, fontWeight: 700 }} tickLine={false} axisLine={false} />
+              <Tooltip formatter={(value) => [formatInteger(Number(value)), "CPD"]} labelStyle={{ fontWeight: 800 }} />
+              <Area type="monotone" dataKey="cpd" stroke="#2563EB" strokeWidth={2.5} fill="url(#cecCpdFill)" isAnimationActive={false} />
             </AreaChart>
           </ResponsiveContainer>
         </div>
+        <p className="mt-2 text-right text-[11px] font-bold text-muted">Atualizado em {snapshot.importedAtLabel}</p>
       </article>
-
-      <article className="rounded-[24px] border border-slate-200/80 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-black text-navy-950">Ticket status</h2>
-            <p className="mt-1 text-xs font-bold text-muted">Last update {snapshot.importedAtLabel}</p>
-          </div>
-          <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700">{formatInteger(snapshot.totalBacklog)} tickets</span>
-        </div>
-        <div className="mt-3 grid items-center gap-3 sm:grid-cols-[minmax(220px,0.9fr)_minmax(240px,1.1fr)]">
-          <div className="relative mx-auto h-[210px] w-full max-w-[280px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={statusData} dataKey="value" nameKey="name" innerRadius={62} outerRadius={92} paddingAngle={2} stroke="none" isAnimationActive={false}>
-                  {statusData.map((item) => <Cell key={item.name} fill={item.color} />)}
-                </Pie>
-                <Tooltip formatter={(value, name) => [formatInteger(Number(value)), name]} />
-              </PieChart>
-            </ResponsiveContainer>
-            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-              <span className="text-3xl font-black text-navy-950">{formatInteger(snapshot.totalBacklog)}</span>
-              <span className="text-[10px] font-black uppercase tracking-wide text-muted">total</span>
-            </div>
-          </div>
-          <div className="space-y-2">
-            {statusConfig.map((status) => {
-              const value = status.key === "Open" ? snapshot.openCount : status.key === "On Hold" ? snapshot.onHoldCount : snapshot.newCount;
-              const percentage = snapshot.totalBacklog ? (value / snapshot.totalBacklog) * 100 : 0;
-              const Icon = status.icon;
-              return (
-                <div key={status.key} className="grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-xl border border-slate-100 bg-slate-50/70 px-3 py-2.5">
-                  <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white shadow-sm"><Icon className="h-4 w-4" style={{ color: status.color }} /></span>
-                  <div>
-                    <p className="text-sm font-black text-navy-950">{status.label}</p>
-                    <p className="text-[11px] font-bold text-muted">{percentage.toFixed(1)}%</p>
-                  </div>
-                  <span className="text-lg font-black text-navy-950">{formatInteger(value)}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </article>
-      </div>
     </section>
   );
 }
@@ -204,55 +178,51 @@ export function CecReportOverview({ report, loading, error }: { report: CecRepor
 export function CecReportDetails({ report, loading }: { report: CecReportPayload | null; loading: boolean }) {
   const snapshot = report?.snapshot ?? null;
   if (!snapshot) {
-    return <div className="px-4 py-12 text-center text-sm font-bold text-muted">{loading ? "Loading Freshdesk groups..." : "No CEC rows available."}</div>;
+    return <div className="px-4 py-12 text-center text-sm font-bold text-muted">{loading ? "Carregando agentes..." : "Nenhum agente disponível no snapshot CEC."}</div>;
   }
 
-  const statusByGroup = new Map<string, Record<string, number>>();
-  snapshot.tickets.forEach((ticket) => {
-    const groupName = ticket.groupName || ticket.agentName;
-    const counts = statusByGroup.get(groupName) ?? {};
-    counts[ticket.status] = (counts[ticket.status] || 0) + 1;
-    statusByGroup.set(groupName, counts);
-  });
+  const previousByAgent = new Map(
+    (report?.previous?.agents ?? []).map((agent) => [agent.agentName.trim().toLocaleLowerCase("pt-BR"), agent.cpd])
+  );
 
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
         <div>
-          <h2 className="font-black text-navy-950">Backlog by Freshdesk group</h2>
-          <p className="mt-0.5 text-xs font-bold text-muted">Unresolved tickets from the groups enabled for the CEC report.</p>
+          <h2 className="font-black text-navy-950">CPD por agente</h2>
+          <p className="mt-0.5 text-xs font-bold text-muted">Ticket ID distinto por agente no arquivo correspondente ao snapshot da hora.</p>
         </div>
         <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-700">
-          <UserRound className="h-3.5 w-3.5" /> {snapshot.departments.length} groups
+          <UserRound className="h-3.5 w-3.5" /> {snapshot.activeAgents} agentes
         </span>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[760px] table-fixed text-left text-sm">
+        <table className="w-full min-w-[720px] table-fixed text-left text-sm">
           <thead className="sticky top-0 z-10 bg-slate-50 text-xs uppercase tracking-wide text-muted">
             <tr>
-              <th className="w-[34%] px-4 py-3 font-black">Freshdesk group</th>
-              <th className="w-[12%] px-4 py-3 text-center font-black">Tickets</th>
-              <th className="w-[12%] px-4 py-3 text-center font-black">Open</th>
-              <th className="w-[12%] px-4 py-3 text-center font-black">On Hold</th>
-              <th className="w-[10%] px-4 py-3 text-center font-black">New</th>
-              <th className="w-[10%] px-4 py-3 text-center font-black">Other</th>
-              <th className="w-[10%] px-4 py-3 text-right font-black">Share</th>
+              <th className="w-[42%] px-4 py-3 font-black">Agente</th>
+              <th className="w-[16%] px-4 py-3 text-center font-black">CPD atual</th>
+              <th className="w-[16%] px-4 py-3 text-center font-black">Hora anterior</th>
+              <th className="w-[14%] px-4 py-3 text-center font-black">Diferença</th>
+              <th className="w-[12%] px-4 py-3 text-right font-black">Participação</th>
             </tr>
           </thead>
           <tbody>
-            {snapshot.departments.map((group, index) => {
-              const statuses = statusByGroup.get(group.name) ?? {};
-              const knownStatuses = (statuses.Open || 0) + (statuses["On Hold"] || 0) + (statuses.New || 0);
-              const otherStatuses = Math.max(0, group.backlog - knownStatuses);
+            {snapshot.agents.map((agent, index) => {
+              const previous = previousByAgent.get(agent.agentName.trim().toLocaleLowerCase("pt-BR")) ?? 0;
+              const difference = agent.cpd - previous;
               return (
-                <tr key={`${group.name}-${index}`} className={cn("border-t border-slate-100", index % 2 ? "bg-slate-50/45" : "bg-white")}>
-                  <td className="px-4 py-3 font-extrabold text-navy-950">{group.name}</td>
-                  <td className="px-4 py-3 text-center font-black text-navy-950">{formatInteger(group.backlog)}</td>
-                  <td className="px-4 py-3 text-center font-bold text-blue-700">{formatInteger(statuses.Open || 0)}</td>
-                  <td className="px-4 py-3 text-center font-bold text-amber-700">{formatInteger(statuses["On Hold"] || 0)}</td>
-                  <td className="px-4 py-3 text-center font-bold text-emerald-700">{formatInteger(statuses.New || 0)}</td>
-                  <td className="px-4 py-3 text-center font-bold text-slate-600">{formatInteger(otherStatuses)}</td>
-                  <td className="px-4 py-3 text-right font-black text-muted">{(group.percent ?? 0).toFixed(1)}%</td>
+                <tr key={agent.agentName} className={cn("border-t border-slate-100", index % 2 ? "bg-slate-50/45" : "bg-white")}>
+                  <td className="px-4 py-3 font-extrabold text-navy-950">{agent.agentName}</td>
+                  <td className="px-4 py-3 text-center text-base font-black text-blue-700">{formatInteger(agent.cpd)}</td>
+                  <td className="px-4 py-3 text-center font-bold text-slate-600">{formatInteger(previous)}</td>
+                  <td className={cn(
+                    "px-4 py-3 text-center font-black",
+                    difference > 0 ? "text-emerald-700" : difference < 0 ? "text-red-700" : "text-slate-500"
+                  )}>
+                    {difference > 0 ? "+" : ""}{formatInteger(difference)}
+                  </td>
+                  <td className="px-4 py-3 text-right font-black text-muted">{formatDecimal(agent.share)}%</td>
                 </tr>
               );
             })}
