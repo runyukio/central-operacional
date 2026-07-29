@@ -17,6 +17,14 @@ const BLUE = "#2563EB";
 const GREEN = "#10B981";
 const RED = "#EF4444";
 const SOFT_BLUE = "#DBEAFE";
+// Rasterized directly from the Lucide ArrowUp, ArrowDown, and Minus icons.
+const ICONS = {
+  upGreen: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAAsTAAALEwEAmpwYAAABCUlEQVR4nO2VQQrCMBBFA7qf9AKK19ALeYtO6AG8g9KFs3aR0YUrvYIrEe8gbpUpFKWtbdA0G/NhoEzT+S+ZoVEqKuoHJVszl1DBRTQAxpNm85CQZ8mFNM9L8zeIvH8IogFYXFXNX4FrtU+HQXeug5wEuZn3A0Fdx95nO6jZHKy51gytOfuFoM/mwNmkmk926cgfBLWby5LqO8l5g4Dmnl/0JhuXa5oAivwmGxdra4Nplk7miU2nXeZtAG0QUvsbgEvVvAvgE4QTgEgzLsDiDRiPTeYuAOVMAJuD1JKayqe0A0Cv0hGAYwvMnw8hWLy/7gi8BwfQjIu3y8bvT8ZVCZuZhPMHUVGqric+KdyOuiSScAAAAABJRU5ErkJggg==",
+  upBlue: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAAsTAAALEwEAmpwYAAABBUlEQVR4nO2VQQrCMBBFA3oJIVP1GrpwL2Zc5Q7exjsoXXgKV3oCJbMR8Q7SbWWQtmDTNmKajfkwUNJp3mtSUiFiYn4IoNlwieDR+UCiMYCUc/E1jwWDg6K0gJelKO1fQucDQLOvwauVOIjFcRj2zTHESmhHeC8Sun3Z+90O3Qh/WIA3vxK6GZ4omn6Oj1aXxJ+Ebodzy+c9HvMmARa4VHSfLK/jqqcuwOEe7rVI7JzgydrMuuBtAm0SPPfXAtIC7xJoknAS4Eg0W0B6AtLZBncRKL8JRSeei+cUPgMOAr0GogDGLaB//wiVyar/v8mCC8j3YVWc834PGdckiuZczg/ExIh6Xs2q1XJi/e+bAAAAAElFTkSuQmCC",
+  downGreen: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAAsTAAALEwEAmpwYAAABA0lEQVR4nO2UQQrCMBBFA7pPcgEFj6EX8had4AF6B8WFXbtI7MKVXsGViHcQt5WxKNWmdlrTCJIHA6Vk5r8kpYwFAl8gjZpgsV8gDMTCqCwviL0LcA3XhwA+excQz93nFQRYuALfiL/+CIWBmGu4cAN7sZ4N2wrINBpwo3Y4i/yzkjoavw0/2STqBLDn3ltYg7PbCGQ2iU8CtnCyAMI1LOokqgSqwrlRc0YmSXrYUBqi1Zmn0ahKAO9caHUsy8OKbaM+XYAgUTpep+EEiVKQ8/AaifpyEf4iAUtqOK7FHuaUhCbRTTj5Olwee8OT6HbndolDIfzgL7yA3KgpVvFdIMAacgNn9NyRwM768QAAAABJRU5ErkJggg==",
+  downRed: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAAsTAAALEwEAmpwYAAAA/UlEQVR4nO2UTQrCMBBGA3oOBY+hi1Lm6xF6B2/jHZQuPIheoSsRD9DEhbiNzEJI7d+0xhYkDwZC6cz3kpQqFQh8QZEkGy41BZpoZwDLxevRBQzwfAvwegoB61YQUOEKxsb89Ueo+SdD9DDAWcfxcqiABhYGOPEs8c+qiOO1O1gTXeskugS4h3vdd3h2bwHTINEmUBcuFmAM0aFLokmgKdwQ7ZUUm6YzbqgMAW53olWTAN+5Bi418kcbRXOxgESiEuIzXCJRI+A3XCDRWl7CSxJA1kMg4x7lEyuX8B8uvQ6vxz7gJH638084SBPlzs7z0cJdCmDLVXoYCKh+vADEkwbEYSSWYAAAAABJRU5ErkJggg==",
+  minus: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAAsTAAALEwEAmpwYAAAASUlEQVR4nGNgGAWjYBSMglEwCkYBFpBc3N2fXNL1LaWk+z81MMgskJkMxIDUoh4ralmMjkFmD34HDHgUjIJRMApGwSgYBSMOAAAICdYxboF7uQAAAABJRU5ErkJggg=="
+} as const;
 
 export async function renderAdsOnlineProductivityReportPng(report: AdsOnlineProductivityReportSnapshot) {
   const height = Math.max(MIN_HEIGHT, FIXED_HEIGHT + report.rows.length * ROW_HEIGHT);
@@ -82,9 +90,9 @@ function AdsOnlineProductivityReportImage({ report }: { report: AdsOnlineProduct
 
       <section style={{ alignItems: "center", color: MUTED, display: "flex", fontSize: 15, fontWeight: 700, marginTop: 24, width: "100%" }}>
         <span style={{ display: "flex", marginRight: 20 }}>Comparison: current interval vs. previous interval</span>
-        <LegendItem color={GREEN} icon="↑" label="Increase" />
-        <LegendItem color={MUTED} icon="=" label="No change" />
-        <LegendItem color={RED} icon="↓" label="Decrease" />
+        <LegendItem icon={ICONS.upGreen} label="Increase" />
+        <LegendItem icon={ICONS.minus} label="No change" />
+        <LegendItem icon={ICONS.downRed} label="Decrease" />
         <span style={{ display: "flex", marginLeft: 12 }}>( ) Previous interval submit</span>
       </section>
 
@@ -113,7 +121,7 @@ function SubmitComparison({ percent }: { percent: number | null }) {
   const positive = percent >= 0;
   return (
     <span style={{ alignItems: "center", color: positive ? GREEN : RED, display: "flex", fontSize: 17, fontWeight: 900 }}>
-      <span style={{ display: "flex" }}>{positive ? "↑" : "↓"}</span>
+      <Icon src={positive ? ICONS.upGreen : ICONS.downRed} />
       <span style={{ display: "flex", marginLeft: 6 }}>{formatPercent(Math.abs(percent))} vs. previous hour</span>
     </span>
   );
@@ -126,7 +134,7 @@ function AhtComparison({ deltaMs }: { deltaMs: number | null }) {
   const faster = deltaMs <= 0;
   return (
     <span style={{ alignItems: "center", color: faster ? GREEN : RED, display: "flex", fontSize: 17, fontWeight: 900 }}>
-      <span style={{ display: "flex" }}>{faster ? "↓" : "↑"}</span>
+      <Icon src={faster ? ICONS.downGreen : ICONS.upBlue} />
       <span style={{ display: "flex", marginLeft: 6 }}>{formatShortDuration(Math.abs(deltaMs))} {faster ? "faster" : "slower"} than previous hour</span>
     </span>
   );
@@ -137,7 +145,10 @@ function TableHeader({ report }: { report: AdsOnlineProductivityReportSnapshot }
     <div style={{ alignItems: "center", background: "#F8FAFC", borderBottom: "1px solid #D7E0EA", color: MUTED, display: "flex", fontSize: 16, fontWeight: 900, height: 56, letterSpacing: 1, padding: "0 26px", width: "100%" }}>
       <div style={{ display: "flex", width: 64 }}>#</div>
       <div style={{ display: "flex", width: 410 }}>AGENT / WB</div>
-      <div style={{ display: "flex", width: 305 }}>SUBMIT {report.currentHourLabel} ↓</div>
+      <div style={{ alignItems: "center", display: "flex", width: 305 }}>
+        <span style={{ display: "flex" }}>SUBMIT {report.currentHourLabel}</span>
+        <span style={{ display: "flex", marginLeft: 6 }}><Icon size={17} src={ICONS.downRed} /></span>
+      </div>
       <div style={{ display: "flex", width: 255 }}>VS. {report.previousHourLabel}</div>
       <div style={{ display: "flex", width: 220 }}>SHIFT TOTAL</div>
       <div style={{ display: "flex", width: 160 }}>AVG AHT</div>
@@ -176,7 +187,7 @@ function AgentRow({
       </div>
       <div style={{ alignItems: "center", display: "flex", width: 255 }}>
         <div style={{ alignItems: "center", background: comparison.background, borderRadius: 10, color: comparison.color, display: "flex", fontSize: 18, fontWeight: 900, justifyContent: "center", minWidth: 96, padding: "8px 10px" }}>
-          {comparison.icon}
+          <Icon size={17} src={comparison.icon} />
           <span style={{ display: "flex", marginLeft: 5 }}>{comparison.label}</span>
         </div>
         <span style={{ color: MUTED, display: "flex", fontSize: 16, fontWeight: 700, marginLeft: 12 }}>({formatInteger(row.previousSubmit)})</span>
@@ -195,10 +206,10 @@ function EmptyRow() {
   );
 }
 
-function LegendItem({ icon, label, color }: { icon: string; label: string; color: string }) {
+function LegendItem({ icon, label }: { icon: string; label: string }) {
   return (
     <span style={{ alignItems: "center", display: "flex", marginRight: 18 }}>
-      <span style={{ color, display: "flex", fontSize: 18, fontWeight: 900 }}>{icon}</span>
+      <Icon size={18} src={icon} />
       <span style={{ display: "flex", marginLeft: 5 }}>{label}</span>
     </span>
   );
@@ -209,7 +220,7 @@ function comparisonPresentation(row: AdsOnlineProductivityAgentRow) {
     return {
       background: "#DBEAFE",
       color: "#1D4ED8",
-      icon: "↑",
+      icon: ICONS.upBlue,
       label: "NEW"
     };
   }
@@ -217,7 +228,7 @@ function comparisonPresentation(row: AdsOnlineProductivityAgentRow) {
     return {
       background: "#F1F5F9",
       color: MUTED,
-      icon: "=",
+      icon: ICONS.minus,
       label: "0%"
     };
   }
@@ -225,7 +236,7 @@ function comparisonPresentation(row: AdsOnlineProductivityAgentRow) {
   return {
     background: up ? "#D1FAE5" : "#FEE2E2",
     color: up ? "#047857" : "#DC2626",
-    icon: up ? "↑" : "↓",
+    icon: up ? ICONS.upGreen : ICONS.downRed,
     label: formatPercent(Math.abs(row.comparisonPercent ?? 0))
   };
 }
@@ -255,6 +266,11 @@ function formatShortDuration(value: number) {
 
 function truncate(value: string, length: number) {
   return value.length <= length ? value : `${value.slice(0, length - 1)}…`;
+}
+
+function Icon({ src, size = 20 }: { src: string; size?: number }) {
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img alt="" height={size} src={src} width={size} />;
 }
 
 const panelStyle: CSSProperties = {
