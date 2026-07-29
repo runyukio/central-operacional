@@ -210,6 +210,16 @@ export function BillingPage() {
   const bulkAdjustmentInputRef = useRef<HTMLInputElement | null>(null);
   const employeePageSize = 12;
   const data = payload?.data;
+  const expectedFiscalTotal = data
+    ? calculateBillingFiscalExpectedAmount({
+      referenceMonth: data.referenceMonth,
+      wbLogin: "",
+      grossAmount: data.summary.grossAmount,
+      correctionAmount: 0,
+      advanceAmount: data.summary.advanceAmount,
+      finalAmount: data.summary.finalAmount
+    })
+    : 0;
   const canManageBilling = Boolean(data?.permissions.canManageBilling);
   const billingButtonClass = "inline-flex items-center justify-center gap-2 leading-none";
   const tabs = useMemo<Array<[TabKey, string]>>(() => {
@@ -581,7 +591,7 @@ export function BillingPage() {
             <StatCard title="Ajustes" value={formatCurrency(data.summary.adjustmentAmount)} helper="campanhas e correções" icon={FileSpreadsheet} tone={data.summary.adjustmentAmount < 0 ? "red" : "green"} />
             <StatCard title="Valor final" value={formatCurrency(data.summary.finalAmount)} helper="invoice" icon={CheckCircle2} tone="green" />
             <StatCard title="Horas aprovadas" value={minutesToHours(data.summary.approvedMinutes)} helper="oficiais" icon={RefreshCw} tone="purple" />
-            <StatCard title="Status ciclo" value={data.cycle.statusLabel} helper={data.cycle.updatedAt} icon={LockKeyhole} tone="orange" />
+            <StatCard title="Valor NFS-e" value={formatCurrency(expectedFiscalTotal)} helper="total esperado nas notas" icon={FileText} tone="blue" />
           </div>
 
           <section className="grid gap-3 xl:grid-cols-[1fr_360px]">

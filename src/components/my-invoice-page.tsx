@@ -265,12 +265,13 @@ export function MyInvoicePage() {
         <div className={cn("rounded-xl border px-3 py-2 text-sm font-bold", error ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-700")}>{error || message}</div>
       ) : null}
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
         <StatCard title="Horas aprovadas" value={minutesToHours(data.invoice.approvedMinutes)} helper="oficiais" icon={CheckCircle2} tone="green" />
         <StatCard title="Horas projetadas" value={minutesToHours(data.invoice.projectedMinutes)} helper={`${data.invoice.projectedDays} dia(s)`} icon={Clock} tone="blue" />
         <StatCard title="Total de horas" value={minutesToHours(data.invoice.totalConsideredMinutes)} helper="aprovadas + projeção" icon={FileText} tone="purple" />
         <StatCard title="Valor/hora" value={formatCurrency(data.invoice.hourlyRate)} helper={billingRuleLabel(data.invoice.billingRule)} icon={CircleDollarSign} tone="orange" />
         <StatCard title="Valor final" value={formatCurrency(data.invoice.finalAmount)} helper="previsão/invoice" icon={WalletCards} tone="green" />
+        <StatCard title="Valor NFS-e" value={formatCurrency(expectedFiscalAmount)} helper="valor para emitir a nota" icon={FileText} tone="blue" />
       </div>
 
       <section className="card overflow-hidden">
