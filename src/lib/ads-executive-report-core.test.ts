@@ -98,7 +98,7 @@ test("no VIDEO restringe somente backlog e max latency às filas de 15 minutos",
   assert.equal(report.buckets[10].backlog, 12);
   assert.equal(report.buckets[10].maxLatencyMs, 600_000);
 });
-test("no Executive conta quem esteve presente ou online na hora", () => {
+test("no Executive mantém na contagem quem está em pausa ou com estação bloqueada", () => {
   const report = buildAdsExecutiveReportSnapshot({
     selectedCycle: "2026-07-21 10:30",
     queueRows: [{ lob: "ADS", history: [metric("2026-07-21 10:30", 10, 10, 0)] }],
@@ -111,7 +111,7 @@ test("no Executive conta quem esteve presente ou online na hora", () => {
     ]
   });
 
-  assert.equal(report.buckets[10].online, 3);
+  assert.equal(report.buckets[10].online, 5);
 });
 
 function metric(cycleDownload: string, input: number, output: number, backlog: number, maxLatencyMs = 120_000) {
