@@ -13,6 +13,12 @@ test("resolve as categorias principais por cargo/função", () => {
   assert.equal(resolveBillingOmieMainCategory("Coordenador"), "2.10.89");
   assert.equal(resolveBillingOmieMainCategory("Qualidade"), "2.10.98");
   assert.equal(resolveBillingOmieMainCategory("WFM"), "2.10.96");
+  assert.equal(resolveBillingOmieMainCategory("Supervisão"), "2.10.97");
+  assert.equal(resolveBillingOmieMainCategory("RH"), "2.10.94");
+  assert.equal(resolveBillingOmieMainCategory("RTA"), "2.10.88");
+  assert.equal(resolveBillingOmieMainCategory("Financeiro"), "2.10.93");
+  assert.equal(resolveBillingOmieMainCategory("Logística/TI"), "2.10.93");
+  assert.equal(resolveBillingOmieMainCategory("WFM", "RTA"), "2.10.88");
 });
 
 test("mantém correção, desconto e outros no saldo da categoria principal", () => {
@@ -53,7 +59,7 @@ test("rateia bônus e campanha e usa ADI como tipo documental quando há adianta
 
 test("bloqueia cargo sem de/para e invoice com valor não positivo", () => {
   assert.throws(
-    () => resolveBillingOmieMainCategory("Supervisor"),
+    () => resolveBillingOmieMainCategory("Diretor"),
     (error: unknown) => error instanceof OmieIntegrationError
       && error.message.includes("sem categoria")
   );

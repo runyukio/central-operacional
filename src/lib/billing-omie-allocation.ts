@@ -14,11 +14,36 @@ const MAIN_CATEGORY_BY_ROLE: Record<string, string> = {
   coordenadora: "2.10.89",
   qualidade: "2.10.98",
   quality: "2.10.98",
+  supervisor: "2.10.97",
+  supervisora: "2.10.97",
+  supervisao: "2.10.97",
+  supervision: "2.10.97",
+  rh: "2.10.94",
+  recursoshumanos: "2.10.94",
+  humanresources: "2.10.94",
+  rta: "2.10.88",
+  financeiro: "2.10.93",
+  financial: "2.10.93",
+  it: "2.10.93",
+  ti: "2.10.93",
+  logisticati: "2.10.93",
+  logisticsit: "2.10.93",
   wfm: "2.10.96"
+};
+
+const MAIN_CATEGORY_BY_SKILL: Record<string, string> = {
+  rta: "2.10.88",
+  financeiro: "2.10.93",
+  financial: "2.10.93",
+  it: "2.10.93",
+  ti: "2.10.93",
+  logisticati: "2.10.93",
+  logisticsit: "2.10.93"
 };
 
 type BillingOmieAllocationInput = {
   roleTitle: string;
+  skill?: string | null;
   finalAmount: number;
   bonusAmount: number;
   campaignAmount: number;
@@ -34,7 +59,7 @@ export type BillingOmieAllocation = {
 };
 
 export function buildBillingOmieAllocation(input: BillingOmieAllocationInput): BillingOmieAllocation {
-  const mainCategoryCode = resolveBillingOmieMainCategory(input.roleTitle);
+  const mainCategoryCode = resolveBillingOmieMainCategory(input.roleTitle, input.skill);
   const documentAmount = roundCurrency(input.finalAmount);
   const bonusAmount = roundCurrency(input.bonusAmount);
   const campaignAmount = roundCurrency(input.campaignAmount);
@@ -65,9 +90,10 @@ export function buildBillingOmieAllocation(input: BillingOmieAllocationInput): B
   };
 }
 
-export function resolveBillingOmieMainCategory(roleTitle: string) {
+export function resolveBillingOmieMainCategory(roleTitle: string, skill?: string | null) {
   const normalizedRole = normalizeRoleTitle(roleTitle);
-  const categoryCode = MAIN_CATEGORY_BY_ROLE[normalizedRole];
+  const normalizedSkill = normalizeRoleTitle(skill ?? "");
+  const categoryCode = MAIN_CATEGORY_BY_SKILL[normalizedSkill] || MAIN_CATEGORY_BY_ROLE[normalizedRole];
   if (!categoryCode) {
     throw new OmieIntegrationError(
       `Cargo/função sem categoria configurada para o Omie: ${String(roleTitle ?? "").trim() || "não informado"}.`

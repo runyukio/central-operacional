@@ -207,6 +207,7 @@ export function buildOmiePixTransferData(input: {
     finalidade_transferencia: "01.3",
     cpf_cnpj_transferencia: beneficiaryTaxId,
     nome_transferencia: beneficiaryName,
+    // With TRA + 01.3, Omie uses this field for the beneficiary's PIX key, not a QR Code payment payload.
     pix_qrcode: pixKey
   };
 }

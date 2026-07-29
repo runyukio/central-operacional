@@ -601,6 +601,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
   try {
     buildBillingOmieAllocation({
       roleTitle: user.employeeProfile.roleTitle,
+      skill: user.employeeProfile.skill,
       finalAmount: calculated.finalAmount,
       bonusAmount: calculated.bonusAmount,
       campaignAmount: calculated.campaignAmount,
@@ -796,6 +797,7 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
               wbLogin: true,
               fullName: true,
               roleTitle: true,
+              skill: true,
               pixKey: true,
               pixKeyType: true,
               lobId: true
@@ -862,6 +864,7 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
     const finalAmount = Number(fiscalInvoice.employeeInvoice.finalAmount);
     const allocation = buildBillingOmieAllocation({
       roleTitle: fiscalInvoice.employeeInvoice.employee.roleTitle,
+      skill: fiscalInvoice.employeeInvoice.employee.skill,
       finalAmount,
       bonusAmount: adjustmentBreakdown.bonusAmount,
       campaignAmount,
