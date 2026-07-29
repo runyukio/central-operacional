@@ -47,6 +47,7 @@ type QualityRecordForMetrics = Prisma.QualityRecordGetPayload<{ select: typeof q
 type TnsQualityRecordForMetrics = Prisma.TnsQualityRecordGetPayload<{ select: typeof tnsQualityMetricSelect }>;
 type CecQualityRecordForMetrics = Prisma.CecQualityRecordGetPayload<{ select: typeof cecQualityMetricSelect }>;
 type ProductionRecordForMetrics = Prisma.ProductionRecordGetPayload<{ select: typeof productionMetricSelect }>;
+type CecCpdRecordForMetrics = Prisma.PerformanceCecCpdRecordGetPayload<{ select: typeof cecCpdMetricSelect }>;
 type ScheduleRecordForMetrics = Prisma.ScheduleGetPayload<{ select: typeof scheduleMetricSelect }>;
 type AttendanceRecordForMetrics = Prisma.AttendanceRecordGetPayload<{ select: typeof attendanceMetricSelect }>;
 
@@ -340,6 +341,11 @@ const productionMetricSelect = {
   queueId: true,
   employeeId: true
 } satisfies Prisma.ProductionRecordSelect;
+const cecCpdMetricSelect = {
+  performanceDay: true,
+  ticketCount: true,
+  employeeId: true
+} satisfies Prisma.PerformanceCecCpdRecordSelect;
 const scheduleMetricSelect = {
   date: true,
   status: true,
@@ -3381,7 +3387,7 @@ async function resolveBatchWbInfo(input?: PerformanceQuery["wbLogins"]) {
 async function buildAgentRows(employees: PerformanceEmployee[], period: Period) {
   if (!employees.length) return [];
   const employeeIds = employees.map((employee) => employee.id);
-  const [qualityRecords, tnsQualityRecords, cecQualityRecords, productionRecords, schedules, attendanceRecords] = await Promise.all([
+  const [qualityRecords, tnsQualityRecords, cecQualityRecords, productionRecords, cecCpdRecords, schedules, attendanceRecords] = await Promise.all([
     prisma.qualityRecord.findMany({
       where: {
         AND: [
@@ -3403,6 +3409,10 @@ async function buildAgentRows(employees: PerformanceEmployee[], period: Period) 
       where: { employeeId: { in: employeeIds }, bzDay: { gte: period.start, lte: period.end } },
       select: productionMetricSelect
     }),
+    prisma.performanceCecCpdRecord.findMany({
+      where: { employeeId: { in: employeeIds }, performanceDay: { gte: period.start, lte: period.end } },
+      select: cecCpdMetricSelect
+    }),
     prisma.schedule.findMany({
       where: { employeeId: { in: employeeIds }, date: { gte: period.start, lte: period.end }, deletedAt: null },
       select: scheduleMetricSelect
@@ -3418,7 +3428,19 @@ async function buildAgentRows(employees: PerformanceEmployee[], period: Period) 
   const submitDaysByWeekStart = new Map(weeks.map((week) => [formatDateKey(week.start), countDistinctProductionDays(productionRecords, week)]));
   return employees.map((employee) => {
     const qualityRule = getQualityRuleByEmployee(employee);
-    const weekly = weeks.map((week) => buildWeeklyMetrics(employee.id, week, submitDaysByWeekStart.get(formatDateKey(week.start)) ?? 0, qualityRule, qualityRecords, tnsQualityRecords, cecQualityRecords, productionRecords, schedules, attendanceRecords));
+    const weekly = weeks.map((week) => buildWeeklyMetrics(
+      employee.id,
+      week,
+      submitDaysByWeekStart.get(formatDateKey(week.start)) ?? 0,
+      qualityRule,
+      qualityRecords,
+      tnsQualityRecords,
+      cecQualityRecords,
+      productionRecords,
+      cecCpdRecords,
+      schedules,
+      attendanceRecords
+    ));
     const employeeQualityRecords = qualityRecords.filter((record) => record.employeeId === employee.id);
     const employeeTnsQualityRecords = tnsQualityRecords.filter((record) => record.employeeId === employee.id);
     const employeeCecQualityRecords = cecQualityRecords.filter((record) => record.employeeId === employee.id);
@@ -3450,17 +3472,19 @@ async function buildAgentRows(employees: PerformanceEmployee[], period: Period) 
       weekly,
       ...wfhQualification,
       ...periodMetrics,
-      submitDays: periodSubmitDays,
+      submitDays: qualityRule === "CEC_QUALITY" ? periodMetrics.submitDays : periodSubmitDays,
       submitAveragePerDay: periodMetrics.submit
     };
   });
 }
 
-function buildWeeklyMetrics(employeeId: string, week: WeekRange, uploadedDaysCount: number, qualityRule: QualityRule, qualityRecords: QualityRecordForMetrics[], tnsQualityRecords: TnsQualityRecordForMetrics[], cecQualityRecords: CecQualityRecordForMetrics[], productionRecords: ProductionRecordForMetrics[], schedules: ScheduleRecordForMetrics[], attendanceRecords: AttendanceRecordForMetrics[]): WeeklyMetricRow {
+function buildWeeklyMetrics(employeeId: string, week: WeekRange, uploadedDaysCount: number, qualityRule: QualityRule, qualityRecords: QualityRecordForMetrics[], tnsQualityRecords: TnsQualityRecordForMetrics[], cecQualityRecords: CecQualityRecordForMetrics[], productionRecords: ProductionRecordForMetrics[], cecCpdRecords: CecCpdRecordForMetrics[], schedules: ScheduleRecordForMetrics[], attendanceRecords: AttendanceRecordForMetrics[]): WeeklyMetricRow {
   const weekQualityRecords: QualityRecordForMetrics[] = [];
   const weekTnsQualityRecords: TnsQualityRecordForMetrics[] = [];
   const weekCecQualityRecords: CecQualityRecordForMetrics[] = [];
+  const weekCecCpdRecords: CecCpdRecordForMetrics[] = [];
   let submitTotal = 0;
+  let cecCpdSubmitDays = 0;
   let moderationSeconds = 0;
   let absences = 0;
   const unjustifiedAbsenceDates = new Set<string>();
@@ -3477,10 +3501,20 @@ function buildWeeklyMetrics(employeeId: string, week: WeekRange, uploadedDaysCou
     if (record.employeeId !== employeeId || !isDateInRange(record.qualityDate, week.start, week.end)) continue;
     weekCecQualityRecords.push(record);
   }
-  for (const record of productionRecords) {
-    if (record.employeeId !== employeeId || !isDateInRange(record.bzDay, week.start, week.end)) continue;
-    submitTotal += record.submitNum;
-    moderationSeconds += record.moderationSeconds;
+  if (qualityRule === "CEC_QUALITY") {
+    for (const record of cecCpdRecords) {
+      if (record.employeeId !== employeeId || !isDateInRange(record.performanceDay, week.start, week.end)) continue;
+      weekCecCpdRecords.push(record);
+    }
+    const cpdMetrics = calculateCecCpdMetrics(weekCecCpdRecords);
+    submitTotal = cpdMetrics.submitTotal;
+    cecCpdSubmitDays = cpdMetrics.submitDays;
+  } else {
+    for (const record of productionRecords) {
+      if (record.employeeId !== employeeId || !isDateInRange(record.bzDay, week.start, week.end)) continue;
+      submitTotal += record.submitNum;
+      moderationSeconds += record.moderationSeconds;
+    }
   }
   for (const schedule of schedules) {
     if (schedule.employeeId !== employeeId || !isDateInRange(schedule.date, week.start, week.end)) continue;
@@ -3492,14 +3526,15 @@ function buildWeeklyMetrics(employeeId: string, week: WeekRange, uploadedDaysCou
     if (record.employeeId !== employeeId || !isDateInRange(record.date, week.start, week.end)) continue;
     if (isUnjustifiedAbsenceRecord(record)) unjustifiedAbsenceDates.add(formatDateKey(record.date));
   }
+  const submitDays = qualityRule === "CEC_QUALITY" ? cecCpdSubmitDays : uploadedDaysCount;
   return {
     weekStart: formatDateKey(week.start),
     weekEnd: formatDateKey(week.end),
     weekLabel: `${formatDisplayDate(week.start)} a ${formatDisplayDate(week.end)}`,
     ...calculateQualityByRule(qualityRule, weekQualityRecords, weekTnsQualityRecords, weekCecQualityRecords),
-    submit: calculateDailySubmit(submitTotal, week.start, week.end, uploadedDaysCount).submitAveragePerDay,
+    submit: calculateDailySubmit(submitTotal, week.start, week.end, submitDays).submitAveragePerDay,
     submitTotal,
-    submitDays: uploadedDaysCount,
+    submitDays,
     moderationSeconds: round2(moderationSeconds),
     ahtSeconds: submitTotal > 0 ? round2(moderationSeconds / submitTotal) : 0,
     absences,
@@ -3542,7 +3577,7 @@ function summarizeRows(rows: AgentPerformanceRow[], period: Period) {
 
 function calculateQualityByRule(qualityRule: QualityRule, adsRecords: QualityRecordForMetrics[], tnsRecords: TnsQualityRecordForMetrics[], cecRecords: CecQualityRecordForMetrics[] = []) {
   if (qualityRule === "ADS_QUALITY") return calculateAdsQuality(adsRecords);
-  if (qualityRule === "TNS_QUALITY") return calculateTnsQuality(tnsRecords);
+  if (qualityRule === "TNS_QUALITY") return calculateTnsQualityWithKapFallback(adsRecords, tnsRecords);
   if (qualityRule === "CEC_QUALITY") return calculateCecQuality(cecRecords);
   return emptyQualityMetrics(qualityRule);
 }
@@ -3569,18 +3604,79 @@ function calculateAdsQuality(records: QualityRecordForMetrics[]) {
   };
 }
 
+export function calculateTnsQualityWithKapFallback(kapRecords: QualityRecordForMetrics[], legacyRecords: TnsQualityRecordForMetrics[]) {
+  const preferredByDay = new Map<string, { correctKeys: Set<string>; totalKeys: Set<string> }>();
+  for (const record of kapRecords) {
+    const taskKey = qualityTaskKey(record);
+    if (!taskKey) continue;
+    const day = formatDateKey(record.auditDate);
+    const aggregate = preferredByDay.get(day) ?? { correctKeys: new Set<string>(), totalKeys: new Set<string>() };
+    aggregate.totalKeys.add(taskKey);
+    if (isCorrectQualityResult(record.finalResult)) aggregate.correctKeys.add(taskKey);
+    preferredByDay.set(day, aggregate);
+  }
+  if (!preferredByDay.size) return calculateTnsQuality(legacyRecords);
+
+  const legacyByDay = new Map<string, { errors: number; total: number }>();
+  for (const record of legacyRecords) {
+    const day = formatDateKey(record.auditDate);
+    const aggregate = legacyByDay.get(day) ?? { errors: 0, total: 0 };
+    aggregate.errors += record.mislabeled + record.leakage + record.falsePositive;
+    aggregate.total += record.sampling;
+    legacyByDay.set(day, aggregate);
+  }
+  const selectedByDay = new Map(
+    Array.from(legacyByDay, ([day, aggregate]) => [
+      day,
+      {
+        correct: Math.max(0, aggregate.total - aggregate.errors),
+        total: aggregate.total
+      }
+    ])
+  );
+  for (const [day, aggregate] of preferredByDay) {
+    if (aggregate.totalKeys.size <= 0) continue;
+    selectedByDay.set(day, {
+      correct: aggregate.correctKeys.size,
+      total: aggregate.totalKeys.size
+    });
+  }
+
+  const sampling = Array.from(selectedByDay.values()).reduce((sum, row) => sum + row.total, 0);
+  const numerator = Array.from(selectedByDay.values()).reduce((sum, row) => sum + row.correct, 0);
+  return tnsQualityMetrics(numerator, sampling);
+}
+
 function calculateTnsQuality(records: TnsQualityRecordForMetrics[]) {
   const sampling = records.reduce((sum, record) => sum + record.sampling, 0);
   const errors = records.reduce((sum, record) => sum + record.mislabeled + record.leakage + record.falsePositive, 0);
   const numerator = Math.max(0, sampling - errors);
+  return tnsQualityMetrics(numerator, sampling);
+}
+
+function tnsQualityMetrics(numerator: number, sampling: number) {
   return {
     qualityRule: "TNS_QUALITY" as const,
     qualityNumerator: numerator,
     qualityDenominator: sampling,
-    qualityErrors: errors,
+    qualityErrors: Math.max(0, sampling - numerator),
     qualityCorrect: numerator,
     qualityTotal: sampling,
     quality: percent(numerator, sampling)
+  };
+}
+
+export function calculateCecCpdMetrics(records: Array<{ performanceDay: Date; ticketCount: number }>) {
+  const submitTotal = records.reduce((sum, record) => sum + record.ticketCount, 0);
+  const submitDays = new Set(
+    records
+      .filter((record) => record.ticketCount > 0)
+      .map((record) => formatDateKey(record.performanceDay))
+  ).size;
+  return {
+    submitTotal,
+    submitDays,
+    submit: submitDays > 0 ? round2(submitTotal / submitDays) : 0
   };
 }
 
