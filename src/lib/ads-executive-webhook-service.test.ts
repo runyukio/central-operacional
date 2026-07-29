@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   assertKwaiTalkAccepted,
+  buildExecutiveReportDeliveryFileName,
   buildExecutiveReportStoragePath,
   buildKwaiTalkMarkdownPayload
 } from "./ads-executive-webhook-service";
@@ -66,4 +67,19 @@ test("gera uma URL de imagem imutável por ciclo sem substituir o latest", () =>
     ),
     "automation/video-executive/video_executive_2026-07-28-09-30.png"
   );
+});
+
+test("gera um objeto exclusivo mesmo quando o mesmo ciclo é reenviado", () => {
+  const first = buildExecutiveReportDeliveryFileName(
+    "ads_online_productivity_2026-07-29-02-30.png",
+    "delivery-a"
+  );
+  const second = buildExecutiveReportDeliveryFileName(
+    "ads_online_productivity_2026-07-29-02-30.png",
+    "delivery-b"
+  );
+
+  assert.equal(first, "ads_online_productivity_2026-07-29-02-30_delivery-a.png");
+  assert.equal(second, "ads_online_productivity_2026-07-29-02-30_delivery-b.png");
+  assert.notEqual(first, second);
 });

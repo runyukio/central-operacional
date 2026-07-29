@@ -69,7 +69,7 @@ test("builds the ADS online productivity ranking with hourly and shift metrics",
   assert.equal(report.previousIntervalSubmit, 60);
   assert.equal(report.submitComparisonPercent, 21.7);
   assert.equal(report.totalShiftSubmit, 313);
-  assert.ok(Math.abs(report.averageSubmitPerHour - 104.33333333333333) < 0.0001);
+  assert.ok(Math.abs(report.averageSubmitPerHour - 24.333333333333332) < 0.0001);
   assert.ok(report.currentIntervalAhtMs !== null);
   assert.ok(Math.abs(report.currentIntervalAhtMs - 88_493.1506849315) < 0.001);
   assert.ok(report.ahtDeltaMs !== null);

@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { randomUUID } from "node:crypto";
 
 import {
   buildAdsExecutiveReportSnapshot,
@@ -445,11 +446,11 @@ function resolvePayloadMode(config: ExecutiveWebhookConfig): WebhookPayloadMode 
 
 async function publishKwaiTalkImage(image: Buffer, fileName: string, selectedCycle: string, storagePath: string) {
   const file = new File([new Uint8Array(image)], fileName, { type: "image/png" });
-  const immutablePath = buildExecutiveReportStoragePath(storagePath, fileName);
-  const [uploaded] = await Promise.all([
-    uploadPublicObject("mural-media", immutablePath, file, { upsert: true }),
-    uploadPublicObject("mural-media", storagePath, file, { upsert: true })
-  ]);
+  const immutablePath = buildExecutiveReportStoragePath(
+    storagePath,
+    buildExecutiveReportDeliveryFileName(fileName, randomUUID())
+  );
+  const uploaded = await uploadPublicObject("mural-media", immutablePath, file);
   const version = encodeURIComponent(selectedCycle);
   return `${uploaded.publicUrl}${uploaded.publicUrl.includes("?") ? "&" : "?"}v=${version}`;
 }
@@ -460,6 +461,15 @@ export function buildExecutiveReportStoragePath(latestPath: string, fileName: st
   const directory = directoryEnd >= 0 ? normalizedPath.slice(0, directoryEnd) : "";
   const safeFileName = fileName.replace(/^\/+/, "").replace(/\.\./g, "");
   return directory ? `${directory}/${safeFileName}` : safeFileName;
+}
+
+export function buildExecutiveReportDeliveryFileName(fileName: string, deliveryId: string) {
+  const extensionIndex = fileName.lastIndexOf(".");
+  const baseName = extensionIndex > 0 ? fileName.slice(0, extensionIndex) : fileName;
+  const extension = extensionIndex > 0 ? fileName.slice(extensionIndex) : ".png";
+  const safeBaseName = baseName.replace(/^\/+/, "").replace(/\.\./g, "");
+  const safeDeliveryId = deliveryId.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  return `${safeBaseName}_${safeDeliveryId || "delivery"}${extension}`;
 }
 
 export function buildKwaiTalkMarkdownPayload(input: {

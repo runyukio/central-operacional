@@ -95,10 +95,8 @@ export function buildAdsOnlineProductivityReportSnapshot(input: {
   const previousIntervalModeration = sum(previousMetrics, (metric) => metric.moderationMs);
   const currentIntervalAhtMs = currentIntervalSubmit > 0 ? currentIntervalModeration / currentIntervalSubmit : null;
   const previousIntervalAhtMs = previousIntervalSubmit > 0 ? previousIntervalModeration / previousIntervalSubmit : null;
-  const hourlyTotals = operationHourlyTotals(onlineRows, parsedByRow, selected);
-  const hoursWithData = hourlyTotals.filter((hour) => hour.hasSnapshot);
-  const averageSubmitPerHour = hoursWithData.length
-    ? sum(hoursWithData, (hour) => hour.submit) / hoursWithData.length
+  const averageSubmitPerHour = rows.length
+    ? currentIntervalSubmit / rows.length
     : 0;
 
   return {
@@ -113,7 +111,10 @@ export function buildAdsOnlineProductivityReportSnapshot(input: {
     averageSubmitPerHour,
     currentIntervalSubmit,
     previousIntervalSubmit,
-    submitComparisonPercent: percentChange(currentIntervalSubmit, previousIntervalSubmit),
+    submitComparisonPercent: percentChange(
+      averageSubmitPerHour,
+      rows.length ? previousIntervalSubmit / rows.length : 0
+    ),
     currentIntervalAhtMs,
     previousIntervalAhtMs,
     ahtDeltaMs: currentIntervalAhtMs !== null && previousIntervalAhtMs !== null
@@ -122,28 +123,6 @@ export function buildAdsOnlineProductivityReportSnapshot(input: {
     totalShiftSubmit: sum(rows, (row) => row.shiftTotal),
     rows
   };
-}
-
-function operationHourlyTotals(
-  rows: AdsExecutiveAgentRow[],
-  parsedByRow: Map<AdsExecutiveAgentRow, ParsedHistory[]>,
-  selected: ParsedExecutiveCycle
-) {
-  const dayStart = Date.UTC(
-    Number(selected.dateKey.slice(0, 4)),
-    Number(selected.dateKey.slice(5, 7)) - 1,
-    Number(selected.dateKey.slice(8, 10))
-  );
-  return Array.from({ length: selected.hour + 1 }, (_, hour) => {
-    const start = dayStart + hour * HOUR_MS;
-    const end = hour === selected.hour ? selected.timestamp : start + HOUR_MS - 1;
-    const metrics = rows.map((row) => intervalMetric(parsedByRow.get(row) ?? [], start, end));
-    return {
-      hour,
-      submit: sum(metrics, (metric) => metric.submit),
-      hasSnapshot: metrics.some((metric) => metric.hasSnapshot)
-    };
-  });
 }
 
 function parseHistory(row: AdsExecutiveAgentRow, maxTimestamp: number): ParsedHistory[] {

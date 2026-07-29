@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { buildCecHourlyCpd } from "@/lib/realtime-cec-cpd";
-import { parseCecScheduledReport } from "@/lib/realtime-cec-freshdesk";
+import {
+  getCecCycleForDate,
+  getCecScheduledReportGeneratedAt,
+  parseCecScheduledReport
+} from "@/lib/realtime-cec-freshdesk";
 
 test("conta Ticket ID distinto dentro de cada agente", () => {
   const result = buildCecHourlyCpd([
@@ -55,4 +59,15 @@ test("lê as colunas reais do Data Export Freshdesk", () => {
     { ticket: "501", agentName: "Ana", status: "Open" },
     { ticket: "502", agentName: "Bruno", status: "Closed" }
   ]);
+});
+
+test("usa a hora em que o arquivo do Freshdesk foi gerado como ciclo do CPD", () => {
+  const generatedAt = getCecScheduledReportGeneratedAt("tickets_1785298442316.csv");
+
+  assert.equal(generatedAt?.toISOString(), "2026-07-29T04:14:02.316Z");
+  assert.equal(getCecCycleForDate(generatedAt as Date), "2026-07-29 01:00");
+});
+
+test("mantém o fallback seguro quando o nome não contém timestamp", () => {
+  assert.equal(getCecScheduledReportGeneratedAt("cec_export.csv"), null);
 });

@@ -170,6 +170,24 @@ export async function refreshRealtimeCecFromFreshdesk(options: { force?: boolean
   }
 
   const input = await fetchRealtimeCecFromFreshdesk();
+  const existingSourceFile = await prisma.realTimeCecSnapshot.findFirst({
+    where: {
+      source: cecCpdSource,
+      fileName: input.fileName
+    },
+    orderBy: { importedAt: "desc" },
+    select: { id: true, cycleDownload: true, importedAt: true }
+  });
+  if (existingSourceFile) {
+    return {
+      success: true,
+      refreshed: false,
+      snapshotId: existingSourceFile.id,
+      cycleDownload: existingSourceFile.cycleDownload,
+      importedAt: existingSourceFile.importedAt.toISOString(),
+      message: "O último arquivo horário do Freshdesk já foi importado."
+    };
+  }
   const imported = await importRealtimeCecSnapshot(input);
   if ("error" in imported) throw new Error(imported.error);
   return { ...imported, refreshed: true };

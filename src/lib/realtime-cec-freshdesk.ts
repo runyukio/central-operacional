@@ -215,7 +215,7 @@ export function parseCecScheduledReport(buffer: Buffer): RealtimeCecTicketInput[
   return tickets;
 }
 
-function currentHourlyCycle() {
+export function getCecCycleForDate(value: Date) {
   const formatter = new Intl.DateTimeFormat("sv-SE", {
     timeZone: saoPauloTimeZone,
     year: "numeric",
@@ -224,8 +224,21 @@ function currentHourlyCycle() {
     hour: "2-digit",
     hour12: false
   });
-  const parts = Object.fromEntries(formatter.formatToParts(new Date()).map((part) => [part.type, part.value]));
+  const parts = Object.fromEntries(formatter.formatToParts(value).map((part) => [part.type, part.value]));
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:00`;
+}
+
+export function getCecScheduledReportGeneratedAt(fileName: string) {
+  const match = fileName.match(/(?:^|[_-])(\d{13})(?=\D|$)/);
+  if (!match?.[1]) return null;
+  const timestamp = Number(match[1]);
+  if (!Number.isSafeInteger(timestamp)) return null;
+  const generatedAt = new Date(timestamp);
+  return Number.isNaN(generatedAt.getTime()) ? null : generatedAt;
+}
+
+function currentHourlyCycle() {
+  return getCecCycleForDate(new Date());
 }
 
 export async function fetchRealtimeCecFromFreshdesk(): Promise<RealtimeCecImportInput> {
@@ -234,11 +247,12 @@ export async function fetchRealtimeCecFromFreshdesk(): Promise<RealtimeCecImport
   if (!exportUrl) throw new Error("O Freshdesk não retornou o link do arquivo do Data Export CEC.");
 
   const downloaded = await downloadScheduledReport(validateExportUrl(exportUrl));
+  const reportGeneratedAt = getCecScheduledReportGeneratedAt(downloaded.fileName) ?? new Date();
   return {
-    cycleDownload: currentHourlyCycle(),
+    cycleDownload: getCecCycleForDate(reportGeneratedAt),
     fileName: downloaded.fileName,
     source: "freshdesk-cec-cpd-hourly",
-    generatedDate: new Date().toISOString(),
+    generatedDate: reportGeneratedAt.toISOString(),
     tickets: parseCecScheduledReport(downloaded.buffer)
   };
 }

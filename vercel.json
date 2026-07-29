@@ -6,7 +6,7 @@
     },
     {
       "path": "/api/cron/realtime-cec",
-      "schedule": "0 * * * *"
+      "schedule": "20 * * * *"
     },
     {
       "path": "/api/cron/ads-executive-report",

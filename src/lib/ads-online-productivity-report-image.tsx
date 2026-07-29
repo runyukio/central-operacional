@@ -60,7 +60,7 @@ function AdsOnlineProductivityReportImage({ report }: { report: AdsOnlineProduct
 
       <section style={{ display: "flex", gap: 18, marginTop: 26, width: "100%" }}>
         <KpiCard
-          label="AVG SUBMIT / HOUR"
+          label="AVG SUBMIT / HOUR / AGENT"
           value={formatInteger(report.averageSubmitPerHour)}
           comparison={<SubmitComparison percent={report.submitComparisonPercent} />}
         />
