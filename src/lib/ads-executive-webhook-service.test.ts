@@ -45,6 +45,19 @@ test("buildKwaiTalkMarkdownPayload identifica o report VIDEO", () => {
   assert.match(payload.markdown.content, /!\[VIDEO Executive Report\]/);
 });
 
+test("buildKwaiTalkMarkdownPayload supports the ADS online productivity title", () => {
+  const payload = buildKwaiTalkMarkdownPayload({
+    lob: "ADS",
+    reportTitle: "ADS Online Productivity",
+    imageUrl: "https://storage.example/ads-online-productivity.png",
+    selectedCycle: "2026-07-29 14:58",
+    generatedAt: "2026-07-29T17:58:00.000Z"
+  });
+
+  assert.match(payload.markdown.content, /### ADS Online Productivity/);
+  assert.match(payload.markdown.content, /!\[ADS Online Productivity\]/);
+});
+
 test("gera uma URL de imagem imutável por ciclo sem substituir o latest", () => {
   assert.equal(
     buildExecutiveReportStoragePath(

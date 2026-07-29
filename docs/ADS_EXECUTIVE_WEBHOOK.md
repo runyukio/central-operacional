@@ -2,6 +2,8 @@
 
 O report Executivo de ADS e gerado no servidor como PNG e enviado automaticamente pelo cron da Vercel no minuto 55 de cada hora.
 
+O report adicional `ADS Online Productivity` usa o mesmo webhook e e enviado no minuto 58 de cada hora. Todo o conteudo visivel da imagem e do payload e gerado em ingles.
+
 ## Configuracao
 
 Cadastre as variaveis abaixo no ambiente de producao da Vercel:
@@ -74,3 +76,18 @@ A imagem usa o ultimo ciclo valido do Real Time e inclui:
 - maior e menor producao da ultima hora.
 
 O Forecast vem da base de Performance e a necessidade de HC vem da necessidade horaria de ADS.
+
+## ADS Online Productivity
+
+O segundo report usa apenas os agentes ADS considerados online pelo mesmo criterio do Executive: presenca online, presenca no cronograma ou atividade no intervalo atual.
+
+A imagem inclui:
+
+- media de submit por hora da operacao;
+- AHT medio do intervalo atual;
+- soma do submit acumulado no shift date;
+- ranking completo dos agentes online, do maior para o menor submit do intervalo;
+- comparacao percentual com o intervalo anterior;
+- submit acumulado no shift date e AHT medio de cada agente.
+
+O endpoint do cron e `/api/cron/ads-online-productivity-report` e o agendamento em `vercel.json` e `58 * * * *`.

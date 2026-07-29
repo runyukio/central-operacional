@@ -13,6 +13,10 @@
       "schedule": "55 * * * *"
     },
     {
+      "path": "/api/cron/ads-online-productivity-report",
+      "schedule": "58 * * * *"
+    },
+    {
       "path": "/api/cron/video-executive-report",
       "schedule": "55 * * * *"
     }

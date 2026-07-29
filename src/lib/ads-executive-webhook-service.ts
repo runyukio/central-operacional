@@ -9,6 +9,8 @@ import {
   type ExecutiveReportLob
 } from "@/lib/ads-executive-report-core";
 import { renderAdsExecutiveReportPng } from "@/lib/ads-executive-report-image";
+import { buildAdsOnlineProductivityReportSnapshot } from "@/lib/ads-online-productivity-report-core";
+import { renderAdsOnlineProductivityReportPng } from "@/lib/ads-online-productivity-report-image";
 import { calculateForecastModelWeights, predictForecastHour, type ForecastActual } from "@/lib/performance-forecast-core";
 import { prisma } from "@/lib/prisma";
 import { QUEUE_METADATA } from "@/lib/queue-metadata";
@@ -27,10 +29,11 @@ const automationActor = {
 };
 
 type WebhookPayloadMode = "multipart" | "json" | "kwaitalk";
+type WebhookReportType = "ADS_EXECUTIVE" | "VIDEO_EXECUTIVE" | "ADS_ONLINE_PRODUCTIVITY";
 type ExecutiveWebhookConfig = {
   lob: ExecutiveReportLob;
   envPrefix: "ADS_EXECUTIVE_WEBHOOK" | "VIDEO_EXECUTIVE_WEBHOOK";
-  reportType: "ADS_EXECUTIVE" | "VIDEO_EXECUTIVE";
+  reportType: WebhookReportType;
   storagePath: string;
 };
 
@@ -47,6 +50,8 @@ const VIDEO_WEBHOOK_CONFIG: ExecutiveWebhookConfig = {
   reportType: "VIDEO_EXECUTIVE",
   storagePath: "automation/video-executive/latest.png"
 };
+
+const ADS_ONLINE_PRODUCTIVITY_STORAGE_PATH = "automation/ads-online-productivity/latest.png";
 
 type KwaiTalkWebhookResponse = {
   code?: number | string;
@@ -72,6 +77,73 @@ export async function sendLatestAdsExecutiveReport(): Promise<AdsExecutiveWebhoo
 
 export async function sendLatestVideoExecutiveReport(): Promise<AdsExecutiveWebhookResult> {
   return sendLatestExecutiveReport(VIDEO_WEBHOOK_CONFIG);
+}
+
+export async function sendLatestAdsOnlineProductivityReport(): Promise<AdsExecutiveWebhookResult> {
+  if (!isWebhookEnabled(ADS_WEBHOOK_CONFIG)) {
+    return {
+      sent: false,
+      skipped: true,
+      selectedCycle: null,
+      fileName: null,
+      bytes: 0,
+      status: null,
+      message: "ADS online productivity report delivery is disabled."
+    };
+  }
+
+  const webhookUrl = resolveWebhookUrl(ADS_WEBHOOK_CONFIG);
+  if (!webhookUrl) throw new Error("ADS_EXECUTIVE_WEBHOOK_URL is not configured.");
+
+  const realtime = await getRealtimeSnapshot(automationActor, { view: "both" });
+  if ("error" in realtime && realtime.error) throw new Error(realtime.error);
+  const data = "data" in realtime ? realtime.data : null;
+  const selectedCycle = data?.agents.selectedCycle || data?.queueView.selectedCycle;
+  if (!data?.summary.hasData || !selectedCycle) {
+    throw new Error("There is no valid Real Time snapshot for the ADS online productivity report.");
+  }
+
+  const report = buildAdsOnlineProductivityReportSnapshot({
+    selectedCycle,
+    agentRows: mapAgentRows(data.agents.rows)
+  });
+  const image = await renderAdsOnlineProductivityReportPng(report);
+  const fileName = `ads_online_productivity_${safeFilePart(selectedCycle)}.png`;
+  const idempotencyKey = `ads-online-productivity:${selectedCycle}`;
+  const mode = resolvePayloadMode(ADS_WEBHOOK_CONFIG);
+  const imageUrl = mode === "kwaitalk"
+    ? await publishKwaiTalkImage(image, fileName, selectedCycle, ADS_ONLINE_PRODUCTIVITY_STORAGE_PATH)
+    : null;
+  const response = await postWebhook({
+    url: webhookUrl,
+    image,
+    fileName,
+    idempotencyKey,
+    mode,
+    token: resolveWebhookToken(ADS_WEBHOOK_CONFIG),
+    imageUrl,
+    lob: "ADS",
+    reportTitle: "ADS Online Productivity",
+    reportType: "ADS_ONLINE_PRODUCTIVITY",
+    timeoutMs: resolveTimeoutMs(ADS_WEBHOOK_CONFIG),
+    metadata: {
+      reportType: "ADS_ONLINE_PRODUCTIVITY",
+      selectedCycle,
+      date: report.dateKey,
+      generatedAt: new Date().toISOString(),
+      contentType: "image/png"
+    }
+  });
+
+  return {
+    sent: true,
+    skipped: false,
+    selectedCycle,
+    fileName,
+    bytes: image.byteLength,
+    status: response.status,
+    message: "ADS online productivity report sent to the webhook."
+  };
 }
 
 async function sendLatestExecutiveReport(config: ExecutiveWebhookConfig): Promise<AdsExecutiveWebhookResult> {
@@ -274,7 +346,8 @@ async function postWebhook(input: {
   token: string | null;
   imageUrl: string | null;
   lob: ExecutiveReportLob;
-  reportType: "ADS_EXECUTIVE" | "VIDEO_EXECUTIVE";
+  reportTitle?: string;
+  reportType: WebhookReportType;
   timeoutMs: number;
   metadata: Record<string, string>;
 }) {
@@ -293,6 +366,7 @@ async function postWebhook(input: {
     headers.set("Content-Type", "application/json");
     body = JSON.stringify(buildKwaiTalkMarkdownPayload({
       lob: input.lob,
+      reportTitle: input.reportTitle,
       imageUrl: input.imageUrl,
       selectedCycle: input.metadata.selectedCycle,
       generatedAt: input.metadata.generatedAt
@@ -390,20 +464,22 @@ export function buildExecutiveReportStoragePath(latestPath: string, fileName: st
 
 export function buildKwaiTalkMarkdownPayload(input: {
   lob?: ExecutiveReportLob;
+  reportTitle?: string;
   imageUrl: string;
   selectedCycle: string;
   generatedAt: string;
 }) {
   const lob = input.lob ?? "ADS";
+  const reportTitle = input.reportTitle ?? `${lob} Executive Report`;
   const generatedAt = formatKwaiTalkGeneratedAt(input.generatedAt);
   return {
     msgtype: "markdown",
     markdown: {
       content: [
-        `### ${lob} Executive Report`,
+        `### ${reportTitle}`,
         `**Cycle:** ${input.selectedCycle}`,
         `**Generated:** ${generatedAt}`,
-        `![${lob} Executive Report](${input.imageUrl})`
+        `![${reportTitle}](${input.imageUrl})`
       ].join("\n\n")
     }
   };

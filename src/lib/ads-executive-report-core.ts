@@ -90,7 +90,7 @@ export type AdsExecutiveReportSnapshot = {
   lowAgents: AdsExecutiveRankingRow[];
 };
 
-type ParsedCycle = {
+export type ParsedExecutiveCycle = {
   cycleDownload: string;
   dateKey: string;
   hour: number;
@@ -98,7 +98,7 @@ type ParsedCycle = {
   timestamp: number;
 };
 
-type QueueSnapshot = ParsedCycle & { metric: AdsExecutiveQueueMetric };
+type QueueSnapshot = ParsedExecutiveCycle & { metric: AdsExecutiveQueueMetric };
 
 export function buildAdsExecutiveReportSnapshot(input: {
   queueRows: AdsExecutiveQueueRow[];
@@ -114,7 +114,7 @@ export function buildAdsExecutiveReportSnapshot(input: {
   const backlogLatencyQueues = lob === "VIDEO"
     ? queues.filter((row) => row.slaTargetMinutes === 15)
     : queues;
-  const agents = input.agentRows.filter((row) => isExecutiveAgent(row, lob));
+  const agents = input.agentRows.filter((row) => isExecutiveAgentForLob(row, lob));
   const queueSnapshots = buildQueueSnapshots(queues, selected.timestamp);
   const backlogLatencySnapshots = buildQueueSnapshots(backlogLatencyQueues, selected.timestamp);
   const queueByHour = buildQueueHourDeltas(queueSnapshots, selected.dateKey);
@@ -126,10 +126,7 @@ export function buildAdsExecutiveReportSnapshot(input: {
       .map((row) => [row.hour, Math.max(0, Math.round(row.input))])
   );
   const requiredByHour = new Map((input.requirements ?? []).map((row) => [row.hour, row.required]));
-  const currentOnline = agents.filter((row) => (
-    isExecutivePresentHeadcountRow(row)
-    || hadExecutiveActivityInSelectedHour(row, selected)
-  )).length;
+  const currentOnline = agents.filter((row) => isExecutiveAgentOnlineAtCycle(row, input.selectedCycle)).length;
 
   const buckets = Array.from({ length: 24 }, (_, hour): AdsExecutiveHourBucket => {
     const queue = queueByHour.get(hour);
@@ -177,7 +174,7 @@ export function buildAdsExecutiveReportSnapshot(input: {
   };
 }
 
-export function parseAdsExecutiveCycle(value: string): ParsedCycle {
+export function parseAdsExecutiveCycle(value: string): ParsedExecutiveCycle {
   const match = value.match(/(\d{4})[-/](\d{2})[-/](\d{2})(?:[T_\s-]+(\d{2})[:-](\d{2})(?::?(\d{2}))?)?/);
   if (!match) throw new Error(`Ciclo do Real Time inválido: ${value || "vazio"}`);
   const year = Number(match[1]);
@@ -233,7 +230,7 @@ function buildQueueHourDeltas(snapshots: QueueSnapshot[], dateKey: string) {
   return result;
 }
 
-function buildAgentHourDeltas(rows: AdsExecutiveAgentRow[], selected: ParsedCycle) {
+function buildAgentHourDeltas(rows: AdsExecutiveAgentRow[], selected: ParsedExecutiveCycle) {
   const hourly = new Map<number, { cycleDownload: string; timestamp: number; online: number }>();
   for (const row of rows) {
     const latestByHour = new Map<string, ReturnType<typeof parseAdsExecutiveCycle> & { submit: number }>();
@@ -291,7 +288,7 @@ function buildAgentRankings(rows: AdsExecutiveAgentRow[], currentCycle: string, 
   };
 }
 
-function historyAtOrBefore(row: AdsExecutiveAgentRow, target: ParsedCycle) {
+function historyAtOrBefore(row: AdsExecutiveAgentRow, target: ParsedExecutiveCycle) {
   return row.history
     .map((item) => ({ ...item, parsed: safeParseCycle(item.cycleDownload) }))
     .filter((item) => item.parsed && item.parsed.dateKey === target.dateKey && item.parsed.timestamp <= target.timestamp)
@@ -305,7 +302,7 @@ function previousHistory(row: AdsExecutiveAgentRow, timestamp: number) {
     .sort((a, b) => (b.parsed?.timestamp ?? 0) - (a.parsed?.timestamp ?? 0))[0] ?? null;
 }
 
-function hadExecutiveActivityInSelectedHour(row: AdsExecutiveAgentRow, selected: ParsedCycle) {
+function hadExecutiveActivityInSelectedHour(row: AdsExecutiveAgentRow, selected: ParsedExecutiveCycle) {
   const snapshots = row.history
     .map((item) => ({ ...item, parsed: safeParseCycle(item.cycleDownload) }))
     .filter((item) => item.parsed && item.parsed.timestamp <= selected.timestamp)
@@ -367,11 +364,16 @@ function kpi(label: string, value: number | null, previous: number | null, bette
   return { label, value, previous, delta: value !== null && previous !== null ? value - previous : null, betterWhen };
 }
 
-function isExecutiveAgent(row: AdsExecutiveAgentRow, lob: ExecutiveReportLob) {
+export function isExecutiveAgentForLob(row: AdsExecutiveAgentRow, lob: ExecutiveReportLob) {
   return normalize(row.lob) === normalize(lob)
     && normalize(row.crossingStatus) === "encontrado"
     && normalize(row.personType) === "agente"
     && ["ativo", "active"].includes(normalize(row.employeeStatus));
+}
+
+export function isExecutiveAgentOnlineAtCycle(row: AdsExecutiveAgentRow, selectedCycle: string) {
+  const selected = parseAdsExecutiveCycle(selectedCycle);
+  return isExecutivePresentHeadcountRow(row) || hadExecutiveActivityInSelectedHour(row, selected);
 }
 
 function safeParseCycle(value: string) {
