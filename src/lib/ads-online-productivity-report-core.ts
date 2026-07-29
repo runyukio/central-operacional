@@ -95,8 +95,13 @@ export function buildAdsOnlineProductivityReportSnapshot(input: {
   const previousIntervalModeration = sum(previousMetrics, (metric) => metric.moderationMs);
   const currentIntervalAhtMs = currentIntervalSubmit > 0 ? currentIntervalModeration / currentIntervalSubmit : null;
   const previousIntervalAhtMs = previousIntervalSubmit > 0 ? previousIntervalModeration / previousIntervalSubmit : null;
-  const averageSubmitPerHour = rows.length
-    ? currentIntervalSubmit / rows.length
+  const currentSubmittingAgents = rows.filter((row) => row.currentSubmit > 0).length;
+  const previousSubmittingAgents = rows.filter((row) => row.previousSubmit > 0).length;
+  const averageSubmitPerHour = currentSubmittingAgents
+    ? currentIntervalSubmit / currentSubmittingAgents
+    : 0;
+  const previousAverageSubmitPerHour = previousSubmittingAgents
+    ? previousIntervalSubmit / previousSubmittingAgents
     : 0;
 
   return {
@@ -113,7 +118,7 @@ export function buildAdsOnlineProductivityReportSnapshot(input: {
     previousIntervalSubmit,
     submitComparisonPercent: percentChange(
       averageSubmitPerHour,
-      rows.length ? previousIntervalSubmit / rows.length : 0
+      previousAverageSubmitPerHour
     ),
     currentIntervalAhtMs,
     previousIntervalAhtMs,

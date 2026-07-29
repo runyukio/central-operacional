@@ -100,6 +100,50 @@ test("compares midnight with the previous day's 23h interval", () => {
   assert.equal(report.rows[0].previousSubmit, 18);
 });
 
+test("excludes agents with zero submit from the per-agent averages", () => {
+  const report = buildAdsOnlineProductivityReportSnapshot({
+    selectedCycle: "2026-07-29 09:30",
+    agentRows: [
+      agent({
+        name: "Submitting agent",
+        wbLogin: "wb_submitting",
+        presenceStatus: "Online",
+        history: [
+          history("2026-07-29 07:30", 10, 60_000),
+          history("2026-07-29 08:30", 30, 60_000),
+          history("2026-07-29 09:30", 50, 60_000)
+        ]
+      }),
+      agent({
+        name: "Paused agent",
+        wbLogin: "wb_paused",
+        presenceStatus: "Tela bloqueada",
+        history: [
+          history("2026-07-29 07:30", 0, 60_000),
+          history("2026-07-29 08:30", 15, 60_000),
+          history("2026-07-29 09:30", 15, 60_000)
+        ]
+      }),
+      agent({
+        name: "No submit agent",
+        wbLogin: "wb_no_submit",
+        presenceStatus: "Online",
+        history: [
+          history("2026-07-29 07:30", 5, 60_000),
+          history("2026-07-29 08:30", 5, 60_000),
+          history("2026-07-29 09:30", 5, 60_000)
+        ]
+      })
+    ]
+  });
+
+  assert.equal(report.onlineCount, 3);
+  assert.equal(report.currentIntervalSubmit, 20);
+  assert.equal(report.previousIntervalSubmit, 35);
+  assert.equal(report.averageSubmitPerHour, 20);
+  assert.equal(report.submitComparisonPercent, 14.3);
+});
+
 function agent(input: {
   name: string;
   wbLogin: string;
