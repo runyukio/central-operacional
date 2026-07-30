@@ -2,13 +2,15 @@ import type { OmieCategoryAllocation } from "@/lib/omie-service";
 import { OmieIntegrationError } from "@/lib/omie-service";
 
 export const BILLING_OMIE_PROJECT_CODE = 10011279879;
+export const BILLING_OMIE_DEPARTMENT_CODE = "10171310973";
 export const BILLING_OMIE_BONUS_CATEGORY_CODE = "2.02.04";
 export const BILLING_OMIE_CAMPAIGN_CATEGORY_CODE = "2.02.99";
 export const BILLING_OMIE_ADVANCE_DOCUMENT_TYPE = "ADI";
+export const BILLING_OMIE_FISCAL_DOCUMENT_TYPE = "NF";
 
 const MAIN_CATEGORY_BY_ROLE: Record<string, string> = {
-  agent: "2.10.99",
-  agente: "2.10.99",
+  agent: "2.10.89",
+  agente: "2.10.89",
   coordinator: "2.10.89",
   coordenador: "2.10.89",
   coordenadora: "2.10.89",
@@ -24,10 +26,10 @@ const MAIN_CATEGORY_BY_ROLE: Record<string, string> = {
   rta: "2.10.88",
   financeiro: "2.10.93",
   financial: "2.10.93",
-  it: "2.10.93",
-  ti: "2.10.93",
-  logisticati: "2.10.93",
-  logisticsit: "2.10.93",
+  it: "2.10.90",
+  ti: "2.10.90",
+  logisticati: "2.10.90",
+  logisticsit: "2.10.90",
   wfm: "2.10.96"
 };
 
@@ -35,10 +37,10 @@ const MAIN_CATEGORY_BY_SKILL: Record<string, string> = {
   rta: "2.10.88",
   financeiro: "2.10.93",
   financial: "2.10.93",
-  it: "2.10.93",
-  ti: "2.10.93",
-  logisticati: "2.10.93",
-  logisticsit: "2.10.93"
+  it: "2.10.90",
+  ti: "2.10.90",
+  logisticati: "2.10.90",
+  logisticsit: "2.10.90"
 };
 
 type BillingOmieAllocationInput = {
@@ -53,6 +55,7 @@ type BillingOmieAllocationInput = {
 export type BillingOmieAllocation = {
   documentAmount: number;
   projectCode: number;
+  departmentCode: string;
   documentTypeCode: string | null;
   mainCategoryCode: string;
   categories: OmieCategoryAllocation[];
@@ -84,7 +87,10 @@ export function buildBillingOmieAllocation(input: BillingOmieAllocationInput): B
   return {
     documentAmount,
     projectCode: BILLING_OMIE_PROJECT_CODE,
-    documentTypeCode: advanceAmount > 0 ? BILLING_OMIE_ADVANCE_DOCUMENT_TYPE : null,
+    departmentCode: BILLING_OMIE_DEPARTMENT_CODE,
+    // This allocation represents the fiscal invoice submitted by the employee.
+    // An advance is a deduction in this invoice, not a replacement for its NF type.
+    documentTypeCode: BILLING_OMIE_FISCAL_DOCUMENT_TYPE,
     mainCategoryCode,
     categories
   };

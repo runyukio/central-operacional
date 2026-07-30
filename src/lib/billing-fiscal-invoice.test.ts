@@ -9,20 +9,22 @@ import {
   normalizeBillingFiscalInvoiceNumber
 } from "./billing-fiscal-invoice";
 
-test("aceita números de nota fiscal com até 4 dígitos", () => {
-  assert.equal(BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH, 4);
+test("aceita números de nota fiscal com até 20 dígitos", () => {
+  assert.equal(BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH, 20);
   assert.equal(isValidBillingFiscalInvoiceNumber("5"), true);
   assert.equal(isValidBillingFiscalInvoiceNumber("0005"), true);
+  assert.equal(isValidBillingFiscalInvoiceNumber("12345678901234567890"), true);
 });
 
 test("preserva zeros à esquerda e rejeita identificadores acima do limite", () => {
   assert.equal(isValidBillingFiscalInvoiceNumber("0012"), true);
-  assert.equal(isValidBillingFiscalInvoiceNumber("00123"), false);
+  assert.equal(isValidBillingFiscalInvoiceNumber("123456789012345678901"), false);
 });
 
 test("normaliza caracteres não numéricos sem converter o identificador para number", () => {
   assert.equal(normalizeBillingFiscalInvoiceNumber(" 00.12 "), "0012");
-  assert.equal(normalizeBillingFiscalInvoiceNumber("12345"), "1234");
+  assert.equal(normalizeBillingFiscalInvoiceNumber("12.345"), "12345");
+  assert.equal(normalizeBillingFiscalInvoiceNumber("123456789012345678901"), "12345678901234567890");
 });
 
 test("soma a correção ao valor bruto esperado na nota fiscal", () => {

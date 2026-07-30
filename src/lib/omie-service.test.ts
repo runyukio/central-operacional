@@ -11,6 +11,7 @@ import {
   buildOmieIntegrationCode,
   buildOmiePixTransferData,
   calculateOmieDueDate,
+  calculateOmieIssueDate,
   type OmieConfig,
   OmieIntegrationError,
   upsertBillingAccountPayable
@@ -38,7 +39,8 @@ const input = {
   grossAmount: 2225.47,
   documentAmount: 1840,
   projectCode: 10011279879,
-  documentTypeCode: "ADI",
+  departmentCode: "10171310973",
+  documentTypeCode: "NF",
   categories: [
     { code: "2.10.96", value: 1740 },
     { code: "2.02.04", value: 100 }
@@ -87,7 +89,12 @@ test("localiza o fornecedor e envia projeto, rateio e transferência por chave P
   assert.equal(payable.numero_documento_fiscal, "12345");
   assert.equal(payable.numero_documento, "B202607-wblucasy");
   assert.equal(payable.codigo_projeto, 10011279879);
-  assert.equal(payable.codigo_tipo_documento, "ADI");
+  assert.deepEqual(payable.distribuicao, [{
+    cCodDep: "10171310973",
+    nValDep: 1840,
+    nPerDep: 100
+  }]);
+  assert.equal(payable.codigo_tipo_documento, "NF");
   assert.deepEqual(payable.cnab_integracao_bancaria, {
     codigo_forma_pagamento: "TRA",
     finalidade_transferencia: "01.3",
@@ -96,7 +103,7 @@ test("localiza o fornecedor e envia projeto, rateio e transferência por chave P
     pix_qrcode: "lucas@example.com"
   });
   assert.equal(payable.numero_parcela, "001/001");
-  assert.equal(payable.data_emissao, "18/07/2026");
+  assert.equal(payable.data_emissao, "30/06/2026");
   assert.equal(payable.data_entrada, "18/07/2026");
   assert.equal(payable.data_vencimento, "07/08/2026");
   assert.equal(payable.data_previsao, "07/08/2026");
@@ -128,6 +135,12 @@ test("calcula o quinto dia útil do mês seguinte sem contar fins de semana", ()
     calculateOmieDueDate("2026-07", new Date("2026-07-27T15:00:00.000Z")).toISOString(),
     "2026-08-07T12:00:00.000Z"
   );
+});
+
+test("usa o último dia do mês anterior como data de emissão", () => {
+  assert.equal(calculateOmieIssueDate("2026-07").toISOString(), "2026-06-30T12:00:00.000Z");
+  assert.equal(calculateOmieIssueDate("2026-01").toISOString(), "2025-12-31T12:00:00.000Z");
+  assert.throws(() => calculateOmieIssueDate("2026-13"), /Mês de referência inválido/);
 });
 
 test("considera Sexta-feira Santa e Corpus Christi no calendário de São Paulo", () => {

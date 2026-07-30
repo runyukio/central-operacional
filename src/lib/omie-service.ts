@@ -36,6 +36,7 @@ export type OmieAccountPayableInput = {
   grossAmount: number;
   documentAmount: number;
   projectCode: number;
+  departmentCode: string;
   documentTypeCode?: string | null;
   categories: OmieCategoryAllocation[];
   billingGrossAmount: number;
@@ -179,6 +180,14 @@ export function calculateOmieDueDate(referenceMonth: string, now = new Date()) {
   return dueDate < today ? today : dueDate;
 }
 
+export function calculateOmieIssueDate(referenceMonth: string) {
+  const [year, month] = String(referenceMonth).split("-").map(Number);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+    throw new OmieIntegrationError("Mês de referência inválido para calcular a data de emissão no Omie.");
+  }
+  return new Date(Date.UTC(year, month - 1, 0, 12));
+}
+
 export function buildOmieAttachmentIntegrationCode(employeeInvoiceId: string, documentHash?: string | null) {
   const digest = createHash("sha256")
     .update(`${employeeInvoiceId}:${String(documentHash ?? "")}`)
@@ -225,7 +234,8 @@ export async function upsertBillingAccountPayable(
   if (!supplierCode) throw new OmieIntegrationError(`Fornecedor do CNPJ ${maskCnpj(cnpj)} não possui código válido no Omie.`);
 
   const integrationCode = input.integrationCode || buildOmieIntegrationCode(input.referenceMonth, input.wbLogin || input.employeeInvoiceId);
-  const issueDate = formatOmieDate(input.approvedAt);
+  const issueDate = formatOmieDate(calculateOmieIssueDate(input.referenceMonth));
+  const entryDate = formatOmieDate(input.approvedAt);
   const dueDate = formatOmieDate(calculateOmieDueDate(input.referenceMonth, now));
   const documentAmount = roundCurrency(input.documentAmount);
   if (!Number.isFinite(documentAmount) || documentAmount <= 0) {
@@ -234,6 +244,18 @@ export async function upsertBillingAccountPayable(
   const categoryPayload = buildCategoryPayload(input.categories, documentAmount);
   if (!Number.isSafeInteger(input.projectCode) || input.projectCode <= 0) {
     throw new OmieIntegrationError("O projeto PJ não possui um código válido no Omie.");
+  }
+  const departmentCode = String(input.departmentCode ?? "").trim();
+  if (!departmentCode) {
+    throw new OmieIntegrationError("O departamento WFM não possui um código válido no Omie.");
+  }
+  const invoiceNumber = String(input.invoiceNumber ?? "").trim();
+  if (!/^\d{1,20}$/.test(invoiceNumber)) {
+    throw new OmieIntegrationError("O número da NFS-e precisa conter somente números, com até 20 dígitos.");
+  }
+  const accessKey = normalizeAccessKey(input.accessKey);
+  if (accessKey.length < 44 || accessKey.length > 60) {
+    throw new OmieIntegrationError("A chave de acesso da NFS-e precisa conter entre 44 e 60 dígitos.");
   }
   const documentTypeCode = String(input.documentTypeCode ?? "").trim().toUpperCase();
   const pixTransfer = buildOmiePixTransferData(input);
@@ -245,16 +267,21 @@ export async function upsertBillingAccountPayable(
     valor_documento: documentAmount,
     ...categoryPayload,
     data_previsao: dueDate,
-    numero_documento_fiscal: input.invoiceNumber,
+    numero_documento_fiscal: invoiceNumber,
     numero_documento: buildOmieDocumentNumber(input.referenceMonth, input.wbLogin),
     codigo_projeto: input.projectCode,
+    distribuicao: [{
+      cCodDep: departmentCode,
+      nValDep: documentAmount,
+      nPerDep: 100
+    }],
     data_emissao: issueDate,
-    data_entrada: issueDate,
+    data_entrada: entryDate,
     numero_parcela: "001/001",
     ...(documentTypeCode ? { codigo_tipo_documento: documentTypeCode } : {}),
     cnab_integracao_bancaria: pixTransfer,
     observacao: buildObservation(input),
-    ...(normalizeAccessKey(input.accessKey).length === 44 ? { chave_nfe: normalizeAccessKey(input.accessKey) } : {}),
+    ...(accessKey.length === 44 ? { chave_nfe: accessKey } : {}),
     id_conta_corrente: config.checkingAccountId
   };
 
@@ -408,6 +435,8 @@ async function callOmie<T>(endpoint: string, call: string, param: unknown[], con
 
 function buildObservation(input: OmieAccountPayableInput) {
   return [
+    `NFS-e: ${input.invoiceNumber}`,
+    `Chave NFS-e: ${normalizeAccessKey(input.accessKey)}`,
     `Billing ${input.referenceMonth}`,
     `WB: ${input.wbLogin}`,
     `Cargo: ${input.roleTitle}`,
@@ -420,8 +449,6 @@ function buildObservation(input: OmieAccountPayableInput) {
     `Desconto: ${formatCurrency(input.discountAmount)}`,
     `Outros ajustes: ${formatCurrency(input.otherAdjustmentAmount)}`,
     `Final: ${formatCurrency(input.documentAmount)}`,
-    `NF: ${input.invoiceNumber}`,
-    input.accessKey ? `Chave NFS-e: ${normalizeAccessKey(input.accessKey)}` : "",
     input.serviceDescription.trim() ? `Serviço: ${input.serviceDescription.trim()}` : ""
   ].filter(Boolean).join(" | ").slice(0, 500);
 }
