@@ -51,5 +51,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!api/auth|api/employee-registrations/public|api/realtime/import|api/realtime/cec/import|api/realtime/ai-snapshot|api/realtime-hours/import|api/realtime-hours/agent-snapshot|api/realtime-hours/status|api/realtime-hours/imports|api/performance/import/automated|api/cron/realtime-cec|api/cron/ads-executive-report|api/cron/ads-online-productivity-report|api/cron/video-executive-report|cadastro-colaborador|login|_next/static|_next/image|favicon.ico).*)"]
+  matcher: ["/((?!api/auth|api/employee-registrations/public|api/realtime/import|api/realtime/cec/import|api/realtime/ai-snapshot|api/realtime-hours/import|api/realtime-hours/agent-snapshot|api/realtime-hours/status|api/realtime-hours/imports|api/performance/import/automated|api/cron/realtime-cec|api/cron/shift-changes-effective|api/cron/ads-executive-report|api/cron/ads-online-productivity-report|api/cron/video-executive-report|cadastro-colaborador|login|_next/static|_next/image|favicon.ico).*)"]
 };
