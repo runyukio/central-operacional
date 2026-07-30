@@ -29,7 +29,7 @@ export async function GET(request: Request) {
     const dateKey = url.searchParams.get("date")?.trim() || undefined;
     const report = await getCecResolvedHourlyReport(dateKey);
     const image = renderCecResolvedKimReport(report);
-    const sent = await sendCecResolvedReportToKim(image);
+    const sent = await sendCecResolvedReportToKim(image, report);
     return NextResponse.json({
       success: true,
       sent,

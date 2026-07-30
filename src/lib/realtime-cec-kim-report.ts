@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
 import { createCanvas, GlobalFonts, type SKRSContext2D } from "@napi-rs/canvas";
@@ -37,6 +38,7 @@ export type CecHourlySnapshotInput = {
 export type CecResolvedAgentRow = {
   key: string;
   name: string;
+  skill: string;
   total: number;
   hourly: number[];
 };
@@ -105,9 +107,9 @@ function normalizedAgentKey(value: string) {
   return value.trim().toLocaleLowerCase("en-US");
 }
 
-function displayAgentName(value: unknown) {
+function displayAgentLogin(value: unknown) {
   const name = String(value ?? "").replace(/\s+/g, " ").trim();
-  return name || "Unassigned";
+  return name.match(/\bwb_[^\s]+/i)?.[0].toLowerCase() ?? "";
 }
 
 function rawHourlyData(value: Prisma.JsonValue): RawCecHourlyData {
@@ -143,14 +145,15 @@ function buildDateMetrics(snapshots: CecHourlySnapshotInput[], dateKey: string, 
         if (seenTickets.has(dedupeKey)) return;
         seenTickets.add(dedupeKey);
 
-        const agentName = displayAgentName(ticket.agentName);
-        if (!agentName.toLowerCase().includes("wb_")) return;
+        const agentName = displayAgentLogin(ticket.agentName);
+        if (!agentName) return;
 
         hourlyResolved[hour] += 1;
         const key = normalizedAgentKey(agentName);
         const row = agentRows.get(key) ?? {
           key,
           name: agentName,
+          skill: "No skill",
           total: 0,
           hourly: Array.from({ length: 24 }, () => 0)
         };
@@ -253,7 +256,30 @@ export async function getCecResolvedHourlyReport(dateKey = currentDateKey()) {
       rawData: true
     }
   });
-  return buildCecResolvedHourlyReport(snapshots, dateKey);
+  const report = buildCecResolvedHourlyReport(snapshots, dateKey);
+  if (!report.agents.length) return report;
+
+  const profiles = await prisma.employeeProfile.findMany({
+    where: {
+      OR: report.agents.map((agent) => ({
+        wbLogin: { equals: agent.name, mode: "insensitive" as const }
+      }))
+    },
+    select: {
+      wbLogin: true,
+      skill: true
+    }
+  });
+  const skillsByLogin = new Map(
+    profiles.map((profile) => [
+      profile.wbLogin.trim().toLowerCase(),
+      profile.skill?.trim() || "No skill"
+    ])
+  );
+  report.agents.forEach((agent) => {
+    agent.skill = skillsByLogin.get(agent.key) ?? "No skill";
+  });
+  return report;
 }
 
 function hourLabel(hour: number) {
@@ -314,6 +340,33 @@ function truncateText(context: SKRSContext2D, value: string, maxWidth: number) {
     text = text.slice(0, -1);
   }
   return `${text}…`;
+}
+
+function skillBadgePalette(skill: string) {
+  const normalized = skill.trim().toUpperCase();
+  if (normalized.includes("POC")) return { background: "#fff1dc", foreground: "#a85000" };
+  if (normalized.includes("L2")) return { background: "#f0eaff", foreground: "#6842b8" };
+  if (normalized.includes("CREDIT")) return { background: "#dff7f2", foreground: "#0b725f" };
+  if (normalized.includes("L1")) return { background: "#e7f0ff", foreground: "#1765c1" };
+  return { background: "#edf1f5", foreground: "#52637a" };
+}
+
+function drawSkillBadge(
+  context: SKRSContext2D,
+  x: number,
+  y: number,
+  maxWidth: number,
+  skill: string
+) {
+  if (maxWidth < 38) return;
+  const palette = skillBadgePalette(skill);
+  const label = truncateText(context, skill || "No skill", Math.max(20, maxWidth - 16));
+  const width = Math.min(maxWidth, Math.max(38, context.measureText(label).width + 16));
+  fillRoundedRect(context, x, y, width, 24, 12, palette.background);
+  context.fillStyle = palette.foreground;
+  context.textAlign = "center";
+  context.fillText(label, x + width / 2, y + 17);
+  context.textAlign = "left";
 }
 
 function percentChange(current: number, previous: number | null) {
@@ -606,7 +659,13 @@ export function renderCecResolvedKimReport(
     context.stroke();
     context.fillStyle = "#0b234a";
     setFont(context, 16, 600);
-    context.fillText(truncateText(context, agent.name, nameWidth - 28), heatmapX + 26, rowY + 30);
+    const agentX = heatmapX + 26;
+    const agentLabel = truncateText(context, agent.name, nameWidth - 116);
+    context.fillText(agentLabel, agentX, rowY + 30);
+    const agentLabelWidth = context.measureText(agentLabel).width;
+    setFont(context, 11, 800);
+    const badgeX = agentX + agentLabelWidth + 10;
+    drawSkillBadge(context, badgeX, rowY + 11, gridX - badgeX - 8, agent.skill);
     heatHours.forEach((hour, columnIndex) => {
       const value = agent.hourly[hour];
       const cellX = gridX + columnIndex * cellWidth + 1;
@@ -684,50 +743,92 @@ function validateKimWebhook(value: string) {
   return url;
 }
 
+function formatKimGeneratedAt(value: Date) {
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: SAO_PAULO_TIME_ZONE,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(value);
+}
+
+export function buildCecKwaiTalkMarkdownPayload(
+  report: Pick<CecResolvedHourlyReport, "dateKey" | "updatedThroughHour">,
+  imageUrl: string,
+  generatedAt = new Date()
+) {
+  const cycle = `${report.dateKey} ${String(report.updatedThroughHour).padStart(2, "0")}:00`;
+  return {
+    msgtype: "markdown",
+    markdown: {
+      content: [
+        "### CEC Resolved Report",
+        `**Cycle:** ${cycle}`,
+        `**Generated:** ${formatKimGeneratedAt(generatedAt)}`,
+        `![CEC Resolved Report](${imageUrl})`
+      ].join("\n\n")
+    }
+  };
+}
+
+type CecKimImagePublisher = (
+  image: Buffer,
+  report: Pick<CecResolvedHourlyReport, "dateKey" | "updatedThroughHour">
+) => Promise<string>;
+
+async function publishCecKimImage(
+  image: Buffer,
+  report: Pick<CecResolvedHourlyReport, "dateKey" | "updatedThroughHour">
+) {
+  const { uploadPublicObject } = await import("@/lib/supabase-storage");
+  const cycle = `${report.dateKey}-${String(report.updatedThroughHour).padStart(2, "0")}-00`;
+  const fileName = `cec_resolved_${cycle}_${randomUUID()}.png`;
+  const file = new File([Uint8Array.from(image)], fileName, { type: "image/png" });
+  const uploaded = await uploadPublicObject("mural-media", `automation/cec-resolved/${fileName}`, file);
+  return uploaded.publicUrl;
+}
+
+async function validatePublishedKimImage(imageUrl: string, fetcher: typeof fetch) {
+  const url = new URL(imageUrl);
+  if (url.protocol !== "https:") {
+    throw new Error("The CEC report image must have a public HTTPS URL.");
+  }
+  const response = await fetcher(url, {
+    method: "GET",
+    headers: { Accept: "image/png" },
+    signal: AbortSignal.timeout(30_000)
+  });
+  if (!response.ok) {
+    throw new Error(`The public CEC report image responded HTTP ${response.status}.`);
+  }
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.length < 10_000 || bytes.subarray(1, 4).toString() !== "PNG") {
+    throw new Error("The public CEC report image is empty or invalid.");
+  }
+}
+
 export async function sendCecResolvedReportToKim(
   image: Buffer,
+  report: Pick<CecResolvedHourlyReport, "dateKey" | "updatedThroughHour">,
   webhookUrl = process.env.CEC_KIM_WEBHOOK_URL?.trim() ?? "",
-  fetcher: typeof fetch = fetch
+  fetcher: typeof fetch = fetch,
+  imagePublisher: CecKimImagePublisher = publishCecKimImage
 ): Promise<KimSendResult> {
   if (!webhookUrl) throw new Error("CEC_KIM_WEBHOOK_URL is not configured.");
   if (!image.length) throw new Error("The report image is empty.");
   if (image.length > MAX_KIM_IMAGE_BYTES) throw new Error("The report image exceeds Kim's 2 MB limit.");
 
   const sendUrl = validateKimWebhook(webhookUrl);
-  const uploadUrl = new URL("/api/robot/upload", sendUrl);
-  uploadUrl.searchParams.set("key", sendUrl.searchParams.get("key") ?? "");
-  uploadUrl.searchParams.set("type", "image");
-  const formData = new FormData();
-  const imageBytes = Uint8Array.from(image);
-  formData.append("media", new Blob([imageBytes], { type: "image/png" }), "cec-resolved-report.png");
-
-  const uploadResponse = await fetcher(uploadUrl, {
-    method: "POST",
-    body: formData,
-    signal: AbortSignal.timeout(30_000)
-  });
-  const uploadText = await uploadResponse.text();
-  let uploadPayload: Record<string, unknown> = {};
-  try {
-    uploadPayload = uploadText ? JSON.parse(uploadText) as Record<string, unknown> : {};
-  } catch {
-    uploadPayload = {};
-  }
-  const mediaId = typeof uploadPayload.media_id === "string" ? uploadPayload.media_id.trim() : "";
-  if (!uploadResponse.ok || !mediaId) {
-    const uploadMessage = String(uploadPayload.errmsg ?? uploadPayload.message ?? `HTTP ${uploadResponse.status}`);
-    throw new Error(`Kim could not upload the report image: ${uploadMessage}`);
-  }
+  const imageUrl = await imagePublisher(image, report);
+  await validatePublishedKimImage(imageUrl, fetcher);
 
   const response = await fetcher(sendUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      msgtype: "image",
-      image: {
-        media_id: mediaId
-      }
-    }),
+    body: JSON.stringify(buildCecKwaiTalkMarkdownPayload(report, imageUrl)),
     signal: AbortSignal.timeout(30_000)
   });
 

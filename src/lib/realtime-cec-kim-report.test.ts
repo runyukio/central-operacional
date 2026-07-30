@@ -4,6 +4,7 @@ import test from "node:test";
 import { loadImage } from "@napi-rs/canvas";
 
 import {
+  buildCecKwaiTalkMarkdownPayload,
   buildCecResolvedHourlyReport,
   renderCecResolvedKimReport,
   sendCecResolvedReportToKim,
@@ -30,7 +31,7 @@ test("builds Resolved-only hourly metrics and deduplicates ticket IDs", () => {
       { ticket: "previous", agentName: "wb_previous", status: "Resolved" }
     ]),
     snapshot("2026-07-29 09:00", [
-      { ticket: "1", agentName: "wb_alex", status: "Resolved" },
+      { ticket: "1", agentName: "wb_alex Alex Silva", status: "Resolved" },
       { ticket: "2", agentName: "wb_alex", status: "Open" },
       { ticket: "3", agentName: "outside_team", status: "Resolved" }
     ]),
@@ -47,9 +48,10 @@ test("builds Resolved-only hourly metrics and deduplicates ticket IDs", () => {
   assert.equal(report.activeAgents, 2);
   assert.equal(report.previousTotalResolved, 1);
   assert.deepEqual(report.topDay.map((agent) => agent.name), ["wb_alex", "wb_bia"]);
+  assert.equal(report.topDay[0].skill, "No skill");
 });
 
-test("renders the compact report without the removed ranking area", async () => {
+test("renders the compact PNG report without the removed ranking area", async () => {
   const report = buildCecResolvedHourlyReport([
     snapshot("2026-07-29 10:00", [
       { ticket: "1", agentName: "wb_alex", status: "Resolved" }
@@ -65,17 +67,32 @@ test("renders the compact report without the removed ranking area", async () => 
   assert.ok(image.length < 2 * 1024 * 1024);
 });
 
-test("uploads the PNG and sends the returned Kim media ID", async () => {
+test("builds the Kim heading with cycle, generated time, and image", () => {
+  const payload = buildCecKwaiTalkMarkdownPayload(
+    { dateKey: "2026-07-30", updatedThroughHour: 11 },
+    "https://storage.example/cec-report.png",
+    new Date("2026-07-30T15:05:00.000Z")
+  );
+
+  assert.equal(payload.msgtype, "markdown");
+  assert.match(payload.markdown.content, /CEC Resolved Report/);
+  assert.match(payload.markdown.content, /Cycle:\*\* 2026-07-30 11:00/);
+  assert.match(payload.markdown.content, /Generated:\*\* 30\/07\/2026, 12:05/);
+  assert.match(payload.markdown.content, /!\[CEC Resolved Report\]\(https:\/\/storage\.example\/cec-report\.png\)/);
+});
+
+test("publishes the PNG and sends the Kim markdown card", async () => {
   const image = Buffer.from("real-report-image");
   let payload: Record<string, unknown> | null = null;
   let requestCount = 0;
-  const fetcher: typeof fetch = async (input, init) => {
+  const fetcher: typeof fetch = async (_input, init) => {
     requestCount += 1;
-    if (String(input).includes("/api/robot/upload")) {
-      assert.ok(init?.body instanceof FormData);
-      return new Response(JSON.stringify({ type: "image", media_id: "ks://report.png/7" }), {
+    if (init?.method === "GET") {
+      const publishedPng = Buffer.alloc(10_001);
+      publishedPng.write("PNG", 1);
+      return new Response(publishedPng, {
         status: 200,
-        headers: { "Content-Type": "application/json" }
+        headers: { "Content-Type": "image/png" }
       });
     }
     payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -84,17 +101,31 @@ test("uploads the PNG and sends the returned Kim media ID", async () => {
       headers: { "Content-Type": "application/json" }
     });
   };
+  const report = buildCecResolvedHourlyReport([
+    snapshot("2026-07-30 11:00", [
+      { ticket: "1", agentName: "wb_alex Alex Silva", status: "Resolved" }
+    ])
+  ], "2026-07-30");
+  const publisher = async (publishedImage: Buffer) => {
+    assert.equal(publishedImage, image);
+    return "https://storage.example/cec-report.png";
+  };
 
   const result = await sendCecResolvedReportToKim(
     image,
+    report,
     "https://kim-robot.kwaitalk.com/api/robot/send?key=test-key",
-    fetcher
+    fetcher,
+    publisher
   );
 
   assert.equal(result.success, true);
   assert.equal(requestCount, 2);
   const sentPayload = payload as Record<string, unknown> | null;
   assert.ok(sentPayload);
-  assert.equal(sentPayload.msgtype, "image");
-  assert.equal((sentPayload.image as { media_id: string }).media_id, "ks://report.png/7");
+  assert.equal(sentPayload.msgtype, "markdown");
+  assert.match(
+    (sentPayload.markdown as { content: string }).content,
+    /!\[CEC Resolved Report\]\(https:\/\/storage\.example\/cec-report\.png\)/
+  );
 });
