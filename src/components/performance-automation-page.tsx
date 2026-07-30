@@ -390,6 +390,23 @@ export function PerformanceAutomationPage({ initialTab = "queue" }: { initialTab
     window.location.href = `/api/performance/queue/export?${params.toString()}`;
   }, [queueEndDate, queueGranularity, queueLob, queueStartDate]);
 
+  const exportAgents = useCallback(() => {
+    if (!agentLob) return;
+    const params = new URLSearchParams({
+      view: agentView,
+      lob: agentLob,
+      sortBy: agentSort.key,
+      sortDirection: agentSort.direction
+    });
+    if (agentSlaTarget) params.set("slaTargetMinutes", agentSlaTarget);
+    if (agentStartDate) params.set("startDate", agentStartDate);
+    if (agentEndDate) params.set("endDate", agentEndDate);
+    if (agentShiftId) params.set("shiftId", agentShiftId);
+    if (agentSupervisorId) params.set("supervisorId", agentSupervisorId);
+    if (agentSearch.trim()) params.set("search", agentSearch.trim());
+    window.location.href = `/api/performance/agents/export?${params.toString()}`;
+  }, [agentEndDate, agentLob, agentSearch, agentShiftId, agentSlaTarget, agentSort, agentStartDate, agentSupervisorId, agentView]);
+
   const loadForecast = useCallback(async () => {
     setLoadingForecast(true);
     const params = new URLSearchParams({ granularity: "hourly" });
@@ -597,6 +614,7 @@ export function PerformanceAutomationPage({ initialTab = "queue" }: { initialTab
             setAgentEndDate("");
             setAgentPage(1);
           }}
+          onExport={exportAgents}
           onRefresh={() => void loadAgents()}
         />
       ) : activeTab === "supervisors" ? (
@@ -955,6 +973,7 @@ function AgentsView({
   onSortChange,
   onPageChange,
   onViewChange,
+  onExport,
   onRefresh
 }: {
   loading: boolean;
@@ -979,6 +998,7 @@ function AgentsView({
   onSortChange: (value: { key: AgentSortKey; direction: AgentSortDirection }) => void;
   onPageChange: (value: number) => void;
   onViewChange: (value: QualityGranularity) => void;
+  onExport: () => void;
   onRefresh: () => void;
 }) {
   const lobs = normalizeLobs(payload?.filters.lobs ?? []);
@@ -1001,9 +1021,14 @@ function AgentsView({
               : "Output, AHT e qualidade consolidados a partir das bases vigentes."}
           </p>
         </div>
-        <button type="button" onClick={onRefresh} className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-white px-3 text-xs font-black text-navy-950 hover:bg-slate-50">
-          <RefreshCw className="h-4 w-4" /> Atualizar
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" onClick={onExport} disabled={!selectedLob || loading} className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-white px-3 text-xs font-black text-navy-950 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45">
+            <Download className="h-4 w-4" /> Exportar XLSX
+          </button>
+          <button type="button" onClick={onRefresh} className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-white px-3 text-xs font-black text-navy-950 hover:bg-slate-50">
+            <RefreshCw className="h-4 w-4" /> Atualizar
+          </button>
+        </div>
       </div>
 
       <div className="space-y-4 p-4">
