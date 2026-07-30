@@ -185,7 +185,7 @@ export function BillingPage() {
   const [employeeId] = useState(billingQueryParam("employeeId"));
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
-  const [employeeStatus, setEmployeeStatus] = useState("Ambos");
+  const [employeeStatus, setEmployeeStatus] = useState("Todos");
   const [invoiceStatus, setInvoiceStatus] = useState("Todos");
   const [roleTitle, setRoleTitle] = useState("Todos");
   const [skill, setSkill] = useState("Todos");
@@ -245,7 +245,7 @@ export function BillingPage() {
     params.set("section", activeTab);
     if (employeeId) params.set("employeeId", employeeId);
     if (search.trim()) params.set("search", search.trim());
-    if (employeeStatus !== "Ambos") params.set("employeeStatus", employeeStatus);
+    if (employeeStatus !== "Todos") params.set("employeeStatus", employeeStatus);
     if (invoiceStatus !== "Todos") params.set("invoiceStatus", invoiceStatus);
     if (roleTitle !== "Todos") params.set("roleTitle", roleTitle);
     if (skill !== "Todos") params.set("skill", skill);
@@ -455,7 +455,7 @@ export function BillingPage() {
     const params = new URLSearchParams({ referenceMonth });
     if (employeeId) params.set("employeeId", employeeId);
     if (search.trim()) params.set("search", search.trim());
-    if (employeeStatus !== "Ambos") params.set("employeeStatus", employeeStatus);
+    if (employeeStatus !== "Todos") params.set("employeeStatus", employeeStatus);
     if (invoiceStatus !== "Todos") params.set("invoiceStatus", invoiceStatus);
     if (roleTitle !== "Todos") params.set("roleTitle", roleTitle);
     if (skill !== "Todos") params.set("skill", skill);
@@ -507,8 +507,9 @@ export function BillingPage() {
           </Label>
           <Label text="Status do colaborador">
             <select value={employeeStatus} onChange={(event) => setEmployeeStatus(event.target.value)} className="premium-control h-10 w-full px-3 text-sm font-bold">
-              <option>Ambos</option>
+              <option>Todos</option>
               <option>Ativo</option>
+              <option>Afastado</option>
               <option>Desligado</option>
             </select>
           </Label>

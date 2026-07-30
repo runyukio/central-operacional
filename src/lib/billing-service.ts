@@ -2451,8 +2451,10 @@ async function listBillingEmployees(filters: BillingDashboardFilters, referenceM
   if (filters.shiftId && filters.shiftId !== "Todos") and.push({ shiftId: filters.shiftId });
   if (filters.employeeId) and.push({ id: filters.employeeId });
   if (filters.roleTitle && filters.roleTitle !== "Todos") and.push({ roleTitle: { equals: filters.roleTitle, mode: "insensitive" } });
-  if (filters.employeeStatus === "Ativo") and.push({ operationalStatus: { equals: "Ativo", mode: "insensitive" } });
-  if (filters.employeeStatus === "Desligado") and.push({ operationalStatus: { equals: "Desligado", mode: "insensitive" } });
+  const employeeStatus = filters.employeeStatus?.trim();
+  if (employeeStatus && !["Todos", "Ambos"].includes(employeeStatus)) {
+    and.push({ operationalStatus: { equals: employeeStatus, mode: "insensitive" } });
+  }
   const search = filters.search?.trim();
   if (search) {
     and.push({
