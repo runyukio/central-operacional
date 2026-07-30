@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  BILLING_OMIE_DEPARTMENT_CODE,
   BILLING_OMIE_PROJECT_CODE,
   buildBillingOmieAllocation,
   resolveBillingOmieMainCategory
@@ -9,7 +10,7 @@ import {
 import { OmieIntegrationError } from "./omie-service";
 
 test("resolve as categorias principais por cargo/função", () => {
-  assert.equal(resolveBillingOmieMainCategory("Agente"), "2.10.99");
+  assert.equal(resolveBillingOmieMainCategory("Agente"), "2.10.89");
   assert.equal(resolveBillingOmieMainCategory("Coordenador"), "2.10.89");
   assert.equal(resolveBillingOmieMainCategory("Qualidade"), "2.10.98");
   assert.equal(resolveBillingOmieMainCategory("WFM"), "2.10.96");
@@ -17,7 +18,7 @@ test("resolve as categorias principais por cargo/função", () => {
   assert.equal(resolveBillingOmieMainCategory("RH"), "2.10.94");
   assert.equal(resolveBillingOmieMainCategory("RTA"), "2.10.88");
   assert.equal(resolveBillingOmieMainCategory("Financeiro"), "2.10.93");
-  assert.equal(resolveBillingOmieMainCategory("Logística/TI"), "2.10.93");
+  assert.equal(resolveBillingOmieMainCategory("Logística/TI"), "2.10.90");
   assert.equal(resolveBillingOmieMainCategory("WFM", "RTA"), "2.10.88");
 });
 
@@ -31,13 +32,14 @@ test("mantém correção, desconto e outros no saldo da categoria principal", ()
   }), {
     documentAmount: 980.38,
     projectCode: BILLING_OMIE_PROJECT_CODE,
-    documentTypeCode: null,
-    mainCategoryCode: "2.10.99",
-    categories: [{ code: "2.10.99", value: 980.38 }]
+    departmentCode: BILLING_OMIE_DEPARTMENT_CODE,
+    documentTypeCode: "NF",
+    mainCategoryCode: "2.10.89",
+    categories: [{ code: "2.10.89", value: 980.38 }]
   });
 });
 
-test("rateia bônus e campanha e usa ADI como tipo documental quando há adiantamento", () => {
+test("rateia bônus e campanha e mantém NF no invoice mesmo quando há adiantamento", () => {
   assert.deepEqual(buildBillingOmieAllocation({
     roleTitle: "WFM",
     finalAmount: 5_527.44,
@@ -47,7 +49,8 @@ test("rateia bônus e campanha e usa ADI como tipo documental quando há adianta
   }), {
     documentAmount: 5_527.44,
     projectCode: BILLING_OMIE_PROJECT_CODE,
-    documentTypeCode: "ADI",
+    departmentCode: BILLING_OMIE_DEPARTMENT_CODE,
+    documentTypeCode: "NF",
     mainCategoryCode: "2.10.96",
     categories: [
       { code: "2.10.96", value: 5_227.44 },

@@ -1,6 +1,6 @@
-export const BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH = 4;
+export const BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH = 20;
 
-const BILLING_FISCAL_INVOICE_NUMBER_PATTERN = /^\d{1,4}$/;
+const BILLING_FISCAL_INVOICE_NUMBER_PATTERN = /^\d{1,20}$/;
 
 export const BILLING_FISCAL_INVOICE_NUMBER_ERROR =
   `Número da nota fiscal inválido. Informe somente números, com até ${BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH} dígitos.`;
