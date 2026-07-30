@@ -14,6 +14,7 @@ import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import { prisma } from "@/lib/prisma";
 import { canApproveRequest, normalizeRole } from "@/lib/permissions";
 import { cleanShiftName, shiftCategoryName, shiftLookupKey } from "@/lib/shift-display";
+import { isShiftChangeEffective } from "@/lib/shift-change-effective-service";
 
 const uiToDbStatus = {
   Aberto: "ABERTO",
@@ -481,7 +482,14 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
       const shiftChangeResult =
         transition.applyShiftChange && isShiftChangeRequest(current)
           ? await applyShiftChangeRequestToSchedule(tx, current, user.id)
-          : { updated: false, message: "" };
+          : {
+              updated: false,
+              message: "",
+              applicationStatus: "NOT_APPLIED",
+              appliedAt: null,
+              scheduledFor: null,
+              profileUpdated: false
+            } satisfies ShiftChangeApplicationResult;
 
       const shouldUpdatePayload = transition.applySchedule && isDayOffRequest(current);
       const shouldUpdateAdvancePayload = transition.applyMonthlyAdvance && isMonthlyAdvanceRequest(current);
@@ -513,10 +521,13 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
               : shouldUpdateShiftPayload
                 ? { payload: {
                     ...((current.payload ?? {}) as Prisma.InputJsonObject),
-                    shiftChangeAppliedAt: new Date().toISOString(),
-                    shiftChangeAppliedById: user.id,
-                    shiftChangeApplicationStatus: shiftChangeResult.updated ? "APPLIED" : "NOT_APPLIED",
-                    shiftChangeApplicationMessage: shiftChangeResult.message || null
+                    shiftChangeApprovedAt: new Date().toISOString(),
+                    shiftChangeApprovedById: user.id,
+                    shiftChangeAppliedAt: shiftChangeResult.appliedAt,
+                    shiftChangeAppliedById: shiftChangeResult.profileUpdated ? user.id : null,
+                    shiftChangeApplicationStatus: shiftChangeResult.applicationStatus,
+                    shiftChangeApplicationMessage: shiftChangeResult.message || null,
+                    shiftChangeScheduledFor: shiftChangeResult.scheduledFor
                   } }
             : {}),
           history: {
@@ -532,7 +543,12 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
                   : shouldUpdateAdvancePayload
                     ? { monthlyAdvanceUpdated: advanceResult.updated, monthlyAdvanceMessage: advanceResult.message }
                     : shouldUpdateShiftPayload
-                      ? { shiftChangeUpdated: shiftChangeResult.updated, shiftChangeMessage: shiftChangeResult.message }
+                      ? {
+                          shiftChangeUpdated: shiftChangeResult.profileUpdated,
+                          shiftChangeScheduled: shiftChangeResult.applicationStatus === "SCHEDULED",
+                          shiftChangeStatus: shiftChangeResult.applicationStatus,
+                          shiftChangeMessage: shiftChangeResult.message
+                        }
                     : undefined
             }
           },
@@ -579,11 +595,16 @@ export async function updateOperationalRequestStatus(actor: Actor, id: string, s
           data: {
             requestId: saved.id,
             actorId: user.id,
-            action: "Turno atualizado",
+            action: shiftChangeResult.applicationStatus === "SCHEDULED" ? "Turno agendado" : "Turno atualizado",
             from: transition.nextStatus,
             to: transition.nextStatus,
             reason: shiftChangeResult.message,
-            metadata: { shiftChangeUpdated: true }
+            metadata: {
+              shiftChangeUpdated: shiftChangeResult.profileUpdated,
+              shiftChangeScheduled: shiftChangeResult.applicationStatus === "SCHEDULED",
+              shiftChangeStatus: shiftChangeResult.applicationStatus,
+              shiftChangeScheduledFor: shiftChangeResult.scheduledFor
+            }
           }
         });
       }
@@ -766,6 +787,14 @@ type RequestTransition =
       supervisorTitle?: string;
       supervisorBody?: string;
     };
+type ShiftChangeApplicationResult = {
+  updated: boolean;
+  message: string;
+  applicationStatus: "APPLIED" | "SCHEDULED" | "NOT_APPLIED";
+  appliedAt: string | null;
+  scheduledFor: string | null;
+  profileUpdated: boolean;
+};
 
 async function findActiveUser(email: string) {
   return prisma.user.findUnique({
@@ -2469,7 +2498,11 @@ async function auditScheduleApplication(
   });
 }
 
-async function applyShiftChangeRequestToSchedule(tx: Prisma.TransactionClient, request: PrismaRequest, actorId: string) {
+async function applyShiftChangeRequestToSchedule(
+  tx: Prisma.TransactionClient,
+  request: PrismaRequest,
+  actorId: string
+): Promise<ShiftChangeApplicationResult> {
   const payload = (request.payload ?? {}) as Record<string, unknown>;
   if (payload.shiftChangeAppliedAt) throw new DomainError("Esta solicitação já teve a troca de turno aplicada.");
   if (!request.employeeId) throw new DomainError("Solicitação sem colaborador vinculado para aplicar troca de turno.");
@@ -2495,29 +2528,33 @@ async function applyShiftChangeRequestToSchedule(tx: Prisma.TransactionClient, r
   if (!shift) throw new DomainError("Turno solicitado não encontrado.");
 
   if (changeType === "Fixa") {
+    const effectiveNow = isShiftChangeEffective(startDate);
     const employee = await tx.employeeProfile.findUnique({
       where: { id: request.employeeId },
       include: { shift: true }
     });
     if (!employee) throw new DomainError("Colaborador não encontrado para aplicar troca de turno.");
-    const employeeBefore = serialize({ id: employee.id, shiftId: employee.shiftId, shift: employee.shift?.name ?? null });
-    const updatedEmployee = await tx.employeeProfile.update({
-      where: { id: request.employeeId },
-      data: { shiftId: shift.id },
-      include: { shift: true }
-    });
-    const employeeAfter = serialize({ id: updatedEmployee.id, shiftId: updatedEmployee.shiftId, shift: updatedEmployee.shift?.name ?? null });
-    await tx.auditLog.create({
-      data: {
-        actorId,
-        action: "EDICAO",
-        entity: "EmployeeProfile",
-        entityId: request.employeeId,
-        reason: `Troca de turno fixa aprovada pela solicitação ${request.code}`,
-        previousValue: employeeBefore,
-        newValue: employeeAfter
-      }
-    });
+
+    if (effectiveNow) {
+      const employeeBefore = serialize({ id: employee.id, shiftId: employee.shiftId, shift: employee.shift?.name ?? null });
+      const updatedEmployee = await tx.employeeProfile.update({
+        where: { id: request.employeeId },
+        data: { shiftId: shift.id },
+        include: { shift: true }
+      });
+      const employeeAfter = serialize({ id: updatedEmployee.id, shiftId: updatedEmployee.shiftId, shift: updatedEmployee.shift?.name ?? null });
+      await tx.auditLog.create({
+        data: {
+          actorId,
+          action: "EDICAO",
+          entity: "EmployeeProfile",
+          entityId: request.employeeId,
+          reason: `Troca de turno fixa vigente pela solicitação ${request.code}`,
+          previousValue: employeeBefore,
+          newValue: employeeAfter
+        }
+      });
+    }
 
     const schedules = await tx.schedule.findMany({
       where: {
@@ -2560,11 +2597,30 @@ async function applyShiftChangeRequestToSchedule(tx: Prisma.TransactionClient, r
         action: "ALTERACAO_ESCALA",
         entity: "Schedule",
         entityId: request.id,
-        reason: `Troca de turno fixa aplicada em ${schedules.length} cronograma(s).`,
-        newValue: { requestId: request.id, startDate: startDate.toISOString().slice(0, 10), desiredShift, schedulesUpdated: schedules.length }
+        reason: effectiveNow
+          ? `Troca de turno fixa aplicada em ${schedules.length} cronograma(s).`
+          : `Troca de turno fixa agendada para ${startDate.toISOString().slice(0, 10)} em ${schedules.length} cronograma(s).`,
+        newValue: {
+          requestId: request.id,
+          startDate: startDate.toISOString().slice(0, 10),
+          desiredShift,
+          schedulesUpdated: schedules.length,
+          profileUpdated: effectiveNow
+        }
       }
     });
-    return { updated: true, message: `Troca de turno fixa aprovada. Turno cadastral atualizado e ${schedules.length} cronograma(s) futuro(s) ajustado(s).` };
+    const scheduledFor = startDate.toISOString().slice(0, 10);
+    const appliedAt = effectiveNow ? new Date().toISOString() : null;
+    return {
+      updated: true,
+      message: effectiveNow
+        ? `Troca de turno fixa aprovada e vigente. Turno cadastral atualizado e ${schedules.length} cronograma(s) ajustado(s).`
+        : `Troca de turno fixa aprovada e agendada para ${formatDatePtBr(startDate)}. O turno atual será mantido até o início da vigência; ${schedules.length} cronograma(s) futuro(s) foram preparados.`,
+      applicationStatus: effectiveNow ? "APPLIED" : "SCHEDULED",
+      appliedAt,
+      scheduledFor,
+      profileUpdated: effectiveNow
+    };
   }
 
   const schedules = await tx.schedule.findMany({
@@ -2622,13 +2678,24 @@ async function applyShiftChangeRequestToSchedule(tx: Prisma.TransactionClient, r
     }
   });
 
-  return { updated: true, message: `Troca de turno temporária aprovada e aplicada em ${schedules.length} cronograma(s).` };
+  return {
+    updated: true,
+    message: `Troca de turno temporária aprovada e aplicada em ${schedules.length} cronograma(s).`,
+    applicationStatus: "APPLIED",
+    appliedAt: new Date().toISOString(),
+    scheduledFor: startDate.toISOString().slice(0, 10),
+    profileUpdated: false
+  };
 }
 
 function parseDateOnly(value: unknown) {
   if (!value) return null;
   const date = new Date(`${String(value).slice(0, 10)}T00:00:00.000Z`);
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatDatePtBr(date: Date) {
+  return new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" }).format(date);
 }
 
 function areaForRequest(type: string) {
@@ -2770,6 +2837,11 @@ async function notifyRequestStatusChangeSafely(request: PrismaRequest, actorId: 
     const previousStatus = latestHistory?.from ? normalizeDbRequestStatus(latestHistory.from) : "ABERTO";
     const currentStatus = normalizeDbRequestStatus(request.status);
     const currentUiStatus = dbToUiStatus[currentStatus] ?? "Aberto";
+    const payload = (request.payload ?? {}) as Record<string, unknown>;
+    const scheduledShiftChange =
+      isShiftChangeRequest(request) &&
+      String(payload.shiftChangeApplicationStatus ?? "").toUpperCase() === "SCHEDULED";
+    const scheduledFor = parseDateOnly(payload.shiftChangeScheduledFor ?? payload.shiftChangeStartDate ?? payload.shiftChangeDate);
     const requesterNotification =
       previousStatus === "ABERTO" && currentStatus === "EM_ANALISE"
         ? {
@@ -2777,6 +2849,14 @@ async function notifyRequestStatusChangeSafely(request: PrismaRequest, actorId: 
             body: "Seu supervisor aprovou a primeira etapa. A solicitação está em análise pelo WFM.",
             type: "REQUEST" as NotificationKind
           }
+        : scheduledShiftChange && currentStatus === "APROVADO"
+          ? {
+              title: "Troca de turno agendada",
+              body: scheduledFor
+                ? `Sua troca de turno foi aprovada e entrará em vigência em ${formatDatePtBr(scheduledFor)}. Seu horário atual será mantido até essa data.`
+                : "Sua troca de turno foi aprovada e será aplicada no início da vigência.",
+              type: "SUCCESS" as NotificationKind
+            }
         : {
             title: notificationTitleForStatus(currentUiStatus, request.type.name),
             body: notificationBodyForStatus(currentUiStatus, request.type.name, reason),
@@ -2805,7 +2885,9 @@ async function notifyRequestStatusChangeSafely(request: PrismaRequest, actorId: 
         prisma,
         request,
         currentStatus === "APROVADO" ? "Solicitação aprovada pelo WFM" : "Solicitação recusada pelo WFM",
-        `${request.code} foi ${currentStatus === "APROVADO" ? "aprovada" : "recusada"} pelo WFM.`
+        scheduledShiftChange && currentStatus === "APROVADO" && scheduledFor
+          ? `${request.code} foi aprovada pelo WFM e entrará em vigência em ${formatDatePtBr(scheduledFor)}.`
+          : `${request.code} foi ${currentStatus === "APROVADO" ? "aprovada" : "recusada"} pelo WFM.`
       );
     }
   } catch (error) {

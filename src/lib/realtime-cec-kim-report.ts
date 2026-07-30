@@ -11,11 +11,24 @@ const CEC_HOURLY_SOURCE = "freshdesk-cec-cpd-hourly";
 const KIM_WEBHOOK_HOST = "kim-robot.kwaitalk.com";
 const MAX_KIM_IMAGE_BYTES = 2 * 1024 * 1024;
 
-for (const weight of [400, 600, 700, 800]) {
+const cecFontRegistrations = [
   GlobalFonts.registerFromPath(
-    join(process.cwd(), "node_modules", "@fontsource", "inter", "files", `inter-latin-${weight}-normal.woff`)
-  );
-}
+    join(process.cwd(), "node_modules", "@fontsource", "inter", "files", "inter-latin-400-normal.woff"),
+    "CEC Inter Regular"
+  ),
+  GlobalFonts.registerFromPath(
+    join(process.cwd(), "node_modules", "@fontsource", "inter", "files", "inter-latin-600-normal.woff"),
+    "CEC Inter SemiBold"
+  ),
+  GlobalFonts.registerFromPath(
+    join(process.cwd(), "node_modules", "@fontsource", "inter", "files", "inter-latin-700-normal.woff"),
+    "CEC Inter Bold"
+  ),
+  GlobalFonts.registerFromPath(
+    join(process.cwd(), "node_modules", "@fontsource", "inter", "files", "inter-latin-800-normal.woff"),
+    "CEC Inter ExtraBold"
+  )
+];
 
 type RawTicket = {
   ticket?: unknown;
@@ -322,15 +335,40 @@ function fillRoundedRect(
 }
 
 function setFont(context: SKRSContext2D, size: number, weight = 400) {
-  if (weight >= 800) {
-    context.font = `400 ${size}px "Inter ExtraBold"`;
-    return;
+  const family =
+    weight >= 800
+      ? "CEC Inter ExtraBold"
+      : weight >= 700
+        ? "CEC Inter Bold"
+        : weight >= 550
+          ? "CEC Inter SemiBold"
+          : "CEC Inter Regular";
+  context.font = `400 ${size}px "${family}"`;
+}
+
+function assertReportFontsAvailable(context: SKRSContext2D) {
+  if (cecFontRegistrations.some((registered) => !registered)) {
+    throw new Error("The CEC report fonts could not be loaded.");
   }
-  if (weight >= 550 && weight < 700) {
-    context.font = `400 ${size}px "Inter SemiBold"`;
-    return;
+  setFont(context, 36, 800);
+  if (context.measureText("CEC RADAR").width < 100) {
+    throw new Error("The CEC report font is unavailable in the rendering environment.");
   }
-  context.font = `${weight >= 700 ? 700 : 400} ${size}px Inter`;
+}
+
+function assertReportTextRasterized(context: SKRSContext2D) {
+  const pixels = context.getImageData(20, 15, 1160, 100).data;
+  let darkPixels = 0;
+  for (let index = 0; index < pixels.length; index += 4) {
+    const alpha = pixels[index + 3];
+    const red = pixels[index];
+    const green = pixels[index + 1];
+    const blue = pixels[index + 2];
+    if (alpha > 200 && red < 110 && green < 130 && blue < 170) darkPixels += 1;
+  }
+  if (darkPixels < 500) {
+    throw new Error("The CEC report text was not rasterized; the Kim message was not sent.");
+  }
 }
 
 function truncateText(context: SKRSContext2D, value: string, maxWidth: number) {
@@ -426,6 +464,7 @@ export function renderCecResolvedKimReport(
   const height = 1900;
   const canvas = createCanvas(width, height);
   const context = canvas.getContext("2d");
+  assertReportFontsAvailable(context);
   context.fillStyle = "#f7faff";
   context.fillRect(0, 0, width, height);
   context.textBaseline = "alphabetic";
@@ -720,6 +759,7 @@ export function renderCecResolvedKimReport(
   );
   context.textAlign = "left";
 
+  assertReportTextRasterized(context);
   const buffer = canvas.toBuffer("image/png");
   if (buffer.length > MAX_KIM_IMAGE_BYTES) {
     throw new Error(`The generated report is ${(buffer.length / 1024 / 1024).toFixed(2)} MB; Kim accepts up to 2 MB.`);
