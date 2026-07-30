@@ -27,7 +27,7 @@ async function main() {
     await writeFile(outputPath, image);
   }
 
-  const sent = shouldSend ? await sendCecResolvedReportToKim(image) : null;
+  const sent = shouldSend ? await sendCecResolvedReportToKim(image, report) : null;
   console.log(JSON.stringify({
     success: true,
     realData: true,
