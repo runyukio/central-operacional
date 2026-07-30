@@ -9,6 +9,10 @@
       "schedule": "20 * * * *"
     },
     {
+      "path": "/api/cron/realtime-cec-kim",
+      "schedule": "0 * * * *"
+    },
+    {
       "path": "/api/cron/ads-executive-report",
       "schedule": "55 * * * *"
     },
