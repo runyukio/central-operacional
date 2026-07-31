@@ -6,6 +6,7 @@ import {
   parseAdsExecutiveCycle,
   type AdsExecutiveAgentRow,
   type AdsExecutiveForecastPoint,
+  type AdsExecutiveRequirement,
   type AdsExecutiveQueueRow,
   type ExecutiveReportLob
 } from "@/lib/ads-executive-report-core";
@@ -309,16 +310,38 @@ async function loadExecutiveForecast(lob: ExecutiveReportLob, dateKey: string): 
 
 async function loadAdsRequirements(dateKey: string) {
   const date = utcDate(dateKey);
-  const rows = await prisma.adsHourlyRequirement.findMany({
-    where: { date },
-    orderBy: { hour: "asc" },
-    select: { hour: true, requiredStaff: true }
-  });
-  return rows.map((row) => ({ hour: row.hour, required: row.requiredStaff }));
+  const [rows, shiftFallback] = await Promise.all([
+    prisma.adsHourlyRequirement.findMany({
+      where: { date },
+      orderBy: { hour: "asc" },
+      select: { hour: true, requiredStaff: true }
+    }),
+    loadStaffCoverageRequirements("ADS", dateKey)
+  ]);
+  const hourlyRequirements = rows.map((row) => ({ hour: row.hour, required: row.requiredStaff }));
+  const requirements = mergeExecutiveRequirements(hourlyRequirements, shiftFallback);
+  const importedHours = new Set(hourlyRequirements.map((row) => row.hour));
+  const fallbackHours = requirements.filter((row) => !importedHours.has(row.hour)).map((row) => row.hour);
+
+  if (fallbackHours.length) {
+    console.info("[ads-executive-report] Required HC fallback applied", {
+      dateKey,
+      importedHours: hourlyRequirements.length,
+      fallbackHours
+    });
+  } else if (!requirements.length) {
+    console.warn("[ads-executive-report] Required HC unavailable", { dateKey });
+  }
+
+  return requirements;
 }
 
 async function loadExecutiveRequirements(lob: ExecutiveReportLob, dateKey: string) {
   if (lob === "ADS") return loadAdsRequirements(dateKey);
+  return loadStaffCoverageRequirements(lob, dateKey);
+}
+
+async function loadStaffCoverageRequirements(lob: ExecutiveReportLob, dateKey: string) {
   const rows = await prisma.staffCoverage.findMany({
     where: {
       date: utcDate(dateKey),
@@ -329,12 +352,25 @@ async function loadExecutiveRequirements(lob: ExecutiveReportLob, dateKey: strin
       shift: { select: { name: true } }
     }
   });
+  return expandExecutiveShiftRequirements(rows);
+}
+
+export function expandExecutiveShiftRequirements(rows: Array<{ requiredStaff: number; shift: { name: string } }>) {
   const requiredByHour = new Map<number, number>();
   for (const row of rows) {
     for (const hour of executiveShiftHours(row.shift.name)) {
       requiredByHour.set(hour, (requiredByHour.get(hour) ?? 0) + Math.max(0, row.requiredStaff));
     }
   }
+  return Array.from(requiredByHour, ([hour, required]) => ({ hour, required })).sort((a, b) => a.hour - b.hour);
+}
+
+export function mergeExecutiveRequirements(
+  primary: AdsExecutiveRequirement[],
+  fallback: AdsExecutiveRequirement[]
+) {
+  const requiredByHour = new Map(fallback.map((row) => [row.hour, row.required]));
+  for (const row of primary) requiredByHour.set(row.hour, row.required);
   return Array.from(requiredByHour, ([hour, required]) => ({ hour, required })).sort((a, b) => a.hour - b.hour);
 }
 
