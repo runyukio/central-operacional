@@ -5,7 +5,9 @@ import {
   assertKwaiTalkAccepted,
   buildExecutiveReportDeliveryFileName,
   buildExecutiveReportStoragePath,
-  buildKwaiTalkMarkdownPayload
+  buildKwaiTalkMarkdownPayload,
+  expandExecutiveShiftRequirements,
+  mergeExecutiveRequirements
 } from "./ads-executive-webhook-service";
 
 test("buildKwaiTalkMarkdownPayload builds the Kim markdown contract", () => {
@@ -82,4 +84,37 @@ test("gera um objeto exclusivo mesmo quando o mesmo ciclo é reenviado", () => {
   assert.equal(first, "ads_online_productivity_2026-07-29-02-30_delivery-a.png");
   assert.equal(second, "ads_online_productivity_2026-07-29-02-30_delivery-b.png");
   assert.notEqual(first, second);
+});
+
+test("expande o Required HC por turno para todas as horas do ADS", () => {
+  const requirements = expandExecutiveShiftRequirements([
+    { requiredStaff: 11, shift: { name: "Manhã" } },
+    { requiredStaff: 12, shift: { name: "Tarde" } },
+    { requiredStaff: 9, shift: { name: "Noite" } }
+  ]);
+
+  assert.equal(requirements.length, 24);
+  assert.deepEqual(requirements.slice(0, 7), [
+    { hour: 0, required: 9 },
+    { hour: 1, required: 9 },
+    { hour: 2, required: 9 },
+    { hour: 3, required: 9 },
+    { hour: 4, required: 9 },
+    { hour: 5, required: 9 },
+    { hour: 6, required: 11 }
+  ]);
+  assert.deepEqual(requirements.at(-1), { hour: 23, required: 9 });
+});
+
+test("mantém o Required HC horário importado e usa o turno somente como fallback", () => {
+  const requirements = mergeExecutiveRequirements(
+    [{ hour: 6, required: 15 }, { hour: 7, required: 14 }],
+    [{ hour: 6, required: 11 }, { hour: 7, required: 11 }, { hour: 8, required: 11 }]
+  );
+
+  assert.deepEqual(requirements, [
+    { hour: 6, required: 15 },
+    { hour: 7, required: 14 },
+    { hour: 8, required: 11 }
+  ]);
 });
