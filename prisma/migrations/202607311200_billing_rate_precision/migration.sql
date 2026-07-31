@@ -1,0 +1,5 @@
+ALTER TABLE "BillingEmployeeInvoice"
+ALTER COLUMN "hourlyRate" SET DATA TYPE DECIMAL(18,8);
+
+ALTER TABLE "BillingRateConfig"
+ALTER COLUMN "value" SET DATA TYPE DECIMAL(18,8);
