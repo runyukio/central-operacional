@@ -1389,7 +1389,16 @@ function AgentTable({
                 <td className="px-4 py-3 font-bold">{row.skill}</td>
                 <td className="px-4 py-3"><QueueIdCell queues={row.queueBreakdown} /></td>
                 <td className="px-4 py-3"><AgentMetricCell current={row.current.submit} previous={row.previous?.submit ?? null} format="number" positiveDirection="up" /></td>
-                <td className="px-4 py-3"><AgentMetricCell current={row.current.ahtMs} previous={row.previous?.ahtMs ?? null} format="duration" positiveDirection="down" /></td>
+                <td className="px-4 py-3">
+                  <AgentMetricCell
+                    current={row.current.ahtMs}
+                    previous={row.previous?.ahtMs ?? null}
+                    format="duration"
+                    positiveDirection="down"
+                    targetExceeded={row.lob.trim().toUpperCase() === "ADS" && row.current.ahtMs !== null && row.current.ahtMs > 60_000}
+                    targetTitle="AHT acima da meta de 60s para ADS."
+                  />
+                </td>
                 <td className="px-4 py-3"><AgentMetricCell current={row.current.moderationMs} previous={row.previous?.moderationMs ?? null} format="duration" positiveDirection="neutral" /></td>
                 <td className="px-4 py-3"><AgentMetricCell current={row.current.timeout} previous={row.previous?.timeout ?? null} format="number" positiveDirection="down" /></td>
                 <td className="px-4 py-3"><AgentMetricCell current={row.current.refresh} previous={row.previous?.refresh ?? null} format="number" positiveDirection="down" /></td>
@@ -1471,12 +1480,16 @@ function AgentMetricCell({
   current,
   previous,
   format,
-  positiveDirection
+  positiveDirection,
+  targetExceeded = false,
+  targetTitle
 }: {
   current: number | null;
   previous: number | null;
   format: "number" | "duration";
   positiveDirection: "up" | "down" | "neutral";
+  targetExceeded?: boolean;
+  targetTitle?: string;
 }) {
   const delta = current !== null && previous !== null ? current - previous : null;
   const isPositive = delta === null || positiveDirection === "neutral" ? null : delta === 0 ? true : positiveDirection === "up" ? delta > 0 : delta < 0;
@@ -1487,7 +1500,20 @@ function AgentMetricCell({
 
   return (
     <div className="min-w-[84px]">
-      <p className="font-black text-navy-950">{value}</p>
+      {targetExceeded ? (
+        <p>
+          <span
+            aria-label={`${value}. ${targetTitle ?? "Fora da meta."}`}
+            className="inline-flex items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2 py-0.5 font-black text-red-700"
+            title={targetTitle}
+          >
+            <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+            {value}
+          </span>
+        </p>
+      ) : (
+        <p className="font-black text-navy-950">{value}</p>
+      )}
       {delta === null ? (
         <p className="mt-1 text-[11px] font-black text-muted">Sem comparação</p>
       ) : (

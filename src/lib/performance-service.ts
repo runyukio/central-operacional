@@ -15,6 +15,7 @@ import {
 import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import { parseWbLoginBatch } from "@/lib/batch-wb-filter";
 import { getDefaultDatePeriod } from "@/lib/default-date-range";
+import { buildPerformanceAgentsExportPayload } from "@/lib/performance-agents-export";
 import { prisma } from "@/lib/prisma";
 import { QUEUE_METADATA, type QueueLob, type QueueMetadata } from "@/lib/queue-metadata";
 import { QUEUE_REPORT_METADATA, getQueueReportMetadataById } from "@/lib/queue-report-metadata";
@@ -169,6 +170,7 @@ export type PerformanceAgentsQuery = {
   page?: number;
   pageSize?: number;
   metadataOnly?: boolean;
+  includeAllRows?: boolean;
 };
 
 export type PerformanceSupervisorsQuery = {
@@ -1114,10 +1116,14 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
   const sortDirection = query.sortDirection === "asc" ? "asc" : "desc";
   filteredRows.sort((a, b) => comparePerformanceAgentRows(a, b, sortBy, sortDirection));
 
-  const pageSize = Math.min(100, Math.max(10, Math.trunc(query.pageSize ?? 50)));
   const totalRows = filteredRows.length;
+  const pageSize = query.includeAllRows
+    ? Math.max(1, totalRows)
+    : Math.min(100, Math.max(10, Math.trunc(query.pageSize ?? 50)));
   const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
-  const page = Math.min(totalPages, Math.max(1, Math.trunc(query.page ?? 1)));
+  const page = query.includeAllRows
+    ? 1
+    : Math.min(totalPages, Math.max(1, Math.trunc(query.page ?? 1)));
   const pageRows = filteredRows.slice((page - 1) * pageSize, page * pageSize);
   const submit = filteredRows.reduce((total, row) => total + row.submit, 0);
   const moderationSeconds = filteredRows.reduce((total, row) => total + row.moderationSeconds, 0);
@@ -1178,6 +1184,52 @@ export async function getPerformanceAgentsDashboard(actor: Actor, query: Perform
       quality: row.quality
     }))
   };
+}
+
+export async function exportPerformanceAgentsXlsxData(actor: Actor, query: PerformanceAgentsQuery = {}): Promise<XlsxExportPayload> {
+  const user = await requireActiveUser(actor);
+  if (!canExportPerformance(permissionUser(user))) {
+    throw new PerformanceError("Você não tem permissão para exportar Performance.", 403);
+  }
+  if (!query.lob?.trim()) throw new PerformanceError("Selecione uma LOB antes de exportar.", 400);
+
+  const dashboard = await getPerformanceAgentsDashboard(actor, {
+    ...query,
+    page: 1,
+    includeAllRows: true,
+    metadataOnly: false
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      actorId: user.id,
+      action: AuditAction.EDICAO,
+      entity: "Performance",
+      entityId: "AGENTS",
+      after: {
+        filters: {
+          view: query.view,
+          startDate: query.startDate,
+          endDate: query.endDate,
+          lob: query.lob,
+          slaTargetMinutes: query.slaTargetMinutes,
+          supervisorId: query.supervisorId,
+          shiftId: query.shiftId,
+          search: query.search,
+          sortBy: query.sortBy,
+          sortDirection: query.sortDirection
+        },
+        rows: dashboard.agents.length
+      },
+      reason: "PERFORMANCE_AGENTS_EXPORTED"
+    }
+  }).catch(() => undefined);
+
+  return buildPerformanceAgentsExportPayload({
+    period: dashboard.period,
+    selectedLob: dashboard.selectedLob,
+    agents: dashboard.agents
+  });
 }
 
 export async function getPerformanceSupervisorsDashboard(actor: Actor, query: PerformanceSupervisorsQuery = {}) {

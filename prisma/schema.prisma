@@ -683,7 +683,7 @@ model BillingEmployeeInvoice {
   approvedMinutes          Int                        @default(0)
   projectedMinutes         Int                        @default(0)
   totalConsideredMinutes   Int                        @default(0)
-  hourlyRate               Decimal                    @default(0) @db.Decimal(10, 2)
+  hourlyRate               Decimal                    @default(0) @db.Decimal(18, 8)
   billingRule              String
   grossAmount              Decimal                    @default(0) @db.Decimal(12, 2)
   advanceAmount            Decimal                    @default(0) @db.Decimal(12, 2)
@@ -817,7 +817,7 @@ model BillingRateConfig {
   id            String    @id @default(cuid())
   key           String    @unique
   label         String
-  value         Decimal   @db.Decimal(10, 2)
+  value         Decimal   @db.Decimal(18, 8)
   active        Boolean   @default(true)
   effectiveFrom DateTime  @default(now())
   effectiveTo   DateTime?

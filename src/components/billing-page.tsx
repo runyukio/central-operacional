@@ -1389,12 +1389,12 @@ function RatesTable({ rows, draft, setDraft, saving, onSave }: { rows: BillingPa
           {agent.map((rate) => <RateInput key={rate.key} rate={rate} draft={draft} setDraft={setDraft} />)}
         </div>
       </RateSection>
-      <RateSection title="Valores por Skill staff">
+      <RateSection title="Valores por Cargo/Função ou Skill staff">
         <div className="overflow-x-auto rounded-xl border border-border">
           <table className="min-w-full divide-y divide-border text-sm">
             <thead className="bg-slate-50 text-left text-[11px] font-black uppercase tracking-wide text-muted">
               <tr>
-                <th className="px-3 py-2">Skill</th>
+                <th className="px-3 py-2">Regra</th>
                 <th className="px-3 py-2">Valor Manhã/Tarde</th>
                 <th className="px-3 py-2">Valor Noite</th>
                 <th className="px-3 py-2">Última atualização</th>

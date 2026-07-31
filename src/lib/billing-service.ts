@@ -14,6 +14,11 @@ import {
 import { calculateBillingFiscalExpectedAmount } from "@/lib/billing-fiscal-invoice";
 import { buildBillingOmieAllocation } from "@/lib/billing-omie-allocation";
 import { canAccessBilling, canManageBilling } from "@/lib/billing-permissions";
+import {
+  BILLING_STAFF_RATE_DEFAULTS,
+  resolveEmployeeBillingStaffRateKey,
+  resolveEmployeeBillingStaffRateRule
+} from "@/lib/billing-rate-rules";
 import { isAgentJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
 import { MONTHLY_ADVANCE_FIXED_AMOUNT, isMonthlyAdvanceReferenceMonthAvailable } from "@/lib/monthly-advance-constants";
 import { formatReferenceMonth, normalizeReferenceMonth } from "@/lib/monthly-advance-service";
@@ -72,19 +77,11 @@ const DEFAULT_RATE_CONFIGS = [
   { key: "STAFF_WFM_II_DAY_RATE", label: "WFM II Manhã/Tarde", value: 36.93, group: "STAFF", skillKey: "wfm_ii", displayName: "WFM II", shiftBucket: "DIA" },
   { key: "STAFF_WFM_II_NIGHT_RATE", label: "WFM II Noite", value: 42.47, group: "STAFF", skillKey: "wfm_ii", displayName: "WFM II", shiftBucket: "NOITE" },
   { key: "STAFF_WFM_III_DAY_RATE", label: "WFM III Manhã/Tarde", value: 42.61, group: "STAFF", skillKey: "wfm_iii", displayName: "WFM III", shiftBucket: "DIA" },
-  { key: "STAFF_WFM_III_NIGHT_RATE", label: "WFM III Noite", value: 49.01, group: "STAFF", skillKey: "wfm_iii", displayName: "WFM III", shiftBucket: "NOITE" }
-] as const;
-
-const STAFF_RATE_RULES = [
-  { skillKey: "coordinator", displayName: "Coordinator", dayKey: "STAFF_COORDINATOR_DAY_RATE", nightKey: "STAFF_COORDINATOR_NIGHT_RATE", aliases: ["coordinator", "coordenador", "coordenadora"] },
-  { skillKey: "it_team", displayName: "TI", dayKey: "STAFF_IT_TEAM_DAY_RATE", nightKey: "STAFF_IT_TEAM_NIGHT_RATE", aliases: ["it team", "it", "ti", "logistica/ti", "logistica ti"] },
-  { skillKey: "quality_analyst", displayName: "Quality Analyst", dayKey: "STAFF_QUALITY_ANALYST_DAY_RATE", nightKey: "STAFF_QUALITY_ANALYST_NIGHT_RATE", aliases: ["quality analyst", "quality", "qa", "analista de qualidade", "qualidade"] },
-  { skillKey: "rta", displayName: "RTA", dayKey: "STAFF_RTA_DAY_RATE", nightKey: "STAFF_RTA_NIGHT_RATE", aliases: ["rta"] },
-  { skillKey: "supervisor", displayName: "Supervisor", dayKey: "STAFF_SUPERVISOR_DAY_RATE", nightKey: "STAFF_SUPERVISOR_NIGHT_RATE", aliases: ["supervisor", "supervisora"] },
-  { skillKey: "trainer", displayName: "Trainer", dayKey: "STAFF_TRAINER_DAY_RATE", nightKey: "STAFF_TRAINER_NIGHT_RATE", aliases: ["trainer", "treinador", "treinadora"] },
-  { skillKey: "wfm_i", displayName: "WFM I", dayKey: "STAFF_WFM_I_DAY_RATE", nightKey: "STAFF_WFM_I_NIGHT_RATE", aliases: ["wfm i", "wfmi", "wfm 1"] },
-  { skillKey: "wfm_ii", displayName: "WFM II", dayKey: "STAFF_WFM_II_DAY_RATE", nightKey: "STAFF_WFM_II_NIGHT_RATE", aliases: ["wfm ii", "wfmii", "wfm 2"] },
-  { skillKey: "wfm_iii", displayName: "WFM III", dayKey: "STAFF_WFM_III_DAY_RATE", nightKey: "STAFF_WFM_III_NIGHT_RATE", aliases: ["wfm iii", "wfmiii", "wfm 3"] }
+  { key: "STAFF_WFM_III_NIGHT_RATE", label: "WFM III Noite", value: 49.01, group: "STAFF", skillKey: "wfm_iii", displayName: "WFM III", shiftBucket: "NOITE" },
+  { key: "STAFF_HR_DAY_RATE", label: "RH Manhã/Tarde", value: BILLING_STAFF_RATE_DEFAULTS.HR.day, group: "STAFF", skillKey: "hr", displayName: "RH", shiftBucket: "DIA" },
+  { key: "STAFF_HR_NIGHT_RATE", label: "RH Noite", value: BILLING_STAFF_RATE_DEFAULTS.HR.night, group: "STAFF", skillKey: "hr", displayName: "RH", shiftBucket: "NOITE" },
+  { key: "STAFF_FINANCE_DAY_RATE", label: "Financeiro Manhã/Tarde", value: BILLING_STAFF_RATE_DEFAULTS.FINANCE.day, group: "STAFF", skillKey: "finance", displayName: "Financeiro", shiftBucket: "DIA" },
+  { key: "STAFF_FINANCE_NIGHT_RATE", label: "Financeiro Noite", value: BILLING_STAFF_RATE_DEFAULTS.FINANCE.night, group: "STAFF", skillKey: "finance", displayName: "Financeiro", shiftBucket: "NOITE" }
 ] as const;
 
 type ActiveUser = NonNullable<Awaited<ReturnType<typeof findActiveUser>>>;
@@ -1649,8 +1646,8 @@ export async function saveBillingRates(actor: Actor, input: Record<string, numbe
       const before = await tx.billingRateConfig.findUnique({ where: { key } });
       const record = await tx.billingRateConfig.upsert({
         where: { key },
-        update: { label: config.label, value: decimal(value), active: true, updatedById: user!.id },
-        create: { key, label: config.label, value: decimal(value), active: true, updatedById: user!.id }
+        update: { label: config.label, value: rateDecimal(value), active: true, updatedById: user!.id },
+        create: { key, label: config.label, value: rateDecimal(value), active: true, updatedById: user!.id }
       });
       await tx.auditLog.create({
         data: {
@@ -2541,7 +2538,7 @@ async function upsertEmployeeInvoice(
       approvedMinutes: calculated.approvedMinutes,
       projectedMinutes: calculated.projectedMinutes,
       totalConsideredMinutes: calculated.totalConsideredMinutes,
-      hourlyRate: decimal(calculated.hourlyRate),
+      hourlyRate: rateDecimal(calculated.hourlyRate),
       billingRule: calculated.billingRule,
       grossAmount: decimal(calculated.grossAmount),
       advanceAmount: decimal(calculated.advanceAmount),
@@ -2560,7 +2557,7 @@ async function upsertEmployeeInvoice(
       approvedMinutes: calculated.approvedMinutes,
       projectedMinutes: calculated.projectedMinutes,
       totalConsideredMinutes: calculated.totalConsideredMinutes,
-      hourlyRate: decimal(calculated.hourlyRate),
+      hourlyRate: rateDecimal(calculated.hourlyRate),
       billingRule: calculated.billingRule,
       grossAmount: decimal(calculated.grossAmount),
       advanceAmount: decimal(calculated.advanceAmount),
@@ -2663,15 +2660,15 @@ function resolveHourlyRate(employee: BillingEmployee, rates: BillingRates): Bill
     };
   }
 
-  const staffRule = resolveStaffRateRule(employee.skill);
-  if (staffRule) {
-    const rateKey = shiftBucket === "NOITE" ? staffRule.nightKey : staffRule.dayKey;
+  const staffRateRule = resolveEmployeeBillingStaffRateKey(employee, shiftBucket);
+  if (staffRateRule) {
+    const { rule, source, rateKey } = staffRateRule;
     const shiftLabel = shiftBucket === "NOITE" ? "Noite" : "Manhã/Tarde";
     return {
       hourlyRate: rates[rateKey],
-      billingRule: `SKILL_${staffRule.skillKey}_${shiftBucket}`,
-      billingRuleLabel: `Skill ${staffRule.displayName} + Turno ${shiftLabel}`,
-      billingRateSource: `Skill ${staffRule.displayName}`
+      billingRule: `${source === "Skill" ? "SKILL" : "CARGO"}_${rule.skillKey}_${shiftBucket}`,
+      billingRuleLabel: `${source} ${rule.displayName} + Turno ${shiftLabel}`,
+      billingRateSource: `${source} ${rule.displayName}`
     };
   }
 
@@ -2723,7 +2720,7 @@ function applyPocAgentRateModifier(employee: Pick<BillingEmployee, "roleTitle" |
 function isBillableEmployee(employee: Pick<BillingEmployee, "roleTitle" | "skill" | "contractType"> & { operationalStatus?: string | null }) {
   if (isTrainingTerminationStatus(employee.operationalStatus)) return false;
   if (!isBillingEligibleContract(employee.contractType)) return false;
-  return isAgentJobTitle(employee.roleTitle) || Boolean(resolveStaffRateRule(employee.skill)) || isSpecialBillingSkill(employee.skill);
+  return isAgentJobTitle(employee.roleTitle) || Boolean(resolveEmployeeBillingStaffRateRule(employee)) || isSpecialBillingSkill(employee.skill);
 }
 
 function isScheduleWithinEmployeeBillingWindow(employee: Pick<BillingEmployee, "terminationDate">, date: Date) {
@@ -2794,11 +2791,6 @@ function isPocSkill(value?: string | null) {
 function isAssistantSkill(value?: string | null) {
   const skill = normalizeComparableJobTitle(value);
   return skill === "assistant" || skill === "assistente";
-}
-
-function resolveStaffRateRule(value?: string | null) {
-  const skill = normalizeComparableJobTitle(value);
-  return STAFF_RATE_RULES.find((rule) => rule.aliases.some((alias) => normalizeComparableJobTitle(alias) === skill)) ?? null;
 }
 
 function officialShiftBucket(value?: string | null): "MANHA" | "TARDE" | "NOITE" | null {
@@ -3473,6 +3465,10 @@ function roundMoney(value: number) {
 
 function decimal(value: number | string | Prisma.Decimal) {
   return new Prisma.Decimal(Number(value || 0).toFixed(2));
+}
+
+function rateDecimal(value: number | string | Prisma.Decimal) {
+  return new Prisma.Decimal(value || 0).toDecimalPlaces(8);
 }
 
 function decimalOrNull(value?: number | null) {
