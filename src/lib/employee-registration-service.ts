@@ -15,6 +15,7 @@ import { canApproveRegistration, canManageRoles, normalizeRole } from "@/lib/per
 import { auditPermissionDenied } from "@/lib/permission-audit";
 import { normalizePixKeyType, validatePixKey } from "@/lib/pix-key";
 import { prisma } from "@/lib/prisma";
+import { baseTimesForShift } from "@/lib/shift-base-times";
 import { cleanShiftName, isBlockedShiftName, isSelectableShiftName, shiftLookupKey } from "@/lib/shift-display";
 import type { RegistrationInput } from "@/lib/registration-validation";
 
@@ -936,7 +937,8 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
         create: { name: op.lob, description: op.lob === "ALL" ? "Atuação transversal / staff / multi-LOB" : "Criado no cadastro real" }
       });
       const existingShift = await tx.shift.findFirst({ where: { OR: [{ name: op.shift }, { name: { startsWith: `${op.shift} (` } }] } });
-      const shift = existingShift ?? await tx.shift.create({ data: { name: op.shift, startsAt: defaultShiftStart(op.shift), endsAt: defaultShiftEnd(op.shift), color: "#2563EB" } });
+      const baseShiftTimes = baseTimesForShift(op.shift) ?? baseTimesForShift("Manhã")!;
+      const shift = existingShift ?? await tx.shift.create({ data: { name: op.shift, startsAt: baseShiftTimes.startsAt, endsAt: baseShiftTimes.endsAt, color: "#2563EB" } });
       const supervisor = op.supervisor
         ? await tx.employeeProfile.findFirst({ where: { OR: [{ fullName: op.supervisor }, { wbLogin: op.supervisor }] } })
         : null;
@@ -2522,20 +2524,6 @@ function databaseEnvIssue() {
 function technicalMessage(error: unknown) {
   if (error instanceof Error) return `${error.name}: ${error.message}`;
   return "Falha desconhecida ao salvar cadastro real";
-}
-
-function defaultShiftStart(name: string) {
-  if (name === "Tarde") return "14:00";
-  if (name === "Noite") return "20:00";
-  if (name === "Folga") return "00:00";
-  return "08:00";
-}
-
-function defaultShiftEnd(name: string) {
-  if (name === "Tarde") return "20:00";
-  if (name === "Noite") return "02:00";
-  if (name === "Folga") return "00:00";
-  return "14:00";
 }
 
 function formatDate(date: Date) {

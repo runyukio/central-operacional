@@ -87,6 +87,9 @@ export async function DELETE(request: Request) {
   if (!parsed.success) {
     return NextResponse.json({ error: "Dados inválidos para remover cronograma.", issues: parsed.error.flatten() }, { status: 400 });
   }
+  if (parsed.data.scope !== "all" && (!parsed.data.month || !parsed.data.year)) {
+    return NextResponse.json({ error: "Informe explicitamente o mês e o ano do cronograma a remover." }, { status: 400 });
+  }
 
   const actor = await getApiActor();
   if (!canUpdateScheduleSlot({ role: actor.role, status: "ACTIVE" })) {

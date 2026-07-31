@@ -122,6 +122,7 @@ const XAxis = dynamic(() => import("@/components/ui/lazy-recharts").then((module
 const YAxis = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.ChartYAxis), { ssr: false });
 const AbsenceReasonsDonut = dynamic(() => import("@/components/ui/lazy-recharts").then((module) => module.AbsenceReasonsDonut), { ssr: false });
 import { getPixKeyFormatHint, PIX_KEY_TYPES, validatePixKey } from "@/lib/pix-key";
+import { approvedShiftBaseTimes, baseTimesForShift } from "@/lib/shift-base-times";
 import { cleanShiftName, cleanShiftOptions, isBlockedShiftName, isSelectableShiftName, shiftCategoryName, standardShiftNames } from "@/lib/shift-display";
 import {
   DEFAULT_PRODUCTIVE_HOURS,
@@ -152,12 +153,7 @@ const employeeOperationalStatusOptions = ["Ativo", "Em treinamento", "Nesting", 
 const pcdDisabilityTypeOptions = ["", "Física", "Auditiva", "Visual", "Intelectual", "Psicossocial", "Múltipla", "Neurodivergente", "Outra", "Prefiro não informar"];
 const absenceReasonOptions = ["Problema de saúde", "Erro de programação de escala", "Problema técnico corporativo", "Emergência familiar", "Não informado", "Problema técnico pessoal", "Problema de transporte", "Problema pessoal", "Erro de visualização de escala", "Outros"];
 const timeBlockCategoryOptions = ["Administrativo", "Desenvolvimento", "Acompanhamento de operação", "Feedback", "Reunião", "Treinamento", "Suporte ao time", "Análise de indicadores", "Escalonamento / Ocorrência", "Pausa", "Outros"];
-const scheduleShiftTimes: Record<string, { startsAt: string; endsAt: string }> = {
-  Manhã: { startsAt: "08:00", endsAt: "14:00" },
-  Tarde: { startsAt: "14:00", endsAt: "20:00" },
-  Noite: { startsAt: "20:00", endsAt: "02:00" },
-  Folga: { startsAt: "", endsAt: "" }
-};
+const scheduleShiftTimes: Record<string, { startsAt: string; endsAt: string }> = approvedShiftBaseTimes;
 const dayOffKinds = ["DAY_OFF_SWAP", "DAY_OFF_SELL", "DAY_OFF_REQUEST"] as const;
 type DayOffKind = (typeof dayOffKinds)[number];
 const dayOffKindLabels: Record<DayOffKind, string> = {
@@ -5881,8 +5877,8 @@ export function SchedulesPage() {
     employeeId: "",
     date: currentOperationalDateInput(),
     shift: "Manhã",
-    startsAt: "06:00",
-    endsAt: "14:00",
+    startsAt: String(approvedShiftBaseTimes.Manhã.startsAt),
+    endsAt: String(approvedShiftBaseTimes.Manhã.endsAt),
     status: "Escalado",
     lob: "",
     supervisor: "",
@@ -6509,14 +6505,24 @@ export function SchedulesPage() {
 
   async function removeSelectedEmployeeSchedule(scope: "month" | "all" = "month") {
     if (!scheduleEditForm.employeeId) return;
-    const confirmed = window.confirm(scope === "all" ? "Isso removerá todos os cronogramas deste colaborador, mas não excluirá o cadastro. Continuar?" : "Isso removerá os registros de cronograma deste colaborador no mês selecionado, mas não excluirá o cadastro. Continuar?");
+    // The editor is opened from a date cell. Use that date as the source of
+    // truth, rather than the page's initial period, which can differ after a
+    // custom date-range is applied.
+    const selectedDate = parseDateInput(scheduleEditForm.date);
+    const selectedPeriod = selectedDate
+      ? { month: selectedDate.getUTCMonth() + 1, year: selectedDate.getUTCFullYear() }
+      : schedulePeriod;
+    const selectedMonthLabel = scheduleMonthFormatter.format(operationalDateFromParts(selectedPeriod.year, selectedPeriod.month, 1));
+    const confirmed = window.confirm(scope === "all"
+      ? "Isso removerá todos os cronogramas deste colaborador, mas não excluirá o cadastro. Continuar?"
+      : `Isso removerá somente os registros de cronograma de ${selectedMonthLabel} deste colaborador, sem alterar os demais meses. Continuar?`);
     if (!confirmed) return;
 
     setSavingSchedule(true);
     try {
       const payload = await apiJson<{ message: string }>("/api/schedules", {
         method: "DELETE",
-        body: JSON.stringify({ employeeId: scheduleEditForm.employeeId, month: schedulePeriod.month, year: schedulePeriod.year, scope })
+        body: JSON.stringify({ employeeId: scheduleEditForm.employeeId, month: selectedPeriod.month, year: selectedPeriod.year, scope })
       });
       setAttendanceMessage(payload.message ?? "Cronograma removido.");
       closeScheduleEditor();
@@ -6786,6 +6792,8 @@ export function SchedulesPage() {
 
   function configuredTimesForShift(shift: string) {
     const cleanedShift = cleanShiftName(shift) || "Manhã";
+    const baseTimes = baseTimesForShift(cleanedShift);
+    if (baseTimes?.startsAt && baseTimes.endsAt) return baseTimes;
     const configured = scheduleSettings?.shifts.find((item) => item.status !== "INACTIVE" && cleanShiftName(item.name) === cleanedShift);
     return configured ? { startsAt: configured.startsAt, endsAt: configured.endsAt } : timesForShift(cleanedShift);
   }
@@ -8408,8 +8416,8 @@ const templateRows = [
     data: currentOperationalDateInput(),
     status: "Escalado",
     turno: "Manhã",
-    entrada: "06:00",
-    saida: "14:00",
+    entrada: approvedShiftBaseTimes.Manhã.startsAt,
+    saida: approvedShiftBaseTimes.Manhã.endsAt,
     lob: "CEC"
   }
 ];

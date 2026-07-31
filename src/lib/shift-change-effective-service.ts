@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { baseTimesForShift } from "@/lib/shift-base-times";
 import { cleanShiftName } from "@/lib/shift-display";
 
 const SAO_PAULO_TIME_ZONE = "America/Sao_Paulo";
@@ -63,6 +64,8 @@ export async function applyDueFixedShiftChanges(referenceDate = new Date()) {
               select: {
                 id: true,
                 shiftId: true,
+                workStartTime: true,
+                workEndTime: true,
                 supervisorId: true,
                 shift: { select: { name: true } }
               }
@@ -93,6 +96,10 @@ export async function applyDueFixedShiftChanges(referenceDate = new Date()) {
           }
         });
         if (!shift) throw new Error("Turno solicitado não encontrado.");
+        const baseTimes = baseTimesForShift(desiredShift);
+        if (!baseTimes?.startsAt || !baseTimes.endsAt) {
+          throw new Error("A troca de turno deve selecionar Manhã, Tarde ou Noite.");
+        }
 
         const guard = await tx.request.updateMany({
           where: { id: current.id, updatedAt: current.updatedAt },
@@ -103,17 +110,25 @@ export async function applyDueFixedShiftChanges(referenceDate = new Date()) {
         const beforeEmployee = serialize({
           id: current.employee.id,
           shiftId: current.employee.shiftId,
-          shift: current.employee.shift.name
+          shift: current.employee.shift.name,
+          workStartTime: current.employee.workStartTime,
+          workEndTime: current.employee.workEndTime
         });
         const updatedEmployee = await tx.employeeProfile.update({
           where: { id: current.employeeId },
-          data: { shiftId: shift.id },
+          data: {
+            shiftId: shift.id,
+            workStartTime: baseTimes.startsAt,
+            workEndTime: baseTimes.endsAt
+          },
           include: { shift: true }
         });
         const afterEmployee = serialize({
           id: updatedEmployee.id,
           shiftId: updatedEmployee.shiftId,
-          shift: updatedEmployee.shift.name
+          shift: updatedEmployee.shift.name,
+          workStartTime: updatedEmployee.workStartTime,
+          workEndTime: updatedEmployee.workEndTime
         });
 
         const schedules = await tx.schedule.findMany({
@@ -127,14 +142,14 @@ export async function applyDueFixedShiftChanges(referenceDate = new Date()) {
         });
         let updatedScheduleCount = 0;
         for (const schedule of schedules) {
-          if (schedule.shiftId === shift.id && schedule.startsAt === shift.startsAt && schedule.endsAt === shift.endsAt) continue;
+          if (schedule.shiftId === shift.id && schedule.startsAt === baseTimes.startsAt && schedule.endsAt === baseTimes.endsAt) continue;
           const before = serialize(schedule);
           const after = await tx.schedule.update({
             where: { id: schedule.id },
             data: {
               shiftId: shift.id,
-              startsAt: shift.startsAt,
-              endsAt: shift.endsAt,
+              startsAt: baseTimes.startsAt,
+              endsAt: baseTimes.endsAt,
               observation: `Troca de turno fixa vigente pela solicitação ${current.code}`
             },
             include: { shift: true }
@@ -178,6 +193,7 @@ export async function applyDueFixedShiftChanges(referenceDate = new Date()) {
                 metadata: {
                   shiftChangeUpdated: true,
                   shiftChangeEffectiveDate: startDate.toISOString().slice(0, 10),
+                  baseTimes,
                   schedulesUpdated: updatedScheduleCount
                 }
               }

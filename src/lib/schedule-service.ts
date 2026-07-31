@@ -15,6 +15,7 @@ import {
 } from "@/lib/permissions";
 import { auditPermissionDenied } from "@/lib/permission-audit";
 import { logPerformanceMetric } from "@/lib/performance-logger";
+import { approvedShiftBaseTimes } from "@/lib/shift-base-times";
 import { cleanShiftName, isBlockedShiftName, isSelectableShiftName, shiftCategoryName, shiftLookupKey } from "@/lib/shift-display";
 import { calculateAbsenceRate, calculateCoverageRate, getAbsenceStatuses, getPresentStatuses, getScheduledStatuses, isAbsenceStatus, isPresentStatus, isScheduledStatus, normalizeOperationalStatus } from "@/lib/attendance-calculation";
 import { calculateProductiveDifferenceMinutes, formatWorkHours, isProductiveDifferenceWithinTolerance, plannedProductiveHoursForSchedule } from "@/lib/work-hours-rules";
@@ -119,12 +120,7 @@ const manuallyBlockedScheduleStatusLabels = new Set([
   "Folga aprovada"
 ]);
 
-const defaultShiftTimes: Record<string, { startsAt: string; endsAt: string }> = {
-  Manhã: { startsAt: "08:00", endsAt: "14:00" },
-  Tarde: { startsAt: "14:00", endsAt: "20:00" },
-  Noite: { startsAt: "20:00", endsAt: "02:00" },
-  Folga: { startsAt: "", endsAt: "" }
-};
+const defaultShiftTimes: Record<string, { startsAt: string; endsAt: string }> = approvedShiftBaseTimes;
 
 const allowDemoDataFallback = process.env.ALLOW_DEMO_LOGIN === "true" || process.env.ALLOW_DEMO_DATA === "true";
 const inactiveEmployeeStatusKeys = new Set([
@@ -1337,6 +1333,9 @@ export async function removeOperationalSchedules(actor: Actor, input: ScheduleRe
       return { error: reason };
     }
     if (!input.employeeId) return { error: "Informe o colaborador." };
+    if (input.scope !== "all" && (!Number.isInteger(input.month) || !Number.isInteger(input.year) || input.month! < 1 || input.month! > 12)) {
+      return { error: "Informe explicitamente o mês e o ano do cronograma a remover." };
+    }
 
     const employee = await prisma.employeeProfile.findUnique({ where: { id: input.employeeId } });
     if (!employee) return { error: "Colaborador não encontrado." };

@@ -13,6 +13,7 @@ import { roleHasCapability } from "@/lib/access-control";
 import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import { prisma } from "@/lib/prisma";
 import { canApproveRequest, normalizeRole } from "@/lib/permissions";
+import { baseTimesForShift } from "@/lib/shift-base-times";
 import { cleanShiftName, shiftCategoryName, shiftLookupKey } from "@/lib/shift-display";
 import { isShiftChangeEffective } from "@/lib/shift-change-effective-service";
 
@@ -2516,6 +2517,10 @@ async function applyShiftChangeRequestToSchedule(
 
   const desiredShift = cleanShiftName(String(payload.desiredShift ?? ""));
   if (!desiredShift) throw new DomainError("Novo turno solicitado é obrigatório.");
+  const baseTimes = baseTimesForShift(desiredShift);
+  if (!baseTimes?.startsAt || !baseTimes.endsAt) {
+    throw new DomainError("A troca de turno deve selecionar Manhã, Tarde ou Noite.");
+  }
 
   const shift = await tx.shift.findFirst({
     where: {
@@ -2536,13 +2541,29 @@ async function applyShiftChangeRequestToSchedule(
     if (!employee) throw new DomainError("Colaborador não encontrado para aplicar troca de turno.");
 
     if (effectiveNow) {
-      const employeeBefore = serialize({ id: employee.id, shiftId: employee.shiftId, shift: employee.shift?.name ?? null });
+      const employeeBefore = serialize({
+        id: employee.id,
+        shiftId: employee.shiftId,
+        shift: employee.shift?.name ?? null,
+        workStartTime: employee.workStartTime,
+        workEndTime: employee.workEndTime
+      });
       const updatedEmployee = await tx.employeeProfile.update({
         where: { id: request.employeeId },
-        data: { shiftId: shift.id },
+        data: {
+          shiftId: shift.id,
+          workStartTime: baseTimes.startsAt,
+          workEndTime: baseTimes.endsAt
+        },
         include: { shift: true }
       });
-      const employeeAfter = serialize({ id: updatedEmployee.id, shiftId: updatedEmployee.shiftId, shift: updatedEmployee.shift?.name ?? null });
+      const employeeAfter = serialize({
+        id: updatedEmployee.id,
+        shiftId: updatedEmployee.shiftId,
+        shift: updatedEmployee.shift?.name ?? null,
+        workStartTime: updatedEmployee.workStartTime,
+        workEndTime: updatedEmployee.workEndTime
+      });
       await tx.auditLog.create({
         data: {
           actorId,
@@ -2571,8 +2592,8 @@ async function applyShiftChangeRequestToSchedule(
         where: { id: schedule.id },
         data: {
           shiftId: shift.id,
-          startsAt: shift.startsAt,
-          endsAt: shift.endsAt,
+          startsAt: baseTimes.startsAt,
+          endsAt: baseTimes.endsAt,
           observation: `Troca de turno fixa aprovada pela solicitação ${request.code}`
         },
         include: { shift: true }
@@ -2604,6 +2625,7 @@ async function applyShiftChangeRequestToSchedule(
           requestId: request.id,
           startDate: startDate.toISOString().slice(0, 10),
           desiredShift,
+          baseTimes,
           schedulesUpdated: schedules.length,
           profileUpdated: effectiveNow
         }
@@ -2640,8 +2662,8 @@ async function applyShiftChangeRequestToSchedule(
       where: { id: schedule.id },
       data: {
         shiftId: shift.id,
-        startsAt: shift.startsAt,
-        endsAt: shift.endsAt,
+        startsAt: baseTimes.startsAt,
+        endsAt: baseTimes.endsAt,
         observation: `Troca de turno temporária aprovada pela solicitação ${request.code}`
       },
       include: { shift: true }
@@ -2673,6 +2695,7 @@ async function applyShiftChangeRequestToSchedule(
         startDate: startDate.toISOString().slice(0, 10),
         endDate: (endDate ?? startDate).toISOString().slice(0, 10),
         desiredShift,
+        baseTimes,
         schedulesUpdated: schedules.length
       }
     }
