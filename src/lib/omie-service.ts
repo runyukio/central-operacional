@@ -247,7 +247,7 @@ export async function upsertBillingAccountPayable(
   }
   const departmentCode = String(input.departmentCode ?? "").trim();
   if (!departmentCode) {
-    throw new OmieIntegrationError("O departamento WFM não possui um código válido no Omie.");
+    throw new OmieIntegrationError("O departamento do colaborador não possui um código válido no Omie.");
   }
   const invoiceNumber = String(input.invoiceNumber ?? "").trim();
   if (!/^\d{1,20}$/.test(invoiceNumber)) {

@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  BILLING_OMIE_DEPARTMENT_CODE,
+  BILLING_OMIE_DEPARTMENT_CODES,
   BILLING_OMIE_PROJECT_CODE,
   buildBillingOmieAllocation,
+  resolveBillingOmieDepartment,
   resolveBillingOmieMainCategory
 } from "./billing-omie-allocation";
 import { OmieIntegrationError } from "./omie-service";
@@ -19,11 +20,37 @@ test("resolve as categorias principais por cargo/função", () => {
   assert.equal(resolveBillingOmieMainCategory("RTA"), "2.10.88");
   assert.equal(resolveBillingOmieMainCategory("Financeiro"), "2.10.93");
   assert.equal(resolveBillingOmieMainCategory("Logística/TI"), "2.10.90");
+  assert.equal(resolveBillingOmieMainCategory("Agente", "Treinadores"), "2.10.95");
+  assert.equal(resolveBillingOmieMainCategory("Agente", "Treinador II"), "2.10.95");
   assert.equal(resolveBillingOmieMainCategory("WFM", "RTA"), "2.10.88");
+});
+
+test("resolve o departamento pela LOB e usa cargo/função somente para ALL", () => {
+  assert.deepEqual(resolveBillingOmieDepartment("ADS", "WFM"), {
+    key: "ADS",
+    code: BILLING_OMIE_DEPARTMENT_CODES.ADS,
+    name: "ADS"
+  });
+  assert.deepEqual(resolveBillingOmieDepartment("CEC", "Agente"), {
+    key: "CEC",
+    code: BILLING_OMIE_DEPARTMENT_CODES.CEC,
+    name: "CEC"
+  });
+  assert.deepEqual(resolveBillingOmieDepartment("ALL", "WFM"), {
+    key: "WFM",
+    code: BILLING_OMIE_DEPARTMENT_CODES.WFM,
+    name: "WFM"
+  });
+  assert.deepEqual(resolveBillingOmieDepartment("ALL", "RTA"), {
+    key: "RTA",
+    code: BILLING_OMIE_DEPARTMENT_CODES.RTA,
+    name: "RTA"
+  });
 });
 
 test("mantém correção, desconto e outros no saldo da categoria principal", () => {
   assert.deepEqual(buildBillingOmieAllocation({
+    lob: "ADS",
     roleTitle: "Agente",
     finalAmount: 980.38,
     bonusAmount: 0,
@@ -32,7 +59,8 @@ test("mantém correção, desconto e outros no saldo da categoria principal", ()
   }), {
     documentAmount: 980.38,
     projectCode: BILLING_OMIE_PROJECT_CODE,
-    departmentCode: BILLING_OMIE_DEPARTMENT_CODE,
+    departmentCode: BILLING_OMIE_DEPARTMENT_CODES.ADS,
+    departmentName: "ADS",
     documentTypeCode: "NF",
     mainCategoryCode: "2.10.89",
     categories: [{ code: "2.10.89", value: 980.38 }]
@@ -41,6 +69,7 @@ test("mantém correção, desconto e outros no saldo da categoria principal", ()
 
 test("rateia bônus e campanha e mantém NF no invoice mesmo quando há adiantamento", () => {
   assert.deepEqual(buildBillingOmieAllocation({
+    lob: "ALL",
     roleTitle: "WFM",
     finalAmount: 5_527.44,
     bonusAmount: 200,
@@ -49,7 +78,8 @@ test("rateia bônus e campanha e mantém NF no invoice mesmo quando há adiantam
   }), {
     documentAmount: 5_527.44,
     projectCode: BILLING_OMIE_PROJECT_CODE,
-    departmentCode: BILLING_OMIE_DEPARTMENT_CODE,
+    departmentCode: BILLING_OMIE_DEPARTMENT_CODES.WFM,
+    departmentName: "WFM",
     documentTypeCode: "NF",
     mainCategoryCode: "2.10.96",
     categories: [
@@ -68,6 +98,7 @@ test("bloqueia cargo sem de/para e invoice com valor não positivo", () => {
   );
   assert.throws(
     () => buildBillingOmieAllocation({
+      lob: "ADS",
       roleTitle: "Agente",
       finalAmount: 0,
       bonusAmount: 0,
@@ -76,5 +107,15 @@ test("bloqueia cargo sem de/para e invoice com valor não positivo", () => {
     }),
     (error: unknown) => error instanceof OmieIntegrationError
       && error.message.includes("maior que zero")
+  );
+  assert.throws(
+    () => resolveBillingOmieDepartment("LOB_NOVA", "Agente"),
+    (error: unknown) => error instanceof OmieIntegrationError
+      && error.message.includes("Departamento Omie não configurado")
+  );
+  assert.throws(
+    () => resolveBillingOmieDepartment(null, "Agente"),
+    (error: unknown) => error instanceof OmieIntegrationError
+      && error.message.includes("LOB não informada")
   );
 });

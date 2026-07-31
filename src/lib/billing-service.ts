@@ -597,6 +597,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
   const calculated = await calculateEmployeeInvoice(user.employeeProfile as BillingEmployee, referenceMonth, rates, cycle.id, cycle.status);
   try {
     buildBillingOmieAllocation({
+      lob: user.employeeProfile.lob?.name,
       roleTitle: user.employeeProfile.roleTitle,
       skill: user.employeeProfile.skill,
       finalAmount: calculated.finalAmount,
@@ -797,7 +798,8 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
               skill: true,
               pixKey: true,
               pixKeyType: true,
-              lobId: true
+              lobId: true,
+              lob: { select: { name: true } }
             }
           }
         }
@@ -860,6 +862,7 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
     const advanceAmount = Number(fiscalInvoice.employeeInvoice.advanceAmount);
     const finalAmount = Number(fiscalInvoice.employeeInvoice.finalAmount);
     const allocation = buildBillingOmieAllocation({
+      lob: fiscalInvoice.employeeInvoice.employee.lob?.name,
       roleTitle: fiscalInvoice.employeeInvoice.employee.roleTitle,
       skill: fiscalInvoice.employeeInvoice.employee.skill,
       finalAmount,
@@ -930,6 +933,7 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
       documentAmount: allocation.documentAmount,
       projectCode: allocation.projectCode,
       departmentCode: allocation.departmentCode,
+      departmentName: allocation.departmentName,
       documentTypeCode: allocation.documentTypeCode,
       pixKeyType: fiscalInvoice.employeeInvoice.employee.pixKeyType ?? "",
       categories: allocation.categories,
