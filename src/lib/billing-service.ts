@@ -1341,6 +1341,51 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
     include: { fiscalInvoice: true }
   });
 
+  if (input.finalized && isEmployeeInTrainingStatus(employee.operationalStatus)) {
+    const calculated = await calculateEmployeeInvoice(employee, referenceMonth, await getBillingRates(), cycle.id, cycle.status);
+    const invoice = await prisma.$transaction(async (tx) => {
+      const savedInvoice = await upsertEmployeeInvoice(cycle.id, calculated, { status: "FECHADO" }, tx);
+      await tx.auditLog.create({
+        data: {
+          actorId: user!.id,
+          action: AuditAction.EDICAO,
+          entity: "BillingEmployeeInvoice",
+          entityId: savedInvoice.id,
+          reason: "Invoice individual de colaborador em treinamento finalizado pelo Admin Central sem nota fiscal",
+          previousValue: existing ? {
+            status: existing.status,
+            finalAmount: Number(existing.finalAmount),
+            totalMinutes: existing.totalConsideredMinutes,
+            invoiceNumber: existing.fiscalInvoice?.invoiceNumber ?? null
+          } : undefined,
+          newValue: {
+            status: savedInvoice.status,
+            referenceMonth,
+            employeeId: employee.id,
+            employeeStatus: employee.operationalStatus,
+            fiscalInvoiceRequired: false,
+            omieSendRequired: false,
+            finalAmount: Number(savedInvoice.finalAmount),
+            totalMinutes: savedInvoice.totalConsideredMinutes
+          }
+        }
+      });
+      return savedInvoice;
+    });
+    return {
+      data: {
+        id: invoice.id,
+        status: invoice.status,
+        statusLabel: invoiceStatusLabel(invoice.status),
+        omie: {
+          status: "NOT_SENT" as const,
+          message: "Fechamento de colaborador em treinamento concluído sem nota fiscal e sem envio ao Omie.",
+          launchCode: ""
+        }
+      }
+    };
+  }
+
   if (input.finalized) {
     if (!input.file && !hasReusableBillingFiscalExtraction(existing?.fiscalInvoice)) {
       return { error: "Anexe a nota fiscal para que os dados sejam lidos automaticamente.", status: 400 };
@@ -2735,6 +2780,10 @@ function isScheduleWithinEmployeeBillingWindow(employee: Pick<BillingEmployee, "
 function isTrainingTerminationStatus(value?: string | null) {
   const status = normalizeComparableJobTitle(value).replace(/[^a-z0-9]/g, "");
   return status === "desligadoemtreinamento" || status === "desligadotreinamento";
+}
+
+function isEmployeeInTrainingStatus(value?: string | null) {
+  return normalizeComparableJobTitle(value).replace(/[^a-z0-9]/g, "") === "emtreinamento";
 }
 
 function isBillingEligibleContract(value?: string | null) {

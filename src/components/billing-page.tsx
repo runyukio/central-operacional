@@ -1003,6 +1003,7 @@ function EmployeeBillingDetail({
   const [fiscalError, setFiscalError] = useState("");
   const [fiscalDraft, setFiscalDraft] = useState<BillingFiscalDraft>(EMPTY_BILLING_FISCAL_UPLOAD);
   const finalized = invoice.status === "FECHADO";
+  const finalizesWithoutFiscalInvoice = invoice.employeeStatus.trim().toLocaleLowerCase("pt-BR") === "em treinamento";
   const alreadyReleasedForReview = ["DISPONIVEL_APROVACAO", "APROVADO_COLABORADOR", "AGUARDANDO_SUPERVISOR", "AGUARDANDO_ADMIN"].includes(invoice.status);
   const expectedFiscalAmount = calculateBillingFiscalExpectedAmount({
     referenceMonth,
@@ -1026,6 +1027,11 @@ function EmployeeBillingDetail({
       return;
     }
     const completed = await onSetFinalized(true, fiscalDraft);
+    if (completed) setFinalizationOpen(false);
+  }
+
+  async function finalizeTrainingInvoice() {
+    const completed = await onSetFinalized(true);
     if (completed) setFinalizationOpen(false);
   }
 
@@ -1071,7 +1077,11 @@ function EmployeeBillingDetail({
               <button
                 type="button"
                 disabled={saving}
-                onClick={() => finalized ? void onSetFinalized(false) : openFinalizationForm()}
+                onClick={() => finalized
+                  ? void onSetFinalized(false)
+                  : finalizesWithoutFiscalInvoice
+                    ? void finalizeTrainingInvoice()
+                    : openFinalizationForm()}
                 className={cn(
                   "inline-flex h-9 items-center justify-center gap-2 rounded-lg px-3 text-xs font-black leading-none",
                   finalized ? "border border-amber-200 bg-amber-50 text-amber-800" : "premium-button"
