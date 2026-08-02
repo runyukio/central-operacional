@@ -11,7 +11,7 @@ import {
   type BillingFiscalDocumentExtraction,
   verifyBillingFiscalValidationToken
 } from "@/lib/billing-fiscal-invoice-extraction";
-import { calculateBillingFiscalExpectedAmount } from "@/lib/billing-fiscal-invoice";
+import { calculateBillingFiscalExpectedAmount, isBillingFiscalAmountMismatchExempt } from "@/lib/billing-fiscal-invoice";
 import { buildBillingOmieAllocation } from "@/lib/billing-omie-allocation";
 import { canAccessBilling, canManageBilling } from "@/lib/billing-permissions";
 import {
@@ -512,8 +512,9 @@ export async function previewBillingFiscalInvoice(actor: Actor, input: {
     await ensureBillingFiscalDocumentAvailable(extraction, referenceMonth, employee.id);
 
     const matchesBilling = currencyEquals(extraction.serviceAmount, expectedFiscalAmount);
+    const amountMismatchAccepted = !matchesBilling && isBillingFiscalAmountMismatchExempt(employee.wbLogin);
     stage = "CREATE_VALIDATION";
-    const validationToken = matchesBilling
+    const validationToken = matchesBilling || amountMismatchAccepted
       ? createBillingFiscalValidationToken({
         ...extraction,
         serviceDescription: buildAutomaticBillingServiceDescription(extraction, referenceMonth),
@@ -534,6 +535,7 @@ export async function previewBillingFiscalInvoice(actor: Actor, input: {
         billingGrossAmount: expectedFiscalAmount,
         difference: roundMoney(extraction.serviceAmount - expectedFiscalAmount),
         matchesBilling,
+        amountMismatchAccepted,
         validationToken
       }
     };
@@ -616,6 +618,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
     return { error: "Os dados financeiros do colaborador não estão completos para o envio ao Omie.", status: 400 };
   }
   const expectedFiscalAmount = calculateBillingFiscalExpectedAmount(calculated);
+  const allowFiscalAmountMismatch = isBillingFiscalAmountMismatchExempt(user.employeeProfile.wbLogin);
   const file = input.file ?? null;
   let extraction: BillingFiscalDocumentExtraction;
   try {
@@ -624,6 +627,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
       referenceMonth,
       employeeId: user.employeeProfile.id,
       billingGrossAmount: expectedFiscalAmount,
+      allowAmountMismatch: allowFiscalAmountMismatch,
       file,
       validationToken: String(input.validationToken ?? ""),
       existing: persisted?.fiscalInvoice ?? null
@@ -723,6 +727,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
             invoiceNumber,
             invoiceGrossAmount: extraction.serviceAmount,
             billingGrossAmount: expectedFiscalAmount,
+            amountMismatchAccepted: allowFiscalAmountMismatch && !currencyEquals(extraction.serviceAmount, expectedFiscalAmount),
             billingHoursGrossAmount: calculated.grossAmount,
             billingCorrectionAmount: calculated.correctionAmount,
             extractionMethod: extraction.extractionMethod,
@@ -1400,6 +1405,7 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
 
     const calculated = await calculateEmployeeInvoice(employee, referenceMonth, await getBillingRates(), cycle.id, cycle.status);
     const expectedFiscalAmount = calculateBillingFiscalExpectedAmount(calculated);
+    const allowFiscalAmountMismatch = isBillingFiscalAmountMismatchExempt(employee.wbLogin);
     const file = input.file ?? null;
     let extraction: BillingFiscalDocumentExtraction;
     try {
@@ -1408,6 +1414,7 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
         referenceMonth,
         employeeId: employee.id,
         billingGrossAmount: expectedFiscalAmount,
+        allowAmountMismatch: allowFiscalAmountMismatch,
         file,
         validationToken: String(input.validationToken ?? ""),
         existing: existing?.fiscalInvoice ?? null
@@ -1523,6 +1530,7 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
               invoiceNumber,
               invoiceGrossAmount: extraction.serviceAmount,
               billingGrossAmount: expectedFiscalAmount,
+              amountMismatchAccepted: allowFiscalAmountMismatch && !currencyEquals(extraction.serviceAmount, expectedFiscalAmount),
               billingHoursGrossAmount: calculated.grossAmount,
               billingCorrectionAmount: calculated.correctionAmount,
               extractionMethod: extraction.extractionMethod,
@@ -3350,6 +3358,7 @@ async function resolveBillingFiscalSubmission(input: {
   referenceMonth: string;
   employeeId: string;
   billingGrossAmount: number;
+  allowAmountMismatch: boolean;
   file: File | null;
   validationToken: string;
   existing: BillingFiscalInvoiceRecord | null;
@@ -3379,7 +3388,7 @@ async function resolveBillingFiscalSubmission(input: {
     throw new BillingFiscalExtractionError("Anexe a nota fiscal para que os dados sejam lidos automaticamente.");
   }
 
-  if (!currencyEquals(extraction.serviceAmount, input.billingGrossAmount)) {
+  if (!input.allowAmountMismatch && !currencyEquals(extraction.serviceAmount, input.billingGrossAmount)) {
     throw new BillingFiscalExtractionError(
       `O valor do serviço na nota (${formatBillingCurrency(extraction.serviceAmount)}) é diferente do valor esperado do Billing com o adiantamento reincorporado (${formatBillingCurrency(input.billingGrossAmount)}).`,
       409

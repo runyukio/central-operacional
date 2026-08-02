@@ -5,6 +5,7 @@ import {
   BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH,
   calculateBillingFiscalExpectedAmount,
   calculateBillingFiscalGrossAmount,
+  isBillingFiscalAmountMismatchExempt,
   isValidBillingFiscalInvoiceNumber,
   normalizeBillingFiscalInvoiceNumber
 } from "./billing-fiscal-invoice";
@@ -25,6 +26,14 @@ test("normaliza caracteres não numéricos sem converter o identificador para nu
   assert.equal(normalizeBillingFiscalInvoiceNumber(" 00.12 "), "0012");
   assert.equal(normalizeBillingFiscalInvoiceNumber("12.345"), "12345");
   assert.equal(normalizeBillingFiscalInvoiceNumber("123456789012345678901"), "12345678901234567890");
+});
+
+test("libera divergência de valor da NF somente para os WBs autorizados", () => {
+  assert.equal(isBillingFiscalAmountMismatchExempt("wb_lucasy"), true);
+  assert.equal(isBillingFiscalAmountMismatchExempt(" WB_KEVIN11 "), true);
+  assert.equal(isBillingFiscalAmountMismatchExempt("leonardo20"), true);
+  assert.equal(isBillingFiscalAmountMismatchExempt("wb_leonardo20"), false);
+  assert.equal(isBillingFiscalAmountMismatchExempt("wb_outro"), false);
 });
 
 test("soma a correção ao valor bruto esperado na nota fiscal", () => {

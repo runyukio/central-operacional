@@ -1,5 +1,11 @@
 export const BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH = 20;
 
+const BILLING_FISCAL_AMOUNT_MISMATCH_EXEMPT_WB_LOGINS = new Set([
+  "wb_lucasy",
+  "wb_kevin11",
+  "leonardo20"
+]);
+
 const BILLING_FISCAL_INVOICE_NUMBER_PATTERN = /^\d{1,20}$/;
 
 export const BILLING_FISCAL_INVOICE_NUMBER_ERROR =
@@ -11,6 +17,10 @@ export function isValidBillingFiscalInvoiceNumber(value: string) {
 
 export function normalizeBillingFiscalInvoiceNumber(value: string) {
   return value.replace(/\D/g, "").slice(0, BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH);
+}
+
+export function isBillingFiscalAmountMismatchExempt(wbLogin: string | null | undefined) {
+  return BILLING_FISCAL_AMOUNT_MISMATCH_EXEMPT_WB_LOGINS.has(String(wbLogin ?? "").trim().toLowerCase());
 }
 
 export function calculateBillingFiscalGrossAmount(grossAmount: number, correctionAmount: number) {

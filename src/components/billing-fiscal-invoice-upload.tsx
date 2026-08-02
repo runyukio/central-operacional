@@ -14,6 +14,7 @@ export type BillingFiscalInvoiceAnalysis = {
   billingGrossAmount: number;
   difference: number;
   matchesBilling: boolean;
+  amountMismatchAccepted: boolean;
   validationToken: string;
 };
 
@@ -41,7 +42,10 @@ export function billingFiscalUploadIsReady(
   existing: ExistingBillingFiscalInvoice | null | undefined,
   expectedGrossAmount: number
 ) {
-  if (value.file) return Boolean(value.analysis?.matchesBilling && value.validationToken);
+  if (value.file) return Boolean(
+    (value.analysis?.matchesBilling || value.analysis?.amountMismatchAccepted)
+    && value.validationToken
+  );
   return Boolean(
     existing?.accessKey
     && existing.invoiceNumber
@@ -119,14 +123,16 @@ export function BillingFiscalInvoiceUpload({
       accessKey: value.analysis.accessKey,
       invoiceNumber: value.analysis.invoiceNumber,
       serviceAmount: value.analysis.serviceAmount,
-      matchesBilling: value.analysis.matchesBilling
+      matchesBilling: value.analysis.matchesBilling,
+      amountMismatchAccepted: value.analysis.amountMismatchAccepted
     }
     : existing?.accessKey
       ? {
         accessKey: existing.accessKey,
         invoiceNumber: existing.invoiceNumber,
         serviceAmount: existing.grossAmount,
-        matchesBilling: currencyEquals(existing.grossAmount, expectedGrossAmount)
+        matchesBilling: currencyEquals(existing.grossAmount, expectedGrossAmount),
+        amountMismatchAccepted: false
       }
       : null;
 
@@ -177,14 +183,18 @@ export function BillingFiscalInvoiceUpload({
             "flex items-start gap-2 rounded-xl border px-3 py-2.5 text-sm font-bold",
             displayed.matchesBilling
               ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+              : displayed.amountMismatchAccepted
+                ? "border-blue-200 bg-blue-50 text-blue-700"
               : "border-red-200 bg-red-50 text-red-700"
           )}>
-            {displayed.matchesBilling
+            {displayed.matchesBilling || displayed.amountMismatchAccepted
               ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
               : <XCircle className="mt-0.5 h-4 w-4 shrink-0" />}
             <span>
               {displayed.matchesBilling
                 ? "Nota validada: o valor do serviço é igual ao valor esperado do Billing."
+                : displayed.amountMismatchAccepted
+                  ? "Nota validada: a divergência de valor está liberada para este colaborador."
                 : `Aprovação bloqueada: a nota está em ${formatCurrency(displayed.serviceAmount)} e o valor esperado do Billing em ${formatCurrency(expectedGrossAmount)}.`}
             </span>
           </div>
