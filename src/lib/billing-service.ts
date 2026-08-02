@@ -474,10 +474,7 @@ export async function previewBillingFiscalInvoice(actor: Actor, input: {
   }
 
   if (!employee) return { error: "Colaborador não encontrado para validar a nota fiscal.", status: 404 };
-  const eligibleForFiscalPreview = requestedEmployeeId
-    ? isManuallyFinalizableBillingEmployee(employee)
-    : isBillableEmployee(employee);
-  if (!eligibleForFiscalPreview) return { error: "Colaborador não elegível para Billing.", status: 403 };
+  if (!isBillableEmployee(employee)) return { error: "Colaborador não elegível para Billing.", status: 403 };
 
   const cycle = await prisma.billingCycle.findUnique({ where: { referenceMonth } });
   const isOwnInvoice = !requestedEmployeeId;
@@ -1336,7 +1333,7 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
     include: { user: true, lob: true, supervisor: true, shift: true }
   });
   if (!employee) return { error: "Colaborador não encontrado.", status: 404 };
-  if (!isManuallyFinalizableBillingEmployee(employee)) return { error: "Colaborador não elegível para fechamento manual de Billing.", status: 403 };
+  if (!isBillableEmployee(employee)) return { error: "Colaborador não elegível para Billing.", status: 403 };
 
   const cycle = await ensureBillingCycle(referenceMonth);
   const existing = await prisma.billingEmployeeInvoice.findUnique({
@@ -2482,14 +2479,7 @@ async function listBillingEmployees(filters: BillingDashboardFilters, referenceM
     include: { user: true, lob: true, supervisor: true, shift: true },
     orderBy: [{ lob: { name: "asc" } }, { fullName: "asc" }]
   });
-  const explicitlyShowingTrainingTerminations = Boolean(filters.employeeId)
-    || isTrainingTerminationStatus(filters.employeeStatus);
-  const finalizedEmployeeIdSet = new Set(finalizedInvoiceEmployeeIds);
-  return employees.filter((employee) => (
-    isBillableEmployee(employee)
-    || finalizedEmployeeIdSet.has(employee.id)
-    || (explicitlyShowingTrainingTerminations && isManuallyFinalizableBillingEmployee(employee))
-  ));
+  return employees.filter((employee) => isBillableEmployee(employee));
 }
 
 function filterInvoices<T extends { status: string; billingRule?: string; adjustmentTypes?: string[] }>(invoices: T[], filters: BillingDashboardFilters) {
@@ -2735,13 +2725,6 @@ function isBillableEmployee(employee: Pick<BillingEmployee, "roleTitle" | "skill
   if (isTrainingTerminationStatus(employee.operationalStatus)) return false;
   if (!isBillingEligibleContract(employee.contractType)) return false;
   return isAgentJobTitle(employee.roleTitle) || Boolean(resolveEmployeeBillingStaffRateRule(employee)) || isSpecialBillingSkill(employee.skill);
-}
-
-function isManuallyFinalizableBillingEmployee(employee: Pick<BillingEmployee, "roleTitle" | "skill" | "contractType"> & { operationalStatus?: string | null }) {
-  if (isBillableEmployee(employee)) return true;
-  return isTrainingTerminationStatus(employee.operationalStatus)
-    && isBillingEligibleContract(employee.contractType)
-    && isAgentJobTitle(employee.roleTitle);
 }
 
 function isScheduleWithinEmployeeBillingWindow(employee: Pick<BillingEmployee, "terminationDate">, date: Date) {

@@ -512,7 +512,6 @@ export function BillingPage() {
               <option>Em treinamento</option>
               <option>Afastado</option>
               <option>Desligado</option>
-              <option>Desligado em Treinamento</option>
             </select>
           </Label>
           <Label text="Status do invoice">
