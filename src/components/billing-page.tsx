@@ -509,8 +509,10 @@ export function BillingPage() {
             <select value={employeeStatus} onChange={(event) => setEmployeeStatus(event.target.value)} className="premium-control h-10 w-full px-3 text-sm font-bold">
               <option>Todos</option>
               <option>Ativo</option>
+              <option>Em treinamento</option>
               <option>Afastado</option>
               <option>Desligado</option>
+              <option>Desligado em Treinamento</option>
             </select>
           </Label>
           <Label text="Status do invoice">
