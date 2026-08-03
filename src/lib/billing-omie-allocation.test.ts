@@ -11,7 +11,8 @@ import {
 import { OmieIntegrationError } from "./omie-service";
 
 test("resolve as categorias principais por cargo/função", () => {
-  assert.equal(resolveBillingOmieMainCategory("Agente"), "2.10.89");
+  assert.equal(resolveBillingOmieMainCategory("Agente"), "2.10.99");
+  assert.equal(resolveBillingOmieMainCategory("Agent"), "2.10.99");
   assert.equal(resolveBillingOmieMainCategory("Coordenador"), "2.10.89");
   assert.equal(resolveBillingOmieMainCategory("Qualidade"), "2.10.98");
   assert.equal(resolveBillingOmieMainCategory("WFM"), "2.10.96");
@@ -19,7 +20,8 @@ test("resolve as categorias principais por cargo/função", () => {
   assert.equal(resolveBillingOmieMainCategory("RH"), "2.10.94");
   assert.equal(resolveBillingOmieMainCategory("RTA"), "2.10.88");
   assert.equal(resolveBillingOmieMainCategory("Financeiro"), "2.10.93");
-  assert.equal(resolveBillingOmieMainCategory("Logística/TI"), "2.10.90");
+  assert.equal(resolveBillingOmieMainCategory("TI"), "2.10.93");
+  assert.equal(resolveBillingOmieMainCategory("Logística/TI"), "2.10.93");
   assert.equal(resolveBillingOmieMainCategory("Agente", "Treinadores"), "2.10.95");
   assert.equal(resolveBillingOmieMainCategory("Agente", "Treinador II"), "2.10.95");
   assert.equal(resolveBillingOmieMainCategory("WFM", "RTA"), "2.10.88");
@@ -62,8 +64,8 @@ test("mantém correção, desconto e outros no saldo da categoria principal", ()
     departmentCode: BILLING_OMIE_DEPARTMENT_CODES.ADS,
     departmentName: "ADS",
     documentTypeCode: "NF",
-    mainCategoryCode: "2.10.89",
-    categories: [{ code: "2.10.89", value: 980.38 }]
+    mainCategoryCode: "2.10.99",
+    categories: [{ code: "2.10.99", value: 980.38 }]
   });
 });
 

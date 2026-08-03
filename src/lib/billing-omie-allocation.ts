@@ -19,8 +19,8 @@ export const BILLING_OMIE_ADVANCE_DOCUMENT_TYPE = "ADI";
 export const BILLING_OMIE_FISCAL_DOCUMENT_TYPE = "NF";
 
 const MAIN_CATEGORY_BY_ROLE: Record<string, string> = {
-  agent: "2.10.89",
-  agente: "2.10.89",
+  agent: "2.10.99",
+  agente: "2.10.99",
   coordinator: "2.10.89",
   coordenador: "2.10.89",
   coordenadora: "2.10.89",
@@ -36,10 +36,10 @@ const MAIN_CATEGORY_BY_ROLE: Record<string, string> = {
   rta: "2.10.88",
   financeiro: "2.10.93",
   financial: "2.10.93",
-  it: "2.10.90",
-  ti: "2.10.90",
-  logisticati: "2.10.90",
-  logisticsit: "2.10.90",
+  it: "2.10.93",
+  ti: "2.10.93",
+  logisticati: "2.10.93",
+  logisticsit: "2.10.93",
   wfm: "2.10.96"
 };
 
@@ -54,10 +54,10 @@ const MAIN_CATEGORY_BY_SKILL: Record<string, string> = {
   rta: "2.10.88",
   financeiro: "2.10.93",
   financial: "2.10.93",
-  it: "2.10.90",
-  ti: "2.10.90",
-  logisticati: "2.10.90",
-  logisticsit: "2.10.90"
+  it: "2.10.93",
+  ti: "2.10.93",
+  logisticati: "2.10.93",
+  logisticsit: "2.10.93"
 };
 
 const DEPARTMENT_BY_LOB: Record<string, keyof typeof BILLING_OMIE_DEPARTMENT_CODES> = {

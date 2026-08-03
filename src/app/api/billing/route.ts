@@ -7,6 +7,7 @@ import {
   deleteBillingAdjustment,
   getBillingDashboard,
   releaseEmployeeBillingInvoiceForReview,
+  retryEmployeeBillingInvoiceOmie,
   saveBillingRates,
   setEmployeeBillingInvoiceFinalized,
   supervisorReviewInvoiceAdjustment,
@@ -95,6 +96,9 @@ export async function POST(request: Request) {
         referenceMonth: body.referenceMonth,
         employeeId: String(body.employeeId ?? "")
       });
+      break;
+    case "retry-employee-invoice-omie":
+      result = await retryEmployeeBillingInvoiceOmie(actor, String(body.employeeInvoiceId ?? ""));
       break;
     case "supervisor-review-adjustment":
       result = await supervisorReviewInvoiceAdjustment(actor, { id: String(body.id ?? ""), observation: String(body.observation ?? "") });

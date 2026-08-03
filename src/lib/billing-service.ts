@@ -778,6 +778,32 @@ export async function retryMyBillingInvoiceOmie(actor: Actor, referenceMonthInpu
   return { data: { id: invoice.id, omie } };
 }
 
+export async function retryEmployeeBillingInvoiceOmie(actor: Actor, employeeInvoiceIdInput: string) {
+  const user = await findActiveUser(actor.email);
+  const denied = requireBillingManagement(user);
+  if (denied) return denied;
+
+  const employeeInvoiceId = String(employeeInvoiceIdInput ?? "").trim();
+  if (!employeeInvoiceId) return { error: "Invoice obrigatório para reenviar ao Omie.", status: 400 };
+
+  const invoice = await prisma.billingEmployeeInvoice.findUnique({
+    where: { id: employeeInvoiceId },
+    select: {
+      id: true,
+      status: true,
+      employee: { select: { wbLogin: true } },
+      fiscalInvoice: { select: { id: true } }
+    }
+  });
+  if (!invoice?.fiscalInvoice) return { error: "Nota fiscal não encontrada para reenviar ao Omie.", status: 404 };
+  if (invoice.status !== "APROVADO_COLABORADOR") {
+    return { error: "Somente invoices aprovados pelo colaborador podem ser reenviados ao Omie.", status: 409 };
+  }
+
+  const omie = await syncBillingFiscalInvoiceToOmie(invoice.id, user!.id);
+  return { data: { id: invoice.id, wbLogin: invoice.employee.wbLogin, omie } };
+}
+
 async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId: string | null): Promise<BillingOmieSyncResult> {
   const fiscalInvoice = await prisma.billingFiscalInvoice.findUnique({
     where: { employeeInvoiceId },
