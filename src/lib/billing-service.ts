@@ -820,7 +820,7 @@ export async function reconcileBillingOmieAgentCategories(actor: Actor, input: {
       omieStatus: "SYNCED",
       employeeInvoice: {
         referenceMonth,
-        status: "APROVADO_COLABORADOR"
+        status: { in: ["APROVADO_COLABORADOR", "FECHADO"] }
       }
     },
     select: {
@@ -860,7 +860,9 @@ export async function reconcileBillingOmieAgentCategories(actor: Actor, input: {
 
   if (input.apply) {
     for (const invoice of selected) {
-      const omie = await syncBillingFiscalInvoiceToOmie(invoice.employeeInvoiceId, user!.id);
+      const omie = await syncBillingFiscalInvoiceToOmie(invoice.employeeInvoiceId, user!.id, {
+        allowFinalizedReconciliation: true
+      });
       results.push({
         employeeInvoiceId: invoice.employeeInvoiceId,
         wbLogin: invoice.employeeInvoice.employee.wbLogin,
@@ -901,7 +903,11 @@ function omieAuditCategoryCodes(value: Prisma.JsonValue | null | undefined) {
   });
 }
 
-async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId: string | null): Promise<BillingOmieSyncResult> {
+async function syncBillingFiscalInvoiceToOmie(
+  employeeInvoiceId: string,
+  actorId: string | null,
+  options: { allowFinalizedReconciliation?: boolean } = {}
+): Promise<BillingOmieSyncResult> {
   const fiscalInvoice = await prisma.billingFiscalInvoice.findUnique({
     where: { employeeInvoiceId },
     include: {
@@ -935,7 +941,10 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
     }
   });
   if (!fiscalInvoice) return { status: "ERROR", message: "Nota fiscal não encontrada para integração com o Omie.", launchCode: "" };
-  if (fiscalInvoice.employeeInvoice.status !== "APROVADO_COLABORADOR") {
+  const isEmployeeApproved = fiscalInvoice.employeeInvoice.status === "APROVADO_COLABORADOR";
+  const isEligibleFinalizedReconciliation = options.allowFinalizedReconciliation
+    && fiscalInvoice.employeeInvoice.status === "FECHADO";
+  if (!isEmployeeApproved && !isEligibleFinalizedReconciliation) {
     return {
       status: "NOT_SENT",
       message: "Somente a aprovação feita pelo colaborador pode enviar o invoice ao Omie.",
