@@ -151,6 +151,10 @@ export function canAccessPerformance(user: PermissionUser) {
   return isActiveUser(user) && roleHasCapability(user.role, "PERFORMANCE");
 }
 
+export function canAccessOwnPerformance(user: PermissionUser) {
+  return isActiveUser(user) && roleHasCapability(user.role, "PERSONAL");
+}
+
 export function canAccessPerformanceWfh(user: PermissionUser) {
   return canAccessPerformance(user);
 }
