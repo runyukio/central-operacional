@@ -7,7 +7,8 @@ import {
   calculateBillingFiscalGrossAmount,
   isBillingFiscalAmountMismatchExempt,
   isValidBillingFiscalInvoiceNumber,
-  normalizeBillingFiscalInvoiceNumber
+  normalizeBillingFiscalInvoiceNumber,
+  resolveBillingManualClosureWithoutFiscalInvoiceReason
 } from "./billing-fiscal-invoice";
 
 test("aceita números de nota fiscal com até 20 dígitos", () => {
@@ -34,6 +35,34 @@ test("libera divergência de valor da NF somente para os WBs autorizados", () =>
   assert.equal(isBillingFiscalAmountMismatchExempt("leonardo20"), true);
   assert.equal(isBillingFiscalAmountMismatchExempt("wb_leonardo20"), false);
   assert.equal(isBillingFiscalAmountMismatchExempt("wb_outro"), false);
+});
+
+test("permite fechamento manual sem nota para valor não positivo, treinamento e WB autorizado", () => {
+  assert.equal(resolveBillingManualClosureWithoutFiscalInvoiceReason({
+    wbLogin: "wb_agente",
+    employeeStatus: "Ativo",
+    finalAmount: 0
+  }), "NON_POSITIVE_FINAL_AMOUNT");
+  assert.equal(resolveBillingManualClosureWithoutFiscalInvoiceReason({
+    wbLogin: "wb_agente",
+    employeeStatus: "Ativo",
+    finalAmount: -10
+  }), "NON_POSITIVE_FINAL_AMOUNT");
+  assert.equal(resolveBillingManualClosureWithoutFiscalInvoiceReason({
+    wbLogin: "wb_agente",
+    employeeStatus: "Em treinamento",
+    finalAmount: 100
+  }), "EMPLOYEE_IN_TRAINING");
+  assert.equal(resolveBillingManualClosureWithoutFiscalInvoiceReason({
+    wbLogin: " GUILHEREME.RAMOS ",
+    employeeStatus: "Ativo",
+    finalAmount: 4_700.16
+  }), "WB_EXCEPTION");
+  assert.equal(resolveBillingManualClosureWithoutFiscalInvoiceReason({
+    wbLogin: "wb_outro",
+    employeeStatus: "Ativo",
+    finalAmount: 100
+  }), null);
 });
 
 test("soma a correção ao valor bruto esperado na nota fiscal", () => {

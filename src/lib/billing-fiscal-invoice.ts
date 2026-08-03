@@ -6,6 +6,15 @@ const BILLING_FISCAL_AMOUNT_MISMATCH_EXEMPT_WB_LOGINS = new Set([
   "leonardo20"
 ]);
 
+const BILLING_MANUAL_CLOSURE_WITHOUT_FISCAL_INVOICE_WB_LOGINS = new Set([
+  "guilhereme.ramos"
+]);
+
+export type BillingManualClosureWithoutFiscalInvoiceReason =
+  | "EMPLOYEE_IN_TRAINING"
+  | "NON_POSITIVE_FINAL_AMOUNT"
+  | "WB_EXCEPTION";
+
 const BILLING_FISCAL_INVOICE_NUMBER_PATTERN = /^\d{1,20}$/;
 
 export const BILLING_FISCAL_INVOICE_NUMBER_ERROR =
@@ -21,6 +30,19 @@ export function normalizeBillingFiscalInvoiceNumber(value: string) {
 
 export function isBillingFiscalAmountMismatchExempt(wbLogin: string | null | undefined) {
   return BILLING_FISCAL_AMOUNT_MISMATCH_EXEMPT_WB_LOGINS.has(String(wbLogin ?? "").trim().toLowerCase());
+}
+
+export function resolveBillingManualClosureWithoutFiscalInvoiceReason(input: {
+  wbLogin: string | null | undefined;
+  employeeStatus: string | null | undefined;
+  finalAmount: number;
+}): BillingManualClosureWithoutFiscalInvoiceReason | null {
+  const employeeStatus = normalizeComparableBillingValue(input.employeeStatus);
+  if (employeeStatus === "emtreinamento") return "EMPLOYEE_IN_TRAINING";
+  if (Number(input.finalAmount) <= 0) return "NON_POSITIVE_FINAL_AMOUNT";
+  const wbLogin = String(input.wbLogin ?? "").trim().toLowerCase();
+  if (BILLING_MANUAL_CLOSURE_WITHOUT_FISCAL_INVOICE_WB_LOGINS.has(wbLogin)) return "WB_EXCEPTION";
+  return null;
 }
 
 export function calculateBillingFiscalGrossAmount(grossAmount: number, correctionAmount: number) {
@@ -40,4 +62,12 @@ export function calculateBillingFiscalExpectedAmount(input: {
 
 function roundCurrency(value: number) {
   return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+}
+
+function normalizeComparableBillingValue(value: string | null | undefined) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
 }

@@ -10,7 +10,11 @@ import {
   type BillingFiscalInvoiceUploadValue
 } from "@/components/billing-fiscal-invoice-upload";
 import { EmptyState, PageHeader, Panel, StatCard, StatusBadge } from "@/components/ui/primitives";
-import { calculateBillingFiscalExpectedAmount, isBillingFiscalAmountMismatchExempt } from "@/lib/billing-fiscal-invoice";
+import {
+  calculateBillingFiscalExpectedAmount,
+  isBillingFiscalAmountMismatchExempt,
+  resolveBillingManualClosureWithoutFiscalInvoiceReason
+} from "@/lib/billing-fiscal-invoice";
 import { cn } from "@/lib/utils";
 
 type BillingPayload = {
@@ -1003,7 +1007,11 @@ function EmployeeBillingDetail({
   const [fiscalError, setFiscalError] = useState("");
   const [fiscalDraft, setFiscalDraft] = useState<BillingFiscalDraft>(EMPTY_BILLING_FISCAL_UPLOAD);
   const finalized = invoice.status === "FECHADO";
-  const finalizesWithoutFiscalInvoice = invoice.employeeStatus.trim().toLocaleLowerCase("pt-BR") === "em treinamento";
+  const finalizesWithoutFiscalInvoice = Boolean(resolveBillingManualClosureWithoutFiscalInvoiceReason({
+    wbLogin: invoice.wbLogin,
+    employeeStatus: invoice.employeeStatus,
+    finalAmount: invoice.finalAmount
+  }));
   const allowFiscalAmountMismatch = isBillingFiscalAmountMismatchExempt(invoice.wbLogin);
   const alreadyReleasedForReview = ["DISPONIVEL_APROVACAO", "APROVADO_COLABORADOR", "AGUARDANDO_SUPERVISOR", "AGUARDANDO_ADMIN"].includes(invoice.status);
   const expectedFiscalAmount = calculateBillingFiscalExpectedAmount({
@@ -1031,7 +1039,7 @@ function EmployeeBillingDetail({
     if (completed) setFinalizationOpen(false);
   }
 
-  async function finalizeTrainingInvoice() {
+  async function finalizeWithoutFiscalInvoice() {
     const completed = await onSetFinalized(true);
     if (completed) setFinalizationOpen(false);
   }
@@ -1081,7 +1089,7 @@ function EmployeeBillingDetail({
                 onClick={() => finalized
                   ? void onSetFinalized(false)
                   : finalizesWithoutFiscalInvoice
-                    ? void finalizeTrainingInvoice()
+                    ? void finalizeWithoutFiscalInvoice()
                     : openFinalizationForm()}
                 className={cn(
                   "inline-flex h-9 items-center justify-center gap-2 rounded-lg px-3 text-xs font-black leading-none",
