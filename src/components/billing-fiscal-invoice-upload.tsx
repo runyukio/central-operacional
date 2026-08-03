@@ -40,7 +40,8 @@ export const EMPTY_BILLING_FISCAL_UPLOAD: BillingFiscalInvoiceUploadValue = {
 export function billingFiscalUploadIsReady(
   value: BillingFiscalInvoiceUploadValue,
   existing: ExistingBillingFiscalInvoice | null | undefined,
-  expectedGrossAmount: number
+  expectedGrossAmount: number,
+  allowAmountMismatch = false
 ) {
   if (value.file) return Boolean(
     (value.analysis?.matchesBilling || value.analysis?.amountMismatchAccepted)
@@ -49,7 +50,7 @@ export function billingFiscalUploadIsReady(
   return Boolean(
     existing?.accessKey
     && existing.invoiceNumber
-    && currencyEquals(existing.grossAmount, expectedGrossAmount)
+    && (allowAmountMismatch || currencyEquals(existing.grossAmount, expectedGrossAmount))
   );
 }
 
@@ -57,6 +58,7 @@ export function BillingFiscalInvoiceUpload({
   referenceMonth,
   employeeId,
   expectedGrossAmount,
+  allowAmountMismatch = false,
   existing,
   disabled = false,
   value,
@@ -65,6 +67,7 @@ export function BillingFiscalInvoiceUpload({
   referenceMonth: string;
   employeeId?: string;
   expectedGrossAmount: number;
+  allowAmountMismatch?: boolean;
   existing?: ExistingBillingFiscalInvoice | null;
   disabled?: boolean;
   value: BillingFiscalInvoiceUploadValue;
@@ -132,7 +135,8 @@ export function BillingFiscalInvoiceUpload({
         invoiceNumber: existing.invoiceNumber,
         serviceAmount: existing.grossAmount,
         matchesBilling: currencyEquals(existing.grossAmount, expectedGrossAmount),
-        amountMismatchAccepted: false
+        amountMismatchAccepted: allowAmountMismatch
+          && !currencyEquals(existing.grossAmount, expectedGrossAmount)
       }
       : null;
 

@@ -10,7 +10,7 @@ import {
   type BillingFiscalInvoiceUploadValue
 } from "@/components/billing-fiscal-invoice-upload";
 import { EmptyState, PageHeader, Panel, StatCard, StatusBadge } from "@/components/ui/primitives";
-import { calculateBillingFiscalExpectedAmount } from "@/lib/billing-fiscal-invoice";
+import { calculateBillingFiscalExpectedAmount, isBillingFiscalAmountMismatchExempt } from "@/lib/billing-fiscal-invoice";
 import { cn } from "@/lib/utils";
 
 type BillingPayload = {
@@ -1004,6 +1004,7 @@ function EmployeeBillingDetail({
   const [fiscalDraft, setFiscalDraft] = useState<BillingFiscalDraft>(EMPTY_BILLING_FISCAL_UPLOAD);
   const finalized = invoice.status === "FECHADO";
   const finalizesWithoutFiscalInvoice = invoice.employeeStatus.trim().toLocaleLowerCase("pt-BR") === "em treinamento";
+  const allowFiscalAmountMismatch = isBillingFiscalAmountMismatchExempt(invoice.wbLogin);
   const alreadyReleasedForReview = ["DISPONIVEL_APROVACAO", "APROVADO_COLABORADOR", "AGUARDANDO_SUPERVISOR", "AGUARDANDO_ADMIN"].includes(invoice.status);
   const expectedFiscalAmount = calculateBillingFiscalExpectedAmount({
     referenceMonth,
@@ -1022,7 +1023,7 @@ function EmployeeBillingDetail({
 
   async function finalizeInvoice() {
     setFiscalError("");
-    if (!billingFiscalUploadIsReady(fiscalDraft, invoice.fiscalInvoice, expectedFiscalAmount)) {
+    if (!billingFiscalUploadIsReady(fiscalDraft, invoice.fiscalInvoice, expectedFiscalAmount, allowFiscalAmountMismatch)) {
       setFiscalError("Selecione a nota fiscal e aguarde a validação automática dos dados.");
       return;
     }
@@ -1207,6 +1208,7 @@ function EmployeeBillingDetail({
                 referenceMonth={referenceMonth}
                 employeeId={invoice.employeeId}
                 expectedGrossAmount={expectedFiscalAmount}
+                allowAmountMismatch={allowFiscalAmountMismatch}
                 existing={invoice.fiscalInvoice}
                 disabled={saving}
                 value={fiscalDraft}
@@ -1224,7 +1226,12 @@ function EmployeeBillingDetail({
               </button>
               <button
                 type="button"
-                disabled={saving || !billingFiscalUploadIsReady(fiscalDraft, invoice.fiscalInvoice, expectedFiscalAmount)}
+                disabled={saving || !billingFiscalUploadIsReady(
+                  fiscalDraft,
+                  invoice.fiscalInvoice,
+                  expectedFiscalAmount,
+                  allowFiscalAmountMismatch
+                )}
                 onClick={() => void finalizeInvoice()}
                 className="premium-button inline-flex h-10 items-center justify-center gap-2 px-4 text-sm font-black disabled:cursor-not-allowed disabled:opacity-60"
               >

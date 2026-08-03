@@ -11,7 +11,7 @@ import {
   type BillingFiscalInvoiceUploadValue
 } from "@/components/billing-fiscal-invoice-upload";
 import { EmptyState, PageHeader, Panel, StatCard, StatusBadge } from "@/components/ui/primitives";
-import { calculateBillingFiscalExpectedAmount } from "@/lib/billing-fiscal-invoice";
+import { calculateBillingFiscalExpectedAmount, isBillingFiscalAmountMismatchExempt } from "@/lib/billing-fiscal-invoice";
 import { cn } from "@/lib/utils";
 
 type MyInvoicePayload = {
@@ -106,6 +106,7 @@ export function MyInvoicePage() {
   const [adjustment, setAdjustment] = useState({ type: "Horas não consideradas", questionedItem: "Horas aprovadas", description: "" });
   const [fiscalUpload, setFiscalUpload] = useState<BillingFiscalInvoiceUploadValue>(EMPTY_BILLING_FISCAL_UPLOAD);
   const data = payload?.data;
+  const allowFiscalAmountMismatch = isBillingFiscalAmountMismatchExempt(data?.invoice.wbLogin);
   const expectedFiscalAmount = data
     ? calculateBillingFiscalExpectedAmount({
       referenceMonth: data.referenceMonth,
@@ -161,7 +162,12 @@ export function MyInvoicePage() {
   }
 
   async function approveInvoice() {
-    if (!data || !billingFiscalUploadIsReady(fiscalUpload, data.invoice.fiscalInvoice, expectedFiscalAmount)) {
+    if (!data || !billingFiscalUploadIsReady(
+      fiscalUpload,
+      data.invoice.fiscalInvoice,
+      expectedFiscalAmount,
+      allowFiscalAmountMismatch
+    )) {
       setError("Selecione a nota fiscal e aguarde a validação automática dos dados.");
       return;
     }
@@ -366,6 +372,7 @@ export function MyInvoicePage() {
               <BillingFiscalInvoiceUpload
                 referenceMonth={referenceMonth}
                 expectedGrossAmount={expectedFiscalAmount}
+                allowAmountMismatch={allowFiscalAmountMismatch}
                 existing={data.invoice.fiscalInvoice}
                 disabled={!data.invoice.canApprove || saving}
                 value={fiscalUpload}
@@ -411,7 +418,12 @@ export function MyInvoicePage() {
                 disabled={
                   !data.invoice.canApprove
                   || saving
-                  || !billingFiscalUploadIsReady(fiscalUpload, data.invoice.fiscalInvoice, expectedFiscalAmount)
+                  || !billingFiscalUploadIsReady(
+                    fiscalUpload,
+                    data.invoice.fiscalInvoice,
+                    expectedFiscalAmount,
+                    allowFiscalAmountMismatch
+                  )
                 }
                 onClick={() => void approveInvoice()}
                 className="premium-button inline-flex h-10 w-full items-center justify-center gap-2 px-3 text-sm font-extrabold leading-none disabled:cursor-not-allowed disabled:opacity-50"
