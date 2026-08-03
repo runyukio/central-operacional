@@ -940,22 +940,13 @@ function scheduleCountsAsCoverage(schedule: StaffCoverageSchedule) {
   const shift = scheduleShiftCategory(schedule);
   if (!isProductiveShift(shift)) return false;
   if (coverageStatuses.has(schedule.status)) return true;
-  if (schedule.status === "NESTING") return isVideoOrCommentsSchedule(schedule);
+  if (schedule.status === "NESTING") return true;
   return schedule.status === "TROCA_APROVADA" && isProductiveShift(shift);
 }
 
 function scheduleEmployeeCountsAsActive(schedule: StaffCoverageSchedule) {
   if (isCoverageEmployeeActive(schedule.employee.operationalStatus)) return true;
-  return isOperationalNesting(schedule.employee.operationalStatus) && isVideoOrCommentsSchedule(schedule) && scheduleCountsAsCoverage(schedule);
-}
-
-function isVideoOrCommentsSchedule(schedule: StaffCoverageSchedule) {
-  const key = lookupKey([
-    schedule.employee.skill,
-    schedule.coverageLobName,
-    schedule.employee.lob.name
-  ].filter(Boolean).join(" "));
-  return key.includes("VIDEO") || key.includes("COMMENT") || key.includes("TNS");
+  return isOperationalNesting(schedule.employee.operationalStatus) && scheduleCountsAsCoverage(schedule);
 }
 
 function isOperationalNesting(status?: string | null) {

@@ -14,7 +14,7 @@ import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import { prisma } from "@/lib/prisma";
 import { canApproveRequest, normalizeRole } from "@/lib/permissions";
 import { baseTimesForShift } from "@/lib/shift-base-times";
-import { cleanShiftName, shiftCategoryName, shiftLookupKey } from "@/lib/shift-display";
+import { cleanShiftName, shiftCategoryName } from "@/lib/shift-display";
 import { isShiftChangeEffective } from "@/lib/shift-change-effective-service";
 
 const uiToDbStatus = {
@@ -1943,18 +1943,13 @@ function scheduleCountsAsCoverageForImpact(schedule: { status: ScheduleStatus; s
   const shift = normalizeProductiveShiftForImpact(shiftOverride ?? schedule.shift?.name ?? schedule.employee?.shift?.name);
   if (!shift) return false;
   if (coverageStatuses.has(schedule.status)) return true;
-  if (schedule.status === "NESTING") return isVideoOrCommentsScheduleForImpact(schedule);
+  if (schedule.status === "NESTING") return true;
   return schedule.status === "TROCA_APROVADA";
 }
 
 function scheduleEmployeeCountsAsActiveForImpact(schedule: { status: ScheduleStatus; employee: { skill?: string | null; operationalStatus?: string | null; lob?: { name: string } | null } }) {
   if (isCoverageEmployeeActiveForImpact(schedule.employee.operationalStatus)) return true;
-  return isOperationalNestingForImpact(schedule.employee.operationalStatus) && isVideoOrCommentsScheduleForImpact(schedule) && scheduleCountsAsCoverageForImpact(schedule);
-}
-
-function isVideoOrCommentsScheduleForImpact(schedule: { employee?: { skill?: string | null; lob?: { name: string } | null } }) {
-  const key = shiftLookupKey([schedule.employee?.skill, schedule.employee?.lob?.name].filter(Boolean).join(" "));
-  return key.includes("VIDEO") || key.includes("COMMENT") || key.includes("TNS");
+  return isOperationalNestingForImpact(schedule.employee.operationalStatus) && scheduleCountsAsCoverageForImpact(schedule);
 }
 
 function isOperationalNestingForImpact(value?: string | null) {

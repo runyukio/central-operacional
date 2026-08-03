@@ -398,16 +398,7 @@ function formatStaffPerson(schedule: StaffSchedule): RequiredStaffPersonWithDate
 
 function scheduleCountsAsStaffCoverage(schedule: StaffSchedule) {
   if (coverageStatuses.has(schedule.status)) return true;
-  return schedule.status === "NESTING" && isVideoOrCommentsSchedule(schedule);
-}
-
-function isVideoOrCommentsSchedule(schedule: StaffSchedule) {
-  const key = lookupKey([
-    schedule.employee.skill,
-    schedule.coverageLobName,
-    schedule.employee.lob.name
-  ].filter(Boolean).join(" "));
-  return key.includes("VIDEO") || key.includes("COMMENT") || key.includes("TNS");
+  return schedule.status === "NESTING";
 }
 
 function classifyStaffBySkill(skill?: string | null): StaffRole | null {

@@ -1125,18 +1125,18 @@ async function buildAiRequiredAgentsPeriodSummary(period: AiOperationalPeriod, t
     const lob = schedule.lobId ? lobNameById.get(schedule.lobId) ?? schedule.employee.lob.name : schedule.employee.lob.name;
     if (!aiRequiredMatchesTargetLob(lob, targetLobs)) return;
     if (!isAgentJobTitle(schedule.employee.roleTitle)) return;
-    if (!aiRequiredEmployeeCountsAsActive(schedule.employee.operationalStatus)) return;
+    const status = normalizeOperationalStatus(schedule.status);
+    if (!aiRequiredEmployeeCountsAsActive(schedule.employee.operationalStatus, status)) return;
     const shift = aiRequiredShiftName(schedule.shift?.name ?? schedule.employee.shift?.name);
     if (!shift) return;
     const date = realtimeDateKeyFromDate(schedule.date);
     const key = aiRequiredRowKey(date, lob, shift);
     const current = rowsByKey.get(key) ?? emptyAiRequiredAgentsRow(date, lob, shift);
-    const status = normalizeOperationalStatus(schedule.status);
     if (status === "ESCALADO") current.escaladoStatus += 1;
-    if (isScheduledStatus(status) || (status === "NESTING" && aiRequiredIsVideoOrCommentsSchedule(lob, schedule.employee.skill))) current.scheduled += 1;
+    if (isScheduledStatus(status) || status === "NESTING") current.scheduled += 1;
     if (isPresentStatus(status)) current.present += 1;
     if (isAbsenceStatus(status)) current.absent += 1;
-    if (aiRequiredCountsAsAvailable(status, lob, schedule.employee.skill)) current.available += 1;
+    if (aiRequiredCountsAsAvailable(status)) current.available += 1;
     rowsByKey.set(key, current);
   });
 
@@ -1245,23 +1245,22 @@ function summarizeAiRequiredAgentsRowsBy(rows: AiRequiredAgentsRow[], field: "lo
   return Array.from(grouped.entries()).map(([key, values]) => summarizeAiRequiredAgentsRows(key, values));
 }
 
-function aiRequiredCountsAsAvailable(status: ReturnType<typeof normalizeOperationalStatus>, lob: string, skill?: string | null) {
+function aiRequiredCountsAsAvailable(status: ReturnType<typeof normalizeOperationalStatus>) {
   if (status && aiRequiredCoverageStatuses.has(status)) return true;
-  return status === "NESTING" && aiRequiredIsVideoOrCommentsSchedule(lob, skill);
+  return status === "NESTING";
 }
 
-function aiRequiredEmployeeCountsAsActive(status?: string | null) {
+function aiRequiredEmployeeCountsAsActive(
+  status: string | null | undefined,
+  scheduleStatus: ReturnType<typeof normalizeOperationalStatus>
+) {
   const key = String(status ?? "")
     .trim()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
+  if (key === "nesting") return aiRequiredCountsAsAvailable(scheduleStatus);
   return !aiRequiredInactiveEmployeeStatusTokens.has(key);
-}
-
-function aiRequiredIsVideoOrCommentsSchedule(lob: string, skill?: string | null) {
-  const key = `${lob} ${skill ?? ""}`.toUpperCase();
-  return key.includes("VIDEO") || key.includes("COMMENT") || key.includes("TNS");
 }
 
 function aiRequiredMatchesTargetLob(lob: string, targetLobs: string[] | null) {
