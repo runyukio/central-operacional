@@ -12,7 +12,7 @@ import {
   verifyBillingFiscalValidationToken
 } from "@/lib/billing-fiscal-invoice-extraction";
 import { calculateBillingFiscalExpectedAmount, isBillingFiscalAmountMismatchExempt } from "@/lib/billing-fiscal-invoice";
-import { buildBillingOmieAllocation } from "@/lib/billing-omie-allocation";
+import { buildBillingOmieAllocation, resolveBillingOmieMainCategory } from "@/lib/billing-omie-allocation";
 import { canAccessBilling, canManageBilling } from "@/lib/billing-permissions";
 import {
   BILLING_STAFF_RATE_DEFAULTS,
@@ -802,6 +802,103 @@ export async function retryEmployeeBillingInvoiceOmie(actor: Actor, employeeInvo
 
   const omie = await syncBillingFiscalInvoiceToOmie(invoice.id, user!.id);
   return { data: { id: invoice.id, wbLogin: invoice.employee.wbLogin, omie } };
+}
+
+export async function reconcileBillingOmieAgentCategories(actor: Actor, input: {
+  referenceMonth?: string | null;
+  limit?: number;
+  apply?: boolean;
+}) {
+  const user = await findActiveUser(actor.email);
+  const denied = requireBillingManagement(user);
+  if (denied) return denied;
+
+  const referenceMonth = normalizeBillingMonth(input.referenceMonth);
+  const limit = Math.max(1, Math.min(5, Math.trunc(Number(input.limit) || 5)));
+  const fiscalInvoices = await prisma.billingFiscalInvoice.findMany({
+    where: {
+      omieStatus: "SYNCED",
+      employeeInvoice: {
+        referenceMonth,
+        status: "APROVADO_COLABORADOR"
+      }
+    },
+    select: {
+      id: true,
+      employeeInvoiceId: true,
+      employeeInvoice: {
+        select: {
+          employee: { select: { fullName: true, wbLogin: true, roleTitle: true, skill: true } }
+        }
+      }
+    }
+  });
+  const audits = await prisma.auditLog.findMany({
+    where: {
+      entity: "BillingFiscalInvoiceOmie",
+      entityId: { in: fiscalInvoices.map((invoice) => invoice.id) },
+      reason: "Conta a Pagar sincronizada com o Omie"
+    },
+    select: { entityId: true, newValue: true, createdAt: true },
+    orderBy: { createdAt: "desc" }
+  });
+  const latestAuditByInvoice = new Map<string, (typeof audits)[number]>();
+  for (const audit of audits) {
+    if (audit.entityId && !latestAuditByInvoice.has(audit.entityId)) latestAuditByInvoice.set(audit.entityId, audit);
+  }
+
+  const candidates = fiscalInvoices.filter((invoice) => {
+    const expectedCategory = resolveBillingOmieMainCategory(
+      invoice.employeeInvoice.employee.roleTitle,
+      invoice.employeeInvoice.employee.skill
+    );
+    const sentCategories = omieAuditCategoryCodes(latestAuditByInvoice.get(invoice.id)?.newValue);
+    return sentCategories.includes("2.10.89") && expectedCategory !== "2.10.89";
+  });
+  const selected = candidates.slice(0, limit);
+  const results: Array<{ employeeInvoiceId: string; wbLogin: string; status: string; message: string }> = [];
+
+  if (input.apply) {
+    for (const invoice of selected) {
+      const omie = await syncBillingFiscalInvoiceToOmie(invoice.employeeInvoiceId, user!.id);
+      results.push({
+        employeeInvoiceId: invoice.employeeInvoiceId,
+        wbLogin: invoice.employeeInvoice.employee.wbLogin,
+        status: omie.status,
+        message: omie.message
+      });
+    }
+  }
+
+  return {
+    data: {
+      referenceMonth,
+      found: candidates.length,
+      processed: results.length,
+      remaining: input.apply ? Math.max(0, candidates.length - results.filter((result) => result.status === "SYNCED").length) : candidates.length,
+      candidates: selected.map((invoice) => ({
+        employeeInvoiceId: invoice.employeeInvoiceId,
+        employeeName: invoice.employeeInvoice.employee.fullName,
+        wbLogin: invoice.employeeInvoice.employee.wbLogin,
+        expectedCategory: resolveBillingOmieMainCategory(
+          invoice.employeeInvoice.employee.roleTitle,
+          invoice.employeeInvoice.employee.skill
+        )
+      })),
+      results
+    }
+  };
+}
+
+function omieAuditCategoryCodes(value: Prisma.JsonValue | null | undefined) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  const categories = (value as Prisma.JsonObject).categories;
+  if (!Array.isArray(categories)) return [];
+  return categories.flatMap((category) => {
+    if (!category || typeof category !== "object" || Array.isArray(category)) return [];
+    const code = (category as Prisma.JsonObject).code;
+    return typeof code === "string" ? [code] : [];
+  });
 }
 
 async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId: string | null): Promise<BillingOmieSyncResult> {
