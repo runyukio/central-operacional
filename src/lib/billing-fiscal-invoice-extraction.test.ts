@@ -21,12 +21,38 @@ Valor do Serviço Desconto Incondicionado
 R$ 457,24 -
 `;
 
+const saoPauloMunicipalSampleText = `
+PREFEITURA DO MUNICÍPIO DE SÃO PAULO
+SECRETARIA MUNICIPAL DA FAZENDA
+NOTA FISCAL ELETRÔNICA DE SERVIÇOS - NFS-e
+Número da Nota
+Data e Hora de Emissão
+Código de Verificação
+20260803u15269932000101
+00000029
+03/08/2026 18:33:05
+4GYD-UWCA
+Identificador Nacional: 35503081215269932000101000000000002926086129807140
+DISCRIMINAÇÃO DE SERVIÇOS
+Serviços de moderação de redes sociais
+VALOR TOTAL DO SERVIÇO = R$ 3.000,80
+`;
+
 test("extrai chave, número, descrição e valor da NFS-e nacional", () => {
   assert.deepEqual(extractBillingFiscalFieldsFromText(sampleText), {
     accessKey: "35095022262629545000119000000000000526075882824813",
     invoiceNumber: "5",
     serviceAmount: 457.24,
     serviceDescription: "Distrato"
+  });
+});
+
+test("extrai identificador, número e valor da NFS-e municipal de São Paulo", () => {
+  assert.deepEqual(extractBillingFiscalFieldsFromText(saoPauloMunicipalSampleText), {
+    accessKey: "35503081215269932000101000000000002926086129807140",
+    invoiceNumber: "00000029",
+    serviceAmount: 3000.8,
+    serviceDescription: "Serviços de moderação de redes sociais"
   });
 });
 

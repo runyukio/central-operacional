@@ -265,9 +265,14 @@ function findXmlValue(xml: string, tags: string[]) {
 }
 
 function findAccessKey(text: string) {
-  const labeled = text.match(/chave de acesso (?:da |de )?nfs-?e([\s\S]{0,180})/i)?.[1] ?? "";
-  const labeledCandidate = findLongDigitSequence(labeled);
-  if (labeledCandidate) return labeledCandidate;
+  const labeledSections = [
+    text.match(/chave de acesso (?:da |de )?nfs-?e([\s\S]{0,180})/i)?.[1] ?? "",
+    text.match(/identificador nacional\s*:?([\s\S]{0,100})/i)?.[1] ?? ""
+  ];
+  for (const labeled of labeledSections) {
+    const labeledCandidate = findLongDigitSequence(labeled);
+    if (labeledCandidate) return labeledCandidate;
+  }
   return findLongDigitSequence(text);
 }
 
@@ -281,6 +286,16 @@ function findLongDigitSequence(text: string) {
 }
 
 function findInvoiceNumber(text: string) {
+  const saoPauloMunicipal = text.match(
+    /numero da nota[\s\S]{0,260}?\n\s*(\d{1,20})\s*\n\s*\d{2}\/\d{2}\/\d{4}\b/i
+  )?.[1];
+  if (saoPauloMunicipal) return saoPauloMunicipal;
+
+  const genericNoteInline = text.match(
+    /numero da nota(?: fiscal)?[ \t]*[:#-]?[ \t]*(\d{1,20})\b/i
+  )?.[1];
+  if (genericNoteInline) return genericNoteInline;
+
   const nextLine = text.match(/numero da nfs-?e[^\n]*\n\s*(\d{1,20})\b/i)?.[1];
   if (nextLine) return nextLine;
   const inline = text.match(/(?:numero|n[ºo])\s*(?:da\s*)?nfs-?e\s*[:#-]?\s*(\d{1,20})\b/i)?.[1];
@@ -297,7 +312,9 @@ function findServiceAmount(text: string) {
 function findServiceDescription(text: string) {
   const originalLines = text.split(/\r?\n/).map((line) => line.trim());
   const normalizedLines = originalLines.map(normalizeSearchText);
-  const index = normalizedLines.findIndex((line) => line.includes("descricao do servico"));
+  const index = normalizedLines.findIndex((line) => (
+    line.includes("descricao do servico") || line.includes("discriminacao de servicos")
+  ));
   if (index < 0) return "";
 
   for (let cursor = index + 1; cursor < originalLines.length; cursor += 1) {
@@ -315,6 +332,7 @@ function isLikelySectionHeader(value: string) {
     "tributacao municipal",
     "tributacao federal",
     "valor total da nfs-e",
+    "valor total do servico",
     "tomador do servico",
     "emitente da nfs-e",
     "servico prestado"
