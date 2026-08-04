@@ -252,6 +252,7 @@ function mapAgentRows(rows: Array<Record<string, unknown>>): AdsExecutiveAgentRo
     displayName: String(row.displayName ?? ""),
     wbLogin: String(row.wbLogin ?? ""),
     rawWbLogin: String(row.rawWbLogin ?? ""),
+    skill: String(row.skill ?? ""),
     lob: String(row.lob ?? ""),
     crossingStatus: String(row.crossingStatus ?? ""),
     personType: String(row.personType ?? ""),

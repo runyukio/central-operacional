@@ -11,6 +11,7 @@ const HOUR_MS = 60 * 60 * 1000;
 export type AdsOnlineProductivityAgentRow = {
   name: string;
   wbLogin: string;
+  skill: string | null;
   currentSubmit: number;
   previousSubmit: number;
   comparisonPercent: number | null;
@@ -74,6 +75,7 @@ export function buildAdsOnlineProductivityReportSnapshot(input: {
     return {
       name: row.displayName || row.wbLogin || row.rawWbLogin || "Unknown agent",
       wbLogin: row.wbLogin || row.rawWbLogin || "-",
+      skill: reportableSkill(row.skill),
       currentSubmit: current.submit,
       previousSubmit: previous.submit,
       comparisonPercent,
@@ -202,6 +204,12 @@ function formatDateLabel(dateKey: string) {
 
 function finite(value: number | null | undefined) {
   return Number.isFinite(value) ? Number(value) : 0;
+}
+
+function reportableSkill(value: string | null | undefined) {
+  const skill = String(value ?? "").trim();
+  if (!skill || /^(?:-|n\/?a|n[aã]o encontrado)$/i.test(skill)) return null;
+  return skill;
 }
 
 function sum<T>(rows: T[], value: (row: T) => number) {

@@ -9,6 +9,9 @@
 - Normalized comparison: both images scaled to `800 px` wide at density `1`
 - State: ADS, 24 online agents, current interval `14:00–14:58`, previous interval `13:00–13:58`
 - Implementation surface: deterministic server-rendered PNG; there are no browser interactions.
+- Latest incremental source: `/var/folders/k0/t49rkn556y1gk9gwb838yk5w0000gn/T/codex-clipboard-4c19061b-21aa-4f71-ba32-ffe44687016e.png` (`784 x 901` cropped chat preview)
+- Latest incremental implementation: `/tmp/ads-online-productivity-skill-badge.png` (`1600 x 1400`, density `1`)
+- Latest focused comparison: `/tmp/ads-skill-badge-comparison.png` (agent-table crops normalized to `700 px` wide)
 
 ## Findings
 
@@ -45,6 +48,13 @@
 - The revised implementation has no actionable P0/P1/P2 differences.
 - The required content remains readable across all 24 rows and the output is not clipped.
 
+### Pass 3 — Skill badge
+
+- Added the registered skill as a compact violet badge beside the WB label.
+- The focused comparison confirms that the existing row height, name/WB hierarchy, metric columns, and alternating row rhythm are preserved.
+- Missing or placeholder skill values keep the original WB-only state, with no empty badge or reserved gap.
+- No actionable P0/P1/P2 difference was identified.
+
 ## Implementation Checklist
 
 - [x] Match the selected single-column ranked layout.
@@ -54,6 +64,8 @@
 - [x] Show comparison badge, previous submit, shift total, and average AHT.
 - [x] Preserve the existing ADS Executive visual system.
 - [x] Grow the PNG height to include every online agent.
+- [x] Show the registered skill without changing report calculations or ordering.
+- [x] Suppress empty and placeholder skill badges.
 
 ## Follow-up Polish
 

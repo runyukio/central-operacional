@@ -11,6 +11,7 @@ test("builds the ADS online productivity ranking with hourly and shift metrics",
       agent({
         name: "Amanda Ribeiro",
         wbLogin: "wb_amandar",
+        skill: "Material Queues",
         presenceStatus: "Online",
         history: [
           history("2026-07-29 12:58", 80, 84_000),
@@ -59,6 +60,7 @@ test("builds the ADS online productivity ranking with hourly and shift metrics",
   assert.equal(report.previousHourLabel, "13H");
   assert.equal(report.onlineCount, 3);
   assert.deepEqual(report.rows.map((row) => row.wbLogin), ["wb_amandar", "wb_rafaelo", "wb_camilas"]);
+  assert.deepEqual(report.rows.map((row) => row.skill), ["Material Queues", null, null]);
   assert.deepEqual(report.rows.map((row) => row.currentSubmit), [26, 24, 23]);
   assert.deepEqual(report.rows.map((row) => row.previousSubmit), [20, 20, 20]);
   assert.equal(report.rows[0].comparisonPercent, 30);
@@ -148,6 +150,7 @@ function agent(input: {
   name: string;
   wbLogin: string;
   lob?: string;
+  skill?: string;
   presenceStatus?: string;
   isSchedulePresent?: boolean;
   history: AdsExecutiveAgentRow["history"];
@@ -156,6 +159,7 @@ function agent(input: {
     displayName: input.name,
     wbLogin: input.wbLogin,
     rawWbLogin: input.wbLogin,
+    skill: input.skill ?? "",
     lob: input.lob ?? "ADS",
     crossingStatus: "Encontrado",
     personType: "Agente",

@@ -177,7 +177,10 @@ function AgentRow({
       </div>
       <div style={{ display: "flex", flexDirection: "column", width: 410 }}>
         <div style={{ color: NAVY, display: "flex", fontSize: 21, fontWeight: 900 }}>{truncate(row.name, 36)}</div>
-        <div style={{ color: MUTED, display: "flex", fontSize: 16, fontWeight: 700, marginTop: 3 }}>{truncate(row.wbLogin, 34)}</div>
+        <div style={{ alignItems: "center", color: MUTED, display: "flex", fontSize: 16, fontWeight: 700, marginTop: 3 }}>
+          <span style={{ display: "flex" }}>{truncate(row.wbLogin, row.skill ? 20 : 34)}</span>
+          {row.skill ? <SkillBadge skill={row.skill} /> : null}
+        </div>
       </div>
       <div style={{ alignItems: "center", display: "flex", width: 305 }}>
         <div style={{ color: NAVY, display: "flex", fontSize: 24, fontWeight: 900, width: 55 }}>{formatInteger(row.currentSubmit)}</div>
@@ -195,6 +198,26 @@ function AgentRow({
       <div style={{ color: NAVY, display: "flex", fontSize: 22, fontWeight: 900, width: 220 }}>{formatInteger(row.shiftTotal)}</div>
       <div style={{ color: NAVY, display: "flex", fontSize: 21, fontWeight: 900, width: 160 }}>{formatDuration(row.ahtMs)}</div>
     </div>
+  );
+}
+
+function SkillBadge({ skill }: { skill: string }) {
+  return (
+    <span style={{
+      background: "#EDE9FE",
+      border: "1px solid #DDD6FE",
+      borderRadius: 999,
+      color: "#6D28D9",
+      display: "flex",
+      fontSize: 12,
+      fontWeight: 900,
+      letterSpacing: 0.5,
+      marginLeft: 9,
+      padding: "3px 8px",
+      textTransform: "uppercase"
+    }}>
+      {truncate(skill, 22)}
+    </span>
   );
 }
 

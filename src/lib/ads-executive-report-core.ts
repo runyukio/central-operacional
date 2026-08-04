@@ -21,6 +21,7 @@ export type AdsExecutiveAgentRow = {
   displayName: string;
   wbLogin: string;
   rawWbLogin: string;
+  skill?: string;
   lob: string;
   crossingStatus: string;
   personType: string;
