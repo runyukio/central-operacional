@@ -11,6 +11,9 @@ const WIDTH = 1600;
 const ROW_HEIGHT = 80;
 const MIN_HEIGHT = 1400;
 const FIXED_HEIGHT = 760;
+const SKILL_CARDS_PER_ROW = 4;
+const SKILL_CARD_HEIGHT = 104;
+const SKILL_CARD_GAP = 14;
 const NAVY = "#0F172A";
 const MUTED = "#64748B";
 const BLUE = "#2563EB";
@@ -27,7 +30,11 @@ const ICONS = {
 } as const;
 
 export async function renderAdsOnlineProductivityReportPng(report: AdsOnlineProductivityReportSnapshot) {
-  const height = Math.max(MIN_HEIGHT, FIXED_HEIGHT + report.rows.length * ROW_HEIGHT);
+  const skillCardRows = Math.ceil(report.skillAverages.length / SKILL_CARDS_PER_ROW);
+  const skillSectionHeight = skillCardRows
+    ? 49 + skillCardRows * SKILL_CARD_HEIGHT + Math.max(0, skillCardRows - 1) * SKILL_CARD_GAP
+    : 0;
+  const height = Math.max(MIN_HEIGHT, FIXED_HEIGHT + skillSectionHeight + report.rows.length * ROW_HEIGHT);
   const response = new ImageResponse(<AdsOnlineProductivityReportImage report={report} />, {
     width: WIDTH,
     height
@@ -53,7 +60,7 @@ function AdsOnlineProductivityReportImage({ report }: { report: AdsOnlineProduct
           </div>
           <div style={{ alignItems: "center", background: "#ECFDF5", border: "1px solid #A7F3D0", borderRadius: 13, color: "#047857", display: "flex", fontSize: 18, fontWeight: 900, marginTop: 12, padding: "11px 18px" }}>
             <span style={{ background: GREEN, borderRadius: 999, display: "flex", height: 10, marginRight: 10, width: 10 }} />
-            {formatInteger(report.onlineCount)} agents online
+            {formatInteger(report.productiveAgentCount)} agents with submit
           </div>
         </div>
       </header>
@@ -76,9 +83,11 @@ function AdsOnlineProductivityReportImage({ report }: { report: AdsOnlineProduct
         />
       </section>
 
+      {report.skillAverages.length ? <SkillAverageCards report={report} /> : null}
+
       <section style={{ ...panelStyle, display: "flex", flexDirection: "column", marginTop: 24, overflow: "hidden", width: "100%" }}>
         <div style={{ borderBottom: "1px solid #D7E0EA", color: NAVY, display: "flex", fontSize: 28, fontWeight: 900, padding: "22px 28px" }}>
-          Online agents in current interval
+          Agents with submit in current interval
         </div>
         <TableHeader report={report} />
         <div style={{ display: "flex", flexDirection: "column", width: "100%" }}>
@@ -111,6 +120,36 @@ function KpiCard({ label, value, comparison }: { label: string; value: string; c
       <div style={{ color: NAVY, display: "flex", fontSize: 49, fontWeight: 900, marginTop: 20 }}>{value}</div>
       <div style={{ alignItems: "center", display: "flex", marginTop: 14 }}>{comparison}</div>
     </div>
+  );
+}
+
+function SkillAverageCards({ report }: { report: AdsOnlineProductivityReportSnapshot }) {
+  const availableWidth = WIDTH - 96;
+  const cardWidth = Math.floor((availableWidth - SKILL_CARD_GAP * (SKILL_CARDS_PER_ROW - 1)) / SKILL_CARDS_PER_ROW);
+  return (
+    <section style={{ display: "flex", flexDirection: "column", marginTop: 22, width: "100%" }}>
+      <div style={{ color: MUTED, display: "flex", fontSize: 15, fontWeight: 900, letterSpacing: 2, marginBottom: 12 }}>
+        AVG SUBMIT BY SKILL
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: SKILL_CARD_GAP, width: "100%" }}>
+        {report.skillAverages.map((item) => (
+          <div key={item.skill} style={{ ...panelStyle, display: "flex", flexDirection: "column", height: SKILL_CARD_HEIGHT, justifyContent: "space-between", padding: "14px 18px", width: cardWidth }}>
+            <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", width: "100%" }}>
+              <span style={{ background: "#EDE9FE", border: "1px solid #DDD6FE", borderRadius: 999, color: "#6D28D9", display: "flex", fontSize: 12, fontWeight: 900, letterSpacing: 0.5, padding: "4px 9px", textTransform: "uppercase" }}>
+                {truncate(item.skill, 24)}
+              </span>
+              <span style={{ color: MUTED, display: "flex", fontSize: 13, fontWeight: 800 }}>
+                {formatInteger(item.agentCount)} {item.agentCount === 1 ? "agent" : "agents"}
+              </span>
+            </div>
+            <div style={{ alignItems: "baseline", display: "flex" }}>
+              <span style={{ color: NAVY, display: "flex", fontSize: 33, fontWeight: 900 }}>{formatAverage(item.averageSubmit)}</span>
+              <span style={{ color: MUTED, display: "flex", fontSize: 14, fontWeight: 800, marginLeft: 8 }}>avg submit</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -224,7 +263,7 @@ function SkillBadge({ skill }: { skill: string }) {
 function EmptyRow() {
   return (
     <div style={{ alignItems: "center", color: MUTED, display: "flex", fontSize: 19, fontWeight: 800, height: 130, justifyContent: "center", width: "100%" }}>
-      No ADS agents are online in the current interval.
+      No ADS agents recorded submit in the current interval.
     </div>
   );
 }
@@ -272,6 +311,10 @@ function formatInteger(value: number | null) {
 
 function formatPercent(value: number) {
   return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value)}%`;
+}
+
+function formatAverage(value: number) {
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value);
 }
 
 function formatDuration(value: number | null) {

@@ -20,6 +20,12 @@ export type AdsOnlineProductivityAgentRow = {
   ahtMs: number | null;
 };
 
+export type AdsOnlineProductivitySkillAverage = {
+  skill: string;
+  averageSubmit: number;
+  agentCount: number;
+};
+
 export type AdsOnlineProductivityReportSnapshot = {
   selectedCycle: string;
   dateKey: string;
@@ -28,7 +34,7 @@ export type AdsOnlineProductivityReportSnapshot = {
   previousHourLabel: string;
   intervalLabel: string;
   previousIntervalLabel: string;
-  onlineCount: number;
+  productiveAgentCount: number;
   averageSubmitPerHour: number;
   currentIntervalSubmit: number;
   previousIntervalSubmit: number;
@@ -37,6 +43,7 @@ export type AdsOnlineProductivityReportSnapshot = {
   previousIntervalAhtMs: number | null;
   ahtDeltaMs: number | null;
   totalShiftSubmit: number;
+  skillAverages: AdsOnlineProductivitySkillAverage[];
   rows: AdsOnlineProductivityAgentRow[];
 };
 
@@ -62,7 +69,7 @@ export function buildAdsOnlineProductivityReportSnapshot(input: {
   const onlineRows = eligibleRows.filter((row) => isExecutiveAgentOnlineAtCycle(row, input.selectedCycle));
   const parsedByRow = new Map(onlineRows.map((row) => [row, parseHistory(row, selected.timestamp)]));
 
-  const rows = onlineRows.map((row): AdsOnlineProductivityAgentRow => {
+  const measuredRows = onlineRows.map((row) => {
     const history = parsedByRow.get(row) ?? [];
     const current = intervalMetric(history, currentStart, selected.timestamp);
     const previous = intervalMetric(history, previousStart, previousTarget);
@@ -73,31 +80,37 @@ export function buildAdsOnlineProductivityReportSnapshot(input: {
       : latest?.ahtMs ?? null;
     const comparisonPercent = percentChange(current.submit, previous.submit);
     return {
-      name: row.displayName || row.wbLogin || row.rawWbLogin || "Unknown agent",
-      wbLogin: row.wbLogin || row.rawWbLogin || "-",
-      skill: reportableSkill(row.skill),
-      currentSubmit: current.submit,
-      previousSubmit: previous.submit,
-      comparisonPercent,
-      comparison: comparisonTone(current.submit, previous.submit, comparisonPercent),
-      shiftTotal,
-      ahtMs
+      current,
+      previous,
+      reportRow: {
+        name: row.displayName || row.wbLogin || row.rawWbLogin || "Unknown agent",
+        wbLogin: row.wbLogin || row.rawWbLogin || "-",
+        skill: reportableSkill(row.skill),
+        currentSubmit: current.submit,
+        previousSubmit: previous.submit,
+        comparisonPercent,
+        comparison: comparisonTone(current.submit, previous.submit, comparisonPercent),
+        shiftTotal,
+        ahtMs
+      } satisfies AdsOnlineProductivityAgentRow
     };
-  }).sort((left, right) => (
+  });
+  const productiveRows = measuredRows.filter((row) => row.reportRow.currentSubmit > 0);
+  const rows = productiveRows.map((row) => row.reportRow).sort((left, right) => (
     right.currentSubmit - left.currentSubmit
     || right.shiftTotal - left.shiftTotal
     || left.name.localeCompare(right.name)
   ));
 
-  const currentMetrics = onlineRows.map((row) => intervalMetric(parsedByRow.get(row) ?? [], currentStart, selected.timestamp));
-  const previousMetrics = onlineRows.map((row) => intervalMetric(parsedByRow.get(row) ?? [], previousStart, previousTarget));
+  const currentMetrics = productiveRows.map((row) => row.current);
+  const previousMetrics = productiveRows.map((row) => row.previous);
   const currentIntervalSubmit = sum(currentMetrics, (metric) => metric.submit);
   const previousIntervalSubmit = sum(previousMetrics, (metric) => metric.submit);
   const currentIntervalModeration = sum(currentMetrics, (metric) => metric.moderationMs);
   const previousIntervalModeration = sum(previousMetrics, (metric) => metric.moderationMs);
   const currentIntervalAhtMs = currentIntervalSubmit > 0 ? currentIntervalModeration / currentIntervalSubmit : null;
   const previousIntervalAhtMs = previousIntervalSubmit > 0 ? previousIntervalModeration / previousIntervalSubmit : null;
-  const currentSubmittingAgents = rows.filter((row) => row.currentSubmit > 0).length;
+  const currentSubmittingAgents = rows.length;
   const previousSubmittingAgents = rows.filter((row) => row.previousSubmit > 0).length;
   const averageSubmitPerHour = currentSubmittingAgents
     ? currentIntervalSubmit / currentSubmittingAgents
@@ -114,7 +127,7 @@ export function buildAdsOnlineProductivityReportSnapshot(input: {
     previousHourLabel: `${String((selected.hour + 23) % 24).padStart(2, "0")}H`,
     intervalLabel: formatInterval(currentStart, selected.timestamp),
     previousIntervalLabel: formatInterval(previousStart, previousTarget),
-    onlineCount: rows.length,
+    productiveAgentCount: rows.length,
     averageSubmitPerHour,
     currentIntervalSubmit,
     previousIntervalSubmit,
@@ -128,6 +141,7 @@ export function buildAdsOnlineProductivityReportSnapshot(input: {
       ? currentIntervalAhtMs - previousIntervalAhtMs
       : null,
     totalShiftSubmit: sum(rows, (row) => row.shiftTotal),
+    skillAverages: buildSkillAverages(rows),
     rows
   };
 }
@@ -210,6 +224,34 @@ function reportableSkill(value: string | null | undefined) {
   const skill = String(value ?? "").trim();
   if (!skill || /^(?:-|n\/?a|n[aã]o encontrado)$/i.test(skill)) return null;
   return skill;
+}
+
+function buildSkillAverages(rows: AdsOnlineProductivityAgentRow[]): AdsOnlineProductivitySkillAverage[] {
+  const grouped = new Map<string, { skill: string; totalSubmit: number; agentCount: number }>();
+  for (const row of rows) {
+    const skill = row.skill ?? "Unassigned";
+    const key = comparableSkill(skill);
+    const current = grouped.get(key) ?? { skill, totalSubmit: 0, agentCount: 0 };
+    current.totalSubmit += row.currentSubmit;
+    current.agentCount += 1;
+    grouped.set(key, current);
+  }
+  return [...grouped.values()].map((group) => ({
+    skill: group.skill,
+    averageSubmit: group.totalSubmit / group.agentCount,
+    agentCount: group.agentCount
+  })).sort((left, right) => (
+    right.averageSubmit - left.averageSubmit
+    || left.skill.localeCompare(right.skill)
+  ));
+}
+
+function comparableSkill(value: string) {
+  return value
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
 }
 
 function sum<T>(rows: T[], value: (row: T) => number) {

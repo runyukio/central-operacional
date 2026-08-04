@@ -22,6 +22,7 @@ test("builds the ADS online productivity ranking with hourly and shift metrics",
       agent({
         name: "Rafael Oliveira",
         wbLogin: "wb_rafaelo",
+        skill: "Nesting",
         isSchedulePresent: true,
         history: [
           history("2026-07-29 12:58", 60, 90_000),
@@ -32,6 +33,7 @@ test("builds the ADS online productivity ranking with hourly and shift metrics",
       agent({
         name: "Camila Santos",
         wbLogin: "wb_camilas",
+        skill: "Nesting",
         history: [
           history("2026-07-29 12:58", 40, 92_000),
           history("2026-07-29 13:58", 60, 92_000),
@@ -58,9 +60,9 @@ test("builds the ADS online productivity ranking with hourly and shift metrics",
   assert.equal(report.previousIntervalLabel, "13:00–13:58");
   assert.equal(report.currentHourLabel, "14H");
   assert.equal(report.previousHourLabel, "13H");
-  assert.equal(report.onlineCount, 3);
+  assert.equal(report.productiveAgentCount, 3);
   assert.deepEqual(report.rows.map((row) => row.wbLogin), ["wb_amandar", "wb_rafaelo", "wb_camilas"]);
-  assert.deepEqual(report.rows.map((row) => row.skill), ["Material Queues", null, null]);
+  assert.deepEqual(report.rows.map((row) => row.skill), ["Material Queues", "Nesting", "Nesting"]);
   assert.deepEqual(report.rows.map((row) => row.currentSubmit), [26, 24, 23]);
   assert.deepEqual(report.rows.map((row) => row.previousSubmit), [20, 20, 20]);
   assert.equal(report.rows[0].comparisonPercent, 30);
@@ -76,6 +78,10 @@ test("builds the ADS online productivity ranking with hourly and shift metrics",
   assert.ok(Math.abs(report.currentIntervalAhtMs - 88_493.1506849315) < 0.001);
   assert.ok(report.ahtDeltaMs !== null);
   assert.ok(report.ahtDeltaMs < 0);
+  assert.deepEqual(report.skillAverages, [
+    { skill: "Material Queues", averageSubmit: 26, agentCount: 1 },
+    { skill: "Nesting", averageSubmit: 23.5, agentCount: 2 }
+  ]);
 });
 
 test("compares midnight with the previous day's 23h interval", () => {
@@ -102,13 +108,14 @@ test("compares midnight with the previous day's 23h interval", () => {
   assert.equal(report.rows[0].previousSubmit, 18);
 });
 
-test("excludes agents with zero submit from the per-agent averages", () => {
+test("excludes agents with zero submit from the report and averages", () => {
   const report = buildAdsOnlineProductivityReportSnapshot({
     selectedCycle: "2026-07-29 09:30",
     agentRows: [
       agent({
         name: "Submitting agent",
         wbLogin: "wb_submitting",
+        skill: "Nesting",
         presenceStatus: "Online",
         history: [
           history("2026-07-29 07:30", 10, 60_000),
@@ -139,11 +146,15 @@ test("excludes agents with zero submit from the per-agent averages", () => {
     ]
   });
 
-  assert.equal(report.onlineCount, 3);
+  assert.equal(report.productiveAgentCount, 1);
+  assert.deepEqual(report.rows.map((row) => row.wbLogin), ["wb_submitting"]);
   assert.equal(report.currentIntervalSubmit, 20);
-  assert.equal(report.previousIntervalSubmit, 35);
+  assert.equal(report.previousIntervalSubmit, 20);
   assert.equal(report.averageSubmitPerHour, 20);
-  assert.equal(report.submitComparisonPercent, 14.3);
+  assert.equal(report.submitComparisonPercent, 0);
+  assert.deepEqual(report.skillAverages, [
+    { skill: "Nesting", averageSubmit: 20, agentCount: 1 }
+  ]);
 });
 
 function agent(input: {
