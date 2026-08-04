@@ -20,6 +20,16 @@ const BLUE = "#2563EB";
 const GREEN = "#10B981";
 const RED = "#EF4444";
 const SOFT_BLUE = "#DBEAFE";
+const SKILL_BADGE_PALETTES = [
+  { background: "#DBEAFE", border: "#BFDBFE", color: "#1D4ED8" },
+  { background: "#EDE9FE", border: "#DDD6FE", color: "#6D28D9" },
+  { background: "#CFFAFE", border: "#A5F3FC", color: "#0E7490" },
+  { background: "#FEF3C7", border: "#FDE68A", color: "#B45309" },
+  { background: "#E0E7FF", border: "#C7D2FE", color: "#4338CA" },
+  { background: "#FCE7F3", border: "#FBCFE8", color: "#BE185D" },
+  { background: "#FFEDD5", border: "#FED7AA", color: "#C2410C" }
+] as const;
+const UNASSIGNED_SKILL_PALETTE = { background: "#F1F5F9", border: "#E2E8F0", color: "#475569" } as const;
 // Rasterized directly from the Lucide ArrowUp, ArrowDown, and Minus icons.
 const ICONS = {
   upGreen: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAAsTAAALEwEAmpwYAAABCUlEQVR4nO2VQQrCMBBFA7qf9AKK19ALeYtO6AG8g9KFs3aR0YUrvYIrEe8gbpUpFKWtbdA0G/NhoEzT+S+ZoVEqKuoHJVszl1DBRTQAxpNm85CQZ8mFNM9L8zeIvH8IogFYXFXNX4FrtU+HQXeug5wEuZn3A0Fdx95nO6jZHKy51gytOfuFoM/mwNmkmk926cgfBLWby5LqO8l5g4Dmnl/0JhuXa5oAivwmGxdra4Nplk7miU2nXeZtAG0QUvsbgEvVvAvgE4QTgEgzLsDiDRiPTeYuAOVMAJuD1JKayqe0A0Cv0hGAYwvMnw8hWLy/7gi8BwfQjIu3y8bvT8ZVCZuZhPMHUVGqric+KdyOuiSScAAAAABJRU5ErkJggg==",
@@ -135,9 +145,7 @@ function SkillAverageCards({ report }: { report: AdsOnlineProductivityReportSnap
         {report.skillAverages.map((item) => (
           <div key={item.skill} style={{ ...panelStyle, display: "flex", flexDirection: "column", height: SKILL_CARD_HEIGHT, justifyContent: "space-between", padding: "14px 18px", width: cardWidth }}>
             <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", width: "100%" }}>
-              <span style={{ background: "#EDE9FE", border: "1px solid #DDD6FE", borderRadius: 999, color: "#6D28D9", display: "flex", fontSize: 12, fontWeight: 900, letterSpacing: 0.5, padding: "4px 9px", textTransform: "uppercase" }}>
-                {truncate(item.skill, 24)}
-              </span>
+              <SkillBadge skill={item.skill} />
               <span style={{ color: MUTED, display: "flex", fontSize: 13, fontWeight: 800 }}>
                 {formatInteger(item.agentCount)} {item.agentCount === 1 ? "agent" : "agents"}
               </span>
@@ -218,7 +226,7 @@ function AgentRow({
         <div style={{ color: NAVY, display: "flex", fontSize: 21, fontWeight: 900 }}>{truncate(row.name, 36)}</div>
         <div style={{ alignItems: "center", color: MUTED, display: "flex", fontSize: 16, fontWeight: 700, marginTop: 3 }}>
           <span style={{ display: "flex" }}>{truncate(row.wbLogin, row.skill ? 20 : 34)}</span>
-          {row.skill ? <SkillBadge skill={row.skill} /> : null}
+          {row.skill ? <SkillBadge marginLeft={9} skill={row.skill} /> : null}
         </div>
       </div>
       <div style={{ alignItems: "center", display: "flex", width: 305 }}>
@@ -240,24 +248,35 @@ function AgentRow({
   );
 }
 
-function SkillBadge({ skill }: { skill: string }) {
+function SkillBadge({ skill, marginLeft = 0 }: { skill: string; marginLeft?: number }) {
+  const palette = skillBadgePalette(skill);
   return (
     <span style={{
-      background: "#EDE9FE",
-      border: "1px solid #DDD6FE",
+      background: palette.background,
+      border: `1px solid ${palette.border}`,
       borderRadius: 999,
-      color: "#6D28D9",
+      color: palette.color,
       display: "flex",
       fontSize: 12,
       fontWeight: 900,
       letterSpacing: 0.5,
-      marginLeft: 9,
+      marginLeft,
       padding: "3px 8px",
       textTransform: "uppercase"
     }}>
       {truncate(skill, 22)}
     </span>
   );
+}
+
+function skillBadgePalette(skill: string) {
+  const normalized = skill.trim().toLowerCase();
+  if (normalized === "unassigned") return UNASSIGNED_SKILL_PALETTE;
+  let hash = 0;
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash = ((hash << 5) - hash + normalized.charCodeAt(index)) | 0;
+  }
+  return SKILL_BADGE_PALETTES[Math.abs(hash) % SKILL_BADGE_PALETTES.length];
 }
 
 function EmptyRow() {
