@@ -1,6 +1,7 @@
 import { type ScheduleStatus, Prisma } from "@prisma/client";
 
 import { createPermissionError } from "@/lib/api-errors";
+import { isProjectExcludedFromAdsCoverage } from "@/lib/coverage-lob-rules";
 import type { Actor } from "@/lib/mock-db";
 import { recordErrorLog } from "@/lib/mock-db";
 import { isQualityJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
@@ -169,6 +170,7 @@ async function listStaffSchedules(period: { startDate: Date; endDate: Date }, qu
 
 function scheduleMatchesStaffCoverage(schedule: StaffSchedule, query: RequiredStaffQuery) {
   if (isQualityJobTitle(schedule.employee.roleTitle)) return false;
+  if (isProjectExcludedFromAdsCoverage(schedule.employee.lob.name, schedule.coverageLobName)) return false;
   const role = classifyStaffBySkill(schedule.employee.skill);
   const lob = canonicalLob(schedule.coverageLobName);
   if (!role) return false;

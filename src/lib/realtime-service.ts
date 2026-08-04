@@ -14,6 +14,7 @@ import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import type { Actor } from "@/lib/mock-db";
 import { canAccessExecutiveAdsReport, canAccessRealTime, canAccessRealTimeAgentsReports, canAccessRealTimeQueues } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import { isProjectExcludedFromAdsCoverage } from "@/lib/coverage-lob-rules";
 import { resolveQueueReference } from "@/lib/queue-dictionary";
 import { getQueueReportMetadataById } from "@/lib/queue-report-metadata";
 import { getRealtimeHoursOperationalPresence, type RealtimeHoursPresenceStatus } from "@/lib/realtime-hours-service";
@@ -1123,6 +1124,7 @@ async function buildAiRequiredAgentsPeriodSummary(period: AiOperationalPeriod, t
 
   schedules.forEach((schedule) => {
     const lob = schedule.lobId ? lobNameById.get(schedule.lobId) ?? schedule.employee.lob.name : schedule.employee.lob.name;
+    if (isProjectExcludedFromAdsCoverage(schedule.employee.lob.name, lob)) return;
     if (!aiRequiredMatchesTargetLob(lob, targetLobs)) return;
     if (!isAgentJobTitle(schedule.employee.roleTitle)) return;
     const status = normalizeOperationalStatus(schedule.status);

@@ -14,6 +14,7 @@ import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import { prisma } from "@/lib/prisma";
 import { canApproveRequest, normalizeRole } from "@/lib/permissions";
 import { baseTimesForShift } from "@/lib/shift-base-times";
+import { isProjectExcludedFromAdsCoverage } from "@/lib/coverage-lob-rules";
 import { cleanShiftName, shiftCategoryName } from "@/lib/shift-display";
 import { isShiftChangeEffective } from "@/lib/shift-change-effective-service";
 
@@ -1773,7 +1774,7 @@ async function buildCoverageImpactRow(input: {
 
   const [requirement, currentAvailable] = await Promise.all([
     findRequirementForImpact(input.date, lobId, shift),
-    countAvailableCoverageForImpact(input.date, lobId, shift)
+    countAvailableCoverageForImpact(input.date, lobId, lob.name, shift)
   ]);
   const required = requirement?.requiredStaff ?? null;
   const impactDelta = input.impactDelta;
@@ -1894,7 +1895,7 @@ async function findRequirementForImpact(date: Date, lobId: string, shift: string
   });
 }
 
-async function countAvailableCoverageForImpact(date: Date, lobId: string, shift: string) {
+async function countAvailableCoverageForImpact(date: Date, lobId: string, lobName: string, shift: string) {
   const schedules = await prisma.schedule.findMany({
     where: {
       date,
@@ -1918,6 +1919,7 @@ async function countAvailableCoverageForImpact(date: Date, lobId: string, shift:
   return schedules.filter((schedule) => {
     const scheduleLobId = schedule.lobId ?? schedule.employee.lob.id;
     if (scheduleLobId !== lobId) return false;
+    if (isProjectExcludedFromAdsCoverage(schedule.employee.lob.name, lobName)) return false;
     if (!isAgentJobTitle(schedule.employee.roleTitle)) return false;
     if (!scheduleEmployeeCountsAsActiveForImpact(schedule)) return false;
     if (scheduleShiftCategoryForImpact(schedule, schedule.employee.shift?.name) !== shift) return false;

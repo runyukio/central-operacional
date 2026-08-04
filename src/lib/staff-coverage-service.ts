@@ -5,6 +5,7 @@ import { buildAdsRequirementPlan } from "@/lib/ads-requirement-planning-service"
 import { createPermissionError } from "@/lib/api-errors";
 import { hasExcelValue, normalizeExcelDate } from "@/lib/excel-normalization";
 import { isAgentJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
+import { isProjectExcludedFromAdsCoverage } from "@/lib/coverage-lob-rules";
 import type { Actor } from "@/lib/mock-db";
 import { recordErrorLog } from "@/lib/mock-db";
 import { canAccessStaffCoverage, canAutoUpdateAdsRequirement, canExportStaffCoverage, canManageStaffCoverageRequirements } from "@/lib/permissions";
@@ -904,6 +905,7 @@ async function listCoverageSchedules(period: { startDate: Date; endDate: Date },
 
 function scheduleMatchesFilters(schedule: StaffCoverageSchedule, query: StaffCoverageQuery) {
   if (!isAgentJobTitle(schedule.employee.roleTitle)) return false;
+  if (isProjectExcludedFromAdsCoverage(schedule.employee.lob.name, schedule.coverageLobName)) return false;
   if (!scheduleEmployeeCountsAsActive(schedule)) return false;
   if (!scheduleCountsAsCoverage(schedule)) return false;
 
