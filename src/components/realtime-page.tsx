@@ -330,7 +330,7 @@ type ExecutiveHourBucket = {
 };
 type ExecutiveHeatmapCell = {
   value: string;
-  tone: "empty" | "good" | "neutral" | "watch" | "bad" | "critical";
+  tone: "empty" | "good" | "neutral" | "forecast" | "watch" | "bad" | "critical";
 };
 type ExecutiveHeatmapRow = {
   label: string;
@@ -1267,6 +1267,7 @@ function ExecutiveHeatmap({ rows }: { rows: ExecutiveHeatmapRow[] }) {
                   "grid min-h-8 place-items-center rounded-lg px-1",
                   cell.tone === "good" && "bg-emerald-100 text-emerald-800",
                   cell.tone === "neutral" && "bg-blue-50 text-blue-700",
+                  cell.tone === "forecast" && "bg-rose-50 text-rose-700",
                   cell.tone === "watch" && "bg-amber-100 text-amber-900",
                   cell.tone === "bad" && "bg-red-100 text-red-700",
                   cell.tone === "critical" && "bg-red-600 text-white",
@@ -2810,7 +2811,7 @@ function drawExecutiveExportHeatmap(ctx: CanvasRenderingContext2D, rows: Executi
   const tableX = x + 34;
   const tableY = y + 112;
   const firstColumn = 310;
-  const rowHeight = 40;
+  const rowHeight = 36;
   const headerHeight = 40;
   const colGap = 7;
   const colWidth = (width - 68 - firstColumn - colGap * 24) / 24;
@@ -2822,15 +2823,15 @@ function drawExecutiveExportHeatmap(ctx: CanvasRenderingContext2D, rows: Executi
     drawCenteredText(ctx, `${String(hour).padStart(2, "0")}h`, colX + colWidth / 2, tableY + 27, 15, "#475569", "900");
   });
 
-  rows.slice(0, 9).forEach((row, rowIndex) => {
-    const rowY = tableY + headerHeight + 8 + rowIndex * (rowHeight + 5);
+  rows.slice(0, 10).forEach((row, rowIndex) => {
+    const rowY = tableY + headerHeight + 8 + rowIndex * (rowHeight + 4);
     roundRect(ctx, tableX, rowY, firstColumn - 10, rowHeight, 8, "#F1F5F9");
-    drawText(ctx, row.label, tableX + 16, rowY + 27, 16, "#0F172A", "900");
+    drawText(ctx, row.label, tableX + 16, rowY + 25, 16, "#0F172A", "900");
     row.cells.slice(0, 24).forEach((cell, hour) => {
       const tone = executiveCanvasHeatmapTone(cell.tone);
       const colX = tableX + firstColumn + hour * (colWidth + colGap);
       roundRect(ctx, colX, rowY, colWidth, rowHeight, 8, tone.bg);
-      drawCenteredText(ctx, truncateForCanvas(ctx, cell.value, colWidth - 8), colX + colWidth / 2, rowY + 27, 15, tone.text, "900");
+      drawCenteredText(ctx, truncateForCanvas(ctx, cell.value, colWidth - 8), colX + colWidth / 2, rowY + 25, 15, tone.text, "900");
     });
   });
 }
@@ -3072,6 +3073,7 @@ function drawExecutiveExportRanking(ctx: CanvasRenderingContext2D, title: string
 
 function executiveCanvasHeatmapTone(tone: ExecutiveHeatmapCell["tone"]) {
   if (tone === "good") return { bg: "#D1FAE5", text: "#047857" };
+  if (tone === "forecast") return { bg: "#FFF1F2", text: "#BE123C" };
   if (tone === "watch") return { bg: "#FEF3C7", text: "#92400E" };
   if (tone === "bad") return { bg: "#FEE2E2", text: "#B91C1C" };
   if (tone === "critical") return { bg: "#DC2626", text: "#FFFFFF" };
@@ -3836,6 +3838,7 @@ function buildExecutiveReport(
     buildAgentKpiCard("Online agents", latest?.online ?? null, previous?.online ?? null, "number", "up", buildExecutiveTrend(buckets, "online", selected)),
     buildAgentKpiCard("Current Backlog", latest?.backlog ?? null, previous?.backlog ?? null, "number", "down", buildExecutiveTrend(buckets, "backlog", selected))
   ];
+  const inputForecastHistory = buildExecutiveInputForecastHistory(reportRows, buckets, selected, performanceTrend);
 
   return {
     lob,
@@ -3845,8 +3848,8 @@ function buildExecutiveReport(
     latestHourLabel: latest?.cycleDownload ?? (selectedCycle || "-"),
     buckets,
     cards,
-    heatmap: buildExecutiveHeatmap(buckets, latencyTargetMinutes),
-    inputForecastHistory: buildExecutiveInputForecastHistory(reportRows, buckets, selected, performanceTrend),
+    heatmap: buildExecutiveHeatmap(buckets, latencyTargetMinutes, lob, inputForecastHistory),
+    inputForecastHistory,
     backlogHistory: buildExecutiveTrend(buckets, "backlog", selected),
     topAgents: agentRankings.top,
     lowAgents: agentRankings.low
@@ -4454,7 +4457,12 @@ function buildExecutiveTrend(buckets: ExecutiveHourBucket[], key: keyof Pick<Exe
     });
 }
 
-function buildExecutiveHeatmap(buckets: ExecutiveHourBucket[], latencyTargetMinutes: number): ExecutiveHeatmapRow[] {
+function buildExecutiveHeatmap(
+  buckets: ExecutiveHourBucket[],
+  latencyTargetMinutes: number,
+  lob: ExecutiveReportLob,
+  inputForecastHistory: ExecutiveReport["inputForecastHistory"] = []
+): ExecutiveHeatmapRow[] {
   const previousBacklog = (index: number) => {
     for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
       if (buckets[cursor]?.backlog !== null) return buckets[cursor].backlog;
@@ -4462,8 +4470,18 @@ function buildExecutiveHeatmap(buckets: ExecutiveHourBucket[], latencyTargetMinu
     return null;
   };
 
+  const inputRows: ExecutiveHeatmapRow[] = [
+    buildExecutiveHeatmapRow("Input", buckets, (bucket) => formatNumberCell(bucket.input, bucket.input === null ? "empty" : "neutral"))
+  ];
+  if (lob === "ADS") {
+    inputRows.push(buildExecutiveHeatmapRow("Forecast", buckets, (_bucket, index) => {
+      const forecast = inputForecastHistory[index]?.forecast ?? null;
+      return formatNumberCell(forecast, forecast === null ? "empty" : "forecast");
+    }));
+  }
+
   return [
-    buildExecutiveHeatmapRow("Input", buckets, (bucket) => formatNumberCell(bucket.input, bucket.input === null ? "empty" : "neutral")),
+    ...inputRows,
     buildExecutiveHeatmapRow("Output", buckets, (bucket) => {
       if (bucket.output === null) return emptyExecutiveCell();
       const input = bucket.input ?? 0;
