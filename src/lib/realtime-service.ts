@@ -18,6 +18,7 @@ import { isProjectExcludedFromAdsCoverage } from "@/lib/coverage-lob-rules";
 import { resolveQueueReference } from "@/lib/queue-dictionary";
 import { getQueueReportMetadataById } from "@/lib/queue-report-metadata";
 import { getRealtimeHoursOperationalPresence, type RealtimeHoursPresenceStatus } from "@/lib/realtime-hours-service";
+import { matchesRealtimeEmployeeStatus } from "@/lib/realtime-employee-status";
 import { shiftCategoryName } from "@/lib/shift-display";
 import { isWorkHoursAllowedForSchedule, parseWorkHoursToMinutes } from "@/lib/work-hours-rules";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
@@ -3804,7 +3805,7 @@ function filterAgentRows(rows: AgentCycleRow[], query: RealtimeExportQuery) {
   return rows.filter((row) => {
     if (query.crossingStatus && row.crossingStatus !== query.crossingStatus) return false;
     if (query.personType && row.personType !== query.personType) return false;
-    if (query.employeeStatus && !matchesEmployeeStatus(row.employeeStatus, query.employeeStatus)) return false;
+    if (query.employeeStatus && !matchesRealtimeEmployeeStatus(row.employeeStatus, query.employeeStatus)) return false;
     if (query.presenceStatus && row.presenceStatus !== query.presenceStatus) return false;
     if (query.lob && row.lob !== query.lob) return false;
     if (query.supervisor && row.supervisor !== query.supervisor) return false;
@@ -4029,13 +4030,6 @@ function summarizeQueueRowsForExport(rows: QueueCycleRow[]) {
       return currentMax === null ? row.current.maxLatencyMs : Math.max(currentMax, row.current.maxLatencyMs);
     }, null)
   };
-}
-
-function matchesEmployeeStatus(value: string, filter: string) {
-  const normalizedValue = normalizeHeader(value);
-  const normalizedFilter = normalizeHeader(filter);
-  if (normalizedFilter === "ativo") return normalizedValue === "ativo" || normalizedValue === "active";
-  return normalizedValue === normalizedFilter;
 }
 
 function calculateLatencyAdherence(maxLatencyMs: number | null, slaTargetMinutes: number | null) {

@@ -1,4 +1,5 @@
 import { isExecutivePresentHeadcountRow } from "@/lib/realtime-report-headcount";
+import { isRealtimeActiveEmployeeStatus } from "@/lib/realtime-employee-status";
 
 export type AdsExecutiveQueueMetric = {
   input: number;
@@ -369,7 +370,7 @@ export function isExecutiveAgentForLob(row: AdsExecutiveAgentRow, lob: Executive
   return normalize(row.lob) === normalize(lob)
     && normalize(row.crossingStatus) === "encontrado"
     && normalize(row.personType) === "agente"
-    && ["ativo", "active"].includes(normalize(row.employeeStatus));
+    && isRealtimeActiveEmployeeStatus(row.employeeStatus);
 }
 
 export function isExecutiveAgentOnlineAtCycle(row: AdsExecutiveAgentRow, selectedCycle: string) {
