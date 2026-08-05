@@ -540,7 +540,9 @@ function invoiceStatusLabel(value: string) {
     APROVADO_COLABORADOR: "Aprovado pelo colaborador",
     AGUARDANDO_SUPERVISOR: "Aguardando supervisor",
     AGUARDANDO_ADMIN: "Aguardando Admin",
-    AJUSTE_CONCLUIDO: "Ajuste concluído"
+    AJUSTE_CONCLUIDO: "Ajuste concluído",
+    FECHADO: "Fechado",
+    PAGO: "Pago"
   };
   return labels[value] ?? value;
 }

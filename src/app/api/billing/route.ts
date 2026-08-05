@@ -9,6 +9,7 @@ import {
   releaseEmployeeBillingInvoiceForReview,
   saveBillingRates,
   setEmployeeBillingInvoiceFinalized,
+  setEmployeeBillingInvoicePaid,
   supervisorReviewInvoiceAdjustment,
   updateBillingAdjustment,
   updateBillingCycleStatus
@@ -94,6 +95,17 @@ export async function POST(request: Request) {
       result = await releaseEmployeeBillingInvoiceForReview(actor, {
         referenceMonth: body.referenceMonth,
         employeeId: String(body.employeeId ?? "")
+      });
+      break;
+    case "set-employee-invoice-paid":
+      if (typeof body.paid !== "boolean") {
+        result = { error: "Status de pagamento inválido.", status: 400 };
+        break;
+      }
+      result = await setEmployeeBillingInvoicePaid(actor, {
+        referenceMonth: body.referenceMonth,
+        employeeId: String(body.employeeId ?? ""),
+        paid: body.paid
       });
       break;
     case "supervisor-review-adjustment":

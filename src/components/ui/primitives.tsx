@@ -106,7 +106,7 @@ export function StatusBadge({ status }: { status: string }) {
       ? "bg-amber-50 text-amber-600"
       : normalized.includes("aguardando")
         ? "bg-amber-50 text-amber-700"
-      : normalized.includes("aprov") || normalized.includes("funcion") || normalized.includes("online") || normalized.includes("lido") || normalized.includes("sucesso") || normalized.includes("fechado") || normalized.includes("resolvido") || normalized.includes("respondido")
+      : normalized.includes("aprov") || normalized.includes("funcion") || normalized.includes("online") || normalized.includes("lido") || normalized.includes("sucesso") || normalized.includes("fechado") || normalized.includes("pago") || normalized.includes("resolvido") || normalized.includes("respondido")
         ? "bg-emerald-50 text-emerald-600"
       : normalized.includes("novo") || normalized.includes("recebido")
         ? "bg-cyan-50 text-cyan-700"
