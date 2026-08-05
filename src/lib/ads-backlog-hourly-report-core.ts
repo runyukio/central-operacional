@@ -24,7 +24,9 @@ export type AdsBacklogHourlyReportSnapshot = {
   plannedBacklog: number;
   actualIncomingVolume: number;
   forecastedVolume: number;
-  materialSubmitPerHour: number;
+  materialAverageSubmitPerHour: number;
+  materialTotalSubmitPerHour: number;
+  materialProductiveAgentCount: number;
   expectedNextHourBacklog: number;
   expectedClearanceLabel: string;
   remainingHourFraction: number;
@@ -86,14 +88,16 @@ export function buildAdsBacklogHourlyReportSnapshot(input: {
     selectedCycle: input.selectedCycle,
     agentRows: input.agentRows
   });
-  const materialSubmit = productivity.rows
-    .filter((row) => isMaterialQueuesSkill(row.skill))
-    .reduce((total, row) => total + row.currentSubmit, 0);
+  const materialRows = productivity.rows.filter((row) => isMaterialQueuesSkill(row.skill));
+  const materialSubmit = materialRows.reduce((total, row) => total + row.currentSubmit, 0);
   const elapsedHourFraction = Math.max(1 / 60, selected.minute / 60);
-  const materialSubmitPerHour = Math.round(materialSubmit / elapsedHourFraction);
+  const materialTotalSubmitPerHour = Math.round(materialSubmit / elapsedHourFraction);
+  const materialAverageSubmitPerHour = materialRows.length
+    ? Math.round(materialSubmit / elapsedHourFraction / materialRows.length)
+    : 0;
   const remainingHourFraction = Math.max(0, Math.min(1, (60 - selected.minute) / 60));
   const remainingForecastVolume = planPoint.forecastVolume * remainingHourFraction;
-  const remainingMaterialOutput = materialSubmitPerHour * remainingHourFraction;
+  const remainingMaterialOutput = materialTotalSubmitPerHour * remainingHourFraction;
   const expectedNextHourBacklog = Math.max(
     0,
     Math.round(currentBacklog + remainingForecastVolume - remainingMaterialOutput)
@@ -109,7 +113,9 @@ export function buildAdsBacklogHourlyReportSnapshot(input: {
     plannedBacklog: Math.round(planPoint.plannedBacklog),
     actualIncomingVolume: Math.round(actualIncomingVolume),
     forecastedVolume: Math.round(planPoint.forecastVolume),
-    materialSubmitPerHour,
+    materialAverageSubmitPerHour,
+    materialTotalSubmitPerHour,
+    materialProductiveAgentCount: materialRows.length,
     expectedNextHourBacklog,
     expectedClearanceLabel: clearance ? formatClearance(clearance.timestamp) : "Not available",
     remainingHourFraction
@@ -127,7 +133,7 @@ export function buildAdsBacklogKwaiTalkPayload(report: AdsBacklogHourlyReportSna
         `- **Planned backlog:** ${formatInteger(report.plannedBacklog)}`,
         `- **Actual incoming volume:** ${formatInteger(report.actualIncomingVolume)}`,
         `- **Forecasted volume:** ${formatInteger(report.forecastedVolume)}`,
-        `- **Current productivity:** ${formatInteger(report.materialSubmitPerHour)} submits/hour (Material only)`,
+        `- **Current productivity:** ${formatInteger(report.materialAverageSubmitPerHour)} submits/hour/agent (Material only)`,
         `- **Expected backlog at ${nextHourTime}:** ${formatInteger(report.expectedNextHourBacklog)}`,
         `- **Expected clearance:** ${report.expectedClearanceLabel}`,
         "",

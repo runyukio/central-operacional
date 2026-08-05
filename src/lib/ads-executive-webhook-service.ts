@@ -2,10 +2,6 @@ import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import {
-  buildAdsBacklogHourlyReportSnapshot,
-  buildAdsBacklogKwaiTalkPayload
-} from "@/lib/ads-backlog-hourly-report-core";
-import {
   buildAdsExecutiveReportSnapshot,
   parseAdsExecutiveCycle,
   type AdsExecutiveAgentRow,
@@ -35,7 +31,7 @@ const automationActor = {
 };
 
 type WebhookPayloadMode = "multipart" | "json" | "kwaitalk";
-type WebhookReportType = "ADS_EXECUTIVE" | "VIDEO_EXECUTIVE" | "ADS_ONLINE_PRODUCTIVITY" | "ADS_BACKLOG_HOURLY";
+type WebhookReportType = "ADS_EXECUTIVE" | "VIDEO_EXECUTIVE" | "ADS_ONLINE_PRODUCTIVITY";
 type ExecutiveWebhookConfig = {
   lob: ExecutiveReportLob;
   envPrefix: "ADS_EXECUTIVE_WEBHOOK" | "VIDEO_EXECUTIVE_WEBHOOK";
@@ -149,66 +145,6 @@ export async function sendLatestAdsOnlineProductivityReport(): Promise<AdsExecut
     bytes: image.byteLength,
     status: response.status,
     message: "ADS online productivity report sent to the webhook."
-  };
-}
-
-export async function sendLatestAdsBacklogHourlyReport(): Promise<AdsExecutiveWebhookResult> {
-  if (!isWebhookEnabled(ADS_WEBHOOK_CONFIG)) {
-    return {
-      sent: false,
-      skipped: true,
-      selectedCycle: null,
-      fileName: null,
-      bytes: 0,
-      status: null,
-      message: "ADS backlog hourly report delivery is disabled."
-    };
-  }
-
-  const webhookUrl = resolveWebhookUrl(ADS_WEBHOOK_CONFIG);
-  if (!webhookUrl) throw new Error("ADS_EXECUTIVE_WEBHOOK_URL is not configured.");
-
-  const realtime = await getRealtimeSnapshot(automationActor, { view: "both" });
-  if ("error" in realtime && realtime.error) throw new Error(realtime.error);
-  const data = "data" in realtime ? realtime.data : null;
-  const selectedCycle = data?.queueView.selectedCycle || data?.agents.selectedCycle;
-  if (!data?.summary.hasData || !selectedCycle) {
-    throw new Error("There is no valid Real Time snapshot for the ADS backlog hourly report.");
-  }
-
-  const report = buildAdsBacklogHourlyReportSnapshot({
-    selectedCycle,
-    queueRows: mapQueueRows(data.queueView.rows),
-    agentRows: mapAgentRows(data.agents.rows)
-  });
-  if (!report) {
-    return {
-      sent: false,
-      skipped: true,
-      selectedCycle,
-      fileName: null,
-      bytes: 0,
-      status: null,
-      message: "The selected cycle is outside the ADS backlog plan or does not have complete live data."
-    };
-  }
-
-  const response = await postKwaiTalkMarkdownWebhook({
-    url: webhookUrl,
-    payload: buildAdsBacklogKwaiTalkPayload(report),
-    idempotencyKey: `ads-backlog-hourly:${selectedCycle}`,
-    token: resolveWebhookToken(ADS_WEBHOOK_CONFIG),
-    timeoutMs: resolveTimeoutMs(ADS_WEBHOOK_CONFIG)
-  });
-
-  return {
-    sent: true,
-    skipped: false,
-    selectedCycle,
-    fileName: null,
-    bytes: 0,
-    status: response.status,
-    message: "ADS backlog hourly report sent to the webhook."
   };
 }
 
@@ -506,49 +442,6 @@ async function postWebhook(input: {
       throw new Error(`Webhook respondeu HTTP ${response.status}${detail ? `: ${detail}` : ""}`);
     }
     if (input.mode === "kwaitalk") assertKwaiTalkAccepted(responseText);
-    return response;
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(`Webhook excedeu o limite de ${input.timeoutMs} ms.`);
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function postKwaiTalkMarkdownWebhook(input: {
-  url: string;
-  payload: ReturnType<typeof buildAdsBacklogKwaiTalkPayload>;
-  idempotencyKey: string;
-  token: string | null;
-  timeoutMs: number;
-}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
-  const headers = new Headers({
-    Accept: "application/json, text/plain, */*",
-    "Content-Type": "application/json",
-    "Idempotency-Key": input.idempotencyKey,
-    "X-Report-Type": "ADS_BACKLOG_HOURLY"
-  });
-  if (input.token) headers.set("Authorization", `Bearer ${input.token}`);
-
-  try {
-    const response = await fetch(input.url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(input.payload),
-      signal: controller.signal,
-      cache: "no-store",
-      redirect: "follow"
-    });
-    const responseText = await response.text();
-    if (!response.ok) {
-      const detail = sanitizeResponseBody(responseText);
-      throw new Error(`Webhook respondeu HTTP ${response.status}${detail ? `: ${detail}` : ""}`);
-    }
-    assertKwaiTalkAccepted(responseText);
     return response;
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
