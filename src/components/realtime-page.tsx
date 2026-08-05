@@ -1026,6 +1026,16 @@ function ExecutiveReportDashboard({ report }: { report: ExecutiveReport }) {
           <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700">
             Fills through 23h
           </span>
+          {report.lob === "ADS" ? (
+            <button
+              type="button"
+              onClick={() => downloadAdsExecutiveHealthMap(report.selectedCycle)}
+              className="premium-control inline-flex h-10 items-center gap-2 px-3 text-sm font-extrabold text-navy-950"
+            >
+              <Download className="h-4 w-4" />
+              Download data
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={() => downloadExecutiveReportImage(report)}
@@ -1121,6 +1131,12 @@ function ExecutiveReportDashboard({ report }: { report: ExecutiveReport }) {
       </div>
     </div>
   );
+}
+
+function downloadAdsExecutiveHealthMap(selectedCycle: string) {
+  const params = new URLSearchParams();
+  if (selectedCycle) params.set("cycleDownload", selectedCycle);
+  window.location.assign(`/api/realtime/executive/ads/export?${params.toString()}`);
 }
 
 function ExecutiveMetricCard({ card }: { card: AgentKpiCard }) {

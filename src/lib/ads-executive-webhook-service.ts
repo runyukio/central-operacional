@@ -23,6 +23,7 @@ import { QUEUE_METADATA } from "@/lib/queue-metadata";
 import { QUEUE_REPORT_METADATA } from "@/lib/queue-report-metadata";
 import { getRealtimeSnapshot } from "@/lib/realtime-service";
 import { uploadPublicObject } from "@/lib/supabase-storage";
+import type { Actor } from "@/lib/mock-db";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FORECAST_HISTORY_DAYS = 120;
@@ -209,6 +210,31 @@ export async function sendLatestAdsBacklogHourlyReport(): Promise<AdsExecutiveWe
     status: response.status,
     message: "ADS backlog hourly report sent to the webhook."
   };
+}
+
+export async function getAdsExecutiveReportSnapshot(actor: Actor, cycleDownload?: string) {
+  const realtime = await getRealtimeSnapshot(actor, { view: "both", cycleDownload });
+  if ("error" in realtime && realtime.error) throw new Error(realtime.error);
+  const data = "data" in realtime ? realtime.data : null;
+  const selectedCycle = data?.queueView.selectedCycle || data?.agents.selectedCycle;
+  if (!data?.summary.hasData || !selectedCycle) {
+    throw new Error("There is no valid Real Time snapshot for the ADS executive report.");
+  }
+
+  const parsedCycle = parseAdsExecutiveCycle(selectedCycle);
+  const [forecast, requirements] = await Promise.all([
+    loadExecutiveForecast("ADS", parsedCycle.dateKey),
+    loadExecutiveRequirements("ADS", parsedCycle.dateKey)
+  ]);
+
+  return buildAdsExecutiveReportSnapshot({
+    lob: "ADS",
+    selectedCycle,
+    queueRows: mapQueueRows(data.queueView.rows),
+    agentRows: mapAgentRows(data.agents.rows),
+    forecast,
+    requirements
+  });
 }
 
 async function sendLatestExecutiveReport(config: ExecutiveWebhookConfig): Promise<AdsExecutiveWebhookResult> {
