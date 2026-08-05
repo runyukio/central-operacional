@@ -1,10 +1,11 @@
 import {
   buildAdsExecutiveReportSnapshot,
+  isExecutiveAgentForLob,
+  isExecutiveAgentOnlineAtCycle,
   parseAdsExecutiveCycle,
   type AdsExecutiveAgentRow,
   type AdsExecutiveQueueRow
 } from "@/lib/ads-executive-report-core";
-import { buildAdsOnlineProductivityReportSnapshot } from "@/lib/ads-online-productivity-report-core";
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -84,20 +85,14 @@ export function buildAdsBacklogHourlyReportSnapshot(input: {
   const actualIncomingVolume = currentBucket?.input;
   if (typeof currentBacklog !== "number" || typeof actualIncomingVolume !== "number") return null;
 
-  const productivity = buildAdsOnlineProductivityReportSnapshot({
-    selectedCycle: input.selectedCycle,
-    agentRows: input.agentRows
-  });
-  const materialRows = productivity.rows.filter((row) => isMaterialQueuesSkill(row.skill));
-  const materialSubmit = materialRows.reduce((total, row) => total + row.currentSubmit, 0);
-  const elapsedHourFraction = Math.max(1 / 60, selected.minute / 60);
-  const materialTotalSubmitPerHour = Math.round(materialSubmit / elapsedHourFraction);
-  const materialAverageSubmitPerHour = materialRows.length
-    ? Math.round(materialSubmit / elapsedHourFraction / materialRows.length)
-    : 0;
+  const materialProductivity = buildMaterialHourlyProductivity(
+    input.agentRows,
+    input.selectedCycle,
+    selected.timestamp
+  );
   const remainingHourFraction = Math.max(0, Math.min(1, (60 - selected.minute) / 60));
   const remainingForecastVolume = planPoint.forecastVolume * remainingHourFraction;
-  const remainingMaterialOutput = materialTotalSubmitPerHour * remainingHourFraction;
+  const remainingMaterialOutput = materialProductivity.totalSubmitPerHour * remainingHourFraction;
   const expectedNextHourBacklog = Math.max(
     0,
     Math.round(currentBacklog + remainingForecastVolume - remainingMaterialOutput)
@@ -113,9 +108,9 @@ export function buildAdsBacklogHourlyReportSnapshot(input: {
     plannedBacklog: Math.round(planPoint.plannedBacklog),
     actualIncomingVolume: Math.round(actualIncomingVolume),
     forecastedVolume: Math.round(planPoint.forecastVolume),
-    materialAverageSubmitPerHour,
-    materialTotalSubmitPerHour,
-    materialProductiveAgentCount: materialRows.length,
+    materialAverageSubmitPerHour: materialProductivity.averageSubmitPerHour,
+    materialTotalSubmitPerHour: materialProductivity.totalSubmitPerHour,
+    materialProductiveAgentCount: materialProductivity.agentCount,
     expectedNextHourBacklog,
     expectedClearanceLabel: clearance ? formatClearance(clearance.timestamp) : "Not available",
     remainingHourFraction
@@ -146,6 +141,44 @@ export function buildAdsBacklogKwaiTalkPayload(report: AdsBacklogHourlyReportSna
 
 export function isMaterialQueuesSkill(value: string | null | undefined) {
   return normalize(value) === "material queues";
+}
+
+function buildMaterialHourlyProductivity(
+  rows: AdsExecutiveAgentRow[],
+  selectedCycle: string,
+  selectedTimestamp: number
+) {
+  const rates = rows
+    .filter((row) => (
+      isExecutiveAgentForLob(row, "ADS")
+      && isExecutiveAgentOnlineAtCycle(row, selectedCycle)
+      && isMaterialQueuesSkill(row.skill)
+    ))
+    .flatMap((row) => {
+      const history = row.history.flatMap((item) => {
+        try {
+          const parsed = parseAdsExecutiveCycle(item.cycleDownload);
+          return parsed.timestamp <= selectedTimestamp ? [{ ...item, timestamp: parsed.timestamp }] : [];
+        } catch {
+          return [];
+        }
+      }).sort((left, right) => left.timestamp - right.timestamp);
+      const current = history.at(-1);
+      const baseline = history.filter((item) => item.timestamp <= selectedTimestamp - HOUR_MS).at(-1);
+      if (!current || !baseline || current.timestamp <= baseline.timestamp) return [];
+      const currentSubmit = Math.max(0, Number(current.submit ?? 0));
+      const baselineSubmit = Math.max(0, Number(baseline.submit ?? 0));
+      const submit = currentSubmit >= baselineSubmit ? currentSubmit - baselineSubmit : currentSubmit;
+      const observedHours = (current.timestamp - baseline.timestamp) / HOUR_MS;
+      const submitPerHour = observedHours > 0 ? submit / observedHours : 0;
+      return submitPerHour > 0 && Number.isFinite(submitPerHour) ? [submitPerHour] : [];
+    });
+  const totalSubmitPerHour = rates.reduce((total, rate) => total + rate, 0);
+  return {
+    averageSubmitPerHour: rates.length ? Math.round(totalSubmitPerHour / rates.length) : 0,
+    totalSubmitPerHour: Math.round(totalSubmitPerHour),
+    agentCount: rates.length
+  };
 }
 
 function normalize(value: unknown) {

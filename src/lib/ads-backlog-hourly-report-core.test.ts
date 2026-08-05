@@ -45,10 +45,10 @@ test("projects the next hour with ADS backlog, remaining forecast and Material-o
   assert.equal(report.plannedBacklog, 3863);
   assert.equal(report.actualIncomingVolume, 300);
   assert.equal(report.forecastedVolume, 561);
-  assert.equal(report.materialAverageSubmitPerHour, 180);
-  assert.equal(report.materialTotalSubmitPerHour, 360);
+  assert.equal(report.materialAverageSubmitPerHour, 90);
+  assert.equal(report.materialTotalSubmitPerHour, 180);
   assert.equal(report.materialProductiveAgentCount, 2);
-  assert.equal(report.expectedNextHourBacklog, 4101);
+  assert.equal(report.expectedNextHourBacklog, 4191);
   assert.equal(report.expectedClearanceLabel, "Aug 7 at 5:00 AM");
 });
 
@@ -63,8 +63,8 @@ test("builds an English Kim message with the next-hour projection", () => {
   const payload = buildAdsBacklogKwaiTalkPayload(report);
   assert.equal(payload.msgtype, "markdown");
   assert.match(payload.markdown.content, /ADS Backlog Update — 20:00/);
-  assert.match(payload.markdown.content, /Current productivity:.*240 submits\/hour\/agent \(Material only\)/);
-  assert.match(payload.markdown.content, /Expected backlog at 21:00:.*4,161/);
+  assert.match(payload.markdown.content, /Current productivity:.*120 submits\/hour\/agent \(Material only\)/);
+  assert.match(payload.markdown.content, /Expected backlog at 21:00:.*4,221/);
   assert.match(payload.markdown.content, /Expected clearance:.*Aug 7 at 5:00 AM/);
 });
 
