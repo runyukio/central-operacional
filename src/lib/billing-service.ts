@@ -16,6 +16,12 @@ import {
   isBillingFiscalAmountMismatchExempt,
   resolveBillingManualClosureWithoutFiscalInvoiceReason
 } from "@/lib/billing-fiscal-invoice";
+import {
+  BILLING_INVOICE_CLOSED_STATUS,
+  BILLING_INVOICE_PAID_STATUS,
+  buildBillingPaymentSummary,
+  isBillingInvoiceFinalizedStatus as isFinalizedInvoiceStatus
+} from "@/lib/billing-payment-status";
 import { buildBillingOmieAllocation } from "@/lib/billing-omie-allocation";
 import { canAccessBilling, canManageBilling } from "@/lib/billing-permissions";
 import {
@@ -298,8 +304,12 @@ export async function getBillingDashboard(actor: Actor, filters: BillingDashboar
     includeHourDetails: section === "hours" || section === "all"
   });
   const filteredInvoices = filterInvoices(invoices, scopedFilters);
+  const paymentInvoices = filterInvoices(invoices, { ...scopedFilters, invoiceStatus: "Todos" });
   const cycleStatus = cycle?.status ?? "ABERTO";
-  const summary = buildDashboardSummary(filteredInvoices, cycleStatus);
+  const summary = {
+    ...buildDashboardSummary(filteredInvoices, cycleStatus),
+    paymentSummary: buildBillingPaymentSummary(paymentInvoices)
+  };
   const byLob = buildLobSummary(filteredInvoices);
   const visibleEmployeeIds = scope.restricted ? new Set(filteredInvoices.map((invoice) => invoice.employeeId)) : null;
   const [adjustments, adjustmentRequests, rateConfigs] = await Promise.all([
@@ -1349,6 +1359,9 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
     where: { billingCycleId_employeeId: { billingCycleId: cycle.id, employeeId: employee.id } },
     include: { fiscalInvoice: true }
   });
+  if (!input.finalized && existing?.status === BILLING_INVOICE_PAID_STATUS) {
+    return { error: "Marque o invoice como pendente antes de reabri-lo.", status: 409 };
+  }
   const calculatedForFinalization = input.finalized
     ? await calculateEmployeeInvoice(employee, referenceMonth, await getBillingRates(), cycle.id, cycle.status)
     : null;
@@ -1699,6 +1712,56 @@ export async function releaseEmployeeBillingInvoiceForReview(actor: Actor, input
   });
 
   return { data: { id: invoice.id, status: invoice.status, statusLabel: invoiceStatusLabel(invoice.status) } };
+}
+
+export async function setEmployeeBillingInvoicePaid(actor: Actor, input: {
+  referenceMonth?: string | null;
+  employeeId: string;
+  paid: boolean;
+}) {
+  const user = await findActiveUser(actor.email);
+  const denied = requireBillingManagement(user);
+  if (denied) return denied;
+  const referenceMonth = normalizeBillingMonth(input.referenceMonth);
+  if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
+  if (!input.employeeId?.trim()) return { error: "Colaborador obrigatório para atualizar o pagamento.", status: 400 };
+
+  const cycle = await prisma.billingCycle.findUnique({ where: { referenceMonth } });
+  if (!cycle) return { error: "Ciclo de Billing não encontrado.", status: 404 };
+
+  const invoice = await prisma.billingEmployeeInvoice.findUnique({
+    where: { billingCycleId_employeeId: { billingCycleId: cycle.id, employeeId: input.employeeId } }
+  });
+  if (!invoice) return { error: "Invoice individual não encontrado.", status: 404 };
+  if (!isFinalizedInvoiceStatus(invoice.status)) {
+    return { error: "Finalize o invoice antes de registrar o pagamento.", status: 409 };
+  }
+
+  const nextStatus = input.paid ? BILLING_INVOICE_PAID_STATUS : BILLING_INVOICE_CLOSED_STATUS;
+  if (invoice.status === nextStatus) {
+    return { data: { id: invoice.id, status: invoice.status, statusLabel: invoiceStatusLabel(invoice.status) } };
+  }
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const item = await tx.billingEmployeeInvoice.update({
+      where: { id: invoice.id },
+      data: { status: nextStatus }
+    });
+    await tx.auditLog.create({
+      data: {
+        actorId: user!.id,
+        action: AuditAction.EDICAO,
+        entity: "BillingEmployeeInvoice",
+        entityId: invoice.id,
+        reason: input.paid ? "Pagamento do invoice confirmado" : "Pagamento do invoice revertido para pendente",
+        previousValue: { status: invoice.status, referenceMonth, employeeId: input.employeeId },
+        newValue: { status: item.status, referenceMonth, employeeId: input.employeeId }
+      }
+    });
+    return item;
+  });
+
+  return { data: { id: updated.id, status: updated.status, statusLabel: invoiceStatusLabel(updated.status) } };
 }
 
 export async function saveBillingRates(actor: Actor, input: Record<string, number>) {
@@ -2496,7 +2559,7 @@ async function listBillingEmployees(filters: BillingDashboardFilters, referenceM
     }),
     cycleId
       ? prisma.billingEmployeeInvoice.findMany({
-        where: { billingCycleId: cycleId, status: "FECHADO" },
+        where: { billingCycleId: cycleId, status: { in: [BILLING_INVOICE_CLOSED_STATUS, BILLING_INVOICE_PAID_STATUS] } },
         distinct: ["employeeId"],
         select: { employeeId: true }
       })
@@ -2561,10 +2624,6 @@ function filterInvoices<T extends { status: string; billingRule?: string; adjust
     }
     return true;
   });
-}
-
-function isFinalizedInvoiceStatus(status?: string | null) {
-  return status === "FECHADO";
 }
 
 function applyPersistedInvoiceSnapshot<T extends InvoiceCalculation>(invoice: T, persisted: PersistedInvoiceSnapshot): T {
@@ -3571,7 +3630,8 @@ function invoiceStatusLabel(status: string) {
     AGUARDANDO_SUPERVISOR: "Aguardando supervisor",
     AGUARDANDO_ADMIN: "Aguardando Admin",
     AJUSTE_CONCLUIDO: "Ajuste concluído",
-    FECHADO: "Fechado"
+    FECHADO: "Fechado",
+    PAGO: "Pago"
   };
   return labels[status] ?? status;
 }

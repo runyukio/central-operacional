@@ -702,7 +702,8 @@ function invoiceStatusLabel(value: string) {
     AGUARDANDO_SUPERVISOR: "Aguardando supervisor",
     AGUARDANDO_ADMIN: "Aguardando Admin",
     AJUSTE_CONCLUIDO: "Ajuste concluído",
-    FECHADO: "Fechado"
+    FECHADO: "Fechado",
+    PAGO: "Pago"
   };
   return labels[value] ?? value;
 }

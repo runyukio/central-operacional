@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, CircleDollarSign, Download, Eye, FileSpreadsheet, FileText, LockKeyhole, Pencil, RefreshCw, Save, Search, Send, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
+import { CheckCircle2, CircleDollarSign, Clock3, Download, Eye, FileSpreadsheet, FileText, LockKeyhole, Pencil, RefreshCw, Save, Search, Send, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 
 import {
   BillingFiscalInvoiceUpload,
@@ -37,6 +37,12 @@ type BillingPayload = {
       approvedMinutes: number;
       agentsWithHours: number;
       cycleStatusLabel: string;
+      paymentSummary: {
+        pendingCount: number;
+        pendingAmount: number;
+        paidCount: number;
+        paidAmount: number;
+      };
     };
     filterOptions: {
       lobs: Array<{ value: string; label: string }>;
@@ -455,6 +461,35 @@ export function BillingPage() {
     }, "Invoice individual liberado para conferência.");
   }
 
+  async function setEmployeeInvoicePaid(invoice: BillingPayload["data"]["invoices"][number], paid: boolean) {
+    setSaving(true);
+    setError("");
+    setMessage("");
+    try {
+      const response = await fetch("/api/billing", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "set-employee-invoice-paid",
+          referenceMonth,
+          employeeId: invoice.employeeId,
+          paid
+        })
+      });
+      const next = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(next.error ?? "Não foi possível atualizar o pagamento.");
+      setMessage(paid ? "Invoice marcado como pago." : "Invoice retornado para pendente de pagamento.");
+      setSelectedInvoice(null);
+      await load();
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível atualizar o pagamento.");
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const exportHref = useMemo(() => {
     const params = new URLSearchParams({ referenceMonth });
     if (employeeId) params.set("employeeId", employeeId);
@@ -524,9 +559,8 @@ export function BillingPage() {
               <option value="EM_PREVISAO">Em previsão</option>
               <option value="DISPONIVEL_APROVACAO">Disponível para aprovação</option>
               <option value="APROVADO_COLABORADOR">Aprovado pelo colaborador</option>
-              <option value="AGUARDANDO_SUPERVISOR">Aguardando supervisor</option>
-              <option value="AGUARDANDO_ADMIN">Aguardando Admin</option>
               <option value="FECHADO">Fechado</option>
+              <option value="PAGO">Pago</option>
             </select>
           </Label>
           <Label text="Cargo/Função">
@@ -649,6 +683,20 @@ export function BillingPage() {
                   <InfoLine label="Agentes com horas" value={data.summary.agentsWithHours} />
                   <InfoLine label="Valor final" value={formatCurrency(data.summary.finalAmount)} />
                 </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 border-t border-border/70 pt-3">
+                  <PaymentSummaryCard
+                    label="Pendente"
+                    count={data.summary.paymentSummary.pendingCount}
+                    amount={data.summary.paymentSummary.pendingAmount}
+                    tone="pending"
+                  />
+                  <PaymentSummaryCard
+                    label="Pago"
+                    count={data.summary.paymentSummary.paidCount}
+                    amount={data.summary.paymentSummary.paidAmount}
+                    tone="paid"
+                  />
+                </div>
                 {canManageBilling ? (
                   <div className="mt-3 grid gap-2">
                     <button disabled={saving} onClick={() => postBilling({ action: "set-cycle-status", referenceMonth, status: "EM_REVISAO" }, "Ciclo marcado como Em revisão.")} className="premium-control inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none text-navy-950">Marcar em revisão</button>
@@ -684,6 +732,7 @@ export function BillingPage() {
               onCreateAdjustment={(draft) => createEmployeeAdjustment(selectedInvoice, draft)}
               onReleaseForReview={() => releaseEmployeeInvoiceForReview(selectedInvoice)}
               onSetFinalized={(finalized, fiscalDraft) => setEmployeeInvoiceFinalized(selectedInvoice, finalized, fiscalDraft)}
+              onSetPaid={(paid) => setEmployeeInvoicePaid(selectedInvoice, paid)}
             />
           ) : null}
           {selectedFiscalInvoice ? (
@@ -717,6 +766,33 @@ function InfoLine({ label, value }: { label: string; value: React.ReactNode }) {
     <div className="flex items-center justify-between gap-3 border-b border-border/70 py-2 last:border-b-0">
       <span className="text-xs font-black uppercase tracking-wide text-muted">{label}</span>
       <span className="text-right text-sm font-extrabold text-navy-950">{value}</span>
+    </div>
+  );
+}
+
+function PaymentSummaryCard({
+  label,
+  count,
+  amount,
+  tone
+}: {
+  label: string;
+  count: number;
+  amount: number;
+  tone: "pending" | "paid";
+}) {
+  const paid = tone === "paid";
+  const Icon = paid ? CheckCircle2 : Clock3;
+  return (
+    <div className={cn(
+      "min-w-0 rounded-xl border px-3 py-2.5",
+      paid ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50"
+    )}>
+      <div className={cn("flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wide", paid ? "text-emerald-700" : "text-amber-700")}>
+        <Icon className="h-3.5 w-3.5 shrink-0" /> {label}
+      </div>
+      <p className="mt-1 truncate text-sm font-black text-navy-950" title={formatCurrency(amount)}>{formatCurrency(amount)}</p>
+      <p className="mt-0.5 text-[11px] font-bold text-muted">{count} invoice{count === 1 ? "" : "s"}</p>
     </div>
   );
 }
@@ -987,7 +1063,8 @@ function EmployeeBillingDetail({
   onLoadHourDetails,
   onCreateAdjustment,
   onReleaseForReview,
-  onSetFinalized
+  onSetFinalized,
+  onSetPaid
 }: {
   invoice: BillingPayload["data"]["invoices"][number];
   referenceMonth: string;
@@ -1000,20 +1077,22 @@ function EmployeeBillingDetail({
   onCreateAdjustment: (draft: { type: string; description: string; amount: string }) => Promise<void>;
   onReleaseForReview: () => Promise<void>;
   onSetFinalized: (finalized: boolean, fiscalDraft?: BillingFiscalDraft) => Promise<boolean>;
+  onSetPaid: (paid: boolean) => Promise<boolean>;
 }) {
   const [draft, setDraft] = useState({ type: "Correção", amount: "", description: "" });
   const [localError, setLocalError] = useState("");
   const [finalizationOpen, setFinalizationOpen] = useState(false);
   const [fiscalError, setFiscalError] = useState("");
   const [fiscalDraft, setFiscalDraft] = useState<BillingFiscalDraft>(EMPTY_BILLING_FISCAL_UPLOAD);
-  const finalized = invoice.status === "FECHADO";
+  const paid = invoice.status === "PAGO";
+  const finalized = invoice.status === "FECHADO" || paid;
   const finalizesWithoutFiscalInvoice = Boolean(resolveBillingManualClosureWithoutFiscalInvoiceReason({
     wbLogin: invoice.wbLogin,
     employeeStatus: invoice.employeeStatus,
     finalAmount: invoice.finalAmount
   }));
   const allowFiscalAmountMismatch = isBillingFiscalAmountMismatchExempt(invoice.wbLogin);
-  const alreadyReleasedForReview = ["DISPONIVEL_APROVACAO", "APROVADO_COLABORADOR", "AGUARDANDO_SUPERVISOR", "AGUARDANDO_ADMIN"].includes(invoice.status);
+  const alreadyReleasedForReview = ["DISPONIVEL_APROVACAO", "APROVADO_COLABORADOR"].includes(invoice.status);
   const expectedFiscalAmount = calculateBillingFiscalExpectedAmount({
     referenceMonth,
     wbLogin: invoice.wbLogin,
@@ -1082,7 +1161,23 @@ function EmployeeBillingDetail({
                 <Send className="h-4 w-4" /> {alreadyReleasedForReview ? "Conferência liberada" : "Liberar conferência"}
               </button>
             ) : null}
-            {canManageBilling ? (
+            {canManageBilling && finalized ? (
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => void onSetPaid(!paid)}
+                className={cn(
+                  "inline-flex h-9 items-center justify-center gap-2 rounded-lg border px-3 text-xs font-black leading-none",
+                  paid
+                    ? "border-amber-200 bg-amber-50 text-amber-800"
+                    : "border-emerald-200 bg-emerald-50 text-emerald-800"
+                )}
+              >
+                {paid ? <Clock3 className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />}
+                {paid ? "Marcar pendente" : "Marcar como pago"}
+              </button>
+            ) : null}
+            {canManageBilling && !paid ? (
               <button
                 type="button"
                 disabled={saving}
@@ -1110,8 +1205,13 @@ function EmployeeBillingDetail({
 
         <div className="flex-1 overflow-y-auto p-4">
           {finalized ? (
-            <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-800">
-              Invoice individual finalizado pelo Admin. Valores, horas e status ficam congelados até reabertura manual.
+            <div className={cn(
+              "mb-4 rounded-xl border px-3 py-2 text-sm font-bold",
+              paid ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-800"
+            )}>
+              {paid
+                ? "Pagamento confirmado. O invoice permanece congelado; marque-o como pendente antes de reabrir."
+                : "Invoice individual finalizado pelo Admin. Valores, horas e status ficam congelados até reabertura manual."}
             </div>
           ) : null}
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
