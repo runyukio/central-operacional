@@ -26,6 +26,7 @@ import {
   isExecutivePresentHeadcountRow,
   isReportOnlineHeadcountRow
 } from "@/lib/realtime-report-headcount";
+import { matchesRealtimeEmployeeStatus } from "@/lib/realtime-employee-status";
 import { cn } from "@/lib/utils";
 import { CecReportDetails, CecReportOverview, type CecReportPayload } from "@/components/realtime-cec-report";
 
@@ -622,7 +623,7 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
     return (agentView?.rows ?? []).filter((row) => {
       if (agentFilters.crossingStatus && row.crossingStatus !== agentFilters.crossingStatus) return false;
       if (agentFilters.personType && row.personType !== agentFilters.personType) return false;
-      if (agentFilters.employeeStatus && !matchesEmployeeStatus(row.employeeStatus, agentFilters.employeeStatus)) return false;
+      if (agentFilters.employeeStatus && !matchesRealtimeEmployeeStatus(row.employeeStatus, agentFilters.employeeStatus)) return false;
       if (agentFilters.presenceStatus && row.presenceStatus !== agentFilters.presenceStatus) return false;
       if (agentFilters.lob && row.lob !== agentFilters.lob) return false;
       if (agentFilters.supervisor && row.supervisor !== agentFilters.supervisor) return false;
@@ -4580,7 +4581,7 @@ function isReportAgentForLob(row: AgentRealtimeRow, lob: "ADS" | "VIDEO" | "COMM
   return row.lob === lob
     && row.crossingStatus === "Encontrado"
     && row.personType === "Agente"
-    && matchesEmployeeStatus(row.employeeStatus, "Ativo");
+    && matchesRealtimeEmployeeStatus(row.employeeStatus, "Ativo");
 }
 
 function buildQueueLobCards(rows: QueueRealtimeRow[], selectedCycle: string): QueueLobCardData[] {
@@ -4965,13 +4966,6 @@ function buildQueueQueryParams(cycleDownload: string, filters: QueueFilters) {
     if (value) params.set(`queue${key[0].toUpperCase()}${key.slice(1)}`, value);
   });
   return params;
-}
-
-function matchesEmployeeStatus(value: string, filter: string) {
-  const normalizedValue = normalizeSearch(value);
-  const normalizedFilter = normalizeSearch(filter);
-  if (normalizedFilter === "ativo") return normalizedValue === "ativo" || normalizedValue === "active";
-  return normalizedValue === normalizedFilter;
 }
 
 function compareAgentRows(a: AgentRealtimeRow, b: AgentRealtimeRow, sort: AgentSortState) {

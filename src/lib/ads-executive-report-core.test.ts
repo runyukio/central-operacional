@@ -114,6 +114,21 @@ test("no Executive mantém na contagem quem está em pausa ou com estação bloq
   assert.equal(report.buckets[10].online, 5);
 });
 
+test("inclui agente em Nesting no Real Time Executive", () => {
+  const nestingAgent = agent("wb_nesting", "Online", false, 12);
+  nestingAgent.employeeStatus = "Nesting";
+
+  const report = buildAdsExecutiveReportSnapshot({
+    selectedCycle: "2026-07-21 10:30",
+    queueRows: [{ lob: "ADS", history: [metric("2026-07-21 10:30", 12, 12, 0)] }],
+    agentRows: [nestingAgent]
+  });
+
+  assert.equal(report.buckets[10].online, 1);
+  assert.equal(report.topAgents[0]?.wbLogin, "wb_nesting");
+  assert.equal(report.topAgents[0]?.submit, 12);
+});
+
 function metric(cycleDownload: string, input: number, output: number, backlog: number, maxLatencyMs = 120_000) {
   return {
     cycleDownload,
