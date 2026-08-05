@@ -2,6 +2,10 @@ import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 import {
+  buildAdsBacklogHourlyReportSnapshot,
+  buildAdsBacklogKwaiTalkPayload
+} from "@/lib/ads-backlog-hourly-report-core";
+import {
   buildAdsExecutiveReportSnapshot,
   parseAdsExecutiveCycle,
   type AdsExecutiveAgentRow,
@@ -145,6 +149,65 @@ export async function sendLatestAdsOnlineProductivityReport(): Promise<AdsExecut
     bytes: image.byteLength,
     status: response.status,
     message: "ADS online productivity report sent to the webhook."
+  };
+}
+
+export async function sendLatestAdsBacklogHourlyReport(): Promise<AdsExecutiveWebhookResult> {
+  if (!isAdsBacklogWebhookEnabled()) {
+    return {
+      sent: false,
+      skipped: true,
+      selectedCycle: null,
+      fileName: null,
+      bytes: 0,
+      status: null,
+      message: "ADS backlog hourly report delivery is disabled."
+    };
+  }
+
+  const webhookUrl = String(process.env.ADS_BACKLOG_WEBHOOK_URL ?? "").trim();
+  if (!webhookUrl) throw new Error("ADS_BACKLOG_WEBHOOK_URL is not configured.");
+
+  const realtime = await getRealtimeSnapshot(automationActor, { view: "both" });
+  if ("error" in realtime && realtime.error) throw new Error(realtime.error);
+  const data = "data" in realtime ? realtime.data : null;
+  const selectedCycle = data?.queueView.selectedCycle || data?.agents.selectedCycle;
+  if (!data?.summary.hasData || !selectedCycle) {
+    throw new Error("There is no valid Real Time snapshot for the ADS backlog hourly report.");
+  }
+
+  const report = buildAdsBacklogHourlyReportSnapshot({
+    selectedCycle,
+    queueRows: mapQueueRows(data.queueView.rows),
+    agentRows: mapAgentRows(data.agents.rows)
+  });
+  if (!report) {
+    return {
+      sent: false,
+      skipped: true,
+      selectedCycle,
+      fileName: null,
+      bytes: 0,
+      status: null,
+      message: "The selected cycle is outside the ADS backlog plan or does not have complete live data."
+    };
+  }
+
+  const response = await postAdsBacklogWebhook({
+    url: webhookUrl,
+    payload: buildAdsBacklogKwaiTalkPayload(report),
+    idempotencyKey: `ads-backlog-hourly:${selectedCycle}`,
+    timeoutMs: resolveAdsBacklogTimeoutMs()
+  });
+
+  return {
+    sent: true,
+    skipped: false,
+    selectedCycle,
+    fileName: null,
+    bytes: 0,
+    status: response.status,
+    message: "ADS backlog hourly report sent to the webhook."
   };
 }
 
@@ -453,6 +516,45 @@ async function postWebhook(input: {
   }
 }
 
+async function postAdsBacklogWebhook(input: {
+  url: string;
+  payload: ReturnType<typeof buildAdsBacklogKwaiTalkPayload>;
+  idempotencyKey: string;
+  timeoutMs: number;
+}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
+  try {
+    const response = await fetch(input.url, {
+      method: "POST",
+      headers: {
+        Accept: "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        "Idempotency-Key": input.idempotencyKey,
+        "X-Report-Type": "ADS_BACKLOG_HOURLY"
+      },
+      body: JSON.stringify(input.payload),
+      signal: controller.signal,
+      cache: "no-store",
+      redirect: "follow"
+    });
+    const responseText = await response.text();
+    if (!response.ok) {
+      const detail = sanitizeResponseBody(responseText);
+      throw new Error(`Webhook respondeu HTTP ${response.status}${detail ? `: ${detail}` : ""}`);
+    }
+    assertKwaiTalkAccepted(responseText);
+    return response;
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`Webhook excedeu o limite de ${input.timeoutMs} ms.`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function queueIdsForLob(lob: ExecutiveReportLob) {
   return Array.from(new Set([
     ...Object.entries(QUEUE_METADATA).filter(([, metadata]) => metadata.lob === lob).map(([queueId]) => queueId),
@@ -462,6 +564,17 @@ function queueIdsForLob(lob: ExecutiveReportLob) {
 
 function isWebhookEnabled(config: ExecutiveWebhookConfig) {
   return ["1", "true", "yes", "on"].includes(String(process.env[`${config.envPrefix}_ENABLED`] ?? "").trim().toLowerCase());
+}
+
+function isAdsBacklogWebhookEnabled() {
+  return ["1", "true", "yes", "on"].includes(
+    String(process.env.ADS_BACKLOG_WEBHOOK_ENABLED ?? "").trim().toLowerCase()
+  );
+}
+
+function resolveAdsBacklogTimeoutMs() {
+  const parsed = Number(process.env.ADS_BACKLOG_WEBHOOK_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS);
+  return Number.isFinite(parsed) && parsed >= 1_000 && parsed <= 120_000 ? Math.round(parsed) : DEFAULT_TIMEOUT_MS;
 }
 
 function resolveWebhookUrl(config: ExecutiveWebhookConfig) {

@@ -98,7 +98,11 @@ export function buildAdsBacklogHourlyReportSnapshot(input: {
     Math.round(currentBacklog + remainingForecastVolume - remainingMaterialOutput)
   );
   const nextHourTimestamp = currentHourTimestamp + HOUR_MS;
-  const clearance = plan.find((point) => point.timestamp >= currentHourTimestamp && point.plannedBacklog <= 0);
+  const clearanceTimestamp = projectDynamicClearance(
+    plan,
+    nextHourTimestamp,
+    expectedNextHourBacklog
+  );
 
   return {
     selectedCycle: input.selectedCycle,
@@ -112,7 +116,7 @@ export function buildAdsBacklogHourlyReportSnapshot(input: {
     materialTotalSubmitPerHour: materialProductivity.totalSubmitPerHour,
     materialProductiveAgentCount: materialProductivity.agentCount,
     expectedNextHourBacklog,
-    expectedClearanceLabel: clearance ? formatClearance(clearance.timestamp) : "Not available",
+    expectedClearanceLabel: clearanceTimestamp === null ? "Not available" : formatClearance(clearanceTimestamp),
     remainingHourFraction
   };
 }
@@ -179,6 +183,33 @@ function buildMaterialHourlyProductivity(
     totalSubmitPerHour: Math.round(totalSubmitPerHour),
     agentCount: rates.length
   };
+}
+
+function projectDynamicClearance(
+  plan: AdsBacklogPlanPoint[],
+  nextHourTimestamp: number,
+  expectedNextHourBacklog: number
+) {
+  if (expectedNextHourBacklog <= 0) return nextHourTimestamp;
+  const ordered = [...plan].sort((left, right) => left.timestamp - right.timestamp);
+  const nextPlanIndex = ordered.findIndex((point) => point.timestamp === nextHourTimestamp);
+  if (nextPlanIndex < 0) return null;
+  const liveOffset = expectedNextHourBacklog - ordered[nextPlanIndex].plannedBacklog;
+  for (let index = nextPlanIndex; index < ordered.length; index += 1) {
+    if (ordered[index].plannedBacklog + liveOffset <= 0) return ordered[index].timestamp;
+  }
+
+  const last = ordered.at(-1);
+  if (!last) return null;
+  const burnWindowStartIndex = Math.max(nextPlanIndex, ordered.length - 7);
+  const burnWindowStart = ordered[burnWindowStartIndex];
+  const burnWindowHours = (last.timestamp - burnWindowStart.timestamp) / HOUR_MS;
+  const plannedBurnPerHour = burnWindowHours > 0
+    ? (burnWindowStart.plannedBacklog - last.plannedBacklog) / burnWindowHours
+    : 0;
+  const remainingBacklog = Math.max(0, last.plannedBacklog + liveOffset);
+  if (plannedBurnPerHour <= 0 || remainingBacklog <= 0) return null;
+  return last.timestamp + Math.ceil(remainingBacklog / plannedBurnPerHour) * HOUR_MS;
 }
 
 function normalize(value: unknown) {

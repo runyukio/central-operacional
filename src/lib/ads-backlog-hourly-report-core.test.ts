@@ -49,7 +49,7 @@ test("projects the next hour with ADS backlog, remaining forecast and Material-o
   assert.equal(report.materialTotalSubmitPerHour, 180);
   assert.equal(report.materialProductiveAgentCount, 2);
   assert.equal(report.expectedNextHourBacklog, 4191);
-  assert.equal(report.expectedClearanceLabel, "Aug 7 at 5:00 AM");
+  assert.equal(report.expectedClearanceLabel, "Aug 7 at 4:00 AM");
 });
 
 test("builds an English Kim message with the next-hour projection", () => {
@@ -65,7 +65,7 @@ test("builds an English Kim message with the next-hour projection", () => {
   assert.match(payload.markdown.content, /ADS Backlog Update — 20:00/);
   assert.match(payload.markdown.content, /Current productivity:.*120 submits\/hour\/agent \(Material only\)/);
   assert.match(payload.markdown.content, /Expected backlog at 21:00:.*4,221/);
-  assert.match(payload.markdown.content, /Expected clearance:.*Aug 7 at 5:00 AM/);
+  assert.match(payload.markdown.content, /Expected clearance:.*Aug 7 at 4:00 AM/);
 });
 
 test("matches only the Material Queues skill", () => {
