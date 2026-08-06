@@ -1166,7 +1166,7 @@ function EmployeeBillingDetail({
                 <Send className="h-4 w-4" /> {alreadyReleasedForReview ? "Conferência liberada" : "Liberar conferência"}
               </button>
             ) : null}
-            {canManageBillingPaymentStatus && finalized ? (
+            {canManageBillingPaymentStatus ? (
               <button
                 type="button"
                 disabled={saving}

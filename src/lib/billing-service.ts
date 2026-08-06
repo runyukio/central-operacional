@@ -1734,9 +1734,6 @@ export async function setEmployeeBillingInvoicePaid(actor: Actor, input: {
     where: { billingCycleId_employeeId: { billingCycleId: cycle.id, employeeId: input.employeeId } }
   });
   if (!invoice) return { error: "Invoice individual não encontrado.", status: 404 };
-  if (!isFinalizedInvoiceStatus(invoice.status)) {
-    return { error: "Finalize o invoice antes de registrar o pagamento.", status: 409 };
-  }
 
   const nextStatus = input.paid ? BILLING_INVOICE_PAID_STATUS : BILLING_INVOICE_CLOSED_STATUS;
   if (invoice.status === nextStatus) {
