@@ -22,7 +22,14 @@ export async function middleware(request: NextRequest) {
   }
 
   const isBillingPath = pathname === "/billing" || pathname.startsWith("/billing/");
-  if (isBillingPath && !canAccessBilling({ id: token.sub, email: token.email, name: token.name, role })) {
+  if (isBillingPath && !canAccessBilling({
+    id: token.sub,
+    email: token.email,
+    name: token.name,
+    role,
+    roleTitle: typeof token.roleTitle === "string" ? token.roleTitle : null,
+    jobTitle: typeof token.jobTitle === "string" ? token.jobTitle : null
+  })) {
     return NextResponse.redirect(new URL(getDefaultPathForRole(role), request.url));
   }
 

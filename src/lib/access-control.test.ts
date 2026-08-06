@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { normalizeAccessRole, roleHasCapability } from "@/lib/access-control";
+import { canAccessBilling, canManageBilling, canManageBillingPaymentStatus } from "@/lib/billing-permissions";
 import { canAccessFinanceiro } from "@/lib/financeiro-permissions";
 import {
   canAccessPerformance,
@@ -65,6 +66,20 @@ test("RH e Financeiro apenas visualizam Billing e Financeiro", () => {
     assert.equal(roleHasCapability(role, "SCHEDULE_EDIT"), false, role);
     assert.equal(roleHasCapability(role, "ADVANCE_MANAGE"), false, role);
   }
+});
+
+test("Financeiro altera apenas o status de pagamento do Billing", () => {
+  assert.equal(canManageBillingPaymentStatus({ role: "FINANCEIRO" }), true);
+  assert.equal(canManageBilling({ role: "FINANCEIRO" }), false);
+  assert.equal(canManageBillingPaymentStatus({ role: "RH" }), false);
+  assert.equal(canManageBillingPaymentStatus({ role: "ADMIN" }), true);
+});
+
+test("cargo/função Financeiro pode alterar o pagamento sem receber administração ampla", () => {
+  const financeByJobTitle = { role: "COLABORADOR", roleTitle: "Financeiro" };
+  assert.equal(canAccessBilling(financeByJobTitle), true);
+  assert.equal(canManageBillingPaymentStatus(financeByJobTitle), true);
+  assert.equal(canManageBilling(financeByJobTitle), false);
 });
 
 test("Colaborador acessa o próprio invoice pelo pacote pessoal, sem abrir o Billing consolidado", () => {

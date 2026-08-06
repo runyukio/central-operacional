@@ -23,7 +23,7 @@ import {
   isBillingInvoiceFinalizedStatus as isFinalizedInvoiceStatus
 } from "@/lib/billing-payment-status";
 import { buildBillingOmieAllocation } from "@/lib/billing-omie-allocation";
-import { canAccessBilling, canManageBilling } from "@/lib/billing-permissions";
+import { canAccessBilling, canManageBilling, canManageBillingPaymentStatus } from "@/lib/billing-permissions";
 import {
   BILLING_STAFF_RATE_DEFAULTS,
   resolveEmployeeBillingStaffRateKey,
@@ -340,7 +340,8 @@ export async function getBillingDashboard(actor: Actor, filters: BillingDashboar
       adjustmentRequests,
       rateConfigs,
       permissions: {
-        canManageBilling: canManageBilling({ id: user!.id, email: user!.email, name: user!.name, role: user!.role.name })
+        canManageBilling: canManageBilling(billingPermissionIdentity(user!)),
+        canManageBillingPaymentStatus: canManageBillingPaymentStatus(billingPermissionIdentity(user!))
       },
       filterOptions: buildBillingFilterOptions(invoices)
     }
@@ -1720,7 +1721,7 @@ export async function setEmployeeBillingInvoicePaid(actor: Actor, input: {
   paid: boolean;
 }) {
   const user = await findActiveUser(actor.email);
-  const denied = requireBillingManagement(user);
+  const denied = requireBillingPaymentStatusManagement(user);
   if (denied) return denied;
   const referenceMonth = normalizeBillingMonth(input.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
@@ -3275,7 +3276,7 @@ function logPerformance(label: string, startedAt: number, details: Record<string
 
 function requireBillingAccess(user: ActiveUser | null) {
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
-  if (!canAccessBilling({ id: user.id, email: user.email, name: user.name, role: user.role.name })) {
+  if (!canAccessBilling(billingPermissionIdentity(user))) {
     return { error: "Você não tem permissão para acessar Billing.", status: 403 };
   }
   return null;
@@ -3283,22 +3284,40 @@ function requireBillingAccess(user: ActiveUser | null) {
 
 function requireBillingManagement(user: ActiveUser | null) {
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
-  if (!canManageBilling({ id: user.id, email: user.email, name: user.name, role: user.role.name })) {
+  if (!canManageBilling(billingPermissionIdentity(user))) {
     return { error: "Você não tem permissão para administrar Billing.", status: 403 };
+  }
+  return null;
+}
+
+function requireBillingPaymentStatusManagement(user: ActiveUser | null) {
+  if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
+  if (!canManageBillingPaymentStatus(billingPermissionIdentity(user))) {
+    return { error: "Você não tem permissão para alterar o status de pagamento do Billing.", status: 403 };
   }
   return null;
 }
 
 function getBillingAccessScope(user: ActiveUser | null): { restricted: false; supervisorId?: undefined } | { restricted: true; supervisorId: string } | { error: string; status: number } {
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
-  if (canManageBilling({ id: user.id, email: user.email, name: user.name, role: user.role.name })) return { restricted: false };
+  if (canManageBilling(billingPermissionIdentity(user))) return { restricted: false };
   if (normalizeRole(user.role.name) === "SUPERVISOR") {
     const supervisorId = user.employeeProfile?.id;
     if (!supervisorId) return { error: "Supervisor sem cadastro vinculado para filtrar o time no Billing.", status: 403 };
     return { restricted: true, supervisorId };
   }
-  if (canAccessBilling({ id: user.id, email: user.email, name: user.name, role: user.role.name })) return { restricted: false };
+  if (canAccessBilling(billingPermissionIdentity(user))) return { restricted: false };
   return { error: "Você não tem permissão para acessar Billing.", status: 403 };
+}
+
+function billingPermissionIdentity(user: ActiveUser) {
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role.name,
+    roleTitle: user.employeeProfile?.roleTitle ?? null
+  };
 }
 
 function applyBillingScope(filters: BillingDashboardFilters, scope: { restricted: false; supervisorId?: undefined } | { restricted: true; supervisorId: string }): BillingDashboardFilters {

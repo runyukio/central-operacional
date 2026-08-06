@@ -163,6 +163,7 @@ type BillingPayload = {
     }>;
     permissions: {
       canManageBilling: boolean;
+      canManageBillingPaymentStatus: boolean;
     };
   };
 };
@@ -231,6 +232,7 @@ export function BillingPage() {
     })
     : 0;
   const canManageBilling = Boolean(data?.permissions.canManageBilling);
+  const canManageBillingPaymentStatus = Boolean(data?.permissions.canManageBillingPaymentStatus);
   const billingButtonClass = "inline-flex items-center justify-center gap-2 leading-none";
   const tabs = useMemo<Array<[TabKey, string]>>(() => {
     const base: Array<[TabKey, string]> = [
@@ -727,6 +729,7 @@ export function BillingPage() {
               detailsLoaded={activeTab === "hours"}
               exportHref={`/api/billing/export?referenceMonth=${encodeURIComponent(referenceMonth)}&employeeId=${encodeURIComponent(selectedInvoice.employeeId)}`}
               canManageBilling={canManageBilling}
+              canManageBillingPaymentStatus={canManageBillingPaymentStatus}
               onClose={() => setSelectedInvoice(null)}
               onLoadHourDetails={() => setActiveTab("hours")}
               onCreateAdjustment={(draft) => createEmployeeAdjustment(selectedInvoice, draft)}
@@ -1059,6 +1062,7 @@ function EmployeeBillingDetail({
   detailsLoaded,
   exportHref,
   canManageBilling,
+  canManageBillingPaymentStatus,
   onClose,
   onLoadHourDetails,
   onCreateAdjustment,
@@ -1072,6 +1076,7 @@ function EmployeeBillingDetail({
   detailsLoaded: boolean;
   exportHref: string;
   canManageBilling: boolean;
+  canManageBillingPaymentStatus: boolean;
   onClose: () => void;
   onLoadHourDetails: () => void;
   onCreateAdjustment: (draft: { type: string; description: string; amount: string }) => Promise<void>;
@@ -1161,7 +1166,7 @@ function EmployeeBillingDetail({
                 <Send className="h-4 w-4" /> {alreadyReleasedForReview ? "Conferência liberada" : "Liberar conferência"}
               </button>
             ) : null}
-            {canManageBilling && finalized ? (
+            {canManageBillingPaymentStatus && finalized ? (
               <button
                 type="button"
                 disabled={saving}
