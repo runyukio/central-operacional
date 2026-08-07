@@ -80,8 +80,9 @@ npm run db:deploy
 
 ## Operational Notes
 
-- Real Time data retention should default to 3 days unless
-  `REALTIME_RETENTION_DAYS` overrides it.
+- Real Time data retention has a minimum window of 7 days. The
+  `REALTIME_RETENTION_DAYS` variable can extend this window, but values below
+  7 are clamped to 7 days.
 - Performance has had parallel work from more than one Codex session. Always
   inspect current files before changing anything under Performance routes,
   services, or APIs.

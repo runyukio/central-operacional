@@ -248,8 +248,19 @@ type QueueSummaryReadRow = {
 };
 
 const staleThresholdMinutes = 20;
-const realtimeRetentionDays = Number.parseInt(process.env.REALTIME_RETENTION_DAYS ?? "3", 10) || 3;
-const realtimeViewHistoryBatchLimit = 1200;
+const realtimeMinimumRetentionDays = 7;
+const configuredRealtimeRetentionDays = Number.parseInt(
+  process.env.REALTIME_RETENTION_DAYS ?? String(realtimeMinimumRetentionDays),
+  10
+);
+const realtimeRetentionDays = Number.isFinite(configuredRealtimeRetentionDays)
+  ? Math.max(realtimeMinimumRetentionDays, configuredRealtimeRetentionDays)
+  : realtimeMinimumRetentionDays;
+const realtimeImportsPerHour = 6;
+const realtimeViewHistoryBatchLimit = Math.max(
+  1200,
+  realtimeRetentionDays * 24 * realtimeImportsPerHour
+);
 const realtimeRawFallbackBatchLimit = 12;
 
 type RealtimeBatchReadRow = {
