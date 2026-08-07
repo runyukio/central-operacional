@@ -4,6 +4,7 @@ import test from "node:test";
 import { normalizeAccessRole, roleHasCapability } from "@/lib/access-control";
 import { canAccessBilling, canManageBilling, canManageBillingPaymentStatus } from "@/lib/billing-permissions";
 import { canAccessFinanceiro } from "@/lib/financeiro-permissions";
+import { canAccessPathForRole, getNavItems } from "@/lib/navigation";
 import {
   canAccessPerformance,
   canAccessRealTime,
@@ -44,6 +45,14 @@ test("Supervisor e Qualidade visualizam todos os cronogramas sem poder editar", 
     assert.equal(roleHasCapability(role, "SCHEDULE_VIEW"), true, role);
     assert.equal(roleHasCapability(role, "SCHEDULE_EDIT"), false, role);
   }
+});
+
+test("RTA visualiza Cronogramas sem poder editar", () => {
+  const rta = { role: "RTA", status: "ACTIVE" };
+  assert.equal(roleHasCapability("RTA", "SCHEDULE_VIEW"), true);
+  assert.equal(roleHasCapability("RTA", "SCHEDULE_EDIT"), false);
+  assert.equal(getNavItems(rta).some((item) => item.href === "/escalas"), true);
+  assert.equal(canAccessPathForRole("/escalas", rta), true);
 });
 
 test("RTA e POC recebem somente o pacote operacional definido", () => {
