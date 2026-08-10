@@ -211,8 +211,10 @@ export async function listOperationalWorkHours(actor: Actor, query: WorkHourQuer
               reason: true,
               justification: true,
               rejectionReason: true,
+              rejectedAt: true,
               createdAt: true,
-              requestedBy: { select: { name: true } }
+              requestedBy: { select: { name: true } },
+              rejectedBy: { select: { name: true } }
             }
           },
           schedule: { select: { status: true, startsAt: true, endsAt: true } }
@@ -1272,8 +1274,10 @@ async function getRecordWithRelations(id: string) {
           reason: true,
           justification: true,
           rejectionReason: true,
+          rejectedAt: true,
           createdAt: true,
-          requestedBy: { select: { name: true } }
+          requestedBy: { select: { name: true } },
+          rejectedBy: { select: { name: true } }
         }
       },
       schedule: { select: { status: true, startsAt: true, endsAt: true } }
@@ -1283,6 +1287,7 @@ async function getRecordWithRelations(id: string) {
 
 function formatWorkHourRecord(record: any, viewer?: WorkHourRecordViewer, capturedHours = 0) {
   const adjustment = record.adjustments?.[0];
+  const canSeeRejectionDetails = canSeeWorkHourAdjustmentRejectionReason(viewer, adjustment);
   const adjustmentDifferenceMinutes = adjustment
     ? calculateAdjustmentDifferenceMinutes(adjustment.currentActualHours ?? record.effectiveHours, adjustment.requestedActualHours)
     : null;
@@ -1316,7 +1321,9 @@ function formatWorkHourRecord(record: any, viewer?: WorkHourRecordViewer, captur
     adjustmentDifferenceMinutes,
     adjustmentReason: adjustment?.reason ?? "",
     adjustmentJustification: adjustment?.justification ?? "",
-    adjustmentRejectionReason: canSeeWorkHourAdjustmentRejectionReason(viewer, adjustment) ? adjustment?.rejectionReason ?? "" : "",
+    adjustmentRejectionReason: canSeeRejectionDetails ? adjustment?.rejectionReason ?? "" : "",
+    adjustmentRejectedBy: canSeeRejectionDetails ? adjustment?.rejectedBy?.name ?? "" : "",
+    adjustmentRejectedAt: canSeeRejectionDetails && adjustment?.rejectedAt ? formatDateTime(adjustment.rejectedAt) : "",
     adjustmentRequestedBy: adjustment?.requestedBy?.name ?? "",
     adjustmentRequestedAt: adjustment ? formatDateTime(adjustment.createdAt) : "",
     source: record.source ?? "",
@@ -1368,6 +1375,14 @@ async function writeReviewHistory(tx: Prisma.TransactionClient, userId: string, 
 }
 
 async function notifyReviewResult(tx: Prisma.TransactionClient, adjustment: any, title: string, requesterBody: string, employeeBody = requesterBody) {
+  const adjustmentDate = adjustment.record?.date ? formatDate(adjustment.record.date) : "";
+  const hrefParams = new URLSearchParams();
+  if (adjustmentDate) {
+    hrefParams.set("startDate", adjustmentDate);
+    hrefParams.set("endDate", adjustmentDate);
+  }
+  if (adjustment.employeeId) hrefParams.set("employeeId", adjustment.employeeId);
+  const href = `/horas-operacionais${hrefParams.size ? `?${hrefParams.toString()}` : ""}`;
   const notifications = [
     adjustment.requestedById ? { userId: adjustment.requestedById, body: requesterBody } : null,
     adjustment.employee?.userId ? { userId: adjustment.employee.userId, body: adjustment.employee.userId === adjustment.requestedById ? requesterBody : employeeBody } : null
@@ -1375,7 +1390,7 @@ async function notifyReviewResult(tx: Prisma.TransactionClient, adjustment: any,
   const uniqueNotifications = Array.from(new Map(notifications.map((item) => [item.userId, item])).values());
   for (const notification of uniqueNotifications) {
     await tx.notification.create({
-      data: { userId: notification.userId, title, body: notification.body, category: "Horas Operacionais", type: "INFO", entity: "WorkHourAdjustmentRequest", entityId: adjustment.id, href: "/horas-operacionais" }
+      data: { userId: notification.userId, title, body: notification.body, category: "Horas Operacionais", type: "INFO", entity: "WorkHourAdjustmentRequest", entityId: adjustment.id, href }
     });
   }
 }
