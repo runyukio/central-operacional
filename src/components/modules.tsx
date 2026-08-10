@@ -397,6 +397,8 @@ type WorkHourRow = {
   adjustmentReason?: string;
   adjustmentJustification?: string;
   adjustmentRejectionReason?: string;
+  adjustmentRejectedBy?: string;
+  adjustmentRejectedAt?: string;
   adjustmentRequestedBy?: string;
   adjustmentRequestedAt?: string;
   source: string;
@@ -7979,11 +7981,14 @@ export function WorkHoursPage() {
   }
 
   function openAdjustment(row: WorkHourRow) {
+    const isRejectedAdjustment = row.adjustmentStatus === "Recusado";
     setSelectedRow(row);
     setAdjustmentForm({
-      requestedActualHours: formatWorkHourValue(row.effectiveHours, ""),
-      reason: "Erro de apontamento",
-      justification: "",
+      requestedActualHours: isRejectedAdjustment && row.adjustmentRequestedHours !== null && row.adjustmentRequestedHours !== undefined
+        ? formatWorkHourValue(row.adjustmentRequestedHours, "")
+        : formatWorkHourValue(row.effectiveHours, ""),
+      reason: isRejectedAdjustment && row.adjustmentReason ? row.adjustmentReason : "Erro de apontamento",
+      justification: isRejectedAdjustment ? row.adjustmentJustification ?? "" : "",
       rejectionReason: ""
     });
     setShowAdjustment(true);
@@ -8190,7 +8195,7 @@ export function WorkHoursPage() {
                     <td className="px-4 py-3"><WorkHourBalanceBadge plannedHours={row.plannedHours} differenceMinutes={row.differenceMinutes} /></td>
                     <td className="px-4 py-3">
                       {row.adjustmentId ? (
-                        <div className="min-w-[180px] space-y-1">
+                        <div className="min-w-[240px] space-y-1">
                           <StatusBadge status={row.adjustmentStatus} />
                           <p className="text-xs font-semibold text-muted">Atual: {formatWorkHourValue(row.adjustmentCurrentHours ?? row.effectiveHours, "0:00")}</p>
                           <p className="text-xs font-semibold text-navy-950">Solicitado: {row.adjustmentRequestedHours === null || row.adjustmentRequestedHours === undefined ? "-" : formatWorkHourValue(row.adjustmentRequestedHours)}</p>
@@ -8198,6 +8203,17 @@ export function WorkHoursPage() {
                             Ajuste: {row.adjustmentDifferenceMinutes === null || row.adjustmentDifferenceMinutes === undefined ? "-" : formatHourDifference(row.adjustmentDifferenceMinutes)}
                           </p>
                           {row.adjustmentRequestedBy ? <p className="text-[11px] font-semibold text-muted">Por {row.adjustmentRequestedBy} em {row.adjustmentRequestedAt}</p> : null}
+                          {row.adjustmentStatus === "Recusado" && row.adjustmentRejectionReason ? (
+                            <div className="mt-2 rounded-lg border border-red-200 bg-red-50 p-2.5 text-red-800">
+                              <p className="text-[11px] font-black uppercase tracking-wide">Motivo da recusa</p>
+                              <p className="mt-1 whitespace-pre-wrap text-xs font-semibold leading-5">{row.adjustmentRejectionReason}</p>
+                              {row.adjustmentRejectedBy || row.adjustmentRejectedAt ? (
+                                <p className="mt-1.5 text-[11px] font-bold text-red-700">
+                                  {[row.adjustmentRejectedBy ? `Por ${row.adjustmentRejectedBy}` : "", row.adjustmentRejectedAt ? `em ${row.adjustmentRejectedAt}` : ""].filter(Boolean).join(" ")}
+                                </p>
+                              ) : null}
+                            </div>
+                          ) : null}
                         </div>
                       ) : (
                         <StatusBadge status="Sem ajuste" />
@@ -8206,7 +8222,9 @@ export function WorkHoursPage() {
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-2">
                         {canRequestAdjustment && row.plannedHours > 0 && row.status !== "Ajuste solicitado" ? (
-                          <button onClick={() => openAdjustment(row)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">Solicitar ajuste</button>
+                          <button onClick={() => openAdjustment(row)} className={cn("rounded-lg border px-3 py-2 text-xs font-bold", row.adjustmentStatus === "Recusado" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-blue-200 bg-blue-50 text-blue-700")}>
+                            {row.adjustmentStatus === "Recusado" ? "Corrigir e reenviar" : "Solicitar ajuste"}
+                          </button>
                         ) : null}
                         {canApprove && row.adjustmentId && row.adjustmentStatus === "Em análise" ? (
                           <>
@@ -8339,11 +8357,22 @@ export function WorkHoursPage() {
           <div className="card w-full max-w-2xl p-5">
             <div className="mb-5 flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-extrabold text-navy-950">Solicitar ajuste de horas</h2>
+                <h2 className="text-lg font-extrabold text-navy-950">{selectedRow.adjustmentStatus === "Recusado" ? "Corrigir e reenviar ajuste" : "Solicitar ajuste de horas"}</h2>
                 <p className="text-sm text-muted">{selectedRow.employeeName} • {selectedRow.date} • {selectedRow.wbLogin}</p>
               </div>
               <button onClick={() => setShowAdjustment(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
             </div>
+            {selectedRow.adjustmentStatus === "Recusado" && selectedRow.adjustmentRejectionReason ? (
+              <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-red-800">
+                <p className="text-sm font-extrabold">Motivo da recusa</p>
+                <p className="mt-1 whitespace-pre-wrap text-sm font-semibold leading-6">{selectedRow.adjustmentRejectionReason}</p>
+                {selectedRow.adjustmentRejectedBy || selectedRow.adjustmentRejectedAt ? (
+                  <p className="mt-2 text-xs font-bold text-red-700">
+                    {[selectedRow.adjustmentRejectedBy ? `Por ${selectedRow.adjustmentRejectedBy}` : "", selectedRow.adjustmentRejectedAt ? `em ${selectedRow.adjustmentRejectedAt}` : ""].filter(Boolean).join(" ")}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
             <div className="grid gap-4 md:grid-cols-2">
               <InfoLine label="Colaborador" value={selectedRow.employeeName} />
               <InfoLine label="WB/Login" value={selectedRow.wbLogin} />
@@ -8363,7 +8392,7 @@ export function WorkHoursPage() {
               </label>
             </div>
             <button disabled={savingAdjustment} onClick={submitAdjustment} className="mt-5 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-60">
-              {savingAdjustment ? "Enviando..." : "Enviar para WFM/Admin"}
+              {savingAdjustment ? "Enviando..." : selectedRow.adjustmentStatus === "Recusado" ? "Reenviar para WFM/Admin" : "Enviar para WFM/Admin"}
             </button>
           </div>
         </div>
