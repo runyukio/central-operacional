@@ -1740,7 +1740,7 @@ export async function exportRealtimeAgents(actor: Actor, query: RealtimeExportQu
   const queueView = snapshotData.queueView;
   const rows = sortAgentRows(filterAgentRows(agentView.rows, query), query.sortBy ?? "submit_desc");
   const queueRows = sortQueueRows(filterQueueRows(queueView.rows, query), query.sortBy ?? "backlog_desc");
-  const filteredSummary = summarizeAgentRows(rows);
+  const filteredSummary = summarizeAgentRows(rows.filter((row) => row.personType === "Agente"));
   const filteredQueueSummary = summarizeQueueRowsForExport(queueRows);
   const unfilteredUnmatched = agentView.rows.filter((row) => row.crossingStatus === "Não encontrado");
   const importRows = (await listRealtimeImports(actor));
@@ -2815,8 +2815,8 @@ async function buildAgentRealtimeViewFromSummaryRows(
     isSchedulePresent: isAgentPresentInSchedule(row, presenceContext)
   }));
 
-  const summaryCurrent = summarizeAgentRows(rows);
-  const summaryPrevious = previousCycle ? summarizeAgentRows(previousRows) : null;
+  const summaryCurrent = summarizeAgentRows(rows.filter((row) => row.personType === "Agente"));
+  const summaryPrevious = previousCycle ? summarizeAgentRows(previousRows.filter((row) => row.personType === "Agente")) : null;
 
   return {
     cycles,
@@ -3144,8 +3144,8 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
     isSchedulePresent: isAgentPresentInSchedule(row, presenceContext)
   }));
 
-  const summaryCurrent = summarizeAgentRows(rows);
-  const summaryPrevious = previousCycle ? summarizeAgentRows(previousRows) : null;
+  const summaryCurrent = summarizeAgentRows(rows.filter((row) => row.personType === "Agente"));
+  const summaryPrevious = previousCycle ? summarizeAgentRows(previousRows.filter((row) => row.personType === "Agente")) : null;
 
   return {
     cycles,
