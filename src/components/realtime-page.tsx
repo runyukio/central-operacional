@@ -409,7 +409,7 @@ type ImportHistory = {
 const defaultAgentFilters: AgentFilters = {
   search: "",
   crossingStatus: "Encontrado",
-  personType: "Agente",
+  personType: "",
   employeeStatus: "Ativo",
   presenceStatus: "",
   lob: "",
@@ -422,8 +422,8 @@ const defaultAgentFilters: AgentFilters = {
 const emptyAgentFilters: AgentFilters = {
   search: "",
   crossingStatus: "",
-  personType: "Agente",
-  employeeStatus: "Ativo",
+  personType: "",
+  employeeStatus: "",
   presenceStatus: "",
   lob: "",
   supervisor: "",
@@ -674,7 +674,8 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
     ),
     [agentView?.rows, currentExecutiveSourceData, executiveLob, queueView?.rows, selectedCycleValue]
   );
-  const filteredAgentCards = useMemo(() => buildFilteredAgentCards(agentRows, selectedCycleValue), [agentRows, selectedCycleValue]);
+  const productivityAgentRows = useMemo(() => agentRows.filter((row) => row.personType === "Agente"), [agentRows]);
+  const filteredAgentCards = useMemo(() => buildFilteredAgentCards(productivityAgentRows, selectedCycleValue), [productivityAgentRows, selectedCycleValue]);
   const filteredQueueCards = useMemo(() => buildQueueLobCards(queueRows, selectedCycleValue), [queueRows, selectedCycleValue]);
 
   useEffect(() => {
@@ -959,9 +960,10 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
             ) : null}
           </div>
           {effectiveTab === "agents" ? (
-            <div className="mt-4 grid gap-2 rounded-3xl border border-slate-100 bg-slate-50/70 p-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7">
-              <SearchBox value={agentFilters.search} onChange={(value) => updateAgentFilter("search", value)} placeholder="Buscar agente ou WB..." />
+            <div className="mt-4 grid gap-2 rounded-3xl border border-slate-100 bg-slate-50/70 p-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-8">
+              <SearchBox value={agentFilters.search} onChange={(value) => updateAgentFilter("search", value)} placeholder="Buscar pessoa ou WB..." />
               <FilterSelect value={agentFilters.crossingStatus} onChange={(value) => updateAgentFilter("crossingStatus", value)} label="Cruzamento" empty="Todos" options={agentView?.filters.crossingStatuses ?? []} />
+              <FilterSelect value={agentFilters.personType} onChange={(value) => updateAgentFilter("personType", value)} label="Tipo de pessoa" empty="Todos os tipos" options={agentView?.filters.personTypes ?? []} />
               <FilterSelect value={agentFilters.presenceStatus} onChange={(value) => updateAgentFilter("presenceStatus", value)} label="Status atual" empty="Todos" options={agentView?.filters.presenceStatuses ?? []} />
               <FilterSelect value={agentFilters.supervisor} onChange={(value) => updateAgentFilter("supervisor", value)} label="Supervisor" empty="Todos" options={agentView?.filters.supervisors ?? []} />
               <FilterSelect value={agentFilters.shift} onChange={(value) => updateAgentFilter("shift", value)} label="Turno" empty="Todos" options={agentView?.filters.shifts ?? []} />
@@ -1353,7 +1355,7 @@ function AgentTable({
   onSelect: (row: AgentRealtimeRow) => void;
 }) {
   const columns: Array<{ label: string; sortKey?: AgentSortKey }> = [
-    { label: "Agente", sortKey: "displayName" },
+    { label: "Pessoa", sortKey: "displayName" },
     { label: "WB/Login", sortKey: "wbLogin" },
     { label: "Status atual", sortKey: "presenceStatus" },
     { label: "LOB", sortKey: "lob" },
@@ -1371,7 +1373,7 @@ function AgentTable({
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs font-black uppercase tracking-wide text-muted">
-        <span>{rows.length} de {totalRows} agente(s) exibidos</span>
+        <span>{rows.length} de {totalRows} pessoa(s) exibida(s) · KPIs consideram somente Agentes</span>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[1320px] border-separate border-spacing-0 text-left text-sm">
@@ -1398,7 +1400,13 @@ function AgentTable({
           <tbody>
             {rows.map((row, index) => (
               <tr key={row.key} className={cn("border-t border-slate-100 transition hover:bg-blue-50/60", index % 2 ? "bg-slate-50/35" : "bg-white")}>
-                <td className="px-4 py-3 font-extrabold text-navy-950">{row.displayName}</td>
+                <td className="px-4 py-3">
+                  <p className="font-extrabold text-navy-950">{row.displayName}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                    <StatusPill value={row.personType} />
+                    <span className="text-[11px] font-bold text-muted">{row.roleTitle || "Sem cargo"}</span>
+                  </div>
+                </td>
                 <td className="px-4 py-3 font-bold text-navy-950">{row.wbLogin || row.rawWbLogin || "-"}</td>
                 <td className="px-4 py-3"><PresenceStatusPill status={row.presenceStatus} /></td>
                 <td className="px-4 py-3 font-bold">{row.lob}</td>
@@ -1431,7 +1439,7 @@ function AgentTable({
             {!rows.length ? (
               <tr>
                 <td colSpan={columns.length} className="px-4 py-12 text-center text-sm font-bold text-muted">
-                  Nenhum agente ativo encontrado neste ciclo. Altere os filtros ou selecione outro ciclo para consultar os dados.
+                  Nenhuma pessoa encontrada neste ciclo. Altere os filtros ou selecione outro ciclo para consultar os dados.
                 </td>
               </tr>
             ) : null}
@@ -1843,6 +1851,7 @@ function AgentDetailDrawer({ row, selectedCycle, onClose }: { row: AgentRealtime
               <h2 className="text-xl font-black text-navy-950">{row.displayName}</h2>
               <PresenceStatusPill status={row.presenceStatus} />
               <StatusPill value={row.crossingStatus} />
+              <StatusPill value={row.personType} />
             </div>
             <p className="mt-1 text-sm font-bold text-muted">{row.wbLogin || row.rawWbLogin} · {row.lob} · {row.supervisor}</p>
           </div>
