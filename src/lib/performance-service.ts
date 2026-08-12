@@ -94,6 +94,7 @@ export type PerformanceQuery = {
   sortDirection?: PerformanceSortDirection;
   granularity?: PerformanceProductionGranularity;
   metadataOnly?: boolean;
+  trendOnly?: boolean;
 };
 
 export type PerformanceQualityQuery = {
@@ -500,7 +501,7 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
   const productionPeriod = requestedLob === "ADS" && granularity === "hourly" && !query.endDate
     ? await extendProductionPeriodToLatestRealtimeAds(resolvedProductionPeriod)
     : resolvedProductionPeriod;
-  const panel = await buildProductionDashboardPanel(productionPeriod);
+  const panel = query.trendOnly ? emptyProductionDashboardPanelData() : await buildProductionDashboardPanel(productionPeriod);
   const canImport = canImportPerformance(permissionUser(user));
   if (query.metadataOnly || (requestedLob && !performanceLobOptions().includes(requestedLob))) {
     return emptyProductionDashboardPayload(productionPeriod, granularity, panel, canImport);
@@ -510,7 +511,7 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
   const queueSql = performanceQueueFilterSql(requestedLob, query.slaTargetMinutes);
   const employeeSql = ownEmployeeId ? Prisma.sql`AND "employeeId" = ${ownEmployeeId}` : Prisma.empty;
   const [productionTrendRows, volumeTrendRows, productionQueueRows, volumeQueueRows] = await Promise.all([
-    prisma.$queryRaw<Array<{ bucket: Date; submit: number; moderationSeconds: number; latencyMinutesSum: number; records: number }>>(Prisma.sql`
+    query.trendOnly ? Promise.resolve([]) : prisma.$queryRaw<Array<{ bucket: Date; submit: number; moderationSeconds: number; latencyMinutesSum: number; records: number }>>(Prisma.sql`
       SELECT
         ${bucketSql} AS "bucket",
         COALESCE(SUM("submitNum"), 0)::double precision AS "submit",
@@ -537,7 +538,7 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
       GROUP BY ${bucketSql}
       ORDER BY ${bucketSql} ASC
     `),
-    prisma.$queryRaw<Array<{ queueId: string; submit: number; moderationSeconds: number; latencyMinutesSum: number; records: number; agents: number }>>(Prisma.sql`
+    query.trendOnly ? Promise.resolve([]) : prisma.$queryRaw<Array<{ queueId: string; submit: number; moderationSeconds: number; latencyMinutesSum: number; records: number; agents: number }>>(Prisma.sql`
       SELECT
         "queueId",
         COALESCE(SUM("submitNum"), 0)::double precision AS "submit",
@@ -552,7 +553,7 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
         ${queueSql}
       GROUP BY "queueId"
     `),
-    ownEmployeeId ? Promise.resolve([]) : prisma.$queryRaw<Array<{ queueId: string; input: number; records: number }>>(Prisma.sql`
+    ownEmployeeId || query.trendOnly ? Promise.resolve([]) : prisma.$queryRaw<Array<{ queueId: string; input: number; records: number }>>(Prisma.sql`
       SELECT
         "queueId",
         COALESCE(SUM("inputCount"), 0)::double precision AS "input",
@@ -639,7 +640,7 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
   const previousTrend = trend.length > 1 ? trend[trend.length - 2] : null;
   const currentTrend = trend.length ? trend[trend.length - 1] : null;
 
-  const latestImport = await prisma.performanceImportBatch.findFirst({
+  const latestImport = query.trendOnly ? null : await prisma.performanceImportBatch.findFirst({
     where: { type: "PRODUCTION" },
     orderBy: { importedAt: "desc" },
     select: { fileName: true, importedAt: true, rowsValid: true, status: true }
@@ -4601,6 +4602,23 @@ async function buildProductionDashboardPanel(period: Period) {
     mappedQueueIds: queueMap.size - unmappedQueues.length,
     unmappedQueues,
     alerts
+  };
+}
+
+function emptyProductionDashboardPanelData(): Awaited<ReturnType<typeof buildProductionDashboardPanel>> {
+  return {
+    dataRange: null,
+    lastDataAt: null,
+    lastImport: null,
+    staleThresholdHours: 0,
+    isStale: false,
+    totalRows: 0,
+    totalSubmit: 0,
+    totalInput: 0,
+    totalQueueIds: 0,
+    mappedQueueIds: 0,
+    unmappedQueues: [],
+    alerts: []
   };
 }
 

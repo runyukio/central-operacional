@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { type Dispatch, type InputHTMLAttributes, type ReactNode, type SetStateAction, useCallback, useEffect, useRef, useState } from "react";
+import { type Dispatch, type InputHTMLAttributes, type ReactNode, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import {
   type LucideIcon,
@@ -12445,7 +12445,10 @@ function PerformanceProductionPage() {
 
   const loadForecast = useCallback(async () => {
     setForecastLoading(true);
-    const params = new URLSearchParams({ granularity: "hourly" });
+    const params = new URLSearchParams({ granularity: "hourly", trendOnly: "true" });
+    const forecastStart = new Date();
+    forecastStart.setUTCDate(forecastStart.getUTCDate() - 42);
+    params.set("startDate", forecastStart.toISOString().slice(0, 10));
     if (forecastFilters.lob) params.set("lob", forecastFilters.lob);
     try {
       const data = await apiJson<PerformanceProductionResponse>(`/api/performance?${params.toString()}`);
@@ -12466,7 +12469,10 @@ function PerformanceProductionPage() {
   const trendRows = payload?.trend ?? [];
   const lobs = payload?.filters.lobs ?? ["ADS", "VIDEO", "COMMENTS", "N/A"];
   const granularityLabel = performanceGranularityLabel(filters.granularity);
-  const forecast = buildPerformanceForecast(forecastPayload?.trend ?? [], forecastFilters.horizonDays);
+  const forecast = useMemo(
+    () => buildPerformanceForecast(forecastPayload?.trend ?? [], forecastFilters.horizonDays),
+    [forecastFilters.horizonDays, forecastPayload?.trend]
+  );
   const exportForecastXlsx = useCallback(async () => {
     if (!forecast.exportRows.length) {
       setMessage("Não há dados de forecast para exportar.");
@@ -13102,7 +13108,8 @@ type PerformanceForecastActual = { date: Date; timestamp: number; input: number 
 
 function performanceForecastValue(actuals: PerformanceForecastActual[], targetDate: Date, referenceDate: Date) {
   const referenceTime = referenceDate.getTime();
-  const training = actuals.filter((row) => row.timestamp <= referenceTime && row.input > 0);
+  const trainingStart = referenceTime - 42 * 24 * 36e5;
+  const training = actuals.filter((row) => row.timestamp <= referenceTime && row.timestamp >= trainingStart && row.input > 0);
   if (!training.length) return 0;
   const targetHour = targetDate.getUTCHours();
   const targetDay = targetDate.getUTCDay();
