@@ -377,7 +377,6 @@ type ExecutiveSourceData = {
 const ADS_REPORT_TARGET_LATENCY_MINUTES = 120;
 const ADS_REPORT_TARGET_LATENCY_LABEL = "2:00h";
 const VIDEO_EXECUTIVE_TARGET_LATENCY_MINUTES = 15;
-const EXECUTIVE_FORECAST_MIN_HORIZON_HOURS = 72;
 const EXECUTIVE_HOUR_MS = 60 * 60 * 1000;
 const EXECUTIVE_DAY_MS = 24 * EXECUTIVE_HOUR_MS;
 const EXECUTIVE_INPUT_COLOR = "#65B80F";
@@ -4055,19 +4054,17 @@ function buildExecutivePerformanceForecastHistory(performanceTrend: PerformanceF
     }));
   }
 
-  const actualByKey = new Map(actuals.map((row) => [performanceHourKey(row.at), row.input]));
-  const selectedDayEnd = new Date(Date.UTC(selected.date.getFullYear(), selected.date.getMonth(), selected.date.getDate(), 23, 0, 0, 0));
-  const horizonHours = Math.max(EXECUTIVE_FORECAST_MIN_HORIZON_HOURS, Math.ceil((selectedDayEnd.getTime() - lastReal.timestamp) / EXECUTIVE_HOUR_MS) + 1);
-  const forecastByKey = new Map<string, number>();
-  for (let index = 1; index <= horizonHours; index += 1) {
-    const at = new Date(lastReal.timestamp + index * EXECUTIVE_HOUR_MS);
-    forecastByKey.set(performanceHourKey(at), executivePerformanceForecastValue(positiveActuals, at, lastReal.at));
-  }
+  // Keep the projection independent from the selected day's actual volume. The
+  // whole 24-hour curve is produced with data available before that day starts,
+  // so elapsed hours remain comparable instead of being replaced by actuals.
+  const selectedDayStart = new Date(Date.UTC(selected.date.getFullYear(), selected.date.getMonth(), selected.date.getDate(), 0, 0, 0, 0));
+  const referenceTime = Math.min(lastReal.timestamp, selectedDayStart.getTime() - 1);
+  const training = positiveActuals.filter((row) => row.timestamp <= referenceTime);
+  const referenceAt = training.at(-1)?.at ?? null;
 
   return buckets.map((bucket) => {
     const at = new Date(Date.UTC(selected.date.getFullYear(), selected.date.getMonth(), selected.date.getDate(), bucket.hour, 0, 0, 0));
-    const key = performanceHourKey(at);
-    const forecast = actualByKey.get(key) ?? forecastByKey.get(key) ?? executivePerformanceForecastValue(positiveActuals, at, lastReal.at);
+    const forecast = referenceAt ? executivePerformanceForecastValue(training, at, referenceAt) : 0;
     return {
       label: bucket.label,
       input: bucket.hour <= selected.date.getHours() ? bucket.input : null,
@@ -4082,13 +4079,14 @@ function executivePerformanceForecastValue(actuals: Array<{ at: Date; timestamp:
   const targetDay = targetAt.getUTCDay();
   const training = actuals.filter((row) => row.timestamp <= referenceTime && row.input > 0);
   if (!training.length) return 0;
+  const recentSameHour = training.filter((row) => row.at.getUTCHours() === targetHour && row.timestamp > referenceTime - 72 * EXECUTIVE_HOUR_MS);
   const sevenDaySameHour = training.filter((row) => row.at.getUTCHours() === targetHour && row.timestamp > referenceTime - 7 * EXECUTIVE_DAY_MS);
   const olderSeasonalSlot = training.filter((row) => row.at.getUTCHours() === targetHour && row.at.getUTCDay() === targetDay && row.timestamp <= referenceTime - 7 * EXECUTIVE_DAY_MS);
   const sevenDayProfile = executiveWeightedAverage(sevenDaySameHour, referenceAt, 3.5)
     || executiveWeightedAverage(training.filter((row) => row.timestamp > referenceTime - 7 * EXECUTIVE_DAY_MS), referenceAt, 3.5);
+  const recentProfile = executiveWeightedAverage(recentSameHour, referenceAt, 1.5) || sevenDayProfile;
   const olderSeasonalProfile = executiveWeightedAverage(olderSeasonalSlot, referenceAt, 21) || sevenDayProfile;
-  const recentProjected = sevenDayProfile * executiveRecentForecastAdjustment(training, targetAt, referenceAt);
-  return Math.max(0, sevenDayProfile * 0.6 + recentProjected * 0.35 + olderSeasonalProfile * 0.05);
+  return Math.max(0, sevenDayProfile * 0.6 + recentProfile * 0.35 + olderSeasonalProfile * 0.05);
 }
 
 function executiveRecentHourlyProfileForecast(actuals: Array<{ at: Date; timestamp: number; input: number }>, targetAt: Date, referenceAt: Date) {
@@ -4121,33 +4119,6 @@ function executiveShortMomentumForecast(actuals: Array<{ at: Date; timestamp: nu
   return { value: sameHourValue > 0 ? sameHourValue * 0.62 + (hotNow || hourlyMomentum) * 0.38 : hotNow || hourlyMomentum, samples: recentSameHour.length + last24h.length };
 }
 
-function executiveRecentForecastAdjustment(actuals: Array<{ at: Date; timestamp: number; input: number }>, targetAt: Date, referenceAt: Date) {
-  const referenceTime = referenceAt.getTime();
-  const recentRatios = executiveRecentForecastRatios(actuals, referenceTime, 3);
-  const slowerRatios = executiveRecentForecastRatios(actuals, referenceTime, 12);
-  const recent = executiveWeightedForecastRatio(recentRatios);
-  const slower = executiveWeightedForecastRatio(slowerRatios);
-  const blended = recentRatios.length ? recent * 0.7 + slower * 0.3 : slower;
-  return executiveClamp(blended || 1, 0.5, 2.5);
-}
-
-function executiveRecentForecastRatios(actuals: Array<{ at: Date; timestamp: number; input: number }>, referenceTime: number, hours: number) {
-  return actuals
-    .filter((row) => row.timestamp <= referenceTime && row.timestamp > referenceTime - hours * EXECUTIVE_HOUR_MS)
-    .map((row) => {
-      const history = actuals.filter((item) => item.timestamp < row.timestamp && item.timestamp >= row.timestamp - 7 * EXECUTIVE_DAY_MS && item.at.getUTCHours() === row.at.getUTCHours());
-      const expected = executiveWeightedAverage(history, new Date(row.timestamp - EXECUTIVE_HOUR_MS), 3.5);
-      const ageHours = Math.max(0, (referenceTime - row.timestamp) / EXECUTIVE_HOUR_MS);
-      return expected > 0 ? { value: row.input / expected, weight: Math.exp(-ageHours / 3) } : null;
-    })
-    .filter((row): row is { value: number; weight: number } => Boolean(row));
-}
-
-function executiveWeightedForecastRatio(ratios: Array<{ value: number; weight: number }>) {
-  const totalWeight = ratios.reduce((sum, row) => sum + row.weight, 0);
-  return totalWeight ? ratios.reduce((sum, row) => sum + row.value * row.weight, 0) / totalWeight : 1;
-}
-
 function addExecutiveWindowRatio(ratios: Array<{ ratio: number; weight: number }>, actuals: Array<{ timestamp: number; input: number }>, referenceTime: number, windowMs: number, weight: number, maxRatio: number) {
   const recent = executiveSum(actuals.filter((row) => row.timestamp > referenceTime - windowMs).map((row) => row.input));
   const previous = executiveSum(actuals.filter((row) => row.timestamp <= referenceTime - windowMs && row.timestamp > referenceTime - windowMs * 2).map((row) => row.input));
@@ -4172,10 +4143,6 @@ function parsePerformanceTrendHour(value: string) {
   if (!match) return null;
   const [, year, month, day, hour] = match;
   return new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), 0, 0, 0));
-}
-
-function performanceHourKey(date: Date) {
-  return `${performanceDateKey(date)} ${String(date.getUTCHours()).padStart(2, "0")}:00`;
 }
 
 function performanceDateKey(date: Date) {

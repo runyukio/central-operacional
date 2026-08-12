@@ -12481,7 +12481,7 @@ function PerformanceProductionPage() {
       "Projetado até": forecast.projectedUntilLabel,
       "Próximas 24h": forecast.next24h,
       "Total projetado": forecast.totalProjected,
-      "Ajuste recente": forecast.recentAdjustment,
+      Modelo: "60% últimos 7 dias + 35% últimas 72h no mesmo horário + 5% sazonalidade",
       "Assertividade (%)": forecast.accuracy,
       "Pico previsto": forecast.peak.value,
       "Horário do pico": forecast.peak.label
@@ -12538,15 +12538,23 @@ function PerformanceProductionPage() {
 
       {message ? <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{message}</p> : null}
 
-      <div className="flex flex-wrap items-center gap-2">
-        <button type="button" onClick={() => setActiveTab("queues")} className={cn("inline-flex items-center gap-2 rounded-xl border px-5 py-3 text-sm font-black transition", activeTab === "queues" ? "border-blue-600 bg-blue-600 text-white shadow-soft" : "border-border bg-white text-navy-950 hover:bg-slate-50")}>
-          <ListChecks className="h-4 w-4" />
-          Dados de fila
-        </button>
-        <button type="button" onClick={() => setActiveTab("forecast")} className={cn("inline-flex items-center gap-2 rounded-xl border px-5 py-3 text-sm font-black transition", activeTab === "forecast" ? "border-blue-600 bg-blue-600 text-white shadow-soft" : "border-border bg-white text-navy-950 hover:bg-slate-50")}>
-          <LineChartIcon className="h-4 w-4" />
-          Forecast
-        </button>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" onClick={() => setActiveTab("queues")} className={cn("inline-flex items-center gap-2 rounded-xl border px-5 py-3 text-sm font-black transition", activeTab === "queues" ? "border-blue-600 bg-blue-600 text-white shadow-soft" : "border-border bg-white text-navy-950 hover:bg-slate-50")}>
+            <ListChecks className="h-4 w-4" />
+            Dados de fila
+          </button>
+          <button type="button" onClick={() => setActiveTab("forecast")} className={cn("inline-flex items-center gap-2 rounded-xl border px-5 py-3 text-sm font-black transition", activeTab === "forecast" ? "border-blue-600 bg-blue-600 text-white shadow-soft" : "border-border bg-white text-navy-950 hover:bg-slate-50")}>
+            <LineChartIcon className="h-4 w-4" />
+            Forecast
+          </button>
+        </div>
+        {activeTab === "forecast" ? (
+          <button type="button" onClick={exportForecastXlsx} disabled={!forecast.exportRows.length} className="inline-flex h-11 items-center gap-2 rounded-xl bg-blue-600 px-5 text-sm font-black text-white shadow-soft transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">
+            <Download className="h-4 w-4" />
+            Baixar dados XLSX
+          </button>
+        ) : null}
       </div>
 
       {activeTab === "forecast" ? (
@@ -12557,10 +12565,6 @@ function PerformanceProductionPage() {
                 <p className="text-xs font-black uppercase tracking-[0.12em] text-muted">Último real</p>
                 <p className="mt-1 text-sm font-black text-navy-950">{forecast.lastRealLabel}</p>
               </div>
-              <button type="button" onClick={exportForecastXlsx} disabled={!forecast.exportRows.length} className="premium-control inline-flex h-11 items-center gap-2 px-4 text-sm font-extrabold text-navy-950 disabled:opacity-50">
-                <Download className="h-4 w-4" />
-                Baixar bases XLSX
-              </button>
               <div className="grid min-w-[180px] place-items-center rounded-xl border border-border bg-white px-6 py-3 text-center">
                 <p className="text-xs font-black uppercase tracking-[0.12em] text-muted">Projetado até</p>
                 <p className="mt-1 text-sm font-black text-navy-950">{forecast.projectedUntilLabel}</p>
@@ -12615,16 +12619,15 @@ function PerformanceProductionPage() {
               ))}
             </div>
 
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <PerformanceProductionKpi title="Próximas 24h" value={formatPerformanceNumber(forecast.next24h)} muted="enqueue previsto" tone="green" />
               <PerformanceProductionKpi title={`${forecastFilters.horizonDays} dias`} value={formatPerformanceNumber(forecast.totalProjected)} muted={`${forecast.horizonHours} horas base`} tone="blue" />
-              <PerformanceProductionKpi title="Ajuste recente" value={`${forecast.recentAdjustment.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}x`} muted="sinal das últimas 3/6/12h" tone="orange" />
               <PerformanceProductionKpi title="Assertividade" value={formatPerformancePercent(forecast.accuracy)} muted="últimos 7 dias" tone="green" />
               <PerformanceProductionKpi title="Pico previsto" value={formatPerformanceNumber(forecast.peak.value)} muted={forecast.peak.label} tone="orange" />
             </div>
           </section>
 
-          <PerformanceChartCard title="Forecast de enqueue" subtitle={`${forecastFilters.lob || "Todas as LOBs"} · 60% últimos 7 dias + 35% volume recente + 5% sazonalidade`}>
+          <PerformanceChartCard title="Forecast de enqueue" subtitle={`${forecastFilters.lob || "Todas as LOBs"} · projeção independente: 60% últimos 7 dias + 35% últimas 72h no mesmo horário + 5% sazonalidade`}>
             {forecastLoading && !forecastPayload ? (
               <div className="grid h-[420px] place-items-center text-sm font-bold text-muted">Carregando forecast...</div>
             ) : (
@@ -13022,17 +13025,17 @@ function buildPerformanceForecast(trend: PerformanceProductionResponse["trend"],
   const actuals = hourlyRows.map((row) => ({ date: row.date, timestamp: row.date.getTime(), input: Math.max(0, row.input || 0) }));
   const positiveActuals = actuals.filter((row) => row.input > 0);
   const lastTime = last?.date.getTime() ?? Date.now();
-  const recentAdjustment = performanceRecentRegimeAdjustment(positiveActuals, new Date(lastTime));
 
-  const validationCandidates = positiveActuals.filter((row) => row.timestamp > lastTime - 7 * 24 * 36e5 && row.timestamp <= lastTime);
+  const validationCandidates = positiveActuals.filter((row) => row.timestamp > lastTime - 14 * 24 * 36e5 && row.timestamp <= lastTime);
   const validation = validationCandidates.map((row) => {
     const history = positiveActuals.filter((item) => item.timestamp < row.timestamp);
     const forecast = history.length >= 24 ? performanceForecastValue(history, row.date, new Date(row.timestamp - 36e5)) : null;
     return { ...row, forecast };
   });
   const validationWithForecast = validation.filter((row): row is typeof row & { forecast: number } => row.forecast !== null);
-  const validationError = validationWithForecast.length
-    ? validationWithForecast.reduce((sum, row) => sum + Math.abs(row.input - row.forecast) / Math.max(row.input, row.forecast, 1), 0) / validationWithForecast.length
+  const recentValidation = validationWithForecast.filter((row) => row.timestamp > lastTime - 7 * 24 * 36e5);
+  const validationError = recentValidation.length
+    ? recentValidation.reduce((sum, row) => sum + Math.abs(row.input - row.forecast) / Math.max(row.input, row.forecast, 1), 0) / recentValidation.length
     : 0;
   const accuracy = Math.max(0, Math.min(100, 100 - validationError * 100));
   const historicalForecastByTime = new Map(validationWithForecast.map((row) => [row.timestamp, Math.round(row.forecast)]));
@@ -13051,15 +13054,9 @@ function buildPerformanceForecast(trend: PerformanceProductionResponse["trend"],
     key: row.key,
     label: row.label,
     real: Math.round(row.input || 0),
-    forecast: null as number | null
+    forecast: historicalForecastByTime.get(row.date.getTime()) ?? null
   }));
-  const bridgePoint = last ? {
-    key: `${last.key}-forecast-start`,
-    label: last.label,
-    real: null as number | null,
-    forecast: Math.round(last.input || 0)
-  } : null;
-  const chart = [...historicalPoints, ...(bridgePoint ? [bridgePoint] : []), ...forecastPoints];
+  const chart = [...historicalPoints, ...forecastPoints];
   const next24h = forecastPoints.slice(0, 24).reduce((sum, row) => sum + (row.forecast || 0), 0);
   const totalProjected = forecastPoints.reduce((sum, row) => sum + (row.forecast || 0), 0);
   const peak = forecastPoints.reduce((best, row) => (row.forecast || 0) > best.value ? { value: row.forecast || 0, label: row.label } : best, { value: 0, label: "-" });
@@ -13093,7 +13090,6 @@ function buildPerformanceForecast(trend: PerformanceProductionResponse["trend"],
     horizonHours,
     next24h,
     totalProjected,
-    recentAdjustment,
     accuracy,
     peak,
     exportRows,
@@ -13110,40 +13106,14 @@ function performanceForecastValue(actuals: PerformanceForecastActual[], targetDa
   if (!training.length) return 0;
   const targetHour = targetDate.getUTCHours();
   const targetDay = targetDate.getUTCDay();
+  const recentSameHour = training.filter((row) => row.date.getUTCHours() === targetHour && row.timestamp > referenceTime - 72 * 36e5);
   const sevenDaySameHour = training.filter((row) => row.date.getUTCHours() === targetHour && row.timestamp > referenceTime - 7 * 24 * 36e5);
   const olderSeasonalSlot = training.filter((row) => row.date.getUTCHours() === targetHour && row.date.getUTCDay() === targetDay && row.timestamp <= referenceTime - 7 * 24 * 36e5);
   const sevenDayProfile = performanceWeightedForecastAverage(sevenDaySameHour, referenceDate, 3.5)
     || performanceWeightedForecastAverage(training.filter((row) => row.timestamp > referenceTime - 7 * 24 * 36e5), referenceDate, 3.5);
+  const recentProfile = performanceWeightedForecastAverage(recentSameHour, referenceDate, 1.5) || sevenDayProfile;
   const olderSeasonalProfile = performanceWeightedForecastAverage(olderSeasonalSlot, referenceDate, 21) || sevenDayProfile;
-  const recentProjected = sevenDayProfile * performanceRecentRegimeAdjustment(training, referenceDate);
-  return Math.max(0, sevenDayProfile * 0.6 + recentProjected * 0.35 + olderSeasonalProfile * 0.05);
-}
-
-function performanceRecentRegimeAdjustment(actuals: PerformanceForecastActual[], referenceDate: Date) {
-  const recentRatios = performanceRecentForecastRatios(actuals, referenceDate, 3);
-  const slowerRatios = performanceRecentForecastRatios(actuals, referenceDate, 12);
-  const recent = performanceWeightedForecastRatio(recentRatios);
-  const slower = performanceWeightedForecastRatio(slowerRatios);
-  const blended = recentRatios.length ? recent * 0.7 + slower * 0.3 : slower;
-  return Math.max(0.5, Math.min(2.5, blended || 1));
-}
-
-function performanceRecentForecastRatios(actuals: PerformanceForecastActual[], referenceDate: Date, hours: number) {
-  const referenceTime = referenceDate.getTime();
-  return actuals
-    .filter((row) => row.timestamp <= referenceTime && row.timestamp > referenceTime - hours * 36e5)
-    .map((row) => {
-      const history = actuals.filter((item) => item.timestamp < row.timestamp && item.timestamp >= row.timestamp - 7 * 24 * 36e5 && item.date.getUTCHours() === row.date.getUTCHours());
-      const expected = performanceWeightedForecastAverage(history, new Date(row.timestamp - 36e5), 3.5);
-      const ageHours = Math.max(0, (referenceTime - row.timestamp) / 36e5);
-      return expected > 0 ? { value: row.input / expected, weight: Math.exp(-ageHours / 3) } : null;
-    })
-    .filter((row): row is { value: number; weight: number } => Boolean(row));
-}
-
-function performanceWeightedForecastRatio(ratios: Array<{ value: number; weight: number }>) {
-  const totalWeight = ratios.reduce((sum, row) => sum + row.weight, 0);
-  return totalWeight ? ratios.reduce((sum, row) => sum + row.value * row.weight, 0) / totalWeight : 1;
+  return Math.max(0, sevenDayProfile * 0.6 + recentProfile * 0.35 + olderSeasonalProfile * 0.05);
 }
 
 function performanceWeightedForecastAverage(rows: PerformanceForecastActual[], referenceDate: Date, halfLifeDays: number) {
