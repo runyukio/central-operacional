@@ -20,6 +20,8 @@ const updateSchema = z.object({
   shiftId: z.string().trim().optional(),
   contractType: z.string().trim().optional(),
   skill: z.string().trim().optional(),
+  skillIds: z.array(z.string().trim().min(1)).optional(),
+  primarySkillId: z.string().trim().optional(),
   wave: z.string().trim().optional(),
   admissionDate: z.string().trim().optional(),
   trainingStartDate: z.string().trim().optional(),

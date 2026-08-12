@@ -473,6 +473,7 @@ model EmployeeProfile {
   tokenTransactions          TokenTransaction[]
   rewardRedemptions          RewardRedemption[]
   moodRecords                EmployeeMoodRecord[]
+  skillAssignments           EmployeeSkillAssignment[]
   createdAt                  DateTime                    @default(now())
   updatedAt                  DateTime                    @updatedAt
   deletedAt                  DateTime?
@@ -487,6 +488,35 @@ model EmployeeProfile {
   @@index([wave])
   @@index([operationalStatus])
   @@index([deletedAt])
+}
+
+model OperationalSkill {
+  id             String                    @id @default(cuid())
+  name           String
+  normalizedName String                    @unique
+  description    String?
+  color          String                    @default("#2563EB")
+  status         String                    @default("ACTIVE")
+  assignments    EmployeeSkillAssignment[]
+  createdAt      DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
+
+  @@index([status])
+  @@index([name])
+}
+
+model EmployeeSkillAssignment {
+  employeeId String
+  skillId    String
+  isPrimary  Boolean          @default(false)
+  employee   EmployeeProfile  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  skill      OperationalSkill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  @@id([employeeId, skillId])
+  @@index([skillId])
+  @@index([employeeId, isPrimary])
 }
 
 model Schedule {

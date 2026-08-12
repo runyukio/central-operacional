@@ -493,10 +493,13 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
   if (!canAccessPerformance(permissionUser(user))) throw new PerformanceError("Você não tem permissão para acessar Performance.", 403);
 
   const role = normalizeRole(user.role.name);
-  const productionPeriod = await resolveProductionDashboardPeriod(query);
   const ownEmployeeId = role === "COLABORADOR" ? requireOwnEmployee(user).id : null;
   const requestedLob = query.lob && query.lob !== "Todos" ? query.lob.toUpperCase() : "";
   const granularity = normalizeProductionGranularity(query.granularity);
+  const resolvedProductionPeriod = await resolveProductionDashboardPeriod(query);
+  const productionPeriod = requestedLob === "ADS" && granularity === "hourly" && !query.endDate
+    ? await extendProductionPeriodToLatestRealtimeAds(resolvedProductionPeriod)
+    : resolvedProductionPeriod;
   const panel = await buildProductionDashboardPanel(productionPeriod);
   const canImport = canImportPerformance(permissionUser(user));
   if (query.metadataOnly || (requestedLob && !performanceLobOptions().includes(requestedLob))) {
@@ -577,6 +580,13 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
     const aggregate = ensureProductionAggregate(trendMap, bucket.key);
     aggregate.input += Number(row.input ?? 0);
     aggregate.records += Number(row.records ?? 0);
+  }
+  if (requestedLob === "ADS" && granularity === "hourly") {
+    const realtimeHourlyInput = await realtimeAdsHourlyInput(productionPeriod);
+    for (const row of realtimeHourlyInput) {
+      const aggregate = ensureProductionAggregate(trendMap, row.key);
+      aggregate.input = row.input;
+    }
   }
   for (const row of productionQueueRows) {
     const queueId = row.queueId || "Sem Fila ID";
@@ -4635,6 +4645,69 @@ function queueWhereByPerformanceLob(lob: string) {
 
 function allPerformanceQueueIds() {
   return unique([...Object.keys(QUEUE_METADATA), ...Object.keys(QUEUE_REPORT_METADATA)]);
+}
+
+async function extendProductionPeriodToLatestRealtimeAds(period: Period): Promise<Period> {
+  const latest = await prisma.realTimeQueueCycleSummary.findFirst({
+    where: { lob: "ADS" },
+    orderBy: { cycleDownload: "desc" },
+    select: { cycleDownload: true }
+  });
+  const latestDate = latest ? parseRealtimeCycleDate(latest.cycleDownload) : null;
+  if (!latestDate || latestDate <= period.end) return period;
+  return { ...period, end: latestDate };
+}
+
+async function realtimeAdsHourlyInput(period: Period) {
+  const startCycle = `${formatDateKey(period.start)} 00:00`;
+  const endCycle = `${formatDateKey(period.end)} 23:59`;
+  const rows = await prisma.realTimeQueueCycleSummary.findMany({
+    where: { lob: "ADS", cycleDownload: { gte: startCycle, lte: endCycle } },
+    orderBy: [{ cycleDownload: "asc" }, { batch: { importedAt: "asc" } }],
+    select: { cycleDownload: true, batchId: true, input: true, batch: { select: { importedAt: true } } }
+  });
+  const latestBatchByCycle = new Map<string, { batchId: string; importedAt: number }>();
+  for (const row of rows) {
+    const importedAt = row.batch.importedAt.getTime();
+    const current = latestBatchByCycle.get(row.cycleDownload);
+    if (!current || importedAt > current.importedAt) latestBatchByCycle.set(row.cycleDownload, { batchId: row.batchId, importedAt });
+  }
+  const cumulativeByCycle = new Map<string, number>();
+  for (const row of rows) {
+    if (latestBatchByCycle.get(row.cycleDownload)?.batchId !== row.batchId) continue;
+    cumulativeByCycle.set(row.cycleDownload, (cumulativeByCycle.get(row.cycleDownload) ?? 0) + row.input);
+  }
+  const latestCycleByHour = new Map<string, { cycleDownload: string; cumulative: number }>();
+  for (const [cycleDownload, cumulative] of cumulativeByCycle) {
+    const at = parseRealtimeCycleDate(cycleDownload);
+    if (!at) continue;
+    const key = `${formatDateKey(at)} ${String(at.getUTCHours()).padStart(2, "0")}:00`;
+    const current = latestCycleByHour.get(key);
+    if (!current || cycleDownload > current.cycleDownload) latestCycleByHour.set(key, { cycleDownload, cumulative });
+  }
+  let previousCumulative: number | null = null;
+  let previousCycleAt: Date | null = null;
+  return Array.from(latestCycleByHour.entries())
+    .sort(([, a], [, b]) => a.cycleDownload.localeCompare(b.cycleDownload))
+    .map(([key, row]) => {
+      const cycleAt = parseRealtimeCycleDate(row.cycleDownload);
+      if (cycleAt && cycleAt.getUTCMinutes() < 30) return null;
+      const gapHours = cycleAt && previousCycleAt ? (cycleAt.getTime() - previousCycleAt.getTime()) / 3_600_000 : null;
+      const input = previousCumulative === null || (gapHours !== null && gapHours > 2)
+        ? null
+        : row.cumulative < previousCumulative ? row.cumulative : row.cumulative - previousCumulative;
+      previousCumulative = row.cumulative;
+      previousCycleAt = cycleAt;
+      return input === null ? null : { key, input: Math.max(0, input) };
+    })
+    .filter((row): row is { key: string; input: number } => Boolean(row));
+}
+
+function parseRealtimeCycleDate(value: string) {
+  const match = String(value ?? "").match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const [, year, month, day, hour, minute] = match;
+  return new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute)));
 }
 
 function performanceSlaTargetOptions(lob: string) {
