@@ -684,7 +684,15 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
 
     async function loadExecutiveSources() {
       setExecutiveSourceData(null);
-      const performanceParams = new URLSearchParams({ lob: executiveLob, granularity: "hourly" });
+      const forecastStart = new Date(selected.date);
+      forecastStart.setDate(forecastStart.getDate() - 42);
+      const performanceParams = new URLSearchParams({
+        lob: executiveLob,
+        granularity: "hourly",
+        trendOnly: "true",
+        startDate: formatDateKey(forecastStart),
+        endDate: selected.dateKey
+      });
       const requiredParams = new URLSearchParams({
         startDate: selected.dateKey,
         endDate: selected.dateKey,

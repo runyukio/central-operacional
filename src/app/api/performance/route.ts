@@ -31,7 +31,8 @@ export async function GET(request: Request) {
       sortDirection: readSortDirection(url.searchParams.get("sortDirection")),
       granularity: readGranularity(url.searchParams.get("granularity")),
       slaTargetMinutes: readPositiveNumber(url.searchParams.get("slaTargetMinutes")),
-      metadataOnly: url.searchParams.get("metadataOnly") === "true"
+      metadataOnly: url.searchParams.get("metadataOnly") === "true",
+      trendOnly: url.searchParams.get("trendOnly") === "true"
     };
     const payload = query.view
       ? await getPerformanceDashboard(actor, query)
