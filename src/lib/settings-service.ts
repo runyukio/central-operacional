@@ -161,6 +161,7 @@ export async function getSystemSettings(actor: Actor) {
       roles,
       permissions,
       requestTypes,
+      skills,
       teams,
       employees,
       supervisorEmployees,
@@ -185,6 +186,7 @@ export async function getSystemSettings(actor: Actor) {
       prisma.role.findMany({ orderBy: { name: "asc" } }),
       prisma.permission.findMany({ orderBy: { key: "asc" } }),
       prisma.requestType.findMany({ orderBy: { name: "asc" } }),
+      prisma.operationalSkill.findMany({ orderBy: [{ status: "asc" }, { name: "asc" }] }),
       prisma.team.findMany({ include: settingsTeamInclude, orderBy: { name: "asc" } }),
       prisma.employeeProfile.findMany({ where: { deletedAt: null }, select: settingsEmployeeSelect, orderBy: { fullName: "asc" }, take: 500 }),
       findSupervisorSettingEmployees(),
@@ -224,6 +226,7 @@ export async function getSystemSettings(actor: Actor) {
         roles: roles.map((role) => ({ id: role.id, name: role.name, label: role.label, description: role.description ?? "", status: roleStatus[role.id] ?? "ACTIVE", essential: essentialRoles.includes(role.name), permissions: permissionsForRole(role.name, rolePermissions) })),
         permissions: permissions.map((permission) => ({ id: permission.id, key: permission.key, label: permission.label, description: permission.description ?? "", status: permissionStatus[permission.id] ?? "ACTIVE" })),
         requestTypes: requestTypes.map((type) => ({ id: type.id, name: type.name, area: type.area, slaHours: type.slaHours, requiresApproval: type.requiresApproval, status: requestTypeStatus[type.id] ?? "ACTIVE", essential: essentialDayOffTypes.includes(type.name) })),
+        skills: skills.map((skill) => ({ id: skill.id, name: skill.name, description: skill.description ?? "", color: skill.color, status: skill.status === "INACTIVE" ? "INACTIVE" : "ACTIVE" })),
         teams: teams.map((team) => ({ id: team.id, name: team.name, lobId: team.lobId, lob: team.lob.name, supervisorId: team.supervisorId ?? "", supervisorName: team.supervisor?.fullName ?? "", supervisorEmail: team.supervisor?.user?.email ?? "", status: teamStatus[team.id] ?? "ACTIVE" })),
         supervisors: supervisorEmployees
           .filter((employee) => canBeSupervisorOption(employee, superviseeCounts))
@@ -271,10 +274,11 @@ export async function getSystemSettings(actor: Actor) {
 }
 
 async function getLimitedSystemSettings() {
-  const [lobs, shifts, requestTypes, teams, employees, supervisorEmployees, lobStatus, shiftStatus, teamStatus, requestTypeStatus, roleTitles, defaultMonth, generalSettings] = await Promise.all([
+  const [lobs, shifts, requestTypes, skills, teams, employees, supervisorEmployees, lobStatus, shiftStatus, teamStatus, requestTypeStatus, roleTitles, defaultMonth, generalSettings] = await Promise.all([
     prisma.lob.findMany({ orderBy: { name: "asc" } }),
     prisma.shift.findMany({ orderBy: { name: "asc" } }),
     prisma.requestType.findMany({ orderBy: { name: "asc" } }),
+    prisma.operationalSkill.findMany({ orderBy: [{ status: "asc" }, { name: "asc" }] }),
     prisma.team.findMany({ include: settingsTeamInclude, orderBy: { name: "asc" } }),
     prisma.employeeProfile.findMany({ where: { deletedAt: null }, select: settingsEmployeeSelect, orderBy: { fullName: "asc" }, take: 500 }),
     findSupervisorSettingEmployees(),
@@ -294,6 +298,7 @@ async function getLimitedSystemSettings() {
     lobs: lobs.map((lob) => ({ id: lob.id, name: lob.name, label: lob.name, description: lob.description ?? "", status: lobStatus[lob.id] ?? "ACTIVE", active: (lobStatus[lob.id] ?? "ACTIVE") === "ACTIVE", system: lob.name === "ALL", isSystem: lob.name === "ALL" })),
     shifts: formatShiftsForSettings(shifts, shiftStatus),
     requestTypes: requestTypes.map((type) => ({ id: type.id, name: type.name, area: type.area, slaHours: type.slaHours, requiresApproval: type.requiresApproval, status: requestTypeStatus[type.id] ?? "ACTIVE", essential: essentialDayOffTypes.includes(type.name) })),
+    skills: skills.map((skill) => ({ id: skill.id, name: skill.name, description: skill.description ?? "", color: skill.color, status: skill.status === "INACTIVE" ? "INACTIVE" : "ACTIVE" })),
     teams: teams.map((team) => ({ id: team.id, name: team.name, lobId: team.lobId, lob: team.lob.name, supervisorId: team.supervisorId ?? "", supervisorName: team.supervisor?.fullName ?? "", supervisorEmail: team.supervisor?.user?.email ?? "", status: teamStatus[team.id] ?? "ACTIVE" })),
     supervisors: supervisorEmployees
       .filter((employee) => canBeSupervisorOption(employee, superviseeCounts))
@@ -356,6 +361,8 @@ export async function updateSystemSettings(actor: Actor, action: SettingsAction)
           return saveRequestType(tx, admin.id, action);
         case "roleTitle":
           return saveRoleTitle(tx, admin.id, action);
+        case "skill":
+          return saveOperationalSkill(tx, admin.id, action);
         case "defaultMonth":
           return saveDefaultMonth(tx, admin.id, action);
         case "slaRule":
@@ -556,6 +563,27 @@ async function saveRoleTitle(tx: Prisma.TransactionClient, adminId: string, acti
   await writeJsonConfig(tx, configKeys.roleTitles, next, "Cargos/funções operacionais configuráveis");
   await auditSettings(tx, adminId, "EDICAO", "SystemConfig", configKeys.roleTitles, action);
   return { data: next };
+}
+
+async function saveOperationalSkill(tx: Prisma.TransactionClient, adminId: string, action: SettingsAction) {
+  const id = text(action.id);
+  const name = text(action.name);
+  const normalizedName = normalizeSkillName(name);
+  const description = text(action.description);
+  const color = /^#[0-9A-F]{6}$/i.test(text(action.color)) ? text(action.color).toUpperCase() : "#2563EB";
+  const status = statusValue(action.status) ?? "ACTIVE";
+  if (!name) return { error: "Nome da skill é obrigatório." };
+  const duplicate = await tx.operationalSkill.findFirst({ where: { normalizedName, ...(id ? { id: { not: id } } : {}) } });
+  if (duplicate) return { error: "Já existe uma skill com esse nome." };
+  const before = id ? await tx.operationalSkill.findUnique({ where: { id } }) : null;
+  const skill = id
+    ? await tx.operationalSkill.update({ where: { id }, data: { name, normalizedName, description: description || null, color, status } })
+    : await tx.operationalSkill.create({ data: { name, normalizedName, description: description || null, color, status } });
+  if (before && before.name !== name) {
+    await tx.employeeProfile.updateMany({ where: { skill: before.name }, data: { skill: name } });
+  }
+  await auditSettings(tx, adminId, id ? "EDICAO" : "CRIACAO", "OperationalSkill", skill.id, action, before ?? undefined);
+  return { data: skill };
 }
 
 async function saveDefaultMonth(tx: Prisma.TransactionClient, adminId: string, action: SettingsAction) {
@@ -801,6 +829,7 @@ function emptySettings() {
     roles: [],
     permissions: [],
     requestTypes: [],
+    skills: [],
     teams: [],
     supervisors: [],
     employees: [],
@@ -816,6 +845,10 @@ function emptySettings() {
 
 function text(value: unknown) {
   return String(value ?? "").trim();
+}
+
+function normalizeSkillName(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 function statusValue(value: unknown): StatusValue | undefined {

@@ -4082,23 +4082,13 @@ function executivePerformanceForecastValue(actuals: Array<{ at: Date; timestamp:
   const targetDay = targetAt.getUTCDay();
   const training = actuals.filter((row) => row.timestamp <= referenceTime && row.input > 0);
   if (!training.length) return 0;
-
-  const candidates: Array<{ value: number; weight: number }> = [];
-  const seasonalSlot = training.filter((row) => row.at.getUTCDay() === targetDay && row.at.getUTCHours() === targetHour);
-  const sameHourRecent = training.filter((row) => row.at.getUTCHours() === targetHour && row.timestamp >= referenceTime - 35 * EXECUTIVE_DAY_MS);
-  const profile = executiveRecentHourlyProfileForecast(training, targetAt, referenceAt);
-  const momentum = executiveShortMomentumForecast(training, targetAt, referenceAt);
-
-  if (seasonalSlot.length) candidates.push({ value: executiveWeightedAverage(seasonalSlot, referenceAt), weight: executiveClamp(seasonalSlot.length / 8, 0.22, 1.1) * 0.36 });
-  if (sameHourRecent.length) candidates.push({ value: executiveWeightedAverage(sameHourRecent, referenceAt, 10), weight: executiveClamp(sameHourRecent.length / 10, 0.24, 1.15) * 0.3 });
-  if (profile.value > 0) candidates.push({ value: profile.value, weight: executiveClamp(profile.samples / 24, 0.22, 1.1) * 0.22 });
-  if (momentum.value > 0) candidates.push({ value: momentum.value, weight: executiveClamp(momentum.samples / 12, 0.18, 1) * 0.12 });
-
-  const fallbackRows = training.filter((row) => row.timestamp >= referenceTime - 14 * EXECUTIVE_DAY_MS);
-  const fallback = executiveWeightedAverage(fallbackRows.length ? fallbackRows : training, referenceAt);
-  const weight = candidates.reduce((total, candidate) => total + candidate.weight, 0);
-  const blended = weight > 0 ? candidates.reduce((total, candidate) => total + candidate.value * candidate.weight, 0) / weight : fallback;
-  return Math.max(0, blended * executiveRecentForecastAdjustment(training, targetAt, referenceAt));
+  const sevenDaySameHour = training.filter((row) => row.at.getUTCHours() === targetHour && row.timestamp > referenceTime - 7 * EXECUTIVE_DAY_MS);
+  const olderSeasonalSlot = training.filter((row) => row.at.getUTCHours() === targetHour && row.at.getUTCDay() === targetDay && row.timestamp <= referenceTime - 7 * EXECUTIVE_DAY_MS);
+  const sevenDayProfile = executiveWeightedAverage(sevenDaySameHour, referenceAt, 3.5)
+    || executiveWeightedAverage(training.filter((row) => row.timestamp > referenceTime - 7 * EXECUTIVE_DAY_MS), referenceAt, 3.5);
+  const olderSeasonalProfile = executiveWeightedAverage(olderSeasonalSlot, referenceAt, 21) || sevenDayProfile;
+  const recentProjected = sevenDayProfile * executiveRecentForecastAdjustment(training, targetAt, referenceAt);
+  return Math.max(0, sevenDayProfile * 0.6 + recentProjected * 0.35 + olderSeasonalProfile * 0.05);
 }
 
 function executiveRecentHourlyProfileForecast(actuals: Array<{ at: Date; timestamp: number; input: number }>, targetAt: Date, referenceAt: Date) {
@@ -4133,18 +4123,29 @@ function executiveShortMomentumForecast(actuals: Array<{ at: Date; timestamp: nu
 
 function executiveRecentForecastAdjustment(actuals: Array<{ at: Date; timestamp: number; input: number }>, targetAt: Date, referenceAt: Date) {
   const referenceTime = referenceAt.getTime();
-  const targetHour = targetAt.getUTCHours();
-  const ratios: Array<{ ratio: number; weight: number }> = [];
-  addExecutiveWindowRatio(ratios, actuals, referenceTime, 24 * EXECUTIVE_HOUR_MS, 0.36, 3.4);
-  addExecutiveWindowRatio(ratios, actuals, referenceTime, 72 * EXECUTIVE_HOUR_MS, 0.3, 3);
-  addExecutiveWindowRatio(ratios, actuals, referenceTime, 7 * EXECUTIVE_DAY_MS, 0.18, 2.6);
-  const sameHour = actuals.filter((row) => row.at.getUTCHours() === targetHour);
-  const recentSameHour = executiveSum(sameHour.filter((row) => row.timestamp > referenceTime - 10 * EXECUTIVE_DAY_MS).map((row) => row.input));
-  const previousSameHour = executiveSum(sameHour.filter((row) => row.timestamp <= referenceTime - 10 * EXECUTIVE_DAY_MS && row.timestamp > referenceTime - 50 * EXECUTIVE_DAY_MS).map((row) => row.input)) / 4;
-  if (previousSameHour > 0) ratios.push({ ratio: executiveClamp(recentSameHour / previousSameHour, 0.35, 3.4), weight: 0.24 });
-  if (!ratios.length) return 1;
-  const raw = ratios.reduce((total, item) => total + item.ratio * item.weight, 0) / ratios.reduce((total, item) => total + item.weight, 0);
-  return executiveClamp(1 + (raw - 1) * 0.94, 0.45, 3.1);
+  const recentRatios = executiveRecentForecastRatios(actuals, referenceTime, 3);
+  const slowerRatios = executiveRecentForecastRatios(actuals, referenceTime, 12);
+  const recent = executiveWeightedForecastRatio(recentRatios);
+  const slower = executiveWeightedForecastRatio(slowerRatios);
+  const blended = recentRatios.length ? recent * 0.7 + slower * 0.3 : slower;
+  return executiveClamp(blended || 1, 0.5, 2.5);
+}
+
+function executiveRecentForecastRatios(actuals: Array<{ at: Date; timestamp: number; input: number }>, referenceTime: number, hours: number) {
+  return actuals
+    .filter((row) => row.timestamp <= referenceTime && row.timestamp > referenceTime - hours * EXECUTIVE_HOUR_MS)
+    .map((row) => {
+      const history = actuals.filter((item) => item.timestamp < row.timestamp && item.timestamp >= row.timestamp - 7 * EXECUTIVE_DAY_MS && item.at.getUTCHours() === row.at.getUTCHours());
+      const expected = executiveWeightedAverage(history, new Date(row.timestamp - EXECUTIVE_HOUR_MS), 3.5);
+      const ageHours = Math.max(0, (referenceTime - row.timestamp) / EXECUTIVE_HOUR_MS);
+      return expected > 0 ? { value: row.input / expected, weight: Math.exp(-ageHours / 3) } : null;
+    })
+    .filter((row): row is { value: number; weight: number } => Boolean(row));
+}
+
+function executiveWeightedForecastRatio(ratios: Array<{ value: number; weight: number }>) {
+  const totalWeight = ratios.reduce((sum, row) => sum + row.weight, 0);
+  return totalWeight ? ratios.reduce((sum, row) => sum + row.value * row.weight, 0) / totalWeight : 1;
 }
 
 function addExecutiveWindowRatio(ratios: Array<{ ratio: number; weight: number }>, actuals: Array<{ timestamp: number; input: number }>, referenceTime: number, windowMs: number, weight: number, maxRatio: number) {

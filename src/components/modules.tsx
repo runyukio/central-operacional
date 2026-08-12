@@ -1029,6 +1029,7 @@ type SystemSettings = {
   roles: Array<{ id: string; name: string; label: string; description?: string; status?: "ACTIVE" | "INACTIVE"; essential?: boolean; permissions?: string[] }>;
   permissions?: Array<{ id: string; key: string; label: string; description?: string; status: "ACTIVE" | "INACTIVE" }>;
   requestTypes: Array<{ id: string; name: string; area: string; slaHours: number; requiresApproval: boolean; status?: "ACTIVE" | "INACTIVE"; essential?: boolean }>;
+  skills: Array<{ id: string; name: string; description?: string; color: string; status: "ACTIVE" | "INACTIVE" }>;
   teams?: Array<{ id: string; name: string; lobId: string; lob: string; supervisorId?: string; supervisorName?: string; supervisorEmail?: string; status: "ACTIVE" | "INACTIVE" }>;
   supervisors?: Array<{ id: string; name: string; email?: string; lobId?: string; lob?: string; teamId?: string; team?: string; supervisees?: number; status?: string }>;
   employees?: Array<{ id: string; name: string; email?: string; wb?: string; roleTitle?: string; roleName?: string; lobId?: string; lob?: string; teamId?: string; team?: string; supervisorId?: string; supervisorName?: string; shiftId?: string; shift?: string; status?: string }>;
@@ -1054,6 +1055,7 @@ type EmployeeClient = (typeof employees)[number] & {
   directReports?: number;
   totalReports?: number;
   skill?: string;
+  skills?: Array<{ id: string; name: string; color: string; isPrimary: boolean; status?: "ACTIVE" | "INACTIVE" }>;
   wave?: string;
   lobId?: string;
   shiftId?: string;
@@ -9953,6 +9955,8 @@ export function EmployeeMapPage() {
   const [statusDraft, setStatusDraft] = useState("");
   const [roleDraft, setRoleDraft] = useState("");
   const [skillDraft, setSkillDraft] = useState("");
+  const [skillIdsDraft, setSkillIdsDraft] = useState<string[]>([]);
+  const [primarySkillIdDraft, setPrimarySkillIdDraft] = useState("");
   const [waveDraft, setWaveDraft] = useState("");
   const [supervisorDraft, setSupervisorDraft] = useState("");
   const [lobDraft, setLobDraft] = useState("");
@@ -10134,6 +10138,8 @@ export function EmployeeMapPage() {
     setStatusDraft(employeeMapStatusLabel(selected.status ?? ""));
     setRoleDraft(selected.systemRole ?? "COLABORADOR");
     setSkillDraft(selected.skill ?? "");
+    setSkillIdsDraft((selected.skills ?? []).filter((skill) => !skill.id.startsWith("legacy:")).map((skill) => skill.id));
+    setPrimarySkillIdDraft((selected.skills ?? []).find((skill) => skill.isPrimary && !skill.id.startsWith("legacy:"))?.id ?? "");
     setWaveDraft(selected.wave ?? "");
     setSupervisorDraft(selected.supervisorId ?? "");
     setLobDraft(selected.lobId ?? "");
@@ -10183,7 +10189,9 @@ export function EmployeeMapPage() {
           roleTitle: roleTitleDraft,
           operationalStatus: statusDraft,
           roleName: isAdmin ? roleDraft : undefined,
-          skill: selectedCanEditEmployeeOperational ? skillDraft : undefined,
+          skill: selectedCanEditEmployeeOperational && !employeeSettings?.skills?.length ? skillDraft : undefined,
+          skillIds: selectedCanEditEmployeeOperational && employeeSettings?.skills?.length ? skillIdsDraft : undefined,
+          primarySkillId: selectedCanEditEmployeeOperational && employeeSettings?.skills?.length ? primarySkillIdDraft : undefined,
           wave: selectedCanEditEmployeeOperational ? waveDraft : undefined,
           supervisorId: canEditOperationalBindings ? supervisorDraft : undefined,
 	          lobId: canEditOperationalBindings ? lobDraft || undefined : undefined,
@@ -10372,7 +10380,7 @@ export function EmployeeMapPage() {
                     <span key={`${employee.id}-role`} className="block max-w-[160px] truncate" title={employee.role}>{employee.role}</span>,
                     employee.systemRole ?? "-",
                     employee.lob,
-                    employee.skill || "Sem skill",
+                    <EmployeeSkillBadges key={`${employee.id}-skills`} skills={employee.skills} fallback={employee.skill} compact />,
                     employee.wave || "Sem wave",
                     <span key={`${employee.id}-supervisor`} className="block max-w-[160px] truncate" title={employee.supervisor}>{employee.supervisor}</span>,
                     cleanShiftName(employee.shift) || "-",
@@ -10427,7 +10435,7 @@ export function EmployeeMapPage() {
                 <InfoLine label="LOB" value={selected.lob} />
                 <InfoLine label="Supervisor" value={selected.supervisor} />
                 <InfoLine label="Subordinados" value={selected.directReports ?? 0} />
-                <InfoLine label="Skill" value={selected.skill || "Sem skill"} />
+                <InfoLine label="Skills" value={<EmployeeSkillBadges skills={selected.skills} fallback={selected.skill} />} />
                 <InfoLine label="Wave" value={selected.wave || "Sem wave"} />
                 <InfoLine label="Turno" value={cleanShiftName(selected.shift) || "-"} />
                 <InfoLine label="Horário de entrada" value={selected.workStartTime || "Não informado"} />
@@ -10445,7 +10453,7 @@ export function EmployeeMapPage() {
                 <div className="grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-3">
                   <InfoLine label="Cargo/Função" value={selected.role} />
                   <InfoLine label="LOB" value={selected.lob} />
-                  <InfoLine label="Skill" value={selected.skill || "Sem skill"} />
+                  <InfoLine label="Skills" value={<EmployeeSkillBadges skills={selected.skills} fallback={selected.skill} />} />
                   <InfoLine label="Wave" value={selected.wave || "Sem wave"} />
                   <InfoLine label="Horário de entrada" value={selected.workStartTime || "Não informado"} />
                   <InfoLine label="Horário de saída" value={selected.workEndTime || "Não informado"} />
@@ -10498,7 +10506,38 @@ export function EmployeeMapPage() {
                             ) : (
                               <FormInput label="Cargo/Função" value={roleTitleDraft} onChange={setRoleTitleDraft} error={employeeFieldErrors.roleTitle} />
                             )}
-                            <FormInput label="Skill" value={skillDraft} onChange={setSkillDraft} error={employeeFieldErrors.skill} />
+                            {employeeSettings?.skills?.length ? (
+                              <div className="md:col-span-2 xl:col-span-3">
+                                <span className="mb-1.5 block text-sm font-bold text-muted">Skills</span>
+                                <div className="grid gap-2 rounded-xl border border-border bg-white p-3 sm:grid-cols-2 xl:grid-cols-3">
+                                  {employeeSettings.skills.filter((skill) => skill.status !== "INACTIVE" || skillIdsDraft.includes(skill.id)).map((skill) => {
+                                    const selectedSkill = skillIdsDraft.includes(skill.id);
+                                    const primary = primarySkillIdDraft === skill.id;
+                                    return (
+                                      <div key={skill.id} className="flex items-center justify-between gap-3 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                                        <label className="flex min-w-0 items-center gap-2 text-sm font-bold text-navy-950">
+                                          <input
+                                            type="checkbox"
+                                            checked={selectedSkill}
+                                            onChange={(event) => {
+                                              const next = event.target.checked ? [...skillIdsDraft, skill.id] : skillIdsDraft.filter((id) => id !== skill.id);
+                                              setSkillIdsDraft(Array.from(new Set(next)));
+                                              if (!event.target.checked && primary) setPrimarySkillIdDraft(next[0] ?? "");
+                                              if (event.target.checked && !primarySkillIdDraft) setPrimarySkillIdDraft(skill.id);
+                                            }}
+                                          />
+                                          <span className="truncate">{skill.name}</span>
+                                        </label>
+                                        <label className="flex items-center gap-1 text-[11px] font-black uppercase tracking-wide text-muted">
+                                          <input type="radio" name="primary-skill" checked={primary} disabled={!selectedSkill} onChange={() => setPrimarySkillIdDraft(skill.id)} /> Principal
+                                        </label>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                                {employeeFieldErrors.skillIds || employeeFieldErrors.primarySkillId ? <span className="mt-1 block text-xs font-bold text-red-600">{employeeFieldErrors.skillIds || employeeFieldErrors.primarySkillId}</span> : null}
+                              </div>
+                            ) : <FormInput label="Skill" value={skillDraft} onChange={setSkillDraft} error={employeeFieldErrors.skill} />}
                             <FormInput label="Wave" value={waveDraft} onChange={setWaveDraft} error={employeeFieldErrors.wave} />
                             {isAdmin ? <FormSelect label="Role/Permissão" value={roleDraft} options={employeeRoleOptions} onChange={setRoleDraft} error={employeeFieldErrors.roleName} /> : null}
                             {canEditOperationalBindings ? (
@@ -11076,6 +11115,37 @@ function InfoLine({ label, value }: { label: string; value: React.ReactNode }) {
       <p className="text-xs font-bold uppercase tracking-wide text-muted">{label}</p>
       <p className="mt-1 font-bold text-navy-950">{value}</p>
     </div>
+  );
+}
+
+function EmployeeSkillBadges({
+  skills,
+  fallback,
+  compact = false
+}: {
+  skills?: Array<{ id: string; name: string; color: string; isPrimary: boolean; status?: "ACTIVE" | "INACTIVE" }>;
+  fallback?: string;
+  compact?: boolean;
+}) {
+  const visible = (skills?.length ? skills : fallback ? [{ id: `fallback:${fallback}`, name: fallback, color: "#2563EB", isPrimary: true as const }] : []);
+  if (!visible.length) return <span className="text-muted">Sem skill</span>;
+  const ordered = [...visible].sort((left, right) => Number(right.isPrimary) - Number(left.isPrimary) || left.name.localeCompare(right.name));
+  const limit = compact ? 2 : 3;
+  return (
+    <span className="inline-flex max-w-full flex-wrap items-center gap-1.5">
+      {ordered.slice(0, limit).map((skill) => (
+        <span
+          key={skill.id}
+          className="inline-flex max-w-[150px] items-center gap-1 truncate rounded-full border px-2 py-0.5 text-[11px] font-black"
+          style={{ color: skill.color, borderColor: `${skill.color}55`, backgroundColor: `${skill.color}12` }}
+          title={`${skill.name}${skill.isPrimary ? " · principal" : ""}`}
+        >
+          {skill.isPrimary ? <span aria-hidden="true">★</span> : null}
+          <span className="truncate">{skill.name}</span>
+        </span>
+      ))}
+      {ordered.length > limit ? <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-black text-slate-600" title={ordered.slice(limit).map((skill) => skill.name).join(", ")}>+{ordered.length - limit}</span> : null}
+    </span>
   );
 }
 
@@ -12377,8 +12447,6 @@ function PerformanceProductionPage() {
     setForecastLoading(true);
     const params = new URLSearchParams({ granularity: "hourly" });
     if (forecastFilters.lob) params.set("lob", forecastFilters.lob);
-    if (filters.startDate) params.set("startDate", filters.startDate);
-    if (filters.endDate) params.set("endDate", filters.endDate);
     try {
       const data = await apiJson<PerformanceProductionResponse>(`/api/performance?${params.toString()}`);
       setForecastPayload(data);
@@ -12389,7 +12457,7 @@ function PerformanceProductionPage() {
     } finally {
       setForecastLoading(false);
     }
-  }, [filters.endDate, filters.startDate, forecastFilters.lob]);
+  }, [forecastFilters.lob]);
 
   useEffect(() => {
     if (activeTab === "forecast") void loadForecast();
@@ -12399,6 +12467,30 @@ function PerformanceProductionPage() {
   const lobs = payload?.filters.lobs ?? ["ADS", "VIDEO", "COMMENTS", "N/A"];
   const granularityLabel = performanceGranularityLabel(filters.granularity);
   const forecast = buildPerformanceForecast(forecastPayload?.trend ?? [], forecastFilters.horizonDays);
+  const exportForecastXlsx = useCallback(async () => {
+    if (!forecast.exportRows.length) {
+      setMessage("Não há dados de forecast para exportar.");
+      return;
+    }
+    const XLSX = await import("xlsx");
+    const workbook = XLSX.utils.book_new();
+    const detailSheet = XLSX.utils.json_to_sheet(forecast.exportRows);
+    const summarySheet = XLSX.utils.json_to_sheet([{
+      LOB: forecastFilters.lob || "Todas as LOBs",
+      "Último real": forecast.lastRealLabel,
+      "Projetado até": forecast.projectedUntilLabel,
+      "Próximas 24h": forecast.next24h,
+      "Total projetado": forecast.totalProjected,
+      "Ajuste recente": forecast.recentAdjustment,
+      "Assertividade (%)": forecast.accuracy,
+      "Pico previsto": forecast.peak.value,
+      "Horário do pico": forecast.peak.label
+    }]);
+    XLSX.utils.book_append_sheet(workbook, summarySheet, "Resumo");
+    XLSX.utils.book_append_sheet(workbook, detailSheet, "Histórico e Forecast");
+    const lob = (forecastFilters.lob || "todas_lobs").toLowerCase().replace(/[^a-z0-9]+/g, "_");
+    XLSX.writeFile(workbook, `forecast_performance_${lob}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }, [forecast, forecastFilters.lob]);
   const productionRecords = payload?.summary.records ?? 0;
   const totalImportedRows = payload?.panel.totalRows ?? 0;
   const enqueueRecords = Math.max(0, totalImportedRows - productionRecords);
@@ -12465,6 +12557,10 @@ function PerformanceProductionPage() {
                 <p className="text-xs font-black uppercase tracking-[0.12em] text-muted">Último real</p>
                 <p className="mt-1 text-sm font-black text-navy-950">{forecast.lastRealLabel}</p>
               </div>
+              <button type="button" onClick={exportForecastXlsx} disabled={!forecast.exportRows.length} className="premium-control inline-flex h-11 items-center gap-2 px-4 text-sm font-extrabold text-navy-950 disabled:opacity-50">
+                <Download className="h-4 w-4" />
+                Baixar bases XLSX
+              </button>
               <div className="grid min-w-[180px] place-items-center rounded-xl border border-border bg-white px-6 py-3 text-center">
                 <p className="text-xs font-black uppercase tracking-[0.12em] text-muted">Projetado até</p>
                 <p className="mt-1 text-sm font-black text-navy-950">{forecast.projectedUntilLabel}</p>
@@ -12522,13 +12618,13 @@ function PerformanceProductionPage() {
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
               <PerformanceProductionKpi title="Próximas 24h" value={formatPerformanceNumber(forecast.next24h)} muted="enqueue previsto" tone="green" />
               <PerformanceProductionKpi title={`${forecastFilters.horizonDays} dias`} value={formatPerformanceNumber(forecast.totalProjected)} muted={`${forecast.horizonHours} horas base`} tone="blue" />
-              <PerformanceProductionKpi title="Ajuste recente" value={`${forecast.recentAdjustment.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}x`} muted="hora • últimos dias" tone="orange" />
+              <PerformanceProductionKpi title="Ajuste recente" value={`${forecast.recentAdjustment.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}x`} muted="sinal das últimas 3/6/12h" tone="orange" />
               <PerformanceProductionKpi title="Assertividade" value={formatPerformancePercent(forecast.accuracy)} muted="últimos 7 dias" tone="green" />
               <PerformanceProductionKpi title="Pico previsto" value={formatPerformanceNumber(forecast.peak.value)} muted={forecast.peak.label} tone="orange" />
             </div>
           </section>
 
-          <PerformanceChartCard title="Forecast de enqueue" subtitle={`${forecastFilters.lob || "Todas as LOBs"} · histórico real e projeção por hora`}>
+          <PerformanceChartCard title="Forecast de enqueue" subtitle={`${forecastFilters.lob || "Todas as LOBs"} · 60% últimos 7 dias + 35% volume recente + 5% sazonalidade`}>
             {forecastLoading && !forecastPayload ? (
               <div className="grid h-[420px] place-items-center text-sm font-bold text-muted">Carregando forecast...</div>
             ) : (
@@ -12923,40 +13019,27 @@ function buildPerformanceForecast(trend: PerformanceProductionResponse["trend"],
     .sort((a, b) => a.date.getTime() - b.date.getTime());
   const horizonHours = Math.max(24, Math.min(24 * Math.round(horizonDays || 14), 24 * 21));
   const last = hourlyRows[hourlyRows.length - 1] ?? null;
-  const byHour = new Map<number, { sum: number; count: number }>();
-
-  for (const row of hourlyRows) {
-    const hour = row.date.getUTCHours();
-    const current = byHour.get(hour) ?? { sum: 0, count: 0 };
-    current.sum += Math.max(0, row.input || 0);
-    current.count += 1;
-    byHour.set(hour, current);
-  }
-
-  const avgForHour = (hour: number) => {
-    const current = byHour.get(hour);
-    return current?.count ? current.sum / current.count : 0;
-  };
+  const actuals = hourlyRows.map((row) => ({ date: row.date, timestamp: row.date.getTime(), input: Math.max(0, row.input || 0) }));
+  const positiveActuals = actuals.filter((row) => row.input > 0);
   const lastTime = last?.date.getTime() ?? Date.now();
-  const last24Rows = hourlyRows.filter((row) => row.date.getTime() > lastTime - 24 * 36e5 && row.date.getTime() <= lastTime);
-  const last24Actual = last24Rows.reduce((sum, row) => sum + Math.max(0, row.input || 0), 0);
-  const last24Baseline = last24Rows.reduce((sum, row) => sum + avgForHour(row.date.getUTCHours()), 0);
-  const recentAdjustment = last24Baseline > 0 ? Math.max(0.2, Math.min(2.5, last24Actual / last24Baseline)) : 1;
+  const recentAdjustment = performanceRecentRegimeAdjustment(positiveActuals, new Date(lastTime));
 
-  const validationRows = hourlyRows.filter((row) => row.date.getTime() > lastTime - 7 * 24 * 36e5 && row.date.getTime() <= lastTime);
-  const validationError = validationRows.length
-    ? validationRows.reduce((sum, row) => {
-      const expected = avgForHour(row.date.getUTCHours()) * recentAdjustment;
-      const actual = Math.max(0, row.input || 0);
-      const denominator = Math.max(actual, expected, 1);
-      return sum + Math.abs(actual - expected) / denominator;
-    }, 0) / validationRows.length
+  const validationCandidates = positiveActuals.filter((row) => row.timestamp > lastTime - 7 * 24 * 36e5 && row.timestamp <= lastTime);
+  const validation = validationCandidates.map((row) => {
+    const history = positiveActuals.filter((item) => item.timestamp < row.timestamp);
+    const forecast = history.length >= 24 ? performanceForecastValue(history, row.date, new Date(row.timestamp - 36e5)) : null;
+    return { ...row, forecast };
+  });
+  const validationWithForecast = validation.filter((row): row is typeof row & { forecast: number } => row.forecast !== null);
+  const validationError = validationWithForecast.length
+    ? validationWithForecast.reduce((sum, row) => sum + Math.abs(row.input - row.forecast) / Math.max(row.input, row.forecast, 1), 0) / validationWithForecast.length
     : 0;
   const accuracy = Math.max(0, Math.min(100, 100 - validationError * 100));
+  const historicalForecastByTime = new Map(validationWithForecast.map((row) => [row.timestamp, Math.round(row.forecast)]));
 
   const forecastPoints = Array.from({ length: horizonHours }, (_, index) => {
     const date = new Date(lastTime + (index + 1) * 36e5);
-    const value = Math.round(avgForHour(date.getUTCHours()) * recentAdjustment);
+    const value = Math.round(performanceForecastValue(positiveActuals, date, new Date(lastTime)));
     return {
       key: `${date.toISOString().slice(0, 13)}:00`,
       label: formatPerformanceForecastHourLabel(date),
@@ -12981,6 +13064,29 @@ function buildPerformanceForecast(trend: PerformanceProductionResponse["trend"],
   const totalProjected = forecastPoints.reduce((sum, row) => sum + (row.forecast || 0), 0);
   const peak = forecastPoints.reduce((best, row) => (row.forecast || 0) > best.value ? { value: row.forecast || 0, label: row.label } : best, { value: 0, label: "-" });
   const projectedUntil = forecastPoints[forecastPoints.length - 1];
+  const exportRows = [
+    ...actuals.map((row) => {
+      const historicalForecast = historicalForecastByTime.get(row.date.getTime()) ?? null;
+      return {
+        Tipo: "Real",
+        "Data e hora": formatPerformanceForecastHourLabel(row.date),
+        Timestamp: row.date.toISOString(),
+        Real: row.input,
+        Forecast: historicalForecast,
+        "Desvio absoluto": historicalForecast === null ? null : row.input - historicalForecast,
+        "Desvio (%)": historicalForecast ? (row.input - historicalForecast) / historicalForecast : null
+      };
+    }),
+    ...forecastPoints.map((row) => ({
+      Tipo: "Projetado",
+      "Data e hora": row.label,
+      Timestamp: new Date(row.key.replace(" ", "T")).toISOString(),
+      Real: null,
+      Forecast: row.forecast,
+      "Desvio absoluto": null,
+      "Desvio (%)": null
+    }))
+  ];
 
   return {
     chart,
@@ -12990,9 +13096,68 @@ function buildPerformanceForecast(trend: PerformanceProductionResponse["trend"],
     recentAdjustment,
     accuracy,
     peak,
+    exportRows,
     lastRealLabel: last?.label ?? "-",
     projectedUntilLabel: projectedUntil?.label ?? "-"
   };
+}
+
+type PerformanceForecastActual = { date: Date; timestamp: number; input: number };
+
+function performanceForecastValue(actuals: PerformanceForecastActual[], targetDate: Date, referenceDate: Date) {
+  const referenceTime = referenceDate.getTime();
+  const training = actuals.filter((row) => row.timestamp <= referenceTime && row.input > 0);
+  if (!training.length) return 0;
+  const targetHour = targetDate.getUTCHours();
+  const targetDay = targetDate.getUTCDay();
+  const sevenDaySameHour = training.filter((row) => row.date.getUTCHours() === targetHour && row.timestamp > referenceTime - 7 * 24 * 36e5);
+  const olderSeasonalSlot = training.filter((row) => row.date.getUTCHours() === targetHour && row.date.getUTCDay() === targetDay && row.timestamp <= referenceTime - 7 * 24 * 36e5);
+  const sevenDayProfile = performanceWeightedForecastAverage(sevenDaySameHour, referenceDate, 3.5)
+    || performanceWeightedForecastAverage(training.filter((row) => row.timestamp > referenceTime - 7 * 24 * 36e5), referenceDate, 3.5);
+  const olderSeasonalProfile = performanceWeightedForecastAverage(olderSeasonalSlot, referenceDate, 21) || sevenDayProfile;
+  const recentProjected = sevenDayProfile * performanceRecentRegimeAdjustment(training, referenceDate);
+  return Math.max(0, sevenDayProfile * 0.6 + recentProjected * 0.35 + olderSeasonalProfile * 0.05);
+}
+
+function performanceRecentRegimeAdjustment(actuals: PerformanceForecastActual[], referenceDate: Date) {
+  const recentRatios = performanceRecentForecastRatios(actuals, referenceDate, 3);
+  const slowerRatios = performanceRecentForecastRatios(actuals, referenceDate, 12);
+  const recent = performanceWeightedForecastRatio(recentRatios);
+  const slower = performanceWeightedForecastRatio(slowerRatios);
+  const blended = recentRatios.length ? recent * 0.7 + slower * 0.3 : slower;
+  return Math.max(0.5, Math.min(2.5, blended || 1));
+}
+
+function performanceRecentForecastRatios(actuals: PerformanceForecastActual[], referenceDate: Date, hours: number) {
+  const referenceTime = referenceDate.getTime();
+  return actuals
+    .filter((row) => row.timestamp <= referenceTime && row.timestamp > referenceTime - hours * 36e5)
+    .map((row) => {
+      const history = actuals.filter((item) => item.timestamp < row.timestamp && item.timestamp >= row.timestamp - 7 * 24 * 36e5 && item.date.getUTCHours() === row.date.getUTCHours());
+      const expected = performanceWeightedForecastAverage(history, new Date(row.timestamp - 36e5), 3.5);
+      const ageHours = Math.max(0, (referenceTime - row.timestamp) / 36e5);
+      return expected > 0 ? { value: row.input / expected, weight: Math.exp(-ageHours / 3) } : null;
+    })
+    .filter((row): row is { value: number; weight: number } => Boolean(row));
+}
+
+function performanceWeightedForecastRatio(ratios: Array<{ value: number; weight: number }>) {
+  const totalWeight = ratios.reduce((sum, row) => sum + row.weight, 0);
+  return totalWeight ? ratios.reduce((sum, row) => sum + row.value * row.weight, 0) / totalWeight : 1;
+}
+
+function performanceWeightedForecastAverage(rows: PerformanceForecastActual[], referenceDate: Date, halfLifeDays: number) {
+  if (!rows.length) return 0;
+  const halfLifeMs = Math.max(1, halfLifeDays) * 24 * 36e5;
+  let total = 0;
+  let weight = 0;
+  for (const row of rows) {
+    const age = Math.max(0, referenceDate.getTime() - row.timestamp);
+    const currentWeight = Math.exp(-Math.LN2 * age / halfLifeMs);
+    total += row.input * currentWeight;
+    weight += currentWeight;
+  }
+  return weight ? total / weight : 0;
 }
 
 function parsePerformanceHourlyKey(key: string) {
@@ -18245,7 +18410,7 @@ export function SettingsPage() {
   const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [settingsMessage, setSettingsMessage] = useState("");
   const [settingsError, setSettingsError] = useState(false);
-  const adminSections = ["Usuários", "Perfis", "LOBs", "Times", "Supervisores", "Turnos", "Cargos/Funções", "Tipos de solicitação", "SLAs", "Regras de aprovação", "Regras de cobertura", "Regras de tokens", "Configurações gerais"];
+  const adminSections = ["Usuários", "Perfis", "LOBs", "Times", "Supervisores", "Turnos", "Cargos/Funções", "Skills", "Tipos de solicitação", "SLAs", "Regras de aprovação", "Regras de cobertura", "Regras de tokens", "Configurações gerais"];
   const [activeSection, setActiveSection] = useState(adminSections[0]);
   const [userDraft, setUserDraft] = useState({ id: "", name: "", email: "", roleName: "COLABORADOR", status: "ACTIVE", employeeId: "", password: "" });
   const [roleDraft, setRoleDraft] = useState({ id: "", name: "", label: "", description: "", status: "ACTIVE" as "ACTIVE" | "INACTIVE" });
@@ -18255,6 +18420,7 @@ export function SettingsPage() {
   const [shiftDraft, setShiftDraft] = useState({ id: "", name: "", startsAt: "08:00", endsAt: "16:00", color: "#2563EB" });
   const [requestTypeDraft, setRequestTypeDraft] = useState({ id: "", name: "", area: "Operação", slaHours: "24", requiresApproval: true, status: "ACTIVE" as "ACTIVE" | "INACTIVE" });
   const [roleTitleDraft, setRoleTitleDraft] = useState({ previousName: "", name: "", status: "ACTIVE" as "ACTIVE" | "INACTIVE" });
+  const [skillConfigDraft, setSkillConfigDraft] = useState({ id: "", name: "", description: "", color: "#2563EB", status: "ACTIVE" as "ACTIVE" | "INACTIVE" });
   const [ruleDraft, setRuleDraft] = useState({ id: "", name: "", requestType: "", priority: "Média", hours: "24", role: "WFM", lob: "ALL", shift: "", staffRequired: "1", points: "1", status: "ACTIVE" as "ACTIVE" | "INACTIVE" });
   const [generalDraft, setGeneralDraft] = useState<Record<string, unknown>>({});
   const [defaultMonthDraft, setDefaultMonthDraft] = useState(() => currentOperationalMonthInput());
@@ -18288,6 +18454,7 @@ export function SettingsPage() {
       setSupervisorDraft({ supervisorId: "", teamId: "", employeeId: "" });
       setShiftDraft({ id: "", name: "", startsAt: "08:00", endsAt: "16:00", color: "#2563EB" });
       setRoleTitleDraft({ previousName: "", name: "", status: "ACTIVE" });
+      setSkillConfigDraft({ id: "", name: "", description: "", color: "#2563EB", status: "ACTIVE" });
       setRequestTypeDraft({ id: "", name: "", area: "Operação", slaHours: "24", requiresApproval: true, status: "ACTIVE" });
       setUserDraft({ id: "", name: "", email: "", roleName: "COLABORADOR", status: "ACTIVE", employeeId: "", password: "" });
       setRuleDraft({ id: "", name: "", requestType: "", priority: "Média", hours: "24", role: "WFM", lob: "ALL", shift: "", staffRequired: "1", points: "1", status: "ACTIVE" });
@@ -18587,6 +18754,36 @@ export function SettingsPage() {
               ) : <EmptyState title="Nenhum cargo configurado" description="Cadastre cargos operacionais para uso no Mapa e cadastros." />}
             </Panel>
           </div> : null}
+
+          {activeSection === "Skills" ? (
+            <Panel title="Catálogo de skills">
+              <div className="mb-4 grid gap-3 md:grid-cols-[minmax(180px,1fr)_minmax(220px,2fr)_90px_120px_auto]">
+                <input value={skillConfigDraft.name} onChange={(event) => setSkillConfigDraft({ ...skillConfigDraft, name: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Nome da skill" />
+                <input value={skillConfigDraft.description} onChange={(event) => setSkillConfigDraft({ ...skillConfigDraft, description: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Descrição opcional" />
+                <input type="color" value={skillConfigDraft.color} onChange={(event) => setSkillConfigDraft({ ...skillConfigDraft, color: event.target.value })} className="h-10 w-full rounded-lg border border-border px-2" title="Cor da badge" />
+                <select value={skillConfigDraft.status} onChange={(event) => setSkillConfigDraft({ ...skillConfigDraft, status: event.target.value as "ACTIVE" | "INACTIVE" })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"><option value="ACTIVE">Ativa</option><option value="INACTIVE">Inativa</option></select>
+                <button disabled={savingSettings || !skillConfigDraft.name.trim()} onClick={() => void saveSetting({ type: "skill", ...skillConfigDraft }, skillConfigDraft.id ? "Skill atualizada." : "Skill criada.")} className="rounded-lg bg-blue-600 px-4 text-sm font-bold text-white disabled:opacity-60">{skillConfigDraft.id ? "Salvar" : "Criar"}</button>
+              </div>
+              <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-800">
+                Cada colaborador pode ter várias skills, mas somente uma principal. A principal continua sendo usada por Billing, permissões e relatórios legados.
+              </div>
+              {settings?.skills?.length ? (
+                <SimpleTable
+                  columns={["Badge", "Skill", "Descrição", "Status", "Ações"]}
+                  rows={settings.skills.map((skill) => [
+                    <span key={`${skill.id}-badge`} className="inline-flex rounded-full border px-3 py-1 text-xs font-black" style={{ color: skill.color, borderColor: `${skill.color}55`, backgroundColor: `${skill.color}12` }}>{skill.name}</span>,
+                    skill.name,
+                    skill.description || "-",
+                    <StatusBadge key={`${skill.id}-status`} status={skill.status === "INACTIVE" ? "Inativa" : "Ativa"} />,
+                    <div key={`${skill.id}-actions`} className="flex flex-wrap gap-2">
+                      <button onClick={() => setSkillConfigDraft({ id: skill.id, name: skill.name, description: skill.description ?? "", color: skill.color, status: skill.status })} className="rounded-lg border border-border px-3 py-1 text-xs font-bold">Editar</button>
+                      <button onClick={() => void saveSetting({ type: "skill", ...skill, status: skill.status === "INACTIVE" ? "ACTIVE" : "INACTIVE" }, "Status da skill atualizado.")} className="rounded-lg border border-border px-3 py-1 text-xs font-bold">{skill.status === "INACTIVE" ? "Ativar" : "Inativar"}</button>
+                    </div>
+                  ])}
+                />
+              ) : <EmptyState title="Nenhuma skill cadastrada" description="Crie as skills operacionais e defina uma cor para cada badge." />}
+            </Panel>
+          ) : null}
 
           {activeSection === "Configurações gerais" ? (
             <Panel title="Parâmetros e permissões">

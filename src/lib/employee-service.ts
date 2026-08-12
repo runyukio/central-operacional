@@ -20,6 +20,10 @@ const employeeInclude = {
   team: true,
   shift: true,
   supervisor: true,
+  skillAssignments: {
+    include: { skill: true },
+    orderBy: [{ isPrimary: "desc" as const }, { skill: { name: "asc" as const } }]
+  },
   _count: { select: { supervisees: true } },
   equipments: true
 } satisfies Prisma.EmployeeProfileInclude;
@@ -39,6 +43,8 @@ export type EmployeeAdminUpdateInput = {
   shiftId?: string;
   contractType?: string;
   skill?: string;
+  skillIds?: string[];
+  primarySkillId?: string;
   wave?: string;
   admissionDate?: string;
   trainingStartDate?: string;
@@ -170,6 +176,7 @@ async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeList
               { user: { email: { contains: search, mode: "insensitive" as const } } },
               { roleTitle: { contains: search, mode: "insensitive" as const } },
               { skill: { contains: search, mode: "insensitive" as const } },
+              { skillAssignments: { some: { skill: { name: { contains: search, mode: "insensitive" as const } } } } },
               { wave: { contains: search, mode: "insensitive" as const } },
               { lob: { name: { contains: search, mode: "insensitive" as const } } },
               { supervisor: { fullName: { contains: search, mode: "insensitive" as const } } }
@@ -186,7 +193,7 @@ async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeList
       buildIdFilterWhere("shiftId", query.shiftId),
       buildContractTypeFilterWhere(query.contractType),
       buildNullableTextFilterWhere("roleTitle", query.roleTitle),
-      buildNullableTextFilterWhere("skill", query.skill),
+      buildEmployeeSkillFilterWhere(query.skill),
       buildNullableTextFilterWhere("wave", query.wave),
       query.role ? { user: { role: { name: query.role } } } : {}
     ].filter(hasWhereInput);
@@ -312,6 +319,10 @@ type LegacyEmployeeRow = {
   scheduleType: string;
   operationalStatus: string;
   skill: string | null;
+  skillAssignments: Array<{
+    isPrimary: boolean;
+    skill: { id: string; name: string; color: string; status: string };
+  }>;
   wave: string | null;
   lobId: string;
   lob: string;
@@ -341,6 +352,10 @@ type EmployeeSummaryRow = {
   scheduleType: string;
   operationalStatus: string;
   skill: string | null;
+  skillAssignments: Array<{
+    isPrimary: boolean;
+    skill: { id: string; name: string; color: string; status: string };
+  }>;
   wave: string | null;
   lobId: string;
   teamId: string;
@@ -370,6 +385,13 @@ const employeeSummarySelect = {
   scheduleType: true,
   operationalStatus: true,
   skill: true,
+  skillAssignments: {
+    select: {
+      isPrimary: true,
+      skill: { select: { id: true, name: true, color: true, status: true } }
+    },
+    orderBy: [{ isPrimary: "desc" as const }, { skill: { name: "asc" as const } }]
+  },
   wave: true,
   lobId: true,
   teamId: true,
@@ -469,7 +491,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     const adminOnlyFields: Array<keyof EmployeeAdminUpdateInput> = ["roleName"];
     const sensitivePeopleFields: Array<keyof EmployeeAdminUpdateInput> = ["fullName", "socialName", "email", "userStatus", "wbLogin", "primaryPhone", "city", "stateUf", "preferredSchedule", "contractType", "admissionDate", "trainingStartDate", "terminationDate", "terminationType", "terminationReason", "ethnicity", "sexualOrientation", "isPcd", "pcdDisabilityType", "pcdDisabilityOther", "firstJob", "hasTelemarketingExperience", "telemarketingWhere", "cpf", "cnpj", "pixKey", "pixKeyType"];
     const operationalBindingFields: Array<keyof EmployeeAdminUpdateInput> = ["lobId", "supervisorId", "shiftId", "siteOperation"];
-    const profileOperationalFields: Array<keyof EmployeeAdminUpdateInput> = ["roleTitle", "operationalStatus", "internalNotes", "skill", "wave", "nestingStartDate", "goLiveDate", "workStartTime", "workEndTime"];
+    const profileOperationalFields: Array<keyof EmployeeAdminUpdateInput> = ["roleTitle", "operationalStatus", "internalNotes", "skill", "skillIds", "primarySkillId", "wave", "nestingStartDate", "goLiveDate", "workStartTime", "workEndTime"];
     if (!actorCanManageRoles && adminOnlyFields.some((field) => input[field] !== undefined)) return createPermissionError("Apenas Admin pode alterar role/permissão.");
     if (!canEditPeopleData && sensitivePeopleFields.some((field) => input[field] !== undefined)) return createPermissionError("Você não tem permissão para editar dados cadastrais/contratuais.");
     if (!canEditOperational && operationalBindingFields.some((field) => input[field] !== undefined)) return createPermissionError("Você não tem permissão para editar vínculos operacionais.");
@@ -522,6 +544,8 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     const nextTelemarketingWhere = cleanNullable(input.telemarketingWhere);
     const nextInternalNotes = cleanNullable(input.internalNotes);
     const nextSkill = cleanNullable(input.skill);
+    const nextSkillIds = input.skillIds === undefined ? undefined : Array.from(new Set(input.skillIds.map((value) => clean(value)).filter((value): value is string => Boolean(value))));
+    const nextPrimarySkillId = input.primarySkillId === undefined ? undefined : clean(input.primarySkillId);
     const nextWave = cleanNullable(input.wave);
     const nextPrimaryPhone = cleanNullable(input.primaryPhone);
     const nextCity = cleanNullable(input.city);
@@ -565,6 +589,18 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     if ((input.isPcd !== undefined || input.pcdDisabilityType !== undefined) && effectiveIsPcd === "Sim" && !effectivePcdDisabilityType) return createValidationError({ pcdDisabilityType: "Tipo de deficiência é obrigatório quando PCD for Sim." });
     if ((input.isPcd !== undefined || input.pcdDisabilityType !== undefined || input.pcdDisabilityOther !== undefined) && effectiveIsPcd === "Sim" && effectivePcdDisabilityType === "Outra" && !effectivePcdDisabilityOther) return createValidationError({ pcdDisabilityOther: "Especifique o tipo de deficiência." });
     if (nextSupervisorId && nextSupervisorId === employee.id) return createValidationError({ supervisorId: "O colaborador não pode ser supervisor de si mesmo." }, "O colaborador não pode ser supervisor de si mesmo.");
+
+    let selectedSkills: Array<{ id: string; name: string }> | undefined;
+    let resolvedPrimarySkillId: string | null | undefined;
+    if (nextSkillIds !== undefined) {
+      selectedSkills = nextSkillIds.length
+        ? await prisma.operationalSkill.findMany({ where: { id: { in: nextSkillIds } }, select: { id: true, name: true } })
+        : [];
+      if (selectedSkills.length !== nextSkillIds.length) return createValidationError({ skillIds: "Uma ou mais skills selecionadas não existem." });
+      resolvedPrimarySkillId = nextSkillIds.length ? (nextPrimarySkillId && nextSkillIds.includes(nextPrimarySkillId) ? nextPrimarySkillId : nextSkillIds[0]) : null;
+    } else if (nextPrimarySkillId !== undefined) {
+      return createValidationError({ primarySkillId: "Selecione as skills antes de definir a principal." });
+    }
 
     let targetRoleId: string | undefined;
     if (nextRoleName) {
@@ -660,11 +696,21 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
           ...(input.telemarketingWhere !== undefined ? { telemarketingWhere: nextTelemarketingWhere } : {}),
           ...(input.siteOperation !== undefined ? { siteOperation: nextSiteOperation } : {}),
           ...(input.internalNotes !== undefined ? { internalNotes: nextInternalNotes } : {}),
-          ...(input.skill !== undefined ? { skill: nextSkill } : {}),
+          ...(nextSkillIds !== undefined
+            ? { skill: selectedSkills?.find((item) => item.id === resolvedPrimarySkillId)?.name ?? null }
+            : input.skill !== undefined ? { skill: nextSkill } : {}),
           ...(input.wave !== undefined ? { wave: nextWave } : {})
         },
         include: { ...employeeInclude }
       });
+      if (nextSkillIds !== undefined) {
+        await tx.employeeSkillAssignment.deleteMany({ where: { employeeId: employee.id } });
+        if (nextSkillIds.length) {
+          await tx.employeeSkillAssignment.createMany({
+            data: nextSkillIds.map((skillId) => ({ employeeId: employee.id, skillId, isPrimary: skillId === resolvedPrimarySkillId }))
+          });
+        }
+      }
       if (input.cpf !== undefined || input.cnpj !== undefined || pixValidation?.valid) {
         const sensitive = await tx.employeeSensitiveData.findUnique({
           where: { employeeId: employee.id },
@@ -735,7 +781,9 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
           }
         }).catch(() => undefined);
       }
-      return record;
+      return nextSkillIds !== undefined
+        ? tx.employeeProfile.findUniqueOrThrow({ where: { id: record.id }, include: { ...employeeInclude } })
+        : record;
     });
 
     const sensitive = await prisma.employeeSensitiveData.findUnique({ where: { employeeId: updated.id } });
@@ -977,6 +1025,21 @@ export async function deleteOperationalEmployee(actor: Actor, input: EmployeeDel
 
 type EmployeeWithRelations = Prisma.EmployeeProfileGetPayload<{ include: typeof employeeInclude }>;
 
+function mapEmployeeSkills(
+  assignments: Array<{ isPrimary: boolean; skill: { id: string; name: string; color: string; status?: string } }>,
+  legacySkill?: string | null
+) {
+  const mapped = assignments.map((assignment) => ({
+    id: assignment.skill.id,
+    name: assignment.skill.name,
+    color: assignment.skill.color,
+    isPrimary: assignment.isPrimary,
+    status: assignment.skill.status === "INACTIVE" ? "INACTIVE" as const : "ACTIVE" as const
+  }));
+  if (mapped.length || !legacySkill?.trim()) return mapped;
+  return [{ id: `legacy:${legacySkill}`, name: legacySkill, color: "#2563EB", isPrimary: true, status: "ACTIVE" as const }];
+}
+
 function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: EmployeeSensitiveData) {
   const canViewSensitive = canViewEmployeeSensitiveData({ role }, { roleTitle: employee.roleTitle, email: employee.user?.email });
   const canViewPix = canViewSensitive;
@@ -1000,6 +1063,7 @@ function mapEmployee(employee: EmployeeWithRelations, role: string, sensitive?: 
     supervisorId: employee.supervisorId ?? "",
     directReports: employee._count.supervisees,
     skill: employee.skill ?? "",
+    skills: mapEmployeeSkills(employee.skillAssignments, employee.skill),
     wave: employee.wave ?? "",
     shift: cleanShiftName(employee.shift.name) || "Sem turno",
     shiftId: employee.shiftId,
@@ -1106,6 +1170,7 @@ function mapLegacyEmployee(employee: LegacyEmployeeRow, role: string) {
     supervisorId: employee.supervisorId ?? "",
     directReports: 0,
     skill: employee.skill ?? "",
+    skills: mapEmployeeSkills([], employee.skill),
     wave: employee.wave ?? "",
     shift: cleanShiftName(employee.shift) || "Sem turno",
     shiftId: employee.shiftId,
@@ -1190,6 +1255,7 @@ function mapEmployeeSummary(employee: EmployeeSummaryRow, role: string) {
     supervisorId: employee.supervisorId ?? "",
     directReports: employee._count.supervisees,
     skill: employee.skill ?? "",
+    skills: mapEmployeeSkills(employee.skillAssignments, employee.skill),
     wave: employee.wave ?? "",
     shift: cleanShiftName(employee.shift.name) || "Sem turno",
     shiftId: employee.shiftId,
@@ -1349,11 +1415,10 @@ async function resolveEmployeeBatchWb(input?: EmployeeListQuery["wbLogins"]) {
 
 async function getEmployeeFilterOptions(where: Prisma.EmployeeProfileWhereInput) {
   const [skillRows, waveRows, roleTitleRows, statusRows] = await Promise.all([
-    prisma.employeeProfile.findMany({
-      where: { ...where, skill: { not: null } },
-      distinct: ["skill"],
-      select: { skill: true },
-      orderBy: { skill: "asc" }
+    prisma.operationalSkill.findMany({
+      where: { status: "ACTIVE" },
+      select: { name: true },
+      orderBy: { name: "asc" }
     }),
     prisma.employeeProfile.findMany({
       where: { ...where, wave: { not: null } },
@@ -1381,7 +1446,7 @@ async function getEmployeeFilterOptions(where: Prisma.EmployeeProfileWhereInput)
       .filter(isSelectableEmployeeStatusOption)
   ])).sort(employeeStatusSort);
   return {
-    skills: skillRows.map((row) => row.skill).filter((value): value is string => Boolean(value?.trim())),
+    skills: skillRows.map((row) => row.name).filter((value): value is string => Boolean(value?.trim())),
     waves: waveRows.map((row) => row.wave).filter((value): value is string => Boolean(value?.trim())),
     roleTitles: roleTitleRows.map((row) => row.roleTitle).filter((value): value is string => Boolean(value?.trim())),
     statuses
@@ -1414,6 +1479,21 @@ function buildNullableTextFilterWhere(field: "skill" | "wave" | "roleTitle", val
     }
   });
   return { OR: clauses };
+}
+
+function buildEmployeeSkillFilterWhere(value: unknown): Prisma.EmployeeProfileWhereInput {
+  const values = cleanFilterValues(value);
+  if (!values.length) return {};
+  return {
+    OR: values.map((item) => isNoneFilter(item)
+      ? { AND: [{ OR: [{ skill: null }, { skill: "" }] }, { skillAssignments: { none: {} } }] }
+      : {
+          OR: [
+            { skill: { equals: item, mode: "insensitive" as const } },
+            { skillAssignments: { some: { skill: { name: { equals: item, mode: "insensitive" as const } } } } }
+          ]
+        })
+  };
 }
 
 function buildContractTypeFilterWhere(value: unknown): Prisma.EmployeeProfileWhereInput {
