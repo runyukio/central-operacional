@@ -46,7 +46,7 @@ import { deletePrivateObject, downloadPrivateObject, isStorageConfigured, upload
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
 export const BILLING_START_MONTH = "2026-06";
-export const DEFAULT_BILLING_REFERENCE_MONTH = "2026-07";
+export const DEFAULT_BILLING_REFERENCE_MONTH = "2026-08";
 
 const BILLING_PJ_ONLY_MESSAGE = "Billing disponível apenas para colaboradores PJ.";
 const BILLING_REQUEST_TYPE_NAME = "Ajuste de Invoice";

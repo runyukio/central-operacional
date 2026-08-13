@@ -192,7 +192,7 @@ function billingInitialTab(): TabKey {
 }
 
 export function BillingPage() {
-  const [referenceMonth, setReferenceMonth] = useState(billingQueryParam("referenceMonth") || "2026-07");
+  const [referenceMonth, setReferenceMonth] = useState(billingQueryParam("referenceMonth") || "2026-08");
   const [employeeId] = useState(billingQueryParam("employeeId"));
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
