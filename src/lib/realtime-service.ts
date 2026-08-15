@@ -19,6 +19,7 @@ import { resolveQueueReference } from "@/lib/queue-dictionary";
 import { getQueueReportMetadataById } from "@/lib/queue-report-metadata";
 import { getRealtimeHoursOperationalPresence, type RealtimeHoursPresenceStatus } from "@/lib/realtime-hours-service";
 import { matchesRealtimeEmployeeStatus } from "@/lib/realtime-employee-status";
+import { buildRealtimePresenceFallbackRows } from "@/lib/realtime-presence-fallback";
 import { shiftCategoryName } from "@/lib/shift-display";
 import { isWorkHoursAllowedForSchedule, parseWorkHoursToMinutes } from "@/lib/work-hours-rules";
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
@@ -2808,7 +2809,15 @@ async function buildAgentRealtimeViewFromSummaryRows(
     })
     .sort((a, b) => b.current.submit - a.current.submit || a.displayName.localeCompare(b.displayName));
   const presenceContext = await loadAgentPresenceContext(baseRows, selectedCycle);
-  const rows = baseRows.map((row) => ({
+  const rowsWithPresenceFallback = [
+    ...baseRows,
+    ...buildRealtimePresenceFallbackRows({
+      existingRows: baseRows,
+      candidates: presenceContext.captureRows,
+      selectedCycle
+    })
+  ];
+  const rows = rowsWithPresenceFallback.map((row) => ({
     ...row,
     presenceStatus: resolveAgentPresenceStatus(row, presenceContext),
     isScheduled: isAgentScheduledForPresence(row, presenceContext),
@@ -3137,7 +3146,15 @@ async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOpt
     .sort((a, b) => b.current.submit - a.current.submit || a.displayName.localeCompare(b.displayName));
 
   const presenceContext = await loadAgentPresenceContext(baseRows, selectedCycle);
-  const rows = baseRows.map((row) => ({
+  const rowsWithPresenceFallback = [
+    ...baseRows,
+    ...buildRealtimePresenceFallbackRows({
+      existingRows: baseRows,
+      candidates: presenceContext.captureRows,
+      selectedCycle
+    })
+  ];
+  const rows = rowsWithPresenceFallback.map((row) => ({
     ...row,
     presenceStatus: resolveAgentPresenceStatus(row, presenceContext),
     isScheduled: isAgentScheduledForPresence(row, presenceContext),
@@ -3190,7 +3207,8 @@ async function loadAgentPresenceContext(rows: AgentCycleRow[], selectedCycle: st
   return {
     scheduleByEmployeeId,
     presenceByEmployeeId,
-    presenceByWbLogin
+    presenceByWbLogin,
+    captureRows: capturePresence.rows
   };
 }
 
