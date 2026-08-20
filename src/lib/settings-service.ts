@@ -91,7 +91,7 @@ const permissionSeeds = [
   ["can_mark_present", "Marcar presença"],
   ["can_approve_day_off_supervisor_step", "Aprovar folga como supervisor"],
   ["can_approve_day_off_wfm_step", "Aprovar folga como WFM"],
-  ["can_view_employee_map", "Visualizar mapa de funcionários"],
+  ["can_view_employee_map", "Visualizar mapa de parceiros"],
   ["can_edit_employee_data", "Editar dados de parceiro"],
   ["can_view_sensitive_employee_data", "Ver dados sensíveis"],
   ["can_export_employee_data", "Exportar parceiros"],

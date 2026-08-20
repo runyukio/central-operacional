@@ -2154,7 +2154,7 @@ export function EmployeeRegistrationPublicPage() {
           </div>
           <div className="p-6">
             <div className="mb-5 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
-              Dados sensíveis são protegidos por permissão e só aparecem no Mapa de Funcionários para perfis autorizados.
+              Dados sensíveis são protegidos por permissão e só aparecem no Mapa de Parceiros para perfis autorizados.
             </div>
             {sections[step]}
             {error ? (
@@ -5500,7 +5500,7 @@ export function RegistrationApprovalsPage() {
       setItems((current) => current.map((item) => (item.id === payload.data.id ? payload.data : item)));
       setSelected(payload.data);
       setMessageTone("success");
-      setMessage(action === "approve" ? "Cadastro aprovado, usuário liberado e Mapa de Funcionários atualizado." : action === "reject" ? "Cadastro recusado com justificativa registrada." : "Ajuste solicitado ao parceiro.");
+      setMessage(action === "approve" ? "Cadastro aprovado, usuário liberado e Mapa de Parceiros atualizado." : action === "reject" ? "Cadastro recusado com justificativa registrada." : "Ajuste solicitado ao parceiro.");
     } catch (err) {
       setMessageTone("error");
       if (err instanceof ApiRequestError) setReviewFieldErrors(err.fields ?? {});
@@ -5765,7 +5765,7 @@ export function RegistrationApprovalsPage() {
                   <MetricPill value={employeeImportPreview.errorRows} label="Linhas com erro" />
                   <MetricPill value={employeeImportPreview.warningRows ?? employeeImportPreview.rows.filter((row) => !row.errors.length && row.warnings.length).length} label="Linhas com alerta" />
                   <MetricPill value={employeeImportPreview.usuariosCriar ?? employeeImportPreview.rows.filter((row) => !row.errors.length && row.preview.createUser).length} label="Usuários a criar" />
-                  <MetricPill value={employeeImportPreview.colaboradoresCriar ?? employeeImportPreview.rows.filter((row) => !row.errors.length && row.action === "criar").length} label="Funcionários a criar" />
+                  <MetricPill value={employeeImportPreview.colaboradoresCriar ?? employeeImportPreview.rows.filter((row) => !row.errors.length && row.action === "criar").length} label="Parceiros a criar" />
                   <MetricPill value={employeeImportPreview.registrosAtualizar ?? employeeImportPreview.rows.filter((row) => !row.errors.length && row.action === "atualizar").length} label="Atualizações" />
                   <MetricPill value={employeeImportPreview.duplicidades ?? employeeImportPreview.rows.filter((row) => [...row.errors, ...row.warnings].some((message) => /duplic|existente|uso/i.test(message))).length} label="Duplicidades" />
                 </div>
@@ -10314,7 +10314,7 @@ export function EmployeeMapPage() {
 
   return (
     <div>
-      <PageHeader title="Funcionários" description="Base operacional de parceiros, vínculos e informações cadastrais." icon={UsersRound} actions={<button onClick={exportEmployeesXlsx} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Exportar XLSX</button>} />
+      <PageHeader title="Parceiros" description="Base operacional de parceiros, vínculos e informações cadastrais." icon={UsersRound} actions={<button onClick={exportEmployeesXlsx} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Exportar XLSX</button>} />
       {employeeMessage ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{employeeMessage}</div> : null}
       <div className="space-y-5">
         <div className="space-y-5">
@@ -10370,7 +10370,7 @@ export function EmployeeMapPage() {
             <MetricPill value={employeeContractSummary.clt} label="CLT" />
             <MetricPill value={employeeContractSummary.pj} label="PJ" />
           </div>
-          <Panel title="Funcionários">
+          <Panel title="Parceiros">
             {employeeLoading ? (
               <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm font-bold text-blue-700">Carregando resumo dos parceiros...</div>
             ) : employeeRows.length ? (
@@ -11016,7 +11016,7 @@ export function HierarchyPage() {
             ) : payload?.tree.length ? (
               <div className="space-y-2">{payload.tree.map(renderHierarchyNode)}</div>
             ) : (
-              <EmptyState title="Nenhum vínculo encontrado" description="Ajuste os filtros ou cadastre o supervisor no Mapa de Funcionários." />
+              <EmptyState title="Nenhum vínculo encontrado" description="Ajuste os filtros ou cadastre o supervisor no Mapa de Parceiros." />
             )}
           </Panel>
         </div>
@@ -11083,7 +11083,7 @@ export function HierarchyPage() {
                     <p className="text-sm text-muted">Nenhum parceiro abaixo deste nível.</p>
                   )}
                 </ProfileSection>
-                <a href={`/mapa-funcionarios`} className="block rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-center text-sm font-bold text-blue-700">Ver no Mapa de Funcionários</a>
+                <a href={`/mapa-funcionarios`} className="block rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-center text-sm font-bold text-blue-700">Ver no Mapa de Parceiros</a>
               </div>
             ) : (
               <EmptyState title="Nenhum parceiro selecionado" description="Clique em um nome na árvore para ver diretos e indiretos." />

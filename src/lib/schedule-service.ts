@@ -1059,7 +1059,7 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
     mark("sessionLookupMs");
     if (!user) return { error: "Usuário ativo não encontrado para justificar ocorrência." };
-    if (!user.employeeProfile) return { error: "Supervisor sem perfil de funcionário vinculado." };
+    if (!user.employeeProfile) return { error: "Supervisor sem perfil de parceiro vinculado." };
     supervisorWbLogin = user.employeeProfile.wbLogin;
 
     const date = parseDateOnly(input.date);
@@ -2676,7 +2676,7 @@ async function validateImportRowsInDb(rows: Array<Record<string, unknown>>): Pro
     if (text(row.lob) && !lob) errors.push(`LOB ${text(row.lob)} não cadastrada.`);
 
     const employee = wbLogin ? employeeMap.get(wbLogin) : null;
-    if (wbLogin && !employee) errors.push("WB/Login não encontrado na base de funcionários.");
+    if (wbLogin && !employee) errors.push("WB/Login não encontrado na base de parceiros.");
     if (employee && text(row.lob) && normalizeImportKey(text(row.lob)) !== normalizeImportKey(employee.lob.name)) warnings.push("LOB no arquivo diferente da LOB do parceiro.");
     if (employee && text(row.supervisor_wb_login) && normalizeImportKey(text(row.supervisor_wb_login)) !== normalizeImportKey(employee.supervisor?.wbLogin ?? "")) warnings.push("Supervisor no arquivo diferente do supervisor do parceiro.");
     if (key && (duplicateKeys.get(key) ?? 0) > 1) errors.push("Linha duplicada no arquivo para o mesmo WB/Login + data.");

@@ -933,7 +933,7 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
 
     const employee = normalizedWbLogin ? employeeMap.get(normalizedWbLogin) : null;
     const eligibleEmployee = employee && !employee.deletedAt ? employee : null;
-    if (wbLogin && !employee) errors.push("WB/Login não encontrado na base de funcionários.");
+    if (wbLogin && !employee) errors.push("WB/Login não encontrado na base de parceiros.");
     if (employee?.deletedAt) errors.push("Parceiro removido/deletado não pode receber horas.");
     if (eligibleEmployee && isInactiveEmployeeStatusForWorkHours(eligibleEmployee.operationalStatus)) warnings.push("Parceiro desligado/inativo encontrado. Horas permitidas para fins de invoice.");
 
@@ -987,7 +987,7 @@ function toImportPreview(rows: Array<Record<string, unknown>>, validation: Valid
   const missingEmployeeRows = validation.filter((row) => row.normalizedWbLogin && !row.employeeId);
   return {
     message: uniqueNormalizedWbLogins.length && !foundNormalizedWbLogins.length
-      ? "Nenhum WB/Login do arquivo foi encontrado no banco. Verifique se a base de funcionários foi importada no ambiente atual."
+      ? "Nenhum WB/Login do arquivo foi encontrado no banco. Verifique se a base de parceiros foi importada no ambiente atual."
       : undefined,
     totalRows: rows.length,
     validRows: validation.filter((row) => !row.errors.length).length,

@@ -273,7 +273,7 @@ export async function getOperationalEmployeeDetail(actor: Actor, id: string) {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
     if (!user) return createPermissionError("Usuário não autenticado.");
     const role = normalizeRole(actor.role);
-    if (!canAccessEmployeeMap({ role: actor.role, status: user.status })) return createPermissionError("Você não tem permissão para acessar o Mapa de Funcionários.");
+    if (!canAccessEmployeeMap({ role: actor.role, status: user.status })) return createPermissionError("Você não tem permissão para acessar o Mapa de Parceiros.");
 
     const employee = await prisma.employeeProfile.findFirst({
       where: { id, deletedAt: null },
@@ -775,12 +775,12 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
             previousValue: {
               pixKeyType: previousPixKeyType,
               pixKeyMasked: maskPixKey(previousPixKey, previousPixKeyType),
-              source: "Mapa de Funcionários"
+              source: "Mapa de Parceiros"
             },
             newValue: {
               pixKeyType: pixValidation.pixKeyType,
               pixKeyMasked: maskPixKey(pixValidation.normalizedValue, pixValidation.pixKeyType),
-              source: "Mapa de Funcionários"
+              source: "Mapa de Parceiros"
             }
           }
         }).catch(() => undefined);
@@ -809,7 +809,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
 export async function exportOperationalEmployeesXlsxData(actor: Actor, filters: { query?: string | null; lob?: string[] | string | null; status?: string[] | string | null; supervisorId?: string[] | string | null; shiftId?: string[] | string | null; contractType?: string[] | string | null; roleTitle?: string[] | string | null; skill?: string[] | string | null; wave?: string[] | string | null }) {
   const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
   if (!user) return createPermissionError("Usuário não autenticado.");
-  if (!canAccessEmployeeMap({ role: actor.role, status: user.status })) return createPermissionError("Você não tem permissão para exportar o Mapa de Funcionários.");
+  if (!canAccessEmployeeMap({ role: actor.role, status: user.status })) return createPermissionError("Você não tem permissão para exportar o Mapa de Parceiros.");
 
   const role = normalizeRole(actor.role);
   const rowsResult = await listOperationalEmployees(actor, { summary: false, limit: 10000 });
@@ -851,7 +851,7 @@ export async function exportOperationalEmployeesXlsxData(actor: Actor, filters: 
       action: "EDICAO",
       entity: "EmployeeProfile",
       entityId: "employee-map",
-      reason: `Exportação XLSX do Mapa de Funcionários (${role})`,
+      reason: `Exportação XLSX do Mapa de Parceiros (${role})`,
       previousValue: {},
       newValue: {
         role,
@@ -867,8 +867,8 @@ export async function exportOperationalEmployeesXlsxData(actor: Actor, filters: 
   return {
     headers,
     rows: exportRows,
-    sheetName: "Funcionarios",
-    fileName: `funcionarios_${new Date().toISOString().slice(0, 10)}.xlsx`
+    sheetName: "Parceiros",
+    fileName: `parceiros_${new Date().toISOString().slice(0, 10)}.xlsx`
   };
 }
 

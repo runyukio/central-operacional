@@ -21,7 +21,7 @@ const ENGLISH_TRANSLATIONS = new Map<string, string>([
   ["Meu Cronograma", "My Schedule"],
   ["Cadastros", "Registrations"],
   ["Cronogramas", "Schedules"],
-  ["Mapa de Funcionários", "Employee Map"],
+  ["Mapa de Parceiros", "Partner Map"],
   ["Minhas Horas", "My Hours"],
   ["Horas Operacionais", "Operational Hours"],
   ["Esteiras", "Workflows"],
@@ -206,7 +206,6 @@ const ENGLISH_TRANSLATIONS = new Map<string, string>([
 
   ["Parceiro", "Partner"],
   ["Parceiros", "Partners"],
-  ["Funcionários", "Employees"],
   ["Agente", "Agent"],
   ["Agentes", "Agents"],
   ["Fila", "Queue"],

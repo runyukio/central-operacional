@@ -45,7 +45,7 @@ export const navSections: NavSection[] = [
       { label: "Meu Cronograma", href: "/minha-escala", icon: "CalendarDays", roles: personalRoles },
       { label: "Cadastros", href: "/cadastros", icon: "UserPlus", roles: rolesWithCapability("EMPLOYEE_EDIT") },
       { label: "Cronogramas", href: "/escalas", icon: "CalendarRange", roles: rolesWithCapability("SCHEDULE_VIEW") },
-      { label: "Mapa de Funcionários", href: "/mapa-funcionarios", icon: "Map", roles: rolesWithCapability("EMPLOYEE_MAP") }
+      { label: "Mapa de Parceiros", href: "/mapa-funcionarios", icon: "Map", roles: rolesWithCapability("EMPLOYEE_MAP") }
     ]
   },
   {

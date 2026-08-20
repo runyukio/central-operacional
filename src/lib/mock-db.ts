@@ -620,7 +620,7 @@ export function reviewEmployeeRegistration(
 
   const operationalData = input.operationalData ?? defaultOperationalData(record);
   const duplicateWb = db.employees.some((employee) => employee.wb === operationalData.wbLogin);
-  if (duplicateWb) return { error: "WB/Login já existe no Mapa de Funcionários." };
+  if (duplicateWb) return { error: "WB/Login já existe no Mapa de Parceiros." };
 
   const employee = {
     id: `EMP-${Date.now().toString().slice(-6)}`,
@@ -667,8 +667,8 @@ export function reviewEmployeeRegistration(
   record.createdUserEmail = record.email;
   record.createdEmployeeProfileId = employee.id;
   record.history.unshift({ at: timestamp(), actor: actor.name, action: "Cadastro aprovado e parceiro ativado", notes: input.reviewNotes });
-  createInternalNotification({ userEmail: record.email, title: "Cadastro aprovado", body: "Seu acesso foi liberado e seus dados já aparecem no Mapa de Funcionários.", type: "CADASTRO", href: "/minha-escala" });
-  addAudit(actor, "APROVAÇÃO", "EmployeeRegistrationRequest", record.id, "Cadastro aprovado e Mapa de Funcionários atualizado", before, { status: record.status, employee });
+  createInternalNotification({ userEmail: record.email, title: "Cadastro aprovado", body: "Seu acesso foi liberado e seus dados já aparecem no Mapa de Parceiros.", type: "CADASTRO", href: "/minha-escala" });
+  addAudit(actor, "APROVAÇÃO", "EmployeeRegistrationRequest", record.id, "Cadastro aprovado e Mapa de Parceiros atualizado", before, { status: record.status, employee });
   return { data: record, employee };
 }
 

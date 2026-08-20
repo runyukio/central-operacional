@@ -777,7 +777,7 @@ export async function upsertRealtimeHoursIdentityMapping(input: RealtimeHoursIde
   });
 
   if (!employee) {
-    return { success: false, error: "WB/Login não encontrado no Mapa de Funcionários.", message: "WB/Login não encontrado no Mapa de Funcionários.", status: 404 };
+    return { success: false, error: "WB/Login não encontrado no Mapa de Parceiros.", message: "WB/Login não encontrado no Mapa de Parceiros.", status: 404 };
   }
 
   const mapping = await prisma.$transaction(async (tx) => {
