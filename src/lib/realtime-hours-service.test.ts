@@ -122,7 +122,7 @@ test("ociosidade acima de quinze minutos nao contabiliza atividade", () => {
   assert.equal(activeDuration(segments), 0);
 });
 
-test("une atividade do mesmo colaborador em notebooks diferentes sem duplicar sobreposicao", () => {
+test("une atividade do mesmo parceiro em notebooks diferentes sem duplicar sobreposicao", () => {
   const segments = buildMergedTimelineSegments(
     [
       { ...point("2026-07-13T09:00:00.000Z", true), hostname: "NOTEBOOK-A", windowsUser: "rita" },

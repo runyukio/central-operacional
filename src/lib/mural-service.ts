@@ -355,7 +355,7 @@ export async function exportMuralPostAcknowledgements(actor: Actor, id: string, 
     headers: [
       "titulo_post",
       "post_id",
-      "colaborador",
+      "parceiro",
       "wb_login",
       "email",
       "role",

@@ -232,7 +232,7 @@ export function MyInvoicePage() {
   if (error && !payload) {
     return (
       <>
-        <PageHeader title="Invoice do mês" description="Billing disponível a partir de Junho/2026 para colaboradores PJ." icon={FileText} />
+        <PageHeader title="Invoice do mês" description="Billing disponível a partir de Junho/2026 para parceiros PJ." icon={FileText} />
         <EmptyState title="Invoice indisponível" description={error} />
       </>
     );
@@ -537,7 +537,7 @@ function invoiceStatusLabel(value: string) {
   const labels: Record<string, string> = {
     EM_PREVISAO: "Em previsão",
     DISPONIVEL_APROVACAO: "Disponível para aprovação",
-    APROVADO_COLABORADOR: "Aprovado pelo colaborador",
+    APROVADO_COLABORADOR: "Aprovado pelo parceiro",
     AGUARDANDO_SUPERVISOR: "Aguardando supervisor",
     AGUARDANDO_ADMIN: "Aguardando Admin",
     AJUSTE_CONCLUIDO: "Ajuste concluído",

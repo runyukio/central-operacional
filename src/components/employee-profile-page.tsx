@@ -189,14 +189,14 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
   }, [employeeId]);
 
   const data = payload?.data;
-  const title = data?.viewer.isOwnProfile ? "Meu Perfil" : "Perfil do Colaborador";
+  const title = data?.viewer.isOwnProfile ? "Meu Perfil" : "Perfil do Parceiro";
   const statusTone = data?.employee.status.toLowerCase().includes("deslig") || data?.employee.status.toLowerCase().includes("inativo") ? "bg-slate-100 text-slate-600" : "bg-emerald-50 text-emerald-700";
 
   if (loading) {
     return (
       <>
         <PageHeader title="Meu Perfil" description="Carregando informações consolidadas." icon={UserCircle} />
-        <EmptyState title="Carregando perfil" description="Buscando dados reais do colaborador, cronograma e indicadores." />
+        <EmptyState title="Carregando perfil" description="Buscando dados reais do parceiro, cronograma e indicadores." />
       </>
     );
   }
@@ -216,7 +216,7 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
     <div className="space-y-4">
       <PageHeader
         title={title}
-        description={data.viewer.isOwnProfile ? "Seus dados e informações consolidadas." : "Resumo operacional do colaborador selecionado."}
+        description={data.viewer.isOwnProfile ? "Seus dados e informações consolidadas." : "Resumo operacional do parceiro selecionado."}
         icon={UserCircle}
         actions={data.viewer.isOwnProfile ? <Link href="/meus-dados/adicionais" className="premium-control inline-flex h-9 items-center px-3 text-xs font-extrabold text-blue-700">Atualizar dados adicionais/PIX</Link> : null}
       />
@@ -698,7 +698,7 @@ function invoiceStatusLabel(value: string) {
   const labels: Record<string, string> = {
     EM_PREVISAO: "Em previsão",
     DISPONIVEL_APROVACAO: "Disponível para aprovação",
-    APROVADO_COLABORADOR: "Aprovado pelo colaborador",
+    APROVADO_COLABORADOR: "Aprovado pelo parceiro",
     AGUARDANDO_SUPERVISOR: "Aguardando supervisor",
     AGUARDANDO_ADMIN: "Aguardando Admin",
     AJUSTE_CONCLUIDO: "Ajuste concluído",

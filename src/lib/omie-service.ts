@@ -142,7 +142,7 @@ export function normalizeBrazilianTaxId(value: string) {
 
 export function formatBrazilianCnpj(value: string) {
   const digits = normalizeBrazilianTaxId(value);
-  if (digits.length !== 14) throw new OmieIntegrationError("O colaborador não possui um CNPJ válido para localizar o fornecedor no Omie.");
+  if (digits.length !== 14) throw new OmieIntegrationError("O parceiro não possui um CNPJ válido para localizar o fornecedor no Omie.");
   return digits.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, "$1.$2.$3/$4-$5");
 }
 
@@ -247,7 +247,7 @@ export async function upsertBillingAccountPayable(
   }
   const departmentCode = String(input.departmentCode ?? "").trim();
   if (!departmentCode) {
-    throw new OmieIntegrationError("O departamento do colaborador não possui um código válido no Omie.");
+    throw new OmieIntegrationError("O departamento do parceiro não possui um código válido no Omie.");
   }
   const invoiceNumber = String(input.invoiceNumber ?? "").trim();
   if (!/^\d{1,20}$/.test(invoiceNumber)) {
@@ -590,7 +590,7 @@ function normalizePixTransferKey(value: string, type: string) {
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "");
-  if (!pixKey) throw new OmieIntegrationError("O colaborador não possui chave PIX cadastrada.");
+  if (!pixKey) throw new OmieIntegrationError("O parceiro não possui chave PIX cadastrada.");
 
   if (normalizedType === "cpf") {
     const digits = pixKey.replace(/\D/g, "");

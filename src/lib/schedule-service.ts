@@ -878,7 +878,7 @@ export async function editOperationalSchedule(actor: Actor, input: ScheduleEditI
     if (!date) return { error: "Data inválida." };
 
     const employee = await prisma.employeeProfile.findUnique({ where: { id: input.employeeId }, include: { shift: true } });
-    if (!employee) return { error: "Colaborador não encontrado." };
+    if (!employee) return { error: "Parceiro não encontrado." };
 
     const requestedShift = cleanShiftName(input.shift);
     const shift = requestedShift && isSelectableShiftName(requestedShift)
@@ -1071,7 +1071,7 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
       include: { shift: true, supervisor: true, lob: true }
     });
     mark("employeeLookupMs");
-    if (!employee) return { error: "Colaborador não encontrado." };
+    if (!employee) return { error: "Parceiro não encontrado." };
 
     const status = uiToAttendanceStatus[input.status];
     if (!status) return { error: "Status de ocorrência inválido." };
@@ -1088,7 +1088,7 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
     mark("scheduleLookupMs");
     if (!schedule) return { error: "Registro de falta não encontrado." };
     if (schedule.employeeId !== employee.id) {
-      return { error: "Colaborador da pendência não corresponde ao registro selecionado." };
+      return { error: "Parceiro da pendência não corresponde ao registro selecionado." };
     }
     const shift = schedule.shift ?? employee.shift;
     const existing = input.attendanceRecordId
@@ -1103,7 +1103,7 @@ async function justifyAttendanceAsSupervisor(actor: Actor, input: AttendanceInpu
         });
     mark("attendanceLookupMs");
     if (existing?.employeeId && existing.employeeId !== employee.id) {
-      return { error: "Colaborador da pendência não corresponde ao registro selecionado." };
+      return { error: "Parceiro da pendência não corresponde ao registro selecionado." };
     }
     if (existing?.scheduleId && existing.scheduleId !== schedule.id) {
       return { error: "Registro de falta não encontrado para o cronograma selecionado." };
@@ -1332,13 +1332,13 @@ export async function removeOperationalSchedules(actor: Actor, input: ScheduleRe
       await auditPermissionDenied(actor, { action: "SCHEDULE_DELETE", entity: "Schedule", reason, entityId: input.employeeId });
       return { error: reason };
     }
-    if (!input.employeeId) return { error: "Informe o colaborador." };
+    if (!input.employeeId) return { error: "Informe o parceiro." };
     if (input.scope !== "all" && (!Number.isInteger(input.month) || !Number.isInteger(input.year) || input.month! < 1 || input.month! > 12)) {
       return { error: "Informe explicitamente o mês e o ano do cronograma a remover." };
     }
 
     const employee = await prisma.employeeProfile.findUnique({ where: { id: input.employeeId } });
-    if (!employee) return { error: "Colaborador não encontrado." };
+    if (!employee) return { error: "Parceiro não encontrado." };
     const period = resolvePeriod(input);
     const where: Prisma.ScheduleWhereInput = {
       employeeId: input.employeeId,
@@ -1379,7 +1379,7 @@ export async function removeOperationalSchedules(actor: Actor, input: ScheduleRe
             after: { deletedAt: now.toISOString() },
             previousValue: serialize(schedule),
             newValue: { deletedAt: now.toISOString() },
-            reason: input.scope === "all" ? "Remoção de todos os cronogramas do colaborador" : `Remoção de cronograma do período ${period.month}/${period.year}`
+            reason: input.scope === "all" ? "Remoção de todos os cronogramas do parceiro" : `Remoção de cronograma do período ${period.month}/${period.year}`
           }
         });
       }
@@ -1389,7 +1389,7 @@ export async function removeOperationalSchedules(actor: Actor, input: ScheduleRe
           action: "ALTERACAO_ESCALA",
           entity: "Schedule",
           entityId: employee.id,
-          reason: input.scope === "all" ? "Remoção de todos os cronogramas do colaborador" : `Remoção de cronograma do colaborador no mês ${period.month}/${period.year}`,
+          reason: input.scope === "all" ? "Remoção de todos os cronogramas do parceiro" : `Remoção de cronograma do parceiro no mês ${period.month}/${period.year}`,
           previousValue: { affectedSchedules: schedules.length },
           newValue: { deletedAt: true }
         }
@@ -1399,7 +1399,7 @@ export async function removeOperationalSchedules(actor: Actor, input: ScheduleRe
     return { success: true, message: `${schedules.length} registro(s) de cronograma removido(s).`, schedules: await getOperationalSchedules(actor, input) };
   } catch (error) {
     recordErrorLog({ userEmail: actor.email, code: "SCHEDULE_REMOVE_DB_ERROR", message: error instanceof Error ? error.message : "Falha ao remover cronograma", action: "SCHEDULE_REMOVE", severity: "ERROR" });
-    return { error: "Não foi possível remover o cronograma do colaborador." };
+    return { error: "Não foi possível remover o cronograma do parceiro." };
   }
 }
 
@@ -2001,7 +2001,7 @@ export async function exportJustifiedAbsencesXlsxData(actor: Actor, query: Atten
 
     const headers = [
       "data",
-      "colaborador",
+      "parceiro",
       "wb_login",
       "email",
       "lob",
@@ -2085,7 +2085,7 @@ export async function exportUnjustifiedAbsencesXlsxData(actor: Actor, query: Att
 
     const headers = [
       "data",
-      "colaborador",
+      "parceiro",
       "wb_login",
       "email",
       "lob",
@@ -2169,7 +2169,7 @@ export async function exportClassifiedUnjustifiedAbsencesXlsxData(actor: Actor, 
 
     const headers = [
       "data",
-      "colaborador",
+      "parceiro",
       "wb_login",
       "email",
       "lob",
@@ -2236,7 +2236,7 @@ export async function exportAttendanceDetailXlsxData(actor: Actor, query: Attend
   return {
     headers: [
       "data",
-      "colaborador",
+      "parceiro",
       "wb_login",
       "email",
       "lob",
@@ -2311,7 +2311,7 @@ export async function exportRecurringAbsencesXlsxData(actor: Actor, query: Atten
       sheetName: "Faltas recorrentes",
       headers: [
         "data_referencia",
-        "colaborador",
+        "parceiro",
         "wb_login",
         "lob",
         "supervisor",
@@ -2441,7 +2441,7 @@ function editMockSchedule(actor: Actor, input: ScheduleEditInput) {
 }
 
 function validateScheduleEdit(input: ScheduleEditInput) {
-  if (!input.employeeId) return "Colaborador obrigatório.";
+  if (!input.employeeId) return "Parceiro obrigatório.";
   if (!input.date) return "Data obrigatória.";
   if (!input.status) return "Status obrigatório.";
   if (needsTime(input.status) && (!input.shift || !input.startsAt || !input.endsAt)) return "Turno, entrada e saída são obrigatórios para status produtivos.";
@@ -2677,11 +2677,11 @@ async function validateImportRowsInDb(rows: Array<Record<string, unknown>>): Pro
 
     const employee = wbLogin ? employeeMap.get(wbLogin) : null;
     if (wbLogin && !employee) errors.push("WB/Login não encontrado na base de funcionários.");
-    if (employee && text(row.lob) && normalizeImportKey(text(row.lob)) !== normalizeImportKey(employee.lob.name)) warnings.push("LOB no arquivo diferente da LOB do colaborador.");
-    if (employee && text(row.supervisor_wb_login) && normalizeImportKey(text(row.supervisor_wb_login)) !== normalizeImportKey(employee.supervisor?.wbLogin ?? "")) warnings.push("Supervisor no arquivo diferente do supervisor do colaborador.");
+    if (employee && text(row.lob) && normalizeImportKey(text(row.lob)) !== normalizeImportKey(employee.lob.name)) warnings.push("LOB no arquivo diferente da LOB do parceiro.");
+    if (employee && text(row.supervisor_wb_login) && normalizeImportKey(text(row.supervisor_wb_login)) !== normalizeImportKey(employee.supervisor?.wbLogin ?? "")) warnings.push("Supervisor no arquivo diferente do supervisor do parceiro.");
     if (key && (duplicateKeys.get(key) ?? 0) > 1) errors.push("Linha duplicada no arquivo para o mesmo WB/Login + data.");
     const existingSchedule = employee && parsedDate ? scheduleMap.get(`${employee.id}:${parsedDate.getTime()}`) : null;
-    if (existingSchedule) warnings.push("Cronograma já existe para este colaborador/data e será atualizado.");
+    if (existingSchedule) warnings.push("Cronograma já existe para este parceiro/data e será atualizado.");
 
     return {
       rowNumber,

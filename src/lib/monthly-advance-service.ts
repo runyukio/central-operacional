@@ -29,8 +29,8 @@ const MONTH_NAMES = [
   "Novembro",
   "Dezembro"
 ];
-const MONTHLY_ADVANCE_PJ_ONLY_MESSAGE = "Adiantamento mensal disponível apenas para colaboradores PJ.";
-const MONTHLY_ADVANCE_TRAINING_BLOCK_MESSAGE = "Adiantamento mensal indisponível para colaboradores em treinamento.";
+const MONTHLY_ADVANCE_PJ_ONLY_MESSAGE = "Adiantamento mensal disponível apenas para parceiros PJ.";
+const MONTHLY_ADVANCE_TRAINING_BLOCK_MESSAGE = "Adiantamento mensal indisponível para parceiros em treinamento.";
 const MONTHLY_ADVANCE_TRAINING_BLOCK_REASON = "TRAINING_STATUS";
 const monthlyAdvanceTrainingStatusValues = [
   "Em treinamento",
@@ -288,7 +288,7 @@ export async function listMonthlyAdvances(actor: Actor, filters: MonthlyAdvanceF
 
   if (role === "COLABORADOR") {
     const employee = await resolveEmployeeForUser(user);
-    if (!employee) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
+    if (!employee) return { error: "Seu usuário não está vinculado a um cadastro de parceiro.", status: 400 };
     if (!isMonthlyAdvanceEligibleContract(employee.contractType)) return { error: MONTHLY_ADVANCE_PJ_ONLY_MESSAGE, status: 403 };
     if (isMonthlyAdvanceTrainingStatus(employee.operationalStatus)) return { error: MONTHLY_ADVANCE_TRAINING_BLOCK_MESSAGE, status: 403 };
     where.employeeId = employee.id;
@@ -376,7 +376,7 @@ export async function getMyMonthlyAdvanceCycles(actor: Actor) {
   const user = await findActiveUser(actor.email);
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
   const employee = await resolveEmployeeForUser(user);
-  if (!employee) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
+  if (!employee) return { error: "Seu usuário não está vinculado a um cadastro de parceiro.", status: 400 };
   if (!isMonthlyAdvanceEligibleContract(employee.contractType)) {
     return { data: [], message: MONTHLY_ADVANCE_PJ_ONLY_MESSAGE };
   }
@@ -423,7 +423,7 @@ export async function respondMonthlyAdvance(actor: Actor, input: { referenceMont
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
 
   const employee = await resolveEmployeeForUser(user);
-  if (!employee) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
+  if (!employee) return { error: "Seu usuário não está vinculado a um cadastro de parceiro.", status: 400 };
   if (!isMonthlyAdvanceEligibleContract(employee.contractType)) return { error: MONTHLY_ADVANCE_PJ_ONLY_MESSAGE, status: 403 };
   if (isMonthlyAdvanceTrainingStatus(employee.operationalStatus)) return { error: MONTHLY_ADVANCE_TRAINING_BLOCK_MESSAGE, status: 403 };
 
@@ -808,7 +808,7 @@ export async function createMonthlyAdvanceChangeRequest(actor: Actor, input: {
   const user = await findActiveUser(actor.email);
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
   const employee = await resolveEmployeeForUser(user);
-  if (!employee) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
+  if (!employee) return { error: "Seu usuário não está vinculado a um cadastro de parceiro.", status: 400 };
   if (!isMonthlyAdvanceEligibleContract(employee.contractType)) return { error: MONTHLY_ADVANCE_PJ_ONLY_MESSAGE, status: 403 };
   if (isMonthlyAdvanceTrainingStatus(employee.operationalStatus)) return { error: MONTHLY_ADVANCE_TRAINING_BLOCK_MESSAGE, status: 403 };
 
@@ -921,7 +921,7 @@ export async function applyApprovedMonthlyAdvanceChange(tx: Prisma.TransactionCl
 }, actorId: string) {
   const payload = (request.payload ?? {}) as Record<string, unknown>;
   if (!payload.monthlyAdvanceChange) return { updated: false, message: "" };
-  if (!request.employeeId) throw new Error("Solicitação sem colaborador vinculado para alterar adiantamento.");
+  if (!request.employeeId) throw new Error("Solicitação sem parceiro vinculado para alterar adiantamento.");
   const referenceMonth = normalizeReferenceMonth(payload.referenceMonth);
   if (!referenceMonth) throw new Error("Mês de referência inválido na solicitação de adiantamento.");
   if (!isMonthlyAdvanceReferenceMonthAvailable(referenceMonth)) {

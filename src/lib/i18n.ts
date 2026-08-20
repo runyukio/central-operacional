@@ -31,8 +31,8 @@ const ENGLISH_TRANSLATIONS = new Map<string, string>([
   ["Equipamentos e Logística", "Equipment and Logistics"],
   ["Configurações", "Settings"],
   ["Pesquisar pessoas, cronogramas, solicitações...", "Search people, schedules, requests..."],
-  ["Buscar colaboradores...", "Search employees..."],
-  ["Buscando colaboradores...", "Searching employees..."],
+  ["Buscar parceiros...", "Search partners..."],
+  ["Buscando parceiros...", "Searching partners..."],
   ["Nenhum resultado encontrado.", "No results found."],
   ["Notificações", "Notifications"],
   ["Marcar lidas", "Mark as read"],
@@ -204,8 +204,8 @@ const ENGLISH_TRANSLATIONS = new Map<string, string>([
   ["sáb.", "Sat."],
   ["dom.", "Sun."],
 
-  ["Colaborador", "Employee"],
-  ["Colaboradores", "Employees"],
+  ["Parceiro", "Partner"],
+  ["Parceiros", "Partners"],
   ["Funcionários", "Employees"],
   ["Agente", "Agent"],
   ["Agentes", "Agents"],
@@ -233,7 +233,8 @@ const ENGLISH_TRANSLATIONS = new Map<string, string>([
   ["Dados de pagamento", "Payment details"],
   ["Cadastro", "Registration"],
   ["Cadastro enviado", "Registration submitted"],
-  ["Cadastro do Colaborador", "Employee Registration"],
+  ["Cadastro do Parceiro", "Partner Registration"],
+  ["Status do parceiro", "Partner status"],
   ["Criado em", "Created at"],
   ["Atualizado em", "Updated at"],
   ["Criado por", "Created by"],
@@ -330,7 +331,7 @@ const ENGLISH_TRANSLATIONS = new Map<string, string>([
   ["Filas do ciclo", "Queues in cycle"],
   ["Histórico por ciclo", "History by cycle"],
   ["Status cruzamento", "Match status"],
-  ["Status colaborador", "Employee status"],
+  ["Status parceiro", "Partner status"],
   ["Tipo de pessoa", "Person type"],
   ["Somente Agentes", "Agents only"],
   ["Não encontrados", "Not matched"],
@@ -494,9 +495,9 @@ const MONTHS: Record<string, string> = {
 };
 
 const COUNT_LABELS: Array<[RegExp, string]> = [
-  [/^(\d+) colaborador\(es\)$/i, "$1 employee(s)"],
-  [/^(\d+) colaborador\(es\) encontrado\(s\)$/i, "$1 employee(s) found"],
-  [/^(\d+) colaborador\(es\) exibido\(s\)$/i, "$1 employee(s) displayed"],
+  [/^(\d+) parceiro\(es\)$/i, "$1 partner(s)"],
+  [/^(\d+) parceiro\(es\) encontrado\(s\)$/i, "$1 partner(s) found"],
+  [/^(\d+) parceiro\(es\) exibido\(s\)$/i, "$1 partner(s) displayed"],
   [/^(\d+) agente\(s\)$/i, "$1 agent(s)"],
   [/^(\d+) agente\(s\) exibido\(s\)$/i, "$1 agent(s) displayed"],
   [/^(\d+) fila\(s\)$/i, "$1 queue(s)"],
@@ -546,8 +547,8 @@ function translateDynamicText(value: string): string {
   const showing = value.match(/^Mostrando (\d+) a (\d+) de (\d+) registros$/i);
   if (showing) return `Showing ${showing[1]} to ${showing[2]} of ${showing[3]} records`;
 
-  const displayed = value.match(/^(\d+) de (\d+) colaborador\(es\) exibido\(s\)$/i);
-  if (displayed) return `${displayed[1]} of ${displayed[2]} employee(s) displayed`;
+  const displayed = value.match(/^(\d+) de (\d+) parceiro\(es\) exibido\(s\)$/i);
+  if (displayed) return `${displayed[1]} of ${displayed[2]} partner(s) displayed`;
 
   const recordsWithTotal = value.match(/^(\d+) de (\d+) registro\(s\)$/i);
   if (recordsWithTotal) return `${recordsWithTotal[1]} of ${recordsWithTotal[2]} record(s)`;

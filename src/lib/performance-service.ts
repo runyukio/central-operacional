@@ -2531,7 +2531,7 @@ async function previewTnsQualityRows(rawRows: Record<string, unknown>[], options
     else if (!employee) warnings.push("WB/Login não encontrado no cadastro; a produção será mantida sem vínculo individual.");
     else if (qualityRule === "ADS_QUALITY") warnings.push("Este agente pertence à ADS. A qualidade dele deve ser calculada pela base ADS.");
     else if (qualityRule === "CEC_QUALITY") warnings.push("Este agente pertence à CEC. A qualidade dele deve ser calculada pela base CEC.");
-    else if (qualityRule === "UNKNOWN") warnings.push("Colaborador sem LOB cadastrada ou com LOB sem regra de qualidade.");
+    else if (qualityRule === "UNKNOWN") warnings.push("Parceiro sem LOB cadastrada ou com LOB sem regra de qualidade.");
     if (!auditDate) errors.push("Data da qualidade TNS inválida.");
     if (sampling === null || sampling < 0) errors.push("Sampling inválido.");
     if (mislabeled === null || mislabeled < 0) errors.push("Mislabeled inválido.");
@@ -3512,7 +3512,7 @@ async function requireActiveUser(actor: Actor): Promise<AuthenticatedUser> {
 }
 
 function requireOwnEmployee(user: AuthenticatedUser) {
-  if (!user.employeeProfile || user.employeeProfile.deletedAt) throw new PerformanceError("Seu usuário não está vinculado a um cadastro de colaborador.", 403);
+  if (!user.employeeProfile || user.employeeProfile.deletedAt) throw new PerformanceError("Seu usuário não está vinculado a um cadastro de parceiro.", 403);
   return user.employeeProfile;
 }
 

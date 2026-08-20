@@ -398,7 +398,7 @@ async function requireActiveUser(actor: Actor): Promise<AuthenticatedUser> {
 
 function requireLinkedEmployee(user: AuthenticatedUser) {
   if (!user.employeeProfile || user.employeeProfile.deletedAt) {
-    throw new AdditionalRegistrationDataError("Seu usuário não está vinculado a um cadastro de colaborador. Contate o administrador.", 403);
+    throw new AdditionalRegistrationDataError("Seu usuário não está vinculado a um cadastro de parceiro. Contate o administrador.", 403);
   }
   return user.employeeProfile;
 }

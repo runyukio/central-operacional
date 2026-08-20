@@ -76,7 +76,7 @@ export async function applyDueFixedShiftChanges(referenceDate = new Date()) {
           return { applied: false, schedulesUpdated: 0 };
         }
         if (!current.employeeId || !current.employee) {
-          throw new Error("Solicitação sem colaborador vinculado.");
+          throw new Error("Solicitação sem parceiro vinculado.");
         }
 
         const payload = (current.payload ?? {}) as ScheduledShiftChangePayload;

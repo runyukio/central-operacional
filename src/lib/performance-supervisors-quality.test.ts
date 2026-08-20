@@ -11,7 +11,7 @@ test("usa no AHT de supervisores TNS somente filas com meta de 15 minutos", () =
   assert.equal(isSupervisorAhtQueue({ lob: "ADS", slaTargetMinutes: 1_440 }), true);
 });
 
-test("prioriza a qualidade KAP sobre a base TNS legada para o mesmo colaborador e dia", () => {
+test("prioriza a qualidade KAP sobre a base TNS legada para o mesmo parceiro e dia", () => {
   const rows = mergeSupervisorQualityDailyRows(
     [
       {
@@ -42,7 +42,7 @@ test("prioriza a qualidade KAP sobre a base TNS legada para o mesmo colaborador 
   ]);
 });
 
-test("mantém dados legados quando não existe KAP para o colaborador no dia", () => {
+test("mantém dados legados quando não existe KAP para o parceiro no dia", () => {
   const rows = mergeSupervisorQualityDailyRows(
     [
       {

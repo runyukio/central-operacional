@@ -95,13 +95,13 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
     if (!viewer) return createPermissionError("Usuário não autenticado.");
 
     const targetId = employeeId ?? viewer.employeeProfile?.id;
-    if (!targetId) return createNotFoundError("Seu usuário não está vinculado a um cadastro de colaborador. Contate o administrador.");
+    if (!targetId) return createNotFoundError("Seu usuário não está vinculado a um cadastro de parceiro. Contate o administrador.");
 
     const employee = await prisma.employeeProfile.findFirst({
       where: { id: targetId, deletedAt: null },
       include: profileEmployeeInclude
     });
-    if (!employee) return createNotFoundError("Colaborador não encontrado.");
+    if (!employee) return createNotFoundError("Parceiro não encontrado.");
     if (!canViewProfile(viewer, employee)) return createPermissionError("Você não tem permissão para visualizar este perfil.");
 
     const period = currentMonthPeriod();
@@ -149,7 +149,7 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
     });
     return response;
   } catch (error) {
-    return createServerError(error, "Não foi possível carregar o perfil do colaborador.");
+    return createServerError(error, "Não foi possível carregar o perfil do parceiro.");
   }
 }
 

@@ -228,7 +228,7 @@ export const equipmentRows = Array.from({ length: 10 }).map((_, index) => {
   return {
     code: `EQP-${String(index + 1).padStart(4, "0")}`,
     type: types[index % types.length],
-    employee: employees[index]?.name ?? "Colaborador",
+    employee: employees[index]?.name ?? "Parceiro",
     status,
     delivered: `${String(23 - index).padStart(2, "0")}/05/2026`,
     impact: status === "Inoperante" ? "Alto" : status === "Em Manutenção" ? "Médio" : "Baixo"

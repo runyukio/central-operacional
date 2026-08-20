@@ -24,6 +24,6 @@ export async function POST(request: Request) {
     return NextResponse.json(result);
   } catch (error) {
     console.error("[employee-import:commit-route] falha inesperada", error);
-    return errorResponse(createServerError(error, "Não foi possível confirmar a importação de colaboradores. Tente novamente ou contate o administrador."));
+    return errorResponse(createServerError(error, "Não foi possível confirmar a importação de parceiros. Tente novamente ou contate o administrador."));
   }
 }

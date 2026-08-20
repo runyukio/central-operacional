@@ -680,7 +680,7 @@ function TimelinePanel({
             value={search}
             onChange={(event) => onSearchChange(event.target.value)}
             className="premium-control h-10 w-full pl-9 pr-3 text-sm font-bold outline-none"
-            placeholder="Buscar por colaborador, WB, usuário Windows, máquina ou IP"
+            placeholder="Buscar por parceiro, WB, usuário Windows, máquina ou IP"
           />
         </label>
 
@@ -792,7 +792,7 @@ function TimelinePanel({
               <thead>
                 <tr className="border-b border-border bg-slate-50 text-[11px] font-black uppercase tracking-wide text-muted">
                   <th className="w-14 px-3 py-3">Ação</th>
-                  <th className="w-[270px] px-3 py-3">Colaborador</th>
+                  <th className="w-[270px] px-3 py-3">Parceiro</th>
                   <th className="w-32 px-3 py-3">Data</th>
                   <th className="w-28 px-3 py-3">Duração</th>
                   <th className="w-44 px-3 py-3">Escala prevista</th>
@@ -1175,7 +1175,7 @@ function MappingsPanel({
             value={search}
             onChange={(event) => onSearchChange(event.target.value)}
             className="premium-control h-10 w-full pl-9 pr-3 text-sm font-bold outline-none"
-            placeholder="Buscar máquina, usuário Windows, WB ou colaborador"
+            placeholder="Buscar máquina, usuário Windows, WB ou parceiro"
           />
         </label>
         <label className="block">
@@ -1204,7 +1204,7 @@ function MappingsPanel({
               <tr className="border-b border-border bg-slate-50 text-[11px] font-black uppercase tracking-wide text-muted">
                 <th className="px-3 py-3">Máquina</th>
                 <th className="px-3 py-3">Usuário Windows</th>
-                <th className="px-3 py-3">Colaborador atual</th>
+                <th className="px-3 py-3">Parceiro atual</th>
                 <th className="px-3 py-3">Novo WB/Login</th>
                 <th className="px-3 py-3">Último sinal</th>
                 <th className="px-3 py-3 text-right">Ação</th>

@@ -91,7 +91,7 @@ test("cargo/função Financeiro pode alterar o pagamento sem receber administra�
   assert.equal(canManageBilling(financeByJobTitle), false);
 });
 
-test("Colaborador acessa o próprio invoice pelo pacote pessoal, sem abrir o Billing consolidado", () => {
+test("Parceiro acessa o próprio invoice pelo pacote pessoal, sem abrir o Billing consolidado", () => {
   assert.equal(roleHasCapability("COLABORADOR", "PERSONAL"), true);
   assert.equal(roleHasCapability("COLABORADOR", "BILLING_VIEW"), false);
   assert.equal(roleHasCapability("COLABORADOR", "BILLING_MANAGE"), false);

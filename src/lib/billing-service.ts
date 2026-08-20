@@ -48,7 +48,7 @@ import type { XlsxExportPayload } from "@/lib/xlsx-export";
 export const BILLING_START_MONTH = "2026-06";
 export const DEFAULT_BILLING_REFERENCE_MONTH = "2026-08";
 
-const BILLING_PJ_ONLY_MESSAGE = "Billing disponível apenas para colaboradores PJ.";
+const BILLING_PJ_ONLY_MESSAGE = "Billing disponível apenas para parceiros PJ.";
 const BILLING_REQUEST_TYPE_NAME = "Ajuste de Invoice";
 const BILLING_INVOICE_BUCKET = "billing-invoices" as const;
 const POC_AGENT_HOURLY_RATE_MULTIPLIER = 1.15;
@@ -365,7 +365,7 @@ export async function getBillingFinanceCostSnapshot(referenceMonthInput: string)
 export async function getMyBillingInvoice(actor: Actor, referenceMonthInput?: string | null) {
   const user = await findActiveUser(actor.email);
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
-  if (!user.employeeProfile) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
+  if (!user.employeeProfile) return { error: "Seu usuário não está vinculado a um cadastro de parceiro.", status: 400 };
   if (!isBillingEligibleContract(user.employeeProfile.contractType)) return { error: BILLING_PJ_ONLY_MESSAGE, status: 403 };
 
   const referenceMonth = normalizeBillingMonth(referenceMonthInput);
@@ -488,8 +488,8 @@ export async function previewBillingFiscalInvoice(actor: Actor, input: {
     employee = user.employeeProfile as BillingEmployee | null;
   }
 
-  if (!employee) return { error: "Colaborador não encontrado para validar a nota fiscal.", status: 404 };
-  if (!isBillableEmployee(employee)) return { error: "Colaborador não elegível para Billing.", status: 403 };
+  if (!employee) return { error: "Parceiro não encontrado para validar a nota fiscal.", status: 404 };
+  if (!isBillableEmployee(employee)) return { error: "Parceiro não elegível para Billing.", status: 403 };
 
   const cycle = await prisma.billingCycle.findUnique({ where: { referenceMonth } });
   const isOwnInvoice = !requestedEmployeeId;
@@ -576,7 +576,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
 }) {
   const user = await findActiveUser(actor.email);
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
-  if (!user.employeeProfile) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
+  if (!user.employeeProfile) return { error: "Seu usuário não está vinculado a um cadastro de parceiro.", status: 400 };
   if (!isBillingEligibleContract(user.employeeProfile.contractType)) return { error: BILLING_PJ_ONLY_MESSAGE, status: 403 };
 
   const referenceMonth = normalizeBillingMonth(input.referenceMonth);
@@ -589,7 +589,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
   });
   const effectiveStatus = persisted?.status ?? defaultInvoiceStatusForCycle(cycle.status);
   if (!isInvoiceAvailableForEmployeeReview(cycle.status, effectiveStatus)) return { error: "Invoice ainda não está disponível para aprovação.", status: 403 };
-  if (isFinalizedInvoiceStatus(persisted?.status)) return { error: "Este invoice foi finalizado pelo Admin Central e não pode ser aprovado pelo colaborador.", status: 409 };
+  if (isFinalizedInvoiceStatus(persisted?.status)) return { error: "Este invoice foi finalizado pelo Admin Central e não pode ser aprovado pelo parceiro.", status: 409 };
 
   if (!input.file && !hasReusableBillingFiscalExtraction(persisted?.fiscalInvoice)) {
     return { error: "Anexe a nota fiscal para que os dados sejam lidos automaticamente.", status: 400 };
@@ -630,7 +630,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
     });
   } catch (error) {
     if (error instanceof OmieIntegrationError) return { error: error.message, status: 400 };
-    return { error: "Os dados financeiros do colaborador não estão completos para o envio ao Omie.", status: 400 };
+    return { error: "Os dados financeiros do parceiro não estão completos para o envio ao Omie.", status: 400 };
   }
   const expectedFiscalAmount = calculateBillingFiscalExpectedAmount(calculated);
   const allowFiscalAmountMismatch = isBillingFiscalAmountMismatchExempt(user.employeeProfile.wbLogin);
@@ -734,7 +734,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
           action: AuditAction.APROVACAO,
           entity: "BillingEmployeeInvoice",
           entityId: savedInvoice.id,
-          reason: "Invoice aprovado pelo colaborador com nota fiscal",
+          reason: "Invoice aprovado pelo parceiro com nota fiscal",
           newValue: {
             referenceMonth,
             employeeId: calculated.employeeId,
@@ -764,7 +764,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
       message: "Invoice salvo, mas não foi possível iniciar o envio ao Omie. Tente novamente pelo botão de reenvio.",
       launchCode: ""
     }));
-    return { data: { id: invoice.id, status: "Aprovado pelo colaborador", omie } };
+    return { data: { id: invoice.id, status: "Aprovado pelo parceiro", omie } };
   } catch (error) {
     if (uploadedPath) await deletePrivateObject(BILLING_INVOICE_BUCKET, uploadedPath).catch(() => undefined);
     if (isBillingFiscalDuplicateError(error)) {
@@ -777,7 +777,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
 export async function retryMyBillingInvoiceOmie(actor: Actor, referenceMonthInput?: string | null) {
   const user = await findActiveUser(actor.email);
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
-  if (!user.employeeProfile) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
+  if (!user.employeeProfile) return { error: "Seu usuário não está vinculado a um cadastro de parceiro.", status: 400 };
   const referenceMonth = normalizeBillingMonth(referenceMonthInput);
   const cycle = await prisma.billingCycle.findUnique({ where: { referenceMonth }, select: { id: true } });
   if (!cycle) return { error: "Ciclo de Billing não encontrado.", status: 404 };
@@ -787,7 +787,7 @@ export async function retryMyBillingInvoiceOmie(actor: Actor, referenceMonthInpu
   });
   if (!invoice?.fiscalInvoice) return { error: "Nota fiscal não encontrada para reenviar ao Omie.", status: 404 };
   if (invoice.status !== "APROVADO_COLABORADOR") {
-    return { error: "Somente a aprovação feita pelo colaborador pode enviar o invoice ao Omie.", status: 409 };
+    return { error: "Somente a aprovação feita pelo parceiro pode enviar o invoice ao Omie.", status: 409 };
   }
   const omie = await syncBillingFiscalInvoiceToOmie(invoice.id, user.id);
   return { data: { id: invoice.id, omie } };
@@ -830,7 +830,7 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
   if (fiscalInvoice.employeeInvoice.status !== "APROVADO_COLABORADOR") {
     return {
       status: "NOT_SENT",
-      message: "Somente a aprovação feita pelo colaborador pode enviar o invoice ao Omie.",
+      message: "Somente a aprovação feita pelo parceiro pode enviar o invoice ao Omie.",
       launchCode: ""
     };
   }
@@ -1046,7 +1046,7 @@ export async function submitInvoiceAdjustmentRequest(actor: Actor, input: {
 }) {
   const user = await findActiveUser(actor.email);
   if (!user) return { error: "Usuário ativo não encontrado.", status: 401 };
-  if (!user.employeeProfile) return { error: "Seu usuário não está vinculado a um cadastro de colaborador.", status: 400 };
+  if (!user.employeeProfile) return { error: "Seu usuário não está vinculado a um cadastro de parceiro.", status: 400 };
   if (!isBillingEligibleContract(user.employeeProfile.contractType)) return { error: BILLING_PJ_ONLY_MESSAGE, status: 403 };
 
   const referenceMonth = normalizeBillingMonth(input.referenceMonth);
@@ -1346,14 +1346,14 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
   if (denied) return denied;
   const referenceMonth = normalizeBillingMonth(input.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
-  if (!input.employeeId?.trim()) return { error: "Colaborador obrigatório para finalizar invoice.", status: 400 };
+  if (!input.employeeId?.trim()) return { error: "Parceiro obrigatório para finalizar invoice.", status: 400 };
 
   const employee = await prisma.employeeProfile.findFirst({
     where: { id: input.employeeId, deletedAt: null },
     include: { user: true, lob: true, supervisor: true, shift: true }
   });
-  if (!employee) return { error: "Colaborador não encontrado.", status: 404 };
-  if (!isBillableEmployee(employee)) return { error: "Colaborador não elegível para Billing.", status: 403 };
+  if (!employee) return { error: "Parceiro não encontrado.", status: 404 };
+  if (!isBillableEmployee(employee)) return { error: "Parceiro não elegível para Billing.", status: 403 };
 
   const cycle = await ensureBillingCycle(referenceMonth);
   const existing = await prisma.billingEmployeeInvoice.findUnique({
@@ -1598,7 +1598,7 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
     }
   }
 
-  if (!existing) return { error: "Invoice individual ainda não existe para este colaborador/ciclo.", status: 404 };
+  if (!existing) return { error: "Invoice individual ainda não existe para este parceiro/ciclo.", status: 404 };
   const fiscalInvoiceToRemove = existing.fiscalInvoice;
   const reopenedAt = new Date();
   const invoice = await prisma.$transaction(async (tx) => {
@@ -1677,14 +1677,14 @@ export async function releaseEmployeeBillingInvoiceForReview(actor: Actor, input
   if (denied) return denied;
   const referenceMonth = normalizeBillingMonth(input.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
-  if (!input.employeeId?.trim()) return { error: "Colaborador obrigatório para liberar conferência.", status: 400 };
+  if (!input.employeeId?.trim()) return { error: "Parceiro obrigatório para liberar conferência.", status: 400 };
 
   const employee = await prisma.employeeProfile.findFirst({
     where: { id: input.employeeId, deletedAt: null },
     include: { user: true, lob: true, supervisor: true, shift: true }
   });
-  if (!employee) return { error: "Colaborador não encontrado.", status: 404 };
-  if (!isBillableEmployee(employee)) return { error: "Colaborador não elegível para Billing.", status: 403 };
+  if (!employee) return { error: "Parceiro não encontrado.", status: 404 };
+  if (!isBillableEmployee(employee)) return { error: "Parceiro não elegível para Billing.", status: 403 };
 
   const cycle = await ensureBillingCycle(referenceMonth);
   const existing = await prisma.billingEmployeeInvoice.findUnique({
@@ -1725,7 +1725,7 @@ export async function setEmployeeBillingInvoicePaid(actor: Actor, input: {
   if (denied) return denied;
   const referenceMonth = normalizeBillingMonth(input.referenceMonth);
   if (!isBillingMonthAvailable(referenceMonth)) return billingUnavailable();
-  if (!input.employeeId?.trim()) return { error: "Colaborador obrigatório para atualizar o pagamento.", status: 400 };
+  if (!input.employeeId?.trim()) return { error: "Parceiro obrigatório para atualizar o pagamento.", status: 400 };
 
   const cycle = await prisma.billingCycle.findUnique({ where: { referenceMonth } });
   if (!cycle) return { error: "Ciclo de Billing não encontrado.", status: 404 };
@@ -1871,7 +1871,7 @@ export async function bulkCreateBillingAdjustments(actor: Actor, input: {
   const cycle = await ensureBillingCycle(referenceMonth);
   const rowNumbers = rows.map((_, index) => index + 2);
   const identifiers = rows
-    .map((row) => readBulkAdjustmentCell(row, ["wb_login", "wb", "login", "wbLogin", "WB/Login", "colaborador", "employee", "email"]))
+    .map((row) => readBulkAdjustmentCell(row, ["wb_login", "wb", "login", "wbLogin", "WB/Login", "parceiro", "colaborador", "employee", "email"]))
     .filter(Boolean)
     .map((value) => normalizeBulkLookup(value));
   const uniqueIdentifiers = Array.from(new Set(identifiers));
@@ -1916,15 +1916,15 @@ export async function bulkCreateBillingAdjustments(actor: Actor, input: {
   rows.forEach((row, index) => {
     const rowNumber = rowNumbers[index];
     if (isBulkAdjustmentRowEmpty(row)) return;
-    const identifier = readBulkAdjustmentCell(row, ["wb_login", "wb", "login", "wbLogin", "WB/Login", "colaborador", "employee", "email"]);
+    const identifier = readBulkAdjustmentCell(row, ["wb_login", "wb", "login", "wbLogin", "WB/Login", "parceiro", "colaborador", "employee", "email"]);
     const lookup = normalizeBulkLookup(identifier);
     if (!lookup) {
-      errors.push({ rowNumber, wbLogin: "", error: "Informe wb_login ou e-mail do colaborador." });
+      errors.push({ rowNumber, wbLogin: "", error: "Informe wb_login ou e-mail do parceiro." });
       return;
     }
     const employee = employeesByLookup.get(lookup);
     if (!employee) {
-      errors.push({ rowNumber, wbLogin: String(identifier ?? ""), error: "Colaborador não encontrado pelo WB/Login ou e-mail." });
+      errors.push({ rowNumber, wbLogin: String(identifier ?? ""), error: "Parceiro não encontrado pelo WB/Login ou e-mail." });
       return;
     }
     if (!isBillingEligibleContract(employee.contractType)) {
@@ -2155,7 +2155,7 @@ export async function exportBilling(actor: Actor, filters: BillingDashboardFilte
         rows: data.byLob.map((row) => [row.lob, row.agents, minutesToHoursLabel(row.approvedMinutes), moneyText(row.grossAmount), moneyText(row.advanceAmount), moneyText(row.adjustmentAmount), moneyText(row.finalAmount)])
       },
       {
-        sheetName: "Por Colaborador",
+        sheetName: "Por Parceiro",
         headers: ["nome", "wb_login", "cnpj", "tipo_chave_pix", "chave_pix", "cargo_funcao", "skill", "status_colaborador", "lob", "supervisor", "turno_oficial", "regra_billing", "valor_hora", "horas_aprovadas", "horas_projetadas", "total_horas", "valor_bruto", "adiantamento", "campanha", "bonus", "desconto", "correcao", "ajustes_total", "valor_final", "status_invoice", "aprovado_em"],
         columnFormats: currencyColumnFormats([12, 16, 17, 18, 19, 20, 21, 22, 23]),
         rows: data.invoices.map((row) => [row.employeeName, row.wbLogin, row.cnpj, row.pixKeyType, row.pixKey, row.roleTitle, row.skill, row.employeeStatus, row.lob, row.supervisor, row.officialShift, row.billingRuleLabel || row.billingRule, moneyText(row.hourlyRate), minutesToHoursLabel(row.approvedMinutes), minutesToHoursLabel(row.projectedMinutes), minutesToHoursLabel(row.totalConsideredMinutes), moneyText(row.grossAmount), moneyText(row.advanceAmount), moneyText(row.campaignAmount), moneyText(row.bonusAmount), moneyText(row.discountAmount), moneyText(row.correctionAmount), moneyText(row.adjustmentAmount), moneyText(row.finalAmount), row.statusLabel, row.approvedByEmployeeAt || ""])
@@ -2168,13 +2168,13 @@ export async function exportBilling(actor: Actor, filters: BillingDashboardFilte
       },
       {
         sheetName: "Ajustes",
-        headers: ["tipo_ajuste", "descricao", "mes", "colaborador", "lob", "valor", "criado_por", "criado_em"],
+        headers: ["tipo_ajuste", "descricao", "mes", "parceiro", "lob", "valor", "criado_por", "criado_em"],
         columnFormats: currencyColumnFormats([5]),
         rows: data.adjustments.map((row) => [row.type, row.description, row.referenceMonth, row.employeeName || "", row.lob || "", moneyText(row.amount), row.createdBy, row.createdAt])
       },
       {
         sheetName: "Aprovações",
-        headers: ["colaborador", "wb_login", "cnpj", "tipo_chave_pix", "chave_pix", "status_invoice", "aprovado_em", "ajuste_aberto", "valor_final"],
+        headers: ["parceiro", "wb_login", "cnpj", "tipo_chave_pix", "chave_pix", "status_invoice", "aprovado_em", "ajuste_aberto", "valor_final"],
         columnFormats: currencyColumnFormats([8]),
         rows: data.invoices.map((row) => [row.employeeName, row.wbLogin, row.cnpj, row.pixKeyType, row.pixKey, row.statusLabel, row.approvedByEmployeeAt || "", row.hasOpenAdjustment ? "Sim" : "Não", moneyText(row.finalAmount)])
       },
@@ -2546,7 +2546,9 @@ async function calculateEmployeeInvoice(employee: BillingEmployee, referenceMont
 
 async function listBillingEmployees(filters: BillingDashboardFilters, referenceMonth: string, cycleId: string | null) {
   const period = monthPeriod(referenceMonth);
-  const [approvedHourEmployees, finalizedInvoices] = await Promise.all([
+  const search = filters.search?.trim();
+  const shouldSearchCnpj = Boolean(search && /\d/.test(search));
+  const [approvedHourEmployees, finalizedInvoices, sensitiveCnpjRows] = await Promise.all([
     prisma.workHourRecord.findMany({
       where: {
         date: { gte: period.start, lte: period.end },
@@ -2560,6 +2562,12 @@ async function listBillingEmployees(filters: BillingDashboardFilters, referenceM
         where: { billingCycleId: cycleId, status: { in: [BILLING_INVOICE_CLOSED_STATUS, BILLING_INVOICE_PAID_STATUS] } },
         distinct: ["employeeId"],
         select: { employeeId: true }
+      })
+      : Promise.resolve([]),
+    shouldSearchCnpj
+      ? prisma.employeeSensitiveData.findMany({
+        where: { cnpj: { not: null } },
+        select: { employeeId: true, cnpj: true }
       })
       : Promise.resolve([])
   ]);
@@ -2588,8 +2596,11 @@ async function listBillingEmployees(filters: BillingDashboardFilters, referenceM
   if (employeeStatus && !["Todos", "Ambos"].includes(employeeStatus)) {
     and.push({ operationalStatus: { equals: employeeStatus, mode: "insensitive" } });
   }
-  const search = filters.search?.trim();
   if (search) {
+    const normalizedSearch = normalizeBillingSearch(search);
+    const cnpjEmployeeIds = sensitiveCnpjRows
+      .filter((row) => billingCnpjMatchesSearch(row.cnpj, normalizedSearch))
+      .map((row) => row.employeeId);
     and.push({
       OR: [
         { fullName: { contains: search, mode: "insensitive" } },
@@ -2598,7 +2609,8 @@ async function listBillingEmployees(filters: BillingDashboardFilters, referenceM
         { skill: { contains: search, mode: "insensitive" } },
         { user: { email: { contains: search, mode: "insensitive" } } },
         { lob: { name: { contains: search, mode: "insensitive" } } },
-        { supervisor: { fullName: { contains: search, mode: "insensitive" } } }
+        { supervisor: { fullName: { contains: search, mode: "insensitive" } } },
+        ...(cnpjEmployeeIds.length ? [{ id: { in: cnpjEmployeeIds } }] : [])
       ]
     });
   }
@@ -2610,6 +2622,15 @@ async function listBillingEmployees(filters: BillingDashboardFilters, referenceM
     orderBy: [{ lob: { name: "asc" } }, { fullName: "asc" }]
   });
   return employees.filter((employee) => isBillableEmployee(employee));
+}
+
+function normalizeBillingSearch(value: string | null | undefined) {
+  return String(value ?? "").toLocaleLowerCase("pt-BR").replace(/[^a-z0-9]/g, "");
+}
+
+export function billingCnpjMatchesSearch(cnpj: string | null | undefined, search: string | null | undefined) {
+  const normalizedSearch = normalizeBillingSearch(search);
+  return Boolean(normalizedSearch) && normalizeBillingSearch(cnpj).includes(normalizedSearch);
 }
 
 function filterInvoices<T extends { status: string; billingRule?: string; adjustmentTypes?: string[] }>(invoices: T[], filters: BillingDashboardFilters) {
@@ -2785,7 +2806,7 @@ function resolveHourlyRate(employee: BillingEmployee, rates: BillingRates): Bill
       hourlyRate: 0,
       billingRule: "TURNO_NAO_CADASTRADO",
       billingRuleLabel: "Turno oficial não cadastrado",
-      billingRateSource: "Cadastro do colaborador",
+      billingRateSource: "Cadastro do parceiro",
       billingWarning: "Turno oficial não cadastrado."
     };
   }
@@ -2877,7 +2898,7 @@ async function validateBillingAdjustmentTarget(input: { employeeInvoiceId?: stri
         employee: { select: { contractType: true } }
       }
     });
-    if (!invoice) return { error: "Invoice do colaborador não encontrado.", status: 404 };
+    if (!invoice) return { error: "Invoice do parceiro não encontrado.", status: 404 };
     if (!isBillingEligibleContract(invoice.employee.contractType)) return { error: BILLING_PJ_ONLY_MESSAGE, status: 403 };
   }
 
@@ -2886,7 +2907,7 @@ async function validateBillingAdjustmentTarget(input: { employeeInvoiceId?: stri
       where: { id: input.employeeId, deletedAt: null },
       select: { contractType: true }
     });
-    if (!employee) return { error: "Colaborador não encontrado.", status: 404 };
+    if (!employee) return { error: "Parceiro não encontrado.", status: 404 };
     if (!isBillingEligibleContract(employee.contractType)) return { error: BILLING_PJ_ONLY_MESSAGE, status: 403 };
   }
 
@@ -3641,7 +3662,7 @@ function invoiceStatusLabel(status: string) {
   const labels: Record<string, string> = {
     EM_PREVISAO: "Em previsão",
     DISPONIVEL_APROVACAO: "Disponível para aprovação",
-    APROVADO_COLABORADOR: "Aprovado pelo colaborador",
+    APROVADO_COLABORADOR: "Aprovado pelo parceiro",
     AJUSTE_SOLICITADO: "Ajuste solicitado",
     AGUARDANDO_SUPERVISOR: "Aguardando supervisor",
     AGUARDANDO_ADMIN: "Aguardando Admin",

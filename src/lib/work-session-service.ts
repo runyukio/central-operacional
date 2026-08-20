@@ -318,11 +318,11 @@ export async function listWorkSessionDailySummary(actor: Actor, query: WorkSessi
 export async function getWorkSessionEvents(actor: Actor, query: WorkSessionQuery = {}) {
   const user = await requireWorkSessionUser(actor);
   if ("error" in user) return user;
-  if (!query.employeeId) return { success: false, error: "Informe o colaborador.", message: "Informe o colaborador.", status: 400 };
+  if (!query.employeeId) return { success: false, error: "Informe o parceiro.", message: "Informe o parceiro.", status: 400 };
 
   const date = parseDate(query.date) ?? todayUtc();
   const [employee] = await listVisibleEmployees(user, { employeeId: query.employeeId });
-  if (!employee) return { success: false, error: "Colaborador não encontrado ou fora da sua visão.", message: "Colaborador não encontrado ou fora da sua visão.", status: 404 };
+  if (!employee) return { success: false, error: "Parceiro não encontrado ou fora da sua visão.", message: "Parceiro não encontrado ou fora da sua visão.", status: 404 };
   const events = await prisma.workSessionEvent.findMany({
     where: { employeeId: employee.id, eventTimestamp: { gte: date, lt: addDays(date, 1) } },
     include: { device: true },
@@ -379,7 +379,7 @@ export async function exportWorkSessionXlsxData(actor: Actor, query: WorkSession
   return {
     fileName: `monitoramento_jornada_${result.date}.xlsx`,
     sheetName: "monitoramento_jornada",
-    headers: ["data", "colaborador", "wb_login", "lob", "supervisor", "cargo_funcao", "status_atual", "primeiro_login", "ultimo_logout", "ultimo_evento", "tempo_ativo", "tempo_inativo", "dispositivo", "agent_version"],
+    headers: ["data", "parceiro", "wb_login", "lob", "supervisor", "cargo_funcao", "status_atual", "primeiro_login", "ultimo_logout", "ultimo_evento", "tempo_ativo", "tempo_inativo", "dispositivo", "agent_version"],
     rows: result.data.map((row) => [
       result.date,
       row.employeeName,
@@ -531,7 +531,7 @@ async function workSessionFilterOptions(_user: AuthenticatedUser) {
     skills: ["Todos", "SEM_SKILL", ...unique(employees.map((employee) => employee.skill).filter(Boolean) as string[])],
     statuses: ["Todos", "Ativo", "Bloqueado", "Offline", "Suspenso", "Desconhecido"],
     employees: [
-      { id: "Todos", name: "Todos os colaboradores", wbLogin: "" },
+      { id: "Todos", name: "Todos os parceiros", wbLogin: "" },
       ...employees.map((employee) => ({ id: employee.id, name: employee.fullName, wbLogin: employee.wbLogin }))
     ]
   };
@@ -548,7 +548,7 @@ function buildCurrentSummary(rows: Array<{ currentStatus: string; activeMinutes:
     unknown: count("Desconhecido"),
     totalActiveMinutes: rows.reduce((sum, row) => sum + row.activeMinutes, 0),
     totalActiveTime: formatMinutes(rows.reduce((sum, row) => sum + row.activeMinutes, 0)),
-    averageLastSync: syncedRows.length ? `${syncedRows.length} colaborador(es) com sincronização` : "Sem sincronização"
+    averageLastSync: syncedRows.length ? `${syncedRows.length} parceiro(es) com sincronização` : "Sem sincronização"
   };
 }
 

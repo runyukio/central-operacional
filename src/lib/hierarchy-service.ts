@@ -182,14 +182,14 @@ export async function updateEmployeeSupervisor(actor: Actor, input: { employeeId
 
     const supervisorId = input.supervisorId?.trim() || null;
     if (supervisorId && supervisorId === input.employeeId) {
-      return createValidationError({ supervisorId: "O colaborador não pode ser supervisor de si mesmo." }, "O colaborador não pode ser supervisor de si mesmo.");
+      return createValidationError({ supervisorId: "O parceiro não pode ser supervisor de si mesmo." }, "O parceiro não pode ser supervisor de si mesmo.");
     }
 
     const employee = await prisma.employeeProfile.findFirst({
       where: { id: input.employeeId, deletedAt: null },
       select: { id: true, fullName: true, supervisorId: true }
     });
-    if (!employee) return createNotFoundError("Colaborador não encontrado.");
+    if (!employee) return createNotFoundError("Parceiro não encontrado.");
 
     let supervisor: { id: string; fullName: string } | null = null;
     if (supervisorId) {

@@ -171,6 +171,7 @@ export const QUEUE_REPORT_METADATA: Record<string, QueueReportMetadata> = {
   "600001240": {"queueName":"Fila não mapeada","department":"Other Queue","lob":"N/A"},
   "600001241": {"queueName":"Fila não mapeada","department":"Other Queue","lob":"N/A"},
   "600001260": {"queueName":"User Report Review Brazilian Barrel Language","department":"User Report","lob":"VIDEO"},
+  "600001263": {"queueName":"Image Preliminary Review Routine Quality Check for the Brazil Language Cohort Large Model","department":"Comments QA","lob":"COMMENTS"},
   "600001275": {"queueName":"User Complaint Brazilian Barrel Initial","department":"User Appeal","lob":"VIDEO"},
   "600001276": {"queueName":"User Complaint Brazilian Barrel Initial","department":"User Complaint Brazil Underage","lob":"VIDEO"},
   "600001295": {"queueName":"Comment Label Review Brazilian Barrel Quality Inspection Queue","department":"Comment Label Review Brazilian Barrel Market Label","lob":"COMMENTS"},

@@ -298,8 +298,8 @@ export async function createOperationalRequest(actor: Actor, input: CreateReques
     const area = areaForRequest(input.type);
     const requesterProfile = await resolveRequesterEmployeeProfile(user);
     if (isDayOffRequest(input) && !requesterProfile) {
-      return validationFailure("Seu usuário não está vinculado a um cadastro de colaborador. Contate o administrador.", {
-        employeeId: "Colaborador não vinculado ao usuário logado."
+      return validationFailure("Seu usuário não está vinculado a um cadastro de parceiro. Contate o administrador.", {
+        employeeId: "Parceiro não vinculado ao usuário logado."
       });
     }
     if (isDayOffRequest(input) && requesterProfile?.id) {
@@ -307,13 +307,13 @@ export async function createOperationalRequest(actor: Actor, input: CreateReques
       if (dayOffError) return { error: dayOffError };
     }
     if (isMonthlyAdvanceRequest(input) && !requesterProfile) {
-      return validationFailure("Seu usuário não está vinculado a um cadastro de colaborador. Contate o administrador.", {
-        employeeId: "Colaborador não vinculado ao usuário logado."
+      return validationFailure("Seu usuário não está vinculado a um cadastro de parceiro. Contate o administrador.", {
+        employeeId: "Parceiro não vinculado ao usuário logado."
       });
     }
     if (isShiftChangeRequest(input) && !requesterProfile) {
-      return validationFailure("Seu usuário não está vinculado a um cadastro de colaborador. Contate o administrador.", {
-        employeeId: "Colaborador não vinculado ao usuário logado."
+      return validationFailure("Seu usuário não está vinculado a um cadastro de parceiro. Contate o administrador.", {
+        employeeId: "Parceiro não vinculado ao usuário logado."
       });
     }
     if (isShiftChangeRequest(input) && requesterProfile?.id) {
@@ -875,7 +875,7 @@ function mapRequestCreateError(error: unknown): RequestServiceError {
         error: "Não foi possível criar a solicitação porque há um vínculo obrigatório ausente ou inválido.",
         message: "Não foi possível criar a solicitação porque há um vínculo obrigatório ausente ou inválido.",
         type: "RELATION_ERROR",
-        fieldErrors: { request: "Revise usuário, colaborador e tipo da solicitação." },
+        fieldErrors: { request: "Revise usuário, parceiro e tipo da solicitação." },
         status: 400
       };
     }
@@ -1606,7 +1606,7 @@ async function calculateCoverageImpactForRequestData(request: PrismaRequestForDi
   if (!request.employeeId) {
     return summarizeCoverageImpact(request, [{
       date: "-",
-      label: "Solicitação sem colaborador",
+      label: "Solicitação sem parceiro",
       lob: "-",
       shift: "-",
       required: null,
@@ -1618,7 +1618,7 @@ async function calculateCoverageImpactForRequestData(request: PrismaRequestForDi
       impactStatus: "SEM_REQUERIDO",
       impactDirection: "NEUTRO",
       result: "NO_SCHEDULE",
-      message: "Não foi possível calcular impacto porque a solicitação não possui colaborador vinculado."
+      message: "Não foi possível calcular impacto porque a solicitação não possui parceiro vinculado."
     }]);
   }
 
@@ -1632,7 +1632,7 @@ async function calculateCoverageImpactForRequestData(request: PrismaRequestForDi
   if (!employee) {
     return summarizeCoverageImpact(request, [{
       date: "-",
-      label: "Colaborador não encontrado",
+      label: "Parceiro não encontrado",
       lob: "-",
       shift: "-",
       required: null,
@@ -1644,7 +1644,7 @@ async function calculateCoverageImpactForRequestData(request: PrismaRequestForDi
       impactStatus: "SEM_REQUERIDO",
       impactDirection: "NEUTRO",
       result: "NO_SCHEDULE",
-      message: "Não foi possível calcular impacto porque o colaborador não foi encontrado."
+      message: "Não foi possível calcular impacto porque o parceiro não foi encontrado."
     }]);
   }
 
@@ -2166,7 +2166,7 @@ async function validateDayOffRequestInDatabase(employeeId: string, input: Create
     if (!current.date || !desired.date) return "Datas da troca de folga inválidas.";
     if (employeeScheduleCount && !current.schedule) return "Data atual da folga fora do período de cronograma carregado.";
     if (employeeScheduleCount && !desired.schedule) return "Nova data desejada fora do período de cronograma carregado.";
-    if (current.schedule && !isScheduleDayOffStatus(current.schedule.status)) return "A data atual informada não está registrada como folga para este colaborador.";
+    if (current.schedule && !isScheduleDayOffStatus(current.schedule.status)) return "A data atual informada não está registrada como folga para este parceiro.";
     if (desired.schedule && isScheduleDayOffStatus(desired.schedule.status)) return "A nova data desejada já está registrada como folga.";
     return duplicateDayOffRequest(employeeId, kind, { currentDayOffDate: input.currentDayOffDate, desiredDayOffDate: input.desiredDayOffDate });
   }
@@ -2264,10 +2264,10 @@ async function applyDayOffRequestToSchedule(tx: Prisma.TransactionClient, reques
   if (!kind) return { updated: false, message: "" };
   const payload = (request.payload ?? {}) as Record<string, unknown>;
   if (payload.scheduleAppliedAt || payload.scheduleApplicationStatus === "APPLIED") throw new DomainError("Esta solicitação já foi aplicada ao Cronograma.");
-  if (!request.employeeId) throw new DomainError("Solicitação sem colaborador vinculado para aplicar cronograma.");
+  if (!request.employeeId) throw new DomainError("Solicitação sem parceiro vinculado para aplicar cronograma.");
 
   const employee = await tx.employeeProfile.findUnique({ where: { id: request.employeeId }, include: { shift: true } });
-  if (!employee) throw new DomainError("Colaborador não encontrado para aplicar cronograma.");
+  if (!employee) throw new DomainError("Parceiro não encontrado para aplicar cronograma.");
 
   if (kind === "DAY_OFF_SWAP") return applySwapSchedule(tx, request, employee, actorId, payload);
   if (kind === "DAY_OFF_SELL") return applySellSchedule(tx, request, employee, actorId, payload, actionInput);
@@ -2503,7 +2503,7 @@ async function applyShiftChangeRequestToSchedule(
 ): Promise<ShiftChangeApplicationResult> {
   const payload = (request.payload ?? {}) as Record<string, unknown>;
   if (payload.shiftChangeAppliedAt) throw new DomainError("Esta solicitação já teve a troca de turno aplicada.");
-  if (!request.employeeId) throw new DomainError("Solicitação sem colaborador vinculado para aplicar troca de turno.");
+  if (!request.employeeId) throw new DomainError("Solicitação sem parceiro vinculado para aplicar troca de turno.");
 
   const changeType = normalizeShiftChangeType(payload.shiftChangeType);
   const startDate = parseDateOnly(payload.shiftChangeStartDate ?? payload.shiftChangeDate ?? payload.requestedDate);
@@ -2535,7 +2535,7 @@ async function applyShiftChangeRequestToSchedule(
       where: { id: request.employeeId },
       include: { shift: true }
     });
-    if (!employee) throw new DomainError("Colaborador não encontrado para aplicar troca de turno.");
+    if (!employee) throw new DomainError("Parceiro não encontrado para aplicar troca de turno.");
 
     if (effectiveNow) {
       const employeeBefore = serialize({

@@ -193,7 +193,7 @@ export async function createFormalFeedback(actor: Actor, input: CreateFormalFeed
   const title = input.title?.trim();
   const description = input.description?.trim();
 
-  if (!employeeId) throw new FormalFeedbackError("Colaborador é obrigatório.");
+  if (!employeeId) throw new FormalFeedbackError("Parceiro é obrigatório.");
   if (!category) throw new FormalFeedbackError("Categoria é obrigatória.");
   if (!formalFeedbackCategories.includes(category)) throw new FormalFeedbackError("Categoria inválida.");
   if (!title) throw new FormalFeedbackError("Título é obrigatório.");
@@ -203,12 +203,12 @@ export async function createFormalFeedback(actor: Actor, input: CreateFormalFeed
     where: { id: employeeId, deletedAt: null },
     include: { user: true, lob: true, supervisor: true }
   });
-  if (!employee) throw new FormalFeedbackError("Colaborador não encontrado.", 404);
+  if (!employee) throw new FormalFeedbackError("Parceiro não encontrado.", 404);
   if (!isAgentJobTitle(employee.roleTitle)) {
-    throw new FormalFeedbackError("Feedback Formal deve ser criado para colaboradores/agentes operacionais.");
+    throw new FormalFeedbackError("Feedback Formal deve ser criado para parceiros/agentes operacionais.");
   }
   if (!canCreateFeedbackForEmployee(user, employee)) {
-    throw new FormalFeedbackError("Supervisor só pode criar feedback para colaboradores do próprio time.", 403);
+    throw new FormalFeedbackError("Supervisor só pode criar feedback para parceiros do próprio time.", 403);
   }
 
   const feedback = await prisma.formalFeedback.create({
@@ -251,7 +251,7 @@ export async function createFormalFeedback(actor: Actor, input: CreateFormalFeed
 
 export async function acknowledgeFormalFeedback(actor: Actor, id: string, input: AcknowledgeFormalFeedbackInput = {}) {
   const user = await requireUser(actor);
-  if (!user.employeeProfile) throw new FormalFeedbackError("Seu usuário não está vinculado a um colaborador.", 403);
+  if (!user.employeeProfile) throw new FormalFeedbackError("Seu usuário não está vinculado a um parceiro.", 403);
 
   const feedback = await prisma.formalFeedback.findFirst({
     where: { id, deletedAt: null },
@@ -342,7 +342,7 @@ export async function exportFormalFeedbackXlsxData(actor: Actor, filters: Formal
     sheetName: "Feedback Formal",
     headers: [
       "data_feedback",
-      "colaborador",
+      "parceiro",
       "wb_login",
       "lob",
       "supervisor_colaborador",
@@ -385,9 +385,9 @@ export async function getFormalFeedbackProfileSummary(actor: Actor, employeeId: 
     where: { id: employeeId, deletedAt: null },
     include: { user: true, lob: true, supervisor: true }
   });
-  if (!employee) throw new FormalFeedbackError("Colaborador não encontrado.", 404);
+  if (!employee) throw new FormalFeedbackError("Parceiro não encontrado.", 404);
   if (!canViewFormalFeedbackForEmployee(user, employee)) {
-    throw new FormalFeedbackError("Você não tem permissão para visualizar histórico de feedbacks deste colaborador.", 403);
+    throw new FormalFeedbackError("Você não tem permissão para visualizar histórico de feedbacks deste parceiro.", 403);
   }
 
   const monthStart = new Date();

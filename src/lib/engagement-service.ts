@@ -185,7 +185,7 @@ export async function listAnonymousFeedback(actor: Actor, filters: AnonymousFeed
 export async function createAnonymousFeedback(actor: Actor, input: AnonymousFeedbackInput) {
   const user = await requireUser(actor);
   if (!user.employeeProfile) {
-    throw new EngagementError("Seu usuário não está vinculado a um cadastro de colaborador.", 403);
+    throw new EngagementError("Seu usuário não está vinculado a um cadastro de parceiro.", 403);
   }
   if (!canSubmitAnonymousFeedback(permissionUserFromAuthenticatedUser(user))) {
     throw new EngagementError("Seu perfil possui acesso administrativo ao Feedback Anônimo. Use a visão administrativa.", 403);
@@ -534,7 +534,7 @@ export async function updateClimateSurveyStatus(actor: Actor, input: Partial<Cli
 export async function submitClimateSurveyAnswer(actor: Actor, input: ClimateAnswerInput) {
   const user = await requireUser(actor);
   const role = normalizeRole(user.role.name);
-  if (role !== "COLABORADOR") throw new EngagementError("Apenas colaboradores podem responder pesquisas de clima.", 403);
+  if (role !== "COLABORADOR") throw new EngagementError("Apenas parceiros podem responder pesquisas de clima.", 403);
 
   const survey = await prisma.climateSurvey.findUnique({
     where: { id: input.surveyId },

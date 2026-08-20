@@ -2137,7 +2137,7 @@ export function EmployeeRegistrationPublicPage() {
           <div className="flex items-center gap-3">
             <div className="grid h-11 w-11 place-items-center rounded-xl bg-blue-600 text-white"><UserPlus className="h-6 w-6" /></div>
             <div>
-              <h1 className="text-2xl font-black text-navy-950">Cadastro do Colaborador</h1>
+              <h1 className="text-2xl font-black text-navy-950">Cadastro do Parceiro</h1>
               <p className="text-sm text-muted">Solicite seu acesso. O login só será liberado após aprovação.</p>
             </div>
           </div>
@@ -2235,13 +2235,17 @@ function formatCnpjInputValue(value: string) {
   return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
 }
 
-function FormSelect({ label, value, options, onChange, error, disabled = false, emptyLabel = "Não informado" }: { label: string; value: string; options: string[]; onChange: (value: string) => void; error?: string; disabled?: boolean; emptyLabel?: string }) {
+function displaySystemRole(value?: string | null) {
+  return value === "COLABORADOR" ? "PARCEIRO" : value || "-";
+}
+
+function FormSelect({ label, value, options, onChange, error, disabled = false, emptyLabel = "Não informado", optionLabel }: { label: string; value: string; options: string[]; onChange: (value: string) => void; error?: string; disabled?: boolean; emptyLabel?: string; optionLabel?: (value: string) => string }) {
   return (
     <label className="block">
       <span className="mb-1.5 block text-sm font-bold text-muted">{label}</span>
       <select value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500", error ? "border-red-300 bg-red-50/40" : "border-border")}>
         {options.map((option) => (
-          <option key={option} value={option}>{option || emptyLabel}</option>
+          <option key={option} value={option}>{option ? optionLabel?.(option) ?? option : emptyLabel}</option>
         ))}
       </select>
       {error ? <span className="mt-1 block text-xs font-bold text-red-600">{error}</span> : null}
@@ -2492,7 +2496,7 @@ export function AdditionalRegistrationDataPage() {
           <Panel title="Status">
             <div className="space-y-3 text-sm text-muted">
               <div className="rounded-xl border border-border bg-slate-50 p-3">
-                <p className="text-xs font-extrabold uppercase tracking-wide text-muted">Colaborador</p>
+                <p className="text-xs font-extrabold uppercase tracking-wide text-muted">Parceiro</p>
                 <p className="mt-1 font-black text-navy-950">{profileName || "Cadastro vinculado"}</p>
               </div>
               <div className="rounded-xl border border-border bg-slate-50 p-3">
@@ -3654,7 +3658,7 @@ export function OperationalCommandCenter() {
                     </tr>
                   </tbody>
                 </table>
-                <p className="mt-2 text-[10.5px] font-semibold text-blue-600">Total não inclui colaboradores em treinamento.</p>
+                <p className="mt-2 text-[10.5px] font-semibold text-blue-600">Total não inclui parceiros em treinamento.</p>
               </div>
             ) : <EmptyState title="Sem pessoas ativas" description="A matriz exibe Manhã, Tarde, Noite e treinamento para os filtros aplicados." />}
           </Panel>
@@ -3748,7 +3752,7 @@ export function OperationalCommandCenter() {
                   </button>
                 ) : null}
               </div>
-            ) : <EmptyState title="Nenhuma falta recorrente encontrada." description="Não há colaboradores com 2 ou mais dias consecutivos de ausência até a data de referência." />}
+            ) : <EmptyState title="Nenhuma falta recorrente encontrada." description="Não há parceiros com 2 ou mais dias consecutivos de ausência até a data de referência." />}
           </Panel>
         </div>
 
@@ -3897,11 +3901,11 @@ export function OperationalCommandCenter() {
             ) : null}
             {commandRecurringAbsences.length ? (
               <SimpleTable
-                columns={["Colaborador", "WB/Login", "LOB", "Supervisor", "Dias", "Risco", "Último status", "Sequência", "Ação"]}
+                columns={["Parceiro", "WB/Login", "LOB", "Supervisor", "Dias", "Risco", "Último status", "Sequência", "Ação"]}
                 rows={recurringAbsenceRows(commandRecurringAbsences)}
               />
             ) : (
-              <EmptyState title="Nenhuma falta recorrente encontrada." description="Não há colaboradores com 2 ou mais dias consecutivos de ausência nos filtros aplicados." />
+              <EmptyState title="Nenhuma falta recorrente encontrada." description="Não há parceiros com 2 ou mais dias consecutivos de ausência nos filtros aplicados." />
             )}
           </div>
         </div>
@@ -3927,7 +3931,7 @@ export function OperationalCommandCenter() {
             </div>
             {selectedPresencePeople.length ? (
               <SimpleTable
-                columns={["Colaborador", "WB/Login", "Supervisor", "Cargo/Função", "Skill", "Máquina", "Último sinal"]}
+                columns={["Parceiro", "WB/Login", "Supervisor", "Cargo/Função", "Skill", "Máquina", "Último sinal"]}
                 rows={selectedPresencePeople.map((person) => [
                   person.employeeName || "Não identificado",
                   person.wbLogin || "Sem WB",
@@ -3975,11 +3979,11 @@ export function OperationalCommandCenter() {
               <EmptyState title="Não foi possível carregar" description={commandDetailError} />
             ) : commandDetailPeople.length ? (
               <SimpleTable
-                columns={["Colaborador", "WB/Login", "Data", "LOB", "Supervisor", "Turno", "Cargo/Função", "Status do cronograma", "Justificativa", "Ação"]}
+                columns={["Parceiro", "WB/Login", "Data", "LOB", "Supervisor", "Turno", "Cargo/Função", "Status do cronograma", "Justificativa", "Ação"]}
                 rows={commandPeopleRows(commandDetailPeople)}
               />
             ) : (
-              <EmptyState title="Nenhum colaborador encontrado para os filtros selecionados." description="A lista respeita o período e os filtros aplicados na Central Operacional." />
+              <EmptyState title="Nenhum parceiro encontrado para os filtros selecionados." description="A lista respeita o período e os filtros aplicados na Central Operacional." />
             )}
           </div>
         </div>
@@ -4003,7 +4007,7 @@ export function OperationalCommandCenter() {
               <EmptyState title="Não foi possível carregar" description={agentAbsenceError} />
             ) : agentAbsencePeople.length ? (
               <SimpleTable
-                columns={["Colaborador", "WB/Login", "Data", "LOB", "Supervisor", "Turno", "Cargo/Função", "Status do cronograma", "Justificativa", "Ação"]}
+                columns={["Parceiro", "WB/Login", "Data", "LOB", "Supervisor", "Turno", "Cargo/Função", "Status do cronograma", "Justificativa", "Ação"]}
                 rows={commandPeopleRows(agentAbsencePeople)}
               />
             ) : (
@@ -4031,11 +4035,11 @@ export function OperationalCommandCenter() {
               <EmptyState title="Não foi possível carregar" description={lobAbsError} />
             ) : lobAbsPeople.length ? (
               <SimpleTable
-                columns={["Colaborador", "WB/Login", "Data", "LOB", "Supervisor", "Turno", "Cargo/Função", "Status do cronograma", "Justificativa", "Ação"]}
+                columns={["Parceiro", "WB/Login", "Data", "LOB", "Supervisor", "Turno", "Cargo/Função", "Status do cronograma", "Justificativa", "Ação"]}
                 rows={commandPeopleRows(lobAbsPeople)}
               />
             ) : (
-              <EmptyState title="Nenhum colaborador encontrado para os filtros selecionados." description="A lista respeita o período e os filtros aplicados na Central Operacional." />
+              <EmptyState title="Nenhum parceiro encontrado para os filtros selecionados." description="A lista respeita o período e os filtros aplicados na Central Operacional." />
             )}
           </div>
         </div>
@@ -4059,7 +4063,7 @@ export function OperationalCommandCenter() {
               <EmptyState title="Não foi possível carregar" description={activePeopleError} />
             ) : activePeople.length ? (
               <SimpleTable
-                columns={["Nome", "WB/Login", "E-mail", "Cargo/Função", "LOB", "Supervisor", "Turno", "Skill", "Status do colaborador"]}
+                columns={["Nome", "WB/Login", "E-mail", "Cargo/Função", "LOB", "Supervisor", "Turno", "Skill", "Status do parceiro"]}
                 rows={activePeopleRows(activePeople)}
               />
             ) : (
@@ -4100,11 +4104,11 @@ export function OperationalCommandCenter() {
               <EmptyState title="Não foi possível carregar" description={attritionPeopleError} />
             ) : attritionPeople.length ? (
               <SimpleTable
-                columns={["Nome", "WB/Login", "E-mail", "LOB", "Supervisor", "Cargo/Função", "Skill", "Wave", "Admissão", "Desligamento", "Status do colaborador"]}
+                columns={["Nome", "WB/Login", "E-mail", "LOB", "Supervisor", "Cargo/Função", "Skill", "Wave", "Admissão", "Desligamento", "Status do parceiro"]}
                 rows={attritionPeopleRows(attritionPeople)}
               />
             ) : (
-              <EmptyState title="Nenhum desligamento encontrado" description="A lista considera apenas colaboradores com Data de Desligamento dentro do período filtrado." />
+              <EmptyState title="Nenhum desligamento encontrado" description="A lista considera apenas parceiros com Data de Desligamento dentro do período filtrado." />
             )}
           </div>
         </div>
@@ -4215,7 +4219,7 @@ export function OperationalCommandCenter() {
               <EmptyState title="Não foi possível carregar" description={absenceReasonError} />
             ) : absenceReasonPeople.length ? (
               <SimpleTable
-                columns={["Colaborador", "WB/Login", "Data", "Turno", "LOB", "Supervisor", "Status", "Motivo", "Classificação", "Categoria", "Observação", "Justificado por", "Justificado em", "Ação"]}
+                columns={["Parceiro", "WB/Login", "Data", "Turno", "LOB", "Supervisor", "Status", "Motivo", "Classificação", "Categoria", "Observação", "Justificado por", "Justificado em", "Ação"]}
                 rows={absenceReasonPeople.map((record) => [
                   record.employeeName,
                   record.wbLogin ?? "-",
@@ -4257,7 +4261,7 @@ export function OperationalCommandCenter() {
               <EmptyState title="Não foi possível carregar" description={absSupervisorError} />
             ) : absSupervisorPeople.length ? (
               <SimpleTable
-                columns={["Colaborador", "WB/Login", "Data", "Turno", "LOB", "Supervisor", "Status", "Motivo", "Justificativa", "Ação"]}
+                columns={["Parceiro", "WB/Login", "Data", "Turno", "LOB", "Supervisor", "Status", "Motivo", "Justificativa", "Ação"]}
                 rows={absSupervisorPeople.map((record) => [
                   record.employeeName,
                   record.wbLogin ?? "-",
@@ -5355,14 +5359,14 @@ export function RegistrationApprovalsPage() {
       const XLSX = await import("xlsx");
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer);
-      const sheetName = workbook.SheetNames.find((name) => normalizeExcelKey(name) === "colaboradores") ?? workbook.SheetNames[0];
+      const sheetName = workbook.SheetNames.find((name) => ["parceiros", "colaboradores"].includes(normalizeExcelKey(name))) ?? workbook.SheetNames[0];
       if (!sheetName) throw new Error("O arquivo não possui abas para leitura.");
       const sheet = workbook.Sheets[sheetName];
       const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
       const rows = rawRows
         .map(normalizeEmployeeImportSheetRow)
         .filter((row) => Object.values(row).some((value) => String(value ?? "").trim() !== ""));
-      if (!rows.length) throw new Error("Nenhuma linha de colaborador encontrada. Verifique se a aba colaboradores possui dados.");
+      if (!rows.length) throw new Error("Nenhuma linha de parceiro encontrada. Verifique se a aba parceiros possui dados.");
       const payload = await apiJson<{ data: EmployeeImportPreview }>("/api/employee-registrations/import/preview", {
         method: "POST",
         body: JSON.stringify({ rows })
@@ -5372,7 +5376,7 @@ export function RegistrationApprovalsPage() {
       setShowEmployeeImport(true);
     } catch (err) {
       setMessageTone("error");
-      const errorMessage = err instanceof ApiRequestError ? err.message : err instanceof Error ? err.message : "Não foi possível ler o arquivo de colaboradores.";
+      const errorMessage = err instanceof ApiRequestError ? err.message : err instanceof Error ? err.message : "Não foi possível ler o arquivo de parceiros.";
       setEmployeeImportError(errorMessage);
       setMessage(errorMessage);
       setShowEmployeeImport(true);
@@ -5386,7 +5390,7 @@ export function RegistrationApprovalsPage() {
     setDownloadingEmployeeTemplate(true);
     setMessage("");
     try {
-      await downloadFile("/api/employee-registrations/template", "template_colaboradores.xlsx");
+      await downloadFile("/api/employee-registrations/template", "template_parceiros.xlsx");
     } catch (err) {
       setMessageTone("error");
       setMessage(err instanceof Error ? err.message : "Não foi possível baixar o template. Tente novamente.");
@@ -5408,7 +5412,7 @@ export function RegistrationApprovalsPage() {
       for (let index = 0; index < chunks.length; index += 1) {
         const chunk = chunks[index];
         setMessageTone("success");
-        setMessage(`Importando colaboradores... lote ${index + 1}/${chunks.length} (${processedRows}/${employeeImportRows.length} linhas processadas).`);
+        setMessage(`Importando parceiros... lote ${index + 1}/${chunks.length} (${processedRows}/${employeeImportRows.length} linhas processadas).`);
         const payload = await apiJson<{ data: EmployeeImportPreview & { colaboradoresCriados: number; usuariosCriados: number; registrosAtualizados: number; ignoredRows?: number; importBatchId: string } }>("/api/employee-registrations/import/commit", {
           method: "POST",
           body: JSON.stringify({ rows: chunk, allowPartial: allowPartialEmployeeImport })
@@ -5420,12 +5424,12 @@ export function RegistrationApprovalsPage() {
         processedRows += chunk.length;
       }
       setMessageTone("success");
-      setMessage(`Importação concluída: ${summary.colaboradoresCriados} colaborador(es), ${summary.usuariosCriados} usuário(s), ${summary.registrosAtualizados} registro(s) atualizado(s), ${summary.ignoredRows} linha(s) ignorada(s).`);
+      setMessage(`Importação concluída: ${summary.colaboradoresCriados} parceiro(es), ${summary.usuariosCriados} usuário(s), ${summary.registrosAtualizados} registro(s) atualizado(s), ${summary.ignoredRows} linha(s) ignorada(s).`);
       setShowEmployeeImport(false);
       await refreshRegistrations(1);
     } catch (err) {
       setMessageTone("error");
-      const errorMessage = err instanceof ApiRequestError ? err.message : err instanceof Error ? err.message : "Não foi possível importar colaboradores.";
+      const errorMessage = err instanceof ApiRequestError ? err.message : err instanceof Error ? err.message : "Não foi possível importar parceiros.";
       setEmployeeImportError(errorMessage);
       setMessage(errorMessage);
       setShowEmployeeImport(true);
@@ -5444,7 +5448,7 @@ export function RegistrationApprovalsPage() {
     }
     if (action === "approve" && selected.hasPassword === false) {
       setMessageTone("error");
-      setMessage("Este cadastro não possui senha cadastrada. Solicite ajuste ao colaborador.");
+      setMessage("Este cadastro não possui senha cadastrada. Solicite ajuste ao parceiro.");
       return;
     }
     if (action === "approve") {
@@ -5496,7 +5500,7 @@ export function RegistrationApprovalsPage() {
       setItems((current) => current.map((item) => (item.id === payload.data.id ? payload.data : item)));
       setSelected(payload.data);
       setMessageTone("success");
-      setMessage(action === "approve" ? "Cadastro aprovado, usuário liberado e Mapa de Funcionários atualizado." : action === "reject" ? "Cadastro recusado com justificativa registrada." : "Ajuste solicitado ao colaborador.");
+      setMessage(action === "approve" ? "Cadastro aprovado, usuário liberado e Mapa de Funcionários atualizado." : action === "reject" ? "Cadastro recusado com justificativa registrada." : "Ajuste solicitado ao parceiro.");
     } catch (err) {
       setMessageTone("error");
       if (err instanceof ApiRequestError) setReviewFieldErrors(err.fields ?? {});
@@ -5508,7 +5512,7 @@ export function RegistrationApprovalsPage() {
 
   async function deleteRegistration() {
     if (!selected || deletingRegistration) return;
-    const confirmed = window.confirm("Tem certeza que deseja excluir este cadastro? Esta ação não deve ser usada para colaboradores ativos.");
+    const confirmed = window.confirm("Tem certeza que deseja excluir este cadastro? Esta ação não deve ser usada para parceiros ativos.");
     if (!confirmed) return;
 
     setDeletingRegistration(true);
@@ -5548,7 +5552,7 @@ export function RegistrationApprovalsPage() {
   return (
     <div>
       <PageHeader
-        title="Cadastros de Colaboradores"
+        title="Cadastros de Parceiros"
         description="Aprove, recuse, solicite ajustes e complemente dados operacionais antes de liberar acesso."
         icon={UserPlus}
         actions={
@@ -5556,7 +5560,7 @@ export function RegistrationApprovalsPage() {
             <button onClick={() => { window.location.href = "/cadastro-colaborador"; }} className="premium-control h-11 px-4 text-sm font-extrabold text-navy-950">Novo cadastro manual</button>
             <button onClick={() => employeeImportInputRef.current?.click()} className="flex h-11 items-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-extrabold text-white shadow-soft">
               <Upload className="h-4 w-4" />
-              Importar colaboradores
+              Importar parceiros
             </button>
             <button type="button" disabled={downloadingEmployeeTemplate} onClick={downloadEmployeeTemplate} className="premium-control flex h-11 items-center gap-2 px-4 text-sm font-extrabold text-navy-950 disabled:cursor-not-allowed disabled:opacity-60">
               <Download className="h-4 w-4" />
@@ -5569,7 +5573,7 @@ export function RegistrationApprovalsPage() {
       <div className="mb-5 grid gap-4 md:grid-cols-4">
         <StatCard title="Pendentes" value={counts.pending} helper="aguardando RH/Admin/WFM" icon={Clock} tone="orange" />
         <StatCard title="Ativos" value={counts.active} helper="liberados no mapa" icon={CheckCircle2} tone="green" />
-        <StatCard title="Ajustes" value={counts.adjust} helper="retorno ao colaborador" icon={RefreshCw} tone="blue" />
+        <StatCard title="Ajustes" value={counts.adjust} helper="retorno ao parceiro" icon={RefreshCw} tone="blue" />
         <StatCard title="Recusados" value={counts.refused} helper="com justificativa" icon={XCircle} tone="red" />
       </div>
       {message ? <div className={cn("mb-5 rounded-lg border px-4 py-3 text-sm font-bold", messageTone === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700")}>{message}</div> : null}
@@ -5722,7 +5726,7 @@ export function RegistrationApprovalsPage() {
               </div>
             </div>
           ) : (
-            <EmptyState title="Nenhum cadastro selecionado" description="Quando um colaborador enviar cadastro, a análise aparecerá aqui." />
+            <EmptyState title="Nenhum cadastro selecionado" description="Quando um parceiro enviar cadastro, a análise aparecerá aqui." />
           )}
         </Panel>
       </div>
@@ -5732,7 +5736,7 @@ export function RegistrationApprovalsPage() {
             <div className="shrink-0 border-b border-border px-5 py-4">
               <div className="flex items-center justify-between gap-4">
               <div>
-                <h2 className="text-lg font-extrabold text-navy-950">Importar colaboradores</h2>
+                <h2 className="text-lg font-extrabold text-navy-950">Importar parceiros</h2>
                 <p className="text-sm text-muted">{employeeImportFileName || "Arquivo Excel"} • preview antes de salvar</p>
               </div>
               <button onClick={() => setShowEmployeeImport(false)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
@@ -5751,7 +5755,7 @@ export function RegistrationApprovalsPage() {
                 <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
                   {employeeImportError}
                 </div>
-                <EmptyState title="Não foi possível validar o arquivo" description="Revise a aba colaboradores e os cabeçalhos mínimos, depois selecione o arquivo novamente." />
+                <EmptyState title="Não foi possível validar o arquivo" description="Revise a aba parceiros e os cabeçalhos mínimos, depois selecione o arquivo novamente." />
               </div>
             ) : employeeImportPreview ? (
               <div className="space-y-5">
@@ -5765,7 +5769,7 @@ export function RegistrationApprovalsPage() {
                   <MetricPill value={employeeImportPreview.registrosAtualizar ?? employeeImportPreview.rows.filter((row) => !row.errors.length && row.action === "atualizar").length} label="Atualizações" />
                   <MetricPill value={employeeImportPreview.duplicidades ?? employeeImportPreview.rows.filter((row) => [...row.errors, ...row.warnings].some((message) => /duplic|existente|uso/i.test(message))).length} label="Duplicidades" />
                 </div>
-                <ImportIssueSummary rows={employeeImportPreview.rows} title="Corrija estas linhas do arquivo de colaboradores" />
+                <ImportIssueSummary rows={employeeImportPreview.rows} title="Corrija estas linhas do arquivo de parceiros" />
                 {employeeImportPreview.errorRows ? (
                   <label className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-700">
                     <input type="checkbox" checked={allowPartialEmployeeImport} onChange={(event) => setAllowPartialEmployeeImport(event.target.checked)} />
@@ -5828,7 +5832,7 @@ export function RegistrationApprovalsPage() {
                   </button>
                 </div>
               </div>
-            ) : <EmptyState title="Nenhum preview disponível" description="Selecione um arquivo de colaboradores para validar antes da importação." />}
+            ) : <EmptyState title="Nenhum preview disponível" description="Selecione um arquivo de parceiros para validar antes da importação." />}
             </div>
           </div>
         </div>
@@ -6195,7 +6199,7 @@ export function SchedulesPage() {
     const targetRow = row ?? scheduleRows[0];
     const targetEmployee = targetRow?.employee ?? scheduleEmployees[0];
     if (!targetEmployee) {
-      setAttendanceMessage("Nenhum colaborador ativo encontrado para receber cronograma.");
+      setAttendanceMessage("Nenhum parceiro ativo encontrado para receber cronograma.");
       return;
     }
     const cellStatus = statusFromScheduleCell(value);
@@ -6294,7 +6298,7 @@ export function SchedulesPage() {
     const targetRow = row ?? scheduleRows[0];
     const targetEmployee = targetRow?.employee ?? scheduleEmployees[0];
     if (!targetEmployee) {
-      setAttendanceMessage("Nenhum colaborador ativo encontrado para justificar ocorrência.");
+      setAttendanceMessage("Nenhum parceiro ativo encontrado para justificar ocorrência.");
       return;
     }
     const cellStatus = statusFromScheduleCell(value);
@@ -6325,7 +6329,7 @@ export function SchedulesPage() {
 
   async function saveScheduleEdit() {
     if (!scheduleEditForm.employeeId) {
-      setAttendanceMessage("Selecione um colaborador.");
+      setAttendanceMessage("Selecione um parceiro.");
       return;
     }
     if (!scheduleEditForm.date || !scheduleEditForm.status) {
@@ -6371,7 +6375,7 @@ export function SchedulesPage() {
 
   async function saveManualWorkHours(confirmOverwrite = false) {
     if (!scheduleEditForm.employeeId || !scheduleEditForm.date) {
-      setAttendanceMessage("Colaborador e data são obrigatórios para lançar horas.");
+      setAttendanceMessage("Parceiro e data são obrigatórios para lançar horas.");
       return;
     }
     if (!selectedCellHasSchedule) {
@@ -6518,8 +6522,8 @@ export function SchedulesPage() {
       : schedulePeriod;
     const selectedMonthLabel = scheduleMonthFormatter.format(operationalDateFromParts(selectedPeriod.year, selectedPeriod.month, 1));
     const confirmed = window.confirm(scope === "all"
-      ? "Isso removerá todos os cronogramas deste colaborador, mas não excluirá o cadastro. Continuar?"
-      : `Isso removerá somente os registros de cronograma de ${selectedMonthLabel} deste colaborador, sem alterar os demais meses. Continuar?`);
+      ? "Isso removerá todos os cronogramas deste parceiro, mas não excluirá o cadastro. Continuar?"
+      : `Isso removerá somente os registros de cronograma de ${selectedMonthLabel} deste parceiro, sem alterar os demais meses. Continuar?`);
     if (!confirmed) return;
 
     setSavingSchedule(true);
@@ -6532,7 +6536,7 @@ export function SchedulesPage() {
       closeScheduleEditor();
       await refreshSchedules();
     } catch (error) {
-      setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível remover o cronograma do colaborador.");
+      setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível remover o cronograma do parceiro.");
     } finally {
       setSavingSchedule(false);
     }
@@ -6577,7 +6581,7 @@ export function SchedulesPage() {
   async function saveSlotJustification() {
     if (savingJustification) return;
     if (!scheduleEditForm.employeeId || !scheduleEditForm.date) {
-      setAttendanceMessage("Colaborador e data são obrigatórios para revisar a justificativa.");
+      setAttendanceMessage("Parceiro e data são obrigatórios para revisar a justificativa.");
       return;
     }
     if (!statusNeedsReason(scheduleEditForm.status)) {
@@ -6693,7 +6697,7 @@ export function SchedulesPage() {
   const scheduleTotalRows = schedulePagination.total || scheduleRows.length;
   const scheduleQuantity = scheduleMetrics.quantity;
   const scheduleSummaryItems = [
-    { label: "Colaboradores", value: scheduleTotalRows },
+    { label: "Parceiros", value: scheduleTotalRows },
     { label: "Quantidade", value: scheduleQuantity },
     { label: "ABS", value: `${attendanceSummary?.absRate ?? 0}%` },
     { label: "Pendências", value: attendanceSummary?.unjustified ?? 0 }
@@ -7058,7 +7062,7 @@ export function SchedulesPage() {
             {scheduleRows.length ? <table className="w-full min-w-[1130px] border-collapse text-[11.5px]">
               <thead>
                 <tr className="border-b border-border bg-slate-50 text-left text-xs font-bold uppercase tracking-wide text-muted">
-                  <th className="px-3 py-2">Colaborador</th>
+                  <th className="px-3 py-2">Parceiro</th>
                   <th className="px-3 py-2">Cargo</th>
                   <th className="px-3 py-2">LOB</th>
                   <th className="px-2 py-2 text-center">Escala</th>
@@ -7398,7 +7402,7 @@ export function SchedulesPage() {
                 </div>
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="block md:col-span-2">
-                    <span className="mb-1.5 block text-sm font-bold text-muted">Colaborador</span>
+                    <span className="mb-1.5 block text-sm font-bold text-muted">Parceiro</span>
                     <div className="rounded-lg border border-border bg-white p-2">
                       <input
                         disabled={!canManageSchedules}
@@ -7413,13 +7417,13 @@ export function SchedulesPage() {
                         </div>
                       ) : (
                         <div className="mt-2 rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
-                          Selecione um colaborador.
+                          Selecione um parceiro.
                         </div>
                       )}
                       {canManageSchedules ? (
                         <div className="mt-2 max-h-52 overflow-y-auto rounded-md border border-border bg-white">
                           {loadingScheduleEmployeeSearch ? (
-                            <div className="px-3 py-3 text-sm font-semibold text-muted">Buscando colaboradores...</div>
+                            <div className="px-3 py-3 text-sm font-semibold text-muted">Buscando parceiros...</div>
                           ) : filteredScheduleEmployeeOptions.length ? (
                             filteredScheduleEmployeeOptions.map((employee) => (
                               <button
@@ -7436,7 +7440,7 @@ export function SchedulesPage() {
                               </button>
                             ))
                           ) : (
-                            <div className="px-3 py-3 text-sm font-semibold text-muted">Nenhum colaborador encontrado.</div>
+                            <div className="px-3 py-3 text-sm font-semibold text-muted">Nenhum parceiro encontrado.</div>
                           )}
                         </div>
                       ) : null}
@@ -7609,7 +7613,7 @@ export function SchedulesPage() {
                       {selectedScheduleStatusIsWorkflowLocked ? "Status controlado pela Esteira" : savingSchedule ? "Salvando..." : "Salvar edição do cronograma"}
                     </button>
                     <button disabled={savingSchedule} onClick={() => removeSelectedEmployeeSchedule("month")} className="mt-3 w-full rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700 disabled:opacity-60">
-                      Remover cronograma do colaborador neste mês
+                      Remover cronograma do parceiro neste mês
                     </button>
                   </>
                 ) : null}
@@ -7715,7 +7719,7 @@ export function SchedulesPage() {
             <div className="grid gap-4 md:grid-cols-2">
               {selectedAttendancePending ? (
                 <div className="rounded-lg border border-blue-100 bg-blue-50 p-3">
-                  <span className="mb-1.5 block text-sm font-bold text-muted">Colaborador</span>
+                  <span className="mb-1.5 block text-sm font-bold text-muted">Parceiro</span>
                   <p className="text-sm font-extrabold text-navy-950">{selectedAttendancePending.employeeName}</p>
                   <p className="mt-1 text-xs font-semibold text-blue-700">
                     WB/Login: {selectedAttendancePending.wbLogin || "Não informado"} • Supervisor: {selectedAttendancePending.supervisor || "Sem supervisor"}
@@ -7723,7 +7727,7 @@ export function SchedulesPage() {
                 </div>
               ) : (
                 <label className="block">
-                  <span className="mb-1.5 block text-sm font-bold text-muted">Colaborador</span>
+                  <span className="mb-1.5 block text-sm font-bold text-muted">Parceiro</span>
                   <select value={attendanceForm.employeeId} onChange={(event) => setAttendanceForm({ ...attendanceForm, employeeId: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100">
                     {employeeOptions.map((employee) => <option key={employee.id} value={employee.id}>{employeeOptionLabel(employee)}</option>)}
                   </select>
@@ -8057,7 +8061,7 @@ export function WorkHoursPage() {
   }
 
   async function deleteWorkHour(row: WorkHourRow) {
-    const confirmed = window.confirm(`Excluir as horas de ${row.employeeName} em ${row.date}? O cronograma e o colaborador serão mantidos.`);
+    const confirmed = window.confirm(`Excluir as horas de ${row.employeeName} em ${row.date}? O cronograma e o parceiro serão mantidos.`);
     if (!confirmed) return;
 
     setDeletingWorkHourId(row.id);
@@ -8148,8 +8152,8 @@ export function WorkHoursPage() {
           <FormSelect label="LOB" value={filters.lob} options={lobOptions} onChange={(value) => setFilters({ ...filters, lob: value })} />
           <FormInput label="Supervisor" value={filters.supervisor} onChange={(value) => setFilters({ ...filters, supervisor: value })} />
           <FormSelect label="Turno" value={filters.shift} options={shiftOptions} onChange={(value) => setFilters({ ...filters, shift: value })} />
-          <FormInput label="Colaborador/WB" value={filters.collaborator} onChange={(value) => setFilters({ ...filters, collaborator: value })} />
-          <FormSelect label="Status colaborador" value={filters.employeeStatus} options={employeeWorkHourStatusOptions} onChange={(value) => setFilters({ ...filters, employeeStatus: value })} />
+          <FormInput label="Parceiro/WB" value={filters.collaborator} onChange={(value) => setFilters({ ...filters, collaborator: value })} />
+          <FormSelect label="Status parceiro" value={filters.employeeStatus} options={employeeWorkHourStatusOptions} onChange={(value) => setFilters({ ...filters, employeeStatus: value })} />
           <FormSelect label="Status" value={filters.status} options={statusOptions} onChange={(value) => setFilters({ ...filters, status: value, overtimeOnly: false, hoursPendingOnly: false, pendingOnly: false, noScheduleOnly: false })} />
           <div className="flex items-end gap-2">
             <button onClick={() => loadWorkHours(1)} className="h-11 flex-1 rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
@@ -8177,7 +8181,7 @@ export function WorkHoursPage() {
             <table className="w-full min-w-[1420px] text-left text-sm">
               <thead className="border-b border-border bg-slate-50 text-xs font-bold uppercase tracking-wide text-muted">
                 <tr>
-                  {["Data", "Colaborador", "WB/Login", "Status colaborador", "LOB", "Supervisor", "Turno", "Horas planejadas", "Horas realizadas", "Horas de captura", "Dif.", "Status", "Ajuste", "Ações"].map((column) => <th key={column} className="px-4 py-3">{column}</th>)}
+                  {["Data", "Parceiro", "WB/Login", "Status parceiro", "LOB", "Supervisor", "Turno", "Horas planejadas", "Horas realizadas", "Horas de captura", "Dif.", "Status", "Ajuste", "Ações"].map((column) => <th key={column} className="px-4 py-3">{column}</th>)}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border bg-white">
@@ -8278,8 +8282,8 @@ export function WorkHoursPage() {
                     <tr>
                       <th className="px-3 py-2">Linha</th>
                       <th className="px-3 py-2">WB/Login</th>
-                      <th className="px-3 py-2">Colaborador</th>
-                      <th className="px-3 py-2">Status colaborador</th>
+                      <th className="px-3 py-2">Parceiro</th>
+                      <th className="px-3 py-2">Status parceiro</th>
                       <th className="px-3 py-2">Data</th>
                       <th className="px-3 py-2">Cronograma</th>
                       <th className="px-3 py-2">Status cronograma</th>
@@ -8330,7 +8334,7 @@ export function WorkHoursPage() {
                 <MetricPill value={`${preview.foundUniqueWbLogins ?? 0}/${preview.uniqueWbLogins ?? 0}`} label="WB/Login encontrados" />
                 <MetricPill value={preview.scheduleFoundRows} label="Com cronograma" />
                 <MetricPill value={preview.noScheduleRows} label="Sem cronograma" />
-                <p className="text-sm text-muted">WB/Login inexistente ou ausência de cronograma bloqueia a linha. Colaborador desligado/inativo vira alerta para invoice, não erro. A divergência compara horas realizadas contra {formatWorkHourValue(DEFAULT_PRODUCTIVE_HOURS)} por dia produtivo.</p>
+                <p className="text-sm text-muted">WB/Login inexistente ou ausência de cronograma bloqueia a linha. Parceiro desligado/inativo vira alerta para invoice, não erro. A divergência compara horas realizadas contra {formatWorkHourValue(DEFAULT_PRODUCTIVE_HOURS)} por dia produtivo.</p>
                 <ImportIssueSummary rows={preview.validation} title="Corrija estas linhas do upload de horas" />
                 {preview.missingWbLogins?.length ? (
                   <div className="rounded-lg border border-red-100 bg-red-50 p-3 text-xs font-semibold text-red-700">
@@ -8376,7 +8380,7 @@ export function WorkHoursPage() {
               </div>
             ) : null}
             <div className="grid gap-4 md:grid-cols-2">
-              <InfoLine label="Colaborador" value={selectedRow.employeeName} />
+              <InfoLine label="Parceiro" value={selectedRow.employeeName} />
               <InfoLine label="WB/Login" value={selectedRow.wbLogin} />
               <InfoLine label="Data" value={selectedRow.date} />
               <InfoLine label="Cronograma vinculado" value={selectedRow.plannedHours > 0 ? "Sim" : "Não"} />
@@ -8933,7 +8937,7 @@ export function RequestsPage() {
           {["Todos", ...requestPriorities].map((priority) => <option key={priority}>{priority}</option>)}
         </select>
         <input value={filters.requester} onChange={(event) => setFilters({ ...filters, requester: event.target.value })} className="h-11 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Solicitante" />
-        <input value={filters.collaborator} onChange={(event) => setFilters({ ...filters, collaborator: event.target.value })} className="h-11 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Colaborador ou WB/Login" />
+        <input value={filters.collaborator} onChange={(event) => setFilters({ ...filters, collaborator: event.target.value })} className="h-11 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Parceiro ou WB/Login" />
         <select value={filters.lob} onChange={(event) => setFilters({ ...filters, lob: event.target.value })} className="h-11 rounded-lg border border-border px-3 text-sm font-bold outline-none">
           {["Todos", "ALL", "CEC", "TNS", "ADS"].map((lob) => <option key={lob}>{lob}</option>)}
         </select>
@@ -8964,7 +8968,7 @@ export function RequestsPage() {
                 request.time
               ])}
             />
-          ) : <EmptyState title="Nenhuma solicitação encontrada" description="As solicitações criadas pelos colaboradores aparecerão aqui." />}
+          ) : <EmptyState title="Nenhuma solicitação encontrada" description="As solicitações criadas pelos parceiros aparecerão aqui." />}
         </Panel>
         <Panel title="Detalhe da Solicitação">
           <RequestDetailContent selected={selected} actorRole={actorRole} actionReason={actionReason} setActionReason={setActionReason} comment={comment} setComment={setComment} onMove={moveStatus} onComment={submitComment} actionPending={actionPending} />
@@ -9450,7 +9454,7 @@ export function RequestsKanbanPage() {
         <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
           <label className="relative block xl:col-span-2">
             <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted" />
-            <input value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} className="h-10 w-full rounded-lg border border-border pl-9 pr-3 text-sm outline-none" placeholder="Buscar por colaborador, WB/Login, tipo ou ID" />
+            <input value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} className="h-10 w-full rounded-lg border border-border pl-9 pr-3 text-sm outline-none" placeholder="Buscar por parceiro, WB/Login, tipo ou ID" />
           </label>
           <select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
             {["Todos", ...requestStatuses].map((status) => <option key={status}>{status}</option>)}
@@ -9477,7 +9481,7 @@ export function RequestsKanbanPage() {
               <option key={supervisor.id} value={supervisor.id}>{supervisor.name} - {supervisor.wbLogin}</option>
             ))}
           </select>
-          <input value={filters.collaborator} onChange={(event) => setFilters({ ...filters, collaborator: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Colaborador" />
+          <input value={filters.collaborator} onChange={(event) => setFilters({ ...filters, collaborator: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Parceiro" />
           <input value={filters.wbLogin} onChange={(event) => setFilters({ ...filters, wbLogin: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="WB/Login" />
           <input value={filters.requester} onChange={(event) => setFilters({ ...filters, requester: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Solicitante" />
           <select value={filters.assignedTo} onChange={(event) => setFilters({ ...filters, assignedTo: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
@@ -9514,7 +9518,7 @@ export function RequestsKanbanPage() {
       {viewMode === "table" ? (
         <Panel title="Visão Tabela">
           <SimpleTable
-            columns={["ID", "Criação", "Tipo", "Status", "Impacto", "Colaborador", "WB/Login", "LOB", "Supervisor", "Data solicitada", "Prioridade", "Próxima etapa", "Responsável", "Atualização", "Ações"]}
+            columns={["ID", "Criação", "Tipo", "Status", "Impacto", "Parceiro", "WB/Login", "LOB", "Supervisor", "Data solicitada", "Prioridade", "Próxima etapa", "Responsável", "Atualização", "Ações"]}
             rows={requests.map((request) => [
               <button key={`${request.id}-id`} onClick={() => openRequestDetail(request)} className="font-extrabold text-blue-600">{request.id}</button>,
               request.createdAt ?? request.time,
@@ -9756,7 +9760,7 @@ export function AdvanceManagementPage() {
 
   async function removeMonthlyAdvanceRecord(record: MonthlyAdvanceRecordClient) {
     if (!canDeleteMonthlyAdvance || advanceEditingId) return;
-    if (!window.confirm("Tem certeza que deseja remover este registro de adiantamento? Esta ação não altera dados do colaborador.")) return;
+    if (!window.confirm("Tem certeza que deseja remover este registro de adiantamento? Esta ação não altera dados do parceiro.")) return;
     setAdvanceEditingId(record.id);
     try {
       await apiJson<{ data: MonthlyAdvanceRecordClient }>("/api/monthly-advance", {
@@ -9785,7 +9789,7 @@ export function AdvanceManagementPage() {
     <div>
       <PageHeader
         title="Adiantamento"
-        description="Gestão mensal de adesão, valores e exportações para colaboradores PJ."
+        description="Gestão mensal de adesão, valores e exportações para parceiros PJ."
         icon={Coins}
         actions={(
           <div className="flex flex-wrap gap-2">
@@ -9824,7 +9828,7 @@ export function AdvanceManagementPage() {
                 <option value="Não">Não</option>
               </select>
             </label>
-            <FormInput label="Colaborador / WB/Login" value={advanceSearch} onChange={setAdvanceSearch} />
+            <FormInput label="Parceiro / WB/Login" value={advanceSearch} onChange={setAdvanceSearch} />
             <div className="flex items-end gap-2">
               <button type="button" onClick={() => loadMonthlyAdvances()} className="h-11 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white">Buscar</button>
               <button type="button" disabled={!isSelectedAdvanceMonthAvailable} onClick={() => exportMonthlyAdvanceXlsx()} className="h-11 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 disabled:cursor-not-allowed disabled:opacity-50">Exportar filtros</button>
@@ -9865,7 +9869,7 @@ export function AdvanceManagementPage() {
                 <ImportIssueSummary rows={advancePreview.rows} title="Corrija estas linhas do adiantamento" />
                 <div className="max-h-[48vh] overflow-y-auto">
                   <SimpleTable
-                    columns={["Linha", "WB/Login", "Colaborador", "Contrato", "Mês", "Aderente", "Valor", "Ação", "Erros"]}
+                    columns={["Linha", "WB/Login", "Parceiro", "Contrato", "Mês", "Aderente", "Valor", "Ação", "Erros"]}
                     rows={advancePreview.rows.slice(0, IMPORT_PREVIEW_ROW_LIMIT).map((row) => [
                       row.rowNumber,
                       row.wbLogin || "-",
@@ -10120,7 +10124,7 @@ export function EmployeeMapPage() {
       setSelected(payload.data);
       setEmployeeRows((items) => items.map((item) => (item.id === payload.data.id ? { ...item, ...payload.data } : item)));
     } catch (error) {
-      setEmployeeMessage(error instanceof Error ? error.message : "Não foi possível carregar o detalhe do colaborador.");
+      setEmployeeMessage(error instanceof Error ? error.message : "Não foi possível carregar o detalhe do parceiro.");
     } finally {
       setSelectedEmployeeLoading(false);
     }
@@ -10231,7 +10235,7 @@ export function EmployeeMapPage() {
         setEmployeeFieldErrors(error.fields ?? {});
         setEmployeeMessage(error.message);
       } else {
-        setEmployeeMessage(error instanceof Error ? error.message : "Não foi possível atualizar o colaborador.");
+        setEmployeeMessage(error instanceof Error ? error.message : "Não foi possível atualizar o parceiro.");
       }
     } finally {
       setSavingEmployee(false);
@@ -10310,7 +10314,7 @@ export function EmployeeMapPage() {
 
   return (
     <div>
-      <PageHeader title="Funcionários" description="Base operacional de colaboradores, vínculos e informações cadastrais." icon={UsersRound} actions={<button onClick={exportEmployeesXlsx} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Exportar XLSX</button>} />
+      <PageHeader title="Funcionários" description="Base operacional de parceiros, vínculos e informações cadastrais." icon={UsersRound} actions={<button onClick={exportEmployeesXlsx} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Exportar XLSX</button>} />
       {employeeMessage ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{employeeMessage}</div> : null}
       <div className="space-y-5">
         <div className="space-y-5">
@@ -10368,17 +10372,17 @@ export function EmployeeMapPage() {
           </div>
           <Panel title="Funcionários">
             {employeeLoading ? (
-              <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm font-bold text-blue-700">Carregando resumo dos colaboradores...</div>
+              <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm font-bold text-blue-700">Carregando resumo dos parceiros...</div>
             ) : employeeRows.length ? (
               <>
                 <SimpleTable
-                  columns={["Nome", "E-mail", "WB/Login", "Cargo/Função", "Role", "LOB", "Skill", "Wave", "Supervisor", "Turno", "Senioridade", "Status do colaborador", "Ação"]}
+                  columns={["Nome", "E-mail", "WB/Login", "Cargo/Função", "Role", "LOB", "Skill", "Wave", "Supervisor", "Turno", "Senioridade", "Status do parceiro", "Ação"]}
                   rows={employeeRows.map((employee) => [
                     <button key={employee.id} onClick={() => selectEmployee(employee)} className="max-w-[180px] truncate font-bold text-blue-700" title={employee.name}>{employee.name}</button>,
                     <span key={`${employee.id}-email`} className="block max-w-[190px] truncate" title={employee.email ?? "-"}>{employee.email ?? "-"}</span>,
                     employee.wb,
                     <span key={`${employee.id}-role`} className="block max-w-[160px] truncate" title={employee.role}>{employee.role}</span>,
-                    employee.systemRole ?? "-",
+                    displaySystemRole(employee.systemRole),
                     employee.lob,
                     <EmployeeSkillBadges key={`${employee.id}-skills`} skills={employee.skills} fallback={employee.skill} compact />,
                     employee.wave || "Sem wave",
@@ -10402,7 +10406,7 @@ export function EmployeeMapPage() {
               </>
             ) : (
               <div>
-                <EmptyState title={hasEmployeeFilters ? "Nenhum colaborador encontrado para os filtros selecionados" : "Nenhum colaborador encontrado"} description={hasEmployeeFilters ? "Limpe os filtros para voltar a listar a base real disponível para seu perfil." : "Aprove cadastros ou importe colaboradores para iniciar a base."} />
+                <EmptyState title={hasEmployeeFilters ? "Nenhum parceiro encontrado para os filtros selecionados" : "Nenhum parceiro encontrado"} description={hasEmployeeFilters ? "Limpe os filtros para voltar a listar a base real disponível para seu perfil." : "Aprove cadastros ou importe parceiros para iniciar a base."} />
                 {hasEmployeeFilters ? (
                   <div className="mt-3 text-center">
                     <button onClick={clearEmployeeFilters} className="rounded-lg border border-border px-4 py-2 text-sm font-bold text-navy-950">Limpar filtros</button>
@@ -10419,12 +10423,12 @@ export function EmployeeMapPage() {
                 <div className="flex min-w-0 items-center gap-3">
                   <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-blue-600 font-black text-white shadow-sm">{initials(selected.name)}</span>
                   <div className="min-w-0">
-                    <p className="text-xs font-black uppercase tracking-[0.22em] text-blue-600">Perfil do colaborador</p>
+                    <p className="text-xs font-black uppercase tracking-[0.22em] text-blue-600">Perfil do parceiro</p>
                     <h2 className="truncate text-xl font-black text-navy-950">{selected.name}</h2>
                     <p className="truncate text-sm font-semibold text-muted">{selected.wb} • {selected.role} • {selected.lob}</p>
                   </div>
                 </div>
-                <button type="button" onClick={() => { setSelected(null); setEditingEmployee(false); }} className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-border bg-white text-xl font-black text-navy-950 shadow-sm transition hover:bg-slate-50" aria-label="Fechar detalhe do colaborador">
+                <button type="button" onClick={() => { setSelected(null); setEditingEmployee(false); }} className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-border bg-white text-xl font-black text-navy-950 shadow-sm transition hover:bg-slate-50" aria-label="Fechar detalhe do parceiro">
                   ×
                 </button>
               </div>
@@ -10447,7 +10451,7 @@ export function EmployeeMapPage() {
                 <InfoLine label="Desligamento" value={selected.terminationDate || "Não informada"} />
                 <InfoLine label="Tipo de desligamento" value={selected.terminationType || "Não informado"} />
                 <InfoLine label="Motivo do desligamento" value={selected.terminationReason || "Não informado"} />
-                <InfoLine label="Status do colaborador" value={employeeMapStatusLabel(selected.status)} />
+                <InfoLine label="Status do parceiro" value={employeeMapStatusLabel(selected.status)} />
               </div>
               <ProfileSection title="Dados Operacionais">
                 <div className="grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-3">
@@ -10457,7 +10461,7 @@ export function EmployeeMapPage() {
                   <InfoLine label="Wave" value={selected.wave || "Sem wave"} />
                   <InfoLine label="Horário de entrada" value={selected.workStartTime || "Não informado"} />
                   <InfoLine label="Horário de saída" value={selected.workEndTime || "Não informado"} />
-                  <InfoLine label="Status do colaborador" value={<StatusBadge status={employeeMapStatusLabel(selected.status)} />} />
+                  <InfoLine label="Status do parceiro" value={<StatusBadge status={employeeMapStatusLabel(selected.status)} />} />
                   <InfoLine label="Supervisor vinculado" value={selected.supervisor} />
                   <InfoLine label="Subordinados diretos" value={selected.directReports ?? 0} />
                   <InfoLine label="Última presença" value={selected.lastPresence ?? "Sem registro"} />
@@ -10539,7 +10543,7 @@ export function EmployeeMapPage() {
                               </div>
                             ) : <FormInput label="Skill" value={skillDraft} onChange={setSkillDraft} error={employeeFieldErrors.skill} />}
                             <FormInput label="Wave" value={waveDraft} onChange={setWaveDraft} error={employeeFieldErrors.wave} />
-                            {isAdmin ? <FormSelect label="Role/Permissão" value={roleDraft} options={employeeRoleOptions} onChange={setRoleDraft} error={employeeFieldErrors.roleName} /> : null}
+                            {isAdmin ? <FormSelect label="Role/Permissão" value={roleDraft} options={employeeRoleOptions} onChange={setRoleDraft} error={employeeFieldErrors.roleName} optionLabel={displaySystemRole} /> : null}
                             {canEditOperationalBindings ? (
                               <label className="block">
                                 <span className="mb-1.5 block text-sm font-bold text-muted">LOB</span>
@@ -10573,7 +10577,7 @@ export function EmployeeMapPage() {
                             <FormInput label="Horário de entrada" value={workStartTimeDraft} onChange={setWorkStartTimeDraft} error={employeeFieldErrors.workStartTime} />
                             <FormInput label="Horário de saída" value={workEndTimeDraft} onChange={setWorkEndTimeDraft} error={employeeFieldErrors.workEndTime} />
                             <FormSelect
-                              label="Status do colaborador"
+                              label="Status do parceiro"
                               value={statusDraft}
                               options={operationalStatusOptions}
                               onChange={(value) => {
@@ -10800,7 +10804,7 @@ export function EmployeeMapPage() {
             </div>
             <div className="space-y-4">
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-800">
-                Esta ação pode remover permanentemente dados do colaborador. Use apenas para cadastros incorretos, duplicados ou testes. Para colaboradores reais com histórico, utilize Inativar colaborador.
+                Esta ação pode remover permanentemente dados do parceiro. Use apenas para cadastros incorretos, duplicados ou testes. Para parceiros reais com histórico, utilize Inativar parceiro.
               </div>
               <label className="block">
                 <span className="mb-1.5 block text-sm font-bold text-muted">Motivo obrigatório</span>
@@ -10945,7 +10949,7 @@ export function HierarchyPage() {
     return (
       <div key={node.id} className="space-y-2">
         <div className="flex items-center gap-2 rounded-lg border border-border bg-white p-3" style={{ marginLeft: `${Math.min(node.level, 6) * 18}px` }}>
-          <button type="button" onClick={() => toggleHierarchyNode(node.id)} className="grid h-8 w-8 place-items-center rounded-lg border border-border text-navy-950" title={node.children.length ? "Expandir/recolher" : "Nenhum colaborador abaixo"} aria-expanded={isOpen}>
+          <button type="button" onClick={() => toggleHierarchyNode(node.id)} className="grid h-8 w-8 place-items-center rounded-lg border border-border text-navy-950" title={node.children.length ? "Expandir/recolher" : "Nenhum parceiro abaixo"} aria-expanded={isOpen}>
             <ChevronRight className={cn("h-4 w-4 transition-transform", isOpen ? "rotate-90" : "")} />
           </button>
           <button type="button" onClick={() => selectHierarchyEmployee(node)} className="min-w-0 flex-1 text-left">
@@ -10958,7 +10962,7 @@ export function HierarchyPage() {
         {isOpen ? (
           node.children.length ? <div className="space-y-2">{node.children.map(renderHierarchyNode)}</div> : (
             <div className="rounded-lg border border-dashed border-border bg-slate-50 p-3 text-xs font-bold text-muted" style={{ marginLeft: `${Math.min(node.level + 1, 7) * 18}px` }}>
-              Nenhum colaborador abaixo.
+              Nenhum parceiro abaixo.
             </div>
           )
         ) : null}
@@ -10970,7 +10974,7 @@ export function HierarchyPage() {
     <div>
       <PageHeader
         title="Hierarquia"
-        description="Estrutura organizacional por supervisor, cargo e colaboradores."
+        description="Estrutura organizacional por supervisor, cargo e parceiros."
         icon={UsersRound}
         actions={<button onClick={exportHierarchy} className="premium-control flex h-10 items-center gap-2 px-4 text-sm font-extrabold text-navy-950"><Download className="h-4 w-4" /> Exportar</button>}
       />
@@ -11002,7 +11006,7 @@ export function HierarchyPage() {
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
-            <MetricPill value={payload?.summary.total ?? 0} label="Colaboradores" />
+            <MetricPill value={payload?.summary.total ?? 0} label="Parceiros" />
             <MetricPill value={payload?.summary.withSupervisor ?? 0} label="Com supervisor" />
             <MetricPill value={payload?.summary.withoutSupervisor ?? 0} label="Sem supervisor" />
           </div>
@@ -11076,13 +11080,13 @@ export function HierarchyPage() {
                       rows={selected.all.map((employee) => [employee.name, employee.wbLogin, employee.roleTitle, employee.supervisorName])}
                     />
                   ) : (
-                    <p className="text-sm text-muted">Nenhum colaborador abaixo deste nível.</p>
+                    <p className="text-sm text-muted">Nenhum parceiro abaixo deste nível.</p>
                   )}
                 </ProfileSection>
                 <a href={`/mapa-funcionarios`} className="block rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-center text-sm font-bold text-blue-700">Ver no Mapa de Funcionários</a>
               </div>
             ) : (
-              <EmptyState title="Nenhum colaborador selecionado" description="Clique em um nome na árvore para ver diretos e indiretos." />
+              <EmptyState title="Nenhum parceiro selecionado" description="Clique em um nome na árvore para ver diretos e indiretos." />
             )}
           </Panel>
         </div>
@@ -13992,7 +13996,7 @@ function PerformancePreviewModal({ title, fileName, preview, importing, onClose,
           <div className="mt-4 max-h-[52vh] overflow-auto rounded-xl border border-border">
             <table className="w-full min-w-[1080px] text-sm">
               <thead className="sticky top-0 bg-white text-left text-xs font-extrabold uppercase text-muted">
-                <tr>{["Linha", "WB/Login", "Colaborador", "LOB", "Data", "Identificador", "Ação", "Erros/alertas"].map((column) => <th key={column} className="px-3 py-2">{column}</th>)}</tr>
+                <tr>{["Linha", "WB/Login", "Parceiro", "LOB", "Data", "Identificador", "Ação", "Erros/alertas"].map((column) => <th key={column} className="px-3 py-2">{column}</th>)}</tr>
               </thead>
               <tbody>
                 {preview.rows.slice(0, IMPORT_PREVIEW_ROW_LIMIT).map((row) => (
@@ -14690,7 +14694,7 @@ export function WorkSessionMonitoringPage() {
 
   const rows = payload?.data ?? [];
   const summary = payload?.summary;
-  const employeeOptions = payload?.filters.employees ?? [{ id: "Todos", name: "Todos os colaboradores", wbLogin: "" }];
+  const employeeOptions = payload?.filters.employees ?? [{ id: "Todos", name: "Todos os parceiros", wbLogin: "" }];
 
   return (
     <div className="space-y-4">
@@ -14717,7 +14721,7 @@ export function WorkSessionMonitoringPage() {
           <PerformanceSelect label="Cargo/Função" value={filters.roleTitle} onChange={(value) => updateFilter("roleTitle", value)} options={payload?.filters.roles ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todos os cargos" : value} />
           <PerformanceSelect label="Skill" value={filters.skill} onChange={(value) => updateFilter("skill", value)} options={payload?.filters.skills ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todas as skills" : value === "SEM_SKILL" ? "Sem skill" : value} />
           <PerformanceSelect label="Status atual" value={filters.status} onChange={(value) => updateFilter("status", value)} options={payload?.filters.statuses ?? ["Todos"]} optionLabel={(value) => value === "Todos" ? "Todos os status" : value} />
-          <PerformanceSelect label="Colaborador" value={filters.employeeId} onChange={(value) => updateFilter("employeeId", value)} options={employeeOptions.map((item) => item.id)} optionLabel={(value) => {
+          <PerformanceSelect label="Parceiro" value={filters.employeeId} onChange={(value) => updateFilter("employeeId", value)} options={employeeOptions.map((item) => item.id)} optionLabel={(value) => {
             const employee = employeeOptions.find((item) => item.id === value);
             return employee ? (employee.wbLogin ? `${employee.name} · ${employee.wbLogin}` : employee.name) : value;
           }} />
@@ -14738,10 +14742,10 @@ export function WorkSessionMonitoringPage() {
       {message ? <div className="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm font-bold text-red-600">{message}</div> : null}
       {loading ? <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">Carregando Monitoramento de Jornada...</div> : null}
 
-      <Panel title="Status atual dos colaboradores">
+      <Panel title="Status atual dos parceiros">
         {rows.length ? (
           <SimpleTable
-            columns={["Colaborador", "WB/Login", "LOB", "Supervisor", "Cargo/Função", "Status atual", "Primeiro login", "Último evento", "Tempo ativo", "Tempo inativo", "Última sincronização", "Dispositivo"]}
+            columns={["Parceiro", "WB/Login", "LOB", "Supervisor", "Cargo/Função", "Status atual", "Primeiro login", "Último evento", "Tempo ativo", "Tempo inativo", "Última sincronização", "Dispositivo"]}
             rows={rows.map((row) => [
               <button key={row.employeeId} type="button" onClick={() => void openDetail(row)} className="max-w-[210px] truncate text-left font-extrabold text-blue-700" title={row.employeeName}>{row.employeeName}</button>,
               row.wbLogin,
@@ -14758,7 +14762,7 @@ export function WorkSessionMonitoringPage() {
             ])}
           />
         ) : (
-          <EmptyState title="Nenhum evento de jornada encontrado" description="Os colaboradores aparecerão aqui quando houver usuário ativo, dispositivo vinculado ou filtros compatíveis." />
+          <EmptyState title="Nenhum evento de jornada encontrado" description="Os parceiros aparecerão aqui quando houver usuário ativo, dispositivo vinculado ou filtros compatíveis." />
         )}
       </Panel>
 
@@ -14880,7 +14884,7 @@ export function QualityPage() {
       <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_330px]">
         <Panel title="Histórico de Feedbacks">
           <SimpleTable
-            columns={["Data/Hora", "Colaborador", "Tipo", "Tema", "Qualidade", "Status", "Feedback"]}
+            columns={["Data/Hora", "Parceiro", "Tipo", "Tema", "Qualidade", "Status", "Feedback"]}
             rows={feedbacks.map((feedback, index) => [
               feedback.createdAt ?? `${currentOperationalDateInput().split("-").reverse().join("/")} 0${Math.max(4, 9 - index)}:15`,
               feedback.employee,
@@ -14911,7 +14915,7 @@ export function QualityPage() {
             </div>
             <div className="space-y-4">
               <label className="block">
-                <span className="mb-1.5 block text-sm font-bold text-muted">Colaborador</span>
+                <span className="mb-1.5 block text-sm font-bold text-muted">Parceiro</span>
                 <select value={feedbackForm.employeeId} onChange={(event) => setFeedbackForm({ ...feedbackForm, employeeId: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3">
                   {employees.map((employee) => (
                     <option key={employee.id} value={employee.id}>{employee.name}</option>
@@ -17205,7 +17209,7 @@ export function ClimatePage() {
     const adminPayload = payload?.mode === "admin" ? payload : null;
     return (
       <div>
-        <PageHeader title="Pesquisa de Clima" description="Pesquisas reais para resposta dos colaboradores e consolidação administrativa." icon={HeartPulse} actions={<TopActions />} />
+        <PageHeader title="Pesquisa de Clima" description="Pesquisas reais para resposta dos parceiros e consolidação administrativa." icon={HeartPulse} actions={<TopActions />} />
         {message ? <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
         <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <StatCard title="Pesquisas abertas" value={adminPayload?.summary.open ?? 0} helper="ciclos ativos" icon={HeartPulse} tone="blue" />
@@ -17510,7 +17514,7 @@ export function FormalFeedbackPage() {
     <div>
       <PageHeader
         title="Feedback Formal"
-        description="Feedbacks formais enviados pela liderança, com ciência do colaborador e histórico rastreável."
+        description="Feedbacks formais enviados pela liderança, com ciência do parceiro e histórico rastreável."
         icon={MessagesSquare}
         actions={<TopActions />}
       />
@@ -17530,7 +17534,7 @@ export function FormalFeedbackPage() {
         <Panel title="Novo feedback formal">
           <div className="grid gap-3 xl:grid-cols-[1.1fr_180px_220px_1fr]">
             <label className="block">
-              <span className="mb-1.5 block text-sm font-bold text-muted">Colaborador</span>
+              <span className="mb-1.5 block text-sm font-bold text-muted">Parceiro</span>
               <select value={draft.employeeId} onChange={(event) => setDraft({ ...draft, employeeId: event.target.value })} className="h-11 w-full rounded-lg border border-border px-3 text-sm font-bold">
                 {payload?.options.employees.length ? payload.options.employees.map((employee) => (
                   <option key={employee.id} value={employee.id}>
@@ -17595,7 +17599,7 @@ export function FormalFeedbackPage() {
           <EmptyState title="Carregando feedbacks" description="Buscando feedbacks formais conforme sua permissão." />
         ) : payload?.data.length ? (
           <SimpleTable
-            columns={["Data", "Colaborador", "LOB", "Autor", "Tipo", "Categoria", "Título", "Status", "Ciente em", "Ações"]}
+            columns={["Data", "Parceiro", "LOB", "Autor", "Tipo", "Categoria", "Título", "Status", "Ciente em", "Ações"]}
             rows={payload.data.map((feedback) => [
               feedback.sentAt,
               <div key={`${feedback.id}-employee`} className="min-w-[160px]">
@@ -17637,7 +17641,7 @@ export function FormalFeedbackPage() {
               <button type="button" onClick={() => setSelectedFeedback(null)} className="grid h-9 w-9 place-items-center rounded-lg hover:bg-slate-100">×</button>
             </div>
             <div className="grid gap-3 md:grid-cols-2">
-              <InfoBox label="Colaborador" value={`${selectedFeedback.employeeName} · ${selectedFeedback.wbLogin}`} />
+              <InfoBox label="Parceiro" value={`${selectedFeedback.employeeName} · ${selectedFeedback.wbLogin}`} />
               <InfoBox label="Supervisor" value={selectedFeedback.supervisor} />
               <InfoBox label="Autor" value={`${selectedFeedback.authorName} · ${selectedFeedback.authorRole}`} />
               <InfoBox label="Ciência" value={selectedFeedback.acknowledgedAt || "Pendente"} />
@@ -17859,7 +17863,7 @@ export function AnonymousFeedbackPage() {
         respondedBy: "East River"
       } : current);
       setResponseDraft(payload.data.response ?? responseDraft.trim());
-      setMessage("Resposta enviada ao colaborador como East River.");
+      setMessage("Resposta enviada ao parceiro como East River.");
       await loadAnonymousFeedback();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Não foi possível enviar a resposta.");
@@ -17909,7 +17913,7 @@ export function AnonymousFeedbackPage() {
     if (feedbackFilters.search.trim()) exportParams.set("search", feedbackFilters.search.trim());
     return (
       <div>
-        <PageHeader title="Feedback Anônimo" description="Acompanhe manifestações, responda aos colaboradores e preserve a escolha de identificação." icon={MessageCircle} actions={<TopActions />} />
+        <PageHeader title="Feedback Anônimo" description="Acompanhe manifestações, responda aos parceiros e preserve a escolha de identificação." icon={MessageCircle} actions={<TopActions />} />
         {message ? <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
         <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           <StatCard title="Total" value={summary?.total ?? 0} helper="feedbacks recebidos" icon={MessageCircle} tone="blue" />
@@ -17969,7 +17973,7 @@ export function AnonymousFeedbackPage() {
               ])}
             />
           ) : (
-            <EmptyState title="Nenhum feedback recebido ainda." description="Os feedbacks enviados pelos colaboradores aparecerão aqui." />
+            <EmptyState title="Nenhum feedback recebido ainda." description="Os feedbacks enviados pelos parceiros aparecerão aqui." />
           )}
         </Panel>
         {selectedFeedback ? (
@@ -18004,25 +18008,25 @@ export function AnonymousFeedbackPage() {
                 </div>
                 {selectedFeedback.allowContact && selectedFeedback.contact ? (
                   <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-800">
-                    <p className="font-extrabold">Contato permitido pelo colaborador</p>
+                    <p className="font-extrabold">Contato permitido pelo parceiro</p>
                     <p className="mt-1">{selectedFeedback.contact.name} · {selectedFeedback.contact.email} · {selectedFeedback.contact.wbLogin}</p>
                   </div>
                 ) : (
                   <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
                     <p className="font-extrabold">Identidade protegida</p>
-                    <p className="mt-1">O colaborador optou por permanecer anônimo. Nenhum dado de identificação é exibido nesta área.</p>
+                    <p className="mt-1">O parceiro optou por permanecer anônimo. Nenhum dado de identificação é exibido nesta área.</p>
                   </div>
                 )}
                 <div className="rounded-lg border border-emerald-100 bg-emerald-50/60 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <p className="text-sm font-extrabold text-navy-950">Resposta para o colaborador</p>
-                      <p className="mt-1 text-xs font-semibold text-emerald-800">No perfil do colaborador, o remetente será exibido somente como East River.</p>
+                      <p className="text-sm font-extrabold text-navy-950">Resposta para o parceiro</p>
+                      <p className="mt-1 text-xs font-semibold text-emerald-800">No perfil do parceiro, o remetente será exibido somente como East River.</p>
                     </div>
                     {selectedFeedback.respondedAt ? <p className="text-xs font-bold text-emerald-700">Último envio: {ptDate(selectedFeedback.respondedAt)}</p> : null}
                   </div>
                   <label className="mt-3 block">
-                    <span className="sr-only">Resposta da East River para o colaborador</span>
+                    <span className="sr-only">Resposta da East River para o parceiro</span>
                     <textarea
                       value={responseDraft}
                       onChange={(event) => setResponseDraft(event.target.value)}
@@ -18316,7 +18320,7 @@ export function PlatformUsagePage() {
 
   const stats = usage
     ? [
-        { title: "Usuários ativos", value: usage.activeUsers.toLocaleString("pt-BR"), change: `${usage.employees} colaboradores`, icon: Users, tone: "blue" as const },
+        { title: "Usuários ativos", value: usage.activeUsers.toLocaleString("pt-BR"), change: `${usage.employees} parceiros`, icon: Users, tone: "blue" as const },
         { title: "Arquivos enviados", value: usage.uploadedFiles.toLocaleString("pt-BR"), change: usage.storageLabel, icon: Upload, tone: "green" as const },
         { title: "Solicitações", value: usage.requests.toLocaleString("pt-BR"), change: `${usage.openRequests} abertas`, icon: ClipboardList, tone: "orange" as const },
         { title: "Reports de turno", value: usage.shiftReports.toLocaleString("pt-BR"), change: "base gerencial", icon: FileText, tone: "purple" as const },
@@ -18561,7 +18565,7 @@ export function SettingsPage() {
               <div className="mb-4 grid gap-3 md:grid-cols-3 xl:grid-cols-6">
                 <input value={userDraft.name} onChange={(event) => setUserDraft({ ...userDraft, name: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="Nome" />
                 <input value={userDraft.email} onChange={(event) => setUserDraft({ ...userDraft, email: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm outline-none" placeholder="E-mail" />
-                <select value={userDraft.roleName} onChange={(event) => setUserDraft({ ...userDraft, roleName: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">{roleOptions.map((role) => <option key={role}>{role}</option>)}</select>
+                <select value={userDraft.roleName} onChange={(event) => setUserDraft({ ...userDraft, roleName: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">{roleOptions.map((role) => <option key={role} value={role}>{displaySystemRole(role)}</option>)}</select>
                 <select value={userDraft.employeeId} onChange={(event) => setUserDraft({ ...userDraft, employeeId: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none">
                   <option value="">Sem vínculo</option>
                   {employeeOptionsForSettings.map((employee) => <option key={employee.id} value={employee.id}>{employee.name} - {employee.email || employee.wb || employee.id}</option>)}
@@ -18572,7 +18576,7 @@ export function SettingsPage() {
               {settings?.users?.length ? <SimpleTable columns={["Nome", "E-mail", "Role", "Status", "Vínculo", "Ações"]} rows={settings.users.map((user) => [
                 user.name,
                 user.email,
-                user.roleName,
+                displaySystemRole(user.roleName),
                 <StatusBadge key={`${user.id}-status`} status={user.status === "ACTIVE" ? "Ativo" : "Inativo"} />,
                 user.employeeName || "-",
                 <div key={`${user.id}-actions`} className="flex flex-wrap gap-2">
@@ -18593,7 +18597,7 @@ export function SettingsPage() {
                 <button disabled={savingSettings || !roleDraft.id} onClick={() => void saveSetting({ type: "role", ...roleDraft }, "Perfil atualizado.")} className="rounded-lg bg-blue-600 px-4 text-sm font-bold text-white disabled:opacity-60">Salvar</button>
               </div>
               <SimpleTable columns={["Role", "Label", "Essencial", "Status", "Ações"]} rows={(settings?.roles ?? []).map((role) => [
-                role.name,
+                displaySystemRole(role.name),
                 role.label,
                 role.essential ? "Sim" : "Não",
                 <StatusBadge key={`${role.id}-status`} status={role.status === "INACTIVE" ? "Inativo" : "Ativo"} />,
@@ -18654,7 +18658,7 @@ export function SettingsPage() {
               <div className="mb-4 grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto]">
                 <select value={supervisorDraft.supervisorId} onChange={(event) => setSupervisorDraft({ ...supervisorDraft, supervisorId: event.target.value })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"><option value="">Supervisor</option>{supervisorOptions.map((supervisor) => <option key={supervisor.id} value={supervisor.id}>{supervisor.name} - {supervisor.email}</option>)}</select>
                 <select value={supervisorDraft.teamId} onChange={(event) => setSupervisorDraft({ ...supervisorDraft, teamId: event.target.value, employeeId: "" })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"><option value="">Vincular time</option>{teamOptions.map((team) => <option key={team.id} value={team.id}>{team.name} - {team.lob}</option>)}</select>
-                <select value={supervisorDraft.employeeId} onChange={(event) => setSupervisorDraft({ ...supervisorDraft, employeeId: event.target.value, teamId: "" })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"><option value="">Vincular colaborador</option>{employeeOptionsForSettings.map((employee) => <option key={employee.id} value={employee.id}>{employee.name} - {employee.email || employee.wb}</option>)}</select>
+                <select value={supervisorDraft.employeeId} onChange={(event) => setSupervisorDraft({ ...supervisorDraft, employeeId: event.target.value, teamId: "" })} className="h-10 rounded-lg border border-border px-3 text-sm font-bold outline-none"><option value="">Vincular parceiro</option>{employeeOptionsForSettings.map((employee) => <option key={employee.id} value={employee.id}>{employee.name} - {employee.email || employee.wb}</option>)}</select>
                 <button disabled={savingSettings} onClick={() => void saveSetting({ type: "supervisor", ...supervisorDraft }, "Vínculo de supervisão atualizado.")} className="rounded-lg bg-blue-600 px-4 text-sm font-bold text-white disabled:opacity-60">Salvar vínculo</button>
               </div>
               {supervisorOptions.length ? <SimpleTable columns={["Supervisor", "E-mail", "LOB", "Time", "Agentes", "Status"]} rows={supervisorOptions.map((supervisor) => [
@@ -18742,7 +18746,7 @@ export function SettingsPage() {
                 <button disabled={savingSettings || !skillConfigDraft.name.trim()} onClick={() => void saveSetting({ type: "skill", ...skillConfigDraft }, skillConfigDraft.id ? "Skill atualizada." : "Skill criada.")} className="rounded-lg bg-blue-600 px-4 text-sm font-bold text-white disabled:opacity-60">{skillConfigDraft.id ? "Salvar" : "Criar"}</button>
               </div>
               <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-800">
-                Cada colaborador pode ter várias skills, mas somente uma principal. A principal continua sendo usada por Billing, permissões e relatórios legados.
+                Cada parceiro pode ter várias skills, mas somente uma principal. A principal continua sendo usada por Billing, permissões e relatórios legados.
               </div>
               {settings?.skills?.length ? (
                 <SimpleTable
@@ -18770,7 +18774,7 @@ export function SettingsPage() {
               </div>
               <SimpleTable
                 columns={["Role", "Descrição"]}
-                rows={(settings?.roles ?? []).map((role) => [role.name, role.label])}
+                rows={(settings?.roles ?? []).map((role) => [displaySystemRole(role.name), role.label])}
               />
               <div className="mt-4 rounded-lg border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
                 Apenas ADMIN acessa esta página. Modo local/produção é informativo; secrets continuam fora da interface.

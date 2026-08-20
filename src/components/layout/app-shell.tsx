@@ -516,7 +516,7 @@ export function AppShell({
               {globalSearchOpen && globalSearch.trim().length >= 2 ? (
                 <div className="absolute left-0 top-11 z-50 w-full overflow-hidden rounded-2xl border border-border bg-white shadow-2xl shadow-navy-950/15 dark:bg-slate-950 dark:shadow-none">
                   {globalSearchLoading ? (
-                    <div className="px-4 py-3 text-sm font-bold text-blue-700">Buscando colaboradores...</div>
+                    <div className="px-4 py-3 text-sm font-bold text-blue-700">Buscando parceiros...</div>
                   ) : globalSearchResults.length ? (
                     <div className="max-h-[360px] overflow-y-auto p-1.5">
                       {globalSearchResults.map((result) => (

@@ -77,7 +77,7 @@ export function plannedProductiveHoursForSchedule(schedule?: WorkHoursScheduleLi
 }
 
 export function workHoursBlockedReasonForSchedule(schedule?: WorkHoursScheduleLike | null) {
-  if (!schedule) return "Não existe cronograma para este colaborador nesta data.";
+  if (!schedule) return "Não existe cronograma para este parceiro nesta data.";
   if (isWorkHoursAllowedForSchedule(schedule)) return "";
   const normalizedStatus = normalizeStatusKey(schedule.status);
   if (normalizedStatus === "TROCA_APROVADA") {

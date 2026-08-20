@@ -23,6 +23,6 @@ export async function POST(request: Request) {
     return NextResponse.json(result);
   } catch (error) {
     console.error("[employee-import:preview-route] falha inesperada", error);
-    return errorResponse(createServerError(error, "Não foi possível validar o arquivo de colaboradores. Tente novamente ou contate o administrador."));
+    return errorResponse(createServerError(error, "Não foi possível validar o arquivo de parceiros. Tente novamente ou contate o administrador."));
   }
 }

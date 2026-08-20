@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { isProjectExcludedFromAdsCoverage } from "@/lib/coverage-lob-rules";
 
-test("exclui colaborador PROJECT quando o slot de cobertura foi marcado como ADS", () => {
+test("exclui parceiro PROJECT quando o slot de cobertura foi marcado como ADS", () => {
   assert.equal(isProjectExcludedFromAdsCoverage("PROJECT", "ADS"), true);
   assert.equal(isProjectExcludedFromAdsCoverage(" project ", "ads"), true);
 });

@@ -39,8 +39,8 @@ export async function GET(request: Request) {
   if (!employee) {
     return NextResponse.json({
       success: false,
-      error: "Não encontrei um vínculo de colaborador para seu login.",
-      message: "Não encontrei um vínculo de colaborador para seu login. Peça ao supervisor para conferir seu cadastro/vínculo."
+      error: "Não encontrei um vínculo de parceiro para seu login.",
+      message: "Não encontrei um vínculo de parceiro para seu login. Peça ao supervisor para conferir seu cadastro/vínculo."
     }, { status: 404 });
   }
 

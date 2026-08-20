@@ -177,7 +177,7 @@ const importFieldLabels: Array<{ label: string; keys: string[] }> = [
   { label: "Cargo/Função", keys: ["cargo_funcao"] },
   { label: "Skill", keys: ["skill"] },
   { label: "Wave", keys: ["wave"] },
-  { label: "Status do colaborador", keys: ["status_colaborador"] },
+  { label: "Status do parceiro", keys: ["status_colaborador"] },
   { label: "Tipo de contrato", keys: ["tipo_contrato"] },
   { label: "Data de admissão", keys: ["data_admissao"] },
   { label: "Data de início de Nesting", keys: ["data_inicio_nesting"] },
@@ -227,9 +227,9 @@ export async function submitOperationalRegistration(input: RegistrationInput) {
       });
       if (activeEmployee) {
         return {
-          error: "Já existe um colaborador ativo vinculado a este CPF.",
+          error: "Já existe um parceiro ativo vinculado a este CPF.",
           type: "DUPLICATE_ERROR",
-          fields: { cpf: "Já existe um colaborador ativo vinculado a este CPF." }
+          fields: { cpf: "Já existe um parceiro ativo vinculado a este CPF." }
         };
       }
     }
@@ -278,13 +278,13 @@ export async function submitOperationalRegistration(input: RegistrationInput) {
           where: { id: reusableRegistration.id },
           data: {
             ...baseData,
-            history: appendHistory(reusableRegistration.history, "Colaborador", "Cadastro reaberto pelo envio de novo formulário.")
+            history: appendHistory(reusableRegistration.history, "Parceiro", "Cadastro reaberto pelo envio de novo formulário.")
           }
         })
         : await tx.employeeRegistrationRequest.create({
           data: {
             ...baseData,
-            history: [{ at: new Date().toISOString(), actor: "Colaborador", action: "Cadastro enviado" }]
+            history: [{ at: new Date().toISOString(), actor: "Parceiro", action: "Cadastro enviado" }]
           }
         });
 
@@ -386,12 +386,12 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
       allowPartial
     });
     if (invalidRows.length && !allowPartial) {
-      return { error: `Existem erros na importação de colaboradores. ${summarizeEmployeeImportErrors(validations)}`, preview: { rows: validations } };
+      return { error: `Existem erros na importação de parceiros. ${summarizeEmployeeImportErrors(validations)}`, preview: { rows: validations } };
     }
 
     const validRows = rows.filter((_, index) => !validations[index]?.errors.length);
     if (!validRows.length) {
-      return { error: `Nenhuma linha válida para importar colaboradores. ${summarizeEmployeeImportErrors(validations)}`, preview: { rows: validations } };
+      return { error: `Nenhuma linha válida para importar parceiros. ${summarizeEmployeeImportErrors(validations)}`, preview: { rows: validations } };
     }
     const normalizedValidRows = validRows.map((row) => normalizeEmployeeImportRow(row));
     const [importRoles, importLobs, importShifts] = await Promise.all([
@@ -747,7 +747,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
           action: "IMPORTACAO",
           entity: "EmployeeProfile",
           entityId: batchId,
-          reason: "Importação em massa de colaboradores via Excel",
+          reason: "Importação em massa de parceiros via Excel",
           newValue: {
             totalRows: rows.length,
             validRows: validRows.length,
@@ -785,11 +785,11 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
       }
     };
   } catch (error) {
-    console.error("[registration-import] erro ao importar colaboradores", error);
-    recordErrorLog({ userEmail: actor.email, code: "EMPLOYEE_IMPORT_DB_ERROR", message: error instanceof Error ? error.message : "Falha ao importar colaboradores", action: "EMPLOYEE_IMPORT", severity: "ERROR" });
+    console.error("[registration-import] erro ao importar parceiros", error);
+    recordErrorLog({ userEmail: actor.email, code: "EMPLOYEE_IMPORT_DB_ERROR", message: error instanceof Error ? error.message : "Falha ao importar parceiros", action: "EMPLOYEE_IMPORT", severity: "ERROR" });
     const mapped = mapPrismaError(error);
     if (mapped) return mapped;
-    return { error: error instanceof Error ? `Não foi possível importar colaboradores: ${error.message}` : "Não foi possível importar colaboradores. Verifique os dados obrigatórios e duplicidades." };
+    return { error: error instanceof Error ? `Não foi possível importar parceiros: ${error.message}` : "Não foi possível importar parceiros. Verifique os dados obrigatórios e duplicidades." };
   }
 }
 
@@ -874,7 +874,7 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
     if (existing.status === "APROVADO" || existing.status === "ATIVO") return { error: "Cadastro já foi aprovado." };
     if (existing.status === "RECUSADO") return { error: "Cadastro já foi recusado." };
     if (input.action === "approve" && !input.operationalData) return { error: "Dados operacionais são obrigatórios para aprovação." };
-    if (input.action === "approve" && !existing.passwordHash) return { error: "Este cadastro não possui senha cadastrada. Solicite ajuste ao colaborador." };
+    if (input.action === "approve" && !existing.passwordHash) return { error: "Este cadastro não possui senha cadastrada. Solicite ajuste ao parceiro." };
     if (input.action === "approve") {
       const requiredDataError = validateRequiredApprovalRegistrationData(existing);
       if (requiredDataError) return requiredDataError;
@@ -1055,7 +1055,7 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
           createdUserId: user.id,
           createdEmployeeProfileId: employee.id,
           operationalData: op as Prisma.InputJsonObject,
-          history: appendHistory(existing.history, actor.name, "Cadastro aprovado e colaborador ativado", input.reviewNotes)
+          history: appendHistory(existing.history, actor.name, "Cadastro aprovado e parceiro ativado", input.reviewNotes)
         }
       });
 
@@ -1153,7 +1153,7 @@ async function canImportEmployees(actor: Actor) {
   if (!user) return { error: "Usuário não autenticado." };
   const actorRole = normalizeRole(actor.role);
   if (!canManageRoles({ role: actor.role, status: user.status })) {
-    const reason = actorRole === "SUPERVISOR" ? "Supervisor não possui permissão para aprovar ou editar cadastros." : "Sem permissão para importar colaboradores.";
+    const reason = actorRole === "SUPERVISOR" ? "Supervisor não possui permissão para aprovar ou editar cadastros." : "Sem permissão para importar parceiros.";
     await auditPermissionDenied(actor, { action: "EMPLOYEE_IMPORT", entity: "EmployeeRegistrationRequest", reason });
     return { error: reason };
   }
@@ -1226,7 +1226,7 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     if (!isExistingEmployeeImport && !row.roleTitle) errors.push("Cargo/Função obrigatório.");
     if ((row.createUser || !isExistingEmployeeImport) && !text(rawRow.role_permissao)) errors.push("Role/Permissão obrigatória.");
     if (!isExistingEmployeeImport && !row.lob) errors.push("LOB obrigatória.");
-    if (!isExistingEmployeeImport && !row.employeeStatus) errors.push("Status do colaborador obrigatório.");
+    if (!isExistingEmployeeImport && !row.employeeStatus) errors.push("Status do parceiro obrigatório.");
     if (!isExistingEmployeeImport && !row.isPcd) errors.push("É PCD? obrigatório.");
     if (hasImportValue(rawRow.eh_pcd) && !row.isPcd) errors.push("É PCD? inválido. Use Sim, Não ou Prefiro não informar.");
     if (row.isPcd === "Sim" && !row.pcdDisabilityType) errors.push("Tipo de deficiência é obrigatório quando PCD for Sim.");
@@ -1240,7 +1240,7 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
       errors.push(blockedKey === "PLANTAO" ? "Plantão não é um turno ativo." : "Férias deve ser usada como status de cronograma, não como turno.");
     } else if (row.shift && (!isSelectableShiftName(row.shift) || !validShifts.has(normalizeLookupKey(cleanShiftName(row.shift))))) errors.push(`Turno ${row.shift} não existe em Configurações.`);
     if (row.cpf && !isCpfFormat(row.cpf)) errors.push("CPF inválido. Use 000.000.000-00.");
-    if (!isExistingEmployeeImport && !row.cpf) warnings.push("CPF pendente: o colaborador será importado com cadastro incompleto para complemento posterior.");
+    if (!isExistingEmployeeImport && !row.cpf) warnings.push("CPF pendente: o parceiro será importado com cadastro incompleto para complemento posterior.");
     if (!isExistingEmployeeImport && !hasImportValue(rawRow.cnpj)) errors.push("CNPJ é obrigatório.");
     if (row.cnpj && !isCnpjFormat(row.cnpj)) errors.push("CNPJ inválido. Use 00.000.000/0000-00.");
     if (row.createUser && !row.name) errors.push("Nome obrigatório quando criar_usuario = sim.");
@@ -1267,8 +1267,8 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     if (hasImportValue(rawRow.tipo_desligamento) && !row.terminationType) errors.push("Tipo de desligamento inválido. Use Voluntário ou Involuntário.");
     if (hasAnyImportValue(rawRow, ["horario_entrada", "entrada"]) && !row.workStartTime) errors.push("Horário de entrada inválido.");
     if (hasAnyImportValue(rawRow, ["horario_saida", "saida"]) && !row.workEndTime) errors.push("Horário de saída inválido.");
-    if (hasAnyImportValue(rawRow, ["status_colaborador"]) && isOperationalTerminationStatus(row.employeeStatus) && !row.terminationDate && !activeByWb?.terminationDate) warnings.push("Colaborador marcado como Desligado sem data de desligamento.");
-    if (hasAnyImportValue(rawRow, ["status_colaborador"]) && isTrainingTerminationStatus(row.employeeStatus) && !row.terminationDate && !activeByWb?.terminationDate) warnings.push("Colaborador marcado como Desligado em Treinamento sem data de desligamento.");
+    if (hasAnyImportValue(rawRow, ["status_colaborador"]) && isOperationalTerminationStatus(row.employeeStatus) && !row.terminationDate && !activeByWb?.terminationDate) warnings.push("Parceiro marcado como Desligado sem data de desligamento.");
+    if (hasAnyImportValue(rawRow, ["status_colaborador"]) && isTrainingTerminationStatus(row.employeeStatus) && !row.terminationDate && !activeByWb?.terminationDate) warnings.push("Parceiro marcado como Desligado em Treinamento sem data de desligamento.");
     if (row.terminationDate && hasAnyImportValue(rawRow, ["status_colaborador"]) && !isAccessInactiveEmployeeStatus(row.employeeStatus)) warnings.push("Data de desligamento preenchida, mas status_colaborador não está Desligado, Desligado em Treinamento, Inativo ou Desativado.");
     if (hasAnyImportValue(rawRow, ["status_colaborador"]) && isAccessInactiveEmployeeStatus(row.employeeStatus)) warnings.push("Acesso vinculado será inativado e o histórico será preservado.");
     if (row.stateUf && !/^[A-Z]{2}$/.test(row.stateUf)) errors.push("Estado UF deve ter 2 letras.");
@@ -1285,7 +1285,7 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     if (normalizedRowWbLogin) seenWb.add(normalizedRowWbLogin);
 
     if (activeByWb) {
-      warnings.push("WB/Login existente: o colaborador será atualizado.");
+      warnings.push("WB/Login existente: o parceiro será atualizado.");
       if (row.skill && row.skill !== (activeByWb.skill ?? "")) warnings.push(`Skill será atualizada de ${activeByWb.skill || "vazio"} para ${row.skill}.`);
       if (row.wave && row.wave !== (activeByWb.wave ?? "")) warnings.push(`Wave será atualizada de ${activeByWb.wave || "vazio"} para ${row.wave}.`);
       if (row.workStartTime && row.workStartTime !== (activeByWb.workStartTime ?? "")) warnings.push(`Horário de entrada será atualizado de ${activeByWb.workStartTime || "vazio"} para ${row.workStartTime}.`);
@@ -1295,14 +1295,14 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
       if (!row.workEndTime) errors.push("Horário de saída é obrigatório.");
     }
     const activeByCpf = row.cpf ? activeEmployeeByCpfMap.get(row.cpf) ?? null : null;
-    if (activeByCpf && activeByCpf.id !== activeByWb?.id) errors.push("Já existe colaborador ativo com este CPF.");
+    if (activeByCpf && activeByCpf.id !== activeByWb?.id) errors.push("Já existe parceiro ativo com este CPF.");
     const activeUser = row.email ? activeUserByEmail.get(row.email) ?? null : null;
     if (activeUser && activeUser.id !== activeByWb?.userId) errors.push("Já existe usuário ativo com este e-mail.");
     const supervisor = resolveImportSupervisor(row, employeeByWb, supervisorByEmail, supervisorsByNameKey);
     if (row.supervisorWbLogin || row.supervisorEmail || row.supervisorName) {
       if (!supervisor.employee) errors.push(supervisor.error ?? "Supervisor informado não encontrado.");
       if (supervisor.employee && normalizedRowWbLogin && normalizeWbLoginForEmployeeImport(supervisor.employee.wbLogin) === normalizedRowWbLogin) {
-        errors.push("O colaborador não pode ser supervisor de si mesmo.");
+        errors.push("O parceiro não pode ser supervisor de si mesmo.");
       }
       if (supervisor.employee && activeByWb?.supervisorId && activeByWb.supervisorId !== supervisor.employee.id) {
         warnings.push(`Supervisor será atualizado para ${supervisor.employee.fullName}.`);
@@ -1716,7 +1716,7 @@ function resolveImportSupervisor(
   }
   if (row.supervisorName) {
     const matches = supervisorsByNameKey.get(normalizeLookupKey(row.supervisorName)) ?? [];
-    if (matches.length > 1) return { employee: null, error: "Supervisor por nome encontrou mais de um colaborador. Use supervisor_wb_login." };
+    if (matches.length > 1) return { employee: null, error: "Supervisor por nome encontrou mais de um parceiro. Use supervisor_wb_login." };
     return matches[0] ? { employee: matches[0] } : { employee: null, error: "Supervisor informado por nome não encontrado." };
   }
   return { employee: null, error: undefined };

@@ -63,7 +63,7 @@ async function resolveMoodActor(actor: Actor) {
 
 export async function getOwnMood(actor: Actor, dateValue?: string) {
   const actorMood = await resolveMoodActor(actor);
-  if (!actorMood) return { error: "Usuário sem cadastro de colaborador vinculado." };
+  if (!actorMood) return { error: "Usuário sem cadastro de parceiro vinculado." };
   const date = parseMoodDate(dateValue);
   if (!date) return { error: "Data inválida." };
   const record = await prisma.employeeMoodRecord.findUnique({
@@ -82,7 +82,7 @@ export async function getOwnMood(actor: Actor, dateValue?: string) {
 
 export async function submitOwnMood(actor: Actor, input: MoodInput) {
   const actorMood = await resolveMoodActor(actor);
-  if (!actorMood) return { error: "Usuário sem cadastro de colaborador vinculado." };
+  if (!actorMood) return { error: "Usuário sem cadastro de parceiro vinculado." };
   const date = parseMoodDate(input.date);
   if (!date) return { error: "Data inválida." };
   const moodScore = Number(input.moodScore);

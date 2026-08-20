@@ -135,13 +135,13 @@ export async function listOperationalEmployees(actor: Actor, query: EmployeeList
       try {
         return await listOperationalEmployeesLegacy(actor);
       } catch (legacyError) {
-        console.error("[employee] erro no fallback legado de colaboradores", legacyError);
+        console.error("[employee] erro no fallback legado de parceiros", legacyError);
       }
     }
     recordErrorLog({
       userEmail: actor.email,
       code: "EMPLOYEE_LIST_DB_ERROR",
-      message: error instanceof Error ? error.message : "Falha ao listar colaboradores reais",
+      message: error instanceof Error ? error.message : "Falha ao listar parceiros reais",
       route: "/api/employees",
       action: "EMPLOYEE_LIST",
       severity: "ERROR"
@@ -258,7 +258,7 @@ async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeList
     recordErrorLog({
       userEmail: actor.email,
       code: "EMPLOYEE_SUMMARY_LIST_ERROR",
-      message: error instanceof Error ? error.message : "Falha ao listar resumo de colaboradores",
+      message: error instanceof Error ? error.message : "Falha ao listar resumo de parceiros",
       route: "/api/employees",
       action: "EMPLOYEE_SUMMARY_LIST",
       severity: "ERROR"
@@ -279,8 +279,8 @@ export async function getOperationalEmployeeDetail(actor: Actor, id: string) {
       where: { id, deletedAt: null },
       include: { ...employeeInclude }
     });
-    if (!employee) return createNotFoundError("Colaborador não encontrado.");
-    if (role === "COLABORADOR" && employee.userId !== user.id) return createPermissionError("Você não tem permissão para visualizar este colaborador.");
+    if (!employee) return createNotFoundError("Parceiro não encontrado.");
+    if (role === "COLABORADOR" && employee.userId !== user.id) return createPermissionError("Você não tem permissão para visualizar este parceiro.");
 
     const shouldLoadSensitive = canViewEmployeeSensitiveData({ role: actor.role, status: user.status }, { roleTitle: employee.roleTitle, email: employee.user?.email });
     const sensitive = shouldLoadSensitive ? await prisma.employeeSensitiveData.findUnique({ where: { employeeId: employee.id } }) : null;
@@ -289,12 +289,12 @@ export async function getOperationalEmployeeDetail(actor: Actor, id: string) {
     recordErrorLog({
       userEmail: actor.email,
       code: "EMPLOYEE_DETAIL_ERROR",
-      message: error instanceof Error ? error.message : "Falha ao carregar detalhe do colaborador",
+      message: error instanceof Error ? error.message : "Falha ao carregar detalhe do parceiro",
       route: `/api/employees/${id}`,
       action: "EMPLOYEE_DETAIL",
       severity: "ERROR"
     });
-    return mapPrismaError(error) ?? createServerError(error, "Não foi possível carregar os detalhes do colaborador.");
+    return mapPrismaError(error) ?? createServerError(error, "Não foi possível carregar os detalhes do parceiro.");
   }
 }
 
@@ -485,12 +485,12 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
       where: { id: input.id, deletedAt: null },
       include: { ...employeeInclude }
     });
-    if (!employee) return createNotFoundError("Colaborador não encontrado.");
+    if (!employee) return createNotFoundError("Parceiro não encontrado.");
     const actorCanManageRoles = canManageRoles({ role: actor.role, status: user.status });
     const canEditOperational = canEditEmployeeData({ role: actor.role, status: user.status });
     const canEditPeopleData = canEditEmployeeSensitiveData({ role: actor.role, status: user.status });
     const canEditProfileOperational = canEditOperational;
-    if (!canEditOperational && !canEditPeopleData) return createPermissionError("Você não tem permissão para editar dados do colaborador.");
+    if (!canEditOperational && !canEditPeopleData) return createPermissionError("Você não tem permissão para editar dados do parceiro.");
 
     const adminOnlyFields: Array<keyof EmployeeAdminUpdateInput> = ["roleName"];
     const sensitivePeopleFields: Array<keyof EmployeeAdminUpdateInput> = ["fullName", "socialName", "email", "userStatus", "wbLogin", "primaryPhone", "city", "stateUf", "preferredSchedule", "contractType", "admissionDate", "trainingStartDate", "terminationDate", "terminationType", "terminationReason", "ethnicity", "sexualOrientation", "isPcd", "pcdDisabilityType", "pcdDisabilityOther", "firstJob", "hasTelemarketingExperience", "telemarketingWhere", "cpf", "cnpj", "pixKey", "pixKeyType"];
@@ -583,7 +583,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     if (input.lobId !== undefined && !nextLobId) return createValidationError({ lobId: "LOB é obrigatória." });
     if (input.shiftId !== undefined && !nextShiftId) return createValidationError({ shiftId: "Turno é obrigatório." });
     if (input.roleTitle !== undefined && !nextRoleTitle) return createValidationError({ roleTitle: "Cargo/Função é obrigatório." });
-    if (input.operationalStatus !== undefined && !nextStatus) return createValidationError({ operationalStatus: "Status do colaborador é obrigatório." });
+    if (input.operationalStatus !== undefined && !nextStatus) return createValidationError({ operationalStatus: "Status do parceiro é obrigatório." });
     if (input.stateUf !== undefined && nextStateUf && nextStateUf.length !== 2) return createValidationError({ stateUf: "Estado/UF deve ter 2 letras." });
     if (input.cpf !== undefined && nextCpf && nextCpfDigits.length !== 11) return createValidationError({ cpf: "CPF deve conter 11 dígitos." });
     if (input.cnpj !== undefined && nextCnpj && nextCnpjDigits.length !== 14) return createValidationError({ cnpj: "CNPJ deve conter 14 dígitos." });
@@ -592,7 +592,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     if (pixValidation && !pixValidation.valid) return createValidationError({ [pixValidation.field ?? "pixKey"]: pixValidation.message ?? "Chave PIX inválida." });
     if ((input.isPcd !== undefined || input.pcdDisabilityType !== undefined) && effectiveIsPcd === "Sim" && !effectivePcdDisabilityType) return createValidationError({ pcdDisabilityType: "Tipo de deficiência é obrigatório quando PCD for Sim." });
     if ((input.isPcd !== undefined || input.pcdDisabilityType !== undefined || input.pcdDisabilityOther !== undefined) && effectiveIsPcd === "Sim" && effectivePcdDisabilityType === "Outra" && !effectivePcdDisabilityOther) return createValidationError({ pcdDisabilityOther: "Especifique o tipo de deficiência." });
-    if (nextSupervisorId && nextSupervisorId === employee.id) return createValidationError({ supervisorId: "O colaborador não pode ser supervisor de si mesmo." }, "O colaborador não pode ser supervisor de si mesmo.");
+    if (nextSupervisorId && nextSupervisorId === employee.id) return createValidationError({ supervisorId: "O parceiro não pode ser supervisor de si mesmo." }, "O parceiro não pode ser supervisor de si mesmo.");
 
     let selectedSkills: Array<{ id: string; name: string }> | undefined;
     let resolvedPrimarySkillId: string | null | undefined;
@@ -624,7 +624,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     }
     if (nextWbLogin && nextWbLogin !== employee.wbLogin) {
       const duplicatedWb = await prisma.employeeProfile.findFirst({ where: { wbLogin: nextWbLogin, deletedAt: null, id: { not: employee.id } } });
-      if (duplicatedWb) return createDuplicateError("Já existe um colaborador com este WB/Login.", { wbLogin: "Este WB/Login já está em uso." });
+      if (duplicatedWb) return createDuplicateError("Já existe um parceiro com este WB/Login.", { wbLogin: "Este WB/Login já está em uso." });
     }
     if (nextEmail && nextEmail !== employee.user?.email) {
       const duplicatedEmail = await prisma.user.findFirst({ where: { email: nextEmail, deletedAt: null, id: employee.userId ? { not: employee.userId } : undefined } });
@@ -793,16 +793,16 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     const sensitive = await prisma.employeeSensitiveData.findUnique({ where: { employeeId: updated.id } });
     return { data: mapEmployee(updated, role, sensitive ?? undefined) };
   } catch (error) {
-    console.error("[employee] erro ao atualizar colaborador", error);
+    console.error("[employee] erro ao atualizar parceiro", error);
     recordErrorLog({
       userEmail: actor.email,
       code: "EMPLOYEE_UPDATE_DB_ERROR",
-      message: error instanceof Error ? error.message : "Falha ao atualizar colaborador",
+      message: error instanceof Error ? error.message : "Falha ao atualizar parceiro",
       route: "/api/employees",
       action: "EMPLOYEE_UPDATE",
       severity: "ERROR"
     });
-    return mapPrismaError(error) ?? createServerError(error, "Erro inesperado ao atualizar colaborador. Tente novamente ou contate o administrador.");
+    return mapPrismaError(error) ?? createServerError(error, "Erro inesperado ao atualizar parceiro. Tente novamente ou contate o administrador.");
   }
 }
 
@@ -885,7 +885,7 @@ export async function resetEmployeeUserPassword(actor: Actor, input: { employeeI
     if (input.password !== input.confirmPassword) return { error: "A confirmação de senha não confere." };
 
     const employee = await prisma.employeeProfile.findFirst({ where: { id: input.employeeId, deletedAt: null }, include: { user: true } });
-    if (!employee?.userId || !employee.user) return { error: "Este colaborador não possui usuário vinculado." };
+    if (!employee?.userId || !employee.user) return { error: "Este parceiro não possui usuário vinculado." };
 
     const passwordHash = await bcrypt.hash(input.password, 10);
     await prisma.$transaction(async (tx) => {
@@ -948,7 +948,7 @@ export async function deleteOperationalEmployee(actor: Actor, input: EmployeeDel
       where: { id: input.id, deletedAt: null },
       include: { user: { include: { role: true } }, lob: true, team: true, supervisor: true, shift: true }
     });
-    if (!employee) return createNotFoundError("Colaborador não encontrado.");
+    if (!employee) return createNotFoundError("Parceiro não encontrado.");
 
     const dependencies = await getEmployeeDeleteDependencies(employee.id, employee.userId);
     const blockers = Object.entries(dependencies.critical).filter(([, count]) => count > 0);
@@ -962,7 +962,7 @@ export async function deleteOperationalEmployee(actor: Actor, input: EmployeeDel
 
     if (blockers.length) {
       await auditEmployeeDelete(admin.id, employee, reason, "DELETE_EMPLOYEE_BLOCKED", dependencies, { blockers: Object.fromEntries(blockers) });
-      return createRelationError("Este cadastro possui histórico operacional vinculado. Use Inativar colaborador para preservar auditoria.", {
+      return createRelationError("Este cadastro possui histórico operacional vinculado. Use Inativar parceiro para preservar auditoria.", {
         dependencies: blockers.map(([name, count]) => `${name}: ${count}`).join(", ")
       });
     }

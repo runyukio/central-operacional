@@ -198,7 +198,7 @@ export function BillingFiscalInvoiceUpload({
               {displayed.matchesBilling
                 ? "Nota validada: o valor do serviço é igual ao valor esperado do Billing."
                 : displayed.amountMismatchAccepted
-                  ? "Nota validada: a divergência de valor está liberada para este colaborador."
+                  ? "Nota validada: a divergência de valor está liberada para este parceiro."
                 : `Aprovação bloqueada: a nota está em ${formatCurrency(displayed.serviceAmount)} e o valor esperado do Billing em ${formatCurrency(expectedGrossAmount)}.`}
             </span>
           </div>

@@ -13,14 +13,14 @@ const existingInvoice = {
   fileName: "nota.pdf"
 };
 
-test("mantém a divergência bloqueada para colaboradores sem exceção", () => {
+test("mantém a divergência bloqueada para parceiros sem exceção", () => {
   assert.equal(
     billingFiscalUploadIsReady(EMPTY_BILLING_FISCAL_UPLOAD, existingInvoice, 11_000.64),
     false
   );
 });
 
-test("libera uma nota já anexada com valor divergente para colaboradores autorizados", () => {
+test("libera uma nota já anexada com valor divergente para parceiros autorizados", () => {
   assert.equal(
     billingFiscalUploadIsReady(EMPTY_BILLING_FISCAL_UPLOAD, existingInvoice, 11_000.64, true),
     true

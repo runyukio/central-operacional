@@ -45,7 +45,7 @@ export function ApprovalTimeline({ children }: { children: ReactNode }) {
 }
 
 export function EmployeeProfileDrawer({ children }: { children: ReactNode }) {
-  return <Panel title="Perfil do Colaborador">{children}</Panel>;
+  return <Panel title="Perfil do Parceiro">{children}</Panel>;
 }
 
 export function UploadExcelModal({ children }: { children: ReactNode }) {

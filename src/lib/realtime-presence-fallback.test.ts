@@ -21,7 +21,7 @@ function candidate(overrides: Partial<RealtimeOperationalPresenceCandidate> = {}
   };
 }
 
-test("complementa o ciclo atual com colaborador ativo presente na Captura de Horas", () => {
+test("complementa o ciclo atual com parceiro ativo presente na Captura de Horas", () => {
   const rows = buildRealtimePresenceFallbackRows({
     existingRows: [],
     candidates: [candidate()],

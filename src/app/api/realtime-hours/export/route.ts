@@ -116,7 +116,7 @@ async function authorizeExport() {
 function buildCaptureHoursExportResponse(exportRows: RealtimeHoursExportRow[]) {
   const headers = [
     "Data",
-    "Colaborador",
+    "Parceiro",
     "WB/Login",
     "ID do agente",
     "Status online",

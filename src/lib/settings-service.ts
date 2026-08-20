@@ -92,9 +92,9 @@ const permissionSeeds = [
   ["can_approve_day_off_supervisor_step", "Aprovar folga como supervisor"],
   ["can_approve_day_off_wfm_step", "Aprovar folga como WFM"],
   ["can_view_employee_map", "Visualizar mapa de funcionários"],
-  ["can_edit_employee_data", "Editar dados de colaborador"],
+  ["can_edit_employee_data", "Editar dados de parceiro"],
   ["can_view_sensitive_employee_data", "Ver dados sensíveis"],
-  ["can_export_employee_data", "Exportar colaboradores"],
+  ["can_export_employee_data", "Exportar parceiros"],
   ["can_manage_registrations", "Gerenciar cadastros"],
   ["can_reset_password", "Resetar senha"],
   ["can_access_audit_logs", "Acessar auditoria"],
@@ -518,7 +518,7 @@ async function saveSupervisorLink(tx: Prisma.TransactionClient, adminId: string,
     await auditSettings(tx, adminId, "EDICAO", "EmployeeProfile", employee.id, action, before);
     return { data: employee };
   }
-  return { error: "Informe time ou colaborador para vínculo de supervisão." };
+  return { error: "Informe time ou parceiro para vínculo de supervisão." };
 }
 
 async function saveShift(tx: Prisma.TransactionClient, adminId: string, action: SettingsAction) {

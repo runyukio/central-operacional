@@ -40,7 +40,7 @@ test("não divide por zero quando não há avaliações", () => {
   });
 });
 
-test("separa a fonte de qualidade pela LOB atual do colaborador", () => {
+test("separa a fonte de qualidade pela LOB atual do parceiro", () => {
   assert.equal(getQualityRuleByEmployee({ lob: { name: "ADS" } }), "ADS_QUALITY");
   assert.equal(getQualityRuleByEmployee({ lob: { name: "PROJECT" } }), "ADS_QUALITY");
   assert.equal(getQualityRuleByEmployee({ lob: { name: "VIDEO" } }), "TNS_QUALITY");

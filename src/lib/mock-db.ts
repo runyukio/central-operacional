@@ -552,7 +552,7 @@ export function submitEmployeeRegistration(input: Omit<EmployeeRegistrationRecor
 
   if (db.registrationRequests.some((item) => digits(item.cpf) === digits(input.cpf))) errors.push("CPF já possui cadastro ou solicitação.");
   if (db.registrationRequests.some((item) => item.email.toLowerCase() === input.email.toLowerCase())) errors.push("E-mail já possui cadastro ou solicitação.");
-  if (db.employees.some((employee) => employeeEmail(employee)?.toLowerCase() === input.email.toLowerCase())) errors.push("E-mail já está vinculado a colaborador ativo.");
+  if (db.employees.some((employee) => employeeEmail(employee)?.toLowerCase() === input.email.toLowerCase())) errors.push("E-mail já está vinculado a parceiro ativo.");
 
   if (errors.length) return { error: errors.join(" ") };
 
@@ -666,7 +666,7 @@ export function reviewEmployeeRegistration(
   record.operationalData = operationalData;
   record.createdUserEmail = record.email;
   record.createdEmployeeProfileId = employee.id;
-  record.history.unshift({ at: timestamp(), actor: actor.name, action: "Cadastro aprovado e colaborador ativado", notes: input.reviewNotes });
+  record.history.unshift({ at: timestamp(), actor: actor.name, action: "Cadastro aprovado e parceiro ativado", notes: input.reviewNotes });
   createInternalNotification({ userEmail: record.email, title: "Cadastro aprovado", body: "Seu acesso foi liberado e seus dados já aparecem no Mapa de Funcionários.", type: "CADASTRO", href: "/minha-escala" });
   addAudit(actor, "APROVAÇÃO", "EmployeeRegistrationRequest", record.id, "Cadastro aprovado e Mapa de Funcionários atualizado", before, { status: record.status, employee });
   return { data: record, employee };
@@ -918,7 +918,7 @@ export function listAttendanceRecords(actor: Actor) {
 export function updateAttendance(actor: Actor, input: { employeeId: string; date: string; shift: string; status: string; absenceReason?: string; reasonCategory?: string; supervisorJustification?: string; hasEvidence?: boolean; evidenceUrl?: string }) {
   const db = getMockDb();
   const employee = db.employees.find((item) => item.id === input.employeeId);
-  if (!employee) return { error: "Colaborador não encontrado." };
+  if (!employee) return { error: "Parceiro não encontrado." };
   const canManageAttendance = roleHasCapability(actor.role, "ATTENDANCE_MANAGE");
   const canJustifyAttendance = roleHasCapability(actor.role, "ATTENDANCE_JUSTIFY");
   if (!canManageAttendance && !canJustifyAttendance) return { error: "Sem permissão para alterar presença." };

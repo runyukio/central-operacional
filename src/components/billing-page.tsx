@@ -237,7 +237,7 @@ export function BillingPage() {
   const tabs = useMemo<Array<[TabKey, string]>>(() => {
     const base: Array<[TabKey, string]> = [
       ["lob", "Consolidado por LOB"],
-      ["employees", "Por colaborador"],
+      ["employees", "Por parceiro"],
       ["hours", "Detalhamento de horas"]
     ];
     return canManageBilling
@@ -444,7 +444,7 @@ export function BillingPage() {
       if (!response.ok) throw new Error(next.error ?? "Não foi possível atualizar o invoice.");
       setMessage(finalized
         ? "Invoice individual finalizado manualmente, sem envio ao Omie."
-        : "Invoice reaberto: a nota fiscal anterior foi removida e o colaborador já pode enviar uma nova.");
+        : "Invoice reaberto: a nota fiscal anterior foi removida e o parceiro já pode enviar uma nova.");
       await load();
       return true;
     } catch (err) {
@@ -530,7 +530,7 @@ export function BillingPage() {
     <div className="space-y-4">
       <PageHeader
         title="Billing"
-        description="Cálculo de invoice para colaboradores PJ com base nas horas aprovadas oficiais."
+        description="Cálculo de invoice para parceiros PJ com base nas horas aprovadas oficiais."
         icon={CircleDollarSign}
         actions={<StatusBadge status="Acesso restrito" />}
       />
@@ -540,13 +540,13 @@ export function BillingPage() {
           <Label text="Mês de referência">
             <input type="month" min="2026-06" value={referenceMonth} onChange={(event) => setReferenceMonth(event.target.value)} className="premium-control h-10 w-full px-3 text-sm font-bold" />
           </Label>
-          <Label text="Buscar colaborador">
+          <Label text="Buscar parceiro">
             <div className="premium-control flex h-10 items-center gap-2 px-3">
               <Search className="h-4 w-4 text-muted" />
-              <input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="Nome, WB, e-mail, skill..." className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" />
+              <input value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="Nome, WB, e-mail, CNPJ, skill..." className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" />
             </div>
           </Label>
-          <Label text="Status do colaborador">
+          <Label text="Status do parceiro">
             <select value={employeeStatus} onChange={(event) => setEmployeeStatus(event.target.value)} className="premium-control h-10 w-full px-3 text-sm font-bold">
               <option>Todos</option>
               <option>Ativo</option>
@@ -560,7 +560,7 @@ export function BillingPage() {
               <option>Todos</option>
               <option value="EM_PREVISAO">Em previsão</option>
               <option value="DISPONIVEL_APROVACAO">Disponível para aprovação</option>
-              <option value="APROVADO_COLABORADOR">Aprovado pelo colaborador</option>
+              <option value="APROVADO_COLABORADOR">Aprovado pelo parceiro</option>
               <option value="FECHADO">Fechado</option>
               <option value="PAGO">Pago</option>
             </select>
@@ -616,7 +616,7 @@ export function BillingPage() {
             </a>
           </div>
         </div>
-        <p className="mt-2 text-xs font-semibold text-muted">Billing disponível a partir de Junho/2026 apenas para colaboradores PJ. Ciclos anteriores ficam bloqueados.</p>
+        <p className="mt-2 text-xs font-semibold text-muted">Billing disponível a partir de Junho/2026 apenas para parceiros PJ. Ciclos anteriores ficam bloqueados.</p>
       </section>
 
       {message || error ? (
@@ -702,7 +702,7 @@ export function BillingPage() {
                 {canManageBilling ? (
                   <div className="mt-3 grid gap-2">
                     <button disabled={saving} onClick={() => postBilling({ action: "set-cycle-status", referenceMonth, status: "EM_REVISAO" }, "Ciclo marcado como Em revisão.")} className="premium-control inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none text-navy-950">Marcar em revisão</button>
-                    <button disabled={saving} onClick={() => postBilling({ action: "set-cycle-status", referenceMonth, status: "FINALIZADO_CONFERENCIA" }, "Ciclo liberado para conferência dos colaboradores.")} className="premium-button inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none">
+                    <button disabled={saving} onClick={() => postBilling({ action: "set-cycle-status", referenceMonth, status: "FINALIZADO_CONFERENCIA" }, "Ciclo liberado para conferência dos parceiros.")} className="premium-button inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none">
                       <Send className="h-4 w-4" /> Liberar conferência
                     </button>
                     <button disabled={saving} onClick={() => postBilling({ action: "set-cycle-status", referenceMonth, status: "FECHADO" }, "Ciclo fechado.")} className="premium-control inline-flex h-9 items-center justify-center gap-2 px-3 text-xs font-black leading-none text-navy-950">Fechar ciclo</button>
@@ -714,7 +714,7 @@ export function BillingPage() {
                 )}
               </Panel>
               <Panel title="Exportar Billing">
-                <p className="text-sm font-semibold text-muted">Gera XLSX com Consolidado, Por LOB, Por Colaborador, Detalhamento de Horas, Ajustes, Aprovações e Configurações.</p>
+                <p className="text-sm font-semibold text-muted">Gera XLSX com Consolidado, Por LOB, Por Parceiro, Detalhamento de Horas, Ajustes, Aprovações e Configurações.</p>
                 <a href={exportHref} className="premium-button mt-3 inline-flex h-10 w-full items-center justify-center gap-2 px-3 text-sm font-extrabold leading-none">
                   <Download className="h-4 w-4" /> Exportar XLSX
                 </a>
@@ -822,7 +822,7 @@ function EmployeeTable({
   const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
   const safePage = Math.min(page, totalPages);
   const pagedRows = rows.slice((safePage - 1) * pageSize, safePage * pageSize);
-  if (!rows.length) return <EmptyState title="Sem colaboradores" description="Não há invoices para os filtros selecionados." />;
+  if (!rows.length) return <EmptyState title="Sem parceiros" description="Não há invoices para os filtros selecionados." />;
   return (
     <div className="space-y-3">
       <Table
@@ -860,7 +860,7 @@ function EmployeeTable({
         ])}
       />
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-muted">
-        <span>{rows.length} colaborador(es) encontrados</span>
+        <span>{rows.length} parceiro(es) encontrados</span>
         <div className="flex items-center gap-2">
           <button type="button" disabled={safePage <= 1} onClick={() => onPageChange(safePage - 1)} className="premium-control h-8 px-3 disabled:opacity-50">Anterior</button>
           <span>Página {safePage} de {totalPages}</span>
@@ -964,7 +964,7 @@ function FiscalInvoiceField({ label, children }: { label: string; children: Reac
 
 function HourDetailsTable({ rows }: { rows: BillingPayload["data"]["invoices"] }) {
   const details = rows.flatMap((row) => row.hourDetails?.map((detail) => [detail.date, row.employeeName, row.wbLogin, row.lob, detail.kind === "PROJECTED" ? "Projetado" : "Aprovado", minutesToHours(detail.minutes), formatCurrency(detail.amount)]) ?? []);
-  return <Table columns={["Data", "Colaborador", "WB/Login", "LOB", "Tipo", "Horas", "Valor"]} rows={details} />;
+  return <Table columns={["Data", "Parceiro", "WB/Login", "LOB", "Tipo", "Horas", "Valor"]} rows={details} />;
 }
 
 function AdjustmentForm({ draft, setDraft, invoices, saving, onSubmit }: { draft: { type: string; description: string; amount: string; employeeInvoiceId: string }; setDraft: (value: { type: string; description: string; amount: string; employeeInvoiceId: string }) => void; invoices: BillingPayload["data"]["invoices"]; saving: boolean; onSubmit: () => void }) {
@@ -1287,7 +1287,7 @@ function EmployeeBillingDetail({
                     <h3 className="mt-2.5 text-sm font-bold text-navy-950">{detailsLoaded ? "Sem composição de horas" : "Detalhe sob demanda"}</h3>
                     <p className="mt-1 text-xs text-muted">
                       {detailsLoaded
-                        ? "Não há horas aprovadas ou projetadas para exibir neste colaborador/ciclo."
+                        ? "Não há horas aprovadas ou projetadas para exibir neste parceiro/ciclo."
                         : "Carregue a composição diária completa deste ciclo sem trazer todos os detalhes no primeiro load."}
                     </p>
                     {!detailsLoaded ? (
@@ -1388,7 +1388,7 @@ function AdjustmentsTable({
 }) {
   return (
     <Table
-      columns={["Tipo", "Descrição", "Observação", "Colaborador", "LOB", "Valor", "Criado por", "Criado em", "Ações"]}
+      columns={["Tipo", "Descrição", "Observação", "Parceiro", "LOB", "Valor", "Criado por", "Criado em", "Ações"]}
       rows={rows.map((row) => [
         row.type,
         row.description,
@@ -1500,7 +1500,7 @@ function AdjustmentEditModal({
 }
 
 function AdjustmentRequestsTable({ rows }: { rows: BillingPayload["data"]["adjustmentRequests"] }) {
-  return <Table columns={["Solicitação", "Colaborador", "Item", "Status", "Valor final", "Criada em"]} rows={rows.map((row) => [row.requestCode || row.id, `${row.employeeName} (${row.wbLogin})`, row.questionedItem, <StatusBadge key={row.id} status={row.statusLabel} />, formatCurrency(row.finalAmount), row.createdAt])} />;
+  return <Table columns={["Solicitação", "Parceiro", "Item", "Status", "Valor final", "Criada em"]} rows={rows.map((row) => [row.requestCode || row.id, `${row.employeeName} (${row.wbLogin})`, row.questionedItem, <StatusBadge key={row.id} status={row.statusLabel} />, formatCurrency(row.finalAmount), row.createdAt])} />;
 }
 
 function RatesTable({ rows, draft, setDraft, saving, onSave }: { rows: BillingPayload["data"]["rateConfigs"]; draft: Record<string, string>; setDraft: (value: Record<string, string>) => void; saving: boolean; onSave: () => void }) {

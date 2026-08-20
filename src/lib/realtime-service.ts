@@ -282,7 +282,7 @@ type RealtimeCycleOption = {
 };
 
 const queueNameCandidates = ["fila", "queue", "queue id", "queue_id", "queue name", "queue_name", "skill group queue", "skillgroupqueue"];
-const agentNameCandidates = ["agente", "agent", "auditor", "auditor name", "nome", "name", "colaborador", "operator", "moderator"];
+const agentNameCandidates = ["agente", "agent", "auditor", "auditor name", "nome", "name", "parceiro", "colaborador", "operator", "moderator"];
 const wbLoginCandidates = ["wb", "wb login", "wblogin", "login", "user id", "userid", "uid", "email", "e-mail"];
 const statusCandidates = ["status", "state", "estado", "situacao", "situação", "agent status", "queue status", "online status"];
 const lobCandidates = ["lob", "operation", "operacao", "operação", "skill group", "skillgroup", "business", "cost center"];

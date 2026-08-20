@@ -638,7 +638,7 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
   }
 
   const fieldErrors: Record<string, string> = {};
-  if (!input.employeeId) fieldErrors.employeeId = "Colaborador é obrigatório.";
+  if (!input.employeeId) fieldErrors.employeeId = "Parceiro é obrigatório.";
   const date = parseImportDate(input.date);
   if (!date) fieldErrors.date = "Data inválida.";
   const actualHours = parseHours(input.actualHours);
@@ -651,13 +651,13 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
       where: { id: input.employeeId, deletedAt: null },
       include: { shift: true, lob: true, supervisor: true }
     });
-    if (!employee) return createValidationError({ employeeId: "Colaborador não encontrado." }, "Colaborador não encontrado.");
+    if (!employee) return createValidationError({ employeeId: "Parceiro não encontrado." }, "Parceiro não encontrado.");
 
     const schedule = await prisma.schedule.findUnique({
       where: { employeeId_date: { employeeId: employee.id, date: date! } }
     });
     if (!schedule) {
-      return createValidationError({ scheduleId: "Não existe cronograma para este colaborador nesta data. Crie o cronograma antes de lançar horas." }, "Não é possível lançar horas sem cronograma vinculado.");
+      return createValidationError({ scheduleId: "Não existe cronograma para este parceiro nesta data. Crie o cronograma antes de lançar horas." }, "Não é possível lançar horas sem cronograma vinculado.");
     }
     if (!isWorkHoursAllowedForSchedule(schedule)) {
       return createValidationError({ scheduleId: workHoursBlockedReasonForSchedule(schedule) }, workHoursBlockedReasonForSchedule(schedule));
@@ -934,8 +934,8 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
     const employee = normalizedWbLogin ? employeeMap.get(normalizedWbLogin) : null;
     const eligibleEmployee = employee && !employee.deletedAt ? employee : null;
     if (wbLogin && !employee) errors.push("WB/Login não encontrado na base de funcionários.");
-    if (employee?.deletedAt) errors.push("Colaborador removido/deletado não pode receber horas.");
-    if (eligibleEmployee && isInactiveEmployeeStatusForWorkHours(eligibleEmployee.operationalStatus)) warnings.push("Colaborador desligado/inativo encontrado. Horas permitidas para fins de invoice.");
+    if (employee?.deletedAt) errors.push("Parceiro removido/deletado não pode receber horas.");
+    if (eligibleEmployee && isInactiveEmployeeStatusForWorkHours(eligibleEmployee.operationalStatus)) warnings.push("Parceiro desligado/inativo encontrado. Horas permitidas para fins de invoice.");
 
     const hasActualHours = hasExcelValue(row.horas_realizadas);
     const actualHours = parseHours(row.horas_realizadas);
@@ -947,10 +947,10 @@ async function validateWorkHourRows(rows: Array<Record<string, unknown>>) {
     if (eligibleEmployee && date) {
       schedule = scheduleMap.get(`${eligibleEmployee.id}:${date.getTime()}`);
       existingRecordId = recordMap.get(`${eligibleEmployee.id}:${date.getTime()}`)?.id;
-      if (!schedule) errors.push("Não existe cronograma para este colaborador nesta data. Importe ou crie o cronograma antes de subir as horas.");
+      if (!schedule) errors.push("Não existe cronograma para este parceiro nesta data. Importe ou crie o cronograma antes de subir as horas.");
       else if (!isWorkHoursAllowedForSchedule(schedule)) errors.push(workHoursBlockedReasonForSchedule(schedule));
-      if (text(row.lob) && text(row.lob).toUpperCase() !== eligibleEmployee.lob.name.toUpperCase()) warnings.push("LOB no arquivo diferente da LOB do colaborador.");
-      if (text(row.supervisor_wb_login) && normalizeWbLogin(row.supervisor_wb_login) !== normalizeWbLogin(eligibleEmployee.supervisor?.wbLogin)) warnings.push("Supervisor no arquivo diferente do supervisor do colaborador.");
+      if (text(row.lob) && text(row.lob).toUpperCase() !== eligibleEmployee.lob.name.toUpperCase()) warnings.push("LOB no arquivo diferente da LOB do parceiro.");
+      if (text(row.supervisor_wb_login) && normalizeWbLogin(row.supervisor_wb_login) !== normalizeWbLogin(eligibleEmployee.supervisor?.wbLogin)) warnings.push("Supervisor no arquivo diferente do supervisor do parceiro.");
       if (existingRecordId) warnings.push("Registro já existe e será atualizado.");
     }
     const allowsWorkHours = isWorkHoursAllowedForSchedule(schedule);
