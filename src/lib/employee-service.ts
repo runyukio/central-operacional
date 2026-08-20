@@ -163,6 +163,9 @@ async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeList
     const role = normalizeRole(actor.role);
     if (!canAccessEmployeeMap({ role: actor.role, status: user.status })) return paginatedEmployees([], 0, page, limit);
     const search = clean(query.search)?.trim();
+    const cnpjEmployeeIds = search && canViewEmployeeSensitiveData({ role: actor.role, status: user.status })
+      ? await findEmployeeIdsByCnpjSearch(search)
+      : [];
     const statusWhere = buildEmployeeStatusWhere(query.status);
     const batch = parseWbLoginBatch(query.wbLogins ?? "");
 
@@ -179,7 +182,8 @@ async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeList
               { skillAssignments: { some: { skill: { name: { contains: search, mode: "insensitive" as const } } } } },
               { wave: { contains: search, mode: "insensitive" as const } },
               { lob: { name: { contains: search, mode: "insensitive" as const } } },
-              { supervisor: { fullName: { contains: search, mode: "insensitive" as const } } }
+              { supervisor: { fullName: { contains: search, mode: "insensitive" as const } } },
+              ...(cnpjEmployeeIds.length ? [{ id: { in: cnpjEmployeeIds } }] : [])
             ]
           }
         : {})
@@ -811,6 +815,7 @@ export async function exportOperationalEmployeesXlsxData(actor: Actor, filters: 
   const rowsResult = await listOperationalEmployees(actor, { summary: false, limit: 10000 });
   const employees = Array.isArray(rowsResult) ? rowsResult : rowsResult.data;
   const query = clean(filters.query)?.toLowerCase() ?? "";
+  const queryDigits = query.replace(/\D/g, "");
   const lobs = cleanFilterValues(filters.lob);
   const statuses = cleanFilterValues(filters.status);
   const supervisorIds = cleanFilterValues(filters.supervisorId);
@@ -821,7 +826,10 @@ export async function exportOperationalEmployeesXlsxData(actor: Actor, filters: 
   const waves = cleanFilterValues(filters.wave);
   const filteredRows = employees.filter((employee) => {
     const row = employee as Record<string, any>;
-    const matchesQuery = !query || [employee.name, employee.wb, employee.email, employee.role, employee.lob, row.supervisor, row.skill, row.wave].join(" ").toLowerCase().includes(query);
+    const cnpjDigits = String(row.sensitive?.cnpj ?? "").replace(/\D/g, "");
+    const matchesQuery = !query
+      || [employee.name, employee.wb, employee.email, employee.role, employee.lob, row.supervisor, row.skill, row.wave].join(" ").toLowerCase().includes(query)
+      || (queryDigits.length >= 3 && cnpjDigits.includes(queryDigits));
     const matchesLob = !lobs.length || lobs.some((lob) => matchesEmployeeMapLobFilter(employee.lob, lob));
     const matchesStatus = !statuses.length || statuses.some((status) => matchesEmployeeStatusFilter(employee.status, row.userStatus, status));
     const matchesSupervisor = !supervisorIds.length || supervisorIds.some((supervisorId) => isNoneFilter(supervisorId) ? !row.supervisorId : row.supervisorId === supervisorId);
@@ -1411,6 +1419,23 @@ async function resolveEmployeeBatchWb(input?: EmployeeListQuery["wbLogins"]) {
     notFound: parsed.values.filter((value) => !found.has(normalizeWbLogin(value))),
     duplicatesRemoved: parsed.duplicatesRemoved
   };
+}
+
+async function findEmployeeIdsByCnpjSearch(search: string) {
+  const digits = search.replace(/\D/g, "");
+  if (digits.length < 3) return [];
+  const rawPattern = `%${search.trim()}%`;
+  const digitsPattern = `%${digits}%`;
+  const rows = await prisma.$queryRaw<Array<{ employeeId: string }>>(Prisma.sql`
+    SELECT "employeeId"
+    FROM "EmployeeSensitiveData"
+    WHERE "cnpj" IS NOT NULL
+      AND (
+        LOWER("cnpj") LIKE LOWER(${rawPattern})
+        OR regexp_replace("cnpj", '[^0-9]', '', 'g') LIKE ${digitsPattern}
+      )
+  `);
+  return rows.map((row) => row.employeeId);
 }
 
 async function getEmployeeFilterOptions(where: Prisma.EmployeeProfileWhereInput) {

@@ -18,6 +18,7 @@ export type AdsOnlineProductivityAgentRow = {
   comparison: "up" | "down" | "equal" | "new";
   shiftTotal: number;
   ahtMs: number | null;
+  moderationMs: number;
 };
 
 export type AdsOnlineProductivitySkillAverage = {
@@ -40,6 +41,7 @@ export type AdsOnlineProductivityReportSnapshot = {
   previousIntervalSubmit: number;
   submitComparisonPercent: number | null;
   currentIntervalAhtMs: number | null;
+  currentIntervalModerationMs: number;
   previousIntervalAhtMs: number | null;
   ahtDeltaMs: number | null;
   totalShiftSubmit: number;
@@ -75,8 +77,9 @@ export function buildAdsOnlineProductivityReportSnapshot(input: {
     const previous = intervalMetric(history, previousStart, previousTarget);
     const latest = latestAtOrBefore(history, selected.timestamp);
     const shiftTotal = Math.max(0, finite(latest?.submit));
-    const ahtMs = shiftTotal > 0 && finite(latest?.moderationMs) > 0
-      ? finite(latest?.moderationMs) / shiftTotal
+    const shiftModerationMs = Math.max(0, finite(latest?.moderationMs));
+    const ahtMs = shiftTotal > 0 && shiftModerationMs > 0
+      ? shiftModerationMs / shiftTotal
       : latest?.ahtMs ?? null;
     const comparisonPercent = percentChange(current.submit, previous.submit);
     return {
@@ -91,7 +94,8 @@ export function buildAdsOnlineProductivityReportSnapshot(input: {
         comparisonPercent,
         comparison: comparisonTone(current.submit, previous.submit, comparisonPercent),
         shiftTotal,
-        ahtMs
+        ahtMs,
+        moderationMs: current.moderationMs
       } satisfies AdsOnlineProductivityAgentRow
     };
   });
@@ -108,16 +112,22 @@ export function buildAdsOnlineProductivityReportSnapshot(input: {
   const previousIntervalSubmit = sum(previousMetrics, (metric) => metric.submit);
   const currentIntervalModeration = sum(currentMetrics, (metric) => metric.moderationMs);
   const previousIntervalModeration = sum(previousMetrics, (metric) => metric.moderationMs);
-  const currentIntervalAhtMs = currentIntervalSubmit > 0 ? currentIntervalModeration / currentIntervalSubmit : null;
-  const previousIntervalAhtMs = previousIntervalSubmit > 0 ? previousIntervalModeration / previousIntervalSubmit : null;
-  const currentSubmittingAgents = rows.length;
-  const previousSubmittingAgents = rows.filter((row) => row.previousSubmit > 0).length;
-  const averageSubmitPerHour = currentSubmittingAgents
-    ? currentIntervalSubmit / currentSubmittingAgents
-    : 0;
-  const previousAverageSubmitPerHour = previousSubmittingAgents
-    ? previousIntervalSubmit / previousSubmittingAgents
-    : 0;
+  const currentIntervalAhtMs = currentIntervalSubmit > 0
+    ? weightedAverage(currentMetrics, intervalAht, (metric) => metric.submit)
+    : null;
+  const previousIntervalAhtMs = previousIntervalSubmit > 0
+    ? weightedAverage(previousMetrics, intervalAht, (metric) => metric.submit)
+    : null;
+  const averageSubmitPerHour = weightedAverage(
+    rows,
+    (row) => row.currentSubmit,
+    (row) => row.currentSubmit
+  );
+  const previousAverageSubmitPerHour = weightedAverage(
+    rows,
+    (row) => row.previousSubmit,
+    (row) => row.previousSubmit
+  );
 
   return {
     selectedCycle: input.selectedCycle,
@@ -136,6 +146,7 @@ export function buildAdsOnlineProductivityReportSnapshot(input: {
       previousAverageSubmitPerHour
     ),
     currentIntervalAhtMs,
+    currentIntervalModerationMs: currentIntervalModeration,
     previousIntervalAhtMs,
     ahtDeltaMs: currentIntervalAhtMs !== null && previousIntervalAhtMs !== null
       ? currentIntervalAhtMs - previousIntervalAhtMs
@@ -227,18 +238,19 @@ function reportableSkill(value: string | null | undefined) {
 }
 
 function buildSkillAverages(rows: AdsOnlineProductivityAgentRow[]): AdsOnlineProductivitySkillAverage[] {
-  const grouped = new Map<string, { skill: string; totalSubmit: number; agentCount: number }>();
+  const grouped = new Map<string, { skill: string; weightedSubmit: number; submitWeight: number; agentCount: number }>();
   for (const row of rows) {
     const skill = row.skill ?? "Unassigned";
     const key = comparableSkill(skill);
-    const current = grouped.get(key) ?? { skill, totalSubmit: 0, agentCount: 0 };
-    current.totalSubmit += row.currentSubmit;
+    const current = grouped.get(key) ?? { skill, weightedSubmit: 0, submitWeight: 0, agentCount: 0 };
+    current.weightedSubmit += row.currentSubmit * row.currentSubmit;
+    current.submitWeight += row.currentSubmit;
     current.agentCount += 1;
     grouped.set(key, current);
   }
   return [...grouped.values()].map((group) => ({
     skill: group.skill,
-    averageSubmit: group.totalSubmit / group.agentCount,
+    averageSubmit: group.submitWeight > 0 ? group.weightedSubmit / group.submitWeight : 0,
     agentCount: group.agentCount
   })).sort((left, right) => (
     right.averageSubmit - left.averageSubmit
@@ -256,4 +268,20 @@ function comparableSkill(value: string) {
 
 function sum<T>(rows: T[], value: (row: T) => number) {
   return rows.reduce((total, row) => total + value(row), 0);
+}
+
+function weightedAverage<T>(rows: T[], value: (row: T) => number, weight: (row: T) => number) {
+  let weightedTotal = 0;
+  let totalWeight = 0;
+  for (const row of rows) {
+    const rowWeight = Math.max(0, finite(weight(row)));
+    if (rowWeight <= 0) continue;
+    weightedTotal += finite(value(row)) * rowWeight;
+    totalWeight += rowWeight;
+  }
+  return totalWeight > 0 ? weightedTotal / totalWeight : 0;
+}
+
+function intervalAht(metric: IntervalMetric) {
+  return metric.submit > 0 ? metric.moderationMs / metric.submit : 0;
 }

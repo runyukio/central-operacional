@@ -69,18 +69,20 @@ test("builds the ADS online productivity ranking with hourly and shift metrics",
   assert.equal(report.rows[0].comparison, "up");
   assert.equal(report.rows[0].shiftTotal, 126);
   assert.equal(report.rows[0].ahtMs, 84_000);
+  assert.equal(report.rows[0].moderationMs, 2_184_000);
   assert.equal(report.currentIntervalSubmit, 73);
   assert.equal(report.previousIntervalSubmit, 60);
-  assert.equal(report.submitComparisonPercent, 21.7);
+  assert.equal(report.submitComparisonPercent, 22);
   assert.equal(report.totalShiftSubmit, 313);
-  assert.ok(Math.abs(report.averageSubmitPerHour - 24.333333333333332) < 0.0001);
+  assert.ok(Math.abs(report.averageSubmitPerHour - 24.397260273972602) < 0.0001);
+  assert.equal(report.currentIntervalModerationMs, 6_460_000);
   assert.ok(report.currentIntervalAhtMs !== null);
   assert.ok(Math.abs(report.currentIntervalAhtMs - 88_493.1506849315) < 0.001);
   assert.ok(report.ahtDeltaMs !== null);
   assert.ok(report.ahtDeltaMs < 0);
   assert.deepEqual(report.skillAverages, [
     { skill: "Material Queues", averageSubmit: 26, agentCount: 1 },
-    { skill: "Nesting", averageSubmit: 23.5, agentCount: 2 }
+    { skill: "Nesting", averageSubmit: 23.51063829787234, agentCount: 2 }
   ]);
 });
 

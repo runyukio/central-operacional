@@ -1204,11 +1204,11 @@ export async function exportPerformanceAgentsXlsxData(actor: Actor, query: Perfo
   }
   if (!query.lob?.trim()) throw new PerformanceError("Selecione uma LOB antes de exportar.", 400);
 
-  const dashboard = await getPerformanceAgentsDashboard(actor, {
-    ...query,
-    page: 1,
-    includeAllRows: true,
-    metadataOnly: false
+  const view = normalizeDashboardView(query.view);
+  const dashboard = await resolvePerformanceAgentExportScope(query, view);
+  const agents = await getPerformanceAgentExportRowsByPeriod(user, query, {
+    period: dashboard.period,
+    selectedLob: dashboard.selectedLob
   });
 
   await prisma.auditLog.create({
@@ -1230,7 +1230,7 @@ export async function exportPerformanceAgentsXlsxData(actor: Actor, query: Perfo
           sortBy: query.sortBy,
           sortDirection: query.sortDirection
         },
-        rows: dashboard.agents.length
+        rows: agents.length
       },
       reason: "PERFORMANCE_AGENTS_EXPORTED"
     }
@@ -1238,9 +1238,226 @@ export async function exportPerformanceAgentsXlsxData(actor: Actor, query: Perfo
 
   return buildPerformanceAgentsExportPayload({
     period: dashboard.period,
+    view,
     selectedLob: dashboard.selectedLob,
-    agents: dashboard.agents
+    agents
   });
+}
+
+async function resolvePerformanceAgentExportScope(
+  query: PerformanceAgentsQuery,
+  view: "monthly" | "weekly" | "daily"
+) {
+  const selectedLob = query.lob?.trim().toUpperCase() ?? "";
+  if (!selectedLob || selectedLob === "TODOS" || !performanceLobOptions().includes(selectedLob)) {
+    throw new PerformanceError("Selecione uma LOB válida antes de exportar.", 400);
+  }
+  const fallback = getDefaultDatePeriod();
+  const rangeEnd = selectedLob === "CEC"
+    ? (await prisma.performanceCecCpdRecord.aggregate({ _max: { performanceDay: true } }))._max.performanceDay
+    : (await prisma.productionRecord.aggregate({ _max: { bzDay: true } }))._max.bzDay;
+  const defaultPeriod = dashboardViewPeriod(rangeEnd ?? fallback.end, view);
+  const start = parseDate(query.startDate) ?? defaultPeriod.start;
+  const end = parseDate(query.endDate) ?? defaultPeriod.end;
+  if (start > end) throw new PerformanceError("A data inicial não pode ser posterior à data final.", 400);
+  return {
+    period: periodPayload({ start, end }),
+    selectedLob
+  };
+}
+
+async function getPerformanceAgentExportRowsByPeriod(
+  user: AuthenticatedUser,
+  query: PerformanceAgentsQuery,
+  dashboard: { period: { startDate: string; endDate: string }; selectedLob: string }
+) {
+  const start = parseDate(dashboard.period.startDate);
+  const end = parseDate(dashboard.period.endDate);
+  if (!start || !end) throw new PerformanceError("O período selecionado para exportação é inválido.", 400);
+
+  const view = normalizeDashboardView(query.view);
+  const requestedLob = dashboard.selectedLob;
+  const role = normalizeRole(user.role.name);
+  const ownEmployeeId = role === "COLABORADOR" ? requireOwnEmployee(user).id : null;
+  const ownProductionEmployeeSql = ownEmployeeId ? Prisma.sql`AND p."employeeId" = ${ownEmployeeId}` : Prisma.empty;
+  const ownCpdEmployeeSql = ownEmployeeId ? Prisma.sql`AND c."employeeId" = ${ownEmployeeId}` : Prisma.empty;
+  const bucketSql = performanceAgentBucketSql(view, requestedLob === "CEC" ? "cec" : "production");
+  const queueSql = performanceQueueFilterSql(requestedLob, query.slaTargetMinutes);
+
+  type AgentExportRawRow = {
+    periodStart: Date;
+    employeeId: string | null;
+    employeeName: string;
+    wbLogin: string;
+    supervisorId: string | null;
+    supervisor: string;
+    shiftId: string | null;
+    shift: string;
+    queueId: string;
+    submit: number;
+    moderationSeconds: number;
+    activeDates: Date[];
+  };
+
+  const [rawRows, qualityByPeriodIdentity] = await Promise.all([
+    requestedLob === "CEC"
+      ? prisma.$queryRaw<AgentExportRawRow[]>(Prisma.sql`
+          SELECT
+            ${bucketSql} AS "periodStart",
+            c."employeeId" AS "employeeId",
+            COALESCE(e."fullName", c."wbLogin") AS "employeeName",
+            COALESCE(e."wbLogin", c."wbLogin") AS "wbLogin",
+            e."supervisorId" AS "supervisorId",
+            COALESCE(s."fullName", 'Sem supervisor') AS "supervisor",
+            e."shiftId" AS "shiftId",
+            COALESCE(sh."name", 'Sem turno') AS "shift",
+            ''::text AS "queueId",
+            COALESCE(SUM(c."ticketCount"), 0)::double precision AS "submit",
+            0::double precision AS "moderationSeconds",
+            COALESCE(
+              ARRAY_AGG(DISTINCT c."performanceDay") FILTER (WHERE c."ticketCount" > 0),
+              ARRAY[]::timestamp[]
+            ) AS "activeDates"
+          FROM "PerformanceCecCpdRecord" c
+          LEFT JOIN "EmployeeProfile" e ON e."id" = c."employeeId"
+          LEFT JOIN "EmployeeProfile" s ON s."id" = e."supervisorId"
+          LEFT JOIN "Shift" sh ON sh."id" = e."shiftId"
+          WHERE c."performanceDay" >= ${start}
+            AND c."performanceDay" <= ${end}
+            ${ownCpdEmployeeSql}
+          GROUP BY
+            ${bucketSql},
+            c."employeeId",
+            e."fullName",
+            e."wbLogin",
+            c."wbLogin",
+            e."supervisorId",
+            s."fullName",
+            e."shiftId",
+            sh."name"
+        `)
+      : prisma.$queryRaw<AgentExportRawRow[]>(Prisma.sql`
+          SELECT
+            ${bucketSql} AS "periodStart",
+            p."employeeId" AS "employeeId",
+            COALESCE(e."fullName", p."wbLogin") AS "employeeName",
+            COALESCE(e."wbLogin", p."wbLogin") AS "wbLogin",
+            e."supervisorId" AS "supervisorId",
+            COALESCE(s."fullName", 'Sem supervisor') AS "supervisor",
+            e."shiftId" AS "shiftId",
+            COALESCE(sh."name", 'Sem turno') AS "shift",
+            p."queueId" AS "queueId",
+            COALESCE(SUM(p."submitNum"), 0)::double precision AS "submit",
+            COALESCE(SUM(p."moderationSeconds"), 0)::double precision AS "moderationSeconds",
+            ARRAY_AGG(DISTINCT p."bzDay") AS "activeDates"
+          FROM "ProductionRecord" p
+          LEFT JOIN "EmployeeProfile" e ON e."id" = p."employeeId"
+          LEFT JOIN "EmployeeProfile" s ON s."id" = e."supervisorId"
+          LEFT JOIN "Shift" sh ON sh."id" = e."shiftId"
+          WHERE p."bzDay" >= ${start}
+            AND p."bzDay" <= ${end}
+            ${ownProductionEmployeeSql}
+            ${queueSql}
+          GROUP BY
+            ${bucketSql},
+            p."employeeId",
+            e."fullName",
+            e."wbLogin",
+            p."wbLogin",
+            e."supervisorId",
+            s."fullName",
+            e."shiftId",
+            sh."name",
+            p."queueId"
+        `),
+    getPerformanceAgentQualityByPeriodIdentity(requestedLob, start, end, ownEmployeeId, view)
+  ]);
+
+  const aggregateMap = new Map<string, {
+    periodStart: Date;
+    employeeId: string | null;
+    employeeName: string;
+    wbLogin: string;
+    lob: string;
+    supervisorId: string | null;
+    supervisor: string;
+    shiftId: string | null;
+    shift: string;
+    submit: number;
+    moderationSeconds: number;
+    activeDates: Set<string>;
+    outputAveragePerDay: number;
+  }>();
+
+  for (const row of rawRows) {
+    const periodKey = formatDateKey(row.periodStart);
+    const lob = requestedLob === "CEC" ? "CEC" : getPerformanceQueueMetadataById(row.queueId).lob;
+    const identity = row.employeeId || `wb:${normalizePerformanceWbLogin(row.wbLogin)}`;
+    const key = `${periodKey}:${identity}:${lob}`;
+    const current = aggregateMap.get(key) ?? {
+      periodStart: row.periodStart,
+      employeeId: row.employeeId,
+      employeeName: row.employeeName,
+      wbLogin: row.wbLogin,
+      lob,
+      supervisorId: row.supervisorId,
+      supervisor: row.supervisor,
+      shiftId: row.shiftId,
+      shift: row.shift,
+      submit: 0,
+      moderationSeconds: 0,
+      activeDates: new Set<string>(),
+      outputAveragePerDay: 0
+    };
+    current.submit += Number(row.submit ?? 0);
+    current.moderationSeconds += Number(row.moderationSeconds ?? 0);
+    for (const date of row.activeDates ?? []) current.activeDates.add(formatDateKey(date));
+    current.outputAveragePerDay = current.activeDates.size > 0 ? current.submit / current.activeDates.size : 0;
+    aggregateMap.set(key, current);
+  }
+
+  const search = query.search?.trim().toLocaleLowerCase("pt-BR") ?? "";
+  const rows = Array.from(aggregateMap.values()).flatMap((row) => {
+    if (query.supervisorId && row.supervisorId !== query.supervisorId) return [];
+    if (query.shiftId && row.shiftId !== query.shiftId) return [];
+    if (search
+      && !row.employeeName.toLocaleLowerCase("pt-BR").includes(search)
+      && !row.wbLogin.toLocaleLowerCase("pt-BR").includes(search)) return [];
+
+    const periodKey = formatDateKey(row.periodStart);
+    const identity = row.employeeId ? `employee:${row.employeeId}` : `wb:${normalizePerformanceWbLogin(row.wbLogin)}`;
+    const quality = qualityByPeriodIdentity.get(`${periodKey}:${identity}`);
+    const bounds = performanceAgentBucketBounds(row.periodStart, view, start, end);
+    return [{
+      periodStart: formatDateKey(bounds.start),
+      periodEnd: formatDateKey(bounds.end),
+      employeeName: row.employeeName,
+      wbLogin: row.wbLogin,
+      lob: row.lob,
+      supervisor: row.supervisor,
+      shift: row.shift,
+      submit: Math.round(row.submit),
+      outputAveragePerDay: round2(row.outputAveragePerDay),
+      daysWithData: row.activeDates.size,
+      moderationSeconds: round2(row.moderationSeconds),
+      ahtSeconds: row.submit > 0 ? round2(row.moderationSeconds / row.submit) : 0,
+      cpdAverage: requestedLob === "CEC" ? round2(row.outputAveragePerDay) : 0,
+      cpdTickets: requestedLob === "CEC" ? Math.round(row.submit) : 0,
+      cpdDays: requestedLob === "CEC" ? row.activeDates.size : 0,
+      qualityCorrect: quality?.correct ?? 0,
+      qualityTotal: quality?.total ?? 0,
+      qualityErrors: quality?.errors ?? 0,
+      quality: quality?.quality ?? 0
+    }];
+  });
+
+  const sortBy = query.sortBy ?? "submit";
+  const sortDirection = query.sortDirection === "asc" ? "asc" : "desc";
+  rows.sort((left, right) => {
+    const periodComparison = left.periodStart.localeCompare(right.periodStart);
+    return periodComparison || comparePerformanceAgentRows(left, right, sortBy, sortDirection);
+  });
+  return rows;
 }
 
 export async function getPerformanceSupervisorsDashboard(actor: Actor, query: PerformanceSupervisorsQuery = {}) {
@@ -1794,6 +2011,75 @@ async function getPerformanceAgentQualityByIdentity(
     if (wbLogin) qualityByIdentity.set(`wb:${wbLogin}`, aggregate);
   }
   return qualityByIdentity;
+}
+
+async function getPerformanceAgentQualityByPeriodIdentity(
+  requestedLob: string,
+  start: Date,
+  end: Date,
+  ownEmployeeId: string | null,
+  view: "monthly" | "weekly" | "daily"
+) {
+  type QualityByPeriodAgentRawRow = {
+    periodStart: Date;
+    employeeId: string | null;
+    wbLogin: string;
+    correct: number;
+    total: number;
+  };
+  const ownQualityEmployeeSql = ownEmployeeId ? Prisma.sql`AND q."employeeId" = ${ownEmployeeId}` : Prisma.empty;
+  const bucketSql = requestedLob === "CEC" ? cecQualityBucketSql(view) : qualityBucketSql(view);
+  const rows = requestedLob === "CEC"
+    ? await prisma.$queryRaw<QualityByPeriodAgentRawRow[]>(Prisma.sql`
+      SELECT
+        ${bucketSql} AS "periodStart",
+        q."employeeId" AS "employeeId",
+        MAX(COALESCE(e."wbLogin", q."wbLogin")) AS "wbLogin",
+        COALESCE(SUM(q."passQuantity"), 0)::double precision AS "correct",
+        COALESCE(SUM(q."passQuantity" + q."failQuantity"), 0)::double precision AS "total"
+      FROM "CecQualityRecord" q
+      LEFT JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
+      WHERE q."qualityDate" >= ${start}
+        AND q."qualityDate" <= ${end}
+        ${ownQualityEmployeeSql}
+        ${visibleQualityRecordSql}
+      GROUP BY
+        ${bucketSql},
+        q."employeeId",
+        CASE WHEN q."employeeId" IS NULL THEN LOWER(TRIM(q."wbLogin")) ELSE '' END
+    `)
+    : await prisma.$queryRaw<QualityByPeriodAgentRawRow[]>(Prisma.sql`
+      SELECT
+        ${bucketSql} AS "periodStart",
+        q."employeeId" AS "employeeId",
+        MAX(COALESCE(e."wbLogin", q."wbLogin")) AS "wbLogin",
+        COUNT(DISTINCT CASE WHEN LOWER(TRIM(q."finalResult")) = 'correct' THEN q."concatKey" END)::double precision AS "correct",
+        COUNT(DISTINCT q."concatKey")::double precision AS "total"
+      FROM "QualityRecord" q
+      LEFT JOIN "EmployeeProfile" e ON e."id" = q."employeeId"
+      LEFT JOIN "Lob" l ON l."id" = COALESCE(q."lobId", e."lobId")
+      WHERE q."auditDate" >= ${start}
+        AND q."auditDate" <= ${end}
+        ${requestedLob === "ADS" || requestedLob === "PROJECT"
+          ? Prisma.sql`AND UPPER(COALESCE(l."name", '')) IN ('ADS', 'PROJECT')`
+          : Prisma.sql`AND UPPER(COALESCE(l."name", '')) = ${requestedLob}`}
+        ${ownQualityEmployeeSql}
+        ${visibleQualityRecordSql}
+      GROUP BY
+        ${bucketSql},
+        q."employeeId",
+        CASE WHEN q."employeeId" IS NULL THEN LOWER(TRIM(q."wbLogin")) ELSE '' END
+    `);
+
+  const qualityByPeriodIdentity = new Map<string, PerformanceAgentQualityAggregate>();
+  for (const row of rows) {
+    const periodKey = formatDateKey(row.periodStart);
+    const aggregate = serializeQualityAggregate(row.correct, row.total);
+    if (row.employeeId) qualityByPeriodIdentity.set(`${periodKey}:employee:${row.employeeId}`, aggregate);
+    const wbLogin = normalizePerformanceWbLogin(row.wbLogin);
+    if (wbLogin) qualityByPeriodIdentity.set(`${periodKey}:wb:${wbLogin}`, aggregate);
+  }
+  return qualityByPeriodIdentity;
 }
 
 function normalizePerformanceWbLogin(value: string) {
@@ -4742,6 +5028,33 @@ function productionBucketSql(granularity: PerformanceProductionGranularity) {
   if (granularity === "weekly") return Prisma.sql`date_trunc('week', "bzDay")`;
   if (granularity === "monthly") return Prisma.sql`date_trunc('month', "bzDay")`;
   return Prisma.sql`date_trunc('day', "bzDay")`;
+}
+
+function performanceAgentBucketSql(
+  view: "monthly" | "weekly" | "daily",
+  source: "production" | "cec"
+) {
+  const column = source === "cec" ? Prisma.sql`c."performanceDay"` : Prisma.sql`p."bzDay"`;
+  if (view === "monthly") return Prisma.sql`date_trunc('month', ${column})`;
+  if (view === "weekly") return Prisma.sql`date_trunc('week', ${column})`;
+  return Prisma.sql`date_trunc('day', ${column})`;
+}
+
+function performanceAgentBucketBounds(
+  periodStart: Date,
+  view: "monthly" | "weekly" | "daily",
+  selectedStart: Date,
+  selectedEnd: Date
+) {
+  const naturalEnd = view === "monthly"
+    ? addDays(utcDate(periodStart.getUTCFullYear(), periodStart.getUTCMonth() + 2, 1), -1)
+    : view === "weekly"
+      ? addDays(periodStart, 6)
+      : periodStart;
+  return {
+    start: periodStart < selectedStart ? selectedStart : periodStart,
+    end: naturalEnd > selectedEnd ? selectedEnd : naturalEnd
+  };
 }
 
 function qualityBucketSql(granularity: "monthly" | "weekly" | "daily") {

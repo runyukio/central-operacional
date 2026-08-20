@@ -10315,7 +10315,7 @@ export function EmployeeMapPage() {
       <div className="space-y-5">
         <div className="space-y-5">
           <div className="card grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-10">
-            <input value={query} onChange={(event) => setQuery(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm outline-none xl:col-span-2" placeholder="Nome, e-mail, WB/Login, Skill ou Wave" />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} className="h-10 rounded-lg border border-border px-3 text-sm outline-none xl:col-span-2" placeholder="Nome, e-mail, WB/Login, CNPJ, Skill ou Wave" />
             <EmployeeMultiSelectFilter ariaLabel="Filtrar por LOB" allLabel="Todas as LOBs" values={lobFilter} onChange={setLobFilter} options={employeeMapLobs.map((lob) => ({ value: lob, label: lob }))} />
             <EmployeeMultiSelectFilter ariaLabel="Filtrar por status" allLabel="Todos os status" values={statusFilter} onChange={setStatusFilter} options={employeeStatusOptions.map((status) => ({ value: status, label: status }))} />
             <EmployeeMultiSelectFilter ariaLabel="Filtrar por supervisor" allLabel="Todos os supervisores" values={supervisorFilter} onChange={setSupervisorFilter} options={[{ value: "SEM_SUPERVISOR", label: "Sem supervisor" }, ...employeeSupervisorOptions.map((supervisor) => ({ value: supervisor.id, label: supervisor.name }))]} />

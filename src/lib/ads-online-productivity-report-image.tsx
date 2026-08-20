@@ -191,14 +191,15 @@ function TableHeader({ report }: { report: AdsOnlineProductivityReportSnapshot }
   return (
     <div style={{ alignItems: "center", background: "#F8FAFC", borderBottom: "1px solid #D7E0EA", color: MUTED, display: "flex", fontSize: 16, fontWeight: 900, height: 56, letterSpacing: 1, padding: "0 26px", width: "100%" }}>
       <div style={{ display: "flex", width: 64 }}>#</div>
-      <div style={{ display: "flex", width: 410 }}>AGENT / WB</div>
-      <div style={{ alignItems: "center", display: "flex", width: 305 }}>
+      <div style={{ display: "flex", width: 350 }}>AGENT / WB</div>
+      <div style={{ alignItems: "center", display: "flex", width: 280 }}>
         <span style={{ display: "flex" }}>SUBMIT {report.currentHourLabel}</span>
         <span style={{ display: "flex", marginLeft: 6 }}><Icon size={17} src={ICONS.downRed} /></span>
       </div>
-      <div style={{ display: "flex", width: 255 }}>VS. {report.previousHourLabel}</div>
-      <div style={{ display: "flex", width: 220 }}>SHIFT TOTAL</div>
-      <div style={{ display: "flex", width: 160 }}>AVG AHT</div>
+      <div style={{ display: "flex", width: 230 }}>VS. {report.previousHourLabel}</div>
+      <div style={{ display: "flex", width: 180 }}>SHIFT TOTAL</div>
+      <div style={{ display: "flex", width: 145 }}>AVG AHT</div>
+      <div style={{ display: "flex", width: 170 }}>MODERATION (MIN)</div>
     </div>
   );
 }
@@ -222,28 +223,29 @@ function AgentRow({
           {index + 1}
         </div>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", width: 410 }}>
-        <div style={{ color: NAVY, display: "flex", fontSize: 21, fontWeight: 900 }}>{truncate(row.name, 36)}</div>
+      <div style={{ display: "flex", flexDirection: "column", width: 350 }}>
+        <div style={{ color: NAVY, display: "flex", fontSize: 21, fontWeight: 900 }}>{truncate(row.name, 30)}</div>
         <div style={{ alignItems: "center", color: MUTED, display: "flex", fontSize: 16, fontWeight: 700, marginTop: 3 }}>
           <span style={{ display: "flex" }}>{truncate(row.wbLogin, row.skill ? 20 : 34)}</span>
           {row.skill ? <SkillBadge marginLeft={9} skill={row.skill} /> : null}
         </div>
       </div>
-      <div style={{ alignItems: "center", display: "flex", width: 305 }}>
+      <div style={{ alignItems: "center", display: "flex", width: 280 }}>
         <div style={{ color: NAVY, display: "flex", fontSize: 24, fontWeight: 900, width: 55 }}>{formatInteger(row.currentSubmit)}</div>
-        <div style={{ background: "#E2E8F0", borderRadius: 999, display: "flex", height: 5, overflow: "hidden", width: 210 }}>
+        <div style={{ background: "#E2E8F0", borderRadius: 999, display: "flex", height: 5, overflow: "hidden", width: 190 }}>
           <div style={{ background: BLUE, borderRadius: 999, display: "flex", height: 5, width: `${Math.max(2, (row.currentSubmit / maxSubmit) * 100)}%` }} />
         </div>
       </div>
-      <div style={{ alignItems: "center", display: "flex", width: 255 }}>
+      <div style={{ alignItems: "center", display: "flex", width: 230 }}>
         <div style={{ alignItems: "center", background: comparison.background, borderRadius: 10, color: comparison.color, display: "flex", fontSize: 18, fontWeight: 900, justifyContent: "center", minWidth: 96, padding: "8px 10px" }}>
           <Icon size={17} src={comparison.icon} />
           <span style={{ display: "flex", marginLeft: 5 }}>{comparison.label}</span>
         </div>
         <span style={{ color: MUTED, display: "flex", fontSize: 16, fontWeight: 700, marginLeft: 12 }}>({formatInteger(row.previousSubmit)})</span>
       </div>
-      <div style={{ color: NAVY, display: "flex", fontSize: 22, fontWeight: 900, width: 220 }}>{formatInteger(row.shiftTotal)}</div>
-      <div style={{ color: NAVY, display: "flex", fontSize: 21, fontWeight: 900, width: 160 }}>{formatDuration(row.ahtMs)}</div>
+      <div style={{ color: NAVY, display: "flex", fontSize: 22, fontWeight: 900, width: 180 }}>{formatInteger(row.shiftTotal)}</div>
+      <div style={{ color: NAVY, display: "flex", fontSize: 21, fontWeight: 900, width: 145 }}>{formatDuration(row.ahtMs)}</div>
+      <div style={{ color: NAVY, display: "flex", fontSize: 21, fontWeight: 900, width: 170 }}>{formatMinutes(row.moderationMs)}</div>
     </div>
   );
 }
@@ -347,6 +349,11 @@ function formatShortDuration(value: number) {
   const seconds = Math.max(0, Math.round(value / 1000));
   if (seconds < 60) return `${seconds}s`;
   return `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+function formatMinutes(value: number) {
+  if (!Number.isFinite(value)) return "-";
+  return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(Math.max(0, value) / 60_000)} min`;
 }
 
 function truncate(value: string, length: number) {
