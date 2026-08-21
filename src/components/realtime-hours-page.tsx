@@ -249,6 +249,24 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
     setMappingsPayload(body);
   }, []);
 
+  const loadStatus = useCallback(async () => {
+    const response = await fetch("/api/realtime-hours/status?limit=500", { cache: "no-store" });
+    const body = await response.json() as RealtimeHoursStatusPayload;
+    if (!response.ok || body.success === false) {
+      throw new Error(body.message || body.error || "Não foi possível carregar a captura de horas.");
+    }
+    setStatusPayload(body);
+  }, []);
+
+  const loadTimeline = useCallback(async () => {
+    const response = await fetch(`/api/realtime-hours/timeline?date=${encodeURIComponent(timelineDate)}`, { cache: "no-store" });
+    const body = await response.json() as RealtimeHoursTimelinePayload;
+    if (!response.ok || body.success === false) {
+      throw new Error(body.message || body.error || "Não foi possível carregar a linha do tempo.");
+    }
+    setTimelinePayload(body);
+  }, [timelineDate]);
+
   const loadData = useCallback(async (showRefreshing = false) => {
     if (showRefreshing) setRefreshing(true);
     if (!showRefreshing) setLoading(true);
@@ -256,24 +274,7 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
     setSuccessMessage("");
 
     try {
-      const statusRequest = fetch("/api/realtime-hours/status?limit=500", { cache: "no-store" })
-        .then(async (response) => {
-          const body = await response.json() as RealtimeHoursStatusPayload;
-          if (!response.ok || body.success === false) {
-            throw new Error(body.message || body.error || "Não foi possível carregar a captura de horas.");
-          }
-          setStatusPayload(body);
-        });
-      const timelineRequest = fetch(`/api/realtime-hours/timeline?date=${encodeURIComponent(timelineDate)}`, { cache: "no-store" })
-        .then(async (response) => {
-          const body = await response.json() as RealtimeHoursTimelinePayload;
-          if (!response.ok || body.success === false) {
-            throw new Error(body.message || body.error || "Não foi possível carregar a linha do tempo.");
-          }
-          setTimelinePayload(body);
-        });
-
-      const results = await Promise.allSettled([statusRequest, timelineRequest]);
+      const results = await Promise.allSettled([loadStatus(), loadTimeline()]);
       const rejected = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
       if (rejected) throw rejected.reason;
     } catch (loadError) {
@@ -282,13 +283,32 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
       setLoading(false);
       setRefreshing(false);
     }
-  }, [timelineDate]);
+  }, [loadStatus, loadTimeline]);
 
   useEffect(() => {
-    loadData();
-    const interval = window.setInterval(() => loadData(true), 60_000);
-    return () => window.clearInterval(interval);
+    void loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    async function refreshStatusWhenVisible() {
+      if (document.hidden) return;
+      setRefreshing(true);
+      try {
+        await loadStatus();
+      } catch (loadError) {
+        setError(loadError instanceof Error ? loadError.message : "Não foi possível atualizar a captura de horas.");
+      } finally {
+        setRefreshing(false);
+      }
+    }
+
+    const interval = window.setInterval(() => void refreshStatusWhenVisible(), 120_000);
+    document.addEventListener("visibilitychange", refreshStatusWhenVisible);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshStatusWhenVisible);
+    };
+  }, [loadStatus]);
 
   useEffect(() => {
     if (!canManageMappings || activeTab !== "MAPPINGS" || mappingsPayload) return;

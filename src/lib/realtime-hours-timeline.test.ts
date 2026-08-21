@@ -7,7 +7,9 @@ import {
   compareRealtimeHoursPlannedShift,
   filterRealtimeHoursTimelineRows,
   matchRealtimeHoursPlannedShift,
+  realtimeHoursArchiveThroughDate,
   realtimeHoursOvertimeRanges,
+  realtimeHoursRawDeleteBefore,
   realtimeHoursShiftDateActivity,
   saoPauloDateKey,
   type RealtimeHoursTimelineFilterRow
@@ -252,6 +254,20 @@ test("filtro de Data nao inclui outro slot apenas por estar dentro da janela vis
   ], { date: "2026-07-20" });
 
   assert.deepEqual(filtered.map((item) => item.slotId), ["slot-20"]);
+});
+
+test("arquiva apenas datas com a janela operacional completa", () => {
+  assert.equal(
+    realtimeHoursArchiveThroughDate(new Date("2026-08-21T15:00:00.000Z")),
+    "2026-08-19"
+  );
+});
+
+test("preserva no bruto a sobreposicao necessaria para turnos noturnos", () => {
+  assert.equal(
+    realtimeHoursRawDeleteBefore("2026-08-19").toISOString(),
+    "2026-08-19T19:00:00.000Z"
+  );
 });
 
 test("calcula hora extra com os mesmos blocos exibidos na timeline", () => {

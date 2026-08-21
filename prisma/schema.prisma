@@ -1005,6 +1005,7 @@ model RealTimeRecord {
   @@index([status])
   @@index([lob])
   @@index([supervisor])
+  @@index([createdAt])
   @@index([batchId, recordType])
   @@index([recordType, batchId, rowNumber])
 }
@@ -1128,6 +1129,7 @@ model RealTimeHoursImportBatch {
   @@index([importedAt])
   @@index([status])
   @@index([status, importedAt])
+  @@index([status, capturedAt, importedAt])
 }
 
 model RealTimeHoursRecord {
@@ -1165,8 +1167,38 @@ model RealTimeHoursRecord {
   @@index([identityConfidence])
   @@index([capturedAt, employeeId])
   @@index([capturedAt, wbLogin])
+  @@index([employeeId, capturedAt])
+  @@index([wbLogin, capturedAt])
   @@index([hostname, capturedAt])
   @@index([hostname, windowsUser, capturedAt])
+}
+
+model RealTimeHoursArchiveDay {
+  dateKey        String                    @id
+  windowStart    DateTime
+  windowEnd      DateTime
+  calculationEnd DateTime
+  sourceRecords  Int                       @default(0)
+  generatedAt    DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
+  rows           RealTimeHoursArchiveRow[]
+
+  @@index([generatedAt])
+}
+
+model RealTimeHoursArchiveRow {
+  dateKey           String
+  rowKey            String
+  employeeId        String?
+  wbLoginNormalized String?
+  payload           Json
+  day               RealTimeHoursArchiveDay @relation(fields: [dateKey], references: [dateKey], onDelete: Cascade)
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+
+  @@id([dateKey, rowKey])
+  @@index([employeeId, dateKey])
+  @@index([wbLoginNormalized, dateKey])
 }
 
 model RealTimeHoursIdentityMapping {

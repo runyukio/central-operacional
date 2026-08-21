@@ -19,7 +19,8 @@ param(
 
   [string]$EmployeeId = "",
 
-  [int]$HeartbeatSeconds = 60,
+  [ValidateRange(120, 900)]
+  [int]$HeartbeatSeconds = 120,
 
   [int]$ActiveThresholdSeconds = 300,
 
@@ -38,7 +39,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$AgentVersion = "0.1.0"
+$AgentVersion = "0.1.1"
 $TaskName = "Central Operacional - Realtime Hours Agent"
 
 function Assert-Administrator {
@@ -76,6 +77,7 @@ if (-not (Test-Path $sourceAgent)) {
 
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $InstallDir "queue") -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $InstallDir "failed") -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $InstallDir "logs") -Force | Out-Null
 
 $targetAgent = Join-Path $InstallDir "RealtimeHoursAgent.ps1"
@@ -125,6 +127,7 @@ Write-Host "Instalacao concluida."
 Write-Host "Config: $configPath"
 Write-Host "Logs:   $(Join-Path $InstallDir "logs\agent.log")"
 Write-Host "Fila:   $(Join-Path $InstallDir "queue")"
+Write-Host "Falhas: $(Join-Path $InstallDir "failed")"
 Write-Host ""
 Write-Host "Teste manual:"
 Write-Host "powershell -ExecutionPolicy Bypass -File `"$targetAgent`" -Mode Once"

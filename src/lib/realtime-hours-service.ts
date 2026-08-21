@@ -12,6 +12,8 @@ import {
   buildRealtimeHoursPlannedShifts,
   buildRealtimeHoursSlotAssignmentWindows,
   matchRealtimeHoursPlannedShift,
+  realtimeHoursArchiveThroughDate,
+  realtimeHoursRawDeleteBefore,
   saoPauloDateKey,
   startOfSaoPauloDate,
   type RealtimeHoursPlannedShift,
@@ -40,10 +42,18 @@ const timelineHeartbeatSeconds = Number.parseInt(process.env.REALTIME_HOURS_TIME
   || (Number.isFinite(legacyTimelineHeartbeatMinutes) ? legacyTimelineHeartbeatMinutes * 60 : 120);
 const timelineMaxGapSeconds = Number.parseInt(process.env.REALTIME_HOURS_TIMELINE_MAX_GAP_SECONDS ?? "", 10)
   || (Number.isFinite(legacyTimelineMaxGapMinutes) ? legacyTimelineMaxGapMinutes * 60 : 180);
-const configuredRetentionDays = Number.parseInt(process.env.REALTIME_HOURS_RETENTION_DAYS ?? "90", 10);
+const configuredRetentionDays = Number.parseInt(process.env.REALTIME_HOURS_RAW_RETENTION_DAYS ?? "7", 10);
 const retentionDays = Number.isFinite(configuredRetentionDays)
   ? Math.min(730, Math.max(7, configuredRetentionDays))
-  : 90;
+  : 7;
+const configuredArchiveDaysPerRun = Number.parseInt(process.env.REALTIME_HOURS_ARCHIVE_DAYS_PER_RUN ?? "2", 10);
+const archiveDaysPerRun = Number.isFinite(configuredArchiveDaysPerRun)
+  ? Math.min(7, Math.max(1, configuredArchiveDaysPerRun))
+  : 2;
+const configuredRetentionDeleteLimit = Number.parseInt(process.env.REALTIME_HOURS_RETENTION_DELETE_LIMIT ?? "20000", 10);
+const retentionDeleteLimit = Number.isFinite(configuredRetentionDeleteLimit)
+  ? Math.min(100_000, Math.max(1_000, configuredRetentionDeleteLimit))
+  : 20_000;
 const identityConfidences = ["HIGH", "MEDIUM", "LOW", "UNKNOWN"] as const;
 const realtimeHoursEventTypes = ["SESSION_START", "SESSION_RESUME", "HEARTBEAT", "SESSION_END"] as const;
 
@@ -100,6 +110,27 @@ type RealtimeHoursTimelineOptions = {
   employeeId?: string | null;
   wbLogin?: string | null;
   includeOvernightShiftTail?: boolean;
+};
+
+type RealtimeHoursTimelineRow = ReturnType<typeof buildRealtimeHoursTimelineRow>;
+
+type RealtimeHoursTimelineResult = {
+  success: true;
+  date: string;
+  window: {
+    start: string;
+    end: string;
+    calculationEnd: string;
+  };
+  summary: {
+    users: number;
+    activeMs: number;
+    noActivityMs: number;
+    sessions: number;
+  };
+  rows: RealtimeHoursTimelineRow[];
+  sourceRecords?: number;
+  archived?: boolean;
 };
 
 export type RealtimeHoursShiftActivityRequest = {
@@ -349,17 +380,38 @@ export async function importRealtimeHoursSnapshot(input: unknown) {
   const source = parsed.data.source || defaultSource;
   const status = rowErrors.length ? "PARTIAL" : "SUCCESS";
   const batch = await prisma.$transaction(async (tx) => {
-    const created = await tx.realTimeHoursImportBatch.create({
-      data: {
-        source,
-        capturedAt,
-        status,
-        rowsTotal: parsed.data.records.length,
-        rowsValid: recordsToInsert.length,
-        rowsError: rowErrors.length,
-        errorSummary: rowErrors.length ? rowErrors.slice(0, 50) : Prisma.JsonNull
-      }
-    });
+    const sharedBatchId = realtimeHoursSharedBatchId(source, capturedAt);
+    const created = sharedBatchId
+      ? await tx.realTimeHoursImportBatch.upsert({
+        where: { id: sharedBatchId },
+        create: {
+          id: sharedBatchId,
+          source,
+          capturedAt,
+          importedAt: new Date(),
+          status,
+          rowsTotal: 0,
+          rowsValid: 0,
+          rowsError: 0,
+          errorSummary: Prisma.JsonNull
+        },
+        update: {
+          capturedAt,
+          importedAt: new Date(),
+          ...(rowErrors.length ? { status: "PARTIAL", errorSummary: rowErrors.slice(0, 50) } : {})
+        }
+      })
+      : await tx.realTimeHoursImportBatch.create({
+        data: {
+          source,
+          capturedAt,
+          status,
+          rowsTotal: 0,
+          rowsValid: 0,
+          rowsError: 0,
+          errorSummary: Prisma.JsonNull
+        }
+      });
 
     let insertedCount = 0;
     for (let index = 0; index < recordsToInsert.length; index += 1000) {
@@ -374,18 +426,24 @@ export async function importRealtimeHoursSnapshot(input: unknown) {
       insertedCount += inserted.count;
     }
 
-    if (insertedCount !== recordsToInsert.length) {
-      if (insertedCount === 0) {
+    if (insertedCount === 0) {
+      if (!sharedBatchId) {
         await tx.realTimeHoursImportBatch.delete({ where: { id: created.id } });
-        return { created: null, insertedCount };
       }
-      await tx.realTimeHoursImportBatch.update({
-        where: { id: created.id },
-        data: { rowsValid: insertedCount }
-      });
+      return { created: null, insertedCount };
     }
 
-    return { created, insertedCount };
+    const updated = await tx.realTimeHoursImportBatch.update({
+      where: { id: created.id },
+      data: {
+        rowsTotal: { increment: parsed.data.records.length },
+        rowsValid: { increment: insertedCount },
+        rowsError: { increment: rowErrors.length },
+        ...(rowErrors.length ? { status: "PARTIAL", errorSummary: rowErrors.slice(0, 50) } : {})
+      }
+    });
+
+    return { created: updated, insertedCount };
   });
 
   if (!batch.created) {
@@ -410,7 +468,7 @@ export async function importRealtimeHoursSnapshot(input: unknown) {
     source: batch.created.source,
     status: batch.created.status,
     capturedAt: batch.created.capturedAt.toISOString(),
-    rowsProcessed: batch.created.rowsTotal,
+    rowsProcessed: parsed.data.records.length,
     rowsValid: batch.insertedCount,
     rowsError: batch.created.rowsError,
     rowsDuplicate: duplicateCount + recordsToInsert.length - batch.insertedCount,
@@ -604,16 +662,128 @@ export async function listRealtimeHoursImports(options: RealtimeHoursImportsOpti
 
 export async function cleanupRealtimeHoursRetention() {
   const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
-  const deleted = await prisma.realTimeHoursImportBatch.deleteMany({
-    where: { capturedAt: { lt: cutoff } }
-  });
+  const archive = await archiveRealtimeHoursBeforeCutoff(cutoff);
+
+  // Raw heartbeats are deleted only after every affected operational date is
+  // archived. The first runs therefore backfill safely before pruning starts.
+  const batchesDeleted = archive.remainingDays === 0 && archive.deleteBefore
+    ? await deleteRealtimeHoursBatchesBefore(new Date(archive.deleteBefore), retentionDeleteLimit)
+    : 0;
 
   return {
     success: true,
     retentionDays,
     cutoff: cutoff.toISOString(),
-    batchesDeleted: deleted.count
+    archive,
+    batchesDeleted,
+    deleteLimit: retentionDeleteLimit
   };
+}
+
+async function archiveRealtimeHoursBeforeCutoff(cutoff: Date) {
+  const oldestBatch = await prisma.realTimeHoursImportBatch.findFirst({
+    where: { capturedAt: { lt: cutoff } },
+    orderBy: { capturedAt: "asc" },
+    select: { capturedAt: true }
+  });
+  if (!oldestBatch) {
+    return {
+      requiredDays: 0,
+      archivedDays: 0,
+      remainingDays: 0,
+      processedDates: [] as string[],
+      deleteBefore: null as string | null
+    };
+  }
+
+  const startDate = addDateKeyDays(saoPauloDateKey(oldestBatch.capturedAt), -1);
+  const endDate = realtimeHoursArchiveThroughDate(cutoff);
+  const requiredDates = dateKeysBetween(startDate, endDate, 4_000);
+  const coveredThroughEndDate = requiredDates.at(-1) === endDate;
+  const existing = await prisma.realTimeHoursArchiveDay.findMany({
+    where: { dateKey: { in: requiredDates } },
+    select: { dateKey: true }
+  });
+  const archivedDates = new Set(existing.map((row) => row.dateKey));
+  const missingDates = requiredDates.filter((dateKey) => !archivedDates.has(dateKey));
+  const datesToProcess = missingDates.slice(0, archiveDaysPerRun);
+
+  for (const dateKey of datesToProcess) {
+    await archiveRealtimeHoursDate(dateKey);
+    archivedDates.add(dateKey);
+  }
+
+  return {
+    requiredDays: requiredDates.length,
+    archivedDays: archivedDates.size,
+    remainingDays: requiredDates.filter((dateKey) => !archivedDates.has(dateKey)).length + (coveredThroughEndDate ? 0 : 1),
+    processedDates: datesToProcess,
+    deleteBefore: coveredThroughEndDate ? realtimeHoursRawDeleteBefore(endDate).toISOString() : null
+  };
+}
+
+async function archiveRealtimeHoursDate(dateKey: string) {
+  const timeline = await getRealtimeHoursTimelineFromRaw({ date: dateKey });
+  const generatedAt = new Date();
+
+  await prisma.$transaction(async (tx) => {
+    await tx.realTimeHoursArchiveDay.upsert({
+      where: { dateKey },
+      create: {
+        dateKey,
+        windowStart: new Date(timeline.window.start),
+        windowEnd: new Date(timeline.window.end),
+        calculationEnd: new Date(timeline.window.calculationEnd),
+        sourceRecords: timeline.sourceRecords ?? 0,
+        generatedAt
+      },
+      update: {
+        windowStart: new Date(timeline.window.start),
+        windowEnd: new Date(timeline.window.end),
+        calculationEnd: new Date(timeline.window.calculationEnd),
+        sourceRecords: timeline.sourceRecords ?? 0,
+        generatedAt
+      }
+    });
+    await tx.realTimeHoursArchiveRow.deleteMany({ where: { dateKey } });
+    for (let index = 0; index < timeline.rows.length; index += 500) {
+      const rows = timeline.rows.slice(index, index + 500);
+      await tx.realTimeHoursArchiveRow.createMany({
+        data: rows.map((row) => ({
+          dateKey,
+          rowKey: row.key,
+          employeeId: row.employeeId || null,
+          wbLoginNormalized: row.wbLogin ? normalizeLogin(row.wbLogin) : null,
+          payload: toJsonValue(row)
+        }))
+      });
+    }
+  }, { timeout: 30_000 });
+}
+
+async function deleteRealtimeHoursBatchesBefore(cutoff: Date, limit: number) {
+  return prisma.$executeRaw(Prisma.sql`
+    WITH stale_batches AS (
+      SELECT "id"
+      FROM "RealTimeHoursImportBatch"
+      WHERE "capturedAt" < ${cutoff}
+      ORDER BY "capturedAt" ASC
+      LIMIT ${limit}
+    )
+    DELETE FROM "RealTimeHoursImportBatch" AS batch
+    USING stale_batches
+    WHERE batch."id" = stale_batches."id"
+  `);
+}
+
+function dateKeysBetween(startDate: string, endDate: string, maximumDays: number) {
+  const dates: string[] = [];
+  let current = startDate;
+  while (current <= endDate && dates.length < maximumDays) {
+    dates.push(current);
+    current = addDateKeyDays(current, 1);
+  }
+  return dates;
 }
 
 export async function listRealtimeHoursIdentityMappings() {
@@ -841,8 +1011,130 @@ export async function upsertRealtimeHoursIdentityMapping(input: RealtimeHoursIde
   };
 }
 
-export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOptions = {}) {
+export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOptions = {}): Promise<RealtimeHoursTimelineResult> {
   const startedAt = Date.now();
+  const archived = await getArchivedRealtimeHoursTimeline(options);
+  const result = archived ?? await getRealtimeHoursTimelineFromRaw(options);
+  logPerformanceMetric("realtime-hours.timeline", startedAt, {
+    date: result.date,
+    records: result.sourceRecords ?? 0,
+    rows: result.rows.length,
+    archived: Boolean(result.archived)
+  });
+  return result;
+}
+
+export async function getRealtimeHoursTimelineRange(options: {
+  dates: string[];
+  employeeId?: string | null;
+  wbLogin?: string | null;
+}) {
+  const dates = Array.from(new Set(options.dates.filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))));
+  if (!dates.length) return [];
+
+  const employeeId = String(options.employeeId ?? "").trim();
+  const wbLogin = normalizeLogin(String(options.wbLogin ?? ""));
+  const archivedDays = await prisma.realTimeHoursArchiveDay.findMany({
+    where: { dateKey: { in: dates } },
+    include: {
+      rows: {
+        where: employeeId || wbLogin ? {
+          OR: [
+            ...(employeeId ? [{ employeeId }] : []),
+            ...(wbLogin ? [{ wbLoginNormalized: wbLogin }] : [])
+          ]
+        } : undefined,
+        orderBy: { rowKey: "asc" }
+      }
+    }
+  });
+  const results = new Map<string, RealtimeHoursTimelineResult>(
+    archivedDays.map((day) => [day.dateKey, timelineFromArchivedDay(day, {})])
+  );
+  const missingDates = dates.filter((date) => !results.has(date));
+
+  for (let index = 0; index < missingDates.length; index += 4) {
+    const chunk = missingDates.slice(index, index + 4);
+    const timelines = await Promise.all(chunk.map((date) => getRealtimeHoursTimelineFromRaw({
+      date,
+      employeeId,
+      wbLogin
+    })));
+    timelines.forEach((timeline) => results.set(timeline.date, timeline));
+  }
+
+  return dates
+    .map((date) => results.get(date))
+    .filter((timeline): timeline is RealtimeHoursTimelineResult => Boolean(timeline));
+}
+
+async function getArchivedRealtimeHoursTimeline(options: RealtimeHoursTimelineOptions) {
+  const dateKey = resolveTimelineDate(options.date).date;
+  const employeeId = String(options.employeeId ?? "").trim();
+  const wbLogin = normalizeLogin(String(options.wbLogin ?? ""));
+  const day = await prisma.realTimeHoursArchiveDay.findUnique({
+    where: { dateKey },
+    include: {
+      rows: {
+        where: employeeId || wbLogin ? {
+          OR: [
+            ...(employeeId ? [{ employeeId }] : []),
+            ...(wbLogin ? [{ wbLoginNormalized: wbLogin }] : [])
+          ]
+        } : undefined,
+        orderBy: { rowKey: "asc" }
+      }
+    }
+  });
+  return day ? timelineFromArchivedDay(day, options) : null;
+}
+
+function timelineFromArchivedDay(
+  day: {
+    dateKey: string;
+    windowStart: Date;
+    windowEnd: Date;
+    calculationEnd: Date;
+    sourceRecords: number;
+    rows: Array<{ payload: Prisma.JsonValue }>;
+  },
+  options: Pick<RealtimeHoursTimelineOptions, "search">
+): RealtimeHoursTimelineResult {
+  const search = normalizeSearch(options.search);
+  const rows = day.rows
+    .map((row) => archivedTimelineRow(row.payload))
+    .filter((row): row is RealtimeHoursTimelineRow => Boolean(row))
+    .filter((row) => !search || normalizeSearch([
+      row.hostname,
+      ...row.hostnames,
+      ...row.windowsUsers,
+      row.windowsUser,
+      row.wbLogin,
+      row.employeeName,
+      row.lob,
+      row.shift,
+      row.ipAddress
+    ].join(" ")).includes(search));
+
+  return buildRealtimeHoursTimelineResult({
+    date: day.dateKey,
+    window: {
+      start: day.windowStart.toISOString(),
+      end: day.windowEnd.toISOString(),
+      calculationEnd: day.calculationEnd.toISOString()
+    },
+    rows,
+    sourceRecords: day.sourceRecords,
+    archived: true
+  });
+}
+
+function archivedTimelineRow(payload: Prisma.JsonValue) {
+  if (!isPlainObject(payload) || typeof payload.key !== "string" || !Array.isArray(payload.segments)) return null;
+  return payload as unknown as RealtimeHoursTimelineRow;
+}
+
+async function getRealtimeHoursTimelineFromRaw(options: RealtimeHoursTimelineOptions = {}): Promise<RealtimeHoursTimelineResult> {
   const period = resolveTimelineDate(options.date);
   const employeeId = String(options.employeeId ?? "").trim();
   const wbLogin = normalizeLogin(String(options.wbLogin ?? ""));
@@ -1010,28 +1302,40 @@ export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOpt
     return left.localeCompare(right) || a.data.localeCompare(b.data) || a.key.localeCompare(b.key);
   });
 
-  const result = {
-    success: true,
+  return buildRealtimeHoursTimelineResult({
     date: period.date,
     window: {
       start: period.start.toISOString(),
       end: period.end.toISOString(),
       calculationEnd: period.calculationEnd.toISOString()
     },
-    summary: {
-      users: rows.length,
-      activeMs: rows.reduce((sum, row) => sum + row.activeMs, 0),
-      noActivityMs: rows.reduce((sum, row) => sum + row.noActivityMs, 0),
-      sessions: rows.reduce((sum, row) => sum + row.sessionCount, 0)
-    },
-    rows
-  };
-  logPerformanceMetric("realtime-hours.timeline", startedAt, {
-    date: period.date,
-    records: records.length,
-    rows: rows.length
+    rows,
+    sourceRecords: records.length,
+    archived: false
   });
-  return result;
+}
+
+function buildRealtimeHoursTimelineResult(input: {
+  date: string;
+  window: RealtimeHoursTimelineResult["window"];
+  rows: RealtimeHoursTimelineRow[];
+  sourceRecords?: number;
+  archived?: boolean;
+}): RealtimeHoursTimelineResult {
+  return {
+    success: true,
+    date: input.date,
+    window: input.window,
+    summary: {
+      users: input.rows.length,
+      activeMs: input.rows.reduce((sum, row) => sum + row.activeMs, 0),
+      noActivityMs: input.rows.reduce((sum, row) => sum + row.noActivityMs, 0),
+      sessions: input.rows.reduce((sum, row) => sum + row.sessionCount, 0)
+    },
+    rows: input.rows,
+    sourceRecords: input.sourceRecords,
+    archived: input.archived
+  };
 }
 
 export async function getRealtimeHoursShiftActivityHours(
@@ -1041,21 +1345,67 @@ export async function getRealtimeHoursShiftActivityHours(
   const result = new Map(uniqueRequests.map((request) => [request.key, 0]));
   if (!uniqueRequests.length) return result;
 
-  const employeeIds = Array.from(new Set(uniqueRequests.map((request) => request.employeeId).filter(Boolean)));
-  const wbLogins = Array.from(new Set(uniqueRequests.map((request) => request.wbLogin).filter(Boolean)));
+  const allDateKeys = Array.from(new Set(uniqueRequests.map((request) => request.shiftDate.toISOString().slice(0, 10))));
+  const allEmployeeIds = Array.from(new Set(uniqueRequests.map((request) => request.employeeId).filter(Boolean)));
+  const allWbLogins = Array.from(new Set(uniqueRequests.map((request) => normalizeLogin(request.wbLogin)).filter(Boolean)));
+  const archivedDays = await prisma.realTimeHoursArchiveDay.findMany({
+    where: { dateKey: { in: allDateKeys } },
+    include: {
+      rows: {
+        where: {
+          OR: [
+            ...(allEmployeeIds.length ? [{ employeeId: { in: allEmployeeIds } }] : []),
+            ...(allWbLogins.length ? [{ wbLoginNormalized: { in: allWbLogins } }] : [])
+          ]
+        },
+        select: { payload: true }
+      }
+    }
+  });
+  const archivedDateKeys = new Set(archivedDays.map((day) => day.dateKey));
+  const requestsByDate = new Map<string, RealtimeHoursShiftActivityRequest[]>();
+  for (const request of uniqueRequests) {
+    const dateKey = request.shiftDate.toISOString().slice(0, 10);
+    const dateRequests = requestsByDate.get(dateKey) ?? [];
+    dateRequests.push(request);
+    requestsByDate.set(dateKey, dateRequests);
+  }
+  for (const day of archivedDays) {
+    const rows = day.rows
+      .map((row) => archivedTimelineRow(row.payload))
+      .filter((row): row is RealtimeHoursTimelineRow => Boolean(row));
+    for (const request of requestsByDate.get(day.dateKey) ?? []) {
+      const normalizedWbLogin = normalizeLogin(request.wbLogin);
+      const activeMs = rows
+        .filter((row) => row.data === day.dateKey && (
+          row.employeeId === request.employeeId
+          || (normalizedWbLogin && normalizeLogin(row.wbLogin) === normalizedWbLogin)
+        ))
+        .reduce((sum, row) => sum + row.activeMs, 0);
+      result.set(request.key, activeMs / (60 * 60 * 1_000));
+    }
+  }
+
+  const rawRequests = uniqueRequests.filter((request) => (
+    !archivedDateKeys.has(request.shiftDate.toISOString().slice(0, 10))
+  ));
+  if (!rawRequests.length) return result;
+
+  const employeeIds = Array.from(new Set(rawRequests.map((request) => request.employeeId).filter(Boolean)));
+  const wbLogins = Array.from(new Set(rawRequests.map((request) => request.wbLogin).filter(Boolean)));
   const employeeIdByWbLogin = new Map(
-    uniqueRequests
+    rawRequests
       .filter((request) => request.employeeId && request.wbLogin)
       .map((request) => [normalizeLogin(request.wbLogin), request.employeeId])
   );
   const requestsByEmployeeId = new Map<string, RealtimeHoursShiftActivityRequest[]>();
-  for (const request of uniqueRequests) {
+  for (const request of rawRequests) {
     const employeeRequests = requestsByEmployeeId.get(request.employeeId) ?? [];
     employeeRequests.push(request);
     requestsByEmployeeId.set(request.employeeId, employeeRequests);
   }
 
-  const requestedDateKeys = Array.from(new Set(uniqueRequests.map((request) => request.shiftDate.toISOString().slice(0, 10))));
+  const requestedDateKeys = Array.from(new Set(rawRequests.map((request) => request.shiftDate.toISOString().slice(0, 10))));
   const scheduleDateKeys = Array.from(new Set(requestedDateKeys.flatMap((date) => [
     addDateKeyDays(date, -1),
     date,
@@ -1764,6 +2114,15 @@ function blankToUndefined(value: unknown) {
 function parseDate(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function realtimeHoursSharedBatchId(source: string, capturedAt: Date) {
+  if (source !== "direct-windows-agent") return null;
+  const minute = new Date(Math.floor(capturedAt.getTime() / 60_000) * 60_000)
+    .toISOString()
+    .slice(0, 16)
+    .replace(/[-:T]/g, "");
+  return `direct-windows-agent-${minute}`;
 }
 
 function parseLimit(value: string | number | null | undefined, fallback: number, max: number) {

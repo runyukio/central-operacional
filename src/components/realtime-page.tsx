@@ -32,11 +32,6 @@ import { CecReportDetails, CecReportOverview, type CecReportPayload } from "@/co
 
 type CountItem = { label: string; count: number };
 
-type RealtimeLatestCycleStatus = {
-  cycleDownload?: string;
-  importedAt?: string;
-} | null | undefined;
-
 type RealTimeRow = {
   id: string;
   rowNumber: number;
@@ -759,26 +754,11 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
 
   async function refreshRealtimeSnapshot(background = true) {
     try {
+      if (background && document.hidden) return;
+      if (background && !followLatestCycle && selectedCycleValue) return;
       const view = effectiveTab === "agents" ? "agents" : effectiveTab === "report" || effectiveTab === "executive" ? "both" : "queues";
-      const params = new URLSearchParams({ view });
-      const response = await fetch(`/api/realtime/latest?${params.toString()}`, { cache: "no-store" });
-      const json = await response.json();
-      if (!response.ok) throw new Error(json.message || json.error || "Não foi possível verificar atualização do Real Time.");
-
-      const latestCycleDownload = pickLatestRealtimeCycle(
-        effectiveTab === "agents" ? json.data?.agents : effectiveTab === "queues" ? json.data?.queues : json.data?.queues ?? json.data?.agents,
-        effectiveTab === "report" || effectiveTab === "executive" ? json.data?.agents : null
-      );
       const shouldFollowLatest = followLatestCycle || !selectedCycleValue;
-      const cycleToRefresh = shouldFollowLatest ? latestCycleDownload : selectedCycleValue;
-      if (!cycleToRefresh) return;
-
-      if (shouldFollowLatest && cycleToRefresh !== selectedCycleValue) {
-        setSelectedCycle(cycleToRefresh);
-        return;
-      }
-
-      await loadSnapshot(cycleToRefresh, background, view);
+      await loadSnapshot(shouldFollowLatest ? "" : selectedCycleValue, background, view);
     } catch (currentError) {
       console.warn("[realtime] Auto-refresh falhou.", currentError);
     }
@@ -786,9 +766,10 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
 
   useEffect(() => {
     if (isCecReport) return;
+    if (!followLatestCycle && selectedCycleValue) return;
     const interval = window.setInterval(async () => {
       await refreshRealtimeSnapshot(true);
-    }, 60000);
+    }, 120_000);
     return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, reportLob, clientQueuesOnly, followLatestCycle, selectedCycleValue, isCecReport]);
@@ -797,7 +778,10 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
     if (effectiveTab !== "report" || reportLob !== "CEC") return;
     const cycleToLoad = followLatestCycle ? "" : selectedCycleValue;
     void loadCecReport(cycleToLoad);
-    const interval = window.setInterval(() => void loadCecReport(cycleToLoad), 60000);
+    if (!followLatestCycle && selectedCycleValue) return;
+    const interval = window.setInterval(() => {
+      if (!document.hidden) void loadCecReport("");
+    }, 120_000);
     return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveTab, reportLob, selectedCycleValue, followLatestCycle]);
@@ -805,14 +789,13 @@ export function RealTimePage({ userRole, userEmail, userRoleTitle, userJobTitle,
   useEffect(() => {
     function refreshWhenVisible() {
       if (document.hidden) return;
-      if (isCecReport) void loadCecReport(followLatestCycle ? "" : selectedCycleValue);
+      if (!followLatestCycle && selectedCycleValue) return;
+      if (isCecReport) void loadCecReport("");
       else void refreshRealtimeSnapshot(true);
     }
 
-    window.addEventListener("focus", refreshWhenVisible);
     document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {
-      window.removeEventListener("focus", refreshWhenVisible);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4863,17 +4846,6 @@ function formatReportMaxLatency(value: number | null | undefined, reportLob: Rep
 
 function getReportLatencyTargetMinutes(reportLob: ReportLob, fallback: number | null) {
   return reportLob === "ADS" ? ADS_REPORT_TARGET_LATENCY_MINUTES : fallback;
-}
-
-function pickLatestRealtimeCycle(...statuses: RealtimeLatestCycleStatus[]) {
-  return statuses
-    .filter((status): status is NonNullable<RealtimeLatestCycleStatus> => typeof status?.cycleDownload === "string" && Boolean(status.cycleDownload))
-    .sort((a, b) => {
-      const parsedA = parseRealtimeCycle(a.cycleDownload ?? "", a.importedAt ?? "");
-      const parsedB = parseRealtimeCycle(b.cycleDownload ?? "", b.importedAt ?? "");
-      if (parsedA.timestamp !== parsedB.timestamp) return parsedB.timestamp - parsedA.timestamp;
-      return new Date(b.importedAt ?? 0).getTime() - new Date(a.importedAt ?? 0).getTime();
-    })[0]?.cycleDownload ?? "";
 }
 
 function parseRealtimeCycle(value: string, importedAt: string) {

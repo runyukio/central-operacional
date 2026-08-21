@@ -4,7 +4,7 @@ import { getApiActor } from "@/lib/api-actor";
 import { prisma } from "@/lib/prisma";
 import { applyApprovedRealtimeHoursAdjustments, applyApprovedRealtimeHoursAdjustmentsForRange } from "@/lib/realtime-hours-adjustments-service";
 import { canAccessOwnRealtimeHours } from "@/lib/realtime-hours-permissions";
-import { getRealtimeHoursTimeline } from "@/lib/realtime-hours-service";
+import { getRealtimeHoursTimeline, getRealtimeHoursTimelineRange } from "@/lib/realtime-hours-service";
 
 export const dynamic = "force-dynamic";
 
@@ -53,11 +53,11 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: false, error: range.error, message: range.error }, { status: 400 });
     }
 
-    const timelines = await mapInBatches(range.dates, 4, async (date) => getRealtimeHoursTimeline({
-      date,
+    const timelines = await getRealtimeHoursTimelineRange({
+      dates: range.dates,
       employeeId: employee.id,
       wbLogin: employee.wbLogin
-    }));
+    });
     const employeeWbLogin = normalizeLogin(employee.wbLogin);
     const adjustedDays = await applyApprovedRealtimeHoursAdjustmentsForRange(timelines.map((timeline) => ({
       date: timeline.date,
@@ -158,14 +158,6 @@ function parseInputDate(value: string) {
 
 function formatInputDate(date: Date) {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
-}
-
-async function mapInBatches<T, R>(values: T[], batchSize: number, mapper: (value: T) => Promise<R>) {
-  const results: R[] = [];
-  for (let index = 0; index < values.length; index += batchSize) {
-    results.push(...await Promise.all(values.slice(index, index + batchSize).map(mapper)));
-  }
-  return results;
 }
 
 function employeePayload(employee: {

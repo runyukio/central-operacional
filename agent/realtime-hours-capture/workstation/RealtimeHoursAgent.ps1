@@ -22,7 +22,7 @@ try {
   # Older hosts may not allow changing TLS settings; Invoke-RestMethod will use its defaults.
 }
 
-$AgentVersion = "0.1.0"
+$AgentVersion = "0.1.1"
 $DefaultRoot = Join-Path $env:ProgramData "CentralOperacional\RealtimeHoursAgent"
 if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
   $ConfigPath = Join-Path $DefaultRoot "config.json"
@@ -30,11 +30,12 @@ if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
 
 $RootDir = Split-Path -Parent $ConfigPath
 $QueueDir = Join-Path $RootDir "queue"
+$FailedDir = Join-Path $RootDir "failed"
 $LogDir = Join-Path $RootDir "logs"
 $LogPath = Join-Path $LogDir "agent.log"
 
 function Initialize-AgentFolders {
-  foreach ($path in @($RootDir, $QueueDir, $LogDir)) {
+  foreach ($path in @($RootDir, $QueueDir, $FailedDir, $LogDir)) {
     if (-not (Test-Path $path)) {
       New-Item -ItemType Directory -Path $path -Force | Out-Null
     }
@@ -284,6 +285,21 @@ function Invoke-AgentPost {
   return Invoke-RestMethod -Method Post -Uri $Uri -Headers $headers -Body $body -ContentType "application/json; charset=utf-8" -TimeoutSec 10
 }
 
+function Get-HttpStatusCode {
+  param([System.Management.Automation.ErrorRecord]$ErrorRecord)
+  try {
+    if ($ErrorRecord.Exception.Response -and $ErrorRecord.Exception.Response.StatusCode) {
+      return [int]$ErrorRecord.Exception.Response.StatusCode
+    }
+  } catch {}
+  return $null
+}
+
+function Test-PermanentHttpFailure {
+  param([int]$StatusCode)
+  return $StatusCode -ge 400 -and $StatusCode -lt 500 -and $StatusCode -notin @(408, 429)
+}
+
 function New-SnapshotPayload {
   $config = Get-Config
   $targets = @(Get-DeliveryTargets -Config $config)
@@ -346,7 +362,13 @@ function Flush-Queue {
 
   $files = Get-ChildItem -Path $QueueDir -Filter "*.json" -File | Sort-Object Name
   foreach ($file in $files) {
-    $payload = Read-JsonHashtable -Path $file.FullName
+    try {
+      $payload = Read-JsonHashtable -Path $file.FullName
+    } catch {
+      Move-Item -Path $file.FullName -Destination (Join-Path $FailedDir $file.Name) -Force
+      Write-AgentLog -Level "ERROR" -Message ("Snapshot invalido movido para quarentena: {0}" -f $file.Name)
+      continue
+    }
     $sent = $false
     foreach ($target in $targets) {
       $targetLabel = [string]$target["label"]
@@ -362,7 +384,14 @@ function Flush-Queue {
         $sent = $true
         break
       } catch {
-        Write-AgentLog -Level "WARN" -Message ("Falha ao enviar para {0}. {1}" -f $targetLabel, $_.Exception.Message)
+        $statusCode = Get-HttpStatusCode -ErrorRecord $_
+        if ($null -ne $statusCode -and (Test-PermanentHttpFailure -StatusCode $statusCode)) {
+          Move-Item -Path $file.FullName -Destination (Join-Path $FailedDir $file.Name) -Force
+          Write-AgentLog -Level "ERROR" -Message ("Snapshot recusado permanentemente por {0} (HTTP {1}) e movido para quarentena: {2}" -f $targetLabel, $statusCode, $file.Name)
+          $sent = $true
+          break
+        }
+        Write-AgentLog -Level "WARN" -Message ("Falha temporaria ao enviar para {0}. {1}" -f $targetLabel, $_.Exception.Message)
       }
     }
 
@@ -387,7 +416,7 @@ function Start-Daemon {
       Write-AgentLog -Level "WARN" -Message ("Ciclo com falha. {0}" -f $_.Exception.Message)
     }
     $config = Get-Config
-    $heartbeatSeconds = Get-ConfigInt -Config $config -Key "heartbeatSeconds" -DefaultValue 60
+    $heartbeatSeconds = [Math]::Max(120, (Get-ConfigInt -Config $config -Key "heartbeatSeconds" -DefaultValue 120))
     Start-Sleep -Seconds $heartbeatSeconds
   }
 }

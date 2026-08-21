@@ -464,6 +464,21 @@ export function startOfSaoPauloDate(dateKey: string) {
   return saoPauloDateTime(dateKey, 0);
 }
 
+export function realtimeHoursArchiveThroughDate(cutoff: Date) {
+  // A timeline for operational date D reads through the start of D+2.
+  // Archive only dates whose complete calculation window is older than cutoff.
+  return addDateKeyDays(saoPauloDateKey(cutoff), -2);
+}
+
+export function realtimeHoursRawDeleteBefore(archiveThroughDate: string) {
+  // The next operational date can read up to eight hours before midnight.
+  // Preserve that overlap in raw storage so overnight shifts stay complete.
+  return new Date(
+    startOfSaoPauloDate(addDateKeyDays(archiveThroughDate, 1)).getTime()
+    - 8 * millisecondsPerHour
+  );
+}
+
 export function saoPauloDateTime(dateKey: string, minutesAfterMidnight: number) {
   const [year, month, day] = dateKey.split("-").map(Number);
   const hours = Math.floor(minutesAfterMidnight / 60);

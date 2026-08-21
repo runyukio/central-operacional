@@ -1,4 +1,4 @@
-# Realtime Hours Capture - instalacao direta no site
+# Realtime Hours Capture 0.1.1 - instalacao direta no site
 
 Este pacote instala o agente de captura de horas diretamente nos computadores da operacao, sem servidor Windows local.
 
@@ -9,6 +9,12 @@ Computador do colaborador -> https://eastriverbrasil.com/api/realtime-hours/agen
 ```
 
 O computador precisa apenas de internet. Nao precisa estar na mesma rede da empresa e nao precisa acessar `192.168.x.x`.
+
+## Otimizacao da versao 0.1.1
+
+- envia heartbeat a cada 120 segundos, mantendo eventos de sessao e o histórico operacional;
+- move JSON local inválido e respostas HTTP 4xx permanentes para `failed\`, evitando reenvio infinito;
+- mantém `408`, `429` e falhas `5xx` na fila para nova tentativa.
 
 ## O que o agente captura
 
@@ -113,6 +119,7 @@ Arquivos principais:
 
 - `config.json`: URL do site, token do agente e parametros;
 - `queue\`: snapshots pendentes quando o site/internet estiver fora;
+- `failed\`: snapshots inválidos ou recusados permanentemente;
 - `logs\agent.log`: logs locais.
 
 ## Tarefa agendada

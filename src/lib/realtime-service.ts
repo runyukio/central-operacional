@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 
 import { Prisma } from "@prisma/client";
+import { unstable_cache } from "next/cache";
 
 import {
   calculateAbsenceRate,
@@ -263,6 +264,25 @@ const realtimeViewHistoryBatchLimit = Math.max(
   realtimeRetentionDays * 24 * realtimeImportsPerHour
 );
 const realtimeRawFallbackBatchLimit = 12;
+const configuredRealtimeRawRetentionHours = Number.parseInt(process.env.REALTIME_RAW_RETENTION_HOURS ?? "24", 10);
+const realtimeRawRetentionHours = Number.isFinite(configuredRealtimeRawRetentionHours)
+  ? Math.min(realtimeRetentionDays * 24, Math.max(12, configuredRealtimeRawRetentionHours))
+  : 24;
+const configuredRealtimeRawDeleteLimit = Number.parseInt(process.env.REALTIME_RAW_DELETE_LIMIT ?? "10000", 10);
+const realtimeRawDeleteLimit = Number.isFinite(configuredRealtimeRawDeleteLimit)
+  ? Math.min(50_000, Math.max(1_000, configuredRealtimeRawDeleteLimit))
+  : 10_000;
+
+const getCachedQueueRealtimeView = unstable_cache(
+  async (cycleDownload: string) => buildQueueRealtimeView({ cycleDownload: cycleDownload || undefined }),
+  ["realtime-queue-view-v1"],
+  { revalidate: 60, tags: ["realtime-queue-view"] }
+);
+const getCachedAgentRealtimeView = unstable_cache(
+  async (cycleDownload: string) => buildAgentRealtimeView({ cycleDownload: cycleDownload || undefined }),
+  ["realtime-agent-view-v1"],
+  { revalidate: 60, tags: ["realtime-agent-view"] }
+);
 
 type RealtimeBatchReadRow = {
   id: string;
@@ -380,6 +400,20 @@ function realtimeRetentionCutoff() {
 
 async function pruneRealtimeHistory(currentBatchId?: string) {
   try {
+    const rawCutoff = new Date(Date.now() - realtimeRawRetentionHours * 60 * 60 * 1_000);
+    await prisma.$executeRaw(Prisma.sql`
+      WITH stale_records AS (
+        SELECT "id"
+        FROM "RealTimeRecord"
+        WHERE "createdAt" < ${rawCutoff}
+        ORDER BY "createdAt" ASC
+        LIMIT ${realtimeRawDeleteLimit}
+      )
+      DELETE FROM "RealTimeRecord" AS record
+      USING stale_records
+      WHERE record."id" = stale_records."id"
+    `);
+
     while (true) {
       const staleBatches = await prisma.realTimeImportBatch.findMany({
         where: {
@@ -626,8 +660,8 @@ export async function getRealtimeSnapshot(actor: Actor, options: RealtimeSnapsho
   }
 
   const [queueRealtime, agentRealtime] = await Promise.all([
-    requestedView === "agents" ? Promise.resolve(emptyQueueRealtimeView()) : buildQueueRealtimeView(options),
-    requestedView === "queues" ? Promise.resolve(emptyAgentRealtimeView()) : buildAgentRealtimeView(actor, options)
+    requestedView === "agents" ? Promise.resolve(emptyQueueRealtimeView()) : getCachedQueueRealtimeView(options.cycleDownload ?? ""),
+    requestedView === "queues" ? Promise.resolve(emptyAgentRealtimeView()) : getCachedAgentRealtimeView(options.cycleDownload ?? "")
   ]);
 
   const minutesSinceImport = Math.max(0, Math.floor((Date.now() - batch.importedAt.getTime()) / 60000));
@@ -2976,7 +3010,7 @@ function agentSummaryRowsFromRawRecords(records: Array<{
   ));
 }
 
-async function buildAgentRealtimeView(actor: Actor, options: RealtimeSnapshotOptions) {
+async function buildAgentRealtimeView(options: RealtimeSnapshotOptions) {
   const batches = await prisma.realTimeImportBatch.findMany({
     where: { status: "SUCCESS", agentRows: { gt: 0 }, importedAt: { gte: realtimeRetentionCutoff() } },
     orderBy: { importedAt: "desc" },
