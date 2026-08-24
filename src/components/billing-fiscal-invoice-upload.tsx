@@ -10,6 +10,11 @@ export type BillingFiscalInvoiceAnalysis = {
   invoiceNumber: string;
   serviceAmount: number;
   serviceDescription: string;
+  customerTaxId: string;
+  supplierTaxId: string;
+  taxationCode: string;
+  nbsCode: string;
+  complianceValidated: boolean;
   extractionMethod: "PDF_TEXT" | "OCR" | "XML";
   billingGrossAmount: number;
   difference: number;
@@ -205,6 +210,15 @@ export function BillingFiscalInvoiceUpload({
         </>
       ) : null}
 
+      {value.analysis?.complianceValidated ? (
+        <div className="grid gap-2 sm:grid-cols-2">
+          <ComplianceField label="Tomador validado" value={formatCnpj(value.analysis.customerTaxId)} />
+          <ComplianceField label="Prestador validado" value={formatCnpj(value.analysis.supplierTaxId)} />
+          <ComplianceField label="Código de Tributação" value={value.analysis.taxationCode} />
+          <ComplianceField label="Código da NBS" value={value.analysis.nbsCode} />
+        </div>
+      ) : null}
+
       {analyzing ? (
         <div className="flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-800">
           <FileSearch className="h-4 w-4 shrink-0" />
@@ -237,10 +251,28 @@ function ReadField({ label, value, mono = false, wide = false }: { label: string
   );
 }
 
+function ComplianceField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-emerald-800">
+      <CheckCircle2 className="h-4 w-4 shrink-0" />
+      <div className="min-w-0">
+        <p className="text-[10px] font-black uppercase tracking-wide">{label}</p>
+        <p className="break-all text-xs font-black">{value}</p>
+      </div>
+    </div>
+  );
+}
+
 function currencyEquals(left: number, right: number) {
   return Math.round(Number(left) * 100) === Math.round(Number(right) * 100);
 }
 
 function formatCurrency(value: number) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(Number.isFinite(value) ? value : 0);
+}
+
+function formatCnpj(value: string) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  if (digits.length !== 14) return value || "-";
+  return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
 }

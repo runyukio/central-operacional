@@ -48,6 +48,10 @@ type MyInvoicePayload = {
         invoiceNumber: string;
         grossAmount: number;
         serviceDescription: string;
+        customerTaxId: string;
+        supplierTaxId: string;
+        taxationCode: string;
+        nbsCode: string;
         fileName: string;
         mimeType: string;
         sizeBytes: number;

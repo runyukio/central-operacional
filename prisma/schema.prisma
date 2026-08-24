@@ -748,6 +748,10 @@ model BillingFiscalInvoice {
   documentHash         String?                @unique
   extractionMethod     String?
   extractedAt          DateTime?
+  customerTaxId        String?
+  supplierTaxId        String?
+  taxationCode         String?
+  nbsCode              String?
   invoiceNumber       String
   grossAmount         Decimal                @db.Decimal(12, 2)
   serviceDescription  String

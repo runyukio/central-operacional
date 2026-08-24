@@ -9,6 +9,7 @@ import {
   currencyEquals,
   extractBillingFiscalInvoice,
   type BillingFiscalDocumentExtraction,
+  validateBillingFiscalComplianceFields,
   verifyBillingFiscalValidationToken
 } from "@/lib/billing-fiscal-invoice-extraction";
 import {
@@ -98,6 +99,7 @@ type ActiveUser = NonNullable<Awaited<ReturnType<typeof findActiveUser>>>;
 type BillingFiscalPreviewStage =
   | "CALCULATE_BILLING"
   | "EXTRACT_DOCUMENT"
+  | "VALIDATE_COMPLIANCE"
   | "CHECK_DUPLICATE"
   | "CREATE_VALIDATION";
 type BillingEmployee = Prisma.EmployeeProfileGetPayload<{
@@ -149,6 +151,10 @@ type BillingFiscalInvoiceRecord = {
   documentHash: string | null;
   extractionMethod: string | null;
   extractedAt: Date | null;
+  customerTaxId: string | null;
+  supplierTaxId: string | null;
+  taxationCode: string | null;
+  nbsCode: string | null;
   invoiceNumber: string;
   grossAmount: Prisma.Decimal;
   serviceDescription: string;
@@ -174,6 +180,10 @@ type BillingFiscalInvoiceView = {
   invoiceNumber: string;
   grossAmount: number;
   serviceDescription: string;
+  customerTaxId: string;
+  supplierTaxId: string;
+  taxationCode: string;
+  nbsCode: string;
   fileName: string;
   mimeType: string;
   sizeBytes: number;
@@ -522,7 +532,17 @@ export async function previewBillingFiscalInvoice(actor: Actor, input: {
     );
     const expectedFiscalAmount = calculateBillingFiscalExpectedAmount(calculated);
     stage = "EXTRACT_DOCUMENT";
-    const extraction = await extractBillingFiscalInvoice(input.file);
+    const extraction = await extractBillingFiscalInvoice(input.file, {
+      requireComplianceFields: isOwnInvoice
+    });
+    stage = "VALIDATE_COMPLIANCE";
+    if (isOwnInvoice) {
+      const sensitiveData = await prisma.employeeSensitiveData.findUnique({
+        where: { employeeId: employee.id },
+        select: { cnpj: true }
+      });
+      validateBillingFiscalComplianceFields(extraction, sensitiveData?.cnpj ?? "");
+    }
     stage = "CHECK_DUPLICATE";
     await ensureBillingFiscalDocumentAvailable(extraction, referenceMonth, employee.id);
 
@@ -551,6 +571,11 @@ export async function previewBillingFiscalInvoice(actor: Actor, input: {
         difference: roundMoney(extraction.serviceAmount - expectedFiscalAmount),
         matchesBilling,
         amountMismatchAccepted,
+        customerTaxId: extraction.customerTaxId,
+        supplierTaxId: extraction.supplierTaxId,
+        taxationCode: extraction.taxationCode,
+        nbsCode: extraction.nbsCode,
+        complianceValidated: isOwnInvoice,
         validationToken
       }
     };
@@ -591,7 +616,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
   if (!isInvoiceAvailableForEmployeeReview(cycle.status, effectiveStatus)) return { error: "Invoice ainda não está disponível para aprovação.", status: 403 };
   if (isFinalizedInvoiceStatus(persisted?.status)) return { error: "Este invoice foi finalizado pelo Admin Central e não pode ser aprovado pelo parceiro.", status: 409 };
 
-  if (!input.file && !hasReusableBillingFiscalExtraction(persisted?.fiscalInvoice)) {
+  if (!input.file && !hasReusableBillingFiscalExtraction(persisted?.fiscalInvoice, true)) {
     return { error: "Anexe a nota fiscal para que os dados sejam lidos automaticamente.", status: 400 };
   }
   if (input.file) {
@@ -645,7 +670,9 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
       allowAmountMismatch: allowFiscalAmountMismatch,
       file,
       validationToken: String(input.validationToken ?? ""),
-      existing: persisted?.fiscalInvoice ?? null
+      existing: persisted?.fiscalInvoice ?? null,
+      enforceCompliance: true,
+      supplierTaxId: sensitiveData?.cnpj ?? ""
     });
   } catch (error) {
     if (error instanceof BillingFiscalExtractionError) return { error: error.message, status: error.status };
@@ -702,6 +729,10 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
           invoiceNumber,
           grossAmount: decimal(extraction.serviceAmount),
           serviceDescription,
+          customerTaxId: extraction.customerTaxId,
+          supplierTaxId: extraction.supplierTaxId,
+          taxationCode: extraction.taxationCode,
+          nbsCode: extraction.nbsCode,
           ...fileData,
           submittedById: user.id,
           submittedAt: approvedAt,
@@ -720,6 +751,10 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
           invoiceNumber,
           grossAmount: decimal(extraction.serviceAmount),
           serviceDescription,
+          customerTaxId: extraction.customerTaxId,
+          supplierTaxId: extraction.supplierTaxId,
+          taxationCode: extraction.taxationCode,
+          nbsCode: extraction.nbsCode,
           ...fileData,
           submittedById: user.id,
           submittedAt: approvedAt,
@@ -746,6 +781,10 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
             billingHoursGrossAmount: calculated.grossAmount,
             billingCorrectionAmount: calculated.correctionAmount,
             extractionMethod: extraction.extractionMethod,
+            customerTaxId: extraction.customerTaxId,
+            supplierTaxId: extraction.supplierTaxId,
+            taxationCode: extraction.taxationCode,
+            nbsCode: extraction.nbsCode,
             invoiceFileName: fileData.fileName,
             finalAmount: calculated.finalAmount,
             totalMinutes: calculated.totalConsideredMinutes
@@ -857,6 +896,12 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
       where: { employeeId: fiscalInvoice.employeeInvoice.employeeId },
       select: { cnpj: true }
     });
+    validateBillingFiscalComplianceFields({
+      customerTaxId: fiscalInvoice.customerTaxId ?? "",
+      supplierTaxId: fiscalInvoice.supplierTaxId ?? "",
+      taxationCode: fiscalInvoice.taxationCode ?? "",
+      nbsCode: fiscalInvoice.nbsCode ?? ""
+    }, sensitiveData?.cnpj ?? "");
     if (fiscalInvoice.storageBucket !== BILLING_INVOICE_BUCKET) {
       throw new OmieIntegrationError("A nota fiscal está armazenada em uma origem inválida para envio ao Omie.");
     }
@@ -976,7 +1021,7 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
       launchCode: result.launchCode
     };
   } catch (error) {
-    const message = error instanceof OmieIntegrationError
+    const message = error instanceof OmieIntegrationError || error instanceof BillingFiscalExtractionError
       ? error.message
       : "Não foi possível enviar o lançamento ao Omie.";
     await prisma.billingFiscalInvoice.update({
@@ -1447,7 +1492,9 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
         allowAmountMismatch: allowFiscalAmountMismatch,
         file,
         validationToken: String(input.validationToken ?? ""),
-        existing: existing?.fiscalInvoice ?? null
+        existing: existing?.fiscalInvoice ?? null,
+        enforceCompliance: false,
+        supplierTaxId: ""
       });
     } catch (error) {
       if (error instanceof BillingFiscalExtractionError) return { error: error.message, status: error.status };
@@ -1498,6 +1545,10 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
             invoiceNumber,
             grossAmount: decimal(extraction.serviceAmount),
             serviceDescription,
+            customerTaxId: extraction.customerTaxId || null,
+            supplierTaxId: extraction.supplierTaxId || null,
+            taxationCode: extraction.taxationCode || null,
+            nbsCode: extraction.nbsCode || null,
             ...fileData,
             submittedById: user!.id,
             submittedAt,
@@ -1531,6 +1582,10 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
             invoiceNumber,
             grossAmount: decimal(extraction.serviceAmount),
             serviceDescription,
+            customerTaxId: extraction.customerTaxId || null,
+            supplierTaxId: extraction.supplierTaxId || null,
+            taxationCode: extraction.taxationCode || null,
+            nbsCode: extraction.nbsCode || null,
             ...fileData,
             submittedById: user!.id,
             submittedAt,
@@ -2156,13 +2211,13 @@ export async function exportBilling(actor: Actor, filters: BillingDashboardFilte
       },
       {
         sheetName: "Por Parceiro",
-        headers: ["nome", "wb_login", "cnpj", "tipo_chave_pix", "chave_pix", "cargo_funcao", "skill", "status_colaborador", "lob", "supervisor", "turno_oficial", "regra_billing", "valor_hora", "horas_aprovadas", "horas_projetadas", "total_horas", "valor_bruto", "adiantamento", "campanha", "bonus", "desconto", "correcao", "ajustes_total", "valor_final", "status_invoice", "aprovado_em"],
+        headers: ["nome", "wb_login", "cnpj", "tipo_chave_pix", "chave_pix", "tipo_servico", "skill", "status_colaborador", "lob", "supervisor", "turno_oficial", "regra_billing", "valor_hora", "horas_aprovadas", "horas_projetadas", "total_horas", "valor_bruto", "adiantamento", "campanha", "bonus", "desconto", "correcao", "ajustes_total", "valor_final", "status_invoice", "aprovado_em"],
         columnFormats: currencyColumnFormats([12, 16, 17, 18, 19, 20, 21, 22, 23]),
         rows: data.invoices.map((row) => [row.employeeName, row.wbLogin, row.cnpj, row.pixKeyType, row.pixKey, row.roleTitle, row.skill, row.employeeStatus, row.lob, row.supervisor, row.officialShift, row.billingRuleLabel || row.billingRule, moneyText(row.hourlyRate), minutesToHoursLabel(row.approvedMinutes), minutesToHoursLabel(row.projectedMinutes), minutesToHoursLabel(row.totalConsideredMinutes), moneyText(row.grossAmount), moneyText(row.advanceAmount), moneyText(row.campaignAmount), moneyText(row.bonusAmount), moneyText(row.discountAmount), moneyText(row.correctionAmount), moneyText(row.adjustmentAmount), moneyText(row.finalAmount), row.statusLabel, row.approvedByEmployeeAt || ""])
       },
       {
         sheetName: "Detalhamento de Horas",
-        headers: ["data", "nome", "wb_login", "cnpj", "tipo_chave_pix", "chave_pix", "status_colaborador", "lob", "supervisor", "skill", "cargo_funcao", "turno_oficial", "turno_slot", "horas_aprovadas", "valor_hora", "valor_calculado", "regra_billing"],
+        headers: ["data", "nome", "wb_login", "cnpj", "tipo_chave_pix", "chave_pix", "status_colaborador", "lob", "supervisor", "skill", "tipo_servico", "turno_oficial", "turno_slot", "horas_aprovadas", "valor_hora", "valor_calculado", "regra_billing"],
         columnFormats: currencyColumnFormats([14, 15]),
         rows: data.invoices.flatMap((row) => row.hourDetails.map((detail) => [detail.date, row.employeeName, row.wbLogin, row.cnpj, row.pixKeyType, row.pixKey, row.employeeStatus, row.lob, row.supervisor, row.skill, row.roleTitle, row.officialShift, detail.shift, minutesToHoursLabel(detail.minutes), moneyText(row.hourlyRate), moneyText(detail.amount), row.billingRuleLabel || row.billingRule]))
       },
@@ -2829,7 +2884,7 @@ function resolveHourlyRate(employee: BillingEmployee, rates: BillingRates): Bill
         hourlyRate: rates.NIGHT_HOURLY_RATE,
         billingRule: "AGENTE_NOITE",
         billingRuleLabel: "Agente + Turno Noite",
-        billingRateSource: "Cargo/Função Agente"
+        billingRateSource: "Tipo de serviço Agente"
       });
     }
     if (shiftBucket === "TARDE") {
@@ -2837,14 +2892,14 @@ function resolveHourlyRate(employee: BillingEmployee, rates: BillingRates): Bill
         hourlyRate: rates.AFTERNOON_HOURLY_RATE,
         billingRule: "AGENTE_TARDE",
         billingRuleLabel: "Agente + Turno Tarde",
-        billingRateSource: "Cargo/Função Agente"
+        billingRateSource: "Tipo de serviço Agente"
       });
     }
     return applyPocAgentRateModifier(employee, {
       hourlyRate: rates.MORNING_HOURLY_RATE,
       billingRule: "AGENTE_MANHA",
       billingRuleLabel: "Agente + Turno Manhã",
-      billingRateSource: "Cargo/Função Agente"
+      billingRateSource: "Tipo de serviço Agente"
     });
   }
 
@@ -3444,6 +3499,10 @@ function mapBillingFiscalInvoice(
     invoiceNumber: row.invoiceNumber,
     grossAmount: Number(row.grossAmount),
     serviceDescription: row.serviceDescription,
+    customerTaxId: row.customerTaxId ?? "",
+    supplierTaxId: row.supplierTaxId ?? "",
+    taxationCode: row.taxationCode ?? "",
+    nbsCode: row.nbsCode ?? "",
     fileName: row.fileName,
     mimeType: row.mimeType,
     sizeBytes: row.sizeBytes,
@@ -3470,6 +3529,8 @@ async function resolveBillingFiscalSubmission(input: {
   file: File | null;
   validationToken: string;
   existing: BillingFiscalInvoiceRecord | null;
+  enforceCompliance: boolean;
+  supplierTaxId: string;
 }): Promise<BillingFiscalDocumentExtraction> {
   let extraction: BillingFiscalDocumentExtraction;
 
@@ -3481,7 +3542,9 @@ async function resolveBillingFiscalSubmission(input: {
       actorEmail: input.actorEmail,
       referenceMonth: input.referenceMonth,
       employeeId: input.employeeId,
-      billingGrossAmount: input.billingGrossAmount
+      billingGrossAmount: input.billingGrossAmount,
+      enforceCompliance: input.enforceCompliance,
+      supplierTaxId: input.supplierTaxId
     });
   } else if (hasReusableBillingFiscalExtraction(input.existing)) {
     extraction = {
@@ -3489,6 +3552,10 @@ async function resolveBillingFiscalSubmission(input: {
       invoiceNumber: input.existing.invoiceNumber,
       serviceAmount: Number(input.existing.grossAmount),
       serviceDescription: input.existing.serviceDescription,
+      customerTaxId: input.existing.customerTaxId ?? "",
+      supplierTaxId: input.existing.supplierTaxId ?? "",
+      taxationCode: input.existing.taxationCode ?? "",
+      nbsCode: input.existing.nbsCode ?? "",
       documentHash: input.existing.documentHash,
       extractionMethod: normalizeBillingFiscalExtractionMethod(input.existing.extractionMethod)
     };
@@ -3502,20 +3569,30 @@ async function resolveBillingFiscalSubmission(input: {
       409
     );
   }
+  if (input.enforceCompliance) {
+    validateBillingFiscalComplianceFields(extraction, input.supplierTaxId);
+  }
   await ensureBillingFiscalDocumentAvailable(extraction, input.referenceMonth, input.employeeId);
   return extraction;
 }
 
 function hasReusableBillingFiscalExtraction(
-  row: BillingFiscalInvoiceRecord | null | undefined
+  row: BillingFiscalInvoiceRecord | null | undefined,
+  requireCompliance = false
 ): row is BillingFiscalInvoiceRecord & { accessKey: string; documentHash: string; extractionMethod: string } {
-  return Boolean(
+  const hasBaseFields = Boolean(
     row?.accessKey
     && row.documentHash
     && row.extractionMethod
     && row.invoiceNumber
     && Number(row.grossAmount) > 0
   );
+  return hasBaseFields && (!requireCompliance || Boolean(
+    row?.customerTaxId
+    && row.supplierTaxId
+    && row.taxationCode
+    && row.nbsCode
+  ));
 }
 
 async function ensureBillingFiscalDocumentAvailable(

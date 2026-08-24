@@ -10,6 +10,10 @@ const MAX_PDF_PAGES_TO_SCAN = 2;
 const PDF_RENDER_SCALE = 2;
 const MAX_IMAGE_DIMENSION = 2_400;
 
+export const BILLING_FISCAL_EXPECTED_CUSTOMER_TAX_ID = "58151940000161";
+export const BILLING_FISCAL_EXPECTED_TAXATION_CODE = "17.02.01";
+export const BILLING_FISCAL_EXPECTED_NBS_CODE = "1.703.99.00";
+
 export type BillingFiscalExtractionMethod = "PDF_TEXT" | "OCR" | "XML";
 
 export type BillingFiscalDocumentExtraction = {
@@ -17,6 +21,10 @@ export type BillingFiscalDocumentExtraction = {
   invoiceNumber: string;
   serviceAmount: number;
   serviceDescription: string;
+  customerTaxId: string;
+  supplierTaxId: string;
+  taxationCode: string;
+  nbsCode: string;
   documentHash: string;
   extractionMethod: BillingFiscalExtractionMethod;
 };
@@ -40,7 +48,10 @@ export class BillingFiscalExtractionError extends Error {
   }
 }
 
-export async function extractBillingFiscalInvoice(file: File): Promise<BillingFiscalDocumentExtraction> {
+export async function extractBillingFiscalInvoice(
+  file: File,
+  options: { requireComplianceFields?: boolean } = {}
+): Promise<BillingFiscalDocumentExtraction> {
   const buffer = Buffer.from(await file.arrayBuffer());
   const documentHash = hashBillingFiscalFile(buffer);
   const extension = extname(file.name).toLowerCase();
@@ -53,7 +64,7 @@ export async function extractBillingFiscalInvoice(file: File): Promise<BillingFi
   }
 
   if (extension === ".pdf" || mimeType === "application/pdf") {
-    const result = await extractFromPdf(buffer);
+    const result = await extractFromPdf(buffer, Boolean(options.requireComplianceFields));
     return validateExtractedFields({ ...result.fields, documentHash, extractionMethod: result.method });
   }
 
@@ -87,7 +98,14 @@ export function createBillingFiscalValidationToken(input: Omit<BillingFiscalVali
 export async function verifyBillingFiscalValidationToken(
   token: string,
   file: File,
-  expected: { actorEmail: string; referenceMonth: string; employeeId: string; billingGrossAmount: number }
+  expected: {
+    actorEmail: string;
+    referenceMonth: string;
+    employeeId: string;
+    billingGrossAmount: number;
+    enforceCompliance?: boolean;
+    supplierTaxId?: string;
+  }
 ) {
   const [encodedPayload, receivedSignature, extraPart] = String(token ?? "").split(".");
   if (!encodedPayload || !receivedSignature || extraPart) {
@@ -127,6 +145,10 @@ export async function verifyBillingFiscalValidationToken(
     throw new BillingFiscalExtractionError("O arquivo enviado não é o mesmo que foi validado automaticamente.");
   }
 
+  if (expected.enforceCompliance) {
+    validateBillingFiscalComplianceFields(payload, expected.supplierTaxId ?? "");
+  }
+
   return validateExtractedFields(payload);
 }
 
@@ -137,7 +159,79 @@ export function extractBillingFiscalFieldsFromText(text: string, metadataText = 
   const invoiceNumber = findInvoiceNumber(normalizedText);
   const serviceAmount = findServiceAmount(normalizedText);
   const serviceDescription = findServiceDescription(text);
-  return { accessKey, invoiceNumber, serviceAmount, serviceDescription };
+  const customerTaxId = findCustomerTaxId(normalizedText);
+  const supplierTaxId = findSupplierTaxId(normalizedText);
+  const taxationCode = findTaxationCode(normalizedText);
+  const nbsCode = findNbsCode(normalizedText);
+  return {
+    accessKey,
+    invoiceNumber,
+    serviceAmount,
+    serviceDescription,
+    customerTaxId,
+    supplierTaxId,
+    taxationCode,
+    nbsCode
+  };
+}
+
+export function validateBillingFiscalComplianceFields(
+  fields: Pick<BillingFiscalDocumentExtraction, "customerTaxId" | "supplierTaxId" | "taxationCode" | "nbsCode">,
+  registeredSupplierTaxId: string
+) {
+  const customerTaxId = normalizeTaxId(fields.customerTaxId);
+  const supplierTaxId = normalizeTaxId(fields.supplierTaxId);
+  const expectedSupplierTaxId = normalizeTaxId(registeredSupplierTaxId);
+  const taxationCode = normalizeTaxationCode(fields.taxationCode);
+  const nbsCode = normalizeNbsCode(fields.nbsCode);
+
+  if (expectedSupplierTaxId.length !== 14) {
+    throw new BillingFiscalExtractionError(
+      "Seu cadastro não possui um CNPJ válido. Atualize o CNPJ do parceiro antes de enviar a nota fiscal."
+    );
+  }
+  if (!customerTaxId) {
+    throw new BillingFiscalExtractionError(
+      `Não foi possível identificar o CNPJ do tomador. A NFS-e deve informar ${formatCnpj(BILLING_FISCAL_EXPECTED_CUSTOMER_TAX_ID)} como tomador/adquirente.`
+    );
+  }
+  if (customerTaxId !== BILLING_FISCAL_EXPECTED_CUSTOMER_TAX_ID) {
+    throw new BillingFiscalExtractionError(
+      `CNPJ do tomador incorreto: a nota informa ${formatCnpj(customerTaxId)}, mas deve informar ${formatCnpj(BILLING_FISCAL_EXPECTED_CUSTOMER_TAX_ID)}. Corrija e emita novamente a NFS-e.`
+    );
+  }
+  if (!supplierTaxId) {
+    throw new BillingFiscalExtractionError(
+      `Não foi possível identificar o CNPJ do prestador. A NFS-e deve informar o mesmo CNPJ cadastrado para você: ${formatCnpj(expectedSupplierTaxId)}.`
+    );
+  }
+  if (supplierTaxId !== expectedSupplierTaxId) {
+    throw new BillingFiscalExtractionError(
+      `CNPJ do prestador incorreto: a nota informa ${formatCnpj(supplierTaxId)}, mas seu cadastro informa ${formatCnpj(expectedSupplierTaxId)}. Corrija a nota ou atualize seu cadastro antes de tentar novamente.`
+    );
+  }
+  if (!taxationCode) {
+    throw new BillingFiscalExtractionError(
+      `Não foi possível identificar o Código de Tributação Nacional/Municipal. A NFS-e deve informar ${BILLING_FISCAL_EXPECTED_TAXATION_CODE}.`
+    );
+  }
+  if (taxationCode !== BILLING_FISCAL_EXPECTED_TAXATION_CODE) {
+    throw new BillingFiscalExtractionError(
+      `Código de Tributação incorreto: a nota informa ${taxationCode}, mas deve informar ${BILLING_FISCAL_EXPECTED_TAXATION_CODE}. Corrija e emita novamente a NFS-e.`
+    );
+  }
+  if (!nbsCode) {
+    throw new BillingFiscalExtractionError(
+      `Não foi possível identificar o Código da NBS. A NFS-e deve informar ${BILLING_FISCAL_EXPECTED_NBS_CODE}.`
+    );
+  }
+  if (nbsCode !== BILLING_FISCAL_EXPECTED_NBS_CODE) {
+    throw new BillingFiscalExtractionError(
+      `Código da NBS incorreto: a nota informa ${nbsCode}, mas deve informar ${BILLING_FISCAL_EXPECTED_NBS_CODE}. Corrija e emita novamente a NFS-e.`
+    );
+  }
+
+  return { customerTaxId, supplierTaxId, taxationCode, nbsCode };
 }
 
 export function currencyEquals(left: number, right: number) {
@@ -148,7 +242,7 @@ export function hashBillingFiscalFile(buffer: Buffer) {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
-async function extractFromPdf(buffer: Buffer) {
+async function extractFromPdf(buffer: Buffer, requireComplianceFields: boolean) {
   const [{ getDocument }, { createCanvas }] = await Promise.all([
     import("pdfjs-dist/legacy/build/pdf.mjs"),
     import("@napi-rs/canvas")
@@ -171,7 +265,7 @@ async function extractFromPdf(buffer: Buffer) {
     }
 
     const nativeFields = extractBillingFiscalFieldsFromText(nativeText, metadataText);
-    if (hasAllRequiredFields(nativeFields)) {
+    if (hasAllRequiredFields(nativeFields, requireComplianceFields)) {
       return { fields: nativeFields, method: "PDF_TEXT" as const };
     }
 
@@ -188,7 +282,7 @@ async function extractFromPdf(buffer: Buffer) {
       }).promise;
       ocrText += `\n${await recognizeBillingFiscalText(canvas.toBuffer("image/png"))}`;
       const fields = extractBillingFiscalFieldsFromText(`${nativeText}\n${ocrText}`, metadataText);
-      if (hasAllRequiredFields(fields)) {
+      if (hasAllRequiredFields(fields, requireComplianceFields)) {
         return { fields, method: "OCR" as const };
       }
     }
@@ -248,12 +342,45 @@ function extractBillingFiscalFieldsFromXml(xml: string) {
   const serviceDescription = decodeXmlEntities(
     findXmlValue(xml, ["Discriminacao", "xDescServ", "DescricaoServico", "xServ"]) || ""
   ).trim();
+  const customerTaxId = findXmlPartyTaxId(xml, "CUSTOMER");
+  const supplierTaxId = findXmlPartyTaxId(xml, "SUPPLIER");
+  const taxationCode = normalizeTaxationCode(findXmlValue(xml, [
+    "cTribNac",
+    "CodigoTributacaoNacional",
+    "CodigoTributacaoMunicipal",
+    "CodigoTributacaoMunicipio",
+    "ItemListaServico"
+  ]));
+  const nbsCode = normalizeNbsCode(findXmlValue(xml, ["cNBS", "CodigoNBS", "CodigoNbs", "NBS"]));
   return {
     accessKey: String(accessKey ?? "").replace(/\D/g, ""),
     invoiceNumber: String(invoiceNumber ?? "").replace(/\D/g, ""),
     serviceAmount,
-    serviceDescription
+    serviceDescription,
+    customerTaxId,
+    supplierTaxId,
+    taxationCode,
+    nbsCode
   };
+}
+
+function findXmlPartyTaxId(xml: string, party: "CUSTOMER" | "SUPPLIER") {
+  const directTags = party === "CUSTOMER"
+    ? ["CnpjTomador", "CNPJTomador", "CpfCnpjTomador", "NifTomador"]
+    : ["CnpjPrestador", "CNPJPrestador", "CpfCnpjPrestador", "NifPrestador"];
+  const direct = normalizeTaxId(findXmlValue(xml, directTags));
+  if (direct) return direct;
+
+  const sectionTags = party === "CUSTOMER"
+    ? ["TomadorServico", "Tomador", "toma"]
+    : ["PrestadorServico", "Prestador", "prest", "emit"];
+  for (const tag of sectionTags) {
+    const section = xml.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, "i"))?.[1] ?? "";
+    if (!section) continue;
+    const taxId = normalizeTaxId(findXmlValue(section, ["Cnpj", "CNPJ", "CpfCnpj", "CnpjCpf", "Nif", "NIF"]));
+    if (taxId) return taxId;
+  }
+  return "";
 }
 
 function findXmlValue(xml: string, tags: string[]) {
@@ -327,6 +454,69 @@ function findServiceDescription(text: string) {
   return "";
 }
 
+function findCustomerTaxId(text: string) {
+  return findPartyTaxId(text, [
+    /tomador\s*\/\s*adquirente/i,
+    /tomador do servico/i,
+    /tomador/i,
+    /adquirente/i
+  ], ["prestador", "fornecedor", "intermediario", "servico prestado", "descricao do servico"]);
+}
+
+function findSupplierTaxId(text: string) {
+  return findPartyTaxId(text, [
+    /prestador\s*\/\s*fornecedor/i,
+    /prestador do servico/i,
+    /prestador/i,
+    /fornecedor/i
+  ], ["tomador", "adquirente", "intermediario", "servico prestado", "descricao do servico"]);
+}
+
+function findPartyTaxId(text: string, sectionPatterns: RegExp[], endMarkers: string[]) {
+  for (const pattern of sectionPatterns) {
+    const match = pattern.exec(text);
+    if (!match || match.index === undefined) continue;
+    const start = match.index + match[0].length;
+    const remainder = text.slice(start, start + 1_200);
+    const endIndexes = endMarkers
+      .map((marker) => remainder.indexOf(marker))
+      .filter((index) => index >= 0);
+    const section = remainder.slice(0, endIndexes.length ? Math.min(...endIndexes) : remainder.length);
+    const labeled = section.match(
+      /(?:cnpj\s*\/\s*cpf\s*\/\s*nif|cnpj\s*\/\s*cpf|cpf\s*\/\s*cnpj|cnpj)\s*:?[ \t\n]*((?:\d[\s./-]?){14,24})/i
+    )?.[1] ?? "";
+    const taxId = normalizeTaxId(labeled);
+    if (taxId.length === 14) return taxId;
+  }
+  return "";
+}
+
+function findTaxationCode(text: string) {
+  const labels = [
+    /codigo de tributacao nacional\s*\/\s*municipal/i,
+    /codigo de tributacao nacional/i,
+    /codigo de tributacao municipal/i,
+    /codigo de tributacao do municipio/i
+  ];
+  for (const label of labels) {
+    const match = label.exec(text);
+    if (!match || match.index === undefined) continue;
+    const nearby = text.slice(match.index + match[0].length, match.index + match[0].length + 180);
+    const code = nearby.match(/\b(\d{2}[.\s-]?\d{2}[.\s-]?\d{2})\b/)?.[1] ?? "";
+    const normalized = normalizeTaxationCode(code);
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
+function findNbsCode(text: string) {
+  const match = /(?:codigo da nbs|codigo nbs|\bnbs\b)/i.exec(text);
+  if (!match || match.index === undefined) return "";
+  const nearby = text.slice(match.index + match[0].length, match.index + match[0].length + 180);
+  const code = nearby.match(/\b(\d[.\s-]?\d{3}[.\s-]?\d{2}[.\s-]?\d{2})\b/)?.[1] ?? "";
+  return normalizeNbsCode(code);
+}
+
 function isLikelySectionHeader(value: string) {
   return [
     "tributacao municipal",
@@ -344,6 +534,10 @@ function validateExtractedFields<T extends {
   invoiceNumber: string;
   serviceAmount: number;
   serviceDescription: string;
+  customerTaxId: string;
+  supplierTaxId: string;
+  taxationCode: string;
+  nbsCode: string;
 }>(fields: T): T {
   const accessKey = String(fields.accessKey ?? "").replace(/\D/g, "");
   const invoiceNumber = String(fields.invoiceNumber ?? "").replace(/\D/g, "");
@@ -366,16 +560,37 @@ function validateExtractedFields<T extends {
     accessKey,
     invoiceNumber,
     serviceAmount,
-    serviceDescription: String(fields.serviceDescription ?? "").trim().slice(0, 1_000)
+    serviceDescription: String(fields.serviceDescription ?? "").trim().slice(0, 1_000),
+    customerTaxId: normalizeTaxId(fields.customerTaxId),
+    supplierTaxId: normalizeTaxId(fields.supplierTaxId),
+    taxationCode: normalizeTaxationCode(fields.taxationCode),
+    nbsCode: normalizeNbsCode(fields.nbsCode)
   };
 }
 
-function hasAllRequiredFields(fields: { accessKey: string; invoiceNumber: string; serviceAmount: number }) {
-  return fields.accessKey.length >= 44
+function hasAllRequiredFields(
+  fields: {
+    accessKey: string;
+    invoiceNumber: string;
+    serviceAmount: number;
+    customerTaxId: string;
+    supplierTaxId: string;
+    taxationCode: string;
+    nbsCode: string;
+  },
+  requireComplianceFields: boolean
+) {
+  const hasBaseFields = fields.accessKey.length >= 44
     && fields.accessKey.length <= 60
     && isValidBillingFiscalInvoiceNumber(fields.invoiceNumber)
     && Number.isFinite(fields.serviceAmount)
     && fields.serviceAmount > 0;
+  return hasBaseFields && (!requireComplianceFields || Boolean(
+    fields.customerTaxId
+    && fields.supplierTaxId
+    && fields.taxationCode
+    && fields.nbsCode
+  ));
 }
 
 function signTokenPayload(encodedPayload: string) {
@@ -397,6 +612,28 @@ function normalizeSearchText(value: string) {
 
 function normalizeEmail(value: string) {
   return String(value ?? "").trim().toLowerCase();
+}
+
+function normalizeTaxId(value: string) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  return digits.length === 14 ? digits : "";
+}
+
+function normalizeTaxationCode(value: string) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  return digits.length === 6 ? `${digits.slice(0, 2)}.${digits.slice(2, 4)}.${digits.slice(4)}` : "";
+}
+
+function normalizeNbsCode(value: string) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  return digits.length === 8
+    ? `${digits.slice(0, 1)}.${digits.slice(1, 4)}.${digits.slice(4, 6)}.${digits.slice(6)}`
+    : "";
+}
+
+function formatCnpj(value: string) {
+  const digits = String(value ?? "").replace(/\D/g, "").padEnd(14, "?").slice(0, 14);
+  return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
 }
 
 function parseCurrency(value: string) {

@@ -107,6 +107,10 @@ type BillingPayload = {
         invoiceNumber: string;
         grossAmount: number;
         serviceDescription: string;
+        customerTaxId: string;
+        supplierTaxId: string;
+        taxationCode: string;
+        nbsCode: string;
         fileName: string;
         mimeType: string;
         sizeBytes: number;
@@ -565,7 +569,7 @@ export function BillingPage() {
               <option value="PAGO">Pago</option>
             </select>
           </Label>
-          <Label text="Cargo/Função">
+          <Label text="Tipo de serviço">
             <select value={roleTitle} onChange={(event) => setRoleTitle(event.target.value)} className="premium-control h-10 w-full px-3 text-sm font-bold">
               <option>Todos</option>
               {data?.filterOptions.roleTitles.map((item) => <option key={item}>{item}</option>)}
@@ -927,6 +931,23 @@ function FiscalInvoiceModal({
             <p className="whitespace-pre-wrap break-words text-sm font-bold leading-6 text-navy-950">{fiscalInvoice.serviceDescription}</p>
           </FiscalInvoiceField>
 
+          {fiscalInvoice.customerTaxId || fiscalInvoice.supplierTaxId || fiscalInvoice.taxationCode || fiscalInvoice.nbsCode ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <FiscalInvoiceField label="CNPJ do tomador">
+                <p className="font-mono text-sm font-black text-navy-950">{formatBillingCnpj(fiscalInvoice.customerTaxId)}</p>
+              </FiscalInvoiceField>
+              <FiscalInvoiceField label="CNPJ do prestador">
+                <p className="font-mono text-sm font-black text-navy-950">{formatBillingCnpj(fiscalInvoice.supplierTaxId)}</p>
+              </FiscalInvoiceField>
+              <FiscalInvoiceField label="Código de Tributação">
+                <p className="text-sm font-black text-navy-950">{fiscalInvoice.taxationCode || "-"}</p>
+              </FiscalInvoiceField>
+              <FiscalInvoiceField label="Código da NBS">
+                <p className="text-sm font-black text-navy-950">{fiscalInvoice.nbsCode || "-"}</p>
+              </FiscalInvoiceField>
+            </div>
+          ) : null}
+
           <div className="flex flex-col gap-3 rounded-xl border border-border bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex min-w-0 items-center gap-3">
               <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white text-blue-700 shadow-sm">
@@ -1237,7 +1258,7 @@ function EmployeeBillingDetail({
           <div className="mt-4 grid gap-3 xl:grid-cols-[1fr_360px]">
             <Panel title="Regra aplicada">
               <div className="grid gap-2 text-sm font-semibold text-navy-950 md:grid-cols-2">
-                <InfoLine label="Cargo/Função" value={invoice.roleTitle} />
+                <InfoLine label="Tipo de serviço" value={invoice.roleTitle} />
                 <InfoLine label="Skill" value={invoice.skill || "-"} />
                 <InfoLine label="Turno oficial" value={invoice.officialShift} />
                 <InfoLine label="Supervisor" value={invoice.supervisor} />
@@ -1520,7 +1541,7 @@ function RatesTable({ rows, draft, setDraft, saving, onSave }: { rows: BillingPa
           {agent.map((rate) => <RateInput key={rate.key} rate={rate} draft={draft} setDraft={setDraft} />)}
         </div>
       </RateSection>
-      <RateSection title="Valores por Cargo/Função ou Skill staff">
+      <RateSection title="Valores por Tipo de serviço ou Skill staff">
         <div className="overflow-x-auto rounded-xl border border-border">
           <table className="min-w-full divide-y divide-border text-sm">
             <thead className="bg-slate-50 text-left text-[11px] font-black uppercase tracking-wide text-muted">
@@ -1631,4 +1652,10 @@ function minutesToHours(minutes: number) {
 
 function formatCurrency(value: number) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(Number.isFinite(value) ? value : 0);
+}
+
+function formatBillingCnpj(value: string) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  if (digits.length !== 14) return value || "-";
+  return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
 }
