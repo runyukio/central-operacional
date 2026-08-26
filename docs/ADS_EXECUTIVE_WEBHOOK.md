@@ -91,3 +91,24 @@ A imagem inclui:
 - submit acumulado no shift date e AHT medio de cada agente.
 
 O endpoint do cron e `/api/cron/ads-online-productivity-report` e o agendamento em `vercel.json` e `58 * * * *`.
+
+## TNS Online Productivity
+
+O report TNS segue o mesmo layout e a mesma cadencia do ADS, usando o webhook ja configurado para VIDEO:
+
+```env
+VIDEO_EXECUTIVE_WEBHOOK_ENABLED=true
+VIDEO_EXECUTIVE_WEBHOOK_URL=https://seu-webhook
+VIDEO_EXECUTIVE_WEBHOOK_PAYLOAD_MODE=kwaitalk
+```
+
+O conteudo e gerado integralmente em ingles e inclui:
+
+- parceiros ativos de VIDEO e COMMENTS considerados presentes no intervalo;
+- somente parceiros com submit maior que zero no ranking e nas medias;
+- media ponderada de submit por parceiro e por skill;
+- AHT ponderado somente para VIDEO, seguindo a regra operacional das filas de 15 minutos;
+- moderacao do intervalo atual, total do turno e comparacao com o intervalo anterior;
+- badges distintas para VIDEO e COMMENTS.
+
+O endpoint do cron e `/api/cron/tns-online-productivity-report` e o agendamento em `vercel.json` e `58 * * * *`.

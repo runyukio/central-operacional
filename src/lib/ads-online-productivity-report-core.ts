@@ -8,6 +8,8 @@ import {
 
 const HOUR_MS = 60 * 60 * 1000;
 
+export type OnlineProductivityReportScope = "ADS" | "TNS";
+
 export type AdsOnlineProductivityAgentRow = {
   name: string;
   wbLogin: string;
@@ -28,6 +30,7 @@ export type AdsOnlineProductivitySkillAverage = {
 };
 
 export type AdsOnlineProductivityReportSnapshot = {
+  reportScope: OnlineProductivityReportScope;
   selectedCycle: string;
   dateKey: string;
   dateLabel: string;
@@ -63,11 +66,26 @@ export function buildAdsOnlineProductivityReportSnapshot(input: {
   agentRows: AdsExecutiveAgentRow[];
   selectedCycle: string;
 }): AdsOnlineProductivityReportSnapshot {
+  return buildOnlineProductivityReportSnapshot({ ...input, reportScope: "ADS" });
+}
+
+export function buildTnsOnlineProductivityReportSnapshot(input: {
+  agentRows: AdsExecutiveAgentRow[];
+  selectedCycle: string;
+}): AdsOnlineProductivityReportSnapshot {
+  return buildOnlineProductivityReportSnapshot({ ...input, reportScope: "TNS" });
+}
+
+function buildOnlineProductivityReportSnapshot(input: {
+  agentRows: AdsExecutiveAgentRow[];
+  selectedCycle: string;
+  reportScope: OnlineProductivityReportScope;
+}): AdsOnlineProductivityReportSnapshot {
   const selected = parseAdsExecutiveCycle(input.selectedCycle);
   const currentStart = startOfHour(selected.timestamp);
   const previousStart = currentStart - HOUR_MS;
   const previousTarget = previousStart + (selected.timestamp - currentStart);
-  const eligibleRows = input.agentRows.filter((row) => isExecutiveAgentForLob(row, "ADS"));
+  const eligibleRows = input.agentRows.filter((row) => isProductivityReportAgent(row, input.reportScope));
   const onlineRows = eligibleRows.filter((row) => isExecutiveAgentOnlineAtCycle(row, input.selectedCycle));
   const parsedByRow = new Map(onlineRows.map((row) => [row, parseHistory(row, selected.timestamp)]));
 
@@ -76,19 +94,24 @@ export function buildAdsOnlineProductivityReportSnapshot(input: {
     const current = intervalMetric(history, currentStart, selected.timestamp);
     const previous = intervalMetric(history, previousStart, previousTarget);
     const latest = latestAtOrBefore(history, selected.timestamp);
+    const reportSkill = reportableSkillForScope(row, input.reportScope);
+    const includeInAht = input.reportScope === "ADS" || reportSkill === "VIDEO";
     const shiftTotal = Math.max(0, finite(latest?.submit));
     const shiftModerationMs = Math.max(0, finite(latest?.moderationMs));
-    const ahtMs = shiftTotal > 0 && shiftModerationMs > 0
-      ? shiftModerationMs / shiftTotal
-      : latest?.ahtMs ?? null;
+    const ahtMs = includeInAht
+      ? shiftTotal > 0 && shiftModerationMs > 0
+        ? shiftModerationMs / shiftTotal
+        : latest?.ahtMs ?? null
+      : null;
     const comparisonPercent = percentChange(current.submit, previous.submit);
     return {
       current,
       previous,
+      includeInAht,
       reportRow: {
         name: row.displayName || row.wbLogin || row.rawWbLogin || "Unknown agent",
         wbLogin: row.wbLogin || row.rawWbLogin || "-",
-        skill: reportableSkill(row.skill),
+        skill: reportSkill,
         currentSubmit: current.submit,
         previousSubmit: previous.submit,
         comparisonPercent,
@@ -108,15 +131,17 @@ export function buildAdsOnlineProductivityReportSnapshot(input: {
 
   const currentMetrics = productiveRows.map((row) => row.current);
   const previousMetrics = productiveRows.map((row) => row.previous);
+  const currentAhtMetrics = productiveRows.filter((row) => row.includeInAht).map((row) => row.current);
+  const previousAhtMetrics = productiveRows.filter((row) => row.includeInAht).map((row) => row.previous);
   const currentIntervalSubmit = sum(currentMetrics, (metric) => metric.submit);
   const previousIntervalSubmit = sum(previousMetrics, (metric) => metric.submit);
   const currentIntervalModeration = sum(currentMetrics, (metric) => metric.moderationMs);
   const previousIntervalModeration = sum(previousMetrics, (metric) => metric.moderationMs);
-  const currentIntervalAhtMs = currentIntervalSubmit > 0
-    ? weightedAverage(currentMetrics, intervalAht, (metric) => metric.submit)
+  const currentIntervalAhtMs = sum(currentAhtMetrics, (metric) => metric.submit) > 0
+    ? weightedAverage(currentAhtMetrics, intervalAht, (metric) => metric.submit)
     : null;
-  const previousIntervalAhtMs = previousIntervalSubmit > 0
-    ? weightedAverage(previousMetrics, intervalAht, (metric) => metric.submit)
+  const previousIntervalAhtMs = sum(previousAhtMetrics, (metric) => metric.submit) > 0
+    ? weightedAverage(previousAhtMetrics, intervalAht, (metric) => metric.submit)
     : null;
   const averageSubmitPerHour = weightedAverage(
     rows,
@@ -130,6 +155,7 @@ export function buildAdsOnlineProductivityReportSnapshot(input: {
   );
 
   return {
+    reportScope: input.reportScope,
     selectedCycle: input.selectedCycle,
     dateKey: selected.dateKey,
     dateLabel: formatDateLabel(selected.dateKey),
@@ -155,6 +181,18 @@ export function buildAdsOnlineProductivityReportSnapshot(input: {
     skillAverages: buildSkillAverages(rows),
     rows
   };
+}
+
+function isProductivityReportAgent(row: AdsExecutiveAgentRow, reportScope: OnlineProductivityReportScope) {
+  if (reportScope === "ADS") return isExecutiveAgentForLob(row, "ADS");
+  return isExecutiveAgentForLob(row, "VIDEO") || isExecutiveAgentForLob(row, "COMMENTS");
+}
+
+function reportableSkillForScope(row: AdsExecutiveAgentRow, reportScope: OnlineProductivityReportScope) {
+  if (reportScope === "TNS") {
+    return isExecutiveAgentForLob(row, "COMMENTS") ? "COMMENTS" : "VIDEO";
+  }
+  return reportableSkill(row.skill);
 }
 
 function parseHistory(row: AdsExecutiveAgentRow, maxTimestamp: number): ParsedHistory[] {

@@ -17,6 +17,7 @@ export type AdsExecutiveQueueRow = {
 };
 
 export type ExecutiveReportLob = "ADS" | "VIDEO";
+export type ExecutiveAgentLob = ExecutiveReportLob | "COMMENTS";
 
 export type AdsExecutiveAgentRow = {
   displayName: string;
@@ -366,7 +367,7 @@ function kpi(label: string, value: number | null, previous: number | null, bette
   return { label, value, previous, delta: value !== null && previous !== null ? value - previous : null, betterWhen };
 }
 
-export function isExecutiveAgentForLob(row: AdsExecutiveAgentRow, lob: ExecutiveReportLob) {
+export function isExecutiveAgentForLob(row: AdsExecutiveAgentRow, lob: ExecutiveAgentLob) {
   return normalize(row.lob) === normalize(lob)
     && normalize(row.crossingStatus) === "encontrado"
     && normalize(row.personType) === "agente"

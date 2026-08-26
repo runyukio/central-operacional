@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { AdsExecutiveAgentRow } from "./ads-executive-report-core";
-import { buildAdsOnlineProductivityReportSnapshot } from "./ads-online-productivity-report-core";
+import {
+  buildAdsOnlineProductivityReportSnapshot,
+  buildTnsOnlineProductivityReportSnapshot
+} from "./ads-online-productivity-report-core";
 
 test("builds the ADS online productivity ranking with hourly and shift metrics", () => {
   const report = buildAdsOnlineProductivityReportSnapshot({
@@ -108,6 +111,60 @@ test("compares midnight with the previous day's 23h interval", () => {
   assert.equal(report.previousHourLabel, "23H");
   assert.equal(report.rows[0].currentSubmit, 22);
   assert.equal(report.rows[0].previousSubmit, 18);
+});
+
+test("builds TNS productivity with VIDEO and COMMENTS while AHT uses VIDEO only", () => {
+  const report = buildTnsOnlineProductivityReportSnapshot({
+    selectedCycle: "2026-08-26 14:58",
+    agentRows: [
+      agent({
+        name: "Video agent",
+        wbLogin: "wb_video",
+        lob: "VIDEO",
+        skill: "Premium",
+        presenceStatus: "Online",
+        history: [
+          history("2026-08-26 12:58", 10, 50_000),
+          history("2026-08-26 13:58", 30, 50_000),
+          history("2026-08-26 14:58", 60, 50_000)
+        ]
+      }),
+      agent({
+        name: "Comments agent",
+        wbLogin: "wb_comments",
+        lob: "COMMENTS",
+        skill: "Comments QA",
+        presenceStatus: "Pausa",
+        history: [
+          history("2026-08-26 12:58", 8, 200_000),
+          history("2026-08-26 13:58", 28, 200_000),
+          history("2026-08-26 14:58", 52, 200_000)
+        ]
+      }),
+      agent({
+        name: "ADS agent",
+        wbLogin: "wb_ads",
+        lob: "ADS",
+        presenceStatus: "Online",
+        history: [history("2026-08-26 14:58", 99, 70_000)]
+      })
+    ]
+  });
+
+  assert.equal(report.reportScope, "TNS");
+  assert.equal(report.productiveAgentCount, 2);
+  assert.deepEqual(report.rows.map((row) => row.wbLogin), ["wb_video", "wb_comments"]);
+  assert.deepEqual(report.rows.map((row) => row.skill), ["VIDEO", "COMMENTS"]);
+  assert.deepEqual(report.rows.map((row) => row.currentSubmit), [30, 24]);
+  assert.equal(report.rows[0].ahtMs, 50_000);
+  assert.equal(report.rows[1].ahtMs, null);
+  assert.equal(report.currentIntervalSubmit, 54);
+  assert.equal(report.currentIntervalModerationMs, 6_300_000);
+  assert.equal(report.currentIntervalAhtMs, 50_000);
+  assert.deepEqual(report.skillAverages, [
+    { skill: "VIDEO", averageSubmit: 30, agentCount: 1 },
+    { skill: "COMMENTS", averageSubmit: 24, agentCount: 1 }
+  ]);
 });
 
 test("excludes agents with zero submit from the report and averages", () => {

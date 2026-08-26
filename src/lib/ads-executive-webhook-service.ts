@@ -15,7 +15,11 @@ import {
   type ExecutiveReportLob
 } from "@/lib/ads-executive-report-core";
 import { renderAdsExecutiveReportPng } from "@/lib/ads-executive-report-image";
-import { buildAdsOnlineProductivityReportSnapshot } from "@/lib/ads-online-productivity-report-core";
+import {
+  buildAdsOnlineProductivityReportSnapshot,
+  buildTnsOnlineProductivityReportSnapshot,
+  type OnlineProductivityReportScope
+} from "@/lib/ads-online-productivity-report-core";
 import { renderAdsOnlineProductivityReportPng } from "@/lib/ads-online-productivity-report-image";
 import { calculateForecastModelWeights, predictForecastHour, type ForecastActual } from "@/lib/performance-forecast-core";
 import { prisma } from "@/lib/prisma";
@@ -36,7 +40,7 @@ const automationActor = {
 };
 
 type WebhookPayloadMode = "multipart" | "json" | "kwaitalk";
-type WebhookReportType = "ADS_EXECUTIVE" | "VIDEO_EXECUTIVE" | "ADS_ONLINE_PRODUCTIVITY";
+type WebhookReportType = "ADS_EXECUTIVE" | "VIDEO_EXECUTIVE" | "ADS_ONLINE_PRODUCTIVITY" | "TNS_ONLINE_PRODUCTIVITY";
 type ExecutiveWebhookConfig = {
   lob: ExecutiveReportLob;
   envPrefix: "ADS_EXECUTIVE_WEBHOOK" | "VIDEO_EXECUTIVE_WEBHOOK";
@@ -59,6 +63,37 @@ const VIDEO_WEBHOOK_CONFIG: ExecutiveWebhookConfig = {
 };
 
 const ADS_ONLINE_PRODUCTIVITY_STORAGE_PATH = "automation/ads-online-productivity/latest.png";
+const TNS_ONLINE_PRODUCTIVITY_STORAGE_PATH = "automation/tns-online-productivity/latest.png";
+
+type OnlineProductivityWebhookConfig = {
+  reportScope: OnlineProductivityReportScope;
+  webhookConfig: ExecutiveWebhookConfig;
+  reportType: Extract<WebhookReportType, "ADS_ONLINE_PRODUCTIVITY" | "TNS_ONLINE_PRODUCTIVITY">;
+  reportTitle: string;
+  filePrefix: string;
+  idempotencyPrefix: string;
+  storagePath: string;
+};
+
+const ADS_ONLINE_PRODUCTIVITY_CONFIG: OnlineProductivityWebhookConfig = {
+  reportScope: "ADS",
+  webhookConfig: ADS_WEBHOOK_CONFIG,
+  reportType: "ADS_ONLINE_PRODUCTIVITY",
+  reportTitle: "ADS Online Productivity",
+  filePrefix: "ads_online_productivity",
+  idempotencyPrefix: "ads-online-productivity",
+  storagePath: ADS_ONLINE_PRODUCTIVITY_STORAGE_PATH
+};
+
+const TNS_ONLINE_PRODUCTIVITY_CONFIG: OnlineProductivityWebhookConfig = {
+  reportScope: "TNS",
+  webhookConfig: VIDEO_WEBHOOK_CONFIG,
+  reportType: "TNS_ONLINE_PRODUCTIVITY",
+  reportTitle: "TNS Online Productivity",
+  filePrefix: "tns_online_productivity",
+  idempotencyPrefix: "tns-online-productivity",
+  storagePath: TNS_ONLINE_PRODUCTIVITY_STORAGE_PATH
+};
 
 type KwaiTalkWebhookResponse = {
   code?: number | string;
@@ -87,7 +122,15 @@ export async function sendLatestVideoExecutiveReport(): Promise<AdsExecutiveWebh
 }
 
 export async function sendLatestAdsOnlineProductivityReport(): Promise<AdsExecutiveWebhookResult> {
-  if (!isWebhookEnabled(ADS_WEBHOOK_CONFIG)) {
+  return sendLatestOnlineProductivityReport(ADS_ONLINE_PRODUCTIVITY_CONFIG);
+}
+
+export async function sendLatestTnsOnlineProductivityReport(): Promise<AdsExecutiveWebhookResult> {
+  return sendLatestOnlineProductivityReport(TNS_ONLINE_PRODUCTIVITY_CONFIG);
+}
+
+async function sendLatestOnlineProductivityReport(config: OnlineProductivityWebhookConfig): Promise<AdsExecutiveWebhookResult> {
+  if (!isWebhookEnabled(config.webhookConfig)) {
     return {
       sent: false,
       skipped: true,
@@ -95,31 +138,34 @@ export async function sendLatestAdsOnlineProductivityReport(): Promise<AdsExecut
       fileName: null,
       bytes: 0,
       status: null,
-      message: "ADS online productivity report delivery is disabled."
+      message: `${config.reportScope} online productivity report delivery is disabled.`
     };
   }
 
-  const webhookUrl = resolveWebhookUrl(ADS_WEBHOOK_CONFIG);
-  if (!webhookUrl) throw new Error("ADS_EXECUTIVE_WEBHOOK_URL is not configured.");
+  const webhookUrl = resolveWebhookUrl(config.webhookConfig);
+  if (!webhookUrl) throw new Error(`${config.webhookConfig.envPrefix}_URL is not configured.`);
 
   const realtime = await getRealtimeSnapshot(automationActor, { view: "both" });
   if ("error" in realtime && realtime.error) throw new Error(realtime.error);
   const data = "data" in realtime ? realtime.data : null;
   const selectedCycle = data?.agents.selectedCycle || data?.queueView.selectedCycle;
   if (!data?.summary.hasData || !selectedCycle) {
-    throw new Error("There is no valid Real Time snapshot for the ADS online productivity report.");
+    throw new Error(`There is no valid Real Time snapshot for the ${config.reportScope} online productivity report.`);
   }
 
-  const report = buildAdsOnlineProductivityReportSnapshot({
+  const reportInput = {
     selectedCycle,
     agentRows: mapAgentRows(data.agents.rows)
-  });
+  };
+  const report = config.reportScope === "ADS"
+    ? buildAdsOnlineProductivityReportSnapshot(reportInput)
+    : buildTnsOnlineProductivityReportSnapshot(reportInput);
   const image = await renderAdsOnlineProductivityReportPng(report);
-  const fileName = `ads_online_productivity_${safeFilePart(selectedCycle)}.png`;
-  const idempotencyKey = `ads-online-productivity:${selectedCycle}`;
-  const mode = resolvePayloadMode(ADS_WEBHOOK_CONFIG);
+  const fileName = `${config.filePrefix}_${safeFilePart(selectedCycle)}.png`;
+  const idempotencyKey = `${config.idempotencyPrefix}:${selectedCycle}`;
+  const mode = resolvePayloadMode(config.webhookConfig);
   const imageUrl = mode === "kwaitalk"
-    ? await publishKwaiTalkImage(image, fileName, selectedCycle, ADS_ONLINE_PRODUCTIVITY_STORAGE_PATH)
+    ? await publishKwaiTalkImage(image, fileName, selectedCycle, config.storagePath)
     : null;
   const response = await postWebhook({
     url: webhookUrl,
@@ -127,14 +173,14 @@ export async function sendLatestAdsOnlineProductivityReport(): Promise<AdsExecut
     fileName,
     idempotencyKey,
     mode,
-    token: resolveWebhookToken(ADS_WEBHOOK_CONFIG),
+    token: resolveWebhookToken(config.webhookConfig),
     imageUrl,
-    lob: "ADS",
-    reportTitle: "ADS Online Productivity",
-    reportType: "ADS_ONLINE_PRODUCTIVITY",
-    timeoutMs: resolveTimeoutMs(ADS_WEBHOOK_CONFIG),
+    lob: config.webhookConfig.lob,
+    reportTitle: config.reportTitle,
+    reportType: config.reportType,
+    timeoutMs: resolveTimeoutMs(config.webhookConfig),
     metadata: {
-      reportType: "ADS_ONLINE_PRODUCTIVITY",
+      reportType: config.reportType,
       selectedCycle,
       date: report.dateKey,
       generatedAt: new Date().toISOString(),
@@ -149,7 +195,7 @@ export async function sendLatestAdsOnlineProductivityReport(): Promise<AdsExecut
     fileName,
     bytes: image.byteLength,
     status: response.status,
-    message: "ADS online productivity report sent to the webhook."
+    message: `${config.reportScope} online productivity report sent to the webhook.`
   };
 }
 

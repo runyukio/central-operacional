@@ -25,6 +25,10 @@
       "schedule": "58 * * * *"
     },
     {
+      "path": "/api/cron/tns-online-productivity-report",
+      "schedule": "58 * * * *"
+    },
+    {
       "path": "/api/cron/ads-backlog-hourly-report",
       "schedule": "59 * * * *"
     },

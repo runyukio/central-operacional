@@ -61,6 +61,19 @@ test("buildKwaiTalkMarkdownPayload supports the ADS online productivity title", 
   assert.match(payload.markdown.content, /!\[ADS Online Productivity\]/);
 });
 
+test("buildKwaiTalkMarkdownPayload supports the TNS online productivity title", () => {
+  const payload = buildKwaiTalkMarkdownPayload({
+    lob: "VIDEO",
+    reportTitle: "TNS Online Productivity",
+    imageUrl: "https://storage.example/tns-online-productivity.png",
+    selectedCycle: "2026-08-26 14:58",
+    generatedAt: "2026-08-26T17:58:00.000Z"
+  });
+
+  assert.match(payload.markdown.content, /### TNS Online Productivity/);
+  assert.match(payload.markdown.content, /!\[TNS Online Productivity\]/);
+});
+
 test("gera uma URL de imagem imutável por ciclo sem substituir o latest", () => {
   assert.equal(
     buildExecutiveReportStoragePath(

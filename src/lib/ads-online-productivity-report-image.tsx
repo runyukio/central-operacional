@@ -54,11 +54,12 @@ export async function renderAdsOnlineProductivityReportPng(report: AdsOnlineProd
 
 function AdsOnlineProductivityReportImage({ report }: { report: AdsOnlineProductivityReportSnapshot }) {
   const maxSubmit = Math.max(1, ...report.rows.map((row) => row.currentSubmit));
+  const reportLabel = report.reportScope;
   return (
     <div style={rootStyle}>
       <header style={{ display: "flex", justifyContent: "space-between", width: "100%" }}>
         <div style={{ display: "flex", flexDirection: "column" }}>
-          <div style={{ color: BLUE, fontSize: 17, fontWeight: 900, letterSpacing: 3 }}>ADS · ONLINE PRODUCTIVITY</div>
+          <div style={{ color: BLUE, display: "flex", fontSize: 17, fontWeight: 900, letterSpacing: 3 }}>{reportLabel} · ONLINE PRODUCTIVITY</div>
           <div style={{ color: NAVY, fontSize: 58, fontWeight: 900, marginTop: 9 }}>Agent Production</div>
           <div style={{ color: MUTED, display: "flex", fontSize: 20, fontWeight: 700, marginTop: 9 }}>
             Current interval {report.intervalLabel} · compared with {report.previousIntervalLabel}
@@ -82,7 +83,7 @@ function AdsOnlineProductivityReportImage({ report }: { report: AdsOnlineProduct
           comparison={<SubmitComparison percent={report.submitComparisonPercent} />}
         />
         <KpiCard
-          label="AVG AHT"
+          label={report.reportScope === "TNS" ? "AVG AHT · VIDEO 15M" : "AVG AHT"}
           value={formatDuration(report.currentIntervalAhtMs)}
           comparison={<AhtComparison deltaMs={report.ahtDeltaMs} />}
         />
@@ -103,7 +104,7 @@ function AdsOnlineProductivityReportImage({ report }: { report: AdsOnlineProduct
         <div style={{ display: "flex", flexDirection: "column", width: "100%" }}>
           {report.rows.length
             ? report.rows.map((row, index) => <AgentRow key={`${row.wbLogin}-${index}`} index={index} maxSubmit={maxSubmit} report={report} row={row} />)
-            : <EmptyRow />}
+            : <EmptyRow reportLabel={reportLabel} />}
         </div>
       </section>
 
@@ -116,7 +117,7 @@ function AdsOnlineProductivityReportImage({ report }: { report: AdsOnlineProduct
       </section>
 
       <footer style={{ color: "#94A3B8", display: "flex", fontSize: 15, fontWeight: 700, justifyContent: "space-between", marginTop: 22, width: "100%" }}>
-        <span>Central Operations · ADS · hourly online productivity</span>
+        <span style={{ display: "flex" }}>Central Operations · {reportLabel} · hourly online productivity</span>
         <span>Cycle {report.selectedCycle}</span>
       </footer>
     </div>
@@ -281,10 +282,10 @@ function skillBadgePalette(skill: string) {
   return SKILL_BADGE_PALETTES[Math.abs(hash) % SKILL_BADGE_PALETTES.length];
 }
 
-function EmptyRow() {
+function EmptyRow({ reportLabel }: { reportLabel: string }) {
   return (
     <div style={{ alignItems: "center", color: MUTED, display: "flex", fontSize: 19, fontWeight: 800, height: 130, justifyContent: "center", width: "100%" }}>
-      No ADS agents recorded submit in the current interval.
+      No {reportLabel} agents recorded submit in the current interval.
     </div>
   );
 }
