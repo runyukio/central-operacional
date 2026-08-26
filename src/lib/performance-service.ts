@@ -5,6 +5,7 @@ import { AuditAction, Prisma, type ScheduleStatus } from "@prisma/client";
 import type { Actor } from "@/lib/mock-db";
 import { calculateCecQualityAggregate } from "@/lib/cec-quality";
 import {
+  canAccessOwnPerformance,
   canAccessPerformance,
   canAccessPerformanceFramework,
   canAccessPerformanceWfh,
@@ -467,6 +468,39 @@ export async function getPerformanceDashboard(actor: Actor, query: PerformanceQu
       status: item.status,
       importedBy: item.importedBy?.name ?? item.importedBy?.email ?? "Sistema",
       importedAt: formatDateTime(item.importedAt)
+    }))
+  };
+}
+
+type OwnPerformanceOptions = {
+  includeLobBenchmark?: boolean;
+};
+
+export async function getOwnPerformanceDashboard(actor: Actor, query: PerformanceQuery = {}, options: OwnPerformanceOptions = {}) {
+  const user = await requireActiveUser(actor);
+  if (!canAccessOwnPerformance(permissionUser(user))) throw new PerformanceError("Você não tem permissão para acessar sua Performance.", 403);
+
+  const ownEmployee = requireOwnEmployee(user);
+  const period = resolvePeriod(query);
+  const ownRowsPromise = buildAgentRows([ownEmployee as PerformanceEmployee], period);
+  const lobRowsPromise = options.includeLobBenchmark === false
+    ? Promise.resolve([])
+    : listPerformanceEmployees({}, { defaultAgentsOnly: true }, period.end).then((employees) =>
+        buildAgentRows(employees.filter((employee) => employee.lobId === ownEmployee.lobId), period)
+      );
+  const [ownRows, lobRows] = await Promise.all([ownRowsPromise, lobRowsPromise]);
+  const mine = ownRows[0] ?? emptyAgentRow(ownEmployee as PerformanceEmployee, period);
+
+  return {
+    mode: "mine" as const,
+    period: periodPayload(period),
+    summary: {
+      mine,
+      lobAverage: summarizeRows(lobRows, period)
+    },
+    weekly: mine.weekly.map((week) => ({
+      ...week,
+      lobAverage: summarizeWeeklyRows(lobRows.flatMap((row) => row.weekly.filter((item) => item.weekStart === week.weekStart)))
     }))
   };
 }

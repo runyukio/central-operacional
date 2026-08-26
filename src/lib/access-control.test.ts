@@ -6,6 +6,7 @@ import { canAccessBilling, canManageBilling, canManageBillingPaymentStatus } fro
 import { canAccessFinanceiro } from "@/lib/financeiro-permissions";
 import { canAccessPathForRole, getNavItems } from "@/lib/navigation";
 import {
+  canAccessOwnPerformance,
   canAccessPerformance,
   canAccessRealTime,
   canAccessWorkSessionMonitoring,
@@ -14,6 +15,22 @@ import {
   canEditSchedule,
   canImportPerformance
 } from "@/lib/permissions";
+
+test("colaborador acessa somente a própria Performance", () => {
+  const collaborator = { role: "COLABORADOR", status: "ACTIVE" };
+  assert.equal(canAccessOwnPerformance(collaborator), true);
+  assert.equal(canAccessPerformance(collaborator), false);
+  assert.equal(canAccessPathForRole("/minha-performance", collaborator), true);
+  assert.equal(canAccessPathForRole("/api/performance/me", collaborator), true);
+  assert.equal(canAccessPathForRole("/performance", collaborator), false);
+  assert.equal(getNavItems(collaborator).some((item) => item.href === "/minha-performance"), true);
+});
+
+test("usuário inativo não acessa a própria Performance", () => {
+  const inactiveCollaborator = { role: "COLABORADOR", status: "INACTIVE" };
+  assert.equal(canAccessOwnPerformance(inactiveCollaborator), false);
+  assert.equal(getNavItems(inactiveCollaborator).some((item) => item.href === "/minha-performance"), false);
+});
 
 test("somente ADMIN e WFM alteram cronogramas", () => {
   const allowed = ["ADMIN", "WFM"];

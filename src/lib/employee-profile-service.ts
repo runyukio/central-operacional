@@ -5,7 +5,7 @@ import { createNotFoundError, createPermissionError, createServerError, type Api
 import { DEFAULT_BILLING_REFERENCE_MONTH, getEmployeeBillingPreview } from "@/lib/billing-service";
 import { getDefaultDatePeriod } from "@/lib/default-date-range";
 import { getEmployeePerformanceSummary } from "@/lib/performance-service";
-import { canAccessEmployeeMap, canAccessPerformance, canAccessPerformanceWfh, canViewEmployeeSensitiveData, normalizeRole } from "@/lib/permissions";
+import { canAccessEmployeeMap, canAccessOwnPerformance, canAccessPerformanceWfh, canViewEmployeeSensitiveData, normalizeRole } from "@/lib/permissions";
 import { logPerformanceMetric } from "@/lib/performance-logger";
 import { prisma } from "@/lib/prisma";
 import { cleanShiftName } from "@/lib/shift-display";
@@ -429,7 +429,7 @@ async function buildPerformanceSummary(viewer: ProfileUser, employee: ProfileEmp
       roleTitle: viewer.employeeProfile?.roleTitle
     };
     const canViewPerformance = isOwnProfile
-      ? canAccessPerformance(permissionUser)
+      ? canAccessOwnPerformance(permissionUser)
       : canAccessPerformanceWfh(permissionUser);
     if (!canViewPerformance) return null;
 

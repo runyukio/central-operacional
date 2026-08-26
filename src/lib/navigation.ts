@@ -1,6 +1,7 @@
 import type { AppRole } from "@/lib/demo-auth";
 import { rolesWithCapability } from "@/lib/access-control";
 import {
+  canAccessOwnPerformance,
   canAccessPerformance,
   canAccessRealTimeQueues,
   canAccessStaffCoverage,
@@ -42,6 +43,7 @@ export const navSections: NavSection[] = [
     label: "Pessoas",
     items: [
       { label: "Meu Perfil", href: "/meu-perfil", icon: "UserCircle", roles: personalRoles },
+      { label: "Minha Performance", href: "/minha-performance", icon: "FileBarChart", roles: personalRoles },
       { label: "Meu Cronograma", href: "/minha-escala", icon: "CalendarDays", roles: personalRoles },
       { label: "Cadastros", href: "/cadastros", icon: "UserPlus", roles: rolesWithCapability("EMPLOYEE_EDIT") },
       { label: "Cronogramas", href: "/escalas", icon: "CalendarRange", roles: rolesWithCapability("SCHEDULE_VIEW") },
@@ -87,6 +89,7 @@ export function getNavItems(userOrRole?: string | PermissionUser) {
     if (item.href === "/real-time") return canAccessRealTimeQueues(permissionUser);
     if (item.href === "/staff-cobertura") return canAccessStaffCoverage(permissionUser);
     if (item.href === "/performance") return canAccessPerformance(permissionUser);
+    if (item.href === "/minha-performance") return canAccessOwnPerformance(permissionUser);
     if (item.href === "/minhas-horas") return canAccessOwnRealtimeHours(permissionUser);
     return item.roles.includes(normalizedRole);
   });
@@ -110,6 +113,10 @@ export function canAccessPathForRole(pathname: string, userOrRole?: string | Per
   const permissionUser = { ...user, status: user?.status ?? "ACTIVE" };
 
   if (pathname === "/" || pathname === "/alterar-senha") return true;
+
+  if (pathname === "/minha-performance" || pathname.startsWith("/minha-performance/") || pathname === "/api/performance/me" || pathname.startsWith("/api/performance/me/")) {
+    return canAccessOwnPerformance(permissionUser);
+  }
 
   if (normalizedRole === "CLIENT") {
     if (pathname === "/staff-cobertura" || pathname.startsWith("/staff-cobertura/") || pathname === "/api/staff-coverage" || pathname.startsWith("/api/staff-coverage/")) return canAccessStaffCoverage(permissionUser);
