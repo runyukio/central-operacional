@@ -321,6 +321,9 @@ model User {
   workHourImports                   WorkHourImportBatch[]       @relation("WorkHourImportUploadedBy")
   performanceImports                PerformanceImportBatch[]    @relation("PerformanceImportUploadedBy")
   workSessionExports                WorkSessionDailySummary[]   @relation("WorkSessionSummaryExportedBy")
+  raffleCampaignsCreated            RaffleCampaign[]            @relation("RaffleCampaignCreatedBy")
+  raffleDistributionsAssigned       RaffleDistribution[]        @relation("RaffleDistributionAssignedBy")
+  raffleTicketsAssigned             RaffleTicketAssignment[]    @relation("RaffleTicketAssignedBy")
   requestedWorkHourAdjustments      WorkHourAdjustmentRequest[] @relation("WorkHourAdjustmentRequestedBy")
   approvedWorkHourAdjustments       WorkHourAdjustmentRequest[] @relation("WorkHourAdjustmentApprovedBy")
   rejectedWorkHourAdjustments       WorkHourAdjustmentRequest[] @relation("WorkHourAdjustmentRejectedBy")
@@ -474,6 +477,7 @@ model EmployeeProfile {
   rewardRedemptions          RewardRedemption[]
   moodRecords                EmployeeMoodRecord[]
   skillAssignments           EmployeeSkillAssignment[]
+  raffleTickets              RaffleTicketAssignment[]
   createdAt                  DateTime                    @default(now())
   updatedAt                  DateTime                    @updatedAt
   deletedAt                  DateTime?
@@ -2416,6 +2420,60 @@ model EmployeeCampaignSegment {
   createdById String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+model RaffleCampaign {
+  id            String                   @id @default(cuid())
+  name          String
+  minNumber     Int                      @default(1)
+  maxNumber     Int                      @default(10000)
+  status        String                   @default("ACTIVE")
+  createdById   String
+  createdBy     User                     @relation("RaffleCampaignCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  distributions RaffleDistribution[]
+  tickets       RaffleTicketAssignment[]
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+
+  @@index([status, createdAt])
+  @@index([createdById])
+}
+
+model RaffleDistribution {
+  id                 String                   @id @default(cuid())
+  campaignId         String
+  assignedById       String
+  idempotencyKey     String                   @unique
+  requestFingerprint String
+  ticketsPerEmployee Int
+  employeeCount      Int
+  totalTickets       Int
+  campaign           RaffleCampaign           @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  assignedBy         User                     @relation("RaffleDistributionAssignedBy", fields: [assignedById], references: [id], onDelete: Restrict)
+  tickets            RaffleTicketAssignment[]
+  createdAt          DateTime                 @default(now())
+
+  @@index([campaignId, createdAt])
+  @@index([assignedById])
+}
+
+model RaffleTicketAssignment {
+  id             String             @id @default(cuid())
+  campaignId     String
+  distributionId String
+  employeeId     String
+  assignedById   String
+  number         Int
+  campaign       RaffleCampaign     @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  distribution   RaffleDistribution @relation(fields: [distributionId], references: [id], onDelete: Cascade)
+  employee       EmployeeProfile    @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  assignedBy     User               @relation("RaffleTicketAssignedBy", fields: [assignedById], references: [id], onDelete: Restrict)
+  createdAt      DateTime           @default(now())
+
+  @@unique([campaignId, number])
+  @@index([employeeId, campaignId])
+  @@index([distributionId])
+  @@index([assignedById])
 }
 
 model BirthdayNotification {

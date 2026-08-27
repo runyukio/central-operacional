@@ -13,6 +13,7 @@ export type PasswordUserRecord = {
   roleName: string;
   roleTitle: string | null;
   skill: string | null;
+  lob: string | null;
   mustChangePassword: boolean;
   temporaryPassword: boolean;
 };
@@ -29,10 +30,12 @@ export async function findPasswordUserByEmail(email: string, client: QueryClient
       u."status"::text AS "status",
       r."name" AS "roleName",
       ep."roleTitle",
-      ep."skill"
+      ep."skill",
+      l."name" AS "lob"
     FROM "User" u
     INNER JOIN "Role" r ON r."id" = u."roleId"
     LEFT JOIN "EmployeeProfile" ep ON ep."userId" = u."id" AND ep."deletedAt" IS NULL
+    LEFT JOIN "Lob" l ON l."id" = ep."lobId"
     WHERE lower(u."email") = ${email.toLowerCase()}
       AND u."deletedAt" IS NULL
     LIMIT 1

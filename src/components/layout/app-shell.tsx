@@ -15,6 +15,7 @@ import {
   Clock,
   Coins,
   FileBarChart,
+  Gift,
   HeartPulse,
   HelpCircle,
   KanbanSquare,
@@ -61,6 +62,7 @@ const icons = {
   MessagesSquare,
   Coins,
   FileBarChart,
+  Gift,
   ScrollText,
   Settings,
   UserCircle
@@ -76,6 +78,7 @@ type ShellUser = {
   roleTitle?: string | null;
   jobTitle?: string | null;
   skill?: string | null;
+  lob?: string | null;
 };
 
 type HeaderNotification = {

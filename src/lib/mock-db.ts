@@ -24,6 +24,7 @@ export type Actor = {
   roleTitle?: string | null;
   jobTitle?: string | null;
   skill?: string | null;
+  lob?: string | null;
 };
 
 export type RequestStatus = "Aberto" | "Em análise" | "Aprovado" | "Recusado" | "Concluído" | "Cancelado";
@@ -366,7 +367,8 @@ export function getActorFromSession(session: Session | null): Actor {
       role: (session.user.role as AppRole | undefined) ?? "COLABORADOR",
       roleTitle: session.user.roleTitle ?? null,
       jobTitle: session.user.jobTitle ?? session.user.roleTitle ?? null,
-      skill: session.user.skill ?? null
+      skill: session.user.skill ?? null,
+      lob: session.user.lob ?? null
     };
   }
 

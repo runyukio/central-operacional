@@ -56,6 +56,7 @@ export const authOptions: NextAuthOptions = {
                 roleTitle: user.roleTitle,
                 jobTitle: user.roleTitle,
                 skill: user.skill,
+                lob: user.lob,
                 mustChangePassword: user.mustChangePassword
               } as never;
             }
@@ -102,7 +103,12 @@ export const authOptions: NextAuthOptions = {
         token.roleTitle = (user as { roleTitle?: string | null }).roleTitle ?? null;
         token.jobTitle = (user as { jobTitle?: string | null }).jobTitle ?? null;
         token.skill = (user as { skill?: string | null }).skill ?? null;
+        token.lob = (user as { lob?: string | null }).lob ?? "";
         token.mustChangePassword = Boolean((user as { mustChangePassword?: boolean }).mustChangePassword);
+      }
+      if (!user && token.email && typeof token.lob !== "string") {
+        const current = await findPasswordUserByEmail(String(token.email)).catch(() => null);
+        token.lob = current?.lob ?? "";
       }
       return token;
     },
@@ -113,6 +119,7 @@ export const authOptions: NextAuthOptions = {
         session.user.roleTitle = typeof token.roleTitle === "string" ? token.roleTitle : null;
         session.user.jobTitle = typeof token.jobTitle === "string" ? token.jobTitle : null;
         session.user.skill = typeof token.skill === "string" ? token.skill : null;
+        session.user.lob = typeof token.lob === "string" && token.lob ? token.lob : null;
         session.user.mustChangePassword = Boolean(token.mustChangePassword);
       }
       return session;

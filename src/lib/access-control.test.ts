@@ -6,6 +6,8 @@ import { canAccessBilling, canManageBilling, canManageBillingPaymentStatus } fro
 import { canAccessFinanceiro } from "@/lib/financeiro-permissions";
 import { canAccessPathForRole, getNavItems } from "@/lib/navigation";
 import {
+  canAccessCampaignAgent,
+  canManageCampaignStaff,
   canAccessPerformance,
   canAccessRealTime,
   canAccessWorkSessionMonitoring,
@@ -14,6 +16,20 @@ import {
   canEditSchedule,
   canImportPerformance
 } from "@/lib/permissions";
+
+test("Campanha separa a visão do agente ADS da gestão Staff", () => {
+  const adsAgent = { role: "COLABORADOR", roleTitle: "Agente", lob: "ADS", status: "ACTIVE" };
+  const videoAgent = { role: "COLABORADOR", roleTitle: "Agente", lob: "VIDEO", status: "ACTIVE" };
+
+  assert.equal(canAccessCampaignAgent(adsAgent), true);
+  assert.equal(canAccessCampaignAgent(videoAgent), false);
+  assert.equal(canAccessCampaignAgent({ ...adsAgent, roleTitle: "Supervisor" }), false);
+  assert.equal(canManageCampaignStaff({ role: "WFM", status: "ACTIVE" }), true);
+  assert.equal(canManageCampaignStaff({ role: "ADMIN", status: "ACTIVE" }), true);
+  assert.equal(canManageCampaignStaff(adsAgent), false);
+  assert.equal(getNavItems(adsAgent).some((item) => item.href === "/campanha/agente"), true);
+  assert.equal(getNavItems(videoAgent).some((item) => item.href.startsWith("/campanha")), false);
+});
 
 test("somente ADMIN e WFM alteram cronogramas", () => {
   const allowed = ["ADMIN", "WFM"];

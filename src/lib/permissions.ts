@@ -10,6 +10,7 @@ export type PermissionUser = {
   roleTitle?: string | null;
   jobTitle?: string | null;
   skill?: string | null;
+  lob?: string | null;
 };
 
 export type PermissionEmployee = {
@@ -149,6 +150,23 @@ export function canExportWorkSessionMonitoring(user: PermissionUser) {
 
 export function canAccessPerformance(user: PermissionUser) {
   return isActiveUser(user) && roleHasCapability(user.role, "PERFORMANCE");
+}
+
+export function canAccessCampaignAgent(user: PermissionUser) {
+  return (
+    isActiveUser(user)
+    && roleHasCapability(user.role, "CAMPAIGN_AGENT")
+    && normalizeComparableJobTitle(user.lob) === "ads"
+    && isAgentJobTitle(user.roleTitle ?? user.jobTitle)
+  );
+}
+
+export function canManageCampaignStaff(user: PermissionUser) {
+  return isActiveUser(user) && roleHasCapability(user.role, "CAMPAIGN_STAFF");
+}
+
+export function canAccessCampaign(user: PermissionUser) {
+  return canAccessCampaignAgent(user) || canManageCampaignStaff(user);
 }
 
 export function canAccessPerformanceWfh(user: PermissionUser) {

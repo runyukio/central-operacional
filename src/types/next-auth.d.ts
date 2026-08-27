@@ -12,6 +12,7 @@ declare module "next-auth" {
       roleTitle?: string | null;
       jobTitle?: string | null;
       skill?: string | null;
+      lob?: string | null;
       mustChangePassword?: boolean;
     };
   }
@@ -21,6 +22,7 @@ declare module "next-auth" {
     roleTitle?: string | null;
     jobTitle?: string | null;
     skill?: string | null;
+    lob?: string | null;
     mustChangePassword?: boolean;
   }
 }
@@ -31,6 +33,7 @@ declare module "next-auth/jwt" {
     roleTitle?: string | null;
     jobTitle?: string | null;
     skill?: string | null;
+    lob?: string | null;
     mustChangePassword?: boolean;
   }
 }

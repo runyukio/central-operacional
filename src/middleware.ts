@@ -44,8 +44,18 @@ export async function middleware(request: NextRequest) {
     role,
     email: typeof token.email === "string" ? token.email : null,
     name: typeof token.name === "string" ? token.name : null,
+    roleTitle: typeof token.roleTitle === "string" ? token.roleTitle : null,
+    jobTitle: typeof token.jobTitle === "string" ? token.jobTitle : null,
+    lob: typeof token.lob === "string" ? token.lob : null,
     status: "ACTIVE"
   };
+
+  // Existing JWTs created before the Campaign release do not contain LOB yet.
+  // Let the request reach the page/API once; both re-read the user from Postgres
+  // and enforce ADS ownership before returning any raffle data.
+  const isCampaignPath = pathname === "/campanha" || pathname.startsWith("/campanha/") || pathname.startsWith("/api/campaigns/raffle");
+  const isLegacyAdsCandidate = role === "COLABORADOR" && !permissionUser.lob;
+  if (isCampaignPath && isLegacyAdsCandidate) return NextResponse.next();
 
   if (!isBillingPath && !canAccessPathForRole(pathname, permissionUser)) {
     if (pathname.startsWith("/api/")) {
