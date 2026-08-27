@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import {
   Check,
   CheckCircle2,
@@ -12,13 +11,14 @@ import {
   Send,
   ShieldCheck,
   Ticket,
+  Trash2,
   UsersRound,
   X
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { PageHeader, Panel, StatCard, StatusBadge } from "@/components/ui/primitives";
-import { formatRaffleNumber, raffleConfirmationText } from "@/lib/campaign-raffle-core";
+import { formatRaffleNumber } from "@/lib/campaign-raffle-core";
 import { cn } from "@/lib/utils";
 
 type CampaignSummary = {
@@ -47,6 +47,13 @@ type StaffPayload = {
     assignedBy: string;
     createdAt: string;
   }>;
+  ticketHolders: Array<{
+    employeeId: string;
+    name: string;
+    wbLogin: string;
+    status: string;
+    tickets: Array<{ id: string; number: number; assignedAt: string }>;
+  }>;
 };
 
 type AgentPayload = {
@@ -73,6 +80,12 @@ type PendingDistribution = {
   idempotencyKey: string;
   stage: "review" | "confirm";
 };
+type PendingTicketDeletion = {
+  ticketId: string;
+  number: number;
+  employeeName: string;
+  wbLogin: string;
+};
 
 export function CampaignRafflePage({ view }: { view: "agent" | "staff" }) {
   const [payload, setPayload] = useState<RafflePayload | null>(null);
@@ -87,8 +100,9 @@ export function CampaignRafflePage({ view }: { view: "agent" | "staff" }) {
   const [campaignName, setCampaignName] = useState("");
   const [creating, setCreating] = useState(false);
   const [pending, setPending] = useState<PendingDistribution | null>(null);
-  const [confirmation, setConfirmation] = useState("");
   const [sending, setSending] = useState(false);
+  const [pendingDeletion, setPendingDeletion] = useState<PendingTicketDeletion | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const loadDashboard = useCallback(async (campaignId?: string) => {
     setLoading(true);
@@ -116,21 +130,16 @@ export function CampaignRafflePage({ view }: { view: "agent" | "staff" }) {
     return <CampaignLoading />;
   }
 
-  const access = payload?.access;
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Campanha"
+        title="Rifa"
         description={view === "staff" ? "Distribuição segura de tickets da rifa para agentes ADS." : "Consulte os tickets atribuídos a você em cada campanha."}
         icon={Gift}
         actions={(
-          <div className="flex flex-wrap items-center gap-2">
-            {access?.canViewOwn ? <CampaignTab href="/campanha/agente" active={view === "agent"}>Agente</CampaignTab> : null}
-            {access?.canManage ? <CampaignTab href="/campanha/staff" active={view === "staff"}>Staff</CampaignTab> : null}
-            <button type="button" onClick={() => void loadDashboard()} className="premium-control inline-flex h-10 items-center gap-2 px-3.5 text-sm font-extrabold text-navy-950">
-              <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} /> Atualizar
-            </button>
-          </div>
+          <button type="button" onClick={() => void loadDashboard()} className="premium-control inline-flex h-10 items-center gap-2 px-3.5 text-sm font-extrabold text-navy-950">
+            <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} /> Atualizar
+          </button>
         )}
       />
 
@@ -153,7 +162,6 @@ export function CampaignRafflePage({ view }: { view: "agent" | "staff" }) {
           onCreate={() => setCreateOpen(true)}
           onPrepare={(employeeNames) => {
             const totalTickets = selectedEmployeeIds.length * ticketsPerEmployee;
-            setConfirmation("");
             setPending({
               employeeIds: [...selectedEmployeeIds],
               employeeNames,
@@ -163,6 +171,7 @@ export function CampaignRafflePage({ view }: { view: "agent" | "staff" }) {
               stage: "review"
             });
           }}
+          onDeleteTicket={setPendingDeletion}
         />
       ) : payload?.view === "agent" ? <AgentCampaignView payload={payload} /> : null}
 
@@ -209,8 +218,6 @@ export function CampaignRafflePage({ view }: { view: "agent" | "staff" }) {
       {pending ? (
         <DistributionConfirmationModal
           pending={pending}
-          confirmation={confirmation}
-          setConfirmation={setConfirmation}
           sending={sending}
           onClose={() => !sending && setPending(null)}
           onContinue={() => setPending((current) => current ? { ...current, stage: "confirm" } : null)}
@@ -229,7 +236,6 @@ export function CampaignRafflePage({ view }: { view: "agent" | "staff" }) {
                   campaignId,
                   employeeIds: pending.employeeIds,
                   ticketsPerEmployee: pending.ticketsPerEmployee,
-                  confirmation,
                   idempotencyKey: pending.idempotencyKey
                 })
               });
@@ -237,13 +243,42 @@ export function CampaignRafflePage({ view }: { view: "agent" | "staff" }) {
               if (!response.ok) throw new Error(result.message || result.error || "Não foi possível distribuir os tickets.");
               setPending(null);
               setSelectedEmployeeIds([]);
-              setConfirmation("");
               setSuccess(`${result.data.totalTickets} tickets distribuídos com sucesso, sem duplicidade.`);
               await loadDashboard(campaignId);
             } catch (caught) {
               setError(caught instanceof Error ? caught.message : "Não foi possível distribuir os tickets.");
             } finally {
               setSending(false);
+            }
+          }}
+        />
+      ) : null}
+
+      {pendingDeletion ? (
+        <TicketDeletionModal
+          ticket={pendingDeletion}
+          deleting={deleting}
+          onClose={() => !deleting && setPendingDeletion(null)}
+          onDelete={async () => {
+            const staffPayload = payload?.view === "staff" ? payload : null;
+            const campaignId = selectedCampaignId || staffPayload?.selectedCampaignId || "";
+            setDeleting(true);
+            setError("");
+            try {
+              const response = await fetch("/api/campaigns/raffle", {
+                method: "DELETE",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ticketId: pendingDeletion.ticketId })
+              });
+              const result = await response.json();
+              if (!response.ok) throw new Error(result.message || result.error || "Não foi possível excluir o ticket.");
+              setPendingDeletion(null);
+              setSuccess(`Ticket ${formatRaffleNumber(result.data.number)} de ${result.data.employeeName} excluído.`);
+              await loadDashboard(campaignId);
+            } catch (caught) {
+              setError(caught instanceof Error ? caught.message : "Não foi possível excluir o ticket.");
+            } finally {
+              setDeleting(false);
             }
           }}
         />
@@ -263,7 +298,8 @@ function StaffCampaignView({
   agentSearch,
   setAgentSearch,
   onCreate,
-  onPrepare
+  onPrepare,
+  onDeleteTicket
 }: {
   payload: StaffPayload;
   selectedCampaignId: string;
@@ -276,7 +312,10 @@ function StaffCampaignView({
   setAgentSearch: (search: string) => void;
   onCreate: () => void;
   onPrepare: (employeeNames: string[]) => void;
+  onDeleteTicket: (ticket: PendingTicketDeletion) => void;
 }) {
+  const [staffTab, setStaffTab] = useState<"distribute" | "tickets">("distribute");
+  const [ticketSearch, setTicketSearch] = useState("");
   const campaignId = selectedCampaignId || payload.selectedCampaignId || "";
   const selectedCampaign = payload.campaigns.find((campaign) => campaign.id === campaignId) ?? null;
   const selectedSet = useMemo(() => new Set(selectedEmployeeIds), [selectedEmployeeIds]);
@@ -284,6 +323,11 @@ function StaffCampaignView({
   const filteredAgents = payload.agents.filter((agent) => !normalizedSearch || `${agent.name} ${agent.wbLogin} ${agent.shift}`.toLowerCase().includes(normalizedSearch));
   const totalTickets = selectedEmployeeIds.length * ticketsPerEmployee;
   const canPrepare = Boolean(selectedCampaign && selectedCampaign.status === "ACTIVE" && selectedEmployeeIds.length && ticketsPerEmployee > 0 && totalTickets <= payload.summary.availableTickets);
+  const normalizedTicketSearch = ticketSearch.trim().toLowerCase();
+  const filteredTicketHolders = useMemo(() => payload.ticketHolders.filter((holder) => (
+    !normalizedTicketSearch
+    || `${holder.name} ${holder.wbLogin} ${holder.tickets.map((ticket) => formatRaffleNumber(ticket.number)).join(" ")}`.toLowerCase().includes(normalizedTicketSearch)
+  )), [normalizedTicketSearch, payload.ticketHolders]);
 
   return (
     <>
@@ -316,7 +360,26 @@ function StaffCampaignView({
           </div>
         </div>
       ) : (
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.7fr)]">
+        <>
+          <div className="card flex flex-wrap gap-2 p-2">
+            <button
+              type="button"
+              onClick={() => setStaffTab("distribute")}
+              className={cn("rounded-xl px-4 py-2 text-sm font-extrabold transition", staffTab === "distribute" ? "bg-blue-600 text-white shadow-soft" : "text-muted hover:bg-slate-50 hover:text-navy-950")}
+            >
+              Distribuir tickets
+            </button>
+            <button
+              type="button"
+              onClick={() => setStaffTab("tickets")}
+              className={cn("rounded-xl px-4 py-2 text-sm font-extrabold transition", staffTab === "tickets" ? "bg-blue-600 text-white shadow-soft" : "text-muted hover:bg-slate-50 hover:text-navy-950")}
+            >
+              Todos os tickets
+            </button>
+          </div>
+
+          {staffTab === "distribute" ? (
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.7fr)]">
           <Panel title="Distribuir tickets">
             <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_190px]">
               <label className="block">
@@ -398,9 +461,96 @@ function StaffCampaignView({
               {!payload.recentDistributions.length ? <p className="py-8 text-center text-sm font-bold text-muted">Nenhum envio realizado nesta campanha.</p> : null}
             </div>
           </Panel>
-        </div>
+            </div>
+          ) : (
+            <TicketAssignmentsPanel
+              holders={filteredTicketHolders}
+              search={ticketSearch}
+              setSearch={setTicketSearch}
+              onDeleteTicket={onDeleteTicket}
+            />
+          )}
+        </>
       )}
     </>
+  );
+}
+
+function TicketAssignmentsPanel({
+  holders,
+  search,
+  setSearch,
+  onDeleteTicket
+}: {
+  holders: StaffPayload["ticketHolders"];
+  search: string;
+  setSearch: (value: string) => void;
+  onDeleteTicket: (ticket: PendingTicketDeletion) => void;
+}) {
+  const visibleTickets = holders.reduce((total, holder) => total + holder.tickets.length, 0);
+  return (
+    <Panel title="Agentes e tickets">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <label className="block min-w-0 flex-1">
+          <span className="mb-1.5 block text-xs font-extrabold uppercase tracking-wide text-muted">Buscar agente ou ticket</span>
+          <span className="premium-control flex h-10 items-center gap-2 px-3">
+            <Search className="h-4 w-4 text-muted" />
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Nome, WB ou número" className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" />
+          </span>
+        </label>
+        <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-right">
+          <p className="text-[11px] font-extrabold uppercase tracking-wide text-blue-700">Resultado</p>
+          <p className="text-sm font-black text-navy-950">{holders.length} agentes · {visibleTickets} tickets</p>
+        </div>
+      </div>
+
+      <div className="mt-4 space-y-3">
+        {holders.map((holder) => (
+          <section key={holder.employeeId} className="overflow-hidden rounded-xl border border-border bg-white">
+            <div className="flex flex-col gap-2 border-b border-border bg-slate-50 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-black text-navy-950">{holder.name}</p>
+                <p className="truncate text-xs font-semibold text-muted">{holder.wbLogin} · {holder.status}</p>
+              </div>
+              <span className="w-fit rounded-full bg-blue-100 px-2.5 py-1 text-[11px] font-extrabold text-blue-700">{holder.tickets.length} ticket(s)</span>
+            </div>
+            <div className="grid grid-cols-1 gap-2 p-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5">
+              {holder.tickets.map((ticket) => (
+                <div key={ticket.id} className="flex items-center justify-between gap-2 rounded-xl border border-blue-100 bg-blue-50/45 px-3 py-2">
+                  <div>
+                    <p className="font-mono text-sm font-black tracking-wider text-navy-950">{formatRaffleNumber(ticket.number)}</p>
+                    <p className="mt-0.5 text-[10px] font-semibold text-muted">{formatDateTime(ticket.assignedAt)}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onDeleteTicket({
+                      ticketId: ticket.id,
+                      number: ticket.number,
+                      employeeName: holder.name,
+                      wbLogin: holder.wbLogin
+                    })}
+                    className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-red-200 bg-white text-red-600 transition hover:bg-red-50"
+                    aria-label={`Excluir ticket ${formatRaffleNumber(ticket.number)} de ${holder.name}`}
+                    title="Excluir ticket"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        ))}
+        {!holders.length ? (
+          <div className="grid min-h-[220px] place-items-center rounded-xl border border-dashed border-border bg-slate-50 p-8 text-center">
+            <div>
+              <Ticket className="mx-auto h-9 w-9 text-blue-400" />
+              <p className="mt-3 text-sm font-black text-navy-950">Nenhum ticket encontrado</p>
+              <p className="mt-1 text-xs font-semibold text-muted">Ajuste a busca ou distribua os primeiros tickets desta campanha.</p>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </Panel>
   );
 }
 
@@ -451,8 +601,6 @@ function AgentCampaignView({ payload }: { payload: AgentPayload }) {
 
 function DistributionConfirmationModal({
   pending,
-  confirmation,
-  setConfirmation,
   sending,
   onClose,
   onContinue,
@@ -460,15 +608,12 @@ function DistributionConfirmationModal({
   onSend
 }: {
   pending: PendingDistribution;
-  confirmation: string;
-  setConfirmation: (value: string) => void;
   sending: boolean;
   onClose: () => void;
   onContinue: () => void;
   onBack: () => void;
   onSend: () => void;
 }) {
-  const requiredText = raffleConfirmationText(pending.totalTickets);
   return (
     <Modal
       title={pending.stage === "review" ? "1ª confirmação · revisar envio" : "2ª confirmação · autorizar distribuição"}
@@ -498,18 +643,48 @@ function DistributionConfirmationModal({
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-bold leading-relaxed text-amber-900">
             Serão distribuídos <strong>{pending.totalTickets.toLocaleString("pt-BR")} tickets únicos</strong> entre {pending.employeeIds.length} agentes ADS. Os números serão sorteados somente após a confirmação.
           </div>
-          <label className="mt-4 block">
-            <span className="mb-1.5 block text-xs font-extrabold uppercase tracking-wide text-muted">Digite <strong className="text-navy-950">{requiredText}</strong></span>
-            <input autoFocus value={confirmation} onChange={(event) => setConfirmation(event.target.value.toUpperCase())} disabled={sending} className="premium-control h-11 w-full px-3 font-mono text-sm font-black tracking-wide outline-none" />
-          </label>
+          <p className="mt-4 text-sm font-semibold leading-6 text-muted">Revise o total acima e clique em confirmar para concluir. Não é necessário digitar nenhuma frase.</p>
           <div className="mt-4 flex justify-end gap-2">
             <button type="button" disabled={sending} onClick={onBack} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Voltar</button>
-            <button type="button" disabled={sending || confirmation !== requiredText} onClick={onSend} className="premium-button inline-flex h-10 items-center gap-2 px-4 text-sm font-extrabold disabled:cursor-not-allowed disabled:opacity-50">
+            <button type="button" disabled={sending} onClick={onSend} className="premium-button inline-flex h-10 items-center gap-2 px-4 text-sm font-extrabold disabled:cursor-not-allowed disabled:opacity-50">
               <ShieldCheck className="h-4 w-4" /> {sending ? "Distribuindo..." : "Confirmar e distribuir"}
             </button>
           </div>
         </>
       )}
+    </Modal>
+  );
+}
+
+function TicketDeletionModal({
+  ticket,
+  deleting,
+  onClose,
+  onDelete
+}: {
+  ticket: PendingTicketDeletion;
+  deleting: boolean;
+  onClose: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <Modal
+      title="Excluir ticket"
+      description="O número ficará disponível novamente para futuros sorteios desta campanha."
+      onClose={onClose}
+    >
+      <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+        <p className="text-xs font-extrabold uppercase tracking-wide text-red-700">Ticket selecionado</p>
+        <p className="mt-1 font-mono text-2xl font-black tracking-wider text-navy-950">{formatRaffleNumber(ticket.number)}</p>
+        <p className="mt-2 text-sm font-bold text-red-800">{ticket.employeeName} · {ticket.wbLogin}</p>
+      </div>
+      <p className="mt-4 text-sm font-semibold leading-6 text-muted">A exclusão será registrada na auditoria. Não é necessário digitar nenhuma frase para confirmar.</p>
+      <div className="mt-5 flex justify-end gap-2">
+        <button type="button" disabled={deleting} onClick={onClose} className="premium-control h-10 px-4 text-sm font-extrabold text-navy-950">Cancelar</button>
+        <button type="button" disabled={deleting} onClick={onDelete} className="inline-flex h-10 items-center gap-2 rounded-xl bg-red-600 px-4 text-sm font-extrabold text-white shadow-soft transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50">
+          <Trash2 className="h-4 w-4" /> {deleting ? "Excluindo..." : "Excluir ticket"}
+        </button>
+      </div>
     </Modal>
   );
 }
@@ -528,10 +703,6 @@ function Modal({ title, description, onClose, children }: { title: string; descr
       </div>
     </div>
   );
-}
-
-function CampaignTab({ href, active, children }: { href: string; active: boolean; children: React.ReactNode }) {
-  return <Link href={href} className={cn("inline-flex h-10 items-center rounded-xl border px-4 text-sm font-extrabold transition", active ? "border-blue-600 bg-blue-600 text-white shadow-soft" : "border-border bg-white text-navy-950 hover:border-blue-200 hover:bg-blue-50")}>{children}</Link>;
 }
 
 function ReviewValue({ label, value, highlight = false }: { label: string; value: string; highlight?: boolean }) {

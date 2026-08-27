@@ -34,7 +34,9 @@ test("Campanha separa a visão do agente ADS da gestão Staff", () => {
   assert.equal(canManageCampaignStaff({ role: "WFM", status: "ACTIVE" }), true);
   assert.equal(canManageCampaignStaff({ role: "ADMIN", status: "ACTIVE" }), true);
   assert.equal(canManageCampaignStaff(adsAgent), false);
-  assert.equal(getNavItems(adsAgent).some((item) => item.href === "/campanha/agente"), true);
+  assert.equal(getNavItems(adsAgent).filter((item) => item.href === "/campanha").length, 1);
+  assert.equal(getNavItems(adsAgent).find((item) => item.href === "/campanha")?.label, "Rifa");
+  assert.equal(getNavItems({ role: "WFM", status: "ACTIVE" }).filter((item) => item.href === "/campanha").length, 1);
   assert.equal(getNavItems(videoAgent).some((item) => item.href.startsWith("/campanha")), false);
 });
 

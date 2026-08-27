@@ -5,6 +5,7 @@ import { getApiActor } from "@/lib/api-actor";
 import {
   CampaignRaffleError,
   createRaffleCampaign,
+  deleteRaffleTicket,
   distributeRaffleTickets,
   getCampaignRaffleDashboard
 } from "@/lib/campaign-raffle-service";
@@ -21,11 +22,11 @@ const distributeSchema = z.object({
   campaignId: z.string().trim().min(1),
   employeeIds: z.array(z.string().trim().min(1)).min(1).max(500),
   ticketsPerEmployee: z.number().int().min(1).max(10_000),
-  confirmation: z.string().trim(),
   idempotencyKey: z.string().trim().min(16).max(100)
 });
 
 const mutationSchema = z.discriminatedUnion("action", [createCampaignSchema, distributeSchema]);
+const deleteTicketSchema = z.object({ ticketId: z.string().trim().min(1) });
 
 export async function GET(request: Request) {
   try {
@@ -47,6 +48,17 @@ export async function POST(request: Request) {
       ? await createRaffleCampaign(actor, { name: payload.name })
       : await distributeRaffleTickets(actor, payload);
     return NextResponse.json({ data }, { status: payload.action === "CREATE_CAMPAIGN" ? 201 : 200 });
+  } catch (error) {
+    return raffleErrorResponse(error);
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const actor = await getApiActor();
+    const payload = deleteTicketSchema.parse(await request.json());
+    const data = await deleteRaffleTicket(actor, payload);
+    return NextResponse.json({ data });
   } catch (error) {
     return raffleErrorResponse(error);
   }

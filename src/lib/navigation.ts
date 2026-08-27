@@ -18,6 +18,11 @@ export type NavItem = {
   roles: AppRole[];
 };
 
+const campaignRoles = Array.from(new Set([
+  ...rolesWithCapability("CAMPAIGN_AGENT"),
+  ...rolesWithCapability("CAMPAIGN_STAFF")
+]));
+
 export type NavSection = {
   label: string;
   items: NavItem[];
@@ -43,8 +48,7 @@ export const navSections: NavSection[] = [
   {
     label: "Campanha",
     items: [
-      { label: "Agente", href: "/campanha/agente", icon: "Gift", roles: rolesWithCapability("CAMPAIGN_AGENT") },
-      { label: "Staff", href: "/campanha/staff", icon: "Gift", roles: rolesWithCapability("CAMPAIGN_STAFF") }
+      { label: "Rifa", href: "/campanha", icon: "Gift", roles: campaignRoles }
     ]
   },
   {
@@ -96,6 +100,7 @@ export function getNavItems(userOrRole?: string | PermissionUser) {
     if (item.href === "/real-time") return canAccessRealTimeQueues(permissionUser);
     if (item.href === "/staff-cobertura") return canAccessStaffCoverage(permissionUser);
     if (item.href === "/performance") return canAccessPerformance(permissionUser);
+    if (item.href === "/campanha") return canAccessCampaignAgent(permissionUser) || canManageCampaignStaff(permissionUser);
     if (item.href === "/campanha/agente") return canAccessCampaignAgent(permissionUser);
     if (item.href === "/campanha/staff") return canManageCampaignStaff(permissionUser);
     if (item.href === "/minhas-horas") return canAccessOwnRealtimeHours(permissionUser);

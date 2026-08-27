@@ -4,8 +4,7 @@ import { Prisma } from "@prisma/client";
 import {
   RAFFLE_MAX_NUMBER,
   RAFFLE_MIN_NUMBER,
-  drawUniqueRaffleNumbers,
-  raffleConfirmationText
+  drawUniqueRaffleNumbers
 } from "@/lib/campaign-raffle-core";
 import type { Actor } from "@/lib/mock-db";
 import { isAgentJobTitle } from "@/lib/job-title-normalization";
@@ -76,7 +75,6 @@ export async function distributeRaffleTickets(actor: Actor, input: {
   campaignId: string;
   employeeIds: string[];
   ticketsPerEmployee: number;
-  confirmation: string;
   idempotencyKey: string;
 }) {
   const context = await loadCampaignRaffleContext(actor);
@@ -91,9 +89,6 @@ export async function distributeRaffleTickets(actor: Actor, input: {
   }
   const totalTickets = employeeIds.length * ticketsPerEmployee;
   if (totalTickets > RAFFLE_MAX_NUMBER) throw new CampaignRaffleError("O envio não pode ultrapassar 10.000 tickets.");
-  if (input.confirmation !== raffleConfirmationText(totalTickets)) {
-    throw new CampaignRaffleError(`Digite ${raffleConfirmationText(totalTickets)} para concluir o envio.`);
-  }
   const idempotencyKey = input.idempotencyKey.trim();
   if (idempotencyKey.length < 16 || idempotencyKey.length > 100) throw new CampaignRaffleError("Identificador de envio inválido.");
   const requestFingerprint = createHash("sha256")
@@ -188,6 +183,57 @@ export async function distributeRaffleTickets(actor: Actor, input: {
   }, { maxWait: 5_000, timeout: 15_000 });
 }
 
+export async function deleteRaffleTicket(actor: Actor, input: { ticketId: string }) {
+  const context = await loadCampaignRaffleContext(actor);
+  if (!context.canManage) throw new CampaignRaffleError("Apenas WFM e ADM podem excluir tickets.", 403);
+
+  const ticketId = input.ticketId.trim();
+  if (!ticketId) throw new CampaignRaffleError("Ticket inválido.");
+
+  return prisma.$transaction(async (tx) => {
+    const ticket = await tx.raffleTicketAssignment.findUnique({
+      where: { id: ticketId },
+      select: {
+        id: true,
+        number: true,
+        campaignId: true,
+        distributionId: true,
+        employeeId: true,
+        campaign: { select: { name: true } },
+        employee: { select: { fullName: true, wbLogin: true } }
+      }
+    });
+    if (!ticket) throw new CampaignRaffleError("Este ticket não existe ou já foi excluído.", 404);
+
+    const deleted = await tx.raffleTicketAssignment.deleteMany({ where: { id: ticket.id } });
+    if (deleted.count !== 1) throw new CampaignRaffleError("Este ticket já foi excluído.", 409);
+
+    await tx.auditLog.create({
+      data: {
+        actorId: context.user.id,
+        action: "EXCLUSAO",
+        entity: "RaffleTicketAssignment",
+        entityId: ticket.id,
+        before: {
+          campaignId: ticket.campaignId,
+          campaignName: ticket.campaign.name,
+          distributionId: ticket.distributionId,
+          employeeId: ticket.employeeId,
+          employeeName: ticket.employee.fullName,
+          wbLogin: ticket.employee.wbLogin,
+          number: ticket.number
+        }
+      }
+    });
+    return {
+      id: ticket.id,
+      number: ticket.number,
+      employeeName: ticket.employee.fullName,
+      wbLogin: ticket.employee.wbLogin
+    };
+  }, { maxWait: 5_000, timeout: 10_000 });
+}
+
 async function loadCampaignRaffleContext(actor: Actor) {
   if (!actor.email) throw new CampaignRaffleError("Usuário não autenticado.", 401);
   const user = await prisma.user.findFirst({
@@ -266,7 +312,7 @@ async function loadStaffDashboard(context: CampaignRaffleContext, campaignId?: s
     ?? campaigns.find((campaign) => campaign.status === "ACTIVE")
     ?? campaigns[0]
     ?? null;
-  const [counts, distributions] = selectedCampaign
+  const [counts, distributions, ticketAssignments] = selectedCampaign
     ? await Promise.all([
         prisma.raffleTicketAssignment.groupBy({
           by: ["employeeId"],
@@ -285,12 +331,51 @@ async function loadStaffDashboard(context: CampaignRaffleContext, campaignId?: s
             createdAt: true,
             assignedBy: { select: { name: true, email: true } }
           }
+        }),
+        prisma.raffleTicketAssignment.findMany({
+          where: { campaignId: selectedCampaign.id },
+          orderBy: { number: "asc" },
+          select: {
+            id: true,
+            number: true,
+            createdAt: true,
+            employee: {
+              select: {
+                id: true,
+                fullName: true,
+                wbLogin: true,
+                operationalStatus: true
+              }
+            }
+          }
         })
       ])
-    : [[], []];
+    : [[], [], []];
   const countByEmployee = new Map(counts.map((row) => [row.employeeId, row._count._all]));
   const usedTickets = selectedCampaign?._count.tickets ?? 0;
   const rangeSize = selectedCampaign ? selectedCampaign.maxNumber - selectedCampaign.minNumber + 1 : RAFFLE_MAX_NUMBER;
+  const ticketHolderMap = new Map<string, {
+    employeeId: string;
+    name: string;
+    wbLogin: string;
+    status: string;
+    tickets: Array<{ id: string; number: number; assignedAt: string }>;
+  }>();
+  for (const assignment of ticketAssignments) {
+    const holder = ticketHolderMap.get(assignment.employee.id) ?? {
+      employeeId: assignment.employee.id,
+      name: assignment.employee.fullName,
+      wbLogin: assignment.employee.wbLogin,
+      status: assignment.employee.operationalStatus,
+      tickets: []
+    };
+    holder.tickets.push({
+      id: assignment.id,
+      number: assignment.number,
+      assignedAt: assignment.createdAt.toISOString()
+    });
+    ticketHolderMap.set(holder.employeeId, holder);
+  }
 
   return {
     view: "staff" as const,
@@ -326,7 +411,8 @@ async function loadStaffDashboard(context: CampaignRaffleContext, campaignId?: s
       totalTickets: distribution.totalTickets,
       assignedBy: distribution.assignedBy.name || distribution.assignedBy.email,
       createdAt: distribution.createdAt.toISOString()
-    }))
+    })),
+    ticketHolders: Array.from(ticketHolderMap.values()).sort((left, right) => left.name.localeCompare(right.name, "pt-BR"))
   };
 }
 

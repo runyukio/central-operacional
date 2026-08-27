@@ -40,10 +40,6 @@ export function drawUniqueRaffleNumbers({
   return selected;
 }
 
-export function raffleConfirmationText(totalTickets: number) {
-  return `DISTRIBUIR ${totalTickets}`;
-}
-
 export function formatRaffleNumber(number: number) {
   return String(number).padStart(5, "0");
 }

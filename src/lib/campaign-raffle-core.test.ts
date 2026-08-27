@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { drawUniqueRaffleNumbers, raffleConfirmationText } from "./campaign-raffle-core";
+import { drawUniqueRaffleNumbers } from "./campaign-raffle-core";
 
 test("draws only unused numbers without duplicates", () => {
   const drawn = drawUniqueRaffleNumbers({
@@ -24,8 +24,4 @@ test("rejects a request larger than the available pool", () => {
     count: 2,
     nextIndex: () => 0
   }), /apenas 1 tickets disponíveis/);
-});
-
-test("builds the exact confirmation phrase", () => {
-  assert.equal(raffleConfirmationText(42), "DISTRIBUIR 42");
 });
