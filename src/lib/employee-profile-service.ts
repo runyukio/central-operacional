@@ -5,7 +5,14 @@ import { createNotFoundError, createPermissionError, createServerError, type Api
 import { DEFAULT_BILLING_REFERENCE_MONTH, getEmployeeBillingPreview } from "@/lib/billing-service";
 import { getDefaultDatePeriod } from "@/lib/default-date-range";
 import { getEmployeePerformanceSummary } from "@/lib/performance-service";
-import { canAccessEmployeeMap, canAccessPerformance, canAccessPerformanceWfh, canViewEmployeeSensitiveData, normalizeRole } from "@/lib/permissions";
+import {
+  canAccessEmployeeMap,
+  canAccessPerformance,
+  canAccessPerformanceWfh,
+  canViewEmployeeProfileBillingPreview,
+  canViewEmployeeSensitiveData,
+  normalizeRole
+} from "@/lib/permissions";
 import { logPerformanceMetric } from "@/lib/performance-logger";
 import { prisma } from "@/lib/prisma";
 import { cleanShiftName } from "@/lib/shift-display";
@@ -108,6 +115,7 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
     const viewerRole = normalizeRole(viewer.role.name);
     const isOwnProfile = viewer.employeeProfile?.id === employee.id;
     const canViewDiversityData = isOwnProfile || canViewEmployeeSensitiveData({ role: viewer.role.name, status: viewer.status });
+    const canViewBillingPreview = canViewEmployeeProfileBillingPreview(viewer.employeeProfile?.id, employee.id);
     const [schedule, workHours, requests, equipments, mood, performance, billing, anonymousFeedbacks] = await Promise.all([
       profileSection("schedule", employee.id, buildScheduleSummary(employee.id, period)),
       profileSection("work_hours", employee.id, buildWorkHoursSummary(employee.id, period)),
@@ -115,7 +123,9 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
       profileSection("equipment", employee.id, buildEquipmentSummary(employee.id)),
       profileSection("mood", employee.id, buildMoodSummary(employee.id, period)),
       profileSection("performance", employee.id, buildPerformanceSummary(viewer, employee, period)),
-      profileSection("billing_preview", employee.id, getEmployeeBillingPreview(employee.id, DEFAULT_BILLING_REFERENCE_MONTH)),
+      canViewBillingPreview
+        ? profileSection("billing_preview", employee.id, getEmployeeBillingPreview(employee.id, DEFAULT_BILLING_REFERENCE_MONTH))
+        : Promise.resolve(null),
       isOwnProfile
         ? profileSection("anonymous_feedback", employee.id, buildOwnAnonymousFeedbackSummary(viewer.id))
         : Promise.resolve(null)
@@ -145,7 +155,7 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
       viewerRole,
       isOwnProfile,
       employeeId: employee.id,
-      sections: isOwnProfile ? 8 : 7
+      sections: isOwnProfile ? 8 : 6
     });
     return response;
   } catch (error) {

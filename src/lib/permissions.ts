@@ -66,6 +66,10 @@ export function canViewEmployeeSensitiveData(user: PermissionUser, employee?: Pe
   return isActiveUser(user) && roleHasCapability(user.role, "EMPLOYEE_SENSITIVE");
 }
 
+export function canViewEmployeeProfileBillingPreview(viewerEmployeeId?: string | null, targetEmployeeId?: string | null) {
+  return Boolean(viewerEmployeeId && targetEmployeeId && viewerEmployeeId === targetEmployeeId);
+}
+
 export function canEditEmployeeData(user: PermissionUser, employee?: PermissionEmployee | null) {
   void employee;
   return isActiveUser(user) && roleHasCapability(user.role, "EMPLOYEE_EDIT");

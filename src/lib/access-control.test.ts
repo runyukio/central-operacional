@@ -14,8 +14,15 @@ import {
   canAdminOverrideWorkflowScheduleStatus,
   canAutoUpdateAdsRequirement,
   canEditSchedule,
-  canImportPerformance
+  canImportPerformance,
+  canViewEmployeeProfileBillingPreview
 } from "@/lib/permissions";
+
+test("perfil de terceiros nunca expõe a prévia do invoice", () => {
+  assert.equal(canViewEmployeeProfileBillingPreview("employee-own", "employee-own"), true);
+  assert.equal(canViewEmployeeProfileBillingPreview("employee-staff", "employee-other"), false);
+  assert.equal(canViewEmployeeProfileBillingPreview(null, "employee-other"), false);
+});
 
 test("Campanha separa a visão do agente ADS da gestão Staff", () => {
   const adsAgent = { role: "COLABORADOR", roleTitle: "Agente", lob: "ADS", status: "ACTIVE" };
