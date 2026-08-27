@@ -30,6 +30,7 @@ export type AdsExecutiveAgentRow = {
   employeeStatus: string;
   presenceStatus: string;
   isSchedulePresent?: boolean;
+  shift?: string;
   history: Array<{
     cycleDownload: string;
     submit: number;

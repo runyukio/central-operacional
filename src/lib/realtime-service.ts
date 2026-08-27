@@ -2371,8 +2371,11 @@ function selectRealtimeBatchIdsForView(cycleOptions: RealtimeCycleOption[], sele
   if (selectedCycle) selectedValues.add(selectedCycle);
   if (previousCycle) selectedValues.add(previousCycle);
   if (previousDayCycle) selectedValues.add(previousDayCycle);
-  if (selectedParts?.hour === 0) {
-    previousDayCycles.forEach((cycle) => selectedValues.add(cycle.value));
+  if (selectedParts && selectedParts.hour < 23) {
+    previousDayCycles.forEach((cycle) => {
+      const parsed = parseRealtimeCycleParts(cycle.value);
+      if (parsed && parsed.hour >= 22) selectedValues.add(cycle.value);
+    });
   }
 
   return Array.from(new Set(

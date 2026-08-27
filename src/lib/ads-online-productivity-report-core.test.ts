@@ -113,6 +113,56 @@ test("compares midnight with the previous day's 23h interval", () => {
   assert.equal(report.rows[0].previousSubmit, 18);
 });
 
+test("keeps the operational shift total when the China-day counter resets at 13h", () => {
+  const report = buildAdsOnlineProductivityReportSnapshot({
+    selectedCycle: "2026-08-27 13:30",
+    agentRows: [
+      agent({
+        name: "Morning agent",
+        wbLogin: "wb_morning",
+        shift: "Manhã",
+        presenceStatus: "Online",
+        history: [
+          history("2026-08-27 07:30", 120, 50_000),
+          history("2026-08-27 08:00", 120, 50_000),
+          history("2026-08-27 12:30", 447, 50_000),
+          history("2026-08-27 13:00", 27, 50_000),
+          history("2026-08-27 13:30", 69, 50_000)
+        ]
+      })
+    ]
+  });
+
+  assert.equal(report.rows[0].currentSubmit, 69);
+  assert.equal(report.rows[0].shiftTotal, 396);
+  assert.equal(report.rows[0].ahtMs, 50_000);
+  assert.equal(report.totalShiftSubmit, 396);
+});
+
+test("keeps the night shift total across Sao Paulo midnight", () => {
+  const report = buildAdsOnlineProductivityReportSnapshot({
+    selectedCycle: "2026-08-27 00:30",
+    agentRows: [
+      agent({
+        name: "Night agent",
+        wbLogin: "wb_night_shift",
+        shift: "Noite",
+        presenceStatus: "Online",
+        history: [
+          history("2026-08-26 22:30", 600, 60_000),
+          history("2026-08-26 23:00", 610, 60_000),
+          history("2026-08-26 23:30", 650, 60_000),
+          history("2026-08-27 00:00", 690, 60_000),
+          history("2026-08-27 00:30", 730, 60_000)
+        ]
+      })
+    ]
+  });
+
+  assert.equal(report.rows[0].shiftTotal, 130);
+  assert.equal(report.rows[0].ahtMs, 60_000);
+});
+
 test("builds TNS productivity with VIDEO and COMMENTS while AHT uses VIDEO only", () => {
   const report = buildTnsOnlineProductivityReportSnapshot({
     selectedCycle: "2026-08-26 14:58",
@@ -221,6 +271,7 @@ function agent(input: {
   wbLogin: string;
   lob?: string;
   skill?: string;
+  shift?: string;
   presenceStatus?: string;
   isSchedulePresent?: boolean;
   history: AdsExecutiveAgentRow["history"];
@@ -236,6 +287,7 @@ function agent(input: {
     employeeStatus: "Ativo",
     presenceStatus: input.presenceStatus ?? "Offline",
     isSchedulePresent: input.isSchedulePresent ?? false,
+    shift: input.shift,
     history: input.history
   };
 }

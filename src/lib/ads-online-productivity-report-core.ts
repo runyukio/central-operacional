@@ -5,8 +5,10 @@ import {
   type AdsExecutiveAgentRow,
   type ParsedExecutiveCycle
 } from "@/lib/ads-executive-report-core";
+import { baseTimesForShift } from "@/lib/shift-base-times";
 
 const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 
 export type OnlineProductivityReportScope = "ADS" | "TNS";
 
@@ -96,8 +98,9 @@ function buildOnlineProductivityReportSnapshot(input: {
     const latest = latestAtOrBefore(history, selected.timestamp);
     const reportSkill = reportableSkillForScope(row, input.reportScope);
     const includeInAht = input.reportScope === "ADS" || reportSkill === "VIDEO";
-    const shiftTotal = Math.max(0, finite(latest?.submit));
-    const shiftModerationMs = Math.max(0, finite(latest?.moderationMs));
+    const shift = shiftMetric(history, row.shift, selected.timestamp);
+    const shiftTotal = shift.submit;
+    const shiftModerationMs = shift.moderationMs;
     const ahtMs = includeInAht
       ? shiftTotal > 0 && shiftModerationMs > 0
         ? shiftModerationMs / shiftTotal
@@ -215,6 +218,63 @@ function intervalMetric(history: ParsedHistory[], start: number, end: number): I
     moderationMs: cumulativeDelta(snapshot.moderationMs, baseline?.moderationMs),
     hasSnapshot: true
   };
+}
+
+function shiftMetric(history: ParsedHistory[], shiftName: string | null | undefined, end: number): IntervalMetric {
+  const latest = latestAtOrBefore(history, end);
+  if (!latest) return { submit: 0, moderationMs: 0, hasSnapshot: false };
+
+  const start = operationalShiftStart(shiftName, end);
+  if (start === null) {
+    return {
+      submit: Math.max(0, finite(latest.submit)),
+      moderationMs: Math.max(0, finite(latest.moderationMs)),
+      hasSnapshot: true
+    };
+  }
+
+  const baseline = latestBefore(history, start);
+  const snapshots = history.filter((item) => item.parsed.timestamp >= start && item.parsed.timestamp <= end);
+  if (!snapshots.length) return { submit: 0, moderationMs: 0, hasSnapshot: false };
+
+  // The upstream counters reset at midnight in China (13:00 in Sao Paulo).
+  // Summing each positive cumulative delta preserves the agent's operational
+  // shift total across that reset. A baseline before the shift also removes
+  // work accumulated earlier in the upstream calendar day.
+  if (!baseline) {
+    return {
+      submit: Math.max(0, finite(latest.submit)),
+      moderationMs: Math.max(0, finite(latest.moderationMs)),
+      hasSnapshot: true
+    };
+  }
+
+  let previous = baseline;
+  let submit = 0;
+  let moderationMs = 0;
+  for (const snapshot of snapshots) {
+    submit += cumulativeDelta(snapshot.submit, previous.submit);
+    moderationMs += cumulativeDelta(snapshot.moderationMs, previous.moderationMs);
+    previous = snapshot;
+  }
+  return { submit, moderationMs, hasSnapshot: true };
+}
+
+function operationalShiftStart(shiftName: string | null | undefined, end: number) {
+  const shift = baseTimesForShift(shiftName);
+  if (!shift?.startsAt) return null;
+  const [hour, minute] = shift.startsAt.split(":").map(Number);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+  const selected = new Date(end);
+  let start = Date.UTC(
+    selected.getUTCFullYear(),
+    selected.getUTCMonth(),
+    selected.getUTCDate(),
+    hour,
+    minute
+  );
+  if (start > end) start -= DAY_MS;
+  return start;
 }
 
 function latestBetween(history: ParsedHistory[], start: number, end: number) {
