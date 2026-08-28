@@ -16,6 +16,7 @@ import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import { parseWbLoginBatch } from "@/lib/batch-wb-filter";
 import { getDefaultDatePeriod } from "@/lib/default-date-range";
 import { buildPerformanceAgentsExportPayload } from "@/lib/performance-agents-export";
+import { realtimeHourlyInputFallbackRows } from "@/lib/performance-hourly-input-source";
 import { prisma } from "@/lib/prisma";
 import { QUEUE_METADATA, type QueueLob, type QueueMetadata } from "@/lib/queue-metadata";
 import { QUEUE_REPORT_METADATA, getQueueReportMetadataById } from "@/lib/queue-report-metadata";
@@ -566,6 +567,7 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
     `)
   ]);
   const trendMap = new Map<string, ProductionDashboardAggregate>();
+  const importedInputBuckets = new Set<string>();
   const queueMap = new Map<string, ProductionDashboardQueueAggregate & { agentCount: number }>();
 
   for (const row of productionTrendRows) {
@@ -578,13 +580,14 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
   }
   for (const row of volumeTrendRows) {
     const bucket = productionBucket(row.bucket, granularity);
+    importedInputBuckets.add(bucket.key);
     const aggregate = ensureProductionAggregate(trendMap, bucket.key);
     aggregate.input += Number(row.input ?? 0);
     aggregate.records += Number(row.records ?? 0);
   }
   if (requestedLob === "ADS" && granularity === "hourly") {
     const realtimeHourlyInput = await realtimeAdsHourlyInput(productionPeriod);
-    for (const row of realtimeHourlyInput) {
+    for (const row of realtimeHourlyInputFallbackRows(importedInputBuckets, realtimeHourlyInput)) {
       const aggregate = ensureProductionAggregate(trendMap, row.key);
       aggregate.input = row.input;
     }
