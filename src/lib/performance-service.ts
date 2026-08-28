@@ -15,6 +15,7 @@ import {
 import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import { parseWbLoginBatch } from "@/lib/batch-wb-filter";
 import { getDefaultDatePeriod } from "@/lib/default-date-range";
+import { isPerformanceAdsQueueId, PERFORMANCE_ADS_QUEUE_IDS } from "@/lib/performance-ads-queues";
 import { buildPerformanceAgentsExportPayload } from "@/lib/performance-agents-export";
 import { realtimeHourlyInputFallbackRows } from "@/lib/performance-hourly-input-source";
 import { prisma } from "@/lib/prisma";
@@ -4585,7 +4586,7 @@ function frameworkGroupsForEmployee(employee: Pick<PerformanceEmployee, "lob" | 
 }
 
 function frameworkGroupsForProductionRecord(employee: Pick<PerformanceEmployee, "lob" | "skill">, record: Pick<ProductionRecordForMetrics, "queueId">) {
-  const queueLob = QUEUE_METADATA[String(record.queueId ?? "").trim()]?.lob;
+  const queueLob = getPerformanceQueueMetadataById(record.queueId).lob;
   if (queueLob === "ADS") return ["ADS"] satisfies FrameworkGroupKey[];
   if (queueLob === "VIDEO") return ["TNS", "TNS_VIDEO"] satisfies FrameworkGroupKey[];
   if (queueLob === "COMMENTS") return ["TNS", "TNS_COMMENTS"] satisfies FrameworkGroupKey[];
@@ -4749,6 +4750,7 @@ function performanceLobOptions() {
 
 function getPerformanceQueueMetadataById(queueId?: string | null): QueueMetadata {
   const normalizedQueueId = String(queueId ?? "").trim();
+  if (isPerformanceAdsQueueId(normalizedQueueId)) return { lob: "ADS", slaTargetMinutes: 120 };
   const metadata = getQueueMetadataById(normalizedQueueId);
   if (!normalizedQueueId || QUEUE_METADATA[normalizedQueueId]) return metadata;
   const reportMetadata = getQueueReportMetadataById(normalizedQueueId);
@@ -4829,7 +4831,7 @@ async function buildProductionDashboardPanel(period: Period) {
   }
 
   const unmappedQueues = Array.from(queueMap.values())
-    .filter((item) => item.queueId === "Sem Fila ID" || !QUEUE_METADATA[item.queueId])
+    .filter((item) => item.queueId === "Sem Fila ID" || getPerformanceQueueMetadataById(item.queueId).lob === "N/A")
     .sort((a, b) => (b.productionRows + b.volumeRows) - (a.productionRows + a.volumeRows))
     .slice(0, 50)
     .map((item) => ({
@@ -4951,7 +4953,7 @@ function queueWhereByPerformanceLob(lob: string) {
 }
 
 function allPerformanceQueueIds() {
-  return unique([...Object.keys(QUEUE_METADATA), ...Object.keys(QUEUE_REPORT_METADATA)]);
+  return unique([...Object.keys(QUEUE_METADATA), ...Object.keys(QUEUE_REPORT_METADATA), ...PERFORMANCE_ADS_QUEUE_IDS]);
 }
 
 async function extendProductionPeriodToLatestRealtimeAds(period: Period): Promise<Period> {
