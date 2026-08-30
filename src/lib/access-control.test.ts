@@ -18,10 +18,45 @@ import {
   canViewEmployeeProfileBillingPreview
 } from "@/lib/permissions";
 
-test("perfil de terceiros nunca expõe a prévia do invoice", () => {
-  assert.equal(canViewEmployeeProfileBillingPreview("employee-own", "employee-own"), true);
-  assert.equal(canViewEmployeeProfileBillingPreview("employee-staff", "employee-other"), false);
-  assert.equal(canViewEmployeeProfileBillingPreview(null, "employee-other"), false);
+test("prévia de invoice no perfil fica disponível ao próprio parceiro e a supervisor somente para agentes", () => {
+  assert.equal(canViewEmployeeProfileBillingPreview({
+    viewer: { role: "COLABORADOR", status: "ACTIVE" },
+    target: { roleTitle: "Agente" },
+    viewerEmployeeId: "employee-own",
+    targetEmployeeId: "employee-own"
+  }), true);
+  assert.equal(canViewEmployeeProfileBillingPreview({
+    viewer: { role: "SUPERVISOR", status: "ACTIVE" },
+    target: { roleTitle: "Agente" },
+    viewerEmployeeId: "employee-supervisor",
+    targetEmployeeId: "employee-agent"
+  }), true);
+  for (const roleTitle of ["Supervisor", "WFM", "Qualidade", "Financeiro", "RTA"]) {
+    assert.equal(canViewEmployeeProfileBillingPreview({
+      viewer: { role: "SUPERVISOR", status: "ACTIVE" },
+      target: { roleTitle },
+      viewerEmployeeId: "employee-supervisor",
+      targetEmployeeId: `employee-${roleTitle}`
+    }), false, roleTitle);
+  }
+  assert.equal(canViewEmployeeProfileBillingPreview({
+    viewer: { role: "WFM", status: "ACTIVE" },
+    target: { roleTitle: "Agente" },
+    viewerEmployeeId: "employee-staff",
+    targetEmployeeId: "employee-agent"
+  }), false);
+  assert.equal(canViewEmployeeProfileBillingPreview({
+    viewer: { role: "SUPERVISOR", status: "ACTIVE" },
+    target: { roleTitle: "Agente", role: "WFM" },
+    viewerEmployeeId: "employee-supervisor",
+    targetEmployeeId: "employee-staff"
+  }), false);
+  assert.equal(canViewEmployeeProfileBillingPreview({
+    viewer: { role: "SUPERVISOR", status: "INACTIVE" },
+    target: { roleTitle: "Agente" },
+    viewerEmployeeId: "employee-supervisor",
+    targetEmployeeId: "employee-agent"
+  }), false);
 });
 
 test("Campanha separa a visão do agente ADS da gestão Staff", () => {

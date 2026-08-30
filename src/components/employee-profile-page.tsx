@@ -358,7 +358,11 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
           </Panel>
 
           {data.billing ? (
-            <Panel title="Prévia de Invoice" action="Ver detalhes" actionOnClick={() => window.location.assign(profileLinks.invoice)}>
+            <Panel
+              title="Prévia de Invoice"
+              action={data.viewer.isOwnProfile ? "Ver detalhes" : undefined}
+              actionOnClick={data.viewer.isOwnProfile ? () => window.location.assign(profileLinks.invoice) : undefined}
+            >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="text-sm font-black text-navy-950">{data.billing.monthLabel}</p>

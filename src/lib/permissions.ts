@@ -66,8 +66,20 @@ export function canViewEmployeeSensitiveData(user: PermissionUser, employee?: Pe
   return isActiveUser(user) && roleHasCapability(user.role, "EMPLOYEE_SENSITIVE");
 }
 
-export function canViewEmployeeProfileBillingPreview(viewerEmployeeId?: string | null, targetEmployeeId?: string | null) {
-  return Boolean(viewerEmployeeId && targetEmployeeId && viewerEmployeeId === targetEmployeeId);
+export function canViewEmployeeProfileBillingPreview(input: {
+  viewer: PermissionUser;
+  target: PermissionEmployee;
+  viewerEmployeeId?: string | null;
+  targetEmployeeId?: string | null;
+}) {
+  if (!isActiveUser(input.viewer)) return false;
+  if (input.viewerEmployeeId && input.targetEmployeeId && input.viewerEmployeeId === input.targetEmployeeId) return true;
+  const targetSystemRole = input.target.role ? normalizeRole(input.target.role) : null;
+  return (
+    normalizeRole(input.viewer.role) === "SUPERVISOR"
+    && isAgentEmployee(input.target)
+    && (!targetSystemRole || targetSystemRole === "COLABORADOR")
+  );
 }
 
 export function canEditEmployeeData(user: PermissionUser, employee?: PermissionEmployee | null) {

@@ -115,7 +115,12 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
     const viewerRole = normalizeRole(viewer.role.name);
     const isOwnProfile = viewer.employeeProfile?.id === employee.id;
     const canViewDiversityData = isOwnProfile || canViewEmployeeSensitiveData({ role: viewer.role.name, status: viewer.status });
-    const canViewBillingPreview = canViewEmployeeProfileBillingPreview(viewer.employeeProfile?.id, employee.id);
+    const canViewBillingPreview = canViewEmployeeProfileBillingPreview({
+      viewer: { role: viewer.role.name, status: viewer.status },
+      target: { roleTitle: employee.roleTitle, role: employee.user?.role?.name },
+      viewerEmployeeId: viewer.employeeProfile?.id,
+      targetEmployeeId: employee.id
+    });
     const [schedule, workHours, requests, equipments, mood, performance, billing, anonymousFeedbacks] = await Promise.all([
       profileSection("schedule", employee.id, buildScheduleSummary(employee.id, period)),
       profileSection("work_hours", employee.id, buildWorkHoursSummary(employee.id, period)),
@@ -155,7 +160,7 @@ export async function getEmployeeProfileDashboard(actor: Actor, employeeId?: str
       viewerRole,
       isOwnProfile,
       employeeId: employee.id,
-      sections: isOwnProfile ? 8 : 6
+      sections: 6 + Number(Boolean(billing)) + Number(Boolean(anonymousFeedbacks))
     });
     return response;
   } catch (error) {
