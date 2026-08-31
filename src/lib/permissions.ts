@@ -74,6 +74,7 @@ export function canViewEmployeeProfileBillingPreview(input: {
 }) {
   if (!isActiveUser(input.viewer)) return false;
   if (input.viewerEmployeeId && input.targetEmployeeId && input.viewerEmployeeId === input.targetEmployeeId) return true;
+  if (normalizeRole(input.viewer.role) === "ADMIN") return true;
   const targetSystemRole = input.target.role ? normalizeRole(input.target.role) : null;
   return (
     normalizeRole(input.viewer.role) === "SUPERVISOR"

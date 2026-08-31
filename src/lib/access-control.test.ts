@@ -18,7 +18,7 @@ import {
   canViewEmployeeProfileBillingPreview
 } from "@/lib/permissions";
 
-test("prévia de invoice no perfil fica disponível ao próprio parceiro e a supervisor somente para agentes", () => {
+test("prévia de invoice no perfil fica disponível ao próprio parceiro, a ADMIN para todos e a supervisor somente para agentes", () => {
   assert.equal(canViewEmployeeProfileBillingPreview({
     viewer: { role: "COLABORADOR", status: "ACTIVE" },
     target: { roleTitle: "Agente" },
@@ -31,6 +31,19 @@ test("prévia de invoice no perfil fica disponível ao próprio parceiro e a sup
     viewerEmployeeId: "employee-supervisor",
     targetEmployeeId: "employee-agent"
   }), true);
+  for (const target of [
+    { roleTitle: "Agente", role: "COLABORADOR" },
+    { roleTitle: "Supervisor", role: "SUPERVISOR" },
+    { roleTitle: "WFM", role: "WFM" },
+    { roleTitle: "Financeiro", role: "FINANCEIRO" }
+  ]) {
+    assert.equal(canViewEmployeeProfileBillingPreview({
+      viewer: { role: "ADMIN", status: "ACTIVE" },
+      target,
+      viewerEmployeeId: "employee-admin",
+      targetEmployeeId: `employee-${target.role}`
+    }), true, target.role);
+  }
   for (const roleTitle of ["Supervisor", "WFM", "Qualidade", "Financeiro", "RTA"]) {
     assert.equal(canViewEmployeeProfileBillingPreview({
       viewer: { role: "SUPERVISOR", status: "ACTIVE" },
