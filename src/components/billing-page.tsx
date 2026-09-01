@@ -644,7 +644,7 @@ export function BillingPage() {
             <div className="card overflow-hidden">
               <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
                 {tabs.map(([key, label]) => (
-                  <button key={key} type="button" onClick={() => setActiveTab(key)} className={cn("inline-flex items-center justify-center rounded-lg px-3 py-2 text-xs font-black leading-none", activeTab === key ? "bg-blue-600 text-white" : "text-muted hover:bg-blue-50 hover:text-blue-700")}>
+                  <button key={key} type="button" onClick={() => setActiveTab(key)} className={cn("inline-flex items-center justify-center rounded-lg border px-3 py-2 text-xs font-black leading-none transition", activeTab === key ? "border-blue-600 bg-blue-600 text-white" : "border-transparent bg-slate-50 text-muted hover:bg-blue-50 hover:text-blue-700")}>
                     {label}
                   </button>
                 ))}

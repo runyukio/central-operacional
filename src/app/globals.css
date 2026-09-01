@@ -301,6 +301,10 @@ html.dark {
   --navy-2: #e4e4e7;
   --blue: #60a5fa;
   --surface: #0b0b0d;
+  --surface-raised: #151518;
+  --surface-nested: #1b1b1f;
+  --surface-muted: #202024;
+  --surface-hover: #27272c;
   --ink: #f4f4f5;
   --muted: #a1a1aa;
   --border: rgba(161, 161, 170, 0.22);
@@ -311,16 +315,15 @@ html.dark {
 
 html.dark body {
   background:
-    radial-gradient(circle at 78% -12%, rgba(255, 255, 255, 0.035), transparent 32rem),
-    radial-gradient(circle at 12% 0%, rgba(59, 130, 246, 0.045), transparent 28rem),
+    radial-gradient(circle at 78% -12%, rgba(255, 255, 255, 0.03), transparent 32rem),
+    radial-gradient(circle at 12% 0%, rgba(59, 130, 246, 0.025), transparent 28rem),
     linear-gradient(180deg, #101012 0%, #0b0b0d 46%, #070708 100%),
     #09090b;
   color: var(--ink);
 }
 
 .dark main[class*="bg-["],
-.dark section[class*="bg-["],
-.dark div[class*="bg-["] {
+.dark section[class*="bg-["] {
   background:
     radial-gradient(circle at 78% 8%, rgba(255, 255, 255, 0.028), transparent 28rem),
     linear-gradient(135deg, rgba(21, 21, 24, 0.98) 0%, rgba(12, 12, 14, 0.97) 52%, rgba(18, 18, 20, 0.98) 100%),
@@ -337,7 +340,7 @@ html.dark body {
 
 .dark .card {
   border-color: var(--border);
-  background: rgba(21, 21, 24, 0.97);
+  background: color-mix(in srgb, var(--surface-raised) 97%, transparent);
   box-shadow: var(--card-shadow);
 }
 
@@ -347,7 +350,7 @@ html.dark body {
 
 .dark .glass-panel {
   border-color: var(--border);
-  background: rgba(20, 20, 23, 0.86);
+  background: color-mix(in srgb, var(--surface-raised) 86%, transparent);
 }
 
 .dark .app-sidebar {
@@ -460,35 +463,85 @@ html.dark body {
 
 .dark .bg-surface,
 .dark .hover\:bg-surface:hover {
-  background-color: #18181b;
+  background-color: var(--surface-nested);
 }
 
-.dark [class*="bg-white"],
-.dark [class*="bg-slate-50"],
-.dark [class*="bg-slate-100"],
-.dark [class*="bg-slate-900"],
-.dark [class*="bg-slate-950"] {
-  background-color: rgba(21, 21, 24, 0.97);
+.dark :is(
+  [class~="bg-white"],
+  [class~="bg-white/70"],
+  [class~="bg-white/80"],
+  [class~="bg-white/94"],
+  [class~="bg-white/95"],
+  [class~="bg-slate-50"],
+  [class~="bg-slate-50/30"],
+  [class~="bg-slate-50/35"],
+  [class~="bg-slate-50/40"],
+  [class~="bg-slate-50/45"],
+  [class~="bg-slate-50/55"],
+  [class~="bg-slate-50/60"],
+  [class~="bg-slate-50/70"],
+  [class~="bg-slate-50/80"],
+  [class~="bg-slate-50/95"],
+  [class~="bg-slate-100"],
+  [class~="bg-slate-100/80"],
+  [class~="bg-slate-900"],
+  [class~="bg-slate-950"]
+) {
+  background-color: var(--surface-nested);
 }
 
-.dark [class*="from-white"],
-.dark [class*="from-slate-50"],
-.dark [class*="from-slate-900"] {
-  --tw-gradient-from: rgba(21, 21, 24, 0.97) var(--tw-gradient-from-position);
+.dark :is(
+  [class~="bg-slate-200"],
+  [class~="bg-slate-300"],
+  [class~="bg-slate-400"],
+  [class~="bg-slate-500"],
+  [class~="bg-zinc-200"]
+) {
+  background-color: var(--surface-muted);
+}
+
+.dark .bg-navy-900,
+.dark .bg-navy-950 {
+  background-color: var(--surface-muted);
+}
+
+.dark .border-navy-950 {
+  border-color: var(--border-strong);
+}
+
+.dark :is([class~="from-white"], [class~="from-slate-50"], [class~="from-slate-900"]) {
+  --tw-gradient-from: var(--surface-raised) var(--tw-gradient-from-position);
   --tw-gradient-to: rgba(21, 21, 24, 0) var(--tw-gradient-to-position);
   --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to);
 }
 
-.dark [class*="to-white"],
-.dark [class*="to-slate-50"],
-.dark [class*="to-slate-100"],
-.dark [class*="to-slate-800"] {
-  --tw-gradient-to: rgba(32, 32, 36, 0.9) var(--tw-gradient-to-position);
+.dark :is([class~="from-blue-50"], [class~="from-blue-50/80"]) {
+  --tw-gradient-from: rgba(37, 99, 235, 0.2) var(--tw-gradient-from-position);
+  --tw-gradient-to: rgba(37, 99, 235, 0) var(--tw-gradient-to-position);
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to);
+}
+
+.dark :is(
+  [class~="to-white"],
+  [class~="to-slate-50"],
+  [class~="to-slate-50/65"],
+  [class~="to-slate-50/70"],
+  [class~="to-slate-50/80"],
+  [class~="to-slate-100"],
+  [class~="to-slate-800"]
+) {
+  --tw-gradient-to: color-mix(in srgb, var(--surface-muted) 90%, transparent) var(--tw-gradient-to-position);
+}
+
+.dark :is([class~="to-blue-50"], [class~="to-blue-50/70"]) {
+  --tw-gradient-to: rgba(37, 99, 235, 0.08) var(--tw-gradient-to-position);
 }
 
 .dark .text-ink,
 .dark .text-navy-950,
 .dark .text-navy-900,
+.dark .text-navy-800,
+.dark .text-navy-700,
 .dark .text-slate-900,
 .dark .text-slate-800,
 .dark .text-slate-700 {
@@ -496,6 +549,7 @@ html.dark body {
 }
 
 .dark .text-muted,
+.dark .text-slate-300,
 .dark .text-slate-600,
 .dark .text-slate-500,
 .dark .text-slate-400 {
@@ -503,12 +557,20 @@ html.dark body {
 }
 
 .dark .border-border,
-.dark [class*="border-slate"],
-.dark [class*="border-blue-100"],
-.dark [class*="border-blue-200"],
-.dark [class*="border-amber-200"],
-.dark [class*="border-red-200"],
-.dark [class*="border-emerald-200"] {
+.dark :is(
+  [class~="border-slate-100"],
+  [class~="border-slate-200"],
+  [class~="border-slate-200/70"],
+  [class~="border-slate-200/80"],
+  [class~="border-slate-300"],
+  [class~="border-slate-700"],
+  [class~="border-slate-950"],
+  [class~="border-blue-100"],
+  [class~="border-blue-200"],
+  [class~="border-amber-200"],
+  [class~="border-red-200"],
+  [class~="border-emerald-200"]
+) {
   border-color: var(--border);
 }
 
@@ -518,41 +580,54 @@ html.dark body {
 }
 
 .dark .ring-white,
-.dark [class*="ring-white"] {
+.dark [class~="ring-white"] {
   --tw-ring-color: rgba(161, 161, 170, 0.18);
 }
 
-.dark [class*="bg-blue-50"] {
+.dark :is(
+  [class~="bg-blue-50"],
+  [class~="bg-blue-50/30"],
+  [class~="bg-blue-50/35"],
+  [class~="bg-blue-50/40"],
+  [class~="bg-blue-50/45"],
+  [class~="bg-blue-50/50"],
+  [class~="bg-blue-50/55"],
+  [class~="bg-blue-50/60"],
+  [class~="bg-blue-50/65"],
+  [class~="bg-blue-50/70"],
+  [class~="bg-blue-50/80"]
+) {
   background-color: rgba(37, 99, 235, 0.16);
 }
 
-.dark [class*="bg-emerald-50"] {
+.dark :is([class~="bg-blue-100"], [class~="bg-blue-200"]) {
+  background-color: rgba(37, 99, 235, 0.2);
+}
+
+.dark :is([class~="bg-emerald-50"], [class~="bg-emerald-50/60"], [class~="bg-emerald-50/70"], [class~="bg-emerald-50/80"]) {
   background-color: rgba(16, 185, 129, 0.14);
 }
 
-.dark [class*="bg-red-50"] {
+.dark :is([class~="bg-red-50"], [class~="bg-red-50/40"], [class~="bg-red-50/70"]) {
   background-color: rgba(239, 68, 68, 0.14);
 }
 
-.dark [class*="bg-amber-50"],
-.dark [class*="bg-orange-50"] {
+.dark :is([class~="bg-amber-50"], [class~="bg-amber-50/70"], [class~="bg-orange-50"], [class~="bg-orange-50/70"]) {
   background-color: rgba(245, 158, 11, 0.14);
 }
 
-.dark [class*="bg-violet-50"],
-.dark [class*="bg-purple-50"] {
+.dark :is([class~="bg-violet-50"], [class~="bg-violet-50/80"], [class~="bg-purple-50"]) {
   background-color: rgba(139, 92, 246, 0.16);
 }
 
-.dark [class*="bg-cyan-50"],
-.dark [class*="bg-sky-50"],
-.dark [class*="bg-teal-50"] {
+.dark :is([class~="bg-cyan-50"], [class~="bg-sky-50"], [class~="bg-teal-50"]) {
   background-color: rgba(14, 165, 233, 0.14);
 }
 
 .dark .text-blue-600,
 .dark .text-blue-700,
-.dark .text-blue-800 {
+.dark .text-blue-800,
+.dark .text-blue-900 {
   color: #93c5fd;
 }
 
@@ -581,9 +656,18 @@ html.dark body {
   color: #c4b5fd;
 }
 
+.dark .text-cyan-600,
+.dark .text-cyan-700,
+.dark .text-sky-600,
+.dark .text-sky-700,
+.dark .text-teal-600,
+.dark .text-teal-700 {
+  color: #67e8f9;
+}
+
 .dark .hover\:bg-slate-100:hover,
 .dark .hover\:bg-blue-50:hover {
-  background-color: rgba(39, 39, 42, 0.92);
+  background-color: var(--surface-hover);
 }
 
 .dark table,
@@ -591,4 +675,34 @@ html.dark body {
 .dark tbody,
 .dark tr {
   border-color: var(--border);
+}
+
+.dark table {
+  background-color: transparent;
+}
+
+.dark thead:is([class~="bg-slate-50"], [class~="bg-slate-50/95"], [class~="bg-slate-100"]),
+.dark thead tr:is([class~="bg-slate-50"], [class~="bg-slate-100"]),
+.dark tr:is([class~="bg-gradient-to-b"], [class~="bg-gradient-to-r"], [class~="bg-gradient-to-br"]) {
+  background-color: var(--surface-muted);
+  background-image: none;
+}
+
+.dark tbody[class~="bg-white"] {
+  background-color: var(--surface-raised);
+}
+
+.dark tbody tr[class~="odd:bg-white"]:nth-child(odd),
+.dark tbody tr[class~="bg-white"] {
+  background-color: var(--surface-raised);
+}
+
+.dark tbody tr:is([class~="even:bg-slate-50/35"], [class~="even:bg-slate-50/45"], [class~="even:bg-slate-50/55"], [class~="even:bg-slate-50/60"], [class~="even:bg-slate-50/70"]):nth-child(even),
+.dark tbody tr:is([class~="bg-slate-50"], [class~="bg-slate-50/35"], [class~="bg-slate-50/40"], [class~="bg-slate-50/55"], [class~="bg-slate-50/60"], [class~="bg-slate-50/70"]) {
+  background-color: var(--surface-nested);
+}
+
+.dark tbody tr:is([class~="hover:bg-blue-50"], [class~="hover:bg-blue-50/30"], [class~="hover:bg-blue-50/35"], [class~="hover:bg-blue-50/40"], [class~="hover:bg-blue-50/45"], [class~="hover:bg-blue-50/50"], [class~="hover:bg-blue-50/60"]):hover,
+.dark tbody tr:is([class~="hover:bg-slate-50"], [class~="hover:bg-slate-100"]):hover {
+  background-color: var(--surface-hover);
 }

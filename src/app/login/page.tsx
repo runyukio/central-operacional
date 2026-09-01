@@ -53,7 +53,7 @@ export default function LoginPage() {
         </button>
       </div>
       <section className="relative hidden overflow-hidden bg-[radial-gradient(circle_at_18%_18%,rgba(37,99,235,.14),transparent_20rem),linear-gradient(135deg,#FFFFFF_0%,#F6F8FC_48%,#EAF1FF_100%)] text-navy-950 lg:block">
-        <div className="absolute inset-0 bg-[linear-gradient(120deg,rgba(255,255,255,.9),rgba(255,255,255,.35)),radial-gradient(circle_at_84%_82%,rgba(37,99,235,.18),transparent_26rem)]" />
+        <div className="absolute inset-0 bg-[linear-gradient(120deg,rgba(255,255,255,.9),rgba(255,255,255,.35)),radial-gradient(circle_at_84%_82%,rgba(37,99,235,.18),transparent_26rem)] dark:opacity-0" />
         <div className="relative flex h-full flex-col justify-between p-12">
           <div className="flex items-center gap-3">
             <div className="grid h-12 w-12 place-items-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 text-white shadow-lg shadow-blue-950/25 ring-1 ring-white/40">
