@@ -90,6 +90,20 @@ test("valida tomador, prestador, tributação e NBS do fluxo Omie", () => {
   });
 });
 
+test("aceita o Código da NBS alternativo no fluxo Omie", () => {
+  assert.deepEqual(validateBillingFiscalComplianceFields({
+    customerTaxId: "58.151.940/0001-61",
+    supplierTaxId: "62.388.834/0001-73",
+    taxationCode: "17.02.01",
+    nbsCode: "14011300"
+  }, "62.388.834/0001-73"), {
+    customerTaxId: "58151940000161",
+    supplierTaxId: "62388834000173",
+    taxationCode: "17.02.01",
+    nbsCode: "1.401.13.00"
+  });
+});
+
 test("extrai os campos fiscais obrigatórios do XML", async () => {
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
     <Nfse>
@@ -132,7 +146,7 @@ test("explica cada divergência fiscal para o parceiro corrigir", () => {
   );
   assert.throws(
     () => validateBillingFiscalComplianceFields({ ...valid, nbsCode: "1.111.11.11" }, valid.supplierTaxId),
-    /Código da NBS incorreto.*1\.703\.99\.00/i
+    /Código da NBS incorreto.*1\.703\.99\.00 ou 1\.401\.13\.00/i
   );
   assert.throws(
     () => validateBillingFiscalComplianceFields({ ...valid, customerTaxId: "" }, valid.supplierTaxId),
@@ -148,7 +162,7 @@ test("explica cada divergência fiscal para o parceiro corrigir", () => {
   );
   assert.throws(
     () => validateBillingFiscalComplianceFields({ ...valid, nbsCode: "" }, valid.supplierTaxId),
-    /Não foi possível identificar o Código da NBS.*1\.703\.99\.00/i
+    /Não foi possível identificar o Código da NBS.*1\.703\.99\.00 ou 1\.401\.13\.00/i
   );
 });
 

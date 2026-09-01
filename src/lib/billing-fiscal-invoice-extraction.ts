@@ -13,6 +13,12 @@ const MAX_IMAGE_DIMENSION = 2_400;
 export const BILLING_FISCAL_EXPECTED_CUSTOMER_TAX_ID = "58151940000161";
 export const BILLING_FISCAL_EXPECTED_TAXATION_CODE = "17.02.01";
 export const BILLING_FISCAL_EXPECTED_NBS_CODE = "1.703.99.00";
+export const BILLING_FISCAL_ALLOWED_NBS_CODES = [
+  BILLING_FISCAL_EXPECTED_NBS_CODE,
+  "1.401.13.00"
+] as const;
+
+const BILLING_FISCAL_ALLOWED_NBS_CODES_LABEL = BILLING_FISCAL_ALLOWED_NBS_CODES.join(" ou ");
 
 export type BillingFiscalExtractionMethod = "PDF_TEXT" | "OCR" | "XML";
 
@@ -222,12 +228,12 @@ export function validateBillingFiscalComplianceFields(
   }
   if (!nbsCode) {
     throw new BillingFiscalExtractionError(
-      `Não foi possível identificar o Código da NBS. A NFS-e deve informar ${BILLING_FISCAL_EXPECTED_NBS_CODE}.`
+      `Não foi possível identificar o Código da NBS. A NFS-e deve informar ${BILLING_FISCAL_ALLOWED_NBS_CODES_LABEL}.`
     );
   }
-  if (nbsCode !== BILLING_FISCAL_EXPECTED_NBS_CODE) {
+  if (!BILLING_FISCAL_ALLOWED_NBS_CODES.some((allowedCode) => allowedCode === nbsCode)) {
     throw new BillingFiscalExtractionError(
-      `Código da NBS incorreto: a nota informa ${nbsCode}, mas deve informar ${BILLING_FISCAL_EXPECTED_NBS_CODE}. Corrija e emita novamente a NFS-e.`
+      `Código da NBS incorreto: a nota informa ${nbsCode}, mas deve informar ${BILLING_FISCAL_ALLOWED_NBS_CODES_LABEL}. Corrija e emita novamente a NFS-e.`
     );
   }
 
