@@ -185,7 +185,7 @@ export function calculateOmieIssueDate(referenceMonth: string) {
   if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
     throw new OmieIntegrationError("Mês de referência inválido para calcular a data de emissão no Omie.");
   }
-  return new Date(Date.UTC(year, month - 1, 0, 12));
+  return new Date(Date.UTC(year, month, 0, 12));
 }
 
 export function buildOmieAttachmentIntegrationCode(employeeInvoiceId: string, documentHash?: string | null) {
