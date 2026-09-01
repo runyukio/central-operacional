@@ -8,6 +8,7 @@ import { canAccessPathForRole, getNavItems } from "@/lib/navigation";
 import {
   canAccessCampaignAgent,
   canManageCampaignStaff,
+  canAccessOwnPerformance,
   canAccessPerformance,
   canAccessRealTime,
   canAccessWorkSessionMonitoring,
@@ -192,6 +193,29 @@ test("Qualidade, Supervisor e WFM acessam Performance", () => {
   for (const role of ["QUALIDADE", "SUPERVISOR", "WFM"]) {
     assert.equal(roleHasCapability(role, "PERFORMANCE"), true, role);
     assert.equal(canAccessPerformance({ role, status: "ACTIVE" }), true, role);
+  }
+});
+
+test("Meus Dados da Performance fica restrito ao próprio agente ativo", () => {
+  const agent = { role: "COLABORADOR", roleTitle: "Agente", status: "ACTIVE" };
+
+  assert.equal(canAccessOwnPerformance(agent), true);
+  assert.equal(canAccessPerformance(agent), false);
+  assert.equal(getNavItems(agent).some((item) => item.href === "/performance/meus-dados"), true);
+  assert.equal(getNavItems(agent).some((item) => item.href === "/performance"), false);
+  assert.equal(canAccessPathForRole("/performance/meus-dados", agent), true);
+  assert.equal(canAccessPathForRole("/api/performance/me", agent), true);
+  assert.equal(canAccessPathForRole("/api/performance", agent), false);
+
+  for (const denied of [
+    { role: "COLABORADOR", roleTitle: "Supervisor", status: "ACTIVE" },
+    { role: "SUPERVISOR", roleTitle: "Supervisor", status: "ACTIVE" },
+    { role: "ADMIN", roleTitle: "Administrador", status: "ACTIVE" },
+    { role: "COLABORADOR", roleTitle: "Agente", status: "INACTIVE" }
+  ]) {
+    assert.equal(canAccessOwnPerformance(denied), false);
+    assert.equal(getNavItems(denied).some((item) => item.href === "/performance/meus-dados"), false);
+    assert.equal(canAccessPathForRole("/performance/meus-dados", denied), false);
   }
 });
 

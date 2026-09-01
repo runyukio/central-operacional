@@ -8,6 +8,7 @@ import {
   Bell,
   CalendarDays,
   CalendarRange,
+  ChartNoAxesCombined,
   ChevronDown,
   ChevronRight,
   ClipboardCheck,
@@ -34,6 +35,7 @@ import {
   ShieldCheck,
   Sparkles,
   Sun,
+  Trophy,
   UserPlus,
   UserCircle,
   UsersRound
@@ -48,6 +50,7 @@ const icons = {
   CalendarDays,
   UserPlus,
   CalendarRange,
+  ChartNoAxesCombined,
   Clock,
   ClipboardList,
   ClipboardCheck,
@@ -65,6 +68,7 @@ const icons = {
   Gift,
   ScrollText,
   Settings,
+  Trophy,
   UserCircle
 };
 

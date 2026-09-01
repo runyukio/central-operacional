@@ -169,6 +169,15 @@ export function canAccessPerformance(user: PermissionUser) {
   return isActiveUser(user) && roleHasCapability(user.role, "PERFORMANCE");
 }
 
+export function canAccessOwnPerformance(user: PermissionUser) {
+  return (
+    isActiveUser(user)
+    && normalizeRole(user.role) === "COLABORADOR"
+    && roleHasCapability(user.role, "PERSONAL")
+    && isAgentJobTitle(user.roleTitle ?? user.jobTitle)
+  );
+}
+
 export function canAccessCampaignAgent(user: PermissionUser) {
   return (
     isActiveUser(user)

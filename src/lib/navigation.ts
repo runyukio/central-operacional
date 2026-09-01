@@ -1,6 +1,7 @@
 import type { AppRole } from "@/lib/demo-auth";
 import { rolesWithCapability } from "@/lib/access-control";
 import {
+  canAccessOwnPerformance,
   canAccessPerformance,
   canAccessCampaignAgent,
   canManageCampaignStaff,
@@ -42,7 +43,8 @@ export const navSections: NavSection[] = [
       { label: "Real Time", href: "/real-time", icon: "MonitorCog", roles: rolesWithCapability("REALTIME_QUEUES") },
       { label: "Captura de Horas", href: "/captura-horas", icon: "Clock", roles: rolesWithCapability("CAPTURE") },
       { label: "Necessidade", href: "/staff-cobertura", icon: "UsersRound", roles: rolesWithCapability("STAFF_COVERAGE") },
-      { label: "Performance", href: "/performance", icon: "Trophy", roles: rolesWithCapability("PERFORMANCE") }
+      { label: "Performance", href: "/performance", icon: "Trophy", roles: rolesWithCapability("PERFORMANCE") },
+      { label: "Meus Dados", href: "/performance/meus-dados", icon: "ChartNoAxesCombined", roles: personalRoles }
     ]
   },
   {
@@ -100,6 +102,7 @@ export function getNavItems(userOrRole?: string | PermissionUser) {
     if (item.href === "/real-time") return canAccessRealTimeQueues(permissionUser);
     if (item.href === "/staff-cobertura") return canAccessStaffCoverage(permissionUser);
     if (item.href === "/performance") return canAccessPerformance(permissionUser);
+    if (item.href === "/performance/meus-dados") return canAccessOwnPerformance(permissionUser);
     if (item.href === "/campanha") return canAccessCampaignAgent(permissionUser) || canManageCampaignStaff(permissionUser);
     if (item.href === "/campanha/agente") return canAccessCampaignAgent(permissionUser);
     if (item.href === "/campanha/staff") return canManageCampaignStaff(permissionUser);
@@ -126,6 +129,13 @@ export function canAccessPathForRole(pathname: string, userOrRole?: string | Per
   const permissionUser = { ...user, status: user?.status ?? "ACTIVE" };
 
   if (pathname === "/" || pathname === "/alterar-senha") return true;
+
+  if (
+    pathname === "/performance/meus-dados"
+    || pathname.startsWith("/performance/meus-dados/")
+    || pathname === "/api/performance/me"
+    || pathname.startsWith("/api/performance/me/")
+  ) return canAccessOwnPerformance(permissionUser);
 
   if (normalizedRole === "CLIENT") {
     if (pathname === "/staff-cobertura" || pathname.startsWith("/staff-cobertura/") || pathname === "/api/staff-coverage" || pathname.startsWith("/api/staff-coverage/")) return canAccessStaffCoverage(permissionUser);

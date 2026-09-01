@@ -5,6 +5,7 @@ import { AuditAction, Prisma, type ScheduleStatus } from "@prisma/client";
 import type { Actor } from "@/lib/mock-db";
 import { calculateCecQualityAggregate } from "@/lib/cec-quality";
 import {
+  canAccessOwnPerformance,
   canAccessPerformance,
   canAccessPerformanceFramework,
   canAccessPerformanceWfh,
@@ -470,6 +471,28 @@ export async function getPerformanceDashboard(actor: Actor, query: PerformanceQu
       importedBy: item.importedBy?.name ?? item.importedBy?.email ?? "Sistema",
       importedAt: formatDateTime(item.importedAt)
     }))
+  };
+}
+
+export async function getOwnPerformanceDashboard(
+  actor: Actor,
+  query: Pick<PerformanceQuery, "startDate" | "endDate"> = {}
+) {
+  const user = await requireActiveUser(actor);
+  if (!canAccessOwnPerformance(permissionUser(user))) {
+    throw new PerformanceError("Esta área é exclusiva para agentes ativos.", 403);
+  }
+
+  const period = resolvePeriod(query);
+  const ownEmployee = requireOwnEmployee(user);
+  const ownRows = await buildAgentRows([ownEmployee as PerformanceEmployee], period);
+  const mine = ownRows[0] ?? emptyAgentRow(ownEmployee as PerformanceEmployee, period);
+
+  return {
+    mode: "mine" as const,
+    period: periodPayload(period),
+    summary: { mine },
+    weekly: mine.weekly
   };
 }
 
