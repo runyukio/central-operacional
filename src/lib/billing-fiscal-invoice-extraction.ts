@@ -15,7 +15,8 @@ export const BILLING_FISCAL_EXPECTED_TAXATION_CODE = "17.02.01";
 export const BILLING_FISCAL_EXPECTED_NBS_CODE = "1.703.99.00";
 export const BILLING_FISCAL_ALLOWED_NBS_CODES = [
   BILLING_FISCAL_EXPECTED_NBS_CODE,
-  "1.401.13.00"
+  "1.401.13.00",
+  "1.1806.59.00"
 ] as const;
 
 const BILLING_FISCAL_ALLOWED_NBS_CODES_LABEL = BILLING_FISCAL_ALLOWED_NBS_CODES.join(" ou ");
@@ -519,7 +520,7 @@ function findNbsCode(text: string) {
   const match = /(?:codigo da nbs|codigo nbs|\bnbs\b)/i.exec(text);
   if (!match || match.index === undefined) return "";
   const nearby = text.slice(match.index + match[0].length, match.index + match[0].length + 180);
-  const code = nearby.match(/\b(\d[.\s-]?\d{3}[.\s-]?\d{2}[.\s-]?\d{2})\b/)?.[1] ?? "";
+  const code = nearby.match(/(?<![\d.-])\b(\d[.\s-]?\d{3,4}[.\s-]?\d{2}[.\s-]?\d{2})\b(?![.-]\d)/)?.[1] ?? "";
   return normalizeNbsCode(code);
 }
 
@@ -632,9 +633,9 @@ function normalizeTaxationCode(value: string) {
 
 function normalizeNbsCode(value: string) {
   const digits = String(value ?? "").replace(/\D/g, "");
-  return digits.length === 8
-    ? `${digits.slice(0, 1)}.${digits.slice(1, 4)}.${digits.slice(4, 6)}.${digits.slice(6)}`
-    : "";
+  if (digits.length !== 8 && digits.length !== 9) return "";
+  const categoryEnd = digits.length - 4;
+  return `${digits.slice(0, 1)}.${digits.slice(1, categoryEnd)}.${digits.slice(categoryEnd, categoryEnd + 2)}.${digits.slice(categoryEnd + 2)}`;
 }
 
 function formatCnpj(value: string) {
