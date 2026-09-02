@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { getBillingFiscalDocumentCodeException } from "./billing-fiscal-document-exceptions";
+import { isBillingFiscalAmountMismatchExempt } from "./billing-fiscal-invoice";
 
 import {
   createBillingFiscalValidationToken,
@@ -49,6 +51,136 @@ DISCRIMINAÇÃO DE SERVIÇOS
 Serviços de moderação de redes sociais
 VALOR TOTAL DO SERVIÇO = R$ 3.000,80
 `;
+
+const municipalFiscalSampleText = `${saoPauloMunicipalSampleText}
+PRESTADOR DE SERVIÇOS
+CPF/CNPJ: Inscrição Municipal:
+Nome/Razão Social:
+Endereço:
+62.388.834/0001-73 4.491.932-8
+Empresa prestadora de serviços
+TOMADOR DE SERVIÇOS
+Nome/Razão Social:
+CPF/CNPJ: Inscrição Municipal:
+Endereço:
+Empresa tomadora de serviços
+58.151.940/0001-61 1.637.375-8
+INTERMEDIÁRIO DE SERVIÇOS
+CPF/CNPJ: Nome/Razão Social: ---- ----
+Código do Serviço
+03115 - Assessoria ou consultoria
+`;
+
+const municipalDocumentContext = {
+  wbLogin: "wb_luiza03",
+  referenceMonth: "2026-08",
+  documentHash: "0204976f20b0f8df862d0d4f4c12e7fbaef57e05599759183660a9d9c0ad52a8"
+};
+
+test("extrai os CNPJs das seções municipais e preserva o código de serviço sem inventar NBS", () => {
+  const fields = extractBillingFiscalFieldsFromText(municipalFiscalSampleText);
+  assert.equal(fields.customerTaxId, "58151940000161");
+  assert.equal(fields.supplierTaxId, "62388834000173");
+  assert.equal(fields.taxationCode, "03115");
+  assert.equal(fields.nbsCode, "");
+  assert.equal(fields.serviceAmount, 3000.8);
+});
+
+test("não usa o CNPJ do tomador como prestador se o CNPJ do prestador estiver ausente", () => {
+  const fields = extractBillingFiscalFieldsFromText(municipalFiscalSampleText.replace("62.388.834/0001-73", "não informado"));
+  assert.equal(fields.supplierTaxId, "");
+  assert.equal(fields.customerTaxId, "58151940000161");
+});
+
+test("permite o código municipal e a ausência de NBS somente para o documento autorizado", () => {
+  const fields = extractBillingFiscalFieldsFromText(municipalFiscalSampleText);
+  assert.deepEqual(validateBillingFiscalComplianceFields(fields, "62388834000173", municipalDocumentContext), {
+    customerTaxId: "58151940000161",
+    supplierTaxId: "62388834000173",
+    taxationCode: "03115",
+    nbsCode: ""
+  });
+  assert.equal(getBillingFiscalDocumentCodeException(municipalDocumentContext)?.id, "SAO_PAULO_NF30_LUIZA03_2026_08");
+  assert.equal(isBillingFiscalAmountMismatchExempt("wb_luiza03"), false);
+});
+
+test("não libera o código municipal para outro parceiro, outro PDF, outro ciclo ou sem contexto", () => {
+  const fields = extractBillingFiscalFieldsFromText(municipalFiscalSampleText);
+  for (const context of [
+    undefined,
+    { ...municipalDocumentContext, wbLogin: "wb_outro" },
+    { ...municipalDocumentContext, wbLogin: undefined },
+    { ...municipalDocumentContext, referenceMonth: "2026-09" },
+    { ...municipalDocumentContext, documentHash: "outro-documento" },
+    { ...municipalDocumentContext, documentHash: undefined }
+  ]) {
+    assert.equal(getBillingFiscalDocumentCodeException(context), null);
+    assert.throws(
+      () => validateBillingFiscalComplianceFields(fields, "62388834000173", context),
+      /Código de Tributação incorreto/
+    );
+  }
+});
+
+test("a exceção de códigos mantém obrigatória a conferência dos CNPJs", () => {
+  const fields = extractBillingFiscalFieldsFromText(municipalFiscalSampleText);
+  for (const customerTaxId of ["", "11111111000111"]) {
+    assert.throws(
+      () => validateBillingFiscalComplianceFields({ ...fields, customerTaxId }, "62388834000173", municipalDocumentContext),
+      /CNPJ do tomador/
+    );
+  }
+  for (const supplierTaxId of ["", "11111111000111"]) {
+    assert.throws(
+      () => validateBillingFiscalComplianceFields({ ...fields, supplierTaxId }, "62388834000173", municipalDocumentContext),
+      /CNPJ do prestador/
+    );
+  }
+  assert.throws(
+    () => validateBillingFiscalComplianceFields(fields, "", municipalDocumentContext),
+    /cadastro não possui um CNPJ válido/
+  );
+  assert.throws(
+    () => validateBillingFiscalComplianceFields(fields, "11111111000111", municipalDocumentContext),
+    /CNPJ do prestador incorreto/
+  );
+});
+
+test("a exceção não aceita campos fiscais diferentes dos autorizados", () => {
+  const fields = extractBillingFiscalFieldsFromText(municipalFiscalSampleText);
+  for (const overrides of [{ taxationCode: "99999" }, { nbsCode: "1.111.11.11" }, { nbsCode: "inválido" }]) {
+    assert.throws(
+      () => validateBillingFiscalComplianceFields({ ...fields, ...overrides }, "62388834000173", municipalDocumentContext),
+      /Código de Tributação incorreto/
+    );
+  }
+});
+
+test("um token com hash autorizado não libera um arquivo diferente", async () => {
+  process.env.NEXTAUTH_SECRET = "billing-fiscal-test-secret";
+  const fields = extractBillingFiscalFieldsFromText(municipalFiscalSampleText);
+  const expected = {
+    actorEmail: "parceiro@example.com",
+    referenceMonth: "2026-08",
+    employeeId: "employee-municipal",
+    billingGrossAmount: 3000.8
+  };
+  const token = createBillingFiscalValidationToken({
+    ...fields,
+    ...expected,
+    documentHash: municipalDocumentContext.documentHash,
+    extractionMethod: "PDF_TEXT"
+  });
+  await assert.rejects(
+    verifyBillingFiscalValidationToken(token, new File(["outro PDF"], "nota.pdf"), {
+      ...expected,
+      wbLogin: "wb_luiza03",
+      enforceCompliance: true,
+      supplierTaxId: "62388834000173"
+    }),
+    /arquivo enviado não é o mesmo/
+  );
+});
 
 test("extrai chave, número, descrição e valor da NFS-e nacional", () => {
   assert.deepEqual(extractBillingFiscalFieldsFromText(sampleText), {

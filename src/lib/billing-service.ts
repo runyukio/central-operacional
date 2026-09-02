@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { AuditAction, Prisma, RequestStatus, ScheduleStatus, WorkHourRecordStatus } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
+import { getBillingFiscalDocumentCodeException, type BillingFiscalDocumentContext } from "@/lib/billing-fiscal-document-exceptions";
 import {
   BillingFiscalExtractionError,
   createBillingFiscalValidationToken,
@@ -533,7 +534,8 @@ export async function previewBillingFiscalInvoice(actor: Actor, input: {
     const expectedFiscalAmount = calculateBillingFiscalExpectedAmount(calculated);
     stage = "EXTRACT_DOCUMENT";
     const extraction = await extractBillingFiscalInvoice(input.file, {
-      requireComplianceFields: isOwnInvoice
+      requireComplianceFields: isOwnInvoice,
+      documentContext: { wbLogin: employee.wbLogin, referenceMonth }
     });
     stage = "VALIDATE_COMPLIANCE";
     if (isOwnInvoice) {
@@ -541,7 +543,11 @@ export async function previewBillingFiscalInvoice(actor: Actor, input: {
         where: { employeeId: employee.id },
         select: { cnpj: true }
       });
-      validateBillingFiscalComplianceFields(extraction, sensitiveData?.cnpj ?? "");
+      validateBillingFiscalComplianceFields(extraction, sensitiveData?.cnpj ?? "", {
+        wbLogin: employee.wbLogin,
+        referenceMonth,
+        documentHash: extraction.documentHash
+      });
     }
     stage = "CHECK_DUPLICATE";
     await ensureBillingFiscalDocumentAvailable(extraction, referenceMonth, employee.id);
@@ -616,7 +622,10 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
   if (!isInvoiceAvailableForEmployeeReview(cycle.status, effectiveStatus)) return { error: "Invoice ainda não está disponível para aprovação.", status: 403 };
   if (isFinalizedInvoiceStatus(persisted?.status)) return { error: "Este invoice foi finalizado pelo Admin Central e não pode ser aprovado pelo parceiro.", status: 409 };
 
-  if (!input.file && !hasReusableBillingFiscalExtraction(persisted?.fiscalInvoice, true)) {
+  if (!input.file && !hasReusableBillingFiscalExtraction(persisted?.fiscalInvoice, true, {
+    wbLogin: user.employeeProfile.wbLogin,
+    referenceMonth
+  })) {
     return { error: "Anexe a nota fiscal para que os dados sejam lidos automaticamente.", status: 400 };
   }
   if (input.file) {
@@ -666,6 +675,7 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
       actorEmail: user.email,
       referenceMonth,
       employeeId: user.employeeProfile.id,
+      wbLogin: user.employeeProfile.wbLogin,
       billingGrossAmount: expectedFiscalAmount,
       allowAmountMismatch: allowFiscalAmountMismatch,
       file,
@@ -785,6 +795,11 @@ export async function approveMyBillingInvoice(actor: Actor, input: {
             supplierTaxId: extraction.supplierTaxId,
             taxationCode: extraction.taxationCode,
             nbsCode: extraction.nbsCode,
+            fiscalCodeException: getBillingFiscalDocumentCodeException({
+              wbLogin,
+              referenceMonth,
+              documentHash: extraction.documentHash
+            })?.id ?? null,
             invoiceFileName: fileData.fileName,
             finalAmount: calculated.finalAmount,
             totalMinutes: calculated.totalConsideredMinutes
@@ -901,7 +916,11 @@ async function syncBillingFiscalInvoiceToOmie(employeeInvoiceId: string, actorId
       supplierTaxId: fiscalInvoice.supplierTaxId ?? "",
       taxationCode: fiscalInvoice.taxationCode ?? "",
       nbsCode: fiscalInvoice.nbsCode ?? ""
-    }, sensitiveData?.cnpj ?? "");
+    }, sensitiveData?.cnpj ?? "", {
+      wbLogin: fiscalInvoice.employeeInvoice.employee.wbLogin,
+      referenceMonth: fiscalInvoice.employeeInvoice.referenceMonth,
+      documentHash: fiscalInvoice.documentHash
+    });
     if (fiscalInvoice.storageBucket !== BILLING_INVOICE_BUCKET) {
       throw new OmieIntegrationError("A nota fiscal está armazenada em uma origem inválida para envio ao Omie.");
     }
@@ -1488,6 +1507,7 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
         actorEmail: user!.email,
         referenceMonth,
         employeeId: employee.id,
+        wbLogin: employee.wbLogin,
         billingGrossAmount: expectedFiscalAmount,
         allowAmountMismatch: allowFiscalAmountMismatch,
         file,
@@ -3524,6 +3544,7 @@ async function resolveBillingFiscalSubmission(input: {
   actorEmail: string;
   referenceMonth: string;
   employeeId: string;
+  wbLogin: string;
   billingGrossAmount: number;
   allowAmountMismatch: boolean;
   file: File | null;
@@ -3544,7 +3565,8 @@ async function resolveBillingFiscalSubmission(input: {
       employeeId: input.employeeId,
       billingGrossAmount: input.billingGrossAmount,
       enforceCompliance: input.enforceCompliance,
-      supplierTaxId: input.supplierTaxId
+      supplierTaxId: input.supplierTaxId,
+      wbLogin: input.wbLogin
     });
   } else if (hasReusableBillingFiscalExtraction(input.existing)) {
     extraction = {
@@ -3570,7 +3592,11 @@ async function resolveBillingFiscalSubmission(input: {
     );
   }
   if (input.enforceCompliance) {
-    validateBillingFiscalComplianceFields(extraction, input.supplierTaxId);
+    validateBillingFiscalComplianceFields(extraction, input.supplierTaxId, {
+      wbLogin: input.wbLogin,
+      referenceMonth: input.referenceMonth,
+      documentHash: extraction.documentHash
+    });
   }
   await ensureBillingFiscalDocumentAvailable(extraction, input.referenceMonth, input.employeeId);
   return extraction;
@@ -3578,7 +3604,8 @@ async function resolveBillingFiscalSubmission(input: {
 
 function hasReusableBillingFiscalExtraction(
   row: BillingFiscalInvoiceRecord | null | undefined,
-  requireCompliance = false
+  requireCompliance = false,
+  documentContext?: Omit<BillingFiscalDocumentContext, "documentHash">
 ): row is BillingFiscalInvoiceRecord & { accessKey: string; documentHash: string; extractionMethod: string } {
   const hasBaseFields = Boolean(
     row?.accessKey
@@ -3587,11 +3614,12 @@ function hasReusableBillingFiscalExtraction(
     && row.invoiceNumber
     && Number(row.grossAmount) > 0
   );
+  const codeException = getBillingFiscalDocumentCodeException({ ...documentContext, documentHash: row?.documentHash });
   return hasBaseFields && (!requireCompliance || Boolean(
     row?.customerTaxId
     && row.supplierTaxId
     && row.taxationCode
-    && row.nbsCode
+    && (row.nbsCode || (codeException && row.taxationCode === codeException.taxationCode))
   ));
 }
 

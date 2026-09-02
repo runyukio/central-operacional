@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 
 import { BILLING_FISCAL_INVOICE_NUMBER_MAX_LENGTH, isValidBillingFiscalInvoiceNumber } from "@/lib/billing-fiscal-invoice";
+import { getBillingFiscalDocumentCodeException, type BillingFiscalDocumentContext } from "@/lib/billing-fiscal-document-exceptions";
 
 const VALIDATION_TOKEN_VERSION = 1;
 const VALIDATION_TOKEN_TTL_MS = 15 * 60 * 1000;
@@ -57,7 +58,10 @@ export class BillingFiscalExtractionError extends Error {
 
 export async function extractBillingFiscalInvoice(
   file: File,
-  options: { requireComplianceFields?: boolean } = {}
+  options: {
+    requireComplianceFields?: boolean;
+    documentContext?: Omit<BillingFiscalDocumentContext, "documentHash">;
+  } = {}
 ): Promise<BillingFiscalDocumentExtraction> {
   const buffer = Buffer.from(await file.arrayBuffer());
   const documentHash = hashBillingFiscalFile(buffer);
@@ -71,7 +75,8 @@ export async function extractBillingFiscalInvoice(
   }
 
   if (extension === ".pdf" || mimeType === "application/pdf") {
-    const result = await extractFromPdf(buffer, Boolean(options.requireComplianceFields));
+    const codeException = getBillingFiscalDocumentCodeException({ ...options.documentContext, documentHash });
+    const result = await extractFromPdf(buffer, Boolean(options.requireComplianceFields), codeException?.taxationCode);
     return validateExtractedFields({ ...result.fields, documentHash, extractionMethod: result.method });
   }
 
@@ -112,6 +117,7 @@ export async function verifyBillingFiscalValidationToken(
     billingGrossAmount: number;
     enforceCompliance?: boolean;
     supplierTaxId?: string;
+    wbLogin?: string;
   }
 ) {
   const [encodedPayload, receivedSignature, extraPart] = String(token ?? "").split(".");
@@ -153,7 +159,11 @@ export async function verifyBillingFiscalValidationToken(
   }
 
   if (expected.enforceCompliance) {
-    validateBillingFiscalComplianceFields(payload, expected.supplierTaxId ?? "");
+    validateBillingFiscalComplianceFields(payload, expected.supplierTaxId ?? "", {
+      wbLogin: expected.wbLogin,
+      referenceMonth: expected.referenceMonth,
+      documentHash: currentHash
+    });
   }
 
   return validateExtractedFields(payload);
@@ -184,7 +194,8 @@ export function extractBillingFiscalFieldsFromText(text: string, metadataText = 
 
 export function validateBillingFiscalComplianceFields(
   fields: Pick<BillingFiscalDocumentExtraction, "customerTaxId" | "supplierTaxId" | "taxationCode" | "nbsCode">,
-  registeredSupplierTaxId: string
+  registeredSupplierTaxId: string,
+  documentContext?: BillingFiscalDocumentContext
 ) {
   const customerTaxId = normalizeTaxId(fields.customerTaxId);
   const supplierTaxId = normalizeTaxId(fields.supplierTaxId);
@@ -216,6 +227,11 @@ export function validateBillingFiscalComplianceFields(
     throw new BillingFiscalExtractionError(
       `CNPJ do prestador incorreto: a nota informa ${formatCnpj(supplierTaxId)}, mas seu cadastro informa ${formatCnpj(expectedSupplierTaxId)}. Corrija a nota ou atualize seu cadastro antes de tentar novamente.`
     );
+  }
+
+  const codeException = getBillingFiscalDocumentCodeException(documentContext);
+  if (codeException && taxationCode === codeException.taxationCode && !String(fields.nbsCode ?? "").trim()) {
+    return { customerTaxId, supplierTaxId, taxationCode, nbsCode };
   }
   if (!taxationCode) {
     throw new BillingFiscalExtractionError(
@@ -249,7 +265,7 @@ export function hashBillingFiscalFile(buffer: Buffer) {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
-async function extractFromPdf(buffer: Buffer, requireComplianceFields: boolean) {
+async function extractFromPdf(buffer: Buffer, requireComplianceFields: boolean, exemptMunicipalCode?: string) {
   const [{ getDocument }, { createCanvas }] = await Promise.all([
     import("pdfjs-dist/legacy/build/pdf.mjs"),
     import("@napi-rs/canvas")
@@ -272,7 +288,7 @@ async function extractFromPdf(buffer: Buffer, requireComplianceFields: boolean) 
     }
 
     const nativeFields = extractBillingFiscalFieldsFromText(nativeText, metadataText);
-    if (hasAllRequiredFields(nativeFields, requireComplianceFields)) {
+    if (hasAllRequiredFields(nativeFields, requireComplianceFields, exemptMunicipalCode)) {
       return { fields: nativeFields, method: "PDF_TEXT" as const };
     }
 
@@ -289,7 +305,7 @@ async function extractFromPdf(buffer: Buffer, requireComplianceFields: boolean) 
       }).promise;
       ocrText += `\n${await recognizeBillingFiscalText(canvas.toBuffer("image/png"))}`;
       const fields = extractBillingFiscalFieldsFromText(`${nativeText}\n${ocrText}`, metadataText);
-      if (hasAllRequiredFields(fields, requireComplianceFields)) {
+      if (hasAllRequiredFields(fields, requireComplianceFields, exemptMunicipalCode)) {
         return { fields, method: "OCR" as const };
       }
     }
@@ -494,6 +510,10 @@ function findPartyTaxId(text: string, sectionPatterns: RegExp[], endMarkers: str
     )?.[1] ?? "";
     const taxId = normalizeTaxId(labeled);
     if (taxId.length === 14) return taxId;
+    // Municipal PDFs may put the field labels before the values in reading order.
+    // Keep the fallback inside the same party section to avoid swapping the CNPJs.
+    const formattedTaxId = section.match(/\b\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\b/)?.[0] ?? "";
+    if (formattedTaxId) return normalizeTaxId(formattedTaxId);
   }
   return "";
 }
@@ -513,7 +533,8 @@ function findTaxationCode(text: string) {
     const normalized = normalizeTaxationCode(code);
     if (normalized) return normalized;
   }
-  return "";
+  const municipalCode = text.match(/codigo do servico\s*:?\s*(\d{5})\b/)?.[1] ?? "";
+  return normalizeTaxationCode(municipalCode);
 }
 
 function findNbsCode(text: string) {
@@ -585,7 +606,8 @@ function hasAllRequiredFields(
     taxationCode: string;
     nbsCode: string;
   },
-  requireComplianceFields: boolean
+  requireComplianceFields: boolean,
+  exemptMunicipalCode?: string
 ) {
   const hasBaseFields = fields.accessKey.length >= 44
     && fields.accessKey.length <= 60
@@ -596,7 +618,7 @@ function hasAllRequiredFields(
     fields.customerTaxId
     && fields.supplierTaxId
     && fields.taxationCode
-    && fields.nbsCode
+    && (fields.nbsCode || (exemptMunicipalCode && fields.taxationCode === exemptMunicipalCode))
   ));
 }
 
@@ -628,6 +650,7 @@ function normalizeTaxId(value: string) {
 
 function normalizeTaxationCode(value: string) {
   const digits = String(value ?? "").replace(/\D/g, "");
+  if (digits.length === 5) return digits;
   return digits.length === 6 ? `${digits.slice(0, 2)}.${digits.slice(2, 4)}.${digits.slice(4)}` : "";
 }
 
