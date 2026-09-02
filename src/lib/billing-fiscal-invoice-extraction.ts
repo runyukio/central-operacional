@@ -520,7 +520,7 @@ function findNbsCode(text: string) {
   const match = /(?:codigo da nbs|codigo nbs|\bnbs\b)/i.exec(text);
   if (!match || match.index === undefined) return "";
   const nearby = text.slice(match.index + match[0].length, match.index + match[0].length + 180);
-  const code = nearby.match(/(?<![\d.-])\b(\d[.\s-]?\d{3,4}[.\s-]?\d{2}[.\s-]?\d{2})\b(?![.-]\d)/)?.[1] ?? "";
+  const code = nearby.match(/(?<![\d.-])(?<!\d\s)\b(\d[.\s-]?\d{3,4}[.\s-]?\d{2}[.\s-]?\d{2})\b(?![.-]\d)/)?.[1] ?? "";
   return normalizeNbsCode(code);
 }
 

@@ -120,7 +120,7 @@ for (const nbsCode of ["1.1806.59.00", "118065900", "1 1806 59 00", "1-1806-59-0
 }
 
 test("não extrai um NBS permitido a partir de um código maior", () => {
-  for (const nbsCode of ["1180659000", "1.11806.59.00", "1.1806.59.001", "9.1.1806.59.00"]) {
+  for (const nbsCode of ["1180659000", "1.11806.59.00", "1.1806.59.001", "9.1.1806.59.00", "9 1 1806 59 00"]) {
     const fields = extractBillingFiscalFieldsFromText(sampleText.replace("1.703.99.00", nbsCode));
     assert.equal(fields.nbsCode, "", nbsCode);
   }
