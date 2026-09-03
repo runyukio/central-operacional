@@ -32,7 +32,7 @@ CNPJ / CPF / NIF
 Código de Tributação Nacional
 17.02.01
 Código da NBS
-1.703.99.00
+1.1703.99.00
 `;
 
 const saoPauloMunicipalSampleText = `
@@ -191,7 +191,7 @@ test("extrai chave, número, descrição e valor da NFS-e nacional", () => {
     customerTaxId: "58151940000161",
     supplierTaxId: "62388834000173",
     taxationCode: "17.02.01",
-    nbsCode: "1.703.99.00"
+    nbsCode: "1.1703.99.00"
   });
 });
 
@@ -213,14 +213,29 @@ test("valida tomador, prestador, tributação e NBS do fluxo Omie", () => {
     customerTaxId: "58.151.940/0001-61",
     supplierTaxId: "62.388.834/0001-73",
     taxationCode: "170201",
-    nbsCode: "17039900"
+    nbsCode: "117039900"
   }, "62.388.834/0001-73"), {
     customerTaxId: "58151940000161",
     supplierTaxId: "62388834000173",
     taxationCode: "17.02.01",
-    nbsCode: "1.703.99.00"
+    nbsCode: "1.1703.99.00"
   });
 });
+
+for (const nbsCode of ["1.1703.99.00", "117039900", "1 1703 99 00", "1-1703-99-00"]) {
+  test("aceita o NBS completo da nota sem remover dígitos: " + nbsCode, () => {
+    const fields = extractBillingFiscalFieldsFromText(sampleText.replace("1.1703.99.00", nbsCode));
+    assert.equal(fields.nbsCode, "1.1703.99.00");
+    assert.equal(
+      validateBillingFiscalComplianceFields(fields, "62.388.834/0001-73").nbsCode,
+      "1.1703.99.00"
+    );
+    assert.equal(
+      validateBillingFiscalComplianceFields({ ...fields, nbsCode }, "62.388.834/0001-73").nbsCode,
+      "1.1703.99.00"
+    );
+  });
+}
 
 test("aceita o Código da NBS alternativo no fluxo Omie", () => {
   assert.deepEqual(validateBillingFiscalComplianceFields({
@@ -238,7 +253,7 @@ test("aceita o Código da NBS alternativo no fluxo Omie", () => {
 
 for (const nbsCode of ["1.1806.59.00", "118065900", "1 1806 59 00", "1-1806-59-00"]) {
   test(`extrai e valida o NBS de nove dígitos sem truncar: ${nbsCode}`, () => {
-    const fields = extractBillingFiscalFieldsFromText(sampleText.replace("1.703.99.00", nbsCode));
+    const fields = extractBillingFiscalFieldsFromText(sampleText.replace("1.1703.99.00", nbsCode));
     assert.equal(fields.nbsCode, "1.1806.59.00");
     assert.equal(
       validateBillingFiscalComplianceFields(fields, "62.388.834/0001-73").nbsCode,
@@ -252,15 +267,18 @@ for (const nbsCode of ["1.1806.59.00", "118065900", "1 1806 59 00", "1-1806-59-0
 }
 
 test("não extrai um NBS permitido a partir de um código maior", () => {
-  for (const nbsCode of ["1180659000", "1.11806.59.00", "1.1806.59.001", "9.1.1806.59.00", "9 1 1806 59 00"]) {
-    const fields = extractBillingFiscalFieldsFromText(sampleText.replace("1.703.99.00", nbsCode));
+  for (const nbsCode of [
+    "1170399000", "1.11703.99.00", "1.1703.99.001", "9.1.1703.99.00", "9 1 1703 99 00",
+    "1180659000", "1.11806.59.00", "1.1806.59.001", "9.1.1806.59.00", "9 1 1806 59 00"
+  ]) {
+    const fields = extractBillingFiscalFieldsFromText(sampleText.replace("1.1703.99.00", nbsCode));
     assert.equal(fields.nbsCode, "", nbsCode);
   }
 });
 
 test("continua recusando códigos NBS não autorizados de oito ou nove dígitos", () => {
   const fields = extractBillingFiscalFieldsFromText(sampleText);
-  for (const nbsCode of ["1.806.59.00", "1.1806.59.01"]) {
+  for (const nbsCode of ["1.703.99.00", "17039900", "1.1703.99.01", "1.806.59.00", "1.1806.59.01"]) {
     assert.throws(
       () => validateBillingFiscalComplianceFields({ ...fields, nbsCode }, "62.388.834/0001-73"),
       /Código da NBS incorreto/
@@ -278,7 +296,7 @@ test("extrai os campos fiscais obrigatórios do XML", async () => {
       <CnpjTomador>58151940000161</CnpjTomador>
       <CnpjPrestador>62388834000173</CnpjPrestador>
       <cTribNac>170201</cTribNac>
-      <cNBS>17039900</cNBS>
+      <cNBS>117039900</cNBS>
     </Nfse>`;
   const result = await extractBillingFiscalInvoice(new File([xml], "nota.xml", { type: "application/xml" }), {
     requireComplianceFields: true
@@ -286,7 +304,7 @@ test("extrai os campos fiscais obrigatórios do XML", async () => {
   assert.equal(result.customerTaxId, "58151940000161");
   assert.equal(result.supplierTaxId, "62388834000173");
   assert.equal(result.taxationCode, "17.02.01");
-  assert.equal(result.nbsCode, "1.703.99.00");
+  assert.equal(result.nbsCode, "1.1703.99.00");
 });
 
 test("explica cada divergência fiscal para o parceiro corrigir", () => {
@@ -294,7 +312,7 @@ test("explica cada divergência fiscal para o parceiro corrigir", () => {
     customerTaxId: "58151940000161",
     supplierTaxId: "62388834000173",
     taxationCode: "17.02.01",
-    nbsCode: "1.703.99.00"
+    nbsCode: "1.1703.99.00"
   };
   assert.throws(
     () => validateBillingFiscalComplianceFields({ ...valid, customerTaxId: "11111111000111" }, valid.supplierTaxId),
@@ -310,7 +328,7 @@ test("explica cada divergência fiscal para o parceiro corrigir", () => {
   );
   assert.throws(
     () => validateBillingFiscalComplianceFields({ ...valid, nbsCode: "1.111.11.11" }, valid.supplierTaxId),
-    /Código da NBS incorreto.*1\.703\.99\.00 ou 1\.401\.13\.00 ou 1\.1806\.59\.00/i
+    /Código da NBS incorreto.*1\.1703\.99\.00 ou 1\.401\.13\.00 ou 1\.1806\.59\.00/i
   );
   assert.throws(
     () => validateBillingFiscalComplianceFields({ ...valid, customerTaxId: "" }, valid.supplierTaxId),
@@ -326,7 +344,7 @@ test("explica cada divergência fiscal para o parceiro corrigir", () => {
   );
   assert.throws(
     () => validateBillingFiscalComplianceFields({ ...valid, nbsCode: "" }, valid.supplierTaxId),
-    /Não foi possível identificar o Código da NBS.*1\.703\.99\.00 ou 1\.401\.13\.00 ou 1\.1806\.59\.00/i
+    /Não foi possível identificar o Código da NBS.*1\.1703\.99\.00 ou 1\.401\.13\.00 ou 1\.1806\.59\.00/i
   );
 });
 
@@ -340,7 +358,7 @@ test("preserva o NBS de nove dígitos ao confirmar a nota validada", async () =>
   process.env.NEXTAUTH_SECRET = "billing-fiscal-test-secret";
   const content = Buffer.from("nota-nbs-118065900");
   const file = new File([content], "nota.pdf", { type: "application/pdf" });
-  const fields = extractBillingFiscalFieldsFromText(sampleText.replace("1.703.99.00", "1.1806.59.00"));
+  const fields = extractBillingFiscalFieldsFromText(sampleText.replace("1.1703.99.00", "1.1806.59.00"));
   const expected = {
     actorEmail: "agente@example.com",
     referenceMonth: "2026-08",
@@ -373,7 +391,7 @@ test("assina a leitura e rejeita arquivo diferente", async () => {
     customerTaxId: "58151940000161",
     supplierTaxId: "62388834000173",
     taxationCode: "17.02.01",
-    nbsCode: "1.703.99.00",
+    nbsCode: "1.1703.99.00",
     documentHash: hashBillingFiscalFile(validatedContent),
     extractionMethod: "OCR",
     actorEmail: "agente@example.com",
