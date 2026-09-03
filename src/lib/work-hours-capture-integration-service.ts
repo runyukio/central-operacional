@@ -11,6 +11,7 @@ import {
   captureDivergenceActionLabel,
   captureDivergenceReasonLabel,
   evaluateCaptureImport,
+  reuseCaptureResolution,
   shouldCreateLowAdherence,
   type CaptureDivergenceAction,
   type CaptureDivergenceReason,
@@ -40,6 +41,7 @@ type CaptureImportProposal = {
   calculation: OperationalHourCalculation | null;
   decision: ReturnType<typeof evaluateCaptureImport>;
   existingRecord: ExistingWorkHour | null;
+  manuallyValidated?: boolean;
 };
 
 type CaptureImportEmployee = {
@@ -146,7 +148,7 @@ export async function commitCaptureWorkHoursImport(
           const saved = await saveValidatedAttendance(tx, {
             proposal,
             actorId: authorization.user.id,
-            actionSource: "AUTOMATIC",
+            actionSource: proposal.manuallyValidated ? "MANUAL" : "AUTOMATIC",
             currentRecord: current
           });
           if (saved.changed) imported += 1;
@@ -390,6 +392,11 @@ export async function resolveCaptureWorkHourDivergence(
       where: { id: divergence.id },
       data: {
         status: "RESOLVED",
+        reconciliationKey: reconciliationKey(employee.id, formatDate(divergence.date), schedule.id),
+        slotKey: schedule.id,
+        scheduleId: schedule.id,
+        plannedStart: schedule.startsAt,
+        plannedEnd: schedule.endsAt,
         resolutionAction: input.action,
         resolvedById: authorization.user.id,
         resolvedAt: new Date()
@@ -601,7 +608,28 @@ async function buildCaptureImportPlan(filters: CaptureImportFilters) {
     select: { id: true, employeeId: true, date: true, effectiveHours: true, actualHours: true, scheduleId: true, status: true }
   }) : [];
   const existingByKey = new Map(existing.map((record) => [employeeDateKey(record.employeeId, record.date), record]));
-  for (const proposal of proposals) proposal.existingRecord = existingByKey.get(employeeDateKey(proposal.employee.id, proposal.date)) ?? null;
+  const resolved = pairs.length ? await prisma.workHourCaptureDivergence.findMany({
+    where: {
+      status: "RESOLVED",
+      reconciliationKey: { in: proposals.map((proposal) => proposal.reconciliationKey) }
+    },
+    select: { reconciliationKey: true, status: true, scheduleId: true, plannedStart: true, plannedEnd: true, sourceDurationMs: true, resolutionAction: true }
+  }) : [];
+  const resolvedByKey = new Map(resolved.map((item) => [item.reconciliationKey, item]));
+  for (const proposal of proposals) {
+    proposal.existingRecord = existingByKey.get(employeeDateKey(proposal.employee.id, proposal.date)) ?? null;
+    const reused = reuseCaptureResolution({
+      scheduleId: proposal.schedule?.id ?? null,
+      scheduleStatus: proposal.scheduleStatus,
+      plannedStart: proposal.schedule?.startsAt ?? null,
+      plannedEnd: proposal.schedule?.endsAt ?? null,
+      capturedMs: proposal.capturedMs
+    }, resolvedByKey.get(proposal.reconciliationKey));
+    if (reused) {
+      proposal.decision = reused;
+      proposal.manuallyValidated = true;
+    }
+  }
   proposals.sort((left, right) => left.date.getTime() - right.date.getTime() || left.employee.fullName.localeCompare(right.employee.fullName));
   return { proposals, period };
 }
@@ -1089,8 +1117,8 @@ function proposalFromDivergence(
   targetStatus: string
 ): CaptureImportProposal {
   return {
-    reconciliationKey: divergence.reconciliationKey,
-    slotKey: divergence.slotKey,
+    reconciliationKey: reconciliationKey(employee.id, formatDate(divergence.date), schedule.id),
+    slotKey: schedule.id,
     employee,
     schedule,
     date: divergence.date,

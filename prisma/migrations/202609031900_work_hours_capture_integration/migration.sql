@@ -1,3 +1,5 @@
+BEGIN;
+
 CREATE TABLE "WorkHourCaptureImportRun" (
     "id" TEXT NOT NULL,
     "startedById" TEXT NOT NULL,
@@ -97,3 +99,12 @@ ALTER TABLE "WorkHourAdherenceJustification" ADD CONSTRAINT "WorkHourAdherenceJu
 ALTER TABLE "WorkHourAdherenceJustification" ADD CONSTRAINT "WorkHourAdherenceJustification_supervisorId_fkey" FOREIGN KEY ("supervisorId") REFERENCES "EmployeeProfile"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 ALTER TABLE "WorkHourAdherenceJustification" ADD CONSTRAINT "WorkHourAdherenceJustification_scheduleId_fkey" FOREIGN KEY ("scheduleId") REFERENCES "Schedule"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 ALTER TABLE "WorkHourAdherenceJustification" ADD CONSTRAINT "WorkHourAdherenceJustification_answeredById_fkey" FOREIGN KEY ("answeredById") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- These records are accessed only through the authorized Prisma server routes.
+-- Do not expose import history or employee justifications through the Data API.
+ALTER TABLE "WorkHourCaptureImportRun" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "WorkHourCaptureDivergence" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "WorkHourAdherenceJustification" ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON "WorkHourCaptureImportRun", "WorkHourCaptureDivergence", "WorkHourAdherenceJustification" FROM anon, authenticated;
+
+COMMIT;

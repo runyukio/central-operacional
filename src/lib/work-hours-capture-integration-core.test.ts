@@ -7,11 +7,40 @@ import {
   calculateOperationalHours,
   evaluateCaptureImport,
   resolveOperationalHourRule,
+  reuseCaptureResolution,
   shouldCreateLowAdherence
 } from "@/lib/work-hours-capture-integration-core";
 
 const hour = 60 * 60 * 1000;
 const minute = 60 * 1000;
+
+test("reimportação preserva uma captura curta já confirmada no mesmo slot", () => {
+  const input = { scheduleId: "slot-1", scheduleStatus: "PRESENTE", plannedStart: "23:00", plannedEnd: "08:00", capturedMs: 40 * minute };
+  const resolved = { ...input, status: "RESOLVED", sourceDurationMs: input.capturedMs, resolutionAction: "CONFIRM_PRESENCE" };
+  const result = reuseCaptureResolution(input, resolved);
+  assert.equal(result?.decision, "AUTOMATIC");
+  assert.equal(calculateOperationalHours(input.capturedMs, { lob: "ADS" }).operationalMs, 70 * minute);
+  assert.equal(reuseCaptureResolution({ ...input, capturedMs: 41 * minute }, resolved), null);
+  assert.equal(reuseCaptureResolution({ ...input, scheduleId: "slot-2" }, resolved), null);
+  assert.equal(reuseCaptureResolution({ ...input, plannedStart: "22:00" }, resolved), null);
+  assert.equal(reuseCaptureResolution({ ...input, scheduleStatus: "ESCALADO" }, resolved), null);
+  assert.equal(reuseCaptureResolution(input, { ...resolved, status: "PENDING" }), null);
+});
+
+test("decisões de folga e falta não são reabertas sem mudança na captura", () => {
+  for (const [action, status] of [["CONFIRM_DAY_OFF", "FOLGA"], ["CONFIRM_ABSENCE", "FALTA"]]) {
+    const input = { scheduleId: "slot-1", scheduleStatus: status, plannedStart: "08:00", plannedEnd: "17:00", capturedMs: 40 * minute };
+    const resolved = { ...input, status: "RESOLVED", sourceDurationMs: input.capturedMs, resolutionAction: action };
+    assert.equal(reuseCaptureResolution(input, resolved)?.decision, "IGNORE");
+    assert.equal(reuseCaptureResolution({ ...input, capturedMs: 3 * hour }, resolved), null);
+  }
+});
+
+test("comparecimento confirmado preserva venda de folga na reimportação", () => {
+  const input = { scheduleId: "slot-1", scheduleStatus: "VENDA_FOLGA_APROVADA", plannedStart: "08:00", plannedEnd: "17:00", capturedMs: 2 * hour };
+  const resolved = { ...input, status: "RESOLVED", sourceDurationMs: input.capturedMs, resolutionAction: "CONFIRM_ATTENDANCE" };
+  assert.equal(reuseCaptureResolution(input, resolved)?.targetScheduleStatus, "VENDA_FOLGA_APROVADA");
+});
 
 test("1. ADS escalado com 6:30 vira presença e 7:00", () => {
   assert.equal(evaluateCaptureImport({ scheduleExists: true, scheduleStatus: "ESCALADO", capturedMs: 6.5 * hour }).targetScheduleStatus, "PRESENTE");

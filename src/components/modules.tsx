@@ -7877,16 +7877,16 @@ export function WorkHoursPage() {
   const [filters, setFilters] = useState(() => ({
     ...initialDateRangeFromUrl(),
     employeeId: queryParam("employeeId"),
-    lob: "Todos",
-    supervisor: "",
-    shift: "Todos",
-    collaborator: "",
-    employeeStatus: "Todos",
-    status: "Todos",
-    overtimeOnly: false,
-    hoursPendingOnly: false,
-    pendingOnly: false,
-    noScheduleOnly: false
+    lob: queryParam("lob") || "Todos",
+    supervisor: queryParam("supervisor"),
+    shift: queryParam("shift") || "Todos",
+    collaborator: queryParam("collaborator"),
+    employeeStatus: queryParam("employeeStatus") || "Todos",
+    status: queryParam("status") || "Todos",
+    overtimeOnly: queryParam("overtimeOnly") === "true",
+    hoursPendingOnly: queryParam("hoursPendingOnly") === "true",
+    pendingOnly: queryParam("pendingOnly") === "true",
+    noScheduleOnly: queryParam("noScheduleOnly") === "true"
   }));
   const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [loading, setLoading] = useState(false);
@@ -7895,6 +7895,7 @@ export function WorkHoursPage() {
   const [showPreview, setShowPreview] = useState(false);
   const [savingImport, setSavingImport] = useState(false);
   const [captureImportPreview, setCaptureImportPreview] = useState<CaptureWorkHourImportPreview | null>(null);
+  const captureImportScope = useRef<{ payload: ReturnType<typeof captureImportPayload>; query: string } | null>(null);
   const [importingCapture, setImportingCapture] = useState(false);
   const [adherenceRows, setAdherenceRows] = useState<WorkHourAdherenceRow[]>([]);
   const [adherenceDrafts, setAdherenceDrafts] = useState<Record<string, string>>({});
@@ -7994,6 +7995,9 @@ export function WorkHoursPage() {
     if (filters.collaborator) params.set("collaborator", filters.collaborator);
     if (filters.employeeStatus !== "Todos") params.set("employeeStatus", filters.employeeStatus);
     if (filters.status !== "Todos") params.set("status", filters.status);
+    for (const key of ["overtimeOnly", "hoursPendingOnly", "pendingOnly", "noScheduleOnly"] as const) {
+      if (filters[key]) params.set(key, "true");
+    }
     return params.toString();
   }
 
@@ -8001,10 +8005,13 @@ export function WorkHoursPage() {
     setImportingCapture(true);
     setCaptureImportPreview(null);
     setMessage("");
+    // Confirmation must refer to the scope shown in the preview, even if filters change.
+    const scope = { payload: captureImportPayload(), query: preservedWorkHourQuery() };
+    captureImportScope.current = scope;
     try {
       const previewPayload = await apiJson<{ data: CaptureWorkHourImportPreview }>("/api/work-hours/capture-import/preview", {
         method: "POST",
-        body: JSON.stringify(captureImportPayload())
+        body: JSON.stringify(scope.payload)
       });
       if (previewPayload.data.overlap.count > 0) {
         setCaptureImportPreview(previewPayload.data);
@@ -8019,16 +8026,18 @@ export function WorkHoursPage() {
   }
 
   async function commitCaptureImport(confirmReprocessing: boolean) {
+    const scope = captureImportScope.current;
+    if (!scope) return;
     setImportingCapture(true);
     setMessage("");
     try {
       const payload = await apiJson<{ data: { imported: number; unchanged: number; divergences: number; ignored: number } }>("/api/work-hours/capture-import/commit", {
         method: "POST",
-        body: JSON.stringify({ ...captureImportPayload(), confirmReprocessing })
+        body: JSON.stringify({ ...scope.payload, confirmReprocessing })
       });
       setCaptureImportPreview(null);
       if (payload.data.divergences > 0) {
-        window.location.assign(`/horas-operacionais/divergencias?${preservedWorkHourQuery()}`);
+        window.location.assign(`/horas-operacionais/divergencias?${scope.query}`);
         return;
       }
       setMessage(`${payload.data.imported} registro(s) atualizado(s) pela Captura de Horas. ${payload.data.unchanged} já estavam corretos.`);

@@ -178,6 +178,38 @@ export function shouldCreateLowAdherence(capturedMs?: number | null) {
   return Boolean(capturedMs !== null && capturedMs !== undefined && capturedMs > 0 && capturedMs < LOW_ADHERENCE_THRESHOLD_MS);
 }
 
+// Reuse an explicit decision only for the exact capture and slot that was reviewed.
+export function reuseCaptureResolution(input: {
+  scheduleId: string | null;
+  scheduleStatus: string;
+  plannedStart: string | null;
+  plannedEnd: string | null;
+  capturedMs: number | null;
+}, resolved: {
+  status: string;
+  scheduleId: string | null;
+  plannedStart: string | null;
+  plannedEnd: string | null;
+  sourceDurationMs: number | null;
+  resolutionAction: string | null;
+} | undefined): CaptureImportEvaluation | null {
+  if (!resolved || resolved.status !== "RESOLVED" || !input.scheduleId
+    || input.scheduleId !== resolved.scheduleId
+    || input.plannedStart !== resolved.plannedStart || input.plannedEnd !== resolved.plannedEnd
+    || input.capturedMs !== resolved.sourceDurationMs) return null;
+  const targets: Record<string, string> = {
+    CONFIRM_PRESENCE: "PRESENTE",
+    CONFIRM_ATTENDANCE: "VENDA_FOLGA_APROVADA",
+    CONFIRM_ABSENCE: "FALTA",
+    CONFIRM_DAY_OFF: "FOLGA"
+  };
+  const target = targets[resolved.resolutionAction ?? ""];
+  if (!target || input.scheduleStatus !== target) return null;
+  if (target === "FALTA" || target === "FOLGA") return { decision: "IGNORE", reasons: [], actions: [] };
+  if (!input.capturedMs || input.capturedMs <= 0) return null;
+  return { decision: "AUTOMATIC", targetScheduleStatus: target, reasons: [], actions: [] };
+}
+
 export function captureDivergenceReasonLabel(reason: CaptureDivergenceReason) {
   const labels: Record<CaptureDivergenceReason, string> = {
     MISSING_CAPTURE: "Cronograma produtivo sem duração na Captura de Horas.",
