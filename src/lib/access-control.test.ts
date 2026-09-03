@@ -89,6 +89,61 @@ test("Campanha separa a visão do agente ADS da gestão Staff", () => {
   assert.equal(getNavItems(videoAgent).some((item) => item.href.startsWith("/campanha")), false);
 });
 
+test("POC ADS acessa Meus Dados e seus tickets sem acesso à gestão", () => {
+  const poc = { role: "POC", roleTitle: "Agente", lob: "ADS", status: "ACTIVE" };
+
+  assert.equal(canAccessOwnPerformance(poc), true);
+  assert.equal(canAccessCampaignAgent(poc), true);
+  assert.equal(roleHasCapability(poc.role, "CAMPAIGN_AGENT"), true);
+  const menu = getNavItems(poc);
+  assert.equal(menu.some((item) => item.href === "/performance/meus-dados"), true);
+  assert.equal(menu.filter((item) => item.href === "/campanha").length, 1);
+  assert.equal(menu.some((item) => item.href === "/performance"), false);
+
+  for (const path of ["/performance/meus-dados", "/api/performance/me", "/campanha", "/campanha/agente", "/api/campaigns/raffle"]) {
+    assert.equal(canAccessPathForRole(path, poc), true, path);
+  }
+  for (const path of ["/performance", "/api/performance", "/api/performance/export", "/api/performance/import", "/campanha/staff"]) {
+    assert.equal(canAccessPathForRole(path, poc), false, path);
+  }
+  assert.equal(canAccessPerformance(poc), false);
+  assert.equal(canImportPerformance(poc), false);
+  assert.equal(canManageCampaignStaff(poc), false);
+  assert.equal(roleHasCapability(poc.role, "CAMPAIGN_STAFF"), false);
+});
+
+test("POC de outras LOBs acessa Meus Dados mas a Rifa continua exclusiva de ADS", () => {
+  for (const lob of ["CEC", "VIDEO", "COMMENTS", "PROJECT", "ALL", ""]) {
+    const poc = { role: "POC", roleTitle: "Agente", lob, status: "ACTIVE" };
+    assert.equal(canAccessOwnPerformance(poc), true, lob);
+    assert.equal(canAccessPathForRole("/api/performance/me", poc), true, lob);
+    assert.equal(canAccessCampaignAgent(poc), false, lob);
+    assert.equal(getNavItems(poc).some((item) => item.href === "/campanha"), false, lob);
+    assert.equal(canAccessPathForRole("/campanha", poc), false, lob);
+    assert.equal(canAccessPathForRole("/api/campaigns/raffle", poc), false, lob);
+  }
+});
+
+test("acesso pessoal de POC exige agente ativo e não é concedido apenas pela skill", () => {
+  for (const denied of [
+    { role: "POC", roleTitle: "Agente", status: "INACTIVE" },
+    { role: "POC", roleTitle: "Supervisor", status: "ACTIVE" },
+    { role: "POC", roleTitle: null, status: "ACTIVE" },
+    { role: "RTA", roleTitle: "Agente", skill: "POC", status: "ACTIVE" },
+    { role: "SUPERVISOR", roleTitle: "Agente", skill: "POC", status: "ACTIVE" }
+  ]) {
+    const user = { ...denied, lob: "ADS" };
+    assert.equal(canAccessOwnPerformance(user), false);
+    assert.equal(canAccessCampaignAgent(user), false);
+    assert.equal(canAccessPathForRole("/performance/meus-dados", user), false);
+    assert.equal(canAccessPathForRole("/api/performance/me", user), false);
+    assert.equal(canAccessPathForRole("/campanha", user), false);
+  }
+  const normalizedPoc = { role: " poc ", jobTitle: "agente", lob: "ads", status: "ACTIVE" };
+  assert.equal(canAccessOwnPerformance(normalizedPoc), true);
+  assert.equal(canAccessCampaignAgent(normalizedPoc), true);
+});
+
 test("somente ADMIN e WFM alteram cronogramas", () => {
   const allowed = ["ADMIN", "WFM"];
   const denied = ["GESTOR", "SUPERVISOR", "QUALIDADE", "RH", "FINANCEIRO", "TI", "RTA", "POC", "COLABORADOR", "CLIENT", "GLOBAL"];

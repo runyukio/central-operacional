@@ -54,7 +54,7 @@ export async function middleware(request: NextRequest) {
   // Let the request reach the page/API once; both re-read the user from Postgres
   // and enforce ADS ownership before returning any raffle data.
   const isCampaignPath = pathname === "/campanha" || pathname.startsWith("/campanha/") || pathname.startsWith("/api/campaigns/raffle");
-  const isLegacyAdsCandidate = role === "COLABORADOR" && !permissionUser.lob;
+  const isLegacyAdsCandidate = (role === "COLABORADOR" || role === "POC") && !permissionUser.lob;
   if (isCampaignPath && isLegacyAdsCandidate) return NextResponse.next();
 
   if (!isBillingPath && !canAccessPathForRole(pathname, permissionUser)) {

@@ -170,9 +170,10 @@ export function canAccessPerformance(user: PermissionUser) {
 }
 
 export function canAccessOwnPerformance(user: PermissionUser) {
+  const role = normalizeRole(user.role);
   return (
     isActiveUser(user)
-    && normalizeRole(user.role) === "COLABORADOR"
+    && (role === "COLABORADOR" || role === "POC")
     && roleHasCapability(user.role, "PERSONAL")
     && isAgentJobTitle(user.roleTitle ?? user.jobTitle)
   );
