@@ -102,6 +102,7 @@ import {
   canEditSchedule,
   canEditWorkHours,
   canImportWorkHours,
+  canJustifyAbsence,
   canManageRoles,
   canRequestWorkHourAdjustment,
   canViewWorkHours,
@@ -749,6 +750,34 @@ type WorkHourPreview = {
   scheduleFoundRows: number;
   noScheduleRows: number;
   validation: Array<{ rowNumber: number; wbLogin: string; originalWbLogin?: string; normalizedWbLogin?: string; employeeName: string; employeeStatus?: string; date: string; hasSchedule?: boolean; allowsWorkHours?: boolean; scheduleStatus?: string; actualHours?: number; actualHoursLabel?: string; plannedHours?: number | null; plannedHoursLabel?: string; differenceMinutes?: number | null; differenceLabel?: string; errors: string[]; warnings: string[]; action: string; status: string }>;
+};
+
+type CaptureWorkHourImportPreview = {
+  period: { startDate: string; endDate: string };
+  summary: { automatic: number; divergences: number; ignored: number };
+  overlap: {
+    count: number;
+    dates: string[];
+    agents: Array<{ id: string; name: string; wbLogin: string }>;
+    currentHours: number;
+    proposedHours: number;
+  };
+};
+
+type WorkHourAdherenceRow = {
+  id: string;
+  employeeName: string;
+  wbLogin: string;
+  date: string;
+  lob: string;
+  classification: string;
+  supervisor: string;
+  plannedSlot: string;
+  capturedDuration: string;
+  status: string;
+  justification: string;
+  answeredBy: string;
+  answeredAt: string;
 };
 
 type RegistrationItem = {
@@ -7865,6 +7894,11 @@ export function WorkHoursPage() {
   const [preview, setPreview] = useState<(WorkHourPreview & { fileName: string }) | null>(null);
   const [showPreview, setShowPreview] = useState(false);
   const [savingImport, setSavingImport] = useState(false);
+  const [captureImportPreview, setCaptureImportPreview] = useState<CaptureWorkHourImportPreview | null>(null);
+  const [importingCapture, setImportingCapture] = useState(false);
+  const [adherenceRows, setAdherenceRows] = useState<WorkHourAdherenceRow[]>([]);
+  const [adherenceDrafts, setAdherenceDrafts] = useState<Record<string, string>>({});
+  const [savingAdherenceId, setSavingAdherenceId] = useState("");
   const [downloadingWorkHourTemplate, setDownloadingWorkHourTemplate] = useState(false);
   const [selectedRow, setSelectedRow] = useState<WorkHourRow | null>(null);
   const [showAdjustment, setShowAdjustment] = useState(false);
@@ -7886,6 +7920,7 @@ export function WorkHoursPage() {
   const canApprove = canApproveWorkHourAdjustment(permissionUser);
   const canDeleteWorkHours = canEditWorkHours(permissionUser);
   const canRequestAdjustment = canRequestWorkHourAdjustment(permissionUser);
+  const canViewAdherence = canJustifyAbsence(permissionUser);
   const employeeWorkHourStatusOptions = ["Todos", "Ativos", "Desligados/Inativos"];
   const statusOptions = ["Todos", "Hora extra", "OK", "Horas pendentes", "Sem cronograma"];
   const lobOptions = ["Todos", ...(settings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? Array.from(new Set(rows.map((row) => row.lob).filter(Boolean))))];
@@ -7899,6 +7934,7 @@ export function WorkHoursPage() {
   useEffect(() => {
     apiJson<{ data: SystemSettings }>("/api/settings").then((payload) => setSettings(payload.data)).catch(() => undefined);
     void loadWorkHours();
+    if (canViewAdherence) void loadAdherence();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -7933,6 +7969,111 @@ export function WorkHoursPage() {
       setMessage(error instanceof Error ? error.message : "Não foi possível carregar horas operacionais.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  function captureImportPayload() {
+    return {
+      startDate: filters.startDate,
+      endDate: filters.endDate,
+      employeeId: filters.employeeId || undefined,
+      lob: filters.lob,
+      supervisor: filters.supervisor || undefined,
+      shift: filters.shift,
+      collaborator: filters.collaborator || undefined,
+      employeeStatus: filters.employeeStatus
+    };
+  }
+
+  function preservedWorkHourQuery() {
+    const params = new URLSearchParams({ startDate: filters.startDate, endDate: filters.endDate });
+    if (filters.employeeId) params.set("employeeId", filters.employeeId);
+    if (filters.lob !== "Todos") params.set("lob", filters.lob);
+    if (filters.supervisor) params.set("supervisor", filters.supervisor);
+    if (filters.shift !== "Todos") params.set("shift", filters.shift);
+    if (filters.collaborator) params.set("collaborator", filters.collaborator);
+    if (filters.employeeStatus !== "Todos") params.set("employeeStatus", filters.employeeStatus);
+    if (filters.status !== "Todos") params.set("status", filters.status);
+    return params.toString();
+  }
+
+  async function importFromCapture() {
+    setImportingCapture(true);
+    setCaptureImportPreview(null);
+    setMessage("");
+    try {
+      const previewPayload = await apiJson<{ data: CaptureWorkHourImportPreview }>("/api/work-hours/capture-import/preview", {
+        method: "POST",
+        body: JSON.stringify(captureImportPayload())
+      });
+      if (previewPayload.data.overlap.count > 0) {
+        setCaptureImportPreview(previewPayload.data);
+        return;
+      }
+      await commitCaptureImport(false);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível importar a Captura de Horas.");
+    } finally {
+      setImportingCapture(false);
+    }
+  }
+
+  async function commitCaptureImport(confirmReprocessing: boolean) {
+    setImportingCapture(true);
+    setMessage("");
+    try {
+      const payload = await apiJson<{ data: { imported: number; unchanged: number; divergences: number; ignored: number } }>("/api/work-hours/capture-import/commit", {
+        method: "POST",
+        body: JSON.stringify({ ...captureImportPayload(), confirmReprocessing })
+      });
+      setCaptureImportPreview(null);
+      if (payload.data.divergences > 0) {
+        window.location.assign(`/horas-operacionais/divergencias?${preservedWorkHourQuery()}`);
+        return;
+      }
+      setMessage(`${payload.data.imported} registro(s) atualizado(s) pela Captura de Horas. ${payload.data.unchanged} já estavam corretos.`);
+      await Promise.all([loadWorkHours(1), canViewAdherence ? loadAdherence() : Promise.resolve()]);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível processar a Captura de Horas.");
+    } finally {
+      setImportingCapture(false);
+    }
+  }
+
+  async function loadAdherence() {
+    if (!canViewAdherence) return;
+    try {
+      const params = new URLSearchParams({ startDate: filters.startDate, endDate: filters.endDate });
+      if (filters.employeeId) params.set("employeeId", filters.employeeId);
+      if (filters.lob !== "Todos") params.set("lob", filters.lob);
+      if (filters.collaborator) params.set("collaborator", filters.collaborator);
+      const payload = await apiJson<{ data: WorkHourAdherenceRow[] }>(`/api/work-hours/adherence?${params.toString()}`);
+      setAdherenceRows(payload.data);
+      setAdherenceDrafts((current) => Object.fromEntries(payload.data.map((row) => [row.id, current[row.id] ?? row.justification])));
+    } catch {
+      setAdherenceRows([]);
+    }
+  }
+
+  async function submitAdherenceJustification(row: WorkHourAdherenceRow) {
+    const justification = (adherenceDrafts[row.id] ?? "").trim();
+    if (justification.length < 5) {
+      setMessage("Informe uma justificativa de aderência com pelo menos 5 caracteres.");
+      return;
+    }
+    setSavingAdherenceId(row.id);
+    setMessage("");
+    try {
+      await apiJson("/api/work-hours/adherence", {
+        method: "POST",
+        body: JSON.stringify({ id: row.id, justification })
+      });
+      setMessage("Justificativa de aderência enviada.");
+      await loadAdherence();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível enviar a justificativa.");
+    } finally {
+      setSavingAdherenceId("");
     }
   }
 
@@ -8115,6 +8256,18 @@ export function WorkHoursPage() {
               </button>
             ) : null}
             {canUpload ? (
+              <button type="button" disabled={importingCapture} onClick={importFromCapture} className="flex h-11 items-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-bold text-white shadow-soft disabled:cursor-not-allowed disabled:opacity-60">
+                <RefreshCw className={cn("h-4 w-4", importingCapture && "animate-spin")} />
+                {importingCapture ? "Consultando captura..." : "Importar da Captura de Horas"}
+              </button>
+            ) : null}
+            {canUpload ? (
+              <a href={`/horas-operacionais/divergencias?${preservedWorkHourQuery()}`} className="flex h-11 items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 text-sm font-bold text-amber-800 shadow-soft">
+                <AlertTriangle className="h-4 w-4" />
+                Tela de Divergências
+              </a>
+            ) : null}
+            {canUpload ? (
               <button type="button" disabled={downloadingWorkHourTemplate} onClick={downloadWorkHourTemplate} className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 shadow-soft disabled:cursor-not-allowed disabled:opacity-60">
                 <Download className="h-4 w-4" />
                 {downloadingWorkHourTemplate ? "Baixando..." : "Baixar template"}
@@ -8131,6 +8284,28 @@ export function WorkHoursPage() {
       />
 
       {message ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
+
+      {captureImportPreview?.overlap.count ? (
+        <section className="card mb-5 border-amber-300 bg-amber-50 p-5">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+            <div className="min-w-0 flex-1">
+              <h2 className="font-extrabold text-amber-950">Confirmação de reprocessamento necessária</h2>
+              <p className="mt-1 text-sm font-semibold text-amber-900">Já existem {captureImportPreview.overlap.count} registro(s) no escopo. A confirmação recalcula tudo a partir da duração original, substitui somente os registros afetados e nunca soma horas ou os 30 minutos novamente.</p>
+              <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                <InfoLine label="Datas afetadas" value={captureImportPreview.overlap.dates.join(", ")} />
+                <InfoLine label="Agentes afetados" value={captureImportPreview.overlap.agents.map((agent) => `${agent.name} (${agent.wbLogin})`).join(", ")} />
+                <InfoLine label="Horas atuais" value={formatWorkHourValue(captureImportPreview.overlap.currentHours, "0:00")} />
+                <InfoLine label="Horas propostas" value={formatWorkHourValue(captureImportPreview.overlap.proposedHours, "0:00")} />
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button disabled={importingCapture} onClick={() => commitCaptureImport(true)} className="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60">{importingCapture ? "Reprocessando..." : "Confirmar reprocessamento"}</button>
+                <button disabled={importingCapture} onClick={() => setCaptureImportPreview(null)} className="rounded-lg border border-border bg-white px-4 py-2.5 text-sm font-bold text-navy-950">Cancelar</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard title="Horas previstas" value={formatWorkHourValue(summary?.plannedHours ?? 0, "0:00")} helper={`base produtiva ${formatWorkHourValue(DEFAULT_PRODUCTIVE_HOURS)}/dia`} icon={Clock} tone="blue" />
@@ -8156,7 +8331,7 @@ export function WorkHoursPage() {
           <FormSelect label="Status parceiro" value={filters.employeeStatus} options={employeeWorkHourStatusOptions} onChange={(value) => setFilters({ ...filters, employeeStatus: value })} />
           <FormSelect label="Status" value={filters.status} options={statusOptions} onChange={(value) => setFilters({ ...filters, status: value, overtimeOnly: false, hoursPendingOnly: false, pendingOnly: false, noScheduleOnly: false })} />
           <div className="flex items-end gap-2">
-            <button onClick={() => loadWorkHours(1)} className="h-11 flex-1 rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
+            <button onClick={() => { void loadWorkHours(1); if (canViewAdherence) void loadAdherence(); }} className="h-11 flex-1 rounded-lg bg-blue-600 px-3 text-sm font-bold text-white">Filtrar</button>
             <button onClick={() => { setFilters({ ...currentOperationalMonthRange(), employeeId: "", lob: "Todos", supervisor: "", shift: "Todos", collaborator: "", employeeStatus: "Todos", status: "Todos", overtimeOnly: false, hoursPendingOnly: false, pendingOnly: false, noScheduleOnly: false }); setTimeout(() => void loadWorkHours(1), 0); }} className="h-11 rounded-lg border border-border bg-white px-3 text-sm font-bold">Limpar</button>
           </div>
         </div>
@@ -8167,6 +8342,64 @@ export function WorkHoursPage() {
           <label className="flex items-center gap-2"><input type="checkbox" checked={filters.noScheduleOnly} onChange={(event) => setFilters({ ...filters, status: "Todos", noScheduleOnly: event.target.checked, overtimeOnly: false, hoursPendingOnly: false, pendingOnly: false })} /> Sem cronograma</label>
         </div>
       </section>
+
+      {canViewAdherence ? (
+        <section className="card mb-5 overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
+            <div>
+              <h2 className="text-lg font-extrabold text-navy-950">Pendências de justificativa</h2>
+              <p className="text-sm font-semibold text-muted">Capturas originais abaixo de 7:25 após presença ou comparecimento validado.</p>
+            </div>
+            <StatusBadge status={`${adherenceRows.filter((row) => row.status === "Pendente").length} pendente(s)`} />
+          </div>
+          {adherenceRows.length ? (
+            <div className="max-h-[520px] overflow-auto">
+              <table className="w-full min-w-[1320px] text-left text-sm">
+                <thead className="sticky top-0 z-10 border-b border-border bg-slate-50 text-xs font-bold uppercase tracking-wide text-muted">
+                  <tr>
+                    {[
+                      "Parceiro / WB", "Data", "LOB / classificação", "Supervisor", "Escala prevista", "Duração original", "Status", "Justificativa", "Resposta"
+                    ].map((column) => <th key={column} className="px-4 py-3">{column}</th>)}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border bg-white">
+                  {adherenceRows.map((row) => (
+                    <tr key={row.id}>
+                      <td className="px-4 py-3"><p className="font-bold text-navy-950">{row.employeeName}</p><p className="text-xs font-semibold text-muted">{row.wbLogin}</p></td>
+                      <td className="px-4 py-3 font-bold">{row.date}</td>
+                      <td className="px-4 py-3">{row.lob} · {row.classification}</td>
+                      <td className="px-4 py-3">{row.supervisor}</td>
+                      <td className="px-4 py-3">{row.plannedSlot}</td>
+                      <td className="px-4 py-3 font-extrabold text-amber-700">{row.capturedDuration}</td>
+                      <td className="px-4 py-3"><StatusBadge status={row.status} /></td>
+                      <td className="px-4 py-3">
+                        {row.status === "Pendente" ? (
+                          <textarea
+                            aria-label={`Justificativa de aderência de ${row.employeeName}`}
+                            value={adherenceDrafts[row.id] ?? ""}
+                            onChange={(event) => setAdherenceDrafts((current) => ({ ...current, [row.id]: event.target.value }))}
+                            placeholder="Explique a baixa aderência ao Cronograma"
+                            className="min-h-20 w-80 rounded-lg border border-border p-2.5 text-sm outline-none focus:border-blue-400"
+                          />
+                        ) : <p className="max-w-sm whitespace-pre-wrap font-semibold">{row.justification}</p>}
+                      </td>
+                      <td className="px-4 py-3">
+                        {row.status === "Pendente" ? (
+                          <button disabled={savingAdherenceId === row.id} onClick={() => submitAdherenceJustification(row)} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-60">
+                            {savingAdherenceId === row.id ? "Enviando..." : "Enviar justificativa"}
+                          </button>
+                        ) : <p className="text-xs font-semibold text-muted">{row.answeredBy}<br />{row.answeredAt}</p>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="p-6"><EmptyState title="Sem pendências de justificativa" description="Não há capturas abaixo de 7:25 aguardando justificativa no período." /></div>
+          )}
+        </section>
+      ) : null}
 
       <section className="card overflow-hidden">
         <div className="flex items-center justify-between border-b border-border px-5 py-4">

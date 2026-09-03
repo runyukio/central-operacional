@@ -112,9 +112,9 @@ type RealtimeHoursTimelineOptions = {
   includeOvernightShiftTail?: boolean;
 };
 
-type RealtimeHoursTimelineRow = ReturnType<typeof buildRealtimeHoursTimelineRow>;
+export type RealtimeHoursTimelineRow = ReturnType<typeof buildRealtimeHoursTimelineRow>;
 
-type RealtimeHoursTimelineResult = {
+export type RealtimeHoursTimelineResult = {
   success: true;
   date: string;
   window: {
