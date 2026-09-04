@@ -6,6 +6,7 @@ import { canImportWorkHours, canJustifyAbsence, normalizeRole } from "@/lib/perm
 import { prisma } from "@/lib/prisma";
 import { getRealtimeHoursTimelineRange } from "@/lib/realtime-hours-service";
 import { isCaptureImportEligible } from "@/lib/work-hours-capture-eligibility";
+import { cancelAdherenceForDeletedWorkHours } from "@/lib/work-hours-adherence-cleanup";
 import { shiftCategoryName } from "@/lib/shift-display";
 import {
   calculateOperationalHours,
@@ -455,6 +456,7 @@ export async function listWorkHourAdherenceJustifications(actor: Actor, filters:
   if ("error" in period) return period;
   const role = normalizeRole(user.role.name);
   const supervisorScope = role === "SUPERVISOR" ? user.employeeProfile?.id ?? "__none__" : null;
+  const statusFilter = normalizeEmployeeStatusFilter(filters.employeeStatus);
   const records = await prisma.workHourAdherenceJustification.findMany({
     where: {
       date: { gte: period.start, lte: period.end },
@@ -462,6 +464,10 @@ export async function listWorkHourAdherenceJustifications(actor: Actor, filters:
       ...(supervisorScope ? { supervisorId: supervisorScope } : {}),
       ...(filters.employeeId ? { employeeId: filters.employeeId } : {}),
       ...(filters.lob && filters.lob !== "Todos" ? { lob: filters.lob } : {}),
+      ...(filters.supervisor && filters.supervisor !== "Todos" ? {
+        supervisor: { fullName: { contains: filters.supervisor, mode: "insensitive" } }
+      } : {}),
+      ...(statusFilter ? { employee: { operationalStatus: statusFilter } } : {}),
       ...(filters.collaborator ? {
         OR: [
           { employee: { fullName: { contains: filters.collaborator, mode: "insensitive" } } },
@@ -476,8 +482,19 @@ export async function listWorkHourAdherenceJustifications(actor: Actor, filters:
     },
     orderBy: [{ status: "desc" }, { date: "desc" }, { employee: { fullName: "asc" } }]
   });
+  // Older deletions may have left orphaned justifications. Never ask a supervisor
+  // to justify a removed record; preserve the old entry for audit/reprocessing.
+  const hours = records.length ? await prisma.workHourRecord.findMany({
+    where: { OR: records.map((record) => ({ employeeId: record.employeeId, date: record.date })) },
+    select: { employeeId: true, date: true }
+  }) : [];
+  const existingDays = new Set(hours.map((record) => `${record.employeeId}:${record.date.toISOString()}`));
   return {
-    data: records.filter((record) => isCaptureImportEligible(record.employee, formatDate(record.date))).map((record) => ({
+    data: records.filter((record) => (
+      existingDays.has(`${record.employeeId}:${record.date.toISOString()}`)
+      && isCaptureImportEligible(record.employee, formatDate(record.date))
+      && (!filters.shift || filters.shift === "Todos" || shiftCategoryName(record.employee.shift.name) === shiftCategoryName(filters.shift))
+    )).map((record) => ({
       id: record.id,
       employeeName: record.employee.fullName,
       wbLogin: record.wbLogin,
@@ -495,6 +512,21 @@ export async function listWorkHourAdherenceJustifications(actor: Actor, filters:
   };
 }
 
+export async function exportWorkHourAdherenceJustifications(actor: Actor, filters: CaptureImportFilters = {}) {
+  const result = await listWorkHourAdherenceJustifications(actor, filters);
+  if ("error" in result) return result;
+  const period = parsePeriod(filters);
+  if ("error" in period) return period;
+  return {
+    fileName: `justificativas_aderencia_${formatDate(period.start)}_${formatDate(period.end)}.xlsx`,
+    sheetName: "Justificativas",
+    autoFilter: true,
+    headers: ["Data do turno", "Parceiro", "WB/Login", "LOB", "Classificação", "Supervisor", "Horário planejado", "Horas capturadas", "Status", "Justificativa", "Respondido por", "Respondido em (São Paulo)"],
+    rows: result.data.map((row) => [row.date, row.employeeName, row.wbLogin, row.lob, row.classification, row.supervisor,
+      row.plannedSlot, row.capturedDuration, row.status, row.justification, row.answeredBy, row.answeredAt])
+  };
+}
+
 export async function answerWorkHourAdherenceJustification(actor: Actor, input: { id: string; justification: string }) {
   const user = await getActiveUser(actor);
   if (!user || !canJustifyAbsence({ role: user.role.name, status: user.status })) {
@@ -502,37 +534,45 @@ export async function answerWorkHourAdherenceJustification(actor: Actor, input: 
   }
   const justification = input.justification.trim();
   if (justification.length < 5) return createValidationError({}, "Informe uma justificativa com pelo menos 5 caracteres.");
-  const record = await prisma.workHourAdherenceJustification.findUnique({ where: { id: input.id }, include: { employee: { include: captureEmployeeInclude } } });
-  if (!record || record.status === "CANCELLED") return createValidationError({}, "Pendência não encontrada.");
-  if (!isCaptureImportEligible(record.employee, formatDate(record.date))) return createValidationError({}, "Este parceiro não é elegível para a integração da Captura de Horas.");
   const role = normalizeRole(user.role.name);
-  if (role === "SUPERVISOR" && record.supervisorId !== user.employeeProfile?.id) {
-    return createPermissionError("Supervisores só podem justificar pendências de seus próprios agentes.");
-  }
-
-  const saved = await prisma.$transaction(async (tx) => {
-    const updated = await tx.workHourAdherenceJustification.update({
-      where: { id: record.id },
-      data: { status: "JUSTIFIED", justification, answeredById: user.id, answeredAt: new Date() }
-    });
-    await tx.notification.updateMany({
-      where: { entity: "WorkHourAdherenceJustification", entityId: record.id, readAt: null },
-      data: { isRead: true, readAt: new Date() }
-    });
-    await tx.auditLog.create({
-      data: {
-        actorId: user.id,
-        action: "EDICAO",
-        entity: "WorkHourAdherenceJustification",
-        entityId: record.id,
-        reason: "Justificativa de baixa aderência enviada.",
-        previousValue: { status: record.status, justification: record.justification },
-        newValue: { status: updated.status, justification, answeredAt: updated.answeredAt }
+  try {
+    const saved = await prisma.$transaction(async (tx) => {
+      const record = await tx.workHourAdherenceJustification.findUnique({ where: { id: input.id }, include: { employee: { include: captureEmployeeInclude } } });
+      if (!record || record.status === "CANCELLED") return createValidationError({}, "Pendência não encontrada ou já excluída.");
+      if (!isCaptureImportEligible(record.employee, formatDate(record.date))) return createValidationError({}, "Este parceiro não é elegível para a integração da Captura de Horas.");
+      if (role === "SUPERVISOR" && record.supervisorId !== user.employeeProfile?.id) {
+        return createPermissionError("Supervisores só podem justificar pendências de seus próprios agentes.");
       }
-    });
-    return updated;
-  });
-  return { data: { id: saved.id, status: "Justificado", answeredAt: formatDateTime(saved.answeredAt!) } };
+      const hours = await tx.workHourRecord.findUnique({
+        where: { employeeId_date: { employeeId: record.employeeId, date: record.date } }, select: { id: true }
+      });
+      if (!hours) return createValidationError({}, "As horas deste dia foram excluídas. Atualize a tela; não há mais justificativa a enviar.");
+      const updated = await tx.workHourAdherenceJustification.update({
+        where: { id: record.id },
+        data: { status: "JUSTIFIED", justification, answeredById: user.id, answeredAt: new Date() }
+      });
+      await tx.notification.updateMany({
+        where: { entity: "WorkHourAdherenceJustification", entityId: record.id, readAt: null },
+        data: { isRead: true, readAt: new Date() }
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          action: "EDICAO",
+          entity: "WorkHourAdherenceJustification",
+          entityId: record.id,
+          reason: "Justificativa de baixa aderência enviada.",
+          previousValue: { status: record.status, justification: record.justification },
+          newValue: { status: updated.status, justification, answeredAt: updated.answeredAt }
+        }
+      });
+      return updated;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    if ("error" in saved) return saved;
+    return { data: { id: saved.id, status: "Justificado", answeredAt: formatDateTime(saved.answeredAt!) } };
+  } catch (error) {
+    return createServerError(error, "Não foi possível salvar a justificativa. Atualize a tela e tente novamente.");
+  }
 }
 
 async function buildCaptureImportPlan(filters: CaptureImportFilters) {
@@ -833,12 +873,18 @@ async function saveValidatedAttendance(
       }
     });
   }
-  await upsertLowAdherence(tx, proposal, input.actorId);
+  await upsertLowAdherence(tx, proposal, input.actorId, Boolean(current));
   return { record: saved, changed: !unchanged };
 }
 
-async function upsertLowAdherence(tx: Prisma.TransactionClient, proposal: CaptureImportProposal, actorId: string) {
+async function upsertLowAdherence(tx: Prisma.TransactionClient, proposal: CaptureImportProposal, actorId: string, hadOperationalHours: boolean) {
   if (!proposal.schedule || proposal.capturedMs === null || !proposal.calculation) return;
+  if (!hadOperationalHours) {
+    // Also repair justifications left by deletions predating the cleanup rule.
+    await cancelAdherenceForDeletedWorkHours(tx, {
+      employeeId: proposal.employee.id, date: proposal.date, actorId, reason: "Reimportação após ausência do registro de horas"
+    });
+  }
   if (!shouldCreateLowAdherence(proposal.capturedMs)) {
     await cancelLowAdherence(tx, proposal.reconciliationKey);
     return;
@@ -1084,6 +1130,7 @@ async function removeOperationalHoursForOutcome(
   actorId: string,
   reason: string
 ) {
+  await cancelAdherenceForDeletedWorkHours(tx, { employeeId, date, actorId, reason });
   const record = await tx.workHourRecord.findUnique({ where: { employeeId_date: { employeeId, date } } });
   if (!record) return;
   await tx.auditLog.create({

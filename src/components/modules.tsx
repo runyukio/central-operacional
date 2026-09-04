@@ -6467,7 +6467,7 @@ export function SchedulesPage() {
       return;
     }
 
-    const confirmed = window.confirm("Excluir as horas lançadas para este dia? O cronograma será mantido.");
+    const confirmed = window.confirm("Excluir as horas lançadas e as justificativas de aderência vinculadas a este dia? O cronograma será mantido.");
     if (!confirmed) return;
 
     setDeletingWorkHour(true);
@@ -6493,7 +6493,7 @@ export function SchedulesPage() {
         adjustmentId: "",
         adjustmentStatus: "Sem ajuste"
       });
-      setAttendanceMessage("Registro de horas excluído. O cronograma foi mantido.");
+      setAttendanceMessage("Horas e pendências de aderência vinculadas excluídas. O cronograma foi mantido.");
       await refreshSchedules();
     } catch (error) {
       setAttendanceMessage(error instanceof Error ? error.message : "Não foi possível excluir as horas.");
@@ -7903,6 +7903,7 @@ export function WorkHoursPage() {
   const [adherenceRows, setAdherenceRows] = useState<WorkHourAdherenceRow[]>([]);
   const [adherenceDrafts, setAdherenceDrafts] = useState<Record<string, string>>({});
   const [savingAdherenceId, setSavingAdherenceId] = useState("");
+  const [exportingAdherence, setExportingAdherence] = useState(false);
   const [downloadingWorkHourTemplate, setDownloadingWorkHourTemplate] = useState(false);
   const [selectedRow, setSelectedRow] = useState<WorkHourRow | null>(null);
   const [showAdjustment, setShowAdjustment] = useState(false);
@@ -8056,14 +8057,33 @@ export function WorkHoursPage() {
     }
   }
 
+  function adherenceQuery() {
+    const params = new URLSearchParams({ startDate: filters.startDate, endDate: filters.endDate });
+    if (filters.employeeId) params.set("employeeId", filters.employeeId);
+    if (filters.lob !== "Todos") params.set("lob", filters.lob);
+    if (filters.collaborator) params.set("collaborator", filters.collaborator);
+    if (filters.supervisor) params.set("supervisor", filters.supervisor);
+    if (filters.shift !== "Todos") params.set("shift", filters.shift);
+    if (filters.employeeStatus !== "Todos") params.set("employeeStatus", filters.employeeStatus);
+    return params.toString();
+  }
+
+  async function exportAdherence() {
+    if (!canViewAdherence || exportingAdherence) return;
+    setExportingAdherence(true);
+    try {
+      await downloadFile(`/api/work-hours/adherence/export?${adherenceQuery()}`, `justificativas_aderencia_${filters.startDate}_${filters.endDate}.xlsx`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Não foi possível exportar as justificativas.");
+    } finally {
+      setExportingAdherence(false);
+    }
+  }
+
   async function loadAdherence() {
     if (!canViewAdherence) return;
     try {
-      const params = new URLSearchParams({ startDate: filters.startDate, endDate: filters.endDate });
-      if (filters.employeeId) params.set("employeeId", filters.employeeId);
-      if (filters.lob !== "Todos") params.set("lob", filters.lob);
-      if (filters.collaborator) params.set("collaborator", filters.collaborator);
-      const payload = await apiJson<{ data: WorkHourAdherenceRow[] }>(`/api/work-hours/adherence?${params.toString()}`);
+      const payload = await apiJson<{ data: WorkHourAdherenceRow[] }>(`/api/work-hours/adherence?${adherenceQuery()}`);
       setAdherenceRows(payload.data);
       setAdherenceDrafts((current) => Object.fromEntries(payload.data.map((row) => [row.id, current[row.id] ?? row.justification])));
     } catch {
@@ -8218,7 +8238,7 @@ export function WorkHoursPage() {
   }
 
   async function deleteWorkHour(row: WorkHourRow) {
-    const confirmed = window.confirm(`Excluir as horas de ${row.employeeName} em ${row.date}? O cronograma e o parceiro serão mantidos.`);
+    const confirmed = window.confirm(`Excluir as horas de ${row.employeeName} em ${row.date} e suas justificativas de aderência? O cronograma e o parceiro serão mantidos.`);
     if (!confirmed) return;
 
     setDeletingWorkHourId(row.id);
@@ -8231,8 +8251,11 @@ export function WorkHoursPage() {
           reason: "Exclusão pelo painel de Horas Operacionais"
         })
       });
-      setMessage("Registro de horas excluído.");
-      await loadWorkHours(rows.length === 1 && pagination.page > 1 ? pagination.page - 1 : pagination.page);
+      await Promise.all([
+        loadWorkHours(rows.length === 1 && pagination.page > 1 ? pagination.page - 1 : pagination.page),
+        canViewAdherence ? loadAdherence() : Promise.resolve()
+      ]);
+      setMessage("Horas e pendências de aderência vinculadas excluídas.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Não foi possível excluir o registro de horas.");
     } finally {
@@ -8368,7 +8391,12 @@ export function WorkHoursPage() {
               <h2 className="text-lg font-extrabold text-navy-950">Pendências de justificativa</h2>
               <p className="text-sm font-semibold text-muted">Capturas originais abaixo de 7:25 após presença ou comparecimento validado.</p>
             </div>
-            <StatusBadge status={`${adherenceRows.filter((row) => row.status === "Pendente").length} pendente(s)`} />
+            <div className="flex flex-wrap items-center gap-3">
+              <StatusBadge status={`${adherenceRows.filter((row) => row.status === "Pendente").length} pendente(s)`} />
+              <button type="button" onClick={() => void exportAdherence()} disabled={exportingAdherence} className="premium-control inline-flex h-10 items-center gap-2 px-4 text-sm font-bold text-navy-950 disabled:opacity-50">
+                <Download className="h-4 w-4" /> {exportingAdherence ? "Exportando..." : "Exportar justificativas"}
+              </button>
+            </div>
           </div>
           {adherenceRows.length ? (
             <div className="max-h-[520px] overflow-auto">

@@ -24,6 +24,7 @@ import { auditPermissionDenied } from "@/lib/permission-audit";
 import { prisma } from "@/lib/prisma";
 import { getRealtimeHoursShiftActivityHours } from "@/lib/realtime-hours-service";
 import { cleanShiftName, shiftCategoryName } from "@/lib/shift-display";
+import { cancelAdherenceForDeletedWorkHours } from "@/lib/work-hours-adherence-cleanup";
 import {
   DEFAULT_PRODUCTIVE_HOURS,
   WORK_HOUR_TOLERANCE_MINUTES,
@@ -791,6 +792,9 @@ export async function deleteWorkHourRecord(actor: Actor, input: DeleteWorkHourIn
 
     const reason = input.reason?.trim() || "Exclusão manual de horas operacionais";
     await prisma.$transaction(async (tx) => {
+      await cancelAdherenceForDeletedWorkHours(tx, {
+        employeeId: record.employeeId, date: record.date, actorId: user.id, reason
+      });
       await tx.workHourRecord.delete({ where: { id: record.id } });
       await tx.auditLog.create({
         data: {
@@ -803,9 +807,9 @@ export async function deleteWorkHourRecord(actor: Actor, input: DeleteWorkHourIn
           newValue: serialize(null)
         }
       });
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
-    return { success: true, message: "Registro de horas excluído." };
+    return { success: true, message: "Registro de horas e pendências de aderência vinculadas excluídos." };
   } catch (error) {
     recordErrorLog({ userEmail: actor.email, code: "WORK_HOUR_DELETE_ERROR", message: error instanceof Error ? error.message : "Falha ao excluir horas", action: "WORK_HOUR_DELETE", severity: "ERROR" });
     return mapPrismaError(error) ?? { error: "Não foi possível excluir o registro de horas." };

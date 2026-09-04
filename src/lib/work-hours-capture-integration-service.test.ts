@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { prisma } from "./prisma";
-import { applyCaptureWorkHourDivergenceDecisions, captureWorkHoursData, commitCaptureWorkHoursImport, listCaptureWorkHourDivergences, previewCaptureWorkHoursImport } from "./work-hours-capture-integration-service";
+import { answerWorkHourAdherenceJustification, applyCaptureWorkHourDivergenceDecisions, captureWorkHoursData, commitCaptureWorkHoursImport, exportWorkHourAdherenceJustifications, listCaptureWorkHourDivergences, listWorkHourAdherenceJustifications, previewCaptureWorkHoursImport } from "./work-hours-capture-integration-service";
+import { deleteWorkHourRecord } from "./work-hours-service";
+import { cancelAdherenceForDeletedWorkHours } from "./work-hours-adherence-cleanup";
+import { buildXlsxResponse } from "./xlsx-export";
+import * as XLSX from "xlsx";
 
 const day = "2026-09-03";
 const date = new Date(`${day}T00:00:00.000Z`);
@@ -104,6 +108,111 @@ function fixture(t: TestContext, seed: Record<string, Row[]> = {}) {
   };
 }
 const mutations = (calls: Row[]) => calls.filter((call) => !["findMany", "findFirst", "findUnique", "timeline"].includes(call.op));
+
+function adherence(id = "adherence", employeeId = "agent", patch: Row = {}): Row {
+  return { id, employeeId, date, scheduleId: `slot-${employeeId}`, supervisorId: null,
+    reconciliationKey: `${employeeId}:${day}:slot-${employeeId}`, wbLogin: `wb_${employeeId}`, lob: "ADS", classification: "ADS",
+    plannedStart: "23:00", plannedEnd: "08:00", sourceDurationMs: 6 * hour, status: "PENDING",
+    justification: null, answeredById: null, answeredAt: null, ...patch };
+}
+
+test("excluir horas cancela justificativas e alertas do mesmo parceiro/data, preservando outros dias e a auditoria", async (t) => {
+  const nextDate = new Date("2026-09-04T00:00:00Z");
+  const f = fixture(t, {
+    employeeProfile: [employee(), employee("other")], schedule: [slot()],
+    workHourRecord: [{ id: "hours", employeeId: "agent", date, effectiveHours: 6.5 }, { id: "tomorrow", employeeId: "agent", date: nextDate }],
+    workHourAdherenceJustification: [adherence(), adherence("answered", "agent", { reconciliationKey: `agent:${day}:previous-slot`, status: "JUSTIFIED", justification: "Motivo original", answeredById: "wfm", answeredAt: new Date() }),
+      adherence("other-day", "agent", { date: nextDate }), adherence("other-agent", "other")],
+    notification: ["adherence", "answered", "other-day", "other-agent"].map((entityId) => ({ id: `notice-${entityId}`, entity: "WorkHourAdherenceJustification", entityId, isRead: false, readAt: null }))
+  });
+  const schedules = clone(f.state.schedule);
+  const result = await deleteWorkHourRecord(actor, { workHourRecordId: "hours" });
+  assert.equal("success" in result && result.success, true);
+  assert.deepEqual(f.state.workHourRecord.map((r) => r.id), ["tomorrow"]);
+  assert.deepEqual(f.state.workHourAdherenceJustification.map((r) => r.status), ["CANCELLED", "CANCELLED", "PENDING", "PENDING"]);
+  assert.equal(f.state.workHourAdherenceJustification[1].justification, null);
+  assert.deepEqual(f.state.notification.map((r) => r.isRead), [true, true, false, false]);
+  assert.deepEqual(f.state.schedule, schedules);
+  assert.equal(f.state.auditLog.find((r) => r.entityId === "answered")!.previousValue.justification, "Motivo original");
+  assert.ok("error" in await answerWorkHourAdherenceJustification(actor, { id: "adherence", justification: "Tela antiga" }));
+});
+
+test("sem horas, pendências antigas não aparecem nem aceitam novas respostas", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee()], workHourAdherenceJustification: [adherence()] });
+  assert.deepEqual(await listWorkHourAdherenceJustifications(actor, { startDate: day, endDate: day }), { data: [] });
+  const result = await answerWorkHourAdherenceJustification(actor, { id: "adherence", justification: "Motivo de uma tela antiga" });
+  assert.ok("error" in result);
+  assert.equal(mutations(f.calls).length, 0);
+});
+
+test("falha na exclusão reverte a limpeza de aderência, notificações e auditoria", async (t) => {
+  const f = fixture(t, { workHourAdherenceJustification: [adherence()],
+    notification: [{ id: "n", entity: "WorkHourAdherenceJustification", entityId: "adherence", isRead: false, readAt: null }] });
+  const before = clone(f.state);
+  await assert.rejects(prisma.$transaction(async (tx) => {
+    await cancelAdherenceForDeletedWorkHours(tx, { employeeId: "agent", date, actorId: "wfm", reason: "Teste" });
+    throw new Error("Delete failed");
+  }, { isolationLevel: "Serializable" }), /Delete failed/);
+  assert.deepEqual(f.state, before);
+});
+
+test("reimportar horas excluídas recria a pendência sem reutilizar a resposta anterior", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()] });
+  f.capture("agent", 6);
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day });
+  const id = f.state.workHourAdherenceJustification[0].id;
+  await answerWorkHourAdherenceJustification(actor, { id, justification: "Resposta original" });
+  await deleteWorkHourRecord(actor, { workHourRecordId: f.state.workHourRecord[0].id });
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day });
+  assert.equal(f.state.workHourAdherenceJustification.length, 1);
+  assert.equal(f.state.workHourAdherenceJustification[0].status, "PENDING");
+  assert.equal(f.state.workHourAdherenceJustification[0].justification, null);
+});
+
+test("exporta XLSX válido com pendentes e justificadas, sem órfãos ou registros fora do período", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee(), employee("b"), employee("orphan")],
+    workHourRecord: [{ id: "hours", employeeId: "agent", date }, { id: "hours-b", employeeId: "b", date }],
+    workHourAdherenceJustification: [adherence(), adherence("answered", "b", { status: "JUSTIFIED", justification: "=Motivo informado", answeredAt: new Date("2026-09-03T14:00:00Z"), answeredBy: { name: "Supervisor" } }),
+      adherence("orphan", "orphan"), adherence("old", "agent", { date: new Date("2026-09-02T00:00:00Z") })] });
+  const result = await exportWorkHourAdherenceJustifications(actor, { startDate: day, endDate: day, lob: "ADS", shift: "Noite" });
+  assert.ok("headers" in result);
+  if (!("headers" in result)) return;
+  assert.equal(result.rows.length, 2);
+  const response = buildXlsxResponse(result);
+  assert.match(response.headers.get("Content-Type")!, /spreadsheetml/);
+  const book = XLSX.read(Buffer.from(await response.arrayBuffer()), { type: "buffer" });
+  const sheet = book.Sheets.Justificativas;
+  assert.equal(sheet.J3.v, "=Motivo informado");
+  assert.equal(sheet.J3.t, "s");
+  assert.equal(sheet.J3.f, undefined);
+  assert.equal(sheet.K3.v, "Supervisor");
+  assert.equal(sheet.L3.v, "03/09/2026, 11:00");
+  assert.deepEqual(sheet["!autofilter"], { ref: "A1:L3" });
+  assert.equal(mutations(f.calls).length, 0);
+});
+
+test("reimportação não recupera justificativa órfã de exclusão anterior à correção", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()],
+    workHourAdherenceJustification: [adherence("legacy", "agent", { status: "JUSTIFIED", justification: "Resposta antiga" })] });
+  f.capture("agent", 6);
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day });
+  assert.equal(f.state.workHourAdherenceJustification[0].status, "PENDING");
+  assert.equal(f.state.workHourAdherenceJustification[0].justification, null);
+  assert.equal(f.state.auditLog.find((r) => r.entityId === "legacy" && r.action === "EXCLUSAO")!.previousValue.justification, "Resposta antiga");
+});
+
+test("exportação respeita escopo do supervisor e impede acesso de agente", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee(), employee("other")],
+    workHourRecord: [{ id: "hours", employeeId: "agent", date }, { id: "hours-other", employeeId: "other", date }],
+    workHourAdherenceJustification: [adherence("mine", "agent", { supervisorId: "supervisor" }), adherence("other", "other", { supervisorId: "someone-else" })] });
+  Object.assign(f.state.user[0], { role: { name: "SUPERVISOR" }, employeeProfile: { id: "supervisor" } });
+  const result = await exportWorkHourAdherenceJustifications(actor, { startDate: day, endDate: day });
+  assert.ok("rows" in result && result.rows.length === 1 && result.rows[0][2] === "wb_agent");
+  const forged = await exportWorkHourAdherenceJustifications(actor, { startDate: day, endDate: day, employeeId: "other" });
+  assert.ok("rows" in forged && forged.rows.length === 0);
+  Object.assign(f.state.user[0], { role: { name: "COLABORADOR" } });
+  assert.ok("error" in await exportWorkHourAdherenceJustifications(actor, { startDate: day, endDate: day }));
+});
 
 test("nenhuma consulta da captura ou do cronograma para Staff, TI, nesting, treinamento e inativos", async (t) => {
   const profiles = [employee("staff", { roleTitle: "Staff" }), employee("ti", { lob: { name: "TI" } }), employee("nesting", { operationalStatus: "Nesting" }),
