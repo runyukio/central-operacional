@@ -26,7 +26,7 @@ export function normalizeSecurityAnswer(value: string) {
 
 export function validateSecurityAnswer(value: string) {
   const normalized = normalizeSecurityAnswer(value);
-  if (normalized.length < 8) return "A resposta deve ter pelo menos 8 caracteres.";
+  if (!normalized) return "Informe a resposta de segurança.";
   if (normalized.length > 128) return "A resposta deve ter no máximo 128 caracteres.";
   return "";
 }

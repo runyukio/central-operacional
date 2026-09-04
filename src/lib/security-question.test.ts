@@ -19,8 +19,9 @@ test("aceita somente perguntas pré-definidas", () => {
   assert.match(securityQuestionLabel("CHILDHOOD_OBJECT"), /objeto/i);
 });
 
-test("valida o tamanho da resposta depois da normalização", () => {
-  assert.match(validateSecurityAnswer("curta"), /8 caracteres/);
+test("aceita respostas curtas e rejeita somente valores vazios ou acima do limite", () => {
+  assert.match(validateSecurityAnswer("   "), /Informe a resposta/);
+  assert.equal(validateSecurityAnswer("a"), "");
   assert.equal(validateSecurityAnswer("resposta segura"), "");
   assert.match(validateSecurityAnswer("x".repeat(129)), /128 caracteres/);
 });

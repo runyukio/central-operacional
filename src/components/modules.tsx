@@ -2385,7 +2385,7 @@ export function AdditionalRegistrationDataPage() {
     if (securitySaving) return;
     const errors: Record<string, string> = {};
     if (!securityForm.question) errors.question = "Selecione uma pergunta.";
-    if (securityForm.answer.trim().length < 8) errors.answer = "A resposta deve ter pelo menos 8 caracteres.";
+    if (!securityForm.answer.trim()) errors.answer = "Informe a resposta de segurança.";
     if (!securityForm.currentPassword) errors.currentPassword = "Informe sua senha atual.";
     if (Object.keys(errors).length) {
       setSecurityErrors(errors);
@@ -2609,7 +2609,7 @@ export function AdditionalRegistrationDataPage() {
                       value={securityForm.answer}
                       onChange={(value) => updateSecurityField("answer", value)}
                       error={securityErrors.answer}
-                      helper="Use no mínimo 8 caracteres. Maiúsculas e espaços extras não alteram a validação."
+                      helper="Maiúsculas e espaços extras não alteram a validação."
                       maxLength={128}
                       autoComplete="new-password"
                       disabled={securityLoading || securitySaving}
