@@ -22,8 +22,11 @@ const excludedClassifications = new Set([
 export function isCaptureImportEligible(profile: CaptureEligibilityProfile, shiftDate: string) {
   if (profile.deletedAt || !isAgentJobTitle(profile.roleTitle)) return false;
   if (!["ATIVO", "ACTIVE", "ONLINE"].includes(normalizeOperationalToken(profile.operationalStatus))) return false;
-  const structuredValues = [profile.roleTitle, profile.lob.name, profile.team?.name, profile.user?.role?.name,
-    profile.skill, ...(profile.skillAssignments ?? []).map((item) => item.skill.name)];
+  // Onboarding is also an operational skill with a fixed-hours rule. It must not
+  // be confused with a pre-operational status/team; all other eligibility gates remain.
+  const skills = [profile.skill, ...(profile.skillAssignments ?? []).map((item) => item.skill.name)]
+    .filter((value) => normalizeOperationalToken(value) !== "ONBOARDING");
+  const structuredValues = [profile.roleTitle, profile.lob.name, profile.team?.name, profile.user?.role?.name, ...skills];
   if (structuredValues.some((value) => {
     const token = normalizeOperationalToken(value);
     return [...excludedClassifications].some((excluded) => (`_${token}_`).includes(`_${excluded}_`));

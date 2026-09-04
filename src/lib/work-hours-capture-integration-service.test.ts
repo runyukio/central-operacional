@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { prisma } from "./prisma";
 import { answerWorkHourAdherenceJustification, applyCaptureWorkHourDivergenceDecisions, captureWorkHoursData, commitCaptureWorkHoursImport, exportWorkHourAdherenceJustifications, listCaptureWorkHourDivergences, listWorkHourAdherenceJustifications, previewCaptureWorkHoursImport } from "./work-hours-capture-integration-service";
-import { deleteWorkHourRecord } from "./work-hours-service";
+import { deleteWorkHourRecord, upsertManualWorkHourRecord } from "./work-hours-service";
 import { cancelAdherenceForDeletedWorkHours } from "./work-hours-adherence-cleanup";
 import { buildXlsxResponse } from "./xlsx-export";
 import * as XLSX from "xlsx";
@@ -46,7 +46,7 @@ function fixture(t: TestContext, seed: Record<string, Row[]> = {}) {
   let serial = 0;
   const hydrate = (model: string, row: Row) => {
     const result = clone(row);
-    if (["workHourCaptureDivergence", "workHourAdherenceJustification"].includes(model)) {
+    if (["workHourRecord", "workHourCaptureDivergence", "workHourAdherenceJustification"].includes(model)) {
       result.employee = clone(state.employeeProfile.find((item) => item.id === row.employeeId));
       result.schedule = clone(state.schedule.find((item) => item.id === row.scheduleId) ?? null);
     }
@@ -72,18 +72,20 @@ function fixture(t: TestContext, seed: Record<string, Row[]> = {}) {
   const delegates: Row = {};
   for (const model of names) {
     delegates[model] = {};
-    for (const op of ["findFirst", "findUnique", "findMany", "create", "upsert", "update", "updateMany", "delete"] as const) {
+    for (const op of ["findFirst", "findUnique", "findUniqueOrThrow", "findMany", "create", "upsert", "update", "updateMany", "delete"] as const) {
       const impl = async (args: any = {}) => {
         calls.push({ model, op, args: clone(args) });
         const found = state[model].filter((row) => matches(hydrate(model, row), args.where));
         if (op === "findMany") return found.map((row) => hydrate(model, row));
         if (op === "findUnique" || op === "findFirst") return found[0] ? hydrate(model, found[0]) : null;
+        if (op === "findUniqueOrThrow") { if (!found[0]) throw new Error(`Missing ${model}`); return hydrate(model, found[0]); }
         if (op === "delete") { state[model] = state[model].filter((row) => row !== found[0]); return found[0]; }
         if (op === "updateMany") { found.forEach((row) => Object.assign(row, clone(args.data))); return { count: found.length }; }
         if (op === "update" && !found.length) throw new Error(`Missing ${model}`);
         const existing = op !== "create" ? found[0] : null;
         const data = op === "upsert" ? existing ? args.update : args.create : args.data;
-        const saved = existing ?? { id: `${model}-${++serial}`, status: "PENDING" };
+        const saved = existing ?? { id: `${model}-${++serial}`, status: "PENDING", createdAt: new Date(),
+          ...(model === "notification" ? { isRead: false, readAt: null } : {}) };
         Object.assign(saved, clone(data), { updatedAt: new Date(Date.now() + ++serial) });
         if (!existing) state[model].push(saved);
         return hydrate(model, saved);
@@ -111,7 +113,7 @@ function fixture(t: TestContext, seed: Record<string, Row[]> = {}) {
     decision(id: string, action: any) { return { id, action, revision: state.workHourCaptureDivergence.find((row) => row.id === id)!.updatedAt.toISOString() }; }
   };
 }
-const mutations = (calls: Row[]) => calls.filter((call) => !["findMany", "findFirst", "findUnique", "timeline"].includes(call.op));
+const mutations = (calls: Row[]) => calls.filter((call) => !["findMany", "findFirst", "findUnique", "findUniqueOrThrow", "timeline"].includes(call.op));
 
 function adherence(id = "adherence", employeeId = "agent", patch: Row = {}): Row {
   return { id, employeeId, date, scheduleId: `slot-${employeeId}`, supervisorId: null,
@@ -191,7 +193,8 @@ test("exporta XLSX válido com pendentes e justificadas, sem órfãos ou registr
   assert.equal(sheet.J3.f, undefined);
   assert.equal(sheet.K3.v, "Supervisor");
   assert.equal(sheet.L3.v, "03/09/2026, 11:00");
-  assert.deepEqual(sheet["!autofilter"], { ref: "A1:L3" });
+  assert.equal(sheet.M3.v, "Captura de Horas");
+  assert.deepEqual(sheet["!autofilter"], { ref: "A1:M3" });
   assert.equal(mutations(f.calls).length, 0);
 });
 
@@ -228,6 +231,205 @@ test("nenhuma consulta da captura ou do cronograma para Staff, TI, nesting, trei
   assert.ok(f.calls.every((call) => ["user", "employeeProfile"].includes(call.model)));
   assert.deepEqual(f.state, before);
 });
+for (const status of ["NESTING", "TREINAMENTO"]) {
+  test(`slot ${status} de agente ativo não recebe presença, horas ou divergência, mesmo reimportando`, async (t) => {
+    const ids = ["none", "short", "long", "onboarding"];
+    const f = fixture(t, { employeeProfile: ids.map((id) => employee(id, id === "onboarding" ? { skill: "Onboarding" } : {})),
+      schedule: ids.map((id) => slot(id, status)),
+      workHourRecord: [{ id: "existing", employeeId: "long", date, effectiveHours: 7, actualHours: 7, status: "OK", scheduleId: "slot-long" }] });
+    f.capture("short", 1); f.capture("long", 10); f.capture("onboarding", 5);
+    const before = clone(f.state);
+    const preview: any = await previewCaptureWorkHoursImport(actor, { shiftDate: day });
+    assert.deepEqual(preview.data.summary, { automatic: 0, divergences: 0, ignored: 0 });
+    assert.equal(preview.data.overlap.count, 0);
+    for (const confirmReprocessing of [false, true]) {
+      const result: any = await commitCaptureWorkHoursImport(actor, { shiftDate: day, confirmReprocessing });
+      assert.equal(result.data?.imported, 0, result.error);
+      assert.equal(result.data?.divergences, 0);
+    }
+    for (const model of ["schedule", "workHourRecord", "workHourCaptureDivergence", "workHourAdherenceJustification", "attendanceRecord", "notification"]) {
+      assert.deepEqual(f.state[model], before[model], model);
+    }
+    assert.ok(mutations(f.calls).every((call) => call.model === "workHourCaptureImportRun" || (call.model === "auditLog" && call.args.data.entity === "WorkHourCaptureImportRun")));
+  });
+
+  test(`divergência antiga de slot ${status} não aparece nem permite alterar presença/falta/folga`, async (t) => {
+    const f = fixture(t, { employeeProfile: [employee(), employee("valid")], schedule: [slot("agent", status), slot("valid")],
+      workHourCaptureDivergence: [divergence("agent", hour, { scheduleStatus: status }), divergence("valid")] });
+    const result: any = await listCaptureWorkHourDivergences(actor, { shiftDate: day });
+    assert.deepEqual(result.data.map((r: Row) => r.id), ["div-valid"]);
+    const before = clone(f.state);
+    for (const action of ["CONFIRM_PRESENCE", "CONFIRM_ABSENCE", "CONFIRM_DAY_OFF", "KEEP_SCHEDULE", "KEEP_PENDING"]) {
+      const applied: any = await applyCaptureWorkHourDivergenceDecisions(actor, { shiftDate: day, confirmed: true,
+        decisions: [f.decision("div-valid", "CONFIRM_PRESENCE"), f.decision("div-agent", action)] });
+      assert.match(applied.error, /Nesting|Treinamento/);
+      assert.deepEqual(f.state, before);
+    }
+    assert.equal(mutations(f.calls).length, 0);
+  });
+}
+
+test("range preserva dia em Nesting e processa somente o dia em produção do mesmo agente", async (t) => {
+  const next = "2026-09-04";
+  const f = fixture(t, { employeeProfile: [employee()], schedule: [slot("agent", "NESTING"),
+    { ...slot(), id: "slot-next", date: new Date(`${next}T00:00:00Z`) }] });
+  f.capture("agent", 6); f.capture("agent", 6, next);
+  const result: any = await commitCaptureWorkHoursImport(actor, { startDate: day, endDate: next });
+  assert.equal(result.data?.imported, 1, result.error);
+  assert.deepEqual(f.state.schedule.map((r) => r.status), ["NESTING", "PRESENTE"]);
+  assert.deepEqual(f.state.workHourRecord.map((r) => [r.date.toISOString().slice(0, 10), r.effectiveHours]), [[next, 6.5]]);
+  assert.deepEqual(f.state.workHourAdherenceJustification.map((r) => r.date.toISOString().slice(0, 10)), [next]);
+});
+
+test("Onboarding ativo em produção importa 8h fixas, inclusive no cadastro de skills múltiplas, sem duplicar", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee("legacy", { skill: "Onboarding", lob: { name: "CEC" } }),
+    employee("multi", { skillAssignments: [{ isPrimary: true, skill: { name: "Onboarding", normalizedName: "ONBOARDING" } }], lob: { name: "CEC" } })],
+    schedule: [slot("legacy"), slot("multi")] });
+  f.capture("legacy", 5); f.capture("multi", 10.5);
+  const result: any = await commitCaptureWorkHoursImport(actor, { shiftDate: day });
+  assert.equal(result.data?.imported, 2, result.error);
+  assert.deepEqual(f.state.workHourRecord.map((r) => [r.effectiveHours, r.observation]), [[8, "RA/Onboarding: 8:00 fixas"], [8, "RA/Onboarding: 8:00 fixas"]]);
+  assert.ok(f.state.schedule.every((r) => r.status === "PRESENTE"));
+  assert.deepEqual(f.state.workHourAdherenceJustification.map((r) => [r.employeeId, r.sourceDurationMs]), [["legacy", 5 * hour]]);
+  const repeated: any = await commitCaptureWorkHoursImport(actor, { shiftDate: day, confirmReprocessing: true });
+  assert.equal(repeated.data?.unchanged, 2, repeated.error);
+  assert.equal(f.state.workHourRecord.length, 2);
+});
+
+test("Onboarding sem captura ou com captura curta continua exigindo revisão antes de receber horas", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee("none", { skill: "Onboarding" }), employee("short", { skill: "Onboarding" })],
+    schedule: [slot("none"), slot("short")] });
+  f.capture("short", 1);
+  const result: any = await commitCaptureWorkHoursImport(actor, { shiftDate: day });
+  assert.equal(result.data?.divergences, 2, result.error);
+  assert.equal(f.state.workHourRecord.length, 0);
+  assert.ok(f.state.schedule.every((r) => r.status === "ESCALADO"));
+  const item = f.state.workHourCaptureDivergence.find((r) => r.employeeId === "short")!;
+  const applied: any = await applyCaptureWorkHourDivergenceDecisions(actor, { shiftDate: day, confirmed: true,
+    decisions: [f.decision(item.id, "CONFIRM_PRESENCE")] });
+  assert.equal(applied.data?.resolved, 1, applied.error);
+  assert.equal(f.state.workHourRecord[0].effectiveHours, 8);
+});
+
+test("horas manuais abaixo de 7:25 geram justificativa e aviso, sem bônus, duplicação ou mudança de slot", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee("agent", { supervisorId: "sup" }), employee("sup", { roleTitle: "Supervisor", userId: "sup-user" })], schedule: [slot()] });
+  const input = { employeeId: "agent", date: day, actualHours: "6:30" };
+  const result: any = await upsertManualWorkHourRecord(actor, input);
+  assert.equal(result.success, true, result.error);
+  assert.equal(f.state.workHourRecord[0].effectiveHours, 6.5);
+  assert.equal(f.state.schedule[0].status, "ESCALADO");
+  assert.equal(f.state.attendanceRecord.length, 0);
+  const pending = f.state.workHourAdherenceJustification[0];
+  assert.equal(pending.date.toISOString().slice(0, 10), day);
+  assert.equal(pending.sourceDurationMs, 6.5 * hour);
+  assert.equal(pending.status, "PENDING");
+  assert.equal(f.state.notification.length, 1);
+  assert.match(f.state.notification[0].body, /lançamento manual/);
+  const listed: any = await listWorkHourAdherenceJustifications(actor, { startDate: day, endDate: day });
+  assert.equal(listed.data[0].durationSource, "Horas manuais");
+  const exported: any = await exportWorkHourAdherenceJustifications(actor, { startDate: day, endDate: day });
+  assert.equal(exported.rows[0][12], "Horas manuais");
+  await upsertManualWorkHourRecord(actor, input);
+  assert.equal(f.state.workHourAdherenceJustification.length, 1);
+  assert.equal(f.state.notification.length, 1);
+  await answerWorkHourAdherenceJustification(actor, { id: pending.id, justification: "Motivo válido" });
+  await upsertManualWorkHourRecord(actor, input);
+  assert.equal(f.state.workHourAdherenceJustification[0].status, "JUSTIFIED");
+  assert.equal(f.state.workHourAdherenceJustification[0].justification, "Motivo válido");
+  assert.equal(f.state.notification.length, 1);
+  const changed: any = await upsertManualWorkHourRecord(actor, { ...input, actualHours: "6:00" });
+  assert.equal(changed.success, true, changed.error);
+  assert.equal(f.state.workHourAdherenceJustification[0].status, "PENDING");
+  assert.equal(f.state.workHourAdherenceJustification[0].justification, null);
+  assert.equal(f.state.notification.length, 2);
+});
+
+test("correção manual para 7:25 encerra a pendência e o aviso; reduzir novamente reabre só o mesmo dia", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee("agent", { supervisorId: "sup" }), employee("sup", { roleTitle: "Supervisor", userId: "sup-user" })], schedule: [slot()] });
+  const input = { employeeId: "agent", date: day, actualHours: "7:24" };
+  await upsertManualWorkHourRecord(actor, input);
+  const id = f.state.workHourAdherenceJustification[0].id;
+  await answerWorkHourAdherenceJustification(actor, { id, justification: "Justificativa anterior" });
+  f.state.workHourAdherenceJustification.push(adherence("other-day", "agent", { date: new Date("2026-09-02T00:00:00Z") }));
+  const result: any = await upsertManualWorkHourRecord(actor, { ...input, actualHours: "7:25" });
+  assert.equal(result.success, true, result.error);
+  assert.equal(f.state.workHourAdherenceJustification[0].status, "CANCELLED");
+  assert.equal(f.state.workHourAdherenceJustification[1].status, "PENDING");
+  assert.ok(f.state.notification.every((n) => n.isRead));
+  assert.ok(f.state.auditLog.some((a) => a.entityId === id && a.previousValue?.justification === "Justificativa anterior"));
+  const reopened: any = await upsertManualWorkHourRecord(actor, input);
+  assert.equal(reopened.success, true, reopened.error);
+  assert.equal(f.state.workHourAdherenceJustification[0].status, "PENDING");
+  assert.equal(f.state.workHourAdherenceJustification[0].justification, null);
+});
+
+test("horas manuais respeitam limite exato e não aplicam regra de 8h da skill Onboarding", async (t) => {
+  const ids = ["zero", "low", "threshold", "above"];
+  const f = fixture(t, { employeeProfile: ids.map((id) => employee(id, { skill: "Onboarding" })), schedule: ids.map((id) => slot(id)) });
+  for (const [employeeId, actualHours] of [["zero", "0:00"], ["low", "7:24"], ["threshold", "7:25"], ["above", "8:00"]]) {
+    const result: any = await upsertManualWorkHourRecord(actor, { employeeId, date: day, actualHours });
+    assert.equal(result.success, true, result.error);
+  }
+  assert.deepEqual(f.state.workHourAdherenceJustification.map((r) => r.employeeId), ["zero", "low"]);
+  assert.equal(f.state.workHourRecord.find((r) => r.employeeId === "low")!.effectiveHours, 7.4);
+});
+
+test("lançamento manual em Nesting/Treinamento permanece bloqueado, inclusive se slot mudar durante salvamento", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee("nesting"), employee("training"), employee()],
+    schedule: [slot("nesting", "NESTING"), slot("training", "TREINAMENTO"), slot()] });
+  for (const employeeId of ["nesting", "training"]) {
+    assert.ok("error" in await upsertManualWorkHourRecord(actor, { employeeId, date: day, actualHours: "6:00" }));
+  }
+  const find = prisma.schedule.findUnique;
+  let reads = 0;
+  t.mock.method(prisma.schedule, "findUnique", (async (args: any) => {
+    const result: any = await find(args);
+    if (++reads === 2) result.status = "NESTING";
+    return result;
+  }) as any);
+  assert.ok("error" in await upsertManualWorkHourRecord(actor, { employeeId: "agent", date: day, actualHours: "6:00" }));
+  assert.equal(mutations(f.calls).length, 0);
+});
+
+test("manual não gera aderência para Staff, TI, inativos ou pré-Go-Live", async (t) => {
+  const profiles = [employee("staff", { roleTitle: "Staff" }), employee("it", { lob: { name: "IT" } }),
+    employee("inactive", { operationalStatus: "Inativo" }), employee("prelive", { goLiveDate: new Date("2026-09-04") })];
+  const f = fixture(t, { employeeProfile: profiles, schedule: profiles.map((p) => slot(p.id)) });
+  for (const p of profiles) {
+    const result: any = await upsertManualWorkHourRecord(actor, { employeeId: p.id, date: day, actualHours: "6:00" });
+    assert.equal(result.success, true, result.error);
+  }
+  assert.equal(f.state.workHourAdherenceJustification.length, 0);
+  assert.equal(f.state.notification.length, 0);
+});
+
+test("falha ao criar justificativa reverte também o lançamento manual de horas", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()] });
+  const before = clone(f.state);
+  t.mock.method(prisma.workHourAdherenceJustification, "upsert", async () => { throw new Error("Simulated adherence failure"); });
+  assert.ok("error" in await upsertManualWorkHourRecord(actor, { employeeId: "agent", date: day, actualHours: "6:00" }));
+  assert.deepEqual(f.state, before);
+});
+
+test("sobrescrita manual da captura exige confirmação e substitui a duração usada na justificativa", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()] });
+  f.capture("agent", 6);
+  await commitCaptureWorkHoursImport(actor, { shiftDate: day });
+  const id = f.state.workHourAdherenceJustification[0].id;
+  await answerWorkHourAdherenceJustification(actor, { id, justification: "Motivo da captura" });
+  const input = { employeeId: "agent", date: day, actualHours: "5:30" };
+  const before = clone(f.state);
+  const refused: any = await upsertManualWorkHourRecord(actor, input);
+  assert.equal(refused.type, "CONFIRMATION_REQUIRED");
+  assert.deepEqual(f.state, before);
+  const result: any = await upsertManualWorkHourRecord(actor, { ...input, confirmOverwrite: true });
+  assert.equal(result.success, true, result.error);
+  assert.equal(f.state.workHourAdherenceJustification[0].sourceDurationMs, 5.5 * hour);
+  assert.equal(f.state.workHourAdherenceJustification[0].status, "PENDING");
+  assert.equal(f.state.workHourAdherenceJustification[0].justification, null);
+  assert.equal(f.state.workHourRecord.length, 1);
+});
+
 test("período válido é obrigatório antes de consultar agentes, horas ou captura", async (t) => {
   const f = fixture(t);
   for (const input of [{}, { startDate: day }, { startDate: day, endDate: "2026-09-02" }, { shiftDate: "2026-02-31" },

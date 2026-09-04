@@ -25,6 +25,7 @@ import { prisma } from "@/lib/prisma";
 import { getRealtimeHoursShiftActivityHours } from "@/lib/realtime-hours-service";
 import { cleanShiftName, shiftCategoryName } from "@/lib/shift-display";
 import { cancelAdherenceForDeletedWorkHours } from "@/lib/work-hours-adherence-cleanup";
+import { syncWorkHourAdherence } from "@/lib/work-hours-adherence-sync";
 import {
   DEFAULT_PRODUCTIVE_HOURS,
   WORK_HOUR_TOLERANCE_MINUTES,
@@ -683,6 +684,17 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
     const status: WorkHourRecordStatus = existing ? "MANUALLY_CORRECTED" : baseStatus;
 
     const saved = await prisma.$transaction(async (tx) => {
+      const currentSchedule = await tx.schedule.findUnique({ where: { employeeId_date: { employeeId: employee.id, date: date! } } });
+      if (!currentSchedule || currentSchedule.deletedAt || !isWorkHoursAllowedForSchedule(currentSchedule)
+        || currentSchedule.id !== schedule.id || currentSchedule.status !== schedule.status
+        || currentSchedule.startsAt !== schedule.startsAt || currentSchedule.endsAt !== schedule.endsAt) {
+        throw new Error("O cronograma mudou. Atualize a tela antes de lançar horas.");
+      }
+      const currentEmployee = await tx.employeeProfile.findUnique({ where: { id: employee.id }, include: {
+        lob: true, team: { select: { name: true } }, user: { select: { role: { select: { name: true } } } },
+        skillAssignments: { include: { skill: true } }
+      } });
+      if (!currentEmployee) throw new Error("Parceiro não encontrado.");
       const record = await tx.workHourRecord.upsert({
         where: { employeeId_date: { employeeId: employee.id, date: date! } },
         update: {
@@ -732,6 +744,12 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
         }
       });
 
+      await syncWorkHourAdherence(tx, {
+        employee: currentEmployee, schedule: currentSchedule, date: date!, durationMs: Math.round(actualHours! * 3_600_000),
+        actorId: user.id, hadOperationalHours: Boolean(existing), source: "MANUAL",
+        sourceChanged: Boolean(existing && !/^manual$/i.test(existing.source ?? ""))
+      });
+
       await tx.workHourHistory.create({
         data: {
           workHourRecordId: record.id,
@@ -755,7 +773,7 @@ export async function upsertManualWorkHourRecord(actor: Actor, input: ManualWork
       });
 
       return record;
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
     return {
       success: true,

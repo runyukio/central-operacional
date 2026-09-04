@@ -14,7 +14,8 @@ for (const [label, patch] of Object.entries({
   Staff: { roleTitle: "Staff" }, TI: { lob: { name: "TI" } }, IT: { skill: "IT" },
   "TI composto": { team: { name: "TI / Tecnologia da Informação" } }, "perfil Staff": { user: { role: { name: "STAFF" } } },
   Nesting: { operationalStatus: "Nesting" }, Treinamento: { operationalStatus: "Em treinamento" },
-  Trainee: { roleTitle: "Trainee" }, Trainer: { skill: "Trainer" }, Onboarding: { skill: "Onboarding" },
+  Trainee: { roleTitle: "Trainee" }, Trainer: { skill: "Trainer" }, "etapa Onboarding": { operationalStatus: "Onboarding" },
+  "time pré-operacional Onboarding": { team: { name: "Onboarding" } },
   "Nesting secundário": { skillAssignments: [{ skill: { name: "Nesting" } }] },
   Inativo: { operationalStatus: "Inativo" }, Desligado: { operationalStatus: "Desligado" },
   "sem Go Live": { goLiveDate: null }, "Go Live futuro": { goLiveDate: "2026-09-04" },
@@ -26,6 +27,17 @@ for (const [label, patch] of Object.entries({
 test("Go Live no próprio Shift Date é elegível; nome não participa da decisão", () => {
   assert.equal(isCaptureImportEligible({ ...active, goLiveDate: shiftDate }, shiftDate), true);
   assert.equal(isCaptureImportEligible({ ...active, skill: "RA" }, shiftDate), true);
+});
+test("skill Onboarding é elegível para agente ativo em produção, sem liberar etapas pré-operacionais ou Staff", () => {
+  for (const skill of [{ skill: "Onboarding" }, { skillAssignments: [{ skill: { name: "Onboarding" } }] }]) {
+    const profile = { ...active, ...skill };
+    assert.equal(isCaptureImportEligible(profile, shiftDate), true);
+    for (const patch of [{ roleTitle: "Staff" }, { lob: { name: "IT" } }, { operationalStatus: "Onboarding" },
+      { operationalStatus: "Em treinamento" }, { operationalStatus: "Nesting" }, { goLiveDate: null },
+      { goLiveDate: "2026-09-04" }, { skillAssignments: [{ skill: { name: "Onboarding" } }, { skill: { name: "Nesting" } }] }]) {
+      assert.equal(isCaptureImportEligible({ ...profile, ...patch }, shiftDate), false);
+    }
+  }
 });
 test("toda divergência oferece exatamente cinco opções", () => {
   for (const scheduleStatus of ["ESCALADO", "FOLGA", "FALTA", "NESTING", "VENDA_FOLGA_APROVADA", "TROCA_APROVADA"]) {

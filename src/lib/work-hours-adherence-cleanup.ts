@@ -6,6 +6,13 @@ export async function cancelAdherenceForDeletedWorkHours(
   tx: Prisma.TransactionClient,
   input: { employeeId: string; date: Date; actorId: string; reason: string }
 ) {
+  return cancelWorkHourAdherenceForDay(tx, { ...input, reason: `Aderência cancelada pela exclusão das horas: ${input.reason}` });
+}
+
+export async function cancelWorkHourAdherenceForDay(
+  tx: Prisma.TransactionClient,
+  input: { employeeId: string; date: Date; actorId: string; reason: string }
+) {
   const records = await tx.workHourAdherenceJustification.findMany({
     where: { employeeId: input.employeeId, date: input.date, status: { not: "CANCELLED" } }
   });
@@ -27,7 +34,7 @@ export async function cancelAdherenceForDeletedWorkHours(
         action: "EXCLUSAO",
         entity: "WorkHourAdherenceJustification",
         entityId: record.id,
-        reason: `Aderência cancelada pela exclusão das horas: ${input.reason}`,
+        reason: input.reason,
         previousValue: {
           reconciliationKey: record.reconciliationKey,
           employeeId: record.employeeId,

@@ -777,6 +777,7 @@ type WorkHourAdherenceRow = {
   supervisor: string;
   plannedSlot: string;
   capturedDuration: string;
+  durationSource: string;
   status: string;
   justification: string;
   answeredBy: string;
@@ -8404,7 +8405,7 @@ export function WorkHoursPage() {
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
             <div>
               <h2 className="text-lg font-extrabold text-navy-950">Pendências de justificativa</h2>
-              <p className="text-sm font-semibold text-muted">Capturas originais abaixo de 7:25 após presença ou comparecimento validado.</p>
+              <p className="text-sm font-semibold text-muted">Capturas originais ou horas lançadas manualmente abaixo de 7:25 para agentes elegíveis.</p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
               <StatusBadge status={`${adherenceRows.filter((row) => row.status === "Pendente").length} pendente(s)`} />
@@ -8419,7 +8420,7 @@ export function WorkHoursPage() {
                 <thead className="sticky top-0 z-10 border-b border-border bg-slate-50 text-xs font-bold uppercase tracking-wide text-muted">
                   <tr>
                     {[
-                      "Parceiro / WB", "Data", "LOB / classificação", "Supervisor", "Escala prevista", "Duração original", "Status", "Justificativa", "Resposta"
+                      "Parceiro / WB", "Data", "LOB / classificação", "Supervisor", "Escala prevista", "Duração de referência", "Status", "Justificativa", "Resposta"
                     ].map((column) => <th key={column} className="px-4 py-3">{column}</th>)}
                   </tr>
                 </thead>
@@ -8431,7 +8432,7 @@ export function WorkHoursPage() {
                       <td className="px-4 py-3">{row.lob} · {row.classification}</td>
                       <td className="px-4 py-3">{row.supervisor}</td>
                       <td className="px-4 py-3">{row.plannedSlot}</td>
-                      <td className="px-4 py-3 font-extrabold text-amber-700">{row.capturedDuration}</td>
+                      <td className="px-4 py-3 font-extrabold text-amber-700">{row.capturedDuration}<p className="text-xs font-semibold text-muted">{row.durationSource}</p></td>
                       <td className="px-4 py-3"><StatusBadge status={row.status} /></td>
                       <td className="px-4 py-3">
                         {row.status === "Pendente" ? (
@@ -8457,7 +8458,7 @@ export function WorkHoursPage() {
               </table>
             </div>
           ) : (
-            <div className="p-6"><EmptyState title="Sem pendências de justificativa" description="Não há capturas abaixo de 7:25 aguardando justificativa no período." /></div>
+            <div className="p-6"><EmptyState title="Sem pendências de justificativa" description="Não há capturas ou horas manuais abaixo de 7:25 aguardando justificativa no período." /></div>
           )}
         </section>
       ) : null}

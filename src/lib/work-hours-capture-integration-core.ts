@@ -44,7 +44,8 @@ export type CaptureImportEvaluation = {
   actions: CaptureDivergenceAction[];
 };
 
-const scheduledStatusKeys = new Set(["ESCALADO", "TROCA_APROVADA", "NESTING"]);
+const scheduledStatusKeys = new Set(["ESCALADO", "TROCA_APROVADA"]);
+const protectedCaptureStatusKeys = new Set(["NESTING", "TREINAMENTO", "EM_TREINAMENTO", "TRAINING"]);
 const recognizedAttendanceStatusKeys = new Set(["PRESENTE", "ATRASO", "SAIDA_ANTECIPADA"]);
 const dayOffStatusKeys = new Set(["FOLGA", "OFF", "FOLGA_APROVADA", "FERIADO"]);
 const dayOffSaleStatusKeys = new Set(["VENDA_FOLGA_APROVADA", "VENDA_DE_FOLGA_APROVADA", "VENDA_FOLGA"]);
@@ -57,6 +58,10 @@ export function normalizeOperationalToken(value?: string | null) {
     .toUpperCase()
     .replace(/[^A-Z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
+}
+
+export function isProtectedCaptureScheduleStatus(status?: string | null) {
+  return protectedCaptureStatusKeys.has(normalizeOperationalToken(status));
 }
 
 export function resolveOperationalHourRule(input: OperationalClassificationInput): {
@@ -112,6 +117,7 @@ function evaluateCaptureImportStatus(input: {
   capturedMs?: number | null;
 }): CaptureImportEvaluation {
   const status = normalizeOperationalToken(input.scheduleStatus);
+  if (isProtectedCaptureScheduleStatus(status)) return { decision: "IGNORE", reasons: [], actions: [] };
   const hasCapture = input.capturedMs !== null && input.capturedMs !== undefined && input.capturedMs > 0;
   const capturedMs = hasCapture ? Math.max(0, Math.floor(input.capturedMs!)) : 0;
 

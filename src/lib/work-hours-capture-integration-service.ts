@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { getRealtimeHoursTimelineRange } from "@/lib/realtime-hours-service";
 import { isCaptureImportEligible } from "@/lib/work-hours-capture-eligibility";
 import { cancelAdherenceForDeletedWorkHours } from "@/lib/work-hours-adherence-cleanup";
+import { syncWorkHourAdherence } from "@/lib/work-hours-adherence-sync";
 import { resolveCapturePeriod } from "@/lib/work-hours-capture-period";
 import { shiftCategoryName } from "@/lib/shift-display";
 import {
@@ -15,8 +16,8 @@ import {
   captureDivergenceActionLabel,
   captureDivergenceReasonLabel,
   evaluateCaptureImport,
+  isProtectedCaptureScheduleStatus,
   reuseCaptureResolution,
-  shouldCreateLowAdherence,
   type CaptureDivergenceAction,
   type CaptureDivergenceReason,
   type OperationalHourCalculation
@@ -305,7 +306,9 @@ export async function listCaptureWorkHourDivergences(actor: Actor, filters: Capt
     orderBy: [{ date: "asc" }, { employee: { fullName: "asc" } }]
   });
   return {
-    data: records.filter((record) => isCaptureImportEligible(record.employee, formatDate(record.date))).map((record) => ({
+    data: records.filter((record) => isCaptureImportEligible(record.employee, formatDate(record.date))
+      && !isProtectedCaptureScheduleStatus(record.schedule?.status)
+      && !isProtectedCaptureScheduleStatus(record.scheduleStatus)).map((record) => ({
       id: record.id,
       revision: record.updatedAt.toISOString(),
       employeeName: record.employee.fullName,
@@ -364,6 +367,10 @@ export async function applyCaptureWorkHourDivergenceDecisions(
         if (!CAPTURE_DIVERGENCE_ACTIONS.includes(decision.action)) throw new CaptureDecisionError("Decisão inválida.");
         const schedule = record.schedule;
         const currentSlot = await tx.schedule.findUnique({ where: { employeeId_date: { employeeId: record.employeeId, date: record.date } } });
+        if (isProtectedCaptureScheduleStatus(record.scheduleStatus) || isProtectedCaptureScheduleStatus(schedule?.status)
+          || isProtectedCaptureScheduleStatus(currentSlot?.status)) {
+          throw new CaptureDecisionError("Slots de Nesting e Treinamento não podem ser alterados por esta importação. Atualize a tela; nenhuma alteração foi aplicada.");
+        }
         if ((schedule && (schedule.deletedAt || schedule.status !== record.scheduleStatus
           || schedule.startsAt !== record.plannedStart || schedule.endsAt !== record.plannedEnd))
           || (!schedule && (record.scheduleId || (currentSlot && !currentSlot.deletedAt)))) {
@@ -482,6 +489,7 @@ export async function listWorkHourAdherenceJustifications(actor: Actor, filters:
     },
     include: {
       employee: { include: captureEmployeeInclude },
+      schedule: true,
       supervisor: { select: { fullName: true } },
       answeredBy: { select: { name: true } }
     },
@@ -491,13 +499,14 @@ export async function listWorkHourAdherenceJustifications(actor: Actor, filters:
   // to justify a removed record; preserve the old entry for audit/reprocessing.
   const hours = records.length ? await prisma.workHourRecord.findMany({
     where: { OR: records.map((record) => ({ employeeId: record.employeeId, date: record.date })) },
-    select: { employeeId: true, date: true }
+    select: { employeeId: true, date: true, source: true }
   }) : [];
-  const existingDays = new Set(hours.map((record) => `${record.employeeId}:${record.date.toISOString()}`));
+  const existingDays = new Map(hours.map((record) => [`${record.employeeId}:${record.date.toISOString()}`, record]));
   return {
     data: records.filter((record) => (
       existingDays.has(`${record.employeeId}:${record.date.toISOString()}`)
       && isCaptureImportEligible(record.employee, formatDate(record.date))
+      && !isProtectedCaptureScheduleStatus(record.schedule?.status)
       && (!filters.shift || filters.shift === "Todos" || shiftCategoryName(record.employee.shift.name) === shiftCategoryName(filters.shift))
     )).map((record) => ({
       id: record.id,
@@ -509,6 +518,7 @@ export async function listWorkHourAdherenceJustifications(actor: Actor, filters:
       supervisor: record.supervisor?.fullName ?? "Sem supervisor",
       plannedSlot: slotLabel(record.plannedStart, record.plannedEnd),
       capturedDuration: formatDuration(record.sourceDurationMs),
+      durationSource: /^manual$/i.test(existingDays.get(`${record.employeeId}:${record.date.toISOString()}`)?.source ?? "") ? "Horas manuais" : "Captura de Horas",
       status: record.status === "JUSTIFIED" ? "Justificado" : "Pendente",
       justification: record.justification ?? "",
       answeredBy: record.answeredBy?.name ?? "",
@@ -526,9 +536,9 @@ export async function exportWorkHourAdherenceJustifications(actor: Actor, filter
     fileName: `justificativas_aderencia_${formatDate(period.start)}_${formatDate(period.end)}.xlsx`,
     sheetName: "Justificativas",
     autoFilter: true,
-    headers: ["Data do turno", "Parceiro", "WB/Login", "LOB", "Classificação", "Supervisor", "Horário planejado", "Horas capturadas", "Status", "Justificativa", "Respondido por", "Respondido em (São Paulo)"],
+    headers: ["Data do turno", "Parceiro", "WB/Login", "LOB", "Classificação", "Supervisor", "Horário planejado", "Duração de referência", "Status", "Justificativa", "Respondido por", "Respondido em (São Paulo)", "Origem da duração"],
     rows: result.data.map((row) => [row.date, row.employeeName, row.wbLogin, row.lob, row.classification, row.supervisor,
-      row.plannedSlot, row.capturedDuration, row.status, row.justification, row.answeredBy, row.answeredAt])
+      row.plannedSlot, row.capturedDuration, row.status, row.justification, row.answeredBy, row.answeredAt, row.durationSource])
   };
 }
 
@@ -542,9 +552,10 @@ export async function answerWorkHourAdherenceJustification(actor: Actor, input: 
   const role = normalizeRole(user.role.name);
   try {
     const saved = await prisma.$transaction(async (tx) => {
-      const record = await tx.workHourAdherenceJustification.findUnique({ where: { id: input.id }, include: { employee: { include: captureEmployeeInclude } } });
+      const record = await tx.workHourAdherenceJustification.findUnique({ where: { id: input.id }, include: { employee: { include: captureEmployeeInclude }, schedule: true } });
       if (!record || record.status === "CANCELLED") return createValidationError({}, "Pendência não encontrada ou já excluída.");
       if (!isCaptureImportEligible(record.employee, formatDate(record.date))) return createValidationError({}, "Este parceiro não é elegível para a integração da Captura de Horas.");
+      if (isProtectedCaptureScheduleStatus(record.schedule?.status)) return createValidationError({}, "Slots de Nesting e Treinamento não exigem justificativa nesta integração.");
       if (role === "SUPERVISOR" && record.supervisorId !== user.employeeProfile?.id) {
         return createPermissionError("Supervisores só podem justificar pendências de seus próprios agentes.");
       }
@@ -646,6 +657,7 @@ async function buildCaptureImportPlan(filters: CaptureImportFilters) {
       const schedule = (captureSlot?.employeeId === employee.id && formatDate(captureSlot.date) === row.data ? captureSlot : null)
         ?? scheduleByEmployeeDate.get(employeeDateKey(employee.id, date))
         ?? null;
+      if (isProtectedCaptureScheduleStatus(schedule?.status)) continue;
       const slotKey = schedule?.id ?? fallbackSlotKey(row.data, schedule?.startsAt ?? null, schedule?.endsAt ?? null);
       const key = reconciliationKey(employee.id, row.data, slotKey);
       const current = captures.get(key);
@@ -662,7 +674,7 @@ async function buildCaptureImportPlan(filters: CaptureImportFilters) {
     proposals.push(buildProposal(capture.employee, capture.schedule, capture.date, capture.slotKey, capture.activeMs));
   }
   for (const schedule of schedules) {
-    if (captureKeysByScheduleId.has(schedule.id)) continue;
+    if (captureKeysByScheduleId.has(schedule.id) || isProtectedCaptureScheduleStatus(schedule.status)) continue;
     const employee = employeeById.get(schedule.employeeId);
     if (!employee || !isCaptureImportEligible(employee, formatDate(schedule.date))) continue;
     proposals.push(buildProposal(employee, schedule, schedule.date, schedule.id, null));
@@ -756,6 +768,9 @@ async function saveValidatedAttendance(
 ) {
   const { proposal } = input;
   if (!proposal.schedule || !proposal.calculation || proposal.capturedMs === null) throw new Error("Proposta validada incompleta.");
+  if (isProtectedCaptureScheduleStatus(proposal.schedule.status)) {
+    throw new CaptureDecisionError("Slots de Nesting e Treinamento não podem receber presença por esta importação.");
+  }
   const targetStatus = (proposal.decision.targetScheduleStatus ?? proposal.schedule.status) as ScheduleStatus;
   const previousSchedule = { ...proposal.schedule };
   if (proposal.schedule.status !== targetStatus) {
@@ -885,94 +900,10 @@ async function saveValidatedAttendance(
 
 async function upsertLowAdherence(tx: Prisma.TransactionClient, proposal: CaptureImportProposal, actorId: string, hadOperationalHours: boolean) {
   if (!proposal.schedule || proposal.capturedMs === null || !proposal.calculation) return;
-  if (!hadOperationalHours) {
-    // Also repair justifications left by deletions predating the cleanup rule.
-    await cancelAdherenceForDeletedWorkHours(tx, {
-      employeeId: proposal.employee.id, date: proposal.date, actorId, reason: "Reimportação após ausência do registro de horas"
-    });
-  }
-  if (!shouldCreateLowAdherence(proposal.capturedMs)) {
-    await cancelLowAdherence(tx, proposal.reconciliationKey);
-    return;
-  }
-  const existing = await tx.workHourAdherenceJustification.findUnique({
-    where: { reconciliationKey: proposal.reconciliationKey }
+  await syncWorkHourAdherence(tx, {
+    employee: proposal.employee, schedule: proposal.schedule, date: proposal.date,
+    durationMs: proposal.capturedMs, actorId, hadOperationalHours, source: "CAPTURE"
   });
-  const sameValidatedCapture = Boolean(
-    existing
-    && existing.status !== "CANCELLED"
-    && existing.sourceDurationMs === proposal.capturedMs
-    && existing.scheduleId === proposal.schedule.id
-    && existing.supervisorId === proposal.employee.supervisorId
-  );
-  if (sameValidatedCapture && existing?.status === "JUSTIFIED") return;
-  const saved = await tx.workHourAdherenceJustification.upsert({
-    where: { reconciliationKey: proposal.reconciliationKey },
-    create: {
-      reconciliationKey: proposal.reconciliationKey,
-      employeeId: proposal.employee.id,
-      scheduleId: proposal.schedule.id,
-      supervisorId: proposal.employee.supervisorId,
-      date: proposal.date,
-      slotKey: proposal.slotKey,
-      wbLogin: proposal.employee.wbLogin,
-      lob: proposal.employee.lob.name,
-      classification: proposal.calculation.classificationLabel,
-      plannedStart: proposal.schedule.startsAt,
-      plannedEnd: proposal.schedule.endsAt,
-      sourceDurationMs: proposal.capturedMs
-    },
-    update: {
-      scheduleId: proposal.schedule.id,
-      supervisorId: proposal.employee.supervisorId,
-      lob: proposal.employee.lob.name,
-      classification: proposal.calculation.classificationLabel,
-      plannedStart: proposal.schedule.startsAt,
-      plannedEnd: proposal.schedule.endsAt,
-      sourceDurationMs: proposal.capturedMs,
-      ...(sameValidatedCapture ? {} : {
-        status: "PENDING",
-        justification: null,
-        answeredById: null,
-        answeredAt: null
-      })
-    }
-  });
-  if (proposal.employee.supervisorId) {
-    const supervisor = await tx.employeeProfile.findUnique({ where: { id: proposal.employee.supervisorId }, select: { userId: true } });
-    if (supervisor?.userId) {
-      const duplicate = await tx.notification.findFirst({
-        where: { userId: supervisor.userId, entity: "WorkHourAdherenceJustification", entityId: saved.id, readAt: null }
-      });
-      if (!duplicate) {
-        await tx.notification.create({
-          data: {
-            userId: supervisor.userId,
-            title: "Justificativa de aderência pendente",
-            body: `${proposal.employee.fullName} registrou ${formatDuration(proposal.capturedMs)} na Captura de Horas em ${proposal.dateKey}.`,
-            category: "Horas Operacionais",
-            type: "WARNING",
-            entity: "WorkHourAdherenceJustification",
-            entityId: saved.id,
-            href: `/horas-operacionais?startDate=${proposal.dateKey}&endDate=${proposal.dateKey}`
-          }
-        });
-      }
-    }
-  }
-  if (!sameValidatedCapture) {
-    await tx.auditLog.create({
-      data: {
-        actorId,
-        action: existing ? "EDICAO" : "CRIACAO",
-        entity: "WorkHourAdherenceJustification",
-        entityId: saved.id,
-        reason: "Captura original inferior a 7:25 após comparecimento validado.",
-        previousValue: existing ? { capturedMs: existing.sourceDurationMs, status: existing.status } : Prisma.JsonNull,
-        newValue: { reconciliationKey: proposal.reconciliationKey, capturedMs: proposal.capturedMs, status: saved.status }
-      }
-    });
-  }
 }
 
 async function cancelLowAdherence(tx: Prisma.TransactionClient, reconciliationKeyValue: string) {

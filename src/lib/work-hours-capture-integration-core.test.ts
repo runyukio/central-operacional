@@ -15,6 +15,15 @@ import {
 const hour = 60 * 60 * 1000;
 const minute = 60 * 1000;
 
+test("slots Nesting e Treinamento são ignorados, com ou sem captura", () => {
+  for (const scheduleStatus of ["NESTING", "TREINAMENTO", "Em treinamento", "Training"]) {
+    for (const capturedMs of [null, 0, hour, 2 * hour, 6 * hour, 10 * hour]) {
+      assert.deepEqual(evaluateCaptureImport({ scheduleExists: true, scheduleStatus, capturedMs }),
+        { decision: "IGNORE", reasons: [], actions: [] }, `${scheduleStatus}: ${capturedMs}`);
+    }
+  }
+});
+
 test("reimportação preserva uma captura curta já confirmada no mesmo slot", () => {
   const input = { scheduleId: "slot-1", scheduleStatus: "PRESENTE", plannedStart: "23:00", plannedEnd: "08:00", capturedMs: 40 * minute };
   const resolved = { ...input, status: "RESOLVED", sourceDurationMs: input.capturedMs, resolutionAction: "CONFIRM_PRESENCE" };
