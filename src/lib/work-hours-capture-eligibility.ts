@@ -19,7 +19,7 @@ const excludedClassifications = new Set([
   "NESTING", "ONBOARDING", "PRE_OPERACIONAL", "PRE_OPERACAO", "PRE_OPERATIONAL"
 ]);
 
-export function isCaptureImportEligible(profile: CaptureEligibilityProfile, shiftDate: string) {
+function isCaptureProductionProfile(profile: CaptureEligibilityProfile) {
   if (profile.deletedAt || !isAgentJobTitle(profile.roleTitle)) return false;
   if (!["ATIVO", "ACTIVE", "ONLINE"].includes(normalizeOperationalToken(profile.operationalStatus))) return false;
   // Onboarding is also an operational skill with a fixed-hours rule. It must not
@@ -31,6 +31,19 @@ export function isCaptureImportEligible(profile: CaptureEligibilityProfile, shif
     const token = normalizeOperationalToken(value);
     return [...excludedClassifications].some((excluded) => (`_${token}_`).includes(`_${excluded}_`));
   })) return false;
+  return true;
+}
+
+// Expected exclusions (Staff, training, Nesting, inactive) are not registration errors.
+export function getCaptureRegistrationIssue(profile: CaptureEligibilityProfile) {
+  if (!isCaptureProductionProfile(profile)) return null;
+  if (!profile.goLiveDate) return "MISSING_GO_LIVE" as const;
+  if (!Number.isFinite(new Date(profile.goLiveDate).getTime())) return "INVALID_GO_LIVE" as const;
+  return null;
+}
+
+export function isCaptureImportEligible(profile: CaptureEligibilityProfile, shiftDate: string) {
+  if (!isCaptureProductionProfile(profile)) return false;
   // A current active status does not turn a pre-Go-Live historical slot into production.
   const goLiveDate = profile.goLiveDate ? new Date(profile.goLiveDate) : null;
   if (!goLiveDate || !Number.isFinite(goLiveDate.getTime())) return false;

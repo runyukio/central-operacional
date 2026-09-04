@@ -5,7 +5,8 @@ import type { Actor } from "@/lib/mock-db";
 import { canImportWorkHours, canJustifyAbsence, normalizeRole } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { getRealtimeHoursTimelineRange } from "@/lib/realtime-hours-service";
-import { isCaptureImportEligible } from "@/lib/work-hours-capture-eligibility";
+import { getCaptureRegistrationIssue, isCaptureImportEligible } from "@/lib/work-hours-capture-eligibility";
+import type { CaptureRegistrationWarning } from "@/lib/work-hours-capture-review";
 import { cancelAdherenceForDeletedWorkHours } from "@/lib/work-hours-adherence-cleanup";
 import { syncWorkHourAdherence } from "@/lib/work-hours-adherence-sync";
 import { resolveCapturePeriod } from "@/lib/work-hours-capture-period";
@@ -102,7 +103,7 @@ export async function previewCaptureWorkHoursImport(actor: Actor, filters: Captu
   if ("error" in authorization) return authorization;
   const built = await buildCaptureImportPlan(filters);
   if ("error" in built) return built;
-  return { data: formatCaptureImportPlan(built.proposals, built.period) };
+  return { data: { ...formatCaptureImportPlan(built.proposals, built.period), registrationWarnings: built.registrationWarnings } };
 }
 
 export async function commitCaptureWorkHoursImport(
@@ -113,7 +114,7 @@ export async function commitCaptureWorkHoursImport(
   if ("error" in authorization) return authorization;
   const built = await buildCaptureImportPlan(input);
   if ("error" in built) return built;
-  const formatted = formatCaptureImportPlan(built.proposals, built.period);
+  const formatted = { ...formatCaptureImportPlan(built.proposals, built.period), registrationWarnings: built.registrationWarnings };
   if (formatted.overlap.count > 0 && !input.confirmReprocessing) {
     return {
       ...createValidationError({}, "Já existem horas contabilizadas no escopo selecionado. Confirme o reprocessamento antes de continuar."),
@@ -273,7 +274,7 @@ export async function commitCaptureWorkHoursImport(
       return { runId: run.id, imported, unchanged, divergences, ignored: run.ignoredRecords };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 10_000, timeout: 60_000 });
 
-    return { data: { ...result, period: formatted.period, filters: sanitizeFilters(input) } };
+    return { data: { ...result, blocked: built.registrationWarnings.length, period: formatted.period, filters: sanitizeFilters(input) } };
   } catch (error) {
     if (error instanceof CaptureDecisionError) return createValidationError({}, error.message);
     if (error instanceof ReprocessConfirmationError) {
@@ -294,6 +295,30 @@ const captureEmployeeInclude = {
   skillAssignments: { include: { skill: true }, orderBy: [{ isPrimary: "desc" as const }, { skillId: "asc" as const }] }
 } satisfies Prisma.EmployeeProfileInclude;
 
+async function captureRegistrationWarnings(employees: CaptureImportEmployee[], period: { start: Date; end: Date }): Promise<CaptureRegistrationWarning[]> {
+  const blocked = employees.filter((employee) => getCaptureRegistrationIssue(employee));
+  if (!blocked.length) return [];
+  // Bound diagnostics to the selected period and known slots. Do not fetch raw captures
+  // for excluded partners, create presence/absence decisions, or modify saved hours.
+  const schedules = await prisma.schedule.findMany({
+    where: { employeeId: { in: blocked.map((employee) => employee.id) }, deletedAt: null,
+      date: { gte: period.start, lte: period.end } },
+    select: { id: true, employeeId: true, date: true, status: true, startsAt: true, endsAt: true },
+    orderBy: [{ date: "asc" }, { employeeId: "asc" }]
+  });
+  const byId = new Map(blocked.map((employee) => [employee.id, employee]));
+  return schedules.flatMap((schedule) => {
+    const employee = byId.get(schedule.employeeId);
+    const code = employee && getCaptureRegistrationIssue(employee);
+    if (!employee || !code || isProtectedCaptureScheduleStatus(schedule.status)) return [];
+    return [{ id: `registration:${schedule.id}`, employeeId: employee.id, employeeName: employee.fullName,
+      wbLogin: employee.wbLogin, date: formatDate(schedule.date), slot: slotLabel(schedule.startsAt, schedule.endsAt),
+      lob: employee.lob.name, supervisor: employee.supervisor?.fullName ?? "Sem supervisor",
+      shift: shiftCategoryName(employee.shift.name) || "Sem turno", code,
+      reason: code === "MISSING_GO_LIVE" ? "Go Live não preenchido no cadastro." : "Data de Go Live inválida no cadastro." }];
+  }).sort((a, b) => a.date.localeCompare(b.date) || a.employeeName.localeCompare(b.employeeName));
+}
+
 export async function listCaptureWorkHourDivergences(actor: Actor, filters: CaptureImportFilters) {
   const authorization = await authorizeCaptureImport(actor);
   if ("error" in authorization) return authorization;
@@ -305,7 +330,10 @@ export async function listCaptureWorkHourDivergences(actor: Actor, filters: Capt
     include: { employee: { include: captureEmployeeInclude }, schedule: true },
     orderBy: [{ date: "asc" }, { employee: { fullName: "asc" } }]
   });
+  const employees = await prisma.employeeProfile.findMany({ where: { deletedAt: null }, include: captureEmployeeInclude });
+  const registrationWarnings = await captureRegistrationWarnings(employees, period);
   return {
+    registrationWarnings,
     data: records.filter((record) => isCaptureImportEligible(record.employee, formatDate(record.date))
       && !isProtectedCaptureScheduleStatus(record.schedule?.status)
       && !isProtectedCaptureScheduleStatus(record.scheduleStatus)).map((record) => ({
@@ -614,12 +642,13 @@ async function buildCaptureImportPlan(filters: CaptureImportFilters) {
     where: employeeWhere,
     include: captureEmployeeInclude
   });
-  const employees = employeesRaw.filter((employee) => {
-    if (!isCaptureImportEligible(employee, formatDate(period.end))) return false;
+  const scopedEmployees = employeesRaw.filter((employee) => {
     if (!filters.shift || filters.shift === "Todos") return true;
     return shiftCategoryName(employee.shift.name) === shiftCategoryName(filters.shift);
   }) as CaptureImportEmployee[];
-  if (!employees.length) return { proposals: [] as CaptureImportProposal[], period };
+  const registrationWarnings = await captureRegistrationWarnings(scopedEmployees, period);
+  const employees = scopedEmployees.filter((employee) => isCaptureImportEligible(employee, formatDate(period.end)));
+  if (!employees.length) return { proposals: [] as CaptureImportProposal[], period, registrationWarnings };
 
   const employeeIds = employees.map((employee) => employee.id);
   // Check existing operational hours before crossing capture and schedule data.
@@ -707,7 +736,7 @@ async function buildCaptureImportPlan(filters: CaptureImportFilters) {
     }
   }
   proposals.sort((left, right) => left.date.getTime() - right.date.getTime() || left.employee.fullName.localeCompare(right.employee.fullName));
-  return { proposals, period };
+  return { proposals, period, registrationWarnings };
 }
 
 function buildProposal(

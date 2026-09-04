@@ -9,7 +9,7 @@ import * as XLSX from "xlsx";
 import { z } from "zod";
 import { resolveCapturePeriod } from "./work-hours-capture-period";
 import { capturePeriodShape, validateCapturePeriod } from "./work-hours-capture-period-schema";
-import { CaptureBatchError, processCaptureImportDays } from "./work-hours-capture-batch";
+import { CaptureBatchError, captureImportNeedsReview, processCaptureImportDays } from "./work-hours-capture-batch";
 
 const day = "2026-09-03";
 const date = new Date(`${day}T00:00:00.000Z`);
@@ -114,6 +114,103 @@ function fixture(t: TestContext, seed: Record<string, Row[]> = {}) {
   };
 }
 const mutations = (calls: Row[]) => calls.filter((call) => !["findMany", "findFirst", "findUnique", "findUniqueOrThrow", "timeline"].includes(call.op));
+
+test("Go Live ausente não fica invisível na prévia nem na tela de divergências, mesmo sem elegíveis", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee("otavioc", { goLiveDate: null })], schedule: [slot("otavioc")] });
+  f.capture("otavioc", 8.25);
+  const before = clone(f.state);
+  const preview: any = await previewCaptureWorkHoursImport(actor, { shiftDate: day });
+  assert.deepEqual(preview.data.summary, { automatic: 0, divergences: 0, ignored: 0 });
+  const listed: any = await listCaptureWorkHourDivergences(actor, { shiftDate: day });
+  assert.deepEqual(listed.data, []);
+  assert.deepEqual(listed.registrationWarnings, preview.data.registrationWarnings);
+  assert.deepEqual(listed.registrationWarnings.map((r: any) => [r.wbLogin, r.date, r.code, r.slot]),
+    [["wb_otavioc", day, "MISSING_GO_LIVE", "23:00 - 08:00"]]);
+  assert.match(listed.registrationWarnings[0].reason, /Go Live não preenchido/);
+  assert.equal(f.calls.some((call) => call.model === "capture"), false);
+  assert.deepEqual(f.state, before);
+});
+
+test("bloqueios preservam horas e cronograma existentes, não criam falta nem aceitam decisões de presença", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee("otavioc", { goLiveDate: null })], schedule: [slot("otavioc")],
+    workHourRecord: [{ id: "saved-hours", employeeId: "otavioc", date, effectiveHours: 8 }] });
+  const schedules = clone(f.state.schedule);
+  const hours = clone(f.state.workHourRecord);
+  const result: any = await commitCaptureWorkHoursImport(actor, { shiftDate: day });
+  assert.equal(result.data.blocked, 1);
+  assert.equal(result.data.imported, 0);
+  assert.equal(result.data.divergences, 0);
+  assert.equal(captureImportNeedsReview(result.data), true);
+  const decision = await applyCaptureWorkHourDivergenceDecisions(actor, { shiftDate: day, confirmed: true,
+    decisions: [{ id: "registration:slot-otavioc", action: "CONFIRM_PRESENCE", revision: new Date().toISOString() }] });
+  assert.ok("error" in decision);
+  assert.deepEqual(f.state.schedule, schedules);
+  assert.deepEqual(f.state.workHourRecord, hours);
+  for (const model of ["workHourCaptureDivergence", "workHourAdherenceJustification", "attendanceRecord"]) assert.equal(f.state[model].length, 0);
+});
+
+test("bloqueios respeitam período e filtros da importação; revisão mostra todo período com slicers locais", async (t) => {
+  const otherDay = new Date("2026-09-04T00:00:00Z");
+  fixture(t, { employeeProfile: [employee("ads", { goLiveDate: null }), employee("cec", { goLiveDate: null, lob: { name: "CEC" } }), employee("no-slot", { goLiveDate: null })],
+    schedule: [slot("ads"), slot("cec"), { ...slot("ads"), id: "tomorrow", date: otherDay }] });
+  const preview: any = await previewCaptureWorkHoursImport(actor, { shiftDate: day, lob: "ADS" });
+  assert.deepEqual(preview.data.registrationWarnings.map((r: any) => r.wbLogin), ["wb_ads"]);
+  const listed: any = await listCaptureWorkHourDivergences(actor, { startDate: day, endDate: "2026-09-04", lob: "ADS" });
+  assert.deepEqual(listed.registrationWarnings.map((r: any) => [r.wbLogin, r.date]), [["wb_ads", day], ["wb_cec", day], ["wb_ads", "2026-09-04"]]);
+  const morning: any = await previewCaptureWorkHoursImport(actor, { shiftDate: day, shift: "Manhã" });
+  assert.deepEqual(morning.data.registrationWarnings, []);
+});
+
+test("exclusões esperadas e slots Nesting/Treinamento não viram bloqueios de cadastro", async (t) => {
+  const profiles: Row[] = [employee("staff", { roleTitle: "Staff" }), employee("ti", { lob: { name: "TI" } }),
+    employee("inactive", { operationalStatus: "Inativo" }), employee("nesting", { operationalStatus: "Nesting" }),
+    employee("training", { operationalStatus: "Em treinamento" }), employee("slot-nesting"), employee("slot-training"),
+    employee("deleted", { deletedAt: new Date() })].map((p) => ({ ...p, goLiveDate: null }));
+  profiles.push(employee("future", { goLiveDate: new Date("2026-09-10") }));
+  fixture(t, { employeeProfile: profiles, schedule: profiles.map((p) => slot(p.id,
+    p.id === "slot-nesting" ? "NESTING" : p.id === "slot-training" ? "TREINAMENTO" : "ESCALADO")) });
+  const preview: any = await previewCaptureWorkHoursImport(actor, { shiftDate: day });
+  assert.deepEqual(preview.data.registrationWarnings, []);
+  const listed: any = await listCaptureWorkHourDivergences(actor, { shiftDate: day });
+  assert.deepEqual(listed.registrationWarnings, []);
+});
+
+test("corrigir Go Live remove o bloqueio sem importar sozinho; nova importação processa as horas", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee("otavioc", { goLiveDate: null })], schedule: [slot("otavioc")] });
+  f.capture("otavioc", 8.25);
+  const blocked: any = await listCaptureWorkHourDivergences(actor, { shiftDate: day });
+  assert.equal(blocked.registrationWarnings.length, 1);
+  f.state.employeeProfile[0].goLiveDate = date;
+  const fixed: any = await listCaptureWorkHourDivergences(actor, { shiftDate: day });
+  assert.deepEqual(fixed.registrationWarnings, []);
+  assert.equal(f.state.workHourRecord.length, 0);
+  const result: any = await commitCaptureWorkHoursImport(actor, { shiftDate: day });
+  assert.equal(result.data.blocked, 0);
+  assert.equal(result.data.imported, 1);
+  assert.equal(f.state.workHourRecord[0].effectiveHours, 8.75);
+});
+
+test("bloqueios coexistem com divergências reais e continuam protegidos pela autorização", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee(), employee("blocked", { goLiveDate: null })],
+    schedule: [slot(), slot("blocked")], workHourCaptureDivergence: [divergence()] });
+  const result: any = await listCaptureWorkHourDivergences(actor, { shiftDate: day });
+  assert.deepEqual(result.data.map((r: any) => r.id), ["div-agent"]);
+  assert.equal(result.registrationWarnings.length, 1);
+  f.state.user[0].role.name = "COLABORADOR";
+  f.calls.length = 0;
+  assert.ok("error" in await listCaptureWorkHourDivergences(actor, { shiftDate: day }));
+  assert.ok(f.calls.every((call) => call.model === "user"));
+});
+
+test("lote com apenas bloqueios cadastrais também abre revisão e acumula todos os dias", async () => {
+  const result = await processCaptureImportDays({ startDate: day, endDate: "2026-09-04" }, async () => ({
+    imported: 0, unchanged: 0, divergences: 0, ignored: 0, blocked: 1
+  }), () => {});
+  assert.equal(result.blocked, 2);
+  assert.equal(captureImportNeedsReview(result), true);
+  assert.equal(captureImportNeedsReview({ imported: 1, unchanged: 0, divergences: 0, ignored: 0 }), false);
+  assert.equal(captureImportNeedsReview({ imported: 0, unchanged: 0, divergences: 1, ignored: 0 }), true);
+});
 
 function adherence(id = "adherence", employeeId = "agent", patch: Row = {}): Row {
   return { id, employeeId, date, scheduleId: `slot-${employeeId}`, supervisorId: null,
@@ -548,7 +645,7 @@ test("processamento diário acumula todos os dias antes de abrir as divergência
   const result = await processCaptureImportDays({ startDate: day, endDate: "2026-09-05" }, async (d) => {
     calls.push(d); return { imported: 1, unchanged: 2, divergences: 1, ignored: 0 };
   }, (d, index, total) => progress.push(`${d}:${index}/${total}`));
-  assert.deepEqual(result, { imported: 3, unchanged: 6, divergences: 3, ignored: 0, completedDates: [day, "2026-09-04", "2026-09-05"] });
+  assert.deepEqual(result, { imported: 3, unchanged: 6, divergences: 3, ignored: 0, blocked: 0, completedDates: [day, "2026-09-04", "2026-09-05"] });
   assert.equal(calls.length, 3);
   assert.equal(progress[2], "2026-09-05:3/3");
 });

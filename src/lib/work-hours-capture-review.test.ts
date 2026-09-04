@@ -1,11 +1,27 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isCaptureImportEligible, type CaptureEligibilityProfile } from "./work-hours-capture-eligibility";
+import { getCaptureRegistrationIssue, isCaptureImportEligible, type CaptureEligibilityProfile } from "./work-hours-capture-eligibility";
 import { CAPTURE_DIVERGENCE_ACTIONS, evaluateCaptureImport, reuseCaptureResolution } from "./work-hours-capture-integration-core";
 import { captureReviewDecisions, captureReviewOptions, EMPTY_CAPTURE_REVIEW_FILTERS, filterCaptureReviewRows, type CaptureReviewChoices } from "./work-hours-capture-review";
 
 const active: CaptureEligibilityProfile = { roleTitle: "Agente", operationalStatus: "Ativo", goLiveDate: "2026-08-01", lob: { name: "ADS" } };
 const shiftDate = "2026-09-03";
+test("diagnóstico distingue Go Live ausente/inválido de exclusão operacional esperada", () => {
+  assert.equal(getCaptureRegistrationIssue({ ...active, goLiveDate: null }), "MISSING_GO_LIVE");
+  assert.equal(getCaptureRegistrationIssue({ ...active, goLiveDate: "inválido" }), "INVALID_GO_LIVE");
+  assert.equal(getCaptureRegistrationIssue(active), null);
+  assert.equal(getCaptureRegistrationIssue({ ...active, goLiveDate: "2026-09-10" }), null);
+  for (const patch of [{ roleTitle: "Staff" }, { operationalStatus: "Nesting" }, { operationalStatus: "Em treinamento" }, { lob: { name: "TI" } }]) {
+    assert.equal(getCaptureRegistrationIssue({ ...active, goLiveDate: null, ...patch }), null);
+  }
+});
+
+test("avisos usam os mesmos slicers sem se transformarem em decisões de presença", () => {
+  const warning = { id: "registration:slot", employeeId: "blocked", lob: "ADS", supervisor: "Sup C", shift: "Tarde" };
+  assert.deepEqual(captureReviewOptions([...rows, warning], "shift"), ["Manhã", "Noite", "Tarde"]);
+  assert.deepEqual(filterCaptureReviewRows([warning], { lob: "ADS", supervisor: "Sup C", shift: "Tarde" }), [warning]);
+  assert.deepEqual(captureReviewDecisions(rows, { [warning.id]: { action: "CONFIRM_PRESENCE", revision: "v1" } }), []);
+});
 test("agente ativo em produção é elegível, inclusive aliases estruturados", () => {
   assert.equal(isCaptureImportEligible(active, shiftDate), true);
   assert.equal(isCaptureImportEligible({ ...active, operationalStatus: "ACTIVE", roleTitle: "Agent" }, shiftDate), true);

@@ -65,7 +65,8 @@ import {
 import { TopActions } from "@/components/layout/app-shell";
 import { CaptureShiftDateDialog } from "@/components/capture-shift-date-dialog";
 import { type CapturePeriod } from "@/lib/work-hours-capture-period";
-import { processCaptureImportDays, type CaptureDayResult } from "@/lib/work-hours-capture-batch";
+import { captureImportNeedsReview, processCaptureImportDays, type CaptureDayResult } from "@/lib/work-hours-capture-batch";
+import type { CaptureRegistrationWarning } from "@/lib/work-hours-capture-review";
 import {
   DonutLegend,
   EmptyState,
@@ -95,6 +96,7 @@ import {
 } from "@/lib/demo-data";
 import { parseWbLoginBatch, serializeWbLogins } from "@/lib/batch-wb-filter";
 import { getDefaultDateRange } from "@/lib/default-date-range";
+import { SECURITY_QUESTIONS } from "@/lib/security-question";
 import {
   canAccessPerformance,
   canApproveWorkHourAdjustment,
@@ -757,6 +759,7 @@ type WorkHourPreview = {
 
 type CaptureWorkHourImportPreview = {
   period: { startDate: string; endDate: string };
+  registrationWarnings: CaptureRegistrationWarning[];
   summary: { automatic: number; divergences: number; ignored: number };
   overlap: {
     count: number;
@@ -1181,6 +1184,11 @@ type AdditionalRegistrationDataResponse = {
       additionalDataUpdatedAt?: string;
     };
   };
+  message?: string;
+};
+
+type SecurityQuestionResponse = {
+  data: { configured: boolean; question: string; questionLabel: string };
   message?: string;
 };
 
@@ -2228,9 +2236,10 @@ type FormInputProps = {
   helper?: string;
   maxLength?: number;
   inputMode?: InputHTMLAttributes<HTMLInputElement>["inputMode"];
+  autoComplete?: string;
 };
 
-function FormInput({ label, value, onChange, type = "text", error, disabled = false, placeholder, helper, maxLength, inputMode }: FormInputProps) {
+function FormInput({ label, value, onChange, type = "text", error, disabled = false, placeholder, helper, maxLength, inputMode, autoComplete }: FormInputProps) {
   function openDatePicker(input: HTMLInputElement) {
     if (type !== "date" || disabled) return;
     const picker = input as HTMLInputElement & { showPicker?: () => void };
@@ -2244,7 +2253,7 @@ function FormInput({ label, value, onChange, type = "text", error, disabled = fa
   return (
     <label className="block">
       <span className="mb-1.5 block text-sm font-bold text-muted">{label}</span>
-      <input type={type} value={value} disabled={disabled} placeholder={placeholder} maxLength={maxLength} inputMode={inputMode} onClick={(event) => openDatePicker(event.currentTarget)} onChange={(event) => onChange(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500", type === "date" && "cursor-pointer", error ? "border-red-300 bg-red-50/40" : "border-border")} />
+      <input type={type} value={value} disabled={disabled} placeholder={placeholder} maxLength={maxLength} inputMode={inputMode} autoComplete={autoComplete} onClick={(event) => openDatePicker(event.currentTarget)} onChange={(event) => onChange(event.target.value)} className={cn("h-11 w-full rounded-lg border px-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500", type === "date" && "cursor-pointer", error ? "border-red-300 bg-red-50/40" : "border-border")} />
       {error ? <span className="mt-1 block text-xs font-bold text-red-600">{error}</span> : null}
       {!error && helper ? <span className="mt-1 block text-xs font-semibold text-muted">{helper}</span> : null}
     </label>
@@ -2334,10 +2343,79 @@ export function AdditionalRegistrationDataPage() {
   const [profileName, setProfileName] = useState("");
   const [pixConfirmationOpen, setPixConfirmationOpen] = useState(false);
   const [pixAcknowledged, setPixAcknowledged] = useState(false);
+  const [securityForm, setSecurityForm] = useState({ question: "", answer: "", currentPassword: "" });
+  const [securityConfigured, setSecurityConfigured] = useState(false);
+  const [securityLoading, setSecurityLoading] = useState(true);
+  const [securitySaving, setSecuritySaving] = useState(false);
+  const [securityMessage, setSecurityMessage] = useState("");
+  const [securityMessageTone, setSecurityMessageTone] = useState<"success" | "error">("success");
+  const [securityErrors, setSecurityErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     void loadAdditionalData();
+    void loadSecurityQuestion();
   }, []);
+
+  async function loadSecurityQuestion() {
+    setSecurityLoading(true);
+    setSecurityMessage("");
+    try {
+      const payload = await apiJson<SecurityQuestionResponse>("/api/auth/security-question");
+      setSecurityConfigured(payload.data.configured);
+      setSecurityForm({ question: payload.data.question ?? "", answer: "", currentPassword: "" });
+    } catch (error) {
+      setSecurityMessageTone("error");
+      setSecurityMessage(error instanceof Error ? error.message : "Não foi possível carregar a pergunta de segurança.");
+    } finally {
+      setSecurityLoading(false);
+    }
+  }
+
+  function updateSecurityField(field: keyof typeof securityForm, value: string) {
+    setSecurityForm((current) => ({ ...current, [field]: value }));
+    setSecurityErrors((current) => {
+      if (!current[field]) return current;
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
+  }
+
+  async function saveSecurityQuestion() {
+    if (securitySaving) return;
+    const errors: Record<string, string> = {};
+    if (!securityForm.question) errors.question = "Selecione uma pergunta.";
+    if (securityForm.answer.trim().length < 8) errors.answer = "A resposta deve ter pelo menos 8 caracteres.";
+    if (!securityForm.currentPassword) errors.currentPassword = "Informe sua senha atual.";
+    if (Object.keys(errors).length) {
+      setSecurityErrors(errors);
+      setSecurityMessageTone("error");
+      setSecurityMessage("Revise os dados de recuperação de senha.");
+      return;
+    }
+    setSecuritySaving(true);
+    setSecurityMessage("");
+    setSecurityErrors({});
+    try {
+      const payload = await apiJson<SecurityQuestionResponse>("/api/auth/security-question", {
+        method: "PUT", body: JSON.stringify(securityForm)
+      });
+      setSecurityConfigured(true);
+      setSecurityForm({ question: payload.data.question, answer: "", currentPassword: "" });
+      setSecurityMessageTone("success");
+      setSecurityMessage(payload.message ?? "Pergunta de segurança atualizada com sucesso.");
+    } catch (error) {
+      setSecurityMessageTone("error");
+      if (error instanceof ApiRequestError) {
+        setSecurityErrors(error.fields ?? {});
+        setSecurityMessage(error.message);
+      } else {
+        setSecurityMessage(error instanceof Error ? error.message : "Não foi possível salvar a pergunta de segurança.");
+      }
+    } finally {
+      setSecuritySaving(false);
+    }
+  }
 
   async function loadAdditionalData() {
     setLoading(true);
@@ -2459,7 +2537,7 @@ export function AdditionalRegistrationDataPage() {
     <div>
       <PageHeader
         title="Dados Cadastrais Adicionais"
-        description="Atualize informações cadastrais complementares, incluindo sua Chave PIX."
+        description="Atualize sua Chave PIX, dados complementares e recuperação de senha."
         icon={UserCircle}
       />
       {message ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
@@ -2488,6 +2566,84 @@ export function AdditionalRegistrationDataPage() {
                       <FormInput label="Chave PIX" value={form.pixKey} onChange={(value) => updateAdditionalDataField("pixKey", value)} error={fieldErrors.pixKey} {...getPixInputProps(form.pixKeyType)} />
                       <p className="mt-1 text-xs font-semibold text-muted">{getPixKeyFormatHint(form.pixKeyType)}</p>
                     </div>
+                  </div>
+                </div>
+              </div>
+              <div className="md:col-span-2">
+                <div className="rounded-xl border border-violet-100 bg-violet-50/55 p-4">
+                  <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex items-start gap-3">
+                      <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white text-violet-600 shadow-soft">
+                        <ShieldCheck className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-black text-navy-950">Recuperação de senha</h3>
+                        <p className="mt-1 text-xs font-semibold leading-5 text-muted">
+                          Escolha uma pergunta e uma resposta que somente você saiba. Elas serão usadas caso você esqueça sua senha.
+                        </p>
+                      </div>
+                    </div>
+                    <span className={cn(
+                      "rounded-full px-3 py-1 text-xs font-extrabold",
+                      securityConfigured ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"
+                    )}>
+                      {securityLoading ? "Carregando..." : securityConfigured ? "Configurada" : "Não configurada"}
+                    </span>
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="md:col-span-2">
+                      <FormSelect
+                        label="Pergunta de segurança"
+                        value={securityForm.question}
+                        options={["", ...SECURITY_QUESTIONS.map((question) => question.value)]}
+                        optionLabel={(value) => SECURITY_QUESTIONS.find((question) => question.value === value)?.label ?? value}
+                        onChange={(value) => updateSecurityField("question", value)}
+                        error={securityErrors.question}
+                        emptyLabel="Selecione uma pergunta"
+                        disabled={securityLoading || securitySaving}
+                      />
+                    </div>
+                    <FormInput
+                      label={securityConfigured ? "Nova resposta" : "Resposta"}
+                      type="password"
+                      value={securityForm.answer}
+                      onChange={(value) => updateSecurityField("answer", value)}
+                      error={securityErrors.answer}
+                      helper="Use no mínimo 8 caracteres. Maiúsculas e espaços extras não alteram a validação."
+                      maxLength={128}
+                      autoComplete="new-password"
+                      disabled={securityLoading || securitySaving}
+                    />
+                    <FormInput
+                      label="Senha atual para confirmar"
+                      type="password"
+                      value={securityForm.currentPassword}
+                      onChange={(value) => updateSecurityField("currentPassword", value)}
+                      error={securityErrors.currentPassword}
+                      maxLength={128}
+                      autoComplete="current-password"
+                      disabled={securityLoading || securitySaving}
+                    />
+                  </div>
+                  {securityMessage ? (
+                    <p role="status" className={cn(
+                      "mt-3 rounded-lg px-3 py-2 text-xs font-bold",
+                      securityMessageTone === "success"
+                        ? "bg-emerald-100 text-emerald-700"
+                        : "bg-red-50 text-red-600"
+                    )}>
+                      {securityMessage}
+                    </p>
+                  ) : null}
+                  <div className="mt-4 flex justify-end">
+                    <button
+                      type="button"
+                      disabled={securityLoading || securitySaving}
+                      onClick={() => void saveSecurityQuestion()}
+                      className="rounded-lg bg-violet-600 px-5 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {securitySaving ? "Salvando..." : securityConfigured ? "Atualizar recuperação" : "Configurar recuperação"}
+                    </button>
                   </div>
                 </div>
               </div>
@@ -8053,7 +8209,7 @@ export function WorkHoursPage() {
         return payload.data;
       }, (date, index, total) => setCaptureProgress(`Importando ${date} · ${index}/${total} dia(s)`));
       setCaptureImportPreview(null);
-      if (result.divergences > 0) {
+      if (captureImportNeedsReview(result)) {
         window.location.assign(`/horas-operacionais/divergencias?${scope.query}`);
         return;
       }
@@ -8349,6 +8505,9 @@ export function WorkHoursPage() {
               <h2 className="font-extrabold text-amber-950">Confirmação de reprocessamento necessária</h2>
               <p className="mt-1 text-sm font-bold text-amber-900">Período: {captureImportPreview.period.startDate} até {captureImportPreview.period.endDate}. Os dias serão processados separadamente, preservando a data de cada turno.</p>
               <p className="mt-1 text-sm font-semibold text-amber-900">Já existem {captureImportPreview.overlap.count} registro(s) no escopo. A confirmação recalcula tudo a partir da duração original, substitui somente os registros afetados e nunca soma horas ou os 30 minutos novamente.</p>
+              {captureImportPreview.registrationWarnings?.length ? <p className="mt-2 text-sm font-bold text-amber-950">
+                Atenção: {captureImportPreview.registrationWarnings.length} bloqueio(s) de cadastro impedem a importação de outros slots. <Link target="_blank" rel="noopener noreferrer" href={`/horas-operacionais/divergencias?${captureReviewQuery(captureImportPreview.period)}`} className="underline">Ver parceiros e motivos na tela de divergências ↗</Link>
+              </p> : null}
               <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
                 <InfoLine label="Datas afetadas" value={captureImportPreview.overlap.dates.join(", ")} />
                 <InfoLine label="Agentes afetados" value={captureImportPreview.overlap.agents.map((agent) => `${agent.name} (${agent.wbLogin})`).join(", ")} />
@@ -10319,7 +10478,9 @@ export function EmployeeMapPage() {
   const operationalStatusOptions = employeeOperationalStatusOptions;
 
   useEffect(() => {
-    void loadEmployees();
+    const initialSearch = new URLSearchParams(window.location.search).get("search") ?? "";
+    setQuery(initialSearch);
+    void loadEmployees({ nextQuery: initialSearch });
     apiJson<{ data: SystemSettings }>("/api/settings")
       .then((payload) => setEmployeeSettings(payload.data))
       .catch(() => setEmployeeSettings(null));
