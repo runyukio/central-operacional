@@ -4,9 +4,10 @@ import { z } from "zod";
 import { getApiActor } from "@/lib/api-actor";
 import { errorResponse, errorStatus, mapZodError } from "@/lib/api-errors";
 import { commitCaptureWorkHoursImport } from "@/lib/work-hours-capture-integration-service";
+import { capturePeriodShape, validateCapturePeriod } from "@/lib/work-hours-capture-period-schema";
 
 const inputSchema = z.object({
-  shiftDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  ...capturePeriodShape,
   employeeId: z.string().optional(),
   lob: z.string().optional(),
   supervisor: z.string().optional(),
@@ -14,7 +15,7 @@ const inputSchema = z.object({
   collaborator: z.string().optional(),
   employeeStatus: z.string().optional(),
   confirmReprocessing: z.boolean().optional()
-});
+}).superRefine(validateCapturePeriod);
 
 export async function POST(request: Request) {
   const parsed = inputSchema.safeParse(await request.json().catch(() => ({})));

@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { getRealtimeHoursTimelineRange } from "@/lib/realtime-hours-service";
 import { isCaptureImportEligible } from "@/lib/work-hours-capture-eligibility";
 import { cancelAdherenceForDeletedWorkHours } from "@/lib/work-hours-adherence-cleanup";
+import { resolveCapturePeriod } from "@/lib/work-hours-capture-period";
 import { shiftCategoryName } from "@/lib/shift-display";
 import {
   calculateOperationalHours,
@@ -126,16 +127,20 @@ export async function commitCaptureWorkHoursImport(
         where: { id: { in: Array.from(new Set(built.proposals.map((item) => item.employee.id))) } },
         include: captureEmployeeInclude
       });
-      const eligibleIds = new Set(freshEmployees.filter((item) => isCaptureImportEligible(item, formatDate(built.period.start))).map((item) => item.id));
-      if (built.proposals.some((item) => !eligibleIds.has(item.employee.id))) {
-        throw new CaptureDecisionError("A elegibilidade de um parceiro mudou. Revise a importação; nenhuma alteração foi aplicada.");
-      }
       const freshById = new Map(freshEmployees.map((employee) => [employee.id, employee]));
       if (built.proposals.some((item) => {
+        const fresh = freshById.get(item.employee.id);
+        return !fresh || !isCaptureImportEligible(fresh, item.dateKey);
+      })) {
+        throw new CaptureDecisionError("A elegibilidade de um parceiro mudou. Revise a importação; nenhuma alteração foi aplicada.");
+      }
+      const changedPartner = built.proposals.find((item) => {
         const fresh = freshById.get(item.employee.id)!;
         return JSON.stringify(classificationInput(fresh)) !== JSON.stringify(classificationInput(item.employee))
-          || fresh.supervisorId !== item.employee.supervisorId || fresh.shiftId !== item.employee.shiftId;
-      })) throw new CaptureDecisionError("A classificação ou o turno de um agente mudou. Revise a importação antes de continuar.");
+          || fresh.supervisorId !== item.employee.supervisorId || fresh.shiftId !== item.employee.shiftId
+          || fresh.shift.startsAt !== item.employee.shift.startsAt || fresh.shift.endsAt !== item.employee.shift.endsAt;
+      });
+      if (changedPartner) throw new CaptureDecisionError(`O cadastro de ${changedPartner.employee.fullName} (${changedPartner.employee.wbLogin}) mudou durante a consulta (classificação, supervisor ou turno). Consulte a captura novamente; nenhuma alteração foi aplicada neste lote.`);
       const affectedPairs = uniqueEmployeeDates(built.proposals);
       const freshSchedules = affectedPairs.length ? await tx.schedule.findMany({ where: {
         OR: affectedPairs, deletedAt: null
@@ -285,15 +290,15 @@ const captureEmployeeInclude = {
   lob: true, shift: true, team: { select: { name: true } },
   user: { select: { role: { select: { name: true } } } },
   supervisor: { select: { id: true, fullName: true, wbLogin: true } },
-  skillAssignments: { include: { skill: true }, orderBy: { isPrimary: "desc" as const } }
+  skillAssignments: { include: { skill: true }, orderBy: [{ isPrimary: "desc" as const }, { skillId: "asc" as const }] }
 } satisfies Prisma.EmployeeProfileInclude;
 
 export async function listCaptureWorkHourDivergences(actor: Actor, filters: CaptureImportFilters) {
   const authorization = await authorizeCaptureImport(actor);
   if ("error" in authorization) return authorization;
-  const period = parseImportShiftDate(filters);
+  const period = parseImportPeriod(filters);
   if ("error" in period) return period;
-  // Slicers are client-side only: always return all eligible divergences of this Shift Date.
+  // Slicers are client-side only: return all eligible divergences of the selected period.
   const records = await prisma.workHourCaptureDivergence.findMany({
     where: { date: { gte: period.start, lte: period.end }, status: "PENDING" },
     include: { employee: { include: captureEmployeeInclude }, schedule: true },
@@ -318,7 +323,7 @@ export async function listCaptureWorkHourDivergences(actor: Actor, filters: Capt
       shift: shiftCategoryName(record.employee.shift.name) || "Sem turno"
     })),
     period: { startDate: formatDate(period.start), endDate: formatDate(period.end) },
-    shiftDate: formatDate(period.start)
+    shiftDate: formatDate(period.start) === formatDate(period.end) ? formatDate(period.start) : null
   };
 }
 
@@ -328,12 +333,12 @@ class CaptureDecisionError extends Error {}
 
 export async function applyCaptureWorkHourDivergenceDecisions(
   actor: Actor,
-  input: { shiftDate: string; decisions: CaptureDivergenceDecisionInput[]; confirmed: boolean }
+  input: CaptureImportFilters & { decisions: CaptureDivergenceDecisionInput[]; confirmed: boolean }
 ) {
   const authorization = await authorizeCaptureImport(actor);
   if ("error" in authorization) return authorization;
   if (!input.confirmed) return createValidationError({}, "Clique em Aplicar alterações para confirmar as decisões.");
-  const period = parseImportShiftDate(input);
+  const period = parseImportPeriod(input);
   if ("error" in period) return period;
   const ids = input.decisions.map((item) => item.id);
   if (!ids.length || ids.length > 1000 || new Set(ids).size !== ids.length) {
@@ -350,10 +355,10 @@ export async function applyCaptureWorkHourDivergenceDecisions(
       for (const decision of input.decisions) {
         const record = byId.get(decision.id);
         if (!record || record.status !== "PENDING" || record.updatedAt.toISOString() !== decision.revision
-          || formatDate(record.date) !== input.shiftDate) {
+          || record.date < period.start || record.date > period.end) {
           throw new CaptureDecisionError("Uma divergência mudou ou já foi resolvida. Atualize a tela e revise as decisões; nenhuma alteração foi aplicada.");
         }
-        if (!isCaptureImportEligible(record.employee, input.shiftDate)) {
+        if (!isCaptureImportEligible(record.employee, formatDate(record.date))) {
           throw new CaptureDecisionError("Um parceiro deixou de ser agente ativo em produção. Atualize a tela; nenhuma alteração foi aplicada.");
         }
         if (!CAPTURE_DIVERGENCE_ACTIONS.includes(decision.action)) throw new CaptureDecisionError("Decisão inválida.");
@@ -416,7 +421,7 @@ export async function applyCaptureWorkHourDivergenceDecisions(
             where: { id: divergence.id },
             data: isPending ? { updatedAt: new Date() } : {
               status: "RESOLVED", resolutionAction: decision.action, resolvedById: authorization.user.id, resolvedAt: new Date(),
-              reconciliationKey: schedule ? reconciliationKey(employee.id, input.shiftDate, schedule.id) : divergence.reconciliationKey,
+              reconciliationKey: schedule ? reconciliationKey(employee.id, formatDate(divergence.date), schedule.id) : divergence.reconciliationKey,
               slotKey: schedule?.id ?? divergence.slotKey, scheduleId: schedule?.id ?? null,
               plannedStart: schedule?.startsAt ?? null, plannedEnd: schedule?.endsAt ?? null,
               scheduleStatus: newStatus, lob: employee.lob.name,
@@ -429,10 +434,10 @@ export async function applyCaptureWorkHourDivergenceDecisions(
             reason: decision.action === "KEEP_SCHEDULE"
               ? "Divergência revisada e encerrada sem alteração do Cronograma ou das Horas Operacionais."
               : captureDivergenceActionLabel(decision.action),
-            previousValue: { shiftDate: input.shiftDate, employeeId: employee.id, wbLogin: employee.wbLogin,
+            previousValue: { shiftDate: formatDate(divergence.date), employeeId: employee.id, wbLogin: employee.wbLogin,
               scheduleStatus: previousStatus, effectiveHours: current?.effectiveHours ?? null,
               capturedMs: divergence.sourceDurationMs, reasons: divergence.reasons, status: divergence.status },
-            newValue: { shiftDate: input.shiftDate, employeeId: employee.id, wbLogin: employee.wbLogin,
+            newValue: { shiftDate: formatDate(divergence.date), employeeId: employee.id, wbLogin: employee.wbLogin,
               decision: decision.action, scheduleStatus: newStatus, effectiveHours: newHours,
               status: isPending ? "PENDING" : "RESOLVED", appliedAt: new Date().toISOString() }
           }
@@ -576,7 +581,7 @@ export async function answerWorkHourAdherenceJustification(actor: Actor, input: 
 }
 
 async function buildCaptureImportPlan(filters: CaptureImportFilters) {
-  const period = parseImportShiftDate(filters);
+  const period = parseImportPeriod(filters);
   if ("error" in period) return period;
   const dateKeys = enumerateDateKeys(period.start, period.end);
   const employeeWhere: Prisma.EmployeeProfileWhereInput = { deletedAt: null };
@@ -599,7 +604,7 @@ async function buildCaptureImportPlan(filters: CaptureImportFilters) {
     include: captureEmployeeInclude
   });
   const employees = employeesRaw.filter((employee) => {
-    if (!isCaptureImportEligible(employee, formatDate(period.start))) return false;
+    if (!isCaptureImportEligible(employee, formatDate(period.end))) return false;
     if (!filters.shift || filters.shift === "Todos") return true;
     return shiftCategoryName(employee.shift.name) === shiftCategoryName(filters.shift);
   }) as CaptureImportEmployee[];
@@ -635,9 +640,10 @@ async function buildCaptureImportPlan(filters: CaptureImportFilters) {
   for (const timeline of timelines) {
     for (const row of timeline.rows) {
       const employee = employeeById.get(row.employeeId) ?? employeeByWb.get(normalizeWb(row.wbLogin));
-      if (!employee || row.activeMs <= 0 || !dateKeys.includes(row.data)) continue;
+      if (!employee || row.activeMs <= 0 || !dateKeys.includes(row.data) || !isCaptureImportEligible(employee, row.data)) continue;
       const date = dateFromKey(row.data);
-      const schedule = (row.slotId ? scheduleById.get(row.slotId) : null)
+      const captureSlot = row.slotId ? scheduleById.get(row.slotId) : null;
+      const schedule = (captureSlot?.employeeId === employee.id && formatDate(captureSlot.date) === row.data ? captureSlot : null)
         ?? scheduleByEmployeeDate.get(employeeDateKey(employee.id, date))
         ?? null;
       const slotKey = schedule?.id ?? fallbackSlotKey(row.data, schedule?.startsAt ?? null, schedule?.endsAt ?? null);
@@ -658,7 +664,7 @@ async function buildCaptureImportPlan(filters: CaptureImportFilters) {
   for (const schedule of schedules) {
     if (captureKeysByScheduleId.has(schedule.id)) continue;
     const employee = employeeById.get(schedule.employeeId);
-    if (!employee) continue;
+    if (!employee || !isCaptureImportEligible(employee, formatDate(schedule.date))) continue;
     proposals.push(buildProposal(employee, schedule, schedule.date, schedule.id, null));
   }
 
@@ -1200,7 +1206,8 @@ function classificationInput(employee: CaptureImportEmployee) {
   return {
     lob: employee.lob.name,
     legacySkill: employee.skill,
-    skillNames: employee.skillAssignments.map((assignment) => assignment.skill.name)
+    // Classification depends on the set of skills, never the database relation order.
+    skillNames: Array.from(new Set(employee.skillAssignments.map((assignment) => assignment.skill.name))).sort()
   };
 }
 
@@ -1226,7 +1233,8 @@ function getActiveUser(actor: Actor) {
 function parsePeriod(filters: CaptureImportFilters): { start: Date; end: Date } | ReturnType<typeof createValidationError> {
   const start = dateFromKey(filters.startDate ?? "");
   const end = dateFromKey(filters.endDate ?? "");
-  if (!filters.startDate || !filters.endDate || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+  if (!filters.startDate || !filters.endDate || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())
+    || formatDate(start) !== filters.startDate || formatDate(end) !== filters.endDate) {
     return createValidationError({}, "Informe uma data inicial e uma data final válidas.");
   }
   if (end < start) return createValidationError({}, "A data final não pode ser anterior à data inicial.");
@@ -1236,13 +1244,10 @@ function parsePeriod(filters: CaptureImportFilters): { start: Date; end: Date } 
   return { start, end };
 }
 
-function parseImportShiftDate(filters: CaptureImportFilters) {
-  const shiftDate = filters.shiftDate || (filters.startDate === filters.endDate ? filters.startDate : "");
-  const date = dateFromKey(shiftDate ?? "");
-  if (!shiftDate || Number.isNaN(date.getTime()) || formatDate(date) !== shiftDate) {
-    return createValidationError({}, "Selecione um único Shift Date válido antes de consultar ou importar a captura.");
-  }
-  return parsePeriod({ startDate: shiftDate, endDate: shiftDate });
+function parseImportPeriod(filters: CaptureImportFilters) {
+  const resolved = resolveCapturePeriod(filters);
+  if ("error" in resolved) return createValidationError({}, resolved.error);
+  return parsePeriod(resolved.period);
 }
 
 function normalizeEmployeeStatusFilter(value?: string) {

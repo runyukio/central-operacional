@@ -3,20 +3,21 @@ import { z } from "zod";
 
 import { getApiActor } from "@/lib/api-actor";
 import { errorResponse, errorStatus, mapZodError } from "@/lib/api-errors";
+import { capturePeriodShape, validateCapturePeriod } from "@/lib/work-hours-capture-period-schema";
 import {
   listCaptureWorkHourDivergences,
   applyCaptureWorkHourDivergenceDecisions
 } from "@/lib/work-hours-capture-integration-service";
 
 const actionSchema = z.object({
-  shiftDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  ...capturePeriodShape,
   decisions: z.array(z.object({
     id: z.string().min(1),
     revision: z.string().datetime(),
     action: z.enum(["CONFIRM_PRESENCE", "CONFIRM_ABSENCE", "CONFIRM_DAY_OFF", "KEEP_SCHEDULE", "KEEP_PENDING"])
   })).min(1).max(1000),
   confirmed: z.literal(true)
-});
+}).superRefine(validateCapturePeriod);
 
 export async function GET(request: Request) {
   const actor = await getApiActor();

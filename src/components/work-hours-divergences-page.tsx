@@ -5,6 +5,7 @@ import { AlertTriangle, ArrowLeft, CheckCircle2, RefreshCw } from "lucide-react"
 import { useEffect, useMemo, useState } from "react";
 import { PageHeader } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
+import { resolveCapturePeriod, type CapturePeriod } from "@/lib/work-hours-capture-period";
 import { CAPTURE_DIVERGENCE_ACTIONS, captureDivergenceActionLabel } from "@/lib/work-hours-capture-integration-core";
 import {
   EMPTY_CAPTURE_REVIEW_FILTERS, captureReviewDecisions, captureReviewOptions, filterCaptureReviewRows,
@@ -18,7 +19,7 @@ type DivergenceRow = CaptureReviewRow & {
 
 export function WorkHoursDivergencesPage() {
   const [rows, setRows] = useState<DivergenceRow[]>([]);
-  const [shiftDate, setShiftDate] = useState("");
+  const [period, setPeriod] = useState<CapturePeriod | null>(null);
   const [returnQuery, setReturnQuery] = useState("");
   const [filters, setFilters] = useState<CaptureReviewFilters>(EMPTY_CAPTURE_REVIEW_FILTERS);
   const [choices, setChoices] = useState<CaptureReviewChoices>({});
@@ -28,24 +29,25 @@ export function WorkHoursDivergencesPage() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const date = params.get("shiftDate") || (params.get("startDate") === params.get("endDate") ? params.get("startDate") : "");
+    const resolved = resolveCapturePeriod({ shiftDate: params.get("shiftDate") ?? undefined,
+      startDate: params.get("startDate") ?? undefined, endDate: params.get("endDate") ?? undefined });
     setReturnQuery(new URLSearchParams(params.get("returnQuery") ?? "").toString());
-    if (!date) {
-      setMessage("Volte para Horas Operacionais e selecione o Shift Date da importação.");
+    if ("error" in resolved) {
+      setMessage(`${resolved.error} Volte para Horas Operacionais e selecione o período da importação.`);
       setLoading(false);
       return;
     }
-    setShiftDate(date);
+    setPeriod(resolved.period);
     const controller = new AbortController();
-    void loadRows(date, controller.signal);
+    void loadRows(resolved.period, controller.signal);
     return () => controller.abort();
   }, []);
 
-  async function loadRows(date: string, signal?: AbortSignal) {
+  async function loadRows(selectedPeriod: CapturePeriod, signal?: AbortSignal) {
     setLoading(true);
     setMessage("");
     try {
-      const response = await fetch(`/api/work-hours/capture-import/divergences?shiftDate=${encodeURIComponent(date)}`, { cache: "no-store", signal });
+      const response = await fetch(`/api/work-hours/capture-import/divergences?${new URLSearchParams(selectedPeriod)}`, { cache: "no-store", signal });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error ?? "Não foi possível carregar as divergências.");
       if (!signal?.aborted) setRows(payload.data ?? []);
@@ -65,13 +67,13 @@ export function WorkHoursDivergencesPage() {
   const returnUrl = `/horas-operacionais${returnQuery ? `?${returnQuery}` : ""}`;
 
   async function applyDecisions() {
-    if (!decisions.length || saving) return;
+    if (!decisions.length || saving || !period) return;
     setSaving(true);
     setMessage("");
     try {
       const response = await fetch("/api/work-hours/capture-import/divergences", {
         method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ shiftDate, decisions, confirmed: true })
+        body: JSON.stringify({ ...period, decisions, confirmed: true })
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error ?? "Não foi possível aplicar as decisões.");
@@ -89,9 +91,9 @@ export function WorkHoursDivergencesPage() {
 
   return (
     <div>
-      <PageHeader title="Divergências da Captura de Horas" description={`Shift Date: ${shiftDate || "não selecionado"} · Selecione as decisões e aplique ao final.`} icon={AlertTriangle} actions={
+      <PageHeader title="Divergências da Captura de Horas" description={`Período (Shift Date): ${period ? `${period.startDate} até ${period.endDate}` : "não selecionado"} · Selecione as decisões e aplique ao final.`} icon={AlertTriangle} actions={
         <div className="flex flex-wrap gap-2">
-          <button type="button" disabled={loading || saving || !shiftDate || decisions.length > 0} onClick={() => void loadRows(shiftDate)}
+          <button type="button" disabled={loading || saving || !period || decisions.length > 0} onClick={() => { if (period) void loadRows(period); }}
             title={decisions.length ? "Aplique suas decisões antes de atualizar." : "Atualizar divergências"}
             className="flex h-11 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-bold text-navy-950 disabled:opacity-50">
             <RefreshCw className="h-4 w-4" /> Atualizar
@@ -112,10 +114,10 @@ export function WorkHoursDivergencesPage() {
           <button type="button" onClick={() => setFilters(EMPTY_CAPTURE_REVIEW_FILTERS)} className="font-bold text-blue-600">Limpar filtros</button>
         </div>
       </section>
-      <section className="space-y-3" aria-label="Divergências do Shift Date">
+      <section className="space-y-3" aria-label="Divergências do período">
         {!loading && !visible.length ? <div className="card p-8 text-center">
           <CheckCircle2 className="mx-auto h-8 w-8 text-emerald-500" />
-          <p className="mt-2 font-bold text-navy-950">{rows.length ? "Nenhuma divergência nos filtros selecionados." : "Nenhuma divergência pendente neste Shift Date."}</p>
+          <p className="mt-2 font-bold text-navy-950">{rows.length ? "Nenhuma divergência nos filtros selecionados." : "Nenhuma divergência pendente neste período."}</p>
         </div> : null}
         {visible.map((row) => (
           <article key={row.id} className="card p-4" style={{ contentVisibility: "auto", containIntrinsicSize: "0 290px" }}>

@@ -64,6 +64,8 @@ import {
 
 import { TopActions } from "@/components/layout/app-shell";
 import { CaptureShiftDateDialog } from "@/components/capture-shift-date-dialog";
+import { type CapturePeriod } from "@/lib/work-hours-capture-period";
+import { processCaptureImportDays, type CaptureDayResult } from "@/lib/work-hours-capture-batch";
 import {
   DonutLegend,
   EmptyState,
@@ -7897,7 +7899,8 @@ export function WorkHoursPage() {
   const [savingImport, setSavingImport] = useState(false);
   const [captureImportPreview, setCaptureImportPreview] = useState<CaptureWorkHourImportPreview | null>(null);
   const [captureDateDialogOpen, setCaptureDateDialogOpen] = useState(false);
-  const [captureShiftDate, setCaptureShiftDate] = useState("");
+  const [capturePeriod, setCapturePeriod] = useState<CapturePeriod | null>(null);
+  const [captureProgress, setCaptureProgress] = useState("");
   const captureImportScope = useRef<{ payload: ReturnType<typeof captureImportPayload>; query: string } | null>(null);
   const [importingCapture, setImportingCapture] = useState(false);
   const [adherenceRows, setAdherenceRows] = useState<WorkHourAdherenceRow[]>([]);
@@ -7977,9 +7980,9 @@ export function WorkHoursPage() {
     }
   }
 
-  function captureImportPayload(shiftDate: string) {
+  function captureImportPayload(period: CapturePeriod) {
     return {
-      shiftDate,
+      ...period,
       employeeId: filters.employeeId || undefined,
       lob: filters.lob,
       supervisor: filters.supervisor || undefined,
@@ -8004,17 +8007,18 @@ export function WorkHoursPage() {
     return params.toString();
   }
 
-  function captureReviewQuery(shiftDate: string) {
-    return new URLSearchParams({ shiftDate, returnQuery: preservedWorkHourQuery() }).toString();
+  function captureReviewQuery(period: CapturePeriod) {
+    return new URLSearchParams({ ...period, returnQuery: preservedWorkHourQuery() }).toString();
   }
 
-  async function importFromCapture(shiftDate: string) {
-    setCaptureShiftDate(shiftDate);
+  async function importFromCapture(period: CapturePeriod) {
+    setCapturePeriod(period);
+    setCaptureProgress("Consultando período...");
     setImportingCapture(true);
     setCaptureImportPreview(null);
     setMessage("");
     // Confirmation must refer to the scope shown in the preview, even if filters change.
-    const scope = { payload: captureImportPayload(shiftDate), query: captureReviewQuery(shiftDate) };
+    const scope = { payload: captureImportPayload(period), query: captureReviewQuery(period) };
     captureImportScope.current = scope;
     try {
       const previewPayload = await apiJson<{ data: CaptureWorkHourImportPreview }>("/api/work-hours/capture-import/preview", {
@@ -8030,6 +8034,7 @@ export function WorkHoursPage() {
       setMessage(error instanceof Error ? error.message : "Não foi possível importar a Captura de Horas.");
     } finally {
       setImportingCapture(false);
+      setCaptureProgress("");
     }
   }
 
@@ -8039,21 +8044,29 @@ export function WorkHoursPage() {
     setImportingCapture(true);
     setMessage("");
     try {
-      const payload = await apiJson<{ data: { imported: number; unchanged: number; divergences: number; ignored: number } }>("/api/work-hours/capture-import/commit", {
-        method: "POST",
-        body: JSON.stringify({ ...scope.payload, confirmReprocessing })
-      });
+      const result = await processCaptureImportDays(scope.payload, async (date) => {
+        const payload = await apiJson<{ data: CaptureDayResult }>("/api/work-hours/capture-import/commit", {
+          method: "POST",
+          body: JSON.stringify({ ...scope.payload, startDate: date, endDate: date, confirmReprocessing })
+        });
+        return payload.data;
+      }, (date, index, total) => setCaptureProgress(`Importando ${date} · ${index}/${total} dia(s)`));
       setCaptureImportPreview(null);
-      if (payload.data.divergences > 0) {
+      if (result.divergences > 0) {
         window.location.assign(`/horas-operacionais/divergencias?${scope.query}`);
         return;
       }
-      setMessage(`${payload.data.imported} registro(s) atualizado(s) pela Captura de Horas. ${payload.data.unchanged} já estavam corretos.`);
       await Promise.all([loadWorkHours(1), canViewAdherence ? loadAdherence() : Promise.resolve()]);
+      setMessage(`${result.completedDates.length} dia(s) concluído(s). ${result.imported} registro(s) atualizado(s) pela Captura de Horas. ${result.unchanged} já estavam corretos.`);
     } catch (error) {
+      // A new attempt must regenerate the preview, including completed days.
+      setCaptureImportPreview(null);
+      captureImportScope.current = null;
+      await Promise.all([loadWorkHours(1), canViewAdherence ? loadAdherence() : Promise.resolve()]);
       setMessage(error instanceof Error ? error.message : "Não foi possível processar a Captura de Horas.");
     } finally {
       setImportingCapture(false);
+      setCaptureProgress("");
     }
   }
 
@@ -8297,11 +8310,11 @@ export function WorkHoursPage() {
             {canUpload ? (
               <button type="button" disabled={importingCapture} onClick={() => setCaptureDateDialogOpen(true)} className="flex h-11 items-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-bold text-white shadow-soft disabled:cursor-not-allowed disabled:opacity-60">
                 <RefreshCw className={cn("h-4 w-4", importingCapture && "animate-spin")} />
-                {importingCapture ? "Consultando captura..." : "Importar da Captura de Horas"}
+                {importingCapture ? captureProgress || "Consultando captura..." : "Importar da Captura de Horas"}
               </button>
             ) : null}
             {canUpload ? (
-              <a href={`/horas-operacionais/divergencias?${captureReviewQuery(captureShiftDate || filters.startDate)}`} className="flex h-11 items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 text-sm font-bold text-amber-800 shadow-soft">
+              <a href={`/horas-operacionais/divergencias?${captureReviewQuery(capturePeriod ?? { startDate: filters.startDate, endDate: filters.endDate })}`} aria-disabled={importingCapture} onClick={(event) => { if (importingCapture) event.preventDefault(); }} className="flex h-11 items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 text-sm font-bold text-amber-800 shadow-soft">
                 <AlertTriangle className="h-4 w-4" />
                 Tela de Divergências
               </a>
@@ -8324,7 +8337,8 @@ export function WorkHoursPage() {
 
       {message ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
 
-      {canUpload ? <CaptureShiftDateDialog open={captureDateDialogOpen} onOpenChange={setCaptureDateDialogOpen} onContinue={(shiftDate) => void importFromCapture(shiftDate)} /> : null}
+      {importingCapture ? <p role="status" className="mb-4 text-sm font-bold text-emerald-700">{captureProgress} · Mantenha esta tela aberta até a conclusão.</p> : null}
+      {canUpload ? <CaptureShiftDateDialog open={captureDateDialogOpen} onOpenChange={setCaptureDateDialogOpen} onContinue={(period) => void importFromCapture(period)} /> : null}
 
       {captureImportPreview?.overlap.count ? (
         <section className="card mb-5 border-amber-300 bg-amber-50 p-5">
@@ -8332,6 +8346,7 @@ export function WorkHoursPage() {
             <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
             <div className="min-w-0 flex-1">
               <h2 className="font-extrabold text-amber-950">Confirmação de reprocessamento necessária</h2>
+              <p className="mt-1 text-sm font-bold text-amber-900">Período: {captureImportPreview.period.startDate} até {captureImportPreview.period.endDate}. Os dias serão processados separadamente, preservando a data de cada turno.</p>
               <p className="mt-1 text-sm font-semibold text-amber-900">Já existem {captureImportPreview.overlap.count} registro(s) no escopo. A confirmação recalcula tudo a partir da duração original, substitui somente os registros afetados e nunca soma horas ou os 30 minutos novamente.</p>
               <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
                 <InfoLine label="Datas afetadas" value={captureImportPreview.overlap.dates.join(", ")} />

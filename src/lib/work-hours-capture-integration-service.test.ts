@@ -6,6 +6,10 @@ import { deleteWorkHourRecord } from "./work-hours-service";
 import { cancelAdherenceForDeletedWorkHours } from "./work-hours-adherence-cleanup";
 import { buildXlsxResponse } from "./xlsx-export";
 import * as XLSX from "xlsx";
+import { z } from "zod";
+import { resolveCapturePeriod } from "./work-hours-capture-period";
+import { capturePeriodShape, validateCapturePeriod } from "./work-hours-capture-period-schema";
+import { CaptureBatchError, processCaptureImportDays } from "./work-hours-capture-batch";
 
 const day = "2026-09-03";
 const date = new Date(`${day}T00:00:00.000Z`);
@@ -224,11 +228,154 @@ test("nenhuma consulta da captura ou do cronograma para Staff, TI, nesting, trei
   assert.ok(f.calls.every((call) => ["user", "employeeProfile"].includes(call.model)));
   assert.deepEqual(f.state, before);
 });
-test("data única é obrigatória antes de consultar agentes, horas ou captura", async (t) => {
+test("período válido é obrigatório antes de consultar agentes, horas ou captura", async (t) => {
   const f = fixture(t);
-  for (const input of [{}, { startDate: day, endDate: "2026-09-04" }, { shiftDate: "2026-02-31" }]) {
+  for (const input of [{}, { startDate: day }, { startDate: day, endDate: "2026-09-02" }, { shiftDate: "2026-02-31" },
+    { startDate: "2026-02-31", endDate: "2026-03-05" }, { startDate: "2026-01-01", endDate: "2026-09-04" }]) {
     assert.ok("error" in await previewCaptureWorkHoursImport(actor, input));
   }
+  assert.ok(f.calls.every((call) => call.model === "user"));
+});
+
+test("ordem das skills não simula mudança de classificação entre plano e transação", async (t) => {
+  const skills = ["Material Queues", "Account", "Freshchat"].map((name) => ({ isPrimary: false, skill: { name, normalizedName: name } }));
+  const f = fixture(t, { employeeProfile: [employee("agent", { skillAssignments: skills })], schedule: [slot()] });
+  f.capture("agent", 6);
+  const find = prisma.employeeProfile.findMany;
+  let calls = 0;
+  t.mock.method(prisma.employeeProfile, "findMany", (async (args: any) => {
+    const rows = await find(args);
+    if (++calls === 2) rows.forEach((row: any) => row.skillAssignments.reverse());
+    return rows;
+  }) as any);
+  const result: any = await commitCaptureWorkHoursImport(actor, { shiftDate: day });
+  assert.equal(result.data?.imported, 1, result.error);
+  assert.equal(f.state.workHourRecord[0].effectiveHours, 6.5);
+});
+
+for (const change of ["skill", "shiftId", "supervisorId", "shiftTime"] as const) {
+  test(`mudança real de ${change} bloqueia o lote e identifica o parceiro sem gravar horas`, async (t) => {
+    const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()] });
+    f.capture("agent", 6);
+    const find = prisma.employeeProfile.findMany;
+    let calls = 0;
+    t.mock.method(prisma.employeeProfile, "findMany", (async (args: any) => {
+      const rows: any[] = await find(args);
+      if (++calls === 2) {
+        if (change === "shiftTime") rows[0].shift.startsAt = "22:00";
+        else rows[0][change] = change === "skill" ? "Bilíngue" : "changed";
+      }
+      return rows;
+    }) as any);
+    const result: any = await commitCaptureWorkHoursImport(actor, { shiftDate: day });
+    assert.match(result.error, /wb_agent/);
+    assert.equal(mutations(f.calls).length, 0);
+  });
+}
+
+test("range inclui cada Shift Date, respeita Go Live por dia e não altera dias externos", async (t) => {
+  const next = "2026-09-04";
+  const slots = ["2026-09-02", day, next, "2026-09-05"].flatMap((d) => ["agent", "new"].map((id) => ({
+    ...slot(id), id: `slot-${id}-${d}`, date: new Date(`${d}T00:00:00Z`)
+  })));
+  const f = fixture(t, { employeeProfile: [employee(), employee("new", { goLiveDate: new Date(`${next}T00:00:00Z`) })], schedule: slots });
+  for (const id of ["agent", "new"]) for (const d of ["2026-09-02", day, next, "2026-09-05"]) f.capture(id, d === day ? 6 : 7, d);
+  const period = { startDate: day, endDate: next };
+  const preview: any = await previewCaptureWorkHoursImport(actor, period);
+  assert.deepEqual(preview.data.summary, { automatic: 3, divergences: 0, ignored: 0 });
+  assert.equal(mutations(f.calls).length, 0);
+  assert.deepEqual(f.calls.find((c) => c.model === "capture")!.args.dates, [day, next]);
+  const first: any = await commitCaptureWorkHoursImport(actor, period);
+  assert.equal(first.data?.imported, 3, first.error);
+  assert.deepEqual(f.state.workHourRecord.map((r) => [r.employeeId, r.date.toISOString().slice(0, 10), r.effectiveHours]), [
+    ["agent", day, 6.5], ["agent", next, 7.5], ["new", next, 7.5]
+  ]);
+  const external = f.state.schedule.filter((s) => ![day, next].includes(s.date.toISOString().slice(0, 10)) || (s.employeeId === "new" && +s.date === +date));
+  assert.ok(external.every((s) => s.status === "ESCALADO"));
+  const denied: any = await commitCaptureWorkHoursImport(actor, period);
+  assert.equal(denied.code, "REPROCESS_CONFIRMATION_REQUIRED");
+  assert.equal(denied.data.overlap.count, 3);
+  assert.deepEqual(denied.data.overlap.dates, [day, next]);
+  const repeated: any = await commitCaptureWorkHoursImport(actor, { ...period, confirmReprocessing: true });
+  assert.equal(repeated.data.unchanged, 3);
+  assert.equal(f.state.workHourRecord.length, 3);
+});
+
+test("divergências do range são revisadas com a data de cada linha e rejeitam linhas fora dele", async (t) => {
+  const next = "2026-09-04";
+  const nextDate = new Date(`${next}T00:00:00Z`);
+  const tomorrow = { ...slot(), id: "tomorrow", date: nextDate };
+  const f = fixture(t, { employeeProfile: [employee()], schedule: [slot(), tomorrow], workHourCaptureDivergence: [
+    divergence(), divergence("agent", hour, { id: "tomorrow", date: nextDate, scheduleId: "tomorrow", reconciliationKey: `agent:${next}:tomorrow` }),
+    divergence("agent", hour, { id: "outside", date: new Date("2026-09-05T00:00:00Z") })
+  ] });
+  const period = { startDate: day, endDate: next };
+  const listed: any = await listCaptureWorkHourDivergences(actor, period);
+  assert.deepEqual(listed.data.map((r: any) => r.date), [day, next]);
+  assert.equal(listed.shiftDate, null);
+  const denied = await applyCaptureWorkHourDivergenceDecisions(actor, { ...period, confirmed: true,
+    decisions: [f.decision("div-agent", "CONFIRM_PRESENCE"), f.decision("outside", "CONFIRM_PRESENCE")] });
+  assert.ok("error" in denied);
+  assert.equal(mutations(f.calls).length, 0);
+  const saved: any = await applyCaptureWorkHourDivergenceDecisions(actor, { ...period, confirmed: true,
+    decisions: [f.decision("div-agent", "CONFIRM_PRESENCE"), f.decision("tomorrow", "CONFIRM_PRESENCE")] });
+  assert.equal(saved.data.resolved, 2);
+  assert.deepEqual(f.state.workHourRecord.map((r) => r.date.toISOString().slice(0, 10)), [day, next]);
+  assert.equal(f.state.workHourCaptureDivergence.find((d) => d.id === "tomorrow")!.reconciliationKey, `agent:${next}:tomorrow`);
+  assert.deepEqual(f.state.auditLog.filter((r) => r.entity === "WorkHourCaptureDivergence").map((r) => r.newValue.shiftDate), [day, next]);
+  assert.equal(f.state.workHourCaptureDivergence.find((d) => d.id === "outside")!.status, "PENDING");
+});
+
+test("contrato de período aceita range e link antigo, mas rejeita datas inválidas ou conflitantes", () => {
+  const schema = z.object(capturePeriodShape).superRefine(validateCapturePeriod);
+  for (const input of [{ shiftDate: day }, { startDate: day, endDate: "2026-09-04" }, { startDate: "2026-08-01", endDate: "2026-10-01" }]) {
+    assert.equal(schema.safeParse(input).success, true);
+  }
+  for (const input of [{}, { startDate: day }, { shiftDate: "2026-02-31" }, { startDate: "2026-09-05", endDate: day },
+    { shiftDate: day, startDate: day, endDate: "2026-09-04" }, { startDate: "2026-08-01", endDate: "2026-10-02" }]) {
+    assert.equal(schema.safeParse(input).success, false);
+  }
+  assert.deepEqual(resolveCapturePeriod({ startDate: "2026-08-31", endDate: "2026-09-01" }), {
+    period: { startDate: "2026-08-31", endDate: "2026-09-01" }, dates: ["2026-08-31", "2026-09-01"]
+  });
+});
+
+test("processamento diário acumula todos os dias antes de abrir as divergências", async () => {
+  const calls: string[] = [];
+  const progress: string[] = [];
+  const result = await processCaptureImportDays({ startDate: day, endDate: "2026-09-05" }, async (d) => {
+    calls.push(d); return { imported: 1, unchanged: 2, divergences: 1, ignored: 0 };
+  }, (d, index, total) => progress.push(`${d}:${index}/${total}`));
+  assert.deepEqual(result, { imported: 3, unchanged: 6, divergences: 3, ignored: 0, completedDates: [day, "2026-09-04", "2026-09-05"] });
+  assert.equal(calls.length, 3);
+  assert.equal(progress[2], "2026-09-05:3/3");
+});
+
+test("falha diária interrompe sem retry e informa exatamente os dias concluídos", async () => {
+  const calls: string[] = [];
+  await assert.rejects(processCaptureImportDays({ startDate: day, endDate: "2026-09-05" }, async (d) => {
+    calls.push(d);
+    if (d === "2026-09-04") throw new Error("Confirme o reprocessamento");
+    return { imported: 1, unchanged: 0, divergences: 1, ignored: 0 };
+  }, () => {}), (error: unknown) => {
+    assert.ok(error instanceof CaptureBatchError);
+    assert.equal(error.failedDate, "2026-09-04");
+    assert.deepEqual(error.result.completedDates, [day]);
+    assert.match(error.message, /Dias concluídos: 2026-09-03/);
+    assert.match(error.message, /Confirme o reprocessamento/);
+    return true;
+  });
+  assert.deepEqual(calls, [day, "2026-09-04"]);
+});
+
+test("range não amplia a permissão de importar ou resolver divergências", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee()], schedule: [slot()] });
+  f.state.user[0].role.name = "COLABORADOR";
+  const period = { startDate: day, endDate: "2026-09-04" };
+  assert.ok("error" in await previewCaptureWorkHoursImport(actor, period));
+  assert.ok("error" in await commitCaptureWorkHoursImport(actor, period));
+  assert.ok("error" in await listCaptureWorkHourDivergences(actor, period));
+  assert.ok("error" in await applyCaptureWorkHourDivergenceDecisions(actor, { ...period, decisions: [], confirmed: true }));
   assert.ok(f.calls.every((call) => call.model === "user"));
 });
 test("horas existentes são verificadas antes do cruzamento; captura só recebe IDs elegíveis", async (t) => {

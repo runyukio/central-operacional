@@ -15,7 +15,7 @@ export function captureReviewOptions(rows: CaptureReviewRow[], key: keyof Captur
   return Array.from(new Set(rows.map((row) => row[key]).filter(Boolean))).sort((a, b) => a.localeCompare(b, "pt-BR"));
 }
 
-// Always build from the complete Shift Date, never from the currently visible slice.
+// Always build from the complete selected period, never from the visible slice.
 export function captureReviewDecisions(rows: CaptureReviewRow[], choices: CaptureReviewChoices) {
   return rows.flatMap((row) => choices[row.id] ? [{ id: row.id, ...choices[row.id] }] : []);
 }
