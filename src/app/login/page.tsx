@@ -7,7 +7,6 @@ import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, LockKeyhole, Mail, Moon, Sparkles, Sun, X } from "lucide-react";
 
-import { ChangePasswordCard } from "@/components/change-password-card";
 import { PasswordRecoveryCard } from "@/components/password-recovery-card";
 import { useTheme } from "@/components/theme-provider";
 
@@ -18,7 +17,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [passwordModal, setPasswordModal] = useState<"change" | "recover" | null>(null);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [success, setSuccess] = useState("");
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -130,15 +129,8 @@ export default function LoginPage() {
                 <ArrowRight className="h-4 w-4" />
               </button>
             </form>
-            <button
-              type="button"
-              onClick={() => setPasswordModal("change")}
-              className="mt-3 flex h-10 w-full items-center justify-center text-sm font-extrabold text-blue-700 hover:text-blue-800"
-            >
-              Primeiro acesso ou senha temporária? Alterar senha
-            </button>
-            <button type="button" onClick={() => setPasswordModal("recover")}
-              className="flex h-10 w-full items-center justify-center text-sm font-extrabold text-blue-700 hover:text-blue-800">
+            <button type="button" onClick={() => setRecoveryOpen(true)}
+              className="mt-3 flex h-10 w-full items-center justify-center text-sm font-extrabold text-blue-700 hover:text-blue-800">
               Esqueci minha senha
             </button>
             <Link href="/cadastro-colaborador" className="mt-4 flex h-11 w-full items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-sm font-extrabold text-blue-700">
@@ -147,13 +139,11 @@ export default function LoginPage() {
           </div>
         </div>
       </section>
-      <Dialog.Root open={Boolean(passwordModal)} onOpenChange={(open) => { if (!open) setPasswordModal(null); }}>
+      <Dialog.Root open={recoveryOpen} onOpenChange={setRecoveryOpen}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 z-50 bg-navy-950/40 backdrop-blur-sm" />
           <Dialog.Content aria-describedby={undefined} className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 outline-none">
-            <Dialog.Title className="sr-only">
-              {passwordModal === "change" ? "Alterar senha" : "Redefinir senha"}
-            </Dialog.Title>
+            <Dialog.Title className="sr-only">Redefinir senha</Dialog.Title>
             <Dialog.Close asChild>
               <button
                 type="button"
@@ -163,22 +153,13 @@ export default function LoginPage() {
                 <X className="h-4 w-4" />
               </button>
             </Dialog.Close>
-            {passwordModal === "change" ? <ChangePasswordCard
-              initialEmail={email}
-              onCancel={() => setPasswordModal(null)}
-              onSuccess={(changedEmail) => {
-                setEmail(changedEmail);
-                setPassword("");
-                setSuccess("Senha alterada com sucesso. Entre usando a nova senha.");
-                setPasswordModal(null);
-              }}
-            /> : <PasswordRecoveryCard initialEmail={email} onCancel={() => setPasswordModal(null)} onSuccess={(changedEmail) => {
+            <PasswordRecoveryCard initialEmail={email} onCancel={() => setRecoveryOpen(false)} onSuccess={(changedEmail) => {
               setEmail(changedEmail);
               setPassword("");
               setError("");
               setSuccess("Senha redefinida com sucesso. Entre usando a nova senha.");
-              setPasswordModal(null);
-            }} />}
+              setRecoveryOpen(false);
+            }} />
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
