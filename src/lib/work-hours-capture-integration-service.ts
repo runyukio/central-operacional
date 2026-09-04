@@ -5,9 +5,11 @@ import type { Actor } from "@/lib/mock-db";
 import { canImportWorkHours, canJustifyAbsence, normalizeRole } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { getRealtimeHoursTimelineRange } from "@/lib/realtime-hours-service";
+import { isCaptureImportEligible } from "@/lib/work-hours-capture-eligibility";
 import { shiftCategoryName } from "@/lib/shift-display";
 import {
   calculateOperationalHours,
+  CAPTURE_DIVERGENCE_ACTIONS,
   captureDivergenceActionLabel,
   captureDivergenceReasonLabel,
   evaluateCaptureImport,
@@ -19,6 +21,7 @@ import {
 } from "@/lib/work-hours-capture-integration-core";
 
 export type CaptureImportFilters = {
+  shiftDate?: string;
   startDate?: string;
   endDate?: string;
   employeeId?: string;
@@ -28,6 +31,9 @@ export type CaptureImportFilters = {
   collaborator?: string;
   employeeStatus?: string;
 };
+
+// Explicit I/O boundary also lets regression tests use captured fixtures without a live database.
+export const captureWorkHoursData = { timelineRange: getRealtimeHoursTimelineRange };
 
 type CaptureImportProposal = {
   reconciliationKey: string;
@@ -50,6 +56,10 @@ type CaptureImportEmployee = {
   fullName: string;
   operationalStatus: string;
   roleTitle: string;
+  goLiveDate: Date | null;
+  deletedAt?: Date | null;
+  team?: { name: string } | null;
+  user?: { role: { name: string } } | null;
   skill: string | null;
   lobId: string;
   supervisorId: string | null;
@@ -111,7 +121,32 @@ export async function commitCaptureWorkHoursImport(
 
   try {
     const result = await prisma.$transaction(async (tx) => {
+      const freshEmployees = await tx.employeeProfile.findMany({
+        where: { id: { in: Array.from(new Set(built.proposals.map((item) => item.employee.id))) } },
+        include: captureEmployeeInclude
+      });
+      const eligibleIds = new Set(freshEmployees.filter((item) => isCaptureImportEligible(item, formatDate(built.period.start))).map((item) => item.id));
+      if (built.proposals.some((item) => !eligibleIds.has(item.employee.id))) {
+        throw new CaptureDecisionError("A elegibilidade de um parceiro mudou. Revise a importação; nenhuma alteração foi aplicada.");
+      }
+      const freshById = new Map(freshEmployees.map((employee) => [employee.id, employee]));
+      if (built.proposals.some((item) => {
+        const fresh = freshById.get(item.employee.id)!;
+        return JSON.stringify(classificationInput(fresh)) !== JSON.stringify(classificationInput(item.employee))
+          || fresh.supervisorId !== item.employee.supervisorId || fresh.shiftId !== item.employee.shiftId;
+      })) throw new CaptureDecisionError("A classificação ou o turno de um agente mudou. Revise a importação antes de continuar.");
       const affectedPairs = uniqueEmployeeDates(built.proposals);
+      const freshSchedules = affectedPairs.length ? await tx.schedule.findMany({ where: {
+        OR: affectedPairs, deletedAt: null
+      } }) : [];
+      const freshScheduleByPair = new Map(freshSchedules.map((schedule) => [employeeDateKey(schedule.employeeId, schedule.date), schedule]));
+      for (const proposal of built.proposals) {
+        const current = freshScheduleByPair.get(employeeDateKey(proposal.employee.id, proposal.date));
+        if ((current?.id ?? null) !== (proposal.schedule?.id ?? null)
+          || (current && (current.status !== proposal.scheduleStatus || current.startsAt !== proposal.schedule?.startsAt || current.endsAt !== proposal.schedule?.endsAt))) {
+          throw new CaptureDecisionError("O cronograma mudou durante a consulta. Reimporte o Shift Date; nenhuma alteração foi aplicada.");
+        }
+      }
       const currentRecords = affectedPairs.length
         ? await tx.workHourRecord.findMany({
           where: {
@@ -233,6 +268,7 @@ export async function commitCaptureWorkHoursImport(
 
     return { data: { ...result, period: formatted.period, filters: sanitizeFilters(input) } };
   } catch (error) {
+    if (error instanceof CaptureDecisionError) return createValidationError({}, error.message);
     if (error instanceof ReprocessConfirmationError) {
       return {
         ...createValidationError({}, "As horas mudaram desde a prévia. Revise e confirme novamente o reprocessamento."),
@@ -244,188 +280,169 @@ export async function commitCaptureWorkHoursImport(
   }
 }
 
+const captureEmployeeInclude = {
+  lob: true, shift: true, team: { select: { name: true } },
+  user: { select: { role: { select: { name: true } } } },
+  supervisor: { select: { id: true, fullName: true, wbLogin: true } },
+  skillAssignments: { include: { skill: true }, orderBy: { isPrimary: "desc" as const } }
+} satisfies Prisma.EmployeeProfileInclude;
+
 export async function listCaptureWorkHourDivergences(actor: Actor, filters: CaptureImportFilters) {
   const authorization = await authorizeCaptureImport(actor);
   if ("error" in authorization) return authorization;
-  const period = parsePeriod(filters);
+  const period = parseImportShiftDate(filters);
   if ("error" in period) return period;
+  // Slicers are client-side only: always return all eligible divergences of this Shift Date.
   const records = await prisma.workHourCaptureDivergence.findMany({
-    where: {
-      date: { gte: period.start, lte: period.end },
-      status: "PENDING",
-      ...(filters.employeeId ? { employeeId: filters.employeeId } : {}),
-      ...(filters.lob && filters.lob !== "Todos" ? { lob: filters.lob } : {}),
-      ...(filters.supervisor && filters.supervisor !== "Todos" ? {
-        employee: { supervisor: { fullName: { contains: filters.supervisor, mode: "insensitive" } } }
-      } : {}),
-      ...(filters.collaborator ? {
-        OR: [
-          { employee: { fullName: { contains: filters.collaborator, mode: "insensitive" } } },
-          { wbLogin: { contains: filters.collaborator, mode: "insensitive" } }
-        ]
-      } : {})
-    },
-    include: {
-      employee: {
-        select: {
-          fullName: true,
-          operationalStatus: true,
-          shift: { select: { name: true } },
-          supervisor: { select: { fullName: true } }
-        }
-      }
-    },
+    where: { date: { gte: period.start, lte: period.end }, status: "PENDING" },
+    include: { employee: { include: captureEmployeeInclude }, schedule: true },
     orderBy: [{ date: "asc" }, { employee: { fullName: "asc" } }]
   });
-  const filteredRecords = records.filter((record) => {
-    if (filters.shift && filters.shift !== "Todos" && shiftCategoryName(record.employee.shift.name) !== shiftCategoryName(filters.shift)) return false;
-    if (filters.employeeStatus === "Ativos" && isInactiveEmployeeStatus(record.employee.operationalStatus)) return false;
-    if (filters.employeeStatus === "Desligados/Inativos" && !isInactiveEmployeeStatus(record.employee.operationalStatus)) return false;
-    return true;
-  });
-
   return {
-    data: filteredRecords.map((record) => ({
+    data: records.filter((record) => isCaptureImportEligible(record.employee, formatDate(record.date))).map((record) => ({
       id: record.id,
+      revision: record.updatedAt.toISOString(),
       employeeName: record.employee.fullName,
-      wbLogin: record.wbLogin,
+      wbLogin: record.employee.wbLogin,
       date: formatDate(record.date),
-      slot: slotLabel(record.plannedStart, record.plannedEnd),
-      lob: record.lob,
-      classification: record.classification,
-      scheduleStatus: scheduleStatusLabel(record.scheduleStatus),
+      slot: slotLabel(record.schedule?.startsAt ?? record.plannedStart, record.schedule?.endsAt ?? record.plannedEnd),
+      lob: record.employee.lob.name,
+      classification: classificationFor(record.employee as CaptureImportEmployee).classificationLabel,
+      scheduleStatus: scheduleStatusLabel(record.schedule?.status ?? "SEM_ESCALA"),
       capturedDuration: formatDuration(record.sourceDurationMs),
-      proposedHours: formatHours(record.proposedHours),
+      proposedHours: formatHours(calculateOperationalHours(record.sourceDurationMs ?? 0, classificationInput(record.employee as CaptureImportEmployee)).operationalHours),
       reasons: jsonStringArray(record.reasons).map((reason) => captureDivergenceReasonLabel(reason as CaptureDivergenceReason)),
-      actions: jsonStringArray(record.suggestedActions).map((action) => ({
-        value: action,
-        label: captureDivergenceActionLabel(action as CaptureDivergenceAction)
-      })),
-      supervisor: record.employee.supervisor?.fullName ?? "Sem supervisor"
+      actions: CAPTURE_DIVERGENCE_ACTIONS.map((value) => ({ value, label: captureDivergenceActionLabel(value) })),
+      supervisor: record.employee.supervisor?.fullName ?? "Sem supervisor",
+      shift: shiftCategoryName(record.employee.shift.name) || "Sem turno"
     })),
     period: { startDate: formatDate(period.start), endDate: formatDate(period.end) },
-    filters: sanitizeFilters(filters)
+    shiftDate: formatDate(period.start)
   };
 }
 
-export async function resolveCaptureWorkHourDivergence(
+export type CaptureDivergenceDecisionInput = { id: string; action: CaptureDivergenceAction; revision: string };
+
+class CaptureDecisionError extends Error {}
+
+export async function applyCaptureWorkHourDivergenceDecisions(
   actor: Actor,
-  input: { id: string; action: CaptureDivergenceAction; confirmed?: boolean }
+  input: { shiftDate: string; decisions: CaptureDivergenceDecisionInput[]; confirmed: boolean }
 ) {
   const authorization = await authorizeCaptureImport(actor);
   if ("error" in authorization) return authorization;
-  if (!input.confirmed) return createValidationError({}, "Confirme a ação antes de alterar o Cronograma e as Horas Operacionais.");
-  if (input.action === "KEEP_PENDING") return { data: { pending: true } };
-
+  if (!input.confirmed) return createValidationError({}, "Clique em Aplicar alterações para confirmar as decisões.");
+  const period = parseImportShiftDate(input);
+  if ("error" in period) return period;
+  const ids = input.decisions.map((item) => item.id);
+  if (!ids.length || ids.length > 1000 || new Set(ids).size !== ids.length) {
+    return createValidationError({}, "Selecione decisões válidas, sem registros duplicados.");
+  }
   try {
     return await prisma.$transaction(async (tx) => {
-    const divergence = await tx.workHourCaptureDivergence.findUnique({
-      where: { id: input.id },
-      include: {
-        employee: {
-          include: {
-            lob: true,
-            shift: true,
-            supervisor: true,
-            skillAssignments: { include: { skill: true }, orderBy: { isPrimary: "desc" } }
-          }
-        },
-        schedule: true
-      }
-    });
-    if (!divergence || divergence.status !== "PENDING") return createValidationError({}, "Divergência não encontrada ou já resolvida.");
-    const allowedActions = jsonStringArray(divergence.suggestedActions);
-    if (!allowedActions.includes(input.action)) return createValidationError({}, "Esta ação não está disponível para a divergência selecionada.");
-
-    const employee = divergence.employee as CaptureImportEmployee;
-    let schedule = divergence.schedule as CaptureImportSchedule | null;
-    if (!schedule && input.action === "CONFIRM_PRESENCE") {
-      schedule = await tx.schedule.upsert({
-        where: { employeeId_date: { employeeId: employee.id, date: divergence.date } },
-        create: {
-          employeeId: employee.id,
-          shiftId: employee.shiftId,
-          lobId: employee.lobId,
-          supervisorId: employee.supervisorId,
-          date: divergence.date,
-          startsAt: employee.shift.startsAt,
-          endsAt: employee.shift.endsAt,
-          status: "PRESENTE",
-          source: "captura-horas-confirmacao"
-        },
-        update: { deletedAt: null }
+      const records = await tx.workHourCaptureDivergence.findMany({
+        where: { id: { in: ids } },
+        include: { employee: { include: captureEmployeeInclude }, schedule: true }
       });
-    }
-    if (!schedule) return createValidationError({}, "Não foi possível localizar ou criar o slot do Cronograma para esta ação.");
-
-    const previousScheduleStatus = schedule.status;
-    if (input.action === "CONFIRM_ABSENCE") {
-      await updateScheduleWithHistory(tx, schedule, "FALTA", authorization.user.id, "Falta confirmada na Tela de Divergências");
-      await upsertPendingAbsence(tx, authorization.user.id, employee.id, schedule);
-      await removeOperationalHoursForOutcome(tx, employee.id, divergence.date, authorization.user.id, "Falta confirmada na Tela de Divergências");
-      await cancelLowAdherence(tx, divergence.reconciliationKey);
-    } else if (input.action === "CONFIRM_DAY_OFF") {
-      await updateScheduleWithHistory(tx, schedule, "FOLGA", authorization.user.id, "Folga confirmada na Tela de Divergências");
-      await resolveAttendanceState(tx, authorization.user.id, employee.id, schedule, "FOLGA");
-      await removeOperationalHoursForOutcome(tx, employee.id, divergence.date, authorization.user.id, "Folga confirmada na Tela de Divergências");
-      await cancelLowAdherence(tx, divergence.reconciliationKey);
-    } else {
-      if (!divergence.sourceDurationMs || divergence.sourceDurationMs <= 0) {
-        return createValidationError({}, "Esta divergência não possui duração capturada para registrar presença.");
-      }
-      const calculation = calculateOperationalHours(divergence.sourceDurationMs, classificationInput(employee));
-      const targetStatus = input.action === "CONFIRM_ATTENDANCE" ? "VENDA_FOLGA_APROVADA" : "PRESENTE";
-      const proposal = proposalFromDivergence(divergence, employee, schedule, calculation, targetStatus);
-      const current = await tx.workHourRecord.findUnique({
-        where: { employeeId_date: { employeeId: employee.id, date: divergence.date } }
-      });
-      await saveValidatedAttendance(tx, {
-        proposal,
-        actorId: authorization.user.id,
-        actionSource: "MANUAL",
-        currentRecord: current
-      });
-      await resolveAttendanceState(tx, authorization.user.id, employee.id, schedule, targetStatus);
-    }
-
-    const saved = await tx.workHourCaptureDivergence.update({
-      where: { id: divergence.id },
-      data: {
-        status: "RESOLVED",
-        reconciliationKey: reconciliationKey(employee.id, formatDate(divergence.date), schedule.id),
-        slotKey: schedule.id,
-        scheduleId: schedule.id,
-        plannedStart: schedule.startsAt,
-        plannedEnd: schedule.endsAt,
-        resolutionAction: input.action,
-        resolvedById: authorization.user.id,
-        resolvedAt: new Date()
-      }
-    });
-    await tx.auditLog.create({
-      data: {
-        actorId: authorization.user.id,
-        action: "APROVACAO",
-        entity: "WorkHourCaptureDivergence",
-        entityId: divergence.id,
-        reason: captureDivergenceActionLabel(input.action),
-        previousValue: {
-          status: divergence.status,
-          scheduleStatus: previousScheduleStatus,
-          capturedMs: divergence.sourceDurationMs,
-          reasons: divergence.reasons
-        },
-        newValue: {
-          status: saved.status,
-          action: input.action,
-          resolvedAt: saved.resolvedAt
+      const byId = new Map(records.map((record) => [record.id, record]));
+      // Validate the complete batch before the first write. Any stale/ineligible row aborts it.
+      for (const decision of input.decisions) {
+        const record = byId.get(decision.id);
+        if (!record || record.status !== "PENDING" || record.updatedAt.toISOString() !== decision.revision
+          || formatDate(record.date) !== input.shiftDate) {
+          throw new CaptureDecisionError("Uma divergência mudou ou já foi resolvida. Atualize a tela e revise as decisões; nenhuma alteração foi aplicada.");
+        }
+        if (!isCaptureImportEligible(record.employee, input.shiftDate)) {
+          throw new CaptureDecisionError("Um parceiro deixou de ser agente ativo em produção. Atualize a tela; nenhuma alteração foi aplicada.");
+        }
+        if (!CAPTURE_DIVERGENCE_ACTIONS.includes(decision.action)) throw new CaptureDecisionError("Decisão inválida.");
+        const schedule = record.schedule;
+        const currentSlot = await tx.schedule.findUnique({ where: { employeeId_date: { employeeId: record.employeeId, date: record.date } } });
+        if ((schedule && (schedule.deletedAt || schedule.status !== record.scheduleStatus
+          || schedule.startsAt !== record.plannedStart || schedule.endsAt !== record.plannedEnd))
+          || (!schedule && (record.scheduleId || (currentSlot && !currentSlot.deletedAt)))) {
+          throw new CaptureDecisionError("O cronograma mudou desde a importação. Reimporte o Shift Date antes de aplicar as decisões.");
+        }
+        if (record.lob !== record.employee.lob.name || record.classification !== classificationFor(record.employee).classificationLabel) {
+          throw new CaptureDecisionError("A classificação de um agente mudou. Reimporte o Shift Date antes de aplicar as decisões.");
         }
       }
-    });
-    return { data: { id: saved.id, status: saved.status, action: input.action } };
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 10_000, timeout: 30_000 });
+
+      const results: Array<{ id: string; status: string; action: CaptureDivergenceAction; revision: string }> = [];
+      for (const decision of input.decisions) {
+        const divergence = byId.get(decision.id)!;
+        const employee = divergence.employee as CaptureImportEmployee;
+        let schedule = divergence.schedule as CaptureImportSchedule | null;
+        const previousStatus = schedule?.status ?? "SEM_ESCALA";
+        const current = await tx.workHourRecord.findUnique({ where: { employeeId_date: { employeeId: employee.id, date: divergence.date } } });
+        let newHours = current?.effectiveHours ?? null;
+        let newStatus = previousStatus;
+        const isPending = decision.action === "KEEP_PENDING";
+        const keeping = decision.action === "KEEP_SCHEDULE" || isPending;
+
+        if (!keeping) {
+          if (!schedule) {
+            // Manual attendance outcomes may establish the missing slot, never an automatic import.
+            schedule = await tx.schedule.upsert({
+              where: { employeeId_date: { employeeId: employee.id, date: divergence.date } },
+              create: { employeeId: employee.id, shiftId: employee.shiftId, lobId: employee.lobId,
+                supervisorId: employee.supervisorId, date: divergence.date, startsAt: employee.shift.startsAt,
+                endsAt: employee.shift.endsAt, status: "ESCALADO", source: "captura-horas-confirmacao" },
+              update: { deletedAt: null }
+            });
+          }
+          if (decision.action === "CONFIRM_ABSENCE" || decision.action === "CONFIRM_DAY_OFF") {
+            const target = decision.action === "CONFIRM_ABSENCE" ? "FALTA" : "FOLGA";
+            const reason = captureDivergenceActionLabel(decision.action) + " na Tela de Divergências";
+            await updateScheduleWithHistory(tx, schedule, target, authorization.user.id, reason);
+            if (target === "FALTA") await upsertPendingAbsence(tx, authorization.user.id, employee.id, schedule);
+            else await resolveAttendanceState(tx, authorization.user.id, employee.id, schedule, target);
+            await removeOperationalHoursForOutcome(tx, employee.id, divergence.date, authorization.user.id, reason);
+            await cancelLowAdherence(tx, divergence.reconciliationKey);
+            newHours = null;
+            newStatus = target;
+          } else {
+            const calculation = calculateOperationalHours(divergence.sourceDurationMs ?? 0, classificationInput(employee));
+            const proposal = proposalFromDivergence(divergence, employee, schedule, calculation, "PRESENTE");
+            await saveValidatedAttendance(tx, { proposal, actorId: authorization.user.id, actionSource: "MANUAL", currentRecord: current });
+            await resolveAttendanceState(tx, authorization.user.id, employee.id, schedule, "PRESENTE");
+            newHours = calculation.operationalHours;
+            newStatus = "PRESENTE";
+          }
+        }
+
+        const updated = await tx.workHourCaptureDivergence.update({
+            where: { id: divergence.id },
+            data: isPending ? { updatedAt: new Date() } : {
+              status: "RESOLVED", resolutionAction: decision.action, resolvedById: authorization.user.id, resolvedAt: new Date(),
+              reconciliationKey: schedule ? reconciliationKey(employee.id, input.shiftDate, schedule.id) : divergence.reconciliationKey,
+              slotKey: schedule?.id ?? divergence.slotKey, scheduleId: schedule?.id ?? null,
+              plannedStart: schedule?.startsAt ?? null, plannedEnd: schedule?.endsAt ?? null,
+              scheduleStatus: newStatus, lob: employee.lob.name,
+              classification: classificationFor(employee).classificationLabel
+            }
+          });
+        await tx.auditLog.create({
+          data: {
+            actorId: authorization.user.id, action: "APROVACAO", entity: "WorkHourCaptureDivergence", entityId: divergence.id,
+            reason: decision.action === "KEEP_SCHEDULE"
+              ? "Divergência revisada e encerrada sem alteração do Cronograma ou das Horas Operacionais."
+              : captureDivergenceActionLabel(decision.action),
+            previousValue: { shiftDate: input.shiftDate, employeeId: employee.id, wbLogin: employee.wbLogin,
+              scheduleStatus: previousStatus, effectiveHours: current?.effectiveHours ?? null,
+              capturedMs: divergence.sourceDurationMs, reasons: divergence.reasons, status: divergence.status },
+            newValue: { shiftDate: input.shiftDate, employeeId: employee.id, wbLogin: employee.wbLogin,
+              decision: decision.action, scheduleStatus: newStatus, effectiveHours: newHours,
+              status: isPending ? "PENDING" : "RESOLVED", appliedAt: new Date().toISOString() }
+          }
+        });
+        results.push({ id: divergence.id, status: isPending ? "PENDING" : "RESOLVED", action: decision.action, revision: updated.updatedAt.toISOString() });
+      }
+      return { data: { results, resolved: results.filter((item) => item.status === "RESOLVED").length, pending: results.filter((item) => item.status === "PENDING").length } };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 10_000, timeout: 60_000 });
   } catch (error) {
-    return createServerError(error, "A ação falhou e nenhuma alteração foi aplicada ao Cronograma ou às Horas Operacionais.");
+    if (error instanceof CaptureDecisionError) return createValidationError({}, error.message);
+    return createServerError(error, "As decisões não foram aplicadas. Nenhuma alteração foi persistida no Cronograma ou nas Horas Operacionais.");
   }
 }
 
@@ -453,14 +470,14 @@ export async function listWorkHourAdherenceJustifications(actor: Actor, filters:
       } : {})
     },
     include: {
-      employee: { select: { fullName: true } },
+      employee: { include: captureEmployeeInclude },
       supervisor: { select: { fullName: true } },
       answeredBy: { select: { name: true } }
     },
     orderBy: [{ status: "desc" }, { date: "desc" }, { employee: { fullName: "asc" } }]
   });
   return {
-    data: records.map((record) => ({
+    data: records.filter((record) => isCaptureImportEligible(record.employee, formatDate(record.date))).map((record) => ({
       id: record.id,
       employeeName: record.employee.fullName,
       wbLogin: record.wbLogin,
@@ -485,8 +502,9 @@ export async function answerWorkHourAdherenceJustification(actor: Actor, input: 
   }
   const justification = input.justification.trim();
   if (justification.length < 5) return createValidationError({}, "Informe uma justificativa com pelo menos 5 caracteres.");
-  const record = await prisma.workHourAdherenceJustification.findUnique({ where: { id: input.id } });
+  const record = await prisma.workHourAdherenceJustification.findUnique({ where: { id: input.id }, include: { employee: { include: captureEmployeeInclude } } });
   if (!record || record.status === "CANCELLED") return createValidationError({}, "Pendência não encontrada.");
+  if (!isCaptureImportEligible(record.employee, formatDate(record.date))) return createValidationError({}, "Este parceiro não é elegível para a integração da Captura de Horas.");
   const role = normalizeRole(user.role.name);
   if (role === "SUPERVISOR" && record.supervisorId !== user.employeeProfile?.id) {
     return createPermissionError("Supervisores só podem justificar pendências de seus próprios agentes.");
@@ -518,7 +536,7 @@ export async function answerWorkHourAdherenceJustification(actor: Actor, input: 
 }
 
 async function buildCaptureImportPlan(filters: CaptureImportFilters) {
-  const period = parsePeriod(filters);
+  const period = parseImportShiftDate(filters);
   if ("error" in period) return period;
   const dateKeys = enumerateDateKeys(period.start, period.end);
   const employeeWhere: Prisma.EmployeeProfileWhereInput = { deletedAt: null };
@@ -538,20 +556,21 @@ async function buildCaptureImportPlan(filters: CaptureImportFilters) {
 
   const employeesRaw = await prisma.employeeProfile.findMany({
     where: employeeWhere,
-    include: {
-      lob: true,
-      shift: true,
-      supervisor: { select: { id: true, fullName: true, wbLogin: true } },
-      skillAssignments: { include: { skill: true }, orderBy: { isPrimary: "desc" } }
-    }
+    include: captureEmployeeInclude
   });
   const employees = employeesRaw.filter((employee) => {
+    if (!isCaptureImportEligible(employee, formatDate(period.start))) return false;
     if (!filters.shift || filters.shift === "Todos") return true;
     return shiftCategoryName(employee.shift.name) === shiftCategoryName(filters.shift);
   }) as CaptureImportEmployee[];
-  if (!employees.length) return createValidationError({}, "Nenhum parceiro foi encontrado para o período e os filtros selecionados.");
+  if (!employees.length) return { proposals: [] as CaptureImportProposal[], period };
 
   const employeeIds = employees.map((employee) => employee.id);
+  // Check existing operational hours before crossing capture and schedule data.
+  const existing = await prisma.workHourRecord.findMany({
+    where: { employeeId: { in: employeeIds }, date: { gte: period.start, lte: period.end } },
+    select: { id: true, employeeId: true, date: true, effectiveHours: true, actualHours: true, scheduleId: true, status: true }
+  });
   const [schedules, timelines] = await Promise.all([
     prisma.schedule.findMany({
       where: {
@@ -561,9 +580,10 @@ async function buildCaptureImportPlan(filters: CaptureImportFilters) {
       },
       orderBy: [{ date: "asc" }, { employeeId: "asc" }]
     }) as Promise<CaptureImportSchedule[]>,
-    getRealtimeHoursTimelineRange({
+    captureWorkHoursData.timelineRange({
       dates: dateKeys,
-      ...(employees.length === 1 ? { employeeId: employees[0].id } : {})
+      eligibleEmployeeIds: employeeIds,
+      eligibleWbLogins: employees.map((employee) => employee.wbLogin)
     })
   ]);
   const employeeById = new Map(employees.map((employee) => [employee.id, employee]));
@@ -603,17 +623,13 @@ async function buildCaptureImportPlan(filters: CaptureImportFilters) {
   }
 
   const pairs = uniqueEmployeeDates(proposals);
-  const existing = pairs.length ? await prisma.workHourRecord.findMany({
-    where: { OR: pairs.map((item) => ({ employeeId: item.employeeId, date: item.date })) },
-    select: { id: true, employeeId: true, date: true, effectiveHours: true, actualHours: true, scheduleId: true, status: true }
-  }) : [];
   const existingByKey = new Map(existing.map((record) => [employeeDateKey(record.employeeId, record.date), record]));
   const resolved = pairs.length ? await prisma.workHourCaptureDivergence.findMany({
     where: {
       status: "RESOLVED",
       reconciliationKey: { in: proposals.map((proposal) => proposal.reconciliationKey) }
     },
-    select: { reconciliationKey: true, status: true, scheduleId: true, plannedStart: true, plannedEnd: true, sourceDurationMs: true, resolutionAction: true }
+    select: { reconciliationKey: true, status: true, scheduleId: true, plannedStart: true, plannedEnd: true, sourceDurationMs: true, resolutionAction: true, scheduleStatus: true, lob: true, classification: true }
   }) : [];
   const resolvedByKey = new Map(resolved.map((item) => [item.reconciliationKey, item]));
   for (const proposal of proposals) {
@@ -623,7 +639,9 @@ async function buildCaptureImportPlan(filters: CaptureImportFilters) {
       scheduleStatus: proposal.scheduleStatus,
       plannedStart: proposal.schedule?.startsAt ?? null,
       plannedEnd: proposal.schedule?.endsAt ?? null,
-      capturedMs: proposal.capturedMs
+      capturedMs: proposal.capturedMs,
+      lob: proposal.employee.lob.name,
+      classification: classificationFor(proposal.employee).classificationLabel
     }, resolvedByKey.get(proposal.reconciliationKey));
     if (reused) {
       proposal.decision = reused;
@@ -642,7 +660,7 @@ function buildProposal(
   capturedMs: number | null
 ): CaptureImportProposal {
   const decision = evaluateCaptureImport({ scheduleExists: Boolean(schedule), scheduleStatus: schedule?.status, capturedMs });
-  const calculation = capturedMs && capturedMs > 0 ? calculateOperationalHours(capturedMs, classificationInput(employee)) : null;
+  const calculation = calculateOperationalHours(capturedMs ?? 0, classificationInput(employee));
   const dateKey = formatDate(date);
   return {
     reconciliationKey: reconciliationKey(employee.id, dateKey, slotKey),
@@ -691,7 +709,7 @@ async function saveValidatedAttendance(
   }
 ) {
   const { proposal } = input;
-  if (!proposal.schedule || !proposal.calculation || !proposal.capturedMs) throw new Error("Proposta validada incompleta.");
+  if (!proposal.schedule || !proposal.calculation || proposal.capturedMs === null) throw new Error("Proposta validada incompleta.");
   const targetStatus = (proposal.decision.targetScheduleStatus ?? proposal.schedule.status) as ScheduleStatus;
   const previousSchedule = { ...proposal.schedule };
   if (proposal.schedule.status !== targetStatus) {
@@ -820,7 +838,7 @@ async function saveValidatedAttendance(
 }
 
 async function upsertLowAdherence(tx: Prisma.TransactionClient, proposal: CaptureImportProposal, actorId: string) {
-  if (!proposal.schedule || !proposal.capturedMs || !proposal.calculation) return;
+  if (!proposal.schedule || proposal.capturedMs === null || !proposal.calculation) return;
   if (!shouldCreateLowAdherence(proposal.capturedMs)) {
     await cancelLowAdherence(tx, proposal.reconciliationKey);
     return;
@@ -1124,7 +1142,7 @@ function proposalFromDivergence(
     date: divergence.date,
     dateKey: formatDate(divergence.date),
     scheduleStatus: divergence.scheduleStatus,
-    capturedMs: divergence.sourceDurationMs,
+    capturedMs: divergence.sourceDurationMs ?? 0,
     calculation,
     decision: { decision: "AUTOMATIC", targetScheduleStatus: targetStatus, reasons: [], actions: [] },
     existingRecord: null
@@ -1171,6 +1189,15 @@ function parsePeriod(filters: CaptureImportFilters): { start: Date; end: Date } 
   return { start, end };
 }
 
+function parseImportShiftDate(filters: CaptureImportFilters) {
+  const shiftDate = filters.shiftDate || (filters.startDate === filters.endDate ? filters.startDate : "");
+  const date = dateFromKey(shiftDate ?? "");
+  if (!shiftDate || Number.isNaN(date.getTime()) || formatDate(date) !== shiftDate) {
+    return createValidationError({}, "Selecione um único Shift Date válido antes de consultar ou importar a captura.");
+  }
+  return parsePeriod({ startDate: shiftDate, endDate: shiftDate });
+}
+
 function normalizeEmployeeStatusFilter(value?: string) {
   if (!value || value === "Todos") return undefined;
   if (value === "Ativos") return { notIn: ["Inativo", "Desligado", "INACTIVE", "TERMINATED"] } as Prisma.StringFilter;
@@ -1178,16 +1205,11 @@ function normalizeEmployeeStatusFilter(value?: string) {
   return { equals: value, mode: "insensitive" as const };
 }
 
-function isInactiveEmployeeStatus(value: string) {
-  return ["INATIVO", "INATIVA", "INACTIVE", "DESLIGADO", "DESLIGADA", "TERMINATED"].includes(
-    value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toUpperCase()
-  );
-}
-
 function sanitizeFilters(filters: CaptureImportFilters) {
   return {
-    startDate: filters.startDate ?? "",
-    endDate: filters.endDate ?? "",
+    shiftDate: filters.shiftDate ?? "",
+    startDate: filters.shiftDate ?? filters.startDate ?? "",
+    endDate: filters.shiftDate ?? filters.endDate ?? "",
     employeeId: filters.employeeId ?? "",
     lob: filters.lob ?? "Todos",
     supervisor: filters.supervisor ?? "",

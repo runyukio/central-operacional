@@ -6,8 +6,7 @@ import { errorResponse, errorStatus, mapZodError } from "@/lib/api-errors";
 import { previewCaptureWorkHoursImport } from "@/lib/work-hours-capture-integration-service";
 
 const filtersSchema = z.object({
-  startDate: z.string().min(1),
-  endDate: z.string().min(1),
+  shiftDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   employeeId: z.string().optional(),
   lob: z.string().optional(),
   supervisor: z.string().optional(),

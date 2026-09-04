@@ -63,6 +63,7 @@ import {
 } from "lucide-react";
 
 import { TopActions } from "@/components/layout/app-shell";
+import { CaptureShiftDateDialog } from "@/components/capture-shift-date-dialog";
 import {
   DonutLegend,
   EmptyState,
@@ -7895,6 +7896,8 @@ export function WorkHoursPage() {
   const [showPreview, setShowPreview] = useState(false);
   const [savingImport, setSavingImport] = useState(false);
   const [captureImportPreview, setCaptureImportPreview] = useState<CaptureWorkHourImportPreview | null>(null);
+  const [captureDateDialogOpen, setCaptureDateDialogOpen] = useState(false);
+  const [captureShiftDate, setCaptureShiftDate] = useState("");
   const captureImportScope = useRef<{ payload: ReturnType<typeof captureImportPayload>; query: string } | null>(null);
   const [importingCapture, setImportingCapture] = useState(false);
   const [adherenceRows, setAdherenceRows] = useState<WorkHourAdherenceRow[]>([]);
@@ -7973,10 +7976,9 @@ export function WorkHoursPage() {
     }
   }
 
-  function captureImportPayload() {
+  function captureImportPayload(shiftDate: string) {
     return {
-      startDate: filters.startDate,
-      endDate: filters.endDate,
+      shiftDate,
       employeeId: filters.employeeId || undefined,
       lob: filters.lob,
       supervisor: filters.supervisor || undefined,
@@ -8001,12 +8003,17 @@ export function WorkHoursPage() {
     return params.toString();
   }
 
-  async function importFromCapture() {
+  function captureReviewQuery(shiftDate: string) {
+    return new URLSearchParams({ shiftDate, returnQuery: preservedWorkHourQuery() }).toString();
+  }
+
+  async function importFromCapture(shiftDate: string) {
+    setCaptureShiftDate(shiftDate);
     setImportingCapture(true);
     setCaptureImportPreview(null);
     setMessage("");
     // Confirmation must refer to the scope shown in the preview, even if filters change.
-    const scope = { payload: captureImportPayload(), query: preservedWorkHourQuery() };
+    const scope = { payload: captureImportPayload(shiftDate), query: captureReviewQuery(shiftDate) };
     captureImportScope.current = scope;
     try {
       const previewPayload = await apiJson<{ data: CaptureWorkHourImportPreview }>("/api/work-hours/capture-import/preview", {
@@ -8265,13 +8272,13 @@ export function WorkHoursPage() {
               </button>
             ) : null}
             {canUpload ? (
-              <button type="button" disabled={importingCapture} onClick={importFromCapture} className="flex h-11 items-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-bold text-white shadow-soft disabled:cursor-not-allowed disabled:opacity-60">
+              <button type="button" disabled={importingCapture} onClick={() => setCaptureDateDialogOpen(true)} className="flex h-11 items-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-bold text-white shadow-soft disabled:cursor-not-allowed disabled:opacity-60">
                 <RefreshCw className={cn("h-4 w-4", importingCapture && "animate-spin")} />
                 {importingCapture ? "Consultando captura..." : "Importar da Captura de Horas"}
               </button>
             ) : null}
             {canUpload ? (
-              <a href={`/horas-operacionais/divergencias?${preservedWorkHourQuery()}`} className="flex h-11 items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 text-sm font-bold text-amber-800 shadow-soft">
+              <a href={`/horas-operacionais/divergencias?${captureReviewQuery(captureShiftDate || filters.startDate)}`} className="flex h-11 items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 text-sm font-bold text-amber-800 shadow-soft">
                 <AlertTriangle className="h-4 w-4" />
                 Tela de Divergências
               </a>
@@ -8293,6 +8300,8 @@ export function WorkHoursPage() {
       />
 
       {message ? <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700">{message}</div> : null}
+
+      {canUpload ? <CaptureShiftDateDialog open={captureDateDialogOpen} onOpenChange={setCaptureDateDialogOpen} onContinue={(shiftDate) => void importFromCapture(shiftDate)} /> : null}
 
       {captureImportPreview?.overlap.count ? (
         <section className="card mb-5 border-amber-300 bg-amber-50 p-5">

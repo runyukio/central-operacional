@@ -110,6 +110,9 @@ type RealtimeHoursTimelineOptions = {
   employeeId?: string | null;
   wbLogin?: string | null;
   includeOvernightShiftTail?: boolean;
+  /** Internal import scope; regular capture screens remain unfiltered. */
+  eligibleEmployeeIds?: string[];
+  eligibleWbLogins?: string[];
 };
 
 export type RealtimeHoursTimelineRow = ReturnType<typeof buildRealtimeHoursTimelineRow>;
@@ -1028,6 +1031,8 @@ export async function getRealtimeHoursTimelineRange(options: {
   dates: string[];
   employeeId?: string | null;
   wbLogin?: string | null;
+  eligibleEmployeeIds?: string[];
+  eligibleWbLogins?: string[];
 }) {
   const dates = Array.from(new Set(options.dates.filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))));
   if (!dates.length) return [];
@@ -1038,7 +1043,12 @@ export async function getRealtimeHoursTimelineRange(options: {
     where: { dateKey: { in: dates } },
     include: {
       rows: {
-        where: employeeId || wbLogin ? {
+        where: options.eligibleEmployeeIds ? {
+          OR: [
+            { employeeId: { in: options.eligibleEmployeeIds } },
+            { wbLoginNormalized: { in: (options.eligibleWbLogins ?? []).map(normalizeLogin) } }
+          ]
+        } : employeeId || wbLogin ? {
           OR: [
             ...(employeeId ? [{ employeeId }] : []),
             ...(wbLogin ? [{ wbLoginNormalized: wbLogin }] : [])
@@ -1058,7 +1068,9 @@ export async function getRealtimeHoursTimelineRange(options: {
     const timelines = await Promise.all(chunk.map((date) => getRealtimeHoursTimelineFromRaw({
       date,
       employeeId,
-      wbLogin
+      wbLogin,
+      eligibleEmployeeIds: options.eligibleEmployeeIds,
+      eligibleWbLogins: options.eligibleWbLogins
     })));
     timelines.forEach((timeline) => results.set(timeline.date, timeline));
   }
@@ -1138,13 +1150,25 @@ async function getRealtimeHoursTimelineFromRaw(options: RealtimeHoursTimelineOpt
   const period = resolveTimelineDate(options.date);
   const employeeId = String(options.employeeId ?? "").trim();
   const wbLogin = normalizeLogin(String(options.wbLogin ?? ""));
+  const eligibleIds = options.eligibleEmployeeIds ? new Set(options.eligibleEmployeeIds) : null;
+  const eligibleLogins = new Set((options.eligibleWbLogins ?? []).map(normalizeLogin));
+  const eligibleMappings = eligibleIds ? await prisma.realTimeHoursIdentityMapping.findMany({
+    where: { OR: [{ employeeId: { in: [...eligibleIds] } }, { wbLogin: { in: [...eligibleLogins], mode: "insensitive" } }] },
+    select: { hostname: true, windowsUser: true }
+  }) : [];
   const records = await prisma.realTimeHoursRecord.findMany({
     where: {
       capturedAt: {
         gte: period.queryStart,
         lt: period.end
       },
-      ...(employeeId || wbLogin ? {
+      ...(eligibleIds ? {
+        OR: [
+          { employeeId: { in: [...eligibleIds] } },
+          { wbLogin: { in: [...eligibleLogins], mode: "insensitive" as const } },
+          ...eligibleMappings.map(({ hostname, windowsUser }) => ({ hostname, windowsUser }))
+        ]
+      } : employeeId || wbLogin ? {
         OR: [
           ...(employeeId ? [{ employeeId }] : []),
           ...(wbLogin ? [{ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }] : [])
@@ -1168,13 +1192,16 @@ async function getRealtimeHoursTimelineFromRaw(options: RealtimeHoursTimelineOpt
   });
 
   const mappings = await mappingLookupFor(records);
-  const employees = await employeeLookupFor(records.map((record) => {
+  const matchedEmployees = await employeeLookupFor(records.map((record) => {
     const mapping = mappings.get(identityKey(record.hostname, record.windowsUser));
     return {
       employeeId: mapping?.employeeId ?? record.employeeId,
       wbLogin: mapping?.wbLogin ?? record.wbLogin
     };
   }));
+  const employees = eligibleIds
+    ? new Map([...matchedEmployees].filter(([, employee]) => eligibleIds.has(employee.id)))
+    : matchedEmployees;
 
   const employeeIds = Array.from(new Set(Array.from(employees.values()).map((employee) => employee.id)));
   const scheduleDateKeys = [
@@ -1219,6 +1246,7 @@ async function getRealtimeHoursTimelineFromRaw(options: RealtimeHoursTimelineOpt
     const employee = employees.get(employeeKey(mapping?.employeeId ?? record.employeeId, mapping?.wbLogin ?? record.wbLogin));
     const employeeId = mapping?.employeeId ?? employee?.id ?? record.employeeId ?? "";
     const wbLogin = mapping?.wbLogin ?? employee?.wbLogin ?? record.wbLogin ?? "";
+    if (eligibleIds && (employeeId ? !eligibleIds.has(employeeId) : !eligibleLogins.has(normalizeLogin(wbLogin)))) continue;
     const key = realtimeHoursTimelinePersonKey({ employeeId, wbLogin, hostname: record.hostname, windowsUser: record.windowsUser });
     const group = groups.get(key) ?? [];
     group.push({ record, employeeId, wbLogin });

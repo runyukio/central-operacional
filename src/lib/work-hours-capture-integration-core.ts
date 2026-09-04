@@ -7,10 +7,12 @@ export type OperationalHourRule = "RA_ONBOARDING" | "BILINGUAL" | "CEC_COMMENTS"
 export type CaptureImportDecision = "AUTOMATIC" | "DIVERGENCE" | "IGNORE";
 export type CaptureDivergenceAction =
   | "CONFIRM_PRESENCE"
-  | "CONFIRM_ATTENDANCE"
   | "CONFIRM_ABSENCE"
   | "CONFIRM_DAY_OFF"
+  | "KEEP_SCHEDULE"
   | "KEEP_PENDING";
+
+export const CAPTURE_DIVERGENCE_ACTIONS = ["CONFIRM_PRESENCE", "CONFIRM_ABSENCE", "CONFIRM_DAY_OFF", "KEEP_SCHEDULE", "KEEP_PENDING"] as const;
 
 export type CaptureDivergenceReason =
   | "MISSING_CAPTURE"
@@ -104,7 +106,7 @@ export function calculateOperationalHours(
   };
 }
 
-export function evaluateCaptureImport(input: {
+function evaluateCaptureImportStatus(input: {
   scheduleExists: boolean;
   scheduleStatus?: string | null;
   capturedMs?: number | null;
@@ -148,7 +150,7 @@ export function evaluateCaptureImport(input: {
       return {
         decision: "DIVERGENCE",
         reasons: ["SHORT_CAPTURE"],
-        actions: ["CONFIRM_ATTENDANCE", "CONFIRM_DAY_OFF", "KEEP_PENDING"]
+        actions: [...CAPTURE_DIVERGENCE_ACTIONS]
       };
     }
     const actions: CaptureDivergenceAction[] = ["CONFIRM_PRESENCE"];
@@ -174,8 +176,13 @@ export function evaluateCaptureImport(input: {
   };
 }
 
+export function evaluateCaptureImport(input: Parameters<typeof evaluateCaptureImportStatus>[0]): CaptureImportEvaluation {
+  const result = evaluateCaptureImportStatus(input);
+  return result.decision === "DIVERGENCE" ? { ...result, actions: [...CAPTURE_DIVERGENCE_ACTIONS] } : result;
+}
+
 export function shouldCreateLowAdherence(capturedMs?: number | null) {
-  return Boolean(capturedMs !== null && capturedMs !== undefined && capturedMs > 0 && capturedMs < LOW_ADHERENCE_THRESHOLD_MS);
+  return Boolean(capturedMs !== null && capturedMs !== undefined && capturedMs >= 0 && capturedMs < LOW_ADHERENCE_THRESHOLD_MS);
 }
 
 // Reuse an explicit decision only for the exact capture and slot that was reviewed.
@@ -185,6 +192,8 @@ export function reuseCaptureResolution(input: {
   plannedStart: string | null;
   plannedEnd: string | null;
   capturedMs: number | null;
+  lob?: string;
+  classification?: string;
 }, resolved: {
   status: string;
   scheduleId: string | null;
@@ -192,11 +201,18 @@ export function reuseCaptureResolution(input: {
   plannedEnd: string | null;
   sourceDurationMs: number | null;
   resolutionAction: string | null;
+  scheduleStatus?: string;
+  lob?: string;
+  classification?: string;
 } | undefined): CaptureImportEvaluation | null {
-  if (!resolved || resolved.status !== "RESOLVED" || !input.scheduleId
+  if (!resolved || resolved.status !== "RESOLVED"
     || input.scheduleId !== resolved.scheduleId
     || input.plannedStart !== resolved.plannedStart || input.plannedEnd !== resolved.plannedEnd
-    || input.capturedMs !== resolved.sourceDurationMs) return null;
+    || input.capturedMs !== resolved.sourceDurationMs
+    || input.lob !== resolved.lob || input.classification !== resolved.classification) return null;
+  if (resolved.resolutionAction === "KEEP_SCHEDULE") {
+    return input.scheduleStatus === resolved.scheduleStatus ? { decision: "IGNORE", reasons: [], actions: [] } : null;
+  }
   const targets: Record<string, string> = {
     CONFIRM_PRESENCE: "PRESENTE",
     CONFIRM_ATTENDANCE: "VENDA_FOLGA_APROVADA",
@@ -206,7 +222,8 @@ export function reuseCaptureResolution(input: {
   const target = targets[resolved.resolutionAction ?? ""];
   if (!target || input.scheduleStatus !== target) return null;
   if (target === "FALTA" || target === "FOLGA") return { decision: "IGNORE", reasons: [], actions: [] };
-  if (!input.capturedMs || input.capturedMs <= 0) return null;
+  // A manually confirmed presence without capture is also final until its source changes.
+  if (!input.capturedMs || input.capturedMs <= 0) return { decision: "IGNORE", reasons: [], actions: [] };
   return { decision: "AUTOMATIC", targetScheduleStatus: target, reasons: [], actions: [] };
 }
 
@@ -222,11 +239,11 @@ export function captureDivergenceReasonLabel(reason: CaptureDivergenceReason) {
 
 export function captureDivergenceActionLabel(action: CaptureDivergenceAction) {
   const labels: Record<CaptureDivergenceAction, string> = {
-    CONFIRM_PRESENCE: "Confirmar presença",
-    CONFIRM_ATTENDANCE: "Confirmar comparecimento",
-    CONFIRM_ABSENCE: "Confirmar falta",
-    CONFIRM_DAY_OFF: "Confirmar folga",
-    KEEP_PENDING: "Manter pendente"
+    CONFIRM_PRESENCE: "Alterar para Presença",
+    CONFIRM_ABSENCE: "Alterar para Falta",
+    CONFIRM_DAY_OFF: "Alterar para Folga",
+    KEEP_SCHEDULE: "Manter cronograma",
+    KEEP_PENDING: "Pendente"
   };
   return labels[action];
 }

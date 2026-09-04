@@ -1,0 +1,21 @@
+import type { CaptureDivergenceAction } from "@/lib/work-hours-capture-integration-core";
+
+export type CaptureReviewRow = { id: string; revision: string; lob: string; supervisor: string; shift: string };
+export type CaptureReviewFilters = { lob: string; supervisor: string; shift: string };
+export type CaptureReviewChoices = Record<string, { action: CaptureDivergenceAction; revision: string }>;
+export const EMPTY_CAPTURE_REVIEW_FILTERS: CaptureReviewFilters = { lob: "", supervisor: "", shift: "" };
+
+export function filterCaptureReviewRows<T extends CaptureReviewRow>(rows: T[], filters: CaptureReviewFilters) {
+  return rows.filter((row) => (!filters.lob || row.lob === filters.lob)
+    && (!filters.supervisor || row.supervisor === filters.supervisor)
+    && (!filters.shift || row.shift === filters.shift));
+}
+
+export function captureReviewOptions(rows: CaptureReviewRow[], key: keyof CaptureReviewFilters) {
+  return Array.from(new Set(rows.map((row) => row[key]).filter(Boolean))).sort((a, b) => a.localeCompare(b, "pt-BR"));
+}
+
+// Always build from the complete Shift Date, never from the currently visible slice.
+export function captureReviewDecisions(rows: CaptureReviewRow[], choices: CaptureReviewChoices) {
+  return rows.flatMap((row) => choices[row.id] ? [{ id: row.id, ...choices[row.id] }] : []);
+}

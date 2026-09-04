@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   CAPTURE_AUTO_PRESENCE_THRESHOLD_MS,
+  CAPTURE_DIVERGENCE_ACTIONS,
   LOW_ADHERENCE_THRESHOLD_MS,
   calculateOperationalHours,
   evaluateCaptureImport,
@@ -112,9 +113,9 @@ test("15. venda de folga com mais de duas horas mantém venda de folga", () => {
   assert.deepEqual([result.decision, result.targetScheduleStatus], ["AUTOMATIC", "VENDA_FOLGA_APROVADA"]);
 });
 
-test("16. venda de folga sem captura só permite confirmar folga ou manter pendente", () => {
+test("16. venda de folga sem captura oferece as cinco decisões fixas", () => {
   const result = evaluateCaptureImport({ scheduleExists: true, scheduleStatus: "VENDA_FOLGA_APROVADA", capturedMs: null });
-  assert.deepEqual(result.actions, ["CONFIRM_DAY_OFF", "KEEP_PENDING"]);
+  assert.deepEqual(result.actions, CAPTURE_DIVERGENCE_ACTIONS);
 });
 
 test("17. captura abaixo de 7:25 gera pendência", () => {
