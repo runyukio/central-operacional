@@ -20,11 +20,36 @@ test("resolve as categorias principais por cargo/função", () => {
   assert.equal(resolveBillingOmieMainCategory("RH"), "2.10.94");
   assert.equal(resolveBillingOmieMainCategory("RTA"), "2.10.88");
   assert.equal(resolveBillingOmieMainCategory("Financeiro"), "2.10.93");
-  assert.equal(resolveBillingOmieMainCategory("TI"), "2.10.93");
-  assert.equal(resolveBillingOmieMainCategory("Logística/TI"), "2.10.93");
+  assert.equal(resolveBillingOmieMainCategory("TI"), "2.10.90");
+  assert.equal(resolveBillingOmieMainCategory("Logística/TI"), "2.10.90");
   assert.equal(resolveBillingOmieMainCategory("Agente", "Treinadores"), "2.10.95");
   assert.equal(resolveBillingOmieMainCategory("Agente", "Treinador II"), "2.10.95");
   assert.equal(resolveBillingOmieMainCategory("WFM", "RTA"), "2.10.88");
+});
+
+test("rateia IT/TI como Analista de Dados por cargo ou skill, mantendo bônus e campanha separados", () => {
+  for (const alias of ["IT", "TI", "Logística/TI", "Logistics IT"]) {
+    for (const assignment of [{ roleTitle: alias }, { roleTitle: "WFM", skill: alias }]) {
+      const allocation = buildBillingOmieAllocation({
+        lob: "ALL",
+        ...assignment,
+        finalAmount: 1_950,
+        bonusAmount: 150,
+        campaignAmount: 100,
+        advanceAmount: 300
+      });
+      assert.equal(allocation.mainCategoryCode, "2.10.90");
+      assert.equal(allocation.departmentCode, BILLING_OMIE_DEPARTMENT_CODES.TECHNOLOGY);
+      assert.equal(allocation.documentAmount, 1_950);
+      assert.equal(allocation.documentTypeCode, "NF");
+      assert.deepEqual(allocation.categories, [
+        { code: "2.10.90", value: 1_700 },
+        { code: "2.02.04", value: 150 },
+        { code: "2.02.99", value: 100 }
+      ]);
+    }
+  }
+  assert.equal(resolveBillingOmieMainCategory("WFM", "Financeiro"), "2.10.93");
 });
 
 test("resolve o departamento pela LOB e usa cargo/função somente para ALL", () => {
