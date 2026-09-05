@@ -305,6 +305,38 @@ test("reimportação não recupera justificativa órfã de exclusão anterior à
   assert.equal(f.state.auditLog.find((r) => r.entityId === "legacy" && r.action === "EXCLUSAO")!.previousValue.justification, "Resposta antiga");
 });
 
+test("filtros independentes combinam período/LOB/turno/parceiro/supervisor/status na consulta e no XLSX, sem escrita", async (t) => {
+  const profiles = [employee(), employee("other"), employee("morning", { shift: { name: "Manhã" } }), employee("cec", { lob: { name: "CEC" } })];
+  const f = fixture(t, {
+    employeeProfile: profiles,
+    workHourRecord: profiles.map((p) => ({ id: `hours-${p.id}`, employeeId: p.id, date })),
+    workHourAdherenceJustification: [
+      adherence("pending", "agent", { supervisorId: "sup-a", supervisor: { fullName: "Supervisor" } }),
+      adherence("answered", "agent", { supervisorId: "sup-a", status: "JUSTIFIED", justification: "Justificativa anterior" }),
+      adherence("same-name", "agent", { supervisorId: "sup-b", supervisor: { fullName: "Supervisor" } }),
+      adherence("other-partner", "other", { supervisorId: "sup-a" }),
+      adherence("morning", "morning", { supervisorId: "sup-a" }),
+      adherence("cec", "cec", { supervisorId: "sup-a", lob: "CEC" }),
+      adherence("old", "agent", { supervisorId: "sup-a", date: new Date("2026-09-02T00:00:00Z") }),
+      adherence("cancelled", "agent", { supervisorId: "sup-a", status: "CANCELLED" })
+    ]
+  });
+  const before = clone(f.state);
+  const filters = { startDate: day, endDate: day, lob: "ADS", shift: "Noite", employeeId: "agent", supervisorId: "sup-a", justificationStatus: "Pendentes" };
+  const listed = await listWorkHourAdherenceJustifications(actor, filters);
+  assert.ok("data" in listed);
+  if (!("data" in listed)) return;
+  assert.deepEqual(listed.data.map((r) => [r.id, r.employeeId, r.supervisorId, r.shift]), [["pending", "agent", "sup-a", "Noite"]]);
+  const pending = await exportWorkHourAdherenceJustifications(actor, filters);
+  assert.ok("rows" in pending && pending.rows.length === 1 && pending.rows[0][8] === "Pendente");
+  const answered = await exportWorkHourAdherenceJustifications(actor, { ...filters, justificationStatus: "Justificados" });
+  assert.ok("rows" in answered && answered.rows.length === 1 && answered.rows[0][9] === "Justificativa anterior");
+  const all = await listWorkHourAdherenceJustifications(actor, { ...filters, justificationStatus: "Todos" });
+  assert.ok("data" in all && all.data.length === 2);
+  assert.deepEqual(f.state, before);
+  assert.equal(mutations(f.calls).length, 0);
+});
+
 test("exportação respeita escopo do supervisor e impede acesso de agente", async (t) => {
   const f = fixture(t, { employeeProfile: [employee(), employee("other")],
     workHourRecord: [{ id: "hours", employeeId: "agent", date }, { id: "hours-other", employeeId: "other", date }],
@@ -314,6 +346,8 @@ test("exportação respeita escopo do supervisor e impede acesso de agente", asy
   assert.ok("rows" in result && result.rows.length === 1 && result.rows[0][2] === "wb_agent");
   const forged = await exportWorkHourAdherenceJustifications(actor, { startDate: day, endDate: day, employeeId: "other" });
   assert.ok("rows" in forged && forged.rows.length === 0);
+  const forgedSupervisor = await exportWorkHourAdherenceJustifications(actor, { startDate: day, endDate: day, supervisorId: "someone-else", justificationStatus: "Pendentes" });
+  assert.ok("rows" in forgedSupervisor && forgedSupervisor.rows.length === 0);
   Object.assign(f.state.user[0], { role: { name: "COLABORADOR" } });
   assert.ok("error" in await exportWorkHourAdherenceJustifications(actor, { startDate: day, endDate: day }));
 });

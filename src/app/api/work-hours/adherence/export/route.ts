@@ -13,6 +13,8 @@ export async function GET(request: Request) {
     employeeId: url.searchParams.get("employeeId") ?? undefined,
     lob: url.searchParams.get("lob") ?? undefined,
     supervisor: url.searchParams.get("supervisor") ?? undefined,
+    supervisorId: url.searchParams.get("supervisorId") ?? undefined,
+    justificationStatus: url.searchParams.get("justificationStatus") ?? undefined,
     shift: url.searchParams.get("shift") ?? undefined,
     employeeStatus: url.searchParams.get("employeeStatus") ?? undefined,
     collaborator: url.searchParams.get("collaborator") ?? undefined

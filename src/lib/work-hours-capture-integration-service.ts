@@ -9,6 +9,7 @@ import { getCaptureRegistrationIssue, isCaptureImportEligible } from "@/lib/work
 import type { CaptureRegistrationWarning } from "@/lib/work-hours-capture-review";
 import { cancelAdherenceForDeletedWorkHours } from "@/lib/work-hours-adherence-cleanup";
 import { syncWorkHourAdherence } from "@/lib/work-hours-adherence-sync";
+import { filterWorkHourAdherenceRows } from "@/lib/work-hour-adherence-filters";
 import { resolveCapturePeriod } from "@/lib/work-hours-capture-period";
 import { shiftCategoryName } from "@/lib/shift-display";
 import {
@@ -34,6 +35,11 @@ export type CaptureImportFilters = {
   shift?: string;
   collaborator?: string;
   employeeStatus?: string;
+};
+
+type AdherenceQueryFilters = CaptureImportFilters & {
+  supervisorId?: string;
+  justificationStatus?: string;
 };
 
 // Explicit I/O boundary also lets regression tests use captured fixtures without a live database.
@@ -487,7 +493,7 @@ export async function applyCaptureWorkHourDivergenceDecisions(
   }
 }
 
-export async function listWorkHourAdherenceJustifications(actor: Actor, filters: CaptureImportFilters = {}) {
+export async function listWorkHourAdherenceJustifications(actor: Actor, filters: AdherenceQueryFilters = {}) {
   const user = await getActiveUser(actor);
   if (!user || !canJustifyAbsence({ role: user.role.name, status: user.status })) {
     return createPermissionError("Você não tem permissão para acompanhar pendências de aderência.");
@@ -531,19 +537,22 @@ export async function listWorkHourAdherenceJustifications(actor: Actor, filters:
   }) : [];
   const existingDays = new Map(hours.map((record) => [`${record.employeeId}:${record.date.toISOString()}`, record]));
   return {
-    data: records.filter((record) => (
+    data: filterWorkHourAdherenceRows(records.filter((record) => (
       existingDays.has(`${record.employeeId}:${record.date.toISOString()}`)
       && isCaptureImportEligible(record.employee, formatDate(record.date))
       && !isProtectedCaptureScheduleStatus(record.schedule?.status)
       && (!filters.shift || filters.shift === "Todos" || shiftCategoryName(record.employee.shift.name) === shiftCategoryName(filters.shift))
     )).map((record) => ({
       id: record.id,
+      employeeId: record.employeeId,
       employeeName: record.employee.fullName,
       wbLogin: record.wbLogin,
       date: formatDate(record.date),
       lob: record.lob,
       classification: record.classification,
       supervisor: record.supervisor?.fullName ?? "Sem supervisor",
+      supervisorId: record.supervisorId ?? "__none__",
+      shift: shiftCategoryName(record.employee.shift.name),
       plannedSlot: slotLabel(record.plannedStart, record.plannedEnd),
       capturedDuration: formatDuration(record.sourceDurationMs),
       durationSource: /^manual$/i.test(existingDays.get(`${record.employeeId}:${record.date.toISOString()}`)?.source ?? "") ? "Horas manuais" : "Captura de Horas",
@@ -551,11 +560,11 @@ export async function listWorkHourAdherenceJustifications(actor: Actor, filters:
       justification: record.justification ?? "",
       answeredBy: record.answeredBy?.name ?? "",
       answeredAt: record.answeredAt ? formatDateTime(record.answeredAt) : ""
-    }))
+    })), { supervisorId: filters.supervisorId, justificationStatus: filters.justificationStatus })
   };
 }
 
-export async function exportWorkHourAdherenceJustifications(actor: Actor, filters: CaptureImportFilters = {}) {
+export async function exportWorkHourAdherenceJustifications(actor: Actor, filters: AdherenceQueryFilters = {}) {
   const result = await listWorkHourAdherenceJustifications(actor, filters);
   if ("error" in result) return result;
   const period = parsePeriod(filters);
