@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createClientRequestGate } from "@/lib/client-request-gate";
 import { CheckCircle2, CircleDollarSign, Clock3, Download, Eye, FileSpreadsheet, FileText, LockKeyhole, Pencil, RefreshCw, Save, Search, Send, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 
 import {
@@ -223,6 +224,7 @@ export function BillingPage() {
   const [selectedFiscalInvoice, setSelectedFiscalInvoice] = useState<BillingPayload["data"]["invoices"][number] | null>(null);
   const [employeePage, setEmployeePage] = useState(1);
   const bulkAdjustmentInputRef = useRef<HTMLInputElement | null>(null);
+  const [loadRequests] = useState(createClientRequestGate);
   const employeePageSize = 12;
   const data = payload?.data;
   const expectedFiscalTotal = data
@@ -255,6 +257,7 @@ export function BillingPage() {
   }, [searchInput]);
 
   const load = useCallback(async () => {
+    const request = loadRequests.begin();
     setLoading(true);
     setError("");
     const params = new URLSearchParams({ referenceMonth });
@@ -271,21 +274,24 @@ export function BillingPage() {
     if (billingRule !== "Todos") params.set("billingRule", billingRule);
     if (adjustmentType !== "Todos") params.set("adjustmentType", adjustmentType);
     try {
-      const response = await fetch(`/api/billing?${params.toString()}`, { cache: "no-store" });
+      const response = await fetch(`/api/billing?${params.toString()}`, { cache: "no-store", signal: request.signal });
       const next = await response.json().catch(() => ({}));
+      if (!loadRequests.isCurrent(request)) return;
       if (!response.ok) throw new Error(next.error ?? "Não foi possível carregar Billing.");
       setPayload(next);
     } catch (err) {
+      if (!loadRequests.isCurrent(request)) return;
       setPayload(null);
       setError(err instanceof Error ? err.message : "Não foi possível carregar Billing.");
     } finally {
-      setLoading(false);
+      if (loadRequests.isCurrent(request)) setLoading(false);
     }
-  }, [referenceMonth, employeeId, search, employeeStatus, invoiceStatus, roleTitle, skill, lob, supervisorId, shiftId, billingRule, adjustmentType, activeTab]);
+  }, [referenceMonth, employeeId, search, employeeStatus, invoiceStatus, roleTitle, skill, lob, supervisorId, shiftId, billingRule, adjustmentType, activeTab, loadRequests]);
 
   useEffect(() => {
     void load();
-  }, [load]);
+    return () => loadRequests.cancel();
+  }, [load, loadRequests]);
 
   useEffect(() => {
     if (!data || canManageBilling) return;

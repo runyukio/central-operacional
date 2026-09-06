@@ -169,6 +169,19 @@ export async function refreshRealtimeCecFromFreshdesk(options: { force?: boolean
     }
   }
 
+  // Share only actual downloads, never an unforced existing-cycle check. A
+  // simultaneous explicit Refresh must not inherit a non-forced skipped result.
+  if (refreshInFlight) return refreshInFlight;
+  const operation = refreshRealtimeCecFromFreshdeskUncached();
+  refreshInFlight = operation;
+  try { return await operation; } finally {
+    if (refreshInFlight === operation) refreshInFlight = null;
+  }
+}
+
+let refreshInFlight: ReturnType<typeof refreshRealtimeCecFromFreshdeskUncached> | null = null;
+
+async function refreshRealtimeCecFromFreshdeskUncached() {
   const input = await fetchRealtimeCecFromFreshdesk();
   const existingSourceFile = await prisma.realTimeCecSnapshot.findFirst({
     where: {
@@ -200,26 +213,40 @@ export async function getRealtimeCecReport(actor: Actor, options: { cycleDownloa
 
   let refreshWarning = "";
   try {
-    await refreshRealtimeCecFromFreshdesk({ force: options.forceRefresh });
+    // Ordinary reads use the hourly import. Only the explicit refresh action
+    // (and scheduled job) calls Freshdesk, including when viewing old cycles.
+    if (options.forceRefresh) await refreshRealtimeCecFromFreshdesk({ force: true });
   } catch (error) {
     refreshWarning = error instanceof Error ? error.message : "Não foi possível consultar o Data Export CEC.";
     console.warn("[realtime/cec] A atualização do CPD falhou; usando o último snapshot CPD válido.", error);
   }
 
-  const snapshots = await prisma.realTimeCecSnapshot.findMany({
-    where: {
-      importedAt: { gte: realtimeCecRetentionCutoff() },
-      source: cecCpdSource
-    },
-    orderBy: [{ cycleDownload: "desc" }, { importedAt: "desc" }],
-    take: 200
-  });
+  // Historic cycles need only the stored aggregate + compact agent list, not
+  // hundreds of full ticket arrays. Missing legacy aggregates retain a fallback.
+  const snapshots = await prisma.$queryRaw<Array<{
+    id: string; cycleDownload: string; importedAt: Date; totalBacklog: number;
+    rawData: Prisma.JsonValue;
+  }>>(Prisma.sql`
+    SELECT "id", "cycleDownload", "importedAt", "totalBacklog",
+      CASE WHEN jsonb_typeof("rawData"->'agents') = 'array'
+        THEN jsonb_build_object('agents', "rawData"->'agents')
+        ELSE jsonb_build_object('tickets', "rawData"->'tickets') END AS "rawData"
+    FROM "RealTimeCecSnapshot"
+    WHERE "importedAt" >= ${realtimeCecRetentionCutoff()} AND "source" = ${cecCpdSource}
+    ORDER BY "cycleDownload" DESC, "importedAt" DESC LIMIT 200
+  `);
   const selected = resolveSelectedSnapshot(snapshots, options.cycleDownload);
   const previous = selected ? snapshots.find((snapshot) => snapshot.cycleDownload < selected.cycleDownload) ?? null : null;
+  const details = selected ? await prisma.realTimeCecSnapshot.findMany({
+    where: { id: { in: [selected.id, ...(previous ? [previous.id] : [])] } }
+  }) : [];
+  const selectedDetail = details.find((row) => row.id === selected?.id);
+  const previousDetail = details.find((row) => row.id === previous?.id);
+  const summaries = new Map(snapshots.map((snapshot) => [snapshot.id, compactCpd(snapshot)]));
 
   return {
     data: {
-      hasData: Boolean(selected),
+      hasData: Boolean(selectedDetail),
       refreshWarning,
       selectedCycle: selected?.cycleDownload ?? "",
       previousCycle: previous?.cycleDownload ?? "",
@@ -227,15 +254,15 @@ export async function getRealtimeCecReport(actor: Actor, options: { cycleDownloa
         value: snapshot.cycleDownload,
         importedAt: snapshot.importedAt.toISOString(),
         importedAtLabel: formatDateTime(snapshot.importedAt),
-        rows: extractCpd(snapshot).agents.length
+        rows: summaries.get(snapshot.id)!.activeAgents
       })),
-      snapshot: selected ? serializeSnapshot(selected) : null,
-      previous: previous ? serializeSnapshot(previous) : null,
+      snapshot: selectedDetail ? serializeSnapshot(selectedDetail) : null,
+      previous: previousDetail ? serializeSnapshot(previousDetail) : null,
       history: snapshots
         .slice()
         .sort((left, right) => left.cycleDownload.localeCompare(right.cycleDownload))
         .map((snapshot) => {
-          const cpd = extractCpd(snapshot);
+          const cpd = summaries.get(snapshot.id)!;
           return {
             cycleDownload: snapshot.cycleDownload,
             totalCpd: cpd.totalCpd,
@@ -247,7 +274,7 @@ export async function getRealtimeCecReport(actor: Actor, options: { cycleDownloa
   };
 }
 
-function resolveSelectedSnapshot(snapshots: NonNullable<RealtimeCecSnapshotRecord>[], cycleDownload?: string) {
+function resolveSelectedSnapshot<T extends { cycleDownload: string }>(snapshots: T[], cycleDownload?: string) {
   const requested = cycleDownload?.trim();
   if (requested) {
     return snapshots.find((snapshot) => snapshot.cycleDownload === requested)
@@ -258,7 +285,15 @@ function resolveSelectedSnapshot(snapshots: NonNullable<RealtimeCecSnapshotRecor
   return snapshots[0] ?? null;
 }
 
-function extractTickets(snapshot: NonNullable<RealtimeCecSnapshotRecord>) {
+function compactCpd(snapshot: { rawData: Prisma.JsonValue }) {
+  const raw = snapshot.rawData as RealtimeCecRawData | null;
+  if (!Array.isArray(raw?.agents)) return buildCecHourlyCpd(extractTickets(snapshot));
+  const activeAgents = raw.agents.length;
+  const totalCpd = raw.agents.reduce((sum, agent) => sum + Math.max(0, Number(agent.cpd) || 0), 0);
+  return { totalCpd, activeAgents, averageCpd: activeAgents ? Math.round(totalCpd / activeAgents * 100) / 100 : 0 };
+}
+
+function extractTickets(snapshot: { rawData: Prisma.JsonValue }) {
   const rawData = snapshot.rawData as RealtimeCecRawData | null;
   return normalizedTickets(Array.isArray(rawData?.tickets) ? rawData.tickets : []);
 }

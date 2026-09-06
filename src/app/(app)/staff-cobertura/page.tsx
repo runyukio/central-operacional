@@ -1,7 +1,7 @@
 import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 
-import { StaffCoveragePage } from "@/components/modules";
+import { StaffCoveragePage } from "@/components/modules/staff-coverage-page";
 import { authOptions } from "@/lib/auth-options";
 import { canAccessStaffCoverage } from "@/lib/permissions";
 

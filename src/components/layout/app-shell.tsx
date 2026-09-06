@@ -18,7 +18,6 @@ import {
   FileBarChart,
   Gift,
   HeartPulse,
-  HelpCircle,
   KanbanSquare,
   LayoutDashboard,
   LogOut,
@@ -608,9 +607,6 @@ export function AppShell({
                 </div>
               ) : null}
             </div>
-            <button className="hidden h-9 w-9 place-items-center rounded-lg border border-transparent hover:border-border hover:bg-surface md:grid">
-              <HelpCircle className="h-[18px] w-[18px]" />
-            </button>
             <button
               onClick={toggleTheme}
               className="hidden h-9 w-9 place-items-center rounded-lg border border-transparent hover:border-border hover:bg-surface md:grid"

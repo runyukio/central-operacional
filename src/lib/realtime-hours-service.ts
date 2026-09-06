@@ -4,6 +4,8 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
 import { getApiActor } from "@/lib/api-actor";
+import { createBoundedSnapshotCache } from "@/lib/bounded-snapshot-cache";
+import { isRealtimeHoursArchiveFresh, REALTIME_HOURS_ARCHIVE_VERSION, selectRealtimeHoursArchiveDates } from "@/lib/realtime-hours-archive-policy";
 import { logPerformanceMetric } from "@/lib/performance-logger";
 import { canAccessRealtimeHoursCapture, canManageRealtimeHoursMappings } from "@/lib/realtime-hours-permissions";
 import { prisma } from "@/lib/prisma";
@@ -13,7 +15,6 @@ import {
   buildRealtimeHoursSlotAssignmentWindows,
   matchRealtimeHoursPlannedShift,
   realtimeHoursArchiveThroughDate,
-  realtimeHoursRawDeleteBefore,
   saoPauloDateKey,
   startOfSaoPauloDate,
   type RealtimeHoursPlannedShift,
@@ -42,18 +43,17 @@ const timelineHeartbeatSeconds = Number.parseInt(process.env.REALTIME_HOURS_TIME
   || (Number.isFinite(legacyTimelineHeartbeatMinutes) ? legacyTimelineHeartbeatMinutes * 60 : 120);
 const timelineMaxGapSeconds = Number.parseInt(process.env.REALTIME_HOURS_TIMELINE_MAX_GAP_SECONDS ?? "", 10)
   || (Number.isFinite(legacyTimelineMaxGapMinutes) ? legacyTimelineMaxGapMinutes * 60 : 180);
-const configuredRetentionDays = Number.parseInt(process.env.REALTIME_HOURS_RAW_RETENTION_DAYS ?? "7", 10);
-const retentionDays = Number.isFinite(configuredRetentionDays)
-  ? Math.min(730, Math.max(7, configuredRetentionDays))
+// The legacy setting is accepted as an archive threshold only, never a TTL.
+const configuredArchiveAfterDays = Number.parseInt(process.env.REALTIME_HOURS_ARCHIVE_AFTER_DAYS ?? process.env.REALTIME_HOURS_RAW_RETENTION_DAYS ?? "7", 10);
+const archiveAfterDays = Number.isFinite(configuredArchiveAfterDays)
+  ? Math.min(730, Math.max(7, configuredArchiveAfterDays))
   : 7;
 const configuredArchiveDaysPerRun = Number.parseInt(process.env.REALTIME_HOURS_ARCHIVE_DAYS_PER_RUN ?? "2", 10);
 const archiveDaysPerRun = Number.isFinite(configuredArchiveDaysPerRun)
   ? Math.min(7, Math.max(1, configuredArchiveDaysPerRun))
   : 2;
-const configuredRetentionDeleteLimit = Number.parseInt(process.env.REALTIME_HOURS_RETENTION_DELETE_LIMIT ?? "20000", 10);
-const retentionDeleteLimit = Number.isFinite(configuredRetentionDeleteLimit)
-  ? Math.min(100_000, Math.max(1_000, configuredRetentionDeleteLimit))
-  : 20_000;
+const timelineSnapshotCache = createBoundedSnapshotCache<RealtimeHoursTimelineResult>(15_000, 4);
+const statusSnapshotCache = createBoundedSnapshotCache<Awaited<ReturnType<typeof loadRecentRealtimeHoursStatusRecordsUncached>>>(15_000, 4);
 const identityConfidences = ["HIGH", "MEDIUM", "LOW", "UNKNOWN"] as const;
 const realtimeHoursEventTypes = ["SESSION_START", "SESSION_RESUME", "HEARTBEAT", "SESSION_END"] as const;
 
@@ -134,6 +134,7 @@ export type RealtimeHoursTimelineResult = {
   rows: RealtimeHoursTimelineRow[];
   sourceRecords?: number;
   archived?: boolean;
+  archiveWarning?: string;
 };
 
 export type RealtimeHoursShiftActivityRequest = {
@@ -430,9 +431,7 @@ export async function importRealtimeHoursSnapshot(input: unknown) {
     }
 
     if (insertedCount === 0) {
-      if (!sharedBatchId) {
-        await tx.realTimeHoursImportBatch.delete({ where: { id: created.id } });
-      }
+      // Even an empty/retried import batch is retained as part of capture audit history.
       return { created: null, insertedCount };
     }
 
@@ -663,28 +662,26 @@ export async function listRealtimeHoursImports(options: RealtimeHoursImportsOpti
   };
 }
 
-export async function cleanupRealtimeHoursRetention() {
-  const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+export async function maintainRealtimeHoursArchives() {
+  const cutoff = new Date(Date.now() - archiveAfterDays * 24 * 60 * 60 * 1000);
   const archive = await archiveRealtimeHoursBeforeCutoff(cutoff);
-
-  // Raw heartbeats are deleted only after every affected operational date is
-  // archived. The first runs therefore backfill safely before pruning starts.
-  const batchesDeleted = archive.remainingDays === 0 && archive.deleteBefore
-    ? await deleteRealtimeHoursBatchesBefore(new Date(archive.deleteBefore), retentionDeleteLimit)
-    : 0;
-
   return {
     success: true,
-    retentionDays,
+    mode: "ARCHIVE_ONLY" as const,
+    rawHistoryPreserved: true,
+    archiveAfterDays,
     cutoff: cutoff.toISOString(),
     archive,
-    batchesDeleted,
-    deleteLimit: retentionDeleteLimit
+    batchesDeleted: 0,
+    recordsDeleted: 0
   };
 }
 
+// Compatibility for any previously deployed caller. This never deletes history.
+export const cleanupRealtimeHoursRetention = maintainRealtimeHoursArchives;
+
 async function archiveRealtimeHoursBeforeCutoff(cutoff: Date) {
-  const oldestBatch = await prisma.realTimeHoursImportBatch.findFirst({
+  const oldestBatch = await prisma.realTimeHoursRecord.findFirst({
     where: { capturedAt: { lt: cutoff } },
     orderBy: { capturedAt: "asc" },
     select: { capturedAt: true }
@@ -695,7 +692,7 @@ async function archiveRealtimeHoursBeforeCutoff(cutoff: Date) {
       archivedDays: 0,
       remainingDays: 0,
       processedDates: [] as string[],
-      deleteBefore: null as string | null
+      refreshedDates: [] as string[]
     };
   }
 
@@ -705,15 +702,17 @@ async function archiveRealtimeHoursBeforeCutoff(cutoff: Date) {
   const coveredThroughEndDate = requiredDates.at(-1) === endDate;
   const existing = await prisma.realTimeHoursArchiveDay.findMany({
     where: { dateKey: { in: requiredDates } },
-    select: { dateKey: true }
+    select: { dateKey: true, updatedAt: true }
   });
   const archivedDates = new Set(existing.map((row) => row.dateKey));
-  const missingDates = requiredDates.filter((dateKey) => !archivedDates.has(dateKey));
-  const datesToProcess = missingDates.slice(0, archiveDaysPerRun);
+  const datesToProcess = selectRealtimeHoursArchiveDates(requiredDates, existing, archiveDaysPerRun);
+  const refreshedDates: string[] = [];
 
   for (const dateKey of datesToProcess) {
-    await archiveRealtimeHoursDate(dateKey);
-    archivedDates.add(dateKey);
+    if (await archiveRealtimeHoursDate(dateKey)) {
+      archivedDates.add(dateKey);
+      refreshedDates.push(dateKey);
+    }
   }
 
   return {
@@ -721,12 +720,30 @@ async function archiveRealtimeHoursBeforeCutoff(cutoff: Date) {
     archivedDays: archivedDates.size,
     remainingDays: requiredDates.filter((dateKey) => !archivedDates.has(dateKey)).length + (coveredThroughEndDate ? 0 : 1),
     processedDates: datesToProcess,
-    deleteBefore: coveredThroughEndDate ? realtimeHoursRawDeleteBefore(endDate).toISOString() : null
+    refreshedDates
   };
 }
 
-async function archiveRealtimeHoursDate(dateKey: string) {
+export async function archiveRealtimeHoursDate(dateKey: string) {
+  const source = (await loadRealtimeHoursArchiveFingerprints([dateKey])).get(dateKey);
+  const before = source?.fingerprint;
+  if (!before) return false;
+  const existing = await prisma.realTimeHoursArchiveDay.findUnique({ where: { dateKey } });
+  if (existing && existing.sourceRecords > (source?.preservedSourceRecords ?? 0)) {
+    // A late arrival must not disguise raw records deleted by legacy retention.
+    // Rotate verification without replacing any historic payload or fingerprint.
+    await prisma.realTimeHoursArchiveDay.update({ where: { dateKey }, data: { updatedAt: new Date() } });
+    return false;
+  }
+  if (isRealtimeHoursArchiveFresh(existing?.sourceFingerprint, before)) {
+    // Rotate verification fairly through old days without rewriting their rows.
+    await prisma.realTimeHoursArchiveDay.update({ where: { dateKey }, data: { sourceFingerprint: before } });
+    return true;
+  }
+  // Always rebuild from ALL retained raw events, never from an old/filtered archive.
   const timeline = await getRealtimeHoursTimelineFromRaw({ date: dateKey });
+  const after = (await loadRealtimeHoursArchiveFingerprints([dateKey])).get(dateKey)?.fingerprint;
+  if (before !== after) return false;
   const generatedAt = new Date();
 
   await prisma.$transaction(async (tx) => {
@@ -738,6 +755,7 @@ async function archiveRealtimeHoursDate(dateKey: string) {
         windowEnd: new Date(timeline.window.end),
         calculationEnd: new Date(timeline.window.calculationEnd),
         sourceRecords: timeline.sourceRecords ?? 0,
+        sourceFingerprint: before,
         generatedAt
       },
       update: {
@@ -745,6 +763,7 @@ async function archiveRealtimeHoursDate(dateKey: string) {
         windowEnd: new Date(timeline.window.end),
         calculationEnd: new Date(timeline.window.calculationEnd),
         sourceRecords: timeline.sourceRecords ?? 0,
+        sourceFingerprint: before,
         generatedAt
       }
     });
@@ -762,21 +781,54 @@ async function archiveRealtimeHoursDate(dateKey: string) {
       });
     }
   }, { timeout: 30_000 });
+  timelineSnapshotCache.clear();
+  return true;
 }
 
-async function deleteRealtimeHoursBatchesBefore(cutoff: Date, limit: number) {
-  return prisma.$executeRaw(Prisma.sql`
-    WITH stale_batches AS (
-      SELECT "id"
-      FROM "RealTimeHoursImportBatch"
-      WHERE "capturedAt" < ${cutoff}
-      ORDER BY "capturedAt" ASC
-      LIMIT ${limit}
+/** Raw capture events are append-only. Counts/watermarks detect late arrivals;
+ * reference content hashes also detect historic mapping, roster and shift edits.
+ * Only tiny fingerprints cross the DB boundary, not the historical raw payloads.
+ */
+async function loadRealtimeHoursArchiveFingerprints(dates: string[]) {
+  const periods = Array.from(new Set(dates)).map((date) => resolveTimelineDate(date));
+  if (!periods.length) return new Map<string, { fingerprint: string; sourceRecords: number; preservedSourceRecords: number }>();
+  const requested = periods.map((period) => Prisma.sql`(
+    ${period.date}::text, ${period.queryStart}::timestamp, ${period.end}::timestamp,
+    ${new Date(`${addDateKeyDays(period.date, -1)}T00:00:00Z`)}::timestamp,
+    ${new Date(`${addDateKeyDays(period.date, 1)}T00:00:00Z`)}::timestamp
+  )`);
+  const rows = await prisma.$queryRaw<Array<{ dateKey: string; fingerprint: string; sourceRecords: number; preservedSourceRecords: number }>>(Prisma.sql`
+    WITH references_digest AS (
+      SELECT concat_ws('|',
+        (SELECT md5(COALESCE(string_agg(jsonb_build_array("id", "wbLogin", "fullName", "roleTitle", "skill", "operationalStatus", "lobId", "shiftId", "supervisorId")::text, '|' ORDER BY "id"), '')) FROM "EmployeeProfile"),
+        (SELECT md5(COALESCE(string_agg(jsonb_build_array("hostname", "windowsUser", "wbLogin", "employeeId")::text, '|' ORDER BY "id"), '')) FROM "RealTimeHoursIdentityMapping"),
+        (SELECT md5(COALESCE(string_agg(jsonb_build_array("id", "name", "startsAt", "endsAt")::text, '|' ORDER BY "id"), '')) FROM "Shift"),
+        (SELECT md5(COALESCE(string_agg(jsonb_build_array("id", "name")::text, '|' ORDER BY "id"), '')) FROM "Lob")
+      ) AS digest
+    ), requested("dateKey", "queryStart", "queryEnd", "scheduleStart", "scheduleEnd") AS (
+      VALUES ${Prisma.join(requested)}
     )
-    DELETE FROM "RealTimeHoursImportBatch" AS batch
-    USING stale_batches
-    WHERE batch."id" = stale_batches."id"
+    SELECT requested."dateKey", raw."count"::integer AS "sourceRecords", raw."preserved"::integer AS "preservedSourceRecords", md5(concat_ws('|', ${REALTIME_HOURS_ARCHIVE_VERSION},
+      ${timelineHeartbeatSeconds}, ${timelineMaxGapSeconds}, ${activityIdleThresholdSeconds},
+      references_digest.digest, raw."count", raw."latest", schedules.digest
+    )) AS fingerprint
+    FROM requested CROSS JOIN references_digest
+    LEFT JOIN "RealTimeHoursArchiveDay" archive ON archive."dateKey" = requested."dateKey"
+    CROSS JOIN LATERAL (
+      SELECT COUNT(*)::text AS "count", MAX("createdAt")::text AS "latest",
+        COUNT(*) FILTER (WHERE archive."generatedAt" IS NULL OR "createdAt" <= archive."generatedAt") AS "preserved"
+      FROM "RealTimeHoursRecord"
+      WHERE "capturedAt" >= requested."queryStart" AND "capturedAt" < requested."queryEnd"
+    ) raw
+    CROSS JOIN LATERAL (
+      SELECT md5(COALESCE(string_agg(jsonb_build_array("id", "employeeId", "date", "startsAt", "endsAt", "status", "shiftId", "deletedAt")::text, '|' ORDER BY "id"), '')) AS digest
+      FROM "Schedule" WHERE "date" >= requested."scheduleStart" AND "date" <= requested."scheduleEnd"
+    ) schedules
   `);
+  return new Map(rows.map((row) => [row.dateKey, {
+    fingerprint: row.fingerprint, sourceRecords: row.sourceRecords,
+    preservedSourceRecords: row.preservedSourceRecords ?? row.sourceRecords
+  }]));
 }
 
 function dateKeysBetween(startDate: string, endDate: string, maximumDays: number) {
@@ -887,7 +939,7 @@ export async function listRealtimeHoursIdentityMappings() {
 }
 
 async function loadRealtimeHoursIdentityDiscoveryRecords() {
-  const since = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+  const since = new Date(Date.now() - archiveAfterDays * 24 * 60 * 60 * 1000);
 
   return prisma.$queryRaw<RealtimeHoursIdentityDiscoveryRecord[]>(Prisma.sql`
     SELECT
@@ -933,6 +985,7 @@ export async function upsertRealtimeHoursIdentityMapping(input: RealtimeHoursIde
 
   if (!wbLogin) {
     await prisma.realTimeHoursIdentityMapping.deleteMany({ where: { hostname, windowsUser } });
+    timelineSnapshotCache.clear();
     return { success: true, deleted: true, hostname, windowsUser };
   }
 
@@ -984,19 +1037,12 @@ export async function upsertRealtimeHoursIdentityMapping(input: RealtimeHoursIde
       }
     });
 
-    await tx.realTimeHoursRecord.updateMany({
-      where: { hostname, windowsUser },
-      data: {
-        wbLogin: employee.wbLogin,
-        employeeId: employee.id,
-        identitySource: "manual_site_mapping",
-        identityConfidence: "HIGH"
-      }
-    });
-
+    // Resolve corrections through the mapping on reads; original capture audit
+    // records must not be rewritten when a machine is reassigned.
     return saved;
   });
 
+  timelineSnapshotCache.clear();
   return {
     success: true,
     data: {
@@ -1015,6 +1061,11 @@ export async function upsertRealtimeHoursIdentityMapping(input: RealtimeHoursIde
 }
 
 export async function getRealtimeHoursTimeline(options: RealtimeHoursTimelineOptions = {}): Promise<RealtimeHoursTimelineResult> {
+  const key = JSON.stringify({ ...options, date: resolveTimelineDate(options.date).date });
+  return timelineSnapshotCache.get(key, () => loadRealtimeHoursTimeline(options));
+}
+
+async function loadRealtimeHoursTimeline(options: RealtimeHoursTimelineOptions): Promise<RealtimeHoursTimelineResult> {
   const startedAt = Date.now();
   const archived = await getArchivedRealtimeHoursTimeline(options);
   const result = archived ?? await getRealtimeHoursTimelineFromRaw(options);
@@ -1058,8 +1109,10 @@ export async function getRealtimeHoursTimelineRange(options: {
       }
     }
   });
+  const fingerprints = await loadRealtimeHoursArchiveFingerprints(archivedDays.map((day) => day.dateKey));
   const results = new Map<string, RealtimeHoursTimelineResult>(
-    archivedDays.map((day) => [day.dateKey, timelineFromArchivedDay(day, {})])
+    archivedDays.filter((day) => canReadRealtimeHoursArchive(day, fingerprints.get(day.dateKey)))
+      .map((day) => [day.dateKey, timelineFromArchivedDay(day, {}, fingerprints.get(day.dateKey))])
   );
   const missingDates = dates.filter((date) => !results.has(date));
 
@@ -1088,7 +1141,12 @@ async function getArchivedRealtimeHoursTimeline(options: RealtimeHoursTimelineOp
     where: { dateKey },
     include: {
       rows: {
-        where: employeeId || wbLogin ? {
+        where: options.eligibleEmployeeIds ? {
+          OR: [
+            { employeeId: { in: options.eligibleEmployeeIds } },
+            { wbLoginNormalized: { in: (options.eligibleWbLogins ?? []).map(normalizeLogin) } }
+          ]
+        } : employeeId || wbLogin ? {
           OR: [
             ...(employeeId ? [{ employeeId }] : []),
             ...(wbLogin ? [{ wbLoginNormalized: wbLogin }] : [])
@@ -1098,7 +1156,17 @@ async function getArchivedRealtimeHoursTimeline(options: RealtimeHoursTimelineOp
       }
     }
   });
-  return day ? timelineFromArchivedDay(day, options) : null;
+  if (!day) return null;
+  const source = (await loadRealtimeHoursArchiveFingerprints([dateKey])).get(dateKey);
+  return canReadRealtimeHoursArchive(day, source) ? timelineFromArchivedDay(day, options, source) : null;
+}
+
+function canReadRealtimeHoursArchive(
+  day: { sourceFingerprint?: string | null; sourceRecords: number },
+  source: { fingerprint: string; sourceRecords: number; preservedSourceRecords: number } | undefined
+) {
+  return Boolean(source && (isRealtimeHoursArchiveFresh(day.sourceFingerprint, source.fingerprint)
+    || day.sourceRecords > source.preservedSourceRecords));
 }
 
 function timelineFromArchivedDay(
@@ -1110,7 +1178,8 @@ function timelineFromArchivedDay(
     sourceRecords: number;
     rows: Array<{ payload: Prisma.JsonValue }>;
   },
-  options: Pick<RealtimeHoursTimelineOptions, "search">
+  options: Pick<RealtimeHoursTimelineOptions, "search">,
+  source?: { sourceRecords: number; preservedSourceRecords: number }
 ): RealtimeHoursTimelineResult {
   const search = normalizeSearch(options.search);
   const rows = day.rows
@@ -1128,7 +1197,7 @@ function timelineFromArchivedDay(
       row.ipAddress
     ].join(" ")).includes(search));
 
-  return buildRealtimeHoursTimelineResult({
+  const result = buildRealtimeHoursTimelineResult({
     date: day.dateKey,
     window: {
       start: day.windowStart.toISOString(),
@@ -1139,6 +1208,10 @@ function timelineFromArchivedDay(
     sourceRecords: day.sourceRecords,
     archived: true
   });
+  if (source && source.preservedSourceRecords < day.sourceRecords) {
+    return { ...result, archiveWarning: "Histórico arquivado preservado: a base bruta legada está incompleta para recalcular este dia." };
+  }
+  return result;
 }
 
 function archivedTimelineRow(payload: Prisma.JsonValue) {
@@ -1152,8 +1225,10 @@ async function getRealtimeHoursTimelineFromRaw(options: RealtimeHoursTimelineOpt
   const wbLogin = normalizeLogin(String(options.wbLogin ?? ""));
   const eligibleIds = options.eligibleEmployeeIds ? new Set(options.eligibleEmployeeIds) : null;
   const eligibleLogins = new Set((options.eligibleWbLogins ?? []).map(normalizeLogin));
-  const eligibleMappings = eligibleIds ? await prisma.realTimeHoursIdentityMapping.findMany({
-    where: { OR: [{ employeeId: { in: [...eligibleIds] } }, { wbLogin: { in: [...eligibleLogins], mode: "insensitive" } }] },
+  const mappedEmployeeIds = eligibleIds ? [...eligibleIds] : employeeId ? [employeeId] : [];
+  const mappedWbLogins = eligibleIds ? [...eligibleLogins] : wbLogin ? [wbLogin] : [];
+  const eligibleMappings = mappedEmployeeIds.length || mappedWbLogins.length ? await prisma.realTimeHoursIdentityMapping.findMany({
+    where: { OR: [{ employeeId: { in: mappedEmployeeIds } }, { wbLogin: { in: mappedWbLogins, mode: "insensitive" } }] },
     select: { hostname: true, windowsUser: true }
   }) : [];
   const records = await prisma.realTimeHoursRecord.findMany({
@@ -1171,7 +1246,8 @@ async function getRealtimeHoursTimelineFromRaw(options: RealtimeHoursTimelineOpt
       } : employeeId || wbLogin ? {
         OR: [
           ...(employeeId ? [{ employeeId }] : []),
-          ...(wbLogin ? [{ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }] : [])
+          ...(wbLogin ? [{ wbLogin: { equals: wbLogin, mode: "insensitive" as const } }] : []),
+          ...eligibleMappings.map(({ hostname, windowsUser }) => ({ hostname, windowsUser }))
         ]
       } : {})
     },
@@ -1247,6 +1323,8 @@ async function getRealtimeHoursTimelineFromRaw(options: RealtimeHoursTimelineOpt
     const employeeId = mapping?.employeeId ?? employee?.id ?? record.employeeId ?? "";
     const wbLogin = mapping?.wbLogin ?? employee?.wbLogin ?? record.wbLogin ?? "";
     if (eligibleIds && (employeeId ? !eligibleIds.has(employeeId) : !eligibleLogins.has(normalizeLogin(wbLogin)))) continue;
+    if (!eligibleIds && (mappedEmployeeIds.length || mappedWbLogins.length)
+      && !mappedEmployeeIds.includes(employeeId) && !mappedWbLogins.includes(normalizeLogin(wbLogin))) continue;
     const key = realtimeHoursTimelinePersonKey({ employeeId, wbLogin, hostname: record.hostname, windowsUser: record.windowsUser });
     const group = groups.get(key) ?? [];
     group.push({ record, employeeId, wbLogin });
@@ -1390,7 +1468,9 @@ export async function getRealtimeHoursShiftActivityHours(
       }
     }
   });
-  const archivedDateKeys = new Set(archivedDays.map((day) => day.dateKey));
+  const fingerprints = await loadRealtimeHoursArchiveFingerprints(archivedDays.map((day) => day.dateKey));
+  const freshArchivedDays = archivedDays.filter((day) => canReadRealtimeHoursArchive(day, fingerprints.get(day.dateKey)));
+  const archivedDateKeys = new Set(freshArchivedDays.map((day) => day.dateKey));
   const requestsByDate = new Map<string, RealtimeHoursShiftActivityRequest[]>();
   for (const request of uniqueRequests) {
     const dateKey = request.shiftDate.toISOString().slice(0, 10);
@@ -1398,7 +1478,7 @@ export async function getRealtimeHoursShiftActivityHours(
     dateRequests.push(request);
     requestsByDate.set(dateKey, dateRequests);
   }
-  for (const day of archivedDays) {
+  for (const day of freshArchivedDays) {
     const rows = day.rows
       .map((row) => archivedTimelineRow(row.payload))
       .filter((row): row is RealtimeHoursTimelineRow => Boolean(row));
@@ -1442,6 +1522,10 @@ export async function getRealtimeHoursShiftActivityHours(
   const periods = new Map(requestedDateKeys.map((date) => [date, resolveTimelineDate(date)]));
   const queryStart = new Date(Math.min(...Array.from(periods.values()).map((period) => period.queryStart.getTime())));
   const queryEnd = new Date(Math.max(...Array.from(periods.values()).map((period) => period.end.getTime())));
+  const identityMappings = await prisma.realTimeHoursIdentityMapping.findMany({
+    where: { OR: [{ employeeId: { in: employeeIds } }, { wbLogin: { in: wbLogins, mode: "insensitive" } }] },
+    select: { hostname: true, windowsUser: true, employeeId: true, wbLogin: true }
+  });
 
   const [records, schedules] = await Promise.all([
     prisma.realTimeHoursRecord.findMany({
@@ -1449,7 +1533,8 @@ export async function getRealtimeHoursShiftActivityHours(
         capturedAt: { gte: queryStart, lt: queryEnd },
         OR: [
           { employeeId: { in: employeeIds } },
-          ...(wbLogins.length ? [{ wbLogin: { in: wbLogins } }] : [])
+          ...(wbLogins.length ? [{ wbLogin: { in: wbLogins, mode: "insensitive" as const } }] : []),
+          ...identityMappings.map(({ hostname, windowsUser }) => ({ hostname, windowsUser }))
         ]
       },
       orderBy: [{ capturedAt: "asc" }],
@@ -1483,11 +1568,14 @@ export async function getRealtimeHoursShiftActivityHours(
     })
   ]);
 
+  const mappingByDevice = await mappingLookupFor(records);
   const recordsByEmployeeId = new Map<string, TimelineDeviceRecord[]>();
   for (const record of records) {
-    const employeeId = record.employeeId && requestsByEmployeeId.has(record.employeeId)
-      ? record.employeeId
-      : employeeIdByWbLogin.get(normalizeLogin(record.wbLogin ?? "")) ?? "";
+    const mapping = mappingByDevice.get(identityKey(record.hostname, record.windowsUser));
+    const resolvedEmployeeId = mapping?.employeeId ?? record.employeeId;
+    const employeeId = resolvedEmployeeId && requestsByEmployeeId.has(resolvedEmployeeId)
+      ? resolvedEmployeeId
+      : employeeIdByWbLogin.get(normalizeLogin(mapping?.wbLogin ?? record.wbLogin ?? "")) ?? "";
     if (!employeeId) continue;
     const employeeRecords = recordsByEmployeeId.get(employeeId) ?? [];
     employeeRecords.push(record);
@@ -1754,6 +1842,10 @@ async function applyRealtimeHoursIdentityMappings(records: NormalizedRealtimeHou
 }
 
 async function loadRecentRealtimeHoursStatusRecords(limit: number) {
+  return statusSnapshotCache.get(String(limit), () => loadRecentRealtimeHoursStatusRecordsUncached(limit));
+}
+
+async function loadRecentRealtimeHoursStatusRecordsUncached(limit: number) {
   const statusSince = new Date(Date.now() - staleThresholdMinutes * 60_000);
   const candidates = await prisma.realTimeHoursRecord.findMany({
     where: { capturedAt: { gte: statusSince } },

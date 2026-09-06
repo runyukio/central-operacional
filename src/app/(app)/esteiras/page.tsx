@@ -1,4 +1,4 @@
-import { RequestsKanbanPage } from "@/components/modules";
+import { RequestsKanbanPage } from "@/components/modules/requests-kanban-page";
 
 export default function EsteirasRoute() {
   return <RequestsKanbanPage />;

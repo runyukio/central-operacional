@@ -1,5 +1,3 @@
-import { createHmac } from "node:crypto";
-
 import bcrypt from "bcryptjs";
 
 import { createAuthError, createPermissionError, createServerError, createValidationError } from "@/lib/api-errors";
@@ -13,6 +11,8 @@ import {
   validateSecurityAnswer
 } from "@/lib/security-question";
 import { updateSupabasePasswordIfPresent, verifySupabasePassword } from "@/lib/supabase-auth";
+import { authRateKey, consumeAuthRateLimit } from "@/lib/auth-rate-limit";
+import { assertPasswordSyncConfigured, verifyAccountPassword } from "@/lib/password-credentials";
 
 const DUMMY_ANSWER_HASH = "$2a$12$0CVTI6Z.eCLH7zSGQVdt4.i6vP/ET0s/NuCTP6x58iIaL/fN2r.NS";
 const GENERIC_RECOVERY_ERROR = "Não foi possível validar os dados informados. Revise as informações ou tente novamente mais tarde.";
@@ -56,7 +56,7 @@ export const passwordRecoveryData = {
     return prisma.user.findFirst({
       where: { email: { equals: email, mode: "insensitive" }, status: "ACTIVE", deletedAt: null,
         employeeProfile: { is: { deletedAt: null } } },
-      select: { id: true, email: true, passwordHash: true, securityQuestion: true,
+      select: { id: true, email: true, passwordHash: true, passwordChangedAt: true, lastPasswordResetAt: true, securityQuestion: true,
         employeeProfile: { select: { wbLogin: true } } }
     });
   },
@@ -64,7 +64,7 @@ export const passwordRecoveryData = {
     return prisma.user.findFirst({
       where: { email: { equals: email, mode: "insensitive" }, status: "ACTIVE", deletedAt: null,
         employeeProfile: { is: { wbLogin: { equals: wbLogin, mode: "insensitive" }, deletedAt: null } } },
-      select: { id: true, email: true, passwordHash: true, securityQuestion: true, securityAnswerHash: true }
+      select: { id: true, email: true, passwordHash: true, updatedAt: true, securityQuestion: true, securityAnswerHash: true }
     });
   },
   async saveSecurityQuestion(userId: string, question: string, answerHash: string) {
@@ -83,28 +83,16 @@ export const passwordRecoveryData = {
     });
   },
   async consumeRateLimit(keyHash: string, limit: number, now: Date) {
-    return prisma.$transaction(async (tx) => {
-      const current = await tx.passwordRecoveryRateLimit.findUnique({ where: { keyHash } });
-      const next = nextPasswordRecoveryRateState(current, now, limit);
-      await tx.passwordRecoveryRateLimit.upsert({ where: { keyHash }, create: {
-        keyHash, attempts: next.attempts, windowStartedAt: next.windowStartedAt,
-        blockedUntil: next.blockedUntil, expiresAt: next.expiresAt
-      }, update: {
-        attempts: next.attempts, windowStartedAt: next.windowStartedAt,
-        blockedUntil: next.blockedUntil, expiresAt: next.expiresAt
-      } });
-      return next;
-    });
+    return consumeAuthRateLimit(keyHash, limit, now);
   },
   cleanupRateLimits(keys: string[], now: Date) {
     return prisma.passwordRecoveryRateLimit.deleteMany({ where: { OR: [{ keyHash: { in: keys } }, { expiresAt: { lt: now } }] } });
   },
   verifyExternalPassword: verifySupabasePassword,
   updateExternalPassword: updateSupabasePasswordIfPresent,
-  async updateLocalPassword(userId: string, passwordHash: string, context: PasswordRecoveryContext, externalStatus: string) {
-    const now = new Date();
+  async updateLocalPassword(userId: string, passwordHash: string, context: PasswordRecoveryContext, externalStatus: string, expectedUpdatedAt?: Date) {
     await prisma.$transaction(async (tx) => {
-      await updatePasswordForUser(userId, passwordHash, tx);
+      await updatePasswordForUser(userId, passwordHash, tx, expectedUpdatedAt);
       await tx.auditLog.create({ data: {
         actorId: userId, action: "EDICAO", entity: "User", entityId: userId,
         previousValue: { passwordHash: "protected" },
@@ -145,11 +133,7 @@ export async function saveOwnSecurityQuestion(actor: Actor, input: SecurityQuest
   try {
     const user = await passwordRecoveryData.findOwnUser(email);
     if (!user) return createPermissionError("Seu usuário ativo não está vinculado a um cadastro de parceiro.");
-    const [localMatches, supabaseUser] = await Promise.all([
-      bcrypt.compare(currentPassword, user.passwordHash),
-      passwordRecoveryData.verifyExternalPassword(user.email, currentPassword).catch(() => null)
-    ]);
-    if (!localMatches && !supabaseUser) return createAuthError("A senha atual não confere.");
+    if (!await verifyAccountPassword(user, currentPassword)) return createAuthError("A senha atual não confere.");
     const answerHash = await bcrypt.hash(normalizeSecurityAnswer(answer), 12);
     await passwordRecoveryData.saveSecurityQuestion(user.id, question, answerHash);
     return { success: true, message: "Pergunta de segurança atualizada com sucesso.",
@@ -178,7 +162,7 @@ export async function recoverPasswordWithSecurityQuestion(input: RecoverPassword
 
   const now = new Date();
   const ip = String(context.ipAddress || "unknown").slice(0, 128);
-  const keys = [rateKey(`account:${email}|${wbLogin}`), rateKey(`ip:${ip}`)];
+  const keys = [authRateKey(`account:${email}|${wbLogin}`), authRateKey(`ip:${ip}`)];
   try {
     const accountRate = await passwordRecoveryData.consumeRateLimit(keys[0], ACCOUNT_LIMIT, now);
     const ipRate = await passwordRecoveryData.consumeRateLimit(keys[1], IP_LIMIT, now);
@@ -196,19 +180,17 @@ export async function recoverPasswordWithSecurityQuestion(input: RecoverPassword
       return createValidationError({ newPassword: "A nova senha deve ser diferente da senha atual." });
     }
 
-    // Synchronize a matching Supabase Auth identity first; local-only accounts
-    // continue to use the database credential exactly as they do today.
-    const externalStatus = await passwordRecoveryData.updateExternalPassword(user.email, newPassword);
+    // Local authority is saved first: an external outage cannot leave the old
+    // provider password usable in this application after a successful reset.
+    assertPasswordSyncConfigured();
     const passwordHash = await bcrypt.hash(newPassword, 10);
-    await passwordRecoveryData.updateLocalPassword(user.id, passwordHash, context, externalStatus);
+    await passwordRecoveryData.updateLocalPassword(user.id, passwordHash, context, "LOCAL_AUTHORITATIVE", user.updatedAt);
+    const externalStatus = await passwordRecoveryData.updateExternalPassword(user.email, newPassword).catch(() => "LOCAL_SAVED_EXTERNAL_PENDING");
     await passwordRecoveryData.cleanupRateLimits(keys, now);
-    return { success: true, message: "Senha redefinida com sucesso. Entre usando sua nova senha.", email: user.email };
+    return { success: true, message: externalStatus === "LOCAL_SAVED_EXTERNAL_PENDING"
+      ? "Senha redefinida na Central. Entre com a nova senha. A sincronização externa está pendente; contate o administrador."
+      : "Senha redefinida com sucesso. Entre usando sua nova senha.", email: user.email };
   } catch (error) {
     return createServerError(error, "Não foi possível redefinir a senha agora. Tente novamente mais tarde.");
   }
-}
-
-function rateKey(value: string) {
-  const secret = process.env.NEXTAUTH_SECRET || "local-password-recovery";
-  return createHmac("sha256", secret).update(value).digest("hex");
 }

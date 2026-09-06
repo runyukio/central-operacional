@@ -1,4 +1,5 @@
 import { AnonymousFeedbackStatus, ClimateQuestionType, Prisma } from "@prisma/client";
+import { collectExportBatches } from "@/lib/export-pagination";
 
 import type { Actor } from "@/lib/mock-db";
 import {
@@ -352,20 +353,34 @@ export async function exportAnonymousFeedbackXlsxData(actor: Actor, filters: Ano
   if (!canExportAnonymousFeedback(permissionUserFromAuthenticatedUser(user))) {
     throw new EngagementError("Você não tem permissão para exportar Feedback Anônimo.", 403);
   }
-  const result = await listAnonymousFeedback(actor, { ...filters, page: 1, limit: 10000 });
-  const rows = result.data.map((item) => [
-    item.createdAt,
+  const where = await buildAnonymousFeedbackWhere(filters);
+  // A consistent snapshot plus cursor batches prevents silent truncation and
+  // shifting pages. The export projection never reads the private submitter ID.
+  const items = await prisma.$transaction(async (tx) => {
+    const total = await tx.anonymousFeedback.count({ where });
+    return collectExportBatches({ total, fetchPage: (cursor, limit) => tx.anonymousFeedback.findMany({
+      where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: limit,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      select: { id: true, createdAt: true, category: true, urgency: true, status: true, message: true,
+        lobId: true, jobTitle: true, allowContact: true, resolvedAt: true, adminResponse: true, respondedAt: true }
+    }) });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 60_000 });
+  const lobIds = [...new Set(items.map((item) => item.lobId).filter((id): id is string => Boolean(id)))];
+  const lobs = lobIds.length ? await prisma.lob.findMany({ where: { id: { in: lobIds } }, select: { id: true, name: true } }) : [];
+  const lobNames = new Map(lobs.map((lob) => [lob.id, lob.name]));
+  const rows = items.map((item) => [
+    item.createdAt.toISOString(),
     item.category,
-    item.urgencyLabel,
-    item.statusLabel,
-    item.comment,
-    item.lob ?? "",
+    urgencyLabel(item.urgency),
+    feedbackStatusLabels[item.status],
+    item.message,
+    item.lobId ? lobNames.get(item.lobId) ?? "LOB não localizada" : "",
     item.jobTitle ?? "",
     item.allowContact ? "Sim" : "Não",
-    item.resolvedAt ?? "",
-    item.response ?? "",
-    item.respondedAt ?? "",
-    item.respondedBy ?? ""
+    item.resolvedAt?.toISOString() ?? "",
+    item.adminResponse ?? "",
+    item.respondedAt?.toISOString() ?? "",
+    item.adminResponse ? "East River" : ""
   ]);
   return {
     headers: ["data", "categoria", "urgencia", "status", "comentario", "lob", "cargo_funcao", "contato_permitido", "resolvido_em", "resposta", "respondido_em", "respondido_por"],

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import * as Dialog from "@radix-ui/react-dialog";
 import { signIn } from "next-auth/react";
@@ -20,24 +20,36 @@ export default function LoginPage() {
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [success, setSuccess] = useState("");
 
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("reason") === "session-expired") {
+      setError("Sua sessão expirou ou foi revogada. Entre novamente para continuar.");
+    }
+  }, []);
+
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (loading) return;
     setLoading(true);
     setError("");
     setSuccess("");
-    const result = await signIn("credentials", {
-      email,
-      password,
-      redirect: false,
-      callbackUrl: "/"
-    });
-    setLoading(false);
-    if (result?.error) {
-      setError("E-mail ou senha inválidos.");
-      return;
+    try {
+      const result = await signIn("credentials", {
+        email,
+        password,
+        redirect: false,
+        callbackUrl: "/"
+      });
+      if (!result || result.error) {
+        setError(result?.error === "AUTH_RATE_LIMITED" ? "Muitas tentativas. Aguarde 30 minutos antes de tentar novamente." : "E-mail ou senha inválidos.");
+        return;
+      }
+      router.push(result.url ?? "/");
+      router.refresh();
+    } catch {
+      setError("Não foi possível entrar agora. Verifique sua conexão e tente novamente.");
+    } finally {
+      setLoading(false);
     }
-    router.push(result?.url ?? "/");
-    router.refresh();
   }
 
   return (
@@ -122,7 +134,7 @@ export default function LoginPage() {
                   />
                 </div>
               </label>
-              {error ? <p className="rounded-lg bg-red-50 px-3 py-2 text-sm font-bold text-red-600">{error}</p> : null}
+              {error ? <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm font-bold text-red-600">{error}</p> : null}
               {success ? <p className="rounded-lg bg-blue-50 px-3 py-2 text-sm font-bold text-blue-700">{success}</p> : null}
               <button disabled={loading} className="premium-button flex h-12 w-full items-center justify-center gap-2 text-sm font-extrabold disabled:opacity-70">
                 {loading ? "Entrando..." : "Entrar"}

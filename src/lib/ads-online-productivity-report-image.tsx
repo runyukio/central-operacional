@@ -6,14 +6,16 @@ import type {
   AdsOnlineProductivityAgentRow,
   AdsOnlineProductivityReportSnapshot
 } from "@/lib/ads-online-productivity-report-core";
-
-const WIDTH = 1600;
-const ROW_HEIGHT = 80;
-const MIN_HEIGHT = 1400;
-const FIXED_HEIGHT = 760;
-const SKILL_CARDS_PER_ROW = 4;
-const SKILL_CARD_HEIGHT = 104;
-const SKILL_CARD_GAP = 14;
+import {
+  ONLINE_PRODUCTIVITY_IMAGE_WIDTH as WIDTH,
+  ONLINE_PRODUCTIVITY_ROW_HEIGHT as ROW_HEIGHT,
+  ONLINE_PRODUCTIVITY_SKILL_CARDS_PER_ROW as SKILL_CARDS_PER_ROW,
+  ONLINE_PRODUCTIVITY_SKILL_CARD_HEIGHT as SKILL_CARD_HEIGHT,
+  ONLINE_PRODUCTIVITY_SKILL_CARD_GAP as SKILL_CARD_GAP,
+  ONLINE_PRODUCTIVITY_MAX_IMAGE_HEIGHT,
+  onlineProductivityImageHeight,
+  type OnlineProductivityReportPage
+} from "@/lib/online-productivity-report-pages";
 const NAVY = "#0F172A";
 const MUTED = "#64748B";
 const BLUE = "#2563EB";
@@ -39,21 +41,18 @@ const ICONS = {
   minus: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAAsTAAALEwEAmpwYAAAASUlEQVR4nGNgGAWjYBSMglEwCkYBFpBc3N2fXNL1LaWk+z81MMgskJkMxIDUoh4ralmMjkFmD34HDHgUjIJRMApGwSgYBSMOAAAICdYxboF7uQAAAABJRU5ErkJggg=="
 } as const;
 
-export async function renderAdsOnlineProductivityReportPng(report: AdsOnlineProductivityReportSnapshot) {
-  const skillCardRows = Math.ceil(report.skillAverages.length / SKILL_CARDS_PER_ROW);
-  const skillSectionHeight = skillCardRows
-    ? 49 + skillCardRows * SKILL_CARD_HEIGHT + Math.max(0, skillCardRows - 1) * SKILL_CARD_GAP
-    : 0;
-  const height = Math.max(MIN_HEIGHT, FIXED_HEIGHT + skillSectionHeight + report.rows.length * ROW_HEIGHT);
-  const response = new ImageResponse(<AdsOnlineProductivityReportImage report={report} />, {
+export async function renderAdsOnlineProductivityReportPng(report: AdsOnlineProductivityReportSnapshot, page?: OnlineProductivityReportPage) {
+  const height = onlineProductivityImageHeight(report.rows.length, report.skillAverages.length);
+  if (height > ONLINE_PRODUCTIVITY_MAX_IMAGE_HEIGHT) throw new Error("Online productivity report exceeds the image budget; paginate all rows before rendering.");
+  const response = new ImageResponse(<AdsOnlineProductivityReportImage report={report} page={page} />, {
     width: WIDTH,
     height
   });
   return Buffer.from(await response.arrayBuffer());
 }
 
-function AdsOnlineProductivityReportImage({ report }: { report: AdsOnlineProductivityReportSnapshot }) {
-  const maxSubmit = Math.max(1, ...report.rows.map((row) => row.currentSubmit));
+function AdsOnlineProductivityReportImage({ report, page }: { report: AdsOnlineProductivityReportSnapshot; page?: OnlineProductivityReportPage }) {
+  const maxSubmit = page?.maxSubmit ?? report.rows.reduce((maximum, row) => Math.max(maximum, row.currentSubmit), 1);
   const reportLabel = report.reportScope;
   return (
     <div style={rootStyle}>
@@ -98,13 +97,13 @@ function AdsOnlineProductivityReportImage({ report }: { report: AdsOnlineProduct
 
       <section style={{ ...panelStyle, display: "flex", flexDirection: "column", marginTop: 24, overflow: "hidden", width: "100%" }}>
         <div style={{ borderBottom: "1px solid #D7E0EA", color: NAVY, display: "flex", fontSize: 28, fontWeight: 900, padding: "22px 28px" }}>
-          Agents with submit in current interval
+          {page && page.pageCount > 1 ? `Agents with submit · page ${page.pageNumber}/${page.pageCount}${report.rows.length ? ` · ${page.rowOffset + 1}–${page.rowOffset + report.rows.length} of ${page.totalRows}` : " · skill summaries continued"}` : "Agents with submit in current interval"}
         </div>
         <TableHeader report={report} />
         <div style={{ display: "flex", flexDirection: "column", width: "100%" }}>
           {report.rows.length
-            ? report.rows.map((row, index) => <AgentRow key={`${row.wbLogin}-${index}`} index={index} maxSubmit={maxSubmit} report={report} row={row} />)
-            : <EmptyRow reportLabel={reportLabel} />}
+            ? report.rows.map((row, index) => <AgentRow key={`${row.wbLogin}-${index}`} index={index + (page?.rowOffset ?? 0)} maxSubmit={maxSubmit} report={report} row={row} />)
+            : page?.totalRows ? <div style={{ color: MUTED, display: "flex", fontSize: 19, height: 130, alignItems: "center", justifyContent: "center" }}>Agent rows are shown on the preceding pages.</div> : <EmptyRow reportLabel={reportLabel} />}
         </div>
       </section>
 
@@ -118,7 +117,7 @@ function AdsOnlineProductivityReportImage({ report }: { report: AdsOnlineProduct
 
       <footer style={{ color: "#94A3B8", display: "flex", fontSize: 15, fontWeight: 700, justifyContent: "space-between", marginTop: 22, width: "100%" }}>
         <span style={{ display: "flex" }}>Central Operations · {reportLabel} · hourly online productivity</span>
-        <span>Cycle {report.selectedCycle}</span>
+        <span>Cycle {report.selectedCycle}{page && page.pageCount > 1 ? ` · Page ${page.pageNumber}/${page.pageCount}` : ""}</span>
       </footer>
     </div>
   );

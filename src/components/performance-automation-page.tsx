@@ -56,7 +56,7 @@ type SupervisorView = QualityGranularity;
 type PerformanceTab = "queue" | "agents" | "supervisors" | "forecast" | "quality" | "wfh";
 
 const PerformanceWfhPanel = dynamic(
-  () => import("@/components/modules").then((module) => module.PerformanceWfhPanel),
+  () => import("@/components/modules/performance-wfh-panel").then((module) => module.PerformanceWfhPanel),
   {
     ssr: false,
     loading: () => <EmptyBox label="Carregando WFH..." />
@@ -107,6 +107,7 @@ type PerformanceProductionResponse = {
   summary: PerformanceSummary;
   trend: PerformanceTrendRow[];
   queues?: PerformanceQueueRow[];
+  realtimeFallbackWarning?: string;
 };
 
 type ManualImportResult = {
@@ -515,6 +516,11 @@ export function PerformanceAutomationPage({ initialTab = "queue" }: { initialTab
   }, [activeTab, loadSupervisors]);
 
   const basePayload = queuePayload ?? forecastPayload;
+  const realtimeFallbackWarning = activeTab === "forecast"
+    ? forecastPayload?.realtimeFallbackWarning
+    : activeTab === "queue" && queueGranularity === "hourly"
+      ? queuePayload?.realtimeFallbackWarning
+      : undefined;
   const lobs = useMemo(() => normalizeLobs(basePayload?.filters.lobs ?? []), [basePayload]);
   const queueRows = queuePayload?.trend ?? [];
   const baseQueueSummary = useMemo(() => summarizeQueueRows(basePayload?.queues ?? []), [basePayload]);
@@ -567,6 +573,9 @@ export function PerformanceAutomationPage({ initialTab = "queue" }: { initialTab
       </div>
 
       {message ? <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{message}</p> : null}
+      {realtimeFallbackWarning ? (
+        <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">{realtimeFallbackWarning}</p>
+      ) : null}
 
       {activeTab === "queue" ? (
         <QueueView

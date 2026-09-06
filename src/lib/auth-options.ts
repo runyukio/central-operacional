@@ -4,10 +4,13 @@ import bcrypt from "bcryptjs";
 
 import { demoUsers } from "@/lib/demo-auth";
 import { recordErrorLog } from "@/lib/mock-db";
-import { findPasswordUserByEmail } from "@/lib/password-user-repository";
-import { verifySupabasePassword } from "@/lib/supabase-auth";
+import { findPasswordUserByEmail, migrateLegacyPasswordForUser } from "@/lib/password-user-repository";
+import { hasLocalPasswordAuthority, verifyAccountPassword } from "@/lib/password-credentials";
+import { AuthenticationRateLimitError, clientIpFromHeaders, consumePasswordAttempts } from "@/lib/auth-rate-limit";
+import { sessionAuthVersion } from "@/lib/session-security";
+import { validateCurrentSessionToken } from "@/lib/session-validation";
 
-const allowDemoLogin = process.env.ALLOW_DEMO_LOGIN === "true";
+const allowDemoLogin = process.env.NODE_ENV !== "production" && process.env.ALLOW_DEMO_LOGIN === "true";
 
 export const authOptions: NextAuthOptions = {
   session: {
@@ -23,33 +26,30 @@ export const authOptions: NextAuthOptions = {
         email: { label: "E-mail", type: "email" },
         password: { label: "Senha", type: "password" }
       },
-      async authorize(credentials) {
+      async authorize(credentials, request) {
         const email = credentials?.email?.toLowerCase().trim();
         const password = credentials?.password ?? "";
 
-        if (!email || !password) {
+        if (!email || email.length > 254 || !password || password.length > 4096) {
           return null;
         }
 
-        const supabaseUser = await verifySupabasePassword(email, password).catch((error) => {
-          recordErrorLog({
-            userEmail: email,
-            code: "SUPABASE_AUTH_ERROR",
-            message: error instanceof Error ? error.message : "Erro ao autenticar no Supabase Auth",
-            action: "LOGIN",
-            severity: "ERROR"
-          });
-          return null;
-        });
-
         try {
-          const user = await findPasswordUserByEmail(email);
+          const rate = await consumePasswordAttempts("login", email, clientIpFromHeaders(request.headers));
+          if (!rate.allowed) throw new AuthenticationRateLimitError();
+          let user = await findPasswordUserByEmail(email);
 
           if (user && user.status === "ACTIVE") {
-            const passwordMatches = supabaseUser ? true : await bcrypt.compare(password, user.passwordHash);
+            const passwordMatches = await verifyAccountPassword(user, password);
             if (passwordMatches) {
+              if (!hasLocalPasswordAuthority(user)) {
+                // Migrate the successfully verified legacy credential once.
+                if (!await migrateLegacyPasswordForUser(user, await bcrypt.hash(password, 10))) return null;
+                user = await findPasswordUserByEmail(email);
+                if (!user || user.status !== "ACTIVE" || !await bcrypt.compare(password, user.passwordHash)) return null;
+              }
               return {
-                id: supabaseUser?.id ?? user.id,
+                id: user.id,
                 email: user.email,
                 name: user.name,
                 role: user.roleName,
@@ -57,11 +57,13 @@ export const authOptions: NextAuthOptions = {
                 jobTitle: user.roleTitle,
                 skill: user.skill,
                 lob: user.lob,
-                mustChangePassword: user.mustChangePassword
+                mustChangePassword: user.mustChangePassword,
+                authVersion: sessionAuthVersion(user)
               } as never;
             }
           }
         } catch (error) {
+          if (error instanceof AuthenticationRateLimitError) throw error;
           recordErrorLog({
             userEmail: email,
             code: "LOGIN_DATABASE_ERROR",
@@ -71,24 +73,14 @@ export const authOptions: NextAuthOptions = {
           });
         }
 
-        if (supabaseUser && !allowDemoLogin) {
-          recordErrorLog({
-            userEmail: email,
-            code: "LOGIN_USER_NOT_RELEASED",
-            message: "Usuário autenticado no Supabase, mas sem perfil ativo aprovado na Central Operacional.",
-            action: "LOGIN",
-            severity: "WARNING"
-          });
-          return null;
-        }
-
         const fallback = demoUsers.find((demoUser) => demoUser.email === email);
         if (allowDemoLogin && fallback && password === "Central@123") {
           return {
             id: fallback.email,
             email: fallback.email,
             name: fallback.name,
-            role: fallback.role
+            role: fallback.role,
+            demoSession: true
           } as never;
         }
 
@@ -99,6 +91,8 @@ export const authOptions: NextAuthOptions = {
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
+        token.authVersion = (user as { authVersion?: string }).authVersion;
+        token.demoSession = (user as { demoSession?: boolean }).demoSession === true;
         token.role = (user as { role?: string }).role;
         token.roleTitle = (user as { roleTitle?: string | null }).roleTitle ?? null;
         token.jobTitle = (user as { jobTitle?: string | null }).jobTitle ?? null;
@@ -106,13 +100,10 @@ export const authOptions: NextAuthOptions = {
         token.lob = (user as { lob?: string | null }).lob ?? "";
         token.mustChangePassword = Boolean((user as { mustChangePassword?: boolean }).mustChangePassword);
       }
-      if (!user && token.email && typeof token.lob !== "string") {
-        const current = await findPasswordUserByEmail(String(token.email)).catch(() => null);
-        token.lob = current?.lob ?? "";
-      }
-      return token;
+      return validateCurrentSessionToken(token);
     },
     async session({ session, token }) {
+      if (token.authInvalid) return { ...session, user: undefined };
       if (session.user) {
         session.user.id = token.sub ?? "";
         session.user.role = String(token.role ?? "COLABORADOR");

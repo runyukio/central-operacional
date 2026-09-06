@@ -136,7 +136,7 @@ test("redefine a senha válida nos dois provedores e limpa os limitadores", asyn
   };
 
   const result = await recoverPasswordWithSecurityQuestion(validRecovery, { ipAddress: "203.0.113.8" });
-  assert.deepEqual(calls, ["external", "local", "cleanup"]);
+  assert.deepEqual(calls, ["local", "external", "cleanup"]);
   assert.equal("success" in result && result.success, true);
 });
 

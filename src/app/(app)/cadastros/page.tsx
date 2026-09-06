@@ -1,7 +1,7 @@
 import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 
-import { RegistrationApprovalsPage } from "@/components/modules";
+import { RegistrationApprovalsPage } from "@/components/modules/registration-approvals-page";
 import { authOptions } from "@/lib/auth-options";
 import { canApproveRegistration } from "@/lib/permissions";
 

@@ -156,6 +156,7 @@ type RealtimeHoursTimelineRow = {
 
 type RealtimeHoursTimelinePayload = {
   success: boolean;
+  archiveWarning?: string;
   date: string;
   window: { start: string; end: string; calculationEnd: string };
   summary: {
@@ -477,6 +478,13 @@ export function RealtimeHoursPage({ canManageMappings = false }: RealtimeHoursPa
         <div className="flex items-start gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2.5 text-sm font-bold text-red-700">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>{error}</span>
+        </div>
+      ) : null}
+
+      {activeTab === "TIMELINE" && timelinePayload?.date === timelineDate && timelinePayload.archiveWarning ? (
+        <div role="status" className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm font-bold text-amber-800">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{timelinePayload.archiveWarning} Os valores preservados continuam disponíveis; este aviso não significa ausência de horas.</span>
         </div>
       ) : null}
 

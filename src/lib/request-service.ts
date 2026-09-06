@@ -12,6 +12,7 @@ import { applyApprovedMonthlyAdvanceChange, isMonthlyAdvanceRequestPayload } fro
 import { roleHasCapability } from "@/lib/access-control";
 import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import { prisma } from "@/lib/prisma";
+import { nextRequestCode } from "@/lib/request-code";
 import { canApproveRequest, normalizeRole } from "@/lib/permissions";
 import { baseTimesForShift } from "@/lib/shift-base-times";
 import { isProjectExcludedFromAdsCoverage } from "@/lib/coverage-lob-rules";
@@ -2975,27 +2976,6 @@ function dayOffApproverMessage(type: string) {
 
 function serialize(value: unknown) {
   return value ? JSON.parse(JSON.stringify(value)) : {};
-}
-
-async function nextRequestCode(tx: Prisma.TransactionClient) {
-  const recentCodes = await tx.request.findMany({
-    where: { code: { startsWith: "REQ-" } },
-    select: { code: true },
-    orderBy: { code: "desc" },
-    take: 200
-  });
-  const maxNumber = recentCodes.reduce((max, item) => {
-    const numeric = Number(item.code.replace(/^REQ-/i, ""));
-    return Number.isFinite(numeric) ? Math.max(max, numeric) : max;
-  }, 1000);
-
-  for (let offset = 1; offset <= 100; offset += 1) {
-    const candidate = `REQ-${String(maxNumber + offset).padStart(4, "0")}`;
-    const exists = await tx.request.findUnique({ where: { code: candidate }, select: { id: true } });
-    if (!exists) return candidate;
-  }
-
-  return `REQ-${Date.now()}`;
 }
 
 function formatDateTime(date: Date) {

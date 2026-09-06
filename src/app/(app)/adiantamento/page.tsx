@@ -1,7 +1,7 @@
 import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 
-import { AdvanceManagementPage } from "@/components/modules";
+import { AdvanceManagementPage } from "@/components/modules/advance-management-page";
 import { authOptions } from "@/lib/auth-options";
 import { canAccessAdvanceModule } from "@/lib/permissions";
 

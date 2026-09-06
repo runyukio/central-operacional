@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { errorResponse, errorStatus, mapZodError } from "@/lib/api-errors";
 import { recoverPasswordWithSecurityQuestion } from "@/lib/password-recovery-service";
+import { clientIpFromHeaders } from "@/lib/auth-rate-limit";
 
 const schema = z.object({
   email: z.string().trim().email().max(254),
@@ -17,7 +18,7 @@ export async function POST(request: Request) {
   const parsed = schema.safeParse(await request.json().catch(() => ({})));
   if (!parsed.success) return errorResponse(mapZodError(parsed.error));
   const result = await recoverPasswordWithSecurityQuestion(parsed.data, {
-    ipAddress: clientIp(request),
+    ipAddress: clientIpFromHeaders(request.headers),
     userAgent: request.headers.get("user-agent")
   });
   if ("error" in result) {
@@ -29,12 +30,4 @@ export async function POST(request: Request) {
     return NextResponse.json(result, { status: errorStatus(result), headers: { "Cache-Control": "no-store" } });
   }
   return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
-}
-
-function clientIp(request: Request) {
-  const value = request.headers.get("x-vercel-forwarded-for")
-    ?? request.headers.get("x-forwarded-for")
-    ?? request.headers.get("x-real-ip")
-    ?? "unknown";
-  return value.split(",")[0]?.trim() || "unknown";
 }

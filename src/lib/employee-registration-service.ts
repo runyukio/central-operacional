@@ -18,6 +18,9 @@ import { prisma } from "@/lib/prisma";
 import { baseTimesForShift } from "@/lib/shift-base-times";
 import { cleanShiftName, isBlockedShiftName, isSelectableShiftName, shiftLookupKey } from "@/lib/shift-display";
 import type { RegistrationInput } from "@/lib/registration-validation";
+import { canAssignSecurityJobTitle } from "@/lib/security-classifications";
+import { assertActiveAdminRemains } from "@/lib/admin-invariant";
+import { assertPasswordSyncConfigured, passwordCredentialProviders } from "@/lib/password-credentials";
 
 const allowDemoDataFallback = process.env.ALLOW_DEMO_LOGIN === "true" || process.env.ALLOW_DEMO_DATA === "true";
 const internalDefaultTeamName = "Time Inicial";
@@ -394,6 +397,7 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
       return { error: `Nenhuma linha válida para importar parceiros. ${summarizeEmployeeImportErrors(validations)}`, preview: { rows: validations } };
     }
     const normalizedValidRows = validRows.map((row) => normalizeEmployeeImportRow(row));
+    if (normalizedValidRows.some((row) => row.createUser)) assertPasswordSyncConfigured();
     const [importRoles, importLobs, importShifts] = await Promise.all([
       prisma.role.findMany({ select: { id: true, name: true } }),
       prisma.lob.findMany({ select: { id: true, name: true } }),
@@ -453,6 +457,9 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
       const rawRow = validRows[rowIndex] ?? {};
       const existingByWb = existingProfilesByWb.get(normalizeWbLoginForEmployeeImport(row.wbLogin)) ?? null;
       const isExistingEmployeeImport = Boolean(existingByWb);
+      if (!canAssignSecurityJobTitle(permission.user.role.name, existingByWb?.roleTitle, row.roleTitle || undefined)) {
+        throw new Error(`Linha ${rowIndex + 1}: apenas Admin pode atribuir ou remover o cargo Financeiro.`);
+      }
       const role = row.roleName ? importRoleByName.get(row.roleName) ?? null : null;
       if (!role && (row.createUser || !isExistingEmployeeImport)) throw new Error(`Linha ${rowIndex + 1}: Role/Permissão obrigatória.`);
       const lob = row.lob ? importLobByName.get(row.lob) ?? null : null;
@@ -629,6 +636,9 @@ export async function importEmployeeRows(actor: Actor, rows: EmployeeImportRow[]
               }
             });
           userId = user.id;
+          await passwordCredentialProviders.updateExternal(user.email, row.temporaryPassword).catch(() => {
+            recordErrorLog({ userEmail: actor.email, code: "PASSWORD_SYNC_PENDING", message: "Senha local atualizada; sincronização externa pendente.", action: "EMPLOYEE_IMPORT", severity: "WARNING" });
+          });
           usuariosCriados += existingUser ? 0 : 1;
         }
 
@@ -861,8 +871,8 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
   try {
     const reviewer = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
     if (!reviewer && allowDemoDataFallback) return reviewMockRegistration(actor, input);
-    const actorRole = normalizeRole(actor.role);
-    if (!reviewer || !canApproveRegistration({ role: actor.role, status: reviewer.status })) {
+    const actorRole = normalizeRole(reviewer?.role.name);
+    if (!reviewer || reviewer.deletedAt || !canApproveRegistration({ role: reviewer.role.name, status: reviewer.status })) {
       const reason = actorRole === "SUPERVISOR" ? "Supervisor não possui permissão para aprovar ou editar cadastros." : "Sem permissão para revisar cadastro.";
       await auditPermissionDenied(actor, { action: "REGISTRATION_REVIEW", entity: "EmployeeRegistrationRequest", reason, entityId: input.id });
       return { error: reason };
@@ -888,6 +898,9 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
       return { error: "Turno selecionado não é uma opção padrão válida." };
     }
     if (input.action === "approve" && input.operationalData) {
+      if (!canAssignSecurityJobTitle(reviewer.role.name, null, input.operationalData.roleTitle)) {
+        return { error: "Apenas Admin pode aprovar um cadastro com cargo Financeiro, pois ele concede acesso a pagamentos." };
+      }
       const requiredFields: Array<[keyof NonNullable<RegistrationReviewInput["operationalData"]>, string]> = [
         ["lob", "LOB"],
         ["shift", "Turno"],
@@ -950,6 +963,7 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
 	      });
       const approvedEmployeeStatus = !op.employeeStatus || op.employeeStatus === "Pendente de Cadastro" ? "Ativo" : op.employeeStatus;
       const collaboratorRole = await tx.role.findUniqueOrThrow({ where: { name: "COLABORADOR" } });
+      if (existingUser) await assertActiveAdminRemains(tx, existingUser.id, { roleId: collaboratorRole.id });
       const user = existingUser
         ? await tx.user.update({
           where: { id: existingUser.id },
@@ -980,6 +994,9 @@ export async function reviewOperationalRegistration(actor: Actor, input: Registr
       const profileByWb = await tx.employeeProfile.findUnique({ where: { wbLogin: op.wbLogin } });
       const profileByUser = await tx.employeeProfile.findUnique({ where: { userId: user.id } });
       const existingProfile = profileByWb ?? profileByUser;
+      if (!canAssignSecurityJobTitle(reviewer.role.name, existingProfile?.roleTitle, op.roleTitle)) {
+        throw new Error("Apenas Admin pode atribuir ou remover o cargo Financeiro.");
+      }
       const operationalProfileData = cleanPatchPayload({
         userId: user.id,
         wbLogin: op.wbLogin,
@@ -1108,6 +1125,7 @@ export async function deleteOperationalRegistration(actor: Actor, id: string) {
     const now = new Date();
     const updated = await prisma.$transaction(async (tx) => {
       if (existing.createdUserId) {
+        await assertActiveAdminRemains(tx, existing.createdUserId, { status: "INACTIVE", deletedAt: now });
         await tx.user.update({
           where: { id: existing.createdUserId },
           data: { status: "INACTIVE", deletedAt: now }
@@ -1150,9 +1168,9 @@ function isBlockingRegistration(item: EmployeeRegistrationRequest) {
 
 async function canImportEmployees(actor: Actor) {
   const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
-  if (!user) return { error: "Usuário não autenticado." };
-  const actorRole = normalizeRole(actor.role);
-  if (!canManageRoles({ role: actor.role, status: user.status })) {
+  if (!user || user.deletedAt) return { error: "Usuário não autenticado." };
+  const actorRole = normalizeRole(user.role.name);
+  if (!canManageRoles({ role: user.role.name, status: user.status })) {
     const reason = actorRole === "SUPERVISOR" ? "Supervisor não possui permissão para aprovar ou editar cadastros." : "Sem permissão para importar parceiros.";
     await auditPermissionDenied(actor, { action: "EMPLOYEE_IMPORT", entity: "EmployeeRegistrationRequest", reason });
     return { error: reason };
@@ -1276,6 +1294,7 @@ async function validateEmployeeImportRows(rows: EmployeeImportRow[]): Promise<Em
     if (row.primaryPhone && !/^\d{2}\s?\d{4,5}-?\d{4}$/.test(row.primaryPhone.replace(/[()]/g, ""))) warnings.push("Contato principal fora do padrão brasileiro.");
     if (row.createUser && !row.temporaryPassword) errors.push("Senha temporária obrigatória quando criar_usuario = sim.");
     if (row.createUser && row.temporaryPassword && row.temporaryPassword.length < 8) errors.push("Senha temporária deve ter pelo menos 8 caracteres.");
+    if (row.createUser && row.temporaryPassword.length > 128) errors.push("Senha temporária deve ter no máximo 128 caracteres.");
 
     if (row.cpf && seenCpf.has(row.cpf)) errors.push("CPF duplicado dentro do arquivo.");
     if (row.email && seenEmail.has(row.email)) errors.push("E-mail duplicado dentro do arquivo.");

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createClientRequestGate } from "@/lib/client-request-gate";
 import {
   BarChart3,
   CalendarDays,
@@ -279,8 +280,10 @@ export function FinanceiroPage() {
   const [savingAdjustment, setSavingAdjustment] = useState(false);
   const [toast, setToast] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [loadRequests] = useState(createClientRequestGate);
 
   const fetchData = useCallback(async () => {
+    const request = loadRequests.begin();
     setLoading(true);
     setError("");
     const params = new URLSearchParams();
@@ -288,20 +291,25 @@ export function FinanceiroPage() {
     if (costCenter !== "Todos") params.set("costCenter", costCenter);
     if (source !== "Todos") params.set("source", source);
     if (search.trim()) params.set("search", search.trim());
-    const response = await fetch(`/api/financeiro?${params.toString()}`, { cache: "no-store" });
-    const json = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      setError(json.message || json.error || "Não foi possível carregar Financeiro.");
-      setLoading(false);
-      return;
+    try {
+      const response = await fetch(`/api/financeiro?${params.toString()}`, { cache: "no-store", signal: request.signal });
+      const json = await response.json();
+      if (!loadRequests.isCurrent(request)) return;
+      if (!response.ok) throw new Error(json.message || json.error || "Não foi possível carregar Financeiro.");
+      setPayload(json);
+    } catch (error) {
+      if (!loadRequests.isCurrent(request)) return;
+      setPayload(null);
+      setError(error instanceof Error ? error.message : "Não foi possível carregar Financeiro.");
+    } finally {
+      if (loadRequests.isCurrent(request)) setLoading(false);
     }
-    setPayload(json);
-    setLoading(false);
-  }, [invoiceCycleMonth, costCenter, source, search]);
+  }, [invoiceCycleMonth, costCenter, source, search, loadRequests]);
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    void fetchData();
+    return () => loadRequests.cancel();
+  }, [fetchData, loadRequests]);
 
   useEffect(() => {
     if (!toast) return undefined;

@@ -1209,6 +1209,7 @@ model RealTimeHoursArchiveDay {
   windowEnd      DateTime
   calculationEnd DateTime
   sourceRecords  Int                       @default(0)
+  sourceFingerprint String?
   generatedAt    DateTime                  @default(now())
   updatedAt      DateTime                  @updatedAt
   rows           RealTimeHoursArchiveRow[]

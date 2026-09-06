@@ -10,6 +10,7 @@ import {
   monthlyAdvanceAmountForOptIn
 } from "@/lib/monthly-advance-constants";
 import { prisma } from "@/lib/prisma";
+import { nextRequestCode } from "@/lib/request-code";
 import { normalizeRole } from "@/lib/permissions";
 
 export const MONTHLY_ADVANCE_LOCKED_IMPLEMENTATION_MONTH = "2026-05";
@@ -1228,11 +1229,6 @@ function chunkArray<T>(items: T[], size: number) {
   const chunks: T[][] = [];
   for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
   return chunks;
-}
-
-async function nextRequestCode(tx: Prisma.TransactionClient) {
-  const count = await tx.request.count();
-  return `REQ-${String(count + 1).padStart(4, "0")}`;
 }
 
 async function notifyWfmSafely(requestId: string, code: string, requesterName: string, actorEmail: string) {

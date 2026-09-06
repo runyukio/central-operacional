@@ -16,18 +16,24 @@ export type PasswordUserRecord = {
   lob: string | null;
   mustChangePassword: boolean;
   temporaryPassword: boolean;
+  updatedAt: Date;
+  passwordChangedAt: Date | null;
+  lastPasswordResetAt: Date | null;
 };
 
-let userColumnCache: Set<string> | null = null;
-
 export async function findPasswordUserByEmail(email: string, client: QueryClient = prisma) {
-  const rows = await client.$queryRaw<Array<Omit<PasswordUserRecord, "mustChangePassword" | "temporaryPassword">>>`
+  const rows = await client.$queryRaw<Array<PasswordUserRecord>>`
     SELECT
       u."id",
       u."email",
       u."name",
       u."passwordHash",
       u."status"::text AS "status",
+      u."updatedAt",
+      u."passwordChangedAt",
+      u."lastPasswordResetAt",
+      u."mustChangePassword",
+      u."temporaryPassword",
       r."name" AS "roleName",
       ep."roleTitle",
       ep."skill",
@@ -44,72 +50,47 @@ export async function findPasswordUserByEmail(email: string, client: QueryClient
   const user = rows[0];
   if (!user) return null;
 
-  const columns = await getUserColumns(client);
-  return {
-    ...user,
-    mustChangePassword: columns.has("mustChangePassword") ? await readBooleanColumn(user.id, "mustChangePassword", client) : false,
-    temporaryPassword: columns.has("temporaryPassword") ? await readBooleanColumn(user.id, "temporaryPassword", client) : false
-  } satisfies PasswordUserRecord;
+  return user;
 }
 
-export async function updatePasswordForUser(userId: string, passwordHash: string, client: QueryClient = prisma) {
+export async function migrateLegacyPasswordForUser(user: Pick<PasswordUserRecord, "id" | "passwordHash" | "updatedAt">, passwordHash: string, client: QueryClient = prisma) {
+  const now = new Date();
+  // Compare the exact version that was authenticated. A concurrent reset must
+  // win over a legacy login, and temporary-password requirements stay intact.
+  const changed = await client.$executeRaw`
+    UPDATE "User" SET "passwordHash" = ${passwordHash}, "updatedAt" = ${now}, "passwordChangedAt" = ${now}
+    WHERE "id" = ${user.id} AND "passwordHash" = ${user.passwordHash} AND "updatedAt" = ${user.updatedAt}
+      AND "passwordChangedAt" IS NULL AND "lastPasswordResetAt" IS NULL
+      AND "status" = 'ACTIVE' AND "deletedAt" IS NULL
+  `;
+  return changed === 1;
+}
+
+export async function updatePasswordForUser(userId: string, passwordHash: string, client: QueryClient = prisma, expectedUpdatedAt?: Date) {
   const now = new Date();
 
-  await client.$executeRaw`
+  const changed = await client.$executeRaw`
     UPDATE "User"
     SET
       "passwordHash" = ${passwordHash},
-      "updatedAt" = ${now}
+      "updatedAt" = ${now},
+      "mustChangePassword" = false,
+      "temporaryPassword" = false,
+      "passwordChangedAt" = ${now},
+      "lastPasswordResetAt" = ${now},
+      "passwordResetById" = NULL
     WHERE "id" = ${userId}
+      AND "status" = 'ACTIVE' AND "deletedAt" IS NULL
+      AND (${expectedUpdatedAt ?? null}::timestamp IS NULL OR "updatedAt" = ${expectedUpdatedAt ?? null})
   `;
-
-  await resetOptionalPasswordColumns(userId, now, client);
+  if (changed !== 1) throw new Error("Sua conta foi alterada durante a solicitação. Entre novamente e tente outra vez.");
 }
 
 export async function resetOptionalPasswordColumns(userId: string, now = new Date(), client: QueryClient = prisma) {
-  const columns = await getUserColumns(client);
-
-  if (columns.has("mustChangePassword")) {
-    await client.$executeRaw`UPDATE "User" SET "mustChangePassword" = false WHERE "id" = ${userId}`;
-  }
-  if (columns.has("temporaryPassword")) {
-    await client.$executeRaw`UPDATE "User" SET "temporaryPassword" = false WHERE "id" = ${userId}`;
-  }
-  if (columns.has("passwordChangedAt")) {
-    await client.$executeRaw`UPDATE "User" SET "passwordChangedAt" = ${now} WHERE "id" = ${userId}`;
-  }
-  if (columns.has("lastPasswordResetAt")) {
-    await client.$executeRaw`UPDATE "User" SET "lastPasswordResetAt" = ${now} WHERE "id" = ${userId}`;
-  }
-  if (columns.has("passwordResetById")) {
-    await client.$executeRaw`UPDATE "User" SET "passwordResetById" = NULL WHERE "id" = ${userId}`;
-  }
-}
-
-async function getUserColumns(client: QueryClient) {
-  if (userColumnCache) return userColumnCache;
-
-  const rows = await client.$queryRaw<Array<{ column_name: string }>>`
-    SELECT column_name
-    FROM information_schema.columns
-    WHERE table_schema = 'public'
-      AND table_name = 'User'
+  await client.$executeRaw`
+    UPDATE "User" SET "mustChangePassword" = false, "temporaryPassword" = false,
+      "passwordChangedAt" = ${now}, "lastPasswordResetAt" = ${now},
+      "passwordResetById" = NULL, "updatedAt" = ${now}
+    WHERE "id" = ${userId}
   `;
-
-  userColumnCache = new Set(rows.map((row) => row.column_name));
-  return userColumnCache;
-}
-
-async function readBooleanColumn(userId: string, column: "mustChangePassword" | "temporaryPassword", client: QueryClient) {
-  if (column === "mustChangePassword") {
-    const rows = await client.$queryRaw<Array<{ value: boolean }>>`
-      SELECT "mustChangePassword" AS "value" FROM "User" WHERE "id" = ${userId} LIMIT 1
-    `;
-    return Boolean(rows[0]?.value);
-  }
-
-  const rows = await client.$queryRaw<Array<{ value: boolean }>>`
-    SELECT "temporaryPassword" AS "value" FROM "User" WHERE "id" = ${userId} LIMIT 1
-  `;
-  return Boolean(rows[0]?.value);
 }

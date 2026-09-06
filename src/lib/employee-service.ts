@@ -1,5 +1,3 @@
-import bcrypt from "bcryptjs";
-
 import { Prisma, type EmployeeSensitiveData, type UserStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
@@ -12,6 +10,9 @@ import { canBeSupervisorJobTitle, isAgentJobTitle, normalizeJobTitle } from "@/l
 import { normalizeWbLogin, parseWbLoginBatch } from "@/lib/batch-wb-filter";
 import { maskPixKey, validatePixKey } from "@/lib/pix-key";
 import { cleanShiftName } from "@/lib/shift-display";
+import { canAssignSecurityJobTitle } from "@/lib/security-classifications";
+import { synchronizeUserPassword } from "@/lib/password-credentials";
+import { assertActiveAdminRemains } from "@/lib/admin-invariant";
 
 const allowDemoDataFallback = process.env.ALLOW_DEMO_LOGIN === "true" || process.env.ALLOW_DEMO_DATA === "true";
 const employeeInclude = {
@@ -105,7 +106,8 @@ export async function listOperationalEmployees(actor: Actor, query: EmployeeList
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
     if (!user) return allowDemoDataFallback ? listMockEmployees(actor) : [];
-
+    if (user.deletedAt) return [];
+    actor = { ...actor, role: normalizeRole(user.role.name) };
     const role = normalizeRole(actor.role);
     if (!canAccessEmployeeMap({ role: actor.role, status: user.status })) return [];
     let employeeWhere: Prisma.EmployeeProfileWhereInput =
@@ -159,7 +161,8 @@ async function listOperationalEmployeesSummary(actor: Actor, query: EmployeeList
       const fallback = allowDemoDataFallback ? listMockEmployees(actor) : [];
       return paginatedEmployees(fallback, fallback.length, page, limit);
     }
-
+    if (user.deletedAt) return paginatedEmployees([], 0, page, limit);
+    actor = { ...actor, role: normalizeRole(user.role.name) };
     const role = normalizeRole(actor.role);
     if (!canAccessEmployeeMap({ role: actor.role, status: user.status })) return paginatedEmployees([], 0, page, limit);
     const search = clean(query.search)?.trim();
@@ -272,6 +275,8 @@ export async function getOperationalEmployeeDetail(actor: Actor, id: string) {
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true, employeeProfile: true } });
     if (!user) return createPermissionError("Usuário não autenticado.");
+    if (user.deletedAt) return createPermissionError("Usuário sem acesso ativo.");
+    actor = { ...actor, role: normalizeRole(user.role.name) };
     const role = normalizeRole(actor.role);
     if (!canAccessEmployeeMap({ role: actor.role, status: user.status })) return createPermissionError("Você não tem permissão para acessar o Mapa de Parceiros.");
 
@@ -474,6 +479,8 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
   try {
     const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
     if (!user) return createPermissionError("Usuário não autenticado.");
+    if (user.deletedAt) return createPermissionError("Usuário sem acesso ativo.");
+    actor = { ...actor, role: normalizeRole(user.role.name) };
     const role = normalizeRole(actor.role);
     if (!canEditEmployeeData({ role: actor.role, status: user.status })) {
       const reason = role === "SUPERVISOR" ? "Supervisor não possui permissão para editar cadastros." : "Você não tem permissão para editar dados operacionais.";
@@ -506,6 +513,9 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     const nextUserStatus = normalizeUserStatus(input.userStatus);
     const nextWbLogin = clean(input.wbLogin);
     const nextRoleTitle = input.roleTitle === undefined ? undefined : normalizeJobTitle(input.roleTitle);
+    if (!canAssignSecurityJobTitle(user.role.name, employee.roleTitle, nextRoleTitle)) {
+      return createPermissionError("Apenas Admin pode atribuir ou remover o cargo Financeiro, pois ele concede acesso a pagamentos.");
+    }
     const nextStatus = clean(input.operationalStatus);
     const inferredUserStatus = canEditPeopleData && nextStatus ? userStatusFromOperationalStatus(nextStatus) : undefined;
     const nextRoleName = clean(input.roleName);
@@ -610,7 +620,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     if (nextRoleName) {
       if (!actorCanManageRoles) return createPermissionError("Apenas Admin pode alterar role/permissão de sistema.");
       const activeAdmins = await prisma.user.count({ where: { status: "ACTIVE", deletedAt: null, role: { name: "ADMIN" } } });
-      if (employee.userId && employee.userId === user.id && employee.user?.role?.name === "ADMIN" && nextRoleName !== "ADMIN" && activeAdmins <= 1) {
+      if (employee.userId && employee.user?.role?.name === "ADMIN" && nextRoleName !== "ADMIN" && activeAdmins <= 1) {
         return createPermissionError("Não é permitido remover o único Admin ativo.");
       }
       const targetRole = await prisma.role.findUnique({ where: { name: nextRoleName } });
@@ -618,7 +628,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
       targetRoleId = targetRole.id;
     }
     if (nextUserStatus && !["ACTIVE", "INACTIVE", "BLOCKED"].includes(nextUserStatus)) return createValidationError({ userStatus: "Status de acesso inválido." });
-    if (effectiveUserStatus && employee.userId && employee.userId === user.id && employee.user?.role?.name === "ADMIN" && effectiveUserStatus !== "ACTIVE") {
+    if (effectiveUserStatus && employee.userId && employee.user?.role?.name === "ADMIN" && effectiveUserStatus !== "ACTIVE") {
       const activeAdmins = await prisma.user.count({ where: { status: "ACTIVE", deletedAt: null, role: { name: "ADMIN" }, id: { not: employee.userId } } });
       if (activeAdmins <= 0) return createPermissionError("Não é permitido inativar o único Admin ativo.");
     }
@@ -654,6 +664,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
 
     const updated = await prisma.$transaction(async (tx) => {
       if (employee.userId && (targetRoleId || nextEmail || effectiveUserStatus)) {
+        await assertActiveAdminRemains(tx, employee.userId, { roleId: targetRoleId, status: effectiveUserStatus });
         await tx.user.update({
           where: { id: employee.userId },
           data: {
@@ -809,6 +820,8 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
 export async function exportOperationalEmployeesXlsxData(actor: Actor, filters: { query?: string | null; lob?: string[] | string | null; status?: string[] | string | null; supervisorId?: string[] | string | null; shiftId?: string[] | string | null; contractType?: string[] | string | null; roleTitle?: string[] | string | null; skill?: string[] | string | null; wave?: string[] | string | null }) {
   const user = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
   if (!user) return createPermissionError("Usuário não autenticado.");
+  if (user.deletedAt) return createPermissionError("Usuário sem acesso ativo.");
+  actor = { ...actor, role: normalizeRole(user.role.name) };
   if (!canAccessEmployeeMap({ role: actor.role, status: user.status })) return createPermissionError("Você não tem permissão para exportar o Mapa de Parceiros.");
 
   const role = normalizeRole(actor.role);
@@ -875,20 +888,20 @@ export async function exportOperationalEmployeesXlsxData(actor: Actor, filters: 
 export async function resetEmployeeUserPassword(actor: Actor, input: { employeeId: string; password: string; confirmPassword: string }) {
   try {
     const admin = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
-    if (!admin) return { error: "Usuário não autenticado." };
-    if (normalizeRole(actor.role) !== "ADMIN") {
+    if (!admin || admin.status !== "ACTIVE" || admin.deletedAt) return { error: "Usuário não autenticado." };
+    if (normalizeRole(admin.role.name) !== "ADMIN") {
       const reason = normalizeRole(actor.role) === "SUPERVISOR" ? "Supervisor não possui permissão para resetar senha." : "Apenas Admin pode resetar senha.";
       await auditPermissionDenied(actor, { action: "USER_PASSWORD_RESET", entity: "User", reason, entityId: input.employeeId });
       return { error: reason };
     }
-    if (!input.password || input.password.length < 8) return { error: "A nova senha deve ter pelo menos 8 caracteres." };
+    if (!input.password || input.password.length < 8 || input.password.length > 128) return { error: "A nova senha deve ter entre 8 e 128 caracteres." };
     if (input.password !== input.confirmPassword) return { error: "A confirmação de senha não confere." };
 
     const employee = await prisma.employeeProfile.findFirst({ where: { id: input.employeeId, deletedAt: null }, include: { user: true } });
     if (!employee?.userId || !employee.user) return { error: "Este parceiro não possui usuário vinculado." };
 
-    const passwordHash = await bcrypt.hash(input.password, 10);
-    await prisma.$transaction(async (tx) => {
+    const externalStatus = await synchronizeUserPassword({ email: employee.user.email, password: input.password,
+      persistLocal: (passwordHash) => prisma.$transaction(async (tx) => {
       await tx.user.update({
         where: { id: employee.userId! },
         data: {
@@ -911,9 +924,11 @@ export async function resetEmployeeUserPassword(actor: Actor, input: { employeeI
           newValue: { passwordHash: "updated", mustChangePassword: true, temporaryPassword: true }
         }
       });
-    });
+    }) });
 
-    return { success: true, message: "Senha temporária definida. O usuário deverá alterá-la no próximo acesso." };
+    return { success: true, message: externalStatus === "LOCAL_SAVED_EXTERNAL_PENDING"
+      ? "Senha temporária definida na Central. A sincronização externa está pendente. O usuário deverá entrar novamente e alterar a senha."
+      : "Senha temporária definida. As sessões anteriores foram revogadas; o usuário deverá entrar novamente e alterar a senha." };
   } catch (error) {
     console.error("[employee] erro ao resetar senha", error);
     recordErrorLog({
@@ -931,8 +946,8 @@ export async function resetEmployeeUserPassword(actor: Actor, input: { employeeI
 export async function deleteOperationalEmployee(actor: Actor, input: EmployeeDeleteInput) {
   try {
     const admin = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
-    if (!admin) return createPermissionError("Usuário não autenticado.");
-    if (normalizeRole(actor.role) !== "ADMIN") {
+    if (!admin || admin.status !== "ACTIVE" || admin.deletedAt) return createPermissionError("Usuário não autenticado.");
+    if (normalizeRole(admin.role.name) !== "ADMIN") {
       const reason = normalizeRole(actor.role) === "SUPERVISOR" ? "Supervisor não possui permissão para editar cadastros." : "Apenas ADMIN pode excluir cadastros.";
       await auditPermissionDenied(actor, { action: "EMPLOYEE_DELETE", entity: "EmployeeProfile", reason, entityId: input.id });
       return createPermissionError(reason);
@@ -972,6 +987,7 @@ export async function deleteOperationalEmployee(actor: Actor, input: EmployeeDel
     const deletedEmail = employee.user ? buildDeletedEmail(employee.user.email, employee.user.id) : null;
 
     await prisma.$transaction(async (tx) => {
+      if (employee.userId) await assertActiveAdminRemains(tx, employee.userId, { status: "INACTIVE", deletedAt: now });
       await tx.employeeSensitiveData.deleteMany({ where: { employeeId: employee.id } });
       await tx.employeeRegistrationRequest.updateMany({
         where: { OR: [{ createdEmployeeProfileId: employee.id }, ...(employee.userId ? [{ createdUserId: employee.userId }] : [])] },

@@ -11,6 +11,13 @@ const CEC_HOURLY_SOURCE = "freshdesk-cec-cpd-hourly";
 const KIM_WEBHOOK_HOST = "kim-robot.kwaitalk.com";
 const MAX_KIM_IMAGE_BYTES = 2 * 1024 * 1024;
 
+export class CecHourlyDataUnavailableError extends Error {
+  constructor(readonly dateKey: string) {
+    super(`No real CEC hourly data is available for ${dateKey}.`);
+    this.name = "CecHourlyDataUnavailableError";
+  }
+}
+
 const cecFontRegistrations = [
   GlobalFonts.registerFromPath(
     join(process.cwd(), "node_modules", "@fontsource", "inter", "files", "inter-latin-400-normal.woff"),
@@ -194,7 +201,7 @@ export function buildCecResolvedHourlyReport(
   parseDateKey(requestedDateKey);
   const currentSnapshots = snapshots.filter((snapshot) => snapshot.cycleDownload.startsWith(`${requestedDateKey} `));
   if (!currentSnapshots.length) {
-    throw new Error(`No real CEC hourly data is available for ${requestedDateKey}.`);
+    throw new CecHourlyDataUnavailableError(requestedDateKey);
   }
 
   const updatedThroughHour = Math.max(...currentSnapshots.map((snapshot) => cycleHour(snapshot.cycleDownload)));

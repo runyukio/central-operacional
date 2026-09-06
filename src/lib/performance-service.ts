@@ -18,7 +18,7 @@ import { parseWbLoginBatch } from "@/lib/batch-wb-filter";
 import { getDefaultDatePeriod } from "@/lib/default-date-range";
 import { isPerformanceAdsQueueId, PERFORMANCE_ADS_QUEUE_IDS } from "@/lib/performance-ads-queues";
 import { buildPerformanceAgentsExportPayload } from "@/lib/performance-agents-export";
-import { realtimeHourlyInputFallbackRows } from "@/lib/performance-hourly-input-source";
+import { needsRealtimeHourlyInputFallback, realtimeHourlyInputFallbackRows } from "@/lib/performance-hourly-input-source";
 import { prisma } from "@/lib/prisma";
 import { QUEUE_METADATA, type QueueLob, type QueueMetadata } from "@/lib/queue-metadata";
 import { QUEUE_REPORT_METADATA, getQueueReportMetadataById } from "@/lib/queue-report-metadata";
@@ -592,6 +592,7 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
   ]);
   const trendMap = new Map<string, ProductionDashboardAggregate>();
   const importedInputBuckets = new Set<string>();
+  let realtimeFallbackWarning = "";
   const queueMap = new Map<string, ProductionDashboardQueueAggregate & { agentCount: number }>();
 
   for (const row of productionTrendRows) {
@@ -609,11 +610,19 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
     aggregate.input += Number(row.input ?? 0);
     aggregate.records += Number(row.records ?? 0);
   }
-  if (requestedLob === "ADS" && granularity === "hourly") {
-    const realtimeHourlyInput = await realtimeAdsHourlyInput(productionPeriod);
-    for (const row of realtimeHourlyInputFallbackRows(importedInputBuckets, realtimeHourlyInput)) {
-      const aggregate = ensureProductionAggregate(trendMap, row.key);
-      aggregate.input = row.input;
+  if (requestedLob === "ADS" && granularity === "hourly"
+    && needsRealtimeHourlyInputFallback(importedInputBuckets, productionPeriod.start, productionPeriod.end)) {
+    try {
+      const realtimeHourlyInput = await realtimeAdsHourlyInput(productionPeriod);
+      for (const row of realtimeHourlyInputFallbackRows(importedInputBuckets, realtimeHourlyInput)) {
+        const aggregate = ensureProductionAggregate(trendMap, row.key);
+        aggregate.input = row.input;
+      }
+    } catch (error) {
+      // Real Time supplements imported data; a transient fallback failure must
+      // not discard the valid imported dashboard or turn its metrics into zero.
+      console.warn("[performance] Real Time hourly fallback unavailable", error instanceof Error ? error.name : "DatabaseError");
+      realtimeFallbackWarning = "O complemento horário do Real Time está temporariamente indisponível. Os dados importados foram preservados; horários sem importação podem estar incompletos.";
     }
   }
   for (const row of productionQueueRows) {
@@ -675,6 +684,7 @@ export async function getPerformanceProductionDashboard(actor: Actor, query: Per
 
   return {
     mode: "production" as const,
+    realtimeFallbackWarning,
     canImport,
     granularity,
     period: periodPayload(productionPeriod),
@@ -4990,25 +5000,30 @@ async function extendProductionPeriodToLatestRealtimeAds(period: Period): Promis
   return { ...period, end: latestDate };
 }
 
-async function realtimeAdsHourlyInput(period: Period) {
+export async function realtimeAdsHourlyInput(period: Period) {
   const startCycle = `${formatDateKey(period.start)} 00:00`;
   const endCycle = `${formatDateKey(period.end)} 23:59`;
-  const rows = await prisma.realTimeQueueCycleSummary.findMany({
-    where: { lob: "ADS", cycleDownload: { gte: startCycle, lte: endCycle } },
-    orderBy: [{ cycleDownload: "asc" }, { batch: { importedAt: "asc" } }],
-    select: { cycleDownload: true, batchId: true, input: true, batch: { select: { importedAt: true } } }
-  });
-  const latestBatchByCycle = new Map<string, { batchId: string; importedAt: number }>();
-  for (const row of rows) {
-    const importedAt = row.batch.importedAt.getTime();
-    const current = latestBatchByCycle.get(row.cycleDownload);
-    if (!current || importedAt > current.importedAt) latestBatchByCycle.set(row.cycleDownload, { batchId: row.batchId, importedAt });
-  }
-  const cumulativeByCycle = new Map<string, number>();
-  for (const row of rows) {
-    if (latestBatchByCycle.get(row.cycleDownload)?.batchId !== row.batchId) continue;
-    cumulativeByCycle.set(row.cycleDownload, (cumulativeByCycle.get(row.cycleDownload) ?? 0) + row.input);
-  }
+  // One PostgreSQL statement sees a consistent snapshot of parent + children,
+  // including when retention removes a batch concurrently. Aggregate before
+  // transferring data, rather than materializing every queue from every import.
+  const rows = await prisma.$queryRaw<Array<{ cycleDownload: string; cumulative: number }>>(Prisma.sql`
+    WITH latest_batches AS (
+      SELECT DISTINCT ON (summary."cycleDownload") summary."cycleDownload", summary."batchId"
+      FROM "RealTimeQueueCycleSummary" summary
+      INNER JOIN "RealTimeImportBatch" batch ON batch."id" = summary."batchId"
+      WHERE summary."lob" = 'ADS'
+        AND summary."cycleDownload" >= ${startCycle} AND summary."cycleDownload" <= ${endCycle}
+      ORDER BY summary."cycleDownload", batch."importedAt" DESC, batch."id" DESC
+    )
+    SELECT summary."cycleDownload", SUM(summary."input")::double precision AS cumulative
+    FROM "RealTimeQueueCycleSummary" summary
+    INNER JOIN latest_batches latest ON latest."batchId" = summary."batchId"
+      AND latest."cycleDownload" = summary."cycleDownload"
+    WHERE summary."lob" = 'ADS'
+    GROUP BY summary."cycleDownload"
+    ORDER BY summary."cycleDownload" ASC
+  `);
+  const cumulativeByCycle = new Map(rows.map((row) => [row.cycleDownload, Number(row.cumulative)]));
   const latestCycleByHour = new Map<string, { cycleDownload: string; cumulative: number }>();
   for (const [cycleDownload, cumulative] of cumulativeByCycle) {
     const at = parseRealtimeCycleDate(cycleDownload);

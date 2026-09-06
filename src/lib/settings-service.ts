@@ -1,5 +1,8 @@
 import { randomUUID } from "crypto";
 import bcrypt from "bcryptjs";
+import { assertActiveAdminRemains } from "@/lib/admin-invariant";
+import { assertPasswordSyncConfigured, passwordCredentialProviders } from "@/lib/password-credentials";
+import { redactCredentialFields } from "@/lib/credential-redaction";
 import { Prisma } from "@prisma/client";
 
 import type { Actor } from "@/lib/mock-db";
@@ -339,7 +342,8 @@ async function getLimitedSystemSettings() {
 export async function updateSystemSettings(actor: Actor, action: SettingsAction) {
   try {
     const admin = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
-    if (!admin || normalizeRole(actor.role) !== "ADMIN") return { error: "Apenas Admin pode alterar configurações." };
+    if (!admin || admin.status !== "ACTIVE" || admin.deletedAt || normalizeRole(admin.role.name) !== "ADMIN") return { error: "Apenas Admin pode alterar configurações." };
+    if (action.type === "user" && text(action.password)) assertPasswordSyncConfigured();
 
     const result = await prisma.$transaction(async (tx) => {
       switch (String(action.type)) {
@@ -381,6 +385,11 @@ export async function updateSystemSettings(actor: Actor, action: SettingsAction)
     });
 
     if ("error" in result) return result;
+    if (action.type === "user" && text(action.password)) {
+      await passwordCredentialProviders.updateExternal(text(action.email).toLowerCase(), text(action.password)).catch(() => {
+        recordErrorLog({ userEmail: actor.email, code: "PASSWORD_SYNC_PENDING", message: "Senha local atualizada; sincronização externa pendente.", action: "SETTINGS_SAVE", severity: "WARNING" });
+      });
+    }
     return { success: true, ...result };
   } catch (error) {
     console.error("[settings] erro ao salvar configuração", error);
@@ -399,6 +408,7 @@ async function saveUser(tx: Prisma.TransactionClient, adminId: string, action: S
   if (!name || !email) return { error: "Nome e e-mail do usuário são obrigatórios." };
   const role = await tx.role.findUnique({ where: { name: roleName } });
   if (!role) return { error: "Role/perfil não encontrado." };
+  if (id) await assertActiveAdminRemains(tx, id, { roleId: role.id, status });
   if (status !== "ACTIVE" && id) {
     const user = await tx.user.findUnique({ where: { id }, include: { role: true } });
     if (user?.role.name === "ADMIN") {
@@ -409,7 +419,7 @@ async function saveUser(tx: Prisma.TransactionClient, adminId: string, action: S
   const duplicate = await tx.user.findFirst({ where: { email, deletedAt: null, ...(id ? { id: { not: id } } : {}) } });
   if (duplicate) return { error: "Já existe usuário ativo com este e-mail." };
   const password = text(action.password);
-  if (!id && password.length < 8) return { error: "Senha temporária deve ter pelo menos 8 caracteres." };
+  if ((!id || password) && (password.length < 8 || password.length > 128)) return { error: "Senha temporária deve ter entre 8 e 128 caracteres." };
   const passwordHash = password ? await bcrypt.hash(password, 10) : undefined;
   const before = id ? await tx.user.findUnique({ where: { id }, include: { role: true, employeeProfile: true } }) : null;
   const passwordResetData = passwordHash
@@ -422,7 +432,8 @@ async function saveUser(tx: Prisma.TransactionClient, adminId: string, action: S
     await tx.employeeProfile.update({ where: { id: employeeId }, data: { userId: user.id } });
   }
   await auditSettings(tx, adminId, id ? "EDICAO" : "CRIACAO", "User", user.id, action, before);
-  return { data: user };
+  return { data: { id: user.id, name: user.name, email: user.email, roleId: user.roleId,
+    status: user.status, mustChangePassword: user.mustChangePassword, temporaryPassword: user.temporaryPassword } };
 }
 
 async function saveRole(tx: Prisma.TransactionClient, adminId: string, action: SettingsAction) {
@@ -856,5 +867,5 @@ function statusValue(value: unknown): StatusValue | undefined {
 }
 
 function toJson(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+  return JSON.parse(JSON.stringify(redactCredentialFields(value))) as Prisma.InputJsonValue;
 }

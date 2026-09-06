@@ -43,7 +43,8 @@ import {
 
 const approvalRoles = rolesWithCapability("WORK_HOURS_EDIT");
 const toleranceMinutes = WORK_HOUR_TOLERANCE_MINUTES;
-const workHourExportLimit = 10000;
+const workHourExportBatchSize = 500;
+const workHourExportMaxRows = 100_000;
 const pendingWorkHourAdjustmentStatuses: WorkHourAdjustmentStatus[] = ["ABERTO", "EM_ANALISE"];
 const inactiveEmployeeStatusLabels = [
   "Inativo",
@@ -62,6 +63,23 @@ const inactiveEmployeeStatusLabels = [
   "SUSPENDED"
 ];
 const inactiveEmployeeStatusTokens = new Set(inactiveEmployeeStatusLabels.map((status) => normalizeStatusToken(status)));
+
+const workHourReadInclude = {
+  employee: { select: {
+    id: true, fullName: true, wbLogin: true, operationalStatus: true, roleTitle: true,
+    lob: { select: { name: true } }, shift: { select: { name: true } },
+    supervisor: { select: { id: true, fullName: true, wbLogin: true } }
+  } },
+  adjustments: { orderBy: { createdAt: "desc" }, take: 1, select: {
+    id: true, status: true, currentActualHours: true, requestedActualHours: true,
+    requestedById: true, reason: true, justification: true, rejectionReason: true,
+    rejectedAt: true, createdAt: true,
+    requestedBy: { select: { name: true } }, rejectedBy: { select: { name: true } }
+  } },
+  schedule: { select: { status: true, startsAt: true, endsAt: true } }
+} satisfies Prisma.WorkHourRecordInclude;
+
+export const workHourReadData = { capturedHours: getRealtimeHoursShiftActivityHours };
 
 type UserWithRole = Prisma.UserGetPayload<{ include: { role: true; employeeProfile: true } }>;
 type WorkHourRecordViewer = {
@@ -178,8 +196,7 @@ export async function listOperationalWorkHours(actor: Actor, query: WorkHourQuer
     const period = resolvePeriod(query);
     const page = Math.max(1, Number(query.page) || 1);
     const requestedLimit = Number(query.limit) || 50;
-    const maxLimit = requestedLimit > 100 ? workHourExportLimit : 100;
-    const limit = Math.min(maxLimit, Math.max(10, requestedLimit));
+    const limit = Math.min(100, Math.max(10, requestedLimit));
     const where = buildRecordWhere(user, query, period);
 
     const [records, total] = await prisma.$transaction([
@@ -188,46 +205,14 @@ export async function listOperationalWorkHours(actor: Actor, query: WorkHourQuer
         orderBy: [{ date: "desc" }, { employee: { fullName: "asc" } }],
         skip: (page - 1) * limit,
         take: limit,
-        include: {
-          employee: {
-            select: {
-              id: true,
-              fullName: true,
-              wbLogin: true,
-              operationalStatus: true,
-              roleTitle: true,
-              lob: { select: { name: true } },
-              shift: { select: { name: true } },
-              supervisor: { select: { id: true, fullName: true, wbLogin: true } }
-            }
-          },
-          adjustments: {
-            orderBy: { createdAt: "desc" },
-            take: 1,
-            select: {
-              id: true,
-              status: true,
-              currentActualHours: true,
-              requestedActualHours: true,
-              requestedById: true,
-              reason: true,
-              justification: true,
-              rejectionReason: true,
-              rejectedAt: true,
-              createdAt: true,
-              requestedBy: { select: { name: true } },
-              rejectedBy: { select: { name: true } }
-            }
-          },
-          schedule: { select: { status: true, startsAt: true, endsAt: true } }
-        }
+        include: workHourReadInclude
       }),
       prisma.workHourRecord.count({ where })
     ]);
 
     const [summary, capturedHoursByRecordId] = await Promise.all([
       getWorkHoursSummary(where),
-      getRealtimeHoursShiftActivityHours(records.map((record) => ({
+      workHourReadData.capturedHours(records.map((record) => ({
         key: record.id,
         employeeId: record.employeeId,
         wbLogin: record.wbLogin,
@@ -839,8 +824,36 @@ export async function exportOperationalWorkHoursXlsxData(actor: Actor, query: Wo
   if (!user || !canViewWorkHours({ role: user.role.name, status: user.status })) return createPermissionError("Você não tem permissão para exportar horas.");
 
   const period = resolvePeriod(query);
-  const result = await listOperationalWorkHours(actor, { ...query, page: 1, limit: workHourExportLimit });
-  if ("error" in result) return result;
+  const where = buildRecordWhere(user, query, period);
+  // XLSX serialization is in-memory; refuse oversize files explicitly, never truncate.
+  const expectedRows = await prisma.workHourRecord.count({ where });
+  if (expectedRows > workHourExportMaxRows) {
+    return { error: `A seleção contém ${expectedRows} registros. Divida o período em exportações de até ${workHourExportMaxRows} registros.`, status: 413 };
+  }
+  const data: ReturnType<typeof formatWorkHourRecord>[] = [];
+  let afterId: string | undefined;
+  const exportStartedAt = new Date();
+  while (true) {
+    const records = await prisma.workHourRecord.findMany({
+      where: { AND: [where, { createdAt: { lte: exportStartedAt } }, ...(afterId ? [{ id: { gt: afterId } }] : [])] },
+      orderBy: { id: "asc" }, take: workHourExportBatchSize, include: workHourReadInclude
+    });
+    if (!records.length) break;
+    const capturedHours = await workHourReadData.capturedHours(records.map((record) => ({
+      key: record.id, employeeId: record.employeeId, wbLogin: record.wbLogin, shiftDate: record.date
+    })));
+    data.push(...records.map((record) => formatWorkHourRecord(record, toWorkHourRecordViewer(user), capturedHours.get(record.id) ?? 0)));
+    if (data.length > workHourExportMaxRows) {
+      return { error: "A seleção excedeu o limite seguro de exportação. Divida o período e tente novamente.", status: 413 };
+    }
+    afterId = records.at(-1)!.id;
+    if (records.length < workHourExportBatchSize) break;
+  }
+  // Reject a changing result set rather than silently deliver an incomplete workbook.
+  if (data.length !== expectedRows) {
+    return { error: "Os registros mudaram durante a exportação. Atualize os dados e tente novamente.", status: 409 };
+  }
+  data.sort((left, right) => right.date.localeCompare(left.date) || left.employeeName.localeCompare(right.employeeName));
   const headers = [
     "data",
     "nome",
@@ -861,7 +874,7 @@ export async function exportOperationalWorkHoursXlsxData(actor: Actor, query: Wo
     "solicitado_por",
     "solicitado_em"
   ];
-  const rows = result.data.map((row) => [
+  const rows = data.map((row) => [
     row.date,
     row.employeeName,
     row.wbLogin,
@@ -888,7 +901,7 @@ export async function exportOperationalWorkHoursXlsxData(actor: Actor, query: Wo
       action: AuditAction.UPLOAD,
       entity: "WorkHourRecord",
       reason: "Exportação XLSX de horas operacionais",
-      newValue: { filters: query, exportedRows: result.data.length }
+      newValue: { filters: query, exportedRows: data.length }
     }
   }).catch(() => undefined);
 
@@ -1206,48 +1219,57 @@ function normalizeStatusToken(value: unknown) {
 }
 
 async function getWorkHoursSummary(where: Prisma.WorkHourRecordWhereInput) {
-  const productiveWhere: Prisma.WorkHourRecordWhereInput = { AND: [where, { status: { not: "NO_SCHEDULE" } }] };
-  const okWhere: Prisma.WorkHourRecordWhereInput = {
-    AND: [productiveWhere, { differenceMinutes: { gte: -toleranceMinutes, lte: toleranceMinutes } }]
-  };
-  const divergentWhere: Prisma.WorkHourRecordWhereInput = {
-    AND: [productiveWhere, { OR: [{ differenceMinutes: { lt: -toleranceMinutes } }, { differenceMinutes: { gt: toleranceMinutes } }] }]
-  };
-  const [totals, okRecords, divergentRecords, overtime, pending, noScheduleRecords, adjustments] = await Promise.all([
-    prisma.workHourRecord.aggregate({
-      where: productiveWhere,
+  const [groups, adjustments] = await Promise.all([
+    prisma.workHourRecord.groupBy({
+      by: ["status", "differenceMinutes"],
+      where,
       _count: { _all: true },
       _sum: { effectiveHours: true, adjustedHours: true }
     }),
-    prisma.workHourRecord.count({ where: okWhere }),
-    prisma.workHourRecord.count({ where: divergentWhere }),
-    prisma.workHourRecord.aggregate({
-      where: { AND: [productiveWhere, { differenceMinutes: { gt: 0 } }] },
-      _sum: { differenceMinutes: true }
-    }),
-    prisma.workHourRecord.aggregate({
-      where: { AND: [productiveWhere, { differenceMinutes: { lt: 0 } }] },
-      _sum: { differenceMinutes: true }
-    }),
-    prisma.workHourRecord.count({ where: { AND: [where, { status: "NO_SCHEDULE" }] } }),
     prisma.workHourAdjustmentRequest.groupBy({ by: ["status"], where: { record: { is: where } }, _count: { _all: true } }).catch(() => [])
   ]);
+  return summarizeWorkHourGroups(groups, adjustments);
+}
+
+export function summarizeWorkHourGroups(groups: Array<{
+  status: string; differenceMinutes: number | null;
+  _count: { _all: number }; _sum: { effectiveHours: number | null; adjustedHours: number | null };
+}>, adjustments: Array<{ status: WorkHourAdjustmentStatus; _count: { _all: number } }>) {
+  let productiveCount = 0;
+  let effectiveHours = 0;
+  let adjustedHours = 0;
+  let okRecords = 0;
+  let divergentRecords = 0;
+  let noScheduleRecords = 0;
+  let overtimeMinutes = 0;
+  let pendingMinutes = 0;
+  for (const group of groups) {
+    const count = group._count._all;
+    if (group.status === "NO_SCHEDULE") { noScheduleRecords += count; continue; }
+    productiveCount += count;
+    effectiveHours += Number(group._sum.effectiveHours ?? 0);
+    adjustedHours += Number(group._sum.adjustedHours ?? 0);
+    if (group.differenceMinutes === null) continue;
+    if (Math.abs(group.differenceMinutes) <= toleranceMinutes) okRecords += count;
+    else divergentRecords += count;
+    if (group.differenceMinutes > 0) overtimeMinutes += group.differenceMinutes * count;
+    if (group.differenceMinutes < 0) pendingMinutes += group.differenceMinutes * count;
+  }
   const adjustmentCount = (status: WorkHourAdjustmentStatus) => adjustments.find((item) => item.status === status)?._count._all ?? 0;
-  const plannedHours = (totals._count._all ?? 0) * DEFAULT_PRODUCTIVE_HOURS;
-  const effectiveHours = Number(totals._sum.effectiveHours ?? 0);
+  const plannedHours = productiveCount * DEFAULT_PRODUCTIVE_HOURS;
   return {
     plannedHours: roundHours(plannedHours),
     actualHours: roundHours(effectiveHours),
     differenceHours: roundHours(effectiveHours - plannedHours),
     okRecords,
     divergentRecords,
-    overtimeHours: roundHours(Number(overtime._sum.differenceMinutes ?? 0) / 60),
-    pendingHours: roundHours(Math.abs(Number(pending._sum.differenceMinutes ?? 0)) / 60),
+    overtimeHours: roundHours(overtimeMinutes / 60),
+    pendingHours: roundHours(Math.abs(pendingMinutes) / 60),
     noScheduleRecords,
     pendingAdjustments: adjustmentCount("ABERTO") + adjustmentCount("EM_ANALISE"),
     approvedAdjustments: adjustmentCount("APROVADO"),
     rejectedAdjustments: adjustmentCount("RECUSADO"),
-    adjustedHours: roundHours(Number(totals._sum.adjustedHours ?? 0))
+    adjustedHours: roundHours(adjustedHours)
   };
 }
 

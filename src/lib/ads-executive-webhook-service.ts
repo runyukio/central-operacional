@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { unstable_cache } from "next/cache";
 
 import {
   buildAdsBacklogHourlyReportSnapshot,
@@ -21,6 +22,7 @@ import {
   type OnlineProductivityReportScope
 } from "@/lib/ads-online-productivity-report-core";
 import { renderAdsOnlineProductivityReportPng } from "@/lib/ads-online-productivity-report-image";
+import { onlineProductivityPageDelivery, paginateOnlineProductivityReport } from "@/lib/online-productivity-report-pages";
 import { calculateForecastModelWeights, predictForecastHour, type ForecastActual } from "@/lib/performance-forecast-core";
 import { prisma } from "@/lib/prisma";
 import { QUEUE_METADATA } from "@/lib/queue-metadata";
@@ -111,6 +113,8 @@ export type AdsExecutiveWebhookResult = {
   bytes: number;
   status: number | null;
   message: string;
+  pageCount?: number;
+  fileNames?: string[];
 };
 
 export async function sendLatestAdsExecutiveReport(): Promise<AdsExecutiveWebhookResult> {
@@ -160,42 +164,63 @@ async function sendLatestOnlineProductivityReport(config: OnlineProductivityWebh
   const report = config.reportScope === "ADS"
     ? buildAdsOnlineProductivityReportSnapshot(reportInput)
     : buildTnsOnlineProductivityReportSnapshot(reportInput);
-  const image = await renderAdsOnlineProductivityReportPng(report);
-  const fileName = `${config.filePrefix}_${safeFilePart(selectedCycle)}.png`;
-  const idempotencyKey = `${config.idempotencyPrefix}:${selectedCycle}`;
+  const pages = paginateOnlineProductivityReport(report);
+  const baseFileName = `${config.filePrefix}_${safeFilePart(selectedCycle)}.png`;
+  const baseIdempotencyKey = `${config.idempotencyPrefix}:${selectedCycle}`;
   const mode = resolvePayloadMode(config.webhookConfig);
-  const imageUrl = mode === "kwaitalk"
-    ? await publishKwaiTalkImage(image, fileName, selectedCycle, config.storagePath)
-    : null;
-  const response = await postWebhook({
-    url: webhookUrl,
-    image,
-    fileName,
-    idempotencyKey,
-    mode,
-    token: resolveWebhookToken(config.webhookConfig),
-    imageUrl,
-    lob: config.webhookConfig.lob,
-    reportTitle: config.reportTitle,
-    reportType: config.reportType,
-    timeoutMs: resolveTimeoutMs(config.webhookConfig),
-    metadata: {
-      reportType: config.reportType,
-      selectedCycle,
-      date: report.dateKey,
-      generatedAt: new Date().toISOString(),
-      contentType: "image/png"
+  const fileNames: string[] = [];
+  let bytes = 0;
+  let status: number | null = null;
+  // Render, upload, and send one bounded image at a time. Do not retain every PNG.
+  for (const page of pages) {
+    const { fileName, idempotencyKey } = onlineProductivityPageDelivery(baseFileName, baseIdempotencyKey, page);
+    try {
+      const image = await renderAdsOnlineProductivityReportPng(page.report, page);
+      const imageUrl = mode === "kwaitalk"
+        ? await publishKwaiTalkImage(image, fileName, selectedCycle, config.storagePath)
+        : null;
+      const response = await postWebhook({
+        url: webhookUrl,
+        image,
+        fileName,
+        idempotencyKey,
+        mode,
+        token: resolveWebhookToken(config.webhookConfig),
+        imageUrl,
+        lob: config.webhookConfig.lob,
+        reportTitle: pages.length > 1 ? `${config.reportTitle} (${page.pageNumber}/${page.pageCount})` : config.reportTitle,
+        reportType: config.reportType,
+        timeoutMs: resolveTimeoutMs(config.webhookConfig),
+        metadata: {
+          reportType: config.reportType,
+          selectedCycle,
+          date: report.dateKey,
+          generatedAt: new Date().toISOString(),
+          contentType: "image/png",
+          pageNumber: String(page.pageNumber),
+          pageCount: String(page.pageCount),
+          rowOffset: String(page.rowOffset),
+          totalRows: String(page.totalRows)
+        }
+      });
+      fileNames.push(fileName);
+      bytes += image.byteLength;
+      status = response.status;
+    } catch (error) {
+      throw new Error(`${config.reportScope} online productivity page ${page.pageNumber}/${page.pageCount} failed after ${fileNames.length} delivered page(s): ${error instanceof Error ? error.message : "Unknown delivery error"}`);
     }
-  });
+  }
 
   return {
     sent: true,
     skipped: false,
     selectedCycle,
-    fileName,
-    bytes: image.byteLength,
-    status: response.status,
-    message: `${config.reportScope} online productivity report sent to the webhook.`
+    fileName: fileNames[0],
+    fileNames,
+    pageCount: pages.length,
+    bytes,
+    status,
+    message: `${config.reportScope} online productivity report sent to the webhook${pages.length > 1 ? ` in ${pages.length} pages` : ""}.`
   };
 }
 
@@ -414,6 +439,24 @@ async function loadExecutiveForecast(lob: ExecutiveReportLob, dateKey: string): 
   if (!queueIds.length) return [];
   const dayStart = utcDate(dateKey);
   const historyStart = new Date(dayStart.getTime() - FORECAST_HISTORY_DAYS * DAY_MS);
+  // Cache only the operational aggregate, never actor-specific data. Any import,
+  // correction or deletion in the source window changes this version immediately.
+  const [source] = await prisma.$queryRaw<Array<{ rows: string; updated: string | null; input: string }>>(Prisma.sql`
+    SELECT COUNT(*)::text AS "rows", MAX("updatedAt")::text AS "updated",
+      COALESCE(SUM("inputCount"), 0)::text AS "input"
+    FROM "PerformanceQueueVolumeRecord"
+    WHERE "queueId" IN (${Prisma.join(queueIds)}) AND "bzTime" >= ${historyStart} AND "bzTime" < ${dayStart}
+  `);
+  const version = createHash("sha256").update(JSON.stringify({ source, queueIds: [...queueIds].sort() })).digest("hex");
+  return unstable_cache(
+    () => calculateExecutiveForecast(dateKey, queueIds, historyStart, dayStart),
+    // Bump the model version when changing performance-forecast-core formulas.
+    ["executive-hourly-forecast-v1", lob, dateKey, version],
+    { revalidate: 24 * 60 * 60 }
+  )();
+}
+
+async function calculateExecutiveForecast(dateKey: string, queueIds: string[], historyStart: Date, dayStart: Date): Promise<AdsExecutiveForecastPoint[]> {
   const rows = await prisma.$queryRaw<Array<{ at: Date; input: number }>>(Prisma.sql`
     SELECT
       date_trunc('hour', "bzTime") AS "at",

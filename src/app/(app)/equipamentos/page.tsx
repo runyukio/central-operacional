@@ -1,7 +1,7 @@
 import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 
-import { EquipmentPage } from "@/components/modules";
+import { EquipmentPage } from "@/components/modules/equipment-page";
 import { authOptions } from "@/lib/auth-options";
 import { canAccessEquipment } from "@/lib/permissions";
 

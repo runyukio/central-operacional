@@ -26,7 +26,9 @@ export async function GET(request: Request) {
     noScheduleOnly: url.searchParams.get("noScheduleOnly") === "true"
   });
 
-  if (!("headers" in result)) return NextResponse.json(result, { status: errorStatus(result as any) });
+  if (!("headers" in result) || !result.headers) {
+    return NextResponse.json(result, { status: "status" in result && typeof result.status === "number" ? result.status : errorStatus(result as any) });
+  }
 
   return buildXlsxResponse(result);
 }
