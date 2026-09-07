@@ -89,7 +89,7 @@ test("Performance displays a fallback warning only in hourly queue or forecast v
     ["forecast", "monthly", "forecast incomplete"],
     ["agents", "hourly", undefined],
     ["quality", "hourly", undefined],
-    ["wfh", "hourly", undefined]
+    ["supervisors", "hourly", undefined]
   ]) {
     const warning = await runFunction(expression, {
       activeTab, queueGranularity,
@@ -101,6 +101,30 @@ test("Performance displays a fallback warning only in hourly queue or forecast v
   assert.equal(await runFunction(expression, {
     activeTab: "queue", queueGranularity: "hourly", queuePayload: null, forecastPayload: null
   })(), undefined);
+});
+
+test("Performance keeps its five remaining tabs without loading or rendering WFH", () => {
+  const { source, declaration } = componentSource("PerformanceAutomationPage");
+  const labels: string[] = [];
+  function visit(node: ts.Node) {
+    if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(source) === "TabButton") {
+      const label = node.attributes.properties.find((attribute): attribute is ts.JsxAttribute =>
+        ts.isJsxAttribute(attribute) && attribute.name.getText(source) === "label"
+      );
+      assert.ok(label?.initializer && ts.isStringLiteral(label.initializer));
+      labels.push(label.initializer.text);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(declaration);
+  assert.deepEqual(labels, ["Dados de fila", "Agentes", "Supervisores", "Forecast", "Qualidade"]);
+  assert.doesNotMatch(source.getFullText(), /PerformanceWfhPanel|performance-wfh-panel|["']wfh["']/);
+  const route = readFileSync(path.join(process.cwd(), "src/app/(app)/performance/page.tsx"), "utf8");
+  assert.match(route, /<PerformanceAutomationPage\s*\/>/);
+  assert.doesNotMatch(route, /initialTab|["']wfh["']/);
+  assert.match(declaration.getText(source), /useState<PerformanceTab>\("queue"\)/);
+  const profile = readFileSync(path.join(process.cwd(), "src/components/employee-profile-page.tsx"), "utf8");
+  assert.doesNotMatch(profile, /view=wfh/);
 });
 
 test("Performance keeps successful imported data when its Real Time fallback carries a warning", async () => {

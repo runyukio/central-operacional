@@ -555,7 +555,7 @@ function buildProfileActionLinks(data: ProfilePayload["data"]) {
       : `/horas-operacionais?employeeId=${employeeId}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`,
     performance: ownProfile
       ? `/performance?view=mine&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`
-      : `/performance?view=wfh&employeeId=${employeeId}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`,
+      : `/performance?employeeId=${employeeId}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`,
     requests: `/esteiras?employeeId=${employeeId}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`,
     equipment: `/equipamentos?responsibleId=${employeeId}`,
     invoice: `/meu-perfil/invoice?referenceMonth=${encodeURIComponent(data.billing?.referenceMonth ?? referenceMonth)}`
