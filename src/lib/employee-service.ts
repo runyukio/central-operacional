@@ -663,7 +663,7 @@ export async function updateOperationalEmployee(actor: Actor, input: EmployeeAdm
     }
 
     const updated = await prisma.$transaction(async (tx) => {
-      if (employee.userId && (targetRoleId || nextEmail || effectiveUserStatus)) {
+      if (employee.userId && (targetRoleId || nextEmail || nextFullName || effectiveUserStatus)) {
         await assertActiveAdminRemains(tx, employee.userId, { roleId: targetRoleId, status: effectiveUserStatus });
         await tx.user.update({
           where: { id: employee.userId },
