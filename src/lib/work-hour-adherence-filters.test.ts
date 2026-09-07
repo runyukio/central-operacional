@@ -1,9 +1,27 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { adherenceFilterQuery, filterWorkHourAdherenceRows, groupWorkHourAdherenceByDay, initialAdherenceFilters } from "./work-hour-adherence-filters";
+import { adherenceFilterQuery, filterWorkHourAdherenceRows, groupWorkHourAdherenceByDay, initialAdherenceFilters, reconcileAdherenceFilters } from "./work-hour-adherence-filters";
 
 const period = { startDate: "2026-09-01", endDate: "2026-09-05" };
 const row = { id: "a", date: "2026-09-03", lob: "ADS", supervisorId: "sup-a", shift: "Noite", employeeId: "a", employeeName: "Ana", status: "Pendente" };
+
+test("data/LOB reconciliam seleções inválidas sem fixar nomes de supervisores",()=>{
+  const filters={...initialAdherenceFilters(period),lob:"ADS",supervisorId:"sup-a",shift:"Noite"};
+  const options={lobs:["ADS","CEC"],supervisors:[{id:"sup-a",name:"Nome dinâmico"}],shifts:["Noite"]};
+  assert.deepEqual(reconcileAdherenceFilters(filters,options),filters);
+  assert.equal(reconcileAdherenceFilters(filters,{...options,supervisors:[]}).supervisorId,"Todos");
+  const reset=reconcileAdherenceFilters(filters,{lobs:["CEC"],supervisors:[],shifts:["Manhã"]});
+  assert.equal(reset.lob,"Todos");assert.equal(reset.supervisorId,"Todos");assert.equal(reset.shift,"Todos");
+  assert.equal(reconcileAdherenceFilters({...filters,lob:"Todos"},options).supervisorId,"Todos");
+});
+
+test("pesquisa combina nome/WB e todos os demais filtros",()=>{
+  const rows=[{...row,wbLogin:"wb_ana"},{...row,id:"b",employeeName:"Bia",wbLogin:"wb_bia"}];
+  assert.deepEqual(filterWorkHourAdherenceRows(rows,{...initialAdherenceFilters(period),collaborator:"  WB_ANA  ",lob:"ADS"}).map(r=>r.id),["a"]);
+  assert.deepEqual(filterWorkHourAdherenceRows(rows,{collaborator:"ANA",justificationStatus:"Justificados"}),[]);
+  assert.equal(new URLSearchParams(adherenceFilterQuery({collaborator:"wb_ana"})).get("collaborator"),"wb_ana");
+  assert.equal(new URLSearchParams(adherenceFilterQuery({collaborator:"Todos"})).get("collaborator"),"Todos");
+});
 
 test("todos os filtros de justificativa são combinados, incluindo datas, parceiro e status", () => {
   const rows = [row,

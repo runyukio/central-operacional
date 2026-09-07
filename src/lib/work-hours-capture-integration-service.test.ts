@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { prisma } from "./prisma";
-import { answerWorkHourAdherenceJustification, applyCaptureWorkHourDivergenceDecisions, captureWorkHoursData, commitCaptureWorkHoursImport, exportWorkHourAdherenceJustifications, listCaptureWorkHourDivergences, listWorkHourAdherenceJustifications, previewCaptureWorkHoursImport } from "./work-hours-capture-integration-service";
+import { answerWorkHourAdherenceJustification, applyCaptureWorkHourDivergenceDecisions, captureWorkHoursData, commitCaptureWorkHoursImport, exportWorkHourAdherenceJustifications, getWorkHourAdherenceFilterOptions, listCaptureWorkHourDivergences, listWorkHourAdherenceJustifications, previewCaptureWorkHoursImport } from "./work-hours-capture-integration-service";
 import { deleteWorkHourRecord, upsertManualWorkHourRecord } from "./work-hours-service";
 import { cancelAdherenceForDeletedWorkHours } from "./work-hours-adherence-cleanup";
 import { buildXlsxResponse } from "./xlsx-export";
@@ -63,6 +63,8 @@ function fixture(t: TestContext, seed: Record<string, Row[]> = {}) {
         if ("in" in expected) return expected.in.includes(value);
         if ("notIn" in expected) return !expected.notIn.includes(value);
         if ("not" in expected) return value !== expected.not;
+        if ("lt" in expected) return value < expected.lt;
+        if ("contains" in expected) return String(value ?? "").toLowerCase().includes(String(expected.contains).toLowerCase());
         if ("gte" in expected || "lte" in expected) return (!expected.gte || value >= expected.gte) && (!expected.lte || value <= expected.lte);
         return matches(value ?? {}, expected);
       }
@@ -76,7 +78,11 @@ function fixture(t: TestContext, seed: Record<string, Row[]> = {}) {
       const impl = async (args: any = {}) => {
         calls.push({ model, op, args: clone(args) });
         const found = state[model].filter((row) => matches(hydrate(model, row), args.where));
-        if (op === "findMany") return found.map((row) => hydrate(model, row));
+        if (op === "findMany") {
+          const result = found.map((row) => hydrate(model, row));
+          if (args.take && model === "workHourAdherenceJustification") result.sort((a,b) => +b.date - +a.date || b.id.localeCompare(a.id));
+          return args.take ? result.slice(0, args.take) : result;
+        }
         if (op === "findUnique" || op === "findFirst") return found[0] ? hydrate(model, found[0]) : null;
         if (op === "findUniqueOrThrow") { if (!found[0]) throw new Error(`Missing ${model}`); return hydrate(model, found[0]); }
         if (op === "delete") { state[model] = state[model].filter((row) => row !== found[0]); return found[0]; }
@@ -350,6 +356,70 @@ test("exportação respeita escopo do supervisor e impede acesso de agente", asy
   assert.ok("rows" in forgedSupervisor && forgedSupervisor.rows.length === 0);
   Object.assign(f.state.user[0], { role: { name: "COLABORADOR" } });
   assert.ok("error" in await exportWorkHourAdherenceJustifications(actor, { startDate: day, endDate: day }));
+});
+
+test("paginação real aplica os mesmos filtros e elegibilidade do export sem mudar dados", async (t) => {
+  const profiles = [employee(), employee("other"), employee("staff", { roleTitle: "Staff" }), employee("future", { goLiveDate: new Date("2026-09-04") })];
+  const f=fixture(t, {employeeProfile: profiles,
+    workHourRecord: profiles.map(p=>({id:`h-${p.id}`,employeeId:p.id,date})),
+    workHourAdherenceJustification: Array.from({length: 120},(_,i)=>adherence(String(i).padStart(3,"0"),i%5===0?"staff":i%7===0?"future":"agent",{supervisorId:"sup",status:i%3===0?"JUSTIFIED":"PENDING"}))
+  });
+  const before=clone(f.state);
+  const filters={startDate:day,endDate:day,lob:"ADS",shift:"Noite",supervisorId:"sup",justificationStatus:"Pendentes",collaborator:"WB_AGENT"};
+  const all=await listWorkHourAdherenceJustifications(actor,filters);
+  assert.ok("data" in all); if (!("data" in all))return;
+  const ids:string[]=[];let cursor:string|undefined;
+  for(let n=0;n<20;n++){
+    const result=await listWorkHourAdherenceJustifications(actor,filters,{limit:7,cursor});
+    assert.ok("pagination" in result);if (!("pagination" in result))return;
+    ids.push(...result.data.map(r=>r.id));
+    if(!result.pagination.hasMore)break;cursor=result.pagination.nextCursor!;
+  }
+  assert.deepEqual(ids.sort(),all.data.map(r=>r.id).sort());assert.equal(new Set(ids).size,ids.length);
+  assert.ok(f.calls.filter(c=>c.model==="workHourAdherenceJustification"&&c.args.take).every(c=>c.args.take===50&&c.args.skip===undefined));
+  assert.deepEqual(f.state,before);assert.equal(mutations(f.calls).length,0);
+  assert.ok("error" in await listWorkHourAdherenceJustifications(actor,filters,{cursor:"invalid"}));
+});
+
+test("página mantém escopo do supervisor mesmo com supervisorId forjado", async (t)=>{
+  const f=fixture(t,{employeeProfile:[employee()],workHourRecord:[{id:"h",employeeId:"agent",date}],
+    workHourAdherenceJustification:[adherence("mine","agent",{supervisorId:"mine"}),adherence("theirs","agent",{supervisorId:"theirs"})]});
+  Object.assign(f.state.user[0],{role:{name:"SUPERVISOR"},employeeProfile:{id:"mine"}});
+  const valid=await listWorkHourAdherenceJustifications(actor,{startDate:day,endDate:day},{limit:1});
+  assert.ok("data" in valid&&valid.data.length===1&&valid.data[0].id==="mine");
+  const forged=await listWorkHourAdherenceJustifications(actor,{startDate:day,endDate:day,supervisorId:"theirs"},{limit:1});
+  assert.ok("data" in forged&&forged.data.length===0);
+  Object.assign(f.state.user[0],{role:{name:"COLABORADOR"}});
+  assert.ok("error" in await listWorkHourAdherenceJustifications(actor,{startDate:day,endDate:day},{limit:1}));
+});
+
+test("opções vêm de grupos agregados do período e LOB, com a mesma elegibilidade", async(t)=>{
+  const f=fixture(t,{employeeProfile:[employee(),employee("cec",{lob:{name:"CEC"},shift:{name:"Manhã"}}),
+    employee("future",{goLiveDate:new Date("2026-09-04")}),employee("staff",{roleTitle:"Staff"})]});
+  const groups=[{employeeId:"agent",lob:"ADS",supervisorId:"a",supervisor:"Supervisor A",scheduleStatus:null,lastDate:date},
+    {employeeId:"cec",lob:"CEC",supervisorId:"b",supervisor:"Supervisor B",scheduleStatus:null,lastDate:date},
+    {employeeId:"future",lob:"FUTURE",supervisorId:"c",supervisor:"Future",scheduleStatus:null,lastDate:date},
+    {employeeId:"staff",lob:"STAFF",supervisorId:"d",supervisor:"Staff",scheduleStatus:null,lastDate:date},
+    {employeeId:"agent",lob:"NESTING",supervisorId:"e",supervisor:"Nesting",scheduleStatus:"NESTING",lastDate:date}];
+  const queries:any[]=[];
+  t.mock.method(prisma,"$queryRaw",(async(query:any)=>{queries.push(query);return groups;}) as any);
+  const all=await getWorkHourAdherenceFilterOptions(actor,{startDate:day,endDate:day});
+  assert.ok("data" in all);if (!("data" in all))return;
+  assert.deepEqual(all.data,{lobs:["ADS","CEC"],supervisors:[],shifts:["Manhã","Noite"]});
+  const ads=await getWorkHourAdherenceFilterOptions(actor,{startDate:day,endDate:day,lob:"ADS"});
+  assert.ok("data" in ads&&ads.data.supervisors.length===1&&ads.data.supervisors[0].id==="a");
+  assert.ok("data" in ads&&ads.data.shifts.join()==="Noite");
+  const cec=await getWorkHourAdherenceFilterOptions(actor,{startDate:day,endDate:day,lob:"CEC"});
+  assert.ok("data" in cec&&cec.data.supervisors[0].id==="b");
+  assert.match(queries[0].sql,/MAX\(j.date\)/);assert.match(queries[0].sql,/EXISTS[\s\S]*SELECT 1 FROM "WorkHourRecord"/);
+  assert.doesNotMatch(queries[0].sql,/j\.justification/);
+  Object.assign(f.state.user[0],{role:{name:"SUPERVISOR"},employeeProfile:{id:"scope-id"}});
+  await getWorkHourAdherenceFilterOptions(actor,{startDate:day,endDate:day,lob:"ADS"});
+  assert.match(queries.at(-1).sql,/AND j\."supervisorId" = \?/);assert.ok(queries.at(-1).values.includes("scope-id"));
+  Object.assign(f.state.user[0],{role:{name:"COLABORADOR"}});
+  const count=queries.length;
+  assert.ok("error" in await getWorkHourAdherenceFilterOptions(actor,{startDate:day,endDate:day}));assert.equal(queries.length,count);
+  assert.equal(mutations(f.calls).length,0);
 });
 
 test("nenhuma consulta da captura ou do cronograma para Staff, TI, nesting, treinamento e inativos", async (t) => {

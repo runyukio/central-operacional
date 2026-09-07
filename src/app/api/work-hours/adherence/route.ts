@@ -23,7 +23,7 @@ export async function GET(request: Request) {
     shift: url.searchParams.get("shift") ?? undefined,
     employeeStatus: url.searchParams.get("employeeStatus") ?? undefined,
     collaborator: url.searchParams.get("collaborator") ?? undefined
-  });
+  }, { cursor: url.searchParams.get("cursor") ?? undefined, limit: 50 });
   if ("error" in result) return NextResponse.json(result, { status: errorStatus(result as any) });
   return NextResponse.json(result);
 }

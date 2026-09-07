@@ -3,14 +3,14 @@
 import { createClientRequestGate } from "@/lib/client-request-gate";
 
 import Link from "next/link";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import { AlertTriangle, CheckCircle2, Clock, ClipboardList, Download, FileText, RefreshCw, Upload } from "lucide-react";
 import { CaptureShiftDateDialog } from "@/components/capture-shift-date-dialog";
 import { type CapturePeriod } from "@/lib/work-hours-capture-period";
 import { captureImportNeedsReview, processCaptureImportDays, type CaptureDayResult } from "@/lib/work-hours-capture-batch";
 import type { CaptureRegistrationWarning } from "@/lib/work-hours-capture-review";
-import { adherenceFilterQuery, filterWorkHourAdherenceRows, groupWorkHourAdherenceByDay, initialAdherenceFilters, type WorkHourAdherenceFilters } from "@/lib/work-hour-adherence-filters";
+import { WorkHourJustifications } from "@/components/work-hour-justifications";
 import { EmptyState, MetricPill, PageHeader, StatCard, StatusBadge } from "@/components/ui/primitives";
 import { canApproveWorkHourAdjustment, canEditWorkHours, canImportWorkHours, canJustifyAbsence, canRequestWorkHourAdjustment, canViewWorkHours, normalizeRole } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
@@ -51,25 +51,6 @@ type CaptureWorkHourImportPreview = {
 };
 
 
-type WorkHourAdherenceRow = {
-  id: string;
-  employeeId: string;
-  employeeName: string;
-  wbLogin: string;
-  date: string;
-  lob: string;
-  classification: string;
-  supervisor: string;
-  supervisorId: string;
-  shift: string;
-  plannedSlot: string;
-  capturedDuration: string;
-  durationSource: string;
-  status: string;
-  justification: string;
-  answeredBy: string;
-  answeredAt: string;
-};
 
 
 function WorkHourBalanceBadge({
@@ -129,17 +110,8 @@ export function WorkHoursPage() {
   const [captureProgress, setCaptureProgress] = useState("");
   const captureImportScope = useRef<{ payload: ReturnType<typeof captureImportPayload>; query: string } | null>(null);
   const [importingCapture, setImportingCapture] = useState(false);
-  const [adherenceRows, setAdherenceRows] = useState<WorkHourAdherenceRow[]>([]);
   const [activeHoursSlice, setActiveHoursSlice] = useState<"hours" | "justifications">("hours");
-  const [adherenceFilters, setAdherenceFilters] = useState(() => initialAdherenceFilters(currentOperationalMonthRange()));
-  const [appliedAdherenceFilters, setAppliedAdherenceFilters] = useState(adherenceFilters);
-  const [adherenceSelectionLabels, setAdherenceSelectionLabels] = useState({ supervisor: "Todos", partner: "Todos" });
-  const [loadingAdherence, setLoadingAdherence] = useState(false);
-  const [adherenceError, setAdherenceError] = useState("");
-  const adherenceRequestId = useRef(0);
-  const [adherenceDrafts, setAdherenceDrafts] = useState<Record<string, string>>({});
-  const [savingAdherenceId, setSavingAdherenceId] = useState("");
-  const [exportingAdherence, setExportingAdherence] = useState(false);
+  const [adherenceRevision, setAdherenceRevision] = useState(0);
   const [downloadingWorkHourTemplate, setDownloadingWorkHourTemplate] = useState(false);
   const [selectedRow, setSelectedRow] = useState<WorkHourRow | null>(null);
   const [showAdjustment, setShowAdjustment] = useState(false);
@@ -162,19 +134,6 @@ export function WorkHoursPage() {
   const canDeleteWorkHours = canEditWorkHours(permissionUser);
   const canRequestAdjustment = canRequestWorkHourAdjustment(permissionUser);
   const canViewAdherence = canJustifyAbsence(permissionUser);
-  const visibleAdherenceRows = useMemo(() => filterWorkHourAdherenceRows(adherenceRows, appliedAdherenceFilters), [adherenceRows, appliedAdherenceFilters]);
-  const adherenceDays = useMemo(() => groupWorkHourAdherenceByDay(visibleAdherenceRows), [visibleAdherenceRows]);
-  const adherenceOptions = useMemo(() => {
-    const supervisors = new Map(adherenceRows.map((row) => [row.supervisorId, row.supervisor]));
-    const partners = new Map(adherenceRows.map((row) => [row.employeeId, `${row.employeeName} · ${row.wbLogin}`]));
-    const byLabel = (a: [string, string], b: [string, string]) => a[1].localeCompare(b[1], "pt-BR");
-    return {
-      lobs: ["Todos", ...Array.from(new Set(adherenceRows.map((row) => row.lob).filter(Boolean))).sort()],
-      shifts: ["Todos", ...Array.from(new Set(adherenceRows.map((row) => row.shift).filter(Boolean))).sort()],
-      supervisors: new Map(Array.from(supervisors).sort(byLabel)),
-      partners: new Map(Array.from(partners).sort(byLabel))
-    };
-  }, [adherenceRows]);
   const employeeWorkHourStatusOptions = ["Todos", "Ativos", "Desligados/Inativos"];
   const statusOptions = ["Todos", "Hora extra", "OK", "Horas pendentes", "Sem cronograma"];
   const lobOptions = ["Todos", ...(settings?.lobs.filter((lob) => lob.status !== "INACTIVE").map((lob) => lob.name) ?? Array.from(new Set(rows.map((row) => row.lob).filter(Boolean))))];
@@ -192,10 +151,6 @@ export function WorkHoursPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    if (canViewAdherence) void loadAdherence();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canViewAdherence]);
 
   async function loadWorkHours(nextPage = pagination.page, appliedFilters = filters) {
     const request = hoursRequests.begin();
@@ -324,65 +279,8 @@ export function WorkHoursPage() {
     }
   }
 
-  async function exportAdherence() {
-    if (!canViewAdherence || exportingAdherence || loadingAdherence || adherenceError) return;
-    setExportingAdherence(true);
-    try {
-      await downloadFile(`/api/work-hours/adherence/export?${adherenceFilterQuery(appliedAdherenceFilters)}`, `justificativas_aderencia_${appliedAdherenceFilters.startDate}_${appliedAdherenceFilters.endDate}.xlsx`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Não foi possível exportar as justificativas.");
-    } finally {
-      setExportingAdherence(false);
-    }
-  }
-
-  async function loadAdherence(nextFilters: WorkHourAdherenceFilters = appliedAdherenceFilters) {
-    if (!canViewAdherence) return;
-    const requestId = ++adherenceRequestId.current;
-    if (!nextFilters.startDate || !nextFilters.endDate || nextFilters.startDate > nextFilters.endDate) {
-      setAdherenceError("Informe um período válido: a data inicial deve ser anterior ou igual à data final.");
-      setLoadingAdherence(false);
-      return;
-    }
-    setLoadingAdherence(true);
-    setAdherenceError("");
-    try {
-      // Load the authorized period once; keep dropdown options independent of the selected dimensions.
-      const query = adherenceFilterQuery({ startDate: nextFilters.startDate, endDate: nextFilters.endDate });
-      const payload = await apiJson<{ data: WorkHourAdherenceRow[] }>(`/api/work-hours/adherence?${query}`);
-      if (requestId !== adherenceRequestId.current) return;
-      setAdherenceRows(payload.data);
-      setAppliedAdherenceFilters({ ...nextFilters });
-      setAdherenceDrafts((current) => ({ ...current, ...Object.fromEntries(payload.data.map((row) => [row.id, current[row.id] ?? row.justification])) }));
-    } catch (error) {
-      if (requestId !== adherenceRequestId.current) return;
-      setAdherenceRows([]);
-      setAdherenceError(error instanceof Error ? error.message : "Não foi possível carregar as justificativas.");
-    } finally {
-      if (requestId === adherenceRequestId.current) setLoadingAdherence(false);
-    }
-  }
-
-  async function submitAdherenceJustification(row: WorkHourAdherenceRow) {
-    const justification = (adherenceDrafts[row.id] ?? "").trim();
-    if (justification.length < 5) {
-      setMessage("Informe uma justificativa de aderência com pelo menos 5 caracteres.");
-      return;
-    }
-    setSavingAdherenceId(row.id);
-    setMessage("");
-    try {
-      await apiJson("/api/work-hours/adherence", {
-        method: "POST",
-        body: JSON.stringify({ id: row.id, justification })
-      });
-      setMessage("Justificativa de aderência enviada.");
-      await loadAdherence();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Não foi possível enviar a justificativa.");
-    } finally {
-      setSavingAdherenceId("");
-    }
+  async function loadAdherence() {
+    setAdherenceRevision((revision) => revision + 1);
   }
 
   async function handleWorkHourFile(file?: File) {
@@ -668,91 +566,7 @@ export function WorkHoursPage() {
       </section>
       ) : null}
 
-      {activeHoursSlice === "justifications" && canViewAdherence ? (
-        <>
-        <section className="card mb-5 p-4" aria-label="Filtros de justificativas">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <FormInput label="Data inicial" type="date" value={adherenceFilters.startDate} onChange={(value) => setAdherenceFilters({ ...adherenceFilters, startDate: value })} />
-            <FormInput label="Data final" type="date" value={adherenceFilters.endDate} onChange={(value) => setAdherenceFilters({ ...adherenceFilters, endDate: value })} />
-            <FormSelect label="LOB" value={adherenceFilters.lob} options={Array.from(new Set([...adherenceOptions.lobs, adherenceFilters.lob]))} onChange={(value) => setAdherenceFilters({ ...adherenceFilters, lob: value })} />
-            <FormSelect label="Supervisor" value={adherenceFilters.supervisorId} options={Array.from(new Set(["Todos", ...adherenceOptions.supervisors.keys(), adherenceFilters.supervisorId]))} optionLabel={(value) => value === "Todos" ? value : adherenceOptions.supervisors.get(value) ?? adherenceSelectionLabels.supervisor} onChange={(value) => { setAdherenceFilters({ ...adherenceFilters, supervisorId: value }); setAdherenceSelectionLabels((current) => ({ ...current, supervisor: adherenceOptions.supervisors.get(value) ?? value })); }} />
-            <FormSelect label="Turno" value={adherenceFilters.shift} options={Array.from(new Set([...adherenceOptions.shifts, adherenceFilters.shift]))} onChange={(value) => setAdherenceFilters({ ...adherenceFilters, shift: value })} />
-            <FormSelect label="Parceiro" value={adherenceFilters.employeeId} options={Array.from(new Set(["Todos", ...adherenceOptions.partners.keys(), adherenceFilters.employeeId]))} optionLabel={(value) => value === "Todos" ? value : adherenceOptions.partners.get(value) ?? adherenceSelectionLabels.partner} onChange={(value) => { setAdherenceFilters({ ...adherenceFilters, employeeId: value }); setAdherenceSelectionLabels((current) => ({ ...current, partner: adherenceOptions.partners.get(value) ?? value })); }} />
-            <FormSelect label="Status da justificativa" value={adherenceFilters.justificationStatus} options={["Todos", "Pendentes", "Justificados"]} onChange={(value) => setAdherenceFilters({ ...adherenceFilters, justificationStatus: value })} />
-            <div className="flex items-end gap-2">
-              <button type="button" disabled={loadingAdherence} onClick={() => void loadAdherence(adherenceFilters)} className="h-11 flex-1 rounded-lg bg-blue-600 px-3 text-sm font-bold text-white disabled:opacity-60">{loadingAdherence ? "Carregando..." : "Filtrar"}</button>
-              <button type="button" disabled={loadingAdherence} onClick={() => { const cleared = initialAdherenceFilters(currentOperationalMonthRange()); setAdherenceFilters(cleared); void loadAdherence(cleared); }} className="h-11 rounded-lg border border-border bg-white px-3 text-sm font-bold disabled:opacity-60">Limpar</button>
-            </div>
-          </div>
-        </section>
-        <section className="card mb-5 overflow-hidden">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
-            <div>
-              <h2 className="text-lg font-extrabold text-navy-950">Pendências de justificativa</h2>
-              <p className="text-sm font-semibold text-muted">Capturas originais ou horas lançadas manualmente abaixo de 7:25 para agentes elegíveis.</p>
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <StatusBadge status={`${visibleAdherenceRows.filter((row) => row.status === "Pendente").length} pendente(s)`} />
-              <StatusBadge status={`${visibleAdherenceRows.filter((row) => row.status === "Justificado").length} justificado(s)`} />
-              <button type="button" onClick={() => void exportAdherence()} disabled={exportingAdherence || loadingAdherence || Boolean(adherenceError)} className="premium-control inline-flex h-10 items-center gap-2 px-4 text-sm font-bold text-navy-950 disabled:opacity-50">
-                <Download className="h-4 w-4" /> {exportingAdherence ? "Exportando..." : "Exportar justificativas"}
-              </button>
-            </div>
-          </div>
-          {adherenceError ? <p role="alert" className="p-6 text-sm font-bold text-red-700">{adherenceError}</p> : loadingAdherence ? <p role="status" className="p-6 text-sm font-semibold text-muted">Carregando justificativas...</p> : visibleAdherenceRows.length ? (
-            <div className="max-h-[520px] overflow-auto">
-              <table className="w-full min-w-[1320px] text-left text-sm">
-                <thead className="sticky top-0 z-10 border-b border-border bg-slate-50 text-xs font-bold uppercase tracking-wide text-muted">
-                  <tr>
-                    {[
-                      "Parceiro / WB", "Data", "LOB / classificação", "Supervisor", "Escala prevista", "Duração de referência", "Status", "Justificativa", "Resposta"
-                    ].map((column) => <th key={column} className="px-4 py-3">{column}</th>)}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border bg-white">
-                  {adherenceDays.map((day) => (
-                    <Fragment key={day.date}>
-                    <tr className="bg-slate-50"><th scope="rowgroup" colSpan={9} className="px-4 py-3 font-extrabold text-navy-950">{day.date.split("-").reverse().join("/")} <span className="ml-2 text-xs font-semibold text-muted">{day.rows.length} registro(s)</span></th></tr>
-                    {day.rows.map((row) => (
-                    <tr key={row.id}>
-                      <td className="px-4 py-3"><p className="font-bold text-navy-950">{row.employeeName}</p><p className="text-xs font-semibold text-muted">{row.wbLogin}</p></td>
-                      <td className="px-4 py-3 font-bold">{row.date}</td>
-                      <td className="px-4 py-3">{row.lob} · {row.classification}</td>
-                      <td className="px-4 py-3">{row.supervisor}</td>
-                      <td className="px-4 py-3">{row.plannedSlot}</td>
-                      <td className="px-4 py-3 font-extrabold text-amber-700">{row.capturedDuration}<p className="text-xs font-semibold text-muted">{row.durationSource}</p></td>
-                      <td className="px-4 py-3"><StatusBadge status={row.status} /></td>
-                      <td className="px-4 py-3">
-                        {row.status === "Pendente" ? (
-                          <textarea
-                            aria-label={`Justificativa de aderência de ${row.employeeName}`}
-                            value={adherenceDrafts[row.id] ?? ""}
-                            onChange={(event) => setAdherenceDrafts((current) => ({ ...current, [row.id]: event.target.value }))}
-                            placeholder="Explique a baixa aderência ao Cronograma"
-                            className="min-h-20 w-80 rounded-lg border border-border p-2.5 text-sm outline-none focus:border-blue-400"
-                          />
-                        ) : <p className="max-w-sm whitespace-pre-wrap font-semibold">{row.justification}</p>}
-                      </td>
-                      <td className="px-4 py-3">
-                        {row.status === "Pendente" ? (
-                          <button disabled={savingAdherenceId === row.id} onClick={() => submitAdherenceJustification(row)} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-60">
-                            {savingAdherenceId === row.id ? "Enviando..." : "Enviar justificativa"}
-                          </button>
-                        ) : <p className="text-xs font-semibold text-muted">{row.answeredBy}<br />{row.answeredAt}</p>}
-                      </td>
-                    </tr>
-                    ))}
-                    </Fragment>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="p-6"><EmptyState title="Nenhuma justificativa encontrada" description="Não há justificativas pendentes ou respondidas para o período e os filtros selecionados." /></div>
-          )}
-        </section>
-        </>
-      ) : null}
+      {canViewAdherence ? <WorkHourJustifications active={activeHoursSlice === "justifications"} refreshKey={adherenceRevision} actorName={session?.user?.name ?? ""} onMessage={setMessage} /> : null}
 
       {activeHoursSlice === "hours" ? (
       <section className="card overflow-hidden">

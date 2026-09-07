@@ -10,6 +10,7 @@ import type { CaptureRegistrationWarning } from "@/lib/work-hours-capture-review
 import { cancelAdherenceForDeletedWorkHours } from "@/lib/work-hours-adherence-cleanup";
 import { syncWorkHourAdherence } from "@/lib/work-hours-adherence-sync";
 import { filterWorkHourAdherenceRows } from "@/lib/work-hour-adherence-filters";
+import { decodeAdherenceCursor, scanAdherencePage } from "@/lib/work-hour-adherence-pagination";
 import { resolveCapturePeriod } from "@/lib/work-hours-capture-period";
 import { shiftCategoryName } from "@/lib/shift-display";
 import {
@@ -493,7 +494,14 @@ export async function applyCaptureWorkHourDivergenceDecisions(
   }
 }
 
-export async function listWorkHourAdherenceJustifications(actor: Actor, filters: AdherenceQueryFilters = {}) {
+const adherenceListInclude = {
+  employee: { include: captureEmployeeInclude },
+  schedule: true,
+  supervisor: { select: { fullName: true } },
+  answeredBy: { select: { name: true } }
+} satisfies Prisma.WorkHourAdherenceJustificationInclude;
+
+export async function listWorkHourAdherenceJustifications(actor: Actor, filters: AdherenceQueryFilters = {}, pagination?: { cursor?: string; limit?: number }) {
   const user = await getActiveUser(actor);
   if (!user || !canJustifyAbsence({ role: user.role.name, status: user.status })) {
     return createPermissionError("Você não tem permissão para acompanhar pendências de aderência.");
@@ -503,8 +511,7 @@ export async function listWorkHourAdherenceJustifications(actor: Actor, filters:
   const role = normalizeRole(user.role.name);
   const supervisorScope = role === "SUPERVISOR" ? user.employeeProfile?.id ?? "__none__" : null;
   const statusFilter = normalizeEmployeeStatusFilter(filters.employeeStatus);
-  const records = await prisma.workHourAdherenceJustification.findMany({
-    where: {
+  const where: Prisma.WorkHourAdherenceJustificationWhereInput = {
       date: { gte: period.start, lte: period.end },
       status: { not: "CANCELLED" },
       ...(supervisorScope ? { supervisorId: supervisorScope } : {}),
@@ -520,15 +527,39 @@ export async function listWorkHourAdherenceJustifications(actor: Actor, filters:
           { wbLogin: { contains: filters.collaborator, mode: "insensitive" } }
         ]
       } : {})
-    },
-    include: {
-      employee: { include: captureEmployeeInclude },
-      schedule: true,
-      supervisor: { select: { fullName: true } },
-      answeredBy: { select: { name: true } }
-    },
+    };
+  if (pagination) {
+    let cursor;
+    try { cursor = pagination.cursor ? decodeAdherenceCursor(pagination.cursor) : undefined; }
+    catch { return createValidationError({}, "Paginação inválida. Atualize os filtros e tente novamente."); }
+    const limit = Math.min(100, Math.max(1, Math.floor(pagination.limit || 50)));
+    // Keep the authorization predicate separate: a requested supervisor can never override it.
+    const dimensions: Prisma.WorkHourAdherenceJustificationWhereInput[] = [];
+    if (filters.supervisorId && filters.supervisorId !== "Todos") dimensions.push({ supervisorId: filters.supervisorId === "__none__" ? null : filters.supervisorId });
+    if (["Pendentes", "Pendente"].includes(filters.justificationStatus ?? "")) dimensions.push({ status: "PENDING" });
+    if (["Justificados", "Justificado"].includes(filters.justificationStatus ?? "")) dimensions.push({ status: "JUSTIFIED" });
+    return scanAdherencePage({
+      cursor, limit,
+      read: (after, take) => prisma.workHourAdherenceJustification.findMany({
+        where: { AND: [where, ...dimensions, ...(after ? [{ OR: [
+          { date: { lt: new Date(after.date) } },
+          { date: new Date(after.date), id: { lt: after.id } }
+        ] }] : [])] },
+        include: adherenceListInclude,
+        orderBy: [{ date: "desc" }, { id: "desc" }], take
+      }),
+      visible: (records) => visibleAdherenceRows(records, filters)
+    });
+  }
+  const records = await prisma.workHourAdherenceJustification.findMany({
+    where,
+    include: adherenceListInclude,
     orderBy: [{ status: "desc" }, { date: "desc" }, { employee: { fullName: "asc" } }]
   });
+  return { data: await visibleAdherenceRows(records, filters) };
+}
+
+async function visibleAdherenceRows(records: Prisma.WorkHourAdherenceJustificationGetPayload<{ include: typeof adherenceListInclude }>[], filters: AdherenceQueryFilters) {
   // Older deletions may have left orphaned justifications. Never ask a supervisor
   // to justify a removed record; preserve the old entry for audit/reprocessing.
   const hours = records.length ? await prisma.workHourRecord.findMany({
@@ -536,8 +567,7 @@ export async function listWorkHourAdherenceJustifications(actor: Actor, filters:
     select: { employeeId: true, date: true, source: true }
   }) : [];
   const existingDays = new Map(hours.map((record) => [`${record.employeeId}:${record.date.toISOString()}`, record]));
-  return {
-    data: filterWorkHourAdherenceRows(records.filter((record) => (
+  return filterWorkHourAdherenceRows(records.filter((record) => (
       existingDays.has(`${record.employeeId}:${record.date.toISOString()}`)
       && isCaptureImportEligible(record.employee, formatDate(record.date))
       && !isProtectedCaptureScheduleStatus(record.schedule?.status)
@@ -560,8 +590,56 @@ export async function listWorkHourAdherenceJustifications(actor: Actor, filters:
       justification: record.justification ?? "",
       answeredBy: record.answeredBy?.name ?? "",
       answeredAt: record.answeredAt ? formatDateTime(record.answeredAt) : ""
-    })), { supervisorId: filters.supervisorId, justificationStatus: filters.justificationStatus })
-  };
+    })), { supervisorId: filters.supervisorId, justificationStatus: filters.justificationStatus });
+}
+
+export async function getWorkHourAdherenceFilterOptions(actor: Actor, filters: CaptureImportFilters) {
+  const user = await getActiveUser(actor);
+  if (!user || !canJustifyAbsence({ role: user.role.name, status: user.status })) {
+    return createPermissionError("Você não tem permissão para acompanhar pendências de aderência.");
+  }
+  const period = parsePeriod(filters);
+  if ("error" in period) return period;
+  const supervisorScope = normalizeRole(user.role.name) === "SUPERVISOR" ? user.employeeProfile?.id ?? "__none__" : null;
+  // Aggregate only the option dimensions in PostgreSQL, not the justification
+  // bodies/history. MAX(date) lets the unchanged Go Live predicate establish
+  // whether at least one eligible day exists in each group.
+  const groups = await prisma.$queryRaw<Array<{
+    employeeId: string; lob: string; supervisorId: string | null; supervisor: string | null;
+    scheduleStatus: string | null; lastDate: Date;
+  }>>(Prisma.sql`
+    SELECT j."employeeId", j.lob, j."supervisorId", sup."fullName" AS supervisor,
+           s.status::text AS "scheduleStatus", MAX(j.date) AS "lastDate"
+    FROM "WorkHourAdherenceJustification" j
+    LEFT JOIN "Schedule" s ON s.id = j."scheduleId"
+    LEFT JOIN "EmployeeProfile" sup ON sup.id = j."supervisorId"
+    WHERE j.date >= ${period.start} AND j.date <= ${period.end}
+      AND j.status <> 'CANCELLED'
+      ${supervisorScope ? Prisma.sql`AND j."supervisorId" = ${supervisorScope}` : Prisma.empty}
+      AND EXISTS (SELECT 1 FROM "WorkHourRecord" h WHERE h."employeeId" = j."employeeId" AND h.date = j.date)
+    GROUP BY j."employeeId", j.lob, j."supervisorId", sup."fullName", s.status
+  `);
+  const employees = groups.length ? await prisma.employeeProfile.findMany({
+    where: { id: { in: Array.from(new Set(groups.map((item) => item.employeeId))) } },
+    select: { id: true, roleTitle: true, operationalStatus: true, goLiveDate: true, deletedAt: true, skill: true,
+      lob: { select: { name: true } }, team: { select: { name: true } }, shift: { select: { name: true } },
+      user: { select: { role: { select: { name: true } } } },
+      skillAssignments: { select: { skill: { select: { name: true } } } }
+    }
+  }) : [];
+  const byId = new Map(employees.map((employee) => [employee.id, employee]));
+  const eligible = groups.filter((group) => {
+    const employee = byId.get(group.employeeId);
+    return employee && isCaptureImportEligible(employee, formatDate(group.lastDate)) && !isProtectedCaptureScheduleStatus(group.scheduleStatus);
+  });
+  const lobs = Array.from(new Set(eligible.map((group) => group.lob).filter(Boolean))).sort();
+  const selectedLob = filters.lob && filters.lob !== "Todos" && lobs.includes(filters.lob) ? filters.lob : null;
+  const scoped = selectedLob ? eligible.filter((group) => group.lob === selectedLob) : eligible;
+  const supervisors = selectedLob ? Array.from(new Map(scoped.map((group) => [group.supervisorId ?? "__none__", {
+    id: group.supervisorId ?? "__none__", name: group.supervisor ?? "Sem supervisor"
+  }])).values()).sort((a, b) => a.name.localeCompare(b.name, "pt-BR") || a.id.localeCompare(b.id)) : [];
+  const shifts = new Set(scoped.map((group) => shiftCategoryName(byId.get(group.employeeId)?.shift.name)));
+  return { data: { lobs, supervisors, shifts: ["Manhã", "Tarde", "Noite"].filter((shift) => shifts.has(shift)) } };
 }
 
 export async function exportWorkHourAdherenceJustifications(actor: Actor, filters: AdherenceQueryFilters = {}) {
