@@ -11,9 +11,19 @@ test("request allocation acquires shared transaction lock before reading numeric
     return calls.length === 1 ? [{}] : [{ nextNumber: "10001" }];
   } } as unknown as Prisma.TransactionClient;
   assert.equal(await nextRequestCode(tx), "REQ-10001");
-  assert.match(calls[0], /pg_advisory_xact_lock/);
+  assert.match(calls[0], /pg_advisory_xact_lock\(726391, 1\)::text/);
   assert.match(calls[1], /MAX\(SUBSTRING/);
   assert.doesNotMatch(calls[1], /LIMIT|deletedAt/);
+});
+
+test("request allocation does not read a number if acquiring the lock fails", async () => {
+  let calls = 0;
+  const tx = { $queryRaw: async () => {
+    calls += 1;
+    throw new Error("lock unavailable");
+  } } as unknown as Prisma.TransactionClient;
+  await assert.rejects(nextRequestCode(tx), /lock unavailable/);
+  assert.equal(calls, 1);
 });
 
 test("request allocation preserves arbitrary precision and rejects a missing allocation", async () => {

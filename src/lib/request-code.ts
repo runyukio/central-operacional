@@ -4,7 +4,9 @@ import { Prisma } from "@prisma/client";
 export async function nextRequestCode(tx: Prisma.TransactionClient) {
   // A transaction lock serializes BOTH regular and monthly-advance writers.
   // Keep the maximum query after the lock so READ COMMITTED sees the last commit.
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(726391, 1)`;
+  // PostgreSQL returns void here, which Prisma cannot deserialize. Cast only
+  // the result; keep the same transaction-scoped lock and allocation ordering.
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(726391, 1)::text`;
   const rows = await tx.$queryRaw<Array<{ nextNumber: string }>>(Prisma.sql`
     SELECT (GREATEST(COALESCE(MAX(SUBSTRING("code" FROM 5)::numeric), 0), 1000) + 1)::text AS "nextNumber"
     FROM "Request"
