@@ -14,13 +14,13 @@ import { prisma } from "@/lib/prisma";
 
 const actor: Actor = { email: "poc@example.test", name: "Test POC", role: "POC" };
 
-function pocUser(lob = "ADS") {
+function pocUser(lob = "ADS", role = "POC") {
   return {
     id: "poc-user",
     name: actor.name,
     email: actor.email,
     status: "ACTIVE",
-    role: { name: "POC" },
+    role: { name: role },
     employeeProfile: {
       id: "poc-employee",
       fullName: actor.name,
@@ -34,13 +34,13 @@ function pocUser(lob = "ADS") {
   };
 }
 
-function mockDatabase(t: TestContext, lob = "ADS") {
+function mockDatabase(t: TestContext, lob = "ADS", role = "POC") {
   // Prisma delegates are proxies, so replace the methods directly and restore
   // them after each test. No database connection or transaction is used.
   const originalFindUser = prisma.user.findFirst;
   const originalFindTickets = prisma.raffleTicketAssignment.findMany;
   const originalTransaction = prisma.$transaction;
-  const userQuery = t.mock.fn(async (_args: Prisma.UserFindFirstArgs) => pocUser(lob));
+  const userQuery = t.mock.fn(async (_args: Prisma.UserFindFirstArgs) => pocUser(lob, role));
   const ticketsQuery = t.mock.fn(async (_args: Prisma.RaffleTicketAssignmentFindManyArgs) => []);
   const transaction = t.mock.fn(async () => { throw new Error("Unexpected write"); });
   prisma.user.findFirst = userQuery as unknown as typeof prisma.user.findFirst;
@@ -84,6 +84,28 @@ test("POC não pode consultar Staff nem criar, distribuir ou excluir tickets pel
     await assert.rejects(action, { name: "CampaignRaffleError", status: 403 });
   }
   assert.equal(transaction.mock.callCount(), 0);
+});
+
+test("agentes e POC de PROJECT consultam só seus tickets e não podem executar ações de Staff", async (t) => {
+  for (const role of ["COLABORADOR", "POC"]) {
+    await t.test(role, async (subtest) => {
+      const { ticketsQuery, transaction } = mockDatabase(subtest, "PROJECT", role);
+      const access = await getCampaignRaffleAccess(actor);
+      assert.deepEqual(access, { canViewOwn: true, canManage: false, lob: "PROJECT", roleTitle: "Agente" });
+      await getCampaignRaffleDashboard(actor, "agent", "another-partners-campaign");
+      assert.deepEqual(ticketsQuery.mock.calls[0].arguments[0].where, { employeeId: "poc-employee" });
+      for (const action of [
+        () => getCampaignRaffleDashboard(actor, "staff"),
+        () => createRaffleCampaign(actor, { name: "Test campaign" }),
+        () => distributeRaffleTickets(actor, {
+          campaignId: "campaign", employeeIds: ["another-employee"], ticketsPerEmployee: 1,
+          idempotencyKey: "project-distribution-test"
+        }),
+        () => deleteRaffleTicket(actor, { ticketId: "another-ticket" })
+      ]) await assert.rejects(action, { status: 403 });
+      assert.equal(transaction.mock.callCount(), 0);
+    });
+  }
 });
 
 test("servidor revalida a LOB de POC e não confia em claims antigos da sessão", async (t) => {

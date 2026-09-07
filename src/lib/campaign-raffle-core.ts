@@ -1,5 +1,11 @@
 export const RAFFLE_MIN_NUMBER = 1;
 export const RAFFLE_MAX_NUMBER = 10_000;
+export const RAFFLE_ELIGIBLE_LOBS = ["ADS", "PROJECT"] as const;
+
+export function isRaffleEligibleLob(lob?: string | null) {
+  const normalized = lob?.trim().toUpperCase();
+  return RAFFLE_ELIGIBLE_LOBS.some((eligible) => eligible === normalized);
+}
 
 export function drawUniqueRaffleNumbers({
   min = RAFFLE_MIN_NUMBER,

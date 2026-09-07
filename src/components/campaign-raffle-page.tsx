@@ -134,7 +134,7 @@ export function CampaignRafflePage({ view }: { view: "agent" | "staff" }) {
     <div className="space-y-4">
       <PageHeader
         title="Rifa"
-        description={view === "staff" ? "Distribuição segura de tickets da rifa para agentes ADS." : "Consulte os tickets atribuídos a você em cada campanha."}
+        description={view === "staff" ? "Distribuição segura de tickets da rifa para agentes ADS e PROJECT." : "Consulte os tickets atribuídos a você em cada campanha."}
         icon={Gift}
         actions={(
           <button type="button" onClick={() => void loadDashboard()} className="premium-control inline-flex h-10 items-center gap-2 px-3.5 text-sm font-extrabold text-navy-950">
@@ -347,7 +347,7 @@ function StaffCampaignView({
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard title="Tickets distribuídos" value={payload.summary.usedTickets.toLocaleString("pt-BR")} helper="números únicos" icon={Ticket} tone="blue" />
         <StatCard title="Tickets disponíveis" value={payload.summary.availableTickets.toLocaleString("pt-BR")} helper="até 10.000" icon={ShieldCheck} tone="green" />
-        <StatCard title="Agentes contemplados" value={payload.summary.coveredAgents} helper="agentes ADS" icon={UsersRound} tone="purple" />
+        <StatCard title="Agentes contemplados" value={payload.summary.coveredAgents} helper="agentes ADS e PROJECT" icon={UsersRound} tone="purple" />
         <StatCard title="Envios realizados" value={payload.summary.distributions} helper="lotes confirmados" icon={History} tone="cyan" />
       </div>
 
@@ -356,7 +356,7 @@ function StaffCampaignView({
           <div>
             <Gift className="mx-auto h-10 w-10 text-blue-500" />
             <h2 className="mt-3 text-lg font-black text-navy-950">Crie a primeira campanha</h2>
-            <p className="mt-1 text-sm text-muted">Depois você poderá selecionar os agentes ADS e distribuir números aleatórios.</p>
+            <p className="mt-1 text-sm text-muted">Depois você poderá selecionar os agentes ADS e PROJECT e distribuir números aleatórios.</p>
           </div>
         </div>
       ) : (
@@ -383,7 +383,7 @@ function StaffCampaignView({
           <Panel title="Distribuir tickets">
             <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_190px]">
               <label className="block">
-                <span className="mb-1.5 block text-xs font-extrabold uppercase tracking-wide text-muted">Buscar agente ADS</span>
+                <span className="mb-1.5 block text-xs font-extrabold uppercase tracking-wide text-muted">Buscar agente ADS / PROJECT</span>
                 <span className="premium-control flex h-10 items-center gap-2 px-3">
                   <Search className="h-4 w-4 text-muted" />
                   <input value={agentSearch} onChange={(event) => setAgentSearch(event.target.value)} placeholder="Nome, WB ou turno" className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" />
@@ -422,7 +422,7 @@ function StaffCampaignView({
                     </label>
                   );
                 })}
-                {!filteredAgents.length ? <p className="px-3 py-8 text-center text-sm font-bold text-muted">Nenhum agente ADS encontrado.</p> : null}
+                {!filteredAgents.length ? <p className="px-3 py-8 text-center text-sm font-bold text-muted">Nenhum agente ADS ou PROJECT encontrado.</p> : null}
               </div>
             </div>
 
@@ -641,7 +641,7 @@ function DistributionConfirmationModal({
       ) : (
         <>
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-bold leading-relaxed text-amber-900">
-            Serão distribuídos <strong>{pending.totalTickets.toLocaleString("pt-BR")} tickets únicos</strong> entre {pending.employeeIds.length} agentes ADS. Os números serão sorteados somente após a confirmação.
+            Serão distribuídos <strong>{pending.totalTickets.toLocaleString("pt-BR")} tickets únicos</strong> entre {pending.employeeIds.length} agentes ADS/PROJECT. Os números serão sorteados somente após a confirmação.
           </div>
           <p className="mt-4 text-sm font-semibold leading-6 text-muted">Revise o total acima e clique em confirmar para concluir. Não é necessário digitar nenhuma frase.</p>
           <div className="mt-4 flex justify-end gap-2">

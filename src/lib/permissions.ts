@@ -1,5 +1,6 @@
 import type { AppRole } from "@/lib/demo-auth";
 import { normalizeAccessRole, roleHasCapability } from "@/lib/access-control";
+import { isRaffleEligibleLob } from "@/lib/campaign-raffle-core";
 import { isAgentJobTitle, normalizeComparableJobTitle } from "@/lib/job-title-normalization";
 
 export type PermissionUser = {
@@ -183,7 +184,7 @@ export function canAccessCampaignAgent(user: PermissionUser) {
   return (
     isActiveUser(user)
     && roleHasCapability(user.role, "CAMPAIGN_AGENT")
-    && normalizeComparableJobTitle(user.lob) === "ads"
+    && isRaffleEligibleLob(user.lob)
     && isAgentJobTitle(user.roleTitle ?? user.jobTitle)
   );
 }

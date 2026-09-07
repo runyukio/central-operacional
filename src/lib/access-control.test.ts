@@ -112,8 +112,23 @@ test("POC ADS acessa Meus Dados e seus tickets sem acesso à gestão", () => {
   assert.equal(roleHasCapability(poc.role, "CAMPAIGN_STAFF"), false);
 });
 
-test("POC de outras LOBs acessa Meus Dados mas a Rifa continua exclusiva de ADS", () => {
-  for (const lob of ["CEC", "VIDEO", "COMMENTS", "PROJECT", "ALL", ""]) {
+test("agentes e POC de PROJECT acessam a Rifa ADS sem ganhar gestão Staff", () => {
+  for (const role of ["COLABORADOR", "POC"]) {
+    const user = { role, roleTitle: "Agente", lob: "PROJECT", status: "ACTIVE" };
+    assert.equal(canAccessCampaignAgent(user), true);
+    assert.equal(getNavItems(user).filter((item) => item.href === "/campanha").length, 1);
+    for (const path of ["/campanha", "/campanha/agente", "/api/campaigns/raffle"]) {
+      assert.equal(canAccessPathForRole(path, user), true, path);
+    }
+    assert.equal(canAccessPathForRole("/campanha/staff", user), false);
+    assert.equal(canManageCampaignStaff(user), false);
+    assert.equal(canAccessCampaignAgent({ ...user, roleTitle: "Supervisor" }), false);
+    assert.equal(canAccessCampaignAgent({ ...user, status: "INACTIVE" }), false);
+  }
+});
+
+test("POC de outras LOBs acessa Meus Dados mas a Rifa continua exclusiva de ADS e PROJECT", () => {
+  for (const lob of ["CEC", "VIDEO", "COMMENTS", "ALL", ""]) {
     const poc = { role: "POC", roleTitle: "Agente", lob, status: "ACTIVE" };
     assert.equal(canAccessOwnPerformance(poc), true, lob);
     assert.equal(canAccessPathForRole("/api/performance/me", poc), true, lob);

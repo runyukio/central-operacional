@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { drawUniqueRaffleNumbers } from "./campaign-raffle-core";
+import { drawUniqueRaffleNumbers, isRaffleEligibleLob } from "./campaign-raffle-core";
+
+test("raffle eligibility accepts only ADS and PROJECT, including normalized names", () => {
+  for (const lob of ["ADS", "PROJECT", " ads ", "project"]) assert.equal(isRaffleEligibleLob(lob), true, lob);
+  for (const lob of ["CEC", "VIDEO", "COMMENTS", "ALL", "PROJECT MINOR", "ADS/PROJECT", "", null, undefined]) {
+    assert.equal(isRaffleEligibleLob(lob), false, String(lob));
+  }
+});
 
 test("draws only unused numbers without duplicates", () => {
   const drawn = drawUniqueRaffleNumbers({

@@ -4,7 +4,9 @@ import { Prisma } from "@prisma/client";
 import {
   RAFFLE_MAX_NUMBER,
   RAFFLE_MIN_NUMBER,
-  drawUniqueRaffleNumbers
+  RAFFLE_ELIGIBLE_LOBS,
+  drawUniqueRaffleNumbers,
+  isRaffleEligibleLob
 } from "@/lib/campaign-raffle-core";
 import type { Actor } from "@/lib/mock-db";
 import { isAgentJobTitle } from "@/lib/job-title-normalization";
@@ -37,7 +39,7 @@ export async function getCampaignRaffleDashboard(actor: Actor, view: "agent" | "
     return loadStaffDashboard(context, campaignId);
   }
   if (!context.canViewOwn || !context.employee) {
-    throw new CampaignRaffleError("A visão Agente está disponível somente para agentes da operação ADS.", 403);
+    throw new CampaignRaffleError("A visão Agente está disponível somente para agentes das operações ADS e PROJECT.", 403);
   }
   return loadAgentDashboard(context);
 }
@@ -82,7 +84,7 @@ export async function distributeRaffleTickets(actor: Actor, input: {
 
   const employeeIds = Array.from(new Set(input.employeeIds.map((id) => id.trim()).filter(Boolean))).sort();
   const ticketsPerEmployee = Number(input.ticketsPerEmployee);
-  if (!employeeIds.length) throw new CampaignRaffleError("Selecione pelo menos um agente ADS.");
+  if (!employeeIds.length) throw new CampaignRaffleError("Selecione pelo menos um agente ADS ou PROJECT.");
   if (employeeIds.length > 500) throw new CampaignRaffleError("Selecione no máximo 500 agentes por envio.");
   if (!Number.isInteger(ticketsPerEmployee) || ticketsPerEmployee < 1 || ticketsPerEmployee > RAFFLE_MAX_NUMBER) {
     throw new CampaignRaffleError("A quantidade por agente deve estar entre 1 e 10.000.");
@@ -117,16 +119,16 @@ export async function distributeRaffleTickets(actor: Actor, input: {
         id: { in: employeeIds },
         deletedAt: null,
         terminationDate: null,
-        lob: { name: { equals: "ADS", mode: "insensitive" } },
+        lob: { name: { in: [...RAFFLE_ELIGIBLE_LOBS], mode: "insensitive" } },
         user: { is: { status: "ACTIVE", deletedAt: null } }
       },
-      select: { id: true, fullName: true, wbLogin: true, roleTitle: true, operationalStatus: true }
+      select: { id: true, fullName: true, wbLogin: true, roleTitle: true, operationalStatus: true, lob: { select: { name: true } } }
     });
-    const eligible = eligibleEmployees.filter(isEligibleAdsAgent);
+    const eligible = eligibleEmployees.filter(isEligibleRaffleAgent);
     if (eligible.length !== employeeIds.length) {
       const eligibleIds = new Set(eligible.map((employee) => employee.id));
       const invalidCount = employeeIds.filter((id) => !eligibleIds.has(id)).length;
-      throw new CampaignRaffleError(`${invalidCount} parceiro(s) não são agentes ADS ativos e não podem receber tickets.`, 409);
+      throw new CampaignRaffleError(`${invalidCount} parceiro(s) não são agentes ADS/PROJECT ativos e não podem receber tickets.`, 409);
     }
 
     const usedNumbers = await tx.raffleTicketAssignment.findMany({
@@ -271,7 +273,7 @@ async function loadCampaignRaffleContext(actor: Actor) {
     user,
     employee,
     canManage: canManageCampaignStaff(permissionUser),
-    canViewOwn: Boolean(employee && !employee.deletedAt && !employee.terminationDate && isEligibleAdsAgent(employee) && canAccessCampaignAgent(permissionUser))
+    canViewOwn: Boolean(employee && !employee.deletedAt && !employee.terminationDate && isEligibleRaffleAgent(employee) && canAccessCampaignAgent(permissionUser))
   };
 }
 
@@ -293,7 +295,7 @@ async function loadStaffDashboard(context: CampaignRaffleContext, campaignId?: s
       where: {
         deletedAt: null,
         terminationDate: null,
-        lob: { name: { equals: "ADS", mode: "insensitive" } },
+        lob: { name: { in: [...RAFFLE_ELIGIBLE_LOBS], mode: "insensitive" } },
         user: { is: { status: "ACTIVE", deletedAt: null } }
       },
       select: {
@@ -302,12 +304,13 @@ async function loadStaffDashboard(context: CampaignRaffleContext, campaignId?: s
         wbLogin: true,
         roleTitle: true,
         operationalStatus: true,
+        lob: { select: { name: true } },
         shift: { select: { name: true } }
       },
       orderBy: { fullName: "asc" }
     })
   ]);
-  const agents = eligibleRows.filter(isEligibleAdsAgent);
+  const agents = eligibleRows.filter(isEligibleRaffleAgent);
   const selectedCampaign = campaigns.find((campaign) => campaign.id === campaignId)
     ?? campaigns.find((campaign) => campaign.status === "ACTIVE")
     ?? campaigns[0]
@@ -457,10 +460,9 @@ async function loadAgentDashboard(context: CampaignRaffleContext) {
   };
 }
 
-function isEligibleAdsAgent(employee: { roleTitle: string; operationalStatus: string; lob?: { name: string } }) {
+function isEligibleRaffleAgent(employee: { roleTitle: string; operationalStatus: string; lob: { name: string } }) {
   const status = employee.operationalStatus.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
-  const isAds = employee.lob ? employee.lob.name.trim().toUpperCase() === "ADS" : true;
-  return isAds && isAgentJobTitle(employee.roleTitle) && status !== "desligado";
+  return isRaffleEligibleLob(employee.lob.name) && isAgentJobTitle(employee.roleTitle) && status !== "desligado";
 }
 
 function cryptoShuffle<T>(values: T[]) {

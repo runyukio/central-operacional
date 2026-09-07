@@ -56,11 +56,11 @@ export async function middleware(request: NextRequest) {
     status: "ACTIVE"
   };
 
-  // Some active profiles still have no LOB. The page/API rechecks ADS ownership
+  // Some active profiles still have no LOB. The page/API rechecks ADS/PROJECT eligibility
   // in Postgres before returning any raffle data for these users.
   const isCampaignPath = pathname === "/campanha" || pathname.startsWith("/campanha/") || pathname.startsWith("/api/campaigns/raffle");
-  const isLegacyAdsCandidate = (role === "COLABORADOR" || role === "POC") && !permissionUser.lob;
-  if (isCampaignPath && isLegacyAdsCandidate) return NextResponse.next();
+  const isLegacyCampaignCandidate = (role === "COLABORADOR" || role === "POC") && !permissionUser.lob;
+  if (isCampaignPath && isLegacyCampaignCandidate) return NextResponse.next();
 
   if (!isBillingPath && !canAccessPathForRole(pathname, permissionUser)) {
     if (pathname.startsWith("/api/")) {

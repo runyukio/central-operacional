@@ -48,6 +48,16 @@ test("middleware libera as telas pessoais de POC ADS sem liberar Performance ger
   }
 });
 
+test("middleware libera Rifa para agentes e POC de PROJECT sem liberar Staff", async () => {
+  for (const role of ["COLABORADOR", "POC"]) {
+    const user = { role, roleTitle: "Agente", lob: "PROJECT" };
+    for (const path of ["/campanha", "/campanha/agente", "/api/campaigns/raffle"]) {
+      assert.equal((await requestAs(path, user)).headers.get("x-middleware-next"), "1", path);
+    }
+    assert.equal((await requestAs("/campanha/staff", user)).status, 307);
+  }
+});
+
 test("middleware returns 401 for revoked API sessions before any service can run", async () => {
   await requestAs("/api/employees/reset-password", { role: "ADMIN" });
   const claims = { sub: currentUser!.id, email: currentUser!.email, role: "ADMIN", authVersion: sessionAuthVersion(currentUser!) };
