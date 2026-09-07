@@ -448,22 +448,6 @@ export function EmployeeProfilePage({ employeeId }: { employeeId?: string }) {
             <p className="mt-3 text-xs font-semibold text-muted">Último lançamento: {data.workHours.lastRecordAt || "Sem registro"}</p>
           </Panel>
 
-          <Panel title="Performance" action="Ver histórico" actionOnClick={() => window.location.assign(profileLinks.performance)}>
-            {data.performance ? (
-              <div className="grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
-                <InfoLine label="Qualidade" value={formatPercent(data.performance.quality)} />
-                <InfoLine label={data.performance.outputLabel} value={formatNumber(data.performance.submit)} />
-                {data.performance.outputTotal != null ? <InfoLine label="Output total" value={formatNumber(data.performance.outputTotal)} /> : null}
-                <InfoLine label="AHT" value={data.performance.ahtAvailable ? formatAht(data.performance.ahtSeconds) : "Não disponível"} />
-                <InfoLine label="ABS" value={formatPercent(data.performance.abs)} />
-                <InfoLine label="WFH" value={<WfhBadge status={data.performance.wfhStatus} label={data.performance.wfhStatusLabel} />} />
-                <InfoLine label="Regra" value={qualityRuleLabel(data.performance.qualityRule)} />
-              </div>
-            ) : (
-              <EmptyState title="Sem performance no período" description="Importe Qualidade/Produção ou ajuste o período no módulo Performance." />
-            )}
-          </Panel>
-
           <Panel title="Feedback / Humor">
             <div className="flex items-center gap-3">
               <div className="grid h-12 w-12 place-items-center rounded-xl bg-orange-50 text-orange-500">
@@ -553,9 +537,6 @@ function buildProfileActionLinks(data: ProfilePayload["data"]) {
     workHours: ownProfile
       ? `/minha-escala?month=${encodeURIComponent(referenceMonth)}`
       : `/horas-operacionais?employeeId=${employeeId}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`,
-    performance: ownProfile
-      ? `/performance?view=mine&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`
-      : `/performance?employeeId=${employeeId}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`,
     requests: `/esteiras?employeeId=${employeeId}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`,
     equipment: `/equipamentos?responsibleId=${employeeId}`,
     invoice: `/meu-perfil/invoice?referenceMonth=${encodeURIComponent(data.billing?.referenceMonth ?? referenceMonth)}`
@@ -625,21 +606,6 @@ function ScheduleChip({ day }: { day: { day: string; weekday: string; status: st
         <p className="mx-auto mt-1 line-clamp-2 max-w-full text-[10px] font-extrabold leading-[11px]">{shortStatus}</p>
       </div>
     </div>
-  );
-}
-
-function WfhBadge({ status, label }: { status: string; label: string }) {
-  const tone = status === "QUALIFIED"
-    ? "bg-emerald-50 text-emerald-700"
-    : status === "PENDING_VALIDATION" || status === "INSUFFICIENT_DATA"
-      ? "bg-amber-50 text-amber-700"
-      : status === "NOT_APPLICABLE"
-        ? "bg-slate-50 text-slate-600"
-        : "bg-red-50 text-red-700";
-  return (
-    <span className={cn("inline-flex rounded-md px-2 py-1 text-xs font-black", tone)}>
-      {label || "Sem dados"}
-    </span>
   );
 }
 

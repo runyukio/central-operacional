@@ -127,6 +127,34 @@ test("Performance keeps its five remaining tabs without loading or rendering WFH
   assert.doesNotMatch(profile, /view=wfh/);
 });
 
+test("profile removes only the Performance detail panel and keeps the other sections and top indicators", () => {
+  const { source, declaration } = componentSource("EmployeeProfilePage");
+  const panelTitles: string[] = [];
+  let indicatorCount = 0;
+  function visit(node: ts.Node) {
+    if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+      const tag = node.tagName.getText(source);
+      if (tag === "StatCard") indicatorCount += 1;
+      if (tag === "Panel") {
+        const title = node.attributes.properties.find((attribute): attribute is ts.JsxAttribute =>
+          ts.isJsxAttribute(attribute) && attribute.name.getText(source) === "title"
+        );
+        if (title?.initializer) panelTitles.push(title.initializer.getText(source));
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(declaration);
+  assert.equal(panelTitles.includes('"Performance"'), false);
+  for (const title of ["Dados Operacionais", "Solicitações", "Feedback / Humor", "Equipamentos", "Dados Cadastrais"]) {
+    assert.ok(panelTitles.includes(JSON.stringify(title)), `Missing profile section: ${title}`);
+  }
+  assert.ok(panelTitles.some((title) => title.includes("data.workHours.periodLabel")));
+  assert.ok(panelTitles.some((title) => title.includes("data.schedule.periodLabel")));
+  assert.equal(indicatorCount, 5);
+  assert.doesNotMatch(source.getFullText(), /profileLinks\.performance|WfhBadge/);
+});
+
 test("Performance keeps successful imported data when its Real Time fallback carries a warning", async () => {
   for (const name of ["loadQueue", "loadForecast"]) {
     let shown: unknown, loading = false, message = "previous error";
