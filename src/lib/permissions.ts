@@ -342,6 +342,14 @@ export function canManageRoles(user: PermissionUser) {
   return isActiveUser(user) && roleHasCapability(user.role, "EMPLOYEE_ROLE_EDIT");
 }
 
+export function canResetEmployeePassword(user: PermissionUser, target?: PermissionEmployee | null) {
+  if (!isActiveUser(user) || !roleHasCapability(user.role, "EMPLOYEE_PASSWORD_RESET")) return false;
+  if (normalizeRole(user.role) === "ADMIN") return true;
+  // Role checks must use the target's system role, never their job title or skill.
+  if (target === undefined) return true;
+  return Boolean(target?.role?.trim()) && normalizeRole(target?.role) !== "ADMIN";
+}
+
 export function canManagePermissions(user: PermissionUser) {
   return canAccessSettings(user);
 }

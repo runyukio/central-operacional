@@ -3,9 +3,9 @@ import { Prisma, type EmployeeSensitiveData, type UserStatus } from "@prisma/cli
 import { prisma } from "@/lib/prisma";
 import type { Actor } from "@/lib/mock-db";
 import { listEmployeesForActor as listMockEmployees, recordErrorLog } from "@/lib/mock-db";
-import { canAccessEmployeeMap, canEditEmployeeData, canEditEmployeeSensitiveData, canManageRoles, canViewEmployeeSensitiveData, normalizeRole } from "@/lib/permissions";
+import { canAccessEmployeeMap, canEditEmployeeData, canEditEmployeeSensitiveData, canManageRoles, canResetEmployeePassword, canViewEmployeeSensitiveData, normalizeRole } from "@/lib/permissions";
 import { auditPermissionDenied } from "@/lib/permission-audit";
-import { createDuplicateError, createNotFoundError, createPermissionError, createRelationError, createServerError, createValidationError, mapPrismaError } from "@/lib/api-errors";
+import { createAuthError, createDuplicateError, createNotFoundError, createPermissionError, createRelationError, createServerError, createValidationError, mapPrismaError } from "@/lib/api-errors";
 import { canBeSupervisorJobTitle, isAgentJobTitle, normalizeJobTitle } from "@/lib/job-title-normalization";
 import { normalizeWbLogin, parseWbLoginBatch } from "@/lib/batch-wb-filter";
 import { maskPixKey, validatePixKey } from "@/lib/pix-key";
@@ -887,18 +887,25 @@ export async function exportOperationalEmployeesXlsxData(actor: Actor, filters: 
 
 export async function resetEmployeeUserPassword(actor: Actor, input: { employeeId: string; password: string; confirmPassword: string }) {
   try {
-    const admin = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
-    if (!admin || admin.status !== "ACTIVE" || admin.deletedAt) return { error: "Usuário não autenticado." };
-    if (normalizeRole(admin.role.name) !== "ADMIN") {
-      const reason = normalizeRole(actor.role) === "SUPERVISOR" ? "Supervisor não possui permissão para resetar senha." : "Apenas Admin pode resetar senha.";
+    const requester = await prisma.user.findUnique({ where: { email: actor.email }, include: { role: true } });
+    if (!requester || requester.status !== "ACTIVE" || requester.deletedAt) return createAuthError("Usuário não autenticado.");
+    actor = { ...actor, role: normalizeRole(requester.role.name) };
+    const permissionUser = { role: requester.role.name, status: requester.status };
+    if (!canResetEmployeePassword(permissionUser)) {
+      const reason = "Apenas Admin e WFM podem resetar senha.";
       await auditPermissionDenied(actor, { action: "USER_PASSWORD_RESET", entity: "User", reason, entityId: input.employeeId });
-      return { error: reason };
+      return createPermissionError(reason);
     }
     if (!input.password || input.password.length < 8 || input.password.length > 128) return { error: "A nova senha deve ter entre 8 e 128 caracteres." };
     if (input.password !== input.confirmPassword) return { error: "A confirmação de senha não confere." };
 
-    const employee = await prisma.employeeProfile.findFirst({ where: { id: input.employeeId, deletedAt: null }, include: { user: true } });
-    if (!employee?.userId || !employee.user) return { error: "Este parceiro não possui usuário vinculado." };
+    const employee = await prisma.employeeProfile.findFirst({ where: { id: input.employeeId, deletedAt: null }, include: { user: { include: { role: true } } } });
+    if (!employee?.userId || !employee.user || employee.user.deletedAt) return { error: "Este parceiro não possui usuário vinculado." };
+    if (!canResetEmployeePassword(permissionUser, { role: employee.user.role.name })) {
+      const reason = "Somente Admin pode resetar a senha de uma conta de administrador.";
+      await auditPermissionDenied(actor, { action: "USER_PASSWORD_RESET", entity: "User", reason, entityId: employee.userId });
+      return createPermissionError(reason);
+    }
 
     const externalStatus = await synchronizeUserPassword({ email: employee.user.email, password: input.password,
       persistLocal: (passwordHash) => prisma.$transaction(async (tx) => {
@@ -906,16 +913,16 @@ export async function resetEmployeeUserPassword(actor: Actor, input: { employeeI
         where: { id: employee.userId! },
         data: {
           passwordHash,
-          status: "ACTIVE",
+          ...(normalizeRole(requester.role.name) === "ADMIN" ? { status: "ACTIVE" as const } : {}),
           mustChangePassword: true,
           temporaryPassword: true,
           lastPasswordResetAt: new Date(),
-          passwordResetById: admin.id
+          passwordResetById: requester.id
         }
       });
       await tx.auditLog.create({
         data: {
-          actorId: admin.id,
+          actorId: requester.id,
           action: "EDICAO",
           entity: "User",
           entityId: employee.userId,

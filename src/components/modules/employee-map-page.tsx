@@ -6,7 +6,7 @@ import { useSession } from "next-auth/react";
 import { Check, ChevronDown, LockKeyhole, Plus, UsersRound } from "lucide-react";
 import { EmptyState, MetricPill, MiniAlertList, PageHeader, Panel, SimpleTable, StatusBadge } from "@/components/ui/primitives";
 import { parseWbLoginBatch, serializeWbLogins } from "@/lib/batch-wb-filter";
-import { canEditEmployeeData, canEditEmployeeSensitiveData, canManageRoles } from "@/lib/permissions";
+import { canEditEmployeeData, canEditEmployeeSensitiveData, canManageRoles, canResetEmployeePassword } from "@/lib/permissions";
 import { cn, initials } from "@/lib/utils";
 import { cleanShiftName, isSelectableShiftName } from "@/lib/shift-display";
 import { ApiRequestError, EmployeeClient, EmployeeListResponse, FormInput, FormSelect, InfoLine, SystemSettings, apiJson, displaySystemRole, employeeMapStatusLabel, employeeOperationalStatusOptions, employeeStatusKey, pcdDisabilityTypeOptions } from './shared';
@@ -245,6 +245,7 @@ export function EmployeeMapPage() {
   const hasEmployeeFilters = Boolean(query.trim()) || employeeBatchWbs.length > 0 || [lobFilter, statusFilter, supervisorFilter, roleTitleFilter, skillFilter, waveFilter, shiftFilter, contractFilter].some((values) => values.length > 0);
   const employeePermissionUser = { role: session?.user?.role };
   const isAdmin = canManageRoles(employeePermissionUser);
+  const canResetSelectedPassword = Boolean(selected?.userId) && canResetEmployeePassword(employeePermissionUser, { role: selected?.systemRole });
   const isSupervisorUser = session?.user?.role === "SUPERVISOR";
   const canEditEmployeeOperational = canEditEmployeeData(employeePermissionUser);
   const canEditOperationalBindings = canEditEmployeeOperational;
@@ -513,7 +514,7 @@ export function EmployeeMapPage() {
   }
 
   async function resetSelectedPassword() {
-    if (!selected || resettingPassword) return;
+    if (!selected || resettingPassword || !canResetSelectedPassword) return;
     setResettingPassword(true);
     setEmployeeMessage("");
     try {
@@ -718,7 +719,7 @@ export function EmployeeMapPage() {
                         <button onClick={() => setEditingEmployee(true)} className="rounded-lg bg-blue-600 px-3 py-2.5 text-sm font-bold text-white">
                           Editar dados
                         </button>
-                        {isAdmin ? (
+                        {canResetSelectedPassword ? (
                           <button onClick={() => setShowResetPassword(true)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5 text-sm font-bold text-blue-700">
                             Resetar senha
                           </button>
@@ -919,7 +920,7 @@ export function EmployeeMapPage() {
                           <button disabled={savingEmployee} onClick={() => setEditingEmployee(false)} className="rounded-lg border border-border bg-white px-3 py-2.5 text-sm font-bold text-navy-950 disabled:opacity-50">
                             Cancelar
                           </button>
-                          {isAdmin ? (
+                          {canResetSelectedPassword ? (
                             <button onClick={() => setShowResetPassword(true)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5 text-sm font-bold text-blue-700">
                               Resetar senha
                             </button>
@@ -1009,7 +1010,7 @@ export function EmployeeMapPage() {
           </div>
         ) : null}
       </div>
-      {showResetPassword && selected ? (
+      {showResetPassword && selected && canResetSelectedPassword ? (
         <div className="fixed inset-0 z-50 grid place-items-center bg-navy-950/40 p-4 backdrop-blur-sm">
           <div className="card w-full max-w-md p-5">
             <div className="mb-4 flex items-center justify-between">
@@ -1023,8 +1024,8 @@ export function EmployeeMapPage() {
               <FormInput label="Nova senha" type="password" value={resetPasswordForm.password} onChange={(value) => setResetPasswordForm({ ...resetPasswordForm, password: value })} />
               <FormInput label="Confirmar nova senha" type="password" value={resetPasswordForm.confirmPassword} onChange={(value) => setResetPasswordForm({ ...resetPasswordForm, confirmPassword: value })} />
               <label className="flex items-center gap-2 rounded-lg border border-border bg-slate-50 p-3 text-sm font-semibold text-muted">
-                <input type="checkbox" disabled />
-                Solicitar troca no próximo login (preparado para fase futura)
+                <input type="checkbox" checked disabled />
+                Troca de senha obrigatória no próximo login
               </label>
               <button disabled={resettingPassword} onClick={resetSelectedPassword} className="rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-50">
                 {resettingPassword ? "Salvando..." : "Salvar nova senha"}

@@ -58,6 +58,17 @@ test("middleware libera Rifa para agentes e POC de PROJECT sem liberar Staff", a
   }
 });
 
+test("middleware permits password reset only for active ADMIN and WFM", async () => {
+  for (const role of ["ADMIN", "WFM"]) {
+    const response = await requestAs("/api/employees/reset-password", { role });
+    assert.equal(response.headers.get("x-middleware-next"), "1", role);
+  }
+  for (const role of ["SUPERVISOR", "GESTOR", "RH", "FINANCEIRO", "POC", "RTA", "COLABORADOR", "CLIENT"]) {
+    assert.equal((await requestAs("/api/employees/reset-password", { role })).status, 403, role);
+  }
+  assert.equal((await requestAs("/api/employees/reset-password")).status, 401);
+});
+
 test("middleware returns 401 for revoked API sessions before any service can run", async () => {
   await requestAs("/api/employees/reset-password", { role: "ADMIN" });
   const claims = { sub: currentUser!.id, email: currentUser!.email, role: "ADMIN", authVersion: sessionAuthVersion(currentUser!) };

@@ -8,6 +8,7 @@ import {
   canManageCampaignStaff,
   canAccessRealTimeQueues,
   canAccessStaffCoverage,
+  canResetEmployeePassword,
   normalizeRole,
   type PermissionUser
 } from "@/lib/permissions";
@@ -132,6 +133,7 @@ export function canAccessPathForRole(pathname: string, userOrRole?: string | Per
   const permissionUser = { ...user, status: user?.status ?? "ACTIVE" };
 
   if (pathname === "/" || pathname === "/alterar-senha") return true;
+  if (pathname === "/api/employees/reset-password" || pathname.startsWith("/api/employees/reset-password/")) return canResetEmployeePassword(permissionUser);
   if (pathname === "/meu-espaco" || pathname.startsWith("/meu-espaco/") || pathname === "/api/meu-espaco" || pathname.startsWith("/api/meu-espaco/")) return canAccessMeuEspaco(permissionUser);
 
   if (
