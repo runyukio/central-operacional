@@ -10,10 +10,17 @@ const BILLING_MANUAL_CLOSURE_WITHOUT_FISCAL_INVOICE_WB_LOGINS = new Set([
   "guilhereme.ramos"
 ]);
 
+// Exceção pontual autorizada para o fechamento manual de agosto/2026.
+// Não libera o fluxo automático nem os demais ciclos destes parceiros.
+const BILLING_MANUAL_CLOSURE_MONTH_EXCEPTIONS = new Map<string, ReadonlySet<string>>([
+  ["2026-08", new Set(["wb_diorgenes", "wb_stephaniet"])]
+]);
+
 export type BillingManualClosureWithoutFiscalInvoiceReason =
   | "EMPLOYEE_IN_TRAINING"
   | "NON_POSITIVE_FINAL_AMOUNT"
-  | "WB_EXCEPTION";
+  | "WB_EXCEPTION"
+  | "WB_MONTH_EXCEPTION";
 
 const BILLING_FISCAL_INVOICE_NUMBER_PATTERN = /^\d{1,20}$/;
 
@@ -33,6 +40,7 @@ export function isBillingFiscalAmountMismatchExempt(wbLogin: string | null | und
 }
 
 export function resolveBillingManualClosureWithoutFiscalInvoiceReason(input: {
+  referenceMonth: string;
   wbLogin: string | null | undefined;
   employeeStatus: string | null | undefined;
   finalAmount: number;
@@ -42,6 +50,7 @@ export function resolveBillingManualClosureWithoutFiscalInvoiceReason(input: {
   if (Number(input.finalAmount) <= 0) return "NON_POSITIVE_FINAL_AMOUNT";
   const wbLogin = String(input.wbLogin ?? "").trim().toLowerCase();
   if (BILLING_MANUAL_CLOSURE_WITHOUT_FISCAL_INVOICE_WB_LOGINS.has(wbLogin)) return "WB_EXCEPTION";
+  if (BILLING_MANUAL_CLOSURE_MONTH_EXCEPTIONS.get(input.referenceMonth)?.has(wbLogin)) return "WB_MONTH_EXCEPTION";
   return null;
 }
 

@@ -39,30 +39,52 @@ test("libera divergência de valor da NF somente para os WBs autorizados", () =>
 
 test("permite fechamento manual sem nota para valor não positivo, treinamento e WB autorizado", () => {
   assert.equal(resolveBillingManualClosureWithoutFiscalInvoiceReason({
+    referenceMonth: "2026-07",
     wbLogin: "wb_agente",
     employeeStatus: "Ativo",
     finalAmount: 0
   }), "NON_POSITIVE_FINAL_AMOUNT");
   assert.equal(resolveBillingManualClosureWithoutFiscalInvoiceReason({
+    referenceMonth: "2026-07",
     wbLogin: "wb_agente",
     employeeStatus: "Ativo",
     finalAmount: -10
   }), "NON_POSITIVE_FINAL_AMOUNT");
   assert.equal(resolveBillingManualClosureWithoutFiscalInvoiceReason({
+    referenceMonth: "2026-07",
     wbLogin: "wb_agente",
     employeeStatus: "Em treinamento",
     finalAmount: 100
   }), "EMPLOYEE_IN_TRAINING");
   assert.equal(resolveBillingManualClosureWithoutFiscalInvoiceReason({
+    referenceMonth: "2026-07",
     wbLogin: " GUILHEREME.RAMOS ",
     employeeStatus: "Ativo",
     finalAmount: 4_700.16
   }), "WB_EXCEPTION");
   assert.equal(resolveBillingManualClosureWithoutFiscalInvoiceReason({
+    referenceMonth: "2026-07",
     wbLogin: "wb_outro",
     employeeStatus: "Ativo",
     finalAmount: 100
   }), null);
+});
+
+test("exceção manual pontual de agosto/2026 libera somente os dois WBs autorizados", () => {
+  for (const wbLogin of ["wb_diorgenes", " WB_STEPHANIET "]) {
+    for (const employeeStatus of ["Ativo", "Desligado"]) {
+      const input = { referenceMonth: "2026-08", wbLogin, employeeStatus, finalAmount: 1000 };
+      assert.equal(resolveBillingManualClosureWithoutFiscalInvoiceReason(input), "WB_MONTH_EXCEPTION");
+      for (const referenceMonth of ["2026-07", "2026-09", "2027-08", "08", "2026-8", ""]) {
+        assert.equal(resolveBillingManualClosureWithoutFiscalInvoiceReason({ ...input, referenceMonth }), null);
+      }
+    }
+    // Não altera a regra de aprovação automática/divergência de valor da NF.
+    assert.equal(isBillingFiscalAmountMismatchExempt(wbLogin), false);
+  }
+  for (const wbLogin of ["wb_outro", "wb_diogenes", "wb_diorgenes2", "wb_stephaniet2", null, undefined]) {
+    assert.equal(resolveBillingManualClosureWithoutFiscalInvoiceReason({ referenceMonth: "2026-08", wbLogin, employeeStatus: "Ativo", finalAmount: 1000 }), null);
+  }
 });
 
 test("soma a correção ao valor bruto esperado na nota fiscal", () => {

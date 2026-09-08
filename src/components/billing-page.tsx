@@ -1119,6 +1119,7 @@ function EmployeeBillingDetail({
   const paid = invoice.status === "PAGO";
   const finalized = invoice.status === "FECHADO" || paid;
   const finalizesWithoutFiscalInvoice = Boolean(resolveBillingManualClosureWithoutFiscalInvoiceReason({
+    referenceMonth,
     wbLogin: invoice.wbLogin,
     employeeStatus: invoice.employeeStatus,
     finalAmount: invoice.finalAmount

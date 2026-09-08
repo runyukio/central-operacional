@@ -1433,6 +1433,7 @@ export async function setEmployeeBillingInvoiceFinalized(actor: Actor, input: {
 
   if (input.finalized && calculatedForFinalization) {
     const closureWithoutFiscalInvoiceReason = resolveBillingManualClosureWithoutFiscalInvoiceReason({
+      referenceMonth,
       wbLogin: employee.wbLogin,
       employeeStatus: employee.operationalStatus,
       finalAmount: calculatedForFinalization.finalAmount
