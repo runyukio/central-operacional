@@ -6,7 +6,8 @@ import { apiJson, FormInput } from "@/components/modules/shared";
 import { officialAbsenceReasons } from "@/lib/absence-reasons";
 import { createSpacePendingFeed, emptySpaceFeed, type SpacePendingPage } from "@/lib/meu-espaco-feed";
 import type { SpacePending } from "@/lib/meu-espaco-contract";
-import { dateLabel, number, SpaceButtons, SpaceLoad, useSpaceRead } from "./shared";
+import { formatMinutesToHHMM } from "@/lib/work-hours-rules";
+import { dateLabel, SpaceButtons, SpaceLoad, useSpaceRead } from "./shared";
 
 function PendingDetail({ row, supervisorId, canRespond, onAnswered }: { row: SpacePending; supervisorId: string; canRespond: boolean; onAnswered: (row: SpacePending) => void }) {
   const endpoint = `/api/meu-espaco/pendencias/${row.kind}/${encodeURIComponent(row.id)}?${new URLSearchParams({ supervisorId })}`;
@@ -25,7 +26,7 @@ function PendingDetail({ row, supervisorId, canRespond, onAnswered }: { row: Spa
     finally { setSaving(false); }
   }
   return <div className="mt-4 border-t border-border pt-4">
-    {row.kind === "hours" ? <p className="mb-3 text-sm text-muted">Classificação: {row.reason} · Previsto: {row.plannedStart || "—"}–{row.plannedEnd || "—"} · Captura na ocorrência: {number(row.capturedMinutes, " min")}</p> : null}
+    {row.kind === "hours" ? <p className="mb-3 text-sm text-muted">Classificação: {row.reason} · Previsto: {row.plannedStart || "—"}–{row.plannedEnd || "—"} · Captura na ocorrência: {row.capturedMinutes == null ? "Sem dados" : formatMinutesToHHMM(row.capturedMinutes).padStart(5, "0")}</p> : null}
     {canRespond && row.pending ? <form onSubmit={submit} className="space-y-3">
       {row.kind === "absence" ? <label className="block text-sm font-bold">Motivo<select required value={reason} onChange={(e) => setReason(e.target.value)} className="premium-control mt-2 w-full p-2"><option value="">Selecione o motivo</option>{officialAbsenceReasons.map((value) => <option key={value}>{value}</option>)}</select></label> : null}
       {row.kind === "absence" ? <label className="block text-sm font-bold">Categoria<select value={reasonCategory} onChange={(e) => setReasonCategory(e.target.value)} className="premium-control mt-2 w-full p-2">{["Cronograma", "Operacional", "Saúde", "Infraestrutura", "Equipamentos", "Internet", "Outros"].map((value) => <option key={value}>{value}</option>)}</select></label> : null}
