@@ -57,8 +57,8 @@ export function SpaceResultsTab({ data }: { data: SpaceResults }) {
       {!partners.length ? <p className="p-6 text-center text-muted">Nenhum parceiro encontrado.</p> : null}
     </section>
     {visibleData.groups.map((group) => <section key={group.lob} className="card overflow-hidden" aria-label={`Evolução diária ${group.lob}`}>
-      <div className="p-4"><h3 className="font-extrabold">Evolução diária · {group.lob}</h3><p className="mt-1 text-xs text-muted">Cada linha corresponde à data da base. Datas sem registros não são convertidas em zero.</p></div>
-      <div className="overflow-x-auto"><table className={tableClass}><thead><tr><th>Data</th><MetricHeaders lob={group.lob} /></tr></thead><tbody>{group.daily.map((row) => <tr key={row.date}><td>{dateLabel(row.date)}</td><MetricCells metric={row.metric} lob={group.lob} /></tr>)}</tbody></table></div>
+      <div className="p-4"><h3 className="font-extrabold">Evolução diária · {group.lob}</h3><p className="mt-1 text-xs text-muted">Cada linha corresponde à data da base. {group.lob === "ADS" ? "Submit total soma a produção do time nessa data. " : ""}Datas sem registros não são convertidas em zero.</p></div>
+      <div className="overflow-x-auto"><table className={tableClass}><thead><tr><th>Data</th>{group.lob === "ADS" ? <th>Submit total</th> : null}<MetricHeaders lob={group.lob} /></tr></thead><tbody>{group.daily.map((row) => <tr key={row.date}><td>{dateLabel(row.date)}</td>{group.lob === "ADS" ? <td>{number(row.metric.production)}</td> : null}<MetricCells metric={row.metric} lob={group.lob} /></tr>)}</tbody></table></div>
       {!group.daily.length ? <p className="p-6 text-center text-muted">Sem dados no período.</p> : null}
     </section>)}
   </div>;
