@@ -2620,3 +2620,82 @@ model BirthdayNotification {
 
   @@index([month])
 }
+
+// Weekly Quality is isolated from operational Performance and its imports.
+model QualityWeeklyAsset {
+  id           String   @id
+  filename     String
+  objectPath   String   @unique
+  declaredSize Int
+  kind         String
+  createdById  String
+  createdAt    DateTime @default(now())
+  mappings     QualityWeeklyMapping[]
+  imports      QualityWeeklyImport[]
+}
+
+model QualityWeeklyMapping {
+  id           String   @id
+  assetId      String
+  digest       String
+  entries      Json
+  createdById  String
+  createdBy    String
+  createdAt    DateTime @default(now())
+  asset        QualityWeeklyAsset @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  imports      QualityWeeklyImport[]
+  @@index([createdAt, id])
+}
+
+model QualityWeeklyImport {
+  id           String   @id
+  assetId      String
+  mappingId    String?
+  digest       String
+  sheet        String
+  dateColumn   String?
+  validation   Json
+  createdById  String
+  createdBy    String
+  createdAt    DateTime @default(now())
+  asset        QualityWeeklyAsset @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  mapping      QualityWeeklyMapping? @relation(fields: [mappingId], references: [id], onDelete: Restrict)
+  drafts       QualityWeeklyDraft[]
+  reports      QualityWeeklyReport[]
+  @@index([createdAt, id])
+}
+
+model QualityWeeklyDraft {
+  id           String   @id
+  importId     String
+  snapshot     String
+  expectations Json
+  contentHash  String
+  createdById  String
+  createdAt    DateTime @default(now())
+  import       QualityWeeklyImport @relation(fields: [importId], references: [id], onDelete: Restrict)
+}
+
+model QualityWeeklyReport {
+  id           String   @id
+  weekStart    String
+  weekNumber   Int
+  version      Int
+  importId     String
+  snapshot     String
+  contentHash  String
+  createdById  String
+  createdBy    String
+  createdAt    DateTime @default(now())
+  import       QualityWeeklyImport @relation(fields: [importId], references: [id], onDelete: Restrict)
+  head         QualityWeeklyHead?
+  @@unique([weekStart, version])
+  @@index([weekStart, createdAt])
+  @@index([createdAt, id])
+}
+
+model QualityWeeklyHead {
+  weekStart String @id
+  reportId  String @unique
+  report    QualityWeeklyReport @relation(fields: [reportId], references: [id], onDelete: Restrict)
+}

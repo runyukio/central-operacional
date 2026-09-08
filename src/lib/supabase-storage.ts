@@ -5,6 +5,7 @@ import type { Actor } from "@/lib/mock-db";
 import { roleHasCapability } from "@/lib/access-control";
 
 export const storageBuckets = {
+  "quality-weekly-reports": { maxBytes: 10 * 1024 * 1024, extensions: [".xlsx", ".csv", ".docx"] },
   "schedule-imports": { maxBytes: 10 * 1024 * 1024, extensions: [".xlsx", ".csv"] },
   "request-attachments": { maxBytes: 10 * 1024 * 1024, extensions: [".pdf", ".png", ".jpg", ".jpeg", ".docx", ".xlsx", ".csv"] },
   "quality-materials": { maxBytes: 30 * 1024 * 1024, extensions: [".pdf", ".png", ".jpg", ".jpeg", ".docx"] },
@@ -46,6 +47,9 @@ export function validateStorageUpload(actor: Actor, bucket: string, file: File) 
 
 function canUploadToBucket(actor: Actor, bucket: StorageBucket) {
   switch (bucket) {
+    // Dedicated API verifies the explicit report allowlist; generic uploads stay blocked.
+    case "quality-weekly-reports":
+      return false;
     case "schedule-imports":
       return roleHasCapability(actor.role, "SCHEDULE_EDIT");
     case "request-attachments":

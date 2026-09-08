@@ -17,7 +17,7 @@ export async function middleware(request: NextRequest) {
       return NextResponse.json({ success: false, error: "Sessão expirada ou revogada. Entre novamente.", message: "Sessão expirada ou revogada. Entre novamente." }, { status: 401, headers: { "Cache-Control": "no-store" } });
     }
     const loginUrl = new URL("/login", request.url);
-    loginUrl.searchParams.set("callbackUrl", pathname);
+    loginUrl.searchParams.set("callbackUrl", pathname === "/weekly-quality-report" ? pathname + request.nextUrl.search : pathname);
     if (originalToken) loginUrl.searchParams.set("reason", "session-expired");
     return NextResponse.redirect(loginUrl);
   }

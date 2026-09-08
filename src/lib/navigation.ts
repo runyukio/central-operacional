@@ -46,6 +46,7 @@ export const navSections: NavSection[] = [
       { label: "Captura de Horas", href: "/captura-horas", icon: "Clock", roles: rolesWithCapability("CAPTURE") },
       { label: "Necessidade", href: "/staff-cobertura", icon: "UsersRound", roles: rolesWithCapability("STAFF_COVERAGE") },
       { label: "Performance", href: "/performance", icon: "Trophy", roles: rolesWithCapability("PERFORMANCE") },
+      { label: "Weekly Quality Report", href: "/weekly-quality-report", icon: "FileBarChart", roles: ["ADMIN", "WFM"] },
       { label: "Meus Dados", href: "/performance/meus-dados", icon: "ChartNoAxesCombined", roles: personalRoles }
     ]
   },
@@ -133,6 +134,7 @@ export function canAccessPathForRole(pathname: string, userOrRole?: string | Per
   const permissionUser = { ...user, status: user?.status ?? "ACTIVE" };
 
   if (pathname === "/" || pathname === "/alterar-senha") return true;
+  if (pathname === "/weekly-quality-report" || pathname.startsWith("/weekly-quality-report/") || pathname === "/api/quality-weekly" || pathname.startsWith("/api/quality-weekly/")) return normalizedRole === "ADMIN" || normalizedRole === "WFM";
   if (pathname === "/api/employees/reset-password" || pathname.startsWith("/api/employees/reset-password/")) return canResetEmployeePassword(permissionUser);
   if (pathname === "/meu-espaco" || pathname.startsWith("/meu-espaco/") || pathname === "/api/meu-espaco" || pathname.startsWith("/api/meu-espaco/")) return canAccessMeuEspaco(permissionUser);
 
