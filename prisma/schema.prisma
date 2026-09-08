@@ -483,6 +483,7 @@ model EmployeeProfile {
   cecQualityRecords                 CecQualityRecord[]
   productionRecords                 ProductionRecord[]
   cecCpdRecords                     PerformanceCecCpdRecord[]
+  cecFrtRecords                     PerformanceCecFrtRecord[]
   workSessionDevices                WorkSessionDevice[]
   workSessionEvents                 WorkSessionEvent[]
   workSessionDailySummaries         WorkSessionDailySummary[]
@@ -1419,6 +1420,7 @@ model PerformanceImportBatch {
   productionRecords  ProductionRecord[]
   queueVolumeRecords PerformanceQueueVolumeRecord[]
   cecCpdRecords      PerformanceCecCpdRecord[]
+  cecFrtRecords      PerformanceCecFrtRecord[]
   importedAt         DateTime                       @default(now())
   createdAt          DateTime                       @default(now())
 
@@ -1581,6 +1583,25 @@ model PerformanceCecCpdRecord {
   @@index([employeeId])
   @@index([importBatchId])
   @@index([employeeId, performanceDay])
+}
+
+model PerformanceCecFrtRecord {
+  id               String                 @id @default(cuid())
+  ticketCreatedDay DateTime               @db.Date
+  wbLogin          String
+  employeeId       String?
+  employee         EmployeeProfile?       @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  priority         String
+  total            Int
+  over240          Int
+  over1440         Int
+  importBatchId    String
+  importBatch      PerformanceImportBatch @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+  createdAt        DateTime               @default(now())
+
+  @@unique([importBatchId, ticketCreatedDay, wbLogin, priority])
+  @@index([ticketCreatedDay])
+  @@index([employeeId, ticketCreatedDay])
 }
 
 model PerformanceManualUploadChunk {

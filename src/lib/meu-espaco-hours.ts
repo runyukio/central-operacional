@@ -2,8 +2,14 @@ import { plannedProductiveHoursForSchedule } from "@/lib/work-hours-rules";
 import type { SpaceHoursSummary, SpacePeriod } from "@/lib/meu-espaco-contract";
 
 export function spaceHoursDefaultPeriod(period: SpacePeriod, today: string): SpacePeriod {
-  if (period.startDate !== `${today.slice(0, 7)}-01` || period.endDate !== today) return period;
-  return { ...period, endDate: new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)), 0)).toISOString().slice(0, 10) };
+  return spaceHoursMonthPeriod((period.startDate || today).slice(0, 7));
+}
+
+export function spaceHoursMonthPeriod(month: string): SpacePeriod {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new Error("Selecione um mês válido.");
+  const year = Number(month.slice(0, 4));
+  if (year < 1900 || year > 9999) throw new Error("Selecione um mês válido.");
+  return { startDate: `${month}-01`, endDate: new Date(Date.UTC(year, Number(month.slice(5)), 0)).toISOString().slice(0, 10) };
 }
 
 export type SpaceScheduleGroup = { status: string; startsAt: string | null; endsAt: string | null; shiftName: string | null; future: boolean; slots: number };

@@ -10,10 +10,10 @@ import { getSpacePendingItem, getSpaceSummary, listSpacePending, respondSpacePen
 import { getSpaceResults } from "./meu-espaco-results-service";
 import { listOperationalWorkHours, workHourReadData } from "./work-hours-service";
 import type { MeuEspacoScope } from "./meu-espaco-scope";
-import { isActiveSpaceSupervisor } from "./meu-espaco-supervisors";
+import { isActiveSpaceSupervisor, isCurrentSpacePartner } from "./meu-espaco-supervisors";
 import { spaceLatencyQueueKind } from "./meu-espaco-metrics";
 import { spaceHoursDefaultPeriod, summarizeSpaceHours } from "./meu-espaco-hours";
-import { getSpaceHoursSummary, spaceHoursPeriod } from "./meu-espaco-hours-service";
+import { getSpaceHoursSummary, getSpaceMonthlyHours, spaceHoursPeriod } from "./meu-espaco-hours-service";
 
 // Prisma model delegates are proxies without method descriptors. Replace only
 // this process's delegates, keeping all test IO in memory and failing closed.
@@ -162,6 +162,31 @@ test("results reconcile daily sums, weighted quality, current membership and par
   assert.equal(result.partners.find((row) => row.id === "no-data")?.metric.latencyMinutes, null);
 });
 
+test("CEC SLA/FRT respects team scope and never changes CPD production days", async (t) => {
+  t.mock.method(prisma, "$queryRaw", async (sql: any) => {
+    assert.ok(sql.values.includes("agent"));
+    const date = new Date("2026-09-01");
+    if (sql.text.includes('FROM "PerformanceCecCpdRecord"')) return [{employeeId:"agent",day:date,output:200,ahtSubmit:0,duration:0,active:true,updatedAt:date}];
+    if (sql.text.includes('FROM "PerformanceCecFrtRecord"')) {
+      assert.match(sql.text, /f\."employeeId" IN/);
+      return [
+        {employeeId:"agent",wbLogin:"wb_agent",day:date,normalTotal:10,normalOver:10,urgentTotal:10,urgentOver:2,updatedAt:date},
+        {employeeId:"agent",wbLogin:"wb_agent",day:new Date("2026-09-02"),normalTotal:90,normalOver:0,urgentTotal:30,urgentOver:2,updatedAt:date}
+      ];
+    }
+    return [];
+  });
+  t.mock.method(prisma.schedule,"groupBy",async()=>[]);
+  const result = await getSpaceResults(scope({employees:[employee("agent","sup",{lob:{name:"CEC"}}),employee("no-data","sup",{lob:{name:"CEC"}})]}),new URLSearchParams("startDate=2026-09-01&endDate=2026-09-06"));
+  const group=result.groups[0];
+  assert.equal(group.metric.cecFrt?.normalSla,90);assert.equal(group.metric.cecFrt?.urgentSla,90);
+  assert.equal(group.metric.production,200);assert.equal(group.metric.productionDays,1);assert.equal(group.metric.agentDays,1);assert.equal(group.metric.cpd,200);
+  assert.equal(group.coverage.frtPartners,1);assert.equal(group.coverage.frtLatest,"2026-09-02");
+  assert.equal(group.daily[1].metric.cpd,null);assert.equal(group.daily[1].metric.cecFrt?.normalSla,100);
+  assert.equal(result.supervisors[0].groups[0].metric.cecFrt?.normalSla,90);
+  assert.equal(result.partners.find(r=>r.id==="no-data")?.metric.cecFrt?.normalSla,null);
+});
+
 test("active directory checks operational and account statuses, deletion and supervisor role", () => {
   const active = { roleTitle: "Supervisão", operationalStatus: "Ativo", deletedAt: null, user: { status: "ACTIVE", deletedAt: null, role: { name: "SUPERVISOR" } } };
   assert.equal(isActiveSpaceSupervisor(active), true);
@@ -169,6 +194,53 @@ test("active directory checks operational and account statuses, deletion and sup
   assert.equal(isActiveSpaceSupervisor({ ...active, user: { ...active.user, status: "INACTIVE" } }), false);
   assert.equal(isActiveSpaceSupervisor({ ...active, deletedAt: new Date() }), false);
   assert.equal(isActiveSpaceSupervisor({ ...active, user: null }), false);
+  assert.equal(isActiveSpaceSupervisor({ ...active, wbLogin: "wb_hailene" }), false);
+  assert.equal(isActiveSpaceSupervisor({ ...active, roleTitle: "Supervisora de Qualidade" }), false);
+  assert.equal(isActiveSpaceSupervisor({ ...active, skill: "Quality" }), false);
+  for (const status of ["Ativo", "Nesting", "Em treinamento", "Onboarding"]) assert.equal(isCurrentSpacePartner({ ...active, operationalStatus: status }), true);
+  for (const status of ["Desligado", "Inativo", "Desativado"]) assert.equal(isCurrentSpacePartner({ ...active, operationalStatus: status }), false);
+});
+
+test("current Meu Espaço excludes quality supervision and terminated partners before consulting any metrics", async (t) => {
+  t.mock.method(prisma.user, "findUnique", async () => ({ id: "u", email: "test@example.test", status: "ACTIVE", deletedAt: null, role: { name: "ADMIN" }, employeeProfile: null }));
+  t.mock.method(prisma.employeeProfile, "findMany", async () => [employee("sup", "manager", { roleTitle: "Supervisor" }),
+    employee("hailene", "manager", { roleTitle: "Supervisor", wbLogin: "wb_hailene" }), employee(),
+    employee("terminated", "sup", { operationalStatus: "Desligado" }), employee("quality-agent", "hailene")]);
+  const actor = { email: "test@example.test", name: "Test", role: "ADMIN" as const };
+  const result = await getMeuEspacoScope(actor);
+  assert.deepEqual(result.activeSupervisorIds, ["sup"]); assert.deepEqual(result.employeeIds, ["agent"]);
+  assert.equal(result.profiles.some((p) => p.id === "terminated"), false);
+  await assert.rejects(() => getMeuEspacoScope(actor, "hailene"), /Supervisor ativo/);
+});
+
+test("monthly hours paginate partners, sum all days and keep full-team cards independent of page", async (t) => {
+  const partners = Array.from({ length: 51 }, (_, i) => employee(`agent-${String(i).padStart(2, "0")}`));
+  const selectedIds = partners.slice(0, 50).map((p) => p.id);
+  const day = new Date("2026-09-01"), futureDay = new Date("2026-09-30");
+  t.mock.method(prisma.workHourRecord, "findMany", async (args: any) => {
+    assert.deepEqual(args.where.employeeId.in, selectedIds);
+    assert.equal(args.where.date.gte.toISOString().slice(0, 10), "2026-09-01");
+    assert.equal(args.where.date.lte.toISOString().slice(0, 10), "2026-09-07");
+    return [1, 2].map((n) => ({ id: `record-${n}`, employeeId: partners[0].id, wbLogin: partners[0].wbLogin, date: new Date(+day + (n - 1) * 86400000),
+      actualHours: 8, adjustedHours: null, effectiveHours: 8, differenceMinutes: 0, status: "RECORDED", schedule: { status: "ESCALADO", startsAt: null, endsAt: null, deletedAt: null } }));
+  });
+  t.mock.method(prisma.schedule, "findMany", async (args: any) => {
+    assert.deepEqual(args.where.employeeId.in, selectedIds); assert.equal(args.where.deletedAt, null);
+    assert.equal(args.where.date.lte.toISOString().slice(0, 10), "2026-09-30");
+    return [{ employeeId: partners[0].id, date: futureDay, status: "ESCALADO", startsAt: null, endsAt: null }];
+  });
+  t.mock.method(prisma.workHourRecord, "aggregate", async (args: any) => {
+    assert.equal(args.where.employeeId.in.length, 51); return { _sum: { effectiveHours: 400 }, _count: { _all: 50 } };
+  });
+  t.mock.method(prisma, "$queryRaw", async (sql: any) => { assert.ok(sql.values.includes("agent-50")); return [{ status: "ESCALADO", future: true, slots: 51 }]; });
+  let captureCalls = 0;
+  t.mock.method(workHourReadData, "capturedHours", async (items: any[]) => { captureCalls++; assert.equal(items.length, 2); return new Map(items.map((item) => [item.key, 8])); });
+  const all = scope({ employees: partners, employeeIds: partners.map((p) => p.id) } as Partial<MeuEspacoScope>);
+  const result = await getSpaceMonthlyHours(all, new URLSearchParams("month=2026-09"), "2026-09-07");
+  assert.equal(result.data.length, 50); assert.equal(result.pagination.total, 51); assert.equal(result.pagination.totalPages, 2);
+  assert.equal(result.data[0].effectiveHours, 16); assert.equal(result.data[0].futureHours, 8); assert.equal(result.data[0].projectedHours, 24);
+  assert.equal(result.data[1].projectedHours, null); assert.equal(result.summary.projectedHours, 808); assert.equal(captureCalls, 1);
+  await assert.rejects(() => getSpaceMonthlyHours(all, new URLSearchParams("month=2026-09&page=0")), /Página inválida/);
 });
 
 test("latency uses sum/submits, separates Comments, excludes other video SLAs, preserves no data", () => {
@@ -259,7 +331,7 @@ test("absence answer reuses attendance classification and its original histories
   const partner = { ...employee(), shift };
   const schedule: any = { id: "absence", employeeId: "agent", date, status: "FALTA", deletedAt: null, shift, employee: partner };
   const record: any = { id: "attendance", employeeId: "agent", scheduleId: "absence", date, status: "FALTA", isJustified: false, absenceReason: null,
-    updatedAt: date, registeredAt: date, justifiedAt: null };
+    updatedAt: date, registeredAt: date, justifiedAt: null, evidenceUrl: "https://example.test/prior-evidence", hasEvidence: true };
   t.mock.method(prisma.user, "findUnique", async () => ({ id: "u", name: "Test", status: "ACTIVE", role: { name: "SUPERVISOR" }, employeeProfile: { id: "sup", wbLogin: "test" } }));
   t.mock.method(prisma.user, "findMany", async () => []);
   t.mock.method(prisma.employeeProfile, "findFirst", async () => partner);
@@ -278,4 +350,5 @@ test("absence answer reuses attendance classification and its original histories
   assert.equal(result.data.pending, false); assert.equal(schedule.status, "FALTA_INJUSTIFICADA");
   assert.equal(record.isJustified, true); assert.equal(history.length, 1); assert.equal(scheduleHistory.length, 1); assert.equal(audits.length, 1);
   assert.equal(history[0].attendanceRecordId, "attendance"); assert.equal(audits[0].entity, "AttendanceRecord");
+  assert.equal(record.evidenceUrl, "https://example.test/prior-evidence"); assert.equal(record.hasEvidence, true);
 });

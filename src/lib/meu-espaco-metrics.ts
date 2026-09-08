@@ -1,5 +1,6 @@
 import { calculateAbsenceRate } from "@/lib/attendance-calculation";
 import type { SpaceMetric } from "@/lib/meu-espaco-contract";
+import { cecFrtMetrics, emptyCecFrt, type CecFrtCounts } from "@/lib/cec-frt";
 
 export function spaceLobFamily(lob: string) {
   const value = lob.trim().toUpperCase();
@@ -8,10 +9,10 @@ export function spaceLobFamily(lob: string) {
   return value;
 }
 export type MetricAccumulator = { output: number; days: Set<string>; agentDays: Set<string>; ahtSubmit: number; duration: number; correct: number; samples: number; planned: number; absences: number;
-  latencyMinutesSum: number; latencySubmits: number; commentsLatencyMinutesSum: number; commentsLatencySubmits: number };
+  latencyMinutesSum: number; latencySubmits: number; commentsLatencyMinutesSum: number; commentsLatencySubmits: number; cecFrt: CecFrtCounts };
 export function emptySpaceMetric(): MetricAccumulator {
   return { output: 0, days: new Set(), agentDays: new Set(), ahtSubmit: 0, duration: 0, correct: 0, samples: 0, planned: 0, absences: 0,
-    latencyMinutesSum: 0, latencySubmits: 0, commentsLatencyMinutesSum: 0, commentsLatencySubmits: 0 };
+    latencyMinutesSum: 0, latencySubmits: 0, commentsLatencyMinutesSum: 0, commentsLatencySubmits: 0, cecFrt: emptyCecFrt() };
 }
 export function spaceLatencyQueueKind(queue: { lob: string; slaTargetMinutes: number | null }) {
   if (queue.lob === "ADS" || (queue.lob === "VIDEO" && queue.slaTargetMinutes === 15)) return "primary";
@@ -20,7 +21,7 @@ export function spaceLatencyQueueKind(queue: { lob: string; slaTargetMinutes: nu
 }
 const round = (n: number) => Math.round(n * 100) / 100;
 export function finishSpaceMetric(value: MetricAccumulator, lob: string): SpaceMetric {
-  return { production: value.days.size ? value.output : null,
+  return { ...(lob === "CEC" ? { cecFrt: cecFrtMetrics(value.cecFrt) } : {}), production: value.days.size ? value.output : null,
     dailyTeam: value.days.size ? round(value.output / value.days.size) : null,
     dailyIndividual: value.agentDays.size ? round(value.output / value.agentDays.size) : null,
     ahtSeconds: lob !== "CEC" && value.ahtSubmit > 0 ? round(value.duration / value.ahtSubmit) : null,

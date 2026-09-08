@@ -6,6 +6,7 @@ import { isProtectedCaptureScheduleStatus } from "@/lib/work-hours-capture-integ
 import { answerWorkHourAdherenceJustification } from "@/lib/work-hours-capture-integration-service";
 import { updateOperationalAttendance } from "@/lib/schedule-service";
 import { MeuEspacoError } from "@/lib/meu-espaco-access";
+import { isCurrentSpacePartner } from "@/lib/meu-espaco-supervisors";
 import { decodeSpaceCursor, encodeSpaceCursor, pendingFingerprint, spaceDate, spacePendingFilters, spacePeriod, spaceToday } from "@/lib/meu-espaco-filters";
 import type { MeuEspacoScope } from "@/lib/meu-espaco-scope";
 import type { ManagementCounts, SpacePending, SpaceSummary } from "@/lib/meu-espaco-contract";
@@ -24,7 +25,7 @@ export async function spacePendingSource(scope: MeuEspacoScope) {
   }) : [];
   const validReasons = reasonRows.flatMap((row) => row.absenceReason && normalizeAbsenceReasonForInput(row.absenceReason) ? [row.absenceReason] : []);
   const validReasonSql = validReasons.length ? Prisma.sql`a."absenceReason" IN (${Prisma.join(validReasons)})` : Prisma.sql`FALSE`;
-  const eligibleIds = scope.profiles.filter((employee) => isCaptureImportEligible(employee, spaceToday())).map((employee) => employee.id);
+  const eligibleIds = scope.profiles.filter((employee) => isCurrentSpacePartner(employee) && isCaptureImportEligible(employee, spaceToday())).map((employee) => employee.id);
   return Prisma.sql`WITH items AS (
     SELECT s.id, 'absence'::text AS kind, s.date, e.id AS "employeeId", e."fullName" AS "employeeName", e."wbLogin",
       l.name AS lob, e."supervisorId", COALESCE(sup."fullName", 'Sem supervisor') AS supervisor,
@@ -139,7 +140,7 @@ export async function respondSpacePending(scope: MeuEspacoScope, kind: string, i
     const attendance = await prisma.attendanceRecord.findFirst({ where: { scheduleId: id, employeeId: item.employeeId }, orderBy: [{ updatedAt: "desc" }, { id: "desc" }], select: { id: true } });
     const result = await updateOperationalAttendance(scope.actor, { employeeId: item.employeeId, scheduleId: id, attendanceRecordId: attendance?.id,
       date: item.date, shift: schedule.shift?.name || schedule.employee.shift.name, status: schedule.status === "ERRO_ESCALA" ? "Erro de escala" : "Falta",
-      absenceReason: input.reason, reasonCategory: input.reasonCategory, supervisorJustification: input.justification, hasEvidence: Boolean(input.evidenceUrl), evidenceUrl: input.evidenceUrl });
+      absenceReason: input.reason, reasonCategory: input.reasonCategory, supervisorJustification: input.justification, hasEvidence: Boolean(item.evidenceUrl), evidenceUrl: item.evidenceUrl });
     if ("error" in result) throw new MeuEspacoError(result.error || "Não foi possível responder.");
   }
   return { data: await getSpacePendingItem(scope, kind, id) };

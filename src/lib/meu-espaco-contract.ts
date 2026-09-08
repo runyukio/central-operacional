@@ -13,6 +13,7 @@ export type SpaceSummary = {
   management: ManagementCounts; lobs: string[]; period: SpacePeriod;
 };
 export type SpaceMetric = {
+  cecFrt?: import("@/lib/cec-frt").CecFrtMetric;
   production: number | null; dailyTeam: number | null; dailyIndividual: number | null;
   ahtSeconds: number | null; cpd: number | null; quality: number | null; abs: number | null;
   latencyMinutes: number | null; commentsLatencyMinutes: number | null;
@@ -23,14 +24,20 @@ export type SpaceResults = {
   period: SpacePeriod;
   supervisors: Array<{ id: string; name: string; groups: Array<{ lob: string; metric: SpaceMetric }> }>;
   groups: Array<{ lob: string; teamSize: number; metric: SpaceMetric; daily: Array<{ date: string; metric: SpaceMetric }>;
-    coverage: { productionPartners: number; qualityPartners: number; schedulePartners: number; productionLatest: string | null; qualityLatest: string | null; scheduleLatest: string | null; updatedAt: string | null } }>;
+    coverage: { frtPartners?: number; frtLatest?: string | null; productionPartners: number; qualityPartners: number; schedulePartners: number; productionLatest: string | null; qualityLatest: string | null; scheduleLatest: string | null; updatedAt: string | null } }>;
   partners: Array<{ id: string; name: string; wbLogin: string; skill: string; lob: string; metric: SpaceMetric }>;
 };
 export type SpaceHours = {
+  period: SpacePeriod;
   summary: SpaceHoursSummary;
-  data: Array<{ id: string; employeeId: string; employeeName: string; wbLogin: string; date: string; lob: string;
-    plannedHours: number; actualHours: number; capturedHours: number; effectiveHours: number; adjustedHours: number; differenceMinutes: number; status: string }>;
+  data: SpaceMonthlyHoursRow[];
   pagination: { page: number; totalPages: number; total: number };
+};
+export type SpaceMonthlyHoursRow = {
+  id: string; employeeId: string; employeeName: string; wbLogin: string; month: string; lob: string;
+  plannedHours: number; actualHours: number; capturedHours: number; effectiveHours: number; adjustedHours: number;
+  differenceMinutes: number; status: string; realizedRecords: number; futureHours: number;
+  projectedHours: number | null; missingPastSlots: number;
 };
 export type SpaceHoursSummary = {
   actualThrough: string; projectionFrom: string; projectionUntil: string;

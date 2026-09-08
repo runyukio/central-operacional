@@ -20,6 +20,7 @@ import {
   type PerformancePreviewRow
 } from "@/lib/performance-service";
 import { processFirstWorksheetInChunks, XlsxChunkError } from "@/lib/xlsx-row-chunks";
+import { importCecFrtSnapshot } from "@/lib/cec-frt-service";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 800;
@@ -60,6 +61,12 @@ export async function POST(request: Request) {
       const qualityScope = readQualityScope(url);
       try {
         const uploadedFiles = await rebuildUploadedFiles(uploadId, importUser.email);
+        if (uploadedFiles.cecFrt) {
+          if (uploadedFiles.production || uploadedFiles.volume || uploadedFiles.cecCpd || uploadedFiles.quality) {
+            throw new PerformanceError("Envie SLA/FRT CEC separadamente das demais bases.", 400);
+          }
+          return NextResponse.json({ success: true, ...await importCecFrtSnapshot(actor, readWorkbookRows(uploadedFiles.cecFrt.buffer), uploadedFiles.cecFrt.fileName) });
+        }
         const hasOperationalFiles = Boolean(uploadedFiles.production || uploadedFiles.volume || uploadedFiles.cecCpd);
         if (hasOperationalFiles && (!uploadedFiles.production || !uploadedFiles.volume || !uploadedFiles.cecCpd)) {
           throw new PerformanceError("As bases Produção / Output, Filas / Input e CEC CPD / Output devem ser enviadas juntas.", 400);
@@ -107,7 +114,7 @@ export async function POST(request: Request) {
 async function receiveUploadChunk(request: Request, url: URL, uploadedByEmail: string) {
   const uploadId = requiredUploadId(url);
   const fileType = url.searchParams.get("fileType");
-  if (fileType !== "production" && fileType !== "volume" && fileType !== "cecCpd" && fileType !== "quality") throw new PerformanceError("Tipo de arquivo inválido.", 400);
+  if (fileType !== "production" && fileType !== "volume" && fileType !== "cecCpd" && fileType !== "quality" && fileType !== "cecFrt") throw new PerformanceError("Tipo de arquivo inválido.", 400);
   const chunkIndex = integerParam(url, "chunkIndex", 0);
   const totalChunks = integerParam(url, "totalChunks", 1);
   if (chunkIndex >= totalChunks) throw new PerformanceError("Índice da parte do arquivo inválido.", 400);
@@ -146,7 +153,7 @@ async function rebuildUploadedFiles(uploadId: string, uploadedByEmail: string) {
   });
   if (!chunks.length) throw new PerformanceError("Nenhuma parte do upload foi encontrada.", 400);
 
-  const rebuild = (fileType: "production" | "volume" | "cecCpd" | "quality") => {
+  const rebuild = (fileType: "production" | "volume" | "cecCpd" | "quality" | "cecFrt") => {
     const fileChunks = chunks.filter((chunk) => chunk.fileType === fileType);
     if (!fileChunks.length) return null;
     const expected = fileChunks[0].totalChunks;
@@ -164,7 +171,7 @@ async function rebuildUploadedFiles(uploadId: string, uploadedByEmail: string) {
     return { fileName: fileChunks[0].fileName, buffer: data };
   };
 
-  return { production: rebuild("production"), volume: rebuild("volume"), cecCpd: rebuild("cecCpd"), quality: rebuild("quality") };
+  return { production: rebuild("production"), volume: rebuild("volume"), cecCpd: rebuild("cecCpd"), quality: rebuild("quality"), cecFrt: rebuild("cecFrt") };
 }
 
 async function processQualityFile(

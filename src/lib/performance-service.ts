@@ -3528,6 +3528,13 @@ function requireImportPermission(user: AuthenticatedUser) {
   if (!canImportPerformance(permissionUser(user))) throw new PerformanceError("Apenas ADMIN ou WFM podem importar Performance.", 403);
 }
 
+export async function authorizePerformanceRead(actor: Actor) {
+  const user = await requireActiveUser(actor);
+  if (!canAccessPerformance(permissionUser(user))) throw new PerformanceError("Você não tem permissão para acessar Performance.", 403);
+  const ownEmployee = normalizeRole(user.role.name) === "COLABORADOR" ? requireOwnEmployee(user) : null;
+  return { user, ownEmployee, canImport: canImportPerformance(permissionUser(user)) };
+}
+
 async function requireActiveUser(actor: Actor): Promise<AuthenticatedUser> {
   if (!actor.email) throw new PerformanceError("Faça login para acessar Performance.", 401);
   const user = await prisma.user.findUnique({

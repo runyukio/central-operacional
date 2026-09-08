@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getApiActor } from "@/lib/api-actor";
 import { getPerformanceProductionDashboard, PerformanceError, type PerformanceQuery } from "@/lib/performance-service";
 import { buildXlsxResponse, dateStamp } from "@/lib/xlsx-export";
+import { latencyDisplayValue, latencyUnit } from "@/lib/latency-display";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +33,7 @@ export async function GET(request: Request) {
         ["LOB", filterLob],
         ["Input", dashboard.summary.input],
         ["Output", dashboard.summary.submit],
-        ["Latency media (min)", dashboard.summary.latencyMinutes],
+        [`Latency media (${latencyUnit(query.lob || "")})`, latencyDisplayValue(dashboard.summary.latencyMinutes, query.lob || "")],
         ["AHT medio (s)", dashboard.summary.ahtSeconds],
         ["Registros", dashboard.summary.records],
         ["Filas", dashboard.summary.queues ?? 0]
@@ -40,26 +41,27 @@ export async function GET(request: Request) {
       sheets: [
         {
           sheetName: "Tendencia",
-          headers: ["Periodo", "Input", "Output", "Latency media (min)", "AHT medio (s)", "Registros"],
+          headers: ["Periodo", "Input", "Output", `Latency media (${latencyUnit(query.lob || "")})`, "AHT medio (s)", "Registros"],
           rows: dashboard.trend.map((row) => [
             row.label,
             row.input,
             row.submit,
-            row.latencyMinutes,
+            latencyDisplayValue(row.latencyMinutes, query.lob || ""),
             row.ahtSeconds,
             row.records
           ])
         },
         {
           sheetName: "Filas",
-          headers: ["Queue ID", "Fila", "LOB", "Input", "Output", "Latency media (min)", "AHT medio (s)", "Agentes", "Registros"],
+          headers: ["Queue ID", "Fila", "LOB", "Input", "Output", "Latency media", "Unidade de latência", "AHT medio (s)", "Agentes", "Registros"],
           rows: (dashboard.queues ?? []).map((row) => [
             row.queueId,
             row.queueName,
             row.lob || "N/A",
             row.input,
             row.submit,
-            row.latencyMinutes,
+            latencyDisplayValue(row.latencyMinutes, row.lob || query.lob || ""),
+            latencyUnit(row.lob || query.lob || ""),
             row.ahtSeconds,
             row.agents,
             row.records

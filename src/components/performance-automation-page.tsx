@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import {
   type LucideIcon,
   ArrowDown,
@@ -43,6 +44,9 @@ import {
 import { TopActions } from "@/components/layout/app-shell";
 import { PageHeader, StatCard } from "@/components/ui/primitives";
 import { cn, formatNumber } from "@/lib/utils";
+import { formatLatencyDisplay, latencyDisplayValue, latencyUnit } from "@/lib/latency-display";
+
+const CecFrtPanel = dynamic(() => import("@/components/performance-cec-frt").then((module) => module.CecFrtPanel));
 
 type PerformanceGranularity = "monthly" | "weekly" | "daily" | "hourly";
 type ForecastView = "hour" | "day" | "week";
@@ -357,6 +361,7 @@ export function PerformanceAutomationPage() {
   const loadQueue = useCallback(async (lobOverride?: string) => {
     setLoadingQueue(true);
     const effectiveLob = typeof lobOverride === "string" ? lobOverride : queueLob;
+    if (effectiveLob === "CEC") { setLoadingQueue(false); return; }
     const params = new URLSearchParams({ granularity: queueGranularity });
     if (effectiveLob) params.set("lob", effectiveLob);
     else params.set("metadataOnly", "true");
@@ -537,7 +542,7 @@ export function PerformanceAutomationPage() {
         )}
       />
 
-      {activeTab === "supervisors" ? null : activeTab === "quality" ? (
+      {activeTab === "supervisors" || (activeTab === "queue" && queueLob === "CEC") ? null : activeTab === "quality" ? (
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <StatCard title="Último upload" value={formatQualityImportDate(qualityPayload?.lastImport?.importedAt)} helper="snapshot de qualidade vigente" icon={CheckCircle2} tone="green" />
           <StatCard title="Janela da base" value={formatQualityRange(qualityPayload?.dataRange)} helper={qualityLob === "ADS" ? "ADS + PROJECT" : qualityLob} icon={CalendarClock} tone="purple" />
@@ -1411,6 +1416,7 @@ function QueueView({
   onExport: () => void;
   onRefresh: () => void;
 }) {
+  const [cecRefresh, setCecRefresh] = useState(0);
   const [queueSearch, setQueueSearch] = useState("");
   const [queueSort, setQueueSort] = useState<{ key: QueueSortKey; direction: QueueSortDirection }>({ key: "input", direction: "desc" });
   const queueRows = useMemo(() => {
@@ -1441,7 +1447,7 @@ function QueueView({
     <section className="overflow-hidden rounded-2xl border border-border bg-white shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
         <h2 className="text-base font-black text-navy-950">Dados de fila</h2>
-        <button type="button" onClick={onRefresh} className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-white px-3 text-xs font-black text-navy-950 hover:bg-slate-50">
+        <button type="button" onClick={() => selectedLob === "CEC" ? setCecRefresh((v) => v + 1) : onRefresh()} className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-white px-3 text-xs font-black text-navy-950 hover:bg-slate-50">
           <RefreshCw className="h-4 w-4" /> Atualizar
         </button>
       </div>
@@ -1449,7 +1455,7 @@ function QueueView({
       <div className="space-y-4 p-4">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
           <div className="flex flex-col gap-3 xl:flex-row xl:items-end">
-            <DateRangeFilter
+            {selectedLob !== "CEC" ? <><DateRangeFilter
               startDate={startDate}
               endDate={endDate}
               minDate={payload?.panel.dataRange?.startDate ?? ""}
@@ -1459,17 +1465,17 @@ function QueueView({
             />
             <SlicerGroup label="Visao">
               {granularityOptions.map((option) => <SlicerButton key={option.value} active={granularity === option.value} label={option.label} onClick={() => onGranularityChange(option.value)} />)}
-            </SlicerGroup>
+            </SlicerGroup></> : null}
             <SlicerGroup label="LOB">
               {lobs.map((lob) => <SlicerButton key={lob} active={selectedLob === lob} label={lob} onClick={() => onLobChange(lob)} tone="dark" />)}
             </SlicerGroup>
           </div>
-          <button type="button" onClick={onExport} disabled={!selectedLob} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-border bg-white px-3 text-xs font-black text-navy-950 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45">
+          {selectedLob !== "CEC" ? <button type="button" onClick={onExport} disabled={!selectedLob} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-border bg-white px-3 text-xs font-black text-navy-950 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45">
             <Download className="h-4 w-4" /> Exportar XLSX
-          </button>
+          </button> : null}
         </div>
 
-        {!selectedLob ? (
+        {selectedLob === "CEC" ? <CecFrtPanel refreshToken={cecRefresh} /> : !selectedLob ? (
           <div className="grid min-h-[300px] place-items-center rounded-2xl border border-dashed border-blue-200 bg-blue-50/40 px-6 text-center">
             <div className="max-w-md">
               <span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-white text-blue-600 shadow-sm"><BarChart3 className="h-5 w-5" /></span>
@@ -1482,7 +1488,7 @@ function QueueView({
             <div className="grid gap-3 md:grid-cols-3">
               <StatCard title="Input" value={formatNumber(summaryInput)} helper={`${formatNumber(summaryQueues)} filas`} icon={Rows3} tone="cyan" />
               <StatCard title="Output" value={formatNumber(summarySubmit)} helper={`${formatNumber(summaryRecords)} registros`} icon={FileSpreadsheet} tone="blue" />
-              <StatCard title="Latência" value={formatMinutes(summaryLatency)} helper="latência / output" icon={Clock} tone="orange" />
+              <StatCard title={`Latência (${latencyUnit(selectedLob)})`} value={formatLatencyDisplay(summaryLatency, selectedLob)} helper="latência ponderada pelo output" icon={Clock} tone="orange" />
             </div>
 
             <div className="rounded-xl border border-border bg-white p-4">
@@ -1493,7 +1499,7 @@ function QueueView({
                 </div>
                 <span className="rounded-lg bg-slate-50 px-3 py-1 text-xs font-black text-muted">{formatNumber(chartRows.length)} pontos</span>
               </div>
-              {chartRows.length ? <QueueDashboardChart rows={chartRows} /> : <EmptyBox label="Sem dados para o filtro selecionado." />}
+              {chartRows.length ? <QueueDashboardChart rows={chartRows} lob={selectedLob} /> : <EmptyBox label="Sem dados para o filtro selecionado." />}
             </div>
 
             <div className="overflow-hidden rounded-xl border border-border bg-white">
@@ -1535,7 +1541,7 @@ function QueueView({
                       <td className="px-3 py-2 font-bold text-muted">{row.lob || "N/A"}</td>
                       <td className="px-3 py-2 text-right font-bold text-navy-950">{formatNumber(row.input)}</td>
                       <td className="px-3 py-2 text-right font-bold text-navy-950">{formatNumber(row.submit)}</td>
-                      <td className="px-3 py-2 text-right font-bold text-navy-950">{formatMinutes(row.latencyMinutes)}</td>
+                      <td className="px-3 py-2 text-right font-bold text-navy-950">{formatLatencyDisplay(row.latencyMinutes, row.lob || selectedLob)}</td>
                       <td className="px-3 py-2 text-right font-bold text-navy-950">{formatSeconds(row.ahtSeconds)}</td>
                       <td className="px-3 py-2 text-right font-bold text-navy-950">{formatNumber(row.agents)}</td>
                     </tr>
@@ -1552,27 +1558,27 @@ function QueueView({
   );
 }
 
-function QueueDashboardChart({ rows }: { rows: PerformanceTrendRow[] }) {
+function QueueDashboardChart({ rows, lob }: { rows: PerformanceTrendRow[]; lob: string }) {
   return (
     <div className="h-[360px] w-full">
       <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={rows} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}>
+        <ComposedChart data={rows.map((row) => ({ ...row, latencyDisplay: latencyDisplayValue(row.latencyMinutes, lob) }))} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
           <XAxis dataKey="label" tick={{ fontSize: 11, fontWeight: 700, fill: "#475569" }} tickLine={false} axisLine={false} minTickGap={18} />
           <YAxis yAxisId="volume" tick={{ fontSize: 11, fontWeight: 700, fill: "#475569" }} tickLine={false} axisLine={false} tickFormatter={(value) => formatCompactAxis(Number(value))} />
-          <YAxis yAxisId="latency" orientation="right" tick={{ fontSize: 11, fontWeight: 700, fill: "#EA580C" }} tickLine={false} axisLine={false} tickFormatter={(value) => `${Number(value || 0).toLocaleString("pt-BR", { maximumFractionDigits: 0 })}m`} />
-          <RechartsTooltip content={<QueueDashboardTooltip />} cursor={{ fill: "#EFF6FF" }} />
+          <YAxis yAxisId="latency" orientation="right" tick={{ fontSize: 11, fontWeight: 700, fill: "#EA580C" }} tickLine={false} axisLine={false} tickFormatter={(value) => `${Number(value || 0).toLocaleString("pt-BR", { maximumFractionDigits: 2 })} ${latencyUnit(lob)}`} />
+          <RechartsTooltip content={<QueueDashboardTooltip lob={lob} />} cursor={{ fill: "#EFF6FF" }} />
           <Legend wrapperStyle={{ fontSize: 12, fontWeight: 800 }} />
           <Bar yAxisId="volume" dataKey="input" name="Input" fill="#06B6D4" radius={[5, 5, 0, 0]} maxBarSize={34} />
           <Bar yAxisId="volume" dataKey="submit" name="Output" fill="#2563EB" radius={[5, 5, 0, 0]} maxBarSize={34} />
-          <Line yAxisId="latency" type="monotone" dataKey="latencyMinutes" name="Latência" stroke="#F97316" strokeWidth={3} dot={false} activeDot={{ r: 5 }} />
+          <Line yAxisId="latency" type="monotone" dataKey="latencyDisplay" name={`Latência (${latencyUnit(lob)})`} stroke="#F97316" strokeWidth={3} dot={false} activeDot={{ r: 5 }} />
         </ComposedChart>
       </ResponsiveContainer>
     </div>
   );
 }
 
-function QueueDashboardTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: PerformanceTrendRow }> }) {
+function QueueDashboardTooltip({ active, payload, lob }: { active?: boolean; payload?: Array<{ payload: PerformanceTrendRow }>; lob: string }) {
   if (!active || !payload?.length) return null;
   const row = payload[0]?.payload;
   if (!row) return null;
@@ -1582,7 +1588,7 @@ function QueueDashboardTooltip({ active, payload }: { active?: boolean; payload?
       <div className="space-y-1">
         <div className="flex justify-between gap-5"><span>Input</span><span>{formatNumber(row.input)}</span></div>
         <div className="flex justify-between gap-5"><span>Output</span><span>{formatNumber(row.submit)}</span></div>
-        <div className="flex justify-between gap-5"><span>Latência</span><span>{formatMinutes(row.latencyMinutes)}</span></div>
+        <div className="flex justify-between gap-5"><span>Latência</span><span>{formatLatencyDisplay(row.latencyMinutes, lob)}</span></div>
         <div className="flex justify-between gap-5"><span>AHT</span><span>{formatSeconds(row.ahtSeconds)}</span></div>
       </div>
     </div>
@@ -2729,10 +2735,6 @@ function formatOptionalMultiplier(value?: number | null) {
 
 function formatOptionalPercent(value?: number | null) {
   return typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : "N/A";
-}
-
-function formatMinutes(value?: number | null) {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? `${value.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} min` : "-";
 }
 
 function formatLatencyTargetLabel(minutes: number) {

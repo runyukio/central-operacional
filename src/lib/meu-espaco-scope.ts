@@ -4,7 +4,7 @@ import type { Actor } from "@/lib/mock-db";
 import { normalizeRole } from "@/lib/permissions";
 import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import { canRespondMeuEspaco, MeuEspacoError, resolveMeuEspacoSupervisor } from "@/lib/meu-espaco-access";
-import { isActiveSpaceSupervisor } from "@/lib/meu-espaco-supervisors";
+import { isActiveSpaceSupervisor, isCurrentSpacePartner } from "@/lib/meu-espaco-supervisors";
 
 const profileSelect = {
   id: true, fullName: true, wbLogin: true, roleTitle: true, operationalStatus: true, deletedAt: true,
@@ -24,10 +24,10 @@ export async function getMeuEspacoScope(actor: Actor, requestedSupervisor?: stri
   const role = normalizeRole(user.role.name);
   const broad = role !== "SUPERVISOR";
   // Includes transferred partners only when they have hours still assigned to the selected owner.
-  const profiles = await prisma.employeeProfile.findMany({
+  const profiles = (await prisma.employeeProfile.findMany({
     where: { deletedAt: null, ...(supervisorId ? { OR: [{ supervisorId }, { id: supervisorId }, { adherenceJustifications: { some: { supervisorId } } }] } : {}) },
     select: profileSelect
-  });
+  })).filter(isCurrentSpacePartner);
   const activeSupervisorIds = profiles.filter(isActiveSpaceSupervisor).map((profile) => profile.id);
   if (supervisorId && !activeSupervisorIds.includes(supervisorId)) throw new MeuEspacoError("Supervisor ativo não encontrado. Atualize a lista.", 404);
   const employees = profiles.filter((employee) => isAgentJobTitle(employee.roleTitle) && employee.supervisorId !== null
