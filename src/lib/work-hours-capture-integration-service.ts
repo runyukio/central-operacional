@@ -12,7 +12,7 @@ import { syncWorkHourAdherence } from "@/lib/work-hours-adherence-sync";
 import { filterWorkHourAdherenceRows } from "@/lib/work-hour-adherence-filters";
 import { decodeAdherenceCursor, scanAdherencePage } from "@/lib/work-hour-adherence-pagination";
 import { resolveCapturePeriod } from "@/lib/work-hours-capture-period";
-import { buildAdherenceSummary } from "@/lib/work-hour-adherence-summary";
+import { buildAdherenceSummary, isExcludedAdherenceSummarySupervisor, type AdherenceSummaryResponse } from "@/lib/work-hour-adherence-summary";
 import { shiftCategoryName } from "@/lib/shift-display";
 import {
   calculateOperationalHours,
@@ -643,14 +643,36 @@ export async function getWorkHourAdherenceFilterOptions(actor: Actor, filters: C
   return { data: { lobs, supervisors, shifts: ["Manhã", "Tarde", "Noite"].filter((shift) => shifts.has(shift)) } };
 }
 
-export async function getWorkHourAdherenceSummary(actor: Actor, filters: Pick<CaptureImportFilters, "startDate" | "endDate">) {
+export async function getWorkHourAdherenceSummary(actor: Actor, filters: Pick<CaptureImportFilters, "startDate" | "endDate"> = {}) {
   const user = await getActiveUser(actor);
   if (!user || !canJustifyAbsence({ role: user.role.name, status: user.status })) {
     return createPermissionError("Você não tem permissão para acompanhar pendências de aderência.");
   }
-  const period = parsePeriod(filters);
+  const explicitPeriod = filters.startDate !== undefined || filters.endDate !== undefined ? parsePeriod(filters) : null;
+  if (explicitPeriod && "error" in explicitPeriod) return explicitPeriod;
+  // This row is created inside the import transaction and is visible only after
+  // success. Choose the latest execution, not MAX(Shift Date): backfills count too.
+  const run = await prisma.workHourCaptureImportRun.findFirst({
+    where: { status: "COMPLETED" }, orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: { id: true, endDate: true, createdAt: true }
+  });
+  const latestImport = run ? { id: run.id, shiftDate: formatDate(run.endDate), importedAt: run.createdAt.toISOString() } : null;
+  if (!explicitPeriod && !latestImport) return { data: null, latestImport: null } satisfies AdherenceSummaryResponse;
+  const period = explicitPeriod ?? parsePeriod({ startDate: latestImport!.shiftDate, endDate: latestImport!.shiftDate });
   if ("error" in period) return period;
   const supervisorScope = normalizeRole(user.role.name) === "SUPERVISOR" ? user.employeeProfile?.id ?? "__none__" : null;
+  const profiles = await prisma.employeeProfile.findMany({
+    where: { deletedAt: null, ...(supervisorScope ? { id: supervisorScope } : {}), OR: [
+      { roleTitle: { contains: "supervis", mode: "insensitive" } },
+      { user: { role: { name: "SUPERVISOR" } } },
+      { supervisees: { some: {} } }, { supervisedTeams: { some: {} } }, { supervisedAdherenceJustifications: { some: {} } }
+    ] },
+    select: { id: true, fullName: true, wbLogin: true }
+  });
+  // No active-status filter: registered supervisors remain visible at zero.
+  // Existing supervisor authorization still applies to both the roster and counts.
+  const supervisors = profiles.filter((profile) => !isExcludedAdherenceSummarySupervisor(profile.wbLogin))
+    .map((profile) => ({ id: profile.id, name: profile.fullName }));
   // PostgreSQL counts the complete period. Employee/day metadata is retained only
   // to apply the SAME eligibility predicates as the list, including each day's Go Live.
   const groups = await prisma.$queryRaw<Array<{
@@ -682,7 +704,8 @@ export async function getWorkHourAdherenceSummary(actor: Actor, filters: Pick<Ca
     return employee && isCaptureImportEligible(employee, formatDate(group.date)) && !isProtectedCaptureScheduleStatus(group.scheduleStatus);
   });
   return { data: buildAdherenceSummary({ startDate: formatDate(period.start), endDate: formatDate(period.end) },
-    eligible.map((group) => ({ date: formatDate(group.date), supervisorId: group.supervisorId, supervisor: group.supervisor, count: Number(group.count) }))) };
+    eligible.map((group) => ({ date: formatDate(group.date), supervisorId: group.supervisorId, supervisor: group.supervisor, count: Number(group.count) })), supervisors),
+    latestImport } satisfies AdherenceSummaryResponse;
 }
 
 export async function exportWorkHourAdherenceJustifications(actor: Actor, filters: AdherenceQueryFilters = {}) {
