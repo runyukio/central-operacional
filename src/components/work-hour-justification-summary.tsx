@@ -66,7 +66,7 @@ export function WorkHourJustificationSummary({ active, refreshKey }: { active: b
       {dirty && valid ? <p role="status" className="mt-2 text-xs font-semibold text-blue-700">Clique em Aplicar período para atualizar o gráfico.</p> : null}
       {!valid && (draft.startDate || draft.endDate) ? <p role="alert" className="mt-3 text-sm font-semibold text-red-700">{"error" in validation ? validation.error.replace("por importação", "por consulta") : ""}</p> : null}
     </div>
-    <div className="p-5 sm:p-6" aria-busy={state.loading}>
+    <div className="min-h-[600px] p-5 sm:p-6" aria-busy={state.loading}>
       {state.loading ? <Loading /> : state.error ? <div role="alert" className="space-y-4 py-6 text-center"><p className="text-sm font-semibold text-red-700">{state.error}</p><button type="button" onClick={() => setRevision((value) => value + 1)} className="premium-control h-11 px-5 text-sm font-bold">Tentar novamente</button></div>
         : state.data ? <Suspense fallback={<Loading />}><Chart data={state.data} /></Suspense>
         : <p role="status" className="py-8 text-center text-sm text-muted">Ainda não há uma importação concluída para abrir automaticamente. Selecione um período para consultar as pendências existentes.</p>}

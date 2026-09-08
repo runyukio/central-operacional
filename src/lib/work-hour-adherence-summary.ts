@@ -11,10 +11,17 @@ export type AdherenceSummarySupervisor = { id: string; name: string };
 export type AdherenceSummaryImport = { id: string; shiftDate: string; importedAt: string };
 export type AdherenceSummaryResponse = { data: AdherenceSummary | null; latestImport: AdherenceSummaryImport | null };
 
-// Exact registered identities, not a first-name match that could hide a homonym.
-export function isExcludedAdherenceSummarySupervisor(wbLogin: string) {
-  return ["wb_hellida", "guilhereme.ramos"].includes(wbLogin.trim().toLowerCase());
-}
+// Fixed reporting roster, resolved against EmployeeProfile IDs. Display labels
+// and order are intentional; names/WBs never determine the association.
+export const ADHERENCE_SUMMARY_SUPERVISORS: readonly AdherenceSummarySupervisor[] = [
+  { id: "cmpr3xlnj00lg13eevxkeoqyp", name: "Priscilla" },
+  { id: "cmpbf8cx8005ci38n42kims14", name: "Diógenes" },
+  { id: "cmpbf81lv004wi38na5tdkl28", name: "João Lucas" },
+  { id: "cmpbf8stn000739ojpefw8j7t", name: "Glauce" },
+  { id: "cmpbf9fo1001339ojixg1wt8k", name: "William" },
+  { id: "cmpb4s3lm00nqwqfcm636mca5", name: "Jessica" },
+  { id: "cmpbf8imf005ki38n8ix91l2i", name: "Fernanda Bencice" }
+];
 
 export type AdherenceSummary = CapturePeriod & {
   supervisors: AdherenceSummarySupervisor[];
@@ -27,7 +34,7 @@ export type AdherenceSummary = CapturePeriod & {
 };
 
 // Receives disjoint COUNT(DISTINCT justification.id) groups, never paginated rows.
-export function buildAdherenceSummary(period: CapturePeriod, groups: AdherenceSummaryGroup[], roster?: AdherenceSummarySupervisor[]): AdherenceSummary {
+export function buildAdherenceSummary(period: CapturePeriod, groups: AdherenceSummaryGroup[], roster: readonly AdherenceSummarySupervisor[] = ADHERENCE_SUMMARY_SUPERVISORS): AdherenceSummary {
   const resolved = resolveCapturePeriod(period);
   if ("error" in resolved) throw new Error(resolved.error);
   const registered = roster ? new Map(roster.map((supervisor) => [supervisor.id, supervisor])) : null;
@@ -45,10 +52,9 @@ export function buildAdherenceSummary(period: CapturePeriod, groups: AdherenceSu
   }
   const days = Array.from(byDay, ([date, supervisors]) => ({
     date,
-    supervisors: Array.from(supervisors.values()).sort((a, b) => a.name.localeCompare(b.name, "pt-BR") || a.id.localeCompare(b.id)),
+    supervisors: Array.from(supervisors.values()),
     total: Array.from(supervisors.values()).reduce((sum, row) => sum + row.count, 0)
   }));
-  const supervisors = Array.from(new Map(days.flatMap((day) => day.supervisors.map(({ id, name }) => [id, { id, name }] as const))).values())
-    .sort((a, b) => a.name.localeCompare(b.name, "pt-BR") || a.id.localeCompare(b.id));
+  const supervisors = Array.from(new Map(days.flatMap((day) => day.supervisors.map(({ id, name }) => [id, { id, name }] as const))).values());
   return { ...period, supervisors, days, total: days.reduce((sum, day) => sum + day.total, 0) };
 }

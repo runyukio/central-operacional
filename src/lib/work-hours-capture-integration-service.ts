@@ -12,7 +12,7 @@ import { syncWorkHourAdherence } from "@/lib/work-hours-adherence-sync";
 import { filterWorkHourAdherenceRows } from "@/lib/work-hour-adherence-filters";
 import { decodeAdherenceCursor, scanAdherencePage } from "@/lib/work-hour-adherence-pagination";
 import { resolveCapturePeriod } from "@/lib/work-hours-capture-period";
-import { buildAdherenceSummary, isExcludedAdherenceSummarySupervisor, type AdherenceSummaryResponse } from "@/lib/work-hour-adherence-summary";
+import { ADHERENCE_SUMMARY_SUPERVISORS, buildAdherenceSummary, type AdherenceSummaryResponse } from "@/lib/work-hour-adherence-summary";
 import { shiftCategoryName } from "@/lib/shift-display";
 import {
   calculateOperationalHours,
@@ -661,18 +661,9 @@ export async function getWorkHourAdherenceSummary(actor: Actor, filters: Pick<Ca
   const period = explicitPeriod ?? parsePeriod({ startDate: latestImport!.shiftDate, endDate: latestImport!.shiftDate });
   if ("error" in period) return period;
   const supervisorScope = normalizeRole(user.role.name) === "SUPERVISOR" ? user.employeeProfile?.id ?? "__none__" : null;
-  const profiles = await prisma.employeeProfile.findMany({
-    where: { deletedAt: null, ...(supervisorScope ? { id: supervisorScope } : {}), OR: [
-      { roleTitle: { contains: "supervis", mode: "insensitive" } },
-      { user: { role: { name: "SUPERVISOR" } } },
-      { supervisees: { some: {} } }, { supervisedTeams: { some: {} } }, { supervisedAdherenceJustifications: { some: {} } }
-    ] },
-    select: { id: true, fullName: true, wbLogin: true }
-  });
-  // No active-status filter: registered supervisors remain visible at zero.
-  // Existing supervisor authorization still applies to both the roster and counts.
-  const supervisors = profiles.filter((profile) => !isExcludedAdherenceSummarySupervisor(profile.wbLogin))
-    .map((profile) => ({ id: profile.id, name: profile.fullName }));
+  // Keep the existing authorization: a fixed roster does not grant supervisors
+  // access to another team's pending counts.
+  const supervisors = ADHERENCE_SUMMARY_SUPERVISORS.filter((supervisor) => !supervisorScope || supervisor.id === supervisorScope);
   // PostgreSQL counts the complete period. Employee/day metadata is retained only
   // to apply the SAME eligibility predicates as the list, including each day's Go Live.
   const groups = await prisma.$queryRaw<Array<{
@@ -686,6 +677,7 @@ export async function getWorkHourAdherenceSummary(actor: Actor, filters: Pick<Ca
     LEFT JOIN "EmployeeProfile" sup ON sup.id = j."supervisorId"
     WHERE j.date >= ${period.start} AND j.date <= ${period.end}
       AND j.status = 'PENDING'
+      AND j."supervisorId" IN (${Prisma.join(ADHERENCE_SUMMARY_SUPERVISORS.map((supervisor) => supervisor.id))})
       ${supervisorScope ? Prisma.sql`AND j."supervisorId" = ${supervisorScope}` : Prisma.empty}
       AND EXISTS (SELECT 1 FROM "WorkHourRecord" h WHERE h."employeeId" = j."employeeId" AND h.date = j.date)
     GROUP BY j.date, j."employeeId", j."supervisorId", sup."fullName", s.status
