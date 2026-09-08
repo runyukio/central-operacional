@@ -1,5 +1,6 @@
 import type { AppRole } from "@/lib/demo-auth";
 import { rolesWithCapability } from "@/lib/access-control";
+import { canAccessMeuEspaco, meuEspacoRoles } from "@/lib/meu-espaco-access";
 import {
   canAccessOwnPerformance,
   canAccessPerformance,
@@ -66,6 +67,7 @@ export const navSections: NavSection[] = [
   {
     label: "Rotina",
     items: [
+      { label: "Meu Espaço", href: "/meu-espaco", icon: "LayoutDashboard", roles: [...meuEspacoRoles] },
       { label: "Minhas Horas", href: "/minhas-horas", icon: "Clock", roles: personalRoles },
       { label: "Horas Operacionais", href: "/horas-operacionais", icon: "Clock", roles: rolesWithCapability("WORK_HOURS_VIEW") },
       { label: "Report de Turno", href: "/report-turno", icon: "ClipboardCheck", roles: shiftReportRoles },
@@ -98,6 +100,7 @@ export function getNavItems(userOrRole?: string | PermissionUser) {
   const normalizedRole = normalizeRole(user?.role);
   const permissionUser = { ...user, status: user?.status ?? "ACTIVE" };
   return navItems.filter((item) => {
+    if (item.href === "/meu-espaco") return canAccessMeuEspaco(permissionUser);
     if (item.href === "/captura-horas") return canAccessRealtimeHoursCapture(permissionUser);
     if (item.href === "/real-time") return canAccessRealTimeQueues(permissionUser);
     if (item.href === "/staff-cobertura") return canAccessStaffCoverage(permissionUser);
@@ -129,6 +132,7 @@ export function canAccessPathForRole(pathname: string, userOrRole?: string | Per
   const permissionUser = { ...user, status: user?.status ?? "ACTIVE" };
 
   if (pathname === "/" || pathname === "/alterar-senha") return true;
+  if (pathname === "/meu-espaco" || pathname.startsWith("/meu-espaco/") || pathname === "/api/meu-espaco" || pathname.startsWith("/api/meu-espaco/")) return canAccessMeuEspaco(permissionUser);
 
   if (
     pathname === "/performance/meus-dados"

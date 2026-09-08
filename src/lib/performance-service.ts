@@ -67,7 +67,7 @@ const visibleQualityRecordWhere = {
   ]
 } satisfies Prisma.QualityRecordWhereInput;
 
-const visibleQualityRecordSql = Prisma.sql`
+export const visibleQualityRecordSql = Prisma.sql`
   AND (
     q."importBatchId" IS NULL
     OR EXISTS (
@@ -122,7 +122,19 @@ export function mergeSupervisorQualityDailyRows(
   preferredRows: SupervisorQualityDailyRow[],
   fallbackRows: SupervisorQualityDailyRow[]
 ) {
-  const selectedRows = new Map<string, SupervisorQualityDailyRow>();
+  const selectedRows = selectSupervisorQualityDailyRows(preferredRows, fallbackRows);
+  const totalsBySupervisor = new Map<string, { supervisorId: string; correct: number; total: number }>();
+  for (const row of selectedRows) {
+    const aggregate = totalsBySupervisor.get(row.supervisorId) ?? { supervisorId: row.supervisorId, correct: 0, total: 0 };
+    aggregate.correct += Number(row.correct ?? 0);
+    aggregate.total += Number(row.total ?? 0);
+    totalsBySupervisor.set(row.supervisorId, aggregate);
+  }
+  return Array.from(totalsBySupervisor.values()).sort((left, right) => left.supervisorId.localeCompare(right.supervisorId));
+}
+
+export function selectSupervisorQualityDailyRows<T extends SupervisorQualityDailyRow>(preferredRows: T[], fallbackRows: T[]): T[] {
+  const selectedRows = new Map<string, T>();
   const rowKey = (row: SupervisorQualityDailyRow) => {
     const qualityDay = row.qualityDay instanceof Date ? row.qualityDay : new Date(row.qualityDay);
     const normalizedDay = Number.isNaN(qualityDay.getTime())
@@ -138,21 +150,7 @@ export function mergeSupervisorQualityDailyRows(
     if (Number(row.total ?? 0) > 0) selectedRows.set(rowKey(row), row);
   }
 
-  const totalsBySupervisor = new Map<string, { supervisorId: string; correct: number; total: number }>();
-  for (const row of selectedRows.values()) {
-    const aggregate = totalsBySupervisor.get(row.supervisorId) ?? {
-      supervisorId: row.supervisorId,
-      correct: 0,
-      total: 0
-    };
-    aggregate.correct += Number(row.correct ?? 0);
-    aggregate.total += Number(row.total ?? 0);
-    totalsBySupervisor.set(row.supervisorId, aggregate);
-  }
-
-  return Array.from(totalsBySupervisor.values()).sort((left, right) =>
-    left.supervisorId.localeCompare(right.supervisorId)
-  );
+  return Array.from(selectedRows.values());
 }
 
 export function isSupervisorAhtQueue(metadata: { lob: string; slaTargetMinutes: number | null }) {
@@ -4781,7 +4779,7 @@ function performanceLobOptions() {
   return ["ADS", "VIDEO", "COMMENTS", "CEC", "N/A"];
 }
 
-function getPerformanceQueueMetadataById(queueId?: string | null): QueueMetadata {
+export function getPerformanceQueueMetadataById(queueId?: string | null): QueueMetadata {
   const normalizedQueueId = String(queueId ?? "").trim();
   if (isPerformanceAdsQueueId(normalizedQueueId)) return { lob: "ADS", slaTargetMinutes: 120 };
   const metadata = getQueueMetadataById(normalizedQueueId);
@@ -4985,7 +4983,7 @@ function queueWhereByPerformanceLob(lob: string) {
   return { queueId: { in: queueIdsByPerformanceLob(lob) } };
 }
 
-function allPerformanceQueueIds() {
+export function allPerformanceQueueIds() {
   return unique([...Object.keys(QUEUE_METADATA), ...Object.keys(QUEUE_REPORT_METADATA), ...PERFORMANCE_ADS_QUEUE_IDS]);
 }
 

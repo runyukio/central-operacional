@@ -184,7 +184,7 @@ const workHourColumnAliases: Record<string, string> = {
   shift: "turno"
 };
 
-export async function listOperationalWorkHours(actor: Actor, query: WorkHourQuery = {}) {
+export async function listOperationalWorkHours(actor: Actor, query: WorkHourQuery = {}, trustedEmployeeIds?: string[]) {
   try {
     const user = await getUser(actor);
     if (!user) return { error: "Usuário não encontrado ou inativo." };
@@ -197,7 +197,9 @@ export async function listOperationalWorkHours(actor: Actor, query: WorkHourQuer
     const page = Math.max(1, Number(query.page) || 1);
     const requestedLimit = Number(query.limit) || 50;
     const limit = Math.min(100, Math.max(10, requestedLimit));
-    const where = buildRecordWhere(user, query, period);
+    const baseWhere = buildRecordWhere(user, query, period);
+    // Internal read-only callers may narrow, never expand, the existing scope.
+    const where: Prisma.WorkHourRecordWhereInput = trustedEmployeeIds === undefined ? baseWhere : { AND: [baseWhere, { employeeId: { in: trustedEmployeeIds } }] };
 
     const [records, total] = await prisma.$transaction([
       prisma.workHourRecord.findMany({
