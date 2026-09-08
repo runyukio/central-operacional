@@ -45,7 +45,7 @@ export async function spacePendingSource(scope: MeuEspacoScope) {
     FROM "WorkHourAdherenceJustification" j JOIN "EmployeeProfile" e ON e.id=j."employeeId"
     LEFT JOIN "Schedule" s ON s.id=j."scheduleId" LEFT JOIN "EmployeeProfile" sup ON sup.id=j."supervisorId"
     LEFT JOIN "User" u ON u.id=j."answeredById"
-    WHERE j.status IN ('PENDING', 'JUSTIFIED') AND j."supervisorId" IS NOT NULL AND ${inIds(Prisma.sql`e.id`, eligibleIds)}
+    WHERE j.status IN ('PENDING', 'JUSTIFIED') AND ${inIds(Prisma.sql`j."supervisorId"`, scope.activeSupervisorIds)} AND ${inIds(Prisma.sql`e.id`, eligibleIds)}
       AND j.date >= e."goLiveDate"::date AND j.date <= ${spaceDate(spaceToday())}
       AND (s.id IS NULL OR (s."deletedAt" IS NULL AND s.status::text NOT IN (${Prisma.join(protectedStatuses)})))
       AND EXISTS (SELECT 1 FROM "WorkHourRecord" w WHERE w."employeeId"=j."employeeId" AND w.date=j.date)
@@ -65,17 +65,18 @@ export async function getSpaceSummary(scope: MeuEspacoScope, query: URLSearchPar
     FROM items GROUP BY "supervisorId"`);
   const rows = new Map<string, SpaceSummary["supervisors"][number]>();
   for (const profile of scope.profiles) {
-    if (profile.id === scope.supervisorId || ["SUPERVISOR", "SUPERVISAO"].includes(profile.roleTitle.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase()) || profile.user?.role?.name === "SUPERVISOR") {
+    if (scope.activeSupervisorIds.includes(profile.id)) {
       rows.set(profile.id, { id: profile.id, name: profile.fullName, teamSize: 0, absences: 0, hours: 0, answered: 0, oldest: null });
     }
   }
   for (const employee of scope.employees) {
-    if (!employee.supervisorId) continue;
+    if (!employee.supervisorId || !scope.activeSupervisorIds.includes(employee.supervisorId)) continue;
     const row = rows.get(employee.supervisorId) ?? { id: employee.supervisorId, name: employee.supervisor?.fullName || "Sem supervisor", teamSize: 0, absences: 0, hours: 0, answered: 0, oldest: null };
     row.teamSize++; rows.set(row.id, row);
   }
   const management: ManagementCounts = { absences: 0, hours: 0, answered: 0, oldest: null };
   for (const count of counts) {
+    if (!count.supervisorId || !scope.activeSupervisorIds.includes(count.supervisorId)) continue;
     management.absences += count.absences; management.hours += count.hours; management.answered += count.answered;
     if (count.oldest && (!management.oldest || count.oldest < management.oldest)) management.oldest = count.oldest;
     if (count.supervisorId) rows.set(count.supervisorId, { id: count.supervisorId, name: count.supervisor,

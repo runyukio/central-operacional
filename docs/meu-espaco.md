@@ -10,7 +10,7 @@ Página `/meu-espaco`, no menu Rotina. Não substitui Cronogramas, Performance o
 - WFM e ADMIN: consulta ampla; respostas continuam sujeitas às permissões e validações originais.
 - Outros perfis não recebem menu, página nem acesso direto às APIs.
 - Resultados e horas utilizam os parceiros classificados como agentes no cadastro atual e o vínculo atual `EmployeeProfile.supervisorId`. As regras de classificação de agente são as mesmas da Performance.
-- O consolidado reúne times vinculados a supervisores, não parceiros/ocorrências ainda sem responsável. WFM/gestão podem consultar horas que continuem atribuídas a um supervisor arquivado, sem reativá-lo ou redistribuir os registros.
+- O consolidado reúne somente supervisores com cadastro Ativo/Active, conta ACTIVE e sem exclusão. O filtro e todas as APIs usam esse mesmo conjunto; selecionar diretamente um ID inativo é bloqueado. Históricos de inativos continuam nas telas originais, sem excluir nem redistribuir ocorrências.
 - Faltas usam o time atual. Horas pendentes usam exclusivamente `WorkHourAdherenceJustification.supervisorId`; uma transferência de parceiro não muda esse responsável.
 - As consultas de horas recebem um conjunto interno de IDs que só restringe o filtro original. Esse conjunto não vem do navegador.
 
@@ -37,6 +37,7 @@ Consultas agregadas por parceiro e dia, com dados de ProductionRecord, Performan
 - Média diária do time: produção / dias distintos com base de produção.
 - Média diária individual: produção / dias-parceiro com base. Na linha do parceiro, o denominador são seus próprios dias.
 - AHT: soma das durações / soma dos submits elegíveis, nunca média simples dos AHTs. Em TNS, apenas filas de 15 minutos; produção total não sofre esse corte.
+- Latência: `SUM(ProductionRecord.latencyMinutesSum) / SUM(submitNum)` por parceiro/dia/time/supervisor, em minutos. Apenas registros com submits positivos e latência não nula/não negativa; dados ausentes não viram zero. Filas ADS, vídeo TNS com SLA de 15 minutos no de/para e Comments são consolidados separadamente. CEC não se aplica. Os denominadores de cobertura aparecem nos cards.
 - CPD CEC: tickets / dias-parceiro com produção positiva, conforme a Performance.
 - Qualidade: acertos / amostras. TNS prefere KAP por parceiro/dia e só usa a base legada quando KAP não cobre aquele dia.
 - ABS: faltas / dias escalados, usando os classificadores e arredondamento existentes.
@@ -46,6 +47,10 @@ Consultas agregadas por parceiro e dia, com dados de ProductionRecord, Performan
 ### Horas
 
 Consulta de `listOperationalWorkHours`, sem novos cálculos de duração nem ações de importação, exclusão ou aprovação. Datas de consulta e busca por nome/WB são próprias da aba. Previstas, capturadas, registradas, ajustadas, efetivas, diferença e status são o DTO do serviço existente.
+
+Cards agregam **todas as páginas** do recorte autorizado: realizado soma `WorkHourRecord.effectiveHours` até hoje (inclui ajustes já aplicados); escala futura usa os cronogramas não excluídos de amanhã até a data final e `plannedProductiveHoursForSchedule`, regra atual de 8h produtivas por dia elegível. Folgas, faltas, férias, Nesting e Treinamento não são slots produtivos nessa regra. Total projetado = realizado + escala futura, sem duplicar o dia atual e sem substituir um fechamento aprovado. Dias passados escalados sem registro geram aviso, nunca preenchimento estimado. Hoje pode estar parcial. Quando o período inicial é mês atual até hoje, esta aba abre o mês completo para exibir a projeção; períodos históricos são preservados.
+
+O visual usa as superfícies e textos dos temas globais, azul padrão para seleção/ação e filtros em slices. A prévia isolada usa dados fictícios e não faz gravações no banco.
 
 ## APIs
 

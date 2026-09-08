@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { ArrowUpRight, Check, Loader2 } from "lucide-react";
 import { apiJson } from "@/components/modules/shared";
 import { createClientRequestGate } from "@/lib/client-request-gate";
 import { cn } from "@/lib/utils";
+import styles from "./space.module.css";
 
 export function useSpaceRead<T>(url: string, enabled = true, revision = 0) {
   const [state, setState] = useState<{ key: string; url: string; data: T | null; error: string; loading: boolean }>({ key: "", url: "", data: null, error: "", loading: false });
@@ -34,9 +35,10 @@ export function SpaceLoad({ loading, error, retry }: { loading: boolean; error: 
   return loading ? <div role="status" className="flex items-center gap-2 p-5 text-sm text-muted"><Loader2 className="h-4 w-4 animate-spin" />Carregando dados do espaço…</div> : null;
 }
 export function SpaceButtons({ label, value, options, onChange }: { label: string; value: string; options: { id: string; label: string }[]; onChange: (value: string) => void }) {
-  return <fieldset><legend className="mb-2 text-xs font-bold text-muted">{label}</legend><div className="flex flex-wrap gap-2">{options.map((option) => <button key={option.id} type="button" aria-pressed={option.id === value} onClick={() => onChange(option.id)} className={cn("rounded-lg border px-3 py-2 text-sm font-bold", option.id === value ? "border-blue-600 bg-blue-600 text-white" : "border-border bg-white text-navy-950 hover:border-blue-400")}>{option.label}</button>)}</div></fieldset>;
+  return <fieldset className="min-w-0"><legend className={styles.legend}>{label}</legend><div className="flex flex-wrap gap-2">{options.map((option) => <button key={option.id} type="button" aria-pressed={option.id === value} onClick={() => onChange(option.id)} className={styles.chip}>{option.id === value ? <Check aria-hidden className="h-3.5 w-3.5" /> : null}{option.label}</button>)}</div></fieldset>;
 }
-export function SpaceCard({ title, value, helper }: { title: string; value: string; helper?: string }) {
-  return <div className="card min-w-0 p-4"><p className="text-xs font-bold uppercase tracking-wide text-muted">{title}</p><p className="mt-2 break-words text-2xl font-extrabold text-navy-950">{value}</p>{helper ? <p className="mt-2 text-xs text-muted">{helper}</p> : null}</div>;
+export function SpaceCard({ title, value, helper, tone = "blue", onClick }: { title: string; value: string; helper?: string; tone?: "blue" | "amber" | "violet" | "teal"; onClick?: () => void }) {
+  const content = <><span className="block text-xs font-bold uppercase tracking-wide text-muted">{title}</span><span className={cn("block text-navy-950", styles.metricValue)}>{value}</span>{helper ? <span className="mt-2 block text-xs text-muted">{helper}</span> : null}{onClick ? <span className={styles.metricAction}>Ver pendências<ArrowUpRight aria-hidden className="h-3.5 w-3.5" /></span> : null}</>;
+  return onClick ? <button type="button" onClick={onClick} className={cn(styles.metric, styles.metricButton)} data-tone={tone}>{content}</button> : <div className={styles.metric} data-tone={tone}>{content}</div>;
 }
-export const tableClass = "w-full text-left text-sm [&_th]:whitespace-nowrap [&_th]:bg-slate-50 [&_th]:px-4 [&_th]:py-3 [&_th]:text-xs [&_th]:font-bold [&_th]:text-muted [&_td]:border-t [&_td]:border-border [&_td]:px-4 [&_td]:py-3";
+export const tableClass = `${styles.table} w-full text-left text-sm [&_th]:whitespace-nowrap [&_th]:px-4 [&_th]:py-3 [&_th]:text-xs [&_th]:font-bold [&_td]:border-t [&_td]:border-border [&_td]:px-4 [&_td]:py-3`;

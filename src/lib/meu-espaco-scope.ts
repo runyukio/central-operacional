@@ -4,13 +4,14 @@ import type { Actor } from "@/lib/mock-db";
 import { normalizeRole } from "@/lib/permissions";
 import { isAgentJobTitle } from "@/lib/job-title-normalization";
 import { canRespondMeuEspaco, MeuEspacoError, resolveMeuEspacoSupervisor } from "@/lib/meu-espaco-access";
+import { isActiveSpaceSupervisor } from "@/lib/meu-espaco-supervisors";
 
 const profileSelect = {
   id: true, fullName: true, wbLogin: true, roleTitle: true, operationalStatus: true, deletedAt: true,
   supervisorId: true, goLiveDate: true, skill: true,
   lob: { select: { name: true } }, team: { select: { name: true } },
   supervisor: { select: { id: true, fullName: true } },
-  user: { select: { role: { select: { name: true } } } },
+  user: { select: { status: true, deletedAt: true, role: { select: { name: true } } } },
   skillAssignments: { select: { skill: { select: { name: true } } } }
 } satisfies Prisma.EmployeeProfileSelect;
 export type SpaceEmployee = Prisma.EmployeeProfileGetPayload<{ select: typeof profileSelect }>;
@@ -27,14 +28,11 @@ export async function getMeuEspacoScope(actor: Actor, requestedSupervisor?: stri
     where: { deletedAt: null, ...(supervisorId ? { OR: [{ supervisorId }, { id: supervisorId }, { adherenceJustifications: { some: { supervisorId } } }] } : {}) },
     select: profileSelect
   });
-  if (supervisorId && !profiles.some((employee) => employee.id === supervisorId)) {
-    // WFM/management may inspect pending hours still assigned to an archived
-    // supervisor. This does not restore the profile or reassign the occurrence.
-    const archivedOwner = broad ? await prisma.employeeProfile.findUnique({ where: { id: supervisorId }, select: { id: true } }) : null;
-    if (!archivedOwner) throw new MeuEspacoError("Supervisor não encontrado.", 404);
-  }
-  const employees = profiles.filter((employee) => isAgentJobTitle(employee.roleTitle) && employee.supervisorId !== null && (!supervisorId || employee.supervisorId === supervisorId));
+  const activeSupervisorIds = profiles.filter(isActiveSpaceSupervisor).map((profile) => profile.id);
+  if (supervisorId && !activeSupervisorIds.includes(supervisorId)) throw new MeuEspacoError("Supervisor ativo não encontrado. Atualize a lista.", 404);
+  const employees = profiles.filter((employee) => isAgentJobTitle(employee.roleTitle) && employee.supervisorId !== null
+    && activeSupervisorIds.includes(employee.supervisorId) && (!supervisorId || employee.supervisorId === supervisorId));
   const employeeIds = employees.map((employee) => employee.id);
-  return { user, actor: { email: user.email, name: user.name, role } as Actor, role, broad, supervisorId, employees, employeeIds, profiles, canRespond: canRespondMeuEspaco(permissionUser) };
+  return { user, actor: { email: user.email, name: user.name, role } as Actor, role, broad, supervisorId, activeSupervisorIds, employees, employeeIds, profiles, canRespond: canRespondMeuEspaco(permissionUser) };
 }
 export type MeuEspacoScope = Awaited<ReturnType<typeof getMeuEspacoScope>>;

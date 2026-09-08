@@ -39,8 +39,8 @@ function PendingDetail({ row, supervisorId, canRespond, onAnswered }: { row: Spa
   </div>;
 }
 
-export function SpacePendingTab({ supervisorId, lobs, canRespond, onAnswered }: { supervisorId: string; lobs: string[]; canRespond: boolean; onAnswered: () => void }) {
-  const [filters, setFilters] = useState({ kind: "all", state: "pending", search: "", lob: "", startDate: "", endDate: "" });
+export function SpacePendingTab({ supervisorId, lobs, canRespond, onAnswered, initialKind = "all" }: { supervisorId: string; lobs: string[]; canRespond: boolean; onAnswered: () => void; initialKind?: string }) {
+  const [filters, setFilters] = useState({ kind: initialKind, state: "pending", search: "", lob: "", startDate: "", endDate: "" });
   const [search, setSearch] = useState("");
   const [opened, setOpened] = useState("");
   const [message, setMessage] = useState("");
@@ -61,7 +61,9 @@ export function SpacePendingTab({ supervisorId, lobs, canRespond, onAnswered }: 
   return <div className="space-y-4">
     <section className="card space-y-4 p-4" aria-label="Filtros de pendências">
       <div className="flex flex-wrap gap-5"><SpaceButtons label="Tipo" value={filters.kind} onChange={(kind) => change({ kind })} options={[{ id: "all", label: "Todas" }, { id: "absence", label: "Faltas" }, { id: "hours", label: "Horas" }]} /><SpaceButtons label="Situação" value={filters.state} onChange={(state) => change({ state })} options={[{ id: "pending", label: "Pendentes" }, { id: "answered", label: "Respondidas" }]} /></div>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><FormInput label="Parceiro" value={filters.search} onChange={(search) => change({ search })} placeholder="Nome ou WB" /><label className="text-xs font-bold text-muted">LOB<select className="premium-control mt-2 w-full p-2.5 text-sm" value={filters.lob} onChange={(e) => change({ lob: e.target.value })}><option value="">Todas</option>{lobs.map((lob) => <option key={lob}>{lob}</option>)}</select></label><FormInput label="Ocorrências desde (opcional)" type="date" value={filters.startDate} onChange={(startDate) => change({ startDate })} /><FormInput label="Ocorrências até (opcional)" type="date" value={filters.endDate} onChange={(endDate) => change({ endDate })} /></div>
+      <SpaceButtons label="LOB das pendências" value={filters.lob} onChange={(lob) => change({ lob })} options={[{ id: "", label: "Todas as LOBs" }, ...lobs.map((lob) => ({ id: lob, label: lob }))]} />
+      <div className="grid gap-3 sm:grid-cols-3"><FormInput label="Parceiro" value={filters.search} onChange={(search) => change({ search })} placeholder="Nome ou WB" /><FormInput label="Ocorrências desde (opcional)" type="date" value={filters.startDate} onChange={(startDate) => change({ startDate })} /><FormInput label="Ocorrências até (opcional)" type="date" value={filters.endDate} onChange={(endDate) => change({ endDate })} /></div>
+      <button type="button" onClick={() => change({ kind: "all", state: "pending", search: "", lob: "", startDate: "", endDate: "" })} className="text-xs font-bold text-blue-600 underline underline-offset-4">Limpar filtros de pendências</button>
       <p className="text-xs text-muted">Sem datas: todas as ocorrências até hoje, inclusive de meses anteriores. Ordem da mais antiga para a mais recente. Horas mantêm o responsável registrado na ocorrência.</p>
       {!valid ? <p role="alert" className="text-sm text-red-700">A data inicial deve ser anterior ou igual à final.</p> : null}
     </section>
