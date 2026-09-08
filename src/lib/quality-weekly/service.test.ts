@@ -82,6 +82,19 @@ test("PostgreSQL full flow: immutable mapping, source, preview, Word, idempotenc
     const firstMap = await service.mapping(mapAsset.id, author);
     const sameMap = await service.mapping((await source(excel(maps), "mapping")).id, author);
     assert.equal(sameMap.unchanged, true); assert.equal(sameMap.id, firstMap.id);
+    const incompleteRows: Cell[][] = [maps[0], ["qa-a", "QA Accounts A", "ACCOUNTS", ""], ["qa-u", "QA Unit", "Unit", ""]];
+    const incomplete = await service.mapping((await source(excel(incompleteRows), "mapping")).id, author);
+    assert.equal(incomplete.pendingCount, 1);
+    assert.equal(incomplete.entries.find(m => m.queueId === "qa-u")?.category, "Unit");
+    const repeatIncomplete = await service.mapping((await source(excel(incompleteRows), "mapping")).id, author);
+    assert.equal(repeatIncomplete.id, incomplete.id);
+    const pendingSource = await service.importAsset((await source(fixture("2030-12-23"))).id, author);
+    assert.equal(pendingSource.validation.valid, false);
+    await assert.rejects(() => service.preview({ uploadId: pendingSource.id, start: "2030-12-23", weekNumber: 52, complete: true }, author), isStatus(422));
+    const conflict = await source(excel([maps[0], ["qa-u", "QA Unit", "Unit", ""], ["qa-u", "QA Unit", "Material", ""]]), "mapping");
+    await assert.rejects(() => service.mapping(conflict.id, author), isStatus(422));
+    assert.equal((await service.currentMapping())?.id, incomplete.id);
+    await service.mapping((await source(excel(maps), "mapping")).id, author);
     await assert.rejects(() => service.inspect(mapAsset.id, { id: "other", name: "Other" }), isStatus(404));
     const legacyPath = process.env.QA_SOURCE;
     if (legacyPath) {

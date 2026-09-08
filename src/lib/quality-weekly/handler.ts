@@ -38,7 +38,7 @@ export async function qualityWeeklyHandler(request: Request, author: QualityAuth
     const mapping = await service.currentMapping();
     return json({ user: author, mapping: mapping ? { id: mapping.id, filename: mapping.asset.filename, entries: mapping.entries, createdAt: mapping.createdAt, createdBy: mapping.createdBy } : null });
   }
-  if (method === "GET" && path[0] === "mapping-template") return fileResponse(new TextEncoder().encode("queue_id,queue_name,section,industry\r\n"), "Queue mapping template.csv", "text/csv; charset=utf-8");
+  if (method === "GET" && path[0] === "mapping-template") return fileResponse(new TextEncoder().encode("queue_id,queue_name,section,industry,category\r\n"), "Queue mapping template.csv", "text/csv; charset=utf-8");
   if (method === "POST" && path[0] === "transfers" && !path[1]) {
     const input = z.object({ filename: z.string().min(1).max(240), size: z.number().int().positive().max(MAX_UPLOAD), kind: z.enum(["source", "mapping"]) }).parse(await body(request));
     const asset = await service.transfer(input.filename, input.size, input.kind, author);

@@ -25,7 +25,17 @@ export type Mapping = {
   queueName: string;
   section: Section;
   industry: 'A' | 'B' | null;
+  category?: string;
 };
+// Incomplete classifications may be saved, but never used as official results.
+export type MappingEntry = Omit<Mapping, 'section'> & { section: Section | null };
+export function mappingPending(entry: MappingEntry): string[] {
+  return [
+    ...(!entry.queueName ? ['Queue name'] : []),
+    ...(!entry.section ? ['Report section'] : []),
+    ...(entry.section === 'ACCOUNTS' && !entry.industry ? ['Industry A/B'] : []),
+  ];
+}
 export type Issue = {
   row: number | null;
   field: string;
@@ -43,6 +53,7 @@ export type Case = {
   queueName: string;
   section: Section;
   industry: 'A' | 'B' | null;
+  category?: string;
   allow: number;
   labeled: number;
   result: Outcome;
@@ -74,6 +85,7 @@ export type SectionReport = {
   rows: MetricRow[];
   agents: MetricRow[];
   queues?: MetricRow[];
+  categories?: MetricRow[];
 };
 export type TrendPoint = {
   start: string;
@@ -97,7 +109,7 @@ export type Snapshot = {
   ruleDefinition?: typeof RULE_DEFINITION;
   uploadId: string;
   mappingId: string;
-  mappings: Mapping[];
+  mappings: MappingEntry[];
   filename: string;
   digest: string;
   metrics: Metrics;
@@ -244,12 +256,15 @@ export function agentKey(c: Case) {
   return c.agentId ? 'id:' + c.agentId : 'name:' + c.agentName;
 }
 
-export function parseMapping(table: SourceTable): {
-  mappings: Mapping[];
+export function parseMapping(table: SourceTable, options: {
+  allowIncomplete?: boolean;
+  queueNames?: Readonly<Record<string, string>>;
+} = {}): {
+  mappings: MappingEntry[];
   issues: Issue[];
 } {
   const issues: Issue[] = [],
-    mappings: Mapping[] = [];
+    mappings: MappingEntry[] = [];
   const cols = {
     queueId: fieldIndex(table.headers, [
       'queue_id',
@@ -259,15 +274,20 @@ export function parseMapping(table: SourceTable): {
     queueName: fieldIndex(table.headers, ['queue_name', 'queue name', 'name']),
     section: fieldIndex(table.headers, ['section', 'report_section']),
     industry: fieldIndex(table.headers, ['industry', 'account_industry']),
+    category: fieldIndex(table.headers, ['category', 'queue_category']),
   };
   for (const [field, idx] of Object.entries(cols))
-    if (idx < 0)
+    if (idx < 0 && field !== 'category' && !(options.allowIncomplete && ['queueName', 'industry'].includes(field)))
       issues.push({
         row: null,
         field,
         message: `Missing mapping column: ${field}. Use the downloadable mapping template.`,
         severity: 'error',
       });
+  table.headers.forEach((header, index) => {
+    if (header && table.headers.findIndex(h => normalize(h) === normalize(header)) !== index)
+      issues.push({ row: null, field: header, message: 'Duplicate mapping column. Keep only one column per field.', severity: 'error' });
+  });
   if (issues.length) return { mappings, issues };
   const sections: Record<string, Section> = {
     cd: 'CD',
@@ -276,6 +296,7 @@ export function parseMapping(table: SourceTable): {
     er_accounts: 'ACCOUNTS',
     er_sampling_accounts: 'ACCOUNTS',
     material: 'MATERIAL',
+    unit: 'MATERIAL',
     'er_material/unit': 'MATERIAL',
     'material/unit': 'MATERIAL',
     er_material_unit: 'MATERIAL',
@@ -284,11 +305,14 @@ export function parseMapping(table: SourceTable): {
   table.rows.forEach((row, i) => {
     if (row.every((v) => !textValue(v))) return;
     const queueId = identifier(row[cols.queueId]),
-      queueName = textValue(row[cols.queueName]);
-    const sectionKey = normalize(textValue(row[cols.section]));
+      queueName = textValue(row[cols.queueName]) || (options.queueNames && Object.hasOwn(options.queueNames, queueId) ? options.queueNames[queueId] : '') || '';
+    const sectionText = textValue(row[cols.section]);
+    const sectionKey = normalize(sectionText);
     const section = Object.hasOwn(sections, sectionKey)
       ? sections[sectionKey]
-      : undefined;
+      : null;
+    const category = textValue(row[cols.category]) ||
+      (sectionKey === 'material' ? 'Material' : sectionKey === 'unit' ? 'Unit' : !section ? sectionText : '');
     const industryText = textValue(row[cols.industry])
       .replace(/^industry\s*/i, '')
       .toUpperCase();
@@ -297,21 +321,22 @@ export function parseMapping(table: SourceTable): {
     const sourceRow = table.rowNumbers[i];
     if (
       !queueId ||
-      !queueName ||
-      !section ||
-      (section === 'ACCOUNTS' && !industry) ||
-      (section !== 'ACCOUNTS' && industryText)
+      !sectionText ||
+      (industryText && !industry) ||
+      (section && section !== 'ACCOUNTS' && industryText) ||
+      (!options.allowIncomplete && (!queueName || !section || (section === 'ACCOUNTS' && !industry)))
     ) {
       issues.push({
         row: sourceRow,
         field: 'mapping',
-        message:
-          'Use a text queue ID, a queue name and section CD / ACCOUNTS / MATERIAL. Accounts requires industry A or B; leave industry blank for other sections.',
+        message: options.allowIncomplete
+          ? 'Provide a valid queue ID and a section/category. If supplied, Industry must be A or B and is only applicable to Accounts. Blank names and unfinished classifications may be saved for review.'
+          : 'Use a text queue ID, a queue name and section CD / ACCOUNTS / MATERIAL. Accounts requires industry A or B; leave industry blank for other sections.',
         severity: 'error',
       });
       return;
     }
-    const entry = { queueId, queueName, section, industry },
+    const entry: MappingEntry = { queueId, queueName, section, industry, ...(category ? { category } : {}) },
       signature = JSON.stringify(entry);
     if (seen.has(queueId)) {
       if (seen.get(queueId) !== signature)
@@ -325,6 +350,9 @@ export function parseMapping(table: SourceTable): {
     }
     seen.set(queueId, signature);
     mappings.push(entry);
+    const pending = mappingPending(entry);
+    if (pending.length) issues.push({ row: sourceRow, field: 'mapping', severity: 'warning',
+      message: `Queue ${queueId} saved for review. Pending: ${pending.join(', ')}. Complete these fields before using this queue in a weekly report.` });
   });
   if (!mappings.length && !issues.length)
     issues.push({
@@ -338,7 +366,7 @@ export function parseMapping(table: SourceTable): {
 
 export function analyze(
   table: SourceTable,
-  mappings: Mapping[],
+  mappings: MappingEntry[],
   dateColumn?: string,
 ): Analysis {
   const issues: Issue[] = [];
@@ -421,11 +449,14 @@ export function analyze(
       if (typeof get(k) === 'number') sourceCounts[k] += Number(get(k));
     if (get('result') === 'Correct') sourceCounts.correct++;
     const queueId = identifier(get('queueId')),
-      mapping = map.get(queueId);
+      mapping = map.get(queueId),
+      pendingMapping = mapping ? mappingPending(mapping) : [];
     if (queueId && !mapping) {
       unknownQueues.add(queueId);
       issue(row, 'queue_id', `Queue ${queueId} is missing from the queue mapping.`);
     }
+    if (pendingMapping.length)
+      issue(row, 'mapping', `Queue ${queueId} has an incomplete mapping: ${pendingMapping.join(', ')}. Complete Queue mapping and revalidate.`);
     const date = dateValue(get('date'));
     if (date) {
       const start = weekStart(date);
@@ -494,7 +525,7 @@ export function analyze(
       Number(get('mislabeled')) !== Number(result === 'Mislabeled')
     )
       fail('final_result', 'The error amounts disagree with final_result.');
-    if (!mapping || !valid) continue;
+    if (!mapping || !mapping.section || pendingMapping.length || !valid) continue;
     const c: Case = {
       sourceRow: row,
       qaId,
@@ -506,6 +537,7 @@ export function analyze(
       queueName: mapping.queueName,
       section: mapping.section,
       industry: mapping.industry,
+      ...(mapping.category ? { category: mapping.category } : {}),
       allow: Number(get('allow')),
       labeled: Number(get('labeled')),
       result,
@@ -636,6 +668,7 @@ export function buildSections(cases: Case[]): Record<Section, SectionReport> {
           metrics: aggregate(subset),
           rows,
           queues: grouped(subset, c => c.queueId, c => c.queueName),
+          ...(subset.some(c => c.category) ? { categories: grouped(subset, c => c.category ? `category:${c.category}` : `queue:${c.queueId}`, c => c.category || c.queueName) } : {}),
           agents: grouped(subset, agentKey, (c) => c.agentName).sort((a, b) =>
             a.name.localeCompare(b.name),
           ),

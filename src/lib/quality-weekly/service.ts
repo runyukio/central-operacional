@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { QualityWeeklyError as ErrorWithStatus } from "./access";
-import { aggregate, analyze, buildAgents, buildSections, dayAdd, dateValue, parseMapping, RULE_VERSION, RULE_DEFINITION, trendPoint, weekStart } from "./domain";
-import type { Mapping, Snapshot, Validation } from "./domain";
+import { aggregate, analyze, buildAgents, buildSections, dayAdd, dateValue, mappingPending, parseMapping, RULE_VERSION, RULE_DEFINITION, trendPoint, weekStart } from "./domain";
+import type { MappingEntry, Snapshot, Validation } from "./domain";
+import { QUEUE_REPORT_METADATA } from "../queue-report-metadata";
 import { readTables, selectTable, MAX_UPLOAD } from "./workbook";
 import type { QualityStorage } from "./storage";
 
@@ -11,7 +12,11 @@ const asJson = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.I
 export const sha256 = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 // Store the canonical snapshot as text to avoid JSONB/driver floating-point reserialization.
 const snapshotOf = (value: string) => JSON.parse(value) as Snapshot;
-const entriesOf = (value: Prisma.JsonValue) => value as unknown as Mapping[];
+const entriesOf = (value: Prisma.JsonValue) => value as unknown as MappingEntry[];
+// Reuse registered names only. Operational LOB/department never determines a quality section.
+const queueNames = Object.fromEntries(Object.entries(QUEUE_REPORT_METADATA)
+  .filter(([, value]) => value.queueName && value.queueName !== "Fila não mapeada")
+  .map(([id, value]) => [id, value.queueName]));
 const LOCK_ID = 721806923; // Only Weekly Quality publishing/mapping operations share this lock.
 
 export function createQualityWeeklyService(db: PrismaClient, storage: QualityStorage) {
@@ -59,16 +64,17 @@ export function createQualityWeeklyService(db: PrismaClient, storage: QualitySto
     async mapping(assetId: string, author: QualityAuthor, sheet?: string) {
       const { row, bytes } = await asset(assetId, author);
       if (row.kind !== "mapping") throw new ErrorWithStatus("Select a queue mapping file.");
-      const parsed = parseMapping(table(bytes, row.filename, sheet));
-      if (parsed.issues.length) throw new ErrorWithStatus("Resolve the mapping issues before saving.", 422, { issues: parsed.issues });
+      const parsed = parseMapping(table(bytes, row.filename, sheet), { allowIncomplete: true, queueNames });
+      if (parsed.issues.some(issue => issue.severity === "error")) throw new ErrorWithStatus("Resolve the mapping issues before saving.", 422, { issues: parsed.issues });
       const entries = parsed.mappings.sort((a, b) => a.queueId.localeCompare(b.queueId));
+      const pendingCount = entries.filter(entry => mappingPending(entry).length).length;
       return db.$transaction(async tx => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(${LOCK_ID})`;
         const previous = await tx.qualityWeeklyMapping.findFirst({ orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
-        const canonicalMapping = (items: Mapping[]) => items.map(m => [m.queueId, m.queueName, m.section, m.industry]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
-        if (previous && JSON.stringify(canonicalMapping(entriesOf(previous.entries))) === JSON.stringify(canonicalMapping(entries))) return { id: previous.id, entries, unchanged: true };
+        const canonicalMapping = (items: MappingEntry[]) => items.map(m => [m.queueId, m.queueName, m.section, m.industry, m.category || null]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+        if (previous && JSON.stringify(canonicalMapping(entriesOf(previous.entries))) === JSON.stringify(canonicalMapping(entries))) return { id: previous.id, entries, unchanged: true, pendingCount };
         const mapping = await tx.qualityWeeklyMapping.create({ data: { id: randomUUID(), assetId, digest: sha256(bytes), entries: asJson(entries), createdById: author.id, createdBy: author.name } });
-        return { id: mapping.id, entries, unchanged: false };
+        return { id: mapping.id, entries, unchanged: false, pendingCount };
       });
     },
     importAsset,

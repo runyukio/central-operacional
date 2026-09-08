@@ -51,7 +51,7 @@ export function QualityReportView({ snapshot, initialSection = "CD", initialView
   const current = snapshot.sections[section];
   const previous = snapshot.trend[2]?.[section];
   const rows = view === "agents" ? snapshot.agents.filter(a => a.section === section).map(a => ({ ...a, name: `${a.name} · ${a.queueName}` }))
-    : view === "industry" ? current.rows : current.queues || current.rows;
+    : view === "industry" ? current.rows : view === "categories" ? current.categories || [] : current.queues || current.rows;
   const filtered = rows.filter(r => `${r.name} ${r.id}`.toLowerCase().includes(search.toLowerCase()));
   return <div className="space-y-4">
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -65,10 +65,10 @@ export function QualityReportView({ snapshot, initialSection = "CD", initialView
       <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-navy-950"><span>Accuracy: <strong>{rate(current.metrics.accuracy)}</strong></span><span>Weekly change: <strong>{change(current.metrics.accuracy, previous?.accuracy)}</strong></span><span className="text-xs text-muted">{number(current.metrics.n)} distinct cases · Totals recalculated from counts</span></div>
       {section !== "MATERIAL" && <Trend key={section} snapshot={snapshot} section={section} />}
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-4">
-        {[["queues", "By queue"], ...(section === "ACCOUNTS" ? [["industry", "By industry"]] : []), ["agents", "By agent"]].map(([key, title]) => <button type="button" key={key} aria-pressed={view === key} className={`${view === key ? "premium-button" : "premium-control text-navy-950"} px-3 py-2 text-xs font-bold`} onClick={() => { setView(key); setLimit(50); }}>{title}</button>)}
+        {[["queues", "By queue"], ...(current.categories?.length ? [["categories", "By category"]] : []), ...(section === "ACCOUNTS" ? [["industry", "By industry"]] : []), ["agents", "By agent"]].map(([key, title]) => <button type="button" key={key} aria-pressed={view === key} className={`${view === key ? "premium-button" : "premium-control text-navy-950"} px-3 py-2 text-xs font-bold`} onClick={() => { setView(key); setLimit(50); }}>{title}</button>)}
         <input aria-label="Search report detail" placeholder="Search queue or agent" className="premium-control min-w-0 flex-1 px-3 py-2 text-sm md:ml-auto md:max-w-xs" value={search} onChange={e => { setSearch(e.target.value); setLimit(50); }} />
       </div>
-      <div className="mt-3"><MetricTable rows={filtered.slice(0, limit)} label={view === "agents" ? "Agent · Queue" : view === "industry" ? "Industry" : "Queue"} /></div>
+      <div className="mt-3"><MetricTable rows={filtered.slice(0, limit)} label={view === "agents" ? "Agent · Queue" : view === "industry" ? "Industry" : view === "categories" ? "Category" : "Queue"} /></div>
       {filtered.length > limit && <button type="button" className="premium-control mt-3 px-4 py-2 text-sm font-bold" onClick={() => setLimit(n => n + 50)}>Show 50 more ({filtered.length - limit} remaining)</button>}
       <div className="mt-3"><MetricTable rows={[{ id: "total", name: "Section total", ...current.metrics }]} /></div>
     </Panel>
