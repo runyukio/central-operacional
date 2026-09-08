@@ -12,6 +12,7 @@ import { syncWorkHourAdherence } from "@/lib/work-hours-adherence-sync";
 import { filterWorkHourAdherenceRows } from "@/lib/work-hour-adherence-filters";
 import { decodeAdherenceCursor, scanAdherencePage } from "@/lib/work-hour-adherence-pagination";
 import { resolveCapturePeriod } from "@/lib/work-hours-capture-period";
+import { buildAdherenceSummary } from "@/lib/work-hour-adherence-summary";
 import { shiftCategoryName } from "@/lib/shift-display";
 import {
   calculateOperationalHours,
@@ -640,6 +641,48 @@ export async function getWorkHourAdherenceFilterOptions(actor: Actor, filters: C
   }])).values()).sort((a, b) => a.name.localeCompare(b.name, "pt-BR") || a.id.localeCompare(b.id)) : [];
   const shifts = new Set(scoped.map((group) => shiftCategoryName(byId.get(group.employeeId)?.shift.name)));
   return { data: { lobs, supervisors, shifts: ["Manhã", "Tarde", "Noite"].filter((shift) => shifts.has(shift)) } };
+}
+
+export async function getWorkHourAdherenceSummary(actor: Actor, filters: Pick<CaptureImportFilters, "startDate" | "endDate">) {
+  const user = await getActiveUser(actor);
+  if (!user || !canJustifyAbsence({ role: user.role.name, status: user.status })) {
+    return createPermissionError("Você não tem permissão para acompanhar pendências de aderência.");
+  }
+  const period = parsePeriod(filters);
+  if ("error" in period) return period;
+  const supervisorScope = normalizeRole(user.role.name) === "SUPERVISOR" ? user.employeeProfile?.id ?? "__none__" : null;
+  // PostgreSQL counts the complete period. Employee/day metadata is retained only
+  // to apply the SAME eligibility predicates as the list, including each day's Go Live.
+  const groups = await prisma.$queryRaw<Array<{
+    date: Date; employeeId: string; supervisorId: string | null;
+    supervisor: string | null; scheduleStatus: string | null; count: bigint;
+  }>>(Prisma.sql`
+    SELECT j.date, j."employeeId", j."supervisorId", sup."fullName" AS supervisor,
+           s.status::text AS "scheduleStatus", COUNT(DISTINCT j.id) AS count
+    FROM "WorkHourAdherenceJustification" j
+    LEFT JOIN "Schedule" s ON s.id = j."scheduleId"
+    LEFT JOIN "EmployeeProfile" sup ON sup.id = j."supervisorId"
+    WHERE j.date >= ${period.start} AND j.date <= ${period.end}
+      AND j.status = 'PENDING'
+      ${supervisorScope ? Prisma.sql`AND j."supervisorId" = ${supervisorScope}` : Prisma.empty}
+      AND EXISTS (SELECT 1 FROM "WorkHourRecord" h WHERE h."employeeId" = j."employeeId" AND h.date = j.date)
+    GROUP BY j.date, j."employeeId", j."supervisorId", sup."fullName", s.status
+  `);
+  const employees = groups.length ? await prisma.employeeProfile.findMany({
+    where: { id: { in: Array.from(new Set(groups.map((group) => group.employeeId))) } },
+    select: { id: true, roleTitle: true, operationalStatus: true, goLiveDate: true, deletedAt: true, skill: true,
+      lob: { select: { name: true } }, team: { select: { name: true } },
+      user: { select: { role: { select: { name: true } } } },
+      skillAssignments: { select: { skill: { select: { name: true } } } }
+    }
+  }) : [];
+  const byId = new Map(employees.map((employee) => [employee.id, employee]));
+  const eligible = groups.filter((group) => {
+    const employee = byId.get(group.employeeId);
+    return employee && isCaptureImportEligible(employee, formatDate(group.date)) && !isProtectedCaptureScheduleStatus(group.scheduleStatus);
+  });
+  return { data: buildAdherenceSummary({ startDate: formatDate(period.start), endDate: formatDate(period.end) },
+    eligible.map((group) => ({ date: formatDate(group.date), supervisorId: group.supervisorId, supervisor: group.supervisor, count: Number(group.count) }))) };
 }
 
 export async function exportWorkHourAdherenceJustifications(actor: Actor, filters: AdherenceQueryFilters = {}) {

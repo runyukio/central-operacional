@@ -14,10 +14,10 @@ function Slicer({ label, value, options, onChange, disabled, helper }: {
   onChange: (value: string) => void; disabled?: boolean; helper?: string;
 }) {
   return <fieldset disabled={disabled} className="min-w-0">
-    <legend className="mb-2 text-[11px] font-extrabold uppercase tracking-wide text-muted">{label}</legend>
-    <div className="flex flex-wrap gap-1.5">
+    <legend className="mb-3 text-sm font-extrabold uppercase tracking-wide text-muted">{label}</legend>
+    <div className="flex flex-wrap gap-2.5">
       {options.map((option) => <button key={option.id} type="button" aria-pressed={value === option.id}
-        onClick={() => onChange(option.id)} className={cn("rounded-lg border px-3 py-1.5 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-50",
+        onClick={() => onChange(option.id)} className={cn("min-h-11 rounded-lg border px-4 py-2.5 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-50",
           value === option.id ? "border-blue-600 bg-blue-600 text-white" : "border-border bg-white text-navy-950 hover:border-blue-400")}>{option.name}</button>)}
     </div>
     {helper ? <p className="mt-1.5 text-xs font-semibold text-muted">{helper}</p> : null}
@@ -27,8 +27,8 @@ function Slicer({ label, value, options, onChange, disabled, helper }: {
 const optionsWithAll = (values: string[], all = "Todos") => [{ id: "Todos", name: all }, ...values.map((value) => ({ id: value, name: value }))];
 const noOptions: AdherenceFilterOptions = { lobs: [], supervisors: [], shifts: [] };
 
-export function WorkHourJustifications({ active, refreshKey, actorName, onMessage }: {
-  active: boolean; refreshKey: number; actorName: string; onMessage: (message: string) => void;
+export function WorkHourJustifications({ active, refreshKey, actorName, onMessage, onAnswered }: {
+  active: boolean; refreshKey: number; actorName: string; onMessage: (message: string) => void; onAnswered?: () => void;
 }) {
   const [filters, setFilters] = useState(() => ({ ...initialAdherenceFilters(currentOperationalMonthRange()), collaborator: "" }));
   const [search, setSearch] = useState("");
@@ -118,6 +118,7 @@ export function WorkHourJustifications({ active, refreshKey, actorName, onMessag
       });
       feed.update({ ...row, ...response.data, justification, answeredBy: actorName });
       onMessage("Justificativa de aderência enviada.");
+      onAnswered?.();
     } catch (error) { onMessage(error instanceof Error ? error.message : "Não foi possível enviar a justificativa."); }
     finally { setSavingId(""); }
   }
@@ -144,14 +145,16 @@ export function WorkHourJustifications({ active, refreshKey, actorName, onMessag
 
   if (!active) return null;
   return <>
-    <section className="card mb-5 space-y-4 p-4" aria-label="Filtros de justificativas">
-      <div className="flex flex-wrap items-end gap-3">
+    <section className="card mb-5 space-y-6 p-5 sm:p-6" aria-label="Filtros de justificativas">
+      <div className="grid items-end gap-4 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,2fr)_auto] [&_input]:h-12 [&_input]:text-base">
         <FormInput label="Data inicial" type="date" value={filters.startDate} onChange={(startDate) => changeFilters({ startDate })} />
         <FormInput label="Data final" type="date" value={filters.endDate} onChange={(endDate) => changeFilters({ endDate })} />
+        <FormInput label="Parceiro" value={filters.collaborator} placeholder="Pesquisar por nome ou WB"
+          onChange={(collaborator) => changeFilters({ collaborator })} />
         <button type="button" onClick={() => changeFilters({ ...initialAdherenceFilters(currentOperationalMonthRange()), collaborator: "" })}
-          className="premium-control ml-auto inline-flex h-10 items-center gap-2 px-3 text-xs font-bold"><RefreshCw className="h-3.5 w-3.5" />Limpar filtros</button>
+          className="premium-control inline-flex h-12 items-center justify-center gap-2 px-5 text-sm font-bold"><RefreshCw className="h-4 w-4" />Limpar filtros</button>
       </div>
-      <div className="flex flex-wrap items-start gap-x-7 gap-y-4">
+      <div className="grid items-start gap-6 border-t border-border pt-5 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.8fr)_minmax(0,1fr)_minmax(0,1fr)]">
       <Slicer label="LOB" value={filters.lob} options={optionsWithAll(options.lobs, "Todas")} disabled={!optionsReady}
         onChange={(lob) => changeFilters({ lob })} />
       <Slicer label="Supervisor" value={filters.supervisorId} options={[{ id: "Todos", name: "Todos" }, ...options.supervisors]}
@@ -159,8 +162,6 @@ export function WorkHourJustifications({ active, refreshKey, actorName, onMessag
         onChange={(supervisorId) => changeFilters({ supervisorId })} />
       <Slicer label="Turno" value={filters.shift} options={optionsWithAll(options.shifts)} disabled={!optionsReady}
         onChange={(shift) => changeFilters({ shift })} />
-      <div className="w-full sm:w-72"><FormInput label="Parceiro" value={filters.collaborator} placeholder="Pesquisar por nome ou WB"
-        onChange={(collaborator) => changeFilters({ collaborator })} /></div>
       <Slicer label="Status da justificativa" value={filters.justificationStatus} options={optionsWithAll(["Pendentes", "Justificados"])}
         onChange={(justificationStatus) => changeFilters({ justificationStatus })} />
       </div>

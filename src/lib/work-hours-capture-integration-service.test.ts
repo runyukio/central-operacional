@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { prisma } from "./prisma";
+import { getWorkHourAdherenceSummary } from "./work-hours-capture-integration-service";
 import { answerWorkHourAdherenceJustification, applyCaptureWorkHourDivergenceDecisions, captureWorkHoursData, commitCaptureWorkHoursImport, exportWorkHourAdherenceJustifications, getWorkHourAdherenceFilterOptions, listCaptureWorkHourDivergences, listWorkHourAdherenceJustifications, previewCaptureWorkHoursImport } from "./work-hours-capture-integration-service";
 import { deleteWorkHourRecord, upsertManualWorkHourRecord } from "./work-hours-service";
 import { cancelAdherenceForDeletedWorkHours } from "./work-hours-adherence-cleanup";
@@ -420,6 +421,93 @@ test("opções vêm de grupos agregados do período e LOB, com a mesma elegibili
   const count=queries.length;
   assert.ok("error" in await getWorkHourAdherenceFilterOptions(actor,{startDate:day,endDate:day}));assert.equal(queries.length,count);
   assert.equal(mutations(f.calls).length,0);
+});
+
+test("resumo agrega todo o período por dia e responsável sem carregar pendências individuais", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee(), employee("second"), employee("future", { goLiveDate: new Date("2026-09-04") }),
+    employee("staff", { roleTitle: "Staff" }), employee("inactive", { operationalStatus: "Inativo" }),
+    employee("deleted", { deletedAt: new Date() }), employee("onboarding", { skill: "Onboarding" })] });
+  const group = (employeeId: string, count: number, patch: Row = {}) => ({ employeeId, date, supervisorId: "old-owner", supervisor: "Supervisor A",
+    scheduleStatus: null, count: BigInt(count), ...patch });
+  const groups = [group("agent", 60), group("second", 7), group("agent", 3, { supervisorId: "same-name" }),
+    group("future", 100), group("future", 2, { date: new Date("2026-09-04") }), group("staff", 100), group("inactive", 100),
+    group("deleted", 100), group("missing", 100), group("agent", 100, { scheduleStatus: "NESTING" }),
+    group("agent", 100, { scheduleStatus: "TREINAMENTO" }), group("onboarding", 1, { supervisorId: null, supervisor: null })];
+  const queries: Row[] = [];
+  t.mock.method(prisma, "$queryRaw", (async (query: Row) => { queries.push(query); return groups; }) as any);
+  const before = clone(f.state);
+  const result = await getWorkHourAdherenceSummary(actor, { startDate: day, endDate: "2026-09-05" });
+  assert.ok("data" in result); if (!("data" in result)) return;
+  assert.equal(result.data.total, 73);
+  assert.deepEqual(result.data.days.map((day) => day.total), [71, 2, 0]);
+  assert.equal(result.data.days[0].supervisors.find((row) => row.id === "old-owner")?.count, 67);
+  assert.equal(result.data.days[0].supervisors.find((row) => row.id === "same-name")?.count, 3);
+  assert.equal(result.data.days[0].supervisors.find((row) => row.id === "__none__")?.count, 1);
+  assert.match(queries[0].sql, /COUNT\(DISTINCT j.id\)/);
+  assert.match(queries[0].sql, /j.status = 'PENDING'/);
+  assert.match(queries[0].sql, /EXISTS[\s\S]*FROM "WorkHourRecord"/);
+  assert.match(queries[0].sql, /j.date >= \? AND j.date <= \?/);
+  assert.doesNotMatch(queries[0].sql, /LIMIT|OFFSET|j.justification|j.answeredBy/);
+  assert.equal(queries[0].values[1].toISOString(), "2026-09-05T23:59:59.999Z");
+  assert.equal(f.calls.filter((call) => call.model === "workHourAdherenceJustification").length, 0);
+  assert.equal(mutations(f.calls).length, 0);
+  assert.deepEqual(f.state, before);
+});
+
+test("resumo usa permissão do banco e escopo registrado do supervisor, não filtros do cliente", async (t) => {
+  const f = fixture(t);
+  const queries: Row[] = [];
+  t.mock.method(prisma, "$queryRaw", (async (query: Row) => { queries.push(query); return []; }) as any);
+  for (const role of ["ADMIN", "WFM", "SUPERVISOR"]) {
+    Object.assign(f.state.user[0], { role: { name: role }, employeeProfile: { id: "my-supervisor-id" } });
+    const result = await getWorkHourAdherenceSummary(actor, { startDate: day, endDate: day, supervisorId: "forged-id" } as any);
+    assert.ok("data" in result);
+    if (role === "SUPERVISOR") {
+      assert.match(queries.at(-1)!.sql, /AND j."supervisorId" = \?/);
+      assert.ok(queries.at(-1)!.values.includes("my-supervisor-id"));
+    } else assert.doesNotMatch(queries.at(-1)!.sql, /AND j."supervisorId"/);
+    assert.ok(!queries.at(-1)!.values.includes("forged-id"));
+  }
+  f.state.user[0].employeeProfile = null;
+  await getWorkHourAdherenceSummary(actor, { startDate: day, endDate: day });
+  assert.ok(queries.at(-1)!.values.includes("__none__"));
+  const count = queries.length;
+  for (const role of ["GESTOR", "COLABORADOR", "POC", "FINANCEIRO"]) {
+    f.state.user[0].role = { name: role };
+    assert.ok("error" in await getWorkHourAdherenceSummary(actor, { startDate: day, endDate: day }));
+  }
+  f.state.user[0].role = { name: "ADMIN" };
+  f.state.user[0].status = "INACTIVE";
+  assert.ok("error" in await getWorkHourAdherenceSummary(actor, { startDate: day, endDate: day }));
+  f.state.user[0].status = "ACTIVE";
+  for (const period of [{ startDate: "2026-09-04", endDate: day }, { startDate: "invalid", endDate: day }, { startDate: "2026-01-01", endDate: day }]) {
+    assert.ok("error" in await getWorkHourAdherenceSummary(actor, period));
+  }
+  assert.equal(queries.length, count);
+});
+
+test("resumo acompanha resposta real e exclusão de horas sem duplicar histórico", async (t) => {
+  const f = fixture(t, { employeeProfile: [employee("agent", { supervisorId: "new-owner" })],
+    workHourRecord: [{ id: "hours", employeeId: "agent", date }],
+    workHourAdherenceJustification: [adherence("first", "agent", { supervisorId: "old-owner" }),
+      adherence("second", "agent", { supervisorId: "old-owner" }), adherence("cancelled", "agent", { status: "CANCELLED" })] });
+  t.mock.method(prisma, "$queryRaw", (async () => {
+    const pending = f.state.workHourAdherenceJustification.filter((row) => row.status === "PENDING"
+      && f.state.workHourRecord.some((hours) => hours.employeeId === row.employeeId && +hours.date === +row.date));
+    return pending.map((row) => ({ employeeId: row.employeeId, date: row.date, supervisorId: row.supervisorId, supervisor: "Original",
+      scheduleStatus: null, count: BigInt(1) }));
+  }) as any);
+  const read = async () => { const result = await getWorkHourAdherenceSummary(actor, { startDate: day, endDate: day });
+    assert.ok("data" in result); return result.data; };
+  assert.equal((await read()).total, 2);
+  assert.equal((await read()).days[0].supervisors[0].id, "old-owner");
+  const answered = await answerWorkHourAdherenceJustification(actor, { id: "first", justification: "Ajuste documentado de teste" });
+  assert.ok("data" in answered);
+  const afterAnswer = clone(f.state);
+  assert.equal((await read()).total, 1);
+  assert.deepEqual(f.state, afterAnswer);
+  f.state.workHourRecord.splice(0);
+  assert.equal((await read()).total, 0);
 });
 
 test("nenhuma consulta da captura ou do cronograma para Staff, TI, nesting, treinamento e inativos", async (t) => {

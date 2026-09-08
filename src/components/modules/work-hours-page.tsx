@@ -11,6 +11,7 @@ import { type CapturePeriod } from "@/lib/work-hours-capture-period";
 import { captureImportNeedsReview, processCaptureImportDays, type CaptureDayResult } from "@/lib/work-hours-capture-batch";
 import type { CaptureRegistrationWarning } from "@/lib/work-hours-capture-review";
 import { WorkHourJustifications } from "@/components/work-hour-justifications";
+import { WorkHourJustificationSummary } from "@/components/work-hour-justification-summary";
 import { EmptyState, MetricPill, PageHeader, StatCard, StatusBadge } from "@/components/ui/primitives";
 import { canApproveWorkHourAdjustment, canEditWorkHours, canImportWorkHours, canJustifyAbsence, canRequestWorkHourAdjustment, canViewWorkHours, normalizeRole } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
@@ -110,7 +111,8 @@ export function WorkHoursPage() {
   const [captureProgress, setCaptureProgress] = useState("");
   const captureImportScope = useRef<{ payload: ReturnType<typeof captureImportPayload>; query: string } | null>(null);
   const [importingCapture, setImportingCapture] = useState(false);
-  const [activeHoursSlice, setActiveHoursSlice] = useState<"hours" | "justifications">("hours");
+  const [activeHoursSlice, setActiveHoursSlice] = useState<"hours" | "justifications" | "summary">("hours");
+  const [adherenceSummaryRevision, setAdherenceSummaryRevision] = useState(0);
   const [adherenceRevision, setAdherenceRevision] = useState(0);
   const [downloadingWorkHourTemplate, setDownloadingWorkHourTemplate] = useState(false);
   const [selectedRow, setSelectedRow] = useState<WorkHourRow | null>(null);
@@ -539,6 +541,7 @@ export function WorkHoursPage() {
       <nav aria-label="Visão de Horas Operacionais" className="mb-5 flex flex-wrap gap-2">
         <button type="button" aria-pressed={activeHoursSlice === "hours"} onClick={() => setActiveHoursSlice("hours")} className={cn("inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-xs font-black transition", activeHoursSlice === "hours" ? "border-blue-600 bg-blue-600 text-white" : "border-border bg-white text-navy-950 hover:bg-blue-50")}><Clock className="h-4 w-4" />Painel de horas</button>
         {canViewAdherence ? <button type="button" aria-pressed={activeHoursSlice === "justifications"} onClick={() => setActiveHoursSlice("justifications")} className={cn("inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-xs font-black transition", activeHoursSlice === "justifications" ? "border-blue-600 bg-blue-600 text-white" : "border-border bg-white text-navy-950 hover:bg-blue-50")}><ClipboardList className="h-4 w-4" />Justificativas</button> : null}
+        {canViewAdherence ? <button type="button" aria-pressed={activeHoursSlice === "summary"} onClick={() => setActiveHoursSlice("summary")} className={cn("inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-xs font-black transition", activeHoursSlice === "summary" ? "border-blue-600 bg-blue-600 text-white" : "border-border bg-white text-navy-950 hover:bg-blue-50")}><ClipboardList className="h-4 w-4" />Resumo de justificativas</button> : null}
       </nav>
 
       {activeHoursSlice === "hours" ? (
@@ -566,7 +569,8 @@ export function WorkHoursPage() {
       </section>
       ) : null}
 
-      {canViewAdherence ? <WorkHourJustifications active={activeHoursSlice === "justifications"} refreshKey={adherenceRevision} actorName={session?.user?.name ?? ""} onMessage={setMessage} /> : null}
+      {canViewAdherence ? <WorkHourJustifications active={activeHoursSlice === "justifications"} refreshKey={adherenceRevision} actorName={session?.user?.name ?? ""} onMessage={setMessage} onAnswered={() => setAdherenceSummaryRevision((value) => value + 1)} /> : null}
+      {canViewAdherence ? <WorkHourJustificationSummary active={activeHoursSlice === "summary"} refreshKey={adherenceRevision + adherenceSummaryRevision} /> : null}
 
       {activeHoursSlice === "hours" ? (
       <section className="card overflow-hidden">
