@@ -8,8 +8,8 @@ const date = (key: string) => new Date(`${key}T00:00:00Z`);
 const iso = (value: Date) => value.toISOString().slice(0, 10);
 const visible = Prisma.sql`JOIN "PerformanceImportBatch" b ON b.id=f."importBatchId" AND b.type='CEC_FRT' AND b.status='SUCCESS'`;
 
-export async function importCecFrtSnapshot(actor: Actor, raw: Record<string, unknown>[], fileName: string) {
-  const user = await authorizePerformanceImport(actor);
+export async function prepareCecFrtSnapshot(actor: Actor, raw: Record<string, unknown>[]) {
+  await authorizePerformanceImport(actor);
   let parsed: ReturnType<typeof parseCecFrtRows>;
   try { parsed = parseCecFrtRows(raw); } catch (error) { throw new PerformanceError((error as Error).message, 400); }
   if (parsed.errorCount) throw new PerformanceError(`${parsed.errorCount} linhas inválidas. A base anterior foi preservada. ${parsed.errors.join(" ")}`, 400);
@@ -28,19 +28,28 @@ export async function importCecFrtSnapshot(actor: Actor, raw: Record<string, unk
     byLogin.set(login, employee.id);
   }
   const unmatchedRows = parsed.rows.filter((row) => !byLogin.has(row.wbLogin)).length;
+  return {
+    rows: parsed.rows.map((row) => ({ ticketCreatedDay: date(row.day), wbLogin: row.wbLogin, employeeId: byLogin.get(row.wbLogin) ?? null,
+      priority: row.priority, total: row.total, over240: row.over240, over1440: row.over1440 })),
+    summary: { cecFrtRows: parsed.rows.length, unmatchedRows, unmatchedLogins: logins.filter((login) => !byLogin.has(login)).length,
+      startDate: parsed.rows.reduce((min, row) => row.day < min ? row.day : min, parsed.rows[0].day),
+      endDate: parsed.rows.reduce((max, row) => row.day > max ? row.day : max, parsed.rows[0].day) }
+  };
+}
+
+export async function importCecFrtSnapshot(actor: Actor, raw: Record<string, unknown>[], fileName: string) {
+  const user = await authorizePerformanceImport(actor);
+  const prepared = await prepareCecFrtSnapshot(actor, raw);
   const batch = await prisma.performanceImportBatch.create({ data: { type: "CEC_FRT", fileName, status: "PROCESSING", importedById: user.id,
-    rowsTotal: parsed.rows.length, rowsValid: parsed.rows.length, rowsError: 0 } });
+    rowsTotal: prepared.rows.length, rowsValid: prepared.rows.length, rowsError: 0 } });
   try {
-    for (let i = 0; i < parsed.rows.length; i += 1500) {
-      await prisma.performanceCecFrtRecord.createMany({ data: parsed.rows.slice(i, i + 1500).map((row) => ({
-        ticketCreatedDay: date(row.day), wbLogin: row.wbLogin, employeeId: byLogin.get(row.wbLogin) ?? null,
-        priority: row.priority, total: row.total, over240: row.over240, over1440: row.over1440, importBatchId: batch.id
-      })) });
+    for (let i = 0; i < prepared.rows.length; i += 1500) {
+      await prisma.performanceCecFrtRecord.createMany({ data: prepared.rows.slice(i, i + 1500).map((row) => ({ ...row, importBatchId: batch.id })) });
     }
     // Publish the fully staged snapshot atomically. Concurrent uploads cannot expose two snapshots.
     await prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('performance-cec-frt-snapshot'))::text`;
-      await tx.performanceImportBatch.update({ where: { id: batch.id }, data: { status: "SUCCESS", rowsInserted: parsed.rows.length, importedAt: new Date() } });
+      await tx.performanceImportBatch.update({ where: { id: batch.id }, data: { status: "SUCCESS", rowsInserted: prepared.rows.length, importedAt: new Date() } });
       // Does not touch CPD, production, quality, or another in-progress upload.
       await tx.performanceImportBatch.deleteMany({ where: { type: "CEC_FRT", status: { not: "PROCESSING" }, id: { not: batch.id } } });
     }, { timeout: 120000 });
@@ -48,9 +57,7 @@ export async function importCecFrtSnapshot(actor: Actor, raw: Record<string, unk
     await prisma.performanceImportBatch.deleteMany({ where: { id: batch.id, status: "PROCESSING" } });
     throw error;
   }
-  return { cecFrtRows: parsed.rows.length, unmatchedRows, unmatchedLogins: logins.filter((login) => !byLogin.has(login)).length,
-    startDate: parsed.rows.reduce((min, row) => row.day < min ? row.day : min, parsed.rows[0].day),
-    endDate: parsed.rows.reduce((max, row) => row.day > max ? row.day : max, parsed.rows[0].day) };
+  return prepared.summary;
 }
 
 export type CecFrtDayRow = CecFrtCounts & { employeeId: string | null; wbLogin: string; day: Date; name: string; skill: string; supervisorId: string | null; supervisor: string; records: number; updatedAt: Date };

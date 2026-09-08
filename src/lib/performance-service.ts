@@ -3091,7 +3091,7 @@ async function commitCecCpdRows(user: AuthenticatedUser, rows: PerformancePrevie
   };
 }
 
-async function bulkUpsertProductionRecords(rows: PerformancePreviewRow[], batchId: string) {
+async function bulkUpsertProductionRecords(rows: PerformancePreviewRow[], batchId: string, database: Pick<Prisma.TransactionClient, "$executeRaw"> = prisma) {
   for (const chunk of chunks(rows, 2500)) {
     const payload = JSON.stringify(chunk.map((row) => ({
       id: crypto.randomUUID(),
@@ -3109,7 +3109,7 @@ async function bulkUpsertProductionRecords(rows: PerformancePreviewRow[], batchI
       importBatchId: batchId
     })));
 
-    await prisma.$executeRaw(Prisma.sql`
+    await database.$executeRaw(Prisma.sql`
       WITH incoming AS (
         SELECT *
         FROM jsonb_to_recordset(${payload}::jsonb) AS x(
@@ -3179,7 +3179,7 @@ async function bulkUpsertProductionRecords(rows: PerformancePreviewRow[], batchI
   }
 }
 
-async function bulkUpsertPerformanceCecCpdRecords(rows: PerformancePreviewRow[], batchId: string) {
+async function bulkUpsertPerformanceCecCpdRecords(rows: PerformancePreviewRow[], batchId: string, database: Pick<Prisma.TransactionClient, "$executeRaw"> = prisma) {
   for (const chunk of chunks(rows, 2500)) {
     const payload = JSON.stringify(chunk.map((row) => ({
       id: crypto.randomUUID(),
@@ -3192,7 +3192,7 @@ async function bulkUpsertPerformanceCecCpdRecords(rows: PerformancePreviewRow[],
       importBatchId: batchId
     })));
 
-    await prisma.$executeRaw(Prisma.sql`
+    await database.$executeRaw(Prisma.sql`
       WITH incoming AS (
         SELECT *
         FROM jsonb_to_recordset(${payload}::jsonb) AS x(
@@ -3242,7 +3242,7 @@ async function bulkUpsertPerformanceCecCpdRecords(rows: PerformancePreviewRow[],
   }
 }
 
-async function bulkUpsertPerformanceQueueVolumeRecords(rows: PerformancePreviewRow[], batchId: string) {
+async function bulkUpsertPerformanceQueueVolumeRecords(rows: PerformancePreviewRow[], batchId: string, database: Pick<Prisma.TransactionClient, "$executeRaw"> = prisma) {
   for (const chunk of chunks(rows, 2500)) {
     const payload = JSON.stringify(chunk.map((row) => ({
       id: crypto.randomUUID(),
@@ -3254,7 +3254,7 @@ async function bulkUpsertPerformanceQueueVolumeRecords(rows: PerformancePreviewR
       importBatchId: batchId
     })));
 
-    await prisma.$executeRaw(Prisma.sql`
+    await database.$executeRaw(Prisma.sql`
       WITH incoming AS (
         SELECT *
         FROM jsonb_to_recordset(${payload}::jsonb) AS x(
@@ -3298,6 +3298,24 @@ async function bulkUpsertPerformanceQueueVolumeRecords(rows: PerformancePreviewR
         "updatedAt" = EXCLUDED."updatedAt"
     `);
   }
+}
+
+export function prepareManualOperationalRows(base: "production" | "volume" | "cecCpd", rows: PerformancePreviewRow[]) {
+  const expectedType = { production: "PRODUCTION", volume: "PRODUCTION_VOLUME", cecCpd: "CEC_CPD" }[base];
+  if (rows.some((row) => row.type !== expectedType)) {
+    throw new PerformanceError("O arquivo não corresponde à base selecionada. Confira os campos Produção / Output, Filas / Input e CEC CPD / Output. Nenhuma base foi alterada.", 400);
+  }
+  const valid = rows.filter((row) => !row.errors.length && row.uniqueKey);
+  if (!valid.length) throw new PerformanceError(`A base selecionada não contém linhas válidas. Nenhuma base foi alterada. ${rows[0]?.errors.join(" ") ?? ""}`, 400);
+  // Keep the existing rule: invalid operational rows are counted and skipped; duplicate keys are summed.
+  const aggregated = base === "production" ? aggregateProductionRows(valid) : base === "volume" ? aggregateProductionVolumeRows(valid) : aggregateCecCpdRows(valid);
+  return { rows: aggregated, validCount: valid.length, errorCount: rows.length - valid.length, totalCount: rows.length };
+}
+
+export async function writeManualOperationalRows(database: Prisma.TransactionClient, base: "production" | "volume" | "cecCpd", rows: PerformancePreviewRow[], batchId: string) {
+  if (base === "production") return bulkUpsertProductionRecords(rows, batchId, database);
+  if (base === "volume") return bulkUpsertPerformanceQueueVolumeRecords(rows, batchId, database);
+  return bulkUpsertPerformanceCecCpdRecords(rows, batchId, database);
 }
 
 function aggregateProductionRows(rows: PerformancePreviewRow[]) {

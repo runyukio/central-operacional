@@ -6,21 +6,19 @@ import { getApiActor } from "@/lib/api-actor";
 import { prisma } from "@/lib/prisma";
 import {
   authorizePerformanceImport,
-  commitCecCpdManualPreviewImport,
-  commitProductionManualPreviewImport,
   discardQualitySnapshotImport,
   finalizeQualitySnapshotImport,
   importQualitySnapshotChunk,
   PerformanceError,
   previewCecCpdImport,
   previewProductionImport,
-  replacePerformanceSnapshot,
   startQualitySnapshotImport,
-  type PerformanceQualityScope,
-  type PerformancePreviewRow
+  type PerformanceQualityScope
 } from "@/lib/performance-service";
 import { processFirstWorksheetInChunks, XlsxChunkError } from "@/lib/xlsx-row-chunks";
-import { importCecFrtSnapshot } from "@/lib/cec-frt-service";
+import { prepareCecFrtSnapshot } from "@/lib/cec-frt-service";
+import { performanceManualBases, validateManualFileManifest, type PerformanceManualBase } from "@/lib/performance-manual-bases";
+import { replaceSelectedManualSnapshots, type ManualSnapshotFiles } from "@/lib/performance-manual-snapshot";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 800;
@@ -33,10 +31,8 @@ const MAX_QUALITY_FILE_ROWS = 1_000_000;
 const QUALITY_PROCESSING_CHUNK_ROWS = 10_000;
 const UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
 
-type PreviewedFile = {
-  fileName: string;
-  rows: PerformancePreviewRow[];
-};
+type UploadedFile = { fileName: string; buffer: Buffer | ArrayBuffer };
+type UploadedBases = Partial<Record<PerformanceManualBase, UploadedFile | null>>;
 
 export async function POST(request: Request) {
   const url = new URL(request.url);
@@ -53,7 +49,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "chunk") {
-      return receiveUploadChunk(request, url, importUser.email);
+      return await receiveUploadChunk(request, url, importUser.email);
     }
 
     if (action === "finalize") {
@@ -61,18 +57,17 @@ export async function POST(request: Request) {
       const qualityScope = readQualityScope(url);
       try {
         const uploadedFiles = await rebuildUploadedFiles(uploadId, importUser.email);
-        if (uploadedFiles.cecFrt) {
-          if (uploadedFiles.production || uploadedFiles.volume || uploadedFiles.cecCpd || uploadedFiles.quality) {
-            throw new PerformanceError("Envie SLA/FRT CEC separadamente das demais bases.", 400);
-          }
-          return NextResponse.json({ success: true, ...await importCecFrtSnapshot(actor, readWorkbookRows(uploadedFiles.cecFrt.buffer), uploadedFiles.cecFrt.fileName) });
+        try {
+          validateManualFileManifest(url.searchParams.get("fileTypes"), Object.entries(uploadedFiles).filter(([, file]) => file).map(([key]) => key));
+        } catch (error) {
+          throw new PerformanceError((error as Error).message, 400);
         }
-        const hasOperationalFiles = Boolean(uploadedFiles.production || uploadedFiles.volume || uploadedFiles.cecCpd);
-        if (hasOperationalFiles && (!uploadedFiles.production || !uploadedFiles.volume || !uploadedFiles.cecCpd)) {
-          throw new PerformanceError("As bases Produção / Output, Filas / Input e CEC CPD / Output devem ser enviadas juntas.", 400);
+        const hasOperationalFiles = performanceManualBases.some((base) => uploadedFiles[base.key]);
+        if (hasOperationalFiles && uploadedFiles.quality) {
+          throw new PerformanceError("Envie Qualidade pela janela de Qualidade, separadamente das bases operacionais. Nenhuma base foi alterada.", 400);
         }
-        const operationalResult = uploadedFiles.production && uploadedFiles.volume && uploadedFiles.cecCpd
-          ? await processPerformanceFiles(actor, uploadedFiles.production, uploadedFiles.volume, uploadedFiles.cecCpd)
+        const operationalResult = hasOperationalFiles
+          ? await processPerformanceFiles(actor, uploadedFiles)
           : null;
         const qualityResult = uploadedFiles.quality
           ? await processQualityFile(actor, uploadedFiles.quality, qualityScope)
@@ -85,19 +80,14 @@ export async function POST(request: Request) {
     }
 
     const formData = await request.formData();
-    const productionFile = readXlsxFile(formData.get("productionFile"), "Produção / Output");
-    const volumeFile = readXlsxFile(formData.get("volumeFile"), "Filas / Input");
-    const cecCpdFile = readXlsxFile(formData.get("cecCpdFile"), "CEC CPD / Output");
-    return NextResponse.json(await processPerformanceFiles(actor, {
-      fileName: productionFile.name,
-      buffer: await productionFile.arrayBuffer()
-    }, {
-      fileName: volumeFile.name,
-      buffer: await volumeFile.arrayBuffer()
-    }, {
-      fileName: cecCpdFile.name,
-      buffer: await cecCpdFile.arrayBuffer()
-    }));
+    const files: UploadedBases = {};
+    for (const base of performanceManualBases) {
+      const value = formData.get(`${base.key}File`);
+      if (value === null) continue;
+      const file = readXlsxFile(value, base.label);
+      files[base.key] = { fileName: file.name, buffer: await file.arrayBuffer() };
+    }
+    return NextResponse.json({ success: true, ...await processPerformanceFiles(actor, files) });
   } catch (error) {
     if (error instanceof PerformanceError) {
       return NextResponse.json({ success: false, error: error.message, message: error.message }, { status: error.status });
@@ -232,73 +222,23 @@ function readQualityScope(url: URL): PerformanceQualityScope {
 
 async function processPerformanceFiles(
   actor: Awaited<ReturnType<typeof getApiActor>>,
-  productionFile: { fileName: string; buffer: Buffer | ArrayBuffer },
-  volumeFile: { fileName: string; buffer: Buffer | ArrayBuffer },
-  cecCpdFile: { fileName: string; buffer: Buffer | ArrayBuffer }
+  files: UploadedBases
 ) {
-  const previews: PreviewedFile[] = [];
-
-  for (const file of [productionFile, volumeFile]) {
+  const previews: ManualSnapshotFiles = {};
+  for (const { key } of performanceManualBases) {
+    const file = files[key];
+    if (!file) continue;
     const rawRows = readWorkbookRows(file.buffer);
-    const preview = await previewProductionImport(actor, rawRows, { skipExistingCheck: true });
-    previews.push({ fileName: file.fileName, rows: preview.rows });
+    if (key === "cecFrt") {
+      previews.cecFrt = { fileName: file.fileName, ...await prepareCecFrtSnapshot(actor, rawRows) };
+    } else {
+      const preview = key === "cecCpd"
+        ? await previewCecCpdImport(actor, rawRows, { skipExistingCheck: true })
+        : await previewProductionImport(actor, rawRows, { skipExistingCheck: true });
+      previews[key] = { fileName: file.fileName, rows: preview.rows };
+    }
   }
-  const cecCpdPreview = await previewCecCpdImport(actor, readWorkbookRows(cecCpdFile.buffer), { skipExistingCheck: true });
-  previews.push({ fileName: cecCpdFile.fileName, rows: cecCpdPreview.rows });
-
-  const coverage = summarizeCoverage(previews);
-  if (!coverage.productionRows || !coverage.volumeRows || !coverage.cecCpdRows) {
-    throw new PerformanceError(
-      "As três bases são obrigatórias: Produção / Output precisa conter submit, Filas / Input precisa conter enqueue e CEC CPD / Output precisa conter tickets.",
-      400
-    );
-  }
-
-  let batchId: string | undefined;
-  const imports = [];
-  const batchFileName = `${productionFile.fileName} + ${volumeFile.fileName} + ${cecCpdFile.fileName}`;
-  for (const [index, preview] of previews.slice(0, 2).entries()) {
-    const result = await commitProductionManualPreviewImport(
-      actor,
-      preview.rows,
-      index === 0 ? batchFileName : preview.fileName,
-      batchId
-    );
-    batchId = result.batchId;
-    imports.push({
-      fileName: preview.fileName,
-      importedRows: result.importedRows,
-      productionRows: result.productionRows,
-      volumeRows: result.volumeRows
-    });
-  }
-  const cecCpdResult = await commitCecCpdManualPreviewImport(
-    actor,
-    cecCpdPreview.rows,
-    cecCpdFile.fileName,
-    batchId
-  );
-  batchId = cecCpdResult.batchId;
-  imports.push({
-    fileName: cecCpdFile.fileName,
-    importedRows: cecCpdResult.importedRows,
-    productionRows: 0,
-    volumeRows: 0,
-    cecCpdRows: cecCpdResult.cecCpdRows
-  });
-
-  if (!batchId) throw new PerformanceError("Não foi possível criar o lote manual de Performance.", 500);
-  const reset = await replacePerformanceSnapshot(actor, batchId);
-  return {
-    success: true,
-    batchId,
-    productionRows: coverage.productionRows,
-    volumeRows: coverage.volumeRows,
-    cecCpdRows: coverage.cecCpdRows,
-    rowsError: coverage.rowsError,
-    files: imports,
-    reset
-  };
+  return replaceSelectedManualSnapshots(actor, previews);
 }
 
 function requiredUploadId(url: URL) {
@@ -321,7 +261,9 @@ function readXlsxFile(value: FormDataEntryValue | null, label: string) {
 }
 
 function readWorkbookRows(buffer: Buffer | ArrayBuffer) {
-  const workbook = XLSX.read(buffer, { cellDates: true });
+  let workbook: XLSX.WorkBook;
+  try { workbook = XLSX.read(buffer, { cellDates: true }); }
+  catch { throw new PerformanceError("Não foi possível ler o XLSX. Verifique o arquivo e envie novamente. Nenhuma base foi alterada.", 400); }
   const sheetName = workbook.SheetNames[0];
   const sheet = sheetName ? workbook.Sheets[sheetName] : null;
   if (!sheet) throw new PerformanceError("Planilha de Performance não encontrada no arquivo.", 400);
@@ -329,23 +271,4 @@ function readWorkbookRows(buffer: Buffer | ArrayBuffer) {
   if (!rows.length) throw new PerformanceError("A planilha enviada está vazia.", 400);
   if (rows.length > MAX_OPERATIONAL_FILE_ROWS) throw new PerformanceError("A planilha excede o limite de 250.000 linhas.", 413);
   return rows;
-}
-
-function summarizeCoverage(files: PreviewedFile[]) {
-  let productionRows = 0;
-  let volumeRows = 0;
-  let cecCpdRows = 0;
-  let rowsError = 0;
-  for (const file of files) {
-    for (const row of file.rows) {
-      if (row.errors.length) {
-        rowsError += 1;
-        continue;
-      }
-      if (row.type === "PRODUCTION") productionRows += 1;
-      if (row.type === "PRODUCTION_VOLUME") volumeRows += 1;
-      if (row.type === "CEC_CPD") cecCpdRows += 1;
-    }
-  }
-  return { productionRows, volumeRows, cecCpdRows, rowsError };
 }

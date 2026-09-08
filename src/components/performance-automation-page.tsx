@@ -45,6 +45,7 @@ import { TopActions } from "@/components/layout/app-shell";
 import { PageHeader, StatCard } from "@/components/ui/primitives";
 import { cn, formatNumber } from "@/lib/utils";
 import { formatLatencyDisplay, latencyDisplayValue, latencyUnit } from "@/lib/latency-display";
+import { performanceManualBases, type PerformanceManualBase, type ManualImportResult } from "@/lib/performance-manual-bases";
 
 const CecFrtPanel = dynamic(() => import("@/components/performance-cec-frt").then((module) => module.CecFrtPanel));
 
@@ -102,13 +103,6 @@ type PerformanceProductionResponse = {
   trend: PerformanceTrendRow[];
   queues?: PerformanceQueueRow[];
   realtimeFallbackWarning?: string;
-};
-
-type ManualImportResult = {
-  productionRows: number;
-  volumeRows: number;
-  cecCpdRows: number;
-  rowsError: number;
 };
 
 type QualitySummary = {
@@ -356,6 +350,7 @@ export function PerformanceAutomationPage() {
   const [loadingSupervisors, setLoadingSupervisors] = useState(false);
   const [message, setMessage] = useState("");
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [manualImportVersion, setManualImportVersion] = useState(0);
   const [qualityUploadOpen, setQualityUploadOpen] = useState(false);
 
   const loadQueue = useCallback(async (lobOverride?: string) => {
@@ -491,7 +486,7 @@ export function PerformanceAutomationPage() {
 
   useEffect(() => {
     if (activeTab === "forecast") void loadForecast();
-  }, [activeTab, loadForecast]);
+  }, [activeTab, loadForecast, manualImportVersion]);
 
   useEffect(() => {
     if (activeTab === "quality") void loadQuality();
@@ -504,11 +499,11 @@ export function PerformanceAutomationPage() {
 
   useEffect(() => {
     if (activeTab === "agents") void loadAgents();
-  }, [activeTab, loadAgents]);
+  }, [activeTab, loadAgents, manualImportVersion]);
 
   useEffect(() => {
     if (activeTab === "supervisors") void loadSupervisors();
-  }, [activeTab, loadSupervisors]);
+  }, [activeTab, loadSupervisors, manualImportVersion]);
 
   const basePayload = queuePayload ?? forecastPayload;
   const realtimeFallbackWarning = activeTab === "forecast"
@@ -573,6 +568,7 @@ export function PerformanceAutomationPage() {
 
       {activeTab === "queue" ? (
         <QueueView
+          refreshToken={manualImportVersion}
           loading={loadingQueue}
           rows={queueRows}
           payload={queuePayload}
@@ -672,9 +668,8 @@ export function PerformanceAutomationPage() {
         <ManualImportModal
           onClose={() => setUploadOpen(false)}
           onImported={async () => {
-            setQueueLob("");
-            setQueuePayload(null);
-            await loadQueue("");
+            setManualImportVersion((version) => version + 1);
+            await loadQueue();
           }}
         />
       ) : null}
@@ -1386,6 +1381,7 @@ function AgentSortHeader({
 }
 
 function QueueView({
+  refreshToken,
   loading,
   rows,
   payload,
@@ -1401,6 +1397,7 @@ function QueueView({
   onExport,
   onRefresh
 }: {
+  refreshToken: number;
   loading: boolean;
   rows: PerformanceTrendRow[];
   payload: PerformanceProductionResponse | null;
@@ -1475,7 +1472,7 @@ function QueueView({
           </button> : null}
         </div>
 
-        {selectedLob === "CEC" ? <CecFrtPanel refreshToken={cecRefresh} /> : !selectedLob ? (
+        {selectedLob === "CEC" ? <CecFrtPanel refreshToken={cecRefresh + refreshToken} /> : !selectedLob ? (
           <div className="grid min-h-[300px] place-items-center rounded-2xl border border-dashed border-blue-200 bg-blue-50/40 px-6 text-center">
             <div className="max-w-md">
               <span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-white text-blue-600 shadow-sm"><BarChart3 className="h-5 w-5" /></span>
@@ -1623,18 +1620,22 @@ function QueueSortHeader({
   );
 }
 
-function ManualImportModal({ onClose, onImported }: { onClose: () => void; onImported: () => Promise<void> | void }) {
-  const [productionFile, setProductionFile] = useState<File | null>(null);
-  const [volumeFile, setVolumeFile] = useState<File | null>(null);
-  const [cecCpdFile, setCecCpdFile] = useState<File | null>(null);
+export function ManualImportModal({ onClose, onImported }: { onClose: () => void; onImported: () => Promise<void> | void }) {
+  const [files, setFiles] = useState<Partial<Record<PerformanceManualBase, File>>>({});
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState("");
   const [result, setResult] = useState<ManualImportResult | null>(null);
+  const uploadFiles = performanceManualBases.flatMap(({ key }) => files[key] ? [{ file: files[key]!, fileType: key }] : []);
 
   const submit = async () => {
-    if (!productionFile || !volumeFile || !cecCpdFile) {
-      setError("Selecione as bases de Produção / Output, Filas / Input e CEC CPD / Output.");
+    if (uploading || result) return;
+    if (!uploadFiles.length) {
+      setError("Selecione pelo menos uma base para atualizar.");
+      return;
+    }
+    if (uploadFiles.some(({ file }) => !file.name.toLowerCase().endsWith(".xlsx") || !file.size || file.size > 30 * 1024 * 1024)) {
+      setError("Cada arquivo deve ser um XLSX não vazio de até 30 MB.");
       return;
     }
     setUploading(true);
@@ -1643,11 +1644,6 @@ function ManualImportModal({ onClose, onImported }: { onClose: () => void; onImp
     setResult(null);
     try {
       const start = await performanceUploadRequest<{ uploadId: string }>("/api/performance/import/manual?action=start", { method: "POST" });
-      const uploadFiles = [
-        { file: productionFile, fileType: "production" },
-        { file: volumeFile, fileType: "volume" },
-        { file: cecCpdFile, fileType: "cecCpd" }
-      ] as const;
       const chunkSize = 2 * 1024 * 1024;
       const totalChunks = uploadFiles.reduce((total, item) => total + Math.ceil(item.file.size / chunkSize), 0);
       let uploadedChunks = 0;
@@ -1674,11 +1670,12 @@ function ManualImportModal({ onClose, onImported }: { onClose: () => void; onImp
       }
 
       setUploadProgress(90);
-      const finalizeParams = new URLSearchParams({ action: "finalize", uploadId: start.uploadId });
+      const finalizeParams = new URLSearchParams({ action: "finalize", uploadId: start.uploadId, fileTypes: uploadFiles.map((item) => item.fileType).join(",") });
       const body = await performanceUploadRequest<ManualImportResult>(`/api/performance/import/manual?${finalizeParams.toString()}`, { method: "POST" });
       setUploadProgress(100);
-      setResult({ productionRows: body.productionRows, volumeRows: body.volumeRows, cecCpdRows: body.cecCpdRows, rowsError: body.rowsError });
-      await onImported();
+      setResult(body);
+      try { await onImported(); }
+      catch { setError("As bases foram atualizadas, mas não foi possível recarregar os números na tela. Atualize a página; não é necessário reenviar os arquivos."); }
     } catch (uploadError) {
       const message = uploadError instanceof Error ? uploadError.message : "Não foi possível substituir a base de Performance.";
       setError(message);
@@ -1689,63 +1686,53 @@ function ManualImportModal({ onClose, onImported }: { onClose: () => void; onImp
 
   return (
     <div className="fixed inset-0 z-[100] grid place-items-center bg-slate-950/35 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="performance-upload-title">
-      <div className="w-full max-w-4xl overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl">
-        <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+      <div className="flex max-h-[90dvh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-border bg-white shadow-2xl">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-border px-5 py-4">
           <div>
             <p className="text-[11px] font-black uppercase tracking-[0.16em] text-blue-600">Performance</p>
-            <h2 id="performance-upload-title" className="mt-1 text-xl font-black text-navy-950">Substituir base atual</h2>
-            <p className="mt-1 text-sm font-semibold text-muted">Envie as três planilhas. A base vigente só será substituída depois que todas forem validadas.</p>
+            <h2 id="performance-upload-title" className="mt-1 text-xl font-black text-navy-950">Atualizar bases de Performance</h2>
+            <p className="mt-1 text-sm font-semibold text-muted">Selecione uma ou mais planilhas. Você não precisa enviar todas juntas.</p>
           </div>
           <button type="button" onClick={onClose} disabled={uploading} className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-border text-muted hover:bg-slate-50 hover:text-navy-950 disabled:opacity-40" aria-label="Fechar">
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        <div className="space-y-4 p-5">
-          <div className="grid gap-4 md:grid-cols-3">
-            <PerformanceFileField
-              label="Produção / Output"
-              helper="Base com agentname, submit e moderation duration."
-              file={productionFile}
-              onChange={setProductionFile}
-            />
-            <PerformanceFileField
-              label="Filas / Input"
-              helper="Base com queue_id e enqueue."
-              file={volumeFile}
-              onChange={setVolumeFile}
-            />
-            <PerformanceFileField
-              label="CEC CPD / Output"
-              helper="Base com perform_time(hour), agent_name e ticket_id(去重计数)."
-              file={cecCpdFile}
-              onChange={setCecCpdFile}
-            />
+        <div className="min-h-0 space-y-4 overflow-y-auto p-5">
+          <div className="grid gap-4 md:grid-cols-2">
+            {performanceManualBases.map((base) => <PerformanceFileField key={base.key}
+              label={base.label} helper={base.helper} file={files[base.key] ?? null} disabled={uploading || Boolean(result)}
+              onChange={(file) => { setFiles((current) => ({ ...current, [base.key]: file ?? undefined })); setError(""); }}
+              removable
+            />)}
           </div>
 
           <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-900">
-            Este envio substitui integralmente a base anterior de Performance. Nenhum histórico de uploads é acumulado.
+            Somente as bases selecionadas serão substituídas por inteiro; as demais serão mantidas. Envie o arquivo completo do período que deseja manter em cada base.
           </div>
+          <p className="text-xs font-semibold text-muted">Até 30 MB por arquivo. Todos os arquivos selecionados são validados antes da gravação. As regras atuais de tratamento de linhas permanecem.</p>
 
-          {error ? <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{error}</p> : null}
+          {error ? <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{error}</p> : null}
           {result ? (
-            <div className="grid gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 sm:grid-cols-4">
-              <ImportResultMetric label="Output" value={result.productionRows} />
-              <ImportResultMetric label="Input" value={result.volumeRows} />
-              <ImportResultMetric label="CPD CEC" value={result.cecCpdRows} />
-              <ImportResultMetric label="Linhas ignoradas" value={result.rowsError} />
+            <div role="status" className="space-y-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+              <p className="text-sm font-bold text-emerald-950">Bases selecionadas atualizadas. As demais foram preservadas.</p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {performanceManualBases.filter((base) => result.selectedBases.includes(base.key)).map((base) => <ImportResultMetric key={base.key} label={base.label} value={result[base.resultKey] ?? 0} />)}
+                <ImportResultMetric label="Linhas ignoradas" value={result.rowsError} />
+              </div>
+              {result.cecFrtRows !== undefined ? <p className="text-xs text-emerald-950">SLA/FRT CEC: {result.startDate?.split("-").reverse().join("/")} a {result.endDate?.split("-").reverse().join("/")}. {result.unmatchedLogins} logins sem cadastro ({result.unmatchedRows} linhas), mantidos nos totais das filas.</p> : null}
             </div>
           ) : null}
         </div>
 
-        <div className="flex flex-col-reverse gap-2 border-t border-border bg-slate-50/70 px-5 py-4 sm:flex-row sm:justify-end">
+        <div className="flex shrink-0 flex-col-reverse gap-2 border-t border-border bg-slate-50/70 px-5 py-4 sm:flex-row sm:justify-end">
           <button type="button" onClick={onClose} disabled={uploading} className="h-10 rounded-xl border border-border bg-white px-4 text-sm font-black text-navy-950 hover:bg-slate-50 disabled:opacity-40">
             {result ? "Concluir" : "Cancelar"}
           </button>
           {!result ? (
-            <button type="button" onClick={() => void submit()} disabled={uploading || !productionFile || !volumeFile || !cecCpdFile} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 text-sm font-black text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-45">
+            <button type="button" onClick={() => void submit()} disabled={uploading || !uploadFiles.length} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 text-sm font-black text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-45">
               {uploading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
-              {uploading ? `Enviando e validando... ${uploadProgress}%` : "Substituir base"}
+              {uploading ? `Enviando e validando... ${uploadProgress}%` : `Atualizar ${uploadFiles.length || ""} ${uploadFiles.length === 1 ? "base selecionada" : "bases selecionadas"}`}
             </button>
           ) : null}
         </div>
@@ -1902,10 +1889,11 @@ async function performanceUploadRequest<T = Record<string, unknown>>(url: string
   return body;
 }
 
-function PerformanceFileField({ label, helper, file, onChange }: { label: string; helper: string; file: File | null; onChange: (file: File | null) => void }) {
+function PerformanceFileField({ label, helper, file, onChange, disabled = false, removable = false }: { label: string; helper: string; file: File | null; onChange: (file: File | null) => void; disabled?: boolean; removable?: boolean }) {
   return (
-    <label className="group flex min-h-[170px] cursor-pointer flex-col justify-between rounded-2xl border border-dashed border-slate-300 bg-slate-50/70 p-4 transition hover:border-blue-400 hover:bg-blue-50/50">
-      <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="sr-only" onChange={(event) => onChange(event.target.files?.[0] ?? null)} />
+    <div className={cn("relative rounded-2xl border border-dashed p-4 transition", file ? "border-blue-400 bg-blue-50/50" : "border-slate-300 bg-slate-50/70")}>
+    <label className={cn("group flex min-h-[150px] flex-col justify-between", disabled ? "cursor-default" : "cursor-pointer")}>
+      <input type="file" aria-label={label} disabled={disabled} accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="sr-only" onChange={(event) => { const selected = event.target.files?.[0]; if (selected) onChange(selected); event.target.value = ""; }} />
       <span>
         <span className="grid h-10 w-10 place-items-center rounded-xl bg-white text-blue-600 shadow-sm"><FileSpreadsheet className="h-5 w-5" /></span>
         <span className="mt-3 block text-sm font-black text-navy-950">{label}</span>
@@ -1915,6 +1903,8 @@ function PerformanceFileField({ label, helper, file, onChange }: { label: string
         {file ? `${file.name} · ${formatFileSize(file.size)}` : "Selecionar XLSX"}
       </span>
     </label>
+    {removable && file ? <button type="button" aria-label={`Remover ${label}`} disabled={disabled} onClick={() => onChange(null)} className="absolute right-3 top-3 rounded-lg p-2 text-muted hover:bg-white disabled:opacity-40"><X className="h-4 w-4" /></button> : null}
+    </div>
   );
 }
 
