@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { summarizePartnerMonth } from "./meu-espaco-monthly-hours";
-import { spaceHoursDefaultPeriod, spaceHoursMonthPeriod } from "./meu-espaco-hours";
+import { spaceHoursClock, spaceHoursDefaultPeriod, spaceHoursMonthPeriod, spaceShiftInProgress, summarizeSpaceHours } from "./meu-espaco-hours";
 
 const period = { startDate: "2026-09-01", endDate: "2026-09-30" };
 const partner = { id: "agent", fullName: "Parceiro", wbLogin: "wb_agent", lob: { name: "ADS" } };
@@ -40,4 +40,87 @@ test("hours always normalize to one full calendar month including leap years", (
   assert.equal(spaceHoursMonthPeriod("2026-02").endDate, "2026-02-28");
   assert.equal(spaceHoursMonthPeriod("2026-12").endDate, "2026-12-31");
   for (const month of ["2026-13", "0000-01", "2026-9", "bad"]) assert.throws(() => spaceHoursMonthPeriod(month));
+});
+
+const daytime = (day: string, status = "ESCALADO") => ({ ...schedule(day, status), startsAt: "08:00", endsAt: "17:00" });
+test("an ongoing shift projects eight hours without duplicating partial or reducing excess realized hours", () => {
+  for (const realized of [0, 2, 5.5, 8, 9.5]) {
+    const today = "2026-09-08", slot = daytime(today);
+    const input = Object.freeze({ ...record(today, realized), schedule: slot });
+    const result = summarizePartnerMonth(partner, period, today, [input], [slot, daytime("2026-09-09")], new Map([[today, realized]]), 12 * 60);
+    assert.equal(result.inProgressHours, Math.max(0, 8 - realized));
+    assert.equal(result.projectedHours, Math.max(8, realized) + 8);
+    assert.equal(result.futureHours, 8);
+    assert.equal(result.effectiveHours, realized); assert.equal(result.actualHours, realized); assert.equal(result.capturedHours, realized);
+    assert.equal(input.effectiveHours, realized);
+  }
+});
+
+test("no record during an ongoing shift is projection only; missing past hours remain missing", () => {
+  const row = summarizePartnerMonth(partner, period, "2026-09-08", [], [daytime("2026-09-07"), daytime("2026-09-08")], new Map(), 12 * 60);
+  assert.equal(row.realizedRecords, 0); assert.equal(row.effectiveHours, 0);
+  assert.equal(row.inProgressHours, 8); assert.equal(row.projectedHours, 8); assert.equal(row.missingPastSlots, 1);
+  const onlyCurrent = summarizePartnerMonth(partner, period, "2026-09-08", [], [daytime("2026-09-08")], new Map(), 12 * 60);
+  assert.equal(onlyCurrent.status, "Turno em andamento");
+});
+
+test("the complement applies only within scheduled hours and disappears at the end", () => {
+  const today = "2026-09-08", slot = daytime(today);
+  for (const [minute, complement] of [[7 * 60 + 59, 0], [8 * 60, 6], [16 * 60 + 59, 6], [17 * 60, 0], [23 * 60, 0]]) {
+    const row = summarizePartnerMonth(partner, period, today, [{ ...record(today, 2), schedule: slot }], [slot], new Map(), minute);
+    assert.equal(row.inProgressHours, complement, `minute ${minute}`);
+    assert.equal(row.projectedHours, 2 + complement);
+  }
+});
+
+test("overnight shifts are attributed to their start day, including across a month boundary", () => {
+  const slot = schedule("2026-08-31");
+  const august = { startDate: "2026-08-01", endDate: "2026-08-31" };
+  const active = summarizePartnerMonth(partner, august, "2026-09-01", [], [slot], new Map(), 5 * 60);
+  assert.equal(active.inProgressHours, 8); assert.equal(active.projectedHours, 8); assert.equal(active.missingPastSlots, 0);
+  const ended = summarizePartnerMonth(partner, august, "2026-09-01", [], [slot], new Map(), 8 * 60);
+  assert.equal(ended.inProgressHours, 0); assert.equal(ended.projectedHours, null); assert.equal(ended.missingPastSlots, 1);
+  const september = summarizePartnerMonth(partner, period, "2026-09-01", [], [slot], new Map(), 5 * 60);
+  assert.equal(september.inProgressHours, 0); assert.equal(september.projectedHours, null);
+  assert.equal(spaceShiftInProgress(schedule("2026-09-08"), "2026-09-08", 23 * 60), true);
+  assert.equal(spaceShiftInProgress(schedule("2026-09-08"), "2026-09-09", 0), true);
+});
+
+test("in-progress projection preserves excluded statuses and requires valid start/end times", () => {
+  for (const status of ["FOLGA", "FALTA", "FALTA_JUSTIFICADA", "FERIAS", "NESTING", "TREINAMENTO", "ONBOARDING", "AFASTADO"]) {
+    const row = summarizePartnerMonth(partner, period, "2026-09-08", [], [daytime("2026-09-08", status)], new Map(), 12 * 60);
+    assert.equal(row.inProgressHours, 0, status); assert.equal(row.projectedHours, null, status);
+  }
+  for (const times of [{ startsAt: null, endsAt: "17:00" }, { startsAt: "08:00", endsAt: null }, { startsAt: "bad", endsAt: "17:00" }, { startsAt: "08:00", endsAt: "08:00" }, { startsAt: "25:00", endsAt: "27:00" }]) {
+    assert.equal(spaceShiftInProgress({ ...daytime("2026-09-08"), ...times }, "2026-09-08", 12 * 60), false);
+  }
+  for (const status of ["ESCALADO", "PRESENTE", "ATRASO", "TROCA_APROVADA", "VENDA_FOLGA_APROVADA"]) {
+    const row = summarizePartnerMonth(partner, period, "2026-09-08", [], [daytime("2026-09-08", status)], new Map(), 12 * 60);
+    assert.equal(row.inProgressHours, 8, status);
+  }
+  const removed = summarizePartnerMonth(partner, period, "2026-09-08", [record("2026-09-08", 2)], [], new Map(), 12 * 60);
+  assert.equal(removed.projectedHours, 2); assert.equal(removed.inProgressHours, 0);
+});
+
+test("the summary sums per-partner complements, not eight minus the team average", () => {
+  const base = { ...daytime("2026-09-08"), shiftName: "Manhã", future: false };
+  const result = summarizeSpaceHours(period, "2026-09-08", { hours: 15, records: 4 }, [
+    { ...base, effectiveHours: 2, slots: 3 }, { ...base, effectiveHours: 9, slots: 1 },
+    { ...base, status: "NESTING", effectiveHours: null, slots: 4 },
+    { ...base, date: new Date("2026-09-09"), future: true, effectiveHours: null, slots: 4 }
+  ], 12 * 60);
+  assert.equal(result.inProgressHours, 18); assert.equal(result.futureHours, 32); assert.equal(result.projectedHours, 65);
+  assert.equal(result.realizedHours, 15); assert.equal(result.missingPastSlots, 0);
+  const overnight = { ...schedule("2026-08-31"), shiftName: "Noite", future: false, effectiveHours: null, slots: 2 };
+  const august = { startDate: "2026-08-01", endDate: "2026-08-31" };
+  const active = summarizeSpaceHours(august, "2026-09-01", { hours: null, records: 0 }, [overnight], 5 * 60);
+  assert.equal(active.projectedHours, 16); assert.equal(active.missingPastSlots, 0);
+  const ended = summarizeSpaceHours(august, "2026-09-01", { hours: null, records: 0 }, [overnight], 8 * 60);
+  assert.equal(ended.projectedHours, null); assert.equal(ended.missingPastSlots, 2);
+});
+
+test("the calculation clock uses São Paulo dates and 00h even when UTC is already on the next day", () => {
+  assert.deepEqual(spaceHoursClock(new Date("2026-09-09T02:30:00Z")), { today: "2026-09-08", minuteOfDay: 23 * 60 + 30 });
+  assert.deepEqual(spaceHoursClock(new Date("2026-09-09T03:00:00Z")), { today: "2026-09-09", minuteOfDay: 0 });
+  assert.deepEqual(spaceHoursClock(new Date("2026-09-08T15:00:00Z")), { today: "2026-09-08", minuteOfDay: 12 * 60 });
 });

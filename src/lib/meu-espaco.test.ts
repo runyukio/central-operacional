@@ -236,7 +236,7 @@ test("monthly hours paginate partners, sum all days and keep full-team cards ind
   let captureCalls = 0;
   t.mock.method(workHourReadData, "capturedHours", async (items: any[]) => { captureCalls++; assert.equal(items.length, 2); return new Map(items.map((item) => [item.key, 8])); });
   const all = scope({ employees: partners, employeeIds: partners.map((p) => p.id) } as Partial<MeuEspacoScope>);
-  const result = await getSpaceMonthlyHours(all, new URLSearchParams("month=2026-09"), "2026-09-07");
+  const result = await getSpaceMonthlyHours(all, new URLSearchParams("month=2026-09"), new Date("2026-09-07T15:00:00Z"));
   assert.equal(result.data.length, 50); assert.equal(result.pagination.total, 51); assert.equal(result.pagination.totalPages, 2);
   assert.equal(result.data[0].effectiveHours, 16); assert.equal(result.data[0].futureHours, 8); assert.equal(result.data[0].projectedHours, 24);
   assert.equal(result.data[1].projectedHours, null); assert.equal(result.summary.projectedHours, 808); assert.equal(captureCalls, 1);
@@ -282,12 +282,12 @@ test("hours summary queries the whole authorized period, not the detail page, an
     assert.equal(args.take, undefined); return { _sum: { effectiveHours: 37 }, _count: { _all: 5 } };
   });
   t.mock.method(prisma, "$queryRaw", async (sql: any) => {
-    assert.match(sql.text, /s\."deletedAt" IS NULL/); assert.match(sql.text, /NOT EXISTS/); assert.match(sql.text, /GROUP BY 1, 2, 3, 4, 5/);
+    assert.match(sql.text, /s\."deletedAt" IS NULL/); assert.match(sql.text, /LEFT JOIN "WorkHourRecord" w ON w\."employeeId"=s\."employeeId" AND w\.date=s\.date/); assert.match(sql.text, /GROUP BY 1, 2, 3, 4, 5, 6, 7/);
     assert.ok(sql.values.includes("agent")); assert.ok(!sql.values.includes("other"));
     return [{ status: "ESCALADO", future: true, slots: 2 }];
   });
   const period = { startDate: "2026-09-01", endDate: "2026-09-30" };
-  const result = await getSpaceHoursSummary(scope(), new URLSearchParams("page=3&search=agent"), period, "2026-09-07");
+  const result = await getSpaceHoursSummary(scope(), new URLSearchParams("page=3&search=agent"), period, new Date("2026-09-07T15:00:00Z"));
   assert.equal(result.projectedHours, 53);
   assert.equal((await getSpaceHoursSummary(scope(), new URLSearchParams("employeeId=other"), period)).projectedHours, null);
 });
@@ -303,6 +303,29 @@ test("hours read scope only narrows existing filters, including employeeId and f
   const result = await listOperationalWorkHours(scope().actor, { startDate: "2026-09-01", endDate: "2026-09-06", employeeId: "outside", collaborator: "x" }, ["agent"]);
   assert.ok(!("error" in result));
   assert.equal(checked, true);
+});
+
+test("monthly API uses one São Paulo clock and reconciles its row with the aggregated ongoing-shift projection", async (t) => {
+  const date = new Date("2026-09-08"), tomorrow = new Date("2026-09-09");
+  const slot = { employeeId: "agent", date, status: "ESCALADO", startsAt: "08:00", endsAt: "17:00", shift: { name: "Manhã" } };
+  t.mock.method(prisma.workHourRecord, "findMany", async (args: any) => {
+    assert.deepEqual(args.where.employeeId.in, ["agent"]);
+    return [{ id: "ongoing", employeeId: "agent", wbLogin: "wb_agent", date, actualHours: 2, adjustedHours: null, effectiveHours: 2, differenceMinutes: -360, status: "RECORDED", schedule: slot }];
+  });
+  t.mock.method(prisma.schedule, "findMany", async (args: any) => {
+    assert.equal(args.where.deletedAt, null);
+    return [slot, { ...slot, date: tomorrow }];
+  });
+  t.mock.method(prisma.workHourRecord, "aggregate", async () => ({ _sum: { effectiveHours: 2 }, _count: { _all: 1 } }));
+  t.mock.method(prisma, "$queryRaw", async (sql: any) => {
+    assert.ok(sql.values.includes("agent")); assert.ok(!sql.values.includes("outside"));
+    return [{ ...slot, shiftName: "Manhã", future: false, slots: 1, effectiveHours: 2 }, { ...slot, date: tomorrow, shiftName: "Manhã", future: true, slots: 1, effectiveHours: null }];
+  });
+  t.mock.method(workHourReadData, "capturedHours", async () => new Map([["ongoing", 2]]));
+  const result = await getSpaceMonthlyHours(scope(), new URLSearchParams("month=2026-09"), new Date("2026-09-08T15:00:00Z"));
+  assert.equal(result.data[0].effectiveHours, 2); assert.equal(result.data[0].capturedHours, 2);
+  assert.equal(result.data[0].inProgressHours, 6); assert.equal(result.data[0].futureHours, 8); assert.equal(result.data[0].projectedHours, 16);
+  assert.equal(result.summary.realizedHours, 2); assert.equal(result.summary.inProgressHours, 6); assert.equal(result.summary.projectedHours, 16);
 });
 
 test("answering transferred hours writes the original record and exactly one original audit; retry cannot duplicate", async (t) => {

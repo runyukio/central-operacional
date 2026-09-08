@@ -92,10 +92,10 @@ function hoursHtml(data: SpaceHours) {
 const hours: SpaceHours = {
   period,
   summary: { actualThrough: "2026-09-08", projectionFrom: "2026-09-09", projectionUntil: "2026-09-30",
-    realizedHours: 15.5, futureHours: 16, projectedHours: 31.5, realizedRecords: 2, futureSlots: 2, missingPastSlots: 1 },
+    realizedHours: 15.5, futureHours: 16, inProgressHours: 0, projectedHours: 31.5, realizedRecords: 2, futureSlots: 2, missingPastSlots: 1 },
   data: [{ id: "partner", employeeId: "partner", employeeName: "Parceiro de teste", wbLogin: "wb_teste", month: "2026-09", lob: "ADS",
     plannedHours: 32, actualHours: 15, capturedHours: 15.5, effectiveHours: 15.5, adjustedHours: 0.5, differenceMinutes: -30,
-    status: "1 dias sem horas", realizedRecords: 2, futureHours: 16, projectedHours: 31.5, missingPastSlots: 1 }],
+    status: "1 dias sem horas", realizedRecords: 2, futureHours: 16, inProgressHours: 0, projectedHours: 31.5, missingPastSlots: 1 }],
   pagination: { page: 1, totalPages: 1, total: 1 }
 };
 
@@ -110,4 +110,14 @@ test("hours keeps the no-record and future-only notices without the KPI cards", 
   const html = hoursHtml({ ...hours, data: [], summary: { ...hours.summary, realizedRecords: 0, realizedHours: null } });
   assert.match(html, /Sem registros de horas no período/);
   assert.match(html, /Sem realizado disponível: o total projetado considera somente a escala futura/);
+});
+
+test("hours identifies the in-progress complement without presenting it as realized hours", () => {
+  const html = hoursHtml({ ...hours, data: [{ ...hours.data[0], effectiveHours: 2, inProgressHours: 6, futureHours: 8, projectedHours: 16 }] });
+  assert.match(html, /Inclui \+6:00 para completar o turno em andamento/);
+  assert.match(html, /<td>2:00<\/td><td>8:00<\/td><td>16:00/);
+  assert.match(html, /A projeção não altera ou aprova horas/);
+  assert.doesNotMatch(html, /hoje não é projetado novamente/);
+  const noRecord = hoursHtml({ ...hours, data: [], summary: { ...hours.summary, realizedRecords: 0, realizedHours: null, inProgressHours: 8, futureSlots: 0 } });
+  assert.match(noRecord, /Sem realizado disponível: o total projetado inclui o turno em andamento/);
 });

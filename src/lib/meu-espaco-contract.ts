@@ -36,11 +36,11 @@ export type SpaceHours = {
 export type SpaceMonthlyHoursRow = {
   id: string; employeeId: string; employeeName: string; wbLogin: string; month: string; lob: string;
   plannedHours: number; actualHours: number; capturedHours: number; effectiveHours: number; adjustedHours: number;
-  differenceMinutes: number; status: string; realizedRecords: number; futureHours: number;
+  differenceMinutes: number; status: string; realizedRecords: number; futureHours: number; inProgressHours: number;
   projectedHours: number | null; missingPastSlots: number;
 };
 export type SpaceHoursSummary = {
   actualThrough: string; projectionFrom: string; projectionUntil: string;
-  realizedHours: number | null; futureHours: number; projectedHours: number | null;
+  realizedHours: number | null; futureHours: number; inProgressHours: number; projectedHours: number | null;
   realizedRecords: number; futureSlots: number; missingPastSlots: number;
 };
