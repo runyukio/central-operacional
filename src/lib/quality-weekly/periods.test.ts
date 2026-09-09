@@ -115,11 +115,12 @@ test('server preview uses Friday, automatically adds history, and versions histo
   await assert.rejects(() => h.preview([row('2026-09-05', 'weekend')]), /No valid cases/);
 });
 
-test('Word and charts use all seven periods and the immediately preceding period; legacy layouts still work', async () => {
+test('CD chart compares four weeks while full history retains seven periods; legacy layouts still work', async () => {
   const snapshot = (await harness().preview([row('2026-08-28', 'prior', 'Leakage'), row('2026-08-31', 'current')])).snapshot;
   const spec = chartSpec(snapshot, 'CD');
-  assert.equal(spec.labels.length, 7);
-  assert.deepEqual(spec.labels.slice(-2), ['24 Aug', '31 Aug']);
+  assert.equal(spec.labels.length, 4);
+  assert.deepEqual(spec.labels, ['Week 33', 'Week 34', 'Week 35', 'Week 36']);
+  assert.equal(chartSpec(snapshot, 'ACCOUNTS').labels.length, 7);
   assert.equal(spec.series[0].values.at(-2), 0);
   assert.equal(spec.series[0].values.at(-1), 1);
   // Material cases also feed the separate CD rollup, without changing global totals.

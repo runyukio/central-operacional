@@ -1,9 +1,10 @@
-export const RULE_VERSION = 'quality-weekly-v6';
+export const RULE_VERSION = 'quality-weekly-v7';
 export const HISTORY_WEEKS = 7;
 export const RULE_DEFINITION = {
   week: 'Moderation date; Monday to Friday; weekends excluded from weekly metrics; manual operation week number',
   history: 'Selected week and six previous Monday–Friday periods calculated from the same validated upload and frozen section mapping; absent weeks remain N/A',
   cdSampling: 'Consolidated Recall, Material, Quick and Inspection sections only; each distinct case and agent is counted once within the block; this block is not added to overall totals',
+  cdChart: 'Week-over-week view of the selected Monday–Friday week and three preceding weeks; labels follow the manual operation week number; full seven-week comparison remains available',
   key: 'Concatenation of text QA case ID + audit case ID; collisions and non-result conflicts block; identical duplicates count once',
   outcomes: 'Distinct case keys are counted independently per final_result; result categories may overlap; Excel row order has no precedence',
   sampling: 'N = distinct valid case keys', leakageRate: 'Leakage / Allow', falsePositiveRate: 'False Positive / Labeled',

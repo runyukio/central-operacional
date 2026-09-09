@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Line, LineChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis, ReferenceLine } from "recharts";
+import { Line, LineChart, LabelList, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis, ReferenceLine } from "recharts";
 import { CheckCircle2, Files, Target, TrendingUp } from "lucide-react";
 import { Panel, StatCard } from "@/components/ui/primitives";
 import { change, number, rate, SECTION_NAMES, sectionName, reportSection } from "@/lib/quality-weekly/domain";
@@ -26,20 +26,24 @@ function Trend({ snapshot, section }: { snapshot: Snapshot; section: "CD" | "ACC
   const spec = chartSpec(snapshot, section);
   const series = spec.series.slice(0, -1);
   const [hidden, setHidden] = useState<string[]>([]);
-  const data = spec.labels.map((label, i) => ({ label, ...Object.fromEntries(series.map(s => [s.label, s.values[i] == null ? null : s.values[i]! * 100])) }));
+  const data = spec.labels.map((label, i) => ({ label, period: `${spec.periods[i].start} → ${spec.periods[i].end}`, ...Object.fromEntries(series.map(s => [s.label, s.values[i] == null ? null : s.values[i]! * 100])) }));
+  const targetColor = spec.series.at(-1)!.color;
   return <div className="space-y-3">
-    <p className="text-xs text-muted">Current moderation week and {snapshot.trend.length - 1} previous weeks · Accuracy (%) · Gaps mean no validated data · Focused percentage scale</p>
-    <div className="flex flex-wrap gap-2" aria-label="Chart legend">{series.map(s => <button type="button" key={s.label} aria-pressed={!hidden.includes(s.label)} onClick={() => setHidden(values => values.includes(s.label) ? values.filter(v => v !== s.label) : [...values, s.label])} className={`rounded-lg border border-border px-3 py-1.5 text-xs font-bold ${hidden.includes(s.label) ? "opacity-40" : "text-navy-950"}`}><span aria-hidden="true" className="mr-2 inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: s.color }} />{s.label}</button>)}<span className="self-center text-xs text-muted">— Target 95%</span></div>
-    <div className="h-[280px] min-w-0" role="img" aria-label={`${SECTION_NAMES[section]} accuracy over ${snapshot.trend.length} weeks. Exact values are in the weekly comparison below.`}>
-      <ResponsiveContainer width="100%" height="100%"><LineChart data={data} margin={{ top: 16, right: 20, bottom: 12, left: 4 }}>
+    {spec.title && <h3 className="text-sm font-extrabold text-navy-950">{spec.title}</h3>}
+    <p className="text-xs text-muted">Week over week · Selected week and {spec.labels.length - 1} previous weeks · Monday–Friday · Accuracy (%) · Gaps mean no validated data · Focused percentage scale</p>
+    <div className="flex flex-wrap gap-2" aria-label="Chart legend">{series.map(s => <button type="button" key={s.label} aria-pressed={!hidden.includes(s.label)} onClick={() => setHidden(values => values.includes(s.label) ? values.filter(v => v !== s.label) : [...values, s.label])} className={`rounded-lg border border-border px-3 py-1.5 text-xs font-bold ${hidden.includes(s.label) ? "opacity-40" : "text-navy-950"}`}><span aria-hidden="true" className="mr-2 inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: s.color }} />{s.label}</button>)}<span className="self-center text-xs text-muted"><span style={{ color: targetColor }}>—</span> Target 95%</span></div>
+    <div className="max-w-full overflow-x-auto"><div className={section === "CD" ? "h-[300px] min-w-[560px]" : "h-[280px] min-w-0"} role="img" aria-label={`${SECTION_NAMES[section]} accuracy over ${spec.labels.length} weeks. Exact values are in the weekly comparison below.`}>
+      <ResponsiveContainer width="100%" height="100%"><LineChart data={data} margin={{ top: 26, right: 40, bottom: 24, left: 14 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-        <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#7c879a" }} tickLine={false} />
+        <XAxis dataKey="label" interval={section === "CD" ? 0 : undefined} padding={section === "CD" ? { left: 20, right: 20 } : undefined} tick={{ fontSize: 11, fill: "#7c879a" }} tickLine={false} />
         <YAxis domain={[chartMinimum(spec), 100]} tickFormatter={value => `${value}%`} tick={{ fontSize: 11, fill: "#7c879a" }} width={48} tickLine={false} />
-        <Tooltip contentStyle={{ borderRadius: 12, background: "var(--surface)", borderColor: "var(--border)", color: "var(--ink)" }} formatter={(value: number) => `${Number(value).toFixed(2)}%`} />
-        <ReferenceLine y={95} stroke="#94a3b8" strokeDasharray="5 5" />
-        {series.filter(s => !hidden.includes(s.label)).map((s, i) => <Line key={s.label} type="linear" dataKey={s.label} stroke={s.color} strokeWidth={2.5} strokeDasharray={i === 1 ? "6 3" : undefined} dot={{ r: 4 }} connectNulls={false} isAnimationActive={false} />)}
+        <Tooltip contentStyle={{ borderRadius: 12, background: "var(--surface)", borderColor: "var(--border)", color: "var(--ink)" }} labelFormatter={(label, payload) => `${label} · ${payload?.[0]?.payload?.period ?? ""}`} formatter={(value: number) => `${Number(value).toFixed(2)}%`} />
+        <ReferenceLine y={95} stroke={targetColor} strokeDasharray="5 5" label={section === "CD" ? { value: "95%", position: "right", fill: targetColor, fontSize: 11 } : undefined} />
+        {series.filter(s => !hidden.includes(s.label)).map(s => <Line key={s.label} type="linear" dataKey={s.label} stroke={s.color} strokeWidth={2.5} strokeDasharray={series.indexOf(s) === 1 ? "6 3" : undefined} dot={{ r: 4 }} connectNulls={false} isAnimationActive={false}>
+          {spec.pointLabels && <LabelList dataKey={s.label} position={series.indexOf(s) === 0 ? "bottom" : "top"} offset={10} fill={s.color} className={series.indexOf(s) === 0 ? "dark:fill-blue-300" : "dark:fill-amber-300"} fontSize={11} formatter={(value: unknown) => typeof value === "number" ? `${value.toFixed(2)}%` : ""} />}
+        </Line>)}
       </LineChart></ResponsiveContainer>
-    </div>
+    </div></div>
   </div>;
 }
 

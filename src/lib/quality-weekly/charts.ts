@@ -1,6 +1,10 @@
+import { dayAdd } from './domain';
 import type { Snapshot } from './domain';
 export type ChartSpec = {
   labels: string[];
+  periods: { start: string; end: string }[];
+  title?: string;
+  pointLabels?: boolean;
   series: { label: string; color: string; values: (number | null)[] }[];
 };
 export function chartMinimum(spec: ChartSpec) {
@@ -12,8 +16,14 @@ export function chartSpec(
   snapshot: Snapshot,
   kind: 'CD' | 'ACCOUNTS',
 ): ChartSpec {
-  const labels = snapshot.trend.map((p) => {
-    if (snapshot.trend.length > 4) {
+  const trend = kind === 'CD' ? snapshot.trend.slice(-4) : snapshot.trend;
+  const labels = trend.map((p) => {
+    if (kind === 'CD') {
+      const offset = (Date.parse(snapshot.start) - Date.parse(p.start)) / (7 * 86400000);
+      const number = p.weekNumber ?? (Number.isInteger(offset) ? snapshot.weekNumber - offset : null);
+      return number != null && number > 0 ? `Week ${number}` : `Week of ${p.start}`;
+    }
+    if (trend.length > 4) {
       const [, month, day] = p.start.split('-');
       const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
       return `${day} ${months[Number(month) - 1]}`;
@@ -26,36 +36,38 @@ export function chartSpec(
           {
             label: 'Including mislabeled cases',
             color: '#2563eb',
-            values: snapshot.trend.map((p) => p.CD?.accuracy ?? null),
+            values: trend.map((p) => p.CD?.accuracy ?? null),
           },
           {
             label: 'Not including mislabeled cases',
             color: '#d97706',
-            values: snapshot.trend.map((p) => p.CD?.adjustedAccuracy ?? null),
+            values: trend.map((p) => p.CD?.adjustedAccuracy ?? null),
           },
         ]
       : [
           {
             label: 'Industry A',
             color: '#2563eb',
-            values: snapshot.trend.map((p) => p.industryA?.accuracy ?? null),
+            values: trend.map((p) => p.industryA?.accuracy ?? null),
           },
           {
             label: 'Industry B',
             color: '#d97706',
-            values: snapshot.trend.map((p) => p.industryB?.accuracy ?? null),
+            values: trend.map((p) => p.industryB?.accuracy ?? null),
           },
           {
             label: 'Combined',
             color: '#8b5cf6',
-            values: snapshot.trend.map((p) => p.ACCOUNTS?.accuracy ?? null),
+            values: trend.map((p) => p.ACCOUNTS?.accuracy ?? null),
           },
         ];
   return {
     labels,
+    periods: trend.map(p => ({ start: p.start, end: p.end ?? dayAdd(p.start, 4) })),
+    ...(kind === 'CD' ? { title: 'Material Weekly Results - CD Sampling', pointLabels: true } : {}),
     series: [
       ...series,
-      { label: 'Target 95%', color: '#64748b', values: labels.map(() => 0.95) },
+      { label: 'Target 95%', color: kind === 'CD' ? '#e4565b' : '#64748b', values: labels.map(() => 0.95) },
     ],
   };
 }
@@ -69,7 +81,7 @@ export function paintChart(
   ctx.fillRect(0, 0, width, height);
   const min = chartMinimum(spec), max = 100;
   const left = 70,
-    top = 75,
+    top = spec.title ? 120 : 75,
     right = width - 40,
     bottom = height - 55;
   const x = (i: number) =>
@@ -78,12 +90,24 @@ export function paintChart(
     bottom - ((v * 100 - min) / (max - min)) * (bottom - top);
   ctx.font = '16px "Quality Inter", Arial';
   ctx.textBaseline = 'middle';
+  if (spec.title) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#18233a';
+    ctx.font = '22px "Quality Inter", Arial';
+    ctx.fillText(spec.title, width / 2, 24);
+    ctx.font = '14px "Quality Inter", Arial';
+    ctx.fillStyle = '#64748b';
+    ctx.fillText('Week over week · Monday–Friday · Accuracy (%)', width / 2, 49);
+    ctx.font = '16px "Quality Inter", Arial';
+    ctx.textAlign = 'left';
+  }
+  const legendY = spec.title ? 80 : 28;
   let legendX = left;
   spec.series.forEach((s) => {
     ctx.fillStyle = s.color;
-    ctx.fillRect(legendX, 26, 20, 3);
+    ctx.fillRect(legendX, legendY - 2, 20, 3);
     ctx.fillStyle = '#536259';
-    ctx.fillText(s.label, legendX + 28, 28);
+    ctx.fillText(s.label, legendX + 28, legendY);
     legendX += ctx.measureText(s.label).width + 62;
   });
   for (let i = 0; i <= 4; i++) {
@@ -131,6 +155,13 @@ export function paintChart(
         ctx.arc(x(i), y(v), 4, 0, Math.PI * 2);
         ctx.fill();
       });
+    if (spec.pointLabels && j !== spec.series.length - 1) series.values.forEach((v, i) => {
+      if (v == null) return;
+      const labelY = j === 0 ? y(v) + 21 : y(v) - 16;
+      ctx.textAlign = i === 0 ? 'left' : i === spec.labels.length - 1 ? 'right' : 'center';
+      ctx.font = '16px "Quality Inter", Arial';
+      ctx.fillText(`${(v * 100).toFixed(2)}%`, x(i), labelY);
+    });
   });
   ctx.textAlign = 'left';
 }

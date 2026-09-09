@@ -28,6 +28,14 @@ The same immutable calculated snapshot feeds the preview and Word. Counts are ag
 
 ## Persistence and concurrency
 
+### CD week-over-week chart — rule v7 (2026-09-09)
+
+Chart contract: the first chart compares the selected Monday–Friday week with the three immediately preceding weeks, as requested in the reference. Use the existing line-chart renderers in the site and Word; one point is the weighted CD rollup for the entire week, never an agent or a day. Blue/orange series show the two accuracy definitions with point labels, and a red 95% benchmark follows the supplied reference. Missing weeks remain gaps. Four points are intentional for this comparison; the full seven-period history and tables remain available and unchanged.
+
+Week labels count back from the manually entered operation week number, honoring an explicitly stored historical number when present. If that would require zero/negative week numbers (unknown operation-calendar rollover), show the week start date instead of inventing a previous-year number. Hover details preserve exact period dates. Verify the actual preview in both themes and on mobile, and render the Word with four populated weeks to check labels and pagination. Older saved Word files remain immutable; generate a new report version for this chart.
+
+Validation: 57 tests passed, none failed, and three optional fixture/database tests were skipped. Typecheck, lint and build passed. All eight synthetic Word pages were inspected; the first chart and legend controls were checked in the actual preview component, in light/dark themes and a 390px viewport. Metrics, source files and stored report versions were not changed for this presentation adjustment.
+
 ### CD rollup and embedded agent detail — rule v6 (2026-09-09)
 
 The owner confirmed that CD Sampling combines exactly the explicit Recall, Material, Quick and Inspection sections. Effect, Unit, Talent, Picture, Accounts and unclassified sections are excluded from this block. A separate `cdSampling` object preserves its four section rows, weighted totals, queue detail and agent totals in the same server-calculated snapshot. Source classifications remain unchanged, and the rollup is never added to the overall Sampling Amount. Every historical CD point uses the same four-section rule.

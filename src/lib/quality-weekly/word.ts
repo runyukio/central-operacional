@@ -19,6 +19,7 @@ import {
 } from 'docx';
 import { change, rate, SECTION_NAMES, sectionName, reportSection } from './domain';
 import type { MetricRow, Snapshot, Section } from './domain';
+import { chartSpec } from './charts';
 
 export function reportFilename(s: Snapshot) {
   return `Quality Weekly Report - ER BPO - ${s.start} - Week ${s.weekNumber} - v${s.version}.docx`;
@@ -196,7 +197,7 @@ export async function createWord(
                 ? 'Material Weekly Results CD Sampling'
                 : 'Account Weekly Results',
             description:
-              `${s.trend.length} consecutive weeks. Gaps indicate missing data. Target 95%.`,
+              `${chartSpec(s, kind).labels.length} consecutive weeks. Gaps indicate missing data. Target 95%.`,
             name: kind + ' weekly trend',
           },
         }),
