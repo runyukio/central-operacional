@@ -17,7 +17,7 @@ import {
   VerticalAlign,
   WidthType,
 } from 'docx';
-import { change, rate, SECTION_NAMES, sectionName, reportSection } from './domain';
+import { change, rate, SECTION_NAMES, sectionName, reportSection, reportAgentSummary } from './domain';
 import type { MetricRow, Snapshot, Section } from './domain';
 import { chartSpec } from './charts';
 
@@ -167,14 +167,15 @@ export async function createWord(
   const s = snapshot,
     children: (Paragraph | Table)[] = [];
   const period = `Moderation period is from ${s.start.split('-').reverse().join('/')} to ${s.end.split('-').reverse().join('/')}`;
-  const reportLink = (section: string) =>
+  const reportLink = (section: string, prefix?: string) =>
     new Paragraph({
-      spacing: { before: 160, after: 140 },
+      spacing: { before: prefix ? 0 : 160, after: 140 },
       children: [
+        ...(prefix ? [text(prefix + ' ')] : []),
         new ExternalHyperlink({
           link: `${origin}/weekly-quality-report?report=${encodeURIComponent(s.id)}&section=${section}&view=agents`,
           children: [
-            text('Agent Breakdown — open the authenticated report', {
+            text('Open section details in the authenticated report', {
               style: 'Hyperlink',
               size: 20,
             }),
@@ -213,7 +214,7 @@ export async function createWord(
     ),
   );
   if (s.trend.some(t => t.source)) children.push(p('Monday–Friday moderation periods. The selected week and six prior periods are calculated from the same preserved upload. Weekends are excluded; periods without data remain N/A.'));
-  children.push(heading('CD Sampling'), p(s.cdSampling ? 'Recall, Material, Quick and Inspection. Consolidated by report section.' : 'Only material queues.'));
+  children.push(heading('CD Sampling'), reportLink('CD', s.cdSampling ? 'Recall, Material, Quick and Inspection. Consolidated by report section.' : 'Only material queues.'));
   const cd = reportSection(s, 'CD')!;
   children.push(
     metricTable(
@@ -225,10 +226,7 @@ export async function createWord(
     children.push(
       p('No CD Sampling cases in this weekly export. Rates are unavailable.'),
     );
-  children.push(chart('CD'), heading('Breakdown by Agent', HeadingLevel.HEADING_2));
-  if (cd.agents.length) children.push(metricTable(cd.agents, 'Agent', true));
-  else children.push(p('No agent samples available.'));
-  children.push(reportLink('CD'));
+  children.push(chart('CD'));
   children.push(
     heading('ER Sampling', HeadingLevel.HEADING_1, true),
     p(period),
@@ -249,13 +247,7 @@ export async function createWord(
     children.push(
       p('No Accounts cases in this weekly export. Rates are unavailable.'),
     );
-  children.push(
-    chart('ACCOUNTS'),
-    heading('Breakdown by Agent', HeadingLevel.HEADING_2),
-  );
-  if (accounts.agents.length)
-    children.push(metricTable(accounts.agents, 'Agent', true));
-  else children.push(p('No agent samples available.'));
+  children.push(chart('ACCOUNTS'));
   for (const section of (Object.keys(SECTION_NAMES) as Section[]).filter(key => key !== 'CD' && key !== 'ACCOUNTS')) {
   const material = s.sections[section];
   // Old immutable snapshots contain only the original three report sections.
@@ -338,8 +330,6 @@ export async function createWord(
     }),
   );
   children.push(
-    heading('Breakdown by Agent', HeadingLevel.HEADING_2),
-    ...(material.agents.length ? [metricTable(material.agents, 'Agent', true)] : [p('No agent samples available.')]),
     reportLink(section),
     p(
       'Rates are calculated from case counts. N/A means the denominator is zero or the week has no validated data. Weekly changes are expressed in percentage points.',
@@ -355,6 +345,12 @@ export async function createWord(
     ),
   );
   }
+  const agents = reportAgentSummary(s);
+  children.push(
+    heading('Breakdown by Agent', HeadingLevel.HEADING_1, true),
+    p('All report sections for the selected week. Each agent appears once, with rates calculated from combined case counts.'),
+    ...(agents.length ? [metricTable(agents, 'Agent', true)] : [p('No agent samples available.')]),
+  );
   const doc = new Document({
     creator: s.createdBy,
     title: 'Quality Weekly Report ER BPO',

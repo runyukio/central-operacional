@@ -1,10 +1,11 @@
-export const RULE_VERSION = 'quality-weekly-v7';
+export const RULE_VERSION = 'quality-weekly-v8';
 export const HISTORY_WEEKS = 7;
 export const RULE_DEFINITION = {
   week: 'Moderation date; Monday to Friday; weekends excluded from weekly metrics; manual operation week number',
   history: 'Selected week and six previous Monday–Friday periods calculated from the same validated upload and frozen section mapping; absent weeks remain N/A',
   cdSampling: 'Consolidated Recall, Material, Quick and Inspection sections only; each distinct case and agent is counted once within the block; this block is not added to overall totals',
   cdChart: 'Week-over-week view of the selected Monday–Friday week and three preceding weeks; labels follow the manual operation week number; full seven-week comparison remains available',
+  agentBreakdown: 'One report-wide Word table; one row per agent identity across the original sections; sum case numerators and denominators before recalculating rates; do not add the CD Sampling rollup',
   key: 'Concatenation of text QA case ID + audit case ID; collisions and non-result conflicts block; identical duplicates count once',
   outcomes: 'Distinct case keys are counted independently per final_result; result categories may overlap; Excel row order has no precedence',
   sampling: 'N = distinct valid case keys', leakageRate: 'Leakage / Allow', falsePositiveRate: 'False Positive / Labeled',
@@ -776,6 +777,21 @@ export function buildCdSampling(cases: Case[]): SectionReport {
 }
 export function reportSection(snapshot: Pick<Snapshot, 'sections' | 'cdSampling'>, section: Section): SectionReport | undefined {
   return section === 'CD' ? snapshot.cdSampling ?? snapshot.sections.CD : snapshot.sections[section];
+}
+export function reportAgentSummary(snapshot: Pick<Snapshot, 'sections'>): MetricRow[] {
+  const agents = new Map<string, { id: string; name: string; counts: Counts }>();
+  // The source sections partition validated case keys. The separate cdSampling
+  // rollup overlaps those sections and must never be included in this sum.
+  for (const section of Object.values(snapshot.sections)) {
+    for (const row of section.agents) {
+      const agent = agents.get(row.id) ?? { id: row.id, name: row.name, counts: emptyCounts() };
+      for (const field of Object.keys(agent.counts) as (keyof Counts)[]) agent.counts[field] += row[field];
+      agents.set(row.id, agent);
+    }
+  }
+  return [...agents.values()]
+    .map(({ id, name, counts }) => ({ id, name, ...metrics(counts) }))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
 }
 export function trendPoint(
   snapshot: Pick<Snapshot, 'id' | 'start' | 'weekNumber' | 'sections'>,

@@ -28,6 +28,14 @@ The same immutable calculated snapshot feeds the preview and Word. Counts are ag
 
 ## Persistence and concurrency
 
+### Single agent breakdown — rule v8 (2026-09-09)
+
+The Word contains exactly one **Breakdown by Agent**, at the end of the report. It consolidates each agent identity across all original report sections, including Accounts and unclassified queues; the section/fila summaries and weekly charts remain unchanged. Valid IDs stay distinct even when names match; records without an ID retain the existing exact-name identity.
+
+Agent counts are summed across the disjoint source sections and rates are recalculated from their combined numerators and denominators. The overlapping CD Sampling rollup is never added again. This replaces the repeated per-section agent tables introduced in v6. Existing saved Word versions remain immutable; create a new preview and report version for the corrected layout. No database migration or historical-data change is required.
+
+Verification: 59 focused tests passed (three optional real-source/isolated-database checks skipped), including one-table-only, cross-section weighting and agent identity cases. Typecheck, lint and production build passed. All eight pages of the synthetic Word were visually inspected; the CD detail link stays in its section instead of producing a link-only page. No synthetic reports were inserted into production.
+
 ### CD week-over-week chart — rule v7 (2026-09-09)
 
 Chart contract: the first chart compares the selected Monday–Friday week with the three immediately preceding weeks, as requested in the reference. Use the existing line-chart renderers in the site and Word; one point is the weighted CD rollup for the entire week, never an agent or a day. Blue/orange series show the two accuracy definitions with point labels, and a red 95% benchmark follows the supplied reference. Missing weeks remain gaps. Four points are intentional for this comparison; the full seven-period history and tables remain available and unchanged.

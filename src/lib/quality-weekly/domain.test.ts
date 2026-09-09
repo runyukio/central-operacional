@@ -141,7 +141,7 @@ void test('canonical outcomes and grouped metrics are independent of row order',
   assert.equal(buildSections(first.cases).MATERIAL.agents[0].correct, 1);
   assert.equal(buildAgents(first.cases).find(a => a.name === 'Agent A')?.accuracy, 1);
   assert.equal(aggregate(first.cases).accuracy, 1);
-  assert.equal(RULE_VERSION, 'quality-weekly-v7');
+  assert.equal(RULE_VERSION, 'quality-weekly-v8');
 });
 void test('concatenation collisions are rejected', () => {
   const result = analyze(
