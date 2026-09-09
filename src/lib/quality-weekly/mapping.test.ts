@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { analyze, buildSections, FIELDS, mappingPending, parseMapping, SECTION_NAMES, sectionName, trendPoint } from './domain';
+import { aggregate, analyze, buildAgents, buildSections, FIELDS, mappingPending, mappingSection, parseMapping, SECTION_NAMES, sectionName, trendPoint } from './domain';
 import type { Cell, SourceTable } from './domain';
 
 const table = (rows: Cell[][], headers = ['queue_id', 'queue_name', 'section', 'industry']): SourceTable => ({
@@ -59,14 +59,12 @@ test('Material and Unit need no Industry and remain distinct in calculated categ
   assert.equal(sections.UNIT.metrics.n, 1);
 });
 
-test('pending section or name cannot silently drop cases or become official zero results', () => {
-  for (const row of [['p1', 'Unknown', 'Unknown', null], ['p1', null, 'Material', null]]) {
-    const parsed = parseMapping(table([row]), { allowIncomplete: true });
-    const result = analyze(source(['p1']), parsed.mappings);
-    assert.equal(result.valid, false);
-    assert.equal(result.sourceCounts.n, 1);
-    assert.equal(result.cases.length, 0);
-  }
+test('missing queue name still blocks instead of silently dropping cases', () => {
+  const parsed = parseMapping(table([['p1', null, 'Material', null]]), { allowIncomplete: true });
+  const result = analyze(source(['p1']), parsed.mappings);
+  assert.equal(result.valid, false);
+  assert.equal(result.sourceCounts.n, 1);
+  assert.equal(result.cases.length, 0);
 });
 
 test('conflicting categories, invalid Industries and imprecise IDs still block mapping upload', () => {
@@ -86,9 +84,56 @@ test('names and Industry columns may be omitted, official section and category s
   assert.equal(parsed.issues.length, 0);
 });
 
-test('blank or duplicate required columns never bypass mapping validation', () => {
-  assert.ok(parseMapping(table([['1', 'Q', '', '']]), { allowIncomplete: true }).issues.some(i => i.severity === 'error'));
+test('blank queue IDs or duplicate columns never bypass mapping validation', () => {
+  assert.ok(parseMapping(table([['', 'Q', '', '']]), { allowIncomplete: true }).issues.some(i => i.severity === 'error'));
   assert.ok(parseMapping(table([], ['queue_id', 'queue id', 'section']), { allowIncomplete: true }).issues.some(i => i.severity === 'error'));
+});
+
+test('section, category and Industry columns are optional outside Accounts; all samples are retained', () => {
+  for (const mappingTable of [
+    table([['unclassified', 'Queue without classification']], ['queue_id', 'queue_name']),
+    table([['unclassified', 'Queue without classification', '', '']]),
+    table([['unclassified', 'Queue without classification', 'Custom category', '']]),
+  ]) {
+    const parsed = parseMapping(mappingTable);
+    assert.equal(parsed.issues.length, 0);
+    assert.deepEqual(mappingPending(parsed.mappings[0]), []);
+    const result = analyze(source(['unclassified', 'unclassified']), parsed.mappings);
+    assert.equal(result.valid, true);
+    assert.equal(result.cases.length, 2);
+    assert.equal(aggregate(result.cases).n, 2);
+    assert.equal(buildSections(result.cases).OTHER.metrics.n, 2);
+    assert.equal(buildAgents(result.cases)[0].n, 2);
+  }
+});
+
+test('previously saved null sections work without changing the stored mapping or inferring a category', () => {
+  const entries = [{ queueId: 'q1', queueName: 'Existing queue', section: null, industry: null }];
+  const before = JSON.stringify(entries);
+  const result = analyze(source(['q1']), entries);
+  assert.equal(result.valid, true);
+  assert.equal(result.cases[0].section, 'OTHER');
+  assert.equal(JSON.stringify(entries), before);
+  assert.equal(analyze(source(['not-mapped']), entries).valid, false);
+});
+
+test('an explicit category resolves missing sections, but never overrides an explicit section', () => {
+  const parsed = parseMapping(table([
+    ['unit-1', 'Unit queue', 'Unit'], ['material-1', 'Material queue', 'Material'],
+    ['recall-1', 'Recall queue', 'Recall'], ['effect-1', 'Effect queue', 'Efect'],
+  ], ['queue_id', 'queue_name', 'category']));
+  assert.equal(parsed.issues.length, 0);
+  assert.deepEqual(parsed.mappings.map(mappingSection), ['UNIT', 'MATERIAL', 'RECALL', 'EFFECT']);
+  assert.equal(mappingSection({ ...parsed.mappings[2], section: 'CD' }), 'CD');
+});
+
+test('Accounts identified by category still requires Industry A/B', () => {
+  const parsed = parseMapping(table([['account-1', 'Accounts queue', 'Accounts']], ['queue_id', 'queue_name', 'category']), { allowIncomplete: true });
+  assert.deepEqual(mappingPending(parsed.mappings[0]), ['Industry A/B']);
+  assert.equal(analyze(source(['account-1']), parsed.mappings).valid, false);
+  const ready = parseMapping(table([['account-1', 'Accounts queue', 'Accounts', 'A']], ['queue_id', 'queue_name', 'category', 'industry']));
+  assert.equal(ready.issues.length, 0);
+  assert.equal(analyze(source(['account-1']), ready.mappings).valid, true);
 });
 
 test('every supported queue section preserves its own totals and trend without Industry outside Accounts', () => {

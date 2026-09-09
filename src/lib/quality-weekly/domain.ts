@@ -1,4 +1,4 @@
-export const RULE_VERSION = 'quality-weekly-v2';
+export const RULE_VERSION = 'quality-weekly-v3';
 export const RULE_DEFINITION = {
   week: 'Moderation date; Monday to Sunday; manual operation week number',
   key: 'Concatenation of text QA case ID + audit case ID; collisions and conflicts block; identical duplicates count once',
@@ -17,8 +17,16 @@ export const SECTION_NAMES = {
   RECALL: 'Recall',
   EFFECT: 'Effect',
   INSPECTION: 'Inspection',
+  OTHER: 'Other queues',
 } as const;
 export type Section = keyof typeof SECTION_NAMES;
+const SECTION_ALIASES: Record<string, Section> = {
+  cd: 'CD', cd_sampling: 'CD', accounts: 'ACCOUNTS', er_accounts: 'ACCOUNTS', er_sampling_accounts: 'ACCOUNTS',
+  material: 'MATERIAL', er_material: 'MATERIAL', unit: 'UNIT', er_unit: 'UNIT',
+  picture: 'PICTURE', quick: 'QUICK', talent: 'TALENT', recall: 'RECALL',
+  effect: 'EFFECT', efect: 'EFFECT', inspection: 'INSPECTION', other: 'OTHER', other_queues: 'OTHER',
+  'er_material/unit': 'MATERIAL', 'material/unit': 'MATERIAL', er_material_unit: 'MATERIAL',
+};
 type LegacySection = 'CD' | 'ACCOUNTS' | 'MATERIAL';
 type AdditionalSection = Exclude<Section, LegacySection>;
 export function sectionName(snapshot: Pick<Snapshot, 'ruleVersion'>, section: Section): string {
@@ -40,13 +48,18 @@ export type Mapping = {
   industry: 'A' | 'B' | null;
   category?: string;
 };
-// Incomplete classifications may be saved, but never used as official results.
+// A report section is optional. Keep the supplied mapping intact for audit/version history.
 export type MappingEntry = Omit<Mapping, 'section'> & { section: Section | null };
+export function mappingSection(entry: MappingEntry): Section {
+  if (entry.section) return entry.section;
+  // A supplied, recognized category is explicit source information, not an inferred classification.
+  const category = normalize(entry.category || '');
+  return Object.hasOwn(SECTION_ALIASES, category) ? SECTION_ALIASES[category] : 'OTHER';
+}
 export function mappingPending(entry: MappingEntry): string[] {
   return [
     ...(!entry.queueName ? ['Queue name'] : []),
-    ...(!entry.section ? ['Report section'] : []),
-    ...(entry.section === 'ACCOUNTS' && !entry.industry ? ['Industry A/B'] : []),
+    ...(mappingSection(entry) === 'ACCOUNTS' && !entry.industry ? ['Industry A/B'] : []),
   ];
 }
 export type Issue = {
@@ -292,7 +305,7 @@ export function parseMapping(table: SourceTable, options: {
     category: fieldIndex(table.headers, ['category', 'queue_category']),
   };
   for (const [field, idx] of Object.entries(cols))
-    if (idx < 0 && field !== 'category' && !(options.allowIncomplete && ['queueName', 'industry'].includes(field)))
+    if (idx < 0 && (field === 'queueId' || (field === 'queueName' && !options.allowIncomplete)))
       issues.push({
         row: null,
         field,
@@ -304,27 +317,6 @@ export function parseMapping(table: SourceTable, options: {
       issues.push({ row: null, field: header, message: 'Duplicate mapping column. Keep only one column per field.', severity: 'error' });
   });
   if (issues.length) return { mappings, issues };
-  const sections: Record<string, Section> = {
-    cd: 'CD',
-    cd_sampling: 'CD',
-    accounts: 'ACCOUNTS',
-    er_accounts: 'ACCOUNTS',
-    er_sampling_accounts: 'ACCOUNTS',
-    material: 'MATERIAL',
-    unit: 'UNIT',
-    er_unit: 'UNIT',
-    er_material: 'MATERIAL',
-    picture: 'PICTURE',
-    quick: 'QUICK',
-    talent: 'TALENT',
-    recall: 'RECALL',
-    effect: 'EFFECT',
-    efect: 'EFFECT',
-    inspection: 'INSPECTION',
-    'er_material/unit': 'MATERIAL',
-    'material/unit': 'MATERIAL',
-    er_material_unit: 'MATERIAL',
-  };
   const seen = new Map<string, string>();
   table.rows.forEach((row, i) => {
     if (row.every((v) => !textValue(v))) return;
@@ -332,8 +324,8 @@ export function parseMapping(table: SourceTable, options: {
       queueName = textValue(row[cols.queueName]) || (options.queueNames && Object.hasOwn(options.queueNames, queueId) ? options.queueNames[queueId] : '') || '';
     const sectionText = textValue(row[cols.section]);
     const sectionKey = normalize(sectionText);
-    const section = Object.hasOwn(sections, sectionKey)
-      ? sections[sectionKey]
+    const section = Object.hasOwn(SECTION_ALIASES, sectionKey)
+      ? SECTION_ALIASES[sectionKey]
       : null;
     const category = textValue(row[cols.category]) ||
       (sectionKey === 'material' ? 'Material' : section === 'UNIT' ? 'Unit' :
@@ -343,26 +335,26 @@ export function parseMapping(table: SourceTable, options: {
       .toUpperCase();
     const industry: Mapping['industry'] =
       industryText === 'A' || industryText === 'B' ? industryText : null;
+    const entry: MappingEntry = { queueId, queueName, section, industry, ...(category ? { category } : {}) };
+    const effectiveSection = mappingSection(entry);
     const sourceRow = table.rowNumbers[i];
     if (
       !queueId ||
-      !sectionText ||
       (industryText && !industry) ||
-      (section && section !== 'ACCOUNTS' && industryText) ||
-      (!options.allowIncomplete && (!queueName || !section || (section === 'ACCOUNTS' && !industry)))
+      (effectiveSection !== 'ACCOUNTS' && industryText) ||
+      (!options.allowIncomplete && (!queueName || (effectiveSection === 'ACCOUNTS' && !industry)))
     ) {
       issues.push({
         row: sourceRow,
         field: 'mapping',
         message: options.allowIncomplete
-          ? 'Provide a valid queue ID and a section/category. If supplied, Industry must be A or B and is only applicable to Accounts. Blank names and unfinished classifications may be saved for review.'
-          : 'Use a text queue ID, a queue name and a supported report section. Accounts requires industry A or B; leave industry blank for other sections.',
+          ? 'Provide a valid queue ID. Report section and category are optional. If supplied, Industry must be A or B and is only applicable to Accounts. Blank names may be saved for review.'
+          : 'Use a text queue ID and a queue name. Report section and category are optional. Accounts requires industry A or B; leave industry blank for other sections.',
         severity: 'error',
       });
       return;
     }
-    const entry: MappingEntry = { queueId, queueName, section, industry, ...(category ? { category } : {}) },
-      signature = JSON.stringify(entry);
+    const signature = JSON.stringify(entry);
     if (seen.has(queueId)) {
       if (seen.get(queueId) !== signature)
         issues.push({
@@ -550,7 +542,7 @@ export function analyze(
       Number(get('mislabeled')) !== Number(result === 'Mislabeled')
     )
       fail('final_result', 'The error amounts disagree with final_result.');
-    if (!mapping || !mapping.section || pendingMapping.length || !valid) continue;
+    if (!mapping || pendingMapping.length || !valid) continue;
     const c: Case = {
       sourceRow: row,
       qaId,
@@ -560,7 +552,7 @@ export function analyze(
       agentName,
       queueId,
       queueName: mapping.queueName,
-      section: mapping.section,
+      section: mappingSection(mapping),
       industry: mapping.industry,
       ...(mapping.category ? { category: mapping.category } : {}),
       allow: Number(get('allow')),
