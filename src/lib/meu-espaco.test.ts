@@ -130,6 +130,7 @@ test("manager cannot mutate even when an item id and fabricated reply are suppli
   await assert.rejects(() => respondSpacePending(scope({ role: "GESTOR", canRespond: false }), "hours", "id", { justification: "texto" }), /somente à consulta/);
 });
 test("summary aggregates without a metric-month cutoff on open items, using local answer days", async (t) => {
+  t.mock.method(prisma.employeeProfile, "findMany", async () => []);
   t.mock.method(prisma.attendanceRecord, "groupBy", async () => []);
   t.mock.method(prisma, "$queryRaw", async (sql: any) => {
     assert.match(sql.text, /AT TIME ZONE 'America\/Sao_Paulo'/);
@@ -137,7 +138,7 @@ test("summary aggregates without a metric-month cutoff on open items, using loca
     return [{ supervisorId: "sup", supervisor: "Supervisor", absences: 2, hours: 3, answered: 4, oldest: "2026-07-01" }];
   });
   const result = await getSpaceSummary(scope(), new URLSearchParams("startDate=2026-09-01&endDate=2026-09-06"));
-  assert.deepEqual(result.management, { absences: 2, hours: 3, answered: 4, oldest: "2026-07-01" });
+  assert.deepEqual(result.management, { absences: 2, hours: 3, answered: 4, oldest: "2026-07-01", required: 0 });
 });
 test("results reconcile daily sums, weighted quality, current membership and partners without data", async (t) => {
   t.mock.method(prisma, "$queryRaw", async (sql: any) => {

@@ -7,6 +7,7 @@ import type { SpacePeriod, SpaceHours } from "@/lib/meu-espaco-contract";
 import type { MeuEspacoScope } from "@/lib/meu-espaco-scope";
 import { workHourReadData } from "@/lib/work-hours-service";
 import { summarizePartnerMonth } from "@/lib/meu-espaco-monthly-hours";
+import { compareSpaceValues, spaceHoursSortKeys, type SpaceHoursSortKey } from "@/lib/meu-espaco-order";
 
 export function spaceHoursPeriod(query: URLSearchParams, today = spaceToday()): SpacePeriod {
   const startDate = query.get("startDate"), endDate = query.get("endDate");
@@ -49,8 +50,12 @@ export async function getSpaceMonthlyHours(scope: MeuEspacoScope, query: URLSear
   const period = spaceHoursPeriod(query, today), page = Number(query.get("page") || 1);
   if (!Number.isSafeInteger(page) || page < 1 || page > 10000) throw new MeuEspacoError("Página inválida.");
   const allowed = new Set(spaceHoursEmployeeIds(scope, query));
-  const partners = scope.employees.filter((p) => allowed.has(p.id)).sort((a, b) => a.fullName.localeCompare(b.fullName, "pt-BR") || a.id.localeCompare(b.id));
-  const selected = partners.slice((page - 1) * 50, page * 50), ids = selected.map((p) => p.id);
+  const sort = (query.get("sort") || "employeeName") as SpaceHoursSortKey, direction = query.get("direction") || "asc";
+  if (!spaceHoursSortKeys.includes(sort) || !["asc", "desc"].includes(direction)) throw new MeuEspacoError("Ordenação de horas inválida.");
+  const dir = direction === "desc" ? "desc" : "asc";
+  const partners = scope.employees.filter((p) => allowed.has(p.id)).sort((a, b) => compareSpaceValues(a.fullName, b.fullName, dir) || a.id.localeCompare(b.id));
+  // Numeric ordering must see every filtered partner, before the page is sliced.
+  const selected = sort === "employeeName" ? partners.slice((page - 1) * 50, page * 50) : partners, ids = selected.map((p) => p.id);
   const through = period.endDate < today ? period.endDate : today;
   const [records, schedules, summary] = await Promise.all([
     ids.length ? prisma.workHourRecord.findMany({ where: { employeeId: { in: ids }, date: { gte: spaceDate(period.startDate), lte: spaceDate(through) } },
@@ -60,11 +65,20 @@ export async function getSpaceMonthlyHours(scope: MeuEspacoScope, query: URLSear
       select: { employeeId: true, date: true, status: true, startsAt: true, endsAt: true, shift: { select: { name: true } } } }) : [],
     getSpaceHoursSummary(scope, query, period, now)
   ]);
-  // One bounded capture lookup for the page's partners, never a call per partner/day.
-  const captured = records.length ? await workHourReadData.capturedHours(records.map((r) => ({key:r.id,employeeId:r.employeeId,wbLogin:r.wbLogin,shiftDate:r.date}))) : new Map<string, number>();
+  const captured = sort === "capturedHours" && records.length ? await workHourReadData.capturedHours(records.map((r) => ({key:r.id,employeeId:r.employeeId,wbLogin:r.wbLogin,shiftDate:r.date}))) : new Map<string, number>();
   const byPartner = new Map(selected.map((p) => [p.id, { records: [] as Array<(typeof records)[number]>, schedules: [] as Array<(typeof schedules)[number]> }]));
   for (const row of records) byPartner.get(row.employeeId)!.records.push(row);
   for (const row of schedules) byPartner.get(row.employeeId)!.schedules.push(row);
-  return { period, summary, pagination: { page, totalPages: Math.max(1, Math.ceil(partners.length / 50)), total: partners.length },
-    data: selected.map((p) => summarizePartnerMonth(p, period, today, byPartner.get(p.id)!.records, byPartner.get(p.id)!.schedules, captured, minuteOfDay)) };
+  let data = selected.map((p) => summarizePartnerMonth(p, period, today, byPartner.get(p.id)!.records, byPartner.get(p.id)!.schedules, captured, minuteOfDay));
+  if (sort !== "employeeName") data = data.sort((a, b) => {
+    const value = (row: typeof a) => ["capturedHours", "effectiveHours", "differenceMinutes"].includes(sort) && !row.realizedRecords ? null : row[sort];
+    return compareSpaceValues(value(a), value(b), dir) || a.employeeName.localeCompare(b.employeeName, "pt-BR") || a.id.localeCompare(b.id);
+  }).slice((page - 1) * 50, page * 50);
+  if (sort !== "capturedHours") {
+    const pageIds = new Set(data.map((row) => row.employeeId));
+    const pageRecords = records.filter((row) => pageIds.has(row.employeeId));
+    const pageCapture = pageRecords.length ? await workHourReadData.capturedHours(pageRecords.map((r) => ({key:r.id,employeeId:r.employeeId,wbLogin:r.wbLogin,shiftDate:r.date}))) : new Map<string, number>();
+    data = data.map((row) => ({ ...row, capturedHours: byPartner.get(row.employeeId)!.records.reduce((sum, r) => sum + (pageCapture.get(r.id) ?? 0), 0) }));
+  }
+  return { period, summary, pagination: { page, totalPages: Math.max(1, Math.ceil(partners.length / 50)), total: partners.length }, data };
 }

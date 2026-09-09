@@ -41,6 +41,7 @@ const group = (lob: string): SpaceResults["groups"][number] => ({
     productionLatest: null, qualityLatest: null, scheduleLatest: null, updatedAt: null }
 });
 const ResultsTab = loadComponent<{ data: SpaceResults }>("./resultados.tsx", "SpaceResultsTab", {
+  "./target-card": { SpaceTargetCard: () => null },
   "@/lib/latency-display": { formatLatencyDisplay },
   "./shared": { number, dateLabel, tableClass: "table", SpaceButtons: () => null,
     SpaceCard: ({ title, value }: { title: string; value: string }) => createElement("div", { "data-card": title }, value) }

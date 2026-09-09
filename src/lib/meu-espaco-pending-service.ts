@@ -10,6 +10,7 @@ import { isCurrentSpacePartner } from "@/lib/meu-espaco-supervisors";
 import { decodeSpaceCursor, encodeSpaceCursor, pendingFingerprint, spaceDate, spacePendingFilters, spacePeriod, spaceToday } from "@/lib/meu-espaco-filters";
 import type { MeuEspacoScope } from "@/lib/meu-espaco-scope";
 import type { ManagementCounts, SpacePending, SpaceSummary } from "@/lib/meu-espaco-contract";
+import { getSpaceCoverage } from "@/lib/meu-espaco-coverage-service";
 
 const absenceStatuses: ScheduleStatus[] = ["FALTA", "FALTA_JUSTIFICADA", "FALTA_INJUSTIFICADA", "ERRO_ESCALA"];
 const protectedStatuses = Object.values(ScheduleStatus).filter(isProtectedCaptureScheduleStatus);
@@ -83,9 +84,12 @@ export async function getSpaceSummary(scope: MeuEspacoScope, query: URLSearchPar
     if (count.supervisorId) rows.set(count.supervisorId, { id: count.supervisorId, name: count.supervisor,
       teamSize: rows.get(count.supervisorId)?.teamSize ?? 0, absences: count.absences, hours: count.hours, answered: count.answered, oldest: count.oldest });
   }
+  const coverage = await getSpaceCoverage(scope, new URLSearchParams(), new Date(), false);
+  management.required = coverage.pending;
+  for (const row of rows.values()) row.required = coverage.data.filter((slot) => slot.state === "pending" && slot.supervisors.some((s) => s.id === row.id)).length;
   return { actor: { name: scope.user.name, role: scope.role, broad: scope.broad, canRespond: scope.canRespond },
     selectedSupervisorId: scope.supervisorId, management, period,
-    supervisors: [...rows.values()].filter((row) => !scope.supervisorId || row.id === scope.supervisorId).sort((a, b) => (b.absences + b.hours) - (a.absences + a.hours) || a.name.localeCompare(b.name, "pt-BR")),
+    supervisors: [...rows.values()].filter((row) => !scope.supervisorId || row.id === scope.supervisorId).sort((a, b) => (b.absences + b.hours + (b.required ?? 0)) - (a.absences + a.hours + (a.required ?? 0)) || a.name.localeCompare(b.name, "pt-BR")),
     lobs: [...new Set(scope.profiles.map((employee) => employee.lob.name))].sort() };
 }
 
@@ -94,13 +98,14 @@ export async function listSpacePending(scope: MeuEspacoScope, query: URLSearchPa
   const fingerprint = pendingFingerprint(`${scope.user.id}:${scope.supervisorId || "all"}`, filters);
   const cursor = decodeSpaceCursor(query.get("cursor"), fingerprint);
   const source = await spacePendingSource(scope);
-  const rows = await prisma.$queryRaw<DbPending[]>(Prisma.sql`${source} SELECT * FROM items
+  const rows = await prisma.$queryRaw<DbPending[]>(Prisma.sql`${source}, filtered AS (SELECT *, TO_CHAR(MIN(date) OVER (), 'YYYY-MM-DD') AS "oldestDate" FROM items
     WHERE pending=${filters.state === "pending"} AND date >= ${spaceDate(filters.startDate)} AND date <= ${spaceDate(filters.endDate)}
       ${filters.kind === "all" ? Prisma.empty : Prisma.sql`AND kind=${filters.kind}`}
       ${filters.lob ? Prisma.sql`AND lob=${filters.lob}` : Prisma.empty}
       ${filters.search ? Prisma.sql`AND (POSITION(LOWER(${filters.search}) IN LOWER("employeeName"))>0 OR POSITION(LOWER(${filters.search}) IN LOWER("wbLogin"))>0)` : Prisma.empty}
-      ${cursor ? Prisma.sql`AND (date, kind, id) > (${spaceDate(cursor.date)}, ${cursor.kind}, ${cursor.id})` : Prisma.empty}
-    ORDER BY date ASC, kind ASC, id ASC LIMIT 51`);
+    ) SELECT * FROM filtered WHERE TRUE
+      ${cursor ? filters.order === "asc" ? Prisma.sql`AND (date, kind, id) > (${cursor.date}::date, ${cursor.kind}, ${cursor.id})` : Prisma.sql`AND (date, kind, id) < (${cursor.date}::date, ${cursor.kind}, ${cursor.id})` : Prisma.empty}
+    ORDER BY date ${filters.order === "asc" ? Prisma.sql`ASC` : Prisma.sql`DESC`}, kind ${filters.order === "asc" ? Prisma.sql`ASC` : Prisma.sql`DESC`}, id ${filters.order === "asc" ? Prisma.sql`ASC` : Prisma.sql`DESC`} LIMIT 51`);
   const hasMore = rows.length > 50, data = rows.slice(0, 50).map(serialize), last = data.at(-1);
   return { data, hasMore, nextCursor: hasMore && last ? encodeSpaceCursor({ date: last.date, id: last.id, kind: last.kind, fingerprint }) : null };
 }

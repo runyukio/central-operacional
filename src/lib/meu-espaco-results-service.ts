@@ -8,13 +8,14 @@ import type { MeuEspacoScope } from "@/lib/meu-espaco-scope";
 import type { SpaceResults } from "@/lib/meu-espaco-contract";
 import { loadCecFrtDays } from "@/lib/cec-frt-service";
 import { addCecFrt } from "@/lib/cec-frt";
+import { isSpaceMaterialSkill, type SpaceKpiId } from "@/lib/meu-espaco-targets";
 
 type ProductionDay = { employeeId: string; day: Date; output: number; ahtSubmit: number; duration: number; active: boolean; updatedAt: Date;
   latencyMinutesSum?: number; latencySubmits?: number; commentsLatencyMinutesSum?: number; commentsLatencySubmits?: number };
 type QualityDay = { employeeId: string; supervisorId: string; qualityDay: Date; correct: number; total: number; updatedAt: Date };
 const iso = (date: Date) => date.toISOString().slice(0, 10);
 
-export async function getSpaceResults(scope: MeuEspacoScope, query: URLSearchParams): Promise<SpaceResults> {
+export async function getSpaceResults(scope: MeuEspacoScope, query: URLSearchParams, coverageMetric?: SpaceKpiId): Promise<SpaceResults> {
   const period = spacePeriod(query), start = spaceDate(period.startDate), end = new Date(+spaceDate(period.endDate) + 86_400_000);
   const employees = scope.employees.filter((employee) => !query.get("lob") || spaceLobFamily(employee.lob.name) === query.get("lob"));
   const ids = employees.map((employee) => employee.id);
@@ -83,6 +84,7 @@ export async function getSpaceResults(scope: MeuEspacoScope, query: URLSearchPar
     if (!groups.has(lob)) groups.set(lob, { metric: emptySpaceMetric(), daily: new Map(), employees: 0, productionPartners: new Set(), qualityPartners: new Set(), schedulePartners: new Set(), frtPartners: new Set(), productionLatest: null, qualityLatest: null, scheduleLatest: null, frtLatest: null, updatedAt: null });
     groups.get(lob)!.employees++;
   }
+  const sourceMetrics = new Map<string, { employeeId: string; date: string; metric: MetricAccumulator }>();
   function targets(employeeId: string, date: string, updatedAt: Date | null, source: "production" | "quality" | "schedule" | "frt") {
     const employee = byEmployee.get(employeeId)!;
     const group = groups.get(spaceLobFamily(employee.employee.lob.name))!;
@@ -90,13 +92,24 @@ export async function getSpaceResults(scope: MeuEspacoScope, query: URLSearchPar
     group[`${source}Partners`].add(employeeId);
     if (!group[`${source}Latest`] || date > group[`${source}Latest`]!) group[`${source}Latest`] = date;
     if (updatedAt && (!group.updatedAt || updatedAt.toISOString() > group.updatedAt)) group.updatedAt = updatedAt.toISOString();
-    return [employee.metric, group.metric, group.daily.get(date)!, supervisors.get(employee.employee.supervisorId!)!.groups.get(spaceLobFamily(employee.employee.lob.name))!];
+    const result = [employee.metric, group.metric, group.daily.get(date)!, supervisors.get(employee.employee.supervisorId!)!.groups.get(spaceLobFamily(employee.employee.lob.name))!];
+    if (coverageMetric) {
+      const key = `${employeeId}:${date}`;
+      if (!sourceMetrics.has(key)) sourceMetrics.set(key, { employeeId, date, metric: emptySpaceMetric() });
+      result.push(sourceMetrics.get(key)!.metric);
+    }
+    return result;
   }
   for (const row of production) {
     const date = iso(row.day);
     for (const target of targets(row.employeeId, date, row.updatedAt, "production")) {
       target.output += row.output; target.days.add(date);
       if (row.active) target.agentDays.add(`${row.employeeId}:${date}`);
+      const profile = byEmployee.get(row.employeeId)!.employee;
+      if (spaceLobFamily(profile.lob.name) === "ADS" && isSpaceMaterialSkill(profile.skill)) {
+        target.materialOutput += row.output;
+        if (row.active) target.materialDays.add(`${row.employeeId}:${date}`);
+      }
       target.ahtSubmit += row.ahtSubmit; target.duration += row.duration;
       target.latencyMinutesSum += row.latencyMinutesSum ?? 0; target.latencySubmits += row.latencySubmits ?? 0;
       target.commentsLatencyMinutesSum += row.commentsLatencyMinutesSum ?? 0; target.commentsLatencySubmits += row.commentsLatencySubmits ?? 0;
@@ -112,12 +125,19 @@ export async function getSpaceResults(scope: MeuEspacoScope, query: URLSearchPar
   for (const row of cecFrt) if (row.employeeId && byEmployee.has(row.employeeId)) {
     for (const target of targets(row.employeeId, iso(row.day), row.updatedAt, "frt")) addCecFrt(target.cecFrt, row);
   }
-  return { period, supervisors: [...supervisors].map(([id, supervisor]) => ({ id, name: supervisor.name,
+  return { period, ...(coverageMetric ? { sourceMetricDays: [...sourceMetrics.values()].flatMap((row) => {
+    const weight = finishSpaceMetric(row.metric, spaceLobFamily(byEmployee.get(row.employeeId)!.employee.lob.name)).weights?.[coverageMetric];
+    return weight && weight.denominator > 0 ? [{ employeeId: row.employeeId, date: row.date, weight }] : [];
+  }) } : {}), supervisors: [...supervisors].map(([id, supervisor]) => ({ id, name: supervisor.name,
     groups: [...supervisor.groups].map(([lob, metric]) => ({ lob, metric: finishSpaceMetric(metric, lob) })) })),
     groups: [...groups.entries()].map(([lob, group]) => ({ lob, teamSize: group.employees, metric: finishSpaceMetric(group.metric, lob),
     daily: [...group.daily.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, value]) => ({ date, metric: finishSpaceMetric(value, lob) })),
     coverage: { frtPartners: group.frtPartners.size, frtLatest: group.frtLatest, productionPartners: group.productionPartners.size, qualityPartners: group.qualityPartners.size, schedulePartners: group.schedulePartners.size,
       productionLatest: group.productionLatest, qualityLatest: group.qualityLatest, scheduleLatest: group.scheduleLatest, updatedAt: group.updatedAt } })),
-    partners: [...byEmployee.values()].map(({ employee, metric }) => ({ id: employee.id, name: employee.fullName, wbLogin: employee.wbLogin,
-      skill: employee.skill || "Sem skill principal", lob: spaceLobFamily(employee.lob.name), metric: finishSpaceMetric(metric, spaceLobFamily(employee.lob.name)) })).sort((a,b) => a.name.localeCompare(b.name, "pt-BR")) };
+    partners: [...byEmployee.values()].map(({ employee, metric }) => {
+      const finished = finishSpaceMetric(metric, spaceLobFamily(employee.lob.name));
+      if (!isSpaceMaterialSkill(employee.skill)) finished.targets = finished.targets?.filter((target) => target.id !== "materialDaily");
+      return { id: employee.id, name: employee.fullName, wbLogin: employee.wbLogin,
+        skill: employee.skill || "Sem skill principal", lob: spaceLobFamily(employee.lob.name), metric: finished };
+    }).sort((a,b) => a.name.localeCompare(b.name, "pt-BR")) };
 }

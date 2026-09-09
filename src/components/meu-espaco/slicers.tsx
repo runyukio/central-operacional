@@ -23,7 +23,7 @@ export function SpaceSupervisorSlicer({ value, options, onChange }: {
     <div className={styles.supervisorGrid}>
       {visible.map((option) => <button key={option.id} type="button" aria-pressed={value === option.id} className={styles.supervisor} onClick={() => onChange(option.id)}>
         <span className="flex items-center gap-2.5"><span aria-hidden className={styles.avatar}>{option.name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("")}</span><span className="min-w-0 flex-1 text-sm font-bold">{option.name}</span>{value === option.id ? <Check aria-hidden className="h-4 w-4 shrink-0 text-blue-600" /> : null}</span>
-        <span className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted"><span>{option.teamSize} parceiros</span><span className={styles.badge}>{option.absences + option.hours} pendências</span></span>
+        <span className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted"><span>{option.teamSize} parceiros</span><span className={styles.badge}>{option.absences + option.hours} justificativas</span><span className={styles.badge}>{option.required ?? 0} Requerido</span></span>
       </button>)}
     </div>
     {!visible.length ? <p role="status" className="py-5 text-center text-sm text-muted">Nenhum supervisor encontrado. A busca não altera o time selecionado.</p> : null}

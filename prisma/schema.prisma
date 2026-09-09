@@ -277,6 +277,7 @@ model UserPermission {
 }
 
 model User {
+  spaceCoverageNotes SpaceCoverageNote[] @relation("SpaceCoverageActor")
   id                                String                           @id @default(cuid())
   email                             String                           @unique
   name                              String
@@ -411,6 +412,7 @@ model Shift {
 }
 
 model EmployeeProfile {
+  spaceCoverageNotes SpaceCoverageNote[] @relation("SpaceCoverageSupervisor")
   id                                String                           @id @default(cuid())
   userId                            String?                          @unique
   user                              User?                            @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -1907,6 +1909,29 @@ model EquipmentTicket {
   openedBy    User             @relation(fields: [openedById], references: [id])
   createdAt   DateTime         @default(now())
   updatedAt   DateTime         @updatedAt
+}
+
+model SpaceCoverageNote {
+  id             String @id @default(cuid())
+  requestId      String @unique
+  requirementId  String
+  supervisorId   String
+  supervisorName String
+  actorId        String
+  actorName      String
+  date           DateTime @db.Date
+  lobId          String
+  shiftId        String
+  required       Int
+  available      Int
+  text           String
+  createdAt      DateTime @default(now())
+  supervisor     EmployeeProfile @relation("SpaceCoverageSupervisor", fields: [supervisorId], references: [id], onDelete: Restrict)
+  actor          User @relation("SpaceCoverageActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([requirementId, supervisorId, createdAt])
+  @@index([supervisorId, date])
+  @@index([actorId])
 }
 
 model StaffCoverage {

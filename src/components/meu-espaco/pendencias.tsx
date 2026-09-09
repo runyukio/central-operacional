@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { SpaceCoveragePanel } from "./requerido";
+import { spaceAge } from "@/lib/meu-espaco-order";
 import { Check, ChevronDown } from "lucide-react";
 import { apiJson, FormInput } from "@/components/modules/shared";
 import { officialAbsenceReasons } from "@/lib/absence-reasons";
@@ -39,7 +41,7 @@ function PendingDetail({ row, supervisorId, canRespond, onAnswered }: { row: Spa
 }
 
 export function SpacePendingTab({ supervisorId, lobs, canRespond, onAnswered, initialKind = "all" }: { supervisorId: string; lobs: string[]; canRespond: boolean; onAnswered: () => void; initialKind?: string }) {
-  const [filters, setFilters] = useState({ kind: initialKind, state: "pending", search: "", lob: "", startDate: "", endDate: "" });
+  const [filters, setFilters] = useState({ order: "asc", kind: initialKind, state: "pending", search: "", lob: "", startDate: "", endDate: "" });
   const [search, setSearch] = useState("");
   const [opened, setOpened] = useState("");
   const [message, setMessage] = useState("");
@@ -48,24 +50,30 @@ export function SpacePendingTab({ supervisorId, lobs, canRespond, onAnswered, in
     const params = new URLSearchParams(query); if (cursor) params.set("cursor", cursor);
     return apiJson<SpacePendingPage>(`/api/meu-espaco/pendencias?${params}`, { signal });
   }, setState));
-  const query = new URLSearchParams({ ...filters, search, supervisorId }).toString();
+  const query = new URLSearchParams({ ...filters, kind: filters.kind === "required" ? "all" : filters.kind, search, supervisorId }).toString();
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
   const valid = !filters.startDate || !filters.endDate || filters.startDate <= filters.endDate;
   useEffect(() => { const timer = setTimeout(() => setSearch(filters.search.trim()), 300); return () => clearTimeout(timer); }, [filters.search]);
   useEffect(() => {
     setOpened("");
-    if (!valid || search !== filters.search.trim()) { feed.invalidate(); return; }
+    if (filters.kind === "required" || !valid || search !== filters.search.trim()) { feed.invalidate(); return; }
     void feed.reset(query); return () => feed.invalidate();
-  }, [query, valid, search, filters.search, feed]);
+  }, [query, valid, search, filters.search, filters.kind, feed]);
   function change(patch: Partial<typeof filters>) { feed.invalidate(); setFilters((value) => ({ ...value, ...patch })); }
   return <div className="space-y-4">
     <section className="card space-y-4 p-4" aria-label="Filtros de pendências">
-      <div className="flex flex-wrap gap-5"><SpaceButtons label="Tipo" value={filters.kind} onChange={(kind) => change({ kind })} options={[{ id: "all", label: "Todas" }, { id: "absence", label: "Faltas" }, { id: "hours", label: "Horas" }]} /><SpaceButtons label="Situação" value={filters.state} onChange={(state) => change({ state })} options={[{ id: "pending", label: "Pendentes" }, { id: "answered", label: "Respondidas" }]} /></div>
+      <div className="flex flex-wrap gap-5"><SpaceButtons label="Tipo" value={filters.kind} onChange={(kind) => change({ kind })} options={[{ id: "all", label: "Todas" }, { id: "absence", label: "Faltas" }, { id: "hours", label: "Horas" }, { id: "required", label: "Requerido" }]} />{filters.kind !== "required" ? <SpaceButtons label="Situação das faltas e horas" value={filters.state} onChange={(state) => change({ state })} options={[{ id: "pending", label: "Pendentes" }, { id: "answered", label: "Respondidas" }]} /> : null}</div>
+      {filters.kind !== "required" ? <>
+      <SpaceButtons label="Ordem das pendências" value={filters.order} onChange={(order) => change({ order })} options={[{ id: "asc", label: "Mais antigas primeiro" }, { id: "desc", label: "Mais recentes primeiro" }]} />
       <SpaceButtons label="LOB das pendências" value={filters.lob} onChange={(lob) => change({ lob })} options={[{ id: "", label: "Todas as LOBs" }, ...lobs.map((lob) => ({ id: lob, label: lob }))]} />
       <div className="grid gap-3 sm:grid-cols-3"><FormInput label="Parceiro" value={filters.search} onChange={(search) => change({ search })} placeholder="Nome ou WB" /><FormInput label="Ocorrências desde (opcional)" type="date" value={filters.startDate} onChange={(startDate) => change({ startDate })} /><FormInput label="Ocorrências até (opcional)" type="date" value={filters.endDate} onChange={(endDate) => change({ endDate })} /></div>
       <button type="button" onClick={() => change({ kind: "all", state: "pending", search: "", lob: "", startDate: "", endDate: "" })} className="text-xs font-bold text-blue-600 underline underline-offset-4">Limpar filtros de pendências</button>
-      <p className="text-xs text-muted">Sem datas: todas as ocorrências até hoje, inclusive de meses anteriores. Ordem da mais antiga para a mais recente. Horas mantêm o responsável registrado na ocorrência.</p>
+      <p className="text-xs text-muted">Sem datas: todas as ocorrências até hoje, inclusive de meses anteriores. Ordenação pela data da ocorrência; a idade não representa atraso de SLA. Horas mantêm o responsável registrado na ocorrência.</p>
       {!valid ? <p role="alert" className="text-sm text-red-700">A data inicial deve ser anterior ou igual à final.</p> : null}
+      </> : null}
     </section>
+    {filters.kind === "required" || filters.kind === "all" ? <SpaceCoveragePanel supervisorId={supervisorId} onAnswered={onAnswered} /> : null}
+    {filters.kind !== "required" ? <>
     {message ? <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">{message}</p> : null}
     <SpaceLoad loading={state.loading || search !== filters.search.trim()} error={state.error} retry={() => void feed.retry()} />
     {valid && !state.loading && search === filters.search.trim() ? <>
@@ -73,12 +81,13 @@ export function SpacePendingTab({ supervisorId, lobs, canRespond, onAnswered, in
       {state.rows.map((row) => { const key = `${row.kind}:${row.id}`; return <article key={key} className="card p-4">
         <button type="button" onClick={() => setOpened(opened === key ? "" : key)} aria-expanded={opened === key} className="flex w-full flex-wrap items-center justify-between gap-3 text-left">
           <div><p className="font-bold text-navy-950">{row.employeeName} <span className="text-xs font-medium text-muted">{row.wbLogin}</span></p><p className="mt-1 text-xs text-muted">{dateLabel(row.date)} · {row.lob} · Responsável: {row.supervisor}</p></div>
-          <div className="flex items-center gap-3"><span className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-bold">{row.kind === "hours" ? "Horas" : "Falta / ocorrência"}</span><span className="text-xs text-muted">{row.pending ? "Pendente" : row.status === "FALTA_INJUSTIFICADA" ? "Classificada como injustificada" : "Respondida"}</span><ChevronDown className="h-4 w-4" /></div>
+          <div className="flex flex-wrap items-center gap-3"><span className="rounded-lg border border-border px-2 py-1 text-xs">{spaceAge(row.date, today)}{row.pending && row.oldestDate === row.date ? " · Mais antiga" : ""}</span><span className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-bold">{row.kind === "hours" ? "Horas" : "Falta / ocorrência"}</span><span className="text-xs text-muted">{row.pending ? "Pendente" : row.status === "FALTA_INJUSTIFICADA" ? "Classificada como injustificada" : "Respondida"}</span><ChevronDown className="h-4 w-4" /></div>
         </button>
         {opened === key ? <PendingDetail row={row} supervisorId={supervisorId} canRespond={canRespond} onAnswered={(updated) => { feed.answer(updated); setOpened(""); setMessage("Justificativa salva no fluxo original."); onAnswered(); }} /> : null}
       </article>; })}
       {state.hasMore ? <button type="button" onClick={() => void feed.more()} disabled={state.loadingMore || Boolean(state.error)} className="premium-control w-full p-3 text-sm font-bold disabled:opacity-50">{state.loadingMore ? "Carregando…" : "Carregar mais 50"}</button> : null}
       {state.initialized ? <p className="text-center text-xs text-muted">{state.rows.length} ocorrências carregadas{state.hasMore ? " · Há mais resultados" : " · Fim da lista"}</p> : null}
+    </> : null}
     </> : null}
   </div>;
 }

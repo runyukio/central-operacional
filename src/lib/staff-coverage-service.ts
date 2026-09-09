@@ -122,7 +122,7 @@ type RequirementRecord = {
   risk: CoverageRisk;
   observation: string | null;
   lob: { id: string; name: string };
-  shift: { id: string; name: string };
+  shift: { id: string; name: string; startsAt: string; endsAt: string };
 };
 
 type StaffCoverageImportWriteRow = {
@@ -717,6 +717,21 @@ async function auditStaffCoverageImport(userId: string, rows: StaffCoverageImpor
   }
 }
 
+/** Internal read-only adapter. Callers must authorize scope before exposing aggregates. */
+export async function readMeuEspacoCoverageSnapshot(startDate: Date, endDate: Date) {
+  const period = { startDate, endDate };
+  const [requirements, schedules] = await Promise.all([
+    listRequirements(period, {}, await hasStaffCoverageExtendedColumns()),
+    listCoverageSchedules(period, {})
+  ]);
+  const rows = buildCoverageRows(requirements, schedules, { limit: 10000 }).data;
+  const requirementByKey = new Map(requirements.map((row) => [`${formatDateKey(row.date)}|${row.lobId}|${shiftCategoryName(row.shift.name)}`, row]));
+  return rows.flatMap((row) => {
+    const requirement = requirementByKey.get(`${row.date}|${row.lobId}|${row.shift}`);
+    return requirement ? [{ ...row, requirementId: requirement.id, shiftId: requirement.shiftId, startsAt: requirement.shift.startsAt, endsAt: requirement.shift.endsAt }] : [];
+  });
+}
+
 function buildCoverageRows(requirements: RequirementRecord[], schedules: StaffCoverageSchedule[], query: StaffCoverageQuery) {
   const availability = availabilityMap(schedules);
   const rowsByKey = new Map<string, StaffCoverageRow>();
@@ -848,7 +863,7 @@ async function listRequirements(period: { startDate: Date; endDate: Date }, quer
     gap: true,
     risk: true,
     lob: { select: { id: true, name: true } },
-    shift: { select: { id: true, name: true } }
+    shift: { select: { id: true, name: true, startsAt: true, endsAt: true } }
   } satisfies Prisma.StaffCoverageSelect;
   if (hasExtendedColumns) {
     return prisma.staffCoverage.findMany({

@@ -14,6 +14,7 @@ const compiled = ts.transpileModule(`${source}\nexport { PendingDetail };`, {
 }).outputText;
 const compiledModule = { exports: {} as { PendingDetail: React.ComponentType<any> } };
 const dependencies: Record<string, unknown> = {
+  "./requerido": { SpaceCoveragePanel: () => null },
   "@/components/modules/shared": { apiJson: () => { throw new Error("Rendering must not write data"); }, FormInput: () => null },
   "@/lib/absence-reasons": { officialAbsenceReasons: [] },
   "@/lib/meu-espaco-feed": {},
