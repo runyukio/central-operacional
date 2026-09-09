@@ -1,9 +1,10 @@
-export const RULE_VERSION = 'quality-weekly-v3';
+export const RULE_VERSION = 'quality-weekly-v4';
 export const RULE_DEFINITION = {
   week: 'Moderation date; Monday to Sunday; manual operation week number',
-  key: 'Concatenation of text QA case ID + audit case ID; collisions and conflicts block; identical duplicates count once',
+  key: 'Concatenation of text QA case ID + audit case ID; collisions and non-result conflicts block; identical duplicates count once',
+  outcomes: 'Distinct case keys are counted independently per final_result; result categories may overlap; Excel row order has no precedence',
   sampling: 'N = distinct valid case keys', leakageRate: 'Leakage / Allow', falsePositiveRate: 'False Positive / Labeled',
-  mislabeledRate: 'Mislabeled / N', accuracy: 'Correct / N', adjustedAccuracy: '(Correct + Mislabeled) / N',
+  mislabeledRate: 'Mislabeled / N', accuracy: "COUNT(DISTINCT IF(final_result = 'Correct', CONCAT(qaId, auditId), NULL)) / COUNT(DISTINCT CONCAT(qaId, auditId))", adjustedAccuracy: '(Correct + Mislabeled) / N',
   weeklyChange: 'Current accuracy minus prior week accuracy, in percentage points', zeroDenominator: 'N/A', target: 0.95
 } as const;
 export const SECTION_NAMES = {
@@ -34,6 +35,7 @@ export function sectionName(snapshot: Pick<Snapshot, 'ruleVersion'>, section: Se
     ? 'ER Material/Unit' : SECTION_NAMES[section];
 }
 export type Outcome = 'Correct' | 'Leakage' | 'False_Positive' | 'Mislabeled';
+const OUTCOMES: Outcome[] = ['Correct', 'Leakage', 'False_Positive', 'Mislabeled'];
 export type Cell = string | number | boolean | null;
 export type SourceTable = {
   sheet: string;
@@ -83,6 +85,8 @@ export type Case = {
   allow: number;
   labeled: number;
   result: Outcome;
+  // Canonical outcome set for one distinct key; optional for existing callers.
+  results?: Outcome[];
 };
 export type Counts = {
   n: number;
@@ -152,6 +156,8 @@ export type Validation = {
   warningCount: number;
   dates: { start: string; end: string; count: number; days: string[] }[];
   sourceCounts: Counts;
+  distinctCounts?: Counts | null;
+  resultVariations?: number;
   controlTotals: Record<string, number>[];
   headers: string[];
   unknownQueues: string[];
@@ -262,10 +268,11 @@ export function aggregate(cases: Case[]): Metrics {
     c.n++;
     c.allow += x.allow;
     c.labeled += x.labeled;
-    if (x.result === 'Correct') c.correct++;
-    if (x.result === 'Leakage') c.leakage++;
-    if (x.result === 'False_Positive') c.falsePositive++;
-    if (x.result === 'Mislabeled') c.mislabeled++;
+    const results = new Set(x.results ?? [x.result]);
+    if (results.has('Correct')) c.correct++;
+    if (results.has('Leakage')) c.leakage++;
+    if (results.has('False_Positive')) c.falsePositive++;
+    if (results.has('Mislabeled')) c.mislabeled++;
   }
   return metrics(c);
 }
@@ -425,10 +432,11 @@ export function analyze(
     cases: Case[] = [];
   const map = new Map(mappings.map((m) => [m.queueId, m]));
   const unknownQueues = new Set<string>();
-  const seen = new Map<string, { signature: string; row: number }>(),
+  const seen = new Map<string, { signature: string; row: number; value: Case }>(),
     concats = new Map<string, string>();
   let rows = 0,
     duplicates = 0,
+    resultVariations = 0,
     summaryRows = 0,
     missingAgents = 0;
   const calendar = new Map<string, { count: number; days: Set<string> }>();
@@ -569,12 +577,21 @@ export function analyze(
       continue;
     }
     concats.set(concat, pair);
-    const { sourceRow: _source, ...meaning } = c;
+    const { sourceRow: _source, result: _result, ...meaning } = c;
     const signature = JSON.stringify(meaning);
     if (seen.has(pair)) {
       const first = seen.get(pair)!;
-      if (first.signature === signature) duplicates++;
-      else {
+      if (first.signature === signature) {
+        const outcomes = new Set(first.value.results);
+        if (outcomes.has(result)) duplicates++;
+        else {
+          resultVariations++;
+          outcomes.add(result);
+          // Fixed order also makes reuploads with reordered rows idempotent.
+          first.value.results = OUTCOMES.filter(outcome => outcomes.has(outcome));
+          first.value.result = first.value.results[0];
+        }
+      } else {
         const original = JSON.parse(first.signature) as Record<string, unknown>;
         const changed = Object.entries(meaning).filter(([key, value]) => original[key] !== value).map(([key]) => key);
         fail(
@@ -584,7 +601,8 @@ export function analyze(
       }
       continue;
     }
-    seen.set(pair, { signature, row });
+    c.results = [result];
+    seen.set(pair, { signature, row, value: c });
     cases.push(c);
   }
   if (!rows) issue(null, 'file', 'The export has no case rows.');
@@ -602,6 +620,13 @@ export function analyze(
       `${duplicates} identical duplicate rows were counted once.`,
       'warning',
     );
+  if (resultVariations)
+    issue(
+      null,
+      'final_result',
+      `${resultVariations} additional outcomes for existing ID pairs were counted once per result. A case counts as Correct whenever Correct is present, regardless of Excel row order. Result categories may overlap.`,
+      'warning',
+    );
   if (summaryRows > 1)
     issue(
       null,
@@ -609,11 +634,14 @@ export function analyze(
       'More than one summary row was found. Export one complete detail table.',
     );
   const uniqueCounts = aggregate(cases);
+  // Freeze this before adding summary errors, so one mismatch cannot switch
+  // subsequent comparisons back to raw row totals and create false mismatches.
+  const distinctCounts = colsPresent && !errorCount ? uniqueCounts : null;
   for (const control of controlTotals)
     for (const [key, n] of Object.entries(control)) {
       const checked =
-        colsPresent && !errorCount
-          ? uniqueCounts[key as keyof Counts]
+        distinctCounts
+          ? distinctCounts[key as keyof Counts]
           : sourceCounts[key as keyof Counts];
       if (n !== checked)
         issue(
@@ -639,6 +667,8 @@ export function analyze(
     warningCount,
     dates,
     sourceCounts,
+    distinctCounts,
+    resultVariations,
     controlTotals,
     headers: table.headers,
     unknownQueues: [...unknownQueues].sort(),

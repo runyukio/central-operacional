@@ -51,6 +51,28 @@ test("actual worksheet cells are read after patching the declared dimension to A
   assert.equal(table.rows.length, 180);
 });
 
+test("rule updates reject old unsaved drafts but preserve retries for already saved reports", async () => {
+  let saved = false;
+  let writes = 0;
+  const draft = { id: "old-draft", createdById: author.id, snapshot: JSON.stringify({ ruleVersion: "quality-weekly-v3" }) };
+  const tx = {
+    $executeRaw: async () => 0,
+    qualityWeeklyDraft: { findUnique: async () => draft },
+    qualityWeeklyReport: {
+      findUnique: async () => saved ? { id: draft.id, version: 1 } : null,
+      create: async () => { writes++; },
+    },
+  };
+  const db = { $transaction: async (callback: (value: typeof tx) => Promise<unknown>) => callback(tx) } as unknown as PrismaClient;
+  const storage = { read: async () => new Uint8Array(), write: async () => undefined };
+  const service = createQualityWeeklyService(db, storage);
+  await assert.rejects(() => service.commit({ draftId: draft.id, complete: true, replace: true }, author),
+    (error: unknown) => error instanceof QualityWeeklyError && error.status === 409 && /calculation rules changed/.test(error.message));
+  saved = true;
+  assert.deepEqual(await service.commit({ draftId: draft.id, complete: true, replace: true }, author), { id: draft.id, version: 1, unchanged: true });
+  assert.equal(writes, 0);
+});
+
 test("PostgreSQL full flow: immutable mapping, source, preview, Word, idempotency and concurrent revisions", { skip: !process.env.QUALITY_QA_DATABASE_URL }, async () => {
   const url = new URL(process.env.QUALITY_QA_DATABASE_URL!);
   assert.ok(["127.0.0.1", "localhost"].includes(url.hostname), "Synthetic integration tests must NEVER target a remote database");

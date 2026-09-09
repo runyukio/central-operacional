@@ -136,6 +136,7 @@ export function createQualityWeeklyService(db: PrismaClient, storage: QualitySto
         const completed = await tx.qualityWeeklyReport.findUnique({ where: { id: input.draftId } });
         if (completed) return { id: completed.id, version: completed.version, unchanged: true };
         const snapshot = snapshotOf(draft.snapshot);
+        if (snapshot.ruleVersion !== RULE_VERSION) throw new ErrorWithStatus("The calculation rules changed. Create a new preview and review the results before saving.", 409);
         const expected = draft.expectations as Record<string, string | null>;
         const heads = await tx.qualityWeeklyHead.findMany({ where: { weekStart: { in: Object.keys(expected) } }, include: { report: true } });
         const current = heads.find(h => h.weekStart === snapshot.start)?.report;

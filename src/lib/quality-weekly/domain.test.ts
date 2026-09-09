@@ -6,6 +6,7 @@ import {
   aggregate,
   analyze,
   buildSections,
+  buildAgents,
   dateValue,
   dayAdd,
   FIELDS,
@@ -15,6 +16,7 @@ import {
   rate,
   weekStart,
   change,
+  RULE_VERSION,
 } from './domain';
 import type { Cell, Mapping, SourceTable } from './domain';
 import { readTables, selectTable } from './workbook';
@@ -82,15 +84,64 @@ void test('identical duplicates count once, different audit IDs remain different
   assert.equal(result.duplicates, 1);
   assert.equal(result.cases.length, 2);
 });
-void test('conflicting results for a pair block generation', () => {
-  const result = analyze(
-    table([record(), record({ result: 'Leakage', leakage: 1 })]),
-    mapping,
-  );
-  assert.equal(result.valid, false);
-  assert.match(result.issues[0].message, /conflicting/);
-  assert.match(result.issues[0].message, /Excel row 2/);
-  assert.match(result.issues[0].message, /Different fields: result/);
+void test('Correct counts once whenever present, before or after another result', () => {
+  const rows = [record(), record({ result: 'Leakage', leakage: 1 })];
+  for (const ordered of [rows, [...rows].reverse()]) {
+    const result = analyze(table(ordered), mapping);
+    assert.equal(result.valid, true);
+    assert.equal(result.errorCount, 0);
+    assert.equal(result.resultVariations, 1);
+    assert.match(result.issues[0].message, /regardless of Excel row order/);
+    assert.deepEqual(result.cases[0].results, ['Correct', 'Leakage']);
+    assert.equal(result.cases[0].result, 'Correct');
+    const m = aggregate(result.cases);
+    assert.equal(m.n, 1);
+    assert.equal(m.correct, 1);
+    assert.equal(m.leakage, 1);
+    assert.equal(m.allow, 1);
+    assert.equal(m.accuracy, 1);
+  }
+});
+void test('each outcome is distinct per key even with repeated and interleaved result rows', () => {
+  const rows = [record(), record({ result: 'Leakage', leakage: 1 }),
+    record({ result: 'False_Positive', falsePositive: 1 }), record({ result: 'Mislabeled', mislabeled: 1 })];
+  const result = analyze(table([...rows, ...rows].reverse()), mapping);
+  assert.equal(result.valid, true);
+  assert.equal(result.duplicates, 4);
+  assert.equal(result.resultVariations, 3);
+  assert.deepEqual(result.cases[0].results, ['Correct', 'Leakage', 'False_Positive', 'Mislabeled']);
+  const m = aggregate(result.cases);
+  assert.deepEqual([m.n, m.correct, m.leakage, m.falsePositive, m.mislabeled], [1, 1, 1, 1, 1]);
+  // Preserve the existing additive adjusted formula, not an implicit result union.
+  assert.equal(m.adjustedAccuracy, 2);
+});
+void test('different error results without Correct do not invent a Correct outcome', () => {
+  const result = analyze(table([record({ result: 'Leakage', leakage: 1 }), record({ result: 'Mislabeled', mislabeled: 1 })]), mapping);
+  assert.equal(result.valid, true);
+  assert.equal(aggregate(result.cases).accuracy, 0);
+  assert.equal(aggregate(result.cases).n, 1);
+});
+void test('a Correct row cannot bypass conflicts in case identity or base amounts', () => {
+  for (const override of [{ date: '2026-08-25' }, { agentId: '18' }, { agentName: 'Agent B' },
+    { queueId: 'a' }, { allow: 0, labeled: 1 }] as Record<string, Cell>[]) {
+    const result = analyze(table([record(), record({ ...override, result: 'Leakage', leakage: 1 })]), mapping);
+    assert.equal(result.valid, false);
+    assert.equal(result.distinctCounts, null);
+    assert.match(result.issues[0].message, /conflicting/);
+    assert.match(result.issues[0].message, /Excel row 2/);
+  }
+  assert.equal(analyze(table([record(), record({ result: 'Correct', leakage: 1 })]), mapping).valid, false);
+});
+void test('canonical outcomes and grouped metrics are independent of row order', () => {
+  const rows = [record(), record({ result: 'Leakage', leakage: 1 }), record({ qaId: 'qa2', queueId: 'a', agentId: '18', agentName: 'Agent B' })];
+  const first = analyze(table(rows), mapping), last = analyze(table([...rows].reverse()), mapping);
+  const canonical = (analysis: typeof first) => analysis.cases.map(({ sourceRow: _row, ...c }) => c).sort((a, b) => a.qaId.localeCompare(b.qaId));
+  assert.deepEqual(canonical(first), canonical(last));
+  assert.equal(buildSections(first.cases).MATERIAL.metrics.n, 1);
+  assert.equal(buildSections(first.cases).MATERIAL.agents[0].correct, 1);
+  assert.equal(buildAgents(first.cases).find(a => a.name === 'Agent A')?.accuracy, 1);
+  assert.equal(aggregate(first.cases).accuracy, 1);
+  assert.equal(RULE_VERSION, 'quality-weekly-v4');
 });
 void test('concatenation collisions are rejected', () => {
   const result = analyze(
@@ -207,6 +258,23 @@ void test('mismatching control totals block an incomplete export', () => {
   assert.equal(r.valid, false);
   assert.ok(r.issues.some((i) => i.field === 'summary'));
 });
+void test('overlapping outcomes reconcile with distinct summary amounts', () => {
+  const summary = record({ agentId: '汇总', qaId: '', result: '', leakage: 1 });
+  const r = analyze(table([summary, record(), record({ result: 'Leakage', leakage: 1 }), record()]), mapping);
+  assert.equal(r.valid, true);
+  assert.equal(r.sourceCounts.n, 3);
+  assert.equal(r.distinctCounts?.n, 1);
+  assert.equal(r.distinctCounts?.correct, 1);
+  assert.equal(r.distinctCounts?.leakage, 1);
+});
+void test('one summary mismatch does not switch other controls back to duplicated row counts', () => {
+  const summary = record({ agentId: '汇总', qaId: '', result: '', sampling: 2 });
+  const r = analyze(table([summary, record(), record()]), mapping);
+  assert.equal(r.valid, false);
+  assert.equal(r.errorCount, 1);
+  assert.equal(r.distinctCounts?.n, 1);
+  assert.match(r.issues.find(i => i.severity === 'error')!.message, /total for n/);
+});
 void test('blank required numeric amounts are not interpreted as zero', () => {
   assert.equal(
     analyze(table([record({ leakage: null })]), mapping).valid,
@@ -317,6 +385,35 @@ void test('formatted numeric KwaiBI dates keep their calendar date and remain se
   assert.equal(result.valid, true);
   assert.equal(result.cases[0].date, '2026-09-07');
 });
+void test(
+  'provided result-variation export matches the confirmed distinct Correct formula',
+  { skip: !process.env.QA_RESULT_VARIANTS_SOURCE },
+  () => {
+    const t = selectTable(readTables(readFileSync(process.env.QA_RESULT_VARIANTS_SOURCE!), 'kwai.xlsx'));
+    const queueIndex = t.headers.indexOf('audit_queue_id');
+    // Test-only mappings exercise whole-file counts without inferring an operational de-para.
+    const queues = [...new Set(t.rows.map(r => String(r[queueIndex] || '')).filter(Boolean))];
+    const testMapping: Mapping[] = queues.map(queueId => ({ queueId, queueName: `Test queue ${queueId}`, section: 'MATERIAL', industry: null }));
+    const r = analyze(t, testMapping);
+    assert.equal(r.valid, true, JSON.stringify(r.issues));
+    assert.equal(r.rows, 9705);
+    assert.equal(r.cases.length, 9665);
+    assert.equal(r.resultVariations, 40);
+    assert.equal(r.duplicates, 0);
+    const m = aggregate(r.cases);
+    for (const [key, value] of Object.entries({ n: 9665, correct: 9119, allow: 6678, labeled: 2987, leakage: 202, falsePositive: 70, mislabeled: 314 })) {
+      assert.equal(m[key as keyof typeof m], value, key);
+    }
+    assert.equal(rate(m.accuracy), '94.35%');
+    assert.equal(rate(m.adjustedAccuracy), '97.60%');
+    assert.equal(r.errorCount, 0);
+    assert.equal(r.warningCount, 2);
+    assert.deepEqual(r.distinctCounts, m);
+    const reversed = analyze({ ...t, rows: [...t.rows].reverse(), rowNumbers: [...t.rowNumbers].reverse() }, testMapping);
+    assert.equal(reversed.valid, true);
+    assert.deepEqual(aggregate(reversed.cases), m);
+  },
+);
 void test(
   'provided export reconciles all 9291 cases despite incorrect dimensions',
   { skip: !process.env.QA_SOURCE },
