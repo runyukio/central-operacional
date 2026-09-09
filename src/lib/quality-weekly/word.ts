@@ -210,6 +210,7 @@ export async function createWord(
       { spacing: { after: 180 } },
     ),
   );
+  if (s.trend.some(t => t.source)) children.push(p('Monday–Friday moderation periods. The selected week and six prior periods are calculated from the same preserved upload. Weekends are excluded; periods without data remain N/A.'));
   children.push(heading('CD Sampling Agents'), p('Only material queues.'));
   const cd = s.sections.CD;
   children.push(
@@ -271,8 +272,8 @@ export async function createWord(
     ...s.trend.map((t) => (t.weekNumber ? `Week ${t.weekNumber}\n${t.start}` : t.start)),
     'Change',
   ];
-  const current = s.trend[3]?.[section],
-    previous = s.trend[2]?.[section];
+  const current = s.trend.at(-1)?.[section],
+    previous = s.trend.at(-2)?.[section];
   const trendRows = [
     trendHeaders,
     [
@@ -290,7 +291,8 @@ export async function createWord(
   children.push(
     new Table({
       width: { size: 15138, type: WidthType.DXA },
-      columnWidths: [4100, 2207, 2207, 2207, 2207, 2210],
+      columnWidths: [3500, ...Array.from({ length: s.trend.length + 1 }, (_, i) =>
+        Math.floor(11638 / (s.trend.length + 1)) + (i < 11638 % (s.trend.length + 1) ? 1 : 0))],
       layout: TableLayoutType.FIXED,
       borders: {
         top: border,
@@ -333,12 +335,12 @@ export async function createWord(
   children.push(
     reportLink(section),
     p(
-      'Rates are calculated from case counts. N/A means the denominator is zero or the week has no validated report. Weekly changes are expressed in percentage points.',
+      'Rates are calculated from case counts. N/A means the denominator is zero or the week has no validated data. Weekly changes are expressed in percentage points.',
       {
         spacing: { before: 180 },
         children: [
           text(
-            'Rates are calculated from case counts. N/A means the denominator is zero or the week has no validated report. Weekly changes are expressed in percentage points.',
+            'Rates are calculated from case counts. N/A means the denominator is zero or the week has no validated data. Weekly changes are expressed in percentage points.',
             { size: 18, color: '667061' },
           ),
         ],

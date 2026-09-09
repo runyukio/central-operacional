@@ -1,6 +1,8 @@
-export const RULE_VERSION = 'quality-weekly-v4';
+export const RULE_VERSION = 'quality-weekly-v5';
+export const HISTORY_WEEKS = 7;
 export const RULE_DEFINITION = {
-  week: 'Moderation date; Monday to Sunday; manual operation week number',
+  week: 'Moderation date; Monday to Friday; weekends excluded from weekly metrics; manual operation week number',
+  history: 'Selected week and six previous Monday–Friday periods calculated from the same validated upload and frozen section mapping; absent weeks remain N/A',
   key: 'Concatenation of text QA case ID + audit case ID; collisions and non-result conflicts block; identical duplicates count once',
   outcomes: 'Distinct case keys are counted independently per final_result; result categories may overlap; Excel row order has no precedence',
   sampling: 'N = distinct valid case keys', leakageRate: 'Leakage / Allow', falsePositiveRate: 'False Positive / Labeled',
@@ -119,6 +121,9 @@ export type SectionReport = {
 };
 export type TrendPoint = Partial<Record<AdditionalSection, Metrics | null>> & {
   start: string;
+  end?: string;
+  source?: 'upload' | 'missing';
+  observedDays?: string[];
   weekNumber: number | null;
   reportId: string | null;
   CD: Metrics | null;
@@ -158,6 +163,7 @@ export type Validation = {
   sourceCounts: Counts;
   distinctCounts?: Counts | null;
   resultVariations?: number;
+  weekendCases?: number;
   controlTotals: Record<string, number>[];
   headers: string[];
   unknownQueues: string[];
@@ -218,6 +224,14 @@ export function dayAdd(date: string, amount: number): string {
 export function weekStart(date: string): string {
   const d = new Date(date + 'T12:00:00Z');
   return dayAdd(date, -((d.getUTCDay() + 6) % 7));
+}
+export function isReportingDay(date: string): boolean {
+  const day = new Date(date + 'T12:00:00Z').getUTCDay();
+  return day >= 1 && day <= 5;
+}
+export function casesInReportingWeek(cases: Case[], start: string): Case[] {
+  const end = dayAdd(start, 4);
+  return cases.filter(c => c.date >= start && c.date <= end);
 }
 export function dateValue(value: Cell | undefined): string {
   let result = '';
@@ -483,7 +497,7 @@ export function analyze(
     if (pendingMapping.length)
       issue(row, 'mapping', `Queue ${queueId} has an incomplete mapping: ${pendingMapping.join(', ')}. Complete Queue mapping and revalidate.`);
     const date = dateValue(get('date'));
-    if (date) {
+    if (date && isReportingDay(date)) {
       const start = weekStart(date);
       if (!calendar.has(start))
         calendar.set(start, { count: 0, days: new Set() });
@@ -654,8 +668,8 @@ export function analyze(
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([start, x]) => ({
       start,
-      end: dayAdd(start, 6),
-      count: cases.filter((c) => weekStart(c.date) === start).length || x.count,
+      end: dayAdd(start, 4),
+      count: casesInReportingWeek(cases, start).length || x.count,
       days: [...x.days].sort(),
     }));
   return {
@@ -669,6 +683,7 @@ export function analyze(
     sourceCounts,
     distinctCounts,
     resultVariations,
+    weekendCases: cases.filter(c => !isReportingDay(c.date)).length,
     controlTotals,
     headers: table.headers,
     unknownQueues: [...unknownQueues].sort(),
@@ -761,4 +776,25 @@ export function trendPoint(
     industryB:
       snapshot.sections.ACCOUNTS.rows.find((r) => r.id === 'B') ?? null,
   };
+}
+
+// All periods use the same upload, mapping and rules. Historical reports are
+// immutable artifacts, not a substitute for the broader source selected here.
+export function buildUploadTrend(cases: Case[], start: string, weekNumber: number): TrendPoint[] {
+  return Array.from({ length: HISTORY_WEEKS }, (_, i) => {
+    const periodStart = dayAdd(start, -7 * (HISTORY_WEEKS - 1 - i));
+    const subset = casesInReportingWeek(cases, periodStart);
+    const metadata = {
+      start: periodStart,
+      end: dayAdd(periodStart, 4),
+      weekNumber: periodStart === start ? weekNumber : null,
+      reportId: null,
+      source: subset.length ? 'upload' as const : 'missing' as const,
+      observedDays: [...new Set(subset.map(c => c.date))].sort(),
+    };
+    if (!subset.length) return {
+      ...metadata, CD: null, ACCOUNTS: null, MATERIAL: null, industryA: null, industryB: null,
+    };
+    return { ...trendPoint({ id: '', start: periodStart, weekNumber, sections: buildSections(subset) }), ...metadata };
+  });
 }

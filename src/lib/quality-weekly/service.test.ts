@@ -164,7 +164,8 @@ test("PostgreSQL full flow: immutable mapping, source, preview, Word, idempotenc
     const staleContext = await preview(date, 3);
     const priorUpdate = await preview("2030-12-16", 4);
     await service.commit({ draftId: priorUpdate.draftId, complete: true, replace: true }, author);
-    await assert.rejects(() => service.commit({ draftId: staleContext.draftId, complete: true, replace: true }, author), isStatus(409));
+    // A separately saved prior week cannot change this upload-based history.
+    assert.equal((await service.commit({ draftId: staleContext.draftId, complete: true, replace: true }, author)).id, staleContext.draftId);
     await service.mapping((await source(excel(maps.map((row, i) => i ? [row[0], `${row[1]} renamed`, row[2], row[3]] : row)), "mapping")).id, author);
     const revalidated = await service.revalidate(saved.uploadId, author);
     assert.notEqual(revalidated.mappingId, saved.mappingId);

@@ -141,7 +141,7 @@ void test('canonical outcomes and grouped metrics are independent of row order',
   assert.equal(buildSections(first.cases).MATERIAL.agents[0].correct, 1);
   assert.equal(buildAgents(first.cases).find(a => a.name === 'Agent A')?.accuracy, 1);
   assert.equal(aggregate(first.cases).accuracy, 1);
-  assert.equal(RULE_VERSION, 'quality-weekly-v4');
+  assert.equal(RULE_VERSION, 'quality-weekly-v5');
 });
 void test('concatenation collisions are rejected', () => {
   const result = analyze(
@@ -315,7 +315,11 @@ void test('sparse week exposes observed days for explicit completeness confirmat
     table([record(), record({ qaId: '2', date: '2026-08-30' })]),
     mapping,
   );
-  assert.deepEqual(r.dates[0].days, ['2026-08-24', '2026-08-30']);
+  assert.deepEqual(r.dates[0].days, ['2026-08-24']);
+  assert.equal(r.dates[0].end, '2026-08-28');
+  assert.equal(r.dates[0].count, 1);
+  assert.equal(r.weekendCases, 1);
+  assert.equal(r.distinctCounts?.n, 2, 'source reconciliation still includes the weekend');
 });
 void test('mapping requires unique queue classifications and Accounts industry', () => {
   const t: SourceTable = {

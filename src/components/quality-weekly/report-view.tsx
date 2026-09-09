@@ -28,9 +28,9 @@ function Trend({ snapshot, section }: { snapshot: Snapshot; section: "CD" | "ACC
   const [hidden, setHidden] = useState<string[]>([]);
   const data = spec.labels.map((label, i) => ({ label, ...Object.fromEntries(series.map(s => [s.label, s.values[i] == null ? null : s.values[i]! * 100])) }));
   return <div className="space-y-3">
-    <p className="text-xs text-muted">Current moderation week and three previous weeks · Accuracy (%) · Gaps mean no validated data · Focused percentage scale</p>
+    <p className="text-xs text-muted">Current moderation week and {snapshot.trend.length - 1} previous weeks · Accuracy (%) · Gaps mean no validated data · Focused percentage scale</p>
     <div className="flex flex-wrap gap-2" aria-label="Chart legend">{series.map(s => <button type="button" key={s.label} aria-pressed={!hidden.includes(s.label)} onClick={() => setHidden(values => values.includes(s.label) ? values.filter(v => v !== s.label) : [...values, s.label])} className={`rounded-lg border border-border px-3 py-1.5 text-xs font-bold ${hidden.includes(s.label) ? "opacity-40" : "text-navy-950"}`}><span aria-hidden="true" className="mr-2 inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: s.color }} />{s.label}</button>)}<span className="self-center text-xs text-muted">— Target 95%</span></div>
-    <div className="h-[280px] min-w-0" role="img" aria-label={`${SECTION_NAMES[section]} accuracy over four weeks. Exact values are in the weekly comparison below.`}>
+    <div className="h-[280px] min-w-0" role="img" aria-label={`${SECTION_NAMES[section]} accuracy over ${snapshot.trend.length} weeks. Exact values are in the weekly comparison below.`}>
       <ResponsiveContainer width="100%" height="100%"><LineChart data={data} margin={{ top: 16, right: 20, bottom: 12, left: 4 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
         <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#7c879a" }} tickLine={false} />
@@ -49,7 +49,7 @@ export function QualityReportView({ snapshot, initialSection = "CD", initialView
   const [search, setSearch] = useState("");
   const [limit, setLimit] = useState(50);
   const current = snapshot.sections[section] || snapshot.sections.CD;
-  const previous = snapshot.trend[2]?.[section];
+  const previous = snapshot.trend.at(-2)?.[section];
   const rows = view === "agents" ? snapshot.agents.filter(a => a.section === section).map(a => ({ ...a, name: `${a.name} · ${a.queueName}` }))
     : view === "industry" ? current.rows : view === "categories" ? current.categories || [] : current.queues || current.rows;
   const filtered = rows.filter(r => `${r.name} ${r.id}`.toLowerCase().includes(search.toLowerCase()));
@@ -73,9 +73,10 @@ export function QualityReportView({ snapshot, initialSection = "CD", initialView
       <div className="mt-3"><MetricTable rows={[{ id: "total", name: "Section total", ...current.metrics }]} /></div>
     </Panel>
     <Panel title="Weekly comparison">
-      <div className="overflow-x-auto"><table className="w-full min-w-[640px] text-left text-xs text-navy-950"><thead className="bg-slate-50 text-muted"><tr><th className="p-3">Accuracy · {sectionName(snapshot, section)}</th>{snapshot.trend.map(t => <th className="p-3" key={t.start}>{t.weekNumber === null ? "Missing week" : `Week ${t.weekNumber}`}<span className="mt-1 block font-normal">{t.start}</span></th>)}<th className="p-3">Weekly change</th></tr></thead>
+      <div className="overflow-x-auto"><table className="w-full min-w-[880px] text-left text-xs text-navy-950"><thead className="bg-slate-50 text-muted"><tr><th className="p-3">Accuracy · {sectionName(snapshot, section)}</th>{snapshot.trend.map(t => <th className="p-3" key={t.start}>{t.weekNumber !== null ? `Week ${t.weekNumber}` : t.source === "upload" ? "From upload" : "Missing week"}<span className="mt-1 block font-normal">{t.start}{t.end ? ` → ${t.end}` : ""}</span>{t.observedDays && <span className="mt-1 block font-normal">{t.observedDays.length}/5 days with cases</span>}</th>)}<th className="p-3">Weekly change</th></tr></thead>
         <tbody>{[["accuracy", "Including mislabeled cases"], ["adjustedAccuracy", "Not including mislabeled cases"]].map(([metric, label]) => <tr key={metric} className="border-t border-border"><th className="p-3">{label}</th>{snapshot.trend.map(t => <td className="p-3 tabular-nums" key={t.start}>{rate(t[section]?.[metric as "accuracy" | "adjustedAccuracy"])}</td>)}<td className="p-3 tabular-nums">{change(current.metrics[metric as "accuracy" | "adjustedAccuracy"], previous?.[metric as "accuracy" | "adjustedAccuracy"])}</td></tr>)}</tbody></table></div>
       <p className="mt-3 text-xs text-muted">N/A means no validated data or a zero denominator. Weekly change is a difference in percentage points, not a relative percentage.</p>
+      {snapshot.trend.some(t => t.source) && <p className="mt-2 text-xs text-muted">All seven Monday–Friday periods use this report&apos;s preserved upload and section mapping, without requiring separate saved reports. Days without cases are not proof of an incomplete export; check source coverage before confirming.</p>}
     </Panel>
   </div>;
 }

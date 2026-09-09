@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { QualityWeeklyError as ErrorWithStatus } from "./access";
-import { aggregate, analyze, buildAgents, buildSections, dayAdd, dateValue, mappingPending, parseMapping, RULE_VERSION, RULE_DEFINITION, trendPoint, weekStart } from "./domain";
+import { aggregate, analyze, buildAgents, buildSections, buildUploadTrend, casesInReportingWeek, isReportingDay, HISTORY_WEEKS, dayAdd, dateValue, mappingPending, parseMapping, RULE_VERSION, RULE_DEFINITION, weekStart } from "./domain";
 import type { MappingEntry, Snapshot, Validation } from "./domain";
 import { QUEUE_REPORT_METADATA } from "../queue-report-metadata";
 import { readTables, selectTable, MAX_UPLOAD } from "./workbook";
@@ -84,7 +84,7 @@ export function createQualityWeeklyService(db: PrismaClient, storage: QualitySto
       return importAsset(previous.assetId, author, previous.sheet, dateColumn || previous.dateColumn || undefined, true);
     },
     async preview(input: { uploadId: string; start: string; weekNumber: number; complete: boolean }, author: QualityAuthor) {
-      if (dateValue(input.start) !== input.start || weekStart(input.start) !== input.start) throw new ErrorWithStatus("Select a Monday. The reporting period ends on Sunday.");
+      if (dateValue(input.start) !== input.start || weekStart(input.start) !== input.start) throw new ErrorWithStatus("Select a Monday. The reporting period ends on Friday.");
       if (!Number.isInteger(input.weekNumber) || input.weekNumber < 1 || input.weekNumber > 53) throw new ErrorWithStatus("Enter the operation's week number (1–53).");
       if (!input.complete) throw new ErrorWithStatus("Confirm that this is the complete weekly export.");
       const imported = await db.qualityWeeklyImport.findUnique({ where: { id: input.uploadId }, include: { mapping: true, asset: true } });
@@ -95,32 +95,31 @@ export function createQualityWeeklyService(db: PrismaClient, storage: QualitySto
       // Revalidate on the server, with the exact frozen mapping; never trust client metrics.
       const analysis = analyze(table(bytes, imported.asset.filename, imported.sheet), entriesOf(imported.mapping.entries), imported.dateColumn || undefined);
       if (!analysis.valid) throw new ErrorWithStatus("Source validation failed. Revalidate the import.", 422);
-      const cases = analysis.cases.filter(c => weekStart(c.date) === input.start);
+      const cases = casesInReportingWeek(analysis.cases, input.start);
       if (!cases.length) throw new ErrorWithStatus("No valid cases exist in the selected moderation week.", 422);
+      const trend = buildUploadTrend(analysis.cases, input.start, input.weekNumber);
+      const historyStart = dayAdd(input.start, -7 * (HISTORY_WEEKS - 1));
+      const historyEnd = dayAdd(input.start, 4);
+      const contextCases = analysis.cases.filter(c => c.date >= historyStart && c.date <= historyEnd && isReportingDay(c.date));
       return db.$transaction(async tx => {
-        const starts = [3, 2, 1, 0].map(i => dayAdd(input.start, -7 * i));
+        // Only this active week can invalidate publication. Other weeks are
+        // calculated from this preserved upload, never from mutable heads.
+        const starts = [input.start];
         const heads = await tx.qualityWeeklyHead.findMany({ where: { weekStart: { in: starts } }, include: { report: true } });
         const expectations = Object.fromEntries(starts.map(start => [start, heads.find(h => h.weekStart === start)?.reportId ?? null]));
         const previousRow = heads.find(h => h.weekStart === input.start)?.report;
         const previous = previousRow ? snapshotOf(previousRow.snapshot) : null;
         const max = await tx.qualityWeeklyReport.aggregate({ where: { weekStart: input.start }, _max: { version: true } });
         const snapshot: Snapshot = {
-          id: randomUUID(), start: input.start, end: dayAdd(input.start, 6), weekNumber: input.weekNumber,
+          id: randomUUID(), start: input.start, end: dayAdd(input.start, 4), weekNumber: input.weekNumber,
           version: (max._max.version ?? 0) + 1, createdAt: new Date().toISOString(), createdBy: author.name,
           ruleVersion: RULE_VERSION, ruleDefinition: RULE_DEFINITION, uploadId: imported.id, mappingId: imported.mappingId!, mappings: entriesOf(imported.mapping!.entries),
           filename: imported.asset.filename, digest: imported.digest, metrics: aggregate(cases), sections: buildSections(cases), agents: buildAgents(cases),
-          trend: starts.slice(0, 3).map(start => {
-            const head = heads.find(h => h.weekStart === start);
-            if (!head) return { start, weekNumber: null, reportId: null, CD: null, ACCOUNTS: null, MATERIAL: null, industryA: null, industryB: null };
-            const prior = snapshotOf(head.report.snapshot);
-            // Legacy Material totals include Unit and are not comparable to the new separate section.
-            return { ...trendPoint(prior), ...(prior.ruleVersion === 'quality-weekly-v1' ? { MATERIAL: null } : {}) };
-          })
+          trend,
         };
-        snapshot.trend.push(trendPoint(snapshot));
-        const canonicalCases = cases.map(({ sourceRow: _row, ...rest }) => rest).sort((a, b) => JSON.stringify([a.qaId, a.auditId]).localeCompare(JSON.stringify([b.qaId, b.auditId])));
+        const canonicalCases = contextCases.map(({ sourceRow: _row, ...rest }) => rest).sort((a, b) => JSON.stringify([a.qaId, a.auditId]).localeCompare(JSON.stringify([b.qaId, b.auditId])));
         const contentHash = sha256(JSON.stringify({ start: input.start, weekNumber: input.weekNumber, rules: RULE_VERSION,
-          mapping: snapshot.mappings, cases: canonicalCases, previousWeeks: snapshot.trend.slice(0, 3).map(t => t.reportId) }));
+          mapping: snapshot.mappings, cases: canonicalCases }));
         await tx.qualityWeeklyDraft.create({ data: { id: snapshot.id, importId: imported.id, snapshot: JSON.stringify(snapshot), expectations: asJson(expectations), contentHash, createdById: author.id } });
         const unchanged = previousRow?.contentHash === contentHash;
         return { draftId: snapshot.id, snapshot, previous, unchanged, existingId: unchanged ? previousRow!.id : null };

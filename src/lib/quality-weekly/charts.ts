@@ -12,9 +12,14 @@ export function chartSpec(
   snapshot: Snapshot,
   kind: 'CD' | 'ACCOUNTS',
 ): ChartSpec {
-  const labels = snapshot.trend.map((p) =>
-    p.weekNumber == null ? p.start : `W${p.weekNumber} · ${p.start}`,
-  );
+  const labels = snapshot.trend.map((p) => {
+    if (snapshot.trend.length > 4) {
+      const [, month, day] = p.start.split('-');
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      return `${day} ${months[Number(month) - 1]}`;
+    }
+    return p.weekNumber == null ? p.start : `W${p.weekNumber} · ${p.start}`;
+  });
   const series =
     kind === 'CD'
       ? [
