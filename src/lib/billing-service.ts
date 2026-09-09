@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { DEFAULT_BILLING_REFERENCE_MONTH } from "@/lib/billing-reference-month";
+export { DEFAULT_BILLING_REFERENCE_MONTH } from "@/lib/billing-reference-month";
 
 import { AuditAction, Prisma, RequestStatus, ScheduleStatus, WorkHourRecordStatus } from "@prisma/client";
 
@@ -48,7 +50,6 @@ import { deletePrivateObject, downloadPrivateObject, isStorageConfigured, upload
 import type { XlsxExportPayload } from "@/lib/xlsx-export";
 
 export const BILLING_START_MONTH = "2026-06";
-export const DEFAULT_BILLING_REFERENCE_MONTH = "2026-08";
 
 const BILLING_PJ_ONLY_MESSAGE = "Billing disponível apenas para parceiros PJ.";
 const BILLING_REQUEST_TYPE_NAME = "Ajuste de Invoice";

@@ -1,5 +1,7 @@
 "use client";
 
+import { DEFAULT_BILLING_REFERENCE_MONTH } from "@/lib/billing-reference-month";
+
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2, CircleDollarSign, Clock, Download, FileText, RefreshCw, Send, WalletCards } from "lucide-react";
@@ -100,7 +102,7 @@ function invoiceQueryParam(name: string) {
 }
 
 export function MyInvoicePage() {
-  const [referenceMonth, setReferenceMonth] = useState(invoiceQueryParam("referenceMonth") || "2026-08");
+  const [referenceMonth, setReferenceMonth] = useState(invoiceQueryParam("referenceMonth") || DEFAULT_BILLING_REFERENCE_MONTH);
   const [payload, setPayload] = useState<MyInvoicePayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

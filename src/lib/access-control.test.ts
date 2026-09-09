@@ -152,7 +152,9 @@ test("acesso pessoal de POC exige agente ativo e não é concedido apenas pela s
     assert.equal(canAccessCampaignAgent(user), false);
     assert.equal(canAccessPathForRole("/performance/meus-dados", user), false);
     assert.equal(canAccessPathForRole("/api/performance/me", user), false);
-    assert.equal(canAccessPathForRole("/campanha", user), false);
+    // ADS supervisors now have a read-only campaign view, never the personal agent view.
+    assert.equal(canAccessPathForRole("/campanha", user), user.role === "SUPERVISOR");
+    assert.equal(canAccessPathForRole("/campanha/agente", user), false);
   }
   const normalizedPoc = { role: " poc ", jobTitle: "agente", lob: "ads", status: "ACTIVE" };
   assert.equal(canAccessOwnPerformance(normalizedPoc), true);

@@ -134,7 +134,7 @@ export function CampaignRafflePage({ view }: { view: "agent" | "staff" }) {
     <div className="space-y-4">
       <PageHeader
         title="Rifa"
-        description={view === "staff" ? "Distribuição segura de tickets da rifa para agentes ADS e PROJECT." : "Consulte os tickets atribuídos a você em cada campanha."}
+        description={view === "staff" ? (payload?.access.canManage ? "Distribuição segura de tickets da rifa para agentes ADS e PROJECT." : "Consulte as campanhas e todos os tickets atribuídos aos agentes. Acesso somente de consulta.") : "Consulte os tickets atribuídos a você em cada campanha."}
         icon={Gift}
         actions={(
           <button type="button" onClick={() => void loadDashboard()} className="premium-control inline-flex h-10 items-center gap-2 px-3.5 text-sm font-extrabold text-navy-950">
@@ -175,7 +175,7 @@ export function CampaignRafflePage({ view }: { view: "agent" | "staff" }) {
         />
       ) : payload?.view === "agent" ? <AgentCampaignView payload={payload} /> : null}
 
-      {createOpen ? (
+      {createOpen && payload?.access.canManage ? (
         <Modal title="Criar campanha" description="A faixa será fixa de 1 a 10.000 e os números não se repetirão dentro desta campanha." onClose={() => !creating && setCreateOpen(false)}>
           <label className="block">
             <span className="mb-1.5 block text-xs font-extrabold uppercase tracking-wide text-muted">Nome da campanha</span>
@@ -215,7 +215,7 @@ export function CampaignRafflePage({ view }: { view: "agent" | "staff" }) {
         </Modal>
       ) : null}
 
-      {pending ? (
+      {pending && payload?.access.canManage ? (
         <DistributionConfirmationModal
           pending={pending}
           sending={sending}
@@ -254,7 +254,7 @@ export function CampaignRafflePage({ view }: { view: "agent" | "staff" }) {
         />
       ) : null}
 
-      {pendingDeletion ? (
+      {pendingDeletion && payload?.access.canManage ? (
         <TicketDeletionModal
           ticket={pendingDeletion}
           deleting={deleting}
@@ -314,7 +314,8 @@ function StaffCampaignView({
   onPrepare: (employeeNames: string[]) => void;
   onDeleteTicket: (ticket: PendingTicketDeletion) => void;
 }) {
-  const [staffTab, setStaffTab] = useState<"distribute" | "tickets">("distribute");
+  const [staffTab, setStaffTab] = useState<"distribute" | "tickets">(payload.access.canManage ? "distribute" : "tickets");
+  const activeStaffTab = payload.access.canManage ? staffTab : "tickets";
   const [ticketSearch, setTicketSearch] = useState("");
   const campaignId = selectedCampaignId || payload.selectedCampaignId || "";
   const selectedCampaign = payload.campaigns.find((campaign) => campaign.id === campaignId) ?? null;
@@ -339,9 +340,9 @@ function StaffCampaignView({
             {payload.campaigns.map((campaign) => <option key={campaign.id} value={campaign.id}>{campaign.name} · {campaign.status === "ACTIVE" ? "Ativa" : "Encerrada"}</option>)}
           </select>
         </label>
-        <button type="button" onClick={onCreate} className="premium-button inline-flex h-11 items-center justify-center gap-2 px-4 text-sm font-extrabold">
+        {payload.access.canManage ? <button type="button" onClick={onCreate} className="premium-button inline-flex h-11 items-center justify-center gap-2 px-4 text-sm font-extrabold">
           <Plus className="h-4 w-4" /> Nova campanha
-        </button>
+        </button> : null}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -355,30 +356,30 @@ function StaffCampaignView({
         <div className="card grid min-h-[260px] place-items-center p-8 text-center">
           <div>
             <Gift className="mx-auto h-10 w-10 text-blue-500" />
-            <h2 className="mt-3 text-lg font-black text-navy-950">Crie a primeira campanha</h2>
-            <p className="mt-1 text-sm text-muted">Depois você poderá selecionar os agentes ADS e PROJECT e distribuir números aleatórios.</p>
+            <h2 className="mt-3 text-lg font-black text-navy-950">{payload.access.canManage ? "Crie a primeira campanha" : "Nenhuma campanha disponível"}</h2>
+            <p className="mt-1 text-sm text-muted">{payload.access.canManage ? "Depois você poderá selecionar os agentes ADS e PROJECT e distribuir números aleatórios." : "As campanhas e os tickets aparecerão aqui quando forem cadastrados pelo WFM ou ADM."}</p>
           </div>
         </div>
       ) : (
         <>
           <div className="card flex flex-wrap gap-2 p-2">
-            <button
+            {payload.access.canManage ? <button
               type="button"
               onClick={() => setStaffTab("distribute")}
               className={cn("rounded-xl px-4 py-2 text-sm font-extrabold transition", staffTab === "distribute" ? "bg-blue-600 text-white shadow-soft" : "text-muted hover:bg-slate-50 hover:text-navy-950")}
             >
               Distribuir tickets
-            </button>
+            </button> : null}
             <button
               type="button"
               onClick={() => setStaffTab("tickets")}
-              className={cn("rounded-xl px-4 py-2 text-sm font-extrabold transition", staffTab === "tickets" ? "bg-blue-600 text-white shadow-soft" : "text-muted hover:bg-slate-50 hover:text-navy-950")}
+              className={cn("rounded-xl px-4 py-2 text-sm font-extrabold transition", activeStaffTab === "tickets" ? "bg-blue-600 text-white shadow-soft" : "text-muted hover:bg-slate-50 hover:text-navy-950")}
             >
               Todos os tickets
             </button>
           </div>
 
-          {staffTab === "distribute" ? (
+          {activeStaffTab === "distribute" ? (
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.7fr)]">
           <Panel title="Distribuir tickets">
             <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_190px]">
@@ -467,7 +468,7 @@ function StaffCampaignView({
               holders={filteredTicketHolders}
               search={ticketSearch}
               setSearch={setTicketSearch}
-              onDeleteTicket={onDeleteTicket}
+              onDeleteTicket={payload.access.canManage ? onDeleteTicket : undefined}
             />
           )}
         </>
@@ -485,7 +486,7 @@ function TicketAssignmentsPanel({
   holders: StaffPayload["ticketHolders"];
   search: string;
   setSearch: (value: string) => void;
-  onDeleteTicket: (ticket: PendingTicketDeletion) => void;
+  onDeleteTicket?: (ticket: PendingTicketDeletion) => void;
 }) {
   const visibleTickets = holders.reduce((total, holder) => total + holder.tickets.length, 0);
   return (
@@ -521,7 +522,7 @@ function TicketAssignmentsPanel({
                     <p className="font-mono text-sm font-black tracking-wider text-navy-950">{formatRaffleNumber(ticket.number)}</p>
                     <p className="mt-0.5 text-[10px] font-semibold text-muted">{formatDateTime(ticket.assignedAt)}</p>
                   </div>
-                  <button
+                  {onDeleteTicket ? <button
                     type="button"
                     onClick={() => onDeleteTicket({
                       ticketId: ticket.id,
@@ -534,7 +535,7 @@ function TicketAssignmentsPanel({
                     title="Excluir ticket"
                   >
                     <Trash2 className="h-4 w-4" />
-                  </button>
+                  </button> : null}
                 </div>
               ))}
             </div>
@@ -545,7 +546,7 @@ function TicketAssignmentsPanel({
             <div>
               <Ticket className="mx-auto h-9 w-9 text-blue-400" />
               <p className="mt-3 text-sm font-black text-navy-950">Nenhum ticket encontrado</p>
-              <p className="mt-1 text-xs font-semibold text-muted">Ajuste a busca ou distribua os primeiros tickets desta campanha.</p>
+              <p className="mt-1 text-xs font-semibold text-muted">Ajuste a busca ou aguarde a distribuição de tickets nesta campanha.</p>
             </div>
           </div>
         ) : null}

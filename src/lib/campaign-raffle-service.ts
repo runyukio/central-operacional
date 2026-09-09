@@ -10,7 +10,7 @@ import {
 } from "@/lib/campaign-raffle-core";
 import type { Actor } from "@/lib/mock-db";
 import { isAgentJobTitle } from "@/lib/job-title-normalization";
-import { canAccessCampaignAgent, canManageCampaignStaff } from "@/lib/permissions";
+import { canAccessCampaignAgent, canManageCampaignStaff, canViewCampaignStaff, normalizeRole } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
 export class CampaignRaffleError extends Error {
@@ -27,6 +27,7 @@ export async function getCampaignRaffleAccess(actor: Actor) {
   return {
     canViewOwn: context.canViewOwn,
     canManage: context.canManage,
+    canViewAll: context.canViewAll,
     lob: context.employee?.lob.name ?? null,
     roleTitle: context.employee?.roleTitle ?? null
   };
@@ -35,7 +36,7 @@ export async function getCampaignRaffleAccess(actor: Actor) {
 export async function getCampaignRaffleDashboard(actor: Actor, view: "agent" | "staff", campaignId?: string | null) {
   const context = await loadCampaignRaffleContext(actor);
   if (view === "staff") {
-    if (!context.canManage) throw new CampaignRaffleError("Apenas WFM e ADM podem acessar a visão Staff.", 403);
+    if (!context.canViewAll) throw new CampaignRaffleError("Seu perfil não tem acesso à consulta de todos os tickets.", 403);
     return loadStaffDashboard(context, campaignId);
   }
   if (!context.canViewOwn || !context.employee) {
@@ -273,6 +274,9 @@ async function loadCampaignRaffleContext(actor: Actor) {
     user,
     employee,
     canManage: canManageCampaignStaff(permissionUser),
+    canViewAll: canViewCampaignStaff(permissionUser) && (normalizeRole(user.role.name) !== "SUPERVISOR"
+      || Boolean(employee && !employee.deletedAt && !employee.terminationDate
+        && employee.operationalStatus.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase() !== "desligado")),
     canViewOwn: Boolean(employee && !employee.deletedAt && !employee.terminationDate && isEligibleRaffleAgent(employee) && canAccessCampaignAgent(permissionUser))
   };
 }

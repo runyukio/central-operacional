@@ -58,7 +58,7 @@ test("Rifa de POC consulta somente os tickets do parceiro autenticado", async (t
   const { userQuery, ticketsQuery } = mockDatabase(t);
 
   const access = await getCampaignRaffleAccess(actor);
-  assert.deepEqual(access, { canViewOwn: true, canManage: false, lob: "ADS", roleTitle: "Agente" });
+  assert.deepEqual(access, { canViewOwn: true, canManage: false, canViewAll: false, lob: "ADS", roleTitle: "Agente" });
   const dashboard = await getCampaignRaffleDashboard(actor, "agent", "untrusted-campaign-id");
   assert.equal(dashboard.view, "agent");
   assert.equal(dashboard.access.canManage, false);
@@ -91,7 +91,7 @@ test("agentes e POC de PROJECT consultam só seus tickets e não podem executar 
     await t.test(role, async (subtest) => {
       const { ticketsQuery, transaction } = mockDatabase(subtest, "PROJECT", role);
       const access = await getCampaignRaffleAccess(actor);
-      assert.deepEqual(access, { canViewOwn: true, canManage: false, lob: "PROJECT", roleTitle: "Agente" });
+      assert.deepEqual(access, { canViewOwn: true, canManage: false, canViewAll: false, lob: "PROJECT", roleTitle: "Agente" });
       await getCampaignRaffleDashboard(actor, "agent", "another-partners-campaign");
       assert.deepEqual(ticketsQuery.mock.calls[0].arguments[0].where, { employeeId: "poc-employee" });
       for (const action of [

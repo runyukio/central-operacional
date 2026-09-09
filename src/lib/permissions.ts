@@ -193,8 +193,15 @@ export function canManageCampaignStaff(user: PermissionUser) {
   return isActiveUser(user) && roleHasCapability(user.role, "CAMPAIGN_STAFF");
 }
 
+export function canViewCampaignStaff(user: PermissionUser) {
+  if (!isActiveUser(user)) return false;
+  const role = normalizeRole(user.role);
+  return canManageCampaignStaff(user) || role === "GESTOR"
+    || (role === "SUPERVISOR" && user.lob?.trim().toUpperCase() === "ADS");
+}
+
 export function canAccessCampaign(user: PermissionUser) {
-  return canAccessCampaignAgent(user) || canManageCampaignStaff(user);
+  return canAccessCampaignAgent(user) || canViewCampaignStaff(user);
 }
 
 export function canAccessPerformanceWfh(user: PermissionUser) {

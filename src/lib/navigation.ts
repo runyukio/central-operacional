@@ -5,7 +5,7 @@ import {
   canAccessOwnPerformance,
   canAccessPerformance,
   canAccessCampaignAgent,
-  canManageCampaignStaff,
+  canViewCampaignStaff,
   canAccessRealTimeQueues,
   canAccessStaffCoverage,
   canResetEmployeePassword,
@@ -23,7 +23,8 @@ export type NavItem = {
 
 const campaignRoles = Array.from(new Set([
   ...rolesWithCapability("CAMPAIGN_AGENT"),
-  ...rolesWithCapability("CAMPAIGN_STAFF")
+  ...rolesWithCapability("CAMPAIGN_STAFF"),
+  "SUPERVISOR" as const, "GESTOR" as const
 ]));
 
 export type NavSection = {
@@ -108,9 +109,9 @@ export function getNavItems(userOrRole?: string | PermissionUser) {
     if (item.href === "/staff-cobertura") return canAccessStaffCoverage(permissionUser);
     if (item.href === "/performance") return canAccessPerformance(permissionUser);
     if (item.href === "/performance/meus-dados") return canAccessOwnPerformance(permissionUser);
-    if (item.href === "/campanha") return canAccessCampaignAgent(permissionUser) || canManageCampaignStaff(permissionUser);
+    if (item.href === "/campanha") return canAccessCampaignAgent(permissionUser) || canViewCampaignStaff(permissionUser);
     if (item.href === "/campanha/agente") return canAccessCampaignAgent(permissionUser);
-    if (item.href === "/campanha/staff") return canManageCampaignStaff(permissionUser);
+    if (item.href === "/campanha/staff") return canViewCampaignStaff(permissionUser);
     if (item.href === "/minhas-horas") return canAccessOwnRealtimeHours(permissionUser);
     return item.roles.includes(normalizedRole);
   });
@@ -154,8 +155,8 @@ export function canAccessPathForRole(pathname: string, userOrRole?: string | Per
 
   if (pathname === "/performance" || pathname.startsWith("/performance/") || pathname === "/api/performance" || pathname.startsWith("/api/performance/")) return canAccessPerformance(permissionUser);
   if (pathname === "/campanha/agente" || pathname.startsWith("/campanha/agente/")) return canAccessCampaignAgent(permissionUser);
-  if (pathname === "/campanha/staff" || pathname.startsWith("/campanha/staff/")) return canManageCampaignStaff(permissionUser);
-  if (pathname === "/campanha" || pathname.startsWith("/api/campaigns/raffle")) return canAccessCampaignAgent(permissionUser) || canManageCampaignStaff(permissionUser);
+  if (pathname === "/campanha/staff" || pathname.startsWith("/campanha/staff/")) return canViewCampaignStaff(permissionUser);
+  if (pathname === "/campanha" || pathname.startsWith("/api/campaigns/raffle")) return canAccessCampaignAgent(permissionUser) || canViewCampaignStaff(permissionUser);
   if (pathname === "/staff-cobertura" || pathname.startsWith("/staff-cobertura/") || pathname === "/api/staff-coverage" || pathname.startsWith("/api/staff-coverage/")) return canAccessStaffCoverage(permissionUser);
   if (pathname === "/meu-perfil" || pathname.startsWith("/perfil/")) return personalRoles.includes(normalizedRole);
   if (pathname === "/minhas-horas" || pathname.startsWith("/minhas-horas/") || pathname === "/api/realtime-hours/me" || pathname.startsWith("/api/realtime-hours/me/")) return canAccessOwnRealtimeHours(permissionUser);

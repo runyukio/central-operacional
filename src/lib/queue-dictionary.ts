@@ -1,6 +1,17 @@
 import { QUEUE_METADATA, type QueueLob, type QueueMetadata } from "@/lib/queue-metadata";
 
 export const QUEUE_DICTIONARY: Record<string, string> = {
+  "600003263": "Effect Philippines Home",
+  "600003264": "Effect Philippines Top Perfomance",
+  "600003265": "Philippines Home Unit",
+  "600003266": "Philippines Unit Without Industry",
+  "600003267": "Content Reporting Philippines Initial",
+  "600003268": "Philippines Appeals 1",
+  "600003269": "Inconsistency Inspection Philippines",
+  "600003270": "Initial Philippines Effect Recall",
+  "600003271": "Recall of Effect Philippines High Fever",
+  "600003312": "Philippines Industria B Account Review",
+  "600003313": "Philippines Industria A Account Review",
   "600003278": "Drama Revisão de segurança Barris brasileiros Inicial",
   "600002381": "私信图片标注",
   "600002377": "私信文本标注",

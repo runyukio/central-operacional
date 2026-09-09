@@ -7,6 +7,61 @@ import { getQueueIdByName, getQueueNameById, resolveQueueReference } from "./que
 import { allPerformanceQueueIds, getPerformanceQueueMetadataById } from "./performance-service";
 import { isPerformanceAdsQueueId } from "./performance-ads-queues";
 
+const philippinesAdsQueues = [
+  [
+    "600003263",
+    "Effect Philippines Home"
+  ],
+  [
+    "600003264",
+    "Effect Philippines Top Perfomance"
+  ],
+  [
+    "600003265",
+    "Philippines Home Unit"
+  ],
+  [
+    "600003266",
+    "Philippines Unit Without Industry"
+  ],
+  [
+    "600003267",
+    "Content Reporting Philippines Initial"
+  ],
+  [
+    "600003268",
+    "Philippines Appeals 1"
+  ],
+  [
+    "600003269",
+    "Inconsistency Inspection Philippines"
+  ],
+  [
+    "600003270",
+    "Initial Philippines Effect Recall"
+  ],
+  [
+    "600003271",
+    "Recall of Effect Philippines High Fever"
+  ],
+  [
+    "600003312",
+    "Philippines Industria B Account Review"
+  ],
+  [
+    "600003313",
+    "Philippines Industria A Account Review"
+  ]
+];
+
+for (const [id, name] of philippinesAdsQueues) test(`ADS Philippines ${id}: resolves the provided name without changing SLA or department`, () => {
+  assert.equal(getQueueNameById(id), name);
+  assert.equal(getQueueIdByName(name), id);
+  assert.deepEqual(getQueueReportMetadataById(id), { queueName: name, department: "Other Queue", lob: "ADS" });
+  assert.deepEqual(getPerformanceQueueMetadataById(id), { lob: "ADS", slaTargetMinutes: 120 });
+  assert.equal(resolveQueueReference(id).queueName, name);
+});
+
 test("classifica a fila 600001263 no report TNS como COMMENTS com SLA de 168 horas", () => {
   assert.deepEqual(QUEUE_METADATA["600001263"], {
     lob: "COMMENTS",

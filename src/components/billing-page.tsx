@@ -1,5 +1,7 @@
 "use client";
 
+import { DEFAULT_BILLING_REFERENCE_MONTH } from "@/lib/billing-reference-month";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClientRequestGate } from "@/lib/client-request-gate";
 import { CheckCircle2, CircleDollarSign, Clock3, Download, Eye, FileSpreadsheet, FileText, LockKeyhole, Pencil, RefreshCw, Save, Search, Send, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
@@ -197,7 +199,7 @@ function billingInitialTab(): TabKey {
 }
 
 export function BillingPage() {
-  const [referenceMonth, setReferenceMonth] = useState(billingQueryParam("referenceMonth") || "2026-08");
+  const [referenceMonth, setReferenceMonth] = useState(billingQueryParam("referenceMonth") || DEFAULT_BILLING_REFERENCE_MONTH);
   const [employeeId] = useState(billingQueryParam("employeeId"));
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
