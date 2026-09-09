@@ -1,4 +1,4 @@
-export const RULE_VERSION = 'quality-weekly-v1';
+export const RULE_VERSION = 'quality-weekly-v2';
 export const RULE_DEFINITION = {
   week: 'Moderation date; Monday to Sunday; manual operation week number',
   key: 'Concatenation of text QA case ID + audit case ID; collisions and conflicts block; identical duplicates count once',
@@ -9,9 +9,22 @@ export const RULE_DEFINITION = {
 export const SECTION_NAMES = {
   CD: 'CD Sampling',
   ACCOUNTS: 'ER Accounts',
-  MATERIAL: 'ER Material/Unit',
+  MATERIAL: 'ER Material',
+  UNIT: 'ER Unit',
+  PICTURE: 'Picture',
+  QUICK: 'Quick',
+  TALENT: 'Talent',
+  RECALL: 'Recall',
+  EFFECT: 'Effect',
+  INSPECTION: 'Inspection',
 } as const;
 export type Section = keyof typeof SECTION_NAMES;
+type LegacySection = 'CD' | 'ACCOUNTS' | 'MATERIAL';
+type AdditionalSection = Exclude<Section, LegacySection>;
+export function sectionName(snapshot: Pick<Snapshot, 'ruleVersion'>, section: Section): string {
+  return section === 'MATERIAL' && snapshot.ruleVersion === 'quality-weekly-v1'
+    ? 'ER Material/Unit' : SECTION_NAMES[section];
+}
 export type Outcome = 'Correct' | 'Leakage' | 'False_Positive' | 'Mislabeled';
 export type Cell = string | number | boolean | null;
 export type SourceTable = {
@@ -87,7 +100,7 @@ export type SectionReport = {
   queues?: MetricRow[];
   categories?: MetricRow[];
 };
-export type TrendPoint = {
+export type TrendPoint = Partial<Record<AdditionalSection, Metrics | null>> & {
   start: string;
   weekNumber: number | null;
   reportId: string | null;
@@ -113,7 +126,7 @@ export type Snapshot = {
   filename: string;
   digest: string;
   metrics: Metrics;
-  sections: Record<Section, SectionReport>;
+  sections: Record<LegacySection, SectionReport> & Partial<Record<AdditionalSection, SectionReport>>;
   agents: AgentRow[];
   trend: TrendPoint[];
 };
@@ -140,6 +153,8 @@ export const FIELDS: Record<string, string[]> = {
     'moderation_date',
     'audit_date',
     'audit_time',
+    'audit_time(年月日)',
+    'audit_time（年月日）',
     'audit_finish_time',
     'moderation_time',
     '审核日期',
@@ -296,7 +311,16 @@ export function parseMapping(table: SourceTable, options: {
     er_accounts: 'ACCOUNTS',
     er_sampling_accounts: 'ACCOUNTS',
     material: 'MATERIAL',
-    unit: 'MATERIAL',
+    unit: 'UNIT',
+    er_unit: 'UNIT',
+    er_material: 'MATERIAL',
+    picture: 'PICTURE',
+    quick: 'QUICK',
+    talent: 'TALENT',
+    recall: 'RECALL',
+    effect: 'EFFECT',
+    efect: 'EFFECT',
+    inspection: 'INSPECTION',
     'er_material/unit': 'MATERIAL',
     'material/unit': 'MATERIAL',
     er_material_unit: 'MATERIAL',
@@ -312,7 +336,8 @@ export function parseMapping(table: SourceTable, options: {
       ? sections[sectionKey]
       : null;
     const category = textValue(row[cols.category]) ||
-      (sectionKey === 'material' ? 'Material' : sectionKey === 'unit' ? 'Unit' : !section ? sectionText : '');
+      (sectionKey === 'material' ? 'Material' : section === 'UNIT' ? 'Unit' :
+        section && !['CD', 'ACCOUNTS', 'MATERIAL'].includes(section) ? SECTION_NAMES[section] : !section ? sectionText : '');
     const industryText = textValue(row[cols.industry])
       .replace(/^industry\s*/i, '')
       .toUpperCase();
@@ -331,7 +356,7 @@ export function parseMapping(table: SourceTable, options: {
         field: 'mapping',
         message: options.allowIncomplete
           ? 'Provide a valid queue ID and a section/category. If supplied, Industry must be A or B and is only applicable to Accounts. Blank names and unfinished classifications may be saved for review.'
-          : 'Use a text queue ID, a queue name and section CD / ACCOUNTS / MATERIAL. Accounts requires industry A or B; leave industry blank for other sections.',
+          : 'Use a text queue ID, a queue name and a supported report section. Accounts requires industry A or B; leave industry blank for other sections.',
         severity: 'error',
       });
       return;
@@ -408,7 +433,7 @@ export function analyze(
     cases: Case[] = [];
   const map = new Map(mappings.map((m) => [m.queueId, m]));
   const unknownQueues = new Set<string>();
-  const seen = new Map<string, string>(),
+  const seen = new Map<string, { signature: string; row: number }>(),
     concats = new Map<string, string>();
   let rows = 0,
     duplicates = 0,
@@ -555,15 +580,19 @@ export function analyze(
     const { sourceRow: _source, ...meaning } = c;
     const signature = JSON.stringify(meaning);
     if (seen.has(pair)) {
-      if (seen.get(pair) === signature) duplicates++;
-      else
+      const first = seen.get(pair)!;
+      if (first.signature === signature) duplicates++;
+      else {
+        const original = JSON.parse(first.signature) as Record<string, unknown>;
+        const changed = Object.entries(meaning).filter(([key, value]) => original[key] !== value).map(([key]) => key);
         fail(
           'case IDs',
-          'This ID pair appears more than once with conflicting data.',
+          `This ID pair has conflicting data with Excel row ${first.row}. Different fields: ${changed.join(', ')}.`,
         );
+      }
       continue;
     }
-    seen.set(pair, signature);
+    seen.set(pair, { signature, row });
     cases.push(c);
   }
   if (!rows) issue(null, 'file', 'The export has no case rows.');
@@ -702,6 +731,9 @@ export function trendPoint(
     CD: snapshot.sections.CD.metrics,
     ACCOUNTS: snapshot.sections.ACCOUNTS.metrics,
     MATERIAL: snapshot.sections.MATERIAL.metrics,
+    ...Object.fromEntries((Object.keys(SECTION_NAMES) as Section[])
+      .filter(section => !['CD', 'ACCOUNTS', 'MATERIAL'].includes(section))
+      .map(section => [section, snapshot.sections[section]?.metrics ?? null])),
     industryA:
       snapshot.sections.ACCOUNTS.rows.find((r) => r.id === 'A') ?? null,
     industryB:

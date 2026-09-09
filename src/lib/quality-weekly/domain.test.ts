@@ -52,7 +52,7 @@ const record = (overrides: Record<string, Cell> = {}) => {
 };
 const table = (rows: Cell[][]): SourceTable => ({
   sheet: 'Data',
-  headers,
+  headers: [...headers],
   rows,
   rowNumbers: rows.map((_, i) => i + 2),
 });
@@ -89,6 +89,8 @@ void test('conflicting results for a pair block generation', () => {
   );
   assert.equal(result.valid, false);
   assert.match(result.issues[0].message, /conflicting/);
+  assert.match(result.issues[0].message, /Excel row 2/);
+  assert.match(result.issues[0].message, /Different fields: result/);
 });
 void test('concatenation collisions are rejected', () => {
   const result = analyze(
@@ -122,6 +124,22 @@ void test('both required new columns block legacy exports', () => {
       rows: t.rows.map((r) => r.filter((_, j) => i !== j)),
     };
     assert.equal(analyze(altered, mapping).valid, false);
+  }
+});
+void test('KwaiBI moderation date header is recognized without conflating the two case IDs', () => {
+  for (const header of ['audit_time(年月日)', 'audit_time（年月日）']) {
+    const original = table([record({ qaId: '00001234', auditId: '00005678', date: 46258 })]);
+    const t = { ...original, headers: original.headers.map((h, i) => keys[i] === 'date' ? header : h) };
+    const result = analyze(t, mapping);
+    assert.equal(result.valid, true);
+    assert.equal(result.cases[0].date, '2026-08-24');
+    assert.equal(result.cases[0].qaId, '00001234');
+    assert.equal(result.cases[0].auditId, '00005678');
+    const withoutAudit = { ...t, headers: t.headers.filter((_, i) => keys[i] !== 'auditId'), rows: t.rows.map(r => r.filter((_, i) => keys[i] !== 'auditId')) };
+    const rejected = analyze(withoutAudit, mapping);
+    assert.equal(rejected.valid, false);
+    assert.ok(rejected.issues.some(issue => issue.field === 'auditId'));
+    assert.ok(!rejected.issues.some(issue => issue.field === 'date'));
   }
 });
 void test('null agent IDs do not merge different names', () => {
@@ -286,6 +304,18 @@ void test('1904 Excel date system is normalized when cells are dates', () => {
     ),
   );
   assert.equal(parsed.rows[0][keys.indexOf('date')], 46258);
+});
+void test('formatted numeric KwaiBI dates keep their calendar date and remain serializable', () => {
+  const w = XLSX.utils.book_new();
+  const h = headers.map((v, i) => keys[i] === 'date' ? 'audit_time(年月日)' : v);
+  const s = XLSX.utils.aoa_to_sheet([h, record({ date: 46272 })]);
+  s[XLSX.utils.encode_cell({ r: 1, c: keys.indexOf('date') })].z = 'yyyy-MM-dd';
+  XLSX.utils.book_append_sheet(w, s, 'Data');
+  const parsed = selectTable(readTables(XLSX.write(w, { type: 'buffer', bookType: 'xlsx' }), 'fixture.xlsx'));
+  assert.equal(parsed.rows[0][keys.indexOf('date')], 46272);
+  const result = analyze(parsed, mapping);
+  assert.equal(result.valid, true);
+  assert.equal(result.cases[0].date, '2026-09-07');
 });
 void test(
   'provided export reconciles all 9291 cases despite incorrect dimensions',

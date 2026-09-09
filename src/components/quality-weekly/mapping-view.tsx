@@ -18,7 +18,7 @@ export function QualityMappingView({ entries }: { entries: MappingEntry[] }) {
     </div>
     <details className="rounded-lg border border-border p-3 text-xs text-muted">
       <summary className="cursor-pointer font-bold text-navy-950">How to complete pending classifications</summary>
-      <p className="mt-2">In your spreadsheet, set section to CD, ACCOUNTS or ER Material/Unit and preserve the specific group (for example, Unit or Picture) in the optional category column. Material and Unit are also accepted directly in section and remain separate categories. Only Accounts needs Industry A or B.</p>
+      <p className="mt-2">Set section to CD, Accounts, Material, Unit, Picture, Quick, Talent, Recall, Effect or Inspection. Each section has its own results, including separate Material and Unit totals. Only Accounts needs Industry A or B. The optional category column adds a breakdown within the selected section.</p>
       <p className="mt-2">Upload the complete mapping again, then revalidate the source export. Each upload preserves a new mapping version; previous reports do not change.</p>
     </details>
     <div className="max-h-[32rem] overflow-auto rounded-lg border border-border">

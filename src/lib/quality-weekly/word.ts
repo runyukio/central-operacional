@@ -17,8 +17,8 @@ import {
   VerticalAlign,
   WidthType,
 } from 'docx';
-import { change, rate } from './domain';
-import type { MetricRow, Snapshot } from './domain';
+import { change, rate, SECTION_NAMES, sectionName } from './domain';
+import type { MetricRow, Snapshot, Section } from './domain';
 
 export function reportFilename(s: Snapshot) {
   return `Quality Weekly Report - ER BPO - ${s.start} - Week ${s.weekNumber} - v${s.version}.docx`;
@@ -250,8 +250,11 @@ export async function createWord(
   if (accounts.agents.length)
     children.push(metricTable(accounts.agents, 'Agent', true));
   else children.push(p('No agent samples available.'));
-  children.push(heading('Material/Unit Review', HeadingLevel.HEADING_1, true));
-  const material = s.sections.MATERIAL;
+  for (const section of (Object.keys(SECTION_NAMES) as Section[]).filter(key => key !== 'CD' && key !== 'ACCOUNTS')) {
+  const material = s.sections[section];
+  // Old immutable snapshots contain only the original three report sections.
+  if (!material || (section !== 'MATERIAL' && !material.metrics.n)) continue;
+  children.push(heading(`${sectionName(s, section)} Review`, HeadingLevel.HEADING_1, true));
   children.push(
     metricTable(
       [...material.rows, { id: 'total', name: 'Totals', ...material.metrics }],
@@ -260,7 +263,7 @@ export async function createWord(
   );
   if (!material.metrics.n)
     children.push(
-      p('No Material/Unit cases in this weekly export. Rates are unavailable.'),
+      p(`No ${sectionName(s, section)} cases in this weekly export. Rates are unavailable.`),
     );
   children.push(heading('Weekly comparison', HeadingLevel.HEADING_2));
   const trendHeaders = [
@@ -268,18 +271,18 @@ export async function createWord(
     ...s.trend.map((t) => (t.weekNumber ? `Week ${t.weekNumber}\n${t.start}` : t.start)),
     'Change',
   ];
-  const current = s.trend[3]?.MATERIAL,
-    previous = s.trend[2]?.MATERIAL;
+  const current = s.trend[3]?.[section],
+    previous = s.trend[2]?.[section];
   const trendRows = [
     trendHeaders,
     [
       'Including mislabeled cases',
-      ...s.trend.map((t) => rate(t.MATERIAL?.accuracy)),
+      ...s.trend.map((t) => rate(t[section]?.accuracy)),
       change(current?.accuracy, previous?.accuracy),
     ],
     [
       'Not including mislabeled cases',
-      ...s.trend.map((t) => rate(t.MATERIAL?.adjustedAccuracy)),
+      ...s.trend.map((t) => rate(t[section]?.adjustedAccuracy)),
       change(current?.adjustedAccuracy, previous?.adjustedAccuracy),
     ],
   ];
@@ -328,7 +331,7 @@ export async function createWord(
     }),
   );
   children.push(
-    reportLink('MATERIAL'),
+    reportLink(section),
     p(
       'Rates are calculated from case counts. N/A means the denominator is zero or the week has no validated report. Weekly changes are expressed in percentage points.',
       {
@@ -342,6 +345,7 @@ export async function createWord(
       },
     ),
   );
+  }
   const doc = new Document({
     creator: s.createdBy,
     title: 'Quality Weekly Report ER BPO',

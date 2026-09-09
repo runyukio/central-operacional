@@ -74,14 +74,15 @@ export function readTables(bytes: Uint8Array, filename: string): SourceTable[] {
       throw new Error(
         'Export at most 30,000 cases per file and include only the required columns.',
       );
-    // Excel's 1904 date system requires its epoch offset for numeric date columns.
-    if (workbook.Workbook?.WBProps?.date1904) {
+    // sheet_to_json may turn formatted numeric dates into local Date objects.
+    // Keep the original Excel serial so moderation days never depend on server timezone.
+    {
       for (let r = head + 1; r < grid.length; r++)
         for (let col = 0; col < headers.length; col++) {
           const cell =
             workbook.Sheets[sheet][XLSX.utils.encode_cell({ r, c: col })];
           if (cell?.t === 'n' && cell.z && XLSX.SSF.is_date(cell.z))
-            rows[r - head - 1][col] = Number(cell.v) + 1462;
+            rows[r - head - 1][col] = Number(cell.v) + (workbook.Workbook?.WBProps?.date1904 ? 1462 : 0);
         }
     }
     return { sheet, headers, rows, rowNumbers };

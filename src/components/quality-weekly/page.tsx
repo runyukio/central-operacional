@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { AlertTriangle, CheckCircle2, Download, FileBarChart, FileSpreadsheet, History, Loader2, ShieldCheck, Upload } from "lucide-react";
 import { EmptyState, PageHeader, Panel } from "@/components/ui/primitives";
-import { dayAdd, metrics, number, rate } from "@/lib/quality-weekly/domain";
+import { dayAdd, metrics, number, rate, SECTION_NAMES } from "@/lib/quality-weekly/domain";
 import type { Issue, MappingEntry, Section, Snapshot, Validation } from "@/lib/quality-weekly/domain";
 import { QualityMappingView } from "./mapping-view";
 
@@ -71,7 +71,7 @@ export function QualityWeeklyPage({ accessError }: { accessError?: string }) {
     const query = new URLSearchParams(window.location.search);
     const reportId = query.get("report");
     const section = query.get("section");
-    if (["CD", "ACCOUNTS", "MATERIAL"].includes(section || "")) setReportSection(section as Section);
+    if (section && Object.hasOwn(SECTION_NAMES, section)) setReportSection(section as Section);
     if (query.get("view") === "agents") setReportView("agents");
     Promise.all([api<Status>("status", undefined, active.signal), reportId ? api<{ snapshot: Snapshot }>(`reports/${encodeURIComponent(reportId)}`, undefined, active.signal) : Promise.resolve(null)])
       .then(([info, report]) => { setStatus(info); if (report) { setSaved(report.snapshot); setTab("preview"); } })
@@ -135,8 +135,8 @@ export function QualityWeeklyPage({ accessError }: { accessError?: string }) {
           </div></Panel>
           <Panel title="Required before weekly generation"><ul className="space-y-3 text-sm text-navy-950">
             <li className="flex gap-2"><CheckCircle2 className="h-5 w-5 shrink-0 text-blue-600" /><span>Active ADM/WFM access is enabled through the operational site&apos;s login.</span></li>
-            <li className="flex gap-2"><FileSpreadsheet className="h-5 w-5 shrink-0 text-muted" /><span>Expanded export: moderation date and <code>audit_case_order_id</code>, alongside <code>质检case_order_id</code> stored as text. The provided legacy export does not contain both new fields.</span></li>
-            <li className="flex gap-2"><FileSpreadsheet className="h-5 w-5 shrink-0 text-muted" /><span>{status?.mapping ? `Queue mapping available: ${status.mapping.entries.length} queues.` : "Approved queue mapping is still required: queue ID, name, CD / Accounts / Material, and Industry A/B for Accounts."}</span></li>
+            <li className="flex gap-2"><FileSpreadsheet className="h-5 w-5 shrink-0 text-muted" /><span>Export the moderation date (<code>audit_time(年月日)</code> is accepted) and both distinct text IDs: <code>质检case_order_id</code> and <code>audit_case_order_id</code>. One ID never substitutes the other.</span></li>
+            <li className="flex gap-2"><FileSpreadsheet className="h-5 w-5 shrink-0 text-muted" /><span>{status?.mapping ? `Queue mapping available: ${status.mapping.entries.length} queues.` : "Approved queue mapping is still required: queue ID, name, report section, and Industry A/B for Accounts only."}</span></li>
           </ul><p className="mt-4 border-t border-border pt-3 text-xs text-muted">No dates or queue classifications will be inferred. Missing prior weeks remain absent. RCA is not part of this report.</p></Panel>
         </div>
         {validation && <Panel title="2. Validation & source reconciliation">
@@ -163,7 +163,7 @@ export function QualityWeeklyPage({ accessError }: { accessError?: string }) {
       </>}
       {selection && <Panel title="Select worksheet"><p className="mb-3 break-all text-sm text-muted">{selection.filename}</p><select aria-label="Worksheet" className="premium-control px-3 py-2" value={sheet} onChange={e => setSheet(e.target.value)}>{selection.sheets.map(s => <option key={s.name} value={s.name}>{s.name} ({number(s.rows)} rows)</option>)}</select><button type="button" disabled={Boolean(busy)} className="premium-button ml-3 px-4 py-2 text-sm font-bold" onClick={() => void run("Validating worksheet", signal => finishSelection(selection, sheet, dateColumn, signal))}>Validate worksheet</button></Panel>}
       {tab === "mapping" && <Panel title="Queue mapping · separate from operational Performance">
-        <p className="text-sm text-muted">Upload your mapping even if it is not complete yet. Material and Unit are kept separate; other category names are preserved for review. Blank queue names are completed from the site registry when available. Industry A/B can be added later and is only required for Accounts results. Conflicting queue IDs still block the upload.</p>
+        <p className="text-sm text-muted">Report sections: CD, Accounts, Material, Unit, Picture, Quick, Talent, Recall, Effect and Inspection. Material and Unit have separate results. Blank queue names are completed from the site registry when available. Industry A/B can be added later and is only required for Accounts results. Unknown sections remain pending; conflicting queue IDs still block the upload.</p>
         <div className="mt-4 flex flex-wrap gap-3"><a className="premium-control inline-flex items-center gap-2 px-4 py-2 text-sm font-bold" href={endpoint + "mapping-template"}><Download className="h-4 w-4" />Download CSV template</a><input ref={mappingRef} type="file" accept=".xlsx,.csv" className="sr-only" aria-label="Queue mapping upload" onChange={e => { upload(e.target.files?.[0], "mapping"); e.target.value = ""; }} /><button type="button" disabled={!status || Boolean(busy)} className="premium-button px-4 py-2 text-sm font-bold disabled:opacity-50" onClick={() => mappingRef.current?.click()}>Upload approved mapping</button></div>
         {status?.mapping ? <><p className="my-4 text-xs text-muted">Latest saved mapping: {status.mapping.filename} · {dateTime(status.mapping.createdAt)} BRT · {status.mapping.createdBy}. Previous reports keep their original mapping.</p><QualityMappingView entries={status.mapping.entries} /></> : <div className="mt-5"><EmptyState title="Queue mapping pending" description="Upload your de-para to review the categories and any missing fields. No classification or Industry A/B will be guessed." /></div>}
       </Panel>}

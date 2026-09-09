@@ -111,7 +111,10 @@ export function createQualityWeeklyService(db: PrismaClient, storage: QualitySto
           filename: imported.asset.filename, digest: imported.digest, metrics: aggregate(cases), sections: buildSections(cases), agents: buildAgents(cases),
           trend: starts.slice(0, 3).map(start => {
             const head = heads.find(h => h.weekStart === start);
-            return head ? trendPoint(snapshotOf(head.report.snapshot)) : { start, weekNumber: null, reportId: null, CD: null, ACCOUNTS: null, MATERIAL: null, industryA: null, industryB: null };
+            if (!head) return { start, weekNumber: null, reportId: null, CD: null, ACCOUNTS: null, MATERIAL: null, industryA: null, industryB: null };
+            const prior = snapshotOf(head.report.snapshot);
+            // Legacy Material totals include Unit and are not comparable to the new separate section.
+            return { ...trendPoint(prior), ...(prior.ruleVersion === 'quality-weekly-v1' ? { MATERIAL: null } : {}) };
           })
         };
         snapshot.trend.push(trendPoint(snapshot));

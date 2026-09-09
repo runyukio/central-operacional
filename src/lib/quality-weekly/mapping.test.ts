@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { analyze, buildSections, FIELDS, mappingPending, parseMapping } from './domain';
+import { analyze, buildSections, FIELDS, mappingPending, parseMapping, SECTION_NAMES, sectionName, trendPoint } from './domain';
 import type { Cell, SourceTable } from './domain';
 
 const table = (rows: Cell[][], headers = ['queue_id', 'queue_name', 'section', 'industry']): SourceTable => ({
@@ -25,11 +25,11 @@ test('incomplete uploads preserve categories and only fill registered queue name
   ]), { allowIncomplete: true, queueNames: { 'unit-1': 'Registered Unit', 'material-1': 'Registered Material' } });
   assert.equal(parsed.mappings.length, 4);
   assert.equal(parsed.issues.filter(i => i.severity === 'error').length, 0);
-  assert.deepEqual(parsed.mappings.map(m => m.category), ['Unit', 'Material', 'Picture', 'Efect']);
+  assert.deepEqual(parsed.mappings.map(m => m.category), ['Unit', 'Material', 'Picture', 'Effect']);
   assert.equal(parsed.mappings[0].queueName, 'Registered Unit');
-  assert.equal(parsed.mappings[2].section, null);
+  assert.equal(parsed.mappings[2].section, 'PICTURE');
   assert.equal(parsed.mappings[2].queueName, '');
-  assert.deepEqual(mappingPending(parsed.mappings[2]), ['Queue name', 'Report section']);
+  assert.deepEqual(mappingPending(parsed.mappings[2]), ['Queue name']);
   assert.deepEqual(parsed.issues.map(i => i.row), [5, 6]);
 });
 
@@ -52,14 +52,15 @@ test('Material and Unit need no Industry and remain distinct in calculated categ
   assert.equal(parsed.issues.length, 0);
   const result = analyze(source(['m1', 'm2', 'u1']), parsed.mappings);
   assert.equal(result.valid, true);
-  const report = buildSections(result.cases).MATERIAL;
-  assert.deepEqual(report.categories?.map(r => [r.name, r.n]), [['Material', 2], ['Unit', 1]]);
-  assert.equal(report.metrics.n, 3);
-  assert.equal(report.queues?.length, 3);
+  const sections = buildSections(result.cases);
+  assert.deepEqual(sections.MATERIAL.categories?.map(r => [r.name, r.n]), [['Material', 2]]);
+  assert.equal(sections.MATERIAL.metrics.n, 2);
+  assert.equal(sections.MATERIAL.queues?.length, 2);
+  assert.equal(sections.UNIT.metrics.n, 1);
 });
 
 test('pending section or name cannot silently drop cases or become official zero results', () => {
-  for (const row of [['p1', 'Picture', 'Picture', null], ['p1', null, 'Material', null]]) {
+  for (const row of [['p1', 'Unknown', 'Unknown', null], ['p1', null, 'Material', null]]) {
     const parsed = parseMapping(table([row]), { allowIncomplete: true });
     const result = analyze(source(['p1']), parsed.mappings);
     assert.equal(result.valid, false);
@@ -88,4 +89,28 @@ test('names and Industry columns may be omitted, official section and category s
 test('blank or duplicate required columns never bypass mapping validation', () => {
   assert.ok(parseMapping(table([['1', 'Q', '', '']]), { allowIncomplete: true }).issues.some(i => i.severity === 'error'));
   assert.ok(parseMapping(table([], ['queue_id', 'queue id', 'section']), { allowIncomplete: true }).issues.some(i => i.severity === 'error'));
+});
+
+test('every supported queue section preserves its own totals and trend without Industry outside Accounts', () => {
+  const sections = Object.keys(SECTION_NAMES);
+  const parsed = parseMapping(table(sections.map(section => [section, `Queue ${section}`, section, section === 'ACCOUNTS' ? 'A' : null])));
+  assert.equal(parsed.issues.length, 0);
+  const result = analyze(source(sections), parsed.mappings);
+  assert.equal(result.valid, true);
+  const report = buildSections(result.cases);
+  const point = trendPoint({ id: 'qa-only', start: '2026-09-07', weekNumber: 37, sections: report });
+  for (const section of Object.keys(SECTION_NAMES) as (keyof typeof SECTION_NAMES)[]) {
+    assert.equal(report[section].metrics.n, 1, section);
+    assert.equal(point[section]?.n, 1, section);
+  }
+});
+
+test('legacy snapshots keep their combined Material/Unit name and tolerate missing new sections', () => {
+  const all = buildSections([]);
+  const point = trendPoint({ id: 'legacy-qa-only', start: '2026-08-31', weekNumber: 36,
+    sections: { CD: all.CD, ACCOUNTS: all.ACCOUNTS, MATERIAL: all.MATERIAL } });
+  assert.equal(point.UNIT, null);
+  assert.equal(point.EFFECT, null);
+  assert.equal(sectionName({ ruleVersion: 'quality-weekly-v1' }, 'MATERIAL'), 'ER Material/Unit');
+  assert.equal(sectionName({ ruleVersion: 'quality-weekly-v2' }, 'MATERIAL'), 'ER Material');
 });
