@@ -2,6 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { spacePeriodPreset, spacePeriodSelection, spaceSearchMatches } from "./meu-espaco-slicers";
 
+test("Este mês is the default even when month-to-date coincides with today or this week", () => {
+  for (const today of ["2026-09-01", "2026-06-01", "2026-09-09"]) {
+    assert.equal(spacePeriodSelection(spacePeriodPreset("month", today), today), "month");
+  }
+});
+
 test("slicer seven-day shortcut is inclusive and crosses the month/year safely", () => {
   assert.deepEqual(spacePeriodPreset("week", "2026-09-03"), { startDate: "2026-08-28", endDate: "2026-09-03" });
   assert.deepEqual(spacePeriodPreset("week", "2026-01-02"), { startDate: "2025-12-27", endDate: "2026-01-02" });

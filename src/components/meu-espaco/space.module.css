@@ -23,6 +23,23 @@
 .supervisor[aria-pressed="true"] { border-color: var(--space-accent); background: var(--space-tint); box-shadow: inset 0 0 0 1px var(--space-accent); }
 .avatar { display: grid; place-items: center; width: 30px; height: 30px; flex-shrink: 0; border-radius: 9px; color: var(--space-accent); background: var(--space-tint); font-size: 11px; font-weight: 800; }
 .badge { display: inline-flex; align-items: center; gap: 5px; border-radius: 6px; padding: 3px 7px; font-size: 11px; font-weight: 700; color: var(--space-accent); background: var(--space-tint); }
+.statusBadge, .ageBadge { display: inline-flex; align-items: center; gap: 5px; border: 1px solid transparent; border-radius: 7px; padding: 4px 8px; font-size: 11px; font-weight: 750; white-space: nowrap; }
+.statusBadge[data-status="met"] { color: #047857; background: #ecfdf5; border-color: #a7f3d0; }
+.statusBadge[data-status="missed"], .ageBadge[data-priority="high"] { color: #b91c1c; background: #fef2f2; border-color: #fecaca; }
+.statusBadge[data-status="missing"], .ageBadge[data-priority="neutral"] { color: var(--muted); background: var(--surface); border-color: var(--border); }
+.ageBadge[data-priority="medium"] { color: #92400e; background: #fffbeb; border-color: #fde68a; }
+.ageBadge[data-priority="new"], .ageBadge[data-priority="future"] { color: #1d4ed8; background: #eff6ff; border-color: #bfdbfe; }
+.inlineTarget { display: block; margin-top: 4px; font-size: 10px; white-space: nowrap; color: var(--muted); }
+.inlineTarget[data-status="met"] { color: #047857; }
+.inlineTarget[data-status="missed"] { color: #b91c1c; }
+:global(.dark) .statusBadge[data-status="met"] { color: #6ee7b7; background: #064e3b66; border-color: #065f46; }
+:global(.dark) .statusBadge[data-status="missed"], :global(.dark) .ageBadge[data-priority="high"] { color: #fca5a5; background: #7f1d1d55; border-color: #991b1b; }
+:global(.dark) .ageBadge[data-priority="medium"] { color: #fcd34d; background: #78350f55; border-color: #92400e; }
+:global(.dark) .ageBadge[data-priority="new"], :global(.dark) .ageBadge[data-priority="future"] { color: #93c5fd; background: #1e3a8a44; border-color: #1e40af; }
+:global(.dark) .inlineTarget[data-status="met"] { color: #6ee7b7; }
+:global(.dark) .inlineTarget[data-status="missed"] { color: #fca5a5; }
+.compactFilters { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px 24px; }
+.glideHero { border-left: 4px solid #2563eb; }
 .views { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .view { justify-content: flex-start; padding: 14px; min-width: 0; }
 .metric { --metric-color: var(--space-accent); position: relative; min-width: 0; overflow: hidden; padding: 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--space-panel); text-align: left; }

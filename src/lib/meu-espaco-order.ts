@@ -11,3 +11,12 @@ export function spaceAge(date: string, today: string) {
   const days = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)) / 86400000);
   return days === 0 ? "Hoje" : days > 0 ? `há ${days} dia${days === 1 ? "" : "s"}` : `em ${-days} dia${days === -1 ? "" : "s"}`;
 }
+
+/** Visual age only: never an SLA, deadline or change to the occurrence status. */
+export function spaceAgePriority(date: string, today: string, oldest = false, pending = true) {
+  if (!pending) return "neutral";
+  const days = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)) / 86400000);
+  if (days < 0) return "future";
+  if (oldest || days >= 7) return "high";
+  return days > 0 ? "medium" : "new";
+}

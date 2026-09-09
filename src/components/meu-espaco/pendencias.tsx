@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { SpaceCoveragePanel } from "./requerido";
-import { spaceAge } from "@/lib/meu-espaco-order";
+import { spaceAge, spaceAgePriority } from "@/lib/meu-espaco-order";
+import styles from "./space.module.css";
 import { Check, ChevronDown } from "lucide-react";
 import { apiJson, FormInput } from "@/components/modules/shared";
 import { officialAbsenceReasons } from "@/lib/absence-reasons";
@@ -40,10 +41,11 @@ function PendingDetail({ row, supervisorId, canRespond, onAnswered }: { row: Spa
   </div>;
 }
 
-export function SpacePendingTab({ supervisorId, lobs, canRespond, onAnswered, initialKind = "all" }: { supervisorId: string; lobs: string[]; canRespond: boolean; onAnswered: () => void; initialKind?: string }) {
+export function SpacePendingTab({ supervisorId, lobs, canRespond, onAnswered, initialKind = "all", requiredCount = 0 }: { supervisorId: string; lobs: string[]; canRespond: boolean; onAnswered: () => void; initialKind?: string; requiredCount?: number }) {
   const [filters, setFilters] = useState({ order: "asc", kind: initialKind, state: "pending", search: "", lob: "", startDate: "", endDate: "" });
   const [search, setSearch] = useState("");
   const [opened, setOpened] = useState("");
+  const [coverageOpen, setCoverageOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [state, setState] = useState(emptySpaceFeed);
   const [feed] = useState(() => createSpacePendingFeed(async (query, cursor, signal) => {
@@ -62,17 +64,15 @@ export function SpacePendingTab({ supervisorId, lobs, canRespond, onAnswered, in
   function change(patch: Partial<typeof filters>) { feed.invalidate(); setFilters((value) => ({ ...value, ...patch })); }
   return <div className="space-y-4">
     <section className="card space-y-4 p-4" aria-label="Filtros de pendências">
-      <div className="flex flex-wrap gap-5"><SpaceButtons label="Tipo" value={filters.kind} onChange={(kind) => change({ kind })} options={[{ id: "all", label: "Todas" }, { id: "absence", label: "Faltas" }, { id: "hours", label: "Horas" }, { id: "required", label: "Requerido" }]} />{filters.kind !== "required" ? <SpaceButtons label="Situação das faltas e horas" value={filters.state} onChange={(state) => change({ state })} options={[{ id: "pending", label: "Pendentes" }, { id: "answered", label: "Respondidas" }]} /> : null}</div>
+      <div className={styles.compactFilters}><SpaceButtons label="Tipo" value={filters.kind} onChange={(kind) => change({ kind })} options={[{ id: "all", label: "Todas" }, { id: "absence", label: "Faltas" }, { id: "hours", label: "Horas" }, { id: "required", label: `Requerido (${requiredCount})` }]} />{filters.kind !== "required" ? <><SpaceButtons label="Situação das faltas e horas" value={filters.state} onChange={(state) => change({ state })} options={[{ id: "pending", label: "Pendentes" }, { id: "answered", label: "Respondidas" }]} /><SpaceButtons label="Ordem das pendências" value={filters.order} onChange={(order) => change({ order })} options={[{ id: "asc", label: "Mais antigas" }, { id: "desc", label: "Mais recentes" }]} /></> : null}</div>
       {filters.kind !== "required" ? <>
-      <SpaceButtons label="Ordem das pendências" value={filters.order} onChange={(order) => change({ order })} options={[{ id: "asc", label: "Mais antigas primeiro" }, { id: "desc", label: "Mais recentes primeiro" }]} />
-      <SpaceButtons label="LOB das pendências" value={filters.lob} onChange={(lob) => change({ lob })} options={[{ id: "", label: "Todas as LOBs" }, ...lobs.map((lob) => ({ id: lob, label: lob }))]} />
-      <div className="grid gap-3 sm:grid-cols-3"><FormInput label="Parceiro" value={filters.search} onChange={(search) => change({ search })} placeholder="Nome ou WB" /><FormInput label="Ocorrências desde (opcional)" type="date" value={filters.startDate} onChange={(startDate) => change({ startDate })} /><FormInput label="Ocorrências até (opcional)" type="date" value={filters.endDate} onChange={(endDate) => change({ endDate })} /></div>
-      <button type="button" onClick={() => change({ kind: "all", state: "pending", search: "", lob: "", startDate: "", endDate: "" })} className="text-xs font-bold text-blue-600 underline underline-offset-4">Limpar filtros de pendências</button>
-      <p className="text-xs text-muted">Sem datas: todas as ocorrências até hoje, inclusive de meses anteriores. Ordenação pela data da ocorrência; a idade não representa atraso de SLA. Horas mantêm o responsável registrado na ocorrência.</p>
+      <div className="flex flex-wrap items-end gap-4"><FormInput label="Parceiro" value={filters.search} onChange={(search) => change({ search })} placeholder="Nome ou WB" /><button type="button" onClick={() => change({ kind: "all", state: "pending", order: "asc", search: "", lob: "", startDate: "", endDate: "" })} className="pb-3 text-xs font-bold text-blue-600">Limpar filtros</button></div>
+      <details><summary className="cursor-pointer text-xs font-bold text-blue-600">Mais filtros · {filters.lob || "Todas as LOBs"} · {filters.startDate || filters.endDate ? `${dateLabel(filters.startDate)} a ${filters.endDate ? dateLabel(filters.endDate) : "hoje"}` : "todas as datas até hoje"}</summary><div className="mt-3 space-y-3"><SpaceButtons label="LOB das pendências" value={filters.lob} onChange={(lob) => change({ lob })} options={[{ id: "", label: "Todas as LOBs" }, ...lobs.map((lob) => ({ id: lob, label: lob }))]} /><div className="grid gap-3 sm:grid-cols-2"><FormInput label="Ocorrências desde (opcional)" type="date" value={filters.startDate} onChange={(startDate) => change({ startDate })} /><FormInput label="Ocorrências até (opcional)" type="date" value={filters.endDate} onChange={(endDate) => change({ endDate })} /></div></div></details>
+      <p className="text-xs text-muted">Pendências incluem meses anteriores. As cores indicam antiguidade, não atraso de SLA.</p>
       {!valid ? <p role="alert" className="text-sm text-red-700">A data inicial deve ser anterior ou igual à final.</p> : null}
       </> : null}
     </section>
-    {filters.kind === "required" || filters.kind === "all" ? <SpaceCoveragePanel supervisorId={supervisorId} onAnswered={onAnswered} /> : null}
+    {filters.kind === "required" ? <SpaceCoveragePanel supervisorId={supervisorId} /> : filters.kind === "all" ? <details className="card p-4" onToggle={(event) => setCoverageOpen(event.currentTarget.open)}><summary className="cursor-pointer text-sm font-bold">Requerido · {requiredCount} alertas de cobertura</summary>{coverageOpen ? <div className="mt-4"><SpaceCoveragePanel supervisorId={supervisorId} /></div> : null}</details> : null}
     {filters.kind !== "required" ? <>
     {message ? <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">{message}</p> : null}
     <SpaceLoad loading={state.loading || search !== filters.search.trim()} error={state.error} retry={() => void feed.retry()} />
@@ -81,7 +81,7 @@ export function SpacePendingTab({ supervisorId, lobs, canRespond, onAnswered, in
       {state.rows.map((row) => { const key = `${row.kind}:${row.id}`; return <article key={key} className="card p-4">
         <button type="button" onClick={() => setOpened(opened === key ? "" : key)} aria-expanded={opened === key} className="flex w-full flex-wrap items-center justify-between gap-3 text-left">
           <div><p className="font-bold text-navy-950">{row.employeeName} <span className="text-xs font-medium text-muted">{row.wbLogin}</span></p><p className="mt-1 text-xs text-muted">{dateLabel(row.date)} · {row.lob} · Responsável: {row.supervisor}</p></div>
-          <div className="flex flex-wrap items-center gap-3"><span className="rounded-lg border border-border px-2 py-1 text-xs">{spaceAge(row.date, today)}{row.pending && row.oldestDate === row.date ? " · Mais antiga" : ""}</span><span className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-bold">{row.kind === "hours" ? "Horas" : "Falta / ocorrência"}</span><span className="text-xs text-muted">{row.pending ? "Pendente" : row.status === "FALTA_INJUSTIFICADA" ? "Classificada como injustificada" : "Respondida"}</span><ChevronDown className="h-4 w-4" /></div>
+          <div className="flex flex-wrap items-center gap-3"><span className={styles.ageBadge} data-priority={spaceAgePriority(row.date, today, row.oldestDate === row.date, row.pending)} title="Prioridade visual pela antiguidade; não indica atraso de SLA">{spaceAge(row.date, today)}{row.pending && row.oldestDate === row.date ? " · Mais antiga" : ""}</span><span className="rounded-lg bg-slate-100 px-2 py-1 text-xs font-bold">{row.kind === "hours" ? "Horas" : "Falta / ocorrência"}</span><span className="text-xs text-muted">{row.pending ? "Pendente" : row.status === "FALTA_INJUSTIFICADA" ? "Classificada como injustificada" : "Respondida"}</span><ChevronDown className="h-4 w-4" /></div>
         </button>
         {opened === key ? <PendingDetail row={row} supervisorId={supervisorId} canRespond={canRespond} onAnswered={(updated) => { feed.answer(updated); setOpened(""); setMessage("Justificativa salva no fluxo original."); onAnswered(); }} /> : null}
       </article>; })}

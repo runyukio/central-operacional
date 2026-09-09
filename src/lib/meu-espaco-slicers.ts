@@ -1,9 +1,9 @@
 import type { SpacePeriod } from "./meu-espaco-contract";
 
 export const spacePeriodOptions = [
+  { id: "month", label: "Este mês" },
   { id: "today", label: "Hoje" },
-  { id: "week", label: "Últimos 7 dias" },
-  { id: "month", label: "Este mês" }
+  { id: "week", label: "Últimos 7 dias" }
 ] as const;
 
 export function spacePeriodPreset(preset: string, today: string): SpacePeriod {

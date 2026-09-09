@@ -1,6 +1,5 @@
 /** Explicit opt-in, synthetic QA only. Never run against a production database. */
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { prisma } from "../src/lib/prisma";
 import type { Actor } from "../src/lib/mock-db";
@@ -69,16 +68,22 @@ async function main() {
   const scoped = (await getSpaceCoverage(own, params)).data.find((row) => row.id === requiredId)!;
   assert.equal(shared.available, 61); assert.equal(scoped.available, shared.available);
   assert.equal(shared.supervisors.length, 2); assert.equal(scoped.supervisors.length, 1);
-  const body = { supervisorId: "qa-space-sup-a", text: "Synthetic QA justification", requestId: randomUUID() };
-  await Promise.all([justifySpaceCoverage(own, requiredId, body), justifySpaceCoverage(own, requiredId, body)]);
-  assert.equal(await prisma.spaceCoverageNote.count({ where: { requestId: body.requestId } }), 1);
-  const manager = await getMeuEspacoScope(actors.get("GESTOR")!);
-  await assert.rejects(() => justifySpaceCoverage(manager, requiredId, { ...body, requestId: randomUUID() }), { status: 403 });
-  const other = await getMeuEspacoScope(actors.get("ADMIN")!, "qa-space-sup-night");
-  await assert.rejects(() => justifySpaceCoverage(other, requiredId, { ...body, requestId: randomUUID() }), { status: 403 });
+  // A pre-existing note fixture verifies read-only audit preservation, not a new UI workflow.
+  await prisma.spaceCoverageNote.upsert({ where: { requestId: "qa-space-historical-note" }, update: {}, create: {
+    requestId: "qa-space-historical-note", requirementId: requiredId, supervisorId: "qa-space-sup-a", supervisorName: "QA Supervisor A",
+    actorId: admin.user.id, actorName: admin.user.name, date: date(tomorrow), lobId: lob.id, shiftId: shift.id,
+    required: 1000, available: 61, text: "Synthetic historical note, preserved read-only" } });
+  const beforeNotes = await prisma.spaceCoverageNote.count();
+  const body = { supervisorId: "qa-space-sup-a", text: "Must not be stored", requestId: "qa-space-no-new-note" };
+  for (const role of ["ADMIN", "WFM", "GESTOR", "SUPERVISOR"]) {
+    const scope = await getMeuEspacoScope(actors.get(role)!);
+    assert.equal((await getSpaceCoverage(scope, params)).canRespond, false);
+    await assert.rejects(() => justifySpaceCoverage(scope, requiredId, body), { status: 403 });
+  }
+  assert.equal(await prisma.spaceCoverageNote.count(), beforeNotes);
   await prisma.staffCoverage.update({ where: { id: requiredId }, data: { requiredStaff: 1 } });
   assert.equal((await getSpaceCoverage(own, params)).data.find((r) => r.id === requiredId)!.state, "covered");
-  await assert.rejects(() => justifySpaceCoverage(own, requiredId, { ...body, requestId: randomUUID() }), { status: 409 });
+  await assert.rejects(() => justifySpaceCoverage(own, requiredId, body), { status: 403 });
   await prisma.staffCoverage.update({ where: { id: requiredId }, data: { requiredStaff: 1000 } });
   const closed = (await getSpaceCoverage(own, params, new Date(`${tomorrow}T21:00:00Z`))).data.find((r) => r.id === requiredId)!;
   assert.equal(closed.state, "ended_deficit"); assert.ok(closed.notes.length > 0);
@@ -99,6 +104,11 @@ async function main() {
   const glide = await getSpaceGlide(own, new URLSearchParams({ month, lob: "ADS", metric: "materialDaily" }));
   assert.equal(glide.overall, 300); assert.equal(glide.cutoff, moveSpaceDay(today, -1)); assert.ok(glide.automaticWeight! > 0);
   assert.equal(glide.automaticWeight, glide.futureScheduled, "Missing partner-days must not reduce the observed productivity to zero");
-  console.log("Local PostgreSQL QA passed: shared coverage, isolated scopes, manager denial, concurrent idempotency, automatic closure, history, 61-partner ordering/pagination, weighted targets and Glide path.");
+  const teamAht = await getSpaceGlide(own, new URLSearchParams({ month, lob: "ADS", metric: "aht" }));
+  const partnerAht = await getSpaceGlide(own, new URLSearchParams({ month, lob: "ADS", metric: "aht", employeeId: "qa-space-agent-01" }));
+  assert.equal(teamAht.overall, 75); assert.equal(partnerAht.overall, 120);
+  assert.ok(partnerAht.futureScheduled < teamAht.futureScheduled);
+  await assert.rejects(() => getSpaceGlide(own, new URLSearchParams({ month, lob: "ADS", metric: "aht", employeeId: "qa-space-sup-b" })), { status: 403 });
+  console.log("Local PostgreSQL QA passed: read-only coverage for every role, automatic closure and preserved history, scoped partner Glide, weighted targets, 61-partner ordering/pagination and unchanged monthly hours.");
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; }).finally(() => prisma.$disconnect());

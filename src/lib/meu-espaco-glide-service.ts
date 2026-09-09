@@ -4,8 +4,8 @@ import { plannedProductiveHoursForSchedule } from "@/lib/work-hours-rules";
 import { MeuEspacoError } from "@/lib/meu-espaco-access";
 import { spaceDate, spaceToday } from "@/lib/meu-espaco-filters";
 import { getSpaceResults } from "@/lib/meu-espaco-results-service";
-import { spaceLobFamily } from "@/lib/meu-espaco-metrics";
-import { isSpaceMaterialSkill, spaceTargets } from "@/lib/meu-espaco-targets";
+import { spaceTargets } from "@/lib/meu-espaco-targets";
+import { selectSpaceGlideEmployees } from "@/lib/meu-espaco-glide-scope";
 import { moveSpaceDay, projectSpaceGlide, spaceMonthEnd } from "@/lib/meu-espaco-glide";
 import type { MeuEspacoScope } from "@/lib/meu-espaco-scope";
 
@@ -18,8 +18,7 @@ export async function getSpaceGlide(scope: MeuEspacoScope, query: URLSearchParam
   const raw = query.get("remainingWeight");
   const override = raw === null ? undefined : Number(raw);
   if (override !== undefined && (!raw?.trim() || !Number.isFinite(override) || override < 0 || override > 1e9)) throw new MeuEspacoError("Informe um volume restante entre 0 e 1 bilhão.");
-  const employees = scope.employees.filter((p) => spaceLobFamily(p.lob.name) === lob && (id !== "materialDaily" || isSpaceMaterialSkill(p.skill))
-    && (lob !== "TNS" || (!["aht", "latency"].includes(id) || p.lob.name.toUpperCase() !== "COMMENTS") && (id !== "commentsLatency" || p.lob.name.toUpperCase() !== "VIDEO")));
+  const employees = selectSpaceGlideEmployees(scope, lob, id, query.get("employeeId") || "");
   const filteredScope = { ...scope, employees, employeeIds: employees.map((p) => p.id) };
   const monthEnd = spaceMonthEnd(month), beforeToday = moveSpaceDay(today, -1), end = monthEnd < beforeToday ? monthEnd : beforeToday;
   const lookbackStart = moveSpaceDay(`${month}-01`, -6);

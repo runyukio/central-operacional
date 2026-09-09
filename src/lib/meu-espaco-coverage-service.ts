@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { readMeuEspacoCoverageSnapshot } from "@/lib/staff-coverage-service";
 import { MeuEspacoError } from "@/lib/meu-espaco-access";
@@ -20,7 +18,7 @@ export async function getSpaceCoverage(scope: MeuEspacoScope, query = new URLSea
     if (!ok) warnings.push(`${s.fullName}: revise a LOB e o turno no cadastro.`);
     return ok;
   });
-  if (!valid.length) return { period: { startDate, endDate }, today, data: [], pending: 0, warnings, canRespond: scope.canRespond };
+  if (!valid.length) return { period: { startDate, endDate }, today, data: [], pending: 0, warnings, canRespond: false };
   // Include yesterday's overnight shift only if it is still running in the default view.
   const includeOvernight = !query.get("startDate");
   const snapshot = await readMeuEspacoCoverageSnapshot(includeOvernight ? spaceDate(moveSpaceDay(startDate, -1)) : start, end);
@@ -48,37 +46,10 @@ export async function getSpaceCoverage(scope: MeuEspacoScope, query = new URLSea
     orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { id: true, requirementId: true, supervisorId: true, supervisorName: true, actorName: true, createdAt: true, text: true } }) : [];
   const byId = new Map(data.map((row) => [row.id, row]));
   for (const note of notes) byId.get(note.requirementId)?.notes.push({ id: note.id, supervisorId: note.supervisorId, supervisor: note.supervisorName, actor: note.actorName, createdAt: note.createdAt.toISOString(), text: note.text });
-  return { period: { startDate, endDate }, today, data, pending: data.filter((row) => row.state === "pending").length, warnings: [...new Set(warnings)], canRespond: scope.canRespond };
+  return { period: { startDate, endDate }, today, data, pending: data.filter((row) => row.state === "pending").length, warnings: [...new Set(warnings)], canRespond: false };
 }
 
-export async function justifySpaceCoverage(scope: MeuEspacoScope, requirementId: string, input: { supervisorId?: string; text?: string; requestId?: string }) {
-  if (!scope.canRespond) throw new MeuEspacoError("Seu perfil acompanha o Requerido somente em consulta.", 403);
-  const supervisorId = scope.supervisorId || input.supervisorId;
-  if (!supervisorId || !scope.activeSupervisorIds.includes(supervisorId)) throw new MeuEspacoError("Supervisor fora do escopo autorizado.", 403);
-  const text = String(input.text ?? "").trim(), requestId = String(input.requestId ?? "");
-  if (text.length < 5 || text.length > 10000) throw new MeuEspacoError("Descreva a justificativa em 5 a 10.000 caracteres.");
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestId)) throw new MeuEspacoError("Identificador de envio inválido. Atualize a tela.");
-  const requirement = await prisma.staffCoverage.findUnique({ where: { id: requirementId }, select: { date: true } });
-  if (!requirement) throw new MeuEspacoError("Requerido não encontrado.", 404);
-  const date = requirement.date.toISOString().slice(0, 10);
-  const result = await getSpaceCoverage(scope, new URLSearchParams({ startDate: date, endDate: date }));
-  const slot = result.data.find((row) => row.id === requirementId && row.supervisors.some((s) => s.id === supervisorId));
-  if (!slot) throw new MeuEspacoError("Requerido fora da sua LOB/turno.", 403);
-  const previous = await prisma.spaceCoverageNote.findUnique({ where: { requestId } });
-  if (previous) {
-    if (previous.actorId !== scope.user.id || previous.supervisorId !== supervisorId || previous.requirementId !== requirementId || previous.text !== text) throw new MeuEspacoError("Este envio já foi utilizado para outra justificativa.", 409);
-    return { success: true };
-  }
-  if (slot.state !== "pending") throw new MeuEspacoError("Este alerta já foi encerrado. Atualize o Requerido.", 409);
-  try {
-    await prisma.spaceCoverageNote.create({ data: { id: randomUUID(), requestId, requirementId, supervisorId, supervisorName: slot.supervisors.find((s) => s.id === supervisorId)!.name,
-      actorId: scope.user.id, actorName: scope.user.name, date: requirement.date, lobId: slot.lobId, shiftId: slot.shiftId, required: slot.required, available: slot.available, text } });
-  } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      const saved = await prisma.spaceCoverageNote.findUnique({ where: { requestId } });
-      if (saved?.actorId === scope.user.id && saved.supervisorId === supervisorId && saved.requirementId === requirementId && saved.text === text) return { success: true };
-    }
-    throw error;
-  }
-  return { success: true };
+// Retained as a guarded compatibility endpoint. Existing notes are read-only audit history.
+export async function justifySpaceCoverage(_scope: MeuEspacoScope, _requirementId: string, _input: { supervisorId?: string; text?: string; requestId?: string }) {
+  throw new MeuEspacoError("Requerido é apenas um alerta de cobertura e não recebe justificativas.", 403);
 }

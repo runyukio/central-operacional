@@ -80,6 +80,14 @@ test("CEC and TNS daily columns remain unchanged and empty ADS keeps its empty s
   assert.doesNotMatch(empty, /<td>/);
 });
 
+test("Comments latency belongs only to the TNS evolution and redundant explanatory copy is removed", () => {
+  const html = resultsHtml([group("ADS"), group("CEC"), group("TNS"), group("ALL")]);
+  for (const lob of ["ADS", "CEC", "ALL"]) assert.doesNotMatch(dailySection(html, lob), /Latência Comments/);
+  assert.match(dailySection(html, "TNS"), /Latência Comments \(h\)/);
+  assert.doesNotMatch(html, /Time pelo cadastro atual, sem desligados|Latência ponderada \/ SLA CEC/);
+  assert.match(html, /<th>Latência ponderada<\/th>/);
+});
+
 function hoursHtml(data: SpaceHours) {
   const HoursTab = loadComponent<{ supervisorId: string; initialPeriod: typeof period }>("./horas.tsx", "SpaceHoursTab", {
     "@/components/modules/shared": { FormInput: ({ label }: { label: string }) => createElement("label", null, label) },
