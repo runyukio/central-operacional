@@ -12,7 +12,7 @@ import { chartSpec } from './charts';
 
 const keys = Object.keys(FIELDS);
 const headers = keys.map(k => FIELDS[k][0]);
-const mapping: MappingEntry[] = [{ queueId: 'q', queueName: 'Synthetic queue', section: 'CD', industry: null, category: 'Recall' }];
+const mapping: MappingEntry[] = [{ queueId: 'q', queueName: 'Synthetic queue', section: 'MATERIAL', industry: null, category: 'Recall' }];
 const row = (date: string, id: string, result = 'Correct') => {
   const values: Record<string, Cell> = { date, qaId: id, auditId: 'audit', agentId: 'agent', agentName: 'Synthetic agent',
     queueId: 'q', sampling: 1, allow: 1, labeled: 0, result, leakage: Number(result === 'Leakage'),
@@ -66,7 +66,7 @@ test('history comes from the same upload with gaps and section precedence, not f
   assert.equal(trend[6].CD?.n, 2);
   assert.equal(trend[6].CD?.correct, 2);
   assert.equal(trend[6].CD?.mislabeled, 1);
-  assert.equal(trend[6].RECALL?.n, 0, 'section CD wins over category Recall');
+  assert.equal(trend[6].RECALL?.n, 0, 'explicit Material section wins over category Recall');
   assert.deepEqual(trend[6].observedDays, ['2026-08-31', '2026-09-04']);
   assert.deepEqual(buildUploadTrend(analysis([...rows].reverse()).cases, '2026-08-31', 36), trend);
 });
@@ -122,9 +122,7 @@ test('Word and charts use all seven periods and the immediately preceding period
   assert.deepEqual(spec.labels.slice(-2), ['24 Aug', '31 Aug']);
   assert.equal(spec.series[0].values.at(-2), 0);
   assert.equal(spec.series[0].values.at(-1), 1);
-  // Exercise non-empty Material comparison as well as CD's chart.
-  snapshot.sections.MATERIAL = snapshot.sections.CD;
-  snapshot.trend.forEach(t => { t.MATERIAL = t.CD; });
+  // Material cases also feed the separate CD rollup, without changing global totals.
   const word = await renderQualityWord(snapshot, 'https://example.invalid');
   const zip = await JSZip.loadAsync(word);
   const xml = await zip.file('word/document.xml')!.async('string');

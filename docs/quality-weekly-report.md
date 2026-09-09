@@ -28,6 +28,14 @@ The same immutable calculated snapshot feeds the preview and Word. Counts are ag
 
 ## Persistence and concurrency
 
+### CD rollup and embedded agent detail — rule v6 (2026-09-09)
+
+The owner confirmed that CD Sampling combines exactly the explicit Recall, Material, Quick and Inspection sections. Effect, Unit, Talent, Picture, Accounts and unclassified sections are excluded from this block. A separate `cdSampling` object preserves its four section rows, weighted totals, queue detail and agent totals in the same server-calculated snapshot. Source classifications remain unchanged, and the rollup is never added to the overall Sampling Amount. Every historical CD point uses the same four-section rule.
+
+The preview defaults to the CD section summary, with queue and consolidated-agent detail available separately. Word includes section/queue summary tables and complete agent tables for CD and every populated report section; authenticated links remain supplemental. Agents spanning several queues appear once within their section or CD rollup, with totals recalculated from their cases. Earlier saved reports and their cached Word files remain unchanged; the preview warns that a new version is needed for the corrected layout. No schema migration or production data update is required.
+
+Validation: the focused suite passed 54 tests with no failures; two optional local workbook fixtures and the isolated PostgreSQL integration test were skipped. Typecheck, targeted lint and the production build passed. A synthetic report was rendered and all eight Word pages were visually checked, including the four CD rows, agent tables and weekly comparisons. The actual preview component was checked with synthetic data in light/dark themes and a narrow viewport; no production report was created or changed for testing.
+
 ### Business-week periods — rule v5 (2026-09-09)
 
 The owner confirmed Monday–Friday for all sections. The mapping's explicit `section` defines each block and takes precedence over `category`; classification is never inferred from an operational department. Weekend rows remain in the preserved workbook and whole-source control totals, but are excluded from weekly selection and calculations. The selector shows observed business-week ranges (latest first), Friday end dates, distinct case counts, and days with cases. Sparse days do not prove an incomplete export, so full-load confirmation remains required.

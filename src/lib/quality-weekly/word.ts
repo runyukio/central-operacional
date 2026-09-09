@@ -17,7 +17,7 @@ import {
   VerticalAlign,
   WidthType,
 } from 'docx';
-import { change, rate, SECTION_NAMES, sectionName } from './domain';
+import { change, rate, SECTION_NAMES, sectionName, reportSection } from './domain';
 import type { MetricRow, Snapshot, Section } from './domain';
 
 export function reportFilename(s: Snapshot) {
@@ -184,18 +184,19 @@ export async function createWord(
   const chart = (kind: 'CD' | 'ACCOUNTS') =>
     new Paragraph({
       spacing: { before: 190, after: 80 },
+      alignment: AlignmentType.CENTER,
       children: [
         new ImageRun({
           type: 'png',
           data: images[kind],
-          transformation: { width: 920, height: 299 },
+          transformation: kind === 'CD' && s.cdSampling ? { width: 700, height: 228 } : { width: 920, height: 299 },
           altText: {
             title:
               kind === 'CD'
                 ? 'Material Weekly Results CD Sampling'
                 : 'Account Weekly Results',
             description:
-              'Four consecutive weeks. Gaps indicate missing reports. Target 95%.',
+              `${s.trend.length} consecutive weeks. Gaps indicate missing data. Target 95%.`,
             name: kind + ' weekly trend',
           },
         }),
@@ -211,19 +212,22 @@ export async function createWord(
     ),
   );
   if (s.trend.some(t => t.source)) children.push(p('Monday–Friday moderation periods. The selected week and six prior periods are calculated from the same preserved upload. Weekends are excluded; periods without data remain N/A.'));
-  children.push(heading('CD Sampling Agents'), p('Only material queues.'));
-  const cd = s.sections.CD;
+  children.push(heading('CD Sampling'), p(s.cdSampling ? 'Recall, Material, Quick and Inspection. Consolidated by report section.' : 'Only material queues.'));
+  const cd = reportSection(s, 'CD')!;
   children.push(
     metricTable(
       [...cd.rows, { id: 'total', name: 'Totals', ...cd.metrics }],
-      'Queue',
+      s.cdSampling ? 'Section' : 'Queue',
     ),
   );
   if (!cd.metrics.n)
     children.push(
       p('No CD Sampling cases in this weekly export. Rates are unavailable.'),
     );
-  children.push(chart('CD'), reportLink('CD'));
+  children.push(chart('CD'), heading('Breakdown by Agent', HeadingLevel.HEADING_2));
+  if (cd.agents.length) children.push(metricTable(cd.agents, 'Agent', true));
+  else children.push(p('No agent samples available.'));
+  children.push(reportLink('CD'));
   children.push(
     heading('ER Sampling', HeadingLevel.HEADING_1, true),
     p(period),
@@ -333,6 +337,8 @@ export async function createWord(
     }),
   );
   children.push(
+    heading('Breakdown by Agent', HeadingLevel.HEADING_2),
+    ...(material.agents.length ? [metricTable(material.agents, 'Agent', true)] : [p('No agent samples available.')]),
     reportLink(section),
     p(
       'Rates are calculated from case counts. N/A means the denominator is zero or the week has no validated data. Weekly changes are expressed in percentage points.',

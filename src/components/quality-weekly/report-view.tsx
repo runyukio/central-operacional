@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Line, LineChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis, ReferenceLine } from "recharts";
 import { CheckCircle2, Files, Target, TrendingUp } from "lucide-react";
 import { Panel, StatCard } from "@/components/ui/primitives";
-import { change, number, rate, SECTION_NAMES, sectionName } from "@/lib/quality-weekly/domain";
+import { change, number, rate, SECTION_NAMES, sectionName, reportSection } from "@/lib/quality-weekly/domain";
 import type { MetricRow, Section, Snapshot } from "@/lib/quality-weekly/domain";
 import { chartMinimum, chartSpec } from "@/lib/quality-weekly/charts";
 
@@ -48,27 +48,30 @@ export function QualityReportView({ snapshot, initialSection = "CD", initialView
   const [view, setView] = useState(initialView);
   const [search, setSearch] = useState("");
   const [limit, setLimit] = useState(50);
-  const current = snapshot.sections[section] || snapshot.sections.CD;
+  const current = reportSection(snapshot, section) || snapshot.sections.CD;
+  const cdRollup = section === "CD" && Boolean(snapshot.cdSampling);
   const previous = snapshot.trend.at(-2)?.[section];
-  const rows = view === "agents" ? snapshot.agents.filter(a => a.section === section).map(a => ({ ...a, name: `${a.name} · ${a.queueName}` }))
-    : view === "industry" ? current.rows : view === "categories" ? current.categories || [] : current.queues || current.rows;
+  const rows = view === "agents" ? (snapshot.cdSampling ? current.agents : snapshot.agents.filter(a => a.section === section).map(a => ({ ...a, name: `${a.name} · ${a.queueName}` })))
+    : view === "rawQueues" ? current.queues || [] : view === "industry" ? current.rows : view === "categories" ? current.categories || [] : cdRollup ? current.rows : current.queues || current.rows;
   const filtered = rows.filter(r => `${r.name} ${r.id}`.toLowerCase().includes(search.toLowerCase()));
   return <div className="space-y-4">
+    {!snapshot.cdSampling && <p className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700">This preserved version uses the previous CD classification. Create a new preview to consolidate Recall, Material, Quick and Inspection and include the full agent tables in Word.</p>}
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
       <StatCard title="Sampling Amount" value={number(snapshot.metrics.n)} helper="Distinct validated case keys" icon={Files} />
       <StatCard title="Accuracy including mislabeled cases" value={rate(snapshot.metrics.accuracy)} helper="Correct ÷ Sampling Amount" icon={Target} />
       <StatCard title="Accuracy not including mislabeled cases" value={rate(snapshot.metrics.adjustedAccuracy)} helper="(Correct + Mislabeled) ÷ Sampling Amount" icon={CheckCircle2} tone="green" />
       <StatCard title="Moderation period" value={`Week ${snapshot.weekNumber}`} helper={`${snapshot.start} → ${snapshot.end}`} icon={TrendingUp} tone="purple" />
     </div>
-    <div className="flex flex-wrap gap-2" aria-label="Report sections">{(Object.keys(SECTION_NAMES) as Section[]).filter(key => snapshot.sections[key]).map(key => <button type="button" key={key} aria-pressed={section === key} onClick={() => { setSection(key); setLimit(50); setSearch(""); setView("queues"); }} className={`${section === key ? "premium-button" : "premium-control text-navy-950"} px-4 py-2 text-sm font-extrabold`}>{sectionName(snapshot, key)} <span className="ml-2 opacity-70">{number(snapshot.sections[key]!.metrics.n)}</span></button>)}</div>
+    <div className="flex flex-wrap gap-2" aria-label="Report sections">{(Object.keys(SECTION_NAMES) as Section[]).filter(key => snapshot.sections[key]).map(key => <button type="button" key={key} aria-pressed={section === key} onClick={() => { setSection(key); setLimit(50); setSearch(""); setView("queues"); }} className={`${section === key ? "premium-button" : "premium-control text-navy-950"} px-4 py-2 text-sm font-extrabold`}>{sectionName(snapshot, key)} <span className="ml-2 opacity-70">{number(reportSection(snapshot, key)!.metrics.n)}</span></button>)}</div>
     <Panel title={sectionName(snapshot, section)}>
+      {cdRollup && <p className="mb-3 text-xs text-muted">Recall, Material, Quick and Inspection only. This consolidated block is already included in the overall total, not additional samples.</p>}
       <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-navy-950"><span>Accuracy: <strong>{rate(current.metrics.accuracy)}</strong></span><span>Weekly change: <strong>{change(current.metrics.accuracy, previous?.accuracy)}</strong></span><span className="text-xs text-muted">{number(current.metrics.n)} distinct cases · Totals recalculated from counts</span></div>
       {(section === "CD" || section === "ACCOUNTS") && <Trend key={section} snapshot={snapshot} section={section} />}
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-4">
-        {[["queues", "By queue"], ...(current.categories?.length ? [["categories", "By category"]] : []), ...(section === "ACCOUNTS" ? [["industry", "By industry"]] : []), ["agents", "By agent"]].map(([key, title]) => <button type="button" key={key} aria-pressed={view === key} className={`${view === key ? "premium-button" : "premium-control text-navy-950"} px-3 py-2 text-xs font-bold`} onClick={() => { setView(key); setLimit(50); }}>{title}</button>)}
-        <input aria-label="Search report detail" placeholder="Search queue or agent" className="premium-control min-w-0 flex-1 px-3 py-2 text-sm md:ml-auto md:max-w-xs" value={search} onChange={e => { setSearch(e.target.value); setLimit(50); }} />
+        {[["queues", cdRollup ? "By section" : "By queue"], ...(cdRollup ? [["rawQueues", "By queue"]] : []), ...(current.categories?.length ? [["categories", "By category"]] : []), ...(section === "ACCOUNTS" ? [["industry", "By industry"]] : []), ["agents", "By agent"]].map(([key, title]) => <button type="button" key={key} aria-pressed={view === key} className={`${view === key ? "premium-button" : "premium-control text-navy-950"} px-3 py-2 text-xs font-bold`} onClick={() => { setView(key); setLimit(50); }}>{title}</button>)}
+        <input aria-label="Search report detail" placeholder="Search queue or agent" className="premium-control min-w-0 basis-full px-3 py-2 text-sm md:ml-auto md:flex-1 md:basis-auto md:max-w-xs" value={search} onChange={e => { setSearch(e.target.value); setLimit(50); }} />
       </div>
-      <div className="mt-3"><MetricTable rows={filtered.slice(0, limit)} label={view === "agents" ? "Agent · Queue" : view === "industry" ? "Industry" : view === "categories" ? "Category" : "Queue"} /></div>
+      <div className="mt-3"><MetricTable rows={filtered.slice(0, limit)} label={view === "agents" ? snapshot.cdSampling ? "Agent" : "Agent · Queue" : view === "industry" ? "Industry" : view === "categories" ? "Category" : cdRollup && view === "queues" ? "Section" : "Queue"} /></div>
       {filtered.length > limit && <button type="button" className="premium-control mt-3 px-4 py-2 text-sm font-bold" onClick={() => setLimit(n => n + 50)}>Show 50 more ({filtered.length - limit} remaining)</button>}
       <div className="mt-3"><MetricTable rows={[{ id: "total", name: "Section total", ...current.metrics }]} /></div>
     </Panel>

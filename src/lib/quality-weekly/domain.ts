@@ -1,8 +1,9 @@
-export const RULE_VERSION = 'quality-weekly-v5';
+export const RULE_VERSION = 'quality-weekly-v6';
 export const HISTORY_WEEKS = 7;
 export const RULE_DEFINITION = {
   week: 'Moderation date; Monday to Friday; weekends excluded from weekly metrics; manual operation week number',
   history: 'Selected week and six previous Monday–Friday periods calculated from the same validated upload and frozen section mapping; absent weeks remain N/A',
+  cdSampling: 'Consolidated Recall, Material, Quick and Inspection sections only; each distinct case and agent is counted once within the block; this block is not added to overall totals',
   key: 'Concatenation of text QA case ID + audit case ID; collisions and non-result conflicts block; identical duplicates count once',
   outcomes: 'Distinct case keys are counted independently per final_result; result categories may overlap; Excel row order has no precedence',
   sampling: 'N = distinct valid case keys', leakageRate: 'Leakage / Allow', falsePositiveRate: 'False Positive / Labeled',
@@ -149,6 +150,7 @@ export type Snapshot = {
   digest: string;
   metrics: Metrics;
   sections: Record<LegacySection, SectionReport> & Partial<Record<AdditionalSection, SectionReport>>;
+  cdSampling?: SectionReport;
   agents: AgentRow[];
   trend: TrendPoint[];
 };
@@ -758,6 +760,22 @@ export function buildAgents(cases: Case[]): AgentRow[] {
     };
   });
 }
+export const CD_SAMPLING_SECTIONS: Section[] = ['RECALL', 'MATERIAL', 'QUICK', 'INSPECTION'];
+export function buildCdSampling(cases: Case[]): SectionReport {
+  // Analyze has already validated and deduplicated the official case-ID pairs.
+  // Do not reclassify the source sections or add the rollup to global totals.
+  const subset = cases.filter(c => CD_SAMPLING_SECTIONS.includes(c.section));
+  const labels: Partial<Record<Section, string>> = { RECALL: 'Recall', MATERIAL: 'Material', QUICK: 'Quick', INSPECTION: 'Inspection' };
+  return {
+    metrics: aggregate(subset),
+    rows: CD_SAMPLING_SECTIONS.map(section => ({ id: section, name: labels[section]!, ...aggregate(subset.filter(c => c.section === section)) })),
+    queues: grouped(subset, c => c.queueId, c => c.queueName),
+    agents: grouped(subset, agentKey, c => c.agentName).sort((a, b) => a.name.localeCompare(b.name)),
+  };
+}
+export function reportSection(snapshot: Pick<Snapshot, 'sections' | 'cdSampling'>, section: Section): SectionReport | undefined {
+  return section === 'CD' ? snapshot.cdSampling ?? snapshot.sections.CD : snapshot.sections[section];
+}
 export function trendPoint(
   snapshot: Pick<Snapshot, 'id' | 'start' | 'weekNumber' | 'sections'>,
 ): TrendPoint {
@@ -795,6 +813,6 @@ export function buildUploadTrend(cases: Case[], start: string, weekNumber: numbe
     if (!subset.length) return {
       ...metadata, CD: null, ACCOUNTS: null, MATERIAL: null, industryA: null, industryB: null,
     };
-    return { ...trendPoint({ id: '', start: periodStart, weekNumber, sections: buildSections(subset) }), ...metadata };
+    return { ...trendPoint({ id: '', start: periodStart, weekNumber, sections: buildSections(subset) }), CD: buildCdSampling(subset).metrics, ...metadata };
   });
 }

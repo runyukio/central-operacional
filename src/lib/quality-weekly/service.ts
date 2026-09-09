@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { QualityWeeklyError as ErrorWithStatus } from "./access";
-import { aggregate, analyze, buildAgents, buildSections, buildUploadTrend, casesInReportingWeek, isReportingDay, HISTORY_WEEKS, dayAdd, dateValue, mappingPending, parseMapping, RULE_VERSION, RULE_DEFINITION, weekStart } from "./domain";
+import { aggregate, analyze, buildAgents, buildSections, buildCdSampling, buildUploadTrend, casesInReportingWeek, isReportingDay, HISTORY_WEEKS, dayAdd, dateValue, mappingPending, parseMapping, RULE_VERSION, RULE_DEFINITION, weekStart } from "./domain";
 import type { MappingEntry, Snapshot, Validation } from "./domain";
 import { QUEUE_REPORT_METADATA } from "../queue-report-metadata";
 import { readTables, selectTable, MAX_UPLOAD } from "./workbook";
@@ -115,7 +115,7 @@ export function createQualityWeeklyService(db: PrismaClient, storage: QualitySto
           version: (max._max.version ?? 0) + 1, createdAt: new Date().toISOString(), createdBy: author.name,
           ruleVersion: RULE_VERSION, ruleDefinition: RULE_DEFINITION, uploadId: imported.id, mappingId: imported.mappingId!, mappings: entriesOf(imported.mapping!.entries),
           filename: imported.asset.filename, digest: imported.digest, metrics: aggregate(cases), sections: buildSections(cases), agents: buildAgents(cases),
-          trend,
+          trend, cdSampling: buildCdSampling(cases),
         };
         const canonicalCases = contextCases.map(({ sourceRow: _row, ...rest }) => rest).sort((a, b) => JSON.stringify([a.qaId, a.auditId]).localeCompare(JSON.stringify([b.qaId, b.auditId])));
         const contentHash = sha256(JSON.stringify({ start: input.start, weekNumber: input.weekNumber, rules: RULE_VERSION,
