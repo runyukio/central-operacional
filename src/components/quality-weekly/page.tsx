@@ -117,7 +117,7 @@ export function QualityWeeklyPage({ accessError }: { accessError?: string }) {
   const validationCounts = validation?.distinctCounts ?? validation?.sourceCounts;
   const sourceMetrics = validationCounts ? metrics(validationCounts) : null;
   return <div lang="en" className="space-y-4">
-    <PageHeader title="Weekly Quality Report" description="ER BPO · Validate, review and preserve weekly quality results" icon={FileBarChart} actions={<span className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-bold text-muted"><ShieldCheck className="h-4 w-4" />ADM / WFM only</span>} />
+    <PageHeader title="Quality Report" description="ER BPO · Validate, review and preserve weekly quality results" icon={FileBarChart} actions={<span className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-bold text-muted"><ShieldCheck className="h-4 w-4" />ADM / WFM only</span>} />
     {error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700"><div className="flex items-start gap-2"><AlertTriangle className="h-5 w-5 shrink-0" /><p>{error}</p></div>{issues.length > 0 && <div className="mt-3"><Issues issues={issues} /></div>}{!accessError && <button className="mt-3 underline" onClick={() => void run("Reloading workspace", async signal => setStatus(await api<Status>("status", undefined, signal)))}>Retry connection</button>}</div>}
     {notice && <div role="status" className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-700">{notice}</div>}
     {accessError ? null : <>

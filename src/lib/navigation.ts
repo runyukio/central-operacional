@@ -47,7 +47,7 @@ export const navSections: NavSection[] = [
       { label: "Captura de Horas", href: "/captura-horas", icon: "Clock", roles: rolesWithCapability("CAPTURE") },
       { label: "Necessidade", href: "/staff-cobertura", icon: "UsersRound", roles: rolesWithCapability("STAFF_COVERAGE") },
       { label: "Performance", href: "/performance", icon: "Trophy", roles: rolesWithCapability("PERFORMANCE") },
-      { label: "Weekly Quality Report", href: "/weekly-quality-report", icon: "FileBarChart", roles: ["ADMIN", "WFM"] },
+      { label: "Quality Report", href: "/weekly-quality-report", icon: "FileBarChart", roles: ["ADMIN", "WFM"] },
       { label: "Meus Dados", href: "/performance/meus-dados", icon: "ChartNoAxesCombined", roles: personalRoles }
     ]
   },

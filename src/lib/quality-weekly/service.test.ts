@@ -37,7 +37,9 @@ test("only active ADM/WFM can access the page, APIs and shared reports", () => {
     const expected = role === "ADMIN" || role === "WFM";
     assert.equal(hasQualityWeeklyAccess({ ...author, email: "qa@example.invalid", role, status: "ACTIVE" }), expected);
     assert.equal(canAccessPathForRole("/api/quality-weekly/reports/any/document", { role, status: "ACTIVE" }), expected);
-    assert.equal(getNavItems({ role, status: "ACTIVE" }).some(item => item.href === "/weekly-quality-report"), expected);
+    const reportLink = getNavItems({ role, status: "ACTIVE" }).find(item => item.href === "/weekly-quality-report");
+    assert.equal(Boolean(reportLink), expected);
+    if (expected) assert.equal(reportLink?.label, "Quality Report");
   }
   assert.equal(hasQualityWeeklyAccess({ ...author, email: "qa@example.invalid", role: "ADMIN", status: "INACTIVE" }), false);
   assert.equal(hasQualityWeeklyAccess({ ...author, email: "qa@example.invalid", role: "WFM", status: "ACTIVE", deletedAt: new Date() }), false);

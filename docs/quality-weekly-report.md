@@ -1,4 +1,4 @@
-# Weekly Quality Report — ER BPO
+# Quality Report — ER BPO
 
 ## Scope and access
 
