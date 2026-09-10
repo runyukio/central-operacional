@@ -19,7 +19,6 @@ import { processFirstWorksheetInChunks, XlsxChunkError } from "@/lib/xlsx-row-ch
 import { prepareCecFrtSnapshot } from "@/lib/cec-frt-service";
 import { performanceManualBases, validateManualFileManifest, type PerformanceManualBase } from "@/lib/performance-manual-bases";
 import { replaceSelectedManualSnapshots, type ManualSnapshotFiles } from "@/lib/performance-manual-snapshot";
-import { prepareUrSnapshot } from "@/lib/performance-ur-service";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 800;
@@ -105,7 +104,7 @@ export async function POST(request: Request) {
 async function receiveUploadChunk(request: Request, url: URL, uploadedByEmail: string) {
   const uploadId = requiredUploadId(url);
   const fileType = url.searchParams.get("fileType");
-  if (fileType !== "production" && fileType !== "volume" && fileType !== "cecCpd" && fileType !== "quality" && fileType !== "cecFrt" && fileType !== "ur") throw new PerformanceError("Tipo de arquivo inválido.", 400);
+  if (fileType !== "production" && fileType !== "volume" && fileType !== "cecCpd" && fileType !== "quality" && fileType !== "cecFrt") throw new PerformanceError("Tipo de arquivo inválido.", 400);
   const chunkIndex = integerParam(url, "chunkIndex", 0);
   const totalChunks = integerParam(url, "totalChunks", 1);
   if (chunkIndex >= totalChunks) throw new PerformanceError("Índice da parte do arquivo inválido.", 400);
@@ -144,7 +143,7 @@ async function rebuildUploadedFiles(uploadId: string, uploadedByEmail: string) {
   });
   if (!chunks.length) throw new PerformanceError("Nenhuma parte do upload foi encontrada.", 400);
 
-  const rebuild = (fileType: PerformanceManualBase | "quality") => {
+  const rebuild = (fileType: "production" | "volume" | "cecCpd" | "quality" | "cecFrt") => {
     const fileChunks = chunks.filter((chunk) => chunk.fileType === fileType);
     if (!fileChunks.length) return null;
     const expected = fileChunks[0].totalChunks;
@@ -162,7 +161,7 @@ async function rebuildUploadedFiles(uploadId: string, uploadedByEmail: string) {
     return { fileName: fileChunks[0].fileName, buffer: data };
   };
 
-  return { production: rebuild("production"), volume: rebuild("volume"), cecCpd: rebuild("cecCpd"), quality: rebuild("quality"), cecFrt: rebuild("cecFrt"), ur: rebuild("ur") };
+  return { production: rebuild("production"), volume: rebuild("volume"), cecCpd: rebuild("cecCpd"), quality: rebuild("quality"), cecFrt: rebuild("cecFrt") };
 }
 
 async function processQualityFile(
@@ -229,10 +228,6 @@ async function processPerformanceFiles(
   for (const { key } of performanceManualBases) {
     const file = files[key];
     if (!file) continue;
-    if (key === "ur") {
-      previews.ur = { fileName: file.fileName, ...await prepareUrSnapshot(actor, file.buffer) };
-      continue;
-    }
     const rawRows = readWorkbookRows(file.buffer);
     if (key === "cecFrt") {
       previews.cecFrt = { fileName: file.fileName, ...await prepareCecFrtSnapshot(actor, rawRows) };

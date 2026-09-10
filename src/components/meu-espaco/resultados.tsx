@@ -9,7 +9,6 @@ const SpaceGlideTab = dynamic(() => import("./glide-path").then((m) => m.SpaceGl
 import type { SpaceMetric, SpaceResults } from "@/lib/meu-espaco-contract";
 import { dateLabel, number, SpaceButtons, SpaceCard, tableClass } from "./shared";
 import { formatLatencyDisplay } from "@/lib/latency-display";
-import { PerformanceUrBadge } from "@/components/performance-ur-badge";
 
 export function TeamMetricCards({ data, compact = false }: { data: SpaceResults; compact?: boolean }) {
   if (!data.groups.length) return <div className="card p-6 text-muted">Nenhum parceiro no time atual para este filtro.</div>;
@@ -21,7 +20,6 @@ export function TeamMetricCards({ data, compact = false }: { data: SpaceResults;
     </div>
     <details className="mt-3 rounded-xl border border-border p-3 text-xs leading-6 text-muted"><summary className="cursor-pointer font-bold">Cobertura e atualização das bases</summary>
       <p>Cobertura: produção {group.coverage.productionPartners}/{group.teamSize} parceiros (até {dateLabel(group.coverage.productionLatest)}); qualidade {group.coverage.qualityPartners}/{group.teamSize} (até {dateLabel(group.coverage.qualityLatest)}); cronograma {group.coverage.schedulePartners}/{group.teamSize} (até {dateLabel(group.coverage.scheduleLatest)}).</p>
-      <p>UR: {group.coverage.urPartners ?? 0}/{group.teamSize} parceiros (até {dateLabel(group.coverage.urLatest ?? null)}). Moderação real ÷ (8h × dias-agente na base), pelo Brazil Shift Date. Sem base não é zero.</p>
       {group.lob === "CEC" ? <p>SLA/FRT: {group.coverage.frtPartners ?? 0}/{group.teamSize} parceiros (criação de tickets até {dateLabel(group.coverage.frtLatest ?? null)}). CPD continua pela data da produção.</p> : null}
       <p>Última atualização encontrada nas bases: {group.coverage.updatedAt ? new Date(group.coverage.updatedAt).toLocaleString("pt-BR") : "Sem dados"}.</p>
     </details>
@@ -35,7 +33,7 @@ function metricColumns(lob: string, individual = false): MetricColumn[] {
     : [{ key: "dailyIndividual", label: "Média diária individual", value: (m) => m.dailyIndividual }, { key: "ahtSeconds", label: "AHT", value: (m) => m.ahtSeconds, suffix: " s" },
       ...(!individual && ["ADS", "TNS"].includes(lob) ? [{ key: "latencyMinutes", label: lob === "ADS" ? "Latência (h)" : "Latência vídeo (min)", value: (m: SpaceMetric) => m.latencyMinutes, latencyLob: lob }] : []),
       ...(!individual && lob === "TNS" ? [{ key: "commentsLatencyMinutes", label: "Latência Comments (h)", value: (m: SpaceMetric) => m.commentsLatencyMinutes, latencyLob: "COMMENTS" }] : [])];
-  return [...cols, { key: "quality", label: "Qualidade", value: (m) => m.quality, suffix: "%" }, { key: "abs", label: "ABS", value: (m) => m.abs, suffix: "%" }, { key: "ur", label: "UR", value: (m) => m.ur ?? null, suffix: "%" }];
+  return [...cols, { key: "quality", label: "Qualidade", value: (m) => m.quality, suffix: "%" }, { key: "abs", label: "ABS", value: (m) => m.abs, suffix: "%" }];
 }
 function MetricCells({ metric, lob, individual = false }: { metric: SpaceMetric; lob: string; individual?: boolean }) {
   return <>{metricColumns(lob, individual).map((col) => {
@@ -74,7 +72,7 @@ export function SpaceResultsTab({ data, supervisorId = "", view = "dashboard", o
     {navigation}
     <SpaceButtons label="Operação dos resultados" value={lob} onChange={setSelectedLob} options={[{ id: "", label: "Todas as operações" }, ...data.groups.map((group) => ({ id: group.lob, label: group.lob }))]} />
     <TeamMetricCards data={visibleData} />
-    <section className="card overflow-hidden" aria-label="Indicadores por supervisor"><div className="p-4"><h3 className="font-extrabold">Indicadores por supervisor</h3><p className="mt-1 text-xs text-muted">Mesmo período e operação selecionados · composição atual do time</p></div><div className="overflow-x-auto"><table className={tableClass}><thead><tr><th>Supervisor</th><th>Latência ponderada</th><th>UR · meta 60%</th></tr></thead><tbody>{data.supervisors.filter((row) => row.groups.some((group) => !lob || group.lob === lob)).map((row) => <tr key={row.id}><td className="font-bold">{row.name}</td><td><SupervisorLatency groups={row.groups.filter((group) => !lob || group.lob === lob)} /></td><td>{row.groups.filter((group) => !lob || group.lob === lob).map((group) => <div key={group.lob} className="py-1"><span className="mr-2 text-xs text-muted">{group.lob}</span><PerformanceUrBadge value={group.metric.ur} /></div>)}</td></tr>)}</tbody></table></div></section>
+    <section className="card overflow-hidden" aria-label="Latência ponderada por supervisor"><div className="p-4"><h3 className="font-extrabold">Latência ponderada por supervisor</h3><p className="mt-1 text-xs text-muted">Mesmo período e operação selecionados · composição atual do time</p></div><div className="overflow-x-auto"><table className={tableClass}><thead><tr><th>Supervisor</th><th>Latência ponderada</th></tr></thead><tbody>{data.supervisors.filter((row) => row.groups.some((group) => !lob || group.lob === lob)).map((row) => <tr key={row.id}><td className="font-bold">{row.name}</td><td><SupervisorLatency groups={row.groups.filter((group) => !lob || group.lob === lob)} /></td></tr>)}</tbody></table></div></section>
     <section className="card overflow-hidden" aria-label="Resultados por parceiro"><div className="flex flex-wrap items-center justify-between gap-3 p-4"><h3 className="font-extrabold">Resultado por parceiro</h3><label className="text-xs text-muted">Buscar parceiro<input className="premium-control ml-2 p-2 text-sm" placeholder="Nome ou WB" value={search} onChange={(event) => setSearch(event.target.value)} /></label></div>
       {visibleData.groups.map((group) => <div key={group.lob} className="overflow-x-auto"><h4 className="px-4 py-2 text-sm font-bold">{group.lob}</h4><table className={tableClass}><thead><tr><SpaceSortHeader label="Parceiro / WB" column="name" sort={sort} direction={direction} onSort={onSort} /><SpaceSortHeader label="Skill principal" column="skill" sort={sort} direction={direction} onSort={onSort} /><MetricHeaders lob={group.lob} individual sort={sort} direction={direction} onSort={onSort} /></tr></thead><tbody>{sortedPartners.filter((row) => row.lob === group.lob).map((row) => <tr key={row.id}><td><button type="button" className="font-bold text-blue-600 hover:underline" title="Ver Glide path deste parceiro" onClick={() => { setEmployeeId(row.id); changeView("glide"); }}>{row.name}</button><p className="text-xs text-muted">{row.wbLogin}</p></td><td>{row.skill}</td><MetricCells metric={row.metric} lob={row.lob} individual /></tr>)}</tbody></table></div>)}
       {!partners.length ? <p className="p-6 text-center text-muted">Nenhum parceiro encontrado.</p> : null}

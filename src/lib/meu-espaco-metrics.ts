@@ -10,11 +10,10 @@ export function spaceLobFamily(lob: string) {
   return value;
 }
 export type MetricAccumulator = { output: number; materialOutput: number; materialDays: Set<string>; days: Set<string>; agentDays: Set<string>; ahtSubmit: number; duration: number; correct: number; samples: number; planned: number; absences: number;
-  urActualHours: number; urShiftHours: number;
   latencyMinutesSum: number; latencySubmits: number; commentsLatencyMinutesSum: number; commentsLatencySubmits: number; cecFrt: CecFrtCounts };
 export function emptySpaceMetric(): MetricAccumulator {
   return { output: 0, materialOutput: 0, materialDays: new Set(), days: new Set(), agentDays: new Set(), ahtSubmit: 0, duration: 0, correct: 0, samples: 0, planned: 0, absences: 0,
-    urActualHours: 0, urShiftHours: 0, latencyMinutesSum: 0, latencySubmits: 0, commentsLatencyMinutesSum: 0, commentsLatencySubmits: 0, cecFrt: emptyCecFrt() };
+    latencyMinutesSum: 0, latencySubmits: 0, commentsLatencyMinutesSum: 0, commentsLatencySubmits: 0, cecFrt: emptyCecFrt() };
 }
 export function spaceLatencyQueueKind(queue: { lob: string; slaTargetMinutes: number | null }) {
   if (queue.lob === "ADS" || (queue.lob === "VIDEO" && queue.slaTargetMinutes === 15)) return "primary";
@@ -24,7 +23,6 @@ export function spaceLatencyQueueKind(queue: { lob: string; slaTargetMinutes: nu
 const round = (n: number) => Math.round(n * 100) / 100;
 export function finishSpaceMetric(value: MetricAccumulator, lob: string): SpaceMetric {
   const weights: SpaceWeights = {
-    ur: { numerator: value.urActualHours, denominator: value.urShiftHours },
     quality: { numerator: value.correct, denominator: value.samples },
     abs: { numerator: value.absences, denominator: value.planned },
     aht: { numerator: value.duration, denominator: value.ahtSubmit },
@@ -44,7 +42,6 @@ export function finishSpaceMetric(value: MetricAccumulator, lob: string): SpaceM
     commentsLatencyMinutes: lob === "TNS" && value.commentsLatencySubmits > 0 ? round(value.commentsLatencyMinutesSum / value.commentsLatencySubmits) : null,
     latencySubmits: value.latencySubmits, commentsLatencySubmits: value.commentsLatencySubmits,
     quality: value.samples ? round(value.correct / value.samples * 100) : null,
-    ur: value.urShiftHours > 0 ? value.urActualHours / value.urShiftHours * 100 : null,
     abs: value.planned ? calculateAbsenceRate(value.planned, value.absences) : null,
     productionDays: value.days.size, agentDays: value.agentDays.size, qualitySamples: value.samples, planned: value.planned, absences: value.absences };
 }
